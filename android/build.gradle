@@ -36,6 +36,7 @@ android {
         namespace "com.deepanshuchaudhary.pdf_manipulator"
     }
 
+    namespace "com.deepanshuchaudhary.pdf_manipulator"
     compileSdkVersion 33
 
     compileOptions {
