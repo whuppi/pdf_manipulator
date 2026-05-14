@@ -36,7 +36,8 @@ android {
         namespace "com.deepanshuchaudhary.pdf_manipulator"
     }
 
-    compileSdkVersion 32
+    namespace "com.deepanshuchaudhary.pdf_manipulator"
+    compileSdkVersion 33
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
