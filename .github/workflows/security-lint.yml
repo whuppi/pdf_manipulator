@@ -1,0 +1,37 @@
+# Prevent the #1 GitHub Actions security vulnerability:
+# pull_request_target + checkout of PR code = attacker gets write access.
+# Scans all workflow files on every PR that touches .github/
+name: Workflow Security Lint
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths: ['.github/**']
+
+jobs:
+  lint:
+    name: Workflow Security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for dangerous pull_request_target + checkout combo
+        run: |
+          FAILED=false
+          for f in .github/workflows/*.yml; do
+            # Skip this file itself
+            [[ "$f" == *"security-lint"* ]] && continue
+
+            # Check if file uses pull_request_target
+            if grep -q "pull_request_target" "$f"; then
+              # Check if it also checks out PR code (the dangerous pattern)
+              if grep -A5 "actions/checkout" "$f" | grep -qE "github\.event\.pull_request\.head\.(sha|ref)|pull_request\.head\.sha"; then
+                echo "::error file=$f::SECURITY: $f uses pull_request_target with checkout of PR code. This gives attackers write access. See https://securitylab.github.com/resources/github-actions-preventing-pwn-requests/"
+                FAILED=true
+              fi
+            fi
+          done
+
+          if [[ "$FAILED" == "true" ]]; then
+            exit 1
+          fi
+          echo "✓ No dangerous pull_request_target + checkout patterns found"
