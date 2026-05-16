@@ -1,0 +1,83 @@
+# Full 6-platform test — maintainer adds "ready-to-test" label to trigger.
+# Without the label: gate passes immediately (skipped counts as passing).
+# With the label: all 6 platforms must pass for gate to pass.
+# Contributors cannot add labels (requires write access).
+name: Full Test
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    branches: [main, dev]
+
+concurrency:
+  group: full-test-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    if: contains(github.event.pull_request.labels.*.name, 'ready-to-test')
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: ./.github/actions/dart-test
+  linux:
+    if: contains(github.event.pull_request.labels.*.name, 'ready-to-test')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: ./.github/actions/dart-test
+  windows:
+    if: contains(github.event.pull_request.labels.*.name, 'ready-to-test')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: ./.github/actions/dart-test
+  android:
+    if: contains(github.event.pull_request.labels.*.name, 'ready-to-test')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: ./.github/actions/android-test
+  ios:
+    if: contains(github.event.pull_request.labels.*.name, 'ready-to-test')
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: ./.github/actions/ios-test
+  web:
+    if: contains(github.event.pull_request.labels.*.name, 'ready-to-test')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: ./.github/actions/web-test
+
+  # Gate job — required check for branch protection.
+  # Without label: skipped upstream jobs → gate passes (no label = not ready yet, but PR isn't blocked).
+  # With label: all 6 must succeed → gate passes only if all green.
+  gate:
+    name: Full Test Gate
+    if: always()
+    needs: [macos, linux, windows, android, ios, web]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate
+        run: |
+          LABELED="${{ contains(github.event.pull_request.labels.*.name, 'ready-to-test') }}"
+          if [[ "$LABELED" != "true" ]]; then
+            echo "No 'ready-to-test' label — gate passes (maintainer hasn't triggered full test yet)"
+            exit 0
+          fi
+          RESULTS=("${{ needs.macos.result }}" "${{ needs.linux.result }}" "${{ needs.windows.result }}" "${{ needs.android.result }}" "${{ needs.ios.result }}" "${{ needs.web.result }}")
+          for r in "${RESULTS[@]}"; do
+            if [[ "$r" != "success" ]]; then
+              echo "FAILED: platform test returned '$r'"
+              exit 1
+            fi
+          done
+          echo "All 6 platforms passed"

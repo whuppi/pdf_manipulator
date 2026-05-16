@@ -259,10 +259,11 @@ Version bumps, changelog generation, tagging, and publishing are fully automated
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `ci.yml` | PR to main/dev | `dart analyze` + `dart test` on macOS (fast feedback) |
+| `ci.yml` | PR to main/dev | `dart analyze` + `dart test` on macOS (fast, automatic) |
 | `pr-lint.yml` | PR to main/dev | Validates PR title follows Conventional Commits format |
+| `full-test.yml` | Maintainer adds `ready-to-test` label | 6-platform test. Required before merge. Contributors can't trigger it. |
 | `release-please.yml` | Push to main/dev | Reads conventional commits, opens/updates a Release PR with version bump + CHANGELOG |
-| `release.yml` | Tag push (`v*`) | 6-platform test → compile all targets → upload to GitHub Release → publish to pub.dev via OIDC |
+| `release.yml` | Tag push (`v*`) | Compile all targets → GitHub Release → pub.dev publish (no re-test — same commit) |
 
 **Two release channels:**
 

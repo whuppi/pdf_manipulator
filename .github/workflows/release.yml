@@ -1,5 +1,6 @@
-# Full pipeline: test 6 platforms → compile all targets → upload to GitHub Release → publish to pub.dev.
+# Compile all targets → upload to GitHub Release → publish to pub.dev.
 # Triggered by tag push (release-please creates tags when you merge a Release PR).
+# Tests are NOT re-run — full-test already passed before merge (same commit).
 name: Release
 
 on:
@@ -15,47 +16,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # ── Test all platforms ─────────────────────────────────────────────
-  test-macos:
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-        with: { submodules: recursive }
-      - uses: ./.github/actions/dart-test
-  test-linux:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with: { submodules: recursive }
-      - uses: ./.github/actions/dart-test
-  test-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-        with: { submodules: recursive }
-      - uses: ./.github/actions/dart-test
-  test-android:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with: { submodules: recursive }
-      - uses: ./.github/actions/android-test
-  test-ios:
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-        with: { submodules: recursive }
-      - uses: ./.github/actions/ios-test
-  test-web:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with: { submodules: recursive }
-      - uses: ./.github/actions/web-test
-
-  # ── Compile (only after all tests pass) ────────────────────────────
+  # ── Compile all targets ────────────────────────────────────────────
   compile-macos:
-    needs: [test-macos, test-linux, test-windows, test-android, test-ios, test-web]
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -64,7 +26,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: bin-macos, path: out/ }
   compile-ios:
-    needs: [test-macos, test-linux, test-windows, test-android, test-ios, test-web]
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -73,7 +34,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: bin-ios, path: out/ }
   compile-android:
-    needs: [test-macos, test-linux, test-windows, test-android, test-ios, test-web]
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -82,7 +42,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: bin-android, path: out/ }
   compile-linux:
-    needs: [test-macos, test-linux, test-windows, test-android, test-ios, test-web]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -91,7 +50,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: bin-linux, path: out/ }
   compile-wasm:
-    needs: [test-macos, test-linux, test-windows, test-android, test-ios, test-web]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -100,7 +58,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: bin-wasm, path: out/ }
   compile-windows:
-    needs: [test-macos, test-linux, test-windows, test-android, test-ios, test-web]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

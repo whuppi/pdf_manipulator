@@ -244,10 +244,11 @@ Versioning, changelog, tagging, compilation, and publishing are fully automated 
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
-| `ci.yml` | PR to main/dev | Analyze + macOS test (fast feedback) |
+| `ci.yml` | PR to main/dev | Analyze + macOS test (fast, automatic) |
 | `pr-lint.yml` | PR to main/dev | Validates PR title follows Conventional Commits |
+| `full-test.yml` | Maintainer adds `ready-to-test` label | 6-platform test (macOS, Linux, Windows, Android, iOS, Web). Required before merge. |
 | `release-please.yml` | Push to main/dev | Opens/updates Release PRs with version bump + CHANGELOG |
-| `release.yml` | Tag push (`v*`) | 6-platform test → compile → GitHub Release → pub.dev publish |
+| `release.yml` | Tag push (`v*`) | Compile all targets → GitHub Release → pub.dev publish. No re-test (same commit already passed full-test). |
 
 ### Cross-compilation runners
 
