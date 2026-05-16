@@ -1,21 +1,29 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "dart",
   "bump-minor-pre-major": true,
+  "include-component-in-tag": false,
+  "include-v-in-tag": true,
+  "pull-request-title-pattern": "release: ${version}",
+  "pull-request-header": "## pdf_manipulator ${version} ✨\n\nHere's what's in this release:",
+  "pull-request-footer": "*You can edit the changelog above before merging — your edits are what ships.*\n*Merge when ready — tag, binaries, and pub.dev publish happen automatically.*",
+  "label": "release",
+  "release-label": "release",
+  "bootstrap-sha": "945a51f815cfb9aa5393c56c5781db9a8f908822",
+  "prerelease-type": "dev",
+  "changelog-sections": [
+    {"type": "feat", "section": "Features"},
+    {"type": "fix", "section": "Bug Fixes"},
+    {"type": "perf", "section": "Performance"},
+    {"type": "deps", "section": "Dependencies"},
+    {"type": "docs", "section": "Documentation", "hidden": true},
+    {"type": "chore", "section": "Miscellaneous", "hidden": true},
+    {"type": "ci", "section": "CI", "hidden": true},
+    {"type": "test", "section": "Tests", "hidden": true},
+    {"type": "refactor", "section": "Refactoring", "hidden": true},
+    {"type": "build", "section": "Build", "hidden": true}
+  ],
   "packages": {
-    ".": {
-      "release-type": "dart",
-      "prerelease-type": "dev",
-      "changelog-sections": [
-        {"type": "feat", "section": "Features"},
-        {"type": "fix", "section": "Bug Fixes"},
-        {"type": "perf", "section": "Performance"},
-        {"type": "deps", "section": "Dependencies"},
-        {"type": "docs", "section": "Documentation", "hidden": true},
-        {"type": "chore", "section": "Miscellaneous", "hidden": true},
-        {"type": "ci", "section": "CI", "hidden": true},
-        {"type": "test", "section": "Tests", "hidden": true},
-        {"type": "refactor", "section": "Refactoring", "hidden": true}
-      ]
-    }
+    ".": {}
   }
 }
