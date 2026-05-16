@@ -177,7 +177,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: vendor/pdf_oxide }
-      - run: dart pub get
+      - run: dart pub get --no-example
       - run: dart test --timeout=120s
 
   test-linux:
@@ -193,7 +193,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: vendor/pdf_oxide }
-      - run: dart pub get
+      - run: dart pub get --no-example
       - run: dart test --timeout=120s
 
   test-windows:
@@ -209,7 +209,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: vendor/pdf_oxide }
-      - run: dart pub get
+      - run: dart pub get --no-example
       - run: dart test --timeout=120s
 
   test-android:
@@ -325,5 +325,5 @@ jobs:
         with: { submodules: recursive }
       - uses: dart-lang/setup-dart@v1
         with: { sdk: stable }
-      - run: dart pub get
+      - run: dart pub get --no-example
       - run: dart pub publish --dry-run

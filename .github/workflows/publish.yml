@@ -23,7 +23,7 @@ jobs:
         with: { submodules: recursive }
       - uses: dart-lang/setup-dart@v1
         with: { sdk: stable }
-      - run: dart pub get
+      - run: dart pub get --no-example
       - run: dart pub publish --dry-run
       - if: inputs.dry_run == 'false'
         run: dart pub publish --force
