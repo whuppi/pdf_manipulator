@@ -1,7 +1,7 @@
 # Auto-creates Release PRs from conventional commits.
-# dev branch → prerelease versions (1.1.0-dev.0)
-# main branch → stable versions (1.1.0)
-# Zero compute — just reads git history and opens/updates a PR.
+# dev branch → prerelease (1.1.0-dev.0), main branch → stable (1.1.0).
+# One Release PR per branch, auto-updates as commits land.
+# Merge the Release PR when you're ready to ship.
 name: Release Please
 
 on:
@@ -17,9 +17,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: googleapis/release-please-action@v4
-        id: release
         with:
-          release-type: dart
           config-file: .github/release-please-config.json
           manifest-file: .github/.release-please-manifest.json
-          prerelease: ${{ github.ref_name == 'dev' }}
