@@ -4,8 +4,6 @@ description: Build pdf_oxide for macOS arm64 + x64
 runs:
   using: composite
   steps:
-    - uses: actions/checkout@v4
-      with: { submodules: recursive }
     - uses: dtolnay/rust-toolchain@stable
       with: { targets: "aarch64-apple-darwin,x86_64-apple-darwin" }
     - uses: Swatinem/rust-cache@v2

@@ -4,8 +4,6 @@ description: Build pdf_oxide for Windows x64
 runs:
   using: composite
   steps:
-    - uses: actions/checkout@v4
-      with: { submodules: recursive }
     - uses: dtolnay/rust-toolchain@stable
       with: { targets: x86_64-pc-windows-msvc }
     - uses: Swatinem/rust-cache@v2

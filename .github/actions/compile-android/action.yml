@@ -4,8 +4,6 @@ description: Build pdf_oxide for Android arm64, arm, x64, x86 via NDK
 runs:
   using: composite
   steps:
-    - uses: actions/checkout@v4
-      with: { submodules: recursive }
     - uses: dtolnay/rust-toolchain@stable
       with: { targets: "aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android" }
     - uses: Swatinem/rust-cache@v2

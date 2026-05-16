@@ -30,31 +30,43 @@ jobs:
     needs: version
     runs-on: macos-14
     steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
       - uses: ./.github/actions/dart-test
   test-linux:
     needs: version
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
       - uses: ./.github/actions/dart-test
   test-windows:
     needs: version
     runs-on: windows-latest
     steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
       - uses: ./.github/actions/dart-test
   test-android:
     needs: version
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
       - uses: ./.github/actions/android-test
   test-ios:
     needs: version
     runs-on: macos-14
     steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
       - uses: ./.github/actions/ios-test
   test-web:
     needs: version
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
       - uses: ./.github/actions/web-test
 
   # ── Compile (only after all tests pass) ────────────────────────────
@@ -62,6 +74,8 @@ jobs:
     needs: [test-macos, test-linux, test-windows, test-android, test-ios, test-web]
     runs-on: macos-14
     steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
       - uses: ./.github/actions/compile-macos
       - uses: actions/upload-artifact@v4
         with: { name: bin-macos, path: out/ }
@@ -69,6 +83,8 @@ jobs:
     needs: [test-macos, test-linux, test-windows, test-android, test-ios, test-web]
     runs-on: macos-14
     steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
       - uses: ./.github/actions/compile-ios
       - uses: actions/upload-artifact@v4
         with: { name: bin-ios, path: out/ }
@@ -76,6 +92,8 @@ jobs:
     needs: [test-macos, test-linux, test-windows, test-android, test-ios, test-web]
     runs-on: macos-14
     steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
       - uses: ./.github/actions/compile-android
       - uses: actions/upload-artifact@v4
         with: { name: bin-android, path: out/ }
@@ -83,6 +101,8 @@ jobs:
     needs: [test-macos, test-linux, test-windows, test-android, test-ios, test-web]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
       - uses: ./.github/actions/compile-linux
       - uses: actions/upload-artifact@v4
         with: { name: bin-linux, path: out/ }
@@ -90,6 +110,8 @@ jobs:
     needs: [test-macos, test-linux, test-windows, test-android, test-ios, test-web]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
       - uses: ./.github/actions/compile-wasm
       - uses: actions/upload-artifact@v4
         with: { name: bin-wasm, path: out/ }
@@ -97,6 +119,8 @@ jobs:
     needs: [test-macos, test-linux, test-windows, test-android, test-ios, test-web]
     runs-on: windows-latest
     steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
       - uses: ./.github/actions/compile-windows
       - uses: actions/upload-artifact@v4
         with: { name: bin-windows, path: out/ }

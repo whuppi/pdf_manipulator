@@ -4,8 +4,6 @@ description: Build pdf_oxide for Linux x64 + arm64
 runs:
   using: composite
   steps:
-    - uses: actions/checkout@v4
-      with: { submodules: recursive }
     - shell: bash
       run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
     - uses: dtolnay/rust-toolchain@stable

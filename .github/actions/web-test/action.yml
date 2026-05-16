@@ -4,9 +4,6 @@ description: Setup Chrome, run dart test on web platform
 runs:
   using: composite
   steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: recursive
 
     - uses: dart-lang/setup-dart@v1
       with:

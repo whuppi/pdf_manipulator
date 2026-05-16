@@ -11,24 +11,36 @@ jobs:
   macos:
     runs-on: macos-14
     steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
       - uses: ./.github/actions/dart-test
   linux:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
       - uses: ./.github/actions/dart-test
   windows:
     runs-on: windows-latest
     steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
       - uses: ./.github/actions/dart-test
   android:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
       - uses: ./.github/actions/android-test
   ios:
     runs-on: macos-14
     steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
       - uses: ./.github/actions/ios-test
   web:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
       - uses: ./.github/actions/web-test

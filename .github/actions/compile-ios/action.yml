@@ -4,8 +4,6 @@ description: Build pdf_oxide for iOS device + simulators (arm64, sim-arm64, sim-
 runs:
   using: composite
   steps:
-    - uses: actions/checkout@v4
-      with: { submodules: recursive }
     - uses: dtolnay/rust-toolchain@stable
       with: { targets: "aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios" }
     - uses: Swatinem/rust-cache@v2
