@@ -1,10 +1,12 @@
-# Auto-creates Release PRs from conventional commits on main.
+# Auto-creates Release PRs from conventional commits.
+# dev branch → prerelease versions (1.1.0-dev.0)
+# main branch → stable versions (1.1.0)
 # Zero compute — just reads git history and opens/updates a PR.
 name: Release Please
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
 
 permissions:
   contents: write
@@ -20,3 +22,4 @@ jobs:
           release-type: dart
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+          prerelease: ${{ github.ref_name == 'dev' }}
