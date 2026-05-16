@@ -1,0 +1,21 @@
+name: Web Test
+description: Setup Chrome, run dart test on web platform
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - uses: dart-lang/setup-dart@v1
+      with:
+        sdk: stable
+
+    - uses: browser-actions/setup-chrome@v1
+
+    - run: dart pub get --no-example
+      shell: bash
+
+    - run: dart test test/web/web_smoke_test.dart -p chrome --timeout=120s
+      shell: bash

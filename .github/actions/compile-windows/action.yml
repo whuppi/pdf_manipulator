@@ -1,0 +1,18 @@
+name: Compile Windows
+description: Build pdf_oxide for Windows x64
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+      with: { submodules: recursive }
+    - uses: dtolnay/rust-toolchain@stable
+      with: { targets: x86_64-pc-windows-msvc }
+    - uses: Swatinem/rust-cache@v2
+      with: { workspaces: vendor/pdf_oxide }
+    - shell: pwsh
+      run: |
+        cargo build --manifest-path vendor/pdf_oxide/Cargo.toml --lib --release `
+          --target x86_64-pc-windows-msvc --features icc,legacy-crypto,rendering,signatures
+        New-Item -ItemType Directory -Force -Path out\windows-x64
+        Copy-Item vendor\pdf_oxide\target\x86_64-pc-windows-msvc\release\pdf_oxide.dll out\windows-x64\

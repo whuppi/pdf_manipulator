@@ -1,4 +1,3 @@
-# CI — automatic on every push/PR. The gate every PR must pass.
 name: CI
 
 on:
@@ -27,12 +26,4 @@ jobs:
     name: Test (macOS)
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
-        with: { submodules: recursive }
-      - uses: dart-lang/setup-dart@v1
-        with: { sdk: stable }
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with: { workspaces: vendor/pdf_oxide }
-      - run: dart pub get --no-example
-      - run: dart test --timeout=120s
+      - uses: ./.github/actions/dart-test

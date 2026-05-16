@@ -1,0 +1,25 @@
+name: Compile Linux
+description: Build pdf_oxide for Linux x64 + arm64
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+      with: { submodules: recursive }
+    - shell: bash
+      run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+    - uses: dtolnay/rust-toolchain@stable
+      with: { targets: "x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu" }
+    - uses: Swatinem/rust-cache@v2
+      with: { workspaces: vendor/pdf_oxide }
+    - shell: bash
+      env:
+        MANIFEST: vendor/pdf_oxide/Cargo.toml
+        FEATURES: icc,legacy-crypto,rendering,signatures
+      run: |
+        cargo build --manifest-path $MANIFEST --lib --release --target x86_64-unknown-linux-gnu --features $FEATURES
+        CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+        cargo build --manifest-path $MANIFEST --lib --release --target aarch64-unknown-linux-gnu --features $FEATURES
+        mkdir -p out/linux-x64 out/linux-arm64
+        cp vendor/pdf_oxide/target/x86_64-unknown-linux-gnu/release/libpdf_oxide.so out/linux-x64/
+        cp vendor/pdf_oxide/target/aarch64-unknown-linux-gnu/release/libpdf_oxide.so out/linux-arm64/
