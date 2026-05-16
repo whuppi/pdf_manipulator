@@ -117,27 +117,40 @@ jobs:
         with: { submodules: recursive }
       - run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
       - uses: dtolnay/rust-toolchain@stable
-        with: { targets: "x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu,wasm32-unknown-unknown" }
+        with: { targets: "x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu" }
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: vendor/pdf_oxide }
-      - run: cargo install wasm-bindgen-cli --version 0.2.121
-      - name: Linux native
-        run: |
+      - run: |
           cargo build --manifest-path $MANIFEST --lib --release --target x86_64-unknown-linux-gnu --features $FEATURES
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
           cargo build --manifest-path $MANIFEST --lib --release --target aarch64-unknown-linux-gnu --features $FEATURES
           mkdir -p out/linux-x64 out/linux-arm64
           cp vendor/pdf_oxide/target/x86_64-unknown-linux-gnu/release/libpdf_oxide.so out/linux-x64/
           cp vendor/pdf_oxide/target/aarch64-unknown-linux-gnu/release/libpdf_oxide.so out/linux-arm64/
-      - name: WASM
-        run: |
+      - uses: actions/upload-artifact@v4
+        with: { name: bin-linux, path: out/ }
+
+  compile-wasm:
+    name: Compile (WASM)
+    needs: version
+    if: needs.version.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: wasm32-unknown-unknown }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: vendor/pdf_oxide }
+      - run: cargo install wasm-bindgen-cli --version 0.2.121
+      - run: |
           rustup target add wasm32-unknown-unknown
           cargo build --manifest-path $MANIFEST --lib --target wasm32-unknown-unknown --features wasm --no-default-features --release
           mkdir -p out/wasm
           wasm-bindgen --target web --out-dir out/wasm --out-name pdf_oxide \
             vendor/pdf_oxide/target/wasm32-unknown-unknown/release/pdf_oxide.wasm
       - uses: actions/upload-artifact@v4
-        with: { name: bin-linux, path: out/ }
+        with: { name: bin-wasm, path: out/ }
 
   compile-windows:
     name: Compile (Windows)
@@ -272,7 +285,7 @@ jobs:
 
   release:
     name: GitHub Release
-    needs: [version, compile-macos, compile-linux, compile-windows,
+    needs: [version, compile-macos, compile-linux, compile-windows, compile-wasm,
             test-macos, test-linux, test-windows, test-android, test-ios]
     runs-on: ubuntu-latest
     steps:
@@ -301,8 +314,8 @@ jobs:
             done
           done
           # WASM: wasm/{name} → wasm-{name}
-          if [ -d "artifacts/bin-linux/wasm" ]; then
-            for f in artifacts/bin-linux/wasm/*; do
+          if [ -d "artifacts/bin-wasm/wasm" ]; then
+            for f in artifacts/bin-wasm/wasm/*; do
               [ -f "$f" ] || continue
               cp "$f" "release/wasm-$(basename "$f")"
             done
