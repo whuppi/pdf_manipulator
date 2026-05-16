@@ -1,0 +1,26 @@
+# Auto-creates Release PRs from conventional commits.
+# Zero compute — just reads git history and opens/updates a PR.
+name: Release Please
+
+on:
+  push:
+    branches: [main, dev]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          release-type: dart
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          prerelease: ${{ github.ref_name == 'dev' }}

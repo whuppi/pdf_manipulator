@@ -1,8 +1,7 @@
+# Lightweight CI — runs on every PR. Fast feedback.
 name: CI
 
 on:
-  push:
-    branches: [main, dev]
   pull_request:
     branches: [main, dev]
 
