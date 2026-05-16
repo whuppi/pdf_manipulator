@@ -1,0 +1,15 @@
+#!/bin/sh
+# Reject commits that add files matching .gitignore patterns.
+# Catches accidental `git add -f` of ignored files.
+
+bad_files=$(git diff --cached --name-only --diff-filter=A | while read f; do
+  git check-ignore --quiet "$f" 2>/dev/null && echo "$f"
+done)
+
+if [ -n "$bad_files" ]; then
+  echo "ERROR: These newly-added files are gitignored:"
+  echo "$bad_files"
+  echo ""
+  echo "Remove them with: git rm --cached <file>"
+  exit 1
+fi
