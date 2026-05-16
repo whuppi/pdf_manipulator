@@ -2,7 +2,7 @@
 
 Maintenance procedures for the package. For architecture see [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-pdf_manipulator wraps a vendored fork of [pdf_oxide](https://github.com/nickhimself/pdf_oxide) (Rust engine) via FFI (native) and WASM (web). The fork lives at `vendor/pdf_oxide/` on a patch branch. We track upstream plus our own additions:
+pdf_manipulator wraps a vendored fork of [pdf_oxide](https://github.com/nickhimself/pdf_oxide) (Rust engine) via FFI (native) and WASM (web). The fork lives at [`whuppi/pdf_oxide`](https://github.com/whuppi/pdf_oxide) with patches on the [`pdf_manipulator/0.3.47-patches`](https://github.com/whuppi/pdf_oxide/tree/pdf_manipulator/0.3.47-patches) branch. The git submodule at `vendor/pdf_oxide/` points to this branch.
 
 | Source | Why we track it |
 |---|---|
@@ -346,15 +346,15 @@ Our fork (`pdf_manipulator/0.3.47-patches` branch, commits atop `go/v0.3.47`) ad
 
 | Item | Value |
 |---|---|
-| Upstream repo | `https://github.com/nickhimself/pdf_oxide` |
-| Upstream base tag | `go/v0.3.47` (2026-05-12) |
-| Fork branch | `pdf_manipulator/0.3.47-patches` |
-| Patch commits | 3 (header declarations, editor functions, watermark + image optimization + PDF/A validation) |
-| Last refresh | 2026-05-14 |
-| Build hook | Dual-path: contributor compiles from source (`cargo build`), consumer downloads from GitHub Releases. Version read from `pubspec.yaml`. |
+| Upstream repo | [`nickhimself/pdf_oxide`](https://github.com/nickhimself/pdf_oxide) |
+| Fork repo | [`whuppi/pdf_oxide`](https://github.com/whuppi/pdf_oxide) |
+| Fork branch | [`pdf_manipulator/0.3.47-patches`](https://github.com/whuppi/pdf_oxide/tree/pdf_manipulator/0.3.47-patches) |
+| Upstream base tag | `go/v0.3.47` |
 | wasm-bindgen version | `0.2.121` |
 
-Update this table after every upstream bump or patch change.
+Fork convention: `main` on the fork stays a clean mirror of upstream. Patches live on the named branch. When upstream releases a new version, rebase the patch branch onto the new tag (see [S1](#s1--bump-upstream)).
+
+Update this table after every upstream bump.
 
 ---
 
