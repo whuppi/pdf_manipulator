@@ -1,19 +1,17 @@
-# Release — fires when a merge to main changes pubspec.yaml.
+# Release — compiles all targets, tests all platforms, creates GitHub Release.
 #
-# Reads version from pubspec.yaml. If no tag exists for that version:
-#   1. Cross-compiles 13 native targets on 3 runners
-#   2. Tests on 5 platforms (compile from source — contributor path)
-#   3. Creates git tag + GitHub Release with pre-built binaries
-#   4. Validates pub.dev publish
+# Triggers:
+#   - Automatically when pubspec.yaml changes on main (version bump)
+#   - Manually via Actions tab (re-run a release without fake changes)
 #
-# The pre-built binaries are what consumers download via hook/build.dart
-# when they install from pub.dev (they don't have vendor/pdf_oxide/).
+# If a release for the version already exists, it gets overwritten.
 name: Release
 
 on:
   push:
     branches: [main]
     paths: ['pubspec.yaml']
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -29,20 +27,13 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.ver.outputs.version }}
-      skip: ${{ steps.check.outputs.skip }}
     steps:
       - uses: actions/checkout@v4
       - id: ver
         run: |
           V=$(grep '^version:' pubspec.yaml | sed 's/version: //')
           echo "version=$V" >> "$GITHUB_OUTPUT"
-      - id: check
-        run: |
-          if git ls-remote --tags origin | grep -q "refs/tags/v${{ steps.ver.outputs.version }}$"; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
+          echo "Version: $V"
 
   # ═══════════════════════════════════════════════════════════════════
   # COMPILE — 3 runners, 13 native targets (for GitHub Release assets)
@@ -51,7 +42,6 @@ jobs:
   compile-macos:
     name: Compile (macOS + iOS + Android)
     needs: version
-    if: needs.version.outputs.skip == 'false'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -110,7 +100,6 @@ jobs:
   compile-linux:
     name: Compile (Linux)
     needs: version
-    if: needs.version.outputs.skip == 'false'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -133,7 +122,6 @@ jobs:
   compile-wasm:
     name: Compile (WASM)
     needs: version
-    if: needs.version.outputs.skip == 'false'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -155,7 +143,6 @@ jobs:
   compile-windows:
     name: Compile (Windows)
     needs: version
-    if: needs.version.outputs.skip == 'false'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -179,7 +166,6 @@ jobs:
   test-macos:
     name: Test (macOS)
     needs: version
-    if: needs.version.outputs.skip == 'false'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -195,7 +181,6 @@ jobs:
   test-linux:
     name: Test (Linux)
     needs: version
-    if: needs.version.outputs.skip == 'false'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -211,7 +196,6 @@ jobs:
   test-windows:
     name: Test (Windows)
     needs: version
-    if: needs.version.outputs.skip == 'false'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -227,7 +211,6 @@ jobs:
   test-android:
     name: Test (Android)
     needs: version
-    if: needs.version.outputs.skip == 'false'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -259,7 +242,6 @@ jobs:
   test-ios:
     name: Test (iOS)
     needs: version
-    if: needs.version.outputs.skip == 'false'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -290,6 +272,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Delete existing release + tag (if re-running)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ needs.version.outputs.version }}"
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          git push origin --delete "$TAG" 2>/dev/null || true
       - name: Create tag
         run: |
           git config user.name "github-actions[bot]"
