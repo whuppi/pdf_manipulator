@@ -223,6 +223,8 @@ jobs:
       - uses: subosito/flutter-action@v2
         with: { channel: stable }
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: vendor/pdf_oxide }
       - uses: actions/setup-java@v4
