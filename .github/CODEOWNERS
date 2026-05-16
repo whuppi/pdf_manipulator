@@ -1,0 +1,14 @@
+# Protected paths — PRs touching these require maintainer approval.
+# Convention: @whuppi/{repo}-maintainers per repo.
+
+# CI/CD infrastructure
+/.github/                  @whuppi/pdf-manipulator-maintainers
+/.githooks/                @whuppi/pdf-manipulator-maintainers
+
+# Build system + vendored engine
+/hook/                     @whuppi/pdf-manipulator-maintainers
+/vendor/                   @whuppi/pdf-manipulator-maintainers
+
+# Package identity
+/pubspec.yaml              @whuppi/pdf-manipulator-maintainers
+/.pubignore                @whuppi/pdf-manipulator-maintainers

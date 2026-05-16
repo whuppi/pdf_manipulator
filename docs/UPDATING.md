@@ -22,7 +22,7 @@ pdf_manipulator wraps a vendored fork of [pdf_oxide](https://github.com/yfedosee
 | A Rust patch needs updating or adding | [S2 — Edit Rust patches](#s2--edit-rust-patches) |
 | Adding a new FFI function | [S3 — Add FFI function](#s3--add-ffi-function) |
 | Rebuilding WASM | [S4 — Rebuild WASM](#s4--rebuild-wasm) |
-| Rebuilding native binaries | [S5 — Rebuild native binaries](#s5--rebuild-native-binaries) |
+| Releasing a new version | [S5 — Release pipeline](#s5--release-pipeline) |
 | Adding a new platform | [S6 — Add platform](#s6--add-platform) |
 | Consumer reports a missing function | [S7 — Diagnose missing function](#s7--diagnose-missing-function) |
 | Using a new Dart/Flutter feature | [S8 — Update SDK constraint](#s8--update-sdk-constraint) |
@@ -110,11 +110,10 @@ For each new upstream C-ABI function worth exposing, follow [S3](#s3--add-ffi-fu
 
 # Update provenance table (bottom of this file)
 # Update CAPABILITY_ROADMAP.md
-# Update CHANGELOG.md
-# Bump version in pubspec.yaml
+# Update CAPABILITY_ROADMAP.md
 ```
 
-After bumping, always run [S4](#s4--rebuild-wasm). Native binaries are compiled and uploaded by CI when you push the version bump to main ([S5](#s5--rebuild-native-binaries)).
+After Rust changes, rebuild WASM ([S4](#s4--rebuild-wasm)). Version bumps, changelog, and native binary releases are handled automatically by release-please and the tag-triggered release pipeline ([S5](#s5--release-pipeline)).
 
 ---
 
@@ -153,7 +152,7 @@ dart analyze .
 dart test
 ```
 
-After editing patches, always run [S4](#s4--rebuild-wasm). Native binaries are compiled and uploaded by CI when you push the changes to main ([S5](#s5--rebuild-native-binaries)).
+After editing patches, always run [S4](#s4--rebuild-wasm). Native binaries are compiled and released automatically by the tag-triggered pipeline ([S5](#s5--release-pipeline)).
 
 **Critical: commit AND push the submodule, or CI will fail.** Local edits to `vendor/pdf_oxide/` work locally (cargo compiles from the dirty working tree) but CI checks out the committed submodule pointer. If the patches aren't committed and pushed to the fork, CI gets the old code and fails with symbol-not-found errors. The three-step sequence:
 
@@ -166,11 +165,12 @@ git commit -m "patch: <description>"
 # 2. Push to the fork remote
 git push origin pdf_manipulator/0.3.47-patches
 
-# 3. Back to parent — update submodule pointer
+# 3. Back to parent — update submodule pointer and open PR
 cd ../..
 git add vendor/pdf_oxide
-git commit -m "submodule: update to include <description>"
-git push origin main
+git commit -m "build: update submodule to include <description>"
+git push origin <your-feature-branch>
+# Then open a PR to dev
 ```
 
 ---
@@ -188,7 +188,7 @@ End-to-end checklist for exposing a new pdf_oxide function to Dart:
 7. **Public API** — expose via `Pdf`, `PdfEditor`, or `PdfBuilder` in `lib/src/`
 8. **Export** — ensure the public type is exported from `lib/pdf_manipulator.dart`
 9. **Tests** — add test in `test/`
-10. **Rebuild** — [S4](#s4--rebuild-wasm) if Rust changed; native binaries are handled by CI on push to main ([S5](#s5--rebuild-native-binaries))
+10. **Rebuild** — [S4](#s4--rebuild-wasm) if Rust changed; native binaries are released automatically by the tag-triggered pipeline ([S5](#s5--release-pipeline))
 
 Never hand-edit `lib/src/ffi/native_bindings.g.dart`. That file is ffigen output.
 
@@ -216,11 +216,41 @@ The script runs `cargo build --target wasm32-unknown-unknown --features wasm --n
 
 ---
 
-## S5 — Rebuild native binaries
+## S5 — Release pipeline
 
-Native binaries are compiled and uploaded automatically by CI. Contributors do not need to compile and commit binaries manually.
+Versioning, changelog, tagging, compilation, and publishing are fully automated via release-please + tag-triggered CI. No manual version bumps, no manual changelog editing, no manual tagging.
 
-**How it works:** `release.yml` fires on every push to `main` that changes `pubspec.yaml`. If the version is new (no existing git tag), CI cross-compiles 13 native targets + WASM on 3 runners, runs tests on 5 platforms, creates a git tag, and uploads all binaries (native + WASM) to the corresponding GitHub Release.
+### How it works — two release channels
+
+**Prerelease (dev branch):**
+
+1. Work on feature branches with conventional commit titles (`feat:`, `fix:`, etc.)
+2. Open PRs to `dev` — CI runs analyze + macOS test + PR title validation
+3. Squash-merge — PR title becomes the commit on dev
+4. release-please reads the commits, opens a prerelease Release PR (bumps to `1.1.0-dev.0`, writes CHANGELOG)
+5. Merge the Release PR → tag `v1.1.0-dev.0` → full pipeline → prerelease published
+
+**Stable release (main branch):**
+
+1. Open PR from `dev` → `main` with a title summarizing what dev accumulated (e.g. `feat: watermark + compression + stamps`)
+2. Squash-merge — that title becomes the commit on main
+3. release-please reads it, opens a stable Release PR (bumps to `1.1.0`, writes CHANGELOG)
+4. You can edit the Release PR's CHANGELOG before merging to polish the wording
+5. Merge the Release PR → tag `v1.1.0` → full pipeline → stable release published
+
+**Why this works cleanly:** each branch tracks its own commit history independently. Squash-merge works on both paths — the PR title is always the changelog entry. No commits leak between branches.
+
+### CI/CD workflows
+
+| Workflow | Trigger | Purpose |
+|---|---|---|
+| `ci.yml` | PR to main/dev | Analyze + macOS test (fast, automatic) |
+| `pr-lint.yml` | PR to main/dev | Validates PR title follows Conventional Commits |
+| `full-test.yml` | Maintainer adds `ready-to-test` label | 6-platform test (macOS, Linux, Windows, Android, iOS, Web). Required before merge. |
+| `release-please.yml` | Push to main/dev | Opens/updates Release PRs with version bump + CHANGELOG |
+| `release.yml` | Tag push (`v*`) | Compile all targets → GitHub Release → pub.dev publish. No re-test (same commit already passed full-test). |
+
+### Cross-compilation runners
 
 | Runner | Targets |
 |---|---|
@@ -228,31 +258,20 @@ Native binaries are compiled and uploaded automatically by CI. Contributors do n
 | Linux (ubuntu-latest) | Linux x64/arm64, WASM |
 | Windows (windows-latest) | Windows x64 |
 
-### CI/CD workflows
+### Branch protection
 
-| Workflow | Trigger | Purpose |
-|---|---|---|
-| `ci.yml` | Every push/PR | Analyze + macOS test (cheap gate) |
-| `full-test.yml` | Manual (repo owner) | 5-platform test (macOS, Linux, Windows, Android, iOS) |
-| `release.yml` | Push to main changing pubspec.yaml | Compile 13 targets + WASM, test 5 platforms, tag, GitHub Release |
-| `publish.yml` | Manual (repo owner + reviewer) | Push to pub.dev via OIDC |
+Both `main` and `dev` are protected: no direct push (even admins), PRs required, 3 status checks must pass (Analyze, Test, Conventional Commit), squash-merge only, force push blocked.
 
-### GitHub Settings
+### Security
 
-**Branch protection** (Settings → Branches): `main` and `dev` require CI status checks, no force push.
+- Default workflow token is read-only; workflows opt-in to write permissions
+- Fork PRs get read-only tokens (GitHub enforced)
+- pub.dev publish uses OIDC (no long-lived secrets)
+- Only tag pushes trigger the release pipeline; only release-please creates tags
 
-**Environments** (Settings → Environments): `publish` requires reviewer approval.
+### For local development
 
-**To trigger a release after a Rust-side change:**
-
-```sh
-# 1. Bump the version in pubspec.yaml
-# 2. Commit all changes (vendor/pdf_oxide, web_assets/, Dart code)
-# 3. Push to main
-# 4. release.yml handles compilation + tag + GitHub Release upload
-```
-
-**For local development:** contributors compile from source automatically when running `dart test`. The build hook (`hook/build.dart`) detects `vendor/pdf_oxide/Cargo.toml` and runs `cargo build` — no manual compilation step needed. This requires a Rust toolchain (`rustup.rs`).
+Contributors compile from source automatically when running `dart test`. The build hook (`hook/build.dart`) detects `vendor/pdf_oxide/Cargo.toml` and runs `cargo build` — no manual compilation step needed. This requires a Rust toolchain (`rustup.rs`).
 
 ---
 
@@ -262,7 +281,7 @@ Native binaries are compiled and uploaded automatically by CI. Contributors do n
 2. Add the cross-compilation step to `release.yml` (under the appropriate runner job)
 3. Add the platform mapping in `hook/build.dart` (`_platformBinaries` map)
 4. Test locally: `dart test` on the new platform (build hook compiles from source)
-5. Push to main with a version bump — CI compiles and uploads the new binary to the GitHub Release
+5. Merge to dev — release-please handles version bump, CI compiles and uploads the new binary on release
 6. Update `docs/CAPABILITY_ROADMAP.md` infrastructure table
 
 ---
@@ -324,7 +343,7 @@ grep "sdk:" pubspec.yaml
 
 **Current constraint:** `>=3.10.0 <4.0.0` (required by `hooks: build: true`).
 
-When bumping the constraint, update `CHANGELOG.md` to note the new minimum SDK.
+When bumping the constraint, note the new minimum SDK in your commit message — release-please will include it in the changelog automatically.
 
 ---
 
@@ -423,4 +442,4 @@ Update this table after every upstream bump.
 
 ---
 
-> **Upstream bumps rebase our patch branch. Rust patches are additive-only with tagged removal triggers. Rebuild WASM after every Rust change; native binaries are cross-compiled by CI (`release.yml`) on 3 runners for 13 targets and uploaded to GitHub Releases automatically. ffigen regenerates Dart bindings — never hand-edit. The build hook is dual-path: contributors compile from source via `cargo build`; consumers download pre-built binaries from GitHub Releases (zero Rust required).**
+> **Upstream bumps rebase our patch branch. Rust patches are additive-only with tagged removal triggers. Rebuild WASM after every Rust change. Versioning, changelog, tagging, native compilation, and pub.dev publishing are fully automated: release-please opens Release PRs from conventional commits; merging one creates a tag; the tag triggers 6-platform test → compile → GitHub Release → pub publish. ffigen regenerates Dart bindings — never hand-edit. The build hook is dual-path: contributors compile from source via `cargo build`; consumers download pre-built binaries from GitHub Releases (zero Rust required).**

@@ -64,10 +64,10 @@ pdf_manipulator/
 │   ├── pdf_oxide_bg.wasm                 ← WASM binary (gitignored, downloaded by setup)
 │   └── worker.js                         ← Web Worker dispatcher (committed)
 ├── .github/workflows/
-│   ├── ci.yml                            ← auto: analyze + macOS test
-│   ├── full-test.yml                     ← manual: 5-platform test
-│   ├── release.yml                       ← auto on version bump: compile + test + release
-│   └── publish.yml                       ← manual: push to pub.dev
+│   ├── ci.yml                            ← auto on PR: analyze + macOS test
+│   ├── pr-lint.yml                       ← auto on PR: conventional commit title check
+│   ├── release-please.yml                ← auto on push: opens/updates Release PRs
+│   └── release.yml                       ← auto on tag: 6-platform test + compile + release + publish
 ├── tool/
 │   ├── build_wasm.sh                     ← rebuild WASM from source
 │   └── compile_natives.sh                ← local native compilation (CI handles releases)
@@ -253,14 +253,24 @@ Maps 1:1 to pdf_oxide's C error codes: `0=success, 1=invalid arg, 2=IO, 3=parse,
 
 Consumers need zero Rust toolchain. `dart pub get` + `dart run` just works — the hook downloads the binary automatically. Contributors with the submodule get automatic source compilation.
 
-### CI/CD — four workflows
+### CI/CD — automated via release-please
+
+Version bumps, changelog generation, tagging, and publishing are fully automated. The only manual action is merging the Release PR that release-please creates.
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `ci.yml` | Auto on push/PR | `dart analyze` + `dart test` on macOS |
-| `full-test.yml` | Manual (`workflow_dispatch`) | Full test suite on 5 platforms (macOS, Linux, Windows, iOS, Android) |
-| `release.yml` | Auto on version bump | Compiles 13 native targets + WASM on 3 runners, runs full tests on 5 platforms, creates a GitHub Release with all binaries |
-| `publish.yml` | Manual (`workflow_dispatch`) | Publishes to pub.dev via OIDC |
+| `ci.yml` | PR to main/dev | `dart analyze` + `dart test` on macOS (fast, automatic) |
+| `pr-lint.yml` | PR to main/dev | Validates PR title follows Conventional Commits format |
+| `full-test.yml` | Maintainer adds `ready-to-test` label | 6-platform test. Required before merge. Contributors can't trigger it. |
+| `release-please.yml` | Push to main/dev | Reads conventional commits, opens/updates a Release PR with version bump + CHANGELOG |
+| `release.yml` | Tag push (`v*`) | Compile all targets → GitHub Release → pub.dev publish (no re-test — same commit) |
+
+**Two release channels:**
+
+- **Prerelease (dev):** feature PRs squash-merge to dev → release-please opens a prerelease Release PR (`1.1.0-dev.0`) → merge it → tag → pipeline → prerelease published
+- **Stable (main):** PR dev→main squash-merge → release-please opens a stable Release PR (`1.1.0`) → edit changelog if desired → merge → tag → pipeline → stable published
+
+PR titles are the sole changelog source. Squash-merge on both paths keeps history clean. See [`UPDATING.md` S5](UPDATING.md#s5--release-pipeline) for the full procedure.
 
 `release.yml` cross-compilation runners:
 
@@ -270,7 +280,7 @@ Consumers need zero Rust toolchain. `dart pub get` + `dart run` just works — t
 | `ubuntu-latest` | Linux x64/arm64, WASM |
 | `windows-latest` | Windows x64 |
 
-All 13 native binaries + WASM are uploaded as GitHub Release assets. The build hook's download URL matches the asset naming convention (`{platform}-{libname}`).
+All native binaries + WASM are uploaded as GitHub Release assets. The build hook's download URL matches the asset naming convention (`{platform}-{libname}`).
 
 ### Web
 

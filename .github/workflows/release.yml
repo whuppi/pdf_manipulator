@@ -1,77 +1,23 @@
-# Test 6 platforms → compile 13 targets + WASM → GitHub Release.
-# Re-runs overwrite existing releases for the same version.
+# Compile all targets → upload to GitHub Release → publish to pub.dev.
+# Triggered by tag push (release-please creates tags when you merge a Release PR).
+# Tests are NOT re-run — full-test already passed before merge (same commit).
 name: Release
 
 on:
   push:
-    branches: [main]
-    paths: ['pubspec.yaml']
-  workflow_dispatch:
+    tags: ['v*']
 
 permissions:
   contents: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  # ── Version ────────────────────────────────────────────────────────
-  version:
-    name: Read version
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.ver.outputs.version }}
-    steps:
-      - uses: actions/checkout@v4
-      - id: ver
-        run: |
-          V=$(grep '^version:' pubspec.yaml | sed 's/version: //')
-          echo "version=$V" >> "$GITHUB_OUTPUT"
-
-  # ── Test first ─────────────────────────────────────────────────────
-  test-macos:
-    needs: version
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-        with: { submodules: recursive }
-      - uses: ./.github/actions/dart-test
-  test-linux:
-    needs: version
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with: { submodules: recursive }
-      - uses: ./.github/actions/dart-test
-  test-windows:
-    needs: version
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-        with: { submodules: recursive }
-      - uses: ./.github/actions/dart-test
-  test-android:
-    needs: version
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with: { submodules: recursive }
-      - uses: ./.github/actions/android-test
-  test-ios:
-    needs: version
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-        with: { submodules: recursive }
-      - uses: ./.github/actions/ios-test
-  test-web:
-    needs: version
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with: { submodules: recursive }
-      - uses: ./.github/actions/web-test
-
-  # ── Compile (only after all tests pass) ────────────────────────────
+  # ── Compile all targets ────────────────────────────────────────────
   compile-macos:
-    needs: [test-macos, test-linux, test-windows, test-android, test-ios, test-web]
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -80,7 +26,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: bin-macos, path: out/ }
   compile-ios:
-    needs: [test-macos, test-linux, test-windows, test-android, test-ios, test-web]
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -89,7 +34,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: bin-ios, path: out/ }
   compile-android:
-    needs: [test-macos, test-linux, test-windows, test-android, test-ios, test-web]
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -98,7 +42,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: bin-android, path: out/ }
   compile-linux:
-    needs: [test-macos, test-linux, test-windows, test-android, test-ios, test-web]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -107,7 +50,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: bin-linux, path: out/ }
   compile-wasm:
-    needs: [test-macos, test-linux, test-windows, test-android, test-ios, test-web]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -116,7 +58,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: bin-wasm, path: out/ }
   compile-windows:
-    needs: [test-macos, test-linux, test-windows, test-android, test-ios, test-web]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -125,26 +66,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: bin-windows, path: out/ }
 
-  # ── Release ────────────────────────────────────────────────────────
-  release:
-    name: GitHub Release
-    needs: [version, compile-macos, compile-ios, compile-android, compile-linux, compile-windows, compile-wasm]
+  # ── Upload binaries to the GitHub Release ──────────────────────────
+  upload-assets:
+    name: Upload Release Assets
+    needs: [compile-macos, compile-ios, compile-android, compile-linux, compile-windows, compile-wasm]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Delete existing release (if re-running)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="v${{ needs.version.outputs.version }}"
-          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
-          git push origin --delete "$TAG" 2>/dev/null || true
-      - name: Create tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "v${{ needs.version.outputs.version }}"
-          git push origin "v${{ needs.version.outputs.version }}"
       - uses: actions/download-artifact@v4
         with: { path: artifacts/ }
       - name: Flatten assets
@@ -169,16 +96,15 @@ jobs:
           ls -lh release/
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: "v${{ needs.version.outputs.version }}"
+          tag_name: ${{ github.ref_name }}
           files: release/*
-          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ── Validate pub.dev ───────────────────────────────────────────────
-  pub-dry-run:
-    name: pub.dev dry run
-    needs: [test-macos, test-linux, test-windows]
+  # ── Publish to pub.dev ─────────────────────────────────────────────
+  publish:
+    name: Publish to pub.dev
+    needs: upload-assets
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -186,4 +112,4 @@ jobs:
       - uses: dart-lang/setup-dart@v1
         with: { sdk: stable }
       - run: dart pub get --no-example
-      - run: dart pub publish --dry-run
+      - run: dart pub publish --force

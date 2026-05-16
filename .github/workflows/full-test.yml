@@ -1,46 +1,103 @@
+# Full 6-platform test — maintainer adds "ready-to-test" label to trigger.
+# Label is auto-removed on new pushes (stale results = wasted compute).
+# Contributors cannot add labels (requires write/maintain/admin access).
 name: Full Test
 
 on:
-  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    branches: [main, dev]
 
 concurrency:
-  group: full-test-${{ github.ref }}
+  group: full-test-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
+  # Remove label on new push so stale results don't gate merge.
+  # Maintainer must re-label after reviewing new changes.
+  revoke-label:
+    name: Revoke stale label
+    if: >-
+      github.event.action == 'synchronize' &&
+      contains(github.event.pull_request.labels.*.name, 'ready-to-test')
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Remove ready-to-test label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr edit ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --remove-label "ready-to-test"
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --body "Label \`ready-to-test\` removed — new commits pushed. Re-add the label when ready for full test."
+
   macos:
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
       - uses: ./.github/actions/dart-test
   linux:
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
       - uses: ./.github/actions/dart-test
   windows:
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
       - uses: ./.github/actions/dart-test
   android:
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
       - uses: ./.github/actions/android-test
   ios:
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
       - uses: ./.github/actions/ios-test
   web:
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
       - uses: ./.github/actions/web-test
+
+  # Gate job — required check for branch protection.
+  gate:
+    name: Full Test Gate
+    if: always()
+    needs: [macos, linux, windows, android, ios, web]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate
+        run: |
+          # If label event didn't fire tests, gate passes (label not present yet)
+          if [[ "${{ github.event.action }}" != "labeled" ]] || [[ "${{ github.event.label.name }}" != "ready-to-test" ]]; then
+            echo "Full test not triggered — gate passes"
+            exit 0
+          fi
+          # Label was added — all 6 must succeed
+          RESULTS=("${{ needs.macos.result }}" "${{ needs.linux.result }}" "${{ needs.windows.result }}" "${{ needs.android.result }}" "${{ needs.ios.result }}" "${{ needs.web.result }}")
+          for r in "${RESULTS[@]}"; do
+            if [[ "$r" != "success" ]]; then
+              echo "FAILED: platform test returned '$r'"
+              exit 1
+            fi
+          done
+          echo "All 6 platforms passed"
