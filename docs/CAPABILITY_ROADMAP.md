@@ -179,9 +179,16 @@ What's shipped, what's next, what's deliberately out of scope. For the architect
 
 | Capability | Category | Work needed |
 |---|---|---|
-| Font subsetting (re-subset existing embedded fonts) | Content | `subsetter` crate is a dependency, used writer-side only. Needs new Rust module: scan content streams for used glyphs, re-subset each font, replace in PDF. Substantial Rust engineering. |
-| iOS / Android device testing | Infrastructure | Pre-built binaries exist; untested on real devices |
-| Cooperative cancellation via shared atomic flag | Infrastructure | Requires patching pdf_oxide Rust functions to accept `*const bool cancel_flag` and check periodically; future optimization for CPU savings on heavy cancelled ops |
+| PDF → DOCX conversion | Conversion | Upstream v0.3.48 ships C-ABI + WASM. Bump submodule, wire through all layers (S1 + S3). |
+| PDF → PPTX conversion | Conversion | Same upstream release. Wire alongside DOCX. |
+| PDF → XLSX conversion | Conversion | Same upstream release. Wire alongside DOCX. |
+| DOCX → PDF conversion | Conversion | Same upstream release. `pdf_document_open_from_docx_bytes` C-ABI ready. |
+| PPTX → PDF conversion | Conversion | Same upstream release. Wire alongside DOCX→PDF. |
+| XLSX → PDF conversion | Conversion | Same upstream release. Wire alongside DOCX→PDF. |
+| Font extraction with unicode maps | Content | Upstream v0.3.48. `extract_embedded_fonts_with_unicode_maps`. |
+| Font subsetting (re-subset existing embedded fonts) | Content | `subsetter` crate is a dependency, used writer-side only. Needs new Rust module. Substantial Rust engineering. |
+| iOS / Android device testing | Infrastructure | Integration tests exist; untested on real devices in CI |
+| Cooperative cancellation via shared atomic flag | Infrastructure | Requires patching pdf_oxide Rust functions; future optimization |
 
 ---
 
