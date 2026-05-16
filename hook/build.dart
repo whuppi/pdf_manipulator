@@ -11,19 +11,21 @@
 //     → Downloads pre-built binary from GitHub Releases
 //     → Zero toolchain required
 //
-// The fork is automatic: vendor/pdf_oxide/Cargo.toml exists → compile.
-// Doesn't exist → download. Version read from pubspec.yaml — no
-// hardcoded constants to keep in sync.
+// Link mode, target triple, library filename, and Android NDK linker
+// are all read from the CodeConfig input — never hardcoded.
+// Pattern learned from native_toolchain_rust.
 
 import 'dart:io';
 
 import 'package:code_assets/code_assets.dart';
 import 'package:hooks/hooks.dart';
 import 'package:logging/logging.dart';
+import 'package:path/path.dart' as p;
 
 final _log = Logger('pdf_manipulator:build');
 
 const _assetId = 'src/ffi/native_bindings.g.dart';
+const _crateName = 'pdf_oxide';
 const _releaseRepo = 'https://github.com/whuppi/pdf_manipulator/releases/download';
 const _features = 'icc,legacy-crypto,rendering,signatures';
 
@@ -31,8 +33,12 @@ void main(List<String> args) async {
   await build(args, (BuildInput input, BuildOutputBuilder output) async {
     if (!input.config.buildCodeAssets) return;
 
-    final libName = input.config.code.targetOS.dylibFileName('pdf_oxide');
-    final outFile = File.fromUri(input.outputDirectory.resolve(libName));
+    final codeConfig = input.config.code;
+    final targetTriple = _targetTriple(codeConfig);
+    final linkMode = _linkMode(codeConfig);
+    final libFileName = codeConfig.targetOS
+        .libraryFileName(_crateName, linkMode);
+    final outFile = File.fromUri(input.outputDirectory.resolve(libFileName));
 
     if (!outFile.existsSync()) {
       final cargoToml = File.fromUri(
@@ -40,15 +46,11 @@ void main(List<String> args) async {
       );
 
       if (cargoToml.existsSync()) {
-        await _compileFromSource(input, outFile);
+        await _compileFromSource(input, targetTriple, linkMode, outFile);
       } else {
-        await _downloadPrebuilt(input, outFile);
+        await _downloadPrebuilt(input, codeConfig, libFileName, outFile);
       }
     }
-
-    final linkMode = input.config.code.targetOS == OS.iOS
-        ? StaticLinking()
-        : DynamicLoadingBundled();
 
     output.assets.code.add(
       CodeAsset(
@@ -68,77 +70,103 @@ void main(List<String> args) async {
 
 // ── Path 1: Compile from source ────────────────────────────────────────
 
-Future<void> _compileFromSource(BuildInput input, File outFile) async {
-  final target = _cargoTarget(input.config.code);
-  final manifest = input.packageRoot
-      .resolve('vendor/pdf_oxide/Cargo.toml')
-      .toFilePath();
+Future<void> _compileFromSource(
+  BuildInput input,
+  String targetTriple,
+  LinkMode linkMode,
+  File outFile,
+) async {
+  final manifestPath = p.fromUri(
+    input.packageRoot.resolve('vendor/pdf_oxide/Cargo.toml'),
+  );
+  final targetDir = p.join(p.fromUri(input.outputDirectory), 'cargo_target');
 
-  _log.info('compiling from source for $target');
+  _log.info('compiling from source for $targetTriple');
 
   final env = <String, String>{};
 
-  // Android targets need the NDK linker
-  if (target.contains('android')) {
-    final ndkLinker = _findNdkLinker(target);
-    if (ndkLinker != null) {
-      final envKey = 'CARGO_TARGET_${target.toUpperCase().replaceAll('-', '_')}_LINKER';
-      env[envKey] = ndkLinker;
-      _log.info('using NDK linker: $ndkLinker');
+  // Android: use the C compiler Flutter provides via CodeConfig
+  final codeConfig = input.config.code;
+  if (codeConfig.targetOS == OS.android) {
+    final cc = codeConfig.cCompiler;
+    if (cc != null) {
+      final compilerDir = p.dirname(p.fromUri(cc.compiler));
+      final ndkTriple = targetTriple == 'armv7-linux-androideabi'
+          ? 'armv7a-linux-androideabi'
+          : targetTriple;
+      final linker = p.join(compilerDir, '${ndkTriple}35-clang');
+      final ar = p.join(compilerDir, 'llvm-ar');
+      final envKey = 'CARGO_TARGET_${targetTriple.toUpperCase().replaceAll('-', '_')}';
+      env['${envKey}_LINKER'] = linker;
+      env['${envKey}_AR'] = ar;
+      _log.info('NDK linker: $linker');
     }
   }
 
-  final result = await Process.run('cargo', [
-    'build',
-    '--manifest-path', manifest,
-    '--lib',
-    '--release',
-    '--target', target,
-    '--features', _features,
-  ], environment: env.isEmpty ? null : {...Platform.environment, ...env});
+  // macOS: strip Xcode injections from PATH that break host builds
+  if (Platform.isMacOS && codeConfig.targetOS != OS.macOS) {
+    env['PATH'] = Platform.environment['PATH']!
+        .split(':')
+        .where((e) => !e.contains('Contents/Developer/'))
+        .join(':');
+  }
+
+  final result = await Process.run(
+    'cargo',
+    [
+      'build',
+      '--manifest-path', manifestPath,
+      '--lib',
+      '--release',
+      '--target', targetTriple,
+      '--target-dir', targetDir,
+      '--features', _features,
+    ],
+    environment: {...Platform.environment, ...env},
+  );
 
   if (result.exitCode != 0) {
     throw StateError(
       'cargo build failed (exit ${result.exitCode}).\n'
       'stderr: ${result.stderr}\n\n'
       'Ensure Rust is installed: https://rustup.rs\n'
-      'Then: rustup target add $target',
+      'Then: rustup target add $targetTriple',
     );
   }
 
-  final releaseDir = input.packageRoot
-      .resolve('vendor/pdf_oxide/target/$target/release/')
-      .toFilePath();
-  final compiled = _findLib(releaseDir, input.config.code.targetOS);
+  // Find the compiled library using the same filename the output expects
+  final compiled = p.join(
+    targetDir,
+    targetTriple,
+    'release',
+    codeConfig.targetOS
+        .libraryFileName(_crateName, linkMode)
+        .replaceAll('-', '_'),
+  );
+
+  if (!File(compiled).existsSync()) {
+    throw StateError(
+      'Compiled library not found at $compiled.\n'
+      'Expected: ${codeConfig.targetOS.libraryFileName(_crateName, linkMode)}',
+    );
+  }
 
   outFile.parent.createSync(recursive: true);
   File(compiled).copySync(outFile.path);
   _log.info('compiled → ${outFile.path}');
 }
 
-String _findLib(String dir, OS os) {
-  final names = switch (os) {
-    OS.macOS => ['libpdf_oxide.dylib'],
-    OS.iOS => ['libpdf_oxide.a'],
-    OS.android => ['libpdf_oxide.so'],
-    OS.linux => ['libpdf_oxide.so'],
-    OS.windows => ['pdf_oxide.dll'],
-    _ => <String>[],
-  };
-  for (final name in names) {
-    final path = '$dir$name';
-    if (File(path).existsSync()) return path;
-  }
-  throw StateError('No compiled library in $dir');
-}
-
 // ── Path 2: Download from GitHub Releases ──────────────────────────────
 
-Future<void> _downloadPrebuilt(BuildInput input, File outFile) async {
+Future<void> _downloadPrebuilt(
+  BuildInput input,
+  CodeConfig codeConfig,
+  String libFileName,
+  File outFile,
+) async {
   final version = _readVersion(input.packageRoot);
-  final platform = _platformKey(input.config.code);
-  final libName = outFile.uri.pathSegments.last;
-  final url = '$_releaseRepo/v$version/$platform-$libName';
+  final platform = _platformKey(codeConfig);
+  final url = '$_releaseRepo/v$version/$platform-$libFileName';
 
   _log.info('downloading $url');
 
@@ -182,38 +210,40 @@ Future<void> _downloadPrebuilt(BuildInput input, File outFile) async {
   }
 }
 
-// ── NDK linker resolution ──────────────────────────────────────────────
+// ── Config mapping (from native_toolchain_rust pattern) ────────────────
 
-String? _findNdkLinker(String cargoTarget) {
-  final ndkHome = Platform.environment['ANDROID_NDK_HOME'] ??
-      Platform.environment['ANDROID_NDK'];
-  if (ndkHome == null) {
-    // Try ANDROID_HOME/ndk/<version>
-    final androidHome = Platform.environment['ANDROID_HOME'] ??
-        Platform.environment['ANDROID_SDK_ROOT'];
-    if (androidHome == null) return null;
-    final ndkDir = Directory('$androidHome/ndk');
-    if (!ndkDir.existsSync()) return null;
-    final versions = ndkDir.listSync().whereType<Directory>().toList()
-      ..sort((a, b) => b.path.compareTo(a.path));
-    if (versions.isEmpty) return null;
-    return _ndkClang(versions.first.path, cargoTarget);
-  }
-  return _ndkClang(ndkHome, cargoTarget);
+LinkMode _linkMode(CodeConfig code) {
+  return switch (code.linkModePreference) {
+    LinkModePreference.dynamic ||
+    LinkModePreference.preferDynamic => DynamicLoadingBundled(),
+    LinkModePreference.static ||
+    LinkModePreference.preferStatic => StaticLinking(),
+    _ => DynamicLoadingBundled(),
+  };
 }
 
-String? _ndkClang(String ndkPath, String cargoTarget) {
-  final hostTag = Platform.isMacOS ? 'darwin-x86_64' : 'linux-x86_64';
-  final clangPrefix = switch (cargoTarget) {
-    'aarch64-linux-android' => 'aarch64-linux-android21-clang',
-    'armv7-linux-androideabi' => 'armv7a-linux-androideabi21-clang',
-    'x86_64-linux-android' => 'x86_64-linux-android21-clang',
-    'i686-linux-android' => 'i686-linux-android21-clang',
-    _ => null,
+String _targetTriple(CodeConfig code) {
+  if (code.targetOS == OS.iOS &&
+      code.targetArchitecture == Architecture.arm64 &&
+      code.iOS.targetSdk == IOSSdk.iPhoneSimulator) {
+    return 'aarch64-apple-ios-sim';
+  }
+  return switch ((code.targetOS, code.targetArchitecture)) {
+    (OS.android, Architecture.arm) => 'armv7-linux-androideabi',
+    (OS.android, Architecture.arm64) => 'aarch64-linux-android',
+    (OS.android, Architecture.ia32) => 'i686-linux-android',
+    (OS.android, Architecture.x64) => 'x86_64-linux-android',
+    (OS.iOS, Architecture.arm64) => 'aarch64-apple-ios',
+    (OS.iOS, Architecture.x64) => 'x86_64-apple-ios',
+    (OS.linux, Architecture.arm64) => 'aarch64-unknown-linux-gnu',
+    (OS.linux, Architecture.x64) => 'x86_64-unknown-linux-gnu',
+    (OS.macOS, Architecture.arm64) => 'aarch64-apple-darwin',
+    (OS.macOS, Architecture.x64) => 'x86_64-apple-darwin',
+    (OS.windows, Architecture.arm64) => 'aarch64-pc-windows-msvc',
+    (OS.windows, Architecture.x64) => 'x86_64-pc-windows-msvc',
+    (_, _) => throw UnsupportedError(
+        'Unsupported: ${code.targetOS} ${code.targetArchitecture}'),
   };
-  if (clangPrefix == null) return null;
-  final path = '$ndkPath/toolchains/llvm/prebuilt/$hostTag/bin/$clangPrefix';
-  return File(path).existsSync() ? path : null;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -248,31 +278,7 @@ String _platformKey(CodeConfig code) {
     (OS.macOS, Architecture.x64) => 'macos-x64',
     (OS.windows, Architecture.arm64) => 'windows-arm64',
     (OS.windows, Architecture.x64) => 'windows-x64',
-    (_, _) => throw UnimplementedError(
-        'Unsupported: ${code.targetOS} ${code.targetArchitecture}'),
-  };
-}
-
-String _cargoTarget(CodeConfig code) {
-  if (code.targetOS == OS.iOS &&
-      code.targetArchitecture == Architecture.arm64 &&
-      code.iOS.targetSdk == IOSSdk.iPhoneSimulator) {
-    return 'aarch64-apple-ios-sim';
-  }
-  return switch ((code.targetOS, code.targetArchitecture)) {
-    (OS.android, Architecture.arm) => 'armv7-linux-androideabi',
-    (OS.android, Architecture.arm64) => 'aarch64-linux-android',
-    (OS.android, Architecture.ia32) => 'i686-linux-android',
-    (OS.android, Architecture.x64) => 'x86_64-linux-android',
-    (OS.iOS, Architecture.arm64) => 'aarch64-apple-ios',
-    (OS.iOS, Architecture.x64) => 'x86_64-apple-ios',
-    (OS.linux, Architecture.arm64) => 'aarch64-unknown-linux-gnu',
-    (OS.linux, Architecture.x64) => 'x86_64-unknown-linux-gnu',
-    (OS.macOS, Architecture.arm64) => 'aarch64-apple-darwin',
-    (OS.macOS, Architecture.x64) => 'x86_64-apple-darwin',
-    (OS.windows, Architecture.arm64) => 'aarch64-pc-windows-msvc',
-    (OS.windows, Architecture.x64) => 'x86_64-pc-windows-msvc',
-    (_, _) => throw UnimplementedError(
+    (_, _) => throw UnsupportedError(
         'Unsupported: ${code.targetOS} ${code.targetArchitecture}'),
   };
 }
