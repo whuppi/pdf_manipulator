@@ -165,11 +165,12 @@ git commit -m "patch: <description>"
 # 2. Push to the fork remote
 git push origin pdf_manipulator/0.3.47-patches
 
-# 3. Back to parent — update submodule pointer
+# 3. Back to parent — update submodule pointer and open PR
 cd ../..
 git add vendor/pdf_oxide
-git commit -m "submodule: update to include <description>"
-git push origin main
+git commit -m "build: update submodule to include <description>"
+git push origin <your-feature-branch>
+# Then open a PR to dev
 ```
 
 ---
@@ -219,13 +220,25 @@ The script runs `cargo build --target wasm32-unknown-unknown --features wasm --n
 
 Versioning, changelog, tagging, compilation, and publishing are fully automated via release-please + tag-triggered CI. No manual version bumps, no manual changelog editing, no manual tagging.
 
-### How it works
+### How it works — two release channels
 
-1. **Write code** on feature branches with conventional commit messages (`feat:`, `fix:`, etc.)
-2. **Open PRs to `dev`** — CI runs analyze + macOS test + PR title validation
-3. **release-please** reads the merged conventional commits and auto-opens a Release PR that bumps `pubspec.yaml` and writes `CHANGELOG.md`
-4. **Merge the Release PR** — release-please creates a git tag (`v1.1.0` or `v1.1.0-dev.0`)
-5. **Tag push triggers `release.yml`** — tests 6 platforms → compiles all targets → uploads binaries to GitHub Release → publishes to pub.dev via OIDC
+**Prerelease (dev branch):**
+
+1. Work on feature branches with conventional commit titles (`feat:`, `fix:`, etc.)
+2. Open PRs to `dev` — CI runs analyze + macOS test + PR title validation
+3. Squash-merge — PR title becomes the commit on dev
+4. release-please reads the commits, opens a prerelease Release PR (bumps to `1.1.0-dev.0`, writes CHANGELOG)
+5. Merge the Release PR → tag `v1.1.0-dev.0` → full pipeline → prerelease published
+
+**Stable release (main branch):**
+
+1. Open PR from `dev` → `main` with a title summarizing what dev accumulated (e.g. `feat: watermark + compression + stamps`)
+2. Squash-merge — that title becomes the commit on main
+3. release-please reads it, opens a stable Release PR (bumps to `1.1.0`, writes CHANGELOG)
+4. You can edit the Release PR's CHANGELOG before merging to polish the wording
+5. Merge the Release PR → tag `v1.1.0` → full pipeline → stable release published
+
+**Why this works cleanly:** each branch tracks its own commit history independently. Squash-merge works on both paths — the PR title is always the changelog entry. No commits leak between branches.
 
 ### CI/CD workflows
 
