@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0 (2026-05-16)
+
+
+### Bug Fixes
+
+* .pubignore for vendor/ + compile WASM before web tests ([9a3dc68](https://github.com/whuppi/pdf_manipulator/commit/9a3dc68bc67091d11c6a4db313cad353c728952f))
+* **ci:** checkout in workflows before local composite actions ([02e92a5](https://github.com/whuppi/pdf_manipulator/commit/02e92a59063679386e7a0deab44cb67b1a10ab95))
+* WASM target + Rust warnings in release CI ([dfcd65f](https://github.com/whuppi/pdf_manipulator/commit/dfcd65fee6520d6555a81755bc3dc87e01302d3c))
+
 ## 1.0.0
 
 Complete ground-up rewrite. New engine, new API, every platform. See the [migration guide](docs/MIGRATION.md) for upgrading from the old version.
