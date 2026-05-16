@@ -46,11 +46,15 @@ void main(List<String> args) async {
       }
     }
 
+    final linkMode = input.config.code.targetOS == OS.iOS
+        ? StaticLinking()
+        : DynamicLoadingBundled();
+
     output.assets.code.add(
       CodeAsset(
         package: input.packageName,
         name: _assetId,
-        linkMode: DynamicLoadingBundled(),
+        linkMode: linkMode,
         file: outFile.uri,
       ),
       routing: input.config.linkingEnabled

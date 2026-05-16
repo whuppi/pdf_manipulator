@@ -92,7 +92,7 @@ jobs:
         with: { channel: stable }
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-ios-sim
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: vendor/pdf_oxide }
       - uses: futureware-tech/simulator-action@v4
