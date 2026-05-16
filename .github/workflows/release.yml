@@ -240,10 +240,7 @@ jobs:
           force-avd-creation: false
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           disable-animations: true
-          script: |
-            cd example
-            flutter pub get
-            flutter test integration_test/pdf_smoke_test.dart -d emulator-5554
+          script: cd example && flutter pub get && flutter test integration_test/pdf_smoke_test.dart
 
   test-ios:
     name: Test (iOS)
