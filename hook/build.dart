@@ -72,6 +72,18 @@ Future<void> _compileFromSource(BuildInput input, File outFile) async {
 
   _log.info('compiling from source for $target');
 
+  final env = <String, String>{};
+
+  // Android targets need the NDK linker
+  if (target.contains('android')) {
+    final ndkLinker = _findNdkLinker(target);
+    if (ndkLinker != null) {
+      final envKey = 'CARGO_TARGET_${target.toUpperCase().replaceAll('-', '_')}_LINKER';
+      env[envKey] = ndkLinker;
+      _log.info('using NDK linker: $ndkLinker');
+    }
+  }
+
   final result = await Process.run('cargo', [
     'build',
     '--manifest-path', manifest,
@@ -79,7 +91,7 @@ Future<void> _compileFromSource(BuildInput input, File outFile) async {
     '--release',
     '--target', target,
     '--features', _features,
-  ]);
+  ], environment: env.isEmpty ? null : {...Platform.environment, ...env});
 
   if (result.exitCode != 0) {
     throw StateError(
@@ -164,6 +176,40 @@ Future<void> _downloadPrebuilt(BuildInput input, File outFile) async {
   } finally {
     client.close();
   }
+}
+
+// ── NDK linker resolution ──────────────────────────────────────────────
+
+String? _findNdkLinker(String cargoTarget) {
+  final ndkHome = Platform.environment['ANDROID_NDK_HOME'] ??
+      Platform.environment['ANDROID_NDK'];
+  if (ndkHome == null) {
+    // Try ANDROID_HOME/ndk/<version>
+    final androidHome = Platform.environment['ANDROID_HOME'] ??
+        Platform.environment['ANDROID_SDK_ROOT'];
+    if (androidHome == null) return null;
+    final ndkDir = Directory('$androidHome/ndk');
+    if (!ndkDir.existsSync()) return null;
+    final versions = ndkDir.listSync().whereType<Directory>().toList()
+      ..sort((a, b) => b.path.compareTo(a.path));
+    if (versions.isEmpty) return null;
+    return _ndkClang(versions.first.path, cargoTarget);
+  }
+  return _ndkClang(ndkHome, cargoTarget);
+}
+
+String? _ndkClang(String ndkPath, String cargoTarget) {
+  final hostTag = Platform.isMacOS ? 'darwin-x86_64' : 'linux-x86_64';
+  final clangPrefix = switch (cargoTarget) {
+    'aarch64-linux-android' => 'aarch64-linux-android21-clang',
+    'armv7-linux-androideabi' => 'armv7a-linux-androideabi21-clang',
+    'x86_64-linux-android' => 'x86_64-linux-android21-clang',
+    'i686-linux-android' => 'i686-linux-android21-clang',
+    _ => null,
+  };
+  if (clangPrefix == null) return null;
+  final path = '$ndkPath/toolchains/llvm/prebuilt/$hostTag/bin/$clangPrefix';
+  return File(path).existsSync() ? path : null;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
