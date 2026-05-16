@@ -11,7 +11,7 @@ void main() {
   });
 
   tearDown(() {
-    pdf.kill();
+    pdf.dispose();
   });
 
   group('Pdf.watermark', () {
@@ -72,26 +72,26 @@ void main() {
 
   group('PdfEditor.addWatermark', () {
     test('adds watermark — output is larger', () async {
-      final editor = PdfEditor(await pdf.openEditor(minimalPdf));
+      final editor = await Pdf.edit(minimalPdf);
       await editor.addWatermark(0, 'EDITED');
       final saved = await editor.save();
       expect(saved.length, greaterThan(minimalPdf.length));
-      await editor.dispose();
+      editor.dispose();
     });
 
     test('watermark marks document as modified', () async {
-      final editor = PdfEditor(await pdf.openEditor(minimalPdf));
+      final editor = await Pdf.edit(minimalPdf);
       expect(await editor.isModified, isFalse);
       await editor.addWatermark(0, 'MOD');
       expect(await editor.isModified, isTrue);
-      await editor.dispose();
+      editor.dispose();
     });
 
     test('watermark with custom color produces valid PDF', () async {
-      final editor = PdfEditor(await pdf.openEditor(minimalPdf));
+      final editor = await Pdf.edit(minimalPdf);
       await editor.addWatermark(0, 'BLUE', r: 0.0, g: 0.0, b: 1.0);
       final saved = await editor.save();
-      await editor.dispose();
+      editor.dispose();
       final doc = await pdf.open(saved);
       expect(doc.pageCount, equals(1));
       expect(saved.length, greaterThan(minimalPdf.length));

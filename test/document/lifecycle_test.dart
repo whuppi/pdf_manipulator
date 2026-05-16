@@ -7,22 +7,22 @@ void main() {
   group('Pdf.kill', () {
     test('kill does not throw', () {
       final pdf = Pdf();
-      pdf.kill();
+      pdf.dispose();
     });
 
     test('operations work on a new instance after killing old one', () async {
       final pdf1 = Pdf();
-      pdf1.kill();
+      pdf1.dispose();
       final pdf2 = Pdf();
       final doc = await pdf2.open(minimalPdf);
       expect(doc.pageCount, equals(1));
-      pdf2.kill();
+      pdf2.dispose();
     });
 
     test('double kill is safe', () {
       final pdf = Pdf();
-      pdf.kill();
-      pdf.kill();
+      pdf.dispose();
+      pdf.dispose();
     });
 
     test('heavy usage then kill then new instance works', () async {
@@ -33,13 +33,13 @@ void main() {
       await pdf.extractText(minimalPdf);
 
       // Kill it
-      pdf.kill();
+      pdf.dispose();
 
       // New instance should work
       final pdf2 = Pdf();
       final doc = await pdf2.open(minimalPdf);
       expect(doc.pageCount, equals(1));
-      pdf2.kill();
+      pdf2.dispose();
     });
   });
 }

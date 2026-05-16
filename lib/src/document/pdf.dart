@@ -6,30 +6,64 @@ import 'package:pdf_manipulator/src/core/pdf_rect.dart';
 import 'package:pdf_manipulator/src/core/pdf_signature.dart';
 import 'package:pdf_manipulator/src/core/search_result.dart';
 import 'package:pdf_manipulator/src/document/pdf_doc.dart';
+import 'package:pdf_manipulator/src/editor/pdf_editor.dart';
+import 'package:pdf_manipulator/src/builder/pdf_builder.dart';
 import 'package:pdf_manipulator/src/platform/pdf_platform.dart';
 import 'package:pdf_manipulator/src/platform/platform.dart';
 
-/// PDF manipulation — every instance is a worker.
-///
-/// Create, use, kill. Each `Pdf()` spawns its own background worker
-/// (isolate on native, Web Worker on web). `kill()` instantly cancels
-/// all pending operations on that instance.
+/// PDF manipulation — every instance is its own worker.
 ///
 /// ```dart
 /// final pdf = Pdf();
 /// final merged = await pdf.merge([bytesA, bytesB]);
 /// final text = await pdf.extractText(bytes);
-/// pdf.kill();
+/// pdf.dispose();
 /// ```
+///
+/// For batch editing, use [Pdf.edit]. For creating PDFs from scratch,
+/// use [Pdf.build]. Each spawns its own worker — dispose when done.
 class Pdf {
   PdfPlatform? _p;
-  bool _killed = false;
+  bool _disposed = false;
 
   Pdf() : _p = createPlatform();
 
   PdfPlatform get _platform {
-    if (_killed) throw StateError('This Pdf instance has been killed');
+    if (_disposed) throw StateError('This Pdf instance has been disposed');
     return _p!;
+  }
+
+  // ── Static factories ──────────────────────────────────────────
+
+  /// Open a PDF for batch editing. Parse once, mutate many times, save once.
+  ///
+  /// ```dart
+  /// final editor = await Pdf.edit(bytes);
+  /// await editor.setTitle('Report');
+  /// await editor.rotatePage(0, degrees: 90);
+  /// final result = await editor.save();
+  /// editor.dispose();
+  /// ```
+  static Future<PdfEditor> edit(Uint8List bytes) async {
+    final platform = createPlatform();
+    final handle = await platform.openEditor(bytes);
+    return PdfEditor.internal(platform, handle);
+  }
+
+  /// Create a new PDF from scratch.
+  ///
+  /// ```dart
+  /// final builder = await Pdf.build();
+  /// final page = await builder.addA4Page();
+  /// await page.text('Hello');
+  /// await page.done();
+  /// final result = await builder.save();
+  /// builder.dispose();
+  /// ```
+  static Future<PdfBuilder> build() async {
+    final platform = createPlatform();
+    final handle = await platform.createBuilder();
+    return PdfBuilder.internal(platform, handle);
   }
 
   // ── Inspect ────────────────────────────────────────────────────
@@ -142,14 +176,14 @@ class Pdf {
     required double width, required double height,
     double opacity = 1.0,
   }) async {
-    final handle = await openEditor(bytes);
+    final editor = await Pdf.edit(bytes);
     try {
-      await handle.addStamp(page,
+      await editor.addStamp(page,
           stampType: stampType, x: x, y: y, width: width, height: height,
           opacity: opacity);
-      return handle.save();
+      return editor.save();
     } finally {
-      await handle.dispose();
+      editor.dispose();
     }
   }
 
@@ -159,13 +193,13 @@ class Pdf {
     required double width, required double height,
     double opacity = 1.0,
   }) async {
-    final handle = await openEditor(bytes);
+    final editor = await Pdf.edit(bytes);
     try {
-      await handle.addImageStamp(page, imageBytes,
+      await editor.addImageStamp(page, imageBytes,
           x: x, y: y, width: width, height: height, opacity: opacity);
-      return handle.save();
+      return editor.save();
     } finally {
-      await handle.dispose();
+      editor.dispose();
     }
   }
 
@@ -264,28 +298,19 @@ class Pdf {
       {String? password}) =>
       _platform.getEncryptionAlgorithm(bytes, password: password);
 
-  // ── Editor & Builder ──────────────────────────────────────────
-
-  Future<PdfEditorHandle> openEditor(Uint8List bytes) =>
-      _platform.openEditor(bytes);
-
-  Future<PdfBuilderHandle> createBuilder() =>
-      _platform.createBuilder();
-
   // ── Configuration ──────────────────────────────────────────────
 
   void configureWorkerUrl(String url) => _platform.configureWorkerUrl(url);
 
   // ── Lifecycle ──────────────────────────────────────────────────
 
-  /// Kill this instance. Cancels all pending operations instantly.
-  /// The instance cannot be used after this call.
-  void kill() {
-    if (_killed) return;
-    _killed = true;
+  /// Dispose this instance. Cancels all pending operations instantly.
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
     _p?.dispose();
     _p = null;
   }
 
-  bool get isAlive => !_killed;
+  bool get isDisposed => _disposed;
 }

@@ -46,7 +46,7 @@ void main() {
   });
 
   tearDown(() {
-    pdf.kill();
+    pdf.dispose();
   });
 
   group('Pdf.addImageStamp', () {
@@ -86,12 +86,12 @@ void main() {
 
   group('PdfEditor.addImageStamp', () {
     test('adds image stamp via editor', () async {
-      final editor = PdfEditor(await pdf.openEditor(minimalPdf));
+      final editor = await Pdf.edit(minimalPdf);
       await editor.addImageStamp(0, _tinyJpeg,
         x: 100, y: 700, width: 200, height: 100,
       );
       final result = await editor.save();
-      await editor.dispose();
+      editor.dispose();
 
       expect(result.length, greaterThan(minimalPdf.length));
       final info = await pdf.probe(result);
@@ -99,12 +99,12 @@ void main() {
     });
 
     test('editor marks as modified after image stamp', () async {
-      final editor = PdfEditor(await pdf.openEditor(minimalPdf));
+      final editor = await Pdf.edit(minimalPdf);
       await editor.addImageStamp(0, _tinyJpeg,
         x: 50, y: 50, width: 100, height: 100,
       );
       expect(await editor.isModified, isTrue);
-      await editor.dispose();
+      editor.dispose();
     });
   });
 

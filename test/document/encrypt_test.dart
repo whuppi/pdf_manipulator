@@ -11,7 +11,7 @@ void main() {
   });
 
   tearDown(() {
-    pdf.kill();
+    pdf.dispose();
   });
 
   group('Pdf.encrypt', () {
@@ -69,21 +69,21 @@ void main() {
 
   group('PdfEditor.saveEncrypted', () {
     test('encrypted save produces larger output', () async {
-      final editor = PdfEditor(await pdf.openEditor(minimalPdf));
+      final editor = await Pdf.edit(minimalPdf);
       final encrypted = await editor.saveEncrypted(ownerPassword: 'pw');
       final normal = await editor.save();
       expect(encrypted.length, greaterThan(normal.length));
-      await editor.dispose();
+      editor.dispose();
     });
 
     test('modify then encrypt preserves modifications', () async {
-      final editor = PdfEditor(await pdf.openEditor(minimalPdf));
+      final editor = await Pdf.edit(minimalPdf);
       await editor.mergeFrom(minimalPdf);
       final encrypted = await editor.saveEncrypted(
         ownerPassword: 'owner',
         userPassword: 'user',
       );
-      await editor.dispose();
+      editor.dispose();
 
       final doc = await pdf.open(encrypted, password: 'owner');
       expect(doc.pageCount, equals(2));

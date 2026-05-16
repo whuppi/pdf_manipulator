@@ -15,7 +15,7 @@ void main() {
   });
 
   tearDown(() {
-    pdf.kill();
+    pdf.dispose();
   });
 
   group('Pdf.deletePages', () {
@@ -88,35 +88,35 @@ void main() {
 
   group('PdfEditor.deletePage', () {
     test('reduces page count', () async {
-      final editor = PdfEditor(await pdf.openEditor(threePagePdf));
+      final editor = await Pdf.edit(threePagePdf);
       expect(await editor.pageCount, equals(3));
       await editor.deletePage(1);
       expect(await editor.pageCount, equals(2));
-      await editor.dispose();
+      editor.dispose();
     });
 
     test('multiple deletes in descending order', () async {
-      final editor = PdfEditor(await pdf.openEditor(threePagePdf));
+      final editor = await Pdf.edit(threePagePdf);
       await editor.deletePage(2);
       await editor.deletePage(0);
       expect(await editor.pageCount, equals(1));
-      await editor.dispose();
+      editor.dispose();
     });
 
     test('saved result has correct page count', () async {
-      final editor = PdfEditor(await pdf.openEditor(threePagePdf));
+      final editor = await Pdf.edit(threePagePdf);
       await editor.deletePage(1);
       final saved = await editor.save();
-      await editor.dispose();
+      editor.dispose();
       final doc = await pdf.open(saved);
       expect(doc.pageCount, equals(2));
     });
 
     test('delete first page — remaining starts with Letter', () async {
-      final editor = PdfEditor(await pdf.openEditor(threePagePdf));
+      final editor = await Pdf.edit(threePagePdf);
       await editor.deletePage(0); // Delete A4, Letter becomes first
       final saved = await editor.save();
-      await editor.dispose();
+      editor.dispose();
       final doc = await pdf.open(saved);
       expect(doc.pages[0].width, closeTo(612, 1)); // Letter
     });

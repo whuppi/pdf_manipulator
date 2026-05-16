@@ -13,7 +13,7 @@ void main() {
   });
 
   tearDown(() {
-    pdf.kill();
+    pdf.dispose();
   });
 
   group('Pdf.embedFile', () {
@@ -91,20 +91,20 @@ void main() {
 
   group('PdfEditor.embedFile', () {
     test('embed via editor and save', () async {
-      final editor = PdfEditor(await pdf.openEditor(minimalPdf));
+      final editor = await Pdf.edit(minimalPdf);
       await editor.embedFile('readme.txt', Uint8List.fromList('Read me'.codeUnits));
       final result = await editor.save();
-      await editor.dispose();
+      editor.dispose();
       expect(result.length, greaterThan(minimalPdf.length));
     });
   });
 
   group('PdfEditor.eraseRegions', () {
     test('erase via editor and save', () async {
-      final editor = PdfEditor(await pdf.openEditor(minimalPdf));
+      final editor = await Pdf.edit(minimalPdf);
       await editor.eraseRegions(0, [const PdfRect(x: 10, y: 10, width: 50, height: 50)]);
       final result = await editor.save();
-      await editor.dispose();
+      editor.dispose();
       expect(result.length, greaterThan(0));
     });
   });

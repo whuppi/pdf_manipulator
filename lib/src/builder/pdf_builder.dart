@@ -4,50 +4,75 @@ import 'package:pdf_manipulator/src/platform/pdf_platform.dart';
 
 /// Create PDFs from scratch — text, images, forms, tables.
 ///
-/// Created via `pdf.createBuilder()` where `pdf` is a [Pdf] instance.
+/// Created via [Pdf.build]:
 ///
 /// ```dart
-/// final pdf = Pdf();
-/// final builder = await pdf.createBuilder();
+/// final builder = await Pdf.build();
 /// await builder.setTitle('My Document');
 /// final page = await builder.addA4Page();
 /// await page.font('Helvetica', 14);
 /// await page.text('Hello, world!');
 /// await page.done();
-/// final bytes = await builder.build();
-/// await builder.dispose();
+/// final bytes = await builder.save();
+/// builder.dispose();
 /// ```
 class PdfBuilder {
+  PdfPlatform? _platform;
   final PdfBuilderHandle _handle;
-  PdfBuilder(this._handle);
+  bool _disposed = false;
 
-  Future<void> setTitle(String value) => _handle.setTitle(value);
-  Future<void> setAuthor(String value) => _handle.setAuthor(value);
-  Future<void> setSubject(String value) => _handle.setSubject(value);
-  Future<void> setKeywords(String value) => _handle.setKeywords(value);
+  /// Internal constructor — use [Pdf.build] instead.
+  PdfBuilder.internal(this._platform, this._handle);
+
+  void _check() {
+    if (_disposed) throw StateError('This PdfBuilder has been disposed');
+  }
+
+  // ── Metadata ───────────────────────────────────────────────────
+
+  Future<void> setTitle(String value) { _check(); return _handle.setTitle(value); }
+  Future<void> setAuthor(String value) { _check(); return _handle.setAuthor(value); }
+  Future<void> setSubject(String value) { _check(); return _handle.setSubject(value); }
+  Future<void> setKeywords(String value) { _check(); return _handle.setKeywords(value); }
+
+  // ── Pages ──────────────────────────────────────────────────────
 
   Future<PdfPageBuilder> addA4Page() async {
-    final handle = await _handle.addA4Page();
-    return PdfPageBuilder(handle);
+    _check();
+    return PdfPageBuilder(await _handle.addA4Page());
   }
 
   Future<PdfPageBuilder> addLetterPage() async {
-    final handle = await _handle.addLetterPage();
-    return PdfPageBuilder(handle);
+    _check();
+    return PdfPageBuilder(await _handle.addLetterPage());
   }
 
   Future<PdfPageBuilder> addPage({required double width, required double height}) async {
-    final handle = await _handle.addPage(width: width, height: height);
-    return PdfPageBuilder(handle);
+    _check();
+    return PdfPageBuilder(await _handle.addPage(width: width, height: height));
   }
 
-  Future<Uint8List> build() => _handle.build();
-  Future<Uint8List> buildEncrypted({required String ownerPassword,
-      String userPassword = ''}) =>
-      _handle.buildEncrypted(ownerPassword: ownerPassword,
-          userPassword: userPassword);
+  // ── Save ───────────────────────────────────────────────────────
 
-  Future<void> dispose() => _handle.dispose();
+  Future<Uint8List> save() { _check(); return _handle.build(); }
+
+  Future<Uint8List> saveEncrypted({required String ownerPassword,
+      String userPassword = ''}) {
+    _check();
+    return _handle.buildEncrypted(ownerPassword: ownerPassword,
+        userPassword: userPassword);
+  }
+
+  // ── Lifecycle ──────────────────────────────────────────────────
+
+  /// Dispose this builder. Releases the worker and all resources.
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _handle.dispose();
+    _platform?.dispose();
+    _platform = null;
+  }
 }
 
 /// Page content builder — add text, images, forms, watermarks.

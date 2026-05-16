@@ -86,7 +86,7 @@ When in doubt, read existing code in this repo and match it. Per-repo style cons
 
 **Dual-path build hook.** `vendor/pdf_oxide/Cargo.toml` exists → compile from source (contributor). Doesn't exist → download from GitHub Releases (consumer). Version read from `pubspec.yaml`.
 
-**Vendor submodule with patches.** `vendor/pdf_oxide/` is a git submodule on branch `pdf_manipulator/0.3.47-patches`. 29 C-ABI + 8 Rust-level patches. Each has a removal trigger.
+**Vendor submodule with patches.** `vendor/pdf_oxide/` is a git submodule with local patches. Full inventory in `docs/UPDATING.md`.
 
 **CI/CD.** ci.yml (auto, macOS), full-test.yml (manual, 5 platforms), release.yml (auto on version bump, 13 targets + GitHub Release), publish.yml (manual, pub.dev OIDC).
 

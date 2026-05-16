@@ -8,33 +8,18 @@ Cross-platform PDF manipulation for Dart & Flutter. Powered by [pdf_oxide](https
 
 ## Install
 
-### Consumer (zero Rust needed)
-
 ```yaml
 dependencies:
   pdf_manipulator: ^1.0.0
 ```
 
-The build hook automatically downloads a pre-built binary from GitHub Releases for your platform. No Rust toolchain, no compilation — just `dart pub get` and go.
+That's it. Works on all platforms.
 
-For web, also run once from your app directory:
+For web targets, also run once:
 
 ```sh
 dart run pdf_manipulator:setup
 ```
-
-This copies the WASM binary + Web Worker into `web/pdf_manipulator/`.
-
-### Contributor (needs Rust)
-
-```bash
-git clone --recursive https://github.com/whuppi/pdf_manipulator.git
-cd pdf_manipulator
-dart pub get
-dart test  # build hook compiles from source automatically
-```
-
-Requires Rust ([rustup.rs](https://rustup.rs)). The build hook detects `vendor/pdf_oxide/` and runs `cargo build` — no manual compilation step.
 
 ---
 
@@ -53,10 +38,10 @@ final smaller = await pdf.compress(bytes, imageQuality: 75);
 final text = await pdf.extractText(bytes);
 final locked = await pdf.encrypt(bytes, ownerPassword: 'secret');
 
-pdf.kill(); // done — release the worker
+pdf.dispose(); // done — release the worker
 ```
 
-Each `Pdf()` creates its own background worker. `kill()` releases the worker and instantly cancels all pending operations. Bytes in, bytes out. No file paths, no `dart:io`. Same code on every platform.
+Each `Pdf()` creates its own background worker. `dispose()` releases the worker and instantly cancels all pending operations. Bytes in, bytes out. No file paths, no `dart:io`. Same code on every platform.
 
 ---
 
@@ -333,8 +318,7 @@ final erased = await pdf.eraseRegions(bytes,
 When you're applying multiple changes, `PdfEditor` is more efficient — it parses the PDF once and saves once, no matter how many mutations you chain:
 
 ```dart
-final pdf = Pdf();
-final editor = PdfEditor(await pdf.openEditor(bytes));
+final editor = await Pdf.edit(bytes);
 
 await editor.setTitle('Q4 Report');
 await editor.setAuthor('Finance');
@@ -346,7 +330,7 @@ await editor.optimizeImages(quality: 70);
 await editor.flattenForms();
 
 final result = await editor.saveWithOptions(compress: true, garbageCollect: true);
-await editor.dispose();
+editor.dispose();
 ```
 
 Everything `pdf.*` can do, `PdfEditor` can do in a batch. Plus metadata setters, `cropMargins`, `convertToPdfA`, `flattenAllAnnotations`, `setFormFieldValue`, `embedFile`, `eraseRegions`, and `saveEncrypted`.
@@ -358,8 +342,7 @@ Everything `pdf.*` can do, `PdfEditor` can do in a batch. Plus metadata setters,
 Build new PDFs with text, headings, images, and watermarks:
 
 ```dart
-final pdf = Pdf();
-final builder = PdfBuilder(await pdf.createBuilder());
+final builder = await Pdf.build();
 await builder.setTitle('Meeting Notes');
 
 final page = await builder.addA4Page();
@@ -370,11 +353,11 @@ await page.horizontalRule();
 await page.paragraph('Action items follow.');
 await page.done();
 
-final result = await builder.build();
-await builder.dispose();
+final result = await builder.save();
+builder.dispose();
 ```
 
-Custom sizes (`addPage(width: 400, height: 600)`), Letter pages (`addLetterPage()`), images (`page.image(pngBytes, x, y, w, h)`), watermarks (`page.watermark('DRAFT')`), and encrypted output (`builder.buildEncrypted(ownerPassword: 'pw')`).
+Custom sizes (`addPage(width: 400, height: 600)`), Letter pages (`addLetterPage()`), images (`page.image(pngBytes, x, y, w, h)`), watermarks (`page.watermark('DRAFT')`), and encrypted output (`builder.saveEncrypted(ownerPassword: 'pw')`).
 
 Form fields too:
 
@@ -426,17 +409,17 @@ try {
 | Encrypt / decrypt (4 algorithms) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Extract text / Markdown / HTML | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Search text | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Render pages to images | ✅ | ✅ | ✅ | ✅ | ✅ | |
-| Extract embedded images | ✅ | ✅ | ✅ | ✅ | ✅ | |
+| Render pages to images | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Extract embedded images | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Images to PDF | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Digital signatures | ✅ | ✅ | ✅ | ✅ | ✅ | |
-| PdfEditor (batch mutations) | ✅ | ✅ | ✅ | ✅ | ✅ | |
-| PdfBuilder (create from scratch) | ✅ | ✅ | ✅ | ✅ | ✅ | |
-| Form field creation | ✅ | ✅ | ✅ | ✅ | ✅ | |
-| PDF/A + PDF/UA validation | ✅ | ✅ | ✅ | ✅ | ✅ | |
-| Font unembedding | ✅ | ✅ | ✅ | ✅ | ✅ | |
+| Digital signatures | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| PdfEditor (batch mutations) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| PdfBuilder (create from scratch) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Form field creation | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| PDF/A + PDF/UA validation | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Font unembedding | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-**Native:** the build hook compiles from source (contributors with Rust) or downloads a pre-built binary from GitHub Releases (consumers without Rust). **Web:** WASM + Web Worker — run `dart run pdf_manipulator:setup` once to copy assets.
+Every feature works on every platform. Native binaries are downloaded automatically by the build hook. For web, run `dart run pdf_manipulator:setup` once.
 
 ---
 
@@ -446,7 +429,6 @@ try {
 |---|---|
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Source tree, three-layer design, conditional import dispatch, worker model, build hook |
 | [`docs/CAPABILITY_ROADMAP.md`](docs/CAPABILITY_ROADMAP.md) | Every feature with shipped/planned status |
-| [`docs/CI_CD.md`](docs/CI_CD.md) | Workflows, 5-platform testing, release + publish flow |
 | [`docs/MIGRATION.md`](docs/MIGRATION.md) | Method-by-method mapping from the old Android-only package |
 | [`docs/UPDATING.md`](docs/UPDATING.md) | Maintenance recipes — bump upstream, edit patches, rebuild |
 

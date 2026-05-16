@@ -49,14 +49,14 @@ Uint8List _build(String content) => Uint8List.fromList(content.codeUnits);
 
 Future<Uint8List> buildThreePagePdf() async {
   final pdf = Pdf();
-  final editor = PdfEditor(await pdf.openEditor(minimalPdf));
+  final editor = await Pdf.edit(minimalPdf);
   await editor.mergeFrom(letterPdf);
   await editor.mergeFrom(minimalPdf);
   await editor.setTitle('Three Page Test');
   await editor.setAuthor('Test Suite');
   final result = await editor.save();
-  await editor.dispose();
-  pdf.kill();
+  editor.dispose();
+  pdf.dispose();
   return result;
 }
 
@@ -67,25 +67,25 @@ Future<Uint8List> buildMetadataPdf({
   String keywords = 'test, pdf, dart',
 }) async {
   final pdf = Pdf();
-  final editor = PdfEditor(await pdf.openEditor(minimalPdf));
+  final editor = await Pdf.edit(minimalPdf);
   await editor.setTitle(title);
   await editor.setAuthor(author);
   await editor.setSubject(subject);
   await editor.setKeywords(keywords);
   final result = await editor.save();
-  await editor.dispose();
-  pdf.kill();
+  editor.dispose();
+  pdf.dispose();
   return result;
 }
 
 Future<Uint8List> buildFivePagePdf() async {
   final pdf = Pdf();
-  final editor = PdfEditor(await pdf.openEditor(minimalPdf));
+  final editor = await Pdf.edit(minimalPdf);
   for (var i = 0; i < 4; i++) {
     await editor.mergeFrom(minimalPdf);
   }
   final result = await editor.save();
-  await editor.dispose();
-  pdf.kill();
+  editor.dispose();
+  pdf.dispose();
   return result;
 }

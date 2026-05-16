@@ -25,6 +25,7 @@ pdf_manipulator wraps a vendored fork of [pdf_oxide](https://github.com/nickhims
 | Rebuilding native binaries | [S5 — Rebuild native binaries](#s5--rebuild-native-binaries) |
 | Adding a new platform | [S6 — Add platform](#s6--add-platform) |
 | Consumer reports a missing function | [S7 — Diagnose missing function](#s7--diagnose-missing-function) |
+| Using a new Dart/Flutter feature | [S8 — Update SDK constraint](#s8--update-sdk-constraint) |
 
 ---
 
@@ -154,13 +155,28 @@ The script runs `cargo build --target wasm32-unknown-unknown --features wasm --n
 
 Native binaries are compiled and uploaded automatically by CI. Contributors do not need to compile and commit binaries manually.
 
-**How it works:** `release.yml` fires on every push to `main` that changes `pubspec.yaml`. If the version is new (no existing git tag), CI cross-compiles 13 native targets on 3 runners (macOS, Linux, Windows), runs tests on 5 platforms, creates a git tag, and uploads pre-built binaries to the corresponding GitHub Release.
+**How it works:** `release.yml` fires on every push to `main` that changes `pubspec.yaml`. If the version is new (no existing git tag), CI cross-compiles 13 native targets + WASM on 3 runners, runs tests on 5 platforms, creates a git tag, and uploads all binaries (native + WASM) to the corresponding GitHub Release.
 
 | Runner | Targets |
 |---|---|
-| macOS (macos-14) | macOS arm64/x64, iOS arm64/sim-arm64/sim-x64, Android arm64/arm/x64/x86 (needs NDK) |
-| Linux (ubuntu-latest) | Linux x64/arm64 |
-| Windows (windows-latest) | Windows x64 (MSVC) |
+| macOS (macos-14) | macOS arm64/x64, iOS arm64/sim-arm64/sim-x64, Android arm64/arm/x64/x86 |
+| Linux (ubuntu-latest) | Linux x64/arm64, WASM |
+| Windows (windows-latest) | Windows x64 |
+
+### CI/CD workflows
+
+| Workflow | Trigger | Purpose |
+|---|---|---|
+| `ci.yml` | Every push/PR | Analyze + macOS test (cheap gate) |
+| `full-test.yml` | Manual (repo owner) | 5-platform test (macOS, Linux, Windows, Android, iOS) |
+| `release.yml` | Push to main changing pubspec.yaml | Compile 13 targets + WASM, test 5 platforms, tag, GitHub Release |
+| `publish.yml` | Manual (repo owner + reviewer) | Push to pub.dev via OIDC |
+
+### GitHub Settings
+
+**Branch protection** (Settings → Branches): `main` and `dev` require CI status checks, no force push.
+
+**Environments** (Settings → Environments): `publish` requires reviewer approval.
 
 **To trigger a release after a Rust-side change:**
 
@@ -211,6 +227,39 @@ nm -gU .dart_tool/native_assets/*/out/*/libpdf_oxide.dylib | grep "function_name
 #    → Check WasmPdfDocument / WasmPdfEditor in _web.dart
 #    → Check worker.js message dispatch
 ```
+
+---
+
+## S8 — Update SDK constraint
+
+The `environment.sdk` in `pubspec.yaml` must match the minimum Dart SDK the package actually requires. When to update:
+
+| You added | Minimum SDK | Why |
+|---|---|---|
+| Build hooks (`hooks: build: true`) | `>=3.10.0` | Build hooks shipped in Dart 3.10 |
+| `@Native` FFI annotations | `>=3.4.0` | `@Native` stabilized in Dart 3.4 |
+| New Dart language features | Check [Dart changelog](https://dart.dev/get-dart/archive) | Each feature has a minimum SDK |
+
+**How to check what the current minimum should be:**
+
+```sh
+# 1. Look at pubspec.yaml — what features does the package use?
+#    hooks: build: true → needs 3.10+
+#    @Native annotations → needs 3.4+
+#    The highest minimum wins.
+
+# 2. Verify the constraint
+grep "sdk:" pubspec.yaml
+#    Should show >= the highest requirement
+
+# 3. If unsure, try building with an older SDK version
+#    The Dart team publishes minimum SDK requirements per feature
+#    in the changelog at https://dart.dev/get-dart/archive
+```
+
+**Current constraint:** `>=3.10.0 <4.0.0` (required by `hooks: build: true`).
+
+When bumping the constraint, update `CHANGELOG.md` to note the new minimum SDK.
 
 ---
 

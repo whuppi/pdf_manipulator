@@ -9,7 +9,7 @@ repository: https://github.com/whuppi/pdf_manipulator
 issue_tracker: https://github.com/whuppi/pdf_manipulator/issues
 
 environment:
-  sdk: ">=3.4.0 <4.0.0"
+  sdk: ">=3.10.0 <4.0.0"
 
 hooks:
   build: true

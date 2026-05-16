@@ -117,16 +117,26 @@ jobs:
         with: { submodules: recursive }
       - run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
       - uses: dtolnay/rust-toolchain@stable
-        with: { targets: "x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu" }
+        with: { targets: "x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu,wasm32-unknown-unknown" }
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: vendor/pdf_oxide }
-      - run: |
+      - run: cargo install wasm-bindgen-cli --version 0.2.121
+      - name: Linux native
+        run: |
           cargo build --manifest-path $MANIFEST --lib --release --target x86_64-unknown-linux-gnu --features $FEATURES
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
           cargo build --manifest-path $MANIFEST --lib --release --target aarch64-unknown-linux-gnu --features $FEATURES
           mkdir -p out/linux-x64 out/linux-arm64
           cp vendor/pdf_oxide/target/x86_64-unknown-linux-gnu/release/libpdf_oxide.so out/linux-x64/
           cp vendor/pdf_oxide/target/aarch64-unknown-linux-gnu/release/libpdf_oxide.so out/linux-arm64/
+      - name: WASM
+        run: |
+          cd vendor/pdf_oxide
+          cargo build --lib --target wasm32-unknown-unknown --features wasm --no-default-features --release
+          cd ../..
+          mkdir -p out/wasm
+          wasm-bindgen --target web --out-dir out/wasm --out-name pdf_oxide \
+            vendor/pdf_oxide/target/wasm32-unknown-unknown/release/pdf_oxide.wasm
       - uses: actions/upload-artifact@v4
         with: { name: bin-linux, path: out/ }
 
@@ -278,16 +288,25 @@ jobs:
       - name: Flatten assets
         run: |
           mkdir -p release
+          # Native binaries: {platform}/{libname} → {platform}-{libname}
           for runner in bin-macos bin-linux bin-windows; do
             for pdir in artifacts/$runner/*/; do
               [ -d "$pdir" ] || continue
               p=$(basename "$pdir")
+              [ "$p" = "wasm" ] && continue  # handled below
               for lib in "$pdir"*; do
                 [ -f "$lib" ] || continue
                 cp "$lib" "release/${p}-$(basename "$lib")"
               done
             done
           done
+          # WASM: wasm/{name} → wasm-{name}
+          if [ -d "artifacts/bin-linux/wasm" ]; then
+            for f in artifacts/bin-linux/wasm/*; do
+              [ -f "$f" ] || continue
+              cp "$f" "release/wasm-$(basename "$f")"
+            done
+          fi
           ls -lh release/
       - uses: softprops/action-gh-release@v2
         with:

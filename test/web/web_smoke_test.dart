@@ -38,7 +38,7 @@ void main() {
   });
 
   tearDown(() {
-    pdf.kill();
+    pdf.dispose();
   });
 
   group('Web: Pdf.probe', () {

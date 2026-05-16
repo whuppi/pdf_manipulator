@@ -11,7 +11,7 @@ void main() {
   });
 
   tearDown(() {
-    pdf.kill();
+    pdf.dispose();
   });
 
   group('Pdf.watermarkPositioned', () {
@@ -79,7 +79,7 @@ void main() {
 
   group('PdfEditorHandle.addWatermarkPositioned', () {
     test('adds positioned watermark — output is larger', () async {
-      final handle = await pdf.openEditor(minimalPdf);
+      final handle = await Pdf.edit(minimalPdf);
       await handle.addWatermarkPositioned(
         0,
         'EDITED',
@@ -90,11 +90,11 @@ void main() {
       );
       final saved = await handle.save();
       expect(saved.length, greaterThan(minimalPdf.length));
-      await handle.dispose();
+      handle.dispose();
     });
 
     test('positioned watermark marks document as modified', () async {
-      final handle = await pdf.openEditor(minimalPdf);
+      final handle = await Pdf.edit(minimalPdf);
       expect(await handle.isModified, isFalse);
       await handle.addWatermarkPositioned(
         0,
@@ -105,7 +105,7 @@ void main() {
         height: 100,
       );
       expect(await handle.isModified, isTrue);
-      await handle.dispose();
+      handle.dispose();
     });
   });
 }

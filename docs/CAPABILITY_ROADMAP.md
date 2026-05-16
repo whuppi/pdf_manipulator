@@ -24,10 +24,10 @@ What's shipped, what's next, what's deliberately out of scope. For the architect
 | Pre-compiled binaries (macOS arm64/x64, iOS arm64/sim, Android arm64/arm/x64/x86) | ✓ |
 | Pre-compiled binaries (Linux x64/arm64, Windows x64) | ✓ (CI) |
 | CI/CD pipeline (cross-compile 13 targets + WASM → GitHub Releases) | ✓ |
-| ffigen codegen (pdf_oxide.h → native_bindings.g.dart, 329 functions) | ✓ |
+| ffigen codegen (pdf_oxide.h → native_bindings.g.dart) | ✓ |
 | Memory-safe FFI wrappers (bindings.dart) | ✓ |
-| Instance-based API: `Pdf()` per-worker instance with `kill()` for lifecycle control | ✓ |
-| Sealed PdfError hierarchy (11 subtypes) | ✓ |
+| Instance-based API: `Pdf()` per-worker instance with `dispose()` for lifecycle control | ✓ |
+| Sealed PdfError hierarchy | ✓ |
 | Example app (Flutter, macOS + Chrome verified, zero dart:io) | ✓ |
 | Cargo features: icc + legacy-crypto + rendering + signatures | ✓ |
 | Automated web browser tests (8 tests, Chrome, spawnHybridUri + shelf asset server) | ✓ |
@@ -197,4 +197,4 @@ What's shipped, what's next, what's deliberately out of scope. For the architect
 
 ## The one-line summary
 
-> **Full feature parity plus 40+ new capabilities. Instance-based `Pdf()` API with `kill()` for lifecycle control. Encryption with 4 algorithms + 8 permissions (read + write). Positioned watermarks + image stamps + 16 stamp types. Form creation (6 field types including radio groups + JS validation scripts). Font unembedding. Page rendering, image extraction, digital signatures, PDF/A + PDF/UA validation. Typed message protocol, one-memcpy + O(1) transfer. CI/CD cross-compiles 13 native targets + WASM on tag push → GitHub Releases. All watermark/stamp/image-stamp capabilities work on web. Next: font subsetting.**
+> **Full feature parity plus 40+ new capabilities. Instance-based `Pdf()` API with `dispose()` for lifecycle control. Encryption with 4 algorithms + 8 permissions (read + write). Positioned watermarks + image stamps + 16 stamp types. Form creation (6 field types including radio groups + JS validation scripts). Font unembedding. Page rendering, image extraction, digital signatures, PDF/A + PDF/UA validation. Typed message protocol, one-memcpy + O(1) transfer. CI/CD cross-compiles 13 native targets + WASM on tag push → GitHub Releases. All watermark/stamp/image-stamp capabilities work on web. Next: font subsetting.**

@@ -11,7 +11,7 @@ void main() {
   });
 
   tearDown(() {
-    pdf.kill();
+    pdf.dispose();
   });
 
   group('round-trip integrity', () {
@@ -41,11 +41,11 @@ void main() {
     });
 
     test('editor save → open → verify metadata', () async {
-      final editor = PdfEditor(await pdf.openEditor(minimalPdf));
+      final editor = await Pdf.edit(minimalPdf);
       await editor.setTitle('Roundtrip');
       await editor.setAuthor('Miko');
       final saved = await editor.save();
-      await editor.dispose();
+      editor.dispose();
 
       final doc = await pdf.open(saved);
       expect(doc.title, equals('Roundtrip'));
@@ -53,11 +53,11 @@ void main() {
     });
 
     test('editor merge → save → open → verify pages', () async {
-      final editor = PdfEditor(await pdf.openEditor(minimalPdf));
+      final editor = await Pdf.edit(minimalPdf);
       await editor.mergeFrom(minimalPdf);
       await editor.mergeFrom(letterPdf);
       final saved = await editor.save();
-      await editor.dispose();
+      editor.dispose();
 
       final doc = await pdf.open(saved);
       expect(doc.pageCount, equals(3));

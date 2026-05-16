@@ -11,12 +11,12 @@ void main() {
   });
 
   tearDown(() {
-    pdf.kill();
+    pdf.dispose();
   });
 
   group('PdfEditorHandle.addStamp', () {
     test('adds stamp — output is larger', () async {
-      final handle = await pdf.openEditor(minimalPdf);
+      final handle = await Pdf.edit(minimalPdf);
       await handle.addStamp(
         0,
         stampType: 0, // Approved
@@ -27,11 +27,11 @@ void main() {
       );
       final saved = await handle.save();
       expect(saved.length, greaterThan(minimalPdf.length));
-      await handle.dispose();
+      handle.dispose();
     });
 
     test('stamp marks document as modified', () async {
-      final handle = await pdf.openEditor(minimalPdf);
+      final handle = await Pdf.edit(minimalPdf);
       expect(await handle.isModified, isFalse);
       await handle.addStamp(
         0,
@@ -42,11 +42,11 @@ void main() {
         height: 50,
       );
       expect(await handle.isModified, isTrue);
-      await handle.dispose();
+      handle.dispose();
     });
 
     test('stamp produces valid PDF', () async {
-      final handle = await pdf.openEditor(minimalPdf);
+      final handle = await Pdf.edit(minimalPdf);
       await handle.addStamp(
         0,
         stampType: 2, // NotApproved
@@ -56,14 +56,14 @@ void main() {
         height: 80,
       );
       final saved = await handle.save();
-      await handle.dispose();
+      handle.dispose();
 
       final doc = await pdf.open(saved);
       expect(doc.pageCount, equals(1));
     });
 
     test('custom stamp with name', () async {
-      final handle = await pdf.openEditor(minimalPdf);
+      final handle = await Pdf.edit(minimalPdf);
       await handle.addStamp(
         0,
         stampType: 14, // Custom
@@ -75,11 +75,11 @@ void main() {
       );
       final saved = await handle.save();
       expect(saved.length, greaterThan(minimalPdf.length));
-      await handle.dispose();
+      handle.dispose();
     });
 
     test('stamp with custom opacity', () async {
-      final handle = await pdf.openEditor(minimalPdf);
+      final handle = await Pdf.edit(minimalPdf);
       await handle.addStamp(
         0,
         stampType: 0,
@@ -91,7 +91,7 @@ void main() {
       );
       final saved = await handle.save();
       expect(saved.length, greaterThan(minimalPdf.length));
-      await handle.dispose();
+      handle.dispose();
     });
   });
 }

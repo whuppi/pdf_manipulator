@@ -34,7 +34,7 @@ void main() {
   });
 
   tearDown(() {
-    pdf.kill();
+    pdf.dispose();
   });
 
   testWidgets('probe returns valid info', (tester) async {
@@ -81,21 +81,21 @@ void main() {
   });
 
   testWidgets('editor opens and saves', (tester) async {
-    final editor = PdfEditor(await pdf.openEditor(_minimalPdf));
+    final editor = await Pdf.edit(_minimalPdf);
     expect(await editor.pageCount, 1);
     final result = await editor.save();
-    await editor.dispose();
+    editor.dispose();
     expect(result.length, greaterThan(0));
   });
 
   testWidgets('builder creates PDF', (tester) async {
-    final builder = PdfBuilder(await pdf.createBuilder());
+    final builder = await Pdf.build();
     final page = await builder.addA4Page();
     await page.font('Helvetica', 14);
     await page.text('Hello from mobile!');
     await page.done();
-    final bytes = await builder.build();
-    await builder.dispose();
+    final bytes = await builder.save();
+    builder.dispose();
 
     final doc = await pdf.open(bytes);
     expect(doc.pageCount, 1);
@@ -103,7 +103,7 @@ void main() {
 
   testWidgets('kill prevents further operations', (tester) async {
     final p = Pdf();
-    p.kill();
+    p.dispose();
     expect(() => p.probe(_minimalPdf), throwsStateError);
   });
 }

@@ -27,7 +27,7 @@ dart test test/web/web_smoke_test.dart -p chrome
 
 ```bash
 dart analyze .   # zero errors, zero warnings
-dart test        # all 302 tests pass
+dart test
 ```
 
 Both must pass. Don't suppress with `// ignore:` — fix the underlying issue.
@@ -53,7 +53,7 @@ CI runs on every push to a PR — no manual trigger needed for the basic gate. T
 - Match existing code in the repo
 - No `dart:io` in `lib/` — the barrel must stay web-safe
 - Tests in `test/` mirror the `lib/src/` structure
-- Instance API: `final pdf = Pdf(); pdf.method(); pdf.kill();`
+- Instance API: `final pdf = Pdf(); pdf.method(); pdf.dispose();`
 
 ---
 
@@ -85,4 +85,4 @@ The vendored fork at `vendor/pdf_oxide/` carries patches for functions not yet i
 
 ## Releases
 
-Contributors don't need to worry about releases. The repo owner handles versioning, tagging, and publishing. When a version bump lands on `main`, CI compiles 13 native targets, tests on 5 platforms, creates a GitHub Release with pre-built binaries, and validates pub.dev publishing. Details in [`docs/CI_CD.md`](docs/CI_CD.md).
+Contributors don't need to worry about releases. The repo owner handles versioning, tagging, and publishing. When a version bump lands on `main`, CI compiles all targets, tests on 5 platforms, creates a GitHub Release, and validates pub.dev publishing. Details in [`docs/UPDATING.md`](docs/UPDATING.md).

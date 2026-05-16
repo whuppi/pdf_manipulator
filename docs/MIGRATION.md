@@ -11,13 +11,13 @@ The v1 rewrite changes every API surface. This guide maps every old call to its 
 | Android only | iOS, Android, macOS, Windows, Linux, web |
 | File paths in, file paths out | `Uint8List` in, `Uint8List` out |
 | `PdfManipulator()` instance + params objects | `Pdf()` instance methods with named args |
-| No cleanup required | Call `pdf.kill()` when done |
+| No cleanup required | Call `pdf.dispose()` when done |
 | `PlatformException` on error | Typed `PdfError` sealed class |
 | Method channel (Kotlin ↔ Dart) | FFI (native) / WASM (web), off main thread |
 
 ### The instance-based API
 
-v1 uses an instance-based API. Each `Pdf()` instance owns its own worker (isolate on native, Web Worker on web). You create an instance, call methods on it, and kill it when done.
+v1 uses an instance-based API. Each `Pdf()` instance owns its own worker (isolate on native, Web Worker on web). You create an instance, call methods on it, and dispose it when done.
 
 ```dart
 final pdf = Pdf();
@@ -25,11 +25,11 @@ try {
   final merged = await pdf.merge([bytesA, bytesB]);
   await File('/path/merged.pdf').writeAsBytes(merged);
 } finally {
-  pdf.kill();
+  pdf.dispose();
 }
 ```
 
-Call `pdf.kill()` when you're done — in a `finally` block, in a widget's `dispose()`, or wherever cleanup belongs. Each instance is independent; you can run multiple instances in parallel for concurrent work.
+Call `pdf.dispose()` when you're done — in a `finally` block, in a widget's `dispose()`, or wherever cleanup belongs. Each instance is independent; you can run multiple instances in parallel for concurrent work.
 
 ### The I/O change
 
@@ -47,7 +47,7 @@ final bytesA = await File('/path/a.pdf').readAsBytes();
 final bytesB = await File('/path/b.pdf').readAsBytes();
 final merged = await pdf.merge([bytesA, bytesB]);
 await File('/path/merged.pdf').writeAsBytes(merged);
-pdf.kill();
+pdf.dispose();
 ```
 
 This means v1 works on web (no file system) and gives you full control over where files come from and go.
@@ -68,7 +68,7 @@ final path = await plugin.mergePDFs(
 // v1
 final pdf = Pdf();
 final merged = await pdf.merge([bytesA, bytesB]);
-pdf.kill();
+pdf.dispose();
 ```
 
 ### Split
@@ -98,7 +98,7 @@ final paths = await plugin.splitPDF(
 
 // v1 — extract specific pages (0-based)
 final subset = await pdf.extractPages(bytes, pages: [0, 1, 2]);
-pdf.kill();
+pdf.dispose();
 ```
 
 ### Delete pages
@@ -112,7 +112,7 @@ final path = await plugin.pdfPageDeleter(
 // v1 — 0-based indices
 final pdf = Pdf();
 final result = await pdf.deletePages(bytes, pages: [1, 3]);
-pdf.kill();
+pdf.dispose();
 ```
 
 **Note:** v0 used 1-based page numbers. v1 uses 0-based indices throughout.
@@ -131,7 +131,7 @@ final path = await plugin.pdfPageReorder(
 // v1 — 0-based indices in desired order
 final pdf = Pdf();
 final result = await pdf.reorderPages(bytes, order: [2, 0, 1]);
-pdf.kill();
+pdf.dispose();
 ```
 
 ### Rotate pages
@@ -154,7 +154,7 @@ final result = await pdf.rotatePages(bytes, pages: {0: 90, 2: 180});
 
 // v1 — rotate all pages at once
 final result = await pdf.rotateAllPages(bytes, degrees: 90);
-pdf.kill();
+pdf.dispose();
 ```
 
 ### Rotate + delete + reorder (combined)
@@ -172,14 +172,14 @@ final path = await plugin.pdfPageRotatorDeleterReorder(
 
 // v1 — chain separate calls, or use PdfEditor for one-parse-save
 final pdf = Pdf();
-final editor = PdfEditor(await pdf.openEditor(bytes));
+final editor = await Pdf.edit(bytes);
 await editor.rotatePage(0, degrees: 90);
 await editor.deletePage(3);   // delete in descending order
 await editor.deletePage(1);
 // reorder via extractPages if needed
 final result = await editor.save();
 await editor.dispose();
-pdf.kill();
+pdf.dispose();
 ```
 
 ### Compress
@@ -198,13 +198,13 @@ final path = await plugin.pdfCompressor(
 // v1 — stream recompression + GC + image optimization
 final pdf = Pdf();
 final result = await pdf.compress(bytes, imageQuality: 70);
-pdf.kill();
+pdf.dispose();
 ```
 
 **Changed params:** `imageScale` doesn't exist in v1 — pdf_oxide optimizes images by converting non-JPEG to JPEG when smaller, without reducing resolution. `unEmbedFonts` is now a separate method on `PdfEditor`:
 
 ```dart
-final editor = PdfEditor(await pdf.openEditor(bytes));
+final editor = await Pdf.edit(bytes);
 final count = await editor.unembedStandardFonts();
 final result = await editor.save();
 await editor.dispose();
@@ -235,7 +235,7 @@ final result = await pdf.watermark(
   opacity: 0.3,
   rotation: 45,
 );
-pdf.kill();
+pdf.dispose();
 ```
 
 **Replaced:** `positionType` and `customPosition` → use `pdf.watermarkPositioned(bytes, text: ..., x: ..., y: ..., width: ..., height: ...)` for exact positioning with `FixedPrint` annotation. `watermarkLayer` → watermarks are annotations (always visible).
@@ -278,7 +278,7 @@ final result = await pdf.encryptFull(
   allowModify: false,
   allowAnnotate: false,
 );
-pdf.kill();
+pdf.dispose();
 ```
 
 All old permission flags and encryption algorithm choices are supported via `pdf.encryptFull`. v1 adds four additional permission flags not in v0: `allowPrintHq`, `allowFillForms`, `allowAccessibility`, `allowAssemble`.
@@ -294,7 +294,7 @@ final path = await plugin.pdfDecryption(
 // v1
 final pdf = Pdf();
 final result = await pdf.decrypt(bytes, password: 'pw');
-pdf.kill();
+pdf.dispose();
 ```
 
 ### Images to PDF
@@ -313,7 +313,7 @@ final pdf = Pdf();
 final imageBytes1 = await File('/img1.jpg').readAsBytes();
 final imageBytes2 = await File('/img2.png').readAsBytes();
 final result = await pdf.imagesToPdf([imageBytes1, imageBytes2]);
-pdf.kill();
+pdf.dispose();
 ```
 
 **Dropped param:** `createSinglePdf` — v1 always creates one PDF. To create separate PDFs per image, call `pdf.imagesToPdf` once per image.
@@ -335,7 +335,7 @@ final doc = await pdf.open(bytes);
 for (final page in doc.pages) {
   print('Page ${page.index + 1}: ${page.effectiveWidth} x ${page.effectiveHeight}');
 }
-pdf.kill();
+pdf.dispose();
 ```
 
 **Type change:** `PageSizeInfo` → `PdfPageInfo`. Fields renamed: `pageNumber` → `index` (0-based), `widthOfPage` → `width`, `heightOfPage` → `height`. Added: `rotation`, `effectiveWidth`, `effectiveHeight` (which swap on 90°/270° rotation).
@@ -356,7 +356,7 @@ final info = await pdf.probe(bytes);
 print('Valid: ${info.isValid}');
 print('Encrypted: ${info.isEncrypted}');
 print('Pages: ${info.pageCount}');
-pdf.kill();
+pdf.dispose();
 ```
 
 **Type change:** `PdfValidityAndProtection` → `PdfInfo`. `probe` reports `isValid`, `pageCount`, `isEncrypted`, `version`, `isTagged`. For fine-grained permission flags, use `pdf.getPermissions(bytes)` which returns all 8 flags (print, copy, modify, annotate, fill-forms, accessibility, assemble, print-hq). For encryption algorithm, use `pdf.getEncryptionAlgorithm(bytes)`.
@@ -367,11 +367,11 @@ pdf.kill();
 // v0
 await plugin.cancelManipulations();
 
-// v1 — kill the instance's worker
+// v1 — dispose the instance's worker
 final pdf = Pdf();
 // ... do work ...
-pdf.kill();
-// Each Pdf() instance owns its own worker. Killing it frees the isolate/Web Worker.
+pdf.dispose();
+// Each Pdf() instance owns its own worker. Disposing it frees the isolate/Web Worker.
 ```
 
 ---
@@ -397,7 +397,7 @@ try {
 } on PdfError catch (e) {
   print(e);
 } finally {
-  pdf.kill();
+  pdf.dispose();
 }
 ```
 
@@ -414,7 +414,7 @@ try {
 | `PDFPageReorderParams` | `pdf.reorderPages(bytes, order:)` |
 | `PDFPageRotatorParams` | `pdf.rotatePages(bytes, pages:)` |
 | `PageRotationInfo` | `Map<int, int>` (page index → degrees) |
-| `PDFPageRotatorDeleterReorderParams` | `PdfEditor` chained calls (via `pdf.openEditor(bytes)`) |
+| `PDFPageRotatorDeleterReorderParams` | `PdfEditor` chained calls (via `Pdf.edit(bytes)`) |
 | `PDFCompressorParams` | `pdf.compress(bytes, imageQuality:)` |
 | `PDFWatermarkParams` | `pdf.watermark(bytes, text:, opacity:, ...)` |
 | `WatermarkLayer` | Removed — watermark is always an annotation |
@@ -426,9 +426,9 @@ try {
 | `PageSizeInfo` | `PdfPageInfo` |
 | `PDFValidityAndProtectionParams` | `pdf.probe(bytes)` |
 | `PdfValidityAndProtection` | `PdfInfo` |
-| `PlatformException` | `PdfError` sealed class (11 subtypes) |
-| `PdfEditor.open(bytes)` (static factory) | `PdfEditor(await pdf.openEditor(bytes))` (via Pdf instance) |
-| `PdfBuilder.create()` (static factory) | `PdfBuilder(await pdf.createBuilder())` (via Pdf instance) |
+| `PlatformException` | `PdfError` sealed class |
+| `PdfEditor.open(bytes)` (static factory) | `await Pdf.edit(bytes)` (static factory, owns its own worker) |
+| `PdfBuilder.create()` (static factory) | `await Pdf.build()` (static factory, owns its own worker) |
 
 ---
 
@@ -470,8 +470,8 @@ These are all new in v1 — no migration needed, just start using them:
 - `pdf.addImageStamp` / `PdfEditor.addImageStamp` — stamp images (logos, signatures) onto pages
 - `PdfEditor.addStamp` — stamp annotations (Approved, Draft, Confidential, etc.)
 - `PdfEditor.resizeImage` — resize images on page (DPI control)
-- `PdfEditor` — batch mutations (parse once, save once), created via `pdf.openEditor(bytes)`
-- `PdfBuilder` — create PDFs from scratch with text, images, form fields, created via `pdf.createBuilder()`
+- `PdfEditor` — batch mutations (parse once, save once), created via `Pdf.edit(bytes)`
+- `PdfBuilder` — create PDFs from scratch with text, images, form fields, created via `Pdf.build()`
 - `PdfPageBuilder.textField`, `.checkbox`, `.comboBox(options)`, `.pushButton(caption)`, `.signatureField` — interactive form creation
 - `PdfPageBuilder.radioGroup` — radio button groups
 - `PdfPageBuilder.fieldKeystroke`, `.fieldFormat`, `.fieldValidate`, `.fieldCalculate` — JavaScript actions on form fields

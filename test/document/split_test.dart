@@ -7,13 +7,13 @@ import '../helpers/pdf_fixtures.dart';
 
 Future<Uint8List> _fivePages() async {
   final pdf = Pdf();
-  final editor = PdfEditor(await pdf.openEditor(minimalPdf));
+  final editor = await Pdf.edit(minimalPdf);
   for (var i = 0; i < 4; i++) {
     await editor.mergeFrom(minimalPdf);
   }
   final result = await editor.save();
-  await editor.dispose();
-  pdf.kill();
+  editor.dispose();
+  pdf.dispose();
   return result;
 }
 
@@ -25,7 +25,7 @@ void main() {
   });
 
   tearDown(() {
-    pdf.kill();
+    pdf.dispose();
   });
 
   group('Pdf.split', () {
@@ -113,9 +113,9 @@ void main() {
 
   group('PdfEditor.extractPages', () {
     test('extracts pages via editor', () async {
-      final editor = PdfEditor(await pdf.openEditor(await _fivePages()));
+      final editor = await Pdf.edit(await _fivePages());
       final extracted = await editor.extractPages([0, 2, 4]);
-      await editor.dispose();
+      editor.dispose();
 
       final doc = await pdf.open(extracted);
       expect(doc.pageCount, equals(3));

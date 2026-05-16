@@ -11,7 +11,7 @@ void main() {
   });
 
   tearDown(() {
-    pdf.kill();
+    pdf.dispose();
   });
 
   group('Pdf.encryptFull', () {
@@ -77,35 +77,35 @@ void main() {
 
   group('PdfEditor.saveEncryptedFull', () {
     test('encrypted save produces larger output', () async {
-      final editor = PdfEditor(await pdf.openEditor(minimalPdf));
+      final editor = await Pdf.edit(minimalPdf);
       final encrypted = await editor.saveEncryptedFull(ownerPassword: 'pw');
       final normal = await editor.save();
       expect(encrypted.length, greaterThan(normal.length));
-      await editor.dispose();
+      editor.dispose();
     });
 
     test('modify then encrypt preserves modifications', () async {
-      final editor = PdfEditor(await pdf.openEditor(minimalPdf));
+      final editor = await Pdf.edit(minimalPdf);
       await editor.mergeFrom(minimalPdf);
       final encrypted = await editor.saveEncryptedFull(
         ownerPassword: 'owner',
         userPassword: 'user',
       );
-      await editor.dispose();
+      editor.dispose();
 
       final doc = await pdf.open(encrypted, password: 'owner');
       expect(doc.pageCount, equals(2));
     });
 
     test('restrictive permissions via editor', () async {
-      final editor = PdfEditor(await pdf.openEditor(minimalPdf));
+      final editor = await Pdf.edit(minimalPdf);
       final encrypted = await editor.saveEncryptedFull(
         ownerPassword: 'pw',
         allowPrint: false,
         allowCopy: false,
         algorithm: 3,
       );
-      await editor.dispose();
+      editor.dispose();
       expect(encrypted.length, greaterThan(minimalPdf.length));
     });
   });

@@ -319,8 +319,10 @@ build_output/
 # Cargo build artifacts from vendor/pdf_oxide
 vendor/pdf_oxide/target/
 
-# WASM + JS glue in web_assets/ ARE committed — build hooks don't run for web.
-# Rebuilt via tool/build_wasm.sh after Rust changes.
+# WASM binary — downloaded by setup script from GitHub Releases.
+# JS glue + worker.js are committed (small text files, reviewable).
+# Rebuilt locally via tool/build_wasm.sh for development.
+web_assets/*.wasm
 
 # Example app's copy of WASM assets (installed via dart run pdf_manipulator:setup)
 example/web/pdf_manipulator/

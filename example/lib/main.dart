@@ -254,7 +254,7 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
 
   @override
   void dispose() {
-    _pdf.kill();
+    _pdf.dispose();
     super.dispose();
   }
 
@@ -659,7 +659,7 @@ class _MergeTabState extends State<_MergeTab> {
 
   @override
   void dispose() {
-    _pdf.kill();
+    _pdf.dispose();
     super.dispose();
   }
 
@@ -789,7 +789,7 @@ class _ImagesToPdfTabState extends State<_ImagesToPdfTab> {
 
   @override
   void dispose() {
-    _pdf.kill();
+    _pdf.dispose();
     super.dispose();
   }
 
@@ -912,7 +912,7 @@ class _EditorTabState extends State<_EditorTab> {
 
   @override
   void dispose() {
-    _pdf.kill();
+    _pdf.dispose();
     super.dispose();
   }
 
@@ -931,13 +931,13 @@ class _EditorTabState extends State<_EditorTab> {
     if (_fileBytes == null) return;
     setState(() { _loading = true; _status = '$label...'; });
     try {
-      final editor = PdfEditor(await _pdf.openEditor(_fileBytes!));
+      final editor = await Pdf.edit(_fileBytes!);
       try {
         final result = await work(editor);
         final path = await saveBytes(result, '${label.toLowerCase().replaceAll(' ', '_')}.pdf');
         setState(() => _status = path != null ? 'Saved (${fmtSize(result.length)})' : 'Cancelled');
       } finally {
-        await editor.dispose();
+        editor.dispose();
       }
     } on PdfError catch (e) {
       setState(() => _status = 'Error: $e');
