@@ -1,6 +1,6 @@
 # pdf_manipulator
 
-Cross-platform PDF manipulation for Dart & Flutter. Powered by [pdf_oxide](https://github.com/nickhimself/pdf_oxide) (Rust, MIT/Apache-2.0). Every operation runs off the main thread — worker isolate on native, Web Worker on web.
+Cross-platform PDF manipulation for Dart & Flutter. Powered by [pdf_oxide](https://github.com/yfedoseev/pdf_oxide) (Rust, MIT/Apache-2.0). Every operation runs off the main thread — worker isolate on native, Web Worker on web.
 
 > **Upgrading from the old Android-only version?** See the [migration guide](docs/MIGRATION.md).
 
@@ -438,4 +438,4 @@ Every feature works on every platform. Native binaries are downloaded automatica
 
 [MIT](LICENSE) — Dart code, build tooling, and package distribution.
 
-pdf_oxide engine: [MIT/Apache-2.0](https://github.com/nickhimself/pdf_oxide/blob/main/LICENSE-MIT).
+pdf_oxide engine: [MIT/Apache-2.0](https://github.com/yfedoseev/pdf_oxide/blob/main/LICENSE-MIT).

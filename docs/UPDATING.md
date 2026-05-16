@@ -2,7 +2,7 @@
 
 Maintenance procedures for the package. For architecture see [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-pdf_manipulator wraps a vendored fork of [pdf_oxide](https://github.com/nickhimself/pdf_oxide) (Rust engine) via FFI (native) and WASM (web). The fork lives at [`whuppi/pdf_oxide`](https://github.com/whuppi/pdf_oxide) with patches on the [`pdf_manipulator/0.3.47-patches`](https://github.com/whuppi/pdf_oxide/tree/pdf_manipulator/0.3.47-patches) branch. The git submodule at `vendor/pdf_oxide/` points to this branch.
+pdf_manipulator wraps a vendored fork of [pdf_oxide](https://github.com/yfedoseev/pdf_oxide) (Rust engine) via FFI (native) and WASM (web). The fork lives at [`whuppi/pdf_oxide`](https://github.com/whuppi/pdf_oxide) with patches on the [`pdf_manipulator/0.3.47-patches`](https://github.com/whuppi/pdf_oxide/tree/pdf_manipulator/0.3.47-patches) branch. The git submodule at `vendor/pdf_oxide/` points to this branch.
 
 | Source | Why we track it |
 |---|---|
@@ -33,38 +33,85 @@ pdf_manipulator wraps a vendored fork of [pdf_oxide](https://github.com/nickhims
 
 When pdf_oxide tags a new release:
 
+### Step 1 — Discover what's new
+
 ```sh
 cd vendor/pdf_oxide
-git fetch origin
-git log --oneline origin/main..HEAD   # see our patches
+git fetch upstream
+
+# What tags exist?
+git tag --sort=-version:refname | head -5
+
+# What changed since our base?
+git log --oneline v0.3.47..v0.3.48          # commit messages
+git diff --stat v0.3.47..v0.3.48 | tail -5  # file summary
+
+# New C-ABI functions (these are what we can wire to Dart):
+git diff v0.3.47..v0.3.48 -- src/ffi.rs | grep "^+pub extern"
+
+# New WASM functions (these are what web can call):
+git diff v0.3.47..v0.3.48 -- src/wasm.rs | grep "js_name" | head -20
+
+# New Rust public API (for understanding, not direct use):
+git diff v0.3.47..v0.3.48 -- src/document.rs | grep "^+.*pub fn"
+```
+
+### Step 2 — Check if any upstream additions replace our patches
+
+```sh
+# Compare upstream's new ffi.rs functions against our LOCAL PATCH functions
+git diff v0.3.47..v0.3.48 -- src/ffi.rs | grep "pub extern" > /tmp/upstream_new.txt
+grep "LOCAL PATCH" src/ffi.rs | head -20
+
+# If upstream added a function that does the same thing as one of our patches:
+# 1. Delete our patch (the #[no_mangle] fn + the LOCAL PATCH comment)
+# 2. Delete the matching C header declaration if we added it
+# 3. The upstream version is now the canonical one
+```
+
+### Step 3 — Rebase patches onto new tag
+
+```sh
+git log --oneline upstream/main..HEAD   # see our patches
 
 # Rebase our patch branch onto the new tag
 git rebase --onto vX.Y.Z go/v0.3.47  # old base → new base
+# (replace vX.Y.Z with the new tag, go/v0.3.47 with the old base)
 
 # If conflicts: resolve per-file, prioritize upstream, re-apply our additions
 # The patches are additive (new functions); conflicts are rare
 
 cd ../..
 git add vendor/pdf_oxide
+```
 
+### Step 4 — Regenerate and verify
+
+```sh
 # Regenerate Dart bindings from the (possibly updated) C header
 dart run ffigen --config ffigen.yaml
 
-# Check for new upstream functions we should expose
-git diff lib/src/ffi/native_bindings.g.dart | head -80
-
-# If upstream added functions that replace our patches:
-# 1. Remove the patch from vendor/pdf_oxide (header + ffi.rs + editor)
-# 2. Remove the "LOCAL PATCH" comment block
-# 3. Re-run ffigen
-# 4. Update the Rust Patches table below
+# See what ffigen picked up that's new
+git diff lib/src/ffi/native_bindings.g.dart | grep "^+external" | head -20
 
 dart analyze .
 dart test
+```
 
-# Update provenance (bottom of this file)
+### Step 5 — Wire new features
+
+For each new upstream C-ABI function worth exposing, follow [S3](#s3--add-ffi-function). For each new WASM function, add the matching case in `worker.js` and `_web.dart`.
+
+### Step 6 — Finalize
+
+```sh
+# Rebuild WASM
+./tool/build_wasm.sh
+
+# Update provenance table (bottom of this file)
+# Update CAPABILITY_ROADMAP.md
 # Update CHANGELOG.md
-# Version is read from pubspec.yaml — no hardcoded constant in hook/build.dart
+# Bump version in pubspec.yaml
 ```
 
 After bumping, always run [S4](#s4--rebuild-wasm). Native binaries are compiled and uploaded by CI when you push the version bump to main ([S5](#s5--rebuild-native-binaries)).
@@ -346,7 +393,7 @@ Our fork (`pdf_manipulator/0.3.47-patches` branch, commits atop `go/v0.3.47`) ad
 
 | Item | Value |
 |---|---|
-| Upstream repo | [`nickhimself/pdf_oxide`](https://github.com/nickhimself/pdf_oxide) |
+| Upstream repo | [`yfedoseev/pdf_oxide`](https://github.com/yfedoseev/pdf_oxide) |
 | Fork repo | [`whuppi/pdf_oxide`](https://github.com/whuppi/pdf_oxide) |
 | Fork branch | [`pdf_manipulator/0.3.47-patches`](https://github.com/whuppi/pdf_oxide/tree/pdf_manipulator/0.3.47-patches) |
 | Upstream base tag | `go/v0.3.47` |
