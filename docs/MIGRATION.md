@@ -191,7 +191,7 @@ final path = await plugin.pdfCompressor(
     pdfPath: path,
     imageQuality: 70,
     imageScale: 0.5,    // v1 does not scale — preserves resolution
-    unEmbedFonts: true, // v1 has this as a separate method: pdf.unembedStandardFonts(bytes)
+    unEmbedFonts: true, // v1 has this via PdfEditor: editor.unembedStandardFonts()
   ),
 );
 
@@ -201,7 +201,14 @@ final result = await pdf.compress(bytes, imageQuality: 70);
 pdf.kill();
 ```
 
-**Changed params:** `imageScale` doesn't exist in v1 — pdf_oxide optimizes images by converting non-JPEG to JPEG when smaller, without reducing resolution. `unEmbedFonts` is now a separate method: `pdf.unembedStandardFonts(bytes)`.
+**Changed params:** `imageScale` doesn't exist in v1 — pdf_oxide optimizes images by converting non-JPEG to JPEG when smaller, without reducing resolution. `unEmbedFonts` is now a separate method on `PdfEditor`:
+
+```dart
+final editor = PdfEditor(await pdf.openEditor(bytes));
+final count = await editor.unembedStandardFonts();
+final result = await editor.save();
+await editor.dispose();
+```
 
 ### Watermark
 
@@ -352,7 +359,7 @@ print('Pages: ${info.pageCount}');
 pdf.kill();
 ```
 
-**Type change:** `PdfValidityAndProtection` → `PdfInfo`. Fine-grained protection flags (`isOwnerPasswordProtected`, `isPrintingAllowed`, etc.) are not in v1 — `probe` reports `isValid`, `pageCount`, `isEncrypted`, `version`, `isTagged`.
+**Type change:** `PdfValidityAndProtection` → `PdfInfo`. `probe` reports `isValid`, `pageCount`, `isEncrypted`, `version`, `isTagged`. For fine-grained permission flags, use `pdf.getPermissions(bytes)` which returns all 8 flags (print, copy, modify, annotate, fill-forms, accessibility, assemble, print-hq). For encryption algorithm, use `pdf.getEncryptionAlgorithm(bytes)`.
 
 ### Cancel manipulations
 
@@ -458,7 +465,7 @@ These are all new in v1 — no migration needed, just start using them:
 - `pdf.flattenForms`, `pdf.applyRedactions`
 - `pdf.embedFile`, `pdf.eraseRegions`
 - `pdf.getPermissions`, `pdf.getEncryptionAlgorithm` — read encryption info from existing PDFs
-- `pdf.unembedStandardFonts` — remove embedded standard 14 fonts to reduce file size
+- `PdfEditor.unembedStandardFonts()` — remove embedded standard 14 fonts to reduce file size
 - `pdf.watermarkPositioned` — watermark with exact coordinates, font name, and FixedPrint annotation
 - `pdf.addImageStamp` / `PdfEditor.addImageStamp` — stamp images (logos, signatures) onto pages
 - `PdfEditor.addStamp` — stamp annotations (Approved, Draft, Confidential, etc.)
