@@ -69,6 +69,27 @@ class PdfEditor {
       _handle.cropMargins(left: left, right: right, top: top, bottom: bottom);
   Future<void> convertToPdfA({int level = 1}) =>
       _handle.convertToPdfA(level: level);
+  Future<void> addWatermarkPositioned(int pageIndex, String text, {
+    required double x, required double y,
+    required double width, required double height,
+    double fontSize = 48, String? fontName,
+    double rotation = 45, double opacity = 0.3,
+    double r = 0.5, double g = 0.5, double b = 0.5,
+  }) => _handle.addWatermarkPositioned(pageIndex, text,
+      x: x, y: y, width: width, height: height,
+      fontSize: fontSize, fontName: fontName,
+      rotation: rotation, opacity: opacity, r: r, g: g, b: b);
+
+  Future<void> addStamp(int pageIndex, {
+    required int stampType,
+    String? customName,
+    required double x, required double y,
+    required double width, required double height,
+    double opacity = 1.0,
+  }) => _handle.addStamp(pageIndex,
+      stampType: stampType, customName: customName,
+      x: x, y: y, width: width, height: height, opacity: opacity);
+
   Future<void> addImageStamp(int pageIndex, Uint8List imageBytes, {
     required double x, required double y,
     required double width, required double height,
