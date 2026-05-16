@@ -1,0 +1,310 @@
+# Release — fires when a merge to main changes pubspec.yaml.
+#
+# Reads version from pubspec.yaml. If no tag exists for that version:
+#   1. Cross-compiles 13 native targets on 3 runners
+#   2. Tests on 5 platforms (compile from source — contributor path)
+#   3. Creates git tag + GitHub Release with pre-built binaries
+#   4. Validates pub.dev publish
+#
+# The pre-built binaries are what consumers download via hook/build.dart
+# when they install from pub.dev (they don't have vendor/pdf_oxide/).
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths: ['pubspec.yaml']
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  FEATURES: icc,legacy-crypto,rendering,signatures
+  MANIFEST: vendor/pdf_oxide/Cargo.toml
+
+jobs:
+  version:
+    name: Read version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: ver
+        run: |
+          V=$(grep '^version:' pubspec.yaml | sed 's/version: //')
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+      - id: check
+        run: |
+          if git ls-remote --tags origin | grep -q "refs/tags/v${{ steps.ver.outputs.version }}$"; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ═══════════════════════════════════════════════════════════════════
+  # COMPILE — 3 runners, 13 native targets (for GitHub Release assets)
+  # ═══════════════════════════════════════════════════════════════════
+
+  compile-macos:
+    name: Compile (macOS + iOS + Android)
+    needs: version
+    if: needs.version.outputs.skip == 'false'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: >-
+            aarch64-apple-darwin,x86_64-apple-darwin,
+            aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios,
+            aarch64-linux-android,armv7-linux-androideabi,
+            x86_64-linux-android,i686-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: vendor/pdf_oxide }
+
+      - name: macOS
+        run: |
+          for t in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --manifest-path $MANIFEST --lib --release --target $t --features $FEATURES
+          done
+          mkdir -p out/macos-arm64 out/macos-x64
+          cp vendor/pdf_oxide/target/aarch64-apple-darwin/release/libpdf_oxide.dylib out/macos-arm64/
+          cp vendor/pdf_oxide/target/x86_64-apple-darwin/release/libpdf_oxide.dylib out/macos-x64/
+
+      - name: iOS
+        run: |
+          for t in aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios; do
+            cargo build --manifest-path $MANIFEST --lib --release --target $t --features $FEATURES
+          done
+          mkdir -p out/ios-arm64 out/ios-sim-arm64 out/ios-sim-x64
+          cp vendor/pdf_oxide/target/aarch64-apple-ios/release/libpdf_oxide.a out/ios-arm64/
+          cp vendor/pdf_oxide/target/aarch64-apple-ios-sim/release/libpdf_oxide.a out/ios-sim-arm64/
+          cp vendor/pdf_oxide/target/x86_64-apple-ios/release/libpdf_oxide.a out/ios-sim-x64/
+          strip -S out/ios-arm64/libpdf_oxide.a out/ios-sim-arm64/libpdf_oxide.a out/ios-sim-x64/libpdf_oxide.a
+
+      - name: Android
+        run: |
+          NDK=$ANDROID_NDK_HOME
+          TC="$NDK/toolchains/llvm/prebuilt/darwin-x86_64"
+          for s in \
+            "aarch64-linux-android:android-arm64:aarch64-linux-android21-clang" \
+            "armv7-linux-androideabi:android-arm:armv7a-linux-androideabi21-clang" \
+            "x86_64-linux-android:android-x64:x86_64-linux-android21-clang" \
+            "i686-linux-android:android-x86:i686-linux-android21-clang"; do
+            IFS=: read -r triple outdir clang <<< "$s"
+            lv="CARGO_TARGET_$(echo "$triple" | tr '[:lower:]-' '[:upper:]_')_LINKER"
+            export "$lv=$TC/bin/$clang"
+            cargo build --manifest-path $MANIFEST --lib --release --target "$triple" --features $FEATURES
+            mkdir -p "out/$outdir"
+            cp "vendor/pdf_oxide/target/$triple/release/libpdf_oxide.so" "out/$outdir/"
+            unset "$lv"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with: { name: bin-macos, path: out/ }
+
+  compile-linux:
+    name: Compile (Linux)
+    needs: version
+    if: needs.version.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: "x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu" }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: vendor/pdf_oxide }
+      - run: |
+          cargo build --manifest-path $MANIFEST --lib --release --target x86_64-unknown-linux-gnu --features $FEATURES
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+          cargo build --manifest-path $MANIFEST --lib --release --target aarch64-unknown-linux-gnu --features $FEATURES
+          mkdir -p out/linux-x64 out/linux-arm64
+          cp vendor/pdf_oxide/target/x86_64-unknown-linux-gnu/release/libpdf_oxide.so out/linux-x64/
+          cp vendor/pdf_oxide/target/aarch64-unknown-linux-gnu/release/libpdf_oxide.so out/linux-arm64/
+      - uses: actions/upload-artifact@v4
+        with: { name: bin-linux, path: out/ }
+
+  compile-windows:
+    name: Compile (Windows)
+    needs: version
+    if: needs.version.outputs.skip == 'false'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: x86_64-pc-windows-msvc }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: vendor/pdf_oxide }
+      - run: |
+          cargo build --manifest-path vendor/pdf_oxide/Cargo.toml --lib --release `
+            --target x86_64-pc-windows-msvc --features icc,legacy-crypto,rendering,signatures
+          New-Item -ItemType Directory -Force -Path out\windows-x64
+          Copy-Item vendor\pdf_oxide\target\x86_64-pc-windows-msvc\release\pdf_oxide.dll out\windows-x64\
+      - uses: actions/upload-artifact@v4
+        with: { name: bin-windows, path: out/ }
+
+  # ═══════════════════════════════════════════════════════════════════
+  # TEST — 5 platforms (compile from source, same as contributor path)
+  # ═══════════════════════════════════════════════════════════════════
+
+  test-macos:
+    name: Test (macOS)
+    needs: version
+    if: needs.version.outputs.skip == 'false'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: dart-lang/setup-dart@v1
+        with: { sdk: stable }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: vendor/pdf_oxide }
+      - run: dart pub get
+      - run: dart test --timeout=120s
+
+  test-linux:
+    name: Test (Linux)
+    needs: version
+    if: needs.version.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: dart-lang/setup-dart@v1
+        with: { sdk: stable }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: vendor/pdf_oxide }
+      - run: dart pub get
+      - run: dart test --timeout=120s
+
+  test-windows:
+    name: Test (Windows)
+    needs: version
+    if: needs.version.outputs.skip == 'false'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: dart-lang/setup-dart@v1
+        with: { sdk: stable }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: vendor/pdf_oxide }
+      - run: dart pub get
+      - run: dart test --timeout=120s
+
+  test-android:
+    name: Test (Android)
+    needs: version
+    if: needs.version.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: subosito/flutter-action@v2
+        with: { channel: stable }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: vendor/pdf_oxide }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          disable-animations: true
+          script: |
+            cd example
+            flutter pub get
+            flutter test integration_test/pdf_smoke_test.dart
+
+  test-ios:
+    name: Test (iOS)
+    needs: version
+    if: needs.version.outputs.skip == 'false'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: subosito/flutter-action@v2
+        with: { channel: stable }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: vendor/pdf_oxide }
+      - uses: futureware-tech/simulator-action@v4
+        with: { model: 'iPhone 16' }
+      - run: |
+          cd example
+          flutter pub get
+          DEVICE=$(xcrun simctl list devices booted -j | python3 -c "import sys,json; d=json.load(sys.stdin)['devices']; print(next(u for r in d.values() for u in r if u['state']=='Booted')['udid'])")
+          flutter test integration_test/pdf_smoke_test.dart -d "$DEVICE"
+
+  # ═══════════════════════════════════════════════════════════════════
+  # RELEASE — tag + upload binaries after all tests pass
+  # ═══════════════════════════════════════════════════════════════════
+
+  release:
+    name: GitHub Release
+    needs: [version, compile-macos, compile-linux, compile-windows,
+            test-macos, test-linux, test-windows, test-android, test-ios]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "v${{ needs.version.outputs.version }}"
+          git push origin "v${{ needs.version.outputs.version }}"
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts/ }
+      - name: Flatten assets
+        run: |
+          mkdir -p release
+          for runner in bin-macos bin-linux bin-windows; do
+            for pdir in artifacts/$runner/*/; do
+              [ -d "$pdir" ] || continue
+              p=$(basename "$pdir")
+              for lib in "$pdir"*; do
+                [ -f "$lib" ] || continue
+                cp "$lib" "release/${p}-$(basename "$lib")"
+              done
+            done
+          done
+          ls -lh release/
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ needs.version.outputs.version }}"
+          files: release/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  pub-dry-run:
+    name: pub.dev dry run
+    needs: [version, test-macos, test-linux, test-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: dart-lang/setup-dart@v1
+        with: { sdk: stable }
+      - run: dart pub get
+      - run: dart pub publish --dry-run

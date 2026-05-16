@@ -1,260 +1,454 @@
-[![pub package](https://img.shields.io/pub/v/pdf_manipulator.svg)](https://pub.dev/packages/pdf_manipulator) [![wakatime](https://wakatime.com/badge/user/83f3b15d-49de-4c01-b8de-bbc132f11be1/project/db0907ad-0c7e-49cb-bbbb-a0fba05b6bc9.svg)](https://wakatime.com/badge/user/83f3b15d-49de-4c01-b8de-bbc132f11be1/project/db0907ad-0c7e-49cb-bbbb-a0fba05b6bc9)
+# pdf_manipulator
 
-## Word from creator
+Cross-platform PDF manipulation for Dart & Flutter. Powered by [pdf_oxide](https://github.com/nickhimself/pdf_oxide) (Rust, MIT/Apache-2.0). Every operation runs off the main thread — worker isolate on native, Web Worker on web.
 
-**Hello👋, This package is completely compatible with flutter and it also supports using Android Uri of picked file to work with which offers some real benefits such as manipulating them without caching or validating them without caching.**
+> **Status:** Pre-release (`1.0.0-dev.1`). All features below are tested and passing — 298 of them.
+>
+> **Upgrading from the old Android-only version?** See the [migration guide](docs/MIGRATION.md).
 
-**Yes, without a doubt, giving a free 👍 or ⭐ will encourage me to keep working on this plugin.**
+---
 
-## Package description
+## Install
 
-A flutter plugin for doing various manipulations such as merge, split, compress and many more on PDF easily.
-
-**Note:** This project utilises itext7 for various operations involving PDFs and since itext7 AGPL V3 License is used in this plugin, it is also licenced under this licence. The project/plugin developer, the owner of the copyright, and the contributors are not accountable or liable for any damage resulting from this project/plugin.
-
-## Features
-
-- Works on Android 5.0 (API level 21) or later.
-- Works with both absolute file path and Android native Uri.
-- Supports merging multiple PDFs.
-- Supports splitting PDF.
-- Supports rotating PDF pages.
-- Supports deleting PDF pages.
-- Supports reordering PDF pages.
-- Supports rotating, deleting, reordering PDF pages at the same time for more efficiency.
-- Supports compressing PDF.
-- Supports watermarking PDF.
-- Supports encrypting PDF.
-- Supports decrypting PDF.
-- Supports converting images to PDF.
-- Supports getting PDF validity and protection info.
-- Supports getting PDF page size info.
-
-**Note:** To use it in realease mode you will need to create a file named proguard-rules.pro in your project Android->App->proguard-rules.pro. In that file you need to add the below block of text at the end of the file.
-```
-# To use iText in release mode Otherwise we get
-# PlatformException AbstractITextEvent is only for internal usage.
--keep public class com.itextpdf.**
--keep public class org.apache.**
-```
-For reference see this [project file](https://github.com/chaudharydeepanshu/files_tools/blob/main/android/app/proguard-rules.pro).
-
-Then, setup your App->build.gradle buildTypes release config as done in this [project file](https://github.com/chaudharydeepanshu/files_tools/blob/54774ecf28d37c2a27d4fc666f7b178ad84ac46b/android/app/build.gradle#L77).
-If you don't do all of this then you will get PlatformException: AbstractITextEvent is only for internal usage in Release build.
-
-**Note:** If you are getting errors in you IDE after updating this plugin to newer version and the error contains works like Redeclaration, Conflicting declarations, Overload resolution ambiguity then to fix that you probably need to remove the older version of plugin from pub cache `C:\Users\username\AppData\Local\Pub\Cache\hosted\pub.dev\older_version` or simply run `flutter clean`.
-
-## Getting started
-
-- In pubspec.yaml, add this dependency:
+### Consumer (zero Rust needed)
 
 ```yaml
-pdf_manipulator: 
+dependencies:
+  pdf_manipulator: ^1.0.0-dev.1
 ```
 
-- Add this package to your project:
+The build hook automatically downloads a pre-built binary from GitHub Releases for your platform. No Rust toolchain, no compilation — just `dart pub get` and go.
+
+For web, also run once from your app directory:
+
+```sh
+dart run pdf_manipulator:setup
+```
+
+This copies the WASM binary + Web Worker into `web/pdf_manipulator/`.
+
+### Contributor (needs Rust)
+
+```bash
+git clone --recursive https://github.com/nickhimself/pdf_manipulator.git
+cd pdf_manipulator
+dart pub get
+
+# Install Rust (if you don't have it)
+# https://rustup.rs
+
+# Compile native binaries from source
+./tool/compile_natives.sh
+
+# Compile WASM (needs wasm-bindgen)
+./tool/build_wasm.sh
+```
+
+The build hook is dual-path: when pre-built binaries aren't found locally, it downloads them from GitHub Releases. Contributors who compile from source skip the download.
+
+---
+
+## The 30-second version
 
 ```dart
 import 'package:pdf_manipulator/pdf_manipulator.dart';
+
+final pdf = Pdf();
+
+final doc = await pdf.open(pdfBytes);
+print('${doc.pageCount} pages');
+
+final merged = await pdf.merge([pdfA, pdfB]);
+final smaller = await pdf.compress(bytes, imageQuality: 75);
+final text = await pdf.extractText(bytes);
+final locked = await pdf.encrypt(bytes, ownerPassword: 'secret');
+
+pdf.kill(); // done — release the worker
 ```
 
-## Basic Usage
+Each `Pdf()` creates its own background worker. `kill()` releases the worker and instantly cancels all pending operations. Bytes in, bytes out. No file paths, no `dart:io`. Same code on every platform.
 
-### Merging multiple PDFs
+---
+
+## What you can do
+
+### Open and inspect
+
+You picked a PDF. What's inside?
 
 ```dart
-String? mergedPdfPath = await PdfManipulator().mergePDFs(
-  params: PDFMergerParams(pdfsPaths: [pdfPath1, padfPath2]),
+final pdf = Pdf();
+final doc = await pdf.open(bytes);
+print('${doc.pageCount} pages, version ${doc.version}');
+print('Title: ${doc.title}');
+print('Author: ${doc.author}');
+print('Tagged: ${doc.isTagged}');
+
+for (final page in doc.pages) {
+  print('Page ${page.index + 1}: ${page.effectiveWidth} × ${page.effectiveHeight} pt'
+      '${page.rotation != 0 ? ", rotated ${page.rotation}°" : ""}');
+}
+```
+
+Don't need the full parse? `probe` is faster:
+
+```dart
+final info = await pdf.probe(bytes);
+// info.isValid, info.pageCount, info.isEncrypted, info.version
+```
+
+### Merge
+
+Two board decks into one? A cover page onto a report?
+
+```dart
+final merged = await pdf.merge([coverBytes, reportBytes, appendixBytes]);
+```
+
+Page order follows the list order.
+
+### Split
+
+Break a big PDF into smaller ones:
+
+```dart
+// Every 5 pages
+final chunks = await pdf.split(bytes, every: 5);
+// → [pages 1-5, pages 6-10, pages 11-13]
+
+// By file size (max 500KB each)
+final small = await pdf.splitBySize(bytes, maxBytes: 500000);
+```
+
+### Extract, delete, reorder, move
+
+Pull pages out, throw pages away, shuffle them around:
+
+```dart
+// Grab pages 0 and 2 as a new PDF
+final excerpt = await pdf.extractPages(bytes, pages: [0, 2]);
+
+// Delete page 3
+final trimmed = await pdf.deletePages(bytes, pages: [3]);
+
+// Reverse the entire document
+final backwards = await pdf.reorderPages(bytes,
+    order: [4, 3, 2, 1, 0]);
+
+// Move the last page to the front
+final reshuffled = await pdf.movePage(bytes,
+    from: 9, to: 0);
+```
+
+### Rotate
+
+```dart
+// Rotate every page 90° clockwise
+final landscape = await pdf.rotateAllPages(bytes, degrees: 90);
+
+// Rotate specific pages — page 0 by 180°, page 2 by 270°
+final fixed = await pdf.rotatePages(bytes, pages: {0: 180, 2: 270});
+```
+
+### Compress
+
+Three levels of compression in one call — stream recompression, garbage collection, and image optimization. Non-JPEG images get converted to JPEG only if the result is smaller. Resolution is preserved.
+
+```dart
+final smaller = await pdf.compress(bytes, imageQuality: 75);
+print('${bytes.length} → ${smaller.length}');
+```
+
+### Watermark
+
+Stamp text across every page — or just the pages you pick:
+
+```dart
+final stamped = await pdf.watermark(bytes,
+    text: 'CONFIDENTIAL', opacity: 0.2, fontSize: 60, rotation: 45);
+
+// Just page 0
+final partial = await pdf.watermark(bytes,
+    text: 'DRAFT', pages: [0]);
+
+// Positioned — exact coordinates, custom font
+final precise = await pdf.watermarkPositioned(bytes,
+    text: 'INTERNAL',
+    x: 100, y: 50, width: 400, height: 100,
+    fontName: 'Courier', fontSize: 36, opacity: 0.15);
+```
+
+### Stamp annotations
+
+```dart
+final stamped = await pdf.addStamp(bytes,
+    page: 0,
+    stampType: 0,  // 0=Approved, 12=Draft, 6=Confidential
+    x: 50, y: 700, width: 200, height: 50);
+```
+
+### Image stamp
+
+Stamp an image onto a page — logos, signatures, approval seals:
+
+```dart
+final stamped = await pdf.addImageStamp(bytes,
+    page: 0,
+    imageBytes: logoPng,
+    x: 50, y: 700, width: 150, height: 50);
+```
+
+### Encrypt and decrypt
+
+```dart
+// Simple encryption (AES-256, all permissions)
+final locked = await pdf.encrypt(bytes, ownerPassword: 'secret');
+final unlocked = await pdf.decrypt(locked, password: 'secret');
+
+// Full control — algorithm + permissions
+final restricted = await pdf.encryptFull(bytes,
+    ownerPassword: 'owner',
+    userPassword: 'user',
+    algorithm: 2,  // 0=RC4-40, 1=RC4-128, 2=AES-128, 3=AES-256
+    allowPrint: true,
+    allowCopy: false,
+    allowModify: false,
 );
 ```
 
-### Spliting PDF
+### Extract text
+
+Pull text out of any PDF — all pages or just one:
 
 ```dart
-String? mergedPdfPath = await PdfManipulator().mergePDFs(
-  params: PDFMergerParams(pdfsPaths: [pdfPath1, padfPath2]),
-);
+final everything = await pdf.extractText(bytes);
+final page3only = await pdf.extractText(bytes, page: 2);
 ```
 
-#### Split PDF by page count
+### Convert to Markdown, HTML, plain text
 
 ```dart
-List<String>? splitPdfPaths = await PdfManipulator().splitPDF(
-  params: PDFSplitterParams(pdfPath: pdfPath, pageCount: 2),
-);
+final md = await pdf.toMarkdown(bytes);
+final html = await pdf.toHtml(bytes, page: 0);
+final plain = await pdf.toPlainText(bytes, page: 0);
 ```
 
-#### Split PDF by size
+### Search
+
+Find text with page numbers and position rectangles:
 
 ```dart
-List<String>? splitPdfPaths = await PdfManipulator().splitPDF(
-  params: PDFSplitterParams(pdfPath: pdfPath, byteSize: splitSize),
-);
+final hits = await pdf.searchAll(bytes, query: 'revenue');
+for (final hit in hits) {
+  print('Page ${hit.page}: "${hit.text}" at (${hit.rect.x}, ${hit.rect.y})');
+}
+
+// Search one page
+final pageHits = await pdf.searchPage(bytes, page: 0, query: 'total');
 ```
 
-#### Split PDF by page numbers
+### Render pages to images
+
+Turn PDF pages into raw RGBA pixels — for thumbnails, previews, or image pipelines:
 
 ```dart
-List<String>? splitPdfPaths = await PdfManipulator().splitPDF(
-  params: PDFSplitterParams(pdfPath: pdfPath, pageNumbers: [2, 5]),
-);
+final full = await pdf.renderPage(bytes, 0);
+// full.width, full.height, full.data (Uint8List of RGBA pixels)
+
+final fitted = await pdf.renderPageFit(bytes, 0, width: 800, height: 600);
+final thumb = await pdf.renderPageThumbnail(bytes, 0, size: 150);
+final all = await pdf.renderAllPages(bytes, width: 400, height: 600);
 ```
 
-#### Extract PDF pages by page range
+### Extract embedded images
+
+Pull images out of PDF pages:
 
 ```dart
-List<String>? splitPdfPaths = await PdfManipulator().splitPDF(
-  params: PDFSplitterParams(pdfPath: pdfPath, pageRanges: ["2", "5-10"]),
-);
+final images = await pdf.extractImages(bytes, 0);
+for (final img in images) {
+  print('${img.width}×${img.height} ${img.format} — ${img.data.length} bytes');
+}
+
+final allImages = await pdf.extractAllImages(bytes);
 ```
 
-### Rotaing PDF pages
+### Images to PDF
+
+Turn a stack of images into a PDF:
 
 ```dart
-String? rotatedPagesPdfPath = await PdfManipulator().pdfPageRotator(
-  params: PDFPageRotatorParams(pdfPath: pdfPath, pagesRotationInfo: [PageRotationInfo(pageNumber: 1, rotationAngle: 180)]),
-);
+final result = await pdf.imagesToPdf([jpeg1, jpeg2, png3]);
 ```
 
-### Deleting PDF pages
+Each image becomes one A4 page.
+
+### Digital signatures
+
+Inspect, verify, and sign:
 
 ```dart
-String? deletedPagesPdfPath = await PdfManipulator().pdfPageDeleter(
-  params: PDFPageDeleterParams(pdfPath: pdfPath, pageNumbers: [1, 2, 3]),
-);
+final count = await pdf.getSignatureCount(bytes);
+final sigs = await pdf.getSignatures(bytes);
+final allValid = await pdf.verifySignatures(bytes);
+
+final signed = await pdf.sign(bytes,
+    certificate: p12Bytes,
+    certificatePassword: 'cert-pw',
+    reason: 'Approved',
+    location: 'HQ');
 ```
 
-### Reordering PDF pages
+### Read encryption info
 
 ```dart
-String? reorderedPagesPdfPath = await PdfManipulator().pdfPageReorder(
-  params: PDFPageReorderParams(pdfPath: pdfPath, pageNumbers: [4, 1]),
-);
+final perms = await pdf.getPermissions(bytes);
+print('Can print: ${perms.print}, can copy: ${perms.copy}');
+
+final algo = await pdf.getEncryptionAlgorithm(bytes);
+// -1=not encrypted, 0=RC4-40, 1=RC4-128, 2=AES-128, 3=AES-256
 ```
 
-### Rotating, Deleting, Reordering PDF pages at the same time
+### Compliance validation
 
 ```dart
-String? rotatedDeletedReorderedPagesPdfPath = await PdfManipulator().pdfPageRotatorDeleterReorder(
-  params: PDFPageRotatorDeleterReorderParams(
-      pdfPath: pdfPath,
-      pagesRotationInfo: [PageRotationInfo(pageNumber: 1, rotationAngle: 180)],
-      pageNumbersForReorder: [4, 3, 2, 1],
-      pageNumbersForDeleter: [3, 2]),
-);
+final pdfA = await pdf.validatePdfA(bytes);
+print('Compliant: ${pdfA.compliant}, errors: ${pdfA.errors}');
+
+final accessible = await pdf.validatePdfUa(bytes);
 ```
 
-### Compressing PDF
+### Forms, annotations, redactions
 
 ```dart
-String? compressedPdfPath = await PdfManipulator().pdfCompressor(
-  params: PDFCompressorParams(pdfPath: pdfPath, imageQuality: 100, imageScale: 1),
-);
+final flat = await pdf.flattenForms(bytes);
+final redacted = await pdf.applyRedactions(bytes);
 ```
 
-### Watermarking PDF
+### Embed files, erase regions
 
 ```dart
-String? watermarkedPdfPath = await PdfManipulator().pdfWatermark(
-  params: PDFWatermarkParams(
-      pdfPath: pdfPath,
-      text: "Watermark Text",
-      watermarkColor: Colors.red,
-      fontSize: 50,
-      watermarkLayer: WatermarkLayer.overContent,
-      opacity: 0.7,
-      positionType: PositionType.center),
-);
+final withAttachment = await pdf.embedFile(bytes,
+    name: 'data.csv', fileData: csvBytes);
+
+final erased = await pdf.eraseRegions(bytes,
+    page: 0,
+    regions: [PdfRect(x: 100, y: 100, width: 200, height: 50)]);
 ```
 
-**Note:** When using `PositionType.custom` you need to provide `customPositionXCoordinatesList` and `customPositionYCoordinatesList`.
+---
 
-### Encrypting PDF
+## PdfEditor — parse once, mutate many, save once
+
+When you're applying multiple changes, `PdfEditor` is more efficient — it parses the PDF once and saves once, no matter how many mutations you chain:
 
 ```dart
-String? encryptedPdfPath = await PdfManipulator().pdfEncryption(
-  params: PDFEncryptionParams(
-      pdfPath: pdfPath,
-      ownerPassword: "ownerpw",
-      userPassword: "userpw",
-      encryptionAES256: true // Set true to enable encryptionAES256 encryption.
-);
+final pdf = Pdf();
+final editor = PdfEditor(await pdf.openEditor(bytes));
+
+await editor.setTitle('Q4 Report');
+await editor.setAuthor('Finance');
+await editor.rotatePage(0, degrees: 90);
+await editor.deletePage(4);
+await editor.mergeFrom(appendixBytes);
+await editor.addWatermark(0, 'FINAL', opacity: 0.15);
+await editor.optimizeImages(quality: 70);
+await editor.flattenForms();
+
+final result = await editor.saveWithOptions(compress: true, garbageCollect: true);
+await editor.dispose();
 ```
 
-`PDFEncryptionParams` other parameters with their default values is as follows:-
-- `bool allowPrinting = false` Set true to allow printing permission.
-- `bool allowModifyContents = false` Set true to allow modify permission.
-- `bool allowCopy = false` Set true to allow copy permission.
-- `bool allowModifyAnnotations = false` Set true to allow modifying annotations permission.
-- `bool allowFillIn = false` Set true to allow fill in permission.
-- `bool allowScreenReaders = false` Set true to allow screen readers permission.
-- `bool allowAssembly = false` Set true to allow assembly permission.
-- `bool allowDegradedPrinting = false` Set true to allow degraded printing permission.
-- `bool standardEncryptionAES40 = false` Set true to enable StandardEncryptionAES40 encryption. standardEncryptionAES40 implicitly sets doNotEncryptMetadata and encryptEmbeddedFilesOnly as false.
-- `bool standardEncryptionAES128 = false` Set true to enable StandardEncryptionAES128 encryption. standardEncryptionAES128 implicitly sets EncryptionConstants.EMBEDDED_FILES_ONLY as false.
-- `bool encryptionAES128 = false` Set true to enable encryptionAES128 encryption.
-- `bool encryptEmbeddedFilesOnly = false` Set true to encrypt embedded files only.
-- `bool doNotEncryptMetadata = false` Set true to not encrypt metadata.
+Everything `pdf.*` can do, `PdfEditor` can do in a batch. Plus metadata setters, `cropMargins`, `convertToPdfA`, `flattenAllAnnotations`, `setFormFieldValue`, `embedFile`, `eraseRegions`, and `saveEncrypted`.
 
-**Note:** Please be aware that the passed encryption types may override permissions.
+---
 
-### Decrypting PDF
+## PdfBuilder — create PDFs from scratch
+
+Build new PDFs with text, headings, images, and watermarks:
 
 ```dart
-String? decryptedPdfPath = await PdfManipulator().pdfDecryption(
-  params: PDFDecryptionParams(
-      pdfPath: pdfPath,
-      password: ownerOrUserPassword,
-);
+final pdf = Pdf();
+final builder = PdfBuilder(await pdf.createBuilder());
+await builder.setTitle('Meeting Notes');
+
+final page = await builder.addA4Page();
+await page.heading(1, 'Q4 Planning');
+await page.paragraph('We discussed the roadmap for next quarter.');
+await page.space(12);
+await page.horizontalRule();
+await page.paragraph('Action items follow.');
+await page.done();
+
+final result = await builder.build();
+await builder.dispose();
 ```
 
-### Converting images to PDF
+Custom sizes (`addPage(width: 400, height: 600)`), Letter pages (`addLetterPage()`), images (`page.image(pngBytes, x, y, w, h)`), watermarks (`page.watermark('DRAFT')`), and encrypted output (`builder.buildEncrypted(ownerPassword: 'pw')`).
+
+Form fields too:
 
 ```dart
-List<String>? pdfsPaths = await PdfManipulator().imagesToPdfs(
-  params: ImagesToPDFsParams(
-      imagesPaths: imagesPaths,
-      createSinglePdf: false,
-);
+final page = await builder.addA4Page();
+await page.textField('name', 72, 700, 200, 20, defaultValue: 'Jane');
+await page.checkbox('agree', 72, 660, 14, 14, checked: true);
+await page.comboBox('color', 72, 620, 150, 20, ['Red', 'Green', 'Blue']);
+await page.pushButton('submit', 72, 580, 80, 30, 'Submit');
+await page.signatureField('sig', 72, 520, 200, 50);
+await page.done();
 ```
 
-Images in JPEG, JPEG2000, GIF, PNG, BMP, WMF, TIFF, CCITT and JBIG2 formats are supported.
+---
 
-### PDF validity and protection info
+## Error handling
+
+Every error is a typed subclass of `PdfError`. Pattern-match, don't parse strings:
 
 ```dart
-PdfValidityAndProtection? pdfValidityAndProtectionInfo = await PdfManipulator().pdfValidityAndProtection(
-  params: PDFValidityAndProtectionParams(
-      pdfPath: pdfPath,
-);
-
-/// Getting info.
-bool? isPDFValid = pdfValidityAndProtectionInfo?.isPDFValid;
-bool? isOwnerPasswordProtected = pdfValidityAndProtectionInfo?.isOwnerPasswordProtected;
-bool? isOpenPasswordProtected = pdfValidityAndProtectionInfo?.isOpenPasswordProtected;
-bool? isPrintingAllowed = pdfValidityAndProtectionInfo?.isPrintingAllowed;
-bool? isModifyContentsAllowed = pdfValidityAndProtectionInfo?.isModifyContentsAllowed;
-```
-Don't provide password if you just want to check validity and protection. Only provide password if you want to check if that password is correct or not.
-
-**Note:** If you only want to check validity and protection then I suggest to use [pdf_bitmaps](https://pub.dev/packages/pdf_bitmaps) as that is fast and requires less memory.
-
-### PDF page size info
-
-```dart
-List<PageSizeInfo>? pdfPagesSizeInfo = await PdfManipulator().pdfPagesSize(
-  params: PDFPagesSizeParams(
-      pdfPath: pdfPath,
-);
-
-/// Getting 1st page info.
-double? widthOfPage = pdfPagesSizeInfo[0]?.widthOfPage;
-double? heightOfPage = pdfPagesSizeInfo[0]?.heightOfPage;
+try {
+  await pdf.open(mysteryBytes);
+} on PdfPasswordRequired {
+  // prompt the user
+} on PdfCorrupted catch (e) {
+  print('Nope: ${e.message}');
+} on PdfPageRangeError catch (e) {
+  print('Page ${e.page} doesn't exist (only ${e.pageCount} pages)');
+}
 ```
 
-**Note:** If you only want to get page size then I suggest to use [pdf_bitmaps](https://pub.dev/packages/pdf_bitmaps) as that is fast and requires less memory.
+11 error types: `PdfCorrupted`, `PdfPasswordRequired`, `PdfWrongPassword`, `PdfPageRangeError`, `PdfInvalidArgument`, `PdfIoError`, `PdfExtractionFailed`, `PdfUnsupported`, `PdfSearchError`, `PdfCryptoError`, `PdfEngineError`.
 
+---
 
-Note: To try the demos shown in below images run the example included in this plugin.
+## Platform support
 
-<img src="https://user-images.githubusercontent.com/85361211/201522048-1f0c9cd3-e25e-4304-bae9-3673097bfbf1.jpeg" width="20%"></img> <img src="https://user-images.githubusercontent.com/85361211/201522051-db1595b6-d229-4e46-a765-1d09728a5f8c.jpeg" width="20%"></img> <img src="https://user-images.githubusercontent.com/85361211/201522053-7fbf7531-9264-4831-97aa-6d068ee18c4a.jpeg" width="20%"></img> <img src="https://user-images.githubusercontent.com/85361211/201522055-161fd60b-b656-4db3-b310-0b2c1dcb7e67.jpeg" width="20%"></img>
+| Platform | Status |
+|---|---|
+| macOS | Tested |
+| iOS | Build ready |
+| Android | Build ready |
+| Windows | Build ready |
+| Linux | Build ready |
+| Web (Chrome) | Tested |
+
+Native: the build hook downloads a pre-built binary from GitHub Releases (consumer path) or uses a locally compiled binary if present (contributor path). Web: WASM + Web Worker via `dart run pdf_manipulator:setup`.
+
+---
+
+## How it works
+
+Each `Pdf()` instance spawns its own background worker — a worker isolate on native, a Web Worker on web. The Dart layer is a typed facade over pdf_oxide, a Rust PDF engine compiled to native libraries and WASM. The compiler picks the right implementation at build time via conditional imports. `dart:ffi` never touches the public API. `dart:io` is never imported.
+
+`kill()` tears down the worker and instantly cancels all pending operations on that instance. After `kill()`, the instance throws on any further call.
+
+Input and output are `Uint8List`. The consumer handles I/O; the package handles PDFs.
+
+FFI bindings are generated by `ffigen` from pdf_oxide's C header (329 functions). 23 Rust patches on [whuppi/pdf_oxide](https://github.com/whuppi/pdf_oxide) add missing C-ABI functions. Detailed architecture, roadmap, and maintenance recipes live in [`docs/`](docs/).
+
+---
+
+## License
+
+MIT — package, Dart code, and build tooling.
+
+pdf_oxide engine: MIT/Apache-2.0.

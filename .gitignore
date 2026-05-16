@@ -1,30 +1,333 @@
-# Miscellaneous
-*.class
+# ============================================================================
+# AUTO-GENERATED — DO NOT EDIT
+# ============================================================================
+# This file is rendered by:
+#   /Users/deepanshu/personal1/whuppi/.claude/scripts/stamp-gitignore.sh
+# from:
+#   /Users/deepanshu/personal1/whuppi/.gitignore.template
+#
+# To change patterns:
+#   - Workspace-wide: edit .gitignore.template, then re-run the stamper.
+#   - One repo only:  edit `additions_for` in the stamper, then re-run.
+# Manual edits to this file will be overwritten on the next stamp.
+# ============================================================================
+
+# ==============================================================================
+# whuppi canonical .gitignore template (workspace-wide patterns)
+# ==============================================================================
+# Source of truth: /Users/deepanshu/personal1/whuppi/.gitignore.template
+# Rendered into every repo's .gitignore by:
+#   /Users/deepanshu/personal1/whuppi/.claude/scripts/stamp-gitignore.sh
+# Per-repo additions (compiled artifacts, vendored binaries, etc.) live in
+# the stamper's `additions_for` data table, NOT in this template and NOT
+# in the rendered .gitignore files.
+# Rules: /Users/deepanshu/personal1/whuppi/.claude/rules/gitignore-template.md
+# ==============================================================================
+
+# ── Secrets and credentials ───────────────────────────────────────────────────
+# Pattern shape:
+#   - Ignore every `.env*` file by default.
+#   - Re-include the well-known template / example / sample variants
+#     (including hybrid `.json` forms used by Flutter env configs —
+#     see flutter-shared/build-and-environments.md).
+.env
+.env.local
+.env.production
+.env.development
+.env.test
+.env.*.local
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.example.*
+!**/.env.*.example
+!**/.env.template
+!**/.env.template.*
+!**/.env.*.template
+!**/.env.sample
+!**/.env.sample.*
+!**/.env.*.sample
+
+# Auth, tokens, keys
+*.token
+*.pem
+*.key
+!**/public.pem
+!**/public.key
+# NOTE: NEVER use `**/auth/` `**/credentials/` `**/secrets/` here —
+# Dart packages legitimately have `lib/src/auth/` source folders.
+# Auth/credentials/secrets DATA lives only under `data/` (see runtime
+# section below) — that's the only place we ignore those names.
+
+# Secrets files (any flavor, any location)
+secrets.json
+secrets*.json
+secrets_*.json
+**/secrets.json
+**/secrets-*.json
+upload-secrets.sh
+**/upload-secrets.sh
+.deploy/
+**/.deploy/
+deploy/.deploy/
+**/deploy/.deploy/
+
+# Cookie files (login session captures)
+cookies.json
+cookies*.json
+cookies_*.json
+cookies.txt
+
+# ── Runtime data (databases, caches, user content) ────────────────────────────
+# Blanket-ignore data/ contents but allow specific safe templates and
+# a samples/ directory back through.
+#
+# Note on git negation: `!data/foo` only works if `data/` itself isn't
+# also a directory pattern. We list specific subpaths instead of `data/`
+# so negation can re-include single files reliably.
+data/*
+!data/.gitkeep
+!data/.env.example
+!data/.env.template
+!data/.env.sample
+!data/README.md
+!data/samples
+data/samples/output/
+data/samples/cache/
+
+# Common sensitive subdirs explicitly (defense in depth — covers any
+# nested data/ paths in subprojects)
+**/data/auth/
+**/data/credentials/
+**/data/secrets/
+**/data/cache/
+**/data/db/
+**/data/cookies.json
+**/data/cookies*.json
+**/data/cookies_*.json
+**/data/.env
+**/data/.env.local
+**/data/.env.production
+
+# Output dirs (top-level only — anchored to repo root by leading `/`
+# so they do NOT trip source folders like `lib/src/output/` or
+# `lib/generated/` inside Dart packages).
+/output/
+/outputs/
+/generated/
+/debug/
+/logs/
+/projects/
 *.log
-*.pyc
-*.swp
-.DS_Store
-.atom/
-.buildlog/
-.history
-.svn/
-migrate_working_dir/
 
-# IntelliJ related
-*.iml
-*.ipr
-*.iws
-.idea/
+# Output dirs that ARE legitimately runtime data wherever they appear
+# (these names are never used for source code anywhere in whuppi).
+**/data/output/
+**/data/outputs/
+**/data/generated/
+**/data/projects/
 
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-#.vscode/
+# Caches — repo-root only (the dot-prefixed ones are universal).
+/cache/
+.cache/
+**/.cache/
+**/data/cache/
 
-# Flutter/Dart/Pub related
-# Libraries should not include pubspec.lock, per https://dart.dev/guides/libraries/private-files#pubspeclock.
-/pubspec.lock
-**/doc/api/
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.db-journal
+
+# ── Python ────────────────────────────────────────────────────────────────────
+# Patterns that are ONLY ever Python artifacts (no source-folder collisions
+# anywhere in whuppi) stay unanchored. Patterns whose names could collide with
+# source folders elsewhere are anchored to repo root with a leading `/`.
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.eggs/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Build-output dir names — anchored to repo root so they only catch the
+# Python build at the tool's top level. Subpackage source folders named
+# the same are unaffected.
+/develop-eggs/
+/dist/
+/downloads/
+/eggs/
+/lib64/
+/parts/
+/sdist/
+/var/
+/wheels/
+
+# Virtual environments
+.venv/
+/venv/
+# `/ENV/` and `/env/` are deliberately NOT in this template:
+#   - macOS is case-insensitive — `/ENV/` matches `env/` and would
+#     break Flutter's build-time config dir (env/.env.json — see
+#     flutter-shared/build-and-environments.md).
+#   - Python tools that need their `env/` or `ENV/` venv ignored add
+#     it via the stamper's `additions_for` per-repo block. Most use
+#     `.venv/` instead and don't need anything here.
+
+# Testing
+.tox/
+.coverage
+.coverage.*
+.pytest_cache/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+/htmlcov/
+
+# ── Node / JS / TS ────────────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn-integrity
+.pnp.*
+.next/
+.nuxt/
+.svelte-kit/
+.turbo/
+
+# ── Dart / Flutter ────────────────────────────────────────────────────────────
 .dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
 .packages
+.pub-cache/
+.pub/
 build/
+flutter_*.png
+linked_*.ds
+unlinked.ds
+unlinked_spec.ds
+*.lock
+!pubspec.lock
+
+# Safety net: Dart/Flutter packages have their source in `lib/` and `bin/`.
+# Re-include them explicitly so no upstream pattern can ever sweep them up
+# (a defense-in-depth in case a future addition has unintended breadth).
+!lib/
+!lib/**
+!bin/
+!bin/**
+
+# Re-re-assert: build / cache / tool dirs INSIDE lib/ are still artifacts,
+# not source. The safety net above re-includes lib/** wholesale, so these
+# patterns must be re-stated specifically to NOT re-include them.
+**/lib/.dart_tool/
+**/bin/.dart_tool/
+**/lib/build/
+**/bin/build/
+
+# Flutter platform-specific build artifacts (keep platform configs in tree)
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/flutter_export_environment.sh
+**/macos/Flutter/GeneratedPluginRegistrant.swift
+**/macos/Flutter/ephemeral/
+**/android/.gradle/
+**/android/local.properties
+**/android/captures/
+**/android/key.properties
+
+# ── Native / C / C++ ──────────────────────────────────────────────────────────
+*.o
+*.a
+*.dylib
+*.dll
+*.exe
+*.out
+target/
+cmake-build-*/
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+*~
+.zed/
+.cursor/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# ── Claude Code auto-files ────────────────────────────────────────────────────
+# Claude Code auto-creates CLAUDE.md as a copy of ~/CLAUDE.md when starting a
+# session in a directory without one. We don't author CLAUDE.md anymore — the
+# canonical AI config lives in workspace .claude/rules/ and .claude/memory/.
+# See whuppi/_playground/RESUMPTION-BRIEF.md for the elimination history.
+CLAUDE.md
+**/CLAUDE.md
+
+# ── Test runner caches ────────────────────────────────────────────────────────
+# Dart test runner kernel + VM caches occasionally leak when test runs
+# are killed mid-execution (anywhere — workspace root or repo root).
+dart_test.kernel.*
+dart_test.vm.*
+
+# ── pip temp leaks ────────────────────────────────────────────────────────────
+# Each `pip install` creates pip-build-tracker-*, pip-ephem-wheel-cache-*,
+# pip-install-*, pip-metadata-* and similar dirs in $TMPDIR. If a Python
+# tool's Makefile pins TMPDIR inside its venv (the recommended pattern),
+# they don't leak. These patterns are belt-and-suspenders for the case
+# where pip ran from the wrong CWD before TMPDIR was set.
+pip-build-tracker-*
+pip-ephem-wheel-cache-*
+pip-install-*
+pip-metadata-*
+pip-modern-metadata-*
+pip-pip-self-*
+pip-record-*
+pip-req-build-*
+pip-target-*
+pip-tmp-*
+pip-unpack-*
+pip-wheel-*
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+*.bak
+*.tmp
+*.temp
+*.orig
+.sass-cache/
+
+# Local build outputs (CI uploads to GitHub Releases; not committed)
+prebuilt/
+build_output/
+
+# Cargo build artifacts from vendor/pdf_oxide
+vendor/pdf_oxide/target/
+
+# WASM + JS glue in web_assets/ ARE committed — build hooks don't run for web.
+# Rebuilt via tool/build_wasm.sh after Rust changes.
+
+# Example app's copy of WASM assets (installed via dart run pdf_manipulator:setup)
+example/web/pdf_manipulator/
+
+# Build hook output cache
+.dart_tool/hooks_runner/
+.dart_tool/lib/
+
+# pubspec.lock (library, not app — consumers resolve their own deps)
+pubspec.lock

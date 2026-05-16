@@ -1,0 +1,29 @@
+# Publish to pub.dev — repo owner triggers manually after a Release exists.
+name: Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (validate without publishing)'
+        required: true
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+
+jobs:
+  publish:
+    name: pub.dev
+    runs-on: ubuntu-latest
+    environment: publish
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: dart-lang/setup-dart@v1
+        with: { sdk: stable }
+      - run: dart pub get
+      - run: dart pub publish --dry-run
+      - if: inputs.dry_run == 'false'
+        run: dart pub publish --force

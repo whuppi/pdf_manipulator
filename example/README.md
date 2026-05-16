@@ -1,16 +1,41 @@
-# pdf_manipulator_example
+# pdf_manipulator example
 
-Demonstrates how to use the pdf_manipulator plugin.
+A Flutter app that exercises every `pdf_manipulator` feature — pick a PDF, tap an operation, see the result. Runs on macOS, iOS, Android, Windows, Linux, and web.
 
-## Getting Started
+## Run
 
-This project is a starting point for a Flutter application.
+```bash
+# Native (macOS, Windows, Linux)
+cd example
+flutter run
 
-A few resources to get you started if this is your first Flutter project:
+# Web
+cd example
+dart run pdf_manipulator:setup   # one-time — installs WASM assets
+flutter run -d chrome
+```
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+## What's inside
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Four tabs, each testing a different surface:
+
+| Tab | What it tests |
+|---|---|
+| **Operations** | Pick one PDF, then run any method on it — split, merge, rotate, compress, watermark, encrypt, decrypt, extract text, search, render, validate, and more |
+| **Merge** | Pick multiple PDFs, drag to reorder, merge into one |
+| **Images → PDF** | Pick images, convert to a single PDF |
+| **Editor** | `PdfEditor` batch mutations — metadata, rotation, watermark, compress, flatten, encrypt, all chained on one parse-save cycle |
+
+## No `dart:io`
+
+The example uses `file_picker` with `withData: true` everywhere. File bytes come from the picker, not from `File()`. Same code compiles for native and web.
+
+## Web setup
+
+The WASM binary and Web Worker need to be in `web/pdf_manipulator/`. Run once:
+
+```bash
+dart run pdf_manipulator:setup
+```
+
+After that, `flutter run -d chrome` works.
