@@ -155,6 +155,24 @@ dart test
 
 After editing patches, always run [S4](#s4--rebuild-wasm). Native binaries are compiled and uploaded by CI when you push the changes to main ([S5](#s5--rebuild-native-binaries)).
 
+**Critical: commit AND push the submodule, or CI will fail.** Local edits to `vendor/pdf_oxide/` work locally (cargo compiles from the dirty working tree) but CI checks out the committed submodule pointer. If the patches aren't committed and pushed to the fork, CI gets the old code and fails with symbol-not-found errors. The three-step sequence:
+
+```sh
+# 1. Commit inside the submodule
+cd vendor/pdf_oxide
+git add -A
+git commit -m "patch: <description>"
+
+# 2. Push to the fork remote
+git push origin pdf_manipulator/0.3.47-patches
+
+# 3. Back to parent — update submodule pointer
+cd ../..
+git add vendor/pdf_oxide
+git commit -m "submodule: update to include <description>"
+git push origin main
+```
+
 ---
 
 ## S3 — Add FFI function
