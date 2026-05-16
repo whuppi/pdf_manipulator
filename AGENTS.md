@@ -90,7 +90,7 @@ When in doubt, read existing code in this repo and match it. Per-repo style cons
 
 **Conventional commits required.** PR titles must follow `feat:` / `fix:` / `chore:` etc. Enforced by CI (`pr-lint.yml`) and local hook (`.githooks/commit-msg`).
 
-**CI/CD.** Fully automated via release-please. ci.yml (PR gate), pr-lint.yml (conventional commit title), release-please.yml (auto Release PRs), release.yml (tag-triggered: 6-platform test → compile → GitHub Release → pub.dev publish).
+**CI/CD.** Fully automated via release-please with two channels: dev branch → prereleases (`1.1.0-dev.0`), main branch → stable releases (`1.1.0`). Workflows: ci.yml (PR gate), pr-lint.yml (conventional commit title), release-please.yml (auto Release PRs on both branches), release.yml (tag-triggered: 6-platform test → compile → GitHub Release → pub.dev publish via OIDC).
 
 ---
 

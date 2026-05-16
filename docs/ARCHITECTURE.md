@@ -264,10 +264,12 @@ Version bumps, changelog generation, tagging, and publishing are fully automated
 | `release-please.yml` | Push to main/dev | Reads conventional commits, opens/updates a Release PR with version bump + CHANGELOG |
 | `release.yml` | Tag push (`v*`) | 6-platform test → compile all targets → upload to GitHub Release → publish to pub.dev via OIDC |
 
-**The release flow:**
-1. Merge PRs to dev with conventional commit titles (`feat:`, `fix:`, etc.)
-2. release-please auto-creates a Release PR (bumps `pubspec.yaml`, writes `CHANGELOG.md`)
-3. Merge the Release PR → tag created → `release.yml` runs the full pipeline
+**Two release channels:**
+
+- **Prerelease (dev):** feature PRs squash-merge to dev → release-please opens a prerelease Release PR (`1.1.0-dev.0`) → merge it → tag → pipeline → prerelease published
+- **Stable (main):** PR dev→main squash-merge → release-please opens a stable Release PR (`1.1.0`) → edit changelog if desired → merge → tag → pipeline → stable published
+
+PR titles are the sole changelog source. Squash-merge on both paths keeps history clean. See [`UPDATING.md` S5](UPDATING.md#s5--release-pipeline) for the full procedure.
 
 `release.yml` cross-compilation runners:
 
