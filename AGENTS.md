@@ -82,13 +82,15 @@ When in doubt, read existing code in this repo and match it. Per-repo style cons
 
 ## Tool-specific notes
 
-**Instance-based API.** `final pdf = Pdf()` — all methods on the instance. `pdf.kill()` tears down the worker. No static methods.
+**Instance-based API.** `final pdf = Pdf()` — all methods on the instance. `pdf.dispose()` tears down the worker. `Pdf.edit(bytes)` for batch editing, `Pdf.build()` for creating from scratch.
 
 **Dual-path build hook.** `vendor/pdf_oxide/Cargo.toml` exists → compile from source (contributor). Doesn't exist → download from GitHub Releases (consumer). Version read from `pubspec.yaml`.
 
 **Vendor submodule with patches.** `vendor/pdf_oxide/` is a git submodule with local patches. Full inventory in `docs/UPDATING.md`.
 
-**CI/CD.** ci.yml (auto, macOS), full-test.yml (manual, 5 platforms), release.yml (auto on version bump, 13 targets + GitHub Release), publish.yml (manual, pub.dev OIDC).
+**Conventional commits required.** PR titles must follow `feat:` / `fix:` / `chore:` etc. Enforced by CI (`pr-lint.yml`) and local hook (`.githooks/commit-msg`).
+
+**CI/CD.** Fully automated via release-please. ci.yml (PR gate), pr-lint.yml (conventional commit title), release-please.yml (auto Release PRs), release.yml (tag-triggered: 6-platform test → compile → GitHub Release → pub.dev publish).
 
 ---
 

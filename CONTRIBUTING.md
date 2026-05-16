@@ -39,12 +39,12 @@ Both must pass. Don't suppress with `// ignore:` — fix the underlying issue.
 ```
 feature branch ──PR──► dev
                         ↓ CI runs automatically (analyze + macOS test)
+                        ↓ PR title must follow Conventional Commits (feat: / fix: / etc.)
                         ↓ repo owner reviews
-                        ↓ repo owner may trigger Full Test (5 platforms)
-                        ↓ merge when green
+                        ↓ merge when green (squash-merge, PR title = commit message)
 ```
 
-CI runs on every push to a PR — no manual trigger needed for the basic gate. The 5-platform full test (macOS, Linux, Windows, Android emulator, iOS simulator) is triggered manually by the repo owner on promising PRs.
+CI runs on every PR — no manual trigger needed. PR titles are validated by `pr-lint.yml` (required check). Use conventional commit prefixes: `feat:`, `fix:`, `docs:`, `chore:`, `ci:`, `test:`, `refactor:`, `perf:`, `build:`, `deps:`.
 
 ---
 
@@ -85,4 +85,4 @@ The vendored fork at `vendor/pdf_oxide/` carries patches for functions not yet i
 
 ## Releases
 
-Contributors don't need to worry about releases. The repo owner handles versioning, tagging, and publishing. When a version bump lands on `main`, CI compiles all targets, tests on 5 platforms, creates a GitHub Release, and validates pub.dev publishing. Details in [`docs/UPDATING.md`](docs/UPDATING.md).
+Contributors don't need to worry about releases. Versioning, changelog, tagging, and publishing are fully automated via release-please. When conventional commits land on `dev` or `main`, release-please opens a Release PR that bumps the version and writes the changelog. Merging that PR creates a tag, which triggers the full pipeline: 6-platform test → compile → GitHub Release → pub.dev publish. Details in [`docs/UPDATING.md`](docs/UPDATING.md).
