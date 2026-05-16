@@ -1,0 +1,11 @@
+# Vendor source (consumers use prebuilt binaries from GitHub Releases)
+vendor/
+
+# CI/CD
+.github/
+
+# Example lock file
+example/pubspec.lock
+
+# Development files
+.gitmodules

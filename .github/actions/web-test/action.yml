@@ -1,5 +1,5 @@
 name: Web Test
-description: Setup Chrome, run dart test on web platform
+description: Compile WASM, setup Chrome, run dart test on web platform
 
 runs:
   using: composite
@@ -8,6 +8,27 @@ runs:
     - uses: dart-lang/setup-dart@v1
       with:
         sdk: stable
+
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: wasm32-unknown-unknown
+
+    - uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: vendor/pdf_oxide
+
+    - name: Install wasm-bindgen-cli
+      shell: bash
+      run: cargo install wasm-bindgen-cli
+
+    - name: Compile WASM
+      shell: bash
+      run: |
+        cargo build --manifest-path vendor/pdf_oxide/Cargo.toml \
+          --lib --release --target wasm32-unknown-unknown
+        wasm-bindgen \
+          vendor/pdf_oxide/target/wasm32-unknown-unknown/release/pdf_oxide.wasm \
+          --out-dir web_assets --target web --out-name pdf_oxide
 
     - uses: browser-actions/setup-chrome@v1
 
