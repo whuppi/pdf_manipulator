@@ -9,9 +9,13 @@ Contributions are welcome.
 ```bash
 git clone --recursive https://github.com/whuppi/pdf_manipulator.git
 cd pdf_manipulator
+git config core.hooksPath .githooks
 dart pub get
 dart test  # build hook compiles Rust from source automatically
 ```
+
+The `core.hooksPath` step activates git hooks that enforce conventional commits
+and block accidental commits of gitignored files.
 
 **Requires:** [Rust](https://rustup.rs). The build hook detects `vendor/pdf_oxide/Cargo.toml` and runs `cargo build`. No manual compilation step.
 
