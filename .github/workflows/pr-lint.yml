@@ -5,7 +5,7 @@ name: PR Lint
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
-    branches: [main, dev]
+    branches: [prod, dev]
 
 jobs:
   conventional-commit:

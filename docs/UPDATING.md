@@ -230,10 +230,10 @@ Versioning, changelog, tagging, compilation, and publishing are fully automated 
 4. release-please reads the commits, opens a prerelease Release PR (bumps to `1.1.0-dev.0`, writes CHANGELOG)
 5. Merge the Release PR → tag `v1.1.0-dev.0` → full pipeline → prerelease published
 
-**Stable release (main branch):**
+**Stable release (prod branch):**
 
-1. Open PR from `dev` → `main` with a title summarizing what dev accumulated (e.g. `feat: watermark + compression + stamps`)
-2. Squash-merge — that title becomes the commit on main
+1. Open PR from `dev` → `prod` with a title summarizing what dev accumulated (e.g. `feat: watermark + compression + stamps`)
+2. Squash-merge — that title becomes the commit on prod
 3. release-please reads it, opens a stable Release PR (bumps to `1.1.0`, writes CHANGELOG)
 4. You can edit the Release PR's CHANGELOG before merging to polish the wording
 5. Merge the Release PR → tag `v1.1.0` → full pipeline → stable release published

@@ -89,4 +89,4 @@ The vendored fork at `vendor/pdf_oxide/` carries patches for functions not yet i
 
 ## Releases
 
-Contributors don't need to worry about releases. Versioning, changelog, tagging, and publishing are fully automated via release-please. When conventional commits land on `dev` or `main`, release-please opens a Release PR that bumps the version and writes the changelog. Merging that PR creates a tag, which triggers the full pipeline: 6-platform test → compile → GitHub Release → pub.dev publish. Details in [`docs/UPDATING.md`](docs/UPDATING.md).
+Contributors don't need to worry about releases. Versioning, changelog, tagging, and publishing are fully automated via release-please. When conventional commits land on `dev` or `prod`, release-please opens a Release PR that bumps the version and writes the changelog. Merging that PR creates a tag, which triggers the full pipeline: 6-platform test → compile → GitHub Release → pub.dev publish. Details in [`docs/UPDATING.md`](docs/UPDATING.md).

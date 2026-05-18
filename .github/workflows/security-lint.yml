@@ -5,7 +5,7 @@ name: Workflow Security Lint
 
 on:
   pull_request:
-    branches: [main, dev]
+    branches: [prod, dev]
     paths: ['.github/**']
 
 jobs:

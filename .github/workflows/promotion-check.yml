@@ -1,10 +1,12 @@
-# Enforce linear promotion: feature → dev → main. No skipping.
+# Enforce linear promotion: feature → dev → prod. No skipping.
 name: Promotion Check
 
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
-    branches: [dev, main]
+    branches: [dev, prod]
+
+permissions: {}
 
 jobs:
   check:
@@ -18,15 +20,15 @@ jobs:
         run: |
           echo "PR: $HEAD → $BASE"
 
-          # main only accepts PRs from dev
-          if [[ "$BASE" == "main" && "$HEAD" != "dev" ]]; then
-            echo "::error::main only accepts PRs from dev. Got: $HEAD → main"
+          # prod only accepts PRs from dev
+          if [[ "$BASE" == "prod" && "$HEAD" != "dev" ]]; then
+            echo "::error::prod only accepts PRs from dev. Got: $HEAD → prod"
             exit 1
           fi
 
-          # dev accepts PRs from any feature branch (but not main)
-          if [[ "$BASE" == "dev" && "$HEAD" == "main" ]]; then
-            echo "::error::dev does not accept PRs from main. Got: main → dev"
+          # dev accepts PRs from any feature branch (but not prod)
+          if [[ "$BASE" == "dev" && "$HEAD" == "prod" ]]; then
+            echo "::error::dev does not accept PRs from prod. Got: prod → dev"
             exit 1
           fi
 
