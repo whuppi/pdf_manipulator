@@ -1,0 +1,32 @@
+#!/bin/sh
+# Enforce Conventional Commits format.
+# Valid: feat: add watermark | fix(web): handle empty PDF | feat!: breaking change
+# Invalid: added watermark | WIP | misc changes
+
+msg=$(head -1 "$1")
+
+# Allow reverts (squash-reverts have conventional titles, but git revert doesn't)
+echo "$msg" | grep -qE '^Revert ' && exit 0
+
+# Block merge commits — all branch-to-branch moves go through PRs (squash-merge)
+if echo "$msg" | grep -qE '^Merge '; then
+  echo "ERROR: Merge commits are not allowed."
+  echo "  All branch-to-branch promotions go through GitHub PRs (squash-merge)."
+  echo "  Never use 'git merge' locally between branches."
+  exit 1
+fi
+
+if ! echo "$msg" | grep -qE '^(feat|fix|docs|chore|ci|test|refactor|perf|build|deps)(\(.+\))?!?: .+'; then
+  echo "ERROR: Commit message must follow Conventional Commits format."
+  echo ""
+  echo "  <type>[optional scope]: <description>"
+  echo ""
+  echo "  Types: feat fix docs chore ci test refactor perf build deps"
+  echo "  Examples:"
+  echo "    feat: add watermark support"
+  echo "    fix(web): handle empty PDF edge case"
+  echo "    feat!: redesign API (breaking change)"
+  echo ""
+  echo "  Your message: $msg"
+  exit 1
+fi
