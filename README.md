@@ -427,6 +427,18 @@ Every feature works on every platform. Native binaries are downloaded automatica
 
 | Document | What's inside |
 |---|---|
+## Contributing
+
+```bash
+git clone https://github.com/whuppi/pdf_manipulator.git
+cd pdf_manipulator
+git config core.hooksPath .githooks
+```
+
+The hooks enforce conventional commits and block accidental gitignored files.
+
+---
+
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Source tree, three-layer design, conditional import dispatch, worker model, build hook |
 | [`docs/CAPABILITY_ROADMAP.md`](docs/CAPABILITY_ROADMAP.md) | Every feature with shipped/planned status |
 | [`docs/MIGRATION.md`](docs/MIGRATION.md) | Method-by-method mapping from the old Android-only package |
