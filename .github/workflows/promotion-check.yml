@@ -6,6 +6,8 @@ on:
     types: [opened, edited, synchronize, reopened]
     branches: [dev, main]
 
+permissions: {}
+
 jobs:
   check:
     name: Promotion Chain
