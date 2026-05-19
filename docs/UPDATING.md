@@ -230,10 +230,10 @@ Versioning, changelog, tagging, compilation, and publishing are fully automated 
 4. release-please reads the commits, opens a prerelease Release PR (bumps to `1.1.0-dev.0`, writes CHANGELOG)
 5. Merge the Release PR → tag `v1.1.0-dev.0` → full pipeline → prerelease published
 
-**Stable release (main branch):**
+**Stable release (prod branch):**
 
-1. Open PR from `dev` → `main` with a title summarizing what dev accumulated (e.g. `feat: watermark + compression + stamps`)
-2. Squash-merge — that title becomes the commit on main
+1. Open PR from `dev` → `prod` with a title summarizing what dev accumulated (e.g. `feat: watermark + compression + stamps`)
+2. Squash-merge — that title becomes the commit on prod
 3. release-please reads it, opens a stable Release PR (bumps to `1.1.0`, writes CHANGELOG)
 4. You can edit the Release PR's CHANGELOG before merging to polish the wording
 5. Merge the Release PR → tag `v1.1.0` → full pipeline → stable release published
@@ -244,23 +244,23 @@ Versioning, changelog, tagging, compilation, and publishing are fully automated 
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
-| `ci.yml` | PR to main/dev | Analyze + macOS test (fast, automatic) |
-| `pr-lint.yml` | PR to main/dev | Validates PR title follows Conventional Commits |
+| `ci.yml` | PR to prod/dev | Analyze + macOS test (fast, automatic) |
+| `pr-checks.yml` | PR to prod/dev | Conventional commit title + promotion chain + workflow security lint |
 | `full-test.yml` | Maintainer adds `ready-to-test` label | 6-platform test (macOS, Linux, Windows, Android, iOS, Web). Required before merge. |
-| `release-please.yml` | Push to main/dev | Opens/updates Release PRs with version bump + CHANGELOG |
+| `release-please.yml` | Push to prod/dev | Opens/updates Release PRs with version bump + CHANGELOG |
 | `release.yml` | Tag push (`v*`) | Compile all targets → GitHub Release → pub.dev publish. No re-test (same commit already passed full-test). |
 
 ### Cross-compilation runners
 
 | Runner | Targets |
 |---|---|
-| macOS (macos-14) | macOS arm64/x64, iOS arm64/sim-arm64/sim-x64, Android arm64/arm/x64/x86 |
-| Linux (ubuntu-latest) | Linux x64/arm64, WASM |
+| macOS (macos-14) | macOS arm64/x64, iOS arm64/sim-arm64/sim-x64 |
+| Linux (ubuntu-latest) | Linux x64/arm64, Android arm64/arm/x64/x86, WASM |
 | Windows (windows-latest) | Windows x64 |
 
 ### Branch protection
 
-Both `main` and `dev` are protected: no direct push (even admins), PRs required, 3 status checks must pass (Analyze, Test, Conventional Commit), squash-merge only, force push blocked.
+Both `prod` and `dev` are protected: no direct push (even admins), PRs required, 3 status checks must pass (Analyze, Test, Conventional Commit), squash-merge only, force push blocked.
 
 ### Security
 
@@ -420,7 +420,7 @@ Our fork (`pdf_manipulator/0.3.47-patches` branch, commits atop `go/v0.3.47`) ad
 | ffigen produces warnings | Darwin system macros leaking into the header — check `ffigen.yaml` excludes and compiler opts |
 | Native test passes but web test fails | `WasmPdfDocument` method name mismatch vs native `PdfPlatform` — check `_web.dart` |
 | Editor handle error "not found" | Handle was disposed or never opened — check the handle map lifecycle in the worker isolate |
-| "Symbol not found" at runtime | The compiled binary is older than the header — push a version bump to main so CI rebuilds ([S5](#s5--rebuild-native-binaries)), or run `dart test` locally to recompile from source |
+| "Symbol not found" at runtime | The compiled binary is older than the header — push a version bump to prod so CI rebuilds ([S5](#s5--rebuild-native-binaries)), or run `dart test` locally to recompile from source |
 | `dart run ffigen` exits with errors | The C header has syntax issues — check the latest patch commit |
 | Android build fails with linker errors | NDK path wrong or target not installed — check `ANDROID_NDK_HOME` and `rustup target list` |
 

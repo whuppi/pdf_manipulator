@@ -5,15 +5,20 @@ runs:
   using: composite
   steps:
     - shell: bash
-      run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu mold
     - uses: dtolnay/rust-toolchain@stable
       with: { targets: "x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu" }
-    - uses: Swatinem/rust-cache@v2
-      with: { workspaces: vendor/pdf_oxide }
+    - uses: mozilla-actions/sccache-action@v0.0.10
+    - shell: bash
+      run: |
+        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+        echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV
     - shell: bash
       env:
         MANIFEST: vendor/pdf_oxide/Cargo.toml
         FEATURES: icc,legacy-crypto,rendering,signatures
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold
       run: |
         cargo build --manifest-path $MANIFEST --lib --release --target x86_64-unknown-linux-gnu --features $FEATURES
         CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \

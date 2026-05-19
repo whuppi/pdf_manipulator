@@ -1,14 +1,13 @@
-# Protected paths — PRs touching these require maintainer approval.
-# Convention: @whuppi/{repo}-maintainers per repo.
+# Code ownership — enforced natively by GitHub's require_code_owner_reviews.
+#
+# Non-admin PRs need approval from a codeowner for every touched path.
+# Admin (repo owner) bypasses via enforce_admins: false.
+#
+# Order matters — last match wins (gitignore rules).
 
-# CI/CD infrastructure
-/.github/                  @whuppi/pdf-manipulator-maintainers
-/.githooks/                @whuppi/pdf-manipulator-maintainers
+# Default: maintainers team owns everything
+*                          @whuppi/pdf-manipulator-maintainers
 
-# Build system + vendored engine
-/hook/                     @whuppi/pdf-manipulator-maintainers
-/vendor/                   @whuppi/pdf-manipulator-maintainers
-
-# Package identity
-/pubspec.yaml              @whuppi/pdf-manipulator-maintainers
-/.pubignore                @whuppi/pdf-manipulator-maintainers
+# Guard rails: repo owner specifically for CI/config
+/.github/                  @chaudharydeepanshu
+/.githooks/                @chaudharydeepanshu

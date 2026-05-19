@@ -88,9 +88,9 @@ When in doubt, read existing code in this repo and match it. Per-repo style cons
 
 **Vendor submodule with patches.** `vendor/pdf_oxide/` is a git submodule with local patches. Full inventory in `docs/UPDATING.md`.
 
-**Conventional commits required.** PR titles must follow `feat:` / `fix:` / `chore:` etc. Enforced by CI (`pr-lint.yml`) and local hook (`.githooks/commit-msg`).
+**Conventional commits required.** PR titles must follow `feat:` / `fix:` / `chore:` etc. Enforced by CI (`pr-checks.yml`) and local hook (`.githooks/commit-msg`).
 
-**CI/CD.** Fully automated via release-please with two channels: dev branch → prereleases (`1.1.0-dev.0`), main branch → stable releases (`1.1.0`). Workflows: ci.yml (PR gate), pr-lint.yml (conventional commit title), release-please.yml (auto Release PRs on both branches), release.yml (tag-triggered: 6-platform test → compile → GitHub Release → pub.dev publish via OIDC).
+**CI/CD.** Fully automated via release-please with two channels: dev branch → prereleases (`1.1.0-dev.0`), prod branch → stable releases (`1.1.0`). Workflows: ci.yml (PR gate), pr-checks.yml (conventional commit + promotion chain + security lint), release-please.yml (auto Release PRs on both branches), release.yml (tag-triggered: compile → GitHub Release → pub.dev publish via OIDC).
 
 ---
 
@@ -115,7 +115,7 @@ Never commit a sensitive file even if it's somehow not gitignored — surface to
 - **Don't add backwards-compat shims** for code that hasn't shipped. Code assumes the latest schema and contracts; migrations handle old data once.
 - **Don't refactor "for cleanliness" without a stated reason.** Surface the suggestion before changing surrounding code.
 - **No co-authored-by AI in commits.** The maintainer is the author.
-- **Never force-push `main`/`master`.** Never skip pre-commit hooks.
+- **Never force-push protected branches** (`prod`, `main`, `dev`). Never skip pre-commit hooks.
 
 For the engineering philosophy that informs every line of code in this workspace, see `../.claude/rules/universal/dc-engineering-philosophy.md` if available.
 

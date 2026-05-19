@@ -23,9 +23,13 @@ runs:
       with:
         targets: ${{ inputs.rust-targets }}
 
-    - uses: Swatinem/rust-cache@v2
-      with:
-        workspaces: vendor/pdf_oxide
+    - uses: mozilla-actions/sccache-action@v0.0.10
+
+    - shell: bash
+      run: |
+        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+        echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV
 
     - run: dart pub get --no-example
       shell: bash

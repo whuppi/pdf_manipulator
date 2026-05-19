@@ -6,7 +6,7 @@ name: Full Test
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
-    branches: [main, dev]
+    branches: [prod, dev]
 
 concurrency:
   group: full-test-${{ github.event.pull_request.number }}

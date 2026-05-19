@@ -1,0 +1,42 @@
+# slopfairy config for pdf_manipulator
+# Overrides defaults — missing keys use built-in behavior
+
+reviews:
+  auto_review: true
+  focus_areas:
+    - correctness
+    - platform-safety
+    - ffi-boundary
+  ignore_paths: []
+  path_instructions:
+    - path: "lib/src/**"
+      instructions: "Check FFI bindings, null safety, isolate safety, and platform-specific code paths"
+    - path: "hook/**"
+      instructions: "This is the native assets build hook (Rust compilation). Check build.dart correctness"
+    - path: "vendor/**"
+      instructions: "Vendored C bindings from pdf_oxide. Do not suggest style changes"
+    - path: ".github/**"
+      instructions: "Check workflow security (no pull_request_target misuse, no secrets in forks)"
+
+triage:
+  auto_label: true
+  auto_assign: false
+
+personality:
+  tone: professional
+  extra_instructions: |
+    This is a PUBLIC Dart/Flutter package on pub.dev. External contributors
+    and users open issues and PRs. Be welcoming, patient, and helpful.
+
+    Key facts:
+    - Cross-platform: Android, iOS, macOS, Windows, Linux, Web (WASM)
+    - Powered by pdf_oxide (Rust) via FFI. Native assets build hook in hook/build.dart
+    - Conventional commits enforced (feat:, fix:, ci:, chore:, docs:, etc.)
+    - Release-please manages versions and changelogs
+    - Default branch is dev, prod branch is for stable releases
+    - Linear chain: feature → dev → prod. No skipping.
+
+    When triaging issues from users:
+    - Ask for Flutter version, platform, and full error log if not provided
+    - Check if the issue is about the OLD Android-only version (pre-1.0) vs current
+    - Common issues: WASM setup missing, platform-specific build failures, FFI crashes

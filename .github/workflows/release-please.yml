@@ -1,12 +1,12 @@
 # Auto-creates Release PRs from conventional commits.
-# dev branch → prerelease (1.1.0-dev.0), main branch → stable (1.1.0).
+# dev branch → prerelease (1.1.0-dev.0), prod branch → stable (1.1.0).
 # One Release PR per branch, auto-updates as commits land.
 # Merge the Release PR when you're ready to ship.
 name: Release Please
 
 on:
   push:
-    branches: [main, dev]
+    branches: [prod, dev]
 
 permissions:
   contents: write
@@ -18,5 +18,6 @@ jobs:
     steps:
       - uses: googleapis/release-please-action@v4
         with:
+          target-branch: ${{ github.ref_name }}
           config-file: .github/release-please-config.json
           manifest-file: .github/.release-please-manifest.json
