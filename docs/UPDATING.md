@@ -244,10 +244,10 @@ Versioning, changelog, tagging, compilation, and publishing are fully automated 
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
-| `ci.yml` | PR to main/dev | Analyze + macOS test (fast, automatic) |
-| `pr-lint.yml` | PR to main/dev | Validates PR title follows Conventional Commits |
+| `ci.yml` | PR to prod/dev | Analyze + macOS test (fast, automatic) |
+| `pr-lint.yml` | PR to prod/dev | Validates PR title follows Conventional Commits |
 | `full-test.yml` | Maintainer adds `ready-to-test` label | 6-platform test (macOS, Linux, Windows, Android, iOS, Web). Required before merge. |
-| `release-please.yml` | Push to main/dev | Opens/updates Release PRs with version bump + CHANGELOG |
+| `release-please.yml` | Push to prod/dev | Opens/updates Release PRs with version bump + CHANGELOG |
 | `release.yml` | Tag push (`v*`) | Compile all targets → GitHub Release → pub.dev publish. No re-test (same commit already passed full-test). |
 
 ### Cross-compilation runners
@@ -420,7 +420,7 @@ Our fork (`pdf_manipulator/0.3.47-patches` branch, commits atop `go/v0.3.47`) ad
 | ffigen produces warnings | Darwin system macros leaking into the header — check `ffigen.yaml` excludes and compiler opts |
 | Native test passes but web test fails | `WasmPdfDocument` method name mismatch vs native `PdfPlatform` — check `_web.dart` |
 | Editor handle error "not found" | Handle was disposed or never opened — check the handle map lifecycle in the worker isolate |
-| "Symbol not found" at runtime | The compiled binary is older than the header — push a version bump to main so CI rebuilds ([S5](#s5--rebuild-native-binaries)), or run `dart test` locally to recompile from source |
+| "Symbol not found" at runtime | The compiled binary is older than the header — push a version bump to prod so CI rebuilds ([S5](#s5--rebuild-native-binaries)), or run `dart test` locally to recompile from source |
 | `dart run ffigen` exits with errors | The C header has syntax issues — check the latest patch commit |
 | Android build fails with linker errors | NDK path wrong or target not installed — check `ANDROID_NDK_HOME` and `rustup target list` |
 
