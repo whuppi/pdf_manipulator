@@ -1,0 +1,89 @@
+# All PR quality gates in one workflow.
+# Jobs: conventional commit title, promotion chain, workflow security scan.
+name: PR Checks
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+    branches: [dev, prod]
+
+permissions: {}
+
+jobs:
+  # ── Conventional Commits ─────────────────────────────────────────
+  # Since we squash-merge, the PR title becomes the commit message.
+  conventional-commit:
+    name: Conventional Commit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if ! echo "$TITLE" | grep -qE '^(feat|fix|docs|chore|ci|test|refactor|perf|build|deps)(\(.+\))?!?: .+'; then
+            echo "::error::PR title must follow Conventional Commits format."
+            echo ""
+            echo "  <type>[optional scope]: <description>"
+            echo ""
+            echo "  Types: feat fix docs chore ci test refactor perf build deps"
+            echo "  Examples:"
+            echo "    feat: add watermark support"
+            echo "    fix(web): handle empty PDF edge case"
+            echo "    feat!: redesign API (breaking change)"
+            echo ""
+            echo "  Your title: $TITLE"
+            exit 1
+          fi
+          echo "✓ PR title is valid: $TITLE"
+
+  # ── Promotion Chain ──────────────────────────────────────────────
+  # Enforce linear promotion: feature → dev → prod. No skipping.
+  promotion-check:
+    name: Promotion Chain
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate promotion path
+        env:
+          BASE: ${{ github.base_ref }}
+          HEAD: ${{ github.head_ref }}
+        run: |
+          echo "PR: $HEAD → $BASE"
+
+          if [[ "$BASE" == "prod" && "$HEAD" != "dev" ]]; then
+            echo "::error::prod only accepts PRs from dev. Got: $HEAD → prod"
+            exit 1
+          fi
+
+          if [[ "$BASE" == "dev" && "$HEAD" == "prod" ]]; then
+            echo "::error::dev does not accept PRs from prod. Got: prod → dev"
+            exit 1
+          fi
+
+          echo "✓ Valid promotion path: $HEAD → $BASE"
+
+  # ── Workflow Security ────────────────────────────────────────────
+  # Scan for dangerous pull_request_target + checkout combo.
+  # Runs on every PR (2 seconds of grep — cheaper than skipping logic).
+  workflow-security:
+    name: Workflow Security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan for dangerous patterns
+        run: |
+          FAILED=false
+          for f in .github/workflows/*.yml; do
+            [[ "$f" == *"pr-checks"* ]] && continue
+
+            if grep -q "pull_request_target" "$f"; then
+              if grep -A5 "actions/checkout" "$f" | grep -qE "github\.event\.pull_request\.head\.(sha|ref)|pull_request\.head\.sha"; then
+                echo "::error file=$f::SECURITY: $f uses pull_request_target with checkout of PR code. This gives attackers write access."
+                FAILED=true
+              fi
+            fi
+          done
+
+          if [[ "$FAILED" == "true" ]]; then
+            exit 1
+          fi
+          echo "✓ No dangerous pull_request_target + checkout patterns found"
