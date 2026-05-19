@@ -1,9 +1,20 @@
-# Protected paths — PRs touching these require maintainer approval.
-# Convention: @whuppi/{repo}-maintainers per repo.
+# Code ownership — two purposes:
+#
+# 1. .github/ owned by repo owner — GitHub's native require_code_owner_reviews
+#    in branch protection enforces that ONLY the repo owner can approve changes
+#    to workflows, CODEOWNERS itself, and all CI config. This protects the
+#    review-policy.yml workflow from being tampered with.
+#
+# 2. All other paths — the Review Policy CI check reads this file from the
+#    base branch and enforces that non-owner PRs have approval from the
+#    listed codeowners for every touched path.
+#
+# Order matters — last match wins (gitignore rules).
 
-# CI/CD infrastructure
-/.github/                  @whuppi/pdf-manipulator-maintainers
-/.githooks/                @whuppi/pdf-manipulator-maintainers
+# Guard rails — ONLY repo owner can approve changes here.
+# This is enforced by GitHub's native CODEOWNERS + branch protection.
+/.github/                  @chaudharydeepanshu
+/.githooks/                @chaudharydeepanshu
 
 # Build system + vendored engine
 /hook/                     @whuppi/pdf-manipulator-maintainers
@@ -12,3 +23,6 @@
 # Package identity
 /pubspec.yaml              @whuppi/pdf-manipulator-maintainers
 /.pubignore                @whuppi/pdf-manipulator-maintainers
+
+# Core library
+/lib/                      @whuppi/pdf-manipulator-maintainers
