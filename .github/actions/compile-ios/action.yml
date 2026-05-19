@@ -6,8 +6,12 @@ runs:
   steps:
     - uses: dtolnay/rust-toolchain@stable
       with: { targets: "aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios" }
-    - uses: Swatinem/rust-cache@v2
-      with: { workspaces: vendor/pdf_oxide }
+    - uses: mozilla-actions/sccache-action@v0.0.10
+    - shell: bash
+      run: |
+        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+        echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV
     - shell: bash
       env:
         MANIFEST: vendor/pdf_oxide/Cargo.toml
