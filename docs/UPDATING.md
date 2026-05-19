@@ -260,7 +260,7 @@ Versioning, changelog, tagging, compilation, and publishing are fully automated 
 
 ### Branch protection
 
-Both `main` and `dev` are protected: no direct push (even admins), PRs required, 3 status checks must pass (Analyze, Test, Conventional Commit), squash-merge only, force push blocked.
+Both `prod` and `dev` are protected: no direct push (even admins), PRs required, 3 status checks must pass (Analyze, Test, Conventional Commit), squash-merge only, force push blocked.
 
 ### Security
 

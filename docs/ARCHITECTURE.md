@@ -268,7 +268,7 @@ Version bumps, changelog generation, tagging, and publishing are fully automated
 **Two release channels:**
 
 - **Prerelease (dev):** feature PRs squash-merge to dev → release-please opens a prerelease Release PR (`1.1.0-dev.0`) → merge it → tag → pipeline → prerelease published
-- **Stable (main):** PR dev→main squash-merge → release-please opens a stable Release PR (`1.1.0`) → edit changelog if desired → merge → tag → pipeline → stable published
+- **Stable (prod):** PR dev→prod squash-merge → release-please opens a stable Release PR (`1.1.0`) → edit changelog if desired → merge → tag → pipeline → stable published
 
 PR titles are the sole changelog source. Squash-merge on both paths keeps history clean. See [`UPDATING.md` S5](UPDATING.md#s5--release-pipeline) for the full procedure.
 
