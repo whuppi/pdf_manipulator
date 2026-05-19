@@ -245,7 +245,7 @@ Versioning, changelog, tagging, compilation, and publishing are fully automated 
 | Workflow | Trigger | Purpose |
 |---|---|---|
 | `ci.yml` | PR to prod/dev | Analyze + macOS test (fast, automatic) |
-| `pr-lint.yml` | PR to prod/dev | Validates PR title follows Conventional Commits |
+| `pr-checks.yml` | PR to prod/dev | Conventional commit title + promotion chain + workflow security lint |
 | `full-test.yml` | Maintainer adds `ready-to-test` label | 6-platform test (macOS, Linux, Windows, Android, iOS, Web). Required before merge. |
 | `release-please.yml` | Push to prod/dev | Opens/updates Release PRs with version bump + CHANGELOG |
 | `release.yml` | Tag push (`v*`) | Compile all targets → GitHub Release → pub.dev publish. No re-test (same commit already passed full-test). |
@@ -254,8 +254,8 @@ Versioning, changelog, tagging, compilation, and publishing are fully automated 
 
 | Runner | Targets |
 |---|---|
-| macOS (macos-14) | macOS arm64/x64, iOS arm64/sim-arm64/sim-x64, Android arm64/arm/x64/x86 |
-| Linux (ubuntu-latest) | Linux x64/arm64, WASM |
+| macOS (macos-14) | macOS arm64/x64, iOS arm64/sim-arm64/sim-x64 |
+| Linux (ubuntu-latest) | Linux x64/arm64, Android arm64/arm/x64/x86, WASM |
 | Windows (windows-latest) | Windows x64 |
 
 ### Branch protection

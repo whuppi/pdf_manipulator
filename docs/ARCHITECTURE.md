@@ -65,9 +65,11 @@ pdf_manipulator/
 │   └── worker.js                         ← Web Worker dispatcher (committed)
 ├── .github/workflows/
 │   ├── ci.yml                            ← auto on PR: analyze + macOS test
-│   ├── pr-lint.yml                       ← auto on PR: conventional commit title check
+│   ├── full-test.yml                     ← label-triggered: 6-platform test matrix
+│   ├── pr-checks.yml                     ← auto on PR: conventional commit + promotion chain + security lint
 │   ├── release-please.yml                ← auto on push: opens/updates Release PRs
-│   └── release.yml                       ← auto on tag: 6-platform test + compile + release + publish
+│   ├── release.yml                       ← auto on tag: compile + release + publish
+│   └── triage.yml                        ← auto on issue/PR: labels + assignment
 ├── tool/
 │   ├── build_wasm.sh                     ← rebuild WASM from source
 │   └── compile_natives.sh                ← local native compilation (CI handles releases)
@@ -260,7 +262,7 @@ Version bumps, changelog generation, tagging, and publishing are fully automated
 | Workflow | Trigger | What it does |
 |---|---|---|
 | `ci.yml` | PR to prod/dev | `dart analyze` + `dart test` on macOS (fast, automatic) |
-| `pr-lint.yml` | PR to prod/dev | Validates PR title follows Conventional Commits format |
+| `pr-checks.yml` | PR to prod/dev | Conventional commit title + promotion chain + workflow security lint |
 | `full-test.yml` | Maintainer adds `ready-to-test` label | 6-platform test. Required before merge. Contributors can't trigger it. |
 | `release-please.yml` | Push to prod/dev | Reads conventional commits, opens/updates a Release PR with version bump + CHANGELOG |
 | `release.yml` | Tag push (`v*`) | Compile all targets → GitHub Release → pub.dev publish (no re-test — same commit) |
@@ -276,8 +278,8 @@ PR titles are the sole changelog source. Squash-merge on both paths keeps histor
 
 | Runner | Targets |
 |---|---|
-| `macos-14` | macOS arm64/x64, iOS arm64/sim-arm64/sim-x64, Android arm64/arm/x64/x86 |
-| `ubuntu-latest` | Linux x64/arm64, WASM |
+| `macos-14` | macOS arm64/x64, iOS arm64/sim-arm64/sim-x64 |
+| `ubuntu-latest` | Linux x64/arm64, Android arm64/arm/x64/x86, WASM |
 | `windows-latest` | Windows x64 |
 
 All native binaries + WASM are uploaded as GitHub Release assets. The build hook's download URL matches the asset naming convention (`{platform}-{libname}`).
