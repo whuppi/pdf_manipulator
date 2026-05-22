@@ -1,6 +1,7 @@
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
+import '../helpers/memory_io.dart';
 import '../helpers/pdf_fixtures.dart';
 
 void main() {
@@ -16,7 +17,7 @@ void main() {
 
   group('Pdf.getPermissions', () {
     test('unencrypted PDF has all permissions enabled', () async {
-      final perms = await pdf.getPermissions(minimalPdf);
+      final perms = await pdf.getPermissions(sourceOf(minimalPdf));
       expect(perms.print, isTrue);
       expect(perms.printHq, isTrue);
       expect(perms.modify, isTrue);
@@ -28,25 +29,29 @@ void main() {
     });
 
     test('encrypted with restrictive permissions reports them', () async {
-      final encrypted = await pdf.encryptFull(
-        minimalPdf,
+      final encSink = TestPdfSink();
+      await pdf.encryptFull(
+        sourceOf(minimalPdf), encSink,
         ownerPassword: 'owner',
         allowPrint: false,
         allowCopy: false,
         allowModify: false,
       );
-      final perms = await pdf.getPermissions(encrypted, password: 'owner');
+      final encrypted = encSink.takeBytes();
+      final perms = await pdf.getPermissions(sourceOf(encrypted), password: 'owner');
       expect(perms.print, isFalse);
       expect(perms.copy, isFalse);
       expect(perms.modify, isFalse);
     });
 
     test('encrypted with all permissions enabled', () async {
-      final encrypted = await pdf.encryptFull(
-        minimalPdf,
+      final encSink = TestPdfSink();
+      await pdf.encryptFull(
+        sourceOf(minimalPdf), encSink,
         ownerPassword: 'pw',
       );
-      final perms = await pdf.getPermissions(encrypted, password: 'pw');
+      final encrypted = encSink.takeBytes();
+      final perms = await pdf.getPermissions(sourceOf(encrypted), password: 'pw');
       expect(perms.print, isTrue);
       expect(perms.copy, isTrue);
       expect(perms.modify, isTrue);
@@ -55,27 +60,31 @@ void main() {
 
   group('Pdf.getEncryptionAlgorithm', () {
     test('unencrypted PDF returns -1', () async {
-      final alg = await pdf.getEncryptionAlgorithm(minimalPdf);
+      final alg = await pdf.getEncryptionAlgorithm(sourceOf(minimalPdf));
       expect(alg, equals(-1));
     });
 
     test('AES-256 encrypted returns 3', () async {
-      final encrypted = await pdf.encryptFull(
-        minimalPdf,
+      final encSink = TestPdfSink();
+      await pdf.encryptFull(
+        sourceOf(minimalPdf), encSink,
         ownerPassword: 'pw',
         algorithm: 3,
       );
-      final alg = await pdf.getEncryptionAlgorithm(encrypted, password: 'pw');
+      final encrypted = encSink.takeBytes();
+      final alg = await pdf.getEncryptionAlgorithm(sourceOf(encrypted), password: 'pw');
       expect(alg, equals(3));
     });
 
     test('AES-128 encrypted returns 2', () async {
-      final encrypted = await pdf.encryptFull(
-        minimalPdf,
+      final encSink = TestPdfSink();
+      await pdf.encryptFull(
+        sourceOf(minimalPdf), encSink,
         ownerPassword: 'pw',
         algorithm: 2,
       );
-      final alg = await pdf.getEncryptionAlgorithm(encrypted, password: 'pw');
+      final encrypted = encSink.takeBytes();
+      final alg = await pdf.getEncryptionAlgorithm(sourceOf(encrypted), password: 'pw');
       expect(alg, equals(2));
     });
   });

@@ -6,6 +6,8 @@ import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
+import '../helpers/memory_io.dart';
+
 final _minimalPdf = Uint8List.fromList(
   '%PDF-1.4\n'
   '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n'
@@ -43,7 +45,7 @@ void main() {
 
   group('Web: Pdf.probe', () {
     test('returns valid for minimal PDF', () async {
-      final info = await pdf.probe(_minimalPdf);
+      final info = await pdf.probe(sourceOf(_minimalPdf));
       expect(info.isValid, isTrue);
       expect(info.pageCount, 1);
     });
@@ -51,52 +53,61 @@ void main() {
 
   group('Web: Pdf.open', () {
     test('returns PdfDoc with correct page count', () async {
-      final doc = await pdf.open(_minimalPdf);
+      final doc = await pdf.open(sourceOf(_minimalPdf));
       expect(doc.pageCount, 1);
     });
   });
 
   group('Web: Pdf.merge', () {
     test('merges two PDFs', () async {
-      final merged = await pdf.merge([_minimalPdf, _minimalPdf]);
+      final sink = TestPdfSink();
+      await pdf.merge([sourceOf(_minimalPdf), sourceOf(_minimalPdf)], sink);
+      final merged = sink.takeBytes();
       expect(merged.length, greaterThan(_minimalPdf.length));
-      final doc = await pdf.open(merged);
+      final doc = await pdf.open(sourceOf(merged));
       expect(doc.pageCount, 2);
     });
   });
 
   group('Web: Pdf.rotateAllPages', () {
     test('rotates and produces output', () async {
-      final result = await pdf.rotateAllPages(_minimalPdf, degrees: 90);
+      final sink = TestPdfSink();
+      await pdf.rotateAllPages(sourceOf(_minimalPdf), sink, degrees: 90);
+      final result = sink.takeBytes();
       expect(result.length, greaterThan(0));
     });
   });
 
   group('Web: Pdf.extractText', () {
     test('returns string', () async {
-      final text = await pdf.extractText(_minimalPdf);
+      final text = await pdf.extractText(sourceOf(_minimalPdf));
       expect(text, isA<String>());
     });
   });
 
   group('Web: Pdf.compress', () {
     test('produces output', () async {
-      final result = await pdf.compress(_minimalPdf);
+      final sink = TestPdfSink();
+      await pdf.compress(sourceOf(_minimalPdf), sink);
+      final result = sink.takeBytes();
       expect(result.length, greaterThan(0));
     });
   });
 
   group('Web: Pdf.watermark', () {
     test('produces larger output', () async {
-      final result = await pdf.watermark(_minimalPdf, text: 'TEST');
+      final sink = TestPdfSink();
+      await pdf.watermark(sourceOf(_minimalPdf), sink, text: 'TEST');
+      final result = sink.takeBytes();
       expect(result.length, greaterThan(_minimalPdf.length));
     });
   });
 
   group('Web: Pdf.encrypt', () {
     test('produces output', () async {
-      final result =
-          await pdf.encrypt(_minimalPdf, ownerPassword: 'test');
+      final sink = TestPdfSink();
+      await pdf.encrypt(sourceOf(_minimalPdf), sink, ownerPassword: 'test');
+      final result = sink.takeBytes();
       expect(result.length, greaterThan(0));
     });
   });

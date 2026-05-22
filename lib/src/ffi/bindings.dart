@@ -1634,8 +1634,8 @@ class PdfBindings {
     try {
       native.pdf_document_get_permissions(
         docHandle,
-        p.elementAt(0), p.elementAt(1), p.elementAt(2), p.elementAt(3),
-        p.elementAt(4), p.elementAt(5), p.elementAt(6), p.elementAt(7),
+        p + 0, p + 1, p + 2, p + 3,
+        p + 4, p + 5, p + 6, p + 7,
         err,
       );
       _check(err);
@@ -1715,9 +1715,13 @@ class PdfBindings {
       _check(err);
     } finally {
       calloc.free(namePtr);
-      for (final p in optionPtrs) calloc.free(p);
+      for (final p in optionPtrs) {
+        calloc.free(p);
+      }
       calloc.free(optionsArray);
-      if (selected != null) calloc.free(selPtr);
+      if (selected != null) {
+        calloc.free(selPtr);
+      }
       calloc.free(err);
     }
   }
@@ -1757,7 +1761,9 @@ class PdfBindings {
     final namePtr = name.toNativeUtf8(allocator: calloc);
     final valPtrs = values.map((v) => v.toNativeUtf8(allocator: calloc)).toList();
     final valsArray = calloc<ffi.Pointer<ffi.Char>>(values.length);
-    for (var i = 0; i < values.length; i++) valsArray[i] = valPtrs[i].cast();
+    for (var i = 0; i < values.length; i++) {
+      valsArray[i] = valPtrs[i].cast();
+    }
     final xArr = calloc<ffi.Float>(xs.length);
     final yArr = calloc<ffi.Float>(ys.length);
     final wArr = calloc<ffi.Float>(ws.length);
@@ -1777,7 +1783,9 @@ class PdfBindings {
       _check(err);
     } finally {
       calloc.free(namePtr);
-      for (final p in valPtrs) calloc.free(p);
+      for (final p in valPtrs) {
+        calloc.free(p);
+      }
       calloc.free(valsArray);
       calloc.free(xArr); calloc.free(yArr);
       calloc.free(wArr); calloc.free(hArr);

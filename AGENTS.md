@@ -28,7 +28,7 @@ Manual edits to this file will be overwritten on the next stamp.
 
 ## What this tool does
 
-**pdf_manipulator** is a cross-platform, MIT-licensed PDF manipulation package for Dart & Flutter — instance-based API (`final pdf = Pdf()`) for merge, split, compress, encrypt, render, extract text, stamp images, create PDFs from scratch. Powered by a vendored fork of pdf_oxide (Rust) at `vendor/pdf_oxide/`. Worker isolate on native, Web Worker + WASM on web — every operation runs off the main thread. No `dart:io` in the barrel. Input/output is `Uint8List`. Dual-path build hook: consumers get pre-built binaries from GitHub Releases (zero Rust), contributors compile from source automatically.
+**pdf_manipulator** is a cross-platform, MIT-licensed PDF manipulation package for Dart & Flutter — instance-based API (`final pdf = Pdf()`) for merge, split, compress, encrypt, render, extract text, stamp images, create PDFs from scratch. Powered by a vendored fork of pdf_oxide (Rust) at `vendor/pdf_oxide/`. Worker isolate on native, Web Worker + WASM on web — every operation runs off the main thread. No `dart:io` in the barrel. Input via `PdfSource` (random-access reader), output via `PdfSink` (sequential writer). Dual-path build hook: consumers get pre-built binaries from GitHub Releases (zero Rust), contributors compile from source automatically.
 
 This repo is one tool inside the **whuppi** workspace — a multi-tool monorepo. The workspace ships shared engineering standards, code conventions, brand identity, and build patterns that apply across every tool. They're documented in three layers:
 

@@ -40,16 +40,14 @@ void main(List<String> args) async {
         .libraryFileName(_crateName, linkMode);
     final outFile = File.fromUri(input.outputDirectory.resolve(libFileName));
 
-    if (!outFile.existsSync()) {
-      final cargoToml = File.fromUri(
-        input.packageRoot.resolve('vendor/pdf_oxide/Cargo.toml'),
-      );
+    final cargoToml = File.fromUri(
+      input.packageRoot.resolve('vendor/pdf_oxide/Cargo.toml'),
+    );
 
-      if (cargoToml.existsSync()) {
-        await _compileFromSource(input, targetTriple, linkMode, outFile);
-      } else {
-        await _downloadPrebuilt(input, codeConfig, libFileName, outFile);
-      }
+    if (cargoToml.existsSync()) {
+      await _compileFromSource(input, targetTriple, linkMode, outFile);
+    } else if (!outFile.existsSync()) {
+      await _downloadPrebuilt(input, codeConfig, libFileName, outFile);
     }
 
     output.assets.code.add(
@@ -65,6 +63,23 @@ void main(List<String> args) async {
     );
     output.dependencies.add(input.packageRoot.resolve('hook/build.dart'));
     output.dependencies.add(input.packageRoot.resolve('pubspec.yaml'));
+    output.dependencies.add(input.packageRoot.resolve('vendor/pdf_oxide/Cargo.toml'));
+    // List key source files so the hooks_runner invalidates on changes.
+    // Directories aren't tracked reliably — individual files are.
+    for (final path in [
+      'vendor/pdf_oxide/src/ffi.rs',
+      'vendor/pdf_oxide/src/wasm.rs',
+      'vendor/pdf_oxide/src/document.rs',
+      'vendor/pdf_oxide/src/bridge/mod.rs',
+      'vendor/pdf_oxide/src/bridge/ffi_api.rs',
+      'vendor/pdf_oxide/src/bridge/thread_pool.rs',
+      'vendor/pdf_oxide/src/bridge/callback_reader.rs',
+      'vendor/pdf_oxide/src/bridge/callback_writer.rs',
+      'vendor/pdf_oxide/src/bridge/shared_buffer.rs',
+      'vendor/pdf_oxide/src/bridge/arena.rs',
+    ]) {
+      output.dependencies.add(input.packageRoot.resolve(path));
+    }
   });
 }
 

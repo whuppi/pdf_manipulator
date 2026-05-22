@@ -7,6 +7,8 @@ import 'package:pdf_manipulator/src/core/pdf_image.dart';
 import 'package:pdf_manipulator/src/core/pdf_info.dart';
 import 'package:pdf_manipulator/src/core/pdf_rect.dart';
 import 'package:pdf_manipulator/src/core/pdf_signature.dart';
+import 'package:pdf_manipulator/src/core/pdf_sink.dart';
+import 'package:pdf_manipulator/src/core/pdf_source.dart';
 import 'package:pdf_manipulator/src/core/search_result.dart';
 import 'package:pdf_manipulator/src/document/pdf_doc.dart';
 import 'package:pdf_manipulator/src/page/pdf_page_info.dart';
@@ -16,6 +18,16 @@ import 'package:web/web.dart' as web;
 extension _JSArrayBufferSlice on JSArrayBuffer {
   @JS('slice')
   external JSArrayBuffer _slice(int begin);
+}
+
+const _opfsChunkSize = 256 * 1024;
+
+int _opfsCounter = 0;
+
+/// Write result bytes from the worker into a [PdfSink].
+Future<void> _writeTo(PdfSink output, Map<Object?, Object?> r) async {
+  final bytes = Uint8List.view(r['bytes'] as ByteBuffer);
+  await output.write(bytes);
 }
 
 PdfPlatform createPlatform() => WebPdfPlatform._();
@@ -57,7 +69,7 @@ class WebPdfPlatform implements PdfPlatform {
         // Rewrite all relative ES module imports to absolute URLs
         final rewritten = text.replaceAllMapped(
           RegExp(r"""from\s+['"](\./[^'"]+)['"]"""),
-          (m) => "from '${baseUrl}${m.group(1)!.substring(2)}'",
+          (m) => "from '$baseUrl${m.group(1)!.substring(2)}'",
         );
 
         final blob = web.Blob(
@@ -148,19 +160,37 @@ class WebPdfPlatform implements PdfPlatform {
     return result as Map<Object?, Object?>;
   }
 
-  Uint8List _bytes(Map<Object?, Object?> r) =>
-      Uint8List.view(r['bytes'] as ByteBuffer);
-
   List<Uint8List> _bytesList(Map<Object?, Object?> r) =>
       (r['chunks'] as List<Object?>).map((c) => Uint8List.view(c as ByteBuffer)).toList();
+
+  /// Send an op with a PdfSource as primary input.
+  /// Streams to OPFS in chunks, worker reads on demand via SyncAccessHandle.
+  Future<Map<Object?, Object?>> _sendWithSource(
+    String op,
+    PdfSource source,
+    Map<String, Object?> extraArgs,
+  ) async {
+    final filename = '_pdf_${_opfsCounter++}.tmp';
+    var offset = 0;
+    while (offset < source.length) {
+      final count = (source.length - offset).clamp(0, _opfsChunkSize);
+      final chunk = await source.readAt(offset, count);
+      await _send('opfs.write', {
+        'filename': filename,
+        'chunk': chunk.buffer,
+        'offset': offset,
+      });
+      offset += count;
+    }
+    await _send('opfs.finalize', {'filename': filename});
+    return _send(op, {'opfsFile': filename, ...extraArgs});
+  }
 
   // ── Inspect ──
 
   @override
-  Future<PdfDoc> open(Uint8List bytes, {String? password}) async {
-    final r = await _send('open', {
-      'bytes': bytes.buffer, 'password': password,
-    });
+  Future<PdfDoc> open(PdfSource source, {String? password}) async {
+    final r = await _sendWithSource('open', source, {'password': password});
     final pagesRaw = r['pages'] as List;
     final pages = pagesRaw.map((p) {
       final m = p as Map<Object?, Object?>;
@@ -182,8 +212,8 @@ class WebPdfPlatform implements PdfPlatform {
   }
 
   @override
-  Future<PdfInfo> probe(Uint8List bytes) async {
-    final r = await _send('probe', {'bytes': bytes.buffer});
+  Future<PdfInfo> probe(PdfSource source) async {
+    final r = await _sendWithSource('probe', source, {});
     return PdfInfo(
       isValid: r['isValid'] as bool,
       pageCount: r['pageCount'] as int?,
@@ -194,135 +224,158 @@ class WebPdfPlatform implements PdfPlatform {
   // ── Structural ──
 
   @override
-  Future<Uint8List> merge(List<Uint8List> inputs) async {
+  Future<void> merge(List<PdfSource> inputs, PdfSink output) async {
     if (inputs.length < 2) throw ArgumentError('merge requires at least 2 PDFs');
+    final inputBytes = <ByteBuffer>[];
+    for (final src in inputs) {
+      inputBytes.add((await src.readAt(0, src.length)).buffer);
+    }
     final r = await _send('merge', {
-      'inputs': inputs.map((i) => i.buffer).toList(),
+      'inputs': inputBytes,
     });
-    return _bytes(r);
+    await _writeTo(output, r);
   }
 
   @override
-  Future<List<Uint8List>> split(Uint8List bytes, {required int every}) async {
-    final r = await _send('split', {'bytes': bytes.buffer, 'every': every});
-    return _bytesList(r);
+  Future<void> split(PdfSource source, PdfSink Function(int index) sinkFactory,
+      {required int every}) async {
+    final r = await _sendWithSource('split', source, {'every': every});
+    final chunks = _bytesList(r);
+    for (var i = 0; i < chunks.length; i++) {
+      final sink = sinkFactory(i);
+      await sink.write(chunks[i]);
+    }
   }
 
   @override
-  Future<List<Uint8List>> splitBySize(Uint8List bytes, {required int maxBytes}) async {
-    final r = await _send('splitBySize', {'bytes': bytes.buffer, 'maxBytes': maxBytes});
-    return _bytesList(r);
+  Future<int> splitBySize(PdfSource source, PdfSink Function(int index) sinkFactory,
+      {required int maxBytes}) async {
+    final r = await _sendWithSource('splitBySize', source, {'maxBytes': maxBytes});
+    final chunks = _bytesList(r);
+    for (var i = 0; i < chunks.length; i++) {
+      final sink = sinkFactory(i);
+      await sink.write(chunks[i]);
+    }
+    return chunks.length;
   }
 
   @override
-  Future<Uint8List> extractPages(Uint8List bytes, {required List<int> pages}) async {
-    final r = await _send('extractPages', {'bytes': bytes.buffer, 'pages': pages});
-    return _bytes(r);
+  Future<void> extractPages(PdfSource source, PdfSink output,
+      {required List<int> pages}) async {
+    final r = await _sendWithSource('extractPages', source, {'pages': pages});
+    await _writeTo(output, r);
   }
 
   @override
-  Future<Uint8List> deletePages(Uint8List bytes, {required List<int> pages}) async {
-    final r = await _send('deletePages', {'bytes': bytes.buffer, 'pages': pages});
-    return _bytes(r);
+  Future<void> deletePages(PdfSource source, PdfSink output,
+      {required List<int> pages}) async {
+    final r = await _sendWithSource('deletePages', source, {'pages': pages});
+    await _writeTo(output, r);
   }
 
   @override
-  Future<Uint8List> reorderPages(Uint8List bytes, {required List<int> order}) async {
-    final r = await _send('reorderPages', {'bytes': bytes.buffer, 'order': order});
-    return _bytes(r);
+  Future<void> reorderPages(PdfSource source, PdfSink output,
+      {required List<int> order}) async {
+    final r = await _sendWithSource('reorderPages', source, {'order': order});
+    await _writeTo(output, r);
   }
 
   @override
-  Future<Uint8List> movePage(Uint8List bytes, {required int from, required int to}) async {
-    final r = await _send('movePage', {'bytes': bytes.buffer, 'from': from, 'to': to});
-    return _bytes(r);
+  Future<void> movePage(PdfSource source, PdfSink output,
+      {required int from, required int to}) async {
+    final r = await _sendWithSource('movePage', source, {'from': from, 'to': to});
+    await _writeTo(output, r);
   }
 
   @override
-  Future<Uint8List> rotatePages(Uint8List bytes, {required Map<int, int> pages}) async {
-    final r = await _send('rotatePages', {'bytes': bytes.buffer, 'pages': pages});
-    return _bytes(r);
+  Future<void> rotatePages(PdfSource source, PdfSink output,
+      {required Map<int, int> pages}) async {
+    final r = await _sendWithSource('rotatePages', source, {'pages': pages});
+    await _writeTo(output, r);
   }
 
   @override
-  Future<Uint8List> rotateAllPages(Uint8List bytes, {required int degrees}) async {
-    final r = await _send('rotateAllPages', {'bytes': bytes.buffer, 'degrees': degrees});
-    return _bytes(r);
+  Future<void> rotateAllPages(PdfSource source, PdfSink output,
+      {required int degrees}) async {
+    final r = await _sendWithSource('rotateAllPages', source, {'degrees': degrees});
+    await _writeTo(output, r);
   }
 
   // ── Content ──
 
   @override
-  Future<Uint8List> flattenForms(Uint8List bytes) async {
-    final r = await _send('flattenForms', {'bytes': bytes.buffer});
-    return _bytes(r);
+  Future<void> flattenForms(PdfSource source, PdfSink output) async {
+    final r = await _sendWithSource('flattenForms', source, {});
+    await _writeTo(output, r);
   }
 
   @override
-  Future<Uint8List> applyRedactions(Uint8List bytes) async {
-    final r = await _send('applyRedactions', {'bytes': bytes.buffer});
-    return _bytes(r);
+  Future<void> applyRedactions(PdfSource source, PdfSink output) async {
+    final r = await _sendWithSource('applyRedactions', source, {});
+    await _writeTo(output, r);
   }
 
   @override
-  Future<Uint8List> embedFile(Uint8List bytes, {required String name, required Uint8List fileData}) async {
-    final r = await _send('embedFile', {'bytes': bytes.buffer, 'name': name, 'fileData': fileData.buffer});
-    return _bytes(r);
+  Future<void> embedFile(PdfSource source, PdfSink output,
+      {required String name, required Uint8List fileData}) async {
+    final r = await _sendWithSource('embedFile', source, {'name': name, 'fileData': fileData.buffer});
+    await _writeTo(output, r);
   }
 
   @override
-  Future<Uint8List> eraseRegions(Uint8List bytes, {required int page, required List<PdfRect> regions}) async {
+  Future<void> eraseRegions(PdfSource source, PdfSink output,
+      {required int page, required List<PdfRect> regions}) async {
     final rects = <double>[];
     for (final reg in regions) {
       rects.addAll([reg.x, reg.y, reg.width, reg.height]);
     }
-    final r = await _send('eraseRegions', {
-      'bytes': bytes.buffer, 'page': page,
+    final r = await _sendWithSource('eraseRegions', source, {
+      'page': page,
       'rects': Float32List.fromList(rects).buffer,
     });
-    return _bytes(r);
+    await _writeTo(output, r);
   }
 
   @override
-  Future<Uint8List> compress(Uint8List bytes,
+  Future<void> compress(PdfSource source, PdfSink output,
       {int imageQuality = 75, bool garbageCollect = true, bool linearize = false}) async {
-    final r = await _send('compress', {
-      'bytes': bytes.buffer, 'imageQuality': imageQuality,
+    final r = await _sendWithSource('compress', source, {
+      'imageQuality': imageQuality,
       'garbageCollect': garbageCollect, 'linearize': linearize,
     });
-    return _bytes(r);
+    await _writeTo(output, r);
   }
 
   // ── Extraction ──
 
   @override
-  Future<String> extractText(Uint8List bytes, {int? page, String? password}) async {
-    final r = await _send('extractText', {
-      'bytes': bytes.buffer, 'page': page, 'password': password,
+  Future<String> extractText(PdfSource source, {int? page, String? password}) async {
+    final r = await _sendWithSource('extractText', source, {
+      'page': page, 'password': password,
     });
     return r['text'] as String;
   }
 
   @override
-  Future<String> toMarkdown(Uint8List bytes, {int? page, String? password}) async {
-    final r = await _send('toMarkdown', {
-      'bytes': bytes.buffer, 'page': page, 'password': password,
+  Future<String> toMarkdown(PdfSource source, {int? page, String? password}) async {
+    final r = await _sendWithSource('toMarkdown', source, {
+      'page': page, 'password': password,
     });
     return r['text'] as String;
   }
 
   @override
-  Future<String> toHtml(Uint8List bytes, {required int page, String? password}) async {
-    final r = await _send('toHtml', {
-      'bytes': bytes.buffer, 'page': page, 'password': password,
+  Future<String> toHtml(PdfSource source, {required int page, String? password}) async {
+    final r = await _sendWithSource('toHtml', source, {
+      'page': page, 'password': password,
     });
     return r['text'] as String;
   }
 
   @override
-  Future<String> toPlainText(Uint8List bytes, {required int page, String? password}) async {
-    final r = await _send('toPlainText', {
-      'bytes': bytes.buffer, 'page': page, 'password': password,
+  Future<String> toPlainText(PdfSource source, {required int page, String? password}) async {
+    final r = await _sendWithSource('toPlainText', source, {
+      'page': page, 'password': password,
     });
     return r['text'] as String;
   }
@@ -330,19 +383,19 @@ class WebPdfPlatform implements PdfPlatform {
   // ── Search ──
 
   @override
-  Future<List<SearchResult>> searchPage(Uint8List bytes,
+  Future<List<SearchResult>> searchPage(PdfSource source,
       {required int page, required String query, String? password}) async {
-    final r = await _send('searchPage', {
-      'bytes': bytes.buffer, 'page': page, 'query': query, 'password': password,
+    final r = await _sendWithSource('searchPage', source, {
+      'page': page, 'query': query, 'password': password,
     });
     return _parseSearchResults(r['results'] as List<Object?>);
   }
 
   @override
-  Future<List<SearchResult>> searchAll(Uint8List bytes,
+  Future<List<SearchResult>> searchAll(PdfSource source,
       {required String query, String? password}) async {
-    final r = await _send('searchAll', {
-      'bytes': bytes.buffer, 'query': query, 'password': password,
+    final r = await _sendWithSource('searchAll', source, {
+      'query': query, 'password': password,
     });
     return _parseSearchResults(r['results'] as List<Object?>);
   }
@@ -364,20 +417,20 @@ class WebPdfPlatform implements PdfPlatform {
   // ── Security ──
 
   @override
-  Future<Uint8List> watermark(Uint8List bytes,
+  Future<void> watermark(PdfSource source, PdfSink output,
       {required String text, List<int>? pages, double opacity = 0.3,
        double fontSize = 48, double rotation = 45,
        double r = 0.5, double g = 0.5, double b = 0.5}) async {
-    final res = await _send('watermark', {
-      'bytes': bytes.buffer, 'text': text, 'pages': pages,
+    final res = await _sendWithSource('watermark', source, {
+      'text': text, 'pages': pages,
       'opacity': opacity, 'fontSize': fontSize, 'rotation': rotation,
       'r': r, 'g': g, 'b': b,
     });
-    return _bytes(res);
+    await _writeTo(output, res);
   }
 
   @override
-  Future<Uint8List> watermarkPositioned(Uint8List bytes, {
+  Future<void> watermarkPositioned(PdfSource source, PdfSink output, {
     required String text,
     required double x, required double y,
     required double width, required double height,
@@ -389,28 +442,28 @@ class WebPdfPlatform implements PdfPlatform {
     double fixedPrintH = 0.0,
     double fixedPrintV = 0.0,
   }) async {
-    final res = await _send('watermarkPositioned', {
-      'bytes': bytes.buffer, 'text': text, 'pages': pages,
+    final res = await _sendWithSource('watermarkPositioned', source, {
+      'text': text, 'pages': pages,
       'x': x, 'y': y, 'width': width, 'height': height,
       'fontSize': fontSize, 'fontName': fontName,
       'rotation': rotation, 'opacity': opacity,
       'r': r, 'g': g, 'b': b,
       'fixedPrint': fixedPrint, 'fixedPrintH': fixedPrintH, 'fixedPrintV': fixedPrintV,
     });
-    return _bytes(res);
+    await _writeTo(output, res);
   }
 
   @override
-  Future<Uint8List> encrypt(Uint8List bytes,
+  Future<void> encrypt(PdfSource source, PdfSink output,
       {required String ownerPassword, String userPassword = ''}) async {
-    final r = await _send('encrypt', {
-      'bytes': bytes.buffer, 'ownerPassword': ownerPassword, 'userPassword': userPassword,
+    final r = await _sendWithSource('encrypt', source, {
+      'ownerPassword': ownerPassword, 'userPassword': userPassword,
     });
-    return _bytes(r);
+    await _writeTo(output, r);
   }
 
   @override
-  Future<Uint8List> encryptFull(Uint8List bytes, {
+  Future<void> encryptFull(PdfSource source, PdfSink output, {
     required String ownerPassword,
     String userPassword = '',
     int algorithm = 3,
@@ -423,84 +476,87 @@ class WebPdfPlatform implements PdfPlatform {
     bool allowAccessibility = true,
     bool allowAssemble = true,
   }) async {
-    final r = await _send('encryptFull', {
-      'bytes': bytes.buffer, 'ownerPassword': ownerPassword,
+    final r = await _sendWithSource('encryptFull', source, {
+      'ownerPassword': ownerPassword,
       'userPassword': userPassword, 'algorithm': algorithm,
       'allowPrint': allowPrint, 'allowPrintHq': allowPrintHq,
       'allowModify': allowModify, 'allowCopy': allowCopy,
       'allowAnnotate': allowAnnotate, 'allowFillForms': allowFillForms,
       'allowAccessibility': allowAccessibility, 'allowAssemble': allowAssemble,
     });
-    return _bytes(r);
+    await _writeTo(output, r);
   }
 
   @override
-  Future<Uint8List> decrypt(Uint8List bytes, {required String password}) async {
-    final r = await _send('decrypt', {'bytes': bytes.buffer, 'password': password});
-    return _bytes(r);
+  Future<void> decrypt(PdfSource source, PdfSink output,
+      {required String password}) async {
+    final r = await _sendWithSource('decrypt', source, {'password': password});
+    await _writeTo(output, r);
   }
 
   @override
-  Future<Uint8List> sign(Uint8List bytes,
+  Future<void> sign(PdfSource source, PdfSink output,
       {required Uint8List certificate, required String certificatePassword,
        String? reason, String? location}) async {
-    final r = await _send('sign', {
-      'bytes': bytes.buffer, 'certificate': certificate.buffer,
+    final r = await _sendWithSource('sign', source, {
+      'certificate': certificate.buffer,
       'certificatePassword': certificatePassword,
       'reason': reason, 'location': location,
     });
-    return _bytes(r);
+    await _writeTo(output, r);
   }
 
   // ── Creation ──
 
   @override
-  Future<Uint8List> imagesToPdf(List<Uint8List> images) async {
+  Future<void> imagesToPdf(List<Uint8List> images, PdfSink output) async {
     if (images.isEmpty) throw ArgumentError('images must not be empty');
     final r = await _send('imagesToPdf', {
       'images': images.map((i) => i.buffer).toList(),
     });
-    return _bytes(r);
+    await _writeTo(output, r);
   }
 
   // ── Rendering ──
 
   @override
-  Future<RenderedPage> renderPage(Uint8List bytes, int pageIndex,
+  Future<RenderedPage> renderPage(PdfSource source, int pageIndex,
       {String? password}) async {
-    final r = await _send('renderPage', {
-      'bytes': bytes.buffer, 'pageIndex': pageIndex, 'password': password,
+    final r = await _sendWithSource('renderPage', source, {
+      'pageIndex': pageIndex, 'password': password,
     });
     return _parseRenderedPage(r);
   }
 
   @override
-  Future<RenderedPage> renderPageFit(Uint8List bytes, int pageIndex,
+  Future<RenderedPage> renderPageFit(PdfSource source, int pageIndex,
       {required int width, required int height, String? password}) async {
-    final r = await _send('renderPageFit', {
-      'bytes': bytes.buffer, 'pageIndex': pageIndex,
+    final r = await _sendWithSource('renderPageFit', source, {
+      'pageIndex': pageIndex,
       'width': width, 'height': height, 'password': password,
     });
     return _parseRenderedPage(r);
   }
 
   @override
-  Future<RenderedPage> renderPageThumbnail(Uint8List bytes, int pageIndex,
+  Future<RenderedPage> renderPageThumbnail(PdfSource source, int pageIndex,
       {required int size, String? password}) async {
-    final r = await _send('renderPageThumbnail', {
-      'bytes': bytes.buffer, 'pageIndex': pageIndex,
+    final r = await _sendWithSource('renderPageThumbnail', source, {
+      'pageIndex': pageIndex,
       'size': size, 'password': password,
     });
     return _parseRenderedPage(r);
   }
 
   @override
-  Future<List<RenderedPage>> renderAllPages(Uint8List bytes,
-      {required int width, required int height, String? password}) async {
-    final r = await _send('renderAllPages', {
-      'bytes': bytes.buffer, 'width': width, 'height': height, 'password': password,
+  Stream<RenderedPage> renderAllPages(PdfSource source,
+      {required int width, required int height, String? password}) async* {
+    final r = await _sendWithSource('renderAllPages', source, {
+      'width': width, 'height': height, 'password': password,
     });
-    return (r['pages'] as List<Object?>).map(_parseRenderedPage).toList();
+    for (final page in (r['pages'] as List<Object?>).map(_parseRenderedPage)) {
+      yield page;
+    }
   }
 
   RenderedPage _parseRenderedPage(Object? raw) {
@@ -515,21 +571,25 @@ class WebPdfPlatform implements PdfPlatform {
   // ── Image extraction ──
 
   @override
-  Future<List<PdfImage>> extractImages(Uint8List bytes, int pageIndex,
-      {String? password}) async {
-    final r = await _send('extractImages', {
-      'bytes': bytes.buffer, 'pageIndex': pageIndex, 'password': password,
+  Stream<PdfImage> extractImages(PdfSource source, int pageIndex,
+      {String? password}) async* {
+    final r = await _sendWithSource('extractImages', source, {
+      'pageIndex': pageIndex, 'password': password,
     });
-    return _parseImages(r['images'] as List<Object?>);
+    for (final img in _parseImages(r['images'] as List<Object?>)) {
+      yield img;
+    }
   }
 
   @override
-  Future<List<PdfImage>> extractAllImages(Uint8List bytes,
-      {String? password}) async {
-    final r = await _send('extractAllImages', {
-      'bytes': bytes.buffer, 'password': password,
+  Stream<PdfImage> extractAllImages(PdfSource source,
+      {String? password}) async* {
+    final r = await _sendWithSource('extractAllImages', source, {
+      'password': password,
     });
-    return _parseImages(r['images'] as List<Object?>);
+    for (final img in _parseImages(r['images'] as List<Object?>)) {
+      yield img;
+    }
   }
 
   List<PdfImage> _parseImages(List<Object?> raw) => raw.map((item) {
@@ -547,18 +607,18 @@ class WebPdfPlatform implements PdfPlatform {
   // ── Signatures ──
 
   @override
-  Future<int> getSignatureCount(Uint8List bytes, {String? password}) async {
-    final r = await _send('getSignatureCount', {
-      'bytes': bytes.buffer, 'password': password,
+  Future<int> getSignatureCount(PdfSource source, {String? password}) async {
+    final r = await _sendWithSource('getSignatureCount', source, {
+      'password': password,
     });
     return r['count'] as int;
   }
 
   @override
-  Future<List<PdfSignatureInfo>> getSignatures(Uint8List bytes,
+  Future<List<PdfSignatureInfo>> getSignatures(PdfSource source,
       {String? password}) async {
-    final r = await _send('getSignatures', {
-      'bytes': bytes.buffer, 'password': password,
+    final r = await _sendWithSource('getSignatures', source, {
+      'password': password,
     });
     return (r['signatures'] as List<Object?>).map((s) {
       final m = s as Map<Object?, Object?>;
@@ -570,9 +630,9 @@ class WebPdfPlatform implements PdfPlatform {
   }
 
   @override
-  Future<bool> verifySignatures(Uint8List bytes, {String? password}) async {
-    final r = await _send('verifySignatures', {
-      'bytes': bytes.buffer, 'password': password,
+  Future<bool> verifySignatures(PdfSource source, {String? password}) async {
+    final r = await _sendWithSource('verifySignatures', source, {
+      'password': password,
     });
     return r['valid'] as bool? ?? true;
   }
@@ -581,10 +641,9 @@ class WebPdfPlatform implements PdfPlatform {
 
   @override
   Future<({bool compliant, int errors, int warnings})> validatePdfA(
-      Uint8List bytes, {int level = 2, String? password}) async {
+      PdfSource source, {int level = 2, String? password}) async {
     final levels = ['1b', '1a', '2b', '2a', '2u', '3b', '3a', '3u'];
-    final r = await _send('validatePdfA', {
-      'bytes': bytes.buffer,
+    final r = await _sendWithSource('validatePdfA', source, {
       'level': level < levels.length ? levels[level] : '2b',
       'password': password,
     });
@@ -596,9 +655,9 @@ class WebPdfPlatform implements PdfPlatform {
   }
 
   @override
-  Future<bool> validatePdfUa(Uint8List bytes, {int level = 1, String? password}) async {
-    final r = await _send('validatePdfUa', {
-      'bytes': bytes.buffer, 'password': password,
+  Future<bool> validatePdfUa(PdfSource source, {int level = 1, String? password}) async {
+    final r = await _sendWithSource('validatePdfUa', source, {
+      'password': password,
     });
     return r['accessible'] as bool? ?? false;
   }
@@ -608,9 +667,9 @@ class WebPdfPlatform implements PdfPlatform {
   @override
   Future<({bool print, bool printHq, bool modify, bool copy, bool annotate,
       bool fillForms, bool accessibility, bool assemble})>
-    getPermissions(Uint8List bytes, {String? password}) async {
-    final r = await _send('getPermissions', {
-      'bytes': bytes.buffer, 'password': password,
+    getPermissions(PdfSource source, {String? password}) async {
+    final r = await _sendWithSource('getPermissions', source, {
+      'password': password,
     });
     return (
       print: r['print'] as bool? ?? true,
@@ -625,9 +684,9 @@ class WebPdfPlatform implements PdfPlatform {
   }
 
   @override
-  Future<int> getEncryptionAlgorithm(Uint8List bytes, {String? password}) async {
-    final r = await _send('getEncryptionAlgorithm', {
-      'bytes': bytes.buffer, 'password': password,
+  Future<int> getEncryptionAlgorithm(PdfSource source, {String? password}) async {
+    final r = await _sendWithSource('getEncryptionAlgorithm', source, {
+      'password': password,
     });
     return r['algorithm'] as int? ?? -1;
   }
@@ -635,8 +694,8 @@ class WebPdfPlatform implements PdfPlatform {
   // ── Editor ──
 
   @override
-  Future<PdfEditorHandle> openEditor(Uint8List bytes) async {
-    final r = await _send('editorOpen', {'bytes': bytes.buffer});
+  Future<PdfEditorHandle> openEditor(PdfSource source) async {
+    final r = await _sendWithSource('editorOpen', source, {});
     final handleId = r['handleId'] as int;
     return _WebEditorHandle(this, handleId);
   }
@@ -699,12 +758,15 @@ class _WebEditorHandle implements PdfEditorHandle {
   @override Future<void> deletePage(int i) => _op('deletePage', {'page': i});
   @override Future<void> movePage({required int from, required int to}) =>
       _op('movePage', {'from': from, 'to': to});
-  @override Future<Uint8List> extractPages(List<int> pages) async {
+  @override Future<void> extractPages(List<int> pages, PdfSink output) async {
     final r = await _op('extractPages', {'pages': pages});
-    return Uint8List.view(r['bytes'] as ByteBuffer);
+    final bytes = Uint8List.view(r['bytes'] as ByteBuffer);
+    await output.write(bytes);
   }
-  @override Future<void> mergeFrom(Uint8List otherPdf) =>
-      _op('mergeFrom', {'bytes': otherPdf.buffer});
+  @override Future<void> mergeFrom(PdfSource otherPdf) async {
+    final bytes = await otherPdf.readAt(0, otherPdf.length);
+    await _op('mergeFrom', {'bytes': bytes.buffer});
+  }
 
   @override Future<int> optimizeImages({int quality = 75}) async =>
       (await _op('optimizeImages', {'quality': quality}))['value'] as int;
@@ -720,7 +782,9 @@ class _WebEditorHandle implements PdfEditorHandle {
       _op('embedFile', {'name': name, 'data': data.buffer});
   @override Future<void> eraseRegions(int i, List<PdfRect> regions) {
     final rects = <double>[];
-    for (final reg in regions) rects.addAll([reg.x, reg.y, reg.width, reg.height]);
+    for (final reg in regions) {
+      rects.addAll([reg.x, reg.y, reg.width, reg.height]);
+    }
     return _op('eraseRegions', {'page': i, 'rects': Float32List.fromList(rects).buffer});
   }
   @override Future<void> flattenForms() => _op('flattenForms');
@@ -734,24 +798,27 @@ class _WebEditorHandle implements PdfEditorHandle {
   @override Future<void> convertToPdfA({int level = 1}) =>
       _op('convertToPdfA', {'level': level});
 
-  @override Future<Uint8List> save() async {
+  @override Future<void> save(PdfSink output) async {
     final r = await _op('save');
-    return Uint8List.view(r['bytes'] as ByteBuffer);
+    final bytes = Uint8List.view(r['bytes'] as ByteBuffer);
+    await output.write(bytes);
   }
-  @override Future<Uint8List> saveWithOptions({bool compress = true,
+  @override Future<void> saveWithOptions(PdfSink output, {bool compress = true,
       bool garbageCollect = true, bool linearize = false}) async {
     final r = await _op('saveWithOptions', {
       'compress': compress, 'garbageCollect': garbageCollect, 'linearize': linearize});
-    return Uint8List.view(r['bytes'] as ByteBuffer);
+    final bytes = Uint8List.view(r['bytes'] as ByteBuffer);
+    await output.write(bytes);
   }
-  @override Future<Uint8List> saveEncrypted({required String ownerPassword,
+  @override Future<void> saveEncrypted(PdfSink output, {required String ownerPassword,
       String userPassword = ''}) async {
     final r = await _op('saveEncrypted', {
       'ownerPassword': ownerPassword, 'userPassword': userPassword});
-    return Uint8List.view(r['bytes'] as ByteBuffer);
+    final bytes = Uint8List.view(r['bytes'] as ByteBuffer);
+    await output.write(bytes);
   }
 
-  @override Future<Uint8List> saveEncryptedFull({
+  @override Future<void> saveEncryptedFull(PdfSink output, {
     required String ownerPassword,
     String userPassword = '',
     int algorithm = 3,
@@ -772,7 +839,8 @@ class _WebEditorHandle implements PdfEditorHandle {
       'allowAnnotate': allowAnnotate, 'allowFillForms': allowFillForms,
       'allowAccessibility': allowAccessibility, 'allowAssemble': allowAssemble,
     });
-    return Uint8List.view(r['bytes'] as ByteBuffer);
+    final bytes = Uint8List.view(r['bytes'] as ByteBuffer);
+    await output.write(bytes);
   }
 
   @override Future<void> addWatermarkPositioned(int i, String text, {
@@ -844,15 +912,17 @@ class _WebBuilderHandle implements PdfBuilderHandle {
     return _WebPageBuilderHandle(_p, r['handleId'] as int);
   }
 
-  @override Future<Uint8List> build() async {
+  @override Future<void> build(PdfSink output) async {
     final r = await _op('build');
-    return Uint8List.view(r['bytes'] as ByteBuffer);
+    final bytes = Uint8List.view(r['bytes'] as ByteBuffer);
+    await output.write(bytes);
   }
-  @override Future<Uint8List> buildEncrypted({required String ownerPassword,
+  @override Future<void> buildEncrypted(PdfSink output, {required String ownerPassword,
       String userPassword = ''}) async {
     final r = await _op('buildEncrypted', {
       'ownerPassword': ownerPassword, 'userPassword': userPassword});
-    return Uint8List.view(r['bytes'] as ByteBuffer);
+    final bytes = Uint8List.view(r['bytes'] as ByteBuffer);
+    await output.write(bytes);
   }
 
   @override Future<void> dispose() => _op('dispose');

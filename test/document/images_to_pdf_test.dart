@@ -3,6 +3,8 @@ import 'dart:typed_data';
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
+import '../helpers/memory_io.dart';
+
 // Minimal 1x1 white JPEG
 final _tinyJpeg = Uint8List.fromList([
   0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
@@ -49,30 +51,40 @@ void main() {
 
   group('Pdf.imagesToPdf', () {
     test('single image creates 1-page PDF', () async {
-      final result = await pdf.imagesToPdf([_tinyJpeg]);
-      final doc = await pdf.open(result);
+      final sink = TestPdfSink();
+      await pdf.imagesToPdf([_tinyJpeg], sink);
+      final result = sink.takeBytes();
+      final doc = await pdf.open(sourceOf(result));
       expect(doc.pageCount, equals(1));
     });
 
     test('3 images create 3-page PDF', () async {
-      final result = await pdf.imagesToPdf([_tinyJpeg, _tinyJpeg, _tinyJpeg]);
-      final doc = await pdf.open(result);
+      final sink = TestPdfSink();
+      await pdf.imagesToPdf([_tinyJpeg, _tinyJpeg, _tinyJpeg], sink);
+      final result = sink.takeBytes();
+      final doc = await pdf.open(sourceOf(result));
       expect(doc.pageCount, equals(3));
     });
 
     test('output is larger than input image (PDF overhead)', () async {
-      final result = await pdf.imagesToPdf([_tinyJpeg]);
+      final sink = TestPdfSink();
+      await pdf.imagesToPdf([_tinyJpeg], sink);
+      final result = sink.takeBytes();
       expect(result.length, greaterThan(_tinyJpeg.length));
     });
 
     test('more images = larger output', () async {
-      final one = await pdf.imagesToPdf([_tinyJpeg]);
-      final three = await pdf.imagesToPdf([_tinyJpeg, _tinyJpeg, _tinyJpeg]);
+      final sink1 = TestPdfSink();
+      await pdf.imagesToPdf([_tinyJpeg], sink1);
+      final one = sink1.takeBytes();
+      final sink3 = TestPdfSink();
+      await pdf.imagesToPdf([_tinyJpeg, _tinyJpeg, _tinyJpeg], sink3);
+      final three = sink3.takeBytes();
       expect(three.length, greaterThan(one.length));
     });
 
     test('throws on empty list', () {
-      expect(() => pdf.imagesToPdf([]), throwsArgumentError);
+      expect(() => pdf.imagesToPdf([], TestPdfSink()), throwsArgumentError);
     });
   });
 }

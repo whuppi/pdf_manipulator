@@ -9,7 +9,7 @@ Complete ground-up rewrite. New engine, new API, every platform. See the [migrat
 - **Engine:** pdf_oxide (Rust, MIT/Apache-2.0) replaces the previous Android-only backend
 - **Platforms:** iOS, Android, macOS, Windows, Linux, Web — previously Android only
 - **API:** Instance-based `Pdf()` with `dispose()`. Batch editing via `Pdf.edit(bytes)`. Create from scratch via `Pdf.build()`
-- **I/O:** `Uint8List` in and out — no file paths, no `dart:io`
+- **I/O:** `PdfSource` (random-access reader) in, `PdfSink` (sequential writer) out — no file paths, no `dart:io`. Engine reads only targeted ranges via callback, never the full file.
 - **Errors:** Typed `PdfError` sealed class — no more `PlatformException`
 - **Threading:** Every operation runs off the main thread (worker isolate on native, Web Worker on web)
 - **SDK:** Requires Dart >=3.10.0

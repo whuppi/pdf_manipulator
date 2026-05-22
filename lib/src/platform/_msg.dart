@@ -19,6 +19,12 @@ class WorkerMsg {
   final TransferableTypedData? bytes;
   final List<TransferableTypedData>? bytesList;
 
+  /// SendPort to a SourceServer on the main isolate (streaming input).
+  final SendPort? sourcePort;
+
+  /// SendPort to a SinkServer on the main isolate (streaming output).
+  final SendPort? sinkPort;
+
   // Named args — any sendable primitive (int, double, bool, String, List, Map)
   final Map<String, Object?> args;
 
@@ -27,6 +33,8 @@ class WorkerMsg {
     required this.op,
     this.bytes,
     this.bytesList,
+    this.sourcePort,
+    this.sinkPort,
     this.args = const {},
   });
 }
@@ -37,6 +45,22 @@ class WorkerResult {
   final Object? value;
   final Object? error;
   const WorkerResult({required this.id, this.value, this.error});
+}
+
+/// Streaming response — one item at a time. Sent for ops that yield
+/// multiple results (extractImages, renderAllPages). The final item
+/// has [done] = true and no [value].
+class WorkerStreamItem {
+  final int id;
+  final Object? value;
+  final Object? error;
+  final bool done;
+  const WorkerStreamItem({
+    required this.id,
+    this.value,
+    this.error,
+    this.done = false,
+  });
 }
 
 /// Wrap Uint8List for zero-copy transfer.

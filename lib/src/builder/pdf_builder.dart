@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:pdf_manipulator/src/core/pdf_sink.dart';
 import 'package:pdf_manipulator/src/platform/pdf_platform.dart';
 
 /// Create PDFs from scratch — text, images, forms, tables.
@@ -54,12 +55,12 @@ class PdfBuilder {
 
   // ── Save ───────────────────────────────────────────────────────
 
-  Future<Uint8List> save() { _check(); return _handle.build(); }
+  Future<void> save(PdfSink output) { _check(); return _handle.build(output); }
 
-  Future<Uint8List> saveEncrypted({required String ownerPassword,
+  Future<void> saveEncrypted(PdfSink output, {required String ownerPassword,
       String userPassword = ''}) {
     _check();
-    return _handle.buildEncrypted(ownerPassword: ownerPassword,
+    return _handle.buildEncrypted(output, ownerPassword: ownerPassword,
         userPassword: userPassword);
   }
 

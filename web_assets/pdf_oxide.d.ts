@@ -727,10 +727,29 @@ export class WasmPdfDocument {
     [Symbol.dispose](): void;
     /**
      * LOCAL PATCH — pdf_manipulator/0.3.47-patches
+     * Add an image stamp annotation (logo watermark) to a page.
+     * The image bytes (JPEG/PNG) are embedded as an XObject in the appearance stream.
+     * Removal trigger: upstream adds image stamp to WasmPdfDocument.
+     */
+    addImageStamp(page_index: number, image_data: Uint8Array, x: number, y: number, width: number, height: number, opacity: number): void;
+    /**
+     * LOCAL PATCH — pdf_manipulator/0.3.47-patches
+     * Add a stamp annotation to a page.
+     * Removal trigger: upstream adds stamp annotations to WasmPdfDocument.
+     */
+    addStamp(page_index: number, stamp_type: number, custom_name: string | null | undefined, x: number, y: number, width: number, height: number, opacity: number): void;
+    /**
+     * LOCAL PATCH — pdf_manipulator/0.3.47-patches
      * Add a text watermark to an existing page.
      * Removal trigger: upstream adds watermark to WasmPdfDocument.
      */
     addWatermark(page_index: number, text: string, font_size: number, rotation: number, opacity: number, r: number, g: number, b: number): void;
+    /**
+     * LOCAL PATCH — pdf_manipulator/0.3.47-patches
+     * Add a positioned watermark (text at specific coordinates) to a page.
+     * Removal trigger: upstream adds positioned watermark to WasmPdfDocument.
+     */
+    addWatermarkPositioned(page_index: number, text: string, x: number, y: number, width: number, height: number, font_size: number, font_name: string | null | undefined, rotation: number, opacity: number, r: number, g: number, b: number): void;
     /**
      * Apply all redactions in the document.
      */
@@ -957,12 +976,6 @@ export class WasmPdfDocument {
      */
     flattenPageAnnotations(page_index: number): void;
     /**
-     * Create a flattened PDF where each page is rendered as an image.
-     * Burns in all annotations, form fields, and overlays.
-     * Returns the flattened PDF as bytes.
-     */
-    flattenToImages(dpi?: number | null): Uint8Array;
-    /**
      * Return warnings collected during the last form-flattening save.
      *
      * Each entry names a widget field that had no `/AP` appearance stream;
@@ -971,6 +984,14 @@ export class WasmPdfDocument {
      * @returns Array of warning strings
      */
     flattenWarnings(): string[];
+    /**
+     * Load a PDF document from a callback-based reader (OPFS).
+     *
+     * @param read_fn - JS function: (offset: number, count: number) => Uint8Array
+     * @param length_fn - JS function: () => number (total file size)
+     * @param password - Optional password for encrypted PDFs
+     */
+    static fromReader(read_fn: Function, length_fn: Function, password?: string | null): WasmPdfDocument;
     /**
      * Get annotations from a page.
      *
@@ -1033,10 +1054,6 @@ export class WasmPdfDocument {
     movePage(from_index: number, to_index: number): void;
     /**
      * Load a PDF document from raw bytes.
-     *
-     * @param data - PDF file contents as Uint8Array
-     * @param password - Optional password for encrypted PDFs
-     * @throws Error if the PDF is invalid or cannot be parsed
      */
     constructor(data: Uint8Array, password?: string | null);
     /**
@@ -1094,16 +1111,6 @@ export class WasmPdfDocument {
      * @param threshold - Fraction of pages (0.0-1.0) where text must repeat (heuristic mode)
      */
     removeHeaders(threshold: number): number;
-    /**
-     * Render a page to an image (PNG).
-     *
-     * Requires the `rendering` feature.
-     *
-     * @param page_index - Zero-based page number
-     * @param dpi - Dots per inch (default: 150)
-     * @returns Uint8Array containing the PNG image data
-     */
-    renderPage(page_index: number, dpi?: number | null): Uint8Array;
     /**
      * Reposition an image on a page.
      */
@@ -1503,6 +1510,7 @@ export interface InitOutput {
     readonly generateQrSvg: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly __wbg_wasmpdfdocument_free: (a: number, b: number) => void;
     readonly wasmpdfdocument_new: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly wasmpdfdocument_fromReader: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly wasmpdfdocument_pageCount: (a: number, b: number) => void;
     readonly wasmpdfdocument_signatureCount: (a: number, b: number) => void;
     readonly wasmpdfdocument_signatures: (a: number, b: number) => void;
@@ -1520,7 +1528,6 @@ export interface InitOutput {
     readonly wasmpdfdocument_editFooter: (a: number, b: number, c: number) => void;
     readonly wasmpdfdocument_eraseArtifacts: (a: number, b: number, c: number) => void;
     readonly wasmpdfdocument_within: (a: number, b: number, c: number, d: number, e: number) => void;
-    readonly wasmpdfdocument_renderPage: (a: number, b: number, c: number, d: number) => void;
     readonly wasmpdfdocument_toMarkdown: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly wasmpdfdocument_toMarkdownAll: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly wasmpdfdocument_toHtml: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
@@ -1616,6 +1623,9 @@ export interface InitOutput {
     readonly wasmpdfdocument_flattenAllAnnotations: (a: number, b: number) => void;
     readonly wasmpdfdocument_addWatermark: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
     readonly wasmpdfdocument_unembedStandardFonts: (a: number, b: number) => void;
+    readonly wasmpdfdocument_addStamp: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
+    readonly wasmpdfdocument_addImageStamp: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
+    readonly wasmpdfdocument_addWatermarkPositioned: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => void;
     readonly wasmpdfdocument_applyPageRedactions: (a: number, b: number, c: number) => void;
     readonly wasmpdfdocument_applyAllRedactions: (a: number, b: number) => void;
     readonly __wbg_artifactstyle_free: (a: number, b: number) => void;
@@ -1649,7 +1659,6 @@ export interface InitOutput {
     readonly wasmpdfdocument_deletePage: (a: number, b: number, c: number) => void;
     readonly wasmpdfdocument_movePage: (a: number, b: number, c: number, d: number) => void;
     readonly wasmpdfdocument_extractPages: (a: number, b: number, c: number, d: number) => void;
-    readonly wasmpdfdocument_flattenToImages: (a: number, b: number, c: number) => void;
     readonly __wbg_wasmpdf_free: (a: number, b: number) => void;
     readonly wasmpdf_fromBytes: (a: number, b: number, c: number) => void;
     readonly wasmpdf_merge: (a: number, b: number, c: number) => void;
@@ -1765,19 +1774,6 @@ export interface InitOutput {
     readonly wasmocrconfig_new: () => number;
     readonly __wbg_wasmheader_free: (a: number, b: number) => void;
     readonly __wbg_wasmfooter_free: (a: number, b: number) => void;
-    readonly qcms_profile_is_bogus: (a: number) => number;
-    readonly qcms_white_point_sRGB: (a: number) => void;
-    readonly qcms_profile_precache_output_transform: (a: number) => void;
-    readonly qcms_transform_data_rgb_out_lut_precache: (a: number, b: number, c: number, d: number) => void;
-    readonly qcms_transform_data_rgba_out_lut_precache: (a: number, b: number, c: number, d: number) => void;
-    readonly qcms_transform_data_bgra_out_lut_precache: (a: number, b: number, c: number, d: number) => void;
-    readonly qcms_transform_data_rgb_out_lut: (a: number, b: number, c: number, d: number) => void;
-    readonly qcms_transform_data_rgba_out_lut: (a: number, b: number, c: number, d: number) => void;
-    readonly qcms_transform_data_bgra_out_lut: (a: number, b: number, c: number, d: number) => void;
-    readonly qcms_transform_release: (a: number) => void;
-    readonly qcms_enable_iccv4: () => void;
-    readonly lut_interp_linear16: (a: number, b: number, c: number) => number;
-    readonly lut_inverse_interp16: (a: number, b: number, c: number) => number;
     readonly __wbindgen_export: (a: number, b: number) => number;
     readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_export3: (a: number) => void;

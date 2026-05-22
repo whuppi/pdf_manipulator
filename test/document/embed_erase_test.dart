@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
+import '../helpers/memory_io.dart';
 import '../helpers/pdf_fixtures.dart';
 
 void main() {
@@ -19,22 +20,26 @@ void main() {
   group('Pdf.embedFile', () {
     test('embeds a file and produces larger output', () async {
       final attachment = Uint8List.fromList('Hello world attachment'.codeUnits);
-      final result = await pdf.embedFile(
-        minimalPdf,
+      final sink = TestPdfSink();
+      await pdf.embedFile(
+        sourceOf(minimalPdf), sink,
         name: 'hello.txt',
         fileData: attachment,
       );
+      final result = sink.takeBytes();
       expect(result.length, greaterThan(minimalPdf.length));
     });
 
     test('embedded file PDF is still valid', () async {
       final attachment = Uint8List.fromList('Test data'.codeUnits);
-      final result = await pdf.embedFile(
-        minimalPdf,
+      final sink = TestPdfSink();
+      await pdf.embedFile(
+        sourceOf(minimalPdf), sink,
         name: 'test.txt',
         fileData: attachment,
       );
-      final info = await pdf.probe(result);
+      final result = sink.takeBytes();
+      final info = await pdf.probe(sourceOf(result));
       expect(info.isValid, isTrue);
       expect(info.pageCount, 1);
     });
@@ -42,31 +47,36 @@ void main() {
     test('can embed into multi-page PDF', () async {
       final threePages = await buildThreePagePdf();
       final attachment = Uint8List.fromList(List.generate(1000, (i) => i % 256));
-      final result = await pdf.embedFile(
-        threePages,
+      final sink = TestPdfSink();
+      await pdf.embedFile(
+        sourceOf(threePages), sink,
         name: 'data.bin',
         fileData: attachment,
       );
-      final doc = await pdf.open(result);
+      final result = sink.takeBytes();
+      final doc = await pdf.open(sourceOf(result));
       expect(doc.pageCount, 3);
     });
   });
 
   group('Pdf.eraseRegions', () {
     test('erase region produces valid output', () async {
-      final result = await pdf.eraseRegions(
-        minimalPdf,
+      final sink = TestPdfSink();
+      await pdf.eraseRegions(
+        sourceOf(minimalPdf), sink,
         page: 0,
         regions: [const PdfRect(x: 10, y: 10, width: 100, height: 100)],
       );
+      final result = sink.takeBytes();
       expect(result.length, greaterThan(0));
-      final info = await pdf.probe(result);
+      final info = await pdf.probe(sourceOf(result));
       expect(info.isValid, isTrue);
     });
 
     test('erase multiple regions on same page', () async {
-      final result = await pdf.eraseRegions(
-        minimalPdf,
+      final sink = TestPdfSink();
+      await pdf.eraseRegions(
+        sourceOf(minimalPdf), sink,
         page: 0,
         regions: [
           const PdfRect(x: 0, y: 0, width: 50, height: 50),
@@ -74,37 +84,44 @@ void main() {
           const PdfRect(x: 300, y: 300, width: 100, height: 100),
         ],
       );
+      final result = sink.takeBytes();
       expect(result.length, greaterThan(0));
     });
 
     test('erase on multi-page PDF preserves page count', () async {
       final threePages = await buildThreePagePdf();
-      final result = await pdf.eraseRegions(
-        threePages,
+      final sink = TestPdfSink();
+      await pdf.eraseRegions(
+        sourceOf(threePages), sink,
         page: 1,
         regions: [const PdfRect(x: 0, y: 0, width: 200, height: 200)],
       );
-      final doc = await pdf.open(result);
+      final result = sink.takeBytes();
+      final doc = await pdf.open(sourceOf(result));
       expect(doc.pageCount, 3);
     });
   });
 
   group('PdfEditor.embedFile', () {
     test('embed via editor and save', () async {
-      final editor = await Pdf.edit(minimalPdf);
+      final editor = await Pdf.edit(sourceOf(minimalPdf));
       await editor.embedFile('readme.txt', Uint8List.fromList('Read me'.codeUnits));
-      final result = await editor.save();
+      final sink = TestPdfSink();
+      await editor.save(sink);
       editor.dispose();
+      final result = sink.takeBytes();
       expect(result.length, greaterThan(minimalPdf.length));
     });
   });
 
   group('PdfEditor.eraseRegions', () {
     test('erase via editor and save', () async {
-      final editor = await Pdf.edit(minimalPdf);
+      final editor = await Pdf.edit(sourceOf(minimalPdf));
       await editor.eraseRegions(0, [const PdfRect(x: 10, y: 10, width: 50, height: 50)]);
-      final result = await editor.save();
+      final sink = TestPdfSink();
+      await editor.save(sink);
       editor.dispose();
+      final result = sink.takeBytes();
       expect(result.length, greaterThan(0));
     });
   });

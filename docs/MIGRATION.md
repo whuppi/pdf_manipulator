@@ -9,7 +9,7 @@ The v1 rewrite changes every API surface. This guide maps every old call to its 
 | v0 | v1 |
 |---|---|
 | Android only | iOS, Android, macOS, Windows, Linux, web |
-| File paths in, file paths out | `Uint8List` in, `Uint8List` out |
+| File paths in, file paths out | `PdfSource` in, `PdfSink` out (consumer implements I/O) |
 | `PdfManipulator()` instance + params objects | `Pdf()` instance methods with named args |
 | No cleanup required | Call `pdf.dispose()` when done |
 | `PlatformException` on error | Typed `PdfError` sealed class |

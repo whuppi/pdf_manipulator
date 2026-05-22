@@ -32,6 +32,8 @@ export 'src/core/pdf_image.dart';
 export 'src/core/pdf_info.dart';
 export 'src/core/pdf_rect.dart';
 export 'src/core/pdf_signature.dart';
+export 'src/core/pdf_sink.dart';
+export 'src/core/pdf_source.dart';
 export 'src/core/search_result.dart';
 export 'src/document/pdf.dart';
 export 'src/document/pdf_doc.dart';

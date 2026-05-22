@@ -25,23 +25,42 @@ dart run pdf_manipulator:setup
 
 ## The 30-second version
 
+`PdfSource` and `PdfSink` are interfaces *you* implement. The package never touches `dart:io` — you bring whatever backing store fits your platform (file, network, database, memory).
+
 ```dart
+import 'dart:typed_data';
 import 'package:pdf_manipulator/pdf_manipulator.dart';
+
+// In-memory — good for tests and quick scripts
+class MemorySource implements PdfSource {
+  MemorySource(this._data);
+  final Uint8List _data;
+  @override int get length => _data.length;
+  @override Uint8List readAt(int offset, int count) =>
+      Uint8List.sublistView(_data, offset, (offset + count).clamp(0, _data.length));
+}
+
+class MemorySink implements PdfSink {
+  final _buf = BytesBuilder(copy: false);
+  @override void write(Uint8List chunk) => _buf.add(chunk);
+  Uint8List takeBytes() => _buf.takeBytes();
+}
 
 final pdf = Pdf();
 
-final doc = await pdf.open(pdfBytes);
+final source = MemorySource(pdfBytes);
+final doc = await pdf.open(source);
 print('${doc.pageCount} pages');
 
-final merged = await pdf.merge([pdfA, pdfB]);
-final smaller = await pdf.compress(bytes, imageQuality: 75);
-final text = await pdf.extractText(bytes);
-final locked = await pdf.encrypt(bytes, ownerPassword: 'secret');
+final sink = MemorySink();
+await pdf.merge([source, otherSource], sink);
+
+final text = await pdf.extractText(source);
 
 pdf.dispose(); // done — release the worker
 ```
 
-Each `Pdf()` creates its own background worker. `dispose()` releases the worker and instantly cancels all pending operations. Bytes in, bytes out. No file paths, no `dart:io`. Same code on every platform.
+Each `Pdf()` creates its own background worker. `dispose()` releases the worker and instantly cancels all pending operations. `PdfSource` in, `PdfSink` out. No file paths, no `dart:io`. Same code on every platform.
 
 ---
 
@@ -53,7 +72,7 @@ You picked a PDF. What's inside?
 
 ```dart
 final pdf = Pdf();
-final doc = await pdf.open(bytes);
+final doc = await pdf.open(source);
 print('${doc.pageCount} pages, version ${doc.version}');
 print('Title: ${doc.title}');
 print('Author: ${doc.author}');
@@ -68,7 +87,7 @@ for (final page in doc.pages) {
 Don't need the full parse? `probe` is faster:
 
 ```dart
-final info = await pdf.probe(bytes);
+final info = await pdf.probe(source);
 // info.isValid, info.pageCount, info.isEncrypted, info.version
 ```
 
@@ -77,7 +96,7 @@ final info = await pdf.probe(bytes);
 Two board decks into one? A cover page onto a report?
 
 ```dart
-final merged = await pdf.merge([coverBytes, reportBytes, appendixBytes]);
+await pdf.merge([coverSource, reportSource, appendixSource], outputSink);
 ```
 
 Page order follows the list order.
@@ -88,11 +107,13 @@ Break a big PDF into smaller ones:
 
 ```dart
 // Every 5 pages
-final chunks = await pdf.split(bytes, every: 5);
-// → [pages 1-5, pages 6-10, pages 11-13]
+final sinks = <MemorySink>[];
+await pdf.split(source, (i) { final s = MemorySink(); sinks.add(s); return s; }, every: 5);
+// → sinks[0] = pages 1-5, sinks[1] = pages 6-10, sinks[2] = pages 11-13
 
-// By file size (max 500KB each)
-final small = await pdf.splitBySize(bytes, maxBytes: 500000);
+// By file size (max 500KB each) — returns the number of parts
+final partSinks = <MemorySink>[];
+final count = await pdf.splitBySize(source, (i) { final s = MemorySink(); partSinks.add(s); return s; }, maxBytes: 500000);
 ```
 
 ### Extract, delete, reorder, move
@@ -101,17 +122,17 @@ Pull pages out, throw pages away, shuffle them around:
 
 ```dart
 // Grab pages 0 and 2 as a new PDF
-final excerpt = await pdf.extractPages(bytes, pages: [0, 2]);
+await pdf.extractPages(source, outputSink, pages: [0, 2]);
 
 // Delete page 3
-final trimmed = await pdf.deletePages(bytes, pages: [3]);
+await pdf.deletePages(source, outputSink, pages: [3]);
 
 // Reverse the entire document
-final backwards = await pdf.reorderPages(bytes,
+await pdf.reorderPages(source, outputSink,
     order: [4, 3, 2, 1, 0]);
 
 // Move the last page to the front
-final reshuffled = await pdf.movePage(bytes,
+await pdf.movePage(source, outputSink,
     from: 9, to: 0);
 ```
 
@@ -119,10 +140,10 @@ final reshuffled = await pdf.movePage(bytes,
 
 ```dart
 // Rotate every page 90° clockwise
-final landscape = await pdf.rotateAllPages(bytes, degrees: 90);
+await pdf.rotateAllPages(source, outputSink, degrees: 90);
 
 // Rotate specific pages — page 0 by 180°, page 2 by 270°
-final fixed = await pdf.rotatePages(bytes, pages: {0: 180, 2: 270});
+await pdf.rotatePages(source, outputSink, pages: {0: 180, 2: 270});
 ```
 
 ### Compress
@@ -130,8 +151,7 @@ final fixed = await pdf.rotatePages(bytes, pages: {0: 180, 2: 270});
 Three levels of compression in one call — stream recompression, garbage collection, and image optimization. Non-JPEG images get converted to JPEG only if the result is smaller. Resolution is preserved.
 
 ```dart
-final smaller = await pdf.compress(bytes, imageQuality: 75);
-print('${bytes.length} → ${smaller.length}');
+await pdf.compress(source, outputSink, imageQuality: 75);
 ```
 
 ### Watermark
@@ -139,15 +159,15 @@ print('${bytes.length} → ${smaller.length}');
 Stamp text across every page — or just the pages you pick:
 
 ```dart
-final stamped = await pdf.watermark(bytes,
+await pdf.watermark(source, outputSink,
     text: 'CONFIDENTIAL', opacity: 0.2, fontSize: 60, rotation: 45);
 
 // Just page 0
-final partial = await pdf.watermark(bytes,
+await pdf.watermark(source, outputSink,
     text: 'DRAFT', pages: [0]);
 
 // Positioned — exact coordinates, custom font
-final precise = await pdf.watermarkPositioned(bytes,
+await pdf.watermarkPositioned(source, outputSink,
     text: 'INTERNAL',
     x: 100, y: 50, width: 400, height: 100,
     fontName: 'Courier', fontSize: 36, opacity: 0.15);
@@ -156,7 +176,7 @@ final precise = await pdf.watermarkPositioned(bytes,
 ### Stamp annotations
 
 ```dart
-final stamped = await pdf.addStamp(bytes,
+await pdf.addStamp(source, outputSink,
     page: 0,
     stampType: 0,  // 0=Approved, 12=Draft, 6=Confidential
     x: 50, y: 700, width: 200, height: 50);
@@ -167,7 +187,7 @@ final stamped = await pdf.addStamp(bytes,
 Stamp an image onto a page — logos, signatures, approval seals:
 
 ```dart
-final stamped = await pdf.addImageStamp(bytes,
+await pdf.addImageStamp(source, outputSink,
     page: 0,
     imageBytes: logoPng,
     x: 50, y: 700, width: 150, height: 50);
@@ -177,11 +197,11 @@ final stamped = await pdf.addImageStamp(bytes,
 
 ```dart
 // Simple encryption (AES-256, all permissions)
-final locked = await pdf.encrypt(bytes, ownerPassword: 'secret');
-final unlocked = await pdf.decrypt(locked, password: 'secret');
+await pdf.encrypt(source, encryptedSink, ownerPassword: 'secret');
+await pdf.decrypt(encryptedSource, decryptedSink, password: 'secret');
 
 // Full control — algorithm + permissions
-final restricted = await pdf.encryptFull(bytes,
+await pdf.encryptFull(source, outputSink,
     ownerPassword: 'owner',
     userPassword: 'user',
     algorithm: 2,  // 0=RC4-40, 1=RC4-128, 2=AES-128, 3=AES-256
@@ -196,16 +216,16 @@ final restricted = await pdf.encryptFull(bytes,
 Pull text out of any PDF — all pages or just one:
 
 ```dart
-final everything = await pdf.extractText(bytes);
-final page3only = await pdf.extractText(bytes, page: 2);
+final everything = await pdf.extractText(source);
+final page3only = await pdf.extractText(source, page: 2);
 ```
 
 ### Convert to Markdown, HTML, plain text
 
 ```dart
-final md = await pdf.toMarkdown(bytes);
-final html = await pdf.toHtml(bytes, page: 0);
-final plain = await pdf.toPlainText(bytes, page: 0);
+final md = await pdf.toMarkdown(source);
+final html = await pdf.toHtml(source, page: 0);
+final plain = await pdf.toPlainText(source, page: 0);
 ```
 
 ### Search
@@ -213,13 +233,13 @@ final plain = await pdf.toPlainText(bytes, page: 0);
 Find text with page numbers and position rectangles:
 
 ```dart
-final hits = await pdf.searchAll(bytes, query: 'revenue');
+final hits = await pdf.searchAll(source, query: 'revenue');
 for (final hit in hits) {
   print('Page ${hit.page}: "${hit.text}" at (${hit.rect.x}, ${hit.rect.y})');
 }
 
 // Search one page
-final pageHits = await pdf.searchPage(bytes, page: 0, query: 'total');
+final pageHits = await pdf.searchPage(source, page: 0, query: 'total');
 ```
 
 ### Render pages to images
@@ -227,12 +247,16 @@ final pageHits = await pdf.searchPage(bytes, page: 0, query: 'total');
 Turn PDF pages into raw RGBA pixels — for thumbnails, previews, or image pipelines:
 
 ```dart
-final full = await pdf.renderPage(bytes, 0);
+final full = await pdf.renderPage(source, 0);
 // full.width, full.height, full.data (Uint8List of RGBA pixels)
 
-final fitted = await pdf.renderPageFit(bytes, 0, width: 800, height: 600);
-final thumb = await pdf.renderPageThumbnail(bytes, 0, size: 150);
-final all = await pdf.renderAllPages(bytes, width: 400, height: 600);
+final fitted = await pdf.renderPageFit(source, 0, width: 800, height: 600);
+final thumb = await pdf.renderPageThumbnail(source, 0, size: 150);
+
+// Stream — one page at a time, constant memory
+await for (final page in pdf.renderAllPages(source, width: 400, height: 600)) {
+  // process page.data
+}
 ```
 
 ### Extract embedded images
@@ -240,12 +264,14 @@ final all = await pdf.renderAllPages(bytes, width: 400, height: 600);
 Pull images out of PDF pages:
 
 ```dart
-final images = await pdf.extractImages(bytes, 0);
-for (final img in images) {
+// Stream — one image at a time
+await for (final img in pdf.extractImages(source, 0)) {
   print('${img.width}×${img.height} ${img.format} — ${img.data.length} bytes');
 }
 
-final allImages = await pdf.extractAllImages(bytes);
+await for (final img in pdf.extractAllImages(source)) {
+  // every image from every page
+}
 ```
 
 ### Images to PDF
@@ -253,7 +279,7 @@ final allImages = await pdf.extractAllImages(bytes);
 Turn a stack of images into a PDF:
 
 ```dart
-final result = await pdf.imagesToPdf([jpeg1, jpeg2, png3]);
+await pdf.imagesToPdf([jpeg1, jpeg2, png3], outputSink);
 ```
 
 Each image becomes one A4 page.
@@ -263,11 +289,11 @@ Each image becomes one A4 page.
 Inspect, verify, and sign:
 
 ```dart
-final count = await pdf.getSignatureCount(bytes);
-final sigs = await pdf.getSignatures(bytes);
-final allValid = await pdf.verifySignatures(bytes);
+final count = await pdf.getSignatureCount(source);
+final sigs = await pdf.getSignatures(source);
+final allValid = await pdf.verifySignatures(source);
 
-final signed = await pdf.sign(bytes,
+await pdf.sign(source, signedSink,
     certificate: p12Bytes,
     certificatePassword: 'cert-pw',
     reason: 'Approved',
@@ -277,36 +303,36 @@ final signed = await pdf.sign(bytes,
 ### Read encryption info
 
 ```dart
-final perms = await pdf.getPermissions(bytes);
+final perms = await pdf.getPermissions(source);
 print('Can print: ${perms.print}, can copy: ${perms.copy}');
 
-final algo = await pdf.getEncryptionAlgorithm(bytes);
+final algo = await pdf.getEncryptionAlgorithm(source);
 // -1=not encrypted, 0=RC4-40, 1=RC4-128, 2=AES-128, 3=AES-256
 ```
 
 ### Compliance validation
 
 ```dart
-final pdfA = await pdf.validatePdfA(bytes);
+final pdfA = await pdf.validatePdfA(source);
 print('Compliant: ${pdfA.compliant}, errors: ${pdfA.errors}');
 
-final accessible = await pdf.validatePdfUa(bytes);
+final accessible = await pdf.validatePdfUa(source);
 ```
 
 ### Forms, annotations, redactions
 
 ```dart
-final flat = await pdf.flattenForms(bytes);
-final redacted = await pdf.applyRedactions(bytes);
+await pdf.flattenForms(source, outputSink);
+await pdf.applyRedactions(source, outputSink);
 ```
 
 ### Embed files, erase regions
 
 ```dart
-final withAttachment = await pdf.embedFile(bytes,
+await pdf.embedFile(source, outputSink,
     name: 'data.csv', fileData: csvBytes);
 
-final erased = await pdf.eraseRegions(bytes,
+await pdf.eraseRegions(source, outputSink,
     page: 0,
     regions: [PdfRect(x: 100, y: 100, width: 200, height: 50)]);
 ```
@@ -318,18 +344,19 @@ final erased = await pdf.eraseRegions(bytes,
 When you're applying multiple changes, `PdfEditor` is more efficient — it parses the PDF once and saves once, no matter how many mutations you chain:
 
 ```dart
-final editor = await Pdf.edit(bytes);
+final editor = await Pdf.edit(source);
 
 await editor.setTitle('Q4 Report');
 await editor.setAuthor('Finance');
 await editor.rotatePage(0, degrees: 90);
 await editor.deletePage(4);
-await editor.mergeFrom(appendixBytes);
+await editor.mergeFrom(appendixSource);
 await editor.addWatermark(0, 'FINAL', opacity: 0.15);
 await editor.optimizeImages(quality: 70);
 await editor.flattenForms();
 
-final result = await editor.saveWithOptions(compress: true, garbageCollect: true);
+final resultSink = MemorySink();
+await editor.saveWithOptions(resultSink, compress: true, garbageCollect: true);
 editor.dispose();
 ```
 
@@ -353,11 +380,12 @@ await page.horizontalRule();
 await page.paragraph('Action items follow.');
 await page.done();
 
-final result = await builder.save();
+final resultSink = MemorySink();
+await builder.save(resultSink);
 builder.dispose();
 ```
 
-Custom sizes (`addPage(width: 400, height: 600)`), Letter pages (`addLetterPage()`), images (`page.image(pngBytes, x, y, w, h)`), watermarks (`page.watermark('DRAFT')`), and encrypted output (`builder.saveEncrypted(ownerPassword: 'pw')`).
+Custom sizes (`addPage(width: 400, height: 600)`), Letter pages (`addLetterPage()`), images (`page.image(pngBytes, x, y, w, h)`), watermarks (`page.watermark('DRAFT')`), and encrypted output (`builder.saveEncrypted(outputSink, ownerPassword: 'pw')`).
 
 Form fields too:
 
@@ -379,7 +407,7 @@ Every error is a typed subclass of `PdfError`. Pattern-match, don't parse string
 
 ```dart
 try {
-  await pdf.open(mysteryBytes);
+  await pdf.open(source);
 } on PdfPasswordRequired {
   // prompt the user
 } on PdfCorrupted catch (e) {

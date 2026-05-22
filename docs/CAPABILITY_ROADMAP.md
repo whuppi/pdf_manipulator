@@ -14,12 +14,19 @@ What's shipped, what's next, what's deliberately out of scope. For the architect
 | PdfEditor fully async (native FFI / web WASM) | ✓ |
 | PdfBuilder fully async (native FFI / web WASM) | ✓ |
 | Native: worker isolate + FFI, typed message protocol (no closures cross boundary) | ✓ |
-| Native: TransferableTypedData (one memcpy + O(1) transfer — Dart's theoretical minimum) | ✓ |
+| Native: cross-isolate streaming I/O (Dart_ExitIsolate + pthread condvar, zero full-file buffers) | ✓ |
 | Map-based args protocol (no numbered field limits, self-documenting keys) | ✓ |
 | Native: persistent handle map in worker isolate for editor/builder sessions | ✓ |
 | Web: Web Worker + WASM, typed message dispatch | ✓ |
 | Web: ArrayBuffer.slice + postMessage transfer list (one memcpy + O(1) transfer) | ✓ |
 | One barrel, one import, zero `dart:ffi` in public surface | ✓ |
+| Streaming I/O: PdfSource (random-access reader) + PdfSink (sequential writer) | ✓ |
+| Callback reader: Rust reads targeted ranges via C function pointers (no full-file clone) | ✓ |
+| Callback writer: Rust writes output chunks via C function pointer (PositionTracker) | ✓ |
+| NativeCallable-based FFI callback bridge (SourceBridge + SinkBridge) | ✓ |
+| All 19 native editorOpen call sites use callback reader (eliminates source_bytes clone) | ✓ |
+| Stream\<T\> returns for extractImages, extractAllImages, renderAllPages | ✓ |
+| Web: OPFS SyncAccessHandle bridge (>4MB sources stream to disk, worker reads synchronously) | ✓ |
 | Build hook (pre-built binary download, zero Rust for consumers) | ✓ |
 | Pre-compiled binaries (macOS arm64/x64, iOS arm64/sim, Android arm64/arm/x64/x86) | ✓ |
 | Pre-compiled binaries (Linux x64/arm64, Windows x64) | ✓ (CI) |
@@ -189,6 +196,7 @@ What's shipped, what's next, what's deliberately out of scope. For the architect
 | Font subsetting (re-subset existing embedded fonts) | Content | `subsetter` crate is a dependency, used writer-side only. Needs new Rust module. Substantial Rust engineering. |
 | iOS / Android device testing | Infrastructure | Integration tests exist; untested on real devices in CI |
 | Cooperative cancellation via shared atomic flag | Infrastructure | Requires patching pdf_oxide Rust functions; future optimization |
+| Full streaming protocol: PdfEditor opens via cross-isolate streaming (Dart_ExitIsolate + pthread condvar) | ✓ |
 
 ---
 

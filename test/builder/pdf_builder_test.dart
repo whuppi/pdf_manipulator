@@ -1,6 +1,8 @@
 import 'package:test/test.dart';
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
+import '../helpers/memory_io.dart';
+
 void main() {
   late Pdf pdf;
 
@@ -17,11 +19,13 @@ void main() {
       final builder = await Pdf.build();
       final page = await builder.addA4Page();
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
+      final bytes = sink.takeBytes();
       expect(bytes.length, greaterThan(0));
-      final doc = await pdf.open(bytes);
+      final doc = await pdf.open(sourceOf(bytes));
       expect(doc.pageCount, 1);
     });
 
@@ -29,10 +33,12 @@ void main() {
       final builder = await Pdf.build();
       final page = await builder.addLetterPage();
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
-      final doc = await pdf.open(bytes);
+      final bytes = sink.takeBytes();
+      final doc = await pdf.open(sourceOf(bytes));
       expect(doc.pageCount, 1);
       // Letter is 612x792
       expect(doc.pages[0].width, closeTo(612, 1));
@@ -42,10 +48,12 @@ void main() {
       final builder = await Pdf.build();
       final page = await builder.addPage(width: 400, height: 600);
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
-      final doc = await pdf.open(bytes);
+      final bytes = sink.takeBytes();
+      final doc = await pdf.open(sourceOf(bytes));
       expect(doc.pages[0].width, closeTo(400, 1));
       expect(doc.pages[0].height, closeTo(600, 1));
     });
@@ -56,10 +64,12 @@ void main() {
         final page = await builder.addA4Page();
         await page.done();
       }
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
-      final doc = await pdf.open(bytes);
+      final bytes = sink.takeBytes();
+      final doc = await pdf.open(sourceOf(bytes));
       expect(doc.pageCount, 5);
     });
 
@@ -71,10 +81,12 @@ void main() {
       await builder.setKeywords('test, builder');
       final page = await builder.addA4Page();
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
-      final doc = await pdf.open(bytes);
+      final bytes = sink.takeBytes();
+      final doc = await pdf.open(sourceOf(bytes));
       expect(doc.title, 'Test Title');
       expect(doc.author, 'Test Author');
     });
@@ -86,10 +98,12 @@ void main() {
       await page.at(72, 750);
       await page.text('Hello, world!');
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
-      final text = await pdf.extractText(bytes);
+      final bytes = sink.takeBytes();
+      final text = await pdf.extractText(sourceOf(bytes));
       expect(text, contains('Hello, world!'));
     });
 
@@ -98,10 +112,12 @@ void main() {
       final page = await builder.addA4Page();
       await page.paragraph('This is a paragraph of text that should wrap.');
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
-      final text = await pdf.extractText(bytes);
+      final bytes = sink.takeBytes();
+      final text = await pdf.extractText(sourceOf(bytes));
       expect(text, contains('paragraph'));
     });
 
@@ -111,10 +127,12 @@ void main() {
       await page.heading(1, 'Chapter One');
       await page.paragraph('Content here.');
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
-      final text = await pdf.extractText(bytes);
+      final bytes = sink.takeBytes();
+      final text = await pdf.extractText(sourceOf(bytes));
       expect(text, contains('Chapter One'));
     });
 
@@ -123,11 +141,13 @@ void main() {
       final page = await builder.addA4Page();
       await page.watermark('DRAFT');
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
+      final bytes = sink.takeBytes();
       expect(bytes.length, greaterThan(0));
-      final info = await pdf.probe(bytes);
+      final info = await pdf.probe(sourceOf(bytes));
       expect(info.isValid, isTrue);
     });
 
@@ -136,15 +156,19 @@ void main() {
       final page1 = await builder1.addA4Page();
       await page1.paragraph('Secret content');
       await page1.done();
-      final plain = await builder1.save();
+      final plainSink = TestPdfSink();
+      await builder1.save(plainSink);
       builder1.dispose();
+      final plain = plainSink.takeBytes();
 
       final builder2 = await Pdf.build();
       final page2 = await builder2.addA4Page();
       await page2.paragraph('Secret content');
       await page2.done();
-      final encrypted = await builder2.saveEncrypted(ownerPassword: 'test123');
+      final encSink = TestPdfSink();
+      await builder2.saveEncrypted(encSink, ownerPassword: 'test123');
       builder2.dispose();
+      final encrypted = encSink.takeBytes();
 
       expect(encrypted.length, greaterThan(plain.length));
     });
@@ -159,10 +183,12 @@ void main() {
       await page.horizontalRule();
       await page.paragraph('After the rule');
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
-      final info = await pdf.probe(bytes);
+      final bytes = sink.takeBytes();
+      final info = await pdf.probe(sourceOf(bytes));
       expect(info.isValid, isTrue);
       expect(info.pageCount, 1);
     });
@@ -171,7 +197,8 @@ void main() {
       final builder = await Pdf.build();
       final page = await builder.addA4Page();
       await page.done();
-      await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
       builder.dispose();
     });

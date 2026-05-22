@@ -1,6 +1,7 @@
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
+import '../helpers/memory_io.dart';
 import '../helpers/pdf_fixtures.dart';
 
 void main() {
@@ -14,7 +15,7 @@ void main() {
       final pdf1 = Pdf();
       pdf1.dispose();
       final pdf2 = Pdf();
-      final doc = await pdf2.open(minimalPdf);
+      final doc = await pdf2.open(sourceOf(minimalPdf));
       expect(doc.pageCount, equals(1));
       pdf2.dispose();
     });
@@ -28,16 +29,18 @@ void main() {
     test('heavy usage then kill then new instance works', () async {
       final pdf = Pdf();
       // Use the worker
-      await pdf.merge([minimalPdf, minimalPdf]);
-      await pdf.rotatePages(minimalPdf, pages: {0: 90});
-      await pdf.extractText(minimalPdf);
+      final mergeSink = TestPdfSink();
+      await pdf.merge([sourceOf(minimalPdf), sourceOf(minimalPdf)], mergeSink);
+      final rotSink = TestPdfSink();
+      await pdf.rotatePages(sourceOf(minimalPdf), rotSink, pages: {0: 90});
+      await pdf.extractText(sourceOf(minimalPdf));
 
       // Kill it
       pdf.dispose();
 
       // New instance should work
       final pdf2 = Pdf();
-      final doc = await pdf2.open(minimalPdf);
+      final doc = await pdf2.open(sourceOf(minimalPdf));
       expect(doc.pageCount, equals(1));
       pdf2.dispose();
     });

@@ -1,6 +1,8 @@
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/core/pdf_rect.dart';
+import 'package:pdf_manipulator/src/core/pdf_sink.dart';
+import 'package:pdf_manipulator/src/core/pdf_source.dart';
 import 'package:pdf_manipulator/src/platform/pdf_platform.dart';
 
 /// Batch PDF editor — parse once, mutate many times, save once.
@@ -8,10 +10,10 @@ import 'package:pdf_manipulator/src/platform/pdf_platform.dart';
 /// Created via [Pdf.edit]:
 ///
 /// ```dart
-/// final editor = await Pdf.edit(bytes);
+/// final editor = await Pdf.edit(source);
 /// await editor.setTitle('Updated');
 /// await editor.rotatePage(0, degrees: 90);
-/// final result = await editor.save();
+/// await editor.save(outputSink);
 /// editor.dispose();
 /// ```
 class PdfEditor {
@@ -58,10 +60,10 @@ class PdfEditor {
   Future<void> movePage({required int from, required int to}) {
     _check(); return _handle.movePage(from: from, to: to);
   }
-  Future<Uint8List> extractPages(List<int> pages) {
-    _check(); return _handle.extractPages(pages);
+  Future<void> extractPages(List<int> pages, PdfSink output) {
+    _check(); return _handle.extractPages(pages, output);
   }
-  Future<void> mergeFrom(Uint8List otherPdf) { _check(); return _handle.mergeFrom(otherPdf); }
+  Future<void> mergeFrom(PdfSource otherPdf) { _check(); return _handle.mergeFrom(otherPdf); }
 
   // ── Optimization ───────────────────────────────────────────────
 
@@ -148,23 +150,23 @@ class PdfEditor {
 
   // ── Save ───────────────────────────────────────────────────────
 
-  Future<Uint8List> save() { _check(); return _handle.save(); }
+  Future<void> save(PdfSink output) { _check(); return _handle.save(output); }
 
-  Future<Uint8List> saveWithOptions({bool compress = true,
+  Future<void> saveWithOptions(PdfSink output, {bool compress = true,
       bool garbageCollect = true, bool linearize = false}) {
     _check();
-    return _handle.saveWithOptions(compress: compress,
+    return _handle.saveWithOptions(output, compress: compress,
         garbageCollect: garbageCollect, linearize: linearize);
   }
 
-  Future<Uint8List> saveEncrypted({required String ownerPassword,
+  Future<void> saveEncrypted(PdfSink output, {required String ownerPassword,
       String userPassword = ''}) {
     _check();
-    return _handle.saveEncrypted(ownerPassword: ownerPassword,
+    return _handle.saveEncrypted(output, ownerPassword: ownerPassword,
         userPassword: userPassword);
   }
 
-  Future<Uint8List> saveEncryptedFull({
+  Future<void> saveEncryptedFull(PdfSink output, {
       required String ownerPassword, String userPassword = '',
       int algorithm = 3,
       bool allowPrint = true, bool allowPrintHq = true,
@@ -173,7 +175,7 @@ class PdfEditor {
       bool allowAccessibility = true, bool allowAssemble = true,
   }) {
     _check();
-    return _handle.saveEncryptedFull(
+    return _handle.saveEncryptedFull(output,
         ownerPassword: ownerPassword, userPassword: userPassword,
         algorithm: algorithm,
         allowPrint: allowPrint, allowPrintHq: allowPrintHq,
@@ -184,7 +186,6 @@ class PdfEditor {
 
   // ── Lifecycle ──────────────────────────────────────────────────
 
-  /// Dispose this editor. Releases the worker and all resources.
   void dispose() {
     if (_disposed) return;
     _disposed = true;

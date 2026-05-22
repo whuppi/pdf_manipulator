@@ -7,9 +7,13 @@ import 'package:pdf_manipulator/src/core/pdf_image.dart';
 import 'package:pdf_manipulator/src/core/pdf_info.dart';
 import 'package:pdf_manipulator/src/core/pdf_rect.dart';
 import 'package:pdf_manipulator/src/core/pdf_signature.dart';
+import 'package:pdf_manipulator/src/core/pdf_sink.dart';
+import 'package:pdf_manipulator/src/core/pdf_source.dart';
 import 'package:pdf_manipulator/src/core/search_result.dart';
 import 'package:pdf_manipulator/src/document/pdf_doc.dart';
 import 'package:pdf_manipulator/src/ffi/bindings.dart';
+import 'package:pdf_manipulator/src/ffi/streaming_sink.dart';
+import 'package:pdf_manipulator/src/ffi/streaming_source.dart';
 import 'package:pdf_manipulator/src/page/pdf_page_info.dart';
 import 'package:pdf_manipulator/src/platform/_msg.dart';
 import 'package:pdf_manipulator/src/platform/_op.dart';
@@ -32,9 +36,11 @@ class NativePdfPlatform implements PdfPlatform {
   SendPort? _workerPort;
   Isolate? _workerIsolate;
   final _pending = <int, Completer<Object?>>{};
+  final _pendingStreams = <int, StreamController<Object?>>{};
   int _nextId = 0;
   ReceivePort? _responsePort;
   static int _nextHandleId = 0;
+  final _sourceServers = <int, SourceServer>{};
 
   Future<void> _ensureWorker() async {
     if (_workerPort != null) return;
@@ -51,11 +57,35 @@ class NativePdfPlatform implements PdfPlatform {
     _responsePort!.listen((message) {
       if (message is WorkerResult) {
         final completer = _pending.remove(message.id);
-        if (completer == null) return;
-        if (message.error != null) {
-          completer.completeError(message.error!);
+        if (completer != null) {
+          if (message.error != null) {
+            completer.completeError(message.error!);
+          } else {
+            completer.complete(message.value);
+          }
         } else {
-          completer.complete(message.value);
+          // Streaming ops use _pendingStreams — errors from the catch
+          // block arrive as WorkerResult, not WorkerStreamItem.
+          final controller = _pendingStreams.remove(message.id);
+          if (controller != null) {
+            if (message.error != null) {
+              controller.addError(message.error!);
+            }
+            controller.close();
+          }
+        }
+      } else if (message is WorkerStreamItem) {
+        final controller = _pendingStreams[message.id];
+        if (controller == null) return;
+        if (message.error != null) {
+          controller.addError(message.error!);
+          _pendingStreams.remove(message.id);
+          controller.close();
+        } else if (message.done) {
+          _pendingStreams.remove(message.id);
+          controller.close();
+        } else {
+          controller.add(message.value);
         }
       }
     });
@@ -74,289 +104,298 @@ class NativePdfPlatform implements PdfPlatform {
 
   int _id() => _nextId++;
 
+  /// Send an op with a PdfSource as primary input using the streaming
+  /// protocol (cross-isolate reads, no full-buffer transfer).
+  /// Send a streaming op with a PdfSource. Returns a Stream that yields
+  /// items one at a time as the worker produces them.
+  Stream<T> _sendStreamWithSource<T>(Op op, PdfSource source,
+      {Map<String, Object?> args = const {}}) async* {
+    await _ensureWorker();
+    final id = _id();
+    final server = SourceServer(source);
+    final serverPort = server.start();
+    final controller = StreamController<Object?>();
+    _pendingStreams[id] = controller;
+    _workerPort!.send(WorkerMsg(
+      id: id,
+      op: op,
+      sourcePort: serverPort,
+      args: args,
+    ));
+    try {
+      await for (final item in controller.stream) {
+        yield item as T;
+      }
+    } finally {
+      server.stop();
+    }
+  }
+
+  /// Send an op with a streaming source, and optionally a streaming sink.
+  Future<Object?> _sendWithSource(Op op, PdfSource source,
+      {PdfSink? sink, Map<String, Object?> args = const {}}) async {
+    final srcServer = SourceServer(source);
+    final srcPort = srcServer.start();
+    SinkServer? snkServer;
+    SendPort? snkPort;
+    if (sink != null) {
+      snkServer = SinkServer(sink);
+      snkPort = snkServer.start();
+    }
+    try {
+      return await _send(WorkerMsg(
+        id: _id(), op: op, sourcePort: srcPort, sinkPort: snkPort, args: args,
+      ));
+    } finally {
+      srcServer.stop();
+      snkServer?.stop();
+    }
+  }
+
   // ── Inspect ──
 
   @override
-  Future<PdfDoc> open(Uint8List bytes, {String? password}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.open,
-      bytes: transfer(bytes),
+  Future<PdfDoc> open(PdfSource source, {String? password}) async {
+    final result = await _sendWithSource(Op.open, source,
       args: {'password': password},
-    ));
+    );
     return result as PdfDoc;
   }
 
   @override
-  Future<PdfInfo> probe(Uint8List bytes) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.probe,
-      bytes: transfer(bytes),
-    ));
+  Future<PdfInfo> probe(PdfSource source) async {
+    final result = await _sendWithSource(Op.probe, source);
     return result as PdfInfo;
   }
 
   // ── Structural ──
 
   @override
-  Future<Uint8List> merge(List<Uint8List> inputs) async {
+  Future<void> merge(List<PdfSource> inputs, PdfSink output) async {
     if (inputs.length < 2) throw ArgumentError('merge requires at least 2 PDFs');
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.merge,
-      bytesList: transferList(inputs),
-    ));
-    return materialize(result as TransferableTypedData);
+    final srcServer = SourceServer(inputs[0]);
+    final srcPort = srcServer.start();
+    final snkServer = SinkServer(output);
+    final snkPort = snkServer.start();
+    final remaining = <Uint8List>[];
+    for (var i = 1; i < inputs.length; i++) {
+      remaining.add(await inputs[i].readAt(0, inputs[i].length));
+    }
+    try {
+      await _send(WorkerMsg(
+        id: _id(),
+        op: Op.merge,
+        sourcePort: srcPort,
+        sinkPort: snkPort,
+        bytesList: transferList(remaining),
+      ));
+    } finally {
+      srcServer.stop();
+      snkServer.stop();
+    }
   }
 
   @override
-  Future<List<Uint8List>> split(Uint8List bytes, {required int every}) async {
+  Future<void> split(PdfSource source, PdfSink Function(int index) sinkFactory,
+      {required int every}) async {
     if (every < 1) throw ArgumentError('every must be >= 1');
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.split,
-      bytes: transfer(bytes),
+    final result = await _sendWithSource(Op.split, source,
       args: {'every': every},
-    ));
-    return materializeList(result as List<TransferableTypedData>);
+    );
+    final chunks = materializeList(result as List<TransferableTypedData>);
+    for (var i = 0; i < chunks.length; i++) {
+      final sink = sinkFactory(i);
+      await sink.write(chunks[i]);
+    }
   }
 
   @override
-  Future<List<Uint8List>> splitBySize(Uint8List bytes,
+  Future<int> splitBySize(
+      PdfSource source, PdfSink Function(int index) sinkFactory,
       {required int maxBytes}) async {
     if (maxBytes < 1) throw ArgumentError('maxBytes must be >= 1');
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.splitBySize,
-      bytes: transfer(bytes),
+    final result = await _sendWithSource(Op.splitBySize, source,
       args: {'maxBytes': maxBytes},
-    ));
-    return materializeList(result as List<TransferableTypedData>);
+    );
+    final chunks = materializeList(result as List<TransferableTypedData>);
+    for (var i = 0; i < chunks.length; i++) {
+      final sink = sinkFactory(i);
+      await sink.write(chunks[i]);
+    }
+    return chunks.length;
   }
 
   @override
-  Future<Uint8List> extractPages(Uint8List bytes,
+  Future<void> extractPages(PdfSource source, PdfSink output,
       {required List<int> pages}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.extractPages,
-      bytes: transfer(bytes),
+    await _sendWithSource(Op.extractPages, source, sink: output,
       args: {'pages': pages},
-    ));
-    return materialize(result as TransferableTypedData);
+    );
   }
 
   @override
-  Future<Uint8List> deletePages(Uint8List bytes,
+  Future<void> deletePages(PdfSource source, PdfSink output,
       {required List<int> pages}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.deletePages,
-      bytes: transfer(bytes),
+    await _sendWithSource(Op.deletePages, source, sink: output,
       args: {'pages': pages},
-    ));
-    return materialize(result as TransferableTypedData);
+    );
   }
 
   @override
-  Future<Uint8List> reorderPages(Uint8List bytes,
+  Future<void> reorderPages(PdfSource source, PdfSink output,
       {required List<int> order}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.reorderPages,
-      bytes: transfer(bytes),
+    await _sendWithSource(Op.reorderPages, source, sink: output,
       args: {'order': order},
-    ));
-    return materialize(result as TransferableTypedData);
+    );
   }
 
   @override
-  Future<Uint8List> movePage(Uint8List bytes,
+  Future<void> movePage(PdfSource source, PdfSink output,
       {required int from, required int to}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.movePage,
-      bytes: transfer(bytes),
+    await _sendWithSource(Op.movePage, source, sink: output,
       args: {'from': from, 'to': to},
-    ));
-    return materialize(result as TransferableTypedData);
+    );
   }
 
   @override
-  Future<Uint8List> rotatePages(Uint8List bytes,
+  Future<void> rotatePages(PdfSource source, PdfSink output,
       {required Map<int, int> pages}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.rotatePages,
-      bytes: transfer(bytes),
+    await _sendWithSource(Op.rotatePages, source, sink: output,
       args: {'pages': pages},
-    ));
-    return materialize(result as TransferableTypedData);
+    );
   }
 
   @override
-  Future<Uint8List> rotateAllPages(Uint8List bytes,
+  Future<void> rotateAllPages(PdfSource source, PdfSink output,
       {required int degrees}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.rotateAllPages,
-      bytes: transfer(bytes),
+    await _sendWithSource(Op.rotateAllPages, source, sink: output,
       args: {'degrees': degrees},
-    ));
-    return materialize(result as TransferableTypedData);
+    );
   }
 
   // ── Content ──
 
   @override
-  Future<Uint8List> flattenForms(Uint8List bytes) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.flattenForms,
-      bytes: transfer(bytes),
-    ));
-    return materialize(result as TransferableTypedData);
+  Future<void> flattenForms(PdfSource source, PdfSink output) async {
+    await _sendWithSource(Op.flattenForms, source, sink: output);
   }
 
   @override
-  Future<Uint8List> applyRedactions(Uint8List bytes) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.applyRedactions,
-      bytes: transfer(bytes),
-    ));
-    return materialize(result as TransferableTypedData);
+  Future<void> applyRedactions(PdfSource source, PdfSink output) async {
+    await _sendWithSource(Op.applyRedactions, source, sink: output);
   }
 
   @override
-  Future<Uint8List> embedFile(Uint8List bytes,
+  Future<void> embedFile(PdfSource source, PdfSink output,
       {required String name, required Uint8List fileData}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.embedFile,
-      bytes: transfer(bytes),
-      bytesList: [transfer(fileData)],
-      args: {'name': name},
-    ));
-    return materialize(result as TransferableTypedData);
+    final srcServer = SourceServer(source);
+    final srcPort = srcServer.start();
+    final snkServer = SinkServer(output);
+    final snkPort = snkServer.start();
+    try {
+      await _send(WorkerMsg(
+        id: _id(),
+        op: Op.embedFile,
+        sourcePort: srcPort,
+        sinkPort: snkPort,
+        bytesList: [transfer(fileData)],
+        args: {'name': name},
+      ));
+    } finally {
+      srcServer.stop();
+      snkServer.stop();
+    }
   }
 
   @override
-  Future<Uint8List> eraseRegions(Uint8List bytes,
+  Future<void> eraseRegions(PdfSource source, PdfSink output,
       {required int page, required List<PdfRect> regions}) async {
     // Flatten rects into [x0,y0,w0,h0, x1,y1,w1,h1, ...]
     final flat = <double>[];
     for (final r in regions) {
       flat.addAll([r.x, r.y, r.width, r.height]);
     }
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.eraseRegions,
-      bytes: transfer(bytes),
+    await _sendWithSource(Op.eraseRegions, source, sink: output,
       args: {'page': page, 'rects': flat},
-    ));
-    return materialize(result as TransferableTypedData);
+    );
   }
 
   @override
-  Future<Uint8List> compress(Uint8List bytes,
+  Future<void> compress(PdfSource source, PdfSink output,
       {int imageQuality = 75,
       bool garbageCollect = true,
       bool linearize = false}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.compress,
-      bytes: transfer(bytes),
+    await _sendWithSource(Op.compress, source, sink: output,
       args: {
         'imageQuality': imageQuality,
         'garbageCollect': garbageCollect,
         'linearize': linearize,
       },
-    ));
-    return materialize(result as TransferableTypedData);
+    );
   }
 
   // ── Extraction ──
 
   @override
-  Future<String> extractText(Uint8List bytes,
+  Future<String> extractText(PdfSource source,
       {int? page, String? password}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.extractText,
-      bytes: transfer(bytes),
+    final result = await _sendWithSource(Op.extractText, source,
       args: {'page': page, 'password': password},
-    ));
+    );
     return result as String;
   }
 
   @override
-  Future<String> toMarkdown(Uint8List bytes,
+  Future<String> toMarkdown(PdfSource source,
       {int? page, String? password}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.toMarkdown,
-      bytes: transfer(bytes),
+    final result = await _sendWithSource(Op.toMarkdown, source,
       args: {'page': page, 'password': password},
-    ));
+    );
     return result as String;
   }
 
   @override
-  Future<String> toHtml(Uint8List bytes,
+  Future<String> toHtml(PdfSource source,
       {required int page, String? password}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.toHtml,
-      bytes: transfer(bytes),
+    final result = await _sendWithSource(Op.toHtml, source,
       args: {'page': page, 'password': password},
-    ));
+    );
     return result as String;
   }
 
   @override
-  Future<String> toPlainText(Uint8List bytes,
+  Future<String> toPlainText(PdfSource source,
       {required int page, String? password}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.toPlainText,
-      bytes: transfer(bytes),
+    final result = await _sendWithSource(Op.toPlainText, source,
       args: {'page': page, 'password': password},
-    ));
+    );
     return result as String;
   }
 
   // ── Search ──
 
   @override
-  Future<List<SearchResult>> searchPage(Uint8List bytes,
+  Future<List<SearchResult>> searchPage(PdfSource source,
       {required int page, required String query, String? password}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.searchPage,
-      bytes: transfer(bytes),
+    final result = await _sendWithSource(Op.searchPage, source,
       args: {'page': page, 'query': query, 'password': password},
-    ));
+    );
     return result as List<SearchResult>;
   }
 
   @override
-  Future<List<SearchResult>> searchAll(Uint8List bytes,
+  Future<List<SearchResult>> searchAll(PdfSource source,
       {required String query, String? password}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.searchAll,
-      bytes: transfer(bytes),
+    final result = await _sendWithSource(Op.searchAll, source,
       args: {'query': query, 'password': password},
-    ));
+    );
     return result as List<SearchResult>;
   }
 
   // ── Security ──
 
   @override
-  Future<Uint8List> watermark(Uint8List bytes,
+  Future<void> watermark(PdfSource source, PdfSink output,
       {required String text,
       List<int>? pages,
       double opacity = 0.3,
@@ -365,21 +404,17 @@ class NativePdfPlatform implements PdfPlatform {
       double r = 0.5,
       double g = 0.5,
       double b = 0.5}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.watermark,
-      bytes: transfer(bytes),
+    await _sendWithSource(Op.watermark, source, sink: output,
       args: {
         'text': text, 'pages': pages,
         'opacity': opacity, 'fontSize': fontSize, 'rotation': rotation,
         'r': r, 'g': g, 'b': b,
       },
-    ));
-    return materialize(result as TransferableTypedData);
+    );
   }
 
   @override
-  Future<Uint8List> watermarkPositioned(Uint8List bytes, {
+  Future<void> watermarkPositioned(PdfSource source, PdfSink output, {
     required String text,
     required double x, required double y,
     required double width, required double height,
@@ -391,10 +426,7 @@ class NativePdfPlatform implements PdfPlatform {
     double fixedPrintH = 0.0,
     double fixedPrintV = 0.0,
   }) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.watermarkPositioned,
-      bytes: transfer(bytes),
+    await _sendWithSource(Op.watermarkPositioned, source, sink: output,
       args: {
         'text': text, 'fontName': fontName, 'pages': pages,
         'x': x, 'y': y, 'width': width, 'height': height,
@@ -402,24 +434,19 @@ class NativePdfPlatform implements PdfPlatform {
         'r': r, 'g': g, 'b': b,
         'fixedPrint': fixedPrint, 'fixedPrintH': fixedPrintH, 'fixedPrintV': fixedPrintV,
       },
-    ));
-    return materialize(result as TransferableTypedData);
+    );
   }
 
   @override
-  Future<Uint8List> encrypt(Uint8List bytes,
+  Future<void> encrypt(PdfSource source, PdfSink output,
       {required String ownerPassword, String userPassword = ''}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.encrypt,
-      bytes: transfer(bytes),
+    await _sendWithSource(Op.encrypt, source, sink: output,
       args: {'ownerPassword': ownerPassword, 'userPassword': userPassword},
-    ));
-    return materialize(result as TransferableTypedData);
+    );
   }
 
   @override
-  Future<Uint8List> encryptFull(Uint8List bytes, {
+  Future<void> encryptFull(PdfSource source, PdfSink output, {
     required String ownerPassword,
     String userPassword = '',
     int algorithm = 3,
@@ -432,10 +459,7 @@ class NativePdfPlatform implements PdfPlatform {
     bool allowAccessibility = true,
     bool allowAssemble = true,
   }) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.encryptFull,
-      bytes: transfer(bytes),
+    await _sendWithSource(Op.encryptFull, source, sink: output,
       args: {
         'ownerPassword': ownerPassword, 'userPassword': userPassword,
         'algorithm': algorithm,
@@ -444,166 +468,140 @@ class NativePdfPlatform implements PdfPlatform {
         'allowAnnotate': allowAnnotate, 'allowFillForms': allowFillForms,
         'allowAccessibility': allowAccessibility, 'allowAssemble': allowAssemble,
       },
-    ));
-    return materialize(result as TransferableTypedData);
+    );
   }
 
   @override
-  Future<Uint8List> decrypt(Uint8List bytes,
+  Future<void> decrypt(PdfSource source, PdfSink output,
       {required String password}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.decrypt,
-      bytes: transfer(bytes),
+    await _sendWithSource(Op.decrypt, source, sink: output,
       args: {'password': password},
-    ));
-    return materialize(result as TransferableTypedData);
+    );
   }
 
   @override
-  Future<Uint8List> sign(Uint8List bytes,
+  Future<void> sign(PdfSource source, PdfSink output,
       {required Uint8List certificate,
       required String certificatePassword,
       String? reason,
       String? location}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.sign,
-      bytes: transfer(bytes),
-      bytesList: [transfer(certificate)],
-      args: {
-        'certificatePassword': certificatePassword,
-        'reason': reason, 'location': location,
-      },
-    ));
-    return materialize(result as TransferableTypedData);
+    final srcServer = SourceServer(source);
+    final srcPort = srcServer.start();
+    final snkServer = SinkServer(output);
+    final snkPort = snkServer.start();
+    try {
+      await _send(WorkerMsg(
+        id: _id(),
+        op: Op.sign,
+        sourcePort: srcPort,
+        sinkPort: snkPort,
+        bytesList: [transfer(certificate)],
+        args: {
+          'certificatePassword': certificatePassword,
+          'reason': reason, 'location': location,
+        },
+      ));
+    } finally {
+      srcServer.stop();
+      snkServer.stop();
+    }
   }
 
   // ── Creation ──
 
   @override
-  Future<Uint8List> imagesToPdf(List<Uint8List> images) async {
+  Future<void> imagesToPdf(List<Uint8List> images, PdfSink output) async {
     if (images.isEmpty) throw ArgumentError('images must not be empty');
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.imagesToPdf,
-      bytesList: transferList(images),
-    ));
-    return materialize(result as TransferableTypedData);
+    final server = SinkServer(output);
+    final sinkPort = server.start();
+    try {
+      await _send(WorkerMsg(
+        id: _id(),
+        op: Op.imagesToPdf,
+        sinkPort: sinkPort,
+        bytesList: transferList(images),
+      ));
+    } finally {
+      server.stop();
+    }
   }
 
   // ── Rendering ──
 
   @override
-  Future<RenderedPage> renderPage(Uint8List bytes, int pageIndex,
+  Future<RenderedPage> renderPage(PdfSource source, int pageIndex,
       {String? password}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.renderPage,
-      bytes: transfer(bytes),
+    final result = await _sendWithSource(Op.renderPage, source,
       args: {'pageIndex': pageIndex, 'password': password},
-    ));
+    );
     return result as RenderedPage;
   }
 
   @override
-  Future<RenderedPage> renderPageFit(Uint8List bytes, int pageIndex,
+  Future<RenderedPage> renderPageFit(PdfSource source, int pageIndex,
       {required int width, required int height, String? password}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.renderPageFit,
-      bytes: transfer(bytes),
+    final result = await _sendWithSource(Op.renderPageFit, source,
       args: {
         'pageIndex': pageIndex, 'width': width, 'height': height,
         'password': password,
       },
-    ));
+    );
     return result as RenderedPage;
   }
 
   @override
-  Future<RenderedPage> renderPageThumbnail(Uint8List bytes, int pageIndex,
+  Future<RenderedPage> renderPageThumbnail(PdfSource source, int pageIndex,
       {required int size, String? password}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.renderPageThumbnail,
-      bytes: transfer(bytes),
+    final result = await _sendWithSource(Op.renderPageThumbnail, source,
       args: {'pageIndex': pageIndex, 'size': size, 'password': password},
-    ));
+    );
     return result as RenderedPage;
   }
 
   @override
-  Future<List<RenderedPage>> renderAllPages(Uint8List bytes,
-      {required int width, required int height, String? password}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.renderAllPages,
-      bytes: transfer(bytes),
-      args: {'width': width, 'height': height, 'password': password},
-    ));
-    return result as List<RenderedPage>;
-  }
+  Stream<RenderedPage> renderAllPages(PdfSource source,
+      {required int width, required int height, String? password}) =>
+    _sendStreamWithSource<RenderedPage>(Op.renderAllPages, source,
+      args: {'width': width, 'height': height, 'password': password});
 
   // ── Image extraction ──
 
   @override
-  Future<List<PdfImage>> extractImages(Uint8List bytes, int pageIndex,
-      {String? password}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.extractImages,
-      bytes: transfer(bytes),
-      args: {'pageIndex': pageIndex, 'password': password},
-    ));
-    return result as List<PdfImage>;
-  }
+  Stream<PdfImage> extractImages(PdfSource source, int pageIndex,
+      {String? password}) =>
+    _sendStreamWithSource<PdfImage>(Op.extractImages, source,
+      args: {'pageIndex': pageIndex, 'password': password});
 
   @override
-  Future<List<PdfImage>> extractAllImages(Uint8List bytes,
-      {String? password}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.extractAllImages,
-      bytes: transfer(bytes),
-      args: {'password': password},
-    ));
-    return result as List<PdfImage>;
-  }
+  Stream<PdfImage> extractAllImages(PdfSource source,
+      {String? password}) =>
+    _sendStreamWithSource<PdfImage>(Op.extractAllImages, source,
+      args: {'password': password});
 
   // ── Signatures ──
 
   @override
-  Future<int> getSignatureCount(Uint8List bytes, {String? password}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.getSignatureCount,
-      bytes: transfer(bytes),
+  Future<int> getSignatureCount(PdfSource source, {String? password}) async {
+    final result = await _sendWithSource(Op.getSignatureCount, source,
       args: {'password': password},
-    ));
+    );
     return result as int;
   }
 
   @override
-  Future<List<PdfSignatureInfo>> getSignatures(Uint8List bytes,
+  Future<List<PdfSignatureInfo>> getSignatures(PdfSource source,
       {String? password}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.getSignatures,
-      bytes: transfer(bytes),
+    final result = await _sendWithSource(Op.getSignatures, source,
       args: {'password': password},
-    ));
+    );
     return result as List<PdfSignatureInfo>;
   }
 
   @override
-  Future<bool> verifySignatures(Uint8List bytes, {String? password}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.verifySignatures,
-      bytes: transfer(bytes),
+  Future<bool> verifySignatures(PdfSource source, {String? password}) async {
+    final result = await _sendWithSource(Op.verifySignatures, source,
       args: {'password': password},
-    ));
+    );
     return result as bool;
   }
 
@@ -611,27 +609,21 @@ class NativePdfPlatform implements PdfPlatform {
 
   @override
   Future<({bool compliant, int errors, int warnings})> validatePdfA(
-      Uint8List bytes,
+      PdfSource source,
       {int level = 2,
       String? password}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.validatePdfA,
-      bytes: transfer(bytes),
+    final result = await _sendWithSource(Op.validatePdfA, source,
       args: {'level': level, 'password': password},
-    ));
+    );
     return result as ({bool compliant, int errors, int warnings});
   }
 
   @override
-  Future<bool> validatePdfUa(Uint8List bytes,
+  Future<bool> validatePdfUa(PdfSource source,
       {int level = 1, String? password}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.validatePdfUa,
-      bytes: transfer(bytes),
+    final result = await _sendWithSource(Op.validatePdfUa, source,
       args: {'level': level, 'password': password},
-    ));
+    );
     return result as bool;
   }
 
@@ -640,37 +632,34 @@ class NativePdfPlatform implements PdfPlatform {
   @override
   Future<({bool print, bool printHq, bool modify, bool copy, bool annotate,
       bool fillForms, bool accessibility, bool assemble})>
-    getPermissions(Uint8List bytes, {String? password}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.getPermissions,
-      bytes: transfer(bytes),
+    getPermissions(PdfSource source, {String? password}) async {
+    final result = await _sendWithSource(Op.getPermissions, source,
       args: {'password': password},
-    ));
+    );
     return result as ({bool print, bool printHq, bool modify, bool copy,
         bool annotate, bool fillForms, bool accessibility, bool assemble});
   }
 
   @override
-  Future<int> getEncryptionAlgorithm(Uint8List bytes, {String? password}) async {
-    final result = await _send(WorkerMsg(
-      id: _id(),
-      op: Op.getEncryptionAlgorithm,
-      bytes: transfer(bytes),
+  Future<int> getEncryptionAlgorithm(PdfSource source, {String? password}) async {
+    final result = await _sendWithSource(Op.getEncryptionAlgorithm, source,
       args: {'password': password},
-    ));
+    );
     return result as int;
   }
 
   // ── Editor ──
 
   @override
-  Future<PdfEditorHandle> openEditor(Uint8List bytes) async {
+  Future<PdfEditorHandle> openEditor(PdfSource source) async {
     final handleId = _nextHandleId++;
+    final server = SourceServer(source);
+    final serverPort = server.start();
+    _sourceServers[handleId] = server;
     await _send(WorkerMsg(
       id: _id(),
       op: Op.editorOpen,
-      bytes: transfer(bytes),
+      sourcePort: serverPort,
       args: {'handleId': handleId},
     ));
     return _NativeEditorHandle(this, handleId);
@@ -722,7 +711,7 @@ class NativePdfPlatform implements PdfPlatform {
     final bindings = const PdfBindings();
     final handles = <int, ffi.Pointer<ffi.Void>>{};
 
-    workerPort.listen((message) {
+    workerPort.listen((message) async {
       if (message is SendPort) {
         responsePort = message;
         return;
@@ -732,12 +721,24 @@ class NativePdfPlatform implements PdfPlatform {
       final msg = message;
 
       try {
-        final result = _dispatch(bindings, handles, msg);
-        responsePort?.send(WorkerResult(id: msg.id, value: result));
+        final result = await _dispatch(bindings, handles, msg, responsePort);
+        if (!identical(result, _streamSentinel)) {
+          responsePort?.send(WorkerResult(id: msg.id, value: result));
+        }
       } catch (e) {
         responsePort?.send(WorkerResult(id: msg.id, error: e));
       }
     });
+  }
+
+  static final _streamSentinel = Object();
+
+  /// Save an editor handle — streams via callback writer if sinkPort is
+  /// available, otherwise returns bytes as TransferableTypedData.
+  static Future<Object?> _saveEditor(PdfBindings b, ffi.Pointer<ffi.Void> handle, WorkerMsg msg) async {
+    final bytes = b.editorSave(handle);
+    await writeBytesToSink(msg.sinkPort!, bytes);
+    return null;
   }
 
   static ffi.Pointer<ffi.Void> _h(Map<int, ffi.Pointer<ffi.Void>> handles, int? id) {
@@ -746,16 +747,38 @@ class NativePdfPlatform implements PdfPlatform {
     return h;
   }
 
-  static Object? _dispatch(
+  /// Open an editor from a WorkerMsg. Reads bytes from the streaming
+  /// source, uses standard editorOpen (sets source_bytes for convertToPdfA).
+  static Future<(ffi.Pointer<ffi.Void>, void Function())> _openEditorFromMsg(
+      PdfBindings b, WorkerMsg msg) async {
+    final bytes = await _resolveBytes(msg);
+    return (b.editorOpen(bytes), () {});
+  }
+
+  /// Resolve the primary PDF bytes from either a streaming source or a
+  /// transferred buffer. For ops that need the full bytes (doc-based reads,
+  /// non-editor operations), this reads from the SourceServer on main.
+  static Future<Uint8List> _resolveBytes(WorkerMsg msg) async {
+    final replyPort = ReceivePort();
+    msg.sourcePort!.send(['length', replyPort.sendPort]);
+    final length = await replyPort.first as int;
+    final dataPort = ReceivePort();
+    msg.sourcePort!.send(['read', 0, length, dataPort.sendPort]);
+    final td = await dataPort.first as TransferableTypedData;
+    return td.materialize().asUint8List();
+  }
+
+  static Future<Object?> _dispatch(
     PdfBindings b,
     Map<int, ffi.Pointer<ffi.Void>> handles,
     WorkerMsg msg,
-  ) {
+    SendPort? responsePort,
+  ) async {
     switch (msg.op) {
       // ── Inspect ──
 
       case Op.open:
-        final bytes = materialize(msg.bytes!);
+        final bytes = await _resolveBytes(msg);
         final password = msg.args['password'] as String?;
         final handle = b.docOpenFromBytes(bytes, password: password);
         try {
@@ -801,7 +824,7 @@ class NativePdfPlatform implements PdfPlatform {
         }
 
       case Op.probe:
-        final bytes = materialize(msg.bytes!);
+        final bytes = await _resolveBytes(msg);
         try {
           final handle = b.docOpenFromBytes(bytes);
           try {
@@ -824,21 +847,21 @@ class NativePdfPlatform implements PdfPlatform {
       // ── Structural ──
 
       case Op.merge:
-        final inputs = materializeList(msg.bytesList!);
-        final handle = b.editorOpen(inputs[0]);
+        final remaining = materializeList(msg.bytesList!);
+        final (handle, dispose) = await _openEditorFromMsg(b, msg);
         try {
-          for (var i = 1; i < inputs.length; i++) {
-            b.editorMerge(handle, inputs[i]);
+          for (final other in remaining) {
+            b.editorMerge(handle, other);
           }
-          return transfer(b.editorSave(handle));
+          return _saveEditor(b, handle, msg);
         } finally {
           b.editorFree(handle);
+          dispose();
         }
 
       case Op.split:
-        final bytes = materialize(msg.bytes!);
         final every = msg.args['every'] as int;
-        final handle = b.editorOpen(bytes);
+        final (handle, dispose) = await _openEditorFromMsg(b, msg);
         try {
           final pageCount = b.editorPageCount(handle);
           final results = <TransferableTypedData>[];
@@ -850,12 +873,12 @@ class NativePdfPlatform implements PdfPlatform {
           return results;
         } finally {
           b.editorFree(handle);
+          dispose();
         }
 
       case Op.splitBySize:
-        final bytes = materialize(msg.bytes!);
         final maxBytes = msg.args['maxBytes'] as int;
-        final handle = b.editorOpen(bytes);
+        final (handle, dispose) = await _openEditorFromMsg(b, msg);
         try {
           final pageCount = b.editorPageCount(handle);
           final results = <TransferableTypedData>[];
@@ -877,115 +900,119 @@ class NativePdfPlatform implements PdfPlatform {
           return results;
         } finally {
           b.editorFree(handle);
+          dispose();
         }
 
       case Op.extractPages:
-        final bytes = materialize(msg.bytes!);
         final pages = (msg.args['pages'] as List).cast<int>();
-        final handle = b.editorOpen(bytes);
+        final (handle, dispose) = await _openEditorFromMsg(b, msg);
         try {
-          return transfer(b.editorExtractPages(handle, pages));
+          final extracted = b.editorExtractPages(handle, pages);
+          await writeBytesToSink(msg.sinkPort!, extracted);
+          return null;
         } finally {
           b.editorFree(handle);
+          dispose();
         }
 
       case Op.deletePages:
-        final bytes = materialize(msg.bytes!);
         final pages = (msg.args['pages'] as List).cast<int>();
-        final handle = b.editorOpen(bytes);
+        final (handle, dispose) = await _openEditorFromMsg(b, msg);
         try {
           final sorted = List<int>.from(pages)
             ..sort((a, c) => c.compareTo(a));
           for (final page in sorted) {
             b.editorDeletePage(handle, page);
           }
-          return transfer(b.editorSave(handle));
+          return _saveEditor(b, handle, msg);
         } finally {
           b.editorFree(handle);
+          dispose();
         }
 
       case Op.reorderPages:
-        final bytes = materialize(msg.bytes!);
         final order = (msg.args['order'] as List).cast<int>();
-        final handle = b.editorOpen(bytes);
+        final (handle, dispose) = await _openEditorFromMsg(b, msg);
         try {
-          return transfer(b.editorExtractPages(handle, order));
+          final reordered = b.editorExtractPages(handle, order);
+          await writeBytesToSink(msg.sinkPort!, reordered);
+          return null;
         } finally {
           b.editorFree(handle);
+          dispose();
         }
 
       case Op.movePage:
-        final bytes = materialize(msg.bytes!);
         final from = msg.args['from'] as int;
         final to = msg.args['to'] as int;
-        final handle = b.editorOpen(bytes);
+        final (handle, dispose) = await _openEditorFromMsg(b, msg);
         try {
           b.editorMovePage(handle, from, to);
-          return transfer(b.editorSave(handle));
+          return _saveEditor(b, handle, msg);
         } finally {
           b.editorFree(handle);
+          dispose();
         }
 
       case Op.rotatePages:
-        final bytes = materialize(msg.bytes!);
         final pages = (msg.args['pages'] as Map).cast<int, int>();
-        final handle = b.editorOpen(bytes);
+        final (handle, dispose) = await _openEditorFromMsg(b, msg);
         try {
           for (final entry in pages.entries) {
             b.editorRotatePage(handle, entry.key, entry.value);
           }
-          return transfer(b.editorSave(handle));
+          return _saveEditor(b, handle, msg);
         } finally {
           b.editorFree(handle);
+          dispose();
         }
 
       case Op.rotateAllPages:
-        final bytes = materialize(msg.bytes!);
         final degrees = msg.args['degrees'] as int;
-        final handle = b.editorOpen(bytes);
+        final (handle, dispose) = await _openEditorFromMsg(b, msg);
         try {
           b.editorRotateAllPages(handle, degrees);
-          return transfer(b.editorSave(handle));
+          return _saveEditor(b, handle, msg);
         } finally {
           b.editorFree(handle);
+          dispose();
         }
 
       // ── Content ──
 
       case Op.flattenForms:
-        final bytes = materialize(msg.bytes!);
-        final handle = b.editorOpen(bytes);
+        final (handle, dispose) = await _openEditorFromMsg(b, msg);
         try {
           b.editorFlattenForms(handle);
-          return transfer(b.editorSave(handle));
+          return _saveEditor(b, handle, msg);
         } finally {
           b.editorFree(handle);
+          dispose();
         }
 
       case Op.applyRedactions:
-        final bytes = materialize(msg.bytes!);
-        final handle = b.editorOpen(bytes);
+        final (handle, dispose) = await _openEditorFromMsg(b, msg);
         try {
           b.editorApplyAllRedactions(handle);
-          return transfer(b.editorSave(handle));
+          return _saveEditor(b, handle, msg);
         } finally {
           b.editorFree(handle);
+          dispose();
         }
 
       case Op.embedFile:
-        final bytes = materialize(msg.bytes!);
         final fileData = materialize(msg.bytesList![0]);
         final name = msg.args['name'] as String;
-        final handle = b.editorOpen(bytes);
+        final (handle, dispose) = await _openEditorFromMsg(b, msg);
         try {
           b.editorEmbedFile(handle, name, fileData);
-          return transfer(b.editorSave(handle));
+          return _saveEditor(b, handle, msg);
         } finally {
           b.editorFree(handle);
+          dispose();
         }
 
       case Op.eraseRegions:
-        final bytes = materialize(msg.bytes!);
         final page = msg.args['page'] as int;
         final flat = (msg.args['rects'] as List).cast<double>();
         final rects = <PdfRect>[];
@@ -993,34 +1020,36 @@ class NativePdfPlatform implements PdfPlatform {
           rects.add(PdfRect(
               x: flat[i], y: flat[i + 1], width: flat[i + 2], height: flat[i + 3]));
         }
-        final handle = b.editorOpen(bytes);
+        final (handle, dispose) = await _openEditorFromMsg(b, msg);
         try {
           b.editorEraseRegions(handle, page, rects);
-          return transfer(b.editorSave(handle));
+          return _saveEditor(b, handle, msg);
         } finally {
           b.editorFree(handle);
+          dispose();
         }
 
       case Op.compress:
-        final bytes = materialize(msg.bytes!);
         final imageQuality = msg.args['imageQuality'] as int;
         final garbageCollect = msg.args['garbageCollect'] as bool;
         final linearize = msg.args['linearize'] as bool;
-        final handle = b.editorOpen(bytes);
+        final (handle, dispose) = await _openEditorFromMsg(b, msg);
         try {
           b.editorOptimizeImages(handle, quality: imageQuality);
-          return transfer(b.editorSaveWithOptions(handle,
-              compress: true,
-              garbageCollect: garbageCollect,
-              linearize: linearize));
+          final bytes = b.editorSaveWithOptions(handle,
+              compress: true, garbageCollect: garbageCollect,
+              linearize: linearize);
+          await writeBytesToSink(msg.sinkPort!, bytes);
+          return null;
         } finally {
           b.editorFree(handle);
+          dispose();
         }
 
       // ── Extraction ──
 
       case Op.extractText:
-        final bytes = materialize(msg.bytes!);
+        final bytes = await _resolveBytes(msg);
         final password = msg.args['password'] as String?;
         final handle = b.docOpenFromBytes(bytes, password: password);
         try {
@@ -1038,7 +1067,7 @@ class NativePdfPlatform implements PdfPlatform {
         }
 
       case Op.toMarkdown:
-        final bytes = materialize(msg.bytes!);
+        final bytes = await _resolveBytes(msg);
         final password = msg.args['password'] as String?;
         final handle = b.docOpenFromBytes(bytes, password: password);
         try {
@@ -1050,7 +1079,7 @@ class NativePdfPlatform implements PdfPlatform {
         }
 
       case Op.toHtml:
-        final bytes = materialize(msg.bytes!);
+        final bytes = await _resolveBytes(msg);
         final password = msg.args['password'] as String?;
         final page = msg.args['page'] as int;
         final handle = b.docOpenFromBytes(bytes, password: password);
@@ -1061,7 +1090,7 @@ class NativePdfPlatform implements PdfPlatform {
         }
 
       case Op.toPlainText:
-        final bytes = materialize(msg.bytes!);
+        final bytes = await _resolveBytes(msg);
         final password = msg.args['password'] as String?;
         final page = msg.args['page'] as int;
         final handle = b.docOpenFromBytes(bytes, password: password);
@@ -1074,7 +1103,7 @@ class NativePdfPlatform implements PdfPlatform {
       // ── Search ──
 
       case Op.searchPage:
-        final bytes = materialize(msg.bytes!);
+        final bytes = await _resolveBytes(msg);
         final password = msg.args['password'] as String?;
         final page = msg.args['page'] as int;
         final query = msg.args['query'] as String;
@@ -1086,7 +1115,7 @@ class NativePdfPlatform implements PdfPlatform {
         }
 
       case Op.searchAll:
-        final bytes = materialize(msg.bytes!);
+        final bytes = await _resolveBytes(msg);
         final password = msg.args['password'] as String?;
         final query = msg.args['query'] as String;
         final handle = b.docOpenFromBytes(bytes, password: password);
@@ -1099,7 +1128,6 @@ class NativePdfPlatform implements PdfPlatform {
       // ── Security ──
 
       case Op.watermark:
-        final bytes = materialize(msg.bytes!);
         final text = msg.args['text'] as String;
         final pages = (msg.args['pages'] as List?)?.cast<int>();
         final opacity = msg.args['opacity'] as double;
@@ -1108,7 +1136,7 @@ class NativePdfPlatform implements PdfPlatform {
         final r = msg.args['r'] as double;
         final g = msg.args['g'] as double;
         final bVal = msg.args['b'] as double;
-        final handle = b.editorOpen(bytes);
+        final (handle, dispose) = await _openEditorFromMsg(b, msg);
         try {
           final targets = pages ??
               List.generate(b.editorPageCount(handle), (i) => i);
@@ -1121,13 +1149,13 @@ class NativePdfPlatform implements PdfPlatform {
                 g: g,
                 b: bVal);
           }
-          return transfer(b.editorSave(handle));
+          return _saveEditor(b, handle, msg);
         } finally {
           b.editorFree(handle);
+          dispose();
         }
 
       case Op.watermarkPositioned:
-        final bytes = materialize(msg.bytes!);
         final text = msg.args['text'] as String;
         final fontName = msg.args['fontName'] as String?;
         final pages = (msg.args['pages'] as List?)?.cast<int>();
@@ -1144,7 +1172,7 @@ class NativePdfPlatform implements PdfPlatform {
         final fixedPrint = msg.args['fixedPrint'] as bool? ?? false;
         final fixedPrintH = msg.args['fixedPrintH'] as double? ?? 0.0;
         final fixedPrintV = msg.args['fixedPrintV'] as double? ?? 0.0;
-        final handle = b.editorOpen(bytes);
+        final (handle, dispose) = await _openEditorFromMsg(b, msg);
         try {
           final targets = pages ??
               List.generate(b.editorPageCount(handle), (i) => i);
@@ -1165,25 +1193,27 @@ class NativePdfPlatform implements PdfPlatform {
                 fixedPrintH: fixedPrintH,
                 fixedPrintV: fixedPrintV);
           }
-          return transfer(b.editorSave(handle));
+          return _saveEditor(b, handle, msg);
         } finally {
           b.editorFree(handle);
+          dispose();
         }
 
       case Op.encrypt:
-        final bytes = materialize(msg.bytes!);
         final ownerPassword = msg.args['ownerPassword'] as String;
         final userPassword = msg.args['userPassword'] as String;
-        final handle = b.editorOpen(bytes);
+        final (handle, dispose) = await _openEditorFromMsg(b, msg);
         try {
-          return transfer(b.editorSaveEncrypted(handle,
-              userPassword: userPassword, ownerPassword: ownerPassword));
+          final bytes = b.editorSaveEncrypted(handle,
+              userPassword: userPassword, ownerPassword: ownerPassword);
+          await writeBytesToSink(msg.sinkPort!, bytes);
+          return null;
         } finally {
           b.editorFree(handle);
+          dispose();
         }
 
       case Op.encryptFull:
-        final bytes = materialize(msg.bytes!);
         final ownerPassword = msg.args['ownerPassword'] as String;
         final userPassword = msg.args['userPassword'] as String;
         final algorithm = msg.args['algorithm'] as int;
@@ -1195,32 +1225,30 @@ class NativePdfPlatform implements PdfPlatform {
         final allowFillForms = msg.args['allowFillForms'] as bool;
         final allowAccessibility = msg.args['allowAccessibility'] as bool;
         final allowAssemble = msg.args['allowAssemble'] as bool;
-        final handle = b.editorOpen(bytes);
+        final (handle, dispose) = await _openEditorFromMsg(b, msg);
         try {
-          return transfer(b.editorSaveEncryptedFull(handle,
-              userPassword: userPassword,
-              ownerPassword: ownerPassword,
+          final bytes = b.editorSaveEncryptedFull(handle,
+              userPassword: userPassword, ownerPassword: ownerPassword,
               algorithm: algorithm,
-              allowPrint: allowPrint,
-              allowPrintHq: allowPrintHq,
-              allowModify: allowModify,
-              allowCopy: allowCopy,
-              allowAnnotate: allowAnnotate,
-              allowFillForms: allowFillForms,
-              allowAccessibility: allowAccessibility,
-              allowAssemble: allowAssemble));
+              allowPrint: allowPrint, allowPrintHq: allowPrintHq,
+              allowModify: allowModify, allowCopy: allowCopy,
+              allowAnnotate: allowAnnotate, allowFillForms: allowFillForms,
+              allowAccessibility: allowAccessibility, allowAssemble: allowAssemble);
+          await writeBytesToSink(msg.sinkPort!, bytes);
+          return null;
         } finally {
           b.editorFree(handle);
+          dispose();
         }
 
       case Op.decrypt:
-        final bytes = materialize(msg.bytes!);
+        final bytes = await _resolveBytes(msg);
         final password = msg.args['password'] as String;
         final handle = b.docOpenFromBytes(bytes, password: password);
         try {
           final edHandle = b.editorOpen(bytes);
           try {
-            return transfer(b.editorSave(edHandle));
+            return _saveEditor(b, edHandle, msg);
           } finally {
             b.editorFree(edHandle);
           }
@@ -1229,13 +1257,19 @@ class NativePdfPlatform implements PdfPlatform {
         }
 
       case Op.sign:
-        final bytes = materialize(msg.bytes!);
+        // PDF signing is inherently non-streamable — the signature blob
+        // is patched into an offset computed from the full assembled output.
+        // ByteRange calculation requires knowing total size upfront.
+        final bytes = await _resolveBytes(msg);
         final cert = materialize(msg.bytesList![0]);
         final certificatePassword = msg.args['certificatePassword'] as String;
         final reason = msg.args['reason'] as String?;
         final location = msg.args['location'] as String?;
-        return transfer(b.signBytes(bytes, cert, certificatePassword,
-            reason: reason, location: location));
+        final signed = b.signBytes(bytes, cert, certificatePassword,
+            reason: reason, location: location);
+        // Push the signed result to the sink via the streaming protocol
+        await writeBytesToSink(msg.sinkPort!, signed);
+        return null;
 
       // ── Creation ──
 
@@ -1251,7 +1285,9 @@ class NativePdfPlatform implements PdfPlatform {
               b.pageBuilderDone(page);
             }
           }
-          return transfer(b.builderBuild(builder));
+          final built = b.builderBuild(builder);
+          await writeBytesToSink(msg.sinkPort!, built);
+          return null;
         } finally {
           b.builderFree(builder);
         }
@@ -1259,7 +1295,7 @@ class NativePdfPlatform implements PdfPlatform {
       // ── Rendering ──
 
       case Op.renderPage:
-        final bytes = materialize(msg.bytes!);
+        final bytes = await _resolveBytes(msg);
         final password = msg.args['password'] as String?;
         final pageIndex = msg.args['pageIndex'] as int;
         final handle = b.docOpenFromBytes(bytes, password: password);
@@ -1270,7 +1306,7 @@ class NativePdfPlatform implements PdfPlatform {
         }
 
       case Op.renderPageFit:
-        final bytes = materialize(msg.bytes!);
+        final bytes = await _resolveBytes(msg);
         final password = msg.args['password'] as String?;
         final pageIndex = msg.args['pageIndex'] as int;
         final width = msg.args['width'] as int;
@@ -1284,7 +1320,7 @@ class NativePdfPlatform implements PdfPlatform {
         }
 
       case Op.renderPageThumbnail:
-        final bytes = materialize(msg.bytes!);
+        final bytes = await _resolveBytes(msg);
         final password = msg.args['password'] as String?;
         final pageIndex = msg.args['pageIndex'] as int;
         final size = msg.args['size'] as int;
@@ -1297,19 +1333,20 @@ class NativePdfPlatform implements PdfPlatform {
         }
 
       case Op.renderAllPages:
-        final bytes = materialize(msg.bytes!);
+        final bytes = await _resolveBytes(msg);
         final password = msg.args['password'] as String?;
         final width = msg.args['width'] as int;
         final height = msg.args['height'] as int;
         final handle = b.docOpenFromBytes(bytes, password: password);
         try {
           final count = b.docPageCount(handle);
-          final pages = <RenderedPage>[];
           for (var i = 0; i < count; i++) {
-            pages.add(b.renderPageFit(handle, i,
-                fitWidth: width, fitHeight: height));
+            final page = b.renderPageFit(handle, i,
+                fitWidth: width, fitHeight: height);
+            responsePort?.send(WorkerStreamItem(id: msg.id, value: page));
           }
-          return pages;
+          responsePort?.send(WorkerStreamItem(id: msg.id, done: true));
+          return _streamSentinel;
         } finally {
           b.docFree(handle);
         }
@@ -1317,27 +1354,35 @@ class NativePdfPlatform implements PdfPlatform {
       // ── Image extraction ──
 
       case Op.extractImages:
-        final bytes = materialize(msg.bytes!);
+        final bytes = await _resolveBytes(msg);
         final password = msg.args['password'] as String?;
         final pageIndex = msg.args['pageIndex'] as int;
         final handle = b.docOpenFromBytes(bytes, password: password);
         try {
-          return b.docGetEmbeddedImages(handle, pageIndex);
+          final images = b.docGetEmbeddedImages(handle, pageIndex);
+          for (final img in images) {
+            responsePort?.send(WorkerStreamItem(id: msg.id, value: img));
+          }
+          responsePort?.send(WorkerStreamItem(id: msg.id, done: true));
+          return _streamSentinel;
         } finally {
           b.docFree(handle);
         }
 
       case Op.extractAllImages:
-        final bytes = materialize(msg.bytes!);
+        final bytes = await _resolveBytes(msg);
         final password = msg.args['password'] as String?;
         final handle = b.docOpenFromBytes(bytes, password: password);
         try {
           final count = b.docPageCount(handle);
-          final images = <PdfImage>[];
           for (var i = 0; i < count; i++) {
-            images.addAll(b.docGetEmbeddedImages(handle, i));
+            final images = b.docGetEmbeddedImages(handle, i);
+            for (final img in images) {
+              responsePort?.send(WorkerStreamItem(id: msg.id, value: img));
+            }
           }
-          return images;
+          responsePort?.send(WorkerStreamItem(id: msg.id, done: true));
+          return _streamSentinel;
         } finally {
           b.docFree(handle);
         }
@@ -1345,7 +1390,7 @@ class NativePdfPlatform implements PdfPlatform {
       // ── Signatures ──
 
       case Op.getSignatureCount:
-        final bytes = materialize(msg.bytes!);
+        final bytes = await _resolveBytes(msg);
         final password = msg.args['password'] as String?;
         final handle = b.docOpenFromBytes(bytes, password: password);
         try {
@@ -1355,7 +1400,7 @@ class NativePdfPlatform implements PdfPlatform {
         }
 
       case Op.getSignatures:
-        final bytes = materialize(msg.bytes!);
+        final bytes = await _resolveBytes(msg);
         final password = msg.args['password'] as String?;
         final handle = b.docOpenFromBytes(bytes, password: password);
         try {
@@ -1370,7 +1415,7 @@ class NativePdfPlatform implements PdfPlatform {
         }
 
       case Op.verifySignatures:
-        final bytes = materialize(msg.bytes!);
+        final bytes = await _resolveBytes(msg);
         final password = msg.args['password'] as String?;
         final handle = b.docOpenFromBytes(bytes, password: password);
         try {
@@ -1382,7 +1427,7 @@ class NativePdfPlatform implements PdfPlatform {
       // ── Validation ──
 
       case Op.validatePdfA:
-        final bytes = materialize(msg.bytes!);
+        final bytes = await _resolveBytes(msg);
         final password = msg.args['password'] as String?;
         final level = msg.args['level'] as int;
         final handle = b.docOpenFromBytes(bytes, password: password);
@@ -1393,7 +1438,7 @@ class NativePdfPlatform implements PdfPlatform {
         }
 
       case Op.validatePdfUa:
-        final bytes = materialize(msg.bytes!);
+        final bytes = await _resolveBytes(msg);
         final password = msg.args['password'] as String?;
         final level = msg.args['level'] as int;
         final handle = b.docOpenFromBytes(bytes, password: password);
@@ -1406,8 +1451,8 @@ class NativePdfPlatform implements PdfPlatform {
       // ── Editor handle ops ──
 
       case Op.editorOpen:
-        final bytes = materialize(msg.bytes!);
         final handleId = msg.args['handleId'] as int;
+        final bytes = await _resolveBytes(msg);
         handles[handleId] = b.editorOpen(bytes);
         return null;
 
@@ -1503,12 +1548,19 @@ class NativePdfPlatform implements PdfPlatform {
       case Op.editorExtractPages:
         final handleId = msg.args['handleId'] as int;
         final pages = (msg.args['pages'] as List).cast<int>();
-        return transfer(
-            b.editorExtractPages(_h(handles, handleId), pages));
+        final extracted = b.editorExtractPages(_h(handles, handleId), pages);
+        await writeBytesToSink(msg.sinkPort!, extracted);
+        return null;
 
       case Op.editorMergeFrom:
         final handleId = msg.args['handleId'] as int;
-        final otherPdf = materialize(msg.bytes!);
+        final replyPort = ReceivePort();
+        msg.sourcePort!.send(['length', replyPort.sendPort]);
+        final length = await replyPort.first as int;
+        final dataPort = ReceivePort();
+        msg.sourcePort!.send(['read', 0, length, dataPort.sendPort]);
+        final td = await dataPort.first as TransferableTypedData;
+        final otherPdf = td.materialize().asUint8List();
         b.editorMerge(_h(handles, handleId), otherPdf);
         return null;
 
@@ -1611,24 +1663,29 @@ class NativePdfPlatform implements PdfPlatform {
 
       case Op.editorSave:
         final handleId = msg.args['handleId'] as int;
-        return transfer(b.editorSave(_h(handles, handleId)));
+        final saveBytes = b.editorSave(_h(handles, handleId));
+        await writeBytesToSink(msg.sinkPort!, saveBytes);
+        return null;
 
       case Op.editorSaveWithOptions:
         final handleId = msg.args['handleId'] as int;
         final compress = msg.args['compress'] as bool;
         final garbageCollect = msg.args['garbageCollect'] as bool;
         final linearize = msg.args['linearize'] as bool;
-        return transfer(b.editorSaveWithOptions(_h(handles, handleId),
-            compress: compress,
-            garbageCollect: garbageCollect,
-            linearize: linearize));
+        final optsBytes = b.editorSaveWithOptions(_h(handles, handleId),
+            compress: compress, garbageCollect: garbageCollect,
+            linearize: linearize);
+        await writeBytesToSink(msg.sinkPort!, optsBytes);
+        return null;
 
       case Op.editorSaveEncrypted:
         final handleId = msg.args['handleId'] as int;
         final ownerPassword = msg.args['ownerPassword'] as String;
         final userPassword = msg.args['userPassword'] as String;
-        return transfer(b.editorSaveEncrypted(_h(handles, handleId),
-            userPassword: userPassword, ownerPassword: ownerPassword));
+        final encBytes = b.editorSaveEncrypted(_h(handles, handleId),
+            userPassword: userPassword, ownerPassword: ownerPassword);
+        await writeBytesToSink(msg.sinkPort!, encBytes);
+        return null;
 
       case Op.editorSaveEncryptedFull:
         final handleId = msg.args['handleId'] as int;
@@ -1643,20 +1700,15 @@ class NativePdfPlatform implements PdfPlatform {
         final allowFillForms = msg.args['allowFillForms'] as bool;
         final allowAccessibility = msg.args['allowAccessibility'] as bool;
         final allowAssemble = msg.args['allowAssemble'] as bool;
-        return transfer(b.editorSaveEncryptedFull(
-          _h(handles, handleId),
-          userPassword: userPassword,
-          ownerPassword: ownerPassword,
-          algorithm: algorithm,
-          allowPrint: allowPrint,
-          allowPrintHq: allowPrintHq,
-          allowModify: allowModify,
-          allowCopy: allowCopy,
-          allowAnnotate: allowAnnotate,
-          allowFillForms: allowFillForms,
-          allowAccessibility: allowAccessibility,
-          allowAssemble: allowAssemble,
-        ));
+        final encFullBytes = b.editorSaveEncryptedFull(_h(handles, handleId),
+            userPassword: userPassword, ownerPassword: ownerPassword,
+            algorithm: algorithm,
+            allowPrint: allowPrint, allowPrintHq: allowPrintHq,
+            allowModify: allowModify, allowCopy: allowCopy,
+            allowAnnotate: allowAnnotate, allowFillForms: allowFillForms,
+            allowAccessibility: allowAccessibility, allowAssemble: allowAssemble);
+        await writeBytesToSink(msg.sinkPort!, encFullBytes);
+        return null;
 
       case Op.editorAddWatermarkPositioned:
         final handleId = msg.args['handleId'] as int;
@@ -1813,14 +1865,18 @@ class NativePdfPlatform implements PdfPlatform {
 
       case Op.builderBuild:
         final handleId = msg.args['handleId'] as int;
-        return transfer(b.builderBuild(_h(handles, handleId)));
+        final built = b.builderBuild(_h(handles, handleId));
+        await writeBytesToSink(msg.sinkPort!, built);
+        return null;
 
       case Op.builderBuildEncrypted:
         final handleId = msg.args['handleId'] as int;
         final ownerPassword = msg.args['ownerPassword'] as String;
         final userPassword = msg.args['userPassword'] as String;
-        return transfer(b.builderBuildEncrypted(_h(handles, handleId),
-            userPassword: userPassword, ownerPassword: ownerPassword));
+        final builtEnc = b.builderBuildEncrypted(_h(handles, handleId),
+            userPassword: userPassword, ownerPassword: ownerPassword);
+        await writeBytesToSink(msg.sinkPort!, builtEnc);
+        return null;
 
       // ── Page builder ops ──
 
@@ -2043,7 +2099,7 @@ class NativePdfPlatform implements PdfPlatform {
       // ── Encryption info ──
 
       case Op.getPermissions:
-        final bytes = materialize(msg.bytes!);
+        final bytes = await _resolveBytes(msg);
         final password = msg.args['password'] as String?;
         final handle = b.docOpenFromBytes(bytes, password: password);
         try {
@@ -2053,7 +2109,7 @@ class NativePdfPlatform implements PdfPlatform {
         }
 
       case Op.getEncryptionAlgorithm:
-        final bytes = materialize(msg.bytes!);
+        final bytes = await _resolveBytes(msg);
         final password = msg.args['password'] as String?;
         final handle = b.docOpenFromBytes(bytes, password: password);
         try {
@@ -2173,20 +2229,34 @@ class _NativeEditorHandle implements PdfEditorHandle {
           args: {'handleId': _id, 'from': from, 'to': to}));
 
   @override
-  Future<Uint8List> extractPages(List<int> pages) async {
-    final result = await _msg(WorkerMsg(
-        id: _newId(),
-        op: Op.editorExtractPages,
-        args: {'handleId': _id, 'pages': pages}));
-    return materialize(result as TransferableTypedData);
+  Future<void> extractPages(List<int> pages, PdfSink output) async {
+    final server = SinkServer(output);
+    final sinkPort = server.start();
+    try {
+      await _msg(WorkerMsg(
+          id: _newId(),
+          op: Op.editorExtractPages,
+          sinkPort: sinkPort,
+          args: {'handleId': _id, 'pages': pages}));
+    } finally {
+      server.stop();
+    }
   }
 
   @override
-  Future<void> mergeFrom(Uint8List otherPdf) => _msg(WorkerMsg(
-      id: _newId(),
-      op: Op.editorMergeFrom,
-      args: {'handleId': _id},
-      bytes: transfer(otherPdf)));
+  Future<void> mergeFrom(PdfSource otherPdf) async {
+    final server = SourceServer(otherPdf);
+    final serverPort = server.start();
+    try {
+      await _msg(WorkerMsg(
+        id: _newId(),
+        op: Op.editorMergeFrom,
+        args: {'handleId': _id},
+        sourcePort: serverPort));
+    } finally {
+      server.stop();
+    }
+  }
 
   @override
   Future<int> optimizeImages({int quality = 75}) async =>
@@ -2281,39 +2351,56 @@ class _NativeEditorHandle implements PdfEditorHandle {
       args: {'handleId': _id, 'level': level}));
 
   @override
-  Future<Uint8List> save() async {
-    final result = await _msg(
-        WorkerMsg(id: _newId(), op: Op.editorSave, args: {'handleId': _id}));
-    return materialize(result as TransferableTypedData);
+  Future<void> save(PdfSink output) async {
+    final server = SinkServer(output);
+    final sinkPort = server.start();
+    try {
+      await _msg(WorkerMsg(
+          id: _newId(), op: Op.editorSave,
+          sinkPort: sinkPort, args: {'handleId': _id}));
+    } finally {
+      server.stop();
+    }
   }
 
   @override
-  Future<Uint8List> saveWithOptions(
+  Future<void> saveWithOptions(PdfSink output,
       {bool compress = true,
       bool garbageCollect = true,
       bool linearize = false}) async {
-    final result = await _msg(WorkerMsg(
-        id: _newId(),
-        op: Op.editorSaveWithOptions,
-        args: {
-          'handleId': _id,
-          'compress': compress, 'garbageCollect': garbageCollect, 'linearize': linearize,
-        }));
-    return materialize(result as TransferableTypedData);
+    final server = SinkServer(output);
+    final sinkPort = server.start();
+    try {
+      await _msg(WorkerMsg(
+          id: _newId(), op: Op.editorSaveWithOptions,
+          sinkPort: sinkPort,
+          args: {
+            'handleId': _id,
+            'compress': compress, 'garbageCollect': garbageCollect, 'linearize': linearize,
+          }));
+    } finally {
+      server.stop();
+    }
   }
 
   @override
-  Future<Uint8List> saveEncrypted(
+  Future<void> saveEncrypted(PdfSink output,
       {required String ownerPassword, String userPassword = ''}) async {
-    final result = await _msg(WorkerMsg(
-        id: _newId(),
-        op: Op.editorSaveEncrypted,
-        args: {'handleId': _id, 'ownerPassword': ownerPassword, 'userPassword': userPassword}));
-    return materialize(result as TransferableTypedData);
+    final server = SinkServer(output);
+    final sinkPort = server.start();
+    try {
+      await _msg(WorkerMsg(
+          id: _newId(),
+          op: Op.editorSaveEncrypted,
+          sinkPort: sinkPort,
+          args: {'handleId': _id, 'ownerPassword': ownerPassword, 'userPassword': userPassword}));
+    } finally {
+      server.stop();
+    }
   }
 
   @override
-  Future<Uint8List> saveEncryptedFull({
+  Future<void> saveEncryptedFull(PdfSink output, {
     required String ownerPassword,
     String userPassword = '',
     int algorithm = 3,
@@ -2326,20 +2413,26 @@ class _NativeEditorHandle implements PdfEditorHandle {
     bool allowAccessibility = true,
     bool allowAssemble = true,
   }) async {
-    final result = await _msg(WorkerMsg(
-      id: _newId(),
-      op: Op.editorSaveEncryptedFull,
-      args: {
-        'handleId': _id,
-        'ownerPassword': ownerPassword, 'userPassword': userPassword,
-        'algorithm': algorithm,
-        'allowPrint': allowPrint, 'allowPrintHq': allowPrintHq,
-        'allowModify': allowModify, 'allowCopy': allowCopy,
-        'allowAnnotate': allowAnnotate, 'allowFillForms': allowFillForms,
-        'allowAccessibility': allowAccessibility, 'allowAssemble': allowAssemble,
-      },
-    ));
-    return materialize(result as TransferableTypedData);
+    final server = SinkServer(output);
+    final sinkPort = server.start();
+    try {
+      await _msg(WorkerMsg(
+        id: _newId(),
+        op: Op.editorSaveEncryptedFull,
+        sinkPort: sinkPort,
+        args: {
+          'handleId': _id,
+          'ownerPassword': ownerPassword, 'userPassword': userPassword,
+          'algorithm': algorithm,
+          'allowPrint': allowPrint, 'allowPrintHq': allowPrintHq,
+          'allowModify': allowModify, 'allowCopy': allowCopy,
+          'allowAnnotate': allowAnnotate, 'allowFillForms': allowFillForms,
+          'allowAccessibility': allowAccessibility, 'allowAssemble': allowAssemble,
+        },
+      ));
+    } finally {
+      server.stop();
+    }
   }
 
   @override
@@ -2406,8 +2499,11 @@ class _NativeEditorHandle implements PdfEditorHandle {
       ));
 
   @override
-  Future<void> dispose() => _msg(
-      WorkerMsg(id: _newId(), op: Op.editorDispose, args: {'handleId': _id}));
+  Future<void> dispose() async {
+    await _msg(
+        WorkerMsg(id: _newId(), op: Op.editorDispose, args: {'handleId': _id}));
+    _platform._sourceServers.remove(_id)?.stop();
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2473,20 +2569,31 @@ class _NativeBuilderHandle implements PdfBuilderHandle {
   }
 
   @override
-  Future<Uint8List> build() async {
-    final result = await _msg(
-        WorkerMsg(id: _newId(), op: Op.builderBuild, args: {'handleId': _id}));
-    return materialize(result as TransferableTypedData);
+  Future<void> build(PdfSink output) async {
+    final server = SinkServer(output);
+    final sinkPort = server.start();
+    try {
+      await _msg(WorkerMsg(
+          id: _newId(), op: Op.builderBuild,
+          sinkPort: sinkPort, args: {'handleId': _id}));
+    } finally {
+      server.stop();
+    }
   }
 
   @override
-  Future<Uint8List> buildEncrypted(
+  Future<void> buildEncrypted(PdfSink output,
       {required String ownerPassword, String userPassword = ''}) async {
-    final result = await _msg(WorkerMsg(
-        id: _newId(),
-        op: Op.builderBuildEncrypted,
-        args: {'handleId': _id, 'ownerPassword': ownerPassword, 'userPassword': userPassword}));
-    return materialize(result as TransferableTypedData);
+    final server = SinkServer(output);
+    final sinkPort = server.start();
+    try {
+      await _msg(WorkerMsg(
+          id: _newId(), op: Op.builderBuildEncrypted,
+          sinkPort: sinkPort,
+          args: {'handleId': _id, 'ownerPassword': ownerPassword, 'userPassword': userPassword}));
+    } finally {
+      server.stop();
+    }
   }
 
   @override

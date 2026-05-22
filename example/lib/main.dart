@@ -6,6 +6,28 @@ import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
+// ─── In-memory PdfSource / PdfSink for the example app ────────────
+
+class _MemorySource implements PdfSource {
+  _MemorySource(this._data);
+  final Uint8List _data;
+  @override
+  int get length => _data.length;
+  @override
+  Uint8List readAt(int offset, int count) {
+    if (offset >= _data.length) return Uint8List(0);
+    final end = (offset + count).clamp(0, _data.length);
+    return Uint8List.sublistView(_data, offset, end);
+  }
+}
+
+class _MemorySink implements PdfSink {
+  final _builder = BytesBuilder(copy: false);
+  @override
+  void write(Uint8List chunk) => _builder.add(chunk);
+  Uint8List takeBytes() => _builder.takeBytes();
+}
+
 void main() => runApp(const MyApp());
 
 class MyApp extends StatelessWidget {
@@ -265,8 +287,9 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
 
     setState(() { _loading = true; _status = 'Opening...'; });
     try {
-      final doc = await _pdf.open(bytes);
-      final info = await _pdf.probe(bytes);
+      final source = _MemorySource(bytes);
+      final doc = await _pdf.open(source);
+      final info = await _pdf.probe(source);
       setState(() {
         _fileName = 'Selected PDF';
         _fileSize = bytes.length;
@@ -405,43 +428,59 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
         _OpTile(icon: Icons.content_cut, title: 'Split by page count',
           subtitle: 'Every 2 pages', loading: _loading,
           onRun: () => _run('Split', () async {
-            final r = await _pdf.split(bytes, every: 2);
-            setState(() => _status = '${r.length} chunks: ${r.map((c) => fmtSize(c.length)).join(', ')}');
+            final sinks = <_MemorySink>[];
+            await _pdf.split(_MemorySource(bytes), (index) {
+              final s = _MemorySink();
+              sinks.add(s);
+              return s;
+            }, every: 2);
+            final chunks = sinks.map((s) => s.takeBytes()).toList();
+            setState(() => _status = '${chunks.length} chunks: ${chunks.map((c) => fmtSize(c.length)).join(', ')}');
           })),
         _OpTile(icon: Icons.straighten, title: 'Split by size',
           subtitle: 'Max 500 KB per chunk', loading: _loading,
           onRun: () => _run('Split by size', () async {
-            final r = await _pdf.splitBySize(bytes, maxBytes: 500000);
-            setState(() => _status = '${r.length} chunks: ${r.map((c) => fmtSize(c.length)).join(', ')}');
+            final sinks = <_MemorySink>[];
+            await _pdf.splitBySize(_MemorySource(bytes), (index) {
+              final s = _MemorySink();
+              sinks.add(s);
+              return s;
+            }, maxBytes: 500000);
+            final chunks = sinks.map((s) => s.takeBytes()).toList();
+            setState(() => _status = '${chunks.length} chunks: ${chunks.map((c) => fmtSize(c.length)).join(', ')}');
           })),
         if (doc.pageCount >= 3)
           _OpTile(icon: Icons.file_copy_outlined, title: 'Extract pages 1–2',
             subtitle: 'First two pages as new PDF', loading: _loading,
             onRun: () => _run('Extract', () async {
-              final r = await _pdf.extractPages(bytes, pages: [0, 1]);
-              await _saveAndReport(r, 'extracted.pdf');
+              final sink = _MemorySink();
+              await _pdf.extractPages(_MemorySource(bytes), sink, pages: [0, 1]);
+              await _saveAndReport(sink.takeBytes(), 'extracted.pdf');
             })),
         if (doc.pageCount >= 2)
           _OpTile(icon: Icons.delete_outline, title: 'Delete first page',
             subtitle: 'Remove page 1', loading: _loading,
             onRun: () => _run('Delete', () async {
-              final r = await _pdf.deletePages(bytes, pages: [0]);
-              await _saveAndReport(r, 'deleted.pdf');
+              final sink = _MemorySink();
+              await _pdf.deletePages(_MemorySource(bytes), sink, pages: [0]);
+              await _saveAndReport(sink.takeBytes(), 'deleted.pdf');
             })),
         if (doc.pageCount >= 3)
           _OpTile(icon: Icons.swap_vert, title: 'Reverse page order',
             subtitle: 'All pages in reverse', loading: _loading,
             onRun: () => _run('Reverse', () async {
               final order = List.generate(doc.pageCount, (i) => doc.pageCount - 1 - i);
-              final r = await _pdf.reorderPages(bytes, order: order);
-              await _saveAndReport(r, 'reversed.pdf');
+              final sink = _MemorySink();
+              await _pdf.reorderPages(_MemorySource(bytes), sink, order: order);
+              await _saveAndReport(sink.takeBytes(), 'reversed.pdf');
             })),
         if (doc.pageCount >= 2)
           _OpTile(icon: Icons.move_down, title: 'Move page 1 → last',
             subtitle: 'Move first page to end', loading: _loading,
             onRun: () => _run('Move page', () async {
-              final r = await _pdf.movePage(bytes, from: 0, to: doc.pageCount - 1);
-              await _saveAndReport(r, 'moved.pdf');
+              final sink = _MemorySink();
+              await _pdf.movePage(_MemorySource(bytes), sink, from: 0, to: doc.pageCount - 1);
+              await _saveAndReport(sink.takeBytes(), 'moved.pdf');
             })),
         const SizedBox(height: 12),
 
@@ -450,21 +489,24 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
         _OpTile(icon: Icons.rotate_right, title: 'Rotate all 90°',
           subtitle: 'Clockwise', loading: _loading,
           onRun: () => _run('Rotate all', () async {
-            final r = await _pdf.rotateAllPages(bytes, degrees: 90);
-            await _saveAndReport(r, 'rotated_all_90.pdf');
+            final sink = _MemorySink();
+            await _pdf.rotateAllPages(_MemorySource(bytes), sink, degrees: 90);
+            await _saveAndReport(sink.takeBytes(), 'rotated_all_90.pdf');
           })),
         _OpTile(icon: Icons.rotate_left, title: 'Rotate page 1 → 180°',
           subtitle: 'Flip first page upside down', loading: _loading,
           onRun: () => _run('Rotate page 1', () async {
-            final r = await _pdf.rotatePages(bytes, pages: {0: 180});
-            await _saveAndReport(r, 'rotated_p1_180.pdf');
+            final sink = _MemorySink();
+            await _pdf.rotatePages(_MemorySource(bytes), sink, pages: {0: 180});
+            await _saveAndReport(sink.takeBytes(), 'rotated_p1_180.pdf');
           })),
         if (doc.pageCount >= 2)
           _OpTile(icon: Icons.rotate_90_degrees_ccw, title: 'Rotate page 2 → 270°',
             subtitle: 'Counter-clockwise', loading: _loading,
             onRun: () => _run('Rotate page 2', () async {
-              final r = await _pdf.rotatePages(bytes, pages: {1: 270});
-              await _saveAndReport(r, 'rotated_p2_270.pdf');
+              final sink = _MemorySink();
+              await _pdf.rotatePages(_MemorySource(bytes), sink, pages: {1: 270});
+              await _saveAndReport(sink.takeBytes(), 'rotated_p2_270.pdf');
             })),
         const SizedBox(height: 12),
 
@@ -473,7 +515,9 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
         _OpTile(icon: Icons.compress, title: 'Compress (quality 75)',
           subtitle: 'Stream recompression + GC + image optimization', loading: _loading,
           onRun: () => _run('Compress', () async {
-            final r = await _pdf.compress(bytes, imageQuality: 75);
+            final sink = _MemorySink();
+            await _pdf.compress(_MemorySource(bytes), sink, imageQuality: 75);
+            final r = sink.takeBytes();
             final pct = ((1 - r.length / bytes.length) * 100).toStringAsFixed(1);
             setState(() => _status = '${fmtSize(bytes.length)} → ${fmtSize(r.length)} ($pct% ${r.length < bytes.length ? "smaller" : "larger"})');
             if (r.length < bytes.length) await _saveAndReport(r, 'compressed.pdf');
@@ -481,7 +525,9 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
         _OpTile(icon: Icons.compress, title: 'Compress (quality 30)',
           subtitle: 'Aggressive — lower quality, smaller size', loading: _loading,
           onRun: () => _run('Compress aggressively', () async {
-            final r = await _pdf.compress(bytes, imageQuality: 30);
+            final sink = _MemorySink();
+            await _pdf.compress(_MemorySource(bytes), sink, imageQuality: 30);
+            final r = sink.takeBytes();
             final pct = ((1 - r.length / bytes.length) * 100).toStringAsFixed(1);
             setState(() => _status = '${fmtSize(bytes.length)} → ${fmtSize(r.length)} ($pct%)');
           })),
@@ -492,14 +538,16 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
         _OpTile(icon: Icons.water_drop, title: 'Watermark "DRAFT"',
           subtitle: 'Semi-transparent on all pages', loading: _loading,
           onRun: () => _run('Watermark', () async {
-            final r = await _pdf.watermark(bytes, text: 'DRAFT', opacity: 0.3);
-            await _saveAndReport(r, 'watermarked_draft.pdf');
+            final sink = _MemorySink();
+            await _pdf.watermark(_MemorySource(bytes), sink, text: 'DRAFT', opacity: 0.3);
+            await _saveAndReport(sink.takeBytes(), 'watermarked_draft.pdf');
           })),
         _OpTile(icon: Icons.water_drop_outlined, title: 'Watermark "CONFIDENTIAL"',
           subtitle: 'Large, rotated, red-ish', loading: _loading,
           onRun: () => _run('Watermark', () async {
-            final r = await _pdf.watermark(bytes, text: 'CONFIDENTIAL', opacity: 0.2, fontSize: 60, rotation: 45);
-            await _saveAndReport(r, 'watermarked_confidential.pdf');
+            final sink = _MemorySink();
+            await _pdf.watermark(_MemorySource(bytes), sink, text: 'CONFIDENTIAL', opacity: 0.2, fontSize: 60, rotation: 45);
+            await _saveAndReport(sink.takeBytes(), 'watermarked_confidential.pdf');
           })),
         const SizedBox(height: 12),
 
@@ -508,14 +556,16 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
         _OpTile(icon: Icons.lock, title: 'Encrypt',
           subtitle: 'Owner password: secret123', loading: _loading,
           onRun: () => _run('Encrypt', () async {
-            final r = await _pdf.encrypt(bytes, ownerPassword: 'secret123');
-            await _saveAndReport(r, 'encrypted.pdf');
+            final sink = _MemorySink();
+            await _pdf.encrypt(_MemorySource(bytes), sink, ownerPassword: 'secret123');
+            await _saveAndReport(sink.takeBytes(), 'encrypted.pdf');
           })),
         _OpTile(icon: Icons.lock_open, title: 'Decrypt',
           subtitle: 'Try password: secret123', loading: _loading,
           onRun: () => _run('Decrypt', () async {
-            final r = await _pdf.decrypt(bytes, password: 'secret123');
-            await _saveAndReport(r, 'decrypted.pdf');
+            final sink = _MemorySink();
+            await _pdf.decrypt(_MemorySource(bytes), sink, password: 'secret123');
+            await _saveAndReport(sink.takeBytes(), 'decrypted.pdf');
           })),
         const SizedBox(height: 12),
 
@@ -524,7 +574,7 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
         _OpTile(icon: Icons.text_snippet, title: 'Extract all text',
           subtitle: 'Plain text from every page', loading: _loading,
           onRun: () => _run('Extract text', () async {
-            final t = await _pdf.extractText(bytes);
+            final t = await _pdf.extractText(_MemorySource(bytes));
             if (!mounted) return;
             _showTextSheet(context, 'Extracted Text (${t.length} chars)', t);
             setState(() => _status = '${t.length} characters extracted');
@@ -532,7 +582,7 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
         _OpTile(icon: Icons.text_snippet_outlined, title: 'Extract page 1 text',
           subtitle: 'First page only', loading: _loading,
           onRun: () => _run('Extract page 1', () async {
-            final t = await _pdf.extractText(bytes, page: 0);
+            final t = await _pdf.extractText(_MemorySource(bytes), page: 0);
             if (!mounted) return;
             _showTextSheet(context, 'Page 1 Text', t);
             setState(() => _status = 'Page 1: ${t.length} chars');
@@ -540,7 +590,7 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
         _OpTile(icon: Icons.code, title: 'To Markdown',
           subtitle: 'Markdown from all pages', loading: _loading,
           onRun: () => _run('To Markdown', () async {
-            final md = await _pdf.toMarkdown(bytes);
+            final md = await _pdf.toMarkdown(_MemorySource(bytes));
             if (!mounted) return;
             _showTextSheet(context, 'Markdown', md);
             setState(() => _status = 'Markdown: ${md.length} chars');
@@ -548,7 +598,7 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
         _OpTile(icon: Icons.html, title: 'To HTML (page 1)',
           subtitle: 'HTML from first page', loading: _loading,
           onRun: () => _run('To HTML', () async {
-            final h = await _pdf.toHtml(bytes, page: 0);
+            final h = await _pdf.toHtml(_MemorySource(bytes), page: 0);
             if (!mounted) return;
             _showTextSheet(context, 'HTML', h);
             setState(() => _status = 'HTML: ${h.length} chars');
@@ -560,13 +610,13 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
         _OpTile(icon: Icons.search, title: 'Search page 1 for "the"',
           subtitle: 'Find text positions on first page', loading: _loading,
           onRun: () => _run('Search', () async {
-            final r = await _pdf.searchPage(bytes, page: 0, query: 'the');
+            final r = await _pdf.searchPage(_MemorySource(bytes), page: 0, query: 'the');
             setState(() => _status = '${r.length} results on page 1');
           })),
         _OpTile(icon: Icons.manage_search, title: 'Search all pages for "the"',
           subtitle: 'Find across entire document', loading: _loading,
           onRun: () => _run('Search all', () async {
-            final r = await _pdf.searchAll(bytes, query: 'the');
+            final r = await _pdf.searchAll(_MemorySource(bytes), query: 'the');
             setState(() => _status = '${r.length} results across all pages');
           })),
         const SizedBox(height: 12),
@@ -576,14 +626,16 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
         _OpTile(icon: Icons.layers_clear, title: 'Flatten forms',
           subtitle: 'Burn form fields into page content', loading: _loading,
           onRun: () => _run('Flatten forms', () async {
-            final r = await _pdf.flattenForms(bytes);
-            await _saveAndReport(r, 'flattened_forms.pdf');
+            final sink = _MemorySink();
+            await _pdf.flattenForms(_MemorySource(bytes), sink);
+            await _saveAndReport(sink.takeBytes(), 'flattened_forms.pdf');
           })),
         _OpTile(icon: Icons.rule, title: 'Apply redactions',
           subtitle: 'Apply pending redaction marks', loading: _loading,
           onRun: () => _run('Apply redactions', () async {
-            final r = await _pdf.applyRedactions(bytes);
-            await _saveAndReport(r, 'redacted.pdf');
+            final sink = _MemorySink();
+            await _pdf.applyRedactions(_MemorySource(bytes), sink);
+            await _saveAndReport(sink.takeBytes(), 'redacted.pdf');
           })),
         const SizedBox(height: 12),
 
@@ -592,7 +644,7 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
         _OpTile(icon: Icons.verified, title: 'Quick probe',
           subtitle: 'Validate without full parse', loading: _loading,
           onRun: () => _run('Probe', () async {
-            final info = await _pdf.probe(bytes);
+            final info = await _pdf.probe(_MemorySource(bytes));
             setState(() => _status =
                 'Valid: ${info.isValid} • ${info.pageCount} pages • '
                 'Encrypted: ${info.isEncrypted} • v${info.version}');
@@ -683,8 +735,10 @@ class _MergeTabState extends State<_MergeTab> {
     if (_files.length < 2) return;
     setState(() { _loading = true; _status = 'Merging...'; });
     try {
-      final bytesList = _files.map((f) => f.bytes).toList();
-      final r = await _pdf.merge(bytesList);
+      final sources = _files.map((f) => _MemorySource(f.bytes) as PdfSource).toList();
+      final sink = _MemorySink();
+      await _pdf.merge(sources, sink);
+      final r = sink.takeBytes();
       setState(() { _merged = r; _status = 'Merged: ${fmtSize(r.length)}'; });
     } on PdfError catch (e) {
       setState(() => _status = 'Error: $e');
@@ -805,7 +859,9 @@ class _ImagesToPdfTabState extends State<_ImagesToPdfTab> {
     setState(() { _loading = true; _status = 'Converting...'; });
     try {
       final imgs = _images.map((f) => f.bytes).toList();
-      final r = await _pdf.imagesToPdf(imgs);
+      final sink = _MemorySink();
+      await _pdf.imagesToPdf(imgs, sink);
+      final r = sink.takeBytes();
       setState(() { _pdfBytes = r; _status = 'Created: ${fmtSize(r.length)}'; });
     } on PdfError catch (e) {
       setState(() => _status = 'Error: $e');
@@ -931,7 +987,7 @@ class _EditorTabState extends State<_EditorTab> {
     if (_fileBytes == null) return;
     setState(() { _loading = true; _status = '$label...'; });
     try {
-      final editor = await Pdf.edit(_fileBytes!);
+      final editor = await Pdf.edit(_MemorySource(_fileBytes!));
       try {
         final result = await work(editor);
         final path = await saveBytes(result, '${label.toLowerCase().replaceAll(' ', '_')}.pdf');
@@ -996,24 +1052,32 @@ class _EditorTabState extends State<_EditorTab> {
                           await e.setTitle('Test PDF');
                           await e.setAuthor('pdf_manipulator');
                           await e.setSubject('Example output');
-                          return e.save();
+                          final sink = _MemorySink();
+                          await e.save(sink);
+                          return sink.takeBytes();
                         })),
 
                       _SectionLabel('Page Operations'),
                       _OpTile(icon: Icons.rotate_right, title: 'Rotate page 1 → 90°', loading: _loading,
                         onRun: () => _runEditor('Rotate page 1', (e) async {
                           await e.rotatePage(0, degrees: 90);
-                          return e.save();
+                          final sink = _MemorySink();
+                          await e.save(sink);
+                          return sink.takeBytes();
                         })),
                       _OpTile(icon: Icons.rotate_right, title: 'Rotate all → 90°', loading: _loading,
                         onRun: () => _runEditor('Rotate all', (e) async {
                           await e.rotateAllPages(degrees: 90);
-                          return e.save();
+                          final sink = _MemorySink();
+                          await e.save(sink);
+                          return sink.takeBytes();
                         })),
                       _OpTile(icon: Icons.delete_outline, title: 'Delete last page', loading: _loading,
                         onRun: () => _runEditor('Delete last page', (e) async {
                           if (await e.pageCount > 1) await e.deletePage(await e.pageCount - 1);
-                          return e.save();
+                          final sink = _MemorySink();
+                          await e.save(sink);
+                          return sink.takeBytes();
                         })),
 
                       _SectionLabel('Watermark & Compress'),
@@ -1023,31 +1087,41 @@ class _EditorTabState extends State<_EditorTab> {
                           for (var i = 0; i < pc; i++) {
                             await e.addWatermark(i, 'SAMPLE', opacity: 0.25, fontSize: 48);
                           }
-                          return e.save();
+                          final sink = _MemorySink();
+                          await e.save(sink);
+                          return sink.takeBytes();
                         })),
                       _OpTile(icon: Icons.compress, title: 'Optimize images (quality 60)', loading: _loading,
                         onRun: () => _runEditor('Optimize images', (e) async {
                           final count = await e.optimizeImages(quality: 60);
                           log('Optimized $count images');
-                          return e.saveWithOptions(compress: true, garbageCollect: true);
+                          final sink = _MemorySink();
+                          await e.saveWithOptions(sink, compress: true, garbageCollect: true);
+                          return sink.takeBytes();
                         })),
 
                       _SectionLabel('Forms'),
                       _OpTile(icon: Icons.layers_clear, title: 'Flatten forms', loading: _loading,
                         onRun: () => _runEditor('Flatten forms', (e) async {
                           await e.flattenForms();
-                          return e.save();
+                          final sink = _MemorySink();
+                          await e.save(sink);
+                          return sink.takeBytes();
                         })),
                       _OpTile(icon: Icons.layers_clear_outlined, title: 'Flatten all annotations', loading: _loading,
                         onRun: () => _runEditor('Flatten annotations', (e) async {
                           await e.flattenAllAnnotations();
-                          return e.save();
+                          final sink = _MemorySink();
+                          await e.save(sink);
+                          return sink.takeBytes();
                         })),
 
                       _SectionLabel('Security'),
                       _OpTile(icon: Icons.lock, title: 'Save encrypted (pw: test123)', loading: _loading,
                         onRun: () => _runEditor('Encrypt', (e) async {
-                          return e.saveEncrypted(ownerPassword: 'test123');
+                          final sink = _MemorySink();
+                          await e.saveEncrypted(sink, ownerPassword: 'test123');
+                          return sink.takeBytes();
                         })),
 
                       _SectionLabel('Chained Operations'),
@@ -1061,7 +1135,9 @@ class _EditorTabState extends State<_EditorTab> {
                           }
                           await e.optimizeImages(quality: 70);
                           await e.setTitle('Processed by pdf_manipulator');
-                          return e.saveWithOptions(compress: true, garbageCollect: true);
+                          final sink = _MemorySink();
+                          await e.saveWithOptions(sink, compress: true, garbageCollect: true);
+                          return sink.takeBytes();
                         })),
 
                       const SizedBox(height: 40),

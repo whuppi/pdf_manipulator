@@ -2823,6 +2823,12 @@ if (Symbol.dispose) WasmPdf.prototype[Symbol.dispose] = WasmPdf.prototype.free;
  * Call `.free()` when done to release memory.
  */
 export class WasmPdfDocument {
+    static __wrap(ptr) {
+        const obj = Object.create(WasmPdfDocument.prototype);
+        obj.__wbg_ptr = ptr;
+        WasmPdfDocumentFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
     __destroy_into_raw() {
         const ptr = this.__wbg_ptr;
         this.__wbg_ptr = 0;
@@ -2832,6 +2838,62 @@ export class WasmPdfDocument {
     free() {
         const ptr = this.__destroy_into_raw();
         wasm.__wbg_wasmpdfdocument_free(ptr, 0);
+    }
+    /**
+     * LOCAL PATCH — pdf_manipulator/0.3.47-patches
+     * Add an image stamp annotation (logo watermark) to a page.
+     * The image bytes (JPEG/PNG) are embedded as an XObject in the appearance stream.
+     * Removal trigger: upstream adds image stamp to WasmPdfDocument.
+     * @param {number} page_index
+     * @param {Uint8Array} image_data
+     * @param {number} x
+     * @param {number} y
+     * @param {number} width
+     * @param {number} height
+     * @param {number} opacity
+     */
+    addImageStamp(page_index, image_data, x, y, width, height, opacity) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray8ToWasm0(image_data, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.wasmpdfdocument_addImageStamp(retptr, this.__wbg_ptr, page_index, ptr0, len0, x, y, width, height, opacity);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            if (r1) {
+                throw takeObject(r0);
+            }
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * LOCAL PATCH — pdf_manipulator/0.3.47-patches
+     * Add a stamp annotation to a page.
+     * Removal trigger: upstream adds stamp annotations to WasmPdfDocument.
+     * @param {number} page_index
+     * @param {number} stamp_type
+     * @param {string | null | undefined} custom_name
+     * @param {number} x
+     * @param {number} y
+     * @param {number} width
+     * @param {number} height
+     * @param {number} opacity
+     */
+    addStamp(page_index, stamp_type, custom_name, x, y, width, height, opacity) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            var ptr0 = isLikeNone(custom_name) ? 0 : passStringToWasm0(custom_name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            var len0 = WASM_VECTOR_LEN;
+            wasm.wasmpdfdocument_addStamp(retptr, this.__wbg_ptr, page_index, stamp_type, ptr0, len0, x, y, width, height, opacity);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            if (r1) {
+                throw takeObject(r0);
+            }
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
     }
     /**
      * LOCAL PATCH — pdf_manipulator/0.3.47-patches
@@ -2852,6 +2914,41 @@ export class WasmPdfDocument {
             const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             const len0 = WASM_VECTOR_LEN;
             wasm.wasmpdfdocument_addWatermark(retptr, this.__wbg_ptr, page_index, ptr0, len0, font_size, rotation, opacity, r, g, b);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            if (r1) {
+                throw takeObject(r0);
+            }
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * LOCAL PATCH — pdf_manipulator/0.3.47-patches
+     * Add a positioned watermark (text at specific coordinates) to a page.
+     * Removal trigger: upstream adds positioned watermark to WasmPdfDocument.
+     * @param {number} page_index
+     * @param {string} text
+     * @param {number} x
+     * @param {number} y
+     * @param {number} width
+     * @param {number} height
+     * @param {number} font_size
+     * @param {string | null | undefined} font_name
+     * @param {number} rotation
+     * @param {number} opacity
+     * @param {number} r
+     * @param {number} g
+     * @param {number} b
+     */
+    addWatermarkPositioned(page_index, text, x, y, width, height, font_size, font_name, rotation, opacity, r, g, b) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            const len0 = WASM_VECTOR_LEN;
+            var ptr1 = isLikeNone(font_name) ? 0 : passStringToWasm0(font_name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            var len1 = WASM_VECTOR_LEN;
+            wasm.wasmpdfdocument_addWatermarkPositioned(retptr, this.__wbg_ptr, page_index, ptr0, len0, x, y, width, height, font_size, ptr1, len1, rotation, opacity, r, g, b);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             if (r1) {
@@ -3688,31 +3785,6 @@ export class WasmPdfDocument {
         }
     }
     /**
-     * Create a flattened PDF where each page is rendered as an image.
-     * Burns in all annotations, form fields, and overlays.
-     * Returns the flattened PDF as bytes.
-     * @param {number | null} [dpi]
-     * @returns {Uint8Array}
-     */
-    flattenToImages(dpi) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_flattenToImages(retptr, this.__wbg_ptr, isLikeNone(dpi) ? Number.MAX_SAFE_INTEGER : (dpi) >>> 0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-            if (r3) {
-                throw takeObject(r2);
-            }
-            var v1 = getArrayU8FromWasm0(r0, r1).slice();
-            wasm.__wbindgen_export4(r0, r1 * 1, 1);
-            return v1;
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
      * Return warnings collected during the last form-flattening save.
      *
      * Each entry names a widget field that had no `/AP` appearance stream;
@@ -3730,6 +3802,34 @@ export class WasmPdfDocument {
             var v1 = getArrayJsValueFromWasm0(r0, r1).slice();
             wasm.__wbindgen_export4(r0, r1 * 4, 4);
             return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Load a PDF document from a callback-based reader (OPFS).
+     *
+     * @param read_fn - JS function: (offset: number, count: number) => Uint8Array
+     * @param length_fn - JS function: () => number (total file size)
+     * @param password - Optional password for encrypted PDFs
+     * @param {Function} read_fn
+     * @param {Function} length_fn
+     * @param {string | null} [password]
+     * @returns {WasmPdfDocument}
+     */
+    static fromReader(read_fn, length_fn, password) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            var ptr0 = isLikeNone(password) ? 0 : passStringToWasm0(password, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            var len0 = WASM_VECTOR_LEN;
+            wasm.wasmpdfdocument_fromReader(retptr, addHeapObject(read_fn), addHeapObject(length_fn), ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return WasmPdfDocument.__wrap(r0);
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
         }
@@ -3922,10 +4022,6 @@ export class WasmPdfDocument {
     }
     /**
      * Load a PDF document from raw bytes.
-     *
-     * @param data - PDF file contents as Uint8Array
-     * @param password - Optional password for encrypted PDFs
-     * @throws Error if the PDF is invalid or cannot be parsed
      * @param {Uint8Array} data
      * @param {string | null} [password]
      */
@@ -4146,36 +4242,6 @@ export class WasmPdfDocument {
                 throw takeObject(r1);
             }
             return r0 >>> 0;
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * Render a page to an image (PNG).
-     *
-     * Requires the `rendering` feature.
-     *
-     * @param page_index - Zero-based page number
-     * @param dpi - Dots per inch (default: 150)
-     * @returns Uint8Array containing the PNG image data
-     * @param {number} page_index
-     * @param {number | null} [dpi]
-     * @returns {Uint8Array}
-     */
-    renderPage(page_index, dpi) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_renderPage(retptr, this.__wbg_ptr, page_index, isLikeNone(dpi) ? Number.MAX_SAFE_INTEGER : (dpi) >>> 0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-            if (r3) {
-                throw takeObject(r2);
-            }
-            var v1 = getArrayU8FromWasm0(r0, r1).slice();
-            wasm.__wbindgen_export4(r0, r1 * 1, 1);
-            return v1;
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
         }
@@ -5845,6 +5911,10 @@ function __wbg_get_imports() {
         },
         __wbg_call_13665d9f14390edc: function() { return handleError(function (arg0, arg1) {
             const ret = getObject(arg0).call(getObject(arg1));
+            return addHeapObject(ret);
+        }, arguments); },
+        __wbg_call_faa0a261f288f846: function() { return handleError(function (arg0, arg1, arg2, arg3) {
+            const ret = getObject(arg0).call(getObject(arg1), getObject(arg2), getObject(arg3));
             return addHeapObject(ret);
         }, arguments); },
         __wbg_debug_1cbb2f02cd18a348: function(arg0, arg1, arg2, arg3) {

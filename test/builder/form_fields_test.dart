@@ -1,6 +1,8 @@
 import 'package:test/test.dart';
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
+import '../helpers/memory_io.dart';
+
 void main() {
   late Pdf pdf;
 
@@ -18,10 +20,12 @@ void main() {
       final page = await builder.addA4Page();
       await page.textField('name', 72, 700, 200, 20);
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
-      final info = await pdf.probe(bytes);
+      final bytes = sink.takeBytes();
+      final info = await pdf.probe(sourceOf(bytes));
       expect(info.isValid, isTrue);
       expect(info.pageCount, 1);
     });
@@ -32,9 +36,11 @@ void main() {
       await page.textField('email', 72, 700, 200, 20,
           defaultValue: 'user@example.com');
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
+      final bytes = sink.takeBytes();
       expect(bytes.length, greaterThan(0));
     });
 
@@ -43,10 +49,12 @@ void main() {
       final page = await builder.addA4Page();
       await page.checkbox('agree', 72, 700, 20, 20);
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
-      final info = await pdf.probe(bytes);
+      final bytes = sink.takeBytes();
+      final info = await pdf.probe(sourceOf(bytes));
       expect(info.isValid, isTrue);
     });
 
@@ -55,9 +63,11 @@ void main() {
       final page = await builder.addA4Page();
       await page.checkbox('agree', 72, 700, 20, 20, checked: true);
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
+      final bytes = sink.takeBytes();
       expect(bytes.length, greaterThan(0));
     });
 
@@ -67,10 +77,12 @@ void main() {
       await page.comboBox('country', 72, 700, 200, 20,
           ['US', 'UK', 'IN']);
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
-      final info = await pdf.probe(bytes);
+      final bytes = sink.takeBytes();
+      final info = await pdf.probe(sourceOf(bytes));
       expect(info.isValid, isTrue);
     });
 
@@ -80,9 +92,11 @@ void main() {
       await page.comboBox('country', 72, 700, 200, 20,
           ['US', 'UK', 'IN'], selected: 'UK');
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
+      final bytes = sink.takeBytes();
       expect(bytes.length, greaterThan(0));
     });
 
@@ -91,10 +105,12 @@ void main() {
       final page = await builder.addA4Page();
       await page.pushButton('submit', 72, 700, 100, 30, 'Submit');
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
-      final info = await pdf.probe(bytes);
+      final bytes = sink.takeBytes();
+      final info = await pdf.probe(sourceOf(bytes));
       expect(info.isValid, isTrue);
     });
 
@@ -103,10 +119,12 @@ void main() {
       final page = await builder.addA4Page();
       await page.signatureField('sig', 72, 700, 200, 50);
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
-      final info = await pdf.probe(bytes);
+      final bytes = sink.takeBytes();
+      final info = await pdf.probe(sourceOf(bytes));
       expect(info.isValid, isTrue);
     });
 
@@ -120,10 +138,12 @@ void main() {
       await page.pushButton('submit', 72, 620, 100, 30, 'Submit');
       await page.signatureField('sig', 72, 560, 200, 50);
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
-      final doc = await pdf.open(bytes);
+      final bytes = sink.takeBytes();
+      final doc = await pdf.open(sourceOf(bytes));
       expect(doc.pageCount, 1);
     });
   });

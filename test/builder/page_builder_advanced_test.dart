@@ -1,6 +1,8 @@
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
+import '../helpers/memory_io.dart';
+
 void main() {
   late Pdf pdf;
 
@@ -26,10 +28,12 @@ void main() {
         selected: 'green',
       );
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
-      final info = await pdf.probe(bytes);
+      final bytes = sink.takeBytes();
+      final info = await pdf.probe(sourceOf(bytes));
       expect(info.isValid, isTrue);
       expect(info.pageCount, 1);
     });
@@ -41,9 +45,11 @@ void main() {
       await page.fieldKeystroke('AFNumber_Keystroke(0, 0, 0, 0, "", true);');
       await page.fieldFormat('AFNumber_Format(0, 0, 0, 0, "", true);');
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
+      final bytes = sink.takeBytes();
       expect(bytes.length, greaterThan(0));
     });
 
@@ -54,9 +60,11 @@ void main() {
       await page.fieldValidate('event.rc = (event.value >= 0);');
       await page.fieldCalculate('event.value = 42;');
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
+      final bytes = sink.takeBytes();
       expect(bytes.length, greaterThan(0));
     });
 
@@ -67,9 +75,11 @@ void main() {
       await page.paragraph('Click here');
       await page.linkUrl('https://example.com');
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
+      final bytes = sink.takeBytes();
       expect(bytes.length, greaterThan(0));
     });
 
@@ -83,10 +93,12 @@ void main() {
       final page2 = await builder.addA4Page();
       await page2.paragraph('Page 2');
       await page2.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
-      final info = await pdf.probe(bytes);
+      final bytes = sink.takeBytes();
+      final info = await pdf.probe(sourceOf(bytes));
       expect(info.isValid, isTrue);
       expect(info.pageCount, 2);
     });
@@ -98,9 +110,11 @@ void main() {
       await page.paragraph('See note below');
       await page.footnote('1', 'This is the footnote text.');
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
+      final bytes = sink.takeBytes();
       expect(bytes.length, greaterThan(0));
     });
 
@@ -112,9 +126,11 @@ void main() {
           'Lorem ipsum dolor sit amet, consectetur adipiscing elit. '
           'Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.');
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
+      final bytes = sink.takeBytes();
       expect(bytes.length, greaterThan(0));
     });
 
@@ -126,9 +142,11 @@ void main() {
       await page.newline();
       await page.paragraph('Line two');
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
+      final bytes = sink.takeBytes();
       expect(bytes.length, greaterThan(0));
     });
 
@@ -140,10 +158,12 @@ void main() {
       await page.newPageSameSize();
       await page.paragraph('Page 2');
       await page.done();
-      final bytes = await builder.save();
+      final sink = TestPdfSink();
+      await builder.save(sink);
       builder.dispose();
 
-      final info = await pdf.probe(bytes);
+      final bytes = sink.takeBytes();
+      final info = await pdf.probe(sourceOf(bytes));
       expect(info.isValid, isTrue);
       expect(info.pageCount, 2);
     });

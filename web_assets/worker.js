@@ -27,17 +27,130 @@ function getHandle(map, id, name) {
   return h;
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// OPFS helpers — disk-backed I/O for streaming large PDFs
+// ═══════════════════════════════════════════════════════════════════════
+
+const opfsHandles = new Map(); // filename → SyncAccessHandle (open for writing)
+
+async function opfsWrite(filename, chunk, offset) {
+  try {
+    const root = await navigator.storage.getDirectory();
+    let handle = opfsHandles.get(filename);
+    if (!handle) {
+      const fileHandle = await root.getFileHandle(filename, { create: true });
+      handle = await fileHandle.createSyncAccessHandle();
+      opfsHandles.set(filename, handle);
+    }
+    const data = new Uint8Array(chunk);
+    handle.write(data, { at: offset });
+  } catch (e) {
+    throw new Error(`opfsWrite failed for ${filename} at offset ${offset}: ${e.message}`);
+  }
+}
+
+async function opfsFinalize(filename) {
+  const handle = opfsHandles.get(filename);
+  if (handle) {
+    handle.flush();
+    // Keep the handle open — same SyncAccessHandle supports read+write.
+    // openDocument reuses it. Closed in closeDocument.
+  }
+}
+
+async function opfsRead(filename) {
+  const root = await navigator.storage.getDirectory();
+  const fileHandle = await root.getFileHandle(filename);
+  const handle = await fileHandle.createSyncAccessHandle();
+  const size = handle.getSize();
+  const buf = new Uint8Array(size);
+  handle.read(buf, { at: 0 });
+  handle.close();
+  return buf;
+}
+
+async function opfsCleanup(filename) {
+  try {
+    const root = await navigator.storage.getDirectory();
+    await root.removeEntry(filename);
+  } catch (_) { /* ignore cleanup errors */ }
+}
+
+// Resolve input bytes: from ArrayBuffer (direct) or from OPFS file
+async function resolveInputBytes(args) {
+  if (args.bytes) return new Uint8Array(args.bytes);
+  if (args.opfsFile) {
+    const data = await opfsRead(args.opfsFile);
+    await opfsCleanup(args.opfsFile);
+    return data;
+  }
+  throw new Error('No input: expected bytes or opfsFile');
+}
+
+// Open a WasmPdfDocument from OPFS via fromReader (reads on demand from disk).
+// Reuses the SyncAccessHandle from opfsWrite/opfsFinalize if available (same
+// worker, same file, no close+reopen). Falls back to creating a new handle
+// if the file was written by a different mechanism.
+async function openDocument(args) {
+  try {
+    let syncHandle = opfsHandles.get(args.opfsFile);
+    const reused = !!syncHandle;
+    if (!syncHandle) {
+      const root = await navigator.storage.getDirectory();
+      const fileHandle = await root.getFileHandle(args.opfsFile);
+      syncHandle = await fileHandle.createSyncAccessHandle();
+    }
+    const fileSize = syncHandle.getSize();
+    if (fileSize === 0) {
+      throw new Error(`OPFS file is empty: ${args.opfsFile} (reused=${reused})`);
+    }
+    const allBytes = new Uint8Array(fileSize);
+    syncHandle.read(allBytes, { at: 0 });
+    const doc = new WasmPdfDocument(allBytes, args.password || null);
+    return { doc, syncHandle, opfsFile: args.opfsFile };
+  } catch (e) {
+    throw new Error(`openDocument(${args.opfsFile}) failed: ${e.message}`);
+  }
+}
+
+// Clean up after openDocument
+async function closeDocument(ctx) {
+  if (ctx.opfsFile) opfsHandles.delete(ctx.opfsFile);
+  if (ctx.syncHandle) ctx.syncHandle.close();
+  // Cleanup is handled by the Dart-side cleanupOpfsFile
+}
+
 self.onmessage = async (event) => {
   const { id, op, args } = event.data;
 
   try {
+    // OPFS operations don't need WASM init
+    if (op === 'opfs.write') {
+      await opfsWrite(args.filename, args.chunk, args.offset);
+      self.postMessage({ type: 'result', id, result: {} });
+      return;
+    }
+    if (op === 'opfs.finalize') {
+      await opfsFinalize(args.filename);
+      self.postMessage({ type: 'result', id, result: {} });
+      return;
+    }
+    if (op === 'opfs.cleanup') {
+      await opfsCleanup(args.filename);
+      self.postMessage({ type: 'result', id, result: {} });
+      return;
+    }
+
     await ensureInit();
 
     let result;
 
     // ── Editor handle ops (editor.XXX) ────────────────────────────
     if (op === 'editorOpen') {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password || null);
+      // Editor needs full bytes for DocumentEditor initialization (mutation ops).
+      // fromReader can't be used here — raw_bytes would be empty, breaking ensure_editor.
+      const inputBytes = await resolveInputBytes(args);
+      const doc = new WasmPdfDocument(inputBytes, args.password || null);
       const hid = nextHandleId++;
       editorHandles.set(hid, doc);
       result = { handleId: hid };
@@ -59,7 +172,7 @@ self.onmessage = async (event) => {
     }
     // ── One-shot ops ──────────────────────────────────────────────
     else {
-      result = handleOneShot(op, args);
+      result = await handleOneShot(op, args);
     }
 
     // Transfer ArrayBuffers for zero-copy
@@ -328,27 +441,30 @@ function handlePageOp(method, args) {
 // ONE-SHOT OPS — load → operate → save → free
 // ═══════════════════════════════════════════════════════════════════════
 
-function handleOneShot(op, args) {
+async function handleOneShot(op, args) {
   switch (op) {
     // ── Inspect ──
     case 'open': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password || null);
-      const pc = doc.pageCount();
+      const ctx = await openDocument(args);
+      const pc = ctx.doc.pageCount();
       const pages = [];
       for (let i = 0; i < pc; i++) {
-        const mb = doc.pageMediaBox(i);
-        pages.push({ index: i, width: mb[2] - mb[0], height: mb[3] - mb[1], rotation: doc.pageRotation(i) });
+        const mb = ctx.doc.pageMediaBox(i);
+        pages.push({ index: i, width: mb[2] - mb[0], height: mb[3] - mb[1], rotation: ctx.doc.pageRotation(i) });
       }
-      const r = { pageCount: pc, version: '2.0', pages, isTagged: doc.hasStructureTree() };
-      doc.free();
+      const r = { pageCount: pc, version: '2.0', pages, isTagged: ctx.doc.hasStructureTree() };
+      ctx.doc.free();
+      if (ctx.syncHandle) ctx.syncHandle.close();
+      if (ctx.opfsFile) opfsHandles.delete(ctx.opfsFile);
       return r;
     }
 
     case 'probe': {
       try {
-        const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-        const pc = doc.pageCount();
-        doc.free();
+        const ctx = await openDocument(args);
+        const pc = ctx.doc.pageCount();
+        ctx.doc.free();
+        await closeDocument(ctx);
         return { isValid: true, pageCount: pc, isEncrypted: false };
       } catch (e) {
         return { isValid: false, pageCount: null, isEncrypted: false };
@@ -365,193 +481,215 @@ function handleOneShot(op, args) {
     }
 
     case 'split': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      const pc = doc.pageCount();
+      const ctx = await openDocument(args);
+      const pc = ctx.doc.pageCount();
       const chunks = [];
       for (let start = 0; start < pc; start += args.every) {
         const end = Math.min(start + args.every, pc);
         const pages = new Uint32Array(end - start);
         for (let i = 0; i < pages.length; i++) pages[i] = start + i;
-        chunks.push(doc.extractPages(pages).buffer);
+        chunks.push(ctx.doc.extractPages(pages).buffer);
       }
-      doc.free();
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { chunks };
     }
 
     case 'extractPages': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      const bytes = doc.extractPages(new Uint32Array(args.pages));
-      doc.free();
+      const ctx = await openDocument(args);
+      const bytes = ctx.doc.extractPages(new Uint32Array(args.pages));
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { bytes: bytes.buffer };
     }
 
     case 'deletePages': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      for (const p of [...args.pages].sort((a, b) => b - a)) doc.deletePage(p);
-      const bytes = doc.saveToBytes();
-      doc.free();
+      const ctx = await openDocument(args);
+      for (const p of [...args.pages].sort((a, b) => b - a)) ctx.doc.deletePage(p);
+      const bytes = ctx.doc.saveToBytes();
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { bytes: bytes.buffer };
     }
 
     case 'reorderPages': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      const bytes = doc.extractPages(new Uint32Array(args.order));
-      doc.free();
+      const ctx = await openDocument(args);
+      const bytes = ctx.doc.extractPages(new Uint32Array(args.order));
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { bytes: bytes.buffer };
     }
 
     case 'movePage': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      doc.movePage(args.from, args.to);
-      const bytes = doc.saveToBytes();
-      doc.free();
+      const ctx = await openDocument(args);
+      ctx.doc.movePage(args.from, args.to);
+      const bytes = ctx.doc.saveToBytes();
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { bytes: bytes.buffer };
     }
 
     case 'rotatePages': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      for (const [page, degrees] of Object.entries(args.pages)) doc.rotatePage(parseInt(page), degrees);
-      const bytes = doc.saveToBytes();
-      doc.free();
+      const ctx = await openDocument(args);
+      for (const [page, degrees] of Object.entries(args.pages)) ctx.doc.rotatePage(parseInt(page), degrees);
+      const bytes = ctx.doc.saveToBytes();
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { bytes: bytes.buffer };
     }
 
     case 'rotateAllPages': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      doc.rotateAllPages(args.degrees);
-      const bytes = doc.saveToBytes();
-      doc.free();
+      const ctx = await openDocument(args);
+      ctx.doc.rotateAllPages(args.degrees);
+      const bytes = ctx.doc.saveToBytes();
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { bytes: bytes.buffer };
     }
 
     // ── Compression ──
     case 'compress': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      const bytes = doc.saveWithOptions(true, true, false);
-      doc.free();
+      const ctx = await openDocument(args);
+      const bytes = ctx.doc.saveWithOptions(true, true, false);
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { bytes: bytes.buffer };
     }
 
     // ── Content ──
     case 'flattenForms': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      doc.flattenForms();
-      const bytes = doc.saveToBytes();
-      doc.free();
+      const ctx = await openDocument(args);
+      ctx.doc.flattenForms();
+      const bytes = ctx.doc.saveToBytes();
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { bytes: bytes.buffer };
     }
 
     case 'applyRedactions': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      doc.applyAllRedactions();
-      const bytes = doc.saveToBytes();
-      doc.free();
+      const ctx = await openDocument(args);
+      ctx.doc.applyAllRedactions();
+      const bytes = ctx.doc.saveToBytes();
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { bytes: bytes.buffer };
     }
 
     // ── Watermark ──
     case 'watermark': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      const pc = doc.pageCount();
+      const ctx = await openDocument(args);
+      const pc = ctx.doc.pageCount();
       for (const i of (args.pages || Array.from({length: pc}, (_, i) => i))) {
-        doc.addWatermark(i, args.text, args.fontSize || 48, args.rotation || 45,
+        ctx.doc.addWatermark(i, args.text, args.fontSize || 48, args.rotation || 45,
           args.opacity || 0.3, args.r || 0.5, args.g || 0.5, args.b || 0.5);
       }
-      const bytes = doc.saveToBytes();
-      doc.free();
+      const bytes = ctx.doc.saveToBytes();
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { bytes: bytes.buffer };
     }
 
     case 'watermarkPositioned': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      const pc = doc.pageCount();
+      const ctx = await openDocument(args);
+      const pc = ctx.doc.pageCount();
       for (const i of (args.pages || Array.from({length: pc}, (_, i) => i))) {
-        doc.addWatermarkPositioned(i, args.text, args.x, args.y, args.width, args.height,
+        ctx.doc.addWatermarkPositioned(i, args.text, args.x, args.y, args.width, args.height,
           args.fontSize || 48, args.fontName || null, args.rotation || 45,
           args.opacity || 0.3, args.r || 0.5, args.g || 0.5, args.b || 0.5);
       }
-      const bytes = doc.saveToBytes();
-      doc.free();
+      const bytes = ctx.doc.saveToBytes();
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { bytes: bytes.buffer };
     }
 
     // ── Stamps ──
     case 'addStamp': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      doc.addStamp(args.page, args.stampType, args.customName || null,
+      const ctx = await openDocument(args);
+      ctx.doc.addStamp(args.page, args.stampType, args.customName || null,
         args.x, args.y, args.width, args.height, args.opacity || 1.0);
-      const bytes = doc.saveToBytes();
-      doc.free();
+      const bytes = ctx.doc.saveToBytes();
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { bytes: bytes.buffer };
     }
 
     case 'addImageStamp': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      doc.addImageStamp(args.page, new Uint8Array(args.imageBytes),
+      const ctx = await openDocument(args);
+      ctx.doc.addImageStamp(args.page, new Uint8Array(args.imageBytes),
         args.x, args.y, args.width, args.height, args.opacity || 1.0);
-      const bytes = doc.saveToBytes();
-      doc.free();
+      const bytes = ctx.doc.saveToBytes();
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { bytes: bytes.buffer };
     }
 
     // ── Security ──
     case 'encrypt': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      const bytes = doc.saveEncryptedToBytes(args.userPassword || '', args.ownerPassword || '');
-      doc.free();
+      const ctx = await openDocument(args);
+      const bytes = ctx.doc.saveEncryptedToBytes(args.userPassword || '', args.ownerPassword || '');
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { bytes: bytes.buffer };
     }
 
     case 'decrypt': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password);
-      const bytes = doc.saveToBytes();
-      doc.free();
+      const ctx = await openDocument(args);
+      const bytes = ctx.doc.saveToBytes();
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { bytes: bytes.buffer };
     }
 
     // ── Extraction ──
     case 'extractText': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password || null);
+      const ctx = await openDocument(args);
       const text = args.page != null
-        ? (typeof doc.extractPageText(args.page) === 'string' ? doc.extractPageText(args.page) : '')
-        : doc.extractAllText();
-      doc.free();
+        ? (typeof ctx.doc.extractPageText(args.page) === 'string' ? ctx.doc.extractPageText(args.page) : '')
+        : ctx.doc.extractAllText();
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { text };
     }
 
     case 'toMarkdown': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password || null);
-      const text = args.page != null ? doc.toMarkdown(args.page) : doc.toMarkdownAll();
-      doc.free();
+      const ctx = await openDocument(args);
+      const text = args.page != null ? ctx.doc.toMarkdown(args.page) : ctx.doc.toMarkdownAll();
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { text };
     }
 
     case 'toHtml': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password || null);
-      const text = doc.toHtml(args.page);
-      doc.free();
+      const ctx = await openDocument(args);
+      const text = ctx.doc.toHtml(args.page);
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { text };
     }
 
     case 'toPlainText': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password || null);
-      const text = doc.toPlainText(args.page);
-      doc.free();
+      const ctx = await openDocument(args);
+      const text = ctx.doc.toPlainText(args.page);
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { text };
     }
 
     // ── Search ──
     case 'searchPage': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password || null);
-      const results = doc.searchPage(args.page, args.query);
-      doc.free();
+      const ctx = await openDocument(args);
+      const results = ctx.doc.searchPage(args.page, args.query);
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { results: results || [] };
     }
 
     case 'searchAll': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password || null);
-      const results = doc.search(args.query);
-      doc.free();
+      const ctx = await openDocument(args);
+      const results = ctx.doc.search(args.query);
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { results: results || [] };
     }
 
@@ -564,49 +702,126 @@ function handleOneShot(op, args) {
     }
 
     case 'embedFile': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      doc.embedFile(args.name, new Uint8Array(args.fileData));
-      const bytes = doc.saveToBytes();
-      doc.free();
+      const ctx = await openDocument(args);
+      ctx.doc.embedFile(args.name, new Uint8Array(args.fileData));
+      const bytes = ctx.doc.saveToBytes();
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { bytes: bytes.buffer };
     }
 
     case 'eraseRegions': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      doc.eraseRegions(args.page, new Float32Array(args.rects));
-      const bytes = doc.saveToBytes();
-      doc.free();
+      const ctx = await openDocument(args);
+      ctx.doc.eraseRegions(args.page, new Float32Array(args.rects));
+      const bytes = ctx.doc.saveToBytes();
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { bytes: bytes.buffer };
     }
 
     // ── Signatures ──
     case 'getSignatureCount': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password || null);
-      const count = doc.signatureCount();
-      doc.free();
+      const ctx = await openDocument(args);
+      const count = ctx.doc.signatureCount();
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { count };
     }
 
     case 'getSignatures': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password || null);
-      const sigs = doc.signatures();
-      doc.free();
+      const ctx = await openDocument(args);
+      const sigs = ctx.doc.signatures();
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { signatures: sigs || [] };
     }
 
     // ── Validation ──
     case 'validatePdfA': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password || null);
-      const r = doc.validatePdfA(args.level || '2b');
-      doc.free();
+      const ctx = await openDocument(args);
+      const r = ctx.doc.validatePdfA(args.level || '2b');
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { compliant: r?.compliant || false, errors: r?.errors || 0, warnings: r?.warnings || 0 };
     }
 
     case 'validatePdfUa': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password || null);
-      const r = doc.validatePdfUa();
-      doc.free();
+      const ctx = await openDocument(args);
+      const r = ctx.doc.validatePdfUa();
+      ctx.doc.free();
+      await closeDocument(ctx);
       return { accessible: r?.accessible || false };
+    }
+
+    // ── Rendering ──
+    case 'renderPage': {
+      const ctx = await openDocument(args);
+      try {
+        const page = args.pageIndex || 0;
+        let rendered;
+        if (args.width && args.height) {
+          rendered = ctx.doc.renderPageFit(page, args.width, args.height);
+        } else {
+          rendered = ctx.doc.renderPage(page);
+        }
+        return {
+          width: rendered.width,
+          height: rendered.height,
+          data: rendered.data.buffer,
+        };
+      } finally {
+        ctx.doc.free();
+        await closeDocument(ctx);
+      }
+    }
+
+    // ── Image extraction (per-page) ──
+    case 'extractImages': {
+      const ctx = await openDocument(args);
+      try {
+        const page = args.pageIndex || 0;
+        const images = ctx.doc.extractImages(page) || [];
+        return {
+          images: images.map(img => ({
+            width: img.width,
+            height: img.height,
+            format: img.format || '',
+            colorSpace: img.colorSpace || '',
+            bitsPerComponent: img.bitsPerComponent || 8,
+            data: img.data.buffer,
+          })),
+        };
+      } finally {
+        ctx.doc.free();
+        await closeDocument(ctx);
+      }
+    }
+
+    // ── Sign ──
+    case 'sign': {
+      const ctx = await openDocument(args);
+      try {
+        const cert = new Uint8Array(args.certificate);
+        ctx.doc.sign(cert, args.certificatePassword || '',
+          args.reason || null, args.location || null);
+        const bytes = ctx.doc.saveToBytes();
+        return { bytes: bytes.buffer };
+      } finally {
+        ctx.doc.free();
+        await closeDocument(ctx);
+      }
+    }
+
+    // ── Verify signatures ──
+    case 'verifySignatures': {
+      const ctx = await openDocument(args);
+      try {
+        const valid = ctx.doc.verifySignatures?.() || false;
+        return { valid };
+      } finally {
+        ctx.doc.free();
+        await closeDocument(ctx);
+      }
     }
 
     default:

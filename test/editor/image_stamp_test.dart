@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
+import '../helpers/memory_io.dart';
 import '../helpers/pdf_fixtures.dart';
 
 // 1x1 red JPEG (smallest valid JPEG)
@@ -51,55 +52,63 @@ void main() {
 
   group('Pdf.addImageStamp', () {
     test('produces valid PDF with image stamp', () async {
-      final result = await pdf.addImageStamp(minimalPdf,
+      final sink = TestPdfSink();
+      await pdf.addImageStamp(sourceOf(minimalPdf), sink,
         page: 0,
         imageBytes: _tinyJpeg,
         x: 100, y: 700, width: 200, height: 100,
       );
+      final result = sink.takeBytes();
       expect(result.length, greaterThan(minimalPdf.length));
-      final info = await pdf.probe(result);
+      final info = await pdf.probe(sourceOf(result));
       expect(info.isValid, isTrue);
     });
 
     test('image stamp with opacity', () async {
-      final result = await pdf.addImageStamp(minimalPdf,
+      final sink = TestPdfSink();
+      await pdf.addImageStamp(sourceOf(minimalPdf), sink,
         page: 0,
         imageBytes: _tinyJpeg,
         x: 50, y: 50, width: 100, height: 100,
         opacity: 0.5,
       );
-      final info = await pdf.probe(result);
+      final result = sink.takeBytes();
+      final info = await pdf.probe(sourceOf(result));
       expect(info.isValid, isTrue);
     });
 
     test('image stamp preserves page count', () async {
       final threePages = await buildThreePagePdf();
-      final result = await pdf.addImageStamp(threePages,
+      final sink = TestPdfSink();
+      await pdf.addImageStamp(sourceOf(threePages), sink,
         page: 1,
         imageBytes: _tinyJpeg,
         x: 100, y: 100, width: 200, height: 200,
       );
-      final doc = await pdf.open(result);
+      final result = sink.takeBytes();
+      final doc = await pdf.open(sourceOf(result));
       expect(doc.pageCount, 3);
     });
   });
 
   group('PdfEditor.addImageStamp', () {
     test('adds image stamp via editor', () async {
-      final editor = await Pdf.edit(minimalPdf);
+      final editor = await Pdf.edit(sourceOf(minimalPdf));
       await editor.addImageStamp(0, _tinyJpeg,
         x: 100, y: 700, width: 200, height: 100,
       );
-      final result = await editor.save();
+      final sink = TestPdfSink();
+      await editor.save(sink);
       editor.dispose();
 
+      final result = sink.takeBytes();
       expect(result.length, greaterThan(minimalPdf.length));
-      final info = await pdf.probe(result);
+      final info = await pdf.probe(sourceOf(result));
       expect(info.isValid, isTrue);
     });
 
     test('editor marks as modified after image stamp', () async {
-      final editor = await Pdf.edit(minimalPdf);
+      final editor = await Pdf.edit(sourceOf(minimalPdf));
       await editor.addImageStamp(0, _tinyJpeg,
         x: 50, y: 50, width: 100, height: 100,
       );
@@ -110,31 +119,37 @@ void main() {
 
   group('Pdf.addStamp (text stamp)', () {
     test('adds Approved stamp', () async {
-      final result = await pdf.addStamp(minimalPdf,
+      final sink = TestPdfSink();
+      await pdf.addStamp(sourceOf(minimalPdf), sink,
         page: 0, stampType: 0,
         x: 100, y: 700, width: 200, height: 50,
       );
+      final result = sink.takeBytes();
       expect(result.length, greaterThan(minimalPdf.length));
-      final info = await pdf.probe(result);
+      final info = await pdf.probe(sourceOf(result));
       expect(info.isValid, isTrue);
     });
 
     test('adds Draft stamp', () async {
-      final result = await pdf.addStamp(minimalPdf,
+      final sink = TestPdfSink();
+      await pdf.addStamp(sourceOf(minimalPdf), sink,
         page: 0, stampType: 12,
         x: 100, y: 700, width: 200, height: 50,
       );
-      final info = await pdf.probe(result);
+      final result = sink.takeBytes();
+      final info = await pdf.probe(sourceOf(result));
       expect(info.isValid, isTrue);
     });
 
     test('stamp with opacity', () async {
-      final result = await pdf.addStamp(minimalPdf,
+      final sink = TestPdfSink();
+      await pdf.addStamp(sourceOf(minimalPdf), sink,
         page: 0, stampType: 6,
         x: 100, y: 700, width: 200, height: 50,
         opacity: 0.5,
       );
-      final info = await pdf.probe(result);
+      final result = sink.takeBytes();
+      final info = await pdf.probe(sourceOf(result));
       expect(info.isValid, isTrue);
     });
   });

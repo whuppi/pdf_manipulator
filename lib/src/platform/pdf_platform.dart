@@ -1,57 +1,70 @@
-/// Platform-agnostic contract for all PDF operations.
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/core/pdf_image.dart';
 import 'package:pdf_manipulator/src/core/pdf_info.dart';
 import 'package:pdf_manipulator/src/core/pdf_rect.dart';
 import 'package:pdf_manipulator/src/core/pdf_signature.dart';
+import 'package:pdf_manipulator/src/core/pdf_sink.dart';
+import 'package:pdf_manipulator/src/core/pdf_source.dart';
 import 'package:pdf_manipulator/src/core/search_result.dart';
 import 'package:pdf_manipulator/src/document/pdf_doc.dart';
 
+/// Platform-agnostic contract for all PDF operations.
+///
+/// Input: [PdfSource] (random-access reader).
+/// Output: [PdfSink] (sequential writer) for operations producing a PDF.
+/// No dart:io. No Uint8List for PDF I/O.
 abstract interface class PdfPlatform {
   // ── Inspect ──────────────────────────────────────────────────────────────
-  Future<PdfDoc> open(Uint8List bytes, {String? password});
-  Future<PdfInfo> probe(Uint8List bytes);
+  Future<PdfDoc> open(PdfSource source, {String? password});
+  Future<PdfInfo> probe(PdfSource source);
 
   // ── Structural ───────────────────────────────────────────────────────────
-  Future<Uint8List> merge(List<Uint8List> inputs);
-  Future<List<Uint8List>> split(Uint8List bytes, {required int every});
-  Future<List<Uint8List>> splitBySize(Uint8List bytes, {required int maxBytes});
-  Future<Uint8List> extractPages(Uint8List bytes, {required List<int> pages});
-  Future<Uint8List> deletePages(Uint8List bytes, {required List<int> pages});
-  Future<Uint8List> reorderPages(Uint8List bytes, {required List<int> order});
-  Future<Uint8List> movePage(Uint8List bytes,
+  Future<void> merge(List<PdfSource> inputs, PdfSink output);
+  Future<void> split(PdfSource source, PdfSink Function(int index) sinkFactory,
+      {required int every});
+  Future<int> splitBySize(
+      PdfSource source, PdfSink Function(int index) sinkFactory,
+      {required int maxBytes});
+  Future<void> extractPages(PdfSource source, PdfSink output,
+      {required List<int> pages});
+  Future<void> deletePages(PdfSource source, PdfSink output,
+      {required List<int> pages});
+  Future<void> reorderPages(PdfSource source, PdfSink output,
+      {required List<int> order});
+  Future<void> movePage(PdfSource source, PdfSink output,
       {required int from, required int to});
-  Future<Uint8List> rotatePages(Uint8List bytes,
+  Future<void> rotatePages(PdfSource source, PdfSink output,
       {required Map<int, int> pages});
-  Future<Uint8List> rotateAllPages(Uint8List bytes, {required int degrees});
+  Future<void> rotateAllPages(PdfSource source, PdfSink output,
+      {required int degrees});
 
   // ── Content ──────────────────────────────────────────────────────────────
-  Future<Uint8List> flattenForms(Uint8List bytes);
-  Future<Uint8List> applyRedactions(Uint8List bytes);
-  Future<Uint8List> embedFile(Uint8List bytes,
+  Future<void> flattenForms(PdfSource source, PdfSink output);
+  Future<void> applyRedactions(PdfSource source, PdfSink output);
+  Future<void> embedFile(PdfSource source, PdfSink output,
       {required String name, required Uint8List fileData});
-  Future<Uint8List> eraseRegions(Uint8List bytes,
+  Future<void> eraseRegions(PdfSource source, PdfSink output,
       {required int page, required List<PdfRect> regions});
-  Future<Uint8List> compress(Uint8List bytes,
+  Future<void> compress(PdfSource source, PdfSink output,
       {int imageQuality = 75, bool garbageCollect = true, bool linearize = false});
 
   // ── Extraction ───────────────────────────────────────────────────────────
-  Future<String> extractText(Uint8List bytes, {int? page, String? password});
-  Future<String> toMarkdown(Uint8List bytes, {int? page, String? password});
-  Future<String> toHtml(Uint8List bytes,
+  Future<String> extractText(PdfSource source, {int? page, String? password});
+  Future<String> toMarkdown(PdfSource source, {int? page, String? password});
+  Future<String> toHtml(PdfSource source,
       {required int page, String? password});
-  Future<String> toPlainText(Uint8List bytes,
+  Future<String> toPlainText(PdfSource source,
       {required int page, String? password});
 
   // ── Search ───────────────────────────────────────────────────────────────
-  Future<List<SearchResult>> searchPage(Uint8List bytes,
+  Future<List<SearchResult>> searchPage(PdfSource source,
       {required int page, required String query, String? password});
-  Future<List<SearchResult>> searchAll(Uint8List bytes,
+  Future<List<SearchResult>> searchAll(PdfSource source,
       {required String query, String? password});
 
   // ── Security ─────────────────────────────────────────────────────────────
-  Future<Uint8List> watermark(Uint8List bytes,
+  Future<void> watermark(PdfSource source, PdfSink output,
       {required String text,
       List<int>? pages,
       double opacity = 0.3,
@@ -60,7 +73,7 @@ abstract interface class PdfPlatform {
       double r = 0.5,
       double g = 0.5,
       double b = 0.5});
-  Future<Uint8List> watermarkPositioned(Uint8List bytes, {
+  Future<void> watermarkPositioned(PdfSource source, PdfSink output, {
     required String text,
     required double x, required double y,
     required double width, required double height,
@@ -72,9 +85,9 @@ abstract interface class PdfPlatform {
     double fixedPrintH = 0.0,
     double fixedPrintV = 0.0,
   });
-  Future<Uint8List> encrypt(Uint8List bytes,
+  Future<void> encrypt(PdfSource source, PdfSink output,
       {required String ownerPassword, String userPassword = ''});
-  Future<Uint8List> encryptFull(Uint8List bytes, {
+  Future<void> encryptFull(PdfSource source, PdfSink output, {
     required String ownerPassword,
     String userPassword = '',
     int algorithm = 3,
@@ -87,53 +100,54 @@ abstract interface class PdfPlatform {
     bool allowAccessibility = true,
     bool allowAssemble = true,
   });
-  Future<Uint8List> decrypt(Uint8List bytes, {required String password});
-  Future<Uint8List> sign(Uint8List bytes,
+  Future<void> decrypt(PdfSource source, PdfSink output,
+      {required String password});
+  Future<void> sign(PdfSource source, PdfSink output,
       {required Uint8List certificate,
       required String certificatePassword,
       String? reason,
       String? location});
 
   // ── Creation ─────────────────────────────────────────────────────────────
-  Future<Uint8List> imagesToPdf(List<Uint8List> images);
+  Future<void> imagesToPdf(List<Uint8List> images, PdfSink output);
 
   // ── Rendering ────────────────────────────────────────────────────────────
-  Future<RenderedPage> renderPage(Uint8List bytes, int pageIndex,
+  Future<RenderedPage> renderPage(PdfSource source, int pageIndex,
       {String? password});
-  Future<RenderedPage> renderPageFit(Uint8List bytes, int pageIndex,
+  Future<RenderedPage> renderPageFit(PdfSource source, int pageIndex,
       {required int width, required int height, String? password});
-  Future<RenderedPage> renderPageThumbnail(Uint8List bytes, int pageIndex,
+  Future<RenderedPage> renderPageThumbnail(PdfSource source, int pageIndex,
       {required int size, String? password});
-  Future<List<RenderedPage>> renderAllPages(Uint8List bytes,
+  Stream<RenderedPage> renderAllPages(PdfSource source,
       {required int width, required int height, String? password});
 
   // ── Image extraction ─────────────────────────────────────────────────────
-  Future<List<PdfImage>> extractImages(Uint8List bytes, int pageIndex,
+  Stream<PdfImage> extractImages(PdfSource source, int pageIndex,
       {String? password});
-  Future<List<PdfImage>> extractAllImages(Uint8List bytes, {String? password});
+  Stream<PdfImage> extractAllImages(PdfSource source, {String? password});
 
   // ── Signatures ───────────────────────────────────────────────────────────
-  Future<int> getSignatureCount(Uint8List bytes, {String? password});
-  Future<List<PdfSignatureInfo>> getSignatures(Uint8List bytes,
+  Future<int> getSignatureCount(PdfSource source, {String? password});
+  Future<List<PdfSignatureInfo>> getSignatures(PdfSource source,
       {String? password});
-  Future<bool> verifySignatures(Uint8List bytes, {String? password});
+  Future<bool> verifySignatures(PdfSource source, {String? password});
 
   // ── Validation ───────────────────────────────────────────────────────────
   Future<({bool compliant, int errors, int warnings})> validatePdfA(
-      Uint8List bytes,
+      PdfSource source,
       {int level = 2,
       String? password});
-  Future<bool> validatePdfUa(Uint8List bytes,
+  Future<bool> validatePdfUa(PdfSource source,
       {int level = 1, String? password});
 
   // ── Encryption info ──────────────────────────────────────────────────────
   Future<({bool print, bool printHq, bool modify, bool copy, bool annotate,
       bool fillForms, bool accessibility, bool assemble})>
-    getPermissions(Uint8List bytes, {String? password});
-  Future<int> getEncryptionAlgorithm(Uint8List bytes, {String? password});
+    getPermissions(PdfSource source, {String? password});
+  Future<int> getEncryptionAlgorithm(PdfSource source, {String? password});
 
   // ── Editor ───────────────────────────────────────────────────────────────
-  Future<PdfEditorHandle> openEditor(Uint8List bytes);
+  Future<PdfEditorHandle> openEditor(PdfSource source);
 
   // ── Builder ──────────────────────────────────────────────────────────────
   Future<PdfBuilderHandle> createBuilder();
@@ -165,8 +179,8 @@ abstract interface class PdfEditorHandle {
   Future<PdfRect> getPageMediaBox(int pageIndex);
   Future<void> deletePage(int pageIndex);
   Future<void> movePage({required int from, required int to});
-  Future<Uint8List> extractPages(List<int> pages);
-  Future<void> mergeFrom(Uint8List otherPdf);
+  Future<void> extractPages(List<int> pages, PdfSink output);
+  Future<void> mergeFrom(PdfSource otherPdf);
 
   Future<int> optimizeImages({int quality = 75});
   Future<int> unembedStandardFonts();
@@ -206,12 +220,12 @@ abstract interface class PdfEditorHandle {
   Future<void> resizeImage(int pageIndex, String imageName,
       {required double width, required double height});
 
-  Future<Uint8List> save();
-  Future<Uint8List> saveWithOptions({bool compress = true,
+  Future<void> save(PdfSink output);
+  Future<void> saveWithOptions(PdfSink output, {bool compress = true,
       bool garbageCollect = true, bool linearize = false});
-  Future<Uint8List> saveEncrypted({required String ownerPassword,
+  Future<void> saveEncrypted(PdfSink output, {required String ownerPassword,
       String userPassword = ''});
-  Future<Uint8List> saveEncryptedFull({
+  Future<void> saveEncryptedFull(PdfSink output, {
     required String ownerPassword,
     String userPassword = '',
     int algorithm = 3,
@@ -239,8 +253,8 @@ abstract interface class PdfBuilderHandle {
   Future<PdfPageBuilderHandle> addLetterPage();
   Future<PdfPageBuilderHandle> addPage({required double width, required double height});
 
-  Future<Uint8List> build();
-  Future<Uint8List> buildEncrypted({required String ownerPassword,
+  Future<void> build(PdfSink output);
+  Future<void> buildEncrypted(PdfSink output, {required String ownerPassword,
       String userPassword = ''});
 
   Future<void> dispose();

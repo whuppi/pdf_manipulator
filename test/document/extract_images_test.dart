@@ -1,6 +1,7 @@
 import 'package:test/test.dart';
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
+import '../helpers/memory_io.dart';
 import '../helpers/pdf_fixtures.dart';
 
 void main() {
@@ -16,32 +17,35 @@ void main() {
 
   group('Pdf.extractImages', () {
     test('returns empty list for page with no images', () async {
-      final images = await pdf.extractImages(minimalPdf, 0);
+      final images =
+          await pdf.extractImages(sourceOf(minimalPdf), 0).toList();
       expect(images, isEmpty);
     });
 
     test('throws on invalid page index', () async {
       expect(
-        () => pdf.extractImages(minimalPdf, 99),
+        () => pdf.extractImages(sourceOf(minimalPdf), 99).toList(),
         throwsA(isA<PdfError>()),
       );
     });
 
     test('returns PdfImage list type', () async {
-      final images = await pdf.extractImages(minimalPdf, 0);
+      final images =
+          await pdf.extractImages(sourceOf(minimalPdf), 0).toList();
       expect(images, isA<List<PdfImage>>());
     });
   });
 
   group('Pdf.extractAllImages', () {
     test('returns empty for PDF with no images', () async {
-      final images = await pdf.extractAllImages(minimalPdf);
+      final images = await pdf.extractAllImages(sourceOf(minimalPdf)).toList();
       expect(images, isEmpty);
     });
 
     test('works on multi-page PDF', () async {
       final threePages = await buildThreePagePdf();
-      final images = await pdf.extractAllImages(threePages);
+      final images =
+          await pdf.extractAllImages(sourceOf(threePages)).toList();
       expect(images, isA<List<PdfImage>>());
     });
   });

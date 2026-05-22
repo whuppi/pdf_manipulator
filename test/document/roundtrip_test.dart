@@ -1,6 +1,7 @@
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
+import '../helpers/memory_io.dart';
 import '../helpers/pdf_fixtures.dart';
 
 void main() {
@@ -16,66 +17,90 @@ void main() {
 
   group('round-trip integrity', () {
     test('open → merge → open preserves page count', () async {
-      final merged = await pdf.merge([minimalPdf, minimalPdf]);
-      final doc = await pdf.open(merged);
+      final sink1 = TestPdfSink();
+      await pdf.merge([sourceOf(minimalPdf), sourceOf(minimalPdf)], sink1);
+      final merged = sink1.takeBytes();
+      final doc = await pdf.open(sourceOf(merged));
       expect(doc.pageCount, equals(2));
 
-      final again = await pdf.merge([merged, minimalPdf]);
-      final doc2 = await pdf.open(again);
+      final sink2 = TestPdfSink();
+      await pdf.merge([sourceOf(merged), sourceOf(minimalPdf)], sink2);
+      final again = sink2.takeBytes();
+      final doc2 = await pdf.open(sourceOf(again));
       expect(doc2.pageCount, equals(3));
     });
 
     test('rotate → compress → open produces valid PDF', () async {
-      final rotated = await pdf.rotatePages(minimalPdf, pages: {0: 90});
-      final compressed = await pdf.compress(rotated);
-      final doc = await pdf.open(compressed);
+      final rotSink = TestPdfSink();
+      await pdf.rotatePages(sourceOf(minimalPdf), rotSink, pages: {0: 90});
+      final rotated = rotSink.takeBytes();
+      final compSink = TestPdfSink();
+      await pdf.compress(sourceOf(rotated), compSink);
+      final compressed = compSink.takeBytes();
+      final doc = await pdf.open(sourceOf(compressed));
       expect(doc.pageCount, equals(1));
     });
 
     test('merge → rotate → compress → open', () async {
-      final merged = await pdf.merge([minimalPdf, letterPdf]);
-      final rotated = await pdf.rotateAllPages(merged, degrees: 90);
-      final compressed = await pdf.compress(rotated);
-      final doc = await pdf.open(compressed);
+      final mergeSink = TestPdfSink();
+      await pdf.merge([sourceOf(minimalPdf), sourceOf(letterPdf)], mergeSink);
+      final merged = mergeSink.takeBytes();
+      final rotSink = TestPdfSink();
+      await pdf.rotateAllPages(sourceOf(merged), rotSink, degrees: 90);
+      final rotated = rotSink.takeBytes();
+      final compSink = TestPdfSink();
+      await pdf.compress(sourceOf(rotated), compSink);
+      final compressed = compSink.takeBytes();
+      final doc = await pdf.open(sourceOf(compressed));
       expect(doc.pageCount, equals(2));
     });
 
     test('editor save → open → verify metadata', () async {
-      final editor = await Pdf.edit(minimalPdf);
+      final editor = await Pdf.edit(sourceOf(minimalPdf));
       await editor.setTitle('Roundtrip');
       await editor.setAuthor('Miko');
-      final saved = await editor.save();
+      final sink = TestPdfSink();
+      await editor.save(sink);
       editor.dispose();
 
-      final doc = await pdf.open(saved);
+      final saved = sink.takeBytes();
+      final doc = await pdf.open(sourceOf(saved));
       expect(doc.title, equals('Roundtrip'));
       expect(doc.author, equals('Miko'));
     });
 
     test('editor merge → save → open → verify pages', () async {
-      final editor = await Pdf.edit(minimalPdf);
-      await editor.mergeFrom(minimalPdf);
-      await editor.mergeFrom(letterPdf);
-      final saved = await editor.save();
+      final editor = await Pdf.edit(sourceOf(minimalPdf));
+      await editor.mergeFrom(sourceOf(minimalPdf));
+      await editor.mergeFrom(sourceOf(letterPdf));
+      final sink = TestPdfSink();
+      await editor.save(sink);
       editor.dispose();
 
-      final doc = await pdf.open(saved);
+      final saved = sink.takeBytes();
+      final doc = await pdf.open(sourceOf(saved));
       expect(doc.pageCount, equals(3));
     });
 
     test('compress is idempotent — double compress produces valid PDF', () async {
-      final first = await pdf.compress(minimalPdf);
-      final second = await pdf.compress(first);
-      final doc = await pdf.open(second);
+      final sink1 = TestPdfSink();
+      await pdf.compress(sourceOf(minimalPdf), sink1);
+      final first = sink1.takeBytes();
+      final sink2 = TestPdfSink();
+      await pdf.compress(sourceOf(first), sink2);
+      final second = sink2.takeBytes();
+      final doc = await pdf.open(sourceOf(second));
       expect(doc.pageCount, equals(1));
     });
 
     test('10 sequential merges', () async {
       var current = minimalPdf;
       for (var i = 0; i < 10; i++) {
-        current = await pdf.merge([current, minimalPdf]);
+        final sink = TestPdfSink();
+        await pdf.merge([sourceOf(current), sourceOf(minimalPdf)], sink);
+        current = sink.takeBytes();
       }
-      final doc = await pdf.open(current);
+      final doc = await pdf.open(sourceOf(current));
       expect(doc.pageCount, equals(11)); // 1 + 10 merges
     });
   });
