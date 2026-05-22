@@ -6,37 +6,38 @@
 /// ```dart
 /// import 'package:pdf_manipulator/pdf_manipulator.dart';
 ///
-/// // One-shot operations
 /// final pdf = Pdf();
-/// final merged = await pdf.merge([bytesA, bytesB]);
-/// pdf.dispose();
+/// final doc = await pdf.open(source);
+/// print('${doc.pageCount} pages');
 ///
-/// // Batch editing
-/// final editor = await Pdf.edit(bytes);
-/// await editor.setTitle('Report');
-/// final result = await editor.save();
-/// editor.dispose();
+/// await pdf.merge([sourceA, sourceB], outputSink);
+/// final text = await pdf.extract(source, pages: PdfPages.all());
 ///
-/// // Create from scratch
-/// final builder = await Pdf.build();
-/// final page = await builder.addA4Page();
-/// await page.text('Hello');
-/// await page.done();
-/// final result = await builder.save();
-/// builder.dispose();
+/// await for (final page in pdf.render(source, pages: PdfPages.single(0))) {
+///   // process one page at a time
+/// }
+///
+/// await pdf.dispose();
 /// ```
 library;
 
+// Layer 1 — public API
+export 'src/api/pdf.dart';
+export 'src/api/pdf_builder.dart';
+export 'src/api/pdf_editor.dart';
+export 'src/api/pdf_sink.dart';
+export 'src/api/pdf_source.dart';
+export 'src/api/types/pdf_config.dart';
+export 'src/api/types/pdf_enums.dart';
+export 'src/api/types/pdf_errors.dart';
+export 'src/api/types/pdf_pages.dart';
+export 'src/api/types/pdf_params.dart';
+
+// Shared data types (used by bridge, exposed to consumers)
 export 'src/core/errors.dart';
 export 'src/core/pdf_image.dart';
-export 'src/core/pdf_info.dart';
 export 'src/core/pdf_rect.dart';
 export 'src/core/pdf_signature.dart';
-export 'src/core/pdf_sink.dart';
-export 'src/core/pdf_source.dart';
 export 'src/core/search_result.dart';
-export 'src/document/pdf.dart';
 export 'src/document/pdf_doc.dart';
-export 'src/editor/pdf_editor.dart';
-export 'src/builder/pdf_builder.dart';
 export 'src/page/pdf_page_info.dart';

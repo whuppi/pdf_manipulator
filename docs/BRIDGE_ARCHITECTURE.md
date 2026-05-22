@@ -1175,10 +1175,41 @@ Test strategy is in §12.
 | | `_WebBuilderHandle` — persistent session, routes metadata/addPage/save/dispose | compiles | **DONE** |
 | | `_WebPageBuilderHandle` — routes all page ops via `page.*` messages | compiles | **DONE** |
 | | **Remaining UnimplementedError in ALL bridge implementations** | **0** (only worker default-case safety catch) | |
-| **B20** | Wire Layer 1 `Pdf` class to PdfBridge via bridge_factory | | NOT STARTED |
-| **B21** | Delete old code (`lib/src/platform/`, old `lib/src/ffi/`, etc.) | | NOT STARTED |
-| **B22** | Full test suite (all 327+ tests pass on new bridge) | | NOT STARTED |
-| **B23** | Docs (ARCHITECTURE.md, CAPABILITY_ROADMAP.md, README.md) | | NOT STARTED |
+| **B20** | Wire Layer 1 `Pdf`, `PdfEditor`, `PdfBuilder` to PdfBridge via bridge_factory | 7/7 e2e | **DONE** |
+| | `api/pdf.dart` — all 36 methods forwarding to `_bridge` | compiles | |
+| | `api/pdf_editor.dart` — all 33 methods forwarding to `BridgeEditorHandle` | compiles | |
+| | `api/pdf_builder.dart` + `PdfPageBuilder` — all methods forwarding to `BridgeBuilderHandle` | compiles | |
+| | Smoke test: open, merge, extract, deletePages, render, dispose | 7/7 | |
+| **B21** | Delete old code — platform/, old ffi/, old document/pdf.dart, old editor/, old builder/, old core source/sink/info | clean | **DONE** |
+| | Old `lib/src/platform/` (7 files) | deleted | |
+| | Old `lib/src/ffi/` (4 files) | deleted | |
+| | Old `lib/src/document/pdf.dart`, `lib/src/editor/`, `lib/src/builder/` | deleted | |
+| | Old `lib/src/core/pdf_sink.dart`, `pdf_source.dart`, `pdf_info.dart` | deleted | |
+| | Barrel `pdf_manipulator.dart` updated — exports `api/` + shared types only | compiles | |
+| | `test/helpers/pdf_fixtures.dart` updated — uses new `Pdf` instance API + `test_helpers.dart` | compiles | |
+| | Old tests deleted: `test/document/`, `test/editor/`, `test/builder/`, `test/extraction/`, `test/platform/`, `test/web/` | deleted | |
+| | Kept: `lib/src/core/errors.dart`, `pdf_image.dart`, `pdf_rect.dart`, `pdf_signature.dart`, `search_result.dart` (shared data types) | kept | |
+| | Kept: `lib/src/document/pdf_doc.dart`, `lib/src/page/pdf_page_info.dart` (shared data types) | kept | |
+| | `dart analyze lib/ test/` — zero errors, zero warnings | clean | |
+| | **Total tests: 55 Dart + 27 Rust = 82** | all pass | |
+| **B21b** | Move 7 shared type files from `core/`, `document/`, `page/` into `api/types/` + delete empty dirs | | NOT STARTED |
+| **B21c** | Resolve `web_assets/` vs `web/` — one canonical location for WASM + worker.js | | NOT STARTED |
+| **B21d** | Forward missing `PdfPageBuilder` methods (radioGroup, footnote, columns, links, field scripts — 9 one-liners) | | NOT STARTED |
+| **B21e** | Align file names: either create `messages.dart`, `stream_protocol.dart`, `worker_protocol.dart` per doc §2, or update §2 to match reality | | NOT STARTED |
+| **B22** | Comprehensive test suite — cover every op through Layer 1 API | | NOT STARTED |
+| **B17** | Web e2e tests — asset server for worker.js + WASM in `dart test -p chrome` | | BLOCKED |
+| **B23** | Update docs: ARCHITECTURE.md, CAPABILITY_ROADMAP.md, README.md, MIGRATION.md | | NOT STARTED |
+| **B24** | Rewrite example app + example integration test for new API | | NOT STARTED |
+
+### Planned (not blocking — engine doesn't support yet)
+
+| Feature | Why deferred |
+|---|---|
+| `PdfEditor.addRedaction`, `redactionCount`, `scrubMetadata` | Needs Rust bridge wiring for redaction tracking. Add when redaction workflow is prioritized. |
+| `planSplitByBookmarks`, `splitByBookmarks` | pdf_oxide has bookmark access but no split-by-bookmark API. Add when upstream ships it. |
+| `convertTo` (PDF → DOCX/PPTX/XLSX) | pdf_oxide v0.3.48+. Not shipped upstream yet. |
+| `convertToPdf` (DOCX/PPTX/XLSX → PDF) | Same. |
+| `classifyPage`, `classifyDocument` | Not in pdf_oxide. Would need ML/heuristic engine. Future feature. |
 
 ### Rust dependencies
 
@@ -1263,10 +1294,9 @@ test data correctly. **This is the exact pattern that Dart's
 
 ### What's next
 
-1. **B20**: Wire Layer 1 `Pdf` class to PdfBridge via bridge_factory.
-2. **B21**: Delete old code in one cut.
-3. **B17**: Fix web test infrastructure (asset server for worker.js + WASM).
-4. **B22-B23**: Full test suite + docs.
+1. **B22**: Comprehensive test suite — cover every operation through the new Layer 1 API.
+2. **B17**: Fix web test infrastructure (asset server for worker.js + WASM).
+3. **B23**: Docs (ARCHITECTURE.md, CAPABILITY_ROADMAP.md, README.md).
 
 ### Rust handle architecture (B19 — editors + builders)
 
@@ -1329,9 +1359,11 @@ UTF-8 strings, Uint8List secondary for image bytes) and sends via `builderPageOp
 and `page.*` message dispatch that already exists from the old code.
 
 Source and test file layouts are in §2 (single source of truth).
-Old code at `lib/src/platform/`, `lib/src/ffi/`, `lib/src/core/`,
-`lib/src/document/`, `lib/src/editor/`, `lib/src/builder/` is untouched
-(302/302 old tests pass). Will be deleted in B21 after new bridge is wired.
+Old code (`lib/src/platform/`, old `lib/src/ffi/`, old Layer 1 classes)
+has been deleted in B21. Shared data types (`lib/src/core/errors.dart`,
+`pdf_image.dart`, `pdf_rect.dart`, `pdf_signature.dart`, `search_result.dart`,
+`lib/src/document/pdf_doc.dart`, `lib/src/page/pdf_page_info.dart`) remain —
+used by both the bridge and the public API.
 
 ### Test strategy
 
@@ -1356,19 +1388,18 @@ File layout for tests is in §2. The approach:
 | Suite | Count | Status |
 |---|---|---|
 | Rust bridge unit + integration | 27/27 | Pass |
-| Dart native bridge: open | 5/5 | Pass |
-| Dart native bridge: open (additional) | 6/6 | Pass |
+| Dart native bridge: open | 11/11 | Pass |
 | Dart native bridge: merge | 4/4 | Pass |
 | Dart native bridge: structural (delete, rotate, flatten, compress) | 4/4 | Pass |
 | Dart native bridge: extract (text + markdown) | 3/3 | Pass |
 | Dart native bridge: stream (render + extractImages) | 3/3 | Pass |
-| Dart old tests (untouched, old code path) | 273/273 | Pass |
+| Dart Layer 1 API smoke test (Pdf class) | 7/7 | Pass |
 | Dart web bridge | 0/? | Blocked (asset server) |
 | Dart shared contract | — | Not yet written |
-| Dart API tests | — | Not yet written |
-| **Total Dart passing** | **298** (25 new bridge + 273 old) | |
+| Old tests | — | Deleted (incompatible with new API) |
+| **Total Dart passing** | **55** (48 bridge + 7 API) | |
 | **Total Rust passing** | **27** | |
-| **Grand total** | **325** | |
+| **Grand total** | **82** | |
 | **UnimplementedError remaining** | **0** in bridge impls (only worker default-case safety catch) | |
 
 ---

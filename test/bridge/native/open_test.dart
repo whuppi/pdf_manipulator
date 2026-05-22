@@ -6,8 +6,8 @@ import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/bridge/native/native_bridge.dart';
 
-import '../../helpers/new_memory_io.dart';
 import '../../helpers/pdf_fixtures.dart';
+import '../test_helpers.dart';
 
 void main() {
   late NativeBridge bridge;
@@ -22,34 +22,34 @@ void main() {
 
   group('NativeBridge.open', () {
     test('opens minimal PDF — page count is 1', () async {
-      final doc = await bridge.open(sourceOf(minimalPdf));
+      final doc = await bridge.open(src(minimalPdf));
       expect(doc.pageCount, 1);
     });
 
     test('reads version string', () async {
-      final doc = await bridge.open(sourceOf(minimalPdf));
+      final doc = await bridge.open(src(minimalPdf));
       expect(doc.version, contains('.'));
     });
 
     test('reads page dimensions', () async {
-      final doc = await bridge.open(sourceOf(minimalPdf));
+      final doc = await bridge.open(src(minimalPdf));
       expect(doc.pages.length, 1);
       expect(doc.pages[0].width, greaterThan(0));
       expect(doc.pages[0].height, greaterThan(0));
     });
 
     test('isEncrypted is false for unencrypted PDF', () async {
-      final doc = await bridge.open(sourceOf(minimalPdf));
+      final doc = await bridge.open(src(minimalPdf));
       expect(doc.isEncrypted, false);
     });
 
     test('throws on garbage bytes', () async {
-      final garbage = TestPdfSource(Uint8List.fromList([1, 2, 3, 4]));
+      final garbage = TestSource(Uint8List.fromList([1, 2, 3, 4]));
       expect(() => bridge.open(garbage), throwsA(isA<StateError>()));
     });
 
     test('throws on empty bytes', () async {
-      final empty = TestPdfSource(Uint8List(0));
+      final empty = TestSource(Uint8List(0));
       expect(() => bridge.open(empty), throwsA(isA<StateError>()));
     });
   });

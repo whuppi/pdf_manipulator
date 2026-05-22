@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
-import 'package:pdf_manipulator/pdf_manipulator.dart';
+import 'package:pdf_manipulator/src/api/pdf.dart';
 
-import 'memory_io.dart';
+import '../bridge/test_helpers.dart';
 
 /// Minimal valid PDF — one blank A4 page (595×842 points).
 final Uint8List minimalPdf = _build(
@@ -51,16 +51,19 @@ Uint8List _build(String content) => Uint8List.fromList(content.codeUnits);
 
 Future<Uint8List> buildThreePagePdf() async {
   final pdf = Pdf();
-  final editor = await Pdf.edit(sourceOf(minimalPdf));
-  await editor.mergeFrom(sourceOf(letterPdf));
-  await editor.mergeFrom(sourceOf(minimalPdf));
-  await editor.setTitle('Three Page Test');
-  await editor.setAuthor('Test Suite');
-  final sink = TestPdfSink();
-  await editor.save(sink);
-  editor.dispose();
-  pdf.dispose();
-  return sink.takeBytes();
+  try {
+    final editor = await pdf.edit(src(minimalPdf));
+    await editor.mergeFrom(src(letterPdf));
+    await editor.mergeFrom(src(minimalPdf));
+    await editor.setTitle('Three Page Test');
+    await editor.setAuthor('Test Suite');
+    final sink = TestSink();
+    await editor.save(sink);
+    await editor.dispose();
+    return sink.takeBytes();
+  } finally {
+    await pdf.dispose();
+  }
 }
 
 Future<Uint8List> buildMetadataPdf({
@@ -70,27 +73,33 @@ Future<Uint8List> buildMetadataPdf({
   String keywords = 'test, pdf, dart',
 }) async {
   final pdf = Pdf();
-  final editor = await Pdf.edit(sourceOf(minimalPdf));
-  await editor.setTitle(title);
-  await editor.setAuthor(author);
-  await editor.setSubject(subject);
-  await editor.setKeywords(keywords);
-  final sink = TestPdfSink();
-  await editor.save(sink);
-  editor.dispose();
-  pdf.dispose();
-  return sink.takeBytes();
+  try {
+    final editor = await pdf.edit(src(minimalPdf));
+    await editor.setTitle(title);
+    await editor.setAuthor(author);
+    await editor.setSubject(subject);
+    await editor.setKeywords(keywords);
+    final sink = TestSink();
+    await editor.save(sink);
+    await editor.dispose();
+    return sink.takeBytes();
+  } finally {
+    await pdf.dispose();
+  }
 }
 
 Future<Uint8List> buildFivePagePdf() async {
   final pdf = Pdf();
-  final editor = await Pdf.edit(sourceOf(minimalPdf));
-  for (var i = 0; i < 4; i++) {
-    await editor.mergeFrom(sourceOf(minimalPdf));
+  try {
+    final editor = await pdf.edit(src(minimalPdf));
+    for (var i = 0; i < 4; i++) {
+      await editor.mergeFrom(src(minimalPdf));
+    }
+    final sink = TestSink();
+    await editor.save(sink);
+    await editor.dispose();
+    return sink.takeBytes();
+  } finally {
+    await pdf.dispose();
   }
-  final sink = TestPdfSink();
-  await editor.save(sink);
-  editor.dispose();
-  pdf.dispose();
-  return sink.takeBytes();
 }
