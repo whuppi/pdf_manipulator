@@ -176,14 +176,14 @@ class _FileInfoCard extends StatelessWidget {
   final String fileName;
   final int fileSize;
   final PdfDoc doc;
-  final PdfInfo? info;
+
   final VoidCallback onChangePdf;
 
   const _FileInfoCard({
     required this.fileName,
     required this.fileSize,
     required this.doc,
-    this.info,
+
     required this.onChangePdf,
   });
 
@@ -219,7 +219,7 @@ class _FileInfoCard extends StatelessWidget {
                 ),
               ],
             ),
-            if (doc.title != null || doc.author != null || info?.isEncrypted == true) ...[
+            if (doc.title != null || doc.author != null || doc.isEncrypted) ...[
               const SizedBox(height: 10),
               Wrap(
                 spacing: 6,
@@ -229,7 +229,7 @@ class _FileInfoCard extends StatelessWidget {
                     _tag(context, doc.title!),
                   if (doc.author != null)
                     _tag(context, 'by ${doc.author}'),
-                  if (info?.isEncrypted == true)
+                  if (doc.isEncrypted)
                     _tag(context, 'Encrypted', isWarning: true),
                   if (doc.isTagged)
                     _tag(context, 'Tagged'),
@@ -270,7 +270,6 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
   int? _fileSize;
   Uint8List? _fileBytes;
   PdfDoc? _pdfDoc;
-  PdfInfo? _pdfInfo;
   bool _loading = false;
   String? _status;
 
@@ -289,13 +288,11 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
     try {
       final source = _MemorySource(bytes);
       final doc = await _pdf.open(source);
-      final info = await _pdf.probe(source);
       setState(() {
         _fileName = 'Selected PDF';
         _fileSize = bytes.length;
         _fileBytes = bytes;
         _pdfDoc = doc;
-        _pdfInfo = info;
         _status = null;
       });
     } on PdfError catch (e) {
@@ -383,7 +380,6 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
           fileName: _fileName!,
           fileSize: _fileSize!,
           doc: doc,
-          info: _pdfInfo,
           onChangePdf: _pickPdf,
         ),
         const SizedBox(height: 4),
@@ -539,14 +535,16 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
           subtitle: 'Semi-transparent on all pages', loading: _loading,
           onRun: () => _run('Watermark', () async {
             final sink = _MemorySink();
-            await _pdf.watermark(_MemorySource(bytes), sink, text: 'DRAFT', opacity: 0.3);
+            await _pdf.watermark(_MemorySource(bytes), sink, text: 'DRAFT',
+                style: const PdfWatermarkStyle(opacity: 0.3));
             await _saveAndReport(sink.takeBytes(), 'watermarked_draft.pdf');
           })),
         _OpTile(icon: Icons.water_drop_outlined, title: 'Watermark "CONFIDENTIAL"',
           subtitle: 'Large, rotated, red-ish', loading: _loading,
           onRun: () => _run('Watermark', () async {
             final sink = _MemorySink();
-            await _pdf.watermark(_MemorySource(bytes), sink, text: 'CONFIDENTIAL', opacity: 0.2, fontSize: 60, rotation: 45);
+            await _pdf.watermark(_MemorySource(bytes), sink, text: 'CONFIDENTIAL',
+                style: const PdfWatermarkStyle(opacity: 0.2, fontSize: 60, rotation: 45));
             await _saveAndReport(sink.takeBytes(), 'watermarked_confidential.pdf');
           })),
         const SizedBox(height: 12),
@@ -557,7 +555,8 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
           subtitle: 'Owner password: secret123', loading: _loading,
           onRun: () => _run('Encrypt', () async {
             final sink = _MemorySink();
-            await _pdf.encrypt(_MemorySource(bytes), sink, ownerPassword: 'secret123');
+            await _pdf.encrypt(_MemorySource(bytes), sink,
+                encryption: const PdfEncryptionConfig(ownerPassword: 'secret123'));
             await _saveAndReport(sink.takeBytes(), 'encrypted.pdf');
           })),
         _OpTile(icon: Icons.lock_open, title: 'Decrypt',
@@ -574,7 +573,7 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
         _OpTile(icon: Icons.text_snippet, title: 'Extract all text',
           subtitle: 'Plain text from every page', loading: _loading,
           onRun: () => _run('Extract text', () async {
-            final t = await _pdf.extractText(_MemorySource(bytes));
+            final t = await _pdf.extract(_MemorySource(bytes), pages: const PdfPages.all());
             if (!mounted) return;
             _showTextSheet(context, 'Extracted Text (${t.length} chars)', t);
             setState(() => _status = '${t.length} characters extracted');
@@ -582,7 +581,7 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
         _OpTile(icon: Icons.text_snippet_outlined, title: 'Extract page 1 text',
           subtitle: 'First page only', loading: _loading,
           onRun: () => _run('Extract page 1', () async {
-            final t = await _pdf.extractText(_MemorySource(bytes), page: 0);
+            final t = await _pdf.extract(_MemorySource(bytes), pages: const PdfPages.single(0));
             if (!mounted) return;
             _showTextSheet(context, 'Page 1 Text', t);
             setState(() => _status = 'Page 1: ${t.length} chars');
@@ -590,7 +589,8 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
         _OpTile(icon: Icons.code, title: 'To Markdown',
           subtitle: 'Markdown from all pages', loading: _loading,
           onRun: () => _run('To Markdown', () async {
-            final md = await _pdf.toMarkdown(_MemorySource(bytes));
+            final md = await _pdf.extract(_MemorySource(bytes), pages: const PdfPages.all(),
+                format: PdfExtractionFormat.markdown);
             if (!mounted) return;
             _showTextSheet(context, 'Markdown', md);
             setState(() => _status = 'Markdown: ${md.length} chars');
@@ -598,7 +598,8 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
         _OpTile(icon: Icons.html, title: 'To HTML (page 1)',
           subtitle: 'HTML from first page', loading: _loading,
           onRun: () => _run('To HTML', () async {
-            final h = await _pdf.toHtml(_MemorySource(bytes), page: 0);
+            final h = await _pdf.extract(_MemorySource(bytes), pages: const PdfPages.single(0),
+                format: PdfExtractionFormat.html);
             if (!mounted) return;
             _showTextSheet(context, 'HTML', h);
             setState(() => _status = 'HTML: ${h.length} chars');
@@ -610,13 +611,13 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
         _OpTile(icon: Icons.search, title: 'Search page 1 for "the"',
           subtitle: 'Find text positions on first page', loading: _loading,
           onRun: () => _run('Search', () async {
-            final r = await _pdf.searchPage(_MemorySource(bytes), page: 0, query: 'the');
+            final r = await _pdf.search(_MemorySource(bytes), query: 'the', pages: const PdfPages.single(0));
             setState(() => _status = '${r.length} results on page 1');
           })),
         _OpTile(icon: Icons.manage_search, title: 'Search all pages for "the"',
           subtitle: 'Find across entire document', loading: _loading,
           onRun: () => _run('Search all', () async {
-            final r = await _pdf.searchAll(_MemorySource(bytes), query: 'the');
+            final r = await _pdf.search(_MemorySource(bytes), query: 'the', pages: const PdfPages.all());
             setState(() => _status = '${r.length} results across all pages');
           })),
         const SizedBox(height: 12),
@@ -644,10 +645,10 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
         _OpTile(icon: Icons.verified, title: 'Quick probe',
           subtitle: 'Validate without full parse', loading: _loading,
           onRun: () => _run('Probe', () async {
-            final info = await _pdf.probe(_MemorySource(bytes));
+            final doc = await _pdf.open(_MemorySource(bytes));
             setState(() => _status =
-                'Valid: ${info.isValid} • ${info.pageCount} pages • '
-                'Encrypted: ${info.isEncrypted} • v${info.version}');
+                '${doc.pageCount} pages • '
+                'Encrypted: ${doc.isEncrypted} • v${doc.version}');
           })),
 
         const SizedBox(height: 40),
@@ -987,7 +988,7 @@ class _EditorTabState extends State<_EditorTab> {
     if (_fileBytes == null) return;
     setState(() { _loading = true; _status = '$label...'; });
     try {
-      final editor = await Pdf.edit(_MemorySource(_fileBytes!));
+      final editor = await _pdf.edit(_MemorySource(_fileBytes!));
       try {
         final result = await work(editor);
         final path = await saveBytes(result, '${label.toLowerCase().replaceAll(' ', '_')}.pdf');
@@ -1085,7 +1086,8 @@ class _EditorTabState extends State<_EditorTab> {
                         onRun: () => _runEditor('Watermark', (e) async {
                           final pc = await e.pageCount;
                           for (var i = 0; i < pc; i++) {
-                            await e.addWatermark(i, 'SAMPLE', opacity: 0.25, fontSize: 48);
+                            await e.addWatermark(i, 'SAMPLE',
+                                style: const PdfWatermarkStyle(opacity: 0.25, fontSize: 48));
                           }
                           final sink = _MemorySink();
                           await e.save(sink);
@@ -1096,7 +1098,7 @@ class _EditorTabState extends State<_EditorTab> {
                           final count = await e.optimizeImages(quality: 60);
                           log('Optimized $count images');
                           final sink = _MemorySink();
-                          await e.saveWithOptions(sink, compress: true, garbageCollect: true);
+                          await e.save(sink, options: const PdfSaveOptions(compress: true, garbageCollect: true));
                           return sink.takeBytes();
                         })),
 
@@ -1120,7 +1122,8 @@ class _EditorTabState extends State<_EditorTab> {
                       _OpTile(icon: Icons.lock, title: 'Save encrypted (pw: test123)', loading: _loading,
                         onRun: () => _runEditor('Encrypt', (e) async {
                           final sink = _MemorySink();
-                          await e.saveEncrypted(sink, ownerPassword: 'test123');
+                          await e.save(sink, options: const PdfSaveOptions(
+                              encryption: PdfEncryptionConfig(ownerPassword: 'test123')));
                           return sink.takeBytes();
                         })),
 
@@ -1131,12 +1134,13 @@ class _EditorTabState extends State<_EditorTab> {
                           await e.rotateAllPages(degrees: 90);
                           final pc = await e.pageCount;
                           for (var i = 0; i < pc; i++) {
-                            await e.addWatermark(i, 'PROCESSED', opacity: 0.15, fontSize: 40);
+                            await e.addWatermark(i, 'PROCESSED',
+                                style: const PdfWatermarkStyle(opacity: 0.15, fontSize: 40));
                           }
                           await e.optimizeImages(quality: 70);
                           await e.setTitle('Processed by pdf_manipulator');
                           final sink = _MemorySink();
-                          await e.saveWithOptions(sink, compress: true, garbageCollect: true);
+                          await e.save(sink, options: const PdfSaveOptions(compress: true, garbageCollect: true));
                           return sink.takeBytes();
                         })),
 
