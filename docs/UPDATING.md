@@ -2,7 +2,7 @@
 
 Maintenance procedures for the package. For architecture see [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-pdf_manipulator wraps a vendored fork of [pdf_oxide](https://github.com/yfedoseev/pdf_oxide) (Rust engine) via FFI (native) and WASM (web). The fork lives at [`whuppi/pdf_oxide`](https://github.com/whuppi/pdf_oxide) with patches on the [`pdf_manipulator/0.3.47-patches`](https://github.com/whuppi/pdf_oxide/tree/pdf_manipulator/0.3.47-patches) branch. The git submodule at `vendor/pdf_oxide/` points to this branch.
+pdf_manipulator wraps a vendored fork of [pdf_oxide](https://github.com/yfedoseev/pdf_oxide) (Rust engine) via FFI (native) and WASM (web). The fork lives at [`whuppi/pdf_oxide`](https://github.com/whuppi/pdf_oxide) with patches on the [`pdf_manipulator/0.3.53-patches`](https://github.com/whuppi/pdf_oxide/tree/pdf_manipulator/0.3.53-patches) branch. The git submodule at `vendor/pdf_oxide/` points to this branch.
 
 | Source | Why we track it |
 |---|---|
@@ -42,31 +42,33 @@ git fetch upstream
 # What tags exist?
 git tag --sort=-version:refname | head -5
 
-# What changed since our base?
-git log --oneline v0.3.47..v0.3.48          # commit messages
-git diff --stat v0.3.47..v0.3.48 | tail -5  # file summary
+# What changed since our base? (replace OLD with current base tag)
+git log --oneline vOLD..vNEW          # commit messages
+git diff --stat vOLD..vNEW | tail -5  # file summary
 
-# New C-ABI functions (these are what we can wire to Dart):
-git diff v0.3.47..v0.3.48 -- src/ffi.rs | grep "^+pub extern"
+# New WASM functions (what web can call):
+git diff vOLD..vNEW -- src/wasm.rs | grep "js_name" | head -20
 
-# New WASM functions (these are what web can call):
-git diff v0.3.47..v0.3.48 -- src/wasm.rs | grep "js_name" | head -20
-
-# New Rust public API (for understanding, not direct use):
-git diff v0.3.47..v0.3.48 -- src/document.rs | grep "^+.*pub fn"
+# New bridge-relevant Rust API:
+git diff vOLD..vNEW -- src/document.rs src/editor/document_editor.rs | grep "^+.*pub fn"
 ```
 
-### Step 2 — Check if any upstream additions replace our patches
+### Step 2 — Check which of our patched files upstream also changed
 
 ```sh
-# Compare upstream's new ffi.rs functions against our LOCAL PATCH functions
-git diff v0.3.47..v0.3.48 -- src/ffi.rs | grep "pub extern" > /tmp/upstream_new.txt
-grep "LOCAL PATCH" src/ffi.rs | head -20
+# Our patches touch these files — check each for upstream changes:
+for f in Cargo.toml src/bridge/ffi_api.rs src/editor/document_editor.rs \
+         src/editor/mod.rs src/ffi.rs src/signatures/sign_bytes.rs src/wasm.rs; do
+  count=$(git diff vOLD..vNEW -- "$f" | wc -l | tr -d ' ')
+  if [ "$count" -gt "0" ]; then
+    echo "CONFLICT RISK: $f ($count diff lines)"
+  else
+    echo "CLEAN: $f"
+  fi
+done
 
-# If upstream added a function that does the same thing as one of our patches:
-# 1. Delete our patch (the #[no_mangle] fn + the LOCAL PATCH comment)
-# 2. Delete the matching C header declaration if we added it
-# 3. The upstream version is now the canonical one
+# If upstream added a function that does the same thing as one of our patches,
+# the upstream version wins. Delete our patch during conflict resolution.
 ```
 
 ### Step 3 — Rebase patches onto new tag
@@ -74,43 +76,73 @@ grep "LOCAL PATCH" src/ffi.rs | head -20
 ```sh
 git log --oneline upstream/main..HEAD   # see our patches
 
-# Rebase our patch branch onto the new tag
-git rebase --onto vX.Y.Z go/v0.3.47  # old base → new base
-# (replace vX.Y.Z with the new tag, go/v0.3.47 with the old base)
+git rebase vNEW
+# (rebases all our patches onto the new tag)
 
-# If conflicts: resolve per-file, prioritize upstream, re-apply our additions
-# The patches are additive (new functions); conflicts are rare
+# Conflict resolution rules:
+# - C header (include/pdf_oxide_c/pdf_oxide.h): always take upstream.
+#   Our additions are usually absorbed by upstream in later releases.
+# - Cargo.toml: keep our feature additions (e.g. "rendering" in wasm),
+#   drop any that are now always-on deps in upstream.
+# - src/document.rs: keep BOTH (upstream new methods + our local patches).
+#   Watch for missing closing braces after merge.
+# - src/signatures/sign_bytes.rs: if upstream refactored the time code,
+#   apply our WASM cfg-gate to the new location.
+# - src/wasm.rs: keep BOTH (upstream new features + our standalone sign fns).
+#   Watch for missing closing braces after merge.
+# - src/editor/document_editor.rs: upstream may add new fields to
+#   DocumentEditor struct — add them to our from_reader() with defaults.
 
+# After all conflicts resolved:
+cargo build --lib --release   # verify native compiles
+cargo test --lib --release    # verify Rust tests pass
+```
+
+### Step 4 — Rename branch
+
+The branch name encodes the upstream version we're based on. Rename after every sync:
+
+```sh
+# Rename local branch
+git branch -m pdf_manipulator/OLD-patches pdf_manipulator/NEW-patches
+
+# Push new branch, delete old
+git push origin pdf_manipulator/NEW-patches
+git push origin --delete pdf_manipulator/OLD-patches
+```
+
+### Step 5 — Rebuild WASM and verify Dart
+
+```sh
+# Rebuild WASM binary
+bash tool/build_wasm.sh
+
+# Back to parent repo
 cd ../..
-git add vendor/pdf_oxide
+
+# Update submodule pointer
+git add vendor/pdf_oxide web_assets/
+
+# Clear build cache (stale native lib from old upstream)
+rm -rf .dart_tool/hooks_runner
+
+# Verify everything
+dart analyze lib/ test/
+dart test test/types/ test/protocol/ test/ops/native_runner_test.dart
+dart test test/ops/web_runner_test.dart -p chrome
 ```
 
-### Step 4 — Regenerate and verify
+### Step 6 — Commit and finalize
 
 ```sh
-# Regenerate Dart bindings from the (possibly updated) C header
-dart run ffigen --config ffigen.yaml
+# Commit parent with updated submodule + WASM
+git commit -m "build: sync upstream vNEW + rebuild WASM"
 
-# See what ffigen picked up that's new
-git diff lib/src/ffi/native_bindings.g.dart | grep "^+external" | head -20
-
-dart analyze .
-dart test
-```
-
-### Step 5 — Wire new features
-
-For each new upstream C-ABI function worth exposing, follow [S3](#s3--add-ffi-function). For each new WASM function, add the matching case in `worker.js` and `_web.dart`.
-
-### Step 6 — Finalize
-
-```sh
-# Rebuild WASM
-./tool/build_wasm.sh
-
-# Update provenance table (bottom of this file)
-# Update CAPABILITY_ROADMAP.md
-# Update CAPABILITY_ROADMAP.md
+# Update this file:
+# - Branch name references (intro paragraph + provenance table)
+# - Upstream base tag in provenance table
+# - S1 examples (vOLD..vNEW references)
+# Update CAPABILITY_ROADMAP.md with any new capabilities
 ```
 
 After Rust changes, rebuild WASM ([S4](#s4--rebuild-wasm)). Version bumps, changelog, and native binary releases are handled automatically by release-please and the tag-triggered release pipeline ([S5](#s5--release-pipeline)).
@@ -405,9 +437,9 @@ Our fork (`pdf_manipulator/0.3.47-patches` branch, commits atop `go/v0.3.47`) ad
 
 ### Patch discipline
 
-- Every patch carries a `LOCAL PATCH — pdf_manipulator/0.3.47-patches` comment with a one-line description and a removal trigger.
-- Patches are purely additive — they add new `#[no_mangle]` functions and new public methods. They never modify existing upstream code.
-- When upstream adds an equivalent function, delete the patch, re-run ffigen, verify tests pass.
+- Every patch carries a `LOCAL PATCH` comment with a one-line description and a removal trigger.
+- Patches are purely additive — they add new functions and new public methods. They never modify existing upstream code.
+- When upstream adds an equivalent function, delete our patch during the rebase conflict resolution. The upstream version wins.
 
 ---
 
@@ -432,11 +464,11 @@ Our fork (`pdf_manipulator/0.3.47-patches` branch, commits atop `go/v0.3.47`) ad
 |---|---|
 | Upstream repo | [`yfedoseev/pdf_oxide`](https://github.com/yfedoseev/pdf_oxide) |
 | Fork repo | [`whuppi/pdf_oxide`](https://github.com/whuppi/pdf_oxide) |
-| Fork branch | [`pdf_manipulator/0.3.47-patches`](https://github.com/whuppi/pdf_oxide/tree/pdf_manipulator/0.3.47-patches) |
-| Upstream base tag | `go/v0.3.47` |
+| Fork branch | [`pdf_manipulator/0.3.53-patches`](https://github.com/whuppi/pdf_oxide/tree/pdf_manipulator/0.3.53-patches) |
+| Upstream base tag | `v0.3.53` |
 | wasm-bindgen version | `0.2.121` |
 
-Fork convention: `main` on the fork stays a clean mirror of upstream. Patches live on the named branch. When upstream releases a new version, rebase the patch branch onto the new tag (see [S1](#s1--bump-upstream)).
+Fork convention: `main` on the fork stays a clean mirror of upstream. Patches live on the named branch (`pdf_manipulator/X.Y.Z-patches`). The branch name encodes the upstream version — rename it on every sync (S1 Step 4). When upstream releases a new version, rebase the patch branch onto the new tag (see [S1](#s1--bump-upstream)).
 
 Update this table after every upstream bump.
 
