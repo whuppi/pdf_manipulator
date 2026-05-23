@@ -72,6 +72,7 @@ void main() {
         'setTitle', 'setAuthor', 'setSubject', 'setKeywords',
         'cropMargins', 'convertToPdfA', 'flattenAllAnnotations',
         'setFormFieldValue', 'unembedStandardFonts', 'resizeImage',
+        'addRedaction', 'redactionCount', 'applyRedactions', 'scrubMetadata',
         // Page builder sub-ops dispatched via applyPageOp
         'font', 'at', 'text', 'heading', 'paragraph', 'space',
         'horizontalRule', 'image', 'watermark', 'textField',

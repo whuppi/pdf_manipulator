@@ -104,6 +104,16 @@ Future<Object?> _dispatch(String op, Map<String, Object?> args) async {
       return _handleEdit(args, opCode: 16);
     case 'signPem':
       return _handleEdit(args, opCode: 29);
+    case 'planSplitByBookmarks':
+      return _handleRead(args, opCode: 10);
+    case 'classifyPage':
+      return _handleRead(args, opCode: 8);
+    case 'classifyDocument':
+      return _handleRead(args, opCode: 9);
+    case 'convertTo':
+      return _handleEdit(args, opCode: 34);
+    case 'convertToPdf':
+      return _handleEdit(args, opCode: 35);
     case 'addStamp':
       return _handleEdit(args, opCode: 17);
     case 'addImageStamp':
