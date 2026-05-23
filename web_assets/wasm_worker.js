@@ -326,18 +326,30 @@ async function dispatch(op, args, readerCtx, writeFn) {
     }
 
     case 'convertTo': {
-      const doc = openEditor(readerCtx, args.password);
-      doc.convertToOffice(args.format);
-      doc.saveToWriter(writeFn, true, true, false);
+      const doc = openDoc(readerCtx, args.password);
+      let bytes;
+      switch (args.format) {
+        case 'docx': bytes = doc.toDocxBytes(); break;
+        case 'pptx': bytes = doc.toPptxBytes(); break;
+        case 'xlsx': bytes = doc.toXlsxBytes(); break;
+        default: throw new Error(`Unknown format: ${args.format}`);
+      }
       doc.free();
+      writeFn(bytes);
       return {};
     }
 
     case 'convertToPdf': {
-      // office → PDF: the source is the office doc bytes
       const bytes = readAllBytes(readerCtx);
-      const result = convertOfficeToPdf(bytes, args.format);
-      writeFn(result);
+      let doc;
+      switch (args.format) {
+        case 'docx': doc = WasmPdfDocument.openFromDocxBytes(bytes); break;
+        case 'pptx': doc = WasmPdfDocument.openFromPptxBytes(bytes); break;
+        case 'xlsx': doc = WasmPdfDocument.openFromXlsxBytes(bytes); break;
+        default: throw new Error(`Unknown format: ${args.format}`);
+      }
+      doc.saveToWriter(writeFn, true, true, false);
+      doc.free();
       return {};
     }
 
@@ -547,7 +559,7 @@ function applyEditOp(doc, op, args) {
     case 'addRedaction': doc.addRedaction(args.page, args.x, args.y, args.w, args.h, args.overlayText || null); break;
     case 'redactionCount': return { count: doc.redactionCount(args.page) };
     case 'applyRedactions': doc.applyRedactionsDestructive(); break;
-    case 'scrubMetadata': doc.scrubMetadata(); break;
+    case 'scrubMetadata': doc.sanitizeDocument(true, false, false); break;
     default: throw new Error(`Unknown edit op: ${op}`);
   }
 }

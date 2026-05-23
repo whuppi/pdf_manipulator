@@ -3,6 +3,7 @@
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
+import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/transport/bridge.dart';
 import 'package:test/test.dart';
@@ -135,6 +136,26 @@ void registerStructuralTests(PdfBridge Function() b) {
           rect: const PdfRect(x: 100, y: 100, width: 200, height: 200));
       expect(sink.takeBytes().length, greaterThan(0));
     });
+
+    test('planSplitByBookmarks returns splits', () async {
+      final splits = await b().planSplitByBookmarks(src(bookmarkedPdf));
+      expect(splits, isA<List<PdfBookmarkSplit>>());
+      expect(splits.length, greaterThan(0));
+      expect(splits.first.title, isNotEmpty);
+    });
+
+    test('splitByBookmarks produces outputs', () async {
+      final sinks = <TestSink>[];
+      await b().splitByBookmarks(src(bookmarkedPdf), (i) {
+        final s = TestSink();
+        sinks.add(s);
+        return s;
+      });
+      expect(sinks.length, greaterThan(0));
+      for (final s in sinks) {
+        expect(s.takeBytes().length, greaterThan(0));
+      }
+    });
   });
 }
 
@@ -145,3 +166,4 @@ Future<Uint8List> buildThreePagePdf(PdfBridge Function() b) async {
   await b().merge([src(s1.takeBytes()), src(minimalPdf)], s2);
   return s2.takeBytes();
 }
+

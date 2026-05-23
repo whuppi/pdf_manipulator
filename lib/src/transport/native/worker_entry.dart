@@ -111,9 +111,9 @@ Future<Object?> _dispatch(String op, Map<String, Object?> args) async {
     case 'classifyDocument':
       return _handleRead(args, opCode: 9);
     case 'convertTo':
-      return _handleEdit(args, opCode: 34);
+      return _handleRead(args, opCode: 11);
     case 'convertToPdf':
-      return _handleEdit(args, opCode: 35);
+      return _handleRead(args, opCode: 12);
     case 'addStamp':
       return _handleEdit(args, opCode: 17);
     case 'addImageStamp':

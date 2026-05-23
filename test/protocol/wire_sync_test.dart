@@ -73,6 +73,8 @@ void main() {
         'cropMargins', 'convertToPdfA', 'flattenAllAnnotations',
         'setFormFieldValue', 'unembedStandardFonts', 'resizeImage',
         'addRedaction', 'redactionCount', 'applyRedactions', 'scrubMetadata',
+        // Format sub-cases inside convertTo/convertToPdf
+        'docx', 'pptx', 'xlsx',
         // Page builder sub-ops dispatched via applyPageOp
         'font', 'at', 'text', 'heading', 'paragraph', 'space',
         'horizontalRule', 'image', 'watermark', 'textField',

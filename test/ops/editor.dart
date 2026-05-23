@@ -1,5 +1,6 @@
-// Editor — persistent handle: open, mutate, save, dispose.
+// Editor — persistent handle: open, mutate, save, dispose, redaction.
 
+import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/transport/bridge.dart';
 import 'package:test/test.dart';
 
@@ -51,6 +52,35 @@ void registerEditorTests(PdfBridge Function() b) {
       final editor = await b().openEditor(src(minimalPdf));
       await editor.dispose();
       await editor.dispose();
+    });
+
+    test('addRedaction → applyRedactions → save', () async {
+      final editor = await b().openEditor(src(minimalPdf));
+      await editor.addRedaction(0, const PdfRect(x: 50, y: 50, width: 100, height: 20));
+      await editor.applyRedactions();
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final bytes = sink.takeBytes();
+      expect(bytes.length, greaterThan(0));
+      final doc = await b().open(src(bytes));
+      expect(doc.pageCount, 1);
+    });
+
+    test('redactionCount returns int', () async {
+      final editor = await b().openEditor(src(minimalPdf));
+      final count = await editor.redactionCount(0);
+      expect(count, isA<int>());
+      await editor.dispose();
+    });
+
+    test('scrubMetadata → save produces output', () async {
+      final editor = await b().openEditor(src(minimalPdf));
+      await editor.scrubMetadata();
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      expect(sink.takeBytes().length, greaterThan(0));
     });
   });
 }
