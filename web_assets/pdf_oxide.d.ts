@@ -68,6 +68,93 @@ export enum ChromaSampling {
 }
 
 /**
+ * A parsed Document Security Store (`/DSS`, ISO 32000-2 §12.8.4.3).
+ * Count + index accessors mirror `WasmCertificate`'s flat shape
+ * (wasm-bindgen cannot return `Uint8Array[]` directly).
+ */
+export class Dss {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * The `i`-th DER certificate, or `undefined` if out of range.
+     */
+    getCert(i: number): Uint8Array | undefined;
+    /**
+     * The `i`-th DER CRL, or `undefined` if out of range.
+     */
+    getCrl(i: number): Uint8Array | undefined;
+    /**
+     * The `i`-th DER OCSP response, or `undefined` if out of range.
+     */
+    getOcsp(i: number): Uint8Array | undefined;
+    /**
+     * Number of DER X.509 certificates in the DSS.
+     */
+    readonly certCount: number;
+    /**
+     * Number of DER CRLs in the DSS.
+     */
+    readonly crlCount: number;
+    /**
+     * Number of DER OCSP responses in the DSS.
+     */
+    readonly ocspCount: number;
+    /**
+     * Per-signature VRI keys (uppercase-hex SHA-1 of `/Contents`).
+     */
+    readonly vri: string[];
+}
+
+/**
+ * PAdES baseline level. Frozen integer mapping (BB=0, BT=1, BLt=2,
+ * BLta=3) shared with the C ABI and every binding — never renumber.
+ */
+export enum PadesLevel {
+    /**
+     * B-B: signed attrs incl. the ESS signing-certificate-v2.
+     */
+    BB = 0,
+    /**
+     * B-T: B-B + an RFC 3161 signature-time-stamp unsigned attr.
+     */
+    BT = 1,
+    /**
+     * B-LT: B-T + a Document Security Store (DSS/VRI).
+     */
+    BLt = 2,
+    /**
+     * B-LTA: B-LT + a document-scoped `/DocTimeStamp`.
+     */
+    BLta = 3,
+}
+
+/**
+ * Offline B-LT validation material (DER certs / CRLs / OCSP
+ * responses). Build with `new()` then `addCert`/`addCrl`/`addOcsp`.
+ */
+export class RevocationMaterial {
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * Add a DER X.509 certificate.
+     */
+    addCert(der: Uint8Array): void;
+    /**
+     * Add a DER CRL.
+     */
+    addCrl(der: Uint8Array): void;
+    /**
+     * Add a DER OCSP response.
+     */
+    addOcsp(der: Uint8Array): void;
+    /**
+     * Create an empty revocation-material set.
+     */
+    constructor();
+}
+
+/**
  * WASM handle to a streaming-table building session. Created by
  * `FluentPageBuilder.streamingTable()`; rows are pushed via `pushRow`,
  * and the session is sealed with `finish()`.
@@ -579,7 +666,9 @@ export class WasmHeader {
 }
 
 /**
- * OCR configuration for WebAssembly.
+ * OCR configuration for WebAssembly. (Currently a marker — the engine
+ * uses tuned defaults; knobs are exposed as the WASM OCR surface
+ * matures, #524.)
  */
 export class WasmOcrConfig {
     free(): void;
@@ -591,15 +680,27 @@ export class WasmOcrConfig {
 }
 
 /**
- * OCR engine for WebAssembly.
+ * OCR engine for WebAssembly (#524).
+ *
+ * OCR runs entirely in-WASM via the pure-Rust `tract` backend — no
+ * native ONNX Runtime, no JS bridge. Model **delivery is host-side**:
+ * the browser/Deno/edge host fetches the detector + recognizer ONNX
+ * files and the char dictionary (see `modelManifest()` for the URLs)
+ * — typically `fetch()` + the Cache API / IndexedDB for the
+ * tens-of-MB models — then hands the bytes to the constructor. This
+ * only works in the `wasm-ocr` build of `pdf-oxide`; the default
+ * `pdf-oxide-wasm` has no OCR (the constructor returns an error
+ * explaining this).
  */
 export class WasmOcrEngine {
     free(): void;
     [Symbol.dispose](): void;
     /**
-     * Create a new OCR engine.
+     * Not available in this build. OCR needs the `wasm-ocr` build of
+     * `pdf-oxide` (the pure-Rust tract backend); the default
+     * `pdf-oxide-wasm` ships without it.
      */
-    constructor(_det_model_path: string, _rec_model_path: string, _dict_path: string, _config?: WasmOcrConfig | null);
+    constructor(_det_model: Uint8Array, _rec_model: Uint8Array, _dict: string, _config?: WasmOcrConfig | null);
 }
 
 /**
@@ -741,6 +842,11 @@ export class WasmPdfDocument {
      */
     addImageStamp(page_index: number, image_data: Uint8Array, x: number, y: number, width: number, height: number, opacity: number): void;
     /**
+     * Queue an explicit destructive redaction rectangle on a page
+     * (page user space; `fill` is an optional DeviceRGB `[r,g,b]`).
+     */
+    addRedaction(page: number, x0: number, y0: number, x1: number, y1: number, fill?: Float32Array | null): void;
+    /**
      * LOCAL PATCH — pdf_manipulator/0.3.47-patches
      * Add a stamp annotation to a page.
      * Removal trigger: upstream adds stamp annotations to WasmPdfDocument.
@@ -767,12 +873,26 @@ export class WasmPdfDocument {
      */
     applyPageRedactions(page_index: number): void;
     /**
+     * Destructively apply all queued redactions (true content removal,
+     * ISO 32000-1:2008 §12.5.6.23). Returns a `RedactionReport` object.
+     */
+    applyRedactionsDestructive(scrub_metadata?: boolean | null): any;
+    /**
      * Authenticate with a password to decrypt an encrypted PDF.
      *
      * @param password - The password string
      * @returns true if authentication succeeded
      */
     authenticate(password: string): boolean;
+    /**
+     * Cheap per-page text-vs-OCR classification → JSON
+     * `DocumentClassification`.
+     */
+    classifyDocument(): string;
+    /**
+     * Cheap per-page classification → JSON `PageClassification`.
+     */
+    classifyPage(page_index: number): string;
     /**
      * Clear all pending erase operations for a page.
      */
@@ -792,6 +912,11 @@ export class WasmPdfDocument {
      * Delete a page by index (0-based).
      */
     deletePage(index: number): void;
+    /**
+     * The document's Document Security Store (`/DSS`) as a `Dss`, or
+     * `undefined` if absent. Mirrors Rust `signatures::read_dss`.
+     */
+    dss(): Dss | undefined;
     /**
      * Deprecated: Use eraseFooter instead.
      */
@@ -900,6 +1025,12 @@ export class WasmPdfDocument {
      */
     extractLines(page_index: number, region?: Float32Array | null): any;
     /**
+     * Rich per-page extraction → JSON `PageExtraction` (per-region
+     * bbox + typed reason). `optionsJson` is `{}`-tolerant
+     * `AutoExtractOptions`; undefined/empty → defaults.
+     */
+    extractPageAuto(page_index: number, options_json?: string | null): string;
+    /**
      * Extract complete page text data in a single call.
      *
      * Returns `{ spans, chars, page_width, page_height }`.
@@ -957,18 +1088,21 @@ export class WasmPdfDocument {
      */
     extractText(page_index: number, region: any): string;
     /**
+     * One-shot auto text extraction — graceful native fallback (never
+     * the opaque OCR error #513).
+     */
+    extractTextAuto(page_index: number): string;
+    /**
      * Extract text lines from a page.
      *
      * Returns an array of objects with: text, bbox, words (array of Word objects).
      */
     extractTextLines(page_index: number, region?: Float32Array | null): any;
     /**
-     * Extract text using OCR (optical character recognition).
-     *
-     * NOTE: OCR is not yet supported in the WebAssembly build due to missing
-     * ONNX Runtime support for the web backend in the current implementation.
+     * Extract text using OCR. Not available in this build — OCR needs
+     * the `wasm-ocr` build of `pdf-oxide`.
      */
-    extractTextOcr(_page_index: number, _engine?: WasmOcrEngine | null): string;
+    extractTextOcr(_page_index: number, _engine: WasmOcrEngine): string;
     /**
      * Extract word-level data from a page.
      *
@@ -1100,6 +1234,18 @@ export class WasmPdfDocument {
      */
     constructor(data: Uint8Array, password?: string | null);
     /**
+     * Open a PDF from DOCX bytes.
+     */
+    static openFromDocxBytes(data: Uint8Array): WasmPdfDocument;
+    /**
+     * Open a PDF from PPTX bytes.
+     */
+    static openFromPptxBytes(data: Uint8Array): WasmPdfDocument;
+    /**
+     * Open a PDF from XLSX bytes.
+     */
+    static openFromXlsxBytes(data: Uint8Array): WasmPdfDocument;
+    /**
      * Get the number of pages in the document.
      */
     pageCount(): number;
@@ -1127,6 +1273,10 @@ export class WasmPdfDocument {
      * Get the rotation of a page in degrees (0, 90, 180, 270).
      */
     pageRotation(page_index: number): number;
+    /**
+     * Number of redaction regions queued for `page`.
+     */
+    redactionCount(page: number): number;
     /**
      * Identify and remove both headers and footers.
      *
@@ -1186,6 +1336,12 @@ export class WasmPdfDocument {
      * Rotate a page by the given degrees (adds to current rotation).
      */
     rotatePage(page_index: number, degrees: number): void;
+    /**
+     * Standalone document sanitization (#231 T10): strip `/Info`,
+     * catalog XMP `/Metadata`, document JavaScript and embedded files
+     * without geometric redaction. Returns a `RedactionReport` object.
+     */
+    sanitizeDocument(scrub_metadata?: boolean | null, remove_javascript?: boolean | null, remove_embedded_files?: boolean | null): any;
     /**
      * Save all edits and return the resulting PDF as bytes.
      *
@@ -1287,6 +1443,10 @@ export class WasmPdfDocument {
      */
     signatures(): WasmSignature[];
     /**
+     * Convert the entire PDF to DOCX bytes (Uint8Array).
+     */
+    toDocxBytes(): Uint8Array;
+    /**
      * Convert a single page to HTML.
      *
      * @param page_index - Zero-based page number
@@ -1318,6 +1478,14 @@ export class WasmPdfDocument {
      * Convert all pages to plain text.
      */
     toPlainTextAll(): string;
+    /**
+     * Convert the entire PDF to PPTX bytes (Uint8Array).
+     */
+    toPptxBytes(): Uint8Array;
+    /**
+     * Convert the entire PDF to XLSX bytes (Uint8Array).
+     */
+    toXlsxBytes(): Uint8Array;
     /**
      * LOCAL PATCH — pdf_manipulator/0.3.47-patches
      * Unembed Standard 14 fonts.
@@ -1396,6 +1564,10 @@ export class WasmPdfPageRegion {
     extractTextLines(): any;
     /**
      * Extract text using OCR from this region.
+     *
+     * Region-scoped OCR is not wired yet; use the page-level
+     * `WasmPdfDocument.extractTextOcr(pageIndex, engine)` for now
+     * (#524 follow-up).
      */
     extractTextOcr(_engine?: WasmOcrEngine | null): string;
     /**
@@ -1457,6 +1629,12 @@ export class WasmSignature {
      * `/Location` entry from the signature dictionary, if present.
      */
     readonly location: string | undefined;
+    /**
+     * PAdES baseline level from this signature's CMS attributes alone
+     * (`BB` vs `BT`). `BLt` additionally needs the document `/DSS` —
+     * read it via `WasmPdfDocument.dss()` and re-classify there.
+     */
+    readonly padesLevel: PadesLevel;
     /**
      * `/Reason` entry from the signature dictionary, if present.
      */
@@ -1521,6 +1699,23 @@ export class WasmTimestamp {
 }
 
 /**
+ * A CycloneDX 1.6 Cryptographic Bill of Materials (JSON string) of the
+ * algorithms exercised so far this process (#230 Phase F).
+ */
+export function cryptoCbom(): string;
+
+/**
+ * The cryptographic algorithm tokens exercised so far this process
+ * (governance report), as a JSON string array.
+ */
+export function cryptoInventory(): any;
+
+/**
+ * The active crypto policy as its canonical grammar string.
+ */
+export function cryptoPolicy(): string;
+
+/**
  * Disable all pdf_oxide log output — convenience wrapper for
  * `setLogLevel("off")`.
  */
@@ -1539,6 +1734,50 @@ export function generateBarcodeSvg(barcode_type: number, data: string): string;
  * `errorCorrection`: 0=Low, 1=Medium, 2=Quartile, 3=High. `size`: advisory pixel size.
  */
 export function generateQrSvg(data: string, error_correction: number, size: number): string;
+
+/**
+ * Whether `pdf_data` carries a document-scoped RFC 3161
+ * `/DocTimeStamp` archival timestamp (PAdES-B-LTA). This is the
+ * document-level reader signal; a `WasmSignature`'s `padesLevel`
+ * getter is signature-scoped and tops out at B-LT by design.
+ */
+export function hasDocumentTimestamp(pdf_data: Uint8Array): boolean;
+
+/**
+ * #519: Air-gapped OCR model manifest — JSON (detector + every
+ * supported language's cache filenames and source URLs).
+ *
+ * WASM provisioning is **host-side**: browser/WASM has no filesystem
+ * or network-to-disk, so a download-to-cache prefetch cannot run
+ * here. This manifest is informational — it lets the JS host learn
+ * which model files/URLs to fetch and bundle (or ship out of band)
+ * before driving OCR. There is intentionally no `prefetchModels` in
+ * the WASM surface (see `prefetchAvailable`, which always returns
+ * `false`).
+ */
+export function modelManifest(): string;
+
+/**
+ * Plan a bookmark split without producing PDFs. Returns a JSON array
+ * of segment objects (`index, startPage…` shape from
+ * `BookmarkSegment`). `level`: 0 = all depths, 1 = top-level.
+ */
+export function planSplitByBookmarks(src_bytes: Uint8Array, title_prefix: string | null | undefined, ignore_case: boolean, level: number, include_front_matter: boolean): any;
+
+/**
+ * #519: Whether this build can download OCR models to a local cache.
+ * Always `false` in WASM — provisioning is host-side (see
+ * `modelManifest`).
+ */
+export function prefetchAvailable(): boolean;
+
+/**
+ * Install the process-wide runtime crypto policy from its grammar
+ * string (`"compat"|"strict"|"fips-strict"[;…]`). Fail-closed:
+ * throws on an unparseable spec (policy NOT installed) or if a
+ * policy is already set. Default (never set) is `compat`.
+ */
+export function setCryptoPolicy(spec: string): void;
 
 /**
  * Set the maximum log level for pdf_oxide messages.
@@ -1568,6 +1807,18 @@ export function setLogLevel(level: string): void;
 export function signPdfBytes(pdf_data: Uint8Array, cert: WasmCertificate, reason?: string | null, location?: string | null): Uint8Array;
 
 /**
+ * Sign raw PDF bytes at a PAdES baseline level and return the signed
+ * PDF as a `Uint8Array`.
+ *
+ * `level` `BLTA` is reserved (→ error). For `BT`/`BLt` pass a
+ * pre-fetched RFC 3161 `timestampToken` (DER): WASM intentionally
+ * omits the online TSA client (same `ureq`-incompat carve-out as
+ * v0.3.38) — without a token the core fail-closes with `Unsupported`.
+ * `revocation` supplies the B-LT DSS material.
+ */
+export function signPdfBytesPades(pdf_data: Uint8Array, cert: WasmCertificate, level: PadesLevel, timestamp_token?: Uint8Array | null, revocation?: RevocationMaterial | null, reason?: string | null, location?: string | null): Uint8Array;
+
+/**
  * Sign PDF bytes with PEM certificate + key. All data stays inside WASM.
  */
 export function signPdfWithPem(pdf_data: Uint8Array, cert_pem: string, key_pem: string, reason?: string | null, location?: string | null): Uint8Array;
@@ -1578,6 +1829,13 @@ export function signPdfWithPem(pdf_data: Uint8Array, cert_pem: string, key_pem: 
  */
 export function signPdfWithPkcs12(pdf_data: Uint8Array, pkcs12_data: Uint8Array, password: string, reason?: string | null, location?: string | null): Uint8Array;
 
+/**
+ * Split at bookmark boundaries. Returns a JSON array of
+ * `[segment, bytes]` pairs (bytes as a number array; source
+ * unmodified).
+ */
+export function splitByBookmarks(src_bytes: Uint8Array, title_prefix: string | null | undefined, ignore_case: boolean, level: number, include_front_matter: boolean): any;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
@@ -1585,6 +1843,14 @@ export interface InitOutput {
     readonly setLogLevel: (a: number, b: number, c: number) => void;
     readonly generateBarcodeSvg: (a: number, b: number, c: number, d: number) => void;
     readonly generateQrSvg: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly planSplitByBookmarks: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
+    readonly splitByBookmarks: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
+    readonly setCryptoPolicy: (a: number, b: number, c: number) => void;
+    readonly cryptoPolicy: (a: number) => void;
+    readonly cryptoInventory: (a: number) => void;
+    readonly cryptoCbom: (a: number) => void;
+    readonly modelManifest: (a: number) => void;
+    readonly prefetchAvailable: () => number;
     readonly __wbg_wasmpdfdocument_free: (a: number, b: number) => void;
     readonly wasmpdfdocument_new: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly wasmpdfdocument_fromReader: (a: number, b: number, c: number, d: number, e: number) => void;
@@ -1592,6 +1858,7 @@ export interface InitOutput {
     readonly wasmpdfdocument_pageCount: (a: number, b: number) => void;
     readonly wasmpdfdocument_signatureCount: (a: number, b: number) => void;
     readonly wasmpdfdocument_signatures: (a: number, b: number) => void;
+    readonly wasmpdfdocument_dss: (a: number, b: number) => void;
     readonly wasmpdfdocument_version: (a: number, b: number) => void;
     readonly wasmpdfdocument_authenticate: (a: number, b: number, c: number, d: number) => void;
     readonly wasmpdfdocument_hasStructureTree: (a: number, b: number) => void;
@@ -1614,6 +1881,12 @@ export interface InitOutput {
     readonly wasmpdfdocument_toHtmlAll: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly wasmpdfdocument_toPlainText: (a: number, b: number, c: number) => void;
     readonly wasmpdfdocument_toPlainTextAll: (a: number, b: number) => void;
+    readonly wasmpdfdocument_toDocxBytes: (a: number, b: number) => void;
+    readonly wasmpdfdocument_toPptxBytes: (a: number, b: number) => void;
+    readonly wasmpdfdocument_toXlsxBytes: (a: number, b: number) => void;
+    readonly wasmpdfdocument_openFromDocxBytes: (a: number, b: number, c: number) => void;
+    readonly wasmpdfdocument_openFromPptxBytes: (a: number, b: number, c: number) => void;
+    readonly wasmpdfdocument_openFromXlsxBytes: (a: number, b: number, c: number) => void;
     readonly wasmpdfdocument_extractChars: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly wasmpdfdocument_extractSpans: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly wasmpdfdocument_extractPageText: (a: number, b: number, c: number, d: number, e: number) => void;
@@ -1638,6 +1911,19 @@ export interface InitOutput {
     readonly wasmcertificate_validity: (a: number, b: number) => void;
     readonly wasmcertificate_isValid: (a: number, b: number) => void;
     readonly signPdfBytes: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
+    readonly __wbg_revocationmaterial_free: (a: number, b: number) => void;
+    readonly wasmrevocationmaterial_new: () => number;
+    readonly wasmrevocationmaterial_addCert: (a: number, b: number, c: number) => void;
+    readonly wasmrevocationmaterial_addCrl: (a: number, b: number, c: number) => void;
+    readonly wasmrevocationmaterial_addOcsp: (a: number, b: number, c: number) => void;
+    readonly __wbg_dss_free: (a: number, b: number) => void;
+    readonly wasmdss_certCount: (a: number) => number;
+    readonly wasmdss_getCert: (a: number, b: number, c: number) => void;
+    readonly wasmdss_getCrl: (a: number, b: number, c: number) => void;
+    readonly wasmdss_getOcsp: (a: number, b: number, c: number) => void;
+    readonly wasmdss_vri: (a: number, b: number) => void;
+    readonly hasDocumentTimestamp: (a: number, b: number) => number;
+    readonly signPdfBytesPades: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => void;
     readonly signPdfWithPkcs12: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
     readonly signPdfWithPem: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
     readonly __wbg_wasmtimestamp_free: (a: number, b: number) => void;
@@ -1656,6 +1942,7 @@ export interface InitOutput {
     readonly wasmsignature_contactInfo: (a: number, b: number) => void;
     readonly wasmsignature_signingTime: (a: number, b: number) => void;
     readonly wasmsignature_coversWholeDocument: (a: number) => number;
+    readonly wasmsignature_padesLevel: (a: number) => number;
     readonly wasmsignature_verify: (a: number, b: number) => void;
     readonly wasmsignature_verifyDetached: (a: number, b: number, c: number, d: number) => void;
     readonly __wbg_wasmpdfpageregion_free: (a: number, b: number) => void;
@@ -1714,6 +2001,10 @@ export interface InitOutput {
     readonly wasmpdfdocument_addWatermarkPositioned: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => void;
     readonly wasmpdfdocument_applyPageRedactions: (a: number, b: number, c: number) => void;
     readonly wasmpdfdocument_applyAllRedactions: (a: number, b: number) => void;
+    readonly wasmpdfdocument_addRedaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
+    readonly wasmpdfdocument_redactionCount: (a: number, b: number, c: number) => void;
+    readonly wasmpdfdocument_applyRedactionsDestructive: (a: number, b: number, c: number) => void;
+    readonly wasmpdfdocument_sanitizeDocument: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly __wbg_artifactstyle_free: (a: number, b: number) => void;
     readonly wasmartifactstyle_new: () => number;
     readonly wasmartifactstyle_font: (a: number, b: number, c: number, d: number) => number;
@@ -1849,6 +2140,12 @@ export interface InitOutput {
     readonly streamingtable_pushRowSpan: (a: number, b: number, c: number) => void;
     readonly streamingtable_flush: (a: number) => void;
     readonly streamingtable_finish: (a: number, b: number) => void;
+    readonly wasmpdfdocument_classifyDocument: (a: number, b: number) => void;
+    readonly wasmpdfdocument_classifyPage: (a: number, b: number, c: number) => void;
+    readonly wasmpdfdocument_extractTextAuto: (a: number, b: number, c: number) => void;
+    readonly wasmpdfdocument_extractPageAuto: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly wasmdss_crlCount: (a: number) => number;
+    readonly wasmdss_ocspCount: (a: number) => number;
     readonly wasmheader_left: (a: number, b: number) => number;
     readonly wasmheader_center: (a: number, b: number) => number;
     readonly wasmheader_right: (a: number, b: number) => number;
