@@ -1,328 +1,193 @@
 # pdf_manipulator — Architecture
 
-How the package is wired. For what's shipped see [`CAPABILITY_ROADMAP.md`](CAPABILITY_ROADMAP.md). For update procedures see [`UPDATING.md`](UPDATING.md).
+How the package is wired. Three layers, two platforms, full streaming I/O.
+
+For the bridge layer internals (thread pools, condvars, arena allocators,
+shared buffers, OPFS) see [`BRIDGE_ARCHITECTURE.md`](BRIDGE_ARCHITECTURE.md).
+For the public API (every type, method, parameter) see [`API_GOLD.md`](API_GOLD.md).
+For what's shipped see [`CAPABILITY_ROADMAP.md`](CAPABILITY_ROADMAP.md).
 
 ---
 
 ## 1. The contract
 
-Seven guarantees the package earns:
-
-- **One barrel, zero `dart:io`.** `pdf_manipulator.dart` exports the consumer API (`Pdf`, `PdfDoc`, `PdfEditor`, `PdfBuilder`, `PdfSource`, `PdfSink`, typed errors, model types). No file paths, no `File`, no `dart:io` anywhere in the transitive graph. The barrel compiles on web as-is. Consumers implement `PdfSource` (random-access reader) for input and `PdfSink` (sequential writer) for output.
-- **Instance-based, lifecycle-controlled.** `final pdf = Pdf();` creates an instance with its own worker (Isolate on native, Web Worker on web). `pdf.dispose()` disposes the worker and cancels all pending operations. No static shared state — consumers control lifecycle and parallelism by managing instances.
-- **Zero main-thread blocking on every platform.** Native dispatches every FFI call to a long-lived worker isolate via `SendPort`. Web dispatches every WASM call to a Web Worker via `postMessage`. The main thread is never blocked, even for multi-hundred-page PDFs.
-- **Typed errors from the engine.** Every pdf_oxide error code maps 1:1 to a sealed `PdfError` subclass. Callers pattern-match; no string-grepping.
-- **Stateful handles for multi-step editing.** `PdfEditor` and `PdfBuilder` hold opaque FFI pointers on the worker side, addressed by integer handle IDs from the main side. Multiple handles coexist; each is independently disposable.
-- **Conditional import dispatch, not runtime detection.** `platform.dart` uses `export ... if (dart.library.io) ... if (dart.library.js_interop)` to select the platform at compile time. No `kIsWeb`. No `Platform.isAndroid`. The stub throws at construction if somehow reached.
-- **Generated bindings, hand-written memory safety.** `ffigen` reads `pdf_oxide.h` and produces `native_bindings.g.dart`. A hand-written `bindings.dart` wraps every generated function with pointer allocation, error checking, and deallocation. The rest of the package imports `PdfBindings`, never the generated file.
-- **Vendor via submodule with patches.** pdf_oxide is a git submodule at `vendor/pdf_oxide`, pointing at a fork branch (`pdf_manipulator/0.3.47-patches`). The fork adds C-ABI functions and Rust-level additions that upstream hasn't shipped yet. Each patch has a removal trigger — when upstream adds the equivalent, the patch is deleted. Full inventory in [`UPDATING.md`](UPDATING.md).
+- **Three layers.** Public API (Dart) → Bridge (Dart+Rust+JS) → Engine (Rust). Each layer has one job. No layer imports from a layer above it.
+- **`PdfSource` in, `PdfSink` out.** The consumer implements two interfaces. The engine reads targeted ranges via callback (never the full file). The engine writes chunks as it produces them. No full-file buffers. No `dart:io`.
+- **Thread pool, not isolate thread.** The Rust engine runs on raw pthreads in a fixed-size pool (native) or Web Workers in a pool (web). The Dart isolate never blocks. The UI never jank.
+- **Arena allocator per operation.** Every operation gets a `bumpalo::Bump`. Drop the arena = free ALL engine memory. No leaks on cancel or force-kill.
+- **Instant dispose.** Cancel flags + condvar signals wake sleeping threads. 100ms grace for cooperative exit. Force-kill as last resort. Arena drop cleans memory. Zero stuck threads.
+- **Sealed types, not nulls.** `PdfPages.all()`, `PdfPages.single(0)`, `PdfPages.range(5, 10)` — compiler-enforced exhaustive handling. No magic numbers, no null-means-all.
+- **One `save()` with `PdfSaveOptions`.** Compression, garbage collection, linearization, encryption — all in one options class. No separate `saveEncrypted`, `saveWithOptions`.
+- **Stream\<T\> for multi-item ops.** `render()`, `extractImages()` yield items one at a time. Consumer processes one, GC collects it, next arrives. No list accumulation.
+- **Vendor via submodule.** pdf_oxide is a git submodule at `vendor/pdf_oxide`, pointing at a fork with additive patches. Each patch has a removal trigger.
 
 ---
 
 ## 2. Source tree
 
 ```
-pdf_manipulator/
-├── lib/
-│   ├── pdf_manipulator.dart              ← barrel (one import, entire public API)
-│   └── src/
-│       ├── builder/
-│       │   └── pdf_builder.dart          ← PdfBuilder + PdfPageBuilder
-│       ├── core/
-│       │   ├── errors.dart               ← sealed PdfError hierarchy
-│       │   ├── pdf_image.dart
-│       │   ├── pdf_info.dart
-│       │   ├── pdf_rect.dart
-│       │   ├── pdf_signature.dart
-│       │   ├── pdf_sink.dart             ← PdfSink interface (sequential writer)
-│       │   ├── pdf_source.dart           ← PdfSource interface (random-access reader)
-│       │   └── search_result.dart
-│       ├── document/
-│       │   ├── pdf.dart                  ← Pdf class + Pdf.edit() + Pdf.build()
-│       │   └── pdf_doc.dart              ← PdfDoc read-only document model
-│       ├── editor/
-│       │   └── pdf_editor.dart           ← PdfEditor batch editor
-│       ├── ffi/
-│       │   ├── native_bindings.g.dart    ← GENERATED by ffigen + streaming I/O @Native decls
-│       │   ├── bindings.dart             ← PdfBindings — memory-safe wrappers
-│       │   ├── callback_bridge.dart      ← SourceBridge + SinkBridge (NativeCallable)
-│       │   ├── memory_source.dart        ← MemoryPdfSource (worker-side shim)
-│       │   └── streaming_bridge.dart     ← StreamingSourceBridge + SourceServer (cross-isolate)
-│       ├── page/
-│       │   └── pdf_page_info.dart
-│       └── platform/
-│           ├── pdf_platform.dart         ← PdfPlatform interface + handle interfaces
-│           ├── platform.dart             ← conditional export (the router)
-│           ├── _native.dart              ← worker isolate + FFI dispatch
-│           ├── _web.dart                 ← Web Worker + WASM dispatch
-│           ├── _op.dart                  ← Op enum (every operation code)
-│           ├── _msg.dart                 ← WorkerMsg / WorkerResult types
-│           └── _stub.dart                ← compile-time stub (throws)
-├── vendor/
-│   └── pdf_oxide/                        ← git submodule (Rust engine)
-├── hook/
-│   └── build.dart                        ← dual-path: compile from source OR download
-├── bin/
-│   └── setup.dart                        ← web setup: downloads WASM + copies JS/worker
-├── web_assets/                           ← JS glue + worker.js (WASM downloaded at setup)
-│   ├── pdf_oxide.js                      ← wasm-bindgen JS glue (committed)
-│   ├── pdf_oxide_bg.wasm                 ← WASM binary (gitignored, downloaded by setup)
-│   └── worker.js                         ← Web Worker dispatcher (committed)
-├── .github/workflows/
-│   ├── ci.yml                            ← auto on PR: analyze + macOS test
-│   ├── full-test.yml                     ← label-triggered: 6-platform test matrix
-│   ├── pr-checks.yml                     ← auto on PR: conventional commit + promotion chain + security lint
-│   ├── release-please.yml                ← auto on push: opens/updates Release PRs
-│   ├── release.yml                       ← auto on tag: compile + release + publish
-│   └── triage.yml                        ← auto on issue/PR: labels + assignment
-├── tool/
-│   ├── build_wasm.sh                     ← rebuild WASM from source
-│   └── compile_natives.sh                ← local native compilation (CI handles releases)
-├── docs/
-│   ├── ARCHITECTURE.md                   ← this file
-│   ├── CAPABILITY_ROADMAP.md
-│   ├── MIGRATION.md
-│   └── UPDATING.md
-├── example/                              ← Flutter example app (all platforms)
-├── test/                                 ← test suite (native + web)
-├── CONTRIBUTING.md
-├── SECURITY.md
-├── Makefile                              ← make check / make test / make test-web
-├── ffigen.yaml
-└── pubspec.yaml
-```
+lib/
+├── pdf_manipulator.dart                 ← barrel (Layer 1 only)
+└── src/
+    ├── api/                             ← LAYER 1: Public API
+    │   ├── pdf.dart                     ← Pdf (36 methods)
+    │   ├── pdf_editor.dart              ← PdfEditor (33 methods)
+    │   ├── pdf_builder.dart             ← PdfBuilder + PdfPageBuilder
+    │   ├── pdf_source.dart              ← PdfSource interface
+    │   ├── pdf_sink.dart                ← PdfSink interface
+    │   └── types/                       ← sealed types, enums, params, errors
+    │
+    ├── bridge/                          ← LAYER 2: The plumbing
+    │   ├── bridge.dart                  ← abstract PdfBridge
+    │   ├── bridge_factory.dart          ← conditional import router
+    │   ├── native/                      ← NativeBridge (isolate + Rust FFI)
+    │   ├── web/                         ← WebBridge (Web Worker + OPFS + WASM)
+    │   └── ffi/                         ← @Native FFI declarations
+    │
+    └── _internal.dart                   ← internal barrel
 
-Growth happens at the edges: new model types in `core/`, new methods on `Pdf`/`PdfEditor`/`PdfBuilder`, new wrappers in `bindings.dart`. The platform dispatch (`platform/`), build hook, and FFI pipeline are stable infrastructure that rarely change when features are added.
+vendor/pdf_oxide/src/
+├── bridge/                              ← Rust bridge module
+│   ├── thread_pool.rs                   ← fixed-size pool + queue + cancel
+│   ├── callback_reader.rs              ← Read+Seek via condvar
+│   ├── callback_writer.rs              ← Write via condvar
+│   ├── arena.rs                         ← per-operation bumpalo arena
+│   ├── shared_buffer.rs                ← shared memory layout
+│   └── ffi_api.rs                       ← C API for bridge operations
+├── wasm.rs                              ← WASM API + JsCallbackReader
+└── ...existing pdf_oxide engine code
+```
 
 ---
 
 ## 3. The three layers
 
+### Layer 1 — Public API (`lib/src/api/`)
+
+What the consumer sees. Pure Dart. No FFI, no isolates, no threads.
+
+- `PdfSource` / `PdfSink` — the two interfaces the consumer implements
+- `Pdf` — one-shot operations (merge, split, extract, render, etc.)
+- `PdfEditor` — open once, mutate many, save once
+- `PdfBuilder` — create PDFs from scratch
+- Sealed types: `PdfPages`, `PdfEncryptionAlgorithm`, `PdfExtractionFormat`
+- Parameter groups: `PdfSaveOptions`, `PdfEncryptionConfig`, `PdfWatermarkStyle`
+
+Layer 1 holds a `PdfBridge` and forwards every call. It doesn't know which bridge it has.
+
+### Layer 2 — Bridge (`lib/src/bridge/`)
+
+The plumbing. Two implementations of `PdfBridge`:
+
+**NativeBridge** — worker isolate + Rust thread pool. Engine reads via `CallbackReader` (condvar + `NativeCallable.listener`). Engine writes via `CallbackWriter` (same mechanism). Results posted via `allo-isolate` (`Dart_PostCObject`). Shared buffers for the condvar dance. Arena allocator per operation.
+
+**WebBridge** — Web Worker pool. PdfSource data streams to OPFS. Engine reads from OPFS `SyncAccessHandle` via `JsCallbackReader` (synchronous, disk-backed). Output streams back via `postMessage`. Cancel via `Worker.terminate()`. WASM linear memory IS the arena.
+
+### Layer 3 — Engine (`vendor/pdf_oxide/`)
+
+pdf_oxide. Parses PDFs, renders, extracts, edits. Knows nothing about Dart. Reads via `Read + Seek`. Writes via `Write`. Allocates via bumpalo arena. Pure Rust.
+
+The `bridge/` module inside pdf_oxide provides the thread pool, callback reader/writer, arena wrapper, shared buffer layout, and C API. These are additive patches on the fork.
+
+---
+
+## 4. Data flow — native
+
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  DART FACADE (this package)                                  │
-│  Pdf.merge(), PdfEditor.setTitle(), PdfBuilder, typed errors │
-│  Pure Dart. No dart:io. Consumer touches ONLY this layer.    │
-├──────────────────────────────────────────────────────────────┤
-│  BINDINGS (lib/src/ffi/)                                     │
-│  ffigen → native_bindings.g.dart (generated, never edited)   │
-│  bindings.dart → PdfBindings (hand-written memory safety)    │
-├──────────────────────────────────────────────────────────────┤
-│  ENGINE (vendor/pdf_oxide — Rust, MIT/Apache-2.0)            │
-│  PDF parsing, editing, extraction, creation, rendering,      │
-│  signatures, compliance. Git submodule with patches.          │
-│  Compiled by hook/build.dart → .dylib / .so / .dll / .wasm  │
-└──────────────────────────────────────────────────────────────┘
-```
-
-pdf_oxide ships a C header (`pdf_oxide.h`). `ffigen` reads the header and produces `@Native` declarations. `PdfBindings` wraps each one with `calloc` / `free` / error-check. The consumer API (`Pdf`, `PdfEditor`, `PdfBuilder`) dispatches through `PdfBindings` on the worker side.
-
----
-
-## 4. Conditional import dispatch
-
-The load-bearing architecture decision. `lib/src/platform/platform.dart` is a single line:
-
-```dart
-export '_stub.dart'
-    if (dart.library.io) '_native.dart'
-    if (dart.library.js_interop) '_web.dart';
-```
-
-Each file exports one top-level function: `PdfPlatform createPlatform()`. The Dart compiler selects the correct file at compile time. No runtime detection, no `kIsWeb`, no `Platform.isAndroid`. The stub throws `UnsupportedError` if reached.
-
-`PdfPlatform` is the abstract interface (`pdf_platform.dart`) that both `NativePdfPlatform` and `WebPdfPlatform` implement. It declares every operation the package supports. Each `Pdf()` instance creates its own `PdfPlatform`, which owns the worker. `dispose()` terminates the worker and cancels all pending operations on that instance.
-
----
-
-## 5. Off-main-thread dispatch
-
-### Native — per-instance worker isolate
-
-Each `Pdf()` instance spawns its own background `Isolate`. The main isolate and the worker exchange `SendPort`s. `dispose()` calls `Isolate.kill()` on the worker, cancelling all pending operations. Every operation:
-
-1. Main isolate assigns a monotonic request ID and sends a `_WorkerRequest(id, work)`.
-2. Worker receives the message, calls `work(bindings)` (which does the FFI), sends back `_WorkerResponse(id, result | error)`.
-3. Main isolate completes the pending `Completer<Object?>` by request ID.
-
-For handle-based sessions (`PdfEditor`), the engine reads from the main isolate's `PdfSource` on demand via cross-isolate streaming: worker sends `ReadRequest(offset, count)` to main → blocks on a native condvar (yielding the isolate via `Dart_ExitIsolate`) → main fulfills from `PdfSource.readAt` → signals condvar → worker returns bytes to Rust. No full-file buffer on the worker. For one-shot ops, a `SourceServer` on the main isolate serves the same protocol. The message protocol is typed (`WorkerMsg` / `WorkerResult` from `_msg.dart`) with no closures — only primitive fields, `SendPort`s, and transferable byte payloads cross the boundary.
-
-### Web — per-instance Web Worker + WASM
-
-Each `Pdf()` instance creates its own `web.Worker`. The WASM binary loads inside the worker. `dispose()` calls `Worker.terminate()`, cancelling all pending operations. Every operation:
-
-1. Main thread assigns a request ID and calls `worker.postMessage({id, op, args})`.
-2. Worker receives the message, calls the WASM function, posts back `{type: 'result', id, result}`.
-3. Main thread completes the pending `Completer<Object?>` by ID.
-
-For sources larger than 4MB, the Dart main thread streams `PdfSource` data to OPFS in 256KB chunks via the worker. The worker reads from OPFS `SyncAccessHandle` (synchronous, disk-backed, all browsers since March 2023). For smaller sources, bytes transfer directly via `ArrayBuffer` slice + `postMessage` transfer list. Output writes go through `PdfSink` via `postMessage` back to main. The message object is built property-by-property (not via `jsify()`) so `ArrayBuffer` references survive for the transfer list.
-
-### Symmetry
-
-Both platforms achieve bounded memory: the engine reads only targeted ranges (xref, page objects, font data) — never the full file. Native uses `Dart_ExitIsolate` + pthread condvar for synchronous cross-isolate reads. Web uses OPFS `SyncAccessHandle` for disk-backed synchronous reads. Neither platform holds the full PDF in any single buffer.
-
-| Concern | Native | Web |
-|---|---|---|
-| Main thread blocked | Never | Never |
-| Preparation | `TransferableTypedData.fromList` (one memcpy) | `ArrayBuffer.slice(0)` (one memcpy) |
-| Transfer to worker | O(1) ownership move via `SendPort` | O(1) ownership move via `postMessage` transfer list |
-| Transfer from worker | O(1) ownership move via `SendPort` | O(1) ownership move via `postMessage` transfer list |
-| Original bytes after send | Intact, reusable | Intact, reusable |
-| Engine lifecycle | One isolate per `Pdf()` instance | One Worker per `Pdf()` instance |
-| Cleanup | `Isolate.kill()` via `pdf.dispose()` | `Worker.terminate()` via `pdf.dispose()` |
-
----
-
-## 6. The worker handle map — PdfEditor and PdfBuilder
-
-Stateless operations (`pdf.merge`, `pdf.extractText`) send a `WorkerMsg` with the op code and bytes. The worker's `_dispatch` switch opens a document, does the work, frees the handle, and returns the result — all in one message round-trip. No FFI pointer crosses the isolate boundary.
-
-Stateful operations (`PdfEditor`, `PdfBuilder`) need handles that persist across multiple calls. Created via static factories on `Pdf`:
-
-- `await Pdf.edit(bytes)` — spawns a worker, opens an editor session, returns a `PdfEditor` that owns both.
-- `await Pdf.build()` — spawns a worker, creates an empty document, returns a `PdfBuilder` that owns both.
-
-Each `PdfEditor` and `PdfBuilder` is self-contained — it owns its own worker and disposes everything on `dispose()`. No separate `Pdf` instance needed.
-
-The handle mechanism (same on native and web):
-
-1. The worker holds a handle map (`Map<int, Pointer<Void>>` on native, `Map<int, WasmPdfDocument>` on web).
-2. `Pdf.edit(bytes)` assigns a fresh integer `handleId`, sends an open message. The worker opens the document and stores it in `handles[id]`.
-3. Each editor method sends a message with the `handleId`. The worker looks up the handle and calls the engine method.
-4. `editor.dispose()` sends a dispose message, the worker frees the handle, then the platform (isolate/Web Worker) shuts down.
-
-The integer handle ID is the only thing that crosses the isolate boundary. FFI pointers never leave the worker. No closures cross the boundary — every message is a typed `WorkerMsg` with primitive fields and `TransferableTypedData`.
-
-The web path uses the same integer-handle pattern. The Web Worker maintains its own handle map; `_WebEditorHandle` sends `editor.{method}` messages with the `handleId`.
-
----
-
-## 7. The web cross-origin blob URL rewrite
-
-Web deployments commonly serve WASM assets from a CDN on a different origin than the app. ES module workers cannot load scripts cross-origin directly. `_web.dart` handles this:
-
-1. If the configured worker URL starts with `http://` or `https://`, fetch the script text via `window.fetch`.
-2. Rewrite all relative ES module imports (`from './foo.js'`) to absolute URLs using the CDN base.
-3. Create a same-origin `Blob` from the rewritten text and use `URL.createObjectURL(blob)` as the worker URL.
-
-The rewritten absolute imports load cross-origin via CORS (allowed by the ES module spec). The blob URL satisfies the same-origin requirement for `new Worker()`.
-
-`configureWorkerUrl(url)` allows consumers to set the worker URL before the first operation. Default is `pdf_manipulator/worker.js` (same-origin, no rewrite needed).
-
----
-
-## 8. The binding pipeline
-
-### Layer 1 — Generated (`native_bindings.g.dart`)
-
-`ffigen.yaml` points at `vendor/pdf_oxide/include/pdf_oxide_c/pdf_oxide.h`. ffigen produces `@Native external` declarations. This file is never hand-edited. Re-run `dart run ffigen` after vendor bumps.
-
-### Layer 2 — Memory-safe wrappers (`bindings.dart`)
-
-`PdfBindings` wraps every generated function with: allocate pointers, copy data in, call FFI, check error code, copy data out, free pointers. Every function follows the same shape: allocate, call, check, free.
-
-The rest of the package imports `PdfBindings`, never `native_bindings.g.dart`.
-
-### Layer 3 — Consumer API
-
-`Pdf`, `PdfEditor`, `PdfBuilder` are the public surface. `Pdf` is instance-based (`final pdf = Pdf()`); each instance owns its worker. `PdfEditor` and `PdfBuilder` are created via static factories (`await Pdf.edit(bytes)`, `await Pdf.build()`) — each owns its own worker and is independently disposable.
-
----
-
-## 9. Error hierarchy
-
-```dart
-sealed class PdfError implements Exception
-  PdfCorrupted(message, cause?)          // error_code 3
-  PdfPasswordRequired()                  // encrypted, no password
-  PdfWrongPassword()                     // authentication failed
-  PdfPageRangeError(page, pageCount)     // error_code 6
-  PdfInvalidArgument(message)            // error_code 1
-  PdfIoError(message, cause?)            // error_code 2
-  PdfExtractionFailed(message)           // error_code 4
-  PdfUnsupported(message)                // error_code 8
-  PdfSearchError(message)                // error_code 7
-  PdfEngineError(message, cause?)        // error_code 5
+Consumer calls pdf.merge([sourceA, sourceB], outputSink)
+  ↓
+Layer 1: Pdf forwards to bridge.merge(...)
+  ↓
+Layer 2: NativeBridge
+  Main isolate: SourceServer for sourceA, SinkServer for outputSink
+  Worker isolate: allocate shared buffers, create listeners, call Rust FFI
+  ↓
+Layer 3: Rust thread pool
+  Pool thread: CallbackReader reads sourceA via condvar dance
+    (only reads xref + page objects — few KB, not the full file)
+  Pool thread: engine merges pages
+  Pool thread: CallbackWriter streams output chunks via condvar dance
+    (each chunk goes: engine → shared buffer → isolate → SinkServer → PdfSink)
+  Pool thread: posts completion via Dart_PostCObject
+  Pool thread: arena dropped — all engine memory freed
+  ↓
+Layer 2: result arrives at ReceivePort → WorkerResult → main isolate
+  ↓
+Layer 1: Future completes. Consumer's PdfSink has received all output chunks.
 ```
 
-Maps 1:1 to pdf_oxide's C error codes: `0=success, 1=invalid arg, 2=IO, 3=parse, 4=extraction, 5=internal, 6=invalid page, 7=search, 8=unsupported`. `PdfBindings._checkError` does the mapping in one place.
+---
+
+## 5. Data flow — web
+
+```
+Consumer calls pdf.merge([sourceA, sourceB], outputSink)
+  ↓
+Layer 1: Pdf forwards to bridge.merge(...)
+  ↓
+Layer 2: WebBridge
+  Acquires a worker session from the pool
+  Streams sourceA to OPFS in 256KB chunks
+  Sends operation to worker
+  ↓
+Layer 3 (in Web Worker): WASM engine
+  JsCallbackReader reads from OPFS SyncAccessHandle
+    (synchronous, disk-backed, only reads what engine needs)
+  Engine merges pages
+  Output chunks posted back via postMessage (zero-copy transfer)
+  ↓
+Layer 2: receives chunks, calls outputSink.write(chunk) per chunk
+  Releases worker session back to pool
+  ↓
+Layer 1: Future completes.
+```
 
 ---
 
-## 10. Build system
+## 6. Off-main-thread guarantee
 
-### Native — dual-path build hook
-
-`hook/build.dart` delivers the correct native binary to the Dart VM's native asset system. Dual-path resolution:
-
-1. **Source compile** — if `vendor/pdf_oxide/Cargo.toml` exists (contributor with submodule checked out), compile from source via `cargo build`.
-2. **Download** — if the submodule is absent (consumer install), fetch the pre-compiled binary from GitHub Releases at `https://github.com/whuppi/pdf_manipulator/releases/download/v{version}/{platform}-{libname}`. The version is read from `pubspec.yaml`, not hardcoded.
-
-Consumers need zero Rust toolchain. `dart pub get` + `dart run` just works — the hook downloads the binary automatically. Contributors with the submodule get automatic source compilation.
-
-### CI/CD — automated via release-please
-
-Version bumps, changelog generation, tagging, and publishing are fully automated. The only manual action is merging the Release PR that release-please creates.
-
-| Workflow | Trigger | What it does |
-|---|---|---|
-| `ci.yml` | PR to prod/dev | `dart analyze` + `dart test` on macOS (fast, automatic) |
-| `pr-checks.yml` | PR to prod/dev | Conventional commit title + promotion chain + workflow security lint |
-| `full-test.yml` | Maintainer adds `ready-to-test` label | 6-platform test. Required before merge. Contributors can't trigger it. |
-| `release-please.yml` | Push to prod/dev | Reads conventional commits, opens/updates a Release PR with version bump + CHANGELOG |
-| `release.yml` | Tag push (`v*`) | Compile all targets → GitHub Release → pub.dev publish (no re-test — same commit) |
-
-**Two release channels:**
-
-- **Prerelease (dev):** feature PRs squash-merge to dev → release-please opens a prerelease Release PR (`1.1.0-dev.0`) → merge it → tag → pipeline → prerelease published
-- **Stable (prod):** PR dev→prod squash-merge → release-please opens a stable Release PR (`1.1.0`) → edit changelog if desired → merge → tag → pipeline → stable published
-
-PR titles are the sole changelog source. Squash-merge on both paths keeps history clean. See [`UPDATING.md` S5](UPDATING.md#s5--release-pipeline) for the full procedure.
-
-`release.yml` cross-compilation runners:
-
-| Runner | Targets |
+| Platform | Mechanism |
 |---|---|
-| `macos-14` | macOS arm64/x64, iOS arm64/sim-arm64/sim-x64 |
-| `ubuntu-latest` | Linux x64/arm64, Android arm64/arm/x64/x86, WASM |
-| `windows-latest` | Windows x64 |
+| Native | Worker isolate (Dart event loop) + Rust thread pool (raw pthreads). Engine runs on pool threads, never on isolate or UI thread. |
+| Web | Web Worker pool. Each worker has its own WASM instance. Main thread only streams OPFS chunks and receives results. |
 
-All native binaries + WASM are uploaded as GitHub Release assets. The build hook's download URL matches the asset naming convention (`{platform}-{libname}`).
-
-### Web
-
-JS glue (`pdf_oxide.js`) and Web Worker (`worker.js`) are committed in `web_assets/`. The WASM binary (`pdf_oxide_bg.wasm`) is gitignored — it's downloaded from GitHub Releases by `dart run pdf_manipulator:setup` (consumer path) or built locally via `tool/build_wasm.sh` (contributor path). Build hooks don't run for web targets (Flutter limitation), so the setup script is a one-time manual step.
+The UI thread never does PDF work on either platform. The Dart isolate's event loop never blocks — it only processes async listener callbacks.
 
 ---
 
-## 11. The I/O contract — PdfSource / PdfSink
+## 7. Memory model
 
-The consumer API speaks two interfaces:
+| Operation | Native peak | Web peak |
+|---|---|---|
+| 500MB PDF open | ~14MB (callbacks + arena working set) | ~50MB (OPFS on disk + WASM working set) |
+| 500MB PDF merge | ~14MB | ~50MB |
+| 50 image extraction | 1 image at a time (Stream\<PdfImage\>) | 1 image at a time |
 
-- **`PdfSource`** — random-access reader. `int get length` + `FutureOr<Uint8List> readAt(int offset, int count)`. The consumer implements this to provide PDF bytes from any backing store (file, network, database, memory).
-- **`PdfSink`** — sequential writer. `FutureOr<void> write(Uint8List chunk)`. The consumer implements this to receive output bytes into any backing store.
-
-No `File`, no paths, no `dart:io`. The package never sees a filename. The consumer owns their I/O.
-
-Internally, the engine reads only the ranges it needs via callback (xref table, page objects, font data — never the full file). On native, Rust calls back into Dart via `NativeCallable.isolateLocal` function pointers. The `source_bytes` clone inside pdf_oxide is eliminated — a 500MB PDF costs ~50MB of engine working set, not 1.5GB.
-
-Operations that produce multiple items (`extractImages`, `extractAllImages`, `renderAllPages`) return `Stream<T>`, yielding items one at a time.
-
-This is what makes the barrel web-safe. It also means the package compiles identically on every Flutter target without conditional code in the consumer's imports.
-
-Full design: [`STREAMING_REDESIGN.md`](STREAMING_REDESIGN.md).
+No full-file buffers anywhere. The engine reads targeted ranges and writes chunks as it produces them.
 
 ---
 
-## 12. Non-goals
+## 8. Build system
 
-- **File I/O.** The package does not read or write files. `PdfSource` in, `PdfSink` out. The consumer owns their I/O.
-- **Rendering to Flutter widgets.** The package renders pages to raw pixel bytes (`RenderedPage`). Wrapping those in `Image.memory` or a custom painter is the consumer's responsibility.
-- **Forking pdf_oxide permanently.** The fork carries temporary patches with removal triggers. The goal is upstream parity — every patch is deleted when upstream ships the equivalent.
-- **Backward compatibility.** No migration adapters, no deprecated `Uint8List`-based API shims. Clean break.
+Dual-path build hook (`hook/build.dart`):
+- **Contributors** (have `vendor/pdf_oxide/` submodule): cargo compiles from source. Cargo handles incremental caching — fast when nothing changed. Rust source directory is in the hook's dependency list — changes trigger recompile automatically.
+- **Consumers** (installed from pub.dev, no vendor/): downloads pre-built binary from GitHub Releases. Zero Rust toolchain required.
 
 ---
 
-## 13. The one-line summary
+## 9. Test strategy
 
-> **Dart facade over pdf_oxide (Rust, MIT/Apache-2.0). Instance-based API — each `Pdf()` owns its worker, `dispose()` disposes it. Conditional import selects native (worker isolate + FFI) or web (Web Worker + WASM) at compile time. Zero main-thread blocking. Integer handle IDs cross the isolate boundary for stateful editing sessions; FFI pointers never leave the worker. `PdfSource` (random-access reader) in, `PdfSink` (sequential writer) out. Engine reads only the ranges it needs via callback — no full-file clones. No `dart:io`.**
+| Suite | Count | What it proves |
+|---|---|---|
+| Rust bridge unit + integration | 27 | Thread pool, shared buffer, condvar dance, arena, FFI API |
+| Dart native bridge e2e | 44 | Full pipeline: Dart → isolate → Rust pool → engine → result |
+| Dart Layer 1 API | 44 | Consumer-facing API (Pdf, PdfEditor, PdfBuilder) |
+| **Total** | **115** | |
+
+Edge cases tested: dispose during operation, failing PdfSource, failing PdfSink, slow PdfSource (100ms/500ms delay), hanging PdfSource + dispose, editor lifecycle, encrypted save, double dispose.
+
+---
+
+## 10. The one-line summary
+
+> **Three layers (API / Bridge / Engine). PdfSource reads targeted ranges via condvar+listener (native) or OPFS SyncAccessHandle (web). PdfSink receives output chunks as the engine produces them. Thread pool of pthreads (native) or Web Workers (web). Arena allocator per operation. Instant dispose kills everything. 500MB PDF → ~14MB peak. Zero full-file buffers. Zero UI jank. Zero leaks.**

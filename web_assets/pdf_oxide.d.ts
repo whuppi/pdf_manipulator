@@ -707,6 +707,14 @@ export class WasmPdf {
      */
     static merge(pdfs: Uint8Array[]): WasmPdf;
     /**
+     * Merge multiple PDFs from reader callbacks — each input reads on demand.
+     *
+     * @param readers - Array of [readFn, lengthFn] pairs
+     * @param write_fn - JS function for streaming output: (chunk: Uint8Array) => void
+     * @returns void (output streamed through write_fn)
+     */
+    static mergeFromReaders(readers: any[], write_fn: Function): void;
+    /**
      * Get the PDF as a Uint8Array.
      */
     toBytes(): Uint8Array;
@@ -792,6 +800,18 @@ export class WasmPdfDocument {
      * Deprecated: Use eraseHeader instead.
      */
     editHeader(page_index: number): void;
+    /**
+     * Open a PDF for editing from a callback-based reader.
+     *
+     * Uses `DocumentEditor::from_document` — the editor wraps the
+     * reader-opened PdfDocument directly. No full-file buffer.
+     * `source_bytes` is empty — `convertToPdfA` won't work.
+     *
+     * @param read_fn - JS function: (offset: number, count: number) => Uint8Array
+     * @param length_fn - JS function: () => number (total file size)
+     * @param password - Optional password for encrypted PDFs
+     */
+    static editorFromReader(read_fn: Function, length_fn: Function, password?: string | null): WasmPdfDocument;
     /**
      * Embed a file into the PDF document.
      *
@@ -890,9 +910,10 @@ export class WasmPdfDocument {
      */
     extractPageText(page_index: number, reading_order?: string | null): any;
     /**
-     * Extract specific pages to a new PDF (returns bytes).
+     * Extract specific pages — removes all OTHER pages from the editor.
+     * Same logic as native FFI: direct editor mutation via shared editor_ops.
      */
-    extractPages(pages: Uint32Array): Uint8Array;
+    extractPages(pages: Uint32Array): void;
     /**
      * Extract vector paths (lines, curves, shapes) from a page.
      *
@@ -976,6 +997,12 @@ export class WasmPdfDocument {
      */
     flattenPageAnnotations(page_index: number): void;
     /**
+     * Create a flattened PDF where each page is rendered as an image.
+     * Burns in all annotations, form fields, and overlays.
+     * Returns the flattened PDF as bytes.
+     */
+    flattenToImages(dpi?: number | null): Uint8Array;
+    /**
      * Return warnings collected during the last form-flattening save.
      *
      * Each entry names a widget field that had no `/AP` appearance stream;
@@ -1000,6 +1027,10 @@ export class WasmPdfDocument {
      */
     getAnnotations(page_index: number): any;
     /**
+     * Read the document author from the Info dictionary.
+     */
+    getAuthor(): string;
+    /**
      * Get the value of a specific form field by name.
      *
      * @param name - Full qualified field name (e.g., "name" or "topmostSubform[0].Page1[0].f1_01[0]")
@@ -1022,12 +1053,24 @@ export class WasmPdfDocument {
      */
     getFormFields(): any;
     /**
+     * Read the document keywords from the Info dictionary.
+     */
+    getKeywords(): string;
+    /**
      * Get the document outline (bookmarks / table of contents).
      *
      * @returns Array of outline items or null if no outline exists.
      * Each item has: { title, page (number|null), dest_name (string, optional), children (array) }
      */
     getOutline(): any;
+    /**
+     * Read the document subject from the Info dictionary.
+     */
+    getSubject(): string;
+    /**
+     * Read the document title from the Info dictionary.
+     */
+    getTitle(): string;
     /**
      * Check if the document has a structure tree (Tagged PDF).
      */
@@ -1112,6 +1155,22 @@ export class WasmPdfDocument {
      */
     removeHeaders(threshold: number): number;
     /**
+     * Render a page to an image (PNG).
+     *
+     * Requires the `rendering` feature.
+     *
+     * @param page_index - Zero-based page number
+     * @param dpi - Dots per inch (default: 150)
+     * @returns Uint8Array containing the PNG image data
+     */
+    renderPage(page_index: number, dpi?: number | null): Uint8Array;
+    /**
+     * Render a page fitted to a pixel bounding box.
+     * Returns a JS object: { width: number, height: number, data: Uint8Array }
+     * where data is raw image bytes (PNG format, same as renderPage).
+     */
+    renderPageFit(page_index: number, fit_width: number, fit_height: number): any;
+    /**
      * Reposition an image on a page.
      */
     repositionImage(page_index: number, name: string, x: number, y: number): void;
@@ -1144,6 +1203,13 @@ export class WasmPdfDocument {
      * @returns Uint8Array containing the modified PDF
      */
     saveToBytes(): Uint8Array;
+    /**
+     * Save by streaming output chunks through a JS callback function.
+     *
+     * @param write_fn - JS function: (chunk: Uint8Array) => void
+     * @param options - Optional save options (compress, garbageCollect, linearize)
+     */
+    saveToWriter(write_fn: Function, compress?: boolean | null, garbage_collect?: boolean | null, linearize?: boolean | null): void;
     /**
      * Save with options (compress, garbage_collect, linearize) and return bytes.
      *
@@ -1501,6 +1567,17 @@ export function setLogLevel(level: string): void;
  */
 export function signPdfBytes(pdf_data: Uint8Array, cert: WasmCertificate, reason?: string | null, location?: string | null): Uint8Array;
 
+/**
+ * Sign PDF bytes with PEM certificate + key. All data stays inside WASM.
+ */
+export function signPdfWithPem(pdf_data: Uint8Array, cert_pem: string, key_pem: string, reason?: string | null, location?: string | null): Uint8Array;
+
+/**
+ * Sign PDF bytes with a PKCS#12 certificate. All data stays inside WASM —
+ * no cross-boundary borrows that can be invalidated by memory growth.
+ */
+export function signPdfWithPkcs12(pdf_data: Uint8Array, pkcs12_data: Uint8Array, password: string, reason?: string | null, location?: string | null): Uint8Array;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
@@ -1511,6 +1588,7 @@ export interface InitOutput {
     readonly __wbg_wasmpdfdocument_free: (a: number, b: number) => void;
     readonly wasmpdfdocument_new: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly wasmpdfdocument_fromReader: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly wasmpdfdocument_editorFromReader: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly wasmpdfdocument_pageCount: (a: number, b: number) => void;
     readonly wasmpdfdocument_signatureCount: (a: number, b: number) => void;
     readonly wasmpdfdocument_signatures: (a: number, b: number) => void;
@@ -1528,6 +1606,8 @@ export interface InitOutput {
     readonly wasmpdfdocument_editFooter: (a: number, b: number, c: number) => void;
     readonly wasmpdfdocument_eraseArtifacts: (a: number, b: number, c: number) => void;
     readonly wasmpdfdocument_within: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly wasmpdfdocument_renderPage: (a: number, b: number, c: number, d: number) => void;
+    readonly wasmpdfdocument_renderPageFit: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly wasmpdfdocument_toMarkdown: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly wasmpdfdocument_toMarkdownAll: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly wasmpdfdocument_toHtml: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
@@ -1558,6 +1638,8 @@ export interface InitOutput {
     readonly wasmcertificate_validity: (a: number, b: number) => void;
     readonly wasmcertificate_isValid: (a: number, b: number) => void;
     readonly signPdfBytes: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => void;
+    readonly signPdfWithPkcs12: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
+    readonly signPdfWithPem: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
     readonly __wbg_wasmtimestamp_free: (a: number, b: number) => void;
     readonly wasmtimestamp_parse: (a: number, b: number, c: number) => void;
     readonly wasmtimestamp_time: (a: number) => bigint;
@@ -1603,6 +1685,10 @@ export interface InitOutput {
     readonly wasmpdfdocument_embedFile: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly wasmpdfdocument_pageLabels: (a: number, b: number) => void;
     readonly wasmpdfdocument_xmpMetadata: (a: number, b: number) => void;
+    readonly wasmpdfdocument_getTitle: (a: number, b: number) => void;
+    readonly wasmpdfdocument_getAuthor: (a: number, b: number) => void;
+    readonly wasmpdfdocument_getSubject: (a: number, b: number) => void;
+    readonly wasmpdfdocument_getKeywords: (a: number, b: number) => void;
     readonly wasmpdfdocument_setTitle: (a: number, b: number, c: number, d: number) => void;
     readonly wasmpdfdocument_setAuthor: (a: number, b: number, c: number, d: number) => void;
     readonly wasmpdfdocument_setSubject: (a: number, b: number, c: number, d: number) => void;
@@ -1651,6 +1737,7 @@ export interface InitOutput {
     readonly wasmpdfdocument_setImageBounds: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly wasmpdfdocument_save: (a: number, b: number) => void;
     readonly wasmpdfdocument_saveWithOptions: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly wasmpdfdocument_saveToWriter: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly wasmpdfdocument_saveEncryptedToBytes: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
     readonly wasmpdfdocument_validatePdfA: (a: number, b: number, c: number, d: number) => void;
     readonly wasmpdfdocument_convertToPdfA: (a: number, b: number, c: number, d: number) => void;
@@ -1659,8 +1746,10 @@ export interface InitOutput {
     readonly wasmpdfdocument_deletePage: (a: number, b: number, c: number) => void;
     readonly wasmpdfdocument_movePage: (a: number, b: number, c: number, d: number) => void;
     readonly wasmpdfdocument_extractPages: (a: number, b: number, c: number, d: number) => void;
+    readonly wasmpdfdocument_flattenToImages: (a: number, b: number, c: number) => void;
     readonly __wbg_wasmpdf_free: (a: number, b: number) => void;
     readonly wasmpdf_fromBytes: (a: number, b: number, c: number) => void;
+    readonly wasmpdf_mergeFromReaders: (a: number, b: number, c: number, d: number) => void;
     readonly wasmpdf_merge: (a: number, b: number, c: number) => void;
     readonly wasmpdf_fromMarkdown: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly wasmpdf_fromHtml: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;

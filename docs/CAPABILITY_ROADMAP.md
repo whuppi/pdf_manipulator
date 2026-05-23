@@ -1,6 +1,10 @@
 # pdf_manipulator — Capabilities
 
-What's shipped, what's next, what's deliberately out of scope. For the architectural map, see [`ARCHITECTURE.md`](ARCHITECTURE.md). For update procedures, see [`UPDATING.md`](UPDATING.md).
+What's shipped, what's next, what's out of scope.
+
+For architecture see [`ARCHITECTURE.md`](ARCHITECTURE.md).
+For bridge internals see [`BRIDGE_ARCHITECTURE.md`](BRIDGE_ARCHITECTURE.md).
+For public API see [`API_GOLD.md`](API_GOLD.md).
 
 ---
 
@@ -8,195 +12,145 @@ What's shipped, what's next, what's deliberately out of scope. For the architect
 
 | Capability | Status |
 |---|:---:|
-| Cross-platform architecture (conditional export: native FFI / web WASM / stub) | ✓ |
-| PdfPlatform abstract interface (40+ methods, zero platform imports) | ✓ |
-| PdfEditorHandle / PdfBuilderHandle / PdfPageBuilderHandle interfaces | ✓ |
-| PdfEditor fully async (native FFI / web WASM) | ✓ |
-| PdfBuilder fully async (native FFI / web WASM) | ✓ |
-| Native: worker isolate + FFI, typed message protocol (no closures cross boundary) | ✓ |
-| Native: cross-isolate streaming I/O (Dart_ExitIsolate + pthread condvar, zero full-file buffers) | ✓ |
-| Map-based args protocol (no numbered field limits, self-documenting keys) | ✓ |
-| Native: persistent handle map in worker isolate for editor/builder sessions | ✓ |
-| Web: Web Worker + WASM, typed message dispatch | ✓ |
-| Web: ArrayBuffer.slice + postMessage transfer list (one memcpy + O(1) transfer) | ✓ |
-| One barrel, one import, zero `dart:ffi` in public surface | ✓ |
-| Streaming I/O: PdfSource (random-access reader) + PdfSink (sequential writer) | ✓ |
-| Callback reader: Rust reads targeted ranges via C function pointers (no full-file clone) | ✓ |
-| Callback writer: Rust writes output chunks via C function pointer (PositionTracker) | ✓ |
-| NativeCallable-based FFI callback bridge (SourceBridge + SinkBridge) | ✓ |
-| All 19 native editorOpen call sites use callback reader (eliminates source_bytes clone) | ✓ |
-| Stream\<T\> returns for extractImages, extractAllImages, renderAllPages | ✓ |
-| Web: OPFS SyncAccessHandle bridge (>4MB sources stream to disk, worker reads synchronously) | ✓ |
-| Build hook (pre-built binary download, zero Rust for consumers) | ✓ |
-| Pre-compiled binaries (macOS arm64/x64, iOS arm64/sim, Android arm64/arm/x64/x86) | ✓ |
-| Pre-compiled binaries (Linux x64/arm64, Windows x64) | ✓ (CI) |
+| Three-layer architecture (API / Bridge / Engine) | ✓ |
+| PdfBridge abstract interface — NativeBridge + WebBridge implementations | ✓ |
+| Sealed PdfPages type for page-scoped operations | ✓ |
+| PdfSource (random-access reader) + PdfSink (sequential writer) | ✓ |
+| Rust thread pool (raw pthreads, `available_parallelism() / 2`) | ✓ |
+| CallbackReader: condvar + NativeCallable.listener (engine reads ranges on demand) | ✓ |
+| CallbackWriter: condvar + NativeCallable.listener (engine writes chunks as produced) | ✓ |
+| bumpalo arena allocator per operation (drop arena = free ALL memory) | ✓ |
+| allo-isolate for result posting (Dart_PostCObject from any thread) | ✓ |
+| Shared buffer layout (defined once in Rust, mirrored in Dart) | ✓ |
+| Web Worker pool (hardwareConcurrency / 2) with session-based ops | ✓ |
+| OPFS SyncAccessHandle (JsCallbackReader reads from disk, not RAM) | ✓ |
+| OPFS cleanup registry (tracks temp files, cleans on error/dispose) | ✓ |
+| Stream\<T\> for extractImages and render (per-item, one at a time) | ✓ |
+| Cooperative cancel (flag + condvar signal) + force-kill (pthread_cancel / Worker.terminate) | ✓ |
+| Instant dispose (cancel all + kill isolate/workers + arena drop + buffer free) | ✓ |
+| Read timeout (pthread_cond_timedwait 30s) | ✓ |
+| Conditional import dispatch (bridge_factory.dart) | ✓ |
+| Build hook with Rust source in dependencies (auto-recompile on Rust changes) | ✓ |
+| Pre-compiled binaries (macOS, iOS, Android, Linux, Windows) | ✓ |
 | CI/CD pipeline (cross-compile 13 targets + WASM → GitHub Releases) | ✓ |
-| ffigen codegen (pdf_oxide.h → native_bindings.g.dart) | ✓ |
-| Memory-safe FFI wrappers (bindings.dart) | ✓ |
-| Instance-based API: `Pdf()` per-worker instance with `dispose()` for lifecycle control | ✓ |
+| Instance-based API: `Pdf()` with `dispose()` | ✓ |
 | Sealed PdfError hierarchy | ✓ |
-| Example app (Flutter, macOS + Chrome verified, zero dart:io) | ✓ |
-| Cargo features: icc + legacy-crypto + rendering + signatures | ✓ |
-| Automated web browser tests (8 tests, Chrome, spawnHybridUri + shelf asset server) | ✓ |
-| Transfer behavior tests (6 tests proving O(1) send, original-survives, round-trip) | ✓ |
 
 ---
 
-## Inspect
+## Operations — Pdf class (one-shot)
 
-| Capability | Status |
+| Operation | Status |
 |---|:---:|
-| Open + inspect (page count, version, dimensions, rotation, metadata) | ✓ |
-| Page sizes + rotation query | ✓ |
-| Page media box get | ✓ |
-| Validate / probe | ✓ |
-| PDF/A compliance validation (with error/warning counts) | ✓ |
-| PDF/UA accessibility validation | ✓ |
+| open (inspect: page count, version, dimensions, metadata, encryption) | ✓ |
+| merge N PDFs | ✓ |
+| split by page count | ✓ |
+| splitBySize | ✓ |
+| extractPages | ✓ |
+| deletePages | ✓ |
+| reorderPages | ✓ |
+| movePage | ✓ |
+| rotatePages (per-page) | ✓ |
+| rotateAllPages | ✓ |
+| flattenForms | ✓ |
+| applyRedactions | ✓ |
+| embedFile | ✓ |
+| eraseRegions | ✓ |
+| compress (stream recompression + GC + image optimization) | ✓ |
+| extract (text / markdown, via PdfExtractionFormat) | ✓ |
+| search (query + PdfPages) | ✓ |
+| watermark (text, positioned, styled) | ✓ |
+| encrypt (PdfEncryptionConfig with algorithm + permissions) | ✓ |
+| decrypt | ✓ |
+| sign (PKCS12 certificate) | ✓ |
+| addStamp (standard stamp annotations) | ✓ |
+| addImageStamp | ✓ |
+| imagesToPdf | ✓ |
+| render (PdfPages + PdfRenderSize → Stream\<PdfRenderedPage\>) | ✓ |
+| extractImages (PdfPages → Stream\<PdfImage\>) | ✓ |
+| getSignatures | ✓ |
+| verifySignatures | ✓ |
+| validatePdfA | ✓ |
+| validatePdfUa | ✓ |
 
 ---
 
-## Structural
+## Operations — PdfEditor (batch edit)
 
-| Capability | Status |
+| Operation | Status |
 |---|:---:|
-| Merge N PDFs | ✓ |
-| Split by page count | ✓ |
-| Split by byte size | ✓ |
-| Split by page numbers / ranges (extractPages) | ✓ |
-| Delete pages | ✓ |
-| Reorder pages | ✓ |
-| Rotate pages (individual + all) | ✓ |
-| Crop margins | ✓ |
+| openEditor (persistent handle, read source via streaming) | ✓ |
+| setTitle / setAuthor / setSubject / setKeywords | ✓ |
+| getTitle / getAuthor / getSubject / getKeywords | ✓ |
+| rotatePage / rotateAllPages | ✓ |
+| deletePage | ✓ |
+| movePage | ✓ |
+| mergeFrom (PdfSource) | ✓ |
+| extractPages (PdfSink) | ✓ |
+| optimizeImages | ✓ |
+| unembedStandardFonts | ✓ |
+| addWatermark (with PdfWatermarkStyle + PdfWatermarkPosition) | ✓ |
+| addStamp / addImageStamp | ✓ |
+| embedFile / eraseRegions | ✓ |
+| flattenForms / flattenAllAnnotations | ✓ |
+| setFormFieldValue | ✓ |
+| cropMargins | ✓ |
+| convertToPdfA | ✓ |
+| resizeImage | ✓ |
+| save (PdfSink + PdfSaveOptions with optional encryption) | ✓ |
+| getPageMediaBox | ✓ |
+| pageCount / version / isModified | ✓ |
 
 ---
 
-## Content
+## Operations — PdfBuilder (create from scratch)
 
-| Capability | Status |
+| Operation | Status |
 |---|:---:|
-| Watermark (text, font, rotation, opacity, color, per-page or selective) | ✓ |
-| Watermark positioned (x, y, width, height, font name, font size, FixedPrint) | ✓ |
-| Stamp annotations (Approved, Draft, Confidential, + 11 more + Custom) | ✓ |
-| Metadata set/get (title, author, subject, keywords) | ✓ |
-| Set form field values | ✓ |
-| Flatten forms | ✓ |
-| Flatten all annotations | ✓ |
-| Apply redactions | ✓ |
-| Erase rectangular regions (white-out) | ✓ |
-| Embed file attachments | ✓ |
-| PDF/A conversion | ✓ |
+| createBuilder | ✓ |
+| setTitle / setAuthor / setSubject / setKeywords | ✓ |
+| addA4Page / addLetterPage / addPage(custom size) | ✓ |
+| Page: font, at, text, heading, paragraph, space, horizontalRule | ✓ |
+| Page: image, watermark | ✓ |
+| Page: textField, checkbox, comboBox, pushButton, signatureField, radioGroup | ✓ |
+| Page: fieldKeystroke, fieldFormat, fieldValidate, fieldCalculate | ✓ |
+| Page: linkUrl, linkPage | ✓ |
+| Page: footnote, columns, newline, newPageSameSize | ✓ |
+| save (PdfSink + PdfSaveOptions) | ✓ |
 
 ---
 
-## Extraction
+## Tests
 
-| Capability | Status |
+| Suite | Count |
 |---|:---:|
-| Extract text (per page + all) | ✓ |
-| To Markdown (per page + all) | ✓ |
-| To HTML | ✓ |
-| To plain text | ✓ |
-| Extract embedded images from pages | ✓ |
-
----
-
-## Search
-
-| Capability | Status |
-|---|:---:|
-| Search text (per page + all) | ✓ |
-
----
-
-## Security
-
-| Capability | Status |
-|---|:---:|
-| Encrypt (AES, user + owner password) | ✓ |
-| Encrypt with algorithm choice (RC4-40, RC4-128, AES-128, AES-256) | ✓ |
-| Encrypt with permission flags (print, print-hq, modify, copy, annotate, fill-forms, accessibility, assemble) | ✓ |
-| Read permissions from existing PDF (8 flags) | ✓ |
-| Read encryption algorithm from existing PDF | ✓ |
-| Decrypt (open with password + save unencrypted) | ✓ |
-| Encrypted save via editor (with algorithm + permissions) | ✓ |
-
----
-
-## Rendering
-
-| Capability | Status |
-|---|:---:|
-| Render pages to images (renderPage, renderPageFit, renderPageThumbnail, renderAllPages) | ✓ |
-
----
-
-## Images
-
-| Capability | Status |
-|---|:---:|
-| Images to PDF | ✓ |
-| Image optimization (non-JPEG → JPEG when smaller) | ✓ |
-| Image resize on page (DPI control via width/height) | ✓ |
-| Compress (stream + GC + image optimization) | ✓ |
-| Unembed Standard 14 fonts (Helvetica, Times, Courier, Symbol, ZapfDingbats) | ✓ |
-
----
-
-## Signatures
-
-| Capability | Status |
-|---|:---:|
-| Digital signatures (count, list, verify, sign) | ✓ |
-
----
-
-## Builder
-
-| Capability | Status |
-|---|:---:|
-| PdfBuilder — create PDFs from scratch (text, headings, paragraphs, images, watermarks, metadata, custom page sizes, encrypted build) | ✓ |
-| Form field creation: text field, checkbox, combo box, radio group, push button, signature field | ✓ |
-| Field JavaScript actions (keystroke, format, validate, calculate) | ✓ |
-| Links (URL, page target) | ✓ |
-| Layout: footnotes, multi-column text, newline, new-page-same-size | ✓ |
-
----
-
-## Editor
-
-| Capability | Status |
-|---|:---:|
-| Combined operations via PdfEditor chaining | ✓ |
-| Round-trip integrity (open → edit → save → reopen) | ✓ |
-
----
-
-## Maintenance
-
-| Task | Cadence |
-|---|---|
-| Bump pdf_oxide dependency | When upstream ships new C-ABI functions that replace a patch |
-| Rebuild WASM | After every pdf_oxide bump or Rust patch change |
-| Re-run ffigen | After every pdf_oxide header change |
-| Refresh pre-built binaries (all platforms) | After every Rust-side change; CI automates when runners exist |
+| Rust bridge (unit + integration) | 27 |
+| Dart native bridge e2e | 44 |
+| Dart Layer 1 API (Pdf + PdfEditor + PdfBuilder) | 44 |
+| **Total** | **115** |
 
 ---
 
 ## Next up
 
-| Capability | Category | Work needed |
-|---|---|---|
-| PDF → DOCX conversion | Conversion | Upstream v0.3.48 ships C-ABI + WASM. Bump submodule, wire through all layers (S1 + S3). |
-| PDF → PPTX conversion | Conversion | Same upstream release. Wire alongside DOCX. |
-| PDF → XLSX conversion | Conversion | Same upstream release. Wire alongside DOCX. |
-| DOCX → PDF conversion | Conversion | Same upstream release. `pdf_document_open_from_docx_bytes` C-ABI ready. |
-| PPTX → PDF conversion | Conversion | Same upstream release. Wire alongside DOCX→PDF. |
-| XLSX → PDF conversion | Conversion | Same upstream release. Wire alongside DOCX→PDF. |
-| Font extraction with unicode maps | Content | Upstream v0.3.48. `extract_embedded_fonts_with_unicode_maps`. |
-| Font subsetting (re-subset existing embedded fonts) | Content | `subsetter` crate is a dependency, used writer-side only. Needs new Rust module. Substantial Rust engineering. |
-| iOS / Android device testing | Infrastructure | Integration tests exist; untested on real devices in CI |
-| Cooperative cancellation via shared atomic flag | Infrastructure | Requires patching pdf_oxide Rust functions; future optimization |
-| Full streaming protocol: PdfEditor opens via cross-isolate streaming (Dart_ExitIsolate + pthread condvar) | ✓ |
+| Task | Status |
+|---|---|
+| Web e2e tests (asset server for worker.js + WASM in `dart test -p chrome`) | Blocked |
+| Rewrite example app + integration test for new API | Not started |
+| Final fork audit (diff against upstream, clean stale patches) | Not started |
+| README rewrite with new API examples | Not started |
+
+---
+
+## Planned (engine doesn't support yet)
+
+| Feature | Why deferred |
+|---|---|
+| addRedaction, redactionCount, scrubMetadata | Needs Rust bridge wiring for redaction tracking |
+| planSplitByBookmarks, splitByBookmarks | pdf_oxide has bookmarks but no split-by-bookmark API |
+| convertTo (PDF → DOCX/PPTX/XLSX) | pdf_oxide v0.3.48+, not shipped upstream |
+| convertToPdf (DOCX/PPTX/XLSX → PDF) | Same |
+| classifyPage, classifyDocument | Not in pdf_oxide, needs ML/heuristic engine |
 
 ---
 
@@ -204,12 +158,6 @@ What's shipped, what's next, what's deliberately out of scope. For the architect
 
 | Feature | Why not |
 |---|---|
-| OCR (text recognition from scanned images) | Requires Tesseract or similar native dep; not a PDF primitive |
-| Table detection / extraction | Heuristic-heavy; better served by dedicated libraries |
-| Barcode / QR code generation for placement inside PDFs | Not a PDF concern; compose with a barcode package and use `PdfBuilder.image()` |
-
----
-
-## The one-line summary
-
-> **Full feature parity plus 40+ new capabilities. Instance-based `Pdf()` API with `dispose()` for lifecycle control. Encryption with 4 algorithms + 8 permissions (read + write). Positioned watermarks + image stamps + 16 stamp types. Form creation (6 field types including radio groups + JS validation scripts). Font unembedding. Page rendering, image extraction, digital signatures, PDF/A + PDF/UA validation. Typed message protocol, one-memcpy + O(1) transfer. CI/CD cross-compiles 13 native targets + WASM on tag push → GitHub Releases. All watermark/stamp/image-stamp capabilities work on web. Next: font subsetting.**
+| OCR | Requires Tesseract or similar — not a PDF primitive |
+| Table extraction | Heuristic-heavy — better served by dedicated libraries |
+| Barcode/QR generation | Not a PDF concern — compose with a barcode package |

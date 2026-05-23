@@ -2789,6 +2789,30 @@ export class WasmPdf {
         }
     }
     /**
+     * Merge multiple PDFs from reader callbacks — each input reads on demand.
+     *
+     * @param readers - Array of [readFn, lengthFn] pairs
+     * @param write_fn - JS function for streaming output: (chunk: Uint8Array) => void
+     * @returns void (output streamed through write_fn)
+     * @param {any[]} readers
+     * @param {Function} write_fn
+     */
+    static mergeFromReaders(readers, write_fn) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArrayJsValueToWasm0(readers, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.wasmpdf_mergeFromReaders(retptr, ptr0, len0, addHeapObject(write_fn));
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            if (r1) {
+                throw takeObject(r0);
+            }
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Get the size of the PDF in bytes.
      * @returns {number}
      */
@@ -3130,6 +3154,38 @@ export class WasmPdfDocument {
         }
     }
     /**
+     * Open a PDF for editing from a callback-based reader.
+     *
+     * Uses `DocumentEditor::from_document` — the editor wraps the
+     * reader-opened PdfDocument directly. No full-file buffer.
+     * `source_bytes` is empty — `convertToPdfA` won't work.
+     *
+     * @param read_fn - JS function: (offset: number, count: number) => Uint8Array
+     * @param length_fn - JS function: () => number (total file size)
+     * @param password - Optional password for encrypted PDFs
+     * @param {Function} read_fn
+     * @param {Function} length_fn
+     * @param {string | null} [password]
+     * @returns {WasmPdfDocument}
+     */
+    static editorFromReader(read_fn, length_fn, password) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            var ptr0 = isLikeNone(password) ? 0 : passStringToWasm0(password, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+            var len0 = WASM_VECTOR_LEN;
+            wasm.wasmpdfdocument_editorFromReader(retptr, addHeapObject(read_fn), addHeapObject(length_fn), ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return WasmPdfDocument.__wrap(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Embed a file into the PDF document.
      *
      * @param name - Display name for the embedded file
@@ -3454,9 +3510,9 @@ export class WasmPdfDocument {
         }
     }
     /**
-     * Extract specific pages to a new PDF (returns bytes).
+     * Extract specific pages — removes all OTHER pages from the editor.
+     * Same logic as native FFI: direct editor mutation via shared editor_ops.
      * @param {Uint32Array} pages
-     * @returns {Uint8Array}
      */
     extractPages(pages) {
         try {
@@ -3466,14 +3522,9 @@ export class WasmPdfDocument {
             wasm.wasmpdfdocument_extractPages(retptr, this.__wbg_ptr, ptr0, len0);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-            if (r3) {
-                throw takeObject(r2);
+            if (r1) {
+                throw takeObject(r0);
             }
-            var v2 = getArrayU8FromWasm0(r0, r1).slice();
-            wasm.__wbindgen_export4(r0, r1 * 1, 1);
-            return v2;
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
         }
@@ -3785,6 +3836,31 @@ export class WasmPdfDocument {
         }
     }
     /**
+     * Create a flattened PDF where each page is rendered as an image.
+     * Burns in all annotations, form fields, and overlays.
+     * Returns the flattened PDF as bytes.
+     * @param {number | null} [dpi]
+     * @returns {Uint8Array}
+     */
+    flattenToImages(dpi) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.wasmpdfdocument_flattenToImages(retptr, this.__wbg_ptr, isLikeNone(dpi) ? Number.MAX_SAFE_INTEGER : (dpi) >>> 0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            if (r3) {
+                throw takeObject(r2);
+            }
+            var v1 = getArrayU8FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 1, 1);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Return warnings collected during the last form-flattening save.
      *
      * Each entry names a widget field that had no `/AP` appearance stream;
@@ -3858,6 +3934,34 @@ export class WasmPdfDocument {
         }
     }
     /**
+     * Read the document author from the Info dictionary.
+     * @returns {string}
+     */
+    getAuthor() {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.wasmpdfdocument_getAuthor(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            var ptr1 = r0;
+            var len1 = r1;
+            if (r3) {
+                ptr1 = 0; len1 = 0;
+                throw takeObject(r2);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * Get the value of a specific form field by name.
      *
      * @param name - Full qualified field name (e.g., "name" or "topmostSubform[0].Page1[0].f1_01[0]")
@@ -3913,6 +4017,34 @@ export class WasmPdfDocument {
         }
     }
     /**
+     * Read the document keywords from the Info dictionary.
+     * @returns {string}
+     */
+    getKeywords() {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.wasmpdfdocument_getKeywords(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            var ptr1 = r0;
+            var len1 = r1;
+            if (r3) {
+                ptr1 = 0; len1 = 0;
+                throw takeObject(r2);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * Get the document outline (bookmarks / table of contents).
      *
      * @returns Array of outline items or null if no outline exists.
@@ -3932,6 +4064,62 @@ export class WasmPdfDocument {
             return takeObject(r0);
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Read the document subject from the Info dictionary.
+     * @returns {string}
+     */
+    getSubject() {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.wasmpdfdocument_getSubject(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            var ptr1 = r0;
+            var len1 = r1;
+            if (r3) {
+                ptr1 = 0; len1 = 0;
+                throw takeObject(r2);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
+     * Read the document title from the Info dictionary.
+     * @returns {string}
+     */
+    getTitle() {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.wasmpdfdocument_getTitle(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            var ptr1 = r0;
+            var len1 = r1;
+            if (r3) {
+                ptr1 = 0; len1 = 0;
+                throw takeObject(r2);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
         }
     }
     /**
@@ -4247,6 +4435,60 @@ export class WasmPdfDocument {
         }
     }
     /**
+     * Render a page to an image (PNG).
+     *
+     * Requires the `rendering` feature.
+     *
+     * @param page_index - Zero-based page number
+     * @param dpi - Dots per inch (default: 150)
+     * @returns Uint8Array containing the PNG image data
+     * @param {number} page_index
+     * @param {number | null} [dpi]
+     * @returns {Uint8Array}
+     */
+    renderPage(page_index, dpi) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.wasmpdfdocument_renderPage(retptr, this.__wbg_ptr, page_index, isLikeNone(dpi) ? Number.MAX_SAFE_INTEGER : (dpi) >>> 0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            if (r3) {
+                throw takeObject(r2);
+            }
+            var v1 = getArrayU8FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 1, 1);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Render a page fitted to a pixel bounding box.
+     * Returns a JS object: { width: number, height: number, data: Uint8Array }
+     * where data is raw image bytes (PNG format, same as renderPage).
+     * @param {number} page_index
+     * @param {number} fit_width
+     * @param {number} fit_height
+     * @returns {any}
+     */
+    renderPageFit(page_index, fit_width, fit_height) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.wasmpdfdocument_renderPageFit(retptr, this.__wbg_ptr, page_index, fit_width, fit_height);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Reposition an image on a page.
      * @param {number} page_index
      * @param {string} name
@@ -4402,6 +4644,29 @@ export class WasmPdfDocument {
             var v1 = getArrayU8FromWasm0(r0, r1).slice();
             wasm.__wbindgen_export4(r0, r1 * 1, 1);
             return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Save by streaming output chunks through a JS callback function.
+     *
+     * @param write_fn - JS function: (chunk: Uint8Array) => void
+     * @param options - Optional save options (compress, garbageCollect, linearize)
+     * @param {Function} write_fn
+     * @param {boolean | null} [compress]
+     * @param {boolean | null} [garbage_collect]
+     * @param {boolean | null} [linearize]
+     */
+    saveToWriter(write_fn, compress, garbage_collect, linearize) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.wasmpdfdocument_saveToWriter(retptr, this.__wbg_ptr, addHeapObject(write_fn), isLikeNone(compress) ? 0xFFFFFF : compress ? 1 : 0, isLikeNone(garbage_collect) ? 0xFFFFFF : garbage_collect ? 1 : 0, isLikeNone(linearize) ? 0xFFFFFF : linearize ? 1 : 0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            if (r1) {
+                throw takeObject(r0);
+            }
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
         }
@@ -5819,6 +6084,83 @@ export function signPdfBytes(pdf_data, cert, reason, location) {
         wasm.__wbindgen_add_to_stack_pointer(16);
     }
 }
+
+/**
+ * Sign PDF bytes with PEM certificate + key. All data stays inside WASM.
+ * @param {Uint8Array} pdf_data
+ * @param {string} cert_pem
+ * @param {string} key_pem
+ * @param {string | null} [reason]
+ * @param {string | null} [location]
+ * @returns {Uint8Array}
+ */
+export function signPdfWithPem(pdf_data, cert_pem, key_pem, reason, location) {
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passArray8ToWasm0(pdf_data, wasm.__wbindgen_export);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(cert_pem, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(key_pem, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len2 = WASM_VECTOR_LEN;
+        var ptr3 = isLikeNone(reason) ? 0 : passStringToWasm0(reason, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        var len3 = WASM_VECTOR_LEN;
+        var ptr4 = isLikeNone(location) ? 0 : passStringToWasm0(location, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        var len4 = WASM_VECTOR_LEN;
+        wasm.signPdfWithPem(retptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+        var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+        if (r3) {
+            throw takeObject(r2);
+        }
+        var v6 = getArrayU8FromWasm0(r0, r1).slice();
+        wasm.__wbindgen_export4(r0, r1 * 1, 1);
+        return v6;
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+    }
+}
+
+/**
+ * Sign PDF bytes with a PKCS#12 certificate. All data stays inside WASM —
+ * no cross-boundary borrows that can be invalidated by memory growth.
+ * @param {Uint8Array} pdf_data
+ * @param {Uint8Array} pkcs12_data
+ * @param {string} password
+ * @param {string | null} [reason]
+ * @param {string | null} [location]
+ * @returns {Uint8Array}
+ */
+export function signPdfWithPkcs12(pdf_data, pkcs12_data, password, reason, location) {
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passArray8ToWasm0(pdf_data, wasm.__wbindgen_export);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray8ToWasm0(pkcs12_data, wasm.__wbindgen_export);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(password, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len2 = WASM_VECTOR_LEN;
+        var ptr3 = isLikeNone(reason) ? 0 : passStringToWasm0(reason, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        var len3 = WASM_VECTOR_LEN;
+        var ptr4 = isLikeNone(location) ? 0 : passStringToWasm0(location, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        var len4 = WASM_VECTOR_LEN;
+        wasm.signPdfWithPkcs12(retptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+        var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+        if (r3) {
+            throw takeObject(r2);
+        }
+        var v6 = getArrayU8FromWasm0(r0, r1).slice();
+        wasm.__wbindgen_export4(r0, r1 * 1, 1);
+        return v6;
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+    }
+}
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
@@ -5911,6 +6253,10 @@ function __wbg_get_imports() {
         },
         __wbg_call_13665d9f14390edc: function() { return handleError(function (arg0, arg1) {
             const ret = getObject(arg0).call(getObject(arg1));
+            return addHeapObject(ret);
+        }, arguments); },
+        __wbg_call_dfde26266607c996: function() { return handleError(function (arg0, arg1, arg2) {
+            const ret = getObject(arg0).call(getObject(arg1), getObject(arg2));
             return addHeapObject(ret);
         }, arguments); },
         __wbg_call_faa0a261f288f846: function() { return handleError(function (arg0, arg1, arg2, arg3) {
@@ -6062,6 +6408,10 @@ function __wbg_get_imports() {
             const ret = getObject(arg0).next();
             return addHeapObject(ret);
         }, arguments); },
+        __wbg_now_81363d44c96dd239: function() {
+            const ret = Date.now();
+            return ret;
+        },
         __wbg_prototypesetcall_5f9bdc8d75e07276: function(arg0, arg1, arg2) {
             Uint8Array.prototype.set.call(getArrayU8FromWasm0(arg0, arg1), getObject(arg2));
         },

@@ -17,13 +17,13 @@ The v1 rewrite changes every API surface. This guide maps every old call to its 
 
 ### The instance-based API
 
-v1 uses an instance-based API. Each `Pdf()` instance owns its own worker (isolate on native, Web Worker on web). You create an instance, call methods on it, and dispose it when done.
+v1 uses an instance-based API. Each `Pdf()` instance owns its own worker pool. You create an instance, call methods on it, and dispose it when done. Input uses `PdfSource` (consumer-implemented random-access reader). Output uses `PdfSink` (consumer-implemented sequential writer).
 
 ```dart
 final pdf = Pdf();
 try {
-  final merged = await pdf.merge([bytesA, bytesB]);
-  await File('/path/merged.pdf').writeAsBytes(merged);
+  final sink = MyFileSink('merged.pdf');
+  await pdf.merge([MyFileSource('a.pdf'), MyFileSource('b.pdf')], sink);
 } finally {
   pdf.dispose();
 }

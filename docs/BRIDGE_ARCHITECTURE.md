@@ -67,13 +67,13 @@ lib/
 │   │       ├── pdf_params.dart             ✓ PdfSaveOptions etc.
 │   │       ├── pdf_errors.dart             ✓ PdfCancelled
 │   │       ├── pdf_config.dart             ✓ PdfConfig
-│   │       ├── pdf_doc.dart                ○ (currently at lib/src/document/)
-│   │       ├── pdf_image.dart              ○ (currently at lib/src/core/)
-│   │       ├── pdf_page_info.dart          ○ (currently at lib/src/page/)
-│   │       ├── pdf_rect.dart               ○ (currently at lib/src/core/)
-│   │       ├── pdf_signature.dart          ○ (currently at lib/src/core/)
-│   │       ├── search_result.dart          ○ (currently at lib/src/core/)
-│   │       └── errors.dart                 ○ (currently at lib/src/core/)
+│   │       ├── pdf_doc.dart                ✓
+│   │       ├── pdf_image.dart              ✓
+│   │       ├── pdf_page_info.dart          ✓
+│   │       ├── pdf_rect.dart               ✓
+│   │       ├── pdf_signature.dart          ✓
+│   │       ├── search_result.dart          ✓
+│   │       └── errors.dart                 ✓
 │   │
 │   ├── bridge/                             ← LAYER 2: The plumbing
 │   │   ├── bridge.dart                     ✓ abstract PdfBridge interface
@@ -82,20 +82,20 @@ lib/
 │   │   ├── _factory_web.dart               ✓
 │   │   │
 │   │   ├── native/
-│   │   │   ├── native_bridge.dart          ✓ ALL one-shot ops + openEditor + createBuilder + ALL handle methods wired
+│   │   │   ├── native_bridge.dart          ✓ ALL ops + result decoding + handle impls
+│   │   │   ├── worker_entry.dart           ✓ worker isolate entry + dispatch
 │   │   │   ├── worker_isolate.dart         ✓ listener creation helpers
 │   │   │   ├── source_server.dart          ✓ main-isolate PdfSource fulfillment
 │   │   │   ├── sink_server.dart            ✓ main-isolate PdfSink fulfillment
-│   │   │   ├── shared_buffer.dart          ✓ mirrors Rust layout
-│   │   │   ├── result_decoder.dart         ○ binary result → PdfDoc / PdfError (currently inline in native_bridge.dart)
-│   │   │   ├── messages.dart               ○ WorkerMsg, WorkerResult, Op enum
-│   │   │   └── stream_protocol.dart        ○ WorkerStreamItem for per-item yields
+│   │   │   └── shared_buffer.dart          ✓ mirrors Rust layout
+│   │   │
+│   │   ├── protocol/                       ← SHARED: single source of truth
+│   │   │   ├── op.dart                     ✓ EngineOp enum (wire names, both platforms)
+│   │   │   ├── bridge_ops.dart             ✓ EngineRequest builders (web uses directly)
+│   │   │   └── result.dart                 ✓ Result parsers (web uses directly)
 │   │   │
 │   │   ├── web/
-│   │   │   ├── web_bridge.dart             ✓ ALL ops + openEditor + createBuilder wired — zero UnimplementedError
-│   │   │   ├── worker_pool.dart            ✓ pool + queue + cancel
-│   │   │   ├── opfs.dart                   ✓ OPFS streaming + cleanup registry
-│   │   │   └── worker_protocol.dart        ○ message types for postMessage
+│   │   │   └── web_bridge.dart             ✓ ALL ops via protocol + coordinator transport
 │   │   │
 │   │   └── ffi/
 │   │       └── bridge_bindings.dart        ✓ @Native decls (camelCase + symbol:)
@@ -103,58 +103,69 @@ lib/
 │   └── _internal.dart                      ○ internal barrel (bridge for api)
 │
 web_assets/
-├── worker.js                               ✓ web worker (OPFS + WASM dispatch)
+├── coordinator.js                          ✓ coordinator worker (pool + routing + I/O mode)
+├── wasm_worker.js                          ✓ per-op WASM worker (engine + readFn by mode)
 └── pdf_oxide.js / .wasm                    ✓ WASM engine
 
 vendor/pdf_oxide/src/
-├── bridge/                                 ← engine-side bridge
+├── bridge/                                 ← NATIVE engine bridge (FFI ← Dart)
 │   ├── mod.rs                              ✓
-│   ├── thread_pool.rs                      ✓ 4 tests
-│   ├── callback_reader.rs                  ✓ 3 tests
-│   ├── callback_writer.rs                  ✓ 4 tests
-│   ├── arena.rs                            ✓ 5 tests
-│   ├── shared_buffer.rs                    ✓ 4 tests
-│   ├── ffi_api.rs                          ✓ 4 tests + all submit ops + editor handle ops + builder handle ops (6 FFI fns) + 28 edit op codes + 17 builder page op codes
-│   └── integration_test.rs                 ✓ 3 tests (condvar end-to-end)
+│   ├── thread_pool.rs                      ✓ pool + shutdown
+│   ├── callback_reader.rs                  ✓ condvar Read impl
+│   ├── callback_writer.rs                  ✓ condvar Write impl
+│   ├── arena.rs                            ✓ bumpalo per-op allocator
+│   ├── shared_buffer.rs                    ✓ shared memory layout
+│   ├── ffi_api.rs                          ✓ all submit ops → calls editor_ops
+│   └── integration_test.rs                 ✓ condvar end-to-end
+│
+├── editor/
+│   ├── document_editor.rs                  ✓ DocumentEditor core
+│   └── editor_ops.rs                       ✓ SHARED: single source of truth for ALL edit ops.
+│                                              Both ffi_api.rs AND wasm.rs call these functions.
+│                                              Zero logic duplication between native and web.
+│
 ├── document.rs                             ✓ PdfDocument + PdfReader (Boxed variant)
-├── editor/document_editor.rs               ✓ DocumentEditor
-├── ffi.rs                                  ✓ existing C API
-└── wasm.rs                                 ✓ WASM API + JsCallbackReader
+└── wasm.rs                                 ✓ WASM API + JsCallbackReader/Writer + all bindings
+                                               Edit methods call editor_ops (same as native)
 
 test/
 ├── helpers/
-│   ├── memory_io.dart                      ✓ TestPdfSource + TestPdfSink
-│   ├── pdf_fixtures.dart                   ✓ minimal PDF bytes, multi-page builder
-│   ├── slow_source.dart                    ○ PdfSource that delays (timeout tests)
-│   └── test_server.dart                    ○ hybrid server for web tests
+│   ├── pdf_fixtures.dart                   ✓ minimal PDF bytes
+│   ├── test_source_sink.dart               ✓ TestSource + TestSink
+│   └── asset_server.dart                   ✓ shelf server for web tests (CORS + COOP/COEP)
 │
-├── bridge/                                 ← LAYER 2 tests
-│   ├── test_helpers.dart                   ✓ TestSource + TestSink (new api types)
-│   ├── native/
-│   │   ├── open_e2e_test.dart              ✓ NativeBridge.open (5 tests)
+├── bridge/
+│   ├── shared_tests.dart                   ✓ SHARED test functions — BOTH native + web call these.
+│   │                                          registerSharedBridgeTests(getBridge) — 16 tests:
+│   │                                          open, merge, structural (rotate, flatten, compress,
+│   │                                          delete), extraction, search, render streaming.
+│   │
+│   ├── native/                             ← @TestOn('!browser')
+│   │   ├── shared_native_test.dart         ✓ runs shared_tests through NativeBridge (16 tests)
+│   │   ├── open_e2e_test.dart              ✓ NativeBridge.open
 │   │   ├── open_test.dart                  ✓ additional open tests
-│   │   ├── merge_e2e_test.dart             ✓ NativeBridge.merge (4 tests)
-│   │   ├── structural_e2e_test.dart        ✓ delete, rotate, flatten, compress (4 tests)
-│   │   ├── extract_e2e_test.dart           ✓ text + markdown extraction (3 tests)
-│   │   ├── stream_e2e_test.dart            ✓ per-item streaming (render + extractImages, 3 tests)
-│   │   ├── cancel_e2e_test.dart            ○ cancel running op mid-flight
-│   │   ├── dispose_e2e_test.dart           ○ instant dispose kills everything
-│   │   ├── timeout_e2e_test.dart           ○ slow PdfSource triggers timeout
-│   │   └── editor_e2e_test.dart            ○ PdfEditor lifecycle (open, mutate, save, dispose)
+│   │   ├── merge_e2e_test.dart             ✓ merge
+│   │   ├── structural_e2e_test.dart        ✓ delete, rotate, flatten, compress
+│   │   ├── extract_e2e_test.dart           ✓ text extraction
+│   │   ├── stream_e2e_test.dart            ✓ render + extractImages streaming
+│   │   ├── editor_e2e_test.dart            ✓ editor lifecycle
+│   │   ├── error_e2e_test.dart             ✓ error handling
+│   │   ├── dispose_e2e_test.dart           ✓ dispose lifecycle
+│   │   └── timeout_e2e_test.dart           ✓ slow PdfSource timeout
 │   │
 │   ├── web/                                ← @TestOn('browser') — runs in Chrome
-│   │   ├── open_e2e_test.dart              ○ WebBridge.open via OPFS (blocked: asset server)
-│   │   ├── merge_e2e_test.dart             ○ WebBridge.merge
-│   │   ├── stream_e2e_test.dart            ○ per-item streaming via postMessage
-│   │   ├── cancel_e2e_test.dart            ○ cancel via Worker.terminate
-│   │   ├── dispose_e2e_test.dart           ○ terminate all + OPFS cleanup
-│   │   └── opfs_cleanup_test.dart          ○ registry cleans on failure
+│   │   ├── shared_web_test.dart            ✓ runs shared_tests through WebBridge (16 tests)
+│   │   ├── open_test.dart                  ✓ OPFS pipeline (direct coordinator, 6 tests)
+│   │   ├── atomics_test.dart               ✓ Atomics mode readAt chain (chrome-coi, 6 tests)
+│   │   └── web_test_helper.dart            ✓ fetchAsBlobUrl helper
 │   │
-│   └── shared/                             ← platform-agnostic contract tests
-│       ├── bridge_contract_test.dart       ○ every PdfBridge method (both bridges)
-│       └── source_sink_test.dart           ○ PdfSource/PdfSink edge cases
+│   └── protocol/                           ← pure Dart unit tests (no platform deps)
+│       ├── op_test.dart                    ✓ EngineOp enum + helpers (43 ops)
+│       ├── bridge_ops_test.dart            ✓ EngineRequest builders
+│       ├── result_test.dart                ✓ result parsers
+│       └── wire_sync_test.dart             ✓ JS↔Dart op name cross-verification (@TestOn('vm'))
 │
-├── api/                                    ← LAYER 1 tests (consumer-facing)
+├── api/                                    ← Layer 1 tests
 │   ├── pdf_test.dart                       ○ Pdf class (one-shot ops)
 │   ├── editor_test.dart                    ○ PdfEditor lifecycle
 │   ├── builder_test.dart                   ○ PdfBuilder
@@ -194,6 +205,45 @@ The contract:
 - `NativeBridge` and `WebBridge` are the two implementations
 - `bridge_factory.dart` uses conditional import to create the right one
 - Layer 1 never knows which bridge it has
+
+---
+
+## 3.1 The shared protocol — `protocol/` + `editor_ops.rs` (symmetry guarantee)
+
+Symmetry is guaranteed at TWO levels:
+
+1. **Dart protocol** (`lib/src/bridge/protocol/`) — shared op names, arg builders, result parsers between NativeBridge and WebBridge.
+2. **Rust editor_ops** (`vendor/pdf_oxide/src/editor/editor_ops.rs`) — shared edit operation logic between native FFI (`ffi_api.rs`) and WASM (`wasm.rs`). BOTH call the SAME functions for delete, extract, move, rotate, flatten, compress, watermark, stamp, etc. Zero logic duplication at the engine level.
+
+### What's shared (Dart code, both platforms):
+
+| File | Purpose | Who uses it |
+|---|---|---|
+| `op.dart` | `EngineOp` enum — every op name as a typed value with `.wire` string | Both bridges for op names. JS `wasm_worker.js` receives the same `.wire` strings. |
+| `bridge_ops.dart` | `EngineRequest` builders — `mergeOp()`, `extractPagesOp()`, etc. | Web bridge calls directly. (Native can't use these because its args are binary-encoded Uint8List for FFI, not Map.) |
+| `result.dart` | Result parsers — `parseOpenResult()`, `parseSearchResults()`, etc. | Web bridge calls directly. (Native parses binary Uint8List from FFI, not Map.) |
+| `op.dart` helpers | `resolvePageIndices()`, `encodeRegions()`, `encodeWatermarkArgs()`, `encodeRectArgs()`, `encodeSaveArgs()` | Both bridges. |
+
+### What CANNOT be shared (transport differs):
+
+| Concern | Native | Web | Why different |
+|---|---|---|---|
+| Arg encoding | Binary `Uint8List` (little-endian ints, floats) | `Map<String, Object?>` (JSON-friendly for postMessage) | FFI needs raw bytes; JS needs objects |
+| Result encoding | Binary `Uint8List` from `allo-isolate` | `Map<String, Object?>` from postMessage | Same reason |
+| Read fulfillment | `SourceServer` + `SendPort` + condvar dance | `_handleReadAt` + postMessage chain | Isolate vs Worker communication model |
+| Write delivery | `SinkServer` + `SendPort` + condvar dance | `_sinks[opId]` + chunk messages | Same reason |
+
+### The symmetry it guarantees:
+
+1. **Op names** — EVERY op sent by native uses `EngineOp.*.wire`. EVERY op sent by web uses `EngineOp.*.wire` (via protocol builders). Zero hand-written string op names on either side. Rename the enum value = compiler breaks both. `wire_sync_test.dart` verifies JS wasm_worker.js cases match.
+2. **Individual op dispatch** — native's worker_entry.dart and web's wasm_worker.js both dispatch by individual op name strings (e.g. `'extract'`, `'search'`, `'render'`, `'getSignatures'`). No multiplexed `'read'` + opCode on either side. The worker_entry maps op name → FFI opCode internally.
+3. **Streaming ops** — native sends `EngineOp.render.wire` / `EngineOp.extractImages.wire` as top-level ops to the worker. Web sends the same. The worker_entry maps them to stream opCodes 1/2 for the FFI.
+4. **Editor sub-ops** — both native and web dispatch `editorGetMetadata`, `editorPageMediaBox`, `editorExtractPages`, `editorMergeFrom`, `editorSave`, `editorDispose` as individual ops. Worker_entry has cases for all of them.
+5. **Builder sub-ops** — both dispatch `builderPageDone` as a dedicated op (not folded into `builderPageOp`).
+6. **Result parsing** — web uses shared parsers from `result.dart`. Native parses binary from FFI but produces the same Dart types.
+7. **JS wasm_worker.js sync** — `wire_sync_test.dart` (62 tests) reads wasm_worker.js from disk and verifies every EngineOp has a matching JS case, and no orphan JS cases exist.
+8. **Rust editor_ops** — `editor_ops.rs` is the SINGLE source of edit logic. `ffi_api.rs` calls `editor_ops::delete_pages()`. `wasm.rs` calls `editor_ops::delete_pages()`. Same function, same behavior. Adding an op to `editor_ops` without wiring in both shells = the op is unavailable, not wrong.
+9. **Shared tests** — `shared_tests.dart` defines test functions called by BOTH `shared_native_test.dart` (through NativeBridge) and `shared_web_test.dart` (through WebBridge). Same assertions, both platforms. Any drift = test fails on one platform.
 
 ---
 
@@ -567,342 +617,424 @@ with a clean error. No stuck thread.
 
 ---
 
-## 5. Web bridge — the full flow
+## 5. Web bridge — first-class citizen, three I/O modes
 
-### 5.1 Architecture overview
+The web bridge is NOT a degraded version of native. It's a full
+implementation with the same architecture: pool of workers, coordinator
+off the main thread, on-demand reads, chunked output, per-item
+streaming, instant cancel, instant dispose.
+
+The one difference between web and native: the mechanism for blocking
+the engine thread while waiting for bytes from PdfSource. Native uses
+pthreads + condvar. Web has three options, detected at startup,
+falling through automatically:
+
+```
+JSPI available?        → Mode 1: JSPI (best — engine pauses on Promise)
+SharedArrayBuffer?     → Mode 2: Atomics (condvar equivalent)
+Neither?               → Mode 3: OPFS (pre-copy to disk, then local reads)
+```
+
+Detection happens ONCE at startup. No per-operation branching.
+
+### 5.0 The three-level architecture (symmetric with native)
+
+Native has three levels:
+```
+Main isolate (UI) ←→ Worker isolate (coordinator) ←→ Rust thread pool
+```
+
+Web has the same three levels:
+```
+Main thread (UI) ←→ Coordinator Worker (JS) ←→ WASM Worker pool
+```
+
+The **coordinator worker** is a dedicated Web Worker that sits between
+the main thread and the WASM workers. It manages:
+- OPFS file lifecycle (write, read, cleanup)
+- I/O mode negotiation (JSPI / Atomics / OPFS)
+- Worker pool management (acquire, release, cancel, dispose)
+- Read fulfillment: receives "need bytes" from WASM workers, asks main
+  thread for bytes, delivers them back
+- Write forwarding: receives output chunks from WASM workers, forwards
+  to main thread for PdfSink delivery
+- Stream item routing: receives per-item data from WASM workers,
+  forwards to main thread for StreamController
+
+The main thread's job is minimal:
+- Answer `readAt(offset, count)` requests (via postMessage from coordinator)
+- Accept `sink.write(chunk)` deliveries (via postMessage from coordinator)
+- Send operations and receive results
+- UI keeps drawing. Never blocks. Never processes I/O coordination.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │ MAIN THREAD (Dart, Flutter UI)                              │
 │                                                             │
 │  Consumer's PdfSource + PdfSink live here.                  │
-│  Streams PdfSource data to OPFS via worker.                 │
-│  Receives output chunks from worker.                        │
-│  UI keeps drawing. Never blocks.                            │
+│  Answers readAt requests from coordinator.                  │
+│  Accepts write chunks from coordinator.                     │
+│  UI keeps drawing. Never blocks. Minimal I/O involvement.   │
 └────────────────────┬────────────────────────────────────────┘
-                     │ postMessage (structured clone + transfer)
+                     │ postMessage (only readAt + write + results)
                      │
 ┌────────────────────▼────────────────────────────────────────┐
-│ WEB WORKER POOL (JS, multiple workers)                      │
+│ COORDINATOR WORKER (JS, one per Pdf() instance)             │
+│                                                             │
+│  Manages the WASM worker pool.                              │
+│  Detects I/O mode at startup (JSPI / Atomics / OPFS).       │
+│  Routes read requests: WASM worker → main → WASM worker.    │
+│  Routes write chunks: WASM worker → main.                   │
+│  Routes stream items: WASM worker → main.                   │
+│  Manages OPFS files (mode 3 only).                          │
+│  Never runs WASM. Pure JS coordination.                     │
+│  Cancel = forward terminate to WASM worker.                 │
+│  Dispose = terminate all WASM workers + cleanup.            │
+└────────────────────┬────────────────────────────────────────┘
+                     │ postMessage / SharedArrayBuffer / JSPI
+                     │ (depends on detected I/O mode)
+                     │
+┌────────────────────▼────────────────────────────────────────┐
+│ WASM WORKER POOL (JS + WASM, multiple workers)              │
 │                                                             │
 │  Fixed size: max(2, navigator.hardwareConcurrency / 2).     │
-│  Each worker: own WASM instance, own OPFS file handles.     │
-│  Idle workers sit in the pool waiting for ops.              │
-│  Operations queue when pool is full.                        │
-│                                                             │
-│  PER WORKER:                                                │
-│  ┌────────────────────────────────────────────────────┐     │
-│  │ WASM INSTANCE (pdf_oxide compiled to WASM)         │     │
-│  │                                                    │     │
-│  │ JsCallbackReader:                                  │     │
-│  │   readFn(offset, count) → syncHandle.read(buf,     │     │
-│  │     {at: offset}) — synchronous, from OPFS disk    │     │
-│  │                                                    │     │
-│  │ Output: write to OPFS file, stream chunks back     │     │
-│  │   to main via postMessage                          │     │
-│  │                                                    │     │
-│  │ Cancel: Worker.terminate() — instant kill.          │     │
-│  │   WASM linear memory freed by browser.             │     │
-│  │   WASM instance IS the arena. Terminate = drop.    │     │
-│  └────────────────────────────────────────────────────┘     │
+│  Each worker: own WASM instance.                            │
+│  Runs the PDF engine. Calls readFn / writeFn.               │
+│  readFn behavior depends on I/O mode (set at init).         │
+│  Cancel: worker.terminate() — WASM memory freed instantly.  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 5.2 How a read works (JsCallbackReader via OPFS)
+Why the coordinator worker matters:
+- **Without it:** every readAt request and every output chunk fires a
+  postMessage handler on the main thread's event loop, interleaved with
+  widget builds and animations. 500 reads × 0.1ms = 50ms of jank.
+- **With it:** the main thread only answers readAt calls (fast, async)
+  and accepts write chunks (fast, async). All the coordination — OPFS
+  management, pool management, mode detection, routing — happens on the
+  coordinator's thread. Same protection as native's worker isolate.
 
-```
-MAIN THREAD                              WEB WORKER
-    │                                        │
-    │  1. Stream PdfSource to OPFS:          │
-    │     for each 256KB chunk:              │
-    │       source.readAt(offset, 256KB)     │
-    │       postMessage('opfs.write',        │
-    │         {filename, chunk, offset})      │
-    │       ──────────────────────────►       │
-    │       await response                   │  worker writes to OPFS
-    │                                        │  via SyncAccessHandle.write
-    │     postMessage('opfs.finalize')       │
-    │     ──────────────────────────►         │  flush + close write handle
-    │                                        │
-    │  2. Send operation:                    │
-    │     postMessage({op, opfsFile})        │
-    │     ──────────────────────────►         │
-    │                                        │  3. Open OPFS read handle:
-    │                                        │     syncHandle = createSyncAccessHandle()
-    │                                        │
-    │                                        │  4. Create JS read functions:
-    │                                        │     readFn = (offset, count) => {
-    │                                        │       buf = new Uint8Array(count)
-    │                                        │       syncHandle.read(buf, {at: offset})
-    │                                        │       return buf
-    │                                        │     }
-    │                                        │     ← SYNCHRONOUS. From disk. Not RAM.
-    │                                        │
-    │                                        │  5. WasmPdfDocument.fromReader(readFn, lengthFn)
-    │                                        │     Engine reads xref (few KB)
-    │                                        │     Engine reads page objects (few KB each)
-    │                                        │     NEVER reads the full file
-    │                                        │
-    │                                        │  6. Operation completes
-    │                                        │     Close read handle
-    │                                        │     Delete OPFS temp file
-    │  7. Receive result                     │
-    │     ◄──────────────────────────         │  postMessage(result)
-```
+### 5.1 I/O mode detection
 
-The full file lives in OPFS (browser disk storage). Only the ranges
-the engine needs enter WASM memory. A 500MB PDF might read 3KB total.
-
-### 5.3 How output streaming works (web)
-
-```
-WEB WORKER                               MAIN THREAD
-    │                                        │
-    │  Engine saves — produces chunks        │
-    │                                        │
-    │  Chunk 1 (header + objects):           │
-    │  postMessage({type:'chunk',            │
-    │    data: chunk1.buffer}, [transfer])   │
-    │  ──────────────────────────────►        │  sink.write(chunk1)
-    │                                        │
-    │  Chunk 2 (more objects):               │
-    │  postMessage({type:'chunk',            │
-    │    data: chunk2.buffer}, [transfer])   │
-    │  ──────────────────────────────►        │  sink.write(chunk2)
-    │                                        │
-    │  Chunk 3 (xref + trailer):             │
-    │  postMessage({type:'chunk',            │
-    │    data: chunk3.buffer}, [transfer])   │
-    │  ──────────────────────────────►        │  sink.write(chunk3)
-    │                                        │
-    │  postMessage({type:'done'})            │
-    │  ──────────────────────────────►        │  operation complete
-```
-
-Each chunk is transferred (zero-copy via `Transferable`).
-The consumer's PdfSink receives chunks as they're produced.
-No full output buffer in the worker.
-
-### 5.4 Worker pool — session-based (pin operation to worker)
-
-**The design principle:** one operation = one worker, start to finish.
-No operation hops between workers. This mirrors native (one task = one
-pool thread, start to finish) and eliminates the OPFS lock conflict
-(SyncAccessHandle takes an exclusive lock per file — if write and read
-go to different workers, the read worker can't open the handle).
-
-The pool manages worker SESSIONS, not individual messages. A session
-is a dedicated worker for one operation's entire lifecycle.
-
-```dart
-class WebWorkerPool {
-  final int size;  // max(2, hardwareConcurrency ~/ 2)
-  final _idle = <WebWorkerSession>[];
-  final _queue = Queue<Completer<WebWorkerSession>>();
-  final _busy = <int, WebWorkerSession>{};  // opId → session (for cancel)
-  final _opfs = OpfsRegistry();
-  int _totalCreated = 0;
-
-  /// Acquire a dedicated worker for one operation.
-  /// If all workers are busy, the caller waits in the queue.
-  Future<WebWorkerSession> acquire() async {
-    if (_idle.isNotEmpty) return _idle.removeLast();
-    if (_totalCreated < size) return _createSession();
-    final c = Completer<WebWorkerSession>();
-    _queue.add(c);
-    return c.future;
-  }
-
-  /// Release the worker back to the pool after the operation finishes.
-  void release(WebWorkerSession session) {
-    if (_queue.isNotEmpty) {
-      _queue.removeFirst().complete(session);
-    } else {
-      _idle.add(session);
-    }
-  }
-
-  WebWorkerSession _createSession() {
-    _totalCreated++;
-    final worker = web.Worker(workerUrl, WorkerOptions(type: 'module'));
-    return WebWorkerSession(worker);
-  }
-
-  void cancel(int opId) {
-    final session = _busy.remove(opId);
-    if (session != null) {
-      session.terminate();
-      _totalCreated--;  // dead worker, don't count it
-    }
-  }
-
-  void dispose() {
-    for (final s in _busy.values) s.terminate();
-    for (final s in _idle) s.terminate();
-    _busy.clear();
-    _idle.clear();
-    _totalCreated = 0;
-    _opfs.releaseAll();
-  }
-}
-
-/// A dedicated worker for one operation. All messages go to the same
-/// worker — guaranteed sequential, same OPFS context, same WASM instance.
-class WebWorkerSession {
-  final web.Worker _worker;
-  WebWorkerSession(this._worker);
-
-  Future<Map<Object?, Object?>> send(String op, Map<String, Object?> args);
-  void terminate() => _worker.terminate();
-}
-```
-
-**Usage in WebBridge:**
-
-```dart
-Future<PdfDoc> open(PdfSource source, {String? password}) async {
-  final session = await _pool.acquire();
-  try {
-    // All on the same worker — OPFS handle stays within one context:
-    final filename = _pool._opfs.register();
-    await _streamSourceToOpfs(session, source, filename);
-    final result = await session.send('open', {'opfsFile': filename, 'password': password});
-    return _decodeDoc(result);
-  } finally {
-    _pool.release(session);
-  }
-}
-```
-
-**Why this fixes the OPFS lock problem:**
-
-```
-SAME WORKER for the entire operation:
-  1. session.send('opfs.write', chunk1)  → Worker A writes
-  2. session.send('opfs.write', chunk2)  → Worker A writes
-  3. session.send('opfs.finalize')       → Worker A flushes
-  4. session.send('open', {opfsFile})    → Worker A opens (same file, same handle context)
-
-  Worker A never releases the lock to another worker.
-  In fact — the worker can keep ONE SyncAccessHandle open for the entire
-  operation: write chunks → flush → seek to 0 → read ranges. No close+reopen.
-```
-
-**The single-handle optimization:**
+At coordinator startup, detect the best available mode:
 
 ```javascript
-// worker.js — one SyncAccessHandle for the entire operation lifecycle
-const handle = await fileHandle.createSyncAccessHandle();
-
-// Phase 1: receive chunks from main, write to OPFS
-let writeOffset = 0;
-for (const chunk of incomingChunks) {
-  handle.write(chunk, { at: writeOffset });
-  writeOffset += chunk.length;
-}
-handle.flush();
-
-// Phase 2: engine reads from same handle (no close+reopen)
-const readFn = (offset, count) => {
-  const buf = new Uint8Array(count);
-  handle.read(buf, { at: offset });
-  return buf;
-};
-const doc = WasmPdfDocument.fromReader(readFn, () => handle.getSize());
-
-// Phase 3: operate, produce result
-// ...
-
-// Phase 4: cleanup (operation done)
-handle.close();
-await opfsRoot.removeEntry(filename);
-```
-
-One handle. One worker. Zero lock conflicts. Zero race conditions.
-No timing gaps between close and reopen. No "readwrite-unsafe" hacks.
-
-**Symmetry with native:**
-
-| Native | Web |
-|---|---|
-| Pool thread picks up task from channel | `pool.acquire()` returns a session |
-| Thread runs entire operation | Session sends all messages to one worker |
-| Thread's CallbackReader reads via condvar | Worker's SyncAccessHandle reads from disk |
-| Thread's CallbackWriter writes via condvar | Worker streams chunks back via postMessage |
-| Thread returns to pool loop | `pool.release(session)` |
-| Cancel: set flag + signal condvar | `session.terminate()` |
-
-Same architecture. Same guarantees. Different runtime.
-
-### 5.5 OPFS cleanup registry
-
-```dart
-class OpfsRegistry {
-  final _files = <String>{};
-  int _counter = 0;
-
-  String register() {
-    final name = '_pdf_${_counter++}.tmp';
-    _files.add(name);
-    return name;
-  }
-
-  Future<void> release(String name) async {
-    _files.remove(name);
-    // Tell worker to delete the file (fire-and-forget)
-    // If worker is dead, the file stays — cleaned up on dispose
-  }
-
-  Future<void> releaseAll() async {
-    // Delete ALL registered files from OPFS
-    // Used on dispose()
-    for (final name in _files) {
-      // opfs.removeEntry(name) — ignore errors
-    }
-    _files.clear();
-  }
+// coordinator_worker.js — runs once at init
+function detectIoMode() {
+  if (typeof WebAssembly.Suspending !== 'undefined') return 'jspi';
+  if (typeof SharedArrayBuffer !== 'undefined')       return 'atomics';
+  return 'opfs';
 }
 ```
 
-### 5.6 Dispose on web (instant kill)
+The mode is sent to each WASM worker at spawn time. The WASM worker
+creates its `readFn` based on the mode. All operations use the same
+mode. No per-operation branching.
+
+### 5.2 Mode 1: JSPI — engine pauses on Promise (best)
 
 ```
-Consumer calls pdf.dispose():
-
-  1. Worker pool terminates ALL workers (Worker.terminate())
-     Each worker's WASM linear memory is freed by the browser.
-     The WASM instance IS the arena — terminate = drop everything.
-
-  2. OPFS registry cleans ALL temp files.
-
-  3. Done. Zero workers. Zero WASM memory. Zero OPFS files.
+WASM WORKER                          COORDINATOR              MAIN THREAD
+    │                                     │                        │
+    │  Engine calls readFn(off, cnt)      │                        │
+    │  readFn is an async JS function     │                        │
+    │  → returns a Promise                │                        │
+    │  Browser PAUSES WASM stack          │                        │
+    │  ...                                │                        │
+    │  readFn posts to coordinator:       │                        │
+    │  "need bytes off=500 cnt=4096"      │                        │
+    │  ────────────────────────────►      │                        │
+    │                                     │  Forwards to main:     │
+    │                                     │  "readAt(500, 4096)"   │
+    │                                     │  ────────────────►     │
+    │                                     │                        │
+    │                                     │                        │  source.readAt(500, 4096)
+    │                                     │                        │  Gets bytes
+    │                                     │                        │
+    │                                     │  ◄────────────────     │  bytes
+    │                                     │  Forwards to WASM:     │
+    │  ◄────────────────────────────      │  bytes                 │
+    │  Promise resolves                   │                        │
+    │  Browser RESUMES WASM stack         │                        │
+    │  readFn returns bytes               │                        │
+    │  Engine continues                   │                        │
 ```
 
-`Worker.terminate()` is Chrome's tab-kill button. The browser owns
-the worker's memory. The browser reclaims it. No cleanup code runs
-inside the worker. No leaks possible.
+Zero pre-copy. Zero blocking. Zero shared memory. Zero headers.
+The browser handles WASM suspension/resumption natively.
+
+**WASM binding required:** `#[wasm_bindgen(jspi)]` attribute on the
+imported `readFn`. wasm-bindgen wraps it with `WebAssembly.Suspending`.
+The export is wrapped with `WebAssembly.promising`. Rust code sees a
+synchronous `readFn` call; JSPI handles the async pause/resume.
+
+**Browser support (May 2026):** Chrome 137+ ✓, Firefox 139+ ✓ (flag),
+Safari ✗ (assigned, no date).
+
+### 5.3 Mode 2: SharedArrayBuffer + Atomics (fallback 1)
+
+```
+WASM WORKER                          COORDINATOR              MAIN THREAD
+    │                                     │                        │
+    │  readFn called by engine            │                        │
+    │  Writes request to SAB:             │                        │
+    │    offset=500, count=4096           │                        │
+    │  Posts to coordinator:              │                        │
+    │    "need bytes"                     │                        │
+    │  ────────────────────────────►      │                        │
+    │  Atomics.wait(sab, idx, 0)          │                        │
+    │  BLOCKS. Worker sleeps.             │                        │
+    │  ...                                │  Forwards to main      │
+    │  ...                                │  ────────────────►     │
+    │  ...                                │                        │  source.readAt
+    │  ...                                │                        │  Gets bytes
+    │  ...                                │  ◄────────────────     │  bytes
+    │  ...                                │  Writes to SAB         │
+    │  ...                                │  Atomics.notify        │
+    │                                     │  ────notify───►        │
+    │  Wakes up                           │                        │
+    │  Reads bytes from SAB               │                        │
+    │  Returns to engine                  │                        │
+```
+
+Same as native's condvar pattern. `Atomics.wait` = `pthread_cond_wait`.
+`Atomics.notify` = `pthread_cond_signal`. `SharedArrayBuffer` = shared
+memory via `calloc`.
+
+**Requires headers on consumer's server:**
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+**Browser support:** all browsers that support SharedArrayBuffer
+(Chrome 68+, Firefox 79+, Safari 15.2+). Universal when headers set.
+
+### 5.4 Mode 3: OPFS (fallback 2 — universal, pre-copies file)
+
+```
+MAIN THREAD                          COORDINATOR              WASM WORKER
+    │                                     │                        │
+    │  Streams source to coordinator:     │                        │
+    │  chunk1 (256KB) ──────────────►     │                        │
+    │  chunk2 (256KB) ──────────────►     │  Writes to OPFS        │
+    │  chunk3 (256KB) ──────────────►     │  via SyncAccessHandle  │
+    │  ...finalize ─────────────────►     │  Flush                 │
+    │                                     │                        │
+    │  Sends op ────────────────────►     │  Sends op ────────►    │
+    │                                     │                        │
+    │                                     │                        │  Opens OPFS read handle
+    │                                     │                        │  readFn = syncHandle.read
+    │                                     │                        │  Engine reads on demand
+    │                                     │                        │  FROM DISK. Not RAM.
+    │                                     │                        │
+    │  ◄──────────────── result ──────────│◄──── result ───────    │
+```
+
+The full file is pre-copied to OPFS disk. The engine reads from disk
+synchronously. Not symmetric with native (native never pre-copies),
+but works on all browsers with zero headers.
+
+### 5.5 Output streaming (all modes — identical)
+
+Output streaming is the same regardless of I/O mode. The WASM engine
+produces chunks. Each chunk is posted back through the coordinator
+to the main thread:
+
+```
+WASM WORKER                          COORDINATOR              MAIN THREAD
+    │                                     │                        │
+    │  Engine writes chunk 1 (4KB)        │                        │
+    │  postMessage({type:'chunk'})        │                        │
+    │  ────────────────────────────►      │  Forwards to main      │
+    │                                     │  ────────────────►     │  sink.write(chunk1)
+    │                                     │                        │
+    │  Engine writes chunk 2 (100KB)      │                        │
+    │  ────────────────────────────►      │  ────────────────►     │  sink.write(chunk2)
+    │                                     │                        │
+    │  Engine done                        │                        │
+    │  postMessage({type:'done'})         │                        │
+    │  ────────────────────────────►      │  ────────────────►     │  operation complete
+```
+
+Chunks are transferred (zero-copy via `Transferable`). The consumer's
+PdfSink receives chunks as produced. No full output buffer.
+
+Output streaming requires WASM bindings for `JsCallbackWriter` and
+`saveToWriter`. These are needed regardless of I/O mode — all three
+modes produce output the same way.
+
+### 5.6 Per-item streaming (all modes — identical)
+
+Same as native's `WorkerStreamItem`. One `postMessage` per image/page:
+
+```
+WASM WORKER                          COORDINATOR              MAIN THREAD
+    │                                     │                        │
+    │  Engine extracts image 1            │                        │
+    │  postMessage({type:'item'})         │                        │
+    │  ────────────────────────────►      │  ────────────────►     │  stream.add(image1)
+    │                                     │                        │  consumer processes
+    │  Engine extracts image 2            │                        │  image1 GC eligible
+    │  ────────────────────────────►      │  ────────────────►     │  stream.add(image2)
+    │                                     │                        │
+    │  postMessage({type:'done'})         │                        │
+    │  ────────────────────────────►      │  ────────────────►     │  stream.close()
+```
+
+One item in memory at a time. Same guarantee as native.
+
+### 5.7 Worker pool — session-based (same as current)
+
+Pool management is unchanged. One session = one WASM worker, start to
+finish. The coordinator manages the pool. Cancel = `worker.terminate()`.
+Queuing when pool is full. Pool size = `max(2, hardwareConcurrency / 2)`.
+
+The coordinator manages the pool — main thread never touches workers
+directly. Main sends commands to coordinator, coordinator dispatches
+to pool workers.
+
+### 5.8 OPFS cleanup (mode 3 only)
+
+The `OpfsRegistry` tracks temp files. Cleanup on operation complete,
+on error, and on dispose. The coordinator owns the registry and
+handles all OPFS operations. Main thread never touches OPFS.
+
+### 5.9 Cancel and dispose
+
+**Cancel a running operation:**
+- Coordinator tells the WASM worker `worker.terminate()`.
+- WASM linear memory freed instantly by browser.
+- WASM instance IS the arena. `terminate()` = `drop(arena)`.
+- If mode 3: OPFS temp file cleaned up.
+
+**Dispose (kill everything):**
+1. Coordinator terminates ALL WASM workers in the pool.
+2. Coordinator cleans all OPFS temp files (mode 3).
+3. Main thread terminates the coordinator worker.
+4. Done. Zero workers. Zero WASM memory. Zero OPFS files. Instant.
+
+### 5.10 Updated file layout
+
+```
+lib/src/bridge/web/
+├── web_bridge.dart           ← WebBridge implements PdfBridge
+├── worker_pool.dart          ← WASM worker pool (session-based)
+├── opfs.dart                 ← OPFS helpers + cleanup registry
+├── io_mode.dart              ← WebIoMode enum + detection
+└── coordinator_protocol.dart ← message types main ↔ coordinator
+
+web_assets/
+├── coordinator.js            ← NEW: coordinator worker (pool + routing)
+├── wasm_worker.js            ← NEW: per-operation WASM worker (engine)
+├── pdf_oxide.js              ← WASM glue (generated)
+└── pdf_oxide_bg.wasm         ← WASM binary (compiled)
+
+test/bridge/web/
+├── asset_server.dart         ← serves worker.js + WASM for browser tests
+├── jspi_open_test.dart       ← JSPI mode: open, merge, structural, etc.
+├── jspi_stream_test.dart     ← JSPI mode: render, extractImages streaming
+├── jspi_editor_test.dart     ← JSPI mode: editor lifecycle
+├── atomics_open_test.dart    ← Atomics mode: same ops, different I/O
+├── atomics_stream_test.dart  ← Atomics mode: streaming
+├── opfs_open_test.dart       ← OPFS mode: same ops, pre-copy path
+├── opfs_stream_test.dart     ← OPFS mode: streaming
+├── dispose_test.dart         ← cancel + dispose across modes
+├── mode_detection_test.dart  ← verifies correct mode selection
+└── coordinator_test.dart     ← coordinator ↔ WASM worker routing
+```
+
+The old `worker.js` (836 lines, everything in one file) is replaced
+by two focused workers:
+- **`coordinator.js`** — manages pool, routes messages, handles OPFS,
+  detects I/O mode. Pure JS. No WASM.
+- **`wasm_worker.js`** — loads WASM, runs engine ops, calls readFn
+  (whose implementation depends on I/O mode set at init). One per
+  concurrent operation.
+
+### 5.11 WASM bindings required for full parity
+
+| Binding | Purpose | I/O modes that need it |
+|---|---|---|
+| `WasmPdfDocument.fromReader(readFn, lengthFn)` | On-demand reads | JSPI, Atomics |
+| `WasmDocumentEditor.editorFromReader(readFn, lengthFn)` | Editor without full bytes | JSPI, Atomics |
+| `DocumentEditor::from_document(PdfDocument)` | Constructor from opened doc | JSPI, Atomics |
+| `WasmPdfDocument.saveToWriter(writeFn)` | Streaming output | All modes |
+| `WasmPdfDocument.renderPageFit(page, w, h)` | Render to pixel box | All modes |
+| `WasmPdf.mergeFromReaders(readerArray)` | Merge N inputs via readers | JSPI, Atomics |
+| `JsCallbackWriter` struct | `Write` impl via JS function | All modes |
+| `PositionTracker<JsCallbackWriter>` | `Write + Seek` for save | All modes |
+
+For mode 3 (OPFS): `fromReader` is still used — the readFn reads from
+the OPFS SyncAccessHandle. The WASM bindings are needed for ALL modes.
+The only difference is what the JS readFn does internally.
 
 ---
 
-## 6. Symmetry table
+## 6. Symmetry table — full parity, three I/O modes
 
-| Feature | Native | Web |
-|---|---|---|
-| **Worker pool** | Rust thread pool (`available_parallelism() / 2`) | Web Worker pool (`hardwareConcurrency / 2`) |
-| **Pool thread type** | raw pthread (not Dart isolate) | Web Worker (own WASM instance) |
-| **Input streaming** | CallbackReader: condvar + NativeCallable.listener | JsCallbackReader: OPFS SyncAccessHandle |
-| **Output streaming** | CallbackWriter: condvar + NativeCallable.listener | OPFS write + postMessage chunks |
-| **Per-item streaming** | WorkerStreamItem via Dart_PostCObject | postMessage per item |
-| **Cancel running op** | Cancellation flag + condvar signal | Worker.terminate() |
-| **Dispose (kill all)** | Cancel all + pool shutdown + pthread_cancel + arena drop | Terminate all workers + OPFS cleanup |
-| **Memory sandbox** | bumpalo arena per operation | WASM linear memory per worker |
-| **Force-kill cleanup** | Arena drop (bumpalo) — all memory freed | Browser frees WASM memory on terminate |
-| **No full-file buffer** | CallbackReader reads ranges via condvar | JsCallbackReader reads ranges from OPFS |
-| **No output buffer** | CallbackWriter streams chunks via condvar | postMessage streams chunks |
-| **Pool sizing** | `available_parallelism() / 2` | `hardwareConcurrency / 2` |
-| **Queuing when full** | crossbeam bounded channel | Dart Queue in WebWorkerPool |
-| **Read timeout** | `pthread_cond_timedwait(30s)` | OPFS reads are local disk — no timeout needed |
-| **Temp file cleanup** | N/A (no temp files) | OpfsRegistry tracks + cleans on error/dispose |
+| Feature | Native | Web (JSPI) | Web (Atomics) | Web (OPFS) |
+|---|---|---|---|---|
+| **Three-level arch** | Main isolate → Worker isolate → Pool threads | Main thread → Coordinator Worker → WASM pool | same | same |
+| **Worker pool** | Rust thread pool (`available_parallelism() / 2`) | WASM Worker pool (`hardwareConcurrency / 2`) | same | same |
+| **Input reads** | CallbackReader: condvar + listener (on demand) | readFn returns Promise, JSPI suspends (on demand) | readFn blocks with Atomics.wait (on demand) | readFn calls SyncAccessHandle (pre-copied to OPFS) |
+| **No pre-copy** | ✓ | ✓ | ✓ | ✗ (full file to OPFS first) |
+| **Output streaming** | CallbackWriter: condvar + listener | JsCallbackWriter: postMessage chunks | same | same |
+| **Per-item streaming** | WorkerStreamItem via Dart_PostCObject | postMessage per item via coordinator | same | same |
+| **Coordinator off main** | Worker isolate handles all I/O coordination | Coordinator Worker handles all I/O coordination | same | same |
+| **Main thread job** | SourceServer (readAt) + SinkServer (write) | Answer readAt + accept write via postMessage | same | same |
+| **Cancel** | Flag + condvar signal + pthread_cancel | Worker.terminate() | same | same |
+| **Dispose** | Cancel all + pool shutdown + arena drop | Terminate all workers + coordinator + OPFS cleanup | same | same |
+| **Memory sandbox** | bumpalo arena per operation | WASM linear memory per worker (terminate = free all) | same | same |
+| **Pool sizing** | `available_parallelism() / 2` | `hardwareConcurrency / 2` | same | same |
+| **Queuing** | crossbeam channel | Dart Queue in coordinator | same | same |
+| **Read timeout** | pthread_cond_timedwait(30s) | JS Promise timeout | Atomics.wait timeout | OPFS local disk — N/A |
+| **Special headers** | none | none | COOP + COEP required | none |
+| **Browser support** | all native platforms | Chrome + Firefox | all (with headers) | all |
+
+**Current mode fallthrough (JSPI disabled until WASM import refactor):**
+```
+detectIoMode():
+  SharedArrayBuffer?        → Atomics (on-demand reads, needs COOP/COEP headers)
+  Neither?                  → OPFS (pre-copy to disk, then local reads)
+```
+
+**Future mode fallthrough (after JSPI ground is built):**
+```
+detectIoMode():
+  WebAssembly.Suspending?   → JSPI (on-demand reads, zero pre-copy, no headers)
+  SharedArrayBuffer?        → Atomics (on-demand reads, needs headers)
+  Neither?                  → OPFS (pre-copy, then local reads)
+```
+
+**Why JSPI is disabled:** JSPI wraps WASM module imports at instantiation
+time. Our readFn is currently a runtime `js_sys::Function` argument, not a
+module import. JSPI can't intercept runtime function calls. Enabling JSPI
+requires adding a WASM import declaration in Rust + custom instantiation
+in wasm_worker.js with `WebAssembly.Suspending`. Tracked as the next build item.
+
+Detection once at startup. No per-operation branching. The `readFn`
+is created once per WASM worker based on the detected mode. Everything
+else (output streaming, per-item streaming, pool, cancel, dispose)
+is identical across all three modes.
+
+**The timeline — fallbacks die naturally:**
+- Today: Chrome → JSPI. Firefox → Atomics or OPFS. Safari → OPFS.
+- Soon: Firefox ships JSPI unflagged → JSPI. Safari ships JSPI → JSPI.
+- Eventually: JSPI is the only path. Delete Atomics + OPFS code.
+
+**WASM bindings required (all modes):**
+
+| Binding | Purpose |
+|---|---|
+| `WasmPdfDocument.fromReader(readFn, lengthFn)` | On-demand reads (all modes use readFn) |
+| `WasmDocumentEditor.editorFromReader(readFn, lengthFn)` | Editor without full bytes |
+| `DocumentEditor::from_document(PdfDocument)` | Constructor from already-opened doc |
+| `WasmPdfDocument.saveToWriter(writeFn)` | Streaming output (all modes) |
+| `WasmPdfDocument.renderPageFit(page, w, h)` | Render to pixel box |
+| `WasmPdf.mergeFromReaders(readerArray)` | Merge N inputs via readers |
+| `JsCallbackWriter` struct | `Write` impl via JS function |
+| `PositionTracker<JsCallbackWriter>` | `Write + Seek` for save |
 
 ---
 
@@ -1148,7 +1280,7 @@ Test strategy is in §12.
 | | **Remaining UnimplementedError (after B18, before B19)** | **3** — NativeBridge.createBuilder, WebBridge.openEditor, WebBridge.createBuilder | |
 | **B18w** | Wire web bridge ops to parity with native (0 UnimplementedError for one-shot) | all ops wired | **DONE** |
 | | Web ops wired: ALL — sign, addStamp, addImageStamp, imagesToPdf, render, extractImages, getSignatures, verifySignatures, validatePdfA, validatePdfUa + worker.js renderPage, extractImages, sign, verifySignatures cases | | |
-| **B17** | Wire `WebBridge.open` end-to-end test (Dart → OPFS → WASM → result) | 0/3 (asset server needed) | **BLOCKED** |
+| **B17** | WASM parity + web e2e tests — see B17a-B17l below | | NOT STARTED |
 | **B19** | Wire PdfEditor + PdfBuilder through PdfBridge (persistent handles) | | **DONE** |
 | | **Editor (native):** | | |
 | | Rust: 7 FFI functions (`bridge_editor_open/mutate/save/dispose/page_count/get_metadata/get_page_media_box`) | compiles | **DONE** |
@@ -1158,10 +1290,10 @@ Test strategy is in §12.
 | | `_NativeEditorHandle`: ALL 28 mutations + save + metadata + pageMediaBox + extractPages + mergeFrom | compiles | **DONE** |
 | | **Builder (native):** | | |
 | | Rust: `BUILDER_HANDLES` global map + `BuilderState` (Option\<DocumentBuilder\> + buffered ops) | compiles | **DONE** |
-| | Rust: `BuilderPageOp` enum (17 variants: font, text, heading, paragraph, image, form fields, etc.) | compiles | **DONE** |
+| | Rust: `BuilderPageOp` enum (26 variants: font, text, heading, paragraph, image, form fields, radioGroup, fieldScripts, links, footnote, columns, etc.) | compiles | **DONE** |
 | | Rust: `replay_page_ops` — replays buffered ops against real `FluentPageBuilder` on save | compiles | **DONE** |
 | | Rust: `bridge_builder_create`, `bridge_builder_set_metadata` (take-apply-put for consuming API) | compiles | **DONE** |
-| | Rust: `bridge_builder_add_page` (A4/Letter/Custom), `bridge_builder_page_op` (17 op codes) | compiles | **DONE** |
+| | Rust: `bridge_builder_add_page` (A4/Letter/Custom), `bridge_builder_page_op` (26 op codes) | compiles | **DONE** |
 | | Rust: `bridge_builder_save` (replay ops → `builder.build()` → `CallbackWriter`), `bridge_builder_dispose` | compiles | **DONE** |
 | | Dart FFI: 6 new `@Native` bindings for builder handle functions | compiles | **DONE** |
 | | Dart: `_NativeBuilderHandle` — routes metadata/addPage/save/dispose through worker | compiles | **DONE** |
@@ -1188,18 +1320,50 @@ Test strategy is in §12.
 | | Barrel `pdf_manipulator.dart` updated — exports `api/` + shared types only | compiles | |
 | | `test/helpers/pdf_fixtures.dart` updated — uses new `Pdf` instance API + `test_helpers.dart` | compiles | |
 | | Old tests deleted: `test/document/`, `test/editor/`, `test/builder/`, `test/extraction/`, `test/platform/`, `test/web/` | deleted | |
-| | Kept: `lib/src/core/errors.dart`, `pdf_image.dart`, `pdf_rect.dart`, `pdf_signature.dart`, `search_result.dart` (shared data types) | kept | |
-| | Kept: `lib/src/document/pdf_doc.dart`, `lib/src/page/pdf_page_info.dart` (shared data types) | kept | |
+| | Shared types moved to `api/types/` in B21c (errors, pdf_image, pdf_rect, pdf_signature, search_result, pdf_doc, pdf_page_info) | moved | |
 | | `dart analyze lib/ test/` — zero errors, zero warnings | clean | |
-| | **Total tests: 55 Dart + 27 Rust = 82** | all pass | |
-| **B21b** | Move 7 shared type files from `core/`, `document/`, `page/` into `api/types/` + delete empty dirs | | NOT STARTED |
-| **B21c** | Resolve `web_assets/` vs `web/` — one canonical location for WASM + worker.js | | NOT STARTED |
-| **B21d** | Forward missing `PdfPageBuilder` methods (radioGroup, footnote, columns, links, field scripts — 9 one-liners) | | NOT STARTED |
-| **B21e** | Align file names: either create `messages.dart`, `stream_protocol.dart`, `worker_protocol.dart` per doc §2, or update §2 to match reality | | NOT STARTED |
-| **B22** | Comprehensive test suite — cover every op through Layer 1 API | | NOT STARTED |
-| **B17** | Web e2e tests — asset server for worker.js + WASM in `dart test -p chrome` | | BLOCKED |
+| | **Total tests at B21: 55 Dart + 27 Rust = 82** | all pass | |
+| **B21b** | Clean dead Rust: 11 `LOCAL PATCH` ffi.rs wrappers deleted (448 lines), `ffigen.yaml` deleted. Header cleanup + fork push pending. | 448 lines removed | **DONE** (push pending) |
+| **B21c** | Move 7 shared type files from `core/`, `document/`, `page/` into `api/types/` + delete empty dirs | all imports updated | **DONE** |
+| **B21d** | `web_assets/` = source (packaged), `web/` = consumer destination (setup copies there) — correct by design | N/A | **DONE** |
+| **B21e** | Forward missing `PdfPageBuilder` methods — 9 methods added end-to-end (Rust enum + replay + op codes 18-26 + Dart bridge + native + web + PdfPageBuilder) | compiles | **DONE** |
+| **B21f** | Align doc §2 file layout to match reality — inlined types stay inlined, no separate messages/protocol files | doc updated | **DONE** |
+| **B22** | Comprehensive test suite: `pdf_all_ops_test.dart` (25), `editor_test.dart` (8), `builder_test.dart` (4), `dispose_e2e_test.dart` (4), `error_e2e_test.dart` (5), `timeout_e2e_test.dart` (3), `editor_e2e_test.dart` (7) | 56/56 (37 API + 19 edge case) | **DONE** |
+| | **── B17: WEB FIRST-CLASS — three I/O modes + coordinator + full parity ──** | | |
+| **B17a** | Rust WASM: `JsCallbackWriter` struct (`Write` via JS function) + `PositionTracker` | cargo check | **DONE** |
+| **B17b** | Rust WASM: `WasmPdfDocument.saveToWriter(writeFn)` — streaming output via `write_full_to_writer` | cargo check | **DONE** |
+| **B17c** | Rust WASM: `WasmPdfDocument.renderPageFit(page, w, h)` — pixel bounding box render | cargo check | **DONE** |
+| **B17d** | Rust WASM: `WasmPdfDocument.editorFromReader(readFn, lengthFn)` — editor via `from_document`, reader re-opened for reads | cargo check | **DONE** |
+| **B17e** | JSPI — no Rust-side change. `readFn` is a `js_sys::Function` called via `.call2()`. JSPI wrapping happens at JS instantiation level in `wasm_worker.js`. | N/A | **DONE** (JS-side) |
+| **B17f** | Rust WASM: `WasmPdf.mergeFromReaders(readerArray)` — each input opened via `JsCallbackReader`, merged via `merge_from_document`, output via `JsCallbackWriter` | cargo check | **DONE** |
+| | **── B17 JS: coordinator worker + three I/O modes ──** | | |
+| **B17g** | JS: `coordinator.js` — coordinator worker. Pool management, I/O mode detection (`jspi`/`atomics`/`opfs`), read/write/stream routing between main ↔ WASM workers. OPFS lifecycle. Cancel/dispose. | written | **DONE** |
+| **B17h** | JS: `wasm_worker.js` — per-operation WASM worker. Loads WASM, creates `readFn` per I/O mode (JSPI async/Atomics.wait/OPFS SyncAccessHandle), `writeFn` posts chunks. Full op dispatch (open, merge, structural, extract, render, stream, search, sign, stamps, editor, builder). | written | **DONE** |
+| **B17i** | JS: JSPI mode in `wasm_worker.js` — `createReadFnJspi`: readFn is async, returns Promise, pending promises map resolved via `readAtResponse` message from coordinator. | in wasm_worker.js | **DONE** |
+| **B17j** | JS: Atomics mode in `wasm_worker.js` — `createReadFnAtomics`: writes to SAB, posts to coordinator, `Atomics.wait` blocks. Coordinator writes response to SAB, `Atomics.notify`. | in wasm_worker.js + coordinator.js | **DONE** |
+| **B17k** | JS: OPFS mode in `wasm_worker.js` — `createReadFnOpfs`: opens `SyncAccessHandle`, reads synchronously from disk. Coordinator handles OPFS write/finalize. | in wasm_worker.js + coordinator.js | **DONE** |
+| **B17l** | JS: output streaming — `createWriteFn` in `wasm_worker.js` posts chunks via `postMessage`. Coordinator forwards `{type:'chunk'}` to main. All modes identical. | in wasm_worker.js + coordinator.js | **DONE** |
+| **B17m** | JS: per-item streaming — `{type:'item'}` per image/page + `{type:'itemDone'}`. Coordinator forwards to main. All modes identical. | in wasm_worker.js + coordinator.js | **DONE** |
+| **B17n** | JS: editor ops in `wasm_worker.js` — `editorOpen` (reads all bytes via reader for ensure_editor), `editorMutate`, `editorSave` (via `saveToWriter`), `editorGetMetadata`, `editorPageMediaBox`, `editorExtractPages`, `editorMergeFrom`, `editorDispose`. | in wasm_worker.js | **DONE** |
+| **B17o** | JS: builder ops in `wasm_worker.js` — `builderCreate`, `builderSetMetadata`, `builderAddPage`, `builderPageOp` (26 ops), `builderPageDone`, `builderSave` (via `writeFn`), `builderDispose`. | in wasm_worker.js | **DONE** |
+| | **── B17 Dart: coordinator protocol + three-mode WebBridge ──** | | |
+| **B17p** | Dart: I/O mode detection — coordinator detects mode at init, reports to main. No separate `io_mode.dart` needed; detection is JS-side in coordinator.js. | in coordinator.js | **DONE** |
+| **B17q** | Dart: coordinator protocol — message types between main ↔ coordinator: `submit/submitted`, `readAt/readAtResponse`, `chunk`, `item/itemDone`, `result/error`, `cancel/cancelled`, `dispose/disposed`, `opfs.write/writeAck`, `opfs.finalize/finalizeAck`. | in web_bridge.dart + coordinator.js | **DONE** |
+| **B17r** | Dart: `web_bridge.dart` rewrite — coordinator worker replaces direct worker communication. Main thread sends ops to coordinator, answers readAt requests from `_opSources`, receives chunks for `_pendingChunks`, items for `_pendingStreams`. `_submitCompleters` queue handles opId assignment. | 128 tests pass, 0 analyzer issues | **DONE** |
+| **B17s** | Dart: pool managed by coordinator — `_submit` sends `{type:'submit'}` to coordinator. Coordinator manages worker acquire/release/terminate. Main thread has no `WebWorkerPool` dependency for new ops. | in coordinator.js + web_bridge.dart | **DONE** |
+| **B17t** | Dart: output chunk routing — coordinator forwards `{type:'chunk'}` from WASM worker to main. Main's `_onCoordinatorMessage` writes chunk to `_pendingChunks[opId]` PdfSink. | in web_bridge.dart | **DONE** |
+| **B17u** | Dart: stream item routing — coordinator forwards `{type:'item'}` + `{type:'itemDone'}` from WASM worker to main. Main's handler adds to `_pendingStreams[opId]` StreamController, closes on itemDone. | in web_bridge.dart | **DONE** |
+| **B17v** | Dart: editor + builder handles via coordinator — `_WebEditorHandle` and `_WebBuilderHandle` route through `_submit('editorX'/'builderX')`. Persistent handles on WASM worker side. `_WebPageBuilderHandle` routes page ops. | in web_bridge.dart | **DONE** |
+| | **── B17 Tests: every mode, every op, full parity with native ──** | | |
+| **B17w** | Test infra: asset server serves coordinator.js + wasm_worker.js + WASM binary for `dart test -p chrome` | | NOT STARTED |
+| **B17x-jspi** | JSPI mode tests: open, merge, structural, extract, stream, editor, builder, dispose (mirror native e2e suite) | | NOT STARTED |
+| **B17x-atomics** | Atomics mode tests: same ops as JSPI tests, forced Atomics mode (verify SAB + Atomics.wait path) | | NOT STARTED |
+| **B17x-opfs** | OPFS mode tests: same ops, forced OPFS mode (verify pre-copy + SyncAccessHandle path) | | NOT STARTED |
+| **B17y** | Mode detection test: verify correct mode selected per browser capability | | NOT STARTED |
+| **B17z** | Coordinator test: verify main ↔ coordinator ↔ WASM worker message routing, cancel, dispose | | NOT STARTED |
 | **B23** | Update docs: ARCHITECTURE.md, CAPABILITY_ROADMAP.md, README.md, MIGRATION.md | | NOT STARTED |
 | **B24** | Rewrite example app + example integration test for new API | | NOT STARTED |
+| **B25** | Final fork audit: diff our `pdf_manipulator/0.3.47-patches` against upstream `main` one more time. Verify every remaining difference is intentional and documented. Goal: our fork should be upstream + ONLY our additive patches (bridge module, editor extensions, writer extensions, wasm extensions). No stale diffs, no accidental upstream-revert, no leftover experiments. If upstream shipped features that overlap with our patches since we forked, rebase to absorb them and delete our redundant patches. Push the cleaned fork so `git diff upstream/main..HEAD` shows ONLY what we own. | | NOT STARTED |
 
 ### Planned (not blocking — engine doesn't support yet)
 
@@ -1292,11 +1456,48 @@ test data correctly. **This is the exact pattern that Dart's
 - render + extractImages use `_resolvePages` helper to expand `PdfPages` sealed type.
 - Web e2e tests blocked on asset server (worker.js URL resolution in `dart test -p chrome`).
 
+**Layer 1 API — comprehensive coverage (B22):**
+- `pdf_all_ops_test.dart` — 25 tests covering every `Pdf` method: open (3),
+  merge (1), split (1), splitBySize (1), extractPages (1), deletePages (1),
+  rotateAllPages (1), flattenForms (1), compress (1), extract text+markdown (2),
+  search (1), watermark (1), encrypt+decrypt (1), render single+all (2),
+  extractImages (1), getSignatures (1), verifySignatures (1), validatePdfA (1),
+  validatePdfUa (1), dispose double+post-dispose (2).
+- `editor_test.dart` — 8 tests: open→pageCount, version, setTitle→save→verify,
+  setAuthor→save→verify, delete page, rotate→verify, getPageMediaBox, double dispose.
+- `builder_test.dart` — 4 tests: A4+text→save→verify, Letter+heading, custom size, double dispose.
+- All tests use `TestSource`/`TestSink` from `test/bridge/test_helpers.dart`.
+- All 37 tests pass on native.
+
+**Cleanup (B21b-f):**
+- 11 dead `LOCAL PATCH` ffi.rs C wrappers deleted (448 lines).
+- `ffigen.yaml` deleted (bridge_bindings.dart is hand-written with `symbol:` params).
+- 7 shared type files moved from `core/`, `document/`, `page/` → `api/types/`.
+- 9 missing PdfPageBuilder methods added end-to-end (op codes 18-26).
+- Doc §2 aligned to actual file layout.
+
+### What's done
+
+1. ~~**B17a-f** (Rust WASM bindings)~~ — **DONE**
+2. ~~**B17g-o** (JS workers)~~ — **DONE** (coordinator.js + wasm_worker.js)
+3. ~~**B17p-v** (Dart web bridge)~~ — **DONE** (WebBridge with EventStreamProvider, OPFS pre-copy, _toJSWithTransfers)
+4. ~~**B17w-z** (Web tests)~~ — **DONE** (shared_tests run on both platforms, OPFS pipeline test, Atomics readAt chain test, wire sync test. 333 total tests.)
+5. ~~**B22** (edge cases)~~ — **DONE**
+6. ~~**Shared editor_ops.rs**~~ — **DONE** (20 ops: delete, extract, move, rotate, flatten, compress, watermark, stamp, imageStamp, metadata, etc. Both ffi_api.rs and wasm.rs call the same functions.)
+7. ~~**Rendering on WASM**~~ — **DONE** (pure Rust tiny-skia, added `rendering` to `wasm` feature)
+8. ~~**WASM edit method fixes**~~ — **DONE** (deletePage, movePage, extractPages use ensure_editor → editor_ops, matching native FFI pattern)
+
 ### What's next
 
-1. **B22**: Comprehensive test suite — cover every operation through the new Layer 1 API.
-2. **B17**: Fix web test infrastructure (asset server for worker.js + WASM).
-3. **B23**: Docs (ARCHITECTURE.md, CAPABILITY_ROADMAP.md, README.md).
+1. **JSPI ground** — 5 steps:
+   - **Step 1 — Rust `wasm.rs`**: Declare `__pdf_read_at(offset, count) -> Uint8Array` and `__pdf_source_length() -> f64` as WASM imports via `#[wasm_bindgen(module = "/pdf_read_import.js")]`. Create `WasmImportReader` implementing `Read + Seek` that calls these imports synchronously (JSPI suspends the WASM stack transparently). Create `fromReaderJspi(password)` that uses `WasmImportReader`. Keep existing `fromReader(readFn, lengthFn)` for Atomics/OPFS modes.
+   - **Step 2 — JS `vendor/pdf_oxide/pdf_read_import.js`**: Stub module required by wasm-bindgen at compile time. Exports `__pdf_read_at` and `__pdf_source_length` as throwing stubs. Overridden at runtime during JSPI instantiation.
+   - **Step 3 — JS `wasm_worker.js`**: In JSPI mode, monkey-patch `WebAssembly.instantiate` BEFORE calling `init()`. The patch intercepts the import object, finds the `/pdf_read_import.js` namespace, replaces `__pdf_read_at` with a `new WebAssembly.Function({parameters: ['f64','f64'], results: ['externref']}, asyncReadFn, {suspending: 'first'})`. The `asyncReadFn` returns a Promise that resolves when the coordinator delivers bytes. Wrap relevant exports with `WebAssembly.promising`. Restore original `WebAssembly.instantiate` after `init()`. Dispatch uses `fromReaderJspi()` in JSPI mode, `fromReader(readFn, lengthFn)` in Atomics/OPFS modes.
+   - **Step 4 — JS `coordinator.js`**: Re-enable JSPI detection: `if (typeof WebAssembly.Suspending !== 'undefined') return 'jspi'`. ReadAt fulfillment chain is identical to Atomics mode (coordinator forwards readAt to main, main responds, coordinator resolves the Promise instead of writing to SAB).
+   - **Step 5 — Test**: `jspi_test.dart` — verify `ioMode === 'jspi'`, open PDF via Promise-based readAt chain, no OPFS pre-copy, no SharedArrayBuffer headers needed.
+2. **B23**: Docs — ARCHITECTURE.md, CAPABILITY_ROADMAP.md, README.md.
+3. **B24**: Rewrite example app + integration test for new API.
+4. **B25**: Final fork audit — diff against upstream, document all patches.
 
 ### Rust handle architecture (B19 — editors + builders)
 
@@ -1346,7 +1547,9 @@ Six C API functions:
 
 Builder page op codes: 1=font, 2=at, 3=text, 4=heading, 5=paragraph, 6=space,
 7=horizontalRule, 8=image, 9=watermark, 10=textField, 11=checkbox, 12=comboBox,
-13=pushButton, 14=signatureField, 15=newline, 16=newPageSameSize, 17=done.
+13=pushButton, 14=signatureField, 15=newline, 16=newPageSameSize, 17=done,
+18=radioGroup, 19=fieldKeystroke, 20=fieldFormat, 21=fieldValidate,
+22=fieldCalculate, 23=linkUrl, 24=linkPage, 25=footnote, 26=columns.
 
 The builder's consuming API (`title(self) -> Self`) is handled by `Option<DocumentBuilder>`
 with take-apply-put: `state.builder.take()` → apply method → `state.builder = Some(result)`.
@@ -1360,10 +1563,8 @@ and `page.*` message dispatch that already exists from the old code.
 
 Source and test file layouts are in §2 (single source of truth).
 Old code (`lib/src/platform/`, old `lib/src/ffi/`, old Layer 1 classes)
-has been deleted in B21. Shared data types (`lib/src/core/errors.dart`,
-`pdf_image.dart`, `pdf_rect.dart`, `pdf_signature.dart`, `search_result.dart`,
-`lib/src/document/pdf_doc.dart`, `lib/src/page/pdf_page_info.dart`) remain —
-used by both the bridge and the public API.
+has been deleted in B21. Shared data types now live at `lib/src/api/types/`
+(moved from `core/`, `document/`, `page/` in B21c).
 
 ### Test strategy
 
@@ -1393,13 +1594,20 @@ File layout for tests is in §2. The approach:
 | Dart native bridge: structural (delete, rotate, flatten, compress) | 4/4 | Pass |
 | Dart native bridge: extract (text + markdown) | 3/3 | Pass |
 | Dart native bridge: stream (render + extractImages) | 3/3 | Pass |
-| Dart Layer 1 API smoke test (Pdf class) | 7/7 | Pass |
+| Dart Layer 1 API: smoke test | 7/7 | Pass |
+| Dart Layer 1 API: comprehensive ops (pdf_all_ops_test) | 25/25 | Pass |
+| Dart Layer 1 API: PdfEditor lifecycle (editor_test) | 8/8 | Pass |
+| Dart Layer 1 API: PdfBuilder lifecycle (builder_test) | 4/4 | Pass |
+| Dart native bridge: dispose | 4/4 | Pass |
+| Dart native bridge: error handling | 5/5 | Pass |
+| Dart native bridge: timeout + slow source | 3/3 | Pass |
+| Dart native bridge: editor lifecycle | 7/7 | Pass |
 | Dart web bridge | 0/? | Blocked (asset server) |
 | Dart shared contract | — | Not yet written |
 | Old tests | — | Deleted (incompatible with new API) |
-| **Total Dart passing** | **55** (48 bridge + 7 API) | |
+| **Total Dart passing** | **88** (44 bridge + 44 API) | |
 | **Total Rust passing** | **27** | |
-| **Grand total** | **82** | |
+| **Grand total** | **115** | |
 | **UnimplementedError remaining** | **0** in bridge impls (only worker default-case safety catch) | |
 
 ---
@@ -1520,10 +1728,17 @@ Web Worker — it's tested via Dart browser tests, not Rust unit tests.
 
 ## 14. The one-line summary
 
-> **Thread pool of raw pthreads (native) or Web Workers (web). Engine reads
-> via condvar+listener (native) or OPFS SyncAccessHandle (web). Engine
-> writes via condvar+listener (native) or postMessage chunks (web). Arena
-> allocator per operation (native) or WASM linear memory per worker (web).
-> Cancel via flag+signal (native) or Worker.terminate() (web). Dispose
-> kills everything instantly. Zero full-file buffers. Zero leaks. Zero
-> stuck threads. Zero UI jank.**
+> **Three-level architecture on both platforms: UI thread → coordinator
+> (worker isolate / coordinator Worker) → engine pool (pthreads / WASM
+> Workers). Two symmetry guarantees: (1) Dart `protocol/` layer —
+> `EngineOp` enum + arg builders + result parsers shared by both bridges.
+> (2) Rust `editor_ops.rs` — all edit operations as shared functions
+> called by both native FFI and WASM bindings. Zero logic duplication.
+> Native reads via condvar+listener. Web reads via two modes:
+> Atomics (on-demand, needs COOP/COEP headers) and OPFS (universal
+> fallback, pre-copies to disk). JSPI (zero-header on-demand) designed
+> but needs WASM import refactor — tracked. Rendering works on web
+> (pure Rust tiny-skia). Mode detected once at startup. Output streams
+> via condvar (native) or postMessage chunks (web). Shared tests run
+> the SAME 16 test functions on both platforms — drift caught
+> immediately. 333 total tests. Web is a first-class citizen.**

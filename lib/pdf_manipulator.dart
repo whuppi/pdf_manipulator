@@ -21,23 +21,22 @@
 /// ```
 library;
 
-// Layer 1 — public API
-export 'src/api/pdf.dart';
-export 'src/api/pdf_builder.dart';
-export 'src/api/pdf_editor.dart';
-export 'src/api/pdf_sink.dart';
-export 'src/api/pdf_source.dart';
-export 'src/api/types/pdf_config.dart';
-export 'src/api/types/pdf_enums.dart';
-export 'src/api/types/pdf_errors.dart';
-export 'src/api/types/pdf_pages.dart';
-export 'src/api/types/pdf_params.dart';
+// Public API
+export 'src/ops/pdf.dart';
+export 'src/ops/pdf_editor.dart';
+export 'src/ops/pdf_builder.dart';
 
-// Shared data types (used by bridge, exposed to consumers)
-export 'src/core/errors.dart';
-export 'src/core/pdf_image.dart';
-export 'src/core/pdf_rect.dart';
-export 'src/core/pdf_signature.dart';
-export 'src/core/search_result.dart';
-export 'src/document/pdf_doc.dart';
-export 'src/page/pdf_page_info.dart';
+// Types
+export 'src/types/errors.dart';
+export 'src/types/pdf_config.dart';
+export 'src/types/pdf_doc.dart';
+export 'src/types/pdf_enums.dart';
+export 'src/types/pdf_image.dart';
+export 'src/types/pdf_page_info.dart';
+export 'src/types/pdf_pages.dart';
+export 'src/types/pdf_params.dart';
+export 'src/types/pdf_rect.dart';
+export 'src/types/pdf_signature.dart';
+export 'src/types/pdf_sink.dart';
+export 'src/types/pdf_source.dart';
+export 'src/types/search_result.dart';
