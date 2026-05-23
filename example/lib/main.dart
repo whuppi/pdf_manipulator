@@ -640,15 +640,190 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
           })),
         const SizedBox(height: 12),
 
-        // ── PROBE ──
-        _SectionLabel('Validate'),
-        _OpTile(icon: Icons.verified, title: 'Quick probe',
-          subtitle: 'Validate without full parse', loading: _loading,
-          onRun: () => _run('Probe', () async {
-            final doc = await _pdf.open(_MemorySource(bytes));
-            setState(() => _status =
-                '${doc.pageCount} pages • '
-                'Encrypted: ${doc.isEncrypted} • v${doc.version}');
+        // ── STAMPS ──
+        _SectionLabel('Stamps'),
+        _OpTile(icon: Icons.approval, title: 'Add "Approved" stamp',
+          subtitle: 'Standard stamp on page 1', loading: _loading,
+          onRun: () => _run('Stamp', () async {
+            final sink = _MemorySink();
+            await _pdf.addStamp(_MemorySource(bytes), sink,
+                page: 0, type: PdfStampType.approved,
+                rect: const PdfRect(x: 50, y: 50, width: 200, height: 60));
+            await _saveAndReport(sink.takeBytes(), 'stamped.pdf');
+          })),
+        _OpTile(icon: Icons.add_photo_alternate, title: 'Add image stamp',
+          subtitle: 'Pick an image to stamp on page 1', loading: _loading,
+          onRun: () => _run('Image stamp', () async {
+            final imgs = await pickImageBytes();
+            if (imgs == null || imgs.isEmpty) return;
+            final sink = _MemorySink();
+            await _pdf.addImageStamp(_MemorySource(bytes), sink,
+                page: 0, imageBytes: imgs.first.bytes,
+                rect: const PdfRect(x: 100, y: 100, width: 150, height: 150));
+            await _saveAndReport(sink.takeBytes(), 'image_stamped.pdf');
+          })),
+        const SizedBox(height: 12),
+
+        // ── CONTENT ──
+        _SectionLabel('Content'),
+        _OpTile(icon: Icons.attach_file, title: 'Embed file',
+          subtitle: 'Attach a text file to the PDF', loading: _loading,
+          onRun: () => _run('Embed', () async {
+            final sink = _MemorySink();
+            await _pdf.embedFile(_MemorySource(bytes), sink,
+                name: 'readme.txt', fileData: Uint8List.fromList('Hello from pdf_manipulator!'.codeUnits));
+            await _saveAndReport(sink.takeBytes(), 'with_attachment.pdf');
+          })),
+        _OpTile(icon: Icons.format_paint, title: 'Erase region on page 1',
+          subtitle: 'White-out a rectangle area', loading: _loading,
+          onRun: () => _run('Erase', () async {
+            final sink = _MemorySink();
+            await _pdf.eraseRegions(_MemorySource(bytes), sink,
+                page: 0, regions: [const PdfRect(x: 50, y: 700, width: 200, height: 30)]);
+            await _saveAndReport(sink.takeBytes(), 'erased.pdf');
+          })),
+        const SizedBox(height: 12),
+
+        // ── SIGN ──
+        _SectionLabel('Digital Signing'),
+        _OpTile(icon: Icons.verified_user_outlined, title: 'Sign PDF (PEM)',
+          subtitle: 'Sign with built-in test certificate', loading: _loading,
+          onRun: () => _run('Sign', () async {
+            final sink = _MemorySink();
+            await _pdf.sign(_MemorySource(bytes), sink,
+                credentials: const PdfSigningCredentials.pem(
+                  _testCertPem, _testKeyPem));
+            await _saveAndReport(sink.takeBytes(), 'signed.pdf');
+          })),
+        const SizedBox(height: 12),
+
+        // ── SIGNATURES ──
+        _SectionLabel('Signatures'),
+        _OpTile(icon: Icons.draw, title: 'Get signatures',
+          subtitle: 'List existing digital signatures', loading: _loading,
+          onRun: () => _run('Signatures', () async {
+            final sigs = await _pdf.getSignatures(_MemorySource(bytes));
+            setState(() => _status = '${sigs.length} signature(s) found');
+          })),
+        _OpTile(icon: Icons.verified_user, title: 'Verify signatures',
+          subtitle: 'Check validity of all signatures', loading: _loading,
+          onRun: () => _run('Verify', () async {
+            final valid = await _pdf.verifySignatures(_MemorySource(bytes));
+            setState(() => _status = valid ? 'Signatures valid ✓' : 'Signatures invalid or none ✗');
+          })),
+        const SizedBox(height: 12),
+
+        // ── VALIDATION ──
+        _SectionLabel('Validation'),
+        _OpTile(icon: Icons.verified, title: 'Validate PDF/A',
+          subtitle: 'Check PDF/A-2b compliance', loading: _loading,
+          onRun: () => _run('PDF/A', () async {
+            final r = await _pdf.validatePdfA(_MemorySource(bytes));
+            setState(() => _status = 'PDF/A: ${r.compliant ? "Compliant ✓" : "Not compliant"} '
+                '(${r.errors} errors, ${r.warnings} warnings)');
+          })),
+        _OpTile(icon: Icons.accessibility, title: 'Validate PDF/UA',
+          subtitle: 'Check accessibility compliance', loading: _loading,
+          onRun: () => _run('PDF/UA', () async {
+            final r = await _pdf.validatePdfUa(_MemorySource(bytes));
+            setState(() => _status = 'PDF/UA: ${r ? "Accessible ✓" : "Not accessible ✗"}');
+          })),
+        const SizedBox(height: 12),
+
+        // ── CLASSIFICATION ──
+        _SectionLabel('Classification'),
+        _OpTile(icon: Icons.category, title: 'Classify page 1',
+          subtitle: 'Auto-detect page type', loading: _loading,
+          onRun: () => _run('Classify page', () async {
+            final r = await _pdf.classifyPage(_MemorySource(bytes), 0);
+            setState(() => _status = 'Page 1: ${r.type}');
+          })),
+        _OpTile(icon: Icons.analytics, title: 'Classify document',
+          subtitle: 'Auto-detect document type', loading: _loading,
+          onRun: () => _run('Classify doc', () async {
+            final r = await _pdf.classifyDocument(_MemorySource(bytes));
+            setState(() => _status = 'Document: ${r.type}');
+          })),
+        const SizedBox(height: 12),
+
+        // ── BOOKMARKS ──
+        _SectionLabel('Bookmarks'),
+        _OpTile(icon: Icons.bookmark, title: 'Plan split by bookmarks',
+          subtitle: 'Preview how the PDF would split', loading: _loading,
+          onRun: () => _run('Plan split', () async {
+            try {
+              final splits = await _pdf.planSplitByBookmarks(_MemorySource(bytes));
+              setState(() => _status = '${splits.length} segments: ${splits.map((s) => s.title).join(', ')}');
+            } catch (e) {
+              setState(() => _status = 'No bookmarks found');
+            }
+          })),
+        _OpTile(icon: Icons.call_split, title: 'Split by bookmarks',
+          subtitle: 'Split PDF at bookmark boundaries', loading: _loading,
+          onRun: () => _run('Split bookmarks', () async {
+            try {
+              final sinks = <_MemorySink>[];
+              await _pdf.splitByBookmarks(_MemorySource(bytes), (i) {
+                final s = _MemorySink();
+                sinks.add(s);
+                return s;
+              });
+              final chunks = sinks.map((s) => s.takeBytes()).toList();
+              setState(() => _status = '${chunks.length} parts: ${chunks.map((c) => fmtSize(c.length)).join(', ')}');
+            } catch (e) {
+              setState(() => _status = 'No bookmarks found');
+            }
+          })),
+        const SizedBox(height: 12),
+
+        // ── CONVERSION ──
+        _SectionLabel('Conversion'),
+        _OpTile(icon: Icons.description, title: 'Convert to DOCX',
+          subtitle: 'PDF → Word document', loading: _loading,
+          onRun: () => _run('To DOCX', () async {
+            final sink = _MemorySink();
+            await _pdf.convertTo(_MemorySource(bytes), sink, format: PdfDocumentFormat.docx);
+            await _saveAndReport(sink.takeBytes(), 'converted.docx');
+          })),
+        _OpTile(icon: Icons.picture_as_pdf, title: 'DOCX → PDF',
+          subtitle: 'Convert a DOCX back to PDF', loading: _loading,
+          onRun: () => _run('DOCX→PDF', () async {
+            // First convert to DOCX, then back to PDF
+            final docxSink = _MemorySink();
+            await _pdf.convertTo(_MemorySource(bytes), docxSink, format: PdfDocumentFormat.docx);
+            final pdfSink = _MemorySink();
+            try {
+              await _pdf.convertToPdf(_MemorySource(docxSink.takeBytes()), pdfSink, format: PdfDocumentFormat.docx);
+              await _saveAndReport(pdfSink.takeBytes(), 'from_docx.pdf');
+            } catch (e) {
+              setState(() => _status = 'convertToPdf: $e');
+            }
+          })),
+        const SizedBox(height: 12),
+
+        // ── RENDERING ──
+        _SectionLabel('Rendering'),
+        _OpTile(icon: Icons.image, title: 'Render page 1',
+          subtitle: 'Rasterize first page to image', loading: _loading,
+          onRun: () => _run('Render', () async {
+            int count = 0;
+            await for (final page in _pdf.render(_MemorySource(bytes),
+                pages: const PdfPages.single(0))) {
+              count++;
+              setState(() => _status = 'Rendered: ${page.width}×${page.height} (${fmtSize(page.data.length)})');
+            }
+            if (count == 0) setState(() => _status = 'No pages rendered');
+          })),
+        _OpTile(icon: Icons.photo_library, title: 'Extract images',
+          subtitle: 'Extract embedded images from page 1', loading: _loading,
+          onRun: () => _run('Extract images', () async {
+            int count = 0;
+            await for (final img in _pdf.extractImages(_MemorySource(bytes),
+                pages: const PdfPages.single(0))) {
+              count++;
+              log('Image: ${img.width}×${img.height}');
+            }
+            setState(() => _status = '$count image(s) extracted from page 1');
           })),
 
         const SizedBox(height: 40),
@@ -1118,6 +1293,25 @@ class _EditorTabState extends State<_EditorTab> {
                           return sink.takeBytes();
                         })),
 
+                      _SectionLabel('Redaction'),
+                      _OpTile(icon: Icons.remove_red_eye_outlined, title: 'Add redaction + apply', loading: _loading,
+                        subtitle: 'Redact a region on page 1',
+                        onRun: () => _runEditor('Redact', (e) async {
+                          await e.addRedaction(0, const PdfRect(x: 50, y: 700, width: 200, height: 30));
+                          await e.applyRedactions();
+                          final sink = _MemorySink();
+                          await e.save(sink);
+                          return sink.takeBytes();
+                        })),
+                      _OpTile(icon: Icons.cleaning_services, title: 'Scrub metadata', loading: _loading,
+                        subtitle: 'Remove document metadata',
+                        onRun: () => _runEditor('Scrub metadata', (e) async {
+                          await e.scrubMetadata();
+                          final sink = _MemorySink();
+                          await e.save(sink);
+                          return sink.takeBytes();
+                        })),
+
                       _SectionLabel('Security'),
                       _OpTile(icon: Icons.lock, title: 'Save encrypted (pw: test123)', loading: _loading,
                         onRun: () => _runEditor('Encrypt', (e) async {
@@ -1258,3 +1452,55 @@ class PickedFile {
   final int size;
   const PickedFile({required this.name, required this.bytes, required this.size});
 }
+
+const _testCertPem = '''
+-----BEGIN CERTIFICATE-----
+MIIDSTCCAjGgAwIBAgIUexfMwJDl5Rlv9CCPzlG2ZMWIrigwDQYJKoZIhvcNAQEL
+BQAwNDEWMBQGA1UEAwwNcGRmb3hpZGUtdGVzdDENMAsGA1UECgwEVGVzdDELMAkG
+A1UEBhMCVVMwHhcNMjYwNDI0MDg1NDA1WhcNMzYwNDIxMDg1NDA1WjA0MRYwFAYD
+VQQDDA1wZGZveGlkZS10ZXN0MQ0wCwYDVQQKDARUZXN0MQswCQYDVQQGEwJVUzCC
+ASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAMvG5TAigvrKPPkWY4CAoye5
+SXu32oTJZkzXZWMWETPosyhUxzu1UAezQpgosBV3oH1tTq7BjWEol1dI1eYplXWF
+4Rpry3meJIGkiAbBLTn64UbP886sxQvplpAYcGLeWbT6LTdCvI1BOk55w9eC1RjF
+Vx/ib/YYsgHyBFXIWSpz3d+eZOFnS5PwdkUaj0zk/KTHIFIXE7GoeaAGtDkKLmfP
+ZOh0HMXTRslPF8n/ls42OGPiB9nB5f6Gd4mptU6kLxmh8KTsfSTWxiqmisX2u5kO
+HL4t+7Ld9Y5vJAHfAN6QMWhmI3ESzZPp9i6+MuLGOhjmnGV2Si0i/uaS6vvURPsC
+AwEAAaNTMFEwHQYDVR0OBBYEFGGx/fXllkuIQcEuZQPTJV7qJ43dMB8GA1UdIwQY
+MBaAFGGx/fXllkuIQcEuZQPTJV7qJ43dMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZI
+hvcNAQELBQADggEBAHavjpwAV1Dq3XBEMz/+X9bGfZ8i5zfMjeywhhUUAnGSzl24
+c3tKigiknq45lJ2ITZDxuLXqdG8oU549hnrGw3Ja0RdKvHSBCvOTBs0APnNX07V4
+aoq9gdNQnXKynVlOeFiccvtYeu9o9OGFTttfQbpB0Dpe568YH7NhV3DxEdtsKoK+
+rTUImAGg+mebrEe6ts9FV/lEwnMOJnCdvH9c215yuIWK+fCn3qcPmzWWv08oEr4w
+8Xy/7D8D6MtVlWFXT3YgogusJECJUXioAai4XUI3bAoNwSTw4vwGnnA9+82Nv5qU
+2YWiHsI5E2QSTEFR4Njsmjjrj0FkQtyKdDBOQKs=
+-----END CERTIFICATE-----''';
+
+const _testKeyPem = '''
+-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDLxuUwIoL6yjz5
+FmOAgKMnuUl7t9qEyWZM12VjFhEz6LMoVMc7tVAHs0KYKLAVd6B9bU6uwY1hKJdX
+SNXmKZV1heEaa8t5niSBpIgGwS05+uFGz/POrMUL6ZaQGHBi3lm0+i03QryNQTpO
+ecPXgtUYxVcf4m/2GLIB8gRVyFkqc93fnmThZ0uT8HZFGo9M5PykxyBSFxOxqHmg
+BrQ5Ci5nz2TodBzF00bJTxfJ/5bONjhj4gfZweX+hneJqbVOpC8ZofCk7H0k1sYq
+porF9ruZDhy+Lfuy3fWObyQB3wDekDFoZiNxEs2T6fYuvjLixjoY5pxldkotIv7m
+kur71ET7AgMBAAECggEABgy78Hzlzz+X0Hv7V5ekwGDThKpwVgbgqaFaGjdP1W8F
+ep9httfALipX7MqFx8K1xLjXtX/Q4bSMdwPrjcS9nNqXqerPWfykRXu2qh9WvLpC
+W+bVQdUxQxRGlbU+s5YPAGd5ANios7eJsptngWDEpifzA+L7bfP3vO+2yeaDzIB3
+JQ+wYST0SWm3x3FGM7SCwA9wpNBA38igTJmlppdZIoifzTsb/Q34NmWUEqijVTB8
+DbofDAVW2c9qW/78VABLvDGSOcQUqclDPInBvVjQ8nzv1BaagkyXeKIwRSR3t6Py
+WVJge9fEirgv8nnqKbpLqfPrYTJPit3revUHeheHgQKBgQD9yDujq4Ty3VQq3ajd
+/GoV0NCaABaCeKfmIiiFo7NJRpCS8lrxMvDRfnsl6fCBFPfK8YU4HUxh6s0Rmxx6
+UvDlD/7w3DFeUj/h+2/N3Nj+rYCFTJNens7lvvZS2ftt56d0DBk1JLTxQh+N/OX5
+t82ZMRS/R4f/ibuWFvyJAAGFQQKBgQDNjsodPy6aXVCR82NxEJ3XLuZWCwJoFC7s
+XMMWpjmXCLduBxVIJdCd21L74zX892o1uBLwsuQZZPVUd0zCmCXhonxkhpit3I4S
+qAs86zxmZE9QsoBDk6ECDZ6t5OiBMA6AwdMH4e8GOkZDLcizfc2CINipb8+U0qqC
+tBCwmvvPOwKBgCM2FfhGgwLDbLsp2BU8wWdXeqnzWywtG3aVxLOOHAENtl99Gtse
+a0VV3DZNeB4gz6Sr0AUSI5fuYReRQulB+sR9bKz0kDD7DnwHS+LvQnhLkGpuToAx
+XpmH3ltufTEplBVI3HKALk7PEtu7fBkixHb91VgYz6jH7mwLsmw7wPpBAoGAEvNp
+Gs0qZLzZorsHnfLkOmRug9w7+pBxywS6T6o/gPciwhgRFDe4RfVkbyiBX7MHrbAs
+vtgfQ2AVZhYhk4cnZufuA+6MwOqmhn3Lm3Asf1wcG9p5DMHdhCzxRiLmdJKTo7c6
+120y9iYFOEhOSo38llSk5OoT/yp04dvr9fwz3uUCgYEA59f1MW3cQ/p1+w/k44e+
+s16ZGDxNc06rhp4oTpM+Ey5RtGgkWh0R10EbeXQEEpmfy4tf3OoKb9UCgSLYvGxP
+jIPhvqZJe3pGRdwJG55rJLtS466z5MKG/WKmqFecLejDcVg9qblh9AW5PSvyzcQW
+gT7yGRIIu9uNETw/d7mV+7Y=
+-----END PRIVATE KEY-----''';
