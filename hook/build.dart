@@ -118,8 +118,12 @@ Future<void> _compileFromSource(
     }
   }
 
-  // macOS: strip Xcode injections from PATH that break host builds
-  if (Platform.isMacOS && codeConfig.targetOS != OS.macOS) {
+  // macOS: strip Xcode Developer injections from PATH unconditionally.
+  // Flutter's build system injects Xcode paths that break Cargo's
+  // build-script host compilation (proc-macro2, quote, libc).
+  // Same fix as native_toolchain_rust:
+  // https://github.com/irondash/native_toolchain_rust/issues/17
+  if (Platform.isMacOS) {
     env['PATH'] = Platform.environment['PATH']!
         .split(':')
         .where((e) => !e.contains('Contents/Developer/'))
