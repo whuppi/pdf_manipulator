@@ -19,6 +19,7 @@ import 'builder.dart';
 import 'error.dart';
 import 'lifecycle.dart';
 import 'coverage_check.dart';
+import 'stress.dart';
 
 void main() {
   late WebBridge bridge;
@@ -52,5 +53,6 @@ void main() {
     coordinatorUrl: coordinatorBlobUrl,
     wasmWorkerUrl: wasmWorkerUrl,
   ));
+  registerStressTests(() => bridge);
   registerCoverageCheck();
 }

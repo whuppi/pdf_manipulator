@@ -18,6 +18,7 @@ import 'builder.dart';
 import 'error.dart';
 import 'lifecycle.dart';
 import 'coverage_check.dart';
+import 'stress.dart';
 
 void main() {
   late NativeBridge bridge;
@@ -35,5 +36,6 @@ void main() {
   registerBuilderTests(() => bridge);
   registerErrorTests(() => bridge);
   registerLifecycleTests(() => NativeBridge());
+  registerStressTests(() => bridge);
   registerCoverageCheck();
 }
