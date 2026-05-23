@@ -26,6 +26,9 @@ enum PdfExtractionFormat {
   plainText,
 }
 
+/// Office document format for conversion.
+enum PdfDocumentFormat { docx, pptx, xlsx }
+
 /// Standard stamp annotation type.
 enum PdfStampType {
   approved,

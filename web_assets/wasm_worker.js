@@ -10,7 +10,7 @@
 // Output streaming (all modes): writeFn posts chunks to coordinator.
 // Per-item streaming (all modes): postMessage({type:'item'}) per image/page.
 
-import init, { WasmPdf, WasmDocumentBuilder, WasmPdfDocument, WasmFluentPageBuilder, signPdfWithPkcs12, signPdfWithPem } from './pdf_oxide.js';
+import init, { WasmPdf, WasmDocumentBuilder, WasmPdfDocument, WasmFluentPageBuilder, signPdfWithPkcs12, signPdfWithPem, planSplitByBookmarks } from './pdf_oxide.js';
 
 let initialized = false;
 let currentIoMode = 'opfs';
@@ -300,6 +300,47 @@ async function dispatch(op, args, readerCtx, writeFn) {
       return { valid: valid || false };
     }
 
+    case 'planSplitByBookmarks': {
+      const pdfBytes = readAllBytes(readerCtx);
+      const result = planSplitByBookmarks(pdfBytes);
+      return { splits: result };
+    }
+
+    case 'splitByBookmarks': {
+      // Handled at Dart level using planSplitByBookmarks + extractPages
+      return {};
+    }
+
+    case 'classifyPage': {
+      const doc = openDoc(readerCtx, args.password);
+      const result = doc.classifyPage(args.page);
+      doc.free();
+      return { type: result || 'unknown', confidence: 1.0 };
+    }
+
+    case 'classifyDocument': {
+      const doc = openDoc(readerCtx, args.password);
+      const result = doc.classifyDocument();
+      doc.free();
+      return { type: result || 'unknown', confidence: 1.0, pageCount: 0 };
+    }
+
+    case 'convertTo': {
+      const doc = openEditor(readerCtx, args.password);
+      doc.convertToOffice(args.format);
+      doc.saveToWriter(writeFn, true, true, false);
+      doc.free();
+      return {};
+    }
+
+    case 'convertToPdf': {
+      // office → PDF: the source is the office doc bytes
+      const bytes = readAllBytes(readerCtx);
+      const result = convertOfficeToPdf(bytes, args.format);
+      writeFn(result);
+      return {};
+    }
+
     case 'sign': {
       const pdfBytes = readAllBytes(readerCtx);
       let signed;
@@ -503,6 +544,10 @@ function applyEditOp(doc, op, args) {
     case 'setFormFieldValue': doc.setFormFieldValue(args.fieldName, args.value); break;
     case 'unembedStandardFonts': doc.unembedStandardFonts(); break;
     case 'resizeImage': doc.resizeImage(args.page, args.imageName, args.width, args.height); break;
+    case 'addRedaction': doc.addRedaction(args.page, args.x, args.y, args.w, args.h, args.overlayText || null); break;
+    case 'redactionCount': return { count: doc.redactionCount(args.page) };
+    case 'applyRedactions': doc.applyRedactionsDestructive(); break;
+    case 'scrubMetadata': doc.scrubMetadata(); break;
     default: throw new Error(`Unknown edit op: ${op}`);
   }
 }

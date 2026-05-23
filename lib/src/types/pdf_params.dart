@@ -168,3 +168,34 @@ class PdfValidationResult {
     required this.warnings,
   });
 }
+
+/// A bookmark-based split plan entry.
+class PdfBookmarkSplit {
+  final String title;
+  final int startPage;
+  final int endPage;
+  const PdfBookmarkSplit({
+    required this.title,
+    required this.startPage,
+    required this.endPage,
+  });
+}
+
+/// Page classification result.
+class PdfPageClassification {
+  final String type;
+  final double confidence;
+  const PdfPageClassification({required this.type, required this.confidence});
+}
+
+/// Document classification result.
+class PdfDocumentClassification {
+  final String type;
+  final double confidence;
+  final int pageCount;
+  const PdfDocumentClassification({
+    required this.type,
+    required this.confidence,
+    required this.pageCount,
+  });
+}

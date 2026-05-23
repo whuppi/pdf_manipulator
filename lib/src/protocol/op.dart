@@ -56,6 +56,18 @@ enum EngineOp {
   render('render'),
   extractImages('extractImages'),
 
+  // ── Bookmarks (source → read → result) ──
+  planSplitByBookmarks('planSplitByBookmarks'),
+  splitByBookmarks('splitByBookmarks'),
+
+  // ── Classification (source → read → result) ──
+  classifyPage('classifyPage'),
+  classifyDocument('classifyDocument'),
+
+  // ── Conversion (source → sink) ──
+  convertTo('convertTo'),
+  convertToPdf('convertToPdf'),
+
   // ── Signatures / Validation (source → read → result) ──
   getSignatures('getSignatures'),
   verifySignatures('verifySignatures'),

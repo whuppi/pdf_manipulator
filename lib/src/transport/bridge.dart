@@ -117,6 +117,24 @@ abstract class PdfBridge {
   Future<bool> validatePdfUa(PdfSource source,
       {int level = 1, String? password});
 
+  // ── Bookmarks ──
+  Future<List<PdfBookmarkSplit>> planSplitByBookmarks(PdfSource source,
+      {String? password});
+  Future<void> splitByBookmarks(PdfSource source,
+      PdfSink Function(int index) sinkFactory, {String? password});
+
+  // ── Classification ──
+  Future<PdfPageClassification> classifyPage(PdfSource source,
+      int page, {String? password});
+  Future<PdfDocumentClassification> classifyDocument(PdfSource source,
+      {String? password});
+
+  // ── Conversion ──
+  Future<void> convertTo(PdfSource source, PdfSink output,
+      {required PdfDocumentFormat format, String? password});
+  Future<void> convertToPdf(PdfSource document, PdfSink output,
+      {required PdfDocumentFormat format});
+
   // ── Editor ──
   Future<BridgeEditorHandle> openEditor(PdfSource source, {String? password});
 
@@ -183,6 +201,12 @@ abstract class BridgeEditorHandle {
   Future<void> resizeImage(int page, String imageName, {
     required double width, required double height,
   });
+
+  // ── Redaction ──
+  Future<void> addRedaction(int page, PdfRect region, {String? overlayText});
+  Future<int> redactionCount(int page);
+  Future<void> applyRedactions();
+  Future<void> scrubMetadata();
 
   // ── Save ──
   Future<void> save(PdfSink output, {PdfSaveOptions options = const PdfSaveOptions()});

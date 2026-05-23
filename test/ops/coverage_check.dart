@@ -4,7 +4,7 @@
 
 import 'package:test/test.dart';
 
-const _bridgeMethodCount = 33;
+const _bridgeMethodCount = 39;
 
 const _testedMethods = <String>{
   'open',                                              // open.dart
@@ -18,6 +18,9 @@ const _testedMethods = <String>{
   'render', 'extractImages',                            // stream.dart
   'watermark', 'encrypt', 'decrypt', 'sign',            // security.dart
   'getSignatures', 'verifySignatures',                  // security.dart
+  'planSplitByBookmarks', 'splitByBookmarks',           // structural.dart
+  'classifyPage', 'classifyDocument',                   // content.dart
+  'convertTo', 'convertToPdf',                          // content.dart
   'openEditor',                                         // editor.dart
   'createBuilder', 'imagesToPdf',                       // builder.dart
   'dispose',                                            // lifecycle.dart

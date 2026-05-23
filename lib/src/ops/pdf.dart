@@ -268,6 +268,48 @@ class Pdf {
     return _bridge.validatePdfUa(source, level: level, password: password);
   }
 
+  // ── Bookmarks ──
+
+  Future<List<PdfBookmarkSplit>> planSplitByBookmarks(PdfSource source,
+      {String? password}) {
+    _check();
+    return _bridge.planSplitByBookmarks(source, password: password);
+  }
+
+  Future<void> splitByBookmarks(PdfSource source,
+      PdfSink Function(int index) sinkFactory, {String? password}) {
+    _check();
+    return _bridge.splitByBookmarks(source, sinkFactory, password: password);
+  }
+
+  // ── Classification ──
+
+  Future<PdfPageClassification> classifyPage(PdfSource source, int page,
+      {String? password}) {
+    _check();
+    return _bridge.classifyPage(source, page, password: password);
+  }
+
+  Future<PdfDocumentClassification> classifyDocument(PdfSource source,
+      {String? password}) {
+    _check();
+    return _bridge.classifyDocument(source, password: password);
+  }
+
+  // ── Conversion ──
+
+  Future<void> convertTo(PdfSource source, PdfSink output,
+      {required PdfDocumentFormat format, String? password}) {
+    _check();
+    return _bridge.convertTo(source, output, format: format, password: password);
+  }
+
+  Future<void> convertToPdf(PdfSource document, PdfSink output,
+      {required PdfDocumentFormat format}) {
+    _check();
+    return _bridge.convertToPdf(document, output, format: format);
+  }
+
   // ── Lifecycle ──
 
   Future<void> dispose() async {

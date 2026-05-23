@@ -31,8 +31,8 @@ void main() {
       }
     });
 
-    test('has all 43 expected operations', () {
-      expect(EngineOp.values.length, 43);
+    test('has all 49 expected operations', () {
+      expect(EngineOp.values.length, 49);
     });
 
     test('contains every structural op', () {

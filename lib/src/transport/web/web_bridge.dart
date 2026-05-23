@@ -652,6 +652,54 @@ class WebBridge implements PdfBridge {
     return r['accessible'] as bool? ?? false;
   }
 
+  @override
+  Future<List<PdfBookmarkSplit>> planSplitByBookmarks(PdfSource source, {String? password}) async {
+    final r = await _submit(planSplitByBookmarksOp(password: password), source: source);
+    final list = r['splits'] as List? ?? [];
+    return list.map((e) => PdfBookmarkSplit(
+      title: e['title'] as String? ?? '',
+      startPage: e['startPage'] as int? ?? 0,
+      endPage: e['endPage'] as int? ?? 0,
+    )).toList();
+  }
+
+  @override
+  Future<void> splitByBookmarks(PdfSource source, PdfSink Function(int) sinkFactory, {String? password}) async {
+    final splits = await planSplitByBookmarks(source, password: password);
+    for (var i = 0; i < splits.length; i++) {
+      final split = splits[i];
+      final pages = List.generate(split.endPage - split.startPage, (j) => split.startPage + j);
+      final sink = sinkFactory(i);
+      await extractPages(source, sink, pages: pages);
+    }
+  }
+
+  @override
+  Future<PdfPageClassification> classifyPage(PdfSource source, int page, {String? password}) async {
+    final r = await _submit(classifyPageOp(page: page, password: password), source: source);
+    return PdfPageClassification(type: r['type'] as String? ?? 'unknown', confidence: (r['confidence'] as num?)?.toDouble() ?? 0);
+  }
+
+  @override
+  Future<PdfDocumentClassification> classifyDocument(PdfSource source, {String? password}) async {
+    final r = await _submit(classifyDocumentOp(password: password), source: source);
+    return PdfDocumentClassification(
+      type: r['type'] as String? ?? 'unknown',
+      confidence: (r['confidence'] as num?)?.toDouble() ?? 0,
+      pageCount: r['pageCount'] as int? ?? 0,
+    );
+  }
+
+  @override
+  Future<void> convertTo(PdfSource source, PdfSink output,
+      {required PdfDocumentFormat format, String? password}) =>
+    _submitEdit(convertToOp(format: format, password: password), source, output);
+
+  @override
+  Future<void> convertToPdf(PdfSource document, PdfSink output,
+      {required PdfDocumentFormat format}) =>
+    _submitEdit(convertToPdfOp(format: format), document, output);
+
   // ── Editor + Builder ──
 
   @override
@@ -868,6 +916,20 @@ class _WebEditorHandle implements BridgeEditorHandle {
       _op(editorMutateOp(handleId: _hid, editOp: 'resizeImage', extra: {
         'page': page, 'imageName': imageName, 'width': width, 'height': height,
       }));
+
+  @override Future<void> addRedaction(int page, PdfRect region, {String? overlayText}) =>
+      _op(editorMutateOp(handleId: _hid, editOp: 'addRedaction', extra: {
+        'page': page, 'x': region.x, 'y': region.y, 'w': region.width, 'h': region.height,
+        if (overlayText != null) 'overlayText': overlayText,
+      }));
+  @override Future<int> redactionCount(int page) async {
+    final r = await _b._submit(editorMutateOp(handleId: _hid, editOp: 'redactionCount', extra: {'page': page}));
+    return r['count'] as int? ?? 0;
+  }
+  @override Future<void> applyRedactions() =>
+      _op(editorMutateOp(handleId: _hid, editOp: 'applyRedactions'));
+  @override Future<void> scrubMetadata() =>
+      _op(editorMutateOp(handleId: _hid, editOp: 'scrubMetadata'));
 
   @override Future<void> save(PdfSink output, {PdfSaveOptions options = const PdfSaveOptions()}) async {
     await _b._submit(editorSaveOp(handleId: _hid, options: options), sink: output);

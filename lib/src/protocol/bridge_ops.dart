@@ -204,6 +204,30 @@ EngineRequest validatePdfAOp({int level = 2, String? password}) =>
 EngineRequest validatePdfUaOp({int level = 1, String? password}) =>
     EngineRequest(EngineOp.validatePdfUa, {'level': level, 'password': password});
 
+// ── Bookmarks ──
+
+EngineRequest planSplitByBookmarksOp({String? password}) =>
+    EngineRequest(EngineOp.planSplitByBookmarks, {'password': password});
+
+EngineRequest splitByBookmarksOp({String? password}) =>
+    EngineRequest(EngineOp.splitByBookmarks, {'password': password});
+
+// ── Classification ──
+
+EngineRequest classifyPageOp({required int page, String? password}) =>
+    EngineRequest(EngineOp.classifyPage, {'page': page, 'password': password});
+
+EngineRequest classifyDocumentOp({String? password}) =>
+    EngineRequest(EngineOp.classifyDocument, {'password': password});
+
+// ── Conversion ──
+
+EngineRequest convertToOp({required PdfDocumentFormat format, String? password}) =>
+    EngineRequest(EngineOp.convertTo, {'format': format.name, 'password': password});
+
+EngineRequest convertToPdfOp({required PdfDocumentFormat format}) =>
+    EngineRequest(EngineOp.convertToPdf, {'format': format.name});
+
 // ── Editor handle ops ──
 
 EngineRequest editorOpenOp({String? password}) =>

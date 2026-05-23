@@ -163,6 +163,30 @@ class PdfEditor {
   }
 
 
+  // ── Redaction ──
+
+  Future<void> addRedaction(int page, PdfRect region, {String? overlayText}) {
+    _check();
+    return _handle.addRedaction(page, region, overlayText: overlayText);
+  }
+
+  Future<int> redactionCount(int page) {
+    _check();
+    return _handle.redactionCount(page);
+  }
+
+  Future<void> applyRedactions() {
+    _check();
+    return _handle.applyRedactions();
+  }
+
+  Future<void> scrubMetadata() {
+    _check();
+    return _handle.scrubMetadata();
+  }
+
+  // ── Save ──
+
   Future<void> save(PdfSink output, {
     PdfSaveOptions options = const PdfSaveOptions(),
   }) {

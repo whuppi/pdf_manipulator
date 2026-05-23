@@ -828,6 +828,92 @@ class NativeBridge implements PdfBridge {
   }
 
   @override
+  Future<List<PdfBookmarkSplit>> planSplitByBookmarks(PdfSource source, {String? password}) async {
+    _checkDisposed();
+    final result = await _submitRead(EngineOp.planSplitByBookmarks.wire, source, password: password);
+    return _decodeBookmarkSplits(result);
+  }
+
+  @override
+  Future<void> splitByBookmarks(PdfSource source, PdfSink Function(int) sinkFactory, {String? password}) async {
+    _checkDisposed();
+    // splitByBookmarks: plan first, then extract pages for each split
+    final splits = await planSplitByBookmarks(source, password: password);
+    for (var i = 0; i < splits.length; i++) {
+      final split = splits[i];
+      final pages = List.generate(split.endPage - split.startPage, (j) => split.startPage + j);
+      final sink = sinkFactory(i);
+      await extractPages(source, sink, pages: pages);
+    }
+  }
+
+  @override
+  Future<PdfPageClassification> classifyPage(PdfSource source, int page, {String? password}) async {
+    _checkDisposed();
+    final params = Uint8List(4);
+    ByteData.sublistView(params).setInt32(0, page, Endian.little);
+    final result = await _submitRead(EngineOp.classifyPage.wire, source, password: password, params: params);
+    return _decodeClassifyPage(result);
+  }
+
+  @override
+  Future<PdfDocumentClassification> classifyDocument(PdfSource source, {String? password}) async {
+    _checkDisposed();
+    final result = await _submitRead(EngineOp.classifyDocument.wire, source, password: password);
+    return _decodeClassifyDocument(result);
+  }
+
+  @override
+  Future<void> convertTo(PdfSource source, PdfSink output, {required PdfDocumentFormat format, String? password}) async {
+    _checkDisposed();
+    final formatBytes = utf8.encode(format.name);
+    final params = Uint8List(4 + formatBytes.length);
+    ByteData.sublistView(params).setInt32(0, formatBytes.length, Endian.little);
+    params.setAll(4, formatBytes);
+    await _submitEdit(EngineOp.convertTo.wire, source, output, params: params);
+  }
+
+  @override
+  Future<void> convertToPdf(PdfSource document, PdfSink output, {required PdfDocumentFormat format}) async {
+    _checkDisposed();
+    final formatBytes = utf8.encode(format.name);
+    final params = Uint8List(4 + formatBytes.length);
+    ByteData.sublistView(params).setInt32(0, formatBytes.length, Endian.little);
+    params.setAll(4, formatBytes);
+    await _submitEdit(EngineOp.convertToPdf.wire, document, output, params: params);
+  }
+
+  static List<PdfBookmarkSplit> _decodeBookmarkSplits(Uint8List bytes) {
+    if (bytes.isEmpty || bytes[0] != 1) return [];
+    final bd = ByteData.sublistView(bytes);
+    final count = bd.getInt32(1, Endian.little);
+    final splits = <PdfBookmarkSplit>[];
+    var off = 5;
+    for (var i = 0; i < count; i++) {
+      final titleLen = bd.getInt32(off, Endian.little); off += 4;
+      final title = utf8.decode(bytes.sublist(off, off + titleLen)); off += titleLen;
+      final startPage = bd.getInt32(off, Endian.little); off += 4;
+      final endPage = bd.getInt32(off, Endian.little); off += 4;
+      splits.add(PdfBookmarkSplit(title: title, startPage: startPage, endPage: endPage));
+    }
+    return splits;
+  }
+
+  PdfPageClassification _decodeClassifyPage(Uint8List bytes) {
+    if (bytes.isEmpty || bytes[0] != 1) return const PdfPageClassification(type: 'unknown', confidence: 0);
+    final text = _decodeTextResult(bytes);
+    return PdfPageClassification(type: text, confidence: 1.0);
+  }
+
+  PdfDocumentClassification _decodeClassifyDocument(Uint8List bytes) {
+    if (bytes.isEmpty || bytes[0] != 1) {
+      return const PdfDocumentClassification(type: 'unknown', confidence: 0, pageCount: 0);
+    }
+    final text = _decodeTextResult(bytes);
+    return PdfDocumentClassification(type: text, confidence: 1.0, pageCount: 0);
+  }
+
+  @override
   Future<BridgeEditorHandle> openEditor(PdfSource source, {String? password}) async {
     _checkDisposed();
     final server = SourceServer(source);
@@ -1025,6 +1111,39 @@ class _NativeEditorHandle implements BridgeEditorHandle {
   @override Future<void> resizeImage(int page, String imageName, {
     required double width, required double height,
   }) => _mutate(28, params: _encodeResizeImage(page, imageName, width, height));
+
+  @override
+  Future<void> addRedaction(int page, PdfRect region, {String? overlayText}) {
+    final textBytes = overlayText != null ? utf8.encode(overlayText) : Uint8List(0);
+    final params = Uint8List(4 + 8 * 4 + 4 + textBytes.length);
+    final bd = ByteData.sublistView(params);
+    var off = 0;
+    bd.setInt32(off, page, Endian.little); off += 4;
+    bd.setFloat64(off, region.x, Endian.little); off += 8;
+    bd.setFloat64(off, region.y, Endian.little); off += 8;
+    bd.setFloat64(off, region.width, Endian.little); off += 8;
+    bd.setFloat64(off, region.height, Endian.little); off += 8;
+    bd.setInt32(off, textBytes.length, Endian.little); off += 4;
+    params.setAll(off, textBytes);
+    return _mutate(30, params: params);
+  }
+
+  @override
+  Future<int> redactionCount(int page) async {
+    final params = Uint8List(4);
+    ByteData.sublistView(params).setInt32(0, page, Endian.little);
+    final result = await _mutate(31, params: params);
+    if (result.length >= 5) {
+      return ByteData.sublistView(result).getInt32(1, Endian.little);
+    }
+    return 0;
+  }
+
+  @override
+  Future<void> applyRedactions() => _mutate(32);
+
+  @override
+  Future<void> scrubMetadata() => _mutate(33);
 
   @override
   Future<void> save(PdfSink output, {PdfSaveOptions options = const PdfSaveOptions()}) async {
