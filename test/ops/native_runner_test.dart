@@ -4,7 +4,7 @@
 @TestOn('!browser')
 library;
 
-import 'package:pdf_manipulator/src/transport/native/native_bridge.dart';
+import 'package:pdf_manipulator/src/transport/native/bridge.dart';
 import 'package:test/test.dart';
 
 import 'open.dart';

@@ -3,7 +3,7 @@
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
-import 'package:pdf_manipulator/src/transport/bridge.dart';
+import 'package:pdf_manipulator/src/transport/pdf_bridge.dart';
 import 'package:test/test.dart';
 
 import '../helpers/fixtures.dart';

@@ -10,8 +10,8 @@ import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_config.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
-import 'package:pdf_manipulator/src/transport/bridge.dart';
-import 'package:pdf_manipulator/src/transport/bridge_factory.dart';
+import 'package:pdf_manipulator/src/transport/pdf_bridge.dart';
+import 'package:pdf_manipulator/src/transport/create.dart';
 import 'package:pdf_manipulator/src/types/pdf_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
@@ -62,7 +62,7 @@ class Pdf {
     return _bridge.split(source, sinkFactory, every: every);
   }
 
-  Future<int> splitBySize(
+  Future<List<int>> splitBySize(
       PdfSource source, PdfSink Function(int index) sinkFactory,
       {required int maxBytes}) {
     _check();

@@ -5,7 +5,7 @@ import 'dart:typed_data';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
-import 'package:pdf_manipulator/src/transport/bridge.dart';
+import 'package:pdf_manipulator/src/transport/pdf_bridge.dart';
 import 'package:test/test.dart';
 
 import '../helpers/fixtures.dart';
@@ -77,13 +77,13 @@ void registerStructuralTests(PdfBridge Function() b) {
     test('splitBySize produces at least 1 chunk', () async {
       final multiPage = await buildThreePagePdf(b);
       final sinks = <TestSink>[];
-      final count = await b().splitBySize(src(multiPage), (i) {
+      final chunkSizes = await b().splitBySize(src(multiPage), (i) {
         final s = TestSink();
         sinks.add(s);
         return s;
       }, maxBytes: 50000);
-      expect(count, greaterThanOrEqualTo(1));
-      expect(sinks.length, count);
+      expect(chunkSizes.length, greaterThanOrEqualTo(1));
+      expect(sinks.length, chunkSizes.length);
     });
 
     test('movePage produces valid output', () async {

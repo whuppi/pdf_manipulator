@@ -9,7 +9,7 @@
 
 import 'dart:ffi' as ffi;
 import 'dart:isolate';
-import 'package:pdf_manipulator/src/transport/native/bridge_bindings.dart' as bridge;
+import 'package:pdf_manipulator/src/transport/native/bindings.dart' as bridge;
 import 'package:pdf_manipulator/src/transport/native/shared_buffer.dart';
 
 void initBridge() {

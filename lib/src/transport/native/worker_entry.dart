@@ -13,7 +13,7 @@ import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
-import 'package:pdf_manipulator/src/transport/native/bridge_bindings.dart' as bridge;
+import 'package:pdf_manipulator/src/transport/native/bindings.dart' as bridge;
 import 'package:pdf_manipulator/src/transport/native/shared_buffer.dart';
 import 'package:pdf_manipulator/src/transport/native/worker_isolate.dart' as helpers;
 

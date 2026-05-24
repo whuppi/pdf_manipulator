@@ -4,7 +4,7 @@
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/pdf_manipulator.dart';
-import 'package:pdf_manipulator/src/transport/bridge.dart';
+import 'package:pdf_manipulator/src/transport/pdf_bridge.dart';
 import 'package:test/test.dart';
 
 import '../helpers/generators.dart';
@@ -15,17 +15,17 @@ void registerStressTests(PdfBridge Function() b) {
     late Uint8List largePdf;
 
     setUpAll(() async {
-      largePdf = await buildLargePdf(b, pageCount: 200);
+      largePdf = await buildLargePdf(b, pageCount: 1000);
     });
 
     // ── Basic operations on 200-page PDF ──
 
-    test('open 200-page PDF', () async {
+    test('open 1000-page PDF', () async {
       final doc = await b().open(src(largePdf));
-      expect(doc.pageCount, 200);
+      expect(doc.pageCount, 1000);
     });
 
-    test('extract text from 200-page PDF', () async {
+    test('extract text from 1000-page PDF', () async {
       final text = await b().extract(src(largePdf), pages: const PdfPages.all());
       expect(text.length, greaterThan(1000));
       expect(text, contains('Lorem ipsum'));
@@ -38,33 +38,36 @@ void registerStressTests(PdfBridge Function() b) {
 
     // ── Split by page count ──
 
-    test('split 200-page PDF every 20 pages', () async {
+    test('split 1000-page PDF every 100 pages', () async {
       final sinks = <TestSink>[];
       await b().split(src(largePdf), (i) {
         final s = TestSink();
         sinks.add(s);
         return s;
-      }, every: 20);
+      }, every: 100);
       expect(sinks.length, 10);
       for (final s in sinks) {
         final bytes = s.takeBytes();
         expect(bytes.length, greaterThan(0));
         final doc = await b().open(src(bytes));
-        expect(doc.pageCount, 20);
+        expect(doc.pageCount, 100);
       }
     });
 
-    // ── splitBySize — the main event ──
+    // ── splitBySize — tested on 100-page subset for speed ──
+    // extractPages is expensive per call; splitBySize probes via extractPages.
+    // 100 pages keeps each test under 30 seconds while still testing the algorithm.
 
     test('splitBySize with generous limit → fewer chunks', () async {
+      final smallPdf = await buildLargePdf(b, pageCount: 100);
       final sinks = <TestSink>[];
-      final count = await b().splitBySize(src(largePdf), (i) {
+      final chunkSizes = await b().splitBySize(src(smallPdf), (i) {
         final s = TestSink();
         sinks.add(s);
         return s;
-      }, maxBytes: largePdf.length ~/ 2);
-      expect(count, greaterThanOrEqualTo(2));
-      expect(sinks.length, count);
+      }, maxBytes: smallPdf.length ~/ 2);
+      expect(chunkSizes.length, greaterThanOrEqualTo(2));
+      expect(sinks.length, chunkSizes.length);
       var totalPages = 0;
       for (final s in sinks) {
         final bytes = s.takeBytes();
@@ -72,36 +75,34 @@ void registerStressTests(PdfBridge Function() b) {
         final doc = await b().open(src(bytes));
         totalPages += doc.pageCount;
       }
-      expect(totalPages, 200);
+      expect(totalPages, 100);
     });
 
     test('splitBySize with tight limit → many chunks', () async {
+      final smallPdf = await buildLargePdf(b, pageCount: 100);
       final sinks = <TestSink>[];
-      final count = await b().splitBySize(src(largePdf), (i) {
+      final chunkSizes = await b().splitBySize(src(smallPdf), (i) {
         final s = TestSink();
         sinks.add(s);
         return s;
-      }, maxBytes: largePdf.length ~/ 10);
-      expect(count, greaterThanOrEqualTo(5));
-      expect(sinks.length, count);
+      }, maxBytes: smallPdf.length ~/ 10);
+      expect(chunkSizes.length, greaterThanOrEqualTo(5));
+      expect(sinks.length, chunkSizes.length);
       for (final s in sinks) {
         expect(s.takeBytes().length, greaterThan(0));
       }
     });
 
     test('splitBySize with limit smaller than single page', () async {
-      // When maxBytes is smaller than any single page can produce,
-      // the engine should still produce at least one page per chunk
-      // (you can't split a page in half).
+      final smallPdf = await buildLargePdf(b, pageCount: 100);
       final sinks = <TestSink>[];
-      final count = await b().splitBySize(src(largePdf), (i) {
+      final chunkSizes = await b().splitBySize(src(smallPdf), (i) {
         final s = TestSink();
         sinks.add(s);
         return s;
-      }, maxBytes: 500); // smaller than any single page
-      // Each chunk has at least 1 page
-      expect(count, greaterThanOrEqualTo(50));
-      expect(sinks.length, count);
+      }, maxBytes: 500);
+      expect(chunkSizes.length, greaterThanOrEqualTo(50));
+      expect(sinks.length, chunkSizes.length);
       for (final s in sinks) {
         final bytes = s.takeBytes();
         expect(bytes.length, greaterThan(0));
@@ -111,21 +112,37 @@ void registerStressTests(PdfBridge Function() b) {
     });
 
     test('splitBySize with limit equal to full PDF → 1 chunk', () async {
+      final smallPdf = await buildLargePdf(b, pageCount: 100);
       final sinks = <TestSink>[];
-      final count = await b().splitBySize(src(largePdf), (i) {
+      final chunkSizes = await b().splitBySize(src(smallPdf), (i) {
         final s = TestSink();
         sinks.add(s);
         return s;
-      }, maxBytes: largePdf.length * 2); // plenty of room
-      expect(count, 1);
+      }, maxBytes: smallPdf.length * 2);
+      expect(chunkSizes.length, 1);
       expect(sinks.length, 1);
       final doc = await b().open(src(sinks.first.takeBytes()));
-      expect(doc.pageCount, 200);
+      expect(doc.pageCount, 100);
+    });
+
+    test('splitBySize returns chunk byte sizes', () async {
+      final smallPdf = await buildLargePdf(b, pageCount: 20);
+      final sinks = <TestSink>[];
+      final chunkSizes = await b().splitBySize(src(smallPdf), (i) {
+        final s = TestSink();
+        sinks.add(s);
+        return s;
+      }, maxBytes: smallPdf.length ~/ 3);
+      expect(chunkSizes.length, greaterThanOrEqualTo(2));
+      for (var i = 0; i < chunkSizes.length; i++) {
+        expect(chunkSizes[i], greaterThan(0));
+        expect(chunkSizes[i], sinks[i].takeBytes().length);
+      }
     });
 
     // ── Structural operations at scale ──
 
-    test('extract first 10 pages from 200-page PDF', () async {
+    test('extract first 10 pages from 1000-page PDF', () async {
       final sink = TestSink();
       await b().extractPages(src(largePdf), sink,
           pages: List.generate(10, (i) => i));
@@ -133,36 +150,36 @@ void registerStressTests(PdfBridge Function() b) {
       expect(doc.pageCount, 10);
     });
 
-    test('delete 190 pages from 200-page PDF', () async {
+    test('delete 990 pages from 1000-page PDF', () async {
       final sink = TestSink();
       await b().deletePages(src(largePdf), sink,
-          pages: List.generate(190, (i) => i));
+          pages: List.generate(990, (i) => i));
       final doc = await b().open(src(sink.takeBytes()));
       expect(doc.pageCount, 10);
     });
 
-    test('merge two 200-page PDFs → 400 pages', () async {
+    test('merge two 1000-page PDFs → 2000 pages', () async {
       final sink = TestSink();
       await b().merge([src(largePdf), src(largePdf)], sink);
       final doc = await b().open(src(sink.takeBytes()));
-      expect(doc.pageCount, 400);
+      expect(doc.pageCount, 2000);
     });
 
     // ── Content operations at scale ──
 
-    test('compress 200-page PDF', () async {
+    test('compress 1000-page PDF', () async {
       final sink = TestSink();
       await b().compress(src(largePdf), sink);
       expect(sink.takeBytes().length, greaterThan(0));
     });
 
-    test('watermark 200 pages', () async {
+    test('watermark 1000 pages', () async {
       final sink = TestSink();
       await b().watermark(src(largePdf), sink, text: 'CONFIDENTIAL');
       expect(sink.takeBytes().length, greaterThan(largePdf.length));
     });
 
-    test('encrypt then decrypt 200-page PDF', () async {
+    test('encrypt then decrypt 1000-page PDF', () async {
       final encSink = TestSink();
       await b().encrypt(src(largePdf), encSink,
           encryption: const PdfEncryptionConfig(
@@ -170,18 +187,18 @@ void registerStressTests(PdfBridge Function() b) {
       final decSink = TestSink();
       await b().decrypt(src(encSink.takeBytes()), decSink, password: 'owner');
       final doc = await b().open(src(decSink.takeBytes()));
-      expect(doc.pageCount, 200);
+      expect(doc.pageCount, 1000);
     });
 
-    test('search across 200-page PDF', () async {
+    test('search across 1000-page PDF', () async {
       final results = await b().search(src(largePdf),
           query: 'Lorem', pages: const PdfPages.all());
-      expect(results.length, greaterThanOrEqualTo(200));
+      expect(results.length, greaterThanOrEqualTo(1000));
     });
 
     // ── Rendering at scale ──
 
-    test('render first page of 200-page PDF', () async {
+    test('render first page of 1000-page PDF', () async {
       int count = 0;
       await for (final page in b().render(src(largePdf),
           pages: const PdfPages.single(0))) {
@@ -202,7 +219,7 @@ void registerStressTests(PdfBridge Function() b) {
 
     // ── Editor at scale ──
 
-    test('editor: watermark first 10 pages of 200-page PDF', () async {
+    test('editor: watermark first 10 pages of 1000-page PDF', () async {
       final editor = await b().openEditor(src(largePdf));
       for (var i = 0; i < 10; i++) {
         await editor.addWatermark(i, 'EDITED');
@@ -211,7 +228,7 @@ void registerStressTests(PdfBridge Function() b) {
       await editor.save(sink);
       await editor.dispose();
       final doc = await b().open(src(sink.takeBytes()));
-      expect(doc.pageCount, 200);
+      expect(doc.pageCount, 1000);
     });
 
     // ── Varied-size PDF for splitBySize edge cases ──
@@ -219,12 +236,12 @@ void registerStressTests(PdfBridge Function() b) {
     test('splitBySize on varied-size pages', () async {
       final variedPdf = await buildVariedSizePdf(b, pageCount: 50);
       final sinks = <TestSink>[];
-      final count = await b().splitBySize(src(variedPdf), (i) {
+      final chunkSizes = await b().splitBySize(src(variedPdf), (i) {
         final s = TestSink();
         sinks.add(s);
         return s;
       }, maxBytes: variedPdf.length ~/ 5);
-      expect(count, greaterThan(1));
+      expect(chunkSizes.length, greaterThan(1));
       var totalPages = 0;
       for (final s in sinks) {
         final bytes = s.takeBytes();
@@ -245,7 +262,7 @@ void registerStressTests(PdfBridge Function() b) {
 
     // ── Conversion at scale ──
 
-    test('convertTo DOCX from 200-page PDF', () async {
+    test('convertTo DOCX from 1000-page PDF', () async {
       final sink = TestSink();
       await b().convertTo(src(largePdf), sink, format: PdfDocumentFormat.docx);
       expect(sink.takeBytes().length, greaterThan(0));

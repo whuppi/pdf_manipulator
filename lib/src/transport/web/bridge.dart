@@ -1,4 +1,4 @@
-// WebBridge — implements PdfBridge for web platforms.
+// WebBridge — extends PdfBridge for web platforms.
 //
 // Routes all operations through a coordinator worker which manages the
 // WASM worker pool, I/O mode, and read/write/stream routing.
@@ -22,7 +22,7 @@ import 'package:pdf_manipulator/src/types/pdf_source.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
-import 'package:pdf_manipulator/src/transport/bridge.dart';
+import 'package:pdf_manipulator/src/transport/pdf_bridge.dart';
 import 'package:pdf_manipulator/src/types/pdf_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
@@ -34,7 +34,7 @@ import 'package:pdf_manipulator/src/protocol/result.dart';
 
 import 'package:web/web.dart' as web;
 
-class WebBridge implements PdfBridge {
+class WebBridge extends PdfBridge {
   WebBridge({String? coordinatorUrl, String? wasmWorkerUrl})
       : _coordinatorUrl = coordinatorUrl ?? 'pdf_manipulator/coordinator.js',
         _wasmWorkerUrl = wasmWorkerUrl ?? 'pdf_manipulator/wasm_worker.js';
@@ -407,45 +407,6 @@ class WebBridge implements PdfBridge {
   }
 
   @override
-  Future<void> split(PdfSource source, PdfSink Function(int) sinkFactory,
-      {required int every}) async {
-    _checkDisposed();
-    if (every < 1) throw ArgumentError('every must be >= 1');
-    final doc = await open(source);
-    var chunkIndex = 0;
-    for (var start = 0; start < doc.pageCount; start += every) {
-      final end = (start + every).clamp(0, doc.pageCount);
-      final pages = List.generate(end - start, (i) => start + i);
-      await extractPages(source, sinkFactory(chunkIndex), pages: pages);
-      chunkIndex++;
-    }
-  }
-
-  @override
-  Future<int> splitBySize(PdfSource source, PdfSink Function(int) sinkFactory,
-      {required int maxBytes}) async {
-    _checkDisposed();
-    if (maxBytes < 1) throw ArgumentError('maxBytes must be >= 1');
-    final doc = await open(source);
-    var chunkIndex = 0;
-    var chunkPages = <int>[];
-    for (var i = 0; i < doc.pageCount; i++) {
-      chunkPages.add(i);
-      final trial = _ByteCounter();
-      await extractPages(source, trial, pages: chunkPages);
-      if (trial.length > maxBytes && chunkPages.length > 1) {
-        chunkPages.removeLast();
-        await extractPages(source, sinkFactory(chunkIndex), pages: chunkPages);
-        chunkIndex++;
-        chunkPages = [i];
-      }
-    }
-    if (chunkPages.isNotEmpty) {
-      await extractPages(source, sinkFactory(chunkIndex), pages: chunkPages);
-      chunkIndex++;
-    }
-    return chunkIndex;
-  }
 
   @override
   Future<void> extractPages(PdfSource source, PdfSink output,
@@ -663,16 +624,6 @@ class WebBridge implements PdfBridge {
     )).toList();
   }
 
-  @override
-  Future<void> splitByBookmarks(PdfSource source, PdfSink Function(int) sinkFactory, {String? password}) async {
-    final splits = await planSplitByBookmarks(source, password: password);
-    for (var i = 0; i < splits.length; i++) {
-      final split = splits[i];
-      final pages = List.generate(split.endPage - split.startPage, (j) => split.startPage + j);
-      final sink = sinkFactory(i);
-      await extractPages(source, sink, pages: pages);
-    }
-  }
 
   @override
   Future<PdfPageClassification> classifyPage(PdfSource source, int page, {String? password}) async {
@@ -1036,10 +987,3 @@ class _WebPageHandle implements BridgePageBuilderHandle {
   @override Future<void> done() => _b._submit(builderPageDoneOp(handleId: _hid));
 }
 
-// ── Internal helpers ──
-
-class _ByteCounter implements PdfSink {
-  int length = 0;
-  @override
-  void write(Uint8List data) { length += data.length; }
-}

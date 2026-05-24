@@ -1,6 +1,6 @@
 // Builder — create PDF from scratch: pages, text, metadata, imagesToPdf.
 
-import 'package:pdf_manipulator/src/transport/bridge.dart';
+import 'package:pdf_manipulator/src/transport/pdf_bridge.dart';
 import 'package:test/test.dart';
 
 import '../helpers/fixtures.dart';

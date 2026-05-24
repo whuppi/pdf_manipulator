@@ -1,11 +1,6 @@
-// Abstract bridge interface — the seam between Layer 1 (api/) and
-// Layer 2 (bridge/). Mirrors every method on the Pdf class.
-//
-// NativeBridge and WebBridge implement this.
-//
-
-// PdfWatermarkStyle, PdfRenderSize, PdfEncryptionConfig, etc.
-//
+// Abstract bridge — NativeBridge and WebBridge extend this.
+// Thin platform methods are abstract; shared algorithms (split,
+// splitBySize, splitByBookmarks) are concrete here.
 // INTERNAL — not exported from the package.
 
 import 'dart:typed_data';
@@ -21,17 +16,94 @@ import 'package:pdf_manipulator/src/types/pdf_signature.dart';
 import 'package:pdf_manipulator/src/types/search_result.dart';
 import 'package:pdf_manipulator/src/types/pdf_doc.dart';
 
-/// Abstract bridge. Layer 1 calls this. Layer 2 implements it.
+/// Abstract bridge. NativeBridge and WebBridge extend this.
 abstract class PdfBridge {
   // ── Inspect ──
   Future<PdfDoc> open(PdfSource source, {String? password});
 
   // ── Structural ──
   Future<void> merge(List<PdfSource> inputs, PdfSink output);
+
+  /// Split by page count. Shared implementation — calls [open] + [extractPages].
   Future<void> split(PdfSource source, PdfSink Function(int) sinkFactory,
-      {required int every});
-  Future<int> splitBySize(PdfSource source, PdfSink Function(int) sinkFactory,
-      {required int maxBytes});
+      {required int every}) async {
+    if (every < 1) throw ArgumentError('every must be >= 1');
+    final doc = await open(source);
+    final total = doc.pageCount;
+    var chunkIndex = 0;
+    for (var start = 0; start < total; start += every) {
+      final end = (start + every).clamp(0, total);
+      await extractPages(source, sinkFactory(chunkIndex),
+          pages: List.generate(end - start, (i) => start + i));
+      chunkIndex++;
+    }
+  }
+
+  /// Split by byte size. Exponential probe + binary search at each boundary.
+  /// Returns the byte size of each chunk.
+  Future<List<int>> splitBySize(PdfSource source, PdfSink Function(int) sinkFactory,
+      {required int maxBytes}) async {
+    if (maxBytes < 1) throw ArgumentError('maxBytes must be >= 1');
+    final doc = await open(source);
+    final total = doc.pageCount;
+
+    final chunkSizes = <int>[];
+    var chunkStart = 0;
+    var chunkIndex = 0;
+
+    while (chunkStart < total) {
+      final remaining = total - chunkStart;
+
+      // Phase 1: exponential doubling to find the range.
+      // Try 1, 2, 4, 8, 16... pages until it exceeds maxBytes.
+      var probeSize = 1;
+      var lastFit = 1;
+      while (probeSize <= remaining) {
+        final counter = ByteCountSink();
+        await extractPages(source, counter,
+            pages: List.generate(probeSize, (j) => chunkStart + j));
+        if (counter.length <= maxBytes) {
+          lastFit = probeSize;
+          probeSize *= 2;
+        } else {
+          break;
+        }
+      }
+
+      // Phase 2: binary search between lastFit and min(probeSize, remaining).
+      var lo = lastFit;
+      var hi = probeSize.clamp(1, remaining);
+      var bestEnd = lastFit;
+
+      if (lo < hi) {
+        while (lo <= hi) {
+          final mid = (lo + hi) ~/ 2;
+          final counter = ByteCountSink();
+          await extractPages(source, counter,
+              pages: List.generate(mid, (j) => chunkStart + j));
+          if (counter.length <= maxBytes) {
+            bestEnd = mid;
+            lo = mid + 1;
+          } else {
+            hi = mid - 1;
+          }
+        }
+      }
+
+      // Emit the chunk
+      final sink = sinkFactory(chunkIndex);
+      final counter = ByteCountSinkWrapper(sink);
+      await extractPages(source, counter,
+          pages: List.generate(bestEnd, (j) => chunkStart + j));
+      chunkSizes.add(counter.length);
+
+      chunkStart += bestEnd;
+      chunkIndex++;
+    }
+
+    return chunkSizes;
+  }
+
   Future<void> extractPages(PdfSource source, PdfSink output,
       {required List<int> pages});
   Future<void> deletePages(PdfSource source, PdfSink output,
@@ -120,8 +192,18 @@ abstract class PdfBridge {
   // ── Bookmarks ──
   Future<List<PdfBookmarkSplit>> planSplitByBookmarks(PdfSource source,
       {String? password});
+
+  /// Split at bookmark boundaries. Shared implementation — calls
+  /// [planSplitByBookmarks] + [extractPages].
   Future<void> splitByBookmarks(PdfSource source,
-      PdfSink Function(int index) sinkFactory, {String? password});
+      PdfSink Function(int index) sinkFactory, {String? password}) async {
+    final splits = await planSplitByBookmarks(source, password: password);
+    for (var i = 0; i < splits.length; i++) {
+      final split = splits[i];
+      await extractPages(source, sinkFactory(i),
+          pages: List.generate(split.endPage - split.startPage, (j) => split.startPage + j));
+    }
+  }
 
   // ── Classification ──
   Future<PdfPageClassification> classifyPage(PdfSource source,
@@ -269,5 +351,18 @@ class ByteCountSink implements PdfSink {
   @override
   void write(Uint8List chunk) {
     _length += chunk.length;
+  }
+}
+
+class ByteCountSinkWrapper implements PdfSink {
+  final PdfSink _inner;
+  int _length = 0;
+  int get length => _length;
+  ByteCountSinkWrapper(this._inner);
+
+  @override
+  void write(Uint8List chunk) {
+    _length += chunk.length;
+    _inner.write(chunk);
   }
 }

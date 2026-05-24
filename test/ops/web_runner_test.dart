@@ -4,7 +4,7 @@
 @TestOn('browser')
 library;
 
-import 'package:pdf_manipulator/src/transport/web/web_bridge.dart';
+import 'package:pdf_manipulator/src/transport/web/bridge.dart';
 import 'package:test/test.dart';
 
 import '../transport/web/web_test_helper.dart';

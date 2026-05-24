@@ -1,4 +1,4 @@
-// NativeBridge — implements PdfBridge for native platforms.
+// NativeBridge — extends PdfBridge for native platforms.
 //
 // Main-isolate side only. Spawns a worker isolate that owns the Rust
 // thread pool. Each operation: main creates SourceServer/SinkServer,
@@ -18,13 +18,13 @@ import 'package:pdf_manipulator/src/types/pdf_source.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
-import 'package:pdf_manipulator/src/transport/bridge.dart';
+import 'package:pdf_manipulator/src/transport/pdf_bridge.dart';
 import 'package:pdf_manipulator/src/transport/native/sink_server.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
 import 'package:pdf_manipulator/src/types/search_result.dart';
 import 'package:pdf_manipulator/src/transport/native/source_server.dart';
-import 'package:pdf_manipulator/src/transport/native/bridge_bindings.dart' as bridge_ffi;
+import 'package:pdf_manipulator/src/transport/native/bindings.dart' as bridge_ffi;
 import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/transport/native/worker_entry.dart';
 import 'package:pdf_manipulator/src/types/pdf_image.dart';
@@ -32,7 +32,7 @@ import 'package:pdf_manipulator/src/protocol/op.dart';
 import 'package:pdf_manipulator/src/types/pdf_doc.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_info.dart';
 
-class NativeBridge implements PdfBridge {
+class NativeBridge extends PdfBridge {
   NativeBridge();
 
   bool _disposed = false;
@@ -281,54 +281,6 @@ class NativeBridge implements PdfBridge {
     await _submitEdit(EngineOp.merge.wire, inputs[0], output, secondaries: secondaries);
   }
 
-  @override
-  Future<void> split(PdfSource source, PdfSink Function(int) sinkFactory,
-      {required int every}) async {
-    _checkDisposed();
-    if (every < 1) throw ArgumentError('every must be >= 1');
-    final doc = await open(source);
-    final total = doc.pageCount;
-    var chunkIndex = 0;
-    for (var start = 0; start < total; start += every) {
-      final end = (start + every).clamp(0, total);
-      final pages = List.generate(end - start, (i) => start + i);
-      final sink = sinkFactory(chunkIndex);
-      await extractPages(source, sink, pages: pages);
-      chunkIndex++;
-    }
-  }
-
-  @override
-  Future<int> splitBySize(PdfSource source, PdfSink Function(int) sinkFactory,
-      {required int maxBytes}) async {
-    _checkDisposed();
-    if (maxBytes < 1) throw ArgumentError('maxBytes must be >= 1');
-    final doc = await open(source);
-    final total = doc.pageCount;
-    var chunkIndex = 0;
-    var chunkPages = <int>[];
-    for (var i = 0; i < total; i++) {
-      chunkPages.add(i);
-      // Try extracting current chunk — if it exceeds maxBytes, split before this page
-      final trialSink = ByteCountSink();
-      await extractPages(source, trialSink, pages: chunkPages);
-      if (trialSink.length > maxBytes && chunkPages.length > 1) {
-        // Too big with this page — emit the chunk WITHOUT this page
-        chunkPages.removeLast();
-        final sink = sinkFactory(chunkIndex);
-        await extractPages(source, sink, pages: chunkPages);
-        chunkIndex++;
-        chunkPages = [i]; // start new chunk with the page that didn't fit
-      }
-    }
-    // Emit remaining pages
-    if (chunkPages.isNotEmpty) {
-      final sink = sinkFactory(chunkIndex);
-      await extractPages(source, sink, pages: chunkPages);
-      chunkIndex++;
-    }
-    return chunkIndex;
-  }
 
   @override
   Future<void> extractPages(PdfSource source, PdfSink output,
@@ -834,18 +786,6 @@ class NativeBridge implements PdfBridge {
     return _decodeBookmarkSplits(result);
   }
 
-  @override
-  Future<void> splitByBookmarks(PdfSource source, PdfSink Function(int) sinkFactory, {String? password}) async {
-    _checkDisposed();
-    // splitByBookmarks: plan first, then extract pages for each split
-    final splits = await planSplitByBookmarks(source, password: password);
-    for (var i = 0; i < splits.length; i++) {
-      final split = splits[i];
-      final pages = List.generate(split.endPage - split.startPage, (j) => split.startPage + j);
-      final sink = sinkFactory(i);
-      await extractPages(source, sink, pages: pages);
-    }
-  }
 
   @override
   Future<PdfPageClassification> classifyPage(PdfSource source, int page, {String? password}) async {

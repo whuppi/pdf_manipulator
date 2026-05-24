@@ -1,7 +1,7 @@
 // Editor — persistent handle: open, mutate, save, dispose, redaction.
 
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
-import 'package:pdf_manipulator/src/transport/bridge.dart';
+import 'package:pdf_manipulator/src/transport/pdf_bridge.dart';
 import 'package:test/test.dart';
 
 import '../helpers/fixtures.dart';
