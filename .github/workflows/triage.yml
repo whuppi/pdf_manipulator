@@ -39,7 +39,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number }}
         run: |
-          FILES=$(gh pr diff $PR --repo ${{ github.repository }} --name-only)
+          FILES=$(gh pr view $PR --repo ${{ github.repository }} --json files --jq '.files[].path' 2>/dev/null || echo "")
 
           if echo "$FILES" | grep -qE "^\.github/|^\.githooks/"; then
             gh pr edit $PR --repo ${{ github.repository }} --add-label "ci"
