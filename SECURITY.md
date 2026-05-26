@@ -17,4 +17,4 @@ This package processes untrusted PDF input. Relevant concerns include:
 
 ## Response
 
-Reports are acknowledged within 48 hours. Fixes are released as patch versions.
+Reports are acknowledged. Fixes are released as patch versions.

@@ -57,8 +57,35 @@ class PdfPermissions {
   }
 }
 
-/// Encryption configuration.
-class PdfEncryptionConfig {
+/// Encryption intent on save — sealed, compiler-enforced.
+sealed class PdfEncryption {
+  const PdfEncryption();
+
+  /// Preserve the source PDF's existing encryption.
+  /// If the source was not encrypted, output is not encrypted.
+  const factory PdfEncryption.keep() = PdfEncryptionKeep;
+
+  /// Strip all encryption. Output is plaintext.
+  const factory PdfEncryption.remove() = PdfEncryptionRemove;
+
+  /// Apply new encryption.
+  const factory PdfEncryption.config({
+    required String ownerPassword,
+    String userPassword,
+    PdfEncryptionAlgorithm algorithm,
+    PdfPermissions permissions,
+  }) = PdfEncryptionConfig;
+}
+
+class PdfEncryptionKeep extends PdfEncryption {
+  const PdfEncryptionKeep();
+}
+
+class PdfEncryptionRemove extends PdfEncryption {
+  const PdfEncryptionRemove();
+}
+
+class PdfEncryptionConfig extends PdfEncryption {
   final String ownerPassword;
   final String userPassword;
   final PdfEncryptionAlgorithm algorithm;
@@ -72,18 +99,24 @@ class PdfEncryptionConfig {
   });
 }
 
-/// Save options — compression, GC, linearization, optional encryption.
+/// Save options — compression, GC, encryption.
+/// The engine decides full-rewrite vs incremental internally.
+enum PdfSaveMode {
+  fullRewrite,
+  incremental,
+}
+
 class PdfSaveOptions {
+  final PdfSaveMode mode;
   final bool compress;
   final bool garbageCollect;
-  final bool linearize;
-  final PdfEncryptionConfig? encryption;
+  final PdfEncryption encryption;
 
   const PdfSaveOptions({
+    this.mode = PdfSaveMode.fullRewrite,
     this.compress = true,
     this.garbageCollect = true,
-    this.linearize = false,
-    this.encryption,
+    this.encryption = const PdfEncryption.keep(),
   });
 }
 
@@ -104,21 +137,74 @@ class PdfWatermarkStyle {
   });
 }
 
-/// Watermark position (null = centered diagonal).
-class PdfWatermarkPosition {
-  final double x, y, width, height;
-  final bool fixedPrint;
-  final double fixedPrintH, fixedPrintV;
+/// Where to place the watermark on the page.
+///
+/// The engine resolves named positions (center, corner, tiled) to
+/// coordinates using each page's media box at render time — the caller
+/// never computes pixel values. Pages in the same PDF can be mixed
+/// sizes (A4, Letter, A3); the engine handles each independently.
+sealed class PdfWatermarkPosition {
+  const PdfWatermarkPosition();
 
-  const PdfWatermarkPosition({
-    required this.x,
-    required this.y,
-    required this.width,
-    required this.height,
-    this.fixedPrint = false,
-    this.fixedPrintH = 0,
-    this.fixedPrintV = 0,
+  /// Centered on the page. The default.
+  const factory PdfWatermarkPosition.center() = PdfWatermarkCenter;
+
+  /// Anchored to a corner with optional margin.
+  const factory PdfWatermarkPosition.corner(PdfCorner corner, {
+    double marginX,
+    double marginY,
+  }) = PdfWatermarkCorner;
+
+  /// Tiled across the page in a grid.
+  const factory PdfWatermarkPosition.tiled({
+    int columns,
+    int rows,
+  }) = PdfWatermarkTiled;
+
+  /// Exact coordinates — caller is responsible for computing against
+  /// the page dimensions.
+  const factory PdfWatermarkPosition.exact({
+    required double x,
+    required double y,
+    required double width,
+    required double height,
+  }) = PdfWatermarkExact;
+}
+
+class PdfWatermarkCenter extends PdfWatermarkPosition {
+  const PdfWatermarkCenter();
+}
+
+class PdfWatermarkCorner extends PdfWatermarkPosition {
+  final PdfCorner corner;
+  final double marginX;
+  final double marginY;
+  const PdfWatermarkCorner(this.corner, {this.marginX = 20, this.marginY = 20});
+}
+
+class PdfWatermarkTiled extends PdfWatermarkPosition {
+  final int columns;
+  final int rows;
+  const PdfWatermarkTiled({this.columns = 3, this.rows = 4});
+}
+
+class PdfWatermarkExact extends PdfWatermarkPosition {
+  final double x, y, width, height;
+  const PdfWatermarkExact({
+    required this.x, required this.y,
+    required this.width, required this.height,
   });
+}
+
+/// Which corner to anchor a watermark.
+enum PdfCorner { topLeft, topRight, bottomLeft, bottomRight }
+
+/// Whether the watermark renders above or below page content.
+enum PdfWatermarkLayer {
+  /// Renders on top of page content (annotation-based). Default.
+  foreground,
+  /// Renders behind page content (content-stream, prepended in painting order).
+  background,
 }
 
 /// Output size constraint for rendering.

@@ -1,14 +1,14 @@
-// Cross-isolate sink server: PdfSink on main, worker pushes chunks.
+// Cross-isolate sink server: DataSink on main, worker pushes chunks.
 //
 // SinkServer (main isolate) receives write chunks from the worker
-// and pushes them to the consumer's PdfSink.
+// and pushes them to the consumer's DataSink.
 //
 // INTERNAL — used by the native platform implementation only.
 
 import 'dart:isolate';
 import 'dart:typed_data';
 
-import 'package:pdf_manipulator/src/types/pdf_sink.dart';
+import 'package:pdf_manipulator/src/types/data_sink.dart';
 
 /// Runs on the MAIN isolate. Receives write chunks from the worker.
 ///
@@ -17,7 +17,7 @@ import 'package:pdf_manipulator/src/types/pdf_sink.dart';
 class SinkServer {
   SinkServer(this._sink);
 
-  final PdfSink _sink;
+  final DataSink _sink;
   ReceivePort? _port;
 
   SendPort start() {

@@ -80,7 +80,7 @@ void main() {
     test('mode detected as atomics', () async {
       coordinator.postMessage(<String, Object?>{
         'type': 'init',
-        'wasmWorkerUrl': 'http://localhost:$serverPort/web_assets/wasm_worker.js',
+        'workerUrl': 'http://localhost:$serverPort/web_assets/worker.js',
       }.jsify());
       await Future<void>.delayed(const Duration(seconds: 3));
 
@@ -91,7 +91,7 @@ void main() {
     test('open PDF via Atomics.wait readAt chain', () async {
       coordinator.postMessage(<String, Object?>{
         'type': 'init',
-        'wasmWorkerUrl': 'http://localhost:$serverPort/web_assets/wasm_worker.js',
+        'workerUrl': 'http://localhost:$serverPort/web_assets/worker.js',
       }.jsify());
       await Future<void>.delayed(const Duration(seconds: 3));
 

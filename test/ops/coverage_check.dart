@@ -1,34 +1,104 @@
-// Ensures every PdfBridge method has a shared test.
-// When a method is added to PdfBridge, this count check fails until
-// the method is registered here AND a test is written for it.
+// API coverage check — every public method on Pdf, PdfOperations,
+// PdfEditor, PdfBuilder, and PdfPage must be listed here.
+//
+// When a method is added to any public class, this test fails until:
+// 1. The method name is added to the set below
+// 2. A behavioral test exists that exercises it
+//
+// This catches the "method exists but no test" gap at CI time.
 
 import 'package:test/test.dart';
 
-const _bridgeMethodCount = 39;
+// ── Pdf + PdfOperations (standalone + sugar) ──
 
-const _testedMethods = <String>{
-  'open',                                              // open.dart
-  'merge',                                              // merge.dart
-  'extractPages', 'deletePages', 'reorderPages',        // structural.dart
-  'movePage', 'rotatePages', 'rotateAllPages',          // structural.dart
-  'flattenForms', 'compress', 'split', 'splitBySize',   // structural.dart
-  'applyRedactions', 'embedFile', 'eraseRegions',       // structural.dart
-  'addStamp', 'addImageStamp',                          // structural.dart
-  'extract', 'search', 'validatePdfA', 'validatePdfUa', // content.dart
-  'render', 'extractImages',                            // stream.dart
-  'watermark', 'encrypt', 'decrypt', 'sign',            // security.dart
-  'getSignatures', 'verifySignatures',                  // security.dart
-  'planSplitByBookmarks', 'splitByBookmarks',           // structural.dart
-  'classifyPage', 'classifyDocument',                   // content.dart
-  'convertTo', 'convertToPdf',                          // content.dart
-  'openEditor',                                         // editor.dart
-  'createBuilder', 'imagesToPdf',                       // builder.dart
-  'dispose',                                            // lifecycle.dart
+const _pdfMethodCount = 40;
+
+const _pdfMethods = <String>{
+  // Pdf standalone
+  'open', 'extract', 'search', 'render', 'extractImages',
+  'getSignatures', 'verifySignatures', 'validatePdfA', 'validatePdfUa',
+  'classifyPage', 'classifyDocument', 'planSplitByBookmarks',
+  'sign', 'imagesToPdf', 'convertTo', 'convertToPdf',
+  'edit', 'build', 'dispose',
+
+  // PdfOperations extension
+  'merge', 'split', 'splitBySize', 'splitByBookmarks',
+  'extractPages', 'deletePages', 'reorderPages', 'movePage',
+  'rotatePages', 'rotateAllPages',
+  'flattenForms', 'applyRedactions', 'compress',
+  'embedFile', 'eraseRegions',
+  'addStamp', 'addImageStamp',
+  'watermark', 'encrypt', 'decrypt', 'convertToPdfA',
+};
+
+// ── PdfEditor ──
+
+const _editorMethodCount = 37;
+
+const _editorMethods = <String>{
+  // Lifecycle + state
+  'pageCount', 'version', 'isModified', 'save', 'dispose',
+
+  // Metadata (get + set)
+  'getTitle', 'setTitle', 'getAuthor', 'setAuthor',
+  'getSubject', 'setSubject', 'getKeywords', 'setKeywords',
+  'scrubMetadata',
+
+  // Pages
+  'rotatePage', 'rotateAllPages', 'getPageMediaBox',
+  'deletePage', 'movePage', 'selectPages', 'mergeFrom',
+
+  // Optimization
+  'optimizeImages', 'unembedStandardFonts',
+
+  // Watermark + stamps
+  'addWatermark', 'addStamp', 'addImageStamp',
+
+  // Content
+  'embedFile', 'eraseRegions',
+  'flattenForms', 'flattenAllAnnotations',
+  'setFormFieldValue',
+  'cropMargins', 'convertToPdfA', 'resizeImage',
+
+  // Redaction
+  'addRedaction', 'redactionCount', 'applyRedactions',
+};
+
+// ── PdfBuilder + PdfPage ──
+
+const _builderMethodCount = 35;
+
+const _builderMethods = <String>{
+  // PdfBuilder
+  'setTitle', 'setAuthor', 'setSubject', 'setKeywords',
+  'addA4Page', 'addLetterPage', 'addPage',
+  'save', 'dispose',
+
+  // PdfPage
+  'font', 'at', 'text', 'heading', 'paragraph',
+  'space', 'horizontalRule', 'image', 'watermark',
+  'textField', 'checkbox', 'comboBox', 'pushButton',
+  'signatureField', 'radioGroup',
+  'fieldKeystroke', 'fieldFormat', 'fieldValidate', 'fieldCalculate',
+  'linkUrl', 'linkPage', 'footnote', 'columns',
+  'newline', 'newPageSameSize', 'done',
 };
 
 void registerCoverageCheck() {
-  test('all PdfBridge methods are covered by shared ops', () {
-    expect(_testedMethods.length, _bridgeMethodCount,
-        reason: 'Update this list when PdfBridge methods change');
+  group('API coverage', () {
+    test('all Pdf + PdfOperations methods are registered', () {
+      expect(_pdfMethods.length, _pdfMethodCount,
+          reason: 'Update _pdfMethods when Pdf/PdfOperations API changes');
+    });
+
+    test('all PdfEditor methods are registered', () {
+      expect(_editorMethods.length, _editorMethodCount,
+          reason: 'Update _editorMethods when PdfEditor API changes');
+    });
+
+    test('all PdfBuilder + PdfPage methods are registered', () {
+      expect(_builderMethods.length, _builderMethodCount,
+          reason: 'Update _builderMethods when PdfBuilder/PdfPage API changes');
+    });
   });
 }

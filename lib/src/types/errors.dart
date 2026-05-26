@@ -73,8 +73,6 @@ class PdfCryptoError extends PdfError {
 }
 
 /// Operation was cancelled (dispose called during execution).
-class PdfCancelled implements Exception {
-  const PdfCancelled();
-  @override
-  String toString() => 'PdfCancelled: Operation cancelled';
+class PdfCancelled extends PdfError {
+  const PdfCancelled() : super('Operation cancelled');
 }

@@ -9,6 +9,10 @@
 // Uses shared protocol (protocol/) for op names, arg shapes, result parsing.
 // The SAME EngineOp enum and builder functions are used by NativeBridge.
 //
+// Do NOT import WASM bindings (pdf_oxide.js) or call WASM methods directly.
+// All engine calls go through postMessage to the coordinator.
+// The absence of WASM imports makes direct engine access impossible.
+//
 // INTERNAL — created by bridge_factory.dart.
 
 import 'dart:async';
@@ -17,8 +21,8 @@ import 'package:web/web.dart' show EventStreamProviders;
 import 'dart:js_interop_unsafe';
 import 'dart:typed_data';
 
-import 'package:pdf_manipulator/src/types/pdf_sink.dart';
-import 'package:pdf_manipulator/src/types/pdf_source.dart';
+import 'package:pdf_manipulator/src/types/data_sink.dart';
+import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
@@ -28,19 +32,20 @@ import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
 import 'package:pdf_manipulator/src/types/search_result.dart';
 import 'package:pdf_manipulator/src/types/pdf_doc.dart';
-import 'package:pdf_manipulator/src/protocol/bridge_ops.dart';
-import 'package:pdf_manipulator/src/protocol/op.dart';
-import 'package:pdf_manipulator/src/protocol/result.dart';
+import 'package:pdf_manipulator/src/transport/protocol/codec.dart' hide decodeOpenResult, decodeExtractResult, decodeSearchResults, decodeSignatures, decodeVerifySignatures, decodeValidationResult, decodeValidatePdfUa, decodeBookmarkSplits, decodeClassifyPage, decodeClassifyDocument, decodeRenderedPage, decodePdfImage, decodeEditorMetadata;
+import 'package:pdf_manipulator/src/transport/protocol/op.dart';
+import 'package:pdf_manipulator/src/transport/web/wire.dart' as wire;
+import 'package:pdf_manipulator/src/version.dart';
 
 import 'package:web/web.dart' as web;
 
 class WebBridge extends PdfBridge {
-  WebBridge({String? coordinatorUrl, String? wasmWorkerUrl})
+  WebBridge({String? coordinatorUrl, String? workerUrl})
       : _coordinatorUrl = coordinatorUrl ?? 'pdf_manipulator/coordinator.js',
-        _wasmWorkerUrl = wasmWorkerUrl ?? 'pdf_manipulator/wasm_worker.js';
+        _workerUrl = workerUrl ?? 'pdf_manipulator/worker.js';
 
   final String _coordinatorUrl;
-  final String _wasmWorkerUrl;
+  final String _workerUrl;
   web.Worker? _coordinator;
   bool _disposed = false;
   bool _ready = false;
@@ -49,8 +54,8 @@ class WebBridge extends PdfBridge {
   // Per-op tracking
   final _results = <int, Completer<Map<String, Object?>>>{};
   final _streams = <int, StreamController<Map<String, Object?>>>{};
-  final _sinks = <int, PdfSink>{};
-  final _sources = <int, PdfSource>{};
+  final _sinks = <int, DataSink>{};
+  final _sources = <int, DataSource>{};
   final _submitQueue = <Completer<int>>[];
   int _lastOpId = 0;
   Completer<void>? _initCompleter;
@@ -79,7 +84,7 @@ class WebBridge extends PdfBridge {
       }
     }).toJS;
 
-    _post('init', {'wasmWorkerUrl': _wasmWorkerUrl});
+    _post('init', {'workerUrl': _workerUrl});
     await completer.future.timeout(
       const Duration(seconds: 30),
       onTimeout: () => throw StateError(
@@ -105,6 +110,18 @@ class WebBridge extends PdfBridge {
       case 'ready':
         _ready = true;
         _ioMode = data['ioMode']?.toString() ?? 'opfs';
+        // Version guard: detect stale web assets from a previous package version
+        final webVersion = data['version']?.toString() ?? '';
+        if (webVersion == '__VERSION__' || webVersion.isEmpty) {
+          throw StateError(
+            'pdf_manipulator web assets not set up. '
+            'Run: dart run pdf_manipulator:setup');
+        }
+        if (webVersion != packageVersion) {
+          throw StateError(
+            'pdf_manipulator web assets are v$webVersion but package is v$packageVersion. '
+            'Run: dart run pdf_manipulator:setup --force');
+        }
         if (_initCompleter != null && !_initCompleter!.isCompleted) {
           _initCompleter!.complete();
         }
@@ -119,8 +136,8 @@ class WebBridge extends PdfBridge {
 
       case 'chunk':
         final sink = _sinks[opId];
+        final bytes = data['data'];
         if (sink != null) {
-          final bytes = data['data'];
           if (bytes is ByteBuffer) {
             sink.write(Uint8List.view(bytes));
           } else if (bytes is Uint8List) {
@@ -210,8 +227,8 @@ class WebBridge extends PdfBridge {
 
   Future<Map<String, Object?>> _submit(
     EngineRequest req, {
-    PdfSource? source,
-    PdfSink? sink,
+    DataSource? source,
+    DataSink? sink,
   }) async {
     _checkDisposed();
     await _ensureReady();
@@ -271,8 +288,8 @@ class WebBridge extends PdfBridge {
     }
   }
 
-  /// Stream PdfSource bytes to coordinator's OPFS file (mode 3 only).
-  Future<void> _streamSourceToOpfs(PdfSource source, String filename) async {
+  /// Stream DataSource bytes to coordinator's OPFS file (mode 3 only).
+  Future<void> _streamSourceToOpfs(DataSource source, String filename) async {
     const chunkSize = 256 * 1024; // 256KB chunks
     var offset = 0;
     final total = source.length;
@@ -304,8 +321,8 @@ class WebBridge extends PdfBridge {
   /// Submit with source + sink. Fire and forget the result.
   Future<void> _submitEdit(
     EngineRequest req,
-    PdfSource source,
-    PdfSink sink,
+    DataSource source,
+    DataSink sink,
   ) async {
     await _submit(req, source: source, sink: sink);
   }
@@ -314,7 +331,7 @@ class WebBridge extends PdfBridge {
   /// Uses a regular async helper for OPFS pre-copy, then returns the stream.
   Stream<Map<String, Object?>> _submitStream(
     EngineRequest req,
-    PdfSource source,
+    DataSource source,
   ) {
     // Can't use async* here — OPFS pre-copy needs the event loop free for
     // ack messages, and async* generators in dart2js may not yield to JS events
@@ -327,7 +344,7 @@ class WebBridge extends PdfBridge {
 
   Future<void> _submitStreamAsync(
     EngineRequest req,
-    PdfSource source,
+    DataSource source,
     StreamController<Map<String, Object?>> controller,
   ) async {
     try {
@@ -384,94 +401,15 @@ class WebBridge extends PdfBridge {
   // ── Inspect ──
 
   @override
-  Future<PdfDoc> open(PdfSource source, {String? password}) async {
+  Future<PdfDoc> open(DataSource source, {String? password}) async {
     final r = await _submit(openOp(password: password), source: source);
-    return parseOpenResult(r);
+    return wire.wireDecodeOpen(r);
   }
-
-  // ── Structural ──
-
-  @override
-  Future<void> merge(List<PdfSource> inputs, PdfSink output) async {
-    if (inputs.isEmpty) throw ArgumentError('inputs must not be empty');
-    if (inputs.length == 1) {
-      return extractPages(inputs[0], output,
-          pages: List.generate((await open(inputs[0])).pageCount, (i) => i));
-    }
-    final secondaries = <ByteBuffer>[];
-    for (var i = 1; i < inputs.length; i++) {
-      final bytes = await inputs[i].readAt(0, inputs[i].length);
-      secondaries.add(bytes.buffer);
-    }
-    await _submitEdit(mergeOp(secondaries: secondaries), inputs[0], output);
-  }
-
-  @override
-
-  @override
-  Future<void> extractPages(PdfSource source, PdfSink output,
-      {required List<int> pages}) =>
-    _submitEdit(extractPagesOp(pages: pages), source, output);
-
-  @override
-  Future<void> deletePages(PdfSource source, PdfSink output,
-      {required List<int> pages}) =>
-    _submitEdit(deletePagesOp(pages: pages), source, output);
-
-  @override
-  Future<void> reorderPages(PdfSource source, PdfSink output,
-      {required List<int> order}) =>
-    _submitEdit(reorderPagesOp(order: order), source, output);
-
-  @override
-  Future<void> movePage(PdfSource source, PdfSink output,
-      {required int from, required int to}) =>
-    _submitEdit(movePageOp(from: from, to: to), source, output);
-
-  @override
-  Future<void> rotatePages(PdfSource source, PdfSink output,
-      {required Map<int, int> pages}) =>
-    _submitEdit(rotatePagesOp(rotations: pages), source, output);
-
-  @override
-  Future<void> rotateAllPages(PdfSource source, PdfSink output,
-      {required int degrees}) =>
-    _submitEdit(rotateAllPagesOp(degrees: degrees), source, output);
-
-  // ── Content ──
-
-  @override
-  Future<void> flattenForms(PdfSource source, PdfSink output) =>
-    _submitEdit(flattenFormsOp(), source, output);
-
-  @override
-  Future<void> applyRedactions(PdfSource source, PdfSink output) =>
-    _submitEdit(applyRedactionsOp(), source, output);
-
-  @override
-  Future<void> embedFile(PdfSource source, PdfSink output,
-      {required String name, required Uint8List fileData}) =>
-    _submitEdit(embedFileOp(name: name, fileData: fileData), source, output);
-
-  @override
-  Future<void> eraseRegions(PdfSource source, PdfSink output,
-      {required int page, required List<PdfRect> regions}) =>
-    _submitEdit(eraseRegionsOp(page: page, regions: regions), source, output);
-
-  @override
-  Future<void> compress(PdfSource source, PdfSink output,
-      {int imageQuality = 75, bool garbageCollect = true,
-       bool linearize = false}) =>
-    _submitEdit(compressOp(
-      imageQuality: imageQuality,
-      garbageCollect: garbageCollect,
-      linearize: linearize,
-    ), source, output);
 
   // ── Extraction ──
 
   @override
-  Future<String> extract(PdfSource source,
+  Future<String> extract(DataSource source,
       {required PdfPages pages, String? password,
        PdfExtractionFormat format = PdfExtractionFormat.auto}) async {
     final pageIndex = switch (pages) {
@@ -482,13 +420,13 @@ class WebBridge extends PdfBridge {
       extractOp(format: format, page: pageIndex, password: password),
       source: source,
     );
-    return r['text'] as String? ?? '';
+    return wire.wireDecodeText(r);
   }
 
   // ── Search ──
 
   @override
-  Future<List<SearchResult>> search(PdfSource source,
+  Future<List<SearchResult>> search(DataSource source,
       {required String query, required PdfPages pages, String? password}) async {
     final pageIndex = switch (pages) {
       PdfSinglePage(:final index) => index,
@@ -498,30 +436,13 @@ class WebBridge extends PdfBridge {
       searchOp(query: query, page: pageIndex, password: password),
       source: source,
     );
-    return parseSearchResults(r);
+    return wire.wireDecodeSearch(r);
   }
 
   // ── Security ──
 
   @override
-  Future<void> watermark(PdfSource source, PdfSink output,
-      {required String text, PdfPages pages = const PdfPages.all(),
-       PdfWatermarkStyle style = const PdfWatermarkStyle(),
-       PdfWatermarkPosition? position}) =>
-    _submitEdit(watermarkOp(text: text, style: style), source, output);
-
-  @override
-  Future<void> encrypt(PdfSource source, PdfSink output,
-      {required PdfEncryptionConfig encryption}) =>
-    _submitEdit(encryptOp(encryption: encryption), source, output);
-
-  @override
-  Future<void> decrypt(PdfSource source, PdfSink output,
-      {required String password}) =>
-    _submitEdit(decryptOp(password: password), source, output);
-
-  @override
-  Future<void> sign(PdfSource source, PdfSink output,
+  Future<void> sign(DataSource source, DataSink output,
       {required PdfSigningCredentials credentials,
        String? reason, String? location}) =>
     _submitEdit(signOp(
@@ -530,33 +451,18 @@ class WebBridge extends PdfBridge {
       location: location,
     ), source, output);
 
-  // ── Stamps ──
-
-  @override
-  Future<void> addStamp(PdfSource source, PdfSink output,
-      {required int page, required PdfStampType type, required PdfRect rect,
-       String? customName, double opacity = 1.0}) =>
-    _submitEdit(addStampOp(page: page, type: type, rect: rect, opacity: opacity), source, output);
-
-  @override
-  Future<void> addImageStamp(PdfSource source, PdfSink output,
-      {required int page, required Uint8List imageBytes, required PdfRect rect,
-       double opacity = 1.0}) =>
-    _submitEdit(addImageStampOp(
-      page: page, imageBytes: imageBytes, rect: rect, opacity: opacity,
-    ), source, output);
-
   // ── Creation ──
 
   @override
-  Future<void> imagesToPdf(List<Uint8List> images, PdfSink output) async {
-    await _submit(imagesToPdfOp(images: images), sink: output);
+  Future<void> imagesToPdf(List<DataSource> images, DataSink output) async {
+    final imageBytes = await Future.wait(images.map(readAllBytes));
+    await _submit(imagesToPdfOp(images: imageBytes), sink: output);
   }
 
   // ── Rendering ──
 
   @override
-  Stream<RenderedPage> render(PdfSource source,
+  Stream<RenderedPage> render(DataSource source,
       {required PdfPages pages, PdfRenderSize? size, String? password}) async* {
     final pageList = await _resolvePages(source, pages, password: password);
     yield* _submitStream(
@@ -567,94 +473,85 @@ class WebBridge extends PdfBridge {
         password: password,
       ),
       source,
-    ).map(parseRenderedPage);
+    ).map(wire.wireDecodeRenderedPage);
   }
 
   // ── Image extraction ──
 
   @override
-  Stream<PdfImage> extractImages(PdfSource source,
+  Stream<PdfImage> extractImages(DataSource source,
       {required PdfPages pages, String? password}) async* {
     final pageList = await _resolvePages(source, pages, password: password);
     yield* _submitStream(
       extractImagesOp(pageIndices: pageList, password: password),
       source,
-    ).map(parsePdfImage);
+    ).map(wire.wireDecodeImage);
   }
 
   // ── Signatures ──
 
   @override
-  Future<List<PdfSignatureInfo>> getSignatures(PdfSource source,
+  Future<List<PdfSignatureInfo>> getSignatures(DataSource source,
       {String? password}) async {
     final r = await _submit(getSignaturesOp(password: password), source: source);
-    return parseSignatures(r);
+    return wire.wireDecodeSignatures(r);
   }
 
   @override
-  Future<bool> verifySignatures(PdfSource source, {String? password}) async {
+  Future<bool> verifySignatures(DataSource source, {String? password}) async {
     final r = await _submit(verifySignaturesOp(password: password), source: source);
-    return r['valid'] as bool? ?? false;
+    return wire.wireDecodeVerifySignatures(r);
   }
 
   // ── Validation ──
 
   @override
-  Future<PdfValidationResult> validatePdfA(PdfSource source,
+  Future<PdfValidationResult> validatePdfA(DataSource source,
       {int level = 2, String? password}) async {
     final r = await _submit(validatePdfAOp(level: level, password: password), source: source);
-    return parseValidationResult(r);
+    return wire.wireDecodeValidation(r);
   }
 
   @override
-  Future<bool> validatePdfUa(PdfSource source,
+  Future<bool> validatePdfUa(DataSource source,
       {int level = 1, String? password}) async {
     final r = await _submit(validatePdfUaOp(level: level, password: password), source: source);
-    return r['accessible'] as bool? ?? false;
+    return wire.wireDecodeValidatePdfUa(r);
   }
 
   @override
-  Future<List<PdfBookmarkSplit>> planSplitByBookmarks(PdfSource source, {String? password}) async {
+  Future<List<PdfBookmarkSplit>> planSplitByBookmarks(DataSource source, {String? password}) async {
     final r = await _submit(planSplitByBookmarksOp(password: password), source: source);
-    final list = r['splits'] as List? ?? [];
-    return list.map((e) => PdfBookmarkSplit(
-      title: e['title'] as String? ?? '',
-      startPage: e['startPage'] as int? ?? 0,
-      endPage: e['endPage'] as int? ?? 0,
-    )).toList();
+    return wire.wireDecodeBookmarkSplits(r);
   }
 
 
   @override
-  Future<PdfPageClassification> classifyPage(PdfSource source, int page, {String? password}) async {
+  Future<PdfPageClassification> classifyPage(DataSource source, int page, {String? password}) async {
     final r = await _submit(classifyPageOp(page: page, password: password), source: source);
-    return PdfPageClassification(type: r['type'] as String? ?? 'unknown', confidence: (r['confidence'] as num?)?.toDouble() ?? 0);
+    return wire.wireDecodeClassifyPage(r);
   }
 
   @override
-  Future<PdfDocumentClassification> classifyDocument(PdfSource source, {String? password}) async {
+  Future<PdfDocumentClassification> classifyDocument(DataSource source, {String? password}) async {
     final r = await _submit(classifyDocumentOp(password: password), source: source);
-    return PdfDocumentClassification(
-      type: r['type'] as String? ?? 'unknown',
-      confidence: (r['confidence'] as num?)?.toDouble() ?? 0,
-      pageCount: r['pageCount'] as int? ?? 0,
-    );
+    return wire.wireDecodeClassifyDocument(r);
   }
 
   @override
-  Future<void> convertTo(PdfSource source, PdfSink output,
+  Future<void> convertTo(DataSource source, DataSink output,
       {required PdfDocumentFormat format, String? password}) =>
     _submitEdit(convertToOp(format: format, password: password), source, output);
 
   @override
-  Future<void> convertToPdf(PdfSource document, PdfSink output,
+  Future<void> convertToPdf(DataSource document, DataSink output,
       {required PdfDocumentFormat format}) =>
     _submitEdit(convertToPdfOp(format: format), document, output);
 
   // ── Editor + Builder ──
 
   @override
-  Future<BridgeEditorHandle> openEditor(PdfSource source, {String? password}) async {
+  Future<BridgeEditorHandle> openEditor(DataSource source, {String? password}) async {
     final r = await _submit(editorOpenOp(password: password), source: source);
     return _WebEditorHandle(this, r['handleId'] as int);
   }
@@ -693,7 +590,7 @@ class WebBridge extends PdfBridge {
 
   // ── Helpers ──
 
-  Future<List<int>> _resolvePages(PdfSource source, PdfPages pages,
+  Future<List<int>> _resolvePages(DataSource source, PdfPages pages,
       {String? password}) async {
     final doc = await open(source, password: password);
     return resolvePageIndices(pages, doc.pageCount);
@@ -777,24 +674,28 @@ class _WebEditorHandle implements BridgeEditorHandle {
   Future<Map<String, Object?>> _op(EngineRequest req) => _b._submit(req);
 
   @override Future<int> get pageCount async =>
-      parseEditorMetadata(await _op(editorGetMetadataOp(handleId: _hid))).pageCount;
+      wire.wireDecodeEditorMetadata(await _op(editorGetMetadataOp(handleId: _hid))).pageCount;
   @override Future<String> get version async =>
-      parseEditorMetadata(await _op(editorGetMetadataOp(handleId: _hid))).version;
+      wire.wireDecodeEditorMetadata(await _op(editorGetMetadataOp(handleId: _hid))).version;
+  @override Future<bool> get isModified async {
+    final r = await _op(EngineRequest(EngineOp.editorIsModified, {'handleId': _hid}));
+    return (r as Map<String, dynamic>?)?['modified'] == true;
+  }
 
   @override Future<String> getTitle() async =>
-      parseEditorMetadata(await _op(editorGetMetadataOp(handleId: _hid))).title;
+      wire.wireDecodeEditorMetadata(await _op(editorGetMetadataOp(handleId: _hid))).title;
   @override Future<void> setTitle(String value) =>
       _op(editorMutateOp(handleId: _hid, editOp: 'setTitle', extra: {'value': value}));
   @override Future<String> getAuthor() async =>
-      parseEditorMetadata(await _op(editorGetMetadataOp(handleId: _hid))).author;
+      wire.wireDecodeEditorMetadata(await _op(editorGetMetadataOp(handleId: _hid))).author;
   @override Future<void> setAuthor(String value) =>
       _op(editorMutateOp(handleId: _hid, editOp: 'setAuthor', extra: {'value': value}));
   @override Future<String> getSubject() async =>
-      parseEditorMetadata(await _op(editorGetMetadataOp(handleId: _hid))).subject;
+      wire.wireDecodeEditorMetadata(await _op(editorGetMetadataOp(handleId: _hid))).subject;
   @override Future<void> setSubject(String value) =>
       _op(editorMutateOp(handleId: _hid, editOp: 'setSubject', extra: {'value': value}));
   @override Future<String> getKeywords() async =>
-      parseEditorMetadata(await _op(editorGetMetadataOp(handleId: _hid))).keywords;
+      wire.wireDecodeEditorMetadata(await _op(editorGetMetadataOp(handleId: _hid))).keywords;
   @override Future<void> setKeywords(String value) =>
       _op(editorMutateOp(handleId: _hid, editOp: 'setKeywords', extra: {'value': value}));
 
@@ -803,17 +704,16 @@ class _WebEditorHandle implements BridgeEditorHandle {
   @override Future<void> rotateAllPages({required int degrees}) =>
       _op(editorMutateOp(handleId: _hid, editOp: 'rotateAllPages', extra: {'degrees': degrees}));
   @override Future<PdfRect> getPageMediaBox(int page) async =>
-      parseMediaBox(await _op(editorPageMediaBoxOp(handleId: _hid, page: page)));
+      decodeMediaBox(await _op(editorPageMediaBoxOp(handleId: _hid, page: page)));
   @override Future<void> deletePage(int page) =>
       _op(editorMutateOp(handleId: _hid, editOp: 'deletePages', extra: {'pages': [page]}));
   @override Future<void> movePage({required int from, required int to}) =>
       _op(editorMutateOp(handleId: _hid, editOp: 'movePage', extra: {'from': from, 'to': to}));
 
-  @override Future<void> extractPages(List<int> pages, PdfSink output) async {
-    await _b._submit(editorExtractPagesOp(handleId: _hid, pages: pages), sink: output);
-  }
+  @override Future<void> selectPages(List<int> pages) =>
+      _op(editorMutateOp(handleId: _hid, editOp: 'selectPages', extra: {'pages': pages}));
 
-  @override Future<void> mergeFrom(PdfSource otherPdf) async {
+  @override Future<void> mergeFrom(DataSource otherPdf) async {
     final bytes = await otherPdf.readAt(0, otherPdf.length);
     await _op(editorMergeFromOp(handleId: _hid, otherBytes: Uint8List.view(bytes.buffer)));
   }
@@ -825,26 +725,32 @@ class _WebEditorHandle implements BridgeEditorHandle {
 
   @override Future<void> addWatermark(int page, String text, {
     PdfWatermarkStyle style = const PdfWatermarkStyle(),
-    PdfWatermarkPosition? position,
+    PdfWatermarkPosition position = const PdfWatermarkPosition.center(),
+    PdfWatermarkLayer layer = PdfWatermarkLayer.foreground,
   }) => _op(editorMutateOp(handleId: _hid, editOp: 'watermark', extra: {
-    'page': page, ...encodeWatermarkArgs(text, style),
+    'page': page, ...encodeWatermarkArgs(text, style, position, layer),
   }));
 
   @override Future<void> addStamp(int page, {
     required PdfStampType type, required PdfRect rect,
-    String? customName, double opacity = 1.0,
+    double opacity = 1.0,
   }) => _op(editorMutateOp(handleId: _hid, editOp: 'addStamp', extra: {
     'page': page, 'stampType': type.index, ...encodeRectArgs(rect), 'opacity': opacity,
   }));
 
-  @override Future<void> addImageStamp(int page, Uint8List imageBytes, {
+  @override Future<void> addImageStamp(int page, DataSource imageData, {
     required PdfRect rect, double opacity = 1.0,
-  }) => _op(editorMutateOp(handleId: _hid, editOp: 'addImageStamp', extra: {
-    'page': page, 'imageBytes': imageBytes, ...encodeRectArgs(rect), 'opacity': opacity,
-  }));
+  }) async {
+    final imgBytes = await readAllBytes(imageData);
+    await _op(editorMutateOp(handleId: _hid, editOp: 'addImageStamp', extra: {
+      'page': page, 'imageBytes': imgBytes, ...encodeRectArgs(rect), 'opacity': opacity,
+    }));
+  }
 
-  @override Future<void> embedFile(String name, Uint8List data) =>
-      _op(editorMutateOp(handleId: _hid, editOp: 'embedFile', extra: {'name': name, 'fileData': data}));
+  @override Future<void> embedFile(String name, DataSource data) async {
+    final fileBytes = await readAllBytes(data);
+    await _op(editorMutateOp(handleId: _hid, editOp: 'embedFile', extra: {'name': name, 'fileData': fileBytes}));
+  }
   @override Future<void> eraseRegions(int page, List<PdfRect> regions) =>
       _op(editorMutateOp(handleId: _hid, editOp: 'eraseRegions', extra: {
         'page': page, 'regions': encodeRegions(regions),
@@ -882,7 +788,7 @@ class _WebEditorHandle implements BridgeEditorHandle {
   @override Future<void> scrubMetadata() =>
       _op(editorMutateOp(handleId: _hid, editOp: 'scrubMetadata'));
 
-  @override Future<void> save(PdfSink output, {PdfSaveOptions options = const PdfSaveOptions()}) async {
+  @override Future<void> save(DataSink output, {PdfSaveOptions options = const PdfSaveOptions()}) async {
     await _b._submit(editorSaveOp(handleId: _hid, options: options), sink: output);
   }
 
@@ -922,7 +828,7 @@ class _WebBuilderHandle implements BridgeBuilderHandle {
     return _WebPageHandle(_b, r['handleId'] as int);
   }
 
-  @override Future<void> save(PdfSink output, {PdfSaveOptions options = const PdfSaveOptions()}) async {
+  @override Future<void> save(DataSink output) async {
     await _b._submit(builderSaveOp(handleId: _hid), sink: output);
   }
 
@@ -948,8 +854,10 @@ class _WebPageHandle implements BridgePageBuilderHandle {
   @override Future<void> paragraph(String text) => _pgOp('paragraph', {'text': text});
   @override Future<void> space(double points) => _pgOp('space', {'points': points});
   @override Future<void> horizontalRule() => _pgOp('horizontalRule');
-  @override Future<void> image(Uint8List imageBytes, PdfRect rect, {String altText = ''}) =>
-      _pgOp('image', {'imageBytes': imageBytes, ...encodeRectArgs(rect), 'altText': altText});
+  @override Future<void> image(DataSource imageData, PdfRect rect, {String altText = ''}) async {
+    final imgBytes = await readAllBytes(imageData);
+    await _pgOp('image', {'imageBytes': imgBytes, ...encodeRectArgs(rect), 'altText': altText});
+  }
   @override Future<void> watermark(String text) => _pgOp('watermark', {'text': text});
   @override Future<void> textField(String name, PdfRect rect, {String? defaultValue}) =>
       _pgOp('textField', {'name': name, ...encodeRectArgs(rect), 'defaultValue': defaultValue});

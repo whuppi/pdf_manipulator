@@ -2,34 +2,34 @@
 
 import 'dart:typed_data';
 
-import 'package:pdf_manipulator/src/transport/pdf_bridge.dart';
+import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
 import '../helpers/test_source_sink.dart';
 
-void registerErrorTests(PdfBridge Function() b) {
+void registerErrorTests(Pdf Function() createPdf) {
   group('error', () {
     test('open garbage bytes throws', () async {
       expect(
-        () => b().open(TestSource(Uint8List.fromList([1, 2, 3, 4]))),
+        () => createPdf().open(TestSource(Uint8List.fromList([1, 2, 3, 4]))),
         throwsA(anything),
       );
     });
 
     test('open empty bytes throws', () async {
       expect(
-        () => b().open(TestSource(Uint8List(0))),
+        () => createPdf().open(TestSource(Uint8List(0))),
         throwsA(anything),
       );
     });
 
     test('recover after error — next op works', () async {
+      final pdf = createPdf();
       try {
-        await b().open(TestSource(Uint8List.fromList([0xFF, 0xFE])));
+        await pdf.open(TestSource(Uint8List.fromList([0xFF, 0xFE])));
       } catch (_) {}
 
-      // Bridge should still work after an error
-      final doc = await b().open(TestSource(Uint8List.fromList(
+      final doc = await pdf.open(TestSource(Uint8List.fromList(
         '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n'
         '2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n'
         '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]>>endobj\n'

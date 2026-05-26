@@ -1,12 +1,12 @@
 // Test helpers for the new bridge layer.
-// Uses the new api/ PdfSource and PdfSink types.
+// Uses the new api/ DataSource and DataSink types.
 
 import 'dart:typed_data';
 
-import 'package:pdf_manipulator/src/types/pdf_source.dart';
-import 'package:pdf_manipulator/src/types/pdf_sink.dart';
+import 'package:pdf_manipulator/src/types/data_source.dart';
+import 'package:pdf_manipulator/src/types/data_sink.dart';
 
-class TestSource implements PdfSource {
+class TestSource implements DataSource {
   TestSource(this._data);
   final Uint8List _data;
 
@@ -21,7 +21,7 @@ class TestSource implements PdfSource {
   }
 }
 
-class TestSink implements PdfSink {
+class TestSink implements DataSink {
   final _buf = BytesBuilder(copy: false);
 
   @override
@@ -31,4 +31,4 @@ class TestSink implements PdfSink {
   int get length => _buf.length;
 }
 
-PdfSource src(Uint8List bytes) => TestSource(bytes);
+DataSource src(Uint8List bytes) => TestSource(bytes);

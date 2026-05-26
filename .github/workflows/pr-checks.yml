@@ -49,8 +49,8 @@ jobs:
         run: |
           echo "PR: $HEAD → $BASE"
 
-          if [[ "$BASE" == "prod" && "$HEAD" != "dev" ]]; then
-            echo "::error::prod only accepts PRs from dev. Got: $HEAD → prod"
+          if [[ "$BASE" == "prod" && "$HEAD" != "dev" && "$HEAD" != hotfix/* ]]; then
+            echo "::error::prod only accepts PRs from dev or hotfix/* branches. Got: $HEAD → prod"
             exit 1
           fi
 

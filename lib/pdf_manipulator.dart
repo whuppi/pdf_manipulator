@@ -25,6 +25,7 @@ library;
 export 'src/ops/pdf.dart';
 export 'src/ops/pdf_editor.dart';
 export 'src/ops/pdf_builder.dart';
+export 'src/ops/pdf_operations.dart';
 
 // Types
 export 'src/types/errors.dart';
@@ -37,6 +38,6 @@ export 'src/types/pdf_pages.dart';
 export 'src/types/pdf_params.dart';
 export 'src/types/pdf_rect.dart';
 export 'src/types/pdf_signature.dart';
-export 'src/types/pdf_sink.dart';
-export 'src/types/pdf_source.dart';
+export 'src/types/data_sink.dart';
+export 'src/types/data_source.dart';
 export 'src/types/search_result.dart';

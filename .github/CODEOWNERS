@@ -8,6 +8,11 @@
 # Default: maintainers team owns everything
 *                          @whuppi/pdf-manipulator-maintainers
 
-# Guard rails: repo owner specifically for CI/config
+# Release files: repo owner only (contributors don't write changelogs or versions)
+/CHANGELOG.md              @chaudharydeepanshu
+/CHANGELOG.pre.md          @chaudharydeepanshu
+/pubspec.yaml              @chaudharydeepanshu
+
+# CI and config: repo owner only
 /.github/                  @chaudharydeepanshu
 /.githooks/                @chaudharydeepanshu

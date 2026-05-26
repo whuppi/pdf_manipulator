@@ -95,6 +95,7 @@ void main() {
         PdfSearchError() => 'search',
         PdfCryptoError() => 'crypto',
         PdfEngineError() => 'engine',
+        PdfCancelled() => 'cancelled',
       };
       expect(desc, equals('corrupted'));
     });

@@ -1,10 +1,10 @@
-// Runs all shared ops through NativeBridge (phone/desktop path).
+// Runs all shared ops through the public Pdf API (native path).
 // The SAME tests run through WebBridge in web_runner_test.dart.
 
 @TestOn('!browser')
 library;
 
-import 'package:pdf_manipulator/src/transport/native/bridge.dart';
+import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
 import 'open.dart';
@@ -19,23 +19,25 @@ import 'error.dart';
 import 'lifecycle.dart';
 import 'coverage_check.dart';
 import 'stress.dart';
+import 'timing_test.dart';
 
 void main() {
-  late NativeBridge bridge;
+  late Pdf pdf;
 
-  setUpAll(() => bridge = NativeBridge());
-  tearDownAll(() => bridge.dispose());
+  setUpAll(() => pdf = Pdf());
+  tearDownAll(() => pdf.dispose());
 
-  registerOpenTests(() => bridge);
-  registerMergeTests(() => bridge);
-  registerStructuralTests(() => bridge);
-  registerContentTests(() => bridge);
-  registerStreamTests(() => bridge);
-  registerSecurityTests(() => bridge);
-  registerEditorTests(() => bridge);
-  registerBuilderTests(() => bridge);
-  registerErrorTests(() => bridge);
-  registerLifecycleTests(() => NativeBridge());
-  registerStressTests(() => bridge);
+  registerOpenTests(() => pdf);
+  registerMergeTests(() => pdf);
+  registerStructuralTests(() => pdf);
+  registerContentTests(() => pdf);
+  registerStreamTests(() => pdf);
+  registerSecurityTests(() => pdf);
+  registerEditorTests(() => pdf);
+  registerBuilderTests(() => pdf);
+  registerErrorTests(() => pdf);
+  registerLifecycleTests(() => Pdf());
+  registerTimingTests(() => pdf);
+  registerStressTests(() => pdf);
   registerCoverageCheck();
 }

@@ -8,7 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
-class _Source implements PdfSource {
+class _Source implements DataSource {
   _Source(this._data);
   final Uint8List _data;
   @override
@@ -21,14 +21,14 @@ class _Source implements PdfSource {
   }
 }
 
-class _Sink implements PdfSink {
+class _Sink implements DataSink {
   final _builder = BytesBuilder(copy: false);
   @override
   void write(Uint8List chunk) => _builder.add(chunk);
   Uint8List takeBytes() => _builder.takeBytes();
 }
 
-PdfSource _src(Uint8List bytes) => _Source(bytes);
+DataSource _src(Uint8List bytes) => _Source(bytes);
 
 final _minimalPdf = Uint8List.fromList(
   '%PDF-1.4\n'
@@ -68,43 +68,51 @@ void main() {
     expect(doc.pageCount, 2);
   });
 
-  testWidgets('rotate produces output', (tester) async {
+  testWidgets('rotate sets rotation on page', (tester) async {
     final sink = _Sink();
     await pdf.rotateAllPages(_src(_minimalPdf), sink, degrees: 90);
-    expect(sink.takeBytes().length, greaterThan(0));
+    final doc = await pdf.open(_src(sink.takeBytes()));
+    expect(doc.pages[0].rotation, 90);
   });
 
-  testWidgets('extract text returns string', (tester) async {
+  testWidgets('extract text from blank page returns empty', (tester) async {
     final text = await pdf.extract(_src(_minimalPdf), pages: const PdfPages.all());
-    expect(text, isA<String>());
+    expect(text.trim(), isEmpty);
   });
 
-  testWidgets('compress produces output', (tester) async {
+  testWidgets('compress preserves page count', (tester) async {
     final sink = _Sink();
     await pdf.compress(_src(_minimalPdf), sink);
-    expect(sink.takeBytes().length, greaterThan(0));
+    final doc = await pdf.open(_src(sink.takeBytes()));
+    expect(doc.pageCount, 1);
   });
 
-  testWidgets('watermark produces output', (tester) async {
+  testWidgets('watermark text appears in output', (tester) async {
     final sink = _Sink();
-    await pdf.watermark(_src(_minimalPdf), sink, text: 'TEST');
-    expect(sink.takeBytes().length, greaterThan(_minimalPdf.length));
+    await pdf.watermark(_src(_minimalPdf), sink, text: 'MOBILETEST');
+    final output = sink.takeBytes();
+    final doc = await pdf.open(_src(output));
+    expect(doc.pageCount, 1);
+    expect(String.fromCharCodes(output), contains('MOBILETEST'));
   });
 
-  testWidgets('encrypt produces output', (tester) async {
+  testWidgets('encrypt marks PDF as encrypted', (tester) async {
     final sink = _Sink();
     await pdf.encrypt(_src(_minimalPdf), sink,
         encryption: const PdfEncryptionConfig(ownerPassword: 'test'));
-    expect(sink.takeBytes().length, greaterThan(0));
+    final doc = await pdf.open(_src(sink.takeBytes()), password: 'test');
+    expect(doc.isEncrypted, isTrue);
   });
 
-  testWidgets('editor opens and saves', (tester) async {
+  testWidgets('editor setTitle writes title into output', (tester) async {
     final editor = await pdf.edit(_src(_minimalPdf));
     expect(await editor.pageCount, 1);
+    await editor.setTitle('MobileTitle');
     final sink = _Sink();
     await editor.save(sink);
     await editor.dispose();
-    expect(sink.takeBytes().length, greaterThan(0));
+    final output = sink.takeBytes();
+    expect(String.fromCharCodes(output), contains('MobileTitle'));
   });
 
   testWidgets('builder creates PDF', (tester) async {

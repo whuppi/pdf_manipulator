@@ -1,10 +1,13 @@
-# Test configuration for pdf_manipulator.
+# Default platform is VM (native). Web tests run explicitly with -p chrome.
 #
-# Default platform is VM (native tests). Web tests run explicitly:
-#   dart test test/bridge/web/ -p chrome
-#   dart test test/bridge/web/atomics_test.dart -p chrome-coi
+#   dart test                                                    # native only
+#   dart test test/ops/web_runner_test.dart -p chrome            # web ops
+#   dart test test/transport/web/atomics_test.dart -p chrome-coi # Atomics mode
 #
-# `dart test` with no -p flag runs native tests only (fast, ~8s).
+# Or use the Makefile:
+#   make test       # native
+#   make test-web   # web (Chrome)
+#   make check      # analyze + native + web
 
 platforms: [vm]
 
@@ -14,7 +17,3 @@ define_platforms:
     extends: chrome
     settings:
       arguments: --enable-features=SharedArrayBuffer
-
-tags:
-  web:
-  atomics:

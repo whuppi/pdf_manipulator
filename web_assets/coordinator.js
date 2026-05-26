@@ -11,6 +11,10 @@
 //   - Stream item routing: WASM worker → coordinator → main
 //   - OPFS lifecycle (mode 3 only): write, finalize, cleanup
 
+// Version stamp — replaced by setup.dart with the actual package version.
+// If this still says '__VERSION__', setup was not run or is outdated.
+const PKG_VERSION = '__VERSION__';
+
 let ioMode = 'opfs';
 let poolSize = 2;
 const idleWorkers = [];
@@ -18,7 +22,7 @@ const busyWorkers = new Map();   // opId → { worker, opfsFile? }
 const pendingOps = [];           // queued when pool is full
 const opfsFiles = new Set();     // cleanup registry
 let nextOpId = 1;
-let wasmWorkerUrl = null;
+let workerUrl = null;
 
 // Pending read requests: opId → { resolve, reject } for read fulfillment
 const pendingReads = new Map();
@@ -77,21 +81,20 @@ async function createWasmWorker() {
   // runner and asset server are on different ports). The blob worker runs
   // same-origin. Rewrite the relative './pdf_oxide.js' import to absolute
   // so the ES module loader can resolve it from the blob context.
-  let workerUrl = wasmWorkerUrl;
+  let effectiveUrl = workerUrl;
   try {
-    const resp = await fetch(wasmWorkerUrl);
+    const resp = await fetch(workerUrl);
     if (resp.ok) {
       let src = await resp.text();
-      const base = wasmWorkerUrl.substring(0, wasmWorkerUrl.lastIndexOf('/') + 1);
-      // Rewrite relative imports to absolute so blob URL can resolve them
+      const base = workerUrl.substring(0, workerUrl.lastIndexOf('/') + 1);
       src = src.replace("from './pdf_oxide.js'", "from '" + base + "pdf_oxide.js'");
       const blob = new Blob([src], { type: 'application/javascript' });
-      workerUrl = URL.createObjectURL(blob);
+      effectiveUrl = URL.createObjectURL(blob);
     }
   } catch (e) {
   }
 
-  const w = new Worker(workerUrl, { type: 'module' });
+  const w = new Worker(effectiveUrl, { type: 'module' });
   return new Promise((resolve, reject) => {
     let settled = false;
     const timeout = setTimeout(() => {
@@ -272,10 +275,10 @@ self.onmessage = async (e) => {
   try {
     switch (msg.type) {
       case 'init': {
-        wasmWorkerUrl = msg.wasmWorkerUrl;
+        workerUrl = msg.workerUrl;
         poolSize = msg.poolSize || Math.max(2, Math.floor((navigator.hardwareConcurrency || 4) / 2));
         ioMode = detectIoMode();
-        self.postMessage({ type: 'ready', ioMode, poolSize });
+        self.postMessage({ type: 'ready', ioMode, poolSize, version: PKG_VERSION });
         break;
       }
 

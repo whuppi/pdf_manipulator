@@ -1,10 +1,8 @@
 # pdf_manipulator — Capabilities
 
-What's shipped, what's next, what's out of scope.
+What's shipped, what's planned, what's out of scope.
 
 For architecture see [`ARCHITECTURE.md`](ARCHITECTURE.md).
-For bridge internals see [`BRIDGE_ARCHITECTURE.md`](BRIDGE_ARCHITECTURE.md).
-For public API see [`API_GOLD.md`](API_GOLD.md).
 
 ---
 
@@ -12,66 +10,41 @@ For public API see [`API_GOLD.md`](API_GOLD.md).
 
 | Capability | Status |
 |---|:---:|
-| Three-layer architecture (API / Bridge / Engine) | ✓ |
-| PdfBridge abstract interface — NativeBridge + WebBridge implementations | ✓ |
-| Sealed PdfPages type for page-scoped operations | ✓ |
-| PdfSource (random-access reader) + PdfSink (sequential writer) | ✓ |
-| Rust thread pool (raw pthreads, `available_parallelism() / 2`) | ✓ |
-| CallbackReader: condvar + NativeCallable.listener (engine reads ranges on demand) | ✓ |
-| CallbackWriter: condvar + NativeCallable.listener (engine writes chunks as produced) | ✓ |
-| bumpalo arena allocator per operation (drop arena = free ALL memory) | ✓ |
-| allo-isolate for result posting (Dart_PostCObject from any thread) | ✓ |
-| Shared buffer layout (defined once in Rust, mirrored in Dart) | ✓ |
-| Web Worker pool (hardwareConcurrency / 2) with session-based ops | ✓ |
-| OPFS SyncAccessHandle (JsCallbackReader reads from disk, not RAM) | ✓ |
-| OPFS cleanup registry (tracks temp files, cleans on error/dispose) | ✓ |
-| Stream\<T\> for extractImages and render (per-item, one at a time) | ✓ |
-| Cooperative cancel (flag + condvar signal) + force-kill (pthread_cancel / Worker.terminate) | ✓ |
-| Instant dispose (cancel all + kill isolate/workers + arena drop + buffer free) | ✓ |
-| Read timeout (pthread_cond_timedwait 30s) | ✓ |
-| Conditional import dispatch (bridge_factory.dart) | ✓ |
-| Build hook with Rust source in dependencies (auto-recompile on Rust changes) | ✓ |
-| Pre-compiled binaries (macOS, iOS, Android, Linux, Windows) | ✓ |
-| CI/CD pipeline (cross-compile 13 targets + WASM → GitHub Releases) | ✓ |
-| Instance-based API: `Pdf()` with `dispose()` | ✓ |
-| Sealed PdfError hierarchy | ✓ |
+| Four-layer architecture (Consumer API / Transport / Host / Engine) | ✓ |
+| Shared dispatch (`host/dispatch.rs`) — all ops (read + edit) go through one brain | ✓ |
+| Symmetric file naming (bridge↔bridge, coordinator↔coordinator, wire↔wire, ffi_api↔wasm_api, ffi_encode↔wasm_encode) | ✓ |
+| DataSource (random-access reader) + DataSink (sequential writer) | ✓ |
+| Sealed PdfPages, PdfError, PdfEncryption types | ✓ |
+| PdfSaveMode (fullRewrite / incremental) | ✓ |
+| Rust thread pool (native) + Web Worker pool (web) — off main thread | ✓ |
+| Condvar streaming I/O (native) + Atomics/OPFS (web) | ✓ |
+| Stream\<T\> for render and extractImages (one item at a time) | ✓ |
+| Arena allocator per operation (bumpalo) | ✓ |
+| Build hook: compile from source (contributors) or download pre-built (consumers) | ✓ |
+| Pre-built binary caching with SHA256 verification (offline builds work) | ✓ |
+| Web setup script (`dart run pdf_manipulator:setup`) with version guard | ✓ |
+| CI/CD: cross-compile 13 native targets + WASM | ✓ |
+| Wire sync test (catches native/web parity drift) | ✓ |
+| Resource pruning on GC save (scan content streams, prune unused Resources) | ✓ |
 
 ---
 
-## Operations — Pdf class (one-shot)
+## Operations — Pdf (standalone)
 
 | Operation | Status |
 |---|:---:|
-| open (inspect: page count, version, dimensions, metadata, encryption) | ✓ |
-| merge N PDFs | ✓ |
-| split by page count | ✓ |
-| splitBySize | ✓ |
-| extractPages | ✓ |
-| deletePages | ✓ |
-| reorderPages | ✓ |
-| movePage | ✓ |
-| rotatePages (per-page) | ✓ |
-| rotateAllPages | ✓ |
-| flattenForms | ✓ |
-| applyRedactions | ✓ |
-| embedFile | ✓ |
-| eraseRegions | ✓ |
-| compress (stream recompression + GC + image optimization) | ✓ |
-| extract (text / markdown, via PdfExtractionFormat) | ✓ |
-| search (query + PdfPages) | ✓ |
-| watermark (text, positioned, styled) | ✓ |
-| encrypt (PdfEncryptionConfig with algorithm + permissions) | ✓ |
-| decrypt | ✓ |
-| sign (PKCS12 certificate) | ✓ |
-| addStamp (standard stamp annotations) | ✓ |
-| addImageStamp | ✓ |
-| imagesToPdf | ✓ |
-| render (PdfPages + PdfRenderSize → Stream\<PdfRenderedPage\>) | ✓ |
+| open (page count, version, dimensions, metadata, encryption, permissions) | ✓ |
+| extract (text / markdown / html, per-page or all) | ✓ |
+| search (query + PdfPages → SearchResult with x,y,w,h) | ✓ |
+| render (PdfPages → Stream\<RenderedPage\>) | ✓ |
 | extractImages (PdfPages → Stream\<PdfImage\>) | ✓ |
-| getSignatures | ✓ |
-| verifySignatures | ✓ |
-| validatePdfA | ✓ |
-| validatePdfUa | ✓ |
+| getSignatures / verifySignatures | ✓ |
+| validatePdfA / validatePdfUa | ✓ |
+| classifyPage / classifyDocument | ✓ |
+| planSplitByBookmarks | ✓ |
+| sign (PKCS12 / PEM) | ✓ |
+| imagesToPdf | ✓ |
+| convertTo (PDF → DOCX/PPTX/XLSX) / convertToPdf (reverse) | ✓ |
 
 ---
 
@@ -79,27 +52,23 @@ For public API see [`API_GOLD.md`](API_GOLD.md).
 
 | Operation | Status |
 |---|:---:|
-| openEditor (persistent handle, read source via streaming) | ✓ |
-| setTitle / setAuthor / setSubject / setKeywords | ✓ |
-| getTitle / getAuthor / getSubject / getKeywords | ✓ |
+| openEditor (persistent handle, streaming reader) | ✓ |
+| selectPages / deletePage / movePage | ✓ |
 | rotatePage / rotateAllPages | ✓ |
-| deletePage | ✓ |
-| movePage | ✓ |
-| mergeFrom (PdfSource) | ✓ |
-| extractPages (PdfSink) | ✓ |
-| optimizeImages | ✓ |
-| unembedStandardFonts | ✓ |
-| addWatermark (with PdfWatermarkStyle + PdfWatermarkPosition) | ✓ |
+| setTitle / setAuthor / setSubject / setKeywords (get + set) | ✓ |
+| mergeFrom (DataSource) | ✓ |
+| addWatermark (PdfWatermarkStyle + sealed PdfWatermarkPosition + PdfWatermarkLayer) | ✓ |
+| Sealed PdfWatermarkPosition (center / corner / tiled / exact — engine resolves per-page) | ✓ |
+| PdfWatermarkLayer (foreground: annotation / background: content-stream behind page content) | ✓ |
 | addStamp / addImageStamp | ✓ |
 | embedFile / eraseRegions | ✓ |
 | flattenForms / flattenAllAnnotations | ✓ |
 | setFormFieldValue | ✓ |
-| cropMargins | ✓ |
-| convertToPdfA | ✓ |
-| resizeImage | ✓ |
-| save (PdfSink + PdfSaveOptions with optional encryption) | ✓ |
-| getPageMediaBox | ✓ |
-| pageCount / version / isModified | ✓ |
+| cropMargins / convertToPdfA / resizeImage | ✓ |
+| unembedStandardFonts / optimizeImages | ✓ |
+| addRedaction / redactionCount / applyRedactions / scrubMetadata | ✓ |
+| save (DataSink + PdfSaveOptions: mode, compression, GC, encryption) | ✓ |
+| getPageMediaBox / pageCount / version / isModified | ✓ |
 
 ---
 
@@ -107,50 +76,40 @@ For public API see [`API_GOLD.md`](API_GOLD.md).
 
 | Operation | Status |
 |---|:---:|
-| createBuilder | ✓ |
 | setTitle / setAuthor / setSubject / setKeywords | ✓ |
 | addA4Page / addLetterPage / addPage(custom size) | ✓ |
-| Page: font, at, text, heading, paragraph, space, horizontalRule | ✓ |
-| Page: image, watermark | ✓ |
-| Page: textField, checkbox, comboBox, pushButton, signatureField, radioGroup | ✓ |
-| Page: fieldKeystroke, fieldFormat, fieldValidate, fieldCalculate | ✓ |
-| Page: linkUrl, linkPage | ✓ |
-| Page: footnote, columns, newline, newPageSameSize | ✓ |
-| save (PdfSink + PdfSaveOptions) | ✓ |
+| text, heading, paragraph, space, horizontalRule, image, watermark | ✓ |
+| textField, checkbox, comboBox, pushButton, signatureField, radioGroup | ✓ |
+| fieldKeystroke, fieldFormat, fieldValidate, fieldCalculate | ✓ |
+| linkUrl, linkPage, footnote, columns, newline, newPageSameSize | ✓ |
+| save (DataSink) | ✓ |
 
 ---
 
-## Tests
+## Operations — PdfOperations (21 sugar methods)
 
-| Suite | Count |
+| Operation | Status |
 |---|:---:|
-| Rust bridge (unit + integration) | 27 |
-| Dart native bridge e2e | 44 |
-| Dart Layer 1 API (Pdf + PdfEditor + PdfBuilder) | 44 |
-| **Total** | **115** |
+| merge, split, splitBySize, splitByBookmarks | ✓ |
+| extractPages, deletePages, reorderPages, movePage | ✓ |
+| rotatePages, rotateAllPages | ✓ |
+| flattenForms, applyRedactions | ✓ |
+| embedFile, eraseRegions | ✓ |
+| compress, watermark | ✓ |
+| encrypt, decrypt | ✓ |
+| addStamp, addImageStamp, convertToPdfA | ✓ |
 
 ---
 
-## Next up
+## Dispatch coverage
 
-| Task | Status |
-|---|---|
-| Web e2e tests (asset server for worker.js + WASM in `dart test -p chrome`) | Blocked |
-| Rewrite example app + integration test for new API | Not started |
-| Final fork audit (diff against upstream, clean stale patches) | Not started |
-| README rewrite with new API examples | Not started |
+All operations — read, stream, and edit — go through `dispatch.rs` on both platforms.
 
 ---
 
-## Planned (engine doesn't support yet)
+## Planned
 
-| Feature | Why deferred |
-|---|---|
-| addRedaction, redactionCount, scrubMetadata | Needs Rust bridge wiring for redaction tracking |
-| planSplitByBookmarks, splitByBookmarks | pdf_oxide has bookmarks but no split-by-bookmark API |
-| convertTo (PDF → DOCX/PPTX/XLSX) | pdf_oxide v0.3.48+, not shipped upstream |
-| convertToPdf (DOCX/PPTX/XLSX → PDF) | Same |
-| classifyPage, classifyDocument | Not in pdf_oxide, needs ML/heuristic engine |
+No planned items.
 
 ---
 
@@ -160,4 +119,4 @@ For public API see [`API_GOLD.md`](API_GOLD.md).
 |---|---|
 | OCR | Requires Tesseract or similar — not a PDF primitive |
 | Table extraction | Heuristic-heavy — better served by dedicated libraries |
-| Barcode/QR generation | Not a PDF concern — compose with a barcode package |
+| PDF viewer widget | Use pdfx or flutter_pdfview — they're built for viewing, we're built for manipulation |

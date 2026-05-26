@@ -912,6 +912,46 @@ export class WasmPdfDocument {
      * Delete a page by index (0-based).
      */
     deletePage(index: number): void;
+    dispatchClassifyDocument(): any;
+    dispatchClassifyPage(page: number): any;
+    dispatchEditAddImageStamp(page: number, image_bytes: Uint8Array, x: number, y: number, w: number, h: number, opacity: number): void;
+    dispatchEditAddRedaction(page: number, x: number, y: number, w: number, h: number): void;
+    dispatchEditAddStamp(page: number, stamp_type: number, x: number, y: number, w: number, h: number, opacity: number): void;
+    dispatchEditApplyRedactions(): void;
+    dispatchEditApplyRedactionsDestructive(): void;
+    dispatchEditCompress(quality: number): void;
+    dispatchEditConvertToPdfA(level: number): void;
+    dispatchEditCropMargins(left: number, right: number, top: number, bottom: number): void;
+    dispatchEditDeletePages(pages: Uint32Array): void;
+    dispatchEditEmbedFile(name: string, data: Uint8Array): void;
+    dispatchEditEraseRegions(page: number, rects: Float32Array): void;
+    dispatchEditFlattenAllAnnotations(): void;
+    dispatchEditFlattenForms(): void;
+    dispatchEditMerge(secondary_bytes: Uint8Array[]): void;
+    dispatchEditMovePage(from: number, to: number): void;
+    dispatchEditRedactionCount(page: number): number;
+    dispatchEditResizeImage(page: number, name: string, width: number, height: number): void;
+    dispatchEditRotateAll(degrees: number): void;
+    dispatchEditRotatePages(pages: Uint32Array, degrees: Int32Array): void;
+    dispatchEditScrubMetadata(): void;
+    dispatchEditSelectPages(pages: Uint32Array): void;
+    dispatchEditSetAuthor(value: string): void;
+    dispatchEditSetFormFieldValue(name: string, value: string): void;
+    dispatchEditSetKeywords(value: string): void;
+    dispatchEditSetSubject(value: string): void;
+    dispatchEditSetTitle(value: string): void;
+    dispatchEditUnembedStandardFonts(): number;
+    dispatchEditWatermark(page: number, text: string, font_size: number, rotation: number, opacity: number, r: number, g: number, b: number): void;
+    dispatchExtractImages(page: number): any;
+    dispatchExtractText(page?: number | null, format?: string | null): any;
+    dispatchGetSignatures(): any;
+    dispatchOpen(): any;
+    dispatchPlanSplitByBookmarks(): any;
+    dispatchRenderPage(page: number, max_width?: number | null, max_height?: number | null): any;
+    dispatchSearch(query: string, page?: number | null): any;
+    dispatchValidatePdfA(level?: number | null): any;
+    dispatchValidatePdfUa(level?: number | null): any;
+    dispatchVerifySignatures(): any;
     /**
      * The document's Document Security Store (`/DSS`) as a `Dss`, or
      * `undefined` if absent. Mirrors Rust `signatures::read_dss`.
@@ -1041,11 +1081,6 @@ export class WasmPdfDocument {
      */
     extractPageText(page_index: number, reading_order?: string | null): any;
     /**
-     * Extract specific pages — removes all OTHER pages from the editor.
-     * Same logic as native FFI: direct editor mutation via shared editor_ops.
-     */
-    extractPages(pages: Uint32Array): void;
-    /**
      * Extract vector paths (lines, curves, shapes) from a page.
      *
      * @param page_index - Zero-based page number
@@ -1164,6 +1199,7 @@ export class WasmPdfDocument {
      * Read the document author from the Info dictionary.
      */
     getAuthor(): string;
+    getEncryptionAlgorithm(): number;
     /**
      * Get the value of a specific form field by name.
      *
@@ -1197,6 +1233,7 @@ export class WasmPdfDocument {
      * Each item has: { title, page (number|null), dest_name (string, optional), children (array) }
      */
     getOutline(): any;
+    getPermissionBits(): number;
     /**
      * Read the document subject from the Info dictionary.
      */
@@ -1215,6 +1252,8 @@ export class WasmPdfDocument {
      * @returns true if the document has XFA form data
      */
     hasXfa(): boolean;
+    isEncrypted(): boolean;
+    isModified(): boolean;
     /**
      * Merge another PDF (provided as bytes) into this document.
      *
@@ -1324,6 +1363,7 @@ export class WasmPdfDocument {
      * Reposition an image on a page.
      */
     repositionImage(page_index: number, name: string, x: number, y: number): void;
+    requiresPassword(): boolean;
     /**
      * Resize an image on a page.
      */
@@ -1365,7 +1405,7 @@ export class WasmPdfDocument {
      * @param write_fn - JS function: (chunk: Uint8Array) => void
      * @param options - Optional save options (compress, garbageCollect, linearize)
      */
-    saveToWriter(write_fn: Function, compress?: boolean | null, garbage_collect?: boolean | null, linearize?: boolean | null): void;
+    saveToWriter(write_fn: Function, compress?: boolean | null, garbage_collect?: boolean | null, save_mode?: number | null): void;
     /**
      * Save with options (compress, garbage_collect, linearize) and return bytes.
      *
@@ -1392,6 +1432,10 @@ export class WasmPdfDocument {
      * Search for text on a specific page.
      */
     searchPage(page_index: number, pattern: string, case_insensitive?: boolean | null, literal?: boolean | null, whole_word?: boolean | null, max_results?: number | null): any;
+    /**
+     * Keep only the specified pages — removes all others from the editor.
+     */
+    selectPages(pages: Uint32Array): void;
     /**
      * Set the document author.
      */
@@ -1819,6 +1863,16 @@ export function signPdfBytes(pdf_data: Uint8Array, cert: WasmCertificate, reason
 export function signPdfBytesPades(pdf_data: Uint8Array, cert: WasmCertificate, level: PadesLevel, timestamp_token?: Uint8Array | null, revocation?: RevocationMaterial | null, reason?: string | null, location?: string | null): Uint8Array;
 
 /**
+ * Sign PDF via streaming reader/writer with PEM credentials — constant memory.
+ */
+export function signPdfStreamingPem(read_fn: Function, length_fn: Function, write_fn: Function, cert_pem: string, key_pem: string, reason?: string | null, location?: string | null): void;
+
+/**
+ * Sign PDF via streaming reader/writer — constant memory.
+ */
+export function signPdfStreamingPkcs12(read_fn: Function, length_fn: Function, write_fn: Function, pkcs12_data: Uint8Array, password: string, reason?: string | null, location?: string | null): void;
+
+/**
  * Sign PDF bytes with PEM certificate + key. All data stays inside WASM.
  */
 export function signPdfWithPem(pdf_data: Uint8Array, cert_pem: string, key_pem: string, reason?: string | null, location?: string | null): Uint8Array;
@@ -1840,6 +1894,46 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly wasmpdfdocument_dispatchOpen: (a: number, b: number) => void;
+    readonly wasmpdfdocument_dispatchExtractText: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly wasmpdfdocument_dispatchSearch: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly wasmpdfdocument_dispatchGetSignatures: (a: number, b: number) => void;
+    readonly wasmpdfdocument_dispatchVerifySignatures: (a: number, b: number) => void;
+    readonly wasmpdfdocument_dispatchValidatePdfA: (a: number, b: number, c: number) => void;
+    readonly wasmpdfdocument_dispatchValidatePdfUa: (a: number, b: number, c: number) => void;
+    readonly wasmpdfdocument_dispatchClassifyPage: (a: number, b: number, c: number) => void;
+    readonly wasmpdfdocument_dispatchClassifyDocument: (a: number, b: number) => void;
+    readonly wasmpdfdocument_dispatchPlanSplitByBookmarks: (a: number, b: number) => void;
+    readonly wasmpdfdocument_dispatchRenderPage: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly wasmpdfdocument_dispatchExtractImages: (a: number, b: number, c: number) => void;
+    readonly wasmpdfdocument_dispatchEditSelectPages: (a: number, b: number, c: number, d: number) => void;
+    readonly wasmpdfdocument_dispatchEditDeletePages: (a: number, b: number, c: number, d: number) => void;
+    readonly wasmpdfdocument_dispatchEditRotatePages: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly wasmpdfdocument_dispatchEditRotateAll: (a: number, b: number, c: number) => void;
+    readonly wasmpdfdocument_dispatchEditFlattenForms: (a: number, b: number) => void;
+    readonly wasmpdfdocument_dispatchEditApplyRedactions: (a: number, b: number) => void;
+    readonly wasmpdfdocument_dispatchEditCompress: (a: number, b: number, c: number) => void;
+    readonly wasmpdfdocument_dispatchEditMovePage: (a: number, b: number, c: number, d: number) => void;
+    readonly wasmpdfdocument_dispatchEditEmbedFile: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly wasmpdfdocument_dispatchEditEraseRegions: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly wasmpdfdocument_dispatchEditWatermark: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
+    readonly wasmpdfdocument_dispatchEditAddStamp: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
+    readonly wasmpdfdocument_dispatchEditAddImageStamp: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
+    readonly wasmpdfdocument_dispatchEditSetTitle: (a: number, b: number, c: number, d: number) => void;
+    readonly wasmpdfdocument_dispatchEditSetAuthor: (a: number, b: number, c: number, d: number) => void;
+    readonly wasmpdfdocument_dispatchEditSetSubject: (a: number, b: number, c: number, d: number) => void;
+    readonly wasmpdfdocument_dispatchEditSetKeywords: (a: number, b: number, c: number, d: number) => void;
+    readonly wasmpdfdocument_dispatchEditUnembedStandardFonts: (a: number, b: number) => void;
+    readonly wasmpdfdocument_dispatchEditFlattenAllAnnotations: (a: number, b: number) => void;
+    readonly wasmpdfdocument_dispatchEditSetFormFieldValue: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly wasmpdfdocument_dispatchEditCropMargins: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly wasmpdfdocument_dispatchEditConvertToPdfA: (a: number, b: number, c: number) => void;
+    readonly wasmpdfdocument_dispatchEditResizeImage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+    readonly wasmpdfdocument_dispatchEditAddRedaction: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+    readonly wasmpdfdocument_dispatchEditRedactionCount: (a: number, b: number, c: number) => void;
+    readonly wasmpdfdocument_dispatchEditApplyRedactionsDestructive: (a: number, b: number) => void;
+    readonly wasmpdfdocument_dispatchEditScrubMetadata: (a: number, b: number) => void;
+    readonly wasmpdfdocument_dispatchEditMerge: (a: number, b: number, c: number, d: number) => void;
     readonly setLogLevel: (a: number, b: number, c: number) => void;
     readonly generateBarcodeSvg: (a: number, b: number, c: number, d: number) => void;
     readonly generateQrSvg: (a: number, b: number, c: number, d: number, e: number) => void;
@@ -1856,12 +1950,17 @@ export interface InitOutput {
     readonly wasmpdfdocument_fromReader: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly wasmpdfdocument_editorFromReader: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly wasmpdfdocument_pageCount: (a: number, b: number) => void;
+    readonly wasmpdfdocument_isModified: (a: number, b: number) => void;
     readonly wasmpdfdocument_signatureCount: (a: number, b: number) => void;
     readonly wasmpdfdocument_signatures: (a: number, b: number) => void;
     readonly wasmpdfdocument_dss: (a: number, b: number) => void;
     readonly wasmpdfdocument_version: (a: number, b: number) => void;
     readonly wasmpdfdocument_authenticate: (a: number, b: number, c: number, d: number) => void;
     readonly wasmpdfdocument_hasStructureTree: (a: number, b: number) => void;
+    readonly wasmpdfdocument_isEncrypted: (a: number, b: number) => void;
+    readonly wasmpdfdocument_requiresPassword: (a: number, b: number) => void;
+    readonly wasmpdfdocument_getEncryptionAlgorithm: (a: number, b: number) => void;
+    readonly wasmpdfdocument_getPermissionBits: (a: number, b: number) => void;
     readonly wasmpdfdocument_extractText: (a: number, b: number, c: number, d: number) => void;
     readonly wasmpdfdocument_extractAllText: (a: number, b: number) => void;
     readonly wasmpdfdocument_removeHeaders: (a: number, b: number, c: number) => void;
@@ -1926,6 +2025,8 @@ export interface InitOutput {
     readonly signPdfBytesPades: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => void;
     readonly signPdfWithPkcs12: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
     readonly signPdfWithPem: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
+    readonly signPdfStreamingPkcs12: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => void;
+    readonly signPdfStreamingPem: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => void;
     readonly __wbg_wasmtimestamp_free: (a: number, b: number) => void;
     readonly wasmtimestamp_parse: (a: number, b: number, c: number) => void;
     readonly wasmtimestamp_time: (a: number) => bigint;
@@ -2036,7 +2137,7 @@ export interface InitOutput {
     readonly wasmpdfdocument_validatePdfX: (a: number, b: number, c: number, d: number) => void;
     readonly wasmpdfdocument_deletePage: (a: number, b: number, c: number) => void;
     readonly wasmpdfdocument_movePage: (a: number, b: number, c: number, d: number) => void;
-    readonly wasmpdfdocument_extractPages: (a: number, b: number, c: number, d: number) => void;
+    readonly wasmpdfdocument_selectPages: (a: number, b: number, c: number, d: number) => void;
     readonly wasmpdfdocument_flattenToImages: (a: number, b: number, c: number) => void;
     readonly __wbg_wasmpdf_free: (a: number, b: number) => void;
     readonly wasmpdf_fromBytes: (a: number, b: number, c: number) => void;

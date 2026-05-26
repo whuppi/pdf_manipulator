@@ -1,18 +1,17 @@
 // Stream — render pages to images, extract embedded images.
 
-import 'package:pdf_manipulator/src/types/pdf_image.dart';
-import 'package:pdf_manipulator/src/types/pdf_pages.dart';
-import 'package:pdf_manipulator/src/transport/pdf_bridge.dart';
+import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
 import '../helpers/fixtures.dart';
 import '../helpers/test_source_sink.dart';
 
-void registerStreamTests(PdfBridge Function() b) {
+void registerStreamTests(Pdf Function() createPdf) {
   group('stream', () {
     test('render single page yields one result', () async {
+      final pdf = createPdf();
       final pages = <RenderedPage>[];
-      await for (final page in b().render(
+      await for (final page in pdf.render(
         src(minimalPdf),
         pages: const PdfPages.single(0),
       )) {
@@ -23,12 +22,13 @@ void registerStreamTests(PdfBridge Function() b) {
     });
 
     test('render all pages of multi-page PDF', () async {
+      final pdf = createPdf();
       final mergeSink = TestSink();
-      await b().merge([src(minimalPdf), src(minimalPdf)], mergeSink);
+      await pdf.merge([src(minimalPdf), src(minimalPdf)], mergeSink);
       final twoPage = mergeSink.takeBytes();
 
       final pages = <RenderedPage>[];
-      await for (final page in b().render(
+      await for (final page in pdf.render(
         src(twoPage),
         pages: const PdfPages.all(),
       )) {
@@ -38,8 +38,9 @@ void registerStreamTests(PdfBridge Function() b) {
     });
 
     test('extractImages returns list (may be empty for minimal PDF)', () async {
+      final pdf = createPdf();
       final images = <PdfImage>[];
-      await for (final img in b().extractImages(
+      await for (final img in pdf.extractImages(
         src(minimalPdf),
         pages: const PdfPages.all(),
       )) {

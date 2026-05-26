@@ -43,7 +43,7 @@ jobs:
       - uses: dart-lang/setup-dart@v1
         with: { sdk: stable }
       - run: dart pub get --no-example
-      - run: dart analyze lib/ test/ hook/
+      - run: dart analyze .
 
   test:
     needs: changes

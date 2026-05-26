@@ -1,11 +1,10 @@
-// Pdf — every one-shot operation. One instance = one worker + one thread pool.
-
-import 'dart:typed_data';
+// Pdf — entry point + standalone FFI methods.
+// One instance = one bridge = one worker isolate.
 
 import 'package:pdf_manipulator/src/ops/pdf_editor.dart';
 import 'package:pdf_manipulator/src/ops/pdf_builder.dart';
-import 'package:pdf_manipulator/src/types/pdf_sink.dart';
-import 'package:pdf_manipulator/src/types/pdf_source.dart';
+import 'package:pdf_manipulator/src/types/data_sink.dart';
+import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_config.dart';
@@ -13,13 +12,12 @@ import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/transport/pdf_bridge.dart';
 import 'package:pdf_manipulator/src/transport/create.dart';
 import 'package:pdf_manipulator/src/types/pdf_image.dart';
-import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
 import 'package:pdf_manipulator/src/types/search_result.dart';
 import 'package:pdf_manipulator/src/types/pdf_doc.dart';
 
 class Pdf {
-  Pdf({PdfConfig? config}) : _bridge = createBridge();
+  Pdf({PdfConfig? config}) : _bridge = createBridge(config: config);
 
   final PdfBridge _bridge;
   bool _disposed = false;
@@ -28,12 +26,16 @@ class Pdf {
     if (_disposed) throw StateError('This Pdf instance has been disposed');
   }
 
-  // ── Static factories ──
+  // ── Editor + Builder entry points ──
 
-  Future<PdfEditor> edit(PdfSource source, {String? password}) async {
+  Future<PdfEditor> edit(DataSource source, {String? password}) async {
     _check();
+    final doc = await open(source, password: password);
     final handle = await _bridge.openEditor(source, password: password);
-    return PdfEditor.internal(_bridge, handle);
+    return PdfEditor.internal(_bridge, handle,
+        sourceEncryption: doc.encryptionAlgorithm,
+        sourcePermissions: doc.permissions,
+        password: password);
   }
 
   Future<PdfBuilder> build() async {
@@ -42,270 +44,127 @@ class Pdf {
     return PdfBuilder.internal(_bridge, handle);
   }
 
-  // ── Inspect ──
+  // ── Standalone FFI — read-only ──
 
-  Future<PdfDoc> open(PdfSource source, {String? password}) {
+  Future<PdfDoc> open(DataSource source, {String? password}) {
     _check();
     return _bridge.open(source, password: password);
   }
 
-  // ── Structural ──
-
-  Future<void> merge(List<PdfSource> inputs, PdfSink output) {
-    _check();
-    return _bridge.merge(inputs, output);
-  }
-
-  Future<void> split(PdfSource source, PdfSink Function(int index) sinkFactory,
-      {required int every}) {
-    _check();
-    return _bridge.split(source, sinkFactory, every: every);
-  }
-
-  Future<List<int>> splitBySize(
-      PdfSource source, PdfSink Function(int index) sinkFactory,
-      {required int maxBytes}) {
-    _check();
-    return _bridge.splitBySize(source, sinkFactory, maxBytes: maxBytes);
-  }
-
-  Future<void> extractPages(PdfSource source, PdfSink output,
-      {required List<int> pages}) {
-    _check();
-    return _bridge.extractPages(source, output, pages: pages);
-  }
-
-  Future<void> deletePages(PdfSource source, PdfSink output,
-      {required List<int> pages}) {
-    _check();
-    return _bridge.deletePages(source, output, pages: pages);
-  }
-
-  Future<void> reorderPages(PdfSource source, PdfSink output,
-      {required List<int> order}) {
-    _check();
-    return _bridge.reorderPages(source, output, order: order);
-  }
-
-  Future<void> movePage(PdfSource source, PdfSink output,
-      {required int from, required int to}) {
-    _check();
-    return _bridge.movePage(source, output, from: from, to: to);
-  }
-
-  Future<void> rotatePages(PdfSource source, PdfSink output,
-      {required Map<int, int> pages}) {
-    _check();
-    return _bridge.rotatePages(source, output, pages: pages);
-  }
-
-  Future<void> rotateAllPages(PdfSource source, PdfSink output,
-      {required int degrees}) {
-    _check();
-    return _bridge.rotateAllPages(source, output, degrees: degrees);
-  }
-
-  // ── Content ──
-
-  Future<void> flattenForms(PdfSource source, PdfSink output) {
-    _check();
-    return _bridge.flattenForms(source, output);
-  }
-
-  Future<void> applyRedactions(PdfSource source, PdfSink output) {
-    _check();
-    return _bridge.applyRedactions(source, output);
-  }
-
-  Future<void> embedFile(PdfSource source, PdfSink output,
-      {required String name, required Uint8List fileData}) {
-    _check();
-    return _bridge.embedFile(source, output, name: name, fileData: fileData);
-  }
-
-  Future<void> eraseRegions(PdfSource source, PdfSink output,
-      {required int page, required List<PdfRect> regions}) {
-    _check();
-    return _bridge.eraseRegions(source, output, page: page, regions: regions);
-  }
-
-  Future<void> compress(PdfSource source, PdfSink output,
-      {int imageQuality = 75,
-      bool garbageCollect = true,
-      bool linearize = false}) {
-    _check();
-    return _bridge.compress(source, output,
-        imageQuality: imageQuality,
-        garbageCollect: garbageCollect,
-        linearize: linearize);
-  }
-
-
-  Future<String> extract(PdfSource source,
-      {required PdfPages pages,
-      String? password,
-      PdfExtractionFormat format = PdfExtractionFormat.auto}) {
+  Future<String> extract(DataSource source, {
+    required PdfPages pages,
+    String? password,
+    PdfExtractionFormat format = PdfExtractionFormat.auto,
+  }) {
     _check();
     return _bridge.extract(source,
         pages: pages, password: password, format: format);
   }
 
-
-  Future<List<SearchResult>> search(PdfSource source,
-      {required String query, required PdfPages pages, String? password}) {
+  Future<List<SearchResult>> search(DataSource source, {
+    required String query,
+    required PdfPages pages,
+    String? password,
+  }) {
     _check();
     return _bridge.search(source,
         query: query, pages: pages, password: password);
   }
 
-  // ── Security ──
-
-  Future<void> watermark(PdfSource source, PdfSink output,
-      {required String text,
-      PdfPages pages = const PdfPages.all(),
-      PdfWatermarkStyle style = const PdfWatermarkStyle(),
-      PdfWatermarkPosition? position}) {
-    _check();
-    return _bridge.watermark(source, output,
-        text: text, pages: pages, style: style, position: position);
-  }
-
-  Future<void> encrypt(PdfSource source, PdfSink output,
-      {required PdfEncryptionConfig encryption}) {
-    _check();
-    return _bridge.encrypt(source, output, encryption: encryption);
-  }
-
-  Future<void> decrypt(PdfSource source, PdfSink output,
-      {required String password}) {
-    _check();
-    return _bridge.decrypt(source, output, password: password);
-  }
-
-  Future<void> sign(PdfSource source, PdfSink output,
-      {required PdfSigningCredentials credentials,
-      String? reason,
-      String? location}) {
-    _check();
-    return _bridge.sign(source, output,
-        credentials: credentials,
-        reason: reason,
-        location: location);
-  }
-
-  // ── Stamps ──
-
-  Future<void> addStamp(PdfSource source, PdfSink output,
-      {required int page,
-      required PdfStampType type,
-      required PdfRect rect,
-      String? customName,
-      double opacity = 1.0}) {
-    _check();
-    return _bridge.addStamp(source, output,
-        page: page,
-        type: type,
-        rect: rect,
-        customName: customName,
-        opacity: opacity);
-  }
-
-  Future<void> addImageStamp(PdfSource source, PdfSink output,
-      {required int page,
-      required Uint8List imageBytes,
-      required PdfRect rect,
-      double opacity = 1.0}) {
-    _check();
-    return _bridge.addImageStamp(source, output,
-        page: page, imageBytes: imageBytes, rect: rect, opacity: opacity);
-  }
-
-  // ── Creation ──
-
-  Future<void> imagesToPdf(List<Uint8List> images, PdfSink output) {
-    _check();
-    return _bridge.imagesToPdf(images, output);
-  }
-
-
-  Stream<RenderedPage> render(PdfSource source,
-      {required PdfPages pages, PdfRenderSize? size, String? password}) {
+  Stream<RenderedPage> render(DataSource source, {
+    required PdfPages pages,
+    PdfRenderSize? size,
+    String? password,
+  }) {
     _check();
     return _bridge.render(source, pages: pages, size: size, password: password);
   }
 
-
-  Stream<PdfImage> extractImages(PdfSource source,
-      {required PdfPages pages, String? password}) {
+  Stream<PdfImage> extractImages(DataSource source, {
+    required PdfPages pages,
+    String? password,
+  }) {
     _check();
     return _bridge.extractImages(source, pages: pages, password: password);
   }
 
-  // ── Signatures ──
-
-  Future<List<PdfSignatureInfo>> getSignatures(PdfSource source,
-      {String? password}) {
+  Future<List<PdfSignatureInfo>> getSignatures(DataSource source, {
+    String? password,
+  }) {
     _check();
     return _bridge.getSignatures(source, password: password);
   }
 
-  Future<bool> verifySignatures(PdfSource source, {String? password}) {
+  Future<bool> verifySignatures(DataSource source, {String? password}) {
     _check();
     return _bridge.verifySignatures(source, password: password);
   }
 
-  // ── Validation ──
-
-  Future<PdfValidationResult> validatePdfA(PdfSource source,
-      {int level = 2, String? password}) {
+  Future<PdfValidationResult> validatePdfA(DataSource source, {
+    int level = 2,
+    String? password,
+  }) {
     _check();
     return _bridge.validatePdfA(source, level: level, password: password);
   }
 
-  Future<bool> validatePdfUa(PdfSource source,
-      {int level = 1, String? password}) {
+  Future<bool> validatePdfUa(DataSource source, {
+    int level = 1,
+    String? password,
+  }) {
     _check();
     return _bridge.validatePdfUa(source, level: level, password: password);
   }
 
-  // ── Bookmarks ──
-
-  Future<List<PdfBookmarkSplit>> planSplitByBookmarks(PdfSource source,
-      {String? password}) {
+  Future<List<PdfBookmarkSplit>> planSplitByBookmarks(DataSource source, {
+    String? password,
+  }) {
     _check();
     return _bridge.planSplitByBookmarks(source, password: password);
   }
 
-  Future<void> splitByBookmarks(PdfSource source,
-      PdfSink Function(int index) sinkFactory, {String? password}) {
-    _check();
-    return _bridge.splitByBookmarks(source, sinkFactory, password: password);
-  }
-
-  // ── Classification ──
-
-  Future<PdfPageClassification> classifyPage(PdfSource source, int page,
-      {String? password}) {
+  Future<PdfPageClassification> classifyPage(DataSource source, int page, {
+    String? password,
+  }) {
     _check();
     return _bridge.classifyPage(source, page, password: password);
   }
 
-  Future<PdfDocumentClassification> classifyDocument(PdfSource source,
-      {String? password}) {
+  Future<PdfDocumentClassification> classifyDocument(DataSource source, {
+    String? password,
+  }) {
     _check();
     return _bridge.classifyDocument(source, password: password);
   }
 
-  // ── Conversion ──
+  // ── Standalone FFI — write ──
 
-  Future<void> convertTo(PdfSource source, PdfSink output,
-      {required PdfDocumentFormat format, String? password}) {
+  Future<void> sign(DataSource source, DataSink output, {
+    required PdfSigningCredentials credentials,
+    String? reason,
+    String? location,
+  }) {
+    _check();
+    return _bridge.sign(source, output,
+        credentials: credentials, reason: reason, location: location);
+  }
+
+  Future<void> imagesToPdf(List<DataSource> images, DataSink output) {
+    _check();
+    return _bridge.imagesToPdf(images, output);
+  }
+
+  Future<void> convertTo(DataSource source, DataSink output, {
+    required PdfDocumentFormat format,
+    String? password,
+  }) {
     _check();
     return _bridge.convertTo(source, output, format: format, password: password);
   }
 
-  Future<void> convertToPdf(PdfSource document, PdfSink output,
-      {required PdfDocumentFormat format}) {
+  Future<void> convertToPdf(DataSource document, DataSink output, {
+    required PdfDocumentFormat format,
+  }) {
     _check();
     return _bridge.convertToPdf(document, output, format: format);
   }

@@ -18,9 +18,12 @@
 import 'dart:io';
 
 import 'package:code_assets/code_assets.dart';
+import 'package:crypto/crypto.dart';
 import 'package:hooks/hooks.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
+
+import 'asset_hashes.dart';
 
 final _log = Logger('pdf_manipulator:build');
 
@@ -46,8 +49,35 @@ void main(List<String> args) async {
 
     if (cargoToml.existsSync()) {
       await _compileFromSource(input, targetTriple, linkMode, outFile);
-    } else if (!outFile.existsSync()) {
-      await _downloadPrebuilt(input, codeConfig, libFileName, outFile);
+    } else {
+      // Consumer path: download prebuilt binary, cached in shared output dir.
+      // Pattern from sqlite3.dart — cache survives across builds of the same
+      // version. SHA256 verification catches corruption or stale cache.
+      final platform = _platformKey(codeConfig);
+      final assetKey = '$platform-$libFileName';
+      final cachedFile = File.fromUri(
+        input.outputDirectoryShared.resolve(libFileName),
+      );
+
+      if (cachedFile.existsSync()) {
+        final expectedHash = assetHashesSha256[assetKey];
+        if (expectedHash != null) {
+          final actualHash = sha256.convert(await cachedFile.readAsBytes()).toString();
+          if (actualHash == expectedHash) {
+            _log.info('using cached ${cachedFile.path} (hash verified)');
+          } else {
+            _log.info('cached file hash mismatch — re-downloading');
+            await _downloadPrebuilt(input, codeConfig, libFileName, cachedFile);
+          }
+        } else {
+          _log.info('using cached ${cachedFile.path} (no hash to verify)');
+        }
+      } else {
+        await _downloadPrebuilt(input, codeConfig, libFileName, cachedFile);
+      }
+
+      outFile.parent.createSync(recursive: true);
+      cachedFile.copySync(outFile.path);
     }
 
     output.assets.code.add(
@@ -70,13 +100,15 @@ void main(List<String> args) async {
       'vendor/pdf_oxide/src/ffi.rs',
       'vendor/pdf_oxide/src/wasm.rs',
       'vendor/pdf_oxide/src/document.rs',
-      'vendor/pdf_oxide/src/bridge/mod.rs',
-      'vendor/pdf_oxide/src/bridge/ffi_api.rs',
-      'vendor/pdf_oxide/src/bridge/thread_pool.rs',
-      'vendor/pdf_oxide/src/bridge/callback_reader.rs',
-      'vendor/pdf_oxide/src/bridge/callback_writer.rs',
-      'vendor/pdf_oxide/src/bridge/shared_buffer.rs',
-      'vendor/pdf_oxide/src/bridge/arena.rs',
+      'vendor/pdf_oxide/src/host/mod.rs',
+      'vendor/pdf_oxide/src/host/constants.rs',
+      'vendor/pdf_oxide/src/host/native/mod.rs',
+      'vendor/pdf_oxide/src/host/native/ffi_api.rs',
+      'vendor/pdf_oxide/src/host/native/thread_pool.rs',
+      'vendor/pdf_oxide/src/host/native/callback_reader.rs',
+      'vendor/pdf_oxide/src/host/native/callback_writer.rs',
+      'vendor/pdf_oxide/src/host/native/shared_buffer.rs',
+      'vendor/pdf_oxide/src/host/native/arena.rs',
     ]) {
       output.dependencies.add(input.packageRoot.resolve(path));
     }

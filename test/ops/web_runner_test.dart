@@ -1,10 +1,15 @@
-// Runs all shared ops through WebBridge (browser path).
-// The SAME tests run through NativeBridge in native_runner_test.dart.
+// Runs all shared ops through the public Pdf API (web/WASM path).
+// The SAME tests run through native in native_runner_test.dart.
+//
+// Web needs an asset server because dart test -p chrome runs tests on
+// a different origin than the package root. spawnHybridUri starts a
+// shelf server on the VM side; fetchAsBlobUrl turns cross-origin JS
+// into same-origin blob URLs the browser can load as Workers.
 
 @TestOn('browser')
 library;
 
-import 'package:pdf_manipulator/src/transport/web/bridge.dart';
+import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
 import '../transport/web/web_test_helper.dart';
@@ -20,9 +25,10 @@ import 'error.dart';
 import 'lifecycle.dart';
 import 'coverage_check.dart';
 import 'stress.dart';
+import 'timing_test.dart';
 
 void main() {
-  late WebBridge bridge;
+  late Pdf pdf;
   late String coordinatorBlobUrl;
   late String wasmWorkerUrl;
 
@@ -31,28 +37,29 @@ void main() {
     final port = ((await channel.stream.first) as num).toInt();
     coordinatorBlobUrl = await fetchAsBlobUrl(
         'http://localhost:$port/web_assets/coordinator.js');
-    wasmWorkerUrl = 'http://localhost:$port/web_assets/wasm_worker.js';
-    bridge = WebBridge(
-      coordinatorUrl: coordinatorBlobUrl,
-      wasmWorkerUrl: wasmWorkerUrl,
-    );
+    wasmWorkerUrl = 'http://localhost:$port/web_assets/worker.js';
+    pdf = Pdf(config: PdfConfig(
+      webCoordinatorUrl: coordinatorBlobUrl,
+      webWorkerUrl: wasmWorkerUrl,
+    ));
   });
 
-  tearDownAll(() => bridge.dispose());
+  tearDownAll(() => pdf.dispose());
 
-  registerOpenTests(() => bridge);
-  registerMergeTests(() => bridge);
-  registerStructuralTests(() => bridge);
-  registerContentTests(() => bridge);
-  registerStreamTests(() => bridge);
-  registerSecurityTests(() => bridge);
-  registerEditorTests(() => bridge);
-  registerBuilderTests(() => bridge);
-  registerErrorTests(() => bridge);
-  registerLifecycleTests(() => WebBridge(
-    coordinatorUrl: coordinatorBlobUrl,
-    wasmWorkerUrl: wasmWorkerUrl,
-  ));
-  registerStressTests(() => bridge);
+  registerOpenTests(() => pdf);
+  registerMergeTests(() => pdf);
+  registerStructuralTests(() => pdf);
+  registerContentTests(() => pdf);
+  registerStreamTests(() => pdf);
+  registerSecurityTests(() => pdf);
+  registerEditorTests(() => pdf);
+  registerBuilderTests(() => pdf);
+  registerErrorTests(() => pdf);
+  registerLifecycleTests(() => Pdf(config: PdfConfig(
+    webCoordinatorUrl: coordinatorBlobUrl,
+    webWorkerUrl: wasmWorkerUrl,
+  )));
+  registerTimingTests(() => pdf);
+  registerStressTests(() => pdf);
   registerCoverageCheck();
 }

@@ -5,19 +5,15 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/pdf_manipulator.dart';
-import 'package:pdf_manipulator/src/transport/pdf_bridge.dart';
 
 import 'fixtures.dart';
 import 'test_source_sink.dart';
 
 /// Build a PDF with [pageCount] pages using exponential merge.
-/// Creates a 10-page seed via PdfBuilder, then merges copies to reach target.
-/// 1000 pages builds in seconds, not minutes.
-Future<Uint8List> buildLargePdf(PdfBridge Function() b, {int pageCount = 100}) async {
-  final bridge = b();
+Future<Uint8List> buildLargePdf(Pdf Function() createPdf, {int pageCount = 100}) async {
+  final pdf = createPdf();
 
-  // Step 1: build a 10-page seed PDF via builder (fast — only 10 pages)
-  final builder = await bridge.createBuilder();
+  final builder = await pdf.build();
   await builder.setTitle('Stress Test');
   for (var i = 0; i < 10; i++) {
     final page = await builder.addPage(width: 612, height: 792);
@@ -35,23 +31,21 @@ Future<Uint8List> buildLargePdf(PdfBridge Function() b, {int pageCount = 100}) a
   final seedSink = TestSink();
   await builder.save(seedSink);
   await builder.dispose();
-  var current = seedSink.takeBytes(); // 10 pages
+  var current = seedSink.takeBytes();
 
-  // Step 2: exponential merge — double until we reach target
   var currentPages = 10;
   while (currentPages < pageCount) {
     final sink = TestSink();
     final copies = (pageCount / currentPages).ceil().clamp(2, 10);
     final sources = List.generate(copies, (_) => src(current));
-    await bridge.merge(sources, sink);
+    await pdf.merge(sources, sink);
     current = sink.takeBytes();
     currentPages *= copies;
   }
 
-  // Step 3: trim to exact page count if overshot
   if (currentPages > pageCount) {
     final sink = TestSink();
-    await bridge.extractPages(src(current), sink,
+    await pdf.extractPages(src(current), sink,
         pages: List.generate(pageCount, (i) => i));
     current = sink.takeBytes();
   }
@@ -60,17 +54,16 @@ Future<Uint8List> buildLargePdf(PdfBridge Function() b, {int pageCount = 100}) a
 }
 
 /// Build a PDF with [pageCount] pages, each containing the minimalPng image.
-/// Uses the proven-valid PNG from fixtures.
-Future<Uint8List> buildImagePdf(PdfBridge Function() b, {int pageCount = 20}) async {
-  final bridge = b();
-  final builder = await bridge.createBuilder();
+Future<Uint8List> buildImagePdf(Pdf Function() createPdf, {int pageCount = 20}) async {
+  final pdf = createPdf();
+  final builder = await pdf.build();
   await builder.setTitle('Image Test — $pageCount pages');
 
   for (var i = 0; i < pageCount; i++) {
     final page = await builder.addPage(width: 612, height: 792);
     await page.font('Helvetica', 12);
     await page.text('Image page ${i + 1}');
-    await page.image(minimalPng, PdfRect(
+    await page.image(src(minimalPng), PdfRect(
       x: 50, y: 100,
       width: 100 + (i % 5) * 40.0,
       height: 100 + (i % 3) * 60.0,
@@ -85,20 +78,18 @@ Future<Uint8List> buildImagePdf(PdfBridge Function() b, {int pageCount = 20}) as
 }
 
 /// Build a PDF with pages of varying sizes — some small (A5), some large (A3).
-/// Tests splitBySize with heterogeneous page sizes.
-Future<Uint8List> buildVariedSizePdf(PdfBridge Function() b, {int pageCount = 50}) async {
-  final bridge = b();
-  final builder = await bridge.createBuilder();
+Future<Uint8List> buildVariedSizePdf(Pdf Function() createPdf, {int pageCount = 50}) async {
+  final pdf = createPdf();
+  final builder = await pdf.build();
   await builder.setTitle('Varied Size Test');
 
   for (var i = 0; i < pageCount; i++) {
     final isLarge = i % 3 == 0;
-    final w = isLarge ? 841.89 : 420.94; // A3 vs A5 width
+    final w = isLarge ? 841.89 : 420.94;
     final h = isLarge ? 1190.55 : 595.28;
     final page = await builder.addPage(width: w, height: h);
     await page.font('Helvetica', isLarge ? 18 : 10);
     await page.heading(1, '${isLarge ? "LARGE" : "small"} page ${i + 1}');
-    // Bigger pages get more content → bigger file size per page
     if (isLarge) {
       for (var p = 0; p < 5; p++) {
         await page.paragraph(
@@ -120,9 +111,9 @@ Future<Uint8List> buildVariedSizePdf(PdfBridge Function() b, {int pageCount = 50
 }
 
 /// Build a multi-chapter PDF with form fields.
-Future<Uint8List> buildFormPdf(PdfBridge Function() b) async {
-  final bridge = b();
-  final builder = await bridge.createBuilder();
+Future<Uint8List> buildFormPdf(Pdf Function() createPdf) async {
+  final pdf = createPdf();
+  final builder = await pdf.build();
   await builder.setTitle('Form Test');
 
   final page = await builder.addPage(width: 612, height: 792);

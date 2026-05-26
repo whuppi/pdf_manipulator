@@ -1,0 +1,122 @@
+# Create GitHub Releases for new versions found in changelogs.
+#
+# Reads CHANGELOG.md (prod, stable) or CHANGELOG.pre.md (dev, prerelease).
+# For each version without a GitHub Release: creates one (with tag).
+# Idempotent — rerunning skips versions that already have a Release.
+#
+# The created Release triggers publish.yml (compile + publish to pub.dev).
+name: Create Release
+
+on:
+  push:
+    branches: [dev, prod]
+    paths:
+      - 'CHANGELOG.md'
+      - 'CHANGELOG.pre.md'
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to check (dev or prod)'
+        required: true
+        default: 'dev'
+        type: choice
+        options: [dev, prod]
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.branch || github.ref_name }}
+
+      - name: Find unreleased versions
+        id: versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ inputs.branch || github.ref_name }}
+        run: |
+          # Determine which changelog to read
+          if [[ "$BRANCH" == "prod" ]]; then
+            FILE="CHANGELOG.md"
+          else
+            FILE="CHANGELOG.pre.md"
+          fi
+
+          if [ ! -f "$FILE" ]; then
+            echo "No $FILE found."
+            exit 0
+          fi
+
+          # Extract all ## version headers
+          VERSIONS=$(grep -oP '^## \K\S+' "$FILE" || true)
+          if [ -z "$VERSIONS" ]; then
+            echo "No versions found in $FILE."
+            exit 0
+          fi
+
+          # Filter to versions without a GitHub Release
+          UNRELEASED=""
+          for V in $VERSIONS; do
+            TAG="v$V"
+            # Check if GitHub Release exists for this tag
+            if gh release view "$TAG" --json tagName >/dev/null 2>&1; then
+              echo "Release $TAG already exists. Skipping."
+            else
+              UNRELEASED="$UNRELEASED $V"
+              echo "New version: $V"
+            fi
+          done
+
+          echo "unreleased=$(echo $UNRELEASED | xargs)" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "file=$FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Create releases
+        if: steps.versions.outputs.unreleased != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UNRELEASED: ${{ steps.versions.outputs.unreleased }}
+          BRANCH: ${{ steps.versions.outputs.branch }}
+          FILE: ${{ steps.versions.outputs.file }}
+        run: |
+          for VERSION in $UNRELEASED; do
+            TAG="v$VERSION"
+            IS_PRE=false
+            if [[ "$VERSION" == *-* ]]; then
+              IS_PRE=true
+            fi
+
+            # Validate: stable versions only from prod, prereleases only from dev
+            if [[ "$BRANCH" == "prod" && "$IS_PRE" == "true" ]]; then
+              echo "Skipping prerelease $VERSION on prod branch."
+              continue
+            fi
+            if [[ "$BRANCH" == "dev" && "$IS_PRE" == "false" ]]; then
+              echo "Skipping stable $VERSION on dev branch (ships via prod)."
+              continue
+            fi
+
+            # Extract release notes from changelog (everything between this ## and next ##)
+            NOTES=$(awk "/^## ${VERSION//./\\.}($| )/{found=1; next} /^## /{found=0} found" "$FILE")
+
+            echo "Creating release $TAG (prerelease=$IS_PRE)..."
+
+            FLAGS=""
+            if [[ "$IS_PRE" == "true" ]]; then
+              FLAGS="--prerelease"
+            fi
+
+            # Create the Release (this also creates the tag)
+            gh release create "$TAG" \
+              --target "$BRANCH" \
+              --title "pdf_manipulator $VERSION" \
+              --notes "$NOTES" \
+              $FLAGS
+
+            echo "Created release $TAG"
+          done

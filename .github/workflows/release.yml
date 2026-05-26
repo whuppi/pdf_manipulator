@@ -1,18 +1,32 @@
-# Compile all targets → upload to GitHub Release → publish to pub.dev.
-# Triggered by tag push (release-please creates tags when you merge a Release PR).
-# Tests are NOT re-run — full-test already passed before merge (same commit).
+# Compile all targets → upload binaries to GitHub Release → publish to pub.dev.
+#
+# Triggered by:
+#   - Tag push (create-release.yml creates tags via gh release create)
+#   - Manual rerun via workflow_dispatch (pass the tag name)
+#
+# Idempotent:
+#   - Upload: uses --clobber to overwrite existing assets
+#   - pub.dev: rejects duplicate versions (safe to retry)
+#
+# The tag's version is stamped into pubspec.yaml + version.dart before compile.
 name: Release
 
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v1.0.0)'
+        required: true
+        type: string
 
 permissions:
   contents: write
   id-token: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -21,7 +35,7 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-        with: { submodules: recursive }
+        with: { ref: ${{ inputs.tag || github.ref_name }}, submodules: recursive }
       - uses: ./.github/actions/compile-macos
       - uses: actions/upload-artifact@v4
         with: { name: bin-macos, path: out/ }
@@ -29,7 +43,7 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-        with: { submodules: recursive }
+        with: { ref: '${{ inputs.tag || github.ref_name }}', submodules: recursive }
       - uses: ./.github/actions/compile-ios
       - uses: actions/upload-artifact@v4
         with: { name: bin-ios, path: out/ }
@@ -37,7 +51,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { submodules: recursive }
+        with: { ref: '${{ inputs.tag || github.ref_name }}', submodules: recursive }
       - uses: ./.github/actions/compile-android
       - uses: actions/upload-artifact@v4
         with: { name: bin-android, path: out/ }
@@ -45,7 +59,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { submodules: recursive }
+        with: { ref: '${{ inputs.tag || github.ref_name }}', submodules: recursive }
       - uses: ./.github/actions/compile-linux
       - uses: actions/upload-artifact@v4
         with: { name: bin-linux, path: out/ }
@@ -53,7 +67,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { submodules: recursive }
+        with: { ref: '${{ inputs.tag || github.ref_name }}', submodules: recursive }
       - uses: ./.github/actions/compile-wasm
       - uses: actions/upload-artifact@v4
         with: { name: bin-wasm, path: out/ }
@@ -61,7 +75,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with: { submodules: recursive }
+        with: { ref: '${{ inputs.tag || github.ref_name }}', submodules: recursive }
       - uses: ./.github/actions/compile-windows
       - uses: actions/upload-artifact@v4
         with: { name: bin-windows, path: out/ }
@@ -96,7 +110,7 @@ jobs:
           ls -lh release/
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ inputs.tag || github.ref_name }}
           files: release/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -108,8 +122,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { submodules: recursive }
+        with: { ref: '${{ inputs.tag || github.ref_name }}', submodules: recursive }
       - uses: dart-lang/setup-dart@v1
         with: { sdk: stable }
+
+      - name: Stamp version from tag
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          echo "Publishing version: $VERSION"
+
+          # Stamp pubspec.yaml
+          sed -i "s/^version: .*/version: $VERSION/" pubspec.yaml
+
+          # Stamp version.dart
+          sed -i "s/const packageVersion = '[^']*'/const packageVersion = '$VERSION'/" lib/src/version.dart
+
+          # For prereleases: use CHANGELOG.pre.md as the published CHANGELOG
+          if [[ "$VERSION" == *-* ]]; then
+            cp CHANGELOG.pre.md CHANGELOG.md
+          fi
+
+          echo "pubspec: $(grep '^version:' pubspec.yaml)"
+
       - run: dart pub get --no-example
       - run: dart pub publish --force

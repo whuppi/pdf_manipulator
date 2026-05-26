@@ -6,9 +6,9 @@ import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
-// ─── In-memory PdfSource / PdfSink for the example app ────────────
+// ─── In-memory DataSource / DataSink for the example app ────────────
 
-class _MemorySource implements PdfSource {
+class _MemorySource implements DataSource {
   _MemorySource(this._data);
   final Uint8List _data;
   @override
@@ -21,7 +21,7 @@ class _MemorySource implements PdfSource {
   }
 }
 
-class _MemorySink implements PdfSink {
+class _MemorySink implements DataSink {
   final _builder = BytesBuilder(copy: false);
   @override
   void write(Uint8List chunk) => _builder.add(chunk);
@@ -70,6 +70,7 @@ class _HomePageState extends State<HomePage> {
     _MergeTab(),
     _ImagesToPdfTab(),
     _EditorTab(),
+    _BuilderTab(),
   ];
 
   @override
@@ -84,6 +85,7 @@ class _HomePageState extends State<HomePage> {
           NavigationDestination(icon: Icon(Icons.merge), label: 'Merge'),
           NavigationDestination(icon: Icon(Icons.image), label: 'Images→PDF'),
           NavigationDestination(icon: Icon(Icons.edit_document), label: 'Editor'),
+          NavigationDestination(icon: Icon(Icons.note_add), label: 'Builder'),
         ],
       ),
     );
@@ -544,8 +546,36 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
           onRun: () => _run('Watermark', () async {
             final sink = _MemorySink();
             await _pdf.watermark(_MemorySource(bytes), sink, text: 'CONFIDENTIAL',
-                style: const PdfWatermarkStyle(opacity: 0.2, fontSize: 60, rotation: 45));
+                style: const PdfWatermarkStyle(opacity: 0.2, fontSize: 60, rotation: 45,
+                    color: PdfColor(0.8, 0.1, 0.1)));
             await _saveAndReport(sink.takeBytes(), 'watermarked_confidential.pdf');
+          })),
+        _OpTile(icon: Icons.grid_4x4, title: 'Tiled watermark',
+          subtitle: '3×4 grid across every page', loading: _loading,
+          onRun: () => _run('Tiled watermark', () async {
+            final sink = _MemorySink();
+            await _pdf.watermark(_MemorySource(bytes), sink, text: 'COPY',
+                style: const PdfWatermarkStyle(opacity: 0.15, fontSize: 24, rotation: 30),
+                position: const PdfWatermarkPosition.tiled(columns: 3, rows: 4));
+            await _saveAndReport(sink.takeBytes(), 'watermarked_tiled.pdf');
+          })),
+        _OpTile(icon: Icons.arrow_outward, title: 'Corner watermark',
+          subtitle: 'Top-right corner with margin', loading: _loading,
+          onRun: () => _run('Corner watermark', () async {
+            final sink = _MemorySink();
+            await _pdf.watermark(_MemorySource(bytes), sink, text: 'SAMPLE',
+                style: const PdfWatermarkStyle(opacity: 0.4, fontSize: 18, rotation: 0),
+                position: const PdfWatermarkPosition.corner(PdfCorner.topRight));
+            await _saveAndReport(sink.takeBytes(), 'watermarked_corner.pdf');
+          })),
+        _OpTile(icon: Icons.layers, title: 'Background watermark',
+          subtitle: 'Behind page content (content-stream)', loading: _loading,
+          onRun: () => _run('Background watermark', () async {
+            final sink = _MemorySink();
+            await _pdf.watermark(_MemorySource(bytes), sink, text: 'BACKGROUND',
+                style: const PdfWatermarkStyle(opacity: 0.2, fontSize: 48),
+                layer: PdfWatermarkLayer.background);
+            await _saveAndReport(sink.takeBytes(), 'watermarked_background.pdf');
           })),
         const SizedBox(height: 12),
 
@@ -658,7 +688,7 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
             if (imgs == null || imgs.isEmpty) return;
             final sink = _MemorySink();
             await _pdf.addImageStamp(_MemorySource(bytes), sink,
-                page: 0, imageBytes: imgs.first.bytes,
+                page: 0, imageData: _MemorySource(imgs.first.bytes),
                 rect: const PdfRect(x: 100, y: 100, width: 150, height: 150));
             await _saveAndReport(sink.takeBytes(), 'image_stamped.pdf');
           })),
@@ -671,7 +701,7 @@ class _SinglePdfTabState extends State<_SinglePdfTab> {
           onRun: () => _run('Embed', () async {
             final sink = _MemorySink();
             await _pdf.embedFile(_MemorySource(bytes), sink,
-                name: 'readme.txt', fileData: Uint8List.fromList('Hello from pdf_manipulator!'.codeUnits));
+                name: 'readme.txt', fileData: _MemorySource(Uint8List.fromList('Hello from pdf_manipulator!'.codeUnits)));
             await _saveAndReport(sink.takeBytes(), 'with_attachment.pdf');
           })),
         _OpTile(icon: Icons.format_paint, title: 'Erase region on page 1',
@@ -911,7 +941,7 @@ class _MergeTabState extends State<_MergeTab> {
     if (_files.length < 2) return;
     setState(() { _loading = true; _status = 'Merging...'; });
     try {
-      final sources = _files.map((f) => _MemorySource(f.bytes) as PdfSource).toList();
+      final sources = _files.map((f) => _MemorySource(f.bytes) as DataSource).toList();
       final sink = _MemorySink();
       await _pdf.merge(sources, sink);
       final r = sink.takeBytes();
@@ -1034,9 +1064,9 @@ class _ImagesToPdfTabState extends State<_ImagesToPdfTab> {
     if (_images.isEmpty) return;
     setState(() { _loading = true; _status = 'Converting...'; });
     try {
-      final imgs = _images.map((f) => f.bytes).toList();
+      final sources = _images.map((f) => _MemorySource(f.bytes) as DataSource).toList();
       final sink = _MemorySink();
-      await _pdf.imagesToPdf(imgs, sink);
+      await _pdf.imagesToPdf(sources, sink);
       final r = sink.takeBytes();
       setState(() { _pdfBytes = r; _status = 'Created: ${fmtSize(r.length)}'; });
     } on PdfError catch (e) {
@@ -1228,6 +1258,8 @@ class _EditorTabState extends State<_EditorTab> {
                           await e.setTitle('Test PDF');
                           await e.setAuthor('pdf_manipulator');
                           await e.setSubject('Example output');
+                          final modified = await e.isModified;
+                          log('isModified after mutations: $modified');
                           final sink = _MemorySink();
                           await e.save(sink);
                           return sink.takeBytes();
@@ -1317,7 +1349,7 @@ class _EditorTabState extends State<_EditorTab> {
                         onRun: () => _runEditor('Encrypt', (e) async {
                           final sink = _MemorySink();
                           await e.save(sink, options: const PdfSaveOptions(
-                              encryption: PdfEncryptionConfig(ownerPassword: 'test123')));
+                              encryption: PdfEncryption.config(ownerPassword: 'test123')));
                           return sink.takeBytes();
                         })),
 
@@ -1451,6 +1483,249 @@ class PickedFile {
   final Uint8List bytes;
   final int size;
   const PickedFile({required this.name, required this.bytes, required this.size});
+}
+
+// ─── Tab 5: PdfBuilder — create from scratch ─────────────────────
+
+class _BuilderTab extends StatefulWidget {
+  const _BuilderTab();
+  @override
+  State<_BuilderTab> createState() => _BuilderTabState();
+}
+
+class _BuilderTabState extends State<_BuilderTab> {
+  final _pdf = Pdf();
+
+  bool _loading = false;
+  String? _status;
+
+  @override
+  void dispose() {
+    _pdf.dispose();
+    super.dispose();
+  }
+
+  Future<void> _run(String label, Future<void> Function() op) async {
+    setState(() { _loading = true; _status = '$label...'; });
+    try {
+      await op();
+    } catch (e) {
+      setState(() => _status = 'Error: $e');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('PdfBuilder')),
+      body: Column(
+        children: [
+          _StatusBar(loading: _loading, message: _status,
+              onDismiss: () => setState(() => _status = null)),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              children: [
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.note_add, color: Theme.of(context).colorScheme.primary, size: 28),
+                            const SizedBox(width: 12),
+                            const Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text('Create PDFs from scratch',
+                                      style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+                                  SizedBox(height: 2),
+                                  Text('Text, images, forms, links, watermarks',
+                                      style: TextStyle(fontSize: 12, color: Colors.grey)),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+
+                _SectionLabel('Simple'),
+                _OpTile(icon: Icons.text_fields, title: 'Text document',
+                  subtitle: '2 pages with headings, paragraphs, horizontal rule',
+                  loading: _loading,
+                  onRun: () => _run('Text document', () async {
+                    final builder = await _pdf.build();
+                    await builder.setTitle('Example Document');
+                    await builder.setAuthor('pdf_manipulator');
+
+                    final p1 = await builder.addA4Page();
+                    await p1.heading(1, 'Hello from PdfBuilder');
+                    await p1.space(10);
+                    await p1.paragraph('This PDF was created entirely from Dart code using the '
+                        'PdfBuilder API. No source PDF needed — everything is generated from scratch.');
+                    await p1.space(20);
+                    await p1.heading(2, 'Features');
+                    await p1.paragraph('• Text with fonts and sizes\n'
+                        '• Headings (H1–H6)\n'
+                        '• Paragraphs with word wrap\n'
+                        '• Images, watermarks, form fields\n'
+                        '• Links (URL and page)');
+                    await p1.space(20);
+                    await p1.horizontalRule();
+                    await p1.space(10);
+                    await p1.paragraph('Page 1 of 2');
+                    await p1.done();
+
+                    final p2 = await builder.addA4Page();
+                    await p2.heading(1, 'Page Two');
+                    await p2.paragraph('Multi-page documents work seamlessly. Each page can '
+                        'have different content, fonts, and layout.');
+                    await p2.space(20);
+                    await p2.heading(3, 'Columns');
+                    await p2.columns(2, 20, 'This text flows across two columns. '
+                        'The PdfBuilder API supports multi-column layout for more '
+                        'complex document designs. Each column fills evenly.');
+                    await p2.done();
+
+                    final sink = _MemorySink();
+                    await builder.save(sink);
+                    await builder.dispose();
+                    final result = sink.takeBytes();
+                    final path = await saveBytes(result, 'built_text.pdf');
+                    setState(() => _status = path != null
+                        ? 'Saved (${fmtSize(result.length)})'
+                        : 'Cancelled');
+                  })),
+
+                _OpTile(icon: Icons.edit_note, title: 'Form document',
+                  subtitle: 'Text fields, checkboxes, combo box, radio buttons',
+                  loading: _loading,
+                  onRun: () => _run('Form document', () async {
+                    final builder = await _pdf.build();
+                    await builder.setTitle('Sample Form');
+
+                    final p = await builder.addA4Page();
+                    await p.heading(1, 'Registration Form');
+                    await p.space(20);
+
+                    await p.paragraph('Full Name:');
+                    await p.textField('name', const PdfRect(x: 72, y: 680, width: 250, height: 20),
+                        defaultValue: 'John Doe');
+
+                    await p.space(40);
+                    await p.paragraph('Email:');
+                    await p.textField('email', const PdfRect(x: 72, y: 630, width: 250, height: 20));
+
+                    await p.space(40);
+                    await p.paragraph('Country:');
+                    await p.comboBox('country',
+                        const PdfRect(x: 72, y: 580, width: 150, height: 20),
+                        ['USA', 'UK', 'India', 'Germany', 'Japan'],
+                        selected: 'India');
+
+                    await p.space(40);
+                    await p.paragraph('Terms:');
+                    await p.checkbox('agree', const PdfRect(x: 72, y: 530, width: 14, height: 14));
+
+                    await p.space(40);
+                    await p.paragraph('Plan:');
+                    await p.radioGroup('plan', [
+                      (value: 'free', rect: const PdfRect(x: 72, y: 480, width: 14, height: 14)),
+                      (value: 'pro', rect: const PdfRect(x: 72, y: 460, width: 14, height: 14)),
+                      (value: 'enterprise', rect: const PdfRect(x: 72, y: 440, width: 14, height: 14)),
+                    ], selected: 'pro');
+
+                    await p.space(40);
+                    await p.pushButton('submit', const PdfRect(x: 72, y: 390, width: 80, height: 30), 'Submit');
+
+                    await p.space(50);
+                    await p.signatureField('sig', const PdfRect(x: 72, y: 320, width: 200, height: 60));
+
+                    await p.done();
+
+                    final sink = _MemorySink();
+                    await builder.save(sink);
+                    await builder.dispose();
+                    final result = sink.takeBytes();
+                    final path = await saveBytes(result, 'built_form.pdf');
+                    setState(() => _status = path != null
+                        ? 'Saved (${fmtSize(result.length)})'
+                        : 'Cancelled');
+                  })),
+
+                _OpTile(icon: Icons.link, title: 'Links & footnotes',
+                  subtitle: 'URL links, page links, footnotes',
+                  loading: _loading,
+                  onRun: () => _run('Links', () async {
+                    final builder = await _pdf.build();
+                    await builder.setTitle('Links Demo');
+
+                    final p = await builder.addA4Page();
+                    await p.heading(1, 'Links & References');
+                    await p.space(10);
+                    await p.paragraph('Visit our website:');
+                    await p.linkUrl('https://pub.dev/packages/pdf_manipulator');
+                    await p.space(20);
+                    await p.paragraph('Jump to page 2:');
+                    await p.linkPage(1);
+                    await p.space(20);
+                    await p.paragraph('This sentence has a footnote.');
+                    await p.footnote('1', 'This is the footnote text that appears at the bottom of the page.');
+                    await p.done();
+
+                    final p2 = await builder.addA4Page();
+                    await p2.heading(2, 'Page 2 — Link Target');
+                    await p2.paragraph('You arrived here via the page link on page 1.');
+                    await p2.done();
+
+                    final sink = _MemorySink();
+                    await builder.save(sink);
+                    await builder.dispose();
+                    final result = sink.takeBytes();
+                    final path = await saveBytes(result, 'built_links.pdf');
+                    setState(() => _status = path != null
+                        ? 'Saved (${fmtSize(result.length)})'
+                        : 'Cancelled');
+                  })),
+
+                _OpTile(icon: Icons.water_drop, title: 'Watermarked',
+                  subtitle: 'Page with watermark overlay',
+                  loading: _loading,
+                  onRun: () => _run('Watermark', () async {
+                    final builder = await _pdf.build();
+                    final p = await builder.addA4Page();
+                    await p.heading(1, 'Confidential Report');
+                    await p.paragraph('This document contains sensitive information.');
+                    await p.watermark('CONFIDENTIAL');
+                    await p.done();
+
+                    final sink = _MemorySink();
+                    await builder.save(sink);
+                    await builder.dispose();
+                    final result = sink.takeBytes();
+                    final path = await saveBytes(result, 'built_watermark.pdf');
+                    setState(() => _status = path != null
+                        ? 'Saved (${fmtSize(result.length)})'
+                        : 'Cancelled');
+                  })),
+
+                const SizedBox(height: 40),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 const _testCertPem = '''

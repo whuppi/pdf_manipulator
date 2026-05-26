@@ -211,8 +211,8 @@ external void bridgeEditorMutate(
         ffi.Uint64,
         ffi.Pointer<ffi.Uint8>,
         ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>>,
-        ffi.Bool, ffi.Bool, ffi.Bool,
-        ffi.Int32,
+        ffi.Bool, ffi.Bool,
+        ffi.Int32, ffi.Int32, ffi.Int32,
         ffi.Pointer<ffi.Uint8>, ffi.Int32,
         ffi.Pointer<ffi.Uint8>, ffi.Int32,
         ffi.Int32,
@@ -221,8 +221,8 @@ external void bridgeEditorSave(
   int handleId,
   ffi.Pointer<ffi.Uint8> writeBuf,
   ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>> writeNotifyFn,
-  bool compress, bool garbageCollect, bool linearize,
-  int encryptAlgo,
+  bool compress, bool garbageCollect,
+  int saveMode, int encryptMode, int encryptAlgo,
   ffi.Pointer<ffi.Uint8> encryptUserPw, int encryptUserPwLen,
   ffi.Pointer<ffi.Uint8> encryptOwnerPw, int encryptOwnerPwLen,
   int encryptPermissions,
@@ -234,6 +234,9 @@ external void bridgeEditorDispose(int handleId);
 
 @ffi.Native<ffi.Int32 Function(ffi.Uint64)>(symbol: 'bridge_editor_page_count')
 external int bridgeEditorPageCount(int handleId);
+
+@ffi.Native<ffi.Int32 Function(ffi.Uint64)>(symbol: 'bridge_editor_is_modified')
+external int bridgeEditorIsModified(int handleId);
 
 @ffi.Native<ffi.Int32 Function(ffi.Uint64, ffi.Int32, ffi.Pointer<ffi.Double>)>(
     symbol: 'bridge_editor_get_page_media_box')

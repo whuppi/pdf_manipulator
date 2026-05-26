@@ -7,7 +7,7 @@ library;
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:pdf_manipulator/src/types/pdf_source.dart';
+import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:pdf_manipulator/src/transport/native/bridge.dart';
 import 'package:test/test.dart';
 
@@ -59,7 +59,7 @@ void main() {
   });
 }
 
-class _SlowSource implements PdfSource {
+class _SlowSource implements DataSource {
   final Uint8List _data;
   final Duration delay;
   _SlowSource(this._data, {required this.delay});
@@ -75,7 +75,7 @@ class _SlowSource implements PdfSource {
   }
 }
 
-class _HangingSource implements PdfSource {
+class _HangingSource implements DataSource {
   final Uint8List _data;
   _HangingSource(this._data);
 

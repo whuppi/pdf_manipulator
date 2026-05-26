@@ -1,7 +1,8 @@
-// Worker isolate entry point for the native bridge.
+// Native coordinator — the Dart isolate that manages FFI calls.
 //
-// Runs on a background isolate. Receives operation commands from the
-// main isolate (NativeBridge). Handles FFI calls to the Rust bridge.
+// Symmetric with coordinator.js on web. This IS the coordinator:
+// receives ops from the bridge, dispatches FFI calls to the Rust
+// thread pool, returns results. The Rust threads are the workers.
 //
 // This file imports dart:ffi — it's only used on native platforms.
 //
@@ -15,19 +16,84 @@ import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 import 'package:pdf_manipulator/src/transport/native/bindings.dart' as bridge;
 import 'package:pdf_manipulator/src/transport/native/shared_buffer.dart';
-import 'package:pdf_manipulator/src/transport/native/worker_isolate.dart' as helpers;
 
-/// Entry point for the worker isolate. Passed to Isolate.spawn.
-void workerEntryPoint(SendPort mainPort) {
-  final workerPort = ReceivePort();
-  mainPort.send(workerPort.sendPort);
+// ── Condvar channel constants ──
+
+const flagReady = 1 << 0;
+const flagError = 1 << 1;
+const flagCancelled = 1 << 2;
+const flagAck = 1 << 3;
+
+// ── Bridge init ──
+
+void _initBridge() {
+  bridge.storeDartPostCobject(ffi.NativeApi.postCObject.cast());
+  bridge.bridgeInit();
+}
+
+// ── Read/write listeners for the condvar channel ──
+
+({ffi.NativeCallable<ffi.Void Function()> callable, ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>> ptr})
+_createReadListener(SharedReadBuffer readBuf, SendPort sourceServerPort) {
+  late final ffi.NativeCallable<ffi.Void Function()> callable;
+  callable = ffi.NativeCallable<ffi.Void Function()>.listener(() async {
+    final offset = readBuf.requestOffset;
+    final count = readBuf.requestCount;
+    final replyPort = ReceivePort();
+    sourceServerPort.send(['read', offset, count, replyPort.sendPort]);
+    final response = await replyPort.first;
+    replyPort.close();
+    if (response is TransferableTypedData) {
+      final bytes = response.materialize().asUint8List();
+      readBuf.responseLength = bytes.length;
+      readBuf.writeResponseData(bytes);
+      readBuf.setFlags(flagReady);
+    } else {
+      readBuf.responseLength = 0;
+      readBuf.setFlags(flagError);
+    }
+    bridge.bridgeSignalRead(readBuf.rawPtr);
+  });
+  return (callable: callable, ptr: callable.nativeFunction);
+}
+
+({ffi.NativeCallable<ffi.Void Function()> callable, ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>> ptr})
+_createWriteListener(SharedWriteBuffer writeBuf, SendPort sinkServerPort) {
+  late final ffi.NativeCallable<ffi.Void Function()> callable;
+  callable = ffi.NativeCallable<ffi.Void Function()>.listener(() async {
+    final length = writeBuf.chunkLength;
+    final chunk = writeBuf.readChunkData(length);
+    final replyPort = ReceivePort();
+    sinkServerPort.send([
+      'write',
+      TransferableTypedData.fromList([chunk]),
+      replyPort.sendPort,
+    ]);
+    final ack = await replyPort.first;
+    replyPort.close();
+    if (ack == true) {
+      writeBuf.setFlags(flagAck);
+    } else {
+      writeBuf.setFlags(flagError);
+    }
+    bridge.bridgeSignalWrite(writeBuf.rawPtr);
+  });
+  return (callable: callable, ptr: callable.nativeFunction);
+}
+
+// ── Coordinator entry point ──
+
+/// Entry point for the coordinator isolate. Passed to Isolate.spawn.
+void coordinatorEntryPoint(SendPort mainPort) {
+  final coordinatorPort = ReceivePort();
+  mainPort.send(coordinatorPort.sendPort);
 
   SendPort? responsePort;
 
 
-  helpers.initBridge();
+  _initBridge();
 
-  workerPort.listen((message) async {
+  coordinatorPort.listen((message) async {
     if (message is SendPort) {
       responsePort = message;
       return;
@@ -39,15 +105,8 @@ void workerEntryPoint(SendPort mainPort) {
     final args = message[2] as Map<String, Object?>;
 
     try {
-      if (op == 'render' || op == 'extractImages') {
-        final streamOpCode = op == 'render' ? 1 : 2;
-        await _handleStream(args,
-          opCode: streamOpCode,
-          responsePort: responsePort!,
-          requestId: id,
-        );
-      } else {
-        final result = await _dispatch(op, args);
+      final result = await _dispatch(op, args, responsePort: responsePort!, requestId: id);
+      if (result != null) {
         responsePort?.send([id, false, result]);
       }
     } catch (e) {
@@ -56,28 +115,16 @@ void workerEntryPoint(SendPort mainPort) {
   });
 }
 
-Future<Object?> _dispatch(String op, Map<String, Object?> args) async {
+Future<Object?> _dispatch(String op, Map<String, Object?> args, {required SendPort responsePort, required int requestId}) async {
   switch (op) {
     case 'open':
       return _handleOpen(args);
-    case 'merge':
-      return _handleEdit(args, opCode: 1);
-    case 'extractPages':
-      return _handleEdit(args, opCode: 2);
-    case 'deletePages':
-      return _handleEdit(args, opCode: 3);
-    case 'rotateAllPages':
-      return _handleEdit(args, opCode: 6);
-    case 'flattenForms':
-      return _handleEdit(args, opCode: 7);
-    case 'rotatePages':
-      return _handleEdit(args, opCode: 5);
-    case 'compress':
-      return _handleEdit(args, opCode: 9);
-    case 'applyRedactions':
-      return _handleEdit(args, opCode: 8);
-    case 'movePage':
-      return _handleEdit(args, opCode: 10);
+    case 'render':
+      await _handleStream(args, opCode: 1, responsePort: responsePort, requestId: requestId);
+      return null;
+    case 'extractImages':
+      await _handleStream(args, opCode: 2, responsePort: responsePort, requestId: requestId);
+      return null;
     case 'extract':
       return _handleRead(args, opCode: args['opCode'] as int? ?? 1);
     case 'search':
@@ -90,34 +137,20 @@ Future<Object?> _dispatch(String op, Map<String, Object?> args) async {
       return _handleRead(args, opCode: 6);
     case 'validatePdfUa':
       return _handleRead(args, opCode: 7);
-    case 'embedFile':
-      return _handleEdit(args, opCode: 11);
-    case 'eraseRegions':
-      return _handleEdit(args, opCode: 12);
-    case 'encrypt':
-      return _handleEdit(args, opCode: 13);
-    case 'decrypt':
-      return _handleEdit(args, opCode: 14);
-    case 'watermark':
-      return _handleEdit(args, opCode: 15);
-    case 'sign':
-      return _handleEdit(args, opCode: 16);
-    case 'signPem':
-      return _handleEdit(args, opCode: 29);
     case 'planSplitByBookmarks':
       return _handleRead(args, opCode: 10);
     case 'classifyPage':
       return _handleRead(args, opCode: 8);
     case 'classifyDocument':
       return _handleRead(args, opCode: 9);
+    case 'sign':
+      return _handleEdit(args, opCode: 16);
+    case 'signPem':
+      return _handleEdit(args, opCode: 29);
     case 'convertTo':
-      return _handleRead(args, opCode: 11);
+      return _handleEdit(args, opCode: 34);
     case 'convertToPdf':
-      return _handleRead(args, opCode: 12);
-    case 'addStamp':
-      return _handleEdit(args, opCode: 17);
-    case 'addImageStamp':
-      return _handleEdit(args, opCode: 18);
+      return _handleEdit(args, opCode: 35);
     case 'imagesToPdf':
       return _handleImagesToPdf(args);
     case 'editorOpen':
@@ -127,21 +160,25 @@ Future<Object?> _dispatch(String op, Map<String, Object?> args) async {
     case 'editorSave':
       return _handleEditorSave(args);
     case 'editorDispose':
-      bridge.bridgeEditorDispose(args['handleId'] as int);
-      return Uint8List.fromList([1]); // success
+      final disposeHandleId = args['handleId'] as int;
+      bridge.bridgeEditorDispose(disposeHandleId);
+      _editorReaderStates.remove(disposeHandleId)?.dispose();
+      return Uint8List.fromList([1]);
+    case 'editorIsModified':
+      final isModHandleId = args['handleId'] as int;
+      final modified = bridge.bridgeEditorIsModified(isModHandleId);
+      return Uint8List.fromList([1, modified != 0 ? 1 : 0]);
     case 'editorGetMetadata':
       return _handleEditorGetMetadata(args);
     case 'editorPageMediaBox':
       return _handleEditorPageMediaBox(args);
-    case 'editorExtractPages':
-      return _handleEditorExtractPages(args);
     case 'editorMergeFrom':
       return _handleEditorMergeFrom(args);
     case 'builderCreate':
       return _handleBuilderCreate();
     case 'builderSetMetadata':
       await _handleBuilderSetMetadata(args);
-      return null;
+      return Uint8List.fromList([1]);
     case 'builderAddPage':
       return _handleBuilderAddPage(args);
     case 'builderPageOp':
@@ -152,11 +189,26 @@ Future<Object?> _dispatch(String op, Map<String, Object?> args) async {
       return _handleBuilderSave(args);
     case 'builderDispose':
       await _handleBuilderDispose(args);
-      return null;
+      return Uint8List.fromList([1]);
     default:
       throw UnimplementedError('Worker op: $op');
   }
 }
+
+/// Tracks editor reader resources that must stay alive for the editor's lifetime.
+class _EditorReaderState {
+  final SharedReadBuffer readBuf;
+  final ({ffi.NativeCallable<ffi.Void Function()> callable, ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>> ptr}) listener;
+  _EditorReaderState(this.readBuf, this.listener);
+
+  void dispose() {
+    listener.callable.close();
+    bridge.bridgeDestroyReadBuffer(readBuf.rawPtr);
+    calloc.free(readBuf.ptr);
+  }
+}
+
+final _editorReaderStates = <int, _EditorReaderState>{};
 
 Future<Uint8List> _handleEditorOpen(Map<String, Object?> args) async {
   final sourcePort = args['sourcePort'] as SendPort;
@@ -165,7 +217,7 @@ Future<Uint8List> _handleEditorOpen(Map<String, Object?> args) async {
 
   final readBuf = SharedReadBuffer();
   bridge.bridgeInitReadBuffer(readBuf.rawPtr);
-  final listener = helpers.createReadListener(readBuf, sourcePort);
+  final listener = _createReadListener(readBuf, sourcePort);
   final resultPort = ReceivePort();
   final nativePort = resultPort.sendPort.nativePort;
 
@@ -178,13 +230,32 @@ Future<Uint8List> _handleEditorOpen(Map<String, Object?> args) async {
     final handleId = bridge.bridgeEditorOpen(
       readBuf.rawPtr, listener.ptr, sourceLength, passwordPtr, nativePort,
     );
-    if (handleId == 0) throw StateError('Failed to open editor');
+    if (handleId == 0) {
+      listener.callable.close();
+      bridge.bridgeDestroyReadBuffer(readBuf.rawPtr);
+      calloc.free(readBuf.ptr);
+      throw StateError('Failed to open editor');
+    }
     final result = await resultPort.first;
-    return result as Uint8List;
-  } finally {
+    final bytes = result as Uint8List;
+    if (bytes.isNotEmpty && bytes[0] == 1) {
+      // Success — keep reader alive for the editor's lifetime
+      final bd = ByteData.sublistView(bytes);
+      final hid = bd.getUint64(1, Endian.little);
+      _editorReaderStates[hid] = _EditorReaderState(readBuf, listener);
+    } else {
+      // Failed — clean up immediately
+      listener.callable.close();
+      bridge.bridgeDestroyReadBuffer(readBuf.rawPtr);
+      calloc.free(readBuf.ptr);
+    }
+    return bytes;
+  } catch (_) {
     listener.callable.close();
     bridge.bridgeDestroyReadBuffer(readBuf.rawPtr);
     calloc.free(readBuf.ptr);
+    rethrow;
+  } finally {
     resultPort.close();
     if (passwordPtr.address != 0) calloc.free(passwordPtr);
   }
@@ -239,7 +310,8 @@ Future<Uint8List> _handleEditorSave(Map<String, Object?> args) async {
   final sinkPort = args['sinkPort'] as SendPort;
   final compress = args['compress'] as bool? ?? true;
   final garbageCollect = args['garbageCollect'] as bool? ?? true;
-  final linearize = args['linearize'] as bool? ?? false;
+  final saveMode = args['saveMode'] as int? ?? 0;
+  final encryptMode = args['encryptMode'] as int? ?? 0;
   final encryptAlgo = args['encryptAlgo'] as int? ?? 0;
   final encryptUserPw = args['encryptUserPw'] as String? ?? '';
   final encryptOwnerPw = args['encryptOwnerPw'] as String? ?? '';
@@ -247,7 +319,7 @@ Future<Uint8List> _handleEditorSave(Map<String, Object?> args) async {
 
   final writeBuf = SharedWriteBuffer();
   bridge.bridgeInitWriteBuffer(writeBuf.rawPtr);
-  final writeListener = helpers.createWriteListener(writeBuf, sinkPort);
+  final writeListener = _createWriteListener(writeBuf, sinkPort);
   final resultPort = ReceivePort();
   final nativePort = resultPort.sendPort.nativePort;
 
@@ -261,8 +333,7 @@ Future<Uint8List> _handleEditorSave(Map<String, Object?> args) async {
   try {
     bridge.bridgeEditorSave(
       handleId, writeBuf.rawPtr, writeListener.ptr,
-      compress, garbageCollect, linearize,
-      encryptAlgo,
+      compress, garbageCollect, saveMode, encryptMode, encryptAlgo,
       userPwPtr, userPwBytes.length,
       ownerPwPtr, ownerPwBytes.length,
       encryptPermissions,
@@ -307,23 +378,6 @@ Future<Uint8List> _handleEditorPageMediaBox(Map<String, Object?> args) async {
   }
 }
 
-Future<Uint8List> _handleEditorExtractPages(Map<String, Object?> args) async {
-  // extractPages via editor = opCode 2 in bridgeEditorMutate
-  final handleId = args['handleId'] as int;
-  final pages = args['pages'] as List;
-  final params = Uint8List(4 + pages.length * 4);
-  final bd = ByteData.sublistView(params);
-  bd.setInt32(0, pages.length, Endian.little);
-  for (var i = 0; i < pages.length; i++) {
-    bd.setInt32(4 + i * 4, pages[i] as int, Endian.little);
-  }
-  return _handleEditorMutate({
-    'handleId': handleId,
-    'opCode': 2,
-    'params': params,
-  });
-}
-
 Future<Uint8List> _handleEditorMergeFrom(Map<String, Object?> args) async {
   // mergeFrom = opCode 1 in bridgeEditorMutate with secondary bytes
   final handleId = args['handleId'] as int;
@@ -345,7 +399,7 @@ Future<Uint8List> _handleOpen(Map<String, Object?> args) async {
   bridge.bridgeInitReadBuffer(readBuf.rawPtr);
 
 
-  final listener = helpers.createReadListener(readBuf, sourcePort);
+  final listener = _createReadListener(readBuf, sourcePort);
 
 
   final resultPort = ReceivePort();
@@ -395,7 +449,7 @@ Future<Uint8List> _handleRead(Map<String, Object?> args, {required int opCode}) 
   final readBuf = SharedReadBuffer();
   bridge.bridgeInitReadBuffer(readBuf.rawPtr);
 
-  final listener = helpers.createReadListener(readBuf, sourcePort);
+  final listener = _createReadListener(readBuf, sourcePort);
   final resultPort = ReceivePort();
   final nativePort = resultPort.sendPort.nativePort;
 
@@ -457,8 +511,8 @@ Future<Uint8List> _handleEdit(Map<String, Object?> args, {required int opCode}) 
   bridge.bridgeInitWriteBuffer(writeBuf.rawPtr);
 
   // Listeners
-  final readListener = helpers.createReadListener(readBuf, sourcePort);
-  final writeListener = helpers.createWriteListener(writeBuf, sinkPort);
+  final readListener = _createReadListener(readBuf, sourcePort);
+  final writeListener = _createWriteListener(writeBuf, sinkPort);
 
   // Result port
   final resultPort = ReceivePort();
@@ -534,7 +588,7 @@ Future<Uint8List> _handleImagesToPdf(Map<String, Object?> args) async {
   final writeBuf = SharedWriteBuffer();
   bridge.bridgeInitWriteBuffer(writeBuf.rawPtr);
 
-  final writeListener = helpers.createWriteListener(writeBuf, sinkPort);
+  final writeListener = _createWriteListener(writeBuf, sinkPort);
 
   final resultPort = ReceivePort();
   final nativePort = resultPort.sendPort.nativePort;
@@ -600,7 +654,7 @@ Future<void> _handleStream(
   final readBuf = SharedReadBuffer();
   bridge.bridgeInitReadBuffer(readBuf.rawPtr);
 
-  final listener = helpers.createReadListener(readBuf, sourcePort);
+  final listener = _createReadListener(readBuf, sourcePort);
   final resultPort = ReceivePort();
   final nativePort = resultPort.sendPort.nativePort;
 
@@ -728,7 +782,7 @@ Future<Uint8List> _handleBuilderSave(Map<String, Object?> args) async {
 
   final writeBuf = SharedWriteBuffer();
   bridge.bridgeInitWriteBuffer(writeBuf.rawPtr);
-  final writeListener = helpers.createWriteListener(writeBuf, sinkPort);
+  final writeListener = _createWriteListener(writeBuf, sinkPort);
   final resultPort = ReceivePort();
 
   bridge.bridgeBuilderSave(

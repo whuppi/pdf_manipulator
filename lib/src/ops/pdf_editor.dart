@@ -1,18 +1,26 @@
 // PdfEditor — batch editing. Parse once, mutate many, save once.
 
-import 'dart:typed_data';
 
-import 'package:pdf_manipulator/src/types/pdf_sink.dart';
-import 'package:pdf_manipulator/src/types/pdf_source.dart';
+import 'package:pdf_manipulator/src/types/data_sink.dart';
+import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/transport/pdf_bridge.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 
 class PdfEditor {
-  PdfEditor.internal(PdfBridge _, this._handle);
+  PdfEditor.internal(PdfBridge _, this._handle, {
+    PdfEncryptionAlgorithm? sourceEncryption,
+    PdfPermissions? sourcePermissions,
+    String? password,
+  }) : _sourceEncryption = sourceEncryption,
+       _sourcePermissions = sourcePermissions,
+       _password = password;
 
   final BridgeEditorHandle _handle;
+  final PdfEncryptionAlgorithm? _sourceEncryption;
+  final PdfPermissions? _sourcePermissions;
+  final String? _password;
   bool _disposed = false;
 
   void _check() {
@@ -29,6 +37,11 @@ class PdfEditor {
   Future<String> get version {
     _check();
     return _handle.version;
+  }
+
+  Future<bool> get isModified {
+    _check();
+    return _handle.isModified;
   }
 
   // ── Metadata ──
@@ -69,12 +82,12 @@ class PdfEditor {
     return _handle.movePage(from: from, to: to);
   }
 
-  Future<void> extractPages(List<int> pages, PdfSink output) {
+  Future<void> selectPages(List<int> pages) {
     _check();
-    return _handle.extractPages(pages, output);
+    return _handle.selectPages(pages);
   }
 
-  Future<void> mergeFrom(PdfSource otherPdf) {
+  Future<void> mergeFrom(DataSource otherPdf) {
     _check();
     return _handle.mergeFrom(otherPdf);
   }
@@ -95,35 +108,35 @@ class PdfEditor {
 
   Future<void> addWatermark(int page, String text, {
     PdfWatermarkStyle style = const PdfWatermarkStyle(),
-    PdfWatermarkPosition? position,
+    PdfWatermarkPosition position = const PdfWatermarkPosition.center(),
+    PdfWatermarkLayer layer = PdfWatermarkLayer.foreground,
   }) {
     _check();
-    return _handle.addWatermark(page, text, style: style, position: position);
+    return _handle.addWatermark(page, text, style: style, position: position, layer: layer);
   }
 
   Future<void> addStamp(int page, {
     required PdfStampType type,
     required PdfRect rect,
-    String? customName,
     double opacity = 1.0,
   }) {
     _check();
     return _handle.addStamp(page,
-        type: type, rect: rect, customName: customName, opacity: opacity);
+        type: type, rect: rect, opacity: opacity);
   }
 
-  Future<void> addImageStamp(int page, Uint8List imageBytes, {
+  Future<void> addImageStamp(int page, DataSource imageData, {
     required PdfRect rect,
     double opacity = 1.0,
   }) {
     _check();
-    return _handle.addImageStamp(page, imageBytes,
+    return _handle.addImageStamp(page, imageData,
         rect: rect, opacity: opacity);
   }
 
   // ── Content ──
 
-  Future<void> embedFile(String name, Uint8List data) {
+  Future<void> embedFile(String name, DataSource data) {
     _check();
     return _handle.embedFile(name, data);
   }
@@ -150,11 +163,6 @@ class PdfEditor {
         left: left, right: right, top: top, bottom: bottom);
   }
 
-  Future<void> convertToPdfA({int level = 1}) {
-    _check();
-    return _handle.convertToPdfA(level: level);
-  }
-
   Future<void> resizeImage(int page, String imageName, {
     required double width, required double height,
   }) {
@@ -162,6 +170,10 @@ class PdfEditor {
     return _handle.resizeImage(page, imageName, width: width, height: height);
   }
 
+  Future<void> convertToPdfA({int level = 1}) {
+    _check();
+    return _handle.convertToPdfA(level: level);
+  }
 
   // ── Redaction ──
 
@@ -187,11 +199,27 @@ class PdfEditor {
 
   // ── Save ──
 
-  Future<void> save(PdfSink output, {
+  Future<void> save(DataSink output, {
     PdfSaveOptions options = const PdfSaveOptions(),
   }) {
     _check();
-    return _handle.save(output, options: options);
+    final resolved = _resolveEncryption(options);
+    return _handle.save(output, options: resolved);
+  }
+
+  PdfSaveOptions _resolveEncryption(PdfSaveOptions options) {
+    if (options.encryption is! PdfEncryptionKeep) return options;
+    if (_sourceEncryption == null) return options;
+    return PdfSaveOptions(
+      compress: options.compress,
+      garbageCollect: options.garbageCollect,
+      encryption: PdfEncryption.config(
+        ownerPassword: _password ?? '',
+        userPassword: _password ?? '',
+        algorithm: _sourceEncryption,
+        permissions: _sourcePermissions ?? const PdfPermissions.all(),
+      ),
+    );
   }
 
   // ── Lifecycle ──

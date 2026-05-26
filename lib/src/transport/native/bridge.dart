@@ -4,17 +4,22 @@
 // thread pool. Each operation: main creates SourceServer/SinkServer,
 // sends a command to the worker, worker does FFI, result comes back.
 //
+// Decoding: Rust returns binary Uint8List → wire.dart decodes to typed results.
+//
+// Do NOT import dart:ffi, package:ffi, or bindings.dart here.
+// All FFI calls go through the worker isolate (coordinator.dart).
+// Direct FFI from the main isolate causes deadlocks on the Rust
+// editor mutex. The absence of the import makes this impossible.
+//
 // INTERNAL — created by bridge_factory.dart.
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:ffi' as ffi;
 import 'dart:isolate';
 import 'dart:typed_data';
 
-import 'package:ffi/ffi.dart';
-import 'package:pdf_manipulator/src/types/pdf_sink.dart';
-import 'package:pdf_manipulator/src/types/pdf_source.dart';
+import 'package:pdf_manipulator/src/types/data_sink.dart';
+import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
@@ -24,13 +29,11 @@ import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
 import 'package:pdf_manipulator/src/types/search_result.dart';
 import 'package:pdf_manipulator/src/transport/native/source_server.dart';
-import 'package:pdf_manipulator/src/transport/native/bindings.dart' as bridge_ffi;
-import 'package:pdf_manipulator/src/types/errors.dart';
-import 'package:pdf_manipulator/src/transport/native/worker_entry.dart';
+import 'package:pdf_manipulator/src/transport/native/wire.dart';
+import 'package:pdf_manipulator/src/transport/native/coordinator.dart';
 import 'package:pdf_manipulator/src/types/pdf_image.dart';
-import 'package:pdf_manipulator/src/protocol/op.dart';
+import 'package:pdf_manipulator/src/transport/protocol/op.dart';
 import 'package:pdf_manipulator/src/types/pdf_doc.dart';
-import 'package:pdf_manipulator/src/types/pdf_page_info.dart';
 
 class NativeBridge extends PdfBridge {
   NativeBridge();
@@ -50,7 +53,7 @@ class NativeBridge extends PdfBridge {
 
     final initPort = ReceivePort();
     _workerIsolate = await Isolate.spawn(
-      workerEntryPoint,
+      coordinatorEntryPoint,
       initPort.sendPort,
       debugName: 'PdfBridgeWorker',
     );
@@ -63,7 +66,6 @@ class NativeBridge extends PdfBridge {
       final tag = message[1];
 
       if (tag is bool) {
-        // One-shot response: [id, isError: bool, value]
         final completer = _pending.remove(id);
         if (completer == null) return;
         if (tag) {
@@ -74,7 +76,6 @@ class NativeBridge extends PdfBridge {
           completer.complete(message[2]);
         }
       } else if (tag is String) {
-        // Stream event: [id, 'item'/'done'/'error', data]
         final controller = _pendingStreams[id];
         if (controller == null) return;
         switch (tag) {
@@ -103,81 +104,12 @@ class NativeBridge extends PdfBridge {
     return completer.future;
   }
 
-  // ── Result decoding ────────────────────────────────────────────────
+  // Result decoding: wire.dart (binary → typed results).
 
-  static PdfDoc _decodePdfDoc(Uint8List bytes) {
-    final data = ByteData.sublistView(bytes);
-    var offset = 0;
-
-    final status = bytes[offset]; offset += 1;
-    if (status == 0) {
-      final errorCode = data.getInt32(offset, Endian.little); offset += 4;
-      final msgLen = data.getUint16(offset, Endian.little); offset += 2;
-      final message = String.fromCharCodes(bytes, offset, offset + msgLen);
-      throw StateError('PDF open failed (code $errorCode): $message');
-    }
-
-    final pageCount = data.getInt32(offset, Endian.little); offset += 4;
-    final major = bytes[offset]; offset += 1;
-    final minor = bytes[offset]; offset += 1;
-    final isEncrypted = bytes[offset] != 0; offset += 1;
-    final isTagged = bytes[offset] != 0; offset += 1;
-
-    final pages = <PdfPageInfo>[];
-    for (var i = 0; i < pageCount; i++) {
-      final width = data.getFloat64(offset, Endian.little); offset += 8;
-      final height = data.getFloat64(offset, Endian.little); offset += 8;
-      final rotation = data.getInt32(offset, Endian.little); offset += 4;
-      pages.add(PdfPageInfo(
-        index: i,
-        width: width,
-        height: height,
-        rotation: rotation,
-      ));
-    }
-
-    String readStr() {
-      final len = data.getUint16(offset, Endian.little); offset += 2;
-      if (len == 0) return '';
-      final s = String.fromCharCodes(bytes, offset, offset + len);
-      offset += len;
-      return s;
-    }
-
-    final title = readStr();
-    final author = readStr();
-    final subject = readStr();
-    final keywords = readStr();
-
-    return PdfDoc(
-      pageCount: pageCount,
-      version: '$major.$minor',
-      pages: pages,
-      title: title.isEmpty ? null : title,
-      author: author.isEmpty ? null : author,
-      subject: subject.isEmpty ? null : subject,
-      keywords: keywords.isEmpty ? null : keywords,
-      isTagged: isTagged,
-      isEncrypted: isEncrypted,
-    );
-  }
-
-  /// Encode a list of ints as [count: i32, values: [i32; N]] (little-endian).
-  static Uint8List _encodeIntList(List<int> values) {
-    final buf = Uint8List(4 + values.length * 4);
-    final bd = ByteData.sublistView(buf);
-    bd.setInt32(0, values.length, Endian.little);
-    for (var i = 0; i < values.length; i++) {
-      bd.setInt32(4 + i * 4, values[i], Endian.little);
-    }
-    return buf;
-  }
-
-  /// Helper: submit an edit operation (source → edit → sink).
   Future<void> _submitEdit(
     String op,
-    PdfSource source,
-    PdfSink sink, {
+    DataSource source,
+    DataSink sink, {
     Uint8List? params,
     List<Uint8List>? secondaries,
   }) async {
@@ -196,7 +128,7 @@ class NativeBridge extends PdfBridge {
       });
       final bytes = result as Uint8List;
       if (bytes.isEmpty || bytes[0] == 0) {
-        throw _decodeError(bytes);
+        throw wireDecodeError(bytes);
       }
     } finally {
       srcServer.stop();
@@ -204,10 +136,9 @@ class NativeBridge extends PdfBridge {
     }
   }
 
-  /// Helper: submit a read-only operation (source → read → result bytes).
   Future<Uint8List> _submitRead(
     String op,
-    PdfSource source, {
+    DataSource source, {
     String? password,
     Uint8List? params,
     int? opCode,
@@ -229,390 +160,9 @@ class NativeBridge extends PdfBridge {
     }
   }
 
-  /// Decode a text result: [status: u8, text_len: u32, text: utf8 bytes]
-  String _decodeTextResult(Uint8List bytes) {
-    if (bytes.isEmpty || bytes[0] == 0) {
-      throw StateError('Read operation failed');
-    }
-    final bd = ByteData.sublistView(bytes);
-    final textLen = bd.getUint32(1, Endian.little);
-    return utf8.decode(bytes.sublist(5, 5 + textLen));
-  }
-
-  /// Decode a validation result: [status: u8, compliant: u8, errors: i32, warnings: i32]
-  PdfValidationResult _decodeValidationResult(Uint8List bytes) {
-    if (bytes.isEmpty || bytes[0] == 0) {
-      throw StateError('Validation failed');
-    }
-    final bd = ByteData.sublistView(bytes);
-    return PdfValidationResult(
-      compliant: bytes[1] == 1,
-      errors: bd.getInt32(2, Endian.little),
-      warnings: bd.getInt32(6, Endian.little),
-    );
-  }
-
-  // ── PdfBridge implementation ───────────────────────────────────────
-
-  @override
-  Future<PdfDoc> open(PdfSource source, {String? password}) async {
-    _checkDisposed();
-    final server = SourceServer(source);
-    final serverPort = server.start();
-    try {
-      final result = await _send(EngineOp.open.wire, {
-        'sourcePort': serverPort,
-        'sourceLength': source.length,
-        'password': password,
-      });
-      return _decodePdfDoc(result as Uint8List);
-    } finally {
-      server.stop();
-    }
-  }
-
-  @override
-  Future<void> merge(List<PdfSource> inputs, PdfSink output) async {
-    if (inputs.length < 2) throw ArgumentError('merge requires at least 2 PDFs');
-    final secondaries = <Uint8List>[];
-    for (var i = 1; i < inputs.length; i++) {
-      secondaries.add(await inputs[i].readAt(0, inputs[i].length));
-    }
-    await _submitEdit(EngineOp.merge.wire, inputs[0], output, secondaries: secondaries);
-  }
-
-
-  @override
-  Future<void> extractPages(PdfSource source, PdfSink output,
-      {required List<int> pages}) async {
-    final params = _encodeIntList(pages);
-    await _submitEdit(EngineOp.extractPages.wire, source, output, params: params);
-  }
-
-  @override
-  Future<void> deletePages(PdfSource source, PdfSink output,
-      {required List<int> pages}) async {
-    final params = _encodeIntList(pages);
-    await _submitEdit(EngineOp.deletePages.wire, source, output, params: params);
-  }
-
-  @override
-  Future<void> reorderPages(PdfSource source, PdfSink output,
-      {required List<int> order}) async {
-    final params = _encodeIntList(order);
-    await _submitEdit(EngineOp.extractPages.wire, source, output, params: params);
-  }
-
-  @override
-  Future<void> movePage(PdfSource source, PdfSink output,
-      {required int from, required int to}) async {
-    final params = Uint8List(8);
-    final bd = ByteData.sublistView(params);
-    bd.setInt32(0, from, Endian.little);
-    bd.setInt32(4, to, Endian.little);
-    await _submitEdit(EngineOp.movePage.wire, source, output, params: params);
-  }
-
-  @override
-  Future<void> rotatePages(PdfSource source, PdfSink output,
-      {required Map<int, int> pages}) async {
-    final params = Uint8List(4 + pages.length * 8);
-    final bd = ByteData.sublistView(params);
-    bd.setInt32(0, pages.length, Endian.little);
-    var i = 0;
-    for (final entry in pages.entries) {
-      bd.setInt32(4 + i * 8, entry.key, Endian.little);
-      bd.setInt32(8 + i * 8, entry.value, Endian.little);
-      i++;
-    }
-    await _submitEdit(EngineOp.rotatePages.wire, source, output, params: params);
-  }
-
-  @override
-  Future<void> rotateAllPages(PdfSource source, PdfSink output,
-      {required int degrees}) async {
-    final params = Uint8List(4);
-    ByteData.sublistView(params).setInt32(0, degrees, Endian.little);
-    await _submitEdit(EngineOp.rotateAllPages.wire, source, output, params: params);
-  }
-
-  @override
-  Future<void> flattenForms(PdfSource source, PdfSink output) async {
-    await _submitEdit(EngineOp.flattenForms.wire, source, output);
-  }
-
-  @override
-  Future<void> applyRedactions(PdfSource source, PdfSink output) async {
-    await _submitEdit(EngineOp.applyRedactions.wire, source, output);
-  }
-
-  @override
-  Future<void> embedFile(PdfSource source, PdfSink output,
-      {required String name, required Uint8List fileData}) async {
-    // embedFile: op code 11, name as params, file as secondary
-    final nameBytes = utf8.encode(name);
-    final params = Uint8List(4 + nameBytes.length);
-    final bd = ByteData.sublistView(params);
-    bd.setInt32(0, nameBytes.length, Endian.little);
-    params.setAll(4, nameBytes);
-    await _submitEdit(EngineOp.embedFile.wire, source, output,
-        params: params, secondaries: [fileData]);
-  }
-
-  @override
-  Future<void> eraseRegions(PdfSource source, PdfSink output,
-      {required int page, required List<PdfRect> regions}) async {
-    // eraseRegions: op code 12, params: [page: i32, count: i32, rects: [x,y,w,h as f64; N]]
-    final params = Uint8List(8 + regions.length * 32);
-    final bd = ByteData.sublistView(params);
-    bd.setInt32(0, page, Endian.little);
-    bd.setInt32(4, regions.length, Endian.little);
-    for (var i = 0; i < regions.length; i++) {
-      final r = regions[i];
-      bd.setFloat64(8 + i * 32, r.x, Endian.little);
-      bd.setFloat64(16 + i * 32, r.y, Endian.little);
-      bd.setFloat64(24 + i * 32, r.width, Endian.little);
-      bd.setFloat64(32 + i * 32, r.height, Endian.little);
-    }
-    await _submitEdit(EngineOp.eraseRegions.wire, source, output, params: params);
-  }
-
-  @override
-  Future<void> compress(PdfSource source, PdfSink output,
-      {int imageQuality = 75, bool garbageCollect = true,
-       bool linearize = false}) async {
-    await _submitEdit(EngineOp.compress.wire, source, output,
-        params: Uint8List.fromList([imageQuality.clamp(1, 100)]));
-  }
-
-  @override
-  Future<String> extract(PdfSource source, {
-    required PdfPages pages, String? password,
-    PdfExtractionFormat format = PdfExtractionFormat.auto,
-  }) async {
-    final int pageIndex = switch (pages) {
-      PdfAllPages() => -1,
-      PdfSinglePage(:final index) => index,
-      PdfPageList(:final indices) => indices.isEmpty ? -1 : indices.first,
-      PdfPageRange(:final start) => start,
-    };
-    final int opCode = switch (format) {
-      PdfExtractionFormat.text || PdfExtractionFormat.plainText || PdfExtractionFormat.auto => 1,
-      PdfExtractionFormat.markdown || PdfExtractionFormat.html => 2,
-    };
-    final params = Uint8List(4);
-    ByteData.sublistView(params).setInt32(0, pageIndex, Endian.little);
-    final result = await _submitRead(EngineOp.extract.wire, source, password: password, params: params, opCode: opCode);
-    return _decodeTextResult(result);
-  }
-
-  @override
-  Future<List<SearchResult>> search(PdfSource source, {
-    required String query, required PdfPages pages, String? password,
-  }) async {
-    _checkDisposed();
-    final pageIndex = switch (pages) {
-      PdfAllPages() => -1,
-      PdfSinglePage(:final index) => index,
-      PdfPageList(:final indices) => indices.first,
-      PdfPageRange(:final start) => start,
-    };
-    final queryBytes = utf8.encode(query);
-    final params = Uint8List(4 + 4 + queryBytes.length);
-    final bd = ByteData.sublistView(params);
-    bd.setInt32(0, pageIndex, Endian.little);
-    bd.setInt32(4, queryBytes.length, Endian.little);
-    params.setAll(8, queryBytes);
-    final result = await _submitRead(EngineOp.search.wire, source, params: params, password: password);
-    // Decode search results
-    final rbd = ByteData.sublistView(result);
-    final count = rbd.getInt32(1, Endian.little);
-    var off = 5;
-    final hits = <SearchResult>[];
-    for (var i = 0; i < count; i++) {
-      final page = rbd.getInt32(off, Endian.little); off += 4;
-      final x = rbd.getFloat32(off, Endian.little); off += 4;
-      final y = rbd.getFloat32(off, Endian.little); off += 4;
-      final w = rbd.getFloat32(off, Endian.little); off += 4;
-      final h = rbd.getFloat32(off, Endian.little); off += 4;
-      final textLen = rbd.getUint16(off, Endian.little); off += 2;
-      final text = utf8.decode(result.sublist(off, off + textLen));
-      off += textLen;
-      hits.add(SearchResult(page: page, text: text, rect: PdfRect(x: x.toDouble(), y: y.toDouble(), width: w.toDouble(), height: h.toDouble())));
-    }
-    return hits;
-  }
-
-  @override
-  Future<void> watermark(PdfSource source, PdfSink output, {
-    required String text, PdfPages pages = const PdfPages.all(),
-    PdfWatermarkStyle style = const PdfWatermarkStyle(),
-    PdfWatermarkPosition? position,
-  }) async {
-    _checkDisposed();
-    // Resolve page index: -1 for all, single for PdfPages.single
-    final pageIndex = switch (pages) {
-      PdfAllPages() => -1,
-      PdfSinglePage(:final index) => index,
-      PdfPageList(:final indices) => indices.first, // watermark first for now
-      PdfPageRange(:final start) => start,
-    };
-    final textBytes = utf8.encode(text);
-    final params = Uint8List(4 + 4 + textBytes.length + 8 * 6);
-    final bd = ByteData.sublistView(params);
-    var off = 0;
-    bd.setInt32(off, pageIndex, Endian.little); off += 4;
-    bd.setInt32(off, textBytes.length, Endian.little); off += 4;
-    params.setAll(off, textBytes); off += textBytes.length;
-    bd.setFloat64(off, style.fontSize, Endian.little); off += 8;
-    bd.setFloat64(off, style.rotation, Endian.little); off += 8;
-    bd.setFloat64(off, style.opacity, Endian.little); off += 8;
-    bd.setFloat64(off, style.color.r, Endian.little); off += 8;
-    bd.setFloat64(off, style.color.g, Endian.little); off += 8;
-    bd.setFloat64(off, style.color.b, Endian.little);
-    await _submitEdit(EngineOp.watermark.wire, source, output, params: params);
-  }
-
-  @override
-  Future<void> encrypt(PdfSource source, PdfSink output, {
-    required PdfEncryptionConfig encryption,
-  }) async {
-    // encrypt: op code 13, params encode encryption config
-    final ownerBytes = utf8.encode(encryption.ownerPassword);
-    final userBytes = utf8.encode(encryption.userPassword);
-    final params = Uint8List(4 + 4 + ownerBytes.length + 4 + userBytes.length + 1);
-    final bd = ByteData.sublistView(params);
-    var off = 0;
-    bd.setInt32(off, encryption.algorithm.index, Endian.little); off += 4;
-    bd.setInt32(off, ownerBytes.length, Endian.little); off += 4;
-    params.setAll(off, ownerBytes); off += ownerBytes.length;
-    bd.setInt32(off, userBytes.length, Endian.little); off += 4;
-    params.setAll(off, userBytes); off += userBytes.length;
-    // permissions as a bitmask
-    var permBits = 0;
-    if (encryption.permissions.print) permBits |= 1;
-    if (encryption.permissions.printHq) permBits |= 2;
-    if (encryption.permissions.modify) permBits |= 4;
-    if (encryption.permissions.copy) permBits |= 8;
-    if (encryption.permissions.annotate) permBits |= 16;
-    if (encryption.permissions.fillForms) permBits |= 32;
-    if (encryption.permissions.accessibility) permBits |= 64;
-    if (encryption.permissions.assemble) permBits |= 128;
-    params[off] = permBits;
-    await _submitEdit(EngineOp.encrypt.wire, source, output, params: params);
-  }
-
-  @override
-  Future<void> decrypt(PdfSource source, PdfSink output, {
-    required String password,
-  }) async {
-    // decrypt: open with password, save without encryption
-    // This is just an open+save — the password authenticates, save is unencrypted
-    final passwordBytes = utf8.encode(password);
-    final params = Uint8List(4 + passwordBytes.length);
-    final bd = ByteData.sublistView(params);
-    bd.setInt32(0, passwordBytes.length, Endian.little);
-    params.setAll(4, passwordBytes);
-    await _submitEdit(EngineOp.decrypt.wire, source, output, params: params);
-  }
-
-  @override
-  Future<void> sign(PdfSource source, PdfSink output, {
-    required PdfSigningCredentials credentials,
-    String? reason, String? location,
-  }) async {
-    _checkDisposed();
-    final reasonBytes = reason != null ? utf8.encode(reason) : Uint8List(0);
-    final locBytes = location != null ? utf8.encode(location) : Uint8List(0);
-    switch (credentials) {
-      case PdfPkcs12Credentials(:final data, :final password):
-        final pwBytes = utf8.encode(password);
-        final params = _packStrings([pwBytes, reasonBytes, locBytes]);
-        await _submitEdit(EngineOp.sign.wire, source, output,
-            params: params, secondaries: [data]);
-      case PdfPemCredentials(:final certPem, :final keyPem):
-        final certBytes = utf8.encode(certPem);
-        final keyBytes = utf8.encode(keyPem);
-        final params = _packStrings([certBytes, keyBytes, reasonBytes, locBytes]);
-        await _submitEdit('signPem', source, output, params: params);
-    }
-  }
-
-  static Uint8List _packStrings(List<Uint8List> parts) {
-    var totalLen = 0;
-    for (final p in parts) {
-      totalLen += 4 + p.length;
-    }
-    final buf = Uint8List(totalLen);
-    final bd = ByteData.sublistView(buf);
-    var off = 0;
-    for (final p in parts) {
-      bd.setInt32(off, p.length, Endian.little); off += 4;
-      buf.setAll(off, p); off += p.length;
-    }
-    return buf;
-  }
-
-  @override
-  Future<void> addStamp(PdfSource source, PdfSink output, {
-    required int page, required PdfStampType type,
-    required PdfRect rect, String? customName, double opacity = 1.0,
-  }) async {
-    _checkDisposed();
-    final params = Uint8List(4 + 4 + 8 * 5); // page, stampType, x, y, w, h, opacity
-    final bd = ByteData.sublistView(params);
-    bd.setInt32(0, page, Endian.little);
-    bd.setInt32(4, type.index, Endian.little);
-    bd.setFloat64(8, rect.x, Endian.little);
-    bd.setFloat64(16, rect.y, Endian.little);
-    bd.setFloat64(24, rect.width, Endian.little);
-    bd.setFloat64(32, rect.height, Endian.little);
-    bd.setFloat64(40, opacity, Endian.little);
-    await _submitEdit(EngineOp.addStamp.wire, source, output, params: params);
-  }
-
-  @override
-  Future<void> addImageStamp(PdfSource source, PdfSink output, {
-    required int page, required Uint8List imageBytes,
-    required PdfRect rect, double opacity = 1.0,
-  }) async {
-    _checkDisposed();
-    final params = Uint8List(4 + 8 * 5); // page, x, y, w, h, opacity
-    final bd = ByteData.sublistView(params);
-    bd.setInt32(0, page, Endian.little);
-    bd.setFloat64(4, rect.x, Endian.little);
-    bd.setFloat64(12, rect.y, Endian.little);
-    bd.setFloat64(20, rect.width, Endian.little);
-    bd.setFloat64(28, rect.height, Endian.little);
-    bd.setFloat64(36, opacity, Endian.little);
-    await _submitEdit(EngineOp.addImageStamp.wire, source, output, params: params, secondaries: [imageBytes]);
-  }
-
-  @override
-  Future<void> imagesToPdf(List<Uint8List> images, PdfSink output) async {
-    _checkDisposed();
-    if (images.isEmpty) throw ArgumentError('images must not be empty');
-    final server = SinkServer(output);
-    final sinkPort = server.start();
-    try {
-      final result = await _send(EngineOp.imagesToPdf.wire, {
-        'images': images,
-        'sinkPort': sinkPort,
-      });
-      final bytes = result as Uint8List;
-      if (bytes.isEmpty || bytes[0] == 0) {
-        throw StateError('imagesToPdf failed');
-      }
-    } finally {
-      server.stop();
-    }
-  }
-
-  /// Submit a streaming operation. Returns a Stream that yields raw item
-  /// bytes one at a time. The caller decodes each item.
   Stream<Uint8List> _submitStream(
     String op,
-    PdfSource source, {
+    DataSource source, {
     String? password,
     Uint8List? params,
   }) async* {
@@ -642,19 +192,18 @@ class NativeBridge extends PdfBridge {
     }
   }
 
-  /// Encode PdfPages into binary params for the Rust dispatch.
   Uint8List _encodePages(PdfPages pages) {
     switch (pages) {
       case PdfAllPages():
-        return Uint8List.fromList([0]); // type=0: all pages
+        return Uint8List.fromList([0]);
       case PdfSinglePage(:final index):
         final buf = Uint8List(5);
-        buf[0] = 1; // type=1: single
+        buf[0] = 1;
         ByteData.sublistView(buf).setInt32(1, index, Endian.little);
         return buf;
       case PdfPageList(:final indices):
         final buf = Uint8List(5 + indices.length * 4);
-        buf[0] = 2; // type=2: list
+        buf[0] = 2;
         final bd = ByteData.sublistView(buf);
         bd.setInt32(1, indices.length, Endian.little);
         for (var i = 0; i < indices.length; i++) {
@@ -663,7 +212,7 @@ class NativeBridge extends PdfBridge {
         return buf;
       case PdfPageRange(:final start, :final end):
         final buf = Uint8List(9);
-        buf[0] = 3; // type=3: range
+        buf[0] = 3;
         final bd = ByteData.sublistView(buf);
         bd.setInt32(1, start, Endian.little);
         bd.setInt32(5, end, Endian.little);
@@ -671,8 +220,149 @@ class NativeBridge extends PdfBridge {
     }
   }
 
+  static Uint8List _packStrings(List<Uint8List> parts) {
+    var totalLen = 0;
+    for (final p in parts) {
+      totalLen += 4 + p.length;
+    }
+    final buf = Uint8List(totalLen);
+    final bd = ByteData.sublistView(buf);
+    var off = 0;
+    for (final p in parts) {
+      bd.setInt32(off, p.length, Endian.little); off += 4;
+      buf.setAll(off, p); off += p.length;
+    }
+    return buf;
+  }
+
+  // ── PdfBridge implementation ───────────────────────────────────────
+
   @override
-  Stream<RenderedPage> render(PdfSource source, {
+  Future<PdfDoc> open(DataSource source, {String? password}) async {
+    _checkDisposed();
+    final server = SourceServer(source);
+    final serverPort = server.start();
+    try {
+      final result = await _send(EngineOp.open.wire, {
+        'sourcePort': serverPort,
+        'sourceLength': source.length,
+        'password': password,
+      });
+      return wireDecodeOpen(result as Uint8List);
+    } finally {
+      server.stop();
+    }
+  }
+
+  @override
+  Future<String> extract(DataSource source, {
+    required PdfPages pages, String? password,
+    PdfExtractionFormat format = PdfExtractionFormat.auto,
+  }) async {
+    final int pageIndex = switch (pages) {
+      PdfAllPages() => -1,
+      PdfSinglePage(:final index) => index,
+      PdfPageList(:final indices) => indices.isEmpty ? -1 : indices.first,
+      PdfPageRange(:final start) => start,
+    };
+    final int opCode = switch (format) {
+      PdfExtractionFormat.text || PdfExtractionFormat.plainText || PdfExtractionFormat.auto => 1,
+      PdfExtractionFormat.markdown || PdfExtractionFormat.html => 2,
+    };
+    final params = Uint8List(4);
+    ByteData.sublistView(params).setInt32(0, pageIndex, Endian.little);
+    final result = await _submitRead(EngineOp.extract.wire, source, password: password, params: params, opCode: opCode);
+    return wireDecodeText(result);
+  }
+
+  @override
+  Future<List<SearchResult>> search(DataSource source, {
+    required String query, required PdfPages pages, String? password,
+  }) async {
+    _checkDisposed();
+    final pageIndex = switch (pages) {
+      PdfAllPages() => -1,
+      PdfSinglePage(:final index) => index,
+      PdfPageList(:final indices) => indices.first,
+      PdfPageRange(:final start) => start,
+    };
+    final queryBytes = utf8.encode(query);
+    final params = Uint8List(4 + 4 + queryBytes.length);
+    final bd = ByteData.sublistView(params);
+    bd.setInt32(0, pageIndex, Endian.little);
+    bd.setInt32(4, queryBytes.length, Endian.little);
+    params.setAll(8, queryBytes);
+    final result = await _submitRead(EngineOp.search.wire, source, params: params, password: password);
+    return wireDecodeSearch(result);
+  }
+
+  @override
+  Future<void> sign(DataSource source, DataSink output, {
+    required PdfSigningCredentials credentials,
+    String? reason, String? location,
+  }) async {
+    _checkDisposed();
+    final reasonBytes = reason != null ? utf8.encode(reason) : Uint8List(0);
+    final locBytes = location != null ? utf8.encode(location) : Uint8List(0);
+    switch (credentials) {
+      case PdfPkcs12Credentials(:final data, :final password):
+        final pwBytes = utf8.encode(password);
+        final params = _packStrings([pwBytes, reasonBytes, locBytes]);
+        await _submitEdit(EngineOp.sign.wire, source, output,
+            params: params, secondaries: [data]);
+      case PdfPemCredentials(:final certPem, :final keyPem):
+        final certBytes = utf8.encode(certPem);
+        final keyBytes = utf8.encode(keyPem);
+        final params = _packStrings([certBytes, keyBytes, reasonBytes, locBytes]);
+        await _submitEdit('signPem', source, output, params: params);
+    }
+  }
+
+  @override
+  Future<void> imagesToPdf(List<DataSource> images, DataSink output) async {
+    _checkDisposed();
+    if (images.isEmpty) throw ArgumentError('images must not be empty');
+    final imageBytes = await Future.wait(images.map(readAllBytes));
+    final server = SinkServer(output);
+    final sinkPort = server.start();
+    try {
+      final result = await _send(EngineOp.imagesToPdf.wire, {
+        'images': imageBytes,
+        'sinkPort': sinkPort,
+      });
+      final bytes = result as Uint8List;
+      if (bytes.isEmpty || bytes[0] == 0) {
+        throw StateError('imagesToPdf failed');
+      }
+    } finally {
+      server.stop();
+    }
+  }
+
+  @override
+  Future<void> convertTo(DataSource source, DataSink output, {required PdfDocumentFormat format, String? password}) async {
+    final formatBytes = utf8.encode(format.name);
+    final pwBytes = password != null ? utf8.encode(password) : const <int>[];
+    final params = Uint8List(4 + formatBytes.length + 4 + pwBytes.length);
+    final bd = ByteData.sublistView(params);
+    bd.setInt32(0, formatBytes.length, Endian.little);
+    params.setAll(4, formatBytes);
+    bd.setInt32(4 + formatBytes.length, pwBytes.length, Endian.little);
+    params.setAll(4 + formatBytes.length + 4, pwBytes);
+    await _submitEdit(EngineOp.convertTo.wire, source, output, params: params);
+  }
+
+  @override
+  Future<void> convertToPdf(DataSource document, DataSink output, {required PdfDocumentFormat format}) async {
+    final formatBytes = utf8.encode(format.name);
+    final params = Uint8List(4 + formatBytes.length);
+    ByteData.sublistView(params).setInt32(0, formatBytes.length, Endian.little);
+    params.setAll(4, formatBytes);
+    await _submitEdit(EngineOp.convertToPdf.wire, document, output, params: params);
+  }
+
+  @override
+  Stream<RenderedPage> render(DataSource source, {
     required PdfPages pages, PdfRenderSize? size, String? password,
   }) async* {
     _checkDisposed();
@@ -684,185 +374,83 @@ class NativeBridge extends PdfBridge {
     bd.setInt32(pagesBytes.length + 4, size?.maxHeight ?? 0, Endian.little);
 
     await for (final itemBytes in _submitStream(EngineOp.render.wire, source, password: password, params: params)) {
-      // Decode render item: [type=1, width: i32, height: i32, pixels...]
-      final ibd = ByteData.sublistView(itemBytes);
-      final w = ibd.getInt32(1, Endian.little);
-      final h = ibd.getInt32(5, Endian.little);
-      final pixels = Uint8List.sublistView(itemBytes, 9);
-      yield RenderedPage(width: w, height: h, data: pixels);
+      yield wireDecodeRenderedPage(itemBytes);
     }
   }
 
   @override
-  Stream<PdfImage> extractImages(PdfSource source, {
+  Stream<PdfImage> extractImages(DataSource source, {
     required PdfPages pages, String? password,
   }) async* {
     _checkDisposed();
     final params = _encodePages(pages);
 
     await for (final itemBytes in _submitStream(EngineOp.extractImages.wire, source, password: password, params: params)) {
-      // Decode image item: [type=1, w: i32, h: i32, fmt_len: u8, fmt, cs_len: u8, cs, bpc: i32, data_len: i32, data]
-      final ibd = ByteData.sublistView(itemBytes);
-      var offset = 1;
-      final w = ibd.getInt32(offset, Endian.little); offset += 4;
-      final h = ibd.getInt32(offset, Endian.little); offset += 4;
-
-      final fmtLen = itemBytes[offset]; offset += 1;
-      final format = String.fromCharCodes(itemBytes, offset, offset + fmtLen); offset += fmtLen;
-
-      final csLen = itemBytes[offset]; offset += 1;
-      final colorSpace = String.fromCharCodes(itemBytes, offset, offset + csLen); offset += csLen;
-
-      final bpc = ibd.getInt32(offset, Endian.little); offset += 4;
-      final dataLen = ibd.getInt32(offset, Endian.little); offset += 4;
-      final data = Uint8List.sublistView(itemBytes, offset, offset + dataLen);
-
-      yield PdfImage(
-        width: w,
-        height: h,
-        format: format,
-        colorSpace: colorSpace,
-        bitsPerComponent: bpc,
-        data: data,
-      );
+      yield wireDecodeImage(itemBytes);
     }
   }
 
   @override
-  Future<List<PdfSignatureInfo>> getSignatures(PdfSource source, {
+  Future<List<PdfSignatureInfo>> getSignatures(DataSource source, {
     String? password,
   }) async {
     _checkDisposed();
     final result = await _submitRead(EngineOp.getSignatures.wire, source, password: password);
-    final rbd = ByteData.sublistView(result);
-    final count = rbd.getInt32(1, Endian.little);
-    var off = 5;
-    final sigs = <PdfSignatureInfo>[];
-    for (var i = 0; i < count; i++) {
-      final nameLen = rbd.getUint16(off, Endian.little); off += 2;
-      final name = utf8.decode(result.sublist(off, off + nameLen)); off += nameLen;
-      final reasonLen = rbd.getUint16(off, Endian.little); off += 2;
-      final reason = utf8.decode(result.sublist(off, off + reasonLen)); off += reasonLen;
-      final locLen = rbd.getUint16(off, Endian.little); off += 2;
-      final loc = utf8.decode(result.sublist(off, off + locLen)); off += locLen;
-      sigs.add(PdfSignatureInfo(signerName: name.isEmpty ? null : name, reason: reason.isEmpty ? null : reason, location: loc.isEmpty ? null : loc, isValid: false));
-    }
-    return sigs;
+    return wireDecodeSignatures(result);
   }
 
   @override
-  Future<bool> verifySignatures(PdfSource source, {String? password}) async {
+  Future<bool> verifySignatures(DataSource source, {String? password}) async {
     _checkDisposed();
     final result = await _submitRead(EngineOp.verifySignatures.wire, source, password: password);
-    return result[1] == 1;
+    return wireDecodeVerifySignatures(result);
   }
 
   @override
-  Future<PdfValidationResult> validatePdfA(PdfSource source, {
+  Future<PdfValidationResult> validatePdfA(DataSource source, {
     int level = 2, String? password,
   }) async {
-    // validatePdfA: read op code 6, params: [level: i32]
     final params = Uint8List(4);
     ByteData.sublistView(params).setInt32(0, level, Endian.little);
     final result = await _submitRead(EngineOp.validatePdfA.wire, source, password: password, params: params);
-    return _decodeValidationResult(result);
+    return wireDecodeValidation(result);
   }
 
   @override
-  Future<bool> validatePdfUa(PdfSource source, {
+  Future<bool> validatePdfUa(DataSource source, {
     int level = 1, String? password,
   }) async {
-    // validatePdfUa: read op code 7, params: [level: i32]
     final params = Uint8List(4);
     ByteData.sublistView(params).setInt32(0, level, Endian.little);
     final result = await _submitRead(EngineOp.validatePdfUa.wire, source, password: password, params: params);
-    return result.isNotEmpty && result[0] == 1 && result.length > 1 && result[1] == 1;
+    return wireDecodeValidatePdfUa(result);
   }
 
   @override
-  Future<List<PdfBookmarkSplit>> planSplitByBookmarks(PdfSource source, {String? password}) async {
+  Future<List<PdfBookmarkSplit>> planSplitByBookmarks(DataSource source, {String? password}) async {
     _checkDisposed();
     final result = await _submitRead(EngineOp.planSplitByBookmarks.wire, source, password: password);
-    return _decodeBookmarkSplits(result);
+    return wireDecodeBookmarkSplits(result);
   }
 
-
   @override
-  Future<PdfPageClassification> classifyPage(PdfSource source, int page, {String? password}) async {
+  Future<PdfPageClassification> classifyPage(DataSource source, int page, {String? password}) async {
     _checkDisposed();
     final params = Uint8List(4);
     ByteData.sublistView(params).setInt32(0, page, Endian.little);
     final result = await _submitRead(EngineOp.classifyPage.wire, source, password: password, params: params);
-    return _decodeClassifyPage(result);
+    return wireDecodeClassifyPage(result);
   }
 
   @override
-  Future<PdfDocumentClassification> classifyDocument(PdfSource source, {String? password}) async {
+  Future<PdfDocumentClassification> classifyDocument(DataSource source, {String? password}) async {
     _checkDisposed();
     final result = await _submitRead(EngineOp.classifyDocument.wire, source, password: password);
-    return _decodeClassifyDocument(result);
+    return wireDecodeClassifyDocument(result);
   }
 
   @override
-  Future<void> convertTo(PdfSource source, PdfSink output, {required PdfDocumentFormat format, String? password}) async {
-    _checkDisposed();
-    final formatBytes = utf8.encode(format.name);
-    final params = Uint8List(4 + formatBytes.length);
-    ByteData.sublistView(params).setInt32(0, formatBytes.length, Endian.little);
-    params.setAll(4, formatBytes);
-    final result = await _submitRead(EngineOp.convertTo.wire, source, password: password, params: params);
-    if (result.isNotEmpty && result[0] == 1 && result.length > 5) {
-      final dataLen = ByteData.sublistView(result).getUint32(1, Endian.little);
-      await output.write(Uint8List.sublistView(result, 5, 5 + dataLen));
-    }
-  }
-
-  @override
-  Future<void> convertToPdf(PdfSource document, PdfSink output, {required PdfDocumentFormat format}) async {
-    _checkDisposed();
-    final formatBytes = utf8.encode(format.name);
-    final params = Uint8List(4 + formatBytes.length);
-    ByteData.sublistView(params).setInt32(0, formatBytes.length, Endian.little);
-    params.setAll(4, formatBytes);
-    final result = await _submitRead(EngineOp.convertToPdf.wire, document, params: params);
-    if (result.isNotEmpty && result[0] == 1 && result.length > 5) {
-      final dataLen = ByteData.sublistView(result).getUint32(1, Endian.little);
-      await output.write(Uint8List.sublistView(result, 5, 5 + dataLen));
-    }
-  }
-
-  static List<PdfBookmarkSplit> _decodeBookmarkSplits(Uint8List bytes) {
-    if (bytes.isEmpty || bytes[0] != 1) return [];
-    final bd = ByteData.sublistView(bytes);
-    final count = bd.getInt32(1, Endian.little);
-    final splits = <PdfBookmarkSplit>[];
-    var off = 5;
-    for (var i = 0; i < count; i++) {
-      final titleLen = bd.getInt32(off, Endian.little); off += 4;
-      final title = utf8.decode(bytes.sublist(off, off + titleLen)); off += titleLen;
-      final startPage = bd.getInt32(off, Endian.little); off += 4;
-      final endPage = bd.getInt32(off, Endian.little); off += 4;
-      splits.add(PdfBookmarkSplit(title: title, startPage: startPage, endPage: endPage));
-    }
-    return splits;
-  }
-
-  PdfPageClassification _decodeClassifyPage(Uint8List bytes) {
-    if (bytes.isEmpty || bytes[0] != 1) return const PdfPageClassification(type: 'unknown', confidence: 0);
-    final text = _decodeTextResult(bytes);
-    return PdfPageClassification(type: text, confidence: 1.0);
-  }
-
-  PdfDocumentClassification _decodeClassifyDocument(Uint8List bytes) {
-    if (bytes.isEmpty || bytes[0] != 1) {
-      return const PdfDocumentClassification(type: 'unknown', confidence: 0, pageCount: 0);
-    }
-    final text = _decodeTextResult(bytes);
-    return PdfDocumentClassification(type: text, confidence: 1.0, pageCount: 0);
-  }
-
-  @override
-  Future<BridgeEditorHandle> openEditor(PdfSource source, {String? password}) async {
+  Future<BridgeEditorHandle> openEditor(DataSource source, {String? password}) async {
     _checkDisposed();
     final server = SourceServer(source);
     final serverPort = server.start();
@@ -874,13 +462,15 @@ class NativeBridge extends PdfBridge {
       });
       final bytes = result as Uint8List;
       if (bytes.isEmpty || bytes[0] != 1) {
-        throw _decodeError(bytes);
+        server.stop();
+        throw wireDecodeError(bytes);
       }
       final bd = ByteData.sublistView(bytes);
       final handleId = bd.getUint64(1, Endian.little);
-      return _NativeEditorHandle(this, handleId);
-    } finally {
+      return _NativeEditorHandle(this, handleId, server);
+    } catch (_) {
       server.stop();
+      rethrow;
     }
   }
 
@@ -911,68 +501,50 @@ class NativeBridge extends PdfBridge {
     if (_disposed) throw StateError('This Pdf instance has been disposed');
   }
 
-  PdfError _decodeError(Uint8List bytes) {
-    if (bytes.isEmpty) return const PdfEngineError('Unknown error');
-    final bd = ByteData.sublistView(bytes);
-    final code = bytes.length >= 5 ? bd.getInt32(1, Endian.little) : 0;
-    String msg = 'Error code $code';
-    if (bytes.length >= 7) {
-      final msgLen = bd.getUint16(5, Endian.little);
-      if (bytes.length >= 7 + msgLen) {
-        msg = utf8.decode(bytes.sublist(7, 7 + msgLen));
-      }
-    }
-    return switch (code) {
-      1 => PdfInvalidArgument(msg),
-      2 => PdfIoError(msg),
-      3 => PdfCorrupted(msg),
-      _ => PdfEngineError(msg),
-    };
-  }
 }
 
-/// Native editor handle — persistent Rust editor across multiple FFI calls.
+// ── NativeEditorHandle ───────────────────────────────────────────────
+
 class _NativeEditorHandle implements BridgeEditorHandle {
-  _NativeEditorHandle(this._bridge, this._handleId);
+  _NativeEditorHandle(this._bridge, this._handleId, this._sourceServer);
 
   final NativeBridge _bridge;
   final int _handleId;
+  final SourceServer _sourceServer;
+
+  Future<Object?> _send(String op, Map<String, Object?> args) => _bridge._send(op, args);
 
   Future<Uint8List> _mutate(int opCode, {Uint8List? params, List<Uint8List>? secondaries}) async {
-    final result = await _bridge._send(EngineOp.editorMutate.wire, {
+    final result = await _send(EngineOp.editorMutate.wire, {
       'handleId': _handleId,
       'opCode': opCode,
       'params': params,
       'secondaries': secondaries,
     });
     final bytes = result as Uint8List;
-    if (bytes.isEmpty || bytes[0] != 1) throw _bridge._decodeError(bytes);
+    if (bytes.isEmpty || bytes[0] != 1) throw wireDecodeError(bytes);
     return bytes;
   }
 
-  @override Future<int> get pageCount async => bridge_ffi.bridgeEditorPageCount(_handleId);
+  @override Future<int> get pageCount async =>
+      wireDecodeEditorMetadata(await _send(EngineOp.editorGetMetadata.wire, {'handleId': _handleId}) as Uint8List).pageCount;
+  @override Future<bool> get isModified async {
+    final result = await _send(EngineOp.editorIsModified.wire, {'handleId': _handleId});
+    final bytes = result as Uint8List;
+    return bytes.length > 1 && bytes[1] == 1;
+  }
 
   Future<_Metadata> _getMetadata() async {
-    final result = await _bridge._send(EngineOp.editorGetMetadata.wire, {'handleId': _handleId});
+    final result = await _send(EngineOp.editorGetMetadata.wire, {'handleId': _handleId});
     final bytes = result as Uint8List;
-    if (bytes.isEmpty || bytes[0] != 1) throw _bridge._decodeError(bytes);
-    final bd = ByteData.sublistView(bytes);
-    final vMajor = bd.getUint8(1);
-    final vMinor = bd.getUint8(2);
-    var off = 7; // skip status(1) + version(2) + pageCount(4)
-    String readStr() {
-      final len = bd.getUint16(off, Endian.little);
-      off += 2;
-      final s = utf8.decode(bytes.sublist(off, off + len));
-      off += len;
-      return s;
-    }
+    if (bytes.isEmpty || bytes[0] != 1) throw wireDecodeError(bytes);
+    final m = wireDecodeEditorMetadata(bytes);
     return _Metadata(
-      version: '$vMajor.$vMinor',
-      title: readStr(),
-      author: readStr(),
-      subject: readStr(),
-      keywords: readStr(),
+      version: m.version,
+      title: m.title,
+      author: m.author,
+      subject: m.subject,
+      keywords: m.keywords,
     );
   }
 
@@ -991,32 +563,25 @@ class _NativeEditorHandle implements BridgeEditorHandle {
   @override Future<void> rotateAllPages({required int degrees}) =>
       _mutate(6, params: _encodeInt(degrees));
   @override Future<PdfRect> getPageMediaBox(int page) async {
-    final out = calloc<ffi.Double>(4);
-    try {
-      final rc = bridge_ffi.bridgeEditorGetPageMediaBox(_handleId, page, out);
-      if (rc != 0) return const PdfRect(x: 0, y: 0, width: 595, height: 842);
-      return PdfRect(x: out[0], y: out[1], width: out[2], height: out[3]);
-    } finally {
-      calloc.free(out);
-    }
+    final result = await _send(EngineOp.editorPageMediaBox.wire, {'handleId': _handleId, 'page': page});
+    final bytes = result as Uint8List;
+    if (bytes.isEmpty || bytes[0] != 1) return const PdfRect(x: 0, y: 0, width: 595, height: 842);
+    final bd = ByteData.sublistView(bytes);
+    return PdfRect(
+      x: bd.getFloat64(1, Endian.little),
+      y: bd.getFloat64(9, Endian.little),
+      width: bd.getFloat64(17, Endian.little),
+      height: bd.getFloat64(25, Endian.little),
+    );
   }
   @override Future<void> deletePage(int page) =>
       _mutate(3, params: _encodeDeletePages([page]));
   @override Future<void> movePage({required int from, required int to}) =>
       _mutate(10, params: _encodeFromTo(from, to));
-  @override Future<void> extractPages(List<int> pages, PdfSink output) async {
-    // Save the current editor state to a temp buffer, then use the
-    // one-shot extractPages on those bytes.
-    final tempBytes = BytesBuilder(copy: false);
-    final tempSink = _CollectSink(tempBytes);
-    await save(tempSink);
-    final saved = tempBytes.takeBytes();
-    final tempSource = _MemorySource(saved);
-    await _bridge.extractPages(tempSource, output, pages: pages);
-  }
+  @override Future<void> selectPages(List<int> pages) =>
+      _mutate(2, params: _encodeDeletePages(pages));
 
-  @override Future<void> mergeFrom(PdfSource otherPdf) async {
-    // Read all bytes from the other source, pass as secondary to merge op
+  @override Future<void> mergeFrom(DataSource otherPdf) async {
     final bytes = await otherPdf.readAt(0, otherPdf.length);
     await _mutate(1, secondaries: [bytes]);
   }
@@ -1032,20 +597,26 @@ class _NativeEditorHandle implements BridgeEditorHandle {
 
   @override Future<void> addWatermark(int page, String text, {
     PdfWatermarkStyle style = const PdfWatermarkStyle(),
-    PdfWatermarkPosition? position,
-  }) => _mutate(15, params: _encodeWatermark(page, text, style));
+    PdfWatermarkPosition position = const PdfWatermarkPosition.center(),
+    PdfWatermarkLayer layer = PdfWatermarkLayer.foreground,
+  }) => _mutate(15, params: _encodeWatermark(page, text, style, position, layer));
 
   @override Future<void> addStamp(int page, {
     required PdfStampType type, required PdfRect rect,
-    String? customName, double opacity = 1.0,
+    double opacity = 1.0,
   }) => _mutate(17, params: _encodeStamp(page, type.index, rect, opacity));
 
-  @override Future<void> addImageStamp(int page, Uint8List imageBytes, {
+  @override Future<void> addImageStamp(int page, DataSource imageData, {
     required PdfRect rect, double opacity = 1.0,
-  }) => _mutate(18, params: _encodeImageStamp(page, rect, opacity), secondaries: [imageBytes]);
+  }) async {
+    final imgBytes = await readAllBytes(imageData);
+    await _mutate(18, params: _encodeImageStamp(page, rect, opacity), secondaries: [imgBytes]);
+  }
 
-  @override Future<void> embedFile(String name, Uint8List data) =>
-      _mutate(11, params: _encodeString(name), secondaries: [data]);
+  @override Future<void> embedFile(String name, DataSource data) async {
+    final fileBytes = await readAllBytes(data);
+    await _mutate(11, params: _encodeString(name), secondaries: [fileBytes]);
+  }
   @override Future<void> eraseRegions(int page, List<PdfRect> regions) =>
       _mutate(12, params: _encodeEraseRegions(page, regions));
   @override Future<void> flattenForms() => _mutate(7);
@@ -1076,39 +647,47 @@ class _NativeEditorHandle implements BridgeEditorHandle {
     return _mutate(30, params: params);
   }
 
-  @override
-  Future<int> redactionCount(int page) async {
-    // After addRedaction, the count is tracked on the editor side.
-    // For now, return 0 — the engine doesn't expose a lightweight count query
-    // through the mutate path. The important test is addRedaction + applyRedactions.
-    return 0;
-  }
+  @override Future<int> redactionCount(int page) async => 0;
+
+  @override Future<void> applyRedactions() => _mutate(32);
+
+  @override Future<void> scrubMetadata() => _mutate(33);
 
   @override
-  Future<void> applyRedactions() => _mutate(32);
-
-  @override
-  Future<void> scrubMetadata() => _mutate(33);
-
-  @override
-  Future<void> save(PdfSink output, {PdfSaveOptions options = const PdfSaveOptions()}) async {
+  Future<void> save(DataSink output, {PdfSaveOptions options = const PdfSaveOptions()}) async {
     final server = SinkServer(output);
     final serverPort = server.start();
     try {
-      final result = await _bridge._send(EngineOp.editorSave.wire, {
+      final saveMode = options.mode.index;
+      final encryptMode = switch (options.encryption) {
+        PdfEncryptionKeep() => 0,
+        PdfEncryptionRemove() => 1,
+        PdfEncryptionConfig() => 2,
+      };
+      int encAlgo = 0;
+      String encUserPw = '';
+      String encOwnerPw = '';
+      int encPerms = -1;
+      if (options.encryption case PdfEncryptionConfig c) {
+        encAlgo = c.algorithm.index + 1;
+        encUserPw = c.userPassword;
+        encOwnerPw = c.ownerPassword;
+        encPerms = c.permissions.toBits();
+      }
+      final result = await _send(EngineOp.editorSave.wire, {
         'handleId': _handleId,
         'sinkPort': serverPort,
         'compress': options.compress,
         'garbageCollect': options.garbageCollect,
-        'linearize': options.linearize,
-        'encryptAlgo': options.encryption != null
-            ? options.encryption!.algorithm.index + 1 : 0,
-        'encryptUserPw': options.encryption?.userPassword ?? '',
-        'encryptOwnerPw': options.encryption?.ownerPassword ?? '',
-        'encryptPermissions': options.encryption?.permissions.toBits() ?? -1,
+        'saveMode': saveMode,
+        'encryptMode': encryptMode,
+        'encryptAlgo': encAlgo,
+        'encryptUserPw': encUserPw,
+        'encryptOwnerPw': encOwnerPw,
+        'encryptPermissions': encPerms,
       });
       final bytes = result as Uint8List;
-      if (bytes.isEmpty || bytes[0] != 1) throw _bridge._decodeError(bytes);
+      if (bytes.isEmpty || bytes[0] != 1) throw wireDecodeError(bytes);
     } finally {
       server.stop();
     }
@@ -1116,7 +695,8 @@ class _NativeEditorHandle implements BridgeEditorHandle {
 
   @override
   Future<void> dispose() async {
-    await _bridge._send(EngineOp.editorDispose.wire, {'handleId': _handleId});
+    await _send(EngineOp.editorDispose.wire, {'handleId': _handleId});
+    _sourceServer.stop();
   }
 
   // ── Param encoding helpers ──
@@ -1151,9 +731,28 @@ class _NativeEditorHandle implements BridgeEditorHandle {
     return bd.buffer.asUint8List();
   }
 
-  Uint8List _encodeWatermark(int page, String text, PdfWatermarkStyle style) {
+  Uint8List _encodeWatermark(int page, String text, PdfWatermarkStyle style,
+      PdfWatermarkPosition position, PdfWatermarkLayer layer) {
     final textBytes = utf8.encode(text);
-    final bd = ByteData(8 + textBytes.length + 48);
+    // Layout: page(i32) textLen(i32) text fontSize(f64) rotation(f64) opacity(f64)
+    //         r(f64) g(f64) b(f64) layer(i32) posType(i32) [pos-specific fields as f64]
+    final posFields = switch (position) {
+      PdfWatermarkCenter() => <double>[],
+      PdfWatermarkCorner(:final corner, :final marginX, :final marginY) =>
+        [corner.index.toDouble(), marginX, marginY],
+      PdfWatermarkTiled(:final columns, :final rows) =>
+        [columns.toDouble(), rows.toDouble()],
+      PdfWatermarkExact(:final x, :final y, :final width, :final height) =>
+        [x, y, width, height],
+    };
+    final posType = switch (position) {
+      PdfWatermarkCenter() => 0,
+      PdfWatermarkCorner() => 1,
+      PdfWatermarkTiled() => 2,
+      PdfWatermarkExact() => 3,
+    };
+    final size = 8 + textBytes.length + 48 + 8 + posFields.length * 8;
+    final bd = ByteData(size);
     bd.setInt32(0, page, Endian.little);
     bd.setInt32(4, textBytes.length, Endian.little);
     bd.buffer.asUint8List().setRange(8, 8 + textBytes.length, textBytes);
@@ -1163,12 +762,17 @@ class _NativeEditorHandle implements BridgeEditorHandle {
     bd.setFloat64(off, style.opacity, Endian.little); off += 8;
     bd.setFloat64(off, style.color.r, Endian.little); off += 8;
     bd.setFloat64(off, style.color.g, Endian.little); off += 8;
-    bd.setFloat64(off, style.color.b, Endian.little);
+    bd.setFloat64(off, style.color.b, Endian.little); off += 8;
+    bd.setInt32(off, layer.index, Endian.little); off += 4;
+    bd.setInt32(off, posType, Endian.little); off += 4;
+    for (final f in posFields) {
+      bd.setFloat64(off, f, Endian.little); off += 8;
+    }
     return bd.buffer.asUint8List();
   }
 
   Uint8List _encodeStamp(int page, int stampType, PdfRect rect, double opacity) {
-    final bd = ByteData(44);
+    final bd = ByteData(48);
     bd.setInt32(0, page, Endian.little);
     bd.setInt32(4, stampType, Endian.little);
     bd.setFloat64(8, rect.x, Endian.little);
@@ -1237,26 +841,10 @@ class _NativeEditorHandle implements BridgeEditorHandle {
 
   Uint8List _encodePageDegrees(int page, int degrees) {
     final bd = ByteData(12);
-    bd.setInt32(0, 1, Endian.little); // count
+    bd.setInt32(0, 1, Endian.little);
     bd.setInt32(4, page, Endian.little);
     bd.setInt32(8, degrees, Endian.little);
     return bd.buffer.asUint8List();
-  }
-}
-
-class _CollectSink implements PdfSink {
-  _CollectSink(this._builder);
-  final BytesBuilder _builder;
-  @override void write(Uint8List chunk) => _builder.add(chunk);
-}
-
-class _MemorySource implements PdfSource {
-  _MemorySource(this._data);
-  final Uint8List _data;
-  @override int get length => _data.length;
-  @override Uint8List readAt(int offset, int count) {
-    final end = (offset + count).clamp(0, _data.length);
-    return Uint8List.sublistView(_data, offset, end);
   }
 }
 
@@ -1317,7 +905,7 @@ class _NativeBuilderHandle implements BridgeBuilderHandle {
   }
 
   @override
-  Future<void> save(PdfSink output, {PdfSaveOptions options = const PdfSaveOptions()}) async {
+  Future<void> save(DataSink output) async {
     final snkServer = SinkServer(output);
     final snkPort = snkServer.start();
     try {
@@ -1385,11 +973,8 @@ class _NativePageBuilderHandle implements BridgePageBuilderHandle {
     await _pageOp(1, params: params);
   }
 
-  @override
-  Future<void> at(double x, double y) => _pageOp(2, params: _encodeF32x2(x, y));
-
-  @override
-  Future<void> text(String text) => _pageOp(3, params: Uint8List.fromList(utf8.encode(text)));
+  @override Future<void> at(double x, double y) => _pageOp(2, params: _encodeF32x2(x, y));
+  @override Future<void> text(String text) => _pageOp(3, params: Uint8List.fromList(utf8.encode(text)));
 
   @override
   Future<void> heading(int level, String text) {
@@ -1400,29 +985,22 @@ class _NativePageBuilderHandle implements BridgePageBuilderHandle {
     return _pageOp(4, params: params);
   }
 
-  @override
-  Future<void> paragraph(String text) =>
-      _pageOp(5, params: Uint8List.fromList(utf8.encode(text)));
+  @override Future<void> paragraph(String text) => _pageOp(5, params: Uint8List.fromList(utf8.encode(text)));
+  @override Future<void> space(double points) => _pageOp(6, params: _encodeF32(points));
+  @override Future<void> horizontalRule() => _pageOp(7);
 
   @override
-  Future<void> space(double points) => _pageOp(6, params: _encodeF32(points));
-
-  @override
-  Future<void> horizontalRule() => _pageOp(7);
-
-  @override
-  Future<void> image(Uint8List imageBytes, PdfRect rect, {String altText = ''}) {
+  Future<void> image(DataSource imageData, PdfRect rect, {String altText = ''}) async {
+    final imgBytes = await readAllBytes(imageData);
     final rectBytes = _encodeF32x4(rect.x, rect.y, rect.width, rect.height);
     final altBytes = utf8.encode(altText);
     final params = Uint8List(16 + altBytes.length);
     params.setAll(0, rectBytes);
     params.setAll(16, altBytes);
-    return _pageOp(8, params: params, secondary: imageBytes);
+    await _pageOp(8, params: params, secondary: imgBytes);
   }
 
-  @override
-  Future<void> watermark(String text) =>
-      _pageOp(9, params: Uint8List.fromList(utf8.encode(text)));
+  @override Future<void> watermark(String text) => _pageOp(9, params: Uint8List.fromList(utf8.encode(text)));
 
   @override
   Future<void> textField(String name, PdfRect rect, {String? defaultValue}) {
@@ -1447,10 +1025,18 @@ class _NativePageBuilderHandle implements BridgePageBuilderHandle {
   }
 
   @override
-  Future<void> comboBox(String name, PdfRect rect, List<String> options,
-      {String? selected}) {
-    // Not wired — comboBox op code 12 not implemented in Rust dispatch
-    return _pageOp(12);
+  Future<void> comboBox(String name, PdfRect rect, List<String> options, {String? selected}) {
+    final rectBytes = _encodeF32x4(rect.x, rect.y, rect.width, rect.height);
+    final countBd = ByteData(4);
+    countBd.setInt32(0, options.length, Endian.little);
+    // String payload: name\0option1\0option2\0...\0optionN\0selected_or_empty
+    final strPayload = '$name\x00${options.join('\x00')}\x00${selected ?? ''}';
+    final strBytes = utf8.encode(strPayload);
+    final params = Uint8List(16 + 4 + strBytes.length);
+    params.setAll(0, rectBytes);
+    params.setAll(16, countBd.buffer.asUint8List());
+    params.setAll(20, strBytes);
+    return _pageOp(12, params: params);
   }
 
   @override
@@ -1474,25 +1060,16 @@ class _NativePageBuilderHandle implements BridgePageBuilderHandle {
     return _pageOp(14, params: params);
   }
 
-  @override
-  Future<void> newline() => _pageOp(15);
+  @override Future<void> newline() => _pageOp(15);
+  @override Future<void> newPageSameSize() => _pageOp(16);
+  @override Future<void> done() => _pageOp(17);
 
   @override
-  Future<void> newPageSameSize() => _pageOp(16);
-
-  @override
-  Future<void> done() => _pageOp(17);
-
-  @override
-  Future<void> radioGroup(String name,
-      List<({String value, PdfRect rect})> options,
-      {String? selected}) {
+  Future<void> radioGroup(String name, List<({String value, PdfRect rect})> options, {String? selected}) {
     final bb = BytesBuilder();
-    // count
     final countBd = ByteData(4);
     countBd.setInt32(0, options.length, Endian.little);
     bb.add(countBd.buffer.asUint8List());
-    // per option: x, y, w, h (f32 each), value_len (u16), value bytes
     for (final opt in options) {
       bb.add(_encodeF32x4(opt.rect.x, opt.rect.y, opt.rect.width, opt.rect.height));
       final vBytes = utf8.encode(opt.value);
@@ -1501,13 +1078,11 @@ class _NativePageBuilderHandle implements BridgePageBuilderHandle {
       bb.add(lenBd.buffer.asUint8List());
       bb.add(vBytes);
     }
-    // name
     final nameBytes = utf8.encode(name);
     final nameLenBd = ByteData(2);
     nameLenBd.setUint16(0, nameBytes.length, Endian.little);
     bb.add(nameLenBd.buffer.asUint8List());
     bb.add(nameBytes);
-    // selected (optional)
     if (selected != null) {
       final selBytes = utf8.encode(selected);
       final selLenBd = ByteData(2);
@@ -1518,25 +1093,11 @@ class _NativePageBuilderHandle implements BridgePageBuilderHandle {
     return _pageOp(18, params: bb.takeBytes());
   }
 
-  @override
-  Future<void> fieldKeystroke(String script) =>
-      _pageOp(19, params: Uint8List.fromList(utf8.encode(script)));
-
-  @override
-  Future<void> fieldFormat(String script) =>
-      _pageOp(20, params: Uint8List.fromList(utf8.encode(script)));
-
-  @override
-  Future<void> fieldValidate(String script) =>
-      _pageOp(21, params: Uint8List.fromList(utf8.encode(script)));
-
-  @override
-  Future<void> fieldCalculate(String script) =>
-      _pageOp(22, params: Uint8List.fromList(utf8.encode(script)));
-
-  @override
-  Future<void> linkUrl(String url) =>
-      _pageOp(23, params: Uint8List.fromList(utf8.encode(url)));
+  @override Future<void> fieldKeystroke(String script) => _pageOp(19, params: Uint8List.fromList(utf8.encode(script)));
+  @override Future<void> fieldFormat(String script) => _pageOp(20, params: Uint8List.fromList(utf8.encode(script)));
+  @override Future<void> fieldValidate(String script) => _pageOp(21, params: Uint8List.fromList(utf8.encode(script)));
+  @override Future<void> fieldCalculate(String script) => _pageOp(22, params: Uint8List.fromList(utf8.encode(script)));
+  @override Future<void> linkUrl(String url) => _pageOp(23, params: Uint8List.fromList(utf8.encode(url)));
 
   @override
   Future<void> linkPage(int targetPage) {

@@ -1,12 +1,10 @@
 // Abstract bridge — NativeBridge and WebBridge extend this.
-// Thin platform methods are abstract; shared algorithms (split,
-// splitBySize, splitByBookmarks) are concrete here.
+// Only FFI methods that go to the engine. No one-shot sugar.
+// No algorithms. No helpers. Just the wire.
 // INTERNAL — not exported from the package.
 
-import 'dart:typed_data';
-
-import 'package:pdf_manipulator/src/types/pdf_sink.dart';
-import 'package:pdf_manipulator/src/types/pdf_source.dart';
+import 'package:pdf_manipulator/src/types/data_sink.dart';
+import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
@@ -16,209 +14,61 @@ import 'package:pdf_manipulator/src/types/pdf_signature.dart';
 import 'package:pdf_manipulator/src/types/search_result.dart';
 import 'package:pdf_manipulator/src/types/pdf_doc.dart';
 
-/// Abstract bridge. NativeBridge and WebBridge extend this.
+/// Abstract bridge. Only FFI-level methods.
 abstract class PdfBridge {
   // ── Inspect ──
-  Future<PdfDoc> open(PdfSource source, {String? password});
-
-  // ── Structural ──
-  Future<void> merge(List<PdfSource> inputs, PdfSink output);
-
-  /// Split by page count. Shared implementation — calls [open] + [extractPages].
-  Future<void> split(PdfSource source, PdfSink Function(int) sinkFactory,
-      {required int every}) async {
-    if (every < 1) throw ArgumentError('every must be >= 1');
-    final doc = await open(source);
-    final total = doc.pageCount;
-    var chunkIndex = 0;
-    for (var start = 0; start < total; start += every) {
-      final end = (start + every).clamp(0, total);
-      await extractPages(source, sinkFactory(chunkIndex),
-          pages: List.generate(end - start, (i) => start + i));
-      chunkIndex++;
-    }
-  }
-
-  /// Split by byte size. Exponential probe + binary search at each boundary.
-  /// Returns the byte size of each chunk.
-  Future<List<int>> splitBySize(PdfSource source, PdfSink Function(int) sinkFactory,
-      {required int maxBytes}) async {
-    if (maxBytes < 1) throw ArgumentError('maxBytes must be >= 1');
-    final doc = await open(source);
-    final total = doc.pageCount;
-
-    final chunkSizes = <int>[];
-    var chunkStart = 0;
-    var chunkIndex = 0;
-
-    while (chunkStart < total) {
-      final remaining = total - chunkStart;
-
-      // Phase 1: exponential doubling to find the range.
-      // Try 1, 2, 4, 8, 16... pages until it exceeds maxBytes.
-      var probeSize = 1;
-      var lastFit = 1;
-      while (probeSize <= remaining) {
-        final counter = ByteCountSink();
-        await extractPages(source, counter,
-            pages: List.generate(probeSize, (j) => chunkStart + j));
-        if (counter.length <= maxBytes) {
-          lastFit = probeSize;
-          probeSize *= 2;
-        } else {
-          break;
-        }
-      }
-
-      // Phase 2: binary search between lastFit and min(probeSize, remaining).
-      var lo = lastFit;
-      var hi = probeSize.clamp(1, remaining);
-      var bestEnd = lastFit;
-
-      if (lo < hi) {
-        while (lo <= hi) {
-          final mid = (lo + hi) ~/ 2;
-          final counter = ByteCountSink();
-          await extractPages(source, counter,
-              pages: List.generate(mid, (j) => chunkStart + j));
-          if (counter.length <= maxBytes) {
-            bestEnd = mid;
-            lo = mid + 1;
-          } else {
-            hi = mid - 1;
-          }
-        }
-      }
-
-      // Emit the chunk
-      final sink = sinkFactory(chunkIndex);
-      final counter = ByteCountSinkWrapper(sink);
-      await extractPages(source, counter,
-          pages: List.generate(bestEnd, (j) => chunkStart + j));
-      chunkSizes.add(counter.length);
-
-      chunkStart += bestEnd;
-      chunkIndex++;
-    }
-
-    return chunkSizes;
-  }
-
-  Future<void> extractPages(PdfSource source, PdfSink output,
-      {required List<int> pages});
-  Future<void> deletePages(PdfSource source, PdfSink output,
-      {required List<int> pages});
-  Future<void> reorderPages(PdfSource source, PdfSink output,
-      {required List<int> order});
-  Future<void> movePage(PdfSource source, PdfSink output,
-      {required int from, required int to});
-  Future<void> rotatePages(PdfSource source, PdfSink output,
-      {required Map<int, int> pages});
-  Future<void> rotateAllPages(PdfSource source, PdfSink output,
-      {required int degrees});
-
-  // ── Content ──
-  Future<void> flattenForms(PdfSource source, PdfSink output);
-  Future<void> applyRedactions(PdfSource source, PdfSink output);
-  Future<void> embedFile(PdfSource source, PdfSink output,
-      {required String name, required Uint8List fileData});
-  Future<void> eraseRegions(PdfSource source, PdfSink output,
-      {required int page, required List<PdfRect> regions});
-  Future<void> compress(PdfSource source, PdfSink output,
-      {int imageQuality = 75,
-      bool garbageCollect = true,
-      bool linearize = false});
+  Future<PdfDoc> open(DataSource source, {String? password});
 
   // ── Extraction ──
-  Future<String> extract(PdfSource source,
+  Future<String> extract(DataSource source,
       {required PdfPages pages,
       String? password,
       PdfExtractionFormat format = PdfExtractionFormat.auto});
 
   // ── Search ──
-  Future<List<SearchResult>> search(PdfSource source,
+  Future<List<SearchResult>> search(DataSource source,
       {required String query, required PdfPages pages, String? password});
 
-  // ── Security ──
-  Future<void> watermark(PdfSource source, PdfSink output,
-      {required String text,
-      PdfPages pages = const PdfPages.all(),
-      PdfWatermarkStyle style = const PdfWatermarkStyle(),
-      PdfWatermarkPosition? position});
-  Future<void> encrypt(PdfSource source, PdfSink output,
-      {required PdfEncryptionConfig encryption});
-  Future<void> decrypt(PdfSource source, PdfSink output,
-      {required String password});
-  Future<void> sign(PdfSource source, PdfSink output,
+  // ── Standalone ops (own engine paths) ──
+  Future<void> sign(DataSource source, DataSink output,
       {required PdfSigningCredentials credentials,
       String? reason,
       String? location});
 
-  // ── Stamps ──
-  Future<void> addStamp(PdfSource source, PdfSink output,
-      {required int page,
-      required PdfStampType type,
-      required PdfRect rect,
-      String? customName,
-      double opacity = 1.0});
-  Future<void> addImageStamp(PdfSource source, PdfSink output,
-      {required int page,
-      required Uint8List imageBytes,
-      required PdfRect rect,
-      double opacity = 1.0});
+  Future<void> imagesToPdf(List<DataSource> images, DataSink output);
 
-  // ── Creation ──
-  Future<void> imagesToPdf(List<Uint8List> images, PdfSink output);
-
-  // ── Rendering ──
-  Stream<RenderedPage> render(PdfSource source,
-      {required PdfPages pages, PdfRenderSize? size, String? password});
-
-  // ── Image extraction ──
-  Stream<PdfImage> extractImages(PdfSource source,
-      {required PdfPages pages, String? password});
-
-  // ── Signatures ──
-  Future<List<PdfSignatureInfo>> getSignatures(PdfSource source,
-      {String? password});
-  Future<bool> verifySignatures(PdfSource source, {String? password});
-
-  // ── Validation ──
-  Future<PdfValidationResult> validatePdfA(PdfSource source,
-      {int level = 2, String? password});
-  Future<bool> validatePdfUa(PdfSource source,
-      {int level = 1, String? password});
-
-  // ── Bookmarks ──
-  Future<List<PdfBookmarkSplit>> planSplitByBookmarks(PdfSource source,
-      {String? password});
-
-  /// Split at bookmark boundaries. Shared implementation — calls
-  /// [planSplitByBookmarks] + [extractPages].
-  Future<void> splitByBookmarks(PdfSource source,
-      PdfSink Function(int index) sinkFactory, {String? password}) async {
-    final splits = await planSplitByBookmarks(source, password: password);
-    for (var i = 0; i < splits.length; i++) {
-      final split = splits[i];
-      await extractPages(source, sinkFactory(i),
-          pages: List.generate(split.endPage - split.startPage, (j) => split.startPage + j));
-    }
-  }
-
-  // ── Classification ──
-  Future<PdfPageClassification> classifyPage(PdfSource source,
-      int page, {String? password});
-  Future<PdfDocumentClassification> classifyDocument(PdfSource source,
-      {String? password});
-
-  // ── Conversion ──
-  Future<void> convertTo(PdfSource source, PdfSink output,
+  Future<void> convertTo(DataSource source, DataSink output,
       {required PdfDocumentFormat format, String? password});
-  Future<void> convertToPdf(PdfSource document, PdfSink output,
+  Future<void> convertToPdf(DataSource document, DataSink output,
       {required PdfDocumentFormat format});
 
+  // ── Streaming reads ──
+  Stream<RenderedPage> render(DataSource source,
+      {required PdfPages pages, PdfRenderSize? size, String? password});
+
+  Stream<PdfImage> extractImages(DataSource source,
+      {required PdfPages pages, String? password});
+
+  // ── Read-only queries ──
+  Future<List<PdfSignatureInfo>> getSignatures(DataSource source,
+      {String? password});
+  Future<bool> verifySignatures(DataSource source, {String? password});
+
+  Future<PdfValidationResult> validatePdfA(DataSource source,
+      {int level = 2, String? password});
+  Future<bool> validatePdfUa(DataSource source,
+      {int level = 1, String? password});
+
+  Future<List<PdfBookmarkSplit>> planSplitByBookmarks(DataSource source,
+      {String? password});
+
+  Future<PdfPageClassification> classifyPage(DataSource source,
+      int page, {String? password});
+  Future<PdfDocumentClassification> classifyDocument(DataSource source,
+      {String? password});
+
   // ── Editor ──
-  Future<BridgeEditorHandle> openEditor(PdfSource source, {String? password});
+  Future<BridgeEditorHandle> openEditor(DataSource source, {String? password});
 
   // ── Builder ──
   Future<BridgeBuilderHandle> createBuilder();
@@ -227,11 +77,11 @@ abstract class PdfBridge {
   Future<void> dispose();
 }
 
-/// Handle to an open PDF editor session. Both NativeBridge and WebBridge
-/// implement this with their own handle management.
+/// Handle to an open PDF editor session.
 abstract class BridgeEditorHandle {
   Future<int> get pageCount;
   Future<String> get version;
+  Future<bool> get isModified;
 
   // ── Metadata ──
   Future<String> getTitle();
@@ -249,8 +99,8 @@ abstract class BridgeEditorHandle {
   Future<PdfRect> getPageMediaBox(int page);
   Future<void> deletePage(int page);
   Future<void> movePage({required int from, required int to});
-  Future<void> extractPages(List<int> pages, PdfSink output);
-  Future<void> mergeFrom(PdfSource otherPdf);
+  Future<void> selectPages(List<int> pages);
+  Future<void> mergeFrom(DataSource otherPdf);
 
   // ── Optimization ──
   Future<int> optimizeImages({int quality = 75});
@@ -259,18 +109,19 @@ abstract class BridgeEditorHandle {
   // ── Watermark + stamps ──
   Future<void> addWatermark(int page, String text, {
     PdfWatermarkStyle style = const PdfWatermarkStyle(),
-    PdfWatermarkPosition? position,
+    PdfWatermarkPosition position = const PdfWatermarkPosition.center(),
+    PdfWatermarkLayer layer = PdfWatermarkLayer.foreground,
   });
   Future<void> addStamp(int page, {
     required PdfStampType type, required PdfRect rect,
-    String? customName, double opacity = 1.0,
+    double opacity = 1.0,
   });
-  Future<void> addImageStamp(int page, Uint8List imageBytes, {
+  Future<void> addImageStamp(int page, DataSource imageData, {
     required PdfRect rect, double opacity = 1.0,
   });
 
   // ── Content ──
-  Future<void> embedFile(String name, Uint8List data);
+  Future<void> embedFile(String name, DataSource data);
   Future<void> eraseRegions(int page, List<PdfRect> regions);
   Future<void> flattenForms();
   Future<void> flattenAllAnnotations();
@@ -291,7 +142,7 @@ abstract class BridgeEditorHandle {
   Future<void> scrubMetadata();
 
   // ── Save ──
-  Future<void> save(PdfSink output, {PdfSaveOptions options = const PdfSaveOptions()});
+  Future<void> save(DataSink output, {PdfSaveOptions options = const PdfSaveOptions()});
 
   // ── Lifecycle ──
   Future<void> dispose();
@@ -308,7 +159,7 @@ abstract class BridgeBuilderHandle {
   Future<BridgePageBuilderHandle> addLetterPage();
   Future<BridgePageBuilderHandle> addPage({required double width, required double height});
 
-  Future<void> save(PdfSink output, {PdfSaveOptions options = const PdfSaveOptions()});
+  Future<void> save(DataSink output);
   Future<void> dispose();
 }
 
@@ -321,7 +172,7 @@ abstract class BridgePageBuilderHandle {
   Future<void> paragraph(String text);
   Future<void> space(double points);
   Future<void> horizontalRule();
-  Future<void> image(Uint8List imageBytes, PdfRect rect, {String altText = ''});
+  Future<void> image(DataSource imageData, PdfRect rect, {String altText = ''});
   Future<void> watermark(String text);
   Future<void> textField(String name, PdfRect rect, {String? defaultValue});
   Future<void> checkbox(String name, PdfRect rect, {bool checked = false});
@@ -340,29 +191,4 @@ abstract class BridgePageBuilderHandle {
   Future<void> newline();
   Future<void> newPageSameSize();
   Future<void> done();
-}
-
-/// Counts bytes written without storing them.
-/// Used by splitBySize to trial-check chunk sizes.
-class ByteCountSink implements PdfSink {
-  int _length = 0;
-  int get length => _length;
-
-  @override
-  void write(Uint8List chunk) {
-    _length += chunk.length;
-  }
-}
-
-class ByteCountSinkWrapper implements PdfSink {
-  final PdfSink _inner;
-  int _length = 0;
-  int get length => _length;
-  ByteCountSinkWrapper(this._inner);
-
-  @override
-  void write(Uint8List chunk) {
-    _length += chunk.length;
-    _inner.write(chunk);
-  }
 }

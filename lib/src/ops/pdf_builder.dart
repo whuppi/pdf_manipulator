@@ -1,9 +1,8 @@
 // PdfBuilder — create PDFs from scratch.
 
-import 'dart:typed_data';
 
-import 'package:pdf_manipulator/src/types/pdf_sink.dart';
-import 'package:pdf_manipulator/src/types/pdf_params.dart';
+import 'package:pdf_manipulator/src/types/data_sink.dart';
+import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:pdf_manipulator/src/transport/pdf_bridge.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 
@@ -44,11 +43,9 @@ class PdfBuilder {
   }
 
 
-  Future<void> save(PdfSink output, {
-    PdfSaveOptions options = const PdfSaveOptions(),
-  }) {
+  Future<void> save(DataSink output) {
     _check();
-    return _handle.save(output, options: options);
+    return _handle.save(output);
   }
 
   // ── Lifecycle ──
@@ -73,9 +70,9 @@ class PdfPageBuilder {
   Future<void> paragraph(String text) => _handle.paragraph(text);
   Future<void> space(double points) => _handle.space(points);
   Future<void> horizontalRule() => _handle.horizontalRule();
-  Future<void> image(Uint8List imageBytes, PdfRect rect,
+  Future<void> image(DataSource imageData, PdfRect rect,
           {String altText = ''}) =>
-      _handle.image(imageBytes, rect, altText: altText);
+      _handle.image(imageData, rect, altText: altText);
   Future<void> watermark(String text) => _handle.watermark(text);
 
 

@@ -9,8 +9,13 @@
 //
 // Output streaming (all modes): writeFn posts chunks to coordinator.
 // Per-item streaming (all modes): postMessage({type:'item'}) per image/page.
+//
+// IMPORTANT: This file is a THIN PASS-THROUGH. All dispatch cases
+// (read, edit, stream) call doc.dispatchXxx() — one WASM call per op.
+// No loops. No page iteration. No conditional behavior logic.
+// dispatch.rs owns the behavior. If you need a loop, add it in Rust.
 
-import init, { WasmPdf, WasmDocumentBuilder, WasmPdfDocument, WasmFluentPageBuilder, signPdfWithPkcs12, signPdfWithPem, planSplitByBookmarks } from './pdf_oxide.js';
+import init, { WasmPdf, WasmDocumentBuilder, WasmPdfDocument, WasmFluentPageBuilder, signPdfWithPkcs12, signPdfWithPem, signPdfStreamingPkcs12, signPdfStreamingPem, planSplitByBookmarks } from './pdf_oxide.js';
 
 let initialized = false;
 let currentIoMode = 'opfs';
@@ -136,8 +141,6 @@ async function executeOp(op, args, ioMode, sab, opfsFile) {
   try {
     return await dispatch(op, args, readerCtx, writeFn);
   } finally {
-    // Close the reader UNLESS it was claimed by an editor handle.
-    // Editor handles keep their reader alive until editorDispose.
     if (readerCtx && readerCtx.close && !readerCtx._claimed) {
       readerCtx.close();
     }
@@ -165,92 +168,29 @@ async function dispatch(op, args, readerCtx, writeFn) {
   switch (op) {
     case 'open': {
       const doc = openDoc(readerCtx, args.password);
-      const pc = doc.pageCount();
-      const pages = [];
-      for (let i = 0; i < pc; i++) {
-        const mb = doc.pageMediaBox(i);
-        pages.push({
-          index: i,
-          width: mb[2] - mb[0],
-          height: mb[3] - mb[1],
-          rotation: doc.pageRotation(i),
-        });
-      }
-      const r = {
-        pageCount: pc,
-        version: '2.0',
-        pages,
-        isTagged: doc.hasStructureTree(),
-        title: null,
-        author: null,
-        isEncrypted: false,
-      };
+      const r = doc.dispatchOpen();
       doc.free();
       return r;
     }
 
-    case 'merge': {
-      const doc = openEditor(readerCtx, args.password);
-      if (args.secondaries) {
-        for (const secBytes of args.secondaries) {
-          doc.mergeFrom(new Uint8Array(secBytes));
-        }
-      }
-      doc.saveToWriter(writeFn, true, true, false);
-      doc.free();
-      return {};
-    }
-
-    case 'extractPages':
-    case 'deletePages':
-    case 'reorderPages':
-    case 'movePage':
-    case 'rotatePages':
-    case 'rotateAllPages':
-    case 'flattenForms':
-    case 'applyRedactions':
-    case 'compress':
-    case 'embedFile':
-    case 'eraseRegions':
-    case 'watermark':
-    case 'encrypt':
-    case 'decrypt': {
-      const doc = openEditor(readerCtx, args.password);
-      applyEditOp(doc, op, args);
-      doc.saveToWriter(writeFn, args.compress ?? true, args.garbageCollect ?? true, args.linearize ?? false);
-      doc.free();
-      return {};
-    }
-
     case 'extract': {
       const doc = openDoc(readerCtx, args.password);
-      let text;
-      switch (args.format) {
-        case 'markdown': text = doc.toMarkdown(args.page, true, false); break;
-        case 'html': text = doc.toHtml(args.page); break;
-        default: text = doc.extractText(args.page); break;
-      }
+      const r = doc.dispatchExtractText(args.page ?? null, args.format ?? null);
       doc.free();
-      return { text };
+      return r;
     }
 
     case 'search': {
       const doc = openDoc(readerCtx, args.password);
-      const hits = doc.searchPage(args.page, args.query);
+      const r = doc.dispatchSearch(args.query, args.page ?? null);
       doc.free();
-      return { hits };
+      return r;
     }
 
     case 'render': {
       const doc = openDoc(readerCtx, args.password);
       for (const pageIdx of args.pageIndices) {
-        let rendered;
-        if (args.maxWidth && args.maxHeight) {
-          rendered = doc.renderPageFit(pageIdx, args.maxWidth, args.maxHeight);
-        } else {
-          const pngBytes = doc.renderPage(pageIdx, 150);
-          rendered = { width: 0, height: 0, data: pngBytes.buffer };
-        }
+        const rendered = doc.dispatchRenderPage(pageIdx, args.maxWidth ?? null, args.maxHeight ?? null);
         self.postMessage({ type: 'item', data: rendered });
       }
       self.postMessage({ type: 'itemDone' });
@@ -261,7 +201,7 @@ async function dispatch(op, args, readerCtx, writeFn) {
     case 'extractImages': {
       const doc = openDoc(readerCtx, args.password);
       for (const pageIdx of args.pageIndices) {
-        const images = doc.extractImageBytes(pageIdx, null);
+        const images = doc.dispatchExtractImages(pageIdx);
         if (images) {
           for (let i = 0; i < images.length; i++) {
             self.postMessage({ type: 'item', data: images[i] });
@@ -275,54 +215,51 @@ async function dispatch(op, args, readerCtx, writeFn) {
 
     case 'getSignatures': {
       const doc = openDoc(readerCtx, args.password);
-      const sigs = doc.signatures();
+      const r = doc.dispatchGetSignatures();
       doc.free();
-      return { signatures: sigs || [] };
+      return r;
     }
 
-    case 'verifySignatures':
-      return { valid: false };
+    case 'verifySignatures': {
+      const doc = openDoc(readerCtx, args.password);
+      const r = doc.dispatchVerifySignatures();
+      doc.free();
+      return r;
+    }
 
     case 'validatePdfA': {
       const doc = openDoc(readerCtx, args.password);
-      const levelMap = { 1: '1b', 2: '2b', 3: '3b' };
-      const levelStr = typeof args.level === 'string' ? args.level : (levelMap[args.level] || '2b');
-      const r = doc.validatePdfA(levelStr);
+      const r = doc.dispatchValidatePdfA(args.level ?? null);
       doc.free();
-      return r || { compliant: false, errors: 1, warnings: 0 };
+      return r;
     }
 
     case 'validatePdfUa': {
       const doc = openDoc(readerCtx, args.password);
-      const levelStr = args.level != null ? String(args.level) : null;
-      const valid = doc.validatePdfUa(levelStr);
+      const r = doc.dispatchValidatePdfUa(args.level ?? null);
       doc.free();
-      return { valid: valid || false };
+      return r;
     }
 
     case 'planSplitByBookmarks': {
-      const pdfBytes = readAllBytes(readerCtx);
-      const result = planSplitByBookmarks(pdfBytes);
-      return { splits: result };
-    }
-
-    case 'splitByBookmarks': {
-      // Handled at Dart level using planSplitByBookmarks + extractPages
-      return {};
+      const doc = openDoc(readerCtx, args.password);
+      const r = doc.dispatchPlanSplitByBookmarks();
+      doc.free();
+      return r;
     }
 
     case 'classifyPage': {
       const doc = openDoc(readerCtx, args.password);
-      const result = doc.classifyPage(args.page);
+      const r = doc.dispatchClassifyPage(args.page);
       doc.free();
-      return { type: result || 'unknown', confidence: 1.0 };
+      return r;
     }
 
     case 'classifyDocument': {
       const doc = openDoc(readerCtx, args.password);
-      const result = doc.classifyDocument();
+      const r = doc.dispatchClassifyDocument();
       doc.free();
-      return { type: result || 'unknown', confidence: 1.0, pageCount: 0 };
+      return r;
     }
 
     case 'convertTo': {
@@ -354,23 +291,14 @@ async function dispatch(op, args, readerCtx, writeFn) {
     }
 
     case 'sign': {
-      const pdfBytes = readAllBytes(readerCtx);
-      let signed;
       if (args.certPem && args.keyPem) {
-        signed = signPdfWithPem(pdfBytes, args.certPem, args.keyPem, args.reason || null, args.location || null);
+        signPdfStreamingPem(readerCtx.readFn, readerCtx.lengthFn, writeFn,
+            args.certPem, args.keyPem, args.reason || null, args.location || null);
       } else {
-        signed = signPdfWithPkcs12(pdfBytes, new Uint8Array(args.certificate), args.certificatePassword, args.reason || null, args.location || null);
+        signPdfStreamingPkcs12(readerCtx.readFn, readerCtx.lengthFn, writeFn,
+            new Uint8Array(args.certificate), args.certificatePassword,
+            args.reason || null, args.location || null);
       }
-      writeFn(signed);
-      return {};
-    }
-
-    case 'addStamp':
-    case 'addImageStamp': {
-      const doc = openEditor(readerCtx, args.password);
-      applyEditOp(doc, op, args);
-      doc.saveToWriter(writeFn, true, true, false);
-      doc.free();
       return {};
     }
 
@@ -404,13 +332,23 @@ async function dispatch(op, args, readerCtx, writeFn) {
 
     case 'editorMutate': {
       const doc = getHandle(editorHandles, args.handleId, 'Editor');
-      applyEditOp(doc, args.editOp, args);
-      return {};
+      const editResult = applyEditOp(doc, args.editOp, args);
+      return editResult || {};
     }
 
     case 'editorSave': {
       const doc = getHandle(editorHandles, args.handleId, 'Editor');
-      doc.saveToWriter(writeFn, args.compress ?? true, args.garbageCollect ?? true, args.linearize ?? false);
+      const encryptMode = args.encryptMode ?? 0;
+      if (encryptMode === 2) {
+        const bytes = doc.saveEncryptedToBytes(
+          args.encryptUserPw,
+          args.encryptOwnerPw || null,
+          null, null, null, null
+        );
+        writeFn(bytes);
+      } else {
+        doc.saveToWriter(writeFn, args.compress ?? true, args.garbageCollect ?? true, args.saveMode ?? 0);
+      }
       return {};
     }
 
@@ -426,17 +364,15 @@ async function dispatch(op, args, readerCtx, writeFn) {
       };
     }
 
+    case 'editorIsModified': {
+      const doc = getHandle(editorHandles, args.handleId, 'Editor');
+      return { modified: doc.isModified() };
+    }
+
     case 'editorPageMediaBox': {
       const doc = getHandle(editorHandles, args.handleId, 'Editor');
       const mb = doc.pageMediaBox(args.page);
       return { x: mb[0], y: mb[1], width: mb[2] - mb[0], height: mb[3] - mb[1] };
-    }
-
-    case 'editorExtractPages': {
-      const doc = getHandle(editorHandles, args.handleId, 'Editor');
-      const bytes = doc.extractPages(new Uint32Array(args.pages));
-      writeFn(bytes);
-      return {};
     }
 
     case 'editorMergeFrom': {
@@ -510,56 +446,58 @@ async function dispatch(op, args, readerCtx, writeFn) {
 
 function applyEditOp(doc, op, args) {
   switch (op) {
-    case 'extractPages': doc.extractPages(new Uint32Array(args.pages)); break;
-    case 'deletePages': {
-      const sorted = [...args.pages].sort((a, b) => b - a);
-      for (const p of sorted) doc.deletePage(p);
-      break;
-    }
-    case 'reorderPages': doc.extractPages(new Uint32Array(args.order)); break;
-    case 'movePage': doc.movePage(args.from, args.to); break;
+    case 'selectPages': doc.dispatchEditSelectPages(new Uint32Array(args.pages)); break;
+    case 'deletePages': doc.dispatchEditDeletePages(new Uint32Array(args.pages)); break;
+    case 'reorderPages': doc.dispatchEditSelectPages(new Uint32Array(args.order)); break;
+    case 'movePage': doc.dispatchEditMovePage(args.from, args.to); break;
     case 'rotatePages': {
-      for (const [page, degrees] of Object.entries(args.rotations)) {
-        doc.rotatePage(Number(page), degrees);
-      }
+      const pages = []; const degrees = [];
+      for (const [p, d] of Object.entries(args.rotations)) { pages.push(Number(p)); degrees.push(d); }
+      doc.dispatchEditRotatePages(new Uint32Array(pages), new Int32Array(degrees));
       break;
     }
-    case 'rotateAllPages': doc.rotateAllPages(args.degrees); break;
-    case 'flattenForms': doc.flattenForms(); break;
-    case 'applyRedactions': doc.applyAllRedactions(); break;
-    case 'compress': break;
-    case 'embedFile': doc.embedFile(args.name, new Uint8Array(args.fileData)); break;
+    case 'rotateAllPages': doc.dispatchEditRotateAll(args.degrees); break;
+    case 'flattenForms': doc.dispatchEditFlattenForms(); break;
+    case 'applyRedactions': doc.dispatchEditApplyRedactions(); break;
+    case 'compress': doc.dispatchEditCompress(args.imageQuality || 75); break;
+    case 'embedFile': doc.dispatchEditEmbedFile(args.name, new Uint8Array(args.fileData)); break;
     case 'eraseRegions': {
-      for (const r of args.regions) doc.eraseRegion(args.page, r.x, r.y, r.width, r.height);
+      const flat = [];
+      for (const r of args.regions) { flat.push(r.x, r.y, r.width, r.height); }
+      doc.dispatchEditEraseRegions(args.page, new Float32Array(flat));
       break;
     }
     case 'watermark': {
-      const pc = doc.pageCount();
-      const pages = args.pageIndices || Array.from({ length: pc }, (_, i) => i);
-      for (const p of pages) {
-        doc.addWatermark(p, args.text, args.fontSize || 48, args.rotation || 45,
-          args.opacity || 0.3, args.r || 0.5, args.g || 0.5, args.b || 0.5);
-      }
+      const posType = args.posType || 0;
+      const posFields = new Float32Array(
+        posType === 1 ? [args.corner || 0, args.marginX || 20, args.marginY || 20] :
+        posType === 2 ? [args.columns || 3, args.rows || 4] :
+        posType === 3 ? [args.posX || 0, args.posY || 0, args.posW || 100, args.posH || 50] :
+        []
+      );
+      doc.dispatchEditWatermark(args.page, args.text, args.fontSize || 48, args.rotation || 45,
+        args.opacity || 0.3, args.r || 0.5, args.g || 0.5, args.b || 0.5,
+        args.layer || 0, posType, posFields);
       break;
     }
     case 'encrypt': break;
     case 'decrypt': break;
-    case 'addStamp': doc.addStamp(args.page, args.stampType, args.customName || null, args.x, args.y, args.width, args.height, args.opacity || 1.0); break;
-    case 'addImageStamp': doc.addImageStamp(args.page, new Uint8Array(args.imageBytes), args.x, args.y, args.width, args.height, args.opacity || 1.0); break;
-    case 'setTitle': doc.setTitle(args.value); break;
-    case 'setAuthor': doc.setAuthor(args.value); break;
-    case 'setSubject': doc.setSubject(args.value); break;
-    case 'setKeywords': doc.setKeywords(args.value); break;
-    case 'cropMargins': doc.cropMargins(args.left || 0, args.right || 0, args.top || 0, args.bottom || 0); break;
-    case 'convertToPdfA': doc.convertToPdfA(args.level || 1); break;
-    case 'flattenAllAnnotations': doc.flattenAllAnnotations(); break;
-    case 'setFormFieldValue': doc.setFormFieldValue(args.fieldName, args.value); break;
-    case 'unembedStandardFonts': doc.unembedStandardFonts(); break;
-    case 'resizeImage': doc.resizeImage(args.page, args.imageName, args.width, args.height); break;
-    case 'addRedaction': doc.addRedaction(args.page, args.x, args.y, args.w, args.h, args.overlayText || null); break;
-    case 'redactionCount': return { count: doc.redactionCount(args.page) };
-    case 'applyRedactions': doc.applyRedactionsDestructive(); break;
-    case 'scrubMetadata': doc.sanitizeDocument(true, false, false); break;
+    case 'addStamp': doc.dispatchEditAddStamp(args.page, args.stampType, args.x, args.y, args.width, args.height, args.opacity || 1.0); break;
+    case 'addImageStamp': doc.dispatchEditAddImageStamp(args.page, new Uint8Array(args.imageBytes), args.x, args.y, args.width, args.height, args.opacity || 1.0); break;
+    case 'setTitle': doc.dispatchEditSetTitle(args.value); break;
+    case 'setAuthor': doc.dispatchEditSetAuthor(args.value); break;
+    case 'setSubject': doc.dispatchEditSetSubject(args.value); break;
+    case 'setKeywords': doc.dispatchEditSetKeywords(args.value); break;
+    case 'cropMargins': doc.dispatchEditCropMargins(args.left || 0, args.right || 0, args.top || 0, args.bottom || 0); break;
+    case 'convertToPdfA': doc.dispatchEditConvertToPdfA(args.level || 1); break;
+    case 'flattenAllAnnotations': doc.dispatchEditFlattenAllAnnotations(); break;
+    case 'setFormFieldValue': doc.dispatchEditSetFormFieldValue(args.fieldName, args.value); break;
+    case 'unembedStandardFonts': doc.dispatchEditUnembedStandardFonts(); break;
+    case 'resizeImage': doc.dispatchEditResizeImage(args.page, args.imageName, args.width, args.height); break;
+    case 'addRedaction': doc.dispatchEditAddRedaction(args.page, args.x, args.y, args.w, args.h); break;
+    case 'redactionCount': return { count: doc.dispatchEditRedactionCount(args.page) };
+    case 'applyRedactions': doc.dispatchEditApplyRedactionsDestructive(); break;
+    case 'scrubMetadata': doc.dispatchEditScrubMetadata(); break;
     default: throw new Error(`Unknown edit op: ${op}`);
   }
 }

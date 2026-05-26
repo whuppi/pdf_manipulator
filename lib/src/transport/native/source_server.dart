@@ -1,14 +1,14 @@
-// Cross-isolate source server: PdfSource on main, worker reads on demand.
+// Cross-isolate source server: DataSource on main, worker reads on demand.
 //
 // SourceServer (main isolate) listens for read/length requests from
-// the worker and fulfills them from the consumer's PdfSource.
+// the worker and fulfills them from the consumer's DataSource.
 //
 // INTERNAL — used by the native platform implementation only.
 
 import 'dart:isolate';
 import 'dart:typed_data';
 
-import 'package:pdf_manipulator/src/types/pdf_source.dart';
+import 'package:pdf_manipulator/src/types/data_source.dart';
 
 /// Runs on the MAIN isolate. Fulfills read/length requests from the worker.
 ///
@@ -19,7 +19,7 @@ import 'package:pdf_manipulator/src/types/pdf_source.dart';
 class SourceServer {
   SourceServer(this._source);
 
-  final PdfSource _source;
+  final DataSource _source;
   ReceivePort? _port;
 
   SendPort start() {

@@ -1,7 +1,7 @@
 // Asset server for web tests — serves the package root with CORS + COOP/COEP.
 //
 // Started via spawnHybridUri('/test/helpers/asset_server.dart').
-// Serves web_assets/ (coordinator.js, wasm_worker.js, WASM binary).
+// Serves web_assets/ (coordinator.js, worker.js, WASM binary).
 // COOP/COEP headers enable SharedArrayBuffer for Atomics mode.
 //
 
