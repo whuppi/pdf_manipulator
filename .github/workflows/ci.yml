@@ -40,10 +40,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: dart-lang/setup-dart@v1
-        with: { sdk: stable }
-      - run: dart pub get --no-example
-      - run: dart analyze .
+      - uses: subosito/flutter-action@v2
+        with: { channel: stable }
+      - run: flutter pub get
+      - run: cd example && flutter pub get && cd ..
+      - run: flutter analyze .
 
   test:
     needs: changes
