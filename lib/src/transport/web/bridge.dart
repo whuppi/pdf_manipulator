@@ -1,5 +1,15 @@
 // WebBridge — extends PdfBridge for web platforms.
 //
+// RULE: Encode request → send to coordinator → decode result. Zero PDF
+// logic. Does not interpret results beyond wire decoding. Does not make
+// decisions based on PDF content. Symmetric with native/bridge.dart —
+// both bridges must encode the same args for the same ops.
+//
+// VIOLATIONS:
+// - No PDF logic (page routing, format detection).
+// - No direct WASM calls (worker.js handles those).
+// - No conditional behavior that native/bridge.dart doesn't also have.
+//
 // Routes all operations through a coordinator worker which manages the
 // WASM worker pool, I/O mode, and read/write/stream routing.
 //
@@ -719,7 +729,7 @@ class _WebEditorHandle implements BridgeEditorHandle {
   }
 
   @override Future<int> optimizeImages({int quality = 75}) async =>
-      (await _op(editorMutateOp(handleId: _hid, editOp: 'compress', extra: {'imageQuality': quality})))['value'] as int? ?? 0;
+      (await _op(editorMutateOp(handleId: _hid, editOp: 'optimizeImages', extra: {'quality': quality})))['count'] as int? ?? 0;
   @override Future<int> unembedStandardFonts() async =>
       (await _op(editorMutateOp(handleId: _hid, editOp: 'unembedStandardFonts')))['value'] as int? ?? 0;
 

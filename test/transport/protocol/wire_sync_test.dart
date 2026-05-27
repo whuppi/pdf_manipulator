@@ -89,7 +89,7 @@ void main() {
       const subDispatchOps = {
         'editorDispose', 'editorMutate', 'editorSave',
         'editorGetMetadata', 'editorIsModified', 'editorPageMediaBox',
-        'editorMergeFrom',
+        'editorRedactionCount', 'editorQuery', 'editorMergeFrom',
         'builderPageOp', 'builderPageDone',
       };
 
@@ -114,7 +114,7 @@ void main() {
         'setTitle', 'setAuthor', 'setSubject', 'setKeywords',
         'cropMargins', 'convertToPdfA', 'flattenAllAnnotations',
         'setFormFieldValue', 'unembedStandardFonts', 'resizeImage',
-        'addRedaction', 'redactionCount', 'scrubMetadata',
+        'addRedaction', 'redactionCount', 'scrubMetadata', 'optimizeImages',
         // format sub-cases
         'docx', 'pptx', 'xlsx',
         // applyPageOp sub-cases

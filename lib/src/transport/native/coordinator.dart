@@ -1,8 +1,14 @@
-// Native coordinator — the Dart isolate that manages FFI calls.
+// Native coordinator — Dart isolate that routes ops to Rust thread pool.
 //
-// Symmetric with coordinator.js on web. This IS the coordinator:
-// receives ops from the bridge, dispatches FFI calls to the Rust
-// thread pool, returns results. The Rust threads are the workers.
+// RULE: Message router only. Receives ops from bridge, sets up shared
+// buffers, calls FFI entry points, returns raw result bytes. Zero PDF
+// logic. Zero result decoding. Zero conditional behavior based on content.
+//
+// VIOLATIONS:
+// - No PDF-specific logic (page routing, format detection, etc.).
+// - No result interpretation (bridge + wire.dart handle that).
+// - No direct engine calls — only FFI entry points.
+// - Route message + setup I/O buffers + call FFI + return bytes. Nothing else.
 //
 // This file imports dart:ffi — it's only used on native platforms.
 //
@@ -165,13 +171,15 @@ Future<Object?> _dispatch(String op, Map<String, Object?> args, {required SendPo
       _editorReaderStates.remove(disposeHandleId)?.dispose();
       return Uint8List.fromList([1]);
     case 'editorIsModified':
-      final isModHandleId = args['handleId'] as int;
-      final modified = bridge.bridgeEditorIsModified(isModHandleId);
-      return Uint8List.fromList([1, modified != 0 ? 1 : 0]);
+      return _handleEditorQuery(args, 1, 0);
     case 'editorGetMetadata':
       return _handleEditorGetMetadata(args);
     case 'editorPageMediaBox':
-      return _handleEditorPageMediaBox(args);
+      return _handleEditorQuery(args, 2, args['page'] as int);
+    case 'editorRedactionCount':
+      return _handleEditorQuery(args, 3, args['page'] as int);
+    case 'editorQuery':
+      return _handleEditorQuery(args, args['queryCode'] as int, args['param'] as int);
     case 'editorMergeFrom':
       return _handleEditorMergeFrom(args);
     case 'builderCreate':
@@ -359,23 +367,15 @@ Future<Uint8List> _handleEditorGetMetadata(Map<String, Object?> args) async {
   return result is Uint8List ? result : Uint8List.fromList(result as List<int>);
 }
 
-Future<Uint8List> _handleEditorPageMediaBox(Map<String, Object?> args) async {
+/// Query an editor on the thread pool via bridge_editor_query.
+/// All editor reads go through this — never sync FFI on editor handles.
+Future<Uint8List> _handleEditorQuery(Map<String, Object?> args, int queryCode, int param) async {
   final handleId = args['handleId'] as int;
-  final page = args['page'] as int;
-  final out = calloc<ffi.Double>(4);
-  try {
-    final rc = bridge.bridgeEditorGetPageMediaBox(handleId, page, out);
-    final result = Uint8List(1 + 4 * 8); // status + 4 doubles
-    result[0] = rc == 0 ? 1 : 0;
-    final bd = ByteData.sublistView(result);
-    bd.setFloat64(1, out[0], Endian.little);
-    bd.setFloat64(9, out[1], Endian.little);
-    bd.setFloat64(17, out[2], Endian.little);
-    bd.setFloat64(25, out[3], Endian.little);
-    return result;
-  } finally {
-    calloc.free(out);
-  }
+  final resultPort = ReceivePort();
+  bridge.bridgeEditorQuery(handleId, queryCode, param, resultPort.sendPort.nativePort);
+  final result = await resultPort.first as Uint8List;
+  resultPort.close();
+  return result;
 }
 
 Future<Uint8List> _handleEditorMergeFrom(Map<String, Object?> args) async {

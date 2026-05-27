@@ -1,5 +1,14 @@
 // Coordinator Worker — manages WASM worker pool, I/O mode, read/write routing.
 //
+// RULE: Message router only. Routes ops from Dart to WASM workers, routes
+// results back. Manages worker pool lifecycle, OPFS temp files, SAB setup.
+// Zero PDF logic. Zero result interpretation.
+//
+// VIOLATIONS:
+// - No PDF-specific logic.
+// - No result parsing or conditional behavior based on PDF content.
+// - Route message + manage pool + manage I/O mode. Nothing else.
+//
 // Three-level architecture (symmetric with native):
 //   Main thread (Dart) ←→ Coordinator (this file) ←→ WASM Worker pool
 //

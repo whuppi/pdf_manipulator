@@ -32,6 +32,8 @@ enum EngineOp {
   editorGetMetadata('editorGetMetadata'),
   editorIsModified('editorIsModified'),
   editorPageMediaBox('editorPageMediaBox'),
+  editorRedactionCount('editorRedactionCount'),
+  editorQuery('editorQuery'),
   editorMergeFrom('editorMergeFrom'),
 
   // ── Builder handle ops ──

@@ -1,8 +1,18 @@
 // NativeBridge — extends PdfBridge for native platforms.
 //
-// Main-isolate side only. Spawns a worker isolate that owns the Rust
+// RULE: Encode request → send to coordinator → decode result. Zero PDF
+// logic. Does not interpret results beyond wire decoding. Does not make
+// decisions based on PDF content. Symmetric with web/bridge.dart — both
+// bridges must encode the same args for the same ops.
+//
+// VIOLATIONS:
+// - No PDF logic (page routing, format detection).
+// - No direct FFI calls (coordinator handles those).
+// - No conditional behavior that web/bridge.dart doesn't also have.
+//
+// Main-isolate side only. Spawns coordinator isolate that owns the Rust
 // thread pool. Each operation: main creates SourceServer/SinkServer,
-// sends a command to the worker, worker does FFI, result comes back.
+// sends a command to coordinator, coordinator does FFI, result comes back.
 //
 // Decoding: Rust returns binary Uint8List → wire.dart decodes to typed results.
 //
@@ -587,12 +597,20 @@ class _NativeEditorHandle implements BridgeEditorHandle {
   }
 
   @override Future<int> optimizeImages({int quality = 75}) async {
-    await _mutate(9, params: Uint8List.fromList([quality]));
-    return 0;
+    final result = await _send(EngineOp.editorQuery.wire, {
+      'handleId': _handleId, 'queryCode': 4, 'param': quality,
+    });
+    final bytes = result as Uint8List;
+    if (bytes.isEmpty || bytes[0] != 1 || bytes.length < 5) return 0;
+    return ByteData.sublistView(bytes).getInt32(1, Endian.little);
   }
   @override Future<int> unembedStandardFonts() async {
-    await _mutate(23);
-    return 0;
+    final result = await _send(EngineOp.editorQuery.wire, {
+      'handleId': _handleId, 'queryCode': 5, 'param': 0,
+    });
+    final bytes = result as Uint8List;
+    if (bytes.isEmpty || bytes[0] != 1 || bytes.length < 5) return 0;
+    return ByteData.sublistView(bytes).getInt32(1, Endian.little);
   }
 
   @override Future<void> addWatermark(int page, String text, {
@@ -647,7 +665,16 @@ class _NativeEditorHandle implements BridgeEditorHandle {
     return _mutate(30, params: params);
   }
 
-  @override Future<int> redactionCount(int page) async => 0;
+  @override Future<int> redactionCount(int page) async {
+    final result = await _send(EngineOp.editorRedactionCount.wire, {
+      'handleId': _handleId,
+      'page': page,
+    });
+    final bytes = result as Uint8List;
+    if (bytes.isEmpty || bytes[0] != 1) return 0;
+    if (bytes.length < 5) return 0;
+    return ByteData.sublistView(bytes).getInt32(1, Endian.little);
+  }
 
   @override Future<void> applyRedactions() => _mutate(32);
 

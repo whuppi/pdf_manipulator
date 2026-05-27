@@ -101,15 +101,44 @@ For architecture see [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ---
 
-## Dispatch coverage
+## Dispatch coverage — zero violations
 
-All operations — read, stream, and edit — go through `dispatch.rs` on both platforms.
+**Every** operation goes through `dispatch.rs` on both platforms. No exceptions.
+
+| Category | Through dispatch | Rule enforced in |
+|---|---|---|
+| Read ops (open, extract, search, validate, classify, render, extractImages) | `dispatch::*` → ffi_encode / wasm_encode | wasm_api.rs, ffi_api.rs headers |
+| Edit ops (select, delete, rotate, merge, watermark, compress, etc.) | `dispatch::edit_*` | wasm_api.rs `dispatchEdit*` methods |
+| Editor queries (pageCount, isModified, pageMediaBox, redactionCount) | `dispatch::edit_get_metadata` / `edit_is_modified` / `edit_page_media_box` | wasm_api.rs, ffi_api.rs `bridge_editor_query` |
+| Editor save | `dispatch::edit_save_with_options` / `edit_save_encrypted` | wasm_api.rs `dispatchEditSave*` |
+| Sign | `dispatch::sign_via_editor` | Both platforms call same function |
+| Convert (DOCX/PPTX/XLSX) | `dispatch::convert_to_format_writer` / `convert_from_format_writer` | wasm_api.rs `dispatchConvertTo/FromFormat` |
+| Images to PDF | `dispatch::images_to_pdf_writer` / `images_to_pdf_bytes` | wasm_api.rs `dispatchImagesToPdf` |
+| Builder metadata (title, author, etc.) | `dispatch::builder_set_title` etc. | wasm_api.rs `dispatchSet*` |
+| Builder save | `dispatch::builder_save` / `builder_save_to_writer` | wasm_api.rs `dispatchBuild` |
+| Builder page ops (font, text, image, etc.) | `dispatch::PageOp` enum + `dispatch::replay_page_ops` | wasm_api.rs `DispatchPageBuilder` |
+
+worker.js calls ONLY `dispatch*` methods. ffi_api.rs calls ONLY `dispatch::*` functions. Each file has a rule header documenting violations. See individual file headers for the full rule.
 
 ---
 
+## Bugs — FIXED (all 9 from behavioral test rewrite)
+
+| Bug | Fix | Status |
+|---|---|---|
+| `redactionCount` always returns 0 | `bridge_editor_query` on thread pool (query code 3) | FIXED |
+| `optimizeImages` always returns 0 | `bridge_editor_query` (query code 4) + `dispatch::edit_optimize_images` | FIXED |
+| `unembedStandardFonts` always returns 0 | `bridge_editor_query` (query code 5) + `dispatch::edit_unembed_standard_fonts` | FIXED |
+| Source page tree deadlock | All editor queries through thread pool, never sync FFI | FIXED |
+| `getPageMediaBox` silent fallback to A4 | Through thread pool, returns real values | FIXED |
+| `scrubMetadata` doesn't remove metadata | Changed to call `sanitize_document` instead of `apply_redactions_destructive` | FIXED |
+| `getSignatures` can't find sign() output | `sign_pdf_streaming_with_field` writes AcroForm + field + widget + page annotation. `enumerate_signatures` extracts signer CN from CMS blob (strips zero-padding) | FIXED |
+| `convertToPdfA` empty/invalid output | `convert_with_editor` (no commit_in_place materialization). Bundled Liberation fonts for WASM (no system font dependency) | FIXED |
+| `bookmarkedPdf` fixture missing font | Rebuilt with proper `/Resources << /Font << /F1 >> >>`. Photo PNG fixture for optimizeImages tests | FIXED |
+
 ## Planned
 
-No planned items.
+Rewrite example app and verify README examples compile.
 
 ---
 

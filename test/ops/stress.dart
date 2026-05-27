@@ -9,7 +9,7 @@ import '../helpers/generators.dart';
 import '../helpers/test_source_sink.dart';
 
 void registerStressTests(Pdf Function() createPdf) {
-  group('stress', () {
+  group('stress', tags: 'stress', () {
     late Uint8List largePdf;
 
     setUpAll(() async {

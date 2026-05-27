@@ -6,7 +6,7 @@ import 'dart:typed_data';
 
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
-import 'fixtures.dart';
+import 'photo_png.dart';
 import 'test_source_sink.dart';
 
 /// Build a PDF with [pageCount] pages using exponential merge.
@@ -53,17 +53,18 @@ Future<Uint8List> buildLargePdf(Pdf Function() createPdf, {int pageCount = 100})
   return current;
 }
 
-/// Build a PDF with [pageCount] pages, each containing the minimalPng image.
+/// Build a PDF with [pageCount] pages, each containing a 64x64 photo-like PNG.
+/// Uses buildPhotoPng() which produces noisy gradient data — large enough that
+/// JPEG compression at quality 50 beats the Flate-compressed PNG stream.
 Future<Uint8List> buildImagePdf(Pdf Function() createPdf, {int pageCount = 20}) async {
   final pdf = createPdf();
   final builder = await pdf.build();
   await builder.setTitle('Image Test — $pageCount pages');
-
   for (var i = 0; i < pageCount; i++) {
     final page = await builder.addPage(width: 612, height: 792);
     await page.font('Helvetica', 12);
     await page.text('Image page ${i + 1}');
-    await page.image(src(minimalPng), PdfRect(
+    await page.image(src(photoPng), PdfRect(
       x: 50, y: 100,
       width: 100 + (i % 5) * 40.0,
       height: 100 + (i % 3) * 60.0,

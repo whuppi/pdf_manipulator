@@ -132,14 +132,17 @@ void registerSecurityTests(Pdf Function() createPdf) {
           credentials: PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'));
       final signed = sink.takeBytes();
 
-      // Verify the signed PDF opens with correct page count.
       final doc = await pdf.open(src(signed));
       expect(doc.pageCount, 1);
+      expect(signed.length, greaterThan(minimalPdf.length));
 
-      // Verify at least one signature is retrievable.
       final sigs = await pdf.getSignatures(src(signed));
       expect(sigs, isNotEmpty,
           reason: 'signed PDF must contain at least one signature');
+      expect(sigs.first.signerName, isNotNull,
+          reason: 'PKCS12 signature must carry a signer name');
+      expect(sigs.first.signerName, isNotEmpty,
+          reason: 'signer name must not be empty');
     });
 
     test('sign with PEM adds a retrievable signature', () async {
@@ -150,14 +153,14 @@ void registerSecurityTests(Pdf Function() createPdf) {
               const PdfSigningCredentials.pem(testCertPem, testKeyPem));
       final signed = sink.takeBytes();
 
-      // Verify the signed PDF opens with correct page count.
       final doc = await pdf.open(src(signed));
       expect(doc.pageCount, 1);
 
-      // Verify at least one signature is retrievable.
       final sigs = await pdf.getSignatures(src(signed));
       expect(sigs, isNotEmpty,
           reason: 'signed PDF must contain at least one signature');
+      expect(sigs.first.signerName, isNotNull,
+          reason: 'PEM signature must carry a signer name');
     });
 
     test('sign with invalid cert throws', () async {

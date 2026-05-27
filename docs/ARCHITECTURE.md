@@ -302,9 +302,11 @@ WebBridge
 
 ---
 
-## 7. The dispatch layer — one brain, two encoders
+## 7. The dispatch layer — one brain, zero exceptions
 
-`host/dispatch.rs` contains every operation as a typed function. Read/stream ops return typed result structs. Edit ops take typed args and mutate the editor.
+`host/dispatch.rs` contains **every** operation as a typed function. Read, edit, query, save, sign, convert, and builder operations — all of them. No operation calls the engine from any other file. Each shell file (`ffi_api.rs`, `wasm_api.rs`, `worker.js`) has a rule header documenting this invariant and listing violations.
+
+### Read ops
 
 | Function | Returns |
 |---|---|
@@ -321,14 +323,67 @@ WebBridge
 | `render_page(doc, page, w, h)` | `RenderedPage` (width, height, RGBA data) |
 | `extract_images(doc, page)` | `Vec<ExtractedImage>` |
 
-All page routing (all pages vs single page), result flattening (nested bbox → flat x,y,w,h), and engine method calls live here. Both platforms call the same function, get the same result, encode it differently:
+### Editor queries
+
+| Function | Returns |
+|---|---|
+| `edit_get_metadata(editor)` | `EditorMetadataResult` (page count, version, title, author, subject, keywords) |
+| `edit_is_modified(editor)` | `bool` |
+| `edit_page_media_box(editor, page)` | `(f32, f32, f32, f32)` |
+
+### Editor save
+
+| Function | Returns |
+|---|---|
+| `edit_save_with_options(editor, writer, options)` | `Result<()>` |
+| `edit_save(editor, writer, compress, gc, mode)` | `Result<()>` |
+| `edit_save_encrypted(editor, user_pw, owner_pw)` | `Result<Vec<u8>>` |
+
+### Sign
+
+| Function | Returns |
+|---|---|
+| `sign_via_editor(editor, writer, length, creds, opts)` | `Result<()>` — builds AcroForm + field + widget + page annotation alongside the signature dict |
+
+### Convert
+
+| Function | Returns |
+|---|---|
+| `convert_to_format_writer(doc, format, writer)` | `Result<()>` |
+| `convert_to_format(doc, format)` | `Result<Vec<u8>>` |
+| `convert_from_format_writer(data, format, writer)` | `Result<()>` |
+| `convert_from_format_to_bytes(data, format)` | `Result<Vec<u8>>` |
+| `images_to_pdf_writer(images, writer)` | `Result<()>` |
+| `images_to_pdf_bytes(images)` | `Result<Vec<u8>>` |
+
+### Builder
+
+| Function | Returns |
+|---|---|
+| `builder_new()` | `DocumentBuilder` |
+| `builder_set_title/author/subject/keywords(b, val)` | `DocumentBuilder` (move-based) |
+| `builder_add_page(b, w, h)` / `builder_add_a4_page` / `builder_add_letter_page` | `FluentPageBuilder` |
+| `builder_save(b)` / `builder_save_to_writer(b, writer)` | `Result<Vec<u8>>` / `Result<()>` |
+| `page_font/text/heading/paragraph/...` (30 functions) | `FluentPageBuilder` (move-based) |
+| `page_done(p)` | `&mut DocumentBuilder` |
+| `PageOp` enum + `replay_page_ops(builder, size, ops)` | One enum, one replay — both platforms buffer `PageOp` and replay through this function |
+
+### Edit ops (30+ functions)
+
+`edit_merge`, `edit_select_pages`, `edit_delete_pages`, `edit_rotate_pages`, `edit_rotate_all`, `edit_flatten_forms`, `edit_apply_redactions`, `edit_compress`, `edit_optimize_images`, `edit_move_page`, `edit_embed_file`, `edit_erase_regions`, `edit_encrypt`, `edit_watermark`, `edit_add_stamp`, `edit_add_image_stamp`, `edit_set_title`, `edit_set_author`, `edit_set_subject`, `edit_set_keywords`, `edit_unembed_standard_fonts`, `edit_flatten_all_annotations`, `edit_set_form_field_value`, `edit_crop_margins`, `edit_convert_to_pdf_a`, `edit_resize_image`, `edit_add_redaction`, `edit_redaction_count`, `edit_apply_redactions_destructive`, `edit_scrub_metadata`.
+
+### Encoding
+
+Both platforms call the same dispatch functions, then encode differently:
 
 - **Native:** `ffi_encode.rs` → binary `Vec<u8>` → Dart `native/wire.dart` → typed
 - **Web:** `wasm_encode.rs` → `JsValue` object → Dart `web/wire.dart` → typed
 
 Both `wire.dart` files call `codec.dart` internally. Bridges never import codec for decoding.
 
-Step-by-step checklists for adding new read and edit operations are in [`UPDATING.md`](UPDATING.md) (§S3 and §S4). The wire_sync_test catches parity drift — if you add a dispatch function but miss the coordinator or worker.js case, the test fails.
+### The rule
+
+If an operation exists in `ffi_api.rs`, `wasm_api.rs`, `wasm.rs`, or `worker.js` but NOT in `dispatch.rs`, that is a violation. Every file has a header comment documenting this. The wire_sync_test catches parity drift — if you add a dispatch function but miss the coordinator or worker.js case, the test fails.
 
 ---
 
@@ -629,6 +684,17 @@ Honest asymmetries that can't be unified:
 | Type wrappers | None needed | `src/wasm.rs` (WasmPdfDocument etc.) | C FFI uses raw pointers; #[wasm_bindgen] needs wrapper structs |
 | FFI bindings | `bindings.dart` (dart:ffi) | N/A — JS calls WASM directly | Different binding mechanisms |
 | Source/Sink servers | `source_server.dart`, `sink_server.dart` | N/A — handled in JS | Different I/O models |
+| System fonts | `fontdb::load_system_fonts()` available | No filesystem — bundled Liberation fonts via `include_bytes!` | WASM has no OS font access |
+
+Asymmetries that ARE unified (divergence eliminated):
+
+| Concern | How |
+|---|---|
+| All operation logic | `dispatch.rs` — both platforms call the same functions |
+| Builder page ops | `dispatch::PageOp` enum + `dispatch::replay_page_ops` — same enum, same replay on both |
+| Sign with AcroForm | `dispatch::sign_via_editor` — one function, both platforms |
+| PDF/A font embedding | Liberation fonts bundled on ALL platforms via `include_bytes!` in converter fontdb. System fonts loaded additionally on native only. Bundled fonts guarantee identical PDF/A output. |
+| Editor queries (pageCount, isModified, mediaBox) | All through dispatch — never read from `WasmPdfDocument.inner` directly |
 
 ---
 

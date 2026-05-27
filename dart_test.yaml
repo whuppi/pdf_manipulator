@@ -11,6 +11,10 @@
 
 platforms: [vm]
 
+tags:
+  stress:
+    # Heavy ops on 1000-page PDFs. Skip with --exclude-tags=stress for fast iteration.
+
 define_platforms:
   chrome-coi:
     name: Chrome with Cross-Origin Isolation

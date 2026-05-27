@@ -232,15 +232,11 @@ external void bridgeEditorSave(
 @ffi.Native<ffi.Void Function(ffi.Uint64)>(symbol: 'bridge_editor_dispose')
 external void bridgeEditorDispose(int handleId);
 
-@ffi.Native<ffi.Int32 Function(ffi.Uint64)>(symbol: 'bridge_editor_page_count')
-external int bridgeEditorPageCount(int handleId);
-
-@ffi.Native<ffi.Int32 Function(ffi.Uint64)>(symbol: 'bridge_editor_is_modified')
-external int bridgeEditorIsModified(int handleId);
-
-@ffi.Native<ffi.Int32 Function(ffi.Uint64, ffi.Int32, ffi.Pointer<ffi.Double>)>(
-    symbol: 'bridge_editor_get_page_media_box')
-external int bridgeEditorGetPageMediaBox(int handleId, int page, ffi.Pointer<ffi.Double> out);
+/// Query an editor on the thread pool. ALL editor reads go through this.
+/// query_code: 0=pageCount, 1=isModified, 2=getPageMediaBox, 3=redactionCount
+@ffi.Native<ffi.Void Function(ffi.Uint64, ffi.Int32, ffi.Int32, ffi.Int64)>(
+    symbol: 'bridge_editor_query')
+external void bridgeEditorQuery(int handleId, int queryCode, int param, int resultPort);
 
 @ffi.Native<ffi.Void Function(ffi.Uint64, ffi.Int64)>(symbol: 'bridge_editor_get_metadata')
 external void bridgeEditorGetMetadata(int handleId, int resultPort);

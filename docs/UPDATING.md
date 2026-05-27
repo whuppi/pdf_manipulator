@@ -105,7 +105,7 @@ git add vendor/pdf_oxide web_assets/
 rm -rf .dart_tool/hooks_runner   # clear stale native cache
 
 make check                   # native tests
-make check-all               # native + web tests
+make check               # native + web tests
 ```
 
 ### Step 6 — Commit
@@ -181,7 +181,7 @@ End-to-end checklist for a new read/stream operation (e.g. a new `extractFoo`):
 | 15 | `transport/pdf_bridge.dart` | Add abstract method |
 | 16 | `ops/pdf.dart` | Add public method |
 | 17 | Tests | Native + web |
-| 18 | Build | `cargo test` → `make wasm` → `make check-all` |
+| 18 | Build | `cargo test` → `make wasm` → `make check` |
 
 The wire_sync_test catches parity drift — if you miss step 9 or 10, the test fails.
 
@@ -196,7 +196,7 @@ Edit ops also go through `dispatch.rs`. Same pattern as read ops but no encode s
 | 1 | `host/dispatch.rs` | Add `edit_*()` typed function |
 | 2 | `host/native/ffi_api.rs` | Add case in `dispatch_edit_op` (binary params → dispatch call) |
 | 3 | `host/web/wasm_api.rs` | Add `#[wasm_bindgen]` method (call dispatch) |
-| 4 | `web_assets/worker.js` | Add case in `applyEditOp` (one-liner, calls `doc.dispatchEditXxx()`) |
+| 4 | `web_assets/worker.js` | Add case in `applyEditOp` (calls `doc.dispatchEditXxx()`) |
 | 5 | `protocol/codec.dart` | Add param encoder if needed |
 | 6 | `native/coordinator.dart` | Usually goes through existing `editorMutate` — no change |
 | 7 | `native/bridge.dart` | Add `_mutate(opCode, params)` call |
@@ -239,8 +239,8 @@ Version and changelog are manually written by the maintainer. CI handles tagging
 
 ```
 1. Add ## X.Y.Z entry at the top of CHANGELOG.md
-2. Run: dart run tool/commits.dart v<PREVIOUS_VERSION>
-   Copy the <details> block into your entry
+2. Generate commit list: git log v<PREVIOUS_VERSION>..HEAD --oneline --no-decorate
+   Wrap in a <details> block and paste into your entry
 3. Commit + push to dev
 4. PR dev → prod, merge
 5. auto-tag.yml reads CHANGELOG.md → tags vX.Y.Z
@@ -251,8 +251,8 @@ Version and changelog are manually written by the maintainer. CI handles tagging
 
 ```
 1. Add ## X.Y.Z-dev.N entry at the top of CHANGELOG.pre.md
-2. Run: dart run tool/commits.dart v<PREVIOUS_TAG>
-   Copy the <details> block into your entry
+2. Generate commit list: git log v<PREVIOUS_TAG>..HEAD --oneline --no-decorate
+   Wrap in a <details> block and paste into your entry
 3. Commit + push to dev
 4. publish-prerelease.yml reads CHANGELOG.pre.md → tags vX.Y.Z-dev.N
 5. release.yml fires → stamps version → uses CHANGELOG.pre.md as the published changelog
@@ -264,7 +264,7 @@ Version and changelog are manually written by the maintainer. CI handles tagging
 1. git checkout -b hotfix/vX.Y.Z vPREVIOUS_TAG   (branch from release tag)
 2. Fix the bug
 3. Add ## X.Y.Z entry at the top of CHANGELOG.md
-4. Run: dart run tool/commits.dart vPREVIOUS_TAG
+4. Generate commit list: git log vPREVIOUS_TAG..HEAD --oneline --no-decorate
 5. Commit + push the hotfix branch
 6. PR hotfix/vX.Y.Z → prod, merge
 7. auto-tag.yml tags → release.yml publishes
@@ -306,15 +306,13 @@ Version and changelog are manually written by the maintainer. CI handles tagging
 | `pubspec.yaml` | `@chaudharydeepanshu` | Contributors can't change version |
 | `.github/`, `.githooks/` | `@chaudharydeepanshu` | CI/hook changes need maintainer approval |
 
-### Helper tool
+### Generating the commit list for changelog entries
 
 ```bash
-dart run tool/commits.dart v1.0.0       # commits since tag v1.0.0
-dart run tool/commits.dart v1.1.0-dev.0 # commits since that prerelease
-dart run tool/commits.dart abc1234      # commits since any git ref
+git log v1.0.0..HEAD --oneline --no-decorate
 ```
 
-Prints a `<details>` block to stdout. Copy into your changelog entry.
+Wrap the output in a `<details><summary>Commits since X.Y.Z (N)</summary>` block and paste into your changelog entry.
 
 ---
 
@@ -324,7 +322,7 @@ Prints a `<details>` block to stdout. Copy into your changelog entry.
 |---|---|
 | Build hook fails on consumer machine | Binary not found for platform — check `hook/build.dart` and GitHub Release assets |
 | WASM test fails | `worker.js` dispatch out of sync — rebuild WASM (`make wasm`) |
-| Native test passes but web fails | Dispatch parity issue — check `dispatch.rs` page routing + `wasm_encode.rs` result shape |
+| Native test passes but web fails | Check worker.js calls `doc.dispatchXxx()` not `doc.xxx()`. wasm.rs wrapper methods read from wrong internal object. All ops must go through dispatch. |
 | Wire sync test fails | EngineOp enum has an op not in `coordinator.dart` or `worker.js` — add the missing case |
 | Editor handle error "not found" | Handle disposed or never opened — check coordinator.dart lifecycle |
 | "Symbol not found" at runtime | Compiled binary older than source — `dart test` recompiles from source |
@@ -367,7 +365,7 @@ Fork convention: `main` on each fork stays a clean mirror of upstream. Patches l
 
 | File | What it does |
 |---|---|
-| `host/dispatch.rs` | Shared typed dispatch functions — both native and web call these |
+| `host/dispatch.rs` | Shared typed dispatch for ALL operations — read, edit, query, save, sign, convert, builder. `PageOp` enum + `replay_page_ops` for builder page ops. `sign_via_editor` for signing with AcroForm. Both platforms call these — zero exceptions. |
 | `host/constants.rs` | Buffer sizes |
 | `host/native/ffi_api.rs` | C extern entry points — deserialize binary, call dispatch, encode result |
 | `host/native/ffi_encode.rs` | Dispatch result → binary bytes (Dart wire.dart decodes) |
@@ -383,8 +381,12 @@ Fork convention: `main` on each fork stays a clean mirror of upstream. Patches l
 
 | File | What we added |
 |---|---|
-| `src/wasm.rs` | `with_doc()` helper for mutex locking, `isEncrypted`, `requiresPassword`, `getEncryptionAlgorithm`, `getPermissionBits`, `isModified(&mut self)`, streaming sign functions, buffer capacity constants |
+| `src/wasm.rs` | `with_doc()`/`with_editor()` helpers, `pub(crate)` on `JsCallbackWriter`/`PositionTracker`/`WasmDocumentBuilder.inner` for wasm_api.rs access, streaming sign functions, `DispatchPageBuilder` (buffers `dispatch::PageOp`, replays via `dispatch::replay_page_ops`) |
 | `src/editor/document_editor.rs` | `scan_content_stream_names`, `prune_page_resources` (wired into GC save), resource pruning during full rewrite, incremental save support via `save_mode` parameter, `add_content_stream_watermark` + `under_content` HashMap for background watermarks prepended before page Contents |
+| `src/compliance/converter.rs` | Bundled Liberation fonts via `include_bytes!` in `converter_fontdb()` — identical PDF/A output on native and WASM. System fonts loaded additionally on native only. |
+| `src/compliance/fonts/` | 12 Liberation font TTF files (Sans, Serif, Mono × Regular, Bold, Italic, BoldItalic) |
+| `src/signatures/verifier.rs` | Signer CN extraction from CMS blob in `extract_signature_info` (strips zero-padding from /Contents) |
+| `src/signatures/sign_bytes.rs` | `sign_pdf_streaming_with_field` — writes AcroForm + field + widget + page annotation alongside signature dict |
 
 ### Patch discipline
 
@@ -395,4 +397,4 @@ Fork convention: `main` on each fork stays a clean mirror of upstream. Patches l
 
 ---
 
-> **Two submodules (pdf_oxide + office_oxide), same fork convention. Upstream bumps rebase our patch branch. `host/` is entirely ours (dispatch + native + web). All ops (read + edit) go through dispatch.rs. Rebuild WASM after every Rust change. The wire_sync_test catches parity drift. Release pipeline is fully automated.**
+> **Two submodules (pdf_oxide + office_oxide), same fork convention. Upstream bumps rebase our patch branch. `host/` is entirely ours (dispatch + native + web). ALL ops — read, edit, query, save, sign, convert, builder — go through dispatch.rs. Zero exceptions. Builder page ops use `dispatch::PageOp` enum + `replay_page_ops`. Liberation fonts bundled for WASM PDF/A parity. Rebuild WASM after every Rust change. The wire_sync_test catches parity drift. Release pipeline is fully automated.**

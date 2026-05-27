@@ -170,6 +170,9 @@ class PdfEditor {
     return _handle.resizeImage(page, imageName, width: width, height: height);
   }
 
+  /// Apply best-effort PDF/A compliance fixes (output intent, font embedding,
+  /// XMP metadata). Result is not guaranteed compliant — call
+  /// [Pdf.validatePdfA] on the saved output to verify.
   Future<void> convertToPdfA({int level = 1}) {
     _check();
     return _handle.convertToPdfA(level: level);

@@ -25,7 +25,7 @@ import 'error.dart';
 import 'lifecycle.dart';
 import 'coverage_check.dart';
 import 'stress.dart';
-import 'timing_test.dart';
+import 'timing.dart';
 
 void main() {
   late Pdf pdf;

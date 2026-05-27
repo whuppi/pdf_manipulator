@@ -3,6 +3,18 @@
 // Loads WASM once via init(). Runs one operation at a time.
 // Creates readFn/writeFn based on I/O mode (set at init by coordinator).
 //
+// RULE: EVERY call goes through dispatch.rs. No exceptions.
+//
+// - Read/edit/query ops: call doc.dispatchXxx() methods (wasm_api.rs → dispatch.rs).
+// - Builder metadata: call b.dispatchSetTitle(), b.dispatchBuild() (wasm_api.rs → dispatch.rs).
+// - Builder page ops: call page.dispatchPageOp(opCode, args) which buffers dispatch::PageOp,
+//   then page.dispatchDone(builder) replays via dispatch::replay_page_ops.
+//   Same PageOp enum, same replay function as native. Zero divergence possible.
+// - Sign: calls signPdfStreamingPkcs12/Pem which internally use dispatch::sign_via_editor.
+//
+// NEVER call wasm.rs wrapper methods (doc.pageCount(), doc.mergeFrom(), b.title(),
+// page.font(), etc.) directly. They bypass dispatch and cause web-only bugs.
+//
 // Two I/O modes for reads:
 //   atomics: readFn blocks via Atomics.wait on SharedArrayBuffer
 //   opfs:    readFn calls SyncAccessHandle.read (pre-copied to OPFS)
@@ -10,12 +22,12 @@
 // Output streaming (all modes): writeFn posts chunks to coordinator.
 // Per-item streaming (all modes): postMessage({type:'item'}) per image/page.
 //
-// IMPORTANT: This file is a THIN PASS-THROUGH. All dispatch cases
-// (read, edit, stream) call doc.dispatchXxx() — one WASM call per op.
-// No loops. No page iteration. No conditional behavior logic.
-// dispatch.rs owns the behavior. If you need a loop, add it in Rust.
+// IMPORTANT: This file is a THIN PASS-THROUGH. All cases call
+// dispatchXxx() methods. The only loops are for streaming (render/
+// extractImages iterate page indices, posting one item per page).
+// dispatch.rs owns ALL behavior. No PDF logic here.
 
-import init, { WasmPdf, WasmDocumentBuilder, WasmPdfDocument, WasmFluentPageBuilder, signPdfWithPkcs12, signPdfWithPem, signPdfStreamingPkcs12, signPdfStreamingPem, planSplitByBookmarks } from './pdf_oxide.js';
+import init, { WasmDocumentBuilder, WasmPdfDocument, DispatchPageBuilder, signPdfStreamingPkcs12, signPdfStreamingPem } from './pdf_oxide.js';
 
 let initialized = false;
 let currentIoMode = 'opfs';
@@ -264,13 +276,7 @@ async function dispatch(op, args, readerCtx, writeFn) {
 
     case 'convertTo': {
       const doc = openDoc(readerCtx, args.password);
-      let bytes;
-      switch (args.format) {
-        case 'docx': bytes = doc.toDocxBytes(); break;
-        case 'pptx': bytes = doc.toPptxBytes(); break;
-        case 'xlsx': bytes = doc.toXlsxBytes(); break;
-        default: throw new Error(`Unknown format: ${args.format}`);
-      }
+      const bytes = doc.dispatchConvertToFormat(args.format);
       doc.free();
       writeFn(bytes);
       return {};
@@ -278,15 +284,7 @@ async function dispatch(op, args, readerCtx, writeFn) {
 
     case 'convertToPdf': {
       const bytes = readAllBytes(readerCtx);
-      let doc;
-      switch (args.format) {
-        case 'docx': doc = WasmPdfDocument.openFromDocxBytes(bytes); break;
-        case 'pptx': doc = WasmPdfDocument.openFromPptxBytes(bytes); break;
-        case 'xlsx': doc = WasmPdfDocument.openFromXlsxBytes(bytes); break;
-        default: throw new Error(`Unknown format: ${args.format}`);
-      }
-      doc.saveToWriter(writeFn, true, true, false);
-      doc.free();
+      WasmPdfDocument.dispatchConvertFromFormat(bytes, args.format, writeFn);
       return {};
     }
 
@@ -304,10 +302,8 @@ async function dispatch(op, args, readerCtx, writeFn) {
 
     case 'imagesToPdf': {
       const images = args.images.map(b => new Uint8Array(b));
-      const pdf = WasmPdf.fromMultipleImageBytes(images);
-      const bytes = pdf.toBytes();
+      const bytes = WasmPdfDocument.dispatchImagesToPdf(images);
       writeFn(bytes);
-      pdf.free();
       return {};
     }
 
@@ -340,44 +336,41 @@ async function dispatch(op, args, readerCtx, writeFn) {
       const doc = getHandle(editorHandles, args.handleId, 'Editor');
       const encryptMode = args.encryptMode ?? 0;
       if (encryptMode === 2) {
-        const bytes = doc.saveEncryptedToBytes(
+        const bytes = doc.dispatchEditSaveEncrypted(
           args.encryptUserPw,
-          args.encryptOwnerPw || null,
-          null, null, null, null
+          args.encryptOwnerPw || null
         );
         writeFn(bytes);
       } else {
-        doc.saveToWriter(writeFn, args.compress ?? true, args.garbageCollect ?? true, args.saveMode ?? 0);
+        doc.dispatchEditSave(writeFn, args.compress ?? true, args.garbageCollect ?? true, args.saveMode ?? 0);
       }
       return {};
     }
 
     case 'editorGetMetadata': {
       const doc = getHandle(editorHandles, args.handleId, 'Editor');
-      return {
-        pageCount: doc.pageCount(),
-        version: (() => { const v = doc.version(); return v ? `${v[0]}.${v[1]}` : '2.0'; })(),
-        title: doc.getTitle() || '',
-        author: doc.getAuthor() || '',
-        subject: doc.getSubject() || '',
-        keywords: doc.getKeywords() || '',
-      };
+      // Use dispatch methods that read from the EDITOR (not the original PdfDocument).
+      // dispatchOpen reads from PdfDocument — wrong after mutations.
+      const meta = doc.dispatchEditorGetMetadata();
+      return meta;
     }
 
     case 'editorIsModified': {
       const doc = getHandle(editorHandles, args.handleId, 'Editor');
-      return { modified: doc.isModified() };
+      return { modified: doc.dispatchEditIsModified() };
     }
 
     case 'editorPageMediaBox': {
       const doc = getHandle(editorHandles, args.handleId, 'Editor');
-      const mb = doc.pageMediaBox(args.page);
+      const mb = doc.dispatchEditPageMediaBox(args.page);
       return { x: mb[0], y: mb[1], width: mb[2] - mb[0], height: mb[3] - mb[1] };
     }
 
     case 'editorMergeFrom': {
       const doc = getHandle(editorHandles, args.handleId, 'Editor');
-      doc.mergeFrom(new Uint8Array(args.otherBytes));
+      const raw = args.otherBytes;
+      const arr = new Uint8Array(raw instanceof ArrayBuffer ? raw : (raw?.buffer || raw));
+      doc.dispatchEditMerge([arr]);
       return {};
     }
 
@@ -396,19 +389,19 @@ async function dispatch(op, args, readerCtx, writeFn) {
 
     case 'builderSetMetadata': {
       const b = getHandle(builderHandles, args.handleId, 'Builder');
-      if (args.title != null) b.title(args.title);
-      if (args.author != null) b.author(args.author);
-      if (args.subject != null) b.subject(args.subject);
-      if (args.keywords != null) b.keywords(args.keywords);
+      if (args.title != null) b.dispatchSetTitle(args.title);
+      if (args.author != null) b.dispatchSetAuthor(args.author);
+      if (args.subject != null) b.dispatchSetSubject(args.subject);
+      if (args.keywords != null) b.dispatchSetKeywords(args.keywords);
       return {};
     }
 
     case 'builderAddPage': {
-      const b = getHandle(builderHandles, args.handleId, 'Builder');
-      let page;
-      if (args.pageType === 'a4') page = b.a4Page();
-      else if (args.pageType === 'letter') page = b.letterPage();
-      else page = b.page(args.width, args.height);
+      let w, h;
+      if (args.pageType === 'a4') { w = 595.28; h = 841.89; }
+      else if (args.pageType === 'letter') { w = 612; h = 792; }
+      else { w = args.width; h = args.height; }
+      const page = new DispatchPageBuilder(w, h);
       const hid = nextHandleId++;
       pageHandles.set(hid, { page, builderId: args.handleId });
       return { handleId: hid };
@@ -416,7 +409,9 @@ async function dispatch(op, args, readerCtx, writeFn) {
 
     case 'builderPageOp': {
       const entry = getHandle(pageHandles, args.handleId, 'Page');
-      applyPageOp(entry.page, args.pageOp, args);
+      const opCode = PAGE_OP_CODES[args.pageOp];
+      if (opCode === undefined) throw new Error(`Unknown page op: ${args.pageOp}`);
+      entry.page.dispatchPageOp(opCode, args);
       return {};
     }
 
@@ -424,7 +419,7 @@ async function dispatch(op, args, readerCtx, writeFn) {
       const entry = pageHandles.get(args.handleId);
       if (entry) {
         const builder = getHandle(builderHandles, entry.builderId, 'Builder');
-        entry.page.done(builder);
+        entry.page.dispatchDone(builder);
         pageHandles.delete(args.handleId);
       }
       return {};
@@ -432,7 +427,7 @@ async function dispatch(op, args, readerCtx, writeFn) {
 
     case 'builderSave': {
       const b = getHandle(builderHandles, args.handleId, 'Builder');
-      const bytes = b.build();
+      const bytes = b.dispatchBuild();
       writeFn(bytes);
       return {};
     }
@@ -460,6 +455,7 @@ function applyEditOp(doc, op, args) {
     case 'flattenForms': doc.dispatchEditFlattenForms(); break;
     case 'applyRedactions': doc.dispatchEditApplyRedactions(); break;
     case 'compress': doc.dispatchEditCompress(args.imageQuality || 75); break;
+    case 'optimizeImages': return { count: doc.dispatchEditOptimizeImages(args.quality || 75) };
     case 'embedFile': doc.dispatchEditEmbedFile(args.name, new Uint8Array(args.fileData)); break;
     case 'eraseRegions': {
       const flat = [];
@@ -502,35 +498,15 @@ function applyEditOp(doc, op, args) {
   }
 }
 
-// ── Page builder op dispatch ───────────────────────────────────────────
+// ── Page op codes — maps Dart op name → dispatch::PageOp variant number ──
+// Must match the op_code numbers in wasm_api.rs DispatchPageBuilder.dispatchPageOp
 
-function applyPageOp(page, op, args) {
-  switch (op) {
-    case 'font': page.font(args.name, args.size); break;
-    case 'at': page.at(args.x, args.y); break;
-    case 'text': page.text(args.text); break;
-    case 'heading': page.heading(args.level, args.text); break;
-    case 'paragraph': page.paragraph(args.text); break;
-    case 'space': page.space(args.points); break;
-    case 'horizontalRule': page.horizontalRule(); break;
-    case 'image': page.imageWithAlt(new Uint8Array(args.imageBytes), args.x, args.y, args.width, args.height, args.altText || ''); break;
-    case 'watermark': page.watermark(args.text); break;
-    case 'textField': page.textField(args.name, args.x, args.y, args.w, args.h, args.defaultValue || null); break;
-    case 'checkbox': page.checkbox(args.name, args.x, args.y, args.w, args.h, args.checked || false); break;
-    case 'comboBox': page.comboBox(args.name, args.x, args.y, args.w, args.h, args.options, args.selected || null); break;
-    case 'pushButton': page.pushButton(args.name, args.x, args.y, args.w, args.h, args.caption); break;
-    case 'signatureField': page.signatureField(args.name, args.x, args.y, args.w, args.h); break;
-    case 'radioGroup': page.radioGroup(args.name, args.values, args.xs, args.ys, args.ws, args.hs, args.selected || null); break;
-    case 'fieldKeystroke': page.fieldKeystroke(args.script); break;
-    case 'fieldFormat': page.fieldFormat(args.script); break;
-    case 'fieldValidate': page.fieldValidate(args.script); break;
-    case 'fieldCalculate': page.fieldCalculate(args.script); break;
-    case 'linkUrl': page.linkUrl(args.url); break;
-    case 'linkPage': page.linkPage(args.targetPage); break;
-    case 'footnote': page.footnote(args.refMark, args.noteText); break;
-    case 'columns': page.columns(args.columnCount, args.gapPt, args.text); break;
-    case 'newline': page.newline(); break;
-    case 'newPageSameSize': page.newPageSameSize(); break;
-    default: throw new Error(`Unknown page op: ${op}`);
-  }
-}
+const PAGE_OP_CODES = {
+  'font': 1, 'at': 2, 'text': 3, 'heading': 4, 'paragraph': 5,
+  'space': 6, 'horizontalRule': 7, 'image': 8, 'watermark': 9,
+  'textField': 10, 'checkbox': 11, 'comboBox': 12, 'pushButton': 13,
+  'signatureField': 14, 'newline': 15, 'newPageSameSize': 16, 'done': 17,
+  'radioGroup': 18, 'fieldKeystroke': 19, 'fieldFormat': 20,
+  'fieldValidate': 21, 'fieldCalculate': 22, 'linkUrl': 23, 'linkPage': 24,
+  'footnote': 25, 'columns': 26,
+};
