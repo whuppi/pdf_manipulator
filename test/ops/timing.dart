@@ -141,7 +141,7 @@ void registerTimingTests(Pdf Function() createPdf) {
         final median = times[times.length ~/ 2];
         final min = times.first;
         final max = times.last;
-        print('$name: avg=${avg.toStringAsFixed(0)}µs median=${median}µs min=$min µs max=$max µs');
+        print('$name: avg=${avg.toStringAsFixed(0)}µs median=$medianµs min=$min µs max=$max µs');
       }
 
       final mediaBoxTimes = <int>[];

@@ -333,3 +333,6 @@ example/web/pdf_manipulator/
 
 # pubspec.lock (library, not app — consumers resolve their own deps)
 pubspec.lock
+
+# FVM (Flutter Version Manager)
+.fvm/
