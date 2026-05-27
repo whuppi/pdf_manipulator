@@ -453,7 +453,7 @@ function applyEditOp(doc, op, args) {
     }
     case 'rotateAllPages': doc.dispatchEditRotateAll(args.degrees); break;
     case 'flattenForms': doc.dispatchEditFlattenForms(); break;
-    case 'applyRedactions': doc.dispatchEditApplyRedactions(); break;
+    case 'applyRedactions': doc.dispatchEditApplyRedactionsDestructive(); break;
     case 'compress': doc.dispatchEditCompress(args.imageQuality || 75); break;
     case 'optimizeImages': return { count: doc.dispatchEditOptimizeImages(args.quality || 75) };
     case 'embedFile': doc.dispatchEditEmbedFile(args.name, new Uint8Array(args.fileData)); break;
@@ -492,7 +492,6 @@ function applyEditOp(doc, op, args) {
     case 'resizeImage': doc.dispatchEditResizeImage(args.page, args.imageName, args.width, args.height); break;
     case 'addRedaction': doc.dispatchEditAddRedaction(args.page, args.x, args.y, args.w, args.h); break;
     case 'redactionCount': return { count: doc.dispatchEditRedactionCount(args.page) };
-    case 'applyRedactions': doc.dispatchEditApplyRedactionsDestructive(); break;
     case 'scrubMetadata': doc.dispatchEditScrubMetadata(); break;
     default: throw new Error(`Unknown edit op: ${op}`);
   }

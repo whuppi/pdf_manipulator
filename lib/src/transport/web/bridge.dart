@@ -270,7 +270,7 @@ class WebBridge extends PdfBridge {
       if (opfsFile != null) 'opfsFile': opfsFile,
     });
 
-    final opId = await sc.future.timeout(const Duration(seconds: 15),
+    final opId = await sc.future.timeout(const Duration(seconds: 60),
       onTimeout: () => throw StateError('submit queue timed out'));
     _lastOpId = opId;
 
@@ -288,7 +288,7 @@ class WebBridge extends PdfBridge {
 
     try {
       return await rc.future.timeout(
-        const Duration(seconds: 15),
+        const Duration(seconds: 60),
         onTimeout: () => throw StateError(
           'WebBridge op ${req.op.wire} timed out after 15s (opId=$opId)'),
       );
@@ -382,7 +382,7 @@ class WebBridge extends PdfBridge {
         if (opfsFile != null) 'opfsFile': opfsFile,
       });
 
-      final opId = await sc.future.timeout(const Duration(seconds: 15),
+      final opId = await sc.future.timeout(const Duration(seconds: 60),
       onTimeout: () => throw StateError('submit queue timed out'));
       if (opId != expectedOpId) {
         _sources[opId] = _sources.remove(expectedOpId)!;
@@ -602,8 +602,14 @@ class WebBridge extends PdfBridge {
 
   Future<List<int>> _resolvePages(DataSource source, PdfPages pages,
       {String? password}) async {
-    final doc = await open(source, password: password);
-    return resolvePageIndices(pages, doc.pageCount);
+    return switch (pages) {
+      PdfAllPages() => List.generate(
+          (await open(source, password: password)).pageCount, (i) => i),
+      PdfSinglePage(:final index) => [index],
+      PdfPageList(:final indices) => indices,
+      PdfPageRange(:final start, :final end) =>
+          List.generate(end - start, (i) => start + i),
+    };
   }
 
   void _checkDisposed() {
