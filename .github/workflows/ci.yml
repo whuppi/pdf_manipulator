@@ -1,5 +1,4 @@
-# Lightweight CI — runs on PRs only.
-# Doc-only PRs skip expensive jobs; gate still passes.
+# CI — runs on PRs. Doc-only PRs skip expensive jobs; gate still passes.
 name: CI
 
 on:
@@ -28,9 +27,9 @@ jobs:
               - 'hook/**'
               - 'vendor/**'
               - 'web_assets/**'
+              - 'example/**'
               - 'pubspec.yaml'
               - 'analysis_options.yaml'
-              - 'ffigen.yaml'
               - '.github/**'
 
   analyze:
@@ -40,11 +39,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: subosito/flutter-action@v2
-        with: { channel: stable }
-      - run: flutter pub get
-      - run: cd example && flutter pub get && cd ..
-      - run: flutter analyze .
+      - uses: ./.github/workflows/actions/load_config
+        id: config
+      - uses: ./.github/workflows/actions/setup_flutter
+        with:
+          flutter_channel: ${{ steps.config.outputs.flutter_channel }}
+      - run: flutter analyze --no-fatal-infos .
 
   test:
     needs: changes
@@ -53,7 +53,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: ./.github/actions/dart-test
+      - uses: ./.github/workflows/actions/load_config
+        id: config
+      - uses: ./.github/workflows/actions/setup_flutter
+        with:
+          flutter_channel: ${{ steps.config.outputs.flutter_channel }}
+      - uses: ./.github/workflows/actions/setup_rust
+        with:
+          rust_version: ${{ steps.config.outputs.rust_version }}
+      - run: dart test --timeout=120s
 
   # Required check — always runs, gates on results when code changed.
   gate:

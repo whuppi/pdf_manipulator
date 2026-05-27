@@ -1,0 +1,25 @@
+name: 'Setup Flutter'
+description: 'Install Flutter from .fvmrc, pub get root + example.'
+
+inputs:
+  flutter_channel:
+    description: 'Flutter channel fallback if .fvmrc missing'
+    required: false
+    default: 'stable'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version-file: .fvmrc
+        channel: ${{ inputs.flutter_channel }}
+
+    - name: Pub get (root)
+      shell: bash
+      run: flutter pub get
+
+    - name: Pub get (example)
+      shell: bash
+      run: cd example && flutter pub get

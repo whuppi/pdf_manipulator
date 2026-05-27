@@ -1,0 +1,43 @@
+name: 'Setup Rust'
+description: 'Install Rust toolchain + wasm target if needed.'
+
+inputs:
+  rust_version:
+    description: 'Rust toolchain version'
+    required: true
+  wasm:
+    description: 'Install wasm32-unknown-unknown target'
+    required: false
+    default: 'false'
+  wasm_pack_version:
+    description: 'wasm-pack version (only if wasm=true)'
+    required: false
+    default: '0.13.1'
+  wasm_bindgen_version:
+    description: 'wasm-bindgen-cli version (only if wasm=true)'
+    required: false
+    default: '0.2.121'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ inputs.rust_version }}
+        targets: ${{ inputs.wasm == 'true' && 'wasm32-unknown-unknown' || '' }}
+
+    - name: Rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: vendor/pdf_oxide
+
+    - name: Install wasm-pack
+      if: inputs.wasm == 'true'
+      shell: bash
+      run: cargo install wasm-pack@${{ inputs.wasm_pack_version }} --locked
+
+    - name: Install wasm-bindgen-cli
+      if: inputs.wasm == 'true'
+      shell: bash
+      run: cargo install wasm-bindgen-cli@${{ inputs.wasm_bindgen_version }} --locked
