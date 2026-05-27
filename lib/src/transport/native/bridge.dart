@@ -330,7 +330,7 @@ class NativeBridge extends PdfBridge {
         final certBytes = utf8.encode(certPem);
         final keyBytes = utf8.encode(keyPem);
         final params = _packStrings([certBytes, keyBytes, reasonBytes, locBytes]);
-        await _submitEdit(EngineOp.signPem.wire, source, output, params: params);
+        await _submitEdit('signPem', source, output, params: params);
     }
   }
 
