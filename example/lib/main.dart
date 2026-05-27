@@ -977,9 +977,8 @@ class _MergeTabState extends State<_MergeTab> {
                 : ReorderableListView.builder(
                     padding: const EdgeInsets.all(16),
                     itemCount: _files.length,
-                    onReorder: (old, to) {
+                    onReorderItem: (old, to) {
                       setState(() {
-                        if (to > old) to--;
                         final item = _files.removeAt(old);
                         _files.insert(to, item);
                         _merged = null;
@@ -1102,9 +1101,8 @@ class _ImagesToPdfTabState extends State<_ImagesToPdfTab> {
                 : ReorderableListView.builder(
                     padding: const EdgeInsets.all(16),
                     itemCount: _images.length,
-                    onReorder: (old, to) {
+                    onReorderItem: (old, to) {
                       setState(() {
-                        if (to > old) to--;
                         final item = _images.removeAt(old);
                         _images.insert(to, item);
                         _pdfBytes = null;

@@ -44,7 +44,7 @@ jobs:
       - uses: ./.github/workflows/actions/setup_flutter
         with:
           flutter_channel: ${{ steps.config.outputs.flutter_channel }}
-      - run: flutter analyze --no-fatal-infos .
+      - run: flutter analyze .
 
   test:
     needs: changes
