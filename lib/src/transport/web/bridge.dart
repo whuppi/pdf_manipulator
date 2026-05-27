@@ -290,7 +290,7 @@ class WebBridge extends PdfBridge {
       return await rc.future.timeout(
         const Duration(seconds: 60),
         onTimeout: () => throw StateError(
-          'WebBridge op ${req.op.wire} timed out after 15s (opId=$opId)'),
+          'WebBridge op ${req.op.wire} timed out after 60s (opId=$opId)'),
       );
     } finally {
       _sources.remove(opId);
