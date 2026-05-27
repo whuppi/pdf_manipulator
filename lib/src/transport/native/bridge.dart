@@ -111,7 +111,13 @@ class NativeBridge extends PdfBridge {
     final completer = Completer<Object?>();
     _pending[id] = completer;
     _workerPort!.send([id, op, args]);
-    return completer.future;
+    return completer.future.timeout(
+      const Duration(seconds: 60),
+      onTimeout: () {
+        _pending.remove(id);
+        throw TimeoutException('Native bridge op "$op" timed out after 60s');
+      },
+    );
   }
 
   // Result decoding: wire.dart (binary → typed results).
@@ -324,7 +330,7 @@ class NativeBridge extends PdfBridge {
         final certBytes = utf8.encode(certPem);
         final keyBytes = utf8.encode(keyPem);
         final params = _packStrings([certBytes, keyBytes, reasonBytes, locBytes]);
-        await _submitEdit('signPem', source, output, params: params);
+        await _submitEdit(EngineOp.signPem.wire, source, output, params: params);
     }
   }
 

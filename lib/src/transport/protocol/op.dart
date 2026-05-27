@@ -20,6 +20,7 @@ enum EngineOp {
 
   // ── Standalone write ──
   sign('sign'),
+  signPem('signPem'),
   convertTo('convertTo'),
   convertToPdf('convertToPdf'),
   imagesToPdf('imagesToPdf'),
