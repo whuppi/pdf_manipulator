@@ -126,8 +126,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { ref: '${{ inputs.tag || github.ref_name }}', submodules: recursive }
-      - uses: dart-lang/setup-dart@v1
-        with: { sdk: stable }
+      - name: Install fvm + project SDK
+        run: dart pub global activate fvm && fvm install
 
       - name: Stamp version from tag
         run: |
@@ -148,5 +148,5 @@ jobs:
 
           echo "pubspec: $(grep '^version:' pubspec.yaml)"
 
-      - run: dart pub get --no-example
-      - run: dart pub publish --force
+      - run: fvm dart pub get --no-example
+      - run: fvm dart pub publish --force

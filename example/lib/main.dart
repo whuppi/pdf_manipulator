@@ -1323,7 +1323,7 @@ class _MergeTabState extends State<_MergeTab> {
             ]))
           : ReorderableListView.builder(
               padding: const EdgeInsets.all(16), itemCount: _files.length,
-              onReorder: (old, to) => setState(() { final item = _files.removeAt(old); _files.insert(to, item); _merged = null; }),
+              onReorderItem: (old, to) => setState(() { final item = _files.removeAt(old); _files.insert(to, item); _merged = null; }),
               itemBuilder: (_, i) => Card(
                 key: ValueKey('${_files[i].name}_$i'),
                 margin: const EdgeInsets.symmetric(vertical: 3),

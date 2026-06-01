@@ -1,4 +1,6 @@
 # CI — runs on PRs. Doc-only PRs skip expensive jobs; gate still passes.
+# All build/test logic lives in the Makefile. CI only provisions the environment.
+# Makefile uses `fvm dart` / `fvm flutter` — CI installs fvm + project SDK.
 name: CI
 
 on:
@@ -40,8 +42,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: dart-lang/setup-dart@v1
-        with: { sdk: stable }
+      - name: Install fvm + project SDK
+        run: |
+          dart pub global activate fvm
+          fvm install
       - run: make analyze
 
   test:
@@ -51,8 +55,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: dart-lang/setup-dart@v1
-        with: { sdk: stable }
+      - name: Install fvm + project SDK
+        run: |
+          dart pub global activate fvm
+          fvm install
       - uses: dtolnay/rust-toolchain@stable
       - uses: mozilla-actions/sccache-action@v0.0.10
       - run: |

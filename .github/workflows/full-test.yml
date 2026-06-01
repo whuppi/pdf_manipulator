@@ -1,6 +1,6 @@
 # Full 6-platform test — maintainer adds "ready-to-test" label to trigger.
 # Label is auto-removed on new pushes (stale results = wasted compute).
-# All build/test logic lives in the Makefile — CI only provisions the environment.
+# All build/test logic lives in the Makefile. CI only provisions the environment.
 name: Full Test
 
 on:
@@ -39,8 +39,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: dart-lang/setup-dart@v1
-        with: { sdk: stable }
+      - name: Install fvm + project SDK
+        run: dart pub global activate fvm && fvm install
       - uses: dtolnay/rust-toolchain@stable
       - uses: mozilla-actions/sccache-action@v0.0.10
       - run: echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV && echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
@@ -52,8 +52,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: dart-lang/setup-dart@v1
-        with: { sdk: stable }
+      - name: Install fvm + project SDK
+        run: dart pub global activate fvm && fvm install
       - uses: dtolnay/rust-toolchain@stable
       - uses: mozilla-actions/sccache-action@v0.0.10
       - run: echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV && echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
@@ -65,8 +65,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: dart-lang/setup-dart@v1
-        with: { sdk: stable }
+      - name: Install fvm + project SDK
+        shell: bash
+        run: dart pub global activate fvm && fvm install
       - uses: dtolnay/rust-toolchain@stable
       - run: make test-ops-native
         shell: bash
@@ -77,15 +78,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: dart-lang/setup-dart@v1
-        with: { sdk: stable }
+      - name: Install fvm + project SDK
+        run: dart pub global activate fvm && fvm install
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: wasm32-unknown-unknown }
       - uses: browser-actions/setup-chrome@v1
       - name: Install wasm-bindgen-cli
         run: cargo install wasm-bindgen-cli
       - run: make build-wasm
-      - run: dart pub get --no-example
       - run: make test-ops-web
 
   android:
@@ -94,8 +94,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: dart-lang/setup-dart@v1
-        with: { sdk: stable }
+      - name: Install fvm + project SDK
+        run: dart pub global activate fvm && fvm install
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: aarch64-linux-android }
       - run: make test-ops-native
@@ -106,8 +106,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: dart-lang/setup-dart@v1
-        with: { sdk: stable }
+      - name: Install fvm + project SDK
+        run: dart pub global activate fvm && fvm install
       - uses: dtolnay/rust-toolchain@stable
       - run: make test-ops-native
 

@@ -4,12 +4,19 @@
        compile compile-natives compile-wasm \
        clean
 
+# ── SDK resolution ──────────────────────────────────────────────────
+#
+# Uses fvm by default (.fvmrc pins to stable). Contributors without fvm
+# can override: make check DART=dart FLUTTER=flutter
+DART    ?= fvm dart
+FLUTTER ?= fvm flutter
+
 # ── Targets ─────────────────────────────────────────────────────────
 #
 # DEV (local iteration)
 # ─────────────────────
 # make check               full gate: analyze + unit + all 4 ops runners + example
-# make analyze             dart analyze
+# make analyze             analyze package + example (--fatal-infos)
 # make build               build native (Rust FFI) + web (WASM)
 # make build-native        compile Rust native library via dart build hook
 # make build-wasm          compile Rust WASM + wasm-bindgen + wasm-opt
@@ -48,14 +55,16 @@ check: analyze test test-example
 # ── Analyze ─────────────────────────────────────────────────────────
 
 analyze:
-	dart analyze .
+	$(DART) pub get --no-example
+	$(DART) analyze --fatal-infos lib/ bin/ test/ hook/
+	cd example && $(FLUTTER) pub get && $(FLUTTER) analyze --fatal-infos
 
 # ── Build (dev — triggers build hook for the current platform) ──────
 
 build: build-native build-wasm
 
 build-native:
-	dart test test/ops/smoke_test.dart --concurrency=1 --name='DOES_NOT_EXIST' || true
+	$(DART) test test/ops/smoke_test.dart --concurrency=1 --name='DOES_NOT_EXIST' || true
 
 build-wasm:
 	bash tool/build_wasm.sh
@@ -76,7 +85,7 @@ test: test-unit test-ops
 
 test-unit:
 	@echo "=== Unit: types + transport ==="
-	dart test test/types/ test/transport/ -p vm --concurrency=1
+	$(DART) test test/types/ test/transport/ -p vm --concurrency=1
 
 # ── Ops tests (full suite on every platform) ────────────────────────
 
@@ -84,21 +93,21 @@ test-ops: test-ops-native test-ops-web
 
 test-ops-native:
 	@echo "=== Ops: Native ==="
-	-dart test test/ops/runners/native_runner_test.dart --concurrency=1
+	-$(DART) test test/ops/runners/native_runner_test.dart --concurrency=1
 
 test-ops-web: test-ops-opfs test-ops-jspi test-ops-atomics
 
 test-ops-opfs:
 	@echo "=== Ops: Web OPFS ==="
-	-dart test test/ops/runners/web_opfs_runner_test.dart -p chrome --concurrency=1
+	-$(DART) test test/ops/runners/web_opfs_runner_test.dart -p chrome --concurrency=1
 
 test-ops-jspi:
 	@echo "=== Ops: Web JSPI ==="
-	-dart test test/ops/runners/web_jspi_runner_test.dart -p chrome --concurrency=1
+	-$(DART) test test/ops/runners/web_jspi_runner_test.dart -p chrome --concurrency=1
 
 test-ops-atomics:
 	@echo "=== Ops: Web Atomics ==="
-	-dart test test/ops/runners/web_atomics_runner_test.dart -p chrome-coi --concurrency=1
+	-$(DART) test test/ops/runners/web_atomics_runner_test.dart -p chrome-coi --concurrency=1
 
 # ── Example integration tests ───────────────────────────────────────
 
@@ -106,7 +115,7 @@ test-example: test-example-native test-example-web
 
 test-example-native:
 	@echo "=== Example: integration tests (macOS) ==="
-	cd example && fvm flutter test integration_test/pdf_smoke_test.dart -d macos
+	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart -d macos
 
 # All 3 web modes via flutter drive.
 # SharedArrayBuffer enabled via CHROME_EXECUTABLE wrapper (see tool/chrome_with_sab.sh).
@@ -123,7 +132,7 @@ define run_example_web
 	@chromedriver --port=4444 &>/dev/null &
 	@sleep 2
 	@cd example && \
-	CHROME_EXECUTABLE=$(CHROME_SAB) fvm flutter drive \
+	CHROME_EXECUTABLE=$(CHROME_SAB) $(FLUTTER) drive \
 		--driver=test_driver/integration_test.dart \
 		--target=integration_test/pdf_smoke_test.dart \
 		--dart-define=PDF_IO_MODE=$(2) \
@@ -141,19 +150,19 @@ endef
 test-example-web-jspi:
 	@echo "=== Example: clean + setup web assets (real developer flow) ==="
 	rm -rf example/web/pdf_manipulator
-	cd example && dart run pdf_manipulator:setup --force
+	cd example && $(DART) run pdf_manipulator:setup --force
 	$(call run_example_web,JSPI,jspi)
 
 test-example-web-atomics:
 	@echo "=== Example: clean + setup web assets (real developer flow) ==="
 	rm -rf example/web/pdf_manipulator
-	cd example && dart run pdf_manipulator:setup --force
+	cd example && $(DART) run pdf_manipulator:setup --force
 	$(call run_example_web,Atomics,atomics)
 
 test-example-web-opfs:
 	@echo "=== Example: clean + setup web assets (real developer flow) ==="
 	rm -rf example/web/pdf_manipulator
-	cd example && dart run pdf_manipulator:setup --force
+	cd example && $(DART) run pdf_manipulator:setup --force
 	$(call run_example_web,OPFS,opfs)
 
 # ── Clean ───────────────────────────────────────────────────────────

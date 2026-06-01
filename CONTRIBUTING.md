@@ -9,11 +9,18 @@ Contributions are welcome.
 ```bash
 git clone --recursive https://github.com/whuppi/pdf_manipulator.git
 cd pdf_manipulator
+fvm install              # downloads the SDK version pinned in .fvmrc
 fvm dart pub get
-fvm dart test  # build hook compiles Rust from source automatically
+fvm dart test            # build hook compiles Rust from source automatically
 ```
 
 **Requires:** [Rust](https://rustup.rs), [FVM](https://fvm.app) (`.fvmrc` pins to stable). The build hook detects `vendor/pdf_oxide/Cargo.toml` and runs `cargo build`. No manual compilation step.
+
+**Without FVM:** all Makefile commands accept `DART` and `FLUTTER` overrides:
+
+```bash
+make check DART=dart FLUTTER=flutter
+```
 
 For web development:
 
