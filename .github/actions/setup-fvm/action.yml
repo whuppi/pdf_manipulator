@@ -5,13 +5,18 @@ runs:
   using: composite
   steps:
     - uses: dart-lang/setup-dart@v1
-    - name: Add Dart global bin to PATH
+    - name: Install fvm + project SDK
       shell: bash
       run: |
+        # Determine pub global bin path
         if [[ "$RUNNER_OS" == "Windows" ]]; then
-          echo "$LOCALAPPDATA/Pub/Cache/bin" >> $GITHUB_PATH
+          PUB_BIN="$LOCALAPPDATA/Pub/Cache/bin"
         else
-          echo "$HOME/.pub-cache/bin" >> $GITHUB_PATH
+          PUB_BIN="$HOME/.pub-cache/bin"
         fi
-    - shell: bash
-      run: dart pub global activate fvm && fvm install
+        # Add to PATH for this step (export) AND future steps (GITHUB_PATH)
+        export PATH="$PUB_BIN:$PATH"
+        echo "$PUB_BIN" >> $GITHUB_PATH
+        # Now install
+        dart pub global activate fvm
+        fvm install
