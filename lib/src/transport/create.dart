@@ -1,5 +1,5 @@
-// Conditional import router — creates NativeBridge or WebBridge
-// based on the platform at compile time.
+// Conditional import router — creates SharedBridge with the
+// platform-specific transport (NativeTransport or WebTransport).
 //
 // INTERNAL — used by the Pdf class to get a PdfBridge.
 

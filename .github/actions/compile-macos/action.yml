@@ -13,13 +13,4 @@ runs:
         echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
         echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV
     - shell: bash
-      env:
-        MANIFEST: vendor/pdf_oxide/Cargo.toml
-        FEATURES: icc,legacy-crypto,rendering,signatures
-      run: |
-        for t in aarch64-apple-darwin x86_64-apple-darwin; do
-          cargo build --manifest-path $MANIFEST --lib --release --target $t --features $FEATURES
-        done
-        mkdir -p out/macos-arm64 out/macos-x64
-        cp vendor/pdf_oxide/target/aarch64-apple-darwin/release/libpdf_oxide.dylib out/macos-arm64/
-        cp vendor/pdf_oxide/target/x86_64-apple-darwin/release/libpdf_oxide.dylib out/macos-x64/
+      run: make compile-natives

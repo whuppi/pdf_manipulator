@@ -1,9 +1,5 @@
 /// Typed error hierarchy for PDF operations.
 ///
-/// Maps 1:1 to pdf_oxide's C API error codes:
-/// `0=success, 1=invalid arg, 2=IO, 3=parse, 4=extraction,
-///  5=internal, 6=invalid page, 7=search, 8=unsupported`
-///
 /// ```dart
 /// try {
 ///   final doc = await Pdf.open(bytes);

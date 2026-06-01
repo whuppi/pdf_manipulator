@@ -44,7 +44,10 @@ class PdfPermissions {
         assemble = false;
 
   int toBits() {
-    int bits = 0xFFFFF0C0; // reserved bits per PDF spec
+    // Build as signed 32-bit int. The reserved bits (0xFFFFF0C0) set the
+    // upper bits per PDF spec. Using .toSigned(32) ensures the value fits
+    // in the binary codec's i32 type on both VM and web (dart2js has no i64).
+    int bits = 0xFFFFF0C0;
     if (print) bits |= 1 << 2;
     if (modify) bits |= 1 << 3;
     if (copy) bits |= 1 << 4;
@@ -53,7 +56,7 @@ class PdfPermissions {
     if (accessibility) bits |= 1 << 9;
     if (assemble) bits |= 1 << 10;
     if (printHq) bits |= 1 << 11;
-    return bits;
+    return bits.toSigned(32);
   }
 }
 
@@ -99,25 +102,38 @@ class PdfEncryptionConfig extends PdfEncryption {
   });
 }
 
-/// Save options — compression, GC, encryption.
-/// The engine decides full-rewrite vs incremental internally.
-enum PdfSaveMode {
-  fullRewrite,
-  incremental,
+/// Save strategy — sealed so invalid combos are unrepresentable.
+sealed class PdfSaveOptions {
+  const PdfSaveOptions();
+
+  /// Full rewrite — rebuild the entire PDF. Supports compression,
+  /// garbage collection, and encryption changes.
+  const factory PdfSaveOptions.fullRewrite({
+    bool compress,
+    bool garbageCollect,
+    PdfEncryption encryption,
+  }) = PdfSaveFullRewrite;
+
+  /// Incremental — append only changed objects. Fastest for small
+  /// edits on large files. Preserves digital signatures. No GC,
+  /// no compression, no encryption changes possible.
+  const factory PdfSaveOptions.incremental() = PdfSaveIncremental;
 }
 
-class PdfSaveOptions {
-  final PdfSaveMode mode;
+class PdfSaveFullRewrite extends PdfSaveOptions {
   final bool compress;
   final bool garbageCollect;
   final PdfEncryption encryption;
 
-  const PdfSaveOptions({
-    this.mode = PdfSaveMode.fullRewrite,
+  const PdfSaveFullRewrite({
     this.compress = true,
     this.garbageCollect = true,
     this.encryption = const PdfEncryption.keep(),
   });
+}
+
+class PdfSaveIncremental extends PdfSaveOptions {
+  const PdfSaveIncremental();
 }
 
 /// Watermark text style.

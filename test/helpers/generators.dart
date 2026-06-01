@@ -53,7 +53,7 @@ Future<Uint8List> buildLargePdf(Pdf Function() createPdf, {int pageCount = 100})
   return current;
 }
 
-/// Build a PDF with [pageCount] pages, each containing a 64x64 photo-like PNG.
+/// Build a PDF with [pageCount] pages, each containing a 128x128 photo-like PNG.
 /// Uses buildPhotoPng() which produces noisy gradient data — large enough that
 /// JPEG compression at quality 50 beats the Flate-compressed PNG stream.
 Future<Uint8List> buildImagePdf(Pdf Function() createPdf, {int pageCount = 20}) async {
@@ -127,6 +127,48 @@ Future<Uint8List> buildFormPdf(Pdf Function() createPdf) async {
   await page.textField('email', const PdfRect(x: 100, y: 640, width: 200, height: 20));
   await page.text('Agree to terms:');
   await page.checkbox('agree', const PdfRect(x: 100, y: 600, width: 20, height: 20));
+  await page.done();
+
+  final sink = TestSink();
+  await builder.save(sink);
+  await builder.dispose();
+  return sink.takeBytes();
+}
+
+/// Two-page PDF: page 0 has "ALPHA UNIQUE", page 1 has "BRAVO UNIQUE".
+/// For testing page-scoped operations (search filtering, extract by page).
+Future<Uint8List> buildTwoPageTextPdf(Pdf Function() createPdf) async {
+  final pdf = createPdf();
+  final builder = await pdf.build();
+  await builder.setTitle('Two Page Text');
+
+  final p1 = await builder.addPage(width: 612, height: 792);
+  await p1.font('Helvetica', 14);
+  await p1.heading(1, 'Page One');
+  await p1.paragraph('ALPHA UNIQUE content on the first page.');
+  await p1.done();
+
+  final p2 = await builder.addPage(width: 612, height: 792);
+  await p2.font('Helvetica', 14);
+  await p2.heading(1, 'Page Two');
+  await p2.paragraph('BRAVO UNIQUE content on the second page.');
+  await p2.done();
+
+  final sink = TestSink();
+  await builder.save(sink);
+  await builder.dispose();
+  return sink.takeBytes();
+}
+
+/// Single-page PDF with a known embedded image.
+Future<Uint8List> buildSingleImagePdf(Pdf Function() createPdf) async {
+  final pdf = createPdf();
+  final builder = await pdf.build();
+
+  final page = await builder.addPage(width: 612, height: 792);
+  await page.font('Helvetica', 12);
+  await page.text('Page with embedded image');
+  await page.image(src(photoPng), const PdfRect(x: 50, y: 500, width: 100, height: 100));
   await page.done();
 
   final sink = TestSink();

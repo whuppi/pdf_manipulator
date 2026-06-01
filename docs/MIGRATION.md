@@ -234,7 +234,7 @@ await pdf.encrypt(source, sink,
     ));
 ```
 
-v1 adds four permission flags not in v0: `printHighQuality`, `fillForms`, `extractAccessibility`, `assemble`.
+v1 adds four permission flags not in v0: `printHq`, `fillForms`, `accessibility`, `assemble`.
 
 ### Decrypt
 
@@ -363,8 +363,10 @@ No migration needed — just start using:
 - PDF/A and PDF/UA validation
 - PDF/A conversion
 - Convert to/from DOCX, PPTX, XLSX
-- PdfEditor — batch mutations, incremental save
-- PdfBuilder — create from scratch with form fields, links, tables
+- PdfEditor — batch mutations, incremental save, encrypted save
+- PdfBuilder — create from scratch with form fields, links, columns, footnotes
 - Stamp annotations (16 types + image stamps)
-- Redaction, metadata scrub
-- Resource pruning, image optimization
+- Redaction, metadata scrub, crop margins
+- Resource pruning (image optimization, font unembedding)
+- Form field value setting
+- PDF/A conversion (via editor)

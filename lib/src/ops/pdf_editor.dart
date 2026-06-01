@@ -1,6 +1,11 @@
-// PdfEditor — batch editing. Parse once, mutate many, save once.
+// PdfEditor — mutations only. Parse once, mutate many, save once.
+//
+// Every method here modifies the document. Read/export ops that don't
+// modify belong on PdfDoc (queries) or PdfStandalone (one-shot export).
+// Even if the Rust engine implements a non-mutating op on DocumentEditor,
+// it must NOT be exposed here — wrap it as standalone or doc query instead.
 
-
+import 'package:pdf_manipulator/src/ops/pdf_doc.dart';
 import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
@@ -13,14 +18,17 @@ class PdfEditor {
     PdfEncryptionAlgorithm? sourceEncryption,
     PdfPermissions? sourcePermissions,
     String? password,
+    PdfDoc? sourceDoc,
   }) : _sourceEncryption = sourceEncryption,
        _sourcePermissions = sourcePermissions,
-       _password = password;
+       _password = password,
+       _sourceDoc = sourceDoc;
 
   final BridgeEditorHandle _handle;
   final PdfEncryptionAlgorithm? _sourceEncryption;
   final PdfPermissions? _sourcePermissions;
   final String? _password;
+  final PdfDoc? _sourceDoc;
   bool _disposed = false;
 
   void _check() {
@@ -94,9 +102,9 @@ class PdfEditor {
 
   // ── Optimization ──
 
-  Future<int> optimizeImages({int quality = 75}) {
+  Future<int> optimizeImages({int quality = 75, int minSize = 128}) {
     _check();
-    return _handle.optimizeImages(quality: quality);
+    return _handle.optimizeImages(quality: quality, minSize: minSize);
   }
 
   Future<int> unembedStandardFonts() {
@@ -170,9 +178,6 @@ class PdfEditor {
     return _handle.resizeImage(page, imageName, width: width, height: height);
   }
 
-  /// Apply best-effort PDF/A compliance fixes (output intent, font embedding,
-  /// XMP metadata). Result is not guaranteed compliant — call
-  /// [Pdf.validatePdfA] on the saved output to verify.
   Future<void> convertToPdfA({int level = 1}) {
     _check();
     return _handle.convertToPdfA(level: level);
@@ -203,7 +208,7 @@ class PdfEditor {
   // ── Save ──
 
   Future<void> save(DataSink output, {
-    PdfSaveOptions options = const PdfSaveOptions(),
+    PdfSaveOptions options = const PdfSaveOptions.fullRewrite(),
   }) {
     _check();
     final resolved = _resolveEncryption(options);
@@ -211,18 +216,23 @@ class PdfEditor {
   }
 
   PdfSaveOptions _resolveEncryption(PdfSaveOptions options) {
-    if (options.encryption is! PdfEncryptionKeep) return options;
     if (_sourceEncryption == null) return options;
-    return PdfSaveOptions(
-      compress: options.compress,
-      garbageCollect: options.garbageCollect,
-      encryption: PdfEncryption.config(
-        ownerPassword: _password ?? '',
-        userPassword: _password ?? '',
-        algorithm: _sourceEncryption,
-        permissions: _sourcePermissions ?? const PdfPermissions.all(),
-      ),
-    );
+    return switch (options) {
+      PdfSaveFullRewrite(:final compress, :final garbageCollect, :final encryption) =>
+        encryption is PdfEncryptionKeep
+          ? PdfSaveOptions.fullRewrite(
+              compress: compress,
+              garbageCollect: garbageCollect,
+              encryption: PdfEncryption.config(
+                ownerPassword: _password ?? '',
+                userPassword: _password ?? '',
+                algorithm: _sourceEncryption,
+                permissions: _sourcePermissions ?? const PdfPermissions.all(),
+              ),
+            )
+          : options,
+      PdfSaveIncremental() => options,
+    };
   }
 
   // ── Lifecycle ──
@@ -231,5 +241,8 @@ class PdfEditor {
     if (_disposed) return;
     _disposed = true;
     await _handle.dispose();
+    // Dispose the doc handle that edit() opened for metadata reading.
+    // Without this, the doc handle leaks (pinned worker, held source).
+    await _sourceDoc?.dispose();
   }
 }

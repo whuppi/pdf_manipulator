@@ -3,12 +3,17 @@ import 'dart:typed_data';
 
 /// Random-access byte source — any file, any backing store.
 ///
-/// Used for PDFs, images, office documents, embedded attachments —
-/// any data the engine needs to read. The engine reads only the
-/// ranges it needs, never the full file.
+/// The engine reads arbitrary offsets on demand (xref at end of file,
+/// objects scattered throughout). This is NOT a forward-only stream —
+/// the engine seeks backward and forward. A one-shot socket or pipe
+/// that can only read sequentially cannot be a DataSource. Buffer the
+/// full content first, or use a backing store with random access.
+///
+/// Memory is O(1) per read (64KB max per call). The full file is
+/// never buffered by the engine — only the backing store holds it.
 ///
 /// Implement with your backing store: file (pread), memory
-/// (sublistView), HTTP (Range header), IndexedDB (key range), etc.
+/// (sublistView), HTTP (Range header), IndexedDB, web Blob.slice.
 abstract interface class DataSource {
   /// Total size in bytes.
   int get length;

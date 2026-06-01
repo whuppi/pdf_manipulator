@@ -1,41 +1,47 @@
 # pdf_manipulator example
 
-A Flutter app that exercises every `pdf_manipulator` feature — pick a PDF, tap an operation, see the result. Runs on macOS, iOS, Android, Windows, Linux, and web.
+A Flutter app exercising every `pdf_manipulator` feature. Pick a PDF, tap an operation, see the result. Runs on macOS, iOS, Android, Windows, Linux, and web.
 
 ## Run
 
 ```bash
-# Native (macOS, Windows, Linux)
 cd example
-flutter run
 
-# Web
-cd example
-dart run pdf_manipulator:setup   # one-time — installs WASM assets
-flutter run -d chrome
+# native
+fvm flutter run
+
+# web (setup copies JS + WASM into web/pdf_manipulator/)
+dart run pdf_manipulator:setup --force
+fvm flutter run -d chrome
 ```
+
+## Integration tests
+
+```bash
+# native (macOS)
+cd example
+fvm flutter test integration_test/pdf_smoke_test.dart -d macos
+
+# web — all 3 I/O modes (JSPI, Atomics, OPFS) from package root:
+cd ..
+make test-example-web
+```
+
+The integration test covers every API method with hardcoded minimal PDFs — no file picker needed. Force a specific web I/O mode with `--dart-define=PDF_IO_MODE=jspi|atomics|opfs`.
 
 ## What's inside
 
-Four tabs, each testing a different surface:
+Six tabs, one per API surface:
 
-| Tab | What it tests |
-|---|---|
-| **Operations** | Pick one PDF, then run any method on it — split, merge, rotate, compress, watermark, encrypt, decrypt, extract text, search, render, validate, and more |
-| **Merge** | Pick multiple PDFs, drag to reorder, merge into one |
-| **Images → PDF** | Pick images, convert to a single PDF |
-| **Editor** | `PdfEditor` batch mutations — metadata, rotation, watermark, compress, flatten, encrypt, all chained on one parse-save cycle |
+| Tab | API | What it covers |
+|---|---|---|
+| **Doc** | `PdfDoc` | Open, page info, extract text (plain/markdown/html), search, render, extract images, signatures, validate PDF/A + PDF/UA, classify, bookmarks |
+| **Sugar** | `PdfSugar` | Every one-shot convenience method — split, splitBySize, splitByBookmarks, extract, delete, reorder, move, rotate, compress, watermark (all positions + layers), encrypt, decrypt, flatten, redact, embed, erase, stamp, image stamp, PDF/A, images→PDF |
+| **Standalone** | `PdfStandalone` | Sign (PEM), convertTo (DOCX/PPTX/XLSX), convertToPdf (round-trip), extractPages |
+| **Editor** | `PdfEditor` | Metadata get/set (title/author/subject/keywords), scrub, rotate, delete, move, select, merge, mediaBox, optimize images, unembed fonts, watermark, stamp, image stamp, embed, erase, crop, flatten forms + annotations, form field value, redaction lifecycle, PDF/A, save options (full/incremental/encrypted/remove), chained mutations |
+| **Builder** | `PdfBuilder` | A4/Letter/custom pages, text/heading/paragraph, font, space, horizontalRule, columns, newline, newPageSameSize, watermark, image, all form fields (textField/checkbox/comboBox/pushButton/signatureField/radioGroup), field JavaScript (keystroke/format/validate/calculate), links (URL/page), footnotes |
+| **Merge** | `PdfSugar.merge` | Pick N PDFs, drag to reorder, merge |
 
 ## No `dart:io`
 
-The example uses `file_picker` with `withData: true` everywhere. File bytes come from the picker, not from `File()`. Same code compiles for native and web.
-
-## Web setup
-
-The WASM binary and Web Worker need to be in `web/pdf_manipulator/`. Run once:
-
-```bash
-dart run pdf_manipulator:setup
-```
-
-After that, `flutter run -d chrome` works.
+Uses `file_picker` with `withData: true` everywhere. Same code compiles for native and web.

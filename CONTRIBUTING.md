@@ -9,17 +9,17 @@ Contributions are welcome.
 ```bash
 git clone --recursive https://github.com/whuppi/pdf_manipulator.git
 cd pdf_manipulator
-dart pub get
-dart test  # build hook compiles Rust from source automatically
+fvm dart pub get
+fvm dart test  # build hook compiles Rust from source automatically
 ```
 
-**Requires:** [Rust](https://rustup.rs). The build hook detects `vendor/pdf_oxide/Cargo.toml` and runs `cargo build`. No manual compilation step.
+**Requires:** [Rust](https://rustup.rs), [FVM](https://fvm.app) (`.fvmrc` pins to stable). The build hook detects `vendor/pdf_oxide/Cargo.toml` and runs `cargo build`. No manual compilation step.
 
 For web development:
 
 ```bash
-make wasm                    # compile Rust → WASM
-make check                   # analyze + native + web tests
+make build-wasm              # compile Rust → WASM
+make check                   # analyze + native + web tests + example (all 3 web modes)
 ```
 
 ---
@@ -27,10 +27,10 @@ make check                   # analyze + native + web tests
 ## Before submitting a PR
 
 ```bash
-make check                   # analyze + native + web tests
+make check
 ```
 
-Must pass. Don't suppress with `// ignore:` — fix the underlying issue.
+Runs `analyze` + `test` (native + 3 web modes) + `test-example` (native + 3 web modes). Must pass. Don't suppress with `// ignore:` — fix the underlying issue.
 
 ---
 
@@ -40,10 +40,13 @@ All PRs target `dev`. That's the only branch contributors touch.
 
 ```
 your fork / feature branch ──PR──► dev
-                                    ↓ CI: analyze + test
+                                    ↓ CI: make analyze + make test-ops-native
                                     ↓ PR title: Conventional Commits (feat: / fix: / etc.)
                                     ↓ squash-merge when green
+                                    ↓ Full 6-platform test via "ready-to-test" label
 ```
+
+CI calls Makefile targets — same commands locally and in CI. No logic lives in the CI YAML.
 
 You don't write changelog entries, bump versions, or touch `prod`. The maintainer handles releases.
 
@@ -54,8 +57,9 @@ You don't write changelog entries, bump versions, or touch `prod`. The maintaine
 - Match existing code in the repo
 - No `dart:io` in the public API barrel — must stay web-safe
 - No FFI imports in bridge files — all engine calls go through the worker
-- `worker.js` is a thin pass-through — `dispatch.rs` owns the logic
+- `worker.js` is a thin pass-through — `bridge_api.rs` owns the dispatch logic
 - Tests in `test/` mirror the `lib/src/` structure
+- `TestSource` returns views (not copies) — catches buffer-detach bugs in transport
 - Instance API: `final pdf = Pdf(); pdf.method(); pdf.dispose();`
 
 ---

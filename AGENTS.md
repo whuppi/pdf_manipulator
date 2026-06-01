@@ -28,7 +28,7 @@ Manual edits to this file will be overwritten on the next stamp.
 
 ## What this tool does
 
-**pdf_manipulator** is a cross-platform, MIT-licensed PDF manipulation package for Dart & Flutter. Three-layer architecture: public API (Dart) → bridge (Dart+Rust+JS) → engine (Rust/pdf_oxide). Rust engine runs on a thread pool of raw pthreads (native) or Web Workers (web) — never on the UI thread. Reads via condvar+NativeCallable.listener (native) or OPFS SyncAccessHandle (web) — engine reads targeted ranges, never the full file. Writes via condvar (native) or postMessage (web) — output streams chunk by chunk. Arena allocator per operation (native), WASM linear memory per worker (web). Instant dispose kills everything. Input via `PdfSource` (random-access reader), output via `PdfSink` (sequential writer). No `dart:io`.
+**pdf_manipulator** is a cross-platform PDF manipulation package for Dart & Flutter — instance-based API (`final pdf = Pdf()`) with `DataSource` in, `DataSink` out for O(1) memory streaming. Merge, split, compress, encrypt, render, extract text, search, sign, validate, convert, stamp, build from scratch. Powered by a vendored fork of pdf_oxide (Rust) at `vendor/pdf_oxide/`. Worker isolate on native, Web Worker + WASM on web (3 I/O modes: JSPI, Atomics, OPFS) — every operation runs off the main thread. No `dart:io` in the barrel. Dual-path build hook: consumers get pre-built binaries from GitHub Releases (zero Rust), contributors compile from source automatically.
 
 This repo is one tool inside the **whuppi** workspace — a multi-tool monorepo. The workspace ships shared engineering standards, code conventions, brand identity, and build patterns that apply across every tool. They're documented in three layers:
 
@@ -49,18 +49,18 @@ Run these after every code change. A failing test or analyzer error means the ta
 dart pub get
 dart test
 
-# Contributor setup (needs Rust — https://rustup.rs)
+# Contributor setup (needs Rust — https://rustup.rs, FVM — https://fvm.app)
 git clone --recursive https://github.com/whuppi/pdf_manipulator
 dart pub get
-dart test                                           # 302 native tests
-dart test test/web/web_smoke_test.dart -p chrome    # 8 web tests
-dart analyze .
+make check                  # analyze + native (192) + web (3 modes × 192) + example
+
+# Individual targets
+make test-ops-native        # 192 native tests
+make test-ops-web           # 192 × 3 web modes (JSPI, Atomics, OPFS)
+make test-example           # 49 example integration tests (macOS + 3 web modes)
 
 # Rebuild WASM (after Rust changes)
 ./tool/build_wasm.sh
-
-# Rebuild FFI bindings (after C header changes)
-dart run ffigen --config ffigen.yaml
 ```
 
 ---
@@ -82,7 +82,7 @@ When in doubt, read existing code in this repo and match it. Per-repo style cons
 
 ## Tool-specific notes
 
-**Instance-based API.** `final pdf = Pdf()` — all methods on the instance. `pdf.dispose()` tears down the worker. `Pdf.edit(bytes)` for batch editing, `Pdf.build()` for creating from scratch.
+**Instance-based API.** `final pdf = Pdf()` — all methods on the instance. `pdf.dispose()` tears down the worker. `pdf.edit(source)` for batch editing, `pdf.build()` for creating from scratch. I/O is `DataSource` (random-access reads) and `DataSink` (sequential writes) — O(1) memory for any file size.
 
 **Dual-path build hook.** `vendor/pdf_oxide/Cargo.toml` exists → compile from source (contributor). Doesn't exist → download from GitHub Releases (consumer). Version read from `pubspec.yaml`.
 

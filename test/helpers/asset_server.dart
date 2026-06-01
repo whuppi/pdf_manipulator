@@ -1,9 +1,12 @@
-// Asset server for web tests — serves the package root with CORS + COOP/COEP.
+// Hybrid isolate asset server for web tests.
 //
-// Started via spawnHybridUri('/test/helpers/asset_server.dart').
-// Serves web_assets/ (coordinator.js, worker.js, WASM binary).
-// COOP/COEP headers enable SharedArrayBuffer for Atomics mode.
+// dart test -p chrome serves test code but NOT the package root.
+// This server makes web_assets/ (coordinator.js, worker.js, *.wasm)
+// fetchable from the browser test via http://localhost:<port>/web_assets/...
 //
+// Usage:
+//   final channel = spawnHybridUri('/test/helpers/asset_server.dart', stayAlive: true);
+//   final port = (await channel.stream.first as double).toInt();
 
 import 'dart:io';
 
@@ -12,33 +15,18 @@ import 'package:shelf/shelf_io.dart' as io;
 import 'package:shelf_static/shelf_static.dart';
 import 'package:stream_channel/stream_channel.dart';
 
-const _headers = {
-  'Access-Control-Allow-Origin': '*',
-  'Cross-Origin-Opener-Policy': 'same-origin',
-  'Cross-Origin-Embedder-Policy': 'require-corp',
-};
+Middleware _cors() => createMiddleware(
+      requestHandler: (req) =>
+          req.method == 'OPTIONS' ? Response.ok(null, headers: _headers) : null,
+      responseHandler: (res) => res.change(headers: _headers),
+    );
 
-Middleware _cors() {
-  return createMiddleware(
-    requestHandler: (request) {
-      if (request.method == 'OPTIONS') return Response.ok(null, headers: _headers);
-      return null;
-    },
-    responseHandler: (response) => response.change(headers: _headers),
-  );
-}
+const _headers = {'Access-Control-Allow-Origin': '*'};
 
 Future<void> hybridMain(StreamChannel<Object?> channel) async {
   final server = await HttpServer.bind('localhost', 0);
-
-  final handler = const Pipeline()
-      .addMiddleware(_cors())
-      .addHandler(createStaticHandler('.'));
-  io.serveRequests(server, handler);
-
+  io.serveRequests(server,
+      const Pipeline().addMiddleware(_cors()).addHandler(createStaticHandler('.')));
   channel.sink.add(server.port);
-  await channel.stream
-      .listen(null)
-      .asFuture<void>()
-      .then<void>((_) => server.close());
+  await channel.stream.listen(null).asFuture<void>().then<void>((_) => server.close());
 }

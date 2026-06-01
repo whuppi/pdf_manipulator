@@ -1,12 +1,13 @@
 # Default platform is VM (native). Web tests run explicitly with -p chrome.
 #
-#   dart test                                                    # native only
-#   dart test test/ops/web_runner_test.dart -p chrome            # web ops
-#   dart test test/transport/web/atomics_test.dart -p chrome-coi # Atomics mode
+#   dart test                                                         # native only
+#   dart test test/ops/runners/web_opfs_runner_test.dart -p chrome        # web OPFS
+#   dart test test/ops/runners/web_jspi_runner_test.dart -p chrome        # web JSPI
+#   dart test test/ops/runners/web_atomics_runner_test.dart -p chrome-coi # web Atomics
 #
 # Or use the Makefile:
 #   make test       # native
-#   make test-web   # web (Chrome)
+#   make test-web   # web (all 3 modes)
 #   make check      # analyze + native + web
 
 platforms: [vm]

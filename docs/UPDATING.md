@@ -1,92 +1,69 @@
 # Updating pdf_manipulator
 
-Maintenance procedures for the package. For architecture see [`ARCHITECTURE.md`](ARCHITECTURE.md).
+Maintenance recipes. For architecture see [`ARCHITECTURE.md`](ARCHITECTURE.md).
+For capability status see [`CAPABILITY_ROADMAP.md`](CAPABILITY_ROADMAP.md).
 
-pdf_manipulator wraps two vendored forks via FFI (native) and WASM (web):
-- [pdf_oxide](https://github.com/yfedoseev/pdf_oxide) (PDF engine) — fork at [`whuppi/pdf_oxide`](https://github.com/whuppi/pdf_oxide), submodule at `vendor/pdf_oxide/`
-- [office_oxide](https://github.com/yfedoseev/office_oxide) (DOCX/PPTX/XLSX conversion) — fork at [`whuppi/office_oxide`](https://github.com/whuppi/office_oxide), submodule at `vendor/office_oxide/`
+---
 
-| Source | Why we track it |
-|---|---|
-| pdf_oxide upstream tags | The Rust engine — page manipulation, text extraction, rendering, signatures |
-| `host/dispatch.rs` (our code) | Shared dispatch logic — both platforms call the same typed functions |
-| `host/native/` (our code) | FFI entry points (`ffi_api.rs`), binary encoders (`ffi_encode.rs`), I/O transport |
-| `host/web/` (our code) | WASM entry points (`wasm_api.rs`), JsValue encoders (`wasm_encode.rs`) |
-| `src/wasm.rs` (author + our additions) | WASM type wrappers + our `with_doc()` helper + encryption bindings |
-| Rust toolchain | Cross-compilation for 13 native targets + WASM |
-| WASM binary (`web_assets/`) | Compiled from the patched Rust, committed in git, shipped to web consumers |
-| Pre-built native binaries (GitHub Releases) | Per-platform `.dylib` / `.a` / `.so` / `.dll` downloaded by the build hook |
+## Vendored forks
+
+Two git submodules, each a fork of the upstream repo with a named
+patch branch. `main` on each fork stays a clean mirror of upstream.
+
+| Crate | Upstream | Fork | Branch | Base tag | Submodule |
+|---|---|---|---|---|---|
+| pdf_oxide | [`yfedoseev/pdf_oxide`](https://github.com/yfedoseev/pdf_oxide) | [`whuppi/pdf_oxide`](https://github.com/whuppi/pdf_oxide) | `pdf_manipulator/0.3.55-patches` | `v0.3.55` | `vendor/pdf_oxide/` |
+| office_oxide | [`yfedoseev/office_oxide`](https://github.com/yfedoseev/office_oxide) | [`whuppi/office_oxide`](https://github.com/whuppi/office_oxide) | `office_kit/0.1.2-patches` | `v0.1.2` | `vendor/office_oxide/` |
+
+pdf_oxide depends on office_oxide as a path dependency
+(`office_oxide = { path = "../office_oxide" }`).
+wasm-bindgen version: `0.2.121`.
 
 ---
 
 ## When to update
 
-| Trigger | Procedure |
+| Trigger | Recipe |
 |---|---|
-| pdf_oxide releases a new version | [S1 — Bump upstream](#s1--bump-upstream) |
-| A Rust patch needs updating or adding | [S2 — Edit Rust patches](#s2--edit-rust-patches) |
-| Adding a new read/stream operation | [S3 — Add read operation](#s3--add-read-operation) |
-| Adding a new editor mutation | [S4 — Add editor mutation](#s4--add-editor-mutation) |
-| Rebuilding WASM | [S5 — Rebuild WASM](#s5--rebuild-wasm) |
-| Releasing a new version | [S6 — Release pipeline](#s6--release-pipeline) |
+| pdf_oxide upstream release | [S1 — Bump upstream](#s1--bump-upstream) |
+| Edit a Rust patch | [S2 — Edit patches](#s2--edit-patches) |
+| Add a read/stream op | [S3 — Add read op](#s3--add-read-op) |
+| Add an editor mutation | [S4 — Add editor mutation](#s4--add-editor-mutation) |
+| Rebuild WASM | [S5 — Rebuild WASM](#s5--rebuild-wasm) |
+| Release a version | [S6 — Release](#s6--release) |
 
 ---
 
 ## S1 — Bump upstream
 
-When pdf_oxide tags a new release:
-
-### Step 1 — Discover what's new
+### 1. Discover what's new
 
 ```sh
 cd vendor/pdf_oxide
 git fetch upstream
-
-git tag --sort=-version:refname | head -5
 git log --oneline vOLD..vNEW
-git diff --stat vOLD..vNEW | tail -5
-
-# New WASM methods:
-git diff vOLD..vNEW -- src/wasm.rs | grep "js_name" | head -20
-
-# New engine API:
 git diff vOLD..vNEW -- src/document.rs src/editor/document_editor.rs | grep "^+.*pub fn"
 ```
 
-### Step 2 — Check conflict risk in our patched files
+### 2. Check conflict risk
 
 ```sh
-for f in Cargo.toml src/host/dispatch.rs src/host/native/ffi_api.rs \
-         src/host/native/ffi_encode.rs src/host/web/wasm_api.rs \
-         src/host/web/wasm_encode.rs src/wasm.rs \
-         src/editor/document_editor.rs; do
+for f in Cargo.toml src/document.rs src/editor/document_editor.rs \
+         src/compliance/converter.rs src/converters/office/mod.rs \
+         src/writer/pdf_writer.rs src/writer/document_builder.rs; do
   count=$(git diff vOLD..vNEW -- "$f" | wc -l | tr -d ' ')
-  if [ "$count" -gt "0" ]; then
-    echo "CONFLICT RISK: $f ($count diff lines)"
-  else
-    echo "CLEAN: $f"
-  fi
+  [ "$count" -gt "0" ] && echo "RISK: $f ($count lines)" || echo "CLEAN: $f"
 done
 ```
 
-### Step 3 — Rebase patches onto new tag
+### 3. Rebase
 
 ```sh
 git rebase vNEW
-
-# Conflict resolution rules:
-# - src/wasm.rs: keep upstream new methods + our with_doc() helper +
-#   isEncrypted/requiresPassword/getEncryptionAlgorithm/getPermissionBits.
-#   The dispatch_* methods are in host/web/wasm_api.rs (separate file).
-# - src/editor/document_editor.rs: upstream may add new struct fields —
-#   add them to our from_reader() with defaults.
-# - host/ files (dispatch, ffi_api, ffi_encode, wasm_api, wasm_encode):
-#   entirely our code, no upstream conflict expected.
-
-cargo test --lib --release   # verify Rust tests pass
+cargo test --lib --release
 ```
 
-### Step 4 — Rename branch + rebuild
+### 4. Rename branch
 
 ```sh
 git branch -m pdf_manipulator/OLD-patches pdf_manipulator/NEW-patches
@@ -94,63 +71,58 @@ git push origin pdf_manipulator/NEW-patches
 git push origin --delete pdf_manipulator/OLD-patches
 ```
 
-### Step 5 — Rebuild and verify Dart
+### 5. Rebuild + verify
 
 ```sh
-cd ../..   # back to pdf_manipulator root
-
-make wasm                    # rebuild WASM
-git add vendor/pdf_oxide web_assets/
-
-rm -rf .dart_tool/hooks_runner   # clear stale native cache
-
-make check                   # native tests
-make check               # native + web tests
+cd ../..
+./tool/build_wasm.sh
+rm -rf .dart_tool/hooks_runner
+make check
 ```
 
-### Step 6 — Commit
+### 6. Commit
 
 ```sh
+git add vendor/pdf_oxide web_assets/
 git commit -m "build: sync upstream vNEW + rebuild WASM"
-# Update this file's Provenance table with new branch name + base tag
 ```
 
 ---
 
-## S2 — Edit Rust patches
+## S2 — Edit patches
 
-Our `host/` directory is entirely our code — not upstream patches. Edit freely:
+Our `host/` directory is entirely our code. Upstream patches live in
+7 files (see ARCHITECTURE.md §9). Edit either freely:
 
 ```sh
 cd vendor/pdf_oxide
 
-# Edit the files you need:
-# - host/dispatch.rs          — shared operation logic
-# - host/native/ffi_api.rs    — C extern entry points
-# - host/native/ffi_encode.rs — result → binary encoders
-# - host/web/wasm_api.rs      — #[wasm_bindgen] entry points
-# - host/web/wasm_encode.rs   — result → JsValue encoders
-# - src/wasm.rs                — WASM type wrappers (careful — mix of author + ours)
-# - src/editor/document_editor.rs — engine-level additions
+# Our code (host/):
+#   dispatch.rs, bridge_api.rs, positioned_write.rs, sign.rs,
+#   image_optimizer.rs, font_optimizer.rs, constants.rs,
+#   native/*, wasm/*
+#
+# Upstream patches:
+#   document.rs, editor/document_editor.rs,
+#   compliance/converter.rs, converters/office/mod.rs,
+#   writer/pdf_writer.rs, writer/document_builder.rs
 
-cargo test   # verify Rust compiles + passes
-
+cargo test
 cd ../..
-make wasm    # rebuild WASM if any Rust changed
-make check   # native Dart tests
+./tool/build_wasm.sh
+make check
 ```
 
-**Critical: commit AND push the submodule, or CI will fail.**
+**Mark every upstream change** with `── pdf_manipulator patch ──`
+boundaries. Code in `host/` doesn't need markers (the module itself
+is the marker).
+
+**Commit AND push the submodule, or CI will fail:**
 
 ```sh
-# 1. Commit inside the submodule
 cd vendor/pdf_oxide
 git add -A && git commit -m "patch: <description>"
-
-# 2. Push to the fork remote
 git push origin <branch-name>
-
-# 3. Update parent submodule pointer
 cd ../..
 git add vendor/pdf_oxide
 git commit -m "build: update submodule — <description>"
@@ -158,243 +130,131 @@ git commit -m "build: update submodule — <description>"
 
 ---
 
-## S3 — Add read operation
+## S3 — Add read op
 
-End-to-end checklist for a new read/stream operation (e.g. a new `extractFoo`):
-
-| Step | File | What to do |
+| Step | File | Action |
 |---|---|---|
-| 1 | `host/dispatch.rs` | Add typed function + result struct |
-| 2 | `host/native/ffi_encode.rs` | Add `encode_foo()` (dispatch result → binary) |
-| 3 | `host/web/wasm_encode.rs` | Add `foo_to_js()` (dispatch result → JsValue) |
-| 4 | `host/native/ffi_api.rs` | Add case in `dispatch_read_op` (call dispatch + encode) |
-| 5 | `host/web/wasm_api.rs` | Add `#[wasm_bindgen]` method (call wasm_encode) |
-| 6 | `src/wasm.rs` | Nothing if `wasm_api.rs` handles it via `with_doc()` |
-| 7 | `protocol/op.dart` | Add `EngineOp` value |
-| 8 | `protocol/codec.dart` | Add request builder (`fooOp()`) + response decoder (`decodeFoo()`) |
-| 9 | `native/coordinator.dart` | Add case in dispatch switch |
-| 10 | `web_assets/worker.js` | Add case in dispatch switch |
-| 11 | `native/wire.dart` | Add `wireDecodeFoo()` (binary → typed, calls codec) |
-| 12 | `web/wire.dart` | Add `wireDecodeFoo()` (Map → typed, calls codec) |
-| 13 | `native/bridge.dart` | Add method, call `wireDecodeFoo(result)` |
-| 14 | `web/bridge.dart` | Add method, call `wire.wireDecodeFoo(r)` |
-| 15 | `transport/pdf_bridge.dart` | Add abstract method |
-| 16 | `ops/pdf.dart` | Add public method |
-| 17 | Tests | Native + web |
-| 18 | Build | `cargo test` → `make wasm` → `make check` |
+| 1 | `host/dispatch.rs` | Typed function + result struct |
+| 2 | `host/bridge_api.rs` | Match arm (call dispatch, encode response) |
+| 3 | `protocol/op.dart` | Add `EngineOp` value |
+| 4 | `protocol/codec.dart` | Request builder + response decoder |
+| 5 | `ops/pdf_doc.dart` | Public method |
+| 6 | Tests | Core + stress |
+| 7 | Build | `cargo test` → `./tool/build_wasm.sh` → `make check` |
 
-The wire_sync_test catches parity drift — if you miss step 9 or 10, the test fails.
+wire_sync_test catches parity drift — missing step 2 = test failure.
 
 ---
 
 ## S4 — Add editor mutation
 
-Edit ops also go through `dispatch.rs`. Same pattern as read ops but no encode step (edits return `Result<()>`, not structured data):
+Edit mutations are sub-dispatched inside `editorMutate`:
 
-| Step | File | What to do |
+| Step | File | Action |
 |---|---|---|
-| 1 | `host/dispatch.rs` | Add `edit_*()` typed function |
-| 2 | `host/native/ffi_api.rs` | Add case in `dispatch_edit_op` (binary params → dispatch call) |
-| 3 | `host/web/wasm_api.rs` | Add `#[wasm_bindgen]` method (call dispatch) |
-| 4 | `web_assets/worker.js` | Add case in `applyEditOp` (calls `doc.dispatchEditXxx()`) |
-| 5 | `protocol/codec.dart` | Add param encoder if needed |
-| 6 | `native/coordinator.dart` | Usually goes through existing `editorMutate` — no change |
-| 7 | `native/bridge.dart` | Add `_mutate(opCode, params)` call |
-| 8 | `web/bridge.dart` | Add matching method |
-| 9 | `ops/pdf_editor.dart` | Add public method |
-| 10 | Tests | Native + web |
+| 1 | `host/dispatch.rs` | `edit_*()` function |
+| 2 | `host/bridge_api.rs` | Match arm in `handle_editor_mutate` |
+| 3 | `protocol/codec.dart` | Param encoder if needed |
+| 4 | `shared_bridge.dart` | `_mutate('opName', params)` on editor handle |
+| 5 | `ops/pdf_editor.dart` | Public method |
+| 6 | Tests | Core + stress |
 
 ---
 
 ## S5 — Rebuild WASM
 
-After any Rust-side change:
-
 ```sh
-make wasm
-
-# Verify output
+./tool/build_wasm.sh
 ls -lh web_assets/pdf_oxide*
-
-# Commit
 git add web_assets/
 ```
 
 ---
 
-## S6 — Release pipeline
+## S6 — Release
 
-Version and changelog are manually written by the maintainer. CI handles tagging and publishing.
+### Changelog
 
-### Two changelog files
+| File | Purpose |
+|---|---|
+| `CHANGELOG.md` | Stable releases (pub.dev) |
+| `CHANGELOG.pre.md` | Prereleases (dev testing) |
 
-| File | Purpose | CI trigger |
-|---|---|---|
-| `CHANGELOG.md` | Stable releases — what pub.dev shows | `auto-tag.yml` on prod push |
-| `CHANGELOG.pre.md` | Prereleases — testing builds | `publish-prerelease.yml` on dev push |
+`pubspec.yaml` stays `version: 0.0.0` in git. CI stamps the real
+version at publish time.
 
-`pubspec.yaml` stays `version: 0.0.0` in git. CI stamps the real version from the changelog at publish time.
-
-### Stable release
+### Stable
 
 ```
-1. Add ## X.Y.Z entry at the top of CHANGELOG.md
-2. Generate commit list: git log v<PREVIOUS_VERSION>..HEAD --oneline --no-decorate
-   Wrap in a <details> block and paste into your entry
-3. Commit + push to dev
-4. PR dev → prod, merge
-5. auto-tag.yml reads CHANGELOG.md → tags vX.Y.Z
-6. release.yml fires → stamps version → compiles → GitHub Release → pub.dev
+1. Add ## X.Y.Z at top of CHANGELOG.md
+2. git log v<PREV>..HEAD --oneline --no-decorate → paste in entry
+3. Push to dev → PR to prod → merge
+4. create-release.yml → tag + GitHub Release
+5. release.yml → compile + upload + pub.dev
 ```
 
 ### Prerelease
 
 ```
-1. Add ## X.Y.Z-dev.N entry at the top of CHANGELOG.pre.md
-2. Generate commit list: git log v<PREVIOUS_TAG>..HEAD --oneline --no-decorate
-   Wrap in a <details> block and paste into your entry
-3. Commit + push to dev
-4. publish-prerelease.yml reads CHANGELOG.pre.md → tags vX.Y.Z-dev.N
-5. release.yml fires → stamps version → uses CHANGELOG.pre.md as the published changelog
+1. Add ## X.Y.Z-dev.N at top of CHANGELOG.pre.md
+2. Push to dev
+3. create-release.yml → tag + Release
+4. release.yml → compile + upload + pub.dev
 ```
 
 ### Hotfix
 
 ```
-1. git checkout -b hotfix/vX.Y.Z vPREVIOUS_TAG   (branch from release tag)
-2. Fix the bug
-3. Add ## X.Y.Z entry at the top of CHANGELOG.md
-4. Generate commit list: git log vPREVIOUS_TAG..HEAD --oneline --no-decorate
-5. Commit + push the hotfix branch
-6. PR hotfix/vX.Y.Z → prod, merge
-7. auto-tag.yml tags → release.yml publishes
-8. Cherry-pick the fix code to dev if needed (not the changelog commit)
+1. Branch from release tag: git checkout -b hotfix/vX.Y.Z vPREV
+2. Fix, add changelog entry, push
+3. PR to prod → merge → CI tags + publishes
+4. Cherry-pick fix to dev
 ```
 
 ### CI workflows
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
-| `ci.yml` | PR to prod/dev | Analyze + macOS test |
-| `pr-checks.yml` | PR to prod/dev | Conventional commit title + promotion chain + workflow security |
-| `full-test.yml` | `ready-to-test` label | 6-platform test |
-| `create-release.yml` | Push to dev/prod (changelog changed) OR `workflow_dispatch` | Creates GitHub Release + tag for new versions. Idempotent — skips existing. |
-| `release.yml` | Tag push (`v*`) OR `workflow_dispatch` | Stamps version → compiles all targets → uploads to GitHub Release → pub.dev. Idempotent — safe to rerun. |
+| `ci.yml` | PR to prod/dev | `make analyze` + `make test-ops-native` |
+| `pr-checks.yml` | PR to prod/dev | Conventional commit title + promotion chain |
+| `full-test.yml` | `ready-to-test` label | 6-platform test via Makefile targets |
+| `create-release.yml` | Changelog push or `workflow_dispatch` | Tag + GitHub Release (idempotent) |
+| `release.yml` | Tag push or `workflow_dispatch` | `make compile-natives/wasm` + upload + pub.dev (idempotent) |
 
 ### Failure recovery
 
 | Failure | Fix |
 |---|---|
-| `create-release.yml` failed | Rerun via Actions → Create Release → Run workflow. Idempotent. |
-| `release.yml` compile failed | Fix the code, then rerun via Actions → Release → Run workflow → enter tag. |
-| `release.yml` pub.dev publish failed | Rerun via workflow_dispatch. pub.dev rejects duplicates (safe). |
-| Tag exists but no GitHub Release | Run `create-release.yml` via workflow_dispatch — it checks for the Release, not the tag. |
-| GitHub Release exists but no binaries | Rerun `release.yml` via workflow_dispatch — uploads overwrite existing assets. |
+| `create-release.yml` failed | Rerun via workflow_dispatch |
+| Compile failed | Fix code, rerun with tag |
+| pub.dev failed | Rerun (rejects duplicates, safe) |
+| Tag without Release | Run `create-release.yml` |
+| Release without binaries | Rerun `release.yml` |
 
 ### Git hooks
 
-| Hook | What it enforces |
+| Hook | Enforces |
 |---|---|
-| `commit-msg` | Conventional Commits format. Blocks non-release merge commits. |
-| `pre-commit` | Rejects `git add -f` of gitignored files. |
+| `commit-msg` | Conventional Commits format |
+| `pre-commit` | Rejects `git add -f` of gitignored files |
 
-### CODEOWNERS protection
+### CODEOWNERS
 
-| Path | Owner | Effect |
-|---|---|---|
-| `CHANGELOG.md`, `CHANGELOG.pre.md` | `@chaudharydeepanshu` | Contributors can't edit changelogs without maintainer approval |
-| `pubspec.yaml` | `@chaudharydeepanshu` | Contributors can't change version |
-| `.github/`, `.githooks/` | `@chaudharydeepanshu` | CI/hook changes need maintainer approval |
-
-### Generating the commit list for changelog entries
-
-```bash
-git log v1.0.0..HEAD --oneline --no-decorate
-```
-
-Wrap the output in a `<details><summary>Commits since X.Y.Z (N)</summary>` block and paste into your changelog entry.
+| Path | Owner |
+|---|---|
+| `CHANGELOG.md`, `CHANGELOG.pre.md` | `@chaudharydeepanshu` |
+| `pubspec.yaml` | `@chaudharydeepanshu` |
+| `.github/`, `.githooks/` | `@chaudharydeepanshu` |
 
 ---
 
-## Reading the failure modes
+## Troubleshooting
 
-| Failure | First check |
+| Symptom | Check |
 |---|---|
-| Build hook fails on consumer machine | Binary not found for platform — check `hook/build.dart` and GitHub Release assets |
-| WASM test fails | `worker.js` dispatch out of sync — rebuild WASM (`make wasm`) |
-| Native test passes but web fails | Check worker.js calls `doc.dispatchXxx()` not `doc.xxx()`. wasm.rs wrapper methods read from wrong internal object. All ops must go through dispatch. |
-| Wire sync test fails | EngineOp enum has an op not in `coordinator.dart` or `worker.js` — add the missing case |
-| Editor handle error "not found" | Handle disposed or never opened — check coordinator.dart lifecycle |
-| "Symbol not found" at runtime | Compiled binary older than source — `dart test` recompiles from source |
-| Web returns wrong data (e.g. 260 chars instead of full text) | Dispatch page routing — check `dispatch.rs` handles `None` vs `Some(page)` correctly |
-| Web search crash (JSNull) | Result shape mismatch — ensure `wasm_encode.rs` flattens bbox to flat x,y,w,h |
-
----
-
-## Provenance
-
-### pdf_oxide (PDF engine)
-
-| Item | Value |
-|---|---|
-| Upstream repo | [`yfedoseev/pdf_oxide`](https://github.com/yfedoseev/pdf_oxide) |
-| Fork repo | [`whuppi/pdf_oxide`](https://github.com/whuppi/pdf_oxide) |
-| Fork branch | `pdf_manipulator/0.3.55-patches` |
-| Upstream base tag | `v0.3.55` |
-| Submodule path | `vendor/pdf_oxide/` |
-| wasm-bindgen version | `0.2.121` |
-
-### office_oxide (DOCX/PPTX/XLSX conversion)
-
-| Item | Value |
-|---|---|
-| Upstream repo | [`yfedoseev/office_oxide`](https://github.com/yfedoseev/office_oxide) |
-| Fork repo | [`whuppi/office_oxide`](https://github.com/whuppi/office_oxide) |
-| Fork branch | `pdf_manipulator/0.1.2-patches` |
-| Upstream base tag | `v0.1.2` |
-| Submodule path | `vendor/office_oxide/` |
-| Patch | Streaming OPC writer — `Write`-only (no `Seek`), enables streaming DOCX/PPTX/XLSX output |
-
-Fork convention: `main` on each fork stays a clean mirror of upstream. Patches live on the named branch. When upstream releases, rebase onto the new tag and rename the branch ([S1](#s1--bump-upstream)). Same procedure applies to both submodules.
-
----
-
-## Our additions to the engine
-
-### `host/` directory — entirely ours
-
-| File | What it does |
-|---|---|
-| `host/dispatch.rs` | Shared typed dispatch for ALL operations — read, edit, query, save, sign, convert, builder. `PageOp` enum + `replay_page_ops` for builder page ops. `sign_via_editor` for signing with AcroForm. Both platforms call these — zero exceptions. |
-| `host/constants.rs` | Buffer sizes |
-| `host/native/ffi_api.rs` | C extern entry points — deserialize binary, call dispatch, encode result |
-| `host/native/ffi_encode.rs` | Dispatch result → binary bytes (Dart wire.dart decodes) |
-| `host/native/arena.rs` | Per-op bumpalo arena |
-| `host/native/callback_reader.rs` | Read+Seek via condvar |
-| `host/native/callback_writer.rs` | Write via condvar |
-| `host/native/shared_buffer.rs` | Shared memory layout |
-| `host/native/thread_pool.rs` | Fixed-size thread pool + cancel |
-| `host/web/wasm_api.rs` | #[wasm_bindgen] dispatch entry points |
-| `host/web/wasm_encode.rs` | Dispatch result → JsValue (matches Dart codec shape) |
-
-### Additions to author files
-
-| File | What we added |
-|---|---|
-| `src/wasm.rs` | `with_doc()`/`with_editor()` helpers, `pub(crate)` on `JsCallbackWriter`/`PositionTracker`/`WasmDocumentBuilder.inner` for wasm_api.rs access, streaming sign functions, `DispatchPageBuilder` (buffers `dispatch::PageOp`, replays via `dispatch::replay_page_ops`) |
-| `src/editor/document_editor.rs` | `scan_content_stream_names`, `prune_page_resources` (wired into GC save), resource pruning during full rewrite, incremental save support via `save_mode` parameter, `add_content_stream_watermark` + `under_content` HashMap for background watermarks prepended before page Contents |
-| `src/compliance/converter.rs` | Bundled Liberation fonts via `include_bytes!` in `converter_fontdb()` — identical PDF/A output on native and WASM. System fonts loaded additionally on native only. |
-| `src/compliance/fonts/` | 12 Liberation font TTF files (Sans, Serif, Mono × Regular, Bold, Italic, BoldItalic) |
-| `src/signatures/verifier.rs` | Signer CN extraction from CMS blob in `extract_signature_info` (strips zero-padding from /Contents) |
-| `src/signatures/sign_bytes.rs` | `sign_pdf_streaming_with_field` — writes AcroForm + field + widget + page annotation alongside signature dict |
-
-### Patch discipline
-
-- `host/` is entirely ours — no upstream conflict risk.
-- Additions to `src/wasm.rs` are clearly separated (helper methods, encryption bindings, streaming sign).
-- Engine-level patches are additive — never modify existing upstream code.
-- When upstream absorbs a feature we patched, delete our patch during rebase.
-
----
-
-> **Two submodules (pdf_oxide + office_oxide), same fork convention. Upstream bumps rebase our patch branch. `host/` is entirely ours (dispatch + native + web). ALL ops — read, edit, query, save, sign, convert, builder — go through dispatch.rs. Zero exceptions. Builder page ops use `dispatch::PageOp` enum + `replay_page_ops`. Liberation fonts bundled for WASM PDF/A parity. Rebuild WASM after every Rust change. The wire_sync_test catches parity drift. Release pipeline is fully automated.**
+| Build hook fails on consumer machine | Binary missing for platform — check GitHub Release assets |
+| WASM test fails | Rebuild: `./tool/build_wasm.sh` |
+| Native passes, web fails | bridge_api.rs WASM path missing the op |
+| wire_sync_test fails | EngineOp without matching bridge_api.rs arm |
+| "Handle not found" | Handle disposed or never opened |
+| "Symbol not found" at runtime | Binary older than source — rebuild |

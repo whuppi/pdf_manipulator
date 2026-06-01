@@ -1,144 +1,220 @@
-# pdf_manipulator — Capabilities
+# Capability Roadmap
 
-What's shipped, what's planned, what's out of scope.
+Every Rust engine capability mapped to its Dart surface.
 
-For architecture see [`ARCHITECTURE.md`](ARCHITECTURE.md).
+**O(1) memory I/O — non-negotiable.** Every shipped op streams through
+bounded buffers. Every PLANNED op must do the same. The test guards
+(TestSource 64KB, TestSink 256KB) enforce this mechanically — see
+[`ARCHITECTURE.md`](ARCHITECTURE.md) §6.
 
----
+Five files, strict rules:
 
-## Infrastructure
-
-| Capability | Status |
-|---|:---:|
-| Four-layer architecture (Consumer API / Transport / Host / Engine) | ✓ |
-| Shared dispatch (`host/dispatch.rs`) — all ops (read + edit) go through one brain | ✓ |
-| Symmetric file naming (bridge↔bridge, coordinator↔coordinator, wire↔wire, ffi_api↔wasm_api, ffi_encode↔wasm_encode) | ✓ |
-| DataSource (random-access reader) + DataSink (sequential writer) | ✓ |
-| Sealed PdfPages, PdfError, PdfEncryption types | ✓ |
-| PdfSaveMode (fullRewrite / incremental) | ✓ |
-| Rust thread pool (native) + Web Worker pool (web) — off main thread | ✓ |
-| Condvar streaming I/O (native) + Atomics/OPFS (web) | ✓ |
-| Stream\<T\> for render and extractImages (one item at a time) | ✓ |
-| Arena allocator per operation (bumpalo) | ✓ |
-| Build hook: compile from source (contributors) or download pre-built (consumers) | ✓ |
-| Pre-built binary caching with SHA256 verification (offline builds work) | ✓ |
-| Web setup script (`dart run pdf_manipulator:setup`) with version guard | ✓ |
-| CI/CD: cross-compile 13 native targets + WASM | ✓ |
-| Wire sync test (catches native/web parity drift) | ✓ |
-| Resource pruning on GC save (scan content streams, prune unused Resources) | ✓ |
-
----
-
-## Operations — Pdf (standalone)
-
-| Operation | Status |
-|---|:---:|
-| open (page count, version, dimensions, metadata, encryption, permissions) | ✓ |
-| extract (text / markdown / html, per-page or all) | ✓ |
-| search (query + PdfPages → SearchResult with x,y,w,h) | ✓ |
-| render (PdfPages → Stream\<RenderedPage\>) | ✓ |
-| extractImages (PdfPages → Stream\<PdfImage\>) | ✓ |
-| getSignatures / verifySignatures | ✓ |
-| validatePdfA / validatePdfUa | ✓ |
-| classifyPage / classifyDocument | ✓ |
-| planSplitByBookmarks | ✓ |
-| sign (PKCS12 / PEM) | ✓ |
-| imagesToPdf | ✓ |
-| convertTo (PDF → DOCX/PPTX/XLSX) / convertToPdf (reverse) | ✓ |
-
----
-
-## Operations — PdfEditor (batch edit)
-
-| Operation | Status |
-|---|:---:|
-| openEditor (persistent handle, streaming reader) | ✓ |
-| selectPages / deletePage / movePage | ✓ |
-| rotatePage / rotateAllPages | ✓ |
-| setTitle / setAuthor / setSubject / setKeywords (get + set) | ✓ |
-| mergeFrom (DataSource) | ✓ |
-| addWatermark (PdfWatermarkStyle + sealed PdfWatermarkPosition + PdfWatermarkLayer) | ✓ |
-| Sealed PdfWatermarkPosition (center / corner / tiled / exact — engine resolves per-page) | ✓ |
-| PdfWatermarkLayer (foreground: annotation / background: content-stream behind page content) | ✓ |
-| addStamp / addImageStamp | ✓ |
-| embedFile / eraseRegions | ✓ |
-| flattenForms / flattenAllAnnotations | ✓ |
-| setFormFieldValue | ✓ |
-| cropMargins / convertToPdfA / resizeImage | ✓ |
-| unembedStandardFonts / optimizeImages | ✓ |
-| addRedaction / redactionCount / applyRedactions / scrubMetadata | ✓ |
-| save (DataSink + PdfSaveOptions: mode, compression, GC, encryption) | ✓ |
-| getPageMediaBox / pageCount / version / isModified | ✓ |
-
----
-
-## Operations — PdfBuilder (create from scratch)
-
-| Operation | Status |
-|---|:---:|
-| setTitle / setAuthor / setSubject / setKeywords | ✓ |
-| addA4Page / addLetterPage / addPage(custom size) | ✓ |
-| text, heading, paragraph, space, horizontalRule, image, watermark | ✓ |
-| textField, checkbox, comboBox, pushButton, signatureField, radioGroup | ✓ |
-| fieldKeystroke, fieldFormat, fieldValidate, fieldCalculate | ✓ |
-| linkUrl, linkPage, footnote, columns, newline, newPageSameSize | ✓ |
-| save (DataSink) | ✓ |
-
----
-
-## Operations — PdfOperations (21 sugar methods)
-
-| Operation | Status |
-|---|:---:|
-| merge, split, splitBySize, splitByBookmarks | ✓ |
-| extractPages, deletePages, reorderPages, movePage | ✓ |
-| rotatePages, rotateAllPages | ✓ |
-| flattenForms, applyRedactions | ✓ |
-| embedFile, eraseRegions | ✓ |
-| compress, watermark | ✓ |
-| encrypt, decrypt | ✓ |
-| addStamp, addImageStamp, convertToPdfA | ✓ |
-
----
-
-## Dispatch coverage — zero violations
-
-**Every** operation goes through `dispatch.rs` on both platforms. No exceptions.
-
-| Category | Through dispatch | Rule enforced in |
+| File | Role | Rule |
 |---|---|---|
-| Read ops (open, extract, search, validate, classify, render, extractImages) | `dispatch::*` → ffi_encode / wasm_encode | wasm_api.rs, ffi_api.rs headers |
-| Edit ops (select, delete, rotate, merge, watermark, compress, etc.) | `dispatch::edit_*` | wasm_api.rs `dispatchEdit*` methods |
-| Editor queries (pageCount, isModified, pageMediaBox, redactionCount) | `dispatch::edit_get_metadata` / `edit_is_modified` / `edit_page_media_box` | wasm_api.rs, ffi_api.rs `bridge_editor_query` |
-| Editor save | `dispatch::edit_save_with_options` / `edit_save_encrypted` | wasm_api.rs `dispatchEditSave*` |
-| Sign | `dispatch::sign_via_editor` | Both platforms call same function |
-| Convert (DOCX/PPTX/XLSX) | `dispatch::convert_to_format_writer` / `convert_from_format_writer` | wasm_api.rs `dispatchConvertTo/FromFormat` |
-| Images to PDF | `dispatch::images_to_pdf_writer` / `images_to_pdf_bytes` | wasm_api.rs `dispatchImagesToPdf` |
-| Builder metadata (title, author, etc.) | `dispatch::builder_set_title` etc. | wasm_api.rs `dispatchSet*` |
-| Builder save | `dispatch::builder_save` / `builder_save_to_writer` | wasm_api.rs `dispatchBuild` |
-| Builder page ops (font, text, image, etc.) | `dispatch::PageOp` enum + `dispatch::replay_page_ops` | wasm_api.rs `DispatchPageBuilder` |
-
-worker.js calls ONLY `dispatch*` methods. ffi_api.rs calls ONLY `dispatch::*` functions. Each file has a rule header documenting violations. See individual file headers for the full rule.
+| `pdf_doc.dart` | Read-only queries | No mutations |
+| `pdf_editor.dart` | Mutations only | No read/export ops even if Rust has them on editor |
+| `pdf_builder.dart` | Create from scratch | No reading existing PDFs |
+| `pdf_standalone.dart` | Source in, sink out, no handle | Non-mutating one-shot ops |
+| `pdf_sugar.dart` | Convenience wrappers | Over editor/builder only, never standalone (rare exception allowed) |
 
 ---
 
-## Bugs — FIXED (all 9 from behavioral test rewrite)
+## PdfDoc — read-only queries
 
-| Bug | Fix | Status |
+| Capability | Rust | Dart | Status |
+|---|---|---|---|
+| Page count | `current_page_count` | `pageCount` | DONE |
+| Version | `version` | `version` | DONE |
+| Page list (dimensions, rotation) | `get_page_media_box`, `get_page_rotation` | `pages` (decoded on open) | DONE |
+| Title / Author / Subject / Keywords | `title`, `author`, `subject`, `keywords` | decoded on open | DONE |
+| Encryption info | via open result | `isEncrypted`, `encryptionAlgorithm`, `permissions` | DONE |
+| Is tagged | via open result | `isTagged` | DONE |
+| Extract text | `extract_page_text` | `extract()` | DONE |
+| Search text | `search_text` | `search()` | DONE |
+| Render pages | `render_pages_streamed` | `render()` | DONE |
+| Extract images | `extract_images_streamed` | `extractImages()` | DONE |
+| Get signatures | `get_signatures` | `getSignatures()` | DONE |
+| Verify signatures | `verify_signatures` | `verifySignatures()` | DONE |
+| Validate PDF/A | `validate_pdfa` | `validatePdfA()` | DONE |
+| Validate PDF/UA | `validate_pdfua` | `validatePdfUa()` | DONE |
+| Classify page | `classify_page` | `classifyPage()` | DONE |
+| Classify document | `classify_document` | `classifyDocument()` | DONE |
+| Plan split by bookmarks | `plan_split_by_bookmarks` | `planSplitByBookmarks()` | DONE |
+| Get page crop box | `get_page_crop_box` | — | PLANNED |
+| Has XFA forms | `has_xfa` | — | PLANNED |
+| Analyze XFA | `analyze_xfa` | — | PLANNED |
+| Get form fields (list all) | `get_form_fields` | — | PLANNED |
+| Get form field value | `get_form_field_value` | — | PLANNED |
+| Has form field | `has_form_field` | — | PLANNED |
+| Get page images (list metadata) | `get_page_images` | — | PLANNED |
+| Producer / Creator metadata | `producer`, `creator` | — | PLANNED |
+| Creation date | `creation_date` | — | PLANNED |
+
+---
+
+## PdfEditor — mutations only
+
+| Capability | Rust | Dart | Status |
+|---|---|---|---|
+| Set title | `set_title` | `setTitle()` | DONE |
+| Set author | `set_author` | `setAuthor()` | DONE |
+| Set subject | `set_subject` | `setSubject()` | DONE |
+| Set keywords | `set_keywords` | `setKeywords()` | DONE |
+| Get title | `title` | `getTitle()` | DONE |
+| Get author | `author` | `getAuthor()` | DONE |
+| Get subject | `subject` | `getSubject()` | DONE |
+| Get keywords | `keywords` | `getKeywords()` | DONE |
+| Scrub metadata | via bridge | `scrubMetadata()` | DONE |
+| Rotate page | `rotate_page_by` | `rotatePage()` | DONE |
+| Rotate all pages | `rotate_all_pages` | `rotateAllPages()` | DONE |
+| Delete page | via bridge | `deletePage()` | DONE |
+| Move page | via bridge | `movePage()` | DONE |
+| Select pages | `select_pages` | `selectPages()` | DONE |
+| Merge from another PDF | `merge_from_reader` | `mergeFrom()` | DONE |
+| Optimize images | via bridge | `optimizeImages()` | DONE |
+| Unembed standard fonts | via bridge | `unembedStandardFonts()` | DONE |
+| Add watermark | via bridge | `addWatermark()` | DONE |
+| Add stamp | via bridge | `addStamp()` | DONE |
+| Add image stamp | via bridge | `addImageStamp()` | DONE |
+| Embed file | `embed_file` | `embedFile()` | DONE |
+| Erase regions | `erase_regions` | `eraseRegions()` | DONE |
+| Flatten forms | `flatten_forms` | `flattenForms()` | DONE |
+| Flatten all annotations | `flatten_all_annotations` | `flattenAllAnnotations()` | DONE |
+| Set form field value | `set_form_field_value` | `setFormFieldValue()` | DONE |
+| Crop margins | `crop_margins` | `cropMargins()` | DONE |
+| Resize image | `resize_image` | `resizeImage()` | DONE |
+| Convert to PDF/A | via bridge | `convertToPdfA()` | DONE |
+| Add redaction | `add_redaction` | `addRedaction()` | DONE |
+| Redaction count | `redaction_count` | `redactionCount()` | DONE |
+| Apply redactions | `apply_all_redactions` | `applyRedactions()` | DONE |
+| Get page media box | `get_page_media_box` | `getPageMediaBox()` | DONE |
+| Is modified | `is_modified` | `isModified` | DONE |
+| Page count | `current_page_count` | `pageCount` | DONE |
+| Version | `version` | `version` | DONE |
+| Save | `write_full_to_writer` | `save()` | DONE |
+| Set producer | `set_producer` | — | PLANNED |
+| Set creation date | `set_creation_date` | — | PLANNED |
+| Set page media box | `set_page_media_box` | — | PLANNED |
+| Set page crop box | `set_page_crop_box` | — | PLANNED |
+| Set page rotation | `set_page_rotation` | — | PLANNED |
+| Flatten forms on single page | `flatten_forms_on_page` | — | PLANNED |
+| Flatten annotations on single page | `flatten_page_annotations` | — | PLANNED |
+| Clear erase regions | `clear_erase_regions` | — | PLANNED |
+| Merge selective pages from | `merge_pages_from` | — | PLANNED |
+| Apply redactions destructive | `apply_redactions_destructive` | — | PLANNED |
+| Sanitize document | `sanitize_document` | — | PLANNED |
+| Reposition image | `reposition_image` | — | PLANNED |
+| Set image bounds | `set_image_bounds` | — | PLANNED |
+| Remove form field | `remove_form_field` | — | PLANNED |
+| Set form field readonly | `set_form_field_readonly` | — | PLANNED |
+| Set form field required | `set_form_field_required` | — | PLANNED |
+| Set form field tooltip | `set_form_field_tooltip` | — | PLANNED |
+| Set form field rect | `set_form_field_rect` | — | PLANNED |
+| Set form field max length | `set_form_field_max_length` | — | PLANNED |
+| Set form field alignment | `set_form_field_alignment` | — | PLANNED |
+| Set form field background color | `set_form_field_background_color` | — | PLANNED |
+| Set form field border color | `set_form_field_border_color` | — | PLANNED |
+| Set form field border width | `set_form_field_border_width` | — | PLANNED |
+| Set form field default appearance | `set_form_field_default_appearance` | — | PLANNED |
+| Set form field flags | `set_form_field_flags` | — | PLANNED |
+| Convert XFA to AcroForm | `convert_xfa_to_acroform` | — | PLANNED |
+| Embed file with options | `embed_file_with_options` | — | PLANNED |
+| Export form data FDF | `export_form_data_fdf` | — | PLANNED |
+| Export form data XFDF | `export_form_data_xfdf` | — | PLANNED |
+
+---
+
+## PdfBuilder — create from scratch
+
+| Capability | Rust | Dart | Status |
+|---|---|---|---|
+| Create builder | via bridge | `Pdf.build()` | DONE |
+| Add page (custom size) | via bridge | `addPage()` | DONE |
+| Add A4 page | — (dart convenience) | `addA4Page()` | DONE |
+| Add Letter page | — (dart convenience) | `addLetterPage()` | DONE |
+| Set title | via bridge | `setTitle()` | DONE |
+| Set author | via bridge | `setAuthor()` | DONE |
+| Set subject | via bridge | `setSubject()` | DONE |
+| Set keywords | via bridge | `setKeywords()` | DONE |
+| Text | via bridge | `page.text()` | DONE |
+| Heading | via bridge | `page.heading()` | DONE |
+| Paragraph | via bridge | `page.paragraph()` | DONE |
+| Image | via bridge | `page.image()` | DONE |
+| Watermark | via bridge | `page.watermark()` | DONE |
+| Font | via bridge | `page.font()` | DONE |
+| Space | via bridge | `page.space()` | DONE |
+| Horizontal rule | via bridge | `page.horizontalRule()` | DONE |
+| Newline | via bridge | `page.newline()` | DONE |
+| New page same size | via bridge | `page.newPageSameSize()` | DONE |
+| Text field | via bridge | `page.textField()` | DONE |
+| Checkbox | via bridge | `page.checkbox()` | DONE |
+| Combo box | via bridge | `page.comboBox()` | DONE |
+| Push button | via bridge | `page.pushButton()` | DONE |
+| Signature field | via bridge | `page.signatureField()` | DONE |
+| Radio group | via bridge | `page.radioGroup()` | PLANNED |
+| Field keystroke | via bridge | `page.fieldKeystroke()` | DONE |
+| Field format | via bridge | `page.fieldFormat()` | DONE |
+| Field validate | via bridge | `page.fieldValidate()` | DONE |
+| Field calculate | via bridge | `page.fieldCalculate()` | DONE |
+| Link URL | via bridge | `page.linkUrl()` | DONE |
+| Link page | via bridge | `page.linkPage()` | DONE |
+| Footnote | via bridge | `page.footnote()` | DONE |
+| Columns | via bridge | `page.columns()` | DONE |
+| Page done | via bridge | `page.done()` | DONE |
+| Save | via bridge | `save()` | DONE |
+
+---
+
+## PdfStandalone — source in, sink out, no handle
+
+| Capability | Rust | Dart | Status |
+|---|---|---|---|
+| Sign PDF (PKCS12 / PEM) | `handle_sign` | `sign()` | DONE |
+| Convert to format (DOCX/PPTX/XLSX) | `handle_convert_to` | `convertTo()` | DONE |
+| Convert to PDF | `handle_convert_to_pdf` | `convertToPdf()` | DONE |
+| Extract pages | `handle_editor_extract_pages` | `extractPages()` | DONE |
+
+---
+
+## PdfSugar — convenience wrappers over editor/builder
+
+| Sugar method | Wraps | Status |
 |---|---|---|
-| `redactionCount` always returns 0 | `bridge_editor_query` on thread pool (query code 3) | FIXED |
-| `optimizeImages` always returns 0 | `bridge_editor_query` (query code 4) + `dispatch::edit_optimize_images` | FIXED |
-| `unembedStandardFonts` always returns 0 | `bridge_editor_query` (query code 5) + `dispatch::edit_unembed_standard_fonts` | FIXED |
-| Source page tree deadlock | All editor queries through thread pool, never sync FFI | FIXED |
-| `getPageMediaBox` silent fallback to A4 | Through thread pool, returns real values | FIXED |
-| `scrubMetadata` doesn't remove metadata | Changed to call `sanitize_document` instead of `apply_redactions_destructive` | FIXED |
-| `getSignatures` can't find sign() output | `sign_pdf_streaming_with_field` writes AcroForm + field + widget + page annotation. `enumerate_signatures` extracts signer CN from CMS blob (strips zero-padding) | FIXED |
-| `convertToPdfA` empty/invalid output | `convert_with_editor` (no commit_in_place materialization). Bundled Liberation fonts for WASM (no system font dependency) | FIXED |
-| `bookmarkedPdf` fixture missing font | Rebuilt with proper `/Resources << /Font << /F1 >> >>`. Photo PNG fixture for optimizeImages tests | FIXED |
+| `merge` | editor: edit → mergeFrom × N → save | DONE |
+| `split` | editor: extractPages × N chunks | DONE |
+| `splitBySize` | editor: extractPages with binary search | DONE |
+| `splitByBookmarks` | doc: planSplitByBookmarks → extractPages | DONE |
+| `extractPages` | editor: edit → selectPages → save | DONE |
+| `deletePages` | editor: edit → deletePage × N → save | DONE |
+| `reorderPages` | editor: edit → selectPages → save | DONE |
+| `movePage` | editor: edit → movePage → save | DONE |
+| `rotatePages` | editor: edit → rotatePage × N → save | DONE |
+| `rotateAllPages` | editor: edit → rotateAllPages → save | DONE |
+| `flattenForms` | editor: edit → flattenForms → save | DONE |
+| `applyRedactions` | editor: edit → applyRedactions → save | DONE |
+| `compress` | editor: edit → optimizeImages → save(compress) | DONE |
+| `embedFile` | editor: edit → embedFile → save | DONE |
+| `eraseRegions` | editor: edit → eraseRegions → save | DONE |
+| `addStamp` | editor: edit → addStamp → save | DONE |
+| `addImageStamp` | editor: edit → addImageStamp → save | DONE |
+| `watermark` | editor: edit → addWatermark(-1) → save | DONE |
+| `encrypt` | editor: edit → save(encryption) | DONE |
+| `decrypt` | editor: edit(pw) → save(removeEncryption) | DONE |
+| `convertToPdfA` | editor: edit → convertToPdfA → save | DONE |
+| `imagesToPdf` | builder: build → addPage+image × N → save | DONE |
 
-## Planned
+---
 
-Rewrite example app and verify README examples compile.
+## Summary
+
+| Category | Done | Planned |
+|---|---|---|
+| PdfDoc | 17 | 9 |
+| PdfEditor | 35 | 29 |
+| PdfBuilder | 32 | 1 |
+| PdfStandalone | 4 | 0 |
+| PdfSugar | 22 | 0 |
+| **Total** | **110** | **39** |
 
 ---
 

@@ -1,44 +1,77 @@
-// FFI bindings for the Rust bridge C API.
+// FFI bindings for the per-instance Rust bridge.
 //
-// These @Native declarations bind to the functions in
-// vendor/pdf_oxide/src/bridge/ffi_api.rs and allo-isolate.
+// Three entry points:
+//   bridgeInit()     → creates an InstanceState, returns opaque pointer
+//   bridgeExecute()  → runs an op on the instance's thread pool
+//   bridgeShutdown() → drops the instance, frees all memory + threads
 //
-// All Dart names are camelCase. The `symbol:` parameter maps to the
-// actual C symbol name (snake_case). No `// ignore:` comments needed.
+// Multi-source/multi-sink: bridgeExecute takes parallel arrays of
+// (buf, notify, length) triples for sources and (buf, notify) pairs
+// for sinks. Any count — not hardcoded.
 //
-// INTERNAL — used by the native bridge only.
+// INTERNAL — used by coordinator.dart only.
 
 @ffi.DefaultAsset('package:pdf_manipulator/src/ffi/native_bindings.g.dart')
 library;
 
 import 'dart:ffi' as ffi;
 
-// ── Init / Shutdown ─────────────────────────────────────────────────
+// ── allo-isolate bootstrap ───────────────────────────────────────
 
-@ffi.Native<ffi.Void Function(ffi.Pointer<ffi.NativeFunction<ffi.Bool Function(ffi.Int64, ffi.Pointer<ffi.Void>)>>)>(
+@ffi.Native<ffi.Void Function(
+    ffi.Pointer<ffi.NativeFunction<ffi.Bool Function(ffi.Int64, ffi.Pointer<ffi.Void>)>>)>(
     symbol: 'store_dart_post_cobject')
 external void storeDartPostCobject(
   ffi.Pointer<ffi.NativeFunction<ffi.Bool Function(ffi.Int64, ffi.Pointer<ffi.Void>)>> postCObject,
 );
 
-@ffi.Native<ffi.Void Function()>(symbol: 'bridge_init')
-external void bridgeInit();
+// ── Instance lifecycle ──────────────────────────────────────────
 
-@ffi.Native<ffi.Void Function()>(symbol: 'bridge_shutdown')
-external void bridgeShutdown();
+@ffi.Native<ffi.Pointer<ffi.Void> Function()>(symbol: 'bridge_init')
+external ffi.Pointer<ffi.Void> bridgeInit();
 
-// ── Operation management ────────────────────────────────────────────
+@ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Void>)>(
+    symbol: 'bridge_shutdown')
+external void bridgeShutdown(ffi.Pointer<ffi.Void> instance);
 
-@ffi.Native<ffi.Void Function(ffi.Uint64)>(symbol: 'bridge_cancel')
-external void bridgeCancel(int opId);
+// ── Operation execution ─────────────────────────────────────────
 
-@ffi.Native<ffi.Void Function()>(symbol: 'bridge_cancel_all')
-external void bridgeCancelAll();
+/// Execute a binary-encoded operation on the instance's thread pool.
+///
+/// Sources (indexed 0..sourceCount-1): parallel arrays of
+///   [sourceBufs] condvar buffer pointers,
+///   [sourceNotifyFns] NativeCallable listener pointers,
+///   [sourceLengths] byte counts.
+///
+/// Sinks (indexed 0..sinkCount-1): parallel arrays of
+///   [sinkBufs] condvar buffer pointers,
+///   [sinkNotifyFns] NativeCallable listener pointers.
+@ffi.Native<ffi.Void Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Uint8>, ffi.Int32,
+    ffi.Int32,
+    ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
+    ffi.Pointer<ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>>>,
+    ffi.Pointer<ffi.Int64>,
+    ffi.Int32,
+    ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
+    ffi.Pointer<ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>>>,
+    ffi.Int64)>(symbol: 'bridge_execute')
+external void bridgeExecute(
+  ffi.Pointer<ffi.Void> instance,
+  ffi.Pointer<ffi.Uint8> requestPtr,
+  int requestLen,
+  int sourceCount,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> sourceBufs,
+  ffi.Pointer<ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>>> sourceNotifyFns,
+  ffi.Pointer<ffi.Int64> sourceLengths,
+  int sinkCount,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> sinkBufs,
+  ffi.Pointer<ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>>> sinkNotifyFns,
+  int resultPort,
+);
 
-@ffi.Native<ffi.Int32 Function()>(symbol: 'bridge_pool_size')
-external int bridgePoolSize();
-
-// ── Shared buffer management ────────────────────────────────────────
+// ── Condvar buffer management ───────────────────────────────────
 
 @ffi.Native<ffi.Int32 Function()>(symbol: 'bridge_read_buffer_size')
 external int bridgeReadBufferSize();
@@ -46,236 +79,26 @@ external int bridgeReadBufferSize();
 @ffi.Native<ffi.Int32 Function()>(symbol: 'bridge_write_buffer_size')
 external int bridgeWriteBufferSize();
 
-@ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>)>(symbol: 'bridge_init_read_buffer')
+@ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>)>(
+    symbol: 'bridge_init_read_buffer')
 external void bridgeInitReadBuffer(ffi.Pointer<ffi.Uint8> buf);
 
-@ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>)>(symbol: 'bridge_init_write_buffer')
+@ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>)>(
+    symbol: 'bridge_init_write_buffer')
 external void bridgeInitWriteBuffer(ffi.Pointer<ffi.Uint8> buf);
 
-@ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>)>(symbol: 'bridge_destroy_read_buffer')
+@ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>)>(
+    symbol: 'bridge_destroy_read_buffer')
 external void bridgeDestroyReadBuffer(ffi.Pointer<ffi.Uint8> buf);
 
-@ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>)>(symbol: 'bridge_destroy_write_buffer')
+@ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>)>(
+    symbol: 'bridge_destroy_write_buffer')
 external void bridgeDestroyWriteBuffer(ffi.Pointer<ffi.Uint8> buf);
 
-@ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>)>(symbol: 'bridge_signal_read')
+@ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>)>(
+    symbol: 'bridge_signal_read')
 external void bridgeSignalRead(ffi.Pointer<ffi.Uint8> buf);
 
-@ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>)>(symbol: 'bridge_signal_write')
+@ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>)>(
+    symbol: 'bridge_signal_write')
 external void bridgeSignalWrite(ffi.Pointer<ffi.Uint8> buf);
-
-// ── Submit operations ───────────────────────────────────────────────
-
-@ffi.Native<
-    ffi.Uint64 Function(
-        ffi.Pointer<ffi.Uint8>,
-        ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>>,
-        ffi.Int64,
-        ffi.Pointer<ffi.Char>,
-        ffi.Int64)>(symbol: 'bridge_submit_open')
-external int bridgeSubmitOpen(
-  ffi.Pointer<ffi.Uint8> readBuf,
-  ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>> readNotifyFn,
-  int sourceLength,
-  ffi.Pointer<ffi.Char> password,
-  int resultPort,
-);
-
-@ffi.Native<
-    ffi.Uint64 Function(
-        ffi.Pointer<ffi.Uint8>,
-        ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>>,
-        ffi.Int64,
-        ffi.Pointer<ffi.Uint8>,
-        ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>>,
-        ffi.Int32,
-        ffi.Pointer<ffi.Uint8>,
-        ffi.Int32,
-        ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
-        ffi.Pointer<ffi.Size>,
-        ffi.Size,
-        ffi.Int64)>(symbol: 'bridge_submit_edit')
-external int bridgeSubmitEdit(
-  ffi.Pointer<ffi.Uint8> readBuf,
-  ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>> readNotifyFn,
-  int sourceLength,
-  ffi.Pointer<ffi.Uint8> writeBuf,
-  ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>> writeNotifyFn,
-  int opCode,
-  ffi.Pointer<ffi.Uint8> opParams,
-  int opParamsLen,
-  ffi.Pointer<ffi.Pointer<ffi.Uint8>> secondaryPtrs,
-  ffi.Pointer<ffi.Size> secondaryLens,
-  int secondaryCount,
-  int resultPort,
-);
-
-@ffi.Native<
-    ffi.Uint64 Function(
-        ffi.Pointer<ffi.Uint8>,
-        ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>>,
-        ffi.Int64,
-        ffi.Pointer<ffi.Char>,
-        ffi.Int32,
-        ffi.Pointer<ffi.Uint8>,
-        ffi.Int32,
-        ffi.Int64)>(symbol: 'bridge_submit_read')
-external int bridgeSubmitRead(
-  ffi.Pointer<ffi.Uint8> readBuf,
-  ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>> readNotifyFn,
-  int sourceLength,
-  ffi.Pointer<ffi.Char> password,
-  int opCode,
-  ffi.Pointer<ffi.Uint8> opParams,
-  int opParamsLen,
-  int resultPort,
-);
-
-/// Submit a streaming read operation. Posts MULTIPLE results to resultPort:
-/// one per item (type=1), then a done marker (type=2), or error (type=0).
-@ffi.Native<ffi.Uint64 Function(
-        ffi.Pointer<ffi.Uint8>,
-        ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>>,
-        ffi.Int64,
-        ffi.Pointer<ffi.Char>,
-        ffi.Int32,
-        ffi.Pointer<ffi.Uint8>,
-        ffi.Int32,
-        ffi.Int64)>(symbol: 'bridge_submit_stream')
-external int bridgeSubmitStream(
-  ffi.Pointer<ffi.Uint8> readBuf,
-  ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>> readNotifyFn,
-  int sourceLength,
-  ffi.Pointer<ffi.Char> password,
-  int opCode,
-  ffi.Pointer<ffi.Uint8> opParams,
-  int opParamsLen,
-  int resultPort,
-);
-
-// ── Images to PDF ──────────────────────────────────────────────────────
-
-@ffi.Native<ffi.Uint64 Function(
-        ffi.Pointer<ffi.Uint8>,
-        ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>>,
-        ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
-        ffi.Pointer<ffi.Size>,
-        ffi.Size,
-        ffi.Int64)>(symbol: 'bridge_submit_images_to_pdf')
-external int bridgeSubmitImagesToPdf(
-  ffi.Pointer<ffi.Uint8> writeBuf,
-  ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>> writeNotifyFn,
-  ffi.Pointer<ffi.Pointer<ffi.Uint8>> imagePtrs,
-  ffi.Pointer<ffi.Size> imageLens,
-  int imageCount,
-  int resultPort,
-);
-
-// ── Persistent editor handles ─────────────────────────────────────────
-
-@ffi.Native<ffi.Uint64 Function(
-        ffi.Pointer<ffi.Uint8>,
-        ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>>,
-        ffi.Int64,
-        ffi.Pointer<ffi.Char>,
-        ffi.Int64)>(symbol: 'bridge_editor_open')
-external int bridgeEditorOpen(
-  ffi.Pointer<ffi.Uint8> readBuf,
-  ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>> readNotifyFn,
-  int sourceLength,
-  ffi.Pointer<ffi.Char> password,
-  int resultPort,
-);
-
-@ffi.Native<ffi.Void Function(
-        ffi.Uint64,
-        ffi.Int32,
-        ffi.Pointer<ffi.Uint8>,
-        ffi.Int32,
-        ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
-        ffi.Pointer<ffi.Int32>,
-        ffi.Int32,
-        ffi.Int64)>(symbol: 'bridge_editor_mutate')
-external void bridgeEditorMutate(
-  int handleId,
-  int opCode,
-  ffi.Pointer<ffi.Uint8> params,
-  int paramsLen,
-  ffi.Pointer<ffi.Pointer<ffi.Uint8>> secondaries,
-  ffi.Pointer<ffi.Int32> secondaryLens,
-  int secondaryCount,
-  int resultPort,
-);
-
-@ffi.Native<ffi.Void Function(
-        ffi.Uint64,
-        ffi.Pointer<ffi.Uint8>,
-        ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>>,
-        ffi.Bool, ffi.Bool,
-        ffi.Int32, ffi.Int32, ffi.Int32,
-        ffi.Pointer<ffi.Uint8>, ffi.Int32,
-        ffi.Pointer<ffi.Uint8>, ffi.Int32,
-        ffi.Int32,
-        ffi.Int64)>(symbol: 'bridge_editor_save')
-external void bridgeEditorSave(
-  int handleId,
-  ffi.Pointer<ffi.Uint8> writeBuf,
-  ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>> writeNotifyFn,
-  bool compress, bool garbageCollect,
-  int saveMode, int encryptMode, int encryptAlgo,
-  ffi.Pointer<ffi.Uint8> encryptUserPw, int encryptUserPwLen,
-  ffi.Pointer<ffi.Uint8> encryptOwnerPw, int encryptOwnerPwLen,
-  int encryptPermissions,
-  int resultPort,
-);
-
-@ffi.Native<ffi.Void Function(ffi.Uint64)>(symbol: 'bridge_editor_dispose')
-external void bridgeEditorDispose(int handleId);
-
-/// Query an editor on the thread pool. ALL editor reads go through this.
-/// query_code: 0=pageCount, 1=isModified, 2=getPageMediaBox, 3=redactionCount
-@ffi.Native<ffi.Void Function(ffi.Uint64, ffi.Int32, ffi.Int32, ffi.Int64)>(
-    symbol: 'bridge_editor_query')
-external void bridgeEditorQuery(int handleId, int queryCode, int param, int resultPort);
-
-@ffi.Native<ffi.Void Function(ffi.Uint64, ffi.Int64)>(symbol: 'bridge_editor_get_metadata')
-external void bridgeEditorGetMetadata(int handleId, int resultPort);
-
-// ── Builder handle ops ──────────────────────────────────────────────
-
-@ffi.Native<ffi.Uint64 Function()>(symbol: 'bridge_builder_create')
-external int bridgeBuilderCreate();
-
-@ffi.Native<ffi.Void Function(ffi.Uint64, ffi.Int32, ffi.Pointer<ffi.Char>)>(
-    symbol: 'bridge_builder_set_metadata')
-external void bridgeBuilderSetMetadata(
-    int handleId, int op, ffi.Pointer<ffi.Char> value);
-
-@ffi.Native<ffi.Int32 Function(ffi.Uint64, ffi.Int32, ffi.Double, ffi.Double)>(
-    symbol: 'bridge_builder_add_page')
-external int bridgeBuilderAddPage(
-    int handleId, int pageType, double width, double height);
-
-@ffi.Native<
-    ffi.Int32 Function(ffi.Uint64, ffi.Int32, ffi.Pointer<ffi.Uint8>,
-        ffi.Int32, ffi.Pointer<ffi.Uint8>, ffi.Int32)>(
-    symbol: 'bridge_builder_page_op')
-external int bridgeBuilderPageOp(
-    int handleId, int opCode,
-    ffi.Pointer<ffi.Uint8> params, int paramsLen,
-    ffi.Pointer<ffi.Uint8> secondary, int secondaryLen);
-
-@ffi.Native<
-    ffi.Void Function(ffi.Uint64, ffi.Pointer<ffi.Uint8>,
-        ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>>,
-        ffi.Pointer<ffi.Uint8>, ffi.Int32, ffi.Int64)>(
-    symbol: 'bridge_builder_save')
-external void bridgeBuilderSave(
-    int handleId,
-    ffi.Pointer<ffi.Uint8> writeBuf,
-    ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>> writeNotify,
-    ffi.Pointer<ffi.Uint8> saveOptions, int saveOptionsLen,
-    int resultPort);
-
-@ffi.Native<ffi.Void Function(ffi.Uint64)>(symbol: 'bridge_builder_dispose')
-external void bridgeBuilderDispose(int handleId);

@@ -1,4 +1,4 @@
-// Abstract bridge — NativeBridge and WebBridge extend this.
+// Abstract bridge — SharedBridge implements this.
 // Only FFI methods that go to the engine. No one-shot sugar.
 // No algorithms. No helpers. Just the wire.
 // INTERNAL — not exported from the package.
@@ -12,66 +12,56 @@ import 'package:pdf_manipulator/src/types/pdf_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
 import 'package:pdf_manipulator/src/types/search_result.dart';
-import 'package:pdf_manipulator/src/types/pdf_doc.dart';
 
 /// Abstract bridge. Only FFI-level methods.
 abstract class PdfBridge {
-  // ── Inspect ──
-  Future<PdfDoc> open(DataSource source, {String? password});
+  /// Detected I/O mode. Null before first op or [ensureInitialized].
+  PdfIoMode? get ioMode;
 
-  // ── Extraction ──
-  Future<String> extract(DataSource source,
-      {required PdfPages pages,
-      String? password,
-      PdfExtractionFormat format = PdfExtractionFormat.auto});
+  /// Eagerly initialize and return the detected I/O mode. Idempotent.
+  Future<PdfIoMode> ensureInitialized();
 
-  // ── Search ──
-  Future<List<SearchResult>> search(DataSource source,
-      {required String query, required PdfPages pages, String? password});
+  // ── Document handle ──
+  Future<BridgeDocHandle> open(DataSource source, {String? password});
 
-  // ── Standalone ops (own engine paths) ──
+  // ── One-shot ops (no handle — source consumed in one call) ──
   Future<void> sign(DataSource source, DataSink output,
       {required PdfSigningCredentials credentials,
       String? reason,
       String? location});
-
-  Future<void> imagesToPdf(List<DataSource> images, DataSink output);
 
   Future<void> convertTo(DataSource source, DataSink output,
       {required PdfDocumentFormat format, String? password});
   Future<void> convertToPdf(DataSource document, DataSink output,
       {required PdfDocumentFormat format});
 
-  // ── Streaming reads ──
-  Stream<RenderedPage> render(DataSource source,
-      {required PdfPages pages, PdfRenderSize? size, String? password});
-
-  Stream<PdfImage> extractImages(DataSource source,
-      {required PdfPages pages, String? password});
-
-  // ── Read-only queries ──
-  Future<List<PdfSignatureInfo>> getSignatures(DataSource source,
-      {String? password});
-  Future<bool> verifySignatures(DataSource source, {String? password});
-
-  Future<PdfValidationResult> validatePdfA(DataSource source,
-      {int level = 2, String? password});
-  Future<bool> validatePdfUa(DataSource source,
-      {int level = 1, String? password});
-
-  Future<List<PdfBookmarkSplit>> planSplitByBookmarks(DataSource source,
-      {String? password});
-
-  Future<PdfPageClassification> classifyPage(DataSource source,
-      int page, {String? password});
-  Future<PdfDocumentClassification> classifyDocument(DataSource source,
-      {String? password});
-
-  // ── Editor ──
+  // ── Editor handle ──
   Future<BridgeEditorHandle> openEditor(DataSource source, {String? password});
 
-  // ── Builder ──
+  // ── Builder handle ──
   Future<BridgeBuilderHandle> createBuilder();
+
+  // ── Lifecycle ──
+  Future<void> dispose();
+}
+
+/// Handle to an open PDF document — read-only queries.
+abstract class BridgeDocHandle {
+  // ── Metadata (populated at open time, cached) ──
+  Map<String, Object?> get openResult;
+
+  // ── Read ops (reuse already-parsed document via handleId) ──
+  Future<String> extract({required PdfPages pages, PdfExtractionFormat format});
+  Future<List<SearchResult>> search({required String query, required PdfPages pages});
+  Stream<RenderedPage> render({required PdfPages pages, PdfRenderSize? size});
+  Stream<PdfImage> extractImages({required PdfPages pages});
+  Future<List<PdfSignatureInfo>> getSignatures();
+  Future<bool> verifySignatures();
+  Future<PdfValidationResult> validatePdfA({int level});
+  Future<bool> validatePdfUa({int level});
+  Future<List<PdfBookmarkSplit>> planSplitByBookmarks();
+  Future<PdfPageClassification> classifyPage(int page);
+  Future<PdfDocumentClassification> classifyDocument();
 
   // ── Lifecycle ──
   Future<void> dispose();
@@ -103,7 +93,7 @@ abstract class BridgeEditorHandle {
   Future<void> mergeFrom(DataSource otherPdf);
 
   // ── Optimization ──
-  Future<int> optimizeImages({int quality = 75});
+  Future<int> optimizeImages({int quality = 75, int minSize = 128});
   Future<int> unembedStandardFonts();
 
   // ── Watermark + stamps ──
@@ -142,7 +132,10 @@ abstract class BridgeEditorHandle {
   Future<void> scrubMetadata();
 
   // ── Save ──
-  Future<void> save(DataSink output, {PdfSaveOptions options = const PdfSaveOptions()});
+  Future<void> save(DataSink output, {PdfSaveOptions options = const PdfSaveOptions.fullRewrite()});
+
+  // ── Extract pages (select → save → restore, editor unchanged) ──
+  Future<void> extractPages(List<int> pages, DataSink output);
 
   // ── Lifecycle ──
   Future<void> dispose();

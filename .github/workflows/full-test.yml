@@ -1,6 +1,6 @@
 # Full 6-platform test — maintainer adds "ready-to-test" label to trigger.
 # Label is auto-removed on new pushes (stale results = wasted compute).
-# Contributors cannot add labels (requires write/maintain/admin access).
+# All build/test logic lives in the Makefile — CI only provisions the environment.
 name: Full Test
 
 on:
@@ -13,8 +13,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Remove label on new push so stale results don't gate merge.
-  # Maintainer must re-label after reviewing new changes.
   revoke-label:
     name: Revoke stale label
     if: >-
@@ -41,44 +39,78 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: ./.github/actions/dart-test
+      - uses: dart-lang/setup-dart@v1
+        with: { sdk: stable }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - run: echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV && echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+      - run: make test-ops-native
+
   linux:
     if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: ./.github/actions/dart-test
+      - uses: dart-lang/setup-dart@v1
+        with: { sdk: stable }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - run: echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV && echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+      - run: make test-ops-native
+
   windows:
     if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: ./.github/actions/dart-test
-  android:
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with: { submodules: recursive }
-      - uses: ./.github/actions/android-test
-  ios:
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-        with: { submodules: recursive }
-      - uses: ./.github/actions/ios-test
+      - uses: dart-lang/setup-dart@v1
+        with: { sdk: stable }
+      - uses: dtolnay/rust-toolchain@stable
+      - run: make test-ops-native
+        shell: bash
+
   web:
     if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: ./.github/actions/web-test
+      - uses: dart-lang/setup-dart@v1
+        with: { sdk: stable }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: wasm32-unknown-unknown }
+      - uses: browser-actions/setup-chrome@v1
+      - name: Install wasm-bindgen-cli
+        run: cargo install wasm-bindgen-cli
+      - run: make build-wasm
+      - run: dart pub get --no-example
+      - run: make test-ops-web
 
-  # Gate job — required check for branch protection.
+  android:
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: dart-lang/setup-dart@v1
+        with: { sdk: stable }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: aarch64-linux-android }
+      - run: make test-ops-native
+
+  ios:
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: dart-lang/setup-dart@v1
+        with: { sdk: stable }
+      - uses: dtolnay/rust-toolchain@stable
+      - run: make test-ops-native
+
   gate:
     name: Full Test Gate
     if: always()
@@ -87,12 +119,10 @@ jobs:
     steps:
       - name: Evaluate
         run: |
-          # If label event didn't fire tests, gate passes (label not present yet)
           if [[ "${{ github.event.action }}" != "labeled" ]] || [[ "${{ github.event.label.name }}" != "ready-to-test" ]]; then
             echo "Full test not triggered — gate passes"
             exit 0
           fi
-          # Label was added — all 6 must succeed
           RESULTS=("${{ needs.macos.result }}" "${{ needs.linux.result }}" "${{ needs.windows.result }}" "${{ needs.android.result }}" "${{ needs.ios.result }}" "${{ needs.web.result }}")
           for r in "${RESULTS[@]}"; do
             if [[ "$r" != "success" ]]; then

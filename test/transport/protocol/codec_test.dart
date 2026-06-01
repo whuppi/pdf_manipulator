@@ -61,11 +61,6 @@ void main() {
       expect(req.args['format'], 'docx');
     });
 
-    test('imagesToPdfOp', () {
-      final req = imagesToPdfOp(images: [Uint8List(10)]);
-      expect(req.op, EngineOp.imagesToPdf);
-    });
-
     test('renderOp', () {
       final req = renderOp(pageIndices: [0, 1], maxWidth: 800);
       expect(req.op, EngineOp.render);
@@ -74,7 +69,7 @@ void main() {
     });
 
     test('editorSaveOp encodes encryption', () {
-      final req = editorSaveOp(handleId: 1, options: const PdfSaveOptions(
+      final req = editorSaveOp(handleId: 1, options: const PdfSaveOptions.fullRewrite(
         encryption: PdfEncryption.config(ownerPassword: 'ow'),
       ));
       expect(req.args['encryptMode'], 2);
@@ -98,46 +93,46 @@ void main() {
   // RESPONSE DECODING
   // ════════════════════════════════════════════════════
 
-  group('decodeOpenResult', () {
-    test('parses complete result', () {
-      final doc = decodeOpenResult({
-        'pageCount': 3,
-        'version': '1.7',
-        'title': 'Test PDF',
-        'author': 'DC',
-        'subject': 'Sub',
-        'keywords': 'kw',
-        'isTagged': true,
-        'isEncrypted': true,
-        'requiresPassword': false,
-        'encryptionAlgorithm': 4,
-        'permissionBits': 0xFF,
+  group('decodePageList', () {
+    test('parses complete page list', () {
+      final pages = decodePageList({
         'pages': [
           {'index': 0, 'width': 612.0, 'height': 792.0, 'rotation': 0},
           {'index': 1, 'width': 612.0, 'height': 792.0, 'rotation': 90},
           {'index': 2, 'width': 842.0, 'height': 595.0, 'rotation': 0},
         ],
       });
-      expect(doc.pageCount, 3);
-      expect(doc.version, '1.7');
-      expect(doc.title, 'Test PDF');
-      expect(doc.isEncrypted, isTrue);
-      expect(doc.encryptionAlgorithm, PdfEncryptionAlgorithm.aes256);
-      expect(doc.permissions, isNotNull);
-      expect(doc.permissions!.print, isTrue);
-      expect(doc.pages[1].rotation, 90);
+      expect(pages, hasLength(3));
+      expect(pages[1].rotation, 90);
+      expect(pages[2].width, 842.0);
     });
 
-    test('handles missing optional fields', () {
-      final doc = decodeOpenResult({
-        'pageCount': 1,
-        'pages': [{'index': 0, 'width': 100.0, 'height': 200.0}],
-      });
-      expect(doc.version, '2.0');
-      expect(doc.title, isNull);
-      expect(doc.isEncrypted, isFalse);
-      expect(doc.encryptionAlgorithm, isNull);
-      expect(doc.permissions, isNull);
+    test('handles missing pages key', () {
+      final pages = decodePageList({});
+      expect(pages, isEmpty);
+    });
+  });
+
+  group('decodeEncryptionAlgorithm', () {
+    test('parses known algorithms', () {
+      expect(decodeEncryptionAlgorithm(1), PdfEncryptionAlgorithm.rc4_40);
+      expect(decodeEncryptionAlgorithm(4), PdfEncryptionAlgorithm.aes256);
+      expect(decodeEncryptionAlgorithm(0), isNull);
+      expect(decodeEncryptionAlgorithm(99), isNull);
+    });
+  });
+
+  group('decodePermissions', () {
+    test('parses permission bits', () {
+      final perms = decodePermissions(0xFF);
+      expect(perms.print, isTrue);
+      expect(perms.copy, isTrue);
+    });
+
+    test('zero bits means all false', () {
+      final perms = decodePermissions(0);
+      expect(perms.print, isFalse);
+      expect(perms.copy, isFalse);
     });
   });
 
@@ -232,7 +227,7 @@ void main() {
 
     test('encodeRegions', () {
       final r = encodeRegions([const PdfRect(x: 1, y: 2, width: 3, height: 4)]);
-      expect(r[0], {'x': 1.0, 'y': 2.0, 'width': 3.0, 'height': 4.0});
+      expect(r, [1.0, 2.0, 3.0, 4.0]);
     });
 
     test('encodeWatermarkArgs includes style + position + layer', () {

@@ -25,6 +25,9 @@ permissions:
   contents: write
   id-token: write
 
+env:
+  COMPILE_OUTPUT_DIR: out
+
 concurrency:
   group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false

@@ -1,511 +1,485 @@
-// WASM Worker — per-operation engine execution.
+// WASM Worker — one InstanceState per worker, multiple readers per instance.
 //
-// Loads WASM once via init(). Runs one operation at a time.
-// Creates readFn/writeFn based on I/O mode (set at init by coordinator).
+// ── Reader registry ──────────────────────────────────────────────
 //
-// RULE: EVERY call goes through dispatch.rs. No exceptions.
+// Each source gets a unique readerId in the registry. host_read_at
+// dispatches by sourceIndex → readerId via the activeReaderMap.
+// Pinned readers survive across ops (handle lifetime). Non-pinned
+// readers are cleaned after each exec.
 //
-// - Read/edit/query ops: call doc.dispatchXxx() methods (wasm_api.rs → dispatch.rs).
-// - Builder metadata: call b.dispatchSetTitle(), b.dispatchBuild() (wasm_api.rs → dispatch.rs).
-// - Builder page ops: call page.dispatchPageOp(opCode, args) which buffers dispatch::PageOp,
-//   then page.dispatchDone(builder) replays via dispatch::replay_page_ops.
-//   Same PageOp enum, same replay function as native. Zero divergence possible.
-// - Sign: calls signPdfStreamingPkcs12/Pem which internally use dispatch::sign_via_editor.
+// ── Three I/O modes (auto-detected: jspi > atomics > opfs) ──────
 //
-// NEVER call wasm.rs wrapper methods (doc.pageCount(), doc.mergeFrom(), b.title(),
-// page.font(), etc.) directly. They bypass dispatch and cause web-only bugs.
+//   jspi    — JSPI Promise suspension (Chrome 137+ / Firefox 139+)
+//   atomics — SAB + Atomics.wait (needs COOP/COEP)
+//   opfs    — SyncAccessHandle on OPFS disk (universal)
 //
-// Two I/O modes for reads:
-//   atomics: readFn blocks via Atomics.wait on SharedArrayBuffer
-//   opfs:    readFn calls SyncAccessHandle.read (pre-copied to OPFS)
+// ── Message protocol ─────────────────────────────────────────────
 //
-// Output streaming (all modes): writeFn posts chunks to coordinator.
-// Per-item streaming (all modes): postMessage({type:'item'}) per image/page.
-//
-// IMPORTANT: This file is a THIN PASS-THROUGH. All cases call
-// dispatchXxx() methods. The only loops are for streaming (render/
-// extractImages iterate page indices, posting one item per page).
-// dispatch.rs owns ALL behavior. No PDF logic here.
+//   init           { ioMode, baseUrl, wasmModule? }  → ready | error
+//   exec           { opId, requestBytes, args, ioMode, sab?,
+//                    opfsFile?, opfsFiles?, isPinnedOp,
+//                    pinnedSourceOpId? }              → result | error
+//                  ← readAt { reqId, sourceIndex, offset, count, mode, sab? }
+//                    → readAtResponse { reqId, bytes | error }
+//                  ← chunk { sinkIndex, data }
+//   shutdown                                          → shutdown_done
+//   releaseOpfs   { sourceOpId? }                     → releaseOpfs_done
+//   readAtResponse { reqId, bytes | error }
 
-import init, { WasmDocumentBuilder, WasmPdfDocument, DispatchPageBuilder, signPdfStreamingPkcs12, signPdfStreamingPem } from './pdf_oxide.js';
+// ═══════════════════════════════════════════════════════════════════
+// WASM + instance state
+// ═══════════════════════════════════════════════════════════════════
 
+let wasm = null;
 let initialized = false;
+let instancePtr = 0;
 let currentIoMode = 'opfs';
-let nextReqId = 1;
+let wasmBaseUrl = (() => {
+  try { return new URL(self.location.href).href.replace(/\/[^/]*$/, '/'); }
+  catch (_) { return './'; }
+})();
 
-const editorHandles = new Map();   // handleId → WasmPdfDocument
-const editorReaders = new Map();   // handleId → readerCtx (kept alive until editorDispose)
-const builderHandles = new Map();
-const pageHandles = new Map();
-let nextHandleId = 1;
+// ═══════════════════════════════════════════════════════════════════
+// Reader registry
+// ═══════════════════════════════════════════════════════════════════
+
+/** @type {Map<number, Reader>} */
+const readers = new Map();
+let nextReaderId = 1;
+
+/**
+ * @typedef {Object} Reader
+ * @property {number} length        — source byte length
+ * @property {FileSystemSyncAccessHandle|null} opfsHandle
+ * @property {string|null} opfsFile — OPFS filename for cleanup
+ * @property {boolean} pinned       — survives across ops
+ * @property {number|null} pinnedByOpId
+ */
+
+function registerReader(length, opfsHandle, opfsFile, pinned, pinnedByOpId) {
+  const id = nextReaderId++;
+  readers.set(id, { length, opfsHandle, opfsFile, pinned, pinnedByOpId });
+  return id;
+}
+
+function deregisterNonPinned() {
+  for (const [id, r] of readers) {
+    if (!r.pinned) {
+      if (r.opfsHandle) { try { r.opfsHandle.close(); } catch (_) {} }
+      readers.delete(id);
+    }
+  }
+}
+
+function clearAllReaders() {
+  for (const [, r] of readers) {
+    if (r.opfsHandle) { try { r.opfsHandle.close(); } catch (_) {} }
+  }
+  readers.clear();
+}
+
+function findPinnedByOpId(opId) {
+  for (const [id, r] of readers) {
+    if (r.pinned && r.pinnedByOpId === opId) return { id, reader: r };
+  }
+  return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// host_read_at — dispatched by WASM via extern import
+// ═══════════════════════════════════════════════════════════════════
+
+const SAB_HEADER = 8;
+
+/** @type {Array<[number, number]>|null} sourceIndex → readerId */
+let activeReaderMap = null;
+
+/** @type {SharedArrayBuffer|null} */
+let activeSab = null;
+
+/** @type {((msg: any) => void)|null} JSPI read callback */
+let jspiReadResolve = null;
+
+/** @type {((msg: any) => void)|null} JSPI/async write ack callback */
+let jspiWriteResolve = null;
+
+/** @type {SharedArrayBuffer|null} SAB for write backpressure (Atomics mode) */
+let activeWriteSab = null;
+
+function hostReadAt(sourceIndex, offset, count, bufPtr) {
+  const readerId = resolveReaderId(sourceIndex);
+  const reader = readers.get(readerId);
+  if (!reader) return -1;
+
+  // Cap matches SAB_MAX_CHUNK in coordinator.js and chunkSize in web_transport.dart.
+  const toRead = Math.min(count, reader.length - offset, 65536);
+  if (toRead <= 0) return 0;
+
+  // OPFS reader — sync read from disk, independent of I/O mode
+  if (reader.opfsHandle) return readFromOpfs(reader.opfsHandle, offset, toRead, bufPtr);
+
+  // Callback reader — mode determines sync/async mechanism
+  switch (currentIoMode) {
+    case 'atomics': return readViaAtomics(sourceIndex, offset, toRead, bufPtr);
+    case 'jspi':    return readViaJspi(sourceIndex, offset, toRead, bufPtr);
+    default:        return readViaJspi(sourceIndex, offset, toRead, bufPtr);
+  }
+}
+
+function resolveReaderId(sourceIndex) {
+  if (activeReaderMap) {
+    for (const [si, rid] of activeReaderMap) {
+      if (si === sourceIndex) return rid;
+    }
+  }
+  return sourceIndex;
+}
+
+// ── Read: OPFS (sync, any mode) ─────────────────────────────────
+
+function readFromOpfs(handle, offset, count, bufPtr) {
+  const buf = new Uint8Array(count);
+  const n = handle.read(buf, { at: offset });
+  new Uint8Array(wasm.memory.buffer).set(buf.subarray(0, n), bufPtr);
+  return n;
+}
+
+// ── Read: Atomics (sync block via SAB) ──────────────────────────
+
+function readViaAtomics(sourceIndex, offset, count, bufPtr) {
+  if (!activeSab) return -1;
+  const status = new Int32Array(activeSab);
+  const data = new Uint8Array(activeSab, SAB_HEADER);
+
+  Atomics.store(status, 0, 0);
+  self.postMessage({
+    type: 'readAt', reqId: '0', sourceIndex, offset, count,
+    mode: 'atomics', sab: activeSab,
+  });
+  Atomics.wait(status, 0, 0);
+
+  if (Atomics.load(status, 0) === 2) return -1;
+  const len = Atomics.load(new Int32Array(activeSab, 4, 1), 0);
+  new Uint8Array(wasm.memory.buffer).set(data.subarray(0, len), bufPtr);
+  return len;
+}
+
+// ── Read: JSPI (async via promise suspension) ───────────────────
+
+function readViaJspi(sourceIndex, offset, count, bufPtr) {
+  return new Promise((resolve) => {
+    jspiReadResolve = (msg) => {
+      if (msg.error) { resolve(-1); return; }
+      const bytes = new Uint8Array(msg.bytes);
+      new Uint8Array(wasm.memory.buffer).set(bytes, bufPtr);
+      resolve(bytes.length);
+    };
+    self.postMessage({
+      type: 'readAt', reqId: '0', sourceIndex, offset, count, mode: 'async',
+    });
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// host_write_chunk — called by WASM for output, with backpressure
+// ═══════════════════════════════════════════════════════════════════
+//
+// Backpressure prevents the WASM producer from outrunning the Dart
+// consumer. Each chunk waits for an ack before the next is produced.
+//
+//   Atomics: Atomics.wait on a write SAB until coordinator acks
+//   JSPI:    returns Promise, resolved when coordinator acks
+//   OPFS:    fire-and-forget (no blocking mechanism available)
+
+function hostWriteChunk(sinkIndex, bufPtr, len) {
+  const chunk = new Uint8Array(wasm.memory.buffer).slice(bufPtr, bufPtr + len);
+  switch (currentIoMode) {
+    case 'atomics':
+      return writeWithAtomicsAck(sinkIndex, chunk);
+    case 'jspi':
+      return writeWithJspiAck(sinkIndex, chunk);
+    default:
+      // OPFS fallback — no backpressure available
+      self.postMessage({ type: 'chunk', sinkIndex, data: chunk.buffer }, [chunk.buffer]);
+      return 0;
+  }
+}
+
+function writeWithAtomicsAck(sinkIndex, chunk) {
+  if (!activeWriteSab) {
+    self.postMessage({ type: 'chunk', sinkIndex, data: chunk.buffer }, [chunk.buffer]);
+    return 0;
+  }
+  const status = new Int32Array(activeWriteSab);
+  Atomics.store(status, 0, 0);
+  self.postMessage({ type: 'chunk', sinkIndex, data: chunk.buffer }, [chunk.buffer]);
+  Atomics.wait(status, 0, 0);
+  return Atomics.load(status, 0) === 2 ? -1 : 0;
+}
+
+function writeWithJspiAck(sinkIndex, chunk) {
+  return new Promise((resolve) => {
+    jspiWriteResolve = (msg) => {
+      resolve(msg?.error ? -1 : 0);
+    };
+    self.postMessage({ type: 'chunk', sinkIndex, data: chunk.buffer }, [chunk.buffer]);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// WASM initialization
+// ═══════════════════════════════════════════════════════════════════
+
+let jspiBridgeExecute = null;
+let precompiledModule = null;
+
+const JSPI_ASYNC_IMPORTS = ['__wbg_host_read_at', '__wbg_host_write_chunk'];
 
 async function ensureInit() {
   if (initialized) return;
-  await init();
+
+  self.host_read_at = hostReadAt;
+  self.host_write_chunk = hostWriteChunk;
+
+  const jsModule = await import(wasmBaseUrl + 'pdf_oxide.js');
+
+  // Monkey-patch instantiate to intercept imports for JSPI wrapping
+  // and to capture raw WASM exports. Restored in finally.
+  const origInstantiate = WebAssembly.instantiate;
+  const origStreaming = WebAssembly.instantiateStreaming;
+
+  WebAssembly.instantiate = async (source, imports) => {
+    if (currentIoMode === 'jspi' && imports) imports = wrapJspiImports(imports);
+    const result = await origInstantiate(source, imports);
+    wasm = (result instanceof WebAssembly.Instance ? result : result.instance).exports;
+    return result;
+  };
+  if (origStreaming) {
+    WebAssembly.instantiateStreaming = async (response, imports) => {
+      const bytes = await (await response).arrayBuffer();
+      return WebAssembly.instantiate(bytes, imports);
+    };
+  }
+
+  try {
+    await jsModule.default(precompiledModule || (wasmBaseUrl + 'pdf_oxide_bg.wasm'));
+  } finally {
+    WebAssembly.instantiate = origInstantiate;
+    if (origStreaming) WebAssembly.instantiateStreaming = origStreaming;
+  }
+
+  if (currentIoMode === 'jspi') {
+    jspiBridgeExecute = WebAssembly.promising(wasm.bridge_execute);
+  }
   initialized = true;
 }
 
-function getHandle(map, id, name) {
-  const h = map.get(id);
-  if (!h) throw new Error(`${name} handle ${id} not found`);
-  return h;
+function wrapJspiImports(imports) {
+  const patched = {};
+  for (const [mod, fns] of Object.entries(imports)) {
+    const patchedMod = {};
+    for (const [name, fn] of Object.entries(fns)) {
+      patchedMod[name] = (JSPI_ASYNC_IMPORTS.some(p => name.startsWith(p)) && typeof fn === 'function')
+        ? new WebAssembly.Suspending(fn) : fn;
+    }
+    patched[mod] = patchedMod;
+  }
+  return patched;
 }
 
-// ── readFn creators per I/O mode ────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════
+// JSPI bridge_execute caller
+// ═══════════════════════════════════════════════════════════════════
 
-function createReadFnAtomics(sab, sourceLength) {
-  const statusView = new Int32Array(sab);
-  const lengthView = new Int32Array(sab, 4, 1);
-  const dataView = new Uint8Array(sab, 8);
-
-  const readFn = (offset, count) => {
-    Atomics.store(statusView, 0, 0);
-    self.postMessage({ type: 'readAt', reqId: '0', offset, count, mode: 'atomics', sab });
-    Atomics.wait(statusView, 0, 0);
-    const status = Atomics.load(statusView, 0);
-    if (status === 2) throw new Error('Read failed');
-    const len = Atomics.load(lengthView, 0);
-    const result = new Uint8Array(len);
-    result.set(dataView.subarray(0, len));
+async function callBridgeJspi(requestBytes, sourceLengthsPacked, sinkCount) {
+  const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+  const ptr0 = wasm.__wbindgen_export(requestBytes.length, 1) >>> 0;
+  new Uint8Array(wasm.memory.buffer).set(requestBytes, ptr0);
+  const ptr1 = wasm.__wbindgen_export(sourceLengthsPacked.length, 1) >>> 0;
+  new Uint8Array(wasm.memory.buffer).set(sourceLengthsPacked, ptr1);
+  try {
+    await jspiBridgeExecute(retptr, instancePtr, ptr0, requestBytes.length, ptr1, sourceLengthsPacked.length, sinkCount);
+    const mem = new DataView(wasm.memory.buffer);
+    const r0 = mem.getInt32(retptr, true);
+    const r1 = mem.getInt32(retptr + 4, true);
+    const result = new Uint8Array(wasm.memory.buffer, r0, r1).slice();
+    wasm.__wbindgen_export4(r0, r1, 1);
     return result;
-  };
-  const lengthFn = () => sourceLength;
-  return { readFn, lengthFn };
+  } finally {
+    wasm.__wbindgen_add_to_stack_pointer(16);
+  }
 }
 
-function createReadFnOpfs(opfsFile) {
-  let syncHandle = null;
-  let fileLength = 0;
+// ═══════════════════════════════════════════════════════════════════
+// OPFS handle opening
+// ═══════════════════════════════════════════════════════════════════
 
-  const openHandle = async () => {
-    const root = await navigator.storage.getDirectory();
-    const fileHandle = await root.getFileHandle(opfsFile);
-    syncHandle = await fileHandle.createSyncAccessHandle();
-    fileLength = syncHandle.getSize();
-  };
-
-  const readFn = (offset, count) => {
-    const buf = new Uint8Array(count);
-    const n = syncHandle.read(buf, { at: offset });
-    return buf.slice(0, n);
-  };
-
-  const lengthFn = () => fileLength;
-  const close = () => { if (syncHandle) { syncHandle.close(); syncHandle = null; } };
-
-  return { readFn, lengthFn, openHandle, close };
+async function openOpfsHandle(filename) {
+  const root = await navigator.storage.getDirectory();
+  const fh = await root.getFileHandle(filename);
+  return await fh.createSyncAccessHandle();
 }
 
-// ── writeFn (all modes) ────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════
+// Exec — build readers, call bridge_execute, pin on success
+// ═══════════════════════════════════════════════════════════════════
 
-function createWriteFn() {
-  return (chunk) => {
-    const buf = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
-    self.postMessage({ type: 'chunk', data: buf.buffer }, [buf.buffer]);
-  };
+async function exec(msg) {
+  const { opId, requestBytes, args, ioMode, sab, isPinnedOp, pinnedSourceOpId } = msg;
+  if (!requestBytes) throw new Error('No requestBytes');
+
+  await ensureInit();
+  activeSab = (ioMode === 'atomics' && sab) ? sab : null;
+  activeWriteSab = (ioMode === 'atomics' && msg.writeSab) ? msg.writeSab : null;
+
+  // ── Parse OPFS filenames ──────────────────────────────────────
+  const opfsFiles = msg.opfsFiles
+    ? msg.opfsFiles.split(',')
+    : (msg.opfsFile ? [msg.opfsFile] : []);
+
+  // ── Collect source lengths from Dart args ─────────────────────
+  const dartLengths = [];
+  if ((args?.sourceLength ?? 0) > 0) dartLengths.push(args.sourceLength);
+  for (let i = 1; ; i++) {
+    const v = args?.[`source${i}Length`];
+    if (v != null && v > 0) dartLengths.push(v); else break;
+  }
+
+  // ── Build reader registry for this exec ───────────────────────
+  const readerIds = [];
+  const finalLengths = [];
+
+  // Pinned ops: index 0 = existing pinned reader, index 1+ = new sources
+  if (isPinnedOp && pinnedSourceOpId != null) {
+    const pinned = findPinnedByOpId(pinnedSourceOpId);
+    if (pinned) {
+      readerIds.push(pinned.id);
+      finalLengths.push(pinned.reader.length);
+    }
+  }
+
+  // Register new readers for Dart's sources
+  for (let i = 0; i < dartLengths.length; i++) {
+    let handle = null;
+    let length = dartLengths[i];
+    const file = opfsFiles[i] || null;
+    if (file) {
+      handle = await openOpfsHandle(file);
+      length = handle.getSize();
+    }
+    readerIds.push(registerReader(length, handle, file, false, null));
+    finalLengths.push(length);
+  }
+
+  // ── Pack source lengths for WASM ──────────────────────────────
+  const packed = new Uint8Array(finalLengths.length * 8);
+  const dv = new DataView(packed.buffer);
+  for (let i = 0; i < finalLengths.length; i++) {
+    dv.setFloat64(i * 8, finalLengths[i], true);
+  }
+
+  activeReaderMap = readerIds.map((rid, i) => [i, rid]);
+  const sinkCount = args?.hasSink ? 1 : 0;
+  const shouldPin = !!(args?.keepSource);
+  let responseBytes;
+
+  try {
+    if (currentIoMode === 'jspi') {
+      responseBytes = await callBridgeJspi(new Uint8Array(requestBytes), packed, sinkCount);
+    } else {
+      const { bridge_execute } = await import(wasmBaseUrl + 'pdf_oxide.js');
+      responseBytes = bridge_execute(instancePtr, new Uint8Array(requestBytes), packed, sinkCount);
+    }
+
+    // Pin on success only (status byte 1 = ok)
+    if (responseBytes.length > 0 && responseBytes[0] === 1 && shouldPin) {
+      for (const rid of readerIds) {
+        const r = readers.get(rid);
+        if (r) { r.pinned = true; r.pinnedByOpId = opId; }
+      }
+    }
+  } finally {
+    deregisterNonPinned();
+    activeReaderMap = null;
+    activeSab = null;
+    activeWriteSab = null;
+    jspiWriteResolve = null;
+  }
+
+  return responseBytes;
 }
 
-// ── Message handler ────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════
+// Message handler
+// ═══════════════════════════════════════════════════════════════════
 
 self.onmessage = async (e) => {
   const msg = e.data;
 
-  if (msg.type === 'init') {
-    currentIoMode = msg.ioMode;
-    try {
-      await ensureInit();
-    } catch (err) {
-      self.postMessage({ type: 'error', error: 'WASM init failed: ' + err.message });
+  switch (msg.type) {
+    case 'init': {
+      currentIoMode = msg.ioMode;
+      if (msg.baseUrl) wasmBaseUrl = msg.baseUrl;
+      if (msg.wasmModule) precompiledModule = msg.wasmModule;
+      try {
+        await ensureInit();
+        const { bridge_init } = await import(wasmBaseUrl + 'pdf_oxide.js');
+        instancePtr = bridge_init();
+        self.postMessage({ type: 'ready' });
+      } catch (err) {
+        self.postMessage({ type: 'error', error: 'WASM init failed: ' + err.message });
+      }
       return;
     }
-    self.postMessage({ type: 'ready' });
-    return;
-  }
 
-  if (msg.type !== 'exec') return;
-
-  const { opId, op, args, ioMode, sab, opfsFile } = msg;
-
-  try {
-    await ensureInit();
-    const result = await executeOp(op, args, ioMode, sab, opfsFile);
-    self.postMessage({ type: 'result', result: result || {} });
-  } catch (err) {
-    self.postMessage({ type: 'error', error: err.message || String(err) });
-  }
-};
-
-// ── Operation execution ────────────────────────────────────────────────
-
-async function executeOp(op, args, ioMode, sab, opfsFile) {
-  let readerCtx = null;
-  if (args.sourceLength != null) {
-    if (opfsFile) {
-      readerCtx = createReadFnOpfs(opfsFile);
-      await readerCtx.openHandle();
-    } else if (ioMode === 'atomics' && sab) {
-      readerCtx = createReadFnAtomics(sab, args.sourceLength);
-    }
-  }
-
-  const writeFn = createWriteFn();
-
-  try {
-    return await dispatch(op, args, readerCtx, writeFn);
-  } finally {
-    if (readerCtx && readerCtx.close && !readerCtx._claimed) {
-      readerCtx.close();
-    }
-  }
-}
-
-// ── Helpers ────────────────────────────────────────────────────────────
-
-function readAllBytes(readerCtx) {
-  const len = readerCtx.lengthFn();
-  return readerCtx.readFn(0, len);
-}
-
-function openDoc(readerCtx, password) {
-  return WasmPdfDocument.fromReader(readerCtx.readFn, readerCtx.lengthFn, password || null);
-}
-
-function openEditor(readerCtx, password) {
-  return WasmPdfDocument.editorFromReader(readerCtx.readFn, readerCtx.lengthFn, password || null);
-}
-
-// ── Op dispatch ────────────────────────────────────────────────────────
-
-async function dispatch(op, args, readerCtx, writeFn) {
-  switch (op) {
-    case 'open': {
-      const doc = openDoc(readerCtx, args.password);
-      const r = doc.dispatchOpen();
-      doc.free();
-      return r;
-    }
-
-    case 'extract': {
-      const doc = openDoc(readerCtx, args.password);
-      const r = doc.dispatchExtractText(args.page ?? null, args.format ?? null);
-      doc.free();
-      return r;
-    }
-
-    case 'search': {
-      const doc = openDoc(readerCtx, args.password);
-      const r = doc.dispatchSearch(args.query, args.page ?? null);
-      doc.free();
-      return r;
-    }
-
-    case 'render': {
-      const doc = openDoc(readerCtx, args.password);
-      for (const pageIdx of args.pageIndices) {
-        const rendered = doc.dispatchRenderPage(pageIdx, args.maxWidth ?? null, args.maxHeight ?? null);
-        self.postMessage({ type: 'item', data: rendered });
+    case 'shutdown': {
+      if (instancePtr !== 0) {
+        try {
+          const { bridge_shutdown } = await import(wasmBaseUrl + 'pdf_oxide.js');
+          bridge_shutdown(instancePtr);
+        } catch (_) {}
+        instancePtr = 0;
       }
-      self.postMessage({ type: 'itemDone' });
-      doc.free();
-      return {};
+      clearAllReaders();
+      self.postMessage({ type: 'shutdown_done' });
+      return;
     }
 
-    case 'extractImages': {
-      const doc = openDoc(readerCtx, args.password);
-      for (const pageIdx of args.pageIndices) {
-        const images = doc.dispatchExtractImages(pageIdx);
-        if (images) {
-          for (let i = 0; i < images.length; i++) {
-            self.postMessage({ type: 'item', data: images[i] });
-          }
+    case 'releaseOpfs': {
+      const targetOpId = msg.sourceOpId;
+      for (const [id, r] of readers) {
+        if (r.pinned && (targetOpId == null || r.pinnedByOpId === targetOpId)) {
+          if (r.opfsHandle) { try { r.opfsHandle.close(); } catch (_) {} }
+          readers.delete(id);
         }
       }
-      self.postMessage({ type: 'itemDone' });
-      doc.free();
-      return {};
+      self.postMessage({ type: 'releaseOpfs_done' });
+      return;
     }
 
-    case 'getSignatures': {
-      const doc = openDoc(readerCtx, args.password);
-      const r = doc.dispatchGetSignatures();
-      doc.free();
-      return r;
+    case 'readAtResponse': {
+      if (jspiReadResolve) { jspiReadResolve(msg); jspiReadResolve = null; }
+      return;
     }
 
-    case 'verifySignatures': {
-      const doc = openDoc(readerCtx, args.password);
-      const r = doc.dispatchVerifySignatures();
-      doc.free();
-      return r;
+    case 'chunkAck': {
+      if (jspiWriteResolve) { jspiWriteResolve(msg); jspiWriteResolve = null; }
+      return;
     }
 
-    case 'validatePdfA': {
-      const doc = openDoc(readerCtx, args.password);
-      const r = doc.dispatchValidatePdfA(args.level ?? null);
-      doc.free();
-      return r;
-    }
-
-    case 'validatePdfUa': {
-      const doc = openDoc(readerCtx, args.password);
-      const r = doc.dispatchValidatePdfUa(args.level ?? null);
-      doc.free();
-      return r;
-    }
-
-    case 'planSplitByBookmarks': {
-      const doc = openDoc(readerCtx, args.password);
-      const r = doc.dispatchPlanSplitByBookmarks();
-      doc.free();
-      return r;
-    }
-
-    case 'classifyPage': {
-      const doc = openDoc(readerCtx, args.password);
-      const r = doc.dispatchClassifyPage(args.page);
-      doc.free();
-      return r;
-    }
-
-    case 'classifyDocument': {
-      const doc = openDoc(readerCtx, args.password);
-      const r = doc.dispatchClassifyDocument();
-      doc.free();
-      return r;
-    }
-
-    case 'convertTo': {
-      const doc = openDoc(readerCtx, args.password);
-      const bytes = doc.dispatchConvertToFormat(args.format);
-      doc.free();
-      writeFn(bytes);
-      return {};
-    }
-
-    case 'convertToPdf': {
-      const bytes = readAllBytes(readerCtx);
-      WasmPdfDocument.dispatchConvertFromFormat(bytes, args.format, writeFn);
-      return {};
-    }
-
-    case 'sign': {
-      if (args.certPem && args.keyPem) {
-        signPdfStreamingPem(readerCtx.readFn, readerCtx.lengthFn, writeFn,
-            args.certPem, args.keyPem, args.reason || null, args.location || null);
-      } else {
-        signPdfStreamingPkcs12(readerCtx.readFn, readerCtx.lengthFn, writeFn,
-            new Uint8Array(args.certificate), args.certificatePassword,
-            args.reason || null, args.location || null);
+    case 'exec': {
+      try {
+        const responseBytes = await exec(msg);
+        // Slice to ensure we transfer only the result, not the full WASM heap
+        // (wasm-bindgen may return a view into linear memory).
+        const owned = responseBytes.buffer.byteLength === responseBytes.byteLength
+            ? responseBytes.buffer
+            : responseBytes.buffer.slice(responseBytes.byteOffset, responseBytes.byteOffset + responseBytes.byteLength);
+        self.postMessage({ type: 'result', data: owned }, [owned]);
+      } catch (err) {
+        self.postMessage({ type: 'error', error: err.message || String(err) });
       }
-      return {};
+      return;
     }
-
-    case 'imagesToPdf': {
-      const images = args.images.map(b => new Uint8Array(b));
-      const bytes = WasmPdfDocument.dispatchImagesToPdf(images);
-      writeFn(bytes);
-      return {};
-    }
-
-    case 'editorOpen': {
-      const doc = openEditor(readerCtx, args.password);
-      const hid = nextHandleId++;
-      editorHandles.set(hid, doc);
-      if (readerCtx) {
-        readerCtx._claimed = true;
-        editorReaders.set(hid, readerCtx);
-      }
-      return { handleId: hid };
-    }
-
-    case 'editorDispose': {
-      const doc = editorHandles.get(args.handleId);
-      if (doc) { doc.free(); editorHandles.delete(args.handleId); }
-      const reader = editorReaders.get(args.handleId);
-      if (reader && reader.close) { reader.close(); editorReaders.delete(args.handleId); }
-      return {};
-    }
-
-    case 'editorMutate': {
-      const doc = getHandle(editorHandles, args.handleId, 'Editor');
-      const editResult = applyEditOp(doc, args.editOp, args);
-      return editResult || {};
-    }
-
-    case 'editorSave': {
-      const doc = getHandle(editorHandles, args.handleId, 'Editor');
-      const encryptMode = args.encryptMode ?? 0;
-      if (encryptMode === 2) {
-        const bytes = doc.dispatchEditSaveEncrypted(
-          args.encryptUserPw,
-          args.encryptOwnerPw || null
-        );
-        writeFn(bytes);
-      } else {
-        doc.dispatchEditSave(writeFn, args.compress ?? true, args.garbageCollect ?? true, args.saveMode ?? 0);
-      }
-      return {};
-    }
-
-    case 'editorGetMetadata': {
-      const doc = getHandle(editorHandles, args.handleId, 'Editor');
-      // Use dispatch methods that read from the EDITOR (not the original PdfDocument).
-      // dispatchOpen reads from PdfDocument — wrong after mutations.
-      const meta = doc.dispatchEditorGetMetadata();
-      return meta;
-    }
-
-    case 'editorIsModified': {
-      const doc = getHandle(editorHandles, args.handleId, 'Editor');
-      return { modified: doc.dispatchEditIsModified() };
-    }
-
-    case 'editorPageMediaBox': {
-      const doc = getHandle(editorHandles, args.handleId, 'Editor');
-      const mb = doc.dispatchEditPageMediaBox(args.page);
-      return { x: mb[0], y: mb[1], width: mb[2] - mb[0], height: mb[3] - mb[1] };
-    }
-
-    case 'editorMergeFrom': {
-      const doc = getHandle(editorHandles, args.handleId, 'Editor');
-      const raw = args.otherBytes;
-      const arr = new Uint8Array(raw instanceof ArrayBuffer ? raw : (raw?.buffer || raw));
-      doc.dispatchEditMerge([arr]);
-      return {};
-    }
-
-    case 'builderCreate': {
-      const builder = new WasmDocumentBuilder();
-      const hid = nextHandleId++;
-      builderHandles.set(hid, builder);
-      return { handleId: hid };
-    }
-
-    case 'builderDispose': {
-      const b = builderHandles.get(args.handleId);
-      if (b) builderHandles.delete(args.handleId);
-      return {};
-    }
-
-    case 'builderSetMetadata': {
-      const b = getHandle(builderHandles, args.handleId, 'Builder');
-      if (args.title != null) b.dispatchSetTitle(args.title);
-      if (args.author != null) b.dispatchSetAuthor(args.author);
-      if (args.subject != null) b.dispatchSetSubject(args.subject);
-      if (args.keywords != null) b.dispatchSetKeywords(args.keywords);
-      return {};
-    }
-
-    case 'builderAddPage': {
-      let w, h;
-      if (args.pageType === 'a4') { w = 595.28; h = 841.89; }
-      else if (args.pageType === 'letter') { w = 612; h = 792; }
-      else { w = args.width; h = args.height; }
-      const page = new DispatchPageBuilder(w, h);
-      const hid = nextHandleId++;
-      pageHandles.set(hid, { page, builderId: args.handleId });
-      return { handleId: hid };
-    }
-
-    case 'builderPageOp': {
-      const entry = getHandle(pageHandles, args.handleId, 'Page');
-      const opCode = PAGE_OP_CODES[args.pageOp];
-      if (opCode === undefined) throw new Error(`Unknown page op: ${args.pageOp}`);
-      entry.page.dispatchPageOp(opCode, args);
-      return {};
-    }
-
-    case 'builderPageDone': {
-      const entry = pageHandles.get(args.handleId);
-      if (entry) {
-        const builder = getHandle(builderHandles, entry.builderId, 'Builder');
-        entry.page.dispatchDone(builder);
-        pageHandles.delete(args.handleId);
-      }
-      return {};
-    }
-
-    case 'builderSave': {
-      const b = getHandle(builderHandles, args.handleId, 'Builder');
-      const bytes = b.dispatchBuild();
-      writeFn(bytes);
-      return {};
-    }
-
-    default:
-      throw new Error(`Unknown op: ${op}`);
   }
-}
-
-// ── Edit op dispatch ───────────────────────────────────────────────────
-
-function applyEditOp(doc, op, args) {
-  switch (op) {
-    case 'selectPages': doc.dispatchEditSelectPages(new Uint32Array(args.pages)); break;
-    case 'deletePages': doc.dispatchEditDeletePages(new Uint32Array(args.pages)); break;
-    case 'reorderPages': doc.dispatchEditSelectPages(new Uint32Array(args.order)); break;
-    case 'movePage': doc.dispatchEditMovePage(args.from, args.to); break;
-    case 'rotatePages': {
-      const pages = []; const degrees = [];
-      for (const [p, d] of Object.entries(args.rotations)) { pages.push(Number(p)); degrees.push(d); }
-      doc.dispatchEditRotatePages(new Uint32Array(pages), new Int32Array(degrees));
-      break;
-    }
-    case 'rotateAllPages': doc.dispatchEditRotateAll(args.degrees); break;
-    case 'flattenForms': doc.dispatchEditFlattenForms(); break;
-    case 'applyRedactions': doc.dispatchEditApplyRedactionsDestructive(); break;
-    case 'compress': doc.dispatchEditCompress(args.imageQuality || 75); break;
-    case 'optimizeImages': return { count: doc.dispatchEditOptimizeImages(args.quality || 75) };
-    case 'embedFile': doc.dispatchEditEmbedFile(args.name, new Uint8Array(args.fileData)); break;
-    case 'eraseRegions': {
-      const flat = [];
-      for (const r of args.regions) { flat.push(r.x, r.y, r.width, r.height); }
-      doc.dispatchEditEraseRegions(args.page, new Float32Array(flat));
-      break;
-    }
-    case 'watermark': {
-      const posType = args.posType || 0;
-      const posFields = new Float32Array(
-        posType === 1 ? [args.corner || 0, args.marginX || 20, args.marginY || 20] :
-        posType === 2 ? [args.columns || 3, args.rows || 4] :
-        posType === 3 ? [args.posX || 0, args.posY || 0, args.posW || 100, args.posH || 50] :
-        []
-      );
-      doc.dispatchEditWatermark(args.page, args.text, args.fontSize || 48, args.rotation || 45,
-        args.opacity || 0.3, args.r || 0.5, args.g || 0.5, args.b || 0.5,
-        args.layer || 0, posType, posFields);
-      break;
-    }
-    case 'encrypt': break;
-    case 'decrypt': break;
-    case 'addStamp': doc.dispatchEditAddStamp(args.page, args.stampType, args.x, args.y, args.width, args.height, args.opacity || 1.0); break;
-    case 'addImageStamp': doc.dispatchEditAddImageStamp(args.page, new Uint8Array(args.imageBytes), args.x, args.y, args.width, args.height, args.opacity || 1.0); break;
-    case 'setTitle': doc.dispatchEditSetTitle(args.value); break;
-    case 'setAuthor': doc.dispatchEditSetAuthor(args.value); break;
-    case 'setSubject': doc.dispatchEditSetSubject(args.value); break;
-    case 'setKeywords': doc.dispatchEditSetKeywords(args.value); break;
-    case 'cropMargins': doc.dispatchEditCropMargins(args.left || 0, args.right || 0, args.top || 0, args.bottom || 0); break;
-    case 'convertToPdfA': doc.dispatchEditConvertToPdfA(args.level || 1); break;
-    case 'flattenAllAnnotations': doc.dispatchEditFlattenAllAnnotations(); break;
-    case 'setFormFieldValue': doc.dispatchEditSetFormFieldValue(args.fieldName, args.value); break;
-    case 'unembedStandardFonts': doc.dispatchEditUnembedStandardFonts(); break;
-    case 'resizeImage': doc.dispatchEditResizeImage(args.page, args.imageName, args.width, args.height); break;
-    case 'addRedaction': doc.dispatchEditAddRedaction(args.page, args.x, args.y, args.w, args.h); break;
-    case 'redactionCount': return { count: doc.dispatchEditRedactionCount(args.page) };
-    case 'scrubMetadata': doc.dispatchEditScrubMetadata(); break;
-    default: throw new Error(`Unknown edit op: ${op}`);
-  }
-}
-
-// ── Page op codes — maps Dart op name → dispatch::PageOp variant number ──
-// Must match the op_code numbers in wasm_api.rs DispatchPageBuilder.dispatchPageOp
-
-const PAGE_OP_CODES = {
-  'font': 1, 'at': 2, 'text': 3, 'heading': 4, 'paragraph': 5,
-  'space': 6, 'horizontalRule': 7, 'image': 8, 'watermark': 9,
-  'textField': 10, 'checkbox': 11, 'comboBox': 12, 'pushButton': 13,
-  'signatureField': 14, 'newline': 15, 'newPageSameSize': 16, 'done': 17,
-  'radioGroup': 18, 'fieldKeystroke': 19, 'fieldFormat': 20,
-  'fieldValidate': 21, 'fieldCalculate': 22, 'linkUrl': 23, 'linkPage': 24,
-  'footnote': 25, 'columns': 26,
 };

@@ -1,5 +1,8 @@
 // PdfBuilder — create PDFs from scratch.
-
+//
+// build() → addPage(s) with content → save → dispose.
+// Construction only — no reading or querying existing PDFs.
+// Use PdfDoc for read queries, PdfEditor for mutations on existing PDFs.
 
 import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
@@ -42,6 +45,7 @@ class PdfBuilder {
         await _handle.addPage(width: width, height: height));
   }
 
+  // ── Save ──
 
   Future<void> save(DataSink output) {
     _check();
@@ -75,6 +79,7 @@ class PdfPageBuilder {
       _handle.image(imageData, rect, altText: altText);
   Future<void> watermark(String text) => _handle.watermark(text);
 
+  // ── Form fields ──
 
   Future<void> textField(String name, PdfRect rect,
           {String? defaultValue}) =>

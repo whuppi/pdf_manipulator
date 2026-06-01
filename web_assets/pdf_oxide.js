@@ -111,70 +111,6 @@ export const ChromaSampling = Object.freeze({
 });
 
 /**
- * Page ops buffer that uses dispatch::PageOp — same enum as native.
- * worker.js calls dispatchPageOp to buffer, dispatchPageDone to flush.
- */
-export class DispatchPageBuilder {
-    __destroy_into_raw() {
-        const ptr = this.__wbg_ptr;
-        this.__wbg_ptr = 0;
-        DispatchPageBuilderFinalization.unregister(this);
-        return ptr;
-    }
-    free() {
-        const ptr = this.__destroy_into_raw();
-        wasm.__wbg_dispatchpagebuilder_free(ptr, 0);
-    }
-    /**
-     * Flush all buffered ops to the builder through dispatch::replay_page_ops.
-     * @param {WasmDocumentBuilder} builder
-     */
-    dispatchDone(builder) {
-        try {
-            const ptr = this.__destroy_into_raw();
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            _assertClass(builder, WasmDocumentBuilder);
-            wasm.dispatchpagebuilder_dispatchDone(retptr, ptr, builder.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {number} op_code
-     * @param {any} args
-     */
-    dispatchPageOp(op_code, args) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.dispatchpagebuilder_dispatchPageOp(retptr, this.__wbg_ptr, op_code, addHeapObject(args));
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {number} width
-     * @param {number} height
-     */
-    constructor(width, height) {
-        const ret = wasm.dispatchpagebuilder_new(width, height);
-        this.__wbg_ptr = ret;
-        DispatchPageBuilderFinalization.register(this, this.__wbg_ptr, this);
-        return this;
-    }
-}
-if (Symbol.dispose) DispatchPageBuilder.prototype[Symbol.dispose] = DispatchPageBuilder.prototype.free;
-
-/**
  * A parsed Document Security Store (`/DSS`, ISO 32000-2 §12.8.4.3).
  * Count + index accessors mirror `WasmCertificate`'s flat shape
  * (wasm-bindgen cannot return `Uint8Array[]` directly).
@@ -934,99 +870,6 @@ export class WasmDocumentBuilder {
             const ptr0 = passStringToWasm0(creator, wasm.__wbindgen_export, wasm.__wbindgen_export2);
             const len0 = WASM_VECTOR_LEN;
             wasm.wasmdocumentbuilder_creator(retptr, this.__wbg_ptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @returns {Uint8Array}
-     */
-    dispatchBuild() {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmdocumentbuilder_dispatchBuild(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-            if (r3) {
-                throw takeObject(r2);
-            }
-            var v1 = getArrayU8FromWasm0(r0, r1).slice();
-            wasm.__wbindgen_export4(r0, r1 * 1, 1);
-            return v1;
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {string} author
-     */
-    dispatchSetAuthor(author) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(author, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.wasmdocumentbuilder_dispatchSetAuthor(retptr, this.__wbg_ptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {string} keywords
-     */
-    dispatchSetKeywords(keywords) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(keywords, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.wasmdocumentbuilder_dispatchSetKeywords(retptr, this.__wbg_ptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {string} subject
-     */
-    dispatchSetSubject(subject) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(subject, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.wasmdocumentbuilder_dispatchSetSubject(retptr, this.__wbg_ptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {string} title
-     */
-    dispatchSetTitle(title) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(title, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.wasmdocumentbuilder_dispatchSetTitle(retptr, this.__wbg_ptr, ptr0, len0);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             if (r1) {
@@ -3167,30 +3010,6 @@ export class WasmPdf {
         }
     }
     /**
-     * Merge multiple PDFs from reader callbacks — each input reads on demand.
-     *
-     * @param readers - Array of [readFn, lengthFn] pairs
-     * @param write_fn - JS function for streaming output: (chunk: Uint8Array) => void
-     * @returns void (output streamed through write_fn)
-     * @param {any[]} readers
-     * @param {Function} write_fn
-     */
-    static mergeFromReaders(readers, write_fn) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passArrayJsValueToWasm0(readers, wasm.__wbindgen_export);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.wasmpdf_mergeFromReaders(retptr, ptr0, len0, addHeapObject(write_fn));
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
      * Get the size of the PDF in bytes.
      * @returns {number}
      */
@@ -3242,34 +3061,6 @@ export class WasmPdfDocument {
         wasm.__wbg_wasmpdfdocument_free(ptr, 0);
     }
     /**
-     * LOCAL PATCH — pdf_manipulator/0.3.47-patches
-     * Add an image stamp annotation (logo watermark) to a page.
-     * The image bytes (JPEG/PNG) are embedded as an XObject in the appearance stream.
-     * Removal trigger: upstream adds image stamp to WasmPdfDocument.
-     * @param {number} page_index
-     * @param {Uint8Array} image_data
-     * @param {number} x
-     * @param {number} y
-     * @param {number} width
-     * @param {number} height
-     * @param {number} opacity
-     */
-    addImageStamp(page_index, image_data, x, y, width, height, opacity) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passArray8ToWasm0(image_data, wasm.__wbindgen_export);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_addImageStamp(retptr, this.__wbg_ptr, page_index, ptr0, len0, x, y, width, height, opacity);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
      * Queue an explicit destructive redaction rectangle on a page
      * (page user space; `fill` is an optional DeviceRGB `[r,g,b]`).
      * @param {number} page
@@ -3285,97 +3076,6 @@ export class WasmPdfDocument {
             var ptr0 = isLikeNone(fill) ? 0 : passArrayF32ToWasm0(fill, wasm.__wbindgen_export);
             var len0 = WASM_VECTOR_LEN;
             wasm.wasmpdfdocument_addRedaction(retptr, this.__wbg_ptr, page, x0, y0, x1, y1, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * LOCAL PATCH — pdf_manipulator/0.3.47-patches
-     * Add a stamp annotation to a page.
-     * Removal trigger: upstream adds stamp annotations to WasmPdfDocument.
-     * @param {number} page_index
-     * @param {number} stamp_type
-     * @param {string | null | undefined} custom_name
-     * @param {number} x
-     * @param {number} y
-     * @param {number} width
-     * @param {number} height
-     * @param {number} opacity
-     */
-    addStamp(page_index, stamp_type, custom_name, x, y, width, height, opacity) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            var ptr0 = isLikeNone(custom_name) ? 0 : passStringToWasm0(custom_name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            var len0 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_addStamp(retptr, this.__wbg_ptr, page_index, stamp_type, ptr0, len0, x, y, width, height, opacity);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * LOCAL PATCH — pdf_manipulator/0.3.47-patches
-     * Add a text watermark to an existing page.
-     * Removal trigger: upstream adds watermark to WasmPdfDocument.
-     * @param {number} page_index
-     * @param {string} text
-     * @param {number} font_size
-     * @param {number} rotation
-     * @param {number} opacity
-     * @param {number} r
-     * @param {number} g
-     * @param {number} b
-     */
-    addWatermark(page_index, text, font_size, rotation, opacity, r, g, b) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_addWatermark(retptr, this.__wbg_ptr, page_index, ptr0, len0, font_size, rotation, opacity, r, g, b);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * LOCAL PATCH — pdf_manipulator/0.3.47-patches
-     * Add a positioned watermark (text at specific coordinates) to a page.
-     * Removal trigger: upstream adds positioned watermark to WasmPdfDocument.
-     * @param {number} page_index
-     * @param {string} text
-     * @param {number} x
-     * @param {number} y
-     * @param {number} width
-     * @param {number} height
-     * @param {number} font_size
-     * @param {string | null | undefined} font_name
-     * @param {number} rotation
-     * @param {number} opacity
-     * @param {number} r
-     * @param {number} g
-     * @param {number} b
-     */
-    addWatermarkPositioned(page_index, text, x, y, width, height, font_size, font_name, rotation, opacity, r, g, b) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            var ptr1 = isLikeNone(font_name) ? 0 : passStringToWasm0(font_name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            var len1 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_addWatermarkPositioned(retptr, this.__wbg_ptr, page_index, ptr0, len0, x, y, width, height, font_size, ptr1, len1, rotation, opacity, r, g, b);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             if (r1) {
@@ -3602,941 +3302,6 @@ export class WasmPdfDocument {
         }
     }
     /**
-     * @returns {any}
-     */
-    dispatchClassifyDocument() {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchClassifyDocument(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {number} page
-     * @returns {any}
-     */
-    dispatchClassifyPage(page) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchClassifyPage(retptr, this.__wbg_ptr, page);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {Uint8Array} data
-     * @param {string} format
-     * @param {Function} write_fn
-     */
-    static dispatchConvertFromFormat(data, format, write_fn) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_export);
-            const len0 = WASM_VECTOR_LEN;
-            const ptr1 = passStringToWasm0(format, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len1 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_dispatchConvertFromFormat(retptr, ptr0, len0, ptr1, len1, addHeapObject(write_fn));
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {string} format
-     * @returns {Uint8Array}
-     */
-    dispatchConvertToFormat(format) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(format, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_dispatchConvertToFormat(retptr, this.__wbg_ptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-            if (r3) {
-                throw takeObject(r2);
-            }
-            var v2 = getArrayU8FromWasm0(r0, r1).slice();
-            wasm.__wbindgen_export4(r0, r1 * 1, 1);
-            return v2;
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {number} page
-     * @param {Uint8Array} image_bytes
-     * @param {number} x
-     * @param {number} y
-     * @param {number} w
-     * @param {number} h
-     * @param {number} opacity
-     */
-    dispatchEditAddImageStamp(page, image_bytes, x, y, w, h, opacity) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passArray8ToWasm0(image_bytes, wasm.__wbindgen_export);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_dispatchEditAddImageStamp(retptr, this.__wbg_ptr, page, ptr0, len0, x, y, w, h, opacity);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {number} page
-     * @param {number} x
-     * @param {number} y
-     * @param {number} w
-     * @param {number} h
-     */
-    dispatchEditAddRedaction(page, x, y, w, h) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchEditAddRedaction(retptr, this.__wbg_ptr, page, x, y, w, h);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {number} page
-     * @param {number} stamp_type
-     * @param {number} x
-     * @param {number} y
-     * @param {number} w
-     * @param {number} h
-     * @param {number} opacity
-     */
-    dispatchEditAddStamp(page, stamp_type, x, y, w, h, opacity) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchEditAddStamp(retptr, this.__wbg_ptr, page, stamp_type, x, y, w, h, opacity);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    dispatchEditApplyRedactions() {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchEditApplyRedactions(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    dispatchEditApplyRedactionsDestructive() {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchEditApplyRedactionsDestructive(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {number} quality
-     */
-    dispatchEditCompress(quality) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchEditCompress(retptr, this.__wbg_ptr, quality);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {number} level
-     */
-    dispatchEditConvertToPdfA(level) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchEditConvertToPdfA(retptr, this.__wbg_ptr, level);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {number} left
-     * @param {number} right
-     * @param {number} top
-     * @param {number} bottom
-     */
-    dispatchEditCropMargins(left, right, top, bottom) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchEditCropMargins(retptr, this.__wbg_ptr, left, right, top, bottom);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {Uint32Array} pages
-     */
-    dispatchEditDeletePages(pages) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passArray32ToWasm0(pages, wasm.__wbindgen_export);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_dispatchEditDeletePages(retptr, this.__wbg_ptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {string} name
-     * @param {Uint8Array} data
-     */
-    dispatchEditEmbedFile(name, data) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            const ptr1 = passArray8ToWasm0(data, wasm.__wbindgen_export);
-            const len1 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_dispatchEditEmbedFile(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {number} page
-     * @param {Float32Array} rects
-     */
-    dispatchEditEraseRegions(page, rects) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passArrayF32ToWasm0(rects, wasm.__wbindgen_export);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_dispatchEditEraseRegions(retptr, this.__wbg_ptr, page, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    dispatchEditFlattenAllAnnotations() {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchEditFlattenAllAnnotations(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    dispatchEditFlattenForms() {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchEditFlattenForms(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @returns {boolean}
-     */
-    dispatchEditIsModified() {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchEditIsModified(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return r0 !== 0;
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {Uint8Array[]} secondary_bytes
-     */
-    dispatchEditMerge(secondary_bytes) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passArrayJsValueToWasm0(secondary_bytes, wasm.__wbindgen_export);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_dispatchEditMerge(retptr, this.__wbg_ptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {number} from
-     * @param {number} to
-     */
-    dispatchEditMovePage(from, to) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchEditMovePage(retptr, this.__wbg_ptr, from, to);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {number} quality
-     * @returns {number}
-     */
-    dispatchEditOptimizeImages(quality) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchEditOptimizeImages(retptr, this.__wbg_ptr, quality);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return r0 >>> 0;
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {number} page
-     * @returns {Float32Array}
-     */
-    dispatchEditPageMediaBox(page) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchEditPageMediaBox(retptr, this.__wbg_ptr, page);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-            if (r3) {
-                throw takeObject(r2);
-            }
-            var v1 = getArrayF32FromWasm0(r0, r1).slice();
-            wasm.__wbindgen_export4(r0, r1 * 4, 4);
-            return v1;
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {number} page
-     * @returns {number}
-     */
-    dispatchEditRedactionCount(page) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchEditRedactionCount(retptr, this.__wbg_ptr, page);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return r0 >>> 0;
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {number} page
-     * @param {string} name
-     * @param {number} width
-     * @param {number} height
-     */
-    dispatchEditResizeImage(page, name, width, height) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_dispatchEditResizeImage(retptr, this.__wbg_ptr, page, ptr0, len0, width, height);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {number} degrees
-     */
-    dispatchEditRotateAll(degrees) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchEditRotateAll(retptr, this.__wbg_ptr, degrees);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {Uint32Array} pages
-     * @param {Int32Array} degrees
-     */
-    dispatchEditRotatePages(pages, degrees) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passArray32ToWasm0(pages, wasm.__wbindgen_export);
-            const len0 = WASM_VECTOR_LEN;
-            const ptr1 = passArray32ToWasm0(degrees, wasm.__wbindgen_export);
-            const len1 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_dispatchEditRotatePages(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {Function} write_fn
-     * @param {boolean | null} [compress]
-     * @param {boolean | null} [garbage_collect]
-     * @param {number | null} [save_mode]
-     */
-    dispatchEditSave(write_fn, compress, garbage_collect, save_mode) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchEditSave(retptr, this.__wbg_ptr, addHeapObject(write_fn), isLikeNone(compress) ? 0xFFFFFF : compress ? 1 : 0, isLikeNone(garbage_collect) ? 0xFFFFFF : garbage_collect ? 1 : 0, isLikeNone(save_mode) ? Number.MAX_SAFE_INTEGER : (save_mode) >> 0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {string} user_password
-     * @param {string | null} [owner_password]
-     * @returns {Uint8Array}
-     */
-    dispatchEditSaveEncrypted(user_password, owner_password) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(user_password, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            var ptr1 = isLikeNone(owner_password) ? 0 : passStringToWasm0(owner_password, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            var len1 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_dispatchEditSaveEncrypted(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-            if (r3) {
-                throw takeObject(r2);
-            }
-            var v3 = getArrayU8FromWasm0(r0, r1).slice();
-            wasm.__wbindgen_export4(r0, r1 * 1, 1);
-            return v3;
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    dispatchEditScrubMetadata() {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchEditScrubMetadata(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {Uint32Array} pages
-     */
-    dispatchEditSelectPages(pages) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passArray32ToWasm0(pages, wasm.__wbindgen_export);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_dispatchEditSelectPages(retptr, this.__wbg_ptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {string} value
-     */
-    dispatchEditSetAuthor(value) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(value, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_dispatchEditSetAuthor(retptr, this.__wbg_ptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {string} name
-     * @param {string} value
-     */
-    dispatchEditSetFormFieldValue(name, value) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(name, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            const ptr1 = passStringToWasm0(value, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len1 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_dispatchEditSetFormFieldValue(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {string} value
-     */
-    dispatchEditSetKeywords(value) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(value, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_dispatchEditSetKeywords(retptr, this.__wbg_ptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {string} value
-     */
-    dispatchEditSetSubject(value) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(value, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_dispatchEditSetSubject(retptr, this.__wbg_ptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {string} value
-     */
-    dispatchEditSetTitle(value) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(value, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_dispatchEditSetTitle(retptr, this.__wbg_ptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @returns {number}
-     */
-    dispatchEditUnembedStandardFonts() {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchEditUnembedStandardFonts(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return r0 >>> 0;
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {number} page
-     * @param {string} text
-     * @param {number} font_size
-     * @param {number} rotation
-     * @param {number} opacity
-     * @param {number} r
-     * @param {number} g
-     * @param {number} b
-     * @param {number} layer
-     * @param {number} pos_type
-     * @param {Float32Array} pos_fields
-     */
-    dispatchEditWatermark(page, text, font_size, rotation, opacity, r, g, b, layer, pos_type, pos_fields) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(text, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            const ptr1 = passArrayF32ToWasm0(pos_fields, wasm.__wbindgen_export);
-            const len1 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_dispatchEditWatermark(retptr, this.__wbg_ptr, page, ptr0, len0, font_size, rotation, opacity, r, g, b, layer, pos_type, ptr1, len1);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @returns {any}
-     */
-    dispatchEditorGetMetadata() {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchEditorGetMetadata(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {number} page
-     * @returns {any}
-     */
-    dispatchExtractImages(page) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchExtractImages(retptr, this.__wbg_ptr, page);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {number | null} [page]
-     * @param {string | null} [format]
-     * @returns {any}
-     */
-    dispatchExtractText(page, format) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            var ptr0 = isLikeNone(format) ? 0 : passStringToWasm0(format, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            var len0 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_dispatchExtractText(retptr, this.__wbg_ptr, isLikeNone(page) ? Number.MAX_SAFE_INTEGER : (page) >> 0, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @returns {any}
-     */
-    dispatchGetSignatures() {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchGetSignatures(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {Uint8Array[]} images
-     * @returns {Uint8Array}
-     */
-    static dispatchImagesToPdf(images) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passArrayJsValueToWasm0(images, wasm.__wbindgen_export);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_dispatchImagesToPdf(retptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-            if (r3) {
-                throw takeObject(r2);
-            }
-            var v2 = getArrayU8FromWasm0(r0, r1).slice();
-            wasm.__wbindgen_export4(r0, r1 * 1, 1);
-            return v2;
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @returns {any}
-     */
-    dispatchOpen() {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchOpen(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @returns {any}
-     */
-    dispatchPlanSplitByBookmarks() {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchPlanSplitByBookmarks(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {number} page
-     * @param {number | null} [max_width]
-     * @param {number | null} [max_height]
-     * @returns {any}
-     */
-    dispatchRenderPage(page, max_width, max_height) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchRenderPage(retptr, this.__wbg_ptr, page, isLikeNone(max_width) ? Number.MAX_SAFE_INTEGER : (max_width) >>> 0, isLikeNone(max_height) ? Number.MAX_SAFE_INTEGER : (max_height) >>> 0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {string} query
-     * @param {number | null} [page]
-     * @returns {any}
-     */
-    dispatchSearch(query, page) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passStringToWasm0(query, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_dispatchSearch(retptr, this.__wbg_ptr, ptr0, len0, isLikeNone(page) ? Number.MAX_SAFE_INTEGER : (page) >> 0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {number | null} [level]
-     * @returns {any}
-     */
-    dispatchValidatePdfA(level) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchValidatePdfA(retptr, this.__wbg_ptr, isLikeNone(level) ? Number.MAX_SAFE_INTEGER : (level) >> 0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @param {number | null} [level]
-     * @returns {any}
-     */
-    dispatchValidatePdfUa(level) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchValidatePdfUa(retptr, this.__wbg_ptr, isLikeNone(level) ? Number.MAX_SAFE_INTEGER : (level) >> 0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @returns {any}
-     */
-    dispatchVerifySignatures() {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_dispatchVerifySignatures(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
      * The document's Document Security Store (`/DSS`) as a `Dss`, or
      * `undefined` if absent. Mirrors Rust `signatures::read_dss`.
      * @returns {Dss | undefined}
@@ -4586,38 +3351,6 @@ export class WasmPdfDocument {
             if (r1) {
                 throw takeObject(r0);
             }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * Open a PDF for editing from a callback-based reader.
-     *
-     * Uses `DocumentEditor::from_document` — the editor wraps the
-     * reader-opened PdfDocument directly. No full-file buffer.
-     * `source_bytes` is empty — `convertToPdfA` won't work.
-     *
-     * @param read_fn - JS function: (offset: number, count: number) => Uint8Array
-     * @param length_fn - JS function: () => number (total file size)
-     * @param password - Optional password for encrypted PDFs
-     * @param {Function} read_fn
-     * @param {Function} length_fn
-     * @param {string | null} [password]
-     * @returns {WasmPdfDocument}
-     */
-    static editorFromReader(read_fn, length_fn, password) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            var ptr0 = isLikeNone(password) ? 0 : passStringToWasm0(password, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            var len0 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_editorFromReader(retptr, addHeapObject(read_fn), addHeapObject(length_fn), ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return WasmPdfDocument.__wrap(r0);
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
         }
@@ -4976,6 +3709,31 @@ export class WasmPdfDocument {
                 throw takeObject(r1);
             }
             return takeObject(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Extract specific pages to a new PDF (returns bytes).
+     * @param {Uint32Array} pages
+     * @returns {Uint8Array}
+     */
+    extractPages(pages) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray32ToWasm0(pages, wasm.__wbindgen_export);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.wasmpdfdocument_extractPages(retptr, this.__wbg_ptr, ptr0, len0);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
+            if (r3) {
+                throw takeObject(r2);
+            }
+            var v2 = getArrayU8FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 1, 1);
+            return v2;
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
         }
@@ -5358,34 +4116,6 @@ export class WasmPdfDocument {
         }
     }
     /**
-     * Load a PDF document from a callback-based reader (OPFS).
-     *
-     * @param read_fn - JS function: (offset: number, count: number) => Uint8Array
-     * @param length_fn - JS function: () => number (total file size)
-     * @param password - Optional password for encrypted PDFs
-     * @param {Function} read_fn
-     * @param {Function} length_fn
-     * @param {string | null} [password]
-     * @returns {WasmPdfDocument}
-     */
-    static fromReader(read_fn, length_fn, password) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            var ptr0 = isLikeNone(password) ? 0 : passStringToWasm0(password, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-            var len0 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_fromReader(retptr, addHeapObject(read_fn), addHeapObject(length_fn), ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return WasmPdfDocument.__wrap(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
      * Get annotations from a page.
      *
      * @param page_index - Zero-based page number
@@ -5404,52 +4134,6 @@ export class WasmPdfDocument {
                 throw takeObject(r1);
             }
             return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * Read the document author from the Info dictionary.
-     * @returns {string}
-     */
-    getAuthor() {
-        let deferred2_0;
-        let deferred2_1;
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_getAuthor(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-            var ptr1 = r0;
-            var len1 = r1;
-            if (r3) {
-                ptr1 = 0; len1 = 0;
-                throw takeObject(r2);
-            }
-            deferred2_0 = ptr1;
-            deferred2_1 = len1;
-            return getStringFromWasm0(ptr1, len1);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
-        }
-    }
-    /**
-     * @returns {number}
-     */
-    getEncryptionAlgorithm() {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_getEncryptionAlgorithm(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return r0;
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
         }
@@ -5510,34 +4194,6 @@ export class WasmPdfDocument {
         }
     }
     /**
-     * Read the document keywords from the Info dictionary.
-     * @returns {string}
-     */
-    getKeywords() {
-        let deferred2_0;
-        let deferred2_1;
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_getKeywords(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-            var ptr1 = r0;
-            var len1 = r1;
-            if (r3) {
-                ptr1 = 0; len1 = 0;
-                throw takeObject(r2);
-            }
-            deferred2_0 = ptr1;
-            deferred2_1 = len1;
-            return getStringFromWasm0(ptr1, len1);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
-        }
-    }
-    /**
      * Get the document outline (bookmarks / table of contents).
      *
      * @returns Array of outline items or null if no outline exists.
@@ -5557,80 +4213,6 @@ export class WasmPdfDocument {
             return takeObject(r0);
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @returns {number}
-     */
-    getPermissionBits() {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_getPermissionBits(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return r0;
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * Read the document subject from the Info dictionary.
-     * @returns {string}
-     */
-    getSubject() {
-        let deferred2_0;
-        let deferred2_1;
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_getSubject(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-            var ptr1 = r0;
-            var len1 = r1;
-            if (r3) {
-                ptr1 = 0; len1 = 0;
-                throw takeObject(r2);
-            }
-            deferred2_0 = ptr1;
-            deferred2_1 = len1;
-            return getStringFromWasm0(ptr1, len1);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
-        }
-    }
-    /**
-     * Read the document title from the Info dictionary.
-     * @returns {string}
-     */
-    getTitle() {
-        let deferred2_0;
-        let deferred2_1;
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_getTitle(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-            var ptr1 = r0;
-            var len1 = r1;
-            if (r3) {
-                ptr1 = 0; len1 = 0;
-                throw takeObject(r2);
-            }
-            deferred2_0 = ptr1;
-            deferred2_1 = len1;
-            return getStringFromWasm0(ptr1, len1);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-            wasm.__wbindgen_export4(deferred2_0, deferred2_1, 1);
         }
     }
     /**
@@ -5662,42 +4244,6 @@ export class WasmPdfDocument {
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
             wasm.wasmpdfdocument_hasXfa(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return r0 !== 0;
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @returns {boolean}
-     */
-    isEncrypted() {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_isEncrypted(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return r0 !== 0;
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @returns {boolean}
-     */
-    isModified() {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_isModified(retptr, this.__wbg_ptr);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
@@ -5757,6 +4303,10 @@ export class WasmPdfDocument {
     }
     /**
      * Load a PDF document from raw bytes.
+     *
+     * @param data - PDF file contents as Uint8Array
+     * @param password - Optional password for encrypted PDFs
+     * @throws Error if the PDF is invalid or cannot be parsed
      * @param {Uint8Array} data
      * @param {string | null} [password]
      */
@@ -6098,30 +4648,6 @@ export class WasmPdfDocument {
         }
     }
     /**
-     * Render a page fitted to a pixel bounding box.
-     * Returns a JS object: { width: number, height: number, data: Uint8Array }
-     * where data is raw image bytes (PNG format, same as renderPage).
-     * @param {number} page_index
-     * @param {number} fit_width
-     * @param {number} fit_height
-     * @returns {any}
-     */
-    renderPageFit(page_index, fit_width, fit_height) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_renderPageFit(retptr, this.__wbg_ptr, page_index, fit_width, fit_height);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
      * Reposition an image on a page.
      * @param {number} page_index
      * @param {string} name
@@ -6139,24 +4665,6 @@ export class WasmPdfDocument {
             if (r1) {
                 throw takeObject(r0);
             }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * @returns {boolean}
-     */
-    requiresPassword() {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_requiresPassword(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return r0 !== 0;
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
         }
@@ -6324,29 +4832,6 @@ export class WasmPdfDocument {
         }
     }
     /**
-     * Save by streaming output chunks through a JS callback function.
-     *
-     * @param write_fn - JS function: (chunk: Uint8Array) => void
-     * @param options - Optional save options (compress, garbageCollect, linearize)
-     * @param {Function} write_fn
-     * @param {boolean | null} [compress]
-     * @param {boolean | null} [garbage_collect]
-     * @param {number | null} [save_mode]
-     */
-    saveToWriter(write_fn, compress, garbage_collect, save_mode) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_saveToWriter(retptr, this.__wbg_ptr, addHeapObject(write_fn), isLikeNone(compress) ? 0xFFFFFF : compress ? 1 : 0, isLikeNone(garbage_collect) ? 0xFFFFFF : garbage_collect ? 1 : 0, isLikeNone(save_mode) ? Number.MAX_SAFE_INTEGER : (save_mode) >> 0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
      * Save with options (compress, garbage_collect, linearize) and return bytes.
      *
      * @param {Object} [options] - Optional save options.
@@ -6434,25 +4919,6 @@ export class WasmPdfDocument {
                 throw takeObject(r1);
             }
             return takeObject(r0);
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * Keep only the specified pages — removes all others from the editor.
-     * @param {Uint32Array} pages
-     */
-    selectPages(pages) {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            const ptr0 = passArray32ToWasm0(pages, wasm.__wbindgen_export);
-            const len0 = WASM_VECTOR_LEN;
-            wasm.wasmpdfdocument_selectPages(retptr, this.__wbg_ptr, ptr0, len0);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            if (r1) {
-                throw takeObject(r0);
-            }
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
         }
@@ -6937,27 +5403,6 @@ export class WasmPdfDocument {
             var v1 = getArrayU8FromWasm0(r0, r1).slice();
             wasm.__wbindgen_export4(r0, r1 * 1, 1);
             return v1;
-        } finally {
-            wasm.__wbindgen_add_to_stack_pointer(16);
-        }
-    }
-    /**
-     * LOCAL PATCH — pdf_manipulator/0.3.47-patches
-     * Unembed Standard 14 fonts.
-     * Removal trigger: upstream adds font optimization to WasmPdfDocument.
-     * @returns {number}
-     */
-    unembedStandardFonts() {
-        try {
-            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-            wasm.wasmpdfdocument_unembedStandardFonts(retptr, this.__wbg_ptr);
-            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-            if (r2) {
-                throw takeObject(r1);
-            }
-            return r0 >>> 0;
         } finally {
             wasm.__wbindgen_add_to_stack_pointer(16);
         }
@@ -7710,6 +6155,54 @@ export class WasmTimestamp {
 if (Symbol.dispose) WasmTimestamp.prototype[Symbol.dispose] = WasmTimestamp.prototype.free;
 
 /**
+ * Execute an operation within an instance.
+ *
+ * source_lengths: packed f64 array — each 8 bytes is one source length.
+ * Sources get indexed readers (0, 1, 2, ...).
+ * sink_count: how many output sinks exist.
+ * Sinks get indexed writers (0, 1, 2, ...).
+ * @param {number} instance_ptr
+ * @param {Uint8Array} request_bytes
+ * @param {Uint8Array} source_lengths
+ * @param {number} sink_count
+ * @returns {Uint8Array}
+ */
+export function bridge_execute(instance_ptr, request_bytes, source_lengths, sink_count) {
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passArray8ToWasm0(request_bytes, wasm.__wbindgen_export);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray8ToWasm0(source_lengths, wasm.__wbindgen_export);
+        const len1 = WASM_VECTOR_LEN;
+        wasm.bridge_execute(retptr, instance_ptr, ptr0, len0, ptr1, len1, sink_count);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var v3 = getArrayU8FromWasm0(r0, r1).slice();
+        wasm.__wbindgen_export4(r0, r1 * 1, 1);
+        return v3;
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+    }
+}
+
+/**
+ * Create a new engine instance. Returns a WASM pointer.
+ * @returns {number}
+ */
+export function bridge_init() {
+    const ret = wasm.bridge_init();
+    return ret >>> 0;
+}
+
+/**
+ * Destroy an instance. Drops all handles, frees all WASM heap memory.
+ * @param {number} instance_ptr
+ */
+export function bridge_shutdown(instance_ptr) {
+    wasm.bridge_shutdown(instance_ptr);
+}
+
+/**
  * A CycloneDX 1.6 Cryptographic Bill of Materials (JSON string) of the
  * algorithms exercised so far this process (#230 Phase F).
  * @returns {string}
@@ -8085,146 +6578,6 @@ export function signPdfBytesPades(pdf_data, cert, level, timestamp_token, revoca
 }
 
 /**
- * Sign PDF via streaming reader/writer with PEM credentials.
- * @param {Function} read_fn
- * @param {Function} length_fn
- * @param {Function} write_fn
- * @param {string} cert_pem
- * @param {string} key_pem
- * @param {string | null} [reason]
- * @param {string | null} [location]
- */
-export function signPdfStreamingPem(read_fn, length_fn, write_fn, cert_pem, key_pem, reason, location) {
-    try {
-        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-        const ptr0 = passStringToWasm0(cert_pem, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(key_pem, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        const len1 = WASM_VECTOR_LEN;
-        var ptr2 = isLikeNone(reason) ? 0 : passStringToWasm0(reason, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        var len2 = WASM_VECTOR_LEN;
-        var ptr3 = isLikeNone(location) ? 0 : passStringToWasm0(location, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        var len3 = WASM_VECTOR_LEN;
-        wasm.signPdfStreamingPem(retptr, addHeapObject(read_fn), addHeapObject(length_fn), addHeapObject(write_fn), ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
-        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-        if (r1) {
-            throw takeObject(r0);
-        }
-    } finally {
-        wasm.__wbindgen_add_to_stack_pointer(16);
-    }
-}
-
-/**
- * @param {Function} read_fn
- * @param {Function} length_fn
- * @param {Function} write_fn
- * @param {Uint8Array} pkcs12_data
- * @param {string} password
- * @param {string | null} [reason]
- * @param {string | null} [location]
- */
-export function signPdfStreamingPkcs12(read_fn, length_fn, write_fn, pkcs12_data, password, reason, location) {
-    try {
-        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-        const ptr0 = passArray8ToWasm0(pkcs12_data, wasm.__wbindgen_export);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(password, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        const len1 = WASM_VECTOR_LEN;
-        var ptr2 = isLikeNone(reason) ? 0 : passStringToWasm0(reason, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        var len2 = WASM_VECTOR_LEN;
-        var ptr3 = isLikeNone(location) ? 0 : passStringToWasm0(location, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        var len3 = WASM_VECTOR_LEN;
-        wasm.signPdfStreamingPkcs12(retptr, addHeapObject(read_fn), addHeapObject(length_fn), addHeapObject(write_fn), ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
-        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-        if (r1) {
-            throw takeObject(r0);
-        }
-    } finally {
-        wasm.__wbindgen_add_to_stack_pointer(16);
-    }
-}
-
-/**
- * Sign PDF bytes with PEM certificate + key. All data stays inside WASM.
- * @param {Uint8Array} pdf_data
- * @param {string} cert_pem
- * @param {string} key_pem
- * @param {string | null} [reason]
- * @param {string | null} [location]
- * @returns {Uint8Array}
- */
-export function signPdfWithPem(pdf_data, cert_pem, key_pem, reason, location) {
-    try {
-        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-        const ptr0 = passArray8ToWasm0(pdf_data, wasm.__wbindgen_export);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(cert_pem, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        const len1 = WASM_VECTOR_LEN;
-        const ptr2 = passStringToWasm0(key_pem, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        const len2 = WASM_VECTOR_LEN;
-        var ptr3 = isLikeNone(reason) ? 0 : passStringToWasm0(reason, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        var len3 = WASM_VECTOR_LEN;
-        var ptr4 = isLikeNone(location) ? 0 : passStringToWasm0(location, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        var len4 = WASM_VECTOR_LEN;
-        wasm.signPdfWithPem(retptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4);
-        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-        var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-        var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-        if (r3) {
-            throw takeObject(r2);
-        }
-        var v6 = getArrayU8FromWasm0(r0, r1).slice();
-        wasm.__wbindgen_export4(r0, r1 * 1, 1);
-        return v6;
-    } finally {
-        wasm.__wbindgen_add_to_stack_pointer(16);
-    }
-}
-
-/**
- * Sign PDF bytes with a PKCS#12 certificate. All data stays inside WASM —
- * no cross-boundary borrows that can be invalidated by memory growth.
- * @param {Uint8Array} pdf_data
- * @param {Uint8Array} pkcs12_data
- * @param {string} password
- * @param {string | null} [reason]
- * @param {string | null} [location]
- * @returns {Uint8Array}
- */
-export function signPdfWithPkcs12(pdf_data, pkcs12_data, password, reason, location) {
-    try {
-        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-        const ptr0 = passArray8ToWasm0(pdf_data, wasm.__wbindgen_export);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passArray8ToWasm0(pkcs12_data, wasm.__wbindgen_export);
-        const len1 = WASM_VECTOR_LEN;
-        const ptr2 = passStringToWasm0(password, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        const len2 = WASM_VECTOR_LEN;
-        var ptr3 = isLikeNone(reason) ? 0 : passStringToWasm0(reason, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        var len3 = WASM_VECTOR_LEN;
-        var ptr4 = isLikeNone(location) ? 0 : passStringToWasm0(location, wasm.__wbindgen_export, wasm.__wbindgen_export2);
-        var len4 = WASM_VECTOR_LEN;
-        wasm.signPdfWithPkcs12(retptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4);
-        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-        var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
-        var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-        if (r3) {
-            throw takeObject(r2);
-        }
-        var v6 = getArrayU8FromWasm0(r0, r1).slice();
-        wasm.__wbindgen_export4(r0, r1 * 1, 1);
-        return v6;
-    } finally {
-        wasm.__wbindgen_add_to_stack_pointer(16);
-    }
-}
-
-/**
  * Split at bookmark boundaries. Returns a JSON array of
  * `[segment, bytes]` pairs (bytes as a number array; source
  * unmodified).
@@ -8348,14 +6701,6 @@ function __wbg_get_imports() {
             const ret = getObject(arg0).call(getObject(arg1));
             return addHeapObject(ret);
         }, arguments); },
-        __wbg_call_dfde26266607c996: function() { return handleError(function (arg0, arg1, arg2) {
-            const ret = getObject(arg0).call(getObject(arg1), getObject(arg2));
-            return addHeapObject(ret);
-        }, arguments); },
-        __wbg_call_faa0a261f288f846: function() { return handleError(function (arg0, arg1, arg2, arg3) {
-            const ret = getObject(arg0).call(getObject(arg1), getObject(arg2), getObject(arg3));
-            return addHeapObject(ret);
-        }, arguments); },
         __wbg_debug_1cbb2f02cd18a348: function(arg0, arg1, arg2, arg3) {
             console.debug(getObject(arg0), getObject(arg1), getObject(arg2), getObject(arg3));
         },
@@ -8407,10 +6752,6 @@ function __wbg_get_imports() {
             const ret = getObject(arg0)[arg1 >>> 0];
             return addHeapObject(ret);
         },
-        __wbg_get_dcf82ab8aad1a593: function() { return handleError(function (arg0, arg1) {
-            const ret = Reflect.get(getObject(arg0), getObject(arg1));
-            return addHeapObject(ret);
-        }, arguments); },
         __wbg_get_unchecked_1dfe6d05ad91d9b7: function(arg0, arg1) {
             const ret = getObject(arg0)[arg1 >>> 0];
             return addHeapObject(ret);
@@ -8418,6 +6759,14 @@ function __wbg_get_imports() {
         __wbg_get_with_ref_key_6412cf3094599694: function(arg0, arg1) {
             const ret = getObject(arg0)[getObject(arg1)];
             return addHeapObject(ret);
+        },
+        __wbg_host_read_at_e645a430c7b76afa: function(arg0, arg1, arg2, arg3) {
+            const ret = host_read_at(arg0 >>> 0, arg1 >>> 0, arg2 >>> 0, arg3 >>> 0);
+            return ret;
+        },
+        __wbg_host_write_chunk_60d5eb661404fb83: function(arg0, arg1, arg2) {
+            const ret = host_write_chunk(arg0 >>> 0, arg1 >>> 0, arg2 >>> 0);
+            return ret;
         },
         __wbg_info_de0a30e0c0b6b4e9: function(arg0, arg1, arg2, arg3) {
             console.info(getObject(arg0), getObject(arg1), getObject(arg2), getObject(arg3));
@@ -8505,10 +6854,6 @@ function __wbg_get_imports() {
             const ret = getObject(arg0).next();
             return addHeapObject(ret);
         }, arguments); },
-        __wbg_now_81363d44c96dd239: function() {
-            const ret = Date.now();
-            return ret;
-        },
         __wbg_prototypesetcall_5f9bdc8d75e07276: function(arg0, arg1, arg2) {
             Uint8Array.prototype.set.call(getArrayU8FromWasm0(arg0, arg1), getObject(arg2));
         },
@@ -8582,9 +6927,6 @@ function __wbg_get_imports() {
     };
 }
 
-const DispatchPageBuilderFinalization = (typeof FinalizationRegistry === 'undefined')
-    ? { register: () => {}, unregister: () => {} }
-    : new FinalizationRegistry(ptr => wasm.__wbg_dispatchpagebuilder_free(ptr, 1));
 const WasmArtifactFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_wasmartifact_free(ptr, 1));

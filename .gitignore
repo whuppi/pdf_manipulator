@@ -60,17 +60,15 @@
 # section below) — that's the only place we ignore those names.
 
 # Secrets files (any flavor, any location)
+# NOTE: .deploy/ directories are NOT blanket-ignored because git can't
+# un-ignore files inside an ignored directory. Instead we ignore the
+# secret FILES by name. upload-secrets.sh is a tool, not a secret — it
+# reads from secrets.json but contains no secrets itself.
 secrets.json
 secrets*.json
 secrets_*.json
 **/secrets.json
 **/secrets-*.json
-upload-secrets.sh
-**/upload-secrets.sh
-.deploy/
-**/.deploy/
-deploy/.deploy/
-**/deploy/.deploy/
 
 # Cookie files (login session captures)
 cookies.json
@@ -203,6 +201,7 @@ yarn-error.log*
 
 # ── Dart / Flutter ────────────────────────────────────────────────────────────
 .dart_tool/
+.fvm/
 .flutter-plugins
 .flutter-plugins-dependencies
 .packages
@@ -215,6 +214,7 @@ unlinked.ds
 unlinked_spec.ds
 *.lock
 !pubspec.lock
+!uv.lock
 
 # Safety net: Dart/Flutter packages have their source in `lib/` and `bin/`.
 # Re-include them explicitly so no upstream pattern can ever sweep them up
@@ -321,8 +321,10 @@ vendor/pdf_oxide/target/
 
 # WASM binary — downloaded by setup script from GitHub Releases.
 # JS glue + worker.js are committed (small text files, reviewable).
+# .d.ts files are wasm-bindgen build artifacts (TypeScript types) — not consumed.
 # Rebuilt locally via tool/build_wasm.sh for development.
 web_assets/*.wasm
+web_assets/*.d.ts
 
 # Example app's copy of WASM assets (installed via dart run pdf_manipulator:setup)
 example/web/pdf_manipulator/
@@ -333,6 +335,3 @@ example/web/pdf_manipulator/
 
 # pubspec.lock (library, not app — consumers resolve their own deps)
 pubspec.lock
-
-# FVM (Flutter Version Manager)
-.fvm/

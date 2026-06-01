@@ -4,9 +4,6 @@
 // The build hook verifies downloaded files against these hashes.
 // Hash mismatch → re-download. Correct → use cached. Missing → download.
 
-// ignore_for_file: unnecessary_nullable_for_final_variable_declarations
-const String? releaseTag = null; // Set after first release
-
 const Map<String, String> assetHashesSha256 = {
   // Populated by tool/write_asset_hashes.dart after CI uploads release binaries.
   // Format: 'platform-libpdf_oxide.ext': 'sha256hex'
@@ -14,8 +11,9 @@ const Map<String, String> assetHashesSha256 = {
   // Example (after release):
   // 'macos-arm64-libpdf_oxide.dylib': 'abc123...',
   // 'macos-x64-libpdf_oxide.dylib': 'def456...',
-  // 'ios-arm64-libpdf_oxide.dylib': '...',
+  // 'ios-arm64-libpdf_oxide.a': '...',
   // 'android-arm64-libpdf_oxide.so': '...',
   // 'linux-x64-libpdf_oxide.so': '...',
   // 'windows-x64-pdf_oxide.dll': '...',
+  // 'windows-arm64-pdf_oxide.dll': '...',
 };

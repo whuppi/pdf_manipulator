@@ -43,7 +43,7 @@ Complete ground-up rewrite. New engine, new API, every platform. See the [migrat
 
 - **Engine:** pdf_oxide (Rust, MIT/Apache-2.0) replaces the previous Android-only backend
 - **Platforms:** iOS, Android, macOS, Windows, Linux, Web — previously Android only
-- **API:** Instance-based `Pdf()` with `dispose()`. Batch editing via `Pdf.edit()`. Create from scratch via `Pdf.build()`
+- **API:** Instance-based `Pdf()` with `dispose()`. Batch editing via `pdf.edit(source)`. Create from scratch via `pdf.build()`
 - **I/O:** `DataSource` in, `DataSink` out — no file paths, no `dart:io`. Same code on every platform. Engine reads only what it needs, never the full file
 - **Errors:** Typed `PdfError` sealed class — no more `PlatformException`
 - **Performance:** Every operation runs off the main thread. Zero UI jank. No full-file buffers
@@ -67,9 +67,9 @@ Complete ground-up rewrite. New engine, new API, every platform. See the [migrat
 - Page and document classification
 - Convert to/from DOCX, PPTX, XLSX
 - PdfEditor — open once, mutate many, save once (full rewrite or incremental)
-- PdfBuilder — create PDFs from scratch (text, headings, images, form fields, links, tables)
-- Form fields: text, checkbox, combo box, radio group, push button, signature
-- Stamp annotations (16 built-in types + image stamps)
+- PdfBuilder — create PDFs from scratch (text, headings, images, form fields, links, columns, footnotes)
+- Form fields: text, checkbox, combo box, push button, signature
+- Stamp annotations (14 built-in types + image stamps)
 - Font unembedding, image resize, crop margins
 - Embed files, erase regions, flatten forms/annotations
 - Redaction (add, count, apply, scrub metadata)

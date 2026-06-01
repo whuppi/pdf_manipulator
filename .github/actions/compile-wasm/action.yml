@@ -1,5 +1,5 @@
 name: Compile WASM
-description: Build pdf_oxide WASM + run wasm-bindgen
+description: Build pdf_oxide WASM + JS glue via Makefile
 
 runs:
   using: composite
@@ -15,10 +15,8 @@ runs:
     - shell: bash
       run: cargo install wasm-bindgen-cli --version 0.2.121
     - shell: bash
-      env:
-        MANIFEST: vendor/pdf_oxide/Cargo.toml
+      run: make compile-wasm
+    - shell: bash
       run: |
-        cargo build --manifest-path $MANIFEST --lib --target wasm32-unknown-unknown --features wasm --no-default-features --release
         mkdir -p out/wasm
-        wasm-bindgen --target web --out-dir out/wasm --out-name pdf_oxide \
-          vendor/pdf_oxide/target/wasm32-unknown-unknown/release/pdf_oxide.wasm
+        cp web_assets/pdf_oxide.js web_assets/pdf_oxide_bg.wasm out/wasm/

@@ -1,20 +1,44 @@
 # pdf_manipulator — Architecture
 
-How the package is wired. Four layers, two platforms, one shared dispatch, full streaming I/O.
+How the package is wired. Four layers, two platforms, one binary
+format end to end, O(1)-memory streaming I/O everywhere.
 
 ---
 
 ## 1. The contract
 
-- **Four layers.** Consumer API (Dart) → Transport (Dart+JS) → Host (Rust, per-platform thin shell) → Engine (Rust, pure). Each layer has one job. No layer imports from a layer above it.
-- **One dispatch, two encoders.** `host/dispatch.rs` holds ALL operation logic — read, stream, and edit. Native encodes results as binary bytes (`ffi_encode.rs`). Web encodes as JS objects (`wasm_encode.rs`). Fix dispatch once, both platforms fixed.
-- **`DataSource` in, `DataSink` out.** The consumer implements two interfaces. The engine reads targeted ranges via callback (never the full file). The engine writes chunks as it produces them. No full-file buffers. No `dart:io`.
-- **Thread pool, not isolate thread.** The Rust engine runs on raw pthreads in a fixed-size pool (native) or Web Workers in a pool (web). The Dart isolate never blocks. The UI never janks.
-- **Arena allocator per operation.** Every operation gets a `bumpalo::Bump`. Drop the arena = free ALL engine memory. No leaks on cancel.
-- **Sealed types, not nulls.** `PdfPages.all()`, `PdfPages.single(0)`, `PdfPages.range(5, 10)` — compiler-enforced exhaustive handling.
-- **One `save()` with `PdfSaveOptions`.** Compression, garbage collection, save mode (full rewrite or incremental), encryption — all in one options class.
-- **Stream\<T\> for multi-item ops.** `render()`, `extractImages()` yield items one at a time. Consumer processes one, GC collects it, next arrives. No list accumulation.
-- **Vendor via submodule.** pdf_oxide is a git submodule at `vendor/pdf_oxide`, pointing at a fork with additive patches.
+Eight load-bearing guarantees. Every architectural decision serves one.
+
+1. **Four layers.** Consumer API → SharedBridge → Transport → Rust.
+   Each layer has one job. No layer imports from a layer above it.
+
+2. **One binary format.** SharedBridge encodes every op as binary
+   bytes. Same bytes on native and web. Same Rust parser on both
+   targets. Zero format divergence.
+
+3. **One Rust entry point.** `bridge_api.rs` compiles for native
+   (`extern "C"`) AND WASM (`#[wasm_bindgen]`). Same source, same
+   parser, same dispatch calls.
+
+4. **Multi-source / multi-sink.** Every operation can take N indexed
+   DataSources and M indexed DataSinks. Sources are served on demand
+   via readAt callbacks. Sinks receive chunks. No full-file reads
+   anywhere on the Dart side.
+
+5. **O(1) memory.** All ops stream through fixed-size buffers
+   (64KB read, 256KB write). A 7GB file uses the same memory as a
+   7KB file. Every op. Both platforms. Enforced mechanically — test
+   guards throw on any `readAt > 64KB` or `write > 256KB`.
+
+6. **Upstream untouched.** `ffi.rs` (12,147 lines) and `wasm.rs`
+   (7,210 lines) are upstream code. We never call them. We never
+   modify them. Upstream merges stay clean.
+
+7. **Thread pool, not isolate thread.** Rust pthreads (native) or
+   Web Workers (web). Dart isolate never blocks. UI never janks.
+
+8. **Patches are marked.** Every modification to upstream files
+   carries a `── pdf_manipulator patch ──` boundary comment.
 
 ---
 
@@ -22,93 +46,120 @@ How the package is wired. Four layers, two platforms, one shared dispatch, full 
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                       CONSUMER API (Dart)                        │
+│                     1. CONSUMER API (Dart)                        │
 │                                                                  │
-│  pdf.dart            — standalone ops (open, sign, extract)      │
-│  pdf_editor.dart     — open once, mutate many, save once         │
-│  pdf_builder.dart    — create PDFs from scratch                  │
-│  pdf_operations.dart — sugar (extractPages, reorderPages)        │
+│  pdf.dart            — lifecycle, handle creation, ensureInit     │
+│  pdf_doc.dart        — read-only queries (PdfDoc handle)         │
+│  pdf_editor.dart     — mutations only (PdfEditor handle)         │
+│  pdf_builder.dart    — create from scratch (PdfBuilder handle)   │
+│  pdf_standalone.dart — source in, sink out, no handle            │
+│  pdf_sugar.dart      — one-shot convenience wrappers             │
 │                                                                  │
-│  Calls PdfBridge (abstract). Platform-blind.                     │
+│  Platform-blind. Calls PdfBridge (abstract).                     │
 └───────────────────────────────┬──────────────────────────────────┘
                                 │
                                 ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│                       TRANSPORT (Dart + JS)                      │
+│                     2. SHARED BRIDGE (Dart)                       │
 │                                                                  │
-│  Shared:  protocol/codec.dart    — encode requests + decode logic │
-│           protocol/op.dart       — EngineOp enum                 │
+│  shared_bridge.dart  — ONE bridge class, both platforms           │
+│  pdf_transport.dart  — PdfTransport interface (execute/stream)   │
+│  protocol/                                                       │
+│    binary_codec.dart — encode request, decode response            │
+│    codec.dart        — decode Map → typed Dart objects            │
+│    op.dart           — EngineOp enum (35 wire names)             │
 │                                                                  │
-│  Native:  native/bridge.dart       — NativeBridge                │
-│           native/coordinator.dart  — Dart isolate (FFI dispatch) │
-│           native/wire.dart         — binary → typed decoder      │
-│                                                                  │
-│  Web:     web/bridge.dart          — WebBridge                   │
-│           web/wire.dart            — Map → typed decoder         │
-│           coordinator.js           — JS Worker (routes ops)      │
-│           worker.js                — JS Worker (runs WASM)       │
+│  Platform-blind. Encodes args to binary, sends via transport,    │
+│  decodes binary response. PDF bytes never touch the codec —      │
+│  they flow through the transport's I/O channels.                 │
 └───────────────────────────────┬──────────────────────────────────┘
                                 │
                                 ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│                       RUST HOST LAYER                            │
+│                     3. TRANSPORT (Dart, per-platform)             │
 │                                                                  │
-│  Shared:  host/dispatch.rs         — ONE BRAIN, both platforms   │
+│  Native:                                                         │
+│    native_transport.dart — PdfTransport via Dart isolate + FFI   │
+│    coordinator.dart      — isolate entry, calls bridge_execute   │
+│    source_server.dart    — per-source condvar I/O server         │
+│    sink_server.dart      — per-sink condvar I/O server           │
+│    shared_buffer.dart    — condvar shared memory layout           │
+│    bindings.dart         — dart:ffi @Native binding              │
 │                                                                  │
-│  Native:  host/native/ffi_api.rs   — C extern thin shell         │
-│           host/native/ffi_encode.rs — result → binary            │
+│  Web:                                                            │
+│    web_transport.dart    — PdfTransport via JS Worker pool       │
+│    coordinator.js        — pool manager, handle pinning, routing │
+│    worker.js             — WASM exec, reader registry, I/O modes │
 │                                                                  │
-│  Web:     host/web/wasm_api.rs     — #[wasm_bindgen] thin shell  │
-│           host/web/wasm_encode.rs  — result → JsValue            │
-│                                                                  │
-│  Native infra (no web equivalent):                               │
-│           arena.rs, callback_reader.rs, callback_writer.rs,      │
-│           shared_buffer.rs, thread_pool.rs                       │
-│                                                                  │
-│  Web types (no native equivalent):                               │
-│           src/wasm.rs — WasmPdfDocument, WasmPdf, etc.           │
+│  Both: move binary bytes. Route indexed readAt/chunk callbacks.  │
+│  Zero PDF knowledge.                                             │
 └───────────────────────────────┬──────────────────────────────────┘
                                 │
                                 ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│                       PDF ENGINE (Rust, pure)                    │
+│                     4. RUST LAYER                                 │
 │                                                                  │
-│  document.rs, editor/, renderer/, search/, compliance/,          │
-│  signatures/, converters/, extractors/                           │
+│  OUR CODE (src/host/ — entirely ours, not upstream):             │
+│    bridge_api.rs       — single entry, cfg-gated native + WASM   │
+│    binary_codec.rs     — parse request bytes, encode response    │
+│    dispatch.rs         — every operation as a typed function     │
+│    positioned_write.rs — Write + position tracking (no Seek)     │
+│    sign.rs             — O(1)-memory PDF signing with AcroForm   │
+│    image_optimizer.rs  — JPEG recompress (QPDF pattern)          │
+│    font_optimizer.rs   — Standard 14 font unembedding            │
+│    constants.rs        — buffer sizes (64KB read, 256KB write)   │
+│    native/             — arena, thread pool, condvar I/O         │
+│    wasm/               — JsCallbackReader + JsCallbackWriter     │
+│                          via host_read_at / host_write_chunk     │
 │                                                                  │
-│  Knows nothing about FFI, WASM, dispatch, bridges, or Dart.      │
-│  Reads via Read+Seek. Writes via Write. Pure PDF work.           │
+│  UPSTREAM PATCHES (8 files, marked with boundary comments):      │
+│    see §9 for the full list                                      │
+│                                                                  │
+│  UPSTREAM (untouched): ffi.rs, wasm.rs, engine modules           │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 3. Symmetry map
+## 3. Data flow
 
-Every role has a named file on each platform. Where a role doesn't apply to a platform, the reason is noted.
+### Simple op (one source, no output)
 
-| Role | Native | Web |
-|---|---|---|
-| **Bridge** (Dart ↔ Coordinator) | `native/bridge.dart` | `web/bridge.dart` |
-| **Coordinator** (receives ops, dispatches to engine) | `native/coordinator.dart` (Dart isolate — dispatches FFI to Rust thread pool) | `coordinator.js` (JS Worker — routes to worker.js) |
-| **Worker** (runs engine code) | Rust pthread (spawned by `host/native/thread_pool.rs`) | `worker.js` (JS Worker — loads WASM, executes ops) |
-| **Wire decoder** (raw → typed results) | `native/wire.dart` (binary → Map → typed) | `web/wire.dart` (Map → typed) |
-| **Rust API** (entry points from worker) | `host/native/ffi_api.rs` (C extern) | `host/web/wasm_api.rs` (#[wasm_bindgen]) |
-| **Rust encoder** (dispatch result → wire format) | `host/native/ffi_encode.rs` (→ binary) | `host/web/wasm_encode.rs` (→ JsValue) |
-| **Shared dispatch** | `host/dispatch.rs` | `host/dispatch.rs` |
-| **Shared protocol** | `protocol/codec.dart` + `protocol/op.dart` | same files |
-| **Platform I/O transport** | Rust: arena, condvar, shared_buffer, callback_reader/writer, thread_pool | JS: OPFS, SharedArrayBuffer, postMessage (in coordinator.js + worker.js) |
-| **Platform type wrappers** | N/A — C FFI uses raw pointers directly | `src/wasm.rs` — WasmPdfDocument wraps PdfDocument for #[wasm_bindgen] |
-| **Consumer API** | `ops/pdf.dart`, `pdf_editor.dart`, `pdf_builder.dart`, `pdf_operations.dart` | same files |
+```
+pdf.open(source)
+  ↓
+SharedBridge.open()
+  │  encodeRequest('open', {sourceLength: N})  →  Uint8List
+  ↓
+PdfTransport.execute(bytes, sources: [source], keepSources: {0})
+  │
+  ├── Native: isolate → bridge_execute via FFI
+  └── Web:    postMessage → coordinator.js → worker.js → bridge_execute via WASM
+  ↓
+bridge_api.rs  (SAME code, both targets)
+  │  Request::parse(bytes)  →  match "open"  →  dispatch::open_document
+  │  source bytes served on demand via readAt callback
+  ↓
+response bytes  →  decodeResponse  →  PdfDoc
+```
 
-Both bridges call `wireDecodeXxx(raw)` → get typed Dart objects back. Neither bridge calls codec decode functions directly — the wire layer absorbs that internally. Web bridge imports codec for request encoding only (`openOp()`, `extractOp()`, etc.); native bridge doesn't import codec at all.
+### Multi-source op (primary PDF + secondary input)
 
-- **Native wire.dart**: binary bytes → Map (binary parsing) → codec → typed
-- **Web wire.dart**: Map (already from JS) → codec → typed
-
-Same public API on both sides. Same return types. Different internal work.
-
-`codec.dart` has two roles: **request encoding** (`openOp()`, `extractOp()`, etc. — used by both bridges directly) and **response decoding** (`decodeOpenResult()`, etc. — used by wire.dart internally, never by bridges directly).
+```
+editor.mergeFrom(otherPdf)
+  ↓
+SharedBridge._exec(editorMergeFrom, {sourceLength: N},
+    sources: [otherPdf])     ← secondary source at index 0
+  ↓
+PdfTransport.execute(bytes,
+    sources: [otherPdf])     ← transport serves readAt by sourceIndex
+  ↓
+bridge_api.rs
+  │  source[0] = otherPdf via readAt callback (64KB chunks)
+  │  editor.merge_from_reader(BoxedReader for source[0])
+  ↓
+response bytes
+```
 
 ---
 
@@ -116,598 +167,398 @@ Same public API on both sides. Same return types. Different internal work.
 
 ```
 lib/
-├── pdf_manipulator.dart                    ← barrel
+├── pdf_manipulator.dart                    ← barrel export
 └── src/
     ├── ops/                                ← CONSUMER API
-    │   ├── pdf.dart                        ← standalone ops + edit() + build()
-    │   ├── pdf_editor.dart                 ← editor session
-    │   ├── pdf_builder.dart                ← PDF creation from scratch
-    │   └── pdf_operations.dart             ← sugar (extractPages, reorderPages, etc.)
+    │   ├── pdf.dart                        ← lifecycle, Pdf class, ensureInitialized
+    │   ├── pdf_doc.dart                    ← PdfDoc: extract, search, render, ...
+    │   ├── pdf_editor.dart                 ← PdfEditor: mutations only
+    │   ├── pdf_builder.dart                ← PdfBuilder: create from scratch
+    │   ├── pdf_standalone.dart             ← sign, convertTo, convertToPdf, extractPages
+    │   └── pdf_sugar.dart                  ← merge, split, watermark, compress, ...
     │
-    ├── transport/                           ← TRANSPORT
-    │   ├── pdf_bridge.dart                 ← abstract PdfBridge contract
+    ├── transport/                           ← BRIDGE + TRANSPORT
+    │   ├── pdf_bridge.dart                 ← abstract PdfBridge + handle contracts
+    │   ├── pdf_transport.dart              ← PdfTransport interface
+    │   ├── shared_bridge.dart              ← ONE bridge, both platforms
     │   ├── create.dart                     ← conditional import router
-    │   ├── _create_native.dart             ← returns NativeBridge
-    │   ├── _create_web.dart                ← returns WebBridge
+    │   ├── _create_native.dart             ← → SharedBridge(NativeTransport)
+    │   ├── _create_web.dart                ← → SharedBridge(WebTransport)
     │   │
-    │   ├── protocol/                       ← shared by both bridges
-    │   │   ├── codec.dart                  ← encode args, decode results
-    │   │   └── op.dart                     ← EngineOp enum (31 values)
+    │   ├── protocol/
+    │   │   ├── binary_codec.dart           ← binary request/response encoding
+    │   │   ├── codec.dart                  ← typed request builders + response decoders
+    │   │   └── op.dart                     ← EngineOp enum (35 wire names)
     │   │
-    │   ├── native/                         ← native platform
-    │   │   ├── bridge.dart                 ← NativeBridge
-    │   │   ├── coordinator.dart            ← Dart isolate (FFI dispatch to Rust pool)
-    │   │   ├── wire.dart                   ← binary → typed decoder (calls codec)
-    │   │   ├── bindings.dart               ← dart:ffi function signatures
-    │   │   ├── shared_buffer.dart          ← condvar shared memory helpers
-    │   │   ├── source_server.dart          ← serves source bytes to Rust
-    │   │   └── sink_server.dart            ← receives output bytes from Rust
+    │   ├── native/
+    │   │   ├── native_transport.dart       ← isolate + multi-source/sink servers
+    │   │   ├── coordinator.dart            ← isolate entry point
+    │   │   ├── bindings.dart               ← @Native FFI binding
+    │   │   ├── shared_buffer.dart          ← condvar memory layout
+    │   │   ├── source_server.dart          ← per-source condvar server
+    │   │   └── sink_server.dart            ← per-sink condvar server
     │   │
-    │   └── web/                            ← web platform
-    │       ├── bridge.dart                 ← WebBridge
-    │       └── wire.dart                   ← Map → typed decoder (calls codec)
+    │   └── web/
+    │       └── web_transport.dart           ← JS Worker pool + OPFS pre-copy
     │
-    └── types/                              ← shared types
-        ├── pdf_doc.dart, pdf_page.dart
-        ├── pdf_params.dart                 ← PdfSaveOptions, PdfSaveMode, etc.
-        ├── pdf_image.dart, pdf_error.dart
-        └── ...
+    └── types/                              ← shared types (all exported)
+        ├── data_source.dart                ← DataSource interface
+        ├── data_sink.dart                  ← DataSink interface
+        ├── errors.dart                     ← PdfError sealed hierarchy
+        ├── pdf_config.dart                 ← PdfConfig (webIoMode, URLs)
+        ├── pdf_enums.dart                  ← PdfIoMode, PdfEncryptionAlgorithm, ...
+        ├── pdf_image.dart                  ← PdfImage, RenderedPage
+        ├── pdf_page_info.dart              ← PdfPageInfo
+        ├── pdf_pages.dart                  ← PdfPages sealed (all, single, range)
+        ├── pdf_params.dart                 ← PdfSaveOptions, PdfEncryption, ...
+        ├── pdf_rect.dart                   ← PdfRect
+        ├── pdf_signature.dart              ← PdfSignatureInfo
+        └── search_result.dart              ← SearchResult
 
-bin/
-└── setup.dart                              ← `dart run pdf_manipulator:setup` — web asset installer
+web_assets/                                 ← committed in git, shipped to web
+├── coordinator.js                          ← WASM worker pool + handle pinning
+├── worker.js                               ← reader registry, 3 I/O modes, bridge_execute
+├── pdf_oxide.js                            ← wasm-bindgen glue
+├── pdf_oxide.d.ts                          ← TypeScript declarations
+├── pdf_oxide_bg.wasm                       ← WASM binary (one binary, all 3 modes)
+└── pdf_oxide_bg.wasm.d.ts
 
 hook/
-├── build.dart                              ← native build hook (cargo build or download pre-built)
-└── asset_hashes.dart                       ← SHA256 hashes of pre-built binaries (generated)
+├── build.dart                              ← compile from source OR download pre-built
+└── asset_hashes.dart                       ← SHA256 hashes for pre-built binaries
 
 tool/
-├── build_wasm.sh                           ← compile Rust → WASM (`make wasm`)
-├── compile_natives.sh                      ← compile for all 13 native targets
-└── write_asset_hashes.dart                 ← generate asset_hashes.dart from a GitHub Release
-
-dart_test.yaml                              ← test config: VM default, chrome-coi for Atomics tests
-
-web_assets/                                 ← JS workers (web platform)
-├── coordinator.js                          ← manages WASM worker pool
-├── worker.js                               ← calls WASM methods
-├── pdf_oxide.js                            ← wasm-bindgen generated
-└── pdf_oxide_bg.wasm                       ← compiled WASM binary
+├── build_wasm.sh                           ← Rust → WASM
+├── compile_natives.sh                      ← Rust → all native targets
+└── write_asset_hashes.dart                 ← generate hashes after release
 
 vendor/pdf_oxide/src/
-├── host/                                   ← HOST LAYER
-│   ├── dispatch.rs                         ← shared dispatch (both platforms)
+├── host/                                   ← OUR CODE
+│   ├── mod.rs
+│   ├── bridge_api.rs                       ← single entry, cfg-gated
+│   ├── binary_codec.rs                     ← wire format parser/encoder
+│   ├── dispatch.rs                         ← every op as a typed function
+│   ├── positioned_write.rs                 ← CountingWriter + SeekWriter
+│   ├── sign.rs                             ← O(1) signing with AcroForm
+│   ├── image_optimizer.rs                  ← JPEG recompress
+│   ├── font_optimizer.rs                   ← Standard 14 unembedding
 │   ├── constants.rs                        ← buffer sizes
-│   │
-│   ├── native/                             ← native host
-│   │   ├── ffi_api.rs                      ← C extern entry points
-│   │   ├── ffi_encode.rs                   ← dispatch result → binary
-│   │   ├── arena.rs                        ← per-op bumpalo arena
-│   │   ├── callback_reader.rs              ← Read+Seek via condvar
-│   │   ├── callback_writer.rs              ← Write via condvar
-│   │   ├── shared_buffer.rs                ← shared memory layout
-│   │   └── thread_pool.rs                  ← fixed-size pool + cancel
-│   │
-│   └── web/                                ← web host
-│       ├── wasm_api.rs                     ← #[wasm_bindgen] entry points
-│       └── wasm_encode.rs                  ← dispatch result → JsValue
+│   ├── native/                             ← arena, thread pool, condvar I/O
+│   │   ├── arena.rs, callback_reader.rs, callback_writer.rs
+│   │   ├── shared_buffer.rs, thread_pool.rs
+│   └── wasm/                               ← JS callback reader/writer
+│       ├── js_reader.rs                    ← Read+Seek via host_read_at
+│       └── js_writer.rs                    ← Write via host_write_chunk
 │
-├── wasm.rs                                 ← WASM type wrappers (author code)
-│                                             WasmPdfDocument, WasmPdf,
-│                                             WasmCertificate, WasmDocumentBuilder
-│
-└── (engine: document.rs, editor/, renderer/, search/, ...)
+├── compliance/fonts/                       ← 12 Liberation TTF files (SIL OFL)
+├── ffi.rs                                  ← UPSTREAM (12,147 lines, untouched)
+├── wasm.rs                                 ← UPSTREAM (7,210 lines, untouched)
+└── (engine: document.rs, editor/, renderer/, search/, signatures/, ...)
 ```
 
 ---
 
-## 5. Data flow — native `pdf.open(source)`
+## 5. The binary wire format
+
+Same layout in both directions. Op args only — PDF bytes travel
+through the transport's I/O channels, never through the codec.
 
 ```
-Pdf.open(source)
-  │
-  ▼
-NativeBridge.open()
-  Wraps source as SourceServer
-  Sends [id, 'open', {sourcePort, sourceLength, password}] via SendPort
-  │
-  ▼
-coordinator.dart (Dart isolate)
-  Receives op on ReceivePort
-  Allocates SharedReadBuffer + NativeCallable listener
-  Calls bridgeSubmitOpen() via dart:ffi → submits to Rust thread pool
-  │
-  ▼
-ffi_api.rs (Rust thread pool worker)
-  Creates CallbackReader (condvar-based streaming I/O)
-  Opens PdfDocument from reader
-  Calls dispatch::open_document()
-  │
-  ▼
-dispatch.rs (shared brain)
-  Reads page count, version, encryption, metadata
-  Returns typed OpenResult
-  │
-  ▼
-ffi_api.rs
-  Calls ffi_encode::encode_open() → binary Vec<u8>
-  Posts via allo-isolate to Dart native port
-  │
-  ▼
-coordinator.dart
-  Receives Uint8List on result port
-  Sends [id, resultBytes] via SendPort to main isolate
-  │
-  ▼
-NativeBridge
-  wireDecodeOpen(bytes) → PdfDoc (wire handles binary→Map→codec internally)
-  Completes the Future<PdfDoc>
+Request:  [op_len: u8] [op: UTF-8] [field_count: u16 LE] [fields...]
+Response: [status: u8]  [field_count: u16 LE] [fields...]
+            status 0 → [msg_len: u32 LE] [msg: UTF-8]  (error)
+            status 1 → fields                           (ok)
+
+Field:    [key_len: u8] [key: UTF-8] [type: u8] [value]
+
+Types:    0=null  1=i32  2=i64  3=f64  4=bool  5=string  6=bytes
+          7=int_list  8=float_list  9=string_list  10=map_list
 ```
+
+Op names are the EngineOp `.wire` strings (`"open"`, `"extract"`,
+`"editorMutate"`, etc.). No numeric mapping to keep in sync — the
+enum IS the protocol.
 
 ---
 
-## 6. Data flow — web `pdf.open(source)`
-
-```
-Pdf.open(source)
-  │
-  ▼
-WebBridge.open()
-  If OPFS mode: pre-copies source to OPFS (256KB chunked postMessage)
-  If Atomics mode: no pre-copy (reads go through SharedArrayBuffer)
-  Posts {type:'submit', op:'open', args} to coordinator
-  │
-  ▼
-coordinator.js (JS Worker)
-  Assigns opId
-  Acquires a worker from pool
-  Forwards {type:'exec', opId, op:'open', args} to worker
-  │
-  ▼
-worker.js (JS Worker, has WASM instance)
-  Creates readerCtx (OPFS: SyncAccessHandle / Atomics: SAB + Atomics.wait)
-  Calls WasmPdfDocument.fromReader(readFn, lengthFn, password)
-  Calls doc.dispatchOpen() — synchronous WASM call
-  │
-  ▼
-wasm_api.rs (#[wasm_bindgen])
-  Locks inner PdfDocument mutex via with_doc()
-  Calls wasm_encode::open_to_js()
-  │
-  ▼
-wasm_encode.rs
-  Calls dispatch::open_document()
-  │
-  ▼
-dispatch.rs (same shared brain as native)
-  Returns typed OpenResult
-  │
-  ▼
-wasm_encode.rs
-  Formats as JS object {pageCount, version, isEncrypted, ...}
-  Returns JsValue
-  │
-  ▼
-worker.js
-  Posts {type:'result', result} to coordinator
-  │
-  ▼
-coordinator.js
-  Forwards {type:'result', opId, result} to Dart
-  │
-  ▼
-WebBridge
-  wireDecodeOpen(jsMap) → PdfDoc (wire calls codec internally)
-  Completes the Future<PdfDoc>
-```
-
----
-
-## 7. The dispatch layer — one brain, zero exceptions
-
-`host/dispatch.rs` contains **every** operation as a typed function. Read, edit, query, save, sign, convert, and builder operations — all of them. No operation calls the engine from any other file. Each shell file (`ffi_api.rs`, `wasm_api.rs`, `worker.js`) has a rule header documenting this invariant and listing violations.
-
-### Read ops
-
-| Function | Returns |
-|---|---|
-| `open_document(doc)` | `OpenResult` (pages, version, encryption, metadata) |
-| `extract_text(doc, page, format)` | `ExtractTextResult` (text) |
-| `search_text(doc, query, page)` | `SearchResult` (hits with flat x,y,w,h) |
-| `get_signatures(doc)` | `SignaturesResult` |
-| `verify_signatures(doc)` | `bool` |
-| `validate_pdf_a(doc, level)` | `ValidationResult` (compliant, errors, warnings) |
-| `validate_pdf_ua(doc, level)` | `bool` |
-| `classify_page(doc, page)` | `ClassificationResult` |
-| `classify_document(doc)` | `ClassificationResult` |
-| `plan_split_by_bookmarks(doc)` | `Vec<BookmarkSplit>` |
-| `render_page(doc, page, w, h)` | `RenderedPage` (width, height, RGBA data) |
-| `extract_images(doc, page)` | `Vec<ExtractedImage>` |
-
-### Editor queries
-
-| Function | Returns |
-|---|---|
-| `edit_get_metadata(editor)` | `EditorMetadataResult` (page count, version, title, author, subject, keywords) |
-| `edit_is_modified(editor)` | `bool` |
-| `edit_page_media_box(editor, page)` | `(f32, f32, f32, f32)` |
-
-### Editor save
-
-| Function | Returns |
-|---|---|
-| `edit_save_with_options(editor, writer, options)` | `Result<()>` |
-| `edit_save(editor, writer, compress, gc, mode)` | `Result<()>` |
-| `edit_save_encrypted(editor, user_pw, owner_pw)` | `Result<Vec<u8>>` |
-
-### Sign
-
-| Function | Returns |
-|---|---|
-| `sign_via_editor(editor, writer, length, creds, opts)` | `Result<()>` — builds AcroForm + field + widget + page annotation alongside the signature dict |
-
-### Convert
-
-| Function | Returns |
-|---|---|
-| `convert_to_format_writer(doc, format, writer)` | `Result<()>` |
-| `convert_to_format(doc, format)` | `Result<Vec<u8>>` |
-| `convert_from_format_writer(data, format, writer)` | `Result<()>` |
-| `convert_from_format_to_bytes(data, format)` | `Result<Vec<u8>>` |
-| `images_to_pdf_writer(images, writer)` | `Result<()>` |
-| `images_to_pdf_bytes(images)` | `Result<Vec<u8>>` |
-
-### Builder
-
-| Function | Returns |
-|---|---|
-| `builder_new()` | `DocumentBuilder` |
-| `builder_set_title/author/subject/keywords(b, val)` | `DocumentBuilder` (move-based) |
-| `builder_add_page(b, w, h)` / `builder_add_a4_page` / `builder_add_letter_page` | `FluentPageBuilder` |
-| `builder_save(b)` / `builder_save_to_writer(b, writer)` | `Result<Vec<u8>>` / `Result<()>` |
-| `page_font/text/heading/paragraph/...` (30 functions) | `FluentPageBuilder` (move-based) |
-| `page_done(p)` | `&mut DocumentBuilder` |
-| `PageOp` enum + `replay_page_ops(builder, size, ops)` | One enum, one replay — both platforms buffer `PageOp` and replay through this function |
-
-### Edit ops (30+ functions)
-
-`edit_merge`, `edit_select_pages`, `edit_delete_pages`, `edit_rotate_pages`, `edit_rotate_all`, `edit_flatten_forms`, `edit_apply_redactions`, `edit_compress`, `edit_optimize_images`, `edit_move_page`, `edit_embed_file`, `edit_erase_regions`, `edit_encrypt`, `edit_watermark`, `edit_add_stamp`, `edit_add_image_stamp`, `edit_set_title`, `edit_set_author`, `edit_set_subject`, `edit_set_keywords`, `edit_unembed_standard_fonts`, `edit_flatten_all_annotations`, `edit_set_form_field_value`, `edit_crop_margins`, `edit_convert_to_pdf_a`, `edit_resize_image`, `edit_add_redaction`, `edit_redaction_count`, `edit_apply_redactions_destructive`, `edit_scrub_metadata`.
-
-### Encoding
-
-Both platforms call the same dispatch functions, then encode differently:
-
-- **Native:** `ffi_encode.rs` → binary `Vec<u8>` → Dart `native/wire.dart` → typed
-- **Web:** `wasm_encode.rs` → `JsValue` object → Dart `web/wire.dart` → typed
-
-Both `wire.dart` files call `codec.dart` internally. Bridges never import codec for decoding.
+## 6. Streaming I/O
 
 ### The rule
 
-If an operation exists in `ffi_api.rs`, `wasm_api.rs`, `wasm.rs`, or `worker.js` but NOT in `dispatch.rs`, that is a violation. Every file has a header comment documenting this. The wire_sync_test catches parity drift — if you add a dispatch function but miss the coordinator or worker.js case, the test fails.
+O(1) memory on every path. No full-file buffers on either platform.
+Memory bounded by buffer size (64KB read, 256KB write), never by
+file size. Test guards enforce this mechanically — see §8.
 
----
-
-## 8. Editor lifecycle
-
-```
-pdf.edit(source)
-  → bridge.openEditor(source)
-  → Rust: open PdfDocument, create DocumentEditor, return handleId
-  → Dart wraps as PdfEditor(handleId)
-
-editor.selectPages([0, 2, 5])
-  → bridge.editorMutate(handleId, opCode=2, params)
-  → Rust: editor.select_pages()
-
-editor.addWatermark(...)
-  → bridge.editorMutate(handleId, opCode=12, params)
-  → Rust: editor.add_watermark()
-
-editor.save(sink, options)
-  → bridge.editorSave(handleId, sink, options)
-  → Rust: editor writes via condvar writer (native) or JS callback (web)
-  → chunks stream to DataSink
-
-editor.dispose()
-  → bridge.editorDispose(handleId)
-  → Rust: drop editor + reader state
-```
-
-The editor holds its source reader alive for the session's lifetime. Mutations are lazy (modify the object tree in memory). Save materializes all mutations to output.
-
-`PdfSaveMode.fullRewrite` (default): GC traversal + rewrite every object. Correct for heavy mutations. ~664ms on a 1000-page PDF.
-
-`PdfSaveMode.incremental`: copy original bytes + append modified objects. ~43ms. Best when few objects changed.
-
----
-
-## 9. Streaming I/O — how bytes move
-
-No full-file buffers on either platform. The engine reads targeted ranges on demand and writes output in chunks as it produces them.
-
-### DataSource and DataSink — the two consumer interfaces
-
-The consumer implements two interfaces (`lib/src/types/data_source.dart`, `data_sink.dart`). The package calls them — the consumer doesn't pull from the package.
+### Transport contract
 
 ```dart
-abstract interface class DataSource {
-  int get length;                                     // total bytes, known upfront
-  FutureOr<Uint8List> readAt(int offset, int count);  // random-access read
-}
-
-abstract interface class DataSink {
-  FutureOr<void> write(Uint8List chunk);              // sequential append
-}
+Future<...> execute(
+  Uint8List request, {
+  List<DataSource> sources,     // indexed 0, 1, 2, ...
+  List<DataSink>   sinks,       // indexed 0, 1, 2, ...
+  Set<int>         keepSources, // persist across ops (handle lifetime)
+});
 ```
 
-**Why `readAt(offset, count)` not `Read + Seek`:** maps directly to `pread()` (file), `Blob.slice()` (web), HTTP `Range` (network), `Uint8List.sublistView` (memory). Stateless per call — no shared cursor, concurrent-safe. The Rust side wraps it into a `Read + Seek` impl (`CallbackReader`) that tracks position internally.
+### Per-operation I/O paths
 
-**Why `write(chunk)` not `Stream<List<int>>`:** push model matches how the engine works (it drives I/O). No `StreamController`, no backpressure management. Consumer wants a stream? Bridge it in their `DataSink` implementation.
-
-**Why `FutureOr`:** memory-backed sources are synchronous. Wrapping `Uint8List.sublistView` in a `Future` adds microtask overhead for the common case. `FutureOr` lets memory be zero-overhead sync, file/network return `Future`.
-
-### Native — condvar + shared memory
-
-Three threads cooperate. The engine (Rust pthread) never touches the consumer's data directly — everything goes through shared memory with condvar synchronization.
-
-**Reading (engine needs bytes from DataSource):**
-
-```
-Rust pthread (engine)              Dart coordinator isolate
-    │                                     │
-    │  1. Lock mutex                      │
-    │  2. Write request to shared buf:    │
-    │     offset=500, count=4096          │
-    │  3. Call NativeCallable listener    │
-    │     ──── fires on isolate loop ──►  │
-    │  4. pthread_cond_timedwait (sleep)  │
-    │     ...                             │  5. Listener reads request from buf
-    │     ...                             │  6. Asks main isolate's SourceServer
-    │     ...                             │  7. SourceServer calls source.readAt()
-    │     ...                             │  8. Writes bytes to shared buf
-    │     ...                             │  9. Sets READY flag, signals condvar
-    │                                     │
-    │  10. Wakes, reads bytes from buf    │
-    │  11. Returns to engine              │
-```
-
-**Writing (engine produces output for DataSink):**
-
-Same dance, reversed. Engine writes a chunk (up to 256KB) to shared memory, signals the isolate, blocks until ACK. The isolate forwards to main thread's SinkServer which calls `sink.write(chunk)`.
-
-**Shared buffer layout:**
-
-```
-READ BUFFER (Dart calloc, 160 + 64KB):
-  [0..8]    request_offset    i64
-  [8..16]   request_count     i64
-  [16..24]  response_length   i64
-  [24..28]  flags             u32  (READY=1, ERROR=2, CANCELLED=4, ACK=8)
-  [28..32]  padding
-  [32..96]  pthread_mutex
-  [96..160] pthread_condvar
-  [160..]   data              64KB max
-
-WRITE BUFFER (Dart calloc, 144 + 256KB):
-  [0..8]    chunk_length      i64
-  [8..12]   flags             u32  (same flag bits)
-  [12..16]  padding
-  [16..80]  pthread_mutex
-  [80..144] pthread_condvar
-  [144..]   data              256KB max
-```
-
-Both sides agree on this layout. The mutex protects concurrent access. The condvar is the sleep/wake handshake. 30-second timeout on both reads and writes prevents stuck threads.
-
-**Thread pool:**
-
-```
-Pool size = max(2, available_parallelism / 2)
-Bounded channel (depth 64) — submit blocks when full (backpressure)
-Each worker thread loops: recv task → check cancel → create arena → run → drop arena
-Shutdown: drop sender → workers see disconnected channel → exit loop → join
-```
-
-**Arena allocator (per-operation memory sandbox):**
-
-Every operation gets a fresh `bumpalo::Bump` arena. All engine memory for that operation is allocated from the arena. When the operation ends — success, error, or cancel — the arena is dropped. ALL memory freed in one shot. No per-object cleanup.
-
-```
-Success:   arena created → engine runs → result extracted → arena dropped
-Error:     arena created → engine fails → arena dropped
-Cancel:    arena created → engine running → cancel flag set → engine returns Err → arena dropped
-Timeout:   arena created → condvar times out (30s) → engine returns Err → arena dropped
-```
-
-**Result posting (Rust → Dart):**
-
-Results cross back via `allo-isolate` — `Isolate::new(port).post(ZeroCopyBuffer(bytes))`. Thread-safe, callable from any pthread. `ZeroCopyBuffer<Vec<u8>>` transfers ownership to Dart as `Uint8List` with zero memcpy. The Dart coordinator receives the result on a `ReceivePort` and forwards to the bridge via `SendPort`.
-
-**Per-item streaming (render, extractImages):**
-
-The engine posts items one at a time via `allo-isolate`. Each item is a separate `Dart_PostCObject`. The coordinator forwards each to the bridge, which yields via `StreamController.add()`. One image/page in memory at a time — consumer processes one, GC collects it, next arrives.
-
-```
-Rust pthread                     Coordinator isolate              Main isolate
-    │                                 │                               │
-    │  Render page 1                  │                               │
-    │  Post item bytes ──────────►    │  Forward ──────────────►      │
-    │                                 │                               │ stream.add(page1)
-    │  Render page 2                  │                               │ page1 GC eligible
-    │  Post item bytes ──────────►    │  Forward ──────────────►      │
-    │                                 │                               │ stream.add(page2)
-    │  Post done marker ─────────►   │  Forward ──────────────►      │
-    │                                 │                               │ stream.close()
-```
-
-### Web — two I/O modes
-
-Detected at startup based on browser capabilities:
-
-**Mode 1: Atomics (SharedArrayBuffer available)**
-
-The coordinator creates a `SharedArrayBuffer` (8-byte header + 64KB data). Passed to the WASM worker at exec time. When the engine needs bytes:
-
-```
-WASM worker (worker.js)            Coordinator (coordinator.js)        Main (Dart)
-    │                                     │                                │
-    │  1. Atomics.store(status, 0)        │                                │
-    │  2. postMessage({readAt,            │                                │
-    │     offset, count, sab})            │                                │
-    │  3. Atomics.wait(status, 0)  ──►    │                                │
-    │     (blocks thread)                 │  4. postMessage({readAt})  ──► │
-    │     ...                             │                                │ 5. source.readAt()
-    │     ...                             │  ◄── readAtResponse(bytes) ──  │
-    │     ...                             │  6. Write bytes to SAB         │
-    │     ...                             │  7. Atomics.store(status, 1)   │
-    │     ...                             │  8. Atomics.notify(status)     │
-    │                                     │                                │
-    │  9. Wakes, reads from SAB           │                                │
-    │  10. Returns to WASM engine         │                                │
-```
-
-On-demand reads. No pre-copy. Lowest memory — only the SAB header + one chunk in flight.
-
-**Requires COOP/COEP headers** on the consumer's server for `SharedArrayBuffer` to be available:
-```
-Cross-Origin-Opener-Policy: same-origin
-Cross-Origin-Embedder-Policy: require-corp
-```
-
-Without these headers, the browser blocks `SharedArrayBuffer` and the coordinator falls through to OPFS mode automatically.
-
-**Mode 2: OPFS (no SharedArrayBuffer)**
-
-Fallback when `SharedArrayBuffer` is unavailable (non-crossOriginIsolated contexts). Source bytes are pre-copied to OPFS disk before the operation starts:
-
-```
-Main (Dart)                        Coordinator                    WASM worker
-    │                                     │                           │
-    │  1. Read source in 256KB chunks     │                           │
-    │  2. postMessage({opfs.write,        │                           │
-    │     chunk, offset})            ──►  │                           │
-    │                                     │  3. OPFS write(chunk)     │
-    │  ◄── opfs.writeAck ──              │                           │
-    │  ... repeat until EOF ...           │                           │
-    │  postMessage({opfs.finalize}) ──►   │                           │
-    │  ◄── opfs.finalizeAck ──           │                           │
-    │                                     │                           │
-    │  4. postMessage({submit, opfsFile}) │                           │
-    │                                ──►  │  5. exec ──►              │
-    │                                     │                           │ 6. SyncAccessHandle.read()
-    │                                     │                           │    (reads from OPFS disk)
-```
-
-Pre-copy cost is paid once per operation. The WASM worker reads via `SyncAccessHandle.read()` — synchronous, disk-backed, no further Dart round-trips. OPFS temp files are cleaned up on worker release.
-
-**Why the coordinator JS Worker exists:**
-
-Without it, every `readAt` request and every output chunk fires a `postMessage` handler on the main thread's event loop, interleaved with widget builds and animations. 500 reads × 0.1ms = 50ms of jank. With the coordinator, the main thread only answers `readAt` calls (fast, async) and accepts write chunks (fast, async). All pool management, OPFS lifecycle, and routing happens on the coordinator's thread. Same protection as native's coordinator isolate.
-
-**Output writing (both web modes):**
-
-The WASM worker calls `writeFn(chunk)` which posts `{type:'chunk', data}` to the coordinator, which forwards to Dart's bridge. Dart calls `sink.write(bytes)`. Transfer-based — ArrayBuffer ownership is moved, not copied.
-
-**Per-item streaming (both web modes):**
-
-Same as native — one `postMessage` per image/page. Worker posts `{type:'item', data}` to coordinator, coordinator forwards to Dart, Dart yields via `StreamController.add()`. Worker posts `{type:'itemDone'}` at the end → stream closes. One item in memory at a time.
-
-### Memory model
-
-| Operation | Native peak | Web peak (Atomics) | Web peak (OPFS) |
-|---|---|---|---|
-| Open 500MB PDF | ~14MB (shared buf + engine working set) | ~64KB SAB + engine | source size on disk + engine |
-| Render 1 page | ~14MB | ~64KB + 1 page RGBA | same |
-| Extract 50 images | 1 image at a time | 1 image at a time | 1 image at a time |
-
-No full-file buffers. Engine reads targeted ranges (xref + specific objects). Writes stream in chunks as produced.
-
-### Cancel and dispose
-
-**Native dispose sequence:**
-
-```
-1. Set cancelled=true on ALL active shared buffers
-2. Signal ALL condvars (wake sleeping pool threads)
-3. Send shutdown to thread pool (drop sender)
-4. Wait 100ms for cooperative exit
-5. Each woken thread: checks cancel → returns Err → arena dropped → exits
-6. Pool threads exit naturally (30s timeout on condvar prevents stuck threads)
-7. Free all shared buffers (calloc.free)
-8. Kill coordinator isolate
-Result: zero threads, zero native memory, zero handles
-```
-
-**Web cancel:** `Worker.terminate()` kills the JS execution context. WASM linear memory is freed instantly by the browser. The WASM instance IS the arena — `terminate()` = `drop(arena)`. No manual cleanup. If OPFS mode, temp file cleaned up by coordinator.
-
-**Web dispose:** coordinator terminates ALL pool workers → cleans all OPFS temp files → main thread terminates the coordinator. Zero workers, zero WASM memory, zero OPFS files.
-
-| | Native | Web |
+| Operation | Input | Output |
 |---|---|---|
-| **Cancel one op** | AtomicBool flag → condvar wakes → engine returns Err → arena dropped | `Worker.terminate()` → WASM memory freed → OPFS cleaned |
-| **Dispose all** | 8-step sequence above | Terminate all + OPFS cleanup |
-| **Timeout** | `pthread_cond_timedwait` 30s on reads + writes | N/A — Atomics.wait blocks; OPFS reads are synchronous |
-| **Arena cleanup** | `bumpalo::Bump` dropped → all chunks freed | Browser kills JS context → linear memory freed |
+| open | reader[0] on demand | — |
+| extract / search / validate / classify | reader[0] on demand | bounded text |
+| render | reader[0] on demand | framed writes, one page at a time |
+| extractImages | reader[0] on demand | framed writes, one image at a time |
+| editorSave | pinned reader[0] | PositionedWrite streams objects |
+| builderSave | — | PositionedWrite streams objects |
+| sign | reader[0] 64KB chunks | writer[0] sequential |
+| mergeFrom | reader[0] secondary PDF | — |
+| addImageStamp / embedFile / builder.image | reader[0] secondary data | — |
+| convertTo (PDF → DOCX/PPTX/XLSX) | reader[0] on demand | streaming ZIP via office_oxide |
+| convertToPdf (DOCX/PPTX/XLSX → PDF) | reader[0] on demand | CountingWriter streams objects |
 
----
+### PositionedWrite — Write without Seek
 
-## 10. Off-main-thread guarantee (all three threads)
+PDF serialization needs byte offsets for the xref table but never
+seeks backward. `PositionedWrite` captures exactly that:
 
-| Platform | Mechanism |
-|---|---|
-| Native | Coordinator isolate (Dart event loop) + Rust thread pool (raw pthreads). Engine runs on pool threads, never on the isolate or UI thread. |
-| Web | Web Worker pool. Each worker has its own WASM instance. Main thread only streams OPFS chunks and receives results. |
+- **`CountingWriter<W: Write>`** — wraps any Write, tracks position
+  via counter. Enables O(1) streaming to sinks that can't Seek.
+- **`SeekWriter<W: Write+Seek>`** — delegates to `stream_position()`.
+  For Cursor, BufWriter, etc.
 
-The UI thread never does PDF work on either platform.
+### Native I/O — condvar + shared memory
 
----
+Each source gets its own `CallbackReader` + condvar buffer on the
+coordinator isolate. Each sink gets its own `CallbackWriter` + buffer.
+Engine reads/writes via shared memory with condvar synchronization.
+Dart serves source bytes from the main thread's DataSource.
 
-## 11. Platform differences (honest asymmetries)
+### Web I/O — three modes, auto-detected
 
-Three threads on each platform. Same roles, different languages:
-
-| Thread | Native | Web |
+| Mode | Mechanism | Requires |
 |---|---|---|
-| **Main** (Dart, runs bridge) | `native/bridge.dart` | `web/bridge.dart` |
-| **Coordinator** (receives ops, dispatches) | `native/coordinator.dart` (Dart isolate) | `coordinator.js` (JS Worker) |
-| **Worker** (runs engine code) | Rust pthread (managed by `thread_pool.rs`) | `worker.js` (JS Worker + WASM) |
+| **JSPI** | `WebAssembly.Suspending` suspends WASM, JS fetches async, resumes | Chrome 137+ / Firefox 139+ |
+| **Atomics** | `Atomics.wait` blocks WASM, JS fills SAB, `Atomics.notify` wakes | `SharedArrayBuffer` (COOP/COEP headers) |
+| **OPFS** | Sources pre-copied to OPFS disk, WASM reads via `SyncAccessHandle` | All modern browsers |
 
-Honest asymmetries that can't be unified:
+Auto-detection priority (best first):
+```
+if ("Suspending" in WebAssembly) → JSPI     (streaming, no headers)
+else if (SharedArrayBuffer)      → Atomics  (streaming, needs COOP/COEP)
+else                             → OPFS     (pre-copy fallback)
+```
 
-| Concern | Native | Web | Why different |
-|---|---|---|---|
-| Coordinator language | Dart isolate | JS Worker | Web can't run Dart isolates |
-| Worker | Rust pthread (engine runs natively) | JS Worker loading WASM | Different runtimes |
-| Wire format | Binary bytes | JS objects | C FFI speaks bytes, WASM speaks JsValue |
-| Wire decoder | `native/wire.dart` (binary→Map→typed) | `web/wire.dart` (Map→typed) | Both return typed; native has extra binary step |
-| I/O transport | Condvar + shared memory (Rust) | OPFS + SharedArrayBuffer (JS) | Different streaming mechanisms |
-| Type wrappers | None needed | `src/wasm.rs` (WasmPdfDocument etc.) | C FFI uses raw pointers; #[wasm_bindgen] needs wrapper structs |
-| FFI bindings | `bindings.dart` (dart:ffi) | N/A — JS calls WASM directly | Different binding mechanisms |
-| Source/Sink servers | `source_server.dart`, `sink_server.dart` | N/A — handled in JS | Different I/O models |
-| System fonts | `fontdb::load_system_fonts()` available | No filesystem — bundled Liberation fonts via `include_bytes!` | WASM has no OS font access |
+Detection follows the `wasm-feature-detect` pattern (GoogleChromeLabs).
+Force any mode: `Pdf(config: PdfConfig(webIoMode: PdfIoMode.jspi))`.
 
-Asymmetries that ARE unified (divergence eliminated):
+All three modes produce the same `Read+Seek` trait on the Rust side.
+`bridge_api.rs` is identical across modes. One WASM binary serves all
+three. Only OPFS pre-copies to disk.
 
-| Concern | How |
+**Web reader registry:** each source gets a unique `readerId` in
+the worker's registry. `host_read_at` dispatches by `sourceIndex →
+readerId` via an `activeReaderMap` built per exec. Pinned readers
+(from handle-creating ops) survive across execs. Non-pinned readers
+are cleaned in `finally`. Exactly symmetric with native's per-source
+condvar servers.
+
+### Backpressure
+
+**Sources (input):** naturally backpressured on all platforms. The
+engine calls `readAt` and blocks until the host returns bytes. The
+engine never reads faster than the host can serve.
+
+**Sinks (output):** backpressured per mode:
+
+- **Native:** condvar shared buffer blocks the Rust writer when full.
+  The Dart coordinator drains it before the writer can continue.
+- **JSPI:** `host_write_chunk` returns a Promise. JSPI suspends the
+  WASM stack. The coordinator forwards the chunk to Dart, Dart's
+  sink consumes it, Dart acks. The coordinator resolves the Promise.
+  WASM resumes. One chunk in flight at a time.
+- **Atomics:** `host_write_chunk` posts the chunk then
+  `Atomics.wait` on a dedicated write SAB. The coordinator forwards
+  to Dart, Dart acks, coordinator `Atomics.store + notify`. Worker
+  wakes. One chunk in flight at a time.
+- **OPFS:** fire-and-forget via `postMessage`. No blocking mechanism
+  available (no SAB, no JSPI). In practice the WASM producer is
+  slower than the main thread consumer for OPFS because OPFS source
+  reads are the bottleneck, not output writes.
+
+### Important: sources are random-access, not forward-only
+
+`DataSource.readAt(offset, count)` is random-access. The engine
+reads the xref table at the end of the file, then jumps to arbitrary
+offsets to load objects. A forward-only pipe (one-shot socket,
+stdin, HTTP without Range headers) cannot be a `DataSource`. Buffer
+the full content first, or use a random-access backing store.
+
+"O(1) memory" means the engine never buffers the full file — only
+the backing store holds it. Each `readAt` returns at most 64KB.
+
+### OPFS mode: O(N) disk + latency
+
+OPFS is the universal fallback (what users get without COOP/COEP
+headers on browsers older than Chrome 137). It pre-copies each
+source file to OPFS disk before processing — O(N) disk space, O(N)
+time before the first output byte, subject to browser storage quota.
+
+Use `await pdf.ensureInitialized()` at startup to detect the mode.
+If `PdfIoMode.opfs` is returned, consider warning the user or
+prompting for COOP/COEP headers.
+
+---
+
+## 7. Instance architecture
+
+```
+Pdf()       = isolated engine instance (pool + handles + children)
+PdfDoc      = read-only document session     (pdf.open)
+PdfEditor   = mutation session               (pdf.edit)
+PdfBuilder  = creation session               (pdf.build)
+```
+
+### Lifecycle
+
+```dart
+final pdf = Pdf();
+
+// Eagerly init — returns detected I/O mode without running an op
+final mode = await pdf.ensureInitialized();
+print(mode);  // PdfIoMode.jspi, .atomics, .opfs, or .native
+
+// Sessions are children of the engine
+final doc = await pdf.open(source);
+await doc.dispose();        // frees ONE doc
+
+await pdf.dispose();        // frees EVERYTHING — cascades to all children
+```
+
+### Dispose rules
+
+- `doc.dispose()` / `editor.dispose()` / `builder.dispose()` — frees
+  one session. Others + engine stay alive.
+- `pdf.dispose()` — cascades to all children. Zero Rust memory
+  retained, zero threads alive.
+- Double dispose is safe (no-op). Using a disposed object throws
+  `StateError`.
+
+### Parallel ops
+
+All ops from one `Pdf` share its pool. Pool size adapts automatically
+(`max(2, cores / 2)`). Multiple `Pdf` instances are fully independent.
+
+### Platform internals
+
+**Native:** all pool threads share one `InstanceState` (Mutex).
+Created by `bridge_init()`, destroyed by `bridge_shutdown()`. Holds
+HashMaps for documents, editors, builders, page ops, plus a cancel
+flag and the thread pool.
+
+**Web:** coordinator routes ops to WASM workers. Documents are pinned
+to workers (one worker per open doc). Different documents on different
+workers = truly parallel. Same document = same worker = serial.
+
+---
+
+## 8. Test architecture
+
+### Rules
+
+1. **Mirror source files.** `pdf_doc.dart` → `pdf_doc_test.dart`.
+2. **Core + stress for every method.** Core = small fixtures (1–3
+   pages). Stress = 1000-page PDFs.
+3. **All 4 platforms run the same tests.** Shared test files define
+   `registerXxxTests(Pdf Function() createPdf)`. Runners call them.
+   Same pass count on native, OPFS, JSPI, and Atomics.
+4. **Per-test timeouts.** Every `test()` has its own `timeout:`.
+   Exceeds budget → fix the algorithm, never the timeout.
+5. **O(1) guards always on.** `TestSource` throws on `readAt > 64KB`.
+   `TestSink` throws on `write > 256KB`. Every test uses these.
+
+### Structure
+
+```
+test/
+├── helpers/
+│   ├── asset_server.dart           HTTP server for web test assets
+│   ├── fixtures.dart               Minimal PDFs, certs, byte data
+│   ├── generators.dart             Build N-page PDFs at runtime
+│   ├── photo_png.dart              128×128 test PNG
+│   └── test_source_sink.dart       TestSource + TestSink (O(1) guards)
+│
+├── ops/
+│   ├── core/                       7 core test files
+│   ├── stress/                     6 stress test files (1000-page)
+│   └── runners/                    4 platform runners
+│       ├── native_runner_test.dart
+│       ├── web_opfs_runner_test.dart
+│       ├── web_jspi_runner_test.dart
+│       └── web_atomics_runner_test.dart
+│
+├── transport/                      Unit tests (no engine)
+│   ├── bridge_contract_test.dart
+│   ├── shared_bridge_test.dart
+│   ├── streaming_guard_test.dart
+│   ├── native/shared_buffer_test.dart
+│   └── protocol/
+│       ├── binary_codec_test.dart
+│       ├── codec_test.dart
+│       └── wire_sync_test.dart     ← parity guard (see below)
+│
+└── types/                          3 type tests
+```
+
+### wire_sync_test — the parity guard
+
+Parses `bridge_api.rs`, `worker.js`, and `coordinator.js` from disk.
+Extracts every match/case arm **programmatically** — zero hardcoded
+allowlists. Verifies:
+
+- Every `EngineOp` has a Rust match arm
+- Every Rust case maps to an `EngineOp` or a known sub-dispatch
+- Edit sub-dispatch and page sub-dispatch are disjoint
+- No sub-dispatch ops leak into top-level
+
+Adding a Dart op without a Rust handler → test fails. Adding a Rust
+handler without a Dart op → test fails.
+
+---
+
+## 9. Upstream patches
+
+### pdf_oxide — 7 files patched
+
+Every modification marked with `── pdf_manipulator patch ──`.
+
+| File | What we added |
 |---|---|
-| All operation logic | `dispatch.rs` — both platforms call the same functions |
-| Builder page ops | `dispatch::PageOp` enum + `dispatch::replay_page_ops` — same enum, same replay on both |
-| Sign with AcroForm | `dispatch::sign_via_editor` — one function, both platforms |
-| PDF/A font embedding | Liberation fonts bundled on ALL platforms via `include_bytes!` in converter fontdb. System fonts loaded additionally on native only. Bundled fonts guarantee identical PDF/A output. |
-| Editor queries (pageCount, isModified, mediaBox) | All through dispatch — never read from `WasmPdfDocument.inner` directly |
+| `Cargo.toml` | `native-bridge` deps + `office_oxide` as path dependency |
+| `lib.rs` | `pub mod host;` |
+| `document.rs` | External reader variant, `from_external_reader()`, info/encryption accessors, `collect_refs_of()` (zero-clone GC), streaming `to_docx/pptx/xlsx_writer_flow()` |
+| `editor/document_editor.rs` | State accessors, `merge_from_reader()`, zero-clone GC BFS, `stage_trimmed_pages_for_gc()`, `write_full_to_writer(PositionedWrite)`, `add_page_annotation()`, `all_media_boxes()` |
+| `compliance/converter.rs` | Expose `convert_with_editor`, bundled 12 Liberation fonts |
+| `writer/pdf_writer.rs` | `finish_to_writer(PositionedWrite)` — streaming save |
+| `writer/document_builder.rs` | `build_to_writer(PositionedWrite)` + `assemble_writer()` |
+| `converters/office/mod.rs` | Finalize-callback pattern for streaming, `convert_X_reader_to_writer()`, `ir_to_pdf_writer()` |
+
+### office_oxide — streaming OPC writer
+
+Branch `office_kit/0.1.2-patches`. Marked with `── office_kit patch ──`.
+
+| File | Patch |
+|---|---|
+| `core/opc.rs` | `OpcWriter<W: Write>` with `ZipWriter::new_stream` (streaming ZIP, no Seek) |
+| `core/editable.rs` | `write_to` uses streaming ZIP |
+| 10 other files | `Write + Seek` → `Write` bounds throughout |
+
+Everything in `src/host/` is entirely ours — no patch markers needed.
 
 ---
 
-## 12. Build system
+## 10. The one-line summary
 
-Dual-path build hook (`hook/build.dart`):
-- **Contributors** (have `vendor/pdf_oxide/` submodule): cargo compiles from source.
-- **Consumers** (installed from pub.dev): downloads pre-built binary from GitHub Releases.
-
-WASM build: `make wasm` runs `wasm-pack build` → produces `web_assets/pdf_oxide_bg.wasm` + `pdf_oxide.js`.
-
----
-
-## 13. The one-line summary
-
-> **Four layers (Consumer API / Transport / Rust Host / Engine). Three threads per platform (main → coordinator → worker). One shared dispatch.rs. Symmetric naming: bridge↔bridge, coordinator↔coordinator, wire↔wire, ffi_api↔wasm_api, ffi_encode↔wasm_encode. Native coordinator is a Dart isolate dispatching FFI to a Rust thread pool. Web coordinator is a JS Worker routing to a WASM Worker. Both wire.dart files return typed results. Neither bridge imports codec. Zero full-file buffers. Zero UI jank.**
+> **Four layers. One binary format. Multi-source/multi-sink transport.
+> Three web I/O modes auto-detected (JSPI > Atomics > OPFS), one WASM
+> binary. O(1) memory on every path — enforced by test guards. Same
+> tests, same pass count, all 4 platforms.**

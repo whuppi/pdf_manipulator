@@ -1,79 +1,83 @@
-// Coordinator Worker — manages WASM worker pool, I/O mode, read/write routing.
+// Coordinator Worker — WASM worker pool manager for one Pdf instance.
 //
-// RULE: Message router only. Routes ops from Dart to WASM workers, routes
-// results back. Manages worker pool lifecycle, OPFS temp files, SAB setup.
-// Zero PDF logic. Zero result interpretation.
+// One coordinator per Pdf(). Owns N WASM workers, routes ops to them,
+// manages handle pinning, and bridges readAt/chunk between Dart and WASM.
 //
-// VIOLATIONS:
-// - No PDF-specific logic.
-// - No result parsing or conditional behavior based on PDF content.
-// - Route message + manage pool + manage I/O mode. Nothing else.
+// ── Message protocol ─────────────────────────────────────────────
 //
-// Three-level architecture (symmetric with native):
-//   Main thread (Dart) ←→ Coordinator (this file) ←→ WASM Worker pool
+// Dart → coordinator:
+//   init             { workerUrl, poolSize?, forceIoMode?, wasmModule? }
+//   submit           { opId, requestBytes, args, opfsFile?, opfsFiles? }
+//   submitStream     { opId, requestBytes, args }
+//   readAtResponse   { readId, bytes | error }
+//   opfs.write       { opId, filename, chunk, offset }
+//   opfs.finalize    { opId }
+//   cancel           { opId }
+//   dispose
 //
-// The coordinator NEVER loads WASM. It's pure JS coordination:
-//   - Pool management (acquire, release, cancel, dispose)
-//   - I/O mode detection (Atomics / OPFS) — once at startup
-//   - Read fulfillment routing: WASM worker → coordinator → main → coordinator → WASM worker
-//   - Write chunk routing: WASM worker → coordinator → main
-//   - Stream item routing: WASM worker → coordinator → main
-//   - OPFS lifecycle (mode 3 only): write, finalize, cleanup
+// coordinator → Dart:
+//   ready            { ioMode, poolSize, version, wasmModule? }
+//   submitted        { opId }
+//   result           { opId, data }
+//   error            { opId?, message }
+//   item             { opId, data }
+//   done             { opId }
+//   streamError      { opId, message }
+//   readAt           { opId, sourceOpId, sourceIndex, readId, offset, count }
+//   chunk            { opId, sinkIndex, data }
+//   opfs.writeAck    { opId }
+//   opfs.finalizeAck { opId }
+//   cancelled        { opId }
+//   disposed
+//
+// coordinator → worker:
+//   exec             { opId, requestBytes, args, ioMode, sab?,
+//                      opfsFile?, opfsFiles?, isPinnedOp, pinnedSourceOpId? }
+//
+// worker → coordinator:
+//   readAt           { reqId, sourceIndex, offset, count, mode, sab? }
+//   chunk            { sinkIndex, data }
+//   result           { data }
+//   error            { error }
+//
+// ── Handle pinning ───────────────────────────────────────────────
+//
+// open/editorOpen → pin worker to handle. Subsequent ops route there.
+// docDispose/editorDispose → unpin. Worker returns to pool.
+//
+// ── Three I/O modes (auto-detected: jspi > atomics > opfs) ──────
+//
+//   jspi    — JSPI Promise suspension (Chrome 137+ / Firefox 139+)
+//   atomics — SAB + Atomics.wait/notify (needs COOP/COEP)
+//   opfs    — Pre-copy to OPFS disk (universal)
 
-// Version stamp — replaced by setup.dart with the actual package version.
-// If this still says '__VERSION__', setup was not run or is outdated.
 const PKG_VERSION = '__VERSION__';
+
+// ═══════════════════════════════════════════════════════════════════
+// Configuration
+// ═══════════════════════════════════════════════════════════════════
 
 let ioMode = 'opfs';
 let poolSize = 2;
-const idleWorkers = [];
-const busyWorkers = new Map();   // opId → { worker, opfsFile? }
-const pendingOps = [];           // queued when pool is full
-const opfsFiles = new Set();     // cleanup registry
-let nextOpId = 1;
 let workerUrl = null;
+let wasmBaseUrl = '';
+let compiledWasmModule = null;
 
-// Pending read requests: opId → { resolve, reject } for read fulfillment
-const pendingReads = new Map();
+// ═══════════════════════════════════════════════════════════════════
+// I/O mode detection
+// ═══════════════════════════════════════════════════════════════════
 
-// ── I/O Mode Detection ─────────────────────────────────────────────────
-
-function detectIoMode() {
+function detectIoMode(forceMode) {
+  if (forceMode === 'atomics' || forceMode === 'opfs' || forceMode === 'jspi') return forceMode;
+  if (typeof WebAssembly !== 'undefined' && 'Suspending' in WebAssembly) return 'jspi';
   if (typeof SharedArrayBuffer !== 'undefined') return 'atomics';
   return 'opfs';
 }
 
-// ── OPFS Helpers (mode 3 only) ──────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════
+// SAB for Atomics mode
+// ═══════════════════════════════════════════════════════════════════
 
-async function opfsWrite(filename, chunk, offset) {
-  const root = await navigator.storage.getDirectory();
-  const fileHandle = await root.getFileHandle(filename, { create: true });
-  const syncHandle = await fileHandle.createSyncAccessHandle();
-  const data = new Uint8Array(chunk);
-  syncHandle.write(data, { at: offset });
-  syncHandle.flush();
-  syncHandle.close();
-}
-
-async function opfsCleanup(filename) {
-  try {
-    const root = await navigator.storage.getDirectory();
-    await root.removeEntry(filename);
-  } catch (_) { /* ignore */ }
-}
-
-async function opfsCleanupAll() {
-  for (const f of opfsFiles) {
-    await opfsCleanup(f);
-  }
-  opfsFiles.clear();
-}
-
-// ── SharedArrayBuffer for Atomics mode ──────────────────────────────────
-
-// Layout: [0] = status flag (0=waiting, 1=ready, 2=error)
-//         [4..8] = response length (int32)
-//         [8..] = response data bytes
 const SAB_HEADER = 8;
 const SAB_MAX_CHUNK = 65536;
 
@@ -81,189 +85,301 @@ function createSab() {
   return new SharedArrayBuffer(SAB_HEADER + SAB_MAX_CHUNK);
 }
 
-// ── Worker Pool ─────────────────────────────────────────────────────────
+// Write-ack SAB: 4 bytes for an Int32 flag. Worker Atomics.wait(0),
+// coordinator Atomics.store(1) + Atomics.notify after Dart consumes.
+function createWriteSab() {
+  return new SharedArrayBuffer(4);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Worker pool
+// ═══════════════════════════════════════════════════════════════════
+
+/** @type {Worker[]} idle workers ready for work */
+const idleWorkers = [];
+
+/** @type {Map<number, {worker: Worker, opfsFile: string|null}>} opId → busy entry */
+const busyWorkers = new Map();
+
+/** @type {((w: Worker) => void)[]} queued resolvers waiting for a worker */
+const waitQueue = [];
+
+function spawnWorker(url) {
+  try {
+    const u = new URL(url);
+    if (u.origin !== self.location.origin) {
+      const blob = new Blob(
+        [`importScripts(${JSON.stringify(url)});`],
+        { type: 'application/javascript' },
+      );
+      return new Worker(URL.createObjectURL(blob));
+    }
+  } catch (_) {}
+  return new Worker(url, { type: 'module' });
+}
 
 async function createWasmWorker() {
-
-  // Fetch the worker script and create a blob URL.
-  // This handles cross-origin scenarios (e.g. dart test where the test
-  // runner and asset server are on different ports). The blob worker runs
-  // same-origin. Rewrite the relative './pdf_oxide.js' import to absolute
-  // so the ES module loader can resolve it from the blob context.
-  let effectiveUrl = workerUrl;
-  try {
-    const resp = await fetch(workerUrl);
-    if (resp.ok) {
-      let src = await resp.text();
-      const base = workerUrl.substring(0, workerUrl.lastIndexOf('/') + 1);
-      src = src.replace("from './pdf_oxide.js'", "from '" + base + "pdf_oxide.js'");
-      const blob = new Blob([src], { type: 'application/javascript' });
-      effectiveUrl = URL.createObjectURL(blob);
-    }
-  } catch (e) {
-  }
-
-  const w = new Worker(effectiveUrl, { type: 'module' });
+  const w = spawnWorker(workerUrl);
   return new Promise((resolve, reject) => {
     let settled = false;
     const timeout = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        w.terminate();
-        reject(new Error('WASM worker init timed out after 10s — module import likely failed (ioMode=' + ioMode + ')'));
+      if (!settled) { settled = true; w.terminate(); reject(new Error('WASM worker init timed out')); }
+    }, 15000);
+
+    function onMsg(e) {
+      if (e.data.type === 'ready' && !settled) {
+        settled = true; clearTimeout(timeout); w.removeEventListener('message', onMsg); resolve(w);
+      } else if (e.data.type === 'error' && !settled) {
+        settled = true; clearTimeout(timeout); w.removeEventListener('message', onMsg);
+        w.terminate(); reject(new Error('WASM worker init: ' + (e.data.error || 'unknown')));
       }
-    }, 10000);
-    const onMsg = (e) => {
-      if (e.data.type === 'ready') {
-        settled = true;
-        clearTimeout(timeout);
-        w.removeEventListener('message', onMsg);
-        resolve(w);
-      } else if (e.data.type === 'error') {
-        if (!settled) {
-          settled = true;
-          clearTimeout(timeout);
-          w.removeEventListener('message', onMsg);
-          w.terminate();
-          reject(new Error('WASM worker init error: ' + (e.data.error || 'unknown')));
-        }
-      }
-    };
+    }
     w.addEventListener('message', onMsg);
     w.addEventListener('error', (e) => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timeout);
-        reject(new Error('WASM worker failed to start: ' + (e.message || e)));
-      }
+      if (!settled) { settled = true; clearTimeout(timeout); reject(new Error('WASM worker failed: ' + (e.message || e.filename || e))); }
     });
-    w.postMessage({ type: 'init', ioMode });
+
+    const initMsg = { type: 'init', ioMode, baseUrl: wasmBaseUrl };
+    if (compiledWasmModule) initMsg.wasmModule = compiledWasmModule;
+    w.postMessage(initMsg);
   });
 }
 
 async function acquireWorker() {
-  if (idleWorkers.length > 0) {
-    return idleWorkers.pop();
-  }
-  if (busyWorkers.size < poolSize) {
-    return await createWasmWorker();
-  }
-  // Pool full — queue
-  return new Promise((resolve) => {
-    pendingOps.push(resolve);
-  });
+  if (idleWorkers.length > 0) return idleWorkers.pop();
+  if (busyWorkers.size < poolSize) return await createWasmWorker();
+  return new Promise((resolve) => waitQueue.push(resolve));
 }
 
 function releaseWorker(opId) {
   const entry = busyWorkers.get(opId);
   if (!entry) return;
   busyWorkers.delete(opId);
-  const worker = entry.worker;
+  writeAckState.delete(opId);
 
-  // Clean OPFS temp file if mode 3
-  if (entry.opfsFile) {
+  if (entry.opfsFile && !isOpfsHeldByHandle(entry.opfsFile)) {
     opfsCleanup(entry.opfsFile);
     opfsFiles.delete(entry.opfsFile);
   }
 
-  // If ops are queued, give the worker to the next one
-  if (pendingOps.length > 0) {
-    const resolve = pendingOps.shift();
-    resolve(worker);
+  if (waitQueue.length > 0) waitQueue.shift()(entry.worker);
+  else idleWorkers.push(entry.worker);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Handle pinning
+// ═══════════════════════════════════════════════════════════════════
+
+/** @type {Map<number, {worker: Worker, sourceOpId: number, opfsFile: string|null}>} */
+const pinnedHandles = new Map();
+
+/** @type {Map<number, {action: 'pin'|'unpin', handleId: number|null, opfsFile: string|null}>} */
+const pendingHandleOps = new Map();
+
+const HANDLE_CREATING_OPS = new Set(['open', 'editorOpen']);
+const HANDLE_DISPOSING_OPS = new Set(['docDispose', 'editorDispose']);
+
+function resolveWorkerForHandle(handleId) {
+  if (handleId !== null && pinnedHandles.has(handleId)) {
+    return { worker: pinnedHandles.get(handleId).worker, isPinned: true };
+  }
+  return null;
+}
+
+function registerHandleOp(opId, opName, handleId, opfsFile) {
+  if (HANDLE_CREATING_OPS.has(opName)) {
+    pendingHandleOps.set(opId, { action: 'pin', handleId: null, opfsFile: opfsFile || null });
+  }
+  if (HANDLE_DISPOSING_OPS.has(opName) && handleId !== null) {
+    pendingHandleOps.set(opId, { action: 'unpin', handleId, opfsFile: null });
+  }
+}
+
+function handlePinOnResult(opId, worker, responseData) {
+  const hop = pendingHandleOps.get(opId);
+  if (!hop) return;
+  pendingHandleOps.delete(opId);
+
+  if (hop.action === 'pin' && responseData) {
+    const hid = extractHandleId(
+      responseData instanceof ArrayBuffer ? new Uint8Array(responseData) : responseData);
+    if (hid !== null) {
+      pinnedHandles.set(hid, { worker, sourceOpId: opId, opfsFile: hop.opfsFile });
+    }
+  } else if (hop.action === 'unpin' && hop.handleId !== null) {
+    const pin = pinnedHandles.get(hop.handleId);
+    pinnedHandles.delete(hop.handleId);
+    worker.postMessage({ type: 'releaseOpfs', sourceOpId: pin ? pin.sourceOpId : null });
+    if (pin && pin.opfsFile) {
+      opfsCleanup(pin.opfsFile);
+      opfsFiles.delete(pin.opfsFile);
+    }
+  }
+}
+
+function handlePinOnError(opId) {
+  pendingHandleOps.delete(opId);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// readAt routing (Dart ↔ worker)
+// ═══════════════════════════════════════════════════════════════════
+
+/** @type {Map<string, {opId: number, workerPort: Worker, mode: string, sab: SharedArrayBuffer|null}>} */
+const pendingReads = new Map();
+
+/** @type {Map<number, {writeSab: SharedArrayBuffer|null, worker: Worker}>} write backpressure per opId */
+const writeAckState = new Map();
+
+function routeReadAt(msg, opId, targetHandleId, worker) {
+  let sourceOpId = opId;
+  if (targetHandleId !== null) {
+    const pin = pinnedHandles.get(targetHandleId);
+    if (pin) sourceOpId = pin.sourceOpId;
+  }
+
+  const readId = `${opId}_${msg.reqId}`;
+  pendingReads.set(readId, { opId, workerPort: worker, mode: msg.mode, sab: msg.sab || null });
+  self.postMessage({
+    type: 'readAt', opId, sourceOpId, readId,
+    sourceIndex: msg.sourceIndex ?? 0,
+    offset: msg.offset, count: msg.count,
+  });
+}
+
+function deliverReadAtResponse(msg) {
+  const pending = pendingReads.get(msg.readId);
+  if (!pending) return;
+  pendingReads.delete(msg.readId);
+
+  if (pending.mode === 'atomics' && pending.sab) {
+    const view = new Int32Array(pending.sab);
+    if (msg.error) {
+      Atomics.store(view, 0, 2);
+      Atomics.notify(view, 0);
+    } else {
+      const bytes = new Uint8Array(msg.bytes);
+      new Uint8Array(pending.sab, SAB_HEADER).set(bytes);
+      Atomics.store(new Int32Array(pending.sab, 4, 1), 0, bytes.length);
+      Atomics.store(view, 0, 1);
+      Atomics.notify(view, 0);
+    }
   } else {
-    idleWorkers.push(worker);
+    const reqId = msg.readId.split('_').pop();
+    if (msg.error) {
+      pending.workerPort.postMessage({ type: 'readAtResponse', reqId, error: msg.error });
+    } else {
+      const transfers = msg.bytes instanceof ArrayBuffer ? [msg.bytes] : [];
+      pending.workerPort.postMessage({ type: 'readAtResponse', reqId, bytes: msg.bytes }, transfers);
+    }
   }
 }
 
-function cancelWorker(opId) {
-  const entry = busyWorkers.get(opId);
-  if (!entry) return;
-  entry.worker.terminate();
-  busyWorkers.delete(opId);
-  if (entry.opfsFile) {
-    opfsCleanup(entry.opfsFile);
-    opfsFiles.delete(entry.opfsFile);
-  }
-  // Terminated workers can't be reused — pool shrinks temporarily
-  // New worker created on next acquireWorker if needed
+// ═══════════════════════════════════════════════════════════════════
+// OPFS helpers
+// ═══════════════════════════════════════════════════════════════════
+
+/** @type {Set<string>} filenames currently on disk */
+const opfsFiles = new Set();
+
+async function opfsWrite(filename, chunk, offset) {
+  const root = await navigator.storage.getDirectory();
+  const fh = await root.getFileHandle(filename, { create: true });
+  const sh = await fh.createSyncAccessHandle();
+  sh.write(new Uint8Array(chunk), { at: offset });
+  sh.flush();
+  sh.close();
 }
 
-function disposeAll() {
-  for (const [opId, entry] of busyWorkers) {
-    entry.worker.terminate();
-  }
-  busyWorkers.clear();
-  for (const w of idleWorkers) {
-    w.terminate();
-  }
-  idleWorkers.length = 0;
-  pendingOps.length = 0;
-  opfsCleanupAll();
+async function opfsCleanup(filename) {
+  try { const root = await navigator.storage.getDirectory(); await root.removeEntry(filename); } catch (_) {}
 }
 
-// ── WASM Worker Message Handler ─────────────────────────────────────────
+async function opfsCleanupAll() {
+  for (const f of opfsFiles) await opfsCleanup(f);
+  opfsFiles.clear();
+}
 
-function setupWorkerListeners(worker, opId) {
+function isOpfsHeldByHandle(filename) {
+  for (const pin of pinnedHandles.values()) {
+    if (pin.opfsFile === filename) return true;
+  }
+  return false;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Binary protocol helpers
+// ═══════════════════════════════════════════════════════════════════
+
+function extractOpName(requestBytes) {
+  if (!requestBytes || requestBytes.byteLength < 2) return null;
+  const view = new Uint8Array(requestBytes);
+  const opLen = view[0];
+  if (opLen === 0 || view.byteLength < 1 + opLen) return null;
+  return String.fromCharCode(...view.slice(1, 1 + opLen));
+}
+
+function extractHandleId(requestBytes) {
+  if (!requestBytes) return null;
+  let view;
+  if (requestBytes instanceof ArrayBuffer) view = new Uint8Array(requestBytes);
+  else if (requestBytes instanceof Uint8Array) view = requestBytes;
+  else if (requestBytes.buffer) view = new Uint8Array(requestBytes.buffer);
+  else return null;
+
+  const needle = [104, 97, 110, 100, 108, 101, 73, 100]; // "handleId"
+  for (let i = 0; i <= view.length - needle.length - 5; i++) {
+    let match = true;
+    for (let j = 0; j < needle.length; j++) {
+      if (view[i + j] !== needle[j]) { match = false; break; }
+    }
+    if (match && view[i + needle.length] === 1) {
+      const o = i + needle.length + 1;
+      return view[o] | (view[o+1] << 8) | (view[o+2] << 16) | (view[o+3] << 24);
+    }
+  }
+  return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Worker message listener (installed per-op)
+// ═══════════════════════════════════════════════════════════════════
+
+function setupWorkerListener(worker, opId, targetHandleId, isStream) {
   worker.onmessage = (e) => {
     const msg = e.data;
+    if (msg.type === '_wlog') return;
 
     switch (msg.type) {
-      case 'readAt': {
-        // WASM worker needs bytes — forward to main thread
-        const readId = `${opId}_${msg.reqId}`;
-        // Store the callback for when main responds
-        pendingReads.set(readId, {
-          opId,
-          workerPort: worker,
-          mode: msg.mode,
-          sab: msg.sab,   // SharedArrayBuffer (atomics mode only)
-        });
-        // Ask main thread for bytes
-        self.postMessage({
-          type: 'readAt',
-          opId,
-          readId,
-          offset: msg.offset,
-          count: msg.count,
-        });
+      case 'readAt':
+        routeReadAt(msg, opId, targetHandleId, worker);
         break;
-      }
 
       case 'chunk': {
-        // Output chunk from engine — forward to main
         const transfers = msg.data instanceof ArrayBuffer ? [msg.data] : [];
-        self.postMessage({ type: 'chunk', opId, data: msg.data }, transfers);
-        break;
-      }
-
-      case 'item': {
-        // Per-item streaming (image, rendered page) — forward to main
-        const transfers = [];
-        if (msg.data && msg.data.data instanceof ArrayBuffer) {
-          transfers.push(msg.data.data);
-        }
-        self.postMessage({ type: 'item', opId, data: msg.data }, transfers);
-        break;
-      }
-
-      case 'itemDone': {
-        self.postMessage({ type: 'itemDone', opId });
+        // Forward chunk to Dart. Dart acks via chunkAck message (see onmessage handler below).
+        // Backpressure: Atomics mode acks via writeSab (see submitOp), JSPI via chunkAck forward.
+        self.postMessage({ type: 'chunk', opId, sinkIndex: msg.sinkIndex ?? 0, data: msg.data }, transfers);
         break;
       }
 
       case 'result': {
-        // Operation complete — forward result, release worker
-        const transfers = [];
-        if (msg.result && msg.result.bytes instanceof ArrayBuffer) {
-          transfers.push(msg.result.bytes);
+        handlePinOnResult(opId, worker, msg.data);
+        if (isStream) {
+          const transfers = msg.data instanceof ArrayBuffer ? [msg.data] : [];
+          self.postMessage({ type: 'item', opId, data: msg.data }, transfers);
+          self.postMessage({ type: 'done', opId });
+        } else {
+          const transfers = msg.data instanceof ArrayBuffer ? [msg.data] : [];
+          self.postMessage({ type: 'result', opId, data: msg.data }, transfers);
         }
-        self.postMessage({ type: 'result', opId, result: msg.result }, transfers);
         releaseWorker(opId);
         break;
       }
 
       case 'error': {
-        self.postMessage({ type: 'error', opId, error: msg.error });
+        handlePinOnError(opId);
+        self.postMessage({ type: isStream ? 'streamError' : 'error', opId, message: msg.error });
         releaseWorker(opId);
         break;
       }
@@ -271,142 +387,173 @@ function setupWorkerListeners(worker, opId) {
   };
 
   worker.onerror = (e) => {
-    self.postMessage({ type: 'error', opId, error: e.message || 'WASM worker crashed' });
+    self.postMessage({ type: 'error', opId, message: e.message || 'WASM worker crashed' });
     releaseWorker(opId);
   };
 }
 
-// ── Main Thread Message Handler ─────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════
+// Submit an op to the pool
+// ═══════════════════════════════════════════════════════════════════
+
+let nextOpId = 1;
+
+async function submitOp(msg, isStream) {
+  const opId = msg.opId ?? nextOpId++;
+  const opName = extractOpName(msg.requestBytes);
+  const handleId = extractHandleId(msg.requestBytes);
+
+  // Route to pinned worker or acquire from pool
+  let worker;
+  let isPinnedOp = false;
+  const pinned = resolveWorkerForHandle(handleId);
+  if (pinned) {
+    worker = pinned.worker;
+    isPinnedOp = true;
+  } else {
+    worker = await acquireWorker();
+  }
+
+  busyWorkers.set(opId, { worker, opfsFile: msg.opfsFile || null });
+  setupWorkerListener(worker, opId, handleId, isStream);
+  if (!isStream) registerHandleOp(opId, opName, handleId, msg.opfsFile);
+
+  // Build exec message for worker
+  const fwdMsg = {
+    type: 'exec', opId,
+    requestBytes: msg.requestBytes,
+    args: msg.args || {},
+    ioMode, isPinnedOp,
+    pinnedSourceOpId: pinned ? pinnedHandles.get(handleId)?.sourceOpId : null,
+  };
+
+  const transfers = msg.requestBytes instanceof ArrayBuffer ? [msg.requestBytes] : [];
+  if (ioMode === 'atomics') {
+    fwdMsg.sab = createSab();
+    fwdMsg.writeSab = createWriteSab();
+    writeAckState.set(opId, { writeSab: fwdMsg.writeSab, worker });
+  } else if (ioMode === 'jspi') {
+    writeAckState.set(opId, { writeSab: null, worker });
+  }
+  if (msg.opfsFile) fwdMsg.opfsFile = msg.opfsFile;
+  if (msg.opfsFiles) fwdMsg.opfsFiles = msg.opfsFiles;
+
+  worker.postMessage(fwdMsg, transfers);
+  self.postMessage({ type: 'submitted', opId });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Cancel + dispose
+// ═══════════════════════════════════════════════════════════════════
+
+async function shutdownWorker(w) {
+  return new Promise(resolve => {
+    const timeout = setTimeout(() => { w.terminate(); resolve(); }, 2000);
+    try {
+      w.onmessage = (e) => {
+        if (e.data.type === 'shutdown_done') { clearTimeout(timeout); w.terminate(); resolve(); }
+      };
+      w.postMessage({ type: 'shutdown' });
+    } catch (_) { clearTimeout(timeout); w.terminate(); resolve(); }
+  });
+}
+
+async function cancelWorker(opId) {
+  const entry = busyWorkers.get(opId);
+  if (!entry) return;
+  busyWorkers.delete(opId);
+  await shutdownWorker(entry.worker);
+  if (entry.opfsFile && !isOpfsHeldByHandle(entry.opfsFile)) {
+    await opfsCleanup(entry.opfsFile);
+    opfsFiles.delete(entry.opfsFile);
+  }
+}
+
+async function disposeAll() {
+  const allWorkers = new Set();
+  for (const [, entry] of busyWorkers) allWorkers.add(entry.worker);
+  for (const w of idleWorkers) allWorkers.add(w);
+  await Promise.all([...allWorkers].map(shutdownWorker));
+
+  busyWorkers.clear();
+  idleWorkers.length = 0;
+  waitQueue.length = 0;
+  pinnedHandles.clear();
+  pendingHandleOps.clear();
+  pendingReads.clear();
+  writeAckState.clear();
+  await opfsCleanupAll();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Main thread message handler
+// ═══════════════════════════════════════════════════════════════════
 
 self.onmessage = async (e) => {
   const msg = e.data;
-
   try {
     switch (msg.type) {
       case 'init': {
         workerUrl = msg.workerUrl;
         poolSize = msg.poolSize || Math.max(2, Math.floor((navigator.hardwareConcurrency || 4) / 2));
-        ioMode = detectIoMode();
-        self.postMessage({ type: 'ready', ioMode, poolSize, version: PKG_VERSION });
+        ioMode = detectIoMode(msg.forceIoMode);
+        try {
+          wasmBaseUrl = new URL(workerUrl, self.location.href).href.replace(/\/[^/]*$/, '/');
+        } catch (_) { wasmBaseUrl = './'; }
+
+        if (msg.wasmModule) compiledWasmModule = msg.wasmModule;
+        if (!compiledWasmModule) {
+          try {
+            compiledWasmModule = await WebAssembly.compileStreaming(fetch(wasmBaseUrl + 'pdf_oxide_bg.wasm'));
+          } catch (_) { compiledWasmModule = null; }
+        }
+
+        const readyMsg = { type: 'ready', ioMode, poolSize, version: PKG_VERSION };
+        if (compiledWasmModule) readyMsg.wasmModule = compiledWasmModule;
+        self.postMessage(readyMsg);
         break;
       }
 
-      case 'readAtResponse': {
-        const pending = pendingReads.get(msg.readId);
-        pendingReads.delete(msg.readId);
+      case 'readAtResponse': deliverReadAtResponse(msg); break;
 
-        if (pending.mode === 'atomics' && pending.sab) {
-          // Atomics mode: write bytes to SAB, notify
-          const view = new Int32Array(pending.sab);
-          const dataView = new Uint8Array(pending.sab, SAB_HEADER);
-          if (msg.error) {
-            Atomics.store(view, 0, 2); // error flag
-            Atomics.notify(view, 0);
-          } else {
-            const bytes = new Uint8Array(msg.bytes);
-            dataView.set(bytes);
-            Atomics.store(view, 1, bytes.length);
-            Atomics.store(view, 0, 1); // ready flag
-            Atomics.notify(view, 0);
-          }
+      case 'chunkAck': {
+        const state = writeAckState.get(msg.opId);
+        if (!state) break;
+        if (state.writeSab) {
+          // Atomics mode: set SAB flag and notify the blocked worker
+          Atomics.store(new Int32Array(state.writeSab), 0, 1);
+          Atomics.notify(new Int32Array(state.writeSab), 0);
         } else {
-          // Non-atomics: forward bytes to worker via postMessage
-          if (msg.error) {
-            pending.workerPort.postMessage({
-              type: 'readAtResponse',
-              reqId: msg.readId.split('_').pop(),
-              error: msg.error,
-            });
-          } else {
-            const transfers = msg.bytes instanceof ArrayBuffer ? [msg.bytes] : [];
-            pending.workerPort.postMessage({
-              type: 'readAtResponse',
-              reqId: msg.readId.split('_').pop(),
-              bytes: msg.bytes,
-            }, transfers);
-          }
+          // JSPI mode: forward ack to worker — resolves the write Promise
+          state.worker.postMessage({ type: 'chunkAck' });
         }
         break;
       }
 
-      case 'opfs.write': {
-        // Mode 3: stream source chunks to OPFS
-        const filename = msg.filename;
-        opfsFiles.add(filename);
-        await opfsWrite(filename, msg.chunk, msg.offset);
+      case 'opfs.write':
+        opfsFiles.add(msg.filename);
+        await opfsWrite(msg.filename, msg.chunk, msg.offset);
         self.postMessage({ type: 'opfs.writeAck', opId: msg.opId });
         break;
-      }
 
-      case 'opfs.finalize': {
-        // Mode 3: source fully written to OPFS
+      case 'opfs.finalize':
         self.postMessage({ type: 'opfs.finalizeAck', opId: msg.opId });
         break;
-      }
 
-      case 'submit': {
-        const opId = nextOpId++;
-        try {
-          const worker = await acquireWorker();
-          const entry = { worker, opfsFile: msg.opfsFile || null };
-          busyWorkers.set(opId, entry);
-          setupWorkerListeners(worker, opId);
+      case 'submit':       await submitOp(msg, false); break;
+      case 'submitStream':  await submitOp(msg, true); break;
 
-          const fwdMsg = {
-            type: 'exec',
-            opId,
-            op: msg.op,
-            args: msg.args,
-            ioMode,
-          };
-
-          const transfers = [];
-          if (msg.args) {
-            for (const key of Object.keys(msg.args)) {
-              const val = msg.args[key];
-              if (val instanceof ArrayBuffer) {
-                transfers.push(val);
-              }
-            }
-          }
-
-          if (ioMode === 'atomics') {
-            fwdMsg.sab = createSab();
-          }
-
-          if (msg.opfsFile) {
-            fwdMsg.opfsFile = msg.opfsFile;
-          }
-
-          worker.postMessage(fwdMsg, transfers);
-          self.postMessage({ type: 'submitted', opId });
-        } catch (err) {
-          self.postMessage({
-            type: 'error',
-            opId,
-            error: 'Worker acquire failed: ' + (err.message || String(err)),
-          });
-        }
-        break;
-      }
-
-      case 'cancel': {
-        cancelWorker(msg.opId);
+      case 'cancel':
+        await cancelWorker(msg.opId);
         self.postMessage({ type: 'cancelled', opId: msg.opId });
         break;
-      }
 
-      case 'dispose': {
-        disposeAll();
+      case 'dispose':
+        await disposeAll();
         self.postMessage({ type: 'disposed' });
         break;
-      }
     }
   } catch (err) {
-    self.postMessage({
-      type: 'error',
-      opId: msg.opId || 0,
-      error: err.message || String(err),
-    });
+    self.postMessage({ type: 'error', opId: msg.opId || 0, message: err.message || String(err) });
   }
 };

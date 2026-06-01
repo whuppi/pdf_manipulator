@@ -1,7 +1,7 @@
 // Shared protocol codec — the SINGLE SOURCE OF TRUTH for encoding args
 // and decoding results across native and web bridges.
 //
-// Both NativeBridge and WebBridge MUST use these functions.
+// SharedBridge uses these decode functions. Encode side replaced by binary_codec.
 // Adding a field here adds it to both platforms.
 // Missing a field here breaks both platforms.
 //
@@ -9,7 +9,6 @@
 
 import 'dart:typed_data';
 
-import 'package:pdf_manipulator/src/types/pdf_doc.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_info.dart';
@@ -85,11 +84,6 @@ EngineRequest convertToOp({required PdfDocumentFormat format, String? password})
 EngineRequest convertToPdfOp({required PdfDocumentFormat format}) =>
     EngineRequest(EngineOp.convertToPdf, {'format': format.name});
 
-// ── Creation ──
-
-EngineRequest imagesToPdfOp({required List<Uint8List> images}) =>
-    EngineRequest(EngineOp.imagesToPdf, {'images': images});
-
 // ── Streaming ──
 
 EngineRequest renderOp({
@@ -146,8 +140,8 @@ EngineRequest editorDisposeOp({required int handleId}) =>
 EngineRequest editorMutateOp({required int handleId, required String editOp, Map<String, Object?> extra = const {}}) =>
     EngineRequest(EngineOp.editorMutate, {'handleId': handleId, 'editOp': editOp, ...extra});
 
-EngineRequest editorSaveOp({required int handleId, PdfSaveOptions options = const PdfSaveOptions()}) =>
-    EngineRequest(EngineOp.editorSave, {'handleId': handleId, ..._encodeSaveArgs(options)});
+EngineRequest editorSaveOp({required int handleId, PdfSaveOptions options = const PdfSaveOptions.fullRewrite()}) =>
+    EngineRequest(EngineOp.editorSave, {'handleId': handleId, ...encodeSaveArgs(options)});
 
 EngineRequest editorGetMetadataOp({required int handleId}) =>
     EngineRequest(EngineOp.editorGetMetadata, {'handleId': handleId});
@@ -201,9 +195,9 @@ EngineRequest builderSaveOp({required int handleId}) =>
 // RESPONSE DECODING — Map<String, Object?> from the wire → Dart types
 // ════════════════════════════════════════════════════════════════════
 
-PdfDoc decodeOpenResult(Map<String, Object?> r) {
+List<PdfPageInfo> decodePageList(Map<String, Object?> r) {
   final pagesRaw = r['pages'] as List? ?? [];
-  final pages = pagesRaw.map((p) {
+  return pagesRaw.map((p) {
     final m = _asMap(p);
     return PdfPageInfo(
       index: m['index'] as int,
@@ -212,26 +206,18 @@ PdfDoc decodeOpenResult(Map<String, Object?> r) {
       rotation: (m['rotation'] as num?)?.toInt() ?? 0,
     );
   }).toList();
+}
 
-  final encAlgo = r['encryptionAlgorithm'] as int? ?? 0;
-  final permBits = r['permissionBits'] as int? ?? 0xFF;
+PdfEncryptionAlgorithm? decodeEncryptionAlgorithmFromMap(Map<String, Object?> r) {
+  final code = r['encryptionAlgorithm'] as int? ?? 0;
+  return decodeEncryptionAlgorithm(code);
+}
 
-  return PdfDoc(
-    pageCount: r['pageCount'] as int,
-    version: r['version'] as String? ?? '2.0',
-    pages: pages,
-    title: r['title'] as String?,
-    author: r['author'] as String?,
-    subject: r['subject'] as String?,
-    keywords: r['keywords'] as String?,
-    isTagged: r['isTagged'] as bool? ?? false,
-    isEncrypted: r['isEncrypted'] as bool? ?? false,
-    requiresPassword: r['requiresPassword'] as bool? ?? false,
-    encryptionAlgorithm: _decodeEncryptionAlgorithm(encAlgo),
-    permissions: (r['isEncrypted'] as bool? ?? false)
-        ? _decodePermissions(permBits)
-        : null,
-  );
+PdfPermissions? decodePermissionsFromMap(Map<String, Object?> r) {
+  final isEncrypted = r['isEncrypted'] as bool? ?? false;
+  if (!isEncrypted) return null;
+  final bits = r['permissionBits'] as int? ?? 0xFF;
+  return decodePermissions(bits);
 }
 
 String decodeExtractResult(Map<String, Object?> r) =>
@@ -355,10 +341,8 @@ List<int> resolvePageIndices(PdfPages pages, int pageCount) => switch (pages) {
   PdfPageRange(:final start, :final end) => List.generate(end - start, (i) => start + i),
 };
 
-List<Map<String, double>> encodeRegions(List<PdfRect> regions) =>
-    regions.map((r) => {
-      'x': r.x, 'y': r.y, 'width': r.width, 'height': r.height,
-    }).toList();
+List<double> encodeRegions(List<PdfRect> regions) =>
+    regions.expand((r) => [r.x, r.y, r.width, r.height]).toList();
 
 Map<String, Object?> encodeWatermarkArgs(
   String text,
@@ -396,8 +380,25 @@ Map<String, Object?> encodeRectArgs(PdfRect rect) => {
 
 // ── Private helpers ──
 
-Map<String, Object?> _encodeSaveArgs(PdfSaveOptions options) {
-  int encryptMode = switch (options.encryption) {
+Map<String, Object?> encodeSaveArgs(PdfSaveOptions options) {
+  return switch (options) {
+    PdfSaveFullRewrite(:final compress, :final garbageCollect, :final encryption) => {
+      'saveMode': 0,
+      'compress': compress,
+      'garbageCollect': garbageCollect,
+      ..._encodeEncryption(encryption),
+    },
+    PdfSaveIncremental() => {
+      'saveMode': 1,
+      'compress': false,
+      'garbageCollect': false,
+      ..._encodeEncryption(const PdfEncryption.keep()),
+    },
+  };
+}
+
+Map<String, Object?> _encodeEncryption(PdfEncryption encryption) {
+  final encryptMode = switch (encryption) {
     PdfEncryptionKeep() => 0,
     PdfEncryptionRemove() => 1,
     PdfEncryptionConfig() => 2,
@@ -406,16 +407,13 @@ Map<String, Object?> _encodeSaveArgs(PdfSaveOptions options) {
   String encUserPw = '';
   String encOwnerPw = '';
   int encPerms = -1;
-  if (options.encryption case PdfEncryptionConfig c) {
+  if (encryption case PdfEncryptionConfig c) {
     encAlgo = c.algorithm.index + 1;
     encUserPw = c.userPassword;
     encOwnerPw = c.ownerPassword;
     encPerms = c.permissions.toBits();
   }
   return {
-    'compress': options.compress,
-    'garbageCollect': options.garbageCollect,
-    'saveMode': options.mode.index,
     'encryptMode': encryptMode,
     'encryptAlgo': encAlgo,
     'encryptUserPw': encUserPw,
@@ -425,13 +423,14 @@ Map<String, Object?> _encodeSaveArgs(PdfSaveOptions options) {
 }
 
 String _encodeExtractionFormat(PdfExtractionFormat format) => switch (format) {
+  PdfExtractionFormat.auto => 'auto',
+  PdfExtractionFormat.text => 'text',
   PdfExtractionFormat.markdown => 'markdown',
   PdfExtractionFormat.html => 'html',
   PdfExtractionFormat.plainText => 'plainText',
-  _ => 'plainText',
 };
 
-PdfEncryptionAlgorithm? _decodeEncryptionAlgorithm(int code) => switch (code) {
+PdfEncryptionAlgorithm? decodeEncryptionAlgorithm(int code) => switch (code) {
   1 => PdfEncryptionAlgorithm.rc4_40,
   2 => PdfEncryptionAlgorithm.rc4_128,
   3 => PdfEncryptionAlgorithm.aes128,
@@ -439,7 +438,7 @@ PdfEncryptionAlgorithm? _decodeEncryptionAlgorithm(int code) => switch (code) {
   _ => null,
 };
 
-PdfPermissions _decodePermissions(int bits) => PdfPermissions(
+PdfPermissions decodePermissions(int bits) => PdfPermissions(
   print: bits & 1 != 0,
   printHq: bits & 2 != 0,
   modify: bits & 4 != 0,

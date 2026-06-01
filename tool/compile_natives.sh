@@ -14,14 +14,14 @@
 set -euo pipefail
 
 MANIFEST="vendor/pdf_oxide/Cargo.toml"
-OUT="build_output"
+OUT="${COMPILE_OUTPUT_DIR:-build_output}"
 
 if [ ! -f "$MANIFEST" ]; then
   echo "Error: run from package root (vendor/pdf_oxide/Cargo.toml not found)"
   exit 1
 fi
 
-FEATURES="icc,legacy-crypto,rendering,signatures"
+FEATURES="icc,legacy-crypto,rendering,signatures,native-bridge"
 
 build() {
   local target=$1
@@ -88,6 +88,7 @@ if command -v x86_64-w64-mingw32-gcc &>/dev/null; then
   build "x86_64-pc-windows-gnu" "windows-x64" "pdf_oxide.dll"
 elif [[ "$(uname -s)" == MINGW* ]] || [[ "$(uname -s)" == MSYS* ]]; then
   build "x86_64-pc-windows-msvc" "windows-x64" "pdf_oxide.dll"
+  build "aarch64-pc-windows-msvc" "windows-arm64" "pdf_oxide.dll"
 fi
 
 # Android (needs NDK)

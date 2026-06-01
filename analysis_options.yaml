@@ -8,3 +8,9 @@ analyzer:
   exclude:
     - 'lib/src/ffi/native_bindings.g.dart'
     - 'vendor/**'
+
+linter:
+  rules:
+    # Requires Dart 3.12+ syntax but SDK constraint is >=3.10.0.
+    # Enable when minimum SDK is bumped to 3.12.
+    use_null_aware_elements: false

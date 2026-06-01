@@ -7,15 +7,17 @@
 /// import 'package:pdf_manipulator/pdf_manipulator.dart';
 ///
 /// final pdf = Pdf();
+///
+/// // Open once, query many times, dispose when done
 /// final doc = await pdf.open(source);
 /// print('${doc.pageCount} pages');
+/// final text = await doc.extract(pages: PdfPages.all());
+/// final hits = await doc.search(query: 'hello', pages: PdfPages.all());
+/// await doc.dispose();
 ///
+/// // One-shot operations
 /// await pdf.merge([sourceA, sourceB], outputSink);
-/// final text = await pdf.extract(source, pages: PdfPages.all());
-///
-/// await for (final page in pdf.render(source, pages: PdfPages.single(0))) {
-///   // process one page at a time
-/// }
+/// await pdf.sign(source, outputSink, credentials: creds);
 ///
 /// await pdf.dispose();
 /// ```
@@ -23,14 +25,15 @@ library;
 
 // Public API
 export 'src/ops/pdf.dart';
+export 'src/ops/pdf_doc.dart';
 export 'src/ops/pdf_editor.dart';
 export 'src/ops/pdf_builder.dart';
-export 'src/ops/pdf_operations.dart';
+export 'src/ops/pdf_standalone.dart';
+export 'src/ops/pdf_sugar.dart';
 
 // Types
 export 'src/types/errors.dart';
 export 'src/types/pdf_config.dart';
-export 'src/types/pdf_doc.dart';
 export 'src/types/pdf_enums.dart';
 export 'src/types/pdf_image.dart';
 export 'src/types/pdf_page_info.dart';

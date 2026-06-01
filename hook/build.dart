@@ -30,7 +30,7 @@ final _log = Logger('pdf_manipulator:build');
 const _assetId = 'src/ffi/native_bindings.g.dart';
 const _crateName = 'pdf_oxide';
 const _releaseRepo = 'https://github.com/whuppi/pdf_manipulator/releases/download';
-const _features = 'icc,legacy-crypto,rendering,signatures';
+const _features = 'icc,legacy-crypto,rendering,signatures,native-bridge';
 
 void main(List<String> args) async {
   await build(args, (BuildInput input, BuildOutputBuilder output) async {
@@ -94,23 +94,19 @@ void main(List<String> args) async {
     output.dependencies.add(input.packageRoot.resolve('hook/build.dart'));
     output.dependencies.add(input.packageRoot.resolve('pubspec.yaml'));
     output.dependencies.add(input.packageRoot.resolve('vendor/pdf_oxide/Cargo.toml'));
-    // List key source files so the hooks_runner invalidates on changes.
-    // Directories aren't tracked reliably — individual files are.
-    for (final path in [
-      'vendor/pdf_oxide/src/ffi.rs',
-      'vendor/pdf_oxide/src/wasm.rs',
-      'vendor/pdf_oxide/src/document.rs',
-      'vendor/pdf_oxide/src/host/mod.rs',
-      'vendor/pdf_oxide/src/host/constants.rs',
-      'vendor/pdf_oxide/src/host/native/mod.rs',
-      'vendor/pdf_oxide/src/host/native/ffi_api.rs',
-      'vendor/pdf_oxide/src/host/native/thread_pool.rs',
-      'vendor/pdf_oxide/src/host/native/callback_reader.rs',
-      'vendor/pdf_oxide/src/host/native/callback_writer.rs',
-      'vendor/pdf_oxide/src/host/native/shared_buffer.rs',
-      'vendor/pdf_oxide/src/host/native/arena.rs',
-    ]) {
-      output.dependencies.add(input.packageRoot.resolve(path));
+
+    // Register every source file Cargo used via its dep-info (.d) file.
+    // Cargo writes this automatically next to each artifact, listing every
+    // .rs, .toml, font, and asset that contributed to the build.
+    // The hooks_runner MD5-hashes each registered file — any content change
+    // triggers a recompile. No hand-written file lists to maintain.
+    // Pattern from native_toolchain_rust (irondash).
+    if (cargoToml.existsSync()) {
+      final targetDir = p.join(p.fromUri(input.outputDirectory), 'cargo_target');
+      final depInfoPath = p.join(
+        targetDir, targetTriple, 'release', 'deps', 'pdf_oxide.d',
+      );
+      _registerCargoDeps(output, depInfoPath, input.packageRoot);
     }
   });
 }
@@ -295,6 +291,76 @@ String _targetTriple(CodeConfig code) {
     (_, _) => throw UnsupportedError(
         'Unsupported: ${code.targetOS} ${code.targetArchitecture}'),
   };
+}
+
+// ── Cargo dep-info parsing ─────────────────────────────────────────────
+//
+// Cargo writes a .d file (Makefile dep-info format) next to each compiled
+// artifact listing every source file that contributed to the build. We
+// parse it and register each file as a build dependency so the hooks_runner
+// invalidates the cache on any content change.
+// Pattern from native_toolchain_rust (irondash).
+
+void _registerCargoDeps(
+  BuildOutputBuilder output,
+  String depInfoPath,
+  Uri packageRoot,
+) {
+  final depFile = File(depInfoPath);
+  if (!depFile.existsSync()) {
+    _log.warning('dep-info not found at $depInfoPath');
+    return;
+  }
+
+  final content = depFile.readAsStringSync();
+  final crateRoot = p.fromUri(packageRoot.resolve('vendor/pdf_oxide/'));
+  final packageDir = p.fromUri(packageRoot);
+  var registered = 0;
+
+  for (final line in content.split('\n')) {
+    final trimmed = line.trim();
+    if (trimmed.isEmpty || trimmed.startsWith('#')) continue;
+
+    final colonIdx = trimmed.indexOf(':');
+    if (colonIdx < 0) continue;
+    final deps = trimmed.substring(colonIdx + 1).trim();
+
+    if (deps.isEmpty) {
+      // Standalone "src/foo.rs:" line — the path itself is the dep.
+      final candidate = trimmed.substring(0, colonIdx).trim();
+      if (candidate.isNotEmpty) {
+        _addDep(output, packageDir, crateRoot, candidate);
+        registered++;
+      }
+      continue;
+    }
+
+    for (final dep in deps.split(' ')) {
+      final d = dep.trim();
+      if (d.isNotEmpty) {
+        _addDep(output, packageDir, crateRoot, d);
+        registered++;
+      }
+    }
+  }
+
+  _log.info('registered $registered source deps from Cargo dep-info');
+}
+
+void _addDep(
+  BuildOutputBuilder output,
+  String packageDir,
+  String crateRoot,
+  String depPath,
+) {
+  final absolute = p.isAbsolute(depPath)
+      ? depPath
+      : p.normalize(p.join(crateRoot, depPath));
+
+  if (!File(absolute).existsSync()) return;
+  if (!p.isWithin(packageDir, absolute)) return;
+
+  output.dependencies.add(Uri.file(absolute));
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────

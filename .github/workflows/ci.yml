@@ -30,6 +30,7 @@ jobs:
               - 'example/**'
               - 'pubspec.yaml'
               - 'analysis_options.yaml'
+              - 'Makefile'
               - '.github/**'
 
   analyze:
@@ -39,12 +40,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: ./.github/workflows/actions/load_config
-        id: config
-      - uses: ./.github/workflows/actions/setup_flutter
-        with:
-          flutter_channel: ${{ steps.config.outputs.flutter_channel }}
-      - run: flutter analyze .
+      - uses: dart-lang/setup-dart@v1
+        with: { sdk: stable }
+      - run: make analyze
 
   test:
     needs: changes
@@ -53,17 +51,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: ./.github/workflows/actions/load_config
-        id: config
-      - uses: ./.github/workflows/actions/setup_flutter
-        with:
-          flutter_channel: ${{ steps.config.outputs.flutter_channel }}
-      - uses: ./.github/workflows/actions/setup_rust
-        with:
-          rust_version: ${{ steps.config.outputs.rust_version }}
-      - run: dart test --timeout=120s
+      - uses: dart-lang/setup-dart@v1
+        with: { sdk: stable }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+      - run: make test-ops-native
 
-  # Required check — always runs, gates on results when code changed.
   gate:
     name: CI Gate
     if: always()
