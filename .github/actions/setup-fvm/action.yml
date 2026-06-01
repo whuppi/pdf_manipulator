@@ -5,5 +5,13 @@ runs:
   using: composite
   steps:
     - uses: dart-lang/setup-dart@v1
+    - name: Add Dart global bin to PATH
+      shell: bash
+      run: |
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          echo "$LOCALAPPDATA/Pub/Cache/bin" >> $GITHUB_PATH
+        else
+          echo "$HOME/.pub-cache/bin" >> $GITHUB_PATH
+        fi
     - shell: bash
       run: dart pub global activate fvm && fvm install
