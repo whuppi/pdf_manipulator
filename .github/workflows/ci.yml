@@ -42,10 +42,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
+      - uses: dart-lang/setup-dart@v1
       - name: Install fvm + project SDK
-        run: |
-          dart pub global activate fvm
-          fvm install
+        run: dart pub global activate fvm && fvm install
       - run: make analyze
 
   test:
@@ -55,10 +54,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
+      - uses: dart-lang/setup-dart@v1
       - name: Install fvm + project SDK
-        run: |
-          dart pub global activate fvm
-          fvm install
+        run: dart pub global activate fvm && fvm install
       - uses: dtolnay/rust-toolchain@stable
       - uses: mozilla-actions/sccache-action@v0.0.10
       - run: |
