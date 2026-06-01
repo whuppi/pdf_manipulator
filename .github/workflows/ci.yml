@@ -1,6 +1,5 @@
-# CI — runs on PRs. Doc-only PRs skip expensive jobs; gate still passes.
-# All build/test logic lives in the Makefile. CI only provisions the environment.
-# Makefile uses `fvm dart` / `fvm flutter` — CI installs fvm + project SDK.
+# CI — every PR. Fast gate: analyze + unit + native ops.
+# Reuses composite actions — same logic as full-test, just fewer platforms.
 name: CI
 
 on:
@@ -42,9 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: dart-lang/setup-dart@v1
-      - name: Install fvm + project SDK
-        run: dart pub global activate fvm && fvm install
+      - uses: ./.github/actions/setup-fvm
       - run: make analyze
 
   test:
@@ -54,15 +51,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: dart-lang/setup-dart@v1
-      - name: Install fvm + project SDK
-        run: dart pub global activate fvm && fvm install
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: mozilla-actions/sccache-action@v0.0.10
-      - run: |
-          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-      - run: make test-ops-native
+      - uses: ./.github/actions/pkg-test-native
 
   gate:
     name: CI Gate

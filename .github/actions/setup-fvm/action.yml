@@ -1,0 +1,9 @@
+name: Setup FVM
+description: Install Dart SDK, FVM, and the project's pinned Flutter/Dart SDK from .fvmrc
+
+runs:
+  using: composite
+  steps:
+    - uses: dart-lang/setup-dart@v1
+    - shell: bash
+      run: dart pub global activate fvm && fvm install

@@ -4,14 +4,8 @@ description: Build pdf_oxide WASM + JS glue via Makefile
 runs:
   using: composite
   steps:
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: ./.github/actions/setup-rust
       with: { targets: wasm32-unknown-unknown }
-    - uses: mozilla-actions/sccache-action@v0.0.10
-    - shell: bash
-      run: |
-        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-        echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV
     - shell: bash
       run: cargo install wasm-bindgen-cli --version 0.2.121
     - shell: bash

@@ -1,6 +1,7 @@
 .PHONY: check analyze build build-native build-wasm \
        test test-unit test-ops test-ops-native test-ops-web test-ops-opfs test-ops-jspi test-ops-atomics \
-       test-example test-example-native test-example-web test-example-web-jspi test-example-web-atomics test-example-web-opfs \
+       test-example test-example-macos test-example-android test-example-ios test-example-device \
+       test-example-web test-example-web-jspi test-example-web-atomics test-example-web-opfs \
        compile compile-natives compile-wasm \
        clean
 
@@ -111,11 +112,26 @@ test-ops-atomics:
 
 # ── Example integration tests ───────────────────────────────────────
 
-test-example: test-example-native test-example-web
+test-example: test-example-macos test-example-web
 
-test-example-native:
+# DEVICE can be overridden: make test-example-device DEVICE=emulator-5554
+DEVICE ?= macos
+
+test-example-macos:
 	@echo "=== Example: integration tests (macOS) ==="
 	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart -d macos
+
+test-example-android:
+	@echo "=== Example: integration tests (Android) ==="
+	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart
+
+test-example-ios:
+	@echo "=== Example: integration tests (iOS) ==="
+	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart
+
+test-example-device:
+	@echo "=== Example: integration tests (device=$(DEVICE)) ==="
+	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart -d $(DEVICE)
 
 # All 3 web modes via flutter drive.
 # SharedArrayBuffer enabled via CHROME_EXECUTABLE wrapper (see tool/chrome_with_sab.sh).

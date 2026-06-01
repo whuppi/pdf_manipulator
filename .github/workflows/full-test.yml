@@ -1,6 +1,10 @@
-# Full 6-platform test — maintainer adds "ready-to-test" label to trigger.
-# Label is auto-removed on new pushes (stale results = wasted compute).
-# All build/test logic lives in the Makefile. CI only provisions the environment.
+# Full test — maintainer adds "ready-to-test" label to trigger.
+# Label auto-removed on new pushes (stale results = wasted compute).
+#
+# Package tests: unit + native ops on macOS/Linux/Windows + web (3 modes)
+# Integration tests: example app on macOS/Android emulator/iOS simulator + web (3 modes)
+#
+# Every job composes reusable actions from .github/actions/.
 name: Full Test
 
 on:
@@ -31,95 +35,90 @@ jobs:
             --remove-label "ready-to-test"
           gh pr comment ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }} \
-            --body "Label \`ready-to-test\` removed — new commits pushed. Re-add the label when ready for full test."
+            --body "Label \`ready-to-test\` removed — new commits pushed. Re-add when ready."
 
-  macos:
+  # ── Package tests (dart test) ──────────────────────────────────────
+
+  pkg-macos:
+    name: "pkg: macOS"
     if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: dart-lang/setup-dart@v1
-      - name: Install fvm + project SDK
-        run: dart pub global activate fvm && fvm install
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: mozilla-actions/sccache-action@v0.0.10
-      - run: echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV && echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-      - run: make test-ops-native
+      - uses: ./.github/actions/pkg-test-native
 
-  linux:
+  pkg-linux:
+    name: "pkg: Linux"
     if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: dart-lang/setup-dart@v1
-      - name: Install fvm + project SDK
-        run: dart pub global activate fvm && fvm install
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: mozilla-actions/sccache-action@v0.0.10
-      - run: echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV && echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-      - run: make test-ops-native
+      - uses: ./.github/actions/pkg-test-native
 
-  windows:
+  pkg-windows:
+    name: "pkg: Windows"
     if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - name: Install fvm + project SDK
-        shell: bash
-        run: dart pub global activate fvm && fvm install
-      - uses: dtolnay/rust-toolchain@stable
-      - run: make test-ops-native
-        shell: bash
+      - uses: ./.github/actions/pkg-test-native
 
-  web:
+  pkg-web:
+    name: "pkg: Web (3 modes)"
     if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: dart-lang/setup-dart@v1
-      - name: Install fvm + project SDK
-        run: dart pub global activate fvm && fvm install
-      - uses: dtolnay/rust-toolchain@stable
-        with: { targets: wasm32-unknown-unknown }
-      - uses: browser-actions/setup-chrome@v1
-      - name: Install wasm-bindgen-cli
-        run: cargo install wasm-bindgen-cli
-      - run: make build-wasm
-      - run: make test-ops-web
+      - uses: ./.github/actions/pkg-test-web
 
-  android:
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with: { submodules: recursive }
-      - uses: dart-lang/setup-dart@v1
-      - name: Install fvm + project SDK
-        run: dart pub global activate fvm && fvm install
-      - uses: dtolnay/rust-toolchain@stable
-        with: { targets: aarch64-linux-android }
-      - run: make test-ops-native
+  # ── Integration tests (flutter test on device) ─────────────────────
 
-  ios:
+  int-macos:
+    name: "integration: macOS"
     if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: dart-lang/setup-dart@v1
-      - name: Install fvm + project SDK
-        run: dart pub global activate fvm && fvm install
-      - uses: dtolnay/rust-toolchain@stable
-      - run: make test-ops-native
+      - uses: ./.github/actions/integration-macos
+
+  int-android:
+    name: "integration: Android"
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: ./.github/actions/integration-android
+
+  int-ios:
+    name: "integration: iOS"
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: ./.github/actions/integration-ios
+
+  int-web:
+    name: "integration: Web (3 modes)"
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: ./.github/actions/integration-web
+
+  # ── Gate ───────────────────────────────────────────────────────────
 
   gate:
     name: Full Test Gate
     if: always()
-    needs: [macos, linux, windows, android, ios, web]
+    needs: [pkg-macos, pkg-linux, pkg-windows, pkg-web, int-macos, int-android, int-ios, int-web]
     runs-on: ubuntu-latest
     steps:
       - name: Evaluate
@@ -128,11 +127,20 @@ jobs:
             echo "Full test not triggered — gate passes"
             exit 0
           fi
-          RESULTS=("${{ needs.macos.result }}" "${{ needs.linux.result }}" "${{ needs.windows.result }}" "${{ needs.android.result }}" "${{ needs.ios.result }}" "${{ needs.web.result }}")
+          RESULTS=(
+            "${{ needs.pkg-macos.result }}"
+            "${{ needs.pkg-linux.result }}"
+            "${{ needs.pkg-windows.result }}"
+            "${{ needs.pkg-web.result }}"
+            "${{ needs.int-macos.result }}"
+            "${{ needs.int-android.result }}"
+            "${{ needs.int-ios.result }}"
+            "${{ needs.int-web.result }}"
+          )
           for r in "${RESULTS[@]}"; do
             if [[ "$r" != "success" ]]; then
-              echo "FAILED: platform test returned '$r'"
+              echo "FAILED: a test returned '$r'"
               exit 1
             fi
           done
-          echo "All 6 platforms passed"
+          echo "All 8 jobs passed"

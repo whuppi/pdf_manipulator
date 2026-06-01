@@ -1,16 +1,10 @@
 name: Compile iOS
-description: Build pdf_oxide for iOS device + simulators (arm64, sim-arm64, sim-x64)
+description: Build pdf_oxide for iOS device + simulators via Makefile
 
 runs:
   using: composite
   steps:
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: ./.github/actions/setup-rust
       with: { targets: "aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios" }
-    - uses: mozilla-actions/sccache-action@v0.0.10
-    - shell: bash
-      run: |
-        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-        echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV
     - shell: bash
       run: make compile-natives

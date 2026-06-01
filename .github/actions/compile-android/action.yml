@@ -1,16 +1,10 @@
 name: Compile Android
-description: Build pdf_oxide for Android arm64, arm, x64, x86 via NDK
+description: Build pdf_oxide for Android arm64, arm, x64, x86 via Makefile
 
 runs:
   using: composite
   steps:
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: ./.github/actions/setup-rust
       with: { targets: "aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android" }
-    - uses: mozilla-actions/sccache-action@v0.0.10
-    - shell: bash
-      run: |
-        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-        echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV
     - shell: bash
       run: make compile-natives
