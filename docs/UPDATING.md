@@ -217,7 +217,7 @@ version at publish time.
 |---|---|---|
 | `ci.yml` | PR to prod/dev | `make analyze` + `make test-unit` + `make test-ops-native` |
 | `pr-checks.yml` | PR to prod/dev | Conventional commit title + promotion chain |
-| `full-test.yml` | `ready-to-test` label | 8 jobs: 4 pkg (macOS/Linux/Windows/web) + 4 integration (macOS/Android/iOS/web) |
+| `full-test.yml` | `ready-to-test` label | 10 jobs: 4 pkg (macOS/Linux/Windows/web) + 6 integration (macOS/Linux/Windows/Android/iOS/web) |
 | `create-release.yml` | Changelog push or `workflow_dispatch` | Tag + GitHub Release (idempotent) |
 | `release.yml` | Tag push or `workflow_dispatch` | `make compile-natives/wasm` + upload + pub.dev (idempotent) |
 

@@ -86,6 +86,24 @@ jobs:
         with: { submodules: recursive }
       - uses: ./.github/actions/integration-macos
 
+  int-linux:
+    name: "integration: Linux"
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: ./.github/actions/integration-linux
+
+  int-windows:
+    name: "integration: Windows"
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: ./.github/actions/integration-windows
+
   int-android:
     name: "integration: Android"
     if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
@@ -118,7 +136,7 @@ jobs:
   gate:
     name: Full Test Gate
     if: always()
-    needs: [pkg-macos, pkg-linux, pkg-windows, pkg-web, int-macos, int-android, int-ios, int-web]
+    needs: [pkg-macos, pkg-linux, pkg-windows, pkg-web, int-macos, int-linux, int-windows, int-android, int-ios, int-web]
     runs-on: ubuntu-latest
     steps:
       - name: Evaluate
@@ -133,6 +151,8 @@ jobs:
             "${{ needs.pkg-windows.result }}"
             "${{ needs.pkg-web.result }}"
             "${{ needs.int-macos.result }}"
+            "${{ needs.int-linux.result }}"
+            "${{ needs.int-windows.result }}"
             "${{ needs.int-android.result }}"
             "${{ needs.int-ios.result }}"
             "${{ needs.int-web.result }}"
@@ -143,4 +163,4 @@ jobs:
               exit 1
             fi
           done
-          echo "All 8 jobs passed"
+          echo "All 10 jobs passed"

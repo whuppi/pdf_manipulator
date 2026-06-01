@@ -1,6 +1,6 @@
 .PHONY: check analyze build build-native build-wasm \
        test test-unit test-ops test-ops-native test-ops-web test-ops-opfs test-ops-jspi test-ops-atomics \
-       test-example test-example-macos test-example-android test-example-ios test-example-device \
+       test-example test-example-macos test-example-linux test-example-windows test-example-android test-example-ios test-example-device \
        test-example-web test-example-web-jspi test-example-web-atomics test-example-web-opfs \
        compile compile-natives compile-wasm \
        clean
@@ -120,6 +120,14 @@ DEVICE ?= macos
 test-example-macos:
 	@echo "=== Example: integration tests (macOS) ==="
 	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart -d macos
+
+test-example-linux:
+	@echo "=== Example: integration tests (Linux) ==="
+	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart -d linux
+
+test-example-windows:
+	@echo "=== Example: integration tests (Windows) ==="
+	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart -d windows
 
 test-example-android:
 	@echo "=== Example: integration tests (Android) ==="
