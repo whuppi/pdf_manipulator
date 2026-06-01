@@ -47,10 +47,12 @@ All PRs target `dev`. That's the only branch contributors touch.
 
 ```
 your fork / feature branch ──PR──► dev
-                                    ↓ CI: make analyze + make test-ops-native
+                                    ↓ CI: make analyze + make test-unit + make test-ops-native
                                     ↓ PR title: Conventional Commits (feat: / fix: / etc.)
                                     ↓ squash-merge when green
-                                    ↓ Full 6-platform test via "ready-to-test" label
+                                    ↓ Full 8-job test via "ready-to-test" label
+                                      (4 pkg: macOS/Linux/Windows/web
+                                       4 integration: macOS/Android/iOS/web)
 ```
 
 CI calls Makefile targets — same commands locally and in CI. No logic lives in the CI YAML.

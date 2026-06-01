@@ -215,9 +215,9 @@ version at publish time.
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
-| `ci.yml` | PR to prod/dev | `make analyze` + `make test-ops-native` |
+| `ci.yml` | PR to prod/dev | `make analyze` + `make test-unit` + `make test-ops-native` |
 | `pr-checks.yml` | PR to prod/dev | Conventional commit title + promotion chain |
-| `full-test.yml` | `ready-to-test` label | 6-platform test via Makefile targets |
+| `full-test.yml` | `ready-to-test` label | 8 jobs: 4 pkg (macOS/Linux/Windows/web) + 4 integration (macOS/Android/iOS/web) |
 | `create-release.yml` | Changelog push or `workflow_dispatch` | Tag + GitHub Release (idempotent) |
 | `release.yml` | Tag push or `workflow_dispatch` | `make compile-natives/wasm` + upload + pub.dev (idempotent) |
 
