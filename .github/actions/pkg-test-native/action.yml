@@ -6,16 +6,7 @@ runs:
   steps:
     - uses: ./.github/actions/setup-fvm
     - uses: ./.github/actions/setup-rust
-    # On Windows, fvm isn't available — use bare dart/flutter via Makefile overrides
-    - if: runner.os == 'Windows'
-      shell: bash
-      run: make test-unit DART=dart FLUTTER=flutter
-    - if: runner.os == 'Windows'
-      shell: bash
-      run: make test-ops-native DART=dart FLUTTER=flutter
-    - if: runner.os != 'Windows'
-      shell: bash
+    - shell: bash
       run: make test-unit
-    - if: runner.os != 'Windows'
-      shell: bash
+    - shell: bash
       run: make test-ops-native

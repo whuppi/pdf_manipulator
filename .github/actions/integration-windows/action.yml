@@ -7,4 +7,4 @@ runs:
     - uses: ./.github/actions/setup-fvm
     - uses: ./.github/actions/setup-rust
     - shell: bash
-      run: make test-example-windows DART=dart FLUTTER=flutter
+      run: make test-example-windows

@@ -1,34 +1,84 @@
-name: Setup FVM
+name: Setup FVM (cross-platform)
 description: >
-  Install the Flutter/Dart SDK pinned in .fvmrc.
-  Linux/macOS: installs fvm, uses fvm dart/fvm flutter.
-  Windows: uses subosito/flutter-action (fvm has no Windows CI support).
-  Both read the same .fvmrc pin — same SDK version guaranteed.
+  Install FVM from GitHub Releases + run fvm install to get the SDK pinned in .fvmrc.
+  Works on Linux, macOS, AND Windows. Downloads the pre-built binary directly —
+  no dart pub global activate (avoids PATH issues on Windows Git Bash).
+
+inputs:
+  fvm-version:
+    description: "FVM version to install (default: latest)"
+    required: false
+    default: "latest"
 
 runs:
   using: composite
   steps:
-    # Linux / macOS — install fvm natively
-    - if: runner.os != 'Windows'
-      uses: dart-lang/setup-dart@v1
-    - if: runner.os != 'Windows'
-      name: Install fvm + project SDK
+    - name: Install FVM + project SDK
       shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        FVM_VERSION_INPUT: ${{ inputs.fvm-version }}
       run: |
-        dart pub global activate fvm
-        echo "$HOME/.pub-cache/bin" >> $GITHUB_PATH
-        "$HOME/.pub-cache/bin/fvm" install
+        set -euo pipefail
 
-    # Windows — fvm doesn't work reliably in CI Git Bash.
-    # Read the channel from .fvmrc and use subosito/flutter-action instead.
-    # Makefile uses DART/FLUTTER vars which CI overrides to bare dart/flutter.
-    - if: runner.os == 'Windows'
-      id: fvmrc
-      shell: bash
-      run: |
-        CHANNEL=$(python3 -c "import json; print(json.load(open('.fvmrc'))['flutter'])")
-        echo "channel=$CHANNEL" >> $GITHUB_OUTPUT
-    - if: runner.os == 'Windows'
-      uses: subosito/flutter-action@v2
-      with:
-        channel: ${{ steps.fvmrc.outputs.channel }}
+        # ── Detect OS + arch ───────────────────────────────────────────
+        case "$(uname -s)" in
+          Linux*)  OS=linux ;;
+          Darwin*) OS=macos ;;
+          MINGW*|MSYS*|CYGWIN*) OS=windows ;;
+          *)       echo "::error::Unsupported OS: $(uname -s)"; exit 1 ;;
+        esac
+
+        case "$(uname -m)" in
+          x86_64)  ARCH=x64 ;;
+          arm64|aarch64) ARCH=arm64 ;;
+          *)       echo "::error::Unsupported arch: $(uname -m)"; exit 1 ;;
+        esac
+
+        echo "Platform: $OS-$ARCH"
+
+        # ── Resolve version ────────────────────────────────────────────
+        if [[ "$FVM_VERSION_INPUT" == "latest" ]]; then
+          FVM_VERSION=$(curl -sS -H "Authorization: bearer $GITHUB_TOKEN" \
+            https://api.github.com/repos/leoafarias/fvm/releases/latest \
+            | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+        else
+          FVM_VERSION="$FVM_VERSION_INPUT"
+        fi
+        echo "FVM version: $FVM_VERSION"
+
+        # ── Download + extract ─────────────────────────────────────────
+        INSTALL_DIR="$RUNNER_TOOL_CACHE/fvm"
+        mkdir -p "$INSTALL_DIR"
+
+        if [[ "$OS" == "windows" ]]; then
+          URL="https://github.com/leoafarias/fvm/releases/download/$FVM_VERSION/fvm-$FVM_VERSION-$OS-$ARCH.zip"
+          curl -sSL "$URL" -o "$RUNNER_TEMP/fvm.zip"
+          unzip -qo "$RUNNER_TEMP/fvm.zip" -d "$INSTALL_DIR"
+          rm -f "$RUNNER_TEMP/fvm.zip"
+        else
+          URL="https://github.com/leoafarias/fvm/releases/download/$FVM_VERSION/fvm-$FVM_VERSION-$OS-$ARCH.tar.gz"
+          curl -sSL "$URL" -o "$RUNNER_TEMP/fvm.tar.gz"
+          tar xzf "$RUNNER_TEMP/fvm.tar.gz" -C "$INSTALL_DIR"
+          rm -f "$RUNNER_TEMP/fvm.tar.gz"
+        fi
+
+        # The archive extracts to fvm/ subdirectory containing the binary
+        FVM_BIN="$INSTALL_DIR/fvm"
+        export PATH="$FVM_BIN:$PATH"
+        echo "$FVM_BIN" >> $GITHUB_PATH
+
+        # ── Verify ─────────────────────────────────────────────────────
+        fvm --version
+
+        # ── Install project SDK from .fvmrc ────────────────────────────
+        echo -e "yes\nyes\n" | fvm install
+
+        # Suppress analytics
+        fvm flutter config --no-analytics 2>/dev/null || true
+        fvm flutter config --no-cli-animations 2>/dev/null || true
+
+        echo "::group::SDK versions"
+        fvm dart --version
+        fvm flutter --version
+        echo "::endgroup::"
