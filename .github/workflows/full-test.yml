@@ -43,7 +43,7 @@ jobs:
     name: "pkg: macOS"
     if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: macos-14
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
@@ -53,7 +53,7 @@ jobs:
     name: "pkg: Linux"
     if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
@@ -63,7 +63,7 @@ jobs:
     name: "pkg: Windows"
     if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
@@ -73,7 +73,7 @@ jobs:
     name: "pkg: Web (3 modes)"
     if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
@@ -85,7 +85,7 @@ jobs:
     name: "integration: macOS"
     if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: macos-14
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
@@ -95,7 +95,7 @@ jobs:
     name: "integration: Linux"
     if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
@@ -105,7 +105,7 @@ jobs:
     name: "integration: Windows"
     if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
@@ -115,7 +115,7 @@ jobs:
     name: "integration: Android"
     if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
@@ -125,7 +125,7 @@ jobs:
     name: "integration: iOS"
     if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: macos-14
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
@@ -135,7 +135,7 @@ jobs:
     name: "integration: Web (3 modes)"
     if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }

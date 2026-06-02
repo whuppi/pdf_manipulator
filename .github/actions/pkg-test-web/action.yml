@@ -5,7 +5,15 @@ runs:
   using: composite
   steps:
     - uses: ./.github/actions/setup-web-testing
-    - shell: bash
+    - name: "Pub get"
+      shell: bash
       run: fvm dart pub get --no-example
-    - shell: bash
-      run: make test-ops-web
+    - name: "Web JSPI"
+      shell: bash
+      run: make test-ops-jspi
+    - name: "Web Atomics"
+      shell: bash
+      run: make test-ops-atomics
+    - name: "Web OPFS"
+      shell: bash
+      run: make test-ops-opfs
