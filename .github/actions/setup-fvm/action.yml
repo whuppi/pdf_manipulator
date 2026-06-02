@@ -8,9 +8,9 @@ runs:
     - name: Install fvm + project SDK
       shell: bash
       run: |
-        # dart-lang/setup-dart normalizes PUB_CACHE to $HOME/.pub-cache on all OSes
-        PUB_BIN="$HOME/.pub-cache/bin"
-        export PATH="$PUB_BIN:$PATH"
-        echo "$PUB_BIN" >> $GITHUB_PATH
         dart pub global activate fvm
-        fvm install
+        # GITHUB_PATH only affects the NEXT workflow step, not subsequent steps
+        # within this composite action. Use full path for fvm in this step,
+        # then add to GITHUB_PATH for all later steps.
+        echo "$HOME/.pub-cache/bin" >> $GITHUB_PATH
+        "$HOME/.pub-cache/bin/fvm" install
