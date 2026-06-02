@@ -174,6 +174,16 @@ void registerDocTests(Pdf Function() createPdf) {
 
     // ── Render ────────────────────────────────────────────────────
 
+    // Warmup: first render call pays a one-time init cost for the
+    // rasterizer. On slow Windows CI VMs this exceeds any reasonable
+    // per-test timeout. Running it once untimed in setUp lets the
+    // actual tests measure render performance, not init.
+    test('render warmup', () async {
+      final doc = await createPdf().open(src(minimalPdf));
+      await for (final _ in doc.render(pages: const PdfPages.single(0))) {}
+      await doc.dispose();
+    }, timeout: Timeout(Duration(seconds: 30)));
+
     test('render single page yields one image with dimensions', () async {
       final doc = await createPdf().open(src(minimalPdf));
       final pages = <RenderedPage>[];
@@ -185,7 +195,7 @@ void registerDocTests(Pdf Function() createPdf) {
       expect(pages[0].height, greaterThan(0));
       expect(pages[0].data.length, greaterThan(0));
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 5)));
+    }, timeout: Timeout(Duration(seconds: 2)));
 
     test('render all pages of 2-page PDF yields 2 results', () async {
       final pdf = createPdf();
@@ -197,7 +207,7 @@ void registerDocTests(Pdf Function() createPdf) {
       }
       expect(pages, hasLength(2));
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 5)));
+    }, timeout: Timeout(Duration(seconds: 2)));
 
     // ── Extract images ────────────────────────────────────────────
 
