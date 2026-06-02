@@ -211,23 +211,7 @@ test-example-web: test-example-web-jspi test-example-web-atomics test-example-we
 CHROME_SAB := $(CURDIR)/tool/chrome_with_sab.sh
 
 define run_example_web
-	@echo "=== Example: web $(1) ==="
-	@chromedriver --port=4444 &>/dev/null &
-	@sleep 2
-	@cd example && \
-	CHROME_EXECUTABLE=$(CHROME_SAB) $(FLUTTER) drive \
-		--driver=test_driver/integration_test.dart \
-		--target=integration_test/pdf_smoke_test.dart \
-		--dart-define=PDF_IO_MODE=$(2) \
-		-d chrome 2>&1 | tee /tmp/_pdf_web_test.log || true ; \
-	pkill -f 'flutter_tools_chrome_device' 2>/dev/null || true ; \
-	pkill chromedriver 2>/dev/null || true ; \
-	rm -f example/flutter_*.log ; \
-	if grep -q 'All tests passed' /tmp/_pdf_web_test.log; then \
-		echo "=== Example web $(1): All 49 tests passed ===" ; \
-	else \
-		echo "=== Example web $(1): FAILED ===" ; exit 1 ; \
-	fi
+	@./tool/run_web_test.sh $(2) $(CHROME_SAB) $(FLUTTER)
 endef
 
 test-example-web-jspi:
