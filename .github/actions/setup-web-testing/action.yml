@@ -18,9 +18,9 @@ runs:
         # Resolve latest stable version + download URLs from Chrome for Testing API
         API="https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json"
         JSON=$(curl -sS "$API")
-        VERSION=$(echo "$JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['channels']['Stable']['version'])")
-        CHROME_URL=$(echo "$JSON" | python3 -c "import sys,json; [print(p['url']) for p in json.load(sys.stdin)['channels']['Stable']['downloads']['chrome'] if p['platform']=='linux64']")
-        DRIVER_URL=$(echo "$JSON" | python3 -c "import sys,json; [print(p['url']) for p in json.load(sys.stdin)['channels']['Stable']['downloads']['chromedriver'] if p['platform']=='linux64']")
+        VERSION=$(echo "$JSON" | python3 -c "import sys,json; d=json.load(sys.stdin)['channels']['Stable']; print(d['version'])")
+        CHROME_URL=$(echo "$JSON" | python3 -c "import sys,json; d=json.load(sys.stdin)['channels']['Stable']['downloads']['chrome']; print(next(p['url'] for p in d if p['platform']=='linux64'))")
+        DRIVER_URL=$(echo "$JSON" | python3 -c "import sys,json; d=json.load(sys.stdin)['channels']['Stable']['downloads']['chromedriver']; print(next(p['url'] for p in d if p['platform']=='linux64'))")
         echo "Chrome for Testing: $VERSION"
 
         INSTALL_DIR="/opt/chrome-for-testing"
