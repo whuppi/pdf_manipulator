@@ -1,7 +1,8 @@
-name: Setup Web Testing
+name: Setup Web Testing (Linux only)
 description: >
   Install Chrome + ChromeDriver (matched versions), FVM, Rust (wasm target),
-  wasm-bindgen, binaryen, xvfb. Build WASM. Everything needed for web tests.
+  wasm-bindgen, binaryen, xvfb. Build WASM. Linux CI only — web tests always
+  run on ubuntu-latest.
 
 outputs:
   chrome-path:
@@ -26,5 +27,13 @@ runs:
       run: make build-wasm
     - shell: bash
       run: |
-        echo "Chrome: $(${{ steps.chrome.outputs.chrome-path }} --version)"
+        # Remove system Chrome so chromedriver only finds the action's matched version.
+        # flutter drive's WebDriverService creates its own chromedriver session that
+        # ignores CHROME_EXECUTABLE and uses whatever chrome is on PATH / at the default
+        # location. Without this, chromedriver 149 finds system Chrome 148 → mismatch.
+        sudo rm -f /usr/bin/google-chrome-stable /usr/bin/google-chrome /opt/google/chrome/chrome 2>/dev/null || true
+        # Symlink the action's Chrome to where chromedriver expects it
+        sudo ln -sf "${{ steps.chrome.outputs.chrome-path }}" /usr/bin/google-chrome-stable
+        sudo ln -sf "${{ steps.chrome.outputs.chrome-path }}" /usr/bin/google-chrome
+        echo "Chrome: $(google-chrome-stable --version)"
         echo "ChromeDriver: $(chromedriver --version)"
