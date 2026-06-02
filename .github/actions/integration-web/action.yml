@@ -8,8 +8,10 @@ runs:
     - uses: ./.github/actions/setup-rust
       with: { targets: wasm32-unknown-unknown }
     - uses: browser-actions/setup-chrome@v1
+      id: chrome
+    - uses: browser-actions/setup-chromedriver@v2
       with:
-        install-chromedriver: true
+        chrome-version: ${{ steps.chrome.outputs.chrome-version }}
     - shell: bash
       run: |
         cargo install wasm-bindgen-cli --version 0.2.121
