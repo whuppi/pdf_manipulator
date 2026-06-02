@@ -202,8 +202,6 @@ test-example-device:
 
 # All 3 web modes via flutter drive.
 # SharedArrayBuffer enabled via CHROME_EXECUTABLE wrapper (see tool/chrome_with_sab.sh).
-test-example-web: test-example-web-jspi test-example-web-atomics test-example-web-opfs
-
 # Shared helper: run flutter drive with a given mode.
 # CHROME_EXECUTABLE wrapper adds --enable-features=SharedArrayBuffer to the
 # app Chrome. This works around flutter drive's WebDriverService not forwarding
@@ -214,22 +212,30 @@ define run_example_web
 	@./tool/run_web_test.sh $(2) $(CHROME_SAB) $(FLUTTER)
 endef
 
-test-example-web-jspi:
-	@echo "=== Example: clean + setup web assets (real developer flow) ==="
+define setup_example_web
+	@echo "=== Example: clean + setup web assets ==="
 	rm -rf example/web/pdf_manipulator
 	cd example && $(FLUTTER) pub get && $(DART) run pdf_manipulator:setup --force
+endef
+
+# All 3 web modes: setup once, run all three sequentially.
+test-example-web:
+	$(call setup_example_web)
+	$(call run_example_web,JSPI,jspi)
+	$(call run_example_web,Atomics,atomics)
+	$(call run_example_web,OPFS,opfs)
+
+# Individual modes: each does its own setup (for standalone use).
+test-example-web-jspi:
+	$(call setup_example_web)
 	$(call run_example_web,JSPI,jspi)
 
 test-example-web-atomics:
-	@echo "=== Example: clean + setup web assets (real developer flow) ==="
-	rm -rf example/web/pdf_manipulator
-	cd example && $(FLUTTER) pub get && $(DART) run pdf_manipulator:setup --force
+	$(call setup_example_web)
 	$(call run_example_web,Atomics,atomics)
 
 test-example-web-opfs:
-	@echo "=== Example: clean + setup web assets (real developer flow) ==="
-	rm -rf example/web/pdf_manipulator
-	cd example && $(FLUTTER) pub get && $(DART) run pdf_manipulator:setup --force
+	$(call setup_example_web)
 	$(call run_example_web,OPFS,opfs)
 
 # ── Clean ───────────────────────────────────────────────────────────

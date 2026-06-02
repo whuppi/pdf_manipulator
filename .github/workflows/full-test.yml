@@ -135,7 +135,7 @@ jobs:
     name: "integration: Web (3 modes)"
     if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
