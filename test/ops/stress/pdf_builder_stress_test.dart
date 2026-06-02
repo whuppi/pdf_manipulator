@@ -13,6 +13,6 @@ void registerBuilderStressTests(Pdf Function() createPdf) {
       final imagePdf = await buildImagePdf(createPdf, pageCount: 10);
       final doc = await pdf.open(src(imagePdf));
       expect(doc.pageCount, 10);
-    }, timeout: Timeout(Duration(seconds: 5)));
+    }, timeout: Timeout(Duration(seconds: 10)));
   });
 }

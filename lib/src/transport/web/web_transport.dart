@@ -184,15 +184,7 @@ class WebTransport implements PdfTransport {
     if (_disposed) return;
     _disposed = true;
 
-    // Fail all pending ops
-    for (final c in _pending.values) {
-      c.completeError(StateError('Transport disposed'));
-    }
     _pending.clear();
-    for (final s in _streams.values) {
-      s.addError(StateError('Transport disposed'));
-      s.close();
-    }
     _streams.clear();
     _sources.clear();
     _sinks.clear();

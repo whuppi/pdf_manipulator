@@ -76,8 +76,8 @@ git push origin --delete pdf_manipulator/OLD-patches
 
 ```sh
 cd ../..
-./tool/build_wasm.sh
-rm -rf .dart_tool/hooks_runner
+make build-wasm
+make clean
 make check
 ```
 
@@ -108,9 +108,9 @@ cd vendor/pdf_oxide
 #   compliance/converter.rs, converters/office/mod.rs,
 #   writer/pdf_writer.rs, writer/document_builder.rs
 
-cargo test
+cargo test --lib
 cd ../..
-./tool/build_wasm.sh
+make build-wasm
 make check
 ```
 
@@ -118,8 +118,8 @@ make check
 boundaries. Code in `host/` doesn't need markers (the module itself
 is the marker).
 
-**Verify zero warnings from our code before committing** — see
-[S7 — Verify our-code warnings](#s7--verify-our-code-warnings).
+**Verify zero warnings:** `make analyze` checks Rust warnings in our
+patched lines automatically (see [S7](#s7--verify-our-code-warnings)).
 
 **Commit AND push the submodule, or CI will fail:**
 
@@ -144,7 +144,7 @@ git commit -m "build: update submodule — <description>"
 | 4 | `protocol/codec.dart` | Request builder + response decoder |
 | 5 | `ops/pdf_doc.dart` | Public method |
 | 6 | Tests | Core + stress |
-| 7 | Build | `cargo test` → `./tool/build_wasm.sh` → `make check` |
+| 7 | Build | `cargo test --lib` → `make build-wasm` → `make check` |
 
 wire_sync_test catches parity drift — missing step 2 = test failure.
 
@@ -168,7 +168,7 @@ Edit mutations are sub-dispatched inside `editorMutate`:
 ## S5 — Rebuild WASM
 
 ```sh
-./tool/build_wasm.sh
+make build-wasm
 ls -lh web_assets/pdf_oxide*
 git add web_assets/
 ```
@@ -254,64 +254,28 @@ version at publish time.
 
 ## S7 — Verify our-code warnings
 
-Both vendored crates have `#![warn(missing_docs)]` at crate root. Upstream
-code may have its own warnings we don't touch. Our patches must not add new
-ones. The diff-based approach below separates our warnings from upstream's.
+`make analyze` includes a Rust warning check for both vendored crates:
 
-### Why the naive grep fails
+1. Runs `cargo check` with all features (same set as CI release builds)
+2. Uses `--message-format=json` to get warnings even from cached builds
+3. Derives the upstream base tag from the branch name automatically
+   (`pdf_manipulator/0.3.55-patches` → `v0.3.55`). No hardcoded tag —
+   renaming the branch in S1 step 4 is all that's needed.
+4. Diffs against the base tag to find lines we changed
+5. Fails if any warning falls inside our changed lines
 
-Cargo's default output splits each warning across two lines:
-```
-warning: missing documentation for a struct
-  --> src/host/dispatch.rs:24:1
-```
-`grep "src/host/" | grep "warning"` finds nothing — no single line has both.
-
-### The reliable check
+Checks both `vendor/pdf_oxide` and `vendor/office_oxide`.
 
 ```sh
-cd vendor/pdf_oxide
-
-# 1. Force recompile (cached builds suppress warnings)
-touch src/lib.rs
-
-# 2. Build, pair each warning with its location
-cargo build --lib --features native-bridge 2>&1 \
-  | grep -B1 "^\s*-->" \
-  | grep -E "(^warning:|-->)" \
-  | paste - - \
-  > /tmp/all_warnings.txt
-
-# 3. Get the list of files our patch touches
-git diff upstream/main...HEAD --name-only | sort > /tmp/our_files.txt
-
-# 4. Filter: warnings in OUR files only
-while IFS= read -r line; do
-  file=$(echo "$line" | sed 's/.*--> //' | cut -d: -f1)
-  grep -q "^${file}$" /tmp/our_files.txt && echo "$line"
-done < /tmp/all_warnings.txt
+make analyze
 ```
 
-If that prints anything, those are **our warnings — fix them**.
+If the Rust check fails, it prints the exact file:line and warning.
+Fix them before committing.
 
-### Same check for office_oxide
-
-```sh
-cd vendor/office_oxide
-touch src/lib.rs
-cargo build --lib 2>&1 \
-  | grep -B1 "^\s*-->" \
-  | grep -E "(^warning:|-->)" \
-  | paste - - \
-  > /tmp/oo_warnings.txt
-
-git diff upstream/main...HEAD --name-only | sort > /tmp/oo_files.txt
-
-while IFS= read -r line; do
-  file=$(echo "$line" | sed 's/.*--> //' | cut -d: -f1)
-  grep -q "^${file}$" /tmp/oo_files.txt && echo "$line"
-done < /tmp/oo_warnings.txt
-```
+The feature set (`RUST_FEATURES` in the Makefile) must match
+`compile_natives.sh`'s `FEATURES` — if they diverge, CI catches
+warnings that `make analyze` misses.
 
 ### Common warning types and fixes
 
@@ -322,14 +286,8 @@ done < /tmp/oo_warnings.txt
 | `unused variable: x` | Param unused behind a `#[cfg]` gate | Prefix with underscore: `_x` |
 | `variable does not need to be mutable` | `let mut x` but `x` never mutated in this cfg | Restructure into per-cfg blocks, or remove `mut` |
 | `type X is more private than item Y` | `pub` fn takes `pub(crate)` args | Narrow the fn to `pub(crate)`, or widen the arg type |
-| `function X is never used` | Patch replaced callers with a new variant | Delete the dead function, or add `#[allow(dead_code)]` with a comment explaining it's kept for upstream compat |
+| `function X is never used` | Patch replaced callers with a new variant | Prefix with underscore: `_fn_name` |
 | `unused Result that must be used` | `.write_all(…)` without `?` | Add `?` to propagate the error |
-
-### When to run this
-
-**Every time before committing a patch** to either vendored crate. The rule:
-upstream warnings are upstream's problem; warnings in files our diff touches
-are ours. Zero is the only acceptable count for ours.
 
 ---
 
@@ -338,7 +296,7 @@ are ours. Zero is the only acceptable count for ours.
 | Symptom | Check |
 |---|---|
 | Build hook fails on consumer machine | Binary missing for platform — check GitHub Release assets |
-| WASM test fails | Rebuild: `./tool/build_wasm.sh` |
+| WASM test fails | Rebuild: `make build-wasm` |
 | Native passes, web fails | bridge_api.rs WASM path missing the op |
 | wire_sync_test fails | EngineOp without matching bridge_api.rs arm |
 | "Handle not found" | Handle disposed or never opened |

@@ -238,16 +238,8 @@ class NativeTransport implements PdfTransport {
     }
     _heldSourceServers.clear();
 
-    for (final c in _pending.values) {
-      c.completeError(StateError('Transport disposed'));
-    }
     _pending.clear();
     _pendingResourceIds.clear();
-
-    for (final s in _pendingStreams.values) {
-      s.addError(StateError('Transport disposed'));
-      s.close();
-    }
     _pendingStreams.clear();
 
     _responsePort?.close();

@@ -1,4 +1,6 @@
-// Instance architecture — cascade, isolation, parallel, reuse.
+// Instance architecture — cascade, isolation, parallel, reuse, abrupt kill.
+
+import 'dart:async';
 
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
@@ -189,5 +191,72 @@ void registerInstanceTests(Pdf Function() createPdf) {
       expect(await ed.pageCount, 1);
       await pdf.dispose();
     }, timeout: Timeout(Duration(seconds: 3)));
+
+    // ── Abrupt dispose (kill mid-flight) ──
+
+    test('dispose mid-merge produces no unhandled errors', () async {
+      final errors = <Object>[];
+      await runZonedGuarded(() async {
+        final pdf = createPdf();
+        final sink = TestSink();
+        unawaited(pdf.merge(
+          [src(minimalPdf), src(minimalPdf), src(minimalPdf)],
+          sink,
+        ));
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        await pdf.dispose();
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }, (e, st) {
+        errors.add(e);
+        // ignore: avoid_print
+        print('LEAKED ERROR: $e\n$st');
+      });
+      expect(errors, isEmpty, reason: 'dispose mid-flight should not leak errors');
+    }, timeout: Timeout(Duration(seconds: 5)));
+
+    test('dispose mid-open produces no unhandled errors', () async {
+      final errors = <Object>[];
+      await runZonedGuarded(() async {
+        final pdf = createPdf();
+        unawaited(pdf.open(src(minimalPdf)));
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        await pdf.dispose();
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }, (e, _) {
+        errors.add(e);
+      });
+      expect(errors, isEmpty, reason: 'dispose mid-flight should not leak errors');
+    }, timeout: Timeout(Duration(seconds: 5)));
+
+    test('dispose mid-edit produces no unhandled errors', () async {
+      final errors = <Object>[];
+      await runZonedGuarded(() async {
+        final pdf = createPdf();
+        unawaited(pdf.edit(src(minimalPdf)));
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        await pdf.dispose();
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }, (e, _) {
+        errors.add(e);
+      });
+      expect(errors, isEmpty, reason: 'dispose mid-flight should not leak errors');
+    }, timeout: Timeout(Duration(seconds: 5)));
+
+    test('fresh instance works after abrupt dispose of another', () async {
+      final pdf1 = createPdf();
+      unawaited(pdf1.merge(
+        [src(minimalPdf), src(minimalPdf)],
+        TestSink(),
+      ));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      await pdf1.dispose();
+
+      // A completely new instance should work fine
+      final pdf2 = createPdf();
+      final doc = await pdf2.open(src(minimalPdf));
+      expect(doc.pageCount, 1);
+      await doc.dispose();
+      await pdf2.dispose();
+    }, timeout: Timeout(Duration(seconds: 5)));
   });
 }

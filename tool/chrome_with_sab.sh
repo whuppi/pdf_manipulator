@@ -10,5 +10,25 @@
 #
 # Setting CHROME_EXECUTABLE to this script makes ChromeDevice launch Chrome
 # with SAB enabled, so Atomics mode works in flutter drive integration tests.
-exec /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
-  --enable-features=SharedArrayBuffer "$@"
+
+# Find Chrome binary — macOS, Linux, Windows (Git Bash)
+if [[ -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]]; then
+  CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+elif command -v google-chrome-stable &>/dev/null; then
+  CHROME="google-chrome-stable"
+elif command -v google-chrome &>/dev/null; then
+  CHROME="google-chrome"
+elif command -v chromium-browser &>/dev/null; then
+  CHROME="chromium-browser"
+elif command -v chromium &>/dev/null; then
+  CHROME="chromium"
+elif [[ -x "/c/Program Files/Google/Chrome/Application/chrome.exe" ]]; then
+  CHROME="/c/Program Files/Google/Chrome/Application/chrome.exe"
+elif [[ -x "$LOCALAPPDATA/Google/Chrome/Application/chrome.exe" ]]; then
+  CHROME="$LOCALAPPDATA/Google/Chrome/Application/chrome.exe"
+else
+  echo "chrome_with_sab.sh: Chrome not found" >&2
+  exit 1
+fi
+
+exec "$CHROME" --enable-features=SharedArrayBuffer "$@"

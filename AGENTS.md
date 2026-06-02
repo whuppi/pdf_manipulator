@@ -45,22 +45,21 @@ If you're working on this tool standalone (cloned outside the workspace), the in
 Run these after every code change. A failing test or analyzer error means the task is not done — don't suppress with `// ignore:`, `# noqa`, or `--no-verify`. Fix the underlying issue.
 
 ```bash
-# Consumer setup (zero Rust)
-dart pub get
-dart test
-
-# Contributor setup (needs Rust — https://rustup.rs, FVM — https://fvm.app)
+# Setup (needs Rust — https://rustup.rs, FVM — https://fvm.app)
 git clone --recursive https://github.com/whuppi/pdf_manipulator
-dart pub get
-make check                  # analyze + native (192) + web (3 modes × 192) + example
+cd pdf_manipulator
+fvm install                     # downloads SDK pinned in .fvmrc
+make check                      # analyze + native + web (3 modes) + example
+
+# Without FVM (override SDK commands)
+make check DART=dart FLUTTER=flutter
 
 # Individual targets
-make test-ops-native        # 192 native tests
-make test-ops-web           # 192 × 3 web modes (JSPI, Atomics, OPFS)
-make test-example           # 49 example integration tests (macOS + 3 web modes)
-
-# Rebuild WASM (after Rust changes)
-./tool/build_wasm.sh
+make analyze                    # Dart + Rust warnings (all features)
+make test-ops-native            # 192 native tests
+make test-ops-web               # 192 × 3 web modes (JSPI, Atomics, OPFS)
+make test-example               # example integration tests (macOS + 3 web modes)
+make build-wasm                 # rebuild WASM after Rust changes
 ```
 
 ---
