@@ -1,13 +1,7 @@
 name: Setup Web Testing (Linux only)
 description: >
-  Install Chrome + ChromeDriver (matched versions), FVM, Rust (wasm target),
-  wasm-bindgen, binaryen, xvfb. Build WASM. Linux CI only — web tests always
-  run on ubuntu-latest.
-
-outputs:
-  chrome-path:
-    description: Path to the installed Chrome binary
-    value: ${{ steps.chrome.outputs.chrome-path }}
+  Install Chrome + ChromeDriver (matched), FVM, Rust (wasm target),
+  wasm-bindgen, binaryen, xvfb. Build WASM. Linux CI only.
 
 runs:
   using: composite
@@ -15,30 +9,60 @@ runs:
     - uses: ./.github/actions/setup-fvm
     - uses: ./.github/actions/setup-rust
       with: { targets: wasm32-unknown-unknown }
-    - uses: browser-actions/setup-chrome@v2
-      id: chrome
-      with:
-        install-chromedriver: true
+
+    # ── Chrome + ChromeDriver (matched versions, from Chrome for Testing) ──
+    - shell: bash
+      run: |
+        set -euo pipefail
+
+        # Resolve latest stable version from Chrome for Testing endpoints
+        CfT_URL="https://googlechromelabs.github.io/chrome-for-testing"
+        VERSION=$(curl -sS "$CfT_URL/LATEST_RELEASE_STABLE")
+        echo "Chrome for Testing version: $VERSION"
+
+        PLATFORM="linux64"
+        INSTALL_DIR="/opt/chrome-for-testing"
+        sudo mkdir -p "$INSTALL_DIR"
+
+        # Download and extract Chrome
+        echo "=== Installing Chrome $VERSION ==="
+        curl -sSL "$CfT_URL/$VERSION/$PLATFORM/chrome-$PLATFORM.zip" -o /tmp/chrome.zip
+        sudo unzip -qo /tmp/chrome.zip -d "$INSTALL_DIR"
+        rm /tmp/chrome.zip
+        CHROME_BIN="$INSTALL_DIR/chrome-$PLATFORM/chrome"
+        sudo chmod +x "$CHROME_BIN"
+
+        # Download and extract ChromeDriver (same version = guaranteed match)
+        echo "=== Installing ChromeDriver $VERSION ==="
+        curl -sSL "$CfT_URL/$VERSION/$PLATFORM/chromedriver-$PLATFORM.zip" -o /tmp/chromedriver.zip
+        sudo unzip -qo /tmp/chromedriver.zip -d "$INSTALL_DIR"
+        rm /tmp/chromedriver.zip
+        CHROMEDRIVER_BIN="$INSTALL_DIR/chromedriver-$PLATFORM/chromedriver"
+        sudo chmod +x "$CHROMEDRIVER_BIN"
+
+        # Replace system Chrome so ALL consumers find our version:
+        # - dart test -p chrome (finds google-chrome-stable on PATH)
+        # - flutter drive (uses CHROME_EXECUTABLE → our wrapper → CHROME_PATH)
+        # - chromedriver (finds chrome at standard path)
+        sudo rm -f /usr/bin/google-chrome-stable /usr/bin/google-chrome 2>/dev/null || true
+        sudo ln -sf "$CHROME_BIN" /usr/bin/google-chrome-stable
+        sudo ln -sf "$CHROME_BIN" /usr/bin/google-chrome
+        sudo ln -sf "$CHROMEDRIVER_BIN" /usr/local/bin/chromedriver
+
+        echo "Chrome: $(google-chrome-stable --version)"
+        echo "ChromeDriver: $(chromedriver --version)"
+
+        # Set env vars for subsequent steps:
+        # CHROME_PATH — our wrapper reads this to find the right binary
+        # CHROME_EXECUTABLE — flutter drive + dart test use this
+        WRAPPER="$(cd "$GITHUB_WORKSPACE" && pwd)/tool/chrome_with_sab.sh"
+        echo "CHROME_PATH=$CHROME_BIN" >> $GITHUB_ENV
+        echo "CHROME_EXECUTABLE=$WRAPPER" >> $GITHUB_ENV
+
+    # ── WASM toolchain + build ──
     - shell: bash
       run: |
         cargo install wasm-bindgen-cli --version 0.2.121
         sudo apt-get update && sudo apt-get install -y binaryen xvfb
     - shell: bash
       run: make build-wasm
-    - shell: bash
-      env:
-        CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
-      run: |
-        # Replace system Chrome with the action's matched version everywhere.
-        # Chrome for Testing (from setup-chrome@v2) needs --no-sandbox on CI.
-        # Setting CHROME_EXECUTABLE makes both `dart test -p chrome` and
-        # `flutter drive` use our wrapper which adds --no-sandbox + SAB.
-        sudo rm -f /usr/bin/google-chrome-stable /usr/bin/google-chrome /opt/google/chrome/chrome 2>/dev/null || true
-        sudo ln -sf "$CHROME_PATH" /usr/bin/google-chrome-stable
-        sudo ln -sf "$CHROME_PATH" /usr/bin/google-chrome
-        # Set CHROME_EXECUTABLE globally for all subsequent steps
-        WRAPPER="$(cd "$GITHUB_WORKSPACE" && pwd)/tool/chrome_with_sab.sh"
-        echo "CHROME_EXECUTABLE=$WRAPPER" >> $GITHUB_ENV
-        echo "CHROME_PATH=$CHROME_PATH" >> $GITHUB_ENV
-        echo "Chrome: $(google-chrome-stable --version)"
-        echo "ChromeDriver: $(chromedriver --version)"
