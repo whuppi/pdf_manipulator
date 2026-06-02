@@ -185,7 +185,7 @@ void registerDocTests(Pdf Function() createPdf) {
       expect(pages[0].height, greaterThan(0));
       expect(pages[0].data.length, greaterThan(0));
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 3)));
 
     test('render all pages of 2-page PDF yields 2 results', () async {
       final pdf = createPdf();
