@@ -33,52 +33,96 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ── Validate tag before doing anything ─────────────────────────────
+  validate:
+    name: Validate tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - name: Resolve + validate tag
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+
+          # Must match vX.Y.Z or vX.Y.Z-pre.N
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "::error::Invalid tag format: '$TAG' (expected vX.Y.Z or vX.Y.Z-pre.N)"
+            exit 1
+          fi
+
+          # Tag must exist as a git ref
+          if ! gh api "repos/${{ github.repository }}/git/ref/tags/$TAG" --silent 2>/dev/null; then
+            echo "::error::Tag '$TAG' does not exist"
+            exit 1
+          fi
+
+          # GitHub Release must exist for this tag
+          if ! gh release view "$TAG" --repo "${{ github.repository }}" --json tagName --jq '.tagName' >/dev/null 2>&1; then
+            echo "::error::No GitHub Release found for '$TAG'"
+            exit 1
+          fi
+
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Validated: $TAG → $VERSION"
+
   # ── Compile all targets ────────────────────────────────────────────
   compile-macos:
+    needs: validate
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-        with: { ref: '${{ github.event.inputs.tag || github.ref_name }}', submodules: recursive }
+        with: { ref: '${{ needs.validate.outputs.tag }}', submodules: recursive }
       - uses: ./.github/actions/compile-macos
       - uses: actions/upload-artifact@v4
         with: { name: bin-macos, path: out/ }
   compile-ios:
+    needs: validate
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-        with: { ref: '${{ github.event.inputs.tag || github.ref_name }}', submodules: recursive }
+        with: { ref: '${{ needs.validate.outputs.tag }}', submodules: recursive }
       - uses: ./.github/actions/compile-ios
       - uses: actions/upload-artifact@v4
         with: { name: bin-ios, path: out/ }
   compile-android:
+    needs: validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { ref: '${{ github.event.inputs.tag || github.ref_name }}', submodules: recursive }
+        with: { ref: '${{ needs.validate.outputs.tag }}', submodules: recursive }
       - uses: ./.github/actions/compile-android
       - uses: actions/upload-artifact@v4
         with: { name: bin-android, path: out/ }
   compile-linux:
+    needs: validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { ref: '${{ github.event.inputs.tag || github.ref_name }}', submodules: recursive }
+        with: { ref: '${{ needs.validate.outputs.tag }}', submodules: recursive }
       - uses: ./.github/actions/compile-linux
       - uses: actions/upload-artifact@v4
         with: { name: bin-linux, path: out/ }
   compile-wasm:
+    needs: validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { ref: '${{ github.event.inputs.tag || github.ref_name }}', submodules: recursive }
+        with: { ref: '${{ needs.validate.outputs.tag }}', submodules: recursive }
       - uses: ./.github/actions/compile-wasm
       - uses: actions/upload-artifact@v4
         with: { name: bin-wasm, path: out/ }
   compile-windows:
+    needs: validate
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with: { ref: '${{ github.event.inputs.tag || github.ref_name }}', submodules: recursive }
+        with: { ref: '${{ needs.validate.outputs.tag }}', submodules: recursive }
       - uses: ./.github/actions/compile-windows
       - uses: actions/upload-artifact@v4
         with: { name: bin-windows, path: out/ }
@@ -86,7 +130,7 @@ jobs:
   # ── Upload binaries to the GitHub Release ──────────────────────────
   upload-assets:
     name: Upload Release Assets
-    needs: [compile-macos, compile-ios, compile-android, compile-linux, compile-windows, compile-wasm]
+    needs: [validate, compile-macos, compile-ios, compile-android, compile-linux, compile-windows, compile-wasm]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -113,7 +157,7 @@ jobs:
           ls -lh release/
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          tag_name: ${{ needs.validate.outputs.tag }}
           files: release/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -121,19 +165,18 @@ jobs:
   # ── Publish to pub.dev ─────────────────────────────────────────────
   publish:
     name: Publish to pub.dev
-    needs: upload-assets
+    needs: [validate, upload-assets]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { ref: '${{ github.event.inputs.tag || github.ref_name }}', submodules: recursive }
+        with: { ref: '${{ needs.validate.outputs.tag }}', submodules: recursive }
       - uses: dart-lang/setup-dart@v1
       - name: Install fvm + project SDK
         run: dart pub global activate fvm && fvm install
 
       - name: Stamp version from tag
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          VERSION="${TAG#v}"
+          VERSION="${{ needs.validate.outputs.version }}"
           echo "Publishing version: $VERSION"
 
           # Stamp pubspec.yaml
