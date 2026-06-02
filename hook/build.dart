@@ -30,7 +30,21 @@ final _log = Logger('pdf_manipulator:build');
 const _assetId = 'src/ffi/native_bindings.g.dart';
 const _crateName = 'pdf_oxide';
 const _releaseRepo = 'https://github.com/whuppi/pdf_manipulator/releases/download';
-const _features = 'icc,legacy-crypto,rendering,signatures,native-bridge';
+const _featuresFallback = 'icc,legacy-crypto,rendering,signatures,native-bridge';
+
+/// Read features from compile_rust.sh (single source of truth).
+/// Falls back to hardcoded value for pub.dev consumers who don't have the script.
+String _resolveFeatures(Uri packageRoot) {
+  final script = File.fromUri(packageRoot.resolve('tool/compile_rust.sh'));
+  if (script.existsSync()) {
+    final result = Process.runSync('bash', [script.path, '--features', 'native']);
+    if (result.exitCode == 0) {
+      final features = (result.stdout as String).trim();
+      if (features.isNotEmpty) return features;
+    }
+  }
+  return _featuresFallback;
+}
 
 void main(List<String> args) async {
   await build(args, (BuildInput input, BuildOutputBuilder output) async {
@@ -167,7 +181,7 @@ Future<void> _compileFromSource(
       '--release',
       '--target', targetTriple,
       '--target-dir', targetDir,
-      '--features', _features,
+      '--features', _resolveFeatures(input.packageRoot),
     ],
     environment: {...Platform.environment, ...env},
   );
