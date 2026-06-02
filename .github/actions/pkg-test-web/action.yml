@@ -7,7 +7,7 @@ runs:
     - uses: ./.github/actions/setup-fvm
     - uses: ./.github/actions/setup-rust
       with: { targets: wasm32-unknown-unknown }
-    - uses: browser-actions/setup-chrome@v1
+    - uses: browser-actions/setup-chrome@v2
     - shell: bash
       run: |
         cargo install wasm-bindgen-cli --version 0.2.121
