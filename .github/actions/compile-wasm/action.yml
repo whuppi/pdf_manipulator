@@ -11,7 +11,7 @@ runs:
         cargo install wasm-bindgen-cli --version 0.2.121
         sudo apt-get update && sudo apt-get install -y binaryen
     - shell: bash
-      run: make compile-wasm
+      run: bash tool/compile_rust.sh wasm
     - shell: bash
       run: |
         mkdir -p out/wasm

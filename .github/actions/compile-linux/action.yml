@@ -1,12 +1,12 @@
 name: Compile Linux
-description: Build pdf_oxide for Linux x64 + arm64 via Makefile
+description: Build pdf_oxide for Linux x64 + arm64 (cross-compile)
 
 runs:
   using: composite
   steps:
     - shell: bash
-      run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu mold
+      run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
     - uses: ./.github/actions/setup-rust
       with: { targets: "x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu" }
     - shell: bash
-      run: make compile-natives
+      run: bash tool/compile_rust.sh linux

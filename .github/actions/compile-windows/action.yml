@@ -1,5 +1,5 @@
 name: Compile Windows
-description: Build pdf_oxide for Windows x64 + arm64 via Makefile
+description: Build pdf_oxide for Windows x64 + arm64
 
 runs:
   using: composite
@@ -7,4 +7,4 @@ runs:
     - uses: ./.github/actions/setup-rust
       with: { targets: "x86_64-pc-windows-msvc,aarch64-pc-windows-msvc" }
     - shell: bash
-      run: make compile-natives
+      run: bash tool/compile_rust.sh windows

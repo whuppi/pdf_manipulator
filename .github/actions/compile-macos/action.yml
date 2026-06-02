@@ -1,5 +1,5 @@
 name: Compile macOS
-description: Build pdf_oxide for macOS arm64 + x64 via Makefile
+description: Build pdf_oxide for macOS arm64 + x64
 
 runs:
   using: composite
@@ -7,4 +7,4 @@ runs:
     - uses: ./.github/actions/setup-rust
       with: { targets: "aarch64-apple-darwin,x86_64-apple-darwin" }
     - shell: bash
-      run: make compile-natives
+      run: bash tool/compile_rust.sh macos

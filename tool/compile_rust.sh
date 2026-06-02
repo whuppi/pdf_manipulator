@@ -1,28 +1,34 @@
 #!/bin/bash
-# Compile pdf_oxide for any target: native platforms, WASM, or both.
+# Compile pdf_oxide for any target: specific platform, WASM, or auto-detect.
 #
 # Usage:
-#   ./tool/compile_rust.sh native       Compile all native targets for this host
-#   ./tool/compile_rust.sh wasm         Compile WASM + wasm-bindgen + wasm-opt
-#   ./tool/compile_rust.sh all          Both
-#   ./tool/compile_rust.sh --features   Print feature flags (used by Makefile)
+#   ./tool/compile_rust.sh macos        macOS arm64 + x64
+#   ./tool/compile_rust.sh ios          iOS device + simulators
+#   ./tool/compile_rust.sh linux        Linux x64 + arm64 (cross-compile)
+#   ./tool/compile_rust.sh android      Android arm64 + arm + x64 + x86
+#   ./tool/compile_rust.sh windows      Windows x64 (+ arm64 on MSVC)
+#   ./tool/compile_rust.sh wasm         WASM + wasm-bindgen + wasm-opt
+#   ./tool/compile_rust.sh native       Auto-detect what this host can build
+#   ./tool/compile_rust.sh all          native + wasm
+#   ./tool/compile_rust.sh --features   Print feature flags (used by Makefile + build.dart)
 #
-# Run from package root. Auto-detects what native targets the host can build.
+# CI calls the specific platform (macos/ios/linux/android/windows/wasm).
+# Local dev calls native (auto-detect) or all.
 #
 # Prerequisites:
-#   - Rust toolchain with targets installed
-#   - WASM: rustup target add wasm32-unknown-unknown
+#   - Rust toolchain with targets installed (rustup target add ...)
 #   - WASM: cargo install wasm-bindgen-cli; brew/apt install binaryen
 #   - Android: ANDROID_NDK_HOME set
+#   - Linux arm64 cross: apt install gcc-aarch64-linux-gnu
 
 set -euo pipefail
 
 # ── Feature flags (single source of truth) ──────────────────────────
+# build.dart reads these via: ./tool/compile_rust.sh --features native
 
 NATIVE_FEATURES="icc,legacy-crypto,rendering,signatures,native-bridge"
 WASM_FEATURES="wasm,rendering"
 
-# Query mode — Makefile calls this to get features without building.
 if [[ "${1:-}" == "--features" ]]; then
   case "${2:-all}" in
     native) echo "$NATIVE_FEATURES" ;;
@@ -44,13 +50,13 @@ if [ ! -f "$MANIFEST" ]; then
   exit 1
 fi
 
-MODE="${1:-all}"
+MODE="${1:-native}"
 
 # ═════════════════════════════════════════════════════════════════════
-# NATIVE
+# NATIVE — shared helpers
 # ═════════════════════════════════════════════════════════════════════
 
-compile_native() {
+compile_one() {
   local target=$1 outdir=$2 libname=$3
   local out="${COMPILE_OUTPUT_DIR:-$PKG_ROOT/build_output}"
 
@@ -63,7 +69,7 @@ compile_native() {
   echo "  → $out/$outdir/$libname ($(du -h "$out/$outdir/$libname" | cut -f1))"
 }
 
-compile_android() {
+compile_android_target() {
   local target=$1 outdir=$2 clang_prefix=$3
   local ndk="${ANDROID_NDK_HOME:-$HOME/Library/Android/sdk/ndk/28.0.12433566}"
   local toolchain="$ndk/toolchains/llvm/prebuilt"
@@ -80,46 +86,11 @@ compile_android() {
 
   local linker_var="CARGO_TARGET_$(echo "$target" | tr '[:lower:]-' '[:upper:]_')_LINKER"
   export "$linker_var=$host_dir/bin/${clang_prefix}21-clang"
-  compile_native "$target" "$outdir" "libpdf_oxide.so"
+  compile_one "$target" "$outdir" "libpdf_oxide.so"
   unset "$linker_var"
 }
 
-do_native() {
-  # macOS + iOS
-  if [[ "$(uname)" == "Darwin" ]]; then
-    compile_native "aarch64-apple-darwin" "macos-arm64" "libpdf_oxide.dylib"
-    compile_native "x86_64-apple-darwin"  "macos-x64"   "libpdf_oxide.dylib"
-    compile_native "aarch64-apple-ios"     "ios-arm64"     "libpdf_oxide.a"
-    compile_native "aarch64-apple-ios-sim" "ios-sim-arm64" "libpdf_oxide.a"
-    compile_native "x86_64-apple-ios"      "ios-sim-x64"   "libpdf_oxide.a"
-    local out="${COMPILE_OUTPUT_DIR:-$PKG_ROOT/build_output}"
-    strip -S "$out/ios-arm64/libpdf_oxide.a" 2>/dev/null || true
-    strip -S "$out/ios-sim-arm64/libpdf_oxide.a" 2>/dev/null || true
-    strip -S "$out/ios-sim-x64/libpdf_oxide.a" 2>/dev/null || true
-  fi
-
-  # Linux
-  if [[ "$(uname)" == "Linux" ]]; then
-    compile_native "x86_64-unknown-linux-gnu"  "linux-x64"  "libpdf_oxide.so"
-    compile_native "aarch64-unknown-linux-gnu" "linux-arm64" "libpdf_oxide.so"
-  fi
-
-  # Windows
-  if command -v x86_64-w64-mingw32-gcc &>/dev/null; then
-    compile_native "x86_64-pc-windows-gnu" "windows-x64" "pdf_oxide.dll"
-  elif [[ "$(uname -s)" == MINGW* ]] || [[ "$(uname -s)" == MSYS* ]]; then
-    compile_native "x86_64-pc-windows-msvc" "windows-x64" "pdf_oxide.dll"
-    compile_native "aarch64-pc-windows-msvc" "windows-arm64" "pdf_oxide.dll"
-  fi
-
-  # Android
-  if [ -d "${ANDROID_NDK_HOME:-$HOME/Library/Android/sdk/ndk}" ]; then
-    compile_android "aarch64-linux-android"   "android-arm64" "aarch64-linux-android"
-    compile_android "armv7-linux-androideabi" "android-arm"   "armv7a-linux-androideabi"
-    compile_android "x86_64-linux-android"    "android-x64"   "x86_64-linux-android"
-    compile_android "i686-linux-android"      "android-x86"   "i686-linux-android"
-  fi
-
+native_summary() {
   echo ""
   local out="${COMPILE_OUTPUT_DIR:-$PKG_ROOT/build_output}"
   echo "=== Native summary ==="
@@ -127,11 +98,96 @@ do_native() {
 }
 
 # ═════════════════════════════════════════════════════════════════════
+# PLATFORM COMMANDS — CI calls these directly
+# ═════════════════════════════════════════════════════════════════════
+
+do_macos() {
+  compile_one "aarch64-apple-darwin" "macos-arm64" "libpdf_oxide.dylib"
+  compile_one "x86_64-apple-darwin"  "macos-x64"   "libpdf_oxide.dylib"
+  native_summary
+}
+
+do_ios() {
+  compile_one "aarch64-apple-ios"     "ios-arm64"     "libpdf_oxide.a"
+  compile_one "aarch64-apple-ios-sim" "ios-sim-arm64" "libpdf_oxide.a"
+  compile_one "x86_64-apple-ios"      "ios-sim-x64"   "libpdf_oxide.a"
+
+  local out="${COMPILE_OUTPUT_DIR:-$PKG_ROOT/build_output}"
+  strip -S "$out/ios-arm64/libpdf_oxide.a" 2>/dev/null || true
+  strip -S "$out/ios-sim-arm64/libpdf_oxide.a" 2>/dev/null || true
+  strip -S "$out/ios-sim-x64/libpdf_oxide.a" 2>/dev/null || true
+  native_summary
+}
+
+do_linux() {
+  compile_one "x86_64-unknown-linux-gnu" "linux-x64" "libpdf_oxide.so"
+
+  # aarch64 cross-compile needs the cross-linker
+  export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER="aarch64-linux-gnu-gcc"
+  compile_one "aarch64-unknown-linux-gnu" "linux-arm64" "libpdf_oxide.so"
+  unset CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER
+
+  native_summary
+}
+
+do_android() {
+  compile_android_target "aarch64-linux-android"   "android-arm64" "aarch64-linux-android"
+  compile_android_target "armv7-linux-androideabi"  "android-arm"   "armv7a-linux-androideabi"
+  compile_android_target "x86_64-linux-android"     "android-x64"   "x86_64-linux-android"
+  compile_android_target "i686-linux-android"        "android-x86"   "i686-linux-android"
+  native_summary
+}
+
+do_windows() {
+  if command -v x86_64-w64-mingw32-gcc &>/dev/null; then
+    compile_one "x86_64-pc-windows-gnu" "windows-x64" "pdf_oxide.dll"
+  elif [[ "$(uname -s)" == MINGW* ]] || [[ "$(uname -s)" == MSYS* ]]; then
+    compile_one "x86_64-pc-windows-msvc" "windows-x64" "pdf_oxide.dll"
+    compile_one "aarch64-pc-windows-msvc" "windows-arm64" "pdf_oxide.dll"
+  else
+    echo "⚠ Windows cross-compile not available on this host"
+    return
+  fi
+  native_summary
+}
+
+# ═════════════════════════════════════════════════════════════════════
+# AUTO-DETECT — local dev convenience (builds what this host supports)
+# ═════════════════════════════════════════════════════════════════════
+
+do_native() {
+  if [[ "$(uname)" == "Darwin" ]]; then
+    do_macos
+    do_ios
+  fi
+
+  if [[ "$(uname)" == "Linux" ]]; then
+    # Only x64 in auto-detect (arm64 cross needs gcc-aarch64 installed)
+    compile_one "x86_64-unknown-linux-gnu" "linux-x64" "libpdf_oxide.so"
+    if command -v aarch64-linux-gnu-gcc &>/dev/null; then
+      export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER="aarch64-linux-gnu-gcc"
+      compile_one "aarch64-unknown-linux-gnu" "linux-arm64" "libpdf_oxide.so"
+      unset CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER
+    fi
+  fi
+
+  if command -v x86_64-w64-mingw32-gcc &>/dev/null; then
+    compile_one "x86_64-pc-windows-gnu" "windows-x64" "pdf_oxide.dll"
+  elif [[ "$(uname -s)" == MINGW* ]] || [[ "$(uname -s)" == MSYS* ]]; then
+    do_windows
+  fi
+
+  if [ -d "${ANDROID_NDK_HOME:-$HOME/Library/Android/sdk/ndk}" ]; then
+    do_android
+  fi
+
+  native_summary
+}
+
+# ═════════════════════════════════════════════════════════════════════
 # WASM
 # ═════════════════════════════════════════════════════════════════════
 
-# wasm-opt feature flags (Rust's wasm32 target enables these by default;
-# wasm-opt must be told about them or it rejects the binary).
 WASM_OPT_FLAGS=(
   --enable-bulk-memory
   --enable-multivalue
@@ -181,8 +237,13 @@ do_wasm() {
 # ═════════════════════════════════════════════════════════════════════
 
 case "$MODE" in
-  native) do_native ;;
-  wasm)   do_wasm ;;
-  all)    do_native; do_wasm ;;
-  *)      echo "Usage: $0 {native|wasm|all|--features [native|wasm]}"; exit 1 ;;
+  macos)    do_macos ;;
+  ios)      do_ios ;;
+  linux)    do_linux ;;
+  android)  do_android ;;
+  windows)  do_windows ;;
+  wasm)     do_wasm ;;
+  native)   do_native ;;
+  all)      do_native; do_wasm ;;
+  *)        echo "Usage: $0 {macos|ios|linux|android|windows|wasm|native|all|--features [native|wasm]}"; exit 1 ;;
 esac

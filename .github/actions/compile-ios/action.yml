@@ -1,5 +1,5 @@
 name: Compile iOS
-description: Build pdf_oxide for iOS device + simulators via Makefile
+description: Build pdf_oxide for iOS device + simulators
 
 runs:
   using: composite
@@ -7,4 +7,4 @@ runs:
     - uses: ./.github/actions/setup-rust
       with: { targets: "aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios" }
     - shell: bash
-      run: make compile-natives
+      run: bash tool/compile_rust.sh ios
