@@ -31,4 +31,10 @@ else
   exit 1
 fi
 
-exec "$CHROME" --enable-features=SharedArrayBuffer "$@"
+# CI Linux runners need --no-sandbox (Chrome refuses to start as root/in containers without it)
+CI_FLAGS=""
+if [[ "$(uname)" == "Linux" ]] && [[ "${CI:-}" == "true" || "$(id -u)" == "0" ]]; then
+  CI_FLAGS="--no-sandbox --disable-gpu"
+fi
+
+exec "$CHROME" --enable-features=SharedArrayBuffer $CI_FLAGS "$@"
