@@ -29,7 +29,7 @@ env:
   COMPILE_OUTPUT_DIR: out
 
 concurrency:
-  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  group: release-${{ github.event.github.event.inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -38,7 +38,7 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-        with: { ref: ${{ inputs.tag || github.ref_name }}, submodules: recursive }
+        with: { ref: ${{ github.event.inputs.tag || github.ref_name }}, submodules: recursive }
       - uses: ./.github/actions/compile-macos
       - uses: actions/upload-artifact@v4
         with: { name: bin-macos, path: out/ }
@@ -46,7 +46,7 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-        with: { ref: '${{ inputs.tag || github.ref_name }}', submodules: recursive }
+        with: { ref: '${{ github.event.inputs.tag || github.ref_name }}', submodules: recursive }
       - uses: ./.github/actions/compile-ios
       - uses: actions/upload-artifact@v4
         with: { name: bin-ios, path: out/ }
@@ -54,7 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { ref: '${{ inputs.tag || github.ref_name }}', submodules: recursive }
+        with: { ref: '${{ github.event.inputs.tag || github.ref_name }}', submodules: recursive }
       - uses: ./.github/actions/compile-android
       - uses: actions/upload-artifact@v4
         with: { name: bin-android, path: out/ }
@@ -62,7 +62,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { ref: '${{ inputs.tag || github.ref_name }}', submodules: recursive }
+        with: { ref: '${{ github.event.inputs.tag || github.ref_name }}', submodules: recursive }
       - uses: ./.github/actions/compile-linux
       - uses: actions/upload-artifact@v4
         with: { name: bin-linux, path: out/ }
@@ -70,7 +70,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { ref: '${{ inputs.tag || github.ref_name }}', submodules: recursive }
+        with: { ref: '${{ github.event.inputs.tag || github.ref_name }}', submodules: recursive }
       - uses: ./.github/actions/compile-wasm
       - uses: actions/upload-artifact@v4
         with: { name: bin-wasm, path: out/ }
@@ -78,7 +78,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with: { ref: '${{ inputs.tag || github.ref_name }}', submodules: recursive }
+        with: { ref: '${{ github.event.inputs.tag || github.ref_name }}', submodules: recursive }
       - uses: ./.github/actions/compile-windows
       - uses: actions/upload-artifact@v4
         with: { name: bin-windows, path: out/ }
@@ -113,7 +113,7 @@ jobs:
           ls -lh release/
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: release/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -125,14 +125,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { ref: '${{ inputs.tag || github.ref_name }}', submodules: recursive }
+        with: { ref: '${{ github.event.inputs.tag || github.ref_name }}', submodules: recursive }
       - uses: dart-lang/setup-dart@v1
       - name: Install fvm + project SDK
         run: dart pub global activate fvm && fvm install
 
       - name: Stamp version from tag
         run: |
-          TAG="${{ inputs.tag || github.ref_name }}"
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
           VERSION="${TAG#v}"
           echo "Publishing version: $VERSION"
 
