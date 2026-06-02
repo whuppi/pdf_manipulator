@@ -15,35 +15,32 @@ runs:
       run: |
         set -euo pipefail
 
-        # Resolve latest stable version from Chrome for Testing endpoints
-        CfT_URL="https://googlechromelabs.github.io/chrome-for-testing"
-        VERSION=$(curl -sS "$CfT_URL/LATEST_RELEASE_STABLE")
-        echo "Chrome for Testing version: $VERSION"
+        # Resolve latest stable version + download URLs from Chrome for Testing API
+        API="https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json"
+        JSON=$(curl -sS "$API")
+        VERSION=$(echo "$JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['channels']['Stable']['version'])")
+        CHROME_URL=$(echo "$JSON" | python3 -c "import sys,json; [print(p['url']) for p in json.load(sys.stdin)['channels']['Stable']['downloads']['chrome'] if p['platform']=='linux64']")
+        DRIVER_URL=$(echo "$JSON" | python3 -c "import sys,json; [print(p['url']) for p in json.load(sys.stdin)['channels']['Stable']['downloads']['chromedriver'] if p['platform']=='linux64']")
+        echo "Chrome for Testing: $VERSION"
 
-        PLATFORM="linux64"
         INSTALL_DIR="/opt/chrome-for-testing"
         sudo mkdir -p "$INSTALL_DIR"
 
-        # Download and extract Chrome
-        echo "=== Installing Chrome $VERSION ==="
-        curl -sSL "$CfT_URL/$VERSION/$PLATFORM/chrome-$PLATFORM.zip" -o /tmp/chrome.zip
+        echo "=== Installing Chrome ==="
+        curl -sSL "$CHROME_URL" -o /tmp/chrome.zip
         sudo unzip -qo /tmp/chrome.zip -d "$INSTALL_DIR"
         rm /tmp/chrome.zip
-        CHROME_BIN="$INSTALL_DIR/chrome-$PLATFORM/chrome"
+        CHROME_BIN="$INSTALL_DIR/chrome-linux64/chrome"
         sudo chmod +x "$CHROME_BIN"
 
-        # Download and extract ChromeDriver (same version = guaranteed match)
-        echo "=== Installing ChromeDriver $VERSION ==="
-        curl -sSL "$CfT_URL/$VERSION/$PLATFORM/chromedriver-$PLATFORM.zip" -o /tmp/chromedriver.zip
+        echo "=== Installing ChromeDriver ==="
+        curl -sSL "$DRIVER_URL" -o /tmp/chromedriver.zip
         sudo unzip -qo /tmp/chromedriver.zip -d "$INSTALL_DIR"
         rm /tmp/chromedriver.zip
-        CHROMEDRIVER_BIN="$INSTALL_DIR/chromedriver-$PLATFORM/chromedriver"
+        CHROMEDRIVER_BIN="$INSTALL_DIR/chromedriver-linux64/chromedriver"
         sudo chmod +x "$CHROMEDRIVER_BIN"
 
-        # Replace system Chrome so ALL consumers find our version:
-        # - dart test -p chrome (finds google-chrome-stable on PATH)
-        # - flutter drive (uses CHROME_EXECUTABLE → our wrapper → CHROME_PATH)
-        # - chromedriver (finds chrome at standard path)
+        # Symlink so all consumers find our matched version
         sudo rm -f /usr/bin/google-chrome-stable /usr/bin/google-chrome 2>/dev/null || true
         sudo ln -sf "$CHROME_BIN" /usr/bin/google-chrome-stable
         sudo ln -sf "$CHROME_BIN" /usr/bin/google-chrome
@@ -52,9 +49,6 @@ runs:
         echo "Chrome: $(google-chrome-stable --version)"
         echo "ChromeDriver: $(chromedriver --version)"
 
-        # Set env vars for subsequent steps:
-        # CHROME_PATH — our wrapper reads this to find the right binary
-        # CHROME_EXECUTABLE — flutter drive + dart test use this
         WRAPPER="$(cd "$GITHUB_WORKSPACE" && pwd)/tool/chrome_with_sab.sh"
         echo "CHROME_PATH=$CHROME_BIN" >> $GITHUB_ENV
         echo "CHROME_EXECUTABLE=$WRAPPER" >> $GITHUB_ENV
