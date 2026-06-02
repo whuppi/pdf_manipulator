@@ -184,6 +184,12 @@ requirements.** Admin bypass exists as a GitHub safety valve — not a
 shortcut. Every change goes through a PR with CI checks. No exceptions,
 no "just this one quick fix," no cherry-picks to protected branches.
 
+**Before claiming any change is done, verify it will reach `dev`:**
+
+1. Is the current branch part of an open PR? → push to that branch.
+2. No open PR? Is the change already on `origin/dev`? → done.
+3. Neither? → create a new PR. No exceptions.
+
 ### Changelog
 
 | File | Purpose |
@@ -259,11 +265,51 @@ releases are skipped, pub.dev rejects duplicate versions.
 | Failure | Fix |
 |---|---|
 | `create-release.yml` failed | Rerun via Actions → Create Release → Run workflow |
-| `publish.yml` compile failed | Fix code, push fix via PR, rerun `publish.yml` with the tag |
-| pub.dev publish failed | Rerun `publish.yml` (pub.dev rejects duplicates, safe to retry) |
+| pub.dev publish failed (but binaries OK) | Rerun `publish.yml` with the tag (pub.dev rejects duplicates, safe to retry) |
 | Tag exists but no Release | Run `create-release.yml` via workflow_dispatch |
 | Release exists but no binaries | Rerun `publish.yml` via workflow_dispatch with tag |
 | `publish.yml` shows "workflow file issue" | Check for `inputs.tag` in top-level expressions — use `github.event.inputs.tag` instead |
+
+### Compile failed — rebuild a release with fixed code
+
+`publish.yml` checks out the **tag's code** for compilation. The compile
+actions (`uses: ./.github/actions/compile-*`) also resolve from the
+tag's checkout. Rerunning `publish.yml` with the same tag reuses the
+same broken code — the fix on `dev` is invisible to the tag.
+
+**Two options:**
+
+**Option A — Bump version (new prerelease).** Code changed, so the
+version changes. Clean and correct.
+
+```
+1. Fix the compile issue, merge to dev via PR
+2. Add ## X.Y.Z-dev.N+1 at top of CHANGELOG.pre.md
+3. Merge to dev
+4. (automatic) create-release.yml → new tag → publish.yml → compile
+```
+
+**Option B — Rebuild same version (delete + recreate tag).** Use when
+the code fix doesn't change the package's behavior (CI/workflow fixes,
+compile script fixes). Same version, fresh tag on the right commit.
+
+```
+1. Fix the compile issue, merge to dev via PR
+2. Delete the broken release + tag:
+     gh release delete vX.Y.Z --repo whuppi/pdf_manipulator --yes
+     gh api repos/whuppi/pdf_manipulator/git/refs/tags/vX.Y.Z -X DELETE
+3. Retrigger:
+     gh workflow run create-release.yml --repo whuppi/pdf_manipulator -f branch=dev
+4. create-release.yml sees the version has no release → creates fresh
+   tag at dev HEAD → publish.yml fires → compiles with the fix
+```
+
+**Pick A when:** the fix changes runtime behavior, adds features, or
+consumers should know the binary differs.
+
+**Pick B when:** the fix is purely CI/build infrastructure. The package
+source is identical — only the build tooling changed. No reason to
+burn a version number.
 
 ### Git hooks
 
