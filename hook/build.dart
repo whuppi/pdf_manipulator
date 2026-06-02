@@ -18,16 +18,19 @@
 import 'dart:io';
 
 import 'package:code_assets/code_assets.dart';
+import 'package:crypto/crypto.dart';
 import 'package:hooks/hooks.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
+
+import 'asset_hashes.dart';
 
 final _log = Logger('pdf_manipulator:build');
 
 const _assetId = 'src/ffi/native_bindings.g.dart';
 const _crateName = 'pdf_oxide';
 const _releaseRepo = 'https://github.com/whuppi/pdf_manipulator/releases/download';
-const _features = 'icc,legacy-crypto,rendering,signatures';
+const _features = 'icc,legacy-crypto,rendering,signatures,native-bridge';
 
 void main(List<String> args) async {
   await build(args, (BuildInput input, BuildOutputBuilder output) async {
@@ -40,16 +43,41 @@ void main(List<String> args) async {
         .libraryFileName(_crateName, linkMode);
     final outFile = File.fromUri(input.outputDirectory.resolve(libFileName));
 
-    if (!outFile.existsSync()) {
-      final cargoToml = File.fromUri(
-        input.packageRoot.resolve('vendor/pdf_oxide/Cargo.toml'),
+    final cargoToml = File.fromUri(
+      input.packageRoot.resolve('vendor/pdf_oxide/Cargo.toml'),
+    );
+
+    if (cargoToml.existsSync()) {
+      await _compileFromSource(input, targetTriple, linkMode, outFile);
+    } else {
+      // Consumer path: download prebuilt binary, cached in shared output dir.
+      // Pattern from sqlite3.dart — cache survives across builds of the same
+      // version. SHA256 verification catches corruption or stale cache.
+      final platform = _platformKey(codeConfig);
+      final assetKey = '$platform-$libFileName';
+      final cachedFile = File.fromUri(
+        input.outputDirectoryShared.resolve(libFileName),
       );
 
-      if (cargoToml.existsSync()) {
-        await _compileFromSource(input, targetTriple, linkMode, outFile);
+      if (cachedFile.existsSync()) {
+        final expectedHash = assetHashesSha256[assetKey];
+        if (expectedHash != null) {
+          final actualHash = sha256.convert(await cachedFile.readAsBytes()).toString();
+          if (actualHash == expectedHash) {
+            _log.info('using cached ${cachedFile.path} (hash verified)');
+          } else {
+            _log.info('cached file hash mismatch — re-downloading');
+            await _downloadPrebuilt(input, codeConfig, libFileName, cachedFile);
+          }
+        } else {
+          _log.info('using cached ${cachedFile.path} (no hash to verify)');
+        }
       } else {
-        await _downloadPrebuilt(input, codeConfig, libFileName, outFile);
+        await _downloadPrebuilt(input, codeConfig, libFileName, cachedFile);
       }
+
+      outFile.parent.createSync(recursive: true);
+      cachedFile.copySync(outFile.path);
     }
 
     output.assets.code.add(
@@ -65,6 +93,21 @@ void main(List<String> args) async {
     );
     output.dependencies.add(input.packageRoot.resolve('hook/build.dart'));
     output.dependencies.add(input.packageRoot.resolve('pubspec.yaml'));
+    output.dependencies.add(input.packageRoot.resolve('vendor/pdf_oxide/Cargo.toml'));
+
+    // Register every source file Cargo used via its dep-info (.d) file.
+    // Cargo writes this automatically next to each artifact, listing every
+    // .rs, .toml, font, and asset that contributed to the build.
+    // The hooks_runner MD5-hashes each registered file — any content change
+    // triggers a recompile. No hand-written file lists to maintain.
+    // Pattern from native_toolchain_rust (irondash).
+    if (cargoToml.existsSync()) {
+      final targetDir = p.join(p.fromUri(input.outputDirectory), 'cargo_target');
+      final depInfoPath = p.join(
+        targetDir, targetTriple, 'release', 'deps', 'pdf_oxide.d',
+      );
+      _registerCargoDeps(output, depInfoPath, input.packageRoot);
+    }
   });
 }
 
@@ -103,8 +146,12 @@ Future<void> _compileFromSource(
     }
   }
 
-  // macOS: strip Xcode injections from PATH that break host builds
-  if (Platform.isMacOS && codeConfig.targetOS != OS.macOS) {
+  // macOS: strip Xcode Developer injections from PATH unconditionally.
+  // Flutter's build system injects Xcode paths that break Cargo's
+  // build-script host compilation (proc-macro2, quote, libc).
+  // Same fix as native_toolchain_rust:
+  // https://github.com/irondash/native_toolchain_rust/issues/17
+  if (Platform.isMacOS) {
     env['PATH'] = Platform.environment['PATH']!
         .split(':')
         .where((e) => !e.contains('Contents/Developer/'))
@@ -244,6 +291,76 @@ String _targetTriple(CodeConfig code) {
     (_, _) => throw UnsupportedError(
         'Unsupported: ${code.targetOS} ${code.targetArchitecture}'),
   };
+}
+
+// ── Cargo dep-info parsing ─────────────────────────────────────────────
+//
+// Cargo writes a .d file (Makefile dep-info format) next to each compiled
+// artifact listing every source file that contributed to the build. We
+// parse it and register each file as a build dependency so the hooks_runner
+// invalidates the cache on any content change.
+// Pattern from native_toolchain_rust (irondash).
+
+void _registerCargoDeps(
+  BuildOutputBuilder output,
+  String depInfoPath,
+  Uri packageRoot,
+) {
+  final depFile = File(depInfoPath);
+  if (!depFile.existsSync()) {
+    _log.warning('dep-info not found at $depInfoPath');
+    return;
+  }
+
+  final content = depFile.readAsStringSync();
+  final crateRoot = p.fromUri(packageRoot.resolve('vendor/pdf_oxide/'));
+  final packageDir = p.fromUri(packageRoot);
+  var registered = 0;
+
+  for (final line in content.split('\n')) {
+    final trimmed = line.trim();
+    if (trimmed.isEmpty || trimmed.startsWith('#')) continue;
+
+    final colonIdx = trimmed.indexOf(':');
+    if (colonIdx < 0) continue;
+    final deps = trimmed.substring(colonIdx + 1).trim();
+
+    if (deps.isEmpty) {
+      // Standalone "src/foo.rs:" line — the path itself is the dep.
+      final candidate = trimmed.substring(0, colonIdx).trim();
+      if (candidate.isNotEmpty) {
+        _addDep(output, packageDir, crateRoot, candidate);
+        registered++;
+      }
+      continue;
+    }
+
+    for (final dep in deps.split(' ')) {
+      final d = dep.trim();
+      if (d.isNotEmpty) {
+        _addDep(output, packageDir, crateRoot, d);
+        registered++;
+      }
+    }
+  }
+
+  _log.info('registered $registered source deps from Cargo dep-info');
+}
+
+void _addDep(
+  BuildOutputBuilder output,
+  String packageDir,
+  String crateRoot,
+  String depPath,
+) {
+  final absolute = p.isAbsolute(depPath)
+      ? depPath
+      : p.normalize(p.join(crateRoot, depPath));
+
+  if (!File(absolute).existsSync()) return;
+  if (!p.isWithin(packageDir, absolute)) return;
+
+  output.dependencies.add(Uri.file(absolute));
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────

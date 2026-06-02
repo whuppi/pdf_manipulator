@@ -1,0 +1,10 @@
+name: Integration Test (macOS)
+description: Run example Flutter integration test on macOS via Makefile
+
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/setup-fvm
+    - uses: ./.github/actions/setup-rust
+    - shell: bash
+      run: make test-example-macos

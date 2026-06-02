@@ -1,5 +1,5 @@
-# Lightweight CI — runs on PRs only.
-# Doc-only PRs skip expensive jobs; gate still passes.
+# CI — every PR. Fast gate: analyze + unit + native ops.
+# Reuses composite actions — same logic as full-test, just fewer platforms.
 name: CI
 
 on:
@@ -28,33 +28,35 @@ jobs:
               - 'hook/**'
               - 'vendor/**'
               - 'web_assets/**'
+              - 'example/**'
               - 'pubspec.yaml'
               - 'analysis_options.yaml'
-              - 'ffigen.yaml'
+              - 'Makefile'
               - '.github/**'
 
   analyze:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: dart-lang/setup-dart@v1
-        with: { sdk: stable }
-      - run: dart pub get --no-example
-      - run: dart analyze lib/ test/ hook/
+      - uses: ./.github/actions/setup-fvm
+      - uses: ./.github/actions/setup-rust
+        with: { targets: wasm32-unknown-unknown }
+      - run: make analyze
 
   test:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: macos-14
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: ./.github/actions/dart-test
+      - uses: ./.github/actions/pkg-test-native
 
-  # Required check — always runs, gates on results when code changed.
   gate:
     name: CI Gate
     if: always()

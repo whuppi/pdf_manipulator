@@ -1,24 +1,18 @@
 name: Compile WASM
-description: Build pdf_oxide WASM + run wasm-bindgen
+description: Build pdf_oxide WASM + JS glue via Makefile
 
 runs:
   using: composite
   steps:
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: ./.github/actions/setup-rust
       with: { targets: wasm32-unknown-unknown }
-    - uses: mozilla-actions/sccache-action@v0.0.10
     - shell: bash
       run: |
-        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-        echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV
+        cargo install wasm-bindgen-cli --version 0.2.121
+        sudo apt-get update && sudo apt-get install -y binaryen
     - shell: bash
-      run: cargo install wasm-bindgen-cli --version 0.2.121
+      run: make compile-wasm
     - shell: bash
-      env:
-        MANIFEST: vendor/pdf_oxide/Cargo.toml
       run: |
-        cargo build --manifest-path $MANIFEST --lib --target wasm32-unknown-unknown --features wasm --no-default-features --release
         mkdir -p out/wasm
-        wasm-bindgen --target web --out-dir out/wasm --out-name pdf_oxide \
-          vendor/pdf_oxide/target/wasm32-unknown-unknown/release/pdf_oxide.wasm
+        cp web_assets/pdf_oxide.js web_assets/pdf_oxide_bg.wasm out/wasm/

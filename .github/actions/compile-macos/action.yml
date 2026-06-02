@@ -1,25 +1,10 @@
 name: Compile macOS
-description: Build pdf_oxide for macOS arm64 + x64
+description: Build pdf_oxide for macOS arm64 + x64 via Makefile
 
 runs:
   using: composite
   steps:
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: ./.github/actions/setup-rust
       with: { targets: "aarch64-apple-darwin,x86_64-apple-darwin" }
-    - uses: mozilla-actions/sccache-action@v0.0.10
     - shell: bash
-      run: |
-        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-        echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV
-    - shell: bash
-      env:
-        MANIFEST: vendor/pdf_oxide/Cargo.toml
-        FEATURES: icc,legacy-crypto,rendering,signatures
-      run: |
-        for t in aarch64-apple-darwin x86_64-apple-darwin; do
-          cargo build --manifest-path $MANIFEST --lib --release --target $t --features $FEATURES
-        done
-        mkdir -p out/macos-arm64 out/macos-x64
-        cp vendor/pdf_oxide/target/aarch64-apple-darwin/release/libpdf_oxide.dylib out/macos-arm64/
-        cp vendor/pdf_oxide/target/x86_64-apple-darwin/release/libpdf_oxide.dylib out/macos-x64/
+      run: make compile-natives

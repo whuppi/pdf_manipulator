@@ -39,7 +39,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number }}
         run: |
-          FILES=$(gh pr diff $PR --repo ${{ github.repository }} --name-only)
+          # Use the REST API files endpoint instead of gh pr view --json files.
+          # gh pr view internally fetches the diff, which fails with HTTP 406
+          # on PRs exceeding GitHub's 20,000-line diff limit.
+          FILES=$(gh api repos/${{ github.repository }}/pulls/$PR/files --paginate --jq '.[].filename' 2>/dev/null || echo "")
 
           if echo "$FILES" | grep -qE "^\.github/|^\.githooks/"; then
             gh pr edit $PR --repo ${{ github.repository }} --add-label "ci"

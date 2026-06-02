@@ -1,27 +1,10 @@
 name: Compile iOS
-description: Build pdf_oxide for iOS device + simulators (arm64, sim-arm64, sim-x64)
+description: Build pdf_oxide for iOS device + simulators via Makefile
 
 runs:
   using: composite
   steps:
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: ./.github/actions/setup-rust
       with: { targets: "aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios" }
-    - uses: mozilla-actions/sccache-action@v0.0.10
     - shell: bash
-      run: |
-        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-        echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV
-    - shell: bash
-      env:
-        MANIFEST: vendor/pdf_oxide/Cargo.toml
-        FEATURES: icc,legacy-crypto,rendering,signatures
-      run: |
-        for t in aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios; do
-          cargo build --manifest-path $MANIFEST --lib --release --target $t --features $FEATURES
-        done
-        mkdir -p out/ios-arm64 out/ios-sim-arm64 out/ios-sim-x64
-        cp vendor/pdf_oxide/target/aarch64-apple-ios/release/libpdf_oxide.a out/ios-arm64/
-        cp vendor/pdf_oxide/target/aarch64-apple-ios-sim/release/libpdf_oxide.a out/ios-sim-arm64/
-        cp vendor/pdf_oxide/target/x86_64-apple-ios/release/libpdf_oxide.a out/ios-sim-x64/
-        strip -S out/ios-arm64/libpdf_oxide.a out/ios-sim-arm64/libpdf_oxide.a out/ios-sim-x64/libpdf_oxide.a
+      run: make compile-natives

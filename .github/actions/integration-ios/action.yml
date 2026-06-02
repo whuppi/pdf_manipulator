@@ -1,0 +1,16 @@
+name: Integration Test (iOS)
+description: Boot iOS simulator, run example Flutter integration test via Makefile
+
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/setup-fvm
+    - uses: ./.github/actions/setup-rust
+      with: { targets: "aarch64-apple-ios,aarch64-apple-ios-sim" }
+
+    - uses: futureware-tech/simulator-action@v4
+      with:
+        model: 'iPhone 16'
+
+    - shell: bash
+      run: make test-example-ios

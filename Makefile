@@ -1,15 +1,244 @@
-.PHONY: check test test-web bindings
+.PHONY: check analyze build build-native build-wasm \
+       test test-unit test-ops test-ops-native test-ops-web test-ops-opfs test-ops-jspi test-ops-atomics \
+       test-example test-example-macos test-example-linux test-example-windows test-example-android test-example-ios test-example-device \
+       test-example-web test-example-web-jspi test-example-web-atomics test-example-web-opfs \
+       compile compile-natives compile-wasm \
+       clean
 
-check:
-	dart analyze .
-	dart test
-	dart test test/web/web_smoke_test.dart -p chrome --timeout=120s
+# ── SDK resolution ──────────────────────────────────────────────────
+#
+# Uses fvm by default (.fvmrc pins to stable). Contributors without fvm
+# can override: make check DART=dart FLUTTER=flutter
+DART    ?= fvm dart
+FLUTTER ?= fvm flutter
 
-test:
-	dart test
+# ── Targets ─────────────────────────────────────────────────────────
+#
+# DEV (local iteration)
+# ─────────────────────
+# make check               full gate: analyze + unit + all 4 ops runners + example
+# make analyze             analyze package + example (--fatal-infos)
+# make build               build native (Rust FFI) + web (WASM)
+# make build-native        compile Rust native library via dart build hook
+# make build-wasm          compile Rust WASM + wasm-bindgen + wasm-opt
+#
+# make test                unit + all 4 ops runners
+# make test-unit           types + transport protocol tests (pure Dart, fast)
+# make test-ops            all 4 ops runners (native + 3 web modes)
+# make test-ops-native     ops: native FFI
+# make test-ops-web        ops: all 3 web modes
+# make test-ops-opfs       ops: web OPFS
+# make test-ops-jspi       ops: web JSPI
+# make test-ops-atomics    ops: web Atomics
+#
+# make test-example             example integration tests (native + all 3 web modes)
+# make test-example-native      example: macOS
+# make test-example-web         example: Chrome (all 3 web modes)
+# make test-example-web-jspi    example: Chrome JSPI mode
+# make test-example-web-atomics example: Chrome Atomics mode
+# make test-example-web-opfs    example: Chrome OPFS mode
+#
+# RELEASE (CI calls these — single source of truth for compile logic)
+# ────────────────────────────────────────────────────────────────────
+# make compile-natives     compile Rust for all targets the host can build
+# make compile-wasm        compile Rust → WASM + JS glue (release binary)
+#
+# make clean               wipe build caches
+#
+# Timeouts: NO global --timeout flag. Every test declares its own
+# timeout via Dart's test(timeout: Timeout(...)) parameter. This is
+# the performance contract — each test knows how long it should take.
 
-test-web:
-	dart test test/web/web_smoke_test.dart -p chrome --timeout=120s
+# ── Gate ────────────────────────────────────────────────────────────
 
-bindings:
-	dart run ffigen --config ffigen.yaml
+check: analyze test test-example
+
+# ── Analyze ─────────────────────────────────────────────────────────
+
+# Features from compile_rust.sh (single source of truth).
+RUST_NATIVE_FEATURES := $(shell bash tool/compile_rust.sh --features native)
+RUST_WASM_FEATURES   := $(shell bash tool/compile_rust.sh --features wasm)
+
+analyze:
+	$(DART) pub get --no-example
+	$(DART) analyze --fatal-infos lib/ bin/ test/ hook/
+	cd example && $(FLUTTER) pub get && $(FLUTTER) analyze --fatal-infos
+	@echo "=== Rust: check pdf_oxide warnings (native) ==="
+	cd vendor/pdf_oxide && cargo check --lib --features $(RUST_NATIVE_FEATURES) \
+		--message-format=json 2>/dev/null \
+		| python3 -c "$$RUST_WARNING_CHECK"
+	@echo "=== Rust: check pdf_oxide warnings (wasm) ==="
+	cd vendor/pdf_oxide && cargo check --lib --target wasm32-unknown-unknown \
+		--features $(RUST_WASM_FEATURES) --no-default-features \
+		--message-format=json 2>/dev/null \
+		| python3 -c "$$RUST_WARNING_CHECK"
+	@echo "=== Rust: check office_oxide warnings ==="
+	cd vendor/office_oxide && cargo check --lib \
+		--message-format=json 2>/dev/null \
+		| python3 -c "$$RUST_WARNING_CHECK"
+
+# Parses cargo JSON diagnostics, filters to files our patch touches,
+# fails if any warning falls inside a line range we changed.
+define RUST_WARNING_CHECK
+import sys,json,subprocess as sp
+# Get lines changed by our patch
+# Derive upstream base tag from branch name (pdf_manipulator/X.Y.Z-patches → vX.Y.Z)
+branch=sp.run(['git','rev-parse','--abbrev-ref','HEAD'],capture_output=True,text=True).stdout.strip()
+base_tag='v'+branch.split('/')[1].replace('-patches','') if '/' in branch else 'v0.3.55'
+diff=sp.run(['git','diff','--unified=0',f'{base_tag}..HEAD','--','src/'],
+  capture_output=True,text=True)
+changed={}
+cur=None
+for l in diff.stdout.splitlines():
+  if l.startswith('+++ b/'): cur=l[6:]
+  elif l.startswith('@@') and cur:
+    for p in l.split('@@')[1].split():
+      if p.startswith('+'):
+        s=p[1:].split(',')
+        start=int(s[0])
+        count=int(s[1]) if len(s)>1 else 1
+        changed.setdefault(cur,set()).update(range(start,start+count))
+warns=0
+for line in sys.stdin:
+  try: msg=json.loads(line)
+  except: continue
+  if msg.get('reason')!='compiler-message': continue
+  m=msg['message']
+  if m['level']!='warning': continue
+  for s in m.get('spans',[]):
+    if not s.get('is_primary'): continue
+    fn=s['file_name']
+    if fn not in changed: break
+    if s['line_start'] in changed[fn]:
+      print(f"  {fn}:{s['line_start']}: {m['message']}")
+      warns+=1
+    break
+if warns:
+  print(f"\n{warns} warning(s) in our changed lines — fix before committing")
+  sys.exit(1)
+endef
+export RUST_WARNING_CHECK
+
+# ── Build (dev — triggers build hook for the current platform) ──────
+
+build: build-native build-wasm
+
+build-native:
+	$(DART) test test/ops/smoke_test.dart --concurrency=1 --name='DOES_NOT_EXIST' || true
+
+build-wasm:
+	bash tool/compile_rust.sh wasm
+
+# ── Compile (release — produces binaries for GitHub Releases) ───────
+
+compile-natives:
+	bash tool/compile_rust.sh native
+
+compile-wasm:
+	bash tool/compile_rust.sh wasm
+
+# ── Test ────────────────────────────────────────────────────────────
+
+test: test-unit test-ops
+
+# ── Unit tests (pure Dart — types + transport protocol) ─────────────
+
+test-unit:
+	@echo "=== Unit: types + transport ==="
+	$(DART) test test/types/ test/transport/ -p vm --concurrency=1
+
+# ── Ops tests (full suite on every platform) ────────────────────────
+
+test-ops: test-ops-native test-ops-web
+
+test-ops-native:
+	@echo "=== Ops: Native ==="
+	$(DART) test test/ops/runners/native_runner_test.dart --concurrency=1
+
+test-ops-web: test-ops-opfs test-ops-jspi test-ops-atomics
+
+test-ops-opfs:
+	@echo "=== Ops: Web OPFS ==="
+	$(DART) test test/ops/runners/web_opfs_runner_test.dart -p chrome --concurrency=1
+
+test-ops-jspi:
+	@echo "=== Ops: Web JSPI ==="
+	$(DART) test test/ops/runners/web_jspi_runner_test.dart -p chrome --concurrency=1
+
+test-ops-atomics:
+	@echo "=== Ops: Web Atomics ==="
+	$(DART) test test/ops/runners/web_atomics_runner_test.dart -p chrome-coi --concurrency=1
+
+# ── Example integration tests ───────────────────────────────────────
+
+test-example: test-example-macos test-example-web
+
+# DEVICE can be overridden: make test-example-device DEVICE=emulator-5554
+DEVICE ?= macos
+
+test-example-macos:
+	@echo "=== Example: integration tests (macOS) ==="
+	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart -d macos
+
+test-example-linux:
+	@echo "=== Example: integration tests (Linux) ==="
+	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart -d linux
+
+test-example-windows:
+	@echo "=== Example: integration tests (Windows) ==="
+	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart -d windows
+
+test-example-android:
+	@echo "=== Example: integration tests (Android) ==="
+	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart
+
+test-example-ios:
+	@echo "=== Example: integration tests (iOS) ==="
+	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart
+
+test-example-device:
+	@echo "=== Example: integration tests (device=$(DEVICE)) ==="
+	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart -d $(DEVICE)
+
+# All 3 web modes via flutter drive.
+# SharedArrayBuffer enabled via CHROME_EXECUTABLE wrapper (see tool/chrome_with_sab.sh).
+# Shared helper: run flutter drive with a given mode.
+# CHROME_EXECUTABLE wrapper adds --enable-features=SharedArrayBuffer to the
+# app Chrome. This works around flutter drive's WebDriverService not forwarding
+# --web-browser-flag to the app Chrome (it only goes to chromedriver's session).
+CHROME_SAB := $(CURDIR)/tool/chrome_with_sab.sh
+
+define run_example_web
+	@./tool/run_web_test.sh $(2) $(CHROME_SAB) $(FLUTTER)
+endef
+
+define setup_example_web
+	@echo "=== Example: clean + setup web assets ==="
+	rm -rf example/web/pdf_manipulator
+	cd example && $(FLUTTER) pub get && $(DART) run pdf_manipulator:setup --force
+endef
+
+# All 3 web modes: setup once, run all three sequentially.
+test-example-web:
+	$(call setup_example_web)
+	$(call run_example_web,JSPI,jspi)
+	$(call run_example_web,Atomics,atomics)
+	$(call run_example_web,OPFS,opfs)
+
+# Individual modes: each does its own setup (for standalone use).
+test-example-web-jspi:
+	$(call setup_example_web)
+	$(call run_example_web,JSPI,jspi)
+
+test-example-web-atomics:
+	$(call setup_example_web)
+	$(call run_example_web,Atomics,atomics)
+
+test-example-web-opfs:
+	$(call setup_example_web)
+	$(call run_example_web,OPFS,opfs)
+
+# ── Clean ───────────────────────────────────────────────────────────
+
+clean:
+	rm -rf .dart_tool/hooks_runner/ .dart_tool/lib/ .dart_tool/native_assets/ build_output/

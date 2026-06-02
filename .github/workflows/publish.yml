@@ -1,0 +1,153 @@
+# Compile all targets → upload binaries to GitHub Release → publish to pub.dev.
+#
+# Triggered by:
+#   - Tag push (create-release.yml creates tags via gh release create)
+#   - Manual rerun via workflow_dispatch (pass the tag name)
+#
+# Idempotent:
+#   - Upload: uses --clobber to overwrite existing assets
+#   - pub.dev: rejects duplicate versions (safe to retry)
+#
+# The tag's version is stamped into pubspec.yaml + version.dart before compile.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  COMPILE_OUTPUT_DIR: out
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  # ── Compile all targets ────────────────────────────────────────────
+  compile-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: ${{ inputs.tag || github.ref_name }}, submodules: recursive }
+      - uses: ./.github/actions/compile-macos
+      - uses: actions/upload-artifact@v4
+        with: { name: bin-macos, path: out/ }
+  compile-ios:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ inputs.tag || github.ref_name }}', submodules: recursive }
+      - uses: ./.github/actions/compile-ios
+      - uses: actions/upload-artifact@v4
+        with: { name: bin-ios, path: out/ }
+  compile-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ inputs.tag || github.ref_name }}', submodules: recursive }
+      - uses: ./.github/actions/compile-android
+      - uses: actions/upload-artifact@v4
+        with: { name: bin-android, path: out/ }
+  compile-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ inputs.tag || github.ref_name }}', submodules: recursive }
+      - uses: ./.github/actions/compile-linux
+      - uses: actions/upload-artifact@v4
+        with: { name: bin-linux, path: out/ }
+  compile-wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ inputs.tag || github.ref_name }}', submodules: recursive }
+      - uses: ./.github/actions/compile-wasm
+      - uses: actions/upload-artifact@v4
+        with: { name: bin-wasm, path: out/ }
+  compile-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ inputs.tag || github.ref_name }}', submodules: recursive }
+      - uses: ./.github/actions/compile-windows
+      - uses: actions/upload-artifact@v4
+        with: { name: bin-windows, path: out/ }
+
+  # ── Upload binaries to the GitHub Release ──────────────────────────
+  upload-assets:
+    name: Upload Release Assets
+    needs: [compile-macos, compile-ios, compile-android, compile-linux, compile-windows, compile-wasm]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts/ }
+      - name: Flatten assets
+        run: |
+          mkdir -p release
+          for runner in bin-macos bin-ios bin-android bin-linux bin-windows; do
+            for pdir in artifacts/$runner/*/; do
+              [ -d "$pdir" ] || continue
+              p=$(basename "$pdir")
+              for lib in "$pdir"*; do
+                [ -f "$lib" ] || continue
+                cp "$lib" "release/${p}-$(basename "$lib")"
+              done
+            done
+          done
+          if [ -d "artifacts/bin-wasm/wasm" ]; then
+            for f in artifacts/bin-wasm/wasm/*; do
+              [ -f "$f" ] || continue
+              cp "$f" "release/wasm-$(basename "$f")"
+            done
+          fi
+          ls -lh release/
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          files: release/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Publish to pub.dev ─────────────────────────────────────────────
+  publish:
+    name: Publish to pub.dev
+    needs: upload-assets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ inputs.tag || github.ref_name }}', submodules: recursive }
+      - uses: dart-lang/setup-dart@v1
+      - name: Install fvm + project SDK
+        run: dart pub global activate fvm && fvm install
+
+      - name: Stamp version from tag
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          echo "Publishing version: $VERSION"
+
+          # Stamp pubspec.yaml
+          sed -i "s/^version: .*/version: $VERSION/" pubspec.yaml
+
+          # Stamp version.dart
+          sed -i "s/const packageVersion = '[^']*'/const packageVersion = '$VERSION'/" lib/src/version.dart
+
+          # For prereleases: use CHANGELOG.pre.md as the published CHANGELOG
+          if [[ "$VERSION" == *-* ]]; then
+            cp CHANGELOG.pre.md CHANGELOG.md
+          fi
+
+          echo "pubspec: $(grep '^version:' pubspec.yaml)"
+
+      - run: fvm dart pub get --no-example
+      - run: fvm dart pub publish --force

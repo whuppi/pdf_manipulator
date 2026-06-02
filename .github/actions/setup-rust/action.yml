@@ -1,0 +1,21 @@
+name: Setup Rust
+description: Install Rust toolchain + sccache for fast builds
+
+inputs:
+  targets:
+    description: Extra Rust targets (comma-separated)
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ inputs.targets }}
+    - uses: mozilla-actions/sccache-action@v0.0.10
+    - shell: bash
+      run: |
+        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+        echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV

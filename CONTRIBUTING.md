@@ -9,20 +9,24 @@ Contributions are welcome.
 ```bash
 git clone --recursive https://github.com/whuppi/pdf_manipulator.git
 cd pdf_manipulator
-git config core.hooksPath .githooks
-dart pub get
-dart test  # build hook compiles Rust from source automatically
+fvm install              # downloads the SDK version pinned in .fvmrc
+fvm dart pub get
+fvm dart test            # build hook compiles Rust from source automatically
 ```
 
-The `core.hooksPath` step activates git hooks that enforce conventional commits
-and block accidental commits of gitignored files.
+**Requires:** [Rust](https://rustup.rs), [FVM](https://fvm.app) (`.fvmrc` pins to stable). The build hook detects `vendor/pdf_oxide/Cargo.toml` and runs `cargo build`. No manual compilation step.
 
-**Requires:** [Rust](https://rustup.rs). The build hook detects `vendor/pdf_oxide/Cargo.toml` and runs `cargo build`. No manual compilation step.
-
-For web tests:
+**Without FVM:** all Makefile commands accept `DART` and `FLUTTER` overrides:
 
 ```bash
-dart test test/web/web_smoke_test.dart -p chrome
+make check DART=dart FLUTTER=flutter
+```
+
+For web development:
+
+```bash
+make build-wasm              # compile Rust → WASM
+make check                   # analyze + native + web tests + example (all 3 web modes)
 ```
 
 ---
@@ -30,63 +34,59 @@ dart test test/web/web_smoke_test.dart -p chrome
 ## Before submitting a PR
 
 ```bash
-dart analyze .   # zero errors, zero warnings
-dart test
+make check
 ```
 
-Both must pass. Don't suppress with `// ignore:` — fix the underlying issue.
+Runs `analyze` + `test` (native + 3 web modes) + `test-example` (native + 3 web modes). Must pass. Don't suppress with `// ignore:` — fix the underlying issue.
 
 ---
 
 ## PR workflow
 
+All PRs target `dev`. That's the only branch contributors touch.
+
 ```
-feature branch ──PR──► dev
-                        ↓ CI runs automatically (analyze + macOS test)
-                        ↓ PR title must follow Conventional Commits (feat: / fix: / etc.)
-                        ↓ repo owner reviews
-                        ↓ merge when green (squash-merge, PR title = commit message)
+your fork / feature branch ──PR──► dev
+                                    ↓ CI: make analyze + make test-unit + make test-ops-native
+                                    ↓ PR title: Conventional Commits (feat: / fix: / etc.)
+                                    ↓ squash-merge when green
+                                    ↓ Full 10-job test via "ready-to-test" label
+                                      (4 pkg: macOS/Linux/Windows/web
+                                       6 integration: macOS/Linux/Windows/Android/iOS/web)
 ```
 
-CI runs on every PR — no manual trigger needed. PR titles are validated by `pr-lint.yml` (required check). Use conventional commit prefixes: `feat:`, `fix:`, `docs:`, `chore:`, `ci:`, `test:`, `refactor:`, `perf:`, `build:`, `deps:`.
+CI calls Makefile targets — same commands locally and in CI. No logic lives in the CI YAML.
+
+You don't write changelog entries, bump versions, or touch `prod`. The maintainer handles releases.
 
 ---
 
 ## Code style
 
 - Match existing code in the repo
-- No `dart:io` in `lib/` — the barrel must stay web-safe
+- No `dart:io` in the public API barrel — must stay web-safe
+- No FFI imports in bridge files — all engine calls go through the worker
+- `worker.js` is a thin pass-through — `bridge_api.rs` owns the dispatch logic
 - Tests in `test/` mirror the `lib/src/` structure
+- `TestSource` returns views (not copies) — catches buffer-detach bugs in transport
 - Instance API: `final pdf = Pdf(); pdf.method(); pdf.dispose();`
 
 ---
 
-## Adding a new PDF operation
+## Adding operations
 
-End-to-end checklist:
-
-1. **Rust** — add `#[no_mangle] pub extern "C" fn` in `vendor/pdf_oxide/src/ffi.rs`
-2. **C header** — add declaration in `vendor/pdf_oxide/include/pdf_oxide_c/pdf_oxide.h`
-3. **ffigen** — `dart run ffigen --config ffigen.yaml`
-4. **Dart FFI wrapper** — safe wrapper in `lib/src/ffi/bindings.dart`
-5. **Op enum** — add value to `lib/src/platform/_op.dart`
-6. **Native dispatch** — add case in `lib/src/platform/_native.dart`
-7. **Web dispatch** — add method in `lib/src/platform/_web.dart` + case in `web_assets/worker.js`
-8. **Platform interface** — add method to `lib/src/platform/pdf_platform.dart`
-9. **Public API** — expose via `Pdf`, `PdfEditor`, or `PdfBuilder`
-10. **Tests** — add test in `test/`
-11. **WASM** — if Rust changed, rebuild: `./tool/build_wasm.sh`
-
-Full maintenance recipes (bumping upstream, editing patches, rebuilding) are in [`docs/UPDATING.md`](docs/UPDATING.md).
+Step-by-step checklists in [`docs/UPDATING.md`](docs/UPDATING.md).
 
 ---
 
-## Rust patches
+## Vendored forks
 
-The vendored fork at `vendor/pdf_oxide/` carries patches for functions not yet in upstream. Every patch has a `LOCAL PATCH` comment with a removal trigger. The full inventory is in [`docs/UPDATING.md`](docs/UPDATING.md).
+Two git submodules at `vendor/`. Provenance and recipes in [`docs/UPDATING.md`](docs/UPDATING.md).
+
+After editing Rust in `vendor/`, commit AND push the submodule before opening a PR.
 
 ---
 
 ## Releases
 
-Contributors don't need to worry about releases. Versioning, changelog, tagging, and publishing are fully automated via release-please. When conventional commits land on `dev` or `prod`, release-please opens a Release PR that bumps the version and writes the changelog. Merging that PR creates a tag, which triggers the full pipeline: 6-platform test → compile → GitHub Release → pub.dev publish. Details in [`docs/UPDATING.md`](docs/UPDATING.md).
+Handled by the maintainer. Details in [`docs/UPDATING.md`](docs/UPDATING.md).

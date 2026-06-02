@@ -1,3 +1,6 @@
 [submodule "vendor/pdf_oxide"]
 	path = vendor/pdf_oxide
 	url = https://github.com/whuppi/pdf_oxide.git
+[submodule "vendor/office_oxide"]
+	path = vendor/office_oxide
+	url = https://github.com/whuppi/office_oxide.git

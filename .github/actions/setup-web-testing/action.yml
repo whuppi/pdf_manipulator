@@ -1,0 +1,68 @@
+name: Setup Web Testing (Linux only)
+description: >
+  Install Chrome + ChromeDriver (matched), FVM, Rust (wasm target),
+  wasm-bindgen, binaryen, xvfb. Build WASM. Linux CI only.
+
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/setup-fvm
+    - uses: ./.github/actions/setup-rust
+      with: { targets: wasm32-unknown-unknown }
+
+    # ── Chrome + ChromeDriver (matched versions, from Chrome for Testing) ──
+    - shell: bash
+      run: |
+        set -euo pipefail
+
+        # Resolve latest stable version + download URLs from Chrome for Testing API
+        API="https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json"
+        JSON=$(curl -sS "$API")
+        VERSION=$(echo "$JSON" | python3 -c "import sys,json; d=json.load(sys.stdin)['channels']['Stable']; print(d['version'])")
+        CHROME_URL=$(echo "$JSON" | python3 -c "import sys,json; d=json.load(sys.stdin)['channels']['Stable']['downloads']['chrome']; print(next(p['url'] for p in d if p['platform']=='linux64'))")
+        DRIVER_URL=$(echo "$JSON" | python3 -c "import sys,json; d=json.load(sys.stdin)['channels']['Stable']['downloads']['chromedriver']; print(next(p['url'] for p in d if p['platform']=='linux64'))")
+        echo "Chrome for Testing: $VERSION"
+
+        INSTALL_DIR="/opt/chrome-for-testing"
+        sudo mkdir -p "$INSTALL_DIR"
+
+        echo "=== Installing Chrome ==="
+        curl -sSL "$CHROME_URL" -o /tmp/chrome.zip
+        sudo unzip -qo /tmp/chrome.zip -d "$INSTALL_DIR"
+        rm /tmp/chrome.zip
+        CHROME_BIN="$INSTALL_DIR/chrome-linux64/chrome"
+        sudo chmod +x "$CHROME_BIN"
+
+        echo "=== Installing ChromeDriver ==="
+        curl -sSL "$DRIVER_URL" -o /tmp/chromedriver.zip
+        sudo unzip -qo /tmp/chromedriver.zip -d "$INSTALL_DIR"
+        rm /tmp/chromedriver.zip
+        CHROMEDRIVER_BIN="$INSTALL_DIR/chromedriver-linux64/chromedriver"
+        sudo chmod +x "$CHROMEDRIVER_BIN"
+
+        # Remove system Chrome entirely so nothing finds the old version.
+        # The package manager cleans up /opt/google/chrome/, /usr/bin/google-chrome*, etc.
+        sudo apt-get remove -y google-chrome-stable 2>/dev/null || true
+        sudo dpkg --purge google-chrome-stable 2>/dev/null || true
+
+        # Symlink our Chrome for Testing to all standard paths
+        sudo ln -sf "$CHROME_BIN" /usr/bin/google-chrome-stable
+        sudo ln -sf "$CHROME_BIN" /usr/bin/google-chrome
+        sudo mkdir -p /opt/google/chrome
+        sudo ln -sf "$CHROME_BIN" /opt/google/chrome/chrome
+        sudo ln -sf "$CHROMEDRIVER_BIN" /usr/local/bin/chromedriver
+
+        echo "Chrome: $(google-chrome-stable --version)"
+        echo "ChromeDriver: $(chromedriver --version)"
+
+        WRAPPER="$(cd "$GITHUB_WORKSPACE" && pwd)/tool/chrome_with_sab.sh"
+        echo "CHROME_PATH=$CHROME_BIN" >> $GITHUB_ENV
+        echo "CHROME_EXECUTABLE=$WRAPPER" >> $GITHUB_ENV
+
+    # ── WASM toolchain + build ──
+    - shell: bash
+      run: |
+        cargo install wasm-bindgen-cli --version 0.2.121
+        sudo apt-get update && sudo apt-get install -y binaryen xvfb
+    - shell: bash
+      run: make build-wasm
