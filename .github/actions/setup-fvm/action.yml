@@ -1,16 +1,34 @@
 name: Setup FVM
-description: Install Dart SDK, FVM, and the project's pinned Flutter/Dart SDK from .fvmrc
+description: >
+  Install the Flutter/Dart SDK pinned in .fvmrc.
+  Linux/macOS: installs fvm, uses fvm dart/fvm flutter.
+  Windows: uses subosito/flutter-action (fvm has no Windows CI support).
+  Both read the same .fvmrc pin — same SDK version guaranteed.
 
 runs:
   using: composite
   steps:
-    - uses: dart-lang/setup-dart@v1
-    - name: Install fvm + project SDK
+    # Linux / macOS — install fvm natively
+    - if: runner.os != 'Windows'
+      uses: dart-lang/setup-dart@v1
+    - if: runner.os != 'Windows'
+      name: Install fvm + project SDK
       shell: bash
       run: |
         dart pub global activate fvm
-        # GITHUB_PATH only affects the NEXT workflow step, not subsequent steps
-        # within this composite action. Use full path for fvm in this step,
-        # then add to GITHUB_PATH for all later steps.
         echo "$HOME/.pub-cache/bin" >> $GITHUB_PATH
         "$HOME/.pub-cache/bin/fvm" install
+
+    # Windows — fvm doesn't work reliably in CI Git Bash.
+    # Read the channel from .fvmrc and use subosito/flutter-action instead.
+    # Makefile uses DART/FLUTTER vars which CI overrides to bare dart/flutter.
+    - if: runner.os == 'Windows'
+      id: fvmrc
+      shell: bash
+      run: |
+        CHANNEL=$(python3 -c "import json; print(json.load(open('.fvmrc'))['flutter'])")
+        echo "channel=$CHANNEL" >> $GITHUB_OUTPUT
+    - if: runner.os == 'Windows'
+      uses: subosito/flutter-action@v2
+      with:
+        channel: ${{ steps.fvmrc.outputs.channel }}
