@@ -29,7 +29,7 @@ env:
   COMPILE_OUTPUT_DIR: out
 
 concurrency:
-  group: release-${{ github.event.github.event.inputs.tag || github.ref_name }}
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -38,7 +38,7 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-        with: { ref: ${{ github.event.inputs.tag || github.ref_name }}, submodules: recursive }
+        with: { ref: '${{ github.event.inputs.tag || github.ref_name }}', submodules: recursive }
       - uses: ./.github/actions/compile-macos
       - uses: actions/upload-artifact@v4
         with: { name: bin-macos, path: out/ }
