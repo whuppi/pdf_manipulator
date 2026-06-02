@@ -184,6 +184,14 @@ requirements.** Admin bypass exists as a GitHub safety valve — not a
 shortcut. Every change goes through a PR with CI checks. No exceptions,
 no "just this one quick fix," no cherry-picks to protected branches.
 
+**Every change needs a PR — no exceptions.** If a PR was already merged
+and you have more changes for the same topic, create a NEW PR. Don't
+assume the old PR's branch will carry new commits — squash-merge
+discards the branch. Don't assume local commits are on the remote —
+check `git log origin/dev` before claiming something is shipped. The
+rule: if `git diff origin/dev -- <file>` shows changes, those changes
+need a PR.
+
 ### Changelog
 
 | File | Purpose |
