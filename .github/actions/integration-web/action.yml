@@ -8,6 +8,7 @@ runs:
     - uses: ./.github/actions/setup-rust
       with: { targets: wasm32-unknown-unknown }
     - uses: browser-actions/setup-chrome@v2
+      id: chrome
       with:
         install-chromedriver: true
     - shell: bash
@@ -17,4 +18,9 @@ runs:
     - shell: bash
       run: make build-wasm
     - shell: bash
-      run: xvfb-run make test-example-web
+      env:
+        CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+      run: |
+        echo "Chrome: $($CHROME_PATH --version)"
+        echo "ChromeDriver: $(chromedriver --version)"
+        xvfb-run make test-example-web
