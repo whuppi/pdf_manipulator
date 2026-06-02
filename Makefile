@@ -94,21 +94,21 @@ test-ops: test-ops-native test-ops-web
 
 test-ops-native:
 	@echo "=== Ops: Native ==="
-	-$(DART) test test/ops/runners/native_runner_test.dart --concurrency=1
+	$(DART) test test/ops/runners/native_runner_test.dart --concurrency=1
 
 test-ops-web: test-ops-opfs test-ops-jspi test-ops-atomics
 
 test-ops-opfs:
 	@echo "=== Ops: Web OPFS ==="
-	-$(DART) test test/ops/runners/web_opfs_runner_test.dart -p chrome --concurrency=1
+	$(DART) test test/ops/runners/web_opfs_runner_test.dart -p chrome --concurrency=1
 
 test-ops-jspi:
 	@echo "=== Ops: Web JSPI ==="
-	-$(DART) test test/ops/runners/web_jspi_runner_test.dart -p chrome --concurrency=1
+	$(DART) test test/ops/runners/web_jspi_runner_test.dart -p chrome --concurrency=1
 
 test-ops-atomics:
 	@echo "=== Ops: Web Atomics ==="
-	-$(DART) test test/ops/runners/web_atomics_runner_test.dart -p chrome-coi --concurrency=1
+	$(DART) test test/ops/runners/web_atomics_runner_test.dart -p chrome-coi --concurrency=1
 
 # ── Example integration tests ───────────────────────────────────────
 
@@ -174,19 +174,19 @@ endef
 test-example-web-jspi:
 	@echo "=== Example: clean + setup web assets (real developer flow) ==="
 	rm -rf example/web/pdf_manipulator
-	cd example && $(DART) run pdf_manipulator:setup --force
+	cd example && $(FLUTTER) pub get && $(DART) run pdf_manipulator:setup --force
 	$(call run_example_web,JSPI,jspi)
 
 test-example-web-atomics:
 	@echo "=== Example: clean + setup web assets (real developer flow) ==="
 	rm -rf example/web/pdf_manipulator
-	cd example && $(DART) run pdf_manipulator:setup --force
+	cd example && $(FLUTTER) pub get && $(DART) run pdf_manipulator:setup --force
 	$(call run_example_web,Atomics,atomics)
 
 test-example-web-opfs:
 	@echo "=== Example: clean + setup web assets (real developer flow) ==="
 	rm -rf example/web/pdf_manipulator
-	cd example && $(DART) run pdf_manipulator:setup --force
+	cd example && $(FLUTTER) pub get && $(DART) run pdf_manipulator:setup --force
 	$(call run_example_web,OPFS,opfs)
 
 # ── Clean ───────────────────────────────────────────────────────────

@@ -31,6 +31,7 @@ wasm-bindgen version: `0.2.121`.
 | Add an editor mutation | [S4 — Add editor mutation](#s4--add-editor-mutation) |
 | Rebuild WASM | [S5 — Rebuild WASM](#s5--rebuild-wasm) |
 | Release a version | [S6 — Release](#s6--release) |
+| Before committing any Rust patch | [S7 — Verify our-code warnings](#s7--verify-our-code-warnings) |
 
 ---
 
@@ -116,6 +117,9 @@ make check
 **Mark every upstream change** with `── pdf_manipulator patch ──`
 boundaries. Code in `host/` doesn't need markers (the module itself
 is the marker).
+
+**Verify zero warnings from our code before committing** — see
+[S7 — Verify our-code warnings](#s7--verify-our-code-warnings).
 
 **Commit AND push the submodule, or CI will fail:**
 
@@ -245,6 +249,87 @@ version at publish time.
 | `CHANGELOG.md`, `CHANGELOG.pre.md` | `@chaudharydeepanshu` |
 | `pubspec.yaml` | `@chaudharydeepanshu` |
 | `.github/`, `.githooks/` | `@chaudharydeepanshu` |
+
+---
+
+## S7 — Verify our-code warnings
+
+Both vendored crates have `#![warn(missing_docs)]` at crate root. Upstream
+code may have its own warnings we don't touch. Our patches must not add new
+ones. The diff-based approach below separates our warnings from upstream's.
+
+### Why the naive grep fails
+
+Cargo's default output splits each warning across two lines:
+```
+warning: missing documentation for a struct
+  --> src/host/dispatch.rs:24:1
+```
+`grep "src/host/" | grep "warning"` finds nothing — no single line has both.
+
+### The reliable check
+
+```sh
+cd vendor/pdf_oxide
+
+# 1. Force recompile (cached builds suppress warnings)
+touch src/lib.rs
+
+# 2. Build, pair each warning with its location
+cargo build --lib --features native-bridge 2>&1 \
+  | grep -B1 "^\s*-->" \
+  | grep -E "(^warning:|-->)" \
+  | paste - - \
+  > /tmp/all_warnings.txt
+
+# 3. Get the list of files our patch touches
+git diff upstream/main...HEAD --name-only | sort > /tmp/our_files.txt
+
+# 4. Filter: warnings in OUR files only
+while IFS= read -r line; do
+  file=$(echo "$line" | sed 's/.*--> //' | cut -d: -f1)
+  grep -q "^${file}$" /tmp/our_files.txt && echo "$line"
+done < /tmp/all_warnings.txt
+```
+
+If that prints anything, those are **our warnings — fix them**.
+
+### Same check for office_oxide
+
+```sh
+cd vendor/office_oxide
+touch src/lib.rs
+cargo build --lib 2>&1 \
+  | grep -B1 "^\s*-->" \
+  | grep -E "(^warning:|-->)" \
+  | paste - - \
+  > /tmp/oo_warnings.txt
+
+git diff upstream/main...HEAD --name-only | sort > /tmp/oo_files.txt
+
+while IFS= read -r line; do
+  file=$(echo "$line" | sed 's/.*--> //' | cut -d: -f1)
+  grep -q "^${file}$" /tmp/oo_files.txt && echo "$line"
+done < /tmp/oo_warnings.txt
+```
+
+### Common warning types and fixes
+
+| Warning | Cause | Fix |
+|---|---|---|
+| `missing documentation for a …` | Public item without `///` doc | Add a one-line `///` comment |
+| `unused import: X` | Patch removed usages but kept the import | Remove `X` from the `use` line |
+| `unused variable: x` | Param unused behind a `#[cfg]` gate | Prefix with underscore: `_x` |
+| `variable does not need to be mutable` | `let mut x` but `x` never mutated in this cfg | Restructure into per-cfg blocks, or remove `mut` |
+| `type X is more private than item Y` | `pub` fn takes `pub(crate)` args | Narrow the fn to `pub(crate)`, or widen the arg type |
+| `function X is never used` | Patch replaced callers with a new variant | Delete the dead function, or add `#[allow(dead_code)]` with a comment explaining it's kept for upstream compat |
+| `unused Result that must be used` | `.write_all(…)` without `?` | Add `?` to propagate the error |
+
+### When to run this
+
+**Every time before committing a patch** to either vendored crate. The rule:
+upstream warnings are upstream's problem; warnings in files our diff touches
+are ours. Zero is the only acceptable count for ours.
 
 ---
 

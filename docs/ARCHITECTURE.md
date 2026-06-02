@@ -45,80 +45,66 @@ Eight load-bearing guarantees. Every architectural decision serves one.
 
 ## 2. The four layers
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                     1. CONSUMER API (Dart)                        │
-│                                                                  │
-│  pdf.dart            — lifecycle, handle creation, ensureInit     │
-│  pdf_doc.dart        — read-only queries (PdfDoc handle)         │
-│  pdf_editor.dart     — mutations only (PdfEditor handle)         │
-│  pdf_builder.dart    — create from scratch (PdfBuilder handle)   │
-│  pdf_standalone.dart — source in, sink out, no handle            │
-│  pdf_sugar.dart      — one-shot convenience wrappers             │
-│                                                                  │
-│  Platform-blind. Calls PdfBridge (abstract).                     │
-└───────────────────────────────┬──────────────────────────────────┘
-                                │
-                                ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                     2. SHARED BRIDGE (Dart)                       │
-│                                                                  │
-│  shared_bridge.dart  — ONE bridge class, both platforms           │
-│  pdf_transport.dart  — PdfTransport interface (execute/stream)   │
-│  protocol/                                                       │
-│    binary_codec.dart — encode request, decode response            │
-│    codec.dart        — decode Map → typed Dart objects            │
-│    op.dart           — EngineOp enum (35 wire names)             │
-│                                                                  │
-│  Platform-blind. Encodes args to binary, sends via transport,    │
-│  decodes binary response. PDF bytes never touch the codec —      │
-│  they flow through the transport's I/O channels.                 │
-└───────────────────────────────┬──────────────────────────────────┘
-                                │
-                                ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                     3. TRANSPORT (Dart, per-platform)             │
-│                                                                  │
-│  Native:                                                         │
-│    native_transport.dart — PdfTransport via Dart isolate + FFI   │
-│    coordinator.dart      — isolate entry, calls bridge_execute   │
-│    source_server.dart    — per-source condvar I/O server         │
-│    sink_server.dart      — per-sink condvar I/O server           │
-│    shared_buffer.dart    — condvar shared memory layout           │
-│    bindings.dart         — dart:ffi @Native binding              │
-│                                                                  │
-│  Web:                                                            │
-│    web_transport.dart    — PdfTransport via JS Worker pool       │
-│    coordinator.js        — pool manager, handle pinning, routing │
-│    worker.js             — WASM exec, reader registry, I/O modes │
-│                                                                  │
-│  Both: move binary bytes. Route indexed readAt/chunk callbacks.  │
-│  Zero PDF knowledge.                                             │
-└───────────────────────────────┬──────────────────────────────────┘
-                                │
-                                ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                     4. RUST LAYER                                 │
-│                                                                  │
-│  OUR CODE (src/host/ — entirely ours, not upstream):             │
-│    bridge_api.rs       — single entry, cfg-gated native + WASM   │
-│    binary_codec.rs     — parse request bytes, encode response    │
-│    dispatch.rs         — every operation as a typed function     │
-│    positioned_write.rs — Write + position tracking (no Seek)     │
-│    sign.rs             — O(1)-memory PDF signing with AcroForm   │
-│    image_optimizer.rs  — JPEG recompress (QPDF pattern)          │
-│    font_optimizer.rs   — Standard 14 font unembedding            │
-│    constants.rs        — buffer sizes (64KB read, 256KB write)   │
-│    native/             — arena, thread pool, condvar I/O         │
-│    wasm/               — JsCallbackReader + JsCallbackWriter     │
-│                          via host_read_at / host_write_chunk     │
-│                                                                  │
-│  UPSTREAM PATCHES (8 files, marked with boundary comments):      │
-│    see §9 for the full list                                      │
-│                                                                  │
-│  UPSTREAM (untouched): ffi.rs, wasm.rs, engine modules           │
-└──────────────────────────────────────────────────────────────────┘
-```
+**Layer 1 — Consumer API (Dart)**
+
+    pdf.dart            — lifecycle, handle creation, ensureInit
+    pdf_doc.dart        — read-only queries (PdfDoc handle)
+    pdf_editor.dart     — mutations only (PdfEditor handle)
+    pdf_builder.dart    — create from scratch (PdfBuilder)
+    pdf_standalone.dart — source in, sink out, no handle
+    pdf_sugar.dart      — one-shot convenience wrappers
+
+    Platform-blind. Calls PdfBridge (abstract).
+            |
+            v
+**Layer 2 — Shared Bridge (Dart)**
+
+    shared_bridge.dart  — ONE bridge class, both platforms
+    pdf_transport.dart  — PdfTransport interface
+    protocol/
+      binary_codec.dart — encode request, decode response
+      codec.dart        — decode Map -> typed Dart objects
+      op.dart           — EngineOp enum (35 wire names)
+
+    Platform-blind. Encodes args to binary, sends via
+    transport, decodes binary response.
+            |
+            v
+**Layer 3 — Transport (Dart, per-platform)**
+
+    Native:
+      native_transport.dart — isolate + FFI
+      coordinator.dart      — isolate entry, bridge_execute
+      source_server.dart    — per-source condvar I/O
+      sink_server.dart      — per-sink condvar I/O
+      shared_buffer.dart    — condvar shared memory layout
+      bindings.dart         — dart:ffi @Native binding
+
+    Web:
+      web_transport.dart    — JS Worker pool
+      coordinator.js        — pool manager, handle pinning
+      worker.js             — WASM exec, reader registry
+
+    Both: move binary bytes. Route readAt/chunk callbacks.
+    Zero PDF knowledge.
+            |
+            v
+**Layer 4 — Rust**
+
+    OUR CODE (src/host/ — entirely ours, not upstream):
+      bridge_api.rs       — single entry, cfg-gated FFI + WASM
+      binary_codec.rs     — parse request, encode response
+      dispatch.rs         — every op as a typed function
+      positioned_write.rs — Write + position tracking
+      sign.rs             — O(1)-memory PDF signing
+      image_optimizer.rs  — JPEG recompress
+      font_optimizer.rs   — Standard 14 font unembedding
+      constants.rs        — buffer sizes (64KB / 256KB)
+      native/             — thread pool, Mutex+Condvar I/O
+      wasm/               — JsCallbackReader/Writer
+
+    UPSTREAM PATCHES (8 files, see §9)
+    UPSTREAM (untouched): ffi.rs, wasm.rs, engine modules
 
 ---
 
