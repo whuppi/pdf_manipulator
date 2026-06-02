@@ -1,0 +1,30 @@
+name: Setup Web Testing
+description: >
+  Install Chrome + ChromeDriver (matched versions), FVM, Rust (wasm target),
+  wasm-bindgen, binaryen, xvfb. Build WASM. Everything needed for web tests.
+
+outputs:
+  chrome-path:
+    description: Path to the installed Chrome binary
+    value: ${{ steps.chrome.outputs.chrome-path }}
+
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/setup-fvm
+    - uses: ./.github/actions/setup-rust
+      with: { targets: wasm32-unknown-unknown }
+    - uses: browser-actions/setup-chrome@v2
+      id: chrome
+      with:
+        install-chromedriver: true
+    - shell: bash
+      run: |
+        cargo install wasm-bindgen-cli --version 0.2.121
+        sudo apt-get update && sudo apt-get install -y binaryen xvfb
+    - shell: bash
+      run: make build-wasm
+    - shell: bash
+      run: |
+        echo "Chrome: $(${{ steps.chrome.outputs.chrome-path }} --version)"
+        echo "ChromeDriver: $(chromedriver --version)"

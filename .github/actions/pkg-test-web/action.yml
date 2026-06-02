@@ -4,16 +4,7 @@ description: Build WASM + run package tests on all 3 web modes via Makefile
 runs:
   using: composite
   steps:
-    - uses: ./.github/actions/setup-fvm
-    - uses: ./.github/actions/setup-rust
-      with: { targets: wasm32-unknown-unknown }
-    - uses: browser-actions/setup-chrome@v2
-    - shell: bash
-      run: |
-        cargo install wasm-bindgen-cli --version 0.2.121
-        sudo apt-get update && sudo apt-get install -y binaryen
-    - shell: bash
-      run: make build-wasm
+    - uses: ./.github/actions/setup-web-testing
     - shell: bash
       run: fvm dart pub get --no-example
     - shell: bash

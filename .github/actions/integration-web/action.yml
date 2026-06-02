@@ -4,23 +4,9 @@ description: Run example Flutter integration test on all 3 web modes via Makefil
 runs:
   using: composite
   steps:
-    - uses: ./.github/actions/setup-fvm
-    - uses: ./.github/actions/setup-rust
-      with: { targets: wasm32-unknown-unknown }
-    - uses: browser-actions/setup-chrome@v2
-      id: chrome
-      with:
-        install-chromedriver: true
-    - shell: bash
-      run: |
-        cargo install wasm-bindgen-cli --version 0.2.121
-        sudo apt-get update && sudo apt-get install -y binaryen xvfb
-    - shell: bash
-      run: make build-wasm
+    - uses: ./.github/actions/setup-web-testing
+      id: web
     - shell: bash
       env:
-        CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
-      run: |
-        echo "Chrome: $($CHROME_PATH --version)"
-        echo "ChromeDriver: $(chromedriver --version)"
-        xvfb-run make test-example-web
+        CHROME_PATH: ${{ steps.web.outputs.chrome-path }}
+      run: xvfb-run make test-example-web
