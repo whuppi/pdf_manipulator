@@ -40,10 +40,16 @@ runs:
         CHROMEDRIVER_BIN="$INSTALL_DIR/chromedriver-linux64/chromedriver"
         sudo chmod +x "$CHROMEDRIVER_BIN"
 
-        # Symlink so all consumers find our matched version
-        sudo rm -f /usr/bin/google-chrome-stable /usr/bin/google-chrome 2>/dev/null || true
+        # Remove system Chrome entirely so nothing finds the old version.
+        # The package manager cleans up /opt/google/chrome/, /usr/bin/google-chrome*, etc.
+        sudo apt-get remove -y google-chrome-stable 2>/dev/null || true
+        sudo dpkg --purge google-chrome-stable 2>/dev/null || true
+
+        # Symlink our Chrome for Testing to all standard paths
         sudo ln -sf "$CHROME_BIN" /usr/bin/google-chrome-stable
         sudo ln -sf "$CHROME_BIN" /usr/bin/google-chrome
+        sudo mkdir -p /opt/google/chrome
+        sudo ln -sf "$CHROME_BIN" /opt/google/chrome/chrome
         sudo ln -sf "$CHROMEDRIVER_BIN" /usr/local/bin/chromedriver
 
         echo "Chrome: $(google-chrome-stable --version)"
