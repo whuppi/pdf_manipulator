@@ -34,8 +34,9 @@ Eight load-bearing guarantees. Every architectural decision serves one.
    (7,210 lines) are upstream code. We never call them. We never
    modify them. Upstream merges stay clean.
 
-7. **Thread pool, not isolate thread.** Rust pthreads (native) or
-   Web Workers (web). Dart isolate never blocks. UI never janks.
+7. **Thread pool, not isolate thread.** Rust thread pool with
+   std::sync Mutex+Condvar (native) or Web Workers (web). Dart
+   isolate never blocks. UI never janks.
 
 8. **Patches are marked.** Every modification to upstream files
    carries a `── pdf_manipulator patch ──` boundary comment.
