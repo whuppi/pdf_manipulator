@@ -219,7 +219,7 @@ define run_example_web
 		--driver=test_driver/integration_test.dart \
 		--target=integration_test/pdf_smoke_test.dart \
 		--dart-define=PDF_IO_MODE=$(2) \
-		-d chrome 2>&1 | tee /tmp/_pdf_web_test.log ; \
+		-d chrome 2>&1 | tee /tmp/_pdf_web_test.log || true ; \
 	pkill -f 'flutter_tools_chrome_device' 2>/dev/null || true ; \
 	pkill chromedriver 2>/dev/null || true ; \
 	rm -f example/flutter_*.log ; \
