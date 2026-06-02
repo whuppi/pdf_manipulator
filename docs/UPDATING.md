@@ -193,8 +193,8 @@ version at publish time.
 1. Add ## X.Y.Z at top of CHANGELOG.md
 2. git log v<PREV>..HEAD --oneline --no-decorate → paste in entry
 3. Push to dev → PR to prod → merge
-4. create-release.yml → tag + GitHub Release
-5. release.yml → compile + upload + pub.dev
+4. create-publish.yml → tag + GitHub Release
+5. publish.yml → compile + upload + pub.dev
 ```
 
 ### Prerelease
@@ -202,8 +202,8 @@ version at publish time.
 ```
 1. Add ## X.Y.Z-dev.N at top of CHANGELOG.pre.md
 2. Push to dev
-3. create-release.yml → tag + Release
-4. release.yml → compile + upload + pub.dev
+3. create-publish.yml → tag + Release
+4. publish.yml → compile + upload + pub.dev
 ```
 
 ### Hotfix
@@ -220,20 +220,20 @@ version at publish time.
 | Workflow | Trigger | Purpose |
 |---|---|---|
 | `ci.yml` | PR to prod/dev | `make analyze` + `make test-unit` + `make test-ops-native` |
-| `pr-checks.yml` | PR to prod/dev | Conventional commit title + promotion chain |
+| `pr-lint.yml` | PR to prod/dev | Conventional commit title + promotion chain |
 | `full-test.yml` | `ready-to-test` label | 10 jobs: 4 pkg (macOS/Linux/Windows/web) + 6 integration (macOS/Linux/Windows/Android/iOS/web) |
-| `create-release.yml` | Changelog push or `workflow_dispatch` | Tag + GitHub Release (idempotent) |
-| `release.yml` | Tag push or `workflow_dispatch` | `make compile-natives/wasm` + upload + pub.dev (idempotent) |
+| `create-publish.yml` | Changelog push or `workflow_dispatch` | Tag + GitHub Release (idempotent) |
+| `publish.yml` | Tag push or `workflow_dispatch` | `make compile-natives/wasm` + upload + pub.dev (idempotent) |
 
 ### Failure recovery
 
 | Failure | Fix |
 |---|---|
-| `create-release.yml` failed | Rerun via workflow_dispatch |
+| `create-publish.yml` failed | Rerun via workflow_dispatch |
 | Compile failed | Fix code, rerun with tag |
 | pub.dev failed | Rerun (rejects duplicates, safe) |
-| Tag without Release | Run `create-release.yml` |
-| Release without binaries | Rerun `release.yml` |
+| Tag without Release | Run `create-publish.yml` |
+| Release without binaries | Rerun `publish.yml` |
 
 ### Git hooks
 
@@ -274,7 +274,7 @@ If the Rust check fails, it prints the exact file:line and warning.
 Fix them before committing.
 
 The feature set (`RUST_FEATURES` in the Makefile) must match
-`compile_natives.sh`'s `FEATURES` — if they diverge, CI catches
+`compile_rust.sh`'s feature definitions — if they diverge, CI catches
 warnings that `make analyze` misses.
 
 ### Common warning types and fixes

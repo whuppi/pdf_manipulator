@@ -87,9 +87,9 @@ When in doubt, read existing code in this repo and match it. Per-repo style cons
 
 **Vendor submodule with patches.** `vendor/pdf_oxide/` is a git submodule with local patches. Full inventory in `docs/UPDATING.md`.
 
-**Conventional commits required.** PR titles must follow `feat:` / `fix:` / `chore:` etc. Enforced by CI (`pr-checks.yml`) and local hook (`.githooks/commit-msg`).
+**Conventional commits required.** PR titles must follow `feat:` / `fix:` / `chore:` etc. Enforced by CI (`pr-lint.yml`) and local hook (`.githooks/commit-msg`).
 
-**CI/CD.** Fully automated via release-please with two channels: dev branch → prereleases (`1.1.0-dev.0`), prod branch → stable releases (`1.1.0`). Workflows: ci.yml (PR gate), pr-checks.yml (conventional commit + promotion chain + security lint), release-please.yml (auto Release PRs on both branches), release.yml (tag-triggered: compile → GitHub Release → pub.dev publish via OIDC).
+**CI/CD.** Fully automated via release-please with two channels: dev branch → prereleases (`1.1.0-dev.0`), prod branch → stable releases (`1.1.0`). Workflows: ci.yml (PR gate), pr-lint.yml (conventional commit + promotion chain + security lint), create-release.yml (tag + GitHub Release), publish.yml (tag-triggered: compile → GitHub Release → pub.dev publish via OIDC).
 
 ---
 

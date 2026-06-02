@@ -55,14 +55,21 @@ check: analyze test test-example
 
 # ── Analyze ─────────────────────────────────────────────────────────
 
-RUST_FEATURES := icc,legacy-crypto,rendering,signatures,native-bridge
+# Features from compile_rust.sh (single source of truth).
+RUST_NATIVE_FEATURES := $(shell bash tool/compile_rust.sh --features native)
+RUST_WASM_FEATURES   := $(shell bash tool/compile_rust.sh --features wasm)
 
 analyze:
 	$(DART) pub get --no-example
 	$(DART) analyze --fatal-infos lib/ bin/ test/ hook/
 	cd example && $(FLUTTER) pub get && $(FLUTTER) analyze --fatal-infos
-	@echo "=== Rust: check pdf_oxide warnings (all features) ==="
-	cd vendor/pdf_oxide && cargo check --lib --features $(RUST_FEATURES) \
+	@echo "=== Rust: check pdf_oxide warnings (native) ==="
+	cd vendor/pdf_oxide && cargo check --lib --features $(RUST_NATIVE_FEATURES) \
+		--message-format=json 2>/dev/null \
+		| python3 -c "$$RUST_WARNING_CHECK"
+	@echo "=== Rust: check pdf_oxide warnings (wasm) ==="
+	cd vendor/pdf_oxide && cargo check --lib --target wasm32-unknown-unknown \
+		--features $(RUST_WASM_FEATURES) --no-default-features \
 		--message-format=json 2>/dev/null \
 		| python3 -c "$$RUST_WARNING_CHECK"
 	@echo "=== Rust: check office_oxide warnings ==="
@@ -120,15 +127,15 @@ build-native:
 	$(DART) test test/ops/smoke_test.dart --concurrency=1 --name='DOES_NOT_EXIST' || true
 
 build-wasm:
-	bash tool/build_wasm.sh
+	bash tool/compile_rust.sh wasm
 
 # ── Compile (release — produces binaries for GitHub Releases) ───────
 
 compile-natives:
-	bash tool/compile_natives.sh
+	bash tool/compile_rust.sh native
 
 compile-wasm:
-	bash tool/build_wasm.sh
+	bash tool/compile_rust.sh wasm
 
 # ── Test ────────────────────────────────────────────────────────────
 

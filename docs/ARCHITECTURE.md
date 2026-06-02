@@ -215,8 +215,7 @@ hook/
 └── asset_hashes.dart                       ← SHA256 hashes for pre-built binaries
 
 tool/
-├── build_wasm.sh                           ← Rust → WASM
-├── compile_natives.sh                      ← Rust → all native targets
+├── compile_rust.sh                         ← Rust → native / wasm / both
 └── write_asset_hashes.dart                 ← generate hashes after release
 
 vendor/pdf_oxide/src/

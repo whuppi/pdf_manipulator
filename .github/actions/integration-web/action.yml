@@ -11,8 +11,8 @@ runs:
     - shell: bash
       run: |
         cargo install wasm-bindgen-cli --version 0.2.121
-        sudo apt-get update && sudo apt-get install -y binaryen
+        sudo apt-get update && sudo apt-get install -y binaryen xvfb
     - shell: bash
       run: make build-wasm
     - shell: bash
-      run: make test-example-web
+      run: xvfb-run make test-example-web

@@ -73,7 +73,7 @@ jobs:
         run: |
           FAILED=false
           for f in .github/workflows/*.yml; do
-            [[ "$f" == *"pr-checks"* ]] && continue
+            [[ "$f" == *"pr-lint"* ]] && continue
 
             if grep -q "pull_request_target" "$f"; then
               if grep -A5 "actions/checkout" "$f" | grep -qE "github\.event\.pull_request\.head\.(sha|ref)|pull_request\.head\.sha"; then
