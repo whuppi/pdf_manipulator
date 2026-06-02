@@ -177,6 +177,13 @@ git add web_assets/
 
 ## S6 — Release
 
+### The one rule
+
+**NEVER push directly to `dev` or `prod`. NEVER bypass PR merge
+requirements.** Admin bypass exists as a GitHub safety valve — not a
+shortcut. Every change goes through a PR with CI checks. No exceptions,
+no "just this one quick fix," no cherry-picks to protected branches.
+
 ### Changelog
 
 | File | Purpose |
@@ -185,25 +192,45 @@ git add web_assets/
 | `CHANGELOG.pre.md` | Prereleases (dev testing) |
 
 `pubspec.yaml` stays `version: 0.0.0` in git. CI stamps the real
-version at publish time.
+version at publish time from the tag.
 
-### Stable
+### How the release pipeline works
+
+The release is a two-workflow chain. Both steps are automatic once
+you push the changelog — no manual workflow runs needed.
+
+```
+Changelog push to dev or prod
+  → create-release.yml (auto-triggers on CHANGELOG.md / CHANGELOG.pre.md change)
+    → scans changelog for versions without a GitHub Release
+    → creates tag + GitHub Release for each new version
+    → tag push triggers publish.yml automatically
+      → 6 compile jobs in parallel (macOS/iOS/Android/Linux/Windows/WASM)
+      → upload binaries to GitHub Release
+      → stamp version from tag into pubspec.yaml + version.dart
+      → dart pub publish to pub.dev
+```
+
+Both workflows are idempotent. Rerun either at any time — existing
+releases are skipped, pub.dev rejects duplicate versions.
+
+### Stable release
 
 ```
 1. Add ## X.Y.Z at top of CHANGELOG.md
 2. git log v<PREV>..HEAD --oneline --no-decorate → paste in entry
-3. Push to dev → PR to prod → merge
-4. create-publish.yml → tag + GitHub Release
-5. publish.yml → compile + upload + pub.dev
+3. PR to prod → merge
+4. (automatic) create-release.yml → tag + GitHub Release
+5. (automatic) publish.yml → compile + upload + pub.dev
 ```
 
 ### Prerelease
 
 ```
 1. Add ## X.Y.Z-dev.N at top of CHANGELOG.pre.md
-2. Push to dev
-3. create-publish.yml → tag + Release
-4. publish.yml → compile + upload + pub.dev
+2. PR to dev → merge (or push to dev via PR)
+3. (automatic) create-release.yml → tag + GitHub Release
+4. (automatic) publish.yml → compile + upload + pub.dev
 ```
 
 ### Hotfix
@@ -211,8 +238,8 @@ version at publish time.
 ```
 1. Branch from release tag: git checkout -b hotfix/vX.Y.Z vPREV
 2. Fix, add changelog entry, push
-3. PR to prod → merge → CI tags + publishes
-4. Cherry-pick fix to dev
+3. PR to prod → merge → CI tags + publishes (automatic)
+4. Cherry-pick fix to dev (via PR)
 ```
 
 ### CI workflows
@@ -221,19 +248,22 @@ version at publish time.
 |---|---|---|
 | `ci.yml` | PR to prod/dev | `make analyze` + `make test-unit` + `make test-ops-native` |
 | `pr-lint.yml` | PR to prod/dev | Conventional commit title + promotion chain |
-| `full-test.yml` | `ready-to-test` label | 10 jobs: 4 pkg (macOS/Linux/Windows/web) + 6 integration (macOS/Linux/Windows/Android/iOS/web) |
-| `create-publish.yml` | Changelog push or `workflow_dispatch` | Tag + GitHub Release (idempotent) |
-| `publish.yml` | Tag push or `workflow_dispatch` | `make compile-natives/wasm` + upload + pub.dev (idempotent) |
+| `full-test.yml` | `ready-to-test` label | 10 jobs: 4 pkg + 6 integration. Web jobs have separate named steps per mode (JSPI/Atomics/OPFS). |
+| `create-release.yml` | Push to dev/prod that changes `CHANGELOG.md` or `CHANGELOG.pre.md`, or `workflow_dispatch` | Scan changelog → tag + GitHub Release (idempotent) |
+| `publish.yml` | Tag push (`v*`), or `workflow_dispatch` with tag name | Compile all 6 targets + upload to Release + publish to pub.dev (idempotent) |
+| `flutter-upgrade.yml` | Daily schedule or `workflow_dispatch` | Check for new Flutter stable, open/update upgrade PR on `chore/flutter-upgrade` branch |
+| `triage.yml` | Issues/PRs opened | Auto-label and assign |
 
 ### Failure recovery
 
 | Failure | Fix |
 |---|---|
-| `create-publish.yml` failed | Rerun via workflow_dispatch |
-| Compile failed | Fix code, rerun with tag |
-| pub.dev failed | Rerun (rejects duplicates, safe) |
-| Tag without Release | Run `create-publish.yml` |
-| Release without binaries | Rerun `publish.yml` |
+| `create-release.yml` failed | Rerun via Actions → Create Release → Run workflow |
+| `publish.yml` compile failed | Fix code, push fix via PR, rerun `publish.yml` with the tag |
+| pub.dev publish failed | Rerun `publish.yml` (pub.dev rejects duplicates, safe to retry) |
+| Tag exists but no Release | Run `create-release.yml` via workflow_dispatch |
+| Release exists but no binaries | Rerun `publish.yml` via workflow_dispatch with tag |
+| `publish.yml` shows "workflow file issue" | Check for `inputs.tag` in top-level expressions — use `github.event.inputs.tag` instead |
 
 ### Git hooks
 
