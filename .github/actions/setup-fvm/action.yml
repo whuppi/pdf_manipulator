@@ -65,20 +65,30 @@ runs:
 
         # The archive extracts to fvm/ subdirectory containing the binary
         FVM_BIN="$INSTALL_DIR/fvm"
+
+        # Verify the binary exists
+        ls -la "$FVM_BIN"/ | head -5
+
+        # Add to PATH for this step AND all subsequent steps
         export PATH="$FVM_BIN:$PATH"
         echo "$FVM_BIN" >> $GITHUB_PATH
 
+        # Also add fvm's Flutter SDK to PATH so fvm dart/fvm flutter work
+        # (fvm install puts it under FVM_CACHE_PATH)
+        FVM_CACHE="$RUNNER_TEMP/fvm_cache"
+        export FVM_CACHE_PATH="$FVM_CACHE"
+        echo "FVM_CACHE_PATH=$FVM_CACHE" >> $GITHUB_ENV
+
         # ── Verify ─────────────────────────────────────────────────────
-        fvm --version
+        "$FVM_BIN/fvm" --version
 
         # ── Install project SDK from .fvmrc ────────────────────────────
-        echo -e "yes\nyes\n" | fvm install
+        echo -e "yes\nyes\n" | "$FVM_BIN/fvm" install
 
         # Suppress analytics
-        fvm flutter config --no-analytics 2>/dev/null || true
-        fvm flutter config --no-cli-animations 2>/dev/null || true
+        "$FVM_BIN/fvm" flutter config --no-analytics 2>/dev/null || true
 
         echo "::group::SDK versions"
-        fvm dart --version
-        fvm flutter --version
+        "$FVM_BIN/fvm" dart --version
+        "$FVM_BIN/fvm" flutter --version
         echo "::endgroup::"
