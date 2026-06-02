@@ -5,8 +5,5 @@ runs:
   using: composite
   steps:
     - uses: ./.github/actions/setup-web-testing
-      id: web
     - shell: bash
-      env:
-        CHROME_PATH: ${{ steps.web.outputs.chrome-path }}
       run: xvfb-run make test-example-web

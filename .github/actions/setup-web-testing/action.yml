@@ -26,14 +26,19 @@ runs:
     - shell: bash
       run: make build-wasm
     - shell: bash
+      env:
+        CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
       run: |
-        # Remove system Chrome so chromedriver only finds the action's matched version.
-        # flutter drive's WebDriverService creates its own chromedriver session that
-        # ignores CHROME_EXECUTABLE and uses whatever chrome is on PATH / at the default
-        # location. Without this, chromedriver 149 finds system Chrome 148 → mismatch.
+        # Replace system Chrome with the action's matched version everywhere.
+        # Chrome for Testing (from setup-chrome@v2) needs --no-sandbox on CI.
+        # Setting CHROME_EXECUTABLE makes both `dart test -p chrome` and
+        # `flutter drive` use our wrapper which adds --no-sandbox + SAB.
         sudo rm -f /usr/bin/google-chrome-stable /usr/bin/google-chrome /opt/google/chrome/chrome 2>/dev/null || true
-        # Symlink the action's Chrome to where chromedriver expects it
-        sudo ln -sf "${{ steps.chrome.outputs.chrome-path }}" /usr/bin/google-chrome-stable
-        sudo ln -sf "${{ steps.chrome.outputs.chrome-path }}" /usr/bin/google-chrome
+        sudo ln -sf "$CHROME_PATH" /usr/bin/google-chrome-stable
+        sudo ln -sf "$CHROME_PATH" /usr/bin/google-chrome
+        # Set CHROME_EXECUTABLE globally for all subsequent steps
+        WRAPPER="$(cd "$GITHUB_WORKSPACE" && pwd)/tool/chrome_with_sab.sh"
+        echo "CHROME_EXECUTABLE=$WRAPPER" >> $GITHUB_ENV
+        echo "CHROME_PATH=$CHROME_PATH" >> $GITHUB_ENV
         echo "Chrome: $(google-chrome-stable --version)"
         echo "ChromeDriver: $(chromedriver --version)"
