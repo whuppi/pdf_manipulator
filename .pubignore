@@ -9,3 +9,6 @@ example/pubspec.lock
 
 # Development files
 .gitmodules
+
+# Internal docs (consumers have README + API docs from dartdoc)
+docs/

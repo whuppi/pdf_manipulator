@@ -115,13 +115,9 @@ jobs:
             fi
             if [ -n "$COMMITS" ]; then
               COMMIT_LIST=$(echo "$COMMITS" | sed 's/^/- /')
-              NOTES="$NOTES
-
-<details><summary>Commits since ${PREV_TAG:-initial} ($COUNT)</summary>
-
-$COMMIT_LIST
-
-</details>"
+              DETAILS_OPEN="<details><summary>Commits since ${PREV_TAG:-initial} ($COUNT)</summary>"
+              DETAILS_CLOSE="</details>"
+              printf -v NOTES '%s\n\n%s\n\n%s\n\n%s' "$NOTES" "$DETAILS_OPEN" "$COMMIT_LIST" "$DETAILS_CLOSE"
             fi
 
             echo "Creating release $TAG (prerelease=$IS_PRE)..."
