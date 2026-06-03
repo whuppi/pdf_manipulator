@@ -1,5 +1,5 @@
 name: pdf_manipulator
-version: 0.0.0
+version: 1.0.0
 description: >
   Cross-platform PDF manipulation for Flutter & Dart. Merge, split, render,
   extract text, search, sign, encrypt, validate, convert, build from scratch.
@@ -48,6 +48,7 @@ dependencies:
   web: ^1.1.0
 
 false_secrets:
+  - /vendor/**
   - /test/helpers/fixtures.dart
   - /example/lib/main.dart
 
