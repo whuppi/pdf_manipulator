@@ -1,621 +1,485 @@
-// pdf_manipulator Web Worker — runs pdf_oxide WASM off the main thread.
+// WASM Worker — one InstanceState per worker, multiple readers per instance.
 //
-// Three dispatch paths:
-//   1. One-shot ops (top-level): load doc → operate → save → free
-//   2. Editor handle ops (editor.*): persistent WasmPdfDocument per handle
-//   3. Builder handle ops (builder.* / page.*): persistent WasmDocumentBuilder + WasmFluentPageBuilder
+// ── Reader registry ──────────────────────────────────────────────
 //
-// Handle maps mirror the native isolate's pattern — same architecture, same lifecycle.
+// Each source gets a unique readerId in the registry. host_read_at
+// dispatches by sourceIndex → readerId via the activeReaderMap.
+// Pinned readers survive across ops (handle lifetime). Non-pinned
+// readers are cleaned after each exec.
+//
+// ── Three I/O modes (auto-detected: jspi > atomics > opfs) ──────
+//
+//   jspi    — JSPI Promise suspension (Chrome 137+ / Firefox 139+)
+//   atomics — SAB + Atomics.wait (needs COOP/COEP)
+//   opfs    — SyncAccessHandle on OPFS disk (universal)
+//
+// ── Message protocol ─────────────────────────────────────────────
+//
+//   init           { ioMode, baseUrl, wasmModule? }  → ready | error
+//   exec           { opId, requestBytes, args, ioMode, sab?,
+//                    opfsFile?, opfsFiles?, isPinnedOp,
+//                    pinnedSourceOpId? }              → result | error
+//                  ← readAt { reqId, sourceIndex, offset, count, mode, sab? }
+//                    → readAtResponse { reqId, bytes | error }
+//                  ← chunk { sinkIndex, data }
+//   shutdown                                          → shutdown_done
+//   releaseOpfs   { sourceOpId? }                     → releaseOpfs_done
+//   readAtResponse { reqId, bytes | error }
 
-import init, { WasmPdf, WasmDocumentBuilder, WasmPdfDocument, WasmFluentPageBuilder } from './pdf_oxide.js';
+// ═══════════════════════════════════════════════════════════════════
+// WASM + instance state
+// ═══════════════════════════════════════════════════════════════════
 
+let wasm = null;
 let initialized = false;
-let nextHandleId = 1;
-const editorHandles = new Map();   // id → WasmPdfDocument
-const builderHandles = new Map();  // id → WasmDocumentBuilder
-const pageHandles = new Map();     // id → WasmFluentPageBuilder
+let instancePtr = 0;
+let currentIoMode = 'opfs';
+let wasmBaseUrl = (() => {
+  try { return new URL(self.location.href).href.replace(/\/[^/]*$/, '/'); }
+  catch (_) { return './'; }
+})();
+
+// ═══════════════════════════════════════════════════════════════════
+// Reader registry
+// ═══════════════════════════════════════════════════════════════════
+
+/** @type {Map<number, Reader>} */
+const readers = new Map();
+let nextReaderId = 1;
+
+/**
+ * @typedef {Object} Reader
+ * @property {number} length        — source byte length
+ * @property {FileSystemSyncAccessHandle|null} opfsHandle
+ * @property {string|null} opfsFile — OPFS filename for cleanup
+ * @property {boolean} pinned       — survives across ops
+ * @property {number|null} pinnedByOpId
+ */
+
+function registerReader(length, opfsHandle, opfsFile, pinned, pinnedByOpId) {
+  const id = nextReaderId++;
+  readers.set(id, { length, opfsHandle, opfsFile, pinned, pinnedByOpId });
+  return id;
+}
+
+function deregisterNonPinned() {
+  for (const [id, r] of readers) {
+    if (!r.pinned) {
+      if (r.opfsHandle) { try { r.opfsHandle.close(); } catch (_) {} }
+      readers.delete(id);
+    }
+  }
+}
+
+function clearAllReaders() {
+  for (const [, r] of readers) {
+    if (r.opfsHandle) { try { r.opfsHandle.close(); } catch (_) {} }
+  }
+  readers.clear();
+}
+
+function findPinnedByOpId(opId) {
+  for (const [id, r] of readers) {
+    if (r.pinned && r.pinnedByOpId === opId) return { id, reader: r };
+  }
+  return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// host_read_at — dispatched by WASM via extern import
+// ═══════════════════════════════════════════════════════════════════
+
+const SAB_HEADER = 8;
+
+/** @type {Array<[number, number]>|null} sourceIndex → readerId */
+let activeReaderMap = null;
+
+/** @type {SharedArrayBuffer|null} */
+let activeSab = null;
+
+/** @type {((msg: any) => void)|null} JSPI read callback */
+let jspiReadResolve = null;
+
+/** @type {((msg: any) => void)|null} JSPI/async write ack callback */
+let jspiWriteResolve = null;
+
+/** @type {SharedArrayBuffer|null} SAB for write backpressure (Atomics mode) */
+let activeWriteSab = null;
+
+function hostReadAt(sourceIndex, offset, count, bufPtr) {
+  const readerId = resolveReaderId(sourceIndex);
+  const reader = readers.get(readerId);
+  if (!reader) return -1;
+
+  // Cap matches SAB_MAX_CHUNK in coordinator.js and chunkSize in web_transport.dart.
+  const toRead = Math.min(count, reader.length - offset, 65536);
+  if (toRead <= 0) return 0;
+
+  // OPFS reader — sync read from disk, independent of I/O mode
+  if (reader.opfsHandle) return readFromOpfs(reader.opfsHandle, offset, toRead, bufPtr);
+
+  // Callback reader — mode determines sync/async mechanism
+  switch (currentIoMode) {
+    case 'atomics': return readViaAtomics(sourceIndex, offset, toRead, bufPtr);
+    case 'jspi':    return readViaJspi(sourceIndex, offset, toRead, bufPtr);
+    default:        return readViaJspi(sourceIndex, offset, toRead, bufPtr);
+  }
+}
+
+function resolveReaderId(sourceIndex) {
+  if (activeReaderMap) {
+    for (const [si, rid] of activeReaderMap) {
+      if (si === sourceIndex) return rid;
+    }
+  }
+  return sourceIndex;
+}
+
+// ── Read: OPFS (sync, any mode) ─────────────────────────────────
+
+function readFromOpfs(handle, offset, count, bufPtr) {
+  const buf = new Uint8Array(count);
+  const n = handle.read(buf, { at: offset });
+  new Uint8Array(wasm.memory.buffer).set(buf.subarray(0, n), bufPtr);
+  return n;
+}
+
+// ── Read: Atomics (sync block via SAB) ──────────────────────────
+
+function readViaAtomics(sourceIndex, offset, count, bufPtr) {
+  if (!activeSab) return -1;
+  const status = new Int32Array(activeSab);
+  const data = new Uint8Array(activeSab, SAB_HEADER);
+
+  Atomics.store(status, 0, 0);
+  self.postMessage({
+    type: 'readAt', reqId: '0', sourceIndex, offset, count,
+    mode: 'atomics', sab: activeSab,
+  });
+  Atomics.wait(status, 0, 0);
+
+  if (Atomics.load(status, 0) === 2) return -1;
+  const len = Atomics.load(new Int32Array(activeSab, 4, 1), 0);
+  new Uint8Array(wasm.memory.buffer).set(data.subarray(0, len), bufPtr);
+  return len;
+}
+
+// ── Read: JSPI (async via promise suspension) ───────────────────
+
+function readViaJspi(sourceIndex, offset, count, bufPtr) {
+  return new Promise((resolve) => {
+    jspiReadResolve = (msg) => {
+      if (msg.error) { resolve(-1); return; }
+      const bytes = new Uint8Array(msg.bytes);
+      new Uint8Array(wasm.memory.buffer).set(bytes, bufPtr);
+      resolve(bytes.length);
+    };
+    self.postMessage({
+      type: 'readAt', reqId: '0', sourceIndex, offset, count, mode: 'async',
+    });
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// host_write_chunk — called by WASM for output, with backpressure
+// ═══════════════════════════════════════════════════════════════════
+//
+// Backpressure prevents the WASM producer from outrunning the Dart
+// consumer. Each chunk waits for an ack before the next is produced.
+//
+//   Atomics: Atomics.wait on a write SAB until coordinator acks
+//   JSPI:    returns Promise, resolved when coordinator acks
+//   OPFS:    fire-and-forget (no blocking mechanism available)
+
+function hostWriteChunk(sinkIndex, bufPtr, len) {
+  const chunk = new Uint8Array(wasm.memory.buffer).slice(bufPtr, bufPtr + len);
+  switch (currentIoMode) {
+    case 'atomics':
+      return writeWithAtomicsAck(sinkIndex, chunk);
+    case 'jspi':
+      return writeWithJspiAck(sinkIndex, chunk);
+    default:
+      // OPFS fallback — no backpressure available
+      self.postMessage({ type: 'chunk', sinkIndex, data: chunk.buffer }, [chunk.buffer]);
+      return 0;
+  }
+}
+
+function writeWithAtomicsAck(sinkIndex, chunk) {
+  if (!activeWriteSab) {
+    self.postMessage({ type: 'chunk', sinkIndex, data: chunk.buffer }, [chunk.buffer]);
+    return 0;
+  }
+  const status = new Int32Array(activeWriteSab);
+  Atomics.store(status, 0, 0);
+  self.postMessage({ type: 'chunk', sinkIndex, data: chunk.buffer }, [chunk.buffer]);
+  Atomics.wait(status, 0, 0);
+  return Atomics.load(status, 0) === 2 ? -1 : 0;
+}
+
+function writeWithJspiAck(sinkIndex, chunk) {
+  return new Promise((resolve) => {
+    jspiWriteResolve = (msg) => {
+      resolve(msg?.error ? -1 : 0);
+    };
+    self.postMessage({ type: 'chunk', sinkIndex, data: chunk.buffer }, [chunk.buffer]);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// WASM initialization
+// ═══════════════════════════════════════════════════════════════════
+
+let jspiBridgeExecute = null;
+let precompiledModule = null;
+
+const JSPI_ASYNC_IMPORTS = ['__wbg_host_read_at', '__wbg_host_write_chunk'];
 
 async function ensureInit() {
   if (initialized) return;
-  await init();
+
+  self.host_read_at = hostReadAt;
+  self.host_write_chunk = hostWriteChunk;
+
+  const jsModule = await import(wasmBaseUrl + 'pdf_oxide.js');
+
+  // Monkey-patch instantiate to intercept imports for JSPI wrapping
+  // and to capture raw WASM exports. Restored in finally.
+  const origInstantiate = WebAssembly.instantiate;
+  const origStreaming = WebAssembly.instantiateStreaming;
+
+  WebAssembly.instantiate = async (source, imports) => {
+    if (currentIoMode === 'jspi' && imports) imports = wrapJspiImports(imports);
+    const result = await origInstantiate(source, imports);
+    wasm = (result instanceof WebAssembly.Instance ? result : result.instance).exports;
+    return result;
+  };
+  if (origStreaming) {
+    WebAssembly.instantiateStreaming = async (response, imports) => {
+      const bytes = await (await response).arrayBuffer();
+      return WebAssembly.instantiate(bytes, imports);
+    };
+  }
+
+  try {
+    await jsModule.default(precompiledModule || (wasmBaseUrl + 'pdf_oxide_bg.wasm'));
+  } finally {
+    WebAssembly.instantiate = origInstantiate;
+    if (origStreaming) WebAssembly.instantiateStreaming = origStreaming;
+  }
+
+  if (currentIoMode === 'jspi') {
+    jspiBridgeExecute = WebAssembly.promising(wasm.bridge_execute);
+  }
   initialized = true;
 }
 
-function getHandle(map, id, name) {
-  const h = map.get(id);
-  if (!h) throw new Error(`${name} handle ${id} not found (disposed or never created)`);
-  return h;
+function wrapJspiImports(imports) {
+  const patched = {};
+  for (const [mod, fns] of Object.entries(imports)) {
+    const patchedMod = {};
+    for (const [name, fn] of Object.entries(fns)) {
+      patchedMod[name] = (JSPI_ASYNC_IMPORTS.some(p => name.startsWith(p)) && typeof fn === 'function')
+        ? new WebAssembly.Suspending(fn) : fn;
+    }
+    patched[mod] = patchedMod;
+  }
+  return patched;
 }
 
-self.onmessage = async (event) => {
-  const { id, op, args } = event.data;
+// ═══════════════════════════════════════════════════════════════════
+// JSPI bridge_execute caller
+// ═══════════════════════════════════════════════════════════════════
+
+async function callBridgeJspi(requestBytes, sourceLengthsPacked, sinkCount) {
+  const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+  const ptr0 = wasm.__wbindgen_export(requestBytes.length, 1) >>> 0;
+  new Uint8Array(wasm.memory.buffer).set(requestBytes, ptr0);
+  const ptr1 = wasm.__wbindgen_export(sourceLengthsPacked.length, 1) >>> 0;
+  new Uint8Array(wasm.memory.buffer).set(sourceLengthsPacked, ptr1);
+  try {
+    await jspiBridgeExecute(retptr, instancePtr, ptr0, requestBytes.length, ptr1, sourceLengthsPacked.length, sinkCount);
+    const mem = new DataView(wasm.memory.buffer);
+    const r0 = mem.getInt32(retptr, true);
+    const r1 = mem.getInt32(retptr + 4, true);
+    const result = new Uint8Array(wasm.memory.buffer, r0, r1).slice();
+    wasm.__wbindgen_export4(r0, r1, 1);
+    return result;
+  } finally {
+    wasm.__wbindgen_add_to_stack_pointer(16);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// OPFS handle opening
+// ═══════════════════════════════════════════════════════════════════
+
+async function openOpfsHandle(filename) {
+  const root = await navigator.storage.getDirectory();
+  const fh = await root.getFileHandle(filename);
+  return await fh.createSyncAccessHandle();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Exec — build readers, call bridge_execute, pin on success
+// ═══════════════════════════════════════════════════════════════════
+
+async function exec(msg) {
+  const { opId, requestBytes, args, ioMode, sab, isPinnedOp, pinnedSourceOpId } = msg;
+  if (!requestBytes) throw new Error('No requestBytes');
+
+  await ensureInit();
+  activeSab = (ioMode === 'atomics' && sab) ? sab : null;
+  activeWriteSab = (ioMode === 'atomics' && msg.writeSab) ? msg.writeSab : null;
+
+  // ── Parse OPFS filenames ──────────────────────────────────────
+  const opfsFiles = msg.opfsFiles
+    ? msg.opfsFiles.split(',')
+    : (msg.opfsFile ? [msg.opfsFile] : []);
+
+  // ── Collect source lengths from Dart args ─────────────────────
+  const dartLengths = [];
+  if ((args?.sourceLength ?? 0) > 0) dartLengths.push(args.sourceLength);
+  for (let i = 1; ; i++) {
+    const v = args?.[`source${i}Length`];
+    if (v != null && v > 0) dartLengths.push(v); else break;
+  }
+
+  // ── Build reader registry for this exec ───────────────────────
+  const readerIds = [];
+  const finalLengths = [];
+
+  // Pinned ops: index 0 = existing pinned reader, index 1+ = new sources
+  if (isPinnedOp && pinnedSourceOpId != null) {
+    const pinned = findPinnedByOpId(pinnedSourceOpId);
+    if (pinned) {
+      readerIds.push(pinned.id);
+      finalLengths.push(pinned.reader.length);
+    }
+  }
+
+  // Register new readers for Dart's sources
+  for (let i = 0; i < dartLengths.length; i++) {
+    let handle = null;
+    let length = dartLengths[i];
+    const file = opfsFiles[i] || null;
+    if (file) {
+      handle = await openOpfsHandle(file);
+      length = handle.getSize();
+    }
+    readerIds.push(registerReader(length, handle, file, false, null));
+    finalLengths.push(length);
+  }
+
+  // ── Pack source lengths for WASM ──────────────────────────────
+  const packed = new Uint8Array(finalLengths.length * 8);
+  const dv = new DataView(packed.buffer);
+  for (let i = 0; i < finalLengths.length; i++) {
+    dv.setFloat64(i * 8, finalLengths[i], true);
+  }
+
+  activeReaderMap = readerIds.map((rid, i) => [i, rid]);
+  const sinkCount = args?.hasSink ? 1 : 0;
+  const shouldPin = !!(args?.keepSource);
+  let responseBytes;
 
   try {
-    await ensureInit();
-
-    let result;
-
-    // ── Editor handle ops (editor.XXX) ────────────────────────────
-    if (op === 'editorOpen') {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password || null);
-      const hid = nextHandleId++;
-      editorHandles.set(hid, doc);
-      result = { handleId: hid };
-    } else if (op.startsWith('editor.')) {
-      result = handleEditorOp(op.substring(7), args);
-    }
-    // ── Builder handle ops (builderXXX / builder.XXX) ─────────────
-    else if (op === 'builderCreate') {
-      const builder = new WasmDocumentBuilder();
-      const hid = nextHandleId++;
-      builderHandles.set(hid, builder);
-      result = { handleId: hid };
-    } else if (op.startsWith('builder.')) {
-      result = handleBuilderOp(op.substring(8), args);
-    }
-    // ── Page handle ops (page.XXX) ────────────────────────────────
-    else if (op.startsWith('page.')) {
-      result = handlePageOp(op.substring(5), args);
-    }
-    // ── One-shot ops ──────────────────────────────────────────────
-    else {
-      result = handleOneShot(op, args);
+    if (currentIoMode === 'jspi') {
+      responseBytes = await callBridgeJspi(new Uint8Array(requestBytes), packed, sinkCount);
+    } else {
+      const { bridge_execute } = await import(wasmBaseUrl + 'pdf_oxide.js');
+      responseBytes = bridge_execute(instancePtr, new Uint8Array(requestBytes), packed, sinkCount);
     }
 
-    // Transfer ArrayBuffers for zero-copy
-    const transfers = [];
-    if (result && result.bytes instanceof ArrayBuffer) transfers.push(result.bytes);
-    if (result && result.chunks) {
-      for (const c of result.chunks) {
-        if (c instanceof ArrayBuffer) transfers.push(c);
+    // Pin on success only (status byte 1 = ok)
+    if (responseBytes.length > 0 && responseBytes[0] === 1 && shouldPin) {
+      for (const rid of readerIds) {
+        const r = readers.get(rid);
+        if (r) { r.pinned = true; r.pinnedByOpId = opId; }
       }
     }
-    self.postMessage({ type: 'result', id, result: result || {} }, transfers);
-  } catch (e) {
-    self.postMessage({ type: 'error', id, error: e.message || String(e) });
+  } finally {
+    deregisterNonPinned();
+    activeReaderMap = null;
+    activeSab = null;
+    activeWriteSab = null;
+    jspiWriteResolve = null;
+  }
+
+  return responseBytes;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Message handler
+// ═══════════════════════════════════════════════════════════════════
+
+self.onmessage = async (e) => {
+  const msg = e.data;
+
+  switch (msg.type) {
+    case 'init': {
+      currentIoMode = msg.ioMode;
+      if (msg.baseUrl) wasmBaseUrl = msg.baseUrl;
+      if (msg.wasmModule) precompiledModule = msg.wasmModule;
+      try {
+        await ensureInit();
+        const { bridge_init } = await import(wasmBaseUrl + 'pdf_oxide.js');
+        instancePtr = bridge_init();
+        self.postMessage({ type: 'ready' });
+      } catch (err) {
+        self.postMessage({ type: 'error', error: 'WASM init failed: ' + err.message });
+      }
+      return;
+    }
+
+    case 'shutdown': {
+      if (instancePtr !== 0) {
+        try {
+          const { bridge_shutdown } = await import(wasmBaseUrl + 'pdf_oxide.js');
+          bridge_shutdown(instancePtr);
+        } catch (_) {}
+        instancePtr = 0;
+      }
+      clearAllReaders();
+      self.postMessage({ type: 'shutdown_done' });
+      return;
+    }
+
+    case 'releaseOpfs': {
+      const targetOpId = msg.sourceOpId;
+      for (const [id, r] of readers) {
+        if (r.pinned && (targetOpId == null || r.pinnedByOpId === targetOpId)) {
+          if (r.opfsHandle) { try { r.opfsHandle.close(); } catch (_) {} }
+          readers.delete(id);
+        }
+      }
+      self.postMessage({ type: 'releaseOpfs_done' });
+      return;
+    }
+
+    case 'readAtResponse': {
+      if (jspiReadResolve) { jspiReadResolve(msg); jspiReadResolve = null; }
+      return;
+    }
+
+    case 'chunkAck': {
+      if (jspiWriteResolve) { jspiWriteResolve(msg); jspiWriteResolve = null; }
+      return;
+    }
+
+    case 'exec': {
+      try {
+        const responseBytes = await exec(msg);
+        // Slice to ensure we transfer only the result, not the full WASM heap
+        // (wasm-bindgen may return a view into linear memory).
+        const owned = responseBytes.buffer.byteLength === responseBytes.byteLength
+            ? responseBytes.buffer
+            : responseBytes.buffer.slice(responseBytes.byteOffset, responseBytes.byteOffset + responseBytes.byteLength);
+        self.postMessage({ type: 'result', data: owned }, [owned]);
+      } catch (err) {
+        self.postMessage({ type: 'error', error: err.message || String(err) });
+      }
+      return;
+    }
   }
 };
-
-// ═══════════════════════════════════════════════════════════════════════
-// EDITOR HANDLE — persistent WasmPdfDocument
-// ═══════════════════════════════════════════════════════════════════════
-
-function handleEditorOp(method, args) {
-  const doc = getHandle(editorHandles, args.handleId, 'Editor');
-
-  switch (method) {
-    case 'dispose':
-      doc.free();
-      editorHandles.delete(args.handleId);
-      return {};
-
-    // ── Properties ──
-    case 'pageCount': return { value: doc.pageCount() };
-    case 'version': {
-      const v = doc.version();
-      return { value: v ? `${v[0]}.${v[1]}` : '1.0' };
-    }
-    case 'isModified': return { value: true }; // WASM always modified after open+edit
-
-    // ── Metadata ──
-    case 'getTitle': return { value: doc.title() || '' };
-    case 'setTitle': doc.setTitle(args.value); return {};
-    case 'getAuthor': return { value: doc.author() || '' };
-    case 'setAuthor': doc.setAuthor(args.value); return {};
-    case 'getSubject': return { value: doc.subject() || '' };
-    case 'setSubject': doc.setSubject(args.value); return {};
-    case 'getKeywords': return { value: doc.keywords() || '' };
-    case 'setKeywords': doc.setKeywords(args.value); return {};
-
-    // ── Pages ──
-    case 'rotatePage': doc.rotatePage(args.page, args.degrees); return {};
-    case 'rotateAllPages': doc.rotateAllPages(args.degrees); return {};
-    case 'getPageMediaBox': {
-      const mb = doc.pageMediaBox(args.page);
-      return { x: mb[0], y: mb[1], width: mb[2] - mb[0], height: mb[3] - mb[1] };
-    }
-    case 'deletePage': doc.deletePage(args.page); return {};
-    case 'movePage': doc.movePage(args.from, args.to); return {};
-    case 'extractPages': {
-      const pages = new Uint32Array(args.pages);
-      return { bytes: doc.extractPages(pages).buffer };
-    }
-    case 'mergeFrom': {
-      const other = new WasmPdfDocument(new Uint8Array(args.bytes));
-      doc.mergeDocument(other);
-      other.free();
-      return {};
-    }
-
-    // ── Optimization ──
-    case 'optimizeImages': return { value: doc.optimizeImages(args.quality) };
-    case 'unembedStandardFonts': return { value: doc.unembedStandardFonts() };
-
-    // ── Watermark + stamps ──
-    case 'addWatermark':
-      doc.addWatermark(args.page, args.text,
-        args.fontSize || 48, args.rotation || 45, args.opacity || 0.3,
-        args.r || 0.5, args.g || 0.5, args.b || 0.5);
-      return {};
-    case 'addWatermarkPositioned':
-      doc.addWatermarkPositioned(args.page, args.text,
-        args.x, args.y, args.width, args.height,
-        args.fontSize || 48, args.fontName || null,
-        args.rotation || 45, args.opacity || 0.3,
-        args.r || 0.5, args.g || 0.5, args.b || 0.5);
-      return {};
-    case 'addStamp':
-      doc.addStamp(args.page, args.stampType, args.customName || null,
-        args.x, args.y, args.width, args.height, args.opacity || 1.0);
-      return {};
-    case 'addImageStamp':
-      doc.addImageStamp(args.page, new Uint8Array(args.imageBytes),
-        args.x, args.y, args.width, args.height, args.opacity || 1.0);
-      return {};
-
-    // ── Content ──
-    case 'embedFile': doc.embedFile(args.name, new Uint8Array(args.data)); return {};
-    case 'eraseRegions': {
-      const rects = new Float32Array(args.rects);
-      doc.eraseRegions(args.page, rects);
-      return {};
-    }
-    case 'flattenForms': doc.flattenForms(); return {};
-    case 'flattenAllAnnotations': doc.flattenAllAnnotations(); return {};
-    case 'applyAllRedactions': doc.applyAllRedactions(); return {};
-    case 'setFormFieldValue': doc.setFormFieldValue(args.field, args.value); return {};
-    case 'cropMargins':
-      doc.cropMargins(args.left, args.right, args.top, args.bottom);
-      return {};
-    case 'convertToPdfA': doc.convertToPdfA(args.level); return {};
-    case 'resizeImage':
-      doc.resizeImage(args.page, args.imageName, args.width, args.height);
-      return {};
-
-    // ── Save ──
-    case 'save': return { bytes: doc.saveToBytes().buffer };
-    case 'saveWithOptions':
-      return { bytes: doc.saveWithOptions(
-        args.compress ?? true, args.garbageCollect ?? true, args.linearize ?? false
-      ).buffer };
-    case 'saveEncrypted':
-      return { bytes: doc.saveEncryptedToBytes(
-        args.userPassword || '', args.ownerPassword || ''
-      ).buffer };
-    case 'saveEncryptedFull':
-      return { bytes: doc.saveEncryptedFullToBytes(
-        args.userPassword || '', args.ownerPassword || '',
-        args.algorithm ?? 3,
-        args.allowPrint ?? true, args.allowPrintHq ?? true,
-        args.allowModify ?? true, args.allowCopy ?? true,
-        args.allowAnnotate ?? true, args.allowFillForms ?? true,
-        args.allowAccessibility ?? true, args.allowAssemble ?? true
-      ).buffer };
-
-    default:
-      throw new Error(`Unknown editor operation: ${method}`);
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// BUILDER HANDLE — persistent WasmDocumentBuilder
-// ═══════════════════════════════════════════════════════════════════════
-
-function handleBuilderOp(method, args) {
-  const builder = getHandle(builderHandles, args.handleId, 'Builder');
-
-  switch (method) {
-    case 'dispose':
-      builderHandles.delete(args.handleId);
-      return {};
-
-    case 'setTitle': builder.title(args.value); return {};
-    case 'setAuthor': builder.author(args.value); return {};
-    case 'setSubject': builder.subject(args.value); return {};
-    case 'setKeywords': builder.keywords(args.value); return {};
-
-    case 'addA4Page': {
-      const page = builder.a4Page();
-      const hid = nextHandleId++;
-      pageHandles.set(hid, { page, builderId: args.handleId });
-      return { handleId: hid };
-    }
-    case 'addLetterPage': {
-      const page = builder.letterPage();
-      const hid = nextHandleId++;
-      pageHandles.set(hid, { page, builderId: args.handleId });
-      return { handleId: hid };
-    }
-    case 'addPage': {
-      const page = builder.page(args.width, args.height);
-      const hid = nextHandleId++;
-      pageHandles.set(hid, { page, builderId: args.handleId });
-      return { handleId: hid };
-    }
-
-    case 'build': return { bytes: builder.build().buffer };
-    case 'buildEncrypted':
-      return { bytes: builder.toBytes_encrypted(
-        args.ownerPassword || '', args.userPassword || ''
-      ).buffer };
-
-    default:
-      throw new Error(`Unknown builder operation: ${method}`);
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// PAGE HANDLE — persistent WasmFluentPageBuilder
-// ═══════════════════════════════════════════════════════════════════════
-
-function handlePageOp(method, args) {
-  const entry = getHandle(pageHandles, args.handleId, 'Page');
-  const page = entry.page;
-
-  switch (method) {
-    case 'done': {
-      const builder = getHandle(builderHandles, entry.builderId, 'Builder');
-      page.done(builder);
-      pageHandles.delete(args.handleId);
-      return {};
-    }
-
-    case 'font': page.font(args.name, args.size); return {};
-    case 'at': page.at(args.x, args.y); return {};
-    case 'text': page.text(args.text); return {};
-    case 'heading': page.heading(args.level, args.text); return {};
-    case 'paragraph': page.paragraph(args.text); return {};
-    case 'space': page.space(args.points); return {};
-    case 'horizontalRule': page.horizontalRule(); return {};
-    case 'image':
-      page.imageWithAlt(new Uint8Array(args.bytes),
-        args.x, args.y, args.width, args.height, args.altText || '');
-      return {};
-    case 'watermark': page.watermark(args.text); return {};
-
-    // ── Form fields ──
-    case 'textField':
-      page.textField(args.name, args.x, args.y, args.w, args.h, args.defaultValue || null);
-      return {};
-    case 'checkbox':
-      page.checkbox(args.name, args.x, args.y, args.w, args.h, args.checked || false);
-      return {};
-    case 'comboBox':
-      page.comboBox(args.name, args.x, args.y, args.w, args.h, args.options, args.selected || null);
-      return {};
-    case 'pushButton':
-      page.pushButton(args.name, args.x, args.y, args.w, args.h, args.caption);
-      return {};
-    case 'signatureField':
-      page.signatureField(args.name, args.x, args.y, args.w, args.h);
-      return {};
-    case 'radioGroup': {
-      const rects = args.rects; // flat array [x0,y0,w0,h0, x1,y1,w1,h1, ...]
-      const xs = [], ys = [], ws = [], hs = [];
-      for (let i = 0; i < rects.length; i += 4) {
-        xs.push(rects[i]); ys.push(rects[i+1]);
-        ws.push(rects[i+2]); hs.push(rects[i+3]);
-      }
-      page.radioGroup(args.name, args.values,
-        new Float64Array(xs), new Float64Array(ys),
-        new Float64Array(ws), new Float64Array(hs),
-        args.selected || null);
-      return {};
-    }
-
-    // ── Field scripts ──
-    case 'fieldKeystroke': page.fieldKeystroke(args.script); return {};
-    case 'fieldFormat': page.fieldFormat(args.script); return {};
-    case 'fieldValidate': page.fieldValidate(args.script); return {};
-    case 'fieldCalculate': page.fieldCalculate(args.script); return {};
-
-    // ── Links ──
-    case 'linkUrl': page.linkUrl(args.url); return {};
-    case 'linkPage': page.linkPage(args.targetPage); return {};
-
-    // ── Layout ──
-    case 'footnote': page.footnote(args.refMark, args.noteText); return {};
-    case 'columns': page.columns(args.columnCount, args.gapPt, args.text); return {};
-    case 'newline': page.newline(); return {};
-    case 'newPageSameSize': page.newPageSameSize(); return {};
-
-    default:
-      throw new Error(`Unknown page operation: ${method}`);
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// ONE-SHOT OPS — load → operate → save → free
-// ═══════════════════════════════════════════════════════════════════════
-
-function handleOneShot(op, args) {
-  switch (op) {
-    // ── Inspect ──
-    case 'open': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password || null);
-      const pc = doc.pageCount();
-      const pages = [];
-      for (let i = 0; i < pc; i++) {
-        const mb = doc.pageMediaBox(i);
-        pages.push({ index: i, width: mb[2] - mb[0], height: mb[3] - mb[1], rotation: doc.pageRotation(i) });
-      }
-      const r = { pageCount: pc, version: '2.0', pages, isTagged: doc.hasStructureTree() };
-      doc.free();
-      return r;
-    }
-
-    case 'probe': {
-      try {
-        const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-        const pc = doc.pageCount();
-        doc.free();
-        return { isValid: true, pageCount: pc, isEncrypted: false };
-      } catch (e) {
-        return { isValid: false, pageCount: null, isEncrypted: false };
-      }
-    }
-
-    // ── Structural ──
-    case 'merge': {
-      const arrays = args.inputs.map(b => new Uint8Array(b));
-      const merged = WasmPdf.merge(arrays);
-      const bytes = merged.toBytes();
-      merged.free();
-      return { bytes: bytes.buffer };
-    }
-
-    case 'split': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      const pc = doc.pageCount();
-      const chunks = [];
-      for (let start = 0; start < pc; start += args.every) {
-        const end = Math.min(start + args.every, pc);
-        const pages = new Uint32Array(end - start);
-        for (let i = 0; i < pages.length; i++) pages[i] = start + i;
-        chunks.push(doc.extractPages(pages).buffer);
-      }
-      doc.free();
-      return { chunks };
-    }
-
-    case 'extractPages': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      const bytes = doc.extractPages(new Uint32Array(args.pages));
-      doc.free();
-      return { bytes: bytes.buffer };
-    }
-
-    case 'deletePages': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      for (const p of [...args.pages].sort((a, b) => b - a)) doc.deletePage(p);
-      const bytes = doc.saveToBytes();
-      doc.free();
-      return { bytes: bytes.buffer };
-    }
-
-    case 'reorderPages': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      const bytes = doc.extractPages(new Uint32Array(args.order));
-      doc.free();
-      return { bytes: bytes.buffer };
-    }
-
-    case 'movePage': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      doc.movePage(args.from, args.to);
-      const bytes = doc.saveToBytes();
-      doc.free();
-      return { bytes: bytes.buffer };
-    }
-
-    case 'rotatePages': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      for (const [page, degrees] of Object.entries(args.pages)) doc.rotatePage(parseInt(page), degrees);
-      const bytes = doc.saveToBytes();
-      doc.free();
-      return { bytes: bytes.buffer };
-    }
-
-    case 'rotateAllPages': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      doc.rotateAllPages(args.degrees);
-      const bytes = doc.saveToBytes();
-      doc.free();
-      return { bytes: bytes.buffer };
-    }
-
-    // ── Compression ──
-    case 'compress': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      const bytes = doc.saveWithOptions(true, true, false);
-      doc.free();
-      return { bytes: bytes.buffer };
-    }
-
-    // ── Content ──
-    case 'flattenForms': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      doc.flattenForms();
-      const bytes = doc.saveToBytes();
-      doc.free();
-      return { bytes: bytes.buffer };
-    }
-
-    case 'applyRedactions': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      doc.applyAllRedactions();
-      const bytes = doc.saveToBytes();
-      doc.free();
-      return { bytes: bytes.buffer };
-    }
-
-    // ── Watermark ──
-    case 'watermark': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      const pc = doc.pageCount();
-      for (const i of (args.pages || Array.from({length: pc}, (_, i) => i))) {
-        doc.addWatermark(i, args.text, args.fontSize || 48, args.rotation || 45,
-          args.opacity || 0.3, args.r || 0.5, args.g || 0.5, args.b || 0.5);
-      }
-      const bytes = doc.saveToBytes();
-      doc.free();
-      return { bytes: bytes.buffer };
-    }
-
-    case 'watermarkPositioned': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      const pc = doc.pageCount();
-      for (const i of (args.pages || Array.from({length: pc}, (_, i) => i))) {
-        doc.addWatermarkPositioned(i, args.text, args.x, args.y, args.width, args.height,
-          args.fontSize || 48, args.fontName || null, args.rotation || 45,
-          args.opacity || 0.3, args.r || 0.5, args.g || 0.5, args.b || 0.5);
-      }
-      const bytes = doc.saveToBytes();
-      doc.free();
-      return { bytes: bytes.buffer };
-    }
-
-    // ── Stamps ──
-    case 'addStamp': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      doc.addStamp(args.page, args.stampType, args.customName || null,
-        args.x, args.y, args.width, args.height, args.opacity || 1.0);
-      const bytes = doc.saveToBytes();
-      doc.free();
-      return { bytes: bytes.buffer };
-    }
-
-    case 'addImageStamp': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      doc.addImageStamp(args.page, new Uint8Array(args.imageBytes),
-        args.x, args.y, args.width, args.height, args.opacity || 1.0);
-      const bytes = doc.saveToBytes();
-      doc.free();
-      return { bytes: bytes.buffer };
-    }
-
-    // ── Security ──
-    case 'encrypt': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      const bytes = doc.saveEncryptedToBytes(args.userPassword || '', args.ownerPassword || '');
-      doc.free();
-      return { bytes: bytes.buffer };
-    }
-
-    case 'decrypt': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password);
-      const bytes = doc.saveToBytes();
-      doc.free();
-      return { bytes: bytes.buffer };
-    }
-
-    // ── Extraction ──
-    case 'extractText': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password || null);
-      const text = args.page != null
-        ? (typeof doc.extractPageText(args.page) === 'string' ? doc.extractPageText(args.page) : '')
-        : doc.extractAllText();
-      doc.free();
-      return { text };
-    }
-
-    case 'toMarkdown': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password || null);
-      const text = args.page != null ? doc.toMarkdown(args.page) : doc.toMarkdownAll();
-      doc.free();
-      return { text };
-    }
-
-    case 'toHtml': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password || null);
-      const text = doc.toHtml(args.page);
-      doc.free();
-      return { text };
-    }
-
-    case 'toPlainText': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password || null);
-      const text = doc.toPlainText(args.page);
-      doc.free();
-      return { text };
-    }
-
-    // ── Search ──
-    case 'searchPage': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password || null);
-      const results = doc.searchPage(args.page, args.query);
-      doc.free();
-      return { results: results || [] };
-    }
-
-    case 'searchAll': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password || null);
-      const results = doc.search(args.query);
-      doc.free();
-      return { results: results || [] };
-    }
-
-    // ── Images ──
-    case 'imagesToPdf': {
-      const doc = WasmPdf.fromMultipleImageBytes(args.images.map(b => new Uint8Array(b)));
-      const bytes = doc.toBytes();
-      doc.free();
-      return { bytes: bytes.buffer };
-    }
-
-    case 'embedFile': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      doc.embedFile(args.name, new Uint8Array(args.fileData));
-      const bytes = doc.saveToBytes();
-      doc.free();
-      return { bytes: bytes.buffer };
-    }
-
-    case 'eraseRegions': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes));
-      doc.eraseRegions(args.page, new Float32Array(args.rects));
-      const bytes = doc.saveToBytes();
-      doc.free();
-      return { bytes: bytes.buffer };
-    }
-
-    // ── Signatures ──
-    case 'getSignatureCount': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password || null);
-      const count = doc.signatureCount();
-      doc.free();
-      return { count };
-    }
-
-    case 'getSignatures': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password || null);
-      const sigs = doc.signatures();
-      doc.free();
-      return { signatures: sigs || [] };
-    }
-
-    // ── Validation ──
-    case 'validatePdfA': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password || null);
-      const r = doc.validatePdfA(args.level || '2b');
-      doc.free();
-      return { compliant: r?.compliant || false, errors: r?.errors || 0, warnings: r?.warnings || 0 };
-    }
-
-    case 'validatePdfUa': {
-      const doc = new WasmPdfDocument(new Uint8Array(args.bytes), args.password || null);
-      const r = doc.validatePdfUa();
-      doc.free();
-      return { accessible: r?.accessible || false };
-    }
-
-    default:
-      throw new Error(`Unknown operation: ${op}`);
-  }
-}
-
-ensureInit().then(() => {
-  self.postMessage({ type: 'ready' });
-}).catch((e) => {
-  self.postMessage({ type: 'error', id: -1, error: `Init failed: ${e.message}` });
-});

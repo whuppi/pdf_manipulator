@@ -26,12 +26,13 @@ Options:
   -h, --help   Show this help.
 
 Files installed:
+  web/pdf_manipulator/coordinator.js       — Coordinator Worker (manages WASM worker pool)
+  web/pdf_manipulator/worker.js            — WASM Worker (runs engine operations)
   web/pdf_manipulator/pdf_oxide.js         — ESM module (JS glue for WASM)
   web/pdf_manipulator/pdf_oxide_bg.wasm    — Compiled WASM binary (downloaded from GitHub Releases)
-  web/pdf_manipulator/worker.js            — Web Worker for off-main-thread dispatch
 ''';
 
-const _localFiles = ['pdf_oxide.js', 'worker.js'];
+const _localFiles = ['coordinator.js', 'worker.js', 'pdf_oxide.js'];
 const _wasmFile = 'pdf_oxide_bg.wasm';
 const _releaseRepo = 'https://github.com/whuppi/pdf_manipulator/releases/download';
 
@@ -67,6 +68,11 @@ void main(List<String> args) async {
 
   var installed = 0;
 
+  // Write version stamp so WebBridge can detect stale assets
+  final versionFile = File('${destDir.path}/.version');
+  versionFile.writeAsStringSync(version);
+  print('  .version — $version');
+
   // Copy JS glue + worker from package (small text files, committed in git)
   for (final name in _localFiles) {
     final src = File.fromUri(webAssetsDir.uri.resolve(name));
@@ -80,7 +86,14 @@ void main(List<String> args) async {
       print('  $name — already exists (use --force to overwrite)');
       continue;
     }
-    src.copySync(dst.path);
+    if (name == 'coordinator.js') {
+      // Stamp version into coordinator so WebBridge can detect stale assets
+      var content = src.readAsStringSync();
+      content = content.replaceFirst("'__VERSION__'", "'$version'");
+      dst.writeAsStringSync(content);
+    } else {
+      src.copySync(dst.path);
+    }
     print('  $name — copied (${(src.lengthSync() / 1024).toStringAsFixed(0)} KB)');
     installed++;
   }

@@ -1,0 +1,37 @@
+#!/bin/sh
+# Enforce Conventional Commits format.
+# Valid: feat: add watermark | fix(web): handle empty PDF | feat!: breaking change
+# Invalid: added watermark | WIP | misc changes
+
+msg=$(head -1 "$1")
+
+# Allow reverts (squash-reverts have conventional titles, but git revert doesn't)
+printf '%s\n' "$msg" | grep -qE '^Revert ' && exit 0
+
+# Block merge commits — branch-to-branch moves go through GitHub PRs.
+# Exception: maintainer may merge dev→prod locally for releases.
+if printf '%s\n' "$msg" | grep -qE '^Merge '; then
+  # Allow merge commits from dev or hotfix branches (release flow)
+  if printf '%s\n' "$msg" | grep -qE "^Merge (branch |remote-tracking branch ).*(dev|hotfix)"; then
+    exit 0
+  fi
+  echo "ERROR: Merge commits are not allowed."
+  echo "  Use GitHub PRs for branch-to-branch promotions."
+  echo "  Exception: 'git merge dev' on prod is allowed for releases."
+  exit 1
+fi
+
+if ! printf '%s\n' "$msg" | grep -qE '^(feat|fix|docs|chore|ci|test|refactor|perf|build|deps)(\(.+\))?!?: .+'; then
+  echo "ERROR: Commit message must follow Conventional Commits format."
+  echo ""
+  echo "  <type>[optional scope]: <description>"
+  echo ""
+  echo "  Types: feat fix docs chore ci test refactor perf build deps"
+  echo "  Examples:"
+  echo "    feat: add watermark support"
+  echo "    fix(web): handle empty PDF edge case"
+  echo "    feat!: redesign API (breaking change)"
+  echo ""
+  printf '  Your message: %s\n' "$msg"
+  exit 1
+fi

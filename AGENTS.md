@@ -28,7 +28,7 @@ Manual edits to this file will be overwritten on the next stamp.
 
 ## What this tool does
 
-**pdf_manipulator** is a cross-platform, MIT-licensed PDF manipulation package for Dart & Flutter — instance-based API (`final pdf = Pdf()`) for merge, split, compress, encrypt, render, extract text, stamp images, create PDFs from scratch. Powered by a vendored fork of pdf_oxide (Rust) at `vendor/pdf_oxide/`. Worker isolate on native, Web Worker + WASM on web — every operation runs off the main thread. No `dart:io` in the barrel. Input/output is `Uint8List`. Dual-path build hook: consumers get pre-built binaries from GitHub Releases (zero Rust), contributors compile from source automatically.
+**pdf_manipulator** is a cross-platform PDF manipulation package for Dart & Flutter — instance-based API (`final pdf = Pdf()`) with `DataSource` in, `DataSink` out for O(1) memory streaming. Merge, split, compress, encrypt, render, extract text, search, sign, validate, convert, stamp, build from scratch. Powered by a vendored fork of pdf_oxide (Rust) at `vendor/pdf_oxide/`. Worker isolate on native, Web Worker + WASM on web (3 I/O modes: JSPI, Atomics, OPFS) — every operation runs off the main thread. No `dart:io` in the barrel. Dual-path build hook: consumers get pre-built binaries from GitHub Releases (zero Rust), contributors compile from source automatically.
 
 This repo is one tool inside the **whuppi** workspace — a multi-tool monorepo. The workspace ships shared engineering standards, code conventions, brand identity, and build patterns that apply across every tool. They're documented in three layers:
 
@@ -45,22 +45,21 @@ If you're working on this tool standalone (cloned outside the workspace), the in
 Run these after every code change. A failing test or analyzer error means the task is not done — don't suppress with `// ignore:`, `# noqa`, or `--no-verify`. Fix the underlying issue.
 
 ```bash
-# Consumer setup (zero Rust)
-dart pub get
-dart test
-
-# Contributor setup (needs Rust — https://rustup.rs)
+# Setup (needs Rust — https://rustup.rs, FVM — https://fvm.app)
 git clone --recursive https://github.com/whuppi/pdf_manipulator
-dart pub get
-dart test                                           # 302 native tests
-dart test test/web/web_smoke_test.dart -p chrome    # 8 web tests
-dart analyze .
+cd pdf_manipulator
+fvm install                     # downloads SDK pinned in .fvmrc
+make check                      # analyze + native + web (3 modes) + example
 
-# Rebuild WASM (after Rust changes)
-./tool/build_wasm.sh
+# Without FVM (override SDK commands)
+make check DART=dart FLUTTER=flutter
 
-# Rebuild FFI bindings (after C header changes)
-dart run ffigen --config ffigen.yaml
+# Individual targets
+make analyze                    # Dart + Rust warnings (all features)
+make test-ops-native            # 192 native tests
+make test-ops-web               # 192 × 3 web modes (JSPI, Atomics, OPFS)
+make test-example               # example integration tests (macOS + 3 web modes)
+make build-wasm                 # rebuild WASM after Rust changes
 ```
 
 ---
@@ -82,13 +81,15 @@ When in doubt, read existing code in this repo and match it. Per-repo style cons
 
 ## Tool-specific notes
 
-**Instance-based API.** `final pdf = Pdf()` — all methods on the instance. `pdf.kill()` tears down the worker. No static methods.
+**Instance-based API.** `final pdf = Pdf()` — all methods on the instance. `pdf.dispose()` tears down the worker. `pdf.edit(source)` for batch editing, `pdf.build()` for creating from scratch. I/O is `DataSource` (random-access reads) and `DataSink` (sequential writes) — O(1) memory for any file size.
 
 **Dual-path build hook.** `vendor/pdf_oxide/Cargo.toml` exists → compile from source (contributor). Doesn't exist → download from GitHub Releases (consumer). Version read from `pubspec.yaml`.
 
 **Vendor submodule with patches.** `vendor/pdf_oxide/` is a git submodule with local patches. Full inventory in `docs/UPDATING.md`.
 
-**CI/CD.** ci.yml (auto, macOS), full-test.yml (manual, 5 platforms), release.yml (auto on version bump, 13 targets + GitHub Release), publish.yml (manual, pub.dev OIDC).
+**Conventional commits required.** PR titles must follow `feat:` / `fix:` / `chore:` etc. Enforced by CI (`pr-lint.yml`) and local hook (`.githooks/commit-msg`).
+
+**CI/CD.** Fully automated via release-please with two channels: dev branch → prereleases (`1.1.0-dev.0`), prod branch → stable releases (`1.1.0`). Workflows: ci.yml (PR gate), pr-lint.yml (conventional commit + promotion chain + security lint), create-release.yml (tag + GitHub Release), publish.yml (tag-triggered: compile → GitHub Release → pub.dev publish via OIDC).
 
 ---
 
@@ -113,7 +114,7 @@ Never commit a sensitive file even if it's somehow not gitignored — surface to
 - **Don't add backwards-compat shims** for code that hasn't shipped. Code assumes the latest schema and contracts; migrations handle old data once.
 - **Don't refactor "for cleanliness" without a stated reason.** Surface the suggestion before changing surrounding code.
 - **No co-authored-by AI in commits.** The maintainer is the author.
-- **Never force-push `main`/`master`.** Never skip pre-commit hooks.
+- **Never force-push protected branches** (`prod`, `main`, `dev`). Never skip pre-commit hooks.
 
 For the engineering philosophy that informs every line of code in this workspace, see `../.claude/rules/universal/dc-engineering-philosophy.md` if available.
 

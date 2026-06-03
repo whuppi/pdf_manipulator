@@ -1,30 +1,10 @@
 name: Compile Android
-description: Build pdf_oxide for Android arm64, arm, x64, x86 via NDK
+description: Build pdf_oxide for Android arm64, arm, x64, x86
 
 runs:
   using: composite
   steps:
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: ./.github/actions/setup-rust
       with: { targets: "aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android" }
-    - uses: Swatinem/rust-cache@v2
-      with: { workspaces: vendor/pdf_oxide }
     - shell: bash
-      env:
-        MANIFEST: vendor/pdf_oxide/Cargo.toml
-        FEATURES: icc,legacy-crypto,rendering,signatures
-      run: |
-        NDK=$ANDROID_NDK_HOME
-        TC="$NDK/toolchains/llvm/prebuilt/darwin-x86_64"
-        for s in \
-          "aarch64-linux-android:android-arm64:aarch64-linux-android21-clang" \
-          "armv7-linux-androideabi:android-arm:armv7a-linux-androideabi21-clang" \
-          "x86_64-linux-android:android-x64:x86_64-linux-android21-clang" \
-          "i686-linux-android:android-x86:i686-linux-android21-clang"; do
-          IFS=: read -r triple outdir clang <<< "$s"
-          lv="CARGO_TARGET_$(echo "$triple" | tr '[:lower:]-' '[:upper:]_')_LINKER"
-          export "$lv=$TC/bin/$clang"
-          cargo build --manifest-path $MANIFEST --lib --release --target "$triple" --features $FEATURES
-          mkdir -p "out/$outdir"
-          cp "vendor/pdf_oxide/target/$triple/release/libpdf_oxide.so" "out/$outdir/"
-          unset "$lv"
-        done
+      run: bash tool/compile_rust.sh android

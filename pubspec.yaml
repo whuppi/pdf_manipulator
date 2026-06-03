@@ -1,12 +1,19 @@
 name: pdf_manipulator
-version: 1.0.0
+version: 0.0.0
 description: >
-  Cross-platform PDF manipulation. Merge, split, compress, encrypt, decrypt,
-  rotate, reorder, watermark, extract text and images — powered by pdf_oxide
-  (Rust, MIT), zero main-thread blocking on every platform including web.
+  Cross-platform PDF manipulation for Flutter & Dart. Merge, split, render,
+  extract text, search, sign, encrypt, validate, convert, build from scratch.
+  Powered by pdf_oxide (Rust). Off the main thread on every platform including web.
 homepage: https://github.com/whuppi/pdf_manipulator
 repository: https://github.com/whuppi/pdf_manipulator
 issue_tracker: https://github.com/whuppi/pdf_manipulator/issues
+
+topics:
+  - pdf
+  - pdf-manipulation
+  - flutter
+  - wasm
+  - rust
 
 environment:
   sdk: ">=3.10.0 <4.0.0"
@@ -15,19 +22,45 @@ hooks:
   build: true
 
 dependencies:
-  code_assets: ^1.0.0
+  # Build hook — native asset compilation protocol
+  code_assets: ^1.2.0
+  hooks: ^2.0.0
+
+  # Build hook — SHA256 verification of downloaded pre-built binaries
+  crypto: ^3.0.6
+
+  # Native FFI bridge (native platforms only)
   ffi: ^2.1.0
-  hooks: ^1.0.0
-  logging: ^1.3.0
-  meta: ^1.16.0
+
+  # Build hook — package root resolution
   package_config: ^2.1.0
+
+  # Build hook — path manipulation
   path: ^1.9.0
+
+  # Build hook + Rust engine logging
+  logging: ^1.3.0
+
+  # Annotations (e.g. @internal)
+  meta: ^1.16.0
+
+  # Web transport — JS interop via dart:js_interop types
   web: ^1.1.0
 
+false_secrets:
+  - /test/helpers/fixtures.dart
+  - /example/lib/main.dart
+
 dev_dependencies:
+  # Test runner
   test: ^1.25.0
-  lints: ^5.1.0
-  ffigen: ^20.1.1
+
+  # Lint rules
+  lints: ^6.0.0
+
+  # Web test asset server (serves coordinator.js + worker.js + wasm to browser tests)
   shelf: ^1.4.2
   shelf_static: ^1.1.3
+
+  # Hybrid isolate communication for web test asset server
   stream_channel: ^2.1.4

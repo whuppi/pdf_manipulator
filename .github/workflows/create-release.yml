@@ -1,0 +1,293 @@
+# Release pipeline: stamped tag → compile → upload → approve → publish.
+#
+# The tag is an orphan commit with stamped version + raw vendor source
+# (no submodule pointers). Compile jobs and git-tag consumers get a
+# self-contained tree. pub.dev tarball also ships vendor source.
+#
+# Automatic on changelog push. Manual via workflow_dispatch.
+# Publish job requires environment approval (human gate before pub.dev).
+# Idempotent — rerun skips existing releases, clobbers existing assets.
+name: Release
+
+on:
+  push:
+    branches: [dev, prod]
+    paths:
+      - 'CHANGELOG.md'
+      - 'CHANGELOG.pre.md'
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to check (dev or prod)'
+        required: true
+        default: 'dev'
+        type: choice
+        options: [dev, prod]
+
+permissions:
+  contents: write
+
+env:
+  COMPILE_OUTPUT_DIR: out
+
+concurrency:
+  # github.event.inputs.branch (not bare inputs.branch) — top-level expressions
+  # are evaluated for ALL push events, not just workflow_dispatch. Bare inputs.*
+  # errors when the inputs context doesn't exist on push events.
+  group: release-${{ github.event.inputs.branch || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Discover version + create stamped tag ───────────────────────────
+  # Reads changelog → finds latest version → creates an orphan commit
+  # with stamped version + raw vendor source (no submodule pointers) →
+  # tags that commit → creates GitHub Release with notes.
+  # All downstream jobs checkout the tag and get a self-contained tree.
+  discover:
+    name: Discover versions
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.find.outputs.tag }}
+      version: ${{ steps.find.outputs.version }}
+      has_release: ${{ steps.find.outputs.has_release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.branch || github.ref_name }}
+          submodules: recursive
+
+      - name: Find + create release
+        id: find
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ inputs.branch || github.ref_name }}
+        run: |
+          if [[ "$BRANCH" == "prod" ]]; then
+            FILE="CHANGELOG.md"
+          else
+            FILE="CHANGELOG.pre.md"
+          fi
+
+          if [ ! -f "$FILE" ]; then
+            echo "has_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          VERSION=$(grep -oP '^## \K\S+' "$FILE" | head -1 || true)
+          if [ -z "$VERSION" ]; then
+            echo "has_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          TAG="v$VERSION"
+          IS_PRE=false
+          [[ "$VERSION" == *-* ]] && IS_PRE=true
+
+          if [[ "$BRANCH" == "prod" && "$IS_PRE" == "true" ]]; then
+            echo "Skipping prerelease $VERSION on prod."
+            echo "has_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$BRANCH" == "dev" && "$IS_PRE" == "false" ]]; then
+            echo "Skipping stable $VERSION on dev."
+            echo "has_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Skip if release already exists
+          if gh release view "$TAG" --json tagName >/dev/null 2>&1; then
+            echo "Release $TAG already exists."
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "has_release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Create orphan stamped commit with raw vendor source
+          bash tool/stamp_release.sh "$TAG" --stamp-tag
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "release: $TAG"
+          STAMPED_SHA=$(git rev-parse HEAD)
+          echo "Stamped commit: $STAMPED_SHA"
+
+          # Push stamped commit so GitHub knows about it (local-only commits can't be tagged)
+          git push origin --force "$STAMPED_SHA:refs/heads/_release-staging"
+
+          # Generate release notes and create release at the stamped commit
+          NOTES=$(bash tool/stamp_release.sh "$TAG" --github-notes)
+          FLAGS=""
+          [[ "$IS_PRE" == "true" ]] && FLAGS="--prerelease"
+          gh release create "$TAG" \
+            --target "$STAMPED_SHA" \
+            --title "pdf_manipulator $VERSION" \
+            --notes "$NOTES" \
+            $FLAGS
+          echo "Created release $TAG at $STAMPED_SHA"
+
+          # Clean up staging branch (tag holds the reference now)
+          git push origin --delete refs/heads/_release-staging 2>/dev/null || true
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "has_release=true" >> "$GITHUB_OUTPUT"
+
+  # ── Compile all targets ────────────────────────────────────────────
+  # Each job checks out the TAG (not the branch). The tag has raw vendor
+  # source — no submodules: recursive needed.
+  compile-macos:
+    needs: discover
+    if: needs.discover.outputs.has_release == 'true'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ needs.discover.outputs.tag }}' }
+      - uses: ./.github/actions/compile-macos
+      - uses: actions/upload-artifact@v4
+        with: { name: bin-macos, path: out/ }
+
+  compile-ios:
+    needs: discover
+    if: needs.discover.outputs.has_release == 'true'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ needs.discover.outputs.tag }}' }
+      - uses: ./.github/actions/compile-ios
+      - uses: actions/upload-artifact@v4
+        with: { name: bin-ios, path: out/ }
+
+  compile-android:
+    needs: discover
+    if: needs.discover.outputs.has_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ needs.discover.outputs.tag }}' }
+      - uses: ./.github/actions/compile-android
+      - uses: actions/upload-artifact@v4
+        with: { name: bin-android, path: out/ }
+
+  compile-linux:
+    needs: discover
+    if: needs.discover.outputs.has_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ needs.discover.outputs.tag }}' }
+      - uses: ./.github/actions/compile-linux
+      - uses: actions/upload-artifact@v4
+        with: { name: bin-linux, path: out/ }
+
+  compile-wasm:
+    needs: discover
+    if: needs.discover.outputs.has_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ needs.discover.outputs.tag }}' }
+      - uses: ./.github/actions/compile-wasm
+      - uses: actions/upload-artifact@v4
+        with: { name: bin-wasm, path: out/ }
+
+  compile-windows:
+    needs: discover
+    if: needs.discover.outputs.has_release == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ needs.discover.outputs.tag }}' }
+      - uses: ./.github/actions/compile-windows
+      - uses: actions/upload-artifact@v4
+        with: { name: bin-windows, path: out/ }
+
+  # ── Upload binaries to the GitHub Release ──────────────────────────
+  upload-assets:
+    name: Upload Release Assets
+    needs: [discover, compile-macos, compile-ios, compile-android, compile-linux, compile-windows, compile-wasm]
+    if: needs.discover.outputs.has_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts/ }
+      - name: Flatten assets
+        run: |
+          mkdir -p release
+          for runner in bin-macos bin-ios bin-android bin-linux bin-windows; do
+            for pdir in artifacts/$runner/*/; do
+              [ -d "$pdir" ] || continue
+              p=$(basename "$pdir")
+              for lib in "$pdir"*; do
+                [ -f "$lib" ] || continue
+                cp "$lib" "release/${p}-$(basename "$lib")"
+              done
+            done
+          done
+          if [ -d "artifacts/bin-wasm/wasm" ]; then
+            for f in artifacts/bin-wasm/wasm/*; do
+              [ -f "$f" ] || continue
+              cp "$f" "release/wasm-$(basename "$f")"
+            done
+          fi
+          ls -lh release/
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.discover.outputs.tag }}
+          files: release/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v4
+        with: { ref: '${{ needs.discover.outputs.tag }}' }
+      - name: Add git install snippet to release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash tool/stamp_release.sh ${{ needs.discover.outputs.tag }} --add-git-install
+
+  # ── Publish to pub.dev (requires approval) ─────────────────────────
+  # Runs AFTER you approve in the GitHub Environment gate.
+  # The tag already has stamped version + raw vendor source.
+  # This job only adds: filtered changelog for pub.dev + asset hashes.
+  publish:
+    name: Publish to pub.dev
+    needs: [discover, upload-assets]
+    if: needs.discover.outputs.has_release == 'true'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.branch || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: '${{ needs.discover.outputs.tag }}'
+          fetch-depth: 0
+      - uses: dart-lang/setup-dart@v1
+      - name: Install fvm + project SDK
+        run: dart pub global activate fvm && fvm install
+
+      - name: Stamp release artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash tool/stamp_release.sh ${{ needs.discover.outputs.tag }}
+
+      - name: Ephemeral commit (clean git for pub publish)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "stamp: ${{ needs.discover.outputs.tag }}" --allow-empty
+
+      - name: Materialize pub.dev credentials
+        env:
+          PUB_CREDS: ${{ secrets.PUB_CREDENTIALS }}
+        run: |
+          mkdir -p "$HOME/.config/dart"
+          printf '%s' "$PUB_CREDS" > "$HOME/.config/dart/pub-credentials.json"
+
+      - run: fvm dart pub get --no-example
+      - run: fvm dart pub publish --force
+
+      - name: Add pub.dev install snippet to release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash tool/stamp_release.sh ${{ needs.discover.outputs.tag }} --add-pub-install

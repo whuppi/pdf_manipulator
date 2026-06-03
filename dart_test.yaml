@@ -1,0 +1,31 @@
+# Default platform is VM (native). Web tests run explicitly with -p chrome.
+#
+#   dart test                                                         # native only
+#   dart test test/ops/runners/web_opfs_runner_test.dart -p chrome        # web OPFS
+#   dart test test/ops/runners/web_jspi_runner_test.dart -p chrome        # web JSPI
+#   dart test test/ops/runners/web_atomics_runner_test.dart -p chrome-coi # web Atomics
+#
+# Or use the Makefile:
+#   make test       # native
+#   make test-web   # web (all 3 modes)
+#   make check      # analyze + native + web
+
+platforms: [vm]
+
+tags:
+  stress:
+    # Heavy ops on 1000-page PDFs. Skip with --exclude-tags=stress for fast iteration.
+
+# On CI (Chrome for Testing), --no-sandbox is required because the SUID
+# sandbox binary isn't included. Locally this flag is harmless.
+override_platforms:
+  chrome:
+    settings:
+      arguments: --no-sandbox --disable-gpu
+
+define_platforms:
+  chrome-coi:
+    name: Chrome with Cross-Origin Isolation
+    extends: chrome
+    settings:
+      arguments: --no-sandbox --disable-gpu --enable-features=SharedArrayBuffer

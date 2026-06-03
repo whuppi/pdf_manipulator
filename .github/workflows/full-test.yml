@@ -1,46 +1,176 @@
+# Full test — maintainer adds "ready-to-test" label to trigger.
+# Label auto-removed on new pushes (stale results = wasted compute).
+#
+# Package tests: unit + native ops on macOS/Linux/Windows + web (3 modes)
+# Integration tests: example app on macOS/Android emulator/iOS simulator + web (3 modes)
+#
+# Every job composes reusable actions from .github/actions/.
 name: Full Test
 
 on:
-  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    branches: [prod, dev]
 
 concurrency:
-  group: full-test-${{ github.ref }}
+  group: full-test-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
-  macos:
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-        with: { submodules: recursive }
-      - uses: ./.github/actions/dart-test
-  linux:
+  revoke-label:
+    name: Revoke stale label
+    if: >-
+      github.event.action == 'synchronize' &&
+      contains(github.event.pull_request.labels.*.name, 'ready-to-test')
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Remove ready-to-test label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr edit ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --remove-label "ready-to-test"
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --body "Label \`ready-to-test\` removed — new commits pushed. Re-add when ready."
+
+  # ── Package tests (dart test) ──────────────────────────────────────
+
+  pkg-macos:
+    name: "pkg: macOS"
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
+    runs-on: macos-14
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: ./.github/actions/dart-test
-  windows:
+      - uses: ./.github/actions/pkg-test-native
+
+  pkg-linux:
+    name: "pkg: Linux"
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: ./.github/actions/pkg-test-native
+
+  pkg-windows:
+    name: "pkg: Windows"
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: windows-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: ./.github/actions/dart-test
-  android:
+      - uses: ./.github/actions/pkg-test-native
+
+  pkg-web:
+    name: "pkg: Web (3 modes)"
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: ./.github/actions/android-test
-  ios:
+      - uses: ./.github/actions/pkg-test-web
+
+  # ── Integration tests (flutter test on device) ─────────────────────
+
+  int-macos:
+    name: "integration: macOS"
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: macos-14
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: ./.github/actions/ios-test
-  web:
+      - uses: ./.github/actions/integration-macos
+
+  int-linux:
+    name: "integration: Linux"
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: ./.github/actions/integration-linux
+
+  int-windows:
+    name: "integration: Windows"
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: ./.github/actions/integration-windows
+
+  int-android:
+    name: "integration: Android"
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: ./.github/actions/integration-android
+
+  int-ios:
+    name: "integration: iOS"
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
+    runs-on: macos-14
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: ./.github/actions/integration-ios
+
+  int-web:
+    name: "integration: Web (3 modes)"
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - uses: ./.github/actions/integration-web
+
+  # ── Gate ───────────────────────────────────────────────────────────
+
+  gate:
+    name: Full Test Gate
+    if: always()
+    needs: [pkg-macos, pkg-linux, pkg-windows, pkg-web, int-macos, int-linux, int-windows, int-android, int-ios, int-web]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with: { submodules: recursive }
-      - uses: ./.github/actions/web-test
+      - name: Evaluate
+        run: |
+          if [[ "${{ github.event.action }}" != "labeled" ]] || [[ "${{ github.event.label.name }}" != "ready-to-test" ]]; then
+            echo "Full test not triggered — gate passes"
+            exit 0
+          fi
+          RESULTS=(
+            "${{ needs.pkg-macos.result }}"
+            "${{ needs.pkg-linux.result }}"
+            "${{ needs.pkg-windows.result }}"
+            "${{ needs.pkg-web.result }}"
+            "${{ needs.int-macos.result }}"
+            "${{ needs.int-linux.result }}"
+            "${{ needs.int-windows.result }}"
+            "${{ needs.int-android.result }}"
+            "${{ needs.int-ios.result }}"
+            "${{ needs.int-web.result }}"
+          )
+          for r in "${RESULTS[@]}"; do
+            if [[ "$r" != "success" ]]; then
+              echo "FAILED: a test returned '$r'"
+              exit 1
+            fi
+          done
+          echo "All 10 jobs passed"

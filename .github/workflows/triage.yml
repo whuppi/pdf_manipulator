@@ -1,0 +1,57 @@
+# Lightweight triage — no LLM, just rules.
+# Auto-assigns, auto-labels based on file paths.
+# Piku will replace this with intelligent triage later.
+name: Triage
+
+on:
+  issues:
+    types: [opened]
+  pull_request_target:
+    types: [opened]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  assign-and-label:
+    runs-on: ubuntu-latest
+    steps:
+      # Auto-assign maintainer on everything
+      - name: Auto-assign
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ "${{ github.event_name }}" == "issues" ]]; then
+            gh issue edit ${{ github.event.issue.number }} \
+              --repo ${{ github.repository }} \
+              --add-assignee chaudharydeepanshu
+          else
+            gh pr edit ${{ github.event.pull_request.number }} \
+              --repo ${{ github.repository }} \
+              --add-assignee chaudharydeepanshu
+          fi
+
+      # Auto-label PRs based on files changed
+      - name: Auto-label PR
+        if: github.event_name == 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          # Use the REST API files endpoint instead of gh pr view --json files.
+          # gh pr view internally fetches the diff, which fails with HTTP 406
+          # on PRs exceeding GitHub's 20,000-line diff limit.
+          FILES=$(gh api repos/${{ github.repository }}/pulls/$PR/files --paginate --jq '.[].filename' 2>/dev/null || echo "")
+
+          if echo "$FILES" | grep -qE "^\.github/|^\.githooks/"; then
+            gh pr edit $PR --repo ${{ github.repository }} --add-label "ci"
+          fi
+
+          if echo "$FILES" | grep -qE "web_assets/|_web\.dart|worker\.js|wasm"; then
+            gh pr edit $PR --repo ${{ github.repository }} --add-label "web"
+          fi
+
+          if echo "$FILES" | grep -qE "^vendor/"; then
+            gh pr edit $PR --repo ${{ github.repository }} --add-label "upstream"
+          fi
