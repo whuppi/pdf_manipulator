@@ -139,11 +139,13 @@ do_android() {
 }
 
 do_windows() {
-  if command -v x86_64-w64-mingw32-gcc &>/dev/null; then
-    compile_one "x86_64-pc-windows-gnu" "windows-x64" "pdf_oxide.dll"
-  elif [[ "$(uname -s)" == MINGW* ]] || [[ "$(uname -s)" == MSYS* ]]; then
+  # MSVC first (native Windows — builds x64 + arm64)
+  if [[ "$(uname -s)" == MINGW* ]] || [[ "$(uname -s)" == MSYS* ]]; then
     compile_one "x86_64-pc-windows-msvc" "windows-x64" "pdf_oxide.dll"
     compile_one "aarch64-pc-windows-msvc" "windows-arm64" "pdf_oxide.dll"
+  # MinGW cross-compile from Linux (x64 only)
+  elif command -v x86_64-w64-mingw32-gcc &>/dev/null; then
+    compile_one "x86_64-pc-windows-gnu" "windows-x64" "pdf_oxide.dll"
   else
     echo "⚠ Windows cross-compile not available on this host"
     return
