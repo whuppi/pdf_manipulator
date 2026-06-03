@@ -10,6 +10,8 @@
 # Each mode gets its own chromedriver port and log file — no shared
 # state between sequential runs.
 #
+# Retries once on AppConnectionException (Flutter DWDS bug #181357).
+#
 # Usage:
 #   run_web_test.sh <mode> <chrome_wrapper> <flutter_cmd...>
 #
@@ -36,80 +38,86 @@ case "$MODE" in
 esac
 
 LOG="/tmp/_pdf_web_test_${MODE}.log"
-: > "$LOG"
+MAX_ATTEMPTS=2
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 1. Start chromedriver
+# Run one attempt — returns 0 on pass, 1 on fail
 # ═══════════════════════════════════════════════════════════════════
 
-# Ensure port is free (stale chromedriver from a killed previous run)
-if lsof -ti ":$PORT" &>/dev/null; then
-  echo "Port $PORT in use — killing stale process"
-  lsof -ti ":$PORT" | xargs kill -9 2>/dev/null || true
-  sleep 1
-fi
+run_one_attempt() {
+  : > "$LOG"
 
-chromedriver --port="$PORT" &>/dev/null &
-CD_PID=$!
-sleep 2
-
-
-# ═══════════════════════════════════════════════════════════════════
-# 2. Run flutter drive (background)
-# ═══════════════════════════════════════════════════════════════════
-
-cd example
-CHROME_EXECUTABLE="$CHROME_WRAPPER" "${FLUTTER[@]}" drive \
-    --driver=test_driver/integration_test.dart \
-    --target=integration_test/pdf_smoke_test.dart \
-    --dart-define=PDF_IO_MODE="$MODE" \
-    --driver-port="$PORT" \
-    -d chrome &>"$LOG" &
-DRIVE_PID=$!
-
-
-# ═══════════════════════════════════════════════════════════════════
-# 3. Poll log for terminal line (5-min timeout prevents infinite hang)
-# ═══════════════════════════════════════════════════════════════════
-
-TIMEOUT=300
-ELAPSED=0
-while kill -0 "$DRIVE_PID" 2>/dev/null; do
-    if grep -qE 'All tests passed|Application finished' "$LOG" 2>/dev/null; then
-        break
-    fi
-    if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
-        echo "=== TIMEOUT: $MODE produced no result after ${TIMEOUT}s ==="
-        echo "Last 20 lines of log:"
-        tail -20 "$LOG"
-        break
-    fi
+  # Ensure port is free (stale chromedriver from a killed previous run)
+  if lsof -ti ":$PORT" &>/dev/null; then
+    echo "Port $PORT in use — killing stale process"
+    lsof -ti ":$PORT" | xargs kill -9 2>/dev/null || true
     sleep 1
-    ELAPSED=$((ELAPSED + 1))
-done
+  fi
+
+  chromedriver --port="$PORT" &>/dev/null &
+  local cd_pid=$!
+  sleep 2
+
+  cd example
+  CHROME_EXECUTABLE="$CHROME_WRAPPER" "${FLUTTER[@]}" drive \
+      --driver=test_driver/integration_test.dart \
+      --target=integration_test/pdf_smoke_test.dart \
+      --dart-define=PDF_IO_MODE="$MODE" \
+      --driver-port="$PORT" \
+      -d chrome &>"$LOG" &
+  local drive_pid=$!
+
+  # Poll log for terminal line (5-min timeout prevents infinite hang)
+  local timeout=300 elapsed=0
+  while kill -0 "$drive_pid" 2>/dev/null; do
+      if grep -qE 'All tests passed|Application finished' "$LOG" 2>/dev/null; then
+          break
+      fi
+      if [ "$elapsed" -ge "$timeout" ]; then
+          echo "=== TIMEOUT: $MODE produced no result after ${timeout}s ==="
+          echo "Last 20 lines of log:"
+          tail -20 "$LOG"
+          break
+      fi
+      sleep 1
+      elapsed=$((elapsed + 1))
+  done
+
+  # Cleanup
+  kill "$drive_pid" 2>/dev/null; wait "$drive_pid" 2>/dev/null
+  kill "$cd_pid"    2>/dev/null; wait "$cd_pid"    2>/dev/null
+  pkill -f 'flutter_tools_chrome_device' 2>/dev/null || true
+  rm -f flutter_*.log
+  cd ..
+
+  if grep -q 'All tests passed' "$LOG"; then
+    return 0
+  else
+    return 1
+  fi
+}
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 4. Cleanup — kill flutter drive + chromedriver + orphaned Chrome
+# Main — run with retry on AppConnectionException
 # ═══════════════════════════════════════════════════════════════════
+# Flutter DWDS bug #181357: AppConnectionException is non-deterministic.
+# Chrome's debug port occasionally fails to connect on CI. One retry
+# is enough — if it fails twice, it's a real problem.
 
-kill "$DRIVE_PID" 2>/dev/null; wait "$DRIVE_PID" 2>/dev/null
-kill "$CD_PID"    2>/dev/null; wait "$CD_PID"    2>/dev/null
-pkill -f 'flutter_tools_chrome_device' 2>/dev/null || true
-
-rm -f flutter_*.log
-
-
-# ═══════════════════════════════════════════════════════════════════
-# 5. Report result
-# ═══════════════════════════════════════════════════════════════════
-
-if grep -q 'All tests passed' "$LOG"; then
+for attempt in $(seq 1 $MAX_ATTEMPTS); do
+  if run_one_attempt; then
     echo "=== Example web $MODE: All tests passed ==="
     exit 0
-else
-    echo "=== Example web $MODE: FAILED ==="
-    cat "$LOG"
-    exit 1
-fi
+  fi
+
+  if [ "$attempt" -lt "$MAX_ATTEMPTS" ] && grep -q 'AppConnectionException' "$LOG"; then
+    echo "=== $MODE attempt $attempt failed (AppConnectionException) — retrying ==="
+    sleep 3
+  fi
+done
+
+echo "=== Example web $MODE: FAILED ==="
+cat "$LOG"
+exit 1
