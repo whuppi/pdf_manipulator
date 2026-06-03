@@ -11,7 +11,7 @@
 
   Rules:
   - Version in ## heading is the ONLY source of truth for the release version
-  - pubspec.yaml stays 0.0.0 — CI stamps it from this file at publish time
+  - pubspec.yaml stays 0.0.0 in git — CI stamps it on the release tag commit
   - Each entry covers ALL changes since the previous ## heading in this file
   - Prerelease entries go in CHANGELOG.pre.md, not here
   - DO NOT add commit lists here — CI auto-appends them at publish time

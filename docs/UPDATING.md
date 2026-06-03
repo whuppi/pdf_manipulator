@@ -209,18 +209,25 @@ Publish to pub.dev requires human approval via GitHub Environments.
 Changelog push to dev or prod
   → create-release.yml (automatic)
     1. Scan changelog for the latest version
-    2. Create tag + GitHub Release (if not exists, idempotent)
-    3. Compile all 6 targets in parallel
-    4. Upload binaries to GitHub Release
-    5. ⏸ PAUSE — publish job waits for approval (GitHub Environment gate)
-    6. You approve → stamp_release.sh runs:
-       - stamps version into pubspec.yaml + version.dart
-       - builds CHANGELOG.md for pub.dev (filters unpublished versions,
-         merges their content into collapsibles, appends commit list
-         since last pub.dev version)
+    2. Create orphan stamped commit:
+       - stamp version into pubspec.yaml + version.dart
+       - convert submodule pointers to raw vendor source
+       - remove .gitmodules
+    3. Create tag + GitHub Release at that commit
+    4. Compile all 6 targets in parallel (checkout tag — no submodules needed)
+    5. Upload binaries + add git install snippet to release notes
+    6. ⏸ PAUSE — publish job waits for approval (GitHub Environment gate)
+    7. You approve → stamp_release.sh runs:
+       - builds filtered CHANGELOG.md for pub.dev (only published versions +
+         current, unpublished intermediate versions merged into collapsibles,
+         commit list since last pub.dev version)
        - generates asset hashes from GitHub Release API
-    7. dart pub publish
+    8. dart pub publish + add pub.dev install snippet to release notes
 ```
+
+The tag is self-contained: stamped version + raw vendor source (no
+submodule pointers). Git tag consumers (`ref: vX.Y.Z`) get the same
+tree as pub.dev consumers. Compile jobs don't need submodule init.
 
 Idempotent. Rerun skips existing releases, clobbers existing assets,
 pub.dev rejects duplicate versions.

@@ -14,8 +14,9 @@
   Rules:
   - Version in ## heading is the source of truth for the prerelease version
   - Each entry covers changes since the PREVIOUS entry in THIS file (not CHANGELOG.md)
-  - pub.dev shows this file as CHANGELOG.md for the prerelease version
-    (CI copies this file to CHANGELOG.md in the published tarball)
+  - pub.dev gets a FILTERED version of this file as CHANGELOG.md:
+    only versions published on pub.dev + the current one are included,
+    unpublished intermediate versions are merged into collapsibles
   - When the stable release ships, write the full summary in CHANGELOG.md
     covering everything since the last stable — this file is not consulted
   - Entries here are permanent history — don't delete old entries

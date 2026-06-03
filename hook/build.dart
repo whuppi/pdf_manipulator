@@ -57,41 +57,83 @@ void main(List<String> args) async {
         .libraryFileName(_crateName, linkMode);
     final outFile = File.fromUri(input.outputDirectory.resolve(libFileName));
 
+    // Resolution order:
+    // 1. Try pre-built binary (fast, no toolchain needed)
+    // 2. Compile from source if vendor/pdf_oxide exists
+    // 3. Init submodules if .gitmodules exists (git dep with ref: dev)
+    // 4. Clear error with options
+
     final cargoToml = File.fromUri(
       input.packageRoot.resolve('vendor/pdf_oxide/Cargo.toml'),
     );
+    final version = _readVersion(input.packageRoot);
+    final isDevVersion = version == '0.0.0';
 
-    if (cargoToml.existsSync()) {
+    // Step 1: Try pre-built binary (skip for 0.0.0 — no release exists)
+    if (!isDevVersion) {
+      final downloaded = await _tryDownloadPrebuilt(
+        input, codeConfig, libFileName, outFile,
+      );
+      if (downloaded) {
+        // Success — skip to asset registration below
+      } else if (cargoToml.existsSync()) {
+        // Step 2: Binary unavailable, but source exists — compile
+        _log.warning(
+          'Pre-built binary unavailable. Compiling from source '
+          '(requires Rust toolchain).',
+        );
+        await _compileFromSource(input, targetTriple, linkMode, outFile);
+      } else {
+        throw StateError(
+          'Pre-built binary unavailable and no Rust source found.\n\n'
+          'Options:\n'
+          '  1. Use a published version: pdf_manipulator: ^X.Y.Z\n'
+          '  2. Use a git tag with binaries: ref: vX.Y.Z\n'
+          '  3. Clone with --recursive and use a path dependency\n',
+        );
+      }
+    } else if (cargoToml.existsSync()) {
+      // Step 2: Dev version (0.0.0) with source — compile directly
       await _compileFromSource(input, targetTriple, linkMode, outFile);
     } else {
-      // Consumer path: download prebuilt binary, cached in shared output dir.
-      // Pattern from sqlite3.dart — cache survives across builds of the same
-      // version. SHA256 verification catches corruption or stale cache.
-      final platform = _platformKey(codeConfig);
-      final assetKey = '$platform-$libFileName';
-      final cachedFile = File.fromUri(
-        input.outputDirectoryShared.resolve(libFileName),
+      // Step 3: Dev version, no source — try init submodules (git dep user)
+      final gitmodules = File.fromUri(
+        input.packageRoot.resolve('.gitmodules'),
       );
-
-      if (cachedFile.existsSync()) {
-        final expectedHash = assetHashesSha256[assetKey];
-        if (expectedHash != null) {
-          final actualHash = sha256.convert(await cachedFile.readAsBytes()).toString();
-          if (actualHash == expectedHash) {
-            _log.info('using cached ${cachedFile.path} (hash verified)');
-          } else {
-            _log.info('cached file hash mismatch — re-downloading');
-            await _downloadPrebuilt(input, codeConfig, libFileName, cachedFile);
-          }
-        } else {
-          _log.info('using cached ${cachedFile.path} (no hash to verify)');
+      if (gitmodules.existsSync()) {
+        _log.warning(
+          'No pre-built binary for dev version. Initializing submodules '
+          'and compiling from source (requires Rust toolchain).',
+        );
+        final initResult = await Process.run(
+          'git',
+          ['submodule', 'update', '--init', '--recursive'],
+          workingDirectory: p.fromUri(input.packageRoot),
+        );
+        if (initResult.exitCode != 0) {
+          throw StateError(
+            'Failed to initialize submodules.\n'
+            'stderr: ${initResult.stderr}\n\n'
+            'Clone manually with --recursive and use a path dependency.',
+          );
         }
+        if (!cargoToml.existsSync()) {
+          throw StateError(
+            'Submodules initialized but vendor/pdf_oxide/Cargo.toml '
+            'still missing. The submodule may be misconfigured.',
+          );
+        }
+        await _compileFromSource(input, targetTriple, linkMode, outFile);
       } else {
-        await _downloadPrebuilt(input, codeConfig, libFileName, cachedFile);
+        // Step 4: No binary, no source, no submodules — nothing we can do
+        throw StateError(
+          'No pre-built binary and no Rust source available.\n\n'
+          'Options:\n'
+          '  1. Use a published version: pdf_manipulator: ^X.Y.Z\n'
+          '  2. Use a git tag with binaries: ref: vX.Y.Z\n'
+          '  3. Clone with --recursive and use a path dependency\n',
+        );
       }
-
-      outFile.parent.createSync(recursive: true);
-      cachedFile.copySync(outFile.path);
     }
 
     output.assets.code.add(
@@ -217,9 +259,9 @@ Future<void> _compileFromSource(
   _log.info('compiled → ${outFile.path}');
 }
 
-// ── Path 2: Download from GitHub Releases ──────────────────────────────
+// ── Path 1: Try download from GitHub Releases (returns false on 404) ────
 
-Future<void> _downloadPrebuilt(
+Future<bool> _tryDownloadPrebuilt(
   BuildInput input,
   CodeConfig codeConfig,
   String libFileName,
@@ -227,8 +269,33 @@ Future<void> _downloadPrebuilt(
 ) async {
   final version = _readVersion(input.packageRoot);
   final platform = _platformKey(codeConfig);
-  final url = '$_releaseRepo/v$version/$platform-$libFileName';
+  final assetKey = '$platform-$libFileName';
+  final cachedFile = File.fromUri(
+    input.outputDirectoryShared.resolve(libFileName),
+  );
 
+  // Check cache first
+  if (cachedFile.existsSync()) {
+    final expectedHash = assetHashesSha256[assetKey];
+    if (expectedHash != null) {
+      final actualHash = sha256.convert(await cachedFile.readAsBytes()).toString();
+      if (actualHash == expectedHash) {
+        _log.info('using cached ${cachedFile.path} (hash verified)');
+        outFile.parent.createSync(recursive: true);
+        cachedFile.copySync(outFile.path);
+        return true;
+      }
+      _log.info('cached file hash mismatch — re-downloading');
+    } else {
+      _log.info('using cached ${cachedFile.path} (no hash to verify)');
+      outFile.parent.createSync(recursive: true);
+      cachedFile.copySync(outFile.path);
+      return true;
+    }
+  }
+
+  // Download
+  final url = '$_releaseRepo/v$version/$platform-$libFileName';
   _log.info('downloading $url');
 
   final client = HttpClient();
@@ -251,26 +318,22 @@ Future<void> _downloadPrebuilt(
 
     if (response.statusCode != 200) {
       await response.drain<void>();
-      throw StateError(
-        'Failed to download pre-built binary.\n'
-        'URL: $url\n'
-        'Status: ${response.statusCode}\n\n'
-        'This usually means pre-built binaries are not available for this version.\n\n'
-        'Options:\n'
-        '  1. Use a published version from pub.dev: pdf_manipulator: ^1.0.0\n'
-        '  2. Use a git tag that has binaries: ref: v1.0.0-dev.0\n'
-        '     (check the GitHub Releases page for tags with binary assets)\n'
-        '  3. Compile from source (requires Rust toolchain):\n'
-        '       git clone --recursive https://github.com/whuppi/pdf_manipulator.git\n'
-        '       # Then use a path dependency in your pubspec.yaml\n',
-      );
+      _log.info('binary not available (HTTP ${response.statusCode})');
+      return false;
     }
 
-    outFile.parent.createSync(recursive: true);
-    final sink = outFile.openWrite();
+    cachedFile.parent.createSync(recursive: true);
+    final sink = cachedFile.openWrite();
     await response.pipe(sink);
-    final mb = (outFile.lengthSync() / 1024 / 1024).toStringAsFixed(1);
-    _log.info('downloaded ${outFile.path} ($mb MB)');
+    final mb = (cachedFile.lengthSync() / 1024 / 1024).toStringAsFixed(1);
+    _log.info('downloaded ${cachedFile.path} ($mb MB)');
+
+    outFile.parent.createSync(recursive: true);
+    cachedFile.copySync(outFile.path);
+    return true;
+  } catch (e) {
+    _log.warning('download failed: $e');
+    return false;
   } finally {
     client.close();
   }

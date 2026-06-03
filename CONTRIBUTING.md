@@ -14,7 +14,7 @@ fvm dart pub get
 fvm dart test            # build hook compiles Rust from source automatically
 ```
 
-**Requires:** [Rust](https://rustup.rs), [FVM](https://fvm.app) (`.fvmrc` pins to stable). The build hook detects `vendor/pdf_oxide/Cargo.toml` and runs `cargo build`. No manual compilation step.
+**Requires:** [Rust](https://rustup.rs), [FVM](https://fvm.app) (`.fvmrc` pins the exact Flutter version). The build hook detects `vendor/pdf_oxide/Cargo.toml` and runs `cargo build`. No manual compilation step.
 
 **Without FVM:** all Makefile commands accept `DART` and `FLUTTER` overrides:
 
