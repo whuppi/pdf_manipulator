@@ -209,7 +209,16 @@ jobs:
           echo "pubspec: $(grep '^version:' pubspec.yaml)"
 
       - name: Generate asset hashes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: fvm dart run tool/write_asset_hashes.dart ${{ needs.validate.outputs.tag }}
+
+      - name: Ephemeral commit (clean git for pub publish)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "stamp: ${{ needs.validate.outputs.tag }}" --allow-empty
 
       - run: fvm dart pub get --no-example
       - run: fvm dart pub publish --force
