@@ -46,8 +46,12 @@ fi
 # background networking, GPU init) so Chrome loads the page faster.
 CI_FLAGS=""
 if [[ "$(uname)" == "Linux" ]] && [[ "${CI:-}" == "true" || "$(id -u)" == "0" ]]; then
+  # Core stability (Chrome won't start without these in containers)
   CI_FLAGS="--no-sandbox --disable-gpu --disable-dev-shm-usage"
-  CI_FLAGS+=" --headless=new"
+  # Eliminate startup overhead — every one of these slows page load,
+  # giving DWDS less time to find window["$dartAppInstanceId"].
+  # NOT --headless=new: Flutter's ChromiumLauncher needs a headed
+  # Chrome with a debug port (xvfb provides the virtual display).
   CI_FLAGS+=" --disable-background-timer-throttling"
   CI_FLAGS+=" --disable-extensions"
   CI_FLAGS+=" --disable-popup-blocking"
@@ -57,9 +61,6 @@ if [[ "$(uname)" == "Linux" ]] && [[ "${CI:-}" == "true" || "$(id -u)" == "0" ]]
   CI_FLAGS+=" --disable-default-apps"
   CI_FLAGS+=" --disable-sync"
   CI_FLAGS+=" --disable-background-networking"
-  CI_FLAGS+=" --disable-hang-monitor"
-  CI_FLAGS+=" --disable-component-extensions-with-background-pages"
-  CI_FLAGS+=" --disable-prompt-on-repost"
 fi
 
 exec "$CHROME" --enable-features=SharedArrayBuffer $CI_FLAGS "$@"

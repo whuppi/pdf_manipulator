@@ -65,6 +65,7 @@ CHROME_EXECUTABLE="$CHROME_WRAPPER" "${FLUTTER[@]}" drive \
     --target=integration_test/pdf_smoke_test.dart \
     --dart-define=PDF_IO_MODE="$MODE" \
     --driver-port="$PORT" \
+    --profile \
     -d chrome &>"$LOG" &
 DRIVE_PID=$!
 
