@@ -1,50 +1,49 @@
 #!/bin/bash
-# Single source of truth for all release stamping. Called by CI and usable locally.
+# ────────────────────────────────────────────────────────────────────
+# stamp_release.sh — Single source of truth for all release stamping.
 #
-# Usage:
-#   ./tool/stamp_release.sh <tag> [mode]
+# Five modes:
 #
-# Modes (5):
-#   --stamp-tag               Prepare tree for the release tag commit:
-#                              - Stamp version into pubspec.yaml + version.dart
-#                              - Convert submodule pointers to raw source files
-#                              - Remove .gitmodules
-#                              Called by CI discover job BEFORE git commit.
+#   --stamp-tag          Prepare tree for the release tag commit:
+#                         stamp version, convert submodule pointers
+#                         to raw source, remove .gitmodules.
+#                         Called by CI discover job BEFORE git commit.
 #
-#   --github-notes            Print GitHub Release notes to stdout:
-#                              - Extract changelog entry for this version
-#                              - Append commit list since previous tag
-#                              Called by CI discover job for gh release create --notes.
+#   --github-notes       Print GitHub Release notes to stdout:
+#                         changelog entry + commit list since prev tag.
+#                         Called by CI discover job for gh release create.
 #
-#   (default, no flag)        Stamp for pub.dev publish:
-#                              - Re-stamp version (idempotent, tag already has it)
-#                              - Build filtered CHANGELOG.md for pub.dev:
-#                                only versions published on pub.dev + current,
-#                                unpublished intermediate versions merged into
-#                                collapsibles, commit list since last pub.dev version
-#                              - Generate asset hashes from GitHub Release API
-#                              Called by CI publish job AFTER approval.
+#   (default)            Stamp for pub.dev publish:
+#                         re-stamp version, build filtered CHANGELOG.md
+#                         (only published versions + current), generate
+#                         asset hashes from GitHub Release API.
+#                         Called by CI publish job AFTER approval.
 #
-#   --add-git-install         Append git tag install snippet to GitHub Release notes.
-#                              Called by CI after binary upload.
+#   --add-git-install    Append git tag install snippet to release notes.
+#                         Called by CI after binary upload.
 #
-#   --add-pub-install         Append pub.dev install snippet to GitHub Release notes.
-#                              Called by CI after pub.dev publish.
+#   --add-pub-install    Append pub.dev install snippet to release notes.
+#                         Called by CI after pub.dev publish.
 #
-# Release pipeline flow (for context):
-#   1. discover:  --stamp-tag → git commit → push temp branch → --github-notes → gh release create
-#   2. compile:   checkout tag (has raw source, no submodules needed)
-#   3. upload:    binaries to release → --add-git-install
+# Pipeline flow:
+#   1. discover:  --stamp-tag → commit → push → --github-notes → gh release
+#   2. compile:   checkout tag (raw source, no submodules)
+#   3. upload:    binaries → --add-git-install
 #   4. publish:   (default) stamp → dart pub publish → --add-pub-install
 #
-# Requires: gh CLI authenticated (GH_TOKEN env var or gh auth login)
-# Run from package root.
-
+# Requires: gh CLI authenticated (GH_TOKEN or gh auth login)
+# Run from: package root
+# ────────────────────────────────────────────────────────────────────
 set -euo pipefail
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Args + globals
+# ═══════════════════════════════════════════════════════════════════
 
 if [ -z "${1:-}" ]; then
   echo "Usage: $0 <tag> [mode]"
-  echo "Modes: (none)=stamp, --github-notes, --add-git-install, --add-pub-install"
+  echo "Modes: (none)=stamp, --stamp-tag, --github-notes, --add-git-install, --add-pub-install"
   echo "Example: $0 v1.0.0-dev.0"
   exit 1
 fi
@@ -55,9 +54,55 @@ MODE="${2:---stamp}"
 REPO="${GITHUB_REPOSITORY:-whuppi/pdf_manipulator}"
 REPO_URL="https://github.com/$REPO"
 
-# ── Stamp tag mode: prepare the tree for a release tag commit ───────
-# Stamps version + converts submodule pointers to raw source files.
-# Called BEFORE git commit in the CI discover job.
+
+# ═══════════════════════════════════════════════════════════════════
+# Helpers
+# ═══════════════════════════════════════════════════════════════════
+
+# Stamp version into pubspec.yaml + version.dart.
+stamp_version() {
+  sed -i.bak "s/^version: .*/version: $VERSION/" pubspec.yaml && rm -f pubspec.yaml.bak
+  echo "  pubspec.yaml → $VERSION"
+
+  sed -i.bak "s/const packageVersion = '[^']*'/const packageVersion = '$VERSION'/" \
+    lib/src/version.dart && rm -f lib/src/version.dart.bak
+  echo "  version.dart → $VERSION"
+}
+
+# Get all published versions from pub.dev.
+get_published_versions() {
+  curl -sS "https://pub.dev/api/packages/pdf_manipulator" 2>/dev/null \
+    | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    for v in data.get('versions', []):
+        print(v['version'])
+except:
+    pass
+" 2>/dev/null || true
+}
+
+# Extract one version's content from a changelog file.
+#   $1 = changelog file path
+#   $2 = version string (e.g. "1.0.0")
+extract_entry() {
+  local file="$1" version="$2"
+  awk "/^## ${version//./\\.}($| )/{found=1; next} /^## /{found=0} found" "$file"
+}
+
+# List all ## version headings in a changelog file.
+get_changelog_versions() {
+  grep -oP '^## \K\S+' "$1" 2>/dev/null || true
+}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Mode: --stamp-tag
+# ═══════════════════════════════════════════════════════════════════
+# Prepare the working tree for an orphan tag commit. Stamps version,
+# de-registers submodules so vendor/ becomes regular tracked files,
+# and adds false_secrets for vendor test keys.
 
 if [[ "$MODE" == "--stamp-tag" ]]; then
   if [[ -z "${CI:-}" && -z "${GITHUB_ACTIONS:-}" ]]; then
@@ -65,39 +110,30 @@ if [[ "$MODE" == "--stamp-tag" ]]; then
     echo "  This is intended for CI only. Ctrl+C to abort, or press Enter to continue."
     read -r
   fi
+
   echo "=== Stamping tag tree for $TAG ==="
-
-  # Stamp version
-  sed -i.bak "s/^version: .*/version: $VERSION/" pubspec.yaml && rm -f pubspec.yaml.bak
-  echo "  pubspec.yaml → $VERSION"
-
-  sed -i.bak "s/const packageVersion = '[^']*'/const packageVersion = '$VERSION'/" lib/src/version.dart && rm -f lib/src/version.dart.bak
-  echo "  version.dart → $VERSION"
+  stamp_version
 
   # Convert submodule pointers to raw source files.
-  # The checkout already has submodules initialized (recursive checkout).
-  # We de-register the submodules so git treats vendor/ as regular files.
   for sub in vendor/pdf_oxide vendor/office_oxide; do
     if [ -d "$sub/.git" ] || [ -f "$sub/.git" ]; then
-      # Remove submodule registration so git tracks files directly
       git rm --cached "$sub" 2>/dev/null || true
       rm -rf "$sub/.git"
-      # Force-add everything including files excluded by vendor .gitignore
-      # (Cargo.lock is gitignored in library crates but we need it for
-      # deterministic builds + wasm-bindgen-cli version detection)
+      # Force-add includes files excluded by vendor .gitignore
+      # (Cargo.lock is gitignored in library crates but needed for
+      # deterministic builds + wasm-bindgen-cli version detection).
       git add --force "$sub/"
       echo "  $sub → raw source (de-registered submodule)"
     fi
   done
 
-  # Remove .gitmodules (not needed when source is inline)
   if [ -f .gitmodules ]; then
     git rm --cached .gitmodules 2>/dev/null || true
     rm -f .gitmodules
     echo "  .gitmodules removed"
   fi
 
-  # Add false_secrets for vendor test keys (only needed when vendor is shipped)
+  # Add false_secrets for vendor test PEM keys (pub.dev security scanner).
   if ! grep -q '/vendor/\*\*' pubspec.yaml; then
     sed -i.bak '/^false_secrets:/a\  - /vendor/**' pubspec.yaml && rm -f pubspec.yaml.bak
     echo "  pubspec.yaml += false_secrets /vendor/**"
@@ -107,7 +143,11 @@ if [[ "$MODE" == "--stamp-tag" ]]; then
   exit 0
 fi
 
-# ── Quick modes that just edit the GitHub Release notes ─────────────
+
+# ═══════════════════════════════════════════════════════════════════
+# Mode: --add-git-install / --add-pub-install
+# ═══════════════════════════════════════════════════════════════════
+# Append install snippets to existing GitHub Release notes.
 
 if [[ "$MODE" == "--add-git-install" ]]; then
   EXISTING=$(gh release view "$TAG" --repo "$REPO" --json body --jq '.body')
@@ -140,63 +180,44 @@ dependencies:
   exit 0
 fi
 
-# ── Guard: reject unknown modes before falling through to stamp ──────
+
+# ═══════════════════════════════════════════════════════════════════
+# Guard: reject unknown modes
+# ═══════════════════════════════════════════════════════════════════
 
 case "$MODE" in
   --stamp|--stamp-tag|--github-notes|--add-git-install|--add-pub-install) ;;
   --*)
     echo "Unknown mode: $MODE"
-    echo "Valid modes: (none), --stamp-tag, --github-notes, --add-git-install, --add-pub-install"
+    echo "Valid: (none), --stamp-tag, --github-notes, --add-git-install, --add-pub-install"
     exit 1
     ;;
 esac
 
-# ── Helper: get published versions from pub.dev ─────────────────────
 
-get_published_versions() {
-  curl -sS "https://pub.dev/api/packages/pdf_manipulator" 2>/dev/null \
-    | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    for v in data.get('versions', []):
-        print(v['version'])
-except:
-    pass
-" 2>/dev/null || true
-}
-
-# ── Helper: extract one version's content from a changelog ──────────
-
-extract_entry() {
-  local file="$1" version="$2"
-  awk "/^## ${version//./\\.}($| )/{found=1; next} /^## /{found=0} found" "$file"
-}
-
-# ── Helper: get all ## versions from a changelog ────────────────────
-
-get_changelog_versions() {
-  local file="$1"
-  grep -oP '^## \K\S+' "$file" 2>/dev/null || true
-}
-
-# ═════════════════════════════════════════════════════════════════════
-# MODE: GitHub Release notes
-# ═════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
+# Mode: --github-notes
+# ═══════════════════════════════════════════════════════════════════
+# Print release notes to stdout (changelog entry + commit list).
 
 if [[ "$MODE" == "--github-notes" ]]; then
-  # Determine changelog file
+  # Pick the right changelog file based on version type.
   if [[ "$VERSION" == *-* ]]; then
-    FILE="CHANGELOG.pre.md"
+    SOURCE_FILE="CHANGELOG.pre.md"
   else
-    FILE="CHANGELOG.md"
+    SOURCE_FILE="CHANGELOG.md"
   fi
 
-  # Extract this version's entry
-  NOTES=$(extract_entry "$FILE" "$VERSION")
+  NOTES=$(extract_entry "$SOURCE_FILE" "$VERSION")
 
-  # Append commits since previous GitHub tag
-  PREV_TAG=$(git tag --sort=-v:refname | grep '^v' | grep -v "^${TAG}$" | head -1 || true)
+  # Find the previous tag for the commit range.
+  # Stable releases skip prereleases; prereleases include any prior tag.
+  if [[ "$VERSION" == *-* ]]; then
+    PREV_TAG=$(git tag --sort=-v:refname | grep '^v' | grep -v "^${TAG}$" | head -1 || true)
+  else
+    PREV_TAG=$(git tag --sort=-v:refname | grep '^v' | grep -v "^${TAG}$" | grep -v '-' | head -1 || true)
+  fi
+
   if [ -n "$PREV_TAG" ]; then
     COMMITS=$(git log "$PREV_TAG"..HEAD --oneline --no-decorate 2>/dev/null || true)
   else
@@ -206,50 +227,45 @@ if [[ "$MODE" == "--github-notes" ]]; then
   if [ -n "$COMMITS" ]; then
     COUNT=$(echo "$COMMITS" | grep -c . || true)
     COMMIT_LIST=$(echo "$COMMITS" | sed 's/^/- /')
-    DETAILS_OPEN="<details><summary>Commits since ${PREV_TAG:-initial} ($COUNT)</summary>"
-    DETAILS_CLOSE="</details>"
-    printf -v NOTES '%s\n\n%s\n\n%s\n\n%s' "$NOTES" "$DETAILS_OPEN" "$COMMIT_LIST" "$DETAILS_CLOSE"
+    printf -v NOTES '%s\n\n<details><summary>Commits since %s (%s)</summary>\n\n%s\n\n</details>' \
+      "$NOTES" "${PREV_TAG:-initial}" "$COUNT" "$COMMIT_LIST"
   fi
 
   echo "$NOTES"
   exit 0
 fi
 
-# ═════════════════════════════════════════════════════════════════════
-# MODE: Stamp for pub.dev publish
-# ═════════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════════
+# Mode: (default) — Stamp for pub.dev publish
+# ═══════════════════════════════════════════════════════════════════
 
 echo "=== Stamping $TAG (version: $VERSION) ==="
 
-# ── 1. pubspec.yaml ─────────────────────────────────────────────────
+# ── 1. Version files ────────────────────────────────────────────
 
-sed -i.bak "s/^version: .*/version: $VERSION/" pubspec.yaml && rm -f pubspec.yaml.bak
-echo "  pubspec.yaml → $VERSION"
+stamp_version
 
-# ── 2. version.dart ─────────────────────────────────────────────────
+# ── 2. Build filtered CHANGELOG.md for pub.dev ──────────────────
+#
+# Only include versions actually published on pub.dev + the current
+# version. Unpublished intermediate versions get merged into a
+# collapsible under the next published version. Append a commit
+# list since the last published version of the same type.
 
-sed -i.bak "s/const packageVersion = '[^']*'/const packageVersion = '$VERSION'/" lib/src/version.dart && rm -f lib/src/version.dart.bak
-echo "  version.dart → $VERSION"
-
-# ── 3. Build CHANGELOG.md for pub.dev ───────────────────────────────
-
-# Determine source changelog
 if [[ "$VERSION" == *-* ]]; then
   SOURCE_CL="CHANGELOG.pre.md"
 else
   SOURCE_CL="CHANGELOG.md"
 fi
 
-# Get versions published on pub.dev
 PUBLISHED=$(get_published_versions)
 echo "  pub.dev has: $(echo "$PUBLISHED" | wc -l | tr -d ' ') published versions"
 
-# Get all versions in the changelog
 CL_VERSIONS=$(get_changelog_versions "$SOURCE_CL")
 
-# Build filtered changelog
 {
-  # Copy the header (everything before the first ## entry)
+  # Copy the header (everything before the first ## entry).
   awk '/^## /{exit} {print}' "$SOURCE_CL"
 
   PREV_PUBLISHED=""
@@ -265,12 +281,11 @@ CL_VERSIONS=$(get_changelog_versions "$SOURCE_CL")
     ENTRY=$(extract_entry "$SOURCE_CL" "$V")
 
     if [[ "$IS_CURRENT" == "true" || "$IS_PUBLISHED" == "true" ]]; then
-      # Print this version's heading + content
       echo "## $V"
       echo ""
       echo "$ENTRY"
 
-      # If there are unpublished versions buffered, add them as collapsible
+      # Flush any buffered unpublished versions as a collapsible.
       if [ -n "$UNPUBLISHED_BUFFER" ]; then
         echo ""
         echo "<details><summary>Also includes unpublished changes</summary>"
@@ -280,16 +295,13 @@ CL_VERSIONS=$(get_changelog_versions "$SOURCE_CL")
       fi
       UNPUBLISHED_BUFFER=""
 
-      # Track for commit range
-      if [[ "$IS_CURRENT" == "true" ]]; then
-        : # current version, commits appended below
-      else
+      if [[ "$IS_CURRENT" != "true" ]]; then
         PREV_PUBLISHED="$V"
       fi
 
       echo ""
     else
-      # Buffer this unpublished version's content
+      # Buffer unpublished version content.
       if [ -n "$UNPUBLISHED_BUFFER" ]; then
         UNPUBLISHED_BUFFER="$UNPUBLISHED_BUFFER"$'\n\n'"### $V"$'\n'"$ENTRY"
       else
@@ -299,19 +311,23 @@ CL_VERSIONS=$(get_changelog_versions "$SOURCE_CL")
   done
 } > /tmp/_changelog_filtered.md
 
-# Determine commit range for pub.dev (since last PUBLISHED version, not last tag)
+# Determine commit range for pub.dev.
+# Stable → previous published stable. Prerelease → previous published prerelease.
+PUB_PREV_TAG=""
 if [ -n "$PREV_PUBLISHED" ] && git rev-parse "v$PREV_PUBLISHED" &>/dev/null; then
   PUB_PREV_TAG="v$PREV_PUBLISHED"
 elif [ -n "$PUBLISHED" ]; then
-  # Use the most recent published version's tag
-  LATEST_PUBLISHED=$(echo "$PUBLISHED" | head -1)
-  if git rev-parse "v$LATEST_PUBLISHED" &>/dev/null; then
+  if [[ "$VERSION" == *-* ]]; then
+    LATEST_PUBLISHED=$(echo "$PUBLISHED" | grep '-' | head -1 || true)
+  else
+    LATEST_PUBLISHED=$(echo "$PUBLISHED" | grep -v '-' | head -1 || true)
+  fi
+  if [ -n "${LATEST_PUBLISHED:-}" ] && git rev-parse "v$LATEST_PUBLISHED" &>/dev/null; then
     PUB_PREV_TAG="v$LATEST_PUBLISHED"
   fi
 fi
 
-COMMITS=""
-if [ -n "${PUB_PREV_TAG:-}" ]; then
+if [ -n "$PUB_PREV_TAG" ]; then
   COMMITS=$(git log "$PUB_PREV_TAG".."$TAG" --oneline --no-decorate 2>/dev/null || true)
 else
   COMMITS=$(git log "$TAG" --oneline --no-decorate 2>/dev/null || true)
@@ -320,17 +336,16 @@ fi
 if [ -n "$COMMITS" ]; then
   COUNT=$(echo "$COMMITS" | grep -c . || true)
   COMMIT_LIST=$(echo "$COMMITS" | sed 's/^/- /')
-  {
-    printf '<details><summary>Commits since %s (%s)</summary>\n\n%s\n\n</details>\n' \
-      "${PUB_PREV_TAG:-initial}" "$COUNT" "$COMMIT_LIST"
-  } >> /tmp/_changelog_filtered.md
+  printf '<details><summary>Commits since %s (%s)</summary>\n\n%s\n\n</details>\n' \
+    "${PUB_PREV_TAG:-initial}" "$COUNT" "$COMMIT_LIST" \
+    >> /tmp/_changelog_filtered.md
 fi
 
 cp /tmp/_changelog_filtered.md CHANGELOG.md
 rm -f /tmp/_changelog_filtered.md
 echo "  CHANGELOG.md built (filtered for pub.dev)"
 
-# ── 4. Asset hashes from GitHub API ─────────────────────────────────
+# ── 3. Asset hashes from GitHub Release API ─────────────────────
 
 HASH_FILE="lib/src/hook/asset_hashes.dart"
 

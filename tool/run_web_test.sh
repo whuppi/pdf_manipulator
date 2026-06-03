@@ -1,11 +1,25 @@
 #!/usr/bin/env bash
-# Run a flutter drive web integration test and exit cleanly once tests finish.
-# Each mode gets its own chromedriver port and log file — no shared state.
+# ────────────────────────────────────────────────────────────────────
+# run_web_test.sh — Run one flutter drive web integration test.
 #
-# Usage: run_web_test.sh <mode> <chrome_wrapper> <flutter_cmd>
-#   mode:           jspi | atomics | opfs
-#   chrome_wrapper: path to chrome_with_sab.sh
-#   flutter_cmd:    e.g. "fvm flutter"
+# Starts chromedriver, runs flutter drive in the background, polls
+# the log for completion, then kills everything cleanly. Exists
+# because flutter drive on web hangs after tests finish (Chrome
+# FocusManager disposal bug keeps the browser process alive).
+#
+# Each mode gets its own chromedriver port and log file — no shared
+# state between sequential runs.
+#
+# Usage:
+#   run_web_test.sh <mode> <chrome_wrapper> <flutter_cmd...>
+#
+#   mode            jspi | atomics | opfs
+#   chrome_wrapper  path to chrome_with_sab.sh (adds SharedArrayBuffer flags)
+#   flutter_cmd     e.g. "fvm flutter"
+#
+# Called by:  Makefile targets (test-example-web-*)
+# Run from:   package root
+# ────────────────────────────────────────────────────────────────────
 set -uo pipefail
 
 MODE="$1"
@@ -24,6 +38,11 @@ esac
 LOG="/tmp/_pdf_web_test_${MODE}.log"
 : > "$LOG"
 
+
+# ═══════════════════════════════════════════════════════════════════
+# 1. Start chromedriver
+# ═══════════════════════════════════════════════════════════════════
+
 # Ensure port is free (stale chromedriver from a killed previous run)
 if lsof -ti ":$PORT" &>/dev/null; then
   echo "Port $PORT in use — killing stale process"
@@ -31,12 +50,15 @@ if lsof -ti ":$PORT" &>/dev/null; then
   sleep 1
 fi
 
-# Start chromedriver on this mode's port
 chromedriver --port="$PORT" &>/dev/null &
 CD_PID=$!
 sleep 2
 
-# Run flutter drive in background, pointing at this mode's chromedriver
+
+# ═══════════════════════════════════════════════════════════════════
+# 2. Run flutter drive (background)
+# ═══════════════════════════════════════════════════════════════════
+
 cd example
 CHROME_EXECUTABLE="$CHROME_WRAPPER" "${FLUTTER[@]}" drive \
     --driver=test_driver/integration_test.dart \
@@ -46,7 +68,11 @@ CHROME_EXECUTABLE="$CHROME_WRAPPER" "${FLUTTER[@]}" drive \
     -d chrome &>"$LOG" &
 DRIVE_PID=$!
 
-# Poll the log for the terminal line (5-min timeout prevents infinite hang)
+
+# ═══════════════════════════════════════════════════════════════════
+# 3. Poll log for terminal line (5-min timeout prevents infinite hang)
+# ═══════════════════════════════════════════════════════════════════
+
 TIMEOUT=300
 ELAPSED=0
 while kill -0 "$DRIVE_PID" 2>/dev/null; do
@@ -63,14 +89,22 @@ while kill -0 "$DRIVE_PID" 2>/dev/null; do
     ELAPSED=$((ELAPSED + 1))
 done
 
-# Kill flutter drive + chromedriver + orphaned app Chrome
+
+# ═══════════════════════════════════════════════════════════════════
+# 4. Cleanup — kill flutter drive + chromedriver + orphaned Chrome
+# ═══════════════════════════════════════════════════════════════════
+
 kill "$DRIVE_PID" 2>/dev/null; wait "$DRIVE_PID" 2>/dev/null
-kill "$CD_PID" 2>/dev/null; wait "$CD_PID" 2>/dev/null
+kill "$CD_PID"    2>/dev/null; wait "$CD_PID"    2>/dev/null
 pkill -f 'flutter_tools_chrome_device' 2>/dev/null || true
 
 rm -f flutter_*.log
 
-# Report result
+
+# ═══════════════════════════════════════════════════════════════════
+# 5. Report result
+# ═══════════════════════════════════════════════════════════════════
+
 if grep -q 'All tests passed' "$LOG"; then
     echo "=== Example web $MODE: All tests passed ==="
     exit 0
