@@ -212,11 +212,12 @@ web_assets/                                 ← committed in git, shipped to web
 └── pdf_oxide_bg.wasm                       ← WASM binary (one binary, all 3 modes)
 
 hook/
-└── build.dart                              ← compile from source OR download pre-built
+└── build.dart                              ← binary-first → source-fallback → submodule-init
 
 tool/
 ├── compile_rust.sh                         ← Rust → native / wasm / per-platform / both
-├── stamp_release.sh                        ← stamp version + changelog + hashes before publish
+├── stamp_release.sh                        ← 5 modes: --stamp-tag, --github-notes, (default),
+│                                              --add-git-install, --add-pub-install
 ├── run_web_test.sh                         ← flutter drive wrapper with clean exit
 └── chrome_with_sab.sh                      ← Chrome launcher with SharedArrayBuffer
 

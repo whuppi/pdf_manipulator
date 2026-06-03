@@ -10,6 +10,7 @@ Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extrac
 
 - [Install](#install)
 - [Quick start](#quick-start)
+- [Sources & sinks](#sources--sinks)
 - [What you can do](#what-you-can-do)
   - [Combine & split](#combine--split)
   - [Read & query](#read--query)
@@ -49,20 +50,28 @@ import 'package:pdf_manipulator/pdf_manipulator.dart';
 
 final pdf = Pdf();
 
-// Open and inspect
+// Open a PDF from bytes in memory
+final source = MemorySource(pdfBytes);      // your Uint8List
 final doc = await pdf.open(source);
-print('${doc.pageCount} pages, v${doc.version}');
-final text = await doc.extract(pages: PdfPages.all());
+print('${doc.pageCount} pages');
 await doc.dispose();
 
-// One-shot operations
-await pdf.merge([sourceA, sourceB], outputSink);
-await pdf.watermark(source, sink, text: 'DRAFT');
+// Merge two PDFs into one
+final output = MemorySink();
+await pdf.merge([sourceA, sourceB], output);
+final mergedBytes = output.takeBytes();
 
+// Always dispose when done
 pdf.dispose();
 ```
 
-`source` is a `DataSource` — random-access byte source. The engine reads arbitrary offsets (xref at end of file, objects scattered throughout), so forward-only pipes (one-shot sockets, stdin) can't be used directly — buffer them first. `outputSink` is a `DataSink` — receives sequential chunks. Two interfaces, two methods each:
+That's it. Every operation follows the same pattern: **source in, sink out**.
+
+---
+
+## Sources & sinks
+
+A `DataSource` is where the PDF bytes come from. A `DataSink` is where the output goes. Two tiny interfaces:
 
 ```dart
 abstract interface class DataSource {
@@ -75,16 +84,11 @@ abstract interface class DataSink {
 }
 ```
 
-Wrap whatever you have — `Uint8List` for memory, `RandomAccessFile` for disk, `Blob.slice` for web file pickers, HTTP Range requests for servers. The engine reads at most 64KB per `readAt` call, never the whole file. Constant memory regardless of file size.
-
-<details>
-<summary>Example implementations (memory, file, HTTP, web blob)</summary>
+The simplest implementations — good for getting started:
 
 ```dart
-// Memory — tests, small files
 class MemorySource implements DataSource {
   MemorySource(this._data);
-
   final Uint8List _data;
 
   @override
@@ -92,8 +96,7 @@ class MemorySource implements DataSource {
 
   @override
   Uint8List readAt(int offset, int count) =>
-      Uint8List.sublistView(
-        _data, offset, (offset + count).clamp(0, _data.length));
+      Uint8List.sublistView(_data, offset, (offset + count).clamp(0, _data.length));
 }
 
 class MemorySink implements DataSink {
@@ -105,6 +108,11 @@ class MemorySink implements DataSink {
   Uint8List takeBytes() => _buf.takeBytes();
 }
 ```
+
+Wrap whatever you have — `Uint8List` for memory, `RandomAccessFile` for disk, `Blob.slice` for web file pickers, HTTP Range requests for remote files. The engine reads at most 64KB per call, never the whole file. Constant memory regardless of file size.
+
+<details>
+<summary>More implementations: file, HTTP, web blob</summary>
 
 ```dart
 // File — mobile/desktop, constant memory for any size
@@ -172,6 +180,8 @@ class BlobSource implements DataSource {
 
 </details>
 
+> **Note:** `DataSource` is random-access — the engine jumps to arbitrary positions in the file. Forward-only streams (like a network socket or stdin) need to be buffered into memory or disk first.
+
 ---
 
 ## What you can do
@@ -206,7 +216,7 @@ await pdf.movePage(source, sink, from: 0, to: 4);
 
 ### Read & query
 
-Open a PDF once, run any number of queries, dispose when done. All queries go through the `PdfDoc` handle:
+Open a PDF once, run any number of queries, dispose when done:
 
 ```dart
 final doc = await pdf.open(source);
@@ -433,17 +443,26 @@ Every error is a typed subclass of `PdfError`. No string matching. No `PlatformE
 
 ## Platforms
 
-### Native
+| Platform | Architectures | Engine |
+|---|---|---|
+| macOS | arm64, x64 | Native (Rust) |
+| iOS | arm64 device, arm64 + x64 simulator | Native (Rust) |
+| Android | arm64, arm, x64, x86 | Native (Rust) |
+| Linux | x64, arm64 | Native (Rust) |
+| Windows | x64, arm64 | Native (Rust) |
+| Web | All modern browsers | WASM |
 
-| Platform | Architectures |
-|---|---|
-| macOS | arm64, x64 |
-| iOS | arm64, simulator (arm64, x64) |
-| Android | arm64, arm, x86_64, x86 |
-| Linux | x64, arm64 |
-| Windows | x64, arm64 |
+### How native binaries are resolved
 
-The PDF engine is compiled Rust. For consumers (installed via pub.dev), the build hook downloads a pre-built binary from GitHub Releases automatically — no Rust toolchain needed. For contributors (cloned with `--recursive`), it compiles from the vendored source.
+The build hook resolves the native library automatically — no manual steps:
+
+| Priority | Method | When | Requires |
+|:---:|---|---|---|
+| 1 | **Pre-built binary** | Default for pub.dev + git tag users | Nothing |
+| 2 | **Source compile** | Binary unavailable (fallback) | [Rust](https://rustup.rs) |
+| 3 | **Submodule init** | Git dep `ref: dev` (no vendor dir) | [Rust](https://rustup.rs) + git |
+
+The vendored Rust source ships in both the pub.dev tarball and git tags. If the repo disappears, published versions still compile from source.
 
 ### Web
 
@@ -457,7 +476,7 @@ Works out of the box on all modern browsers:
 | Chrome Android | 102+ | May 2022 |
 | Samsung Internet | 21+ | 2023 |
 
-Run once after install (and after each package update):
+**Setup** — run once after install (and after each package update):
 
 ```sh
 dart run pdf_manipulator:setup
@@ -465,26 +484,26 @@ dart run pdf_manipulator:setup
 
 The engine compiles to WASM and runs in a Web Worker pool. Your UI thread never does PDF work.
 
-Three I/O modes, auto-detected (best first):
+### Web I/O modes
 
-| Mode | What it does | Requires |
-|---|---|---|
-| **JSPI** | True streaming via WebAssembly promise suspension | Chrome 137+ / Firefox 139+ |
-| **Atomics** | True streaming via SharedArrayBuffer | COOP/COEP headers (see below) |
-| **OPFS** | Pre-copies entire source to disk, then processes (O(N) latency + disk) | All modern browsers |
+Three modes, auto-detected (best first). No code changes between them:
 
-The package detects which mode is available and picks the best one automatically. No code changes needed. To force a specific mode:
+| Mode | How it works | Streaming | Requires |
+|---|---|:---:|---|
+| **JSPI** | WASM promise suspension | ✅ | Chrome 137+ · Firefox 139+ |
+| **Atomics** | SharedArrayBuffer blocking | ✅ | COOP/COEP headers |
+| **OPFS** | Pre-copy to disk, then process | ❌ | All modern browsers |
+
+Force a mode or check which was selected:
 
 ```dart
+// Force
 final pdf = Pdf(config: PdfConfig(webIoMode: PdfIoMode.atomics));
-```
 
-To check which mode was selected (useful for detecting OPFS fallback):
-
-```dart
+// Check
 final mode = await pdf.ensureInitialized();
 if (mode == PdfIoMode.opfs) {
-  // OPFS mode: pre-copies each source to disk before processing.
+  // OPFS: pre-copies each source to disk before processing.
   // Slower first byte + uses disk quota vs streaming modes.
   // To get streaming: deploy with COOP/COEP headers (Atomics)
   // or target Chrome 137+ / Firefox 139+ (JSPI auto-detected).
@@ -492,7 +511,7 @@ if (mode == PdfIoMode.opfs) {
 ```
 
 <details>
-<summary>Advanced: faster web with COOP/COEP headers (has trade-offs)</summary>
+<summary>Advanced: COOP/COEP headers for Atomics on older browsers</summary>
 
 By default on browsers without JSPI support, the package copies your PDF to temporary disk storage (OPFS) before processing — works everywhere, no server config needed.
 

@@ -1,23 +1,41 @@
 #!/bin/bash
-# Stamp all release artifacts for a given tag. Single source of truth.
-# Called by CI before publish AND usable locally.
+# Single source of truth for all release stamping. Called by CI and usable locally.
 #
 # Usage:
-#   ./tool/stamp_release.sh <tag> [--github-notes]
+#   ./tool/stamp_release.sh <tag> [mode]
 #
-# Modes:
-#   <tag>                  Stamp for pub.dev publish (version + changelog + hashes)
-#   <tag> --github-notes   Print GitHub Release notes to stdout (changelog + commits)
+# Modes (5):
+#   --stamp-tag               Prepare tree for the release tag commit:
+#                              - Stamp version into pubspec.yaml + version.dart
+#                              - Convert submodule pointers to raw source files
+#                              - Remove .gitmodules
+#                              Called by CI discover job BEFORE git commit-tree.
 #
-# What "stamp for publish" does (in order):
-#   1. Stamps version into pubspec.yaml
-#   2. Stamps version into lib/src/version.dart
-#   3. Builds CHANGELOG.md for pub.dev:
-#      - For prereleases: starts from CHANGELOG.pre.md
-#      - Filters to only versions published on pub.dev + current
-#      - Merges unpublished intermediate versions into collapsibles
-#      - Appends commit list since last pub.dev version
-#   4. Generates asset hashes from GitHub Release API
+#   --github-notes            Print GitHub Release notes to stdout:
+#                              - Extract changelog entry for this version
+#                              - Append commit list since previous tag
+#                              Called by CI discover job for gh release create --notes.
+#
+#   (default, no flag)        Stamp for pub.dev publish:
+#                              - Re-stamp version (idempotent, tag already has it)
+#                              - Build filtered CHANGELOG.md for pub.dev:
+#                                only versions published on pub.dev + current,
+#                                unpublished intermediate versions merged into
+#                                collapsibles, commit list since last pub.dev version
+#                              - Generate asset hashes from GitHub Release API
+#                              Called by CI publish job AFTER approval.
+#
+#   --add-git-install         Append git tag install snippet to GitHub Release notes.
+#                              Called by CI after binary upload.
+#
+#   --add-pub-install         Append pub.dev install snippet to GitHub Release notes.
+#                              Called by CI after pub.dev publish.
+#
+# Release pipeline flow (for context):
+#   1. discover:  --stamp-tag → git commit-tree → --github-notes → gh release create
+#   2. compile:   checkout tag (has raw source, no submodules needed)
+#   3. upload:    binaries to release → --add-git-install
+#   4. publish:   (default) stamp → dart pub publish → --add-pub-install
 #
 # Requires: gh CLI authenticated (GH_TOKEN env var or gh auth login)
 # Run from package root.
@@ -25,18 +43,100 @@
 set -euo pipefail
 
 if [ -z "${1:-}" ]; then
-  echo "Usage: $0 <tag> [--github-notes]"
+  echo "Usage: $0 <tag> [mode]"
+  echo "Modes: (none)=stamp, --github-notes, --add-git-install, --add-pub-install"
   echo "Example: $0 v1.0.0-dev.0"
-  echo "Example: $0 v1.0.0-dev.0 --github-notes"
   exit 1
 fi
 
 TAG="$1"
 VERSION="${TAG#v}"
+MODE="${2:---stamp}"
 REPO="${GITHUB_REPOSITORY:-whuppi/pdf_manipulator}"
-GITHUB_NOTES_MODE=false
-if [[ "${2:-}" == "--github-notes" ]]; then
-  GITHUB_NOTES_MODE=true
+REPO_URL="https://github.com/$REPO"
+
+# ── Stamp tag mode: prepare the tree for a release tag commit ───────
+# Stamps version + converts submodule pointers to raw source files.
+# Called BEFORE git commit-tree in the CI discover job.
+
+if [[ "$MODE" == "--stamp-tag" ]]; then
+  if [[ -z "${CI:-}" && -z "${GITHUB_ACTIONS:-}" ]]; then
+    echo "⚠ --stamp-tag modifies the working tree (version stamp + submodule de-registration)."
+    echo "  This is intended for CI only. Ctrl+C to abort, or press Enter to continue."
+    read -r
+  fi
+  echo "=== Stamping tag tree for $TAG ==="
+
+  # Stamp version
+  sed -i.bak "s/^version: .*/version: $VERSION/" pubspec.yaml && rm -f pubspec.yaml.bak
+  echo "  pubspec.yaml → $VERSION"
+
+  sed -i.bak "s/const packageVersion = '[^']*'/const packageVersion = '$VERSION'/" lib/src/version.dart && rm -f lib/src/version.dart.bak
+  echo "  version.dart → $VERSION"
+
+  # Convert submodule pointers to raw source files.
+  # The checkout already has submodules initialized (recursive checkout).
+  # We de-register the submodules so git treats vendor/ as regular files.
+  for sub in vendor/pdf_oxide vendor/office_oxide; do
+    if [ -d "$sub/.git" ] || [ -f "$sub/.git" ]; then
+      # Remove submodule registration so git tracks files directly
+      git rm --cached "$sub" 2>/dev/null || true
+      rm -rf "$sub/.git"
+      git add "$sub/"
+      echo "  $sub → raw source (de-registered submodule)"
+    fi
+  done
+
+  # Remove .gitmodules (not needed when source is inline)
+  if [ -f .gitmodules ]; then
+    git rm --cached .gitmodules 2>/dev/null || true
+    rm -f .gitmodules
+    echo "  .gitmodules removed"
+  fi
+
+  echo "=== Tag tree ready ==="
+  exit 0
+fi
+
+# ── Quick modes that just edit the GitHub Release notes ─────────────
+
+if [[ "$MODE" == "--add-git-install" ]]; then
+  EXISTING=$(gh release view "$TAG" --repo "$REPO" --json body --jq '.body')
+  SNIPPET="---
+
+### Install (git tag)
+
+\`\`\`yaml
+dependencies:
+  pdf_manipulator:
+    git:
+      url: $REPO_URL.git
+      ref: $TAG
+\`\`\`"
+  gh release edit "$TAG" --repo "$REPO" --notes "$EXISTING"$'\n\n'"$SNIPPET"
+  echo "Added git install snippet to $TAG release notes"
+  exit 0
+fi
+
+if [[ "$MODE" == "--add-pub-install" ]]; then
+  EXISTING=$(gh release view "$TAG" --repo "$REPO" --json body --jq '.body')
+  SNIPPET="### Install (pub.dev)
+
+\`\`\`yaml
+dependencies:
+  pdf_manipulator: ^$VERSION
+\`\`\`"
+  gh release edit "$TAG" --repo "$REPO" --notes "$EXISTING"$'\n\n'"$SNIPPET"
+  echo "Added pub.dev install snippet to $TAG release notes"
+  exit 0
+fi
+
+# ── Guard: reject unknown modes before falling through to stamp ──────
+
+if [[ "$MODE" == --* && "$MODE" != "--stamp" ]]; then
+  echo "Unknown mode: $MODE"
+  echo "Valid modes: (none), --stamp-tag, --github-notes, --add-git-install, --add-pub-install"
+  exit 1
 fi
 
 # ── Helper: get published versions from pub.dev ─────────────────────
@@ -72,7 +172,7 @@ get_changelog_versions() {
 # MODE: GitHub Release notes
 # ═════════════════════════════════════════════════════════════════════
 
-if [[ "$GITHUB_NOTES_MODE" == "true" ]]; then
+if [[ "$MODE" == "--github-notes" ]]; then
   # Determine changelog file
   if [[ "$VERSION" == *-* ]]; then
     FILE="CHANGELOG.pre.md"

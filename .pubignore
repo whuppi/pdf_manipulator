@@ -1,5 +1,8 @@
-# Vendor source (consumers use prebuilt binaries from GitHub Releases)
-vendor/
+# Vendor source: INCLUDED in pub.dev tarball so consumers can compile
+# from source as a fallback if pre-built binaries are unavailable.
+# Only exclude build artifacts and git metadata inside vendor.
+vendor/*/target/
+vendor/*/.git/
 
 # CI/CD
 .github/

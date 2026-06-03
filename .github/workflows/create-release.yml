@@ -1,4 +1,8 @@
-# Release pipeline: tag → compile → upload → approve → publish.
+# Release pipeline: stamped tag → compile → upload → approve → publish.
+#
+# The tag is an orphan commit with stamped version + raw vendor source
+# (no submodule pointers). Compile jobs and git-tag consumers get a
+# self-contained tree. pub.dev tarball also ships vendor source.
 #
 # Automatic on changelog push. Manual via workflow_dispatch.
 # Publish job requires environment approval (human gate before pub.dev).
@@ -28,11 +32,18 @@ env:
   COMPILE_OUTPUT_DIR: out
 
 concurrency:
+  # github.event.inputs.branch (not bare inputs.branch) — top-level expressions
+  # are evaluated for ALL push events, not just workflow_dispatch. Bare inputs.*
+  # errors when the inputs context doesn't exist on push events.
   group: release-${{ github.event.inputs.branch || github.ref_name }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
-  # ── Find new versions + create tags ────────────────────────────────
+  # ── Discover version + create stamped tag ───────────────────────────
+  # Reads changelog → finds latest version → creates an orphan commit
+  # with stamped version + raw vendor source (no submodule pointers) →
+  # tags that commit → creates GitHub Release with notes.
+  # All downstream jobs checkout the tag and get a self-contained tree.
   discover:
     name: Discover versions
     runs-on: ubuntu-latest
@@ -45,6 +56,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ inputs.branch || github.ref_name }}
+          submodules: recursive
 
       - name: Find + create release
         id: find
@@ -84,33 +96,49 @@ jobs:
             exit 0
           fi
 
-          # Create release if it doesn't exist
+          # Skip if release already exists
           if gh release view "$TAG" --json tagName >/dev/null 2>&1; then
             echo "Release $TAG already exists."
-          else
-            NOTES=$(bash tool/stamp_release.sh "$TAG" --github-notes)
-            FLAGS=""
-            [[ "$IS_PRE" == "true" ]] && FLAGS="--prerelease"
-            gh release create "$TAG" \
-              --target "$BRANCH" \
-              --title "pdf_manipulator $VERSION" \
-              --notes "$NOTES" \
-              $FLAGS
-            echo "Created release $TAG"
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "has_release=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          # Create orphan stamped commit with raw vendor source
+          bash tool/stamp_release.sh "$TAG" --stamp-tag
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          STAMPED_SHA=$(git commit-tree -p HEAD -m "release: $TAG" $(git write-tree))
+          echo "Stamped commit: $STAMPED_SHA"
+
+          # Generate release notes and create release at the stamped commit
+          NOTES=$(bash tool/stamp_release.sh "$TAG" --github-notes)
+          FLAGS=""
+          [[ "$IS_PRE" == "true" ]] && FLAGS="--prerelease"
+          gh release create "$TAG" \
+            --target "$STAMPED_SHA" \
+            --title "pdf_manipulator $VERSION" \
+            --notes "$NOTES" \
+            $FLAGS
+          echo "Created release $TAG at $STAMPED_SHA"
 
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "has_release=true" >> "$GITHUB_OUTPUT"
 
   # ── Compile all targets ────────────────────────────────────────────
+  # Each job checks out the TAG (not the branch). The tag has raw vendor
+  # source — no submodules: recursive needed.
   compile-macos:
     needs: discover
     if: needs.discover.outputs.has_release == 'true'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-        with: { ref: '${{ needs.discover.outputs.tag }}', submodules: recursive }
+        with: { ref: '${{ needs.discover.outputs.tag }}' }
       - uses: ./.github/actions/compile-macos
       - uses: actions/upload-artifact@v4
         with: { name: bin-macos, path: out/ }
@@ -121,7 +149,7 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-        with: { ref: '${{ needs.discover.outputs.tag }}', submodules: recursive }
+        with: { ref: '${{ needs.discover.outputs.tag }}' }
       - uses: ./.github/actions/compile-ios
       - uses: actions/upload-artifact@v4
         with: { name: bin-ios, path: out/ }
@@ -132,7 +160,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { ref: '${{ needs.discover.outputs.tag }}', submodules: recursive }
+        with: { ref: '${{ needs.discover.outputs.tag }}' }
       - uses: ./.github/actions/compile-android
       - uses: actions/upload-artifact@v4
         with: { name: bin-android, path: out/ }
@@ -143,7 +171,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { ref: '${{ needs.discover.outputs.tag }}', submodules: recursive }
+        with: { ref: '${{ needs.discover.outputs.tag }}' }
       - uses: ./.github/actions/compile-linux
       - uses: actions/upload-artifact@v4
         with: { name: bin-linux, path: out/ }
@@ -154,7 +182,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { ref: '${{ needs.discover.outputs.tag }}', submodules: recursive }
+        with: { ref: '${{ needs.discover.outputs.tag }}' }
       - uses: ./.github/actions/compile-wasm
       - uses: actions/upload-artifact@v4
         with: { name: bin-wasm, path: out/ }
@@ -165,7 +193,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with: { ref: '${{ needs.discover.outputs.tag }}', submodules: recursive }
+        with: { ref: '${{ needs.discover.outputs.tag }}' }
       - uses: ./.github/actions/compile-windows
       - uses: actions/upload-artifact@v4
         with: { name: bin-windows, path: out/ }
@@ -205,8 +233,17 @@ jobs:
           files: release/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v4
+        with: { ref: '${{ needs.discover.outputs.tag }}' }
+      - name: Add git install snippet to release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash tool/stamp_release.sh ${{ needs.discover.outputs.tag }} --add-git-install
 
   # ── Publish to pub.dev (requires approval) ─────────────────────────
+  # Runs AFTER you approve in the GitHub Environment gate.
+  # The tag already has stamped version + raw vendor source.
+  # This job only adds: filtered changelog for pub.dev + asset hashes.
   publish:
     name: Publish to pub.dev
     needs: [discover, upload-assets]
@@ -217,7 +254,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: '${{ needs.discover.outputs.tag }}'
-          submodules: recursive
           fetch-depth: 0
       - uses: dart-lang/setup-dart@v1
       - name: Install fvm + project SDK
@@ -237,3 +273,8 @@ jobs:
 
       - run: fvm dart pub get --no-example
       - run: fvm dart pub publish --force
+
+      - name: Add pub.dev install snippet to release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash tool/stamp_release.sh ${{ needs.discover.outputs.tag }} --add-pub-install
