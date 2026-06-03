@@ -211,5 +211,10 @@ jobs:
       - name: Generate asset hashes
         run: fvm dart run tool/write_asset_hashes.dart ${{ needs.validate.outputs.tag }}
 
+      - name: Ephemeral commit (clean git for pub publish)
+        run: |
+          git add -A
+          git commit -m "stamp: ${{ needs.validate.outputs.tag }}" --allow-empty
+
       - run: fvm dart pub get --no-example
       - run: fvm dart pub publish --force
