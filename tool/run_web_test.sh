@@ -50,7 +50,7 @@ DRIVE_PID=$!
 TIMEOUT=300
 ELAPSED=0
 while kill -0 "$DRIVE_PID" 2>/dev/null; do
-    if grep -q 'All tests passed\|Application finished' "$LOG" 2>/dev/null; then
+    if grep -qE 'All tests passed|Application finished' "$LOG" 2>/dev/null; then
         break
     fi
     if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
