@@ -124,6 +124,7 @@ jobs:
               --head "$BRANCH" \
               --title "chore: bump Flutter $CURRENT → $LATEST" \
               --label "$LABEL" \
+              --draft \
               --body "$PR_BODY"
           else
             gh pr edit "$EXISTING_PR" \

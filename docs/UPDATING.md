@@ -37,6 +37,17 @@ matching version before WASM builds.
 
 ---
 
+## Flutter version pinning
+
+`.fvmrc` (root + `example/.fvmrc`) is the single source of truth for
+the Flutter SDK version. Never hardcode the version anywhere else.
+
+`flutter-upgrade.yml` runs daily, detects new Flutter stable releases,
+and opens a draft PR on `chore/flutter-upgrade` that bumps both files.
+Review, test, merge when ready.
+
+---
+
 ## S1 — Bump upstream
 
 ### 1. Discover what's new

@@ -180,7 +180,7 @@ class BlobSource implements DataSource {
 
 </details>
 
-> **Note:** `DataSource` is random-access — the engine jumps to arbitrary positions in the file. Forward-only streams (like a network socket or stdin) need to be buffered into memory or disk first.
+**Note:** `DataSource` is random-access — the engine jumps to arbitrary positions in the file. Forward-only streams (like a network socket or stdin) need to be buffered into memory or disk first.
 
 ---
 
@@ -556,7 +556,7 @@ This adds the COOP/COEP headers to Flutter's dev server automatically.
 
 ## Docs
 
-| | |
+| Doc | What's inside |
 |---|---|
 | [Architecture](docs/ARCHITECTURE.md) | How it's built — layers, streaming I/O, three web modes |
 | [Capabilities](docs/CAPABILITY_ROADMAP.md) | What's shipped, what's planned |
