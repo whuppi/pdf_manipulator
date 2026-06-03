@@ -1,0 +1,19 @@
+# Dependabot: auto-opens PRs when GitHub Actions have new versions.
+# One grouped PR per week instead of one per action. Targets dev branch.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    target-branch: "dev"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "ci"
+    groups:
+      actions:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 5
