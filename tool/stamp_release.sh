@@ -97,6 +97,12 @@ if [[ "$MODE" == "--stamp-tag" ]]; then
     echo "  .gitmodules removed"
   fi
 
+  # Add false_secrets for vendor test keys (only needed when vendor is shipped)
+  if ! grep -q '/vendor/\*\*' pubspec.yaml; then
+    sed -i.bak '/^false_secrets:/a\  - /vendor/**' pubspec.yaml && rm -f pubspec.yaml.bak
+    echo "  pubspec.yaml += false_secrets /vendor/**"
+  fi
+
   echo "=== Tag tree ready ==="
   exit 0
 fi
