@@ -443,14 +443,14 @@ Every error is a typed subclass of `PdfError`. No string matching. No `PlatformE
 
 ## Platforms
 
-| Platform | Architectures | Engine |
-|---|---|---|
-| macOS | arm64, x64 | Native (Rust) |
-| iOS | arm64 device, arm64 + x64 simulator | Native (Rust) |
-| Android | arm64, arm, x64, x86 | Native (Rust) |
-| Linux | x64, arm64 | Native (Rust) |
-| Windows | x64, arm64 | Native (Rust) |
-| Web | All modern browsers | WASM |
+| Platform | Architectures | Minimum version | Engine |
+|---|---|---|---|
+| Android | arm64, arm, x64, x86 | API 21 (Android 5.0) | Native (Rust) |
+| iOS | arm64 device, arm64 + x64 simulator | 13.0 | Native (Rust) |
+| macOS | arm64, x64 | 10.15 (Catalina) | Native (Rust) |
+| Linux | x64, arm64 | glibc 2.31+ (Ubuntu 20.04+) | Native (Rust) |
+| Windows | x64, arm64 | Windows 10 | Native (Rust) |
+| Web | All modern browsers | See [browser table](#web) below | WASM |
 
 ### How native binaries are resolved
 

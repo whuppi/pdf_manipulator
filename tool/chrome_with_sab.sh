@@ -35,10 +35,17 @@ else
   exit 1
 fi
 
-# CI Linux runners need --no-sandbox (Chrome refuses to start as root/in containers without it)
+# CI Linux runners need extra flags:
+#   --no-sandbox        Chrome refuses to start as root/in containers
+#   --disable-gpu       No GPU in CI
+#   --disable-dev-shm-usage  GitHub Actions runners have 64MB /dev/shm;
+#                        Chrome uses shared memory for rendering and silently
+#                        crashes when it runs out. This flag makes Chrome use
+#                        /tmp instead. Without it, DWDS gets AppConnectionException
+#                        because Chrome dies before the debug port is ready.
 CI_FLAGS=""
 if [[ "$(uname)" == "Linux" ]] && [[ "${CI:-}" == "true" || "$(id -u)" == "0" ]]; then
-  CI_FLAGS="--no-sandbox --disable-gpu"
+  CI_FLAGS="--no-sandbox --disable-gpu --disable-dev-shm-usage"
 fi
 
 exec "$CHROME" --enable-features=SharedArrayBuffer $CI_FLAGS "$@"

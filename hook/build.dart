@@ -193,7 +193,8 @@ Future<void> _compileFromSource(
       final ndkTriple = targetTriple == 'armv7-linux-androideabi'
           ? 'armv7a-linux-androideabi'
           : targetTriple;
-      final linker = p.join(compilerDir, '${ndkTriple}35-clang');
+      // API 21 = Android 5.0 — matches compile_rust.sh's release builds.
+      final linker = p.join(compilerDir, '${ndkTriple}21-clang');
       final ar = p.join(compilerDir, 'llvm-ar');
       final envKey = 'CARGO_TARGET_${targetTriple.toUpperCase().replaceAll('-', '_')}';
       env['${envKey}_LINKER'] = linker;
