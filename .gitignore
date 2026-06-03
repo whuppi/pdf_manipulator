@@ -335,3 +335,6 @@ example/web/pdf_manipulator/
 
 # pubspec.lock (library, not app — consumers resolve their own deps)
 pubspec.lock
+
+# Deploy secrets (Bitwarden source of truth, never committed)
+deploy/.deploy/secrets.json
