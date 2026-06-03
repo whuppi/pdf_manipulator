@@ -1,11 +1,9 @@
-# Create GitHub Releases for new versions found in changelogs.
+# Release pipeline: tag → compile → upload → approve → publish.
 #
-# Reads CHANGELOG.md (prod, stable) or CHANGELOG.pre.md (dev, prerelease).
-# For each version without a GitHub Release: creates one (with tag).
-# Idempotent — rerunning skips versions that already have a Release.
-#
-# The created Release triggers publish.yml (compile + publish to pub.dev).
-name: Create Release
+# Automatic on changelog push. Manual via workflow_dispatch.
+# Publish job requires environment approval (human gate before pub.dev).
+# Idempotent — rerun skips existing releases, clobbers existing assets.
+name: Release
 
 on:
   push:
@@ -24,23 +22,36 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+
+env:
+  COMPILE_OUTPUT_DIR: out
+
+concurrency:
+  group: release-${{ github.event.inputs.branch || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
-  create-release:
+  # ── Find new versions + create tags ────────────────────────────────
+  discover:
+    name: Discover versions
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.find.outputs.tag }}
+      version: ${{ steps.find.outputs.version }}
+      has_release: ${{ steps.find.outputs.has_release }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ inputs.branch || github.ref_name }}
 
-      - name: Find unreleased versions
-        id: versions
+      - name: Find + create release
+        id: find
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BRANCH: ${{ inputs.branch || github.ref_name }}
         run: |
-          # Determine which changelog to read
           if [[ "$BRANCH" == "prod" ]]; then
             FILE="CHANGELOG.md"
           else
@@ -48,91 +59,181 @@ jobs:
           fi
 
           if [ ! -f "$FILE" ]; then
-            echo "No $FILE found."
+            echo "has_release=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Extract all ## version headers
-          VERSIONS=$(grep -oP '^## \K\S+' "$FILE" || true)
-          if [ -z "$VERSIONS" ]; then
-            echo "No versions found in $FILE."
+          VERSION=$(grep -oP '^## \K\S+' "$FILE" | head -1 || true)
+          if [ -z "$VERSION" ]; then
+            echo "has_release=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Filter to versions without a GitHub Release
-          UNRELEASED=""
-          for V in $VERSIONS; do
-            TAG="v$V"
-            # Check if GitHub Release exists for this tag
-            if gh release view "$TAG" --json tagName >/dev/null 2>&1; then
-              echo "Release $TAG already exists. Skipping."
-            else
-              UNRELEASED="$UNRELEASED $V"
-              echo "New version: $V"
-            fi
-          done
+          TAG="v$VERSION"
+          IS_PRE=false
+          [[ "$VERSION" == *-* ]] && IS_PRE=true
 
-          echo "unreleased=$(echo $UNRELEASED | xargs)" >> "$GITHUB_OUTPUT"
-          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
-          echo "file=$FILE" >> "$GITHUB_OUTPUT"
+          if [[ "$BRANCH" == "prod" && "$IS_PRE" == "true" ]]; then
+            echo "Skipping prerelease $VERSION on prod."
+            echo "has_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$BRANCH" == "dev" && "$IS_PRE" == "false" ]]; then
+            echo "Skipping stable $VERSION on dev."
+            echo "has_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
-      - name: Create releases
-        if: steps.versions.outputs.unreleased != ''
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          UNRELEASED: ${{ steps.versions.outputs.unreleased }}
-          BRANCH: ${{ steps.versions.outputs.branch }}
-          FILE: ${{ steps.versions.outputs.file }}
-        run: |
-          for VERSION in $UNRELEASED; do
-            TAG="v$VERSION"
-            IS_PRE=false
-            if [[ "$VERSION" == *-* ]]; then
-              IS_PRE=true
-            fi
-
-            # Validate: stable versions only from prod, prereleases only from dev
-            if [[ "$BRANCH" == "prod" && "$IS_PRE" == "true" ]]; then
-              echo "Skipping prerelease $VERSION on prod branch."
-              continue
-            fi
-            if [[ "$BRANCH" == "dev" && "$IS_PRE" == "false" ]]; then
-              echo "Skipping stable $VERSION on dev branch (ships via prod)."
-              continue
-            fi
-
-            # Extract release notes from changelog (everything between this ## and next ##)
-            NOTES=$(awk "/^## ${VERSION//./\\.}($| )/{found=1; next} /^## /{found=0} found" "$FILE")
-
-            # Auto-append commit list since previous tag
-            PREV_TAG=$(git tag --sort=-v:refname | grep '^v' | head -1 || true)
-            if [ -n "$PREV_TAG" ]; then
-              COMMITS=$(git log "$PREV_TAG"..HEAD --oneline --no-decorate)
-              COUNT=$(echo "$COMMITS" | grep -c . || true)
-            else
-              COMMITS=$(git log --oneline --no-decorate)
-              COUNT=$(echo "$COMMITS" | grep -c . || true)
-            fi
-            if [ -n "$COMMITS" ]; then
-              COMMIT_LIST=$(echo "$COMMITS" | sed 's/^/- /')
-              DETAILS_OPEN="<details><summary>Commits since ${PREV_TAG:-initial} ($COUNT)</summary>"
-              DETAILS_CLOSE="</details>"
-              printf -v NOTES '%s\n\n%s\n\n%s\n\n%s' "$NOTES" "$DETAILS_OPEN" "$COMMIT_LIST" "$DETAILS_CLOSE"
-            fi
-
-            echo "Creating release $TAG (prerelease=$IS_PRE)..."
-
+          # Create release if it doesn't exist
+          if gh release view "$TAG" --json tagName >/dev/null 2>&1; then
+            echo "Release $TAG already exists."
+          else
+            NOTES=$(bash tool/stamp_release.sh "$TAG" --github-notes)
             FLAGS=""
-            if [[ "$IS_PRE" == "true" ]]; then
-              FLAGS="--prerelease"
-            fi
-
-            # Create the Release (this also creates the tag)
+            [[ "$IS_PRE" == "true" ]] && FLAGS="--prerelease"
             gh release create "$TAG" \
               --target "$BRANCH" \
               --title "pdf_manipulator $VERSION" \
               --notes "$NOTES" \
               $FLAGS
-
             echo "Created release $TAG"
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "has_release=true" >> "$GITHUB_OUTPUT"
+
+  # ── Compile all targets ────────────────────────────────────────────
+  compile-macos:
+    needs: discover
+    if: needs.discover.outputs.has_release == 'true'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ needs.discover.outputs.tag }}', submodules: recursive }
+      - uses: ./.github/actions/compile-macos
+      - uses: actions/upload-artifact@v4
+        with: { name: bin-macos, path: out/ }
+
+  compile-ios:
+    needs: discover
+    if: needs.discover.outputs.has_release == 'true'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ needs.discover.outputs.tag }}', submodules: recursive }
+      - uses: ./.github/actions/compile-ios
+      - uses: actions/upload-artifact@v4
+        with: { name: bin-ios, path: out/ }
+
+  compile-android:
+    needs: discover
+    if: needs.discover.outputs.has_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ needs.discover.outputs.tag }}', submodules: recursive }
+      - uses: ./.github/actions/compile-android
+      - uses: actions/upload-artifact@v4
+        with: { name: bin-android, path: out/ }
+
+  compile-linux:
+    needs: discover
+    if: needs.discover.outputs.has_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ needs.discover.outputs.tag }}', submodules: recursive }
+      - uses: ./.github/actions/compile-linux
+      - uses: actions/upload-artifact@v4
+        with: { name: bin-linux, path: out/ }
+
+  compile-wasm:
+    needs: discover
+    if: needs.discover.outputs.has_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ needs.discover.outputs.tag }}', submodules: recursive }
+      - uses: ./.github/actions/compile-wasm
+      - uses: actions/upload-artifact@v4
+        with: { name: bin-wasm, path: out/ }
+
+  compile-windows:
+    needs: discover
+    if: needs.discover.outputs.has_release == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ needs.discover.outputs.tag }}', submodules: recursive }
+      - uses: ./.github/actions/compile-windows
+      - uses: actions/upload-artifact@v4
+        with: { name: bin-windows, path: out/ }
+
+  # ── Upload binaries to the GitHub Release ──────────────────────────
+  upload-assets:
+    name: Upload Release Assets
+    needs: [discover, compile-macos, compile-ios, compile-android, compile-linux, compile-windows, compile-wasm]
+    if: needs.discover.outputs.has_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts/ }
+      - name: Flatten assets
+        run: |
+          mkdir -p release
+          for runner in bin-macos bin-ios bin-android bin-linux bin-windows; do
+            for pdir in artifacts/$runner/*/; do
+              [ -d "$pdir" ] || continue
+              p=$(basename "$pdir")
+              for lib in "$pdir"*; do
+                [ -f "$lib" ] || continue
+                cp "$lib" "release/${p}-$(basename "$lib")"
+              done
+            done
           done
+          if [ -d "artifacts/bin-wasm/wasm" ]; then
+            for f in artifacts/bin-wasm/wasm/*; do
+              [ -f "$f" ] || continue
+              cp "$f" "release/wasm-$(basename "$f")"
+            done
+          fi
+          ls -lh release/
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.discover.outputs.tag }}
+          files: release/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Publish to pub.dev (requires approval) ─────────────────────────
+  publish:
+    name: Publish to pub.dev
+    needs: [discover, upload-assets]
+    if: needs.discover.outputs.has_release == 'true'
+    runs-on: ubuntu-latest
+    environment: publish
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: '${{ needs.discover.outputs.tag }}'
+          submodules: recursive
+          fetch-depth: 0
+      - uses: dart-lang/setup-dart@v1
+      - name: Install fvm + project SDK
+        run: dart pub global activate fvm && fvm install
+
+      - name: Stamp release artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash tool/stamp_release.sh ${{ needs.discover.outputs.tag }}
+
+      - name: Ephemeral commit (clean git for pub publish)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "stamp: ${{ needs.discover.outputs.tag }}" --allow-empty
+
+      - run: fvm dart pub get --no-example
+      - run: fvm dart pub publish --force

@@ -202,31 +202,40 @@ version at publish time from the tag.
 
 ### How the release pipeline works
 
-The release is a two-workflow chain. Both steps are automatic once
-you push the changelog — no manual workflow runs needed.
+One workflow (`create-release.yml`) handles the entire pipeline.
+Publish to pub.dev requires human approval via GitHub Environments.
 
 ```
 Changelog push to dev or prod
-  → create-release.yml (auto-triggers on CHANGELOG.md / CHANGELOG.pre.md change)
-    → scans changelog for versions without a GitHub Release
-    → creates tag + GitHub Release for each new version
-    → tag push triggers publish.yml automatically
-      → 6 compile jobs in parallel (macOS/iOS/Android/Linux/Windows/WASM)
-      → upload binaries to GitHub Release
-      → stamp version from tag into pubspec.yaml + version.dart
-      → dart pub publish to pub.dev
+  → create-release.yml (automatic)
+    1. Scan changelog for the latest version
+    2. Create tag + GitHub Release (if not exists, idempotent)
+    3. Compile all 6 targets in parallel
+    4. Upload binaries to GitHub Release
+    5. ⏸ PAUSE — publish job waits for approval (GitHub Environment gate)
+    6. You approve → stamp_release.sh runs:
+       - stamps version into pubspec.yaml + version.dart
+       - builds CHANGELOG.md for pub.dev (filters unpublished versions,
+         merges their content into collapsibles, appends commit list
+         since last pub.dev version)
+       - generates asset hashes from GitHub Release API
+    7. dart pub publish
 ```
 
-Both workflows are idempotent. Rerun either at any time — existing
-releases are skipped, pub.dev rejects duplicate versions.
+Idempotent. Rerun skips existing releases, clobbers existing assets,
+pub.dev rejects duplicate versions.
+
+GitHub Release notes and pub.dev changelog have DIFFERENT commit
+ranges: GitHub shows commits since previous tag, pub.dev shows
+commits since last published version.
 
 ### Stable release
 
 ```
 1. Add ## X.Y.Z at top of CHANGELOG.md (human summary only, no commit list)
 2. PR to prod → merge
-3. (automatic) create-release.yml → tag + GitHub Release (commits auto-appended)
-4. (automatic) publish.yml → compile + upload + generate hashes + pub.dev (commits auto-appended)
+3. (automatic) tag + release + compile + upload
+4. (manual) approve "publish" environment → pub.dev
 ```
 
 ### Prerelease
@@ -234,21 +243,20 @@ releases are skipped, pub.dev rejects duplicate versions.
 ```
 1. Add ## X.Y.Z-dev.N at top of CHANGELOG.pre.md (human summary only, no commit list)
 2. PR to dev → merge
-3. (automatic) create-release.yml → tag + GitHub Release (commits auto-appended)
-4. (automatic) publish.yml → compile + upload + generate hashes + pub.dev (commits auto-appended)
+3. (automatic) tag + release + compile + upload
+4. (manual) approve "publish" environment → pub.dev
 ```
 
-Commit lists are never in the changelog files. CI generates them
-dynamically from `git log` at release time — GitHub Release notes
-and pub.dev tarball each get fresh commit lists. Asset hashes are
-generated from the uploaded binaries before `dart pub publish`.
+Commit lists and changelog filtering are handled by
+`tool/stamp_release.sh` — single source of truth for all stamping.
+Never put commit lists in the changelog files.
 
 ### Hotfix
 
 ```
 1. Branch from release tag: git checkout -b hotfix/vX.Y.Z vPREV
 2. Fix, add changelog entry, push
-3. PR to prod → merge → CI tags + publishes (automatic)
+3. PR to prod → merge → same pipeline (automatic + approval)
 4. Cherry-pick fix to dev (via PR)
 ```
 
@@ -259,8 +267,7 @@ generated from the uploaded binaries before `dart pub publish`.
 | `ci.yml` | PR to prod/dev | `make analyze` + `make test-unit` + `make test-ops-native` |
 | `pr-lint.yml` | PR to prod/dev | Conventional commit title + promotion chain |
 | `full-test.yml` | `ready-to-test` label | 10 jobs: 4 pkg + 6 integration. Web jobs have separate named steps per mode (JSPI/Atomics/OPFS). |
-| `create-release.yml` | Push to dev/prod that changes `CHANGELOG.md` or `CHANGELOG.pre.md`, or `workflow_dispatch` | Scan changelog → tag + GitHub Release (idempotent) |
-| `publish.yml` | Tag push (`v*`), or `workflow_dispatch` with tag name | Compile all 6 targets + upload to Release + publish to pub.dev (idempotent) |
+| `create-release.yml` | Push to dev/prod that changes changelog, or `workflow_dispatch` | Tag + release + compile + upload + publish (with approval gate). One workflow, entire pipeline. |
 | `flutter-upgrade.yml` | Daily schedule or `workflow_dispatch` | Check for new Flutter stable, open/update upgrade PR on `chore/flutter-upgrade` branch |
 | `triage.yml` | Issues/PRs opened | Auto-label and assign |
 
@@ -268,44 +275,36 @@ generated from the uploaded binaries before `dart pub publish`.
 
 | Failure | Fix |
 |---|---|
-| `create-release.yml` failed | Rerun via Actions → Create Release → Run workflow |
-| pub.dev publish failed (but binaries OK) | Rerun `publish.yml` with the tag (pub.dev rejects duplicates, safe to retry) |
-| Tag exists but no Release | Run `create-release.yml` via workflow_dispatch |
-| Release exists but no binaries | Rerun `publish.yml` via workflow_dispatch with tag |
-| `publish.yml` shows "workflow file issue" | Check for `inputs.tag` in top-level expressions — use `github.event.inputs.tag` instead |
+| Compile failed | Rerun `create-release.yml` via workflow_dispatch (idempotent — skips tag creation, recompiles + re-uploads) |
+| Upload failed | Same — rerun, clobber overwrites |
+| Publish failed (but binaries OK) | Rerun — approval gate shows again, pub.dev rejects duplicates |
+| Tag exists but no Release | Rerun `create-release.yml` via workflow_dispatch |
 
-### Compile failed — rebuild a release with fixed code
+### Compile failed with code bug — rebuild a release
 
-`publish.yml` checks out the **tag's code** for compilation. The compile
-actions (`uses: ./.github/actions/compile-*`) also resolve from the
-tag's checkout. Rerunning `publish.yml` with the same tag reuses the
-same broken code — the fix on `dev` is invisible to the tag.
-
-**Two options:**
+The workflow checks out the **tag's code** for compilation. Rerunning
+with the same tag reuses the same broken code.
 
 **Option A — Bump version (new prerelease).** Code changed, so the
 version changes. Clean and correct.
 
 ```
-1. Fix the compile issue, merge to dev via PR
+1. Fix the issue, merge to dev via PR
 2. Add ## X.Y.Z-dev.N+1 at top of CHANGELOG.pre.md
-3. Merge to dev
-4. (automatic) create-release.yml → new tag → publish.yml → compile
+3. Merge to dev → pipeline runs automatically
 ```
 
 **Option B — Rebuild same version (delete + recreate tag).** Use when
-the code fix doesn't change the package's behavior (CI/workflow fixes,
-compile script fixes). Same version, fresh tag on the right commit.
+the fix is purely CI/build infrastructure, not package behavior.
 
 ```
-1. Fix the compile issue, merge to dev via PR
+1. Fix the issue, merge to dev via PR
 2. Delete the broken release + tag:
      gh release delete vX.Y.Z --repo whuppi/pdf_manipulator --yes
      gh api repos/whuppi/pdf_manipulator/git/refs/tags/vX.Y.Z -X DELETE
 3. Retrigger:
      gh workflow run create-release.yml --repo whuppi/pdf_manipulator -f branch=dev
-4. create-release.yml sees the version has no release → creates fresh
-   tag at dev HEAD → publish.yml fires → compiles with the fix
+4. Pipeline creates fresh tag at dev HEAD → compile → upload → approve → publish
 ```
 
 **Pick A when:** the fix changes runtime behavior, adds features, or

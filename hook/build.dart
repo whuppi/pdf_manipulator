@@ -255,9 +255,14 @@ Future<void> _downloadPrebuilt(
         'Failed to download pre-built binary.\n'
         'URL: $url\n'
         'Status: ${response.statusCode}\n\n'
+        'This usually means pre-built binaries are not available for this version.\n\n'
         'Options:\n'
-        '  1. Install Rust (https://rustup.rs) and clone with --recursive\n'
-        '  2. Wait for a release that includes $platform binaries\n',
+        '  1. Use a published version from pub.dev: pdf_manipulator: ^1.0.0\n'
+        '  2. Use a git tag that has binaries: ref: v1.0.0-dev.0\n'
+        '     (check the GitHub Releases page for tags with binary assets)\n'
+        '  3. Compile from source (requires Rust toolchain):\n'
+        '       git clone --recursive https://github.com/whuppi/pdf_manipulator.git\n'
+        '       # Then use a path dependency in your pubspec.yaml\n',
       );
     }
 
