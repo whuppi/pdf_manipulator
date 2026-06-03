@@ -223,21 +223,25 @@ releases are skipped, pub.dev rejects duplicate versions.
 ### Stable release
 
 ```
-1. Add ## X.Y.Z at top of CHANGELOG.md
-2. git log v<PREV>..HEAD --oneline --no-decorate → paste in entry
-3. PR to prod → merge
-4. (automatic) create-release.yml → tag + GitHub Release
-5. (automatic) publish.yml → compile + upload + pub.dev
+1. Add ## X.Y.Z at top of CHANGELOG.md (human summary only, no commit list)
+2. PR to prod → merge
+3. (automatic) create-release.yml → tag + GitHub Release (commits auto-appended)
+4. (automatic) publish.yml → compile + upload + generate hashes + pub.dev (commits auto-appended)
 ```
 
 ### Prerelease
 
 ```
-1. Add ## X.Y.Z-dev.N at top of CHANGELOG.pre.md
-2. PR to dev → merge (or push to dev via PR)
-3. (automatic) create-release.yml → tag + GitHub Release
-4. (automatic) publish.yml → compile + upload + pub.dev
+1. Add ## X.Y.Z-dev.N at top of CHANGELOG.pre.md (human summary only, no commit list)
+2. PR to dev → merge
+3. (automatic) create-release.yml → tag + GitHub Release (commits auto-appended)
+4. (automatic) publish.yml → compile + upload + generate hashes + pub.dev (commits auto-appended)
 ```
+
+Commit lists are never in the changelog files. CI generates them
+dynamically from `git log` at release time — GitHub Release notes
+and pub.dev tarball each get fresh commit lists. Asset hashes are
+generated from the uploaded binaries before `dart pub publish`.
 
 ### Hotfix
 

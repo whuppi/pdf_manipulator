@@ -6,33 +6,16 @@
   How to add a release:
   1. Add a new ## heading at the top with the version number
   2. Write a human summary of changes (for users, not developers)
-  3. Generate the commit list for the <details> block:
-       git log v<PREVIOUS_VERSION>..HEAD --oneline --no-decorate
-     Wrap the output in a <details> block and paste at the end of your entry
-  4. Commit, push to dev, PR dev → prod, merge
-  5. CI reads the version from the top ## heading, tags, and publishes
-
-  Format:
-    ## X.Y.Z
-    
-    Human-written summary of what changed and why it matters.
-    
-    ### Features / Bug Fixes / Breaking Changes / Performance
-    - Description of each change
-    
-    <details><summary>Commits since PREV (N)</summary>
-    
-    - abc1234 feat: thing that happened
-    - def5678 fix: thing that was fixed
-    
-    </details>
+  3. Commit, push to dev, PR dev → prod, merge
+  4. CI reads the version from the top ## heading, tags, and publishes
 
   Rules:
   - Version in ## heading is the ONLY source of truth for the release version
   - pubspec.yaml stays 0.0.0 — CI stamps it from this file at publish time
   - Each entry covers ALL changes since the previous ## heading in this file
-  - The <details> block is generated via: git log vPREV..HEAD --oneline --no-decorate
   - Prerelease entries go in CHANGELOG.pre.md, not here
+  - DO NOT add commit lists here — CI auto-appends them at publish time
+    (GitHub Release notes + pub.dev tarball get the commits dynamically)
 -->
 
 ## 1.0.0

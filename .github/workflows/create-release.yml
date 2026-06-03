@@ -104,6 +104,26 @@ jobs:
             # Extract release notes from changelog (everything between this ## and next ##)
             NOTES=$(awk "/^## ${VERSION//./\\.}($| )/{found=1; next} /^## /{found=0} found" "$FILE")
 
+            # Auto-append commit list since previous tag
+            PREV_TAG=$(git tag --sort=-v:refname | grep '^v' | head -1 || true)
+            if [ -n "$PREV_TAG" ]; then
+              COMMITS=$(git log "$PREV_TAG"..HEAD --oneline --no-decorate)
+              COUNT=$(echo "$COMMITS" | grep -c . || true)
+            else
+              COMMITS=$(git log --oneline --no-decorate)
+              COUNT=$(echo "$COMMITS" | grep -c . || true)
+            fi
+            if [ -n "$COMMITS" ]; then
+              COMMIT_LIST=$(echo "$COMMITS" | sed 's/^/- /')
+              NOTES="$NOTES
+
+<details><summary>Commits since ${PREV_TAG:-initial} ($COUNT)</summary>
+
+$COMMIT_LIST
+
+</details>"
+            fi
+
             echo "Creating release $TAG (prerelease=$IS_PRE)..."
 
             FLAGS=""
