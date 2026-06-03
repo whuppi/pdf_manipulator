@@ -82,7 +82,10 @@ if [[ "$MODE" == "--stamp-tag" ]]; then
       # Remove submodule registration so git tracks files directly
       git rm --cached "$sub" 2>/dev/null || true
       rm -rf "$sub/.git"
-      git add "$sub/"
+      # Force-add everything including files excluded by vendor .gitignore
+      # (Cargo.lock is gitignored in library crates but we need it for
+      # deterministic builds + wasm-bindgen-cli version detection)
+      git add --force "$sub/"
       echo "  $sub → raw source (de-registered submodule)"
     fi
   done
