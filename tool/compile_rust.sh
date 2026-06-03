@@ -203,6 +203,16 @@ WASM_OPT_FLAGS=(
 do_wasm() {
   local out="$PKG_ROOT/web_assets"
 
+  # Ensure wasm-bindgen-cli matches the Cargo.lock version exactly
+  local wb_required
+  wb_required=$(grep -A1 'name = "wasm-bindgen"' "$VENDOR/Cargo.lock" | grep version | head -1 | sed 's/.*"\(.*\)"/\1/')
+  local wb_installed
+  wb_installed=$(wasm-bindgen --version 2>/dev/null | sed 's/wasm-bindgen //' || echo "none")
+  if [[ "$wb_installed" != "$wb_required" ]]; then
+    echo "=== WASM: installing wasm-bindgen-cli $wb_required (have: $wb_installed) ==="
+    cargo install wasm-bindgen-cli --version "$wb_required"
+  fi
+
   echo "=== WASM: compile ==="
   cd "$VENDOR"
   cargo build --lib \

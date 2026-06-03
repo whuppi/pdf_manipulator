@@ -17,7 +17,9 @@ patch branch. `main` on each fork stays a clean mirror of upstream.
 
 pdf_oxide depends on office_oxide as a path dependency
 (`office_oxide = { path = "../office_oxide" }`).
-wasm-bindgen version: `0.2.121`.
+wasm-bindgen-cli version is read from `vendor/pdf_oxide/Cargo.lock`
+at build time — never hardcoded. `compile_rust.sh` auto-installs the
+matching version before WASM builds.
 
 ---
 
