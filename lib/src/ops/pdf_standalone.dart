@@ -10,7 +10,9 @@ import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 
+/// One-shot operations — source in, sink out, no persistent handle.
 extension PdfStandalone on Pdf {
+  /// Digitally signs a PDF with the given [credentials].
   Future<void> sign(DataSource source, DataSink output, {
     required PdfSigningCredentials credentials,
     String? reason,
@@ -20,6 +22,7 @@ extension PdfStandalone on Pdf {
         credentials: credentials, reason: reason, location: location);
   }
 
+  /// Converts a PDF to another document [format] (e.g. DOCX, image).
   Future<void> convertTo(DataSource source, DataSink output, {
     required PdfDocumentFormat format,
     String? password,
@@ -27,12 +30,14 @@ extension PdfStandalone on Pdf {
     return bridge.convertTo(source, output, format: format, password: password);
   }
 
+  /// Converts a document of the given [format] into a PDF.
   Future<void> convertToPdf(DataSource document, DataSink output, {
     required PdfDocumentFormat format,
   }) {
     return bridge.convertToPdf(document, output, format: format);
   }
 
+  /// Extracts specific [pages] from [source] into [output].
   Future<void> extractPages(
     DataSource source,
     DataSink output, {

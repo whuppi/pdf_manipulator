@@ -31,10 +31,10 @@ const _flagAck = 1 << 3;
 // ── Per-source resources (kept alive until dispose) ──────────────
 
 class _SourceResources {
+  _SourceResources(this.readBuf, this.callable);
+
   final SharedReadBuffer readBuf;
   final ffi.NativeCallable<ffi.Void Function()> callable;
-
-  _SourceResources(this.readBuf, this.callable);
 
   void dispose() {
     callable.close();
@@ -48,6 +48,7 @@ var _nextResourceId = 1;
 
 // ── Coordinator isolate entry point ─────────────────────────────────
 
+/// Entry point for the coordinator isolate that owns a Rust engine instance.
 void coordinatorEntryPoint(SendPort mainPort) {
   final port = ReceivePort();
   mainPort.send(port.sendPort);
@@ -107,9 +108,10 @@ void coordinatorEntryPoint(SendPort mainPort) {
 // ── Result with optional resource IDs ──────────────────────────────
 
 class _OpResult {
+  _OpResult(this.bytes, {this.keptResourceIds = const {}});
+
   final Uint8List bytes;
   final Map<int, int> keptResourceIds; // sourceIndex → resourceId
-  _OpResult(this.bytes, {this.keptResourceIds = const {}});
 }
 
 // ── Execute one operation via bridge_execute FFI ────────────────────

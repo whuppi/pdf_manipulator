@@ -22,24 +22,36 @@ sealed class PdfPages {
 
 /// Every page.
 class PdfAllPages extends PdfPages {
+  /// Creates an all-pages scope.
   const PdfAllPages();
 }
 
 /// One page.
 class PdfSinglePage extends PdfPages {
+  /// Creates a single-page scope.
   const PdfSinglePage(this.index);
+
+  /// Zero-based page index.
   final int index;
 }
 
 /// Specific pages.
 class PdfPageList extends PdfPages {
+  /// Creates a page-list scope.
   const PdfPageList(this.indices);
+
+  /// Zero-based page indices.
   final List<int> indices;
 }
 
 /// Contiguous range [start, end).
 class PdfPageRange extends PdfPages {
+  /// Creates a page-range scope.
   const PdfPageRange(this.start, this.end);
+
+  /// Inclusive start index.
   final int start;
+
+  /// Exclusive end index.
   final int end;
 }

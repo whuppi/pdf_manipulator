@@ -10,4 +10,5 @@ import 'package:pdf_manipulator/src/transport/_create_native.dart'
     if (dart.library.js_interop) 'package:pdf_manipulator/src/transport/_create_web.dart'
     as impl;
 
+/// Creates a platform-appropriate [PdfBridge] via conditional import.
 PdfBridge createBridge({PdfConfig? config}) => impl.createBridge(config: config);

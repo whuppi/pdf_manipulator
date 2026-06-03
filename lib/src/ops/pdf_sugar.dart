@@ -7,6 +7,7 @@
 // Do NOT import bridge, transport, protocol, or any internal layer.
 // Sugar composes the public consumer API only.
 
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/ops/pdf.dart';
@@ -18,9 +19,11 @@ import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 
+/// Convenience wrappers — common multi-step PDF operations in one call.
 extension PdfSugar on Pdf {
   // ── Structural ──
 
+  /// Merges multiple PDFs into a single document.
   Future<void> merge(List<DataSource> inputs, DataSink output) async {
     if (inputs.isEmpty) throw ArgumentError('inputs must not be empty');
     final editor = await edit(inputs.first);
@@ -31,6 +34,7 @@ extension PdfSugar on Pdf {
     await editor.dispose();
   }
 
+  /// Splits a PDF into chunks of [every] pages each.
   Future<void> split(
     DataSource source,
     DataSink Function(int index) sinkFactory, {
@@ -52,6 +56,7 @@ extension PdfSugar on Pdf {
     }
   }
 
+  /// Splits a PDF so each chunk stays under [maxBytes].
   Future<List<int>> splitBySize(
     DataSource source,
     DataSink Function(int index) sinkFactory, {
@@ -118,6 +123,7 @@ extension PdfSugar on Pdf {
     }
   }
 
+  /// Splits a PDF at top-level bookmark boundaries.
   Future<void> splitByBookmarks(
     DataSource source,
     DataSink Function(int index) sinkFactory, {
@@ -137,6 +143,7 @@ extension PdfSugar on Pdf {
   }
 
 
+  /// Removes the specified [pages] from the document.
   Future<void> deletePages(
     DataSource source,
     DataSink output, {
@@ -151,6 +158,7 @@ extension PdfSugar on Pdf {
     await editor.dispose();
   }
 
+  /// Reorders pages according to [order] (list of page indices).
   Future<void> reorderPages(
     DataSource source,
     DataSink output, {
@@ -162,6 +170,7 @@ extension PdfSugar on Pdf {
     await editor.dispose();
   }
 
+  /// Moves a single page from index [from] to index [to].
   Future<void> movePage(
     DataSource source,
     DataSink output, {
@@ -174,6 +183,7 @@ extension PdfSugar on Pdf {
     await editor.dispose();
   }
 
+  /// Rotates specific pages by their mapped degree values.
   Future<void> rotatePages(
     DataSource source,
     DataSink output, {
@@ -187,6 +197,7 @@ extension PdfSugar on Pdf {
     await editor.dispose();
   }
 
+  /// Rotates all pages by [degrees] (must be a multiple of 90).
   Future<void> rotateAllPages(
     DataSource source,
     DataSink output, {
@@ -200,6 +211,7 @@ extension PdfSugar on Pdf {
 
   // ── Content ──
 
+  /// Flattens all form fields in the document into static content.
   Future<void> flattenForms(DataSource source, DataSink output) async {
     final editor = await edit(source);
     await editor.flattenForms();
@@ -207,6 +219,7 @@ extension PdfSugar on Pdf {
     await editor.dispose();
   }
 
+  /// Applies all pending redaction marks, permanently removing content.
   Future<void> applyRedactions(DataSource source, DataSink output) async {
     final editor = await edit(source);
     await editor.applyRedactions();
@@ -214,6 +227,7 @@ extension PdfSugar on Pdf {
     await editor.dispose();
   }
 
+  /// Embeds a file attachment into the PDF.
   Future<void> embedFile(
     DataSource source,
     DataSink output, {
@@ -226,6 +240,7 @@ extension PdfSugar on Pdf {
     await editor.dispose();
   }
 
+  /// Erases content within the specified [regions] on [page].
   Future<void> eraseRegions(
     DataSource source,
     DataSink output, {
@@ -238,6 +253,7 @@ extension PdfSugar on Pdf {
     await editor.dispose();
   }
 
+  /// Compresses the PDF by optimizing images and optionally garbage-collecting.
   Future<void> compress(
     DataSource source,
     DataSink output, {
@@ -256,6 +272,7 @@ extension PdfSugar on Pdf {
 
   // ── Security ──
 
+  /// Adds a text watermark to the specified [pages] (default: all).
   Future<void> watermark(
     DataSource source,
     DataSink output, {
@@ -280,6 +297,7 @@ extension PdfSugar on Pdf {
     await editor.dispose();
   }
 
+  /// Encrypts a PDF with the given [encryption] configuration.
   Future<void> encrypt(
     DataSource source,
     DataSink output, {
@@ -290,6 +308,7 @@ extension PdfSugar on Pdf {
     await editor.dispose();
   }
 
+  /// Decrypts a password-protected PDF and saves without encryption.
   Future<void> decrypt(
     DataSource source,
     DataSink output, {
@@ -303,6 +322,7 @@ extension PdfSugar on Pdf {
 
   // ── Stamps ──
 
+  /// Adds a predefined stamp to a single [page].
   Future<void> addStamp(
     DataSource source,
     DataSink output, {
@@ -317,6 +337,7 @@ extension PdfSugar on Pdf {
     await editor.dispose();
   }
 
+  /// Adds a custom image stamp to a single [page].
   Future<void> addImageStamp(
     DataSource source,
     DataSink output, {
@@ -333,6 +354,7 @@ extension PdfSugar on Pdf {
 
   // ── Conversion ──
 
+  /// Converts a PDF to PDF/A at the given conformance [level].
   Future<void> convertToPdfA(
     DataSource source,
     DataSink output, {
@@ -347,6 +369,7 @@ extension PdfSugar on Pdf {
 
   // ── Builder sugar ──
 
+  /// Creates a PDF from a list of images, one per A4 page.
   Future<void> imagesToPdf(List<DataSource> images, DataSink output) async {
     final builder = await build();
     for (final img in images) {
@@ -367,13 +390,15 @@ class _ByteCountSink implements DataSink {
 }
 
 class _ByteCountSinkWrapper implements DataSink {
+  _ByteCountSinkWrapper(this._inner);
+
   final DataSink _inner;
   int _length = 0;
   int get length => _length;
-  _ByteCountSinkWrapper(this._inner);
   @override
   void write(Uint8List chunk) {
     _length += chunk.length;
-    _inner.write(chunk);
+    final result = _inner.write(chunk);
+    if (result is Future<void>) unawaited(result);
   }
 }

@@ -208,8 +208,6 @@ void registerInstanceTests(Pdf Function() createPdf) {
         await Future<void>.delayed(const Duration(milliseconds: 50));
       }, (e, st) {
         errors.add(e);
-        // ignore: avoid_print
-        print('LEAKED ERROR: $e\n$st');
       });
       expect(errors, isEmpty, reason: 'dispose mid-flight should not leak errors');
     }, timeout: Timeout(Duration(seconds: 5)));

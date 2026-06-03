@@ -28,7 +28,9 @@ import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/transport/pdf_transport.dart';
 
+/// Web WASM transport — routes ops through a JS coordinator worker.
 class WebTransport implements PdfTransport {
+  /// Creates a transport using the given coordinator and worker URLs.
   WebTransport({String? coordinatorUrl, String? workerUrl, PdfIoMode? ioMode})
       : _coordinatorUrl = coordinatorUrl ?? _cachedCoordinatorUrl ?? 'pdf_manipulator/coordinator.js',
         // worker.js is resolved by the coordinator relative to its own URL.
@@ -176,6 +178,7 @@ class WebTransport implements PdfTransport {
     } finally {
       _streams.remove(id);
       _sources.remove(id);
+      unawaited(controller.close());
     }
   }
 
@@ -267,13 +270,14 @@ class WebTransport implements PdfTransport {
       case 'opfs.finalizeAck': _opfsAcks.remove('$id:$type')?.complete();
       case 'readAt':           _handleReadAt(obj, id);
       case 'chunk':
-        _sinks[id]?.write(_bytes(obj, 'data'));
+        final writeResult = _sinks[id]?.write(_bytes(obj, 'data'));
+        if (writeResult is Future) unawaited(writeResult);
         _post({'type': 'chunkAck', 'opId': id});
       case 'result':           _cleanupOp(id); _pending.remove(id)?.complete(_bytes(obj, 'data'));
       case 'error':            _cleanupOp(id); _pending.remove(id)?.completeError(StateError(_str(obj, 'message') ?? 'Bridge error'));
       case 'item':             _streams[id]?.add(_bytes(obj, 'data'));
-      case 'done':             _cleanupOp(id); _streams.remove(id)?.close();
-      case 'streamError':      _cleanupOp(id); final c = _streams.remove(id); c?.addError(StateError(_str(obj, 'message') ?? 'Stream error')); c?.close();
+      case 'done':             _cleanupOp(id); unawaited(_streams.remove(id)?.close());
+      case 'streamError':      _cleanupOp(id); final c = _streams.remove(id); c?.addError(StateError(_str(obj, 'message') ?? 'Stream error')); unawaited(c?.close());
     }
   }
 
@@ -315,9 +319,9 @@ class WebTransport implements PdfTransport {
     try {
       final result = source.readAt(offset, count);
       if (result is Future<Uint8List>) {
-        result
+        unawaited(result
             .then((b) => _sendReadAtResponse(readId, b))
-            .catchError((Object e) => _sendReadAtError(readId, e));
+            .catchError((Object e) => _sendReadAtError(readId, e)));
       } else {
         _sendReadAtResponse(readId, result);
       }
@@ -487,10 +491,10 @@ class WebTransport implements PdfTransport {
 
   static JSAny? _toJS(Object? value) => switch (value) {
         null => null,
-        String s => s.toJS,
-        int n => n.toJS,
-        bool b => b.toJS,
-        JSAny js => js,
+        final String s => s.toJS,
+        final int n => n.toJS,
+        final bool b => b.toJS,
+        final JSAny js => js,
       };
 
   static String? _str(JSObject obj, String key) {

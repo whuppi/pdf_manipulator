@@ -14,6 +14,7 @@ const _tF64List = 8;
 const _tStringList = 9;
 const _tMapList = 10;
 
+/// Encodes an operation name and fields into a binary request payload.
 Uint8List encodeRequest(String op, Map<String, Object?> fields) {
   final buf = BytesBuilder(copy: false);
   final opBytes = utf8.encode(op);
@@ -27,6 +28,7 @@ Uint8List encodeRequest(String op, Map<String, Object?> fields) {
   return buf.takeBytes();
 }
 
+/// Decodes a binary response payload into a field map.
 Map<String, Object?> decodeResponse(Uint8List bytes) {
   if (bytes.isEmpty) return {'error': 'empty response'};
   final r = _Reader(bytes);
@@ -55,7 +57,7 @@ void _writeField(BytesBuilder buf, String key, Object value) {
 
 void _writeValue(BytesBuilder buf, Object value) {
   switch (value) {
-    case int v:
+    case final int v:
       if (v.abs() <= 0x7FFFFFFF) {
         buf.addByte(_tI32);
         _writeI32(buf, v);
@@ -63,34 +65,34 @@ void _writeValue(BytesBuilder buf, Object value) {
         buf.addByte(_tI64);
         _writeI64(buf, v);
       }
-    case double v:
+    case final double v:
       buf.addByte(_tF64);
       _writeF64(buf, v);
-    case bool v:
+    case final bool v:
       buf.addByte(_tBool);
       buf.addByte(v ? 1 : 0);
-    case String v:
+    case final String v:
       buf.addByte(_tString);
       final strBytes = utf8.encode(v);
       _writeU32(buf, strBytes.length);
       buf.add(strBytes);
-    case Uint8List v:
+    case final Uint8List v:
       buf.addByte(_tBytes);
       _writeU32(buf, v.length);
       buf.add(v);
-    case List<int> v:
+    case final List<int> v:
       buf.addByte(_tIntList);
       _writeU32(buf, v.length);
       for (final n in v) {
         _writeI32(buf, n);
       }
-    case List<double> v:
+    case final List<double> v:
       buf.addByte(_tF64List);
       _writeU32(buf, v.length);
       for (final n in v) {
         _writeF64(buf, n);
       }
-    case List<String> v:
+    case final List<String> v:
       buf.addByte(_tStringList);
       _writeU32(buf, v.length);
       for (final s in v) {
@@ -98,14 +100,14 @@ void _writeValue(BytesBuilder buf, Object value) {
         _writeU32(buf, sb.length);
         buf.add(sb);
       }
-    case List<Uint8List> v:
+    case final List<Uint8List> v:
       buf.addByte(_tMapList);
       _writeU32(buf, v.length);
       for (final item in v) {
         _writeU32(buf, item.length);
         buf.add(item);
       }
-    case List<Map<String, Object?>> v:
+    case final List<Map<String, Object?>> v:
       buf.addByte(_tMapList);
       _writeU32(buf, v.length);
       for (final m in v) {
@@ -113,7 +115,7 @@ void _writeValue(BytesBuilder buf, Object value) {
         _writeU32(buf, nested.length);
         buf.add(nested);
       }
-    case Map<String, Object?> v:
+    case final Map<String, Object?> v:
       final nested = _encodeNestedMap(v);
       buf.addByte(_tBytes);
       _writeU32(buf, nested.length);

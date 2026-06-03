@@ -323,7 +323,7 @@ void _addField(BytesBuilder buf, String key, Object value) {
 
 void _addValue(BytesBuilder buf, Object value) {
   switch (value) {
-    case int v:
+    case final int v:
       if (v.abs() <= 0x7FFFFFFF) {
         buf.addByte(1);
         final bd = ByteData(4)..setInt32(0, v, Endian.little);
@@ -333,30 +333,30 @@ void _addValue(BytesBuilder buf, Object value) {
         final bd = ByteData(8)..setInt64(0, v, Endian.little);
         buf.add(bd.buffer.asUint8List());
       }
-    case double v:
+    case final double v:
       buf.addByte(3);
       final bd = ByteData(8)..setFloat64(0, v, Endian.little);
       buf.add(bd.buffer.asUint8List());
-    case bool v:
+    case final bool v:
       buf.addByte(4);
       buf.addByte(v ? 1 : 0);
-    case String v:
+    case final String v:
       buf.addByte(5);
       final sb = utf8.encode(v);
       _addU32(buf, sb.length);
       buf.add(sb);
-    case Uint8List v:
+    case final Uint8List v:
       buf.addByte(6);
       _addU32(buf, v.length);
       buf.add(v);
-    case List<int> v:
+    case final List<int> v:
       buf.addByte(7);
       _addU32(buf, v.length);
       for (final n in v) {
         final bd = ByteData(4)..setInt32(0, n, Endian.little);
         buf.add(bd.buffer.asUint8List());
       }
-    case List<Map<String, Object?>> v:
+    case final List<Map<String, Object?>> v:
       buf.addByte(10);
       _addU32(buf, v.length);
       for (final m in v) {

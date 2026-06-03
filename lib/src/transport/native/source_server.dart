@@ -17,11 +17,13 @@ import 'package:pdf_manipulator/src/types/data_source.dart';
 /// - ['read', offset, count, replyPort]
 /// - ['length', replyPort]
 class SourceServer {
+  /// Creates a server that fulfills read requests from [_source].
   SourceServer(this._source);
 
   final DataSource _source;
   ReceivePort? _port;
 
+  /// Starts listening and returns a [SendPort] for the worker isolate.
   SendPort start() {
     _port = ReceivePort();
     _port!.listen((message) async {
@@ -45,6 +47,7 @@ class SourceServer {
     return _port!.sendPort;
   }
 
+  /// Closes the receive port, stopping the server.
   void stop() {
     _port?.close();
     _port = null;

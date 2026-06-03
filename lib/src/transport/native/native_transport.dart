@@ -15,6 +15,7 @@ import 'package:pdf_manipulator/src/transport/native/coordinator.dart';
 import 'package:pdf_manipulator/src/transport/native/source_server.dart';
 import 'package:pdf_manipulator/src/transport/native/sink_server.dart';
 
+/// Native FFI transport — routes ops through a coordinator isolate.
 class NativeTransport implements PdfTransport {
   @override
   PdfIoMode? get ioMode => _ready ? PdfIoMode.native : null;
@@ -85,11 +86,11 @@ class NativeTransport implements PdfTransport {
       case 'item':
         _pendingStreams[id]?.add(payload as Uint8List);
       case 'done':
-        _pendingStreams.remove(id)?.close();
+        unawaited(_pendingStreams.remove(id)?.close());
       case 'streamError':
         final c = _pendingStreams.remove(id);
         c?.addError(StateError(payload as String? ?? 'Stream error'));
-        c?.close();
+        unawaited(c?.close());
     }
   }
 
@@ -225,6 +226,7 @@ class NativeTransport implements PdfTransport {
         server.stop();
       }
       _pendingStreams.remove(id);
+      unawaited(controller.close());
     }
   }
 

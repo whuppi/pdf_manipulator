@@ -15,11 +15,13 @@ import 'package:pdf_manipulator/src/types/data_sink.dart';
 /// Messages are lists:
 /// - ['write', TransferableTypedData, replyPort]
 class SinkServer {
+  /// Creates a server that proxies write chunks to [_sink].
   SinkServer(this._sink);
 
   final DataSink _sink;
   ReceivePort? _port;
 
+  /// Starts listening and returns a [SendPort] for the worker isolate.
   SendPort start() {
     _port = ReceivePort();
     _port!.listen((message) async {
@@ -37,6 +39,7 @@ class SinkServer {
     return _port!.sendPort;
   }
 
+  /// Closes the receive port, stopping the server.
   void stop() {
     _port?.close();
     _port = null;
