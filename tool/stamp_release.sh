@@ -9,7 +9,7 @@
 #                              - Stamp version into pubspec.yaml + version.dart
 #                              - Convert submodule pointers to raw source files
 #                              - Remove .gitmodules
-#                              Called by CI discover job BEFORE git commit-tree.
+#                              Called by CI discover job BEFORE git commit.
 #
 #   --github-notes            Print GitHub Release notes to stdout:
 #                              - Extract changelog entry for this version
@@ -32,7 +32,7 @@
 #                              Called by CI after pub.dev publish.
 #
 # Release pipeline flow (for context):
-#   1. discover:  --stamp-tag → git commit-tree → --github-notes → gh release create
+#   1. discover:  --stamp-tag → git commit → push temp branch → --github-notes → gh release create
 #   2. compile:   checkout tag (has raw source, no submodules needed)
 #   3. upload:    binaries to release → --add-git-install
 #   4. publish:   (default) stamp → dart pub publish → --add-pub-install
@@ -57,7 +57,7 @@ REPO_URL="https://github.com/$REPO"
 
 # ── Stamp tag mode: prepare the tree for a release tag commit ───────
 # Stamps version + converts submodule pointers to raw source files.
-# Called BEFORE git commit-tree in the CI discover job.
+# Called BEFORE git commit in the CI discover job.
 
 if [[ "$MODE" == "--stamp-tag" ]]; then
   if [[ -z "${CI:-}" && -z "${GITHUB_ACTIONS:-}" ]]; then
