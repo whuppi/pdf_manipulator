@@ -35,17 +35,31 @@ else
   exit 1
 fi
 
-# CI Linux runners need extra flags:
-#   --no-sandbox        Chrome refuses to start as root/in containers
-#   --disable-gpu       No GPU in CI
-#   --disable-dev-shm-usage  GitHub Actions runners have 64MB /dev/shm;
-#                        Chrome uses shared memory for rendering and silently
-#                        crashes when it runs out. This flag makes Chrome use
-#                        /tmp instead. Without it, DWDS gets AppConnectionException
-#                        because Chrome dies before the debug port is ready.
+# CI Linux: match the flags chromedriver uses in getDesiredCapabilities()
+# (flutter_tools/lib/src/drive/web_driver_service.dart) so the app Chrome
+# starts as fast and cleanly as the test Chrome.
+#
+# Without these, the app Chrome is slow to load the Dart app. DWDS scans
+# tabs for window["$dartAppInstanceId"] with a 50ms gap timeout — if the
+# app hasn't set that global yet, DWDS throws AppConnectionException.
+# These flags eliminate startup overhead (first-run dialogs, extensions,
+# background networking, GPU init) so Chrome loads the page faster.
 CI_FLAGS=""
 if [[ "$(uname)" == "Linux" ]] && [[ "${CI:-}" == "true" || "$(id -u)" == "0" ]]; then
   CI_FLAGS="--no-sandbox --disable-gpu --disable-dev-shm-usage"
+  CI_FLAGS+=" --headless=new"
+  CI_FLAGS+=" --disable-background-timer-throttling"
+  CI_FLAGS+=" --disable-extensions"
+  CI_FLAGS+=" --disable-popup-blocking"
+  CI_FLAGS+=" --disable-translate"
+  CI_FLAGS+=" --no-default-browser-check"
+  CI_FLAGS+=" --no-first-run"
+  CI_FLAGS+=" --disable-default-apps"
+  CI_FLAGS+=" --disable-sync"
+  CI_FLAGS+=" --disable-background-networking"
+  CI_FLAGS+=" --disable-hang-monitor"
+  CI_FLAGS+=" --disable-component-extensions-with-background-pages"
+  CI_FLAGS+=" --disable-prompt-on-repost"
 fi
 
 exec "$CHROME" --enable-features=SharedArrayBuffer $CI_FLAGS "$@"
