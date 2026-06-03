@@ -81,15 +81,17 @@ jobs:
             git checkout -b "$BRANCH"
           fi
 
-          # Update .fvmrc
-          python3 -c "
+          # Update both .fvmrc files (root + example)
+          for fvmrc in .fvmrc example/.fvmrc; do
+            python3 -c "
           import json
-          with open('.fvmrc') as f: data = json.load(f)
+          with open('$fvmrc') as f: data = json.load(f)
           data['flutter'] = '$LATEST'
-          with open('.fvmrc', 'w') as f: json.dump(data, f, indent=2); f.write('\n')
+          with open('$fvmrc', 'w') as f: json.dump(data, f, indent=2); f.write('\n')
           "
+          done
 
-          git add .fvmrc
+          git add .fvmrc example/.fvmrc
           git commit -m "chore: bump Flutter $CURRENT → $LATEST" || {
             echo ".fvmrc already at $LATEST"
             exit 0

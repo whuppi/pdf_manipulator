@@ -47,6 +47,10 @@ dependencies:
   # Web transport — JS interop via dart:js_interop types
   web: ^1.1.0
 
+false_secrets:
+  - /test/helpers/fixtures.dart
+  - /example/lib/main.dart
+
 dev_dependencies:
   # Test runner
   test: ^1.25.0
