@@ -133,11 +133,14 @@ fi
 
 # ── Guard: reject unknown modes before falling through to stamp ──────
 
-if [[ "$MODE" == --* && "$MODE" != "--stamp" ]]; then
-  echo "Unknown mode: $MODE"
-  echo "Valid modes: (none), --stamp-tag, --github-notes, --add-git-install, --add-pub-install"
-  exit 1
-fi
+case "$MODE" in
+  --stamp|--stamp-tag|--github-notes|--add-git-install|--add-pub-install) ;;
+  --*)
+    echo "Unknown mode: $MODE"
+    echo "Valid modes: (none), --stamp-tag, --github-notes, --add-git-install, --add-pub-install"
+    exit 1
+    ;;
+esac
 
 # ── Helper: get published versions from pub.dev ─────────────────────
 
