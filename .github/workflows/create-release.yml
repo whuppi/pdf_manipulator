@@ -114,8 +114,8 @@ jobs:
           STAMPED_SHA=$(git rev-parse HEAD)
           echo "Stamped commit: $STAMPED_SHA"
 
-          # Push the stamped commit so GitHub knows about it before we create the tag
-          git push origin "$STAMPED_SHA:refs/heads/_release-staging"
+          # Push stamped commit so GitHub knows about it (local-only commits can't be tagged)
+          git push origin --force "$STAMPED_SHA:refs/heads/_release-staging"
 
           # Generate release notes and create release at the stamped commit
           NOTES=$(bash tool/stamp_release.sh "$TAG" --github-notes)
@@ -128,7 +128,7 @@ jobs:
             $FLAGS
           echo "Created release $TAG at $STAMPED_SHA"
 
-          # Clean up the staging branch (tag holds the reference now)
+          # Clean up staging branch (tag holds the reference now)
           git push origin --delete refs/heads/_release-staging 2>/dev/null || true
 
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"

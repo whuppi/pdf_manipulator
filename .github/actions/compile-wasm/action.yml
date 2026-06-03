@@ -7,9 +7,7 @@ runs:
     - uses: ./.github/actions/setup-rust
       with: { targets: wasm32-unknown-unknown }
     - shell: bash
-      run: |
-        cargo install wasm-bindgen-cli --version 0.2.121
-        sudo apt-get update && sudo apt-get install -y binaryen
+      run: sudo apt-get update && sudo apt-get install -y binaryen
     - shell: bash
       run: bash tool/compile_rust.sh wasm
     - shell: bash
