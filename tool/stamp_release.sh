@@ -66,7 +66,7 @@ fi
 
 # ── 5. Asset hashes from GitHub API ─────────────────────────────────
 
-HASH_FILE="hook/asset_hashes.dart"
+HASH_FILE="lib/src/hook/asset_hashes.dart"
 
 if ! command -v gh &>/dev/null; then
   echo "  ⚠ gh CLI not found — skipping asset hashes"

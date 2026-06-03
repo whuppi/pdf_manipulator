@@ -188,35 +188,37 @@ lib/
     │   └── web/
     │       └── web_transport.dart           ← JS Worker pool + OPFS pre-copy
     │
-    └── types/                              ← shared types (all exported)
-        ├── data_source.dart                ← DataSource interface
-        ├── data_sink.dart                  ← DataSink interface
-        ├── errors.dart                     ← PdfError sealed hierarchy
-        ├── pdf_config.dart                 ← PdfConfig (webIoMode, URLs)
-        ├── pdf_enums.dart                  ← PdfIoMode, PdfEncryptionAlgorithm, ...
-        ├── pdf_image.dart                  ← PdfImage, RenderedPage
-        ├── pdf_page_info.dart              ← PdfPageInfo
-        ├── pdf_pages.dart                  ← PdfPages sealed (all, single, range)
-        ├── pdf_params.dart                 ← PdfSaveOptions, PdfEncryption, ...
-        ├── pdf_rect.dart                   ← PdfRect
-        ├── pdf_signature.dart              ← PdfSignatureInfo
-        └── search_result.dart              ← SearchResult
+    ├── types/                              ← shared types (all exported)
+    │   ├── data_source.dart                ← DataSource interface
+    │   ├── data_sink.dart                  ← DataSink interface
+    │   ├── errors.dart                     ← PdfError sealed hierarchy
+    │   ├── pdf_config.dart                 ← PdfConfig (webIoMode, URLs)
+    │   ├── pdf_enums.dart                  ← PdfIoMode, PdfEncryptionAlgorithm, ...
+    │   ├── pdf_image.dart                  ← PdfImage, RenderedPage
+    │   ├── pdf_page_info.dart              ← PdfPageInfo
+    │   ├── pdf_pages.dart                  ← PdfPages sealed (all, single, range)
+    │   ├── pdf_params.dart                 ← PdfSaveOptions, PdfEncryption, ...
+    │   ├── pdf_rect.dart                   ← PdfRect
+    │   ├── pdf_signature.dart              ← PdfSignatureInfo
+    │   └── search_result.dart              ← SearchResult
+    │
+    └── hook/                               ← build hook support (not consumer API)
+        └── asset_hashes.dart               ← SHA256 hashes for pre-built binaries
 
 web_assets/                                 ← committed in git, shipped to web
 ├── coordinator.js                          ← WASM worker pool + handle pinning
 ├── worker.js                               ← reader registry, 3 I/O modes, bridge_execute
 ├── pdf_oxide.js                            ← wasm-bindgen glue
-├── pdf_oxide.d.ts                          ← TypeScript declarations
-├── pdf_oxide_bg.wasm                       ← WASM binary (one binary, all 3 modes)
-└── pdf_oxide_bg.wasm.d.ts
+└── pdf_oxide_bg.wasm                       ← WASM binary (one binary, all 3 modes)
 
 hook/
-├── build.dart                              ← compile from source OR download pre-built
-└── asset_hashes.dart                       ← SHA256 hashes for pre-built binaries
+└── build.dart                              ← compile from source OR download pre-built
 
 tool/
-├── compile_rust.sh                         ← Rust → native / wasm / both
-└── write_asset_hashes.dart                 ← generate hashes after release
+├── compile_rust.sh                         ← Rust → native / wasm / per-platform / both
+├── stamp_release.sh                        ← stamp version + changelog + hashes before publish
+├── run_web_test.sh                         ← flutter drive wrapper with clean exit
+└── chrome_with_sab.sh                      ← Chrome launcher with SharedArrayBuffer
 
 vendor/pdf_oxide/src/
 ├── host/                                   ← OUR CODE

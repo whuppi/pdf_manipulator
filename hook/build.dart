@@ -23,7 +23,7 @@ import 'package:hooks/hooks.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
 
-import 'asset_hashes.dart';
+import 'package:pdf_manipulator/src/hook/asset_hashes.dart';
 
 final _log = Logger('pdf_manipulator:build');
 
