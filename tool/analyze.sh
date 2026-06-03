@@ -57,7 +57,12 @@ check_rust_warnings() {
   local diff_output
   diff_output=$(git diff --unified=0 "$base_tag..HEAD" -- src/ 2>/dev/null || true)
 
-  cargo check --lib $extra_args --features "$features" \
+  local feature_flag=""
+  if [ -n "$features" ]; then
+    feature_flag="--features $features"
+  fi
+
+  cargo check --lib $extra_args $feature_flag \
     --message-format=json 2>/dev/null \
   | python3 -c "
 import sys, json
