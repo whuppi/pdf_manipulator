@@ -278,9 +278,11 @@ jobs:
           git commit -m "stamp: ${{ needs.discover.outputs.tag }}" --allow-empty
 
       - name: Materialize pub.dev credentials
+        env:
+          PUB_CREDS: ${{ secrets.PUB_CREDENTIALS }}
         run: |
           mkdir -p "$HOME/.config/dart"
-          echo '${{ secrets.PUB_CREDENTIALS }}' > "$HOME/.config/dart/pub-credentials.json"
+          printf '%s' "$PUB_CREDS" > "$HOME/.config/dart/pub-credentials.json"
 
       - run: fvm dart pub get --no-example
       - run: fvm dart pub publish --force
