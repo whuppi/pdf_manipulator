@@ -177,6 +177,7 @@ jobs:
       - name: Stamp version from tag
         run: |
           VERSION="${{ needs.validate.outputs.version }}"
+          TAG="${{ needs.validate.outputs.tag }}"
           echo "Publishing version: $VERSION"
 
           # Stamp pubspec.yaml
@@ -190,7 +191,25 @@ jobs:
             cp CHANGELOG.pre.md CHANGELOG.md
           fi
 
+          # Auto-append commit list to the changelog for pub.dev
+          PREV_TAG=$(git tag --sort=-v:refname | grep '^v' | grep -v "^$TAG$" | head -1 || true)
+          if [ -n "$PREV_TAG" ]; then
+            COMMITS=$(git log "$PREV_TAG".."$TAG" --oneline --no-decorate)
+            COUNT=$(echo "$COMMITS" | grep -c . || true)
+          else
+            COMMITS=$(git log "$TAG" --oneline --no-decorate)
+            COUNT=$(echo "$COMMITS" | grep -c . || true)
+          fi
+          if [ -n "$COMMITS" ]; then
+            COMMIT_LIST=$(echo "$COMMITS" | sed 's/^/- /')
+            printf '\n<details><summary>Commits since %s (%s)</summary>\n\n%s\n\n</details>\n' \
+              "${PREV_TAG:-initial}" "$COUNT" "$COMMIT_LIST" >> CHANGELOG.md
+          fi
+
           echo "pubspec: $(grep '^version:' pubspec.yaml)"
+
+      - name: Generate asset hashes
+        run: fvm dart run tool/write_asset_hashes.dart ${{ needs.validate.outputs.tag }}
 
       - run: fvm dart pub get --no-example
       - run: fvm dart pub publish --force
