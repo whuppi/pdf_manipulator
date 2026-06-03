@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Run a flutter drive web integration test and exit cleanly once tests finish.
+# Each mode gets its own chromedriver port and log file — no shared state.
+#
 # Usage: run_web_test.sh <mode> <chrome_wrapper> <flutter_cmd>
 #   mode:           jspi | atomics | opfs
 #   chrome_wrapper: path to chrome_with_sab.sh
@@ -11,29 +13,54 @@ CHROME_WRAPPER="$2"
 shift 2
 FLUTTER=("$@")
 
-LOG="/tmp/_pdf_web_test.log"
+# Per-mode port — eliminates port reuse race between sequential modes
+case "$MODE" in
+  jspi)    PORT=4444 ;;
+  atomics) PORT=4445 ;;
+  opfs)    PORT=4446 ;;
+  *)       PORT=4447 ;;
+esac
+
+LOG="/tmp/_pdf_web_test_${MODE}.log"
 : > "$LOG"
 
-# Start chromedriver, record PID
-chromedriver --port=4444 &>/dev/null &
+# Ensure port is free (stale chromedriver from a killed previous run)
+if lsof -ti ":$PORT" &>/dev/null; then
+  echo "Port $PORT in use — killing stale process"
+  lsof -ti ":$PORT" | xargs kill -9 2>/dev/null || true
+  sleep 1
+fi
+
+# Start chromedriver on this mode's port
+chromedriver --port="$PORT" &>/dev/null &
 CD_PID=$!
 sleep 2
 
-# Run flutter drive in background
+# Run flutter drive in background, pointing at this mode's chromedriver
 cd example
 CHROME_EXECUTABLE="$CHROME_WRAPPER" "${FLUTTER[@]}" drive \
     --driver=test_driver/integration_test.dart \
     --target=integration_test/pdf_smoke_test.dart \
     --dart-define=PDF_IO_MODE="$MODE" \
+    --driver-port="$PORT" \
     -d chrome &>"$LOG" &
 DRIVE_PID=$!
 
-# Poll the log for the terminal line
+# Poll the log for the terminal line (5-min timeout prevents infinite hang)
+TIMEOUT=300
+ELAPSED=0
 while kill -0 "$DRIVE_PID" 2>/dev/null; do
     if grep -q 'All tests passed\|Application finished' "$LOG" 2>/dev/null; then
         break
     fi
-    sleep 0.3
+    if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
+        echo "=== TIMEOUT: $MODE produced no result after ${TIMEOUT}s ==="
+        echo "Last 20 lines of log:"
+        tail -20 "$LOG"
+        break
+    fi
+    sleep 1
+    ELAPSED=$((ELAPSED + 1))
 done
 
 # Kill flutter drive + chromedriver + orphaned app Chrome
