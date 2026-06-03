@@ -26,7 +26,6 @@ on:
 
 permissions:
   contents: write
-  id-token: write
 
 env:
   COMPILE_OUTPUT_DIR: out
@@ -256,7 +255,7 @@ jobs:
     needs: [discover, upload-assets]
     if: needs.discover.outputs.has_release == 'true'
     runs-on: ubuntu-latest
-    environment: publish
+    environment: ${{ inputs.branch || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -277,6 +276,11 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "stamp: ${{ needs.discover.outputs.tag }}" --allow-empty
+
+      - name: Materialize pub.dev credentials
+        run: |
+          mkdir -p "$HOME/.config/dart"
+          echo '${{ secrets.PUB_CREDENTIALS }}' > "$HOME/.config/dart/pub-credentials.json"
 
       - run: fvm dart pub get --no-example
       - run: fvm dart pub publish --force
