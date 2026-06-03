@@ -1,10 +1,16 @@
-[![pub package](https://img.shields.io/pub/v/pdf_manipulator.svg)](https://pub.dev/packages/pdf_manipulator) [![wakatime](https://wakatime.com/badge/user/83f3b15d-49de-4c01-b8de-bbc132f11be1/project/db0907ad-0c7e-49cb-bbbb-a0fba05b6bc9.svg)](https://wakatime.com/badge/user/83f3b15d-49de-4c01-b8de-bbc132f11be1/project/db0907ad-0c7e-49cb-bbbb-a0fba05b6bc9)
+# pdf_manipulator (v0 — deprecated)
 
-## Word from creator
+> **This branch is archived.** The v0 Android-only version based on iText7 is no longer maintained.
+>
+> **The package has been completely rewritten** — cross-platform (iOS, Android, macOS, Windows, Linux, Web), powered by a Rust engine, with a new API.
+>
+> **Switch to the new version:** [`dev` branch](https://github.com/whuppi/pdf_manipulator/tree/dev) · [Migration guide](https://github.com/whuppi/pdf_manipulator/blob/dev/docs/MIGRATION.md) · [pub.dev](https://pub.dev/packages/pdf_manipulator)
 
-**Hello👋, This package is completely compatible with flutter and it also supports using Android Uri of picked file to work with which offers some real benefits such as manipulating them without caching or validating them without caching.**
+---
 
-**Yes, without a doubt, giving a free 👍 or ⭐ will encourage me to keep working on this plugin.**
+### What was this?
+
+The original Android-only Flutter plugin for PDF manipulation (merge, split, compress, watermark, encrypt, etc.) using iText7. Android 5.0+ only. AGPL-3.0 licensed due to iText7.
 
 ## Package description
 
