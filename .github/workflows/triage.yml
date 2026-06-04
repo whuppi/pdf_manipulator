@@ -7,13 +7,30 @@ on:
   issues:
     types: [opened]
   pull_request_target:
-    types: [opened]
+    types: [opened, synchronize]
 
 permissions:
   issues: write
   pull-requests: write
 
 jobs:
+  # When a dependabot PR gets updated (e.g. "Update branch" button),
+  # ask dependabot to recreate — picks up any new workflow files.
+  dependabot-recreate:
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.event.action == 'synchronize' &&
+      github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ask dependabot to recreate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --body "@dependabot recreate"
+
   assign-and-label:
     runs-on: ubuntu-latest
     steps:

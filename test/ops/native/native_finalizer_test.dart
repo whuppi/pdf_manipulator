@@ -18,9 +18,12 @@ import 'package:test/test.dart';
 void registerNativeFinalizerTests() {
   test('dispose exits cleanly (no dangling NativeCallable)',
       () async {
-    // Use `dart <file>` not `dart run <file>` — `dart run` triggers build
-    // hooks which recompile the Rust binary. On Windows MSVC this exceeds the
-    // timeout even with cache hits. Direct file execution skips hooks entirely.
+    // Do NOT change to `dart run` — it will fail on Windows with:
+    //   PathAccessException: Cannot delete file, path = '...pdf_oxide.dll'
+    //   (OS Error: Access is denied, errno = 5)
+    // Windows locks loaded DLLs. The parent test process has pdf_oxide.dll
+    // loaded via @Native FFI. `dart run` triggers build hooks which try to
+    // copy the DLL → Access denied. `dart <file>` skips hooks entirely.
     final repro = File('test/ops/native/native_gc_repro.dart').absolute.path;
     final process = await Process.start(Platform.resolvedExecutable, [repro]);
     final exitCode = await process.exitCode.timeout(
