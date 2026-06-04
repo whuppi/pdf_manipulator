@@ -59,5 +59,15 @@ runs:
     - shell: bash
       run: |
         sudo apt-get update && sudo apt-get install -y binaryen xvfb
-    - shell: bash
+
+    - name: Cache WASM build output
+      uses: actions/cache@v4
+      id: wasm-cache
+      with:
+        path: web_assets/pdf_oxide_bg.wasm
+        key: wasm-${{ env.SUBMODULE_PDF_OXIDE }}
+
+    - name: Build WASM
+      if: steps.wasm-cache.outputs.cache-hit != 'true'
+      shell: bash
       run: make build-wasm
