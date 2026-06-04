@@ -7,9 +7,6 @@
 # because flutter drive on web hangs after tests finish (Chrome
 # FocusManager disposal bug keeps the browser process alive).
 #
-# Each mode gets its own chromedriver port and log file — no shared
-# state between sequential runs.
-#
 # Usage:
 #   run_web_test.sh <mode> <chrome_wrapper> <flutter_cmd...>
 #
@@ -27,15 +24,7 @@ CHROME_WRAPPER="$2"
 shift 2
 FLUTTER=("$@")
 
-# Per-mode port — eliminates port reuse race between sequential modes
-case "$MODE" in
-  jspi)    PORT=4444 ;;
-  atomics) PORT=4445 ;;
-  opfs)    PORT=4446 ;;
-  *)       PORT=4447 ;;
-esac
-
-LOG="/tmp/_pdf_web_test_${MODE}.log"
+LOG="/tmp/_pdf_web_test.log"
 : > "$LOG"
 
 
@@ -43,14 +32,7 @@ LOG="/tmp/_pdf_web_test_${MODE}.log"
 # 1. Start chromedriver
 # ═══════════════════════════════════════════════════════════════════
 
-# Ensure port is free (stale chromedriver from a killed previous run)
-if lsof -ti ":$PORT" &>/dev/null; then
-  echo "Port $PORT in use — killing stale process"
-  lsof -ti ":$PORT" | xargs kill -9 2>/dev/null || true
-  sleep 1
-fi
-
-chromedriver --port="$PORT" &>/dev/null &
+chromedriver --port=4444 &>/dev/null &
 CD_PID=$!
 sleep 2
 
@@ -64,30 +46,19 @@ CHROME_EXECUTABLE="$CHROME_WRAPPER" "${FLUTTER[@]}" drive \
     --driver=test_driver/integration_test.dart \
     --target=integration_test/pdf_smoke_test.dart \
     --dart-define=PDF_IO_MODE="$MODE" \
-    --driver-port="$PORT" \
-    --profile \
     -d chrome &>"$LOG" &
 DRIVE_PID=$!
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 3. Poll log for terminal line (5-min timeout prevents infinite hang)
+# 3. Poll log for terminal line
 # ═══════════════════════════════════════════════════════════════════
 
-TIMEOUT=300
-ELAPSED=0
 while kill -0 "$DRIVE_PID" 2>/dev/null; do
-    if grep -qE 'All tests passed|Application finished' "$LOG" 2>/dev/null; then
+    if grep -q 'All tests passed\|Application finished' "$LOG" 2>/dev/null; then
         break
     fi
-    if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
-        echo "=== TIMEOUT: $MODE produced no result after ${TIMEOUT}s ==="
-        echo "Last 20 lines of log:"
-        tail -20 "$LOG"
-        break
-    fi
-    sleep 1
-    ELAPSED=$((ELAPSED + 1))
+    sleep 0.3
 done
 
 

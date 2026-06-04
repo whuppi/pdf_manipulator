@@ -36,7 +36,7 @@ dependencies:
 **Web only** — run once after install (and after each package update):
 
 ```sh
-dart run pdf_manipulator:setup
+flutter pub run pdf_manipulator:setup
 ```
 
 Native platforms need nothing extra — the build hook handles everything.
@@ -479,7 +479,7 @@ Works out of the box on all modern browsers:
 **Setup** — run once after install (and after each package update):
 
 ```sh
-dart run pdf_manipulator:setup
+flutter pub run pdf_manipulator:setup
 ```
 
 The engine compiles to WASM and runs in a Web Worker pool. Your UI thread never does PDF work.

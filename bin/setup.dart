@@ -2,8 +2,12 @@
 //
 // Usage from a Flutter / Dart web app:
 //
-//   dart run pdf_manipulator:setup           # install if missing
-//   dart run pdf_manipulator:setup --force   # overwrite even if present
+//   flutter pub run pdf_manipulator:setup           # install if missing
+//   flutter pub run pdf_manipulator:setup --force   # overwrite even if present
+//
+// Use `flutter pub run`, NOT `dart run`. The Dart SDK's `dart run` triggers
+// build hooks which compile the native binary — unnecessary for web setup.
+// `flutter pub run` skips native build hooks entirely.
 //
 // Copies the JS glue + Web Worker from the package's web_assets/ directory,
 // and downloads the WASM binary from GitHub Releases. Flutter web's build
@@ -17,7 +21,7 @@ import 'dart:io';
 import 'package:package_config/package_config.dart';
 
 const _help = '''
-Usage: dart run pdf_manipulator:setup [--force]
+Usage: flutter pub run pdf_manipulator:setup [--force]
 
 Installs pdf_manipulator web assets into your project's web/pdf_manipulator/ folder.
 

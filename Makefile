@@ -154,7 +154,7 @@ endef
 define setup_example_web
 	@echo "=== Example: clean + setup web assets ==="
 	rm -rf example/web/pdf_manipulator
-	cd example && $(FLUTTER) pub get && $(DART) run pdf_manipulator:setup --force
+	cd example && $(FLUTTER) pub get && $(FLUTTER) pub run pdf_manipulator:setup --force
 endef
 
 # All 3 web modes: setup once, run all three sequentially.

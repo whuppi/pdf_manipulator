@@ -1,19 +1,24 @@
 #!/usr/bin/env bash
-# Launches Chrome with --enable-features=SharedArrayBuffer.
+# ────────────────────────────────────────────────────────────────────
+# chrome_with_sab.sh — Launch Chrome with SharedArrayBuffer enabled.
 #
 # flutter drive launches TWO Chromes: one for the app (via ChromeDevice)
 # and one for the test driver (via chromedriver). --web-browser-flag only
-# reaches the chromedriver Chrome. WebDriverService.start() creates fresh
-# DebuggingOptions that drop webBrowserFlags and webCrossOriginIsolation
-# (flutter/flutter packages/flutter_tools/lib/src/drive/web_driver_service.dart
-# lines 86-98 on stable 3.44). The app Chrome never gets the flag.
+# reaches the chromedriver Chrome. The app Chrome never gets the flag.
 #
-# Setting CHROME_EXECUTABLE to this script makes ChromeDevice launch Chrome
-# with SAB enabled, so Atomics mode works in flutter drive integration tests.
+# Setting CHROME_EXECUTABLE to this script makes ChromeDevice launch
+# Chrome with SAB enabled, so Atomics mode works in integration tests.
+#
+# Called by:  Makefile via CHROME_SAB variable
+# ────────────────────────────────────────────────────────────────────
 
-# Find Chrome binary.
-# CHROME_PATH env var (set by setup-chrome GitHub Action) takes priority.
+
+# ═══════════════════════════════════════════════════════════════════
+# Find Chrome binary
+# ═══════════════════════════════════════════════════════════════════
+# CHROME_PATH (set by setup-web-testing CI action) takes priority.
 # Falls back to auto-detection for local dev.
+
 if [[ -n "${CHROME_PATH:-}" ]] && [[ -x "$CHROME_PATH" ]]; then
   CHROME="$CHROME_PATH"
 elif [[ -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]]; then
@@ -35,32 +40,14 @@ else
   exit 1
 fi
 
-# CI Linux: match the flags chromedriver uses in getDesiredCapabilities()
-# (flutter_tools/lib/src/drive/web_driver_service.dart) so the app Chrome
-# starts as fast and cleanly as the test Chrome.
-#
-# Without these, the app Chrome is slow to load the Dart app. DWDS scans
-# tabs for window["$dartAppInstanceId"] with a 50ms gap timeout — if the
-# app hasn't set that global yet, DWDS throws AppConnectionException.
-# These flags eliminate startup overhead (first-run dialogs, extensions,
-# background networking, GPU init) so Chrome loads the page faster.
+
+# ═══════════════════════════════════════════════════════════════════
+# CI flags
+# ═══════════════════════════════════════════════════════════════════
+
 CI_FLAGS=""
 if [[ "$(uname)" == "Linux" ]] && [[ "${CI:-}" == "true" || "$(id -u)" == "0" ]]; then
-  # Core stability (Chrome won't start without these in containers)
-  CI_FLAGS="--no-sandbox --disable-gpu --disable-dev-shm-usage"
-  # Eliminate startup overhead — every one of these slows page load,
-  # giving DWDS less time to find window["$dartAppInstanceId"].
-  # NOT --headless=new: Flutter's ChromiumLauncher needs a headed
-  # Chrome with a debug port (xvfb provides the virtual display).
-  CI_FLAGS+=" --disable-background-timer-throttling"
-  CI_FLAGS+=" --disable-extensions"
-  CI_FLAGS+=" --disable-popup-blocking"
-  CI_FLAGS+=" --disable-translate"
-  CI_FLAGS+=" --no-default-browser-check"
-  CI_FLAGS+=" --no-first-run"
-  CI_FLAGS+=" --disable-default-apps"
-  CI_FLAGS+=" --disable-sync"
-  CI_FLAGS+=" --disable-background-networking"
+  CI_FLAGS="--no-sandbox --disable-gpu"
 fi
 
 exec "$CHROME" --enable-features=SharedArrayBuffer $CI_FLAGS "$@"
