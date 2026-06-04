@@ -1,14 +1,98 @@
+# ────────────────────────────────────────────────────────────────────
+# debug-ssh — Non-blocking SSH access to any CI runner.
+#
+# HOW IT WORKS:
+#   Starts sshd + bore tunnel in the background (~10s), then returns.
+#   The job continues while SSH stays open. Tunnel dies when the job
+#   ends (runner destroyed).
+#
+# HOW TO USE FOR REAL DEBUGGING:
+#   You need TWO things in the calling workflow/action:
+#
+#   1. This action BEFORE the steps you want to debug (starts tunnel)
+#   2. A keep-alive step AFTER the test steps with if: always()
+#      (holds the runner open so you can investigate failures)
+#
+#   Example inside a composite action:
+#
+#     steps:
+#       - uses: ./.github/actions/setup-fvm
+#       - uses: ./.github/actions/debug-ssh        # ← tunnel opens
+#       - shell: bash
+#         run: make test-ops-native                 # ← test runs
+#       - name: Keep alive for debugging            # ← runner stays
+#         if: always()
+#         shell: bash
+#         run: |
+#           echo "SSH open. Touch /tmp/stop to end."
+#           for i in $(seq 1 1800); do
+#             [ -f /tmp/stop ] && break; sleep 10
+#           done
+#
+#   Example inside a workflow job:
+#
+#     steps:
+#       - uses: actions/checkout@v4
+#       - uses: ./.github/actions/debug-ssh
+#       - uses: ./.github/actions/pkg-test-native
+#       - name: Keep alive for debugging
+#         if: always()
+#         shell: bash
+#         run: |
+#           echo "SSH open. Touch /tmp/stop to end."
+#           for i in $(seq 1 1800); do
+#             [ -f /tmp/stop ] && break; sleep 10
+#           done
+#
+#   The keep-alive runs even if the test step fails (if: always()).
+#   You get up to 5 hours to SSH in, inspect the state, run commands.
+#   Touch /tmp/stop from inside the SSH session to release the runner.
+#
+#   IMPORTANT: increase the job's timeout-minutes to 300 (5 hours)
+#   in the workflow, or the job will be killed at the default timeout.
+#
+# HOW TO CONNECT:
+#   Option A — artifact (works even if logs aren't flushed yet):
+#     gh run download <RUN_ID> --name ssh-info-<OS> --dir /tmp/ssh-info
+#     $(cat /tmp/ssh-info/connect.txt)
+#
+#   Option B — run Summary tab in the GitHub UI:
+#     Look for "SSH Connection" section.
+#
+#   Option C — annotation in the checks tab:
+#     The ::notice:: annotation shows the ssh command.
+#
+# SECURITY:
+#   - Auth: key-only. Keys pulled from the triggering user's GitHub
+#     profile (github.actor). Only the person who triggered the
+#     workflow can SSH in.
+#   - Secrets: GITHUB_TOKEN and runner tokens are stripped from the
+#     SSH session's environment. Note: tokens may still be readable
+#     from /proc or disk on the runner. Do NOT use on workflows
+#     triggered by untrusted PRs from forks.
+#   - Runner: ephemeral. Destroyed when the job ends.
+#   - Tunnel: encrypted. Port is random.
+#
+# WHEN TO REMOVE:
+#   Remove debug-ssh + keep-alive from composite actions BEFORE
+#   merging to dev. Keep the action itself — it's reusable. Just
+#   don't leave it embedded in test actions permanently.
+#
+# PLATFORMS: Linux (apt openssh-server), macOS (built-in sshd),
+#   Windows (built-in OpenSSH). bore binary auto-selected per OS.
+# ────────────────────────────────────────────────────────────────────
+
 name: Debug SSH (bore tunnel)
 description: >
-  Start SSH server + bore tunnel in the background. Non-blocking —
-  the job continues while SSH stays open. Drop into any job on any
-  platform to get live shell access. Key-only auth.
+  Non-blocking SSH into the runner. See file header for usage.
 
 inputs:
   github-user:
-    description: "GitHub username whose SSH keys are authorized"
+    description: >
+      GitHub username whose SSH keys are authorized.
+      Defaults to the user who triggered the workflow.
     required: false
-    default: "chaudharydeepanshu"
+    default: ""
 
 runs:
   using: composite
@@ -16,20 +100,24 @@ runs:
     - name: Start SSH tunnel (Linux)
       if: runner.os == 'Linux'
       shell: bash
+      env:
+        INPUT_USER: ${{ inputs.github-user }}
+        ACTOR: ${{ github.actor }}
       run: |
         set -euo pipefail
+        SSH_USER="${INPUT_USER:-$ACTOR}"
+        unset GITHUB_TOKEN ACTIONS_RUNTIME_TOKEN ACTIONS_ID_TOKEN_REQUEST_TOKEN
 
-        # sshd
         sudo apt-get update -qq && sudo apt-get install -y -qq openssh-server >/dev/null 2>&1
         mkdir -p ~/.ssh && chmod 700 ~/.ssh
-        curl -sS "https://github.com/${{ inputs.github-user }}.keys" >> ~/.ssh/authorized_keys
+        curl -sS "https://github.com/${SSH_USER}.keys" >> ~/.ssh/authorized_keys
         chmod 600 ~/.ssh/authorized_keys
         sudo mkdir -p /run/sshd
         echo -e "Port 2222\nPasswordAuthentication no\nPubkeyAuthentication yes\nPermitRootLogin no" \
           | sudo tee /etc/ssh/sshd_config.d/debug.conf >/dev/null
-        sudo /usr/sbin/sshd -p 2222
+        env -u GITHUB_TOKEN -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+          sudo /usr/sbin/sshd -p 2222
 
-        # bore tunnel
         curl -sSL "https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz" \
           | tar xz -C /tmp
         chmod +x /tmp/bore
@@ -55,21 +143,20 @@ runs:
     - name: Start SSH tunnel (macOS)
       if: runner.os == 'macOS'
       shell: bash
+      env:
+        INPUT_USER: ${{ inputs.github-user }}
+        ACTOR: ${{ github.actor }}
       run: |
         set -euo pipefail
+        SSH_USER="${INPUT_USER:-$ACTOR}"
+        unset GITHUB_TOKEN ACTIONS_RUNTIME_TOKEN ACTIONS_ID_TOKEN_REQUEST_TOKEN
 
-        # macOS has sshd built-in, just configure keys
         mkdir -p ~/.ssh && chmod 700 ~/.ssh
-        curl -sS "https://github.com/${{ inputs.github-user }}.keys" >> ~/.ssh/authorized_keys
+        curl -sS "https://github.com/${SSH_USER}.keys" >> ~/.ssh/authorized_keys
         chmod 600 ~/.ssh/authorized_keys
-
-        # Start sshd on a non-privileged port
         sudo systemsetup -setremotelogin on 2>/dev/null || true
-        /usr/sbin/sshd -p 2222 -o "PubkeyAuthentication yes" -o "PasswordAuthentication no" \
-          -h ~/.ssh/authorized_keys 2>/dev/null || \
-          sudo /usr/sbin/sshd -p 2222 2>/dev/null || true
+        sudo /usr/sbin/sshd -p 2222 2>/dev/null || true
 
-        # bore (macOS arm64)
         curl -sSL "https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-aarch64-apple-darwin.tar.gz" \
           | tar xz -C /tmp
         chmod +x /tmp/bore
@@ -95,19 +182,27 @@ runs:
     - name: Start SSH tunnel (Windows)
       if: runner.os == 'Windows'
       shell: bash
+      env:
+        INPUT_USER: ${{ inputs.github-user }}
+        ACTOR: ${{ github.actor }}
       run: |
         set -euo pipefail
+        SSH_USER="${INPUT_USER:-$ACTOR}"
+        unset GITHUB_TOKEN ACTIONS_RUNTIME_TOKEN ACTIONS_ID_TOKEN_REQUEST_TOKEN
 
-        # Windows runners have OpenSSH built-in
+        # Windows OpenSSH: admin users read keys from ProgramData, not ~/.ssh
+        KEYS=$(curl -sS "https://github.com/${SSH_USER}.keys")
         mkdir -p ~/.ssh && chmod 700 ~/.ssh
-        curl -sS "https://github.com/${{ inputs.github-user }}.keys" >> ~/.ssh/authorized_keys
+        echo "$KEYS" >> ~/.ssh/authorized_keys
         chmod 600 ~/.ssh/authorized_keys
-
-        # Start sshd via PowerShell
+        # Admin keys file — Windows sshd ignores ~/.ssh for admin accounts
+        echo "$KEYS" | powershell -Command '
+          $input | Set-Content C:\ProgramData\ssh\administrators_authorized_keys
+          icacls C:\ProgramData\ssh\administrators_authorized_keys /inheritance:r /grant "SYSTEM:(R)" /grant "BUILTIN\Administrators:(R)"
+        '
         powershell -Command "Start-Service sshd" 2>/dev/null || \
           powershell -Command "Add-WindowsCapability -Online -Name OpenSSH.Server; Start-Service sshd" 2>/dev/null || true
 
-        # bore (Windows x64)
         curl -sSL "https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-pc-windows-msvc.zip" \
           -o /tmp/bore.zip
         unzip -qo /tmp/bore.zip -d /tmp && rm /tmp/bore.zip
@@ -133,6 +228,6 @@ runs:
 
     - uses: actions/upload-artifact@v4
       with:
-        name: ssh-info
+        name: ssh-info-${{ runner.os }}
         path: /tmp/ssh-info/
         if-no-files-found: ignore

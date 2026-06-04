@@ -7,7 +7,16 @@ runs:
     - uses: ./.github/actions/setup-fvm
     - uses: ./.github/actions/setup-rust
     - uses: ./.github/actions/debug-ssh
+      if: runner.os == 'Windows'
     - shell: bash
       run: make test-unit
     - shell: bash
       run: make test-ops-native
+    - name: Keep alive for debugging
+      if: always() && runner.os == 'Windows'
+      shell: bash
+      run: |
+        echo "SSH open. Touch /tmp/stop to end."
+        for i in $(seq 1 1800); do
+          [ -f /tmp/stop ] && break; sleep 10
+        done
