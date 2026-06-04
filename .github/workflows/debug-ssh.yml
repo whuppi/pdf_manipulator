@@ -1,21 +1,11 @@
 # ────────────────────────────────────────────────────────────────────
-# debug-ssh.yml — Debug CI on any runner with SSH + automatic test.
+# debug-ssh.yml — Raw SSH into CI runner via reverse SSH tunnel.
 #
-# Two modes:
-#   1. SSH mode (default): opens tmate session for interactive access
-#   2. Run mode: executes a command and dumps output (no SSH needed)
-#
-# Trigger: workflow_dispatch only (manual).
+# Starts sshd, creates a reverse tunnel through a relay, prints
+# connection string. Raw shell, no tmux, no tmate.
 #
 # Usage:
-#   # Interactive SSH session:
-#   gh workflow run debug-ssh.yml -f runner=ubuntu-latest -f setup=web
-#
-#   # Run a specific command (no SSH, just see output in logs):
-#   gh workflow run debug-ssh.yml -f setup=web -f run="xvfb-run make test-example-web-jspi"
-#
-#   # Run with SSH afterwards (debug failures interactively):
-#   gh workflow run debug-ssh.yml -f setup=web -f run="xvfb-run make test-example-web-jspi" -f ssh_after=true
+#   gh workflow run debug-ssh.yml
 # ────────────────────────────────────────────────────────────────────
 
 name: Debug SSH
@@ -33,111 +23,76 @@ on:
           - windows-latest
         default: ubuntu-latest
 
-      setup:
-        description: "Pre-install environment"
-        required: true
-        type: choice
-        options:
-          - none
-          - web
-          - rust
-          - flutter
-          - full
-        default: web
-
-      run:
-        description: "Command to run (empty = SSH only)"
-        required: false
-        type: string
-        default: ""
-
-      ssh_after:
-        description: "Open SSH after command finishes/fails"
-        required: false
-        type: boolean
-        default: false
-
-      timeout:
-        description: "Session timeout in minutes"
-        required: false
-        type: number
-        default: 30
-
-      branch:
-        description: "Branch to checkout"
-        required: false
-        type: string
-        default: ""
-
 jobs:
   debug:
-    name: "Debug: ${{ inputs.runner }} (${{ inputs.setup }})"
+    name: "SSH: ${{ inputs.runner }}"
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: ${{ fromJSON(inputs.timeout) }}
+    timeout-minutes: 300
 
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.branch || github.ref }}
           submodules: recursive
 
-      - name: Setup Flutter
-        if: contains(fromJSON('["web","flutter","full"]'), inputs.setup)
-        uses: ./.github/actions/setup-fvm
-
-      - name: Setup Rust
-        if: contains(fromJSON('["rust","full"]'), inputs.setup)
-        uses: ./.github/actions/setup-rust
-        with:
-          targets: wasm32-unknown-unknown
-
-      - name: Setup Web Testing
-        if: inputs.setup == 'web' || inputs.setup == 'full'
-        uses: ./.github/actions/setup-web-testing
-
-      - name: Setup example web assets
-        if: inputs.setup == 'web' || inputs.setup == 'full'
+      - name: Setup SSH server and tunnel
         run: |
-          rm -rf example/web/pdf_manipulator
-          cd example
-          fvm flutter pub get
-          fvm flutter pub run pdf_manipulator:setup --force
+          set -euo pipefail
 
-      - name: Environment info
-        run: |
-          echo "::group::System"
-          uname -a
-          df -h / /dev/shm 2>/dev/null || true
-          echo "::endgroup::"
-          echo "::group::Tools"
-          flutter --version 2>/dev/null | head -2 || true
-          google-chrome-stable --version 2>/dev/null || true
-          chromedriver --version 2>/dev/null || true
-          echo "::endgroup::"
-          echo "::group::Web assets"
-          ls -lh example/web/pdf_manipulator/ 2>/dev/null || echo "not set up"
-          echo "::endgroup::"
+          # ── Install and configure sshd ──────────────────────────
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq openssh-server
 
-      # ── Run command (if provided) ─────────────────────────────────
-      - name: "Run: ${{ inputs.run }}"
-        if: inputs.run != ''
-        id: run_cmd
-        continue-on-error: true
-        run: ${{ inputs.run }}
+          # Add DC's public SSH key for authentication
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          curl -sS https://github.com/chaudharydeepanshu.keys >> ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+          echo "Authorized keys:"
+          cat ~/.ssh/authorized_keys
 
-      - name: Report result
-        if: inputs.run != ''
-        run: |
-          if [ "${{ steps.run_cmd.outcome }}" = "success" ]; then
-            echo "✅ Command succeeded"
-          else
-            echo "❌ Command failed"
-          fi
+          # Configure sshd
+          sudo mkdir -p /run/sshd
+          sudo tee /etc/ssh/sshd_config.d/debug.conf > /dev/null <<SSHEOF
+          Port 2222
+          PasswordAuthentication no
+          PubkeyAuthentication yes
+          PermitRootLogin no
+          AllowTcpForwarding yes
+          X11Forwarding no
+          SSHEOF
 
-      # ── SSH session (if no command, or ssh_after=true) ────────────
-      - name: "SSH session"
-        if: inputs.run == '' || inputs.ssh_after == 'true'
-        uses: mxschmitt/action-tmate@v3
-        with:
-          limit-access-to-actor: true
-        timeout-minutes: ${{ fromJSON(inputs.timeout) }}
+          sudo /usr/sbin/sshd -p 2222
+          echo "sshd running on port 2222"
+
+          # ── Create reverse tunnel via bore.pub (free, no signup) ─
+          # bore.pub is a free TCP tunnel relay — like ngrok but no account needed
+          curl -sSL https://github.com/ekzhang/bore/releases/latest/download/bore-v0.5.2-x86_64-unknown-linux-musl.tar.gz | tar xz
+          chmod +x bore
+
+          # Start bore tunnel in background — forwards remote port to local 2222
+          ./bore local 2222 --to bore.pub &
+          BORE_PID=$!
+          sleep 3
+
+          # bore prints the assigned port to stdout
+          echo ""
+          echo "============================================"
+          echo "  SSH INTO THIS RUNNER:"
+          echo ""
+          echo "  ssh -p <PORT> runner@bore.pub"
+          echo ""
+          echo "  (check the bore output above for the port)"
+          echo "============================================"
+          echo ""
+
+          # Keep alive for 5 hours
+          echo "Session will stay open for 5 hours. To end early: touch /tmp/stop"
+          for i in $(seq 1 1800); do
+            if [ -f /tmp/stop ]; then
+              echo "Stop file found, ending session"
+              break
+            fi
+            sleep 10
+          done
+
+          kill $BORE_PID 2>/dev/null || true
