@@ -1,5 +1,6 @@
 # ────────────────────────────────────────────────────────────────────
 # debug-ssh.yml — Raw SSH into CI runner via bore tunnel.
+# Port is written to job summary + artifact for programmatic access.
 # ────────────────────────────────────────────────────────────────────
 
 name: Debug SSH
@@ -29,6 +30,7 @@ jobs:
           submodules: recursive
 
       - name: Start sshd + bore tunnel
+        id: tunnel
         run: |
           set -euo pipefail
 
@@ -50,13 +52,33 @@ jobs:
           sleep 5
 
           BORE_PORT=$(grep -oP 'bore\.pub:\K\d+' /tmp/bore.log | head -1 || true)
-          if [ -n "$BORE_PORT" ]; then
-            echo "::notice::SSH ready: ssh -p $BORE_PORT -o StrictHostKeyChecking=no runner@bore.pub"
-          else
+          if [ -z "$BORE_PORT" ]; then
             echo "::error::bore tunnel failed"
             cat /tmp/bore.log
             exit 1
           fi
+
+          SSH_CMD="ssh -p $BORE_PORT -o StrictHostKeyChecking=no runner@bore.pub"
+          echo "::notice::$SSH_CMD"
+          echo "## SSH Connection" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "$SSH_CMD" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          echo "ssh_cmd=$SSH_CMD" >> $GITHUB_OUTPUT
+          echo "port=$BORE_PORT" >> $GITHUB_OUTPUT
+
+          mkdir -p /tmp/ssh-info
+          echo "$SSH_CMD" > /tmp/ssh-info/connect.txt
+          echo "$BORE_PORT" > /tmp/ssh-info/port.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ssh-info
+          path: /tmp/ssh-info/
+
+      - name: "Connection: ${{ steps.tunnel.outputs.ssh_cmd }}"
+        run: echo "${{ steps.tunnel.outputs.ssh_cmd }}"
 
       - name: Keep alive (touch /tmp/stop to end)
         run: |
