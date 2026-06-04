@@ -1,0 +1,138 @@
+name: Debug SSH (bore tunnel)
+description: >
+  Start SSH server + bore tunnel in the background. Non-blocking —
+  the job continues while SSH stays open. Drop into any job on any
+  platform to get live shell access. Key-only auth.
+
+inputs:
+  github-user:
+    description: "GitHub username whose SSH keys are authorized"
+    required: false
+    default: "chaudharydeepanshu"
+
+runs:
+  using: composite
+  steps:
+    - name: Start SSH tunnel (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # sshd
+        sudo apt-get update -qq && sudo apt-get install -y -qq openssh-server >/dev/null 2>&1
+        mkdir -p ~/.ssh && chmod 700 ~/.ssh
+        curl -sS "https://github.com/${{ inputs.github-user }}.keys" >> ~/.ssh/authorized_keys
+        chmod 600 ~/.ssh/authorized_keys
+        sudo mkdir -p /run/sshd
+        echo -e "Port 2222\nPasswordAuthentication no\nPubkeyAuthentication yes\nPermitRootLogin no" \
+          | sudo tee /etc/ssh/sshd_config.d/debug.conf >/dev/null
+        sudo /usr/sbin/sshd -p 2222
+
+        # bore tunnel
+        curl -sSL "https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz" \
+          | tar xz -C /tmp
+        chmod +x /tmp/bore
+        nohup /tmp/bore local 2222 --to bore.pub > /tmp/bore.log 2>&1 &
+        sleep 5
+
+        BORE_PORT=$(grep -oP 'bore\.pub:\K\d+' /tmp/bore.log | head -1 || true)
+        if [ -z "$BORE_PORT" ]; then
+          echo "::warning::bore tunnel failed — continuing without SSH"
+          cat /tmp/bore.log; exit 0
+        fi
+
+        SSH_CMD="ssh -p $BORE_PORT -o StrictHostKeyChecking=no runner@bore.pub"
+        echo "::notice::$SSH_CMD"
+        echo "## SSH Connection (Linux)" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        echo "$SSH_CMD" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        mkdir -p /tmp/ssh-info
+        echo "$SSH_CMD" > /tmp/ssh-info/connect.txt
+        echo "$BORE_PORT" > /tmp/ssh-info/port.txt
+
+    - name: Start SSH tunnel (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # macOS has sshd built-in, just configure keys
+        mkdir -p ~/.ssh && chmod 700 ~/.ssh
+        curl -sS "https://github.com/${{ inputs.github-user }}.keys" >> ~/.ssh/authorized_keys
+        chmod 600 ~/.ssh/authorized_keys
+
+        # Start sshd on a non-privileged port
+        sudo systemsetup -setremotelogin on 2>/dev/null || true
+        /usr/sbin/sshd -p 2222 -o "PubkeyAuthentication yes" -o "PasswordAuthentication no" \
+          -h ~/.ssh/authorized_keys 2>/dev/null || \
+          sudo /usr/sbin/sshd -p 2222 2>/dev/null || true
+
+        # bore (macOS arm64)
+        curl -sSL "https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-aarch64-apple-darwin.tar.gz" \
+          | tar xz -C /tmp
+        chmod +x /tmp/bore
+        nohup /tmp/bore local 2222 --to bore.pub > /tmp/bore.log 2>&1 &
+        sleep 5
+
+        BORE_PORT=$(grep -oP 'bore\.pub:\K\d+' /tmp/bore.log || grep -o 'bore\.pub:[0-9]*' /tmp/bore.log | cut -d: -f2 | head -1 || true)
+        if [ -z "$BORE_PORT" ]; then
+          echo "::warning::bore tunnel failed — continuing without SSH"
+          cat /tmp/bore.log; exit 0
+        fi
+
+        SSH_CMD="ssh -p $BORE_PORT -o StrictHostKeyChecking=no runner@bore.pub"
+        echo "::notice::$SSH_CMD"
+        echo "## SSH Connection (macOS)" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        echo "$SSH_CMD" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        mkdir -p /tmp/ssh-info
+        echo "$SSH_CMD" > /tmp/ssh-info/connect.txt
+        echo "$BORE_PORT" > /tmp/ssh-info/port.txt
+
+    - name: Start SSH tunnel (Windows)
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # Windows runners have OpenSSH built-in
+        mkdir -p ~/.ssh && chmod 700 ~/.ssh
+        curl -sS "https://github.com/${{ inputs.github-user }}.keys" >> ~/.ssh/authorized_keys
+        chmod 600 ~/.ssh/authorized_keys
+
+        # Start sshd via PowerShell
+        powershell -Command "Start-Service sshd" 2>/dev/null || \
+          powershell -Command "Add-WindowsCapability -Online -Name OpenSSH.Server; Start-Service sshd" 2>/dev/null || true
+
+        # bore (Windows x64)
+        curl -sSL "https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-pc-windows-msvc.zip" \
+          -o /tmp/bore.zip
+        unzip -qo /tmp/bore.zip -d /tmp && rm /tmp/bore.zip
+
+        /tmp/bore.exe local 22 --to bore.pub > /tmp/bore.log 2>&1 &
+        sleep 5
+
+        BORE_PORT=$(grep -oP 'bore\.pub:\K\d+' /tmp/bore.log || grep -o 'bore\.pub:[0-9]*' /tmp/bore.log | cut -d: -f2 | head -1 || true)
+        if [ -z "$BORE_PORT" ]; then
+          echo "::warning::bore tunnel failed — continuing without SSH"
+          cat /tmp/bore.log; exit 0
+        fi
+
+        SSH_CMD="ssh -p $BORE_PORT -o StrictHostKeyChecking=no runneradmin@bore.pub"
+        echo "::notice::$SSH_CMD"
+        echo "## SSH Connection (Windows)" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        echo "$SSH_CMD" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        mkdir -p /tmp/ssh-info
+        echo "$SSH_CMD" > /tmp/ssh-info/connect.txt
+        echo "$BORE_PORT" > /tmp/ssh-info/port.txt
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: ssh-info
+        path: /tmp/ssh-info/
+        if-no-files-found: ignore
