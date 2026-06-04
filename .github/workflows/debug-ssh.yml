@@ -1,0 +1,129 @@
+# ────────────────────────────────────────────────────────────────────
+# debug-ssh.yml — SSH into any CI runner for interactive debugging.
+#
+# Spins up the selected platform, runs optional setup, then opens a
+# tmate SSH session. You get a live terminal on the exact CI machine.
+#
+# Trigger: workflow_dispatch only (manual, never automatic).
+#
+# Usage:
+#   gh workflow run debug-ssh.yml \
+#     -f runner=ubuntu-latest \
+#     -f setup=web \
+#     -f timeout=30
+#
+# Then watch the Actions log — it prints an SSH command and a web URL.
+# Connect, debug, fix. When done: touch /tmp/continue
+# ────────────────────────────────────────────────────────────────────
+
+name: Debug SSH
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: "Runner OS"
+        required: true
+        type: choice
+        options:
+          - ubuntu-latest
+          - macos-14
+          - windows-latest
+        default: ubuntu-latest
+
+      setup:
+        description: "Pre-install environment (or 'none' for bare runner)"
+        required: true
+        type: choice
+        options:
+          - none
+          - web
+          - rust
+          - flutter
+          - full
+        default: web
+
+      timeout:
+        description: "Session timeout in minutes"
+        required: false
+        type: number
+        default: 30
+
+      branch:
+        description: "Branch to checkout"
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  debug:
+    name: "SSH: ${{ inputs.runner }} (${{ inputs.setup }})"
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ fromJSON(inputs.timeout) }}
+
+    steps:
+      # ── Checkout ──────────────────────────────────────────────────
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch || github.ref }}
+          submodules: recursive
+
+      # ── Setup: Flutter (needed by web, flutter, full) ─────────────
+      - name: Setup Flutter
+        if: contains(fromJSON('["web","flutter","full"]'), inputs.setup)
+        uses: ./.github/actions/setup-fvm
+
+      # ── Setup: Rust (needed by rust, full) ────────────────────────
+      - name: Setup Rust
+        if: contains(fromJSON('["rust","full"]'), inputs.setup)
+        uses: ./.github/actions/setup-rust
+        with:
+          targets: wasm32-unknown-unknown
+
+      # ── Setup: Web testing (Chrome + ChromeDriver + xvfb + WASM) ─
+      - name: Setup Web Testing
+        if: inputs.setup == 'web' || inputs.setup == 'full'
+        uses: ./.github/actions/setup-web-testing
+
+      # ── Setup: Web assets for example app ─────────────────────────
+      - name: Setup example web assets
+        if: inputs.setup == 'web' || inputs.setup == 'full'
+        run: |
+          rm -rf example/web/pdf_manipulator
+          cd example
+          fvm flutter pub get
+          fvm flutter pub run pdf_manipulator:setup --force
+
+      # ── Print environment info ────────────────────────────────────
+      - name: Environment info
+        run: |
+          echo "::group::System"
+          uname -a
+          echo "Runner: ${{ inputs.runner }}"
+          echo "Setup: ${{ inputs.setup }}"
+          df -h / /dev/shm 2>/dev/null || true
+          echo "::endgroup::"
+
+          echo "::group::Tools"
+          which flutter && flutter --version 2>/dev/null | head -2 || echo "Flutter: not installed"
+          which dart && dart --version 2>/dev/null || echo "Dart: not installed"
+          which rustc && rustc --version 2>/dev/null || echo "Rust: not installed"
+          which cargo && cargo --version 2>/dev/null || echo "Cargo: not installed"
+          echo "::endgroup::"
+
+          echo "::group::Browser"
+          which google-chrome-stable && google-chrome-stable --version 2>/dev/null || echo "Chrome: not installed"
+          which chromedriver && chromedriver --version 2>/dev/null || echo "ChromeDriver: not installed"
+          which Xvfb && echo "Xvfb: installed" || echo "Xvfb: not installed"
+          echo "::endgroup::"
+
+          echo "::group::Workspace"
+          ls -la
+          echo "::endgroup::"
+
+      # ── SSH session ───────────────────────────────────────────────
+      - name: "SSH session (connect now)"
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: true
+        timeout-minutes: ${{ fromJSON(inputs.timeout) }}
