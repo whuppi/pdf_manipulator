@@ -218,8 +218,7 @@ tool/
 ├── compile_rust.sh                         ← Rust → native / wasm / per-platform / both
 ├── stamp_release.sh                        ← 5 modes: --stamp-tag, --github-notes, (default),
 │                                              --add-git-install, --add-pub-install
-├── run_web_test.sh                         ← flutter drive wrapper with clean exit
-└── chrome_with_sab.sh                      ← Chrome launcher with SharedArrayBuffer
+└── run_web_test.sh                         ← flutter drive -d web-server wrapper
 
 vendor/pdf_oxide/src/
 ├── host/                                   ← OUR CODE
@@ -431,6 +430,26 @@ await pdf.dispose();        // frees EVERYTHING — cascades to all children
   retained, zero threads alive.
 - Double dispose is safe (no-op). Using a disposed object throws
   `StateError`.
+- Internally, the transport returns empty results (instead of
+  throwing) during dispose cascade so child cleanup completes.
+
+### Shutdown order (native)
+
+The coordinator isolate shuts down in a specific order to prevent
+dangling `NativeCallable` pointers. Wrong order → Rust thread calls
+a dead callback → FATAL crash on Windows.
+
+```
+1. Cancel all buffers (held + in-flight)
+     Set FLAG_CANCELLED on every shared buffer
+     Signal every condvar → blocked Rust threads wake immediately
+
+2. bridgeShutdown(instance)
+     Drops ThreadPool → joins threads (fast — they see cancel flag)
+
+3. Close NativeCallables + free buffer memory
+     Safe — no Rust thread is alive to call them
+```
 
 ### Parallel ops
 
@@ -442,7 +461,8 @@ All ops from one `Pdf` share its pool. Pool size adapts automatically
 **Native:** all pool threads share one `InstanceState` (Mutex).
 Created by `bridge_init()`, destroyed by `bridge_shutdown()`. Holds
 HashMaps for documents, editors, builders, page ops, plus a cancel
-flag and the thread pool.
+flag and the thread pool. In-flight buffers are tracked in
+`_activeReadBufs` / `_activeWriteBufs` so shutdown can cancel them.
 
 **Web:** coordinator routes ops to WASM workers. Documents are pinned
 to workers (one worker per open doc). Different documents on different
@@ -479,6 +499,7 @@ test/
 ├── ops/
 │   ├── core/                       7 core test files
 │   ├── stress/                     6 stress test files (1000-page)
+│   ├── native/                     platform-specific native tests
 │   └── runners/                    4 platform runners
 │       ├── native_runner_test.dart
 │       ├── web_opfs_runner_test.dart

@@ -3,7 +3,7 @@
 // Each Pdf() creates one coordinator isolate. The coordinator:
 //   1. Calls bridgeInit() → gets an opaque instance pointer
 //   2. Routes every op through bridgeExecute(instance, ...)
-//   3. On shutdown: calls bridgeShutdown(instance) → all memory freed
+//   3. On shutdown: cancels buffers → joins threads → closes callables
 //
 // Multi-source/multi-sink: bridgeExecute receives arrays of condvar
 // channels. Each source gets its own shared buffer + notify callback.
@@ -28,23 +28,23 @@ const _flagReady = 1 << 0;
 const _flagError = 1 << 1;
 const _flagAck = 1 << 3;
 
-// ── Per-source resources (kept alive until dispose) ──────────────
+// ── Per-source resources (kept alive for handle lifetime) ───────────
 
 class _SourceResources {
   _SourceResources(this.readBuf, this.callable);
 
   final SharedReadBuffer readBuf;
   final ffi.NativeCallable<ffi.Void Function()> callable;
-
-  void dispose() {
-    callable.close();
-    bridge.bridgeDestroyReadBuffer(readBuf.rawPtr);
-    calloc.free(readBuf.ptr);
-  }
 }
 
+// Held resources (pinned for open doc/editor handles).
 final _heldResources = <int, _SourceResources>{};
 var _nextResourceId = 1;
+
+// In-flight operation buffers — cancelled on shutdown so blocked
+// Rust threads wake immediately instead of waiting 30s timeout.
+final _activeReadBufs = <SharedReadBuffer>{};
+final _activeWriteBufs = <SharedWriteBuffer>{};
 
 // ── Coordinator isolate entry point ─────────────────────────────────
 
@@ -68,29 +68,19 @@ void coordinatorEntryPoint(SendPort mainPort) {
     final tag = message[1] as String;
 
     if (tag == 'shutdown') {
-      // 1. Cancel all held source buffers — wakes blocked Rust threads
-      //    so they bail before calling notify_fn again.
-      for (final res in _heldResources.values) {
-        res.readBuf.setFlags(flagCancelled);
-        bridge.bridgeSignalRead(res.readBuf.rawPtr);
-      }
-      // 2. Shut down Rust engine — sets instance cancel flag, drops
-      //    thread pool (joins threads — they exit fast now).
-      bridge.bridgeShutdown(instance);
-      // 3. Now safe to close NativeCallables — no thread will call them.
-      for (final res in _heldResources.values) {
-        res.callable.close();
-        bridge.bridgeDestroyReadBuffer(res.readBuf.rawPtr);
-        calloc.free(res.readBuf.ptr);
-      }
-      _heldResources.clear();
+      _shutdown(instance);
       responsePort?.send([message[0] as int, 'result', Uint8List(0)]);
       return;
     }
 
     if (tag == 'releaseSource') {
       final resourceId = message[2] as int;
-      _heldResources.remove(resourceId)?.dispose();
+      final res = _heldResources.remove(resourceId);
+      if (res != null) {
+        res.callable.close();
+        bridge.bridgeDestroyReadBuffer(res.readBuf.rawPtr);
+        calloc.free(res.readBuf.ptr);
+      }
       responsePort?.send([message[0] as int, 'result', Uint8List(0)]);
       return;
     }
@@ -104,7 +94,8 @@ void coordinatorEntryPoint(SendPort mainPort) {
 
     try {
       final result = await _executeOp(
-        instance, requestBytes, sourcePorts, sourceLengths, sinkPorts, keepSources,
+        instance, requestBytes, sourcePorts, sourceLengths,
+        sinkPorts, keepSources,
       );
       responsePort?.send([id, 'result', result.bytes]);
       if (result.keptResourceIds.isNotEmpty) {
@@ -116,13 +107,55 @@ void coordinatorEntryPoint(SendPort mainPort) {
   });
 }
 
+// ── Shutdown — cancel → join → close ────────────────────────────────
+//
+// Order matters. Closing NativeCallables before threads exit leaves
+// dangling function pointers — Rust calls a dead callback → FATAL
+// crash ("Callback invoked after it has been deleted").
+//
+// Correct order:
+//   1. Set FLAG_CANCELLED + signal condvars on ALL buffers (held +
+//      in-flight). Blocked Rust threads wake and bail immediately.
+//   2. bridgeShutdown → drops ThreadPool → joins threads. Fast now
+//      because every thread sees the cancel flag.
+//   3. Close NativeCallables. Safe — no thread will call them.
+
+void _shutdown(ffi.Pointer<ffi.Void> instance) {
+  // 1. Cancel all buffers
+  for (final res in _heldResources.values) {
+    res.readBuf.setFlags(flagCancelled);
+    bridge.bridgeSignalRead(res.readBuf.rawPtr);
+  }
+  for (final buf in _activeReadBufs) {
+    buf.setFlags(flagCancelled);
+    bridge.bridgeSignalRead(buf.rawPtr);
+  }
+  for (final buf in _activeWriteBufs) {
+    buf.setFlags(flagCancelled);
+    bridge.bridgeSignalWrite(buf.rawPtr);
+  }
+
+  // 2. Shut down Rust engine (joins threads — fast, they're cancelled)
+  bridge.bridgeShutdown(instance);
+
+  // 3. Close NativeCallables + free buffers (safe — threads are dead)
+  for (final res in _heldResources.values) {
+    res.callable.close();
+    bridge.bridgeDestroyReadBuffer(res.readBuf.rawPtr);
+    calloc.free(res.readBuf.ptr);
+  }
+  _heldResources.clear();
+  _activeReadBufs.clear();
+  _activeWriteBufs.clear();
+}
+
 // ── Result with optional resource IDs ──────────────────────────────
 
 class _OpResult {
   _OpResult(this.bytes, {this.keptResourceIds = const {}});
 
   final Uint8List bytes;
-  final Map<int, int> keptResourceIds; // sourceIndex → resourceId
+  final Map<int, int> keptResourceIds;
 }
 
 // ── Execute one operation via bridge_execute FFI ────────────────────
@@ -141,9 +174,11 @@ Future<_OpResult> _executeOp(
   final sourceCount = sourcePorts.length;
   final sinkCount = sinkPorts.length;
 
-  // Allocate source arrays
+  // Allocate source channels
   final srcBufsPtr = calloc<ffi.Pointer<ffi.Uint8>>(sourceCount);
-  final srcNotifyPtr = calloc<ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>>>(sourceCount);
+  final srcNotifyPtr =
+      calloc<ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>>>(
+          sourceCount);
   final srcLengthsPtr = calloc<ffi.Int64>(sourceCount);
   final srcReadBufs = <int, SharedReadBuffer>{};
   final srcCallables = <int, ffi.NativeCallable<ffi.Void Function()>>{};
@@ -165,9 +200,10 @@ Future<_OpResult> _executeOp(
     }
   }
 
-  // Allocate sink arrays
+  // Allocate sink channels
   final snkBufsPtr = calloc<ffi.Pointer<ffi.Uint8>>(sinkCount);
-  final snkNotifyPtr = calloc<ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>>>(sinkCount);
+  final snkNotifyPtr =
+      calloc<ffi.Pointer<ffi.NativeFunction<ffi.Void Function()>>>(sinkCount);
   final snkWriteBufs = <int, SharedWriteBuffer>{};
   final snkCallables = <int, ffi.NativeCallable<ffi.Void Function()>>{};
 
@@ -185,6 +221,10 @@ Future<_OpResult> _executeOp(
       snkNotifyPtr[i] = ffi.nullptr;
     }
   }
+
+  // Register so shutdown can cancel if it fires mid-operation
+  _activeReadBufs.addAll(srcReadBufs.values);
+  _activeWriteBufs.addAll(snkWriteBufs.values);
 
   final resultPort = ReceivePort();
   final nativePort = resultPort.sendPort.nativePort;
@@ -238,7 +278,15 @@ Future<_OpResult> _executeOp(
       }
     }
 
-    // Free the arrays themselves
+    // Unregister from active tracking
+    for (final buf in srcReadBufs.values) {
+      _activeReadBufs.remove(buf);
+    }
+    for (final buf in snkWriteBufs.values) {
+      _activeWriteBufs.remove(buf);
+    }
+
+    // Free the arrays
     calloc.free(srcBufsPtr);
     calloc.free(srcNotifyPtr);
     calloc.free(srcLengthsPtr);

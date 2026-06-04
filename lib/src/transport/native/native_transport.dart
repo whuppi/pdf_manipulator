@@ -101,7 +101,12 @@ class NativeTransport implements PdfTransport {
     List<DataSink> sinks = const [],
     Set<int> keepSources = const {},
   }) async {
-    if (_disposed) throw StateError('NativeTransport disposed');
+    if (_disposed) {
+      // During dispose cascade, child handles send docDispose/editorDispose
+      // commands. The coordinator is already shutting down — return empty
+      // result so the cascade completes without throwing.
+      return (bytes: Uint8List(0), resourceIds: const <int, int>{});
+    }
     await _ensureWorker();
     final id = _nextId++;
     final completer = Completer<Uint8List>();
@@ -191,7 +196,7 @@ class NativeTransport implements PdfTransport {
     Uint8List request, {
     List<DataSource> sources = const [],
   }) async* {
-    if (_disposed) throw StateError('NativeTransport disposed');
+    if (_disposed) return;
     await _ensureWorker();
     final id = _nextId++;
     final controller = StreamController<Uint8List>();
