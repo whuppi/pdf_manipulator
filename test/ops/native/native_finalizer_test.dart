@@ -18,11 +18,10 @@ import 'package:test/test.dart';
 void registerNativeFinalizerTests() {
   test('dispose exits cleanly (no dangling NativeCallable)',
       () async {
-    // Use `dart <file>` not `dart run <file>` — `dart run` triggers build
-    // hooks which recompile the Rust binary. On Windows MSVC this exceeds the
-    // timeout even with cache hits. Direct file execution skips hooks entirely.
-    final repro = File('test/ops/native/native_gc_repro.dart').absolute.path;
-    final process = await Process.start(Platform.resolvedExecutable, [repro]);
+    final process = await Process.start(Platform.resolvedExecutable, [
+      'run',
+      'test/ops/native/native_gc_repro.dart',
+    ]);
     final exitCode = await process.exitCode.timeout(
       Duration(seconds: 30),
       onTimeout: () {
