@@ -16,9 +16,12 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  flutter_driver:
+    sdk: flutter
   integration_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  webdriver: ^3.0.0
 
 flutter:
   uses-material-design: true

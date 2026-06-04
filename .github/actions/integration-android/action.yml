@@ -13,6 +13,15 @@ runs:
         distribution: temurin
         java-version: 17
 
+    - name: Cache Gradle
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: gradle-${{ hashFiles('example/android/build.gradle.kts', 'example/android/app/build.gradle.kts') }}
+        restore-keys: gradle-
+
     - name: Enable KVM
       shell: bash
       run: |

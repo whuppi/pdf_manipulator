@@ -18,6 +18,7 @@ import 'dart:ffi' as ffi;
 
 // ── allo-isolate bootstrap ───────────────────────────────────────
 
+/// Registers the Dart post-C-object callback for allo-isolate.
 @ffi.Native<ffi.Void Function(
     ffi.Pointer<ffi.NativeFunction<ffi.Bool Function(ffi.Int64, ffi.Pointer<ffi.Void>)>>)>(
     symbol: 'store_dart_post_cobject')
@@ -27,9 +28,11 @@ external void storeDartPostCobject(
 
 // ── Instance lifecycle ──────────────────────────────────────────
 
+/// Creates a new Rust engine instance and returns an opaque pointer.
 @ffi.Native<ffi.Pointer<ffi.Void> Function()>(symbol: 'bridge_init')
 external ffi.Pointer<ffi.Void> bridgeInit();
 
+/// Drops the Rust engine instance, freeing all memory and threads.
 @ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Void>)>(
     symbol: 'bridge_shutdown')
 external void bridgeShutdown(ffi.Pointer<ffi.Void> instance);
@@ -73,32 +76,40 @@ external void bridgeExecute(
 
 // ── Condvar buffer management ───────────────────────────────────
 
+/// Returns the size in bytes required for a read condvar buffer.
 @ffi.Native<ffi.Int32 Function()>(symbol: 'bridge_read_buffer_size')
 external int bridgeReadBufferSize();
 
+/// Returns the size in bytes required for a write condvar buffer.
 @ffi.Native<ffi.Int32 Function()>(symbol: 'bridge_write_buffer_size')
 external int bridgeWriteBufferSize();
 
+/// Initialises the mutex and condvar inside a read buffer.
 @ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>)>(
     symbol: 'bridge_init_read_buffer')
 external void bridgeInitReadBuffer(ffi.Pointer<ffi.Uint8> buf);
 
+/// Initialises the mutex and condvar inside a write buffer.
 @ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>)>(
     symbol: 'bridge_init_write_buffer')
 external void bridgeInitWriteBuffer(ffi.Pointer<ffi.Uint8> buf);
 
+/// Destroys the mutex and condvar inside a read buffer.
 @ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>)>(
     symbol: 'bridge_destroy_read_buffer')
 external void bridgeDestroyReadBuffer(ffi.Pointer<ffi.Uint8> buf);
 
+/// Destroys the mutex and condvar inside a write buffer.
 @ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>)>(
     symbol: 'bridge_destroy_write_buffer')
 external void bridgeDestroyWriteBuffer(ffi.Pointer<ffi.Uint8> buf);
 
+/// Signals the Rust side that a read response is ready.
 @ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>)>(
     symbol: 'bridge_signal_read')
 external void bridgeSignalRead(ffi.Pointer<ffi.Uint8> buf);
 
+/// Signals the Rust side that a write ack is ready.
 @ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>)>(
     symbol: 'bridge_signal_write')
 external void bridgeSignalWrite(ffi.Pointer<ffi.Uint8> buf);

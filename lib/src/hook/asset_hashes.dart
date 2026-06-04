@@ -4,6 +4,7 @@
 // The build hook verifies downloaded files against these hashes.
 // Hash mismatch → re-download. Correct → use cached. Missing → download.
 
+/// SHA-256 hashes for pre-built native binaries, verified by the build hook.
 const Map<String, String> assetHashesSha256 = {
   // Populated by tool/write_asset_hashes.dart after CI uploads release binaries.
   // Format: 'platform-libpdf_oxide.ext': 'sha256hex'

@@ -15,6 +15,7 @@ import 'package:pdf_manipulator/src/transport/native/coordinator.dart';
 import 'package:pdf_manipulator/src/transport/native/source_server.dart';
 import 'package:pdf_manipulator/src/transport/native/sink_server.dart';
 
+/// Native FFI transport — routes ops through a coordinator isolate.
 class NativeTransport implements PdfTransport {
   @override
   PdfIoMode? get ioMode => _ready ? PdfIoMode.native : null;
@@ -85,11 +86,11 @@ class NativeTransport implements PdfTransport {
       case 'item':
         _pendingStreams[id]?.add(payload as Uint8List);
       case 'done':
-        _pendingStreams.remove(id)?.close();
+        unawaited(_pendingStreams.remove(id)?.close());
       case 'streamError':
         final c = _pendingStreams.remove(id);
         c?.addError(StateError(payload as String? ?? 'Stream error'));
-        c?.close();
+        unawaited(c?.close());
     }
   }
 
@@ -100,7 +101,12 @@ class NativeTransport implements PdfTransport {
     List<DataSink> sinks = const [],
     Set<int> keepSources = const {},
   }) async {
-    if (_disposed) throw StateError('NativeTransport disposed');
+    if (_disposed) {
+      // During dispose cascade, child handles send docDispose/editorDispose
+      // commands. The coordinator is already shutting down — return empty
+      // result so the cascade completes without throwing.
+      return (bytes: Uint8List(0), resourceIds: const <int, int>{});
+    }
     await _ensureWorker();
     final id = _nextId++;
     final completer = Completer<Uint8List>();
@@ -190,7 +196,7 @@ class NativeTransport implements PdfTransport {
     Uint8List request, {
     List<DataSource> sources = const [],
   }) async* {
-    if (_disposed) throw StateError('NativeTransport disposed');
+    if (_disposed) return;
     await _ensureWorker();
     final id = _nextId++;
     final controller = StreamController<Uint8List>();
@@ -225,6 +231,7 @@ class NativeTransport implements PdfTransport {
         server.stop();
       }
       _pendingStreams.remove(id);
+      unawaited(controller.close());
     }
   }
 
@@ -237,6 +244,21 @@ class NativeTransport implements PdfTransport {
       s.stop();
     }
     _heldSourceServers.clear();
+
+    // Send shutdown to coordinator — cancels buffers (wakes blocked
+    // Rust threads), calls bridgeShutdown (joins threads), then closes
+    // NativeCallables. Must complete before killing the isolate.
+    if (_workerPort != null && _ready) {
+      final id = _nextId++;
+      final completer = Completer<Uint8List>();
+      _pending[id] = completer;
+      _workerPort!.send([id, 'shutdown']);
+      try {
+        await completer.future.timeout(Duration(seconds: 5));
+      } catch (_) {
+        // Timeout — kill anyway below
+      }
+    }
 
     _pending.clear();
     _pendingResourceIds.clear();

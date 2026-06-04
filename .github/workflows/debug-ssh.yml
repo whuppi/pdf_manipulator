@@ -1,6 +1,12 @@
 # ────────────────────────────────────────────────────────────────────
-# debug-ssh.yml — Raw SSH into CI runner via bore tunnel.
-# Port is written to job summary + artifact for programmatic access.
+# debug-ssh.yml — SSH into any runner for interactive debugging.
+#
+# Uses the debug-ssh composite action (bore tunnel, key-only auth).
+# Blocking mode — keeps the runner alive until /tmp/stop is touched.
+#
+# Usage:
+#   gh workflow run debug-ssh.yml
+#   gh workflow run debug-ssh.yml -f runner=macos-14
 # ────────────────────────────────────────────────────────────────────
 
 name: Debug SSH
@@ -29,58 +35,10 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Start sshd + bore tunnel
-        id: tunnel
-        run: |
-          set -euo pipefail
-
-          sudo apt-get update -qq && sudo apt-get install -y -qq openssh-server
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          curl -sS https://github.com/chaudharydeepanshu.keys >> ~/.ssh/authorized_keys
-          chmod 600 ~/.ssh/authorized_keys
-
-          sudo mkdir -p /run/sshd
-          echo -e "Port 2222\nPasswordAuthentication no\nPubkeyAuthentication yes\nPermitRootLogin no" \
-            | sudo tee /etc/ssh/sshd_config.d/debug.conf >/dev/null
-          sudo /usr/sbin/sshd -p 2222
-
-          curl -sSL "https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz" \
-            | tar xz -C /tmp
-          chmod +x /tmp/bore
-
-          /tmp/bore local 2222 --to bore.pub > /tmp/bore.log 2>&1 &
-          sleep 5
-
-          BORE_PORT=$(grep -oP 'bore\.pub:\K\d+' /tmp/bore.log | head -1 || true)
-          if [ -z "$BORE_PORT" ]; then
-            echo "::error::bore tunnel failed"
-            cat /tmp/bore.log
-            exit 1
-          fi
-
-          SSH_CMD="ssh -p $BORE_PORT -o StrictHostKeyChecking=no runner@bore.pub"
-          echo "::notice::$SSH_CMD"
-          echo "## SSH Connection" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "$SSH_CMD" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-
-          echo "ssh_cmd=$SSH_CMD" >> $GITHUB_OUTPUT
-          echo "port=$BORE_PORT" >> $GITHUB_OUTPUT
-
-          mkdir -p /tmp/ssh-info
-          echo "$SSH_CMD" > /tmp/ssh-info/connect.txt
-          echo "$BORE_PORT" > /tmp/ssh-info/port.txt
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ssh-info
-          path: /tmp/ssh-info/
-
-      - name: "Connection: ${{ steps.tunnel.outputs.ssh_cmd }}"
-        run: echo "${{ steps.tunnel.outputs.ssh_cmd }}"
+      - uses: ./.github/actions/debug-ssh
 
       - name: Keep alive (touch /tmp/stop to end)
+        shell: bash
         run: |
-          echo "Session open for 5 hours. Touch /tmp/stop to end early."
+          echo "SSH session open. Touch /tmp/stop to end."
           while [ ! -f /tmp/stop ]; do sleep 10; done

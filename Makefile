@@ -55,69 +55,8 @@ check: analyze test test-example
 
 # ── Analyze ─────────────────────────────────────────────────────────
 
-# Features from compile_rust.sh (single source of truth).
-RUST_NATIVE_FEATURES := $(shell bash tool/compile_rust.sh --features native)
-RUST_WASM_FEATURES   := $(shell bash tool/compile_rust.sh --features wasm)
-
 analyze:
-	$(DART) pub get --no-example
-	$(DART) analyze --fatal-infos lib/ bin/ test/ hook/
-	cd example && $(FLUTTER) pub get && $(FLUTTER) analyze --fatal-infos
-	@echo "=== Rust: check pdf_oxide warnings (native) ==="
-	cd vendor/pdf_oxide && cargo check --lib --features $(RUST_NATIVE_FEATURES) \
-		--message-format=json 2>/dev/null \
-		| python3 -c "$$RUST_WARNING_CHECK"
-	@echo "=== Rust: check pdf_oxide warnings (wasm) ==="
-	cd vendor/pdf_oxide && cargo check --lib --target wasm32-unknown-unknown \
-		--features $(RUST_WASM_FEATURES) --no-default-features \
-		--message-format=json 2>/dev/null \
-		| python3 -c "$$RUST_WARNING_CHECK"
-	@echo "=== Rust: check office_oxide warnings ==="
-	cd vendor/office_oxide && cargo check --lib \
-		--message-format=json 2>/dev/null \
-		| python3 -c "$$RUST_WARNING_CHECK"
-
-# Parses cargo JSON diagnostics, filters to files our patch touches,
-# fails if any warning falls inside a line range we changed.
-define RUST_WARNING_CHECK
-import sys,json,subprocess as sp
-# Get lines changed by our patch
-# Derive upstream base tag from branch name (pdf_manipulator/X.Y.Z-patches → vX.Y.Z)
-branch=sp.run(['git','rev-parse','--abbrev-ref','HEAD'],capture_output=True,text=True).stdout.strip()
-base_tag='v'+branch.split('/')[1].replace('-patches','') if '/' in branch else 'v0.3.55'
-diff=sp.run(['git','diff','--unified=0',f'{base_tag}..HEAD','--','src/'],
-  capture_output=True,text=True)
-changed={}
-cur=None
-for l in diff.stdout.splitlines():
-  if l.startswith('+++ b/'): cur=l[6:]
-  elif l.startswith('@@') and cur:
-    for p in l.split('@@')[1].split():
-      if p.startswith('+'):
-        s=p[1:].split(',')
-        start=int(s[0])
-        count=int(s[1]) if len(s)>1 else 1
-        changed.setdefault(cur,set()).update(range(start,start+count))
-warns=0
-for line in sys.stdin:
-  try: msg=json.loads(line)
-  except: continue
-  if msg.get('reason')!='compiler-message': continue
-  m=msg['message']
-  if m['level']!='warning': continue
-  for s in m.get('spans',[]):
-    if not s.get('is_primary'): continue
-    fn=s['file_name']
-    if fn not in changed: break
-    if s['line_start'] in changed[fn]:
-      print(f"  {fn}:{s['line_start']}: {m['message']}")
-      warns+=1
-    break
-if warns:
-  print(f"\n{warns} warning(s) in our changed lines — fix before committing")
-  sys.exit(1)
-endef
-export RUST_WARNING_CHECK
+	@DART="$(DART)" FLUTTER="$(FLUTTER)" bash tool/analyze.sh
 
 # ── Build (dev — triggers build hook for the current platform) ──────
 
@@ -201,21 +140,14 @@ test-example-device:
 	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart -d $(DEVICE)
 
 # All 3 web modes via flutter drive.
-# SharedArrayBuffer enabled via CHROME_EXECUTABLE wrapper (see tool/chrome_with_sab.sh).
-# Shared helper: run flutter drive with a given mode.
-# CHROME_EXECUTABLE wrapper adds --enable-features=SharedArrayBuffer to the
-# app Chrome. This works around flutter drive's WebDriverService not forwarding
-# --web-browser-flag to the app Chrome (it only goes to chromedriver's session).
-CHROME_SAB := $(CURDIR)/tool/chrome_with_sab.sh
-
 define run_example_web
-	@./tool/run_web_test.sh $(2) $(CHROME_SAB) $(FLUTTER)
+	@./tool/run_web_test.sh $(2) $(FLUTTER)
 endef
 
 define setup_example_web
 	@echo "=== Example: clean + setup web assets ==="
 	rm -rf example/web/pdf_manipulator
-	cd example && $(FLUTTER) pub get && $(DART) run pdf_manipulator:setup --force
+	cd example && $(FLUTTER) pub get && $(FLUTTER) pub run pdf_manipulator:setup --force
 endef
 
 # All 3 web modes: setup once, run all three sequentially.

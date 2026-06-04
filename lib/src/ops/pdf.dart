@@ -16,7 +16,9 @@ import 'package:pdf_manipulator/src/transport/create.dart';
 import 'package:pdf_manipulator/src/transport/protocol/codec.dart' as codec;
 import 'package:pdf_manipulator/src/ops/pdf_doc.dart';
 
+/// Entry point for all PDF operations — open, edit, build, and standalone ops.
 class Pdf {
+  /// Creates a new [Pdf] instance with an optional engine configuration.
   Pdf({PdfConfig? config}) : _bridge = createBridge(config: config);
 
   final PdfBridge _bridge;
@@ -51,6 +53,7 @@ class Pdf {
 
   // ── Document handle — open once, query many, dispose ──
 
+  /// Opens a PDF document for read-only queries.
   Future<PdfDoc> open(DataSource source, {String? password}) async {
     _check();
     final handle = await _bridge.open(source, password: password);
@@ -78,6 +81,7 @@ class Pdf {
 
   // ── Editor handle — open, mutate, save, dispose ──
 
+  /// Opens a PDF document for editing (mutate, then save).
   Future<PdfEditor> edit(DataSource source, {String? password}) async {
     _check();
     final doc = await open(source, password: password);
@@ -96,6 +100,7 @@ class Pdf {
 
   // ── Builder handle — create from scratch, save, dispose ──
 
+  /// Creates a new PDF document from scratch.
   Future<PdfBuilder> build() async {
     _check();
     final handle = await _bridge.createBuilder();
@@ -104,6 +109,7 @@ class Pdf {
 
   // ── Lifecycle ──
 
+  /// Releases engine resources. Idempotent.
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;

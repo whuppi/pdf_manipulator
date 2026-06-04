@@ -8,6 +8,17 @@ runs:
     - uses: ./.github/actions/setup-rust
       with: { targets: "aarch64-apple-ios,aarch64-apple-ios-sim" }
 
+    - uses: actions/cache@v4
+      with:
+        path: example/ios/Pods
+        key: pods-${{ hashFiles('example/ios/Podfile') }}
+        restore-keys: pods-
+
+    - uses: irgaly/xcode-cache@v1
+      with:
+        key: xcode-ios-${{ env.SUBMODULE_PDF_OXIDE }}
+        restore-keys: xcode-ios-
+
     - uses: futureware-tech/simulator-action@v4
       with:
         model: 'iPhone 16'

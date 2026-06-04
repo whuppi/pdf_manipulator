@@ -6,20 +6,34 @@ import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 
 /// RGB color for watermarks and annotations.
 class PdfColor {
-  final double r, g, b;
+  /// Creates an RGB color with components in the range 0.0 to 1.0.
   const PdfColor(this.r, this.g, this.b);
 
+  /// Red component.
+  final double r;
+
+  /// Green component.
+  final double g;
+
+  /// Blue component.
+  final double b;
+
+  /// Black (0, 0, 0).
   static const black = PdfColor(0, 0, 0);
+
+  /// White (1, 1, 1).
   static const white = PdfColor(1, 1, 1);
+
+  /// Gray (0.5, 0.5, 0.5).
   static const gray = PdfColor(0.5, 0.5, 0.5);
+
+  /// Red (1, 0, 0).
   static const red = PdfColor(1, 0, 0);
 }
 
 /// Permission flags for encrypted PDFs.
 class PdfPermissions {
-  final bool print, printHq, modify, copy;
-  final bool annotate, fillForms, accessibility, assemble;
-
+  /// Creates permission flags with individual overrides.
   const PdfPermissions({
     this.print = true,
     this.printHq = true,
@@ -31,8 +45,10 @@ class PdfPermissions {
     this.assemble = true,
   });
 
+  /// All permissions granted.
   const PdfPermissions.all() : this();
 
+  /// Read-only — most permissions revoked except accessibility.
   const PdfPermissions.readOnly()
       : print = false,
         printHq = false,
@@ -43,6 +59,31 @@ class PdfPermissions {
         accessibility = true,
         assemble = false;
 
+  /// Allow printing at standard quality.
+  final bool print;
+
+  /// Allow high-quality printing.
+  final bool printHq;
+
+  /// Allow document modification.
+  final bool modify;
+
+  /// Allow content copying.
+  final bool copy;
+
+  /// Allow annotations.
+  final bool annotate;
+
+  /// Allow form filling.
+  final bool fillForms;
+
+  /// Allow text extraction for accessibility.
+  final bool accessibility;
+
+  /// Allow page assembly (insert, delete, rotate).
+  final bool assemble;
+
+  /// Encodes the permission flags as a signed 32-bit int per the PDF spec.
   int toBits() {
     // Build as signed 32-bit int. The reserved bits (0xFFFFF0C0) set the
     // upper bits per PDF spec. Using .toSigned(32) ensures the value fits
@@ -80,26 +121,39 @@ sealed class PdfEncryption {
   }) = PdfEncryptionConfig;
 }
 
+/// Keep existing encryption unchanged.
 class PdfEncryptionKeep extends PdfEncryption {
+  /// Creates a keep-encryption intent.
   const PdfEncryptionKeep();
 }
 
+/// Remove all encryption.
 class PdfEncryptionRemove extends PdfEncryption {
+  /// Creates a remove-encryption intent.
   const PdfEncryptionRemove();
 }
 
+/// Apply new encryption with explicit parameters.
 class PdfEncryptionConfig extends PdfEncryption {
-  final String ownerPassword;
-  final String userPassword;
-  final PdfEncryptionAlgorithm algorithm;
-  final PdfPermissions permissions;
-
+  /// Creates an encryption configuration.
   const PdfEncryptionConfig({
     required this.ownerPassword,
     this.userPassword = '',
     this.algorithm = PdfEncryptionAlgorithm.aes256,
     this.permissions = const PdfPermissions.all(),
   });
+
+  /// Owner password (full access).
+  final String ownerPassword;
+
+  /// User password (restricted by [permissions]).
+  final String userPassword;
+
+  /// Encryption algorithm to use.
+  final PdfEncryptionAlgorithm algorithm;
+
+  /// Access permissions for the user password.
+  final PdfPermissions permissions;
 }
 
 /// Save strategy — sealed so invalid combos are unrepresentable.
@@ -120,30 +174,34 @@ sealed class PdfSaveOptions {
   const factory PdfSaveOptions.incremental() = PdfSaveIncremental;
 }
 
+/// Full-rewrite save with compression, GC, and encryption control.
 class PdfSaveFullRewrite extends PdfSaveOptions {
-  final bool compress;
-  final bool garbageCollect;
-  final PdfEncryption encryption;
-
+  /// Creates full-rewrite save options.
   const PdfSaveFullRewrite({
     this.compress = true,
     this.garbageCollect = true,
     this.encryption = const PdfEncryption.keep(),
   });
+
+  /// Whether to compress streams.
+  final bool compress;
+
+  /// Whether to remove unreferenced objects.
+  final bool garbageCollect;
+
+  /// Encryption intent for the output.
+  final PdfEncryption encryption;
 }
 
+/// Incremental save — append-only, preserves signatures.
 class PdfSaveIncremental extends PdfSaveOptions {
+  /// Creates incremental save options.
   const PdfSaveIncremental();
 }
 
 /// Watermark text style.
 class PdfWatermarkStyle {
-  final double fontSize;
-  final String? fontName;
-  final double opacity;
-  final double rotation;
-  final PdfColor color;
-
+  /// Creates a watermark text style.
   const PdfWatermarkStyle({
     this.fontSize = 48,
     this.fontName,
@@ -151,6 +209,21 @@ class PdfWatermarkStyle {
     this.rotation = 45,
     this.color = PdfColor.gray,
   });
+
+  /// Font size in points.
+  final double fontSize;
+
+  /// Optional font name. Uses a default sans-serif if null.
+  final String? fontName;
+
+  /// Opacity from 0.0 (invisible) to 1.0 (opaque).
+  final double opacity;
+
+  /// Rotation angle in degrees.
+  final double rotation;
+
+  /// Text color.
+  final PdfColor color;
 }
 
 /// Where to place the watermark on the page.
@@ -187,33 +260,74 @@ sealed class PdfWatermarkPosition {
   }) = PdfWatermarkExact;
 }
 
+/// Centered watermark position.
 class PdfWatermarkCenter extends PdfWatermarkPosition {
+  /// Creates a center-positioned watermark.
   const PdfWatermarkCenter();
 }
 
+/// Corner-anchored watermark position.
 class PdfWatermarkCorner extends PdfWatermarkPosition {
-  final PdfCorner corner;
-  final double marginX;
-  final double marginY;
+  /// Creates a corner-anchored watermark.
   const PdfWatermarkCorner(this.corner, {this.marginX = 20, this.marginY = 20});
+
+  /// Which corner to anchor to.
+  final PdfCorner corner;
+
+  /// Horizontal margin from the corner in points.
+  final double marginX;
+
+  /// Vertical margin from the corner in points.
+  final double marginY;
 }
 
+/// Tiled watermark position.
 class PdfWatermarkTiled extends PdfWatermarkPosition {
-  final int columns;
-  final int rows;
+  /// Creates a tiled watermark.
   const PdfWatermarkTiled({this.columns = 3, this.rows = 4});
+
+  /// Number of columns in the tile grid.
+  final int columns;
+
+  /// Number of rows in the tile grid.
+  final int rows;
 }
 
+/// Exact-coordinate watermark position.
 class PdfWatermarkExact extends PdfWatermarkPosition {
-  final double x, y, width, height;
+  /// Creates an exact-position watermark.
   const PdfWatermarkExact({
     required this.x, required this.y,
     required this.width, required this.height,
   });
+
+  /// X-coordinate in points.
+  final double x;
+
+  /// Y-coordinate in points.
+  final double y;
+
+  /// Width in points.
+  final double width;
+
+  /// Height in points.
+  final double height;
 }
 
 /// Which corner to anchor a watermark.
-enum PdfCorner { topLeft, topRight, bottomLeft, bottomRight }
+enum PdfCorner {
+  /// Top-left corner.
+  topLeft,
+
+  /// Top-right corner.
+  topRight,
+
+  /// Bottom-left corner.
+  bottomLeft,
+
+  /// Bottom-right corner.
+  bottomRight,
+}
 
 /// Whether the watermark renders above or below page content.
 enum PdfWatermarkLayer {
@@ -225,13 +339,19 @@ enum PdfWatermarkLayer {
 
 /// Output size constraint for rendering.
 class PdfRenderSize {
-  final int maxWidth;
-  final int maxHeight;
+  /// Creates a render size constraint.
   const PdfRenderSize({required this.maxWidth, required this.maxHeight});
 
+  /// Creates a square thumbnail constraint.
   const PdfRenderSize.thumbnail(int size)
       : maxWidth = size,
         maxHeight = size;
+
+  /// Maximum output width in pixels.
+  final int maxWidth;
+
+  /// Maximum output height in pixels.
+  final int maxHeight;
 }
 
 /// Signing credentials — PKCS#12 bundle or separate PEM cert + key.
@@ -247,57 +367,95 @@ sealed class PdfSigningCredentials {
       String certPem, String keyPem) = PdfPemCredentials;
 }
 
+/// PKCS#12 signing credentials.
 class PdfPkcs12Credentials extends PdfSigningCredentials {
-  final Uint8List data;
-  final String password;
+  /// Creates PKCS#12 credentials.
   const PdfPkcs12Credentials(this.data, this.password);
+
+  /// The raw .p12 / .pfx bytes.
+  final Uint8List data;
+
+  /// Password to unlock the bundle.
+  final String password;
 }
 
+/// PEM-encoded signing credentials.
 class PdfPemCredentials extends PdfSigningCredentials {
-  final String certPem;
-  final String keyPem;
+  /// Creates PEM credentials.
   const PdfPemCredentials(this.certPem, this.keyPem);
+
+  /// PEM-encoded certificate.
+  final String certPem;
+
+  /// PEM-encoded private key.
+  final String keyPem;
 }
 
 /// Validation result.
 class PdfValidationResult {
-  final bool compliant;
-  final int errors;
-  final int warnings;
+  /// Creates a validation result.
   const PdfValidationResult({
     required this.compliant,
     required this.errors,
     required this.warnings,
   });
+
+  /// Whether the document is compliant with the checked standard.
+  final bool compliant;
+
+  /// Number of validation errors.
+  final int errors;
+
+  /// Number of validation warnings.
+  final int warnings;
 }
 
 /// A bookmark-based split plan entry.
 class PdfBookmarkSplit {
-  final String title;
-  final int startPage;
-  final int endPage;
+  /// Creates a bookmark split entry.
   const PdfBookmarkSplit({
     required this.title,
     required this.startPage,
     required this.endPage,
   });
+
+  /// Bookmark title.
+  final String title;
+
+  /// Start page (inclusive).
+  final int startPage;
+
+  /// End page (exclusive).
+  final int endPage;
 }
 
 /// Page classification result.
 class PdfPageClassification {
-  final String type;
-  final double confidence;
+  /// Creates a page classification result.
   const PdfPageClassification({required this.type, required this.confidence});
+
+  /// Detected page type (e.g. "text", "image", "form").
+  final String type;
+
+  /// Confidence score from 0.0 to 1.0.
+  final double confidence;
 }
 
 /// Document classification result.
 class PdfDocumentClassification {
-  final String type;
-  final double confidence;
-  final int pageCount;
+  /// Creates a document classification result.
   const PdfDocumentClassification({
     required this.type,
     required this.confidence,
     required this.pageCount,
   });
+
+  /// Detected document type.
+  final String type;
+
+  /// Confidence score from 0.0 to 1.0.
+  final double confidence;
+
+  /// Number of pages analyzed.
+  final int pageCount;
 }

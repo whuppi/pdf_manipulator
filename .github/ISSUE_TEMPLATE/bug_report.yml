@@ -1,0 +1,57 @@
+name: Bug report
+description: Something isn't working
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      placeholder: Describe the bug. Include error messages or stack traces if you have them.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Call `pdf.open(...)` with ...
+        2. Then call `doc.extract(...)` ...
+        3. See error ...
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - label: Android
+        - label: iOS
+        - label: macOS
+        - label: Linux
+        - label: Windows
+        - label: Web
+
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      placeholder: "1.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: flutter
+    attributes:
+      label: Flutter version
+      placeholder: "3.44.0"
+
+  - type: dropdown
+    id: regression
+    attributes:
+      label: Did this work before?
+      options:
+        - Yes, it broke in a recent version
+        - No, it never worked for me
+        - Not sure

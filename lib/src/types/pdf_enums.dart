@@ -2,8 +2,8 @@
 
 /// I/O mode — how the engine reads source bytes and writes output.
 ///
-/// Detected automatically on first operation (or via [Pdf.ensureInitialized]).
-/// User can force a web mode via [PdfConfig.webIoMode].
+/// Detected automatically on first operation.
+/// User can force a web mode via `PdfConfig.webIoMode`.
 enum PdfIoMode {
   /// Native FFI via dart:ffi. macOS, iOS, Android, Linux, Windows.
   native,
@@ -28,7 +28,7 @@ enum PdfIoMode {
   /// If you tested locally with COOP/COEP headers (getting Atomics) or
   /// on Chrome 137+ (getting JSPI) and deploy without headers on an
   /// older browser, users silently fall back to OPFS. Use
-  /// [Pdf.ensureInitialized] to detect the mode and warn if needed.
+  /// `ensureInitialized` to detect the mode and warn if needed.
   opfs,
 }
 
@@ -59,22 +59,58 @@ enum PdfExtractionFormat {
 }
 
 /// Office document format for conversion.
-enum PdfDocumentFormat { docx, pptx, xlsx }
+enum PdfDocumentFormat {
+  /// Microsoft Word (.docx).
+  docx,
+
+  /// Microsoft PowerPoint (.pptx).
+  pptx,
+
+  /// Microsoft Excel (.xlsx).
+  xlsx,
+}
 
 /// Standard stamp annotation type.
 enum PdfStampType {
+  /// Approved.
   approved,
+
+  /// Experimental.
   experimental,
+
+  /// Not approved.
   notApproved,
+
+  /// As-is.
   asIs,
+
+  /// Expired.
   expired,
+
+  /// Not for public release.
   notForPublicRelease,
+
+  /// Confidential.
   confidential,
+
+  /// Final.
   final_,
+
+  /// Sold.
   sold,
+
+  /// Departmental.
   departmental,
+
+  /// For comment.
   forComment,
+
+  /// Top secret.
   topSecret,
+
+  /// Draft.
   draft,
+
+  /// For public release.
   forPublicRelease,
 }

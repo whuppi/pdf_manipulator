@@ -158,25 +158,25 @@ void _addField(BytesBuilder buf, String key, Object value) {
 
 void _addValue(BytesBuilder buf, Object value) {
   switch (value) {
-    case int v:
+    case final int v:
       buf.addByte(1);
       buf.add((ByteData(4)..setInt32(0, v, Endian.little)).buffer.asUint8List());
-    case double v:
+    case final double v:
       buf.addByte(3);
       buf.add((ByteData(8)..setFloat64(0, v, Endian.little)).buffer.asUint8List());
-    case bool v:
+    case final bool v:
       buf.addByte(4);
       buf.addByte(v ? 1 : 0);
-    case String v:
+    case final String v:
       buf.addByte(5);
       final sb = Uint8List.fromList(v.codeUnits);
       buf.add((ByteData(4)..setUint32(0, sb.length, Endian.little)).buffer.asUint8List());
       buf.add(sb);
-    case Uint8List v:
+    case final Uint8List v:
       buf.addByte(6);
       buf.add((ByteData(4)..setUint32(0, v.length, Endian.little)).buffer.asUint8List());
       buf.add(v);
-    case List<Map<String, Object?>> v:
+    case final List<Map<String, Object?>> v:
       buf.addByte(10);
       buf.add((ByteData(4)..setUint32(0, v.length, Endian.little)).buffer.asUint8List());
       for (final m in v) {

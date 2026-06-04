@@ -190,7 +190,7 @@ git add web_assets/
 
 ## S6 — Release
 
-### The one rule
+### The rules
 
 **NEVER push directly to `dev` or `prod`. NEVER bypass PR merge
 requirements.** Admin bypass exists as a GitHub safety valve — not a
@@ -202,6 +202,18 @@ no "just this one quick fix," no cherry-picks to protected branches.
 1. Is the current branch part of an open PR? → push to that branch.
 2. No open PR? Is the change already on `origin/dev`? → done.
 3. Neither? → create a new PR. No exceptions.
+
+**NEVER run destructive git commands without explicit permission:**
+
+- `git reset --hard` — destroys uncommitted work permanently
+- `git clean -fd` — deletes untracked files permanently
+- `git stash drop` — loses stashed work permanently
+- `gh pr close --delete-branch` — deletes remote branch
+
+When stuck with conflicts or messy branches: `git stash`, switch
+branches, `git stash pop`. If pop conflicts, resolve — don't nuke.
+If a branch exists locally but not on remote, `git push` it first
+before any cleanup. Work is sacred. Never destroy it to "start clean."
 
 ### Changelog
 

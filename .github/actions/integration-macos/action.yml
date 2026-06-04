@@ -6,5 +6,11 @@ runs:
   steps:
     - uses: ./.github/actions/setup-fvm
     - uses: ./.github/actions/setup-rust
+
+    - uses: irgaly/xcode-cache@v1
+      with:
+        key: xcode-macos-${{ env.SUBMODULE_PDF_OXIDE }}
+        restore-keys: xcode-macos-
+
     - shell: bash
       run: make test-example-macos

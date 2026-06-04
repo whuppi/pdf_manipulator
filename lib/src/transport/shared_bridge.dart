@@ -25,6 +25,7 @@ import 'package:pdf_manipulator/src/transport/protocol/op.dart';
 /// the ~200 bytes of op arguments — PDF data travels through the
 /// transport's dedicated I/O channels.
 class SharedBridge extends PdfBridge {
+  /// Creates a bridge backed by [_transport].
   SharedBridge(this._transport);
   final PdfTransport _transport;
 

@@ -1,7 +1,14 @@
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 
-/// Configuration for a [Pdf] instance.
+/// Configuration for a PDF engine instance.
 class PdfConfig {
+  /// Creates a PDF configuration.
+  const PdfConfig({
+    this.webCoordinatorUrl,
+    this.webWorkerUrl,
+    this.webIoMode,
+  });
+
   /// Custom coordinator JS URL for web. Ignored on native.
   final String? webCoordinatorUrl;
 
@@ -15,10 +22,4 @@ class PdfConfig {
   ///   2. [PdfIoMode.atomics] — if `SharedArrayBuffer` is available
   ///   3. [PdfIoMode.opfs] — universal fallback
   final PdfIoMode? webIoMode;
-
-  const PdfConfig({
-    this.webCoordinatorUrl,
-    this.webWorkerUrl,
-    this.webIoMode,
-  });
 }

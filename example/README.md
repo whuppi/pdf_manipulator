@@ -11,7 +11,7 @@ cd example
 fvm flutter run
 
 # web (setup copies JS + WASM into web/pdf_manipulator/)
-dart run pdf_manipulator:setup --force
+flutter pub run pdf_manipulator:setup --force
 fvm flutter run -d chrome
 ```
 

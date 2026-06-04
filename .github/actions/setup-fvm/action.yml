@@ -13,6 +13,19 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Cache pub packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.pub-cache
+        key: pub-${{ runner.os }}-${{ hashFiles('pubspec.yaml', 'example/pubspec.yaml') }}
+        restore-keys: pub-${{ runner.os }}-
+
+    - name: Cache Flutter SDK (FVM)
+      uses: actions/cache@v4
+      with:
+        path: ~/.fvm_cache
+        key: fvm-sdk-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.fvmrc') }}
+
     - name: Install FVM + project SDK
       shell: bash
       env:
@@ -75,7 +88,7 @@ runs:
 
         # Also add fvm's Flutter SDK to PATH so fvm dart/fvm flutter work
         # (fvm install puts it under FVM_CACHE_PATH)
-        FVM_CACHE="$RUNNER_TEMP/fvm_cache"
+        FVM_CACHE="$HOME/.fvm_cache"
         export FVM_CACHE_PATH="$FVM_CACHE"
         echo "FVM_CACHE_PATH=$FVM_CACHE" >> $GITHUB_ENV
 

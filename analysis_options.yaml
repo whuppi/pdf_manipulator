@@ -14,3 +14,30 @@ linter:
     # Requires Dart 3.12+ syntax but SDK constraint is >=3.10.0.
     # Enable when minimum SDK is bumped to 3.12.
     use_null_aware_elements: false
+
+    # ── Documentation ──────────────────────────────────────────────────
+    public_member_api_docs: true
+
+    # ── Bug prevention ─────────────────────────────────────────────────
+    cancel_subscriptions: true
+    close_sinks: true
+    unawaited_futures: true
+    avoid_void_async: true
+    discarded_futures: true
+    no_adjacent_strings_in_list: true
+    test_types_in_equals: true
+    throw_in_finally: true
+    unnecessary_statements: true
+
+    # ── API quality ────────────────────────────────────────────────────
+    comment_references: true
+    prefer_final_locals: true
+    sort_constructors_first: true
+    use_string_buffers: true
+    avoid_unused_constructor_parameters: true
+    prefer_asserts_in_initializer_lists: true
+
+    # ── Safety ─────────────────────────────────────────────────────────
+    avoid_type_to_string: true
+    literal_only_boolean_expressions: true
+    prefer_void_to_null: true

@@ -15,12 +15,12 @@ import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:test/test.dart';
 
 class StreamingGuardSink implements DataSink {
+  StreamingGuardSink({this.maxChunkSize = 256 * 1024});
+
   final int maxChunkSize;
   int totalBytes = 0;
   int maxSingleWrite = 0;
   int writeCount = 0;
-
-  StreamingGuardSink({this.maxChunkSize = 256 * 1024});
 
   @override
   void write(Uint8List chunk) {
@@ -39,12 +39,12 @@ class StreamingGuardSink implements DataSink {
 }
 
 class StreamingGuardSource implements DataSource {
+  StreamingGuardSource(this._data);
+
   final Uint8List _data;
   int totalBytesRead = 0;
   int readCount = 0;
   int maxSingleRead = 0;
-
-  StreamingGuardSource(this._data);
 
   @override
   int get length => _data.length;
