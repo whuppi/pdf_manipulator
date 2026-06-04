@@ -140,15 +140,8 @@ test-example-device:
 	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart -d $(DEVICE)
 
 # All 3 web modes via flutter drive.
-# SharedArrayBuffer enabled via CHROME_EXECUTABLE wrapper (see tool/chrome_with_sab.sh).
-# Shared helper: run flutter drive with a given mode.
-# CHROME_EXECUTABLE wrapper adds --enable-features=SharedArrayBuffer to the
-# app Chrome. This works around flutter drive's WebDriverService not forwarding
-# --web-browser-flag to the app Chrome (it only goes to chromedriver's session).
-CHROME_SAB := $(CURDIR)/tool/chrome_with_sab.sh
-
 define run_example_web
-	@./tool/run_web_test.sh $(2) $(CHROME_SAB) $(FLUTTER)
+	@./tool/run_web_test.sh $(2) $(FLUTTER)
 endef
 
 define setup_example_web

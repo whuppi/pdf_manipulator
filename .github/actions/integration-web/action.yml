@@ -5,17 +5,12 @@ runs:
   using: composite
   steps:
     - uses: ./.github/actions/setup-web-testing
-
-    # SSH opens BEFORE tests — watch live as they run
-    - name: Debug SSH
-      uses: ./.github/actions/debug-ssh
-
     - name: "Web JSPI"
       shell: bash
-      run: xvfb-run make test-example-web-jspi
+      run: make test-example-web-jspi
     - name: "Web Atomics"
       shell: bash
-      run: xvfb-run make test-example-web-atomics
+      run: make test-example-web-atomics
     - name: "Web OPFS"
       shell: bash
-      run: xvfb-run make test-example-web-opfs
+      run: make test-example-web-opfs

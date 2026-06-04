@@ -23,6 +23,7 @@ import '../stress/pdf_sugar_stress_test.dart';
 import '../stress/pdf_standalone_stress_test.dart';
 import '../stress/pdf_builder_stress_test.dart';
 import '../stress/pdf_instance_stress_test.dart';
+import '../native/native_finalizer_test.dart';
 
 void main() {
   late Pdf pdf;
@@ -55,4 +56,7 @@ void main() {
   registerStandaloneStressTests(() => pdf);
   registerBuilderStressTests(() => pdf);
   registerInstanceStressTests(() => Pdf());
+
+  // Native-only platform tests
+  registerNativeFinalizerTests();
 }

@@ -55,10 +55,6 @@ runs:
         echo "Chrome: $(google-chrome-stable --version)"
         echo "ChromeDriver: $(chromedriver --version)"
 
-        WRAPPER="$(cd "$GITHUB_WORKSPACE" && pwd)/tool/chrome_with_sab.sh"
-        echo "CHROME_PATH=$CHROME_BIN" >> $GITHUB_ENV
-        echo "CHROME_EXECUTABLE=$WRAPPER" >> $GITHUB_ENV
-
     # ── WASM toolchain + build ──
     - shell: bash
       run: |
