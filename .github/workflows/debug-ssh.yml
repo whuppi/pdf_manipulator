@@ -1,14 +1,5 @@
 # ────────────────────────────────────────────────────────────────────
-# debug-ssh.yml — Raw SSH into CI runner. No tmate, no tmux.
-#
-# Starts sshd with key-only auth (your GitHub SSH keys), creates a
-# reverse tunnel via serveo.net, prints connection string.
-#
-# Security: key-only auth, no password, no root login. Public keys
-# fetched from GitHub (already public). Tunnel is SSH-encrypted.
-#
-# Usage:
-#   gh workflow run debug-ssh.yml
+# debug-ssh.yml — Raw SSH into CI runner via bore tunnel.
 # ────────────────────────────────────────────────────────────────────
 
 name: Debug SSH
@@ -37,62 +28,37 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Start SSH server and tunnel
+      - name: Start sshd + bore tunnel
         run: |
           set -euo pipefail
 
-          # ── sshd with key-only auth ─────────────────────────────
           sudo apt-get update -qq && sudo apt-get install -y -qq openssh-server
-
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           curl -sS https://github.com/chaudharydeepanshu.keys >> ~/.ssh/authorized_keys
           chmod 600 ~/.ssh/authorized_keys
 
           sudo mkdir -p /run/sshd
-          cat <<CONF | sudo tee /etc/ssh/sshd_config.d/debug.conf >/dev/null
-          Port 2222
-          PasswordAuthentication no
-          PubkeyAuthentication yes
-          PermitRootLogin no
-          CONF
+          echo -e "Port 2222\nPasswordAuthentication no\nPubkeyAuthentication yes\nPermitRootLogin no" \
+            | sudo tee /etc/ssh/sshd_config.d/debug.conf >/dev/null
           sudo /usr/sbin/sshd -p 2222
-          echo "sshd running on port 2222"
 
-          # ── Reverse tunnel via bore (static binary, no signup) ──
           curl -sSL "https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz" \
-            -o /tmp/bore.tar.gz
-          cd /tmp && tar xzf bore.tar.gz && chmod +x bore && cd -
+            | tar xz -C /tmp
+          chmod +x /tmp/bore
 
           /tmp/bore local 2222 --to bore.pub > /tmp/bore.log 2>&1 &
-          TUNNEL_PID=$!
           sleep 5
 
-          # bore prints: "listening at bore.pub:<PORT>"
-          BORE_PORT=$(grep -oP 'bore\.pub:\K\d+' /tmp/bore.log | head -1)
-
-          echo ""
-          echo "============================================"
-          echo "  CONNECT WITH:"
-          echo ""
+          BORE_PORT=$(grep -oP 'bore\.pub:\K\d+' /tmp/bore.log | head -1 || true)
           if [ -n "$BORE_PORT" ]; then
-            echo "  ssh -p $BORE_PORT -o StrictHostKeyChecking=no runner@bore.pub"
+            echo "::notice::SSH ready: ssh -p $BORE_PORT -o StrictHostKeyChecking=no runner@bore.pub"
           else
-            echo "  (bore failed — check log below)"
+            echo "::error::bore tunnel failed"
             cat /tmp/bore.log
+            exit 1
           fi
-          echo ""
-          echo "  Key-only auth — uses your GitHub SSH keys"
-          echo "============================================"
-          echo ""
 
-          # Keep alive
-          echo "Touch /tmp/stop to end session early"
-          while [ ! -f /tmp/stop ]; do
-            if ! kill -0 $TUNNEL_PID 2>/dev/null; then
-              echo "Tunnel died, restarting..."
-              /tmp/bore local 2222 --to bore.pub > /tmp/bore.log 2>&1 &
-              TUNNEL_PID=$!
-              sleep 5
-            fi
-            sleep 10
-          done
+      - name: Keep alive (touch /tmp/stop to end)
+        run: |
+          echo "Session open for 5 hours. Touch /tmp/stop to end early."
+          while [ ! -f /tmp/stop ]; do sleep 10; done
