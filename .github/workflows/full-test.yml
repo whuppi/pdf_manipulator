@@ -63,7 +63,7 @@ jobs:
     name: "pkg: Windows"
     if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
     runs-on: windows-latest
-    timeout-minutes: 300
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
