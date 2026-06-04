@@ -1,8 +1,11 @@
 # ────────────────────────────────────────────────────────────────────
-# debug-ssh.yml — Raw SSH into CI runner via reverse SSH tunnel.
+# debug-ssh.yml — Raw SSH into CI runner. No tmate, no tmux.
 #
-# Starts sshd, creates a reverse tunnel through a relay, prints
-# connection string. Raw shell, no tmux, no tmate.
+# Starts sshd with key-only auth (your GitHub SSH keys), creates a
+# reverse tunnel via serveo.net, prints connection string.
+#
+# Security: key-only auth, no password, no root login. Public keys
+# fetched from GitHub (already public). Tunnel is SSH-encrypted.
 #
 # Usage:
 #   gh workflow run debug-ssh.yml
@@ -34,65 +37,64 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Setup SSH server and tunnel
+      - name: Start SSH server and tunnel
         run: |
           set -euo pipefail
 
-          # ── Install and configure sshd ──────────────────────────
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq openssh-server
+          # ── sshd with key-only auth ─────────────────────────────
+          sudo apt-get update -qq && sudo apt-get install -y -qq openssh-server
 
-          # Add DC's public SSH key for authentication
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
           curl -sS https://github.com/chaudharydeepanshu.keys >> ~/.ssh/authorized_keys
           chmod 600 ~/.ssh/authorized_keys
-          echo "Authorized keys:"
-          cat ~/.ssh/authorized_keys
 
-          # Configure sshd
           sudo mkdir -p /run/sshd
-          sudo tee /etc/ssh/sshd_config.d/debug.conf > /dev/null <<SSHEOF
+          cat <<CONF | sudo tee /etc/ssh/sshd_config.d/debug.conf >/dev/null
           Port 2222
           PasswordAuthentication no
           PubkeyAuthentication yes
           PermitRootLogin no
-          AllowTcpForwarding yes
-          X11Forwarding no
-          SSHEOF
-
+          CONF
           sudo /usr/sbin/sshd -p 2222
           echo "sshd running on port 2222"
 
-          # ── Create reverse tunnel via bore.pub (free, no signup) ─
-          # bore.pub is a free TCP tunnel relay — like ngrok but no account needed
-          curl -sSL https://github.com/ekzhang/bore/releases/latest/download/bore-v0.5.2-x86_64-unknown-linux-musl.tar.gz | tar xz
-          chmod +x bore
+          # ── Reverse tunnel via serveo.net ────────────────────────
+          # No signup, no binary download. Pure SSH reverse tunnel.
+          ssh-keygen -t ed25519 -f ~/.ssh/tunnel_key -N "" -q
+          ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 \
+            -i ~/.ssh/tunnel_key \
+            -R 0:localhost:2222 serveo.net 2>&1 | tee /tmp/serveo.log &
+          TUNNEL_PID=$!
 
-          # Start bore tunnel in background — forwards remote port to local 2222
-          ./bore local 2222 --to bore.pub &
-          BORE_PID=$!
-          sleep 3
-
-          # bore prints the assigned port to stdout
-          echo ""
-          echo "============================================"
-          echo "  SSH INTO THIS RUNNER:"
-          echo ""
-          echo "  ssh -p <PORT> runner@bore.pub"
-          echo ""
-          echo "  (check the bore output above for the port)"
-          echo "============================================"
-          echo ""
-
-          # Keep alive for 5 hours
-          echo "Session will stay open for 5 hours. To end early: touch /tmp/stop"
-          for i in $(seq 1 1800); do
-            if [ -f /tmp/stop ]; then
-              echo "Stop file found, ending session"
+          # Wait for serveo to print the forwarding line
+          for i in $(seq 1 30); do
+            if grep -q 'Forwarding' /tmp/serveo.log 2>/dev/null; then
               break
+            fi
+            sleep 2
+          done
+
+          echo ""
+          echo "============================================"
+          echo "  CONNECT WITH:"
+          echo ""
+          grep 'Forwarding' /tmp/serveo.log || echo "  (check Actions log for serveo output)"
+          echo ""
+          echo "  Key-only auth — uses your GitHub SSH keys"
+          echo "  Username: runner"
+          echo "============================================"
+          echo ""
+
+          # Keep alive
+          echo "Touch /tmp/stop to end session early"
+          while [ ! -f /tmp/stop ]; do
+            if ! kill -0 $TUNNEL_PID 2>/dev/null; then
+              echo "Tunnel died, restarting..."
+              ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 \
+                -i ~/.ssh/tunnel_key \
+                -R 0:localhost:2222 serveo.net 2>&1 | tee /tmp/serveo.log &
+              TUNNEL_PID=$!
+              sleep 5
             fi
             sleep 10
           done
-
-          kill $BORE_PID 2>/dev/null || true
