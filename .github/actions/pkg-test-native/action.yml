@@ -6,6 +6,7 @@ runs:
   steps:
     - uses: ./.github/actions/setup-fvm
     - uses: ./.github/actions/setup-rust
+    - uses: ./.github/actions/debug-ssh
     - shell: bash
       run: make test-unit
     - shell: bash

@@ -47,7 +47,7 @@ cd example
     --browser-name=chrome \
     --driver-port=4444 \
     --web-browser-flag=--enable-features=SharedArrayBuffer \
-    --web-browser-flag=--no-sandbox &>"$LOG" &
+    --web-browser-flag=--no-sandbox 2>&1 | tee "$LOG" &
 DRIVE_PID=$!
 
 
