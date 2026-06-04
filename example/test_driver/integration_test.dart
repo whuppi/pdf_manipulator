@@ -32,7 +32,7 @@ Future<void> main() async {
           final qStart = raw.indexOf('"');
           final qEnd = raw.lastIndexOf('"');
           if (qStart != -1 && qEnd > qStart) {
-            print(raw.substring(qStart + 1, qEnd));
+            stdout.writeln(raw.substring(qStart + 1, qEnd));
           }
         }
       } catch (_) {}
@@ -49,10 +49,10 @@ Future<void> main() async {
   await driver.close();
 
   if (response.allTestsPassed) {
-    print('All tests passed.');
+    stdout.writeln('All tests passed.');
     exit(0);
   } else {
-    print('Failure Details:\n${response.formattedFailureDetails}');
+    stderr.writeln('Failure Details:\n${response.formattedFailureDetails}');
     exit(1);
   }
 }
