@@ -240,6 +240,21 @@ class NativeTransport implements PdfTransport {
     }
     _heldSourceServers.clear();
 
+    // Send shutdown to coordinator — cancels buffers (wakes blocked
+    // Rust threads), calls bridgeShutdown (joins threads), then closes
+    // NativeCallables. Must complete before killing the isolate.
+    if (_workerPort != null && _ready) {
+      final id = _nextId++;
+      final completer = Completer<Uint8List>();
+      _pending[id] = completer;
+      _workerPort!.send([id, 'shutdown']);
+      try {
+        await completer.future.timeout(Duration(seconds: 5));
+      } catch (_) {
+        // Timeout — kill anyway below
+      }
+    }
+
     _pending.clear();
     _pendingResourceIds.clear();
     _pendingStreams.clear();

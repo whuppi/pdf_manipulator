@@ -68,11 +68,22 @@ void coordinatorEntryPoint(SendPort mainPort) {
     final tag = message[1] as String;
 
     if (tag == 'shutdown') {
+      // 1. Cancel all held source buffers — wakes blocked Rust threads
+      //    so they bail before calling notify_fn again.
       for (final res in _heldResources.values) {
-        res.dispose();
+        res.readBuf.setFlags(flagCancelled);
+        bridge.bridgeSignalRead(res.readBuf.rawPtr);
+      }
+      // 2. Shut down Rust engine — sets instance cancel flag, drops
+      //    thread pool (joins threads — they exit fast now).
+      bridge.bridgeShutdown(instance);
+      // 3. Now safe to close NativeCallables — no thread will call them.
+      for (final res in _heldResources.values) {
+        res.callable.close();
+        bridge.bridgeDestroyReadBuffer(res.readBuf.rawPtr);
+        calloc.free(res.readBuf.ptr);
       }
       _heldResources.clear();
-      bridge.bridgeShutdown(instance);
       responsePort?.send([message[0] as int, 'result', Uint8List(0)]);
       return;
     }
