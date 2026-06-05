@@ -55,7 +55,7 @@ MODE="${1:---help}"
 TAG="${2:-}"
 VERSION="${TAG:+${TAG#v}}"
 
-REPO="${GITHUB_REPOSITORY:-chaudharydeepanshu/pdf_manipulator}"
+REPO="${GITHUB_REPOSITORY:-whuppi/pdf_manipulator}"
 REPO_URL="https://github.com/$REPO"
 PKG_NAME="pdf_manipulator"
 
