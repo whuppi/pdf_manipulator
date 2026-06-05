@@ -35,8 +35,9 @@ jobs:
   # dev only reacts to CHANGELOG.pre.md changes, prod to CHANGELOG.md.
   # Uses git diff across the full push range (not head_commit.modified,
   # which misses force-pushes and ff-merges). Falls back to should_run=true
-  # when diff fails (new branch, orphaned before-SHA) — a wasted run is
-  # cheap; a missed release is not.
+  # when diff fails (new branch, orphaned before-SHA, or workflow_dispatch
+  # where github.event.before is empty) — a wasted run is cheap; a missed
+  # release is not.
   gate:
     name: Release gate
     runs-on: ubuntu-latest
