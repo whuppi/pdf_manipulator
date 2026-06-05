@@ -1,8 +1,7 @@
-# Release pipeline: stamped tag → compile → upload → approve → publish.
+# Release pipeline: gate → discover → compile → upload → publish.
 #
-# The tag is an orphan commit with stamped version + raw vendor source
-# (no submodule pointers). Compile jobs and git-tag consumers get a
-# self-contained tree. pub.dev tarball also ships vendor source.
+# All release logic lives in tool/release.sh. This workflow only
+# handles job orchestration (checkout, compile, upload, publish).
 #
 # Automatic on changelog push. Manual via workflow_dispatch.
 # Publish job requires environment approval (human gate before pub.dev).
@@ -31,13 +30,7 @@ env:
   COMPILE_OUTPUT_DIR: out
 
 jobs:
-  # ── Gate — should this push trigger a release? ─────────────────────
-  # dev only reacts to CHANGELOG.pre.md changes, prod to CHANGELOG.md.
-  # Uses git diff across the full push range (not head_commit.modified,
-  # which misses force-pushes and ff-merges). Falls back to should_run=true
-  # when diff fails (new branch, orphaned before-SHA, or workflow_dispatch
-  # where github.event.before is empty) — a wasted run is cheap; a missed
-  # release is not.
+  # ── Gate ─────────────────────────────────────────────────────────
   gate:
     name: Release gate
     runs-on: ubuntu-latest
@@ -49,41 +42,15 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ inputs.branch || github.ref_name }}
-
       - name: Check changelog relevance
         id: check
         env:
           BRANCH: ${{ inputs.branch || github.ref_name }}
           BEFORE: ${{ github.event.before }}
           AFTER: ${{ github.sha }}
-        run: |
-          if [[ "$BRANCH" == "prod" ]]; then
-            TARGET_FILE="CHANGELOG.md"
-          else
-            TARGET_FILE="CHANGELOG.pre.md"
-          fi
+        run: bash tool/release.sh --gate
 
-          CHANGED_FILES=$(git diff --name-only "$BEFORE" "$AFTER" 2>/dev/null || echo "$TARGET_FILE")
-
-          if echo "$CHANGED_FILES" | grep -qx "$TARGET_FILE"; then
-            VERSION=$(grep -oP '^## \K\S+' "$TARGET_FILE" | head -1 || true)
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-            echo "version=${VERSION:-unknown}" >> "$GITHUB_OUTPUT"
-            echo "Gate: $TARGET_FILE changed, version=$VERSION"
-          else
-            echo "should_run=false" >> "$GITHUB_OUTPUT"
-            echo "version=" >> "$GITHUB_OUTPUT"
-            echo "Gate: $TARGET_FILE not in changeset, skipping"
-          fi
-
-  # ── Discover version + create stamped tag ───────────────────────────
-  # Reads changelog → finds latest version → creates an orphan commit
-  # with stamped version + raw vendor source (no submodule pointers) →
-  # tags that commit → creates GitHub Release with notes.
-  # All downstream jobs checkout the tag and get a self-contained tree.
-  #
-  # Concurrency is version-level: same version pushed twice → latest
-  # cancels the stale run. Different versions → both run independently.
+  # ── Discover version + create release ────────────────────────────
   discover:
     name: Discover versions
     needs: gate
@@ -102,88 +69,14 @@ jobs:
           fetch-depth: 0
           ref: ${{ inputs.branch || github.ref_name }}
           submodules: recursive
-
       - name: Find + create release
         id: find
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BRANCH: ${{ inputs.branch || github.ref_name }}
-        run: |
-          if [[ "$BRANCH" == "prod" ]]; then
-            FILE="CHANGELOG.md"
-          else
-            FILE="CHANGELOG.pre.md"
-          fi
+        run: bash tool/release.sh --discover
 
-          if [ ! -f "$FILE" ]; then
-            echo "has_release=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          VERSION=$(grep -oP '^## \K\S+' "$FILE" | head -1 || true)
-          if [ -z "$VERSION" ]; then
-            echo "has_release=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          TAG="v$VERSION"
-          IS_PRE=false
-          [[ "$VERSION" == *-* ]] && IS_PRE=true
-
-          if [[ "$BRANCH" == "prod" && "$IS_PRE" == "true" ]]; then
-            echo "Skipping prerelease $VERSION on prod."
-            echo "has_release=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [[ "$BRANCH" == "dev" && "$IS_PRE" == "false" ]]; then
-            echo "Skipping stable $VERSION on dev."
-            echo "has_release=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Skip if release already exists
-          if gh release view "$TAG" --json tagName >/dev/null 2>&1; then
-            echo "Release $TAG already exists."
-            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-            echo "has_release=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Create orphan stamped commit with raw vendor source
-          bash tool/stamp_release.sh "$TAG" --stamp-tag
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "release: $TAG"
-          STAMPED_SHA=$(git rev-parse HEAD)
-          echo "Stamped commit: $STAMPED_SHA"
-
-          # Push stamped commit so GitHub knows about it (local-only commits can't be tagged)
-          git push origin --force "$STAMPED_SHA:refs/heads/_release-staging"
-
-          # Generate release notes and create release at the stamped commit
-          NOTES=$(bash tool/stamp_release.sh "$TAG" --github-notes)
-          FLAGS=""
-          [[ "$IS_PRE" == "true" ]] && FLAGS="--prerelease"
-          gh release create "$TAG" \
-            --target "$STAMPED_SHA" \
-            --title "pdf_manipulator $VERSION" \
-            --notes "$NOTES" \
-            $FLAGS
-          echo "Created release $TAG at $STAMPED_SHA"
-
-          # Clean up staging branch (tag holds the reference now)
-          git push origin --delete refs/heads/_release-staging 2>/dev/null || true
-
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "has_release=true" >> "$GITHUB_OUTPUT"
-
-  # ── Compile all targets ────────────────────────────────────────────
-  # Each job checks out the TAG (not the branch). The tag has raw vendor
-  # source — no submodules: recursive needed.
+  # ── Compile all targets ──────────────────────────────────────────
   compile-macos:
     needs: discover
     if: needs.discover.outputs.has_release == 'true'
@@ -250,7 +143,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with: { name: bin-windows, path: out/ }
 
-  # ── Upload binaries to the GitHub Release ──────────────────────────
+  # ── Upload binaries + stamp tag ──────────────────────────────────
   upload-assets:
     name: Upload Release Assets
     needs: [discover, compile-macos, compile-ios, compile-android, compile-linux, compile-windows, compile-wasm]
@@ -286,16 +179,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/checkout@v6
-        with: { ref: '${{ needs.discover.outputs.tag }}' }
-      - name: Add git install snippet to release notes
+        with:
+          ref: '${{ needs.discover.outputs.tag }}'
+          fetch-depth: 0
+      - name: Add git install snippet
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash tool/stamp_release.sh ${{ needs.discover.outputs.tag }} --add-git-install
+        run: bash tool/release.sh --add-git-install ${{ needs.discover.outputs.tag }}
+      - name: Stamp asset hashes into tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash tool/release.sh --update-tag-hashes ${{ needs.discover.outputs.tag }}
 
-  # ── Publish to pub.dev (requires approval) ─────────────────────────
-  # Runs AFTER you approve in the GitHub Environment gate.
-  # The tag already has stamped version + raw vendor source.
-  # This job only adds: filtered changelog for pub.dev + asset hashes.
+  # ── Publish to pub.dev ───────────────────────────────────────────
   publish:
     name: Publish to pub.dev
     needs: [discover, upload-assets]
@@ -310,30 +206,25 @@ jobs:
       - uses: dart-lang/setup-dart@v1
       - name: Install fvm + project SDK
         run: dart pub global activate fvm && fvm install
-
-      - name: Stamp release artifacts
+      - name: Build filtered changelog
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash tool/stamp_release.sh ${{ needs.discover.outputs.tag }}
-
+        run: bash tool/release.sh --stamp-changelog ${{ needs.discover.outputs.tag }}
       - name: Ephemeral commit (clean git for pub publish)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "stamp: ${{ needs.discover.outputs.tag }}" --allow-empty
-
       - name: Materialize pub.dev credentials
         env:
           PUB_CREDS: ${{ secrets.PUB_CREDENTIALS }}
         run: |
           mkdir -p "$HOME/.config/dart"
           printf '%s' "$PUB_CREDS" > "$HOME/.config/dart/pub-credentials.json"
-
       - run: fvm dart pub get --no-example
       - run: fvm dart pub publish --force
-
-      - name: Add pub.dev install snippet to release notes
+      - name: Add pub.dev install snippet
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash tool/stamp_release.sh ${{ needs.discover.outputs.tag }} --add-pub-install
+        run: bash tool/release.sh --add-pub-install ${{ needs.discover.outputs.tag }}

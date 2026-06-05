@@ -216,7 +216,7 @@ hook/
 
 tool/
 ├── compile_rust.sh                         ← Rust → native / wasm / per-platform / both
-├── stamp_release.sh                        ← 5 modes: --stamp-tag, --github-notes, (default),
+├── release.sh                        ← 5 modes: --stamp-tag, --github-notes, (default),
 │                                              --add-git-install, --add-pub-install
 └── run_web_test.sh                         ← flutter drive -d web-server wrapper
 

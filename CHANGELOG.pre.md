@@ -1,27 +1,10 @@
 # Prerelease Changelog
 
-<!--
-  PRERELEASE VERSIONS ONLY. Stable releases go in CHANGELOG.md.
+<!-- Prereleases. Add ## heading at top, CI handles the rest. -->
 
-  How to add a prerelease:
-  1. Add a new ## heading at the top with the prerelease version (e.g. 1.1.0-dev.0)
-  2. Write a summary of what changed SINCE THE PREVIOUS ENTRY IN THIS FILE
-     - First prerelease after a stable: changes since the last stable version
-     - Subsequent prereleases: changes since the previous prerelease
-  3. Commit and push to dev (via PR)
-  4. CI reads the version from the top ## heading, tags, and publishes as prerelease
+## 1.0.2-dev.0
 
-  Rules:
-  - Version in ## heading is the source of truth for the prerelease version
-  - Each entry covers changes since the PREVIOUS entry in THIS file (not CHANGELOG.md)
-  - pub.dev gets a FILTERED version of this file as CHANGELOG.md:
-    only versions published on pub.dev + the current one are included,
-    unpublished intermediate versions are merged into collapsibles
-  - When the stable release ships, write the full summary in CHANGELOG.md
-    covering everything since the last stable — this file is not consulted
-  - Entries here are permanent history — don't delete old entries
-  - DO NOT add commit lists here — CI auto-appends them at publish time
--->
+- Fixed changelog on pub.dev missing commit history between versions
 
 ## 1.0.1-dev.0
 
