@@ -30,7 +30,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh pr comment ${{ github.event.pull_request.number }} \
+          gh pr comment "${{ github.event.pull_request.number }}" \
             --repo "${{ github.repository }}" --body \
             "New commits pushed — workflows may be outdated. A maintainer with push access should comment \`@dependabot recreate\` to pick up the latest changes."
 
