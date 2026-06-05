@@ -1,0 +1,66 @@
+# PHPStan 2.x configuration for pdf_oxide PHP binding.
+#
+# v0.3.55 starts at level 5 — the binding is the Java-shape 9-class
+# refactor on top of an FFI layer with heavy raw FFI\CData. Pushing
+# straight to level 8 produces hundreds of unresolvable warnings on
+# the dynamic-struct-property access surface.
+#
+# Ratchet plan (tracked for v0.3.56+):
+#   1. Wrap raw FFI\CData in an Internal\ namespace marked @internal.
+#   2. Once contained, ratchet level: 5 → 6 → 7 → 8.
+#   3. Add a DynamicMethodReturnTypeExtension for the public wrapper
+#      API to reach level 9.
+#
+# See php/phpstan-stubs/ffi.stub.php for hand-rolled FFI surface stubs.
+
+parameters:
+    level: 5
+    paths:
+        - src
+        - tests
+    excludePaths:
+        # Post-install download bootstrap — runs outside the package.
+        - scripts/download-native-lib.php
+        # PHP scaffolding scripts only used at install/build time.
+        - scripts/*
+        # Vendored / generated FFI header surface (no PHP code).
+        - include/*
+        # Our hand-rolled FFI stub is analysis-input, not lint-target.
+        # PHPStan's stub-validator runs separately and pulls these in.
+        - phpstan-stubs/*
+    stubFiles:
+        - phpstan-stubs/ffi.stub.php
+    # FFI returns are runtime-typed; don't lie to PHPStan about them.
+    treatPhpDocTypesAsCertain: false
+    # NOTE: do NOT add the stub to `bootstrapFiles:` — bootstrapFiles
+    # are PHP-`require`d at PHPStan startup, which would redeclare the
+    # ext-ffi runtime `class FFI` and fatal. `stubFiles:` already gives
+    # PHPStan the static-analysis-only view of the class.
+    ignoreErrors:
+        # Message-regex form (universal across PHPStan versions).
+        #
+        # PHP ext-ffi: `FFI::new` / `FFI::cast` / `FFI::addr` / etc accept
+        # BOTH static AND instance dispatch at runtime (see PHP manual);
+        # the bundled phpstorm-stubs only model the instance form. The
+        # static form is the documented allocator entry — silence the
+        # spurious dynamic-call warnings rather than refactor 25k LoC.
+        - '#^Static call to instance method FFI::\w+\(\)\.$#'
+        # FFI\CData property access is dynamic by definition; PHPStan
+        # cannot see the struct layout declared via FFI::cdef().
+        - '#^Access to an undefined property FFI\\CData::\$\w+\.$#'
+        # Top-level wrappers call raw $ffi->* methods for symbols not
+        # in FunctionBindings; the cdef-declared C functions aren't
+        # visible to PHPStan via the ffi.stub.php hand-roll.
+        - '#^Call to an undefined method FFI::\w+\(\)\.$#'
+        # PHPStan cannot model FFI\CData::$cdata so it falls back to
+        # mixed/0 inference, then trips "always-true/false" on
+        # comparisons that are semantically correct at runtime.
+        - '#^Strict comparison using === between (FFI\\CData and null|0 and 0) will always evaluate to (true|false)\.$#'
+        # FFI binding classes hold raw FFI references to keep the C
+        # data live (preventing GC of the dlopen'd cdef instance). The
+        # property is intentionally write-only.
+        - '#^(Static property|Property) [\w\\]+::\$\w+ is never read, only written\.$#'
+        # PHPUnit/PHPStan flags `assertIsString($x)` redundant when it
+        # already knows `$x` is string — but the assertion documents
+        # intent for human readers, not just the analyzer.
+        - '#^Call to method PHPUnit\\Framework\\Assert::assertIs(String|Bool|Int|Float|Array|Object|Null)\(\) with \w+ will always evaluate to true\.$#'
