@@ -201,7 +201,7 @@ stamp_asset_hashes() {
     local src="web_assets/$js_file"
     if [ -f "$src" ]; then
       local hash
-      hash=$(shasum -a 256 "$src" | cut -d' ' -f1)
+      hash=$( (sha256sum "$src" 2>/dev/null || shasum -a 256 "$src") | cut -d' ' -f1)
       web_entries+="  'wasm-$js_file': '$hash',"$'\n'
       echo "  wasm-$js_file ... ${hash:0:12}..." >&2
     fi

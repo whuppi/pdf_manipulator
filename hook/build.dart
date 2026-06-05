@@ -1,18 +1,108 @@
-// Build hook for pdf_manipulator.
+// Build hook for pdf_manipulator — the single brain for asset resolution.
 //
-// Two roles, one file:
+// ═══════════════════════════════════════════════════════════════════
+// TWO ROLES, ONE FILE
+// ═══════════════════════════════════════════════════════════════════
 //
-//   1. Flutter hook entry point — called automatically by the build
-//      system for native platforms. Reads BuildInput, resolves the
-//      native binary, registers the code asset.
+//   1. Flutter hook entry point — called automatically by Flutter's
+//      build system for native platforms. Receives BuildInput,
+//      resolves the native binary, registers CodeAsset.
 //
 //   2. Library for bin/setup.dart — exports resolveNative() and
-//      resolveWeb() for manual/CLI-triggered resolution.
+//      resolveWeb() for manual CLI-triggered resolution. setup.dart
+//      is a thin wrapper that parses --web/--native/--all and calls
+//      these functions.
 //
-// Both native and web use the same 5-step waterfall via ResolveRequest.
-// Web support is fully implemented here — it just can't be triggered
-// by Flutter's hook system yet (no DataAsset). When that ships, main()
-// adds one call to resolveWeb() and setup.dart becomes optional.
+// ═══════════════════════════════════════════════════════════════════
+// RESOLUTION WATERFALL (same for native and web)
+// ═══════════════════════════════════════════════════════════════════
+//
+//   1. CACHED   — file exists + SHA-256 matches assetHashes → use it
+//   2. DOWNLOAD — fetch from GitHub Releases → cache → use it
+//   3. COMPILE  — vendor/pdf_oxide/ exists → cargo/wasm-pack → use it
+//   4. SUBMODULE — .gitmodules exists → git init recursive → compile
+//   5. ERROR    — nothing worked, clear message with options
+//
+//   --force skips step 1 (always re-resolves).
+//   Version 0.0.0 (dev) skips step 2 (no release exists).
+//
+// ═══════════════════════════════════════════════════════════════════
+// USER SCENARIOS
+// ═══════════════════════════════════════════════════════════════════
+//
+//   pub.dev consumer (pdf_manipulator: ^X.Y.Z):
+//     Native: automatic via build hook. Steps 1→2 (download prebuilt).
+//             If binary missing from release: step 3 (vendor source
+//             ships in tarball, compiles from source).
+//     Web:    manual `flutter pub run pdf_manipulator:setup`.
+//             Same waterfall. Downloads from release or compiles.
+//
+//   Git tag consumer (ref: vX.Y.Z):
+//     Same as pub.dev — tag has vendor source + release has binaries.
+//
+//   Git branch consumer (ref: dev, version 0.0.0):
+//     Download skipped (no release). Compiles from vendor source.
+//     If not cloned with --recursive: submodule init first.
+//
+//   Contributor (path dependency):
+//     Same as branch consumer. Always compiles from source.
+//
+// ═══════════════════════════════════════════════════════════════════
+// STALENESS
+// ═══════════════════════════════════════════════════════════════════
+//
+//   Native: fully automatic. Flutter re-runs the build hook when
+//     pubspec.yaml changes (registered as dependency). Package
+//     update → new assetHashes → cached binary hash mismatch →
+//     re-downloads. User never thinks about it.
+//
+//   Web: NOT automatic. User must run `setup` after package update.
+//     The setup script hash-checks every installed file against
+//     assetHashes and re-resolves any mismatches. If user forgets,
+//     stale assets stay until the next setup run.
+//     This is a Flutter limitation — no build hook for web assets.
+//     Tracked: dart-lang/native#2829 (DataAsset support).
+//
+//   When --force is passed: cache check skipped entirely,
+//     everything re-resolved from download or compile.
+//
+//   When no hash is available (dev version, or missing entry):
+//     Published versions: warning logged, cached file used anyway.
+//     Dev version (0.0.0): cached file used silently (just compiled).
+//
+// ═══════════════════════════════════════════════════════════════════
+// WEB SUPPORT
+// ═══════════════════════════════════════════════════════════════════
+//
+//   resolveWeb() is fully implemented. It resolves all 4 web assets:
+//     pdf_oxide_bg.wasm — WASM binary (compiled by wasm-pack)
+//     pdf_oxide.js      — JS glue (compiled by wasm-pack)
+//     coordinator.js    — worker pool manager (hand-written)
+//     worker.js         — WASM worker (hand-written)
+//
+//   WASM build outputs (wasm + js glue) are always resolved together
+//   from the same source — both downloaded from the same release, or
+//   both compiled from the same wasm-pack run. Never mix versions.
+//
+//   Hand-written JS files fall back to copying from the package's
+//   web_assets/ directory if download fails (they always ship).
+//
+//   When Flutter adds DataAsset support, main() adds one call to
+//   resolveWeb() and setup.dart becomes optional. Zero new code.
+//
+// ═══════════════════════════════════════════════════════════════════
+// ASSET HASHES
+// ═══════════════════════════════════════════════════════════════════
+//
+//   assetHashes is a flat Map<String, String> keyed by GitHub Release
+//   asset name (e.g. 'macos-arm64-libpdf_oxide.dylib',
+//   'wasm-pdf_oxide_bg.wasm'). Generated by tool/release.sh
+//   --update-tag-hashes at release time from two sources:
+//     1. GitHub Release API digests (native + WASM build outputs)
+//     2. Local SHA-256 of hand-written JS (coordinator.js, worker.js)
+//
+//   The resolver uses these to verify cached files and detect stale
+//   assets after a package update.
 
 import 'dart:io';
 
@@ -165,9 +255,10 @@ Future<int> resolveWeb({
     await resolveAsset(ResolveRequest(
       assetName: assetName,
       dest: dest,
-      expectedHash: force ? null : assetHashes[assetName],
+      expectedHash: assetHashes[assetName],
       version: version,
       packageRoot: packageRoot,
+      force: force,
       compile: isWasmBuildOutput
           ? (File d) => _compileWasm(packageRoot, d, localName)
           : (File d) => _copyWebAsset(packageRoot, d, localName),

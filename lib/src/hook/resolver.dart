@@ -36,6 +36,7 @@ class ResolveRequest {
     required this.compile,
     this.cacheFile,
     this.expectedHash,
+    this.force = false,
   });
 
   /// GitHub Release asset name (e.g. `macos-arm64-libpdf_oxide.dylib`
@@ -61,6 +62,10 @@ class ResolveRequest {
   /// Package root URI. Used to locate vendor source and .gitmodules.
   final Uri packageRoot;
 
+  /// When true, skip the cache check and re-resolve from download or
+  /// compile. Used by `setup --force`.
+  final bool force;
+
   /// Compile callback — builds the asset from vendor source and writes
   /// to the provided [File]. The resolver calls this when download fails
   /// and vendor source exists.
@@ -69,22 +74,33 @@ class ResolveRequest {
 
 /// Resolve a single asset through the 5-step waterfall.
 Future<void> resolveAsset(ResolveRequest req) async {
-  // Step 1 — Cached
-  final fileToCheck = req.cacheFile ?? req.dest;
-  if (fileToCheck.existsSync()) {
-    if (req.expectedHash != null) {
-      final actual =
-          sha256.convert(await fileToCheck.readAsBytes()).toString();
-      if (actual == req.expectedHash) {
-        _log.info('using cached ${fileToCheck.path} (hash verified)');
+  // Step 1 — Cached (skipped when force is true)
+  if (!req.force) {
+    final fileToCheck = req.cacheFile ?? req.dest;
+    if (fileToCheck.existsSync()) {
+      if (req.expectedHash != null) {
+        final actual =
+            sha256.convert(await fileToCheck.readAsBytes()).toString();
+        if (actual == req.expectedHash) {
+          _log.info('using cached ${fileToCheck.path} (hash verified)');
+          _copyIfNeeded(fileToCheck, req.dest);
+          return;
+        }
+        _log.info('cached file hash mismatch — resolving fresh');
+      } else if (req.version == '0.0.0') {
+        _log.info(
+            'using cached ${fileToCheck.path} (dev version, no hash)');
+        _copyIfNeeded(fileToCheck, req.dest);
+        return;
+      } else {
+        _log.warning(
+          '${req.assetName}: no hash available for v${req.version}. '
+          'Using cached file WITHOUT verification. '
+          'This may indicate a missing entry in asset_hashes.dart.',
+        );
         _copyIfNeeded(fileToCheck, req.dest);
         return;
       }
-      _log.info('cached file hash mismatch — resolving fresh');
-    } else {
-      _log.info('using cached ${fileToCheck.path} (no hash to verify)');
-      _copyIfNeeded(fileToCheck, req.dest);
-      return;
     }
   }
 

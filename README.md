@@ -30,16 +30,49 @@ Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extrac
 
 ```yaml
 dependencies:
-  pdf_manipulator: ^1.0.0
+  pdf_manipulator:
 ```
 
-**Web only** — run once after install (and after each package update):
+**Web only** — run after install and after each package update:
 
 ```sh
 flutter pub run pdf_manipulator:setup
 ```
 
-Native platforms need nothing extra — the build hook handles everything.
+Native platforms need nothing extra — the build hook resolves binaries automatically on every build.
+
+<details>
+<summary>More setup options</summary>
+
+```sh
+flutter pub run pdf_manipulator:setup           # web assets (default)
+flutter pub run pdf_manipulator:setup --native  # native binary for current OS
+flutter pub run pdf_manipulator:setup --all     # both web and native
+flutter pub run pdf_manipulator:setup --force   # re-resolve even if up to date
+```
+
+Every file is hash-verified against the release. Stale files from a
+previous version are automatically re-resolved.
+
+</details>
+
+<details>
+<summary>Why is this step needed for web?</summary>
+
+Flutter's build hook system supports native binaries automatically
+but has no equivalent for web assets (WASM, JS). The setup command
+resolves them through the same pipeline as native — downloading
+pre-built binaries from GitHub Releases, or compiling from the
+vendored Rust source if binaries aren't available.
+
+This is a Flutter/Dart platform limitation, not specific to this package.
+Tracking: [dart-lang/native#2829](https://github.com/dart-lang/native/issues/2829)
+
+When `DataAsset` support ships, this step will be removed — the build
+hook already has full web support, it just can't be triggered by
+Flutter's build system yet.
+
+</details>
 
 ---
 
