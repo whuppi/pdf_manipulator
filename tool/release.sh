@@ -201,6 +201,7 @@ stamp_asset_hashes() {
     echo "// The build hook verifies downloaded files against these hashes."
     echo "// Hash mismatch → re-download. Correct → use cached. Missing → download."
     echo ""
+    echo "/// SHA-256 hashes for pre-built native binaries, verified by the build hook."
     echo "const Map<String, String> assetHashesSha256 = {"
     echo "$assets" | sort | while IFS=$'\t' read -r name digest; do
       hash="${digest#sha256:}"
