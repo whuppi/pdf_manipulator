@@ -2,6 +2,11 @@
 
 <!-- Prereleases. Add ## heading at top, CI handles the rest. -->
 
+## 1.0.4-dev.0
+
+- Web setup now verifies all assets against release hashes — detects stale files automatically
+- `setup` supports `--force` to re-download everything, `--native` to pre-fetch the native binary
+
 ## 1.0.3-dev.0
 
 - Fixed changelog on pub.dev
