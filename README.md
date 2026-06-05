@@ -33,44 +33,37 @@ dependencies:
   pdf_manipulator:
 ```
 
-**Web only** — run after install and after each package update:
+**Targeting web?** Run this once after install, and again after each update:
 
 ```sh
 flutter pub run pdf_manipulator:setup
 ```
 
-Native platforms need nothing extra — the build hook resolves binaries automatically on every build.
+That's it. Native platforms (iOS, Android, macOS, Windows, Linux) handle everything automatically — no extra steps.
 
 <details>
-<summary>More setup options</summary>
+<summary>Setup options</summary>
 
 ```sh
-flutter pub run pdf_manipulator:setup           # web assets (default)
-flutter pub run pdf_manipulator:setup --native  # native binary for current OS
-flutter pub run pdf_manipulator:setup --all     # both web and native
-flutter pub run pdf_manipulator:setup --force   # re-resolve even if up to date
+flutter pub run pdf_manipulator:setup           # web (default)
+flutter pub run pdf_manipulator:setup --native  # pre-fetch native binary
+flutter pub run pdf_manipulator:setup --all     # web + native
+flutter pub run pdf_manipulator:setup --force   # re-download everything
 ```
-
-Every file is hash-verified against the release. Stale files from a
-previous version are automatically re-resolved.
 
 </details>
 
 <details>
-<summary>Why is this step needed for web?</summary>
+<summary>Why does web need a setup step?</summary>
 
-Flutter's build hook system supports native binaries automatically
-but has no equivalent for web assets (WASM, JS). The setup command
-resolves them through the same pipeline as native — downloading
-pre-built binaries from GitHub Releases, or compiling from the
-vendored Rust source if binaries aren't available.
+Flutter's build system automatically downloads native binaries for
+iOS, Android, etc. — but it doesn't support web assets (WASM, JS)
+yet. The setup command fills that gap: it downloads the pre-built
+WASM engine, or compiles it from the vendored Rust source if the
+download isn't available.
 
-This is a Flutter/Dart platform limitation, not specific to this package.
+This will go away when Flutter adds web asset support to build hooks.
 Tracking: [dart-lang/native#2829](https://github.com/dart-lang/native/issues/2829)
-
-When `DataAsset` support ships, this step will be removed — the build
-hook already has full web support, it just can't be triggered by
-Flutter's build system yet.
 
 </details>
 
