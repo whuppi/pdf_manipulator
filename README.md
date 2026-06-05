@@ -30,7 +30,7 @@ Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extrac
 
 ```yaml
 dependencies:
-  pdf_manipulator: ^1.0.0
+  pdf_manipulator:
 ```
 
 **Web only** — run once after install (and after each package update):
