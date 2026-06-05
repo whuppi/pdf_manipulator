@@ -1,22 +1,10 @@
 # Changelog
 
-<!--
-  STABLE RELEASES ONLY. This file is what pub.dev shows.
+<!-- Stable releases. Add ## heading at top, CI handles the rest. -->
 
-  How to add a release:
-  1. Add a new ## heading at the top with the version number
-  2. Write a human summary of changes (for users, not developers)
-  3. Commit, push to dev, PR dev → prod, merge
-  4. CI reads the version from the top ## heading, tags, and publishes
+## 1.0.2
 
-  Rules:
-  - Version in ## heading is the ONLY source of truth for the release version
-  - pubspec.yaml stays 0.0.0 in git — CI stamps it on the release tag commit
-  - Each entry covers ALL changes since the previous ## heading in this file
-  - Prerelease entries go in CHANGELOG.pre.md, not here
-  - DO NOT add commit lists here — CI auto-appends them at publish time
-    (GitHub Release notes + pub.dev tarball get the commits dynamically)
--->
+- Fixed changelog on pub.dev missing commit history between versions
 
 ## 1.0.1
 

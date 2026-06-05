@@ -242,7 +242,7 @@ Changelog push to dev or prod
     4. Compile all 6 targets in parallel (checkout tag — no submodules needed)
     5. Upload binaries + add git install snippet to release notes
     6. ⏸ PAUSE — publish job waits for approval (GitHub Environment gate)
-    7. You approve → stamp_release.sh runs:
+    7. You approve → release.sh runs:
        - builds filtered CHANGELOG.md for pub.dev (only published versions +
          current, unpublished intermediate versions merged into collapsibles,
          commit list since last pub.dev version)
@@ -280,7 +280,7 @@ commits since last published version.
 ```
 
 Commit lists and changelog filtering are handled by
-`tool/stamp_release.sh` — single source of truth for all stamping.
+`tool/release.sh` — single source of truth for all stamping.
 Never put commit lists in the changelog files.
 
 ### Hotfix
