@@ -545,7 +545,8 @@ cmd_discover() {
   stamped_sha=$(git rev-parse HEAD)
   echo "  Stamped commit: $stamped_sha"
 
-  git push origin --force "$stamped_sha:refs/heads/_release-staging"
+  git push origin --delete refs/heads/_release-staging 2>/dev/null || true
+  git push origin "$stamped_sha:refs/heads/_release-staging"
   trap 'git push origin --delete refs/heads/_release-staging 2>/dev/null || true' EXIT
 
   local notes_file
