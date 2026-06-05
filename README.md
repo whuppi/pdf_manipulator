@@ -33,13 +33,13 @@ dependencies:
   pdf_manipulator:
 ```
 
+Native platforms (iOS, Android, macOS, Windows, Linux) handle everything automatically — no extra steps.
+
 **Targeting web?** Run setup once after install, and again after each `pub upgrade`:
 
 ```sh
 flutter pub run pdf_manipulator:setup
 ```
-
-That's it. Native platforms (iOS, Android, macOS, Windows, Linux) handle everything automatically — no extra steps.
 
 <details>
 <summary>Setup options</summary>
@@ -62,12 +62,12 @@ yet. The setup command fills that gap: it downloads the pre-built
 WASM engine, or compiles it from the vendored Rust source if the
 download isn't available.
 
+To avoid accidental upgrades breaking your web build, hard-pin the
+version: `pdf_manipulator: 1.0.3` (no `^`). Upgrade intentionally
+with `flutter pub upgrade pdf_manipulator` and rerun setup.
+
 This will go away when Flutter adds web asset support to build hooks.
 Tracking: [dart-lang/native#2829](https://github.com/dart-lang/native/issues/2829)
-
-**Tip:** to avoid accidental upgrades breaking your web build, you can
-hard-pin the version: `pdf_manipulator: 1.0.3` (no `^`). Then upgrade
-intentionally with `flutter pub upgrade pdf_manipulator` and rerun setup.
 
 </details>
 
