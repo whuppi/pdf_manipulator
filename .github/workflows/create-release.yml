@@ -190,6 +190,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash tool/release.sh --update-tag-hashes ${{ needs.discover.outputs.tag }}
+      - name: Preview pub.dev changelog
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "═══════════════════════════════════════════════════"
+          echo "  CHANGELOG PREVIEW — review before approving publish"
+          echo "═══════════════════════════════════════════════════"
+          echo ""
+          bash tool/release.sh --stamp-changelog ${{ needs.discover.outputs.tag }}
+          cat CHANGELOG.md
 
   # ── Publish to pub.dev ───────────────────────────────────────────
   publish:
