@@ -163,9 +163,10 @@ stamp_version() {
   echo "  version.dart → $ver"
 }
 
-# Generate lib/src/hook/asset_hashes.dart from the GitHub Release API
-# digests. Returns 0 if the file was written, 1 if there was nothing to
-# stamp (so callers can short-circuit with `|| ...`).
+# Generate lib/src/hook/asset_hashes.dart from two sources:
+#   1. GitHub Release API digests (native binaries + WASM build outputs)
+#   2. Local SHA-256 of hand-written web assets (coordinator.js, worker.js)
+# Returns 0 if the file was written, 1 if there was nothing to stamp.
 stamp_asset_hashes() {
   local tag="$1"
   local hash_file="lib/src/hook/asset_hashes.dart"
@@ -179,34 +180,45 @@ stamp_asset_hashes() {
     return 1
   fi
 
-  # WASM assets are excluded — they're loaded via JS, not downloaded by
-  # the Dart build hook. Only native binaries need hash verification.
-  local assets
-  assets=$(gh api "repos/$REPO/releases/tags/$tag" \
+  # All release assets with digests (native + WASM), excluding source archives.
+  local release_entries=""
+  release_entries=$(gh api "repos/$REPO/releases/tags/$tag" \
     --jq '.assets[]
           | select(.digest != null
-                   and (.name | startswith("wasm-")  | not)
                    and (.name | startswith("Source") | not))
-          | "\(.name)\t\(.digest)"')
+          | "\(.name)\t\(.digest)"' \
+    | sort | while IFS=$'\t' read -r name digest; do
+      hash="${digest#sha256:}"
+      echo "  '$name': '$hash',"
+      echo "  $name ... ${hash:0:12}..." >&2
+    done)
 
-  if [ -z "$assets" ]; then
-    echo "  ⚠ No assets with digests — skipping asset hashes"
+  # Hand-written web assets — hash from the tag's web_assets/ directory.
+  local web_entries=""
+  for js_file in coordinator.js worker.js; do
+    local src="web_assets/$js_file"
+    if [ -f "$src" ]; then
+      local hash
+      hash=$(shasum -a 256 "$src" | cut -d' ' -f1)
+      web_entries+="  'wasm-$js_file': '$hash',"$'\n'
+      echo "  wasm-$js_file ... ${hash:0:12}..." >&2
+    fi
+  done
+
+  local all_entries
+  all_entries=$(printf '%s\n%s' "$release_entries" "$web_entries" | sed '/^$/d')
+
+  if [ -z "$all_entries" ]; then
+    echo "  ⚠ No assets to hash — skipping"
     return 1
   fi
-
-  local entries=""
-  entries=$(echo "$assets" | sort | while IFS=$'\t' read -r name digest; do
-    hash="${digest#sha256:}"
-    echo "  '$name': '$hash',"
-    echo "  $name ... ${hash:0:12}..." >&2
-  done)
 
   # Replace only the lines between the markers, preserve everything else.
   local start_marker="  // --- GENERATED HASHES START ---"
   local end_marker="  // --- GENERATED HASHES END ---"
   local tmp
   tmp=$(mktemp)
-  awk -v start="$start_marker" -v end="$end_marker" -v entries="$entries" '
+  awk -v start="$start_marker" -v end="$end_marker" -v entries="$all_entries" '
     $0 == start { print; print entries; skip=1; next }
     $0 == end   { print; skip=0; next }
     !skip       { print }
@@ -214,7 +226,7 @@ stamp_asset_hashes() {
   mv "$tmp" "$hash_file"
 
   local count
-  count=$(echo "$assets" | grep -c . || true)
+  count=$(echo "$all_entries" | grep -c . || true)
   echo "  $hash_file → $count hashes"
 }
 
