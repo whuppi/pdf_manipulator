@@ -153,8 +153,7 @@ except Exception:
 " 2>/dev/null || true
 }
 
-# Stamp a version string into pubspec.yaml, version.dart, README.md,
-# and coordinator.js.
+# Stamp a version string into pubspec.yaml, version.dart, and README.md.
 stamp_version() {
   local ver="$1"
   sed -i.bak "s/^version: .*/version: $ver/" pubspec.yaml && rm -f pubspec.yaml.bak
@@ -164,8 +163,6 @@ stamp_version() {
   echo "  version.dart → $ver"
   sed -i.bak "s/  ${PKG_NAME}:.*/  ${PKG_NAME}: ^$ver/" README.md && rm -f README.md.bak
   echo "  README.md → ^$ver"
-  sed -i.bak "s/'__VERSION__'/'$ver'/" web_assets/coordinator.js && rm -f web_assets/coordinator.js.bak
-  echo "  coordinator.js → $ver"
 }
 
 # Generate lib/src/hook/asset_hashes.dart from two sources:
