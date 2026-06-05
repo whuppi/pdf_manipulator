@@ -73,7 +73,9 @@ class ResolveRequest {
 }
 
 /// Resolve a single asset through the 5-step waterfall.
-Future<void> resolveAsset(ResolveRequest req) async {
+/// Returns true if the asset was freshly resolved (downloaded, compiled),
+/// false if it was served from cache.
+Future<bool> resolveAsset(ResolveRequest req) async {
   // Step 1 — Cached (skipped when force is true)
   if (!req.force) {
     final fileToCheck = req.cacheFile ?? req.dest;
@@ -84,14 +86,14 @@ Future<void> resolveAsset(ResolveRequest req) async {
         if (actual == req.expectedHash) {
           _log.info('using cached ${fileToCheck.path} (hash verified)');
           _copyIfNeeded(fileToCheck, req.dest);
-          return;
+          return false;
         }
         _log.info('cached file hash mismatch — resolving fresh');
       } else if (req.version == '0.0.0') {
         _log.info(
             'using cached ${fileToCheck.path} (dev version, no hash)');
         _copyIfNeeded(fileToCheck, req.dest);
-        return;
+        return false;
       } else {
         _log.warning(
           '${req.assetName}: no hash available for v${req.version}. '
@@ -99,7 +101,7 @@ Future<void> resolveAsset(ResolveRequest req) async {
           'This may indicate a missing entry in asset_hashes.dart.',
         );
         _copyIfNeeded(fileToCheck, req.dest);
-        return;
+        return false;
       }
     }
   }
@@ -110,7 +112,7 @@ Future<void> resolveAsset(ResolveRequest req) async {
     final target = req.cacheFile ?? req.dest;
     if (await _download(url, target)) {
       _copyIfNeeded(target, req.dest);
-      return;
+      return true;
     }
     _log.info('download unavailable, trying source compile');
   }
@@ -121,7 +123,7 @@ Future<void> resolveAsset(ResolveRequest req) async {
     req.dest.parent.createSync(recursive: true);
     await req.compile(req.dest);
     _cacheIfNeeded(req.dest, req.cacheFile);
-    return;
+    return true;
   }
 
   // Step 4 — Init submodules + compile
@@ -135,7 +137,7 @@ Future<void> resolveAsset(ResolveRequest req) async {
       req.dest.parent.createSync(recursive: true);
       await req.compile(req.dest);
       _cacheIfNeeded(req.dest, req.cacheFile);
-      return;
+      return true;
     }
   }
 

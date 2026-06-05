@@ -84,6 +84,7 @@ void main(List<String> args) async {
       platform: platform,
       libFileName: libFileName,
       dest: File('${destDir.path}/$libFileName'),
+      force: force,
     );
     stdout.writeln('  $libFileName — resolved');
   }

@@ -208,6 +208,7 @@ Future<void> resolveNative({
   String? targetTriple,
   LinkMode? linkMode,
   BuildInput? buildInput,
+  bool force = false,
 }) async {
   final assetName = '$platform-$libFileName';
 
@@ -218,6 +219,7 @@ Future<void> resolveNative({
     expectedHash: assetHashes[assetName],
     version: version,
     packageRoot: packageRoot,
+    force: force,
     compile: (File d) async {
       if (buildInput != null && targetTriple != null && linkMode != null) {
         await _compileNativeFromHook(
@@ -252,7 +254,7 @@ Future<int> resolveWeb({
     final isWasmBuildOutput =
         localName == 'pdf_oxide_bg.wasm' || localName == 'pdf_oxide.js';
 
-    await resolveAsset(ResolveRequest(
+    final fresh = await resolveAsset(ResolveRequest(
       assetName: assetName,
       dest: dest,
       expectedHash: assetHashes[assetName],
@@ -263,7 +265,8 @@ Future<int> resolveWeb({
           ? (File d) => _compileWasm(packageRoot, d, localName)
           : (File d) => _copyWebAsset(packageRoot, d, localName),
     ));
-    installed++;
+
+    if (fresh) installed++;
   }
 
   return installed;
