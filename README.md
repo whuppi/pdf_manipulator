@@ -28,21 +28,26 @@ Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extrac
 
 ## Install
 
+### Add the dependency
+
 ```yaml
 dependencies:
   pdf_manipulator:
 ```
 
-Native platforms (iOS, Android, macOS, Windows, Linux) handle everything automatically — no extra steps.
+### Native platforms
 
-**Targeting web?** Run setup once after install, and again after each `pub upgrade`:
+iOS, Android, macOS, Windows, Linux — nothing extra. The build hook downloads the correct binary automatically.
+
+### Web
+
+Run setup once after install, and again after each `pub upgrade`:
 
 ```sh
 flutter pub run pdf_manipulator:setup
 ```
 
-To avoid silent upgrades breaking your web build, hard-pin the version
-in your pubspec (no `^`):
+Hard-pin the version to avoid silent upgrades breaking your web build:
 
 ```yaml
 pdf_manipulator: X.Y.Z  # exact version — upgrade intentionally
