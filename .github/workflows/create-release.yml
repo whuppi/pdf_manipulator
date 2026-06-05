@@ -30,21 +30,66 @@ permissions:
 env:
   COMPILE_OUTPUT_DIR: out
 
-concurrency:
-  # github.event.inputs.branch (not bare inputs.branch) — top-level expressions
-  # are evaluated for ALL push events, not just workflow_dispatch. Bare inputs.*
-  # errors when the inputs context doesn't exist on push events.
-  group: release-${{ github.event.inputs.branch || github.ref_name }}
-  cancel-in-progress: true
-
 jobs:
+  # ── Gate — should this push trigger a release? ─────────────────────
+  # dev only reacts to CHANGELOG.pre.md changes, prod to CHANGELOG.md.
+  # Uses git diff across the full push range (not head_commit.modified,
+  # which misses force-pushes and ff-merges). Falls back to should_run=true
+  # when diff fails (new branch, orphaned before-SHA) — a wasted run is
+  # cheap; a missed release is not.
+  gate:
+    name: Release gate
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.branch || github.ref_name }}
+
+      - name: Check changelog relevance
+        id: check
+        env:
+          BRANCH: ${{ inputs.branch || github.ref_name }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          if [[ "$BRANCH" == "prod" ]]; then
+            TARGET_FILE="CHANGELOG.md"
+          else
+            TARGET_FILE="CHANGELOG.pre.md"
+          fi
+
+          CHANGED_FILES=$(git diff --name-only "$BEFORE" "$AFTER" 2>/dev/null || echo "$TARGET_FILE")
+
+          if echo "$CHANGED_FILES" | grep -qx "$TARGET_FILE"; then
+            VERSION=$(grep -oP '^## \K\S+' "$TARGET_FILE" | head -1 || true)
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            echo "version=${VERSION:-unknown}" >> "$GITHUB_OUTPUT"
+            echo "Gate: $TARGET_FILE changed, version=$VERSION"
+          else
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "version=" >> "$GITHUB_OUTPUT"
+            echo "Gate: $TARGET_FILE not in changeset, skipping"
+          fi
+
   # ── Discover version + create stamped tag ───────────────────────────
   # Reads changelog → finds latest version → creates an orphan commit
   # with stamped version + raw vendor source (no submodule pointers) →
   # tags that commit → creates GitHub Release with notes.
   # All downstream jobs checkout the tag and get a self-contained tree.
+  #
+  # Concurrency is version-level: same version pushed twice → latest
+  # cancels the stale run. Different versions → both run independently.
   discover:
     name: Discover versions
+    needs: gate
+    if: needs.gate.outputs.should_run == 'true'
+    concurrency:
+      group: release-${{ needs.gate.outputs.version || github.run_id }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.find.outputs.tag }}
