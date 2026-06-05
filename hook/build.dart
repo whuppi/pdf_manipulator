@@ -1,50 +1,137 @@
-// Build hook for pdf_manipulator.
+// Build hook for pdf_manipulator — the single brain for asset resolution.
 //
-// Two paths, selected automatically by what's on disk:
+// ═══════════════════════════════════════════════════════════════════
+// TWO ROLES, ONE FILE
+// ═══════════════════════════════════════════════════════════════════
 //
-//   CONTRIBUTOR (cloned repo with vendor/pdf_oxide/ submodule):
-//     → Compiles from source via cargo build
-//     → Always fresh, matches their code changes
-//     → Requires: Rust toolchain (https://rustup.rs)
+//   1. Flutter hook entry point — called automatically by Flutter's
+//      build system for native platforms. Receives BuildInput,
+//      resolves the native binary, registers CodeAsset.
 //
-//   CONSUMER (installed from pub.dev, no vendor/ directory):
-//     → Downloads pre-built binary from GitHub Releases
-//     → Zero toolchain required
+//   2. Library for bin/setup.dart — exports resolveNative() and
+//      resolveWeb() for manual CLI-triggered resolution. setup.dart
+//      is a thin wrapper that parses --web/--native/--all and calls
+//      these functions.
 //
-// Link mode, target triple, library filename, and Android NDK linker
-// are all read from the CodeConfig input — never hardcoded.
-// Pattern learned from native_toolchain_rust.
+// ═══════════════════════════════════════════════════════════════════
+// RESOLUTION WATERFALL (same for native and web)
+// ═══════════════════════════════════════════════════════════════════
+//
+//   1. CACHED   — file exists + SHA-256 matches assetHashes → use it
+//   2. DOWNLOAD — fetch from GitHub Releases → cache → use it
+//   3. COMPILE  — vendor/pdf_oxide/ exists → cargo/wasm-pack → use it
+//   4. SUBMODULE — .gitmodules exists → git init recursive → compile
+//   5. ERROR    — nothing worked, clear message with options
+//
+//   --force skips step 1 (always re-resolves).
+//   Version 0.0.0 (dev) skips step 2 (no release exists).
+//
+// ═══════════════════════════════════════════════════════════════════
+// USER SCENARIOS
+// ═══════════════════════════════════════════════════════════════════
+//
+//   pub.dev consumer (pdf_manipulator: ^X.Y.Z):
+//     Native: automatic via build hook. Steps 1→2 (download prebuilt).
+//             If binary missing from release: step 3 (vendor source
+//             ships in tarball, compiles from source).
+//     Web:    manual `flutter pub run pdf_manipulator:setup`.
+//             Same waterfall. Downloads from release or compiles.
+//
+//   Git tag consumer (ref: vX.Y.Z):
+//     Same as pub.dev — tag has vendor source + release has binaries.
+//
+//   Git branch consumer (ref: dev, version 0.0.0):
+//     Download skipped (no release). Compiles from vendor source.
+//     If not cloned with --recursive: submodule init first.
+//
+//   Contributor (path dependency):
+//     Same as branch consumer. Always compiles from source.
+//
+// ═══════════════════════════════════════════════════════════════════
+// STALENESS
+// ═══════════════════════════════════════════════════════════════════
+//
+//   Native: fully automatic. Flutter re-runs the build hook when
+//     pubspec.yaml changes (registered as dependency). Package
+//     update → new assetHashes → cached binary hash mismatch →
+//     re-downloads. User never thinks about it.
+//
+//   Web: NOT automatic. User must run `setup` after package update.
+//     The setup script hash-checks every installed file against
+//     assetHashes and re-resolves any mismatches. If user forgets,
+//     stale assets stay until the next setup run.
+//     This is a Flutter limitation — no build hook for web assets.
+//     Tracked: dart-lang/native#2829 (DataAsset support).
+//
+//   When --force is passed: cache check skipped entirely,
+//     everything re-resolved from download or compile.
+//
+//   When no hash is available (dev version, or missing entry):
+//     Published versions: warning logged, cached file used anyway.
+//     Dev version (0.0.0): cached file used silently (just compiled).
+//
+// ═══════════════════════════════════════════════════════════════════
+// WEB SUPPORT
+// ═══════════════════════════════════════════════════════════════════
+//
+//   resolveWeb() is fully implemented. It resolves all 4 web assets:
+//     pdf_oxide_bg.wasm — WASM binary (compiled by wasm-pack)
+//     pdf_oxide.js      — JS glue (compiled by wasm-pack)
+//     coordinator.js    — worker pool manager (hand-written)
+//     worker.js         — WASM worker (hand-written)
+//
+//   WASM build outputs (wasm + js glue) are always resolved together
+//   from the same source — both downloaded from the same release, or
+//   both compiled from the same wasm-pack run. Never mix versions.
+//
+//   Hand-written JS files fall back to copying from the package's
+//   web_assets/ directory if download fails (they always ship).
+//
+//   When Flutter adds DataAsset support, main() adds one call to
+//   resolveWeb() and setup.dart becomes optional. Zero new code.
+//
+// ═══════════════════════════════════════════════════════════════════
+// ASSET HASHES
+// ═══════════════════════════════════════════════════════════════════
+//
+//   assetHashes is a flat Map<String, String> keyed by GitHub Release
+//   asset name (e.g. 'macos-arm64-libpdf_oxide.dylib',
+//   'wasm-pdf_oxide_bg.wasm'). Generated by tool/release.sh
+//   --update-tag-hashes at release time from two sources:
+//     1. GitHub Release API digests (native + WASM build outputs)
+//     2. Local SHA-256 of hand-written JS (coordinator.js, worker.js)
+//
+//   The resolver uses these to verify cached files and detect stale
+//   assets after a package update.
 
 import 'dart:io';
 
 import 'package:code_assets/code_assets.dart';
-import 'package:crypto/crypto.dart';
 import 'package:hooks/hooks.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
 
 import 'package:pdf_manipulator/src/hook/asset_hashes.dart';
+import 'package:pdf_manipulator/src/hook/resolver.dart';
 
 final _log = Logger('pdf_manipulator:build');
 
 const _assetId = 'src/ffi/native_bindings.g.dart';
 const _crateName = 'pdf_oxide';
-const _releaseRepo = 'https://github.com/whuppi/pdf_manipulator/releases/download';
-const _featuresFallback = 'icc,legacy-crypto,rendering,signatures,native-bridge';
+const _featuresFallback =
+    'icc,legacy-crypto,rendering,signatures,native-bridge';
 
-/// Read features from compile_rust.sh (single source of truth).
-/// Falls back to hardcoded value for pub.dev consumers who don't have the script.
-String _resolveFeatures(Uri packageRoot) {
-  final script = File.fromUri(packageRoot.resolve('tool/compile_rust.sh'));
-  if (script.existsSync()) {
-    final result = Process.runSync('bash', [script.path, '--features', 'native']);
-    if (result.exitCode == 0) {
-      final features = (result.stdout as String).trim();
-      if (features.isNotEmpty) return features;
-    }
-  }
-  return _featuresFallback;
-}
+// Web assets — GitHub Release asset names. Keyed by local filename.
+const webAssets = {
+  'pdf_oxide_bg.wasm': 'wasm-pdf_oxide_bg.wasm',
+  'pdf_oxide.js': 'wasm-pdf_oxide.js',
+  'coordinator.js': 'wasm-coordinator.js',
+  'worker.js': 'wasm-worker.js',
+};
+
+// ══════════════════════════════════════════════════════════════════
+// Flutter hook entry point
+// ══════════════════════════════════════════════════════════════════
 
 void main(List<String> args) async {
   await build(args, (BuildInput input, BuildOutputBuilder output) async {
@@ -53,88 +140,26 @@ void main(List<String> args) async {
     final codeConfig = input.config.code;
     final targetTriple = _targetTriple(codeConfig);
     final linkMode = _linkMode(codeConfig);
-    final libFileName = codeConfig.targetOS
-        .libraryFileName(_crateName, linkMode);
-    final outFile = File.fromUri(input.outputDirectory.resolve(libFileName));
+    final libFileName =
+        codeConfig.targetOS.libraryFileName(_crateName, linkMode);
+    final outFile =
+        File.fromUri(input.outputDirectory.resolve(libFileName));
+    final platform = _platformKey(codeConfig);
+    final version = readVersion(input.packageRoot);
 
-    // Resolution order:
-    // 1. Try pre-built binary (fast, no toolchain needed)
-    // 2. Compile from source if vendor/pdf_oxide exists
-    // 3. Init submodules if .gitmodules exists (git dep with ref: dev)
-    // 4. Clear error with options
-
-    final cargoToml = File.fromUri(
-      input.packageRoot.resolve('vendor/pdf_oxide/Cargo.toml'),
+    await resolveNative(
+      packageRoot: input.packageRoot,
+      version: version,
+      platform: platform,
+      libFileName: libFileName,
+      dest: outFile,
+      cacheFile: File.fromUri(
+        input.outputDirectoryShared.resolve(libFileName),
+      ),
+      targetTriple: targetTriple,
+      linkMode: linkMode,
+      buildInput: input,
     );
-    final version = _readVersion(input.packageRoot);
-    final isDevVersion = version == '0.0.0';
-
-    // Step 1: Try pre-built binary (skip for 0.0.0 — no release exists)
-    if (!isDevVersion) {
-      final downloaded = await _tryDownloadPrebuilt(
-        input, codeConfig, libFileName, outFile,
-      );
-      if (downloaded) {
-        // Success — skip to asset registration below
-      } else if (cargoToml.existsSync()) {
-        // Step 2: Binary unavailable, but source exists — compile
-        _log.warning(
-          'Pre-built binary unavailable. Compiling from source '
-          '(requires Rust toolchain).',
-        );
-        await _compileFromSource(input, targetTriple, linkMode, outFile);
-      } else {
-        throw StateError(
-          'Pre-built binary unavailable and no Rust source found.\n\n'
-          'Options:\n'
-          '  1. Use a published version: pdf_manipulator: ^X.Y.Z\n'
-          '  2. Use a git tag with binaries: ref: vX.Y.Z\n'
-          '  3. Clone with --recursive and use a path dependency\n',
-        );
-      }
-    } else if (cargoToml.existsSync()) {
-      // Step 2: Dev version (0.0.0) with source — compile directly
-      await _compileFromSource(input, targetTriple, linkMode, outFile);
-    } else {
-      // Step 3: Dev version, no source — try init submodules (git dep user)
-      final gitmodules = File.fromUri(
-        input.packageRoot.resolve('.gitmodules'),
-      );
-      if (gitmodules.existsSync()) {
-        _log.warning(
-          'No pre-built binary for dev version. Initializing submodules '
-          'and compiling from source (requires Rust toolchain).',
-        );
-        final initResult = await Process.run(
-          'git',
-          ['submodule', 'update', '--init', '--recursive'],
-          workingDirectory: p.fromUri(input.packageRoot),
-        );
-        if (initResult.exitCode != 0) {
-          throw StateError(
-            'Failed to initialize submodules.\n'
-            'stderr: ${initResult.stderr}\n\n'
-            'Clone manually with --recursive and use a path dependency.',
-          );
-        }
-        if (!cargoToml.existsSync()) {
-          throw StateError(
-            'Submodules initialized but vendor/pdf_oxide/Cargo.toml '
-            'still missing. The submodule may be misconfigured.',
-          );
-        }
-        await _compileFromSource(input, targetTriple, linkMode, outFile);
-      } else {
-        // Step 4: No binary, no source, no submodules — nothing we can do
-        throw StateError(
-          'No pre-built binary and no Rust source available.\n\n'
-          'Options:\n'
-          '  1. Use a published version: pdf_manipulator: ^X.Y.Z\n'
-          '  2. Use a git tag with binaries: ref: vX.Y.Z\n'
-          '  3. Clone with --recursive and use a path dependency\n',
-        );
-      }
-    }
 
     output.assets.code.add(
       CodeAsset(
@@ -149,16 +174,13 @@ void main(List<String> args) async {
     );
     output.dependencies.add(input.packageRoot.resolve('hook/build.dart'));
     output.dependencies.add(input.packageRoot.resolve('pubspec.yaml'));
-    output.dependencies.add(input.packageRoot.resolve('vendor/pdf_oxide/Cargo.toml'));
+    output.dependencies.add(
+      input.packageRoot.resolve('vendor/pdf_oxide/Cargo.toml'),
+    );
 
-    // Register every source file Cargo used via its dep-info (.d) file.
-    // Cargo writes this automatically next to each artifact, listing every
-    // .rs, .toml, font, and asset that contributed to the build.
-    // The hooks_runner MD5-hashes each registered file — any content change
-    // triggers a recompile. No hand-written file lists to maintain.
-    // Pattern from native_toolchain_rust (irondash).
-    if (cargoToml.existsSync()) {
-      final targetDir = p.join(p.fromUri(input.outputDirectory), 'cargo_target');
+    if (hasVendorSource(input.packageRoot)) {
+      final targetDir =
+          p.join(p.fromUri(input.outputDirectory), 'cargo_target');
       final depInfoPath = p.join(
         targetDir, targetTriple, 'release', 'deps', 'pdf_oxide.d',
       );
@@ -167,9 +189,96 @@ void main(List<String> args) async {
   });
 }
 
-// ── Path 1: Compile from source ────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════
+// Public API — called by both main() above and bin/setup.dart
+// ══════════════════════════════════════════════════════════════════
 
-Future<void> _compileFromSource(
+/// Resolve the native binary for one platform.
+///
+/// [buildInput] is only needed when called from the Flutter hook
+/// (provides NDK compiler info for Android). Null when called from
+/// setup.dart.
+Future<void> resolveNative({
+  required Uri packageRoot,
+  required String version,
+  required String platform,
+  required String libFileName,
+  required File dest,
+  File? cacheFile,
+  String? targetTriple,
+  LinkMode? linkMode,
+  BuildInput? buildInput,
+  bool force = false,
+}) async {
+  final assetName = '$platform-$libFileName';
+
+  await resolveAsset(ResolveRequest(
+    assetName: assetName,
+    dest: dest,
+    cacheFile: cacheFile,
+    expectedHash: assetHashes[assetName],
+    version: version,
+    packageRoot: packageRoot,
+    force: force,
+    compile: (File d) async {
+      if (buildInput != null && targetTriple != null && linkMode != null) {
+        await _compileNativeFromHook(
+            buildInput, targetTriple, linkMode, d);
+      } else {
+        await _compileNativeFromCli(packageRoot, d);
+      }
+    },
+  ));
+}
+
+/// Resolve all web assets into [destDir].
+///
+/// Returns the number of files installed (0 if all up to date).
+Future<int> resolveWeb({
+  required Uri packageRoot,
+  required String version,
+  required Directory destDir,
+  bool force = false,
+}) async {
+  if (!destDir.existsSync()) {
+    destDir.createSync(recursive: true);
+  }
+
+  var installed = 0;
+
+  for (final entry in webAssets.entries) {
+    final localName = entry.key;
+    final assetName = entry.value;
+    final dest = File('${destDir.path}/$localName');
+
+    final isWasmBuildOutput =
+        localName == 'pdf_oxide_bg.wasm' || localName == 'pdf_oxide.js';
+
+    final fresh = await resolveAsset(ResolveRequest(
+      assetName: assetName,
+      dest: dest,
+      expectedHash: assetHashes[assetName],
+      version: version,
+      packageRoot: packageRoot,
+      force: force,
+      compile: isWasmBuildOutput
+          ? (File d) => _compileWasm(packageRoot, d, localName)
+          : (File d) => _copyWebAsset(packageRoot, d, localName),
+    ));
+
+    if (fresh) installed++;
+  }
+
+  return installed;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// Compile callbacks
+// ══════════════════════════════════════════════════════════════════
+
+/// Compile native from the Flutter build hook (has BuildInput with
+/// NDK info, target triple, link mode).
+Future<void> _compileNativeFromHook(
   BuildInput input,
   String targetTriple,
   LinkMode linkMode,
@@ -178,14 +287,14 @@ Future<void> _compileFromSource(
   final manifestPath = p.fromUri(
     input.packageRoot.resolve('vendor/pdf_oxide/Cargo.toml'),
   );
-  final targetDir = p.join(p.fromUri(input.outputDirectory), 'cargo_target');
+  final targetDir =
+      p.join(p.fromUri(input.outputDirectory), 'cargo_target');
 
   _log.info('compiling from source for $targetTriple');
 
   final env = <String, String>{};
-
-  // Android: use the C compiler Flutter provides via CodeConfig
   final codeConfig = input.config.code;
+
   if (codeConfig.targetOS == OS.android) {
     final cc = codeConfig.cCompiler;
     if (cc != null) {
@@ -193,21 +302,16 @@ Future<void> _compileFromSource(
       final ndkTriple = targetTriple == 'armv7-linux-androideabi'
           ? 'armv7a-linux-androideabi'
           : targetTriple;
-      // API 21 = Android 5.0 — matches compile_rust.sh's release builds.
       final linker = p.join(compilerDir, '${ndkTriple}21-clang');
       final ar = p.join(compilerDir, 'llvm-ar');
-      final envKey = 'CARGO_TARGET_${targetTriple.toUpperCase().replaceAll('-', '_')}';
+      final envKey =
+          'CARGO_TARGET_${targetTriple.toUpperCase().replaceAll('-', '_')}';
       env['${envKey}_LINKER'] = linker;
       env['${envKey}_AR'] = ar;
       _log.info('NDK linker: $linker');
     }
   }
 
-  // macOS: strip Xcode Developer injections from PATH unconditionally.
-  // Flutter's build system injects Xcode paths that break Cargo's
-  // build-script host compilation (proc-macro2, quote, libc).
-  // Same fix as native_toolchain_rust:
-  // https://github.com/irondash/native_toolchain_rust/issues/17
   if (Platform.isMacOS) {
     env['PATH'] = Platform.environment['PATH']!
         .split(':')
@@ -238,7 +342,6 @@ Future<void> _compileFromSource(
     );
   }
 
-  // Find the compiled library using the same filename the output expects
   final compiled = p.join(
     targetDir,
     targetTriple,
@@ -249,10 +352,7 @@ Future<void> _compileFromSource(
   );
 
   if (!File(compiled).existsSync()) {
-    throw StateError(
-      'Compiled library not found at $compiled.\n'
-      'Expected: ${codeConfig.targetOS.libraryFileName(_crateName, linkMode)}',
-    );
+    throw StateError('Compiled library not found at $compiled.');
   }
 
   outFile.parent.createSync(recursive: true);
@@ -260,94 +360,157 @@ Future<void> _compileFromSource(
   _log.info('compiled → ${outFile.path}');
 }
 
-// ── Path 1: Try download from GitHub Releases (returns false on 404) ────
+/// Compile native from CLI (no BuildInput — uses compile_rust.sh).
+Future<void> _compileNativeFromCli(Uri packageRoot, File dest) async {
+  final script =
+      File.fromUri(packageRoot.resolve('tool/compile_rust.sh'));
+  if (!script.existsSync()) {
+    throw StateError(
+      'tool/compile_rust.sh not found. Cannot compile from source.\n'
+      'Install from pub.dev or use a git tag with pre-built binaries.',
+    );
+  }
 
-Future<bool> _tryDownloadPrebuilt(
-  BuildInput input,
-  CodeConfig codeConfig,
-  String libFileName,
-  File outFile,
-) async {
-  final version = _readVersion(input.packageRoot);
-  final platform = _platformKey(codeConfig);
-  final assetKey = '$platform-$libFileName';
-  final cachedFile = File.fromUri(
-    input.outputDirectoryShared.resolve(libFileName),
+  final result = await Process.run(
+    'bash',
+    [script.path, '--native'],
+    workingDirectory: p.fromUri(packageRoot),
   );
-
-  // Check cache first
-  if (cachedFile.existsSync()) {
-    final expectedHash = assetHashesSha256[assetKey];
-    if (expectedHash != null) {
-      final actualHash = sha256.convert(await cachedFile.readAsBytes()).toString();
-      if (actualHash == expectedHash) {
-        _log.info('using cached ${cachedFile.path} (hash verified)');
-        outFile.parent.createSync(recursive: true);
-        cachedFile.copySync(outFile.path);
-        return true;
-      }
-      _log.info('cached file hash mismatch — re-downloading');
-    } else {
-      _log.info('using cached ${cachedFile.path} (no hash to verify)');
-      outFile.parent.createSync(recursive: true);
-      cachedFile.copySync(outFile.path);
-      return true;
-    }
+  if (result.exitCode != 0) {
+    throw StateError(
+      'Native compilation failed (exit ${result.exitCode}).\n'
+      'stderr: ${result.stderr}\n\n'
+      'Ensure Rust is installed: https://rustup.rs',
+    );
   }
 
-  // Download
-  final url = '$_releaseRepo/v$version/$platform-$libFileName';
-  _log.info('downloading $url');
-
-  final client = HttpClient();
-  try {
-    var uri = Uri.parse(url);
-    HttpClientResponse response;
-    var redirects = 0;
-    do {
-      final req = await client.getUrl(uri);
-      req.followRedirects = false;
-      response = await req.close();
-      if (response.isRedirect && response.headers.value('location') != null) {
-        await response.drain<void>();
-        uri = Uri.parse(response.headers.value('location')!);
-        redirects++;
-      } else {
-        break;
-      }
-    } while (redirects < 5);
-
-    if (response.statusCode != 200) {
-      await response.drain<void>();
-      _log.info('binary not available (HTTP ${response.statusCode})');
-      return false;
-    }
-
-    cachedFile.parent.createSync(recursive: true);
-    final sink = cachedFile.openWrite();
-    await response.pipe(sink);
-    final mb = (cachedFile.lengthSync() / 1024 / 1024).toStringAsFixed(1);
-    _log.info('downloaded ${cachedFile.path} ($mb MB)');
-
-    outFile.parent.createSync(recursive: true);
-    cachedFile.copySync(outFile.path);
-    return true;
-  } catch (e) {
-    _log.warning('download failed: $e');
-    return false;
-  } finally {
-    client.close();
+  final libFileName = currentLibFileName();
+  final compiled = File(p.join(
+    p.fromUri(packageRoot),
+    'vendor/pdf_oxide/target/release',
+    libFileName,
+  ));
+  if (!compiled.existsSync()) {
+    throw StateError('Compiled binary not found at ${compiled.path}');
   }
+  dest.parent.createSync(recursive: true);
+  compiled.copySync(dest.path);
 }
 
-// ── Config mapping (from native_toolchain_rust pattern) ────────────────
+/// Compile WASM outputs (pdf_oxide.js + pdf_oxide_bg.wasm).
+Future<void> _compileWasm(
+    Uri packageRoot, File dest, String targetFile) async {
+  final existing =
+      File.fromUri(packageRoot.resolve('web_assets/$targetFile'));
+
+  if (existing.existsSync()) {
+    dest.parent.createSync(recursive: true);
+    existing.copySync(dest.path);
+    return;
+  }
+
+  final script =
+      File.fromUri(packageRoot.resolve('tool/compile_rust.sh'));
+  if (!script.existsSync()) {
+    throw StateError(
+      'tool/compile_rust.sh not found. Cannot compile WASM.\n'
+      'Install from pub.dev or use a git tag with pre-built binaries.',
+    );
+  }
+
+  final result = await Process.run(
+    'bash',
+    [script.path, '--wasm'],
+    workingDirectory: p.fromUri(packageRoot),
+  );
+  if (result.exitCode != 0) {
+    throw StateError(
+      'WASM compilation failed (exit ${result.exitCode}).\n'
+      'stderr: ${result.stderr}\n\n'
+      'Ensure Rust + wasm-pack are installed:\n'
+      '  https://rustup.rs\n'
+      '  cargo install wasm-pack',
+    );
+  }
+
+  if (!existing.existsSync()) {
+    throw StateError(
+        'WASM compiled but $targetFile not found at ${existing.path}');
+  }
+  dest.parent.createSync(recursive: true);
+  existing.copySync(dest.path);
+}
+
+/// Copy hand-written JS from package web_assets/.
+Future<void> _copyWebAsset(
+    Uri packageRoot, File dest, String fileName) async {
+  final src = File.fromUri(packageRoot.resolve('web_assets/$fileName'));
+  if (!src.existsSync()) {
+    throw StateError('$fileName not found in web_assets/');
+  }
+  dest.parent.createSync(recursive: true);
+  src.copySync(dest.path);
+}
+
+// ══════════════════════════════════════════════════════════════════
+// Platform detection — used by both hook and setup.dart
+// ══════════════════════════════════════════════════════════════════
+
+/// Platform key for the current machine.
+String currentPlatformKey() {
+  if (Platform.isMacOS) return _isArm64() ? 'macos-arm64' : 'macos-x64';
+  if (Platform.isLinux) return _isArm64() ? 'linux-arm64' : 'linux-x64';
+  if (Platform.isWindows) {
+    return _isArm64() ? 'windows-arm64' : 'windows-x64';
+  }
+  throw UnsupportedError(
+      'Unsupported platform: ${Platform.operatingSystem}');
+}
+
+/// Library filename for the current platform.
+String currentLibFileName() {
+  if (Platform.isMacOS) return 'lib$_crateName.dylib';
+  if (Platform.isLinux) return 'lib$_crateName.so';
+  if (Platform.isWindows) return '$_crateName.dll';
+  throw UnsupportedError(
+      'Unsupported platform: ${Platform.operatingSystem}');
+}
+
+bool _isArm64() {
+  if (Platform.isWindows) {
+    return Platform.environment['PROCESSOR_ARCHITECTURE'] == 'ARM64';
+  }
+  final result = Process.runSync('uname', ['-m']);
+  final arch = (result.stdout as String).trim();
+  return arch == 'arm64' || arch == 'aarch64';
+}
+
+// ══════════════════════════════════════════════════════════════════
+// Internal helpers
+// ══════════════════════════════════════════════════════════════════
+
+String _resolveFeatures(Uri packageRoot) {
+  final script =
+      File.fromUri(packageRoot.resolve('tool/compile_rust.sh'));
+  if (script.existsSync()) {
+    final result =
+        Process.runSync('bash', [script.path, '--features', 'native']);
+    if (result.exitCode == 0) {
+      final features = (result.stdout as String).trim();
+      if (features.isNotEmpty) return features;
+    }
+  }
+  return _featuresFallback;
+}
 
 LinkMode _linkMode(CodeConfig code) {
   return switch (code.linkModePreference) {
     LinkModePreference.dynamic ||
-    LinkModePreference.preferDynamic => DynamicLoadingBundled(),
+    LinkModePreference.preferDynamic =>
+      DynamicLoadingBundled(),
     LinkModePreference.static ||
-    LinkModePreference.preferStatic => StaticLinking(),
+    LinkModePreference.preferStatic =>
+      StaticLinking(),
     _ => DynamicLoadingBundled(),
   };
 }
@@ -376,13 +539,29 @@ String _targetTriple(CodeConfig code) {
   };
 }
 
-// ── Cargo dep-info parsing ─────────────────────────────────────────────
-//
-// Cargo writes a .d file (Makefile dep-info format) next to each compiled
-// artifact listing every source file that contributed to the build. We
-// parse it and register each file as a build dependency so the hooks_runner
-// invalidates the cache on any content change.
-// Pattern from native_toolchain_rust (irondash).
+String _platformKey(CodeConfig code) {
+  if (code.targetOS == OS.iOS &&
+      code.targetArchitecture == Architecture.arm64 &&
+      code.iOS.targetSdk == IOSSdk.iPhoneSimulator) {
+    return 'ios-sim-arm64';
+  }
+  return switch ((code.targetOS, code.targetArchitecture)) {
+    (OS.android, Architecture.arm) => 'android-arm',
+    (OS.android, Architecture.arm64) => 'android-arm64',
+    (OS.android, Architecture.ia32) => 'android-x86',
+    (OS.android, Architecture.x64) => 'android-x64',
+    (OS.iOS, Architecture.arm64) => 'ios-arm64',
+    (OS.iOS, Architecture.x64) => 'ios-sim-x64',
+    (OS.linux, Architecture.arm64) => 'linux-arm64',
+    (OS.linux, Architecture.x64) => 'linux-x64',
+    (OS.macOS, Architecture.arm64) => 'macos-arm64',
+    (OS.macOS, Architecture.x64) => 'macos-x64',
+    (OS.windows, Architecture.arm64) => 'windows-arm64',
+    (OS.windows, Architecture.x64) => 'windows-x64',
+    (_, _) => throw UnsupportedError(
+        'Unsupported: ${code.targetOS} ${code.targetArchitecture}'),
+  };
+}
 
 void _registerCargoDeps(
   BuildOutputBuilder output,
@@ -396,7 +575,8 @@ void _registerCargoDeps(
   }
 
   final content = depFile.readAsStringSync();
-  final crateRoot = p.fromUri(packageRoot.resolve('vendor/pdf_oxide/'));
+  final crateRoot =
+      p.fromUri(packageRoot.resolve('vendor/pdf_oxide/'));
   final packageDir = p.fromUri(packageRoot);
   var registered = 0;
 
@@ -409,7 +589,6 @@ void _registerCargoDeps(
     final deps = trimmed.substring(colonIdx + 1).trim();
 
     if (deps.isEmpty) {
-      // Standalone "src/foo.rs:" line — the path itself is the dep.
       final candidate = trimmed.substring(0, colonIdx).trim();
       if (candidate.isNotEmpty) {
         _addDep(output, packageDir, crateRoot, candidate);
@@ -444,41 +623,4 @@ void _addDep(
   if (!p.isWithin(packageDir, absolute)) return;
 
   output.dependencies.add(Uri.file(absolute));
-}
-
-// ── Helpers ────────────────────────────────────────────────────────────
-
-String _readVersion(Uri packageRoot) {
-  final lines = File.fromUri(packageRoot.resolve('pubspec.yaml'))
-      .readAsLinesSync();
-  for (final line in lines) {
-    if (line.startsWith('version:')) {
-      return line.substring('version:'.length).trim();
-    }
-  }
-  throw StateError('No version in pubspec.yaml');
-}
-
-String _platformKey(CodeConfig code) {
-  if (code.targetOS == OS.iOS &&
-      code.targetArchitecture == Architecture.arm64 &&
-      code.iOS.targetSdk == IOSSdk.iPhoneSimulator) {
-    return 'ios-sim-arm64';
-  }
-  return switch ((code.targetOS, code.targetArchitecture)) {
-    (OS.android, Architecture.arm) => 'android-arm',
-    (OS.android, Architecture.arm64) => 'android-arm64',
-    (OS.android, Architecture.ia32) => 'android-x86',
-    (OS.android, Architecture.x64) => 'android-x64',
-    (OS.iOS, Architecture.arm64) => 'ios-arm64',
-    (OS.iOS, Architecture.x64) => 'ios-sim-x64',
-    (OS.linux, Architecture.arm64) => 'linux-arm64',
-    (OS.linux, Architecture.x64) => 'linux-x64',
-    (OS.macOS, Architecture.arm64) => 'macos-arm64',
-    (OS.macOS, Architecture.x64) => 'macos-x64',
-    (OS.windows, Architecture.arm64) => 'windows-arm64',
-    (OS.windows, Architecture.x64) => 'windows-x64',
-    (_, _) => throw UnsupportedError(
-        'Unsupported: ${code.targetOS} ${code.targetArchitecture}'),
-  };
 }

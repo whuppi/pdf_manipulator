@@ -6,7 +6,7 @@ Report privately via [GitHub Security Advisories](https://github.com/whuppi/pdf_
 
 ## What's in scope
 
-- **Pre-built binary supply chain** — consumers get native binaries from GitHub Releases via the build hook. SHA256 hashes in `hook/asset_hashes.dart` verify integrity. A compromised release binary or tampered hash file is a valid security report.
+- **Pre-built binary supply chain** — consumers get native binaries and web assets from GitHub Releases via the build hook and setup command. SHA-256 hashes in `lib/src/hook/asset_hashes.dart` verify integrity for all platforms. A compromised release asset or tampered hash file is a valid security report.
 
 - **Data leakage via the transport layer** — if the Dart↔engine bridge exposes data from one operation to another (e.g. a previous PDF's content leaking into a subsequent operation's output), that's a security issue.
 
