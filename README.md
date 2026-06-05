@@ -65,6 +65,10 @@ download isn't available.
 This will go away when Flutter adds web asset support to build hooks.
 Tracking: [dart-lang/native#2829](https://github.com/dart-lang/native/issues/2829)
 
+**Tip:** to avoid accidental upgrades breaking your web build, you can
+hard-pin the version: `pdf_manipulator: 1.0.3` (no `^`). Then upgrade
+intentionally with `flutter pub upgrade pdf_manipulator` and rerun setup.
+
 </details>
 
 ---
