@@ -1,0 +1,20 @@
+# Requirements for benchmarking PDF libraries
+
+# Top Python PDF Libraries
+pymupdf>=1.23.0
+pymupdf4llm>=0.0.1
+pdfplumber>=0.10.0
+pypdf>=3.17.0
+pdfminer.six>=20221105
+pikepdf>=8.0.0
+pypdfium2>=4.0.0
+
+# borb - Note: May have complex dependencies
+# borb>=2.1.0
+
+# Camelot and tabula-py - Not included in main benchmark as they're specialized for tables
+# camelot-py[cv]>=0.11.0
+# tabula-py>=2.8.0
+
+# Our Rust library (installed via maturin)
+# pdf_oxide - should be installed separately with: maturin develop --release

@@ -1,0 +1,214 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "pdf_oxide"
+version = "0.3.55"
+description = "The fastest Python PDF library: 0.8ms mean, 5× faster than PyMuPDF. Text extraction, markdown conversion, PDF creation. 100% pass rate on 3,830 PDFs."
+readme = "README.md"
+requires-python = ">=3.8"
+
+license = { text = "MIT OR Apache-2.0" }
+authors = [{ name = "PDF Oxide Contributors", email = "yfedoseev@gmail.com" }]
+keywords = [
+    "pdf",
+    "text-extraction",
+    "pdf-parser",
+    "pymupdf-alternative",
+    "rag",
+    "llm",
+    "ocr",
+    "markdown",
+    "document-parser",
+    "pdf-to-text",
+    "pdf-to-markdown",
+    "data-extraction",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Text Processing",
+    "Topic :: Text Processing :: General",
+    "Topic :: Text Processing :: Markup :: HTML",
+    "Topic :: Text Processing :: Markup :: Markdown",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
+
+[project.urls]
+Homepage = "https://github.com/yfedoseev/pdf_oxide"
+Documentation = "https://pdf.oxide.fyi/docs/getting-started/python"
+"API Reference (Rust)" = "https://docs.rs/pdf_oxide"
+"API Reference (Python)" = "https://pdf.oxide.fyi/docs/reference/python-api"
+"Performance Benchmarks" = "https://pdf.oxide.fyi/docs/performance"
+Repository = "https://github.com/yfedoseev/pdf_oxide"
+"Bug Tracker" = "https://github.com/yfedoseev/pdf_oxide/issues"
+
+[project.optional-dependencies]
+ocr = [
+    # OCR requires ONNX Runtime and heavy ML dependencies
+    "onnxruntime>=1.20.1",
+]
+
+[dependency-groups]
+dev = [
+    # Linter and formatter (fast, all-in-one tool written in Rust)
+    "ruff>=0.1.0",
+    # Testing
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    # Type checking (optional)
+    "mypy>=1.0",
+    "ty>=0.0.15",
+    # Build tool for Python bindings
+    "maturin>=1.0,<2.0",
+]
+test = ["pytest>=7.0.0", "pytest-cov>=4.0.0"]
+benchmark = [
+    "pikepdf>=9.2.1",
+    "borb>=3.0.4",
+    "pymupdf>=1.24.11",
+    "pymupdf4llm>=0.0.17",
+    "pdfplumber>=0.11.5",
+    "pypdf>=5.9.0",
+    "pypdfium2>=5.3.0",
+    "pdfminer-six>=20231228",
+    "playa-pdf>=1.0.0",
+]
+seg-edgar = ["sec-edgar-downloader>=5.0.3"]
+convert-models = ["torch>=2.4.1", "onnxruntime>=1.20.1", "transformers>=4.46.3"]
+inspect-tj-array = ["pymupdf>=1.24.11"]
+check-pdf-structure = ["pypdf"]
+analyze-pdf-spacing = ["pymupdf>=1.24.11"]
+
+
+[tool.maturin]
+features = ["python"]
+python-source = "python"
+module-name = "pdf_oxide.pdf_oxide"
+# Ensure generated .pyi stubs are packaged (they are gitignored, so include explicitly).
+# LICENSE-APACHE and LICENSE-MIT are included explicitly so the wheel's METADATA
+# directory carries the full dual-licence notice per MIT's "include copyright
+# notice" requirement and PEP 639 best-practice.
+include = ["python/pdf_oxide/*.pyi", "LICENSE-APACHE", "LICENSE-MIT"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+# Ruff - Fast Python linter and formatter (written in Rust)
+# Replaces: Black, isort, Flake8, pyupgrade, and more
+# Docs: https://docs.astral.sh/ruff/
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+extend-exclude = [".git", "__pycache__", "build", "dist", ".eggs", "*.egg-info"]
+
+[tool.ruff.lint]
+# Enable these rule sets
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort (import sorting)
+    "N",   # pep8-naming
+    "B",   # flake8-bugbear (find likely bugs)
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+    "TCH", # flake8-type-checking
+]
+
+# Disable specific rules if needed
+ignore = [
+    "E501", # Line too long (handled by formatter)
+    "B008", # Do not perform function calls in argument defaults
+    "UP",   # pyupgrade (modernize Python code) # compatible with py38
+]
+
+# Allow unused variables when underscore-prefixed
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.lint.per-file-ignores]
+# Ignore import violations in __init__.py files
+"__init__.py" = ["F401", "F403"]
+# Allow print statements in scripts
+"scripts/*.py" = ["T201"]
+# Docker smoke script: runs inside containers, not part of the project package.
+# lines-after-imports=2 conflicts with ruff's formatter for module-level statements.
+"tests/smoke_docker.py" = ["I001"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pdf_oxide"]
+force-single-line = false
+lines-after-imports = 2
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "lf"
+
+[tool.ty.rules]
+possibly-missing-attribute = "error"
+possibly-missing-import = "error"
+possibly-unresolved-reference = "warn"
+
+[tool.ty.src]
+# Linting codes in `scripts` needs lots of dependencies, so we don't include `scripts` here
+# Instead, we could let .py files in `scripts` be checked when they are changed by pre-commit
+include = ["python/pdf_oxide"]
+
+[tool.ty.environment]
+python = "./.venv"
+
+[tool.pdm.scripts]
+fmt = { composite = ["cargo fmt", "ruff check . --select I --fix", "ruff format ."] }
+lint = { composite = [
+    "cargo check",
+    "cargo clippy -- -D warnings",
+    "ruff check . --fix",
+    "ty check .",
+] }
+# Generate .pyi from Rust via rylai. rylai's default emits modern
+# PEP-585 / PEP-604 syntax with `from __future__ import annotations`,
+# so no post-processing is needed (issue #462). Use:
+# `pdm run stub_gen`.
+stub_gen = "uvx rylai -o python/pdf_oxide/"
+
+# basedpyright — stricter pyright fork. CI-enforced (see .github/workflows/python.yml).
+# The auto-generated pdf_oxide.pyi is produced by rylai upstream and
+# unavoidably types some pyo3 surfaces with `Any` (e.g.
+# context-manager __enter__/__exit__ objects). We silence that subset
+# of rules specifically for the generated stub — hand-written .py
+# code in this package still gets the default strictness.
+[tool.basedpyright]
+include = ["python/pdf_oxide"]
+# rylai emits modern PEP-585 / PEP-604 syntax directly. Bare generics
+# (e.g. `dict | None` for opaque pyo3 `Object` enums) are intentional —
+# rylai can't infer element types when the Rust side is opaque, so we
+# silence `reportMissingTypeArgument` rather than guess defaults.
+reportAny = "none"
+reportUnknownArgumentType = "none"
+reportUnknownMemberType = "none"
+reportUnknownParameterType = "none"
+reportUnknownVariableType = "none"
+reportMissingParameterType = "none"
+reportMissingTypeArgument = "none"
+reportImplicitOverride = "none"
+reportUnannotatedClassAttribute = "none"
