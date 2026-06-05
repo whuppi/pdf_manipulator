@@ -56,7 +56,7 @@ flutter pub run pdf_manipulator:setup
 Hard-pin the version to avoid silent upgrades breaking your web build:
 
 ```yaml
-pdf_manipulator: X.Y.Z  # exact version — upgrade intentionally
+pdf_manipulator: 1.0.4  # exact version — upgrade intentionally
 ```
 
 <details>
