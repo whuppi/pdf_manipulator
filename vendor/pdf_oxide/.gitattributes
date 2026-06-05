@@ -1,0 +1,28 @@
+# Binary files — prevent CRLF conversion on Windows
+*.pdf binary
+*.PDF binary
+
+# Source files — force LF line endings on all platforms.
+# Without this, Git for Windows converts LF→CRLF on checkout, and `gofmt -l`,
+# `cargo fmt --check`, `dotnet format`, and eslint all reject the result.
+*.rs    text eol=lf
+*.go    text eol=lf
+*.py    text eol=lf
+*.cs    text eol=lf
+*.ts    text eol=lf
+*.tsx   text eol=lf
+*.js    text eol=lf
+*.mjs   text eol=lf
+*.cjs   text eol=lf
+*.json  text eol=lf
+*.toml  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.md    text eol=lf
+*.sh    text eol=lf
+Makefile text eol=lf
+
+# Windows-specific files that expect CRLF
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
