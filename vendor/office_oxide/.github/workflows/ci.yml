@@ -1,0 +1,657 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+    # Skip CI when only files that can't affect any test or job change.
+    # Workflow edits themselves still trigger a run (.github/workflows/**
+    # is intentionally excluded from this list). When in doubt, leave the
+    # path out — a redundant CI run is cheaper than a regression slipping
+    # through.
+    paths-ignore:
+      # Documentation / legal / informational
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE-*'
+      - 'llms.txt'
+      # Repo / IDE metadata
+      - '.editorconfig'
+      - '.gitignore'
+      - '.devin/**'
+      # GitHub UI / bot config (no CI impact)
+      - '.github/CODEOWNERS'
+      - '.github/FUNDING.yml'
+      - '.github/dependabot.yml'
+      - '.github/release.yml'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/pull_request_template.md'
+      # Local dev hooks (never run in CI)
+      - '.github/hooks/**'
+      # Release-only assets — used by release.yml, not ci.yml
+      - '.github/templates/**'
+      - '.github/scripts/**'
+      # Manual benchmarking tooling — not invoked by any CI job. bench_rust
+      # is a standalone cargo project, not a workspace member.
+      - 'bench_rust/**'
+      - 'bench_python.py'
+      - 'scripts/bench.sh'
+      - 'scripts/bench-requirements.txt'
+  pull_request:
+    branches: [main, develop]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE-*'
+      - 'llms.txt'
+      - '.editorconfig'
+      - '.gitignore'
+      - '.devin/**'
+      - '.github/CODEOWNERS'
+      - '.github/FUNDING.yml'
+      - '.github/dependabot.yml'
+      - '.github/release.yml'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/pull_request_template.md'
+      - '.github/hooks/**'
+      - '.github/templates/**'
+      - '.github/scripts/**'
+      - 'bench_rust/**'
+      - 'bench_python.py'
+      - 'scripts/bench.sh'
+      - 'scripts/bench-requirements.txt'
+
+# Minimal token permissions — jobs that need write access declare it explicitly.
+permissions:
+  contents: read
+
+# Cancel in-progress runs on the same ref when a new one starts.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Warnings-as-errors workflow-wide — rustc, cargo build/test, maturin,
+  # binding cdylib builds. Clippy + rustdoc already gate this; this closes
+  # the gap so no warnings sneak in via untyped cargo invocations.
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  # Check formatting
+  fmt:
+    name: Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+  # Linting with Clippy
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          components: clippy
+
+      - name: Cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Run Clippy on full workspace
+        run: cargo clippy --all-targets --workspace -- -D warnings
+
+  # Build and test
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        rust: [stable, beta]
+        include:
+          - os: ubuntu-latest
+            rust: nightly
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # master
+        with:
+          toolchain: ${{ matrix.rust }}
+
+      # macos-latest images sometimes ship a Homebrew `rustup-init` that
+      # shadows the cargo shim rustup installs under $HOME/.cargo/bin.
+      # When that happens `cargo build` invokes `rustup-init build` and
+      # exits with "unexpected argument 'build' found". Pinning the
+      # rustup-managed bin to the front of PATH avoids the collision.
+      - name: Prepend rustup cargo to PATH (macOS)
+        if: runner.os == 'macOS'
+        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: ${{ matrix.rust }}
+
+      - name: Build
+        run: cargo build --verbose
+
+      - name: Build examples
+        run: cargo build --examples --verbose
+
+      - name: Run Rust examples (self-contained)
+        if: matrix.os == 'ubuntu-latest' && matrix.rust == 'stable'
+        run: |
+          cargo run --example 01_extract
+          cargo run --example 02_create_rich
+          cargo run --example 03_create_xlsx
+          cargo run --example 04_create_pptx
+          cargo run --example 05_edit
+          cargo run --example 06_from_markdown
+
+      - name: Run tests
+        run: cargo test --verbose
+
+      - name: Build documentation (warnings as errors)
+        run: cargo doc --no-deps --workspace
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
+  # Test feature combinations
+  features:
+    name: Feature Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        features:
+          - ""
+          - "mmap"
+          - "parallel"
+          - "python"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Build with features
+        run: cargo build -p office_oxide --no-default-features --features "${{ matrix.features }}"
+        if: matrix.features != ''
+
+      - name: Build without features
+        run: cargo build -p office_oxide --no-default-features
+        if: matrix.features == ''
+
+  # Build the cdylib once per OS and upload as an artifact. Downstream
+  # binding jobs (go, csharp, node-native) consume this prebuilt lib
+  # instead of recompiling. The Rust crate is the source of truth; the
+  # bindings are thin wrappers, so one release build per platform suffices.
+  build-lib:
+    name: Build cdylib (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      # See note in the `test` job — macOS PATH workaround for the
+      # Homebrew rustup-init shim that shadows cargo.
+      - name: Prepend rustup cargo to PATH (macOS)
+        if: runner.os == 'macOS'
+        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: build-lib-${{ matrix.os }}
+
+      - name: Build cdylib
+        run: cargo build --release --lib
+
+      # Upload all possible lib outputs; downstream jobs find the file at
+      # its original target/release/ path so binding test code works
+      # unchanged.
+      - name: Upload native lib artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-lib-${{ matrix.os }}
+          retention-days: 1
+          if-no-files-found: ignore
+          path: |
+            target/release/liboffice_oxide.so
+            target/release/liboffice_oxide.dylib
+            target/release/deps/liboffice_oxide.dylib
+            target/release/office_oxide.dll
+            target/release/office_oxide.lib
+            target/release/liboffice_oxide.a
+
+  # Python bindings test
+  python:
+    name: Python Bindings
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # Only Python versions still supported as of 2026-04.
+        # 3.8 EOL Oct 2024, 3.9 EOL Oct 2025 — dropped.
+        # 3.10 EOL Oct 2026, 3.11–3.14 still under upstream support.
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          allow-prereleases: true
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+      - name: Create virtual environment
+        run: uv venv
+
+      - name: Install maturin
+        run: uv pip install maturin pytest
+
+      - name: Build Python package
+        run: uv run maturin build --release --features python --out dist
+
+      - name: Install wheel
+        shell: bash
+        run: |
+          wheel=$(ls dist/*.whl)
+          uv pip install "$wheel"
+
+      - name: Test Python bindings
+        run: uv run python -c "import office_oxide; print('office_oxide imported successfully')"
+
+      - name: Run Python examples
+        if: matrix.python-version == '3.12'
+        run: |
+          uv run python examples/python/01_extract/main.py
+          uv run python examples/python/02_create_from_markdown/main.py
+          uv run python examples/python/03_edit/main.py
+          uv run python examples/python/04_batch/main.py
+
+  # Go binding test — reuses the prebuilt cdylib from build-lib.
+  go:
+    name: Go Bindings (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: [build-lib]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: 'stable'
+
+      # upload-artifact uses the LCA (target/release/) as the archive root,
+      # so we must specify path: target/release to restore files there.
+      - name: Download cdylib artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: native-lib-${{ matrix.os }}
+          path: target/release
+
+      # CGo on Windows requires a GNU-format static lib (.a), which the
+      # default MSVC build does not produce. Rebuild with windows-gnu target.
+      - name: Install Rust (Windows CGo rebuild)
+        if: runner.os == 'Windows'
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: x86_64-pc-windows-gnu
+
+      - name: Rebuild GNU static lib (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=gcc \
+            cargo build --release --lib --target x86_64-pc-windows-gnu
+          cp target/x86_64-pc-windows-gnu/release/liboffice_oxide.a target/release/
+
+      - name: Run go test
+        run: go test -tags office_oxide_dev -v ./...
+        working-directory: go
+
+      - name: Run Go examples
+        shell: bash
+        run: |
+          (cd examples/go/01_extract && go run -tags office_oxide_dev .)
+          (cd examples/go/02_create_from_markdown && go run -tags office_oxide_dev .)
+          (cd examples/go/03_edit && go run -tags office_oxide_dev .)
+
+  # C# binding test — reuses the prebuilt cdylib from build-lib.
+  csharp:
+    name: C# Bindings (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: [build-lib]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Download cdylib artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: native-lib-${{ matrix.os }}
+          path: target/release
+
+      # Native lib search paths differ per OS:
+      #   Linux  → LD_LIBRARY_PATH
+      #   macOS  → DYLD_LIBRARY_PATH (ignored under SIP for /usr/local/* but
+      #            works for repo-local target/release/)
+      #   Windows → PATH (DLL search rules)
+      - name: Set native lib search path
+        shell: bash
+        run: |
+          NATIVE_DIR="${{ github.workspace }}/target/release"
+          case "${{ runner.os }}" in
+            Linux)   echo "LD_LIBRARY_PATH=${NATIVE_DIR}" >> "$GITHUB_ENV";;
+            macOS)   echo "DYLD_LIBRARY_PATH=${NATIVE_DIR}" >> "$GITHUB_ENV";;
+            Windows) echo "${NATIVE_DIR}" >> "$GITHUB_PATH";;
+          esac
+
+      - name: Run C# tests
+        run: dotnet test csharp/OfficeOxide.Tests/OfficeOxide.Tests.csproj
+
+      - name: Run C# examples
+        run: |
+          dotnet run --project examples/csharp/01_extract/01_extract.csproj
+          dotnet run --project examples/csharp/02_create_from_markdown/02_create_from_markdown.csproj
+          dotnet run --project examples/csharp/03_edit/03_edit.csproj
+
+  # Node-native binding test (koffi) — reuses the prebuilt cdylib.
+  node-native:
+    name: Node-native Bindings (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: [build-lib]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '20'
+
+      - name: Download cdylib artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: native-lib-${{ matrix.os }}
+          path: target/release
+
+      # Resolve the platform-specific cdylib path for OFFICE_OXIDE_LIB.
+      - name: Resolve cdylib path
+        id: lib
+        shell: bash
+        run: |
+          case "${{ runner.os }}" in
+            Linux)   echo "path=${{ github.workspace }}/target/release/liboffice_oxide.so" >> "$GITHUB_OUTPUT";;
+            macOS)   echo "path=${{ github.workspace }}/target/release/liboffice_oxide.dylib" >> "$GITHUB_OUTPUT";;
+            Windows) echo "path=${{ github.workspace }}/target/release/office_oxide.dll" >> "$GITHUB_OUTPUT";;
+          esac
+
+      - name: Install JS deps
+        run: npm install --silent
+        working-directory: js
+
+      - name: Run Node tests
+        working-directory: js
+        run: node --test test/basic.test.mjs
+        env:
+          OFFICE_OXIDE_LIB: ${{ steps.lib.outputs.path }}
+
+      - name: Run JS examples
+        env:
+          OFFICE_OXIDE_LIB: ${{ steps.lib.outputs.path }}
+        run: |
+          node examples/javascript/01_extract.mjs
+          node examples/javascript/02_create_from_markdown.mjs
+          node examples/javascript/03_edit.mjs
+
+  # WASM build check
+  wasm-build:
+    name: WASM Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Build WASM
+        run: cargo build -p office_oxide --lib --target wasm32-unknown-unknown --features wasm,default
+
+  # Code coverage with enforcement
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@d17fa930f29d14b5a8f7361cdbdf7bf1b722e982 # cargo-llvm-cov
+
+      - name: Generate coverage
+        run: |
+          cargo llvm-cov --lib --tests --lcov --output-path lcov.info \
+            --ignore-filename-regex '(python\.rs|wasm\.rs|ffi\.rs)'
+
+      - name: Enforce 75% coverage threshold
+        run: |
+          cargo llvm-cov report \
+            --ignore-filename-regex '(python\.rs|wasm\.rs|ffi\.rs)' \
+            --fail-under-lines 75
+
+      - name: Upload coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5
+        with:
+          files: ./lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+  # Unused dependencies (cargo-shear)
+  shear:
+    name: Unused deps (cargo-shear)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: shear
+      - name: Install cargo-shear
+        uses: taiki-e/install-action@cf525cb33f51aca27cd6fa02034117ab963ff9f1 # v2
+        with:
+          tool: cargo-shear
+      - name: Check for unused dependencies
+        run: cargo shear
+
+  # Benchmark smoke test — verify all benches compile
+  bench:
+    name: Benchmark Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: bench
+      - name: Build benchmarks (compile check only)
+        run: cargo bench --no-run
+
+  # CLI smoke test — verify the CLI binary builds and responds to --help
+  cli:
+    name: CLI Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Build CLI
+        run: cargo build -p office_oxide_cli
+      - name: Verify CLI --help
+        run: cargo run -p office_oxide_cli -- --help
+
+  # Security audit
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Run security audit
+        uses: actions-rust-lang/audit@72c09e02f132669d52284a3323acdb503cfc1a24 # v1
+
+  # cargo-deny: licenses / advisories / bans / sources (single consolidated gate)
+  deny:
+    name: Dependency Check (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - name: Check dependencies
+        uses: EmbarkStudios/cargo-deny-action@91bf2b620e09e18d6eb78b92e7861937469acedb # v2
+        with:
+          command: check
+          arguments: --all-features
+
+  # cargo-geiger: report unsafe code in the dependency tree (informational)
+  geiger:
+    name: Unsafe code audit (cargo-geiger)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: geiger
+      - name: Install cargo-geiger
+        run: cargo install --locked cargo-geiger
+      - name: Run cargo-geiger
+        run: cargo geiger --all-features 2>/dev/null || true
+
+  # TOML formatting check (taplo)
+  taplo:
+    name: TOML format (taplo)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: taplo
+      - name: Install taplo
+        uses: taiki-e/install-action@cf525cb33f51aca27cd6fa02034117ab963ff9f1 # v2
+        with:
+          tool: taplo-cli
+      - name: Check TOML formatting
+        run: taplo fmt --check
+
+  # Feature powerset: build with every combination of features to catch cfg-rot.
+  # Skips dev-deps; root crate only (binary crates have no optional features).
+  features-powerset:
+    name: Feature powerset (cargo-hack)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: hack
+      - name: Install cargo-hack
+        uses: taiki-e/install-action@cf525cb33f51aca27cd6fa02034117ab963ff9f1 # v2
+        with:
+          tool: cargo-hack
+      - name: Build each feature individually (root crate)
+        run: cargo hack check --each-feature --no-dev-deps --lib -p office_oxide
+
+  # Public-API semver check (disabled — re-enable before next release)
+  # semver-checks:
+  #   name: Semver check (PR only)
+  #   runs-on: ubuntu-latest
+  #   if: github.event_name == 'pull_request'
+  #   continue-on-error: true
+  #   steps:
+  #     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+  #     - uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2
+  #       with:
+  #         feature-group: default-features
+
+  # MSRV: verify the oldest supported Rust toolchain still builds the library
+  msrv:
+    name: MSRV build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - name: Read MSRV from Cargo.toml
+        id: msrv
+        run: |
+          v=$(grep -E '^rust-version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=${v:-1.85}" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: msrv
+      - name: Build with MSRV toolchain
+        run: cargo build --lib -p office_oxide
+
+  # DCO check disabled — sign-off requirement removed.
+  # dco:
+  #   name: DCO check
+  #   runs-on: ubuntu-latest
+  #   if: github.event_name == 'pull_request'
