@@ -417,6 +417,54 @@ warnings that `make analyze` misses.
 
 ---
 
+## S8 — Manual comments as slopfairy
+
+Slopfairy's PAT is stored in Bitwarden Secrets Manager. To post a
+comment as her on any whuppi repo:
+
+```sh
+# Get the PAT (one-time per session)
+PAT=$(cd /path/to/slopfairy/deploy/.deploy && ./secrets.sh get prod/SLOPFAIRY_PAT)
+
+# Comment on an issue or PR
+GH_TOKEN=$PAT gh api repos/whuppi/<repo>/issues/<number>/comments \
+  -X POST -f body="your message ✨"
+
+# Close an issue
+GH_TOKEN=$PAT gh issue close <number> --repo whuppi/<repo> --reason completed
+
+# Edit an existing comment
+GH_TOKEN=$PAT gh api repos/whuppi/<repo>/issues/comments/<comment_id> \
+  -X PATCH -f body="updated message ✨"
+```
+
+Use for: closing stale issues, replying to questions the bot missed,
+corrections. Keep her voice (lowercase, warm, one ✨ at the end).
+
+---
+
+## S9 — Preview changelog before pub.dev publish
+
+The publish job has an approval gate. Before approving, preview what
+the filtered changelog will look like:
+
+```sh
+# From the repo root, with the release tag checked out
+bash tool/release.sh --stamp-changelog v1.0.2
+cat CHANGELOG.md
+
+# Undo (restore the original)
+git checkout CHANGELOG.md
+```
+
+Or preview without modifying any files:
+
+```sh
+bash -c 'source <(sed "s/set -euo/set -eo/" tool/release.sh); build_pubdev_changelog v1.0.2'
+```
+
+---
+
 ## Troubleshooting
 
 | Symptom | Check |
