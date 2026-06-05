@@ -417,6 +417,23 @@ warnings that `make analyze` misses.
 
 ---
 
+## S8 — Preview changelog before pub.dev publish
+
+The filtered changelog is printed to CI logs in the "Preview pub.dev
+changelog" step of the upload-assets job — right before the publish
+approval gate. Open the workflow run, expand that step, and review
+the full changelog that will be published.
+
+To preview locally:
+
+```sh
+bash tool/release.sh --stamp-changelog vX.Y.Z
+cat CHANGELOG.md
+git checkout CHANGELOG.md   # restore
+```
+
+---
+
 ## Troubleshooting
 
 | Symptom | Check |
