@@ -255,6 +255,13 @@ stamp_asset_hashes() {
 # nothing when the range is empty.
 commits_collapsible() {
   local from="$1" to="$2"
+
+  # During --discover the tag doesn't exist yet (it's created after
+  # the notes are generated). Fall back to HEAD in that case.
+  if ! git rev-parse "$to" &>/dev/null; then
+    to="HEAD"
+  fi
+
   local commits
   if [ -n "$from" ]; then
     commits=$(git log "$from".."$to" --oneline --no-decorate 2>/dev/null || true)
