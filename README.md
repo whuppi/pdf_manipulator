@@ -41,6 +41,22 @@ flutter pub run pdf_manipulator:setup
 
 Native platforms need nothing extra — the build hook handles everything.
 
+<details>
+<summary>Why is this step needed for web?</summary>
+
+Flutter's build hook system (`hooks: build`) supports native binaries
+(`.so`, `.dylib`, `.dll`) automatically, but has no equivalent for web
+assets (WASM, JS). The setup command copies the pre-built WASM module
+into your project's `web/` directory where Flutter's web build can find it.
+
+This is a Flutter/Dart platform limitation, not specific to this package.
+Tracking issues:
+- [dart-lang/native#2829](https://github.com/dart-lang/native/issues/2829) — `data_assets` support in Dart SDK
+- [dart-lang/native#2114](https://github.com/dart-lang/native/issues/2114) — `DataConfig` with a target
+
+When `data_assets` ships, this step will be removed.
+</details>
+
 ---
 
 ## Quick start
