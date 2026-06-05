@@ -1,73 +1,106 @@
-#!/bin/bash
-# ────────────────────────────────────────────────────────────────────
-# release.sh — All release logic in one file. The workflow is just
-# job orchestration (checkout, compile, upload, publish); every
-# decision and mutation lives here.
+#!/usr/bin/env bash
+# ════════════════════════════════════════════════════════════════════
+# release.sh — all release logic in one file.
 #
-# Eight modes:
+# The CI workflow only does job orchestration (checkout, compile,
+# upload, publish); every decision and mutation lives here.
 #
+# Seven modes
+# ───────────
 #   --gate               Check if this push should trigger a release.
-#   --discover           Find version, create stamped tag + GitHub Release.
+#   --discover           Find the version, create the stamped tag and
+#                        the GitHub Release.
 #   --github-notes       Print GitHub Release notes to stdout.
 #   --update-tag-hashes  Stamp asset hashes into the tag and update it.
-#   --stamp-changelog    Build filtered CHANGELOG.md for pub.dev tarball.
-#   --add-git-install    Append git install snippet to release notes.
-#   --add-pub-install    Append pub.dev install snippet to release notes.
-#   --stamp-tag          Prepare tree for the release tag commit (internal).
+#   --stamp-changelog    Build the filtered CHANGELOG.md for the pub.dev
+#                        tarball.
+#   --add-git-install    Append the git-install snippet to release notes.
+#   --add-pub-install    Append the pub.dev-install snippet to notes.
 #
-# Pipeline flow (matches workflow jobs):
-#   1. gate:      --gate (should this push trigger anything?)
-#   2. discover:  --discover (find version, stamp tag, create release)
-#   3. compile:   (workflow — checkout tag, build per-platform)
-#   4. upload:    (workflow — upload binaries) → --add-git-install → --update-tag-hashes
-#   5. publish:   --stamp-changelog → dart pub publish → --add-pub-install
+# (Tree stamping — version bump, submodule de-registration, vendor
+# source — happens inside --discover; it is not a separate mode.)
 #
-# After step 4, the tag has: stamped version + raw vendor source +
-# asset hashes. Anyone doing `git: ref: <tag>` in pubspec gets a
+# Pipeline flow (matches the workflow jobs)
+# ─────────────────────────────────────────
+#   1. gate      → --gate            should this push trigger anything?
+#   2. discover  → --discover        find version, stamp tag, create release
+#   3. compile   → (workflow)        checkout tag, build per platform
+#   4. upload    → (workflow)        upload binaries
+#                  --add-git-install
+#                  --update-tag-hashes
+#   5. publish   → --stamp-changelog
+#                  dart pub publish
+#                  --add-pub-install
+#
+# After step 4 the tag carries: stamped version + raw vendor source +
+# asset hashes. Anyone using `git: ref: <tag>` in their pubspec gets a
 # working build with verified binaries.
 #
 # Idempotency: every mode is safe to rerun. Existing releases are
-# skipped, duplicate snippets are detected, unchanged hashes don't
+# skipped, duplicate snippets are detected, unchanged hashes do not
 # create new commits.
 #
-# Requires: gh CLI authenticated (GH_TOKEN or gh auth login)
-# Run from: package root
-# ────────────────────────────────────────────────────────────────────
+# Requires : gh CLI authenticated (GH_TOKEN or `gh auth login`)
+# Run from : the package root
+# ════════════════════════════════════════════════════════════════════
+
 set -euo pipefail
 
 
-# ═══════════════════════════════════════════════════════════════════
-# § 1 — Args + globals
-# ═══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════
+# § 1 — Arguments and globals
+# ════════════════════════════════════════════════════════════════════
 
 MODE="${1:---help}"
-
-if [[ "$MODE" == "--help" || "$MODE" == "-h" ]]; then
-  echo "Usage: $0 <mode> [tag]"
-  echo ""
-  echo "Modes:"
-  echo "  --gate               Check if push should trigger release (needs BRANCH, BEFORE, AFTER env)"
-  echo "  --discover           Find version + create release (needs BRANCH env)"
-  echo "  --github-notes TAG   Print release notes to stdout"
-  echo "  --update-tag-hashes TAG  Stamp asset hashes into the tag"
-  echo "  --stamp-changelog TAG    Build filtered CHANGELOG.md for pub.dev"
-  echo "  --add-git-install TAG    Append git install snippet to release notes"
-  echo "  --add-pub-install TAG    Append pub.dev install snippet to release notes"
-  exit 0
-fi
-
 TAG="${2:-}"
 VERSION="${TAG:+${TAG#v}}"
+
 REPO="${GITHUB_REPOSITORY:-chaudharydeepanshu/pdf_manipulator}"
 REPO_URL="https://github.com/$REPO"
 PKG_NAME="pdf_manipulator"
 
 
-# ═══════════════════════════════════════════════════════════════════
-# § 2 — Helpers
-# ═══════════════════════════════════════════════════════════════════
+usage() {
+  cat <<EOF
+Usage: $0 <mode> [tag]
 
-# Write a key=value pair to $GITHUB_OUTPUT (or stdout if not in CI).
+Modes:
+  --gate                    Check if a push should trigger a release.
+                            Env: BRANCH (optionally BEFORE, AFTER).
+                            Outputs: should_run, version.
+
+  --discover                Find the version and create the release.
+                            Env: BRANCH.
+                            Outputs: tag, version, has_release.
+
+  --github-notes TAG        Print GitHub Release notes to stdout.
+  --update-tag-hashes TAG   Stamp asset hashes into the tag (post-upload).
+  --stamp-changelog TAG     Build the filtered CHANGELOG.md for pub.dev.
+  --add-git-install TAG     Append the git-install snippet to the notes.
+  --add-pub-install TAG     Append the pub.dev-install snippet to the notes.
+
+Tags must start with 'v' (e.g. v1.2.3).
+EOF
+}
+
+# Modes that operate on a specific release require a valid tag.
+require_tag() {
+  if [ -z "$TAG" ]; then
+    echo "Error: $MODE requires a tag argument (e.g. $0 $MODE v1.0.0)" >&2
+    exit 1
+  fi
+  if [[ "$TAG" != v* ]]; then
+    echo "Error: tag must start with 'v' (got '$TAG')" >&2
+    exit 1
+  fi
+}
+
+
+# ════════════════════════════════════════════════════════════════════
+# § 2 — Generic helpers
+# ════════════════════════════════════════════════════════════════════
+
+# Write a key=value pair to $GITHUB_OUTPUT (and echo it for the log).
 gh_output() {
   if [ -n "${GITHUB_OUTPUT:-}" ]; then
     echo "$1=$2" >> "$GITHUB_OUTPUT"
@@ -75,24 +108,28 @@ gh_output() {
   echo "  output: $1=$2"
 }
 
-# Configure git identity for CI commits.
+# Configure the git identity used for CI commits.
 git_ci_identity() {
-  git config user.name "github-actions[bot]"
+  git config user.name  "github-actions[bot]"
   git config user.email "github-actions[bot]@users.noreply.github.com"
 }
 
-# Extract one version's entry from a changelog file.
+# Extract one version's entry (body only, heading excluded) from a
+# changelog file. The version is regex-escaped before matching.
 extract_entry() {
   local file="$1" version="$2"
-  awk "/^## ${version//./\\.}($| )/{found=1; next} /^## /{found=0} found" "$file"
+  local escaped
+  escaped=$(printf '%s' "$version" | sed 's/[][\\.^$*+?(){}|]/\\&/g')
+  awk "/^## ${escaped}($| )/{found=1; next} /^## /{found=0} found" "$file"
 }
 
-# List all ## version headings in a changelog file, one per line.
+# List every "## version" heading in a changelog file, one per line.
 get_changelog_versions() {
   sed -n 's/^## \([^ ]*\).*/\1/p' "$1" 2>/dev/null || true
 }
 
-# Pick changelog source file based on version type.
+# Choose the changelog source file based on the version type.
+# Prerelease versions (containing "-") live in CHANGELOG.pre.md.
 pick_source_file() {
   local ver="$1"
   if [[ "$ver" == *-* ]]; then
@@ -102,7 +139,7 @@ pick_source_file() {
   fi
 }
 
-# Fetch all published versions from pub.dev.
+# Fetch every published version of the package from pub.dev.
 get_published_versions() {
   curl -sS "https://pub.dev/api/packages/$PKG_NAME" 2>/dev/null \
     | python3 -c "
@@ -111,12 +148,12 @@ try:
     data = json.load(sys.stdin)
     for v in data.get('versions', []):
         print(v['version'])
-except:
+except Exception:
     pass
 " 2>/dev/null || true
 }
 
-# Stamp version into pubspec.yaml + version.dart.
+# Stamp a version string into pubspec.yaml and lib/src/version.dart.
 stamp_version() {
   local ver="$1"
   sed -i.bak "s/^version: .*/version: $ver/" pubspec.yaml && rm -f pubspec.yaml.bak
@@ -126,25 +163,35 @@ stamp_version() {
   echo "  version.dart → $ver"
 }
 
-# Generate asset_hashes.dart from GitHub Release API digests.
-# Returns 0 if hashes were written, 1 if skipped.
+# Generate lib/src/hook/asset_hashes.dart from the GitHub Release API
+# digests. Returns 0 if the file was written, 1 if there was nothing to
+# stamp (so callers can short-circuit with `|| ...`).
 stamp_asset_hashes() {
   local tag="$1"
   local hash_file="lib/src/hook/asset_hashes.dart"
 
   if ! command -v gh &>/dev/null; then
-    echo "  ⚠ gh CLI not found — skipping asset hashes"; return 1
+    echo "  ⚠ gh CLI not found — skipping asset hashes"
+    return 1
   fi
   if ! gh api "repos/$REPO/releases/tags/$tag" --silent 2>/dev/null; then
-    echo "  ⚠ No GitHub Release for $tag — skipping asset hashes"; return 1
+    echo "  ⚠ No GitHub Release for $tag — skipping asset hashes"
+    return 1
   fi
 
+  # WASM assets are excluded — they're loaded via JS, not downloaded by
+  # the Dart build hook. Only native binaries need hash verification.
   local assets
   assets=$(gh api "repos/$REPO/releases/tags/$tag" \
-    --jq '.assets[] | select(.digest != null and (.name | startswith("wasm-") | not) and (.name | startswith("Source") | not)) | "\(.name)\t\(.digest)"')
+    --jq '.assets[]
+          | select(.digest != null
+                   and (.name | startswith("wasm-")  | not)
+                   and (.name | startswith("Source") | not))
+          | "\(.name)\t\(.digest)"')
 
   if [ -z "$assets" ]; then
-    echo "  ⚠ No assets with digests — skipping asset hashes"; return 1
+    echo "  ⚠ No assets with digests — skipping asset hashes"
+    return 1
   fi
 
   {
@@ -169,41 +216,43 @@ stamp_asset_hashes() {
 }
 
 
-# ═══════════════════════════════════════════════════════════════════
-# § 3 — Changelog builder
+# ════════════════════════════════════════════════════════════════════
+# § 3 — Changelog builders
 #
-# Two entry points:
-#   build_github_notes TAG   → stdout: entry + commits collapsible
-#   build_pubdev_changelog TAG → stdout: full filtered changelog
+# Two public builders:
+#   build_github_notes     TAG → stdout: the entry + a commits collapsible
+#   build_pubdev_changelog TAG → stdout: the full, filtered changelog
 #
-# ── The pub.dev changelog algorithm ────────────────────────────
+# ── pub.dev changelog algorithm ───────────────────────────────────
 #
-# Step 0 — Pick source file.
-#   Stable (no "-") → CHANGELOG.md. Pre (has "-") → CHANGELOG.pre.md.
+# Step 0 — Pick the source file.
+#   Stable (no "-") → CHANGELOG.md.  Pre (has "-") → CHANGELOG.pre.md.
 #
-# Step 1 — YES/NO classification.
-#   For each ## heading in the source file: is it on pub.dev OR is
-#   it the one being deployed right now?
-#     YES → gets its own ## section in the output.
-#     NO  → folded into a collapsible under the nearest YES above it.
+# Step 1 — Classify each "## heading" as YES or NO.
+#   YES = it's already on pub.dev, OR it's the version being deployed.
+#   NO  = anything else (unpublished intermediate work).
 #
-# Pass 1 — Top to bottom, build sections.
-#   YES versions get ## headings. NO versions buffer into the
-#   previous YES version's collapsible. Multiple consecutive NOs
-#   stack in the same collapsible.
+#   YES → gets its own ## section in the output.
+#   NO  → folded into a collapsible under the nearest YES above it.
 #
-# Pass 2 — Bottom to top, add commit lists.
-#   Each YES version gets <details>Commits since vPREV</details>
+# Pass 1 — Top to bottom, build the sections.
+#   YES versions get ## headings. Consecutive NO versions buffer into
+#   the previous YES version's "unpublished changes" collapsible.
+#
+# Pass 2 — Bottom to top, add the commit lists.
+#   Each YES version gets a <details>Commits since vPREV</details>,
 #   where PREV is the YES version directly below it. The bottom-most
-#   YES version gets "Commits since initial".
+#   YES version uses "Commits since initial".
 #
-# ── Commit range rule (same type only) ─────────────────────────
+# ── Commit-range rule (same type only) ────────────────────────────
 #
-# Stable tags only diff against previous stable tags.
-# Prerelease tags only diff against previous prerelease tags.
-# Applies to BOTH github-notes and pub.dev changelog.
-# ═══════════════════════════════════════════════════════════════════
+# Stable tags diff only against previous stable tags; prerelease tags
+# diff only against previous prerelease tags. This applies to both the
+# GitHub notes and the pub.dev changelog.
+# ════════════════════════════════════════════════════════════════════
 
+# Render a <details> block listing commits in (from, to]. Prints
+# nothing when the range is empty.
 commits_collapsible() {
   local from="$1" to="$2"
   local commits
@@ -213,20 +262,23 @@ commits_collapsible() {
     commits=$(git log "$to" --oneline --no-decorate 2>/dev/null || true)
   fi
   [ -z "$commits" ] && return
-  local count
+
+  local count list
   count=$(echo "$commits" | grep -c . || true)
-  local list
   list=$(echo "$commits" | sed 's/^/- /')
   printf '<details><summary>Commits since %s (%s)</summary>\n\n%s\n\n</details>\n' \
     "${from:-initial}" "$count" "$list"
 }
 
+# Find the previous tag of the same release type (stable vs prerelease)
+# that precedes `current` in version order. Prints nothing if none.
 prev_same_type_tag() {
   local current="$1"
   local ver="${current#v}"
   local tags
-  tags=$(git tag --sort=v:refname 2>/dev/null) || true
+  tags=$(git tag --sort=version:refname 2>/dev/null) || true
   [ -z "$tags" ] && return
+
   local result="" tag
   for tag in $tags; do
     [[ "$tag" == "$current" ]] && break
@@ -245,12 +297,11 @@ build_github_notes() {
   local ver="${tag#v}"
   local source_file
   source_file=$(pick_source_file "$ver")
-  local notes
-  notes=$(extract_entry "$source_file" "$ver")
-  local prev_tag
+
+  extract_entry "$source_file" "$ver"
+
+  local prev_tag csection
   prev_tag=$(prev_same_type_tag "$tag")
-  echo "$notes"
-  local csection
   csection=$(commits_collapsible "$prev_tag" "$tag")
   if [ -n "$csection" ]; then
     echo ""
@@ -263,11 +314,12 @@ build_pubdev_changelog() {
   local ver="${tag#v}"
   local source_file
   source_file=$(pick_source_file "$ver")
-  local published
+
+  local published versions
   published=$(get_published_versions)
-  local versions
   versions=$(get_changelog_versions "$source_file")
 
+  # Is this version published, or the one being deployed right now?
   _is_yes() {
     [[ "$1" == "$ver" ]] && return 0
     if [ -n "$published" ]; then
@@ -279,45 +331,10 @@ build_pubdev_changelog() {
     return 1
   }
 
-  local -a yes_list=()
-  local v
-  while IFS= read -r v; do
-    [ -z "$v" ] && continue
-    _is_yes "$v" && yes_list+=("$v")
-  done <<< "$versions"
-
-  # Pass 1 — per-version section files
-  local workdir
-  workdir=$(mktemp -d)
-  local unpub_buf="" cur_yes=""
-  while IFS= read -r v; do
-    [ -z "$v" ] && continue
-    local entry
-    entry=$(extract_entry "$source_file" "$v")
-    if _is_yes "$v"; then
-      if [ -n "$unpub_buf" ] && [ -n "$cur_yes" ]; then
-        {
-          echo ""
-          echo "<details><summary>Also includes unpublished changes</summary>"
-          echo ""
-          echo "$unpub_buf"
-          echo ""
-          echo "</details>"
-        } >> "$workdir/$cur_yes"
-      fi
-      unpub_buf=""
-      cur_yes="$v"
-      { echo "## $v"; echo ""; echo "$entry"; } > "$workdir/$v"
-    else
-      if [ -n "$unpub_buf" ]; then
-        unpub_buf+=$'\n\n'"### $v"$'\n'"$entry"
-      else
-        unpub_buf="### $v"$'\n'"$entry"
-      fi
-    fi
-  done <<< "$versions"
-
-  if [ -n "$unpub_buf" ] && [ -n "$cur_yes" ]; then
+  # Fold the buffered NO-version entries into the current YES section.
+  # Reads $unpub_buf / $cur_yes / $workdir from the enclosing scope.
+  _flush_unpub() {
+    [ -n "$unpub_buf" ] && [ -n "$cur_yes" ] || return 0
     {
       echo ""
       echo "<details><summary>Also includes unpublished changes</summary>"
@@ -326,15 +343,42 @@ build_pubdev_changelog() {
       echo ""
       echo "</details>"
     } >> "$workdir/$cur_yes"
-  fi
+  }
 
-  # Pass 2 — bottom to top, commit lists
-  local prev_yes_tag=""
-  local i
-  for ((i=${#yes_list[@]}-1; i>=0; i--)); do
-    local yv="${yes_list[$i]}"
-    local ytag="v$yv"
-    local csection
+  # Collect the YES versions in document order (newest first).
+  local -a yes_list=()
+  local v
+  while IFS= read -r v; do
+    [ -z "$v" ] && continue
+    _is_yes "$v" && yes_list+=("$v")
+  done <<< "$versions"
+
+  # ── Pass 1 — write one file per version section ──
+  local workdir
+  workdir=$(mktemp -d)
+
+  local unpub_buf="" cur_yes="" entry
+  while IFS= read -r v; do
+    [ -z "$v" ] && continue
+    entry=$(extract_entry "$source_file" "$v")
+    if _is_yes "$v"; then
+      _flush_unpub                # attach pending NOs to the previous YES
+      unpub_buf=""
+      cur_yes="$v"
+      { echo "## $v"; echo ""; echo "$entry"; } > "$workdir/$v"
+    elif [ -n "$unpub_buf" ]; then
+      unpub_buf+=$'\n\n'"### $v"$'\n'"$entry"
+    else
+      unpub_buf="### $v"$'\n'"$entry"
+    fi
+  done <<< "$versions"
+  _flush_unpub                    # attach any trailing NOs to the last YES
+
+  # ── Pass 2 — bottom to top, append commit lists ──
+  local prev_yes_tag="" i yv ytag csection
+  for ((i = ${#yes_list[@]} - 1; i >= 0; i--)); do
+    yv="${yes_list[$i]}"
+    ytag="v$yv"
     csection=$(commits_collapsible "$prev_yes_tag" "$ytag")
     if [ -n "$csection" ]; then
       { echo ""; echo "$csection"; } >> "$workdir/$yv"
@@ -342,119 +386,125 @@ build_pubdev_changelog() {
     prev_yes_tag="$ytag"
   done
 
-  # Assemble
+  # ── Assemble: preamble, then each YES section newest-first ──
   awk '/^## /{exit} {print}' "$source_file"
   for yv in "${yes_list[@]}"; do
     cat "$workdir/$yv"
     echo ""
   done
+
   rm -rf "$workdir"
 }
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════
 # § 4 — Mode: --gate
 #
-# Checks if the right changelog file changed in this push.
-# dev only reacts to CHANGELOG.pre.md, prod to CHANGELOG.md.
-# Uses git diff across the full push range (not head_commit.modified,
-# which misses force-pushes and ff-merges). Falls back to
-# should_run=true when diff fails (new branch, orphaned before-SHA,
-# workflow_dispatch where BEFORE is empty) — a wasted run is cheap;
-# a missed release is not.
+# Decide whether the right changelog file changed in this push: dev
+# reacts to CHANGELOG.pre.md, prod to CHANGELOG.md. The diff spans the
+# whole push range (not head_commit.modified, which misses force-pushes
+# and ff-merges). If the diff can't be computed — a new branch, an
+# orphaned before-SHA, or a workflow_dispatch with an empty BEFORE — we
+# assume the file changed: a wasted run is cheap, a missed release is not.
 #
-# Env: BRANCH, BEFORE, AFTER
-# Outputs: should_run, version (via $GITHUB_OUTPUT)
-# ═══════════════════════════════════════════════════════════════════
+# Env     : BRANCH (optionally BEFORE, AFTER)
+# Outputs : should_run, version
+# ════════════════════════════════════════════════════════════════════
 
-if [[ "$MODE" == "--gate" ]]; then
-  BRANCH="${BRANCH:?--gate requires BRANCH env var}"
-
-  if [[ "$BRANCH" == "prod" ]]; then
-    TARGET_FILE="CHANGELOG.md"
+cmd_gate() {
+  local branch="${BRANCH:?--gate requires BRANCH env var}"
+  local target_file
+  if [[ "$branch" == "prod" ]]; then
+    target_file="CHANGELOG.md"
   else
-    TARGET_FILE="CHANGELOG.pre.md"
+    target_file="CHANGELOG.pre.md"
   fi
 
-  CHANGED_FILES=$(git diff --name-only "${BEFORE:-}" "${AFTER:-HEAD}" 2>/dev/null || echo "$TARGET_FILE")
+  local changed_files
+  if ! changed_files=$(git diff --name-only "${BEFORE:-}" "${AFTER:-HEAD}" 2>/dev/null); then
+    echo "Gate: git diff failed (force-push, new branch, or workflow_dispatch) — assuming $target_file changed"
+    changed_files="$target_file"
+  fi
 
-  if echo "$CHANGED_FILES" | grep -qx "$TARGET_FILE"; then
-    FOUND_VERSION=$(sed -n 's/^## \([^ ]*\).*/\1/p' "$TARGET_FILE" 2>/dev/null | head -1 || true)
+  if grep -Fqx "$target_file" <<< "$changed_files"; then
+    local found_version
+    found_version=$(get_changelog_versions "$target_file" | head -1 || true)
     gh_output "should_run" "true"
-    gh_output "version" "${FOUND_VERSION:-unknown}"
-    echo "Gate: $TARGET_FILE changed, version=$FOUND_VERSION"
+    gh_output "version" "${found_version:-unknown}"
+    echo "Gate: $target_file changed, version=$found_version"
   else
     gh_output "should_run" "false"
     gh_output "version" ""
-    echo "Gate: $TARGET_FILE not in changeset, skipping"
+    echo "Gate: $target_file not in changeset, skipping"
   fi
-  exit 0
-fi
+}
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════
 # § 5 — Mode: --discover
 #
-# Reads the changelog, extracts the latest version, validates
-# branch/type match, creates a stamped tag commit (version stamped,
-# submodules deregistered, vendor source raw), pushes it, creates
-# a GitHub Release with notes. Idempotent: skips if the release
-# already exists.
+# Read the changelog, take the latest version, validate that its type
+# matches the branch, build a stamped tag commit (version stamped,
+# submodules de-registered, vendor source left raw), push it to a
+# staging branch, and create the GitHub Release from it. Idempotent:
+# skips if the release already exists.
 #
-# Env: BRANCH
-# Outputs: tag, version, has_release (via $GITHUB_OUTPUT)
-# ═══════════════════════════════════════════════════════════════════
+# Env     : BRANCH
+# Outputs : tag, version, has_release
+# ════════════════════════════════════════════════════════════════════
 
-if [[ "$MODE" == "--discover" ]]; then
-  BRANCH="${BRANCH:?--discover requires BRANCH env var}"
-
-  if [[ "$BRANCH" == "prod" ]]; then
-    FILE="CHANGELOG.md"
+cmd_discover() {
+  local branch="${BRANCH:?--discover requires BRANCH env var}"
+  local file
+  if [[ "$branch" == "prod" ]]; then
+    file="CHANGELOG.md"
   else
-    FILE="CHANGELOG.pre.md"
+    file="CHANGELOG.pre.md"
   fi
 
-  if [ ! -f "$FILE" ]; then
+  if [ ! -f "$file" ]; then
     gh_output "has_release" "false"
-    echo "No $FILE found"
-    exit 0
+    echo "No $file found"
+    return 0
   fi
 
-  VERSION=$(sed -n 's/^## \([^ ]*\).*/\1/p' "$FILE" 2>/dev/null | head -1 || true)
-  if [ -z "$VERSION" ]; then
+  local version
+  version=$(get_changelog_versions "$file" | head -1 || true)
+  if [ -z "$version" ]; then
     gh_output "has_release" "false"
-    echo "No version heading in $FILE"
-    exit 0
+    echo "No version heading in $file"
+    return 0
   fi
 
-  TAG="v$VERSION"
-  IS_PRE=false
-  [[ "$VERSION" == *-* ]] && IS_PRE=true
+  local tag="v$version"
+  local is_pre=false
+  [[ "$version" == *-* ]] && is_pre=true
 
-  if [[ "$BRANCH" == "prod" && "$IS_PRE" == "true" ]]; then
-    echo "Skipping prerelease $VERSION on prod."
+  if [[ "$branch" == "prod" && "$is_pre" == "true" ]]; then
+    echo "Skipping prerelease $version on prod."
     gh_output "has_release" "false"
-    exit 0
+    return 0
   fi
-  if [[ "$BRANCH" == "dev" && "$IS_PRE" == "false" ]]; then
-    echo "Skipping stable $VERSION on dev."
+  if [[ "$branch" == "dev" && "$is_pre" == "false" ]]; then
+    echo "Skipping stable $version on dev."
     gh_output "has_release" "false"
-    exit 0
+    return 0
   fi
 
-  # Idempotent: skip if release already exists
-  if gh release view "$TAG" --repo "$REPO" --json tagName >/dev/null 2>&1; then
-    echo "Release $TAG already exists."
-    gh_output "tag" "$TAG"
-    gh_output "version" "$VERSION"
+  # Idempotent: skip if the release already exists.
+  if gh release view "$tag" --repo "$REPO" --json tagName >/dev/null 2>&1; then
+    echo "Release $tag already exists."
+    gh_output "tag" "$tag"
+    gh_output "version" "$version"
     gh_output "has_release" "true"
-    exit 0
+    return 0
   fi
 
-  # Stamp the tree: version + deregister submodules + false_secrets
-  echo "=== Stamping tag tree for $TAG ==="
-  stamp_version "$VERSION"
+  # ── Stamp the tree: version + de-register submodules + false_secrets ──
+  echo "=== Stamping tag tree for $tag ==="
+  stamp_version "$version"
 
+  local sub
   for sub in vendor/pdf_oxide vendor/office_oxide; do
     if [ -d "$sub/.git" ] || [ -f "$sub/.git" ]; then
       git rm --cached "$sub" 2>/dev/null || true
@@ -470,112 +520,145 @@ if [[ "$MODE" == "--discover" ]]; then
     echo "  .gitmodules removed"
   fi
 
-  if ! grep -q '/vendor/\*\*' pubspec.yaml; then
+  if ! grep -q '^  - /vendor/\*\*$' pubspec.yaml; then
     sed -i.bak '/^false_secrets:/a\  - /vendor/**' pubspec.yaml && rm -f pubspec.yaml.bak
     echo "  pubspec.yaml += false_secrets /vendor/**"
   fi
 
-  # Commit, push, create release
+  # ── Commit, push to staging, create the GitHub Release ──
   git_ci_identity
   git add -A
-  git commit -m "release: $TAG"
-  STAMPED_SHA=$(git rev-parse HEAD)
-  echo "  Stamped commit: $STAMPED_SHA"
+  if git diff --cached --quiet; then
+    echo "  Tree already stamped — skipping commit"
+  else
+    git commit -m "release: $tag"
+  fi
 
-  git push origin --force "$STAMPED_SHA:refs/heads/_release-staging"
+  local stamped_sha
+  stamped_sha=$(git rev-parse HEAD)
+  echo "  Stamped commit: $stamped_sha"
 
-  NOTES=$(build_github_notes "$TAG")
-  FLAGS=""
-  [[ "$IS_PRE" == "true" ]] && FLAGS="--prerelease"
-  gh release create "$TAG" \
+  git push origin --force "$stamped_sha:refs/heads/_release-staging"
+  trap 'git push origin --delete refs/heads/_release-staging 2>/dev/null || true' EXIT
+
+  local notes_file
+  notes_file=$(mktemp)
+  build_github_notes "$tag" > "$notes_file"
+
+  local -a flags=()
+  [[ "$is_pre" == "true" ]] && flags+=(--prerelease)
+  gh release create "$tag" \
     --repo "$REPO" \
-    --target "$STAMPED_SHA" \
-    --title "$PKG_NAME $VERSION" \
-    --notes "$NOTES" \
-    $FLAGS
-  echo "  Created release $TAG at $STAMPED_SHA"
+    --target "$stamped_sha" \
+    --title "$PKG_NAME $version" \
+    --notes-file "$notes_file" \
+    "${flags[@]}"
+  rm -f "$notes_file"
+  echo "  Created release $tag at $stamped_sha"
 
+  # Staging branch no longer needed — the tag keeps the commit alive.
+  trap - EXIT
   git push origin --delete refs/heads/_release-staging 2>/dev/null || true
 
-  gh_output "tag" "$TAG"
-  gh_output "version" "$VERSION"
+  gh_output "tag" "$tag"
+  gh_output "version" "$version"
   gh_output "has_release" "true"
-  exit 0
-fi
+}
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════
 # § 6 — Mode: --github-notes
 #
 # Print GitHub Release notes to stdout: the changelog entry for this
-# version + a collapsible commit list since the previous tag of the
-# same type (stable↔stable, pre↔pre).
-# ═══════════════════════════════════════════════════════════════════
+# version plus a collapsible commit list since the previous tag of the
+# same type (stable ↔ stable, pre ↔ pre).
+# ════════════════════════════════════════════════════════════════════
 
-if [[ "$MODE" == "--github-notes" ]]; then
+cmd_github_notes() {
+  require_tag
   build_github_notes "$TAG"
-  exit 0
-fi
+}
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════
 # § 7 — Mode: --update-tag-hashes
 #
-# After binaries are uploaded, stamp asset hashes into the tag so
-# `git: ref: <tag>` users get verified binary downloads. Idempotent:
-# skips if hashes are unchanged.
-# ═══════════════════════════════════════════════════════════════════
+# After the binaries are uploaded, stamp their hashes into the tag so
+# `git: ref: <tag>` users get verified downloads. Idempotent: skips if
+# the hashes are unchanged.
+# ════════════════════════════════════════════════════════════════════
 
-if [[ "$MODE" == "--update-tag-hashes" ]]; then
+cmd_update_tag_hashes() {
+  require_tag
   echo "=== Updating $TAG with asset hashes ==="
-  stamp_asset_hashes "$TAG" || { echo "No hashes to stamp — tag unchanged."; exit 0; }
+
+  git fetch origin "refs/tags/$TAG:refs/tags/$TAG" 2>/dev/null || true
+
+  stamp_asset_hashes "$TAG" || { echo "No hashes to stamp — tag unchanged."; return 0; }
 
   git_ci_identity
   git add lib/src/hook/asset_hashes.dart
 
   if git diff --cached --quiet; then
     echo "  Asset hashes unchanged — tag already up to date"
-    exit 0
+    return 0
   fi
 
   git commit -m "stamp: asset hashes for $TAG"
-  NEW_SHA=$(git rev-parse HEAD)
-  git tag -f "$TAG" "$NEW_SHA"
+  local new_sha
+  new_sha=$(git rev-parse HEAD)
+  git tag -f "$TAG" "$new_sha"
   git push origin --force "refs/tags/$TAG"
-  echo "  Tag $TAG updated → $NEW_SHA"
-  exit 0
-fi
+  echo "  Tag $TAG updated → $new_sha"
+}
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════
 # § 8 — Mode: --stamp-changelog
 #
 # Build the filtered CHANGELOG.md for the pub.dev tarball. The tag
-# already has everything else (version, vendor source, asset hashes).
-# ═══════════════════════════════════════════════════════════════════
+# already carries everything else (version, vendor source, hashes).
+# ════════════════════════════════════════════════════════════════════
 
-if [[ "$MODE" == "--stamp-changelog" ]]; then
+cmd_stamp_changelog() {
+  require_tag
   echo "=== Building changelog for $TAG ==="
   build_pubdev_changelog "$TAG" > CHANGELOG.md
   echo "  CHANGELOG.md built (filtered for pub.dev)"
-  exit 0
-fi
+}
 
 
-# ═══════════════════════════════════════════════════════════════════
-# § 9 — Mode: --add-git-install / --add-pub-install
+# ════════════════════════════════════════════════════════════════════
+# § 9 — Modes: --add-git-install / --add-pub-install
 #
-# Append install snippets to existing GitHub Release notes.
-# Idempotent: skips if snippet already present.
-# ═══════════════════════════════════════════════════════════════════
+# Append an install snippet to the existing GitHub Release notes.
+# Idempotent: skips if the snippet is already present.
+# ════════════════════════════════════════════════════════════════════
 
-if [[ "$MODE" == "--add-git-install" ]]; then
-  EXISTING=$(gh release view "$TAG" --repo "$REPO" --json body --jq '.body')
-  if echo "$EXISTING" | grep -qF "### Install (git tag)"; then
-    echo "Git install snippet already present — skipping"
-    exit 0
+# Append `section` to a release's notes unless `marker` already appears
+# in the body.
+append_release_note() {
+  local tag="$1" marker="$2" section="$3"
+  local existing
+  existing=$(gh release view "$tag" --repo "$REPO" --json body --jq '.body')
+
+  if grep -qF "$marker" <<< "$existing"; then
+    echo "Snippet '$marker' already present — skipping"
+    return 0
   fi
-  SNIPPET="---
+
+  local notes_file
+  notes_file=$(mktemp)
+  printf '%s\n\n%s\n' "$existing" "$section" > "$notes_file"
+  gh release edit "$tag" --repo "$REPO" --notes-file "$notes_file"
+  rm -f "$notes_file"
+  echo "Added '$marker' to $tag release notes"
+}
+
+cmd_add_git_install() {
+  require_tag
+  local section
+  section="---
 
 ### Install (git tag)
 
@@ -586,33 +669,42 @@ dependencies:
       url: $REPO_URL.git
       ref: $TAG
 \`\`\`"
-  gh release edit "$TAG" --repo "$REPO" --notes "$EXISTING"$'\n\n'"$SNIPPET"
-  echo "Added git install snippet to $TAG release notes"
-  exit 0
-fi
+  append_release_note "$TAG" "### Install (git tag)" "$section"
+}
 
-if [[ "$MODE" == "--add-pub-install" ]]; then
-  EXISTING=$(gh release view "$TAG" --repo "$REPO" --json body --jq '.body')
-  if echo "$EXISTING" | grep -qF "### Install (pub.dev)"; then
-    echo "Pub.dev install snippet already present — skipping"
-    exit 0
-  fi
-  SNIPPET="### Install (pub.dev)
+cmd_add_pub_install() {
+  require_tag
+  local section
+  section="### Install (pub.dev)
 
 \`\`\`yaml
 dependencies:
   $PKG_NAME: ^$VERSION
 \`\`\`"
-  gh release edit "$TAG" --repo "$REPO" --notes "$EXISTING"$'\n\n'"$SNIPPET"
-  echo "Added pub.dev install snippet to $TAG release notes"
-  exit 0
-fi
+  append_release_note "$TAG" "### Install (pub.dev)" "$section"
+}
 
 
-# ═══════════════════════════════════════════════════════════════════
-# Unknown mode
-# ═══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════
+# § 10 — Dispatch
+# ════════════════════════════════════════════════════════════════════
 
-echo "Unknown mode: $MODE"
-echo "Run '$0 --help' for usage."
-exit 1
+main() {
+  case "$MODE" in
+    --help | -h)         usage ;;
+    --gate)              cmd_gate ;;
+    --discover)          cmd_discover ;;
+    --github-notes)      cmd_github_notes ;;
+    --update-tag-hashes) cmd_update_tag_hashes ;;
+    --stamp-changelog)   cmd_stamp_changelog ;;
+    --add-git-install)   cmd_add_git_install ;;
+    --add-pub-install)   cmd_add_pub_install ;;
+    *)
+      echo "Unknown mode: $MODE" >&2
+      echo "Run '$0 --help' for usage." >&2
+      exit 1
+      ;;
+  esac
+}
+
+main
