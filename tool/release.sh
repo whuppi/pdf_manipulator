@@ -161,8 +161,9 @@ stamp_version() {
   sed -i.bak "s/const packageVersion = '[^']*'/const packageVersion = '$ver'/" \
     lib/src/version.dart && rm -f lib/src/version.dart.bak
   echo "  version.dart → $ver"
-  sed -i.bak "s/  ${PKG_NAME}:.*/  ${PKG_NAME}: ^$ver/" README.md && rm -f README.md.bak
-  echo "  README.md → ^$ver"
+  sed -i.bak "s/  ${PKG_NAME}: .*/  ${PKG_NAME}: ^$ver/" README.md && rm -f README.md.bak
+  sed -i.bak "s/${PKG_NAME}: X\.Y\.Z/${PKG_NAME}: $ver/" README.md && rm -f README.md.bak
+  echo "  README.md → $ver"
 }
 
 # Generate lib/src/hook/asset_hashes.dart from two sources:

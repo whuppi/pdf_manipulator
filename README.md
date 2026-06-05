@@ -45,7 +45,7 @@ To avoid silent upgrades breaking your web build, hard-pin the version
 in your pubspec (no `^`):
 
 ```yaml
-pdf_manipulator: 1.0.3  # exact version — upgrade intentionally
+pdf_manipulator: X.Y.Z  # exact version — upgrade intentionally
 ```
 
 <details>
