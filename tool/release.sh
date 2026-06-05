@@ -545,9 +545,10 @@ cmd_discover() {
   stamped_sha=$(git rev-parse HEAD)
   echo "  Stamped commit: $stamped_sha"
 
-  git push origin --delete refs/heads/_release-staging 2>/dev/null || true
-  git push origin "$stamped_sha:refs/heads/_release-staging"
-  trap 'git push origin --delete refs/heads/_release-staging 2>/dev/null || true' EXIT
+  local staging_branch="_release-staging-$version"
+  git push origin --delete "refs/heads/$staging_branch" 2>/dev/null || true
+  git push origin "$stamped_sha:refs/heads/$staging_branch"
+  trap 'git push origin --delete "refs/heads/'"$staging_branch"'" 2>/dev/null || true' EXIT
 
   local notes_file
   notes_file=$(mktemp)
@@ -566,7 +567,7 @@ cmd_discover() {
 
   # Staging branch no longer needed — the tag keeps the commit alive.
   trap - EXIT
-  git push origin --delete refs/heads/_release-staging 2>/dev/null || true
+  git push origin --delete "refs/heads/$staging_branch" 2>/dev/null || true
 
   gh_output "tag" "$tag"
   gh_output "version" "$version"

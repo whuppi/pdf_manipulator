@@ -190,107 +190,165 @@ git add web_assets/
 
 ## S6 — Release
 
+### Branch model
+
+| Branch | Purpose | Merge method INTO this branch |
+|---|---|---|
+| feature branches | in-progress work | — |
+| `dev` | integration + prereleases | **Squash and merge** (clean up feature work) |
+| `prod` | stable releases | **Create a merge commit** (preserve SHA chain) |
+
+**Why merge commit for dev→prod:** squash and rebase both create new
+SHAs. Prod and dev diverge. Next promotion shows the entire history as
+"new." Merge commit preserves the original SHAs so both branches share
+the same commit objects.
+
 ### The rules
 
-**NEVER push directly to `dev` or `prod`. NEVER bypass PR merge
-requirements.** Admin bypass exists as a GitHub safety valve — not a
-shortcut. Every change goes through a PR with CI checks. No exceptions,
-no "just this one quick fix," no cherry-picks to protected branches.
+- **NEVER push directly to `dev` or `prod`.** Every change goes through
+  a PR. No exceptions.
+- **NEVER force-push protected branches** unless syncing prod to dev
+  after a divergence (and only with the documented procedure below).
+- **NEVER run destructive git commands** (`reset --hard`, `clean -fd`,
+  `stash drop`, `gh pr close --delete-branch`) without explicit
+  permission.
 
-**Before claiming any change is done, verify it will reach `dev`:**
-
-1. Is the current branch part of an open PR? → push to that branch.
-2. No open PR? Is the change already on `origin/dev`? → done.
-3. Neither? → create a new PR. No exceptions.
-
-**NEVER run destructive git commands without explicit permission:**
-
-- `git reset --hard` — destroys uncommitted work permanently
-- `git clean -fd` — deletes untracked files permanently
-- `git stash drop` — loses stashed work permanently
-- `gh pr close --delete-branch` — deletes remote branch
-
-When stuck with conflicts or messy branches: `git stash`, switch
-branches, `git stash pop`. If pop conflicts, resolve — don't nuke.
-If a branch exists locally but not on remote, `git push` it first
-before any cleanup. Work is sacred. Never destroy it to "start clean."
-
-### Changelog
+### Changelog files
 
 | File | Purpose |
 |---|---|
-| `CHANGELOG.md` | Stable releases (pub.dev) |
-| `CHANGELOG.pre.md` | Prereleases (dev testing) |
+| `CHANGELOG.md` | Stable releases — triggers release on `prod` |
+| `CHANGELOG.pre.md` | Prereleases — triggers release on `dev` |
 
-`pubspec.yaml` stays `version: 0.0.0` in git. CI stamps the real
-version at publish time from the tag.
+Add a `## X.Y.Z` heading at the top. Write a human summary. CI
+handles commit lists, filtering, and publishing. `pubspec.yaml` stays
+`version: 0.0.0` in git — CI stamps the real version from the tag.
 
-### How the release pipeline works
+### The release pipeline
 
-One workflow (`create-release.yml`) handles the entire pipeline.
-Publish to pub.dev requires human approval via GitHub Environments.
-
-```
-Changelog push to dev or prod
-  → create-release.yml (automatic)
-    1. Scan changelog for the latest version
-    2. Create orphan stamped commit:
-       - stamp version into pubspec.yaml + version.dart
-       - convert submodule pointers to raw vendor source
-       - remove .gitmodules
-    3. Create tag + GitHub Release at that commit
-    4. Compile all 6 targets in parallel (checkout tag — no submodules needed)
-    5. Upload binaries + add git install snippet to release notes
-    6. ⏸ PAUSE — publish job waits for approval (GitHub Environment gate)
-    7. You approve → release.sh runs:
-       - builds filtered CHANGELOG.md for pub.dev (only published versions +
-         current, unpublished intermediate versions merged into collapsibles,
-         commit list since last pub.dev version)
-       - generates asset hashes from GitHub Release API
-    8. dart pub publish + add pub.dev install snippet to release notes
-```
-
-The tag is self-contained: stamped version + raw vendor source (no
-submodule pointers). Git tag consumers (`ref: vX.Y.Z`) get the same
-tree as pub.dev consumers. Compile jobs don't need submodule init.
-
-Idempotent. Rerun skips existing releases, clobbers existing assets,
-pub.dev rejects duplicate versions.
-
-GitHub Release notes and pub.dev changelog have DIFFERENT commit
-ranges: GitHub shows commits since previous tag, pub.dev shows
-commits since last published version.
-
-### Stable release
+All logic lives in `tool/release.sh` (7 modes). The workflow
+(`create-release.yml`) is pure job orchestration.
 
 ```
-1. Add ## X.Y.Z at top of CHANGELOG.md (human summary only, no commit list)
-2. PR to prod → merge
-3. (automatic) tag + release + compile + upload
-4. (manual) approve "publish" environment → pub.dev
+Push to dev (CHANGELOG.pre.md) or prod (CHANGELOG.md)
+  │
+  ├─ 1. gate     → release.sh --gate
+  │               checks if the right changelog file changed
+  │               dev only reacts to CHANGELOG.pre.md
+  │               prod only reacts to CHANGELOG.md
+  │
+  ├─ 2. discover → release.sh --discover
+  │               finds version, validates branch/type match
+  │               stamps version + deregisters submodules
+  │               creates orphan tag commit + GitHub Release
+  │
+  ├─ 3. compile  → checkout tag, build all 6 platforms in parallel
+  │
+  ├─ 4. upload   → upload binaries to GitHub Release
+  │               release.sh --add-git-install (install snippet)
+  │               release.sh --update-tag-hashes (asset hashes into tag)
+  │
+  └─ 5. publish  → ⏸ PAUSE (GitHub Environment approval gate)
+                    release.sh --stamp-changelog (filtered CHANGELOG.md)
+                    dart pub publish
+                    release.sh --add-pub-install (install snippet)
 ```
+
+After step 4, the tag has: stamped version + raw vendor source +
+asset hashes. `git: ref: <tag>` users get verified binary downloads.
+
+Concurrency is version-level — two different versions can release in
+parallel. Same version pushed twice: the newer run cancels the stale one.
+
+Every step is idempotent on rerun.
 
 ### Prerelease
 
 ```
-1. Add ## X.Y.Z-dev.N at top of CHANGELOG.pre.md (human summary only, no commit list)
-2. PR to dev → merge
-3. (automatic) tag + release + compile + upload
+1. Add ## X.Y.Z-dev.N at top of CHANGELOG.pre.md
+2. PR to dev → squash and merge
+3. (automatic) gate → discover → compile → upload
 4. (manual) approve "publish" environment → pub.dev
 ```
 
-Commit lists and changelog filtering are handled by
-`tool/release.sh` — single source of truth for all stamping.
-Never put commit lists in the changelog files.
-
-### Hotfix
+### Stable release
 
 ```
-1. Branch from release tag: git checkout -b hotfix/vX.Y.Z vPREV
-2. Fix, add changelog entry, push
-3. PR to prod → merge → same pipeline (automatic + approval)
-4. Cherry-pick fix to dev (via PR)
+1. Add ## X.Y.Z at top of CHANGELOG.md
+2. PR to dev → squash and merge (dev ignores stable changelog — no release triggered)
+3. PR from dev → prod → create a merge commit (NOT squash, NOT rebase)
+4. (automatic) gate → discover → compile → upload
+5. (manual) approve "publish" environment → pub.dev
 ```
+
+### Manual re-trigger
+
+If a release needs re-triggering (e.g. after a fix to the pipeline):
+
+```sh
+# Must use --ref to run on the correct branch
+gh workflow run "Release" --repo whuppi/pdf_manipulator --ref dev --field branch=dev
+gh workflow run "Release" --repo whuppi/pdf_manipulator --ref prod --field branch=prod
+```
+
+`--ref` controls which branch the workflow runs ON. `--field branch`
+is the input the script reads. Both must match. Without `--ref`, the
+workflow runs on the default branch regardless of the input.
+
+### Delete and recreate a release
+
+When a release needs to be rebuilt (broken binaries, missing assets):
+
+```sh
+gh release delete vX.Y.Z --repo whuppi/pdf_manipulator --yes
+git push origin --delete refs/tags/vX.Y.Z
+gh workflow run "Release" --repo whuppi/pdf_manipulator --ref <branch> --field branch=<branch>
+```
+
+### Syncing prod to dev (after divergence)
+
+If prod diverges from dev (e.g. accidental squash merge on a promotion
+PR), force-sync prod to dev:
+
+```sh
+# 1. Temporarily allow force-push on prod
+gh api repos/whuppi/pdf_manipulator/branches/prod/protection -X PUT \
+  -F "required_status_checks[strict]=true" \
+  -F "required_status_checks[checks][][context]=Conventional Commit" -F "required_status_checks[checks][][app_id]=15368" \
+  -F "required_status_checks[checks][][context]=Full Test Gate" -F "required_status_checks[checks][][app_id]=15368" \
+  -F "required_status_checks[checks][][context]=CI Gate" -F "required_status_checks[checks][][app_id]=15368" \
+  -F "required_pull_request_reviews[dismiss_stale_reviews]=true" \
+  -F "required_pull_request_reviews[require_code_owner_reviews]=true" \
+  -F "required_pull_request_reviews[required_approving_review_count]=1" \
+  -F "enforce_admins=false" -F "restrictions=null" -F "allow_force_pushes=true" \
+  --silent
+
+# 2. Force-sync
+git push origin dev:prod --force-with-lease
+
+# 3. Disable force-push
+gh api repos/whuppi/pdf_manipulator/branches/prod/protection -X PUT \
+  -F "required_status_checks[strict]=true" \
+  -F "required_status_checks[checks][][context]=Conventional Commit" -F "required_status_checks[checks][][app_id]=15368" \
+  -F "required_status_checks[checks][][context]=Full Test Gate" -F "required_status_checks[checks][][app_id]=15368" \
+  -F "required_status_checks[checks][][context]=CI Gate" -F "required_status_checks[checks][][app_id]=15368" \
+  -F "required_pull_request_reviews[dismiss_stale_reviews]=true" \
+  -F "required_pull_request_reviews[require_code_owner_reviews]=true" \
+  -F "required_pull_request_reviews[required_approving_review_count]=1" \
+  -F "enforce_admins=false" -F "restrictions=null" -F "allow_force_pushes=false" \
+  --silent
+```
+
+### Failure recovery
+
+| Failure | Fix |
+|---|---|
+| Compile failed (infra) | Rerun via workflow_dispatch (idempotent) |
+| Compile failed (code bug) | Fix on dev via PR, bump prerelease version |
+| Upload failed | Rerun — clobber overwrites |
+| Publish failed | Rerun — approval gate shows again |
+| Tag exists but no Release | Rerun via workflow_dispatch |
+| Wrong release notes | Delete release + tag, re-trigger |
 
 ### CI workflows
 
@@ -298,59 +356,16 @@ Never put commit lists in the changelog files.
 |---|---|---|
 | `ci.yml` | PR to prod/dev | `make analyze` + `make test-unit` + `make test-ops-native` |
 | `pr-lint.yml` | PR to prod/dev | Conventional commit title + promotion chain |
-| `full-test.yml` | `ready-to-test` label | 10 jobs: 4 pkg + 6 integration. Web jobs have separate named steps per mode (JSPI/Atomics/OPFS). |
-| `create-release.yml` | Push to dev/prod that changes changelog, or `workflow_dispatch` | Tag + release + compile + upload + publish (with approval gate). One workflow, entire pipeline. |
-| `flutter-upgrade.yml` | Daily schedule or `workflow_dispatch` | Check for new Flutter stable, open/update upgrade PR on `chore/flutter-upgrade` branch |
-| `triage.yml` | Issues/PRs opened | Auto-label and assign |
-
-### Failure recovery
-
-| Failure | Fix |
-|---|---|
-| Compile failed | Rerun `create-release.yml` via workflow_dispatch (idempotent — skips tag creation, recompiles + re-uploads) |
-| Upload failed | Same — rerun, clobber overwrites |
-| Publish failed (but binaries OK) | Rerun — approval gate shows again, pub.dev rejects duplicates |
-| Tag exists but no Release | Rerun `create-release.yml` via workflow_dispatch |
-
-### Compile failed with code bug — rebuild a release
-
-The workflow checks out the **tag's code** for compilation. Rerunning
-with the same tag reuses the same broken code.
-
-**Option A — Bump version (new prerelease).** Code changed, so the
-version changes. Clean and correct.
-
-```
-1. Fix the issue, merge to dev via PR
-2. Add ## X.Y.Z-dev.N+1 at top of CHANGELOG.pre.md
-3. Merge to dev → pipeline runs automatically
-```
-
-**Option B — Rebuild same version (delete + recreate tag).** Use when
-the fix is purely CI/build infrastructure, not package behavior.
-
-```
-1. Fix the issue, merge to dev via PR
-2. Delete the broken release + tag:
-     gh release delete vX.Y.Z --repo whuppi/pdf_manipulator --yes
-     gh api repos/whuppi/pdf_manipulator/git/refs/tags/vX.Y.Z -X DELETE
-3. Retrigger:
-     gh workflow run create-release.yml --repo whuppi/pdf_manipulator -f branch=dev
-4. Pipeline creates fresh tag at dev HEAD → compile → upload → approve → publish
-```
-
-**Pick A when:** the fix changes runtime behavior, adds features, or
-consumers should know the binary differs.
-
-**Pick B when:** the fix is purely CI/build infrastructure. The package
-source is identical — only the build tooling changed. No reason to
-burn a version number.
+| `full-test.yml` | `ready-to-test` label | 10 jobs: 4 pkg + 6 integration |
+| `create-release.yml` | Push to dev/prod changing changelog, or `workflow_dispatch` | Full release pipeline (7 steps) |
+| `flutter-upgrade.yml` | Daily or `workflow_dispatch` | Auto-detect new Flutter stable |
+| `triage.yml` | Issues/PRs | Auto-label, auto-assign, dependabot notifications |
 
 ### Git hooks
 
 | Hook | Enforces |
 |---|---|
-| `commit-msg` | Conventional Commits format |
+| `commit-msg` | Conventional Commits format, blocks merge commits |
 | `pre-commit` | Rejects `git add -f` of gitignored files |
 
 ### CODEOWNERS
