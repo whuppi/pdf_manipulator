@@ -9,9 +9,12 @@ Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extrac
 ## Contents
 
 - [Install](#install)
+  - [Add the dependency](#add-the-dependency)
+  - [Native platforms](#native-platforms)
+  - [Web](#web)
 - [Quick start](#quick-start)
-- [Sources & sinks](#sources--sinks)
-- [What you can do](#what-you-can-do)
+  - [Sources & sinks](#sources--sinks)
+- [Usage](#usage)
   - [Combine & split](#combine--split)
   - [Read & query](#read--query)
   - [Edit & transform](#edit--transform)
@@ -21,6 +24,9 @@ Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extrac
   - [Batch editing](#batch-editing)
 - [Error handling](#error-handling)
 - [Platforms](#platforms)
+  - [How binaries are resolved](#how-binaries-are-resolved)
+  - [Browser support](#browser-support)
+  - [Web I/O modes](#web-io-modes)
 - [When NOT to use pdf_manipulator](#when-not-to-use-pdf_manipulator)
 - [Docs](#docs)
 
@@ -104,9 +110,7 @@ pdf.dispose();
 
 That's it. Every operation follows the same pattern: **source in, sink out**.
 
----
-
-## Sources & sinks
+### Sources & sinks
 
 A `DataSource` is where the PDF bytes come from. A `DataSink` is where the output goes. Two tiny interfaces:
 
@@ -221,7 +225,7 @@ class BlobSource implements DataSource {
 
 ---
 
-## What you can do
+## Usage
 
 ### Combine & split
 
@@ -487,23 +491,22 @@ Every error is a typed subclass of `PdfError`. No string matching. No `PlatformE
 | macOS | arm64, x64 | 10.15 (Catalina) | Native (Rust) |
 | Linux | x64, arm64 | glibc 2.31+ (Ubuntu 20.04+) | Native (Rust) |
 | Windows | x64, arm64 | Windows 10 | Native (Rust) |
-| Web | All modern browsers | See [browser table](#web) below | WASM |
+| Web | All modern browsers | See [browser support](#browser-support) | WASM |
 
-### How native binaries are resolved
+### How binaries are resolved
 
-The build hook resolves the native library automatically — no manual steps:
+The build hook (native) and setup command (web) resolve assets through the same pipeline:
 
 | Priority | Method | When | Requires |
 |:---:|---|---|---|
-| 1 | **Pre-built binary** | Default for pub.dev + git tag users | Nothing |
-| 2 | **Source compile** | Binary unavailable (fallback) | [Rust](https://rustup.rs) |
-| 3 | **Submodule init** | Git dep `ref: dev` (no vendor dir) | [Rust](https://rustup.rs) + git |
+| 1 | **Cached** | File exists + SHA-256 hash matches | Nothing |
+| 2 | **Download** | Fetch pre-built from GitHub Releases | Internet |
+| 3 | **Source compile** | Binary unavailable, vendor source on disk | [Rust](https://rustup.rs) |
+| 4 | **Submodule init** | Git dep `ref: dev` (no vendor dir) | [Rust](https://rustup.rs) + git |
 
 The vendored Rust source ships in both the pub.dev tarball and git tags. If the repo disappears, published versions still compile from source.
 
-### Web
-
-Works out of the box on all modern browsers:
+### Browser support
 
 | Browser | Version | Released |
 |---|---|---|
@@ -512,12 +515,6 @@ Works out of the box on all modern browsers:
 | Safari / Safari iOS | 15.2+ | Dec 2021 |
 | Chrome Android | 102+ | May 2022 |
 | Samsung Internet | 21+ | 2023 |
-
-**Setup** — run once after install (and after each package update):
-
-```sh
-flutter pub run pdf_manipulator:setup
-```
 
 The engine compiles to WASM and runs in a Web Worker pool. Your UI thread never does PDF work.
 

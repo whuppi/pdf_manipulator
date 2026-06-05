@@ -202,17 +202,23 @@ lib/
     │   ├── pdf_signature.dart              ← PdfSignatureInfo
     │   └── search_result.dart              ← SearchResult
     │
-    └── hook/                               ← build hook support (not consumer API)
-        └── asset_hashes.dart               ← SHA256 hashes for pre-built binaries
+    └── hook/                               ← build + setup support (not consumer API)
+        ├── asset_hashes.dart               ← SHA-256 hashes for all release assets (native + web)
+        └── resolver.dart                   ← ResolveRequest + 5-step waterfall (shared by hook + setup)
 
-web_assets/                                 ← committed in git, shipped to web
+web_assets/                                 ← committed in git (except .wasm — gitignored, too large)
 ├── coordinator.js                          ← WASM worker pool + handle pinning
 ├── worker.js                               ← reader registry, 3 I/O modes, bridge_execute
-├── pdf_oxide.js                            ← wasm-bindgen glue
-└── pdf_oxide_bg.wasm                       ← WASM binary (one binary, all 3 modes)
+├── pdf_oxide.js                            ← wasm-bindgen glue (committed, paired with .wasm)
+└── pdf_oxide_bg.wasm                       ← WASM binary (gitignored — downloaded from releases)
 
 hook/
-└── build.dart                              ← binary-first → source-fallback → submodule-init
+└── build.dart                              ← asset resolution brain: resolveNative() + resolveWeb()
+                                               Flutter hook entry + library for bin/setup.dart
+
+bin/
+└── setup.dart                              ← thin CLI: --web (default) / --native / --all / --force
+                                               delegates to hook/build.dart
 
 tool/
 ├── compile_rust.sh                         ← Rust → native / wasm / per-platform / both
