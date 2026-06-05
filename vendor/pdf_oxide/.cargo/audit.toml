@@ -1,0 +1,16 @@
+# Security audit configuration
+# See: https://rustsec.org/
+
+[advisories]
+# Advisories to ignore (with justification)
+ignore = [
+    # RUSTSEC-2023-0071: rsa timing sidechannel (Marvin Attack)
+    # - No fixed version available upstream
+    # - Our usage is for PDF signature verification, not RSA decryption
+    # - Timing attacks require local access and precise measurements
+    # - Will update when fix becomes available
+    "RUSTSEC-2023-0071",
+]
+
+# Treat unmaintained crates as warnings (not errors)
+informational_warnings = ["unmaintained"]

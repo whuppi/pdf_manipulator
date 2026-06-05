@@ -1,0 +1,123 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out the information below to help us diagnose and fix the issue.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is.
+      placeholder: Describe the bug...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Steps to reproduce the behavior
+      placeholder: |
+        1. Open PDF file '...'
+        2. Call function '...'
+        3. Observe error '...'
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What you expected to happen
+      placeholder: Describe what should happen...
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened
+      placeholder: Describe what actually happened...
+    validations:
+      required: true
+
+  - type: textarea
+    id: pdf-info
+    attributes:
+      label: PDF Information (if applicable)
+      description: If the issue is related to a specific PDF, please provide details
+      placeholder: |
+        - PDF version: 1.7
+        - Page count: 10
+        - Encryption: None
+        - File size: 2MB
+        - Can you share the PDF? (Yes/No)
+    validations:
+      required: false
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Information about your environment
+      value: |
+        - **OS**: (e.g., Ubuntu 22.04, Windows 11, macOS 14)
+        - **Rust version**: (run `rustc --version`)
+        - **pdf_oxide version**: (e.g., 0.1.0)
+        - **Python version** (if using Python bindings): (e.g., 3.11.5)
+    validations:
+      required: true
+
+  - type: textarea
+    id: code
+    attributes:
+      label: Code Sample
+      description: Minimal code to reproduce the issue
+      render: rust
+      placeholder: |
+        use pdf_oxide::PdfDocument;
+
+        fn main() {
+            let doc = PdfDocument::open("file.pdf").unwrap();
+            // ...
+        }
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error Messages / Logs
+      description: Any error messages, stack traces, or relevant logs
+      render: shell
+      placeholder: Paste error messages or logs here...
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Any other context about the problem
+      placeholder: Add any other context, screenshots, or information...
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      description: Please confirm the following
+      options:
+        - label: I have searched existing issues to make sure this is not a duplicate
+          required: true
+        - label: I have provided all required information above
+          required: true
+        - label: I am using the latest version of pdf_oxide
+          required: false
