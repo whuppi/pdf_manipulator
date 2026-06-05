@@ -33,7 +33,7 @@ dependencies:
   pdf_manipulator:
 ```
 
-**Targeting web?** Run this once after install, and again after each update:
+**Targeting web?** Run setup once after install, and again after each `pub upgrade`:
 
 ```sh
 flutter pub run pdf_manipulator:setup
