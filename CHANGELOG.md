@@ -2,6 +2,10 @@
 
 <!-- Stable releases. Add ## heading at top, CI handles the rest. -->
 
+## 1.0.3
+
+- Fixed changelog on pub.dev
+
 ## 1.0.2
 
 - Fixed changelog on pub.dev missing commit history between versions
