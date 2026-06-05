@@ -18,6 +18,12 @@
     (GitHub Release notes + pub.dev tarball get the commits dynamically)
 -->
 
+## 1.0.1
+
+- Added public API doc comments across all exported classes and methods
+- Minimum Android API corrected from 35 to 21 (Android 5.0)
+- Setup command is now `flutter pub run pdf_manipulator:setup` (avoids triggering native build hooks with `dart run`)
+
 ## 1.0.0
 
 Complete ground-up rewrite. New engine, new API, every platform. See the [migration guide](docs/MIGRATION.md) for upgrading from the old Android-only version.
