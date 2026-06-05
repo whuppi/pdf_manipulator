@@ -355,7 +355,16 @@ Future<void> _copyWebAsset(
     throw StateError('$fileName not found in web_assets/');
   }
   dest.parent.createSync(recursive: true);
-  src.copySync(dest.path);
+  if (fileName == 'coordinator.js') {
+    // Stamp __VERSION__ with the real version for dev/path consumers
+    // (published/tagged versions are already stamped by release.sh).
+    var content = src.readAsStringSync();
+    final version = readVersion(packageRoot);
+    content = content.replaceFirst("'__VERSION__'", "'$version'");
+    dest.writeAsStringSync(content);
+  } else {
+    src.copySync(dest.path);
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════
