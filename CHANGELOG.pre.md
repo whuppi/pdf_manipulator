@@ -2,6 +2,11 @@
 
 <!-- Prereleases. Add ## heading at top, CI handles the rest. -->
 
+## 1.0.3-dev.0
+
+- Changelog preview visible in CI logs before publish approval
+- Release pipeline idempotency fixes (staging branch, asset hashes)
+
 ## 1.0.2-dev.0
 
 - Fixed changelog on pub.dev missing commit history between versions
