@@ -16,7 +16,7 @@
 //   dispose
 //
 // coordinator → Dart:
-//   ready            { ioMode, poolSize, version, wasmModule? }
+//   ready            { ioMode, poolSize, wasmModule? }
 //   submitted        { opId }
 //   result           { opId, data }
 //   error            { opId?, message }
@@ -50,8 +50,6 @@
 //   jspi    — JSPI Promise suspension (Chrome 137+ / Firefox 139+)
 //   atomics — SAB + Atomics.wait/notify (needs COOP/COEP)
 //   opfs    — Pre-copy to OPFS disk (universal)
-
-const PKG_VERSION = '__VERSION__';
 
 // ═══════════════════════════════════════════════════════════════════
 // Configuration
@@ -508,7 +506,7 @@ self.onmessage = async (e) => {
           } catch (_) { compiledWasmModule = null; }
         }
 
-        const readyMsg = { type: 'ready', ioMode, poolSize, version: PKG_VERSION };
+        const readyMsg = { type: 'ready', ioMode, poolSize };
         if (compiledWasmModule) readyMsg.wasmModule = compiledWasmModule;
         self.postMessage(readyMsg);
         break;
