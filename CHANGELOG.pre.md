@@ -4,8 +4,7 @@
 
 ## 1.0.3-dev.0
 
-- Changelog preview visible in CI logs before publish approval
-- Release pipeline idempotency fixes (staging branch, asset hashes)
+- Fixed changelog on pub.dev
 
 ## 1.0.2-dev.0
 
