@@ -14,22 +14,25 @@ permissions:
   pull-requests: write
 
 jobs:
-  # When a dependabot PR gets updated (e.g. "Update branch" button),
-  # ask dependabot to recreate — picks up any new workflow files.
-  dependabot-recreate:
+  # When a non-dependabot push lands on a dependabot PR (e.g. human clicks
+  # "Update branch"), workflows may be outdated. github-actions[bot] can't
+  # run dependabot commands (no push access), so we comment asking a human.
+  # Skips when dependabot itself pushes (after a recreate) to avoid loops.
+  dependabot-needs-recreate:
     if: >-
       github.event_name == 'pull_request_target' &&
       github.event.action == 'synchronize' &&
-      github.event.pull_request.user.login == 'dependabot[bot]'
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.sender.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
-      - name: Ask dependabot to recreate
+      - name: Notify maintainer
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh pr comment ${{ github.event.pull_request.number }} \
-            --repo ${{ github.repository }} \
-            --body "@dependabot recreate"
+            --repo "${{ github.repository }}" --body \
+            "New commits pushed — workflows may be outdated. A maintainer with push access should comment \`@dependabot recreate\` to pick up the latest changes."
 
   assign-and-label:
     runs-on: ubuntu-latest
