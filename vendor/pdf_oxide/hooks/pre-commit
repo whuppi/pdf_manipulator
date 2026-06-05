@@ -1,0 +1,102 @@
+#!/bin/bash
+# Pre-commit hook to run checks matching GitHub CI
+#
+# To install this hook, run: ./scripts/setup-hooks.sh
+# Or manually: cp hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+
+set -e
+
+echo "Running pre-commit checks..."
+
+# 1. Format check (Rust)
+echo "🔍 Checking Rust code formatting..."
+if ! cargo fmt --check; then
+    echo "❌ Format check failed. Run 'cargo fmt' to fix."
+    exit 1
+fi
+echo "✅ Rust format check passed"
+
+# 2. Python formatting check (if uv and ruff available)
+if command -v uv &> /dev/null; then
+    echo "🔍 Checking Python code formatting with ruff..."
+    if uv run ruff check python/ --select I 2>/dev/null; then
+        if ! uv run ruff format --check python/ 2>/dev/null; then
+            echo "❌ Python format check failed. Run 'uv run ruff format python/' to fix."
+            exit 1
+        fi
+        echo "✅ Python format check passed"
+    else
+        echo "⚠️  Skipping Python format check (ruff not installed in uv env)"
+    fi
+fi
+
+# 3. Clippy lints (exclude python feature to avoid libpython linking issues)
+echo "🔍 Running clippy..."
+# Use all features except python for local checks (Python tested in CI with proper env)
+FEATURES="rendering,barcodes,signatures,office,ocr"
+if ! cargo clippy --all-targets --features "$FEATURES" -- -D warnings; then
+    echo "❌ Clippy found issues. Fix them before committing."
+    exit 1
+fi
+echo "✅ Clippy passed"
+
+# 4. Also run clippy with python feature (just clippy, not tests)
+echo "🔍 Running clippy with Python feature..."
+if ! cargo clippy --features python -- -D warnings; then
+    echo "❌ Clippy (Python) found issues. Fix them before committing."
+    exit 1
+fi
+echo "✅ Clippy (Python) passed"
+
+# 5. Build check
+echo "🔍 Checking build..."
+if ! cargo check --features "$FEATURES"; then
+    echo "❌ Build check failed."
+    exit 1
+fi
+echo "✅ Build check passed"
+
+# 6. Dependency check
+echo "🔍 Checking dependencies with cargo-deny..."
+if ! command -v cargo-deny &> /dev/null; then
+    echo "⚠️  cargo-deny not installed. Run: cargo install cargo-deny"
+    echo "⚠️  Skipping dependency check..."
+else
+    if ! cargo deny check; then
+        echo "❌ Dependency check failed."
+        exit 1
+    fi
+    echo "✅ Dependency check passed"
+fi
+
+# 7. Run library tests (without python feature - tested in CI)
+echo "🔍 Running library tests..."
+if ! cargo test --lib --features "$FEATURES"; then
+    echo "❌ Library tests failed."
+    exit 1
+fi
+echo "✅ Library tests passed"
+
+# 8. Run integration tests (tests/ folder)
+# NOTE: Skipping in pre-commit due to stack overflow issues with large PDFs.
+# These will be run in CI with proper stack configuration.
+echo "🔍 Skipping integration tests (see CI for full test suite)..."
+echo "✅ Integration tests skipped (run in CI environment)"
+
+# 9. Run doctests
+# NOTE: Skipping doctests in pre-commit as they may have out-of-date examples.
+# These will be run in CI with proper context.
+echo "🔍 Skipping doctests (see CI for documentation examples)..."
+echo "✅ Doctests skipped (run in CI environment)"
+
+# 10. Python tests with uv (if available and .venv exists)
+if command -v uv &> /dev/null && [ -d ".venv" ]; then
+    echo "🔍 Running Python lint with ruff..."
+    if uv run ruff check python/ 2>/dev/null; then
+        echo "✅ Python lint passed"
+    else
+        echo "⚠️  Python lint issues found (non-blocking for now)"
+    fi
+fi
+
+echo "✅ All pre-commit checks passed!"

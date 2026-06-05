@@ -1,0 +1,16 @@
+format = ["uvx ruff format", "uvx ruff check --select I --fix"]
+
+# `python_version` intentionally left at rylai's default so the emitted
+# stub uses PEP-585 / PEP-604 syntax directly (`tuple[int, ...]`,
+# `X | None`). Doing it here removes a post-processing step. The stub
+# also opens with `from __future__ import annotations`, so even if a
+# tool decides to import the .pyi file on a Python 3.8/3.9 runtime,
+# annotations remain lazy strings and don't evaluate at import time.
+# Issue #462.
+
+[features]
+# Match the released wheel's feature set exactly so the emitted stubs
+# describe only symbols that are actually present at runtime (issue #464).
+# CI regenerates the stub and runs a symbol-parity check after building
+# the release-feature wheel (see python.yml "Verify stub symbol parity" step).
+enabled = ["python"]
