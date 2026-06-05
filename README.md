@@ -49,10 +49,9 @@ pdf_manipulator: X.Y.Z  # exact version — upgrade intentionally
 ```
 
 <details>
-<summary>Setup options</summary>
+<summary>Extra setup options (optional / debugging)</summary>
 
 ```sh
-flutter pub run pdf_manipulator:setup           # web (default)
 flutter pub run pdf_manipulator:setup --native  # pre-fetch native binary
 flutter pub run pdf_manipulator:setup --all     # web + native
 flutter pub run pdf_manipulator:setup --force   # re-download everything
