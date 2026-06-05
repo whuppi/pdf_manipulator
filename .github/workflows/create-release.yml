@@ -51,7 +51,7 @@ jobs:
       version: ${{ steps.find.outputs.version }}
       has_release: ${{ steps.find.outputs.has_release }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ inputs.branch || github.ref_name }}
@@ -143,10 +143,10 @@ jobs:
     if: needs.discover.outputs.has_release == 'true'
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with: { ref: '${{ needs.discover.outputs.tag }}' }
       - uses: ./.github/actions/compile-macos
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: { name: bin-macos, path: out/ }
 
   compile-ios:
@@ -154,10 +154,10 @@ jobs:
     if: needs.discover.outputs.has_release == 'true'
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with: { ref: '${{ needs.discover.outputs.tag }}' }
       - uses: ./.github/actions/compile-ios
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: { name: bin-ios, path: out/ }
 
   compile-android:
@@ -165,10 +165,10 @@ jobs:
     if: needs.discover.outputs.has_release == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with: { ref: '${{ needs.discover.outputs.tag }}' }
       - uses: ./.github/actions/compile-android
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: { name: bin-android, path: out/ }
 
   compile-linux:
@@ -176,10 +176,10 @@ jobs:
     if: needs.discover.outputs.has_release == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with: { ref: '${{ needs.discover.outputs.tag }}' }
       - uses: ./.github/actions/compile-linux
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: { name: bin-linux, path: out/ }
 
   compile-wasm:
@@ -187,10 +187,10 @@ jobs:
     if: needs.discover.outputs.has_release == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with: { ref: '${{ needs.discover.outputs.tag }}' }
       - uses: ./.github/actions/compile-wasm
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: { name: bin-wasm, path: out/ }
 
   compile-windows:
@@ -198,10 +198,10 @@ jobs:
     if: needs.discover.outputs.has_release == 'true'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with: { ref: '${{ needs.discover.outputs.tag }}' }
       - uses: ./.github/actions/compile-windows
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: { name: bin-windows, path: out/ }
 
   # ── Upload binaries to the GitHub Release ──────────────────────────
@@ -211,7 +211,7 @@ jobs:
     if: needs.discover.outputs.has_release == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with: { path: artifacts/ }
       - name: Flatten assets
         run: |
@@ -233,13 +233,13 @@ jobs:
             done
           fi
           ls -lh release/
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.discover.outputs.tag }}
           files: release/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with: { ref: '${{ needs.discover.outputs.tag }}' }
       - name: Add git install snippet to release notes
         env:
@@ -257,7 +257,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ inputs.branch || github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: '${{ needs.discover.outputs.tag }}'
           fetch-depth: 0
