@@ -398,7 +398,7 @@ build_pubdev_changelog() {
 
   # ── Assemble: preamble, then each YES section newest-first ──
   awk '/^## /{exit} {print}' "$source_file"
-  for yv in "${yes_list[@]}"; do
+  for yv in ${yes_list[@]+"${yes_list[@]}"}; do
     cat "$workdir/$yv"
     echo ""
   done
@@ -635,7 +635,8 @@ cmd_update_tag_hashes() {
 cmd_stamp_changelog() {
   require_tag
   echo "=== Building changelog for $TAG ==="
-  build_pubdev_changelog "$TAG" > CHANGELOG.md
+  build_pubdev_changelog "$TAG" > /tmp/_changelog_pubdev.md
+  mv /tmp/_changelog_pubdev.md CHANGELOG.md
   echo "  CHANGELOG.md built (filtered for pub.dev)"
 }
 
