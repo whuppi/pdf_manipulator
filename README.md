@@ -79,8 +79,8 @@ yet. The setup command fills that gap: it downloads the pre-built
 WASM engine, or compiles it from the vendored Rust source if the
 download isn't available.
 
-This will go away when Flutter adds web asset support to build hooks.
-Tracking: [dart-lang/native#2829](https://github.com/dart-lang/native/issues/2829)
+This will go away when Dart/Flutter adds WASM/JS asset support to
+build hooks. Tracking: [dart-lang/native#988](https://github.com/dart-lang/native/issues/988)
 
 </details>
 

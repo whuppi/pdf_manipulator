@@ -218,6 +218,45 @@ Five files, strict rules:
 
 ---
 
+## Build & distribution
+
+| Capability | Status | Notes |
+|---|---|---|
+| Native binary resolution (5-step waterfall) | DONE | cached → download → compile → submodule → error |
+| Web asset resolution (same waterfall) | DONE | WASM + JS glue, hash-verified |
+| `setup --web` (default) | DONE | Downloads or compiles web assets |
+| `setup --native` | DONE | Pre-fetches native binary for current OS |
+| `setup --all` / `--force` | DONE | Both platforms / re-resolve everything |
+| SHA-256 hash verification (all assets) | DONE | Native + web, stale detection on setup |
+| Automatic web setup via build hook | BLOCKED | See details below |
+
+### Automatic web setup — what's blocking, what to track
+
+The web setup step (`flutter pub run pdf_manipulator:setup`) exists
+because Flutter's build hook system only supports native code assets
+(`CodeAsset`). WASM modules and JS workers need dedicated asset types
+that don't exist yet.
+
+**What will solve it:**
+[`WasmAsset` / `JsAsset`](https://github.com/dart-lang/native/issues/988) —
+dedicated web asset types where the framework (Flutter, Dart, Jaspr)
+handles bundling and exposes a runtime URI. Web workers and WASM
+modules need URLs, not raw bytes — `DataAsset` can't provide that.
+Same problem affects [drift](https://github.com/simolus3/drift/issues/3770)
+and [sqlite3](https://github.com/simolus3/sqlite3.dart) — all waiting
+on the same feature.
+
+**What's ready on our side:**
+`hook/build.dart` already implements `resolveWeb()` with the full
+5-step waterfall. When the Dart SDK adds the asset type and Flutter
+wires the trigger, `main()` adds one call to `resolveWeb()` and
+`setup` becomes optional. Zero new logic needed.
+
+**Track:** [dart-lang/native#988](https://github.com/dart-lang/native/issues/988)
+(P3, Native Assets v1.x milestone, no ETA).
+
+---
+
 ## Out of scope
 
 | Feature | Why not |
