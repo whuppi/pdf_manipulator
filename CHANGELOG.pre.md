@@ -2,6 +2,11 @@
 
 <!-- Prereleases. Add ## heading at top, CI handles the rest. -->
 
+## 1.0.5-dev.0
+
+- Fixed README version not stamped on pub.dev
+- Updated tracking links for web build hook support
+
 ## 1.0.4-dev.0
 
 - Web setup now verifies all assets against release hashes — detects stale files automatically
