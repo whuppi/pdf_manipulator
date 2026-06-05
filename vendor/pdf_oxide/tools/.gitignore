@@ -1,0 +1,15 @@
+benchmark-harness/*
+# Re-include small tracked artefacts inside benchmark-harness: the
+# validator script, skip-lists, and top-level README. Actual fixture
+# corpora (`fixtures/**`, `.fixture-src/**`) stay ignored because
+# they run into the hundreds of MB of binary PDFs.
+!benchmark-harness/README.md
+!benchmark-harness/validate_fixtures.sh
+!benchmark-harness/fixtures/
+benchmark-harness/fixtures/*
+!benchmark-harness/fixtures/*/
+benchmark-harness/fixtures/*/*
+!benchmark-harness/fixtures/*/*/
+benchmark-harness/fixtures/*/*/*
+!benchmark-harness/fixtures/*/*/.skip
+!benchmark-harness/fixtures/*/.skip
