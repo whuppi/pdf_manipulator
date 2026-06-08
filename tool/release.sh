@@ -58,7 +58,13 @@ VERSION="${TAG:+${TAG#v}}"
 
 # Read build.json via pure bash — no python3, no jq, no dart.
 _json_get() {
-  sed -n "s/.*\"$1\": *\"\([^\"]*\)\".*/\1/p" build.json
+  local val
+  val=$(sed -n "s/.*\"$1\": *\"\([^\"]*\)\".*/\1/p" build.json)
+  if [ -z "$val" ]; then
+    echo "Error: key '$1' not found in build.json" >&2
+    exit 1
+  fi
+  echo "$val"
 }
 
 REPO="${GITHUB_REPOSITORY:-$(_json_get repo)}"

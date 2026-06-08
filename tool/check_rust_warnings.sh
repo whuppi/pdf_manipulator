@@ -31,6 +31,7 @@ done <<< "$diff_text"
 
 # Process cargo JSON output line by line
 warns=0
+skipped=0
 while IFS= read -r json_line; do
   # Only compiler-message warnings
   echo "$json_line" | grep -q '"reason":"compiler-message"' || continue
@@ -41,13 +42,20 @@ while IFS= read -r json_line; do
   span_line=$(echo "$json_line" | grep -oE '"line_start":[0-9]+' | head -1 | sed 's/"line_start"://')
   msg_text=$(echo "$json_line" | sed -n 's/.*"message":"\([^"]*\)".*/\1/p' | head -1)
 
-  [ -z "$span_file" ] || [ -z "$span_line" ] && continue
+  if [ -z "$span_file" ] || [ -z "$span_line" ]; then
+    skipped=$((skipped + 1))
+    continue
+  fi
 
   if [[ -n "${changed_files[${span_file}:${span_line}]:-}" ]]; then
     echo "  ${span_file}:${span_line}: ${msg_text}"
     warns=$((warns + 1))
   fi
 done
+
+if [ "$skipped" -gt 0 ]; then
+  echo "  ($skipped warning(s) skipped — could not parse span)" >&2
+fi
 
 if [ "$warns" -gt 0 ]; then
   echo ""

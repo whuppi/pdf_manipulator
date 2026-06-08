@@ -48,7 +48,13 @@ fi
 
 # Read build.json via pure bash — no python3, no jq, no dart.
 _json_get() {
-  sed -n "s/.*\"$1\": *\"\([^\"]*\)\".*/\1/p" "$PKG_ROOT/build.json"
+  local val
+  val=$(sed -n "s/.*\"$1\": *\"\([^\"]*\)\".*/\1/p" "$PKG_ROOT/build.json")
+  if [ -z "$val" ]; then
+    echo "Error: key '$1' not found in build.json" >&2
+    exit 1
+  fi
+  echo "$val"
 }
 
 NATIVE_FEATURES=$(_json_get 'native')
