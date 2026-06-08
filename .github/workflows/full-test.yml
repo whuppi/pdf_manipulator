@@ -3,6 +3,7 @@
 #
 # Package tests: unit + native ops on macOS/Linux/Windows + web (3 modes)
 # Integration tests: example app on macOS/Android emulator/iOS simulator + web (3 modes)
+# Release-build tests: flutter build --release on all 6 targets
 #
 # Every job composes reusable actions from .github/actions/.
 name: Full Test
@@ -141,12 +142,82 @@ jobs:
         with: { submodules: recursive }
       - uses: ./.github/actions/integration-web
 
+  # ── Release-build tests ──────────────────────────────────────────
+  # Debug and release builds exercise different code paths in the
+  # build hook. These verify the hook works in release mode too.
+
+  release-android:
+    name: "release: Android"
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with: { submodules: recursive }
+      - uses: ./.github/actions/setup-flutter
+      - run: make test-release-android
+
+  release-ios:
+    name: "release: iOS"
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with: { submodules: recursive }
+      - uses: ./.github/actions/setup-flutter
+      - run: make test-release-ios
+
+  release-macos:
+    name: "release: macOS"
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with: { submodules: recursive }
+      - uses: ./.github/actions/setup-flutter
+      - run: make test-release-macos
+
+  release-linux:
+    name: "release: Linux"
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with: { submodules: recursive }
+      - uses: ./.github/actions/setup-flutter
+      - run: make test-release-linux
+
+  release-windows:
+    name: "release: Windows"
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+        with: { submodules: recursive }
+      - uses: ./.github/actions/setup-flutter
+      - run: make test-release-windows
+
+  release-web:
+    name: "release: Web"
+    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with: { submodules: recursive }
+      - uses: ./.github/actions/setup-flutter
+      - run: make test-release-web
+
   # ── Gate ───────────────────────────────────────────────────────────
 
   gate:
     name: Full Test Gate
     if: always()
-    needs: [pkg-macos, pkg-linux, pkg-windows, pkg-web, int-macos, int-linux, int-windows, int-android, int-ios, int-web]
+    needs: [pkg-macos, pkg-linux, pkg-windows, pkg-web, int-macos, int-linux, int-windows, int-android, int-ios, int-web, release-android, release-ios, release-macos, release-linux, release-windows, release-web]
     runs-on: ubuntu-latest
     steps:
       - name: Evaluate
@@ -166,6 +237,12 @@ jobs:
             "${{ needs.int-android.result }}"
             "${{ needs.int-ios.result }}"
             "${{ needs.int-web.result }}"
+            "${{ needs.release-android.result }}"
+            "${{ needs.release-ios.result }}"
+            "${{ needs.release-macos.result }}"
+            "${{ needs.release-linux.result }}"
+            "${{ needs.release-windows.result }}"
+            "${{ needs.release-web.result }}"
           )
           for r in "${RESULTS[@]}"; do
             if [[ "$r" != "success" ]]; then
@@ -173,4 +250,4 @@ jobs:
               exit 1
             fi
           done
-          echo "All 10 jobs passed"
+          echo "All 16 jobs passed"
