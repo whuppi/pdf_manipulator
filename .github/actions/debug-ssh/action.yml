@@ -13,28 +13,13 @@
 #   2. A keep-alive step AFTER the test steps with if: always()
 #      (holds the runner open so you can investigate failures)
 #
-#   Example inside a composite action:
-#
-#     steps:
-#       - uses: ./.github/actions/setup-fvm
-#       - uses: ./.github/actions/debug-ssh        # ← tunnel opens
-#       - shell: bash
-#         run: make test-ops-native                 # ← test runs
-#       - name: Keep alive for debugging            # ← runner stays
-#         if: always()
-#         shell: bash
-#         run: |
-#           echo "SSH open. Touch /tmp/stop to end."
-#           for i in $(seq 1 1800); do
-#             [ -f /tmp/stop ] && break; sleep 10
-#           done
-#
 #   Example inside a workflow job:
 #
 #     steps:
-#       - uses: actions/checkout@v4
-#       - uses: ./.github/actions/debug-ssh
-#       - uses: ./.github/actions/pkg-test-native
+#       - uses: actions/checkout@v6
+#       - uses: ./.github/actions/debug-ssh        # ← tunnel opens
+#       - uses: ./.github/actions/make-target      # ← test runs
+#         with: { make-target: test-pkg-native }
 #       - name: Keep alive for debugging
 #         if: always()
 #         shell: bash
@@ -78,7 +63,7 @@
 #   merging to dev. Keep the action itself — it's reusable. Just
 #   don't leave it embedded in test actions permanently.
 #
-# PLATFORMS: Linux (apt openssh-server), macOS (built-in sshd),
+# RUNNERS: Linux (apt openssh-server), macOS (built-in sshd),
 #   Windows (built-in OpenSSH). bore binary auto-selected per OS.
 # ────────────────────────────────────────────────────────────────────
 

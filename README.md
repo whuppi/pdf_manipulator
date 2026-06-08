@@ -23,7 +23,7 @@ Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extrac
   - [Create from scratch](#create-from-scratch)
   - [Batch editing](#batch-editing)
 - [Error handling](#error-handling)
-- [Platforms](#platforms)
+- [Targets](#targets)
   - [How binaries are resolved](#how-binaries-are-resolved)
   - [Browser support](#browser-support)
   - [Web I/O modes](#web-io-modes)
@@ -482,9 +482,9 @@ Every error is a typed subclass of `PdfError`. No string matching. No `PlatformE
 
 ---
 
-## Platforms
+## Targets
 
-| Platform | Architectures | Minimum version | Engine |
+| Target | Architectures | Minimum version | Engine |
 |---|---|---|---|
 | Android | arm64, arm, x64, x86 | API 21 (Android 5.0) | Native (Rust) |
 | iOS | arm64 device, arm64 + x64 simulator | 13.0 | Native (Rust) |

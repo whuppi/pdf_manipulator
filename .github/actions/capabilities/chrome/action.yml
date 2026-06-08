@@ -1,0 +1,73 @@
+name: Chrome
+description: >
+  Install matched Chrome + ChromeDriver from Chrome for Testing.
+  Linux: apt remove old + install to /opt. macOS: install to /Applications. Windows: install to RUNNER_TEMP.
+
+runs:
+  using: composite
+  steps:
+    - name: Chrome (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        API="https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json"
+        JSON=$(curl -sS "$API")
+        VERSION=$(echo "$JSON" | grep -oE '"Stable":\{[^}]*"version":"[^"]*"' | grep -oE '"version":"[^"]*"' | head -1 | sed 's/"version":"//;s/"//')
+        CHROME_URL=$(echo "$JSON" | grep -oE '"url":"https://[^"]*chrome-linux64\.zip"' | head -1 | sed 's/"url":"//;s/"//')
+        DRIVER_URL=$(echo "$JSON" | grep -oE '"url":"https://[^"]*chromedriver-linux64\.zip"' | head -1 | sed 's/"url":"//;s/"//')
+        echo "Chrome for Testing: $VERSION"
+        INSTALL_DIR="/opt/chrome-for-testing"
+        sudo mkdir -p "$INSTALL_DIR"
+        curl -sSL "$CHROME_URL" -o /tmp/chrome.zip
+        sudo unzip -qo /tmp/chrome.zip -d "$INSTALL_DIR" && rm /tmp/chrome.zip
+        curl -sSL "$DRIVER_URL" -o /tmp/chromedriver.zip
+        sudo unzip -qo /tmp/chromedriver.zip -d "$INSTALL_DIR" && rm /tmp/chromedriver.zip
+        sudo chmod +x "$INSTALL_DIR/chrome-linux64/chrome" "$INSTALL_DIR/chromedriver-linux64/chromedriver"
+        sudo apt-get remove -y google-chrome-stable 2>/dev/null || true
+        sudo dpkg --purge google-chrome-stable 2>/dev/null || true
+        sudo ln -sf "$INSTALL_DIR/chrome-linux64/chrome" /usr/bin/google-chrome-stable
+        sudo ln -sf "$INSTALL_DIR/chrome-linux64/chrome" /usr/bin/google-chrome
+        sudo mkdir -p /opt/google/chrome
+        sudo ln -sf "$INSTALL_DIR/chrome-linux64/chrome" /opt/google/chrome/chrome
+        sudo ln -sf "$INSTALL_DIR/chromedriver-linux64/chromedriver" /usr/local/bin/chromedriver
+
+    - name: Chrome (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        set -euo pipefail
+        API="https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json"
+        JSON=$(curl -sS "$API")
+        VERSION=$(echo "$JSON" | grep -oE '"Stable":\{[^}]*"version":"[^"]*"' | grep -oE '"version":"[^"]*"' | head -1 | sed 's/"version":"//;s/"//')
+        CHROME_URL=$(echo "$JSON" | grep -oE '"url":"https://[^"]*chrome-mac-arm64\.zip"' | head -1 | sed 's/"url":"//;s/"//')
+        DRIVER_URL=$(echo "$JSON" | grep -oE '"url":"https://[^"]*chromedriver-mac-arm64\.zip"' | head -1 | sed 's/"url":"//;s/"//')
+        echo "Chrome for Testing: $VERSION"
+        curl -sSL "$CHROME_URL" -o /tmp/chrome.zip
+        unzip -qo /tmp/chrome.zip -d /tmp/chrome-install && rm /tmp/chrome.zip
+        sudo mv "/tmp/chrome-install/chrome-mac-arm64/Google Chrome for Testing.app" "/Applications/Google Chrome for Testing.app"
+        curl -sSL "$DRIVER_URL" -o /tmp/chromedriver.zip
+        unzip -qo /tmp/chromedriver.zip -d /tmp/driver-install && rm /tmp/chromedriver.zip
+        sudo mv /tmp/driver-install/chromedriver-mac-arm64/chromedriver /usr/local/bin/chromedriver
+        sudo chmod +x /usr/local/bin/chromedriver
+        echo "CHROME_EXECUTABLE=/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" >> $GITHUB_ENV
+
+    - name: Chrome (Windows)
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        set -euo pipefail
+        API="https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json"
+        JSON=$(curl -sS "$API")
+        VERSION=$(echo "$JSON" | grep -oE '"Stable":\{[^}]*"version":"[^"]*"' | grep -oE '"version":"[^"]*"' | head -1 | sed 's/"version":"//;s/"//')
+        CHROME_URL=$(echo "$JSON" | grep -oE '"url":"https://[^"]*chrome-win64\.zip"' | head -1 | sed 's/"url":"//;s/"//')
+        DRIVER_URL=$(echo "$JSON" | grep -oE '"url":"https://[^"]*chromedriver-win64\.zip"' | head -1 | sed 's/"url":"//;s/"//')
+        echo "Chrome for Testing: $VERSION"
+        INSTALL_DIR="$RUNNER_TEMP/chrome-for-testing"
+        mkdir -p "$INSTALL_DIR"
+        curl -sSL "$CHROME_URL" -o "$RUNNER_TEMP/chrome.zip"
+        unzip -qo "$RUNNER_TEMP/chrome.zip" -d "$INSTALL_DIR" && rm "$RUNNER_TEMP/chrome.zip"
+        curl -sSL "$DRIVER_URL" -o "$RUNNER_TEMP/chromedriver.zip"
+        unzip -qo "$RUNNER_TEMP/chromedriver.zip" -d "$INSTALL_DIR" && rm "$RUNNER_TEMP/chromedriver.zip"
+        echo "CHROME_EXECUTABLE=$INSTALL_DIR/chrome-win64/chrome.exe" >> $GITHUB_ENV
+        echo "$INSTALL_DIR/chromedriver-win64" >> $GITHUB_PATH

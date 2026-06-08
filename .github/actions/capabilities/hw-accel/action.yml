@@ -1,0 +1,14 @@
+name: Hardware Acceleration
+description: >
+  Enable hardware acceleration for emulators.
+  Linux: enables KVM. macOS: no-op (Hypervisor.framework built-in). Windows: no-op (WHPX built-in).
+
+runs:
+  using: composite
+  steps:
+    - if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm

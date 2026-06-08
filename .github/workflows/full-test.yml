@@ -1,287 +1,156 @@
 # Full test — maintainer adds "ready-to-test" label to trigger.
 # Label auto-removed on new pushes (stale results = wasted compute).
 #
-# Package tests: unit + native ops on macOS/Linux/Windows + web (3 modes)
-# Integration tests: example app on macOS/Android emulator/iOS simulator + web (3 modes)
-# Release-build tests: flutter build --release on all 6 targets
+# Two matrices: default (one runner per target) and all-runners
+# (every valid runner combo). Each row declares capabilities —
+# make-target provisions them.
 #
-# Every job composes reusable actions from .github/actions/.
+# Runners: per-row in matrix (target-specific). Gate job uses
+# configurable infra runner (default: ubuntu-latest).
 name: Full Test
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
     branches: [prod, dev]
+  workflow_dispatch:
+    inputs:
+      all-runners:
+        description: "Test every valid runner per target"
+        type: boolean
+        default: true
+      runner:
+        description: "Runner for infra jobs (gate)"
+        type: choice
+        options: [ubuntu-latest, macos-14, windows-latest]
+        default: ubuntu-latest
 
 concurrency:
-  group: full-test-${{ github.event.pull_request.number }}
+  group: full-test-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
+env:
+  DEFAULT_RUNNER: ubuntu-latest
+
 jobs:
-  # ── Package tests (dart test) ──────────────────────────────────────
-
-  pkg-macos:
-    name: "pkg: macOS"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: macos-14
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-        with: { submodules: recursive }
-      - uses: ./.github/actions/flutter-target
-        with:
-          target: macos
-          make-target: test-pkg-native
-
-  pkg-linux:
-    name: "pkg: Linux"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
+  runners:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    outputs:
+      runner: ${{ steps.resolve.outputs.runner }}
     steps:
-      - uses: actions/checkout@v6
-        with: { submodules: recursive }
-      - uses: ./.github/actions/flutter-target
-        with:
-          target: linux
-          make-target: test-pkg-native
+      - id: resolve
+        run: echo "runner=${{ inputs.runner || env.DEFAULT_RUNNER }}" >> $GITHUB_OUTPUT
 
-  pkg-windows:
-    name: "pkg: Windows"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: windows-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v6
-        with: { submodules: recursive }
-      - uses: ./.github/actions/flutter-target
-        with:
-          target: windows
-          make-target: test-pkg-native
-
-  pkg-web:
-    name: "pkg: Web (3 modes)"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v6
-        with: { submodules: recursive }
-      - uses: ./.github/actions/flutter-target
-        with:
-          target: web
-          make-target: test-ops-web
-
-  # ── Integration tests (flutter test on device) ─────────────────────
-
-  int-macos:
-    name: "integration: macOS"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: macos-14
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-        with: { submodules: recursive }
-      - uses: ./.github/actions/flutter-target
-        with:
-          target: macos
-          make-target: test-example-macos
-
-  int-linux:
-    name: "integration: Linux"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-        with: { submodules: recursive }
-      - uses: ./.github/actions/flutter-target
-        with:
-          target: linux
-          make-target: test-example-linux
-          xvfb: 'true'
-
-  int-windows:
-    name: "integration: Windows"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: windows-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v6
-        with: { submodules: recursive }
-      - uses: ./.github/actions/flutter-target
-        with:
-          target: windows
-          make-target: test-example-windows
-
-  int-android:
-    name: "integration: Android"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v6
-        with: { submodules: recursive }
-      - uses: ./.github/actions/flutter-target
-        with:
-          target: android
-          make-target: test-example-android
-          emulator: 'true'
-
-  int-ios:
-    name: "integration: iOS"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: macos-14
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v6
-        with: { submodules: recursive }
-      - uses: ./.github/actions/flutter-target
-        with:
-          target: ios
-          make-target: test-example-ios
-          simulator: 'true'
-
-  int-web:
-    name: "integration: Web (3 modes)"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v6
-        with: { submodules: recursive }
-      - uses: ./.github/actions/flutter-target
-        with:
-          target: web
-          make-target: test-example-web
-
-  # ── Release-build tests ──────────────────────────────────────────
-  # Debug and release builds exercise different code paths in the
-  # build hook. These verify the hook works in release mode too.
-
-  release-android:
-    name: "release: Android (${{ matrix.os }})"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
+  test:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.action == 'labeled' && github.event.label.name == 'ready-to-test')
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14, windows-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+        include:
+          # ── Package tests ──
+          - { name: "pkg: macOS",      runner: macos-14,       make: test-pkg-native,      timeout: 30 }
+          - { name: "pkg: Linux",      runner: ubuntu-latest,  make: test-pkg-native,      timeout: 30 }
+          - { name: "pkg: Windows",    runner: windows-latest, make: test-pkg-native,      timeout: 40 }
+          - { name: "pkg: Web",        runner: ubuntu-latest,  make: test-ops-web,         timeout: 40, chrome: true, headless-display: true, wasm-cache: true, wasm-build: true }
+
+          # ── Integration tests ──
+          - { name: "int: macOS",      runner: macos-14,       make: test-example-macos,   timeout: 30, xcode-cache: true, xcode-cache-target: macos }
+          - { name: "int: Linux",      runner: ubuntu-latest,  make: test-example-linux,   timeout: 30, headless-display: true }
+          - { name: "int: Windows",    runner: windows-latest, make: test-example-windows,  timeout: 40 }
+          - { name: "int: Android",    runner: ubuntu-latest,  make: test-example-android,  timeout: 40, java: true, hw-accel: true, gradle-cache: true, emulator: true }
+          - { name: "int: iOS",        runner: macos-14,       make: test-example-ios,      timeout: 40, xcode-cache: true, xcode-cache-target: ios, pods-cache: true, simulator: true }
+          - { name: "int: Web",        runner: ubuntu-latest,  make: test-example-web,      timeout: 40, chrome: true, headless-display: true, wasm-cache: true, wasm-build: true }
+
+          # ── Verify (release builds) ──
+          - { name: "verify: Android", runner: ubuntu-latest,  make: verify-android,       timeout: 40, java: true, gradle-cache: true }
+          - { name: "verify: iOS",     runner: macos-14,       make: verify-ios,           timeout: 40, xcode-cache: true, xcode-cache-target: ios, pods-cache: true }
+          - { name: "verify: macOS",   runner: macos-14,       make: verify-macos,         timeout: 40, xcode-cache: true, xcode-cache-target: macos }
+          - { name: "verify: Linux",   runner: ubuntu-latest,  make: verify-linux,         timeout: 30 }
+          - { name: "verify: Windows", runner: windows-latest, make: verify-windows,       timeout: 40 }
+          - { name: "verify: Web",     runner: ubuntu-latest,  make: verify-web,           timeout: 40, wasm-cache: true, wasm-build: true }
+
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
     steps:
       - uses: actions/checkout@v6
         with: { submodules: recursive }
-      - uses: ./.github/actions/flutter-target
+      - uses: ./.github/actions/make-target
         with:
-          target: android
-          make-target: test-release-android
+          make-target: ${{ matrix.make }}
+          java: ${{ matrix.java || 'false' }}
+          chrome: ${{ matrix.chrome || 'false' }}
+          headless-display: ${{ matrix.headless-display || 'false' }}
+          hw-accel: ${{ matrix.hw-accel || 'false' }}
+          gradle-cache: ${{ matrix.gradle-cache || 'false' }}
+          xcode-cache: ${{ matrix.xcode-cache || 'false' }}
+          xcode-cache-target: ${{ matrix.xcode-cache-target || '' }}
+          pods-cache: ${{ matrix.pods-cache || 'false' }}
+          wasm-cache: ${{ matrix.wasm-cache || 'false' }}
+          wasm-build: ${{ matrix.wasm-build || 'false' }}
+          emulator: ${{ matrix.emulator || 'false' }}
+          simulator: ${{ matrix.simulator || 'false' }}
 
-  release-ios:
-    name: "release: iOS"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: macos-14
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v6
-        with: { submodules: recursive }
-      - uses: ./.github/actions/flutter-target
-        with:
-          target: ios
-          make-target: test-release-ios
-
-  release-macos:
-    name: "release: macOS"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: macos-14
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v6
-        with: { submodules: recursive }
-      - uses: ./.github/actions/flutter-target
-        with:
-          target: macos
-          make-target: test-release-macos
-
-  release-linux:
-    name: "release: Linux"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-        with: { submodules: recursive }
-      - uses: ./.github/actions/flutter-target
-        with:
-          target: linux
-          make-target: test-release-linux
-
-  release-windows:
-    name: "release: Windows"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: windows-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v6
-        with: { submodules: recursive }
-      - uses: ./.github/actions/flutter-target
-        with:
-          target: windows
-          make-target: test-release-windows
-
-  release-web:
-    name: "release: Web (${{ matrix.os }})"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
+  # ── All-runners ──
+  test-all-runners:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.all-runners == 'true'
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14, windows-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+        include:
+          # Android on other runners
+          - { name: "verify: Android (macos)", runner: macos-14,       make: verify-android, timeout: 40, java: true, gradle-cache: true }
+          - { name: "verify: Android (win)",   runner: windows-latest, make: verify-android, timeout: 40, java: true, gradle-cache: true }
+          - { name: "int: Android (macos)",    runner: macos-14,       make: test-example-android, timeout: 40, java: true, hw-accel: true, gradle-cache: true, emulator: true }
+          # Web on other runners
+          - { name: "pkg: Web (macos)",        runner: macos-14,       make: test-ops-web,    timeout: 40, chrome: true, wasm-cache: true, wasm-build: true }
+          - { name: "pkg: Web (win)",          runner: windows-latest, make: test-ops-web,    timeout: 40, chrome: true, wasm-cache: true, wasm-build: true }
+          - { name: "int: Web (macos)",        runner: macos-14,       make: test-example-web, timeout: 40, chrome: true, wasm-cache: true, wasm-build: true }
+          - { name: "int: Web (win)",          runner: windows-latest, make: test-example-web, timeout: 40, chrome: true, wasm-cache: true, wasm-build: true }
+          - { name: "verify: Web (macos)",     runner: macos-14,       make: verify-web,      timeout: 40, wasm-cache: true, wasm-build: true }
+          - { name: "verify: Web (win)",       runner: windows-latest, make: verify-web,      timeout: 40, wasm-cache: true, wasm-build: true }
+
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
     steps:
       - uses: actions/checkout@v6
         with: { submodules: recursive }
-      - uses: ./.github/actions/flutter-target
+      - uses: ./.github/actions/make-target
         with:
-          target: web
-          make-target: test-release-web
+          make-target: ${{ matrix.make }}
+          java: ${{ matrix.java || 'false' }}
+          chrome: ${{ matrix.chrome || 'false' }}
+          headless-display: ${{ matrix.headless-display || 'false' }}
+          hw-accel: ${{ matrix.hw-accel || 'false' }}
+          gradle-cache: ${{ matrix.gradle-cache || 'false' }}
+          xcode-cache: ${{ matrix.xcode-cache || 'false' }}
+          xcode-cache-target: ${{ matrix.xcode-cache-target || '' }}
+          pods-cache: ${{ matrix.pods-cache || 'false' }}
+          wasm-cache: ${{ matrix.wasm-cache || 'false' }}
+          wasm-build: ${{ matrix.wasm-build || 'false' }}
+          emulator: ${{ matrix.emulator || 'false' }}
+          simulator: ${{ matrix.simulator || 'false' }}
 
-  # ── Gate ───────────────────────────────────────────────────────────
-
+  # ── Gate ──
   gate:
     name: Full Test Gate
     if: always()
-    needs: [pkg-macos, pkg-linux, pkg-windows, pkg-web, int-macos, int-linux, int-windows, int-android, int-ios, int-web, release-android, release-ios, release-macos, release-linux, release-windows, release-web]
-    runs-on: ubuntu-latest
+    needs: [runners, test, test-all-runners]
+    runs-on: ${{ needs.runners.outputs.runner }}
     steps:
       - name: Evaluate
         run: |
-          if [[ "${{ github.event.action }}" != "labeled" ]] || [[ "${{ github.event.label.name }}" != "ready-to-test" ]]; then
-            echo "Full test not triggered — gate passes"
-            exit 0
+          TEST="${{ needs.test.result }}"
+          ALL="${{ needs.test-all-runners.result }}"
+          if [[ "$TEST" != "success" && "$TEST" != "skipped" ]]; then
+            echo "FAILED: test returned '$TEST'"
+            exit 1
           fi
-          RESULTS=(
-            "${{ needs.pkg-macos.result }}"
-            "${{ needs.pkg-linux.result }}"
-            "${{ needs.pkg-windows.result }}"
-            "${{ needs.pkg-web.result }}"
-            "${{ needs.int-macos.result }}"
-            "${{ needs.int-linux.result }}"
-            "${{ needs.int-windows.result }}"
-            "${{ needs.int-android.result }}"
-            "${{ needs.int-ios.result }}"
-            "${{ needs.int-web.result }}"
-            "${{ needs.release-android.result }}"
-            "${{ needs.release-ios.result }}"
-            "${{ needs.release-macos.result }}"
-            "${{ needs.release-linux.result }}"
-            "${{ needs.release-windows.result }}"
-            "${{ needs.release-web.result }}"
-          )
-          for r in "${RESULTS[@]}"; do
-            if [[ "$r" != "success" ]]; then
-              echo "FAILED: a test returned '$r'"
-              exit 1
-            fi
-          done
+          if [[ "$ALL" != "success" && "$ALL" != "skipped" ]]; then
+            echo "FAILED: test-all-runners returned '$ALL'"
+            exit 1
+          fi
           echo "All jobs passed"
-# CI fixes

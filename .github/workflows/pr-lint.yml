@@ -1,20 +1,40 @@
 # All PR quality gates in one workflow.
 # Jobs: conventional commit title, promotion chain, workflow security scan.
+# Runner-agnostic — all jobs run on one configurable runner.
+# Default: ubuntu-latest. Override via workflow_dispatch.
 name: PR Checks
 
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
     branches: [dev, prod]
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: "Runner for all jobs"
+        type: choice
+        options: [ubuntu-latest, macos-14, windows-latest]
+        default: ubuntu-latest
 
 permissions: {}
 
+env:
+  DEFAULT_RUNNER: ubuntu-latest
+
 jobs:
+  runners:
+    runs-on: ubuntu-latest
+    outputs:
+      runner: ${{ steps.resolve.outputs.runner }}
+    steps:
+      - id: resolve
+        run: echo "runner=${{ inputs.runner || env.DEFAULT_RUNNER }}" >> $GITHUB_OUTPUT
+
   # ── Conventional Commits ─────────────────────────────────────────
-  # Since we squash-merge, the PR title becomes the commit message.
   conventional-commit:
     name: Conventional Commit
-    runs-on: ubuntu-latest
+    needs: runners
+    runs-on: ${{ needs.runners.outputs.runner }}
     steps:
       - name: Check PR title
         env:
@@ -37,10 +57,10 @@ jobs:
           echo "✓ PR title is valid: $TITLE"
 
   # ── Promotion Chain ──────────────────────────────────────────────
-  # Enforce linear promotion: feature → dev → prod. No skipping.
   promotion-check:
     name: Promotion Chain
-    runs-on: ubuntu-latest
+    needs: runners
+    runs-on: ${{ needs.runners.outputs.runner }}
     steps:
       - name: Validate promotion path
         env:
@@ -62,11 +82,10 @@ jobs:
           echo "✓ Valid promotion path: $HEAD → $BASE"
 
   # ── Workflow Security ────────────────────────────────────────────
-  # Scan for dangerous pull_request_target + checkout combo.
-  # Runs on every PR (2 seconds of grep — cheaper than skipping logic).
   workflow-security:
     name: Workflow Security
-    runs-on: ubuntu-latest
+    needs: runners
+    runs-on: ${{ needs.runners.outputs.runner }}
     steps:
       - uses: actions/checkout@v6
       - name: Scan for dangerous patterns

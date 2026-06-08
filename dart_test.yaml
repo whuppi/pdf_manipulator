@@ -1,4 +1,4 @@
-# Default platform is VM (native). Web tests run explicitly with -p chrome.
+# Default test target is VM (native). Web tests run explicitly with -p chrome.
 #
 #   dart test                                                         # native only
 #   dart test test/ops/runners/web_opfs_runner_test.dart -p chrome        # web OPFS

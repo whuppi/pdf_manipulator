@@ -1,0 +1,115 @@
+name: Make Target
+description: >
+  Orchestrator. Provisions capabilities then runs a make target.
+  Each capability is an independent action under capabilities/.
+  This file is a flat list of conditional capability calls — zero
+  logic of its own.
+
+inputs:
+  make-target:
+    description: "Makefile target to run"
+    required: true
+  java:
+    description: "Install JDK"
+    required: false
+    default: 'false'
+  chrome:
+    description: "Install Chrome + ChromeDriver"
+    required: false
+    default: 'false'
+  headless-display:
+    description: "Virtual display for headless GUI"
+    required: false
+    default: 'false'
+  hw-accel:
+    description: "Hardware acceleration for emulators"
+    required: false
+    default: 'false'
+  gradle-cache:
+    description: "Cache Gradle"
+    required: false
+    default: 'false'
+  xcode-cache:
+    description: "Cache Xcode derived data"
+    required: false
+    default: 'false'
+  xcode-cache-target:
+    description: "ios or macos — Xcode cache key"
+    required: false
+    default: ''
+  pods-cache:
+    description: "Cache CocoaPods"
+    required: false
+    default: 'false'
+  wasm-cache:
+    description: "Cache WASM build"
+    required: false
+    default: 'false'
+  wasm-build:
+    description: "Compile WASM from source"
+    required: false
+    default: 'false'
+  emulator:
+    description: "Boot Android emulator (wraps make-target)"
+    required: false
+    default: 'false'
+  simulator:
+    description: "Boot iOS simulator"
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    # ── Always ──
+    - uses: ./.github/actions/capabilities/fvm
+    - uses: ./.github/actions/capabilities/rust
+
+    # ── On demand ──
+    - uses: ./.github/actions/capabilities/java
+      if: inputs.java == 'true'
+
+    - uses: ./.github/actions/capabilities/chrome
+      if: inputs.chrome == 'true'
+
+    - uses: ./.github/actions/capabilities/headless-display
+      if: inputs.headless-display == 'true'
+
+    - uses: ./.github/actions/capabilities/hw-accel
+      if: inputs.hw-accel == 'true'
+
+    - uses: ./.github/actions/capabilities/gradle-cache
+      if: inputs.gradle-cache == 'true'
+
+    - uses: ./.github/actions/capabilities/xcode-cache
+      if: inputs.xcode-cache == 'true'
+      with:
+        target: ${{ inputs.xcode-cache-target }}
+
+    - uses: ./.github/actions/capabilities/pods-cache
+      if: inputs.pods-cache == 'true'
+
+    - uses: ./.github/actions/capabilities/wasm-cache
+      if: inputs.wasm-cache == 'true'
+
+    - uses: ./.github/actions/capabilities/wasm-build
+      if: inputs.wasm-build == 'true'
+
+    - uses: ./.github/actions/capabilities/ios-simulator
+      if: inputs.simulator == 'true'
+
+    - uses: ./.github/actions/capabilities/android-emulator
+      if: inputs.emulator == 'true'
+      with:
+        script: make ${{ inputs.make-target }}
+
+    # ── Run (skipped when emulator wraps it) ──
+    - name: ${{ inputs.make-target }}
+      if: inputs.emulator != 'true' && inputs.headless-display != 'true'
+      shell: bash
+      run: make ${{ inputs.make-target }}
+
+    - name: ${{ inputs.make-target }} (headless)
+      if: inputs.emulator != 'true' && inputs.headless-display == 'true'
+      shell: bash
+      run: xvfb-run make ${{ inputs.make-target }}

@@ -41,6 +41,14 @@ cd "$PKG_ROOT"
 NATIVE_FEATURES=$(bash "$SCRIPT_DIR/compile_rust.sh" --features native)
 WASM_FEATURES=$(bash "$SCRIPT_DIR/compile_rust.sh" --features wasm)
 
+# Ensure wasm target is installed for cargo check
+ensure_target() {
+  if ! rustup target list --installed | grep -qx "$1"; then
+    echo "  Installing Rust target: $1"
+    rustup target add "$1"
+  fi
+}
+
 check_rust_warnings() {
   local crate_dir="$1" features="$2" extra_args="${3:-}"
 
@@ -64,41 +72,8 @@ check_rust_warnings() {
 
   cargo check --lib $extra_args $feature_flag \
     --message-format=json 2>/dev/null \
-  | python3 -c "
-import sys, json
+  | bash "$SCRIPT_DIR/check_rust_warnings.sh" "$diff_output"
 
-diff_text = '''$diff_output'''
-changed = {}
-cur = None
-for l in diff_text.splitlines():
-    if l.startswith('+++ b/'): cur = l[6:]
-    elif l.startswith('@@') and cur:
-        for p in l.split('@@')[1].split():
-            if p.startswith('+'):
-                s = p[1:].split(',')
-                start = int(s[0])
-                count = int(s[1]) if len(s) > 1 else 1
-                changed.setdefault(cur, set()).update(range(start, start + count))
-
-warns = 0
-for line in sys.stdin:
-    try: msg = json.loads(line)
-    except: continue
-    if msg.get('reason') != 'compiler-message': continue
-    m = msg['message']
-    if m['level'] != 'warning': continue
-    for s in m.get('spans', []):
-        if not s.get('is_primary'): continue
-        fn = s['file_name']
-        if fn not in changed: break
-        if s['line_start'] in changed[fn]:
-            print(f'  {fn}:{s[\"line_start\"]}: {m[\"message\"]}')
-            warns += 1
-        break
-if warns:
-    print(f'\n{warns} warning(s) in our changed lines')
-    sys.exit(1)
-"
 
   cd "$PKG_ROOT"
 }
@@ -107,6 +82,7 @@ echo "=== Rust: check pdf_oxide warnings (native) ==="
 check_rust_warnings "$PKG_ROOT/vendor/pdf_oxide" "$NATIVE_FEATURES" ""
 
 echo "=== Rust: check pdf_oxide warnings (wasm) ==="
+ensure_target wasm32-unknown-unknown
 check_rust_warnings "$PKG_ROOT/vendor/pdf_oxide" "$WASM_FEATURES" \
   "--target wasm32-unknown-unknown --no-default-features"
 

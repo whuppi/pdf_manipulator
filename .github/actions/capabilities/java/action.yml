@@ -1,0 +1,16 @@
+name: Java
+description: Install JDK for Android builds.
+
+inputs:
+  version:
+    description: "JDK version"
+    required: false
+    default: '17'
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: ${{ inputs.version }}

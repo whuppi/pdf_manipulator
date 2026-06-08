@@ -13,7 +13,7 @@
 #   ./tool/compile_rust.sh all          native + wasm
 #   ./tool/compile_rust.sh --features   Print feature flags (for Makefile + build.dart)
 #
-# CI calls the specific platform command. Local dev calls native or all.
+# CI calls the specific target command. Local dev calls native or all.
 #
 # Prerequisites:
 #   Rust toolchain with targets installed (rustup target add ...)
@@ -143,7 +143,7 @@ native_summary() {
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Platform commands — CI calls these directly
+# Target commands — CI calls these directly
 # ═══════════════════════════════════════════════════════════════════
 
 do_macos() {
@@ -166,6 +166,16 @@ do_ios() {
 
 do_linux() {
   compile_one "x86_64-unknown-linux-gnu" "linux-x64" "libpdf_oxide.so"
+
+  # Cross-compiler for arm64
+  if ! command -v aarch64-linux-gnu-gcc &>/dev/null; then
+    if [ -n "${CI:-}" ]; then
+      sudo apt-get update -qq && sudo apt-get install -y -qq gcc-aarch64-linux-gnu
+    else
+      echo "Error: aarch64-linux-gnu-gcc not found. Run: sudo apt-get install -y gcc-aarch64-linux-gnu"
+      exit 1
+    fi
+  fi
 
   export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER="aarch64-linux-gnu-gcc"
   compile_one "aarch64-unknown-linux-gnu" "linux-arm64" "libpdf_oxide.so"
@@ -202,7 +212,7 @@ do_windows() {
 # Auto-detect — local dev convenience
 # ═══════════════════════════════════════════════════════════════════
 # Builds whatever this host supports. CI never calls this — it uses
-# the explicit platform commands above.
+# the explicit target commands above.
 
 do_native() {
   if [[ "$(uname)" == "Darwin" ]]; then
@@ -307,6 +317,14 @@ do_wasm() {
   ls -lh "$out"/pdf_oxide*
   echo "Binary: $(wc -c < "$out/pdf_oxide_bg.wasm") bytes"
   echo ""
+  # Copy to COMPILE_OUTPUT_DIR if set (release pipeline uses this)
+  local release_out="${COMPILE_OUTPUT_DIR:-}"
+  if [ -n "$release_out" ]; then
+    mkdir -p "$release_out/wasm"
+    cp "$out/pdf_oxide.js" "$out/pdf_oxide_bg.wasm" "$release_out/wasm/"
+    echo "Copied to $release_out/wasm/"
+  fi
+
   echo "Done. Commit web_assets/ to ship the WASM binary."
 }
 

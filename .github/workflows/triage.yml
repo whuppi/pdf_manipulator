@@ -1,6 +1,6 @@
 # Lightweight triage — no LLM, just rules.
-# Auto-assigns, auto-labels based on file paths.
-# Piku will replace this with intelligent triage later.
+# Auto-assigns, auto-labels, revoke stale ready-to-test.
+# Runner-agnostic — all jobs use RUNNER env var (default: ubuntu-latest).
 name: Triage
 
 on:
@@ -13,6 +13,9 @@ permissions:
   issues: write
   pull-requests: write
 
+env:
+  RUNNER: ubuntu-latest
+
 jobs:
   # Revoke stale ready-to-test label when new commits are pushed.
   # Lives here (not full-test.yml) because pull_request_target gives
@@ -22,7 +25,7 @@ jobs:
       github.event_name == 'pull_request_target' &&
       github.event.action == 'synchronize' &&
       contains(github.event.pull_request.labels.*.name, 'ready-to-test')
-    runs-on: ubuntu-latest
+    runs-on: ${{ env.RUNNER }}
     steps:
       - name: Remove label + notify
         env:
@@ -45,7 +48,7 @@ jobs:
       github.event.action == 'synchronize' &&
       github.event.pull_request.user.login == 'dependabot[bot]' &&
       github.event.sender.login != 'dependabot[bot]'
-    runs-on: ubuntu-latest
+    runs-on: ${{ env.RUNNER }}
     steps:
       - name: Notify maintainer
         env:
@@ -56,7 +59,7 @@ jobs:
             "New commits pushed — workflows may be outdated. A maintainer with push access should comment \`@dependabot recreate\` to pick up the latest changes."
 
   assign-and-label:
-    runs-on: ubuntu-latest
+    runs-on: ${{ env.RUNNER }}
     steps:
       # Auto-assign maintainer on everything
       - name: Auto-assign

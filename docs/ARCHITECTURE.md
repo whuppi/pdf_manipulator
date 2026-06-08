@@ -70,7 +70,7 @@ Eight load-bearing guarantees. Every architectural decision serves one.
     transport, decodes binary response.
             |
             v
-**Layer 3 — Transport (Dart, per-platform)**
+**Layer 3 — Transport (Dart, per-target)**
 
     Native:
       native_transport.dart — isolate + FFI
@@ -224,7 +224,7 @@ bin/
 └── setup.dart                              ← CLI: setup <target> (web|android|ios|macos|linux|windows)
 
 tool/
-├── compile_rust.sh                         ← Rust → native / wasm / per-platform / both
+├── compile_rust.sh                         ← Rust → native / wasm / per-target / both
 │                                              reads features from build.json
 ├── release.sh                              ← 7 modes: --gate, --discover, --github-notes,
 │                                              --update-tag-hashes, --stamp-changelog,
@@ -261,7 +261,129 @@ vendor/pdf_oxide/src/
 
 ---
 
-## 5. The binary wire format
+## 5. CI/CD architecture
+
+### Vocabulary
+
+| Term | Meaning | Example |
+|---|---|---|
+| **target** | What you build for | android, ios, macos, linux, windows, web |
+| **runner** | CI machine that runs the job | ubuntu-latest, macos-14, windows-latest |
+| **host** | Machine doing the building (CI or dev) | `Platform.isMacOS`, `uname` |
+| **capability** | One installable concern | fvm, rust, java, chrome, headless-display |
+| **build** | Compile for dev iteration | `make build-native` |
+| **compile** | Produce release binaries for upload | `make compile-macos` |
+| **verify** | Prove release build works (output thrown away) | `make verify-android` |
+| **test** | Run test suites | `make test-unit` |
+| **release** | Publish a version (tag, upload, pub.dev) | `release.sh --discover` |
+
+"Platform" is not used internally. "Cross-platform" is kept in
+user-facing text (README, pubspec).
+
+### Principles
+
+1. **Makefile is the interface.** CI runs `make <target>`. All build
+   logic lives in Makefile and scripts. CI YAML has zero build logic.
+
+2. **Scripts handle their own deps.** Rust targets, wasm-bindgen,
+   binaryen, cross-compilers — auto-installed by the script that
+   needs them. `$CI` env var: auto-install on CI, error with
+   instructions on dev. `rustup target add` and `cargo install` are
+   always safe (user-space). System packages auto-install only on CI.
+
+3. **Dart is never called from bash.** Bash reads `build.json` with
+   pure `sed`/`grep`. No python3, no jq, no dart.
+
+4. **Capabilities, not layers.** Each CI concern is one action under
+   `capabilities/`. No runner layer, no target layer — just
+   independent capabilities. Each handles all runners internally
+   via `runner.os` guards. `runner.os` guards exist ONLY inside
+   capability actions — nowhere else.
+
+5. **One orchestrator.** `make-target` provisions capabilities then
+   runs `make`. Zero logic — flat list of conditional capability
+   calls. Workflows call `make-target`, never capabilities directly.
+
+6. **Runners are configurable.** Every workflow defines its runner
+   as a `workflow_dispatch` input with a default. No hardcoded
+   `runs-on` except the 2-second resolver job. Infra jobs (gate,
+   triage, lint) use one configurable runner. Test/compile jobs use
+   per-row matrix runners.
+
+7. **Matrix row is the manifest.** Each row declares which
+   capabilities to activate and which runner to use. Adding a new
+   combo = one line. Adding a new capability = one action + one
+   input on `make-target` + add to rows that need it.
+
+### Actions
+
+```
+.github/actions/
+├── capabilities/          13 independent leaves
+│   ├── fvm/               Flutter SDK (all runners)
+│   ├── rust/              Rust toolchain + sccache (all runners)
+│   ├── java/              JDK (all runners)
+│   ├── chrome/            Chrome + ChromeDriver (Linux/macOS/Windows)
+│   ├── headless-display/  xvfb on Linux, no-op elsewhere
+│   ├── hw-accel/          KVM on Linux, no-op elsewhere
+│   ├── gradle-cache/      Gradle downloads cache
+│   ├── xcode-cache/       Xcode derived data cache
+│   ├── pods-cache/        CocoaPods cache
+│   ├── wasm-cache/        WASM build output cache
+│   ├── wasm-build/        Compile WASM from source
+│   ├── android-emulator/  x86_64 on Linux, arm64 on macOS
+│   └── ios-simulator/     macOS only
+├── make-target/           Orchestrator (capabilities → make)
+└── debug-ssh/             SSH tunnel for CI debugging
+```
+
+Each capability:
+- Is one concern, one action, one file.
+- Handles all valid runners internally (`runner.os` guards).
+- Documents runner behavior in its description (what it does on
+  each runner, including no-ops).
+- Never calls another capability. Independent leaves.
+
+### Workflows
+
+| Workflow | Trigger | Runner model |
+|---|---|---|
+| `ci.yml` | PR to prod/dev | All jobs on one input runner (default: ubuntu) |
+| `full-test.yml` | `ready-to-test` label or dispatch | Matrix rows per target + all-runners mode |
+| `create-release.yml` | Changelog push or dispatch | Infra on input runner, compile on matrix |
+| `pr-lint.yml` | PR to prod/dev | All jobs on one input runner |
+| `triage.yml` | Issues/PRs | All jobs on env runner |
+| `flutter-upgrade.yml` | Daily or dispatch | All jobs on input runner |
+| `debug-ssh.yml` | Dispatch only | Direct input runner |
+
+### Test matrix (full-test.yml)
+
+**Default** — one runner per target, always runs on `ready-to-test`:
+
+| Category | Entries |
+|---|---|
+| Package tests | macOS, Linux, Windows, Web |
+| Integration tests | macOS, Linux, Windows, Android (emulator), iOS (simulator), Web (Chrome) |
+| Verify (release builds) | Android, iOS, macOS, Linux, Windows, Web |
+
+**All-runners** — every other valid runner combo, dispatch only.
+Verifies nothing is runner-dependent. Android on macos + windows,
+Web on macos + windows.
+
+### Dependency ownership
+
+| Dep | Owner | CI behavior | Dev behavior |
+|---|---|---|---|
+| Rust targets | `compile_rust.sh`, `hook/build.dart` | Auto-install (safe) | Auto-install (safe) |
+| wasm-bindgen-cli | `compile_rust.sh` | Auto-install (safe) | Auto-install (safe) |
+| binaryen | `compile_rust.sh` | Auto-install | Error with instructions |
+| gcc-aarch64 cross | `compile_rust.sh` | Auto-install | Error with instructions |
+| GTK + ninja | Makefile | Auto-install | Error with instructions |
+| build.json reads | `compile_rust.sh`, `release.sh` | Pure bash `sed`/`grep` | Same |
+
+---
+
+## 6. The binary wire format
 
 Same layout in both directions. Op args only — PDF bytes travel
 through the transport's I/O channels, never through the codec.
@@ -284,11 +406,11 @@ enum IS the protocol.
 
 ---
 
-## 6. Streaming I/O
+## 7. Streaming I/O
 
 ### The rule
 
-O(1) memory on every path. No full-file buffers on either platform.
+O(1) memory on every path. No full-file buffers on native or web.
 Memory bounded by buffer size (64KB read, 256KB write), never by
 file size. Test guards enforce this mechanically — see §8.
 
@@ -412,7 +534,7 @@ prompting for COOP/COEP headers.
 
 ---
 
-## 7. Instance architecture
+## 8. Instance architecture
 
 ```
 Pdf()       = isolated engine instance (pool + handles + children)
@@ -471,7 +593,7 @@ a dead callback → FATAL crash on Windows.
 All ops from one `Pdf` share its pool. Pool size adapts automatically
 (`max(2, cores / 2)`). Multiple `Pdf` instances are fully independent.
 
-### Platform internals
+### Target internals
 
 **Native:** all pool threads share one `InstanceState` (Mutex).
 Created by `bridge_init()`, destroyed by `bridge_shutdown()`. Holds
@@ -485,7 +607,7 @@ workers = truly parallel. Same document = same worker = serial.
 
 ---
 
-## 8. Test architecture
+## 9. Test architecture
 
 ### Rules
 
@@ -514,8 +636,8 @@ test/
 ├── ops/
 │   ├── core/                       7 core test files
 │   ├── stress/                     6 stress test files (1000-page)
-│   ├── native/                     platform-specific native tests
-│   └── runners/                    4 platform runners
+│   ├── native/                     target-specific native tests
+│   └── runners/                    4 target runners
 │       ├── native_runner_test.dart
 │       ├── web_opfs_runner_test.dart
 │       ├── web_jspi_runner_test.dart
@@ -550,7 +672,7 @@ handler without a Dart op → test fails.
 
 ---
 
-## 9. Upstream patches
+## 10. Upstream patches
 
 ### pdf_oxide — 7 files patched
 
@@ -581,7 +703,7 @@ Everything in `src/host/` is entirely ours — no patch markers needed.
 
 ---
 
-## 10. The one-line summary
+## 11. The one-line summary
 
 > **Four layers. One binary format. Multi-source/multi-sink transport.
 > Three web I/O modes auto-detected (JSPI > Atomics > OPFS), one WASM

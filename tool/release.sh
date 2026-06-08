@@ -24,7 +24,7 @@
 # ─────────────────────────────────────────
 #   1. gate      → --gate            should this push trigger anything?
 #   2. discover  → --discover        find version, stamp tag, create release
-#   3. compile   → (workflow)        checkout tag, build per platform
+#   3. compile   → (workflow)        checkout tag, build per target
 #   4. upload    → (workflow)        upload binaries
 #                  --add-git-install
 #                  --update-tag-hashes

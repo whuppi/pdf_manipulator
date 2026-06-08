@@ -1,0 +1,40 @@
+name: Android Emulator
+description: >
+  Boot Android emulator and run a script inside it.
+  Linux: x86_64 emulator (KVM). macOS: arm64 emulator (Hypervisor). Windows: not supported.
+
+inputs:
+  script:
+    description: "Command to run while emulator is alive"
+    required: true
+  api-level:
+    description: "Android API level"
+    required: false
+    default: '34'
+
+runs:
+  using: composite
+  steps:
+    - name: Emulator (Linux — x86_64)
+      if: runner.os == 'Linux'
+      uses: reactivecircus/android-emulator-runner@v2
+      with:
+        api-level: ${{ inputs.api-level }}
+        arch: x86_64
+        target: google_apis
+        force-avd-creation: false
+        emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+        disable-animations: true
+        script: ${{ inputs.script }}
+
+    - name: Emulator (macOS — arm64)
+      if: runner.os == 'macOS'
+      uses: reactivecircus/android-emulator-runner@v2
+      with:
+        api-level: ${{ inputs.api-level }}
+        arch: arm64-v8a
+        target: google_apis
+        force-avd-creation: false
+        emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+        disable-animations: true
+        script: ${{ inputs.script }}

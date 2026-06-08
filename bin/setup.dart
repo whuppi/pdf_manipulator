@@ -11,7 +11,8 @@
 // --force: web skips hash check and re-downloads. Native runs
 //   `flutter clean` first then rebuilds.
 //
-// Use `flutter pub run`, NOT `dart run`.
+// Use `flutter pub run`, NOT `dart run` — native targets
+// subprocess `flutter build` which needs flutter on PATH.
 
 import 'dart:io';
 
@@ -106,6 +107,9 @@ Future<void> _setupWeb(bool force) async {
 
 // ── Native ────────────────────────────────────────────────────────
 
+// 'flutter' on PATH is safe here — this script runs via
+// `flutter pub run`, so the invoking flutter (bare or FVM)
+// adds itself to PATH for child processes.
 Future<void> _setupNative(String target, bool force) async {
   final buildArgs = _nativeBuildArgs[target]!;
 

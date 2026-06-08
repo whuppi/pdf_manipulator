@@ -1,0 +1,13 @@
+name: Gradle Cache
+description: Cache Gradle downloads for Android builds.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache@v4
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: gradle-${{ hashFiles('example/android/build.gradle.kts', 'example/android/app/build.gradle.kts') }}
+        restore-keys: gradle-

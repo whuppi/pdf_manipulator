@@ -1,4 +1,4 @@
-name: Setup FVM (cross-platform)
+name: FVM
 description: >
   Install FVM from GitHub Releases + run fvm install to get the SDK pinned in .fvmrc.
   Works on Linux, macOS, AND Windows. Downloads the pre-built binary directly —

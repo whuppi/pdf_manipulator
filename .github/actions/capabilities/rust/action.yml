@@ -1,4 +1,4 @@
-name: Setup Rust
+name: Rust
 description: Install Rust toolchain + sccache for fast builds
 
 inputs:

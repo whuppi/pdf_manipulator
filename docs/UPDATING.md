@@ -352,14 +352,8 @@ gh api repos/whuppi/pdf_manipulator/branches/prod/protection -X PUT \
 
 ### CI workflows
 
-| Workflow | Trigger | Purpose |
-|---|---|---|
-| `ci.yml` | PR to prod/dev | `make analyze` + `make test-unit` + `make test-ops-native` |
-| `pr-lint.yml` | PR to prod/dev | Conventional commit title + promotion chain |
-| `full-test.yml` | `ready-to-test` label | 4 pkg + 6 integration + release-build per target |
-| `create-release.yml` | Push to dev/prod changing changelog, or `workflow_dispatch` | Full release pipeline (7 steps) |
-| `flutter-upgrade.yml` | Daily or `workflow_dispatch` | Auto-detect new Flutter stable |
-| `triage.yml` | Issues/PRs | Auto-label, auto-assign, dependabot notifications |
+See ARCHITECTURE.md "CI/CD architecture" for the full workflow table,
+runner model, capability architecture, and action inventory.
 
 ### Git hooks
 
@@ -438,9 +432,13 @@ git checkout CHANGELOG.md   # restore
 
 | Symptom | Check |
 |---|---|
-| Build hook fails on consumer machine | Binary missing for platform — check GitHub Release assets |
+| Build hook fails on consumer machine | Binary missing for target — check GitHub Release assets |
 | WASM test fails | Rebuild: `make build-wasm` |
 | Native passes, web fails | bridge_api.rs WASM path missing the op |
 | wire_sync_test fails | EngineOp without matching bridge_api.rs arm |
 | "Handle not found" | Handle disposed or never opened |
 | "Symbol not found" at runtime | Binary older than source — rebuild |
+| `make verify-android` fails without Rust | Hook tries compile → `cargo` not found → error with install URL |
+| `make verify-web` fails without binaryen | `compile_rust.sh` errors with install command (dev) or auto-installs (CI) |
+| `make verify-linux` fails without GTK | Makefile errors with `apt-get install` command (dev) or auto-installs (CI) |
+| `flutter build --release` fails but debug works | Build hook routes differently in release — check `hook/link.dart` exists |

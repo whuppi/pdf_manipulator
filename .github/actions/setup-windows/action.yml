@@ -1,9 +1,0 @@
-name: Setup Windows
-description: Windows build deps. MSVC ships with the runner — nothing to install.
-
-runs:
-  using: composite
-  steps:
-    - name: No-op
-      shell: bash
-      run: echo "Windows setup complete (MSVC ships with runner)"
