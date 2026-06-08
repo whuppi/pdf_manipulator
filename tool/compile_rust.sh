@@ -277,6 +277,11 @@ do_wasm() {
       esac
       echo "  $BINARYEN_VER"
       local tmp="${RUNNER_TEMP:-/tmp}"
+      # Convert Windows paths (D:\...) to Unix (/d/...) so tar doesn't
+      # interpret the colon as a remote host.
+      if command -v cygpath &>/dev/null; then
+        tmp=$(cygpath -u "$tmp")
+      fi
       curl -sSL --fail "$BINARYEN_URL" -o "$tmp/binaryen.tar.gz" \
         || { echo "Error: failed to download binaryen $BINARYEN_VER"; exit 1; }
       tar xzf "$tmp/binaryen.tar.gz" -C "$tmp"
