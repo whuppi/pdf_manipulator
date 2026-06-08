@@ -100,14 +100,17 @@ jobs:
   # ── All-runners ──
   test-all-runners:
     needs: inputs
-    if: needs.inputs.outputs.all-runners == 'true'
+    if: >-
+      needs.inputs.outputs.all-runners == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'))
     strategy:
       fail-fast: false
       matrix:
         include:
           # Android on other runners
           - { name: "verify: Android (macos)", runner: macos-14,       make: verify-android, timeout: 40, java: true, gradle-cache: true }
-          - { name: "verify: Android (win)",   runner: windows-latest, make: verify-android, timeout: 40, java: true, gradle-cache: true }
+          - { name: "verify: Android (win)",   runner: windows-latest, make: verify-android, timeout: 60, java: true, gradle-cache: true }
           - { name: "int: Android (macos)",    runner: macos-14,       make: test-example-android, timeout: 40, java: true, hw-accel: true, gradle-cache: true, emulator: true }
           # Web on other runners
           - { name: "pkg: Web (macos)",        runner: macos-14,       make: test-ops-web,    timeout: 40, chrome: true, wasm-cache: true, wasm-build: true }

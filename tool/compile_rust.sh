@@ -266,13 +266,25 @@ do_wasm() {
       case "$(uname -s)" in
         Linux*)  sudo apt-get update -qq && sudo apt-get install -y -qq binaryen ;;
         Darwin*) brew install binaryen ;;
-        MINGW*|MSYS*) choco install binaryen -y ;;
+        MINGW*|MSYS*)
+          BINARYEN_VER=$(curl -sS -H "Authorization: bearer ${GITHUB_TOKEN:-}" \
+            https://api.github.com/repos/WebAssembly/binaryen/releases/latest \
+            | grep '"tag_name":' | sed 's/.*"\(version_[0-9]*\)".*/\1/')
+          BINARYEN_URL="https://github.com/WebAssembly/binaryen/releases/download/$BINARYEN_VER/binaryen-$BINARYEN_VER-x86_64-windows.tar.gz"
+          echo "  binaryen $BINARYEN_VER"
+          TMPDIR="${RUNNER_TEMP:-/tmp}"
+          curl -sSL "$BINARYEN_URL" -o "$TMPDIR/binaryen.tar.gz"
+          tar xzf "$TMPDIR/binaryen.tar.gz" -C "$TMPDIR"
+          cp "$TMPDIR/binaryen-$BINARYEN_VER/bin/wasm-opt.exe" /usr/bin/wasm-opt.exe 2>/dev/null \
+            || cp "$TMPDIR/binaryen-$BINARYEN_VER/bin/wasm-opt.exe" /mingw64/bin/
+          rm -rf "$TMPDIR/binaryen.tar.gz" "$TMPDIR/binaryen-$BINARYEN_VER"
+          ;;
       esac
     else
       echo "Error: wasm-opt not found. Install binaryen:"
       echo "  macOS:   brew install binaryen"
       echo "  Linux:   sudo apt-get install binaryen"
-      echo "  Windows: choco install binaryen"
+      echo "  Windows: download from https://github.com/WebAssembly/binaryen/releases"
       exit 1
     fi
   fi

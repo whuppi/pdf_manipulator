@@ -45,6 +45,7 @@ runs:
         echo "Chrome for Testing: $VERSION"
         curl -sSL "$CHROME_URL" -o /tmp/chrome.zip
         unzip -qo /tmp/chrome.zip -d /tmp/chrome-install && rm /tmp/chrome.zip
+        sudo rm -rf "/Applications/Google Chrome for Testing.app"
         sudo mv "/tmp/chrome-install/chrome-mac-arm64/Google Chrome for Testing.app" "/Applications/Google Chrome for Testing.app"
         curl -sSL "$DRIVER_URL" -o /tmp/chromedriver.zip
         unzip -qo /tmp/chromedriver.zip -d /tmp/driver-install && rm /tmp/chromedriver.zip
