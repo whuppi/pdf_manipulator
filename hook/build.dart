@@ -89,21 +89,23 @@ const _assetId = 'src/ffi/native_bindings.g.dart';
 // ── build.json — single source of truth for all build constants ──
 // Loaded once per hook invocation. Every constant that's shared with
 // tool/release.sh and tool/compile_rust.sh lives here.
-late final Map<String, dynamic> _buildConfig;
-late final String _crateName;
-late final String _repo;
-late final Map<String, String> _webAssets;
-late final Set<String> _wasmBuildOutputs;
-late final String _nativeFeatures;
+Map<String, dynamic>? _buildConfig;
+late String _crateName;
+late String _repo;
+late Map<String, String> _webAssets;
+late Set<String> _wasmBuildOutputs;
+late String _nativeFeatures;
 
 void _loadBuildConfig(Uri packageRoot) {
+  if (_buildConfig != null) return;
   final file = File.fromUri(packageRoot.resolve('build.json'));
-  _buildConfig = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
-  _crateName = _buildConfig['crate'] as String;
-  _repo = _buildConfig['repo'] as String;
-  _webAssets = Map<String, String>.from(_buildConfig['web'] as Map);
-  _wasmBuildOutputs = Set<String>.from(_buildConfig['wasmBuildOutputs'] as List);
-  _nativeFeatures = (_buildConfig['features'] as Map)['native'] as String;
+  final json = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
+  _buildConfig = json;
+  _crateName = json['crate'] as String;
+  _repo = json['repo'] as String;
+  _webAssets = Map<String, String>.from(json['web'] as Map);
+  _wasmBuildOutputs = Set<String>.from(json['wasmBuildOutputs'] as List);
+  _nativeFeatures = (json['features'] as Map)['native'] as String;
 }
 
 String _downloadUrl(String version, String assetName) =>
