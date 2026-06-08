@@ -14,6 +14,27 @@ permissions:
   pull-requests: write
 
 jobs:
+  # Revoke stale ready-to-test label when new commits are pushed.
+  # Lives here (not full-test.yml) because pull_request_target gives
+  # write access to labels on fork PRs.
+  revoke-ready-to-test:
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.event.action == 'synchronize' &&
+      contains(github.event.pull_request.labels.*.name, 'ready-to-test')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove label + notify
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr edit ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --remove-label "ready-to-test"
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --body "Label \`ready-to-test\` removed — new commits pushed. Re-add when ready."
+
   # When a non-dependabot push lands on a dependabot PR (e.g. human clicks
   # "Update branch"), workflows may be outdated. github-actions[bot] can't
   # run dependabot commands (no push access), so we comment asking a human.

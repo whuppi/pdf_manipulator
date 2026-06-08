@@ -18,26 +18,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  revoke-label:
-    name: Revoke stale label
-    if: >-
-      github.event.action == 'synchronize' &&
-      contains(github.event.pull_request.labels.*.name, 'ready-to-test')
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-    steps:
-      - name: Remove ready-to-test label
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh pr edit ${{ github.event.pull_request.number }} \
-            --repo ${{ github.repository }} \
-            --remove-label "ready-to-test"
-          gh pr comment ${{ github.event.pull_request.number }} \
-            --repo ${{ github.repository }} \
-            --body "Label \`ready-to-test\` removed — new commits pushed. Re-add when ready."
-
   # ── Package tests (dart test) ──────────────────────────────────────
 
   pkg-macos:
