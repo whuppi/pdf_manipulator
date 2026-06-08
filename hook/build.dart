@@ -313,6 +313,16 @@ Future<void> _compileNativeFromHook(
 
   _log.info('compiling from source for $targetTriple');
 
+  // Ensure the Rust target is installed (fresh CI or formatted laptop)
+  final targetCheck = Process.runSync(
+    'rustup', ['target', 'list', '--installed'],
+  );
+  if (targetCheck.exitCode == 0 &&
+      !(targetCheck.stdout as String).contains(targetTriple)) {
+    _log.info('installing Rust target: $targetTriple');
+    Process.runSync('rustup', ['target', 'add', targetTriple]);
+  }
+
   final env = <String, String>{};
   final codeConfig = input.config.code;
 

@@ -40,8 +40,19 @@ VENDOR="$PKG_ROOT/vendor/pdf_oxide"
 # Feature flags — read from build.json (single source of truth)
 # ═══════════════════════════════════════════════════════════════════
 
-NATIVE_FEATURES=$(python3 -c "import json; print(json.load(open('$PKG_ROOT/build.json'))['features']['native'])")
-WASM_FEATURES=$(python3 -c "import json; print(json.load(open('$PKG_ROOT/build.json'))['features']['wasm'])")
+# Rust check — hard error if not installed
+if ! command -v cargo &>/dev/null; then
+  echo "Error: Rust not installed. Get it at https://rustup.rs"
+  exit 1
+fi
+
+# Read build.json via pure bash — no python3, no jq, no dart.
+_json_get() {
+  sed -n "s/.*\"$1\": *\"\([^\"]*\)\".*/\1/p" "$PKG_ROOT/build.json"
+}
+
+NATIVE_FEATURES=$(_json_get 'native')
+WASM_FEATURES=$(_json_get 'wasm')
 
 if [[ "${1:-}" == "--features" ]]; then
   case "${2:-all}" in
@@ -64,6 +75,16 @@ MODE="${1:-native}"
 # Native — shared helpers
 # ═══════════════════════════════════════════════════════════════════
 
+# Ensure a Rust target is installed. Adds it if missing.
+#   $1 = Rust target triple
+ensure_target() {
+  local target="$1"
+  if ! rustup target list --installed | grep -qx "$target"; then
+    echo "  Installing Rust target: $target"
+    rustup target add "$target"
+  fi
+}
+
 # Compile one Rust target and copy the library to the output directory.
 #   $1 = Rust target triple
 #   $2 = output subdirectory name
@@ -73,6 +94,7 @@ compile_one() {
   local out="${COMPILE_OUTPUT_DIR:-$PKG_ROOT/build_output}"
 
   echo "=== Native: $target ==="
+  ensure_target "$target"
   cargo build --manifest-path "$MANIFEST" --lib --release \
     --target "$target" --features "$NATIVE_FEATURES"
 
@@ -258,6 +280,7 @@ do_wasm() {
   fi
 
   echo "=== WASM: compile ==="
+  ensure_target wasm32-unknown-unknown
   cd "$VENDOR"
   cargo build --lib \
     --target wasm32-unknown-unknown \

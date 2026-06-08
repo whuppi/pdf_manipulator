@@ -1,0 +1,11 @@
+name: Setup macOS
+description: Xcode build cache for macOS targets.
+
+runs:
+  using: composite
+  steps:
+    - name: Xcode cache
+      uses: irgaly/xcode-cache@v1
+      with:
+        key: xcode-macos-${{ env.SUBMODULE_PDF_OXIDE }}
+        restore-keys: xcode-macos-

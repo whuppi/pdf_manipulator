@@ -1,0 +1,17 @@
+name: Compile
+description: >
+  Compile pdf_oxide for a target platform via compile_rust.sh.
+  Rust targets and platform deps are auto-installed by the script.
+
+inputs:
+  platform:
+    description: "macos|ios|android|linux|windows|wasm"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/setup-rust
+
+    - shell: bash
+      run: bash tool/compile_rust.sh ${{ inputs.platform }}

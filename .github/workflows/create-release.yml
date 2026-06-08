@@ -84,7 +84,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { ref: '${{ needs.discover.outputs.tag }}' }
-      - uses: ./.github/actions/compile-macos
+      - uses: ./.github/actions/compile
+        with: { platform: macos }
       - uses: actions/upload-artifact@v7
         with: { name: bin-macos, path: out/ }
 
@@ -95,7 +96,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { ref: '${{ needs.discover.outputs.tag }}' }
-      - uses: ./.github/actions/compile-ios
+      - uses: ./.github/actions/compile
+        with: { platform: ios }
       - uses: actions/upload-artifact@v7
         with: { name: bin-ios, path: out/ }
 
@@ -106,7 +108,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { ref: '${{ needs.discover.outputs.tag }}' }
-      - uses: ./.github/actions/compile-android
+      - uses: ./.github/actions/compile
+        with: { platform: android }
       - uses: actions/upload-artifact@v7
         with: { name: bin-android, path: out/ }
 
@@ -117,7 +120,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { ref: '${{ needs.discover.outputs.tag }}' }
-      - uses: ./.github/actions/compile-linux
+      - uses: ./.github/actions/compile
+        with: { platform: linux }
       - uses: actions/upload-artifact@v7
         with: { name: bin-linux, path: out/ }
 
@@ -128,7 +132,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { ref: '${{ needs.discover.outputs.tag }}' }
-      - uses: ./.github/actions/compile-wasm
+      - uses: ./.github/actions/compile
+        with: { platform: wasm }
+      - run: mkdir -p out/wasm && cp web_assets/pdf_oxide.js web_assets/pdf_oxide_bg.wasm out/wasm/
       - uses: actions/upload-artifact@v7
         with: { name: bin-wasm, path: out/ }
 
@@ -139,7 +145,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { ref: '${{ needs.discover.outputs.tag }}' }
-      - uses: ./.github/actions/compile-windows
+      - uses: ./.github/actions/compile
+        with: { platform: windows }
       - uses: actions/upload-artifact@v7
         with: { name: bin-windows, path: out/ }
 

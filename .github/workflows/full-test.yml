@@ -28,7 +28,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { submodules: recursive }
-      - uses: ./.github/actions/pkg-test-native
+      - uses: ./.github/actions/flutter-target
+        with:
+          target: macos
+          make-target: test-pkg-native
 
   pkg-linux:
     name: "pkg: Linux"
@@ -38,7 +41,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { submodules: recursive }
-      - uses: ./.github/actions/pkg-test-native
+      - uses: ./.github/actions/flutter-target
+        with:
+          target: linux
+          make-target: test-pkg-native
 
   pkg-windows:
     name: "pkg: Windows"
@@ -48,7 +54,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { submodules: recursive }
-      - uses: ./.github/actions/pkg-test-native
+      - uses: ./.github/actions/flutter-target
+        with:
+          target: windows
+          make-target: test-pkg-native
 
   pkg-web:
     name: "pkg: Web (3 modes)"
@@ -58,7 +67,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { submodules: recursive }
-      - uses: ./.github/actions/pkg-test-web
+      - uses: ./.github/actions/flutter-target
+        with:
+          target: web
+          make-target: test-ops-web
 
   # ── Integration tests (flutter test on device) ─────────────────────
 
@@ -70,7 +82,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { submodules: recursive }
-      - uses: ./.github/actions/integration-macos
+      - uses: ./.github/actions/flutter-target
+        with:
+          target: macos
+          make-target: test-example-macos
 
   int-linux:
     name: "integration: Linux"
@@ -80,7 +95,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { submodules: recursive }
-      - uses: ./.github/actions/integration-linux
+      - uses: ./.github/actions/flutter-target
+        with:
+          target: linux
+          make-target: test-example-linux
+          xvfb: 'true'
 
   int-windows:
     name: "integration: Windows"
@@ -90,7 +109,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { submodules: recursive }
-      - uses: ./.github/actions/integration-windows
+      - uses: ./.github/actions/flutter-target
+        with:
+          target: windows
+          make-target: test-example-windows
 
   int-android:
     name: "integration: Android"
@@ -100,7 +122,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { submodules: recursive }
-      - uses: ./.github/actions/integration-android
+      - uses: ./.github/actions/flutter-target
+        with:
+          target: android
+          make-target: test-example-android
+          emulator: 'true'
 
   int-ios:
     name: "integration: iOS"
@@ -110,7 +136,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { submodules: recursive }
-      - uses: ./.github/actions/integration-ios
+      - uses: ./.github/actions/flutter-target
+        with:
+          target: ios
+          make-target: test-example-ios
+          simulator: 'true'
 
   int-web:
     name: "integration: Web (3 modes)"
@@ -120,7 +150,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { submodules: recursive }
-      - uses: ./.github/actions/integration-web
+      - uses: ./.github/actions/flutter-target
+        with:
+          target: web
+          make-target: test-example-web
 
   # ── Release-build tests ──────────────────────────────────────────
   # Debug and release builds exercise different code paths in the
@@ -138,13 +171,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { submodules: recursive }
-      - uses: ./.github/actions/setup-fvm
-      - uses: ./.github/actions/setup-rust
-      - uses: actions/setup-java@v4
+      - uses: ./.github/actions/flutter-target
         with:
-          distribution: temurin
-          java-version: 17
-      - run: make test-release-android
+          target: android
+          make-target: test-release-android
 
   release-ios:
     name: "release: iOS"
@@ -154,10 +184,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { submodules: recursive }
-      - uses: ./.github/actions/setup-fvm
-      - uses: ./.github/actions/setup-rust
-        with: { targets: "aarch64-apple-ios,aarch64-apple-ios-sim" }
-      - run: make test-release-ios
+      - uses: ./.github/actions/flutter-target
+        with:
+          target: ios
+          make-target: test-release-ios
 
   release-macos:
     name: "release: macOS"
@@ -167,9 +197,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { submodules: recursive }
-      - uses: ./.github/actions/setup-fvm
-      - uses: ./.github/actions/setup-rust
-      - run: make test-release-macos
+      - uses: ./.github/actions/flutter-target
+        with:
+          target: macos
+          make-target: test-release-macos
 
   release-linux:
     name: "release: Linux"
@@ -179,9 +210,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { submodules: recursive }
-      - uses: ./.github/actions/setup-fvm
-      - uses: ./.github/actions/setup-rust
-      - run: make test-release-linux
+      - uses: ./.github/actions/flutter-target
+        with:
+          target: linux
+          make-target: test-release-linux
 
   release-windows:
     name: "release: Windows"
@@ -191,9 +223,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { submodules: recursive }
-      - uses: ./.github/actions/setup-fvm
-      - uses: ./.github/actions/setup-rust
-      - run: make test-release-windows
+      - uses: ./.github/actions/flutter-target
+        with:
+          target: windows
+          make-target: test-release-windows
 
   release-web:
     name: "release: Web (${{ matrix.os }})"
@@ -207,10 +240,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { submodules: recursive }
-      - uses: ./.github/actions/setup-fvm
-      - uses: ./.github/actions/setup-rust
-        with: { targets: wasm32-unknown-unknown }
-      - run: make test-release-web
+      - uses: ./.github/actions/flutter-target
+        with:
+          target: web
+          make-target: test-release-web
 
   # ── Gate ───────────────────────────────────────────────────────────
 

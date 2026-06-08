@@ -89,6 +89,8 @@ compile-wasm:
 
 test: test-unit test-ops
 
+test-pkg-native: test-unit test-ops-native
+
 # ── Unit tests (pure Dart — types + transport protocol) ─────────────
 
 test-unit:

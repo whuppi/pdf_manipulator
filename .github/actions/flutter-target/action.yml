@@ -1,0 +1,69 @@
+name: Flutter Target
+description: >
+  Orchestrates CI for any Flutter platform target. Calls setup-fvm,
+  setup-rust, then setup-<target>, then runs a make target. Zero
+  platform logic here — everything delegates to leaf actions.
+
+inputs:
+  target:
+    description: "android|ios|macos|linux|windows|web"
+    required: true
+  make-target:
+    description: "Makefile target to run"
+    required: true
+  emulator:
+    description: "Boot Android emulator (wraps make-target)"
+    required: false
+    default: 'false'
+  simulator:
+    description: "Boot iOS simulator"
+    required: false
+    default: 'false'
+  xvfb:
+    description: "Install xvfb for headless Linux"
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    # ── Foundation ──
+    - uses: ./.github/actions/setup-fvm
+    - uses: ./.github/actions/setup-rust
+
+    # ── Target-specific setup (delegates to leaf actions) ──
+    - uses: ./.github/actions/setup-android
+      if: inputs.target == 'android'
+      with:
+        emulator: ${{ inputs.emulator }}
+        emulator-script: make ${{ inputs.make-target }}
+
+    - uses: ./.github/actions/setup-ios
+      if: inputs.target == 'ios'
+      with:
+        simulator: ${{ inputs.simulator }}
+
+    - uses: ./.github/actions/setup-macos
+      if: inputs.target == 'macos'
+
+    - uses: ./.github/actions/setup-linux
+      if: inputs.target == 'linux'
+      with:
+        xvfb: ${{ inputs.xvfb }}
+
+    - uses: ./.github/actions/setup-windows
+      if: inputs.target == 'windows'
+
+    - uses: ./.github/actions/setup-web
+      if: inputs.target == 'web'
+
+    # ── Run (skipped when emulator wraps it) ──
+    - name: ${{ inputs.make-target }}
+      if: inputs.emulator != 'true' && inputs.xvfb != 'true'
+      shell: bash
+      run: make ${{ inputs.make-target }}
+
+    - name: ${{ inputs.make-target }} (headless)
+      if: inputs.emulator != 'true' && inputs.xvfb == 'true'
+      shell: bash
+      run: xvfb-run make ${{ inputs.make-target }}

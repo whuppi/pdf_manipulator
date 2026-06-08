@@ -1,0 +1,34 @@
+name: Setup iOS
+description: CocoaPods cache + Xcode cache. Optionally boot simulator.
+
+inputs:
+  simulator:
+    description: "Boot iOS simulator"
+    required: false
+    default: 'false'
+  simulator-model:
+    description: "Simulator device model"
+    required: false
+    default: 'iPhone 16'
+
+runs:
+  using: composite
+  steps:
+    - name: CocoaPods cache
+      uses: actions/cache@v4
+      with:
+        path: example/ios/Pods
+        key: pods-${{ hashFiles('example/ios/Podfile') }}
+        restore-keys: pods-
+
+    - name: Xcode cache
+      uses: irgaly/xcode-cache@v1
+      with:
+        key: xcode-ios-${{ env.SUBMODULE_PDF_OXIDE }}
+        restore-keys: xcode-ios-
+
+    - name: Boot simulator
+      if: inputs.simulator == 'true'
+      uses: futureware-tech/simulator-action@v4
+      with:
+        model: ${{ inputs.simulator-model }}

@@ -55,7 +55,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { submodules: recursive }
-      - uses: ./.github/actions/pkg-test-native
+      - uses: ./.github/actions/flutter-target
+        with:
+          target: macos
+          make-target: test-pkg-native
 
   gate:
     name: CI Gate
