@@ -1,10 +1,15 @@
-// Thin CLI wrapper over hook/build.dart's resolveNative() and resolveWeb().
+// Setup script for pdf_manipulator.
 //
-// Usage:
-//   flutter pub run pdf_manipulator:setup           # web (default)
-//   flutter pub run pdf_manipulator:setup --native  # native for current OS
-//   flutter pub run pdf_manipulator:setup --all     # both
-//   flutter pub run pdf_manipulator:setup --force   # re-resolve everything
+//   flutter pub run pdf_manipulator:setup                  # web (default)
+//   flutter pub run pdf_manipulator:setup <target>        # web|android|ios|macos|linux|windows
+//   flutter pub run pdf_manipulator:setup --force <target> # re-resolve (debugging)
+//
+// Web: resolves WASM + JS into web/pdf_manipulator/. Hash-verified —
+//   stale files from a previous version are re-downloaded automatically.
+// Native: runs `flutter build <target> --debug` which triggers the build
+//   hook and caches the binary in Flutter's shared cache.
+// --force: web skips hash check and re-downloads. Native runs
+//   `flutter clean` first then rebuilds.
 //
 // Use `flutter pub run`, NOT `dart run`.
 
@@ -16,19 +21,29 @@ import '../hook/build.dart' as build;
 import 'package:pdf_manipulator/src/hook/resolver.dart';
 
 const _help = '''
-Usage: flutter pub run pdf_manipulator:setup [options]
-
-Resolves pdf_manipulator assets (download, compile, or cache).
+Usage: flutter pub run pdf_manipulator:setup [--force] [target]
 
 Targets:
-  (default)    Web assets only (WASM + JS glue)
-  --native     Native binary for current platform only
-  --all        Both web and native
+  (default)        web
+  web              Download/compile WASM + JS (auto stale detection)
+  android          Build + cache native binary for Android
+  ios              Build + cache native binary for iOS
+  macos            Build + cache native binary for macOS
+  linux            Build + cache native binary for Linux
+  windows          Build + cache native binary for Windows
 
 Options:
-  --force      Re-resolve even if files exist and hashes match
-  -h, --help   Show this help
+  --force          Re-resolve target (debugging)
+  -h, --help       Show this help
 ''';
+
+const Map<String, List<String>> _nativeBuildArgs = {
+  'android': ['apk', '--debug'],
+  'ios': ['ios', '--debug', '--no-codesign'],
+  'macos': ['macos', '--debug'],
+  'linux': ['linux', '--debug'],
+  'windows': ['windows', '--debug'],
+};
 
 void main(List<String> args) async {
   if (args.contains('-h') || args.contains('--help')) {
@@ -37,9 +52,28 @@ void main(List<String> args) async {
   }
 
   final force = args.contains('--force');
-  final doNative = args.contains('--native') || args.contains('--all');
-  final doWeb = args.contains('--all') || !args.contains('--native');
+  final targets = args.where((a) => !a.startsWith('-')).toList();
 
+  if (targets.isEmpty) {
+    targets.add('web');
+  }
+
+  for (final target in targets) {
+    if (target == 'web') {
+      await _setupWeb(force);
+    } else if (_nativeBuildArgs.containsKey(target)) {
+      await _setupNative(target, force);
+    } else {
+      stderr.writeln('Error: unknown target "$target".');
+      stderr.writeln('Valid: web, ${_nativeBuildArgs.keys.join(', ')}');
+      exit(1);
+    }
+  }
+}
+
+// ── Web ───────────────────────────────────────────────────────────
+
+Future<void> _setupWeb(bool force) async {
   final config = await findPackageConfig(Directory.current);
   if (config == null) {
     stderr.writeln('Error: not inside a Dart/Flutter project.');
@@ -57,35 +91,46 @@ void main(List<String> args) async {
   final packageRoot = pkg.root;
   final version = readVersion(packageRoot);
 
-  if (doWeb) {
-    stdout.writeln('=== Web assets (v$version) ===');
-    final destDir = Directory('web/pdf_manipulator');
-    final count = await build.resolveWeb(
-      packageRoot: packageRoot,
-      version: version,
-      destDir: destDir,
-      force: force,
+  stdout.writeln('=== Web assets (v$version) ===');
+  final destDir = Directory('web/pdf_manipulator');
+  final count = await build.resolveWeb(
+    packageRoot: packageRoot,
+    version: version,
+    destDir: destDir,
+    force: force,
+  );
+  stdout.writeln(count > 0
+      ? '$count file(s) installed to ${destDir.path}/'
+      : 'All web assets up to date.');
+}
+
+// ── Native ────────────────────────────────────────────────────────
+
+Future<void> _setupNative(String target, bool force) async {
+  final buildArgs = _nativeBuildArgs[target]!;
+
+  stdout.writeln('=== Native ($target) ===');
+
+  if (force) {
+    stdout.writeln('  flutter clean');
+    final clean = await Process.start(
+      'flutter', ['clean'],
+      mode: ProcessStartMode.inheritStdio,
     );
-    stdout.writeln(count > 0
-        ? '$count file(s) installed to ${destDir.path}/'
-        : 'All web assets up to date.');
+    await clean.exitCode;
   }
 
-  if (doNative) {
-    stdout.writeln('=== Native binary (v$version) ===');
-    final platform = build.currentPlatformKey();
-    final libFileName = build.currentLibFileName();
-    final destDir = Directory('.dart_tool/pdf_manipulator');
-    if (!destDir.existsSync()) destDir.createSync(recursive: true);
+  stdout.writeln('  flutter build ${buildArgs.join(' ')}');
+  final process = await Process.start(
+    'flutter',
+    ['build', ...buildArgs],
+    mode: ProcessStartMode.inheritStdio,
+  );
 
-    await build.resolveNative(
-      packageRoot: packageRoot,
-      version: version,
-      platform: platform,
-      libFileName: libFileName,
-      dest: File('${destDir.path}/$libFileName'),
-      force: force,
-    );
-    stdout.writeln('  $libFileName — resolved');
+  final exitCode = await process.exitCode;
+  if (exitCode != 0) {
+    stderr.writeln('  Build failed (exit $exitCode).');
+    exit(exitCode);
   }
+  stdout.writeln('  Native binary cached for $target.');
 }
