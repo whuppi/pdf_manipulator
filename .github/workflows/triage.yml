@@ -75,3 +75,18 @@ jobs:
           if echo "$FILES" | grep -qE "^vendor/"; then
             gh pr edit $PR --repo ${{ github.repository }} --add-label "upstream"
           fi
+
+          # Auto-label by PR title (conventional commits)
+          TITLE="${{ github.event.pull_request.title }}"
+          if echo "$TITLE" | grep -qE '^fix(\(|!?:)'; then
+            gh pr edit $PR --repo ${{ github.repository }} --add-label "bug"
+          elif echo "$TITLE" | grep -qE '^feat(\(|!?:)'; then
+            gh pr edit $PR --repo ${{ github.repository }} --add-label "feature"
+          fi
+
+          # Auto-label promotion PRs
+          HEAD="${{ github.event.pull_request.head.ref }}"
+          BASE="${{ github.event.pull_request.base.ref }}"
+          if [[ "$HEAD" == "dev" && "$BASE" == "prod" ]]; then
+            gh pr edit $PR --repo ${{ github.repository }} --add-label "release"
+          fi

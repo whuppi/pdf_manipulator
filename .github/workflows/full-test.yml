@@ -147,9 +147,12 @@ jobs:
   # build hook. These verify the hook works in release mode too.
 
   release-android:
-    name: "release: Android"
+    name: "release: Android (${{ matrix.os }})"
     if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
@@ -202,9 +205,12 @@ jobs:
       - run: make test-release-windows
 
   release-web:
-    name: "release: Web"
+    name: "release: Web (${{ matrix.os }})"
     if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
@@ -250,4 +256,4 @@ jobs:
               exit 1
             fi
           done
-          echo "All 16 jobs passed"
+          echo "All jobs passed"
