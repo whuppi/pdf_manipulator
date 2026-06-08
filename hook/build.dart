@@ -168,9 +168,14 @@ void main(List<String> args) async {
         linkMode: linkMode,
         file: outFile.uri,
       ),
-      routing: input.config.linkingEnabled
-          ? ToLinkHook(input.packageName)
-          : const ToAppBundle(),
+      // libpdf_oxide is a DynamicLoadingBundled runtime library: there is
+      // nothing to tree-shake or statically link, so it must always go to the
+      // app bundle. Routing it to ToLinkHook() in release/AOT builds (where
+      // input.config.linkingEnabled is true) fails because this package ships
+      // no hook/link.dart, so every release build aborts with
+      // "is sent to package ... for linking, but that package does not have a
+      // link hook." ToAppBundle() is correct for both debug and release.
+      routing: const ToAppBundle(),
     );
     output.dependencies.add(input.packageRoot.resolve('hook/build.dart'));
     output.dependencies.add(input.packageRoot.resolve('pubspec.yaml'));
