@@ -212,20 +212,28 @@ web_assets/                                 ← committed in git (except .wasm �
 ├── pdf_oxide.js                            ← wasm-bindgen glue (committed, paired with .wasm)
 └── pdf_oxide_bg.wasm                       ← WASM binary (gitignored — downloaded from releases)
 
+build.json                                  ← single source of truth: crate name, repo,
+                                               cargo features, web asset map
+
 hook/
-└── build.dart                              ← asset resolution brain: resolveNative() + resolveWeb()
-                                               Flutter hook entry + library for bin/setup.dart
+├── build.dart                              ← Flutter hook entry (native) + resolveWeb() (web)
+│                                              reads build.json, private _resolveNative
+└── link.dart                               ← passthrough today; foundation for tree-shaking
 
 bin/
-└── setup.dart                              ← thin CLI: --web (default) / --native / --all / --force
-                                               delegates to hook/build.dart
+└── setup.dart                              ← CLI: setup <target> (web|android|ios|macos|linux|windows)
 
 tool/
 ├── compile_rust.sh                         ← Rust → native / wasm / per-platform / both
-├── release.sh                        ← 7 modes: --gate, --discover, --github-notes,
+│                                              reads features from build.json
+├── release.sh                              ← 7 modes: --gate, --discover, --github-notes,
 │                                              --update-tag-hashes, --stamp-changelog,
 │                                              --add-git-install, --add-pub-install
 └── run_web_test.sh                         ← flutter drive -d web-server wrapper
+
+vendor/
+├── pdf_oxide/                              ← forked yfedoseev/pdf_oxide (submodule)
+└── office_oxide/                           ← forked yfedoseev/office_oxide (submodule)
 
 vendor/pdf_oxide/src/
 ├── host/                                   ← OUR CODE
