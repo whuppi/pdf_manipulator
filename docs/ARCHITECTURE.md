@@ -224,12 +224,13 @@ bin/
 └── setup.dart                              ← CLI: setup <target> (web|android|ios|macos|linux|windows)
 
 tool/
+├── lib.sh                                  ← shared helpers (sourced by 2+ scripts)
+├── analyze.sh                              ← Dart + Rust static analysis
 ├── compile_rust.sh                         ← Rust → native / wasm / per-target / both
-│                                              reads features from build.json
 ├── release.sh                              ← 7 modes: --gate, --discover, --github-notes,
 │                                              --update-tag-hashes, --stamp-changelog,
 │                                              --add-git-install, --add-pub-install
-└── run_web_test.sh                         ← flutter drive -d web-server wrapper
+└── run_web_test.sh                         ← flutter drive web integration test
 
 vendor/
 ├── pdf_oxide/                              ← forked yfedoseev/pdf_oxide (submodule)

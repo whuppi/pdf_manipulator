@@ -46,16 +46,7 @@ if ! command -v cargo &>/dev/null; then
   exit 1
 fi
 
-# Read build.json via pure bash — no python3, no jq, no dart.
-_json_get() {
-  local val
-  val=$(sed -n "s/.*\"$1\": *\"\([^\"]*\)\".*/\1/p" "$PKG_ROOT/build.json")
-  if [ -z "$val" ]; then
-    echo "Error: key '$1' not found in build.json" >&2
-    exit 1
-  fi
-  echo "$val"
-}
+source "$SCRIPT_DIR/lib.sh"
 
 NATIVE_FEATURES=$(_json_get 'native')
 WASM_FEATURES=$(_json_get 'wasm')
@@ -81,15 +72,6 @@ MODE="${1:-native}"
 # Native — shared helpers
 # ═══════════════════════════════════════════════════════════════════
 
-# Ensure a Rust target is installed. Adds it if missing.
-#   $1 = Rust target triple
-ensure_target() {
-  local target="$1"
-  if ! rustup target list --installed | grep -qx "$target"; then
-    echo "  Installing Rust target: $target"
-    rustup target add "$target"
-  fi
-}
 
 # Compile one Rust target and copy the library to the output directory.
 #   $1 = Rust target triple
