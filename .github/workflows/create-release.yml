@@ -41,7 +41,7 @@ env:
   DEFAULT_RUNNER: ubuntu-latest
 
 jobs:
-  runners:
+  inputs:
     runs-on: ubuntu-latest
     outputs:
       runner: ${{ steps.resolve.outputs.runner }}
@@ -52,8 +52,8 @@ jobs:
   # ── Gate ─────────────────────────────────────────────────────────
   gate:
     name: Release gate
-    needs: runners
-    runs-on: ${{ needs.runners.outputs.runner }}
+    needs: inputs
+    runs-on: ${{ needs.inputs.outputs.runner }}
     outputs:
       should_run: ${{ steps.check.outputs.should_run }}
       version: ${{ steps.check.outputs.version }}
@@ -73,12 +73,12 @@ jobs:
   # ── Discover version + create release ────────────────────────────
   discover:
     name: Discover versions
-    needs: [runners, gate]
+    needs: [inputs, gate]
     if: needs.gate.outputs.should_run == 'true'
     concurrency:
       group: release-${{ needs.gate.outputs.version || github.run_id }}
       cancel-in-progress: true
-    runs-on: ${{ needs.runners.outputs.runner }}
+    runs-on: ${{ needs.inputs.outputs.runner }}
     outputs:
       tag: ${{ steps.find.outputs.tag }}
       version: ${{ steps.find.outputs.version }}
@@ -128,9 +128,9 @@ jobs:
   # ── Upload binaries + stamp tag ──────────────────────────────────
   upload-assets:
     name: Upload Release Assets
-    needs: [runners, discover, compile]
+    needs: [inputs, discover, compile]
     if: needs.discover.outputs.has_release == 'true'
-    runs-on: ${{ needs.runners.outputs.runner }}
+    runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
       - uses: actions/download-artifact@v8
         with: { path: artifacts/ }
@@ -186,9 +186,9 @@ jobs:
   # ── Publish to pub.dev ───────────────────────────────────────────
   publish:
     name: Publish to pub.dev
-    needs: [runners, discover, upload-assets]
+    needs: [inputs, discover, upload-assets]
     if: needs.discover.outputs.has_release == 'true'
-    runs-on: ${{ needs.runners.outputs.runner }}
+    runs-on: ${{ needs.inputs.outputs.runner }}
     environment: ${{ inputs.branch || github.ref_name }}
     steps:
       - uses: actions/checkout@v6

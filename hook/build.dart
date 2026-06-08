@@ -140,7 +140,7 @@ void main(List<String> args) async {
       libFileName: libFileName,
       dest: outFile,
       cacheFile: File.fromUri(
-        input.outputDirectoryShared.resolve(libFileName),
+        input.outputDirectoryShared.resolve('$targetTriple/$libFileName'),
       ),
       targetTriple: targetTriple,
       linkMode: linkMode,

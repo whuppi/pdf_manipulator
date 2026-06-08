@@ -31,15 +31,19 @@ concurrency:
 
 env:
   DEFAULT_RUNNER: ubuntu-latest
+  DEFAULT_ALL_RUNNERS: 'true'
 
 jobs:
-  runners:
+  inputs:
     runs-on: ubuntu-latest
     outputs:
       runner: ${{ steps.resolve.outputs.runner }}
+      all-runners: ${{ steps.resolve.outputs.all-runners }}
     steps:
       - id: resolve
-        run: echo "runner=${{ inputs.runner || env.DEFAULT_RUNNER }}" >> $GITHUB_OUTPUT
+        run: |
+          echo "runner=${{ inputs.runner || env.DEFAULT_RUNNER }}" >> $GITHUB_OUTPUT
+          echo "all-runners=${{ inputs.all-runners || env.DEFAULT_ALL_RUNNERS }}" >> $GITHUB_OUTPUT
 
   test:
     if: >-
@@ -95,7 +99,8 @@ jobs:
 
   # ── All-runners ──
   test-all-runners:
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.all-runners == 'true'
+    needs: inputs
+    if: needs.inputs.outputs.all-runners == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -138,8 +143,8 @@ jobs:
   gate:
     name: Full Test Gate
     if: always()
-    needs: [runners, test, test-all-runners]
-    runs-on: ${{ needs.runners.outputs.runner }}
+    needs: [inputs, test, test-all-runners]
+    runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
       - name: Evaluate
         run: |

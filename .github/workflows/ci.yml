@@ -22,7 +22,7 @@ env:
   DEFAULT_RUNNER: ubuntu-latest
 
 jobs:
-  runners:
+  inputs:
     runs-on: ubuntu-latest
     outputs:
       runner: ${{ steps.resolve.outputs.runner }}
@@ -32,8 +32,8 @@ jobs:
 
   changes:
     name: Detect changes
-    needs: runners
-    runs-on: ${{ needs.runners.outputs.runner }}
+    needs: inputs
+    runs-on: ${{ needs.inputs.outputs.runner }}
     outputs:
       code: ${{ steps.filter.outputs.code }}
     steps:
@@ -55,9 +55,9 @@ jobs:
               - '.github/**'
 
   analyze:
-    needs: [runners, changes]
+    needs: [inputs, changes]
     if: needs.changes.outputs.code == 'true'
-    runs-on: ${{ needs.runners.outputs.runner }}
+    runs-on: ${{ needs.inputs.outputs.runner }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
@@ -67,9 +67,9 @@ jobs:
           make-target: analyze
 
   test:
-    needs: [runners, changes]
+    needs: [inputs, changes]
     if: needs.changes.outputs.code == 'true'
-    runs-on: ${{ needs.runners.outputs.runner }}
+    runs-on: ${{ needs.inputs.outputs.runner }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
@@ -81,8 +81,8 @@ jobs:
   gate:
     name: CI Gate
     if: always()
-    needs: [runners, changes, analyze, test]
-    runs-on: ${{ needs.runners.outputs.runner }}
+    needs: [inputs, changes, analyze, test]
+    runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
       - name: Evaluate
         run: |

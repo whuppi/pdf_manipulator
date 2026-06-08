@@ -22,7 +22,7 @@ env:
   DEFAULT_RUNNER: ubuntu-latest
 
 jobs:
-  runners:
+  inputs:
     runs-on: ubuntu-latest
     outputs:
       runner: ${{ steps.resolve.outputs.runner }}
@@ -31,8 +31,8 @@ jobs:
         run: echo "runner=${{ inputs.runner || env.DEFAULT_RUNNER }}" >> $GITHUB_OUTPUT
 
   check:
-    needs: runners
-    runs-on: ${{ needs.runners.outputs.runner }}
+    needs: inputs
+    runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
       - uses: actions/checkout@v6
         with:

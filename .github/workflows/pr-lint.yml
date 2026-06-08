@@ -22,7 +22,7 @@ env:
   DEFAULT_RUNNER: ubuntu-latest
 
 jobs:
-  runners:
+  inputs:
     runs-on: ubuntu-latest
     outputs:
       runner: ${{ steps.resolve.outputs.runner }}
@@ -33,8 +33,8 @@ jobs:
   # ── Conventional Commits ─────────────────────────────────────────
   conventional-commit:
     name: Conventional Commit
-    needs: runners
-    runs-on: ${{ needs.runners.outputs.runner }}
+    needs: inputs
+    runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
       - name: Check PR title
         env:
@@ -59,8 +59,8 @@ jobs:
   # ── Promotion Chain ──────────────────────────────────────────────
   promotion-check:
     name: Promotion Chain
-    needs: runners
-    runs-on: ${{ needs.runners.outputs.runner }}
+    needs: inputs
+    runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
       - name: Validate promotion path
         env:
@@ -84,8 +84,8 @@ jobs:
   # ── Workflow Security ────────────────────────────────────────────
   workflow-security:
     name: Workflow Security
-    needs: runners
-    runs-on: ${{ needs.runners.outputs.runner }}
+    needs: inputs
+    runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
       - uses: actions/checkout@v6
       - name: Scan for dangerous patterns
