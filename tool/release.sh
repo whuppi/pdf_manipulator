@@ -148,7 +148,6 @@ get_published_versions() {
     | grep -oE '"version":"[^"]*"' \
     | sed 's/"version":"//;s/"//' \
     | sort -t. -k1,1n -k2,2n -k3,3n
-" 2>/dev/null || true
 }
 
 # Stamp a version string into pubspec.yaml, version.dart, and README.md.

@@ -10,7 +10,7 @@ Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extrac
 
 - [Install](#install)
   - [Add the dependency](#add-the-dependency)
-  - [Native platforms](#native-platforms)
+  - [Native targets](#native-platforms)
   - [Web](#web)
 - [Quick start](#quick-start)
   - [Sources & sinks](#sources--sinks)
@@ -41,7 +41,7 @@ dependencies:
   pdf_manipulator:
 ```
 
-### Native platforms
+### Native targets
 
 iOS, Android, macOS, Windows, Linux — nothing extra. The build hook downloads the correct binary automatically.
 
