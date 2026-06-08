@@ -356,7 +356,7 @@ gh api repos/whuppi/pdf_manipulator/branches/prod/protection -X PUT \
 |---|---|---|
 | `ci.yml` | PR to prod/dev | `make analyze` + `make test-unit` + `make test-ops-native` |
 | `pr-lint.yml` | PR to prod/dev | Conventional commit title + promotion chain |
-| `full-test.yml` | `ready-to-test` label | 10 jobs: 4 pkg + 6 integration |
+| `full-test.yml` | `ready-to-test` label | 4 pkg + 6 integration + release-build per target |
 | `create-release.yml` | Push to dev/prod changing changelog, or `workflow_dispatch` | Full release pipeline (7 steps) |
 | `flutter-upgrade.yml` | Daily or `workflow_dispatch` | Auto-detect new Flutter stable |
 | `triage.yml` | Issues/PRs | Auto-label, auto-assign, dependabot notifications |

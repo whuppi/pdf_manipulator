@@ -28,12 +28,20 @@ set -euo pipefail
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Feature flags (single source of truth)
+# Paths
 # ═══════════════════════════════════════════════════════════════════
-# build.dart and analyze.sh read these via: ./tool/compile_rust.sh --features native
 
-NATIVE_FEATURES="icc,legacy-crypto,rendering,signatures,native-bridge"
-WASM_FEATURES="wasm,rendering"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PKG_ROOT="$(dirname "$SCRIPT_DIR")"
+MANIFEST="$PKG_ROOT/vendor/pdf_oxide/Cargo.toml"
+VENDOR="$PKG_ROOT/vendor/pdf_oxide"
+
+# ═══════════════════════════════════════════════════════════════════
+# Feature flags — read from build.json (single source of truth)
+# ═══════════════════════════════════════════════════════════════════
+
+NATIVE_FEATURES=$(python3 -c "import json; print(json.load(open('$PKG_ROOT/build.json'))['features']['native'])")
+WASM_FEATURES=$(python3 -c "import json; print(json.load(open('$PKG_ROOT/build.json'))['features']['wasm'])")
 
 if [[ "${1:-}" == "--features" ]]; then
   case "${2:-all}" in
@@ -43,16 +51,6 @@ if [[ "${1:-}" == "--features" ]]; then
   esac
   exit 0
 fi
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Paths
-# ═══════════════════════════════════════════════════════════════════
-
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PKG_ROOT="$(dirname "$SCRIPT_DIR")"
-MANIFEST="$PKG_ROOT/vendor/pdf_oxide/Cargo.toml"
-VENDOR="$PKG_ROOT/vendor/pdf_oxide"
 
 if [ ! -f "$MANIFEST" ]; then
   echo "Error: run from package root (vendor/pdf_oxide/Cargo.toml not found)"

@@ -19,9 +19,6 @@ import 'package:path/path.dart' as p;
 
 final _log = Logger('pdf_manipulator:resolver');
 
-const _releaseRepo =
-    'https://github.com/whuppi/pdf_manipulator/releases/download';
-
 /// Everything the resolver needs to resolve one asset.
 ///
 /// Built by the Flutter build hook or by setup.dart. The resolver
@@ -30,6 +27,7 @@ class ResolveRequest {
   /// Create a resolve request.
   const ResolveRequest({
     required this.assetName,
+    required this.downloadUrl,
     required this.dest,
     required this.version,
     required this.packageRoot,
@@ -40,9 +38,11 @@ class ResolveRequest {
   });
 
   /// GitHub Release asset name (e.g. `macos-arm64-libpdf_oxide.dylib`
-  /// or `wasm-pdf_oxide_bg.wasm`). Used to build the download URL and
-  /// as the hash lookup key.
+  /// or `wasm-pdf_oxide_bg.wasm`). Used as the hash lookup key.
   final String assetName;
+
+  /// Full download URL for this asset on GitHub Releases.
+  final String downloadUrl;
 
   /// Final output location for the resolved file.
   final File dest;
@@ -108,7 +108,7 @@ Future<bool> resolveAsset(ResolveRequest req) async {
 
   // Step 2 — Download
   if (req.version != '0.0.0') {
-    final url = '$_releaseRepo/v${req.version}/${req.assetName}';
+    final url = req.downloadUrl;
     final target = req.cacheFile ?? req.dest;
     if (await _download(url, target)) {
       _copyIfNeeded(target, req.dest);

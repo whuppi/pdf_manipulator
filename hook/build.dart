@@ -1,29 +1,32 @@
-// Build hook for pdf_manipulator — the single brain for asset resolution.
+// Build hook for pdf_manipulator.
 //
 // ═══════════════════════════════════════════════════════════════════
-// TWO ROLES, ONE FILE
+// STRUCTURE
 // ═══════════════════════════════════════════════════════════════════
 //
-//   1. Flutter hook entry point — called automatically by Flutter's
-//      build system for native platforms. Receives BuildInput,
-//      resolves the native binary, registers CodeAsset.
+//   main()           Flutter hook entry point (native platforms only).
+//                    Resolves the binary, registers it with Flutter.
 //
-//   2. Library for bin/setup.dart — exports resolveNative() and
-//      resolveWeb() for manual CLI-triggered resolution. setup.dart
-//      is a thin wrapper that parses --web/--native/--all and calls
-//      these functions.
+//   resolveWeb()     Public API for bin/setup.dart (web assets).
+//                    Same waterfall, no registration needed — Flutter
+//                    serves web/ as static files.
+//
+//   _resolveNative() Private. Only main() calls this — the correct
+//                    cache path and target config only exist inside
+//                    the build hook. setup --native delegates to
+//                    `flutter build` which triggers main().
 //
 // ═══════════════════════════════════════════════════════════════════
 // RESOLUTION WATERFALL (same for native and web)
 // ═══════════════════════════════════════════════════════════════════
 //
-//   1. CACHED   — file exists + SHA-256 matches assetHashes → use it
-//   2. DOWNLOAD — fetch from GitHub Releases → cache → use it
-//   3. COMPILE  — vendor/pdf_oxide/ exists → cargo/wasm-pack → use it
+//   1. CACHED    — file exists + SHA-256 matches assetHashes → use it
+//   2. DOWNLOAD  — fetch from GitHub Releases → cache → use it
+//   3. COMPILE   — vendor/pdf_oxide/ exists → cargo/wasm-pack → use it
 //   4. SUBMODULE — .gitmodules exists → git init recursive → compile
-//   5. ERROR    — nothing worked, clear message with options
+//   5. ERROR     — nothing worked, clear message with options
 //
-//   --force skips step 1 (always re-resolves).
+//   --force skips step 1 (web only, via setup.dart).
 //   Version 0.0.0 (dev) skips step 2 (no release exists).
 //
 // ═══════════════════════════════════════════════════════════════════
@@ -31,18 +34,18 @@
 // ═══════════════════════════════════════════════════════════════════
 //
 //   pub.dev consumer (pdf_manipulator: ^X.Y.Z):
-//     Native: automatic via build hook. Steps 1→2 (download prebuilt).
-//             If binary missing from release: step 3 (vendor source
-//             ships in tarball, compiles from source).
+//     Native: automatic via build hook. Downloads prebuilt binary.
+//             If binary missing: compiles from vendor source (ships
+//             in tarball).
 //     Web:    manual `flutter pub run pdf_manipulator:setup`.
-//             Same waterfall. Downloads from release or compiles.
+//             Same waterfall. Downloads or compiles.
 //
 //   Git tag consumer (ref: vX.Y.Z):
 //     Same as pub.dev — tag has vendor source + release has binaries.
 //
 //   Git branch consumer (ref: dev, version 0.0.0):
-//     Download skipped (no release). Compiles from vendor source.
-//     If not cloned with --recursive: submodule init first.
+//     Download skipped. Compiles from vendor source or inits
+//     submodules first.
 //
 //   Contributor (path dependency):
 //     Same as branch consumer. Always compiles from source.
@@ -51,59 +54,24 @@
 // STALENESS
 // ═══════════════════════════════════════════════════════════════════
 //
-//   Native: fully automatic. Flutter re-runs the build hook when
-//     pubspec.yaml changes (registered as dependency). Package
-//     update → new assetHashes → cached binary hash mismatch →
-//     re-downloads. User never thinks about it.
+//   Native: fully automatic. Flutter re-runs the hook when
+//     pubspec.yaml changes. New assetHashes → hash mismatch →
+//     re-downloads.
 //
 //   Web: NOT automatic. User must run `setup` after package update.
-//     The setup script hash-checks every installed file against
-//     assetHashes and re-resolves any mismatches. If user forgets,
-//     stale assets stay until the next setup run.
-//     This is a Flutter limitation — no build hook for web assets.
-//     Tracked: dart-lang/native#2829 (DataAsset support).
-//
-//   When --force is passed: cache check skipped entirely,
-//     everything re-resolved from download or compile.
-//
-//   When no hash is available (dev version, or missing entry):
-//     Published versions: warning logged, cached file used anyway.
-//     Dev version (0.0.0): cached file used silently (just compiled).
-//
-// ═══════════════════════════════════════════════════════════════════
-// WEB SUPPORT
-// ═══════════════════════════════════════════════════════════════════
-//
-//   resolveWeb() is fully implemented. It resolves all 4 web assets:
-//     pdf_oxide_bg.wasm — WASM binary (compiled by wasm-pack)
-//     pdf_oxide.js      — JS glue (compiled by wasm-pack)
-//     coordinator.js    — worker pool manager (hand-written)
-//     worker.js         — WASM worker (hand-written)
-//
-//   WASM build outputs (wasm + js glue) are always resolved together
-//   from the same source — both downloaded from the same release, or
-//   both compiled from the same wasm-pack run. Never mix versions.
-//
-//   Hand-written JS files fall back to copying from the package's
-//   web_assets/ directory if download fails (they always ship).
-//
-//   When Flutter adds DataAsset support, main() adds one call to
-//   resolveWeb() and setup.dart becomes optional. Zero new code.
+//     Hash check detects stale files and re-resolves automatically.
+//     Tracked: dart-lang/native#988 (WasmAsset/JsAsset support).
 //
 // ═══════════════════════════════════════════════════════════════════
 // ASSET HASHES
 // ═══════════════════════════════════════════════════════════════════
 //
-//   assetHashes is a flat Map<String, String> keyed by GitHub Release
-//   asset name (e.g. 'macos-arm64-libpdf_oxide.dylib',
-//   'wasm-pdf_oxide_bg.wasm'). Generated by tool/release.sh
-//   --update-tag-hashes at release time from two sources:
+//   Flat Map<String, String> keyed by GitHub Release asset name.
+//   Generated by tool/release.sh --update-tag-hashes from:
 //     1. GitHub Release API digests (native + WASM build outputs)
 //     2. Local SHA-256 of hand-written JS (coordinator.js, worker.js)
-//
-//   The resolver uses these to verify cached files and detect stale
-//   assets after a package update.
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:code_assets/code_assets.dart';
@@ -117,25 +85,44 @@ import 'package:pdf_manipulator/src/hook/resolver.dart';
 final _log = Logger('pdf_manipulator:build');
 
 const _assetId = 'src/ffi/native_bindings.g.dart';
-const _crateName = 'pdf_oxide';
-const _featuresFallback =
-    'icc,legacy-crypto,rendering,signatures,native-bridge';
 
-// Web assets — GitHub Release asset names. Keyed by local filename.
-const webAssets = {
-  'pdf_oxide_bg.wasm': 'wasm-pdf_oxide_bg.wasm',
-  'pdf_oxide.js': 'wasm-pdf_oxide.js',
-  'coordinator.js': 'wasm-coordinator.js',
-  'worker.js': 'wasm-worker.js',
-};
+// ── build.json — single source of truth for all build constants ──
+// Loaded once per hook invocation. Every constant that's shared with
+// tool/release.sh and tool/compile_rust.sh lives here.
+Map<String, dynamic>? _buildConfig;
+late String _crateName;
+late String _repo;
+late Map<String, String> _webAssets;
+late Set<String> _wasmBuildOutputs;
+late String _nativeFeatures;
+
+void _loadBuildConfig(Uri packageRoot) {
+  if (_buildConfig != null) return;
+  final file = File.fromUri(packageRoot.resolve('build.json'));
+  final json = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
+  _buildConfig = json;
+  _crateName = json['crate'] as String;
+  _repo = json['repo'] as String;
+  _webAssets = Map<String, String>.from(json['web'] as Map);
+  _wasmBuildOutputs = Set<String>.from(json['wasmBuildOutputs'] as List);
+  _nativeFeatures = (json['features'] as Map)['native'] as String;
+}
+
+String _downloadUrl(String version, String assetName) =>
+    'https://github.com/$_repo/releases/download/v$version/$assetName';
 
 // ══════════════════════════════════════════════════════════════════
-// Flutter hook entry point
+// § 1 — Flutter hook entry point (native only)
+//
+// Called automatically for iOS, Android, macOS, Linux, Windows.
+// NOT called for web — web goes through resolveWeb() via setup.dart.
 // ══════════════════════════════════════════════════════════════════
 
 void main(List<String> args) async {
   await build(args, (BuildInput input, BuildOutputBuilder output) async {
     if (!input.config.buildCodeAssets) return;
+
+    _loadBuildConfig(input.packageRoot);
 
     final codeConfig = input.config.code;
     final targetTriple = _targetTriple(codeConfig);
@@ -144,13 +131,12 @@ void main(List<String> args) async {
         codeConfig.targetOS.libraryFileName(_crateName, linkMode);
     final outFile =
         File.fromUri(input.outputDirectory.resolve(libFileName));
-    final platform = _platformKey(codeConfig);
-    final version = readVersion(input.packageRoot);
 
-    await resolveNative(
+    // ── Resolve the binary (download, compile, or cache) ──
+    await _resolveNative(
       packageRoot: input.packageRoot,
-      version: version,
-      platform: platform,
+      version: readVersion(input.packageRoot),
+      platform: _platformKey(codeConfig),
       libFileName: libFileName,
       dest: outFile,
       cacheFile: File.fromUri(
@@ -161,44 +147,22 @@ void main(List<String> args) async {
       buildInput: input,
     );
 
-    output.assets.code.add(
-      CodeAsset(
-        package: input.packageName,
-        name: _assetId,
-        linkMode: linkMode,
-        file: outFile.uri,
-      ),
-      routing: input.config.linkingEnabled
-          ? ToLinkHook(input.packageName)
-          : const ToAppBundle(),
-    );
-    output.dependencies.add(input.packageRoot.resolve('hook/build.dart'));
-    output.dependencies.add(input.packageRoot.resolve('pubspec.yaml'));
-    output.dependencies.add(
-      input.packageRoot.resolve('vendor/pdf_oxide/Cargo.toml'),
-    );
-
-    if (hasVendorSource(input.packageRoot)) {
-      final targetDir =
-          p.join(p.fromUri(input.outputDirectory), 'cargo_target');
-      final depInfoPath = p.join(
-        targetDir, targetTriple, 'release', 'deps', 'pdf_oxide.d',
-      );
-      _registerCargoDeps(output, depInfoPath, input.packageRoot);
-    }
+    // ── Register with Flutter ──
+    _registerCodeAsset(input, output, outFile, linkMode);
+    _registerDependencies(input, output, targetTriple);
   });
 }
 
 // ══════════════════════════════════════════════════════════════════
-// Public API — called by both main() above and bin/setup.dart
+// § 2 — Resolution
 // ══════════════════════════════════════════════════════════════════
 
-/// Resolve the native binary for one platform.
-///
-/// [buildInput] is only needed when called from the Flutter hook
-/// (provides NDK compiler info for Android). Null when called from
-/// setup.dart.
-Future<void> resolveNative({
+// ── Native (private) ─────────────────────────────────────────────
+// Not public because the correct cache path, target triple, link
+// mode, and NDK config all come from Flutter's BuildInput — which
+// only exists inside the hook. Calling from outside writes to the
+// wrong cache. setup --native delegates to `flutter build` instead.
+Future<void> _resolveNative({
   required Uri packageRoot,
   required String version,
   required String platform,
@@ -214,6 +178,7 @@ Future<void> resolveNative({
 
   await resolveAsset(ResolveRequest(
     assetName: assetName,
+    downloadUrl: _downloadUrl(version, assetName),
     dest: dest,
     cacheFile: cacheFile,
     expectedHash: assetHashes[assetName],
@@ -222,8 +187,7 @@ Future<void> resolveNative({
     force: force,
     compile: (File d) async {
       if (buildInput != null && targetTriple != null && linkMode != null) {
-        await _compileNativeFromHook(
-            buildInput, targetTriple, linkMode, d);
+        await _compileNativeFromHook(buildInput, targetTriple, linkMode, d);
       } else {
         await _compileNativeFromCli(packageRoot, d);
       }
@@ -231,31 +195,39 @@ Future<void> resolveNative({
   ));
 }
 
-/// Resolve all web assets into [destDir].
-///
-/// Returns the number of files installed (0 if all up to date).
+// ── Web (public — called by bin/setup.dart) ──────────────────────
+// Resolves WASM + JS into destDir (typically web/pdf_manipulator/).
+// Flutter serves destDir as static files — no registration needed.
+//
+// Two asset types with different compile fallbacks:
+//   WASM build outputs (pdf_oxide_bg.wasm, pdf_oxide.js) → wasm-pack
+//   Hand-written JS (coordinator.js, worker.js) → copy from package
+//
+// Returns the number of files freshly resolved (0 = all cached).
 Future<int> resolveWeb({
   required Uri packageRoot,
   required String version,
   required Directory destDir,
   bool force = false,
 }) async {
+  _loadBuildConfig(packageRoot);
+
   if (!destDir.existsSync()) {
     destDir.createSync(recursive: true);
   }
 
   var installed = 0;
 
-  for (final entry in webAssets.entries) {
+  for (final entry in _webAssets.entries) {
     final localName = entry.key;
     final assetName = entry.value;
     final dest = File('${destDir.path}/$localName');
 
-    final isWasmBuildOutput =
-        localName == 'pdf_oxide_bg.wasm' || localName == 'pdf_oxide.js';
+    final isWasmBuildOutput = _wasmBuildOutputs.contains(localName);
 
     final fresh = await resolveAsset(ResolveRequest(
       assetName: assetName,
+      downloadUrl: _downloadUrl(version, assetName),
       dest: dest,
       expectedHash: assetHashes[assetName],
       version: version,
@@ -273,11 +245,60 @@ Future<int> resolveWeb({
 }
 
 // ══════════════════════════════════════════════════════════════════
-// Compile callbacks
+// § 3 — Flutter registration (native only)
 // ══════════════════════════════════════════════════════════════════
 
-/// Compile native from the Flutter build hook (has BuildInput with
-/// NDK info, target triple, link mode).
+/// Register the native binary as a code asset.
+/// Release/AOT routes through hook/link.dart (passthrough today —
+/// see hook/link.dart for the tree-shaking roadmap).
+void _registerCodeAsset(
+  BuildInput input,
+  BuildOutputBuilder output,
+  File outFile,
+  LinkMode linkMode,
+) {
+  output.assets.code.add(
+    CodeAsset(
+      package: input.packageName,
+      name: _assetId,
+      linkMode: linkMode,
+      file: outFile.uri,
+    ),
+    routing: input.config.linkingEnabled
+        ? ToLinkHook(input.packageName)
+        : const ToAppBundle(),
+  );
+}
+
+/// Register files Flutter should watch for changes. When any of
+/// these change, Flutter re-runs the hook.
+void _registerDependencies(
+  BuildInput input,
+  BuildOutputBuilder output,
+  String targetTriple,
+) {
+  output.dependencies.add(input.packageRoot.resolve('hook/build.dart'));
+  output.dependencies.add(input.packageRoot.resolve('pubspec.yaml'));
+  output.dependencies.add(
+    input.packageRoot.resolve('vendor/pdf_oxide/Cargo.toml'),
+  );
+
+  if (hasVendorSource(input.packageRoot)) {
+    final targetDir =
+        p.join(p.fromUri(input.outputDirectory), 'cargo_target');
+    final depInfoPath = p.join(
+      targetDir, targetTriple, 'release', 'deps', 'pdf_oxide.d',
+    );
+    _registerCargoDeps(output, depInfoPath, input.packageRoot);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// § 4 — Compile callbacks
+// ══════════════════════════════════════════════════════════════════
+
+// ── Native: from build hook (has BuildInput with NDK, triple) ────
+
 Future<void> _compileNativeFromHook(
   BuildInput input,
   String targetTriple,
@@ -295,6 +316,7 @@ Future<void> _compileNativeFromHook(
   final env = <String, String>{};
   final codeConfig = input.config.code;
 
+  // Android: use the NDK clang driver Flutter provides
   if (codeConfig.targetOS == OS.android) {
     final cc = codeConfig.cCompiler;
     if (cc != null) {
@@ -319,6 +341,7 @@ Future<void> _compileNativeFromHook(
     }
   }
 
+  // macOS: strip Xcode Developer PATH injections that break cargo
   if (Platform.isMacOS) {
     env['PATH'] = Platform.environment['PATH']!
         .split(':')
@@ -335,7 +358,7 @@ Future<void> _compileNativeFromHook(
       '--release',
       '--target', targetTriple,
       '--target-dir', targetDir,
-      '--features', _resolveFeatures(input.packageRoot),
+      '--features', _resolveFeatures(),
     ],
     environment: {...Platform.environment, ...env},
   );
@@ -367,7 +390,8 @@ Future<void> _compileNativeFromHook(
   _log.info('compiled → ${outFile.path}');
 }
 
-/// Compile native from CLI (no BuildInput — uses compile_rust.sh).
+// ── Native: from CLI (no BuildInput — uses compile_rust.sh) ──────
+
 Future<void> _compileNativeFromCli(Uri packageRoot, File dest) async {
   final script =
       File.fromUri(packageRoot.resolve('tool/compile_rust.sh'));
@@ -391,7 +415,7 @@ Future<void> _compileNativeFromCli(Uri packageRoot, File dest) async {
     );
   }
 
-  final libFileName = currentLibFileName();
+  final libFileName = _currentLibFileName();
   final compiled = File(p.join(
     p.fromUri(packageRoot),
     'vendor/pdf_oxide/target/release',
@@ -404,18 +428,21 @@ Future<void> _compileNativeFromCli(Uri packageRoot, File dest) async {
   compiled.copySync(dest.path);
 }
 
-/// Compile WASM outputs (pdf_oxide.js + pdf_oxide_bg.wasm).
+// ── Web: WASM build outputs (pdf_oxide.js + pdf_oxide_bg.wasm) ───
+
 Future<void> _compileWasm(
     Uri packageRoot, File dest, String targetFile) async {
   final existing =
       File.fromUri(packageRoot.resolve('web_assets/$targetFile'));
 
+  // Contributor has locally built WASM — copy directly
   if (existing.existsSync()) {
     dest.parent.createSync(recursive: true);
     existing.copySync(dest.path);
     return;
   }
 
+  // Compile from source
   final script =
       File.fromUri(packageRoot.resolve('tool/compile_rust.sh'));
   if (!script.existsSync()) {
@@ -448,7 +475,8 @@ Future<void> _compileWasm(
   existing.copySync(dest.path);
 }
 
-/// Copy hand-written JS from package web_assets/.
+// ── Web: hand-written JS (coordinator.js, worker.js) ─────────────
+
 Future<void> _copyWebAsset(
     Uri packageRoot, File dest, String fileName) async {
   final src = File.fromUri(packageRoot.resolve('web_assets/$fileName'));
@@ -460,54 +488,17 @@ Future<void> _copyWebAsset(
 }
 
 // ══════════════════════════════════════════════════════════════════
-// Platform detection — used by both hook and setup.dart
+// § 5 — CodeConfig mapping
 // ══════════════════════════════════════════════════════════════════
 
-/// Platform key for the current machine.
-String currentPlatformKey() {
-  if (Platform.isMacOS) return _isArm64() ? 'macos-arm64' : 'macos-x64';
-  if (Platform.isLinux) return _isArm64() ? 'linux-arm64' : 'linux-x64';
-  if (Platform.isWindows) {
-    return _isArm64() ? 'windows-arm64' : 'windows-x64';
-  }
-  throw UnsupportedError(
-      'Unsupported platform: ${Platform.operatingSystem}');
-}
+String _resolveFeatures() => _nativeFeatures;
 
-/// Library filename for the current platform.
-String currentLibFileName() {
+String _currentLibFileName() {
   if (Platform.isMacOS) return 'lib$_crateName.dylib';
   if (Platform.isLinux) return 'lib$_crateName.so';
   if (Platform.isWindows) return '$_crateName.dll';
   throw UnsupportedError(
       'Unsupported platform: ${Platform.operatingSystem}');
-}
-
-bool _isArm64() {
-  if (Platform.isWindows) {
-    return Platform.environment['PROCESSOR_ARCHITECTURE'] == 'ARM64';
-  }
-  final result = Process.runSync('uname', ['-m']);
-  final arch = (result.stdout as String).trim();
-  return arch == 'arm64' || arch == 'aarch64';
-}
-
-// ══════════════════════════════════════════════════════════════════
-// Internal helpers
-// ══════════════════════════════════════════════════════════════════
-
-String _resolveFeatures(Uri packageRoot) {
-  final script =
-      File.fromUri(packageRoot.resolve('tool/compile_rust.sh'));
-  if (script.existsSync()) {
-    final result =
-        Process.runSync('bash', [script.path, '--features', 'native']);
-    if (result.exitCode == 0) {
-      final features = (result.stdout as String).trim();
-      if (features.isNotEmpty) return features;
-    }
-  }
-  return _featuresFallback;
 }
 
 LinkMode _linkMode(CodeConfig code) {
@@ -569,6 +560,10 @@ String _platformKey(CodeConfig code) {
         'Unsupported: ${code.targetOS} ${code.targetArchitecture}'),
   };
 }
+
+// ══════════════════════════════════════════════════════════════════
+// § 6 — Cargo dep-info registration
+// ══════════════════════════════════════════════════════════════════
 
 void _registerCargoDeps(
   BuildOutputBuilder output,

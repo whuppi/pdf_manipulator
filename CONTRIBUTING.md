@@ -50,7 +50,7 @@ your fork / feature branch ──PR──► dev
                                     ↓ CI: make analyze + make test-unit + make test-ops-native
                                     ↓ PR title: Conventional Commits (feat: / fix: / etc.)
                                     ↓ squash-merge when green
-                                    ↓ Full 10-job test via "ready-to-test" label
+                                    ↓ Full test suite via "ready-to-test" label
                                       (4 pkg: macOS/Linux/Windows/web
                                        6 integration: macOS/Linux/Windows/Android/iOS/web)
 ```
