@@ -70,16 +70,15 @@ runs:
         unzip -qo "$RUNNER_TEMP/chrome.zip" -d "$INSTALL_DIR" && rm "$RUNNER_TEMP/chrome.zip"
         curl -sSL "$DRIVER_URL" -o "$RUNNER_TEMP/chromedriver.zip"
         unzip -qo "$RUNNER_TEMP/chromedriver.zip" -d "$INSTALL_DIR" && rm "$RUNNER_TEMP/chromedriver.zip"
-        # dart test looks for Chrome at hardcoded Windows paths:
-        #   %LOCALAPPDATA%\Google\Chrome\Application\chrome.exe
-        #   %PROGRAMFILES%\Google\Chrome\Application\chrome.exe
-        # Copy our Chrome to both locations so dart test AND ChromeDriver find it.
+        # dart test and ChromeDriver look for Chrome at hardcoded paths.
+        # Copy entire Chrome for Testing directory (not just exe — Chrome
+        # needs its DLLs, resources, locales to launch).
         for dir in \
           "$LOCALAPPDATA/Google/Chrome/Application" \
           "/c/Program Files/Google/Chrome/Application"; do
+          rm -rf "$dir"
           mkdir -p "$dir"
-          cp "$INSTALL_DIR/chrome-win64/chrome.exe" "$dir/chrome.exe"
+          cp -r "$INSTALL_DIR/chrome-win64/"* "$dir/"
         done
-        echo "$INSTALL_DIR/chrome-win64" >> $GITHUB_PATH
         echo "$INSTALL_DIR/chromedriver-win64" >> $GITHUB_PATH
-        echo "CHROME_EXECUTABLE=$INSTALL_DIR/chrome-win64/chrome.exe" >> $GITHUB_ENV
+        echo "CHROME_EXECUTABLE=$LOCALAPPDATA/Google/Chrome/Application/chrome.exe" >> $GITHUB_ENV
