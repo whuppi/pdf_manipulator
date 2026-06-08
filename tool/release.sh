@@ -55,7 +55,8 @@ MODE="${1:---help}"
 TAG="${2:-}"
 VERSION="${TAG:+${TAG#v}}"
 
-REPO="${GITHUB_REPOSITORY:-whuppi/pdf_manipulator}"
+_REPO_FROM_JSON=$(python3 -c "import json; print(json.load(open('build.json'))['repo'])")
+REPO="${GITHUB_REPOSITORY:-$_REPO_FROM_JSON}"
 REPO_URL="https://github.com/$REPO"
 PKG_NAME="pdf_manipulator"
 
@@ -197,16 +198,25 @@ stamp_asset_hashes() {
     done)
 
   # Hand-written web assets — hash from the tag's web_assets/ directory.
+  # Reads local filenames + asset names from build.json, skipping
+  # wasmBuildOutputs (those get hashes from the Release API above).
   local web_entries=""
-  for js_file in coordinator.js worker.js; do
-    local src="web_assets/$js_file"
+  while IFS=$'\t' read -r local_name asset_name; do
+    local src="web_assets/$local_name"
     if [ -f "$src" ]; then
       local hash
       hash=$( (sha256sum "$src" 2>/dev/null || shasum -a 256 "$src") | cut -d' ' -f1)
-      web_entries+="  'wasm-$js_file': '$hash',"$'\n'
-      echo "  wasm-$js_file ... ${hash:0:12}..." >&2
+      web_entries+="  '$asset_name': '$hash',"$'\n'
+      echo "  $asset_name ... ${hash:0:12}..." >&2
     fi
-  done
+  done < <(python3 -c "
+import json
+d = json.load(open('build.json'))
+skip = set(d['wasmBuildOutputs'])
+for local, asset in d['web'].items():
+    if local not in skip:
+        print(f'{local}\t{asset}')
+")
 
   local all_entries
   all_entries=$(printf '%s\n%s' "$release_entries" "$web_entries" | sed '/^$/d')
