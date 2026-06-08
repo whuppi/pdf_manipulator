@@ -130,6 +130,9 @@ test-example-macos:
 
 test-example-linux:
 	@echo "=== Example: integration tests (Linux) ==="
+	@command -v pkg-config >/dev/null && pkg-config --exists gtk+-3.0 || { \
+		if [ -n "$$CI" ]; then sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build libgtk-3-dev; \
+		else echo "Error: libgtk-3-dev not found. Run: sudo apt-get install -y ninja-build libgtk-3-dev"; exit 1; fi; }
 	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart -d linux
 
 test-example-windows:
