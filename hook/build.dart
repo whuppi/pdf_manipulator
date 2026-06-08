@@ -302,7 +302,14 @@ Future<void> _compileNativeFromHook(
       final ndkTriple = targetTriple == 'armv7-linux-androideabi'
           ? 'armv7a-linux-androideabi'
           : targetTriple;
-      final linker = p.join(compilerDir, '${ndkTriple}21-clang');
+      // The NDK per-API clang driver is a `.cmd` batch wrapper on Windows
+      // hosts (e.g. aarch64-linux-android21-clang.cmd); passing the bare name
+      // makes cargo fail with "could not exec the linker ... program not
+      // found". Append the host executable extension so Android cross-compiles
+      // link from a Windows host as well as Linux/macOS. Platform.isWindows
+      // here is the BUILD host (which runs cargo), not the Android target.
+      final clangExt = Platform.isWindows ? '.cmd' : '';
+      final linker = p.join(compilerDir, '${ndkTriple}21-clang$clangExt');
       final ar = p.join(compilerDir, 'llvm-ar');
       final envKey =
           'CARGO_TARGET_${targetTriple.toUpperCase().replaceAll('-', '_')}';
