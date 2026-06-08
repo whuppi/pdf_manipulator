@@ -1,0 +1,15 @@
+{
+  "crate": "pdf_oxide",
+  "repo": "whuppi/pdf_manipulator",
+  "features": {
+    "native": "icc,legacy-crypto,rendering,signatures,native-bridge",
+    "wasm": "wasm,rendering"
+  },
+  "web": {
+    "pdf_oxide_bg.wasm": "wasm-pdf_oxide_bg.wasm",
+    "pdf_oxide.js": "wasm-pdf_oxide.js",
+    "coordinator.js": "wasm-coordinator.js",
+    "worker.js": "wasm-worker.js"
+  },
+  "wasmBuildOutputs": ["pdf_oxide_bg.wasm", "pdf_oxide.js"]
+}

@@ -2,6 +2,7 @@
        test test-unit test-ops test-ops-native test-ops-web test-ops-opfs test-ops-jspi test-ops-atomics \
        test-example test-example-macos test-example-linux test-example-windows test-example-android test-example-ios test-example-device \
        test-example-web test-example-web-jspi test-example-web-atomics test-example-web-opfs \
+       test-release test-release-android test-release-ios test-release-macos test-release-linux test-release-windows test-release-web \
        compile compile-natives compile-wasm \
        clean
 
@@ -37,6 +38,14 @@ FLUTTER ?= fvm flutter
 # make test-example-web-jspi    example: Chrome JSPI mode
 # make test-example-web-atomics example: Chrome Atomics mode
 # make test-example-web-opfs    example: Chrome OPFS mode
+#
+# make test-release             release-build tests (all targets)
+# make test-release-android     release: Android APK
+# make test-release-ios         release: iOS (no codesign)
+# make test-release-macos       release: macOS
+# make test-release-linux       release: Linux
+# make test-release-windows     release: Windows
+# make test-release-web         release: Web (setup + build)
 #
 # RELEASE (CI calls these — single source of truth for compile logic)
 # ────────────────────────────────────────────────────────────────────
@@ -169,6 +178,37 @@ test-example-web-atomics:
 test-example-web-opfs:
 	$(call setup_example_web)
 	$(call run_example_web,OPFS,opfs)
+
+# ── Release-build tests ────────────────────────────────────────────
+# Debug and release builds exercise different code paths in the
+# build hook. These verify the hook works in release mode too.
+
+test-release: test-release-android test-release-ios test-release-macos test-release-linux test-release-windows test-release-web
+
+test-release-android:
+	@echo "=== Release build: Android APK ==="
+	cd example && $(FLUTTER) build apk --release
+
+test-release-ios:
+	@echo "=== Release build: iOS ==="
+	cd example && $(FLUTTER) build ios --release --no-codesign
+
+test-release-macos:
+	@echo "=== Release build: macOS ==="
+	cd example && $(FLUTTER) build macos --release
+
+test-release-linux:
+	@echo "=== Release build: Linux ==="
+	cd example && $(FLUTTER) build linux --release
+
+test-release-windows:
+	@echo "=== Release build: Windows ==="
+	cd example && $(FLUTTER) build windows --release
+
+test-release-web:
+	$(call setup_example_web)
+	@echo "=== Release build: Web ==="
+	cd example && $(FLUTTER) build web --release
 
 # ── Clean ───────────────────────────────────────────────────────────
 

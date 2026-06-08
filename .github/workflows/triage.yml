@@ -14,6 +14,27 @@ permissions:
   pull-requests: write
 
 jobs:
+  # Revoke stale ready-to-test label when new commits are pushed.
+  # Lives here (not full-test.yml) because pull_request_target gives
+  # write access to labels on fork PRs.
+  revoke-ready-to-test:
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.event.action == 'synchronize' &&
+      contains(github.event.pull_request.labels.*.name, 'ready-to-test')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove label + notify
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr edit ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --remove-label "ready-to-test"
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --body "Label \`ready-to-test\` removed — new commits pushed. Re-add when ready."
+
   # When a non-dependabot push lands on a dependabot PR (e.g. human clicks
   # "Update branch"), workflows may be outdated. github-actions[bot] can't
   # run dependabot commands (no push access), so we comment asking a human.
@@ -74,4 +95,19 @@ jobs:
 
           if echo "$FILES" | grep -qE "^vendor/"; then
             gh pr edit $PR --repo ${{ github.repository }} --add-label "upstream"
+          fi
+
+          # Auto-label by PR title (conventional commits)
+          TITLE="${{ github.event.pull_request.title }}"
+          if echo "$TITLE" | grep -qE '^fix(\(|!?:)'; then
+            gh pr edit $PR --repo ${{ github.repository }} --add-label "bug"
+          elif echo "$TITLE" | grep -qE '^feat(\(|!?:)'; then
+            gh pr edit $PR --repo ${{ github.repository }} --add-label "feature"
+          fi
+
+          # Auto-label promotion PRs
+          HEAD="${{ github.event.pull_request.head.ref }}"
+          BASE="${{ github.event.pull_request.base.ref }}"
+          if [[ "$HEAD" == "dev" && "$BASE" == "prod" ]]; then
+            gh pr edit $PR --repo ${{ github.repository }} --add-label "release"
           fi
