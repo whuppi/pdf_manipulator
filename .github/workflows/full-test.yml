@@ -157,7 +157,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { submodules: recursive }
-      - uses: ./.github/actions/setup-flutter
+      - uses: ./.github/actions/setup-fvm
       - run: make test-release-android
 
   release-ios:
@@ -168,7 +168,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { submodules: recursive }
-      - uses: ./.github/actions/setup-flutter
+      - uses: ./.github/actions/setup-fvm
       - run: make test-release-ios
 
   release-macos:
@@ -179,7 +179,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { submodules: recursive }
-      - uses: ./.github/actions/setup-flutter
+      - uses: ./.github/actions/setup-fvm
       - run: make test-release-macos
 
   release-linux:
@@ -190,7 +190,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { submodules: recursive }
-      - uses: ./.github/actions/setup-flutter
+      - uses: ./.github/actions/setup-fvm
       - run: make test-release-linux
 
   release-windows:
@@ -201,7 +201,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { submodules: recursive }
-      - uses: ./.github/actions/setup-flutter
+      - uses: ./.github/actions/setup-fvm
       - run: make test-release-windows
 
   release-web:
@@ -215,7 +215,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { submodules: recursive }
-      - uses: ./.github/actions/setup-flutter
+      - uses: ./.github/actions/setup-fvm
       - run: make test-release-web
 
   # ── Gate ───────────────────────────────────────────────────────────
