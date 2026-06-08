@@ -64,7 +64,7 @@ jobs:
           - { name: "int: Linux",      runner: ubuntu-latest,  make: test-example-linux,   timeout: 30, headless-display: true }
           - { name: "int: Windows",    runner: windows-latest, make: test-example-windows,  timeout: 40 }
           - { name: "int: Android",    runner: ubuntu-latest,  make: test-example-android,  timeout: 40, java: true, hw-accel: true, gradle-cache: true, emulator: true }
-          - { name: "int: iOS",        runner: macos-14,       make: test-example-ios,      timeout: 40, xcode-cache: true, xcode-cache-target: ios, pods-cache: true, simulator: true }
+          - { name: "int: iOS",        runner: macos-14,       make: test-example-ios,      timeout: 60, xcode-cache: true, xcode-cache-target: ios, pods-cache: true, simulator: true }
           - { name: "int: Web",        runner: ubuntu-latest,  make: test-example-web,      timeout: 40, chrome: true, headless-display: true, wasm-cache: true, wasm-build: true }
 
           # ── Verify (release builds) ──

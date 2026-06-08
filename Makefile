@@ -19,6 +19,7 @@
 
 DART    ?= fvm dart
 FLUTTER ?= fvm flutter
+TEST_RESULTS_DIR ?= test-results
 
 # ═══════════════════════════════════════════════════════════════════
 # § 1 — Gate
@@ -108,27 +109,32 @@ test-pkg-native: test-unit test-ops-native
 
 test-unit:
 	@echo "=== Unit: types + transport ==="
-	$(DART) test test/types/ test/transport/ -p vm --concurrency=1
+	@mkdir -p $(TEST_RESULTS_DIR)
+	$(DART) test test/types/ test/transport/ -p vm --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/unit.json
 
 test-ops: test-ops-native test-ops-web
 
 test-ops-native:
 	@echo "=== Ops: Native ==="
-	$(DART) test test/ops/runners/native_runner_test.dart --concurrency=1
+	@mkdir -p $(TEST_RESULTS_DIR)
+	$(DART) test test/ops/runners/native_runner_test.dart --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-native.json
 
 test-ops-web: test-ops-opfs test-ops-jspi test-ops-atomics
 
 test-ops-opfs:
 	@echo "=== Ops: Web OPFS ==="
-	$(DART) test test/ops/runners/web_opfs_runner_test.dart -p chrome --concurrency=1
+	@mkdir -p $(TEST_RESULTS_DIR)
+	$(DART) test test/ops/runners/web_opfs_runner_test.dart -p chrome --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-opfs.json
 
 test-ops-jspi:
 	@echo "=== Ops: Web JSPI ==="
-	$(DART) test test/ops/runners/web_jspi_runner_test.dart -p chrome --concurrency=1
+	@mkdir -p $(TEST_RESULTS_DIR)
+	$(DART) test test/ops/runners/web_jspi_runner_test.dart -p chrome --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-jspi.json
 
 test-ops-atomics:
 	@echo "=== Ops: Web Atomics ==="
-	$(DART) test test/ops/runners/web_atomics_runner_test.dart -p chrome-coi --concurrency=1
+	@mkdir -p $(TEST_RESULTS_DIR)
+	$(DART) test test/ops/runners/web_atomics_runner_test.dart -p chrome-coi --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-atomics.json
 
 # ═══════════════════════════════════════════════════════════════════
 # § 6 — Integration tests (example app)
@@ -168,26 +174,31 @@ test-example: test-example-macos test-example-web
 
 test-example-macos:
 	@echo "=== Example: macOS ==="
-	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart -d macos
+	@mkdir -p $(TEST_RESULTS_DIR)
+	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart -d macos --file-reporter json:../$(TEST_RESULTS_DIR)/int-macos.json
 
 test-example-linux:
 	@echo "=== Example: Linux ==="
 	$(call ensure_gtk)
-	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart -d linux
+	@mkdir -p $(TEST_RESULTS_DIR)
+	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart -d linux --file-reporter json:../$(TEST_RESULTS_DIR)/int-linux.json
 
 test-example-windows:
 	@echo "=== Example: Windows ==="
-	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart -d windows
+	@mkdir -p $(TEST_RESULTS_DIR)
+	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart -d windows --file-reporter json:../$(TEST_RESULTS_DIR)/int-windows.json
 
 # Runs on the connected/booted device. CI boots the emulator via setup-android.
 test-example-android:
 	@echo "=== Example: Android ==="
-	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart
+	@mkdir -p $(TEST_RESULTS_DIR)
+	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart --file-reporter json:../$(TEST_RESULTS_DIR)/int-android.json
 
 # Runs on the booted simulator. CI boots the simulator via setup-ios.
 test-example-ios:
 	@echo "=== Example: iOS ==="
-	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart
+	@mkdir -p $(TEST_RESULTS_DIR)
+	cd example && $(FLUTTER) test integration_test/pdf_smoke_test.dart --file-reporter json:../$(TEST_RESULTS_DIR)/int-ios.json
 
 test-example-device:
 	@echo "=== Example: device=$(DEVICE) ==="
@@ -259,4 +270,4 @@ verify-web:
 # ═══════════════════════════════════════════════════════════════════
 
 clean:
-	rm -rf .dart_tool/hooks_runner/ .dart_tool/lib/ .dart_tool/native_assets/ build_output/
+	rm -rf .dart_tool/hooks_runner/ .dart_tool/lib/ .dart_tool/native_assets/ build_output/ test-results/
