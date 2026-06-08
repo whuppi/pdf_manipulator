@@ -239,6 +239,24 @@ do_wasm() {
     cargo install wasm-bindgen-cli --version "$wb_required"
   fi
 
+  # Ensure wasm-opt (binaryen) is installed.
+  if ! command -v wasm-opt &>/dev/null; then
+    if [ -n "${CI:-}" ]; then
+      echo "=== WASM: installing binaryen (wasm-opt) ==="
+      case "$(uname -s)" in
+        Linux*)  sudo apt-get update -qq && sudo apt-get install -y -qq binaryen ;;
+        Darwin*) brew install binaryen ;;
+        MINGW*|MSYS*) choco install binaryen -y ;;
+      esac
+    else
+      echo "Error: wasm-opt not found. Install binaryen:"
+      echo "  macOS:   brew install binaryen"
+      echo "  Linux:   sudo apt-get install binaryen"
+      echo "  Windows: choco install binaryen"
+      exit 1
+    fi
+  fi
+
   echo "=== WASM: compile ==="
   cd "$VENDOR"
   cargo build --lib \
