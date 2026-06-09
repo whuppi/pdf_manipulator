@@ -1,18 +1,30 @@
 name: Android Emulator
 description: >
   Boot Android emulator and run a script inside it.
-  Uses x86_64 arch on all runners. Linux: KVM accelerated.
-  macOS: Intel runners only — ARM runners (M1) don't support
-  nested virtualization. See android-emulator-runner#350.
+
+  Target: aosp_atd (Automated Test Device) — stripped-down image
+  built for CI. No Google Play, minimal UI, fast boot. Lightest
+  available image. Weight hierarchy:
+    google_apis_playstore > google_apis > default > aosp_atd
+
+  Arch: x86_64 on all runners. Linux uses KVM for hardware
+  acceleration. macOS Intel falls back to SwiftShader (software
+  GPU) — slow cold boot (~230s) but works.
+
+  macOS ARM runners (M1) cannot run emulators at all — nested
+  virtualization unsupported on M1 hardware. Emulator jobs must
+  use macos-*-intel or ubuntu runners.
+  https://docs.github.com/en/actions/reference/runners/github-hosted-runners#limitations-for-arm64-macos-runners
+  https://github.com/ReactiveCircus/android-emulator-runner/issues/350
 
 inputs:
   script:
     description: "Command to run while emulator is alive"
     required: true
   api-level:
-    description: "Android API level"
+    description: "Android API level (30 is lightest ATD available)"
     required: false
-    default: '31'
+    default: '30'
 
 runs:
   using: composite
@@ -27,9 +39,11 @@ runs:
       with:
         api-level: ${{ inputs.api-level }}
         arch: x86_64
-        target: default
+        target: aosp_atd
         force-avd-creation: false
         emulator-options: -no-snapshot-save -no-window -noaudio -no-boot-anim
         emulator-boot-timeout: 600
         disable-animations: true
-        script: ${{ inputs.script }}
+        script: |
+          ${{ inputs.script }}
+          adb -s emulator-5554 emu kill || true

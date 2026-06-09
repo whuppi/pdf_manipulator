@@ -109,12 +109,9 @@ jobs:
       matrix:
         include:
           # Android on other runners
-          #
-          # Emulator jobs use macos-15-intel because GitHub's ARM runners
-          # (M1) don't support nested virtualization — the emulator is a VM
-          # and can't run inside another VM on M1 hardware.
+          # Emulator needs Intel — macOS ARM runners are M1 VMs that can't virtualize the emulator:
+          # https://docs.github.com/en/actions/reference/runners/github-hosted-runners#limitations-for-arm64-macos-runners
           # Non-emulator jobs (verify) run fine on ARM.
-          # Tracking: ReactiveCircus/android-emulator-runner#350
           - { name: "verify: Android (macos-arm64)", runner: macos-14,         make: verify-android, timeout: 40, java: true, gradle-cache: true }
           - { name: "verify: Android (win-x64)",     runner: windows-2025,     make: verify-android, timeout: 60, java: true, gradle-cache: true }
           - { name: "int: Android (macos-intel)",     runner: macos-15-intel,   make: test-example-android, timeout: 40, java: true, hw-accel: true, gradle-cache: true, emulator: true }
