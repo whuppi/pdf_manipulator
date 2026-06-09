@@ -8,6 +8,7 @@ import 'package:test/test.dart';
 import '../../helpers/fixtures.dart';
 import '../../helpers/generators.dart';
 import '../../helpers/test_source_sink.dart';
+import '../../helpers/timeouts.dart';
 
 void registerDocTests(Pdf Function() createPdf) {
   group('doc', () {
@@ -17,13 +18,13 @@ void registerDocTests(Pdf Function() createPdf) {
       final doc = await createPdf().open(src(minimalPdf));
       expect(doc.pageCount, 1);
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('open returns version containing dot', () async {
       final doc = await createPdf().open(src(minimalPdf));
       expect(doc.version, contains('.'));
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('A4 dimensions are 595×842', () async {
       final doc = await createPdf().open(src(minimalPdf));
@@ -31,27 +32,27 @@ void registerDocTests(Pdf Function() createPdf) {
       expect(doc.pages[0].width, closeTo(595, 1));
       expect(doc.pages[0].height, closeTo(842, 1));
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('Letter dimensions are 612×792', () async {
       final doc = await createPdf().open(src(letterPdf));
       expect(doc.pages[0].width, closeTo(612, 1));
       expect(doc.pages[0].height, closeTo(792, 1));
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('isEncrypted false for unencrypted PDF', () async {
       final doc = await createPdf().open(src(minimalPdf));
       expect(doc.isEncrypted, isFalse);
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('multi-page PDF has correct page count', () async {
       final bytes = await buildTwoPageTextPdf(createPdf);
       final doc = await createPdf().open(src(bytes));
       expect(doc.pageCount, 2);
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: t(3));
 
     // ── Open with password ────────────────────────────────────────
 
@@ -66,7 +67,7 @@ void registerDocTests(Pdf Function() createPdf) {
       expect(doc.isEncrypted, isTrue);
       expect(doc.pageCount, 1);
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: t(3));
 
     // ── Extract text ──────────────────────────────────────────────
 
@@ -75,7 +76,7 @@ void registerDocTests(Pdf Function() createPdf) {
       final text = await doc.extract(pages: const PdfPages.single(0));
       expect(text.trim(), isEmpty);
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('extract all pages returns text from both pages', () async {
       final bytes = await buildTwoPageTextPdf(createPdf);
@@ -84,7 +85,7 @@ void registerDocTests(Pdf Function() createPdf) {
       expect(text, contains('ALPHA'));
       expect(text, contains('BRAVO'));
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: t(3));
 
     test('extract single page returns only that page text', () async {
       final bytes = await buildTwoPageTextPdf(createPdf);
@@ -96,7 +97,7 @@ void registerDocTests(Pdf Function() createPdf) {
       expect(page1, contains('BRAVO'));
       expect(page1, isNot(contains('ALPHA')));
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: t(3));
 
     test('extract range returns subset', () async {
       final bytes = await buildTwoPageTextPdf(createPdf);
@@ -105,7 +106,7 @@ void registerDocTests(Pdf Function() createPdf) {
       expect(range, contains('ALPHA'));
       expect(range, isNot(contains('BRAVO')));
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: t(3));
 
     test('extract markdown format returns content', () async {
       final bytes = await buildFormPdf(createPdf);
@@ -116,7 +117,7 @@ void registerDocTests(Pdf Function() createPdf) {
       );
       expect(md, contains('Application'));
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('extract HTML format returns content', () async {
       final bytes = await buildFormPdf(createPdf);
@@ -127,7 +128,7 @@ void registerDocTests(Pdf Function() createPdf) {
       );
       expect(html, isNotEmpty);
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     // ── Search ────────────────────────────────────────────────────
 
@@ -145,7 +146,7 @@ void registerDocTests(Pdf Function() createPdf) {
         expect(r.rect.width, greaterThan(0));
       }
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('search for nonexistent term returns empty', () async {
       final doc = await createPdf().open(src(minimalPdf));
@@ -155,7 +156,7 @@ void registerDocTests(Pdf Function() createPdf) {
       );
       expect(results, isEmpty);
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     // This test catches the search page-filtering bug:
     // if pages param is ignored, both searches return the same count.
@@ -170,7 +171,7 @@ void registerDocTests(Pdf Function() createPdf) {
       expect(page0Hits, isNotEmpty, reason: 'ALPHA should be on page 0');
       expect(page1Hits, isEmpty, reason: 'ALPHA should NOT be on page 1');
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: t(3));
 
     // ── Render ────────────────────────────────────────────────────
 
@@ -185,7 +186,7 @@ void registerDocTests(Pdf Function() createPdf) {
       expect(pages[0].height, greaterThan(0));
       expect(pages[0].data.length, greaterThan(0));
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('render all pages of 2-page PDF yields 2 results', () async {
       final pdf = createPdf();
@@ -197,7 +198,7 @@ void registerDocTests(Pdf Function() createPdf) {
       }
       expect(pages, hasLength(2));
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     // ── Extract images ────────────────────────────────────────────
 
@@ -209,7 +210,7 @@ void registerDocTests(Pdf Function() createPdf) {
       }
       expect(images, isEmpty);
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     // Builder creates proper XObject images (/Im1 in /Resources/XObject,
     // referenced by Do in content stream). The extractor should find them.
@@ -223,7 +224,7 @@ void registerDocTests(Pdf Function() createPdf) {
       }
       expect(images, isNotEmpty, reason: 'Builder XObject image should be extractable');
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: t(3));
 
     // ── Validate ──────────────────────────────────────────────────
 
@@ -233,13 +234,13 @@ void registerDocTests(Pdf Function() createPdf) {
       expect(result.compliant, isFalse);
       expect(result.errors, greaterThan(0));
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('validatePdfUa on minimal returns false', () async {
       final doc = await createPdf().open(src(minimalPdf));
       expect(await doc.validatePdfUa(), isFalse);
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     // ── Classify ──────────────────────────────────────────────────
 
@@ -250,7 +251,7 @@ void registerDocTests(Pdf Function() createPdf) {
       expect(result.confidence, greaterThanOrEqualTo(0.0));
       expect(result.confidence, lessThanOrEqualTo(1.0));
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('classifyDocument returns type and confidence in range', () async {
       final doc = await createPdf().open(src(minimalPdf));
@@ -259,7 +260,7 @@ void registerDocTests(Pdf Function() createPdf) {
       expect(result.confidence, greaterThanOrEqualTo(0.0));
       expect(result.confidence, lessThanOrEqualTo(1.0));
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     // ── Signatures ────────────────────────────────────────────────
 
@@ -267,13 +268,13 @@ void registerDocTests(Pdf Function() createPdf) {
       final doc = await createPdf().open(src(minimalPdf));
       expect(await doc.getSignatures(), isEmpty);
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('verifySignatures false for unsigned PDF', () async {
       final doc = await createPdf().open(src(minimalPdf));
       expect(await doc.verifySignatures(), isFalse);
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     // ── Bookmarks ─────────────────────────────────────────────────
 
@@ -285,7 +286,7 @@ void registerDocTests(Pdf Function() createPdf) {
       expect(splits[1].title, contains('Chapter 2'));
       expect(splits[0].startPage, greaterThanOrEqualTo(0));
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     // ── Convert ───────────────────────────────────────────────────
 
@@ -297,7 +298,7 @@ void registerDocTests(Pdf Function() createPdf) {
       expect(bytes.length, greaterThan(4));
       expect(bytes[0], 0x50); // PK ZIP header
       expect(bytes[1], 0x4B);
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: t(3));
 
     test('convertTo PPTX produces valid ZIP', () async {
       final pdf = createPdf();
@@ -306,7 +307,7 @@ void registerDocTests(Pdf Function() createPdf) {
       final bytes = sink.takeBytes();
       expect(bytes[0], 0x50);
       expect(bytes[1], 0x4B);
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: t(3));
 
     test('convertTo XLSX produces valid ZIP', () async {
       final pdf = createPdf();
@@ -315,7 +316,7 @@ void registerDocTests(Pdf Function() createPdf) {
       final bytes = sink.takeBytes();
       expect(bytes[0], 0x50);
       expect(bytes[1], 0x4B);
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: t(3));
 
     test('convertToPdf from DOCX produces valid PDF', () async {
       final pdf = createPdf();
@@ -325,6 +326,6 @@ void registerDocTests(Pdf Function() createPdf) {
       await pdf.convertToPdf(src(docxSink.takeBytes()), pdfSink, format: PdfDocumentFormat.docx);
       final pdfBytes = pdfSink.takeBytes();
       expect(String.fromCharCodes(pdfBytes.sublist(0, 5)), startsWith('%PDF'));
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
   });
 }

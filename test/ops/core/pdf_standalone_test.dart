@@ -8,6 +8,7 @@ import 'package:test/test.dart';
 
 import '../../helpers/fixtures.dart';
 import '../../helpers/test_source_sink.dart';
+import '../../helpers/timeouts.dart';
 
 void registerStandaloneTests(Pdf Function() createPdf) {
   group('standalone', () {
@@ -27,7 +28,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       expect(sigs.first.signerName, isNotNull);
       expect(sigs.first.signerName, isNotEmpty);
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('sign with PEM adds a retrievable signature', () async {
       final pdf = createPdf();
@@ -41,7 +42,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       expect(sigs, isNotEmpty);
       expect(sigs.first.signerName, isNotNull);
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('sign with invalid cert throws', () async {
       final pdf = createPdf();
@@ -52,7 +53,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
                 Uint8List.fromList([1, 2, 3, 4]), 'wrong')),
         throwsA(anything),
       );
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     // ── Extract pages ──
 
@@ -66,7 +67,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       await pdf.extractPages(src(threePage), sink, pages: [0]);
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 1);
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     // ── Convert ──
 
@@ -77,7 +78,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       final bytes = sink.takeBytes();
       expect(bytes[0], 0x50); // PK header
       expect(bytes[1], 0x4B);
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('convertTo PPTX produces valid ZIP', () async {
       final pdf = createPdf();
@@ -86,7 +87,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       final bytes = sink.takeBytes();
       expect(bytes[0], 0x50);
       expect(bytes[1], 0x4B);
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('convertTo XLSX produces valid ZIP', () async {
       final pdf = createPdf();
@@ -95,7 +96,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       final bytes = sink.takeBytes();
       expect(bytes[0], 0x50);
       expect(bytes[1], 0x4B);
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('convertToPdf from DOCX produces valid PDF', () async {
       final pdf = createPdf();
@@ -105,6 +106,6 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       await pdf.convertToPdf(src(docxSink.takeBytes()), pdfSink, format: PdfDocumentFormat.docx);
       final pdfBytes = pdfSink.takeBytes();
       expect(String.fromCharCodes(pdfBytes.sublist(0, 5)), startsWith('%PDF'));
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
   });
 }

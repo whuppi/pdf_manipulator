@@ -7,6 +7,7 @@ import 'package:test/test.dart';
 
 import '../../helpers/fixtures.dart';
 import '../../helpers/test_source_sink.dart';
+import '../../helpers/timeouts.dart';
 
 void registerInstanceTests(Pdf Function() createPdf) {
   group('instance', () {
@@ -19,7 +20,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
       expect(doc1.pageCount, 1);
       expect(doc2.pageCount, 1);
       await pdf.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('dispose cascades to open editors', () async {
       final pdf = createPdf();
@@ -28,7 +29,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
       expect(await ed1.pageCount, 1);
       expect(await ed2.pageCount, 1);
       await pdf.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('dispose cascades to open builders', () async {
       final pdf = createPdf();
@@ -37,7 +38,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
       await pdf.dispose();
       // No error — both builders freed by cascade
       expect(true, isTrue);
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('dispose cascades to mix of doc+editor+builder', () async {
       final pdf = createPdf();
@@ -47,7 +48,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
       expect(doc.pageCount, 1);
       expect(await ed.pageCount, 1);
       await pdf.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     // ── Double dispose ──
 
@@ -55,7 +56,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       await pdf.dispose();
       await pdf.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('doc double dispose is safe', () async {
       final pdf = createPdf();
@@ -63,7 +64,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
       await doc.dispose();
       await doc.dispose();
       await pdf.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('editor double dispose is safe', () async {
       final pdf = createPdf();
@@ -71,7 +72,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
       await ed.dispose();
       await ed.dispose();
       await pdf.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('builder double dispose is safe', () async {
       final pdf = createPdf();
@@ -79,7 +80,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
       await b.dispose();
       await b.dispose();
       await pdf.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     // ── Operations after dispose throw ──
 
@@ -87,7 +88,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       await pdf.dispose();
       expect(() => pdf.open(src(minimalPdf)), throwsStateError);
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     // ── Dispose returns quickly ──
 
@@ -100,7 +101,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
       await pdf.dispose();
       sw.stop();
       expect(sw.elapsedMilliseconds, lessThan(2000));
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     // ── Sequential reuse ──
 
@@ -119,7 +120,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
       await doc2.dispose();
 
       await pdf.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('doc dispose frees one doc, others survive', () async {
       final pdf = createPdf();
@@ -129,7 +130,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
       expect(doc2.pageCount, 1);
       await doc2.dispose();
       await pdf.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     // ── Multi-instance isolation ──
 
@@ -147,7 +148,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
       expect(docB.pageCount, 1);
       await docB.dispose();
       await pdfB.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('disposing one instance does not affect another', () async {
       final pdfA = createPdf();
@@ -160,7 +161,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
       expect(doc.pageCount, 1);
       await doc.dispose();
       await pdfB.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     // ── Parallel ops on single instance ──
 
@@ -175,7 +176,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
         expect(doc.pageCount, 1);
       }
       await pdf.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: t(3));
 
     test('parallel mix of doc+editor+builder', () async {
       final pdf = createPdf();
@@ -190,7 +191,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
       expect(doc.pageCount, 1);
       expect(await ed.pageCount, 1);
       await pdf.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: t(3));
 
     // ── Abrupt dispose (kill mid-flight) ──
 
@@ -210,7 +211,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
         errors.add(e);
       });
       expect(errors, isEmpty, reason: 'dispose mid-flight should not leak errors');
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: t(3));
 
     test('dispose mid-open produces no unhandled errors', () async {
       final errors = <Object>[];
@@ -224,7 +225,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
         errors.add(e);
       });
       expect(errors, isEmpty, reason: 'dispose mid-flight should not leak errors');
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: t(3));
 
     test('dispose mid-edit produces no unhandled errors', () async {
       final errors = <Object>[];
@@ -238,7 +239,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
         errors.add(e);
       });
       expect(errors, isEmpty, reason: 'dispose mid-flight should not leak errors');
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: t(3));
 
     test('fresh instance works after abrupt dispose of another', () async {
       final pdf1 = createPdf();
@@ -255,6 +256,6 @@ void registerInstanceTests(Pdf Function() createPdf) {
       expect(doc.pageCount, 1);
       await doc.dispose();
       await pdf2.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: t(3));
   });
 }

@@ -24,19 +24,20 @@ import '../stress/pdf_standalone_stress_test.dart';
 import '../stress/pdf_builder_stress_test.dart';
 import '../stress/pdf_instance_stress_test.dart';
 import '../native/native_finalizer_test.dart';
+import '../../helpers/timeouts.dart';
 
 void main() {
   late Pdf pdf;
 
   test('engine init', () {
     pdf = Pdf();
-  }, timeout: Timeout(Duration(seconds: 3)));
+  }, timeout: t(3));
 
   test('verify I/O mode is native', () async {
     final doc = await pdf.open(src(minimalPdf));
     await doc.dispose();
     expect(pdf.ioMode, PdfIoMode.native);
-  }, timeout: Timeout(Duration(seconds: 1)));
+  }, timeout: t(1));
 
   tearDownAll(() => pdf.dispose());
 

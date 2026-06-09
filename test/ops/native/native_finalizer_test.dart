@@ -14,6 +14,7 @@
 import 'dart:io';
 
 import 'package:test/test.dart';
+import '../../helpers/timeouts.dart';
 
 void registerNativeFinalizerTests() {
   test('dispose exits cleanly (no dangling NativeCallable)',
@@ -38,5 +39,5 @@ void registerNativeFinalizerTests() {
             ? 'Process hung — dispose() did not shut down cleanly.'
             : 'Process crashed (exit $exitCode) — dangling NativeCallable.\n'
                 'stderr: ${await process.stderr.transform(const SystemEncoding().decoder).join()}');
-  }, timeout: Timeout(Duration(seconds: 5)));
+  }, timeout: t(5));
 }

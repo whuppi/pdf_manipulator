@@ -7,6 +7,7 @@ import 'package:test/test.dart';
 
 import '../../helpers/generators.dart';
 import '../../helpers/test_source_sink.dart';
+import '../../helpers/timeouts.dart';
 
 void registerStandaloneStressTests(Pdf Function() createPdf) {
   group('stress standalone', tags: 'stress', () {
@@ -15,7 +16,7 @@ void registerStandaloneStressTests(Pdf Function() createPdf) {
     test('build 1000-page PDF', () async {
       largePdf = await buildLargePdf(createPdf, pageCount: 1000);
       expect(largePdf.length, greaterThan(0));
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: t(3));
 
     test('extractPages first 10 from 1000-page', () async {
       final pdf = createPdf();
@@ -24,6 +25,6 @@ void registerStandaloneStressTests(Pdf Function() createPdf) {
           pages: List.generate(10, (i) => i));
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 10);
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: t(3));
   });
 }

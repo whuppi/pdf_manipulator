@@ -6,6 +6,7 @@ import 'package:test/test.dart';
 import '../../helpers/fixtures.dart';
 import '../../helpers/generators.dart';
 import '../../helpers/test_source_sink.dart';
+import '../../helpers/timeouts.dart';
 
 void registerInstanceStressTests(Pdf Function() createPdf) {
   group('instance stress', tags: 'stress', () {
@@ -17,7 +18,7 @@ void registerInstanceStressTests(Pdf Function() createPdf) {
         await doc.dispose();
       }
       await pdf.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: t(3));
 
     test('100x rapid editor open/dispose cycles', () async {
       final pdf = createPdf();
@@ -27,7 +28,7 @@ void registerInstanceStressTests(Pdf Function() createPdf) {
         await ed.dispose();
       }
       await pdf.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: t(3));
 
     test('50x parallel open across 5 instances', () async {
       final instances = List.generate(5, (_) => createPdf());
@@ -43,7 +44,7 @@ void registerInstanceStressTests(Pdf Function() createPdf) {
       for (final pdf in instances) {
         await pdf.dispose();
       }
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: t(3));
 
     test('interleaved doc+editor+sugar on same instance', () async {
       final pdf = createPdf();
@@ -62,7 +63,7 @@ void registerInstanceStressTests(Pdf Function() createPdf) {
         await pdf.merge([src(minimalPdf), src(minimalPdf)], sink2);
       }
       await pdf.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: t(3));
 
     test('dispose under load — open 10 docs then kill', () async {
       final pdf = createPdf();
@@ -74,7 +75,7 @@ void registerInstanceStressTests(Pdf Function() createPdf) {
       await pdf.dispose();
       sw.stop();
       expect(sw.elapsedMilliseconds, lessThan(2000));
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: t(3));
 
     test('splitBySize on varied-size pages', () async {
       final pdf = createPdf();
@@ -95,6 +96,6 @@ void registerInstanceStressTests(Pdf Function() createPdf) {
       }
       expect(totalPages, 50);
       await pdf.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: t(3));
   });
 }
