@@ -4,7 +4,7 @@
 # handles job orchestration.
 #
 # Runners: infra jobs (gate, discover, upload, publish) use one
-# configurable runner (default: ubuntu-latest). Compile jobs use
+# configurable runner (default: ubuntu-24.04). Compile jobs use
 # target-specific runners in a matrix (macos for ios/macos,
 # ubuntu for android/linux/wasm, windows for windows).
 #
@@ -30,19 +30,19 @@ on:
       runner:
         description: "Runner for infra jobs (gate, discover, upload, publish)"
         type: choice
-        options: [ubuntu-latest, macos-14, windows-latest]
-        default: ubuntu-latest
+        options: [ubuntu-24.04, macos-14, windows-2025]
+        default: ubuntu-24.04
 
 permissions:
   contents: write
 
 env:
   COMPILE_OUTPUT_DIR: out
-  DEFAULT_RUNNER: ubuntu-latest
+  DEFAULT_RUNNER: ubuntu-24.04
 
 jobs:
   inputs:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       runner: ${{ steps.resolve.outputs.runner }}
     steps:
@@ -106,10 +106,10 @@ jobs:
         include:
           - { name: macos,   runner: macos-14 }
           - { name: ios,     runner: macos-14 }
-          - { name: android, runner: ubuntu-latest }
-          - { name: linux,   runner: ubuntu-latest }
-          - { name: wasm,    runner: ubuntu-latest }
-          - { name: windows, runner: windows-latest }
+          - { name: android, runner: ubuntu-24.04 }
+          - { name: linux,   runner: ubuntu-24.04 }
+          - { name: wasm,    runner: ubuntu-24.04 }
+          - { name: windows, runner: windows-2025 }
     name: compile-${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
     steps:

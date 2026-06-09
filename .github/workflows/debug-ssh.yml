@@ -19,10 +19,10 @@ on:
         required: true
         type: choice
         options:
-          - ubuntu-latest
+          - ubuntu-24.04
           - macos-14
-          - windows-latest
-        default: ubuntu-latest
+          - windows-2025
+        default: ubuntu-24.04
 
 jobs:
   debug:

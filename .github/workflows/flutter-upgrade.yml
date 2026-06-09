@@ -1,6 +1,6 @@
 # Check for new Flutter stable releases daily.
 # If newer than our pin, open (or update) a single upgrade PR.
-# Runner-agnostic — configurable via workflow_dispatch (default: ubuntu-latest).
+# Runner-agnostic — configurable via workflow_dispatch (default: ubuntu-24.04).
 name: Flutter Upgrade Check
 
 on:
@@ -11,19 +11,19 @@ on:
       runner:
         description: "Runner"
         type: choice
-        options: [ubuntu-latest, macos-14, windows-latest]
-        default: ubuntu-latest
+        options: [ubuntu-24.04, macos-14, windows-2025]
+        default: ubuntu-24.04
 
 permissions:
   contents: write
   pull-requests: write
 
 env:
-  DEFAULT_RUNNER: ubuntu-latest
+  DEFAULT_RUNNER: ubuntu-24.04
 
 jobs:
   inputs:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       runner: ${{ steps.resolve.outputs.runner }}
     steps:

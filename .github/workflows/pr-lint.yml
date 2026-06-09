@@ -1,7 +1,7 @@
 # All PR quality gates in one workflow.
 # Jobs: conventional commit title, promotion chain, workflow security scan.
 # Runner-agnostic — all jobs run on one configurable runner.
-# Default: ubuntu-latest. Override via workflow_dispatch.
+# Default: ubuntu-24.04. Override via workflow_dispatch.
 name: PR Checks
 
 on:
@@ -13,17 +13,17 @@ on:
       runner:
         description: "Runner for all jobs"
         type: choice
-        options: [ubuntu-latest, macos-14, windows-latest]
-        default: ubuntu-latest
+        options: [ubuntu-24.04, macos-14, windows-2025]
+        default: ubuntu-24.04
 
 permissions: {}
 
 env:
-  DEFAULT_RUNNER: ubuntu-latest
+  DEFAULT_RUNNER: ubuntu-24.04
 
 jobs:
   inputs:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       runner: ${{ steps.resolve.outputs.runner }}
     steps:

@@ -1,6 +1,6 @@
 # Lightweight triage — no LLM, just rules.
 # Auto-assigns, auto-labels, revoke stale ready-to-test.
-# Runner-agnostic — all jobs use RUNNER env var (default: ubuntu-latest).
+# Runner-agnostic — all jobs use RUNNER env var (default: ubuntu-24.04).
 name: Triage
 
 on:
@@ -14,7 +14,7 @@ permissions:
   pull-requests: write
 
 env:
-  RUNNER: ubuntu-latest
+  RUNNER: ubuntu-24.04
 
 jobs:
   # Revoke stale ready-to-test label when new commits are pushed.
