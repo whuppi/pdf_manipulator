@@ -1,8 +1,9 @@
 # Full test — maintainer adds "ready-to-test" label to trigger.
 # Label auto-removed on new pushes (stale results = wasted compute).
 #
-# Two matrices: default (one runner per target) and all-runners
-# (every valid runner combo). Each row declares capabilities —
+# Two matrices: core (one runner per target) and portability
+# (every valid runner combo — proves any developer on any machine
+# can build with this package). Each row declares capabilities —
 # make-target provisions them.
 #
 # Runners: per-row in matrix (target-specific). Gate job uses
@@ -15,8 +16,8 @@ on:
     branches: [prod, dev]
   workflow_dispatch:
     inputs:
-      all-runners:
-        description: "Test every valid runner per target"
+      portability:
+        description: "Portability — test every valid runner per target"
         type: boolean
         default: true
       runner:
@@ -31,21 +32,22 @@ concurrency:
 
 env:
   DEFAULT_RUNNER: ubuntu-24.04
-  DEFAULT_ALL_RUNNERS: 'true'
+  DEFAULT_PORTABILITY: 'true'
 
 jobs:
   inputs:
     runs-on: ubuntu-24.04
     outputs:
       runner: ${{ steps.resolve.outputs.runner }}
-      all-runners: ${{ steps.resolve.outputs.all-runners }}
+      portability: ${{ steps.resolve.outputs.portability }}
     steps:
       - id: resolve
         run: |
           echo "runner=${{ inputs.runner || env.DEFAULT_RUNNER }}" >> $GITHUB_OUTPUT
-          echo "all-runners=${{ inputs.all-runners || env.DEFAULT_ALL_RUNNERS }}" >> $GITHUB_OUTPUT
+          echo "portability=${{ inputs.portability || env.DEFAULT_PORTABILITY }}" >> $GITHUB_OUTPUT
 
-  test:
+  # ── Core ──
+  core:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.action == 'labeled' && github.event.label.name == 'ready-to-test')
@@ -104,11 +106,11 @@ jobs:
           path: test-results/
           if-no-files-found: ignore
 
-  # ── All-runners ──
-  test-all-runners:
+  # ── Portability ──
+  portability:
     needs: inputs
     if: >-
-      needs.inputs.outputs.all-runners == 'true' &&
+      needs.inputs.outputs.portability == 'true' &&
       (github.event_name == 'workflow_dispatch' ||
        (github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'))
     strategy:
@@ -164,19 +166,19 @@ jobs:
   gate:
     name: Full Test Gate
     if: always()
-    needs: [inputs, test, test-all-runners]
+    needs: [inputs, core, portability]
     runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
       - name: Evaluate
         run: |
-          TEST="${{ needs.test.result }}"
-          ALL="${{ needs.test-all-runners.result }}"
-          if [[ "$TEST" != "success" && "$TEST" != "skipped" ]]; then
-            echo "FAILED: test returned '$TEST'"
+          CORE="${{ needs.core.result }}"
+          PORT="${{ needs.portability.result }}"
+          if [[ "$CORE" != "success" && "$CORE" != "skipped" ]]; then
+            echo "FAILED: core returned '$CORE'"
             exit 1
           fi
-          if [[ "$ALL" != "success" && "$ALL" != "skipped" ]]; then
-            echo "FAILED: test-all-runners returned '$ALL'"
+          if [[ "$PORT" != "success" && "$PORT" != "skipped" ]]; then
+            echo "FAILED: portability returned '$PORT'"
             exit 1
           fi
           echo "All jobs passed"
