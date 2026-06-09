@@ -1,176 +1,181 @@
 # Full test — maintainer adds "ready-to-test" label to trigger.
 # Label auto-removed on new pushes (stale results = wasted compute).
 #
-# Package tests: unit + native ops on macOS/Linux/Windows + web (3 modes)
-# Integration tests: example app on macOS/Android emulator/iOS simulator + web (3 modes)
+# Single matrix — core rows run always, portability rows (marked
+# [P]) run when the portability toggle is on. Proves any developer
+# on any machine can build with this package. Each row declares
+# capabilities — make-target provisions them.
 #
-# Every job composes reusable actions from .github/actions/.
+# Runners: per-row in matrix (target-specific). Gate job uses
+# configurable infra runner (default: ubuntu-24.04).
 name: Full Test
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
     branches: [prod, dev]
+  workflow_dispatch:
+    inputs:
+      portability:
+        description: "Portability — test every valid runner per target"
+        type: boolean
+        default: true
+      filter:
+        description: "Filter by target (android, web...) or type (pkg, int, verify)"
+        type: choice
+        options:
+          - all
+          - android
+          - ios
+          - macos
+          - linux
+          - windows
+          - web
+          - pkg
+          - int
+          - verify
+        default: all
+      runner:
+        description: "Runner for infra jobs (gate)"
+        type: choice
+        options: [ubuntu-24.04, macos-14, windows-2025-vs2026]
+        default: ubuntu-24.04
 
 concurrency:
-  group: full-test-${{ github.event.pull_request.number }}
+  group: full-test-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
+env:
+  DEFAULT_RUNNER: ubuntu-24.04
+  DEFAULT_PORTABILITY: 'true'
+
 jobs:
-  revoke-label:
-    name: Revoke stale label
-    if: >-
-      github.event.action == 'synchronize' &&
-      contains(github.event.pull_request.labels.*.name, 'ready-to-test')
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
+  inputs:
+    runs-on: ubuntu-24.04
+    outputs:
+      runner: ${{ steps.resolve.outputs.runner }}
+      portability: ${{ steps.resolve.outputs.portability }}
+      filter: ${{ steps.resolve.outputs.filter }}
     steps:
-      - name: Remove ready-to-test label
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - id: resolve
         run: |
-          gh pr edit ${{ github.event.pull_request.number }} \
-            --repo ${{ github.repository }} \
-            --remove-label "ready-to-test"
-          gh pr comment ${{ github.event.pull_request.number }} \
-            --repo ${{ github.repository }} \
-            --body "Label \`ready-to-test\` removed — new commits pushed. Re-add when ready."
+          echo "runner=${{ inputs.runner || env.DEFAULT_RUNNER }}" >> $GITHUB_OUTPUT
+          echo "portability=${{ inputs.portability || env.DEFAULT_PORTABILITY }}" >> $GITHUB_OUTPUT
+          echo "filter=${{ inputs.filter || 'all' }}" >> $GITHUB_OUTPUT
 
-  # ── Package tests (dart test) ──────────────────────────────────────
+  test:
+    needs: inputs
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.action == 'labeled' && github.event.label.name == 'ready-to-test')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── Package tests ──
+          - { name: "pkg: Linux (ubuntu-x64)",      runner: ubuntu-24.04,        make: test-pkg-native, timeout: 30 }
+          - { name: "pkg: macOS (macos-arm64)",     runner: macos-14,            make: test-pkg-native, timeout: 30 }
+          - { name: "pkg: Web (ubuntu-x64)",        runner: ubuntu-24.04,        make: test-ops-web,    timeout: 40, chrome: true, headless-display: true, wasm-cache: true, wasm-build: true }
+          - { name: "pkg: Web (macos-arm64) [P]",       runner: macos-14,            make: test-ops-web,    timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "pkg: Web (win-x64) [P]",           runner: windows-2025-vs2026, make: test-ops-web,    timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "pkg: Windows (win-x64)",       runner: windows-2025-vs2026, make: test-pkg-native, timeout: 40 }
 
-  pkg-macos:
-    name: "pkg: macOS"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: macos-14
-    timeout-minutes: 30
+          # ── Integration tests ──
+          # Emulator needs Intel — macOS ARM runners are M1 VMs that can't virtualize the emulator:
+          # https://docs.github.com/en/actions/reference/runners/github-hosted-runners#limitations-for-arm64-macos-runners
+          - { name: "int: Android (ubuntu-x64)",    runner: ubuntu-24.04,        make: test-example-android, timeout: 40, java: true, hw-accel: true, gradle-cache: true, emulator: true }
+          # Always hangs: flutter test doesn't exit after tests pass
+          # on Intel macOS — dart VM stuck on teardown. Check logs
+          # for ✅/❌ results manually, ignore the timeout cancel.
+          - { name: "int: Android (macos-intel) [P] ⚠", runner: macos-15-intel,      make: test-example-android, timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
+          - { name: "int: Android (win-x64) [P]",       runner: windows-2025-vs2026, make: test-example-android, timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
+          - { name: "int: iOS (macos-arm64)",       runner: macos-14,            make: test-example-ios,     timeout: 60, xcode-cache: true, xcode-cache-target: ios, pods-cache: true, simulator: true }
+          - { name: "int: Linux (ubuntu-x64)",      runner: ubuntu-24.04,        make: test-example-linux,   timeout: 30, headless-display: true }
+          - { name: "int: macOS (macos-arm64)",     runner: macos-14,            make: test-example-macos,   timeout: 30, xcode-cache: true, xcode-cache-target: macos }
+          - { name: "int: Web (ubuntu-x64)",        runner: ubuntu-24.04,        make: test-example-web,     timeout: 40, chrome: true, headless-display: true, wasm-cache: true, wasm-build: true }
+          - { name: "int: Web (macos-arm64) [P]",       runner: macos-14,            make: test-example-web,     timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "int: Web (win-x64) [P]",           runner: windows-2025-vs2026, make: test-example-web,     timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "int: Windows (win-x64)",       runner: windows-2025-vs2026, make: test-example-windows, timeout: 40 }
+
+          # ── Verify (release builds) ──
+          - { name: "verify: Android (ubuntu-x64)", runner: ubuntu-24.04,        make: verify-android, timeout: 40, java: true, gradle-cache: true }
+          - { name: "verify: Android (macos-arm64) [P]",runner: macos-14,            make: verify-android, timeout: 40, java: true, gradle-cache: true, portability: true }
+          - { name: "verify: Android (win-x64) [P]",    runner: windows-2025-vs2026, make: verify-android, timeout: 60, java: true, gradle-cache: true, portability: true }
+          - { name: "verify: iOS (macos-arm64)",    runner: macos-14,            make: verify-ios,     timeout: 40, xcode-cache: true, xcode-cache-target: ios, pods-cache: true }
+          - { name: "verify: Linux (ubuntu-x64)",   runner: ubuntu-24.04,        make: verify-linux,   timeout: 30 }
+          - { name: "verify: macOS (macos-arm64)",  runner: macos-14,            make: verify-macos,   timeout: 40, xcode-cache: true, xcode-cache-target: macos }
+          - { name: "verify: Web (ubuntu-x64)",     runner: ubuntu-24.04,        make: verify-web,     timeout: 40, wasm-cache: true, wasm-build: true }
+          - { name: "verify: Web (macos-arm64) [P]",    runner: macos-14,            make: verify-web,     timeout: 40, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "verify: Web (win-x64) [P]",        runner: windows-2025-vs2026, make: verify-web,     timeout: 40, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "verify: Windows (win-x64)",    runner: windows-2025-vs2026, make: verify-windows, timeout: 40 }
+
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
+    env:
+      FILTER: ${{ needs.inputs.outputs.filter }}
+      PORTABILITY: ${{ needs.inputs.outputs.portability }}
     steps:
+      - name: Check filter
+        id: filter
+        shell: bash
+        run: |
+          NAME="${{ matrix.name }}"
+          F="$FILTER"
+          P="${{ matrix.portability }}"
+          # Skip portability rows when portability is off
+          if [[ "$P" == "true" && "$PORTABILITY" != "true" ]]; then
+            echo "Skipped: portability off"
+            echo "match=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          if [[ "$F" == "all" || -z "$F" ]]; then
+            echo "match=true" >> $GITHUB_OUTPUT
+          elif echo "$NAME" | grep -qi "$F"; then
+            echo "match=true" >> $GITHUB_OUTPUT
+          else
+            echo "Skipped by filter: $F ∉ $NAME"
+            echo "match=false" >> $GITHUB_OUTPUT
+          fi
       - uses: actions/checkout@v6
+        if: steps.filter.outputs.match == 'true'
         with: { submodules: recursive }
-      - uses: ./.github/actions/pkg-test-native
+      - uses: ./.github/actions/make-target
+        if: steps.filter.outputs.match == 'true'
+        with:
+          make-target: ${{ matrix.make }}
+          java: ${{ matrix.java || 'false' }}
+          chrome: ${{ matrix.chrome || 'false' }}
+          headless-display: ${{ matrix.headless-display || 'false' }}
+          hw-accel: ${{ matrix.hw-accel || 'false' }}
+          gradle-cache: ${{ matrix.gradle-cache || 'false' }}
+          xcode-cache: ${{ matrix.xcode-cache || 'false' }}
+          xcode-cache-target: ${{ matrix.xcode-cache-target || '' }}
+          pods-cache: ${{ matrix.pods-cache || 'false' }}
+          wasm-cache: ${{ matrix.wasm-cache || 'false' }}
+          wasm-build: ${{ matrix.wasm-build || 'false' }}
+          emulator: ${{ matrix.emulator || 'false' }}
+          simulator: ${{ matrix.simulator || 'false' }}
+      - name: Upload test results
+        if: always() && steps.filter.outputs.match == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.make }}-${{ matrix.runner }}
+          path: test-results/
+          if-no-files-found: ignore
 
-  pkg-linux:
-    name: "pkg: Linux"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-        with: { submodules: recursive }
-      - uses: ./.github/actions/pkg-test-native
-
-  pkg-windows:
-    name: "pkg: Windows"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: windows-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v6
-        with: { submodules: recursive }
-      - uses: ./.github/actions/pkg-test-native
-
-  pkg-web:
-    name: "pkg: Web (3 modes)"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v6
-        with: { submodules: recursive }
-      - uses: ./.github/actions/pkg-test-web
-
-  # ── Integration tests (flutter test on device) ─────────────────────
-
-  int-macos:
-    name: "integration: macOS"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: macos-14
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-        with: { submodules: recursive }
-      - uses: ./.github/actions/integration-macos
-
-  int-linux:
-    name: "integration: Linux"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-        with: { submodules: recursive }
-      - uses: ./.github/actions/integration-linux
-
-  int-windows:
-    name: "integration: Windows"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: windows-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v6
-        with: { submodules: recursive }
-      - uses: ./.github/actions/integration-windows
-
-  int-android:
-    name: "integration: Android"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v6
-        with: { submodules: recursive }
-      - uses: ./.github/actions/integration-android
-
-  int-ios:
-    name: "integration: iOS"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: macos-14
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v6
-        with: { submodules: recursive }
-      - uses: ./.github/actions/integration-ios
-
-  int-web:
-    name: "integration: Web (3 modes)"
-    if: github.event.action == 'labeled' && github.event.label.name == 'ready-to-test'
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v6
-        with: { submodules: recursive }
-      - uses: ./.github/actions/integration-web
-
-  # ── Gate ───────────────────────────────────────────────────────────
-
+  # ── Gate ──
   gate:
     name: Full Test Gate
     if: always()
-    needs: [pkg-macos, pkg-linux, pkg-windows, pkg-web, int-macos, int-linux, int-windows, int-android, int-ios, int-web]
-    runs-on: ubuntu-latest
+    needs: [inputs, test]
+    runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
       - name: Evaluate
         run: |
-          if [[ "${{ github.event.action }}" != "labeled" ]] || [[ "${{ github.event.label.name }}" != "ready-to-test" ]]; then
-            echo "Full test not triggered — gate passes"
-            exit 0
+          RESULT="${{ needs.test.result }}"
+          if [[ "$RESULT" != "success" && "$RESULT" != "skipped" ]]; then
+            echo "FAILED: test returned '$RESULT'"
+            exit 1
           fi
-          RESULTS=(
-            "${{ needs.pkg-macos.result }}"
-            "${{ needs.pkg-linux.result }}"
-            "${{ needs.pkg-windows.result }}"
-            "${{ needs.pkg-web.result }}"
-            "${{ needs.int-macos.result }}"
-            "${{ needs.int-linux.result }}"
-            "${{ needs.int-windows.result }}"
-            "${{ needs.int-android.result }}"
-            "${{ needs.int-ios.result }}"
-            "${{ needs.int-web.result }}"
-          )
-          for r in "${RESULTS[@]}"; do
-            if [[ "$r" != "success" ]]; then
-              echo "FAILED: a test returned '$r'"
-              exit 1
-            fi
-          done
-          echo "All 10 jobs passed"
+          echo "All jobs passed"

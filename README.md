@@ -10,7 +10,7 @@ Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extrac
 
 - [Install](#install)
   - [Add the dependency](#add-the-dependency)
-  - [Native platforms](#native-platforms)
+  - [Native targets](#native-platforms)
   - [Web](#web)
 - [Quick start](#quick-start)
   - [Sources & sinks](#sources--sinks)
@@ -23,7 +23,7 @@ Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extrac
   - [Create from scratch](#create-from-scratch)
   - [Batch editing](#batch-editing)
 - [Error handling](#error-handling)
-- [Platforms](#platforms)
+- [Targets](#targets)
   - [How binaries are resolved](#how-binaries-are-resolved)
   - [Browser support](#browser-support)
   - [Web I/O modes](#web-io-modes)
@@ -41,7 +41,7 @@ dependencies:
   pdf_manipulator:
 ```
 
-### Native platforms
+### Native targets
 
 iOS, Android, macOS, Windows, Linux — nothing extra. The build hook downloads the correct binary automatically.
 
@@ -60,12 +60,12 @@ pdf_manipulator: X.Y.Z  # exact version — upgrade intentionally
 ```
 
 <details>
-<summary>Extra setup options (optional / debugging)</summary>
+<summary>All setup commands</summary>
 
 ```sh
-flutter pub run pdf_manipulator:setup --native  # pre-fetch native binary
-flutter pub run pdf_manipulator:setup --all     # web + native
-flutter pub run pdf_manipulator:setup --force   # re-download everything
+flutter pub run pdf_manipulator:setup                  # web (default)
+flutter pub run pdf_manipulator:setup <target>         # web|android|ios|macos|linux|windows
+flutter pub run pdf_manipulator:setup --force <target> # re-resolve (debugging)
 ```
 
 </details>
@@ -482,9 +482,9 @@ Every error is a typed subclass of `PdfError`. No string matching. No `PlatformE
 
 ---
 
-## Platforms
+## Targets
 
-| Platform | Architectures | Minimum version | Engine |
+| Target | Architectures | Minimum version | Engine |
 |---|---|---|---|
 | Android | arm64, arm, x64, x86 | API 21 (Android 5.0) | Native (Rust) |
 | iOS | arm64 device, arm64 + x64 simulator | 13.0 | Native (Rust) |

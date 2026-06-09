@@ -24,7 +24,7 @@
 # ─────────────────────────────────────────
 #   1. gate      → --gate            should this push trigger anything?
 #   2. discover  → --discover        find version, stamp tag, create release
-#   3. compile   → (workflow)        checkout tag, build per platform
+#   3. compile   → (workflow)        checkout tag, build per target
 #   4. upload    → (workflow)        upload binaries
 #                  --add-git-install
 #                  --update-tag-hashes
@@ -46,6 +46,7 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # ════════════════════════════════════════════════════════════════════
 # § 1 — Arguments and globals
@@ -55,7 +56,9 @@ MODE="${1:---help}"
 TAG="${2:-}"
 VERSION="${TAG:+${TAG#v}}"
 
-REPO="${GITHUB_REPOSITORY:-whuppi/pdf_manipulator}"
+source "$SCRIPT_DIR/lib.sh"
+
+REPO="${GITHUB_REPOSITORY:-$(_json_get repo)}"
 REPO_URL="https://github.com/$REPO"
 PKG_NAME="pdf_manipulator"
 
@@ -142,15 +145,9 @@ pick_source_file() {
 # Fetch every published version of the package from pub.dev.
 get_published_versions() {
   curl -sS "https://pub.dev/api/packages/$PKG_NAME" 2>/dev/null \
-    | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    for v in data.get('versions', []):
-        print(v['version'])
-except Exception:
-    pass
-" 2>/dev/null || true
+    | grep -oE '"version":"[^"]*"' \
+    | sed 's/"version":"//;s/"//' \
+    | sort -t. -k1,1n -k2,2n -k3,3n
 }
 
 # Stamp a version string into pubspec.yaml, version.dart, and README.md.
@@ -185,11 +182,11 @@ stamp_asset_hashes() {
 
   # All release assets with digests (native + WASM), excluding source archives.
   local release_entries=""
-  release_entries=$(gh api "repos/$REPO/releases/tags/$tag" \
-    --jq '.assets[]
-          | select(.digest != null
-                   and (.name | startswith("Source") | not))
-          | "\(.name)\t\(.digest)"' \
+  local jq_filter
+  read -r -d '' jq_filter <<'JQ' || true
+.assets[]|select(.digest!=null and (.name|startswith("Source")|not))|"\(.name)\t\(.digest)"
+JQ
+  release_entries=$(gh api "repos/$REPO/releases/tags/$tag" --jq "$jq_filter" \
     | sort | while IFS=$'\t' read -r name digest; do
       hash="${digest#sha256:}"
       echo "  '$name': '$hash',"
@@ -197,16 +194,28 @@ stamp_asset_hashes() {
     done)
 
   # Hand-written web assets — hash from the tag's web_assets/ directory.
+  # Reads local filenames + asset names from build.json, skipping
+  # wasmBuildOutputs (those get hashes from the Release API above).
   local web_entries=""
-  for js_file in coordinator.js worker.js; do
-    local src="web_assets/$js_file"
+  while IFS=$'\t' read -r local_name asset_name; do
+    local src="web_assets/$local_name"
     if [ -f "$src" ]; then
       local hash
       hash=$( (sha256sum "$src" 2>/dev/null || shasum -a 256 "$src") | cut -d' ' -f1)
-      web_entries+="  'wasm-$js_file': '$hash',"$'\n'
-      echo "  wasm-$js_file ... ${hash:0:12}..." >&2
+      web_entries+="  '$asset_name': '$hash',"$'\n'
+      echo "  $asset_name ... ${hash:0:12}..." >&2
     fi
-  done
+  done < <(
+    # Read web assets from build.json, skip wasmBuildOutputs.
+    # Pure bash — no python3, no jq.
+    wasm_outputs=$(sed -n 's/.*"wasmBuildOutputs": *\[\(.*\)\].*/\1/p' build.json | tr -d '" ')
+    sed -n '/"web"/,/}/p' build.json | grep ':' | grep -v '"web"' | while IFS=: read -r key val; do
+      local_name=$(echo "$key" | tr -d ' "')
+      asset_name=$(echo "$val" | tr -d ' ",' )
+      echo "$wasm_outputs" | grep -qw "$local_name" && continue
+      echo "$local_name	$asset_name"
+    done
+  )
 
   local all_entries
   all_entries=$(printf '%s\n%s' "$release_entries" "$web_entries" | sed '/^$/d')
@@ -452,11 +461,22 @@ cmd_gate() {
   fi
 
   if grep -Fqx "$target_file" <<< "$changed_files"; then
-    local found_version
-    found_version=$(get_changelog_versions "$target_file" | head -1 || true)
-    gh_output "should_run" "true"
-    gh_output "version" "${found_version:-unknown}"
-    echo "Gate: $target_file changed, version=$found_version"
+    # Only trigger if a NEW version header was added, not just edits.
+    local versions_after versions_before new_version
+    versions_after=$(get_changelog_versions "$target_file")
+    versions_before=$(git show "${BEFORE:-HEAD~1}:$target_file" 2>/dev/null \
+      | sed -n 's/^## \([^ ]*\).*/\1/p' || true)
+    new_version=$(comm -23 <(echo "$versions_after" | sort) <(echo "$versions_before" | sort) | head -1)
+
+    if [[ -n "$new_version" ]]; then
+      gh_output "should_run" "true"
+      gh_output "version" "$new_version"
+      echo "Gate: new version $new_version added to $target_file"
+    else
+      gh_output "should_run" "false"
+      gh_output "version" ""
+      echo "Gate: $target_file changed but no new version header added, skipping"
+    fi
   else
     gh_output "should_run" "false"
     gh_output "version" ""

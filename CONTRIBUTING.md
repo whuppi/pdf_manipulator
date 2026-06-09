@@ -47,15 +47,16 @@ All PRs target `dev`. That's the only branch contributors touch.
 
 ```
 your fork / feature branch ──PR──► dev
-                                    ↓ CI: make analyze + make test-unit + make test-ops-native
+                                    ↓ CI: make analyze + make test-pkg-native
                                     ↓ PR title: Conventional Commits (feat: / fix: / etc.)
                                     ↓ squash-merge when green
-                                    ↓ Full 10-job test via "ready-to-test" label
-                                      (4 pkg: macOS/Linux/Windows/web
-                                       6 integration: macOS/Linux/Windows/Android/iOS/web)
+                                    ↓ Full test suite via "ready-to-test" label
+                                      (pkg + integration + verify across targets)
 ```
 
-CI calls Makefile targets — same commands locally and in CI. No logic lives in the CI YAML.
+CI calls Makefile targets via the `make-target` orchestrator action.
+Same commands locally and in CI. Capability actions handle runner
+differences — no logic in workflows or Makefile.
 
 You don't write changelog entries, bump versions, or touch `prod`. The maintainer handles releases.
 

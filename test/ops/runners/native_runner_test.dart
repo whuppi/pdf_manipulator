@@ -30,13 +30,13 @@ void main() {
 
   test('engine init', () {
     pdf = Pdf();
-  }, timeout: Timeout(Duration(seconds: 5)));
+  }, timeout: Timeout(Duration(seconds: 3)));
 
   test('verify I/O mode is native', () async {
     final doc = await pdf.open(src(minimalPdf));
     await doc.dispose();
     expect(pdf.ioMode, PdfIoMode.native);
-  }, timeout: Timeout(Duration(seconds: 2)));
+  }, timeout: Timeout(Duration(seconds: 1)));
 
   tearDownAll(() => pdf.dispose());
 

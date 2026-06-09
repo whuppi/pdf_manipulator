@@ -224,10 +224,14 @@ Five files, strict rules:
 |---|---|---|
 | Native binary resolution (5-step waterfall) | DONE | cached → download → compile → submodule → error |
 | Web asset resolution (same waterfall) | DONE | WASM + JS glue, hash-verified |
-| `setup --web` (default) | DONE | Downloads or compiles web assets |
-| `setup --native` | DONE | Pre-fetches native binary for current OS |
-| `setup --all` / `--force` | DONE | Both platforms / re-resolve everything |
+| `setup web` (default) | DONE | Downloads or compiles web assets, hash-verified |
+| `setup <target>` | DONE | Triggers `flutter build` to cache native binary |
+| `setup --force web` | DONE | Re-download web assets (debugging) |
 | SHA-256 hash verification (all assets) | DONE | Native + web, stale detection on setup |
+| `build.json` | DONE | Single source of truth for crate, repo, features, web assets |
+| Link hook (`hook/link.dart`) | DONE | Passthrough today — see tree-shaking rows below |
+| Per-feature opt-out via `user_defines` | PLANNED | Consumers disable features in pubspec → smaller binary. Pattern proven by icu_kit. Works today, no SDK changes needed. |
+| Automatic tree-shaking via `@RecordUse` | PLANNED | Compiler detects used APIs, link hook maps to cargo features. Zero config. Blocked: [dart-lang/native#2902](https://github.com/dart-lang/native/issues/2902), [dart-lang/sdk#52970](https://github.com/dart-lang/sdk/issues/52970) |
 | Automatic web setup via build hook | BLOCKED | See details below |
 
 ### Automatic web setup — what's blocking, what to track

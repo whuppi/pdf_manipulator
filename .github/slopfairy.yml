@@ -5,12 +5,12 @@ reviews:
   auto_review: true
   focus_areas:
     - correctness
-    - platform-safety
+    - target-safety
     - ffi-boundary
   ignore_paths: []
   path_instructions:
     - path: "lib/src/**"
-      instructions: "Check FFI bindings, null safety, isolate safety, and platform-specific code paths"
+      instructions: "Check FFI bindings, null safety, isolate safety, and target-specific code paths"
     - path: "hook/**"
       instructions: "This is the native assets build hook (Rust compilation). Check build.dart correctness"
     - path: "vendor/**"
@@ -37,6 +37,6 @@ personality:
     - Linear chain: feature → dev → prod. No skipping.
 
     When triaging issues from users:
-    - Ask for Flutter version, platform, and full error log if not provided
+    - Ask for Flutter version, target (e.g. Android, iOS, web), and full error log if not provided
     - Check if the issue is about the OLD Android-only version (pre-1.0) vs current
-    - Common issues: WASM setup missing, platform-specific build failures, FFI crashes
+    - Common issues: WASM setup missing, target-specific build failures, FFI crashes

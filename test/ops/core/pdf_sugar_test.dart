@@ -20,7 +20,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       await pdf.merge([src(minimalPdf), src(minimalPdf)], sink);
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 2);
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('merge three PDFs → 3 pages', () async {
       final pdf = createPdf();
@@ -28,7 +28,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       await pdf.merge([src(minimalPdf), src(minimalPdf), src(minimalPdf)], sink);
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 3);
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('merge different sized PDFs', () async {
       final pdf = createPdf();
@@ -36,7 +36,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       await pdf.merge([src(minimalPdf), src(letterPdf)], sink);
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 2);
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('merged output is valid PDF', () async {
       final pdf = createPdf();
@@ -47,7 +47,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       expect(bytes[1], 0x50);
       expect(bytes[2], 0x44);
       expect(bytes[3], 0x46);
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Rotate ──
 
@@ -57,7 +57,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       await pdf.rotateAllPages(src(minimalPdf), sink, degrees: 90);
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pages[0].rotation, 90);
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('rotatePages rotates specific pages', () async {
       final pdf = createPdf();
@@ -65,7 +65,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       await pdf.rotatePages(src(minimalPdf), sink, pages: {0: 90});
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pages[0].rotation, 90);
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Flatten ──
 
@@ -78,7 +78,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(output));
       expect(doc.pageCount, 1);
       expect(output.length, greaterThan(formBytes.length ~/ 2));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Compress ──
 
@@ -91,7 +91,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(output));
       expect(doc.pageCount, 3);
       expect(output.length, lessThanOrEqualTo(multiPage.length * 2));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Delete ──
 
@@ -104,7 +104,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       await pdf.deletePages(src(twoPage), deleteSink, pages: [0]);
       final doc = await pdf.open(src(deleteSink.takeBytes()));
       expect(doc.pageCount, 1);
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Reorder ──
 
@@ -115,7 +115,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       await pdf.reorderPages(src(multiPage), sink, order: [2, 1, 0]);
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 3);
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Move ──
 
@@ -135,7 +135,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 3);
       expect(doc.pages[0].width, closeTo(letterWidth, 1.0));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Split ──
 
@@ -153,7 +153,7 @@ void registerSugarTests(Pdf Function() createPdf) {
         final doc = await pdf.open(src(s.takeBytes()));
         expect(doc.pageCount, 1);
       }
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('splitBySize total pages equals original', () async {
       final pdf = createPdf();
@@ -172,7 +172,7 @@ void registerSugarTests(Pdf Function() createPdf) {
         totalPages += doc.pageCount;
       }
       expect(totalPages, 3);
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Split by bookmarks ──
 
@@ -189,7 +189,7 @@ void registerSugarTests(Pdf Function() createPdf) {
         final doc = await pdf.open(src(s.takeBytes()));
         expect(doc.pageCount, 1);
       }
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Redaction ──
 
@@ -199,7 +199,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       await pdf.applyRedactions(src(bookmarkedPdf), sink);
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 2);
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Embed file ──
 
@@ -214,7 +214,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       expect(doc.pageCount, 1);
       expect(output.length, greaterThan(minimalPdf.length));
       expect(String.fromCharCodes(output), contains('test.txt'));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Erase ──
 
@@ -227,7 +227,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(output));
       expect(doc.pageCount, 1);
       expect(output.length, greaterThan(minimalPdf.length));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Stamps ──
 
@@ -242,7 +242,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       expect(doc.pageCount, 1);
       expect(output.length, greaterThan(minimalPdf.length));
       expect(String.fromCharCodes(output).toLowerCase(), contains('approved'));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('addImageStamp embeds image data', () async {
       final pdf = createPdf();
@@ -254,7 +254,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(output));
       expect(doc.pageCount, 1);
       expect(output.length, greaterThan(minimalPdf.length));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Watermark ──
 
@@ -269,7 +269,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       await doc.dispose();
       expect(output.length, greaterThan(input.length));
       expect(String.fromCharCodes(output), contains('CONFIDENTIAL'));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('watermark position variants produce valid output', () async {
       final pdf = createPdf();
@@ -290,7 +290,7 @@ void registerSugarTests(Pdf Function() createPdf) {
         expect(output.length, greaterThan(input.length),
             reason: '${entry.key}: watermark increases file size');
       }
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('watermark layers produce valid output', () async {
       final pdf = createPdf();
@@ -305,7 +305,7 @@ void registerSugarTests(Pdf Function() createPdf) {
         expect(output.length, greaterThan(input.length));
         expect(String.fromCharCodes(output), contains('LAYER'));
       }
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Encrypt / Decrypt ──
 
@@ -326,7 +326,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       final decDoc = await pdf.open(src(decrypted));
       expect(decDoc.pageCount, 1);
       await decDoc.dispose();
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── ConvertToPdfA ──
 
@@ -337,7 +337,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       await pdf.convertToPdfA(src(formBytes), sink);
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 1);
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── ExtractPages ──
 
@@ -348,7 +348,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       await pdf.extractPages(src(threePage), sink, pages: [0, 2]);
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 2);
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── ImagesToPdf ──
 
@@ -358,7 +358,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       await pdf.imagesToPdf([src(minimalPng)], sink);
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 1);
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
   });
 }
 

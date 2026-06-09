@@ -1,0 +1,11 @@
+name: Headless Display
+description: >
+  Virtual display for headless GUI tests.
+  Linux: installs xvfb. macOS: no-op (native display). Windows: no-op (native display).
+
+runs:
+  using: composite
+  steps:
+    - if: runner.os == 'Linux'
+      shell: bash
+      run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb

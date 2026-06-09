@@ -1,0 +1,39 @@
+name: Rust
+description: Install Rust toolchain + sccache for fast builds
+
+inputs:
+  targets:
+    description: Extra Rust targets (comma-separated)
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Submodule cache key
+      id: sub
+      shell: bash
+      run: |
+        echo "pdf_oxide=$(git rev-parse HEAD:vendor/pdf_oxide)" >> $GITHUB_OUTPUT
+        echo "office_oxide=$(git rev-parse HEAD:vendor/office_oxide)" >> $GITHUB_OUTPUT
+
+    - name: Cache cargo registry
+      uses: actions/cache@v5
+      with:
+        path: |
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+        key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}
+        restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-
+
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ inputs.targets }}
+    - uses: mozilla-actions/sccache-action@v0.0.10
+    - shell: bash
+      run: |
+        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+        echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV
+        echo "SUBMODULE_PDF_OXIDE=${{ steps.sub.outputs.pdf_oxide }}" >> $GITHUB_ENV
+        echo "SUBMODULE_OFFICE_OXIDE=${{ steps.sub.outputs.office_oxide }}" >> $GITHUB_ENV

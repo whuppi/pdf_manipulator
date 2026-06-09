@@ -22,9 +22,9 @@ body:
       required: true
 
   - type: checkboxes
-    id: platform
+    id: target
     attributes:
-      label: Platform
+      label: Target (which platform?)
       options:
         - label: Android
         - label: iOS
