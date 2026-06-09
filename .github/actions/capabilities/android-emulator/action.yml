@@ -58,8 +58,10 @@ runs:
       shell: bash
       run: |
         SDK="$(cygpath "$ANDROID_HOME")"
-        yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
-        "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+        SDKMGR="$(find "$SDK/cmdline-tools" -name "sdkmanager*" -type f | head -1)"
+        echo "sdkmanager: $SDKMGR"
+        yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+        "$SDKMGR" \
           "system-images;android-${{ inputs.api-level }};aosp_atd;x86_64" \
           "platform-tools" \
           "emulator" > /dev/null
@@ -69,7 +71,8 @@ runs:
       shell: bash
       run: |
         SDK="$(cygpath "$ANDROID_HOME")"
-        echo no | "$SDK/cmdline-tools/latest/bin/avdmanager" create avd \
+        AVDMGR="$(find "$SDK/cmdline-tools" -name "avdmanager*" -type f | head -1)"
+        echo no | "$AVDMGR" create avd \
           --force -n test \
           --package "system-images;android-${{ inputs.api-level }};aosp_atd;x86_64"
 
