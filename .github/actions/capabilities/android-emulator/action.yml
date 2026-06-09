@@ -2,9 +2,8 @@ name: Android Emulator
 description: >
   Boot Android emulator and run a script inside it.
   Uses x86_64 arch on all runners. Linux: KVM accelerated.
-  macOS: HAXM/HVF on Intel runners only — ARM runners do NOT
-  support nested virtualization (M1 hardware limitation).
-  See ReactiveCircus/android-emulator-runner#350.
+  macOS: Intel runners only — ARM runners (M1) don't support
+  nested virtualization. See android-emulator-runner#350.
 
 inputs:
   script:
@@ -13,7 +12,7 @@ inputs:
   api-level:
     description: "Android API level"
     required: false
-    default: '35'
+    default: '31'
 
 runs:
   using: composite
@@ -28,8 +27,9 @@ runs:
       with:
         api-level: ${{ inputs.api-level }}
         arch: x86_64
-        target: google_apis
+        target: default
         force-avd-creation: false
-        emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+        emulator-options: -no-snapshot-save -no-window -noaudio -no-boot-anim
+        emulator-boot-timeout: 600
         disable-animations: true
         script: ${{ inputs.script }}
