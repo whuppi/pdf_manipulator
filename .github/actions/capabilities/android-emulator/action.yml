@@ -39,6 +39,40 @@ runs:
         $ANDROID_HOME/platform-tools/adb start-server
         $ANDROID_HOME/platform-tools/adb devices
 
+    # Write the user script + cleanup to a temp file, then wrap it
+    # with a timeout. The emulator-runner action splits multi-line
+    # script: blocks into separate /bin/sh -c calls, breaking if/while.
+    # A file-based approach avoids that entirely.
+    - name: Write emulator scripts
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        cat > /tmp/emulator-script.sh << 'EMUSCRIPT'
+        ${{ inputs.script }}
+        adb -s emulator-5554 emu kill 2>/dev/null; true
+        pkill -f 'crashpad[_]handler' 2>/dev/null; true
+        EMUSCRIPT
+        cat > /tmp/emulator-timeout.sh << 'EMUWRAP'
+        #!/usr/bin/env bash
+        LIMIT=${1:-2700}
+        bash /tmp/emulator-script.sh &
+        PID=$!
+        ELAPSED=0
+        while kill -0 $PID 2>/dev/null; do
+          if [ $ELAPSED -ge $LIMIT ]; then
+            echo "::warning::Script still running after ${LIMIT}s — killing (likely hung on teardown)"
+            kill -9 $PID 2>/dev/null
+            wait $PID 2>/dev/null
+            exit 0
+          fi
+          sleep 5
+          ELAPSED=$((ELAPSED + 5))
+        done
+        wait $PID 2>/dev/null
+        exit $?
+        EMUWRAP
+        chmod +x /tmp/emulator-timeout.sh /tmp/emulator-script.sh
+
     # ── Linux / macOS — use the action ──
     - name: Emulator (Linux/macOS)
       if: runner.os != 'Windows'
@@ -51,27 +85,7 @@ runs:
         emulator-options: -no-snapshot-save -no-window -noaudio -no-boot-anim
         emulator-boot-timeout: 600
         disable-animations: true
-        script: |
-          LIMIT=${{ inputs.script-timeout }}
-          bash -c '${{ inputs.script }}' &
-          SCRIPT_PID=$!
-          if [ "$LIMIT" -gt 0 ] 2>/dev/null; then
-            ELAPSED=0
-            while kill -0 $SCRIPT_PID 2>/dev/null; do
-              if [ $ELAPSED -ge $LIMIT ]; then
-                echo "::warning::Script still running after ${LIMIT}s — killing (tests likely passed but process hung on teardown)"
-                kill -9 $SCRIPT_PID 2>/dev/null; true
-                break
-              fi
-              sleep 5
-              ELAPSED=$((ELAPSED + 5))
-            done
-          fi
-          wait $SCRIPT_PID 2>/dev/null; SCRIPT_EXIT=$?
-          [ $SCRIPT_EXIT -eq 137 ] && SCRIPT_EXIT=0
-          adb -s emulator-5554 emu kill 2>/dev/null; true
-          pkill -f 'crashpad[_]handler' 2>/dev/null; true
-          exit $SCRIPT_EXIT
+        script: /tmp/emulator-timeout.sh ${{ inputs.script-timeout }}
 
     # ── Windows — manual boot (action doesn't support Windows) ──
     # Git Bash needs Unix paths — cygpath converts C:\Android\... to /c/Android/...
