@@ -1,0 +1,17 @@
+{
+  "name": "pdf-oxide-examples",
+  "private": true,
+  "type": "module",
+  "description": "Runnable examples for the pdf-oxide Node.js binding",
+  "scripts": {
+    "compile:ts": "tsc -p tsconfig.json",
+    "run:all": "node run_all.mjs"
+  },
+  "dependencies": {
+    "pdf-oxide": "file:../../js"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0"
+  }
+}
