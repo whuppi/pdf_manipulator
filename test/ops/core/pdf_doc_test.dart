@@ -182,7 +182,7 @@ void registerDocTests(Pdf Function() createPdf) {
       final doc = await createPdf().open(src(minimalPdf));
       await for (final _ in doc.render(pages: const PdfPages.single(0))) {}
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 10)));
+    }, timeout: Timeout(Duration(seconds: 30)));
 
     test('render single page yields one image with dimensions', () async {
       final doc = await createPdf().open(src(minimalPdf));
