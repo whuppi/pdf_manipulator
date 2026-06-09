@@ -49,8 +49,8 @@ runs:
         disable-animations: true
         script: |
           ${{ inputs.script }}
-          adb -s emulator-5554 emu kill || true
-          pkill -f crashpad_handler || true
+          adb -s emulator-5554 emu kill 2>/dev/null; true
+          pkill -f crashpad_handler 2>/dev/null; true
 
     # ── Windows — manual boot (action doesn't support Windows) ──
     # Git Bash needs Unix paths — cygpath converts C:\Android\... to /c/Android/...
