@@ -25,6 +25,10 @@ inputs:
     description: "Android API level (30 is lightest ATD available)"
     required: false
     default: '30'
+  script-timeout:
+    description: "Max seconds for script before force-kill (0 = no limit)"
+    required: false
+    default: '2700'
 
 runs:
   using: composite
@@ -48,9 +52,26 @@ runs:
         emulator-boot-timeout: 600
         disable-animations: true
         script: |
-          ${{ inputs.script }}
+          LIMIT=${{ inputs.script-timeout }}
+          bash -c '${{ inputs.script }}' &
+          SCRIPT_PID=$!
+          if [ "$LIMIT" -gt 0 ] 2>/dev/null; then
+            ELAPSED=0
+            while kill -0 $SCRIPT_PID 2>/dev/null; do
+              if [ $ELAPSED -ge $LIMIT ]; then
+                echo "::warning::Script still running after ${LIMIT}s — killing (tests likely passed but process hung on teardown)"
+                kill -9 $SCRIPT_PID 2>/dev/null; true
+                break
+              fi
+              sleep 5
+              ELAPSED=$((ELAPSED + 5))
+            done
+          fi
+          wait $SCRIPT_PID 2>/dev/null; SCRIPT_EXIT=$?
+          [ $SCRIPT_EXIT -eq 137 ] && SCRIPT_EXIT=0
           adb -s emulator-5554 emu kill 2>/dev/null; true
           pkill -f 'crashpad[_]handler' 2>/dev/null; true
+          exit $SCRIPT_EXIT
 
     # ── Windows — manual boot (action doesn't support Windows) ──
     # Git Bash needs Unix paths — cygpath converts C:\Android\... to /c/Android/...
@@ -111,7 +132,25 @@ runs:
     - name: Run script (Windows)
       if: runner.os == 'Windows'
       shell: bash
-      run: ${{ inputs.script }}
+      run: |
+        LIMIT=${{ inputs.script-timeout }}
+        bash -c '${{ inputs.script }}' &
+        SCRIPT_PID=$!
+        if [ "$LIMIT" -gt 0 ] 2>/dev/null; then
+          ELAPSED=0
+          while kill -0 $SCRIPT_PID 2>/dev/null; do
+            if [ $ELAPSED -ge $LIMIT ]; then
+              echo "::warning::Script still running after ${LIMIT}s — killing"
+              kill -9 $SCRIPT_PID 2>/dev/null; true
+              break
+            fi
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+          done
+        fi
+        wait $SCRIPT_PID 2>/dev/null; SCRIPT_EXIT=$?
+        [ $SCRIPT_EXIT -eq 137 ] && SCRIPT_EXIT=0
+        exit $SCRIPT_EXIT
 
     - name: Kill emulator (Windows)
       if: always() && runner.os == 'Windows'

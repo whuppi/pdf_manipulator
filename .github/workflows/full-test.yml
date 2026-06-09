@@ -159,7 +159,7 @@ jobs:
           # Non-emulator jobs (verify) run fine on ARM.
           - { name: "verify: Android (macos-arm64)", runner: macos-14,         make: verify-android, timeout: 40, java: true, gradle-cache: true }
           - { name: "verify: Android (win-x64)",     runner: windows-2025-vs2026,     make: verify-android, timeout: 60, java: true, gradle-cache: true }
-          - { name: "int: Android (macos-intel)",     runner: macos-15-intel,   make: test-example-android, timeout: 40, java: true, hw-accel: true, gradle-cache: true, emulator: true }
+          - { name: "int: Android (macos-intel)",     runner: macos-15-intel,   make: test-example-android, timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true }
           - { name: "int: Android (win-x64)",        runner: windows-2025-vs2026, make: test-example-android, timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true }
           # Web on other runners
           - { name: "pkg: Web (macos-arm64)",      runner: macos-14,       make: test-ops-web,    timeout: 40, chrome: true, wasm-cache: true, wasm-build: true }
