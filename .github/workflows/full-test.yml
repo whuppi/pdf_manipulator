@@ -109,9 +109,15 @@ jobs:
       matrix:
         include:
           # Android on other runners
-          - { name: "verify: Android (macos-arm64)", runner: macos-14,       make: verify-android, timeout: 40, java: true, gradle-cache: true }
-          - { name: "verify: Android (win-x64)",   runner: windows-2025, make: verify-android, timeout: 60, java: true, gradle-cache: true }
-          - { name: "int: Android (macos-arm64)",  runner: macos-14,       make: test-example-android, timeout: 40, java: true, hw-accel: true, gradle-cache: true, emulator: true }
+          #
+          # Emulator jobs use macos-15-intel because GitHub's ARM runners
+          # (M1) don't support nested virtualization — the emulator is a VM
+          # and can't run inside another VM on M1 hardware.
+          # Non-emulator jobs (verify) run fine on ARM.
+          # Tracking: ReactiveCircus/android-emulator-runner#350
+          - { name: "verify: Android (macos-arm64)", runner: macos-14,         make: verify-android, timeout: 40, java: true, gradle-cache: true }
+          - { name: "verify: Android (win-x64)",     runner: windows-2025,     make: verify-android, timeout: 60, java: true, gradle-cache: true }
+          - { name: "int: Android (macos-intel)",     runner: macos-15-intel,   make: test-example-android, timeout: 40, java: true, hw-accel: true, gradle-cache: true, emulator: true }
           # Web on other runners
           - { name: "pkg: Web (macos-arm64)",      runner: macos-14,       make: test-ops-web,    timeout: 40, chrome: true, wasm-cache: true, wasm-build: true }
           - { name: "pkg: Web (win-x64)",          runner: windows-2025, make: test-ops-web,    timeout: 40, chrome: true, wasm-cache: true, wasm-build: true }

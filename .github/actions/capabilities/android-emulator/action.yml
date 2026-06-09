@@ -1,9 +1,10 @@
 name: Android Emulator
 description: >
   Boot Android emulator and run a script inside it.
-  Linux: x86_64 with KVM. macOS ARM: arm64-v8a with Hypervisor.
-  adb server started before emulator boot to prevent connection
-  failures on macOS (ReactiveCircus/android-emulator-runner#404).
+  Uses x86_64 arch on all runners. Linux: KVM accelerated.
+  macOS: HAXM/HVF on Intel runners only — ARM runners do NOT
+  support nested virtualization (M1 hardware limitation).
+  See ReactiveCircus/android-emulator-runner#350.
 
 inputs:
   script:
@@ -23,24 +24,10 @@ runs:
         $ANDROID_HOME/platform-tools/adb start-server
         $ANDROID_HOME/platform-tools/adb devices
 
-    - name: Emulator (Linux — x86_64 KVM)
-      if: runner.os == 'Linux'
-      uses: reactivecircus/android-emulator-runner@v2
+    - uses: reactivecircus/android-emulator-runner@v2
       with:
         api-level: ${{ inputs.api-level }}
         arch: x86_64
-        target: google_apis
-        force-avd-creation: false
-        emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
-        disable-animations: true
-        script: ${{ inputs.script }}
-
-    - name: Emulator (macOS — arm64 Hypervisor)
-      if: runner.os == 'macOS'
-      uses: reactivecircus/android-emulator-runner@v2
-      with:
-        api-level: ${{ inputs.api-level }}
-        arch: arm64-v8a
         target: google_apis
         force-avd-creation: false
         emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
