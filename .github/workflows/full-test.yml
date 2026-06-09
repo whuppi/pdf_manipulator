@@ -22,7 +22,7 @@ on:
       runner:
         description: "Runner for infra jobs (gate)"
         type: choice
-        options: [ubuntu-24.04, macos-14, windows-2025]
+        options: [ubuntu-24.04, macos-14, windows-2025-vs2026]
         default: ubuntu-24.04
 
 concurrency:
@@ -56,13 +56,13 @@ jobs:
           # ── Package tests ──
           - { name: "pkg: macOS (macos-arm64)",    runner: macos-14,       make: test-pkg-native,      timeout: 30 }
           - { name: "pkg: Linux (ubuntu-x64)",     runner: ubuntu-24.04,  make: test-pkg-native,      timeout: 30 }
-          - { name: "pkg: Windows (win-x64)",      runner: windows-2025, make: test-pkg-native,      timeout: 40 }
+          - { name: "pkg: Windows (win-x64)",      runner: windows-2025-vs2026, make: test-pkg-native,      timeout: 40 }
           - { name: "pkg: Web (ubuntu-x64)",       runner: ubuntu-24.04,  make: test-ops-web,         timeout: 40, chrome: true, headless-display: true, wasm-cache: true, wasm-build: true }
 
           # ── Integration tests ──
           - { name: "int: macOS (macos-arm64)",    runner: macos-14,       make: test-example-macos,   timeout: 30, xcode-cache: true, xcode-cache-target: macos }
           - { name: "int: Linux (ubuntu-x64)",     runner: ubuntu-24.04,  make: test-example-linux,   timeout: 30, headless-display: true }
-          - { name: "int: Windows (win-x64)",      runner: windows-2025, make: test-example-windows,  timeout: 40 }
+          - { name: "int: Windows (win-x64)",      runner: windows-2025-vs2026, make: test-example-windows,  timeout: 40 }
           - { name: "int: Android (ubuntu-x64)",   runner: ubuntu-24.04,  make: test-example-android,  timeout: 40, java: true, hw-accel: true, gradle-cache: true, emulator: true }
           - { name: "int: iOS (macos-arm64)",      runner: macos-14,       make: test-example-ios,      timeout: 60, xcode-cache: true, xcode-cache-target: ios, pods-cache: true, simulator: true }
           - { name: "int: Web (ubuntu-x64)",       runner: ubuntu-24.04,  make: test-example-web,      timeout: 40, chrome: true, headless-display: true, wasm-cache: true, wasm-build: true }
@@ -72,7 +72,7 @@ jobs:
           - { name: "verify: iOS (macos-arm64)",    runner: macos-14,       make: verify-ios,           timeout: 40, xcode-cache: true, xcode-cache-target: ios, pods-cache: true }
           - { name: "verify: macOS (macos-arm64)",  runner: macos-14,       make: verify-macos,         timeout: 40, xcode-cache: true, xcode-cache-target: macos }
           - { name: "verify: Linux (ubuntu-x64)",   runner: ubuntu-24.04,  make: verify-linux,         timeout: 30 }
-          - { name: "verify: Windows (win-x64)",    runner: windows-2025, make: verify-windows,       timeout: 40 }
+          - { name: "verify: Windows (win-x64)",    runner: windows-2025-vs2026, make: verify-windows,       timeout: 40 }
           - { name: "verify: Web (ubuntu-x64)",     runner: ubuntu-24.04,  make: verify-web,           timeout: 40, wasm-cache: true, wasm-build: true }
 
     name: ${{ matrix.name }}
@@ -96,6 +96,13 @@ jobs:
           wasm-build: ${{ matrix.wasm-build || 'false' }}
           emulator: ${{ matrix.emulator || 'false' }}
           simulator: ${{ matrix.simulator || 'false' }}
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.make }}-${{ matrix.runner }}
+          path: test-results/
+          if-no-files-found: ignore
 
   # ── All-runners ──
   test-all-runners:
@@ -113,15 +120,15 @@ jobs:
           # https://docs.github.com/en/actions/reference/runners/github-hosted-runners#limitations-for-arm64-macos-runners
           # Non-emulator jobs (verify) run fine on ARM.
           - { name: "verify: Android (macos-arm64)", runner: macos-14,         make: verify-android, timeout: 40, java: true, gradle-cache: true }
-          - { name: "verify: Android (win-x64)",     runner: windows-2025,     make: verify-android, timeout: 60, java: true, gradle-cache: true }
+          - { name: "verify: Android (win-x64)",     runner: windows-2025-vs2026,     make: verify-android, timeout: 60, java: true, gradle-cache: true }
           - { name: "int: Android (macos-intel)",     runner: macos-15-intel,   make: test-example-android, timeout: 40, java: true, hw-accel: true, gradle-cache: true, emulator: true }
           # Web on other runners
           - { name: "pkg: Web (macos-arm64)",      runner: macos-14,       make: test-ops-web,    timeout: 40, chrome: true, wasm-cache: true, wasm-build: true }
-          - { name: "pkg: Web (win-x64)",          runner: windows-2025, make: test-ops-web,    timeout: 40, chrome: true, wasm-cache: true, wasm-build: true }
+          - { name: "pkg: Web (win-x64)",          runner: windows-2025-vs2026, make: test-ops-web,    timeout: 40, chrome: true, wasm-cache: true, wasm-build: true }
           - { name: "int: Web (macos-arm64)",      runner: macos-14,       make: test-example-web, timeout: 40, chrome: true, wasm-cache: true, wasm-build: true }
-          - { name: "int: Web (win-x64)",          runner: windows-2025, make: test-example-web, timeout: 40, chrome: true, wasm-cache: true, wasm-build: true }
+          - { name: "int: Web (win-x64)",          runner: windows-2025-vs2026, make: test-example-web, timeout: 40, chrome: true, wasm-cache: true, wasm-build: true }
           - { name: "verify: Web (macos-arm64)",   runner: macos-14,       make: verify-web,      timeout: 40, wasm-cache: true, wasm-build: true }
-          - { name: "verify: Web (win-x64)",       runner: windows-2025, make: verify-web,      timeout: 40, wasm-cache: true, wasm-build: true }
+          - { name: "verify: Web (win-x64)",       runner: windows-2025-vs2026, make: verify-web,      timeout: 40, wasm-cache: true, wasm-build: true }
 
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
@@ -144,6 +151,13 @@ jobs:
           wasm-build: ${{ matrix.wasm-build || 'false' }}
           emulator: ${{ matrix.emulator || 'false' }}
           simulator: ${{ matrix.simulator || 'false' }}
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.make }}-${{ matrix.runner }}
+          path: test-results/
+          if-no-files-found: ignore
 
   # ── Gate ──
   gate:

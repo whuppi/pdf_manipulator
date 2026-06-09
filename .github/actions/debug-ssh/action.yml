@@ -211,7 +211,7 @@ runs:
         echo "$SSH_CMD" > /tmp/ssh-info/connect.txt
         echo "$BORE_PORT" > /tmp/ssh-info/port.txt
 
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@v7
       with:
         name: ssh-info-${{ runner.os }}
         path: /tmp/ssh-info/

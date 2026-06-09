@@ -13,7 +13,7 @@ on:
       runner:
         description: "Runner for all jobs"
         type: choice
-        options: [ubuntu-24.04, macos-14, windows-2025]
+        options: [ubuntu-24.04, macos-14, windows-2025-vs2026]
         default: ubuntu-24.04
 
 permissions: {}

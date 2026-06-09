@@ -80,6 +80,8 @@ runs:
 
     - uses: ./.github/actions/capabilities/gradle-cache
       if: inputs.gradle-cache == 'true'
+      with:
+        phase: restore
 
     - uses: ./.github/actions/capabilities/xcode-cache
       if: inputs.xcode-cache == 'true'
@@ -114,11 +116,8 @@ runs:
       shell: bash
       run: xvfb-run make ${{ inputs.make-target }}
 
-    # ── Upload test results ──
-    - name: Upload test results
-      if: always()
-      uses: actions/upload-artifact@v7
+    - uses: ./.github/actions/capabilities/gradle-cache
+      if: always() && inputs.gradle-cache == 'true'
       with:
-        name: test-results-${{ inputs.make-target }}-${{ runner.os }}
-        path: test-results/
-        if-no-files-found: ignore
+        phase: save
+

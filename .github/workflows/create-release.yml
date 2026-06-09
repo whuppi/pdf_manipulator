@@ -30,7 +30,7 @@ on:
       runner:
         description: "Runner for infra jobs (gate, discover, upload, publish)"
         type: choice
-        options: [ubuntu-24.04, macos-14, windows-2025]
+        options: [ubuntu-24.04, macos-14, windows-2025-vs2026]
         default: ubuntu-24.04
 
 permissions:
@@ -109,7 +109,7 @@ jobs:
           - { name: android, runner: ubuntu-24.04 }
           - { name: linux,   runner: ubuntu-24.04 }
           - { name: wasm,    runner: ubuntu-24.04 }
-          - { name: windows, runner: windows-2025 }
+          - { name: windows, runner: windows-2025-vs2026 }
     name: compile-${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
     steps:
