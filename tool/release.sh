@@ -461,11 +461,23 @@ cmd_gate() {
   fi
 
   if grep -Fqx "$target_file" <<< "$changed_files"; then
-    local found_version
-    found_version=$(get_changelog_versions "$target_file" | head -1 || true)
-    gh_output "should_run" "true"
-    gh_output "version" "${found_version:-unknown}"
-    echo "Gate: $target_file changed, version=$found_version"
+    # Check if a NEW version header was added (not just file edits).
+    # Compare versions in the file before vs after this push.
+    local versions_after versions_before new_version
+    versions_after=$(get_changelog_versions "$target_file")
+    versions_before=$(git show "${BEFORE:-HEAD~1}:$target_file" 2>/dev/null \
+      | sed -n 's/^## \([^ ]*\).*/\1/p' || true)
+    new_version=$(comm -23 <(echo "$versions_after" | sort) <(echo "$versions_before" | sort) | head -1)
+
+    if [[ -n "$new_version" ]]; then
+      gh_output "should_run" "true"
+      gh_output "version" "$new_version"
+      echo "Gate: new version $new_version added to $target_file"
+    else
+      gh_output "should_run" "false"
+      gh_output "version" ""
+      echo "Gate: $target_file changed but no new version header added, skipping"
+    fi
   else
     gh_output "should_run" "false"
     gh_output "version" ""
