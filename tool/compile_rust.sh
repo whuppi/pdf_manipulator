@@ -301,6 +301,10 @@ do_wasm() {
     fi
   fi
 
+  # Resolve COMPILE_OUTPUT_DIR before cd — relative paths would
+  # break after changing to the vendor directory.
+  local release_out="${COMPILE_OUTPUT_DIR:+$(cd "$PKG_ROOT" && mkdir -p "$COMPILE_OUTPUT_DIR/wasm" && cd "$COMPILE_OUTPUT_DIR/wasm" && pwd)}"
+
   echo "=== WASM: compile ==="
   ensure_target wasm32-unknown-unknown
   cd "$VENDOR"
@@ -329,12 +333,11 @@ do_wasm() {
   ls -lh "$out"/pdf_oxide*
   echo "Binary: $(wc -c < "$out/pdf_oxide_bg.wasm") bytes"
   echo ""
-  # Copy to COMPILE_OUTPUT_DIR if set (release pipeline uses this)
-  local release_out="${COMPILE_OUTPUT_DIR:-}"
-  if [ -n "$release_out" ]; then
-    mkdir -p "$release_out/wasm"
-    cp "$out/pdf_oxide.js" "$out/pdf_oxide_bg.wasm" "$release_out/wasm/"
-    echo "Copied to $release_out/wasm/"
+  # Copy to COMPILE_OUTPUT_DIR if set (release pipeline uses this).
+  # release_out was resolved to absolute path before cd above.
+  if [ -n "${release_out:-}" ]; then
+    cp "$out/pdf_oxide.js" "$out/pdf_oxide_bg.wasm" "$release_out/"
+    echo "Copied to $release_out/"
   fi
 
   echo "Done. Commit web_assets/ to ship the WASM binary."
