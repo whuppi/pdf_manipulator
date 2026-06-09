@@ -20,6 +20,21 @@ on:
         description: "Portability — test every valid runner per target"
         type: boolean
         default: true
+      filter:
+        description: "Filter by target (android, web...) or type (pkg, int, verify)"
+        type: choice
+        options:
+          - all
+          - android
+          - ios
+          - macos
+          - linux
+          - windows
+          - web
+          - pkg
+          - int
+          - verify
+        default: all
       runner:
         description: "Runner for infra jobs (gate)"
         type: choice
@@ -40,14 +55,17 @@ jobs:
     outputs:
       runner: ${{ steps.resolve.outputs.runner }}
       portability: ${{ steps.resolve.outputs.portability }}
+      filter: ${{ steps.resolve.outputs.filter }}
     steps:
       - id: resolve
         run: |
           echo "runner=${{ inputs.runner || env.DEFAULT_RUNNER }}" >> $GITHUB_OUTPUT
           echo "portability=${{ inputs.portability || env.DEFAULT_PORTABILITY }}" >> $GITHUB_OUTPUT
+          echo "filter=${{ inputs.filter || 'all' }}" >> $GITHUB_OUTPUT
 
   # ── Core ──
   core:
+    needs: inputs
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.action == 'labeled' && github.event.label.name == 'ready-to-test')
@@ -80,10 +98,28 @@ jobs:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.timeout }}
+    env:
+      FILTER: ${{ needs.inputs.outputs.filter }}
     steps:
+      - name: Check filter
+        id: filter
+        shell: bash
+        run: |
+          NAME="${{ matrix.name }}"
+          F="$FILTER"
+          if [[ "$F" == "all" || -z "$F" ]]; then
+            echo "match=true" >> $GITHUB_OUTPUT
+          elif echo "$NAME" | grep -qi "$F"; then
+            echo "match=true" >> $GITHUB_OUTPUT
+          else
+            echo "Skipped by filter: $F ∉ $NAME"
+            echo "match=false" >> $GITHUB_OUTPUT
+          fi
       - uses: actions/checkout@v6
+        if: steps.filter.outputs.match == 'true'
         with: { submodules: recursive }
       - uses: ./.github/actions/make-target
+        if: steps.filter.outputs.match == 'true'
         with:
           make-target: ${{ matrix.make }}
           java: ${{ matrix.java || 'false' }}
@@ -99,7 +135,7 @@ jobs:
           emulator: ${{ matrix.emulator || 'false' }}
           simulator: ${{ matrix.simulator || 'false' }}
       - name: Upload test results
-        if: always()
+        if: always() && steps.filter.outputs.match == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.make }}-${{ matrix.runner }}
@@ -136,10 +172,28 @@ jobs:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.timeout }}
+    env:
+      FILTER: ${{ needs.inputs.outputs.filter }}
     steps:
+      - name: Check filter
+        id: filter
+        shell: bash
+        run: |
+          NAME="${{ matrix.name }}"
+          F="$FILTER"
+          if [[ "$F" == "all" || -z "$F" ]]; then
+            echo "match=true" >> $GITHUB_OUTPUT
+          elif echo "$NAME" | grep -qi "$F"; then
+            echo "match=true" >> $GITHUB_OUTPUT
+          else
+            echo "Skipped by filter: $F ∉ $NAME"
+            echo "match=false" >> $GITHUB_OUTPUT
+          fi
       - uses: actions/checkout@v6
+        if: steps.filter.outputs.match == 'true'
         with: { submodules: recursive }
       - uses: ./.github/actions/make-target
+        if: steps.filter.outputs.match == 'true'
         with:
           make-target: ${{ matrix.make }}
           java: ${{ matrix.java || 'false' }}
@@ -155,7 +209,7 @@ jobs:
           emulator: ${{ matrix.emulator || 'false' }}
           simulator: ${{ matrix.simulator || 'false' }}
       - name: Upload test results
-        if: always()
+        if: always() && steps.filter.outputs.match == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.make }}-${{ matrix.runner }}
