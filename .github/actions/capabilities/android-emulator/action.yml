@@ -55,21 +55,26 @@ runs:
         cat > /tmp/emulator-timeout.sh << 'EMUWRAP'
         #!/usr/bin/env bash
         LIMIT=${1:-2700}
-        bash /tmp/emulator-script.sh &
-        PID=$!
-        ELAPSED=0
-        while kill -0 $PID 2>/dev/null; do
-          if [ $ELAPSED -ge $LIMIT ]; then
-            echo "::warning::Script still running after ${LIMIT}s — killing (likely hung on teardown)"
-            kill -9 $PID 2>/dev/null
-            wait $PID 2>/dev/null
-            exit 0
-          fi
-          sleep 5
-          ELAPSED=$((ELAPSED + 5))
-        done
-        wait $PID 2>/dev/null
-        exit $?
+        if [ "$LIMIT" -gt 0 ] 2>/dev/null; then
+          bash /tmp/emulator-script.sh &
+          PID=$!
+          ELAPSED=0
+          while kill -0 $PID 2>/dev/null; do
+            if [ $ELAPSED -ge $LIMIT ]; then
+              echo "::warning::Script still running after ${LIMIT}s — killing (likely hung on teardown)"
+              kill -9 $PID 2>/dev/null
+              wait $PID 2>/dev/null
+              exit 0
+            fi
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+          done
+          wait $PID 2>/dev/null
+          exit $?
+        else
+          bash /tmp/emulator-script.sh
+          exit $?
+        fi
         EMUWRAP
         chmod +x /tmp/emulator-timeout.sh /tmp/emulator-script.sh
 
