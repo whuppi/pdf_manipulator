@@ -307,7 +307,7 @@ user-facing text (README, pubspec).
 
 6. **Runners are configurable.** Every workflow defines its runner
    as a `workflow_dispatch` input with a default. No hardcoded
-   `runs-on` except the 2-second resolver job. Infra jobs (gate,
+   `runs-on` except the 2-second `inputs` job. Infra jobs (gate,
    triage, lint) use one configurable runner. Test/compile jobs use
    per-row matrix runners.
 
@@ -327,12 +327,12 @@ user-facing text (README, pubspec).
 │   ├── chrome/            Chrome + ChromeDriver (Linux/macOS/Windows)
 │   ├── headless-display/  xvfb on Linux, no-op elsewhere
 │   ├── hw-accel/          KVM on Linux, no-op elsewhere
-│   ├── gradle-cache/      Gradle downloads cache
+│   ├── gradle-cache/      Two-phase restore/save + daemon stop
 │   ├── xcode-cache/       Xcode derived data cache
 │   ├── pods-cache/        CocoaPods cache
 │   ├── wasm-cache/        WASM build output cache
 │   ├── wasm-build/        Compile WASM from source
-│   ├── android-emulator/  x86_64 on Linux, arm64 on macOS
+│   ├── android-emulator/  x86_64 + aosp_atd (not macOS ARM — no nested virt)
 │   └── ios-simulator/     macOS only
 ├── make-target/           Orchestrator (capabilities → make)
 └── debug-ssh/             SSH tunnel for CI debugging
@@ -367,9 +367,11 @@ Each capability:
 | Integration tests | macOS, Linux, Windows, Android (emulator), iOS (simulator), Web (Chrome) |
 | Verify (release builds) | Android, iOS, macOS, Linux, Windows, Web |
 
-**All-runners** — every other valid runner combo, dispatch only.
-Verifies nothing is runner-dependent. Android on macos + windows,
-Web on macos + windows.
+**All-runners** — every other valid runner combo, controlled by
+`DEFAULT_ALL_RUNNERS` env var (runs on all triggers when true).
+Verifies nothing is runner-dependent. Android emulator on
+`macos-15-intel` (ARM M1 can't nest VMs) and `windows`.
+Android verify on macos + windows. Web on macos + windows.
 
 ### Dependency ownership
 
@@ -377,7 +379,7 @@ Web on macos + windows.
 |---|---|---|---|
 | Rust targets | `compile_rust.sh`, `hook/build.dart` | Auto-install (safe) | Auto-install (safe) |
 | wasm-bindgen-cli | `compile_rust.sh` | Auto-install (safe) | Auto-install (safe) |
-| binaryen | `compile_rust.sh` | Auto-install | Error with instructions |
+| binaryen | `compile_rust.sh` | GitHub releases download | Error with instructions |
 | gcc-aarch64 cross | `compile_rust.sh` | Auto-install | Error with instructions |
 | GTK + ninja | Makefile | Auto-install | Error with instructions |
 | build.json reads | `compile_rust.sh`, `release.sh` | Pure bash `sed`/`grep` | Same |
