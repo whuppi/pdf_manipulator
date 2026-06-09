@@ -24,7 +24,7 @@
 # ─────────────────────────────────────────
 #   1. gate      → --gate            should this push trigger anything?
 #   2. discover  → --discover        find version, stamp tag, create release
-#   3. compile   → (workflow)        checkout tag, build per platform
+#   3. compile   → (workflow)        checkout tag, build per target
 #   4. upload    → (workflow)        upload binaries
 #                  --add-git-install
 #                  --update-tag-hashes
@@ -46,6 +46,7 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # ════════════════════════════════════════════════════════════════════
 # § 1 — Arguments and globals
@@ -55,8 +56,9 @@ MODE="${1:---help}"
 TAG="${2:-}"
 VERSION="${TAG:+${TAG#v}}"
 
-_REPO_FROM_JSON=$(python3 -c "import json; print(json.load(open('build.json'))['repo'])")
-REPO="${GITHUB_REPOSITORY:-$_REPO_FROM_JSON}"
+source "$SCRIPT_DIR/lib.sh"
+
+REPO="${GITHUB_REPOSITORY:-$(_json_get repo)}"
 REPO_URL="https://github.com/$REPO"
 PKG_NAME="pdf_manipulator"
 
@@ -143,15 +145,9 @@ pick_source_file() {
 # Fetch every published version of the package from pub.dev.
 get_published_versions() {
   curl -sS "https://pub.dev/api/packages/$PKG_NAME" 2>/dev/null \
-    | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    for v in data.get('versions', []):
-        print(v['version'])
-except Exception:
-    pass
-" 2>/dev/null || true
+    | grep -oE '"version":"[^"]*"' \
+    | sed 's/"version":"//;s/"//' \
+    | sort -t. -k1,1n -k2,2n -k3,3n
 }
 
 # Stamp a version string into pubspec.yaml, version.dart, and README.md.
@@ -186,11 +182,11 @@ stamp_asset_hashes() {
 
   # All release assets with digests (native + WASM), excluding source archives.
   local release_entries=""
-  release_entries=$(gh api "repos/$REPO/releases/tags/$tag" \
-    --jq '.assets[]
-          | select(.digest != null
-                   and (.name | startswith("Source") | not))
-          | "\(.name)\t\(.digest)"' \
+  local jq_filter
+  read -r -d '' jq_filter <<'JQ' || true
+.assets[]|select(.digest!=null and (.name|startswith("Source")|not))|"\(.name)\t\(.digest)"
+JQ
+  release_entries=$(gh api "repos/$REPO/releases/tags/$tag" --jq "$jq_filter" \
     | sort | while IFS=$'\t' read -r name digest; do
       hash="${digest#sha256:}"
       echo "  '$name': '$hash',"
@@ -209,14 +205,17 @@ stamp_asset_hashes() {
       web_entries+="  '$asset_name': '$hash',"$'\n'
       echo "  $asset_name ... ${hash:0:12}..." >&2
     fi
-  done < <(python3 -c "
-import json
-d = json.load(open('build.json'))
-skip = set(d['wasmBuildOutputs'])
-for local, asset in d['web'].items():
-    if local not in skip:
-        print(f'{local}\t{asset}')
-")
+  done < <(
+    # Read web assets from build.json, skip wasmBuildOutputs.
+    # Pure bash — no python3, no jq.
+    wasm_outputs=$(sed -n 's/.*"wasmBuildOutputs": *\[\(.*\)\].*/\1/p' build.json | tr -d '" ')
+    sed -n '/"web"/,/}/p' build.json | grep ':' | grep -v '"web"' | while IFS=: read -r key val; do
+      local_name=$(echo "$key" | tr -d ' "')
+      asset_name=$(echo "$val" | tr -d ' ",' )
+      echo "$wasm_outputs" | grep -qw "$local_name" && continue
+      echo "$local_name	$asset_name"
+    done
+  )
 
   local all_entries
   all_entries=$(printf '%s\n%s' "$release_entries" "$web_entries" | sed '/^$/d')

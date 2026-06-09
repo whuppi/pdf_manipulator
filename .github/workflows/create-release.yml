@@ -1,7 +1,12 @@
 # Release pipeline: gate → discover → compile → upload → publish.
 #
 # All release logic lives in tool/release.sh. This workflow only
-# handles job orchestration (checkout, compile, upload, publish).
+# handles job orchestration.
+#
+# Runners: infra jobs (gate, discover, upload, publish) use one
+# configurable runner (default: ubuntu-24.04). Compile jobs use
+# target-specific runners in a matrix (macos for ios/macos,
+# ubuntu for android/linux/wasm, windows for windows).
 #
 # Automatic on changelog push. Manual via workflow_dispatch.
 # Publish job requires environment approval (human gate before pub.dev).
@@ -22,18 +27,33 @@ on:
         default: 'dev'
         type: choice
         options: [dev, prod]
+      runner:
+        description: "Runner for infra jobs (gate, discover, upload, publish)"
+        type: choice
+        options: [ubuntu-24.04, macos-14, windows-2025-vs2026]
+        default: ubuntu-24.04
 
 permissions:
   contents: write
 
 env:
   COMPILE_OUTPUT_DIR: out
+  DEFAULT_RUNNER: ubuntu-24.04
 
 jobs:
+  inputs:
+    runs-on: ubuntu-24.04
+    outputs:
+      runner: ${{ steps.resolve.outputs.runner }}
+    steps:
+      - id: resolve
+        run: echo "runner=${{ inputs.runner || env.DEFAULT_RUNNER }}" >> $GITHUB_OUTPUT
+
   # ── Gate ─────────────────────────────────────────────────────────
   gate:
     name: Release gate
-    runs-on: ubuntu-latest
+    needs: inputs
+    runs-on: ${{ needs.inputs.outputs.runner }}
     outputs:
       should_run: ${{ steps.check.outputs.should_run }}
       version: ${{ steps.check.outputs.version }}
@@ -53,12 +73,12 @@ jobs:
   # ── Discover version + create release ────────────────────────────
   discover:
     name: Discover versions
-    needs: gate
+    needs: [inputs, gate]
     if: needs.gate.outputs.should_run == 'true'
     concurrency:
       group: release-${{ needs.gate.outputs.version || github.run_id }}
       cancel-in-progress: true
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.inputs.outputs.runner }}
     outputs:
       tag: ${{ steps.find.outputs.tag }}
       version: ${{ steps.find.outputs.version }}
@@ -77,78 +97,40 @@ jobs:
         run: bash tool/release.sh --discover
 
   # ── Compile all targets ──────────────────────────────────────────
-  compile-macos:
+  compile:
     needs: discover
     if: needs.discover.outputs.has_release == 'true'
-    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macos,   runner: macos-14 }
+          - { name: ios,     runner: macos-14 }
+          - { name: android, runner: ubuntu-24.04 }
+          - { name: linux,   runner: ubuntu-24.04 }
+          - { name: wasm,    runner: ubuntu-24.04 }
+          - { name: windows, runner: windows-2025-vs2026 }
+    name: compile-${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
-        with: { ref: '${{ needs.discover.outputs.tag }}' }
-      - uses: ./.github/actions/compile-macos
+        with:
+          ref: ${{ needs.discover.outputs.tag }}
+          submodules: recursive
+      - uses: ./.github/actions/make-target
+        with:
+          make-target: compile-${{ matrix.name }}
       - uses: actions/upload-artifact@v7
-        with: { name: bin-macos, path: out/ }
-
-  compile-ios:
-    needs: discover
-    if: needs.discover.outputs.has_release == 'true'
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v6
-        with: { ref: '${{ needs.discover.outputs.tag }}' }
-      - uses: ./.github/actions/compile-ios
-      - uses: actions/upload-artifact@v7
-        with: { name: bin-ios, path: out/ }
-
-  compile-android:
-    needs: discover
-    if: needs.discover.outputs.has_release == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with: { ref: '${{ needs.discover.outputs.tag }}' }
-      - uses: ./.github/actions/compile-android
-      - uses: actions/upload-artifact@v7
-        with: { name: bin-android, path: out/ }
-
-  compile-linux:
-    needs: discover
-    if: needs.discover.outputs.has_release == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with: { ref: '${{ needs.discover.outputs.tag }}' }
-      - uses: ./.github/actions/compile-linux
-      - uses: actions/upload-artifact@v7
-        with: { name: bin-linux, path: out/ }
-
-  compile-wasm:
-    needs: discover
-    if: needs.discover.outputs.has_release == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with: { ref: '${{ needs.discover.outputs.tag }}' }
-      - uses: ./.github/actions/compile-wasm
-      - uses: actions/upload-artifact@v7
-        with: { name: bin-wasm, path: out/ }
-
-  compile-windows:
-    needs: discover
-    if: needs.discover.outputs.has_release == 'true'
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v6
-        with: { ref: '${{ needs.discover.outputs.tag }}' }
-      - uses: ./.github/actions/compile-windows
-      - uses: actions/upload-artifact@v7
-        with: { name: bin-windows, path: out/ }
+        with:
+          name: bin-${{ matrix.name }}
+          path: out/
 
   # ── Upload binaries + stamp tag ──────────────────────────────────
   upload-assets:
     name: Upload Release Assets
-    needs: [discover, compile-macos, compile-ios, compile-android, compile-linux, compile-windows, compile-wasm]
+    needs: [inputs, discover, compile]
     if: needs.discover.outputs.has_release == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
       - uses: actions/download-artifact@v8
         with: { path: artifacts/ }
@@ -204,9 +186,9 @@ jobs:
   # ── Publish to pub.dev ───────────────────────────────────────────
   publish:
     name: Publish to pub.dev
-    needs: [discover, upload-assets]
+    needs: [inputs, discover, upload-assets]
     if: needs.discover.outputs.has_release == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.inputs.outputs.runner }}
     environment: ${{ inputs.branch || github.ref_name }}
     steps:
       - uses: actions/checkout@v6

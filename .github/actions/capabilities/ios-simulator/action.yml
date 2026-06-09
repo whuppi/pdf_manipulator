@@ -1,0 +1,17 @@
+name: iOS Simulator
+description: >
+  Boot iOS simulator.
+  macOS: boots via simulator-action. Linux/Windows: not supported (requires Xcode).
+
+inputs:
+  model:
+    description: "Simulator device model"
+    required: false
+    default: 'iPhone 16'
+
+runs:
+  using: composite
+  steps:
+    - uses: futureware-tech/simulator-action@v4
+      with:
+        model: ${{ inputs.model }}

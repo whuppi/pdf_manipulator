@@ -4,7 +4,7 @@
 // STRUCTURE
 // ═══════════════════════════════════════════════════════════════════
 //
-//   main()           Flutter hook entry point (native platforms only).
+//   main()           Flutter hook entry point (native targets only).
 //                    Resolves the binary, registers it with Flutter.
 //
 //   resolveWeb()     Public API for bin/setup.dart (web assets).
@@ -136,11 +136,11 @@ void main(List<String> args) async {
     await _resolveNative(
       packageRoot: input.packageRoot,
       version: readVersion(input.packageRoot),
-      platform: _platformKey(codeConfig),
+      targetKey: _targetKey(codeConfig),
       libFileName: libFileName,
       dest: outFile,
       cacheFile: File.fromUri(
-        input.outputDirectoryShared.resolve(libFileName),
+        input.outputDirectoryShared.resolve('$targetTriple/$libFileName'),
       ),
       targetTriple: targetTriple,
       linkMode: linkMode,
@@ -165,7 +165,7 @@ void main(List<String> args) async {
 Future<void> _resolveNative({
   required Uri packageRoot,
   required String version,
-  required String platform,
+  required String targetKey,
   required String libFileName,
   required File dest,
   File? cacheFile,
@@ -174,7 +174,7 @@ Future<void> _resolveNative({
   BuildInput? buildInput,
   bool force = false,
 }) async {
-  final assetName = '$platform-$libFileName';
+  final assetName = '$targetKey-$libFileName';
 
   await resolveAsset(ResolveRequest(
     assetName: assetName,
@@ -312,6 +312,16 @@ Future<void> _compileNativeFromHook(
       p.join(p.fromUri(input.outputDirectory), 'cargo_target');
 
   _log.info('compiling from source for $targetTriple');
+
+  // Ensure the Rust target is installed (fresh CI or formatted laptop)
+  final targetCheck = Process.runSync(
+    'rustup', ['target', 'list', '--installed'],
+  );
+  if (targetCheck.exitCode == 0 &&
+      !(targetCheck.stdout as String).contains(targetTriple)) {
+    _log.info('installing Rust target: $targetTriple');
+    Process.runSync('rustup', ['target', 'add', targetTriple]);
+  }
 
   final env = <String, String>{};
   final codeConfig = input.config.code;
@@ -537,7 +547,7 @@ String _targetTriple(CodeConfig code) {
   };
 }
 
-String _platformKey(CodeConfig code) {
+String _targetKey(CodeConfig code) {
   if (code.targetOS == OS.iOS &&
       code.targetArchitecture == Architecture.arm64 &&
       code.iOS.targetSdk == IOSSdk.iPhoneSimulator) {

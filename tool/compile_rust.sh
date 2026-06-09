@@ -13,7 +13,7 @@
 #   ./tool/compile_rust.sh all          native + wasm
 #   ./tool/compile_rust.sh --features   Print feature flags (for Makefile + build.dart)
 #
-# CI calls the specific platform command. Local dev calls native or all.
+# CI calls the specific target command. Local dev calls native or all.
 #
 # Prerequisites:
 #   Rust toolchain with targets installed (rustup target add ...)
@@ -40,8 +40,16 @@ VENDOR="$PKG_ROOT/vendor/pdf_oxide"
 # Feature flags — read from build.json (single source of truth)
 # ═══════════════════════════════════════════════════════════════════
 
-NATIVE_FEATURES=$(python3 -c "import json; print(json.load(open('$PKG_ROOT/build.json'))['features']['native'])")
-WASM_FEATURES=$(python3 -c "import json; print(json.load(open('$PKG_ROOT/build.json'))['features']['wasm'])")
+# Rust check — hard error if not installed
+if ! command -v cargo &>/dev/null; then
+  echo "Error: Rust not installed. Get it at https://rustup.rs"
+  exit 1
+fi
+
+source "$SCRIPT_DIR/lib.sh"
+
+NATIVE_FEATURES=$(_json_get 'native')
+WASM_FEATURES=$(_json_get 'wasm')
 
 if [[ "${1:-}" == "--features" ]]; then
   case "${2:-all}" in
@@ -64,6 +72,7 @@ MODE="${1:-native}"
 # Native — shared helpers
 # ═══════════════════════════════════════════════════════════════════
 
+
 # Compile one Rust target and copy the library to the output directory.
 #   $1 = Rust target triple
 #   $2 = output subdirectory name
@@ -73,6 +82,7 @@ compile_one() {
   local out="${COMPILE_OUTPUT_DIR:-$PKG_ROOT/build_output}"
 
   echo "=== Native: $target ==="
+  ensure_target "$target"
   cargo build --manifest-path "$MANIFEST" --lib --release \
     --target "$target" --features "$NATIVE_FEATURES"
 
@@ -121,7 +131,7 @@ native_summary() {
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Platform commands — CI calls these directly
+# Target commands — CI calls these directly
 # ═══════════════════════════════════════════════════════════════════
 
 do_macos() {
@@ -144,6 +154,16 @@ do_ios() {
 
 do_linux() {
   compile_one "x86_64-unknown-linux-gnu" "linux-x64" "libpdf_oxide.so"
+
+  # Cross-compiler for arm64
+  if ! command -v aarch64-linux-gnu-gcc &>/dev/null; then
+    if [ -n "${CI:-}" ]; then
+      sudo apt-get update -qq && sudo apt-get install -y -qq gcc-aarch64-linux-gnu
+    else
+      echo "Error: aarch64-linux-gnu-gcc not found. Run: sudo apt-get install -y gcc-aarch64-linux-gnu"
+      exit 1
+    fi
+  fi
 
   export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER="aarch64-linux-gnu-gcc"
   compile_one "aarch64-unknown-linux-gnu" "linux-arm64" "libpdf_oxide.so"
@@ -180,7 +200,7 @@ do_windows() {
 # Auto-detect — local dev convenience
 # ═══════════════════════════════════════════════════════════════════
 # Builds whatever this host supports. CI never calls this — it uses
-# the explicit platform commands above.
+# the explicit target commands above.
 
 do_native() {
   if [[ "$(uname)" == "Darwin" ]]; then
@@ -239,7 +259,48 @@ do_wasm() {
     cargo install wasm-bindgen-cli --version "$wb_required"
   fi
 
+  # Ensure wasm-opt (binaryen) is installed.
+  if ! command -v wasm-opt &>/dev/null; then
+    if [ -n "${CI:-}" ]; then
+      echo "=== WASM: installing binaryen (wasm-opt) ==="
+      BINARYEN_VER="version_130"
+      case "$(uname -s)" in
+        Linux*)
+          BINARYEN_URL="https://github.com/WebAssembly/binaryen/releases/download/$BINARYEN_VER/binaryen-$BINARYEN_VER-x86_64-linux.tar.gz"
+          ;;
+        Darwin*)
+          BINARYEN_URL="https://github.com/WebAssembly/binaryen/releases/download/$BINARYEN_VER/binaryen-$BINARYEN_VER-arm64-macos.tar.gz"
+          ;;
+        MINGW*|MSYS*)
+          BINARYEN_URL="https://github.com/WebAssembly/binaryen/releases/download/$BINARYEN_VER/binaryen-$BINARYEN_VER-x86_64-windows.tar.gz"
+          ;;
+      esac
+      echo "  $BINARYEN_VER"
+      local tmp="${RUNNER_TEMP:-/tmp}"
+      # Convert Windows paths (D:\...) to Unix (/d/...) so tar doesn't
+      # interpret the colon as a remote host.
+      if command -v cygpath &>/dev/null; then
+        tmp=$(cygpath -u "$tmp")
+      fi
+      curl -sSL --fail "$BINARYEN_URL" -o "$tmp/binaryen.tar.gz" \
+        || { echo "Error: failed to download binaryen $BINARYEN_VER"; exit 1; }
+      tar xzf "$tmp/binaryen.tar.gz" -C "$tmp"
+      local cargo_bin="$HOME/.cargo/bin"
+      mkdir -p "$cargo_bin"
+      cp "$tmp/binaryen-$BINARYEN_VER/bin/wasm-opt"* "$cargo_bin/" \
+        || { echo "Error: could not copy wasm-opt to $cargo_bin"; exit 1; }
+      rm -rf "$tmp/binaryen.tar.gz" "$tmp/binaryen-$BINARYEN_VER"
+    else
+      echo "Error: wasm-opt not found. Install binaryen:"
+      echo "  macOS:   brew install binaryen"
+      echo "  Linux:   sudo apt-get install binaryen"
+      echo "  Windows: https://github.com/WebAssembly/binaryen/releases"
+      exit 1
+    fi
+  fi
+
   echo "=== WASM: compile ==="
+  ensure_target wasm32-unknown-unknown
   cd "$VENDOR"
   cargo build --lib \
     --target wasm32-unknown-unknown \
@@ -266,6 +327,14 @@ do_wasm() {
   ls -lh "$out"/pdf_oxide*
   echo "Binary: $(wc -c < "$out/pdf_oxide_bg.wasm") bytes"
   echo ""
+  # Copy to COMPILE_OUTPUT_DIR if set (release pipeline uses this)
+  local release_out="${COMPILE_OUTPUT_DIR:-}"
+  if [ -n "$release_out" ]; then
+    mkdir -p "$release_out/wasm"
+    cp "$out/pdf_oxide.js" "$out/pdf_oxide_bg.wasm" "$release_out/wasm/"
+    echo "Copied to $release_out/wasm/"
+  fi
+
   echo "Done. Commit web_assets/ to ship the WASM binary."
 }
 

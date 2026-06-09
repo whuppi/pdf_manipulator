@@ -1,0 +1,121 @@
+name: Android Emulator
+description: >
+  Boot Android emulator and run a script inside it.
+
+  Target: aosp_atd (Automated Test Device) — stripped-down image
+  built for CI. No Google Play, minimal UI, fast boot. Lightest
+  available image. Weight hierarchy:
+    google_apis_playstore > google_apis > default > aosp_atd
+
+  Arch: x86_64 on all runners. Linux uses KVM. macOS Intel uses
+  HAXM/HVF. Windows uses WHPX.
+
+  Linux/macOS use reactivecircus/android-emulator-runner. Windows
+  uses a manual boot script (the action doesn't support Windows).
+
+  macOS ARM runners (M1) cannot run emulators — nested
+  virtualization unsupported on M1 hardware.
+  https://docs.github.com/en/actions/reference/runners/github-hosted-runners#limitations-for-arm64-macos-runners
+
+inputs:
+  script:
+    description: "Command to run while emulator is alive"
+    required: true
+  api-level:
+    description: "Android API level (30 is lightest ATD available)"
+    required: false
+    default: '30'
+
+runs:
+  using: composite
+  steps:
+    - name: Start adb server
+      shell: bash
+      run: |
+        $ANDROID_HOME/platform-tools/adb start-server
+        $ANDROID_HOME/platform-tools/adb devices
+
+    # ── Linux / macOS — use the action ──
+    - name: Emulator (Linux/macOS)
+      if: runner.os != 'Windows'
+      uses: reactivecircus/android-emulator-runner@v2
+      with:
+        api-level: ${{ inputs.api-level }}
+        arch: x86_64
+        target: aosp_atd
+        force-avd-creation: false
+        emulator-options: -no-snapshot-save -no-window -noaudio -no-boot-anim
+        emulator-boot-timeout: 600
+        disable-animations: true
+        script: |
+          ${{ inputs.script }}
+          adb -s emulator-5554 emu kill || true
+          pkill -f crashpad_handler || true
+
+    # ── Windows — manual boot (action doesn't support Windows) ──
+    # Git Bash needs Unix paths — cygpath converts C:\Android\... to /c/Android/...
+    - name: Install system image (Windows)
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        SDK="$(cygpath "$ANDROID_HOME")"
+        SDKMGR="$(find "$SDK/cmdline-tools" -name "sdkmanager*" -type f | head -1)"
+        echo "sdkmanager: $SDKMGR"
+        yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+        "$SDKMGR" \
+          "system-images;android-${{ inputs.api-level }};aosp_atd;x86_64" \
+          "platform-tools" \
+          "emulator" > /dev/null
+
+    - name: Create AVD (Windows)
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        SDK="$(cygpath "$ANDROID_HOME")"
+        AVDMGR="$(find "$SDK/cmdline-tools" -name "avdmanager*" -type f | head -1)"
+        echo no | "$AVDMGR" create avd \
+          --force -n test \
+          --package "system-images;android-${{ inputs.api-level }};aosp_atd;x86_64"
+
+    - name: Boot emulator (Windows)
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        SDK="$(cygpath "$ANDROID_HOME")"
+        "$SDK/emulator/emulator" -port 5554 -avd test \
+          -no-snapshot-save -no-window -noaudio -no-boot-anim &
+
+        echo "Waiting for emulator to boot..."
+        TIMEOUT=600
+        ELAPSED=0
+        while [ $ELAPSED -lt $TIMEOUT ]; do
+          RESULT=$("$SDK/platform-tools/adb" -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null || true)
+          if [ "$RESULT" = "1" ]; then
+            echo "Emulator booted in ${ELAPSED}s."
+            break
+          fi
+          sleep 2
+          ELAPSED=$((ELAPSED + 2))
+        done
+
+        if [ "$RESULT" != "1" ]; then
+          echo "::error::Emulator failed to boot within ${TIMEOUT}s"
+          exit 1
+        fi
+
+        "$SDK/platform-tools/adb" -s emulator-5554 shell input keyevent 82
+        "$SDK/platform-tools/adb" -s emulator-5554 shell settings put global window_animation_scale 0.0
+        "$SDK/platform-tools/adb" -s emulator-5554 shell settings put global transition_animation_scale 0.0
+        "$SDK/platform-tools/adb" -s emulator-5554 shell settings put global animator_duration_scale 0.0
+
+    - name: Run script (Windows)
+      if: runner.os == 'Windows'
+      shell: bash
+      run: ${{ inputs.script }}
+
+    - name: Kill emulator (Windows)
+      if: always() && runner.os == 'Windows'
+      shell: bash
+      run: |
+        SDK="$(cygpath "$ANDROID_HOME")"
+        "$SDK/platform-tools/adb" -s emulator-5554 emu kill || true

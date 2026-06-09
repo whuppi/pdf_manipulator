@@ -1,0 +1,13 @@
+name: WASM Build
+description: Compile WASM from source if not cached.
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        if [ -f web_assets/pdf_oxide_bg.wasm ]; then
+          echo "WASM cached — skipping build"
+        else
+          make build-wasm
+        fi

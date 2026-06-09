@@ -38,8 +38,61 @@ cd "$PKG_ROOT"
 
 # ── Rust analysis (warnings in our patched lines only) ──────────────
 
+source "$SCRIPT_DIR/lib.sh"
+
 NATIVE_FEATURES=$(bash "$SCRIPT_DIR/compile_rust.sh" --features native)
 WASM_FEATURES=$(bash "$SCRIPT_DIR/compile_rust.sh" --features wasm)
+
+# Filter cargo warnings to only lines we changed vs upstream base tag.
+_filter_warnings() {
+  local diff_text="$1"
+  declare -A changed_files
+  local cur_file=""
+  while IFS= read -r line; do
+    case "$line" in
+      "+++ b/"*)
+        cur_file="${line#'+++ b/'}"
+        ;;
+      "@@"*)
+        local start count
+        start=$(echo "$line" | sed -n 's/.*+\([0-9][0-9]*\).*/\1/p')
+        count=$(echo "$line" | sed -n 's/.*+[0-9][0-9]*,\([0-9][0-9]*\).*/\1/p')
+        count=${count:-1}
+        [ "$count" -eq 0 ] && count=1
+        for (( i=start; i<start+count; i++ )); do
+          changed_files["${cur_file}:${i}"]=1
+        done
+        ;;
+    esac
+  done <<< "$diff_text"
+
+  local warns=0 skipped=0
+  while IFS= read -r json_line; do
+    echo "$json_line" | grep -q '"reason":"compiler-message"' || continue
+    echo "$json_line" | grep -q '"level":"warning"' || continue
+    local span_file span_line msg_text
+    span_file=$(echo "$json_line" | grep -oE '"file_name":"[^"]*"' | head -1 | sed 's/"file_name":"//;s/"//')
+    span_line=$(echo "$json_line" | grep -oE '"line_start":[0-9]+' | head -1 | sed 's/"line_start"://')
+    msg_text=$(echo "$json_line" | sed -n 's/.*"message":"\([^"]*\)".*/\1/p' | head -1)
+    if [ -z "$span_file" ] || [ -z "$span_line" ]; then
+      skipped=$((skipped + 1))
+      continue
+    fi
+    if [[ -n "${changed_files[${span_file}:${span_line}]:-}" ]]; then
+      echo "  ${span_file}:${span_line}: ${msg_text}"
+      warns=$((warns + 1))
+    fi
+  done
+
+  if [ "$skipped" -gt 0 ]; then
+    echo "  ($skipped warning(s) skipped — could not parse span)" >&2
+  fi
+  if [ "$warns" -gt 0 ]; then
+    echo ""
+    echo "${warns} warning(s) in our changed lines"
+    return 1
+  fi
+}
 
 check_rust_warnings() {
   local crate_dir="$1" features="$2" extra_args="${3:-}"
@@ -64,41 +117,7 @@ check_rust_warnings() {
 
   cargo check --lib $extra_args $feature_flag \
     --message-format=json 2>/dev/null \
-  | python3 -c "
-import sys, json
-
-diff_text = '''$diff_output'''
-changed = {}
-cur = None
-for l in diff_text.splitlines():
-    if l.startswith('+++ b/'): cur = l[6:]
-    elif l.startswith('@@') and cur:
-        for p in l.split('@@')[1].split():
-            if p.startswith('+'):
-                s = p[1:].split(',')
-                start = int(s[0])
-                count = int(s[1]) if len(s) > 1 else 1
-                changed.setdefault(cur, set()).update(range(start, start + count))
-
-warns = 0
-for line in sys.stdin:
-    try: msg = json.loads(line)
-    except: continue
-    if msg.get('reason') != 'compiler-message': continue
-    m = msg['message']
-    if m['level'] != 'warning': continue
-    for s in m.get('spans', []):
-        if not s.get('is_primary'): continue
-        fn = s['file_name']
-        if fn not in changed: break
-        if s['line_start'] in changed[fn]:
-            print(f'  {fn}:{s[\"line_start\"]}: {m[\"message\"]}')
-            warns += 1
-        break
-if warns:
-    print(f'\n{warns} warning(s) in our changed lines')
-    sys.exit(1)
-"
+  | _filter_warnings "$diff_output"
 
   cd "$PKG_ROOT"
 }
@@ -107,6 +126,7 @@ echo "=== Rust: check pdf_oxide warnings (native) ==="
 check_rust_warnings "$PKG_ROOT/vendor/pdf_oxide" "$NATIVE_FEATURES" ""
 
 echo "=== Rust: check pdf_oxide warnings (wasm) ==="
+ensure_target wasm32-unknown-unknown
 check_rust_warnings "$PKG_ROOT/vendor/pdf_oxide" "$WASM_FEATURES" \
   "--target wasm32-unknown-unknown --no-default-features"
 

@@ -1,0 +1,107 @@
+name: FVM
+description: >
+  Install FVM from GitHub Releases + run fvm install to get the SDK pinned in .fvmrc.
+  Works on Linux, macOS, AND Windows. Downloads the pre-built binary directly —
+  no dart pub global activate (avoids PATH issues on Windows Git Bash).
+
+inputs:
+  fvm-version:
+    description: "FVM version to install (default: latest)"
+    required: false
+    default: "latest"
+
+runs:
+  using: composite
+  steps:
+    - name: Cache pub packages
+      uses: actions/cache@v5
+      with:
+        path: ~/.pub-cache
+        key: pub-${{ runner.os }}-${{ hashFiles('pubspec.yaml', 'example/pubspec.yaml') }}
+        restore-keys: pub-${{ runner.os }}-
+
+    - name: Cache Flutter SDK (FVM)
+      uses: actions/cache@v5
+      with:
+        path: ~/.fvm_cache
+        key: fvm-sdk-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.fvmrc') }}
+
+    - name: Install FVM + project SDK
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        FVM_VERSION_INPUT: ${{ inputs.fvm-version }}
+      run: |
+        set -euo pipefail
+
+        # ── Detect OS + arch ───────────────────────────────────────────
+        case "$(uname -s)" in
+          Linux*)  OS=linux ;;
+          Darwin*) OS=macos ;;
+          MINGW*|MSYS*|CYGWIN*) OS=windows ;;
+          *)       echo "::error::Unsupported OS: $(uname -s)"; exit 1 ;;
+        esac
+
+        case "$(uname -m)" in
+          x86_64)  ARCH=x64 ;;
+          arm64|aarch64) ARCH=arm64 ;;
+          *)       echo "::error::Unsupported arch: $(uname -m)"; exit 1 ;;
+        esac
+
+        echo "Platform: $OS-$ARCH"
+
+        # ── Resolve version ────────────────────────────────────────────
+        if [[ "$FVM_VERSION_INPUT" == "latest" ]]; then
+          FVM_VERSION=$(curl -sS -H "Authorization: bearer $GITHUB_TOKEN" \
+            https://api.github.com/repos/leoafarias/fvm/releases/latest \
+            | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+        else
+          FVM_VERSION="$FVM_VERSION_INPUT"
+        fi
+        echo "FVM version: $FVM_VERSION"
+
+        # ── Download + extract ─────────────────────────────────────────
+        INSTALL_DIR="$RUNNER_TOOL_CACHE/fvm"
+        mkdir -p "$INSTALL_DIR"
+
+        if [[ "$OS" == "windows" ]]; then
+          URL="https://github.com/leoafarias/fvm/releases/download/$FVM_VERSION/fvm-$FVM_VERSION-$OS-$ARCH.zip"
+          curl -sSL "$URL" -o "$RUNNER_TEMP/fvm.zip"
+          unzip -qo "$RUNNER_TEMP/fvm.zip" -d "$INSTALL_DIR"
+          rm -f "$RUNNER_TEMP/fvm.zip"
+        else
+          URL="https://github.com/leoafarias/fvm/releases/download/$FVM_VERSION/fvm-$FVM_VERSION-$OS-$ARCH.tar.gz"
+          curl -sSL "$URL" -o "$RUNNER_TEMP/fvm.tar.gz"
+          tar xzf "$RUNNER_TEMP/fvm.tar.gz" -C "$INSTALL_DIR"
+          rm -f "$RUNNER_TEMP/fvm.tar.gz"
+        fi
+
+        # The archive extracts to fvm/ subdirectory containing the binary
+        FVM_BIN="$INSTALL_DIR/fvm"
+
+        # Verify the binary exists
+        ls -la "$FVM_BIN"/ | head -5
+
+        # Add to PATH for this step AND all subsequent steps
+        export PATH="$FVM_BIN:$PATH"
+        echo "$FVM_BIN" >> $GITHUB_PATH
+
+        # Also add fvm's Flutter SDK to PATH so fvm dart/fvm flutter work
+        # (fvm install puts it under FVM_CACHE_PATH)
+        FVM_CACHE="$HOME/.fvm_cache"
+        export FVM_CACHE_PATH="$FVM_CACHE"
+        echo "FVM_CACHE_PATH=$FVM_CACHE" >> $GITHUB_ENV
+
+        # ── Verify ─────────────────────────────────────────────────────
+        "$FVM_BIN/fvm" --version
+
+        # ── Install project SDK from .fvmrc ────────────────────────────
+        echo -e "yes\nyes\n" | "$FVM_BIN/fvm" install
+
+        # Suppress analytics
+        "$FVM_BIN/fvm" flutter config --no-analytics 2>/dev/null || true
+
+        echo "::group::SDK versions"
+        "$FVM_BIN/fvm" dart --version
+        "$FVM_BIN/fvm" flutter --version
+        echo "::endgroup::"

@@ -1,0 +1,15 @@
+name: Xcode Cache
+description: Cache Xcode derived data for Apple builds.
+
+inputs:
+  target:
+    description: "ios or macos — used in cache key"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: irgaly/xcode-cache@v1
+      with:
+        key: xcode-${{ inputs.target }}-${{ env.SUBMODULE_PDF_OXIDE }}
+        restore-keys: xcode-${{ inputs.target }}-
