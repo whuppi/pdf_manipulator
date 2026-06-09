@@ -14,18 +14,27 @@ permissions:
   pull-requests: write
 
 env:
-  RUNNER: ubuntu-24.04
+  DEFAULT_RUNNER: ubuntu-24.04
 
 jobs:
+  inputs:
+    runs-on: ubuntu-24.04
+    outputs:
+      runner: ${{ steps.resolve.outputs.runner }}
+    steps:
+      - id: resolve
+        run: echo "runner=${{ env.DEFAULT_RUNNER }}" >> $GITHUB_OUTPUT
+
   # Revoke stale ready-to-test label when new commits are pushed.
   # Lives here (not full-test.yml) because pull_request_target gives
   # write access to labels on fork PRs.
   revoke-ready-to-test:
+    needs: inputs
     if: >-
       github.event_name == 'pull_request_target' &&
       github.event.action == 'synchronize' &&
       contains(github.event.pull_request.labels.*.name, 'ready-to-test')
-    runs-on: ${{ env.RUNNER }}
+    runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
       - name: Remove label + notify
         env:
@@ -43,12 +52,13 @@ jobs:
   # run dependabot commands (no push access), so we comment asking a human.
   # Skips when dependabot itself pushes (after a recreate) to avoid loops.
   dependabot-needs-recreate:
+    needs: inputs
     if: >-
       github.event_name == 'pull_request_target' &&
       github.event.action == 'synchronize' &&
       github.event.pull_request.user.login == 'dependabot[bot]' &&
       github.event.sender.login != 'dependabot[bot]'
-    runs-on: ${{ env.RUNNER }}
+    runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
       - name: Notify maintainer
         env:
@@ -59,7 +69,8 @@ jobs:
             "New commits pushed — workflows may be outdated. A maintainer with push access should comment \`@dependabot recreate\` to pick up the latest changes."
 
   assign-and-label:
-    runs-on: ${{ env.RUNNER }}
+    needs: inputs
+    runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
       # Auto-assign maintainer on everything
       - name: Auto-assign
