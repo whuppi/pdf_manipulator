@@ -11,5 +11,5 @@ runs:
   steps:
     - uses: irgaly/xcode-cache@v1
       with:
-        key: xcode-${{ inputs.target }}-${{ env.SUBMODULE_PDF_OXIDE }}
-        restore-keys: xcode-${{ inputs.target }}-
+        key: xcode-${{ runner.os }}-${{ runner.arch }}-${{ inputs.target }}-${{ env.SUBMODULE_PDF_OXIDE }}
+        restore-keys: xcode-${{ runner.os }}-${{ runner.arch }}-${{ inputs.target }}-

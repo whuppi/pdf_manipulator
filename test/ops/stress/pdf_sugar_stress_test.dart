@@ -15,7 +15,7 @@ void registerSugarStressTests(Pdf Function() createPdf) {
     test('build 1000-page PDF', () async {
       largePdf = await buildLargePdf(createPdf, pageCount: 1000);
       expect(largePdf.length, greaterThan(0));
-    }, timeout: Timeout(Duration(seconds: 20)));
+    }, timeout: Timeout(Duration(seconds: 3)));
 
     test('split every 100 pages', () async {
       final pdf = createPdf();
@@ -32,7 +32,7 @@ void registerSugarStressTests(Pdf Function() createPdf) {
         final doc = await pdf.open(src(bytes));
         expect(doc.pageCount, 100);
       }
-    }, timeout: Timeout(Duration(seconds: 20)));
+    }, timeout: Timeout(Duration(seconds: 3)));
 
     test('splitBySize generous limit', () async {
       final pdf = createPdf();
@@ -50,7 +50,7 @@ void registerSugarStressTests(Pdf Function() createPdf) {
         totalPages += doc.pageCount;
       }
       expect(totalPages, 100);
-    }, timeout: Timeout(Duration(seconds: 20)));
+    }, timeout: Timeout(Duration(seconds: 3)));
 
     test('splitBySize tight limit', () async {
       final pdf = createPdf();
@@ -65,7 +65,7 @@ void registerSugarStressTests(Pdf Function() createPdf) {
       for (final s in sinks) {
         expect(s.takeBytes().length, greaterThan(0));
       }
-    }, timeout: Timeout(Duration(seconds: 20)));
+    }, timeout: Timeout(Duration(seconds: 3)));
 
     test('splitBySize smaller than single page', () async {
       final pdf = createPdf();
@@ -83,7 +83,7 @@ void registerSugarStressTests(Pdf Function() createPdf) {
         final doc = await pdf.open(src(bytes));
         expect(doc.pageCount, greaterThanOrEqualTo(1));
       }
-    }, timeout: Timeout(Duration(seconds: 20)));
+    }, timeout: Timeout(Duration(seconds: 3)));
 
     test('splitBySize equal to full PDF → 1 chunk', () async {
       final pdf = createPdf();
@@ -97,7 +97,7 @@ void registerSugarStressTests(Pdf Function() createPdf) {
       expect(sinks.length, 1);
       final doc = await pdf.open(src(sinks.first.takeBytes()));
       expect(doc.pageCount, 100);
-    }, timeout: Timeout(Duration(seconds: 20)));
+    }, timeout: Timeout(Duration(seconds: 3)));
 
     test('splitBySize returns chunk byte sizes', () async {
       final pdf = createPdf();
@@ -113,7 +113,7 @@ void registerSugarStressTests(Pdf Function() createPdf) {
         expect(chunkSizes[i], greaterThan(0));
         expect(chunkSizes[i], sinks[i].takeBytes().length);
       }
-    }, timeout: Timeout(Duration(seconds: 20)));
+    }, timeout: Timeout(Duration(seconds: 3)));
 
     test('extract first 10 pages', () async {
       final pdf = createPdf();
@@ -122,7 +122,7 @@ void registerSugarStressTests(Pdf Function() createPdf) {
           pages: List.generate(10, (i) => i));
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 10);
-    }, timeout: Timeout(Duration(seconds: 20)));
+    }, timeout: Timeout(Duration(seconds: 3)));
 
     test('delete 990 pages', () async {
       final pdf = createPdf();
@@ -131,7 +131,7 @@ void registerSugarStressTests(Pdf Function() createPdf) {
           pages: List.generate(990, (i) => i));
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 10);
-    }, timeout: Timeout(Duration(seconds: 20)));
+    }, timeout: Timeout(Duration(seconds: 3)));
 
     test('merge two 1000-page PDFs → 2000 pages', () async {
       final pdf = createPdf();
@@ -139,7 +139,7 @@ void registerSugarStressTests(Pdf Function() createPdf) {
       await pdf.merge([src(largePdf), src(largePdf)], sink);
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 2000);
-    }, timeout: Timeout(Duration(seconds: 20)));
+    }, timeout: Timeout(Duration(seconds: 3)));
 
     test('splitBySize on varied-size pages', () async {
       final pdf = createPdf();
@@ -156,6 +156,6 @@ void registerSugarStressTests(Pdf Function() createPdf) {
         totalPages += doc.pageCount;
       }
       expect(totalPages, 50);
-    }, timeout: Timeout(Duration(seconds: 20)));
+    }, timeout: Timeout(Duration(seconds: 3)));
   });
 }

@@ -23,8 +23,8 @@ runs:
         path: |
           ~/.cargo/registry/cache
           ~/.cargo/git/db
-        key: cargo-${{ runner.os }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}
-        restore-keys: cargo-${{ runner.os }}-
+        key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}
+        restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-
 
     - uses: dtolnay/rust-toolchain@stable
       with:

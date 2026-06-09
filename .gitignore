@@ -116,6 +116,7 @@ data/samples/cache/
 /debug/
 /logs/
 /projects/
+/test-results/
 *.log
 
 # Output dirs that ARE legitimately runtime data wherever they appear

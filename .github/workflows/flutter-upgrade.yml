@@ -43,13 +43,16 @@ jobs:
         run: |
           CURRENT=$(sed -n 's/.*"flutter": *"\([^"]*\)".*/\1/p' .fvmrc)
           RELEASES_JSON=$(curl -sS https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json)
-          STABLE_HASH=$(echo "$RELEASES_JSON" | grep -oE '"stable":"[^"]*"' | head -1 | sed 's/"stable":"//;s/"//')
-          LATEST=$(echo "$RELEASES_JSON" | grep -oE "\"hash\":\"${STABLE_HASH}\"[^}]*\"version\":\"[^\"]*\"" | grep -oE '"version":"[^"]*"' | sed 's/"version":"//;s/"//')
+          STABLE_HASH=$(echo "$RELEASES_JSON" | grep -oE '"stable" *: *"[^"]*"' | head -1 | sed 's/"stable" *: *"//;s/"//')
+          LATEST=$(echo "$RELEASES_JSON" | grep -A5 "\"hash\" *: *\"${STABLE_HASH}\"" | grep -oE '"version" *: *"[^"]*"' | head -1 | sed 's/"version" *: *"//;s/"//')
 
           echo "current=$CURRENT" >> $GITHUB_OUTPUT
           echo "latest=$LATEST" >> $GITHUB_OUTPUT
 
-          if [ "$CURRENT" = "$LATEST" ]; then
+          if [ -z "$LATEST" ]; then
+            echo "needs_upgrade=false" >> $GITHUB_OUTPUT
+            echo "::error::Could not detect latest Flutter stable version"
+          elif [ "$CURRENT" = "$LATEST" ]; then
             echo "needs_upgrade=false" >> $GITHUB_OUTPUT
             echo "Already on latest stable: $CURRENT"
           else

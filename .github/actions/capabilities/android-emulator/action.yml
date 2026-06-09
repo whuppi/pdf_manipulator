@@ -47,10 +47,7 @@ runs:
         emulator-options: -no-snapshot-save -no-window -noaudio -no-boot-anim
         emulator-boot-timeout: 600
         disable-animations: true
-        script: |
-          ${{ inputs.script }}
-          adb -s emulator-5554 emu kill || true
-          pkill -f crashpad_handler || true
+        script: ${{ inputs.script }}
 
     # ── Windows — manual boot (action doesn't support Windows) ──
     # Git Bash needs Unix paths — cygpath converts C:\Android\... to /c/Android/...

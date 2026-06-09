@@ -17,8 +17,8 @@ runs:
       uses: actions/cache@v5
       with:
         path: ~/.pub-cache
-        key: pub-${{ runner.os }}-${{ hashFiles('pubspec.yaml', 'example/pubspec.yaml') }}
-        restore-keys: pub-${{ runner.os }}-
+        key: pub-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pubspec.yaml', 'example/pubspec.yaml') }}
+        restore-keys: pub-${{ runner.os }}-${{ runner.arch }}-
 
     - name: Cache Flutter SDK (FVM)
       uses: actions/cache@v5

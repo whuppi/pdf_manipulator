@@ -19,8 +19,8 @@ runs:
         path: |
           ~/.gradle/caches
           ~/.gradle/wrapper
-        key: gradle-${{ hashFiles('example/android/build.gradle.kts', 'example/android/app/build.gradle.kts') }}
-        restore-keys: gradle-
+        key: gradle-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('example/android/build.gradle.kts', 'example/android/app/build.gradle.kts') }}
+        restore-keys: gradle-${{ runner.os }}-${{ runner.arch }}-
 
     - name: Stop Gradle daemon
       if: inputs.phase == 'save'
@@ -36,4 +36,4 @@ runs:
         path: |
           ~/.gradle/caches
           ~/.gradle/wrapper
-        key: gradle-${{ hashFiles('example/android/build.gradle.kts', 'example/android/app/build.gradle.kts') }}
+        key: gradle-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('example/android/build.gradle.kts', 'example/android/app/build.gradle.kts') }}

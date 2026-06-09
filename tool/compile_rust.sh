@@ -286,9 +286,11 @@ do_wasm() {
         || { echo "Error: failed to download binaryen $BINARYEN_VER"; exit 1; }
       tar xzf "$tmp/binaryen.tar.gz" -C "$tmp"
       local cargo_bin="$HOME/.cargo/bin"
-      mkdir -p "$cargo_bin"
+      local cargo_lib="$HOME/.cargo/lib"
+      mkdir -p "$cargo_bin" "$cargo_lib"
       cp "$tmp/binaryen-$BINARYEN_VER/bin/wasm-opt"* "$cargo_bin/" \
         || { echo "Error: could not copy wasm-opt to $cargo_bin"; exit 1; }
+      cp "$tmp/binaryen-$BINARYEN_VER/lib/"* "$cargo_lib/" 2>/dev/null || true
       rm -rf "$tmp/binaryen.tar.gz" "$tmp/binaryen-$BINARYEN_VER"
     else
       echo "Error: wasm-opt not found. Install binaryen:"

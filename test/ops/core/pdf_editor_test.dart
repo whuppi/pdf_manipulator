@@ -18,13 +18,13 @@ void registerEditorTests(Pdf Function() createPdf) {
       final editor = await createPdf().edit(src(minimalPdf));
       expect(await editor.pageCount, 1);
       await editor.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('double dispose is safe', () async {
       final editor = await createPdf().edit(src(minimalPdf));
       await editor.dispose();
       await editor.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('isModified false before mutation, true after', () async {
       final editor = await createPdf().edit(src(minimalPdf));
@@ -34,7 +34,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Metadata ──
 
@@ -49,7 +49,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(output));
       expect(doc.pageCount, 1);
       expect(String.fromCharCodes(output), contains('Behavioral Test Title'));
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('scrubMetadata removes title and author', () async {
       final pdf = createPdf();
@@ -69,7 +69,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final scrubbed = String.fromCharCodes(output);
       expect(scrubbed, isNot(contains('ScrubMeTitle')));
       expect(scrubbed, isNot(contains('ScrubMeAuthor')));
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('setAuthor + getAuthor roundtrips', () async {
       final editor = await createPdf().edit(src(minimalPdf));
@@ -77,7 +77,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final author = await editor.getAuthor();
       expect(author, contains('Test Author'));
       await editor.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('setSubject + getSubject roundtrips', () async {
       final editor = await createPdf().edit(src(minimalPdf));
@@ -85,7 +85,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final subject = await editor.getSubject();
       expect(subject, contains('Test Subject'));
       await editor.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('setKeywords + getKeywords roundtrips', () async {
       final editor = await createPdf().edit(src(minimalPdf));
@@ -93,7 +93,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final kw = await editor.getKeywords();
       expect(kw, contains('dart'));
       await editor.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Pages ──
 
@@ -110,7 +110,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 1);
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('getPageMediaBox returns correct A4 dimensions', () async {
       final editor = await createPdf().edit(src(minimalPdf));
@@ -118,7 +118,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       expect(box.width, closeTo(595, 1));
       expect(box.height, closeTo(842, 1));
       await editor.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('mergeFrom increases page count', () async {
       final pdf = createPdf();
@@ -131,7 +131,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 2);
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('selectPages reduces to selected set', () async {
       final pdf = createPdf();
@@ -146,7 +146,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 2);
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('movePage changes page order verified by dimensions', () async {
       final pdf = createPdf();
@@ -162,7 +162,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pages[0].width, isNot(closeTo(boxBefore.width, 1)));
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Redaction ──
 
@@ -177,7 +177,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.addRedaction(0, const PdfRect(x: 50, y: 100, width: 100, height: 20));
       expect(await editor.redactionCount(0), 2);
       await editor.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('addRedaction + applyRedactions produces valid PDF', () async {
       final pdf = createPdf();
@@ -189,7 +189,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 1);
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Encryption ──
 
@@ -204,7 +204,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.isEncrypted, isTrue);
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('save with encryption remove strips encryption', () async {
       final pdf = createPdf();
@@ -227,7 +227,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor2.dispose();
       final doc = await pdf.open(src(decSink.takeBytes()));
       expect(doc.isEncrypted, isFalse);
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Optimization ──
 
@@ -236,7 +236,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final count = await editor.optimizeImages(quality: 75);
       expect(count, 0);
       await editor.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('optimizeImages returns non-zero on image PDF', () async {
       final pdf = createPdf();
@@ -245,7 +245,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final count = await editor.optimizeImages(quality: 50);
       expect(count, greaterThan(0));
       await editor.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('unembedStandardFonts returns count', () async {
       final editor = await createPdf().edit(src(minimalPdf));
@@ -253,7 +253,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       expect(count, isA<int>());
       expect(count, greaterThanOrEqualTo(0));
       await editor.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Content ──
 
@@ -266,7 +266,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 1);
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('cropMargins produces valid PDF', () async {
       final pdf = createPdf();
@@ -279,7 +279,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 1);
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('convertToPdfA produces valid PDF', () async {
       final pdf = createPdf();
@@ -295,7 +295,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final validation = await doc.validatePdfA();
       expect(validation.errors, 0);
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Watermark ──
 
@@ -312,7 +312,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       expect(doc.pageCount, 1);
       expect(output.length, greaterThan(minimalPdf.length));
       expect(String.fromCharCodes(output), contains('TILED'));
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('addWatermark with background layer', () async {
       final pdf = createPdf();
@@ -325,7 +325,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(output));
       expect(doc.pageCount, 1);
       expect(String.fromCharCodes(output), contains('BG'));
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Form fields ──
 
@@ -341,7 +341,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(output));
       expect(doc.pageCount, 1);
       expect(String.fromCharCodes(output), contains('John Doe'));
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Rotation ──
 
@@ -354,7 +354,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pages[0].rotation, 90);
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('rotateAllPages sets rotation on every page', () async {
       final pdf = createPdf();
@@ -368,7 +368,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pages[0].rotation, 180);
       expect(doc.pages[1].rotation, 180);
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Stamps ──
 
@@ -385,7 +385,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       expect(output.length, greaterThan(minimalPdf.length));
       final doc = await pdf.open(src(output));
       expect(doc.pageCount, 1);
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('addImageStamp embeds image data', () async {
       final pdf = createPdf();
@@ -397,7 +397,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final output = sink.takeBytes();
       expect(output.length, greaterThan(minimalPdf.length));
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Content ──
 
@@ -410,7 +410,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.save(sink);
       await editor.dispose();
       expect(sink.takeBytes().length, greaterThan(minimalPdf.length));
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('eraseRegions produces valid output', () async {
       final pdf = createPdf();
@@ -422,7 +422,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 1);
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('flattenForms preserves page count', () async {
       final pdf = createPdf();
@@ -434,7 +434,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 1);
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Save options ──
 
@@ -447,7 +447,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 1);
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('fullRewrite with compress + GC produces smaller output', () async {
       final pdf = createPdf();
@@ -459,7 +459,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 1);
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── Getters ──
 
@@ -468,14 +468,14 @@ void registerEditorTests(Pdf Function() createPdf) {
       final v = await editor.version;
       expect(v, contains('.'));
       await editor.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('getTitle roundtrips with setTitle', () async {
       final editor = await createPdf().edit(src(minimalPdf));
       await editor.setTitle('RoundtripTitle');
       expect(await editor.getTitle(), contains('RoundtripTitle'));
       await editor.dispose();
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     // ── ResizeImage ──
 
@@ -493,6 +493,6 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.save(sink);
       await editor.dispose();
       expect(sink.takeBytes().length, greaterThan(0));
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: Timeout(Duration(seconds: 1)));
   });
 }

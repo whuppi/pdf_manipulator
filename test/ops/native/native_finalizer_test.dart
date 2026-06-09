@@ -38,5 +38,5 @@ void registerNativeFinalizerTests() {
             ? 'Process hung — dispose() did not shut down cleanly.'
             : 'Process crashed (exit $exitCode) — dangling NativeCallable.\n'
                 'stderr: ${await process.stderr.transform(const SystemEncoding().decoder).join()}');
-  }, timeout: Timeout(Duration(seconds: 45)));
+  }, timeout: Timeout(Duration(seconds: 5)));
 }

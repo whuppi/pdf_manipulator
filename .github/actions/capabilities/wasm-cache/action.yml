@@ -8,4 +8,4 @@ runs:
       id: wasm-cache
       with:
         path: web_assets/pdf_oxide_bg.wasm
-        key: wasm-${{ env.SUBMODULE_PDF_OXIDE }}
+        key: wasm-${{ runner.os }}-${{ runner.arch }}-${{ env.SUBMODULE_PDF_OXIDE }}

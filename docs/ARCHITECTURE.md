@@ -350,7 +350,7 @@ Each capability:
 | Workflow | Trigger | Runner model |
 |---|---|---|
 | `ci.yml` | PR to prod/dev | All jobs on one input runner (default: ubuntu) |
-| `full-test.yml` | `ready-to-test` label or dispatch | Core (one runner/target) + portability (every valid combo) |
+| `full-test.yml` | `ready-to-test` label or dispatch | Single matrix — core + portability [P] rows |
 | `create-release.yml` | Changelog push or dispatch | Infra on input runner, compile on matrix |
 | `pr-lint.yml` | PR to prod/dev | All jobs on one input runner |
 | `triage.yml` | Issues/PRs | All jobs on env runner |
@@ -359,19 +359,18 @@ Each capability:
 
 ### Test matrix (full-test.yml)
 
-**Core** — one runner per target, proves the code works:
+Single matrix with two tiers in one sorted list:
 
-| Category | Entries |
-|---|---|
-| Package tests | macOS, Linux, Windows, Web |
-| Integration tests | macOS, Linux, Windows, Android (emulator), iOS (simulator), Web (Chrome) |
-| Verify (release builds) | Android, iOS, macOS, Linux, Windows, Web |
+- **Core rows** — one runner per target, proves the code works.
+- **Portability rows `[P]`** — extra runners, proves any dev
+  machine can build with this package. Controlled by
+  `DEFAULT_PORTABILITY` env var. Skipped when toggle is off.
 
-**Portability** — adds remaining valid runner combos. Proves a
-developer on any machine can build with this package. Controlled
-by `DEFAULT_PORTABILITY` env var. Android emulator on
-`macos-15-intel` and `windows` (ARM M1 can't nest VMs).
-Android verify and Web (pkg + int + verify) on macos + windows.
+| Category | Core | Portability [P] |
+|---|---|---|
+| Package | macOS, Linux, Windows, Web | Web on macos + win |
+| Integration | macOS, Linux, Windows, Android, iOS, Web | Android on macos-intel ⚠ + win, Web on macos + win |
+| Verify | Android, iOS, macOS, Linux, Windows, Web | Android on macos + win, Web on macos + win |
 
 ### Dependency ownership
 

@@ -2,6 +2,12 @@
 
 <!-- Stable releases. Add ## heading at top, CI handles the rest. -->
 
+## 1.0.6
+
+- Fixed release build routing for consumer builds ([PR #80](https://github.com/whuppi/pdf_manipulator/pull/80), [@Binary-Parse](https://github.com/Binary-Parse))
+- Fixed Windows NDK linker `.cmd` extension for Android cross-compilation ([PR #81](https://github.com/whuppi/pdf_manipulator/pull/81), [@Binary-Parse](https://github.com/Binary-Parse))
+- Added CI verify tests — release builds now verified on all 6 targets (Android, iOS, macOS, Linux, Windows, Web)
+
 ## 1.0.5
 
 - Fixed README version not stamped on pub.dev
