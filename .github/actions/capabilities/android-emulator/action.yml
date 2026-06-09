@@ -52,12 +52,14 @@ runs:
           adb -s emulator-5554 emu kill || true
 
     # ── Windows — manual boot (action doesn't support Windows) ──
+    # Git Bash needs Unix paths — cygpath converts C:\Android\... to /c/Android/...
     - name: Install system image (Windows)
       if: runner.os == 'Windows'
       shell: bash
       run: |
-        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
-        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
+        SDK="$(cygpath "$ANDROID_HOME")"
+        yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+        "$SDK/cmdline-tools/latest/bin/sdkmanager" \
           "system-images;android-${{ inputs.api-level }};aosp_atd;x86_64" \
           "platform-tools" \
           "emulator" > /dev/null
@@ -66,7 +68,8 @@ runs:
       if: runner.os == 'Windows'
       shell: bash
       run: |
-        echo no | $ANDROID_HOME/cmdline-tools/latest/bin/avdmanager create avd \
+        SDK="$(cygpath "$ANDROID_HOME")"
+        echo no | "$SDK/cmdline-tools/latest/bin/avdmanager" create avd \
           --force -n test \
           --package "system-images;android-${{ inputs.api-level }};aosp_atd;x86_64"
 
@@ -74,14 +77,15 @@ runs:
       if: runner.os == 'Windows'
       shell: bash
       run: |
-        $ANDROID_HOME/emulator/emulator -port 5554 -avd test \
+        SDK="$(cygpath "$ANDROID_HOME")"
+        "$SDK/emulator/emulator" -port 5554 -avd test \
           -no-snapshot-save -no-window -noaudio -no-boot-anim &
 
         echo "Waiting for emulator to boot..."
         TIMEOUT=600
         ELAPSED=0
         while [ $ELAPSED -lt $TIMEOUT ]; do
-          RESULT=$($ANDROID_HOME/platform-tools/adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null || true)
+          RESULT=$("$SDK/platform-tools/adb" -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null || true)
           if [ "$RESULT" = "1" ]; then
             echo "Emulator booted in ${ELAPSED}s."
             break
@@ -95,10 +99,10 @@ runs:
           exit 1
         fi
 
-        $ANDROID_HOME/platform-tools/adb -s emulator-5554 shell input keyevent 82
-        $ANDROID_HOME/platform-tools/adb -s emulator-5554 shell settings put global window_animation_scale 0.0
-        $ANDROID_HOME/platform-tools/adb -s emulator-5554 shell settings put global transition_animation_scale 0.0
-        $ANDROID_HOME/platform-tools/adb -s emulator-5554 shell settings put global animator_duration_scale 0.0
+        "$SDK/platform-tools/adb" -s emulator-5554 shell input keyevent 82
+        "$SDK/platform-tools/adb" -s emulator-5554 shell settings put global window_animation_scale 0.0
+        "$SDK/platform-tools/adb" -s emulator-5554 shell settings put global transition_animation_scale 0.0
+        "$SDK/platform-tools/adb" -s emulator-5554 shell settings put global animator_duration_scale 0.0
 
     - name: Run script (Windows)
       if: runner.os == 'Windows'
@@ -108,4 +112,6 @@ runs:
     - name: Kill emulator (Windows)
       if: always() && runner.os == 'Windows'
       shell: bash
-      run: $ANDROID_HOME/platform-tools/adb -s emulator-5554 emu kill || true
+      run: |
+        SDK="$(cygpath "$ANDROID_HOME")"
+        "$SDK/platform-tools/adb" -s emulator-5554 emu kill || true
