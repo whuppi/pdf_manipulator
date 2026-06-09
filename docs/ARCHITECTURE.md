@@ -367,11 +367,11 @@ Each capability:
 | Integration tests | macOS, Linux, Windows, Android (emulator), iOS (simulator), Web (Chrome) |
 | Verify (release builds) | Android, iOS, macOS, Linux, Windows, Web |
 
-**All-runners** — every other valid runner combo, controlled by
-`DEFAULT_ALL_RUNNERS` env var (runs on all triggers when true).
-Verifies nothing is runner-dependent. Android emulator on
-`macos-15-intel` (ARM M1 can't nest VMs) and `windows`.
-Android verify on macos + windows. Web on macos + windows.
+**All-runners** — adds remaining valid runner combos on top of
+the default matrix. Controlled by `DEFAULT_ALL_RUNNERS` env var.
+Android emulator on `macos-15-intel` and `windows` (ARM M1
+can't nest VMs — emulator excluded there). Android verify and
+Web (pkg + int + verify) on macos + windows.
 
 ### Dependency ownership
 
