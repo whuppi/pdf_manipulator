@@ -22,7 +22,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(output));
       expect(doc.pageCount, 1);
       expect(String.fromCharCodes(output), contains('Hello World'));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('create → setMetadata → save → verify metadata', () async {
       final pdf = createPdf();
@@ -41,13 +41,13 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final asString = String.fromCharCodes(output);
       expect(asString, contains('Custom Builder Title'));
       expect(asString, contains('Builder Author'));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('double dispose is safe', () async {
       final builder = await createPdf().build();
       await builder.dispose();
       await builder.dispose();
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('imagesToPdf creates valid single-page PDF', () async {
       final pdf = createPdf();
@@ -57,7 +57,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(output));
       expect(doc.pageCount, 1);
       expect(output.length, greaterThan(minimalPdf.length));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('multiple pages have correct count', () async {
       final pdf = createPdf();
@@ -72,7 +72,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 3);
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('addA4Page creates correct dimensions', () async {
       final pdf = createPdf();
@@ -87,7 +87,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       expect(doc.pageCount, 1);
       expect(doc.pages[0].width, closeTo(595, 2));
       expect(doc.pages[0].height, closeTo(842, 2));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('addLetterPage creates correct dimensions', () async {
       final pdf = createPdf();
@@ -102,7 +102,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       expect(doc.pageCount, 1);
       expect(doc.pages[0].width, closeTo(612, 2));
       expect(doc.pages[0].height, closeTo(792, 2));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('addPage custom dimensions', () async {
       final pdf = createPdf();
@@ -116,7 +116,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pages[0].width, closeTo(400, 2));
       expect(doc.pages[0].height, closeTo(300, 2));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('heading + paragraph + space + horizontalRule produce content', () async {
       final pdf = createPdf();
@@ -133,7 +133,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final output = sink.takeBytes();
       expect(String.fromCharCodes(output), contains('Test Heading'));
       expect(String.fromCharCodes(output), contains('Test paragraph'));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('font changes affect output', () async {
       final pdf = createPdf();
@@ -147,7 +147,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.dispose();
       final output = String.fromCharCodes(sink.takeBytes());
       expect(output, contains('Courier'));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('watermark embeds text', () async {
       final pdf = createPdf();
@@ -160,7 +160,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.save(sink);
       await builder.dispose();
       expect(String.fromCharCodes(sink.takeBytes()), contains('BUILDERMARK'));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('image produces output larger than text-only', () async {
       final pdf = createPdf();
@@ -173,7 +173,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.save(sink);
       await builder.dispose();
       expect(sink.takeBytes().length, greaterThan(minimalPdf.length));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('textField embeds field name', () async {
       final pdf = createPdf();
@@ -185,7 +185,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.save(sink);
       await builder.dispose();
       expect(String.fromCharCodes(sink.takeBytes()), contains('myfield'));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('checkbox embeds field name', () async {
       final pdf = createPdf();
@@ -197,7 +197,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.save(sink);
       await builder.dispose();
       expect(String.fromCharCodes(sink.takeBytes()), contains('mycheckbox'));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('comboBox embeds field name and options', () async {
       final pdf = createPdf();
@@ -210,7 +210,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.save(sink);
       await builder.dispose();
       expect(String.fromCharCodes(sink.takeBytes()), contains('mycombo'));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('linkUrl produces valid PDF with annotation', () async {
       final pdf = createPdf();
@@ -227,7 +227,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       expect(doc.pageCount, 1);
       // URL is in a /URI annotation, verify it's in the raw PDF bytes
       expect(String.fromCharCodes(output), contains('example.com'));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('footnote embeds note text', () async {
       final pdf = createPdf();
@@ -240,7 +240,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.save(sink);
       await builder.dispose();
       expect(String.fromCharCodes(sink.takeBytes()), contains('Footnote content'));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('columns embeds column text', () async {
       final pdf = createPdf();
@@ -252,7 +252,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.save(sink);
       await builder.dispose();
       expect(String.fromCharCodes(sink.takeBytes()), contains('Column text'));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('newPageSameSize creates two pages', () async {
       final pdf = createPdf();
@@ -267,7 +267,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 2);
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('newline does not crash', () async {
       final pdf = createPdf();
@@ -282,7 +282,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 1);
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('setSubject + setKeywords on builder', () async {
       final pdf = createPdf();
@@ -297,7 +297,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.dispose();
       final output = String.fromCharCodes(sink.takeBytes());
       expect(output, contains('Test Subject'));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('pushButton embeds field name', () async {
       final pdf = createPdf();
@@ -309,7 +309,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.save(sink);
       await builder.dispose();
       expect(String.fromCharCodes(sink.takeBytes()), contains('mybtn'));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('signatureField embeds field name', () async {
       final pdf = createPdf();
@@ -321,7 +321,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.save(sink);
       await builder.dispose();
       expect(String.fromCharCodes(sink.takeBytes()), contains('mysig'));
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('fieldKeystroke does not crash', () async {
       final pdf = createPdf();
@@ -334,7 +334,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 1);
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('fieldFormat does not crash', () async {
       final pdf = createPdf();
@@ -347,7 +347,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 1);
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('fieldValidate does not crash', () async {
       final pdf = createPdf();
@@ -360,7 +360,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 1);
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('fieldCalculate does not crash', () async {
       final pdf = createPdf();
@@ -373,7 +373,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 1);
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
 
     test('linkPage produces valid output', () async {
       final pdf = createPdf();
@@ -390,6 +390,6 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 2);
-    }, timeout: Timeout(Duration(seconds: 2)));
+    }, timeout: Timeout(Duration(seconds: 1)));
   });
 }

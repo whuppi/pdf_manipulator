@@ -15,14 +15,14 @@ void registerEditorStressTests(Pdf Function() createPdf) {
     test('build 1000-page PDF', () async {
       largePdf = await buildLargePdf(createPdf, pageCount: 1000);
       expect(largePdf.length, greaterThan(0));
-    }, timeout: Timeout(Duration(seconds: 10)));
+    }, timeout: Timeout(Duration(seconds: 3)));
 
     test('watermark 1000 pages', () async {
       final pdf = createPdf();
       final sink = TestSink();
       await pdf.watermark(src(largePdf), sink, text: 'CONFIDENTIAL');
       expect(sink.takeBytes().length, greaterThan(largePdf.length));
-    }, timeout: Timeout(Duration(seconds: 10)));
+    }, timeout: Timeout(Duration(seconds: 3)));
 
     test('encrypt then decrypt 1000-page PDF', () async {
       final pdf = createPdf();
@@ -35,7 +35,7 @@ void registerEditorStressTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(decSink.takeBytes()));
       expect(doc.pageCount, 1000);
       await doc.dispose();
-    }, timeout: Timeout(Duration(seconds: 10)));
+    }, timeout: Timeout(Duration(seconds: 3)));
 
     test('editor watermark first 10 pages', () async {
       final pdf = createPdf();
@@ -48,14 +48,14 @@ void registerEditorStressTests(Pdf Function() createPdf) {
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 1000);
-    }, timeout: Timeout(Duration(seconds: 10)));
+    }, timeout: Timeout(Duration(seconds: 3)));
 
     test('compress 1000-page PDF', () async {
       final pdf = createPdf();
       final sink = TestSink();
       await pdf.compress(src(largePdf), sink);
       expect(sink.takeBytes().length, greaterThan(0));
-    }, timeout: Timeout(Duration(seconds: 10)));
+    }, timeout: Timeout(Duration(seconds: 3)));
 
     test('flattenForms on form PDF', () async {
       final pdf = createPdf();
@@ -63,6 +63,6 @@ void registerEditorStressTests(Pdf Function() createPdf) {
       final sink = TestSink();
       await pdf.flattenForms(src(formPdf), sink);
       expect(sink.takeBytes().length, greaterThan(0));
-    }, timeout: Timeout(Duration(seconds: 10)));
+    }, timeout: Timeout(Duration(seconds: 3)));
   });
 }

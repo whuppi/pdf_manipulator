@@ -39,13 +39,13 @@ void main() {
       webWorkerUrl: 'http://localhost:$serverPort/web_assets/worker.js',
       webIoMode: PdfIoMode.atomics,
     ));
-  }, timeout: Timeout(Duration(seconds: 10)));
+  }, timeout: Timeout(Duration(seconds: 3)));
 
   test('verify I/O mode is atomics', () async {
     final doc = await pdf.open(src(minimalPdf));
     await doc.dispose();
     expect(pdf.ioMode, PdfIoMode.atomics);
-  }, timeout: Timeout(Duration(seconds: 5)));
+  }, timeout: Timeout(Duration(seconds: 3)));
 
   tearDownAll(() => pdf.dispose());
 
