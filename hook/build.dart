@@ -360,19 +360,14 @@ Future<void> _compileNativeFromHook(
   }
 
   // Dart build hooks run in a semi-hermetic environment that strips
-  // most env vars (dart-lang/native hooks_runner). CCACHE_ is
-  // passed through but RUSTC_WRAPPER and SCCACHE_* are not.
-  // Detect sccache on PATH (which IS passed through) and set
-  // RUSTC_WRAPPER so cargo uses it for compilation caching.
-  // Without this, every CI run does a full cold Rust compile.
-  final sccacheResult = Process.runSync(
-    Platform.isWindows ? 'where' : 'which',
-    ['sccache'],
-  );
-  if (sccacheResult.exitCode == 0) {
-    final sccacheBin = (sccacheResult.stdout as String).trim().split('\n').first;
-    env['RUSTC_WRAPPER'] = sccacheBin;
-    _log.info('sccache enabled: $sccacheBin');
+  // most env vars (dart-lang/native hooks_runner). CCACHE_ prefix is
+  // passed through but RUSTC_WRAPPER and SCCACHE_* are not. Detect
+  // sccache on PATH (which IS passed through) and set RUSTC_WRAPPER
+  // so cargo uses it for compilation caching on CI.
+  final sccache = _findOnPath('sccache');
+  if (sccache != null) {
+    env['RUSTC_WRAPPER'] = sccache;
+    _log.info('sccache enabled: $sccache');
   }
 
   final result = await Process.run(
@@ -518,6 +513,20 @@ Future<void> _copyWebAsset(
 // ══════════════════════════════════════════════════════════════════
 
 String _resolveFeatures() => _nativeFeatures;
+
+/// Find an executable on PATH without spawning a process.
+String? _findOnPath(String name) {
+  final path = Platform.environment['PATH'] ?? '';
+  final sep = Platform.isWindows ? ';' : ':';
+  final exts = Platform.isWindows ? ['.exe', '.cmd', '.bat', ''] : [''];
+  for (final dir in path.split(sep)) {
+    for (final ext in exts) {
+      final file = File(p.join(dir, '$name$ext'));
+      if (file.existsSync()) return file.path;
+    }
+  }
+  return null;
+}
 
 String _currentLibFileName() {
   if (Platform.isMacOS) return 'lib$_crateName.dylib';
