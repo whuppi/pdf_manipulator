@@ -114,17 +114,21 @@ runs:
               done
             done
 
-            # Search for stuck force-stop at any depth under any dartvm.
-            echo "-- force-stop search --"
-            for apid in $(pgrep -f "force-stop" 2>/dev/null); do
+            # Search for stuck teardown adb commands (force-stop OR uninstall).
+            # Both go through Binder IPC to system_server and hang when
+            # the emulator is CPU-starved.
+            echo "-- teardown adb search --"
+            for apid in $(pgrep -f "force-stop\|uninstall" 2>/dev/null); do
               ACMD=$(ps -p "$apid" -o args= 2>/dev/null || true)
+              # Only match adb commands, not random processes.
+              echo "$ACMD" | grep -q "adb" || continue
               ACPU=$(ps -p "$apid" -o %cpu= 2>/dev/null | tr -d ' ' || true)
               echo "  FOUND: PID=$apid CPU=${ACPU}% CMD=$ACMD"
               if [ "$KILLED" = "false" ]; then
                 echo ""
-                echo "=== WATCHDOG: stuck adb force-stop detected (PID $apid, cpu=${ACPU}%) ==="
+                echo "=== WATCHDOG: stuck adb teardown detected (PID $apid, cpu=${ACPU}%) ==="
                 echo "    cmd: $ACMD"
-                echo "    Flutter stopApp() has no timeout — killing to unblock teardown."
+                echo "    Flutter teardown has no timeout — killing to unblock."
                 echo "    Only happens on macOS Intel (SwiftShader CPU starvation)."
                 kill -9 "$apid" 2>/dev/null || true
                 KILLED=true
@@ -133,7 +137,7 @@ runs:
               fi
             done
             if [ "$KILLED" = "false" ]; then
-              echo "  (no force-stop process found)"
+              echo "  (no stuck teardown adb found)"
             fi
             echo "=== END PROBE ==="
           done
