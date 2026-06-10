@@ -38,24 +38,13 @@ runs:
         echo "SUBMODULE_PDF_OXIDE=${{ steps.sub.outputs.pdf_oxide }}" >> $GITHUB_ENV
         echo "SUBMODULE_OFFICE_OXIDE=${{ steps.sub.outputs.office_oxide }}" >> $GITHUB_ENV
 
-    # hooks_runner strips SCCACHE_* and ACTIONS_* env vars
-    # (dart-lang/native#3396). Write a wrapper that re-injects them
-    # so build.dart can use sccache with GHA cache backend.
-    # sccache (via opendal) reads: ACTIONS_RESULTS_URL (v2 cache URL),
-    # ACTIONS_RUNTIME_TOKEN, ACTIONS_CACHE_SERVICE_V2, SCCACHE_GHA_ENABLED.
-    # Source: apache/opendal core/src/services/ghac/core.rs
-    - name: Write sccache wrapper for build hooks
+    # Start the sccache server while SCCACHE_GHA_ENABLED and ACTIONS_*
+    # vars are in the environment. The server reads config at startup
+    # and persists as a daemon. Later, hooks_runner strips these vars
+    # (dart-lang/native#3396) before spawning build hooks, so
+    # build.dart's sccache client can't configure the GHA backend
+    # itself. By pre-starting the server here, every client connects
+    # to this already-configured server regardless of their env.
+    - name: Start sccache server
       shell: bash
-      run: |
-        WRAPPER="/tmp/sccache-wrapper.sh"
-        SCCACHE_BIN="$(which sccache)"
-        cat > "$WRAPPER" <<WRAPEOF
-        #!/usr/bin/env bash
-        export SCCACHE_GHA_ENABLED=true
-        export ACTIONS_CACHE_SERVICE_V2="${ACTIONS_CACHE_SERVICE_V2}"
-        export ACTIONS_RESULTS_URL="${ACTIONS_RESULTS_URL}"
-        export ACTIONS_RUNTIME_TOKEN="${ACTIONS_RUNTIME_TOKEN}"
-        exec "${SCCACHE_BIN}" "\$@"
-        WRAPEOF
-        chmod +x "$WRAPPER"
-        echo "sccache wrapper: $WRAPPER -> $SCCACHE_BIN"
+      run: sccache --start-server || true

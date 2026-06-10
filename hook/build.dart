@@ -359,21 +359,16 @@ Future<void> _compileNativeFromHook(
         .join(':');
   }
 
-  // hooks_runner strips SCCACHE_* and ACTIONS_* env vars (dart-lang/native#3396).
-  // The rust CI capability writes /tmp/sccache-wrapper.sh that re-injects
-  // the stripped vars before calling sccache. Prefer it over raw sccache.
-  // On local dev or when the wrapper doesn't exist, fall back to raw sccache.
-  final wrapperPath = '/tmp/sccache-wrapper.sh';
-  final wrapper = File(wrapperPath);
-  if (wrapper.existsSync()) {
-    env['RUSTC_WRAPPER'] = wrapperPath;
-    _log.info('sccache enabled via wrapper (GHA cache)');
-  } else {
-    final sccache = _findOnPath('sccache');
-    if (sccache != null) {
-      env['RUSTC_WRAPPER'] = sccache;
-      _log.info('sccache enabled: $sccache (local cache only)');
-    }
+  // hooks_runner strips SCCACHE_* env vars (dart-lang/native#3396) but
+  // the sccache SERVER is pre-started by the rust CI capability while
+  // the GHA env vars are still available. The server reads its config
+  // at startup, so clients connecting later (from build hooks) get GHA
+  // cache backend even though their env is filtered. We just need to
+  // set RUSTC_WRAPPER so cargo calls sccache as a client.
+  final sccache = _findOnPath('sccache');
+  if (sccache != null) {
+    env['RUSTC_WRAPPER'] = sccache;
+    _log.info('sccache enabled: $sccache');
   }
 
   final result = await Process.run(
