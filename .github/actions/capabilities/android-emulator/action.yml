@@ -90,18 +90,15 @@ runs:
                 echo "$CMDLINE" | grep -q "force-stop" || continue
                 # Confirmed: this is `adb shell am force-stop`. Kill it.
                 CCPU=$(ps -p "$cpid" -o %cpu= 2>/dev/null | tr -d ' ' || true)
-                if true; then
-                    echo ""
-                    echo "=== WATCHDOG: stuck adb force-stop detected (PID $cpid, child of dartvm $dvmpid, cpu=${CCPU}%) ==="
-                    echo "    cmd: $CMDLINE"
-                    echo "    Flutter stopApp() has no timeout — killing to unblock teardown."
-                    echo "    Only happens on macOS Intel (SwiftShader CPU starvation)."
-                    kill -9 "$cpid" 2>/dev/null || true
-                    KILLED=true
-                    echo "=== WATCHDOG: killed. Flutter test should exit shortly. ==="
-                    echo ""
-                  fi
-                fi
+                echo ""
+                echo "=== WATCHDOG: stuck adb force-stop detected (PID $cpid, child of dartvm $dvmpid, cpu=${CCPU}%) ==="
+                echo "    cmd: $CMDLINE"
+                echo "    Flutter stopApp() has no timeout — killing to unblock teardown."
+                echo "    Only happens on macOS Intel (SwiftShader CPU starvation)."
+                kill -9 "$cpid" 2>/dev/null || true
+                KILLED=true
+                echo "=== WATCHDOG: killed. Flutter test should exit shortly. ==="
+                echo ""
               done
             done
           done
