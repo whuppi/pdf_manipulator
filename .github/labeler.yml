@@ -1,0 +1,23 @@
+# Auto-label PRs by file path. Used by actions/labeler.
+# https://github.com/actions/labeler
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - .github/**
+          - .githooks/**
+
+web:
+  - changed-files:
+      - any-glob-to-any-file:
+          - web_assets/**
+          - '**/web_transport.dart'
+          - '**/worker.js'
+          - '**/coordinator.js'
+          - '**/*_web*.dart'
+          - '**/*wasm*'
+
+upstream:
+  - changed-files:
+      - any-glob-to-any-file:
+          - vendor/**
