@@ -20,22 +20,58 @@ echo "=== Verify: 16 KB ELF alignment ==="
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-unzip -o "$APK" 'lib/*' -d "$TMP" >/dev/null 2>&1
+# Extract native libs from APK.
+if command -v unzip &>/dev/null; then
+  unzip -o "$APK" 'lib/*' -d "$TMP" >/dev/null 2>&1
+elif command -v 7z &>/dev/null; then
+  7z x -o"$TMP" "$APK" 'lib/*' >/dev/null 2>&1
+else
+  echo "Skipping: no unzip or 7z available"
+  exit 0
+fi
+
+# Find a tool that can read ELF headers.
+# NDK's llvm-readelf handles cross-arch; host objdump may not.
+READELF=""
+if command -v llvm-readelf &>/dev/null; then
+  READELF="llvm-readelf"
+elif [ -n "${ANDROID_NDK:-}" ]; then
+  NDK_READELF=$(find "$ANDROID_NDK/toolchains/llvm/prebuilt" -name 'llvm-readelf' -o -name 'llvm-readelf.exe' 2>/dev/null | head -1)
+  [ -n "$NDK_READELF" ] && READELF="$NDK_READELF"
+fi
+
+if [ -n "$READELF" ]; then
+  # llvm-readelf: check p_align of LOAD segments directly.
+  check_align() {
+    "$READELF" -l "$1" 2>/dev/null | awk '/LOAD/{print $NF}' | while read -r align; do
+      if [ "$((align))" -lt 16384 ] 2>/dev/null; then echo "BAD"; return; fi
+    done
+  }
+elif command -v objdump &>/dev/null; then
+  # GNU objdump: alignment shown as 2**N.
+  check_align() {
+    local align
+    align=$(objdump -p "$1" 2>/dev/null | grep LOAD | awk '{ print $NF }' | head -1)
+    if ! echo "$align" | grep -qE '2\*\*(1[4-9]|[2-9][0-9])'; then echo "BAD"; fi
+  }
+else
+  echo "Skipping: no readelf or objdump available"
+  exit 0
+fi
 
 FAIL=0
 CHECKED=0
 
 for so in $(find "$TMP/lib" \( -path '*/arm64-v8a/*.so' -o -path '*/x86_64/*.so' \) 2>/dev/null); do
-  align=$(objdump -p "$so" 2>/dev/null | grep LOAD | awk '{ print $NF }' | head -1)
   name=$(basename "$so")
   arch=$(basename "$(dirname "$so")")
   CHECKED=$((CHECKED + 1))
 
-  if echo "$align" | grep -qE '2\*\*(1[4-9]|[2-9][0-9])'; then
-    echo "  ALIGNED: $arch/$name ($align)"
-  else
-    echo "  UNALIGNED: $arch/$name ($align)"
+  if [ -n "$(check_align "$so")" ]; then
+    echo "  UNALIGNED: $arch/$name"
     FAIL=1
+  else
+    echo "  ALIGNED: $arch/$name"
   fi
 done
 
