@@ -35,6 +35,79 @@ runs:
         $ANDROID_HOME/platform-tools/adb start-server
         $ANDROID_HOME/platform-tools/adb devices
 
+    # Watchdog for the flutter test teardown hang on macOS Intel.
+    #
+    # Only affects: macOS Intel + SwiftShader (no hardware GPU).
+    # Does NOT affect: Linux with KVM, Windows, macOS ARM, local dev.
+    #
+    # Root cause: Flutter's stopApp() calls `adb shell am force-stop`
+    # with no timeout (android_device.dart → _processUtils.stream()).
+    # On SwiftShader emulators, qemu uses ~200% CPU on 4 cores,
+    # starving the guest's ActivityManagerService. The `am force-stop`
+    # command never gets CPU time to execute. The dartvm waits for
+    # this adb child forever → flutter test never exits.
+    #
+    # Fix: detect the stuck adb child of dartvm (0% CPU) and kill it.
+    # stopApp() receives an error, continues teardown, flutter test
+    # prints the summary and exits cleanly.
+    #
+    # Harmless on runners where the hang doesn't occur — the watchdog
+    # simply never finds a stuck adb process and exits with the
+    # user's command.
+    - name: Write emulator scripts
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        cat > /tmp/emulator-run.sh << 'EMUSCRIPT'
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        # Run the user's command in background.
+        bash -c "$1" &
+        CMD_PID=$!
+
+        # Watchdog: detect and kill stuck `adb shell am force-stop`.
+        (
+          KILLED=false
+          while kill -0 $CMD_PID 2>/dev/null; do
+            sleep 30
+            # Walk every dartvm's children looking for a stuck adb.
+            for dvmpid in $(pgrep -f dartvm 2>/dev/null); do
+              for cpid in $(pgrep -P "$dvmpid" 2>/dev/null); do
+                CNAME=$(ps -p "$cpid" -o comm= 2>/dev/null || true)
+                CCPU=$(ps -p "$cpid" -o %cpu= 2>/dev/null | tr -d ' ' || true)
+                if echo "$CNAME" | grep -q adb && [ "$KILLED" = "false" ]; then
+                  # adb child of dartvm at 0% CPU = stuck stopApp().
+                  # Float compare: 0.0% or less = stuck.
+                  if echo "$CCPU" | awk '{ exit ($1 > 0.1) }'; then
+                    echo ""
+                    echo "=== WATCHDOG: stuck adb detected (PID $cpid, child of dartvm $dvmpid, cpu=${CCPU}%) ==="
+                    echo "    Flutter stopApp() has no timeout — killing to unblock teardown."
+                    echo "    Only happens on macOS Intel (SwiftShader CPU starvation)."
+                    kill -9 "$cpid" 2>/dev/null || true
+                    KILLED=true
+                    echo "=== WATCHDOG: killed. Flutter test should exit shortly. ==="
+                    echo ""
+                  fi
+                fi
+              done
+            done
+          done
+        ) &
+        WATCHDOG_PID=$!
+
+        # Wait for the user's command to finish.
+        wait $CMD_PID 2>/dev/null
+        EXIT=$?
+
+        # Stop the watchdog.
+        kill $WATCHDOG_PID 2>/dev/null || true
+        wait $WATCHDOG_PID 2>/dev/null || true
+
+        exit $EXIT
+        EMUSCRIPT
+        chmod +x /tmp/emulator-run.sh
+
     # ── Linux / macOS — use the action ──
     - name: Emulator (Linux/macOS)
       if: runner.os != 'Windows'
@@ -47,7 +120,7 @@ runs:
         emulator-options: -no-snapshot-save -no-window -noaudio -no-boot-anim
         emulator-boot-timeout: 600
         disable-animations: true
-        script: ${{ inputs.script }}
+        script: /tmp/emulator-run.sh '${{ inputs.script }}'
 
     # ── Windows — manual boot (action doesn't support Windows) ──
     # Git Bash needs Unix paths — cygpath converts C:\Android\... to /c/Android/...

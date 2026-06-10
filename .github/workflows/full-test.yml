@@ -73,6 +73,9 @@ jobs:
       matrix:
         include:
           # ── TEMPORARY: debug only Intel Android emulator hang ──
+          # ⚠ = teardown hang on macOS Intel (SwiftShader CPU starvation).
+          # Workaround: emulator capability has a watchdog that kills the
+          # stuck adb process. Tests pass, flutter test exits cleanly.
           - { name: "int: Android (macos-intel) [P] ⚠", runner: macos-15-intel, make: test-example-android, timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
           # ── ALL OTHER ENTRIES COMMENTED OUT FOR DEBUG ──
           # - { name: "pkg: Linux (ubuntu-x64)",      runner: ubuntu-24.04,        make: test-pkg-native, timeout: 30 }
