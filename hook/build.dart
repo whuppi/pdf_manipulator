@@ -359,15 +359,24 @@ Future<void> _compileNativeFromHook(
         .join(':');
   }
 
-  // Dart build hooks run in a semi-hermetic environment that strips
-  // most env vars (dart-lang/native hooks_runner). CCACHE_ prefix is
-  // passed through but RUSTC_WRAPPER and SCCACHE_* are not. Detect
-  // sccache on PATH (which IS passed through) and set RUSTC_WRAPPER
-  // so cargo uses it for compilation caching on CI.
-  final sccache = _findOnPath('sccache');
-  if (sccache != null) {
-    env['RUSTC_WRAPPER'] = sccache;
-    _log.info('sccache enabled: $sccache');
+  // hooks_runner strips SCCACHE_* and ACTIONS_* env vars (dart-lang/native
+  // allowlist). sccache is on PATH but without SCCACHE_GHA_ENABLED and
+  // ACTIONS_CACHE_URL it falls back to local disk (useless on fresh CI).
+  //
+  // The rust CI capability writes /tmp/sccache-wrapper.sh that re-injects
+  // the stripped vars before calling sccache. Prefer it over raw sccache.
+  // On local dev or when the wrapper doesn't exist, fall back to raw sccache.
+  final wrapperPath = '/tmp/sccache-wrapper.sh';
+  final wrapper = File(wrapperPath);
+  if (wrapper.existsSync()) {
+    env['RUSTC_WRAPPER'] = wrapperPath;
+    _log.info('sccache enabled via wrapper (GHA cache)');
+  } else {
+    final sccache = _findOnPath('sccache');
+    if (sccache != null) {
+      env['RUSTC_WRAPPER'] = sccache;
+      _log.info('sccache enabled: $sccache (local cache only)');
+    }
   }
 
   final result = await Process.run(

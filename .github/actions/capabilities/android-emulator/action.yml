@@ -74,31 +74,68 @@ runs:
         # Watchdog: detect and kill stuck `adb shell am force-stop`.
         # Only kills adb processes whose command line contains "force-stop".
         # Other adb commands (install, uninstall, shell getprop) are left alone.
+        # Searches all descendants of dartvm, not just direct children.
         (
           KILLED=false
+          TICK=0
           while kill -0 $CMD_PID 2>/dev/null; do
             sleep 30
-            # Walk every dartvm's children looking for a stuck force-stop.
+            TICK=$((TICK + 1))
+            echo ""
+            echo "=== WATCHDOG PROBE ${TICK} (${TICK}x30s) ==="
+
+            # Find all adb processes system-wide and show their parent chain.
+            echo "-- all adb processes --"
+            for apid in $(pgrep -f adb 2>/dev/null); do
+              ACMD=$(ps -p "$apid" -o args= 2>/dev/null || true)
+              APPID=$(ps -p "$apid" -o ppid= 2>/dev/null | tr -d ' ' || true)
+              ACPU=$(ps -p "$apid" -o %cpu= 2>/dev/null | tr -d ' ' || true)
+              echo "  PID=$apid PPID=$APPID CPU=${ACPU}% CMD=$ACMD"
+            done
+
+            # Find all dartvm processes and their full descendant trees.
+            echo "-- dartvm descendant trees --"
             for dvmpid in $(pgrep -f dartvm 2>/dev/null); do
+              echo "  dartvm $dvmpid:"
+              # Direct children.
               for cpid in $(pgrep -P "$dvmpid" 2>/dev/null); do
-                CNAME=$(ps -p "$cpid" -o comm= 2>/dev/null || true)
-                # Only check adb processes.
-                echo "$CNAME" | grep -q adb || continue
-                [ "$KILLED" = "true" ] && continue
-                # Read the full command line to identify force-stop specifically.
-                CMDLINE=$(ps -p "$cpid" -o args= 2>/dev/null || true)
-                echo "$CMDLINE" | grep -q "force-stop" || continue
-                # Confirmed: this is `adb shell am force-stop`. Kill it.
-                CCPU=$(ps -p "$cpid" -o %cpu= 2>/dev/null | tr -d ' ' || true)
+                CCMD=$(ps -p "$cpid" -o args= 2>/dev/null || true)
+                echo "    L1 $cpid: $CCMD"
+                # Grandchildren.
+                for gcpid in $(pgrep -P "$cpid" 2>/dev/null); do
+                  GCCMD=$(ps -p "$gcpid" -o args= 2>/dev/null || true)
+                  echo "      L2 $gcpid: $GCCMD"
+                  # Great-grandchildren.
+                  for ggcpid in $(pgrep -P "$gcpid" 2>/dev/null); do
+                    GGCCMD=$(ps -p "$ggcpid" -o args= 2>/dev/null || true)
+                    echo "        L3 $ggcpid: $GGCCMD"
+                  done
+                done
+              done
+            done
+
+            # Search for stuck force-stop at any depth under any dartvm.
+            echo "-- force-stop search --"
+            for apid in $(pgrep -f "force-stop" 2>/dev/null); do
+              ACMD=$(ps -p "$apid" -o args= 2>/dev/null || true)
+              ACPU=$(ps -p "$apid" -o %cpu= 2>/dev/null | tr -d ' ' || true)
+              echo "  FOUND: PID=$apid CPU=${ACPU}% CMD=$ACMD"
+              if [ "$KILLED" = "false" ]; then
                 echo ""
-                echo "=== WATCHDOG: stuck adb force-stop detected (PID $cpid, child of dartvm $dvmpid, cpu=${CCPU}%) ==="
-                echo "    cmd: $CMDLINE"
+                echo "=== WATCHDOG: stuck adb force-stop detected (PID $apid, cpu=${ACPU}%) ==="
+                echo "    cmd: $ACMD"
                 echo "    Flutter stopApp() has no timeout — killing to unblock teardown."
                 echo "    Only happens on macOS Intel (SwiftShader CPU starvation)."
-                kill -9 "$cpid" 2>/dev/null || true
+                kill -9 "$apid" 2>/dev/null || true
                 KILLED=true
                 echo "=== WATCHDOG: killed. Flutter test should exit shortly. ==="
                 echo ""
+              fi
+            done
+            if [ "$KILLED" = "false" ]; then
+              echo "  (no force-stop process found)"
+            fi
+            echo "=== END PROBE ==="
               done
             done
           done

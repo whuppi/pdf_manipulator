@@ -37,3 +37,28 @@ runs:
         echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV
         echo "SUBMODULE_PDF_OXIDE=${{ steps.sub.outputs.pdf_oxide }}" >> $GITHUB_ENV
         echo "SUBMODULE_OFFICE_OXIDE=${{ steps.sub.outputs.office_oxide }}" >> $GITHUB_ENV
+
+    # Flutter's hooks_runner strips SCCACHE_* and ACTIONS_* env vars
+    # before spawning build hooks (dart-lang/native allowlist doesn't
+    # include them). Our build.dart can find sccache on PATH but
+    # sccache falls back to local disk cache without these vars.
+    #
+    # Workaround: write a wrapper script that re-injects the vars.
+    # build.dart uses this as RUSTC_WRAPPER instead of raw sccache.
+    # The wrapper calls sccache with the GHA cache env restored.
+    #
+    # Upstream tracking: dart-lang/native#3396
+    - name: Write sccache wrapper for build hooks
+      shell: bash
+      run: |
+        WRAPPER="/tmp/sccache-wrapper.sh"
+        SCCACHE_BIN=$(which sccache)
+        cat > "$WRAPPER" << EOF
+        #!/usr/bin/env bash
+        export SCCACHE_GHA_ENABLED=true
+        export ACTIONS_CACHE_URL="$ACTIONS_CACHE_URL"
+        export ACTIONS_RUNTIME_TOKEN="$ACTIONS_RUNTIME_TOKEN"
+        exec "$SCCACHE_BIN" "\$@"
+        EOF
+        chmod +x "$WRAPPER"
+        echo "sccache wrapper: $WRAPPER -> $SCCACHE_BIN"
