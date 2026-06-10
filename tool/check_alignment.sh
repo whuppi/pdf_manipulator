@@ -26,8 +26,8 @@ if command -v unzip &>/dev/null; then
 elif command -v 7z &>/dev/null; then
   7z x -o"$TMP" "$APK" 'lib/*' >/dev/null 2>&1
 else
-  echo "Skipping: no unzip or 7z available"
-  exit 0
+  echo "Error: no unzip or 7z available to extract APK" >&2
+  exit 1
 fi
 
 # Find a tool that can read ELF headers.
@@ -55,8 +55,8 @@ elif command -v objdump &>/dev/null; then
     if ! echo "$align" | grep -qE '2\*\*(1[4-9]|[2-9][0-9])'; then echo "BAD"; fi
   }
 else
-  echo "Skipping: no readelf or objdump available"
-  exit 0
+  echo "Error: no readelf or objdump available to check ELF alignment" >&2
+  exit 1
 fi
 
 FAIL=0
