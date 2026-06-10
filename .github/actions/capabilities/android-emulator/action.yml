@@ -72,21 +72,28 @@ runs:
         CMD_PID=$!
 
         # Watchdog: detect and kill stuck `adb shell am force-stop`.
+        # Only kills adb processes whose command line contains "force-stop".
+        # Other adb commands (install, uninstall, shell getprop) are left alone.
         (
           KILLED=false
           while kill -0 $CMD_PID 2>/dev/null; do
             sleep 30
-            # Walk every dartvm's children looking for a stuck adb.
+            # Walk every dartvm's children looking for a stuck force-stop.
             for dvmpid in $(pgrep -f dartvm 2>/dev/null); do
               for cpid in $(pgrep -P "$dvmpid" 2>/dev/null); do
                 CNAME=$(ps -p "$cpid" -o comm= 2>/dev/null || true)
+                # Only check adb processes.
+                echo "$CNAME" | grep -q adb || continue
+                [ "$KILLED" = "true" ] && continue
+                # Read the full command line to identify force-stop specifically.
+                CMDLINE=$(ps -p "$cpid" -o args= 2>/dev/null || true)
+                echo "$CMDLINE" | grep -q "force-stop" || continue
+                # Confirmed: this is `adb shell am force-stop`. Kill it.
                 CCPU=$(ps -p "$cpid" -o %cpu= 2>/dev/null | tr -d ' ' || true)
-                if echo "$CNAME" | grep -q adb && [ "$KILLED" = "false" ]; then
-                  # adb child of dartvm at 0% CPU = stuck stopApp().
-                  # Float compare: 0.0% or less = stuck.
-                  if echo "$CCPU" | awk '{ exit ($1 > 0.1) }'; then
+                if true; then
                     echo ""
-                    echo "=== WATCHDOG: stuck adb detected (PID $cpid, child of dartvm $dvmpid, cpu=${CCPU}%) ==="
+                    echo "=== WATCHDOG: stuck adb force-stop detected (PID $cpid, child of dartvm $dvmpid, cpu=${CCPU}%) ==="
+                    echo "    cmd: $CMDLINE"
                     echo "    Flutter stopApp() has no timeout — killing to unblock teardown."
                     echo "    Only happens on macOS Intel (SwiftShader CPU starvation)."
                     kill -9 "$cpid" 2>/dev/null || true
