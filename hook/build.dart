@@ -359,6 +359,22 @@ Future<void> _compileNativeFromHook(
         .join(':');
   }
 
+  // Dart build hooks run in a semi-hermetic environment that strips
+  // most env vars (dart-lang/native hooks_runner). CCACHE_ is
+  // passed through but RUSTC_WRAPPER and SCCACHE_* are not.
+  // Detect sccache on PATH (which IS passed through) and set
+  // RUSTC_WRAPPER so cargo uses it for compilation caching.
+  // Without this, every CI run does a full cold Rust compile.
+  final sccacheResult = Process.runSync(
+    Platform.isWindows ? 'where' : 'which',
+    ['sccache'],
+  );
+  if (sccacheResult.exitCode == 0) {
+    final sccacheBin = (sccacheResult.stdout as String).trim().split('\n').first;
+    env['RUSTC_WRAPPER'] = sccacheBin;
+    _log.info('sccache enabled: $sccacheBin');
+  }
+
   final result = await Process.run(
     'cargo',
     [

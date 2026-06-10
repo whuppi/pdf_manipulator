@@ -203,38 +203,59 @@ test-example-android:
 		echo "DEBUG: flutter test PID=$$TEST_PID"; \
 		( \
 			TICK=0; \
+			ADB_KILL_DONE=false; \
 			while kill -0 $$TEST_PID 2>/dev/null; do \
 				sleep 60; \
 				TICK=$$(expr $$TICK + 1); \
-				MINS=$$(expr $$TICK \* 1); \
 				echo ""; \
-				echo "=== PROBE $${MINS}m ==="; \
+				echo "=== PROBE $${TICK}m ==="; \
 				echo "-- alive processes --"; \
-				ps -eo pid,ppid,%cpu,%mem,etime,comm | grep -iE 'flutter|dart|gradle|java|cargo|rustc|qemu|adb|crashpad|emulator' | grep -v grep || true; \
-				echo "-- adb --"; \
+				ps -eo pid,ppid,%cpu,%mem,etime,comm | grep -iE 'flutter|dart|gradle|java|cargo|rustc|qemu|adb|crashpad|emulator|netsimd' | grep -v grep || true; \
+				echo "-- adb state --"; \
 				adb devices 2>/dev/null || true; \
-				adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null || echo "emulator gone"; \
-				echo "-- dart VM sockets+pipes --"; \
+				adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null || echo "  emulator gone"; \
+				echo "-- dart VM open handles --"; \
 				for p in $$(pgrep -f dartvm 2>/dev/null); do \
-					echo "dartvm PID $$p:"; \
-					lsof -p $$p 2>/dev/null | grep -iE 'TCP|PIPE|sock|LISTEN|ESTABLISHED' || echo "  (none)"; \
+					echo "  dartvm PID $$p:"; \
+					lsof -p $$p 2>/dev/null | grep -iE 'TCP|PIPE|sock|LISTEN|ESTABLISHED' || echo "    (none)"; \
 				done; \
-				echo "-- flutter_tools sockets --"; \
-				for p in $$(pgrep -f flutter_tools 2>/dev/null); do \
-					echo "flutter_tools PID $$p:"; \
-					lsof -p $$p 2>/dev/null | grep -iE 'TCP|PIPE|sock|LISTEN|ESTABLISHED' || echo "  (none)"; \
+				echo "-- adb child of dartvm (stopApp hang indicator) --"; \
+				for dvmpid in $$(pgrep -f dartvm 2>/dev/null); do \
+					for cpid in $$(pgrep -P $$dvmpid 2>/dev/null); do \
+						CNAME=$$(ps -p $$cpid -o comm= 2>/dev/null); \
+						CTIME=$$(ps -p $$cpid -o etime= 2>/dev/null | tr -d ' '); \
+						CCPU=$$(ps -p $$cpid -o %cpu= 2>/dev/null | tr -d ' '); \
+						echo "  child $$cpid of dartvm $$dvmpid: $$CNAME (elapsed=$$CTIME, cpu=$$CCPU%)"; \
+						if echo "$$CNAME" | grep -q adb; then \
+							echo "  *** STUCK ADB DETECTED (child of dartvm) ***"; \
+							echo "  lsof for stuck adb:"; \
+							lsof -p $$cpid 2>/dev/null | head -20 || true; \
+							echo "  strace/dtruss not available on macOS CI"; \
+							if [ "$$ADB_KILL_DONE" = "false" ]; then \
+								echo "  >>> KILLING stuck adb PID $$cpid to test if flutter test unblocks <<<"; \
+								kill -9 $$cpid 2>/dev/null || true; \
+								ADB_KILL_DONE=true; \
+								echo "  >>> KILLED. Watching if flutter test exits... <<<"; \
+							fi; \
+						fi; \
+					done; \
 				done; \
+				echo "-- gradle/java daemons --"; \
+				for p in $$(pgrep -f 'java.*gradle\|GradleDaemon\|KotlinCompileDaemon' 2>/dev/null); do \
+					echo "  java PID $$p ($$(ps -p $$p -o etime= 2>/dev/null | tr -d ' ')): $$(ps -p $$p -o %cpu= 2>/dev/null | tr -d ' ')% cpu"; \
+				done || echo "  (none)"; \
 				echo "-- test result file --"; \
 				ls -la ../$(TEST_RESULTS_DIR)/int-android.json 2>/dev/null || echo "  NOT WRITTEN"; \
-				echo "-- child PIDs of flutter test --"; \
+				echo "-- full child tree of flutter test --"; \
 				pgrep -P $$TEST_PID 2>/dev/null | while read cpid; do \
-					echo "  child $$cpid: $$(ps -p $$cpid -o comm= 2>/dev/null)"; \
-				done || echo "  (no children or pgrep failed)"; \
-				echo "-- thread count per dart process --"; \
-				for p in $$(pgrep -f dart 2>/dev/null); do \
-					THREADS=$$(ps -M $$p 2>/dev/null | wc -l | tr -d ' '); \
-					echo "  PID $$p ($$(ps -p $$p -o comm= 2>/dev/null)): $$THREADS threads"; \
-				done; \
+					echo "  L1 child $$cpid: $$(ps -p $$cpid -o comm= 2>/dev/null)"; \
+					pgrep -P $$cpid 2>/dev/null | while read gcpid; do \
+						echo "    L2 child $$gcpid: $$(ps -p $$gcpid -o comm= 2>/dev/null)"; \
+						pgrep -P $$gcpid 2>/dev/null | while read ggcpid; do \
+							echo "      L3 child $$ggcpid: $$(ps -p $$ggcpid -o comm= 2>/dev/null)"; \
+						done; \
+					done; \
+				done || echo "  (no children)"; \
 				echo "=== END PROBE ==="; \
 				echo ""; \
 			done; \
@@ -299,30 +320,30 @@ verify: verify-android verify-ios verify-macos verify-linux verify-windows verif
 
 verify-android:
 	@echo "=== Verify: Android ==="
-	cd example && $(FLUTTER) build apk --release
+	cd example && $(FLUTTER) build apk --release --verbose
 	@bash tool/check_alignment.sh example/build/app/outputs/flutter-apk/app-release.apk
 
 verify-ios:
 	@echo "=== Verify: iOS ==="
-	cd example && $(FLUTTER) build ios --release --no-codesign
+	cd example && $(FLUTTER) build ios --release --no-codesign --verbose
 
 verify-macos:
 	@echo "=== Verify: macOS ==="
-	cd example && $(FLUTTER) build macos --release
+	cd example && $(FLUTTER) build macos --release --verbose
 
 verify-linux:
 	@echo "=== Verify: Linux ==="
 	$(call ensure_gtk)
-	cd example && $(FLUTTER) build linux --release
+	cd example && $(FLUTTER) build linux --release --verbose
 
 verify-windows:
 	@echo "=== Verify: Windows ==="
-	cd example && $(FLUTTER) build windows --release
+	cd example && $(FLUTTER) build windows --release --verbose
 
 verify-web:
 	$(call setup_example_web)
 	@echo "=== Verify: Web ==="
-	cd example && $(FLUTTER) build web --release
+	cd example && $(FLUTTER) build web --release --verbose
 
 # ═══════════════════════════════════════════════════════════════════
 # § 8 — Clean
