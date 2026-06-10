@@ -136,8 +136,6 @@ runs:
               echo "  (no force-stop process found)"
             fi
             echo "=== END PROBE ==="
-              done
-            done
           done
         ) &
         WATCHDOG_PID=$!
