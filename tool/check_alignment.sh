@@ -30,33 +30,40 @@ else
   exit 1
 fi
 
-# Find a tool that can read ELF headers.
-# NDK's llvm-readelf handles cross-arch; host objdump may not.
+# Find a tool that can read cross-arch ELF headers.
+# GNU objdump from MSYS2/MinGW only supports host arch (x86_64) —
+# it cannot read arm64-v8a ELF (PKGBUILD: --target=${CHOST}, no
+# --enable-targets=all). Only LLVM tools handle all architectures.
 READELF=""
 if command -v llvm-readelf &>/dev/null; then
   READELF="llvm-readelf"
 elif [ -n "${ANDROID_NDK:-}" ]; then
   NDK_READELF=$(find "$ANDROID_NDK/toolchains/llvm/prebuilt" -name 'llvm-readelf' -o -name 'llvm-readelf.exe' 2>/dev/null | head -1)
   [ -n "$NDK_READELF" ] && READELF="$NDK_READELF"
+elif command -v objdump &>/dev/null; then
+  # Last resort — works on Linux/macOS (LLVM objdump) but NOT
+  # on Windows (GNU objdump can't read ARM ELF).
+  READELF="objdump"
 fi
 
-if [ -n "$READELF" ]; then
-  # llvm-readelf: check p_align of LOAD segments directly.
+if [ -z "$READELF" ]; then
+  echo "Error: no llvm-readelf or objdump available" >&2
+  exit 1
+fi
+
+if [ "$READELF" = "objdump" ]; then
+  check_align() {
+    local align
+    align=$(objdump -p "$1" 2>/dev/null | grep LOAD | awk '{ print $NF }' | head -1)
+    if [ -z "$align" ]; then echo "BAD"; return; fi
+    if ! echo "$align" | grep -qE '2\*\*(1[4-9]|[2-9][0-9])'; then echo "BAD"; fi
+  }
+else
   check_align() {
     "$READELF" -l "$1" 2>/dev/null | awk '/LOAD/{print $NF}' | while read -r align; do
       if [ "$((align))" -lt 16384 ] 2>/dev/null; then echo "BAD"; return; fi
     done
   }
-elif command -v objdump &>/dev/null; then
-  # GNU objdump: alignment shown as 2**N.
-  check_align() {
-    local align
-    align=$(objdump -p "$1" 2>/dev/null | grep LOAD | awk '{ print $NF }' | head -1)
-    if ! echo "$align" | grep -qE '2\*\*(1[4-9]|[2-9][0-9])'; then echo "BAD"; fi
-  }
-else
-  echo "Error: no readelf or objdump available to check ELF alignment" >&2
-  exit 1
 fi
 
 FAIL=0
