@@ -193,72 +193,63 @@ test-example-windows:
 test-example-android:
 	@echo "=== Example: Android ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
-	@echo "=== DEBUG: pre-test processes ==="
+	@echo "=== DEBUG: pre-test state ==="
 	-ps aux | grep -iE 'flutter|dart|gradle|emulator|qemu|adb' | grep -v grep || true
 	-adb devices 2>/dev/null || true
-	@echo "=== DEBUG: starting flutter test (backgrounded + debug monitor) ==="
-	@cd example && $(FLUTTER) test $(TIMEOUT) integration_test/pdf_smoke_test.dart --file-reporter json:../$(TEST_RESULTS_DIR)/int-android.json 2>&1 | tee /tmp/flutter_test_output.log & \
+	@echo "=== DEBUG: launching flutter test + debug probe ==="
+	@cd example && \
+		$(FLUTTER) test $(TIMEOUT) integration_test/pdf_smoke_test.dart --file-reporter json:../$(TEST_RESULTS_DIR)/int-android.json & \
 		TEST_PID=$$!; \
 		echo "DEBUG: flutter test PID=$$TEST_PID"; \
-		SECONDS_SINCE_LAST_OUTPUT=0; \
-		TOTAL_SECONDS=0; \
-		TESTS_DONE=false; \
-		while kill -0 $$TEST_PID 2>/dev/null; do \
-			sleep 10; \
-			TOTAL_SECONDS=$$(expr $$TOTAL_SECONDS + 10); \
-			if grep -q "tests passed\|tests failed" /tmp/flutter_test_output.log 2>/dev/null; then \
-				if [ "$$TESTS_DONE" = "false" ]; then \
-					echo "DEBUG: tests finished at $${TOTAL_SECONDS}s — starting hang watch"; \
-					TESTS_DONE=true; \
-					SECONDS_SINCE_LAST_OUTPUT=0; \
-				fi; \
-				SECONDS_SINCE_LAST_OUTPUT=$$(expr $$SECONDS_SINCE_LAST_OUTPUT + 10); \
-				if [ $$SECONDS_SINCE_LAST_OUTPUT -ge 120 ]; then \
-					echo ""; \
-					echo "=== DEBUG: HANG DETECTED ($${SECONDS_SINCE_LAST_OUTPUT}s after tests finished) ==="; \
-					echo "--- processes ---"; \
-					ps aux | grep -iE 'flutter|dart|gradle|emulator|qemu|adb|crashpad' | grep -v grep || true; \
-					echo "--- adb devices ---"; \
-					adb devices 2>/dev/null || true; \
-					echo "--- adb shell (emulator alive?) ---"; \
-					adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null || echo "emulator not reachable"; \
-					echo "--- dart process open handles ---"; \
-					for dpid in $$(pgrep -f 'dart' 2>/dev/null); do \
-						echo "PID $$dpid ($$(ps -p $$dpid -o comm= 2>/dev/null)):"; \
-						lsof -p $$dpid 2>/dev/null | grep -iE 'TCP|PIPE|sock|LISTEN' | head -15 || true; \
-					done; \
-					echo "--- java/gradle processes ---"; \
-					for jpid in $$(pgrep -f 'java|gradle' 2>/dev/null); do \
-						echo "PID $$jpid ($$(ps -p $$jpid -o comm= 2>/dev/null)):"; \
-						lsof -p $$jpid 2>/dev/null | grep -iE 'TCP|PIPE|LISTEN' | head -10 || true; \
-					done; \
-					echo "--- test results file ---"; \
-					ls -la ../$(TEST_RESULTS_DIR)/int-android.json 2>/dev/null || echo "NOT WRITTEN"; \
-					echo "--- last 5 lines of flutter output ---"; \
-					tail -5 /tmp/flutter_test_output.log 2>/dev/null || true; \
-					echo "--- process tree from flutter test PID ---"; \
-					pstree $$TEST_PID 2>/dev/null || ps -o pid,ppid,comm -p $$(pgrep -P $$TEST_PID 2>/dev/null) 2>/dev/null || true; \
-					echo "=== END HANG DEBUG ==="; \
-					echo "DEBUG: killing flutter test after hang"; \
-					kill -9 $$TEST_PID 2>/dev/null || true; \
-					break; \
-				fi; \
-			fi; \
-			if [ $$TOTAL_SECONDS -ge 3000 ]; then \
-				echo "DEBUG: absolute timeout 3000s — killing"; \
-				echo "--- processes at timeout ---"; \
-				ps aux | grep -iE 'flutter|dart|gradle|cargo|rustc|emulator' | grep -v grep || true; \
-				kill -9 $$TEST_PID 2>/dev/null || true; \
-				break; \
-			fi; \
-		done; \
+		( \
+			TICK=0; \
+			while kill -0 $$TEST_PID 2>/dev/null; do \
+				sleep 60; \
+				TICK=$$(expr $$TICK + 1); \
+				MINS=$$(expr $$TICK \* 1); \
+				echo ""; \
+				echo "=== PROBE $${MINS}m ==="; \
+				echo "-- alive processes --"; \
+				ps -eo pid,ppid,%cpu,%mem,etime,comm | grep -iE 'flutter|dart|gradle|java|cargo|rustc|qemu|adb|crashpad|emulator' | grep -v grep || true; \
+				echo "-- adb --"; \
+				adb devices 2>/dev/null || true; \
+				adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null || echo "emulator gone"; \
+				echo "-- dart VM sockets+pipes --"; \
+				for p in $$(pgrep -f dartvm 2>/dev/null); do \
+					echo "dartvm PID $$p:"; \
+					lsof -p $$p 2>/dev/null | grep -iE 'TCP|PIPE|sock|LISTEN|ESTABLISHED' || echo "  (none)"; \
+				done; \
+				echo "-- flutter_tools sockets --"; \
+				for p in $$(pgrep -f flutter_tools 2>/dev/null); do \
+					echo "flutter_tools PID $$p:"; \
+					lsof -p $$p 2>/dev/null | grep -iE 'TCP|PIPE|sock|LISTEN|ESTABLISHED' || echo "  (none)"; \
+				done; \
+				echo "-- test result file --"; \
+				ls -la ../$(TEST_RESULTS_DIR)/int-android.json 2>/dev/null || echo "  NOT WRITTEN"; \
+				echo "-- child PIDs of flutter test --"; \
+				pgrep -P $$TEST_PID 2>/dev/null | while read cpid; do \
+					echo "  child $$cpid: $$(ps -p $$cpid -o comm= 2>/dev/null)"; \
+				done || echo "  (no children or pgrep failed)"; \
+				echo "-- thread count per dart process --"; \
+				for p in $$(pgrep -f dart 2>/dev/null); do \
+					THREADS=$$(ps -M $$p 2>/dev/null | wc -l | tr -d ' '); \
+					echo "  PID $$p ($$(ps -p $$p -o comm= 2>/dev/null)): $$THREADS threads"; \
+				done; \
+				echo "=== END PROBE ==="; \
+				echo ""; \
+			done; \
+			echo "DEBUG: flutter test exited, probe stopping"; \
+		) & \
+		PROBE_PID=$$!; \
 		wait $$TEST_PID 2>/dev/null; \
 		EXIT=$$?; \
+		kill $$PROBE_PID 2>/dev/null || true; \
+		wait $$PROBE_PID 2>/dev/null || true; \
+		echo ""; \
 		echo "=== DEBUG: flutter test exit code=$$EXIT ==="; \
-		echo "=== DEBUG: final process state ==="; \
-		ps aux | grep -iE 'flutter|dart|gradle|emulator|qemu|adb|crashpad' | grep -v grep || true; \
-		rm -f /tmp/flutter_test_output.log; \
-		[ $$EXIT -eq 137 ] && EXIT=0; \
+		echo "=== DEBUG: final state ==="; \
+		ps -eo pid,ppid,%cpu,%mem,etime,comm | grep -iE 'flutter|dart|gradle|java|cargo|rustc|qemu|adb|crashpad|emulator' | grep -v grep || true; \
+		echo "=== END DEBUG ==="; \
 		exit $$EXIT
 
 # Runs on the booted simulator. CI boots the simulator via setup-ios.
