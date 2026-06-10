@@ -117,10 +117,16 @@ runs:
             # Search for stuck teardown adb commands (force-stop OR uninstall).
             # Both go through Binder IPC to system_server and hang when
             # the emulator is CPU-starved.
+            # Note: pgrep -f "a\|b" doesn't work on macOS. Search separately.
             echo "-- teardown adb search --"
-            for apid in $(pgrep -f "force-stop\|uninstall" 2>/dev/null); do
+            TEARDOWN_PIDS=""
+            for pattern in "force-stop" "uninstall"; do
+              for apid in $(pgrep -f "$pattern" 2>/dev/null); do
+                TEARDOWN_PIDS="$TEARDOWN_PIDS $apid"
+              done
+            done
+            for apid in $TEARDOWN_PIDS; do
               ACMD=$(ps -p "$apid" -o args= 2>/dev/null || true)
-              # Only match adb commands, not random processes.
               echo "$ACMD" | grep -q "adb" || continue
               ACPU=$(ps -p "$apid" -o %cpu= 2>/dev/null | tr -d ' ' || true)
               echo "  FOUND: PID=$apid CPU=${ACPU}% CMD=$ACMD"
