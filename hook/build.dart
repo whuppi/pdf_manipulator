@@ -359,15 +359,21 @@ Future<void> _compileNativeFromHook(
         .join(':');
   }
 
-  // hooks_runner strips SCCACHE_* env vars (dart-lang/native#3396).
-  // sccache on PATH still works for local disk cache. GHA cache backend
-  // requires SCCACHE_GHA_ENABLED + ACTIONS_CACHE_URL which are stripped.
-  // Until upstream adds SCCACHE_ to the allowlist, native builds get
-  // local-disk-only sccache (helps on repeat builds, not across CI runs).
-  final sccache = _findOnPath('sccache');
-  if (sccache != null) {
-    env['RUSTC_WRAPPER'] = sccache;
-    _log.info('sccache enabled: $sccache');
+  // hooks_runner strips SCCACHE_* and ACTIONS_* env vars (dart-lang/native#3396).
+  // The rust CI capability writes /tmp/sccache-wrapper.sh that re-injects
+  // the stripped vars before calling sccache. Prefer it over raw sccache.
+  // On local dev or when the wrapper doesn't exist, fall back to raw sccache.
+  final wrapperPath = '/tmp/sccache-wrapper.sh';
+  final wrapper = File(wrapperPath);
+  if (wrapper.existsSync()) {
+    env['RUSTC_WRAPPER'] = wrapperPath;
+    _log.info('sccache enabled via wrapper (GHA cache)');
+  } else {
+    final sccache = _findOnPath('sccache');
+    if (sccache != null) {
+      env['RUSTC_WRAPPER'] = sccache;
+      _log.info('sccache enabled: $sccache (local cache only)');
+    }
   }
 
   final result = await Process.run(
