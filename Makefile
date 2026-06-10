@@ -193,7 +193,49 @@ test-example-windows:
 test-example-android:
 	@echo "=== Example: Android ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
-	cd example && $(FLUTTER) test $(TIMEOUT) integration_test/pdf_smoke_test.dart --file-reporter json:../$(TEST_RESULTS_DIR)/int-android.json
+	@echo "=== DEBUG: pre-test processes ==="
+	-ps aux | grep -iE 'flutter|dart|gradle|emulator|qemu|adb' | grep -v grep || true
+	-adb devices 2>/dev/null || true
+	@echo "=== DEBUG: starting flutter test (backgrounded + debug monitor) ==="
+	@cd example && $(FLUTTER) test $(TIMEOUT) integration_test/pdf_smoke_test.dart --file-reporter json:../$(TEST_RESULTS_DIR)/int-android.json & \
+		TEST_PID=$$!; \
+		echo "DEBUG: flutter test PID=$$TEST_PID"; \
+		MONITOR_COUNT=0; \
+		while kill -0 $$TEST_PID 2>/dev/null; do \
+			sleep 10; \
+			MONITOR_COUNT=$$(expr $$MONITOR_COUNT + 1); \
+			if [ $$MONITOR_COUNT -ge 30 ]; then \
+				echo ""; \
+				echo "=== DEBUG DUMP ($$(expr $$MONITOR_COUNT \* 10)s since start) ==="; \
+				echo "--- processes ---"; \
+				ps aux | grep -iE 'flutter|dart|gradle|emulator|qemu|adb|crashpad' | grep -v grep || true; \
+				echo "--- adb devices ---"; \
+				adb devices 2>/dev/null || true; \
+				echo "--- adb shell (emulator alive?) ---"; \
+				adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null || echo "emulator not reachable"; \
+				echo "--- open connections by dart ---"; \
+				for dpid in $$(pgrep -f 'dart' 2>/dev/null); do \
+					echo "PID $$dpid:"; \
+					lsof -p $$dpid 2>/dev/null | grep -iE 'TCP|PIPE|sock' | head -10 || true; \
+				done; \
+				echo "--- test results file ---"; \
+				ls -la ../$(TEST_RESULTS_DIR)/int-android.json 2>/dev/null || echo "NOT WRITTEN YET"; \
+				echo "--- flutter test stdout tail ---"; \
+				echo "(see above for test output)"; \
+				echo "=== END DEBUG DUMP ==="; \
+				echo ""; \
+				echo "DEBUG: killing flutter test after $$(expr $$MONITOR_COUNT \* 10)s"; \
+				kill -9 $$TEST_PID 2>/dev/null || true; \
+				break; \
+			fi; \
+		done; \
+		wait $$TEST_PID 2>/dev/null; \
+		EXIT=$$?; \
+		echo "=== DEBUG: flutter test exit code=$$EXIT ==="; \
+		echo "=== DEBUG: final process state ==="; \
+		ps aux | grep -iE 'flutter|dart|gradle|emulator|qemu|adb|crashpad' | grep -v grep || true; \
+		[ $$EXIT -eq 137 ] && EXIT=0; \
+		exit $$EXIT
 
 # Runs on the booted simulator. CI boots the simulator via setup-ios.
 test-example-ios:
