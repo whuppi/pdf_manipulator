@@ -6,6 +6,8 @@
 
 - Fixed missing WASM binaries in 1.0.6 release (web consumers couldn't download pre-built assets)
 - Added binary verification gate — releases now fail if any of the 15 expected binaries are missing
+- Fixed Android 16 KB page-size alignment for Google Play API 35+ ([PR whuppi/pdf_oxide#1](https://github.com/whuppi/pdf_oxide/pull/1), [@Binary-Parse](https://github.com/Binary-Parse))
+- Added 16 KB ELF alignment verification — Android release builds now checked before shipping
 
 ## 1.0.6-dev.0
 

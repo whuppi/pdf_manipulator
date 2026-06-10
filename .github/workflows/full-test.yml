@@ -84,10 +84,7 @@ jobs:
           # Emulator needs Intel — macOS ARM runners are M1 VMs that can't virtualize the emulator:
           # https://docs.github.com/en/actions/reference/runners/github-hosted-runners#limitations-for-arm64-macos-runners
           - { name: "int: Android (ubuntu-x64)",    runner: ubuntu-24.04,        make: test-example-android, timeout: 40, java: true, hw-accel: true, gradle-cache: true, emulator: true }
-          # Always hangs: flutter test doesn't exit after tests pass
-          # on Intel macOS — dart VM stuck on teardown. Check logs
-          # for ✅/❌ results manually, ignore the timeout cancel.
-          - { name: "int: Android (macos-intel) [P] ⚠", runner: macos-15-intel,      make: test-example-android, timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
+          - { name: "int: Android (macos-intel) [P]", runner: macos-15-intel,      make: test-example-android, timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
           - { name: "int: Android (win-x64) [P]",       runner: windows-2025-vs2026, make: test-example-android, timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
           - { name: "int: iOS (macos-arm64)",       runner: macos-14,            make: test-example-ios,     timeout: 60, xcode-cache: true, xcode-cache-target: ios, pods-cache: true, simulator: true }
           - { name: "int: Linux (ubuntu-x64)",      runner: ubuntu-24.04,        make: test-example-linux,   timeout: 30, headless-display: true }

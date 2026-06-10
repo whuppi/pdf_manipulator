@@ -242,29 +242,30 @@ verify: verify-android verify-ios verify-macos verify-linux verify-windows verif
 
 verify-android:
 	@echo "=== Verify: Android ==="
-	cd example && $(FLUTTER) build apk --release
+	cd example && $(FLUTTER) build apk --release --verbose
+	@bash tool/check_alignment.sh example/build/app/outputs/flutter-apk/app-release.apk
 
 verify-ios:
 	@echo "=== Verify: iOS ==="
-	cd example && $(FLUTTER) build ios --release --no-codesign
+	cd example && $(FLUTTER) build ios --release --no-codesign --verbose
 
 verify-macos:
 	@echo "=== Verify: macOS ==="
-	cd example && $(FLUTTER) build macos --release
+	cd example && $(FLUTTER) build macos --release --verbose
 
 verify-linux:
 	@echo "=== Verify: Linux ==="
 	$(call ensure_gtk)
-	cd example && $(FLUTTER) build linux --release
+	cd example && $(FLUTTER) build linux --release --verbose
 
 verify-windows:
 	@echo "=== Verify: Windows ==="
-	cd example && $(FLUTTER) build windows --release
+	cd example && $(FLUTTER) build windows --release --verbose
 
 verify-web:
 	$(call setup_example_web)
 	@echo "=== Verify: Web ==="
-	cd example && $(FLUTTER) build web --release
+	cd example && $(FLUTTER) build web --release --verbose
 
 # ═══════════════════════════════════════════════════════════════════
 # § 8 — Clean

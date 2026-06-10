@@ -226,6 +226,7 @@ bin/
 tool/
 ├── lib.sh                                  ← shared helpers (sourced by 2+ scripts)
 ├── analyze.sh                              ← Dart + Rust static analysis
+├── check_alignment.sh                      ← 16 KB ELF alignment check for Android APK
 ├── compile_rust.sh                         ← Rust → native / wasm / per-target / both
 ├── release.sh                              ← 7 modes: --gate, --discover, --github-notes,
 │                                              --update-tag-hashes, --stamp-changelog,

@@ -35,6 +35,88 @@ runs:
         $ANDROID_HOME/platform-tools/adb start-server
         $ANDROID_HOME/platform-tools/adb devices
 
+    # Watchdog for the flutter test teardown hang on macOS Intel.
+    #
+    # Only affects: macOS Intel + SwiftShader (no hardware GPU).
+    # Does NOT affect: Linux with KVM, Windows, macOS ARM, local dev.
+    #
+    # Root cause: Flutter's stopApp() calls `adb shell am force-stop`
+    # with no timeout (android_device.dart → _processUtils.stream()).
+    # On SwiftShader emulators, qemu uses ~200% CPU on 4 cores,
+    # starving the guest's ActivityManagerService. The `am force-stop`
+    # command never gets CPU time to execute. The dartvm waits for
+    # this adb child forever → flutter test never exits.
+    #
+    # Fix: detect the stuck adb child of dartvm (0% CPU) and kill it.
+    # stopApp() receives an error return, continues to uninstallApp()
+    # which also fails with "adb uninstall failed: exit code -9" —
+    # that error in the logs is expected and harmless. Teardown then
+    # completes and flutter test prints the summary and exits cleanly.
+    #
+    # Harmless on runners where the hang doesn't occur — the watchdog
+    # simply never finds a stuck adb process and exits with the
+    # user's command.
+    #
+    # Remove this watchdog when Flutter adds a timeout to stopApp():
+    # https://github.com/flutter/flutter/blob/master/packages/flutter_tools/lib/src/android/android_device.dart
+    - name: Write emulator scripts
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        cat > /tmp/emulator-run.sh << 'EMUSCRIPT'
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        # Run the user's command in background.
+        bash -c "$1" &
+        CMD_PID=$!
+
+        # Watchdog: detect and kill stuck `adb shell am force-stop`.
+        # Only kills adb processes whose command line contains "force-stop".
+        # Other adb commands (install, uninstall, shell getprop) are left alone.
+        (
+          KILLED=false
+          while kill -0 $CMD_PID 2>/dev/null; do
+            sleep 30
+            # Walk every dartvm's children looking for a stuck force-stop.
+            for dvmpid in $(pgrep -f dartvm 2>/dev/null); do
+              for cpid in $(pgrep -P "$dvmpid" 2>/dev/null); do
+                CNAME=$(ps -p "$cpid" -o comm= 2>/dev/null || true)
+                # Only check adb processes.
+                echo "$CNAME" | grep -q adb || continue
+                [ "$KILLED" = "true" ] && continue
+                # Read the full command line to identify force-stop specifically.
+                CMDLINE=$(ps -p "$cpid" -o args= 2>/dev/null || true)
+                echo "$CMDLINE" | grep -q "force-stop" || continue
+                # Confirmed: this is `adb shell am force-stop`. Kill it.
+                CCPU=$(ps -p "$cpid" -o %cpu= 2>/dev/null | tr -d ' ' || true)
+                echo ""
+                echo "=== WATCHDOG: stuck adb force-stop detected (PID $cpid, child of dartvm $dvmpid, cpu=${CCPU}%) ==="
+                echo "    cmd: $CMDLINE"
+                echo "    Flutter stopApp() has no timeout — killing to unblock teardown."
+                echo "    Only happens on macOS Intel (SwiftShader CPU starvation)."
+                kill -9 "$cpid" 2>/dev/null || true
+                KILLED=true
+                echo "=== WATCHDOG: killed. Flutter test should exit shortly. ==="
+                echo ""
+              done
+            done
+          done
+        ) &
+        WATCHDOG_PID=$!
+
+        # Wait for the user's command to finish.
+        wait $CMD_PID 2>/dev/null
+        EXIT=$?
+
+        # Stop the watchdog.
+        kill $WATCHDOG_PID 2>/dev/null || true
+        wait $WATCHDOG_PID 2>/dev/null || true
+
+        exit $EXIT
+        EMUSCRIPT
+        chmod +x /tmp/emulator-run.sh
+
     # ── Linux / macOS — use the action ──
     - name: Emulator (Linux/macOS)
       if: runner.os != 'Windows'
@@ -47,7 +129,7 @@ runs:
         emulator-options: -no-snapshot-save -no-window -noaudio -no-boot-anim
         emulator-boot-timeout: 600
         disable-animations: true
-        script: ${{ inputs.script }}
+        script: /tmp/emulator-run.sh '${{ inputs.script }}'
 
     # ── Windows — manual boot (action doesn't support Windows) ──
     # Git Bash needs Unix paths — cygpath converts C:\Android\... to /c/Android/...

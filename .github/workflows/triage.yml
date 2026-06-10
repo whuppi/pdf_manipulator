@@ -1,6 +1,6 @@
-# Lightweight triage — no LLM, just rules.
-# Auto-assigns, auto-labels, revoke stale ready-to-test.
-# Runner-agnostic — all jobs use RUNNER env var (default: ubuntu-24.04).
+# Lightweight triage — auto-assign, auto-label, revoke stale labels.
+# Uses REST API (not GraphQL) for fork PR compatibility.
+# File-path labeling delegated to actions/labeler (Flutter's pattern).
 name: Triage
 
 on:
@@ -10,6 +10,7 @@ on:
     types: [opened, synchronize]
 
 permissions:
+  contents: read
   issues: write
   pull-requests: write
 
@@ -25,9 +26,65 @@ jobs:
       - id: resolve
         run: echo "runner=${{ env.DEFAULT_RUNNER }}" >> $GITHUB_OUTPUT
 
-  # Revoke stale ready-to-test label when new commits are pushed.
-  # Lives here (not full-test.yml) because pull_request_target gives
-  # write access to labels on fork PRs.
+  # ── Auto-label by file path (actions/labeler) ──
+  label-by-files:
+    needs: inputs
+    if: github.event_name == 'pull_request_target'
+    runs-on: ${{ needs.inputs.outputs.runner }}
+    steps:
+      - uses: actions/labeler@v5
+        with:
+          sync-labels: false
+
+  # ── Auto-label by PR title + branch ──
+  label-by-title:
+    needs: inputs
+    if: github.event_name == 'pull_request_target' && github.event.action == 'opened'
+    runs-on: ${{ needs.inputs.outputs.runner }}
+    steps:
+      - name: Label by conventional commit title
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPO="${{ github.repository }}"
+          PR="${{ github.event.pull_request.number }}"
+          TITLE="${{ github.event.pull_request.title }}"
+          HEAD="${{ github.event.pull_request.head.ref }}"
+          BASE="${{ github.event.pull_request.base.ref }}"
+
+          add_label() {
+            gh api "repos/$REPO/issues/$PR/labels" -f "labels[]=$1" --silent 2>/dev/null || true
+          }
+
+          if echo "$TITLE" | grep -qE '^fix(\(|!?:)'; then
+            add_label "bug"
+          elif echo "$TITLE" | grep -qE '^feat(\(|!?:)'; then
+            add_label "feature"
+          fi
+
+          if [[ "$HEAD" == "dev" && "$BASE" == "prod" ]]; then
+            add_label "release"
+          fi
+
+  # ── Auto-assign maintainer ──
+  assign:
+    needs: inputs
+    runs-on: ${{ needs.inputs.outputs.runner }}
+    steps:
+      - name: Assign maintainer
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REPO="${{ github.repository }}"
+          if [[ "${{ github.event_name }}" == "issues" ]]; then
+            NUM="${{ github.event.issue.number }}"
+          else
+            NUM="${{ github.event.pull_request.number }}"
+          fi
+          gh api "repos/$REPO/issues/$NUM/assignees" \
+            -f "assignees[]=chaudharydeepanshu" --silent 2>/dev/null || true
+
+  # ── Revoke stale ready-to-test on new commits ──
   revoke-ready-to-test:
     needs: inputs
     if: >-
@@ -40,17 +97,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh pr edit ${{ github.event.pull_request.number }} \
-            --repo ${{ github.repository }} \
-            --remove-label "ready-to-test"
-          gh pr comment ${{ github.event.pull_request.number }} \
-            --repo ${{ github.repository }} \
-            --body "Label \`ready-to-test\` removed — new commits pushed. Re-add when ready."
+          REPO="${{ github.repository }}"
+          PR="${{ github.event.pull_request.number }}"
+          gh api "repos/$REPO/issues/$PR/labels/ready-to-test" -X DELETE --silent 2>/dev/null || true
+          gh api "repos/$REPO/issues/$PR/comments" \
+            -f "body=Label \`ready-to-test\` removed — new commits pushed. Re-add when ready." \
+            --silent 2>/dev/null || true
 
-  # When a non-dependabot push lands on a dependabot PR (e.g. human clicks
-  # "Update branch"), workflows may be outdated. github-actions[bot] can't
-  # run dependabot commands (no push access), so we comment asking a human.
-  # Skips when dependabot itself pushes (after a recreate) to avoid loops.
+  # ── Dependabot recreate notice ──
   dependabot-needs-recreate:
     needs: inputs
     if: >-
@@ -64,64 +118,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh pr comment "${{ github.event.pull_request.number }}" \
-            --repo "${{ github.repository }}" --body \
-            "New commits pushed — workflows may be outdated. A maintainer with push access should comment \`@dependabot recreate\` to pick up the latest changes."
-
-  assign-and-label:
-    needs: inputs
-    runs-on: ${{ needs.inputs.outputs.runner }}
-    steps:
-      # Auto-assign maintainer on everything
-      - name: Auto-assign
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [[ "${{ github.event_name }}" == "issues" ]]; then
-            gh issue edit ${{ github.event.issue.number }} \
-              --repo ${{ github.repository }} \
-              --add-assignee chaudharydeepanshu
-          else
-            gh pr edit ${{ github.event.pull_request.number }} \
-              --repo ${{ github.repository }} \
-              --add-assignee chaudharydeepanshu
-          fi
-
-      # Auto-label PRs based on files changed
-      - name: Auto-label PR
-        if: github.event_name == 'pull_request_target'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR: ${{ github.event.pull_request.number }}
-        run: |
-          # Use the REST API files endpoint instead of gh pr view --json files.
-          # gh pr view internally fetches the diff, which fails with HTTP 406
-          # on PRs exceeding GitHub's 20,000-line diff limit.
-          FILES=$(gh api repos/${{ github.repository }}/pulls/$PR/files --paginate --jq '.[].filename' 2>/dev/null || echo "")
-
-          if echo "$FILES" | grep -qE "^\.github/|^\.githooks/"; then
-            gh pr edit $PR --repo ${{ github.repository }} --add-label "ci"
-          fi
-
-          if echo "$FILES" | grep -qE "web_assets/|_web\.dart|worker\.js|wasm"; then
-            gh pr edit $PR --repo ${{ github.repository }} --add-label "web"
-          fi
-
-          if echo "$FILES" | grep -qE "^vendor/"; then
-            gh pr edit $PR --repo ${{ github.repository }} --add-label "upstream"
-          fi
-
-          # Auto-label by PR title (conventional commits)
-          TITLE="${{ github.event.pull_request.title }}"
-          if echo "$TITLE" | grep -qE '^fix(\(|!?:)'; then
-            gh pr edit $PR --repo ${{ github.repository }} --add-label "bug"
-          elif echo "$TITLE" | grep -qE '^feat(\(|!?:)'; then
-            gh pr edit $PR --repo ${{ github.repository }} --add-label "feature"
-          fi
-
-          # Auto-label promotion PRs
-          HEAD="${{ github.event.pull_request.head.ref }}"
-          BASE="${{ github.event.pull_request.base.ref }}"
-          if [[ "$HEAD" == "dev" && "$BASE" == "prod" ]]; then
-            gh pr edit $PR --repo ${{ github.repository }} --add-label "release"
-          fi
+          gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+            -f "body=New commits pushed — workflows may be outdated. A maintainer with push access should comment \`@dependabot recreate\` to pick up the latest changes." \
+            --silent 2>/dev/null || true
