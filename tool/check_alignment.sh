@@ -43,9 +43,9 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 if command -v unzip &>/dev/null; then
-  unzip -o "$APK" 'lib/*' -d "$TMP" >/dev/null 2>&1
+  unzip -o "$APK" 'lib/*' -d "$TMP" >/dev/null 2>&1 || true
 elif command -v 7z &>/dev/null; then
-  7z x -o"$TMP" "$APK" 'lib/*' >/dev/null 2>&1
+  7z x "-o$TMP" "$APK" lib/ -y >/dev/null 2>&1 || true
 else
   echo "Error: no unzip or 7z available to extract APK" >&2
   exit 1
