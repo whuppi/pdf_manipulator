@@ -14,11 +14,23 @@ permissions:
   issues: write
   pull-requests: write
 
+env:
+  DEFAULT_RUNNER: ubuntu-24.04
+
 jobs:
+  inputs:
+    runs-on: ubuntu-24.04
+    outputs:
+      runner: ${{ steps.resolve.outputs.runner }}
+    steps:
+      - id: resolve
+        run: echo "runner=${{ env.DEFAULT_RUNNER }}" >> $GITHUB_OUTPUT
+
   # ── Auto-label by file path (actions/labeler) ──
   label-by-files:
+    needs: inputs
     if: github.event_name == 'pull_request_target'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
       - uses: actions/labeler@v5
         with:
@@ -26,8 +38,9 @@ jobs:
 
   # ── Auto-label by PR title + branch ──
   label-by-title:
+    needs: inputs
     if: github.event_name == 'pull_request_target' && github.event.action == 'opened'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
       - name: Label by conventional commit title
         env:
@@ -55,7 +68,8 @@ jobs:
 
   # ── Auto-assign maintainer ──
   assign:
-    runs-on: ubuntu-24.04
+    needs: inputs
+    runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
       - name: Assign maintainer
         env:
@@ -72,11 +86,12 @@ jobs:
 
   # ── Revoke stale ready-to-test on new commits ──
   revoke-ready-to-test:
+    needs: inputs
     if: >-
       github.event_name == 'pull_request_target' &&
       github.event.action == 'synchronize' &&
       contains(github.event.pull_request.labels.*.name, 'ready-to-test')
-    runs-on: ubuntu-24.04
+    runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
       - name: Remove label + notify
         env:
@@ -91,12 +106,13 @@ jobs:
 
   # ── Dependabot recreate notice ──
   dependabot-needs-recreate:
+    needs: inputs
     if: >-
       github.event_name == 'pull_request_target' &&
       github.event.action == 'synchronize' &&
       github.event.pull_request.user.login == 'dependabot[bot]' &&
       github.event.sender.login != 'dependabot[bot]'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
       - name: Notify maintainer
         env:
