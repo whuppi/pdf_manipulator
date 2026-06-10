@@ -35,25 +35,25 @@ runs:
         $ANDROID_HOME/platform-tools/adb start-server
         $ANDROID_HOME/platform-tools/adb devices
 
-    # Watchdog for flutter test teardown hang on macOS Intel.
+    # Watchdog for the flutter test teardown hang on macOS Intel.
     #
     # Only affects: macOS Intel + SwiftShader (no hardware GPU).
     # Does NOT affect: Linux with KVM, Windows, macOS ARM, local dev.
     #
-    # Root cause: Flutter's teardown calls adb commands (force-stop,
-    # uninstall) that go through Binder IPC to the emulator's
-    # system_server. On SwiftShader emulators qemu uses ~200% CPU,
-    # starving system_server. The adb commands hang forever because
-    # Flutter's stopApp() and uninstallApp() have no timeout.
-    # https://github.com/flutter/flutter/issues/187785
+    # Root cause: Flutter's stopApp() calls `adb shell am force-stop`
+    # with no timeout (android_device.dart → _processUtils.stream()).
+    # On SwiftShader emulators, qemu uses ~200% CPU on 4 cores,
+    # starving the guest's ActivityManagerService. The `am force-stop`
+    # command never gets CPU time to execute. The dartvm waits for
+    # this adb child forever → flutter test never exits.
     #
-    # Fix: after all tests pass, any adb child of dartvm sitting at
-    # 0% CPU is a stuck teardown command. Kill it. Flutter handles the
-    # error gracefully and continues to exit. The "adb ... failed:
-    # exit code -9" error in logs after the kill is expected.
+    # Fix: detect the stuck adb child of dartvm (0% CPU) and kill it.
+    # stopApp() receives an error, continues teardown, flutter test
+    # prints the summary and exits cleanly.
     #
     # Harmless on runners where the hang doesn't occur — the watchdog
-    # never finds a stuck adb and exits with the user's command.
+    # simply never finds a stuck adb process and exits with the
+    # user's command.
     - name: Write emulator scripts
       if: runner.os != 'Windows'
       shell: bash
@@ -65,28 +65,29 @@ runs:
         bash -c "$1" &
         CMD_PID=$!
 
-        # Watchdog: kill any adb child of dartvm stuck at 0% CPU.
-        # Checks every 30s. No pattern matching on command names —
-        # any adb process parented to dartvm that's idle is stuck.
+        # Watchdog: kill the two adb commands Flutter runs in teardown.
+        #
+        # Flutter's kill() in integration_test_device.dart runs:
+        #   1. stopApp()     -> adb shell am force-stop <package>
+        #   2. uninstallApp() -> adb uninstall <package>
+        # Both have no timeout and hang on CPU-starved emulators.
+        # Both are direct children of the dartvm process.
+        #
+        # pgrep -f "a|b" doesn't work on macOS BSD — search separately.
         (
           while kill -0 $CMD_PID 2>/dev/null; do
             sleep 30
-            for dvmpid in $(pgrep -f dartvm 2>/dev/null); do
-              for cpid in $(pgrep -P "$dvmpid" 2>/dev/null); do
-                CNAME=$(ps -p "$cpid" -o comm= 2>/dev/null || true)
-                echo "$CNAME" | grep -q adb || continue
-                CCPU=$(ps -p "$cpid" -o %cpu= 2>/dev/null | tr -d ' ' || true)
-                # 0% CPU = stuck on Binder IPC to CPU-starved emulator.
-                if echo "$CCPU" | awk '{ exit ($1 > 0.1) }'; then
-                  CCMD=$(ps -p "$cpid" -o args= 2>/dev/null || true)
-                  echo ""
-                  echo "=== WATCHDOG: stuck adb detected (PID $cpid, cpu=${CCPU}%) ==="
-                  echo "    cmd: $CCMD"
-                  echo "    Killing to unblock flutter test teardown."
-                  kill -9 "$cpid" 2>/dev/null || true
-                  echo "=== WATCHDOG: killed. Flutter test should exit shortly. ==="
-                  echo ""
-                fi
+            for pattern in force-stop uninstall; do
+              for pid in $(pgrep -f "$pattern" 2>/dev/null); do
+                PCMD=$(ps -p "$pid" -o args= 2>/dev/null || true)
+                echo "$PCMD" | grep -q adb || continue
+                echo ""
+                echo "=== WATCHDOG: stuck adb $pattern (PID $pid) ==="
+                echo "    cmd: $PCMD"
+                echo "    Killing to unblock flutter test teardown."
+                kill -9 "$pid" 2>/dev/null || true
+                echo "=== WATCHDOG: killed. ==="
+                echo ""
               done
             done
           done
