@@ -72,37 +72,39 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ── TEMPORARY: debug only Intel Android emulator hang ──
-          # ⚠ = teardown hang on macOS Intel (SwiftShader CPU starvation).
-          # Workaround: emulator capability has a watchdog that kills the
-          # stuck adb process. Tests pass, flutter test exits cleanly.
-          - { name: "int: Android (macos-intel) [P] ⚠", runner: macos-15-intel, make: test-example-android, timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
-          # ── ALL OTHER ENTRIES COMMENTED OUT FOR DEBUG ──
-          # - { name: "pkg: Linux (ubuntu-x64)",      runner: ubuntu-24.04,        make: test-pkg-native, timeout: 30 }
-          # - { name: "pkg: macOS (macos-arm64)",     runner: macos-14,            make: test-pkg-native, timeout: 30 }
-          # - { name: "pkg: Web (ubuntu-x64)",        runner: ubuntu-24.04,        make: test-ops-web,    timeout: 40, chrome: true, headless-display: true, wasm-cache: true, wasm-build: true }
-          # - { name: "pkg: Web (macos-arm64) [P]",       runner: macos-14,            make: test-ops-web,    timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
-          # - { name: "pkg: Web (win-x64) [P]",           runner: windows-2025-vs2026, make: test-ops-web,    timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
-          # - { name: "pkg: Windows (win-x64)",       runner: windows-2025-vs2026, make: test-pkg-native, timeout: 40 }
-          # - { name: "int: Android (ubuntu-x64)",    runner: ubuntu-24.04,        make: test-example-android, timeout: 40, java: true, hw-accel: true, gradle-cache: true, emulator: true }
-          # - { name: "int: Android (win-x64) [P]",       runner: windows-2025-vs2026, make: test-example-android, timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
-          # - { name: "int: iOS (macos-arm64)",       runner: macos-14,            make: test-example-ios,     timeout: 60, xcode-cache: true, xcode-cache-target: ios, pods-cache: true, simulator: true }
-          # - { name: "int: Linux (ubuntu-x64)",      runner: ubuntu-24.04,        make: test-example-linux,   timeout: 30, headless-display: true }
-          # - { name: "int: macOS (macos-arm64)",     runner: macos-14,            make: test-example-macos,   timeout: 30, xcode-cache: true, xcode-cache-target: macos }
-          # - { name: "int: Web (ubuntu-x64)",        runner: ubuntu-24.04,        make: test-example-web,     timeout: 40, chrome: true, headless-display: true, wasm-cache: true, wasm-build: true }
-          # - { name: "int: Web (macos-arm64) [P]",       runner: macos-14,            make: test-example-web,     timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
-          # - { name: "int: Web (win-x64) [P]",           runner: windows-2025-vs2026, make: test-example-web,     timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
-          # - { name: "int: Windows (win-x64)",       runner: windows-2025-vs2026, make: test-example-windows, timeout: 40 }
-          # - { name: "verify: Android (ubuntu-x64)", runner: ubuntu-24.04,        make: verify-android, timeout: 40, java: true, gradle-cache: true }
-          # - { name: "verify: Android (macos-arm64) [P]",runner: macos-14,            make: verify-android, timeout: 40, java: true, gradle-cache: true, portability: true }
-          # - { name: "verify: Android (win-x64) [P]",    runner: windows-2025-vs2026, make: verify-android, timeout: 60, java: true, gradle-cache: true, portability: true }
-          # - { name: "verify: iOS (macos-arm64)",    runner: macos-14,            make: verify-ios,     timeout: 40, xcode-cache: true, xcode-cache-target: ios, pods-cache: true }
-          # - { name: "verify: Linux (ubuntu-x64)",   runner: ubuntu-24.04,        make: verify-linux,   timeout: 30 }
-          # - { name: "verify: macOS (macos-arm64)",  runner: macos-14,            make: verify-macos,   timeout: 40, xcode-cache: true, xcode-cache-target: macos }
-          # - { name: "verify: Web (ubuntu-x64)",     runner: ubuntu-24.04,        make: verify-web,     timeout: 40, wasm-cache: true, wasm-build: true }
-          # - { name: "verify: Web (macos-arm64) [P]",    runner: macos-14,            make: verify-web,     timeout: 40, wasm-cache: true, wasm-build: true, portability: true }
-          # - { name: "verify: Web (win-x64) [P]",        runner: windows-2025-vs2026, make: verify-web,     timeout: 40, wasm-cache: true, wasm-build: true, portability: true }
-          # - { name: "verify: Windows (win-x64)",    runner: windows-2025-vs2026, make: verify-windows, timeout: 40 }
+          # ── Package tests ──
+          - { name: "pkg: Linux (ubuntu-x64)",      runner: ubuntu-24.04,        make: test-pkg-native, timeout: 30 }
+          - { name: "pkg: macOS (macos-arm64)",     runner: macos-14,            make: test-pkg-native, timeout: 30 }
+          - { name: "pkg: Web (ubuntu-x64)",        runner: ubuntu-24.04,        make: test-ops-web,    timeout: 40, chrome: true, headless-display: true, wasm-cache: true, wasm-build: true }
+          - { name: "pkg: Web (macos-arm64) [P]",       runner: macos-14,            make: test-ops-web,    timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "pkg: Web (win-x64) [P]",           runner: windows-2025-vs2026, make: test-ops-web,    timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "pkg: Windows (win-x64)",       runner: windows-2025-vs2026, make: test-pkg-native, timeout: 40 }
+
+          # ── Integration tests ──
+          # Emulator needs Intel — macOS ARM runners are M1 VMs that can't virtualize the emulator:
+          # https://docs.github.com/en/actions/reference/runners/github-hosted-runners#limitations-for-arm64-macos-runners
+          - { name: "int: Android (ubuntu-x64)",    runner: ubuntu-24.04,        make: test-example-android, timeout: 40, java: true, hw-accel: true, gradle-cache: true, emulator: true }
+          - { name: "int: Android (macos-intel) [P]", runner: macos-15-intel,      make: test-example-android, timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
+          - { name: "int: Android (win-x64) [P]",       runner: windows-2025-vs2026, make: test-example-android, timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
+          - { name: "int: iOS (macos-arm64)",       runner: macos-14,            make: test-example-ios,     timeout: 60, xcode-cache: true, xcode-cache-target: ios, pods-cache: true, simulator: true }
+          - { name: "int: Linux (ubuntu-x64)",      runner: ubuntu-24.04,        make: test-example-linux,   timeout: 30, headless-display: true }
+          - { name: "int: macOS (macos-arm64)",     runner: macos-14,            make: test-example-macos,   timeout: 30, xcode-cache: true, xcode-cache-target: macos }
+          - { name: "int: Web (ubuntu-x64)",        runner: ubuntu-24.04,        make: test-example-web,     timeout: 40, chrome: true, headless-display: true, wasm-cache: true, wasm-build: true }
+          - { name: "int: Web (macos-arm64) [P]",       runner: macos-14,            make: test-example-web,     timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "int: Web (win-x64) [P]",           runner: windows-2025-vs2026, make: test-example-web,     timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "int: Windows (win-x64)",       runner: windows-2025-vs2026, make: test-example-windows, timeout: 40 }
+
+          # ── Verify (release builds) ──
+          - { name: "verify: Android (ubuntu-x64)", runner: ubuntu-24.04,        make: verify-android, timeout: 40, java: true, gradle-cache: true }
+          - { name: "verify: Android (macos-arm64) [P]",runner: macos-14,            make: verify-android, timeout: 40, java: true, gradle-cache: true, portability: true }
+          - { name: "verify: Android (win-x64) [P]",    runner: windows-2025-vs2026, make: verify-android, timeout: 60, java: true, gradle-cache: true, portability: true }
+          - { name: "verify: iOS (macos-arm64)",    runner: macos-14,            make: verify-ios,     timeout: 40, xcode-cache: true, xcode-cache-target: ios, pods-cache: true }
+          - { name: "verify: Linux (ubuntu-x64)",   runner: ubuntu-24.04,        make: verify-linux,   timeout: 30 }
+          - { name: "verify: macOS (macos-arm64)",  runner: macos-14,            make: verify-macos,   timeout: 40, xcode-cache: true, xcode-cache-target: macos }
+          - { name: "verify: Web (ubuntu-x64)",     runner: ubuntu-24.04,        make: verify-web,     timeout: 40, wasm-cache: true, wasm-build: true }
+          - { name: "verify: Web (macos-arm64) [P]",    runner: macos-14,            make: verify-web,     timeout: 40, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "verify: Web (win-x64) [P]",        runner: windows-2025-vs2026, make: verify-web,     timeout: 40, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "verify: Windows (win-x64)",    runner: windows-2025-vs2026, make: verify-windows, timeout: 40 }
 
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}

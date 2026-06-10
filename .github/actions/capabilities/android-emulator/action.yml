@@ -48,12 +48,17 @@ runs:
     # this adb child forever → flutter test never exits.
     #
     # Fix: detect the stuck adb child of dartvm (0% CPU) and kill it.
-    # stopApp() receives an error, continues teardown, flutter test
-    # prints the summary and exits cleanly.
+    # stopApp() receives an error return, continues to uninstallApp()
+    # which also fails with "adb uninstall failed: exit code -9" —
+    # that error in the logs is expected and harmless. Teardown then
+    # completes and flutter test prints the summary and exits cleanly.
     #
     # Harmless on runners where the hang doesn't occur — the watchdog
     # simply never finds a stuck adb process and exits with the
     # user's command.
+    #
+    # Remove this watchdog when Flutter adds a timeout to stopApp():
+    # https://github.com/flutter/flutter/blob/master/packages/flutter_tools/lib/src/android/android_device.dart
     - name: Write emulator scripts
       if: runner.os != 'Windows'
       shell: bash

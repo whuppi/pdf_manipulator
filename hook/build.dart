@@ -519,7 +519,7 @@ String? _findOnPath(String name) {
   final path = Platform.environment['PATH'] ?? '';
   final sep = Platform.isWindows ? ';' : ':';
   final exts = Platform.isWindows ? ['.exe', '.cmd', '.bat', ''] : [''];
-  for (final dir in path.split(sep)) {
+  for (final dir in path.split(sep).where((d) => d.isNotEmpty)) {
     for (final ext in exts) {
       final file = File(p.join(dir, '$name$ext'));
       if (file.existsSync()) return file.path;
