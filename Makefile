@@ -243,6 +243,7 @@ verify: verify-android verify-ios verify-macos verify-linux verify-windows verif
 verify-android:
 	@echo "=== Verify: Android ==="
 	cd example && $(FLUTTER) build apk --release
+	@bash tool/check_alignment.sh example/build/app/outputs/flutter-apk/app-release.apk
 
 verify-ios:
 	@echo "=== Verify: iOS ==="

@@ -442,3 +442,4 @@ git checkout CHANGELOG.md   # restore
 | `make verify-web` fails without binaryen | `compile_rust.sh` errors with install command (dev) or auto-installs (CI) |
 | `make verify-linux` fails without GTK | Makefile errors with `apt-get install` command (dev) or auto-installs (CI) |
 | `flutter build --release` fails but debug works | Build hook routes differently in release — check `hook/link.dart` exists |
+| Google Play rejects APK "16 KB page size" | Rust cdylib needs `-Wl,-z,max-page-size=16384` in `build.rs`. Cargo doesn't inherit NDK's 16 KB default. Any new Rust crate producing a cdylib for Android needs this. See `vendor/pdf_oxide/build.rs`. |
