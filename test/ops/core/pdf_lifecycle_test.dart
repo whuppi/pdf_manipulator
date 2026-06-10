@@ -8,6 +8,7 @@ import 'package:test/test.dart';
 
 import '../../helpers/fixtures.dart';
 import '../../helpers/test_source_sink.dart';
+import '../../helpers/timeouts.dart';
 
 void registerLifecycleTests(Pdf Function() createPdf) {
   group('lifecycle', () {
@@ -18,14 +19,14 @@ void registerLifecycleTests(Pdf Function() createPdf) {
         () => createPdf().open(TestSource(Uint8List.fromList([1, 2, 3, 4]))),
         throwsA(anything),
       );
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('open empty bytes throws', () async {
       expect(
         () => createPdf().open(TestSource(Uint8List(0))),
         throwsA(anything),
       );
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('recover after error — next op works', () async {
       final pdf = createPdf();
@@ -43,7 +44,7 @@ void registerLifecycleTests(Pdf Function() createPdf) {
             .codeUnits,
       )));
       expect(doc.pageCount, 1);
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     // ── Instance dispose ──
 
@@ -52,19 +53,19 @@ void registerLifecycleTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(minimalPdf));
       expect(doc.pageCount, 1);
       await pdf.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('instance double dispose is safe', () async {
       final pdf = createPdf();
       await pdf.dispose();
       await pdf.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('operations after instance dispose throw', () async {
       final pdf = createPdf();
       await pdf.dispose();
       expect(() => pdf.open(src(minimalPdf)), throwsStateError);
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('instance dispose returns quickly', () async {
       final pdf = createPdf();
@@ -73,7 +74,7 @@ void registerLifecycleTests(Pdf Function() createPdf) {
       await pdf.dispose();
       sw.stop();
       expect(sw.elapsedMilliseconds, lessThan(2000));
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     // ── Doc handle dispose ──
 
@@ -83,7 +84,7 @@ void registerLifecycleTests(Pdf Function() createPdf) {
       expect(doc.pageCount, 1);
       await doc.dispose();
       await pdf.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
 
     test('doc double dispose is safe', () async {
       final pdf = createPdf();
@@ -91,6 +92,6 @@ void registerLifecycleTests(Pdf Function() createPdf) {
       await doc.dispose();
       await doc.dispose();
       await pdf.dispose();
-    }, timeout: Timeout(Duration(seconds: 1)));
+    }, timeout: t(1));
   });
 }

@@ -22,6 +22,7 @@ import '../stress/pdf_sugar_stress_test.dart';
 import '../stress/pdf_standalone_stress_test.dart';
 import '../stress/pdf_builder_stress_test.dart';
 import '../stress/pdf_instance_stress_test.dart';
+import '../../helpers/timeouts.dart';
 
 void main() {
   late Pdf pdf;
@@ -39,13 +40,13 @@ void main() {
       webWorkerUrl: 'http://localhost:$serverPort/web_assets/worker.js',
       webIoMode: PdfIoMode.atomics,
     ));
-  }, timeout: Timeout(Duration(seconds: 3)));
+  }, timeout: t(3));
 
   test('verify I/O mode is atomics', () async {
     final doc = await pdf.open(src(minimalPdf));
     await doc.dispose();
     expect(pdf.ioMode, PdfIoMode.atomics);
-  }, timeout: Timeout(Duration(seconds: 3)));
+  }, timeout: t(3));
 
   tearDownAll(() => pdf.dispose());
 

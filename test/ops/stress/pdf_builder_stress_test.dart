@@ -5,6 +5,7 @@ import 'package:test/test.dart';
 
 import '../../helpers/generators.dart';
 import '../../helpers/test_source_sink.dart';
+import '../../helpers/timeouts.dart';
 
 void registerBuilderStressTests(Pdf Function() createPdf) {
   group('stress builder', tags: 'stress', () {
@@ -13,6 +14,6 @@ void registerBuilderStressTests(Pdf Function() createPdf) {
       final imagePdf = await buildImagePdf(createPdf, pageCount: 10);
       final doc = await pdf.open(src(imagePdf));
       expect(doc.pageCount, 10);
-    }, timeout: Timeout(Duration(seconds: 3)));
+    }, timeout: t(3));
   });
 }

@@ -2,6 +2,11 @@
 
 <!-- Stable releases. Add ## heading at top, CI handles the rest. -->
 
+## 1.0.7
+
+- Fixed missing WASM binaries in 1.0.6 release (web consumers couldn't download pre-built assets)
+- Added binary verification gate — releases now fail if any of the 15 expected binaries are missing
+
 ## 1.0.6
 
 - Fixed release build routing for consumer builds ([PR #80](https://github.com/whuppi/pdf_manipulator/pull/80), [@Binary-Parse](https://github.com/Binary-Parse))
