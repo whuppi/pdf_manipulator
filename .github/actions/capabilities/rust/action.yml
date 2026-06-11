@@ -58,10 +58,12 @@ runs:
         sccache --start-server || true
 
         SCCACHE_BIN="$(which sccache)"
+        # Cargo on Windows needs a drive-letter path, not Git Bash /c/...
+        # Use cygpath -m for forward-slash Windows path (C:/...) which
+        # works in TOML without escaping backslashes.
+        if command -v cygpath &>/dev/null; then
+          SCCACHE_BIN="$(cygpath -m "$SCCACHE_BIN")"
+        fi
         mkdir -p "$HOME/.cargo"
-        cat >> "$HOME/.cargo/config.toml" << EOF
-
-        [build]
-        rustc-wrapper = "$SCCACHE_BIN"
-        EOF
+        printf '\n[build]\nrustc-wrapper = "%s"\n' "$SCCACHE_BIN" >> "$HOME/.cargo/config.toml"
         echo "sccache: server started, cargo config written ($SCCACHE_BIN)"
