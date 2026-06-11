@@ -166,36 +166,52 @@ runs:
         disable-animations: true
         script: /tmp/emulator-run.sh '${{ inputs.script }}'
 
-    - name: Install SDK (Windows, cache miss)
-      if: >-
-        runner.os == 'Windows' &&
-        steps.avd-cache.outputs.cache-hit != 'true'
+    # ── Windows: mirrors reactivecircus action 1:1 ──
+    # The action doesn't support Windows, so we replicate its exact
+    # sequence: always install SDK, conditionally create AVD, boot,
+    # disable animations, run script, kill.
+    # Source: ReactiveCircus/android-emulator-runner v2
+    #   sdk-installer.ts → installAndroidSdk() — always runs
+    #   emulator-manager.ts → createAvd() — skips if AVD exists
+    #   emulator-manager.ts → launchEmulator() — boot + poll
+
+    # Step 1: Install SDK (always — matches action's installAndroidSdk)
+    - name: Install SDK (Windows)
+      if: runner.os == 'Windows'
       shell: bash
       run: |
         SDK="$(cygpath "$ANDROID_HOME")"
         SDKMGR="$(find "$SDK/cmdline-tools" -name "sdkmanager*" -type f | head -1)"
         yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
-        "$SDKMGR" \
-          "system-images;android-${{ inputs.api-level }};aosp_atd;x86_64" \
-          "platform-tools" "emulator" > /dev/null
+        "$SDKMGR" --install \
+          "build-tools;36.0.0" \
+          "platform-tools" \
+          "platforms;android-${{ inputs.api-level }}" \
+          "emulator" \
+          "system-images;android-${{ inputs.api-level }};aosp_atd;x86_64" > /dev/null
 
+    # Step 2: Create AVD + boot + disable animations + run + kill
     - name: Boot + run (Windows)
       if: runner.os == 'Windows'
       shell: bash
       run: |
         SDK="$(cygpath "$ANDROID_HOME")"
 
-        # Create AVD on cache miss — cached snapshot already has it.
-        if [ "${{ steps.avd-cache.outputs.cache-hit }}" != "true" ]; then
+        # Create AVD if it doesn't exist (matches action's createAvd
+        # with force-avd-creation: false — checks avd directory).
+        AVD_DIR="$HOME/.android/avd/test.avd"
+        if [ ! -d "$AVD_DIR" ]; then
           AVDMGR="$(find "$SDK/cmdline-tools" -name "avdmanager*" -type f | head -1)"
           echo no | "$AVDMGR" create avd --force -n test \
             --package "system-images;android-${{ inputs.api-level }};aosp_atd;x86_64"
         fi
 
+        # Boot emulator (matches action's launchEmulator).
         SNAP_FLAG="${{ inputs.cold-boot == 'true' && '-no-snapshot' || '-no-snapshot-save' }}"
         "$SDK/emulator/emulator" -port 5554 -avd test \
           $SNAP_FLAG -no-window -noaudio -no-boot-anim &
 
+        # Poll for boot (matches action's adb wait loop).
         TIMEOUT=600; ELAPSED=0
         while [ $ELAPSED -lt $TIMEOUT ]; do
           RESULT=$("$SDK/platform-tools/adb" -s emulator-5554 \
@@ -208,6 +224,7 @@ runs:
         done
         [ "$RESULT" != "1" ] && echo "::error::Emulator boot timeout" && exit 1
 
+        # Disable animations (matches action's disableAnimations).
         "$SDK/platform-tools/adb" -s emulator-5554 shell input keyevent 82
         "$SDK/platform-tools/adb" -s emulator-5554 shell \
           settings put global window_animation_scale 0.0
@@ -216,7 +233,7 @@ runs:
         "$SDK/platform-tools/adb" -s emulator-5554 shell \
           settings put global animator_duration_scale 0.0
 
-        # Run the user's script while emulator is alive.
+        # Run the user's script.
         ${{ inputs.script }}
 
     # ── Cleanup ──
