@@ -97,6 +97,14 @@ runs:
         wait $CMD_PID 2>/dev/null
         EXIT=$?
 
+        # DEBUG: show sccache diagnostics from build hook.
+        # Remove once sccache is confirmed working.
+        if [ -f /tmp/sccache-hook.txt ]; then
+          echo ""
+          cat /tmp/sccache-hook.txt
+          echo ""
+        fi
+
         kill $WATCHDOG_PID 2>/dev/null || true
         wait $WATCHDOG_PID 2>/dev/null || true
 
