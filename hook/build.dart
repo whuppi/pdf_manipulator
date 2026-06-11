@@ -371,6 +371,20 @@ Future<void> _compileNativeFromHook(
     _log.info('sccache enabled: $sccache');
   }
 
+  // DEBUG: write sccache diagnostics to /tmp for CI visibility.
+  // hooks_runner swallows hook stdout/stderr on success, so this
+  // is the only way to verify sccache is working from CI logs.
+  // The emulator-run.sh script cats this file after the build.
+  // Remove this block once sccache is confirmed working.
+  final debugFile = File('/tmp/sccache-hook.txt');
+  final debugBuf = StringBuffer()
+    ..writeln('=== sccache hook debug ===')
+    ..writeln('sccache on PATH: ${sccache ?? "NOT FOUND"}')
+    ..writeln('RUSTC_WRAPPER set to: ${env['RUSTC_WRAPPER'] ?? "NOT SET"}')
+    ..writeln('PATH (first 5): ${Platform.environment['PATH']?.split(':').take(5).join(':')}')
+    ..writeln('Platform.environment keys: ${Platform.environment.keys.where((k) => k.contains('SCCACHE') || k.contains('RUSTC') || k.contains('ACTIONS') || k.contains('CARGO')).toList()}');
+  debugFile.writeAsStringSync(debugBuf.toString());
+
   final result = await Process.run(
     'cargo',
     [
@@ -384,6 +398,18 @@ Future<void> _compileNativeFromHook(
     ],
     environment: {...Platform.environment, ...env},
   );
+
+  // DEBUG: append sccache stats after cargo build.
+  // Remove this block once sccache is confirmed working.
+  if (sccache != null) {
+    try {
+      final stats = await Process.run(sccache, ['--show-stats'],
+          environment: {...Platform.environment, ...env});
+      debugFile.writeAsStringSync(
+          '\n=== sccache stats after build ===\n${stats.stdout}\n',
+          mode: FileMode.append);
+    } catch (_) {}
+  }
 
   if (result.exitCode != 0) {
     throw StateError(
