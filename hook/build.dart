@@ -371,18 +371,63 @@ Future<void> _compileNativeFromHook(
     _log.info('sccache enabled: $sccache');
   }
 
-  // DEBUG: write sccache diagnostics to /tmp for CI visibility.
-  // hooks_runner swallows hook stdout/stderr on success, so this
-  // is the only way to verify sccache is working from CI logs.
-  // The emulator-run.sh script cats this file after the build.
-  // Remove this block once sccache is confirmed working.
+  // DEBUG: exhaustive sccache diagnostics. Remove after confirmed working.
   final debugFile = File('/tmp/sccache-hook.txt');
   final debugBuf = StringBuffer()
     ..writeln('=== sccache hook debug ===')
     ..writeln('sccache on PATH: ${sccache ?? "NOT FOUND"}')
-    ..writeln('RUSTC_WRAPPER set to: ${env['RUSTC_WRAPPER'] ?? "NOT SET"}')
-    ..writeln('PATH (first 5): ${Platform.environment['PATH']?.split(':').take(5).join(':')}')
-    ..writeln('Platform.environment keys: ${Platform.environment.keys.where((k) => k.contains('SCCACHE') || k.contains('RUSTC') || k.contains('ACTIONS') || k.contains('CARGO')).toList()}');
+    ..writeln('RUSTC_WRAPPER in env map: ${env['RUSTC_WRAPPER'] ?? "NOT SET"}')
+    ..writeln('')
+    ..writeln('--- Platform.environment (ALL keys) ---')
+    ..writeln(Platform.environment.keys.toList()..sort())
+    ..writeln('')
+    ..writeln('--- RUSTC_WRAPPER in Platform.environment ---')
+    ..writeln('exists: ${Platform.environment.containsKey('RUSTC_WRAPPER')}')
+    ..writeln('value: "${Platform.environment['RUSTC_WRAPPER'] ?? '<null>'}"')
+    ..writeln('')
+    ..writeln('--- SCCACHE/ACTIONS/CARGO vars in Platform.environment ---');
+  for (final key in Platform.environment.keys) {
+    if (key.contains('SCCACHE') || key.contains('RUSTC') ||
+        key.contains('ACTIONS') || key.contains('CARGO')) {
+      debugBuf.writeln('  $key = ${Platform.environment[key]}');
+    }
+  }
+  debugBuf
+    ..writeln('')
+    ..writeln('--- Final environment passed to cargo (relevant keys) ---');
+  final cargoEnv = {...Platform.environment, ...env};
+  for (final key in cargoEnv.keys) {
+    if (key.contains('SCCACHE') || key.contains('RUSTC') ||
+        key.contains('ACTIONS') || key.contains('CARGO') ||
+        key == 'PATH') {
+      final val = cargoEnv[key]!;
+      debugBuf.writeln('  $key = ${val.length > 200 ? '${val.substring(0, 200)}...' : val}');
+    }
+  }
+  debugBuf
+    ..writeln('')
+    ..writeln('--- sccache server check ---');
+  try {
+    final serverCheck = await Process.run(
+        sccache ?? 'sccache', ['--show-stats'],
+        environment: cargoEnv);
+    debugBuf.writeln('exit: ${serverCheck.exitCode}');
+    debugBuf.writeln('stdout: ${serverCheck.stdout}');
+    debugBuf.writeln('stderr: ${serverCheck.stderr}');
+  } catch (e) {
+    debugBuf.writeln('sccache --show-stats failed: $e');
+  }
+  debugBuf
+    ..writeln('')
+    ..writeln('--- test: can cargo see RUSTC_WRAPPER? ---');
+  try {
+    final cargoTest = await Process.run('cargo', ['--version'],
+        environment: cargoEnv);
+    debugBuf.writeln('cargo version: ${cargoTest.stdout.toString().trim()}');
+    debugBuf.writeln('RUSTC_WRAPPER in cargoEnv: ${cargoEnv['RUSTC_WRAPPER']}');
+  } catch (e) {
+    debugBuf.writeln('cargo --version failed: $e');
+  }
   debugFile.writeAsStringSync(debugBuf.toString());
 
   final result = await Process.run(
@@ -399,17 +444,25 @@ Future<void> _compileNativeFromHook(
     environment: {...Platform.environment, ...env},
   );
 
-  // DEBUG: append sccache stats after cargo build.
-  // Remove this block once sccache is confirmed working.
+  // DEBUG: append post-build diagnostics.
+  final postBuf = StringBuffer()
+    ..writeln('')
+    ..writeln('=== POST-BUILD ===')
+    ..writeln('cargo exit code: ${result.exitCode}')
+    ..writeln('cargo stderr (last 500 chars): ${result.stderr.toString().length > 500 ? result.stderr.toString().substring(result.stderr.toString().length - 500) : result.stderr}')
+    ..writeln('');
   if (sccache != null) {
     try {
       final stats = await Process.run(sccache, ['--show-stats'],
-          environment: {...Platform.environment, ...env});
-      debugFile.writeAsStringSync(
-          '\n=== sccache stats after build ===\n${stats.stdout}\n',
-          mode: FileMode.append);
-    } catch (_) {}
+          environment: cargoEnv);
+      postBuf.writeln('=== sccache stats after build ===');
+      postBuf.writeln(stats.stdout);
+      postBuf.writeln(stats.stderr);
+    } catch (e) {
+      postBuf.writeln('sccache --show-stats failed: $e');
+    }
   }
+  debugFile.writeAsStringSync(postBuf.toString(), mode: FileMode.append);
 
   if (result.exitCode != 0) {
     throw StateError(
