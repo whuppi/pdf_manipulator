@@ -2,20 +2,21 @@ name: Android Emulator
 description: >
   Boot Android emulator and run a script inside it.
 
-  Target: aosp_atd (Automated Test Device) — stripped-down image
-  built for CI. No Google Play, minimal UI, fast boot. Lightest
-  available image. Weight hierarchy:
-    google_apis_playstore > google_apis > default > aosp_atd
+  aosp_atd (Automated Test Device) — stripped-down CI image, no
+  Google Play, minimal UI, fast boot. x86_64 on all runners.
+  Linux: KVM. macOS Intel: HAXM/HVF. Windows: WHPX.
+  macOS ARM (M1): cannot run emulators (no nested virtualization).
 
-  Arch: x86_64 on all runners. Linux uses KVM. macOS Intel uses
-  HAXM/HVF. Windows uses WHPX.
+  AVD snapshot caching: first run cold-boots and saves a snapshot.
+  Subsequent runs warm-boot from the cached snapshot (~30s vs ~5min).
+  The snapshot is clean OS state — no app data. Apps install fresh.
+  Disable with avd-cache: false. Force cold boot with cold-boot: true.
 
-  Linux/macOS use reactivecircus/android-emulator-runner. Windows
-  uses a manual boot script (the action doesn't support Windows).
-
-  macOS ARM runners (M1) cannot run emulators — nested
-  virtualization unsupported on M1 hardware.
-  https://docs.github.com/en/actions/reference/runners/github-hosted-runners#limitations-for-arm64-macos-runners
+  Teardown watchdog: on SwiftShader emulators (macOS Intel), Flutter's
+  stopApp() and uninstallApp() hang because adb commands can't reach
+  the CPU-starved guest OS. The watchdog kills stuck adb processes so
+  flutter test exits cleanly. Harmless on runners with hardware accel.
+  https://github.com/flutter/flutter/issues/187785
 
 inputs:
   script:
@@ -25,36 +26,86 @@ inputs:
     description: "Android API level (30 is lightest ATD available)"
     required: false
     default: '30'
+  avd-cache:
+    description: "Cache AVD snapshot for warm boot (~30s vs ~5min cold)"
+    required: false
+    default: 'true'
+  cold-boot:
+    description: "Force cold boot even when snapshot cache exists"
+    required: false
+    default: 'false'
 
 runs:
   using: composite
   steps:
+    # ── adb ──
     - name: Start adb server
       shell: bash
       run: |
         $ANDROID_HOME/platform-tools/adb start-server
         $ANDROID_HOME/platform-tools/adb devices
 
-    # Watchdog for the flutter test teardown hang on macOS Intel.
-    #
-    # Only affects: macOS Intel + SwiftShader (no hardware GPU).
-    # Does NOT affect: Linux with KVM, Windows, macOS ARM, local dev.
-    #
-    # Root cause: Flutter's stopApp() calls `adb shell am force-stop`
-    # with no timeout (android_device.dart → _processUtils.stream()).
-    # On SwiftShader emulators, qemu uses ~200% CPU on 4 cores,
-    # starving the guest's ActivityManagerService. The `am force-stop`
-    # command never gets CPU time to execute. The dartvm waits for
-    # this adb child forever → flutter test never exits.
-    #
-    # Fix: detect the stuck adb child of dartvm (0% CPU) and kill it.
-    # stopApp() receives an error, continues teardown, flutter test
-    # prints the summary and exits cleanly.
-    #
-    # Harmless on runners where the hang doesn't occur — the watchdog
-    # simply never finds a stuck adb process and exits with the
-    # user's command.
-    - name: Write emulator scripts
+    # ── AVD snapshot cache ──
+    - name: Restore AVD cache
+      if: inputs.avd-cache == 'true'
+      uses: actions/cache@v5
+      id: avd-cache
+      with:
+        path: |
+          ~/.android/avd/*
+          ~/.android/adb*
+        key: avd-${{ runner.os }}-${{ runner.arch }}-${{ inputs.api-level }}
+
+    # ── Snapshot generation (cache miss only) ──
+    - name: Generate AVD snapshot (Linux/macOS)
+      if: >-
+        runner.os != 'Windows' &&
+        inputs.avd-cache == 'true' &&
+        steps.avd-cache.outputs.cache-hit != 'true'
+      uses: reactivecircus/android-emulator-runner@v2
+      with:
+        api-level: ${{ inputs.api-level }}
+        arch: x86_64
+        target: aosp_atd
+        force-avd-creation: false
+        emulator-options: -no-window -noaudio -no-boot-anim
+        emulator-boot-timeout: 600
+        disable-animations: false
+        script: echo "AVD snapshot generated for caching."
+
+    - name: Generate AVD snapshot (Windows)
+      if: >-
+        runner.os == 'Windows' &&
+        inputs.avd-cache == 'true' &&
+        steps.avd-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        SDK="$(cygpath "$ANDROID_HOME")"
+        SDKMGR="$(find "$SDK/cmdline-tools" -name "sdkmanager*" -type f | head -1)"
+        yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+        "$SDKMGR" \
+          "system-images;android-${{ inputs.api-level }};aosp_atd;x86_64" \
+          "platform-tools" "emulator" > /dev/null
+        AVDMGR="$(find "$SDK/cmdline-tools" -name "avdmanager*" -type f | head -1)"
+        echo no | "$AVDMGR" create avd --force -n test \
+          --package "system-images;android-${{ inputs.api-level }};aosp_atd;x86_64"
+        "$SDK/emulator/emulator" -port 5554 -avd test \
+          -no-window -noaudio -no-boot-anim &
+        TIMEOUT=600; ELAPSED=0
+        while [ $ELAPSED -lt $TIMEOUT ]; do
+          RESULT=$("$SDK/platform-tools/adb" -s emulator-5554 \
+            shell getprop sys.boot_completed 2>/dev/null || true)
+          [ "$RESULT" = "1" ] && echo "Booted in ${ELAPSED}s." && break
+          sleep 2; ELAPSED=$((ELAPSED + 2))
+        done
+        "$SDK/platform-tools/adb" -s emulator-5554 emu kill || true
+        sleep 5
+
+    # ── Teardown watchdog wrapper ──
+    # Written to /tmp and passed as the reactivecircus script.
+    # Runs the user's command in background, monitors for stuck adb
+    # teardown commands, kills them if found.
+    - name: Write teardown watchdog
       if: runner.os != 'Windows'
       shell: bash
       run: |
@@ -65,15 +116,7 @@ runs:
         bash -c "$1" &
         CMD_PID=$!
 
-        # Watchdog: kill the two adb commands Flutter runs in teardown.
-        #
-        # Flutter's kill() in integration_test_device.dart runs:
-        #   1. stopApp()     -> adb shell am force-stop <package>
-        #   2. uninstallApp() -> adb uninstall <package>
-        # Both have no timeout and hang on CPU-starved emulators.
-        # Both are direct children of the dartvm process.
-        #
-        # pgrep -f "a|b" doesn't work on macOS BSD — search separately.
+        # pgrep -f "a|b" doesn't work on macOS — search separately.
         (
           while kill -0 $CMD_PID 2>/dev/null; do
             sleep 30
@@ -97,9 +140,6 @@ runs:
         wait $CMD_PID 2>/dev/null
         EXIT=$?
 
-        # Show sccache diagnostics from build hook
-        [ -f /tmp/sccache-hook.txt ] && cat /tmp/sccache-hook.txt
-
         kill $WATCHDOG_PID 2>/dev/null || true
         wait $WATCHDOG_PID 2>/dev/null || true
 
@@ -107,8 +147,11 @@ runs:
         EMUSCRIPT
         chmod +x /tmp/emulator-run.sh
 
-    # ── Linux / macOS — use the action ──
-    - name: Emulator (Linux/macOS)
+    # ── Boot + run ──
+    # -no-snapshot-save: warm-boot from cached snapshot, don't save
+    #   post-test state back. clean slate every run.
+    # -no-snapshot: cold-boot, ignore snapshot entirely (cold-boot input).
+    - name: Boot + run (Linux/macOS)
       if: runner.os != 'Windows'
       uses: reactivecircus/android-emulator-runner@v2
       with:
@@ -116,72 +159,67 @@ runs:
         arch: x86_64
         target: aosp_atd
         force-avd-creation: false
-        emulator-options: -no-snapshot-save -no-window -noaudio -no-boot-anim
+        emulator-options: >-
+          ${{ inputs.cold-boot == 'true' && '-no-snapshot' || '-no-snapshot-save' }}
+          -no-window -noaudio -no-boot-anim
         emulator-boot-timeout: 600
         disable-animations: true
         script: /tmp/emulator-run.sh '${{ inputs.script }}'
 
-    # ── Windows — manual boot (action doesn't support Windows) ──
-    # Git Bash needs Unix paths — cygpath converts C:\Android\... to /c/Android/...
-    - name: Install system image (Windows)
-      if: runner.os == 'Windows'
+    - name: Install SDK (Windows, cache miss)
+      if: >-
+        runner.os == 'Windows' &&
+        steps.avd-cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
         SDK="$(cygpath "$ANDROID_HOME")"
         SDKMGR="$(find "$SDK/cmdline-tools" -name "sdkmanager*" -type f | head -1)"
-        echo "sdkmanager: $SDKMGR"
         yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
         "$SDKMGR" \
           "system-images;android-${{ inputs.api-level }};aosp_atd;x86_64" \
-          "platform-tools" \
-          "emulator" > /dev/null
+          "platform-tools" "emulator" > /dev/null
 
-    - name: Create AVD (Windows)
+    - name: Boot + run (Windows)
       if: runner.os == 'Windows'
       shell: bash
       run: |
         SDK="$(cygpath "$ANDROID_HOME")"
-        AVDMGR="$(find "$SDK/cmdline-tools" -name "avdmanager*" -type f | head -1)"
-        echo no | "$AVDMGR" create avd \
-          --force -n test \
-          --package "system-images;android-${{ inputs.api-level }};aosp_atd;x86_64"
 
-    - name: Boot emulator (Windows)
-      if: runner.os == 'Windows'
-      shell: bash
-      run: |
-        SDK="$(cygpath "$ANDROID_HOME")"
+        # Create AVD on cache miss — cached snapshot already has it.
+        if [ "${{ steps.avd-cache.outputs.cache-hit }}" != "true" ]; then
+          AVDMGR="$(find "$SDK/cmdline-tools" -name "avdmanager*" -type f | head -1)"
+          echo no | "$AVDMGR" create avd --force -n test \
+            --package "system-images;android-${{ inputs.api-level }};aosp_atd;x86_64"
+        fi
+
+        SNAP_FLAG="${{ inputs.cold-boot == 'true' && '-no-snapshot' || '-no-snapshot-save' }}"
         "$SDK/emulator/emulator" -port 5554 -avd test \
-          -no-snapshot-save -no-window -noaudio -no-boot-anim &
+          $SNAP_FLAG -no-window -noaudio -no-boot-anim &
 
-        echo "Waiting for emulator to boot..."
-        TIMEOUT=600
-        ELAPSED=0
+        TIMEOUT=600; ELAPSED=0
         while [ $ELAPSED -lt $TIMEOUT ]; do
-          RESULT=$("$SDK/platform-tools/adb" -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null || true)
+          RESULT=$("$SDK/platform-tools/adb" -s emulator-5554 \
+            shell getprop sys.boot_completed 2>/dev/null || true)
           if [ "$RESULT" = "1" ]; then
             echo "Emulator booted in ${ELAPSED}s."
             break
           fi
-          sleep 2
-          ELAPSED=$((ELAPSED + 2))
+          sleep 2; ELAPSED=$((ELAPSED + 2))
         done
-
-        if [ "$RESULT" != "1" ]; then
-          echo "::error::Emulator failed to boot within ${TIMEOUT}s"
-          exit 1
-        fi
+        [ "$RESULT" != "1" ] && echo "::error::Emulator boot timeout" && exit 1
 
         "$SDK/platform-tools/adb" -s emulator-5554 shell input keyevent 82
-        "$SDK/platform-tools/adb" -s emulator-5554 shell settings put global window_animation_scale 0.0
-        "$SDK/platform-tools/adb" -s emulator-5554 shell settings put global transition_animation_scale 0.0
-        "$SDK/platform-tools/adb" -s emulator-5554 shell settings put global animator_duration_scale 0.0
+        "$SDK/platform-tools/adb" -s emulator-5554 shell \
+          settings put global window_animation_scale 0.0
+        "$SDK/platform-tools/adb" -s emulator-5554 shell \
+          settings put global transition_animation_scale 0.0
+        "$SDK/platform-tools/adb" -s emulator-5554 shell \
+          settings put global animator_duration_scale 0.0
 
-    - name: Run script (Windows)
-      if: runner.os == 'Windows'
-      shell: bash
-      run: ${{ inputs.script }}
+        # Run the user's script while emulator is alive.
+        ${{ inputs.script }}
 
+    # ── Cleanup ──
     - name: Kill emulator (Windows)
       if: always() && runner.os == 'Windows'
       shell: bash

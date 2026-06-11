@@ -82,7 +82,7 @@ jobs:
           # - { name: "pkg: Web (win-x64) [P]",           runner: windows-2025-vs2026, make: test-ops-web,    timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
           # - { name: "pkg: Windows (win-x64)",       runner: windows-2025-vs2026, make: test-pkg-native, timeout: 40 }
           # - { name: "int: Android (ubuntu-x64)",    runner: ubuntu-24.04,        make: test-example-android, timeout: 40, java: true, hw-accel: true, gradle-cache: true, emulator: true }
-          # - { name: "int: Android (win-x64) [P]",       runner: windows-2025-vs2026, make: test-example-android, timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
+          - { name: "int: Android (win-x64) [P]",       runner: windows-2025-vs2026, make: test-example-android, timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
           # - { name: "int: iOS (macos-arm64)",       runner: macos-14,            make: test-example-ios,     timeout: 60, xcode-cache: true, xcode-cache-target: ios, pods-cache: true, simulator: true }
           # - { name: "int: Linux (ubuntu-x64)",      runner: ubuntu-24.04,        make: test-example-linux,   timeout: 30, headless-display: true }
           # - { name: "int: macOS (macos-arm64)",     runner: macos-14,            make: test-example-macos,   timeout: 30, xcode-cache: true, xcode-cache-target: macos }

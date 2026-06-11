@@ -38,20 +38,30 @@ runs:
         echo "SUBMODULE_PDF_OXIDE=${{ steps.sub.outputs.pdf_oxide }}" >> $GITHUB_ENV
         echo "SUBMODULE_OFFICE_OXIDE=${{ steps.sub.outputs.office_oxide }}" >> $GITHUB_ENV
 
-    # Start the sccache server while SCCACHE_GHA_ENABLED and ACTIONS_*
-    # vars are in the environment. The server reads config at startup
-    # and persists as a daemon. Later, hooks_runner strips these vars
-    # (dart-lang/native#3396) before spawning build hooks, so
-    # build.dart's sccache client can't configure the GHA backend
-    # itself. By pre-starting the server here, every client connects
-    # to this already-configured server regardless of their env.
-    - name: Start sccache server
+    # sccache for build hooks (dart-lang/native#3396 workaround).
+    #
+    # hooks_runner strips SCCACHE_* and RUSTC_WRAPPER env vars before
+    # spawning build.dart. Two workarounds keep sccache working:
+    #
+    # 1. Pre-start the server with SCCACHE_IDLE_TIMEOUT=0 while GHA
+    #    env vars exist. The server reads config at startup and persists.
+    #    Default idle timeout (600s) is too short — the 25+ min gap
+    #    (SDK download + emulator boot + Gradle) kills the server.
+    #
+    # 2. Write rustc-wrapper to $CARGO_HOME/config.toml. Cargo reads
+    #    this file automatically. hooks_runner can't strip a file.
+    #    HOME is in the allowlist, so cargo finds ~/.cargo/config.toml.
+    - name: Configure sccache for build hooks
       shell: bash
       run: |
-        # Disable idle timeout — the server must survive the 25+ min gap
-        # between this step and the first cargo build inside a Flutter
-        # build hook (Flutter SDK download + emulator boot + Gradle).
-        # Default idle timeout is 600s (10 min) which is too short.
         export SCCACHE_IDLE_TIMEOUT=0
         sccache --start-server || true
-        echo "SCCACHE_IDLE_TIMEOUT=0" >> $GITHUB_ENV
+
+        SCCACHE_BIN="$(which sccache)"
+        mkdir -p "$HOME/.cargo"
+        cat >> "$HOME/.cargo/config.toml" << EOF
+
+        [build]
+        rustc-wrapper = "$SCCACHE_BIN"
+        EOF
+        echo "sccache: server started, cargo config written ($SCCACHE_BIN)"

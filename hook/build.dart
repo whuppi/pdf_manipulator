@@ -359,112 +359,6 @@ Future<void> _compileNativeFromHook(
         .join(':');
   }
 
-  // hooks_runner strips SCCACHE_* env vars (dart-lang/native#3396) but
-  // the sccache SERVER is pre-started by the rust CI capability while
-  // the GHA env vars are still available. The server reads its config
-  // at startup, so clients connecting later (from build hooks) get GHA
-  // cache backend even though their env is filtered. We just need to
-  // set RUSTC_WRAPPER so cargo calls sccache as a client.
-  final sccache = _findOnPath('sccache');
-  if (sccache != null) {
-    env['RUSTC_WRAPPER'] = sccache;
-    _log.info('sccache enabled: $sccache');
-  }
-
-  // DEBUG: exhaustive sccache diagnostics round 2.
-  // Write to /tmp/sccache-hook.txt — emulator-run.sh cats it after build.
-  // Tests every theory: PATH, server reachability, env vars, cargo behavior.
-  final debugFile = File('/tmp/sccache-hook.txt');
-  final d = StringBuffer();
-
-  // 1. Did we find sccache?
-  d.writeln('=== SCCACHE DIAGNOSTICS ===');
-  d.writeln('1. sccache binary: ${sccache ?? "NOT FOUND"}');
-  d.writeln('   RUSTC_WRAPPER in env: ${env['RUSTC_WRAPPER'] ?? "NOT SET"}');
-
-  // 2. Full PATH inside hook
-  d.writeln('');
-  d.writeln('2. PATH entries:');
-  final pathEntries = Platform.environment['PATH']?.split(':') ?? [];
-  for (var i = 0; i < pathEntries.length; i++) {
-    d.writeln('   [$i] ${pathEntries[i]}');
-  }
-
-  // 3. ALL env keys (proves what hooks_runner passes)
-  d.writeln('');
-  d.writeln('3. ALL Platform.environment keys (${Platform.environment.length}):');
-  final keys = Platform.environment.keys.toList()..sort();
-  for (final k in keys) {
-    final v = Platform.environment[k]!;
-    d.writeln('   $k = ${v.length > 100 ? '${v.substring(0, 100)}...' : v}');
-  }
-
-  // 4. Server reachability BEFORE cargo build
-  d.writeln('');
-  d.writeln('4. sccache server reachability BEFORE build:');
-  if (sccache != null) {
-    try {
-      final pre = await Process.run(sccache, ['--show-stats'],
-          environment: {...Platform.environment, ...env});
-      d.writeln('   exit: ${pre.exitCode}');
-      d.writeln('   stdout: ${pre.stdout.toString().trim().replaceAll('\n', '\n   ')}');
-      if (pre.stderr.toString().trim().isNotEmpty) {
-        d.writeln('   stderr: ${pre.stderr.toString().trim()}');
-      }
-    } catch (e) {
-      d.writeln('   FAILED: $e');
-    }
-  } else {
-    d.writeln('   SKIPPED (sccache not found)');
-  }
-
-  // 5. Test: does cargo honor RUSTC_WRAPPER from our env?
-  d.writeln('');
-  d.writeln('5. cargo RUSTC_WRAPPER test:');
-  try {
-    final cargoEnvTest = {...Platform.environment, ...env};
-    final ct = await Process.run('cargo', ['--version'],
-        environment: cargoEnvTest);
-    d.writeln('   cargo: ${ct.stdout.toString().trim()}');
-    d.writeln('   RUSTC_WRAPPER in passed env: ${cargoEnvTest['RUSTC_WRAPPER'] ?? "MISSING"}');
-    d.writeln('   includeParentEnvironment: true (default)');
-  } catch (e) {
-    d.writeln('   FAILED: $e');
-  }
-
-  // 6. Direct sccache rustc test (simulate what cargo does)
-  d.writeln('');
-  d.writeln('6. Direct sccache invocation test:');
-  if (sccache != null) {
-    try {
-      final directTest = await Process.run(sccache, ['rustc', '--version'],
-          environment: {...Platform.environment, ...env});
-      d.writeln('   exit: ${directTest.exitCode}');
-      d.writeln('   stdout: ${directTest.stdout.toString().trim()}');
-      if (directTest.stderr.toString().trim().isNotEmpty) {
-        d.writeln('   stderr: ${directTest.stderr.toString().trim()}');
-      }
-    } catch (e) {
-      d.writeln('   FAILED: $e');
-    }
-
-    // Check stats after direct invocation
-    try {
-      final postDirect = await Process.run(sccache, ['--show-stats'],
-          environment: {...Platform.environment, ...env});
-      d.writeln('   stats after direct call:');
-      final lines = postDirect.stdout.toString().split('\n');
-      for (final line in lines) {
-        if (line.contains('Compile requests') || line.contains('Cache') ||
-            line.contains('location')) {
-          d.writeln('     ${line.trim()}');
-        }
-      }
-    } catch (_) {}
-  }
-
-  debugFile.writeAsStringSync(d.toString());
-
   final result = await Process.run(
     'cargo',
     [
@@ -478,31 +372,6 @@ Future<void> _compileNativeFromHook(
     ],
     environment: {...Platform.environment, ...env},
   );
-
-  // 7. Post-build diagnostics
-  final postD = StringBuffer()
-    ..writeln('')
-    ..writeln('7. POST-BUILD:')
-    ..writeln('   cargo exit: ${result.exitCode}')
-    ..writeln('   cargo stderr (last 300):');
-  final stderrStr = result.stderr.toString();
-  postD.writeln('   ${stderrStr.length > 300 ? stderrStr.substring(stderrStr.length - 300).replaceAll('\n', '\n   ') : stderrStr.replaceAll('\n', '\n   ')}');
-  if (sccache != null) {
-    try {
-      final postStats = await Process.run(sccache, ['--show-stats'],
-          environment: {...Platform.environment, ...env});
-      postD.writeln('');
-      postD.writeln('   sccache stats AFTER build:');
-      for (final line in postStats.stdout.toString().split('\n')) {
-        if (line.trim().isNotEmpty) {
-          postD.writeln('     ${line.trim()}');
-        }
-      }
-    } catch (e) {
-      postD.writeln('   sccache stats FAILED: $e');
-    }
-  }
-  debugFile.writeAsStringSync(postD.toString(), mode: FileMode.append);
 
   if (result.exitCode != 0) {
     throw StateError(
@@ -634,19 +503,6 @@ Future<void> _copyWebAsset(
 
 String _resolveFeatures() => _nativeFeatures;
 
-/// Find an executable on PATH without spawning a process.
-String? _findOnPath(String name) {
-  final path = Platform.environment['PATH'] ?? '';
-  final sep = Platform.isWindows ? ';' : ':';
-  final exts = Platform.isWindows ? ['.exe', '.cmd', '.bat', ''] : [''];
-  for (final dir in path.split(sep).where((d) => d.isNotEmpty)) {
-    for (final ext in exts) {
-      final file = File(p.join(dir, '$name$ext'));
-      if (file.existsSync()) return file.path;
-    }
-  }
-  return null;
-}
 
 String _currentLibFileName() {
   if (Platform.isMacOS) return 'lib$_crateName.dylib';
