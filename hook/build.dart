@@ -503,7 +503,6 @@ Future<void> _copyWebAsset(
 
 String _resolveFeatures() => _nativeFeatures;
 
-
 String _currentLibFileName() {
   if (Platform.isMacOS) return 'lib$_crateName.dylib';
   if (Platform.isLinux) return 'lib$_crateName.so';
