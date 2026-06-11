@@ -70,6 +70,7 @@ void coordinatorEntryPoint(SendPort mainPort) {
     if (tag == 'shutdown') {
       _shutdown(instance);
       responsePort?.send([message[0] as int, 'result', Uint8List(0)]);
+      port.close();
       return;
     }
 
