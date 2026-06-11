@@ -47,4 +47,11 @@ runs:
     # to this already-configured server regardless of their env.
     - name: Start sccache server
       shell: bash
-      run: sccache --start-server || true
+      run: |
+        # Disable idle timeout — the server must survive the 25+ min gap
+        # between this step and the first cargo build inside a Flutter
+        # build hook (Flutter SDK download + emulator boot + Gradle).
+        # Default idle timeout is 600s (10 min) which is too short.
+        export SCCACHE_IDLE_TIMEOUT=0
+        sccache --start-server || true
+        echo "SCCACHE_IDLE_TIMEOUT=0" >> $GITHUB_ENV
