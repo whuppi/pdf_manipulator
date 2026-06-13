@@ -93,6 +93,11 @@ import 'package:pdf_manipulator/pdf_manipulator.dart';
 
 final pdf = Pdf();
 
+// Operations run in parallel across isolated lanes, off the main
+// thread. Cap concurrent lanes per instance if you want — defaults
+// to half the cores, minimum 2:
+//   final pdf = Pdf(config: PdfConfig(maxLanes: 8));
+
 // Open a PDF from bytes in memory
 final source = MemorySource(pdfBytes);      // your Uint8List
 final doc = await pdf.open(source);
@@ -449,7 +454,16 @@ await page.paragraph('Thank you for your purchase.');
 await page.space(20);
 await page.textField('notes', PdfRect(x: 50, y: 400, width: 300, height: 100));
 await page.checkbox('agree', PdfRect(x: 50, y: 370, width: 14, height: 14));
+await page.radioGroup('plan', [
+  (value: 'monthly', rect: PdfRect(x: 50, y: 340, width: 14, height: 14)),
+  (value: 'yearly', rect: PdfRect(x: 50, y: 320, width: 14, height: 14)),
+]);
+
+// Form-field JavaScript (Acrobat-style actions on the field above)
+await page.fieldFormat('AFNumber_Format(2, 0, 0, 0, "\$", true);');
+
 await page.linkUrl('https://example.com');
+await page.linkPage(2);                 // jump to another page in this doc
 await page.footnote('1', 'Terms apply.');
 await page.done();
 
@@ -457,7 +471,9 @@ await builder.save(sink);
 await builder.dispose();
 ```
 
-Text, headings, paragraphs, images, form fields (text, checkbox, combo box, push button, signature), links, footnotes, columns, watermarks — all from Dart. Page sizes: A4, Letter, or custom dimensions.
+Text, headings, paragraphs, images, form fields (text, checkbox, radio group, combo box, push button, signature), links (URL or page), footnotes, columns, watermarks — all from Dart. Page sizes: A4, Letter, or custom dimensions.
+
+Form fields can carry JavaScript actions — `fieldKeystroke`, `fieldFormat`, `fieldValidate`, `fieldCalculate` — that conforming viewers run as the user types, on display, on commit, and when other fields change.
 
 ### Batch editing
 
@@ -484,7 +500,19 @@ Save options:
 - `PdfSaveOptions.fullRewrite(encryption: PdfEncryption.remove())` — strip encryption.
 - `PdfSaveOptions.incremental()` — appends changes without rewriting. Faster, larger file.
 
-Every operation from the sections above is also available on the editor: rotate, stamp, flatten, redact, crop, resize images, embed files, set form field values, scrub metadata, and more.
+**Redaction** is a three-step lifecycle on the editor — mark regions, optionally count what's pending, then permanently remove the content:
+
+```dart
+final editor = await pdf.edit(source);
+editor.addRedaction(0, PdfRect(x: 72, y: 700, width: 200, height: 20));
+editor.addRedaction(1, PdfRect(x: 72, y: 680, width: 150, height: 20));
+print(await editor.redactionCount(0));   // pending marks on page 0
+await editor.applyRedactions();          // content is gone, not hidden
+await editor.save(sink);
+await editor.dispose();
+```
+
+Every operation from the sections above is also available on the editor: rotate, stamp, flatten, crop, resize images, embed files, set form field values, scrub metadata, and more.
 
 ---
 
@@ -556,7 +584,7 @@ Three modes, auto-detected (best first). No code changes between them:
 Force a mode or check which was selected:
 
 ```dart
-// Force
+// Force the web I/O mode (native ignores it)
 final pdf = Pdf(config: PdfConfig(webIoMode: PdfIoMode.atomics));
 
 // Check
