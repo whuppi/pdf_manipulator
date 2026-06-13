@@ -6,7 +6,7 @@
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
-import '../../harness/photo_png.dart';
+import '../../fixtures/generated/fixtures.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
 

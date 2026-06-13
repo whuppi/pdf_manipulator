@@ -18,8 +18,6 @@ import 'dart:typed_data';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
-import '../harness/photo_png.dart';
-
 /// One generated fixture: identity, rationale, declared truths, builder.
 class FixtureSpec {
   /// Creates a spec. [name] is snake_case; the generator derives the
@@ -43,8 +41,9 @@ class FixtureSpec {
   /// thereof.
   final Map<String, Object> truths;
 
-  /// Produces the PDF bytes via dart-pdf.
-  final Future<Uint8List> Function() build;
+  /// Produces the PDF bytes via dart-pdf. Receives the shared
+  /// photo-like PNG (the generator builds it once and injects it).
+  final Future<Uint8List> Function(Uint8List photoPng) build;
 }
 
 pw.Page _textPage(String text, {PdfPageFormat format = PdfPageFormat.a4}) {
@@ -69,7 +68,7 @@ final List<FixtureSpec> catalog = [
         'must yield emptiness, image/signature queries must yield '
         'nothing, classification and validation must still answer.',
     truths: {'pages': 1, 'width': 595.0, 'height': 842.0},
-    build: () async {
+    build: (photoPng) async {
       final doc = pw.Document(title: 'Blank A4');
       doc.addPage(
         pw.Page(pageFormat: PdfPageFormat.a4, build: (ctx) => pw.SizedBox()),
@@ -89,7 +88,7 @@ final List<FixtureSpec> catalog = [
       'page1Marker': 'BRAVO UNIQUE',
       'title': 'Two Page Markers',
     },
-    build: () async {
+    build: (photoPng) async {
       final doc = pw.Document(title: 'Two Page Markers');
       doc.addPage(_textPage('ALPHA UNIQUE content on the first page.'));
       doc.addPage(_textPage('BRAVO UNIQUE content on the second page.'));
@@ -107,7 +106,7 @@ final List<FixtureSpec> catalog = [
       'width': 612.0,
       'height': 792.0,
     },
-    build: () async {
+    build: (photoPng) async {
       final doc = pw.Document(title: 'Three Page Markers');
       for (final m in ['MARKER-ONE', 'MARKER-TWO', 'MARKER-THREE']) {
         doc.addPage(
@@ -127,7 +126,7 @@ final List<FixtureSpec> catalog = [
       'widths': [420.0, 842.0, 420.0, 842.0, 420.0, 842.0],
       'markerPrefix': 'SIZEPAGE-',
     },
-    build: () async {
+    build: (photoPng) async {
       final doc = pw.Document(title: 'Multi Size');
       for (var i = 0; i < 6; i++) {
         final big = i.isOdd;
@@ -153,7 +152,7 @@ final List<FixtureSpec> catalog = [
       'chapters': ['Chapter One', 'Chapter Two', 'Chapter Three'],
       'startPages': [0, 2, 4],
     },
-    build: () async {
+    build: (photoPng) async {
       final doc = pw.Document(title: 'Outlined Chapters');
       const chapters = ['Chapter One', 'Chapter Two', 'Chapter Three'];
       for (var c = 0; c < chapters.length; c++) {
@@ -193,7 +192,7 @@ final List<FixtureSpec> catalog = [
       'imageWidth': 128,
       'imageHeight': 128,
     },
-    build: () async {
+    build: (photoPng) async {
       final doc = pw.Document(title: 'Image Pages');
       final image = pw.MemoryImage(photoPng);
       for (var i = 0; i < 3; i++) {
@@ -224,7 +223,7 @@ final List<FixtureSpec> catalog = [
       'fieldNames': ['fullname', 'agree'],
       'textFieldDefault': 'John Doe',
     },
-    build: () async {
+    build: (photoPng) async {
       final doc = pw.Document(title: 'Foreign Form');
       doc.addPage(
         pw.Page(
@@ -250,7 +249,7 @@ final List<FixtureSpec> catalog = [
         'flattenAllAnnotations must consume annotation dictionaries '
         'with foreign appearance conventions.',
     truths: {'pages': 1, 'annotCount': 2, 'url': 'https://example.com/interop'},
-    build: () async {
+    build: (photoPng) async {
       final doc = pw.Document(title: 'Linked');
       doc.addPage(
         pw.Page(
@@ -283,7 +282,7 @@ final List<FixtureSpec> catalog = [
         'U+2014 and silently drops it — producer limitation, proven '
         'against the raw content stream.)',
     truths: {'pages': 1, 'marker': 'Café Münchhausen, naïve façade ©'},
-    build: () async {
+    build: (photoPng) async {
       final doc = pw.Document(title: 'Unicode');
       doc.addPage(_textPage('Café Münchhausen, naïve façade © reserved.'));
       return _saveDoc(doc);
@@ -300,7 +299,7 @@ final List<FixtureSpec> catalog = [
       'rotations': [90, 180],
       'markerPrefix': 'ROTPAGE-',
     },
-    build: () async {
+    build: (photoPng) async {
       // dart-pdf's widget layer has no /Rotate switch — use its
       // low-level API (still the foreign producer, one layer down).
       final doc = PdfDocument();
@@ -325,7 +324,7 @@ final List<FixtureSpec> catalog = [
         'One hundred marked text pages — the mid-weight diet for ops '
         'where 1000 pages would waste suite time.',
     truths: {'pages': 100, 'markerPrefix': 'STRESSPAGE-'},
-    build: () async {
+    build: (photoPng) async {
       final doc = pw.Document(title: 'Hundred Pages');
       for (var i = 0; i < 100; i++) {
         doc.addPage(
@@ -346,7 +345,7 @@ final List<FixtureSpec> catalog = [
         'once per machine instead of rebuilt inside every stress '
         'battery on every run.',
     truths: {'pages': 1000, 'markerPrefix': 'STRESSPAGE-'},
-    build: () async {
+    build: (photoPng) async {
       final doc = pw.Document(title: 'Thousand Pages');
       for (var i = 0; i < 1000; i++) {
         doc.addPage(

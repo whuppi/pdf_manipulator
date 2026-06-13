@@ -776,14 +776,16 @@ test/
 │   ├── catalog.dart                spec + truths of every generated fixture
 │   ├── generated/                  GITIGNORED — emitted by `make fixtures`
 │   │   ├── .stamp                  input hash (existence is never proof)
-│   │   └── f_*.dart                base64 bytes + truth constants
+│   │   ├── f_*.dart                base64 bytes + truth constants
+│   │   └── f_photo_png.dart        the photo-like raster (seeded noise),
+│   │                               built by the generator, fed into the
+│   │                               image PDF fixtures
 │   ├── third_party/
 │   │   └── tp_encrypted.dart       committed qpdf AES-256 fixture
 │   └── handwritten.dart            hand-authored micro fixtures + certs
 │
 ├── harness/                        MACHINERY — not data
 │   ├── asset_server.dart           HTTP server for web test assets
-│   ├── photo_png.dart              128×128 test PNG (builder input)
 │   ├── slow_source.dart            Parks the engine on a read (cancel tests)
 │   ├── test_source_sink.dart       TestSource + TestSink (O(1) guards)
 │   ├── timeouts.dart               t() — per-test timeout helper
