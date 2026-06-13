@@ -135,6 +135,28 @@ runs:
         (
           while kill -0 $CMD_PID 2>/dev/null; do
             sleep 30
+            # ── TEMPORARY DEBUG PROBE — remove after capturing the hang ──
+            echo "::group::🐶 watchdog probe"
+            echo "-- all adb processes --"
+            for apid in $(pgrep -f adb 2>/dev/null); do
+              echo "  PID=$apid PPID=$(ps -p "$apid" -o ppid= 2>/dev/null | tr -d ' ') CPU=$(ps -p "$apid" -o %cpu= 2>/dev/null | tr -d ' ')% CMD=$(ps -p "$apid" -o args= 2>/dev/null)"
+            done
+            echo "-- dartvm descendant trees --"
+            for dvmpid in $(pgrep -f dartvm 2>/dev/null); do
+              echo "  dartvm $dvmpid:"
+              for cpid in $(pgrep -P "$dvmpid" 2>/dev/null); do
+                echo "    L1 $cpid: $(ps -p "$cpid" -o args= 2>/dev/null)"
+                for gcpid in $(pgrep -P "$cpid" 2>/dev/null); do
+                  echo "      L2 $gcpid: $(ps -p "$gcpid" -o args= 2>/dev/null)"
+                done
+              done
+            done
+            echo "-- force-stop/uninstall search --"
+            for apid in $(pgrep -f "force-stop\|uninstall" 2>/dev/null); do
+              echo "  FOUND PID=$apid CPU=$(ps -p "$apid" -o %cpu= 2>/dev/null | tr -d ' ')% CMD=$(ps -p "$apid" -o args= 2>/dev/null)"
+            done
+            echo "::endgroup::"
+            # ── END TEMPORARY DEBUG PROBE ──
             for pattern in force-stop uninstall; do
               for pid in $(pgrep -f "$pattern" 2>/dev/null); do
                 PCMD=$(ps -p "$pid" -o args= 2>/dev/null || true)
