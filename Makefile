@@ -35,9 +35,11 @@ check: analyze test-guards test test-example
 # § 2 — Analyze
 # ═══════════════════════════════════════════════════════════════════
 #
-# make analyze  Dart + Rust static analysis.
+# make analyze  Dart + Rust static analysis. Depends on fixtures:
+#               analyzing test/ requires the generated fixtures it
+#               imports to exist (gitignored — absent on fresh checkout).
 
-analyze:
+analyze: fixtures
 	@DART="$(DART)" FLUTTER="$(FLUTTER)" bash tool/analyze.sh
 
 # ═══════════════════════════════════════════════════════════════════
