@@ -24,32 +24,53 @@ if [ -n "$IGNORES" ]; then
 fi
 echo "  No // ignore: comments found. Clean."
 
+# ── Resolve BEFORE formatting ───────────────────────────────────────
+# `dart format`'s output depends on the file's resolved LANGUAGE
+# VERSION (new "every-arg-on-its-line" style at >=3.7, old wrap style
+# below). The language version comes from each package's pubspec SDK
+# floor, read via .dart_tool/package_config.json. With no
+# package_config (unresolved deps), the formatter falls back to the
+# SDK's latest — a DIFFERENT style than a resolved package produces.
+#
+# So both packages MUST be resolved before either is formatted, and
+# each package MUST be formatted from its own directory so the
+# formatter reads ITS package_config. Resolving here also means the
+# analyze steps below need no second pub get.
+echo "=== Dart: pub get (root + example) ==="
+$DART pub get --no-example
+( cd "$PKG_ROOT/example" && $FLUTTER pub get )
+
 # ── Dart formatting ─────────────────────────────────────────────────
 # Locally: format in place (the gate fixes what it finds).
 # CI: fail on any diff — unformatted code never lands unnoticed.
-
+#
+# Each package formatted from its own root so the resolved language
+# version is the one its pubspec declares — identical output local and
+# CI, regardless of either machine's default SDK.
 echo "=== Dart: format ==="
-FORMAT_DIRS=""
-for d in lib bin test tool hook example/lib example/integration_test; do
-  [ -e "$PKG_ROOT/$d" ] && FORMAT_DIRS="$FORMAT_DIRS $PKG_ROOT/$d"
-done
-if [ -n "${CI:-}" ]; then
-  $DART format --set-exit-if-changed $FORMAT_DIRS
-else
-  $DART format $FORMAT_DIRS
-fi
+format_pkg() {
+  local pkg_dir="$1"; shift
+  local targets=()
+  for d in "$@"; do
+    [ -e "$pkg_dir/$d" ] && targets+=("$d")
+  done
+  [ ${#targets[@]} -eq 0 ] && return 0
+  if [ -n "${CI:-}" ]; then
+    ( cd "$pkg_dir" && $DART format --set-exit-if-changed "${targets[@]}" )
+  else
+    ( cd "$pkg_dir" && $DART format "${targets[@]}" )
+  fi
+}
+format_pkg "$PKG_ROOT" lib bin test tool hook
+format_pkg "$PKG_ROOT/example" lib integration_test
 
 # ── Dart analysis ───────────────────────────────────────────────────
-
-echo "=== Dart: pub get ==="
-$DART pub get --no-example
 
 echo "=== Dart: analyze lib/ bin/ test/ hook/ ==="
 $DART analyze --fatal-infos lib/ bin/ test/ hook/
 
 echo "=== Dart: analyze example/ ==="
-cd "$PKG_ROOT/example" && $FLUTTER pub get && $FLUTTER analyze --fatal-infos
-cd "$PKG_ROOT"
+( cd "$PKG_ROOT/example" && $FLUTTER analyze --fatal-infos )
 
 # ── Rust analysis (warnings in our patched lines only) ──────────────
 
