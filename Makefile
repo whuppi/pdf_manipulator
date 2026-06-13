@@ -22,10 +22,6 @@ FLUTTER ?= fvm flutter
 TEST_RESULTS_DIR ?= test-results
 TIMEOUT := $(if $(CI),--timeout=30x,)
 VERBOSE := $(if $(CI),--verbose,)
-# CI only: disable DDS for device integration tests — its teardown
-# hangs flutter test on CPU-starved CI emulators (flutter#187785).
-# DDS only powers DevTools, unused in CI and automated runs. Kept enabled locally.
-NODDS := $(if $(CI),--no-dds,)
 
 # ═══════════════════════════════════════════════════════════════════
 # § 1 — Gate
@@ -253,34 +249,34 @@ test-example-matrix:
 test-example-macos:
 	@echo "=== Example: macOS ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
-	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart $(NODDS) -d macos --file-reporter json:../$(TEST_RESULTS_DIR)/int-macos.json
+	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart -d macos --file-reporter json:../$(TEST_RESULTS_DIR)/int-macos.json
 
 test-example-linux:
 	@echo "=== Example: Linux ==="
 	$(call ensure_gtk)
 	@mkdir -p $(TEST_RESULTS_DIR)
-	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart $(NODDS) -d linux --file-reporter json:../$(TEST_RESULTS_DIR)/int-linux.json
+	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart -d linux --file-reporter json:../$(TEST_RESULTS_DIR)/int-linux.json
 
 test-example-windows:
 	@echo "=== Example: Windows ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
-	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart $(NODDS) -d windows --file-reporter json:../$(TEST_RESULTS_DIR)/int-windows.json
+	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart -d windows --file-reporter json:../$(TEST_RESULTS_DIR)/int-windows.json
 
 # Runs on the connected/booted device. CI boots the emulator via setup-android.
 test-example-android:
 	@echo "=== Example: Android ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
-	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart $(NODDS) --file-reporter json:../$(TEST_RESULTS_DIR)/int-android.json
+	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart --file-reporter json:../$(TEST_RESULTS_DIR)/int-android.json
 
 # Runs on the booted simulator. CI boots the simulator via setup-ios.
 test-example-ios:
 	@echo "=== Example: iOS ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
-	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart $(NODDS) --file-reporter json:../$(TEST_RESULTS_DIR)/int-ios.json
+	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart --file-reporter json:../$(TEST_RESULTS_DIR)/int-ios.json
 
 test-example-device:
 	@echo "=== Example: device=$(DEVICE) ==="
-	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart $(NODDS) -d $(DEVICE)
+	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart -d $(DEVICE)
 
 test-example-web:
 	$(call setup_example_web)

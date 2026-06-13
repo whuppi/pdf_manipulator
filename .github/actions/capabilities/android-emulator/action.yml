@@ -126,36 +126,47 @@ runs:
       run: |
         cat > /tmp/emulator-run.sh << 'EMUSCRIPT'
         #!/usr/bin/env bash
-        set -euo pipefail
+        # NOT -e: the result reconciler at the end must run even when the
+        # command exits non-zero.
+        set -uo pipefail
 
-        bash -c "$1" &
+        OUT=/tmp/emulator-cmd.log
+        : > "$OUT"
+
+        # Run the command in the background, output to a log (plain
+        # redirect keeps $! = the command and $? = its real exit code,
+        # unlike a tee pipe). A separate tail streams the log live to the
+        # console so CI output is unchanged.
+        bash -c "$1" > "$OUT" 2>&1 &
         CMD_PID=$!
+        tail -f "$OUT" 2>/dev/null &
+        TAIL_PID=$!
 
-        # Kills stuck adb force-stop / uninstall at teardown. These are
-        # the kill() teardown commands flutter test runs with no timeout;
-        # on CPU-starved CI emulators (macOS-Intel SwiftShader) they hang
-        # on Binder IPC and flutter test never exits (flutter#187785).
-        # Fixed upstream by #187876 (timeouts) — on master, not yet on
-        # stable, so this stays until a stable release ships that fix.
-        # (The DDS teardown hang, a sibling of the same issue, is avoided
-        # at the source by --no-dds in the Makefile, so it isn't handled
-        # here.) pgrep -f "a|b" doesn't work on macOS — search separately.
+        # Teardown watchdog. On CPU-starved CI emulators (macOS-Intel
+        # SwiftShader) flutter test's teardown hangs and never exits:
+        #   - adb force-stop / uninstall block on Binder IPC, and
+        #   - DDS shutdown is fire-and-forget so the dart development-
+        #     service lingers
+        # both sibling symptoms of flutter#187785 (#187876 added adb
+        # timeouts on master, not yet on stable). Kill the stuck teardown
+        # processes so the run can finish; the result reconciler below
+        # decides pass/fail from the actual test output, not the exit
+        # code the kill leaves behind.
+        # pgrep -f "a|b" doesn't work on macOS — search separately.
+        kill_match() {
+          for pid in $(pgrep -f "$1" 2>/dev/null); do
+            local cmd; cmd=$(ps -p "$pid" -o args= 2>/dev/null || true)
+            echo "$cmd" | grep -q "$2" || continue
+            echo "=== WATCHDOG: killing stuck $1 (PID $pid) to unblock teardown ==="
+            kill -9 "$pid" 2>/dev/null || true
+          done
+        }
         (
           while kill -0 $CMD_PID 2>/dev/null; do
             sleep 30
-            for pattern in force-stop uninstall; do
-              for pid in $(pgrep -f "$pattern" 2>/dev/null); do
-                PCMD=$(ps -p "$pid" -o args= 2>/dev/null || true)
-                echo "$PCMD" | grep -q adb || continue
-                echo ""
-                echo "=== WATCHDOG: stuck adb $pattern (PID $pid) ==="
-                echo "    cmd: $PCMD"
-                echo "    Killing to unblock flutter test teardown."
-                kill -9 "$pid" 2>/dev/null || true
-                echo "=== WATCHDOG: killed. ==="
-                echo ""
-              done
-            done
+            kill_match force-stop adb
+            kill_match uninstall adb
+            kill_match development-service dart
           done
         ) &
         WATCHDOG_PID=$!
@@ -165,6 +176,24 @@ runs:
 
         kill $WATCHDOG_PID 2>/dev/null || true
         wait $WATCHDOG_PID 2>/dev/null || true
+        # Flush the tail, then stop it.
+        sleep 1
+        kill $TAIL_PID 2>/dev/null || true
+        wait $TAIL_PID 2>/dev/null || true
+
+        # Result reconciler. flutter test prints "🎉 N tests passed." ONLY
+        # when every test passed, and "Some tests failed." otherwise. When
+        # the suite passed but the run still exited non-zero (because the
+        # watchdog kill -9'd a hung teardown process, or DDS/golden stream
+        # noise), trust the test result, not the exit code. A genuine
+        # failure has no celebration line, so it can never be masked.
+        if [ "$EXIT" -ne 0 ] \
+           && grep -q '🎉.*tests passed\.' "$OUT" \
+           && ! grep -q 'Some tests failed' "$OUT"; then
+          echo "=== WATCHDOG: all tests passed; exit $EXIT was teardown"
+          echo "    noise (flutter#187785), not a test failure. Exit 0. ==="
+          EXIT=0
+        fi
 
         exit $EXIT
         EMUSCRIPT
