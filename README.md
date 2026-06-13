@@ -1,6 +1,14 @@
 # pdf_manipulator
 
+[![pub package](https://img.shields.io/pub/v/pdf_manipulator.svg)](https://pub.dev/packages/pdf_manipulator)
+[![likes](https://img.shields.io/pub/likes/pdf_manipulator)](https://pub.dev/packages/pdf_manipulator/score)
+[![pub points](https://img.shields.io/pub/points/pdf_manipulator)](https://pub.dev/packages/pdf_manipulator/score)
+[![GitHub stars](https://img.shields.io/github/stars/whuppi/pdf_manipulator?style=flat&logo=github)](https://github.com/whuppi/pdf_manipulator)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extract, search, sign, encrypt, validate, convert, build from scratch. Native and web. Every operation runs off the main thread, streams at constant memory, can be cancelled mid-flight, and dies instantly on dispose.
+
+> Try it — and if it helps, a [⭐ star](https://github.com/whuppi/pdf_manipulator) or [👍 like](https://pub.dev/packages/pdf_manipulator) keeps it going. [Bugs & features →](https://github.com/whuppi/pdf_manipulator/issues)
 
 > **Coming from the old Android-only package?** See the [migration guide](docs/MIGRATION.md).
 
