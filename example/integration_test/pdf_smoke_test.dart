@@ -5,13 +5,15 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:pdf_manipulator/pdf_manipulator.dart';
-import 'package:pdf_manipulator_example/main.dart' as app;
 import 'package:pdf_manipulator_example/main.dart'
     show MemorySource, MemorySink, minimalPdf, testCertPem, testKeyPem;
+
+import '../test/harness/pump_strategies.dart';
+import '../test/robots/app_robot.dart';
+import '../test/robots/runtime_tab_robot.dart';
 
 DataSource _src(Uint8List bytes) => MemorySource(bytes);
 
@@ -829,91 +831,59 @@ void main() {
   // The Runtime tab needs no file picker (a native dialog WidgetTester
   // cannot touch), so these flows are fully drivable end to end.
 
+  // These reuse the same harness robots as the host-VM device matrix
+  // (test/journeys/), so the scroll-to-tab / scroll-to-demo quirks are
+  // solved in ONE place. On a real device the screen is whatever the
+  // device gives; the matrix is what proves every SIZE.
+
   testWidgets('UI: app boots and detects an I/O mode', (t) async {
-    app.main();
-    await t.pumpAndSettle();
+    final robot = AppRobot(t);
+    await robot.launch();
     // The chip resolves from "…" to a real mode name.
-    await _pumpUntil(t, () {
-      final modes = ['NATIVE', 'JSPI', 'ATOMICS', 'OPFS'];
-      return modes.any((m) => t.any(find.text(m)));
-    });
+    await pumpUntil(
+      t,
+      () =>
+          ['NATIVE', 'JSPI', 'ATOMICS', 'OPFS'].any((m) => t.any(find.text(m))),
+      describe: 'I/O mode chip resolved',
+    );
   });
 
   testWidgets('UI: cancel-before-start demo reports PdfCancelled', (t) async {
-    app.main();
-    await t.pumpAndSettle();
-    await _runDemo(t, 'Cancel before the job even starts');
-    await _pumpUntil(t, () => t.any(find.textContaining('PdfCancelled')));
+    await AppRobot(t).launch();
+    final runtime = RuntimeTabRobot(t);
+    await runtime.runDemo('Cancel before the job even starts');
+    await runtime.expectStatusContains('PdfCancelled');
   });
 
   testWidgets('UI: parallel-opens demo reports 4 docs', (t) async {
-    app.main();
-    await t.pumpAndSettle();
-    await _runDemo(t, 'Open 4 documents in parallel');
-    await _pumpUntil(t, () => t.any(find.textContaining('4 docs open')));
+    await AppRobot(t).launch();
+    final runtime = RuntimeTabRobot(t);
+    await runtime.runDemo('Open 4 documents in parallel');
+    await runtime.expectStatusContains('4 docs open');
   });
 
   testWidgets('UI: instant-dispose demo reports a measured kill', (t) async {
-    app.main();
-    await t.pumpAndSettle();
-    await _runDemo(t, 'Dispose mid-flight — measure it');
+    await AppRobot(t).launch();
+    final runtime = RuntimeTabRobot(t);
+    await runtime.runDemo('Dispose mid-flight — measure it');
     // Builds a 40-page sample first — give it room on slow devices.
-    await _pumpUntil(t, () => t.any(find.textContaining('dispose() returned')),
-        timeout: const Duration(minutes: 3));
+    await pumpUntil(
+      t,
+      () => t.any(find.textContaining('dispose() returned')),
+      timeout: const Duration(minutes: 3),
+      describe: 'instant-dispose result',
+    );
   });
 
   testWidgets('UI: tab navigation shows each surface', (t) async {
-    app.main();
-    await t.pumpAndSettle();
-    await _tapTab(t, 'Doc');
-    expect(find.text('Open a PDF to query it'), findsOneWidget);
-    await _tapTab(t, 'Merge');
-    expect(find.textContaining('Pick 2+ PDFs'), findsOneWidget);
-  });
-}
-
-/// Scrolls a Runtime-tab demo into view and taps its Run button.
-///
-/// The demo lists are lazy ListViews — a button below the fold isn't
-/// built yet, so ensureVisible can't find it. scrollUntilVisible walks
-/// the list exactly as a user's thumb would, building rows as it goes.
-Future<void> _runDemo(WidgetTester t, String title) async {
-  final run = find.byKey(ValueKey('run:$title'));
-  // The Runtime tab body is the only ListView in the tree; the other
-  // scrollables are the TabBar and the TabBarView pager (both
-  // horizontal). scrollUntilVisible wants the Scrollable inside that
-  // ListView, so the vertical scroll lands on the demo list.
-  final list = find.descendant(
-    of: find.byType(ListView),
-    matching: find.byType(Scrollable),
-  );
-  await t.scrollUntilVisible(run, 200, scrollable: list);
-  await t.tap(run);
-}
-
-/// Scrolls a tab into view, then taps it. The TabBar is scrollable, so
-/// on a narrow screen the last tabs sit off the right edge — drag the
-/// bar until the wanted tab is on-screen, exactly as a user would. The
-/// TabBar is the first scrollable in the tree.
-Future<void> _tapTab(WidgetTester t, String label) async {
-  final tab = find.text(label);
-  await t.scrollUntilVisible(tab, 120,
-      scrollable: find.byType(Scrollable).first);
-  await t.tap(tab);
-  await t.pumpAndSettle();
-}
-
-/// Pumps frames until [condition] holds. pumpAndSettle would hang on
-/// the status bar's spinner — poll explicitly instead.
-Future<void> _pumpUntil(WidgetTester t, bool Function() condition,
-    {Duration timeout = const Duration(seconds: 60)}) async {
-  final end = DateTime.now().add(timeout);
-  while (!condition()) {
-    if (DateTime.now().isAfter(end)) {
-      fail('condition not met within $timeout');
+    final robot = AppRobot(t);
+    await robot.launch();
+    for (final tab in appTabs) {
+      await robot.openTab(tab);
+      expect(find.textContaining(tab.marker), findsOneWidget,
+          reason: '${tab.label} body not shown');
     }
-    await t.pump(const Duration(milliseconds: 100));
-  }
+  });
 }
 
 /// A DataSource whose first read parks until [release] — makes cancel
