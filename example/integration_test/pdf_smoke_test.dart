@@ -11,9 +11,9 @@ import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:pdf_manipulator_example/main.dart'
     show MemorySource, MemorySink, minimalPdf, testCertPem, testKeyPem;
 
-import '../test/harness/pump_strategies.dart';
-import '../test/robots/app_robot.dart';
-import '../test/robots/runtime_tab_robot.dart';
+import 'support/harness/pump_strategies.dart';
+import 'support/robots/app_robot.dart';
+import 'support/robots/runtime_tab_robot.dart';
 
 DataSource _src(Uint8List bytes) => MemorySource(bytes);
 

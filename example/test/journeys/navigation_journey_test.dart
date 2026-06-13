@@ -8,8 +8,8 @@
 
 import 'package:flutter_test/flutter_test.dart';
 
-import '../harness/device_matrix.dart';
-import '../robots/app_robot.dart';
+import '../../integration_test/support/harness/device_matrix.dart';
+import '../../integration_test/support/robots/app_robot.dart';
 
 void main() {
   testJourneyAcrossDevices('navigation: every tab opens',

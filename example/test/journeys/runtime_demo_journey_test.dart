@@ -11,9 +11,9 @@
 // build) so the matrix stays fast; the on-device smoke suite exercises
 // the heavy demos' full execution once on a real device.
 
-import '../harness/device_matrix.dart';
-import '../robots/app_robot.dart';
-import '../robots/runtime_tab_robot.dart';
+import '../../integration_test/support/harness/device_matrix.dart';
+import '../../integration_test/support/robots/app_robot.dart';
+import '../../integration_test/support/robots/runtime_tab_robot.dart';
 
 void main() {
   testJourneyAcrossDevices('runtime: demos reachable + tappable',
