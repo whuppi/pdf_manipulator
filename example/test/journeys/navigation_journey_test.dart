@@ -8,8 +8,7 @@
 
 import 'package:flutter_test/flutter_test.dart';
 
-import '../../integration_test/support/harness/device_matrix.dart';
-import '../../integration_test/support/robots/app_robot.dart';
+import 'package:pdf_manipulator_example_test_support/pdf_manipulator_example_test_support.dart';
 
 void main() {
   testJourneyAcrossDevices('navigation: every tab opens',

@@ -1,0 +1,26 @@
+name: pdf_manipulator_example_test_support
+description: >-
+  Reusable UI-test harness (robot pattern + device matrix) plus the
+  example app's robots. Shared by the example's host-VM journeys
+  (test/) and its on-device smoke suite (integration_test/) through one
+  package: import, so neither root reaches across the other with ../
+  paths — the constraint that breaks web integration tests.
+publish_to: none
+version: 0.0.0
+
+environment:
+  sdk: ^3.4.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_test:
+    sdk: flutter
+  integration_test:
+    sdk: flutter
+  # The example app under test — robots drive its main() and reuse its
+  # in-memory source/sink. This forms a path-dependency cycle with the
+  # example's dev_dependency on this package; pub allows it for path
+  # dev-dependencies (they're outside the published graph).
+  pdf_manipulator_example:
+    path: ../
