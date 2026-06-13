@@ -128,43 +128,21 @@ runs:
         #!/usr/bin/env bash
         set -euo pipefail
 
-        OUT=/tmp/emulator-cmd.log
-        DDS_KILLED=/tmp/emulator-dds-killed
-        rm -f "$OUT" "$DDS_KILLED"
-
-        # Run the command in the background, streaming output to the
-        # console AND capturing it to $OUT (via process substitution, so
-        # $! stays the command's PID and $? is its real exit code — not
-        # tee's). The reconciler at the end reads $OUT for the test result.
-        bash -c "$1" > >(tee "$OUT") 2>&1 &
+        bash -c "$1" &
         CMD_PID=$!
 
-        # pgrep -f "a|b" doesn't work on macOS — search separately.
+        # Kills stuck adb force-stop / uninstall at teardown. These are
+        # the kill() teardown commands flutter test runs with no timeout;
+        # on CPU-starved CI emulators (macOS-Intel SwiftShader) they hang
+        # on Binder IPC and flutter test never exits (flutter#187785).
+        # Fixed upstream by #187876 (timeouts) — on master, not yet on
+        # stable, so this stays until a stable release ships that fix.
+        # (The DDS teardown hang, a sibling of the same issue, is avoided
+        # at the source by --no-dds in the Makefile, so it isn't handled
+        # here.) pgrep -f "a|b" doesn't work on macOS — search separately.
         (
           while kill -0 $CMD_PID 2>/dev/null; do
             sleep 30
-            # ── TEMPORARY DEBUG PROBE — remove after capturing the hang ──
-            echo "::group::🐶 watchdog probe"
-            echo "-- all adb processes --"
-            for apid in $(pgrep -f adb 2>/dev/null); do
-              echo "  PID=$apid PPID=$(ps -p "$apid" -o ppid= 2>/dev/null | tr -d ' ') CPU=$(ps -p "$apid" -o %cpu= 2>/dev/null | tr -d ' ')% CMD=$(ps -p "$apid" -o args= 2>/dev/null)"
-            done
-            echo "-- dartvm descendant trees --"
-            for dvmpid in $(pgrep -f dartvm 2>/dev/null); do
-              echo "  dartvm $dvmpid:"
-              for cpid in $(pgrep -P "$dvmpid" 2>/dev/null); do
-                echo "    L1 $cpid: $(ps -p "$cpid" -o args= 2>/dev/null)"
-                for gcpid in $(pgrep -P "$cpid" 2>/dev/null); do
-                  echo "      L2 $gcpid: $(ps -p "$gcpid" -o args= 2>/dev/null)"
-                done
-              done
-            done
-            echo "-- force-stop/uninstall search --"
-            for apid in $(pgrep -f "force-stop\|uninstall" 2>/dev/null); do
-              echo "  FOUND PID=$apid CPU=$(ps -p "$apid" -o %cpu= 2>/dev/null | tr -d ' ')% CMD=$(ps -p "$apid" -o args= 2>/dev/null)"
-            done
-            echo "::endgroup::"
-            # ── END TEMPORARY DEBUG PROBE ──
             for pattern in force-stop uninstall; do
               for pid in $(pgrep -f "$pattern" 2>/dev/null); do
                 PCMD=$(ps -p "$pid" -o args= 2>/dev/null || true)
@@ -178,30 +156,6 @@ runs:
                 echo ""
               done
             done
-
-            # Stuck DDS at teardown (flutter#187785 sibling: stopApp/
-            # uninstallApp got timeouts in #187876, but dispose()'s
-            # `void shutdown() => _ddsInstance?.shutdown()` is fire-and-
-            # forget — the orphaned `dart development-service` lingers and
-            # flutter test never exits). Kill it ONLY in the exact frozen-
-            # teardown signature: a dartvm whose SOLE child is the DDS
-            # process, idle at ~0% CPU. During the run dartvm has other
-            # children (app, adb), so this can't fire mid-test.
-            for dvmpid in $(pgrep -f dartvm 2>/dev/null); do
-              kids=$(pgrep -P "$dvmpid" 2>/dev/null)
-              [ "$(echo "$kids" | grep -c .)" -eq 1 ] || continue
-              ps -p "$kids" -o args= 2>/dev/null | grep -q "development-service" || continue
-              ddscpu=$(ps -p "$kids" -o %cpu= 2>/dev/null | tr -d ' ')
-              echo "${ddscpu:-1}" | awk '{ exit ($1 > 0.5) }' || continue
-              echo ""
-              echo "=== WATCHDOG: stuck DDS at teardown (PID $kids, cpu=${ddscpu}%) ==="
-              echo "    cmd: $(ps -p "$kids" -o args= 2>/dev/null)"
-              echo "    Sole idle dartvm child = dispose() hung on DDS. Killing."
-              kill -9 "$kids" 2>/dev/null || true
-              touch "$DDS_KILLED"
-              echo "=== WATCHDOG: killed DDS. flutter test should exit. ==="
-              echo ""
-            done
           done
         ) &
         WATCHDOG_PID=$!
@@ -211,27 +165,6 @@ runs:
 
         kill $WATCHDOG_PID 2>/dev/null || true
         wait $WATCHDOG_PID 2>/dev/null || true
-
-        # Reconcile the exit code. When the watchdog kill -9's the stuck
-        # DDS process, flutter test sees its DDS child die and returns
-        # exit 1 EVEN THOUGH every test passed. Treat that as success —
-        # but ONLY when all three hold, so a genuine failure is never
-        # masked:
-        #   1. we actually killed DDS this run ($DDS_KILLED exists),
-        #   2. the run reported "🎉 N tests passed.",
-        #   3. there were zero failures ("Some tests failed" absent, and
-        #      no "-N:" failure counter in the test reporter output).
-        if [ "$EXIT" -ne 0 ] && [ -f "$DDS_KILLED" ]; then
-          if grep -q "tests passed\." "$OUT" \
-             && ! grep -q "Some tests failed" "$OUT" \
-             && ! grep -Eq "^[0-9]{2}:[0-9]{2} \+[0-9]+ -[1-9]" "$OUT"; then
-            echo ""
-            echo "=== WATCHDOG: tests passed; exit $EXIT was caused by the"
-            echo "    DDS kill (flutter#187785 sibling), not a test failure."
-            echo "    Overriding to exit 0. ==="
-            EXIT=0
-          fi
-        fi
 
         exit $EXIT
         EMUSCRIPT
@@ -296,6 +229,8 @@ runs:
             --package "system-images;android-${{ inputs.api-level }};aosp_atd;x86_64"
         fi
 
+        ADB="$SDK/platform-tools/adb -s emulator-5554"
+
         # Boot emulator (matches action's launchEmulator).
         SNAP_FLAG="${{ inputs.cold-boot == 'true' && '-no-snapshot' || '-no-snapshot-save' }}"
         "$SDK/emulator/emulator" -port 5554 -avd test \
@@ -304,8 +239,7 @@ runs:
         # Poll for boot (matches action's adb wait loop).
         TIMEOUT=600; ELAPSED=0
         while [ $ELAPSED -lt $TIMEOUT ]; do
-          RESULT=$("$SDK/platform-tools/adb" -s emulator-5554 \
-            shell getprop sys.boot_completed 2>/dev/null || true)
+          RESULT=$($ADB shell getprop sys.boot_completed 2>/dev/null || true)
           if [ "$RESULT" = "1" ]; then
             echo "Emulator booted in ${ELAPSED}s."
             break
@@ -314,14 +248,27 @@ runs:
         done
         [ "$RESULT" != "1" ] && echo "::error::Emulator boot timeout" && exit 1
 
+        # sys.boot_completed flips when the kernel is up, but system
+        # services (input, settings) publish to ServiceManager a moment
+        # later. Sending input/settings commands before then fails with
+        # "Can't find service" and aborts the job (reactivecircus#432).
+        # Wait for each service to actually exist first.
+        wait_for_service() {
+          local svc="$1" tries=0
+          until $ADB shell service check "$svc" 2>/dev/null | grep -q "Service $svc:"; do
+            tries=$((tries + 1))
+            [ "$tries" -gt 60 ] && echo "::warning::service '$svc' never published" && return 0
+            sleep 1
+          done
+        }
+
         # Disable animations (matches action's disableAnimations).
-        "$SDK/platform-tools/adb" -s emulator-5554 shell input keyevent 82
-        "$SDK/platform-tools/adb" -s emulator-5554 shell \
-          settings put global window_animation_scale 0.0
-        "$SDK/platform-tools/adb" -s emulator-5554 shell \
-          settings put global transition_animation_scale 0.0
-        "$SDK/platform-tools/adb" -s emulator-5554 shell \
-          settings put global animator_duration_scale 0.0
+        wait_for_service input
+        $ADB shell input keyevent 82
+        wait_for_service settings
+        $ADB shell settings put global window_animation_scale 0.0
+        $ADB shell settings put global transition_animation_scale 0.0
+        $ADB shell settings put global animator_duration_scale 0.0
 
         # Run the user's script.
         ${{ inputs.script }}
