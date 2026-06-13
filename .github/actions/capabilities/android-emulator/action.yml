@@ -153,6 +153,8 @@ runs:
         # decides pass/fail from the actual test output, not the exit
         # code the kill leaves behind.
         # pgrep -f "a|b" doesn't work on macOS — search separately.
+        # adb force-stop / uninstall: kill on sight — these processes only
+        # ever exist during teardown, so matching one always means a hang.
         kill_match() {
           for pid in $(pgrep -f "$1" 2>/dev/null); do
             local cmd; cmd=$(ps -p "$pid" -o args= 2>/dev/null || true)
@@ -161,12 +163,31 @@ runs:
             kill -9 "$pid" 2>/dev/null || true
           done
         }
+        # DDS runs for the WHOLE test session, so it must NOT be killed by
+        # name alone — that crashes the live DDS mid-run
+        # (VmServiceDisappearedException). Kill it ONLY in the exact
+        # frozen-teardown signature: a dartvm whose SOLE child is the DDS
+        # process AND it's idle at ~0% CPU. During the run dartvm has
+        # other children (app, adb) and DDS is busy, so this can't fire
+        # mid-test — it's self-gating, no text marker needed.
+        kill_stuck_dds() {
+          for dvmpid in $(pgrep -f dartvm 2>/dev/null); do
+            local kids; kids=$(pgrep -P "$dvmpid" 2>/dev/null)
+            [ "$(echo "$kids" | grep -c .)" -eq 1 ] || continue
+            ps -p "$kids" -o args= 2>/dev/null | grep -q development-service || continue
+            local cpu; cpu=$(ps -p "$kids" -o %cpu= 2>/dev/null | tr -d ' ')
+            echo "${cpu:-1}" | awk '{ exit ($1 > 0.5) }' || continue
+            echo "=== WATCHDOG: stuck DDS at teardown (PID $kids, cpu=${cpu}%)."
+            echo "    Sole idle dartvm child = dispose() hung on DDS. Killing. ==="
+            kill -9 "$kids" 2>/dev/null || true
+          done
+        }
         (
           while kill -0 $CMD_PID 2>/dev/null; do
             sleep 30
             kill_match force-stop adb
             kill_match uninstall adb
-            kill_match development-service dart
+            kill_stuck_dds
           done
         ) &
         WATCHDOG_PID=$!
