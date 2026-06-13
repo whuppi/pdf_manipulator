@@ -842,29 +842,21 @@ void main() {
   testWidgets('UI: cancel-before-start demo reports PdfCancelled', (t) async {
     app.main();
     await t.pumpAndSettle();
-    final run =
-        find.byKey(const ValueKey('run:Cancel before the job even starts'));
-    await t.ensureVisible(run);
-    await t.tap(run);
+    await _runDemo(t, 'Cancel before the job even starts');
     await _pumpUntil(t, () => t.any(find.textContaining('PdfCancelled')));
   });
 
   testWidgets('UI: parallel-opens demo reports 4 docs', (t) async {
     app.main();
     await t.pumpAndSettle();
-    final run = find.byKey(const ValueKey('run:Open 4 documents in parallel'));
-    await t.ensureVisible(run);
-    await t.tap(run);
+    await _runDemo(t, 'Open 4 documents in parallel');
     await _pumpUntil(t, () => t.any(find.textContaining('4 docs open')));
   });
 
   testWidgets('UI: instant-dispose demo reports a measured kill', (t) async {
     app.main();
     await t.pumpAndSettle();
-    final run =
-        find.byKey(const ValueKey('run:Dispose mid-flight — measure it'));
-    await t.ensureVisible(run);
-    await t.tap(run);
+    await _runDemo(t, 'Dispose mid-flight — measure it');
     // Builds a 40-page sample first — give it room on slow devices.
     await _pumpUntil(t, () => t.any(find.textContaining('dispose() returned')),
         timeout: const Duration(minutes: 3));
@@ -873,13 +865,42 @@ void main() {
   testWidgets('UI: tab navigation shows each surface', (t) async {
     app.main();
     await t.pumpAndSettle();
-    await t.tap(find.text('Doc'));
-    await t.pumpAndSettle();
+    await _tapTab(t, 'Doc');
     expect(find.text('Open a PDF to query it'), findsOneWidget);
-    await t.tap(find.text('Merge'));
-    await t.pumpAndSettle();
+    await _tapTab(t, 'Merge');
     expect(find.textContaining('Pick 2+ PDFs'), findsOneWidget);
   });
+}
+
+/// Scrolls a Runtime-tab demo into view and taps its Run button.
+///
+/// The demo lists are lazy ListViews — a button below the fold isn't
+/// built yet, so ensureVisible can't find it. scrollUntilVisible walks
+/// the list exactly as a user's thumb would, building rows as it goes.
+Future<void> _runDemo(WidgetTester t, String title) async {
+  final run = find.byKey(ValueKey('run:$title'));
+  // The Runtime tab body is the only ListView in the tree; the other
+  // scrollables are the TabBar and the TabBarView pager (both
+  // horizontal). scrollUntilVisible wants the Scrollable inside that
+  // ListView, so the vertical scroll lands on the demo list.
+  final list = find.descendant(
+    of: find.byType(ListView),
+    matching: find.byType(Scrollable),
+  );
+  await t.scrollUntilVisible(run, 200, scrollable: list);
+  await t.tap(run);
+}
+
+/// Scrolls a tab into view, then taps it. The TabBar is scrollable, so
+/// on a narrow screen the last tabs sit off the right edge — drag the
+/// bar until the wanted tab is on-screen, exactly as a user would. The
+/// TabBar is the first scrollable in the tree.
+Future<void> _tapTab(WidgetTester t, String label) async {
+  final tab = find.text(label);
+  await t.scrollUntilVisible(tab, 120,
+      scrollable: find.byType(Scrollable).first);
+  await t.tap(tab);
+  await t.pumpAndSettle();
 }
 
 /// Pumps frames until [condition] holds. pumpAndSettle would hang on

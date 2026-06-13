@@ -2,7 +2,7 @@
        build build-native build-wasm \
        test test-pkg-native test-unit \
        test-ops test-ops-native test-ops-web test-ops-opfs test-ops-jspi test-ops-atomics \
-       test-example test-example-macos test-example-linux test-example-windows \
+       test-example test-example-responsive test-example-macos test-example-linux test-example-windows \
        test-example-android test-example-ios test-example-device \
        test-example-web test-example-web-jspi test-example-web-atomics test-example-web-opfs \
        verify verify-android verify-ios verify-macos \
@@ -201,7 +201,8 @@ test-ops-atomics:
 # § 6 — Integration tests (example app)
 # ═══════════════════════════════════════════════════════════════════
 #
-# make test-example              macOS + all 3 web modes.
+# make test-example              responsive + macOS + all 3 web modes.
+# make test-example-responsive   host VM: phone/tablet/desktop sizes.
 # make test-example-macos        macOS desktop.
 # make test-example-linux        Linux desktop (needs GTK + display).
 # make test-example-windows      Windows desktop.
@@ -231,7 +232,18 @@ define run_example_web
 	@./tool/run_web_test.sh $(2) $(FLUTTER)
 endef
 
-test-example: test-example-macos test-example-web
+test-example: test-example-responsive test-example-macos test-example-web
+
+# Host-VM widget test — drives the app at phone/tablet/desktop sizes and
+# proves every tab + demo button is reachable. The on-device suite can't
+# resize the viewport (it hides the UI — flutter/flutter#149209), so
+# size testing lives here. No device, runs anywhere `flutter test` runs,
+# so small-screen layout regressions fail locally, not just on CI's
+# Android emulator.
+test-example-responsive:
+	@echo "=== Example: responsive (host VM, all sizes) ==="
+	@mkdir -p $(TEST_RESULTS_DIR)
+	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) test/responsive_test.dart --file-reporter json:../$(TEST_RESULTS_DIR)/example-responsive.json
 
 test-example-macos:
 	@echo "=== Example: macOS ==="
