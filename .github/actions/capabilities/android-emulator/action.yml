@@ -170,6 +170,29 @@ runs:
                 echo ""
               done
             done
+
+            # Stuck DDS at teardown (flutter#187785 sibling: stopApp/
+            # uninstallApp got timeouts in #187876, but dispose()'s
+            # `void shutdown() => _ddsInstance?.shutdown()` is fire-and-
+            # forget — the orphaned `dart development-service` lingers and
+            # flutter test never exits). Kill it ONLY in the exact frozen-
+            # teardown signature: a dartvm whose SOLE child is the DDS
+            # process, idle at ~0% CPU. During the run dartvm has other
+            # children (app, adb), so this can't fire mid-test.
+            for dvmpid in $(pgrep -f dartvm 2>/dev/null); do
+              kids=$(pgrep -P "$dvmpid" 2>/dev/null)
+              [ "$(echo "$kids" | grep -c .)" -eq 1 ] || continue
+              ps -p "$kids" -o args= 2>/dev/null | grep -q "development-service" || continue
+              ddscpu=$(ps -p "$kids" -o %cpu= 2>/dev/null | tr -d ' ')
+              echo "${ddscpu:-1}" | awk '{ exit ($1 > 0.5) }' || continue
+              echo ""
+              echo "=== WATCHDOG: stuck DDS at teardown (PID $kids, cpu=${ddscpu}%) ==="
+              echo "    cmd: $(ps -p "$kids" -o args= 2>/dev/null)"
+              echo "    Sole idle dartvm child = dispose() hung on DDS. Killing."
+              kill -9 "$kids" 2>/dev/null || true
+              echo "=== WATCHDOG: killed DDS. flutter test should exit. ==="
+              echo ""
+            done
           done
         ) &
         WATCHDOG_PID=$!
