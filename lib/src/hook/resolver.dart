@@ -4,11 +4,17 @@
 /// The resolver doesn't know or care who created the request — it
 /// runs the same 5-step waterfall for every asset:
 ///
-///   1. Cached — file exists locally + hash matches → use it
-///   2. Download — fetch from GitHub Releases → cache → use it
+///   1. Cached — existing file, ONLY with a proof (see below)
+///   2. Download — fetch from GitHub Releases, hash-verified → use it
 ///   3. Compile — vendor source on disk → build → use it
 ///   4. Submodule — .gitmodules exists → init recursive + compile → use it
 ///   5. Error — nothing worked, clear message with options
+///
+/// Every step obeys one rule: **a binary is only used with a proof** —
+/// a matching content hash, or cargo's own freshness receipts (by
+/// falling through to the compile step). "The file exists" is never a
+/// proof: a stale binary looks exactly like a current one until it
+/// crashes on a missing symbol.
 library;
 
 import 'dart:io';
@@ -76,47 +82,86 @@ class ResolveRequest {
 /// Returns true if the asset was freshly resolved (downloaded, compiled),
 /// false if it was served from cache.
 Future<bool> resolveAsset(ResolveRequest req) async {
-  // Step 1 — Cached (skipped when force is true)
-  if (!req.force) {
-    final fileToCheck = req.cacheFile ?? req.dest;
-    if (fileToCheck.existsSync()) {
-      if (req.expectedHash != null) {
-        final actual =
-            sha256.convert(await fileToCheck.readAsBytes()).toString();
-        if (actual == req.expectedHash) {
-          _log.info('using cached ${fileToCheck.path} (hash verified)');
-          _copyIfNeeded(fileToCheck, req.dest);
-          return false;
-        }
-        _log.info('cached file hash mismatch — resolving fresh');
-      } else if (req.version == '0.0.0') {
-        _log.info(
-            'using cached ${fileToCheck.path} (dev version, no hash)');
-        _copyIfNeeded(fileToCheck, req.dest);
-        return false;
-      } else {
-        _log.warning(
-          '${req.assetName}: no hash available for v${req.version}. '
-          'Using cached file WITHOUT verification. '
-          'This may indicate a missing entry in asset_hashes.dart.',
-        );
-        _copyIfNeeded(fileToCheck, req.dest);
-        return false;
-      }
-    }
-  }
+  // Step 1 — Cached
+  if (!req.force && await _tryCache(req)) return false;
 
-  // Step 2 — Download
+  // Step 2 — Download (dev builds have no release to download from)
   if (req.version != '0.0.0') {
-    final url = req.downloadUrl;
     final target = req.cacheFile ?? req.dest;
-    if (await _download(url, target)) {
+    if (await _download(req.downloadUrl, target)) {
+      // Verify at download time, not on the next run's cache check —
+      // release assets are not immutable by construction; the hash is.
+      if (req.expectedHash != null &&
+          await _sha256Of(target) != req.expectedHash) {
+        _log.warning(
+          '${req.assetName}: downloaded file does not match the '
+          'pinned hash — discarding and falling back to source.',
+        );
+        target.deleteSync();
+        return _resolveFromSource(req);
+      }
       _copyIfNeeded(target, req.dest);
       return true;
     }
     _log.info('download unavailable, trying source compile');
   }
 
+  return _resolveFromSource(req);
+}
+
+/// Step 1: serve an existing file ONLY with a proof.
+///
+/// Exactly two reuses are legitimate:
+///   - the file's content matches the pinned hash, or
+///   - there is no hash AND no source to rebuild from — reusing the
+///     file is the only move that exists (loud when that's a release
+///     version, because it means asset_hashes.dart has a gap).
+///
+/// Everything else falls through: when vendor sources are present,
+/// freshness is cargo's question — its fingerprint check is ~1s when
+/// nothing changed, and the alternative is trusting an unprovable
+/// binary.
+Future<bool> _tryCache(ResolveRequest req) async {
+  final cached = req.cacheFile ?? req.dest;
+  if (!cached.existsSync()) return false;
+
+  if (req.expectedHash != null) {
+    if (await _sha256Of(cached) == req.expectedHash) {
+      _log.info('using cached ${cached.path} (hash verified)');
+      _copyIfNeeded(cached, req.dest);
+      return true;
+    }
+    _log.info('cached file hash mismatch — resolving fresh');
+    return false;
+  }
+
+  if (hasVendorSource(req.packageRoot)) {
+    _log.info(
+      'no hash for ${req.assetName} (v${req.version}) — '
+      'delegating freshness to source compile',
+    );
+    return false;
+  }
+
+  if (req.version == '0.0.0') {
+    _log.info('using cached ${cached.path} (dev, no sources to rebuild)');
+  } else {
+    _log.warning(
+      '${req.assetName}: no hash available for v${req.version}. '
+      'Using cached file WITHOUT verification. '
+      'This may indicate a missing entry in asset_hashes.dart.',
+    );
+  }
+  _copyIfNeeded(cached, req.dest);
+  return true;
+}
+
+Future<String> _sha256Of(File file) async =>
+    sha256.convert(await file.readAsBytes()).toString();
+
+/// Steps 3 + 4 of the waterfall: vendor-source compile, then
+/// submodule init + compile, then the explanatory failure.
+Future<bool> _resolveFromSource(ResolveRequest req) async {
   // Step 3 — Compile from vendor source
   if (hasVendorSource(req.packageRoot)) {
     _log.info('compiling from vendor source');
@@ -181,11 +226,12 @@ bool hasGitmodules(Uri packageRoot) {
 
 /// Run `git submodule update --init --recursive`.
 Future<void> initSubmodules(Uri packageRoot) async {
-  final result = await Process.run(
-    'git',
-    ['submodule', 'update', '--init', '--recursive'],
-    workingDirectory: p.fromUri(packageRoot),
-  );
+  final result = await Process.run('git', [
+    'submodule',
+    'update',
+    '--init',
+    '--recursive',
+  ], workingDirectory: p.fromUri(packageRoot));
   if (result.exitCode != 0) {
     throw StateError(
       'Failed to initialize submodules.\n'
@@ -197,8 +243,9 @@ Future<void> initSubmodules(Uri packageRoot) async {
 
 /// Read the package version from pubspec.yaml.
 String readVersion(Uri packageRoot) {
-  final lines =
-      File.fromUri(packageRoot.resolve('pubspec.yaml')).readAsLinesSync();
+  final lines = File.fromUri(
+    packageRoot.resolve('pubspec.yaml'),
+  ).readAsLinesSync();
   for (final line in lines) {
     if (line.startsWith('version:')) {
       return line.substring('version:'.length).trim();
@@ -219,8 +266,7 @@ Future<bool> _download(String url, File dest) async {
       final req = await client.getUrl(uri);
       req.followRedirects = false;
       response = await req.close();
-      if (response.isRedirect &&
-          response.headers.value('location') != null) {
+      if (response.isRedirect && response.headers.value('location') != null) {
         await response.drain<void>();
         uri = Uri.parse(response.headers.value('location')!);
         redirects++;

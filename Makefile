@@ -1,4 +1,4 @@
-.PHONY: check analyze \
+.PHONY: check analyze check-deps fixtures \
        build build-native build-wasm \
        test test-pkg-native test-unit \
        test-ops test-ops-native test-ops-web test-ops-opfs test-ops-jspi test-ops-atomics \
@@ -29,7 +29,7 @@ VERBOSE := $(if $(CI),--verbose,)
 #
 # make check    Full local gate before PR.
 
-check: analyze test test-example
+check: analyze test-guards test test-example
 
 # ═══════════════════════════════════════════════════════════════════
 # § 2 — Analyze
@@ -39,6 +39,63 @@ check: analyze test test-example
 
 analyze:
 	@DART="$(DART)" FLUTTER="$(FLUTTER)" bash tool/analyze.sh
+
+# ═══════════════════════════════════════════════════════════════════
+# § 2a — Dependency report (network; advisory, never fails)
+# ═══════════════════════════════════════════════════════════════════
+#
+# make check-deps   Report dependency drift against the constraint
+#                   doctrine: regular deps keep low floors (new majors
+#                   → verify+widen), dev deps track latest. Runs daily
+#                   in CI as warnings on the Upgrade Check workflow.
+#                   Not part of `make analyze` — a gate must not go
+#                   red because someone published.
+
+check-deps:
+	$(DART) tool/check_deps.dart
+
+# ═══════════════════════════════════════════════════════════════════
+# § 2b — Fixtures + test-suite guards
+# ═══════════════════════════════════════════════════════════════════
+#
+# make fixtures      Generate test fixtures (skips when the stamp matches
+#                    the catalog — existence is never proof, the stamp is).
+# make test-guards   Mechanical guards over the test suite:
+#                      - no dart:io in tests (fixtures are imported Dart
+#                        source, so VM and browser consume identical
+#                        bytes; exempt: the hybrid asset server, native
+#                        process-death tests, and the VM-only
+#                        source-parity guards that read repo source)
+#                      - no byte-grep content assertions (content claims
+#                        go through extract/search/render; %PDF- / ZIP
+#                        magic / encrypted-leak checks pass, and a
+#                        deliberate raw-bytes check carries an inline
+#                        `bytegrep-exempt` marker with its reason; the
+#                        builder battery is exempt wholesale — emitted
+#                        PDF syntax IS its subject)
+
+fixtures:
+	$(DART) run tool/generate_fixtures.dart
+
+test-guards:
+	@bad=$$(grep -rln "dart:io" test/ --include="*.dart" \
+	  | grep -v "test/harness/asset_server.dart" \
+	  | grep -v "test/ops/platform/native/" \
+	  | grep -v "test/bridge/protocol/wire_sync_test.dart" \
+	  | grep -v "test/runtime/web/lane_worker_sync_test.dart" \
+	  | grep -v "test/runtime/dumb_edges_test.dart" || true); \
+	if [ -n "$$bad" ]; then \
+	  echo "dart:io in tests — tests must run identically on VM and"; \
+	  echo "browser; fixtures are imported Dart source, never file I/O:"; \
+	  echo "$$bad"; exit 1; fi
+	@bad=$$(grep -rn "String.fromCharCodes" test/ops/ --include="*.dart" \
+	  | grep -v "sublist(0, 5)" | grep -v "isNot(contains" | grep -v "bytegrep-exempt" \
+	  | grep -v "pdf_builder_battery.dart" || true); \
+	if [ -n "$$bad" ]; then \
+	  echo "byte-grep content assertion — content claims go through"; \
+	  echo "extract/search/render, or carry a bytegrep-exempt marker"; \
+	  echo "with the reason:"; \
+	  echo "$$bad"; exit 1; fi
 
 # ═══════════════════════════════════════════════════════════════════
 # § 3 — Build (dev iteration)
@@ -54,7 +111,7 @@ build: build-native build-wasm
 # current host. Runs a non-existent test name so dart test starts
 # (invoking the hook) but no actual test executes.
 build-native:
-	$(DART) test test/ops/smoke_test.dart --concurrency=1 --name='DOES_NOT_EXIST' || true
+	$(DART) test test/ops/runners/native_runner_test.dart --concurrency=1 --name='DOES_NOT_EXIST' || true
 
 build-wasm:
 	bash tool/compile_rust.sh wasm
@@ -97,7 +154,7 @@ compile-natives:
 #
 # make test              Unit + all ops (native + 3 web modes).
 # make test-pkg-native   Unit + native ops only (CI fast gate).
-# make test-unit         Types + transport protocol (pure Dart).
+# make test-unit         Types + bridge + runtime + harness (pure Dart, VM).
 # make test-ops          All 4 ops runners.
 # make test-ops-native   Ops: native FFI.
 # make test-ops-web      Ops: all 3 web modes.
@@ -105,23 +162,23 @@ compile-natives:
 # make test-ops-jspi     Ops: web JSPI.
 # make test-ops-atomics  Ops: web Atomics.
 
-test: test-unit test-ops
+test: fixtures test-unit test-ops
 
-test-pkg-native: test-unit test-ops-native
+test-pkg-native: fixtures test-unit test-ops-native
 
 test-unit:
-	@echo "=== Unit: types + transport ==="
+	@echo "=== Unit: types + bridge + runtime + harness ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
-	$(DART) test $(TIMEOUT) test/types/ test/transport/ -p vm --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/unit.json
+	$(DART) test $(TIMEOUT) test/types/ test/bridge/ test/runtime/ test/harness/ -p vm --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/unit.json
 
-test-ops: test-ops-native test-ops-web
+test-ops: fixtures test-ops-native test-ops-web
 
 test-ops-native:
 	@echo "=== Ops: Native ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
 	$(DART) test $(TIMEOUT) test/ops/runners/native_runner_test.dart --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-native.json
 
-test-ops-web: test-ops-opfs test-ops-jspi test-ops-atomics
+test-ops-web: fixtures test-ops-opfs test-ops-jspi test-ops-atomics
 
 test-ops-opfs:
 	@echo "=== Ops: Web OPFS ==="

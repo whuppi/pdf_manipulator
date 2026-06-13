@@ -3,17 +3,10 @@ import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 /// Configuration for a PDF engine instance.
 class PdfConfig {
   /// Creates a PDF configuration.
-  const PdfConfig({
-    this.webCoordinatorUrl,
-    this.webWorkerUrl,
-    this.webIoMode,
-  });
+  const PdfConfig({this.webLaneWorkerUrl, this.webIoMode, this.maxLanes});
 
-  /// Custom coordinator JS URL for web. Ignored on native.
-  final String? webCoordinatorUrl;
-
-  /// Custom WASM worker JS URL for web. Ignored on native.
-  final String? webWorkerUrl;
+  /// Custom lane worker JS URL for web. Ignored on native.
+  final String? webLaneWorkerUrl;
 
   /// Force a specific web I/O mode. Ignored on native. Null = auto-detect.
   ///
@@ -22,4 +15,10 @@ class PdfConfig {
   ///   2. [PdfIoMode.atomics] — if `SharedArrayBuffer` is available
   ///   3. [PdfIoMode.opfs] — universal fallback
   final PdfIoMode? webIoMode;
+
+  /// Maximum concurrent lanes (isolated execution units) for this
+  /// instance. Null = `max(2, cores / 2)`. A process-wide budget
+  /// below this cap queues work instead of failing — exceeding any
+  /// cap never errors.
+  final int? maxLanes;
 }

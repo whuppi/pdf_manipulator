@@ -8,8 +8,7 @@
   "web": {
     "pdf_oxide_bg.wasm": "wasm-pdf_oxide_bg.wasm",
     "pdf_oxide.js": "wasm-pdf_oxide.js",
-    "coordinator.js": "wasm-coordinator.js",
-    "worker.js": "wasm-worker.js"
+    "lane_worker.js": "wasm-lane_worker.js"
   },
   "wasmBuildOutputs": ["pdf_oxide_bg.wasm", "pdf_oxide.js"]
 }

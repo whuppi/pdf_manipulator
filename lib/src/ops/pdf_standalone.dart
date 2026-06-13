@@ -8,22 +8,32 @@ import 'package:pdf_manipulator/src/ops/pdf.dart';
 import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
+import 'package:pdf_manipulator/src/types/pdf_task.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 
 /// One-shot operations — source in, sink out, no persistent handle.
 extension PdfStandalone on Pdf {
   /// Digitally signs a PDF with the given [credentials].
-  Future<void> sign(DataSource source, DataSink output, {
+  PdfTask<void> sign(
+    DataSource source,
+    DataSink output, {
     required PdfSigningCredentials credentials,
     String? reason,
     String? location,
   }) {
-    return bridge.sign(source, output,
-        credentials: credentials, reason: reason, location: location);
+    return bridge.sign(
+      source,
+      output,
+      credentials: credentials,
+      reason: reason,
+      location: location,
+    );
   }
 
   /// Converts a PDF to another document [format] (e.g. DOCX, image).
-  Future<void> convertTo(DataSource source, DataSink output, {
+  PdfTask<void> convertTo(
+    DataSource source,
+    DataSink output, {
     required PdfDocumentFormat format,
     String? password,
   }) {
@@ -31,24 +41,28 @@ extension PdfStandalone on Pdf {
   }
 
   /// Converts a document of the given [format] into a PDF.
-  Future<void> convertToPdf(DataSource document, DataSink output, {
+  PdfTask<void> convertToPdf(
+    DataSource document,
+    DataSink output, {
     required PdfDocumentFormat format,
   }) {
     return bridge.convertToPdf(document, output, format: format);
   }
 
   /// Extracts specific [pages] from [source] into [output].
-  Future<void> extractPages(
+  PdfTask<void> extractPages(
     DataSource source,
     DataSink output, {
     required List<int> pages,
     String? password,
-  }) async {
-    final handle = await bridge.openEditor(source, password: password);
+  }) => PdfTask.group((hook) async {
+    final handle = await hook.guard(
+      bridge.openEditor(source, password: password),
+    );
     try {
-      await handle.extractPages(pages, output);
+      await hook.guard(handle.extractPages(pages, output));
     } finally {
       await handle.dispose();
     }
-  }
+  });
 }

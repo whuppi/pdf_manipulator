@@ -30,7 +30,7 @@ final resultPath = await PdfManipulator().mergePDFs(
 final pdf = Pdf();
 final sink = MemorySink();
 await pdf.merge([FileSource(File('a.pdf')), FileSource(File('b.pdf'))], sink);
-pdf.dispose();
+await pdf.dispose();
 ```
 
 You implement `DataSource` and `DataSink` for whatever backing store you have — file, memory, HTTP, web blob. See the [README](../README.md) for examples.
@@ -50,7 +50,7 @@ final path = await plugin.mergePDFs(
 // v1
 final pdf = Pdf();
 await pdf.merge([sourceA, sourceB], outputSink);
-pdf.dispose();
+await pdf.dispose();
 ```
 
 ### Split
@@ -162,7 +162,7 @@ final path = await plugin.pdfCompressor(
 );
 
 // v1
-await pdf.compress(source, sink);
+await pdf.compress(source, sink, imageQuality: 70);
 ```
 
 `imageScale` is gone — v1 optimizes without reducing resolution. `unEmbedFonts` is now a separate editor method:
@@ -286,11 +286,15 @@ for (final page in doc.pages) {
 ### Cancel
 
 ```dart
-// v0
+// v0 — cancel everything
 await plugin.cancelManipulations();
 
-// v1 — dispose the instance
-pdf.dispose();
+// v1 — every method returns a PdfTask: cancel just that operation
+final task = pdf.merge(sources, sink);
+task.cancel();                 // idempotent, instant
+
+// v1 — or cancel everything on the instance
+await pdf.dispose();
 ```
 
 ---
@@ -361,12 +365,12 @@ No migration needed — just start using:
 - Extract embedded images (streaming)
 - Digital signatures (inspect, verify, sign)
 - PDF/A and PDF/UA validation
-- PDF/A conversion
+- PDF/A conversion (one-shot or via editor)
 - Convert to/from DOCX, PPTX, XLSX
 - PdfEditor — batch mutations, incremental save, encrypted save
 - PdfBuilder — create from scratch with form fields, links, columns, footnotes
-- Stamp annotations (16 types + image stamps)
+- Stamp annotations (13 types + image stamps)
 - Redaction, metadata scrub, crop margins
 - Resource pruning (image optimization, font unembedding)
 - Form field value setting
-- PDF/A conversion (via editor)
+- Per-op cancellation (`PdfTask.cancel()`) and instant dispose

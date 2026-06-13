@@ -24,6 +24,21 @@ if [ -n "$IGNORES" ]; then
 fi
 echo "  No // ignore: comments found. Clean."
 
+# ── Dart formatting ─────────────────────────────────────────────────
+# Locally: format in place (the gate fixes what it finds).
+# CI: fail on any diff — unformatted code never lands unnoticed.
+
+echo "=== Dart: format ==="
+FORMAT_DIRS=""
+for d in lib bin test tool hook example/lib example/integration_test; do
+  [ -e "$PKG_ROOT/$d" ] && FORMAT_DIRS="$FORMAT_DIRS $PKG_ROOT/$d"
+done
+if [ -n "${CI:-}" ]; then
+  $DART format --set-exit-if-changed $FORMAT_DIRS
+else
+  $DART format $FORMAT_DIRS
+fi
+
 # ── Dart analysis ───────────────────────────────────────────────────
 
 echo "=== Dart: pub get ==="
@@ -46,7 +61,10 @@ WASM_FEATURES=$(bash "$SCRIPT_DIR/compile_rust.sh" --features wasm)
 # Filter cargo warnings to only lines we changed vs upstream base tag.
 _filter_warnings() {
   local diff_text="$1"
-  declare -A changed_files
+  # Membership via temp file, not `declare -A` — macOS ships bash 3.2,
+  # which has no associative arrays.
+  local changed_keys
+  changed_keys=$(mktemp)
   local cur_file=""
   while IFS= read -r line; do
     case "$line" in
@@ -60,7 +78,7 @@ _filter_warnings() {
         count=${count:-1}
         [ "$count" -eq 0 ] && count=1
         for (( i=start; i<start+count; i++ )); do
-          changed_files["${cur_file}:${i}"]=1
+          echo "${cur_file}:${i}" >> "$changed_keys"
         done
         ;;
     esac
@@ -78,12 +96,13 @@ _filter_warnings() {
       skipped=$((skipped + 1))
       continue
     fi
-    if [[ -n "${changed_files[${span_file}:${span_line}]:-}" ]]; then
+    if grep -qxF "${span_file}:${span_line}" "$changed_keys"; then
       echo "  ${span_file}:${span_line}: ${msg_text}"
       warns=$((warns + 1))
     fi
   done
 
+  rm -f "$changed_keys"
   if [ "$skipped" -gt 0 ]; then
     echo "  ($skipped warning(s) skipped — could not parse span)" >&2
   fi

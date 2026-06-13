@@ -100,9 +100,11 @@ Future<void> _setupWeb(bool force) async {
     destDir: destDir,
     force: force,
   );
-  stdout.writeln(count > 0
-      ? '$count file(s) installed to ${destDir.path}/'
-      : 'All web assets up to date.');
+  stdout.writeln(
+    count > 0
+        ? '$count file(s) installed to ${destDir.path}/'
+        : 'All web assets up to date.',
+  );
 }
 
 // ── Native ────────────────────────────────────────────────────────
@@ -117,19 +119,17 @@ Future<void> _setupNative(String target, bool force) async {
 
   if (force) {
     stdout.writeln('  flutter clean');
-    final clean = await Process.start(
-      'flutter', ['clean'],
-      mode: ProcessStartMode.inheritStdio,
-    );
+    final clean = await Process.start('flutter', [
+      'clean',
+    ], mode: ProcessStartMode.inheritStdio);
     await clean.exitCode;
   }
 
   stdout.writeln('  flutter build ${buildArgs.join(' ')}');
-  final process = await Process.start(
-    'flutter',
-    ['build', ...buildArgs],
-    mode: ProcessStartMode.inheritStdio,
-  );
+  final process = await Process.start('flutter', [
+    'build',
+    ...buildArgs,
+  ], mode: ProcessStartMode.inheritStdio);
 
   final exitCode = await process.exitCode;
   if (exitCode != 0) {

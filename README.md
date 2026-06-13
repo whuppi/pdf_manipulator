@@ -1,6 +1,6 @@
 # pdf_manipulator
 
-Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extract, search, sign, encrypt, validate, convert, build from scratch. Native and web. Off the main thread.
+Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extract, search, sign, encrypt, validate, convert, build from scratch. Native and web. Every operation runs off the main thread, streams at constant memory, can be cancelled mid-flight, and dies instantly on dispose.
 
 > **Coming from the old Android-only package?** See the [migration guide](docs/MIGRATION.md).
 
@@ -105,10 +105,34 @@ await pdf.merge([sourceA, sourceB], output);
 final mergedBytes = output.takeBytes();
 
 // Always dispose when done
-pdf.dispose();
+await pdf.dispose();
 ```
 
 That's it. Every operation follows the same pattern: **source in, sink out**.
+
+### Cancellation
+
+Every engine method returns a `PdfTask<T>` — a `Future` you can also
+cancel. Existing `await` code works unchanged; cancellation is one
+extra verb when you want it:
+
+```dart
+final task = pdf.merge(sources, output);   // starts immediately
+
+// User navigated away — abort just this operation.
+task.cancel();                              // idempotent, instant
+
+try {
+  await task;
+} on PdfCancelled {
+  // The op was cancelled; the Pdf instance and every other
+  // handle keep working.
+}
+```
+
+`pdf.dispose()` is the bigger hammer: it cancels everything on the
+instance and returns in the same event-loop turn — no waiting for
+in-flight work to drain.
 
 ### Sources & sinks
 
@@ -503,6 +527,7 @@ The build hook (native) and setup command (web) resolve assets through the same 
 | 2 | **Download** | Fetch pre-built from GitHub Releases | Internet |
 | 3 | **Source compile** | Binary unavailable, vendor source on disk | [Rust](https://rustup.rs) |
 | 4 | **Submodule init** | Git dep `ref: dev` (no vendor dir) | [Rust](https://rustup.rs) + git |
+| 5 | **Error** | Nothing worked | A clear message listing your options |
 
 The vendored Rust source ships in both the pub.dev tarball and git tags. If the repo disappears, published versions still compile from source.
 
@@ -516,7 +541,7 @@ The vendored Rust source ships in both the pub.dev tarball and git tags. If the 
 | Chrome Android | 102+ | May 2022 |
 | Samsung Internet | 21+ | 2023 |
 
-The engine compiles to WASM and runs in a Web Worker pool. Your UI thread never does PDF work.
+The engine compiles to WASM and runs in isolated Web Workers. Your UI thread never does PDF work.
 
 ### Web I/O modes
 

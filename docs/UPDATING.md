@@ -8,11 +8,11 @@ For capability status see [`CAPABILITY_ROADMAP.md`](CAPABILITY_ROADMAP.md).
 ## Vendored forks
 
 Two git submodules, each a fork of the upstream repo with a named
-patch branch. `main` on each fork stays a clean mirror of upstream.
+patch branch.
 
 | Crate | Upstream | Fork | Branch | Base tag | Submodule |
 |---|---|---|---|---|---|
-| pdf_oxide | [`yfedoseev/pdf_oxide`](https://github.com/yfedoseev/pdf_oxide) | [`whuppi/pdf_oxide`](https://github.com/whuppi/pdf_oxide) | `pdf_manipulator/0.3.55-patches` | `v0.3.55` | `vendor/pdf_oxide/` |
+| pdf_oxide | [`yfedoseev/pdf_oxide`](https://github.com/yfedoseev/pdf_oxide) | [`whuppi/pdf_oxide`](https://github.com/whuppi/pdf_oxide) | `pdf_manipulator/0.3.64-patches` | `v0.3.64` | `vendor/pdf_oxide/` |
 | office_oxide | [`yfedoseev/office_oxide`](https://github.com/yfedoseev/office_oxide) | [`whuppi/office_oxide`](https://github.com/whuppi/office_oxide) | `office_kit/0.1.2-patches` | `v0.1.2` | `vendor/office_oxide/` |
 
 pdf_oxide depends on office_oxide as a path dependency
@@ -20,6 +20,27 @@ pdf_oxide depends on office_oxide as a path dependency
 wasm-bindgen-cli version is read from `vendor/pdf_oxide/Cargo.lock`
 at build time — never hardcoded. `compile_rust.sh` auto-installs the
 matching version before WASM builds.
+
+### The fork contract
+
+Each fork carries exactly three things — anything else is debris and
+gets deleted on sight:
+
+| Ref | Why it exists |
+|---|---|
+| `main` | Clean mirror of upstream main. Synced in S1 step 5; never carries our commits. |
+| The patch branch | All our patches, rebased onto the base tag. The only branch the submodule points at. |
+| `v*` tags | Rebase bases. `make analyze` derives the base tag from the patch-branch name and diffs against it, so the tag must exist on the fork. |
+
+Debris that does NOT belong on a fork: `dependabot/*` branches,
+upstream feature/release branches (fork-time copies, instantly stale),
+and upstream's Go-binding `go/*` tags. Delete with
+`git push origin --delete <ref>` — every such ref still exists on
+upstream, so deletion loses nothing.
+
+Never `git push --mirror` a working fork: mirror mode deletes every
+remote ref that doesn't exist locally, including `main` and any patch
+branch not currently checked out.
 
 ---
 
@@ -34,6 +55,8 @@ matching version before WASM builds.
 | Rebuild WASM | [S5 — Rebuild WASM](#s5--rebuild-wasm) |
 | Release a version | [S6 — Release](#s6--release) |
 | Before committing any Rust patch | [S7 — Verify our-code warnings](#s7--verify-our-code-warnings) |
+| Preview the pub.dev changelog | [S8 — Preview changelog](#s8--preview-changelog-before-pubdev-publish) |
+| Add a test fixture | [S9 — Add a test fixture](#s9--add-a-test-fixture) |
 
 ---
 
@@ -42,9 +65,11 @@ matching version before WASM builds.
 `.fvmrc` (root + `example/.fvmrc`) is the single source of truth for
 the Flutter SDK version. Never hardcode the version anywhere else.
 
-`flutter-upgrade.yml` runs daily, detects new Flutter stable releases,
-and opens a draft PR on `chore/flutter-upgrade` that bumps both files.
-Review, test, merge when ready.
+`upgrade-check.yml` runs daily. Its `flutter` job detects new Flutter
+stable releases and opens a draft PR on `chore/flutter-upgrade` that
+bumps both files — review, test, merge when ready. Its `package-deps`
+job runs `make check-deps` and surfaces dependency drift as warning
+annotations (advisory only — it never fails the run).
 
 ---
 
@@ -54,19 +79,25 @@ Review, test, merge when ready.
 
 ```sh
 cd vendor/pdf_oxide
-git fetch upstream
+git fetch upstream --tags
 git log --oneline vOLD..vNEW
 git diff vOLD..vNEW -- src/document.rs src/editor/document_editor.rs | grep "^+.*pub fn"
 ```
 
+Read the log for fixes that overlap our patches — upstream regularly
+lands the same class of fix (appearance streams, word spacing). Where
+upstream's version supersedes a patch of ours, the rebase drops ours
+and takes upstream.
+
 ### 2. Check conflict risk
 
+Run over every file we patch. The markers ARE the list — never
+maintain one by hand:
+
 ```sh
-for f in Cargo.toml src/document.rs src/editor/document_editor.rs \
-         src/compliance/converter.rs src/converters/office/mod.rs \
-         src/writer/pdf_writer.rs src/writer/document_builder.rs; do
+for f in Cargo.toml $(grep -rl "pdf_manipulator patch" src/ --include="*.rs"); do
   count=$(git diff vOLD..vNEW -- "$f" | wc -l | tr -d ' ')
-  [ "$count" -gt "0" ] && echo "RISK: $f ($count lines)" || echo "CLEAN: $f"
+  [ "$count" -gt "0" ] && echo "RISK : $f ($count lines)" || echo "clean: $f"
 done
 ```
 
@@ -74,8 +105,13 @@ done
 
 ```sh
 git rebase vNEW
-cargo test --lib --release
+cargo test --features native-bridge
 ```
+
+Resolve conflicts commit by commit. `Cargo.lock` conflicts: take the
+base (`git checkout vNEW -- Cargo.lock`) and let cargo re-add our
+feature deps on the next build. Full `cargo test`, not `--lib` — the
+`tests/` tree catches signature drift the lib tests miss.
 
 ### 4. Rename branch
 
@@ -85,7 +121,20 @@ git push origin pdf_manipulator/NEW-patches
 git push origin --delete pdf_manipulator/OLD-patches
 ```
 
-### 5. Rebuild + verify
+### 5. Sync the fork mirror
+
+```sh
+git push origin refs/remotes/upstream/main:refs/heads/main
+git push origin refs/tags/vNEW
+```
+
+Keeps the fork contract (see "Vendored forks" above): `main` stays a
+clean mirror, and the new base tag exists on the fork so `make
+analyze` and future rebases can resolve it from a fork-only clone.
+The `main` push is a fast-forward; if it isn't, the mirror drifted —
+investigate before forcing.
+
+### 6. Rebuild + verify
 
 ```sh
 cd ../..
@@ -94,7 +143,7 @@ make clean
 make check
 ```
 
-### 6. Commit
+### 7. Commit
 
 ```sh
 git add vendor/pdf_oxide web_assets/
@@ -105,31 +154,22 @@ git commit -m "build: sync upstream vNEW + rebuild WASM"
 
 ## S2 — Edit patches
 
-Our `host/` directory is entirely our code. Upstream patches live in
-7 files (see ARCHITECTURE.md §9). Edit either freely:
+Our `host/` directory is entirely our code — edit freely, no markers
+needed (the module itself is the marker). Everything outside `host/`
+is upstream code: **mark every change there** with paired
+`── pdf_manipulator patch ──` / `── end pdf_manipulator patch ──`
+boundaries. The markers are the authoritative inventory of what we
+patch:
 
 ```sh
 cd vendor/pdf_oxide
+grep -rl "pdf_manipulator patch" src/ --include="*.rs"
 
-# Our code (host/):
-#   dispatch.rs, bridge_api.rs, positioned_write.rs, sign.rs,
-#   image_optimizer.rs, font_optimizer.rs, constants.rs,
-#   native/*, wasm/*
-#
-# Upstream patches:
-#   document.rs, editor/document_editor.rs,
-#   compliance/converter.rs, converters/office/mod.rs,
-#   writer/pdf_writer.rs, writer/document_builder.rs
-
-cargo test --lib
+cargo test --features native-bridge
 cd ../..
 make build-wasm
 make check
 ```
-
-**Mark every upstream change** with `── pdf_manipulator patch ──`
-boundaries. Code in `host/` doesn't need markers (the module itself
-is the marker).
 
 **Verify zero warnings:** `make analyze` checks Rust warnings in our
 patched lines automatically (see [S7](#s7--verify-our-code-warnings)).
@@ -379,7 +419,7 @@ runner model, capability architecture, and action inventory.
 1. Runs `cargo check` with all features (same set as CI release builds)
 2. Uses `--message-format=json` to get warnings even from cached builds
 3. Derives the upstream base tag from the branch name automatically
-   (`pdf_manipulator/0.3.55-patches` → `v0.3.55`). No hardcoded tag —
+   (`pdf_manipulator/0.3.64-patches` → `v0.3.64`). No hardcoded tag —
    renaming the branch in S1 step 4 is all that's needed.
 4. Diffs against the base tag to find lines we changed
 5. Fails if any warning falls inside our changed lines
@@ -428,6 +468,25 @@ git checkout CHANGELOG.md   # restore
 
 ---
 
+## S9 — Add a test fixture
+
+1. Add a `FixtureSpec` to `test/fixtures/catalog.dart` — name, why,
+   declared truths, and a dart-pdf builder (the independent producer;
+   never this package's own builder — the foreign-diet rule in
+   ARCHITECTURE.md's testing section).
+2. `make fixtures` (test targets run it automatically; the stamp
+   regenerates everything because the catalog changed).
+3. Import `test/fixtures/generated/fixtures.dart` and assert against
+   the emitted `f<Name>Truth` constants.
+
+Fixtures that no cross-platform library can produce (e.g. encrypted)
+are generated ONCE externally and committed under
+`test/fixtures/third_party/` with full provenance in the file header
+(see `tp_encrypted.dart`). Deliberately broken byte sequences are
+hand-authored in `test/fixtures/handwritten.dart`.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Check |
@@ -443,3 +502,5 @@ git checkout CHANGELOG.md   # restore
 | `make verify-linux` fails without GTK | Makefile errors with `apt-get install` command (dev) or auto-installs (CI) |
 | `flutter build --release` fails but debug works | Build hook routes differently in release — check `hook/link.dart` exists |
 | Google Play rejects APK "16 KB page size" | Rust cdylib needs `-Wl,-z,max-page-size=16384` in `build.rs`. Cargo doesn't inherit NDK's 16 KB default. Any new Rust crate producing a cdylib for Android needs this. See `vendor/pdf_oxide/build.rs`. |
+
+---
