@@ -128,7 +128,15 @@ runs:
         #!/usr/bin/env bash
         set -euo pipefail
 
-        bash -c "$1" &
+        OUT=/tmp/emulator-cmd.log
+        DDS_KILLED=/tmp/emulator-dds-killed
+        rm -f "$OUT" "$DDS_KILLED"
+
+        # Run the command in the background, streaming output to the
+        # console AND capturing it to $OUT (via process substitution, so
+        # $! stays the command's PID and $? is its real exit code — not
+        # tee's). The reconciler at the end reads $OUT for the test result.
+        bash -c "$1" > >(tee "$OUT") 2>&1 &
         CMD_PID=$!
 
         # pgrep -f "a|b" doesn't work on macOS — search separately.
@@ -190,6 +198,7 @@ runs:
               echo "    cmd: $(ps -p "$kids" -o args= 2>/dev/null)"
               echo "    Sole idle dartvm child = dispose() hung on DDS. Killing."
               kill -9 "$kids" 2>/dev/null || true
+              touch "$DDS_KILLED"
               echo "=== WATCHDOG: killed DDS. flutter test should exit. ==="
               echo ""
             done
@@ -202,6 +211,27 @@ runs:
 
         kill $WATCHDOG_PID 2>/dev/null || true
         wait $WATCHDOG_PID 2>/dev/null || true
+
+        # Reconcile the exit code. When the watchdog kill -9's the stuck
+        # DDS process, flutter test sees its DDS child die and returns
+        # exit 1 EVEN THOUGH every test passed. Treat that as success —
+        # but ONLY when all three hold, so a genuine failure is never
+        # masked:
+        #   1. we actually killed DDS this run ($DDS_KILLED exists),
+        #   2. the run reported "🎉 N tests passed.",
+        #   3. there were zero failures ("Some tests failed" absent, and
+        #      no "-N:" failure counter in the test reporter output).
+        if [ "$EXIT" -ne 0 ] && [ -f "$DDS_KILLED" ]; then
+          if grep -q "tests passed\." "$OUT" \
+             && ! grep -q "Some tests failed" "$OUT" \
+             && ! grep -Eq "^[0-9]{2}:[0-9]{2} \+[0-9]+ -[1-9]" "$OUT"; then
+            echo ""
+            echo "=== WATCHDOG: tests passed; exit $EXIT was caused by the"
+            echo "    DDS kill (flutter#187785 sibling), not a test failure."
+            echo "    Overriding to exit 0. ==="
+            EXIT=0
+          fi
+        fi
 
         exit $EXIT
         EMUSCRIPT
