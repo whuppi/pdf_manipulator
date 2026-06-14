@@ -24,7 +24,7 @@ hooks:
 dependencies:
   # Build hook — native asset compilation protocol
   code_assets: ^1.2.0
-  hooks: ^2.0.0
+  hooks: ^2.0.2
 
   # Build hook — SHA256 verification of downloaded pre-built binaries
   crypto: ^3.0.6
@@ -33,7 +33,7 @@ dependencies:
   ffi: ^2.1.0
 
   # Build hook — package root resolution
-  package_config: ^2.1.0
+  package_config: '>=2.1.0 <4.0.0'
 
   # Build hook — path manipulation
   path: ^1.9.0
@@ -47,18 +47,28 @@ dependencies:
   # Web transport — JS interop via dart:js_interop types
   web: ^1.1.0
 
+# Deliberate fake key material the pub.dev secret scanner would flag:
+# the example app's demo signing cert, and the WASM JS glue's doc
+# comments quoting the PEM markers `sign` expects. test/ never ships
+# (.pubignore), so its fixture certs need no entry.
 false_secrets:
-  - /test/helpers/fixtures.dart
   - /example/lib/main.dart
+  - /web_assets/pdf_oxide.js
 
 dev_dependencies:
+  # Fixture generator — the INDEPENDENT PDF producer (dart-pdf). Test
+  # fixtures must never be built by this package's own builder
+  # (self-feeding masks mirrored reader/writer bugs). Dev-only: ships
+  # nowhere.
+  pdf: ^3.12.0
+
   # Test runner
-  test: ^1.25.0
+  test: ^1.31.1
 
   # Lint rules
-  lints: ^6.0.0
+  lints: ^6.1.0
 
-  # Web test asset server (serves coordinator.js + worker.js + wasm to browser tests)
+  # Web test asset server (serves lane_worker.js + wasm to browser tests)
   shelf: ^1.4.2
   shelf_static: ^1.1.3
 

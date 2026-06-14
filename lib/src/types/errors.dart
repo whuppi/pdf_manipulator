@@ -63,7 +63,7 @@ class PdfEngineError extends PdfError {
 class PdfPageRangeError extends PdfError {
   /// Creates a page-range error.
   const PdfPageRangeError({required this.page, required this.pageCount})
-      : super('Page $page out of range ($pageCount pages)');
+    : super('Page $page out of range ($pageCount pages)');
 
   /// The requested page index.
   final int page;
@@ -105,7 +105,9 @@ class PdfCryptoError extends PdfError {
   final Object? cause;
 }
 
-/// Operation was cancelled (dispose called during execution).
+/// The operation was cancelled — its `Pdf` instance was disposed, or
+/// the task itself was cancelled. Carried on the wire as response
+/// status 2, never matched by message text.
 class PdfCancelled extends PdfError {
   /// Creates a cancellation error.
   const PdfCancelled() : super('Operation cancelled');

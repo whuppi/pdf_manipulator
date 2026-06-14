@@ -8,46 +8,46 @@ sealed class PdfPages {
   const PdfPages();
 
   /// Every page in the document.
-  const factory PdfPages.all() = PdfAllPages;
+  const factory PdfPages.all() = PdfPagesAll;
 
   /// A single page by index (0-based).
-  const factory PdfPages.single(int index) = PdfSinglePage;
+  const factory PdfPages.single(int index) = PdfPagesSingle;
 
   /// A list of specific pages by index (0-based).
-  const factory PdfPages.list(List<int> indices) = PdfPageList;
+  const factory PdfPages.list(List<int> indices) = PdfPagesList;
 
   /// A range of pages (inclusive start, exclusive end).
-  const factory PdfPages.range(int start, int end) = PdfPageRange;
+  const factory PdfPages.range(int start, int end) = PdfPagesRange;
 }
 
 /// Every page.
-class PdfAllPages extends PdfPages {
+class PdfPagesAll extends PdfPages {
   /// Creates an all-pages scope.
-  const PdfAllPages();
+  const PdfPagesAll();
 }
 
 /// One page.
-class PdfSinglePage extends PdfPages {
+class PdfPagesSingle extends PdfPages {
   /// Creates a single-page scope.
-  const PdfSinglePage(this.index);
+  const PdfPagesSingle(this.index);
 
   /// Zero-based page index.
   final int index;
 }
 
 /// Specific pages.
-class PdfPageList extends PdfPages {
+class PdfPagesList extends PdfPages {
   /// Creates a page-list scope.
-  const PdfPageList(this.indices);
+  const PdfPagesList(this.indices);
 
   /// Zero-based page indices.
   final List<int> indices;
 }
 
 /// Contiguous range [start, end).
-class PdfPageRange extends PdfPages {
+class PdfPagesRange extends PdfPages {
   /// Creates a page-range scope.
-  const PdfPageRange(this.start, this.end);
+  const PdfPagesRange(this.start, this.end);
 
   /// Inclusive start index.
   final int start;

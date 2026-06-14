@@ -50,14 +50,14 @@ class PdfPermissions {
 
   /// Read-only — most permissions revoked except accessibility.
   const PdfPermissions.readOnly()
-      : print = false,
-        printHq = false,
-        modify = false,
-        copy = false,
-        annotate = false,
-        fillForms = false,
-        accessibility = true,
-        assemble = false;
+    : print = false,
+      printHq = false,
+      modify = false,
+      copy = false,
+      annotate = false,
+      fillForms = false,
+      accessibility = true,
+      assemble = false;
 
   /// Allow printing at standard quality.
   final bool print;
@@ -239,16 +239,15 @@ sealed class PdfWatermarkPosition {
   const factory PdfWatermarkPosition.center() = PdfWatermarkCenter;
 
   /// Anchored to a corner with optional margin.
-  const factory PdfWatermarkPosition.corner(PdfCorner corner, {
+  const factory PdfWatermarkPosition.corner(
+    PdfCorner corner, {
     double marginX,
     double marginY,
   }) = PdfWatermarkCorner;
 
   /// Tiled across the page in a grid.
-  const factory PdfWatermarkPosition.tiled({
-    int columns,
-    int rows,
-  }) = PdfWatermarkTiled;
+  const factory PdfWatermarkPosition.tiled({int columns, int rows}) =
+      PdfWatermarkTiled;
 
   /// Exact coordinates — caller is responsible for computing against
   /// the page dimensions.
@@ -297,8 +296,10 @@ class PdfWatermarkTiled extends PdfWatermarkPosition {
 class PdfWatermarkExact extends PdfWatermarkPosition {
   /// Creates an exact-position watermark.
   const PdfWatermarkExact({
-    required this.x, required this.y,
-    required this.width, required this.height,
+    required this.x,
+    required this.y,
+    required this.width,
+    required this.height,
   });
 
   /// X-coordinate in points.
@@ -333,6 +334,7 @@ enum PdfCorner {
 enum PdfWatermarkLayer {
   /// Renders on top of page content (annotation-based). Default.
   foreground,
+
   /// Renders behind page content (content-stream, prepended in painting order).
   background,
 }
@@ -343,9 +345,7 @@ class PdfRenderSize {
   const PdfRenderSize({required this.maxWidth, required this.maxHeight});
 
   /// Creates a square thumbnail constraint.
-  const PdfRenderSize.thumbnail(int size)
-      : maxWidth = size,
-        maxHeight = size;
+  const PdfRenderSize.thumbnail(int size) : maxWidth = size, maxHeight = size;
 
   /// Maximum output width in pixels.
   final int maxWidth;
@@ -359,12 +359,12 @@ sealed class PdfSigningCredentials {
   const PdfSigningCredentials();
 
   /// PKCS#12 (.p12 / .pfx) bundle containing certificate + private key.
-  const factory PdfSigningCredentials.pkcs12(
-      Uint8List data, String password) = PdfPkcs12Credentials;
+  const factory PdfSigningCredentials.pkcs12(Uint8List data, String password) =
+      PdfPkcs12Credentials;
 
   /// Separate PEM-encoded certificate and private key.
-  const factory PdfSigningCredentials.pem(
-      String certPem, String keyPem) = PdfPemCredentials;
+  const factory PdfSigningCredentials.pem(String certPem, String keyPem) =
+      PdfPemCredentials;
 }
 
 /// PKCS#12 signing credentials.

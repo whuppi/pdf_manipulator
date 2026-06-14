@@ -1,17 +1,4 @@
-# Vendor source: INCLUDED in pub.dev tarball so consumers can compile
-# from source as a fallback if pre-built binaries are unavailable.
-# Only exclude build artifacts and git metadata inside vendor.
-vendor/*/target/
-vendor/*/.git/
-
-# CI/CD
-.github/
-
-# Example lock file
-example/pubspec.lock
-
-# Development files
-.gitmodules
-
-# Internal docs (consumers have README + API docs from dartdoc)
-docs/
+# Published-archive excludes (repo keeps these; consumers never need them).
+# Tests + their committed fixtures stay out of the pub download — they can
+# never affect a consumer app's size either way (not in any import graph).
+test/

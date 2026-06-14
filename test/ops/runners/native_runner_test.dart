@@ -7,38 +7,42 @@ library;
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
-import '../../helpers/fixtures.dart';
-import '../../helpers/test_source_sink.dart';
+import '../../fixtures/handwritten.dart';
+import '../../harness/test_source_sink.dart';
 
-import '../core/pdf_doc_test.dart';
-import '../core/pdf_editor_test.dart';
-import '../core/pdf_builder_test.dart';
-import '../core/pdf_standalone_test.dart';
-import '../core/pdf_sugar_test.dart';
-import '../core/pdf_lifecycle_test.dart';
-import '../core/pdf_instance_test.dart';
-import '../stress/pdf_doc_stress_test.dart';
-import '../stress/pdf_editor_stress_test.dart';
-import '../stress/pdf_sugar_stress_test.dart';
-import '../stress/pdf_standalone_stress_test.dart';
-import '../stress/pdf_builder_stress_test.dart';
-import '../stress/pdf_instance_stress_test.dart';
-import '../native/native_finalizer_test.dart';
+import '../core/pdf_doc_battery.dart';
+import '../core/pdf_editor_battery.dart';
+import '../core/pdf_builder_battery.dart';
+import '../core/pdf_standalone_battery.dart';
+import '../core/pdf_sugar_battery.dart';
+import '../core/pdf_lifecycle_battery.dart';
+import '../core/pdf_instance_battery.dart';
+import '../stress/pdf_doc_stress_battery.dart';
+import '../stress/pdf_editor_stress_battery.dart';
+import '../stress/pdf_sugar_stress_battery.dart';
+import '../stress/pdf_standalone_stress_battery.dart';
+import '../stress/pdf_builder_stress_battery.dart';
+import '../stress/pdf_instance_stress_battery.dart';
+import '../platform/native/native_finalizer_battery.dart';
+import '../../harness/timeouts.dart';
 
 void main() {
   late Pdf pdf;
+  var booted = false;
 
   test('engine init', () {
     pdf = Pdf();
-  }, timeout: Timeout(Duration(seconds: 3)));
+    booted = true;
+  }, timeout: t(2));
 
   test('verify I/O mode is native', () async {
     final doc = await pdf.open(src(minimalPdf));
     await doc.dispose();
     expect(pdf.ioMode, PdfIoMode.native);
-  }, timeout: Timeout(Duration(seconds: 1)));
+  }, timeout: t(1));
 
-  tearDownAll(() => pdf.dispose());
+  // A --name filter can skip 'engine init' — only dispose what booted.
+  tearDownAll(() => booted ? pdf.dispose() : null);
 
   // Core tests
   registerDocTests(() => pdf);

@@ -7,7 +7,8 @@
 import 'package:pdf_manipulator/src/ops/pdf.dart';
 import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
-import 'package:pdf_manipulator/src/transport/pdf_bridge.dart';
+import 'package:pdf_manipulator/src/types/pdf_task.dart';
+import 'package:pdf_manipulator/src/bridge/pdf_bridge.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 
 /// Creates PDFs from scratch — add pages with content, then save.
@@ -25,43 +26,58 @@ class PdfBuilder {
   // ── Metadata ──
 
   /// Sets the document title metadata.
-  Future<void> setTitle(String value) { _check(); return _handle.setTitle(value); }
+  PdfTask<void> setTitle(String value) {
+    _check();
+    return _handle.setTitle(value);
+  }
 
   /// Sets the document author metadata.
-  Future<void> setAuthor(String value) { _check(); return _handle.setAuthor(value); }
+  PdfTask<void> setAuthor(String value) {
+    _check();
+    return _handle.setAuthor(value);
+  }
 
   /// Sets the document subject metadata.
-  Future<void> setSubject(String value) { _check(); return _handle.setSubject(value); }
+  PdfTask<void> setSubject(String value) {
+    _check();
+    return _handle.setSubject(value);
+  }
 
   /// Sets the document keywords metadata.
-  Future<void> setKeywords(String value) { _check(); return _handle.setKeywords(value); }
+  PdfTask<void> setKeywords(String value) {
+    _check();
+    return _handle.setKeywords(value);
+  }
 
   // ── Pages ──
 
   /// Adds a new A4-sized page and returns its content builder.
-  Future<PdfPageBuilder> addA4Page() async {
+  PdfTask<PdfPageBuilder> addA4Page() {
     _check();
-    return PdfPageBuilder(await _handle.addA4Page());
+    return _handle.addA4Page().map((handle) => PdfPageBuilder(handle));
   }
 
   /// Adds a new US Letter-sized page and returns its content builder.
-  Future<PdfPageBuilder> addLetterPage() async {
+  PdfTask<PdfPageBuilder> addLetterPage() {
     _check();
-    return PdfPageBuilder(await _handle.addLetterPage());
+    return _handle.addLetterPage().map((handle) => PdfPageBuilder(handle));
   }
 
   /// Adds a page with custom dimensions (in points) and returns its builder.
-  Future<PdfPageBuilder> addPage(
-      {required double width, required double height}) async {
+  PdfTask<PdfPageBuilder> addPage({
+    required double width,
+    required double height,
+  }) {
     _check();
-    return PdfPageBuilder(
-        await _handle.addPage(width: width, height: height));
+    return _handle
+        .addPage(width: width, height: height)
+        .map((handle) => PdfPageBuilder(handle));
   }
 
   // ── Save ──
 
   /// Writes the constructed PDF to [output].
-  Future<void> save(DataSink output) {
+  PdfTask<void> save(DataSink output) {
     _check();
     return _handle.save(output);
   }
@@ -84,104 +100,115 @@ class PdfPageBuilder {
   final BridgePageBuilderHandle _handle;
 
   /// Sets the current font by [name] and [size] in points.
-  Future<void> font(String name, double size) => _handle.font(name, size);
+  PdfTask<void> font(String name, double size) => _handle.font(name, size);
 
   /// Moves the cursor to absolute position ([x], [y]) in points.
-  Future<void> at(double x, double y) => _handle.at(x, y);
+  PdfTask<void> at(double x, double y) => _handle.at(x, y);
 
   /// Writes inline text at the current cursor position.
-  Future<void> text(String text) => _handle.text(text);
+  PdfTask<void> text(String text) => _handle.text(text);
 
   /// Writes a heading at the given [level] (1-6).
-  Future<void> heading(int level, String text) => _handle.heading(level, text);
+  PdfTask<void> heading(int level, String text) => _handle.heading(level, text);
 
   /// Writes a paragraph of body text.
-  Future<void> paragraph(String text) => _handle.paragraph(text);
+  PdfTask<void> paragraph(String text) => _handle.paragraph(text);
 
   /// Inserts vertical space of [points] height.
-  Future<void> space(double points) => _handle.space(points);
+  PdfTask<void> space(double points) => _handle.space(points);
 
   /// Draws a horizontal rule across the page.
-  Future<void> horizontalRule() => _handle.horizontalRule();
+  PdfTask<void> horizontalRule() => _handle.horizontalRule();
 
   /// Places an image within [rect], with optional [altText] for accessibility.
-  Future<void> image(DataSource imageData, PdfRect rect,
-          {String altText = ''}) =>
-      _handle.image(imageData, rect, altText: altText);
+  PdfTask<void> image(
+    DataSource imageData,
+    PdfRect rect, {
+    String altText = '',
+  }) => _handle.image(imageData, rect, altText: altText);
 
   /// Adds a diagonal watermark text overlay on the page.
-  Future<void> watermark(String text) => _handle.watermark(text);
+  PdfTask<void> watermark(String text) => _handle.watermark(text);
 
   // ── Form fields ──
 
   /// Adds an interactive text input field at [rect].
-  Future<void> textField(String name, PdfRect rect,
-          {String? defaultValue}) =>
+  PdfTask<void> textField(String name, PdfRect rect, {String? defaultValue}) =>
       _handle.textField(name, rect, defaultValue: defaultValue);
 
   /// Adds a checkbox form field at [rect].
-  Future<void> checkbox(String name, PdfRect rect, {bool checked = false}) =>
+  PdfTask<void> checkbox(String name, PdfRect rect, {bool checked = false}) =>
       _handle.checkbox(name, rect, checked: checked);
 
   /// Adds a dropdown combo box form field at [rect].
-  Future<void> comboBox(String name, PdfRect rect, List<String> options,
-          {String? selected}) =>
-      _handle.comboBox(name, rect, options, selected: selected);
+  PdfTask<void> comboBox(
+    String name,
+    PdfRect rect,
+    List<String> options, {
+    String? selected,
+  }) => _handle.comboBox(name, rect, options, selected: selected);
 
   /// Adds a push button at [rect] with the given [caption].
-  Future<void> pushButton(String name, PdfRect rect, String caption) =>
+  PdfTask<void> pushButton(String name, PdfRect rect, String caption) =>
       _handle.pushButton(name, rect, caption);
 
   /// Adds a digital signature field at [rect].
-  Future<void> signatureField(String name, PdfRect rect) =>
+  PdfTask<void> signatureField(String name, PdfRect rect) =>
       _handle.signatureField(name, rect);
 
   // ── Radio group ──
 
   /// Adds a radio button group with the given [options].
-  Future<void> radioGroup(String name,
-          List<({String value, PdfRect rect})> options,
-          {String? selected}) =>
-      _handle.radioGroup(name, options, selected: selected);
+  PdfTask<void> radioGroup(
+    String name,
+    List<({String value, PdfRect rect})> options, {
+    String? selected,
+  }) => _handle.radioGroup(name, options, selected: selected);
 
   // ── Field scripts ──
 
-  /// Sets a JavaScript keystroke action on the current form field.
-  Future<void> fieldKeystroke(String script) => _handle.fieldKeystroke(script);
+  /// Sets a JavaScript keystroke action on the most-recently-added
+  /// form field. A page with no field yet ignores the call.
+  PdfTask<void> fieldKeystroke(String script) => _handle.fieldKeystroke(script);
 
-  /// Sets a JavaScript format action on the current form field.
-  Future<void> fieldFormat(String script) => _handle.fieldFormat(script);
+  /// Sets a JavaScript format action on the most-recently-added
+  /// form field. A page with no field yet ignores the call.
+  PdfTask<void> fieldFormat(String script) => _handle.fieldFormat(script);
 
-  /// Sets a JavaScript validate action on the current form field.
-  Future<void> fieldValidate(String script) => _handle.fieldValidate(script);
+  /// Sets a JavaScript validate action on the most-recently-added
+  /// form field. A page with no field yet ignores the call.
+  PdfTask<void> fieldValidate(String script) => _handle.fieldValidate(script);
 
-  /// Sets a JavaScript calculate action on the current form field.
-  Future<void> fieldCalculate(String script) => _handle.fieldCalculate(script);
+  /// Sets a JavaScript calculate action on the most-recently-added
+  /// form field. A page with no field yet ignores the call.
+  PdfTask<void> fieldCalculate(String script) => _handle.fieldCalculate(script);
 
   // ── Links ──
 
-  /// Adds a URL hyperlink annotation.
-  Future<void> linkUrl(String url) => _handle.linkUrl(url);
+  /// Adds a URL hyperlink anchored on the last-written text. A page
+  /// with no text yet ignores the call.
+  PdfTask<void> linkUrl(String url) => _handle.linkUrl(url);
 
-  /// Adds an internal link to [targetPage] (0-based).
-  Future<void> linkPage(int targetPage) => _handle.linkPage(targetPage);
+  /// Adds an internal link to [targetPage] (0-based), anchored on
+  /// the last-written text. A page with no text yet ignores the call.
+  PdfTask<void> linkPage(int targetPage) => _handle.linkPage(targetPage);
 
   // ── Layout ──
 
   /// Adds a footnote with a reference mark and note text.
-  Future<void> footnote(String refMark, String noteText) =>
+  PdfTask<void> footnote(String refMark, String noteText) =>
       _handle.footnote(refMark, noteText);
 
   /// Lays out [text] in [columnCount] columns with [gapPt] gap between them.
-  Future<void> columns(int columnCount, double gapPt, String text) =>
+  PdfTask<void> columns(int columnCount, double gapPt, String text) =>
       _handle.columns(columnCount, gapPt, text);
 
   /// Inserts a line break at the current cursor position.
-  Future<void> newline() => _handle.newline();
+  PdfTask<void> newline() => _handle.newline();
 
   /// Adds a new page with the same dimensions as the current page.
-  Future<void> newPageSameSize() => _handle.newPageSameSize();
+  PdfTask<void> newPageSameSize() => _handle.newPageSameSize();
 
   /// Finalizes the page content — call after all content is added.
-  Future<void> done() => _handle.done();
+  PdfTask<void> done() => _handle.done();
 }

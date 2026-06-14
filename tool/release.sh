@@ -165,7 +165,7 @@ stamp_version() {
 
 # Generate lib/src/hook/asset_hashes.dart from two sources:
 #   1. GitHub Release API digests (native binaries + WASM build outputs)
-#   2. Local SHA-256 of hand-written web assets (coordinator.js, worker.js)
+#   2. Local SHA-256 of hand-written web assets (lane_worker.js)
 # Returns 0 if the file was written, 1 if there was nothing to stamp.
 stamp_asset_hashes() {
   local tag="$1"
@@ -461,21 +461,34 @@ cmd_gate() {
   fi
 
   if grep -Fqx "$target_file" <<< "$changed_files"; then
-    # Only trigger if a NEW version header was added, not just edits.
-    local versions_after versions_before new_version
+    local versions_after new_version
     versions_after=$(get_changelog_versions "$target_file")
-    versions_before=$(git show "${BEFORE:-HEAD~1}:$target_file" 2>/dev/null \
-      | sed -n 's/^## \([^ ]*\).*/\1/p' || true)
-    new_version=$(comm -23 <(echo "$versions_after" | sort) <(echo "$versions_before" | sort) | head -1)
+
+    if [[ -z "${BEFORE:-}" ]]; then
+      # No before-SHA (workflow_dispatch, force-push, new branch).
+      # Fall back to tag check: if the top version in the changelog
+      # has no corresponding git tag, it hasn't been released yet.
+      new_version=$(head -1 <<< "$versions_after")
+      if [[ -n "$new_version" ]] && git rev-parse "v$new_version" &>/dev/null; then
+        echo "Gate: top version $new_version already has tag v$new_version, skipping"
+        new_version=""
+      fi
+    else
+      # Normal push — diff-based: trigger only if a new header was added.
+      local versions_before
+      versions_before=$(git show "${BEFORE}:$target_file" 2>/dev/null \
+        | sed -n 's/^## \([^ ]*\).*/\1/p' || true)
+      new_version=$(comm -23 <(echo "$versions_after" | sort) <(echo "$versions_before" | sort) | head -1)
+    fi
 
     if [[ -n "$new_version" ]]; then
       gh_output "should_run" "true"
       gh_output "version" "$new_version"
-      echo "Gate: new version $new_version added to $target_file"
+      echo "Gate: version $new_version found in $target_file — triggering release"
     else
       gh_output "should_run" "false"
       gh_output "version" ""
-      echo "Gate: $target_file changed but no new version header added, skipping"
+      echo "Gate: $target_file changed but no unreleased version found, skipping"
     fi
   else
     gh_output "should_run" "false"

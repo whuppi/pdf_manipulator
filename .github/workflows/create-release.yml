@@ -154,6 +154,34 @@ jobs:
             done
           fi
           ls -lh release/
+      - name: Verify all binaries present
+        run: |
+          EXPECTED=(
+            android-arm-libpdf_oxide.so
+            android-arm64-libpdf_oxide.so
+            android-x64-libpdf_oxide.so
+            android-x86-libpdf_oxide.so
+            ios-arm64-libpdf_oxide.a
+            ios-sim-arm64-libpdf_oxide.a
+            ios-sim-x64-libpdf_oxide.a
+            linux-arm64-libpdf_oxide.so
+            linux-x64-libpdf_oxide.so
+            macos-arm64-libpdf_oxide.dylib
+            macos-x64-libpdf_oxide.dylib
+            windows-arm64-pdf_oxide.dll
+            windows-x64-pdf_oxide.dll
+            wasm-pdf_oxide.js
+            wasm-pdf_oxide_bg.wasm
+          )
+          MISSING=()
+          for f in "${EXPECTED[@]}"; do
+            [ -f "release/$f" ] || MISSING+=("$f")
+          done
+          if [ ${#MISSING[@]} -gt 0 ]; then
+            echo "::error::Missing binaries: ${MISSING[*]}"
+            exit 1
+          fi
+          echo "All ${#EXPECTED[@]} binaries present"
       - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.discover.outputs.tag }}

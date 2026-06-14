@@ -2,6 +2,24 @@
 
 <!-- Stable releases. Add ## heading at top, CI handles the rest. -->
 
+## 2.0.0
+
+The concurrency rewrite. Every operation now runs fully isolated on its
+own *lane* — a dedicated Rust thread (native) or Web Worker (web).
+
+- **Breaking:** `webCoordinatorUrl` + `webWorkerUrl` → one `webLaneWorkerUrl`
+- **Breaking:** web now ships `lane_worker.js` (was `coordinator.js` + `worker.js`)
+- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
+- Every method returns `PdfTask<T>` — a `Future` plus `cancel()`; cancelling kills just that job
+- `pdf.dispose()` is instant — no joins, no timeouts, no leaks; in-flight ops resolve with `PdfCancelled`
+- Operations on different handles now run truly parallel on native (1.x serialized them)
+- Lane budgets never error — past the cap, work queues instead of failing
+- Added `PdfConfig.maxLanes` — concurrent lanes per instance (default: half the cores, min 2)
+- All three web modes (JSPI, Atomics, OPFS) behave identically; a bad worker/WASM URL now fails instantly with a typed error instead of hanging
+- Fixed flattening — translated appearances no longer land off-page, unfilled fields render their default value, stamps render their label
+- Fixed missing WASM binaries in the 1.0.6 release
+- Fixed Android 16 KB page-size alignment for Google Play API 35+ ([PR whuppi/pdf_oxide#1](https://github.com/whuppi/pdf_oxide/pull/1), [@Binary-Parse](https://github.com/Binary-Parse))
+
 ## 1.0.6
 
 - Fixed release build routing for consumer builds ([PR #80](https://github.com/whuppi/pdf_manipulator/pull/80), [@Binary-Parse](https://github.com/Binary-Parse))

@@ -11,9 +11,12 @@ import 'package:pdf_manipulator/src/ops/pdf_builder.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:pdf_manipulator/src/types/pdf_config.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
-import 'package:pdf_manipulator/src/transport/pdf_bridge.dart';
-import 'package:pdf_manipulator/src/transport/create.dart';
-import 'package:pdf_manipulator/src/transport/protocol/codec.dart' as codec;
+import 'package:pdf_manipulator/src/types/pdf_task.dart';
+import 'package:meta/meta.dart';
+
+import 'package:pdf_manipulator/src/bridge/pdf_bridge.dart';
+import 'package:pdf_manipulator/src/bridge/create.dart';
+import 'package:pdf_manipulator/src/bridge/protocol/codec.dart' as codec;
 import 'package:pdf_manipulator/src/ops/pdf_doc.dart';
 
 /// Entry point for all PDF operations — open, edit, build, and standalone ops.
@@ -24,7 +27,11 @@ class Pdf {
   final PdfBridge _bridge;
   bool _disposed = false;
 
-  /// Internal — used by PdfStandalone and PdfSugar extensions.
+  /// INTERNAL — the door PdfStandalone and PdfSugar extensions use
+  /// (extensions in other files cannot reach `_bridge`). Consumers
+  /// must never call this; the analyzer flags any outside-package
+  /// use via `@internal`.
+  @internal
   PdfBridge get bridge {
     if (_disposed) throw StateError('This Pdf instance has been disposed');
     return _bridge;
@@ -54,57 +61,67 @@ class Pdf {
   // ── Document handle — open once, query many, dispose ──
 
   /// Opens a PDF document for read-only queries.
-  Future<PdfDoc> open(DataSource source, {String? password}) async {
+  PdfTask<PdfDoc> open(DataSource source, {String? password}) {
     _check();
-    final handle = await _bridge.open(source, password: password);
-    try {
-      final map = handle.openResult;
-      return PdfDoc.internal(handle,
-        pageCount: map['pageCount'] as int? ?? 0,
-        version: map['version'] as String? ?? '1.0',
-        pages: codec.decodePageList(map),
-        title: map['title'] as String?,
-        author: map['author'] as String?,
-        subject: map['subject'] as String?,
-        keywords: map['keywords'] as String?,
-        isEncrypted: map['isEncrypted'] as bool? ?? false,
-        requiresPassword: map['requiresPassword'] as bool? ?? false,
-        isTagged: map['isTagged'] as bool? ?? false,
-        encryptionAlgorithm: codec.decodeEncryptionAlgorithmFromMap(map),
-        permissions: codec.decodePermissionsFromMap(map),
-      );
-    } catch (e) {
-      await handle.dispose();
-      rethrow;
-    }
+    return _bridge.open(source, password: password).map((handle) async {
+      try {
+        final map = handle.openResult;
+        return PdfDoc.internal(
+          handle,
+          pageCount: map['pageCount'] as int? ?? 0,
+          version: map['version'] as String? ?? '1.0',
+          pages: codec.decodePageList(map),
+          title: map['title'] as String?,
+          author: map['author'] as String?,
+          subject: map['subject'] as String?,
+          keywords: map['keywords'] as String?,
+          isEncrypted: map['isEncrypted'] as bool? ?? false,
+          requiresPassword: map['requiresPassword'] as bool? ?? false,
+          isTagged: map['isTagged'] as bool? ?? false,
+          encryptionAlgorithm: codec.decodeEncryptionAlgorithmFromMap(map),
+          permissions: codec.decodePermissionsFromMap(map),
+        );
+      } catch (e) {
+        await handle.dispose();
+        rethrow;
+      }
+    });
   }
 
   // ── Editor handle — open, mutate, save, dispose ──
 
   /// Opens a PDF document for editing (mutate, then save).
-  Future<PdfEditor> edit(DataSource source, {String? password}) async {
+  PdfTask<PdfEditor> edit(DataSource source, {String? password}) {
     _check();
-    final doc = await open(source, password: password);
-    try {
-      final handle = await _bridge.openEditor(source, password: password);
-      return PdfEditor.internal(_bridge, handle,
+    return PdfTask.group((hook) async {
+      final doc = await hook.guard(open(source, password: password));
+      try {
+        final handle = await hook.guard(
+          _bridge.openEditor(source, password: password),
+        );
+        return PdfEditor.internal(
+          _bridge,
+          handle,
           sourceEncryption: doc.encryptionAlgorithm,
           sourcePermissions: doc.permissions,
           password: password,
-          sourceDoc: doc);
-    } catch (e) {
-      await doc.dispose();
-      rethrow;
-    }
+          sourceDoc: doc,
+        );
+      } catch (e) {
+        await doc.dispose();
+        rethrow;
+      }
+    });
   }
 
   // ── Builder handle — create from scratch, save, dispose ──
 
   /// Creates a new PDF document from scratch.
-  Future<PdfBuilder> build() async {
+  PdfTask<PdfBuilder> build() {
     _check();
-    final handle = await _bridge.createBuilder();
-    return PdfBuilder.internal(_bridge, handle);
+    return _bridge.createBuilder().map(
+      (handle) => PdfBuilder.internal(_bridge, handle),
+    );
   }
 
   // ── Lifecycle ──
