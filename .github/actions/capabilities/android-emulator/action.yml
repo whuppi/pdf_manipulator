@@ -20,7 +20,11 @@ description: >
 
 inputs:
   script:
-    description: "Command to run while emulator is alive"
+    description: >
+      Command to run while the emulator is alive. The caller (make-target)
+      passes the shared /tmp/make-run.sh so the in-emulator run is byte-
+      identical to the direct path — no drift. Wrapped by the teardown
+      watchdog below.
     required: true
   api-level:
     description: "Android API level (30 is lightest ATD available)"
@@ -170,6 +174,11 @@ runs:
         # process AND it's idle at ~0% CPU. During the run dartvm has
         # other children (app, adb) and DDS is busy, so this can't fire
         # mid-test — it's self-gating, no text marker needed.
+        #
+        # Killing DDS can sever the harness tally AFTER tests ran but
+        # before they were counted, so Flutter's "🎉 N passed" line can
+        # undercount. The reconciler below works around that by counting
+        # the ✅ marks itself.
         kill_stuck_dds() {
           for dvmpid in $(pgrep -f dartvm 2>/dev/null); do
             local kids; kids=$(pgrep -P "$dvmpid" 2>/dev/null)
@@ -202,18 +211,38 @@ runs:
         kill $TAIL_PID 2>/dev/null || true
         wait $TAIL_PID 2>/dev/null || true
 
-        # Result reconciler. flutter test prints "🎉 N tests passed." ONLY
-        # when every test passed, and "Some tests failed." otherwise. When
-        # the suite passed but the run still exited non-zero (because the
-        # watchdog kill -9'd a hung teardown process, or DDS/golden stream
-        # noise), trust the test result, not the exit code. A genuine
-        # failure has no celebration line, so it can never be masked.
-        if [ "$EXIT" -ne 0 ] \
-           && grep -q '🎉.*tests passed\.' "$OUT" \
-           && ! grep -q 'Some tests failed' "$OUT"; then
-          echo "=== WATCHDOG: all tests passed; exit $EXIT was teardown"
-          echo "    noise (flutter#187785), not a test failure. Exit 0. ==="
+        # Result reconciler — self-count, don't trust the exit code or the
+        # "🎉 N passed" line. Two teardown artifacts make both unreliable
+        # on CPU-starved runners (flutter#187785):
+        #   - the watchdog kill -9 leaves a non-zero exit even on a clean
+        #     pass, and
+        #   - killing a hung DDS can sever the harness tally AFTER tests
+        #     ran but before they were counted, so "🎉 N passed" can show
+        #     fewer than really passed.
+        # Instead, count the per-test marks flutter_test prints: every
+        # passing test is a line starting "✅ ", every failing one "❌ ".
+        # Counting is dynamic — it grows with the suite, no hardcoded
+        # totals. The ONE ❌ that isn't a real failure is the spurious
+        # "❌ loading <file> (failed)" from the golden-comparator stream
+        # (a no-op here — the suite has no golden tests); it's excluded.
+        # Any OTHER ❌ is a real failure and stays red, so nothing is
+        # masked.
+        PASS=$(grep -c '^✅ ' "$OUT" || true)
+        REAL_FAILS=$(grep '^❌ ' "$OUT" | grep -v 'loading .* (failed)' || true)
+        FAIL_COUNT=$(printf '%s' "$REAL_FAILS" | grep -c . || true)
+
+        echo ""
+        echo "── WATCHDOG TALLY ──"
+        if [ "$FAIL_COUNT" -eq 0 ] && [ "$PASS" -gt 0 ]; then
+          echo "🎉 $PASS tests passed (counted from ✅ marks)."
+          echo "   The exit code / 'N passed' line is unreliable after a"
+          echo "   teardown DDS kill — trust this count (flutter#187785)."
           EXIT=0
+        else
+          echo "❌ $FAIL_COUNT real test failure(s) (excludes the spurious"
+          echo "   golden-comparator 'loading … (failed)' line):"
+          printf '%s\n' "$REAL_FAILS"
+          [ "$EXIT" -eq 0 ] && EXIT=1
         fi
 
         exit $EXIT

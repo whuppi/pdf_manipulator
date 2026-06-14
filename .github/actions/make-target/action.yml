@@ -100,21 +100,42 @@ runs:
     - uses: ./.github/actions/capabilities/ios-simulator
       if: inputs.simulator == 'true'
 
+    # ── Run ──
+    # The run command is authored ONCE, here, into /tmp/make-run.sh:
+    # `flutter doctor -v` immediately before `make <target>`. Both the
+    # direct path and the emulator path execute this same file, so the
+    # two can never drift — doctor always runs against the fully-
+    # provisioned environment (live emulator on Android, host elsewhere)
+    # on the line right before make.
+    - name: Compose run script
+      shell: bash
+      run: |
+        cat > /tmp/make-run.sh << 'EOF'
+        #!/usr/bin/env bash
+        set -uo pipefail
+        echo "::group::flutter doctor -v"
+        fvm flutter doctor -v || true
+        echo "::endgroup::"
+        make "$1"
+        EOF
+        chmod +x /tmp/make-run.sh
+
+    # Direct path — normal and headless merged; xvfb-run is the only
+    # variable (a display prefix), applied to doctor + make alike.
+    - name: ${{ inputs.make-target }}
+      if: inputs.emulator != 'true'
+      shell: bash
+      run: |
+        PREFIX=""
+        [ "${{ inputs.headless-display }}" = "true" ] && PREFIX="xvfb-run "
+        ${PREFIX}/tmp/make-run.sh "${{ inputs.make-target }}"
+
+    # Emulator path — the SAME script, executed inside the live emulator
+    # by the capability's teardown-watchdog wrapper.
     - uses: ./.github/actions/capabilities/android-emulator
       if: inputs.emulator == 'true'
       with:
-        script: make ${{ inputs.make-target }}
-
-    # ── Run (skipped when emulator wraps it) ──
-    - name: ${{ inputs.make-target }}
-      if: inputs.emulator != 'true' && inputs.headless-display != 'true'
-      shell: bash
-      run: make ${{ inputs.make-target }}
-
-    - name: ${{ inputs.make-target }} (headless)
-      if: inputs.emulator != 'true' && inputs.headless-display == 'true'
-      shell: bash
-      run: xvfb-run make ${{ inputs.make-target }}
+        script: /tmp/make-run.sh "${{ inputs.make-target }}"
 
     - uses: ./.github/actions/capabilities/gradle-cache
       if: always() && inputs.gradle-cache == 'true'
