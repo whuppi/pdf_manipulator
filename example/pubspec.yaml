@@ -11,7 +11,6 @@ dependencies:
     sdk: flutter
   pdf_manipulator:
     path: ../
-  file_picker: ^8.0.0
 
 dev_dependencies:
   flutter_test:
@@ -22,6 +21,10 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
   webdriver: ^3.0.0
+  # UI-test harness + robots, shared by test/ and integration_test/
+  # through a package: import (no cross-root ../ paths).
+  pdf_manipulator_example_test_support:
+    path: test_support
 
 flutter:
   uses-material-design: true

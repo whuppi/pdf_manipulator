@@ -7,13 +7,14 @@
 
 import 'package:pdf_manipulator/src/ops/pdf.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
+import 'package:pdf_manipulator/src/types/pdf_task.dart';
 import 'package:pdf_manipulator/src/types/pdf_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_info.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
 import 'package:pdf_manipulator/src/types/search_result.dart';
-import 'package:pdf_manipulator/src/transport/pdf_bridge.dart';
+import 'package:pdf_manipulator/src/bridge/pdf_bridge.dart';
 
 /// A parsed PDF document — live handle to the Rust engine.
 ///
@@ -22,7 +23,8 @@ import 'package:pdf_manipulator/src/transport/pdf_bridge.dart';
 /// already-parsed structure — no re-opening.
 class PdfDoc {
   /// Internal constructor — use [Pdf.open] to create instances.
-  PdfDoc.internal(this._handle, {
+  PdfDoc.internal(
+    this._handle, {
     required this.pageCount,
     required this.version,
     required this.pages,
@@ -85,7 +87,7 @@ class PdfDoc {
   // ── Read operations (reuse the already-parsed document) ──
 
   /// Extracts text from the specified [pages] in the given [format].
-  Future<String> extract({
+  PdfTask<String> extract({
     required PdfPages pages,
     PdfExtractionFormat format = PdfExtractionFormat.auto,
   }) {
@@ -94,7 +96,7 @@ class PdfDoc {
   }
 
   /// Searches for [query] text across the specified [pages].
-  Future<List<SearchResult>> search({
+  PdfTask<List<SearchResult>> search({
     required String query,
     required PdfPages pages,
   }) {
@@ -103,10 +105,7 @@ class PdfDoc {
   }
 
   /// Renders the specified [pages] as rasterized images.
-  Stream<RenderedPage> render({
-    required PdfPages pages,
-    PdfRenderSize? size,
-  }) {
+  Stream<RenderedPage> render({required PdfPages pages, PdfRenderSize? size}) {
     _check();
     return _handle.render(pages: pages, size: size);
   }
@@ -118,43 +117,43 @@ class PdfDoc {
   }
 
   /// Returns metadata for all digital signatures in the document.
-  Future<List<PdfSignatureInfo>> getSignatures() {
+  PdfTask<List<PdfSignatureInfo>> getSignatures() {
     _check();
     return _handle.getSignatures();
   }
 
   /// Verifies all digital signatures — returns true if all are valid.
-  Future<bool> verifySignatures() {
+  PdfTask<bool> verifySignatures() {
     _check();
     return _handle.verifySignatures();
   }
 
   /// Validates PDF/A conformance at the given [level] (1, 2, or 3).
-  Future<PdfValidationResult> validatePdfA({int level = 2}) {
+  PdfTask<PdfValidationResult> validatePdfA({int level = 2}) {
     _check();
     return _handle.validatePdfA(level: level);
   }
 
   /// Validates PDF/UA (accessibility) conformance at the given [level].
-  Future<bool> validatePdfUa({int level = 1}) {
+  PdfTask<bool> validatePdfUa({int level = 1}) {
     _check();
     return _handle.validatePdfUa(level: level);
   }
 
   /// Returns bookmark-based split boundaries for the document.
-  Future<List<PdfBookmarkSplit>> planSplitByBookmarks() {
+  PdfTask<List<PdfBookmarkSplit>> planSplitByBookmarks() {
     _check();
     return _handle.planSplitByBookmarks();
   }
 
   /// Classifies a single [page] by its content type (text, image, mixed).
-  Future<PdfPageClassification> classifyPage(int page) {
+  PdfTask<PdfPageClassification> classifyPage(int page) {
     _check();
     return _handle.classifyPage(page);
   }
 
   /// Classifies the entire document by its overall content type.
-  Future<PdfDocumentClassification> classifyDocument() {
+  PdfTask<PdfDocumentClassification> classifyDocument() {
     _check();
     return _handle.classifyDocument();
   }

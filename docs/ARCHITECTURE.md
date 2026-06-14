@@ -30,13 +30,15 @@ Eight load-bearing guarantees. Every architectural decision serves one.
    7KB file. Every op. Both platforms. Enforced mechanically — test
    guards throw on any `readAt > 64KB` or `write > 256KB`.
 
-6. **Upstream untouched.** `ffi.rs` (12,147 lines) and `wasm.rs`
-   (7,210 lines) are upstream code. We never call them. We never
-   modify them. Upstream merges stay clean.
+6. **Upstream untouched.** `ffi.rs` and `wasm.rs` — upstream's own
+   binding surfaces — are never called and never modified. Upstream
+   merges stay clean.
 
-7. **Thread pool, not isolate thread.** Rust thread pool with
-   std::sync Mutex+Condvar (native) or Web Workers (web). Dart
-   isolate never blocks. UI never janks.
+7. **Lanes, not pools.** Every instance owns isolated lanes — a
+   detached Rust thread with its own engine state (native) or a Web
+   Worker with its own WASM instance (web). The Dart isolate never
+   blocks. Dispose kills lanes instantly: no joins, no awaits, no
+   timeouts.
 
 8. **Patches are marked.** Every modification to upstream files
    carries a `── pdf_manipulator patch ──` boundary comment.
@@ -57,36 +59,38 @@ Eight load-bearing guarantees. Every architectural decision serves one.
     Platform-blind. Calls PdfBridge (abstract).
             |
             v
-**Layer 2 — Shared Bridge (Dart)**
+**Layer 2 — Bridge (Dart, lib/src/bridge/)**
 
     shared_bridge.dart  — ONE bridge class, both platforms
     pdf_transport.dart  — PdfTransport interface
     protocol/
       binary_codec.dart — encode request, decode response
       codec.dart        — decode Map -> typed Dart objects
-      op.dart           — EngineOp enum (35 wire names)
+      op.dart           — EngineOp enum (the wire names)
 
     Platform-blind. Encodes args to binary, sends via
     transport, decodes binary response.
             |
             v
-**Layer 3 — Transport (Dart, per-target)**
+**Layer 3 — Runtime (Dart: ONE shared brain, two dumb adapters)**
 
-    Native:
-      native_transport.dart — isolate + FFI
-      coordinator.dart      — isolate entry, bridge_execute
-      source_server.dart    — per-source condvar I/O
-      sink_server.dart      — per-sink condvar I/O
-      shared_buffer.dart    — condvar shared memory layout
-      bindings.dart         — dart:ffi @Native binding
+    Shared (every decision lives here, exactly once):
+      router.dart        — pinning, placement, job identity, dispose
+      lane.dart          — Lane/LaneHost/LaneJob contracts
+      wire_peek.dart     — minimal wire reads (op, handleId)
 
-    Web:
-      web_transport.dart    — JS Worker pool
-      coordinator.js        — pool manager, handle pinning
-      worker.js             — WASM exec, reader registry
+    Native adapter (dumb — four verbs over FFI):
+      native_lane.dart      — lane spawn/submit/cancel/kill
+      channel_buffers.dart  — condvar shared-memory layout
+      lane_bindings.dart    — dart:ffi @Native bindings
 
-    Both: move binary bytes. Route readAt/chunk callbacks.
-    Zero PDF knowledge.
+    Web adapter (dumb — four verbs over postMessage):
+      web_lane.dart         — the lane: job lifecycle, 3 I/O modes
+      web_lane_host.dart    — worker boot handshake, budget, pool
+      lane_protocol.dart    — every code lane_worker.js must agree on
+
+    Both: move binary bytes. Serve readAt/chunk callbacks on the
+    main isolate. Zero PDF knowledge, zero routing decisions.
             |
             v
 **Layer 4 — Rust**
@@ -95,12 +99,13 @@ Eight load-bearing guarantees. Every architectural decision serves one.
       bridge_api.rs       — single entry, cfg-gated FFI + WASM
       binary_codec.rs     — parse request, encode response
       dispatch.rs         — every op as a typed function
+      lane_state.rs       — per-lane engine state (no locks)
       positioned_write.rs — Write + position tracking
       sign.rs             — O(1)-memory PDF signing
       image_optimizer.rs  — JPEG recompress
       font_optimizer.rs   — Standard 14 font unembedding
       constants.rs        — buffer sizes (64KB / 256KB)
-      native/             — thread pool, Mutex+Condvar I/O
+      native/             — lanes, cancel tokens, condvar I/O
       wasm/               — JsCallbackReader/Writer
 
     UPSTREAM PATCHES (8 files, see §9)
@@ -118,10 +123,11 @@ pdf.open(source)
 SharedBridge.open()
   │  encodeRequest('open', {sourceLength: N})  →  Uint8List
   ↓
-PdfTransport.execute(bytes, sources: [source], keepSources: {0})
+Router.execute(bytes, sources: [source], keepSources: {0})
+  │  pin lookup / least-loaded placement → one lane
   │
-  ├── Native: isolate → bridge_execute via FFI
-  └── Web:    postMessage → coordinator.js → worker.js → bridge_execute via WASM
+  ├── Native: lane_submit via FFI → lane thread mailbox
+  └── Web:    postMessage → lane_worker.js → lane_execute via WASM
   ↓
 bridge_api.rs  (SAME code, both targets)
   │  Request::parse(bytes)  →  match "open"  →  dispatch::open_document
@@ -138,8 +144,8 @@ editor.mergeFrom(otherPdf)
 SharedBridge._exec(editorMergeFrom, {sourceLength: N},
     sources: [otherPdf])     ← secondary source at index 0
   ↓
-PdfTransport.execute(bytes,
-    sources: [otherPdf])     ← transport serves readAt by sourceIndex
+Router.execute(bytes,
+    sources: [otherPdf])     ← lane serves readAt by sourceIndex
   ↓
 bridge_api.rs
   │  source[0] = otherPdf via readAt callback (64KB chunks)
@@ -164,31 +170,40 @@ lib/
     │   ├── pdf_standalone.dart             ← sign, convertTo, convertToPdf, extractPages
     │   └── pdf_sugar.dart                  ← merge, split, watermark, compress, ...
     │
-    ├── transport/                           ← BRIDGE + TRANSPORT
+    ├── bridge/                              ← BRIDGE
     │   ├── pdf_bridge.dart                 ← abstract PdfBridge + handle contracts
     │   ├── pdf_transport.dart              ← PdfTransport interface
-    │   ├── shared_bridge.dart              ← ONE bridge, both platforms
+    │   ├── shared_bridge.dart              ← ONE bridge, both platforms; births every PdfTask
+    │   ├── shared_bridge_doc.dart          ← doc handle (part)
+    │   ├── shared_bridge_editor.dart       ← editor handle (part)
+    │   ├── shared_bridge_builder.dart      ← builder + page handles (part)
     │   ├── create.dart                     ← conditional import router
-    │   ├── _create_native.dart             ← → SharedBridge(NativeTransport)
-    │   ├── _create_web.dart                ← → SharedBridge(WebTransport)
+    │   ├── _create_native.dart             ← → SharedBridge(Router(NativeLaneHost))
+    │   ├── _create_web.dart                ← → SharedBridge(Router(WebLaneHost))
     │   │
-    │   ├── protocol/
-    │   │   ├── binary_codec.dart           ← binary request/response encoding
-    │   │   ├── codec.dart                  ← typed request builders + response decoders
-    │   │   └── op.dart                     ← EngineOp enum (35 wire names)
+    │   └── protocol/
+    │       ├── binary_codec.dart           ← binary request/response encoding
+    │       ├── codec.dart                  ← typed request builders + response decoders
+    │       └── op.dart                     ← EngineOp enum (the wire names)
+    │
+    ├── runtime/                             ← THE LANE RUNTIME
+    │   ├── router.dart                     ← shared brain: pinning, placement, dispose
+    │   ├── lane.dart                       ← Lane / LaneHost / LaneJob contracts
+    │   ├── wire_peek.dart                  ← minimal wire reads (op, handleId)
     │   │
     │   ├── native/
-    │   │   ├── native_transport.dart       ← isolate + multi-source/sink servers
-    │   │   ├── coordinator.dart            ← isolate entry point
-    │   │   ├── bindings.dart               ← @Native FFI binding
-    │   │   ├── shared_buffer.dart          ← condvar memory layout
-    │   │   ├── source_server.dart          ← per-source condvar server
-    │   │   └── sink_server.dart            ← per-sink condvar server
+    │   │   ├── native_lane.dart            ← dumb adapter: 4 verbs over FFI
+    │   │   ├── native_lane_host.dart       ← spawn + one-time FFI bootstrap
+    │   │   ├── channel_buffers.dart        ← condvar memory layout
+    │   │   └── lane_bindings.dart          ← @Native FFI bindings
     │   │
     │   └── web/
-    │       └── web_transport.dart           ← JS Worker pool + OPFS pre-copy
+    │       ├── web_lane.dart               ← the lane: job lifecycle, 3 I/O modes
+    │       ├── web_lane_host.dart          ← worker boot handshake, budget, pristine pool
+    │       └── lane_protocol.dart          ← codes injected into lane_worker.js
     │
     ├── types/                              ← shared types (all exported)
+    │   ├── cancel_hook.dart                ← CancelHook: binds PdfTask.cancel to its job
     │   ├── data_source.dart                ← DataSource interface
     │   ├── data_sink.dart                  ← DataSink interface
     │   ├── errors.dart                     ← PdfError sealed hierarchy
@@ -200,6 +215,7 @@ lib/
     │   ├── pdf_params.dart                 ← PdfSaveOptions, PdfEncryption, ...
     │   ├── pdf_rect.dart                   ← PdfRect
     │   ├── pdf_signature.dart              ← PdfSignatureInfo
+    │   ├── pdf_task.dart                   ← PdfTask<T>: Future + cancel()
     │   └── search_result.dart              ← SearchResult
     │
     └── hook/                               ← build + setup support (not consumer API)
@@ -207,8 +223,8 @@ lib/
         └── resolver.dart                   ← ResolveRequest + 5-step waterfall (shared by hook + setup)
 
 web_assets/                                 ← committed in git (except .wasm — gitignored, too large)
-├── coordinator.js                          ← WASM worker pool + handle pinning
-├── worker.js                               ← reader registry, 3 I/O modes, bridge_execute
+├── lane_worker.js                          ← the lane body: reader registry, 3 I/O modes,
+│                                              lane_init + lane_execute (zero routing logic)
 ├── pdf_oxide.js                            ← wasm-bindgen glue (committed, paired with .wasm)
 └── pdf_oxide_bg.wasm                       ← WASM binary (gitignored — downloaded from releases)
 
@@ -223,11 +239,14 @@ hook/
 bin/
 └── setup.dart                              ← CLI: setup <target> (web|android|ios|macos|linux|windows)
 
-tool/
+tool/                                       ← .sh = orchestration wrappers; .dart = programs
+│                                              (anything parsing structured data or using a library)
 ├── lib.sh                                  ← shared helpers (sourced by 2+ scripts)
-├── analyze.sh                              ← Dart + Rust static analysis
+├── analyze.sh                              ← format + Dart + Rust static analysis
 ├── check_alignment.sh                      ← 16 KB ELF alignment check for Android APK
+├── check_deps.dart                         ← dependency-drift report (make check-deps; advisory)
 ├── compile_rust.sh                         ← Rust → native / wasm / per-target / both
+├── generate_fixtures.dart                  ← test fixture generator (make fixtures; stamp-protected)
 ├── release.sh                              ← 7 modes: --gate, --discover, --github-notes,
 │                                              --update-tag-hashes, --stamp-changelog,
 │                                              --add-git-install, --add-pub-install
@@ -248,9 +267,13 @@ vendor/pdf_oxide/src/
 │   ├── image_optimizer.rs                  ← JPEG recompress
 │   ├── font_optimizer.rs                   ← Standard 14 unembedding
 │   ├── constants.rs                        ← buffer sizes
-│   ├── native/                             ← arena, thread pool, condvar I/O
-│   │   ├── arena.rs, callback_reader.rs, callback_writer.rs
-│   │   ├── shared_buffer.rs, thread_pool.rs
+│   ├── lane_state.rs                       ← per-lane engine state (no locks)
+│   ├── native/                             ← lanes + condvar I/O
+│   │   ├── lane.rs                         ← lane thread body, job channels, cancel registry
+│   │   ├── lane_table.rs                   ← global lane table, budget, FFI surface
+│   │   ├── cancel.rs                       ← CancelToken (lane + job flags)
+│   │   ├── callback_reader.rs, callback_writer.rs
+│   │   ├── shared_buffer.rs
 │   └── wasm/                               ← JS callback reader/writer
 │       ├── js_reader.rs                    ← Read+Seek via host_read_at
 │       └── js_writer.rs                    ← Write via host_write_chunk
@@ -355,7 +378,7 @@ Each capability:
 | `create-release.yml` | Changelog push or dispatch | Infra on input runner, compile on matrix |
 | `pr-lint.yml` | PR to prod/dev | All jobs on one input runner |
 | `triage.yml` | Issues/PRs | All jobs on env runner |
-| `flutter-upgrade.yml` | Daily or dispatch | All jobs on input runner |
+| `upgrade-check.yml` | Daily or dispatch | All jobs on input runner |
 | `debug-ssh.yml` | Dispatch only | Direct input runner |
 
 ### Test matrix (full-test.yml)
@@ -456,10 +479,11 @@ seeks backward. `PositionedWrite` captures exactly that:
 
 ### Native I/O — condvar + shared memory
 
-Each source gets its own `CallbackReader` + condvar buffer on the
-coordinator isolate. Each sink gets its own `CallbackWriter` + buffer.
-Engine reads/writes via shared memory with condvar synchronization.
-Dart serves source bytes from the main thread's DataSource.
+Each source gets its own `CallbackReader` + condvar buffer; each sink
+its own `CallbackWriter` + buffer. The lane thread reads/writes via
+shared memory with condvar synchronization and a per-job
+`CancelToken` checked at every wait. Dart serves the bytes on the
+MAIN isolate via `NativeCallable.listener` — no helper isolate.
 
 ### Web I/O — three modes, auto-detected
 
@@ -483,12 +507,12 @@ All three modes produce the same `Read+Seek` trait on the Rust side.
 `bridge_api.rs` is identical across modes. One WASM binary serves all
 three. Only OPFS pre-copies to disk.
 
-**Web reader registry:** each source gets a unique `readerId` in
-the worker's registry. `host_read_at` dispatches by `sourceIndex →
-readerId` via an `activeReaderMap` built per exec. Pinned readers
-(from handle-creating ops) survive across execs. Non-pinned readers
-are cleaned in `finally`. Exactly symmetric with native's per-source
-condvar servers.
+**Web reader registry:** each lane worker keeps a reader map.
+Held readers (kept sources from handle-creating ops) mount FIRST in
+each exec's reader list; the job's own sources follow. Non-held
+readers are dropped in `finally`; held ones survive until the
+handle's dispose releases them. Exactly symmetric with native's
+held-channel adoption.
 
 ### Backpressure
 
@@ -498,16 +522,16 @@ engine never reads faster than the host can serve.
 
 **Sinks (output):** backpressured per mode:
 
-- **Native:** condvar shared buffer blocks the Rust writer when full.
-  The Dart coordinator drains it before the writer can continue.
+- **Native:** condvar shared buffer blocks the lane thread when
+  full. Dart drains it before the writer can continue.
 - **JSPI:** `host_write_chunk` returns a Promise. JSPI suspends the
-  WASM stack. The coordinator forwards the chunk to Dart, Dart's
-  sink consumes it, Dart acks. The coordinator resolves the Promise.
-  WASM resumes. One chunk in flight at a time.
+  WASM stack. The worker forwards the chunk to Dart, Dart's sink
+  consumes it, Dart acks, the worker resolves the Promise. WASM
+  resumes. One chunk in flight at a time.
 - **Atomics:** `host_write_chunk` posts the chunk then
-  `Atomics.wait` on a dedicated write SAB. The coordinator forwards
-  to Dart, Dart acks, coordinator `Atomics.store + notify`. Worker
-  wakes. One chunk in flight at a time.
+  `Atomics.wait` on a dedicated write SAB. Dart consumes the chunk,
+  acks via `Atomics.store + notify`. The worker wakes. One chunk in
+  flight at a time.
 - **OPFS:** fire-and-forget via `postMessage`. No blocking mechanism
   available (no SAB, no JSPI). In practice the WASM producer is
   slower than the main thread consumer for OPFS because OPFS source
@@ -531,20 +555,73 @@ headers on browsers older than Chrome 137). It pre-copies each
 source file to OPFS disk before processing — O(N) disk space, O(N)
 time before the first output byte, subject to browser storage quota.
 
+Pre-copies live under `pdf_manipulator_lanes/{sessionId}/{workerId}/`
+— one random session directory per page load, one directory per
+worker inside it. The cleanup rule:
+
+> **Never race the living. Only sweep the dead.**
+
+While a worker lives, IT deletes its own files — it created them,
+holds their handles, and is their only consumer, so every deletion
+is same-agent and race-free by construction. One verb per job end
+(`opfsDrop`), one per held-source release (`releaseHeld`). No
+retries exist on the live path because no race exists.
+
+Death is handled by liveness, not by guesswork: every owner holds a
+[Web Lock](https://developer.mozilla.org/docs/Web/API/Web_Locks_API)
+for its lifetime — the page holds its session's lock, each worker
+holds its own directory's lock (acquired before its first file can
+exist). The browser releases a lock when its agent dies; that
+release is normative spec text, the web's equivalent of the native
+lane's every-job-posts-exactly-once contract (and the reason
+`FinalizationRegistry`, which is best-effort by spec, is not used).
+An acquirable lock IS the death certificate: retiring a worker
+awaits its lock, then reclaims its whole directory; a new session's
+boot sweep does the same for dead sessions. A crashed tab can never
+leak disk permanently, and the only convergence loop in the runtime
+runs strictly against the provably dead — where it always wins.
+
 Use `await pdf.ensureInitialized()` at startup to detect the mode.
 If `PdfIoMode.opfs` is returned, consider warning the user or
 prompting for COOP/COEP headers.
 
 ---
 
-## 8. Instance architecture
+## 8. Instance architecture — lanes
 
 ```
-Pdf()       = isolated engine instance (pool + handles + children)
+Pdf()       = isolated instance: a Router + its lanes
 PdfDoc      = read-only document session     (pdf.open)
 PdfEditor   = mutation session               (pdf.edit)
 PdfBuilder  = creation session               (pdf.build)
 ```
+
+### The three nouns
+
+- **Lane** — one isolated execution unit. Native: a detached Rust
+  thread with a crossbeam mailbox and its own `LaneState` (documents,
+  editors, builders — no locks, single owner). Web: a Worker running
+  `lane_worker.js` with its own WASM instance. A lane runs one job at
+  a time; nothing is shared between lanes.
+- **Job** — one operation submitted to a lane, with a cancel ticket.
+  Rust guarantees every accepted job posts exactly one result — the
+  guarantee Dart's resource cleanup is built on.
+- **Router** — the one shared brain (`runtime/router.dart`, both
+  platforms). Pins handles to the lane that created them
+  (response-driven: any success carrying a handleId creates a pin),
+  places handle-less ops on the least-loaded lane, spawns lanes up
+  to `maxLanes`, owns held-resource lifecycle, and implements
+  instant dispose.
+
+### The two rules
+
+1. **Single owner.** Every piece of state has exactly one owner
+   thread. Engine state is owned by its lane. Router state is owned
+   by the main isolate's event loop. No cross-thread state, no
+   locks above the I/O channels, no check-then-act races possible.
+2. **Shared brain, dumb edges.** All decisions live in shared code
+   (Router, Rust lane table). The platform adapters translate four
+   verbs — submit, cancelJob, releaseHeld, kill — and decide nothing.
 
 ### Lifecycle
 
@@ -555,142 +632,245 @@ final pdf = Pdf();
 final mode = await pdf.ensureInitialized();
 print(mode);  // PdfIoMode.jspi, .atomics, .opfs, or .native
 
-// Sessions are children of the engine
+// Sessions are children of the instance
 final doc = await pdf.open(source);
-await doc.dispose();        // frees ONE doc
+await doc.dispose();        // frees ONE doc (lane pin removed)
 
-await pdf.dispose();        // frees EVERYTHING — cascades to all children
+await pdf.dispose();        // kills every lane — instant
 ```
 
 ### Dispose rules
 
 - `doc.dispose()` / `editor.dispose()` / `builder.dispose()` — frees
-  one session. Others + engine stay alive.
-- `pdf.dispose()` — cascades to all children. Zero Rust memory
-  retained, zero threads alive.
-- Double dispose is safe (no-op). Using a disposed object throws
-  `StateError`.
-- Internally, the transport returns empty results (instead of
-  throwing) during dispose cascade so child cleanup completes.
+  one session. Others + instance stay alive.
+- `pdf.dispose()` — kills every lane synchronously: each kill flips
+  the lane's cancel flag, wakes its parked I/O, completes its
+  pending submits as cancelled, and frees its platform resources.
+  No joins, no awaits, no timeouts.
+- In-flight ops on a disposed instance resolve with `PdfCancelled`
+  (wire status byte 2 — typed, never string-matched).
+- Double dispose is safe (no-op). Calling methods on a disposed
+  handle throws `StateError`.
 
-### Shutdown order (native)
+### Kill semantics (native)
 
-The coordinator isolate shuts down in a specific order to prevent
-dangling `NativeCallable` pointers. Wrong order → Rust thread calls
-a dead callback → FATAL crash on Windows.
+A lane kill must guarantee no Rust thread ever touches a dead
+`NativeCallable` ("Callback invoked after it has been deleted" is a
+FATAL abort on Windows). The order:
 
 ```
-1. Cancel all buffers (held + in-flight)
-     Set FLAG_CANCELLED on every shared buffer
-     Signal every condvar → blocked Rust threads wake immediately
-
-2. bridgeShutdown(instance)
-     Drops ThreadPool → joins threads (fast — they see cancel flag)
-
-3. Close NativeCallables + free buffer memory
-     Safe — no Rust thread is alive to call them
+1. lane_kill flips the lane cancel flag, then under each channel's
+   pair mutex: set FLAG_CANCELLED + notify_all
+     → a parked lane thread wakes INTO the cancelled check
+     → the lock-order pairing makes notify-after-kill impossible
+2. Every pending job still posts its (cancelled) result
+     → Dart's post-driven cleanup frees each job's buffers
+3. The lane thread sees the flag, drains its mailbox with cancelled
+   posts, and exits — detached, never joined
 ```
 
-### Parallel ops
+### Kill semantics (web)
 
-All ops from one `Pdf` share its pool. Pool size adapts automatically
-(`max(2, cores / 2)`). Multiple `Pdf` instances are fully independent.
+`worker.terminate()` frees the worker, its WASM heap, and every open
+OPFS `SyncAccessHandle` in one stroke. The lane completes its pending
+submits as cancelled on the Dart side; the host reclaims the dead
+worker's OPFS directory once its liveness lock confirms the agent is
+gone (see §7, OPFS mode). A killed-before-use worker is returned to
+the pristine pool instead of terminated (see budget below).
 
-### Target internals
+### Parallel ops + the budgets
 
-**Native:** all pool threads share one `InstanceState` (Mutex).
-Created by `bridge_init()`, destroyed by `bridge_shutdown()`. Holds
-HashMaps for documents, editors, builders, page ops, plus a cancel
-flag and the thread pool. In-flight buffers are tracked in
-`_activeReadBufs` / `_activeWriteBufs` so shutdown can cancel them.
+- Ops on different handles run on different lanes — truly parallel.
+- Ops on one handle are pinned to its lane — serial, by design.
+- The Router spawns lanes up to `maxLanes` per instance
+  (default `max(2, cores / 2)`, configurable via `PdfConfig`).
+- **Native global budget:** at most 128 lane threads process-wide.
+  Past the cap, lane spawns queue FIFO inside Rust — an op can
+  wait, it can never fail for capacity.
+- **Web global budget:** at most 64 live workers page-wide, FIFO
+  waiters past the cap. Lanes killed before receiving work return
+  their worker to a pristine pool, so rapid create+dispose churn
+  recycles workers instead of booting thousands.
+- The web worker boot uses an explicit `booted → init → ready`
+  handshake: the worker announces when its message handler is
+  attached, because a message posted before that is silently
+  dropped (the cross-origin blob bootstrap's dynamic import is not
+  part of module evaluation).
 
-**Web:** coordinator routes ops to WASM workers. Documents are pinned
-to workers (one worker per open doc). Different documents on different
-workers = truly parallel. Same document = same worker = serial.
+### Race freedom by construction
+
+Beyond the two rules, four mechanical properties close the remaining
+race classes:
+
+- **One-way state machines.** Job: queued → running → done/cancelled/
+  failed. Lane: spawning → live → killed. Every transition is
+  set-once; a consumer that misses an update is harmless because it
+  re-checks at its next boundary (I/O point, dequeue point).
+- **No timing-based correctness.** No timeout anywhere is load-bearing.
+  A slow device changes latency, never behavior. The only timer is a
+  debug-build heartbeat that LOGS long I/O parks — it decides nothing.
+- **Keys, not pointers, across FFI.** Dart holds opaque lane keys
+  looked up in a locked table; a call racing a kill finds nothing and
+  gets a well-defined "lane disposed" result. Keys are never reused.
+- **Idempotent teardown.** dispose / cancel / kill are all safe to
+  call twice, from anywhere, in any order.
+
+### Per-op cancellation
+
+Every engine method returns a `PdfTask<T>` — a `Future` plus
+`cancel()`. The task's `CancelHook` is bound by the Router to the
+submitted job; cancel-before-submit resolves without reaching a lane
+(both cancel AND dispose are re-checked synchronously before submit
+— without the dispose re-check, a same-tick dispose would let the op
+resume on a dead Router and spawn a zombie lane that no kill ever
+reaches). A live cancel flips the job's cancel
+flag and wakes its parked I/O: native cancels the job's registered
+channels; web answers the in-flight host read with the cancelled
+code (and wakes an OPFS pre-copy parked on the caller's DataSource).
+The lane survives; only that job dies — its result posts as
+cancelled. Fire-and-forget tasks absorb the cancelled outcome
+silently; real failures on unlistened tasks are re-raised loudly.
 
 ---
 
 ## 9. Test architecture
 
-### Rules
+### The test invariants
 
-1. **Mirror source files.** `pdf_doc.dart` → `pdf_doc_test.dart`.
-2. **Core + stress for every method.** Core = small fixtures (1–3
-   pages). Stress = 1000-page PDFs.
-3. **All 4 platforms run the same tests.** Shared test files define
-   `registerXxxTests(Pdf Function() createPdf)`. Runners call them.
-   Same pass count on native, OPFS, JSPI, and Atomics.
-4. **Per-test timeouts.** Every `test()` has its own `timeout:`.
-   Exceeds budget → fix the algorithm, never the timeout.
-5. **O(1) guards always on.** `TestSource` throws on `readAt > 64KB`.
-   `TestSink` throws on `write > 256KB`. Every test uses these.
+1. **Foreign diet.** Read/edit/sugar ops are tested against PDFs from
+   INDEPENDENT producers (dart-pdf via the fixture generator, the
+   handwritten micro fixtures, the committed qpdf-encrypted fixture) —
+   never against this package's own builder output. Self-feeding lets
+   mirrored reader/writer bugs cancel into green tests.
+2. **Creation is a subject, not infrastructure.** The builder battery
+   builds inline; the builder never manufactures fixtures.
+3. **Declared truths.** Every generated fixture carries typed
+   ground-truth constants; tests assert against declared intent,
+   never re-derived engine output.
+4. **Existence is never proof.** `make fixtures` stamps generated/
+   with a hash of its inputs; mismatch regenerates everything.
+5. **No `dart:io` in tests** (mechanically guarded by `make
+   test-guards`). Fixtures are imported Dart source — VM and browser
+   consume identical bytes. Exceptions: the hybrid asset server, the
+   native process-death tests, and the VM-only source-parity guards
+   (wire sync, worker-verb sync, dumb-edges) — they read repo SOURCE
+   to assert sync, not fixtures.
+6. **Semantic assertions.** Content claims go through extract/search/
+   render — never byte-grepping (guarded; survivors: `%PDF-`/ZIP
+   magic, encrypted-leak negatives, and the builder battery, whose
+   byte emission IS its subject).
+7. **One charter per battery.** Each battery's header names exactly
+   what it alone proves; no two tests prove the same claim.
+8. **Per-test timeouts + O(1) I/O guards always on.** `TestSource`
+   throws on `readAt > 64KB`; `TestSink` on `write > 256KB`. Exceeds
+   a budget → fix the algorithm, never the timeout.
+9. **Tests must be able to fail.** Every assertion answers: "if the
+   feature silently did nothing, does this go red?" If not, it is
+   not a test.
 
 ### Structure
 
 ```
 test/
-├── helpers/
+├── fixtures/                       DATA — three independent producers
+│   ├── catalog.dart                spec + truths of every generated fixture
+│   ├── generated/                  GITIGNORED — emitted by `make fixtures`
+│   │   ├── .stamp                  input hash (existence is never proof)
+│   │   ├── f_*.dart                base64 bytes + truth constants
+│   │   └── f_photo_png.dart        the photo-like raster (seeded noise),
+│   │                               built by the generator, fed into the
+│   │                               image PDF fixtures
+│   ├── third_party/
+│   │   └── tp_encrypted.dart       committed qpdf AES-256 fixture
+│   └── handwritten.dart            hand-authored micro fixtures + certs
+│
+├── harness/                        MACHINERY — not data
 │   ├── asset_server.dart           HTTP server for web test assets
-│   ├── fixtures.dart               Minimal PDFs, certs, byte data
-│   ├── generators.dart             Build N-page PDFs at runtime
-│   ├── photo_png.dart              128×128 test PNG
-│   └── test_source_sink.dart       TestSource + TestSink (O(1) guards)
+│   ├── slow_source.dart            Parks the engine on a read (cancel tests)
+│   ├── test_source_sink.dart       TestSource + TestSink (O(1) guards)
+│   ├── timeouts.dart               t() — per-test timeout helper
+│   └── streaming_guard_test.dart   Tests the guards themselves
 │
 ├── ops/
-│   ├── core/                       7 core test files
-│   ├── stress/                     6 stress test files (1000-page)
-│   ├── native/                     target-specific native tests
-│   └── runners/                    4 target runners
+│   ├── core/                       7 shared batteries (*_battery.dart —
+│   │                               register-only, no main; runners call them)
+│   ├── stress/                     6 stress batteries (1000-page)
+│   ├── platform/                   guarantees only ONE platform can break
+│   │   ├── native/                 finalizer battery + dispose-exit payload
+│   │   └── web/                    config inheritance, clean boot failure,
+│   │                               dead-session reclamation, zero OPFS residue
+│   └── runners/                    4 target runners (the ONLY entry points)
 │       ├── native_runner_test.dart
 │       ├── web_opfs_runner_test.dart
 │       ├── web_jspi_runner_test.dart
 │       └── web_atomics_runner_test.dart
 │
-├── transport/                      Unit tests (no engine)
+├── bridge/                         Unit tests (no engine)
 │   ├── bridge_contract_test.dart
 │   ├── shared_bridge_test.dart
-│   ├── streaming_guard_test.dart
-│   ├── native/shared_buffer_test.dart
 │   └── protocol/
 │       ├── binary_codec_test.dart
 │       ├── codec_test.dart
 │       └── wire_sync_test.dart     ← parity guard (see below)
 │
-└── types/                          3 type tests
+├── runtime/                        Lane runtime unit tests
+│   ├── router_test.dart            ← shared brain vs fake lanes:
+│   │                                  placement, pinning, dispose,
+│   │                                  cancel binding (incl. the
+│   │                                  cancel-before-submit AND
+│   │                                  dispose-before-submit races)
+│   ├── wire_peek_test.dart         ← peeks + response builders
+│   ├── dumb_edges_test.dart        ← dumb-edge guard on all 4 adapter files
+│   ├── native/channel_buffers_test.dart  ← Dart↔Rust layout parity
+│   └── web/lane_worker_sync_test.dart    ← Dart↔worker protocol parity
+│
+└── types/                          errors, page_info, pdf_rect +
+                                    pdf_task (zone physics) + cancel_hook
 ```
 
-### wire_sync_test — the parity guard
+### The parity guards
 
-Parses `bridge_api.rs`, `worker.js`, and `coordinator.js` from disk.
-Extracts every match/case arm **programmatically** — zero hardcoded
-allowlists. Verifies:
+Three tests parse the OTHER side's source from disk — zero hardcoded
+allowlists — so no cross-language contract can drift silently:
 
-- Every `EngineOp` has a Rust match arm
-- Every Rust case maps to an `EngineOp` or a known sub-dispatch
-- Edit sub-dispatch and page sub-dispatch are disjoint
-- No sub-dispatch ops leak into top-level
+- **`bridge/protocol/wire_sync_test.dart`** — every `EngineOp` has a
+  Rust match arm; every Rust case maps back; sub-dispatches stay
+  disjoint and never leak into top-level.
+- **`runtime/web/lane_worker_sync_test.dart`** — the worker handles
+  every Dart→worker tag, posts only known worker→Dart tags, uses
+  only injected protocol codes, calls the lane WASM surface, and
+  contains no routing logic — shared brain, dumb edges.
+- **`runtime/native/channel_buffers_test.dart`** — Dart's channel
+  layout constants match Rust's `shared_buffer.rs` byte-for-byte.
+- **`runtime/dumb_edges_test.dart`** — the four platform adapter
+  files make no routing decisions (no op literals, no peeks).
 
-Adding a Dart op without a Rust handler → test fails. Adding a Rust
-handler without a Dart op → test fails.
+Adding a Dart op without a Rust handler → test fails. Adding routing
+logic to any dumb edge → test fails.
 
 ---
 
 ## 10. Upstream patches
 
-### pdf_oxide — 7 files patched
+### pdf_oxide — patched upstream files
 
-Every modification marked with `── pdf_manipulator patch ──`.
+Every modification carries a `── pdf_manipulator patch ──` boundary
+pair. The marker grep in `UPDATING.md` is the authoritative inventory;
+this table summarizes what each patched file carries and why.
 
-| File | What we added |
+| File | What the patches carry |
 |---|---|
 | `Cargo.toml` | `native-bridge` deps + `office_oxide` as path dependency |
 | `lib.rs` | `pub mod host;` |
-| `document.rs` | External reader variant, `from_external_reader()`, info/encryption accessors, `collect_refs_of()` (zero-clone GC), streaming `to_docx/pptx/xlsx_writer_flow()` |
-| `editor/document_editor.rs` | State accessors, `merge_from_reader()`, zero-clone GC BFS, `stage_trimmed_pages_for_gc()`, `write_full_to_writer(PositionedWrite)`, `add_page_annotation()`, `all_media_boxes()` |
-| `compliance/converter.rs` | Expose `convert_with_editor`, bundled 12 Liberation fonts |
+| `document.rs` | External reader variant + `from_external_reader()` (O(1)-memory open), info/encryption/permissions accessors, `collect_refs_of()` (zero-clone GC), streaming `to_docx/pptx/xlsx_writer_flow()`, scan-all `/Subtype` Form detection |
+| `editor/document_editor.rs` | State accessors, `merge_from_reader()` + shared merge core, zero-clone GC BFS + `stage_trimmed_pages_for_gc()`, `write_full_to_writer(PositionedWrite)` (function-wide streaming offsets), per-save page-ref cache, scoped destructive erase (`erase_regions_destructive`), appearance generation for AP-less annotation types, §12.5.5 appearance placement, `add_page_annotation()`, `all_media_boxes()` |
+| `encryption/mod.rs` + `encryption/algorithms.rs` | Raw file key exposed to the writer (`file_key`, `build_with_key`) so streams encrypt with the key the dict advertises; PDF 2.0 Algorithm 10 (`/Perms` for R6) |
+| `compliance/converter.rs` | Expose `convert_with_editor`, bundled 12 Liberation fonts (WASM has no system fonts) |
 | `writer/pdf_writer.rs` | `finish_to_writer(PositionedWrite)` — streaming save |
 | `writer/document_builder.rs` | `build_to_writer(PositionedWrite)` + `assemble_writer()` |
-| `converters/office/mod.rs` | Finalize-callback pattern for streaming, `convert_X_reader_to_writer()`, `ir_to_pdf_writer()` |
+| `writer/stamp.rs` + `writer/appearance_stream.rs` + `writer/annotation_builder.rs` | Rubber-stamp normal appearance (label + inline font + text escaping) and the appearance-generation dispatch |
+| `converters/office/mod.rs` | Finalize-callback core refactor for streaming, `convert_X_reader_to_writer()`, `ir_to_pdf_writer()`, fallback-font loader visibility |
+| `text/word_boundary.rs` | Geometric-gap threshold contract documentation |
 
 ### office_oxide — streaming OPC writer
 
@@ -708,7 +888,9 @@ Everything in `src/host/` is entirely ours — no patch markers needed.
 
 ## 11. The one-line summary
 
-> **Four layers. One binary format. Multi-source/multi-sink transport.
-> Three web I/O modes auto-detected (JSPI > Atomics > OPFS), one WASM
-> binary. O(1) memory on every path — enforced by test guards. Same
-> tests, same pass count, all 4 platforms.**
+> **Four layers, two rules. One Router (the shared brain), dumb lane
+> adapters per platform. One binary format. Three web I/O modes
+> auto-detected (JSPI > Atomics > OPFS), one WASM binary. Instant
+> dispose — kills, never joins. Budgets queue, never fail. O(1)
+> memory on every path — enforced by test guards. Same tests, same
+> pass count, all 4 platforms.**

@@ -5,7 +5,7 @@ Every Rust engine capability mapped to its Dart surface.
 **O(1) memory I/O — non-negotiable.** Every shipped op streams through
 bounded buffers. Every PLANNED op must do the same. The test guards
 (TestSource 64KB, TestSink 256KB) enforce this mechanically — see
-[`ARCHITECTURE.md`](ARCHITECTURE.md) §6.
+the test architecture in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 Five files, strict rules:
 
@@ -82,7 +82,7 @@ Five files, strict rules:
 | Flatten all annotations | `flatten_all_annotations` | `flattenAllAnnotations()` | DONE |
 | Set form field value | `set_form_field_value` | `setFormFieldValue()` | DONE |
 | Crop margins | `crop_margins` | `cropMargins()` | DONE |
-| Resize image | `resize_image` | `resizeImage()` | DONE |
+| Resize image | `resize_image` | `resizeImage()` | DONE — untestable from the public surface: no API lists image XObject names, so a caller cannot know a valid name to pass. Add an image-name listing (e.g. on `extractImages`) to make this testable and usable. |
 | Convert to PDF/A | via bridge | `convertToPdfA()` | DONE |
 | Add redaction | `add_redaction` | `addRedaction()` | DONE |
 | Redaction count | `redaction_count` | `redactionCount()` | DONE |
@@ -151,7 +151,7 @@ Five files, strict rules:
 | Combo box | via bridge | `page.comboBox()` | DONE |
 | Push button | via bridge | `page.pushButton()` | DONE |
 | Signature field | via bridge | `page.signatureField()` | DONE |
-| Radio group | via bridge | `page.radioGroup()` | PLANNED |
+| Radio group | via bridge | `page.radioGroup()` | DONE |
 | Field keystroke | via bridge | `page.fieldKeystroke()` | DONE |
 | Field format | via bridge | `page.fieldFormat()` | DONE |
 | Field validate | via bridge | `page.fieldValidate()` | DONE |
@@ -205,16 +205,28 @@ Five files, strict rules:
 
 ---
 
+## Runtime — the lane architecture
+
+| Capability | Status |
+|---|---|
+| Per-op cancellation (`PdfTask.cancel()` on every engine method) | DONE |
+| Instant dispose (kill every lane, no joins, same event-loop turn) | DONE |
+| Lane budgets — queue, never fail (128 native threads / 64 web workers, FIFO waiters) | DONE |
+| Pristine worker recycling under create+dispose churn (web) | DONE |
+| Fire-and-forget error physics (cancelled silent, real failures loud) | DONE |
+| Three web I/O modes (JSPI / Atomics / OPFS), identical suite | DONE |
+| Item streaming over the job port (multi-result ops without buffering) | PLANNED — the job's result port is already a message channel: promote it to N interim messages + 1 terminal message. Inherits per-job cancel, instant kill, and the post-driven cleanup protocol unchanged; symmetric on web (worker postMessage). Never add a second transport method for this. |
+
 ## Summary
 
 | Category | Done | Planned |
 |---|---|---|
 | PdfDoc | 17 | 9 |
-| PdfEditor | 35 | 29 |
-| PdfBuilder | 32 | 1 |
+| PdfEditor | 36 | 29 |
+| PdfBuilder | 34 | 0 |
 | PdfStandalone | 4 | 0 |
 | PdfSugar | 22 | 0 |
-| **Total** | **110** | **39** |
+| **Total** | **113** | **38** |
 
 ---
 
@@ -268,3 +280,26 @@ wires the trigger, `main()` adds one call to `resolveWeb()` and
 | OCR | Requires Tesseract or similar — not a PDF primitive |
 | Table extraction | Heuristic-heavy — better served by dedicated libraries |
 | PDF viewer widget | Use pdfx or flutter_pdfview — they're built for viewing, we're built for manipulation |
+
+## Deferred — surfaced by the test overhaul (2026-06-12)
+
+| Capability | Status | Why |
+|---|---|---|
+| Builder output hardening (compress streams by default; richer typesetting) | PLANNED | Builder output is valid but naively shaped vs real-world PDFs; product decision, deliberately separate from the test overhaul. |
+| Attachment-listing read API | PLANNED | embedFile currently has no semantic presence proof — tests fall back to structural checks until attachments can be enumerated. |
+| Typed wire error codes (PdfWrongPassword, PdfCorrupted, … from Rust) | PLANNED | Engine failures are typed as `PdfEngineError(message)` today; per-kind types need error codes on the wire protocol. |
+
+## Binary size — feature trimming
+
+| Stage | Approach | Status |
+|---|---|---|
+| Cargo features via `user_defines` | Consumers opt out of features in pubspec (`hooks: user_defines: pdf_manipulator: {rendering: false, office: false}`); the build hook maps these to `--features` for cargo. One smaller binary, no link-hook changes — user_defines flow through `BuildInput`. Pattern proven by icu_kit's `bundleCldrData` toggle. | PLANNED |
+| Automatic tree-shaking via `@RecordUse` | The compiler records which Dart APIs the app calls; the link hook maps methods to cargo features and recompiles with only what is needed. Zero user config. Blocked upstream: `@RecordUse` instance methods (dart-lang/native#2902), FFI tree-shaking umbrella (dart-lang/sdk#52970). | PLANNED |
+| Web parity | WASM is network-served, so size matters more than native — but per-feature WASM binaries add too much setup complexity. Wait for web build-hook support (dart-lang/native#988), which gives web the same cargo-features path as native. pdf_manipulator's size is CODE (rendering, office, signing), not data, so lazy data loading does not apply. | PLANNED |
+
+## Test infrastructure gaps
+
+| Gap | Detail | Status |
+|---|---|---|
+| Field-action silent no-op | `fieldKeystroke`/`fieldFormat`/`fieldValidate`/`fieldCalculate` attach to the most-recently-added field; on a page with no field the call silently does nothing. A typed error would surface caller bugs. | PLANNED |
+| True O(1) memory verification | The Dart-side chunk guards catch transport violations only; Rust-internal Vec accumulation is invisible to them. Wire a tracking allocator into the Rust test harness: baseline → run op on a 50MB+ input → assert peak allocation stays under a fixed bound (~5MB). | PLANNED |

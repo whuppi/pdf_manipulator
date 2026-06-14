@@ -1,6 +1,14 @@
 # pdf_manipulator
 
-Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extract, search, sign, encrypt, validate, convert, build from scratch. Native and web. Off the main thread.
+[![pub package](https://img.shields.io/pub/v/pdf_manipulator.svg)](https://pub.dev/packages/pdf_manipulator)
+[![likes](https://img.shields.io/pub/likes/pdf_manipulator)](https://pub.dev/packages/pdf_manipulator/score)
+[![pub points](https://img.shields.io/pub/points/pdf_manipulator)](https://pub.dev/packages/pdf_manipulator/score)
+[![GitHub stars](https://img.shields.io/github/stars/whuppi/pdf_manipulator?style=flat&logo=github)](https://github.com/whuppi/pdf_manipulator)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extract, search, sign, encrypt, validate, convert, build from scratch. Native and web. Every operation runs off the main thread, streams at constant memory, can be cancelled mid-flight, and dies instantly on dispose.
+
+> Try it — and if it helps, a [⭐ star](https://github.com/whuppi/pdf_manipulator) or [👍 like](https://pub.dev/packages/pdf_manipulator) keeps it going. [Bugs & features →](https://github.com/whuppi/pdf_manipulator/issues)
 
 > **Coming from the old Android-only package?** See the [migration guide](docs/MIGRATION.md).
 
@@ -93,6 +101,11 @@ import 'package:pdf_manipulator/pdf_manipulator.dart';
 
 final pdf = Pdf();
 
+// Operations run in parallel across isolated lanes, off the main
+// thread. Cap concurrent lanes per instance if you want — defaults
+// to half the cores, minimum 2:
+//   final pdf = Pdf(config: PdfConfig(maxLanes: 8));
+
 // Open a PDF from bytes in memory
 final source = MemorySource(pdfBytes);      // your Uint8List
 final doc = await pdf.open(source);
@@ -105,10 +118,34 @@ await pdf.merge([sourceA, sourceB], output);
 final mergedBytes = output.takeBytes();
 
 // Always dispose when done
-pdf.dispose();
+await pdf.dispose();
 ```
 
 That's it. Every operation follows the same pattern: **source in, sink out**.
+
+### Cancellation
+
+Every engine method returns a `PdfTask<T>` — a `Future` you can also
+cancel. Existing `await` code works unchanged; cancellation is one
+extra verb when you want it:
+
+```dart
+final task = pdf.merge(sources, output);   // starts immediately
+
+// User navigated away — abort just this operation.
+task.cancel();                              // idempotent, instant
+
+try {
+  await task;
+} on PdfCancelled {
+  // The op was cancelled; the Pdf instance and every other
+  // handle keep working.
+}
+```
+
+`pdf.dispose()` is the bigger hammer: it cancels everything on the
+instance and returns in the same event-loop turn — no waiting for
+in-flight work to drain.
 
 ### Sources & sinks
 
@@ -425,7 +462,16 @@ await page.paragraph('Thank you for your purchase.');
 await page.space(20);
 await page.textField('notes', PdfRect(x: 50, y: 400, width: 300, height: 100));
 await page.checkbox('agree', PdfRect(x: 50, y: 370, width: 14, height: 14));
+await page.radioGroup('plan', [
+  (value: 'monthly', rect: PdfRect(x: 50, y: 340, width: 14, height: 14)),
+  (value: 'yearly', rect: PdfRect(x: 50, y: 320, width: 14, height: 14)),
+]);
+
+// Form-field JavaScript (Acrobat-style actions on the field above)
+await page.fieldFormat('AFNumber_Format(2, 0, 0, 0, "\$", true);');
+
 await page.linkUrl('https://example.com');
+await page.linkPage(2);                 // jump to another page in this doc
 await page.footnote('1', 'Terms apply.');
 await page.done();
 
@@ -433,7 +479,9 @@ await builder.save(sink);
 await builder.dispose();
 ```
 
-Text, headings, paragraphs, images, form fields (text, checkbox, combo box, push button, signature), links, footnotes, columns, watermarks — all from Dart. Page sizes: A4, Letter, or custom dimensions.
+Text, headings, paragraphs, images, form fields (text, checkbox, radio group, combo box, push button, signature), links (URL or page), footnotes, columns, watermarks — all from Dart. Page sizes: A4, Letter, or custom dimensions.
+
+Form fields can carry JavaScript actions — `fieldKeystroke`, `fieldFormat`, `fieldValidate`, `fieldCalculate` — that conforming viewers run as the user types, on display, on commit, and when other fields change.
 
 ### Batch editing
 
@@ -460,7 +508,19 @@ Save options:
 - `PdfSaveOptions.fullRewrite(encryption: PdfEncryption.remove())` — strip encryption.
 - `PdfSaveOptions.incremental()` — appends changes without rewriting. Faster, larger file.
 
-Every operation from the sections above is also available on the editor: rotate, stamp, flatten, redact, crop, resize images, embed files, set form field values, scrub metadata, and more.
+**Redaction** is a three-step lifecycle on the editor — mark regions, optionally count what's pending, then permanently remove the content:
+
+```dart
+final editor = await pdf.edit(source);
+editor.addRedaction(0, PdfRect(x: 72, y: 700, width: 200, height: 20));
+editor.addRedaction(1, PdfRect(x: 72, y: 680, width: 150, height: 20));
+print(await editor.redactionCount(0));   // pending marks on page 0
+await editor.applyRedactions();          // content is gone, not hidden
+await editor.save(sink);
+await editor.dispose();
+```
+
+Every operation from the sections above is also available on the editor: rotate, stamp, flatten, crop, resize images, embed files, set form field values, scrub metadata, and more.
 
 ---
 
@@ -503,6 +563,7 @@ The build hook (native) and setup command (web) resolve assets through the same 
 | 2 | **Download** | Fetch pre-built from GitHub Releases | Internet |
 | 3 | **Source compile** | Binary unavailable, vendor source on disk | [Rust](https://rustup.rs) |
 | 4 | **Submodule init** | Git dep `ref: dev` (no vendor dir) | [Rust](https://rustup.rs) + git |
+| 5 | **Error** | Nothing worked | A clear message listing your options |
 
 The vendored Rust source ships in both the pub.dev tarball and git tags. If the repo disappears, published versions still compile from source.
 
@@ -516,7 +577,7 @@ The vendored Rust source ships in both the pub.dev tarball and git tags. If the 
 | Chrome Android | 102+ | May 2022 |
 | Samsung Internet | 21+ | 2023 |
 
-The engine compiles to WASM and runs in a Web Worker pool. Your UI thread never does PDF work.
+The engine compiles to WASM and runs in isolated Web Workers. Your UI thread never does PDF work.
 
 ### Web I/O modes
 
@@ -531,7 +592,7 @@ Three modes, auto-detected (best first). No code changes between them:
 Force a mode or check which was selected:
 
 ```dart
-// Force
+// Force the web I/O mode (native ignores it)
 final pdf = Pdf(config: PdfConfig(webIoMode: PdfIoMode.atomics));
 
 // Check

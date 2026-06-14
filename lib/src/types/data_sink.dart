@@ -12,4 +12,3 @@ abstract interface class DataSink {
   /// Write a chunk. Called sequentially, never concurrently.
   FutureOr<void> write(Uint8List chunk);
 }
-

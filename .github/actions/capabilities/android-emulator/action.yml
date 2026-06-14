@@ -2,123 +2,264 @@ name: Android Emulator
 description: >
   Boot Android emulator and run a script inside it.
 
-  Target: aosp_atd (Automated Test Device) — stripped-down image
-  built for CI. No Google Play, minimal UI, fast boot. Lightest
-  available image. Weight hierarchy:
-    google_apis_playstore > google_apis > default > aosp_atd
+  aosp_atd (Automated Test Device) — stripped-down CI image, no
+  Google Play, minimal UI, fast boot. x86_64 on all runners.
+  Linux: KVM. macOS Intel: HAXM/HVF. Windows: WHPX.
+  macOS ARM (M1): cannot run emulators (no nested virtualization).
 
-  Arch: x86_64 on all runners. Linux uses KVM. macOS Intel uses
-  HAXM/HVF. Windows uses WHPX.
+  AVD snapshot caching: first run cold-boots and saves a snapshot.
+  Subsequent runs warm-boot from the cached snapshot (~30s vs ~5min).
+  The snapshot is clean OS state — no app data. Apps install fresh.
+  Disable with avd-cache: false. Force cold boot with cold-boot: true.
 
-  Linux/macOS use reactivecircus/android-emulator-runner. Windows
-  uses a manual boot script (the action doesn't support Windows).
-
-  macOS ARM runners (M1) cannot run emulators — nested
-  virtualization unsupported on M1 hardware.
-  https://docs.github.com/en/actions/reference/runners/github-hosted-runners#limitations-for-arm64-macos-runners
+  Teardown watchdog: on SwiftShader emulators (macOS Intel), Flutter's
+  teardown hangs because the CPU-starved guest can't be reached. Two
+  sibling causes — adb stopApp()/uninstallApp() blocking on Binder IPC,
+  and DDS shutdown() being fire-and-forget with no timeout. The watchdog
+  kills both so flutter test exits cleanly. Harmless on hardware-accel
+  runners.
+    adb side: https://github.com/flutter/flutter/issues/187785
+    dds side: https://github.com/flutter/flutter/issues/187984
 
 inputs:
   script:
-    description: "Command to run while emulator is alive"
+    description: >
+      Command to run while the emulator is alive. The caller (make-target)
+      passes the shared /tmp/make-run.sh so the in-emulator run is byte-
+      identical to the direct path — no drift. Wrapped by the teardown
+      watchdog below.
     required: true
   api-level:
     description: "Android API level (30 is lightest ATD available)"
     required: false
     default: '30'
+  avd-cache:
+    description: "Cache AVD snapshot for warm boot (~30s vs ~5min cold)"
+    required: false
+    default: 'true'
+  cold-boot:
+    description: "Force cold boot even when snapshot cache exists"
+    required: false
+    default: 'false'
 
 runs:
   using: composite
   steps:
+    # ── adb ──
     - name: Start adb server
       shell: bash
       run: |
         $ANDROID_HOME/platform-tools/adb start-server
         $ANDROID_HOME/platform-tools/adb devices
 
-    # Watchdog for the flutter test teardown hang on macOS Intel.
-    #
-    # Only affects: macOS Intel + SwiftShader (no hardware GPU).
-    # Does NOT affect: Linux with KVM, Windows, macOS ARM, local dev.
-    #
-    # Root cause: Flutter's stopApp() calls `adb shell am force-stop`
-    # with no timeout (android_device.dart → _processUtils.stream()).
-    # On SwiftShader emulators, qemu uses ~200% CPU on 4 cores,
-    # starving the guest's ActivityManagerService. The `am force-stop`
-    # command never gets CPU time to execute. The dartvm waits for
-    # this adb child forever → flutter test never exits.
-    #
-    # Fix: detect the stuck adb child of dartvm (0% CPU) and kill it.
-    # stopApp() receives an error return, continues to uninstallApp()
-    # which also fails with "adb uninstall failed: exit code -9" —
-    # that error in the logs is expected and harmless. Teardown then
-    # completes and flutter test prints the summary and exits cleanly.
-    #
-    # Harmless on runners where the hang doesn't occur — the watchdog
-    # simply never finds a stuck adb process and exits with the
-    # user's command.
-    #
-    # Remove this watchdog when Flutter adds a timeout to stopApp():
-    # https://github.com/flutter/flutter/blob/master/packages/flutter_tools/lib/src/android/android_device.dart
-    - name: Write emulator scripts
+    # ── AVD snapshot cache ──
+    # Include emulator version in cache key — runner image updates
+    # change the emulator binary, making old snapshots incompatible.
+    - name: Emulator version
+      id: emu-ver
+      shell: bash
+      run: |
+        EMU="$ANDROID_HOME/emulator/emulator"
+        if [ -f "$EMU" ]; then
+          VER=$("$EMU" -version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
+        else
+          VER="not-installed"
+        fi
+        echo "version=$VER" >> $GITHUB_OUTPUT
+        echo "Emulator version: $VER"
+
+    - name: Restore AVD cache
+      if: inputs.avd-cache == 'true'
+      uses: actions/cache@v5
+      id: avd-cache
+      with:
+        path: |
+          ~/.android/avd/*
+          ~/.android/adb*
+        key: avd-${{ runner.os }}-${{ runner.arch }}-${{ inputs.api-level }}-emu${{ steps.emu-ver.outputs.version }}
+
+    # ── Snapshot generation (cache miss only) ──
+    - name: Generate AVD snapshot (Linux/macOS)
+      if: >-
+        runner.os != 'Windows' &&
+        inputs.avd-cache == 'true' &&
+        steps.avd-cache.outputs.cache-hit != 'true'
+      uses: reactivecircus/android-emulator-runner@v2
+      with:
+        api-level: ${{ inputs.api-level }}
+        arch: x86_64
+        target: aosp_atd
+        force-avd-creation: false
+        emulator-options: -no-window -noaudio -no-boot-anim
+        emulator-boot-timeout: 600
+        disable-animations: false
+        script: echo "AVD snapshot generated for caching."
+
+    - name: Generate AVD snapshot (Windows)
+      if: >-
+        runner.os == 'Windows' &&
+        inputs.avd-cache == 'true' &&
+        steps.avd-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        SDK="$(cygpath "$ANDROID_HOME")"
+        SDKMGR="$(find "$SDK/cmdline-tools" -name "sdkmanager*" -type f | head -1)"
+        yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+        "$SDKMGR" \
+          "system-images;android-${{ inputs.api-level }};aosp_atd;x86_64" \
+          "platform-tools" "emulator" > /dev/null
+        AVDMGR="$(find "$SDK/cmdline-tools" -name "avdmanager*" -type f | head -1)"
+        echo no | "$AVDMGR" create avd --force -n test \
+          --package "system-images;android-${{ inputs.api-level }};aosp_atd;x86_64"
+        "$SDK/emulator/emulator" -port 5554 -avd test \
+          -no-window -noaudio -no-boot-anim &
+        TIMEOUT=600; ELAPSED=0
+        while [ $ELAPSED -lt $TIMEOUT ]; do
+          RESULT=$("$SDK/platform-tools/adb" -s emulator-5554 \
+            shell getprop sys.boot_completed 2>/dev/null || true)
+          [ "$RESULT" = "1" ] && echo "Booted in ${ELAPSED}s." && break
+          sleep 2; ELAPSED=$((ELAPSED + 2))
+        done
+        "$SDK/platform-tools/adb" -s emulator-5554 emu kill || true
+        sleep 5
+
+    # ── Teardown watchdog wrapper ──
+    # Written to /tmp and passed as the reactivecircus script.
+    # Runs the user's command in background, monitors for stuck adb
+    # teardown commands, kills them if found.
+    - name: Write teardown watchdog
       if: runner.os != 'Windows'
       shell: bash
       run: |
         cat > /tmp/emulator-run.sh << 'EMUSCRIPT'
         #!/usr/bin/env bash
-        set -euo pipefail
+        # NOT -e: the result reconciler at the end must run even when the
+        # command exits non-zero.
+        set -uo pipefail
 
-        # Run the user's command in background.
-        bash -c "$1" &
+        OUT=/tmp/emulator-cmd.log
+        : > "$OUT"
+
+        # Run the command in the background, output to a log (plain
+        # redirect keeps $! = the command and $? = its real exit code,
+        # unlike a tee pipe). A separate tail streams the log live to the
+        # console so CI output is unchanged.
+        bash -c "$1" > "$OUT" 2>&1 &
         CMD_PID=$!
+        tail -f "$OUT" 2>/dev/null &
+        TAIL_PID=$!
 
-        # Watchdog: detect and kill stuck `adb shell am force-stop`.
-        # Only kills adb processes whose command line contains "force-stop".
-        # Other adb commands (install, uninstall, shell getprop) are left alone.
+        # Teardown watchdog. On CPU-starved CI emulators (macOS-Intel
+        # SwiftShader) flutter test's teardown hangs and never exits:
+        #   - adb force-stop / uninstall block on Binder IPC
+        #     (flutter#187785; #187876 added adb timeouts on master, not
+        #     yet on stable), and
+        #   - DDS shutdown is fire-and-forget with no timeout so the dart
+        #     development-service lingers (flutter#187984, the issue we
+        #     filed for this exact hang).
+        # Kill the stuck teardown
+        # processes so the run can finish; the result reconciler below
+        # decides pass/fail from the actual test output, not the exit
+        # code the kill leaves behind.
+        # pgrep -f "a|b" doesn't work on macOS — search separately.
+        # adb force-stop / uninstall: kill on sight — these processes only
+        # ever exist during teardown, so matching one always means a hang.
+        kill_match() {
+          for pid in $(pgrep -f "$1" 2>/dev/null); do
+            local cmd; cmd=$(ps -p "$pid" -o args= 2>/dev/null || true)
+            echo "$cmd" | grep -q "$2" || continue
+            echo "=== WATCHDOG: killing stuck $1 (PID $pid) to unblock teardown ==="
+            kill -9 "$pid" 2>/dev/null || true
+          done
+        }
+        # DDS runs for the WHOLE test session, so it must NOT be killed by
+        # name alone — that crashes the live DDS mid-run
+        # (VmServiceDisappearedException). Kill it ONLY in the exact
+        # frozen-teardown signature: a dartvm whose SOLE child is the DDS
+        # process AND it's idle at ~0% CPU. During the run dartvm has
+        # other children (app, adb) and DDS is busy, so this can't fire
+        # mid-test — it's self-gating, no text marker needed.
+        #
+        # Killing DDS can sever the harness tally AFTER tests ran but
+        # before they were counted, so Flutter's "🎉 N passed" line can
+        # undercount (a side effect of the fire-and-forget DDS shutdown,
+        # flutter#187984). The reconciler below works around that by
+        # counting the ✅ marks itself.
+        kill_stuck_dds() {
+          for dvmpid in $(pgrep -f dartvm 2>/dev/null); do
+            local kids; kids=$(pgrep -P "$dvmpid" 2>/dev/null)
+            [ "$(echo "$kids" | grep -c .)" -eq 1 ] || continue
+            ps -p "$kids" -o args= 2>/dev/null | grep -q development-service || continue
+            local cpu; cpu=$(ps -p "$kids" -o %cpu= 2>/dev/null | tr -d ' ')
+            echo "${cpu:-1}" | awk '{ exit ($1 > 0.5) }' || continue
+            echo "=== WATCHDOG: stuck DDS at teardown (PID $kids, cpu=${cpu}%)."
+            echo "    Sole idle dartvm child = dispose() hung on DDS. Killing. ==="
+            kill -9 "$kids" 2>/dev/null || true
+          done
+        }
         (
-          KILLED=false
           while kill -0 $CMD_PID 2>/dev/null; do
             sleep 30
-            # Walk every dartvm's children looking for a stuck force-stop.
-            for dvmpid in $(pgrep -f dartvm 2>/dev/null); do
-              for cpid in $(pgrep -P "$dvmpid" 2>/dev/null); do
-                CNAME=$(ps -p "$cpid" -o comm= 2>/dev/null || true)
-                # Only check adb processes.
-                echo "$CNAME" | grep -q adb || continue
-                [ "$KILLED" = "true" ] && continue
-                # Read the full command line to identify force-stop specifically.
-                CMDLINE=$(ps -p "$cpid" -o args= 2>/dev/null || true)
-                echo "$CMDLINE" | grep -q "force-stop" || continue
-                # Confirmed: this is `adb shell am force-stop`. Kill it.
-                CCPU=$(ps -p "$cpid" -o %cpu= 2>/dev/null | tr -d ' ' || true)
-                echo ""
-                echo "=== WATCHDOG: stuck adb force-stop detected (PID $cpid, child of dartvm $dvmpid, cpu=${CCPU}%) ==="
-                echo "    cmd: $CMDLINE"
-                echo "    Flutter stopApp() has no timeout — killing to unblock teardown."
-                echo "    Only happens on macOS Intel (SwiftShader CPU starvation)."
-                kill -9 "$cpid" 2>/dev/null || true
-                KILLED=true
-                echo "=== WATCHDOG: killed. Flutter test should exit shortly. ==="
-                echo ""
-              done
-            done
+            kill_match force-stop adb
+            kill_match uninstall adb
+            kill_stuck_dds
           done
         ) &
         WATCHDOG_PID=$!
 
-        # Wait for the user's command to finish.
         wait $CMD_PID 2>/dev/null
         EXIT=$?
 
-        # Stop the watchdog.
         kill $WATCHDOG_PID 2>/dev/null || true
         wait $WATCHDOG_PID 2>/dev/null || true
+        # Flush the tail, then stop it.
+        sleep 1
+        kill $TAIL_PID 2>/dev/null || true
+        wait $TAIL_PID 2>/dev/null || true
+
+        # Result reconciler — self-count, don't trust the exit code or the
+        # "🎉 N passed" line. Two teardown artifacts make both unreliable
+        # on CPU-starved runners (flutter#187785 adb, flutter#187984 dds):
+        #   - the watchdog kill -9 leaves a non-zero exit even on a clean
+        #     pass, and
+        #   - killing a hung DDS can sever the harness tally AFTER tests
+        #     ran but before they were counted, so "🎉 N passed" can show
+        #     fewer than really passed.
+        # Instead, count the per-test marks flutter_test prints: every
+        # passing test is a line starting "✅ ", every failing one "❌ ".
+        # Counting is dynamic — it grows with the suite, no hardcoded
+        # totals. The ONE ❌ that isn't a real failure is the spurious
+        # "❌ loading <file> (failed)" from the golden-comparator stream
+        # (a no-op here — the suite has no golden tests); it's excluded.
+        # Any OTHER ❌ is a real failure and stays red, so nothing is
+        # masked.
+        PASS=$(grep -c '^✅ ' "$OUT" || true)
+        REAL_FAILS=$(grep '^❌ ' "$OUT" | grep -v 'loading .* (failed)' || true)
+        FAIL_COUNT=$(printf '%s' "$REAL_FAILS" | grep -c . || true)
+
+        echo ""
+        echo "── WATCHDOG TALLY ──"
+        if [ "$FAIL_COUNT" -eq 0 ] && [ "$PASS" -gt 0 ]; then
+          echo "🎉 $PASS tests passed (counted from ✅ marks)."
+          echo "   The exit code / 'N passed' line is unreliable after a"
+          echo "   teardown DDS kill — trust this count (flutter#187984)."
+          EXIT=0
+        else
+          echo "❌ $FAIL_COUNT real test failure(s) (excludes the spurious"
+          echo "   golden-comparator 'loading … (failed)' line):"
+          printf '%s\n' "$REAL_FAILS"
+          [ "$EXIT" -eq 0 ] && EXIT=1
+        fi
 
         exit $EXIT
         EMUSCRIPT
         chmod +x /tmp/emulator-run.sh
 
-    # ── Linux / macOS — use the action ──
-    - name: Emulator (Linux/macOS)
+    # ── Boot + run ──
+    # -no-snapshot-save: warm-boot from cached snapshot, don't save
+    #   post-test state back. clean slate every run.
+    # -no-snapshot: cold-boot, ignore snapshot entirely (cold-boot input).
+    - name: Boot + run (Linux/macOS)
       if: runner.os != 'Windows'
       uses: reactivecircus/android-emulator-runner@v2
       with:
@@ -126,72 +267,98 @@ runs:
         arch: x86_64
         target: aosp_atd
         force-avd-creation: false
-        emulator-options: -no-snapshot-save -no-window -noaudio -no-boot-anim
+        emulator-options: >-
+          ${{ inputs.cold-boot == 'true' && '-no-snapshot' || '-no-snapshot-save' }}
+          -no-window -noaudio -no-boot-anim
         emulator-boot-timeout: 600
         disable-animations: true
         script: /tmp/emulator-run.sh '${{ inputs.script }}'
 
-    # ── Windows — manual boot (action doesn't support Windows) ──
-    # Git Bash needs Unix paths — cygpath converts C:\Android\... to /c/Android/...
-    - name: Install system image (Windows)
+    # ── Windows: mirrors reactivecircus action 1:1 ──
+    # The action doesn't support Windows, so we replicate its exact
+    # sequence: always install SDK, conditionally create AVD, boot,
+    # disable animations, run script, kill.
+    # Source: ReactiveCircus/android-emulator-runner v2
+    #   sdk-installer.ts → installAndroidSdk() — always runs
+    #   emulator-manager.ts → createAvd() — skips if AVD exists
+    #   emulator-manager.ts → launchEmulator() — boot + poll
+
+    # Step 1: Install SDK (always — matches action's installAndroidSdk)
+    - name: Install SDK (Windows)
       if: runner.os == 'Windows'
       shell: bash
       run: |
         SDK="$(cygpath "$ANDROID_HOME")"
         SDKMGR="$(find "$SDK/cmdline-tools" -name "sdkmanager*" -type f | head -1)"
-        echo "sdkmanager: $SDKMGR"
         yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
-        "$SDKMGR" \
-          "system-images;android-${{ inputs.api-level }};aosp_atd;x86_64" \
+        "$SDKMGR" --install \
+          "build-tools;36.0.0" \
           "platform-tools" \
-          "emulator" > /dev/null
+          "platforms;android-${{ inputs.api-level }}" \
+          "emulator" \
+          "system-images;android-${{ inputs.api-level }};aosp_atd;x86_64" > /dev/null
 
-    - name: Create AVD (Windows)
+    # Step 2: Create AVD + boot + disable animations + run + kill
+    - name: Boot + run (Windows)
       if: runner.os == 'Windows'
       shell: bash
       run: |
         SDK="$(cygpath "$ANDROID_HOME")"
-        AVDMGR="$(find "$SDK/cmdline-tools" -name "avdmanager*" -type f | head -1)"
-        echo no | "$AVDMGR" create avd \
-          --force -n test \
-          --package "system-images;android-${{ inputs.api-level }};aosp_atd;x86_64"
 
-    - name: Boot emulator (Windows)
-      if: runner.os == 'Windows'
-      shell: bash
-      run: |
-        SDK="$(cygpath "$ANDROID_HOME")"
+        # Create AVD if it doesn't exist (matches action's createAvd
+        # with force-avd-creation: false — checks avd directory).
+        AVD_DIR="$HOME/.android/avd/test.avd"
+        if [ ! -d "$AVD_DIR" ]; then
+          AVDMGR="$(find "$SDK/cmdline-tools" -name "avdmanager*" -type f | head -1)"
+          echo no | "$AVDMGR" create avd --force -n test \
+            --package "system-images;android-${{ inputs.api-level }};aosp_atd;x86_64"
+        fi
+
+        ADB="$SDK/platform-tools/adb -s emulator-5554"
+
+        # Boot emulator (matches action's launchEmulator).
+        SNAP_FLAG="${{ inputs.cold-boot == 'true' && '-no-snapshot' || '-no-snapshot-save' }}"
         "$SDK/emulator/emulator" -port 5554 -avd test \
-          -no-snapshot-save -no-window -noaudio -no-boot-anim &
+          $SNAP_FLAG -no-window -noaudio -no-boot-anim &
 
-        echo "Waiting for emulator to boot..."
-        TIMEOUT=600
-        ELAPSED=0
+        # Poll for boot (matches action's adb wait loop).
+        TIMEOUT=600; ELAPSED=0
         while [ $ELAPSED -lt $TIMEOUT ]; do
-          RESULT=$("$SDK/platform-tools/adb" -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null || true)
+          RESULT=$($ADB shell getprop sys.boot_completed 2>/dev/null || true)
           if [ "$RESULT" = "1" ]; then
             echo "Emulator booted in ${ELAPSED}s."
             break
           fi
-          sleep 2
-          ELAPSED=$((ELAPSED + 2))
+          sleep 2; ELAPSED=$((ELAPSED + 2))
         done
+        [ "$RESULT" != "1" ] && echo "::error::Emulator boot timeout" && exit 1
 
-        if [ "$RESULT" != "1" ]; then
-          echo "::error::Emulator failed to boot within ${TIMEOUT}s"
-          exit 1
-        fi
+        # sys.boot_completed flips when the kernel is up, but system
+        # services (input, settings) publish to ServiceManager a moment
+        # later. Sending input/settings commands before then fails with
+        # "Can't find service" and aborts the job (reactivecircus#432).
+        # Wait for each service to actually exist first.
+        wait_for_service() {
+          local svc="$1" tries=0
+          until $ADB shell service check "$svc" 2>/dev/null | grep -q "Service $svc:"; do
+            tries=$((tries + 1))
+            [ "$tries" -gt 60 ] && echo "::warning::service '$svc' never published" && return 0
+            sleep 1
+          done
+        }
 
-        "$SDK/platform-tools/adb" -s emulator-5554 shell input keyevent 82
-        "$SDK/platform-tools/adb" -s emulator-5554 shell settings put global window_animation_scale 0.0
-        "$SDK/platform-tools/adb" -s emulator-5554 shell settings put global transition_animation_scale 0.0
-        "$SDK/platform-tools/adb" -s emulator-5554 shell settings put global animator_duration_scale 0.0
+        # Disable animations (matches action's disableAnimations).
+        wait_for_service input
+        $ADB shell input keyevent 82
+        wait_for_service settings
+        $ADB shell settings put global window_animation_scale 0.0
+        $ADB shell settings put global transition_animation_scale 0.0
+        $ADB shell settings put global animator_duration_scale 0.0
 
-    - name: Run script (Windows)
-      if: runner.os == 'Windows'
-      shell: bash
-      run: ${{ inputs.script }}
+        # Run the user's script.
+        ${{ inputs.script }}
 
+    # ── Cleanup ──
     - name: Kill emulator (Windows)
       if: always() && runner.os == 'Windows'
       shell: bash

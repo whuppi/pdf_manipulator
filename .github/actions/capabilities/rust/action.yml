@@ -37,3 +37,33 @@ runs:
         echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV
         echo "SUBMODULE_PDF_OXIDE=${{ steps.sub.outputs.pdf_oxide }}" >> $GITHUB_ENV
         echo "SUBMODULE_OFFICE_OXIDE=${{ steps.sub.outputs.office_oxide }}" >> $GITHUB_ENV
+
+    # sccache for build hooks (dart-lang/native#3396 workaround).
+    #
+    # hooks_runner strips SCCACHE_* and RUSTC_WRAPPER env vars before
+    # spawning build.dart. Two workarounds keep sccache working:
+    #
+    # 1. Pre-start the server with SCCACHE_IDLE_TIMEOUT=0 while GHA
+    #    env vars exist. The server reads config at startup and persists.
+    #    Default idle timeout (600s) is too short — the 25+ min gap
+    #    (SDK download + emulator boot + Gradle) kills the server.
+    #
+    # 2. Write rustc-wrapper to $CARGO_HOME/config.toml. Cargo reads
+    #    this file automatically. hooks_runner can't strip a file.
+    #    HOME is in the allowlist, so cargo finds ~/.cargo/config.toml.
+    - name: Configure sccache for build hooks
+      shell: bash
+      run: |
+        export SCCACHE_IDLE_TIMEOUT=0
+        sccache --start-server || true
+
+        SCCACHE_BIN="$(which sccache)"
+        # Cargo on Windows needs a drive-letter path, not Git Bash /c/...
+        # Use cygpath -m for forward-slash Windows path (C:/...) which
+        # works in TOML without escaping backslashes.
+        if command -v cygpath &>/dev/null; then
+          SCCACHE_BIN="$(cygpath -m "$SCCACHE_BIN")"
+        fi
+        mkdir -p "$HOME/.cargo"
+        printf '\n[build]\nrustc-wrapper = "%s"\n' "$SCCACHE_BIN" >> "$HOME/.cargo/config.toml"
+        echo "sccache: server started, cargo config written ($SCCACHE_BIN)"

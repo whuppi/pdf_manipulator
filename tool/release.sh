@@ -165,7 +165,7 @@ stamp_version() {
 
 # Generate lib/src/hook/asset_hashes.dart from two sources:
 #   1. GitHub Release API digests (native binaries + WASM build outputs)
-#   2. Local SHA-256 of hand-written web assets (coordinator.js, worker.js)
+#   2. Local SHA-256 of hand-written web assets (lane_worker.js)
 # Returns 0 if the file was written, 1 if there was nothing to stamp.
 stamp_asset_hashes() {
   local tag="$1"

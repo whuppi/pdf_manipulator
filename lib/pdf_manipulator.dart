@@ -44,3 +44,4 @@ export 'src/types/pdf_signature.dart';
 export 'src/types/data_sink.dart';
 export 'src/types/data_source.dart';
 export 'src/types/search_result.dart';
+export 'src/types/pdf_task.dart' show PdfTask;

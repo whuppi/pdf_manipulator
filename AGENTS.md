@@ -28,7 +28,7 @@ Manual edits to this file will be overwritten on the next stamp.
 
 ## What this tool does
 
-**pdf_manipulator** is a cross-platform PDF manipulation package for Dart & Flutter — instance-based API (`final pdf = Pdf()`) with `DataSource` in, `DataSink` out for O(1) memory streaming. Merge, split, compress, encrypt, render, extract text, search, sign, validate, convert, stamp, build from scratch. Powered by vendored forks of pdf_oxide + office_oxide (Rust) at `vendor/`. Worker isolate on native, Web Worker + WASM on web (3 I/O modes: JSPI, Atomics, OPFS) — every operation runs off the main thread. No `dart:io` in the barrel. 5-step asset resolution: cached → download → compile → submodule → error.
+**pdf_manipulator** is a cross-platform PDF manipulation package for Dart & Flutter — instance-based API (`final pdf = Pdf()`) with `DataSource` in, `DataSink` out for O(1) memory streaming. Merge, split, compress, encrypt, render, extract text, search, sign, validate, convert, stamp, build from scratch. Powered by vendored forks of pdf_oxide + office_oxide (Rust) at `vendor/`. Lane architecture: one shared Dart Router routing jobs to isolated lanes — detached Rust threads on native, Web Workers + WASM on web (3 I/O modes: JSPI, Atomics, OPFS) — every operation runs off the main thread, with per-op cancellation and instant dispose. No `dart:io` in the barrel. 5-step asset resolution: cached → download → compile → submodule → error.
 
 This repo is one tool inside the **whuppi** workspace — a multi-tool monorepo. The workspace ships shared engineering standards, code conventions, brand identity, and build patterns that apply across every tool. They're documented in three layers:
 
@@ -49,7 +49,7 @@ Run these after every code change. A failing test or analyzer error means the ta
 git clone --recursive https://github.com/whuppi/pdf_manipulator
 cd pdf_manipulator
 fvm install                     # downloads SDK pinned in .fvmrc
-make check                      # analyze + native + web (3 modes) + example
+make check                      # analyze + test-guards + tests (native + 3 web modes) + example
 
 # Without FVM (override SDK commands)
 make check DART=dart FLUTTER=flutter
@@ -81,7 +81,7 @@ When in doubt, read existing code in this repo and match it. Per-repo style cons
 
 ## Tool-specific notes
 
-**Instance-based API.** `final pdf = Pdf()` — all methods on the instance. `pdf.dispose()` tears down the worker. `pdf.edit(source)` for batch editing, `pdf.build()` for creating from scratch. I/O is `DataSource` (random-access reads) and `DataSink` (sequential writes) — O(1) memory for any file size.
+**Instance-based API.** `final pdf = Pdf()` — all methods on the instance. Every engine method returns a `PdfTask<T>` (a `Future` plus `cancel()`). `pdf.dispose()` kills every lane instantly. `pdf.edit(source)` for batch editing, `pdf.build()` for creating from scratch. I/O is `DataSource` (random-access reads) and `DataSink` (sequential writes) — O(1) memory for any file size.
 
 **5-step build hook.** cached (hash verified) → download from GitHub Releases → compile from vendor source → init submodules + compile → error. SHA-256 hashes in `lib/src/hook/asset_hashes.dart`. Constants in `build.json`.
 
