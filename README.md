@@ -46,7 +46,7 @@ Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extrac
 
 ```yaml
 dependencies:
-  pdf_manipulator:
+  pdf_manipulator: ^2.0.0
 ```
 
 ### Native targets
@@ -64,7 +64,7 @@ flutter pub run pdf_manipulator:setup
 Hard-pin the version to avoid silent upgrades breaking your web build:
 
 ```yaml
-pdf_manipulator: X.Y.Z  # exact version — upgrade intentionally
+pdf_manipulator: 2.0.0  # exact version — upgrade intentionally
 ```
 
 <details>
