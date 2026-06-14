@@ -13,10 +13,13 @@ description: >
   Disable with avd-cache: false. Force cold boot with cold-boot: true.
 
   Teardown watchdog: on SwiftShader emulators (macOS Intel), Flutter's
-  stopApp() and uninstallApp() hang because adb commands can't reach
-  the CPU-starved guest OS. The watchdog kills stuck adb processes so
-  flutter test exits cleanly. Harmless on runners with hardware accel.
-  https://github.com/flutter/flutter/issues/187785
+  teardown hangs because the CPU-starved guest can't be reached. Two
+  sibling causes — adb stopApp()/uninstallApp() blocking on Binder IPC,
+  and DDS shutdown() being fire-and-forget with no timeout. The watchdog
+  kills both so flutter test exits cleanly. Harmless on hardware-accel
+  runners.
+    adb side: https://github.com/flutter/flutter/issues/187785
+    dds side: https://github.com/flutter/flutter/issues/187984
 
 inputs:
   script:
@@ -148,11 +151,13 @@ runs:
 
         # Teardown watchdog. On CPU-starved CI emulators (macOS-Intel
         # SwiftShader) flutter test's teardown hangs and never exits:
-        #   - adb force-stop / uninstall block on Binder IPC, and
-        #   - DDS shutdown is fire-and-forget so the dart development-
-        #     service lingers
-        # both sibling symptoms of flutter#187785 (#187876 added adb
-        # timeouts on master, not yet on stable). Kill the stuck teardown
+        #   - adb force-stop / uninstall block on Binder IPC
+        #     (flutter#187785; #187876 added adb timeouts on master, not
+        #     yet on stable), and
+        #   - DDS shutdown is fire-and-forget with no timeout so the dart
+        #     development-service lingers (flutter#187984, the issue we
+        #     filed for this exact hang).
+        # Kill the stuck teardown
         # processes so the run can finish; the result reconciler below
         # decides pass/fail from the actual test output, not the exit
         # code the kill leaves behind.
@@ -177,8 +182,9 @@ runs:
         #
         # Killing DDS can sever the harness tally AFTER tests ran but
         # before they were counted, so Flutter's "🎉 N passed" line can
-        # undercount. The reconciler below works around that by counting
-        # the ✅ marks itself.
+        # undercount (a side effect of the fire-and-forget DDS shutdown,
+        # flutter#187984). The reconciler below works around that by
+        # counting the ✅ marks itself.
         kill_stuck_dds() {
           for dvmpid in $(pgrep -f dartvm 2>/dev/null); do
             local kids; kids=$(pgrep -P "$dvmpid" 2>/dev/null)
@@ -213,7 +219,7 @@ runs:
 
         # Result reconciler — self-count, don't trust the exit code or the
         # "🎉 N passed" line. Two teardown artifacts make both unreliable
-        # on CPU-starved runners (flutter#187785):
+        # on CPU-starved runners (flutter#187785 adb, flutter#187984 dds):
         #   - the watchdog kill -9 leaves a non-zero exit even on a clean
         #     pass, and
         #   - killing a hung DDS can sever the harness tally AFTER tests
@@ -236,7 +242,7 @@ runs:
         if [ "$FAIL_COUNT" -eq 0 ] && [ "$PASS" -gt 0 ]; then
           echo "🎉 $PASS tests passed (counted from ✅ marks)."
           echo "   The exit code / 'N passed' line is unreliable after a"
-          echo "   teardown DDS kill — trust this count (flutter#187785)."
+          echo "   teardown DDS kill — trust this count (flutter#187984)."
           EXIT=0
         else
           echo "❌ $FAIL_COUNT real test failure(s) (excludes the spurious"
