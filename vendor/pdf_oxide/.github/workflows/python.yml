@@ -1,0 +1,416 @@
+name: Python Bindings CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  release:
+    types: [ published ]
+
+# Cancel any in-progress run on the same branch when a new one starts.
+# Don't cancel release runs — they must always complete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'release' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Test job - builds extension and runs tests
+  test:
+    name: Test Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13', '3.14']
+
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Free disk space (Ubuntu)
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/free-disk-space
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+
+      - name: Cache Cargo registry
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache Cargo index
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache Cargo build
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: Create virtual environment with uv
+        run: uv venv
+
+      - name: Install maturin
+        run: uv pip install maturin pytest
+
+      - name: Build Python wheel
+        run: uv run maturin build --release --features python,ocr,barcodes --out dist
+        env:
+          CARGO_INCREMENTAL: "0"
+
+      - name: Install built wheel
+        shell: bash
+        run: |
+          wheel=$(ls dist/*.whl)
+          uv run pip install "$wheel"
+
+      - name: Generate stubs and verify symbol parity
+        # Regenerate .pyi stub (using rylai.toml features, i.e. --features python)
+        # then confirm every stub symbol exists in the installed wheel (issue #464).
+        # Uses the test wheel (python,ocr,barcodes) which is a superset of the
+        # release wheel; any stub symbol absent here is certainly absent at release.
+        run: |
+          uvx rylai -o python/pdf_oxide/
+          uv run python scripts/check_stub_parity.py python/pdf_oxide/pdf_oxide.pyi
+
+      - name: Run Rust tests with Python feature
+        # Skip on macOS due to extension-module linking restrictions.
+        # Skip on Linux: main CI runs full cargo test on Linux; running it
+        # here too exhausts the ~14 GB runner disk after the maturin release
+        # build (release + debug build artifacts exceed available space).
+        # CARGO_BUILD_JOBS=2 caps concurrent link-worker spawns so the
+        # parallel-link burst stays under the hosted-runner 7 GB RAM
+        # ceiling — fixes the rust-lld SIGBUS flake tracked in #399.
+        if: runner.os == 'Windows'
+        env:
+          CARGO_BUILD_JOBS: "2"
+          CARGO_INCREMENTAL: "0"
+        run: cargo test --lib --tests --features python
+
+      - name: Run Python tests
+        run: uv run pytest tests/test_python.py -v
+
+  # Lint job - check code quality
+  lint:
+    name: Lint and Format Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Run Clippy with Python feature
+        run: cargo clippy --features python --all-targets --workspace -- -D warnings
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: Pin Python version
+        run: uv python pin 3.11
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Generate .pyi from Rust
+        # rylai's default emits PEP-585 / PEP-604 syntax with
+        # `from __future__ import annotations` at the top; runtime
+        # support for Python 3.8/3.9 is unaffected because .pyi is a
+        # type-checker artifact, not a runtime module. Issue #462.
+        run: uvx rylai -o python/pdf_oxide/
+
+      # ruff runs without --fix in CI (CI verifies; developers auto-fix locally).
+      - name: Ruff lint
+        run: uv run ruff check . --output-format=github
+
+      - name: Ruff format --check
+        run: uv run ruff format --check .
+
+      # Project's existing type checker
+      - name: Run ty check
+        run: uv run ty check .
+
+      # basedpyright — stricter fork of pyright that catches issues ty misses.
+      # Hard gate now that #44 is closed (0 errors, 0 warnings on a clean tree).
+      - name: basedpyright (type check)
+        run: |
+          uv pip install basedpyright
+          uv run basedpyright python/pdf_oxide
+
+      # pip-audit the dependency graph (uv-locked), excluding the
+      # current project itself — pdf-oxide is not on PyPI until the
+      # release job publishes it, so `--strict` on the live venv would
+      # flag our own package as "not found". Export deps-only and audit
+      # from requirements. `--no-deps` is required because uv-exported
+      # requirements are not hashed; the export already contains the
+      # full resolved dependency set.
+      - name: pip-audit (project deps)
+        run: |
+          uv export --no-emit-project --format requirements-txt --no-hashes > /tmp/pip-audit-requirements.txt
+          uv pip install pip-audit
+          uv run pip-audit --strict --disable-pip --no-deps -r /tmp/pip-audit-requirements.txt
+
+  # Build Linux wheels (manylinux + musllinux, x86_64 + aarch64)
+  # Uses PyO3/maturin-action, which handles cross-compilation via Docker + zig.
+  # Lowered glibc floor to 2_28 (RHEL 8 / Ubuntu 20.04 / Debian 11 / Amazon Linux 2023)
+  # from the previous 2_34 (Ubuntu 22.04+) for broader CI/base-image coverage. See #284.
+  build-wheels-linux:
+    name: Build wheels (linux ${{ matrix.target }} ${{ matrix.manylinux }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64
+            manylinux: manylinux_2_28
+          - target: aarch64
+            manylinux: manylinux_2_28
+          - target: x86_64
+            manylinux: musllinux_1_2
+          - target: aarch64
+            manylinux: musllinux_1_2
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.11'
+      - name: Build wheels
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --release --features python,ocr,barcodes --out dist
+      - name: Upload wheels as artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-linux-${{ matrix.target }}-${{ matrix.manylinux }}
+          path: dist/*.whl
+
+  # Build macOS wheels (x86_64 + arm64)
+  build-wheels-macos:
+    name: Build wheels (macos ${{ matrix.target }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.11'
+      - name: Build wheels
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          target: ${{ matrix.target }}
+          args: --release --features python,ocr,barcodes --out dist
+      - name: Upload wheels as artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-macos-${{ matrix.target }}
+          path: dist/*.whl
+
+  # Build Windows wheels (x64 + arm64)
+  build-wheels-windows:
+    name: Build wheels (windows ${{ matrix.target }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x64, aarch64]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.11'
+          architecture: x64
+      - name: Build wheels
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          target: ${{ matrix.target }}
+          args: --release --features python,ocr,barcodes --out dist
+      - name: Upload wheels as artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-windows-${{ matrix.target }}
+          path: dist/*.whl
+
+  # Build source distribution (universal fallback for any Rust-capable platform)
+  build-sdist:
+    name: Build source distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Build sdist
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          command: sdist
+          args: --out dist
+      - name: Upload sdist as artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  # Docker smoke tests — install the manylinux / musllinux wheel inside the
+  # actual target distro containers so we catch libc symbol issues (e.g.
+  # __memcmpeq@GLIBC_2.35 on Amazon Linux 2023) before publishing.
+  # Runs only when Linux wheels are available (push/PR to main/develop + release).
+  docker-smoke-test:
+    name: Docker smoke (${{ matrix.distro }})
+    runs-on: ubuntu-latest
+    needs: [build-wheels-linux]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: amazonlinux-2023
+            image: amazonlinux:2023
+            artifact: wheels-linux-x86_64-manylinux_2_28
+          # ubuntu-20.04 (focal) dropped 2026-05-05: standard LTS support
+          # ended 2025-04-30 and Canonical's archive.ubuntu.com /
+          # security.ubuntu.com mirrors for focal stopped serving (port 80
+          # connection timeouts), while old-releases.ubuntu.com hasn't
+          # received focal yet (ESM at esm.ubuntu.com is paywalled).
+          # `apt-get update` fails before pip even runs. debian-11 below
+          # covers the same glibc 2.31 floor.
+          - distro: debian-11
+            image: debian:11-slim
+            artifact: wheels-linux-x86_64-manylinux_2_28
+          - distro: alpine-3
+            image: alpine:3.19
+            artifact: wheels-linux-x86_64-musllinux_1_2
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Download wheel
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/
+
+      - name: Smoke test in ${{ matrix.distro }}
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/dist:/wheels:ro" \
+            -v "${{ github.workspace }}/tests/fixtures:/fixtures:ro" \
+            -v "${{ github.workspace }}/tests/smoke_docker.py:/smoke_docker.py:ro" \
+            "${{ matrix.image }}" \
+            sh -c '
+              set -e
+              OS_ID=$(. /etc/os-release 2>/dev/null && echo "$ID" || echo unknown)
+              case "$OS_ID" in
+                amzn)
+                  dnf install -y python3-pip > /dev/null 2>&1
+                  ;;
+                ubuntu|debian)
+                  apt-get -o Acquire::Retries=3 update -qq
+                  DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -qq -y python3-pip python3-venv > /dev/null 2>&1
+                  ;;
+                alpine)
+                  apk add --no-cache python3 py3-pip > /dev/null 2>&1
+                  ;;
+              esac
+              python3 -m venv /venv
+              . /venv/bin/activate
+              pip install --quiet --upgrade pip
+              pip install --quiet /wheels/*.whl
+              python3 /smoke_docker.py
+            '
+
+  publish:
+    name: Publish to PyPI
+    needs: [test, lint, build-wheels-linux, build-wheels-macos, build-wheels-windows, build-sdist, docker-smoke-test]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' && github.event.action == 'published'
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sdist
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
+
+  # Generate documentation
+  docs:
+    name: Generate Python documentation
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.11'
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+
+      - name: Install dependencies
+        run: |
+          pip install maturin pdoc3
+
+      - name: Build and install wheel
+        shell: bash
+        run: |
+          maturin build --release --features python --out dist
+          wheel=$(ls dist/*.whl)
+          pip install "$wheel"
+
+      - name: Generate docs
+        run: pdoc --html --output-dir docs-python pdf_oxide
+
+      - name: Upload docs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-docs
+          path: docs-python/
