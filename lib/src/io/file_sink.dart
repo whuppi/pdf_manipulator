@@ -28,6 +28,7 @@ final class FileSink implements DataSink {
   FileSink._(this._raf);
 
   final RandomAccessFile _raf;
+  bool _closed = false;
 
   /// Opens [file] for writing, truncating any existing content. Pair every
   /// `create` with a [close].
@@ -39,9 +40,12 @@ final class FileSink implements DataSink {
   @override
   Future<void> write(Uint8List chunk) => _raf.writeFrom(chunk);
 
-  /// Flushes pending writes and releases the file handle. Idempotent only
-  /// once — call exactly once when the operation completes.
+  /// Flushes pending writes and releases the file handle. Idempotent: safe
+  /// to call more than once (e.g. from a `finally` plus an error path); the
+  /// second and later calls are no-ops.
   Future<void> close() async {
+    if (_closed) return;
+    _closed = true;
     await _raf.flush();
     await _raf.close();
   }

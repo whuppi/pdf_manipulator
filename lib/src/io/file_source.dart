@@ -31,6 +31,10 @@ final class FileSource implements DataSource {
 
   @override
   Future<Uint8List> readAt(int offset, int count) async {
+    // A fresh handle per read, on purpose: DataSource has no dispose hook
+    // to close a long-lived handle, and reads can run concurrently across
+    // lanes — one shared RandomAccessFile would race on its position or
+    // leak. The OS page cache keeps the repeat opens cheap.
     final raf = await _file.open();
     try {
       await raf.setPosition(offset);

@@ -26,6 +26,11 @@ final class MemorySource implements DataSource {
   int get length => _bytes.length;
 
   @override
-  Uint8List readAt(int offset, int count) =>
-      Uint8List.sublistView(_bytes, offset, (offset + count).clamp(0, _bytes.length));
+  Uint8List readAt(int offset, int count) {
+    // Clamp both ends so an over-read returns the available bytes (empty
+    // past EOF) instead of throwing — same graceful behavior as FileSource.
+    final start = offset.clamp(0, _bytes.length);
+    final end = (offset + count).clamp(start, _bytes.length);
+    return Uint8List.sublistView(_bytes, start, end);
+  }
 }
