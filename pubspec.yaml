@@ -1,5 +1,5 @@
 name: pdf_manipulator
-version: 0.0.0
+version: 2.0.1
 description: >-
   Cross-platform PDF toolkit for Flutter. Merge, split, render, extract,
   search, sign, encrypt, convert, build from scratch. Rust engine, off
@@ -52,6 +52,7 @@ dependencies:
 # comments quoting the PEM markers `sign` expects. test/ never ships
 # (.pubignore), so its fixture certs need no entry.
 false_secrets:
+  - /vendor/**
   - /example/lib/main.dart
   - /web_assets/pdf_oxide.js
 
