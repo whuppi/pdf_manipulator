@@ -37,7 +37,7 @@ samples. Force a specific web I/O mode with
 
 ## What's inside
 
-Seven tabs, one per API surface:
+Seven tabs, one per area of the API:
 
 | Tab | API | What it covers |
 |---|---|---|

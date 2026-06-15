@@ -30,7 +30,7 @@ For web development:
 
 ```bash
 make build-wasm              # compile Rust → WASM
-make check                   # the full local gate (see below)
+make check                   # the full local gate (see Before submitting a PR)
 ```
 
 ---

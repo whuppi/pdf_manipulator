@@ -1,11 +1,11 @@
 # pdf_manipulator — Architecture
 
 How the package is wired. Four layers, two platforms, one binary
-format end to end, O(1)-memory streaming I/O everywhere.
+format end to end, streaming bounded-buffer I/O everywhere.
 
 ---
 
-## 1. The contract
+## The contract
 
 Eight load-bearing guarantees. Every architectural decision serves one.
 
@@ -25,10 +25,11 @@ Eight load-bearing guarantees. Every architectural decision serves one.
    via readAt callbacks. Sinks receive chunks. No full-file reads
    anywhere on the Dart side.
 
-5. **O(1) memory.** All ops stream through fixed-size buffers
-   (64KB read, 256KB write). A 7GB file uses the same memory as a
-   7KB file. Every op. Both platforms. Enforced mechanically — test
-   guards throw on any `readAt > 64KB` or `write > 256KB`.
+5. **Bounded-buffer I/O.** Every op streams its input and output through
+   fixed-size buffers (64KB read, 256KB write); the transport never scales
+   with file size, on either platform. Test guards throw on any over-budget
+   `readAt` / `write`, proving the *transport* is O(1). (Full peak-memory
+   verification of Rust-internal processing is roadmapped, not yet automated.)
 
 6. **Upstream untouched.** `ffi.rs` and `wasm.rs` — upstream's own
    binding surfaces — are never called and never modified. Upstream
@@ -40,80 +41,47 @@ Eight load-bearing guarantees. Every architectural decision serves one.
    blocks. Dispose kills lanes instantly: no joins, no awaits, no
    timeouts.
 
-8. **Patches are marked.** Every modification to upstream files
-   carries a `── pdf_manipulator patch ──` boundary comment.
+8. **Patches are marked.** Every change to a vendored upstream file is
+   wrapped in a boundary comment (`── pdf_manipulator patch ──` in
+   pdf_oxide, `── office_kit patch ──` in office_oxide), so upstream
+   merges stay clean.
 
 ---
 
-## 2. The four layers
+## The four layers
 
-**Layer 1 — Consumer API (Dart)**
+Each layer has one job and never imports from a layer above it. This is the
+responsibility each layer holds; the full file list is in **Source tree**, below.
 
-    pdf.dart            — lifecycle, handle creation, ensureInit
-    pdf_doc.dart        — read-only queries (PdfDoc handle)
-    pdf_editor.dart     — mutations only (PdfEditor handle)
-    pdf_builder.dart    — create from scratch (PdfBuilder)
-    pdf_standalone.dart — source in, sink out, no handle
-    pdf_sugar.dart      — one-shot convenience wrappers
+**Layer 1 — Consumer API** (`lib/src/ops/`) — the public surface: `Pdf`
+(lifecycle) plus the `PdfDoc` / `PdfEditor` / `PdfBuilder` handles, and the
+standalone and sugar one-shots. Platform-blind; talks only to the abstract
+`PdfBridge`.
 
-    Platform-blind. Calls PdfBridge (abstract).
-            |
-            v
-**Layer 2 — Bridge (Dart, lib/src/bridge/)**
+↓
 
-    shared_bridge.dart  — ONE bridge class, both platforms
-    pdf_transport.dart  — PdfTransport interface
-    protocol/
-      binary_codec.dart — encode request, decode response
-      codec.dart        — decode Map -> typed Dart objects
-      op.dart           — EngineOp enum (the wire names)
+**Layer 2 — Bridge** (`lib/src/bridge/`) — one `SharedBridge` for both
+platforms. Encodes each op to binary, sends it through the transport, decodes
+the binary response back to typed Dart. Platform-blind.
 
-    Platform-blind. Encodes args to binary, sends via
-    transport, decodes binary response.
-            |
-            v
-**Layer 3 — Runtime (Dart: ONE shared brain, two dumb adapters)**
+↓
 
-    Shared (every decision lives here, exactly once):
-      router.dart        — pinning, placement, job identity, dispose
-      lane.dart          — Lane/LaneHost/LaneJob contracts
-      wire_peek.dart     — minimal wire reads (op, handleId)
+**Layer 3 — Runtime** (`lib/src/runtime/`) — one shared brain (`router.dart`:
+pinning, placement, dispose) plus two dumb adapters (native over FFI, web over
+`postMessage`). The adapters move bytes and serve `readAt` / chunk callbacks on
+the main isolate — zero routing decisions, zero PDF knowledge.
 
-    Native adapter (dumb — four verbs over FFI):
-      native_lane.dart      — lane spawn/submit/cancel/kill
-      channel_buffers.dart  — condvar shared-memory layout
-      lane_bindings.dart    — dart:ffi @Native bindings
+↓
 
-    Web adapter (dumb — four verbs over postMessage):
-      web_lane.dart         — the lane: job lifecycle, 3 I/O modes
-      web_lane_host.dart    — worker boot handshake, budget, pool
-      lane_protocol.dart    — every code lane_worker.js must agree on
-
-    Both: move binary bytes. Serve readAt/chunk callbacks on the
-    main isolate. Zero PDF knowledge, zero routing decisions.
-            |
-            v
-**Layer 4 — Rust**
-
-    OUR CODE (src/host/ — entirely ours, not upstream):
-      bridge_api.rs       — single entry, cfg-gated FFI + WASM
-      binary_codec.rs     — parse request, encode response
-      dispatch.rs         — every op as a typed function
-      lane_state.rs       — per-lane engine state (no locks)
-      positioned_write.rs — Write + position tracking
-      sign.rs             — O(1)-memory PDF signing
-      image_optimizer.rs  — JPEG recompress
-      font_optimizer.rs   — Standard 14 font unembedding
-      constants.rs        — buffer sizes (64KB / 256KB)
-      native/             — lanes, cancel tokens, condvar I/O
-      wasm/               — JsCallbackReader/Writer
-
-    UPSTREAM PATCHES (8 files, see §9)
-    UPSTREAM (untouched): ffi.rs, wasm.rs, engine modules
+**Layer 4 — Rust** (`vendor/pdf_oxide/src/host/`, entirely ours) — one entry
+point (`bridge_api.rs`, cfg-gated for native `extern "C"` and WASM
+`#[wasm_bindgen]`) over a binary parser and one typed dispatch function
+per op. Upstream's own `ffi.rs` / `wasm.rs` are never called or modified
+(see **Upstream patches**).
 
 ---
 
-## 3. Data flow
+## Data flow
 
 ### Simple op (one source, no output)
 
@@ -156,7 +124,7 @@ response bytes
 
 ---
 
-## 4. Source tree
+## Source tree
 
 ```
 lib/
@@ -273,143 +241,20 @@ vendor/pdf_oxide/src/
 │   │   ├── lane_table.rs                   ← global lane table, budget, FFI surface
 │   │   ├── cancel.rs                       ← CancelToken (lane + job flags)
 │   │   ├── callback_reader.rs, callback_writer.rs
-│   │   ├── shared_buffer.rs
+│   │   └── shared_buffer.rs
 │   └── wasm/                               ← JS callback reader/writer
 │       ├── js_reader.rs                    ← Read+Seek via host_read_at
 │       └── js_writer.rs                    ← Write via host_write_chunk
 │
 ├── compliance/fonts/                       ← 12 Liberation TTF files (SIL OFL)
-├── ffi.rs                                  ← UPSTREAM (12,147 lines, untouched)
-├── wasm.rs                                 ← UPSTREAM (7,210 lines, untouched)
+├── ffi.rs                                  ← UPSTREAM (untouched)
+├── wasm.rs                                 ← UPSTREAM (untouched)
 └── (engine: document.rs, editor/, renderer/, search/, signatures/, ...)
 ```
 
 ---
 
-## 5. CI/CD architecture
-
-### Vocabulary
-
-| Term | Meaning | Example |
-|---|---|---|
-| **target** | What you build for | android, ios, macos, linux, windows, web |
-| **runner** | CI machine that runs the job | ubuntu-latest, macos-14, windows-latest |
-| **host** | Machine doing the building (CI or dev) | `Platform.isMacOS`, `uname` |
-| **capability** | One installable concern | fvm, rust, java, chrome, headless-display |
-| **build** | Compile for dev iteration | `make build-native` |
-| **compile** | Produce release binaries for upload | `make compile-macos` |
-| **verify** | Prove release build works (output thrown away) | `make verify-android` |
-| **test** | Run test suites | `make test-unit` |
-| **release** | Publish a version (tag, upload, pub.dev) | `release.sh --discover` |
-
-"Platform" is not used internally. "Cross-platform" is kept in
-user-facing text (README, pubspec).
-
-### Principles
-
-1. **Makefile is the interface.** CI runs `make <target>`. All build
-   logic lives in Makefile and scripts. CI YAML has zero build logic.
-
-2. **Scripts handle their own deps.** Rust targets, wasm-bindgen,
-   binaryen, cross-compilers — auto-installed by the script that
-   needs them. `$CI` env var: auto-install on CI, error with
-   instructions on dev. `rustup target add` and `cargo install` are
-   always safe (user-space). System packages auto-install only on CI.
-
-3. **Dart is never called from bash.** Bash reads `build.json` with
-   pure `sed`/`grep`. No python3, no jq, no dart.
-
-4. **Capabilities, not layers.** Each CI concern is one action under
-   `capabilities/`. No runner layer, no target layer — just
-   independent capabilities. Each handles all runners internally
-   via `runner.os` guards. `runner.os` guards exist ONLY inside
-   capability actions — nowhere else.
-
-5. **One orchestrator.** `make-target` provisions capabilities then
-   runs `make`. Zero logic — flat list of conditional capability
-   calls. Workflows call `make-target`, never capabilities directly.
-
-6. **Runners are configurable.** Every workflow defines its runner
-   as a `workflow_dispatch` input with a default. No hardcoded
-   `runs-on` except the 2-second `inputs` job. Infra jobs (gate,
-   triage, lint) use one configurable runner. Test/compile jobs use
-   per-row matrix runners.
-
-7. **Matrix row is the manifest.** Each row declares which
-   capabilities to activate and which runner to use. Adding a new
-   combo = one line. Adding a new capability = one action + one
-   input on `make-target` + add to rows that need it.
-
-### Actions
-
-```
-.github/actions/
-├── capabilities/          13 independent leaves
-│   ├── fvm/               Flutter SDK (all runners)
-│   ├── rust/              Rust toolchain + sccache (all runners)
-│   ├── java/              JDK (all runners)
-│   ├── chrome/            Chrome + ChromeDriver (Linux/macOS/Windows)
-│   ├── headless-display/  xvfb on Linux, no-op elsewhere
-│   ├── hw-accel/          KVM on Linux, no-op elsewhere
-│   ├── gradle-cache/      Two-phase restore/save + daemon stop
-│   ├── xcode-cache/       Xcode derived data cache
-│   ├── pods-cache/        CocoaPods cache
-│   ├── wasm-cache/        WASM build output cache
-│   ├── wasm-build/        Compile WASM from source
-│   ├── android-emulator/  x86_64 + aosp_atd (not macOS ARM — no nested virt)
-│   └── ios-simulator/     macOS only
-├── make-target/           Orchestrator (capabilities → make)
-└── debug-ssh/             SSH tunnel for CI debugging
-```
-
-Each capability:
-- Is one concern, one action, one file.
-- Handles all valid runners internally (`runner.os` guards).
-- Documents runner behavior in its description (what it does on
-  each runner, including no-ops).
-- Never calls another capability. Independent leaves.
-
-### Workflows
-
-| Workflow | Trigger | Runner model |
-|---|---|---|
-| `ci.yml` | PR to prod/dev | All jobs on one input runner (default: ubuntu) |
-| `full-test.yml` | `ready-to-test` label or dispatch | Single matrix — core + portability [P] rows |
-| `create-release.yml` | Changelog push or dispatch | Infra on input runner, compile on matrix |
-| `pr-lint.yml` | PR to prod/dev | All jobs on one input runner |
-| `triage.yml` | Issues/PRs | All jobs on env runner |
-| `upgrade-check.yml` | Daily or dispatch | All jobs on input runner |
-| `debug-ssh.yml` | Dispatch only | Direct input runner |
-
-### Test matrix (full-test.yml)
-
-Single matrix with two tiers in one sorted list:
-
-- **Core rows** — one runner per target, proves the code works.
-- **Portability rows `[P]`** — extra runners, proves any dev
-  machine can build with this package. Controlled by
-  `DEFAULT_PORTABILITY` env var. Skipped when toggle is off.
-
-| Category | Core | Portability [P] |
-|---|---|---|
-| Package | macOS, Linux, Windows, Web | Web on macos + win |
-| Integration | macOS, Linux, Windows, Android, iOS, Web | Android on macos-intel ⚠ + win, Web on macos + win |
-| Verify | Android, iOS, macOS, Linux, Windows, Web | Android on macos + win, Web on macos + win |
-
-### Dependency ownership
-
-| Dep | Owner | CI behavior | Dev behavior |
-|---|---|---|---|
-| Rust targets | `compile_rust.sh`, `hook/build.dart` | Auto-install (safe) | Auto-install (safe) |
-| wasm-bindgen-cli | `compile_rust.sh` | Auto-install (safe) | Auto-install (safe) |
-| binaryen | `compile_rust.sh` | GitHub releases download | Error with instructions |
-| gcc-aarch64 cross | `compile_rust.sh` | Auto-install | Error with instructions |
-| GTK + ninja | Makefile | Auto-install | Error with instructions |
-| build.json reads | `compile_rust.sh`, `release.sh` | Pure bash `sed`/`grep` | Same |
-
----
-
-## 6. The binary wire format
+## The binary wire format
 
 Same layout in both directions. Op args only — PDF bytes travel
 through the transport's I/O channels, never through the codec.
@@ -419,6 +264,7 @@ Request:  [op_len: u8] [op: UTF-8] [field_count: u16 LE] [fields...]
 Response: [status: u8]  [field_count: u16 LE] [fields...]
             status 0 → [msg_len: u32 LE] [msg: UTF-8]  (error)
             status 1 → fields                           (ok)
+            status 2 → (no payload)                     (cancelled)
 
 Field:    [key_len: u8] [key: UTF-8] [type: u8] [value]
 
@@ -432,13 +278,17 @@ enum IS the protocol.
 
 ---
 
-## 7. Streaming I/O
+## Streaming I/O
 
 ### The rule
 
-O(1) memory on every path. No full-file buffers on native or web.
-Memory bounded by buffer size (64KB read, 256KB write), never by
-file size. Test guards enforce this mechanically — see §8.
+The transport is O(1) on every path: input and output move through
+fixed-size buffers (64KB read, 256KB write), never a full-file buffer
+on the Dart side. Test guards enforce the chunk limits mechanically
+(see **Test architecture**). Full Rust-internal peak-memory
+verification — catching any intermediate accumulation during
+processing — is designed and tracked in the capability roadmap, not
+yet automated.
 
 ### Transport contract
 
@@ -545,8 +395,8 @@ offsets to load objects. A forward-only pipe (one-shot socket,
 stdin, HTTP without Range headers) cannot be a `DataSource`. Buffer
 the full content first, or use a random-access backing store.
 
-"O(1) memory" means the engine never buffers the full file — only
-the backing store holds it. Each `readAt` returns at most 64KB.
+So only the backing store ever holds the whole file — the engine itself
+pulls at most 64KB per `readAt`.
 
 ### OPFS mode: O(N) disk + latency
 
@@ -587,7 +437,7 @@ prompting for COOP/COEP headers.
 
 ---
 
-## 8. Instance architecture — lanes
+## Instance architecture — lanes
 
 ```
 Pdf()       = isolated instance: a Router + its lanes
@@ -675,8 +525,9 @@ FATAL abort on Windows). The order:
 OPFS `SyncAccessHandle` in one stroke. The lane completes its pending
 submits as cancelled on the Dart side; the host reclaims the dead
 worker's OPFS directory once its liveness lock confirms the agent is
-gone (see §7, OPFS mode). A killed-before-use worker is returned to
-the pristine pool instead of terminated (see budget below).
+gone (see **OPFS mode**, under Streaming I/O). A killed-before-use
+worker is returned to the pristine pool instead of terminated (see
+budget below).
 
 ### Parallel ops + the budgets
 
@@ -733,7 +584,130 @@ silently; real failures on unlistened tasks are re-raised loudly.
 
 ---
 
-## 9. Test architecture
+## CI/CD architecture
+
+### Vocabulary
+
+| Term | Meaning | Example |
+|---|---|---|
+| **target** | What you build for | android, ios, macos, linux, windows, web |
+| **runner** | CI machine that runs the job | ubuntu-latest, macos-14, windows-latest |
+| **host** | Machine doing the building (CI or dev) | `Platform.isMacOS`, `uname` |
+| **capability** | One installable concern | fvm, rust, java, chrome, headless-display |
+| **build** | Compile for dev iteration | `make build-native` |
+| **compile** | Produce release binaries for upload | `make compile-macos` |
+| **verify** | Prove release build works (output thrown away) | `make verify-android` |
+| **test** | Run test suites | `make test-unit` |
+| **release** | Publish a version (tag, upload, pub.dev) | `release.sh --discover` |
+
+"Platform" is not used internally. "Cross-platform" is kept in
+user-facing text (README, pubspec).
+
+### Principles
+
+1. **Makefile is the interface.** CI runs `make <target>`. All build
+   logic lives in Makefile and scripts. CI YAML has zero build logic.
+
+2. **Scripts handle their own deps.** Rust targets, wasm-bindgen,
+   binaryen, cross-compilers — auto-installed by the script that
+   needs them. `$CI` env var: auto-install on CI, error with
+   instructions on dev. `rustup target add` and `cargo install` are
+   always safe (user-space). System packages auto-install only on CI.
+
+3. **Dart is never called from bash.** Bash reads `build.json` with
+   pure `sed`/`grep`. No python3, no jq, no dart.
+
+4. **Capabilities, not layers.** Each CI concern is one action under
+   `capabilities/`. No runner layer, no target layer — just
+   independent capabilities. Each handles all runners internally
+   via `runner.os` guards. `runner.os` guards exist ONLY inside
+   capability actions — nowhere else.
+
+5. **One orchestrator.** `make-target` provisions capabilities then
+   runs `make`. Zero logic — flat list of conditional capability
+   calls. Workflows call `make-target`, never capabilities directly.
+
+6. **Runners are configurable.** Every workflow defines its runner
+   as a `workflow_dispatch` input with a default. No hardcoded
+   `runs-on` except the 2-second `inputs` job. Infra jobs (gate,
+   triage, lint) use one configurable runner. Test/compile jobs use
+   per-row matrix runners.
+
+7. **Matrix row is the manifest.** Each row declares which
+   capabilities to activate and which runner to use. Adding a new
+   combo = one line. Adding a new capability = one action + one
+   input on `make-target` + add to rows that need it.
+
+### Actions
+
+```
+.github/actions/
+├── capabilities/          13 independent leaves
+│   ├── fvm/               Flutter SDK (all runners)
+│   ├── rust/              Rust toolchain + sccache (all runners)
+│   ├── java/              JDK (all runners)
+│   ├── chrome/            Chrome + ChromeDriver (Linux/macOS/Windows)
+│   ├── headless-display/  xvfb on Linux, no-op elsewhere
+│   ├── hw-accel/          KVM on Linux, no-op elsewhere
+│   ├── gradle-cache/      Two-phase restore/save + daemon stop
+│   ├── xcode-cache/       Xcode derived data cache
+│   ├── pods-cache/        CocoaPods cache
+│   ├── wasm-cache/        WASM build output cache
+│   ├── wasm-build/        Compile WASM from source
+│   ├── android-emulator/  x86_64 + aosp_atd (not macOS ARM — no nested virt)
+│   └── ios-simulator/     macOS only
+├── make-target/           Orchestrator (capabilities → make)
+└── debug-ssh/             SSH tunnel for CI debugging
+```
+
+Each capability:
+- Is one concern, one action, one file.
+- Handles all valid runners internally (`runner.os` guards).
+- Documents runner behavior in its description (what it does on
+  each runner, including no-ops).
+- Never calls another capability. Independent leaves.
+
+### Workflows
+
+| Workflow | Trigger | Runner model |
+|---|---|---|
+| `ci.yml` | PR to prod/dev | All jobs on one input runner (default: ubuntu) |
+| `full-test.yml` | `ready-to-test` label or dispatch | Single matrix — core + portability [P] rows |
+| `create-release.yml` | Changelog push or dispatch | Infra on input runner, compile on matrix |
+| `pr-lint.yml` | PR to prod/dev | All jobs on one input runner |
+| `triage.yml` | Issues/PRs | All jobs on env runner |
+| `upgrade-check.yml` | Daily or dispatch | All jobs on input runner |
+| `debug-ssh.yml` | Dispatch only | Direct input runner |
+
+### Test matrix (full-test.yml)
+
+Single matrix with two tiers in one sorted list:
+
+- **Core rows** — one runner per target, proves the code works.
+- **Portability rows `[P]`** — extra runners, proves any dev
+  machine can build with this package. Controlled by
+  `DEFAULT_PORTABILITY` env var. Skipped when toggle is off.
+
+| Category | Core | Portability [P] |
+|---|---|---|
+| Package | macOS, Linux, Windows, Web | Web on macos + win |
+| Integration | macOS, Linux, Windows, Android, iOS, Web | Android on macos-intel + win, Web on macos + win |
+| Verify | Android, iOS, macOS, Linux, Web | Android on macos + win, Web on macos + win |
+
+### Dependency ownership
+
+| Dep | Owner | CI behavior | Dev behavior |
+|---|---|---|---|
+| Rust targets | `compile_rust.sh`, `hook/build.dart` | Auto-install (safe) | Auto-install (safe) |
+| wasm-bindgen-cli | `compile_rust.sh` | Auto-install (safe) | Auto-install (safe) |
+| binaryen | `compile_rust.sh` | GitHub releases download | Error with instructions |
+| gcc-aarch64 cross | `compile_rust.sh` | Auto-install | Error with instructions |
+| GTK + ninja | Makefile | Auto-install | Error with instructions |
+| build.json reads | `compile_rust.sh`, `release.sh` | Pure bash `sed`/`grep` | Same |
+
+---
+
+## Test architecture
 
 ### The test invariants
 
@@ -830,8 +804,10 @@ test/
 
 ### The parity guards
 
-Three tests parse the OTHER side's source from disk — zero hardcoded
-allowlists — so no cross-language contract can drift silently:
+Four guards stop a cross-boundary contract from drifting silently. The
+first three parse the OTHER side's source from disk — zero hardcoded
+allowlists, so neither language can fall out of sync; the fourth keeps
+our own platform adapters honest:
 
 - **`bridge/protocol/wire_sync_test.dart`** — every `EngineOp` has a
   Rust match arm; every Rust case maps back; sub-dispatches stay
@@ -850,7 +826,7 @@ logic to any dumb edge → test fails.
 
 ---
 
-## 10. Upstream patches
+## Upstream patches
 
 ### pdf_oxide — patched upstream files
 
@@ -886,7 +862,7 @@ Everything in `src/host/` is entirely ours — no patch markers needed.
 
 ---
 
-## 11. The one-line summary
+## The one-line summary
 
 > **Four layers, two rules. One Router (the shared brain), dumb lane
 > adapters per platform. One binary format. Three web I/O modes

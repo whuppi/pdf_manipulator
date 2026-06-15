@@ -1,4 +1,4 @@
-# pdf_manipulator
+![pdf_manipulator — cross-platform PDF manipulation for Dart & Flutter](assets/banner.webp)
 
 [![pub package](https://img.shields.io/pub/v/pdf_manipulator.svg)](https://pub.dev/packages/pdf_manipulator)
 [![likes](https://img.shields.io/pub/likes/pdf_manipulator)](https://pub.dev/packages/pdf_manipulator/score)
@@ -6,37 +6,38 @@
 [![GitHub stars](https://img.shields.io/github/stars/whuppi/pdf_manipulator?style=flat&logo=github)](https://github.com/whuppi/pdf_manipulator)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extract, search, sign, encrypt, validate, convert, build from scratch. Native and web. Every operation runs off the main thread, streams at constant memory, can be cancelled mid-flight, and dies instantly on dispose.
+Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extract, search, sign, encrypt, validate, convert, or build from scratch. Every operation runs off the main thread and streams large files in chunks. Any of it can be cancelled mid-flight.
 
-> Try it — and if it helps, a [⭐ star](https://github.com/whuppi/pdf_manipulator) or [👍 like](https://pub.dev/packages/pdf_manipulator) keeps it going. [Bugs & features →](https://github.com/whuppi/pdf_manipulator/issues)
+> like it? a [⭐ star](https://github.com/whuppi/pdf_manipulator) or [👍 like](https://pub.dev/packages/pdf_manipulator) is the entire marketing budget. [Bugs & features →](https://github.com/whuppi/pdf_manipulator/issues)
 
-> **Coming from the old Android-only package?** See the [migration guide](docs/MIGRATION.md).
+> **Coming from the old Android-only package?** everything changed, but the [migration guide](docs/MIGRATION.md) has the before/after for every call.
 
 ---
 
-## Contents
+<details>
+<summary><b>👀 Peek inside</b></summary>
 
 - [Install](#install)
   - [Add the dependency](#add-the-dependency)
-  - [Native targets](#native-platforms)
+  - [Native](#native)
   - [Web](#web)
 - [Quick start](#quick-start)
-  - [Sources & sinks](#sources--sinks)
+  - [Merge two PDFs](#merge-two-pdfs)
+  - [Cancellation](#cancellation)
+- [Sources & sinks](#sources--sinks)
 - [Usage](#usage)
-  - [Combine & split](#combine--split)
-  - [Read & query](#read--query)
-  - [Edit & transform](#edit--transform)
-  - [Security & signing](#security--signing)
-  - [Convert](#convert)
-  - [Create from scratch](#create-from-scratch)
-  - [Batch editing](#batch-editing)
+  - [One-shot operations](#one-shot-operations)
+  - [Read a document](#read-a-document)
+  - [Edit a document](#edit-a-document)
+  - [Build from scratch](#build-from-scratch)
 - [Error handling](#error-handling)
-- [Targets](#targets)
-  - [How binaries are resolved](#how-binaries-are-resolved)
+- [Platform support](#platform-support)
   - [Browser support](#browser-support)
   - [Web I/O modes](#web-io-modes)
-- [When NOT to use pdf_manipulator](#when-not-to-use-pdf_manipulator)
+- [Not in the box](#not-in-the-box)
 - [Docs](#docs)
+
+</details>
 
 ---
 
@@ -49,26 +50,26 @@ dependencies:
   pdf_manipulator:
 ```
 
-### Native targets
+### Native
 
-iOS, Android, macOS, Windows, Linux — nothing extra. The build hook downloads the correct binary automatically.
+Nothing to do. On iOS, Android, macOS, Windows, and Linux, the build hook downloads the right binary on first build.
 
 ### Web
 
-Run setup once after install, and again after each `pub upgrade`:
+Web can't auto-download native assets, so run setup once. It fetches the prebuilt WASM engine. Run it again after any `pub upgrade`, since the asset is tied to the package version:
 
 ```sh
 flutter pub run pdf_manipulator:setup
 ```
 
-Hard-pin the version to avoid silent upgrades breaking your web build:
+Pin the version, too, so a `pub upgrade` can't bump it behind your back and leave that fetched asset stale:
 
 ```yaml
-pdf_manipulator: X.Y.Z  # exact version — upgrade intentionally
+pdf_manipulator: X.Y.Z  # exact version
 ```
 
 <details>
-<summary>All setup commands</summary>
+<summary><b>🧰 all the setup commands</b></summary>
 
 ```sh
 flutter pub run pdf_manipulator:setup                  # web (default)
@@ -79,10 +80,12 @@ flutter pub run pdf_manipulator:setup --force <target> # re-resolve (debugging)
 </details>
 
 <details>
-<summary>Why does web need a setup step?</summary>
+<summary><b>🧩 wait — why does web need a setup step?</b></summary>
+
+<br>
 
 Flutter's build system automatically downloads native binaries for
-iOS, Android, etc. — but it doesn't support web assets (WASM, JS)
+iOS, Android, etc., but it doesn't support web assets (WASM, JS)
 yet. The setup command fills that gap: it downloads the pre-built
 WASM engine, or compiles it from the vendored Rust source if the
 download isn't available.
@@ -96,154 +99,164 @@ build hooks. Tracking: [dart-lang/native#988](https://github.com/dart-lang/nativ
 
 ## Quick start
 
+### Merge two PDFs
+
+Merge two PDFs, using bytes in memory (works on web too):
+
 ```dart
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
+// one Pdf instance, reused everywhere
 final pdf = Pdf();
 
-// Operations run in parallel across isolated lanes, off the main
-// thread. Cap concurrent lanes per instance if you want — defaults
-// to half the cores, minimum 2:
-//   final pdf = Pdf(config: PdfConfig(maxLanes: 8));
+// your two PDFs, as sources
+final firstPdf = MemorySource(firstPdfBytes);
+final secondPdf = MemorySource(secondPdfBytes);
 
-// Open a PDF from bytes in memory
-final source = MemorySource(pdfBytes);      // your Uint8List
-final doc = await pdf.open(source);
-print('${doc.pageCount} pages');
-await doc.dispose();
-
-// Merge two PDFs into one
+// where the merged PDF lands
 final output = MemorySink();
-await pdf.merge([sourceA, sourceB], output);
-final mergedBytes = output.takeBytes();
 
-// Always dispose when done
+// combine the two into the output
+await pdf.merge([firstPdf, secondPdf], output);
+
+// take the merged bytes, then dispose it
+final merged = output.takeBytes();
 await pdf.dispose();
 ```
 
-That's it. Every operation follows the same pattern: **source in, sink out**.
+On mobile or desktop, point the same program at files; only the sources, sink, and import change:
+
+```dart
+import 'package:pdf_manipulator/pdf_manipulator.dart';
+import 'package:pdf_manipulator/io.dart'; // adds FileSource / FileSink
+
+final pdf = Pdf();
+
+// read the two PDFs straight from disk
+final firstPdf = FileSource(File('first.pdf'));
+final secondPdf = FileSource(File('second.pdf'));
+
+// write the result straight to a file
+final output = await FileSink.create(File('merged.pdf'));
+
+// the merge call is identical
+await pdf.merge([firstPdf, secondPdf], output);
+
+// flush the file, then dispose it
+await output.close();
+await pdf.dispose();
+```
+
+That's the shape of every **edit**: source in, sink out. Watermark, compress, split, sign are the same shape, a different verb. Reading is the other shape: `open` a document and query it, no sink needed. See [Usage](#usage) for the full menu of both.
 
 ### Cancellation
 
-Every engine method returns a `PdfTask<T>` — a `Future` you can also
-cancel. Existing `await` code works unchanged; cancellation is one
-extra verb when you want it:
+Long job the user no longer needs? You can stop it. Every operation is a **`PdfTask`**: an ordinary `Future` you `await`, plus a `cancel()` button.
+
+Keep the task in a variable: `await` it as usual, and `cancel()` it to stop early, from a Cancel button or your widget's `dispose()`.
 
 ```dart
-final task = pdf.merge(sources, output);   // starts immediately
-
-// User navigated away — abort just this operation.
-task.cancel();                              // idempotent, instant
-
+// run it and await it — your normal code
+final task = pdf.merge([firstPdf, secondPdf], output); // starts running
 try {
   await task;
+  final merged = output.takeBytes(); // success
 } on PdfCancelled {
-  // The op was cancelled; the Pdf instance and every other
-  // handle keep working.
+  // cancelled — the Pdf and everything else keep working
 }
 ```
 
-`pdf.dispose()` is the bigger hammer: it cancels everything on the
-instance and returns in the same event-loop turn — no waiting for
-in-flight work to drain.
+```dart
+// stop it — from a Cancel button, or your widget's dispose()
+task.cancel(); // the await above now throws PdfCancelled
+```
 
-### Sources & sinks
+Three rules and you're safe:
 
-A `DataSource` is where the PDF bytes come from. A `DataSink` is where the output goes. Two tiny interfaces:
+- **The `cancel()` call never throws** — it sends a stop request and returns. No `try/catch` needed; it's safe to call twice, and a no-op once the task is done.
+- **`PdfCancelled` only appears when you `await` the task** — never a half-finished result. That's the spot to wrap in `try/catch`.
+- **Never await the task? Nothing to handle** — cancel it and move on, no error, no crash.
+
+To stop *everything*, **`pdf.dispose()`** cancels every operation and returns immediately; it never waits for in-flight work to drain.
+
+<details>
+<summary><b>🧩 Advanced: when do i want more than one <code>Pdf</code>?</b></summary>
+
+<br>
+
+**Most apps need just one `Pdf` instance**: create it once, reuse it everywhere.
+
+You'd want a second one when **two parts of your app should stop independently.** Say each screen runs its own PDF work: give each screen its own `Pdf`, then `dispose()` it when the user leaves, which cancels only *that* screen's jobs and leaves the rest running. (With one shared `Pdf`, `dispose()` would stop everything, everywhere.)
+
+Each `Pdf` instance runs its own pool of background workers, so operations go in parallel. Want more or fewer at a time?
+
+```dart
+final pdf = Pdf(config: PdfConfig(maxLanes: 8)); // default: max(2, cores ÷ 2)
+```
+
+</details>
+
+---
+
+## Sources & sinks
+
+Every operation reads from a **source** and writes to a **sink**. You've already used the built-ins: `MemorySource`/`MemorySink` for bytes, `FileSource`/`FileSink` for files. Write your own for anything else (a server, a database, a `Blob`).
+
+<details>
+<summary><b>🧩 what are sources & sinks, really? (+ rolling your own)</b></summary>
+
+<br>
+
+A **source** is how `pdf_manipulator` reads your PDF, never all at once, just small bites:
 
 ```dart
 abstract interface class DataSource {
-  int get length;
-  FutureOr<Uint8List> readAt(int offset, int count);
+  int get length; // how big are you?
+  FutureOr<Uint8List> readAt(int offset, int count); // count bytes from offset
 }
+```
 
+It only nibbles — *"give me 64KB starting here"*, then the next bit, then the next. So you hand it a **reader**, not your whole file dumped into one giant `Uint8List`. (It hops around to any spot in the file, so a one-way stream like a live socket can't be a source; stash those in memory or a file first.)
+
+A **sink** is the mirror, one method:
+
+```dart
 abstract interface class DataSink {
-  FutureOr<void> write(Uint8List chunk);
+  FutureOr<void> write(Uint8List chunk); // here's a chunk of output
 }
 ```
 
-The simplest implementations — good for getting started:
+**Build your own** for any backing store. Here's a PDF on a server, streamed over HTTP, pulling only the byte ranges asked for, never the whole download:
 
 ```dart
-class MemorySource implements DataSource {
-  MemorySource(this._data);
-  final Uint8List _data;
+import 'package:http/http.dart' as http;
 
-  @override
-  int get length => _data.length;
-
-  @override
-  Uint8List readAt(int offset, int count) =>
-      Uint8List.sublistView(_data, offset, (offset + count).clamp(0, _data.length));
-}
-
-class MemorySink implements DataSink {
-  final _buf = BytesBuilder(copy: false);
-
-  @override
-  void write(Uint8List chunk) => _buf.add(chunk);
-
-  Uint8List takeBytes() => _buf.takeBytes();
-}
-```
-
-Wrap whatever you have — `Uint8List` for memory, `RandomAccessFile` for disk, `Blob.slice` for web file pickers, HTTP Range requests for remote files. The engine reads at most 64KB per call, never the whole file. Constant memory regardless of file size.
-
-<details>
-<summary>More implementations: file, HTTP, web blob</summary>
-
-```dart
-// File — mobile/desktop, constant memory for any size
-class FileSource implements DataSource {
-  FileSource(this._file) : length = _file.lengthSync();
-
-  final File _file;
-
+class UrlSource implements DataSource {
+  UrlSource(this.uri, this.length); // length from a HEAD request
+  final Uri uri;
   @override
   final int length;
 
   @override
   Future<Uint8List> readAt(int offset, int count) async {
-    final raf = await _file.open();
-    await raf.setPosition(offset);
-    final bytes = await raf.read(count);
-    await raf.close();
-    return bytes;
+    final res = await http.get(uri,
+        headers: {'range': 'bytes=$offset-${offset + count - 1}'});
+    return res.bodyBytes;
   }
 }
+
+// then use it exactly like any other source
+final doc = await pdf.open(UrlSource(uri, contentLength));
 ```
 
-```dart
-// HTTP — stream from server without downloading the whole file
-class HttpSource implements DataSource {
-  HttpSource(this._url, this.length);
-
-  final Uri _url;
-
-  @override
-  final int length;
-
-  @override
-  Future<Uint8List> readAt(int offset, int count) async {
-    final req = await HttpClient().getUrl(_url);
-    req.headers.set('Range', 'bytes=$offset-${offset + count - 1}');
-    final res = await req.close();
-    final builder = BytesBuilder();
-    await for (final chunk in res) {
-      builder.add(chunk);
-    }
-    return builder.takeBytes();
-  }
-}
-```
+Or a browser `Blob` from a file picker / drag-and-drop:
 
 ```dart
-// Web Blob — browser file picker or drag-and-drop (package:web)
+import 'package:web/web.dart' as web;
+
 class BlobSource implements DataSource {
   BlobSource(this._blob) : length = _blob.size;
-
   final web.Blob _blob;
-
   @override
   final int length;
 
@@ -256,293 +269,143 @@ class BlobSource implements DataSource {
 }
 ```
 
-</details>
+Same idea for a custom `DataSink`: implement `write(chunk)` for an upload stream, a database column, wherever the bytes should go.
 
-**Note:** `DataSource` is random-access — the engine jumps to arbitrary positions in the file. Forward-only streams (like a network socket or stdin) need to be buffered into memory or disk first.
+</details>
 
 ---
 
 ## Usage
 
-### Combine & split
+Everything goes through one of four doors. Pick the one that fits what you're doing. Highlights below; every method and full signature lives in the [API reference](https://pub.dev/documentation/pdf_manipulator/latest/).
+
+### One-shot operations
+
+A single change: call it straight on `pdf`, source in, sink out:
 
 ```dart
-// Merge
-await pdf.merge([sourceA, sourceB, sourceC], outputSink);
+await pdf.watermark(source, output,
+    text: 'CONFIDENTIAL',
+    style: PdfWatermarkStyle(opacity: 0.2, fontSize: 60));
 
-// Split every N pages
+await pdf.compress(source, output, imageQuality: 75);
+
+await pdf.encrypt(source, output,
+    encryption: PdfEncryptionConfig(
+      ownerPassword: 'secret',
+      algorithm: PdfEncryptionAlgorithm.aes256,
+    ));
+
 await pdf.split(source, (i) => MemorySink(), every: 5);
-
-// Split by file size
-await pdf.splitBySize(source, (i) => MemorySink(), maxBytes: 500000);
-
-// Split at bookmark boundaries
-await pdf.splitByBookmarks(source, (i) => MemorySink());
-
-// Pick specific pages
-await pdf.extractPages(source, sink, pages: [0, 2, 5]);
-
-// Remove pages
-await pdf.deletePages(source, sink, pages: [3]);
-
-// Reorder
-await pdf.reorderPages(source, sink, order: [4, 3, 2, 1, 0]);
-
-// Move one page
-await pdf.movePage(source, sink, from: 0, to: 4);
 ```
 
-### Read & query
+The full one-shot set, all the same shape: `merge`, `split` / `splitBySize` / `splitByBookmarks`, `extractPages`, `deletePages`, `reorderPages`, `movePage`, `rotatePages` / `rotateAllPages`, `addStamp` / `addImageStamp`, `flattenForms`, `applyRedactions`, `embedFile`, `eraseRegions`, `decrypt`, `sign`, `convertTo` (DOCX/PPTX/XLSX), `convertToPdf`, `convertToPdfA`, `imagesToPdf`.
 
-Open a PDF once, run any number of queries, dispose when done:
+> Doing several of these to the *same* PDF? Use the editor (below); it parses once instead of re-parsing per call.
+
+### Read a document
+
+`pdf.open` gives you a document to query as much as you like, then dispose:
 
 ```dart
 final doc = await pdf.open(source);
-print('${doc.pageCount} pages, v${doc.version}');
-print('encrypted: ${doc.isEncrypted}, tagged: ${doc.isTagged}');
-print('title: ${doc.title}, author: ${doc.author}');
-```
+print('${doc.pageCount} pages · encrypted: ${doc.isEncrypted}');
 
-**Extract text** — plain, markdown, or html:
-
-```dart
 final text = await doc.extract(pages: PdfPages.all());
-final md = await doc.extract(
-    pages: PdfPages.single(0), format: PdfExtractionFormat.markdown);
-final html = await doc.extract(
-    pages: PdfPages.single(0), format: PdfExtractionFormat.html);
-```
-
-**Search** with bounding rectangles:
-
-```dart
 final hits = await doc.search(query: 'revenue', pages: PdfPages.all());
-for (final hit in hits) {
-  print('p${hit.page}: "${hit.text}" at (${hit.rect.x}, ${hit.rect.y})');
-}
-```
 
-**Render** to images — streams one page at a time, constant memory:
-
-```dart
 await for (final page in doc.render(
     pages: PdfPages.all(), size: PdfRenderSize.thumbnail(200))) {
-  // page.width, page.height, page.data (RGBA Uint8List)
+  // page.width, page.height, page.data (RGBA bytes)
 }
-```
-
-**Extract embedded images:**
-
-```dart
-await for (final img in doc.extractImages(pages: PdfPages.single(0))) {
-  print('${img.width}×${img.height} ${img.format}');
-}
-```
-
-**Validate, classify, inspect:**
-
-```dart
-// PDF/A and PDF/UA compliance
-final pdfA = await doc.validatePdfA();
-print('PDF/A: ${pdfA.compliant} (${pdfA.errors} errors, ${pdfA.warnings} warnings)');
-final accessible = await doc.validatePdfUa();
-
-// Auto-detect page/document type
-final pageType = await doc.classifyPage(0);
-final docType = await doc.classifyDocument();
-
-// Digital signatures
-final sigs = await doc.getSignatures();
-final valid = await doc.verifySignatures();
-
-// Bookmark structure
-final segments = await doc.planSplitByBookmarks();
 
 await doc.dispose();
 ```
 
-### Edit & transform
+Also on the document: `extract` (plain / markdown / html), `extractImages`, `getSignatures` / `verifySignatures`, `validatePdfA` / `validatePdfUa`, `classifyPage` / `classifyDocument`, `planSplitByBookmarks`, plus metadata getters (`title`, `author`, `version`, `isTagged`).
 
-```dart
-// Rotate
-await pdf.rotatePages(source, sink, pages: {0: 90, 2: 180});
-await pdf.rotateAllPages(source, sink, degrees: 90);
+### Edit a document
 
-// Watermark — centered (default), tiled, corner, or exact position
-await pdf.watermark(source, sink,
-    text: 'CONFIDENTIAL',
-    style: PdfWatermarkStyle(opacity: 0.2, fontSize: 60, rotation: 45));
-
-// Tiled watermark behind content
-await pdf.watermark(source, sink,
-    text: 'DRAFT',
-    position: PdfWatermarkPosition.tiled(columns: 3, rows: 4),
-    layer: PdfWatermarkLayer.background);
-
-// Corner watermark
-await pdf.watermark(source, sink,
-    text: 'SAMPLE',
-    position: PdfWatermarkPosition.corner(PdfCorner.topRight));
-
-// Stamps
-await pdf.addStamp(source, sink,
-    page: 0, type: PdfStampType.approved,
-    rect: PdfRect(x: 100, y: 100, width: 200, height: 50));
-await pdf.addImageStamp(source, sink,
-    page: 0, imageData: imageSource,
-    rect: PdfRect(x: 100, y: 100, width: 150, height: 150));
-
-// Compress
-await pdf.compress(source, sink, imageQuality: 75);
-
-// Flatten forms / redactions
-await pdf.flattenForms(source, sink);
-await pdf.applyRedactions(source, sink);
-
-// Embed file / erase regions
-await pdf.embedFile(source, sink, name: 'data.csv', fileData: csvSource);
-await pdf.eraseRegions(source, sink,
-    page: 0, regions: [PdfRect(x: 50, y: 700, width: 200, height: 30)]);
-
-// Convert to PDF/A
-await pdf.convertToPdfA(source, sink);
-
-// Images to PDF
-await pdf.imagesToPdf([img1, img2, img3], sink);
-```
-
-For multiple edits on the same PDF, use the [batch editor](#batch-editing) — parse once, mutate many, save once.
-
-### Security & signing
-
-```dart
-// Encrypt
-await pdf.encrypt(source, sink,
-    encryption: PdfEncryptionConfig(
-      ownerPassword: 'secret',
-      algorithm: PdfEncryptionAlgorithm.aes256,
-      permissions: PdfPermissions(copy: false, modify: false),
-    ));
-
-// Decrypt
-await pdf.decrypt(source, sink, password: 'secret');
-
-// Sign (PKCS#12)
-await pdf.sign(source, sink,
-    credentials: PdfSigningCredentials.pkcs12(certBytes, 'cert-pw'),
-    reason: 'Approved', location: 'HQ');
-
-// Sign (PEM)
-await pdf.sign(source, sink,
-    credentials: PdfSigningCredentials.pem(certPem, keyPem));
-```
-
-### Convert
-
-```dart
-// PDF → Office
-await pdf.convertTo(source, sink, format: PdfDocumentFormat.docx);
-await pdf.convertTo(source, sink, format: PdfDocumentFormat.pptx);
-await pdf.convertTo(source, sink, format: PdfDocumentFormat.xlsx);
-
-// Office → PDF
-await pdf.convertToPdf(docxSource, sink, format: PdfDocumentFormat.docx);
-```
-
-### Create from scratch
-
-```dart
-final builder = await pdf.build();
-await builder.setTitle('Invoice #1042');
-await builder.setAuthor('Acme Corp');
-
-final page = await builder.addA4Page();
-await page.heading(1, 'Invoice');
-await page.paragraph('Thank you for your purchase.');
-await page.space(20);
-await page.textField('notes', PdfRect(x: 50, y: 400, width: 300, height: 100));
-await page.checkbox('agree', PdfRect(x: 50, y: 370, width: 14, height: 14));
-await page.radioGroup('plan', [
-  (value: 'monthly', rect: PdfRect(x: 50, y: 340, width: 14, height: 14)),
-  (value: 'yearly', rect: PdfRect(x: 50, y: 320, width: 14, height: 14)),
-]);
-
-// Form-field JavaScript (Acrobat-style actions on the field above)
-await page.fieldFormat('AFNumber_Format(2, 0, 0, 0, "\$", true);');
-
-await page.linkUrl('https://example.com');
-await page.linkPage(2);                 // jump to another page in this doc
-await page.footnote('1', 'Terms apply.');
-await page.done();
-
-await builder.save(sink);
-await builder.dispose();
-```
-
-Text, headings, paragraphs, images, form fields (text, checkbox, radio group, combo box, push button, signature), links (URL or page), footnotes, columns, watermarks — all from Dart. Page sizes: A4, Letter, or custom dimensions.
-
-Form fields can carry JavaScript actions — `fieldKeystroke`, `fieldFormat`, `fieldValidate`, `fieldCalculate` — that conforming viewers run as the user types, on display, on commit, and when other fields change.
-
-### Batch editing
-
-When you need to do multiple things to the same PDF, open an editor. It parses the PDF once, applies all your mutations in memory, and writes once on save.
+`pdf.edit` is for *many* changes to one PDF. It parses once, applies everything in memory, and writes once on save:
 
 ```dart
 final editor = await pdf.edit(source);
 
 await editor.setTitle('Q4 Report');
-await editor.mergeFrom(appendixSource);
+await editor.mergeFrom(appendix);
 await editor.deletePage(4);
-await editor.selectPages([0, 1, 2, 5, 6]);
 await editor.addWatermark(0, 'FINAL', style: PdfWatermarkStyle(opacity: 0.15));
 await editor.optimizeImages(quality: 70);
-await editor.convertToPdfA();
 
-await editor.save(sink, options: PdfSaveOptions.incremental());
+await editor.save(output); // see save options below
 await editor.dispose();
 ```
+
+Also on the editor: `selectPages`, `rotatePage` / `rotateAllPages`, `addStamp` / `addImageStamp`, `embedFile`, `eraseRegions`, `cropMargins`, `resizeImage`, `flattenForms` / `flattenAllAnnotations`, `setFormFieldValue`, `unembedStandardFonts`, `convertToPdfA`, `scrubMetadata`, and metadata get/set.
 
 Save options:
-- `PdfSaveOptions.fullRewrite()` — default. Recompresses, garbage-collects unused objects.
-- `PdfSaveOptions.fullRewrite(encryption: PdfEncryption.config(...))` — encrypt on save.
-- `PdfSaveOptions.fullRewrite(encryption: PdfEncryption.remove())` — strip encryption.
-- `PdfSaveOptions.incremental()` — appends changes without rewriting. Faster, larger file.
 
-**Redaction** is a three-step lifecycle on the editor — mark regions, optionally count what's pending, then permanently remove the content:
+- `PdfSaveOptions.fullRewrite()` — default; recompresses and drops unused objects.
+- `PdfSaveOptions.fullRewrite(encryption: ...)` — encrypt on save (or `PdfEncryption.remove()` to strip it).
+- `PdfSaveOptions.incremental()` — appends changes; faster, larger file.
+
+Redaction is a mark-then-apply lifecycle (the content is removed, not just hidden):
 
 ```dart
-final editor = await pdf.edit(source);
 editor.addRedaction(0, PdfRect(x: 72, y: 700, width: 200, height: 20));
-editor.addRedaction(1, PdfRect(x: 72, y: 680, width: 150, height: 20));
-print(await editor.redactionCount(0));   // pending marks on page 0
-await editor.applyRedactions();          // content is gone, not hidden
-await editor.save(sink);
-await editor.dispose();
+print(await editor.redactionCount(0)); // pending marks on this page
+await editor.applyRedactions(); // gone for good
 ```
 
-Every operation from the sections above is also available on the editor: rotate, stamp, flatten, crop, resize images, embed files, set form field values, scrub metadata, and more.
+### Build from scratch
+
+`pdf.build` hands you an empty PDF; add pages, then content:
+
+```dart
+final builder = await pdf.build();
+await builder.setTitle('Invoice #1042');
+
+final page = await builder.addA4Page();
+await page.heading(1, 'Invoice');
+await page.paragraph('Thank you for your purchase.');
+await page.textField('notes', PdfRect(x: 50, y: 400, width: 300, height: 100));
+await page.linkUrl('https://example.com');
+
+await builder.save(output);
+await builder.dispose();
+```
+
+Pages: `addA4Page` / `addLetterPage` / `addPage` (custom size). Content: `text`, `heading`, `paragraph`, `space`, `image`, `columns`, `footnote`, `watermark`; form fields (`textField`, `checkbox`, `radioGroup`, `comboBox`, `pushButton`, `signatureField`) with Acrobat JS actions (`fieldFormat`, `fieldValidate`, `fieldCalculate`, `fieldKeystroke`); links (`linkUrl`, `linkPage`).
 
 ---
 
 ## Error handling
 
+Every failure is a typed subclass of `PdfError`: no string matching, no `PlatformException`. Catch the cases you handle specially; let the rest fall to a catch-all. Each error carries a human-readable `message`.
+
 ```dart
 try {
-  await pdf.open(source);
+  final doc = await pdf.open(source);
+  // ... use the document, then doc.dispose()
 } on PdfPasswordRequired {
-  // needs a password — retry with pdf.open(source, password: '...')
+  // encrypted — retry with pdf.open(source, password: '...')
+} on PdfWrongPassword {
+  // wrong password — ask the user again
 } on PdfCorrupted catch (e) {
-  print('Bad PDF: ${e.message}');
-} on PdfIoError catch (e) {
-  print('I/O problem: ${e.message}');
+  print('Not a valid PDF: ${e.message}');
+} on PdfError catch (e) {
+  // anything else — I/O failure, unsupported feature, page out of range...
+  print(e.message);
 }
 ```
 
-Every error is a typed subclass of `PdfError`. No string matching. No `PlatformException`.
+`PdfError` is sealed, so you can also `catch (e)` once and `switch` over it, and the compiler flags any case you haven't handled. `PdfCancelled` is part of the same hierarchy (the one [Cancellation](#cancellation) throws).
 
 ---
 
-## Targets
+## Platform support
+
+Every platform Flutter runs on, one API. Native platforms run a Rust core; web runs that same core compiled to WASM.
 
 | Target | Architectures | Minimum version | Engine |
 |---|---|---|---|
@@ -553,9 +416,12 @@ Every error is a typed subclass of `PdfError`. No string matching. No `PlatformE
 | Windows | x64, arm64 | Windows 10 | Native (Rust) |
 | Web | All modern browsers | See [browser support](#browser-support) | WASM |
 
-### How binaries are resolved
+<details>
+<summary><b>🧩 how the binary actually shows up (build-time magic)</b></summary>
 
-The build hook (native) and setup command (web) resolve assets through the same pipeline:
+<br>
+
+You never call this; it runs at build time. For the curious (or when a build fails), here's the order it tries to get the binary, native and web alike:
 
 | Priority | Method | When | Requires |
 |:---:|---|---|---|
@@ -567,7 +433,11 @@ The build hook (native) and setup command (web) resolve assets through the same 
 
 The vendored Rust source ships in both the pub.dev tarball and git tags. If the repo disappears, published versions still compile from source.
 
+</details>
+
 ### Browser support
+
+Minimum versions, with no special setup:
 
 | Browser | Version | Released |
 |---|---|---|
@@ -577,51 +447,57 @@ The vendored Rust source ships in both the pub.dev tarball and git tags. If the 
 | Chrome Android | 102+ | May 2022 |
 | Samsung Internet | 21+ | 2023 |
 
-The engine compiles to WASM and runs in isolated Web Workers. Your UI thread never does PDF work.
+The engine compiles to WASM and runs in isolated Web Workers, so your UI thread never touches PDF work. No jank, even on large files. (These floors can go further back with two extra headers; see [Web I/O modes](#web-io-modes).)
 
 ### Web I/O modes
 
-Three modes, auto-detected (best first). No code changes between them:
+On web you don't configure anything; the package auto-detects the best mode the browser supports and uses it. Everything works regardless of mode; the only thing that varies is how fast it reads large files.
 
-| Mode | How it works | Streaming | Requires |
+Under the hood the modes differ in *how* the WASM engine gets your bytes: the top two stream them on demand, while the fallback copies the whole file into private browser storage first (works everywhere, just a slower first byte).
+
+| Mode | What it means for you | Streams large files | Picked when |
 |---|---|:---:|---|
-| **JSPI** | WASM promise suspension | ✅ | Chrome 137+ · Firefox 139+ |
-| **Atomics** | SharedArrayBuffer blocking | ✅ | COOP/COEP headers |
-| **OPFS** | Pre-copy to disk, then process | ❌ | All modern browsers |
-
-Force a mode or check which was selected:
-
-```dart
-// Force the web I/O mode (native ignores it)
-final pdf = Pdf(config: PdfConfig(webIoMode: PdfIoMode.atomics));
-
-// Check
-final mode = await pdf.ensureInitialized();
-if (mode == PdfIoMode.opfs) {
-  // OPFS: pre-copies each source to disk before processing.
-  // Slower first byte + uses disk quota vs streaming modes.
-  // To get streaming: deploy with COOP/COEP headers (Atomics)
-  // or target Chrome 137+ / Firefox 139+ (JSPI auto-detected).
-}
-```
+| **JSPI** | Best: streams, zero setup | ✅ | Chrome 137+ · Firefox 139+ |
+| **Atomics** | Streams, but needs two server headers | ✅ | COOP/COEP headers are set |
+| **OPFS** | Always works; copies the file to disk first, then reads | ❌ | any modern browser (the fallback) |
 
 <details>
-<summary>Advanced: COOP/COEP headers for Atomics on older browsers</summary>
+<summary><b>🧩 ok but what do JSPI, Atomics, and OPFS actually mean?</b></summary>
 
-By default on browsers without JSPI support, the package copies your PDF to temporary disk storage (OPFS) before processing — works everywhere, no server config needed.
+<br>
 
-On Chrome 137+ and Firefox 139+, JSPI mode is auto-detected and gives true streaming without any server config. This is the best mode and requires no action from you.
+All three solve the same puzzle (synchronous WASM code needs bytes that arrive asynchronously from Dart), just in different ways:
 
-For **older browsers** that have `SharedArrayBuffer` but not JSPI, adding two server headers enables Atomics mode — direct memory reads, no disk copy, lower latency:
+- **JSPI** (JavaScript Promise Integration) — the browser lets the WASM call pause and resume while it waits for the next chunk. Cleanest path, no setup; needs a recent browser. Used automatically where available.
+- **Atomics** — the WASM side blocks on a `SharedArrayBuffer` while a worker fills it. Works on older browsers, but `SharedArrayBuffer` only switches on when your site sends two security headers (see below).
+- **OPFS** (Origin Private File System) — when neither of the above is available, the package copies your file into the browser's private on-disk storage and reads from there. Works everywhere; the copy means a slower first byte and a little disk use.
+
+You never choose; the package tries JSPI, then Atomics, then OPFS, and uses the first that works.
+
+</details>
+
+<details>
+<summary><b>🧩 Advanced: force a mode, or unlock streaming on older browsers</b></summary>
+
+<br>
+
+Pin a mode, or just check which one was chosen (native ignores this):
+
+```dart
+final pdf = Pdf(config: PdfConfig(webIoMode: PdfIoMode.atomics)); // pin a mode
+final mode = await pdf.ensureInitialized(); // or just check
+```
+
+**Unlock streaming on older browsers.** Chrome 137+ / Firefox 139+ already stream via JSPI with no setup. For older browsers that have `SharedArrayBuffer`, two server headers switch the fallback from disk-copy (OPFS) to streaming (Atomics):
 
 ```
 Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: require-corp
 ```
 
-**⚠️ These headers have side effects.** `require-corp` blocks loading ANY cross-origin resource (images, fonts, scripts, iframes) that doesn't explicitly opt in via `Cross-Origin-Resource-Policy` or CORS headers. Google Fonts, CDN images, analytics scripts, OAuth popups, embedded videos — all break unless their servers also send the right headers. Only add these if your app controls all its resource origins or you've tested thoroughly.
+**⚠️ These headers have side effects.** `require-corp` blocks *any* cross-origin resource (images, fonts, scripts, iframes) that doesn't opt in via `Cross-Origin-Resource-Policy` or CORS. Google Fonts, CDN images, analytics, OAuth popups, embedded video all break unless their servers send the right headers. Add them only if your app controls its resource origins, or you've tested thoroughly.
 
-With these headers, browser support for streaming goes further back:
+With the headers set, streaming reaches further back:
 
 | Browser | Version | Released |
 |---|---|---|
@@ -629,31 +505,32 @@ With these headers, browser support for streaming goes further back:
 | Firefox | 79+ | Jul 2020 |
 | Safari / Safari iOS | 15.2+ | Dec 2021 |
 
-For development:
+For local dev, Flutter adds the headers for you:
 
 ```sh
 flutter run -d chrome --cross-origin-isolation
 ```
 
-This adds the COOP/COEP headers to Flutter's dev server automatically.
-
 </details>
 
 ---
 
-## When NOT to use pdf_manipulator
+## Not in the box
 
-- **You only need to display PDFs.** Use [`pdfx`](https://pub.dev/packages/pdfx) or [`flutter_pdfview`](https://pub.dev/packages/flutter_pdfview).
-- **Server-side batch processing.** This package is for client-side use. For thousands of PDFs per second, use qpdf or poppler.
-- **OCR.** This package extracts text already in the PDF. For scanned images, you need Tesseract or similar.
+A tiny wishlist — what the shipped package doesn't do *yet*, and what to grab in the meantime. For the full engine-vs-shipped picture, see the [capability roadmap](docs/CAPABILITY_ROADMAP.md).
+
+- **A viewer to display PDFs.** This is a manipulation library, not a UI widget. To put a PDF on screen, use [`pdfx`](https://pub.dev/packages/pdfx) or [`flutter_pdfview`](https://pub.dev/packages/flutter_pdfview). It pairs well: pre-process here (merge, decrypt, watermark), display there. (It does render pages to image bytes via `doc.render(...)` if you'd rather draw your own surface.)
+- **OCR and table extraction.** `extract` and `search` read the text already in a PDF, so a scanned page (just an image) comes back empty, and clean rows-and-columns is a separate problem. The engine *has* both (a PaddleOCR pipeline and ML table detection); the default build leaves them out so it doesn't pull the ONNX runtime and ~12 MB of models into every install. An opt-in build is on the [roadmap](docs/CAPABILITY_ROADMAP.md); until then, run them externally ([Tesseract](https://github.com/tesseract-ocr/tesseract), [Camelot](https://github.com/camelot-dev/camelot), or a cloud API) and feed the result back. Want them first-party? [Open an issue](https://github.com/whuppi/pdf_manipulator/issues); it's how we gauge demand.
 
 ---
 
 ## Docs
 
+The README covers the everyday stuff. wanna go deeper?
+
 | Doc | What's inside |
 |---|---|
-| [Architecture](docs/ARCHITECTURE.md) | How it's built — layers, streaming I/O, three web modes |
+| [Architecture](docs/ARCHITECTURE.md) | How it's built: layers, streaming I/O, three web modes |
 | [Capabilities](docs/CAPABILITY_ROADMAP.md) | What's shipped, what's planned |
 | [Updating](docs/UPDATING.md) | Maintaining the vendored Rust engine |
 | [Migration](docs/MIGRATION.md) | Upgrading from the old Android-only version |
