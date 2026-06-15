@@ -726,9 +726,10 @@ Single matrix with two tiers in one sorted list:
 5. **No `dart:io` in tests** (mechanically guarded by `make
    test-guards`). Fixtures are imported Dart source — VM and browser
    consume identical bytes. Exceptions: the hybrid asset server, the
-   native process-death tests, and the VM-only source-parity guards
-   (wire sync, worker-verb sync, dumb-edges) — they read repo SOURCE
-   to assert sync, not fixtures.
+   native process-death tests, the native `FileSource`/`FileSink` tests
+   (those classes wrap `dart:io`, so their tests must too — VM-only),
+   and the VM-only source-parity guards (wire sync, worker-verb sync,
+   dumb-edges) — they read repo SOURCE to assert sync, not fixtures.
 6. **Semantic assertions.** Content claims go through extract/search/
    render — never byte-grepping (guarded; survivors: `%PDF-`/ZIP
    magic, encrypted-leak negatives, and the builder battery, whose
@@ -797,6 +798,10 @@ test/
 │   ├── dumb_edges_test.dart        ← dumb-edge guard on all 4 adapter files
 │   ├── native/channel_buffers_test.dart  ← Dart↔Rust layout parity
 │   └── web/lane_worker_sync_test.dart    ← Dart↔worker protocol parity
+│
+├── io/                            MemorySource/MemorySink (pure, any
+│                                   platform) + FileSource/FileSink
+│                                   (native dart:io — VM-only tests)
 │
 └── types/                          errors, page_info, pdf_rect +
                                     pdf_task (zone physics) + cancel_hook

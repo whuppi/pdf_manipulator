@@ -83,6 +83,8 @@ test-guards:
 	@bad=$$(grep -rln "dart:io" test/ --include="*.dart" \
 	  | grep -v "test/harness/asset_server.dart" \
 	  | grep -v "test/ops/platform/native/" \
+	  | grep -v "test/io/file_source_test.dart" \
+	  | grep -v "test/io/file_sink_test.dart" \
 	  | grep -v "test/bridge/protocol/wire_sync_test.dart" \
 	  | grep -v "test/runtime/web/lane_worker_sync_test.dart" \
 	  | grep -v "test/runtime/dumb_edges_test.dart" || true); \
@@ -169,9 +171,9 @@ test: fixtures test-unit test-ops
 test-pkg-native: fixtures test-unit test-ops-native
 
 test-unit:
-	@echo "=== Unit: types + bridge + runtime + harness ==="
+	@echo "=== Unit: types + io + bridge + runtime + harness ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
-	$(DART) test $(TIMEOUT) test/types/ test/bridge/ test/runtime/ test/harness/ -p vm --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/unit.json
+	$(DART) test $(TIMEOUT) test/types/ test/io/ test/bridge/ test/runtime/ test/harness/ -p vm --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/unit.json
 
 test-ops: fixtures test-ops-native test-ops-web
 
