@@ -32,7 +32,7 @@ jobs:
     if: github.event_name == 'pull_request_target'
     runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
-      - uses: actions/labeler@v5
+      - uses: actions/labeler@v6
         with:
           sync-labels: false
 
