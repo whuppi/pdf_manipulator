@@ -25,11 +25,22 @@ import 'package:flutter/material.dart';
 
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
-// ─── In-memory DataSource / DataSink ──────────────────────────────
+// ─── Custom DataSource / DataSink — the real-app pattern ──────────
+//
+// A real app's bytes rarely sit in a Uint8List — they live in files,
+// network streams, pickers, your own store. Implementing the two tiny
+// interfaces is how you wire any of those in. These are this example's
+// own implementations, used throughout the app.
+//
+// For the quick path, the package SHIPS MemorySource / MemorySink
+// (`package:pdf_manipulator/pdf_manipulator.dart`) and FileSource /
+// FileSink (`package:pdf_manipulator/io.dart`). The Standalone tab
+// shows the shipped MemorySink in use; everything else uses these
+// custom impls to show the interface is open.
 
 /// Random-access source over bytes already in memory.
-class MemorySource implements DataSource {
-  MemorySource(this._data);
+class DemoSource implements DataSource {
+  DemoSource(this._data);
   final Uint8List _data;
 
   @override
@@ -44,7 +55,7 @@ class MemorySource implements DataSource {
 }
 
 /// Collects output chunks; hand the bytes off with [takeBytes].
-class MemorySink implements DataSink {
+class DemoSink implements DataSink {
   final _builder = BytesBuilder(copy: false);
 
   @override
@@ -166,7 +177,7 @@ final List<_DemoSample> _demoSamples = [
               'over the lazy dog while the engine streams every byte.');
       await p.done();
     }
-    final sink = MemorySink();
+    final sink = DemoSink();
     await b.save(sink);
     await b.dispose();
     return sink.takeBytes();
@@ -186,7 +197,7 @@ final List<_DemoSample> _demoSamples = [
     await p.checkbox(
         'agree', const PdfRect(x: 100, y: 640, width: 14, height: 14));
     await p.done();
-    final sink = MemorySink();
+    final sink = DemoSink();
     await b.save(sink);
     await b.dispose();
     return sink.takeBytes();
@@ -381,7 +392,7 @@ Future<Uint8List> buildSamplePdf(Pdf pdf, {int pages = 40}) async {
       }
       await p.done();
     }
-    final sink = MemorySink();
+    final sink = DemoSink();
     await b.save(sink);
     return sink.takeBytes();
   } finally {
@@ -759,7 +770,7 @@ mixin _OpsRunner<T extends StatefulWidget> on State<T> {
 mixin _PdfPicker<T extends StatefulWidget> on State<T> {
   Uint8List? bytes;
 
-  DataSource get src => MemorySource(bytes!);
+  DataSource get src => DemoSource(bytes!);
 
   Future<void> pick(void Function(Uint8List picked) onPicked) async {
     final r = await pickPdfBytes();
@@ -849,7 +860,7 @@ class _RuntimeTabState extends State<_RuntimeTab>
                   await runTask(
                       'Heavy merge (tap Cancel!)',
                       () => _pdf.merge(
-                          List.filled(6, MemorySource(sample)), MemorySink()),
+                          List.filled(6, DemoSource(sample)), DemoSink()),
                       done: (_) => 'Merge finished before you cancelled');
                 }),
             _Op(
@@ -858,7 +869,7 @@ class _RuntimeTabState extends State<_RuntimeTab>
                 subtitle: 'task.cancel() on the same tick → PdfCancelled',
                 loading: loading,
                 onRun: () => runFlow('Cancel-before-start', () async {
-                      final task = _pdf.open(MemorySource(minimalPdf));
+                      final task = _pdf.open(DemoSource(minimalPdf));
                       task.cancel();
                       try {
                         final doc = await task;
@@ -877,7 +888,7 @@ class _RuntimeTabState extends State<_RuntimeTab>
                 loading: loading,
                 onRun: () => runFlow('Sibling survival', () async {
                       final sample = await _ensureSample();
-                      final doc = await _pdf.open(MemorySource(sample));
+                      final doc = await _pdf.open(DemoSource(sample));
                       try {
                         final task = doc.extract(pages: const PdfPages.all());
                         task.cancel();
@@ -904,7 +915,7 @@ class _RuntimeTabState extends State<_RuntimeTab>
                 onRun: () => runFlow('Parallel opens', () async {
                       final sw = Stopwatch()..start();
                       final docs = await Future.wait(List.generate(
-                          4, (_) => _pdf.open(MemorySource(minimalPdf))));
+                          4, (_) => _pdf.open(DemoSource(minimalPdf))));
                       sw.stop();
                       final pages = docs.map((d) => d.pageCount).join(', ');
                       for (final d in docs) {
@@ -925,7 +936,7 @@ class _RuntimeTabState extends State<_RuntimeTab>
                       final sample = await _ensureSample();
                       final lab = Pdf();
                       final inflight = lab.merge(
-                          List.filled(6, MemorySource(sample)), MemorySink());
+                          List.filled(6, DemoSource(sample)), DemoSink());
                       await Future<void>.delayed(
                           const Duration(milliseconds: 30));
                       final sw = Stopwatch()..start();
@@ -947,11 +958,11 @@ class _RuntimeTabState extends State<_RuntimeTab>
                 loading: loading,
                 onRun: () => runFlow('Fresh after kill', () async {
                       final lab = Pdf();
-                      unawaited(lab.open(MemorySource(minimalPdf)));
+                      unawaited(lab.open(DemoSource(minimalPdf)));
                       await lab.dispose(); // killed mid-open — fine
                       final lab2 = Pdf();
                       try {
-                        final doc = await lab2.open(MemorySource(minimalPdf));
+                        final doc = await lab2.open(DemoSource(minimalPdf));
                         setState(() => status =
                             '✓ new instance opened ${doc.pageCount} page(s) '
                                 'right after the kill');
@@ -995,7 +1006,7 @@ class _DocTabState extends State<_DocTab>
           final old = _doc;
           _doc = null;
           if (old != null) await old.dispose();
-          final doc = await _pdf.open(MemorySource(picked));
+          final doc = await _pdf.open(DemoSource(picked));
           setState(() {
             _doc = doc;
             status = '${doc.pageCount} pages, v${doc.version}';
@@ -1285,6 +1296,9 @@ class _SugarTabState extends State<_SugarTab>
       pick((p) => setState(() => status = 'Loaded (${fmtSize(p.length)})')));
 
   /// One-shot op into a sink, then offer to save the result.
+  ///
+  /// This tab uses the shipped MemorySink (from the package) rather than
+  /// the example's own DemoSink — the quick path, no plumbing to write.
   Future<void> _opToFile(String label, String filename,
       PdfTask<void> Function(MemorySink sink) start) async {
     final sink = MemorySink();
@@ -1315,9 +1329,9 @@ class _SugarTabState extends State<_SugarTab>
                       title: 'Split every 2 pages',
                       loading: loading,
                       onRun: () => runFlow('Split', () async {
-                            final sinks = <MemorySink>[];
+                            final sinks = <DemoSink>[];
                             await _pdf.split(src, (i) {
-                              final s = MemorySink();
+                              final s = DemoSink();
                               sinks.add(s);
                               return s;
                             }, every: 2);
@@ -1329,9 +1343,9 @@ class _SugarTabState extends State<_SugarTab>
                       title: 'Split by size (500 KB)',
                       loading: loading,
                       onRun: () => runFlow('SplitBySize', () async {
-                            final sinks = <MemorySink>[];
+                            final sinks = <DemoSink>[];
                             await _pdf.splitBySize(src, (i) {
-                              final s = MemorySink();
+                              final s = DemoSink();
                               sinks.add(s);
                               return s;
                             }, maxBytes: 500000);
@@ -1344,9 +1358,9 @@ class _SugarTabState extends State<_SugarTab>
                       loading: loading,
                       onRun: () => runFlow('SplitBookmarks', () async {
                             try {
-                              final sinks = <MemorySink>[];
+                              final sinks = <DemoSink>[];
                               await _pdf.splitByBookmarks(src, (i) {
-                                final s = MemorySink();
+                                final s = DemoSink();
                                 sinks.add(s);
                                 return s;
                               });
@@ -1378,7 +1392,7 @@ class _SugarTabState extends State<_SugarTab>
                             final doc = await _pdf.open(src);
                             final n = doc.pageCount;
                             await doc.dispose();
-                            final sink = MemorySink();
+                            final sink = DemoSink();
                             await _pdf.reorderPages(src, sink,
                                 order: List.generate(n, (i) => n - 1 - i));
                             await saveResult(sink.takeBytes(), 'reversed.pdf');
@@ -1391,7 +1405,7 @@ class _SugarTabState extends State<_SugarTab>
                             final doc = await _pdf.open(src);
                             final n = doc.pageCount;
                             await doc.dispose();
-                            final sink = MemorySink();
+                            final sink = DemoSink();
                             await _pdf.movePage(src, sink, from: 0, to: n - 1);
                             await saveResult(sink.takeBytes(), 'moved.pdf');
                           })),
@@ -1420,7 +1434,7 @@ class _SugarTabState extends State<_SugarTab>
                       title: 'Compress (quality 75)',
                       loading: loading,
                       onRun: () => runFlow('Compress', () async {
-                            final sink = MemorySink();
+                            final sink = DemoSink();
                             await _pdf.compress(src, sink, imageQuality: 75);
                             final r = sink.takeBytes();
                             final pct = ((1 - r.length / bytes!.length) * 100)
@@ -1519,7 +1533,7 @@ class _SugarTabState extends State<_SugarTab>
                           'embedded.pdf',
                           (sink) => _pdf.embedFile(src, sink,
                               name: 'readme.txt',
-                              fileData: MemorySource(Uint8List.fromList(
+                              fileData: DemoSource(Uint8List.fromList(
                                   'Hello from pdf_manipulator!'.codeUnits))))),
                   _Op(
                       icon: Icons.format_paint,
@@ -1554,10 +1568,10 @@ class _SugarTabState extends State<_SugarTab>
                       onRun: () => runFlow('ImageStamp', () async {
                             final imgs = await pickImageBytes();
                             if (imgs == null || imgs.isEmpty) return;
-                            final sink = MemorySink();
+                            final sink = DemoSink();
                             await _pdf.addImageStamp(src, sink,
                                 page: 0,
-                                imageData: MemorySource(imgs.first.bytes),
+                                imageData: DemoSource(imgs.first.bytes),
                                 rect: const PdfRect(
                                     x: 100, y: 100, width: 150, height: 150));
                             await saveResult(
@@ -1578,11 +1592,11 @@ class _SugarTabState extends State<_SugarTab>
                       onRun: () => runFlow('ImgToPdf', () async {
                             final imgs = await pickImageBytes();
                             if (imgs == null || imgs.isEmpty) return;
-                            final sink = MemorySink();
+                            final sink = DemoSink();
                             await _pdf.imagesToPdf(
                                 imgs
                                     .map((i) =>
-                                        MemorySource(i.bytes) as DataSource)
+                                        DemoSource(i.bytes) as DataSource)
                                     .toList(),
                                 sink);
                             await saveResult(
@@ -1621,8 +1635,8 @@ class _StandaloneTabState extends State<_StandaloneTab>
       pick((p) => setState(() => status = 'Loaded (${fmtSize(p.length)})')));
 
   Future<void> _opToFile(String label, String filename,
-      PdfTask<void> Function(MemorySink sink) start) async {
-    final sink = MemorySink();
+      PdfTask<void> Function(DemoSink sink) start) async {
+    final sink = DemoSink();
     if (await runTask(label, () => start(sink))) {
       await saveResult(sink.takeBytes(), filename);
     }
@@ -1689,12 +1703,12 @@ class _StandaloneTabState extends State<_StandaloneTab>
                       subtitle: 'Converts to DOCX first, then back to PDF',
                       loading: loading,
                       onRun: () => runFlow('DOCX→PDF', () async {
-                            final docxSink = MemorySink();
+                            final docxSink = DemoSink();
                             await _pdf.convertTo(src, docxSink,
                                 format: PdfDocumentFormat.docx);
-                            final pdfSink = MemorySink();
+                            final pdfSink = DemoSink();
                             await _pdf.convertToPdf(
-                                MemorySource(docxSink.takeBytes()), pdfSink,
+                                DemoSource(docxSink.takeBytes()), pdfSink,
                                 format: PdfDocumentFormat.docx);
                             await saveResult(
                                 pdfSink.takeBytes(), 'roundtrip.pdf');
@@ -1758,7 +1772,7 @@ class _EditorTabState extends State<_EditorTab>
 
   Future<Uint8List> _saveEditor(PdfEditor e,
       [PdfSaveOptions options = const PdfSaveOptions.fullRewrite()]) async {
-    final sink = MemorySink();
+    final sink = DemoSink();
     await e.save(sink, options: options);
     return sink.takeBytes();
   }
@@ -1861,7 +1875,7 @@ class _EditorTabState extends State<_EditorTab>
                       title: 'Merge with self',
                       loading: loading,
                       onRun: () => _edit('Merge', (e) async {
-                            await e.mergeFrom(MemorySource(bytes!));
+                            await e.mergeFrom(DemoSource(bytes!));
                             return _saveEditor(e);
                           })),
                   _Section('Optimization'),
@@ -1921,7 +1935,7 @@ class _EditorTabState extends State<_EditorTab>
                               return _saveEditor(e);
                             }
                             await e.addImageStamp(
-                                0, MemorySource(imgs.first.bytes),
+                                0, DemoSource(imgs.first.bytes),
                                 rect: const PdfRect(
                                     x: 100, y: 100, width: 150, height: 150));
                             return _saveEditor(e);
@@ -1934,7 +1948,7 @@ class _EditorTabState extends State<_EditorTab>
                       onRun: () => _edit('Embed', (e) async {
                             await e.embedFile(
                                 'note.txt',
-                                MemorySource(
+                                DemoSource(
                                     Uint8List.fromList('Hello!'.codeUnits)));
                             return _saveEditor(e);
                           })),
@@ -2099,7 +2113,7 @@ class _BuilderTabState extends State<_BuilderTab>
       final b = await _pdf.build();
       try {
         await body(b);
-        final sink = MemorySink();
+        final sink = DemoSink();
         await b.save(sink);
         await saveResult(sink.takeBytes(), filename);
       } finally {
@@ -2328,7 +2342,7 @@ class _BuilderTabState extends State<_BuilderTab>
                   await _build('Image', 'built_image.pdf', (b) async {
                     final p = await b.addA4Page();
                     await p.heading(1, 'Image Demo');
-                    await p.image(MemorySource(imgs.first.bytes),
+                    await p.image(DemoSource(imgs.first.bytes),
                         const PdfRect(x: 72, y: 500, width: 200, height: 200));
                     await p.done();
                   });
@@ -2413,11 +2427,11 @@ class _MergeTabState extends State<_MergeTab>
 
   Future<void> _merge() async {
     if (_files.length < 2) return;
-    final sink = MemorySink();
+    final sink = DemoSink();
     final ok = await runTask(
         'Merging ${_files.length} files',
         () => _pdf.merge(
-            _files.map((f) => MemorySource(f.bytes) as DataSource).toList(),
+            _files.map((f) => DemoSource(f.bytes) as DataSource).toList(),
             sink));
     if (ok) {
       final r = sink.takeBytes();
