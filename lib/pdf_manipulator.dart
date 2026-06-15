@@ -45,3 +45,10 @@ export 'src/types/data_sink.dart';
 export 'src/types/data_source.dart';
 export 'src/types/search_result.dart';
 export 'src/types/pdf_task.dart' show PdfTask;
+
+// Ready-made sources & sinks. Memory-backed helpers ship here (pure
+// `dart:typed_data`, web-safe). File-backed helpers need `dart:io`, so
+// they live in the separate `package:pdf_manipulator/io.dart` entry point
+// to keep this library `dart:io`-free.
+export 'src/io/memory_sink.dart';
+export 'src/io/memory_source.dart';

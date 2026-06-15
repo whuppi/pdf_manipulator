@@ -1,5 +1,6 @@
-.PHONY: check analyze check-deps fixtures \
+.PHONY: check analyze check-deps fixtures test-guards \
        build build-native build-wasm \
+       compile-macos compile-ios compile-android compile-linux compile-windows compile-wasm compile-natives \
        test test-pkg-native test-unit \
        test-ops test-ops-native test-ops-web test-ops-opfs test-ops-jspi test-ops-atomics \
        test-example test-example-matrix test-example-macos test-example-linux test-example-windows \
@@ -7,7 +8,6 @@
        test-example-web test-example-web-jspi test-example-web-atomics test-example-web-opfs \
        verify verify-android verify-ios verify-macos \
        verify-linux verify-windows verify-web \
-       compile-macos compile-ios compile-android compile-linux compile-windows compile-wasm compile-natives \
        clean
 
 # ═══════════════════════════════════════════════════════════════════
@@ -83,6 +83,8 @@ test-guards:
 	@bad=$$(grep -rln "dart:io" test/ --include="*.dart" \
 	  | grep -v "test/harness/asset_server.dart" \
 	  | grep -v "test/ops/platform/native/" \
+	  | grep -v "test/io/file_source_test.dart" \
+	  | grep -v "test/io/file_sink_test.dart" \
 	  | grep -v "test/bridge/protocol/wire_sync_test.dart" \
 	  | grep -v "test/runtime/web/lane_worker_sync_test.dart" \
 	  | grep -v "test/runtime/dumb_edges_test.dart" || true); \
@@ -169,9 +171,9 @@ test: fixtures test-unit test-ops
 test-pkg-native: fixtures test-unit test-ops-native
 
 test-unit:
-	@echo "=== Unit: types + bridge + runtime + harness ==="
+	@echo "=== Unit: types + io + bridge + runtime + harness ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
-	$(DART) test $(TIMEOUT) test/types/ test/bridge/ test/runtime/ test/harness/ -p vm --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/unit.json
+	$(DART) test $(TIMEOUT) test/types/ test/io/ test/bridge/ test/runtime/ test/harness/ -p vm --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/unit.json
 
 test-ops: fixtures test-ops-native test-ops-web
 
@@ -229,6 +231,7 @@ define setup_example_web
 endef
 
 define run_example_web
+	@echo "=== Example: Web $(1) ==="
 	@./tool/run_web_test.sh $(2) $(FLUTTER)
 endef
 
@@ -298,10 +301,10 @@ test-example-web-opfs:
 
 # ═══════════════════════════════════════════════════════════════════
 # § 7 — Verify (prove release builds work, output thrown away)
-#
-# Debug and release builds exercise different code paths in the
-# build hook. These verify the hook works in release mode.
 # ═══════════════════════════════════════════════════════════════════
+#
+# Debug and release builds exercise different code paths in the build
+# hook; these prove the hook works in release mode.
 #
 # make verify          All 6 targets.
 # make verify-android  Android APK.
@@ -343,6 +346,8 @@ verify-web:
 # ═══════════════════════════════════════════════════════════════════
 # § 8 — Clean
 # ═══════════════════════════════════════════════════════════════════
+#
+# make clean   Remove generated build + test-result artifacts.
 
 clean:
 	rm -rf .dart_tool/hooks_runner/ .dart_tool/lib/ .dart_tool/native_assets/ build_output/ test-results/
