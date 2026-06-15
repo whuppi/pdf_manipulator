@@ -1,10 +1,12 @@
 ![pdf_manipulator — cross-platform PDF manipulation for Dart & Flutter](assets/banner.webp)
 
-[![pub package](https://img.shields.io/pub/v/pdf_manipulator.svg)](https://pub.dev/packages/pdf_manipulator)
-[![likes](https://img.shields.io/pub/likes/pdf_manipulator)](https://pub.dev/packages/pdf_manipulator/score)
-[![pub points](https://img.shields.io/pub/points/pdf_manipulator)](https://pub.dev/packages/pdf_manipulator/score)
-[![GitHub stars](https://img.shields.io/github/stars/whuppi/pdf_manipulator?style=flat&logo=github)](https://github.com/whuppi/pdf_manipulator)
-[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+<p align="center">
+  <a href="https://pub.dev/packages/pdf_manipulator"><img src="https://img.shields.io/pub/v/pdf_manipulator.svg" alt="pub package"></a>
+  <a href="https://pub.dev/packages/pdf_manipulator/score"><img src="https://img.shields.io/pub/likes/pdf_manipulator" alt="likes"></a>
+  <a href="https://pub.dev/packages/pdf_manipulator/score"><img src="https://img.shields.io/pub/points/pdf_manipulator" alt="pub points"></a>
+  <a href="https://github.com/whuppi/pdf_manipulator"><img src="https://img.shields.io/github/stars/whuppi/pdf_manipulator?style=flat&logo=github" alt="GitHub stars"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="license: MIT"></a>
+</p>
 
 Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extract, search, sign, encrypt, validate, convert, or build from scratch. Every operation runs off the main thread and streams large files in chunks. Any of it can be cancelled mid-flight.
 
