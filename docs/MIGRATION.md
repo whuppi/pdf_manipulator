@@ -35,6 +35,10 @@ await pdf.dispose();
 
 You implement `DataSource` and `DataSink` for whatever backing store you have — file, memory, HTTP, web blob. See the [README](../README.md) for examples.
 
+### Indexing change
+
+v0 used **1-based** page numbers; v1 uses **0-based** indices everywhere — subtract 1 from every page number when migrating. The examples below show the shift inline.
+
 ---
 
 ## Method-by-method
@@ -323,12 +327,6 @@ try {
 
 ---
 
-## Indexing change
-
-v0 used **1-based** page numbers. v1 uses **0-based** indices everywhere. Subtract 1 from every page number when migrating.
-
----
-
 ## Types removed
 
 | v0 type | v1 replacement |
@@ -369,7 +367,7 @@ No migration needed — just start using:
 - Convert to/from DOCX, PPTX, XLSX
 - PdfEditor — batch mutations, incremental save, encrypted save
 - PdfBuilder — create from scratch with form fields, links, columns, footnotes
-- Stamp annotations (13 types + image stamps)
+- Stamp annotations (14 types + image stamps)
 - Redaction, metadata scrub, crop margins
 - Resource pruning (image optimization, font unembedding)
 - Form field value setting

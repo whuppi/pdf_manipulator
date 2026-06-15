@@ -1,5 +1,6 @@
-.PHONY: check analyze check-deps fixtures \
+.PHONY: check analyze check-deps fixtures test-guards \
        build build-native build-wasm \
+       compile-macos compile-ios compile-android compile-linux compile-windows compile-wasm compile-natives \
        test test-pkg-native test-unit \
        test-ops test-ops-native test-ops-web test-ops-opfs test-ops-jspi test-ops-atomics \
        test-example test-example-matrix test-example-macos test-example-linux test-example-windows \
@@ -7,7 +8,6 @@
        test-example-web test-example-web-jspi test-example-web-atomics test-example-web-opfs \
        verify verify-android verify-ios verify-macos \
        verify-linux verify-windows verify-web \
-       compile-macos compile-ios compile-android compile-linux compile-windows compile-wasm compile-natives \
        clean
 
 # ═══════════════════════════════════════════════════════════════════
@@ -229,6 +229,7 @@ define setup_example_web
 endef
 
 define run_example_web
+	@echo "=== Example: Web $(1) ==="
 	@./tool/run_web_test.sh $(2) $(FLUTTER)
 endef
 
@@ -298,10 +299,10 @@ test-example-web-opfs:
 
 # ═══════════════════════════════════════════════════════════════════
 # § 7 — Verify (prove release builds work, output thrown away)
-#
-# Debug and release builds exercise different code paths in the
-# build hook. These verify the hook works in release mode.
 # ═══════════════════════════════════════════════════════════════════
+#
+# Debug and release builds exercise different code paths in the build
+# hook; these prove the hook works in release mode.
 #
 # make verify          All 6 targets.
 # make verify-android  Android APK.
@@ -343,6 +344,8 @@ verify-web:
 # ═══════════════════════════════════════════════════════════════════
 # § 8 — Clean
 # ═══════════════════════════════════════════════════════════════════
+#
+# make clean   Remove generated build + test-result artifacts.
 
 clean:
 	rm -rf .dart_tool/hooks_runner/ .dart_tool/lib/ .dart_tool/native_assets/ build_output/ test-results/

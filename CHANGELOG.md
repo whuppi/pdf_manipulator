@@ -1,6 +1,63 @@
 # Changelog
 
-<!-- Stable releases. Add ## heading at top, CI handles the rest. -->
+<!--
+═══════════════════════════════════════════════════════════════════════
+CHANGELOG STANDARD — read before editing. Applies to both changelogs.
+═══════════════════════════════════════════════════════════════════════
+Two files, same content: CHANGELOG.pre.md (prerelease, `## X.Y.Z-dev.0`)
+and CHANGELOG.md (stable, `## X.Y.Z`). Edit ONLY CHANGELOG.pre.md, then
+regenerate the stable file from it — never hand-edit CHANGELOG.md:
+
+    cp CHANGELOG.pre.md CHANGELOG.md
+    sed -i '' -e '1s/^# Prerelease Changelog$/# Changelog/' \
+              -e '/^## /s/-dev\.[0-9]*//' CHANGELOG.md
+
+ADDING A VERSION
+  Add a `## X.Y.Z-dev.0` heading at the TOP (newest first) and write the
+  summary. One heading per version — bump the version for new work, never
+  add a second `-dev.N` to a version already listed (two dev builds of one
+  version collide into a duplicate `## X.Y.Z` when the stable file is
+  regenerated). Versions, commit lists, tags, publishing — the release
+  tooling owns all of it; you only write the human summary.
+
+ENTRY SHAPE
+  ## X.Y.Z-dev.0
+  <one-line prose lead — only to frame a big release or signal "no
+   behavior change"; omit when the bullets speak for themselves>
+  - **Breaking:** <what changed> → <migration step, INLINE>   ← always first
+  - <upgrade action, e.g. "re-run setup --force web">         ← any required action next
+  - Added/Changed <capability or improvement>                ← then improvements
+  - Fixed <bug> ([PR #N](abs-url), [@user](abs-url))          ← fixes last
+
+  Order IS the grouping — Breaking → action → added/changed → fixed. No
+  `###` subsections: bullet order carries the categories. Only Breaking
+  is bold-tagged; everything else is verb-led. Fixes start with "Fixed".
+
+  EXCEPTION — the genesis entry (a ground-up rewrite, no prior version)
+  uses facet tags instead of deltas: **Engine:** / **API:** / **I/O:** /
+  etc., describing the new package's dimensions. See the 1.0.0 entry.
+
+CONTENT RULES (never change)
+  • Migrate from the entry ALONE — breaking changes inline, old → new.
+    (pub.dev freezes each version's CHANGELOG as a snapshot, so an entry
+    can't rely on anything that later moves.)
+  • NEVER link a living doc (README, docs/*) from an entry — it rots when
+    the doc moves on. The migration guide is reached from the README.
+  • Links point only at IMMUTABLE targets — a specific PR or commit:
+    ([PR #N](https://github.com/whuppi/pdf_manipulator/pull/N),
+    [@user](https://github.com/user)).
+  • No capability inventories — "what's shipped" lives in README +
+    docs/CAPABILITY_ROADMAP.md; the changelog says only what CHANGED.
+═══════════════════════════════════════════════════════════════════════
+-->
+
+<!-- Add new versions below, newest first. -->
+
+## 2.0.1
+
+Docs-only — no code or API changes.
+
+- README and every guide (architecture, capabilities, migration, updating, contributing) rewritten, restructured, and verified against the source
 
 ## 2.0.0
 
@@ -52,43 +109,12 @@ own *lane* — a dedicated Rust thread (native) or Web Worker (web).
 
 ## 1.0.0
 
-Complete ground-up rewrite. New engine, new API, cross-platform. See the [migration guide](docs/MIGRATION.md) for upgrading from the old Android-only version.
+Complete ground-up rewrite — new Rust engine, new instance API, cross-platform (previously Android only). The package docs carry the migration guide and the full capability list.
 
-### What changed
-
-- **Engine:** pdf_oxide (Rust, MIT/Apache-2.0) replaces the previous Android-only backend
+- **Engine:** pdf_oxide (Rust, MIT/Apache-2.0) replaces the Android-only backend
 - **Targets:** iOS, Android, macOS, Windows, Linux, Web — previously Android only
-- **API:** Instance-based `Pdf()` with `dispose()`. Batch editing via `pdf.edit(source)`. Create from scratch via `pdf.build()`
-- **I/O:** `DataSource` in, `DataSink` out — no file paths, no `dart:io`. Same code on every target. Engine reads only what it needs, never the full file
-- **Errors:** Typed `PdfError` sealed class — no more `PlatformException`
-- **Performance:** Every operation runs off the main thread. Zero UI jank. No full-file buffers
-- **SDK:** Requires Dart >=3.10.0
-
-### Capabilities
-
-- Open and inspect (page count, version, dimensions, metadata, encryption, permissions)
-- Merge, split, split by size, split by bookmarks
-- Extract pages, delete pages, reorder, move page
-- Rotate (per-page and all pages)
-- Compress with image optimization
-- Watermark (styled, positioned — sealed PdfWatermarkPosition with center/corner/tiled/exact, foreground/background layer)
-- Encrypt (4 algorithms, 8 permission flags) and decrypt
-- Digital signatures (inspect, verify, sign via PKCS12/PEM)
-- Extract text, Markdown, HTML
-- Search text with bounding rectangles
-- Render pages to RGBA images (Stream)
-- Extract embedded images (Stream)
-- PDF/A and PDF/UA validation
-- Page and document classification
-- Convert to/from DOCX, PPTX, XLSX
-- PdfEditor — open once, mutate many, save once (full rewrite or incremental)
-- PdfBuilder — create PDFs from scratch (text, headings, images, form fields, links, columns, footnotes)
-- Form fields: text, checkbox, combo box, push button, signature
-- Stamp annotations (14 built-in types + image stamps)
-- Font unembedding, image resize, crop margins
-- Embed files, erase regions, flatten forms/annotations
-- Redaction (add, count, apply, scrub metadata)
-- PDF/A conversion
-- Resource pruning on GC save
-- Images to PDF
-- 21 sugar methods on PdfOperations extension
+- **API:** instance-based `Pdf()` with `dispose()`; batch editing via `pdf.edit(source)`, create from scratch via `pdf.build()`
+- **I/O:** `DataSource` in, `DataSink` out — no file paths, no `dart:io`, same code on every target
+- **Errors:** typed `PdfError` sealed class — no more `PlatformException`
+- **Performance:** every operation off the main thread, no full-file buffers
+- **SDK:** requires Dart >=3.10.0
