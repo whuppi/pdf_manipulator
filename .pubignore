@@ -2,3 +2,7 @@
 # Tests + their committed fixtures stay out of the pub download — they can
 # never affect a consumer app's size either way (not in any import graph).
 test/
+
+# Banner: ship only the optimized .webp the README embeds. The heavy PNG
+# source stays tracked in git, but out of the published download.
+assets/banner.png

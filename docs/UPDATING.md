@@ -347,11 +347,14 @@ gh workflow run "Release" --repo whuppi/pdf_manipulator --ref <branch> --field b
 
 ### Syncing prod to dev (after divergence)
 
-If prod diverges from dev (e.g. accidental squash merge on a promotion
-PR), force-sync prod to dev:
+If prod diverges from dev (e.g. an accidental squash merge on a
+promotion PR), force-sync it. Prod normally forbids force-push, so the
+procedure is **allow → sync → re-forbid** — and steps 1 and 3 are the
+*same* protection-PUT call with only the final `allow_force_pushes`
+flag flipped (`true`, then `false`).
 
 ```sh
-# 1. Temporarily allow force-push on prod
+# Step 1 — allow force-push (allow_force_pushes=true):
 gh api repos/whuppi/pdf_manipulator/branches/prod/protection -X PUT \
   -F "required_status_checks[strict]=true" \
   -F "required_status_checks[checks][][context]=Conventional Commit" -F "required_status_checks[checks][][app_id]=15368" \
@@ -363,20 +366,10 @@ gh api repos/whuppi/pdf_manipulator/branches/prod/protection -X PUT \
   -F "enforce_admins=false" -F "restrictions=null" -F "allow_force_pushes=true" \
   --silent
 
-# 2. Force-sync
+# Step 2 — force-sync:
 git push origin dev:prod --force-with-lease
 
-# 3. Disable force-push
-gh api repos/whuppi/pdf_manipulator/branches/prod/protection -X PUT \
-  -F "required_status_checks[strict]=true" \
-  -F "required_status_checks[checks][][context]=Conventional Commit" -F "required_status_checks[checks][][app_id]=15368" \
-  -F "required_status_checks[checks][][context]=Full Test Gate" -F "required_status_checks[checks][][app_id]=15368" \
-  -F "required_status_checks[checks][][context]=CI Gate" -F "required_status_checks[checks][][app_id]=15368" \
-  -F "required_pull_request_reviews[dismiss_stale_reviews]=true" \
-  -F "required_pull_request_reviews[require_code_owner_reviews]=true" \
-  -F "required_pull_request_reviews[required_approving_review_count]=1" \
-  -F "enforce_admins=false" -F "restrictions=null" -F "allow_force_pushes=false" \
-  --silent
+# Step 3 — re-forbid: rerun the Step 1 command with allow_force_pushes=false
 ```
 
 ### Failure recovery
@@ -406,9 +399,12 @@ runner model, capability architecture, and action inventory.
 
 | Path | Owner |
 |---|---|
+| `*` (default — everything else) | `@whuppi/pdf-manipulator-maintainers` |
 | `CHANGELOG.md`, `CHANGELOG.pre.md` | `@chaudharydeepanshu` |
 | `pubspec.yaml` | `@chaudharydeepanshu` |
 | `.github/`, `.githooks/` | `@chaudharydeepanshu` |
+
+Last match wins (gitignore semantics): the release/config paths override the default-team rule.
 
 ---
 

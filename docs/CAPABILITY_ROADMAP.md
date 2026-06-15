@@ -2,10 +2,13 @@
 
 Every Rust engine capability mapped to its Dart surface.
 
-**O(1) memory I/O — non-negotiable.** Every shipped op streams through
-bounded buffers. Every PLANNED op must do the same. The test guards
-(TestSource 64KB, TestSink 256KB) enforce this mechanically — see
-the test architecture in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+**Bounded-buffer I/O — non-negotiable.** Every shipped op streams
+through fixed-size buffers (64KB read, 256KB write); every PLANNED op
+must too. The test guards (TestSource 64KB, TestSink 256KB) enforce the
+*transport* limits mechanically — see the test architecture in
+[`ARCHITECTURE.md`](ARCHITECTURE.md). Full peak-memory verification of
+Rust-internal processing is itself a tracked gap (see **Test
+infrastructure gaps**).
 
 Five files, strict rules:
 
@@ -217,7 +220,12 @@ Five files, strict rules:
 | Three web I/O modes (JSPI / Atomics / OPFS), identical suite | DONE |
 | Item streaming over the job port (multi-result ops without buffering) | PLANNED — the job's result port is already a message channel: promote it to N interim messages + 1 terminal message. Inherits per-job cancel, instant kill, and the post-driven cleanup protocol unchanged; symmetric on web (worker postMessage). Never add a second transport method for this. |
 
-## Summary
+---
+
+## Summary — API surface
+
+Totals for the five consumer surfaces above. Runtime, build, and roadmap
+capabilities are tracked in their own sections.
 
 | Category | Done | Planned |
 |---|---|---|
@@ -241,9 +249,7 @@ Five files, strict rules:
 | `setup --force web` | DONE | Re-download web assets (debugging) |
 | SHA-256 hash verification (all assets) | DONE | Native + web, stale detection on setup |
 | `build.json` | DONE | Single source of truth for crate, repo, features, web assets |
-| Link hook (`hook/link.dart`) | DONE | Passthrough today — see tree-shaking rows below |
-| Per-feature opt-out via `user_defines` | PLANNED | Consumers disable features in pubspec → smaller binary. Pattern proven by icu_kit. Works today, no SDK changes needed. |
-| Automatic tree-shaking via `@RecordUse` | PLANNED | Compiler detects used APIs, link hook maps to cargo features. Zero config. Blocked: [dart-lang/native#2902](https://github.com/dart-lang/native/issues/2902), [dart-lang/sdk#52970](https://github.com/dart-lang/sdk/issues/52970) |
+| Link hook (`hook/link.dart`) | DONE | Passthrough today; the foundation for the tree-shaking work in **Binary size — feature trimming** |
 | Automatic web setup via build hook | BLOCKED | See details below |
 
 ### Automatic web setup — what's blocking, what to track
@@ -273,13 +279,36 @@ wires the trigger, `main()` adds one call to `resolveWeb()` and
 
 ---
 
-## Out of scope
+## Binary size — feature trimming
 
-| Feature | Why not |
+| Stage | Approach | Status |
+|---|---|---|
+| Cargo features via `user_defines` | Consumers opt out of features in pubspec (`hooks: user_defines: pdf_manipulator: {rendering: false, office: false}`); the build hook maps these to `--features` for cargo. One smaller binary, no link-hook changes — user_defines flow through `BuildInput`. Pattern proven by icu_kit's `bundleCldrData` toggle. | PLANNED |
+| Automatic tree-shaking via `@RecordUse` | The compiler records which Dart APIs the app calls; the link hook maps methods to cargo features and recompiles with only what is needed. Zero user config. Blocked upstream: `@RecordUse` instance methods (dart-lang/native#2902), FFI tree-shaking umbrella (dart-lang/sdk#52970). | PLANNED |
+| Web parity | WASM is network-served, so size matters more than native — but per-feature WASM binaries add too much setup complexity. Wait for web build-hook support (dart-lang/native#988), which gives web the same cargo-features path as native. pdf_manipulator's size is CODE (rendering, office, signing), not data, so lazy data loading does not apply. | PLANNED |
+
+---
+
+## Built in the engine, not shipped
+
+These exist in the Rust core (`pdf_oxide`) behind cargo features but are excluded from the shipped `pdf_manipulator` feature sets (`build.json`) — they pull the ONNX runtime and large model files that would bloat every install. No Dart op exposes them today; with the feature off, the FFI returns `_ERR_UNSUPPORTED`. A size tradeoff, not a missing capability.
+
+| Capability | Engine support | Why not shipped |
+|---|---|---|
+| OCR (scanned-page text) | PaddleOCR — DBNet++ detect → SVTR recognize — via ONNX; auto-detects scanned vs native pages; gated on `ocr` / `ocr-tract` / `wasm-ocr` | Adds the ONNX runtime + ~12.5 MB of models per install |
+| Table extraction | `table_extractor` + `spatial_table_detector`, gated on `table-ml` / `ml` | Same ML stack (ONNX + model weight) |
+
+The planned route to expose these without bloating the default is per-feature opt-in via `user_defines` (see [Binary size — feature trimming](#binary-size--feature-trimming)): the consumer enables the cargo feature in their own pubspec and accepts the ONNX runtime + model download. It's deliberately opt-in, not default — and still extra setup on the consumer's side, not a clean built-in. Open an issue to push it forward; demand is what decides priority.
+
+---
+
+## Not planned — open an issue if you need it
+
+| Feature | Where it stands |
 |---|---|
-| OCR | Requires Tesseract or similar — not a PDF primitive |
-| Table extraction | Heuristic-heavy — better served by dedicated libraries |
-| PDF viewer widget | Use pdfx or flutter_pdfview — they're built for viewing, we're built for manipulation |
+| PDF viewer widget | `doc.render(...)` already gives you page images, so a viewer is *buildable* on top — but [pdfx](https://pub.dev/packages/pdfx) and [flutter_pdfview](https://pub.dev/packages/flutter_pdfview) already do viewing well, and this package's focus is manipulation, not UI. Not prioritized; open an issue if a first-party viewer would help. |
+
+---
 
 ## Deferred — surfaced by the test overhaul (2026-06-12)
 
@@ -289,13 +318,7 @@ wires the trigger, `main()` adds one call to `resolveWeb()` and
 | Attachment-listing read API | PLANNED | embedFile currently has no semantic presence proof — tests fall back to structural checks until attachments can be enumerated. |
 | Typed wire error codes (PdfWrongPassword, PdfCorrupted, … from Rust) | PLANNED | Engine failures are typed as `PdfEngineError(message)` today; per-kind types need error codes on the wire protocol. |
 
-## Binary size — feature trimming
-
-| Stage | Approach | Status |
-|---|---|---|
-| Cargo features via `user_defines` | Consumers opt out of features in pubspec (`hooks: user_defines: pdf_manipulator: {rendering: false, office: false}`); the build hook maps these to `--features` for cargo. One smaller binary, no link-hook changes — user_defines flow through `BuildInput`. Pattern proven by icu_kit's `bundleCldrData` toggle. | PLANNED |
-| Automatic tree-shaking via `@RecordUse` | The compiler records which Dart APIs the app calls; the link hook maps methods to cargo features and recompiles with only what is needed. Zero user config. Blocked upstream: `@RecordUse` instance methods (dart-lang/native#2902), FFI tree-shaking umbrella (dart-lang/sdk#52970). | PLANNED |
-| Web parity | WASM is network-served, so size matters more than native — but per-feature WASM binaries add too much setup complexity. Wait for web build-hook support (dart-lang/native#988), which gives web the same cargo-features path as native. pdf_manipulator's size is CODE (rendering, office, signing), not data, so lazy data loading does not apply. | PLANNED |
+---
 
 ## Test infrastructure gaps
 

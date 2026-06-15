@@ -9,7 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:pdf_manipulator_example/main.dart'
-    show MemorySource, MemorySink, minimalPdf, testCertPem, testKeyPem;
+    show minimalPdf, testCertPem, testKeyPem;
 
 import 'package:pdf_manipulator_example_test_support/pdf_manipulator_example_test_support.dart';
 
