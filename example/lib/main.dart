@@ -34,9 +34,9 @@ import 'package:pdf_manipulator/pdf_manipulator.dart';
 //
 // For the quick path, the package SHIPS MemorySource / MemorySink
 // (`package:pdf_manipulator/pdf_manipulator.dart`) and FileSource /
-// FileSink (`package:pdf_manipulator/io.dart`). The Standalone tab
-// shows the shipped MemorySink in use; everything else uses these
-// custom impls to show the interface is open.
+// FileSink (`package:pdf_manipulator/io.dart`). The Sugar tab shows
+// the shipped MemorySink in use; everything else uses these custom
+// impls to show the interface is open.
 
 /// Random-access source over bytes already in memory.
 class DemoSource implements DataSource {
