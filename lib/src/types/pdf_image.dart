@@ -54,7 +54,7 @@ class RenderedPage {
   /// Bitmap height in pixels.
   final int height;
 
-  /// Raw RGBA pixel bytes.
+  /// PNG-encoded image of the page; decode it to read pixels.
   final Uint8List data;
 
   @override
