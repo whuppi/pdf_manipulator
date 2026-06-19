@@ -19,6 +19,7 @@ env:
 
 jobs:
   inputs:
+    name: Resolve inputs
     runs-on: ubuntu-24.04
     outputs:
       runner: ${{ steps.resolve.outputs.runner }}
@@ -28,6 +29,7 @@ jobs:
 
   # ── Auto-label by file path (actions/labeler) ──
   label-by-files:
+    name: Label by changed files
     needs: inputs
     if: github.event_name == 'pull_request_target'
     runs-on: ${{ needs.inputs.outputs.runner }}
@@ -38,6 +40,7 @@ jobs:
 
   # ── Auto-label by PR title + branch ──
   label-by-title:
+    name: Label by title
     needs: inputs
     if: github.event_name == 'pull_request_target' && github.event.action == 'opened'
     runs-on: ${{ needs.inputs.outputs.runner }}
@@ -68,6 +71,7 @@ jobs:
 
   # ── Auto-assign maintainer ──
   assign:
+    name: Assign maintainer
     needs: inputs
     runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
@@ -86,6 +90,7 @@ jobs:
 
   # ── Revoke stale ready-to-test on new commits ──
   revoke-ready-to-test:
+    name: Revoke ready-to-test
     needs: inputs
     if: >-
       github.event_name == 'pull_request_target' &&
@@ -106,6 +111,7 @@ jobs:
 
   # ── Dependabot recreate notice ──
   dependabot-needs-recreate:
+    name: Dependabot recreate notice
     needs: inputs
     if: >-
       github.event_name == 'pull_request_target' &&

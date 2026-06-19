@@ -638,17 +638,26 @@ user-facing text (README, pubspec).
    combo = one line. Adding a new capability = one action + one
    input on `make-target` + add to rows that need it.
 
+8. **Every job is named.** A job's YAML key (its ID) is the code
+   handle — terse, lowercase, used only by `needs:` and
+   `${{ needs.<id>.* }}`, and hyphen-free where referenced in a `needs`
+   expression (a hyphen reads as minus there, so `rust`, not
+   `rust-tests`). The `name:` is the human label the GitHub UI shows
+   and is REQUIRED on every job — never let one fall back to its raw
+   ID. Matrix jobs set `name: <prefix>: ${{ matrix.name }}`.
+
 ### Actions
 
 ```
 .github/actions/
-├── capabilities/          13 independent leaves
+├── capabilities/          14 independent leaves
 │   ├── fvm/               Flutter SDK (all runners)
 │   ├── rust/              Rust toolchain + sccache (all runners)
 │   ├── java/              JDK (all runners)
 │   ├── chrome/            Chrome + ChromeDriver (Linux/macOS/Windows)
 │   ├── headless-display/  xvfb on Linux, no-op elsewhere
 │   ├── hw-accel/          KVM on Linux, no-op elsewhere
+│   ├── free-disk-space/   Reclaim disk on Linux, no-op elsewhere
 │   ├── gradle-cache/      Two-phase restore/save + daemon stop
 │   ├── xcode-cache/       Xcode derived data cache
 │   ├── pods-cache/        CocoaPods cache
