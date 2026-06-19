@@ -23,6 +23,7 @@ env:
 
 jobs:
   inputs:
+    name: Resolve inputs
     runs-on: ubuntu-24.04
     outputs:
       runner: ${{ steps.resolve.outputs.runner }}
@@ -36,6 +37,7 @@ jobs:
     runs-on: ${{ needs.inputs.outputs.runner }}
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      rust: ${{ steps.filter.outputs.rust }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v4
@@ -53,8 +55,14 @@ jobs:
               - 'analysis_options.yaml'
               - 'Makefile'
               - '.github/**'
+            rust:
+              - 'vendor/**'
+              - 'build.json'
+              - 'Makefile'
+              - '.github/**'
 
   analyze:
+    name: Analyze
     needs: [inputs, changes]
     if: needs.changes.outputs.code == 'true'
     runs-on: ${{ needs.inputs.outputs.runner }}
@@ -67,6 +75,7 @@ jobs:
           make-target: analyze
 
   test:
+    name: Package tests
     needs: [inputs, changes]
     if: needs.changes.outputs.code == 'true'
     runs-on: ${{ needs.inputs.outputs.runner }}
@@ -78,10 +87,28 @@ jobs:
         with:
           make-target: test-pkg-native
 
+  # Vendored-engine cargo tests — only when a PR touches the engine, its
+  # features, the Makefile, or CI. Skipped on Dart-only PRs.
+  rust:
+    name: Rust tests
+    needs: [inputs, changes]
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ${{ needs.inputs.outputs.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with: { submodules: recursive }
+      # free-disk: the engine's debug build overruns a stock runner's
+      # ~14 GB free; the capability reclaims room (Linux only).
+      - uses: ./.github/actions/make-target
+        with:
+          make-target: test-rust
+          free-disk: 'true'
+
   gate:
     name: CI Gate
     if: always()
-    needs: [inputs, changes, analyze, test]
+    needs: [inputs, changes, analyze, test, rust]
     runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
       - name: Evaluate
@@ -92,6 +119,11 @@ jobs:
           fi
           if [[ "${{ needs.analyze.result }}" != "success" ]] || [[ "${{ needs.test.result }}" != "success" ]]; then
             echo "FAILED: analyze=${{ needs.analyze.result }} test=${{ needs.test.result }}"
+            exit 1
+          fi
+          # rust runs only when the engine/features/Makefile/CI change; skipped is OK.
+          if [[ "${{ needs.rust.result }}" != "success" && "${{ needs.rust.result }}" != "skipped" ]]; then
+            echo "FAILED: rust=${{ needs.rust.result }}"
             exit 1
           fi
           echo "All CI checks passed"

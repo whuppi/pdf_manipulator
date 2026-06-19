@@ -9,6 +9,10 @@ inputs:
   make-target:
     description: "Makefile target to run"
     required: true
+  free-disk:
+    description: "Reclaim disk for build-heavy jobs (Linux)"
+    required: false
+    default: 'false'
   java:
     description: "Install JDK"
     required: false
@@ -66,6 +70,9 @@ runs:
     - uses: ./.github/actions/capabilities/rust
 
     # ── On demand ──
+    - uses: ./.github/actions/capabilities/free-disk-space
+      if: inputs.free-disk == 'true'
+
     - uses: ./.github/actions/capabilities/java
       if: inputs.java == 'true'
 

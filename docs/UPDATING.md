@@ -105,13 +105,14 @@ done
 
 ```sh
 git rebase vNEW
-cargo test --features native-bridge
+(cd ../.. && make test-rust)
 ```
 
 Resolve conflicts commit by commit. `Cargo.lock` conflicts: take the
 base (`git checkout vNEW -- Cargo.lock`) and let cargo re-add our
-feature deps on the next build. Full `cargo test`, not `--lib` — the
-`tests/` tree catches signature drift the lib tests miss.
+feature deps on the next build. `make test-rust` runs the full `cargo
+test` (not `--lib`) for both crates — the `tests/` tree catches
+signature drift the lib tests miss.
 
 ### 4. Rename branch
 
@@ -164,9 +165,9 @@ patch:
 ```sh
 cd vendor/pdf_oxide
 grep -rl "pdf_manipulator patch" src/ --include="*.rs"
-
-cargo test --features native-bridge
 cd ../..
+
+make test-rust
 make build-wasm
 make check
 ```
@@ -429,9 +430,10 @@ make analyze
 If the Rust check fails, it prints the exact file:line and warning.
 Fix them before committing.
 
-The feature set (`RUST_FEATURES` in the Makefile) must match
-`compile_rust.sh`'s feature definitions — if they diverge, CI catches
-warnings that `make analyze` misses.
+The feature set lives once in `build.json` (`features.native` /
+`features.wasm`); `compile_rust.sh`, the build hook, `make analyze`,
+and `make test-rust` all read it, so the built, analyzed, and tested
+feature sets can't drift apart.
 
 ### Common warning types and fixes
 
