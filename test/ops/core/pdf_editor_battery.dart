@@ -9,6 +9,7 @@
 
 import 'dart:typed_data';
 
+import 'package:image/image.dart' as img;
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
@@ -598,6 +599,79 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final output = sink.takeBytes();
       expect(output.length, greaterThan(minimalPdf.length));
+    }, timeout: t(1));
+
+    test('addImageStamp preserves PNG transparency', () async {
+      // A transparent-background PNG keeps its transparency only if the
+      // engine emits a grayscale /SMask from the alpha channel. Proof is
+      // SEMANTIC — render the stamped page and read the pixels.
+      //
+      // transparentPng is opaque red on the left half, fully transparent
+      // black on the right half. Stamped over a blank WHITE A4 page,
+      // oversized so no page edge stays white:
+      //   • the opaque half must render RED   — proves the stamp drew
+      //   • the transparent half must render WHITE — the page showing
+      //     through. A dropped alpha renders it BLACK, so white ≈ 0.
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(fBlankA4));
+      await editor.addImageStamp(
+        0,
+        src(transparentPng),
+        rect: const PdfRect(x: 0, y: 0, width: 600, height: 850),
+      );
+      final stamped = TestSink();
+      await editor.save(stamped);
+      await editor.dispose();
+
+      final doc = await pdf.open(src(stamped.takeBytes()));
+      final pages = <RenderedPage>[];
+      await for (final page in doc.render(
+        pages: const PdfPages.single(0),
+        size: const PdfRenderSize.thumbnail(160),
+      )) {
+        pages.add(page);
+      }
+      await doc.dispose();
+
+      expect(pages, hasLength(1));
+      // doc.render() yields PNG-encoded frames — decode to pixels.
+      final decoded = img.decodePng(pages.single.data);
+      expect(decoded, isNotNull, reason: 'rendered page must be a valid PNG');
+      final bitmap = decoded!;
+
+      // Count red (opaque half), white (page revealed through the
+      // transparent half), and black (a dropped-alpha black box). With
+      // the /SMask: red ≈ 0.50, white ≈ 0.49, black ≈ 0. A dropped alpha
+      // gives red ≈ 0.07 (also corrupted), white ≈ 0, black ≈ 0.47.
+      var red = 0, white = 0, black = 0;
+      final total = bitmap.width * bitmap.height;
+      for (final p in bitmap) {
+        final r = p.r, g = p.g, b = p.b;
+        if (r > 200 && g < 70 && b < 70) red++;
+        if (r > 220 && g > 220 && b > 220) white++;
+        if (r < 40 && g < 40 && b < 40) black++;
+      }
+
+      expect(total, greaterThan(0));
+      // The opaque half drew — guards against a stamp that does nothing.
+      expect(
+        red / total,
+        greaterThan(0.30),
+        reason: 'opaque red half of the stamp must render',
+      );
+      // The transparent half reveals the white page; a dropped alpha
+      // paints it solid black, so white ≈ 0.
+      expect(
+        white / total,
+        greaterThan(0.30),
+        reason: 'transparent half must reveal the white page, not render black',
+      );
+      // And the transparent region must not be the black box itself.
+      expect(
+        black / total,
+        lessThan(0.05),
+        reason: 'transparent PNG must not render as a black box',
+      );
     }, timeout: t(1));
 
     // ── Content ──
