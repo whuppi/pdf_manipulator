@@ -88,6 +88,18 @@ class _SharedEditorHandle extends BridgeEditorHandle {
     {},
   ).map((map) => codec.decodeEditorMetadata(map).keywords);
 
+  @override
+  PdfTask<String> getProducer() => _exec(
+    EngineOp.editorGetMetadata,
+    {},
+  ).map((map) => codec.decodeEditorMetadata(map).producer);
+
+  @override
+  PdfTask<String> getCreationDate() => _exec(
+    EngineOp.editorGetMetadata,
+    {},
+  ).map((map) => codec.decodeEditorMetadata(map).creationDate);
+
   // ── Metadata setters ──
 
   @override
@@ -101,6 +113,12 @@ class _SharedEditorHandle extends BridgeEditorHandle {
   @override
   PdfTask<void> setKeywords(String value) =>
       _mutate('setKeywords', {'keywords': value});
+  @override
+  PdfTask<void> setProducer(String value) =>
+      _mutate('setProducer', {'producer': value});
+  @override
+  PdfTask<void> setCreationDate(String value) =>
+      _mutate('setCreationDate', {'creationDate': value});
 
   // ── Pages ──
 

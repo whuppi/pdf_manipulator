@@ -32,6 +32,9 @@ class PdfDoc {
     this.author,
     this.subject,
     this.keywords,
+    this.producer,
+    this.creator,
+    this.creationDate,
     this.isEncrypted = false,
     this.requiresPassword = false,
     this.isTagged = false,
@@ -64,6 +67,16 @@ class PdfDoc {
 
   /// Document keywords from metadata, if present.
   final String? keywords;
+
+  /// Document producer (the software that produced the PDF), if present.
+  final String? producer;
+
+  /// Document creator (the source application), if present.
+  final String? creator;
+
+  /// Document creation date as a raw PDF date string
+  /// (e.g. `D:20240101120000Z`), if present.
+  final String? creationDate;
 
   /// Whether the document is encrypted.
   final bool isEncrypted;

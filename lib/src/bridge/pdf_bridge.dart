@@ -160,6 +160,18 @@ abstract class BridgeEditorHandle {
   /// Sets the document keywords.
   PdfTask<void> setKeywords(String value);
 
+  /// Returns the document producer.
+  PdfTask<String> getProducer();
+
+  /// Sets the document producer.
+  PdfTask<void> setProducer(String value);
+
+  /// Returns the document creation date (raw PDF date string).
+  PdfTask<String> getCreationDate();
+
+  /// Sets the document creation date (raw PDF date string).
+  PdfTask<void> setCreationDate(String value);
+
   // ── Pages ──
 
   /// Rotates a single [page] by [degrees] (90, 180, 270).
