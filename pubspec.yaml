@@ -65,6 +65,11 @@ dev_dependencies:
   # Test runner
   test: ^1.31.1
 
+  # PNG decode for render-output pixel assertions (the image-stamp
+  # transparency test reads pixels out of doc.render()'s PNG frames).
+  # Pure Dart — runs on VM and browser. Dev-only: ships nowhere.
+  image: ^4.0.0
+
   # Lint rules
   lints: ^6.1.0
 
