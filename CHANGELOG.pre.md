@@ -27,7 +27,7 @@ ENTRY SHAPE
   - **Breaking:** <what changed> → <migration step, INLINE>   ← always first
   - <upgrade action, e.g. "re-run setup --force web">         ← any required action next
   - Added/Changed <capability or improvement>                ← then improvements
-  - Fixed <bug> ([PR #N](abs-url), [@user](abs-url))          ← fixes last
+  - Fixed <bug> ([#N](issue-url) reported by [@user](abs-url), [PR #N](abs-url))  ← fixes last
 
   Order IS the grouping — Breaking → action → added/changed → fixed. No
   `###` subsections: bullet order carries the categories. Only Breaking
@@ -43,15 +43,22 @@ CONTENT RULES (never change)
     can't rely on anything that later moves.)
   • NEVER link a living doc (README, docs/*) from an entry — it rots when
     the doc moves on. The migration guide is reached from the README.
-  • Links point only at IMMUTABLE targets — a specific PR or commit:
-    ([PR #N](https://github.com/whuppi/pdf_manipulator/pull/N),
-    [@user](https://github.com/user)).
+  • Links point only at IMMUTABLE targets — a PR, commit, or issue:
+    ([#N](https://github.com/whuppi/pdf_manipulator/issues/N) reported by
+    [@user](https://github.com/user), [PR #N](https://github.com/whuppi/pdf_manipulator/pull/N)).
+    Credit the issue + reporter when a reported issue drove the fix; the PR
+    (or commit) link alone otherwise.
   • No capability inventories — "what's shipped" lives in README +
     docs/CAPABILITY_ROADMAP.md; the changelog says only what CHANGED.
 ═══════════════════════════════════════════════════════════════════════
 -->
 
 <!-- Add new versions below, newest first. -->
+
+## 2.0.2-dev.0
+
+- Fixed `addImageStamp` rendering a transparent-background PNG as a solid black box — the alpha channel now ships as a grayscale `/SMask` and the PNG predictor params are preserved, so transparent areas reveal the page instead of painting black ([#103](https://github.com/whuppi/pdf_manipulator/issues/103) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #104](https://github.com/whuppi/pdf_manipulator/pull/104))
+- Fixed the `RenderedPage.data` doc — `render()` returns PNG-encoded bytes (decode to read pixels), not raw RGBA ([PR #104](https://github.com/whuppi/pdf_manipulator/pull/104))
 
 ## 2.0.1-dev.0
 
