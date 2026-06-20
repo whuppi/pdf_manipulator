@@ -88,7 +88,7 @@ jobs:
     needs: inputs
     runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Scan for dangerous patterns
         run: |
           FAILED=false
