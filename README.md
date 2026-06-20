@@ -318,7 +318,7 @@ final hits = await doc.search(query: 'revenue', pages: PdfPages.all());
 
 await for (final page in doc.render(
     pages: PdfPages.all(), size: PdfRenderSize.thumbnail(200))) {
-  // page.width, page.height, page.data (PNG-encoded bytes)
+  // page.width, page.height, page.data — PNG-encoded bytes; decode to read pixels
 }
 
 await doc.dispose();
