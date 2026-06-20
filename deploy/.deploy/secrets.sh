@@ -12,6 +12,7 @@
 #   ./secrets.sh list  <env>                 List secret names for an environment
 #   ./secrets.sh dump  <env>                 Show values (careful!)
 #   ./secrets.sh upload <env|all>            Push all from Bitwarden → GitHub
+#   ./secrets.sh rm    <env>/<KEY>           Delete from Bitwarden + GitHub
 # ============================================================================
 set -e
 
@@ -110,6 +111,50 @@ cmd_set() {
     ghn="$key"
     gh secret set "$ghn" --env "$env" --body "$value" --repo "$REPO"
     echo "✓ GitHub:    $REPO → $env → $ghn"
+}
+
+# Deletes from both backends, scoped to THIS repo only: GitHub by --repo/--env,
+# Bitwarden by the "$BW_PREFIX/$env/" key prefix — it can't reach another repo's
+# secrets. Idempotent: a missing secret is reported, not an error.
+cmd_rm() {
+    local path="$1"
+    if [ -z "$path" ]; then
+        echo "Usage: ./secrets.sh rm <env>/<KEY>"
+        echo "Deletes the secret from Bitwarden AND this repo's GitHub environment."
+        exit 1
+    fi
+
+    local env key
+    env=$(echo "$path" | cut -d/ -f1)
+    key=$(echo "$path" | cut -d/ -f2-)
+    validate_env "$env"
+
+    local ghn
+    ghn="$key"
+    if gh secret list --env "$env" --repo "$REPO" 2>/dev/null | grep -qE "^${ghn}[[:space:]]"; then
+        if gh secret delete "$ghn" --env "$env" --repo "$REPO" 2>/dev/null; then
+            echo "✓ GitHub:    $REPO → $env → $ghn (deleted)"
+        else
+            echo "✗ GitHub:    $REPO → $env → $ghn (delete FAILED — still present)"
+            exit 1
+        fi
+    else
+        echo "· GitHub:    $REPO → $env → $ghn (not present)"
+    fi
+
+    local bw_key="$BW_PREFIX/$env/$key"
+    local id
+    id=$(bws_get_id "$bw_key")
+    if [ -n "$id" ]; then
+        if $BWS secret delete "$id" > /dev/null 2>&1; then
+            echo "✓ Bitwarden: $bw_key (deleted)"
+        else
+            echo "✗ Bitwarden: $bw_key (delete failed)"
+            exit 1
+        fi
+    else
+        echo "· Bitwarden: $bw_key (not present)"
+    fi
 }
 
 cmd_get() {
@@ -234,6 +279,7 @@ case "${1:-}" in
     list)   cmd_list "$2" ;;
     dump)   cmd_dump "$2" ;;
     upload) cmd_upload "$2" ;;
+    rm)     cmd_rm "$2" ;;
     *)
         echo "pdf_manipulator secrets manager"
         echo ""
@@ -243,11 +289,13 @@ case "${1:-}" in
         echo "  ./secrets.sh list  <env>                 List secret names"
         echo "  ./secrets.sh dump  <env>                 Show values (careful!)"
         echo "  ./secrets.sh upload <env|all>            Push Bitwarden → GitHub"
+        echo "  ./secrets.sh rm    <env>/<KEY>           Delete from Bitwarden + GitHub"
         echo ""
         echo "Examples:"
         echo "  ./secrets.sh set prod/PUB_CREDENTIALS '{\"accessToken\":\"...\",\"refreshToken\":\"...\"}'"
         echo "  ./secrets.sh get prod/PUB_CREDENTIALS"
         echo "  ./secrets.sh list prod"
         echo "  ./secrets.sh upload all"
+        echo "  ./secrets.sh rm prod/OLD_KEY"
         ;;
 esac
