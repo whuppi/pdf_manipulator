@@ -38,7 +38,7 @@ jobs:
     needs: inputs
     runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: dev
 
@@ -161,7 +161,7 @@ jobs:
     runs-on: ${{ needs.inputs.outputs.runner }}
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: dev
           submodules: recursive

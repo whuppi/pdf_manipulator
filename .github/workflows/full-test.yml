@@ -135,7 +135,7 @@ jobs:
             echo "Skipped by filter: $F ∉ $NAME"
             echo "match=false" >> $GITHUB_OUTPUT
           fi
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         if: steps.filter.outputs.match == 'true'
         with: { submodules: recursive }
       - uses: ./.github/actions/make-target
