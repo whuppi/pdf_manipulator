@@ -1,7 +1,7 @@
 .PHONY: check analyze check-deps fixtures test-guards \
        build build-native build-wasm \
        compile-macos compile-ios compile-android compile-linux compile-windows compile-wasm compile-natives \
-       test test-pkg-native test-unit \
+       test test-pkg-native test-unit test-rust \
        test-ops test-ops-native test-ops-web test-ops-opfs test-ops-jspi test-ops-atomics \
        test-example test-example-matrix test-example-macos test-example-linux test-example-windows \
        test-example-android test-example-ios test-example-device \
@@ -19,6 +19,7 @@
 
 DART    ?= fvm dart
 FLUTTER ?= fvm flutter
+CARGO   ?= cargo
 TEST_RESULTS_DIR ?= test-results
 TIMEOUT := $(if $(CI),--timeout=30x,)
 VERBOSE := $(if $(CI),--verbose,)
@@ -165,6 +166,7 @@ compile-natives:
 # make test-ops-opfs     Ops: web OPFS.
 # make test-ops-jspi     Ops: web JSPI.
 # make test-ops-atomics  Ops: web Atomics.
+# make test-rust         cargo tests for both vendored crates.
 
 test: fixtures test-unit test-ops
 
@@ -198,6 +200,20 @@ test-ops-atomics:
 	@echo "=== Ops: Web Atomics ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
 	$(DART) test $(TIMEOUT) test/ops/runners/web_atomics_runner_test.dart -p chrome-coi --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-atomics.json
+
+# Rust unit + integration tests for both vendored crates. Most of the
+# engine's tests sit behind features we don't ship (ml / ocr / fips /
+# python / wasm), which need ONNX / pdfium / Python / a wasm target and
+# can't run natively here. pdf_oxide reuses build.json's native feature
+# set — the SAME source the build and analyze read — plus test-support,
+# so a feature added to build.json is tested automatically; office_oxide
+# runs default.
+test-rust:
+	@echo "=== Rust: pdf_oxide ==="
+	$(CARGO) test --manifest-path vendor/pdf_oxide/Cargo.toml \
+	  --features "$$(bash tool/compile_rust.sh --features native),test-support"
+	@echo "=== Rust: office_oxide ==="
+	$(CARGO) test --manifest-path vendor/office_oxide/Cargo.toml
 
 # ═══════════════════════════════════════════════════════════════════
 # § 6 — Integration tests (example app)
@@ -347,7 +363,10 @@ verify-web:
 # § 8 — Clean
 # ═══════════════════════════════════════════════════════════════════
 #
-# make clean   Remove generated build + test-result artifacts.
+# make clean   Full clean — Dart build-hook artifacts, test results, and
+#              both vendored crates' cargo target/ (the bulk of the disk
+#              use). Run deliberately; the next build recompiles fresh.
 
 clean:
 	rm -rf .dart_tool/hooks_runner/ .dart_tool/lib/ .dart_tool/native_assets/ build_output/ test-results/
+	rm -rf vendor/pdf_oxide/target/ vendor/office_oxide/target/

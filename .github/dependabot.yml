@@ -1,7 +1,22 @@
-# Dependabot: auto-opens PRs when GitHub Actions have new versions.
-# One grouped PR per week instead of one per action. Targets dev branch.
+# Version updates only. Security fixes come from this repo's Dependabot alerts +
+# automated-security-fixes (enabled in settings), not from this file.
 version: 2
 updates:
+  - package-ecosystem: "pub"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    target-branch: "dev"
+    commit-message:
+      prefix: "chore"
+    labels:
+      - "dependencies"
+    groups:
+      deps:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 5
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
