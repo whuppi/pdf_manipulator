@@ -80,7 +80,7 @@ Modes:
                             version. Only the top may be untagged; every
                             heading below must have its git tag, or a
                             '<!-- release: no-tag -->' directive AND still
-                            exist (GitHub Release or pub.dev).
+                            be published on pub.dev.
                             Env: BRANCH. Exit 1 on a faulty changelog.
 
   --github-notes TAG        Print GitHub Release notes to stdout.
@@ -799,11 +799,13 @@ dependencies:
 # extract_entry — it never reaches pub.dev.
 #
 # But the directive is NOT a blank cheque. A no-tag version is excused
-# ONLY if it still genuinely shipped once — proven by AT LEAST ONE of:
-#   • a GitHub Release for v<version> still exists, OR
-#   • <version> is published on pub.dev.
-# A no-tag version with NEITHER is a fake faking a release — rejected
-# even with the directive.
+# ONLY if <version> is still published on pub.dev — the one immutable,
+# unambiguous proof it genuinely shipped. (A GitHub Release is no proof
+# here: a *published* release always carries a git tag, which the tag
+# check above already catches, so it never reaches this path; the only
+# tagless release is a *draft*, which isn't a shipped version.) A no-tag
+# version not on pub.dev is faking a release — rejected even with the
+# directive.
 #
 # Lane falls out of the version string itself, no special-casing:
 #   CHANGELOG.md     heading `2.0.2`        → looks for tag `v2.0.2`
@@ -866,7 +868,7 @@ cmd_check_versions() {
   top_ver=$(head -1 <<< "$parsed" | cut -f1)
   echo "Top (release candidate): $top_ver — exempt"
 
-  local -a faulty_untagged=() faulty_fake=()
+  local -a faulty_untagged=() faulty_phantom=()
   local idx=0 ver notag
   while IFS=$'\t' read -r ver notag; do
     idx=$((idx + 1))
@@ -884,19 +886,14 @@ cmd_check_versions() {
       continue
     fi
 
-    # no-tag directive present: excused ONLY if it still really exists.
-    local on_gh=false on_pub=false
-    gh release view "v$ver" --repo "$REPO" --json tagName >/dev/null 2>&1 && on_gh=true
-    if [ -n "$published" ] && grep -qxF "$ver" <<< "$published"; then on_pub=true; fi
-
-    if $on_gh || $on_pub; then
-      local where=""
-      $on_gh && where="GitHub Release"
-      $on_pub && where="${where:+$where + }pub.dev"
-      echo "  • $ver — tagless, no-tag directive, still on $where ✓"
+    # no-tag directive present: excused ONLY if still published on
+    # pub.dev — the only proof of a genuine ship that a missing tag
+    # doesn't already cover (a published GitHub Release implies a tag).
+    if [ -n "$published" ] && grep -qxF "$ver" <<< "$published"; then
+      echo "  • $ver — tagless, no-tag directive, still on pub.dev ✓"
     else
-      faulty_fake+=("$ver")
-      echo "  ✗ $ver — no-tag directive but no tag, no GitHub Release, not on pub.dev"
+      faulty_phantom+=("$ver")
+      echo "  ✗ $ver — no-tag directive but no tag and not on pub.dev"
     fi
   done <<< "$parsed"
 
@@ -906,13 +903,13 @@ cmd_check_versions() {
     echo ""
     echo "::error::$file: below-top version(s) with no git tag and no no-tag directive — ${faulty_untagged[*]}"
     echo "A release is cut from the TOP heading only, so these would silently collapse into it."
-    echo "Fix each: release it before adding a newer one, fold it, or remove it — or, ONLY if it genuinely shipped and still has a GitHub Release or is on pub.dev, add a '<!-- release: no-tag -->' line under its heading."
+    echo "Fix each: release it before adding a newer one, fold it, or remove it — or, ONLY if it genuinely shipped and is still published on pub.dev, add a '<!-- release: no-tag -->' line under its heading."
   fi
-  if [ ${#faulty_fake[@]} -gt 0 ]; then
+  if [ ${#faulty_phantom[@]} -gt 0 ]; then
     bad=1
     echo ""
-    echo "::error::$file: version(s) marked no-tag that never really shipped — ${faulty_fake[*]}"
-    echo "'<!-- release: no-tag -->' only excuses a version that still has a GitHub Release OR is published on pub.dev. These have neither — they are faking a release. Remove them or fold them."
+    echo "::error::$file: version(s) marked no-tag that are not on pub.dev — ${faulty_phantom[*]}"
+    echo "'<!-- release: no-tag -->' only excuses a version still published on pub.dev (the immutable proof it shipped). These are not — they are faking a release. Remove them or fold them."
   fi
   [ "$bad" -eq 1 ] && return 1
 
