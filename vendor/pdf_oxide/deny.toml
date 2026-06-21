@@ -1,0 +1,101 @@
+# cargo-deny configuration
+# See https://embarkstudios.github.io/cargo-deny/
+
+[advisories]
+version = 2
+# Threshold for unmaintained crates
+unmaintained = "none"
+# Threshold for crates that have been yanked from their source registry
+yanked = "deny"
+# Ignore certain advisories (use sparingly).
+ignore = [
+    # RUSTSEC-2023-0071 — Marvin Attack on RustCrypto's `rsa 0.9.x`.
+    # Timing side-channel in the private-key decrypt/sign path.
+    # pdf_oxide uses `rsa` only for signature *verification*
+    # (public-key modexp against the signer's embedded cert), which
+    # the advisory does not implicate. Signing is still a stub
+    # (`src/signatures/signer.rs::create_pkcs7_signature`), so no
+    # private-key operation happens at runtime yet. Drop this ignore
+    # the moment a patched `rsa` release ships (RustCrypto are
+    # migrating to a fully constant-time implementation); re-audit
+    # when the #208 signing half lands.
+    "RUSTSEC-2023-0071",
+    # RUSTSEC-2026-0176 / RUSTSEC-2026-0177 — pyo3 0.28.x: out-of-bounds read
+    # in `nth`/`nth_back` for PyList/PyTuple iterators, and a missing `Sync`
+    # bound on `PyCFunction::new_closure` closures. Both vulnerable APIs are
+    # unused by our binding (lists via `PyList::empty`+`append`; callables are
+    # `#[pyfunction]`/`#[pymethods]`, never runtime closures), so neither path
+    # is reachable. Fixed in pyo3 0.29.0, blocked by pyo3-log (0.13.3 caps at
+    # pyo3 `<0.29`); bump pyo3 + pyo3-log together once pyo3-log adds 0.29
+    # support. Re-audit 2026-09-10.
+    "RUSTSEC-2026-0176",
+    "RUSTSEC-2026-0177",
+]
+
+[licenses]
+version = 2
+# pdf_oxide is licensed MIT OR Apache-2.0. The allow list reflects that:
+# every transitive dep must be a permissive licence we can ship under either
+# of our two outward licences without restricting downstream users.
+#
+# Locked decision (v0.3.35 plan, PLAN-1): no MPL-2.0, no GPL/AGPL/SSPL.
+# MPL is *file-level* copyleft — workable but causes friction for some
+# downstream legal teams, and we chose the no-MPL path to keep the ecosystem
+# story simple. If you're tempted to add a Mozilla-stack crate (cssparser,
+# selectors, html5ever, lightningcss, stylo) to satisfy a feature, talk to
+# the release owner first; the v0.3.35 plan has the rationale.
+#
+# cargo-deny [licenses] is allow-list only — anything not listed below
+# fails the build. There is no separate `deny` array for licences.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Unicode-3.0",
+    "Zlib",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "CC0-1.0",
+    "BSL-1.0",
+    # Apache-2.0 with an LLVM linking-exception clause. The exception
+    # is strictly more permissive than plain Apache-2.0 (it waives the
+    # notice requirement for object-code / binary redistribution);
+    # doesn't affect our MIT OR Apache-2.0 downstream story. Pulled in
+    # transitively via `target-lexicon` → `pyo3-build-config` → `pyo3`.
+    "Apache-2.0 WITH LLVM-exception",
+    # University of Illinois / NCSA Open Source License — permissive,
+    # OSI-approved, FSF Free/Libre. Functionally equivalent to a
+    # BSD-3-Clause + disclaimer. Pulled in transitively via
+    # `libfuzzer-sys` → `rav1e` → `ravif` → `image 0.25.10`.
+    "NCSA",
+    # Community Data License Agreement - Permissive 2.0. Lets
+    # anyone use / modify / distribute the data (here: Mozilla's
+    # CA root bundle) with no copyleft. Pulled in transitively
+    # via `webpki-roots` → `ureq` (our TSA-client HTTP stack).
+    "CDLA-Permissive-2.0",
+    # OpenSSL License — permissive, FSF-Free, OSI-approved (with the
+    # advertising clause already retired in OpenSSL 3.0+). Pulled in
+    # transitively via `aws-lc-rs/fips` → `aws-lc-fips-sys` (the
+    # FIPS-validated module is a fork of OpenSSL FIPS Object Module
+    # with additional Amazon validation). Only enters the dep graph
+    # under the opt-in `fips` feature; the default
+    # RustCrypto provider does not pull it.
+    "OpenSSL",
+]
+
+[bans]
+# Deny multiple versions of the same crate
+multiple-versions = "warn"
+# Deny wildcard dependencies
+wildcards = "warn"
+# Specific crates to deny
+deny = []
+
+[sources]
+# Deny crates from unknown registries
+unknown-registry = "deny"
+# Deny Git sources
+unknown-git = "warn"
+# Allow only crates.io
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
