@@ -850,8 +850,12 @@ cmd_check_versions() {
     END { if (v != "") print v "\t" n }
   ' "$file")
 
-  local total
-  total=$(grep -c . <<< "$parsed" || true)
+  # grep -c prints "0" and exits 1 on no match, so guard the empty case
+  # explicitly rather than lean on that (|| echo 0 would double-count).
+  local total=0
+  if [ -n "$parsed" ]; then
+    total=$(grep -c . <<< "$parsed")
+  fi
   if [ "$total" -le 1 ]; then
     echo "✓ $file: $total version heading(s) — nothing below the top to check"
     return 0
