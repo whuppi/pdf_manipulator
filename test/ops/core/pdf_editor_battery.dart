@@ -120,6 +120,64 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
     }, timeout: t(1));
 
+    test('setProducer + getProducer roundtrips', () async {
+      final editor = await createPdf().edit(src(minimalPdf));
+      await editor.setProducer('pdf_manipulator');
+      final producer = await editor.getProducer();
+      expect(producer, contains('pdf_manipulator'));
+      await editor.dispose();
+    }, timeout: t(1));
+
+    test('setProducer writes producer into output', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(minimalPdf));
+      await editor.setProducer('Behavioral Producer');
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final e2 = await pdf.edit(src(sink.takeBytes()));
+      expect(
+        await e2.getProducer(),
+        contains('Behavioral Producer'),
+        reason: 'the producer must survive save and re-open',
+      );
+      await e2.dispose();
+    }, timeout: t(1));
+
+    test('setCreationDate + getCreationDate roundtrips', () async {
+      final editor = await createPdf().edit(src(minimalPdf));
+      await editor.setCreationDate('D:20240101120000Z');
+      final date = await editor.getCreationDate();
+      expect(date, contains('20240101'));
+      await editor.dispose();
+    }, timeout: t(1));
+
+    test('PdfDoc surfaces producer/creator/creationDate', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(minimalPdf));
+      await editor.setProducer('Doc-Read Producer');
+      await editor.setCreationDate('D:20240101120000Z');
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+
+      final doc = await pdf.open(src(sink.takeBytes()));
+      expect(
+        doc.producer,
+        contains('Doc-Read Producer'),
+        reason: 'producer must surface on the read-only PdfDoc',
+      );
+      expect(
+        doc.creationDate,
+        contains('20240101'),
+        reason: 'creation date must surface on the read-only PdfDoc',
+      );
+      // Creator has no Dart setter; this exercises the read surface decodes
+      // without throwing (String? — empty when the PDF carries no Creator).
+      expect(doc.creator, isA<String?>());
+      await doc.dispose();
+    }, timeout: t(1));
+
     // ── Pages ──
 
     test('deletePage reduces page count', () async {

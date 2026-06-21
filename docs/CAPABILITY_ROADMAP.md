@@ -50,8 +50,8 @@ Five files, strict rules:
 | Get form field value | `get_form_field_value` | — | PLANNED |
 | Has form field | `has_form_field` | — | PLANNED |
 | Get page images (list metadata) | `get_page_images` | — | PLANNED |
-| Producer / Creator metadata | `producer`, `creator` | — | PLANNED |
-| Creation date | `creation_date` | — | PLANNED |
+| Producer / Creator metadata | `producer`, `creator` | `producer`, `creator` (decoded on open) | DONE |
+| Creation date | `creation_date` | `creationDate` (decoded on open) | DONE |
 
 ---
 
@@ -67,6 +67,8 @@ Five files, strict rules:
 | Get author | `author` | `getAuthor()` | DONE |
 | Get subject | `subject` | `getSubject()` | DONE |
 | Get keywords | `keywords` | `getKeywords()` | DONE |
+| Get producer | `producer` | `getProducer()` | DONE |
+| Get creation date | `creation_date` | `getCreationDate()` | DONE |
 | Scrub metadata | via bridge | `scrubMetadata()` | DONE |
 | Rotate page | `rotate_page_by` | `rotatePage()` | DONE |
 | Rotate all pages | `rotate_all_pages` | `rotateAllPages()` | DONE |
@@ -95,8 +97,8 @@ Five files, strict rules:
 | Page count | `current_page_count` | `pageCount` | DONE |
 | Version | `version` | `version` | DONE |
 | Save | `write_full_to_writer` | `save()` | DONE |
-| Set producer | `set_producer` | — | PLANNED |
-| Set creation date | `set_creation_date` | — | PLANNED |
+| Set producer | `set_producer` | `setProducer()` | DONE |
+| Set creation date | `set_creation_date` | `setCreationDate()` | DONE |
 | Set page media box | `set_page_media_box` | — | PLANNED |
 | Set page crop box | `set_page_crop_box` | — | PLANNED |
 | Set page rotation | `set_page_rotation` | — | PLANNED |
@@ -229,12 +231,12 @@ capabilities are tracked in their own sections.
 
 | Category | Done | Planned |
 |---|---|---|
-| PdfDoc | 17 | 9 |
-| PdfEditor | 36 | 29 |
+| PdfDoc | 19 | 7 |
+| PdfEditor | 40 | 27 |
 | PdfBuilder | 34 | 0 |
 | PdfStandalone | 4 | 0 |
 | PdfSugar | 22 | 0 |
-| **Total** | **113** | **38** |
+| **Total** | **119** | **34** |
 
 ---
 

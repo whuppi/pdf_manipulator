@@ -111,6 +111,32 @@ class PdfEditor {
     return _handle.setKeywords(value);
   }
 
+  /// Returns the document producer metadata (the software that produced the PDF).
+  PdfTask<String> getProducer() {
+    _check();
+    return _handle.getProducer();
+  }
+
+  /// Sets the document producer metadata.
+  PdfTask<void> setProducer(String value) {
+    _check();
+    return _handle.setProducer(value);
+  }
+
+  /// Returns the document creation date as a raw PDF date string
+  /// (e.g. `D:20240101120000Z`).
+  PdfTask<String> getCreationDate() {
+    _check();
+    return _handle.getCreationDate();
+  }
+
+  /// Sets the document creation date. Expects a raw PDF date string
+  /// (e.g. `D:20240101120000Z`).
+  PdfTask<void> setCreationDate(String value) {
+    _check();
+    return _handle.setCreationDate(value);
+  }
+
   // ── Pages ──
 
   /// Rotates a single [page] by [degrees] (must be a multiple of 90).
