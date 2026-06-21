@@ -1,0 +1,41 @@
+# Stops the auto-close the instant a non-maintainer replies `keep open`.
+# Removes `resolved` (which takes the issue out of auto-close.yml's pool),
+# flags `needs-review`, and tags the maintainers with who asked and why.
+# Only acts on open issues, so it never reopens a closed one.
+name: Keep open on opt-out
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+
+jobs:
+  keep-open:
+    if: >
+      github.event.issue.state == 'open' &&
+      github.event.issue.pull_request == null &&
+      contains(github.event.issue.labels.*.name, 'resolved') &&
+      github.event.comment.author_association != 'OWNER' &&
+      github.event.comment.author_association != 'MEMBER' &&
+      github.event.comment.author_association != 'COLLABORATOR'
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BODY: ${{ github.event.comment.body }}
+          WHO: ${{ github.event.comment.user.login }}
+          NUM: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Comment body via env var, never interpolated into the script (injection-safe).
+          grep -qiE 'keep open' <<< "$BODY" || exit 0
+          reason=$(printf '%s' "$BODY" | tr '\n' ' ' \
+            | sed -E 's/.*[Kk]eep [Oo]pen//' \
+            | sed -E 's/^[[:space:]:,.-]+//' \
+            | sed -E 's/[[:space:]]+/ /g' \
+            | cut -c1-280)
+          [ -z "$reason" ] && reason='(no reason given, see the comment)'
+          gh issue edit "$NUM" --repo "$REPO" --remove-label resolved --add-label needs-review
+          gh issue comment "$NUM" --repo "$REPO" --body \
+            "$(printf '@chaudharydeepanshu @slopfairy kept open by @%s.\nReason: %s' "$WHO" "$reason")"
