@@ -63,6 +63,13 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ inputs.branch || github.ref_name }}
+      # Backstop: even if a faulty merge skipped the PR check, refuse to
+      # release a lane whose changelog adds more than one new version.
+      # Checks the lane being released (the pushed branch).
+      - name: Version sanity
+        env:
+          BRANCH: ${{ inputs.branch || github.ref_name }}
+        run: bash tool/release.sh --check-versions
       - name: Check changelog relevance
         id: check
         env:

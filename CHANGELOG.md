@@ -4,21 +4,26 @@
 ═══════════════════════════════════════════════════════════════════════
 CHANGELOG STANDARD — read before editing. Applies to both changelogs.
 ═══════════════════════════════════════════════════════════════════════
-Two files, same content: CHANGELOG.pre.md (prerelease, `## X.Y.Z-dev.0`)
-and CHANGELOG.md (stable, `## X.Y.Z`). Edit ONLY CHANGELOG.pre.md, then
-regenerate the stable file from it — never hand-edit CHANGELOG.md:
-
-    cp CHANGELOG.pre.md CHANGELOG.md
-    sed -i '' -e '1s/^# Prerelease Changelog$/# Changelog/' \
-              -e '/^## /s/-dev\.[0-9]*//' CHANGELOG.md
+Two INDEPENDENT lane changelogs — do NOT mirror one from the other:
+  • CHANGELOG.pre.md — the prerelease lane (`## X.Y.Z-dev.N`). Add an
+    entry per prerelease you cut on dev.
+  • CHANGELOG.md — the stable lane (`## X.Y.Z`). Add an entry per stable
+    release, CONSOLIDATING the prerelease entries that ship under it.
+They share prose but track their OWN version sequences. There is no
+`cp + sed` regen: that mirror falsely assumed every prerelease becomes a
+same-numbered stable, so it manufactured stable headings for versions
+that never shipped — which `tool/release.sh --check-versions` now flags.
+Hand-edit each lane's file directly.
 
 ADDING A VERSION
-  Add a `## X.Y.Z-dev.0` heading at the TOP (newest first) and write the
-  summary. One heading per version — bump the version for new work, never
-  add a second `-dev.N` to a version already listed (two dev builds of one
-  version collide into a duplicate `## X.Y.Z` when the stable file is
-  regenerated). Versions, commit lists, tags, publishing — the release
-  tooling owns all of it; you only write the human summary.
+  Add a heading at the TOP (newest first) of the right lane's file and
+  write the summary. Exactly ONE new (untagged) version may sit at the
+  top of each file — every heading BELOW it must already have its git tag
+  (or a verified `release: no-tag` HTML-comment directive). `--check-versions`
+  enforces this at PR + release time: a second un-released version is
+  rejected, since it would collapse into the one release the merge cuts.
+  Versions, commit lists, tags, publishing — the release tooling owns all
+  of it; you only write the human summary.
 
 ENTRY SHAPE
   ## X.Y.Z-dev.0
@@ -58,9 +63,6 @@ CONTENT RULES (never change)
 ## 2.1.0
 
 - Added document producer and creation-date metadata — `PdfEditor.setProducer()` / `getProducer()` and `setCreationDate()` / `getCreationDate()` (raw PDF date strings, e.g. `D:20240101120000Z`), plus `PdfDoc.producer`, `PdfDoc.creator`, and `PdfDoc.creationDate` read on open
-
-## 2.0.2
-
 - Fixed `addImageStamp` rendering a transparent-background PNG as a solid black box — the alpha channel now ships as a grayscale `/SMask` and the PNG predictor params are preserved, so transparent areas reveal the page instead of painting black ([#103](https://github.com/whuppi/pdf_manipulator/issues/103) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #104](https://github.com/whuppi/pdf_manipulator/pull/104))
 - Fixed the `RenderedPage.data` doc — `render()` returns PNG-encoded bytes (decode to read pixels), not raw RGBA ([PR #104](https://github.com/whuppi/pdf_manipulator/pull/104))
 
@@ -129,3 +131,8 @@ Complete ground-up rewrite — new Rust engine, new instance API, cross-platform
 - **Errors:** typed `PdfError` sealed class — no more `PlatformException`
 - **Performance:** every operation off the main thread, no full-file buffers
 - **SDK:** requires Dart >=3.10.0
+
+## 0.5.9
+<!-- release: no-tag -->
+
+- The last release of Android-only version before the cross-platform rewrite.
