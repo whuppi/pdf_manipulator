@@ -25,9 +25,8 @@ jobs:
           days-before-issue-close: 3
           days-before-pr-stale: -1
           days-before-pr-close: -1
-          stale-issue-label: 'pending-auto-close'
+          stale-issue-label: 'bot-closing-soon'
           close-issue-reason: 'completed'
-          exempt-issue-labels: 'keep-open'
           remove-stale-when-updated: false
           operations-per-run: 60
           stale-issue-message: >
