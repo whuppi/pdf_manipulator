@@ -22,6 +22,7 @@ permissions:
 
 jobs:
   retry:
+    name: Re-run failed jobs
     # Only when the run failed on its first attempt.
     if: >-
       github.event.workflow_run.conclusion == 'failure' &&

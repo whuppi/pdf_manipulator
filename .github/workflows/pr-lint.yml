@@ -23,6 +23,7 @@ env:
 
 jobs:
   inputs:
+    name: Resolve inputs
     runs-on: ubuntu-24.04
     outputs:
       runner: ${{ steps.resolve.outputs.runner }}
@@ -81,13 +82,40 @@ jobs:
 
           echo "✓ Valid promotion path: $HEAD → $BASE"
 
+  # ── Changelog Versions ───────────────────────────────────────────
+  # Both lanes, every PR — a faulty changelog must never merge into a
+  # release branch. Only the TOP heading of each file may be untagged
+  # (the release candidate); every heading below must have its git tag
+  # or a verified `<!-- release: no-tag -->` directive. See
+  # tool/release.sh --check-versions.
+  changelog-check:
+    name: Changelog Versions
+    needs: inputs
+    runs-on: ${{ needs.inputs.outputs.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: One new version per lane
+        run: |
+          rc=0
+          echo "── prerelease lane (CHANGELOG.pre.md) ──"
+          BRANCH=dev  bash tool/release.sh --check-versions || rc=1
+          echo ""
+          echo "── stable lane (CHANGELOG.md) ──"
+          BRANCH=prod bash tool/release.sh --check-versions || rc=1
+          exit $rc
+
   # ── Workflow Security ────────────────────────────────────────────
   workflow-security:
     name: Workflow Security
     needs: inputs
     runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Scan for dangerous patterns
         run: |
           FAILED=false

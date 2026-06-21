@@ -406,6 +406,8 @@ PdfImage decodePdfImage(Map<String, Object?> data) => PdfImage(
   String author,
   String subject,
   String keywords,
+  String producer,
+  String creationDate,
 })
 decodeEditorMetadata(Map<String, Object?> r) => (
   pageCount: r['pageCount'] as int? ?? 0,
@@ -414,6 +416,8 @@ decodeEditorMetadata(Map<String, Object?> r) => (
   author: r['author'] as String? ?? '',
   subject: r['subject'] as String? ?? '',
   keywords: r['keywords'] as String? ?? '',
+  producer: r['producer'] as String? ?? '',
+  creationDate: r['creationDate'] as String? ?? '',
 );
 
 /// Decodes a media-box rectangle from a response map.

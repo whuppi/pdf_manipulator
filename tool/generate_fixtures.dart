@@ -50,6 +50,19 @@ Future<void> main() async {
   ).writeAsStringSync(_emitBytes('photoPng', photoPng));
   exports.add("export 'f_photo_png.dart';");
 
+  // The transparent raster the image-stamp transparency test feeds in.
+  final transparentPng = buildTransparentPng();
+  File('$_generatedDir/f_transparent_png.dart').writeAsStringSync(
+    _emitBytes(
+      'transparentPng',
+      transparentPng,
+      'RGBA PNG: opaque-red left half, transparent-black right half. The '
+          'transparent half must survive image-stamp embedding as an /SMask '
+          'instead of painting black.',
+    ),
+  );
+  exports.add("export 'f_transparent_png.dart';");
+
   for (final spec in catalog) {
     final sw = Stopwatch()..start();
     final bytes = await spec.build(photoPng);
@@ -91,8 +104,15 @@ String _stampInputs() {
   return sha256.convert(bytes).toString();
 }
 
-/// Emit raw bytes as a base64 Dart constant named [ident].
-String _emitBytes(String ident, List<int> bytes) {
+/// Emit raw bytes as a base64 Dart constant named [ident]. [doc] is the
+/// `///` doc body for the constant (default describes the photo raster).
+String _emitBytes(
+  String ident,
+  List<int> bytes, [
+  String doc =
+      'Photo-like 128x128 PNG (seeded noise) — JPEG-q50 beats its Flate\n'
+      '/// stream, so optimizeImages finds work. Decoded once at first use.',
+]) {
   final b64 = base64Encode(bytes);
   final chunks = <String>[
     for (var i = 0; i < b64.length; i += 76)
@@ -105,8 +125,7 @@ String _emitBytes(String ident, List<int> bytes) {
 import 'dart:convert';
 import 'dart:typed_data';
 
-/// Photo-like 128x128 PNG (seeded noise) — JPEG-q50 beats its Flate
-/// stream, so optimizeImages finds work. Decoded once at first use.
+/// $doc
 final Uint8List $ident = base64Decode(_b64);
 
 const _b64 =
@@ -202,8 +221,46 @@ Uint8List buildPhotoPng({int seed = 42, int size = 128}) {
   return _assemblePng(size, size, Uint8List.fromList(idat));
 }
 
+/// Build a [size]×[size] RGBA (colour type 6) PNG: opaque red on the
+/// left half, fully transparent black on the right half. The transparent
+/// half must survive image-stamp embedding as an /SMask, not paint black.
+Uint8List buildTransparentPng({int size = 32}) {
+  // Raw image data: one filter byte (0 = none) per scanline, then RGBA
+  // quads. Left half opaque red, right half transparent black.
+  final raw = BytesBuilder(copy: false);
+  final half = size ~/ 2;
+  for (var y = 0; y < size; y++) {
+    raw.addByte(0); // filter: none
+    for (var x = 0; x < size; x++) {
+      if (x < half) {
+        raw
+          ..addByte(255) // R
+          ..addByte(0) // G
+          ..addByte(0) // B
+          ..addByte(255); // A — opaque
+      } else {
+        raw
+          ..addByte(0) // R
+          ..addByte(0) // G
+          ..addByte(0) // B
+          ..addByte(0); // A — transparent
+      }
+    }
+  }
+
+  final idat = ZLibCodec().encode(raw.takeBytes());
+  return _assemblePng(size, size, Uint8List.fromList(idat), colorType: 6);
+}
+
 /// Wrap IDAT bytes in the PNG container: signature, IHDR, IDAT, IEND.
-Uint8List _assemblePng(int width, int height, Uint8List idat) {
+/// [colorType] is the PNG colour type byte: 2 = truecolour RGB (default),
+/// 6 = truecolour with alpha (RGBA).
+Uint8List _assemblePng(
+  int width,
+  int height,
+  Uint8List idat, {
+  int colorType = 2,
+}) {
   final out = BytesBuilder(copy: false);
   out.add(const [137, 80, 78, 71, 13, 10, 26, 10]); // PNG signature
 
@@ -211,7 +268,7 @@ Uint8List _assemblePng(int width, int height, Uint8List idat) {
     ..add(_u32(width))
     ..add(_u32(height))
     ..addByte(8) // bit depth
-    ..addByte(2) // colour type: truecolour RGB
+    ..addByte(colorType) // colour type: 2 = RGB, 6 = RGBA
     ..addByte(0) // compression
     ..addByte(0) // filter
     ..addByte(0); // interlace

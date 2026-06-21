@@ -25,6 +25,7 @@ env:
 
 jobs:
   inputs:
+    name: Resolve inputs
     runs-on: ubuntu-24.04
     outputs:
       runner: ${{ steps.resolve.outputs.runner }}
@@ -33,10 +34,11 @@ jobs:
         run: echo "runner=${{ inputs.runner || env.DEFAULT_RUNNER }}" >> $GITHUB_OUTPUT
 
   check:
+    name: Flutter upgrade check
     needs: inputs
     runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: dev
 
@@ -154,11 +156,12 @@ jobs:
           fi
 
   package-deps:
+    name: Package dependency report
     needs: inputs
     runs-on: ${{ needs.inputs.outputs.runner }}
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: dev
           submodules: recursive

@@ -42,6 +42,7 @@ env:
 
 jobs:
   inputs:
+    name: Resolve inputs
     runs-on: ubuntu-24.04
     outputs:
       runner: ${{ steps.resolve.outputs.runner }}
@@ -58,10 +59,17 @@ jobs:
       should_run: ${{ steps.check.outputs.should_run }}
       version: ${{ steps.check.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ inputs.branch || github.ref_name }}
+      # Backstop: even if a faulty merge skipped the PR check, refuse to
+      # release a lane whose changelog adds more than one new version.
+      # Checks the lane being released (the pushed branch).
+      - name: Version sanity
+        env:
+          BRANCH: ${{ inputs.branch || github.ref_name }}
+        run: bash tool/release.sh --check-versions
       - name: Check changelog relevance
         id: check
         env:
@@ -84,7 +92,7 @@ jobs:
       version: ${{ steps.find.outputs.version }}
       has_release: ${{ steps.find.outputs.has_release }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ inputs.branch || github.ref_name }}
@@ -113,7 +121,7 @@ jobs:
     name: compile-${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.discover.outputs.tag }}
           submodules: recursive
@@ -188,7 +196,7 @@ jobs:
           files: release/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: '${{ needs.discover.outputs.tag }}'
           fetch-depth: 0
@@ -219,7 +227,7 @@ jobs:
     runs-on: ${{ needs.inputs.outputs.runner }}
     environment: ${{ inputs.branch || github.ref_name }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: '${{ needs.discover.outputs.tag }}'
           fetch-depth: 0

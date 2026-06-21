@@ -1,4 +1,11 @@
-![pdf_manipulator — cross-platform PDF manipulation for Dart & Flutter](assets/banner.webp)
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)"  srcset="assets/banner_dark-web-min.webp">
+    <source media="(prefers-color-scheme: light)" srcset="assets/banner_light-web-min.webp">
+    <img alt="pdf_manipulator — cross-platform PDF manipulation for Dart & Flutter"
+         src="assets/banner_light-web-min.webp" width="100%">
+  </picture>
+</p>
 
 <p align="center">
   <a href="https://pub.dev/packages/pdf_manipulator"><img src="https://img.shields.io/pub/v/pdf_manipulator.svg" alt="pub package"></a>
@@ -318,7 +325,7 @@ final hits = await doc.search(query: 'revenue', pages: PdfPages.all());
 
 await for (final page in doc.render(
     pages: PdfPages.all(), size: PdfRenderSize.thumbnail(200))) {
-  // page.width, page.height, page.data (RGBA bytes)
+  // page.width, page.height, page.data — PNG-encoded bytes; decode to read pixels
 }
 
 await doc.dispose();
