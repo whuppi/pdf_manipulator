@@ -76,6 +76,13 @@ Modes:
                             Env: BRANCH.
                             Outputs: tag, version, has_release.
 
+  --check-versions          Fail if the changelog adds >1 unreleased
+                            version. Only the top may be untagged; every
+                            heading below must have its git tag, or a
+                            '<!-- release: no-tag -->' directive AND still
+                            exist (GitHub Release or pub.dev).
+                            Env: BRANCH. Exit 1 on a faulty changelog.
+
   --github-notes TAG        Print GitHub Release notes to stdout.
   --update-tag-hashes TAG   Stamp asset hashes into the tag (post-upload).
   --stamp-changelog TAG     Build the filtered CHANGELOG.md for pub.dev.
@@ -123,7 +130,10 @@ extract_entry() {
   local file="$1" version="$2"
   local escaped
   escaped=$(printf '%s' "$version" | sed 's/[][\\.^$*+?(){}|]/\\&/g')
-  awk "/^## ${escaped}($| )/{found=1; next} /^## /{found=0} found" "$file"
+  # Drop reserved directive lines (<!-- release: ... -->) so they never
+  # reach the published changelog — they are internal tooling markers.
+  awk "/^## ${escaped}($| )/{found=1; next} /^## /{found=0} found" "$file" \
+    | sed '/<!--[[:space:]]*release:.*-->/d'
 }
 
 # List every "## version" heading in a changelog file, one per line.
@@ -252,24 +262,42 @@ JQ
 #
 # ── pub.dev changelog algorithm ───────────────────────────────────
 #
+# This filters the source changelog for the pub.dev tarball. It is
+# keyed PURELY on pub.dev publish status — NOT on git tags. (Whether a
+# version is real at all — has a git tag / GitHub release — is a
+# SEPARATE concern enforced before release by --check-versions; by the
+# time we reach here every heading is already a real, tagged version.)
+#
+# The case it handles: a version can be real and git-tagged yet never
+# pushed to pub.dev — you cut a GitHub release for issue-testing or a
+# `git: ref:` install and skipped/deferred pub.dev. It must NOT show as
+# a standalone pub.dev "## section" (pub.dev never had that version),
+# but its notes still matter — so they fold into the next published
+# version instead.
+#
 # Step 0 — Pick the source file.
 #   Stable (no "-") → CHANGELOG.md.  Pre (has "-") → CHANGELOG.pre.md.
 #
 # Step 1 — Classify each "## heading" as YES or NO.
-#   YES = it's already on pub.dev, OR it's the version being deployed.
-#   NO  = anything else (unpublished intermediate work).
+#   YES = already on pub.dev, OR the version being deployed right now
+#         (about to land on pub.dev this run).
+#   NO  = a real, tagged version that simply isn't on pub.dev.
 #
 #   YES → gets its own ## section in the output.
-#   NO  → folded into a collapsible under the nearest YES above it.
+#   NO  → folds into a collapsible under the nearest YES ABOVE it (the
+#         newer one). Why newer: the changelog is newest-first and
+#         releases are cumulative, so the next-newer published version
+#         already contains this NO version's changes — that's the
+#         pub.dev release its notes belong under.
 #
-# Pass 1 — Top to bottom, build the sections.
-#   YES versions get ## headings. Consecutive NO versions buffer into
-#   the previous YES version's "unpublished changes" collapsible.
+# Pass 1 — Top to bottom (newest→oldest), build the sections.
+#   YES versions get ## headings. Consecutive NO versions buffer, then
+#   attach to the previous YES (the newer one) when the next YES hits.
 #
 # Pass 2 — Bottom to top, add the commit lists.
 #   Each YES version gets a <details>Commits since vPREV</details>,
-#   where PREV is the YES version directly below it. The bottom-most
-#   YES version uses "Commits since initial".
+#   where PREV is the YES version directly below it (older). The
+#   bottom-most YES version uses "Commits since initial".
 #
 # ── Commit-range rule (same type only) ────────────────────────────
 #
@@ -747,13 +775,162 @@ dependencies:
 
 
 # ════════════════════════════════════════════════════════════════════
-# § 10 — Dispatch
+# § 10 — Mode: --check-versions
+#
+# Guard against a faulty changelog that introduces MORE THAN ONE new
+# (un-released) version at once. A release is cut from the TOP heading
+# ONLY (see --discover), so any further un-released heading below it
+# would silently collapse into that one release — a heading "faking" a
+# release it never actually got. They should have been one version.
+#
+# Rule: the TOP heading is the release candidate (allowed to be
+# untagged — it's about to be tagged on this merge). EVERY heading
+# BELOW it must carry its own `v<version>` git tag (proof it was really
+# released at some point), UNLESS it carries the no-tag directive AND
+# still genuinely exists (see below).
+#
+# The no-tag directive — a reserved HTML comment on its own line
+# directly under the heading:
+#   ## 1.0.3
+#   <!-- release: no-tag -->
+# It says "this version intentionally has no git tag" (e.g. the tag was
+# purged but the entry is kept for reference). It is invisible in
+# rendered markdown and is stripped from the published changelog by
+# extract_entry — it never reaches pub.dev.
+#
+# But the directive is NOT a blank cheque. A no-tag version is excused
+# ONLY if it still genuinely shipped once — proven by AT LEAST ONE of:
+#   • a GitHub Release for v<version> still exists, OR
+#   • <version> is published on pub.dev.
+# A no-tag version with NEITHER is a fake faking a release — rejected
+# even with the directive.
+#
+# Lane falls out of the version string itself, no special-casing:
+#   CHANGELOG.md     heading `2.0.2`        → looks for tag `v2.0.2`
+#   CHANGELOG.pre.md heading `2.0.2-dev.0`  → looks for tag `v2.0.2-dev.0`
+# So a stable heading is NOT satisfied by its `-dev.0` prerelease tag —
+# they're different version strings, hence different tags.
+#
+# This is NOT the pub.dev fold (§3): that one asks "is it on pub.dev?";
+# this one asks "does it exist as a release at all?". Orthogonal.
+#
+# Run it at PR time (block the bad merge) AND in the release workflow
+# (catch a faulty/forced merge that skipped the PR check).
+#
+# Env  : BRANCH (dev|prod) — picks the lane/file.
+# Exit : 0 = clean, 1 = faulty (offending versions printed).
+# ════════════════════════════════════════════════════════════════════
+
+cmd_check_versions() {
+  local branch="${BRANCH:?--check-versions requires BRANCH env var}"
+  local file
+  if [[ "$branch" == "prod" ]]; then
+    file="CHANGELOG.md"
+  else
+    file="CHANGELOG.pre.md"
+  fi
+
+  if [ ! -f "$file" ]; then
+    echo "✓ no $file — nothing to check"
+    return 0
+  fi
+
+  # Tags are the source of truth; a shallow CI checkout may lack them.
+  git fetch --tags --quiet origin 2>/dev/null || true
+
+  # Per version (newest first): "<version>\t<has-no-tag-directive 0|1>".
+  # The directive is a `<!-- release: ... no-tag ... -->` comment line
+  # anywhere in the version's block (convention: directly under heading).
+  local parsed
+  parsed=$(awk '
+    /^## / { if (v != "") print v "\t" n; v = $2; n = 0; next }
+    /<!--[[:space:]]*release:.*no-tag.*-->/ { n = 1 }
+    END { if (v != "") print v "\t" n }
+  ' "$file")
+
+  local total
+  total=$(grep -c . <<< "$parsed" || true)
+  if [ "$total" -le 1 ]; then
+    echo "✓ $file: $total version heading(s) — nothing below the top to check"
+    return 0
+  fi
+
+  # Pub.dev versions — fetched once, and only if some heading carries the
+  # no-tag directive (otherwise we never need them).
+  local published=""
+  if awk -F'\t' 'NR > 1 && $2 == 1 { f = 1 } END { exit !f }' <<< "$parsed"; then
+    published=$(get_published_versions || true)
+  fi
+
+  local top_ver
+  top_ver=$(head -1 <<< "$parsed" | cut -f1)
+  echo "Top (release candidate): $top_ver — exempt"
+
+  local -a faulty_untagged=() faulty_fake=()
+  local idx=0 ver notag
+  while IFS=$'\t' read -r ver notag; do
+    idx=$((idx + 1))
+    [ "$idx" -eq 1 ] && continue   # skip the top (release candidate)
+    [ -z "$ver" ] && continue
+
+    if git rev-parse -q --verify "refs/tags/v$ver" >/dev/null 2>&1; then
+      echo "  • $ver — tag v$ver ✓"
+      continue
+    fi
+
+    if [ "$notag" != "1" ]; then
+      faulty_untagged+=("$ver")
+      echo "  ✗ $ver — no tag v$ver, no no-tag directive"
+      continue
+    fi
+
+    # no-tag directive present: excused ONLY if it still really exists.
+    local on_gh=false on_pub=false
+    gh release view "v$ver" --repo "$REPO" --json tagName >/dev/null 2>&1 && on_gh=true
+    if [ -n "$published" ] && grep -qxF "$ver" <<< "$published"; then on_pub=true; fi
+
+    if $on_gh || $on_pub; then
+      local where=""
+      $on_gh && where="GitHub Release"
+      $on_pub && where="${where:+$where + }pub.dev"
+      echo "  • $ver — tagless, no-tag directive, still on $where ✓"
+    else
+      faulty_fake+=("$ver")
+      echo "  ✗ $ver — no-tag directive but no tag, no GitHub Release, not on pub.dev"
+    fi
+  done <<< "$parsed"
+
+  local bad=0
+  if [ ${#faulty_untagged[@]} -gt 0 ]; then
+    bad=1
+    echo ""
+    echo "::error::$file: below-top version(s) with no git tag and no no-tag directive — ${faulty_untagged[*]}"
+    echo "A release is cut from the TOP heading only, so these would silently collapse into it."
+    echo "Fix each: release it before adding a newer one, fold it, or remove it — or, ONLY if it genuinely shipped and still has a GitHub Release or is on pub.dev, add a '<!-- release: no-tag -->' line under its heading."
+  fi
+  if [ ${#faulty_fake[@]} -gt 0 ]; then
+    bad=1
+    echo ""
+    echo "::error::$file: version(s) marked no-tag that never really shipped — ${faulty_fake[*]}"
+    echo "'<!-- release: no-tag -->' only excuses a version that still has a GitHub Release OR is published on pub.dev. These have neither — they are faking a release. Remove them or fold them."
+  fi
+  [ "$bad" -eq 1 ] && return 1
+
+  echo ""
+  echo "✓ $file: one new version at the top ($top_ver); every heading below is tagged or a verified no-tag"
+  return 0
+}
+
+
+# ════════════════════════════════════════════════════════════════════
+# § 11 — Dispatch
 # ════════════════════════════════════════════════════════════════════
 
 main() {
   case "$MODE" in
     --help | -h)         usage ;;
     --gate)              cmd_gate ;;
+    --check-versions)    cmd_check_versions ;;
     --discover)          cmd_discover ;;
     --github-notes)      cmd_github_notes ;;
     --update-tag-hashes) cmd_update_tag_hashes ;;
