@@ -5,15 +5,18 @@
 # The CI workflow only does job orchestration (checkout, compile,
 # upload, publish); every decision and mutation lives here.
 #
-# Seven modes
+# Nine modes
 # ───────────
 #   --gate               Check if this push should trigger a release.
 #   --discover           Find the version, create the stamped tag and
 #                        the GitHub Release.
+#   --check-versions     Fail if the changelog adds >1 unreleased version.
 #   --github-notes       Print GitHub Release notes to stdout.
 #   --update-tag-hashes  Stamp asset hashes into the tag and update it.
 #   --stamp-changelog    Build the filtered CHANGELOG.md for the pub.dev
 #                        tarball.
+#   --stamp-readme       Flatten the README <picture> banner to a single
+#                        <img> for the pub.dev tarball.
 #   --add-git-install    Append the git-install snippet to release notes.
 #   --add-pub-install    Append the pub.dev-install snippet to notes.
 #
@@ -29,6 +32,7 @@
 #                  --add-git-install
 #                  --update-tag-hashes
 #   5. publish   → --stamp-changelog
+#                  --stamp-readme
 #                  dart pub publish
 #                  --add-pub-install
 #
@@ -86,6 +90,7 @@ Modes:
   --github-notes TAG        Print GitHub Release notes to stdout.
   --update-tag-hashes TAG   Stamp asset hashes into the tag (post-upload).
   --stamp-changelog TAG     Build the filtered CHANGELOG.md for pub.dev.
+  --stamp-readme            Flatten the README <picture> banner for pub.dev.
   --add-git-install TAG     Append the git-install snippet to the notes.
   --add-pub-install TAG     Append the pub.dev-install snippet to the notes.
 
@@ -718,6 +723,40 @@ cmd_stamp_changelog() {
 
 
 # ════════════════════════════════════════════════════════════════════
+# § 8b — Mode: --stamp-readme
+#
+# pub.dev strips <picture>/<source> when sanitizing the README, dropping
+# the whole block so the banner renders blank. GitHub renders <picture>
+# fine, so the repo keeps the dark/light version and we flatten it to the
+# inner <img> only in the pub.dev tarball, here at publish time.
+#
+# Remove this mode (and its call in create-release.yml) once pub.dev
+# renders <picture>. Tracking:
+#   https://github.com/dart-lang/pub-dev/issues/5923
+#   https://github.com/dart-lang/pub-dev/issues/6363
+#   https://github.com/google/dart-neats/pull/383
+# ════════════════════════════════════════════════════════════════════
+
+cmd_stamp_readme() {
+  echo "=== Flattening README <picture> banner for pub.dev ==="
+  if ! grep -qE '^[[:space:]]*<picture>[[:space:]]*$' README.md; then
+    echo "  no <picture> banner; nothing to flatten"
+    return 0
+  fi
+  # Match <picture>/<source> only as a tag alone on its line (the banner),
+  # never a mention inside comment prose.
+  awk '
+    /^[[:space:]]*<picture>[[:space:]]*$/   { inpic = 1; next }
+    /^[[:space:]]*<\/picture>[[:space:]]*$/ { inpic = 0; next }
+    inpic && /<source/ { next }
+    { print }
+  ' README.md > /tmp/_readme_pubdev.md
+  mv /tmp/_readme_pubdev.md README.md
+  echo "  README.md banner flattened to a single <img>"
+}
+
+
+# ════════════════════════════════════════════════════════════════════
 # § 9 — Modes: --add-git-install / --add-pub-install
 #
 # Append an install snippet to the existing GitHub Release notes.
@@ -936,6 +975,7 @@ main() {
     --github-notes)      cmd_github_notes ;;
     --update-tag-hashes) cmd_update_tag_hashes ;;
     --stamp-changelog)   cmd_stamp_changelog ;;
+    --stamp-readme)      cmd_stamp_readme ;;
     --add-git-install)   cmd_add_git_install ;;
     --add-pub-install)   cmd_add_pub_install ;;
     *)

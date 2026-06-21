@@ -238,6 +238,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash tool/release.sh --stamp-changelog ${{ needs.discover.outputs.tag }}
+      - name: Flatten README banner for pub.dev
+        run: bash tool/release.sh --stamp-readme
       - name: Ephemeral commit (clean git for pub publish)
         run: |
           git config user.name "github-actions[bot]"
