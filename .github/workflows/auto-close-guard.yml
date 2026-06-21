@@ -37,5 +37,7 @@ jobs:
             | cut -c1-280)
           [ -z "$reason" ] && reason='(no reason given, see the comment)'
           gh issue edit "$NUM" --repo "$REPO" --remove-label resolved
+          # may also carry the stale marker if it opted out during the close window
+          gh issue edit "$NUM" --repo "$REPO" --remove-label bot-closing-soon 2>/dev/null || true
           gh issue comment "$NUM" --repo "$REPO" --body \
             "$(printf '@chaudharydeepanshu @slopfairy kept open by @%s.\nReason: %s' "$WHO" "$reason")"
