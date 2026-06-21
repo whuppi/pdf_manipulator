@@ -1,0 +1,22 @@
+# Posts the opt-out notice the moment you add the `resolved` label, so the
+# reporter has the full grace window to object. See auto-close.yml.
+name: Arm auto-close on resolved
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  issues: write
+
+jobs:
+  arm:
+    if: github.event.label.name == 'resolved'
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUM: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+          MSG: 'Marked resolved, auto-closing in 7 days. Still need it open? Reply `keep open: your reason` (example: keep open: still crashes on Android 14).'
+        run: |
+          gh issue comment "$NUM" --repo "$REPO" --body "$MSG"

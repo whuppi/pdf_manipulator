@@ -1,0 +1,36 @@
+# Auto-close issues marked `resolved` after a grace period.
+#
+# You add the `resolved` label when an issue is done from your side.
+# auto-close-arm.yml comments immediately. This job (daily) posts the
+# reminder at day 4 and closes at day 7. Only an explicit opt-out
+# (auto-close-guard.yml removing `resolved`) stops it; chatter does not.
+name: Auto-close resolved issues
+on:
+  schedule:
+    - cron: '0 9 * * *'   # daily, 09:00 UTC
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v9
+        with:
+          only-labels: 'resolved'
+          days-before-issue-stale: 4
+          days-before-issue-close: 3
+          days-before-pr-stale: -1
+          days-before-pr-close: -1
+          stale-issue-label: 'bot-closing-soon'
+          close-issue-reason: 'completed'
+          remove-stale-when-updated: false
+          operations-per-run: 60
+          stale-issue-message: >
+            Closing in 3 days. If it still affects you, reply
+            `keep open: your reason` and it stays open.
+          close-issue-message: >
+            Auto-closing: marked resolved with no objection in the grace
+            window. Comment any time and it will be looked at.
