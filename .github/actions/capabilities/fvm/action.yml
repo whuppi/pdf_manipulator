@@ -72,33 +72,42 @@ runs:
           rm -f "$RUNNER_TEMP/fvm.tar.gz"
         fi
 
-        # The archive extracts to an fvm/ subdir: the launcher plus its
-        # bundled src/ runtime.
+        # The archive extracts an fvm/ subdir: the launcher plus its bundled
+        # src/ runtime.
         FVM_BIN="$INSTALL_DIR/fvm"
-
-        # Verify the binary exists
         ls -la "$FVM_BIN"/ | head -5
 
-        # Expose fvm to this step and every later step. Rather than putting
-        # the runner-derived toolcache dir on GITHUB_PATH (a value the
-        # env-file audit flags as a newline-injection surface), copy the
-        # tool into a fixed literal directory and add THAT constant to PATH —
-        # nothing runner-derived reaches the env file. Copy the WHOLE dir,
-        # not just the launcher: fvm's launcher execs its bundled src/dart,
-        # so the launcher on its own is a dead script.
-        export PATH="$FVM_BIN:$PATH"
+        # Copy the WHOLE tool into a fixed literal dir and put THAT on PATH —
+        # never the runner-derived toolcache dir, which the env-file audit
+        # flags as a newline-injection surface. The launcher execs its bundled
+        # src/ runtime, so copying the launcher alone would leave a dead script.
         case "$OS" in
           windows)
-            mkdir -p /c/fvm
-            cp -R "$FVM_BIN/." /c/fvm/
-            echo "C:\fvm" >> "$GITHUB_PATH"
+            DEST=/c/fvm
+            mkdir -p "$DEST"
+            cp -R "$FVM_BIN/." "$DEST/"
+            # fvm ships only fvm.bat on Windows, and Git Bash won't resolve a
+            # bare `fvm` to a .bat (MSYS execvp skips .bat extensions). Drop a
+            # POSIX shim that runs the .bat through cmd, so every later bash
+            # step calls `fvm` exactly like the native launcher elsewhere.
+            printf '%s\n' \
+              '#!/usr/bin/env bash' \
+              'set -euo pipefail' \
+              'here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' \
+              'exec cmd //c "$(cygpath -w "$here/fvm.bat")" "$@"' \
+              > "$DEST/fvm"
+            chmod +x "$DEST/fvm"
+            printf '%s\n' 'C:\fvm' >> "$GITHUB_PATH"
             ;;
           *)
-            sudo mkdir -p /opt/fvm
-            sudo cp -R "$FVM_BIN/." /opt/fvm/
-            echo "/opt/fvm" >> "$GITHUB_PATH"
+            DEST=/opt/fvm
+            sudo mkdir -p "$DEST"
+            sudo cp -R "$FVM_BIN/." "$DEST/"
+            printf '%s\n' "$DEST" >> "$GITHUB_PATH"
             ;;
         esac
+        # GITHUB_PATH reaches only later steps; use the literal dir in THIS one.
+        export PATH="$DEST:$PATH"
 
         # Point fvm at its SDK cache for every later step. Heredoc with a
         # random delimiter so a newline in $HOME can't inject extra entries.
@@ -110,16 +119,12 @@ runs:
           echo "__FVM_ENV__"
         } >> "$GITHUB_ENV"
 
-        # ── Verify ─────────────────────────────────────────────────────
-        "$FVM_BIN/fvm" --version
-
-        # ── Install project SDK from .fvmrc ────────────────────────────
-        echo -e "yes\nyes\n" | "$FVM_BIN/fvm" install
-
-        # Suppress analytics
-        "$FVM_BIN/fvm" flutter config --no-analytics 2>/dev/null || true
+        # ── Verify + install via bare `fvm` (uniform across every OS) ──
+        fvm --version
+        printf 'yes\nyes\n' | fvm install
+        fvm flutter config --no-analytics 2>/dev/null || true
 
         echo "::group::SDK versions"
-        "$FVM_BIN/fvm" dart --version
-        "$FVM_BIN/fvm" flutter --version
+        fvm dart --version
+        fvm flutter --version
         echo "::endgroup::"
