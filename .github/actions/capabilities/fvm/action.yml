@@ -68,7 +68,8 @@ runs:
           rm -f "$RUNNER_TEMP/fvm.tar.gz"
         fi
 
-        # The archive extracts to fvm/ subdirectory containing the binary
+        # The archive extracts to an fvm/ subdir: the launcher plus its
+        # bundled src/ runtime.
         FVM_BIN="$INSTALL_DIR/fvm"
 
         # Verify the binary exists
@@ -76,19 +77,21 @@ runs:
 
         # Expose fvm to this step and every later step. Rather than putting
         # the runner-derived toolcache dir on GITHUB_PATH (a value the
-        # env-file audit flags as a newline-injection surface), drop the
-        # binary into a fixed literal directory and add THAT constant to
-        # PATH — nothing runner-derived reaches the env file.
+        # env-file audit flags as a newline-injection surface), copy the
+        # tool into a fixed literal directory and add THAT constant to PATH —
+        # nothing runner-derived reaches the env file. Copy the WHOLE dir,
+        # not just the launcher: fvm's launcher execs its bundled src/dart,
+        # so the launcher on its own is a dead script.
         export PATH="$FVM_BIN:$PATH"
         case "$OS" in
           windows)
             mkdir -p /c/fvm
-            cp "$FVM_BIN/fvm.exe" /c/fvm/fvm.exe
+            cp -R "$FVM_BIN/." /c/fvm/
             echo "C:\fvm" >> "$GITHUB_PATH"
             ;;
           *)
             sudo mkdir -p /opt/fvm
-            sudo cp "$FVM_BIN/fvm" /opt/fvm/fvm
+            sudo cp -R "$FVM_BIN/." /opt/fvm/
             echo "/opt/fvm" >> "$GITHUB_PATH"
             ;;
         esac
