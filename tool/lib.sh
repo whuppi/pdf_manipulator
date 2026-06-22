@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared helpers — ONLY functions used by 2+ scripts belong here.
 # Single-use functions stay in their own script. Source, don't execute.
 #

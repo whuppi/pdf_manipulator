@@ -54,7 +54,9 @@ fi
 FAIL=0
 CHECKED=0
 
-for so in $(find "$TMP/lib" \( -path '*/arm64-v8a/*.so' -o -path '*/x86_64/*.so' \) 2>/dev/null); do
+# Read via process substitution, not `for $(find)`: keeps the loop in this
+# shell so FAIL/CHECKED survive, and handles odd filenames safely.
+while IFS= read -r so; do
   name=$(basename "$so")
   arch=$(basename "$(dirname "$so")")
   CHECKED=$((CHECKED + 1))
@@ -69,7 +71,7 @@ for so in $(find "$TMP/lib" \( -path '*/arm64-v8a/*.so' -o -path '*/x86_64/*.so'
     echo "  UNALIGNED: $arch/$name ($align)"
     FAIL=1
   fi
-done
+done < <(find "$TMP/lib" \( -path '*/arm64-v8a/*.so' -o -path '*/x86_64/*.so' \) 2>/dev/null)
 
 if [ "$CHECKED" -eq 0 ]; then
   echo "  No arm64-v8a or x86_64 .so files found in APK"

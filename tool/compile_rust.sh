@@ -156,7 +156,8 @@ compile_android_target() {
     return
   fi
 
-  local linker_var="CARGO_TARGET_$(echo "$target" | tr '[:lower:]-' '[:upper:]_')_LINKER"
+  local linker_var
+  linker_var="CARGO_TARGET_$(echo "$target" | tr '[:lower:]-' '[:upper:]_')_LINKER"
   export "$linker_var=$host_dir/bin/${clang_prefix}21-clang"
   compile_one "$target" "$outdir" "libpdf_oxide.so"
   unset "$linker_var"

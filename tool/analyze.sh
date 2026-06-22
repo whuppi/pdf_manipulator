@@ -83,8 +83,8 @@ WASM_FEATURES=$(bash "$SCRIPT_DIR/compile_rust.sh" --features wasm)
 # Filter cargo warnings to only lines we changed vs upstream base tag.
 _filter_warnings() {
   local diff_text="$1"
-  # Membership via temp file, not `declare -A` — macOS ships bash 3.2,
-  # which has no associative arrays.
+  # Membership via temp file, not an associative array — macOS ships
+  # bash 3.2, which doesn't have them.
   local changed_keys
   changed_keys=$(mktemp)
   local cur_file=""

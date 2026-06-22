@@ -38,7 +38,7 @@ sleep 2
 # 2. Run flutter drive (-d web-server, single Chrome via chromedriver)
 # ═══════════════════════════════════════════════════════════════════
 
-cd example
+cd example || exit 1
 "${FLUTTER[@]}" drive \
     --driver=test_driver/integration_test.dart \
     --target=integration_test/pdf_smoke_test.dart \
