@@ -26,15 +26,18 @@
 # ────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-# Pinned versions live in ONE file (tool/versions.env), never inline.
-source "$(cd "$(dirname "$0")" && pwd)/versions.env"
+# Resolve the script's own dir once — versions.env and lib.sh both hang off it.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Pinned versions live in ONE file (tool/versions.env), never inline. Sourced at
+# top, so every installer function below sees the pins without re-sourcing.
+source "$SCRIPT_DIR/versions.env"
 
 
 # ═══════════════════════════════════════════════════════════════════
 # Paths
 # ═══════════════════════════════════════════════════════════════════
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PKG_ROOT="$(dirname "$SCRIPT_DIR")"
 MANIFEST="$PKG_ROOT/vendor/pdf_oxide/Cargo.toml"
 VENDOR="$PKG_ROOT/vendor/pdf_oxide"
@@ -64,7 +67,6 @@ _install_wasm_bindgen() {
 
 _install_binaryen() {
   echo "=== WASM: installing binaryen (wasm-opt) $BINARYEN_VERSION ==="
-  source "$SCRIPT_DIR/versions.env"
   local url sha
   case "$(uname -s)" in
     Linux*)  url="https://github.com/WebAssembly/binaryen/releases/download/$BINARYEN_VERSION/binaryen-$BINARYEN_VERSION-x86_64-linux.tar.gz";   sha="$BINARYEN_SHA256_LINUX_X64" ;;
