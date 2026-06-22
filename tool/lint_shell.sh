@@ -13,6 +13,11 @@
 #        shell: or the workflow's defaults.run.shell), so a step can't land on
 #        a Windows runner's pwsh default and break on bash syntax.
 #
+# Scope, honestly: this catches shell-LANGUAGE portability (bash version, the
+# wrong default shell). It does NOT catch BSD-vs-GNU coreutils flag drift —
+# sed -i, grep -P, readlink -f, date/stat formats — because no static tool
+# does. The macOS CI leg (real BSD userland) is the backstop for those.
+#
 # The scan is plain grep: never paste a bash 4.0+ construct verbatim into a
 # comment (it can't tell code from comment) — name it, as this header does.
 set -uo pipefail
