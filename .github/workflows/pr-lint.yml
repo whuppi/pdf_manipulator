@@ -34,6 +34,7 @@ jobs:
       runner: ${{ steps.resolve.outputs.runner }}
     steps:
       - id: resolve
+        shell: bash
         env:
           OVERRIDE: ${{ inputs.runner }}
           DEFAULT: ${{ env.DEFAULT_RUNNER }}
@@ -46,6 +47,7 @@ jobs:
     runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
       - name: Check PR title
+        shell: bash
         env:
           TITLE: ${{ github.event.pull_request.title }}
         run: |
@@ -72,6 +74,7 @@ jobs:
     runs-on: ${{ needs.inputs.outputs.runner }}
     steps:
       - name: Validate promotion path
+        shell: bash
         env:
           BASE: ${{ github.base_ref }}
           HEAD: ${{ github.head_ref }}
@@ -109,6 +112,7 @@ jobs:
           fetch-tags: true
           persist-credentials: false
       - name: One new version per lane
+        shell: bash
         run: |
           rc=0
           echo "── prerelease lane (CHANGELOG.pre.md) ──"
@@ -136,16 +140,19 @@ jobs:
         with:
           persist-credentials: false
       - name: zizmor (security, auditor persona, zero findings)
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}  # higher API rate limit for ref checks
         run: |
           source tool/versions.env
           pipx run "zizmor==$ZIZMOR_VERSION" --persona=auditor .github/
       - name: actionlint (correctness + shellcheck)
+        shell: bash
         run: |
           source tool/versions.env
           go install "github.com/rhysd/actionlint/cmd/actionlint@v$ACTIONLINT_VERSION"
           PATH="$(go env GOPATH)/bin:$PATH"
           actionlint -color
       - name: shell lint (shellcheck + bash 3.2 portability)
+        shell: bash
         run: bash tool/lint_shell.sh

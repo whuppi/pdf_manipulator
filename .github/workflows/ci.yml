@@ -32,6 +32,7 @@ jobs:
       runner: ${{ steps.resolve.outputs.runner }}
     steps:
       - id: resolve
+        shell: bash
         env:
           OVERRIDE: ${{ inputs.runner }}
           DEFAULT: ${{ env.DEFAULT_RUNNER }}
@@ -129,12 +130,21 @@ jobs:
     permissions: {}
     steps:
       - name: Evaluate
+        shell: bash
         env:
+          CHANGES: ${{ needs.changes.result }}
           CODE: ${{ needs.changes.outputs.code }}
           ANALYZE: ${{ needs.analyze.result }}
           TEST: ${{ needs.test.result }}
           RUST: ${{ needs.rust.result }}
         run: |
+          # A failed (not skipped) changes job clears its outputs, so CODE
+          # arrives empty — which must NOT read as "doc-only". Gate on the
+          # job result before trusting its output.
+          if [[ "$CHANGES" != "success" ]]; then
+            echo "FAILED: change detection did not succeed (changes=$CHANGES)"
+            exit 1
+          fi
           if [[ "$CODE" != "true" ]]; then
             echo "Doc-only PR — CI gate passes"
             exit 0
