@@ -66,6 +66,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Re-run failed jobs
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ github.event.workflow_run.id }}
