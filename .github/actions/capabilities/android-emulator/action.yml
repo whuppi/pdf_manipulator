@@ -169,7 +169,7 @@ runs:
         kill_match() {
           for pid in $(pgrep -f "$1" 2>/dev/null); do
             local cmd; cmd=$(ps -p "$pid" -o args= 2>/dev/null || true)
-            echo "$cmd" | grep -q "$2" || continue
+            grep -q "$2" <<< "$cmd" || continue
             echo "=== WATCHDOG: killing stuck $1 (PID $pid) to unblock teardown ==="
             kill -9 "$pid" 2>/dev/null || true
           done
@@ -188,7 +188,7 @@ runs:
         kill_stuck_dds() {
           for dvmpid in $(pgrep -f dartvm 2>/dev/null); do
             local kids; kids=$(pgrep -P "$dvmpid" 2>/dev/null)
-            [ "$(echo "$kids" | grep -c .)" -eq 1 ] || continue
+            [ "$(grep -c . <<< "$kids")" -eq 1 ] || continue
             ps -p "$kids" -o args= 2>/dev/null | grep -q development-service || continue
             local cpu; cpu=$(ps -p "$kids" -o %cpu= 2>/dev/null | tr -d ' ')
             echo "${cpu:-1}" | awk '{ exit ($1 > 0.5) }' || continue

@@ -226,7 +226,7 @@ JQ
     wasm_outputs=$(jq -r '.wasmBuildOutputs | join(" ")' build.json)
     jq -r '.web | to_entries[] | "\(.key)\t\(.value)"' build.json \
       | while IFS=$'\t' read -r local_name asset_name; do
-          echo "$wasm_outputs" | grep -qw "$local_name" && continue
+          grep -qw "$local_name" <<< "$wasm_outputs" && continue
           echo "$local_name	$asset_name"
         done
   )
@@ -252,7 +252,7 @@ JQ
   mv "$tmp" "$hash_file"
 
   local count
-  count=$(echo "$all_entries" | grep -c . || true)
+  count=$(grep -c . <<< "$all_entries" || true)
   echo "  $hash_file → $count hashes"
 }
 
@@ -330,8 +330,8 @@ commits_collapsible() {
   [ -z "$commits" ] && return
 
   local count list
-  count=$(echo "$commits" | grep -c . || true)
-  list=$(echo "$commits" | sed 's/^/- /')
+  count=$(grep -c . <<< "$commits" || true)
+  list=$(sed 's/^/- /' <<< "$commits")
   printf '<details><summary>Commits since %s (%s)</summary>\n\n%s\n\n</details>\n' \
     "${from:-initial}" "$count" "$list"
 }
@@ -510,7 +510,7 @@ cmd_gate() {
       local versions_before
       versions_before=$(git show "${BEFORE}:$target_file" 2>/dev/null \
         | sed -n 's/^## \([^ ]*\).*/\1/p' || true)
-      new_version=$(comm -23 <(echo "$versions_after" | sort) <(echo "$versions_before" | sort) | head -1)
+      new_version=$(comm -23 <(sort <<< "$versions_after") <(sort <<< "$versions_before") | head -1)
     fi
 
     if [[ -n "$new_version" ]]; then

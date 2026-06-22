@@ -37,7 +37,7 @@ runs:
         rustup toolchain install stable --profile minimal --no-self-update
         rustup default stable
         # targets input is comma- or space-separated; empty → no extra targets
-        for t in $(echo "$INPUTS_TARGETS" | tr ',' ' '); do
+        for t in $(tr ',' ' ' <<< "$INPUTS_TARGETS"); do
           rustup target add "$t"
         done
         rustc --version

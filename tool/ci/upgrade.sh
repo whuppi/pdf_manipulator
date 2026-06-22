@@ -69,8 +69,8 @@ set_kv() {  # KEY value file — replace KEY="old" with KEY="new" in place
 # ── Flutter SDK (.fvmrc + example/.fvmrc) ────────────────────────────
 flutter_cur="$(json_get '.flutter' "$ROOT/.fvmrc")"
 releases="$(_fetch https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json 2>/dev/null || true)"
-stable_hash="$(echo "$releases" | jq -r '.current_release.stable // empty' 2>/dev/null || true)"
-flutter_latest="$(echo "$releases" | jq -r --arg h "$stable_hash" '.releases[] | select(.hash == $h) | .version // empty' 2>/dev/null | head -1 || true)"
+stable_hash="$(jq -r '.current_release.stable // empty' <<< "$releases" 2>/dev/null || true)"
+flutter_latest="$(jq -r --arg h "$stable_hash" '.releases[] | select(.hash == $h) | .version // empty' <<< "$releases" 2>/dev/null | head -1 || true)"
 if [ -n "$flutter_latest" ] && [ -n "$flutter_cur" ] && [ "$flutter_cur" != "$flutter_latest" ]; then
   drift=1
   echo "flutter: $flutter_cur -> $flutter_latest"
@@ -172,7 +172,7 @@ fi
 # self-hashes all 6 assets. The CDN prunes old versions, so this must keep
 # the pin fresh or the chrome action's verified download 404s.
 manifest="$(_fetch https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json 2>/dev/null || true)"
-chrome_latest="$(echo "$manifest" | jq -r '.channels.Stable.version // empty' 2>/dev/null || true)"
+chrome_latest="$(jq -r '.channels.Stable.version // empty' <<< "$manifest" 2>/dev/null || true)"
 if [ -n "$chrome_latest" ] && [ "$chrome_latest" != "$CHROME_VERSION" ]; then
   if [ "$MODE" = apply ]; then
     u="https://storage.googleapis.com/chrome-for-testing-public/$chrome_latest"

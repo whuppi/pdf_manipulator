@@ -95,8 +95,8 @@ _filter_warnings() {
         ;;
       "@@"*)
         local start count
-        start=$(echo "$line" | sed -n 's/.*+\([0-9][0-9]*\).*/\1/p')
-        count=$(echo "$line" | sed -n 's/.*+[0-9][0-9]*,\([0-9][0-9]*\).*/\1/p')
+        start=$(sed -n 's/.*+\([0-9][0-9]*\).*/\1/p' <<< "$line")
+        count=$(sed -n 's/.*+[0-9][0-9]*,\([0-9][0-9]*\).*/\1/p' <<< "$line")
         count=${count:-1}
         [ "$count" -eq 0 ] && count=1
         for (( i=start; i<start+count; i++ )); do
@@ -108,12 +108,12 @@ _filter_warnings() {
 
   local warns=0 skipped=0
   while IFS= read -r json_line; do
-    echo "$json_line" | grep -q '"reason":"compiler-message"' || continue
-    echo "$json_line" | grep -q '"level":"warning"' || continue
+    grep -q '"reason":"compiler-message"' <<< "$json_line" || continue
+    grep -q '"level":"warning"' <<< "$json_line" || continue
     local span_file span_line msg_text
-    span_file=$(echo "$json_line" | jq -r '.message.spans[0].file_name // empty' 2>/dev/null)
-    span_line=$(echo "$json_line" | jq -r '.message.spans[0].line_start // empty' 2>/dev/null)
-    msg_text=$(echo "$json_line" | jq -r '.message.message // empty' 2>/dev/null)
+    span_file=$(jq -r '.message.spans[0].file_name // empty' <<< "$json_line" 2>/dev/null)
+    span_line=$(jq -r '.message.spans[0].line_start // empty' <<< "$json_line" 2>/dev/null)
+    msg_text=$(jq -r '.message.message // empty' <<< "$json_line" 2>/dev/null)
     if [ -z "$span_file" ] || [ -z "$span_line" ]; then
       skipped=$((skipped + 1))
       continue
@@ -143,7 +143,7 @@ check_rust_warnings() {
   local branch base_tag
   branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
   if [[ "$branch" == *"/"* ]]; then
-    base_tag="v$(echo "$branch" | cut -d/ -f2 | sed 's/-patches$//')"
+    base_tag="v$(cut -d/ -f2 <<< "$branch" | sed 's/-patches$//')"
   else
     base_tag=$(json_get '.baseTag')
   fi

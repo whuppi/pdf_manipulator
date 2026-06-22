@@ -65,7 +65,7 @@ while IFS= read -r so; do
   # Alignment shown as 2**N. 2**14 = 16384 (16 KB) or higher passes.
   align=$("$OBJDUMP" -p "$so" 2>/dev/null | grep LOAD | awk '{ print $NF }' | head -1)
 
-  if echo "$align" | grep -qE '2\*\*(1[4-9]|[2-9][0-9])'; then
+  if grep -qE '2\*\*(1[4-9]|[2-9][0-9])' <<< "$align"; then
     echo "  ALIGNED: $arch/$name ($align)"
   else
     echo "  UNALIGNED: $arch/$name ($align)"
