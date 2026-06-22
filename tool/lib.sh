@@ -10,7 +10,7 @@
 # both locally and on CI. Standalone tools do NOT — they go through
 # provide_tool below.
 ensure_target() {
-  if ! rustup target list --installed | grep -qx "$1"; then
+  if ! rustup target list --installed | grep -qxF "$1"; then
     echo "  Installing Rust target: $1"
     rustup target add "$1"
   fi
@@ -70,4 +70,14 @@ json_get() {
     echo "Error: '$expr' not found in $file" >&2
     exit 1
   }
+}
+
+# sha256 of a file. GNU coreutils ships sha256sum; macOS ships
+# `shasum -a 256`. Use whichever exists; print the bare hash.
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
 }

@@ -47,13 +47,17 @@ gh_latest_tag() {  # owner/repo -> latest release tag, verbatim
   gh api "repos/$1/releases/latest" --jq '.tag_name' 2>/dev/null || true
 }
 
+# Hardened GET for the fetches below: fail-closed, capped redirects, and a
+# few retries so a transient blip doesn't fail the daily run.
+_fetch() { curl -fsSL --retry 3 --retry-delay 2 --max-redirs 5 "$@"; }
+
 # sha256 of a downloadable asset, or empty on failure. Downloads to a file
 # (never a shell var) so binary content survives intact and a 404 can't
 # masquerade as the empty-string hash.
 sha256_of() {  # url
   local tmp; tmp="$(mktemp)"
-  if curl -fsSL --max-redirs 5 "$1" -o "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
-    sha256sum "$tmp" | cut -d' ' -f1
+  if _fetch "$1" -o "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+    sha256_file "$tmp"
   fi
   rm -f "$tmp"
 }
@@ -64,7 +68,7 @@ set_kv() {  # KEY value file — replace KEY="old" with KEY="new" in place
 
 # ── Flutter SDK (.fvmrc + example/.fvmrc) ────────────────────────────
 flutter_cur="$(json_get '.flutter' "$ROOT/.fvmrc")"
-releases="$(curl -fsSL --max-redirs 5 https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json 2>/dev/null || true)"
+releases="$(_fetch https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json 2>/dev/null || true)"
 stable_hash="$(echo "$releases" | jq -r '.current_release.stable // empty' 2>/dev/null || true)"
 flutter_latest="$(echo "$releases" | jq -r --arg h "$stable_hash" '.releases[] | select(.hash == $h) | .version // empty' 2>/dev/null | head -1 || true)"
 if [ -n "$flutter_latest" ] && [ -n "$flutter_cur" ] && [ "$flutter_cur" != "$flutter_latest" ]; then
@@ -102,7 +106,7 @@ if [ -n "$fvm_latest" ] && [ "$fvm_latest" != "$FVM_VERSION" ]; then
 fi
 
 # ── zizmor gate (ZIZMOR_VERSION in versions.env; run in pr-lint.yml) ──
-ziz_latest="$(curl -fsSL --max-redirs 5 https://pypi.org/pypi/zizmor/json 2>/dev/null | jq -r '.info.version // empty' 2>/dev/null || true)"
+ziz_latest="$(_fetch https://pypi.org/pypi/zizmor/json 2>/dev/null | jq -r '.info.version // empty' 2>/dev/null || true)"
 if [ -n "$ZIZMOR_VERSION" ] && [ -n "$ziz_latest" ] && [ "$ZIZMOR_VERSION" != "$ziz_latest" ]; then
   drift=1
   echo "zizmor: $ZIZMOR_VERSION -> $ziz_latest"
@@ -167,7 +171,7 @@ fi
 # chrome-for-testing publishes no digests, so each bump re-downloads and
 # self-hashes all 6 assets. The CDN prunes old versions, so this must keep
 # the pin fresh or the chrome action's verified download 404s.
-manifest="$(curl -fsSL --max-redirs 5 https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json 2>/dev/null || true)"
+manifest="$(_fetch https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json 2>/dev/null || true)"
 chrome_latest="$(echo "$manifest" | jq -r '.channels.Stable.version // empty' 2>/dev/null || true)"
 if [ -n "$chrome_latest" ] && [ "$chrome_latest" != "$CHROME_VERSION" ]; then
   if [ "$MODE" = apply ]; then

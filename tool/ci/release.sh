@@ -161,7 +161,7 @@ pick_source_file() {
 
 # Fetch every published version of the package from pub.dev.
 get_published_versions() {
-  curl -sS "https://pub.dev/api/packages/$PKG_NAME" 2>/dev/null \
+  curl -sS --retry 3 --retry-delay 2 "https://pub.dev/api/packages/$PKG_NAME" 2>/dev/null \
     | jq -r '.versions[].version // empty' 2>/dev/null \
     | sort -t. -k1,1n -k2,2n -k3,3n
 }
@@ -217,7 +217,7 @@ JQ
     local src="web_assets/$local_name"
     if [ -f "$src" ]; then
       local hash
-      hash=$( (sha256sum "$src" 2>/dev/null || shasum -a 256 "$src") | cut -d' ' -f1)
+      hash=$(sha256_file "$src")
       web_entries+="  '$asset_name': '$hash',"$'\n'
       echo "  $asset_name ... ${hash:0:12}..." >&2
     fi
