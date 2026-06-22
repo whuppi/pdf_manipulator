@@ -21,6 +21,21 @@ wasm-bindgen-cli version is read from `vendor/pdf_oxide/Cargo.lock`
 at build time — never hardcoded. `compile_rust.sh` auto-installs the
 matching version before WASM builds.
 
+### Bumping a fork's base tag — update every place it lives
+
+A base tag lives in more than one spot; change all of them together or they
+drift (a stale `baseTag` once slipped past review here). For pdf_oxide moving
+to a new upstream `vX.Y.Z`:
+
+1. the fork's patch branch — rename to `pdf_manipulator/X.Y.Z-patches`; its
+   name is what `analyze.sh` reads when the submodule is on that branch
+2. `build.json` → `baseTag` — `analyze.sh`'s off-branch fallback for its
+   warning-diff. CI checks the submodule out detached, so this is the value
+   CI actually uses; it MUST equal the branch's version
+3. the **Branch** and **Base tag** columns in the table above
+
+office_oxide is the same, under its own branch name and `v0.1.2`.
+
 ### The fork contract
 
 Each fork carries exactly three things — anything else is debris and
