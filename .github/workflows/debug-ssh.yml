@@ -45,6 +45,7 @@ jobs:
       runner: ${{ steps.resolve.outputs.runner }}
     steps:
       - id: resolve
+        shell: bash
         env:
           OVERRIDE: ${{ inputs.runner }}
           DEFAULT: ${{ env.DEFAULT_RUNNER }}

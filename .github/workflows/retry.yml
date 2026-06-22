@@ -50,6 +50,7 @@ jobs:
       runner: ${{ steps.resolve.outputs.runner }}
     steps:
       - id: resolve
+        shell: bash
         run: echo "runner=${DEFAULT_RUNNER}" >> "$GITHUB_OUTPUT"
 
   retry:

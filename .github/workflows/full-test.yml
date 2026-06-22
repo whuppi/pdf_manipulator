@@ -62,6 +62,7 @@ jobs:
       filter: ${{ steps.resolve.outputs.filter }}
     steps:
       - id: resolve
+        shell: bash
         env:
           RUNNER_IN: ${{ inputs.runner }}
           RUNNER_DEF: ${{ env.DEFAULT_RUNNER }}
@@ -186,6 +187,7 @@ jobs:
     permissions: {}
     steps:
       - name: Evaluate
+        shell: bash
         env:
           TEST_RESULT: ${{ needs.test.result }}
         run: |
