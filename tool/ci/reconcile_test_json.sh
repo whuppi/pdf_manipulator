@@ -72,7 +72,7 @@ awk '
     for (s in started) if (!(s in done)) { incomplete++; incids = incids " #" s }
     printf "── TEST-RESULT RECONCILER ──\n"
     printf "started=%d  done=%d  failures=%d  incomplete=%d  done_event=%s\n", \
-           nstart_count(started), ndone + 0, fails + 0, incomplete, (sawdone ? (donefail ? "fail" : "ok") : "absent")
+           count_keys(started), ndone + 0, fails + 0, incomplete, (sawdone ? (donefail ? "fail" : "ok") : "absent")
     if (ndone + 0 == 0) {
       print "❌ report contained no testDone events — no tests ran."
       exit 2
@@ -92,5 +92,5 @@ awk '
     printf "🎉 %d tests passed (every started test finished success).\n", ndone + 0
     exit 0
   }
-  function nstart_count(a,   k, n) { n = 0; for (k in a) n++; return n }
+  function count_keys(a,   k, n) { n = 0; for (k in a) n++; return n }
 ' "$REPORT"
