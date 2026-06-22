@@ -15,7 +15,7 @@ runs:
 
     - name: Reclaim disk
       if: runner.os == 'Linux'
-      uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # main @ 2024-04
+      uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
       with:
         # Keep the hosted tool cache: the rust capability installs sccache
         # there (the build's RUSTC_WRAPPER) before this step runs, and

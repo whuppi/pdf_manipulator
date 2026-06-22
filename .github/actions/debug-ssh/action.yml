@@ -16,7 +16,7 @@
 #   Example inside a workflow job:
 #
 #     steps:
-#       - uses: actions/checkout@v6
+#       - uses: actions/checkout@v7
 #       - uses: ./.github/actions/debug-ssh        # ← tunnel opens
 #       - uses: ./.github/actions/make-target      # ← test runs
 #         with: { make-target: test-pkg-native }
@@ -103,8 +103,11 @@ runs:
         env -u GITHUB_TOKEN -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
           sudo /usr/sbin/sshd -p 2222
 
-        curl -sSL "https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-unknown-linux-musl.tar.gz" \
-          | tar xz -C /tmp
+        source tool/versions.env
+        bash tool/fetch_verified.sh \
+          "https://github.com/ekzhang/bore/releases/download/$BORE_VERSION/bore-$BORE_VERSION-x86_64-unknown-linux-musl.tar.gz" \
+          "$BORE_SHA256_LINUX_X64" /tmp/bore.tar.gz
+        tar xz -C /tmp -f /tmp/bore.tar.gz
         chmod +x /tmp/bore
         nohup /tmp/bore local 2222 --to bore.pub > /tmp/bore.log 2>&1 &
         sleep 5
@@ -142,8 +145,11 @@ runs:
         sudo systemsetup -setremotelogin on 2>/dev/null || true
         sudo /usr/sbin/sshd -p 2222 2>/dev/null || true
 
-        curl -sSL "https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-aarch64-apple-darwin.tar.gz" \
-          | tar xz -C /tmp
+        source tool/versions.env
+        bash tool/fetch_verified.sh \
+          "https://github.com/ekzhang/bore/releases/download/$BORE_VERSION/bore-$BORE_VERSION-aarch64-apple-darwin.tar.gz" \
+          "$BORE_SHA256_MACOS_ARM64" /tmp/bore.tar.gz
+        tar xz -C /tmp -f /tmp/bore.tar.gz
         chmod +x /tmp/bore
         nohup /tmp/bore local 2222 --to bore.pub > /tmp/bore.log 2>&1 &
         sleep 5
@@ -188,8 +194,10 @@ runs:
         powershell -Command "Start-Service sshd" 2>/dev/null || \
           powershell -Command "Add-WindowsCapability -Online -Name OpenSSH.Server; Start-Service sshd" 2>/dev/null || true
 
-        curl -sSL "https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-pc-windows-msvc.zip" \
-          -o /tmp/bore.zip
+        source tool/versions.env
+        bash tool/fetch_verified.sh \
+          "https://github.com/ekzhang/bore/releases/download/$BORE_VERSION/bore-$BORE_VERSION-x86_64-pc-windows-msvc.zip" \
+          "$BORE_SHA256_WINDOWS_X64" /tmp/bore.zip
         unzip -qo /tmp/bore.zip -d /tmp && rm /tmp/bore.zip
 
         /tmp/bore.exe local 22 --to bore.pub > /tmp/bore.log 2>&1 &
@@ -211,7 +219,7 @@ runs:
         echo "$SSH_CMD" > /tmp/ssh-info/connect.txt
         echo "$BORE_PORT" > /tmp/ssh-info/port.txt
 
-    - uses: actions/upload-artifact@v7
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: ssh-info-${{ runner.os }}
         path: /tmp/ssh-info/

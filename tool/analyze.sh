@@ -7,6 +7,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PKG_ROOT="$(dirname "$SCRIPT_DIR")"
 
+# Pinned versions live in ONE file (tool/versions.env), never inline.
+source "$SCRIPT_DIR/versions.env"
+
 # SDK commands (overridable via env for non-FVM setups)
 DART="${DART:-fvm dart}"
 FLUTTER="${FLUTTER:-fvm flutter}"
@@ -144,7 +147,7 @@ check_rust_warnings() {
   if [[ "$branch" == *"/"* ]]; then
     base_tag="v$(echo "$branch" | cut -d/ -f2 | sed 's/-patches$//')"
   else
-    base_tag="v0.3.55"
+    base_tag="$BASE_TAG"
   fi
 
   local diff_output

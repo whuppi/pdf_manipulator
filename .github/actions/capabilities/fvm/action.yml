@@ -1,38 +1,34 @@
 name: FVM
 description: >
-  Install FVM from GitHub Releases + run fvm install to get the SDK pinned in .fvmrc.
-  Works on Linux, macOS, AND Windows. Downloads the pre-built binary directly —
-  no dart pub global activate (avoids PATH issues on Windows Git Bash).
-
-inputs:
-  fvm-version:
-    description: "FVM version to install (default: latest)"
-    required: false
-    default: "latest"
+  Install the pinned, hash-verified FVM tool from GitHub Releases, then run
+  fvm install to get the SDK from .fvmrc. Works on Linux, macOS, AND Windows.
+  Downloads the pre-built binary directly — no dart pub global activate
+  (avoids PATH issues on Windows Git Bash). Version + per-platform sha256
+  live in tool/versions.env.
 
 runs:
   using: composite
   steps:
     - name: Cache pub packages
-      uses: actions/cache@v5
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       with:
         path: ~/.pub-cache
         key: pub-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pubspec.yaml', 'example/pubspec.yaml') }}
         restore-keys: pub-${{ runner.os }}-${{ runner.arch }}-
 
     - name: Cache Flutter SDK (FVM)
-      uses: actions/cache@v5
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       with:
         path: ~/.fvm_cache
         key: fvm-sdk-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.fvmrc') }}
 
     - name: Install FVM + project SDK
       shell: bash
-      env:
-        GITHUB_TOKEN: ${{ github.token }}
-        FVM_VERSION_INPUT: ${{ inputs.fvm-version }}
       run: |
         set -euo pipefail
+
+        # Pinned version + per-platform sha256, single source of truth.
+        source tool/versions.env
 
         # ── Detect OS + arch ───────────────────────────────────────────
         case "$(uname -s)" in
@@ -48,30 +44,26 @@ runs:
           *)       echo "::error::Unsupported arch: $(uname -m)"; exit 1 ;;
         esac
 
-        echo "Platform: $OS-$ARCH"
+        echo "Platform: $OS-$ARCH — fvm $FVM_VERSION"
 
-        # ── Resolve version ────────────────────────────────────────────
-        if [[ "$FVM_VERSION_INPUT" == "latest" ]]; then
-          FVM_VERSION=$(curl -sS -H "Authorization: bearer $GITHUB_TOKEN" \
-            https://api.github.com/repos/leoafarias/fvm/releases/latest \
-            | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-        else
-          FVM_VERSION="$FVM_VERSION_INPUT"
-        fi
-        echo "FVM version: $FVM_VERSION"
-
-        # ── Download + extract ─────────────────────────────────────────
+        # ── Download + verify + extract ────────────────────────────────
+        # sha256 is pinned per platform; fetch_verified refuses on mismatch
+        # or a missing pin, so a repointed tag can't swap the tool out.
         INSTALL_DIR="$RUNNER_TOOL_CACHE/fvm"
         mkdir -p "$INSTALL_DIR"
 
+        HASH_VAR="FVM_SHA256_${OS^^}_${ARCH^^}"
+        EXPECTED="${!HASH_VAR:-}"
+        base="https://github.com/leoafarias/fvm/releases/download/$FVM_VERSION"
+
         if [[ "$OS" == "windows" ]]; then
-          URL="https://github.com/leoafarias/fvm/releases/download/$FVM_VERSION/fvm-$FVM_VERSION-$OS-$ARCH.zip"
-          curl -sSL "$URL" -o "$RUNNER_TEMP/fvm.zip"
+          bash tool/fetch_verified.sh \
+            "$base/fvm-$FVM_VERSION-$OS-$ARCH.zip" "$EXPECTED" "$RUNNER_TEMP/fvm.zip"
           unzip -qo "$RUNNER_TEMP/fvm.zip" -d "$INSTALL_DIR"
           rm -f "$RUNNER_TEMP/fvm.zip"
         else
-          URL="https://github.com/leoafarias/fvm/releases/download/$FVM_VERSION/fvm-$FVM_VERSION-$OS-$ARCH.tar.gz"
-          curl -sSL "$URL" -o "$RUNNER_TEMP/fvm.tar.gz"
+          bash tool/fetch_verified.sh \
+            "$base/fvm-$FVM_VERSION-$OS-$ARCH.tar.gz" "$EXPECTED" "$RUNNER_TEMP/fvm.tar.gz"
           tar xzf "$RUNNER_TEMP/fvm.tar.gz" -C "$INSTALL_DIR"
           rm -f "$RUNNER_TEMP/fvm.tar.gz"
         fi
@@ -82,15 +74,34 @@ runs:
         # Verify the binary exists
         ls -la "$FVM_BIN"/ | head -5
 
-        # Add to PATH for this step AND all subsequent steps
+        # Expose fvm to this step and every later step. Rather than putting
+        # the runner-derived toolcache dir on GITHUB_PATH (a value the
+        # env-file audit flags as a newline-injection surface), drop the
+        # binary into a fixed literal directory and add THAT constant to
+        # PATH — nothing runner-derived reaches the env file.
         export PATH="$FVM_BIN:$PATH"
-        echo "$FVM_BIN" >> $GITHUB_PATH
+        case "$OS" in
+          windows)
+            mkdir -p /c/fvm
+            cp "$FVM_BIN/fvm.exe" /c/fvm/fvm.exe
+            echo "C:\fvm" >> "$GITHUB_PATH"
+            ;;
+          *)
+            sudo mkdir -p /opt/fvm
+            sudo cp "$FVM_BIN/fvm" /opt/fvm/fvm
+            echo "/opt/fvm" >> "$GITHUB_PATH"
+            ;;
+        esac
 
-        # Also add fvm's Flutter SDK to PATH so fvm dart/fvm flutter work
-        # (fvm install puts it under FVM_CACHE_PATH)
+        # Point fvm at its SDK cache for every later step. Heredoc with a
+        # random delimiter so a newline in $HOME can't inject extra entries.
         FVM_CACHE="$HOME/.fvm_cache"
         export FVM_CACHE_PATH="$FVM_CACHE"
-        echo "FVM_CACHE_PATH=$FVM_CACHE" >> $GITHUB_ENV
+        {
+          echo "FVM_CACHE_PATH<<__FVM_ENV__"
+          echo "$FVM_CACHE"
+          echo "__FVM_ENV__"
+        } >> "$GITHUB_ENV"
 
         # ── Verify ─────────────────────────────────────────────────────
         "$FVM_BIN/fvm" --version

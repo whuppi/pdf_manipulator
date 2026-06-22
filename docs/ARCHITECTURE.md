@@ -210,15 +210,17 @@ bin/
 tool/                                       ← .sh = orchestration wrappers; .dart = programs
 │                                              (anything parsing structured data or using a library)
 ├── lib.sh                                  ← shared helpers (sourced by 2+ scripts)
+├── versions.env                            ← single source of truth for pinned versions + hashes
 ├── analyze.sh                              ← format + Dart + Rust static analysis
 ├── check_alignment.sh                      ← 16 KB ELF alignment check for Android APK
-├── check_deps.dart                         ← dependency-drift report (make check-deps; advisory)
 ├── compile_rust.sh                         ← Rust → native / wasm / per-target / both
+├── fetch_verified.sh                       ← the one door for hash-verified binary downloads
 ├── generate_fixtures.dart                  ← test fixture generator (make fixtures; stamp-protected)
-├── release.sh                              ← 7 modes: --gate, --discover, --github-notes,
-│                                              --update-tag-hashes, --stamp-changelog,
-│                                              --add-git-install, --add-pub-install
-└── run_web_test.sh                         ← flutter drive web integration test
+├── run_web_test.sh                         ← flutter drive web integration test
+└── ci/                                     ← invoked directly by workflows, not by make
+    ├── release.sh                          ← release pipeline (gate → discover → stamp → publish; --help lists modes)
+    ├── upgrade.sh                          ← daily pinned-version bump bot
+    └── reconcile_test_json.sh              ← test pass/fail from the JSON reporter
 
 vendor/
 ├── pdf_oxide/                              ← forked yfedoseev/pdf_oxide (submodule)
@@ -591,7 +593,7 @@ silently; real failures on unlistened tasks are re-raised loudly.
 | Term | Meaning | Example |
 |---|---|---|
 | **target** | What you build for | android, ios, macos, linux, windows, web |
-| **runner** | CI machine that runs the job | ubuntu-latest, macos-14, windows-latest |
+| **runner** | CI machine that runs the job (each workflow sets its own) | e.g. `ubuntu-24.04` |
 | **host** | Machine doing the building (CI or dev) | `Platform.isMacOS`, `uname` |
 | **capability** | One installable concern | fvm, rust, java, chrome, headless-display |
 | **build** | Compile for dev iteration | `make build-native` |
@@ -627,11 +629,13 @@ user-facing text (README, pubspec).
    runs `make`. Zero logic — flat list of conditional capability
    calls. Workflows call `make-target`, never capabilities directly.
 
-6. **Runners are configurable.** Every workflow defines its runner
-   as a `workflow_dispatch` input with a default. No hardcoded
-   `runs-on` except the 2-second `inputs` job. Infra jobs (gate,
-   triage, lint) use one configurable runner. Test/compile jobs use
-   per-row matrix runners.
+6. **Runners are configurable.** Every workflow resolves its runner in
+   one identical `inputs` job — `runs-on: ${{ needs.inputs.outputs.runner }}`
+   on every real job, the only place a literal `runs-on` appears. A
+   workflow that can be hand-run (a real `workflow_dispatch`) exposes a
+   `runner` choice that overrides `DEFAULT_RUNNER`; an event-only bot
+   resolves the hardcoded default through the same job. Test/compile jobs
+   add per-row matrix runners.
 
 7. **Matrix row is the manifest.** Each row declares which
    capabilities to activate and which runner to use. Adding a new
@@ -676,17 +680,74 @@ Each capability:
   each runner, including no-ops).
 - Never calls another capability. Independent leaves.
 
+**What is — and isn't — a capability (the generic test):** a capability
+*provisions one environmental prerequisite a build/test needs*, runner-
+agnostically. When deciding where something new belongs, ask:
+
+- Is it making the runner *ready* to build/test — installing a tool, restoring
+  a cache, setting up a display / disk / accelerator? → **capability**.
+- Is it the build/test *work* itself (compile, run a suite, produce binaries)?
+  → the **Makefile** (`make <target>`), invoked via `make-target`. Never a
+  capability.
+- Is it project automation that talks to the GitHub API (label a PR, open a
+  release/upgrade PR, re-run a job, close stale issues)? → a **workflow job**
+  or a `tool/` script. Never a capability — it provisions nothing.
+
+A capability holds no build logic and no GitHub-API logic. The moment something
+crosses either line, it belongs in the Makefile or a workflow, not under
+`capabilities/`.
+
 ### Workflows
 
 | Workflow | Trigger | Runner model |
 |---|---|---|
-| `ci.yml` | PR to prod/dev | All jobs on one input runner (default: ubuntu) |
-| `full-test.yml` | `ready-to-test` label or dispatch | Single matrix — core + portability [P] rows |
-| `create-release.yml` | Changelog push or dispatch | Infra on input runner, compile on matrix |
-| `pr-lint.yml` | PR to prod/dev | All jobs on one input runner |
-| `triage.yml` | Issues/PRs | All jobs on env runner |
-| `upgrade-check.yml` | Daily or dispatch | All jobs on input runner |
-| `debug-ssh.yml` | Dispatch only | Direct input runner |
+| `ci.yml` | PR to prod/dev | Inputs runner (hand-run override) + `rust`/`test` jobs |
+| `full-test.yml` | `ready-to-test` label or dispatch | Inputs runner + per-row matrix |
+| `create-release.yml` | Changelog push or dispatch | Inputs runner + compile matrix |
+| `pr-lint.yml` | PR to prod/dev | Inputs runner (hand-run override) |
+| `triage.yml` | Issues / fork PRs | Inputs runner (event-only default) — privileged |
+| `retry.yml` | CI / Full Test completed | Inputs runner (event-only default) — privileged |
+| `auto-close.yml` | Schedule / issues / comments | Inputs runner (hand-run override) |
+| `upgrade-check.yml` | Daily / dispatch | Inputs runner (hand-run override) |
+| `debug-ssh.yml` | Dispatch only | Inputs runner (override) |
+
+The two privileged workflows (`triage`, `retry`) carry the only suppressions
+in the tree — see **Workflow security** below.
+
+### Workflow security
+
+Two workflows need a write token in a context a fork can trigger:
+`triage.yml` (label/assign fork PRs) and `retry.yml` (re-run a completed
+run). On a public repo GitHub grants fork-PR write only through
+`pull_request_target` or `workflow_run` — the two riskiest triggers in
+Actions, which zizmor flags categorically (`dangerous-triggers`, high
+severity, every persona). There is no clean alternative: `pull_request` from
+a fork is read-only, and the fork-write repo settings are private-repos-only.
+
+So each is hardened against every vector the finding warns about, then carries
+a single `# zizmor: ignore[dangerous-triggers]` on its trigger line as the
+receipt — not a dodge. A workflow earns that suppression only after all of:
+
+1. **No PR checkout** — never check out the fork ref.
+2. **No PR code execution** — only trusted APIs (`gh`, pinned actions).
+3. **Untrusted data is env-only** — PR title/refs/numbers flow through
+   `env:`, never interpolated into `run:` or an evaluating `with:`.
+4. **No `GITHUB_ENV` / `GITHUB_PATH` writes** — closes env-injection.
+5. **No untrusted artifact ingestion** — retry uses only the numeric run id.
+6. **Least-privilege token** — top-level `permissions: {}`, per-job scopes.
+7. **Repo-guard every job** — `if: github.repository == 'whuppi/pdf_manipulator'`
+   so a fork can't run the privileged workflow in its own context.
+8. **SHA-pinned actions.**
+9. **Bounded** — `timeout-minutes`, `concurrency`, and for reruns a one-shot
+   guard (`run_attempt == 1`).
+10. **Literal API arguments** — no dynamic command built from untrusted data.
+
+The suppression is inline (not `zizmor.yml`) so it lives where it applies and
+silences only that one finding; every other audit stays live, and the
+`pr-lint.yml` zizmor gate re-checks the whole tree on every PR. For a new
+privileged need, prefer in order: `pull_request` (read-only, clean) →
+`schedule` (base-context poller, clean) → and only if instant fork-write is
+truly required, a hardened workflow with the one receipt.
 
 ### Test matrix (full-test.yml)
 

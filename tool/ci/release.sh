@@ -60,7 +60,8 @@ MODE="${1:---help}"
 TAG="${2:-}"
 VERSION="${TAG:+${TAG#v}}"
 
-source "$SCRIPT_DIR/lib.sh"
+# lib.sh is shared with the build scripts in tool/ — one level up from tool/ci/.
+source "$SCRIPT_DIR/../lib.sh"
 
 REPO="${GITHUB_REPOSITORY:-$(_json_get repo)}"
 REPO_URL="https://github.com/$REPO"
@@ -852,7 +853,7 @@ dependencies:
 # So a stable heading is NOT satisfied by its `-dev.0` prerelease tag —
 # they're different version strings, hence different tags.
 #
-# This is NOT the pub.dev fold (§3): that one asks "is it on pub.dev?";
+# This is NOT the pub.dev fold (the one that asks "is it on pub.dev?");
 # this one asks "does it exist as a release at all?". Orthogonal.
 #
 # Run it at PR time (block the bad merge) AND in the release workflow

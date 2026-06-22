@@ -65,11 +65,12 @@ branch not currently checked out.
 `.fvmrc` (root + `example/.fvmrc`) is the single source of truth for
 the Flutter SDK version. Never hardcode the version anywhere else.
 
-`upgrade-check.yml` runs daily. Its `flutter` job detects new Flutter
-stable releases and opens a draft PR on `chore/flutter-upgrade` that
-bumps both files — review, test, merge when ready. Its `package-deps`
-job runs `make check-deps` and surfaces dependency drift as warning
-annotations (advisory only — it never fails the run).
+`upgrade-check.yml` runs daily. Its `upgrade` job detects drift in every
+pinned version Dependabot can't see — the Flutter SDK, the tools and
+verified binaries in `tool/versions.env`, and the zizmor + actionlint gate
+pins — and opens a single draft PR on `chore/upgrades` that bumps them
+(binary sha256s recomputed from the upstream assets). Review, test, merge
+when ready.
 
 ---
 
@@ -267,8 +268,8 @@ handles commit lists, filtering, and publishing. `pubspec.yaml` stays
 
 ### The release pipeline
 
-All logic lives in `tool/release.sh` (7 modes). The workflow
-(`create-release.yml`) is pure job orchestration.
+All logic lives in `tool/ci/release.sh` (run it with `--help` to list its
+modes). The workflow (`create-release.yml`) is pure job orchestration.
 
 ```
 Push to dev (CHANGELOG.pre.md) or prod (CHANGELOG.md)
@@ -281,7 +282,7 @@ Push to dev (CHANGELOG.pre.md) or prod (CHANGELOG.md)
   ├─ 2. discover → release.sh --discover
   │               finds version, validates branch/type match
   │               stamps version + deregisters submodules
-  │               creates orphan tag commit + GitHub Release
+  │               creates stamped tag commit (with a parent) + GitHub Release
   │
   ├─ 3. compile  → checkout tag, build all 6 platforms in parallel
   │
@@ -459,7 +460,7 @@ the full changelog that will be published.
 To preview locally:
 
 ```sh
-bash tool/release.sh --stamp-changelog vX.Y.Z
+bash tool/ci/release.sh --stamp-changelog vX.Y.Z
 cat CHANGELOG.md
 git checkout CHANGELOG.md   # restore
 ```

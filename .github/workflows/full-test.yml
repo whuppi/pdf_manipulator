@@ -41,6 +41,8 @@ on:
         options: [ubuntu-24.04, macos-14, windows-2025-vs2026]
         default: ubuntu-24.04
 
+permissions: {}
+
 concurrency:
   group: full-test-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
@@ -53,16 +55,25 @@ jobs:
   inputs:
     name: Resolve inputs
     runs-on: ubuntu-24.04
+    permissions: {}
     outputs:
       runner: ${{ steps.resolve.outputs.runner }}
       portability: ${{ steps.resolve.outputs.portability }}
       filter: ${{ steps.resolve.outputs.filter }}
     steps:
       - id: resolve
+        env:
+          RUNNER_IN: ${{ inputs.runner }}
+          RUNNER_DEF: ${{ env.DEFAULT_RUNNER }}
+          PORT_IN: ${{ inputs.portability }}
+          PORT_DEF: ${{ env.DEFAULT_PORTABILITY }}
+          FILTER_IN: ${{ inputs.filter }}
         run: |
-          echo "runner=${{ inputs.runner || env.DEFAULT_RUNNER }}" >> $GITHUB_OUTPUT
-          echo "portability=${{ inputs.portability || env.DEFAULT_PORTABILITY }}" >> $GITHUB_OUTPUT
-          echo "filter=${{ inputs.filter || 'all' }}" >> $GITHUB_OUTPUT
+          {
+            echo "runner=${RUNNER_IN:-$RUNNER_DEF}"
+            echo "portability=${PORT_IN:-$PORT_DEF}"
+            echo "filter=${FILTER_IN:-all}"
+          } >> "$GITHUB_OUTPUT"
 
   test:
     needs: inputs
@@ -110,6 +121,8 @@ jobs:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.timeout }}
+    permissions:
+      contents: read  # checkout + caches; no API writes
     env:
       FILTER: ${{ needs.inputs.outputs.filter }}
       PORTABILITY: ${{ needs.inputs.outputs.portability }}
@@ -117,27 +130,29 @@ jobs:
       - name: Check filter
         id: filter
         shell: bash
+        env:
+          NAME: ${{ matrix.name }}
+          MATRIX_PORTABILITY: ${{ matrix.portability }}
         run: |
-          NAME="${{ matrix.name }}"
           F="$FILTER"
-          P="${{ matrix.portability }}"
+          P="$MATRIX_PORTABILITY"
           # Skip portability rows when portability is off
           if [[ "$P" == "true" && "$PORTABILITY" != "true" ]]; then
             echo "Skipped: portability off"
-            echo "match=false" >> $GITHUB_OUTPUT
+            echo "match=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [[ "$F" == "all" || -z "$F" ]]; then
-            echo "match=true" >> $GITHUB_OUTPUT
+            echo "match=true" >> "$GITHUB_OUTPUT"
           elif echo "$NAME" | grep -qi "$F"; then
-            echo "match=true" >> $GITHUB_OUTPUT
+            echo "match=true" >> "$GITHUB_OUTPUT"
           else
             echo "Skipped by filter: $F ∉ $NAME"
-            echo "match=false" >> $GITHUB_OUTPUT
+            echo "match=false" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         if: steps.filter.outputs.match == 'true'
-        with: { submodules: recursive }
+        with: { submodules: recursive, persist-credentials: false }
       - uses: ./.github/actions/make-target
         if: steps.filter.outputs.match == 'true'
         with:
@@ -156,7 +171,7 @@ jobs:
           simulator: ${{ matrix.simulator || 'false' }}
       - name: Upload test results
         if: always() && steps.filter.outputs.match == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.make }}-${{ matrix.runner }}
           path: test-results/
@@ -168,10 +183,13 @@ jobs:
     if: always()
     needs: [inputs, test]
     runs-on: ${{ needs.inputs.outputs.runner }}
+    permissions: {}
     steps:
       - name: Evaluate
+        env:
+          TEST_RESULT: ${{ needs.test.result }}
         run: |
-          RESULT="${{ needs.test.result }}"
+          RESULT="$TEST_RESULT"
           if [[ "$RESULT" != "success" && "$RESULT" != "skipped" ]]; then
             echo "FAILED: test returned '$RESULT'"
             exit 1

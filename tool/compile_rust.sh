@@ -26,6 +26,9 @@
 # ────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
+# Pinned versions live in ONE file (tool/versions.env), never inline.
+source "$(cd "$(dirname "$0")" && pwd)/versions.env"
+
 
 # ═══════════════════════════════════════════════════════════════════
 # Paths
@@ -97,7 +100,10 @@ compile_one() {
 #   $3 = NDK clang prefix (e.g. "aarch64-linux-android")
 compile_android_target() {
   local target="$1" outdir="$2" clang_prefix="$3"
-  local ndk="${ANDROID_NDK_HOME:-$HOME/Library/Android/sdk/ndk/28.0.12433566}"
+  # Prefer ANDROID_NDK_HOME (CI runners set it); else the newest NDK the
+  # dev's Android Studio installed. No version is pinned — CI builds with the
+  # runner's NDK, so a local fallback only needs to find whatever is present.
+  local ndk="${ANDROID_NDK_HOME:-$(ls -d "$HOME/Library/Android/sdk/ndk/"*/ 2>/dev/null | sort -V | tail -1)}"
   local toolchain="$ndk/toolchains/llvm/prebuilt"
 
   local host_dir
@@ -263,16 +269,19 @@ do_wasm() {
   if ! command -v wasm-opt &>/dev/null; then
     if [ -n "${CI:-}" ]; then
       echo "=== WASM: installing binaryen (wasm-opt) ==="
-      BINARYEN_VER="version_130"
+      BINARYEN_VER="$BINARYEN_VERSION"
       case "$(uname -s)" in
         Linux*)
           BINARYEN_URL="https://github.com/WebAssembly/binaryen/releases/download/$BINARYEN_VER/binaryen-$BINARYEN_VER-x86_64-linux.tar.gz"
+          BINARYEN_SHA="$BINARYEN_SHA256_LINUX_X64"
           ;;
         Darwin*)
           BINARYEN_URL="https://github.com/WebAssembly/binaryen/releases/download/$BINARYEN_VER/binaryen-$BINARYEN_VER-arm64-macos.tar.gz"
+          BINARYEN_SHA="$BINARYEN_SHA256_MACOS_ARM64"
           ;;
         MINGW*|MSYS*)
           BINARYEN_URL="https://github.com/WebAssembly/binaryen/releases/download/$BINARYEN_VER/binaryen-$BINARYEN_VER-x86_64-windows.tar.gz"
+          BINARYEN_SHA="$BINARYEN_SHA256_WINDOWS_X64"
           ;;
       esac
       echo "  $BINARYEN_VER"
@@ -282,8 +291,9 @@ do_wasm() {
       if command -v cygpath &>/dev/null; then
         tmp=$(cygpath -u "$tmp")
       fi
-      curl -sSL --fail "$BINARYEN_URL" -o "$tmp/binaryen.tar.gz" \
-        || { echo "Error: failed to download binaryen $BINARYEN_VER"; exit 1; }
+      bash "$(cd "$(dirname "$0")" && pwd)/fetch_verified.sh" \
+        "$BINARYEN_URL" "$BINARYEN_SHA" "$tmp/binaryen.tar.gz" \
+        || { echo "Error: failed to fetch/verify binaryen $BINARYEN_VER"; exit 1; }
       tar xzf "$tmp/binaryen.tar.gz" -C "$tmp"
       local cargo_bin="$HOME/.cargo/bin"
       local cargo_lib="$HOME/.cargo/lib"

@@ -70,7 +70,7 @@ runs:
 
     - name: Restore AVD cache
       if: inputs.avd-cache == 'true'
-      uses: actions/cache@v5
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       id: avd-cache
       with:
         path: |
@@ -84,7 +84,7 @@ runs:
         runner.os != 'Windows' &&
         inputs.avd-cache == 'true' &&
         steps.avd-cache.outputs.cache-hit != 'true'
-      uses: reactivecircus/android-emulator-runner@v2
+      uses: reactivecircus/android-emulator-runner@e89f39f1abbbd05b1113a29cf4db69e7540cae5a # v2.37.0
       with:
         api-level: ${{ inputs.api-level }}
         arch: x86_64
@@ -106,11 +106,11 @@ runs:
         SDKMGR="$(find "$SDK/cmdline-tools" -name "sdkmanager*" -type f | head -1)"
         yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
         "$SDKMGR" \
-          "system-images;android-${{ inputs.api-level }};aosp_atd;x86_64" \
+          "system-images;android-${INPUTS_API_LEVEL};aosp_atd;x86_64" \
           "platform-tools" "emulator" > /dev/null
         AVDMGR="$(find "$SDK/cmdline-tools" -name "avdmanager*" -type f | head -1)"
         echo no | "$AVDMGR" create avd --force -n test \
-          --package "system-images;android-${{ inputs.api-level }};aosp_atd;x86_64"
+          --package "system-images;android-${INPUTS_API_LEVEL};aosp_atd;x86_64"
         "$SDK/emulator/emulator" -port 5554 -avd test \
           -no-window -noaudio -no-boot-anim &
         TIMEOUT=600; ELAPSED=0
@@ -122,6 +122,8 @@ runs:
         done
         "$SDK/platform-tools/adb" -s emulator-5554 emu kill || true
         sleep 5
+      env:
+        INPUTS_API_LEVEL: ${{ inputs.api-level }}
 
     # ── Teardown watchdog wrapper ──
     # Written to /tmp and passed as the reactivecircus script.
@@ -180,11 +182,9 @@ runs:
         # other children (app, adb) and DDS is busy, so this can't fire
         # mid-test — it's self-gating, no text marker needed.
         #
-        # Killing DDS can sever the harness tally AFTER tests ran but
-        # before they were counted, so Flutter's "🎉 N passed" line can
-        # undercount (a side effect of the fire-and-forget DDS shutdown,
-        # flutter#187984). The reconciler below works around that by
-        # counting the ✅ marks itself.
+        # Killing DDS can sever the harness tally after tests ran but before
+        # they were counted, so the "N passed" summary and the exit code both
+        # undercount (fire-and-forget DDS shutdown, flutter#187984).
         kill_stuck_dds() {
           for dvmpid in $(pgrep -f dartvm 2>/dev/null); do
             local kids; kids=$(pgrep -P "$dvmpid" 2>/dev/null)
@@ -217,41 +217,16 @@ runs:
         kill $TAIL_PID 2>/dev/null || true
         wait $TAIL_PID 2>/dev/null || true
 
-        # Result reconciler — self-count, don't trust the exit code or the
-        # "🎉 N passed" line. Two teardown artifacts make both unreliable
-        # on CPU-starved runners (flutter#187785 adb, flutter#187984 dds):
-        #   - the watchdog kill -9 leaves a non-zero exit even on a clean
-        #     pass, and
-        #   - killing a hung DDS can sever the harness tally AFTER tests
-        #     ran but before they were counted, so "🎉 N passed" can show
-        #     fewer than really passed.
-        # Instead, count the per-test marks flutter_test prints: every
-        # passing test is a line starting "✅ ", every failing one "❌ ".
-        # Counting is dynamic — it grows with the suite, no hardcoded
-        # totals. The ONE ❌ that isn't a real failure is the spurious
-        # "❌ loading <file> (failed)" from the golden-comparator stream
-        # (a no-op here — the suite has no golden tests); it's excluded.
-        # Any OTHER ❌ is a real failure and stays red, so nothing is
-        # masked.
-        PASS=$(grep -c '^✅ ' "$OUT" || true)
-        REAL_FAILS=$(grep '^❌ ' "$OUT" | grep -v 'loading .* (failed)' || true)
-        FAIL_COUNT=$(printf '%s' "$REAL_FAILS" | grep -c . || true)
-
+        # The watchdog's kill -9 dirties the exit code and a severed DDS can
+        # drop console marks (flutter#187785 adb, flutter#187984 dds), so
+        # neither is trusted here. The JSON report flushed each test's verdict
+        # as it finished, before the kill — the reconciler below reads
+        # pass/fail from it.
         echo ""
-        echo "── WATCHDOG TALLY ──"
-        if [ "$FAIL_COUNT" -eq 0 ] && [ "$PASS" -gt 0 ]; then
-          echo "🎉 $PASS tests passed (counted from ✅ marks)."
-          echo "   The exit code / 'N passed' line is unreliable after a"
-          echo "   teardown DDS kill — trust this count (flutter#187984)."
-          EXIT=0
-        else
-          echo "❌ $FAIL_COUNT real test failure(s) (excludes the spurious"
-          echo "   golden-comparator 'loading … (failed)' line):"
-          printf '%s\n' "$REAL_FAILS"
-          [ "$EXIT" -eq 0 ] && EXIT=1
-        fi
-
-        exit $EXIT
+        echo "raw command exit was $EXIT (ignored — reconciling from the JSON report)"
+        WS="${GITHUB_WORKSPACE:-.}"
+        bash "$WS/tool/ci/reconcile_test_json.sh" "$WS/test-results/int-android.json"
+        exit $?
         EMUSCRIPT
         chmod +x /tmp/emulator-run.sh
 
@@ -261,7 +236,7 @@ runs:
     # -no-snapshot: cold-boot, ignore snapshot entirely (cold-boot input).
     - name: Boot + run (Linux/macOS)
       if: runner.os != 'Windows'
-      uses: reactivecircus/android-emulator-runner@v2
+      uses: reactivecircus/android-emulator-runner@e89f39f1abbbd05b1113a29cf4db69e7540cae5a # v2.37.0
       with:
         api-level: ${{ inputs.api-level }}
         arch: x86_64
@@ -294,9 +269,11 @@ runs:
         "$SDKMGR" --install \
           "build-tools;36.0.0" \
           "platform-tools" \
-          "platforms;android-${{ inputs.api-level }}" \
+          "platforms;android-${INPUTS_API_LEVEL}" \
           "emulator" \
-          "system-images;android-${{ inputs.api-level }};aosp_atd;x86_64" > /dev/null
+          "system-images;android-${INPUTS_API_LEVEL};aosp_atd;x86_64" > /dev/null
+      env:
+        INPUTS_API_LEVEL: ${{ inputs.api-level }}
 
     # Step 2: Create AVD + boot + disable animations + run + kill
     - name: Boot + run (Windows)
@@ -311,13 +288,17 @@ runs:
         if [ ! -d "$AVD_DIR" ]; then
           AVDMGR="$(find "$SDK/cmdline-tools" -name "avdmanager*" -type f | head -1)"
           echo no | "$AVDMGR" create avd --force -n test \
-            --package "system-images;android-${{ inputs.api-level }};aosp_atd;x86_64"
+            --package "system-images;android-${INPUTS_API_LEVEL};aosp_atd;x86_64"
         fi
 
         ADB="$SDK/platform-tools/adb -s emulator-5554"
 
         # Boot emulator (matches action's launchEmulator).
-        SNAP_FLAG="${{ inputs.cold-boot == 'true' && '-no-snapshot' || '-no-snapshot-save' }}"
+        if [ "$INPUTS_COLD_BOOT" = "true" ]; then
+          SNAP_FLAG="-no-snapshot"
+        else
+          SNAP_FLAG="-no-snapshot-save"
+        fi
         "$SDK/emulator/emulator" -port 5554 -avd test \
           $SNAP_FLAG -no-window -noaudio -no-boot-anim &
 
@@ -356,7 +337,11 @@ runs:
         $ADB shell settings put global animator_duration_scale 0.0
 
         # Run the user's script.
-        ${{ inputs.script }}
+        ${INPUTS_SCRIPT}
+      env:
+        INPUTS_API_LEVEL: ${{ inputs.api-level }}
+        INPUTS_SCRIPT: ${{ inputs.script }}
+        INPUTS_COLD_BOOT: ${{ inputs.cold-boot }}
 
     # ── Cleanup ──
     - name: Kill emulator (Windows)

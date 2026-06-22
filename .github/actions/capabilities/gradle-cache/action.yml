@@ -14,7 +14,7 @@ runs:
   steps:
     - name: Restore Gradle cache
       if: inputs.phase == 'restore'
-      uses: actions/cache/restore@v5
+      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       with:
         path: |
           ~/.gradle/caches
@@ -30,7 +30,7 @@ runs:
 
     - name: Save Gradle cache
       if: inputs.phase == 'save'
-      uses: actions/cache/save@v5
+      uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       continue-on-error: true
       with:
         path: |

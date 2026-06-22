@@ -1,7 +1,7 @@
 <!--
   Banner stays <picture> for GitHub's dark/light. pub.dev strips <picture>
   when sanitizing the README, so the publish step flattens it to the inner
-  <img> via `tool/release.sh --stamp-readme` (the repo copy is untouched).
+  <img> via `tool/ci/release.sh --stamp-readme` (the repo copy is untouched).
   Drop both once pub.dev renders <picture>. Tracking:
   dart-lang/pub-dev#5923, dart-lang/pub-dev#6363, google/dart-neats#383.
 -->

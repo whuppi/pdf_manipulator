@@ -89,7 +89,7 @@ When in doubt, read existing code in this repo and match it. Per-repo style cons
 
 **Conventional commits required.** PR titles must follow `feat:` / `fix:` / `chore:` etc. Enforced by CI (`pr-lint.yml`) and local hook (`.githooks/commit-msg`).
 
-**CI/CD.** Capability-based CI architecture — 13 independent capability actions provisioned by `make-target` orchestrator. Matrix manifests declare capabilities per job. All workflows accept runner override via `workflow_dispatch`. Release pipeline: `create-release.yml` (gate → discover → compile matrix → upload → publish). All release logic in `tool/release.sh`.
+**CI/CD.** Capability-based CI architecture — 13 independent capability actions provisioned by `make-target` orchestrator. Matrix manifests declare capabilities per job. All workflows accept runner override via `workflow_dispatch`. Release pipeline: `create-release.yml` (gate → discover → compile matrix → upload → publish). All release logic in `tool/ci/release.sh`.
 
 ---
 

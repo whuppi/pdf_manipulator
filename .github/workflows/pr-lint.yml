@@ -1,7 +1,7 @@
 # All PR quality gates in one workflow.
-# Jobs: conventional commit title, promotion chain, workflow security scan.
-# Runner-agnostic — all jobs run on one configurable runner.
-# Default: ubuntu-24.04. Override via workflow_dispatch.
+# Jobs: conventional-commit title, promotion chain, changelog versions, and
+# workflow lint (zizmor security + actionlint correctness over .github/).
+# Runner-agnostic — all jobs run on one configurable runner (default ubuntu).
 name: PR Checks
 
 on:
@@ -18,6 +18,11 @@ on:
 
 permissions: {}
 
+# One in-flight run per PR; new pushes cancel the previous run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   DEFAULT_RUNNER: ubuntu-24.04
 
@@ -29,7 +34,10 @@ jobs:
       runner: ${{ steps.resolve.outputs.runner }}
     steps:
       - id: resolve
-        run: echo "runner=${{ inputs.runner || env.DEFAULT_RUNNER }}" >> $GITHUB_OUTPUT
+        env:
+          OVERRIDE: ${{ inputs.runner }}
+          DEFAULT: ${{ env.DEFAULT_RUNNER }}
+        run: echo "runner=${OVERRIDE:-$DEFAULT}" >> "$GITHUB_OUTPUT"
 
   # ── Conventional Commits ─────────────────────────────────────────
   conventional-commit:
@@ -87,7 +95,7 @@ jobs:
   # release branch. Only the TOP heading of each file may be untagged
   # (the release candidate); every heading below must have its git tag
   # or a verified `<!-- release: no-tag -->` directive. See
-  # tool/release.sh --check-versions.
+  # tool/ci/release.sh --check-versions.
   changelog-check:
     name: Changelog Versions
     needs: inputs
@@ -95,42 +103,46 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
           fetch-tags: true
+          persist-credentials: false
       - name: One new version per lane
         run: |
           rc=0
           echo "── prerelease lane (CHANGELOG.pre.md) ──"
-          BRANCH=dev  bash tool/release.sh --check-versions || rc=1
+          BRANCH=dev  bash tool/ci/release.sh --check-versions || rc=1
           echo ""
           echo "── stable lane (CHANGELOG.md) ──"
-          BRANCH=prod bash tool/release.sh --check-versions || rc=1
+          BRANCH=prod bash tool/ci/release.sh --check-versions || rc=1
           exit $rc
 
-  # ── Workflow Security ────────────────────────────────────────────
-  workflow-security:
-    name: Workflow Security
+  # ── Workflow lint (zizmor + actionlint) ──────────────────────────
+  # zizmor = security: the whole .github tree must stay at auditor exit-0; the
+  # only allowances are the two documented, doctrine-hardened suppressions in
+  # triage.yml / retry.yml.
+  # actionlint = correctness: valid YAML, expressions, runner labels, plus
+  # shellcheck on run: blocks. Both pinned; bumped by upgrade-check.yml.
+  workflow-lint:
+    name: Workflow lint
     needs: inputs
     runs-on: ${{ needs.inputs.outputs.runner }}
+    permissions:
+      contents: read  # checkout only; both tools read the workflow files
     steps:
-      - uses: actions/checkout@v7
-      - name: Scan for dangerous patterns
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: zizmor (security, auditor persona, zero findings)
+        env:
+          GH_TOKEN: ${{ github.token }}  # higher API rate limit for ref checks
         run: |
-          FAILED=false
-          for f in .github/workflows/*.yml; do
-            [[ "$f" == *"pr-lint"* ]] && continue
-
-            if grep -q "pull_request_target" "$f"; then
-              if grep -A5 "actions/checkout" "$f" | grep -qE "github\.event\.pull_request\.head\.(sha|ref)|pull_request\.head\.sha"; then
-                echo "::error file=$f::SECURITY: $f uses pull_request_target with checkout of PR code. This gives attackers write access."
-                FAILED=true
-              fi
-            fi
-          done
-
-          if [[ "$FAILED" == "true" ]]; then
-            exit 1
-          fi
-          echo "✓ No dangerous pull_request_target + checkout patterns found"
+          source tool/versions.env
+          pipx run "zizmor==$ZIZMOR_VERSION" --persona=auditor .github/
+      - name: actionlint (correctness + shellcheck)
+        run: |
+          source tool/versions.env
+          go install "github.com/rhysd/actionlint/cmd/actionlint@v$ACTIONLINT_VERSION"
+          PATH="$(go env GOPATH)/bin:$PATH"
+          actionlint -color

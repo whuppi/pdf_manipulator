@@ -22,6 +22,18 @@ Report privately via [GitHub Security Advisories](https://github.com/whuppi/pdf_
 
 - **Upstream Rust engine bugs** not triggered through this package — report to [yfedoseev/pdf_oxide](https://github.com/yfedoseev/pdf_oxide).
 
+## Operational notes (known, accepted)
+
+These are conscious trade-offs, documented so they aren't mistaken for oversights:
+
+- **Prebuilt binaries depend on the main repo's Releases.** Source is baked into each release tag (it survives even if the engine submodule repos are deleted), but the prebuilt download URLs point at this repo's Releases. Deleting the main repo 404s them, so fresh installs fall back to compile-from-source (which needs Rust).
+
+- **pub.dev secret scanning is disabled for `vendor/**`.** The vendored engine source is excluded from publish-time secret scanning, so a secret accidentally committed into the engine would not be flagged. Self-inflicted only — we control the engine source.
+
+- **CI runs Chrome with `--no-sandbox`.** Standard for CI runners (no SUID sandbox available); only the trusted example app is ever loaded, and the runner is ephemeral.
+
+- **`git:`-ref consumers fetch the engine at build time.** Depending on this package by git ref initializes the engine submodules from `whuppi/*`. The supply-chain trust is the same as any git dependency.
+
 ## Response
 
 Valid reports are fixed and shipped as patch versions.
