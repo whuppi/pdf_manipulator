@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # Shell portability + correctness gate — the "zizmor for shell". Same run
-# locally (make lint-shell) and in CI (pr-lint.yml). Three checks:
+# locally (make lint-shell) and in CI (pr-lint.yml). Four checks:
 #   1. shellcheck     — correctness, quoting, broad portability.
 #   2. bash 4.0+ scan — catches macOS-bash-3.2 breaks. macOS is frozen on bash
 #        3.2, so a bash 4.0+ feature under `shell: bash` there is a fatal "bad
@@ -12,14 +12,13 @@
 #   3. workflow shell — every workflow run step resolves to bash (its own
 #        shell: or the workflow's defaults.run.shell), so a step can't land on
 #        a Windows runner's pwsh default and break on bash syntax.
+#   4. coreutils scan — GNU-only flags that break on macOS's BSD userland
+#        (in-place sed, perl-regex grep, and friends). A curated blocklist,
+#        not exhaustive: no static tool covers all of coreutils, so the macOS
+#        CI leg (real BSD) stays the backstop. Add gotchas here as they bite.
 #
-# Scope, honestly: this catches shell-LANGUAGE portability (bash version, the
-# wrong default shell). It does NOT catch BSD-vs-GNU coreutils flag drift —
-# sed -i, grep -P, readlink -f, date/stat formats — because no static tool
-# does. The macOS CI leg (real BSD userland) is the backstop for those.
-#
-# The scan is plain grep: never paste a bash 4.0+ construct verbatim into a
-# comment (it can't tell code from comment) — name it, as this header does.
+# Both scans are plain grep: never paste a flagged construct verbatim into a
+# comment (grep can't tell code from comment) — name it, as this header does.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -96,6 +95,37 @@ for wf in .github/workflows/*.yml; do
 done
 if [ "$nonbash" -eq 0 ]; then
   echo "  clean — every workflow run step is bash"
+else
+  status=1
+fi
+
+# ── 4. GNU-only coreutils flags (break on macOS's BSD userland) ───────
+# Curated blocklist. Descriptions name each flag in prose, never as the
+# literal command-and-flag, so the scan can't match its own text.
+echo "── BSD/GNU coreutils portability (tool/ + .github/) ──"
+gnuism=0
+gscan() {  # ERE  human-description
+  local found
+  found=$(grep -rnE "$1" tool .github \
+    --include='*.sh' --include='*.yml' --include='*.yaml' 2>/dev/null || true)
+  if [ -n "$found" ]; then
+    echo "  GNU-only — $2:" >&2
+    printf '%s\n' "$found" | sed 's/^/    /' >&2
+    gnuism=1
+  fi
+}
+gscan '\bsed\b +(-[a-zA-Z]+ )*-i([[:space:]]|$)'    'in-place sed with no suffix (BSD needs one; use a .bak suffix or a tmpfile)'
+gscan '\bsed\b +-[a-zA-Z]*r([[:space:]]|$)'         'sed extended-regex via the GNU flag (use the portable E flag)'
+gscan '\bgrep\b[^|;&]* -[a-zA-Z]*P([[:space:]]|$)'  'grep perl-regex flag'
+gscan '\breadlink\b +-[a-zA-Z]*f'                   'readlink follow flag (absent on macOS; use a realpath helper)'
+gscan '\bdate\b +(-d\b|--date)'                     'date relative flag (BSD uses the v flag)'
+gscan '\bstat\b +(-c\b|--format|--printf)'          'stat format flag (BSD uses the f flag)'
+gscan '\bfind\b[^|;&]*-printf'                       'find print-format action'
+gscan '\bxargs\b +(-d\b|--delimiter)'               'xargs delimiter flag'
+gscan '\bcp\b[^|;&]*--parents'                       'cp parents flag'
+gscan '(^|[^[:alnum:]_./-])(tac|nproc|sponge)([[:space:]]|$)' 'GNU-only command (no BSD tool by that name)'
+if [ "$gnuism" -eq 0 ]; then
+  echo "  clean — portable across BSD + GNU"
 else
   status=1
 fi

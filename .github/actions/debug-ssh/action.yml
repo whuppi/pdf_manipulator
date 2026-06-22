@@ -112,7 +112,7 @@ runs:
         nohup /tmp/bore local 2222 --to bore.pub > /tmp/bore.log 2>&1 &
         sleep 5
 
-        BORE_PORT=$(grep -oP 'bore\.pub:\K\d+' /tmp/bore.log | head -1 || true)
+        BORE_PORT=$(grep -o 'bore\.pub:[0-9]*' /tmp/bore.log | cut -d: -f2 | head -1 || true)
         if [ -z "$BORE_PORT" ]; then
           echo "::warning::bore tunnel failed — continuing without SSH"
           cat /tmp/bore.log; exit 0
@@ -154,7 +154,7 @@ runs:
         nohup /tmp/bore local 2222 --to bore.pub > /tmp/bore.log 2>&1 &
         sleep 5
 
-        BORE_PORT=$(grep -oP 'bore\.pub:\K\d+' /tmp/bore.log || grep -o 'bore\.pub:[0-9]*' /tmp/bore.log | cut -d: -f2 | head -1 || true)
+        BORE_PORT=$(grep -o 'bore\.pub:[0-9]*' /tmp/bore.log | cut -d: -f2 | head -1 || true)
         if [ -z "$BORE_PORT" ]; then
           echo "::warning::bore tunnel failed — continuing without SSH"
           cat /tmp/bore.log; exit 0
@@ -203,7 +203,7 @@ runs:
         /tmp/bore.exe local 22 --to bore.pub > /tmp/bore.log 2>&1 &
         sleep 5
 
-        BORE_PORT=$(grep -oP 'bore\.pub:\K\d+' /tmp/bore.log || grep -o 'bore\.pub:[0-9]*' /tmp/bore.log | cut -d: -f2 | head -1 || true)
+        BORE_PORT=$(grep -o 'bore\.pub:[0-9]*' /tmp/bore.log | cut -d: -f2 | head -1 || true)
         if [ -z "$BORE_PORT" ]; then
           echo "::warning::bore tunnel failed — continuing without SSH"
           cat /tmp/bore.log; exit 0
