@@ -26,29 +26,32 @@ cd "$ROOT" || exit 1
 # shellcheck source=tool/lib.sh
 source "tool/lib.sh"
 
-require_present shellcheck \
-  "macOS:   brew install shellcheck" \
-  "Linux:   sudo apt-get install -y shellcheck" \
-  "Windows: choco install shellcheck"
-require_present yq \
-  "macOS:   brew install yq" \
-  "Linux:   snap install yq   (the Go yq from mikefarah, not the apt package)" \
-  "Windows: choco install yq"
+# A missing tool skips ONLY its own check, with a loud warning — it never
+# aborts the run, so an absent shellcheck or yq still lets the grep scans run
+# and doesn't block the other checks. CI preinstalls both and enforces the full
+# set, so nothing is silently lost there.
+skip_note() {  # tool  install-hint
+  echo "  ⚠ SKIPPED — '$1' not found ($2). CI enforces this; install to run it locally." >&2
+}
 
 status=0
 
 # ── 1. shellcheck every tracked shell script ─────────────────────────
 # -x follows sourced files; warning severity (notes stay advisory).
 echo "── shellcheck (tracked *.sh) ──"
-sh_files=()
-while IFS= read -r f; do
-  sh_files+=("$f")
-done < <(git ls-files '*.sh')
-if [ "${#sh_files[@]}" -gt 0 ]; then
-  if shellcheck -x -S warning "${sh_files[@]}"; then
-    echo "  clean"
-  else
-    status=1
+if ! command -v shellcheck >/dev/null 2>&1; then
+  skip_note shellcheck "brew install shellcheck / apt-get install shellcheck"
+else
+  sh_files=()
+  while IFS= read -r f; do
+    sh_files+=("$f")
+  done < <(git ls-files '*.sh')
+  if [ "${#sh_files[@]}" -gt 0 ]; then
+    if shellcheck -x -S warning "${sh_files[@]}"; then
+      echo "  clean"
+    else
+      status=1
+    fi
   fi
 fi
 
@@ -83,20 +86,24 @@ fi
 # pwsh) breaks. Each run step must be bash, via its own shell: or the
 # workflow's defaults.run.shell. yq reads the effective shell properly.
 echo "── workflow run steps are bash (Windows safety) ──"
-nonbash=0
-for wf in .github/workflows/*.yml; do
-  [ -e "$wf" ] || continue
-  bad=$(yq '(.defaults.run.shell // "") as $d | .jobs[] | select(.steps) | .steps[] | select(has("run")) | select((.shell // $d) != "bash") | (.name // .id // "unnamed")' "$wf" 2>/dev/null || true)
-  if [ -n "$bad" ]; then
-    echo "  ${wf#./} — run step(s) not on bash (set shell: bash or defaults.run.shell):" >&2
-    printf '%s\n' "$bad" | sed 's/^/    /' >&2
-    nonbash=1
-  fi
-done
-if [ "$nonbash" -eq 0 ]; then
-  echo "  clean — every workflow run step is bash"
+if ! command -v yq >/dev/null 2>&1; then
+  skip_note yq "brew install yq / snap install yq (mikefarah Go build) / choco install yq"
 else
-  status=1
+  nonbash=0
+  for wf in .github/workflows/*.yml; do
+    [ -e "$wf" ] || continue
+    bad=$(yq '(.defaults.run.shell // "") as $d | .jobs[] | select(.steps) | .steps[] | select(has("run")) | select((.shell // $d) != "bash") | (.name // .id // "unnamed")' "$wf" 2>/dev/null || true)
+    if [ -n "$bad" ]; then
+      echo "  ${wf#./} — run step(s) not on bash (set shell: bash or defaults.run.shell):" >&2
+      printf '%s\n' "$bad" | sed 's/^/    /' >&2
+      nonbash=1
+    fi
+  done
+  if [ "$nonbash" -eq 0 ]; then
+    echo "  clean — every workflow run step is bash"
+  else
+    status=1
+  fi
 fi
 
 # ── 4. GNU-only coreutils flags (break on macOS's BSD userland) ───────

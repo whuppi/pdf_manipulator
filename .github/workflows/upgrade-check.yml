@@ -115,8 +115,11 @@ jobs:
             # Live PR branch — append only.
             git push origin chore/upgrades
           else
-            # Any remote copy here is debris from a closed PR — overwrite it.
-            git push --force-with-lease origin chore/upgrades
+            # Any remote copy here is debris from a closed PR. Plain --force,
+            # not --force-with-lease: nothing but the bot pushes this branch,
+            # and lease fails when there's no remote-tracking ref (a fresh
+            # branch, or one deleted after a merge).
+            git push --force origin chore/upgrades
           fi
 
           PR_BODY="$(cat <<'EOF'
