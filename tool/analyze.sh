@@ -16,7 +16,7 @@ FLUTTER="${FLUTTER:-fvm flutter}"
 # Enforce via grep. Every lint must be fixed for real — no suppressions.
 
 echo "=== Dart: check for banned // ignore: comments ==="
-IGNORES=$(grep -rn '// ignore:\|// ignore_for_file:' "$PKG_ROOT/lib/" "$PKG_ROOT/bin/" "$PKG_ROOT/test/" "$PKG_ROOT/hook/" 2>/dev/null | grep -v '\.g\.dart' || true)
+IGNORES=$(grep -rnE '// ignore:|// ignore_for_file:' "$PKG_ROOT/lib/" "$PKG_ROOT/bin/" "$PKG_ROOT/test/" "$PKG_ROOT/hook/" 2>/dev/null | grep -v '\.g\.dart' || true)
 if [ -n "$IGNORES" ]; then
   echo "BANNED: // ignore: comments found. Fix the lint, don't suppress it."
   echo "$IGNORES"
