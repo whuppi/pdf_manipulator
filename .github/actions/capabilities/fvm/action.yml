@@ -52,7 +52,11 @@ runs:
         INSTALL_DIR="$RUNNER_TOOL_CACHE/fvm"
         mkdir -p "$INSTALL_DIR"
 
-        HASH_VAR="FVM_SHA256_${OS^^}_${ARCH^^}"
+        # Uppercase via tr, not bash case-modification expansion: macOS ships
+        # bash 3.2, which lacks it and errors "bad substitution".
+        os_up=$(printf '%s' "$OS" | tr '[:lower:]' '[:upper:]')
+        arch_up=$(printf '%s' "$ARCH" | tr '[:lower:]' '[:upper:]')
+        HASH_VAR="FVM_SHA256_${os_up}_${arch_up}"
         EXPECTED="${!HASH_VAR:-}"
         base="https://github.com/leoafarias/fvm/releases/download/$FVM_VERSION"
 
