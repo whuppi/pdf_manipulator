@@ -31,7 +31,7 @@ case "$WANT" in
     ;;
 esac
 
-curl -sSL --fail "$URL" -o "$DEST" \
+curl -sSL --fail --max-redirs 5 "$URL" -o "$DEST" \
   || { echo "download failed: $URL" >&2; exit 1; }
 
 if command -v sha256sum >/dev/null 2>&1; then

@@ -110,7 +110,7 @@ jobs:
             git push origin chore/upgrades
           else
             # Any remote copy here is debris from a closed PR — overwrite it.
-            git push --force origin chore/upgrades
+            git push --force-with-lease origin chore/upgrades
           fi
 
           PR_BODY="$(cat <<'EOF'
