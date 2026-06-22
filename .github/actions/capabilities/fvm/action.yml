@@ -97,16 +97,20 @@ runs:
               'exec cmd //c "$(cygpath -w "$here/fvm.bat")" "$@"' \
               > "$DEST/fvm"
             chmod +x "$DEST/fvm"
-            printf '%s\n' 'C:\fvm' >> "$GITHUB_PATH"
+            echo "C:\fvm" >> "$GITHUB_PATH"
             ;;
           *)
             DEST=/opt/fvm
             sudo mkdir -p "$DEST"
             sudo cp -R "$FVM_BIN/." "$DEST/"
-            printf '%s\n' "$DEST" >> "$GITHUB_PATH"
+            echo "/opt/fvm" >> "$GITHUB_PATH"
             ;;
         esac
-        # GITHUB_PATH reaches only later steps; use the literal dir in THIS one.
+        # The GITHUB_PATH lines above are fixed string literals via echo, never
+        # $DEST or printf: zizmor's github-env audit flags any non-static write
+        # to GITHUB_PATH as a code-execution surface. $DEST is fine for the
+        # local ops and this step's PATH — only the env-file write must stay a
+        # literal echo. GITHUB_PATH reaches only later steps, so set PATH here too.
         export PATH="$DEST:$PATH"
 
         # Point fvm at its SDK cache for every later step. Heredoc with a
