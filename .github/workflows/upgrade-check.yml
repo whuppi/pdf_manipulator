@@ -27,6 +27,12 @@ concurrency:
 env:
   DEFAULT_RUNNER: ubuntu-24.04
 
+# Every run step uses bash, on any runner. The runner can be overridden to
+# Windows, where the default shell is pwsh and bash syntax would break.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   inputs:
     name: Resolve inputs
