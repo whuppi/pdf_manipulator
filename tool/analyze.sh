@@ -7,9 +7,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PKG_ROOT="$(dirname "$SCRIPT_DIR")"
 
-# Pinned versions live in ONE file (tool/versions.env), never inline.
-source "$SCRIPT_DIR/versions.env"
-
 # SDK commands (overridable via env for non-FVM setups)
 DART="${DART:-fvm dart}"
 FLUTTER="${FLUTTER:-fvm flutter}"
@@ -78,6 +75,7 @@ echo "=== Dart: analyze example/ ==="
 # ── Rust analysis (warnings in our patched lines only) ──────────────
 
 source "$SCRIPT_DIR/lib.sh"
+ensure_jq  # cargo-warning filtering + build.json reads parse JSON via jq
 
 NATIVE_FEATURES=$(bash "$SCRIPT_DIR/compile_rust.sh" --features native)
 WASM_FEATURES=$(bash "$SCRIPT_DIR/compile_rust.sh" --features wasm)
@@ -113,9 +111,9 @@ _filter_warnings() {
     echo "$json_line" | grep -q '"reason":"compiler-message"' || continue
     echo "$json_line" | grep -q '"level":"warning"' || continue
     local span_file span_line msg_text
-    span_file=$(echo "$json_line" | grep -oE '"file_name":"[^"]*"' | head -1 | sed 's/"file_name":"//;s/"//')
-    span_line=$(echo "$json_line" | grep -oE '"line_start":[0-9]+' | head -1 | sed 's/"line_start"://')
-    msg_text=$(echo "$json_line" | sed -n 's/.*"message":"\([^"]*\)".*/\1/p' | head -1)
+    span_file=$(echo "$json_line" | jq -r '.message.spans[0].file_name // empty' 2>/dev/null)
+    span_line=$(echo "$json_line" | jq -r '.message.spans[0].line_start // empty' 2>/dev/null)
+    msg_text=$(echo "$json_line" | jq -r '.message.message // empty' 2>/dev/null)
     if [ -z "$span_file" ] || [ -z "$span_line" ]; then
       skipped=$((skipped + 1))
       continue
@@ -147,7 +145,7 @@ check_rust_warnings() {
   if [[ "$branch" == *"/"* ]]; then
     base_tag="v$(echo "$branch" | cut -d/ -f2 | sed 's/-patches$//')"
   else
-    base_tag="$BASE_TAG"
+    base_tag=$(json_get '.baseTag')
   fi
 
   local diff_output

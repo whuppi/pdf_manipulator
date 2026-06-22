@@ -62,8 +62,9 @@ VERSION="${TAG:+${TAG#v}}"
 
 # lib.sh is shared with the build scripts in tool/ — one level up from tool/ci/.
 source "$SCRIPT_DIR/../lib.sh"
+ensure_jq  # this script parses pub.dev + build.json JSON via jq
 
-REPO="${GITHUB_REPOSITORY:-$(_json_get repo)}"
+REPO="${GITHUB_REPOSITORY:-$(json_get '.repo')}"
 REPO_URL="https://github.com/$REPO"
 PKG_NAME="pdf_manipulator"
 
@@ -161,8 +162,7 @@ pick_source_file() {
 # Fetch every published version of the package from pub.dev.
 get_published_versions() {
   curl -sS "https://pub.dev/api/packages/$PKG_NAME" 2>/dev/null \
-    | grep -oE '"version":"[^"]*"' \
-    | sed 's/"version":"//;s/"//' \
+    | jq -r '.versions[].version // empty' 2>/dev/null \
     | sort -t. -k1,1n -k2,2n -k3,3n
 }
 
@@ -222,15 +222,13 @@ JQ
       echo "  $asset_name ... ${hash:0:12}..." >&2
     fi
   done < <(
-    # Read web assets from build.json, skip wasmBuildOutputs.
-    # Pure bash — no python3, no jq.
-    wasm_outputs=$(sed -n 's/.*"wasmBuildOutputs": *\[\(.*\)\].*/\1/p' build.json | tr -d '" ')
-    sed -n '/"web"/,/}/p' build.json | grep ':' | grep -v '"web"' | while IFS=: read -r key val; do
-      local_name=$(echo "$key" | tr -d ' "')
-      asset_name=$(echo "$val" | tr -d ' ",' )
-      echo "$wasm_outputs" | grep -qw "$local_name" && continue
-      echo "$local_name	$asset_name"
-    done
+    # Read web assets from build.json, skipping the wasmBuildOutputs.
+    wasm_outputs=$(jq -r '.wasmBuildOutputs | join(" ")' build.json)
+    jq -r '.web | to_entries[] | "\(.key)\t\(.value)"' build.json \
+      | while IFS=$'\t' read -r local_name asset_name; do
+          echo "$wasm_outputs" | grep -qw "$local_name" && continue
+          echo "$local_name	$asset_name"
+        done
   )
 
   local all_entries

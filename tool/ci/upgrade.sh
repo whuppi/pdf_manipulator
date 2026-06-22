@@ -16,9 +16,12 @@ set -euo pipefail
 #
 # Owned elsewhere by design (NOT here):
 #   pub deps, GitHub-action SHAs   Dependabot (.github/dependabot.yml)
-#   BASE_TAG                       manual — tracks the pdf_oxide submodule pin
+#   build.json (baseTag, crate,    manual — pdf_oxide source facts; move only
+#     features, outputs)             when the vendored submodule does
 #
-# Pure sed/grep/curl/sha256sum + gh api — no jq, no python, no dart.
+# JSON is parsed with jq — gh's embedded `--jq` for gh-api responses,
+# ensure_jq + jq for curl'd manifests. In-place version bumps stay targeted
+# sed (to preserve each file's formatting). No python, no dart.
 #
 # Usage:  tool/ci/upgrade.sh check   # report drift, write nothing
 #         tool/ci/upgrade.sh apply   # rewrite the pinned files in place
@@ -28,6 +31,7 @@ VERSIONS="$ROOT/tool/versions.env"
 
 # shellcheck source=/dev/null  # runtime path; not followed at lint time
 source "$VERSIONS"
+source "$ROOT/tool/lib.sh"
 
 MODE="${1:-check}"
 case "$MODE" in
@@ -35,12 +39,12 @@ case "$MODE" in
   *) echo "usage: tool/ci/upgrade.sh [check|apply]" >&2; exit 2 ;;
 esac
 
+ensure_jq
+
 drift=0
 
 gh_latest_tag() {  # owner/repo -> latest release tag, verbatim
-  gh api "repos/$1/releases/latest" 2>/dev/null \
-    | grep '"tag_name":' | head -1 \
-    | sed -E 's/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/'
+  gh api "repos/$1/releases/latest" --jq '.tag_name' 2>/dev/null || true
 }
 
 # sha256 of a downloadable asset, or empty on failure. Downloads to a file
@@ -59,10 +63,10 @@ set_kv() {  # KEY value file — replace KEY="old" with KEY="new" in place
 }
 
 # ── Flutter SDK (.fvmrc + example/.fvmrc) ────────────────────────────
-flutter_cur="$(sed -n 's/.*"flutter": *"\([^"]*\)".*/\1/p' "$ROOT/.fvmrc")"
+flutter_cur="$(json_get '.flutter' "$ROOT/.fvmrc")"
 releases="$(curl -fsSL https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json 2>/dev/null || true)"
-stable_hash="$(echo "$releases" | grep -oE '"stable" *: *"[^"]*"' | head -1 | sed 's/"stable" *: *"//;s/"//')"
-flutter_latest="$(echo "$releases" | grep -A5 "\"hash\" *: *\"${stable_hash}\"" | grep -oE '"version" *: *"[^"]*"' | head -1 | sed 's/"version" *: *"//;s/"//')"
+stable_hash="$(echo "$releases" | jq -r '.current_release.stable // empty' 2>/dev/null || true)"
+flutter_latest="$(echo "$releases" | jq -r --arg h "$stable_hash" '.releases[] | select(.hash == $h) | .version // empty' 2>/dev/null | head -1 || true)"
 if [ -n "$flutter_latest" ] && [ -n "$flutter_cur" ] && [ "$flutter_cur" != "$flutter_latest" ]; then
   drift=1
   echo "flutter: $flutter_cur -> $flutter_latest"
@@ -98,9 +102,7 @@ if [ -n "$fvm_latest" ] && [ "$fvm_latest" != "$FVM_VERSION" ]; then
 fi
 
 # ── zizmor gate (ZIZMOR_VERSION in versions.env; run in pr-lint.yml) ──
-ziz_latest="$(curl -fsSL https://pypi.org/pypi/zizmor/json 2>/dev/null \
-  | grep -oE '"version":[[:space:]]*"[0-9][0-9.]*"' | head -1 \
-  | sed -E 's/.*"([0-9][0-9.]*)".*/\1/')"
+ziz_latest="$(curl -fsSL https://pypi.org/pypi/zizmor/json 2>/dev/null | jq -r '.info.version // empty' 2>/dev/null || true)"
 if [ -n "$ZIZMOR_VERSION" ] && [ -n "$ziz_latest" ] && [ "$ZIZMOR_VERSION" != "$ziz_latest" ]; then
   drift=1
   echo "zizmor: $ZIZMOR_VERSION -> $ziz_latest"
@@ -166,7 +168,7 @@ fi
 # self-hashes all 6 assets. The CDN prunes old versions, so this must keep
 # the pin fresh or the chrome action's verified download 404s.
 manifest="$(curl -fsSL https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json 2>/dev/null || true)"
-chrome_latest="$(echo "$manifest" | grep -oE '"Stable":\{[^}]*"version":"[^"]*"' | grep -oE '"version":"[^"]*"' | head -1 | sed 's/"version":"//;s/"//')"
+chrome_latest="$(echo "$manifest" | jq -r '.channels.Stable.version // empty' 2>/dev/null || true)"
 if [ -n "$chrome_latest" ] && [ "$chrome_latest" != "$CHROME_VERSION" ]; then
   if [ "$MODE" = apply ]; then
     u="https://storage.googleapis.com/chrome-for-testing-public/$chrome_latest"

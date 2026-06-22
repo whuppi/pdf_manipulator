@@ -764,6 +764,28 @@ Single matrix with two tiers in one sorted list:
 | Integration | macOS, Linux, Windows, Android, iOS, Web | Android on macos-intel + win, Web on macos + win |
 | Verify | Android, iOS, macOS, Linux, Web | Android on macos + win, Web on macos + win |
 
+### Build inputs — `build.json` vs `versions.env`
+
+Two files hold the project's pinned inputs, split by *what the value is*, not by
+who reads it:
+
+- **`build.json`** — facts about the **subject** being built: the vendored
+  `pdf_oxide` crate (`crate`, `repo`, its `baseTag`), the cargo `features` per
+  target, the wasm outputs. Hand-set; changes only when the vendored submodule
+  moves. Read by `hook/build.dart` (`jsonDecode`) and by `compile_rust.sh` /
+  `release.sh` / `analyze.sh` via the `_json_get` helper in `tool/lib.sh`.
+- **`tool/versions.env`** — pinned versions + sha256 hashes of the external
+  **instruments** the build downloads: `fvm`, `binaryen`, `bore`,
+  Chrome-for-Testing, plus the `zizmor` + `actionlint` gate pins. Shell
+  `KEY="value"`, sourced by the scripts that use them. Every entry is auto-bumped
+  by `tool/ci/upgrade.sh` — the file is bot-owned, no manual exceptions.
+
+The rule: a fact about *what* is built (the crate, its base version, its
+features) belongs in `build.json`; a pinned version of an *external tool* that
+does the building belongs in `versions.env`. So `baseTag` — the upstream
+`pdf_oxide` version — sits beside `crate`/`repo` in `build.json`, not among the
+tool pins.
+
 ### Dependency ownership
 
 | Dep | Owner | CI behavior | Dev behavior |
