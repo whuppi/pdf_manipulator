@@ -141,6 +141,7 @@ gscan '(^|[^[:alnum:]_./-])(tac|nproc|sponge)([[:space:]]|$)' 'GNU-only command 
 gscan '\bsort\b +-[a-zA-Z]*V'                       'sort version-sort flag (older BSD sort lacks it)'
 gscan '\bgrep\b.*\\\|'                               'grep BRE alternation via backslash-pipe (switch to -E with a plain pipe)'
 gscan '\bsed\b.*\\\|'                                'sed BRE alternation via backslash-pipe (switch to -E with a plain pipe)'
+gscan '\b(sha256sum|sha512sum|sha1sum|md5sum|shasum)\b[^|<]*["$][^|]*\|[[:space:]]*(awk|cut|head)' 'checksum of a path argument piped to field extraction — coreutils escapes the digest line on a backslash/Windows path; feed the file on stdin'
 if [ "$gnuism" -eq 0 ]; then
   echo "  clean — portable across BSD + GNU"
 else

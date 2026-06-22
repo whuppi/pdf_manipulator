@@ -34,10 +34,14 @@ esac
 curl -sSL --fail --retry 3 --retry-delay 2 --max-redirs 5 --connect-timeout 10 --max-time 180 "$URL" -o "$DEST" \
   || { echo "download failed: $URL" >&2; exit 1; }
 
+# Feed the file on stdin, never as a path argument: GNU coreutils (and Perl
+# shasum) escape the output line — a backslash before the digest — when the
+# filename contains a backslash, which every Windows Git Bash path does. Stdin
+# keeps the filename out of the output, so the digest is clean on every OS.
 if command -v sha256sum >/dev/null 2>&1; then
-  GOT=$(sha256sum "$DEST" | awk '{print $1}')
+  GOT=$(sha256sum < "$DEST" | awk '{print $1}')
 else
-  GOT=$(shasum -a 256 "$DEST" | awk '{print $1}')
+  GOT=$(shasum -a 256 < "$DEST" | awk '{print $1}')
 fi
 
 if [ "$GOT" != "$WANT" ]; then

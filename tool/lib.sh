@@ -74,12 +74,15 @@ json_get() {
 }
 
 # sha256 of a file. GNU coreutils ships sha256sum; macOS ships
-# `shasum -a 256`. Use whichever exists; print the bare hash.
+# `shasum -a 256`. Use whichever exists; print the bare hash. Feed the file on
+# stdin, never as a path argument: both escape the output line — a backslash
+# before the digest — when the filename contains a backslash, as every Windows
+# Git Bash path does. Stdin keeps the filename out of the output entirely.
 sha256_file() {
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
+    sha256sum < "$1" | awk '{print $1}'
   else
-    shasum -a 256 "$1" | awk '{print $1}'
+    shasum -a 256 < "$1" | awk '{print $1}'
   fi
 }
 
