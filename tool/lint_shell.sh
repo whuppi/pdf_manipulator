@@ -36,32 +36,40 @@ skip_note() {  # tool  install-hint
 
 status=0
 
+# What the scans inspect: tracked shell scripts (repo-wide) and tracked .github
+# YAML (workflow + composite-action run: blocks). git ls-files — not a `grep -r`
+# directory walk — keeps it to tracked files, so a gitignored vendor/ or
+# generated/ dir is never pulled in (no path excludes to maintain). If a
+# *tracked* vendored tree ever needs skipping, add a `:!path` pathspec to the
+# git ls-files calls below.
+sh_files=()
+while IFS= read -r f; do sh_files+=("$f"); done < <(git ls-files '*.sh')
+
+# /dev/null sentinel: keeps the array non-empty so it expands safely under
+# `set -u` on bash 3.2, and grep never falls through to reading stdin.
+scan_files=(/dev/null)
+[ "${#sh_files[@]}" -gt 0 ] && scan_files+=("${sh_files[@]}")
+while IFS= read -r f; do scan_files+=("$f"); done < <(git ls-files '.github' | grep -E '\.ya?ml$')
+
 # ── 1. shellcheck every tracked shell script ─────────────────────────
 # -x follows sourced files; warning severity (notes stay advisory).
 echo "── shellcheck (tracked *.sh) ──"
 if ! command -v shellcheck >/dev/null 2>&1; then
   skip_note shellcheck "brew install shellcheck / apt-get install shellcheck"
-else
-  sh_files=()
-  while IFS= read -r f; do
-    sh_files+=("$f")
-  done < <(git ls-files '*.sh')
-  if [ "${#sh_files[@]}" -gt 0 ]; then
-    if shellcheck -x -S warning "${sh_files[@]}"; then
-      echo "  clean"
-    else
-      status=1
-    fi
+elif [ "${#sh_files[@]}" -gt 0 ]; then
+  if shellcheck -x -S warning "${sh_files[@]}"; then
+    echo "  clean"
+  else
+    status=1
   fi
 fi
 
 # ── 2. bash 4.0+ feature scan (scripts + .github run: blocks) ─────────
-echo "── bash 4.0+ portability scan (tool/ + .github/) ──"
+echo "── bash 4.0+ portability scan (tracked shell + .github YAML) ──"
 hits=0
 scan() {  # ERE  human-description
   local found
-  found=$(grep -rnE "$1" tool .github \
-    --include='*.sh' --include='*.yml' --include='*.yaml' 2>/dev/null || true)
+  found=$(grep -nE "$1" "${scan_files[@]}" 2>/dev/null || true)
   if [ -n "$found" ]; then
     echo "  bash 4.0+ feature — $2:" >&2
     printf '%s\n' "$found" | sed 's/^/    /' >&2
@@ -109,12 +117,11 @@ fi
 # ── 4. GNU-only coreutils flags (break on macOS's BSD userland) ───────
 # Curated blocklist. Descriptions name each flag in prose, never as the
 # literal command-and-flag, so the scan can't match its own text.
-echo "── BSD/GNU coreutils portability (tool/ + .github/) ──"
+echo "── BSD/GNU coreutils portability (tracked shell + .github YAML) ──"
 gnuism=0
 gscan() {  # ERE  human-description
   local found
-  found=$(grep -rnE "$1" tool .github \
-    --include='*.sh' --include='*.yml' --include='*.yaml' 2>/dev/null || true)
+  found=$(grep -nE "$1" "${scan_files[@]}" 2>/dev/null || true)
   if [ -n "$found" ]; then
     echo "  GNU-only — $2:" >&2
     printf '%s\n' "$found" | sed 's/^/    /' >&2

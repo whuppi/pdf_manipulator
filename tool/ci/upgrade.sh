@@ -62,8 +62,22 @@ sha256_of() {  # url
   rm -f "$tmp"
 }
 
-set_kv() {  # KEY value file — replace KEY="old" with KEY="new" in place
-  sed -i.bak -E "s|^$1=\"[^\"]*\"|$1=\"$2\"|" "$3" && rm -f "$3.bak"
+set_kv() {  # KEY value file — replace the KEY="old" line with KEY="new"
+  # The value travels via the environment — not a sed replacement, not awk -v —
+  # so a |, &, or backslash in it stays literal data (sed's replacement string
+  # and awk's -v both interpret those). tmp+mv leaves the file intact if awk
+  # ever fails mid-write.
+  local tmp="$3.tmp"
+  if sk_key="$1" sk_val="$2" awk '
+        BEGIN { k = ENVIRON["sk_key"]; v = ENVIRON["sk_val"] }
+        $0 ~ "^" k "=" { print k "=\"" v "\""; next }
+        { print }
+      ' "$3" > "$tmp"; then
+    mv "$tmp" "$3"
+  else
+    rm -f "$tmp"
+    return 1
+  fi
 }
 
 # ── Flutter SDK (.fvmrc + example/.fvmrc) ────────────────────────────
