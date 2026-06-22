@@ -123,7 +123,8 @@ jobs:
   # only allowances are the two documented, doctrine-hardened suppressions in
   # triage.yml / retry.yml.
   # actionlint = correctness: valid YAML, expressions, runner labels, plus
-  # shellcheck on run: blocks. Both pinned; bumped by upgrade-check.yml.
+  # Workflows (zizmor + actionlint) and shell scripts (shellcheck + a bash
+  # 3.2 portability scan). zizmor/actionlint pinned; bumped by upgrade-check.
   workflow-lint:
     name: Workflow lint
     needs: inputs
@@ -146,3 +147,5 @@ jobs:
           go install "github.com/rhysd/actionlint/cmd/actionlint@v$ACTIONLINT_VERSION"
           PATH="$(go env GOPATH)/bin:$PATH"
           actionlint -color
+      - name: shell lint (shellcheck + bash 3.2 portability)
+        run: bash tool/lint_shell.sh

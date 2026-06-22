@@ -1,4 +1,4 @@
-.PHONY: check analyze fixtures test-guards \
+.PHONY: check analyze lint-shell fixtures test-guards \
        build build-native build-wasm \
        compile-macos compile-ios compile-android compile-linux compile-windows compile-wasm compile-natives \
        test test-pkg-native test-unit test-rust \
@@ -30,7 +30,7 @@ VERBOSE := $(if $(CI),--verbose,)
 #
 # make check    Full local gate before PR.
 
-check: analyze test-guards test test-example
+check: lint-shell analyze test-guards test test-example
 
 # make hooks    Activate the repo's git hooks (commit-msg, pre-commit).
 #               Run once after cloning — they stay dormant otherwise.
@@ -49,6 +49,12 @@ hooks:
 
 analyze: fixtures
 	@DART="$(DART)" FLUTTER="$(FLUTTER)" bash tool/analyze.sh
+
+# make lint-shell  Shell portability gate: shellcheck + a bash 4.0+ scan
+#                  that catches macOS bash 3.2 breaks in scripts and in
+#                  workflow run: blocks. Mirrors the CI workflow-lint job.
+lint-shell:
+	@bash tool/lint_shell.sh
 
 # ═══════════════════════════════════════════════════════════════════
 # § 2b — Fixtures + test-suite guards
