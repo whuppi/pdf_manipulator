@@ -34,22 +34,26 @@ if [ ! -s "$REPORT" ]; then
   exit 2
 fi
 
-# One awk pass. Offsets are computed from the fixed key prefixes:
-#   "test":{"id":   = 13 chars   "testID":  = 9 chars   "result":" = 10 chars
-# IDs are integers and result is a lowercase word, so fixed-width
-# substr extraction is exact and portable (no gawk capture groups).
+# One awk pass. Each field is matched, then the matched span is stripped to
+# its value — digits for an id, the quoted word for a result. No fixed
+# offsets, so extraction survives whitespace or key-order changes in a future
+# Dart reporter format. Plain POSIX awk (no gawk capture groups).
 awk '
   /"type":"testStart"/ {
-    if (match($0, /"test":[{]"id":[0-9]+/)) {
-      id = substr($0, RSTART + 13, RLENGTH - 13)
+    if (match($0, /"test":[[:space:]]*[{][[:space:]]*"id":[[:space:]]*[0-9]+/)) {
+      id = substr($0, RSTART, RLENGTH); gsub(/[^0-9]/, "", id)
       started[id] = 1
     }
     next
   }
   /"type":"testDone"/ {
     id = ""; res = ""
-    if (match($0, /"testID":[0-9]+/))     id  = substr($0, RSTART + 9,  RLENGTH - 9)
-    if (match($0, /"result":"[a-z]+"/))   res = substr($0, RSTART + 10, RLENGTH - 11)
+    if (match($0, /"testID":[[:space:]]*[0-9]+/)) {
+      id = substr($0, RSTART, RLENGTH); gsub(/[^0-9]/, "", id)
+    }
+    if (match($0, /"result":[[:space:]]*"[a-z]+"/)) {
+      res = substr($0, RSTART, RLENGTH); sub(/^"result":[[:space:]]*"/, "", res); sub(/"$/, "", res)
+    }
     if (id != "") done[id] = 1
     ndone++
     if (res == "failure" || res == "error") {

@@ -124,6 +124,9 @@ gscan '\bfind\b[^|;&]*-printf'                       'find print-format action'
 gscan '\bxargs\b +(-d\b|--delimiter)'               'xargs delimiter flag'
 gscan '\bcp\b[^|;&]*--parents'                       'cp parents flag'
 gscan '(^|[^[:alnum:]_./-])(tac|nproc|sponge)([[:space:]]|$)' 'GNU-only command (no BSD tool by that name)'
+gscan '\bsort\b +-[a-zA-Z]*V'                       'sort version-sort flag (older BSD sort lacks it)'
+gscan '\bgrep\b.*\\\|'                               'grep BRE alternation via backslash-pipe (switch to -E with a plain pipe)'
+gscan '\bsed\b.*\\\|'                                'sed BRE alternation via backslash-pipe (switch to -E with a plain pipe)'
 if [ "$gnuism" -eq 0 ]; then
   echo "  clean — portable across BSD + GNU"
 else

@@ -11,6 +11,9 @@
 
 set -euo pipefail
 
+# shellcheck source=tool/lib.sh
+source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+
 APK="${1:?Usage: check_alignment.sh <path-to-apk>}"
 
 if [ ! -f "$APK" ]; then
@@ -21,7 +24,7 @@ fi
 # Locate NDK's llvm-objdump.
 ANDROID_NDK_DIR="${ANDROID_NDK:-${ANDROID_NDK_HOME:-}}"
 if [ -z "$ANDROID_NDK_DIR" ] && [ -n "${ANDROID_HOME:-}" ]; then
-  ANDROID_NDK_DIR=$(find "$ANDROID_HOME/ndk" -maxdepth 1 -type d 2>/dev/null | sort -V | tail -1)
+  ANDROID_NDK_DIR=$(latest_version_subdir "$ANDROID_HOME/ndk")
 fi
 
 OBJDUMP=""

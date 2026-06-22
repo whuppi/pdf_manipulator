@@ -137,7 +137,7 @@ compile_android_target() {
   # Prefer ANDROID_NDK_HOME (CI runners set it); else the newest NDK the
   # dev's Android Studio installed. No version is pinned — CI builds with the
   # runner's NDK, so a local fallback only needs to find whatever is present.
-  local ndk="${ANDROID_NDK_HOME:-$(ls -d "$HOME/Library/Android/sdk/ndk/"*/ 2>/dev/null | sort -V | tail -1)}"
+  local ndk="${ANDROID_NDK_HOME:-$(latest_version_subdir "$HOME/Library/Android/sdk/ndk")}"
   local toolchain="$ndk/toolchains/llvm/prebuilt"
 
   local host_dir
@@ -322,10 +322,13 @@ do_wasm() {
   rm -f "$out"/*.d.ts
 
   echo "=== WASM: optimize ==="
+  # Write to a temp and mv on success: wasm-opt reads and writes the same
+  # path, so a crash mid-write would truncate the only copy.
   wasm-opt -O2 \
     "${WASM_OPT_FLAGS[@]}" \
     "$out/pdf_oxide_bg.wasm" \
-    -o "$out/pdf_oxide_bg.wasm"
+    -o "$out/pdf_oxide_bg.wasm.opt" \
+    && mv "$out/pdf_oxide_bg.wasm.opt" "$out/pdf_oxide_bg.wasm"
 
   echo ""
   echo "=== WASM summary ==="

@@ -49,7 +49,7 @@ gh_latest_tag() {  # owner/repo -> latest release tag, verbatim
 
 # Hardened GET for the fetches below: fail-closed, capped redirects, and a
 # few retries so a transient blip doesn't fail the daily run.
-_fetch() { curl -fsSL --retry 3 --retry-delay 2 --max-redirs 5 "$@"; }
+_fetch() { curl -fsSL --retry 3 --retry-delay 2 --max-redirs 5 --connect-timeout 10 --max-time 30 "$@"; }
 
 # sha256 of a downloadable asset, or empty on failure. Downloads to a file
 # (never a shell var) so binary content survives intact and a 404 can't

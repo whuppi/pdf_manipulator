@@ -82,3 +82,12 @@ sha256_file() {
     shasum -a 256 "$1" | awk '{print $1}'
   fi
 }
+
+# Highest version-named subdirectory of $1 (e.g. an Android NDK dir), or
+# nothing. Portable version-sort (older BSD sort lacks the V flag): sort the
+# basenames by dotted numeric fields. Prints the full path.
+latest_version_subdir() {
+  local base="$1" name
+  name=$(ls "$base" 2>/dev/null | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
+  [ -n "$name" ] && printf '%s\n' "$base/$name"
+}

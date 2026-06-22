@@ -161,7 +161,7 @@ pick_source_file() {
 
 # Fetch every published version of the package from pub.dev.
 get_published_versions() {
-  curl -sS --retry 3 --retry-delay 2 "https://pub.dev/api/packages/$PKG_NAME" 2>/dev/null \
+  curl -sS --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 30 "https://pub.dev/api/packages/$PKG_NAME" 2>/dev/null \
     | jq -r '.versions[].version // empty' 2>/dev/null \
     | sort -t. -k1,1n -k2,2n -k3,3n
 }
@@ -611,7 +611,7 @@ cmd_discover() {
   fi
 
   if ! grep -q '^  - /vendor/\*\*$' pubspec.yaml; then
-    sed -i.bak '/^false_secrets:/a\  - /vendor/**' pubspec.yaml && rm -f pubspec.yaml.bak
+    awk '/^false_secrets:/{print; print "  - /vendor/**"; next} 1' pubspec.yaml > pubspec.yaml.tmp && mv pubspec.yaml.tmp pubspec.yaml
     echo "  pubspec.yaml += false_secrets /vendor/**"
   fi
 
