@@ -145,7 +145,7 @@ jobs:
           fi
           if [[ "$F" == "all" || -z "$F" ]]; then
             echo "match=true" >> "$GITHUB_OUTPUT"
-          elif echo "$NAME" | grep -qi "$F"; then
+          elif grep -qi "$F" <<< "$NAME"; then
             echo "match=true" >> "$GITHUB_OUTPUT"
           else
             echo "Skipped by filter: $F ∉ $NAME"

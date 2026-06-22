@@ -51,7 +51,7 @@ jobs:
         env:
           TITLE: ${{ github.event.pull_request.title }}
         run: |
-          if ! echo "$TITLE" | grep -qE '^(feat|fix|docs|chore|ci|test|refactor|perf|build|deps)(\(.+\))?!?: .+'; then
+          if ! grep -qE '^(feat|fix|docs|chore|ci|test|refactor|perf|build|deps)(\(.+\))?!?: .+' <<< "$TITLE"; then
             echo "::error::PR title must follow Conventional Commits format."
             echo ""
             echo "  <type>[optional scope]: <description>"

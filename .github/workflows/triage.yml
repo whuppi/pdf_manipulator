@@ -85,9 +85,9 @@ jobs:
             gh api "repos/$REPO/issues/$PR/labels" -f "labels[]=$1" --silent 2>/dev/null || true
           }
 
-          if echo "$TITLE" | grep -qE '^fix(\(|!?:)'; then
+          if grep -qE '^fix(\(|!?:)' <<< "$TITLE"; then
             add_label "bug"
-          elif echo "$TITLE" | grep -qE '^feat(\(|!?:)'; then
+          elif grep -qE '^feat(\(|!?:)' <<< "$TITLE"; then
             add_label "feature"
           fi
 
