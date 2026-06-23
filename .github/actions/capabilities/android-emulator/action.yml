@@ -348,8 +348,11 @@ runs:
         $ADB shell settings put global transition_animation_scale 0.0
         $ADB shell settings put global animator_duration_scale 0.0
 
-        # Run the user's script.
-        ${INPUTS_SCRIPT}
+        # Run the user's script through bash -c so the string is parsed as a
+        # command (mirrors the Linux/macOS emulator-run.sh path). An unquoted
+        # ${INPUTS_SCRIPT} would word-split but leave any quote chars literal,
+        # so a quoted make target would reach make with the quotes attached.
+        bash -c "$INPUTS_SCRIPT"
       env:
         INPUTS_API_LEVEL: ${{ inputs.api-level }}
         INPUTS_SCRIPT: ${{ inputs.script }}
