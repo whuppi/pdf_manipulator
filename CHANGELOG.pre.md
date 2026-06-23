@@ -62,7 +62,7 @@ CONTENT RULES (never change)
 
 ## 2.1.1-dev.0
 
-- Fixed the README
+- Fixed the README banner not rendering on pub.dev — the `<picture>` element is flattened to a plain image in the published package ([PR #111](https://github.com/whuppi/pdf_manipulator/pull/111))
 
 ## 2.1.0-dev.0
 
