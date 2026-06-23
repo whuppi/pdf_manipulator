@@ -128,20 +128,25 @@ gscan() {  # ERE  human-description
     gnuism=1
   fi
 }
-gscan '\bsed\b +(-[a-zA-Z]+ )*-i([[:space:]]|$)'    'in-place sed with no suffix (BSD needs one; use a .bak suffix or a tmpfile)'
-gscan '\bsed\b +-[a-zA-Z]*r([[:space:]]|$)'         'sed extended-regex via the GNU flag (use the portable E flag)'
-gscan '\bgrep\b[^|;&]* -[a-zA-Z]*P([[:space:]]|$)'  'grep perl-regex flag'
-gscan '\breadlink\b +-[a-zA-Z]*f'                   'readlink follow flag (absent on macOS; use a realpath helper)'
-gscan '\bdate\b +(-d\b|--date)'                     'date relative flag (BSD uses the v flag)'
-gscan '\bstat\b +(-c\b|--format|--printf)'          'stat format flag (BSD uses the f flag)'
-gscan '\bfind\b[^|;&]*-printf'                       'find print-format action'
-gscan '\bxargs\b +(-d\b|--delimiter)'               'xargs delimiter flag'
-gscan '\bcp\b[^|;&]*--parents'                       'cp parents flag'
+# These patterns use the portable (^|[^[:alnum:]_]) boundary idiom, never the
+# backslash-b form: a GNU / modern-BSD grep extension that matches nothing on an
+# old BSD grep (the userland this check protects). A gscan rule here flags any
+# grep/sed reaching for the non-portable boundary forms — this file included.
+gscan '(^|[^[:alnum:]_])sed +(-[a-zA-Z]+ )*-i([[:space:]]|$)' 'in-place sed with no suffix (BSD needs one; use a .bak suffix or a tmpfile)'
+gscan '(^|[^[:alnum:]_])sed +-[a-zA-Z]*r([[:space:]]|$)' 'sed extended-regex via the GNU flag (use the portable E flag)'
+gscan '(^|[^[:alnum:]_])grep([[:space:]][^|;&]*)? -[a-zA-Z]*P([[:space:]]|$)' 'grep perl-regex flag'
+gscan '(^|[^[:alnum:]_])readlink +-[a-zA-Z]*f' 'readlink follow flag (absent on macOS; use a realpath helper)'
+gscan '(^|[^[:alnum:]_])date +(-d([^[:alnum:]_]|$)|--date)' 'date relative flag (BSD uses the v flag)'
+gscan '(^|[^[:alnum:]_])stat +(-c([^[:alnum:]_]|$)|--format|--printf)' 'stat format flag (BSD uses the f flag)'
+gscan '(^|[^[:alnum:]_])find[[:space:]][^|;&]*-printf' 'find print-format action'
+gscan '(^|[^[:alnum:]_])xargs +(-d([^[:alnum:]_]|$)|--delimiter)' 'xargs delimiter flag'
+gscan '(^|[^[:alnum:]_])cp[[:space:]][^|;&]*--parents' 'cp parents flag'
 gscan '(^|[^[:alnum:]_./-])(tac|nproc|sponge)([[:space:]]|$)' 'GNU-only command (no BSD tool by that name)'
-gscan '\bsort\b +-[a-zA-Z]*V'                       'sort version-sort flag (older BSD sort lacks it)'
-gscan '\bgrep\b.*\\\|'                               'grep BRE alternation via backslash-pipe (switch to -E with a plain pipe)'
-gscan '\bsed\b.*\\\|'                                'sed BRE alternation via backslash-pipe (switch to -E with a plain pipe)'
-gscan '\b(sha256sum|sha512sum|sha1sum|md5sum|shasum)\b[^|<]*["$][^|]*\|[[:space:]]*(awk|cut|head)' 'checksum of a path argument piped to field extraction — coreutils escapes the digest line on a backslash/Windows path; feed the file on stdin'
+gscan '(^|[^[:alnum:]_])sort +-[a-zA-Z]*V' 'sort version-sort flag (older BSD sort lacks it)'
+gscan '(^|[^[:alnum:]_])grep[[:space:]].*\\\|' 'grep BRE alternation via backslash-pipe (switch to -E with a plain pipe)'
+gscan '(^|[^[:alnum:]_])sed[[:space:]].*\\\|' 'sed BRE alternation via backslash-pipe (switch to -E with a plain pipe)'
+gscan '(^|[^[:alnum:]_])(sha256sum|sha512sum|sha1sum|md5sum|shasum)[[:space:]][^|<]*["$][^|]*\|[[:space:]]*(awk|cut|head)' 'checksum of a path argument piped to field extraction — coreutils escapes the digest line on a backslash/Windows path; feed the file on stdin'
+gscan '(^|[^[:alnum:]_])(grep|sed)[[:space:]][^|;&]*(\\[b<>]|\[\[:[<>]:\]\])' 'non-portable word boundary in a grep/sed regex — backslash-b and backslash-angle break on old BSD grep, the bracket-colon-angle forms break on GNU; use the portable (^|[^[:alnum:]_]) class'
 if [ "$gnuism" -eq 0 ]; then
   echo "  clean — portable across BSD + GNU"
 else
