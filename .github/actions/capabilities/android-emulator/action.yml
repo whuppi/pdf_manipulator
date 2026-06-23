@@ -217,15 +217,19 @@ runs:
         kill $TAIL_PID 2>/dev/null || true
         wait $TAIL_PID 2>/dev/null || true
 
-        # The watchdog's kill -9 dirties the exit code and a severed DDS can
-        # drop console marks (flutter#187785 adb, flutter#187984 dds), so
-        # neither is trusted here. The JSON report flushed each test's verdict
-        # as it finished, before the kill — the reconciler below reads
-        # pass/fail from it.
+        # The watchdog kill -9s a DDS that dispose() hung on at teardown, which
+        # dirties the exit code even on a clean pass AND marks those tests
+        # result:"error" — the teardown failed, not the test (flutter#187984/
+        # #187785). So neither the exit code nor the JSON result alone is
+        # trusted. The reconciler reads the JSON for structure but takes the
+        # captured console ($OUT) too: a test whose body printed its pass mark
+        # counts as passed even when its teardown was killed. A body that never
+        # passed still fails. This is the same verdict every other surface gets,
+        # just with the body-pass override the device reporter makes available.
         echo ""
         echo "raw command exit was $EXIT (ignored — reconciling from the JSON report)"
         WS="${GITHUB_WORKSPACE:-.}"
-        bash "$WS/tool/ci/reconcile_test_json.sh" "$WS/test-results/int-android.json"
+        bash "$WS/tool/ci/reconcile_test_json.sh" "$WS/test-results/int-android.json" "$OUT"
         exit $?
         EMUSCRIPT
         chmod +x /tmp/emulator-run.sh
