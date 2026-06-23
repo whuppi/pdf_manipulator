@@ -24,14 +24,6 @@ TEST_RESULTS_DIR ?= test-results
 TIMEOUT := $(if $(CI),--timeout=30x,)
 VERBOSE := $(if $(CI),--verbose,)
 
-# Every JSON-producing test target runs the test with a leading `-` (ignore its
-# exit) and then hands the report to the reconciler, which is the one true
-# verdict on every surface — see tool/ci/reconcile_test_json.sh. The exit code
-# is not trusted because the Android teardown watchdog dirties it even on a
-# clean pass; the reconciler reads the per-test results (plus body-pass markers
-# where the device reporter emits them) instead.
-RECONCILE := bash tool/ci/reconcile_test_json.sh
-
 # ═══════════════════════════════════════════════════════════════════
 # § 1 — Gate
 # ═══════════════════════════════════════════════════════════════════
@@ -182,36 +174,31 @@ test-pkg-native: fixtures test-unit test-ops-native
 test-unit:
 	@echo "=== Unit: types + io + bridge + runtime + harness ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
-	-$(DART) test $(TIMEOUT) test/types/ test/io/ test/bridge/ test/runtime/ test/harness/ -p vm --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/unit.json
-	@$(RECONCILE) $(TEST_RESULTS_DIR)/unit.json
+	$(DART) test $(TIMEOUT) test/types/ test/io/ test/bridge/ test/runtime/ test/harness/ -p vm --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/unit.json
 
 test-ops: fixtures test-ops-native test-ops-web
 
 test-ops-native:
 	@echo "=== Ops: Native ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
-	-$(DART) test $(TIMEOUT) test/ops/runners/native_runner_test.dart --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-native.json
-	@$(RECONCILE) $(TEST_RESULTS_DIR)/ops-native.json
+	$(DART) test $(TIMEOUT) test/ops/runners/native_runner_test.dart --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-native.json
 
 test-ops-web: fixtures test-ops-opfs test-ops-jspi test-ops-atomics
 
 test-ops-opfs:
 	@echo "=== Ops: Web OPFS ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
-	-$(DART) test $(TIMEOUT) test/ops/runners/web_opfs_runner_test.dart -p chrome --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-opfs.json
-	@$(RECONCILE) $(TEST_RESULTS_DIR)/ops-opfs.json
+	$(DART) test $(TIMEOUT) test/ops/runners/web_opfs_runner_test.dart -p chrome --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-opfs.json
 
 test-ops-jspi:
 	@echo "=== Ops: Web JSPI ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
-	-$(DART) test $(TIMEOUT) test/ops/runners/web_jspi_runner_test.dart -p chrome --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-jspi.json
-	@$(RECONCILE) $(TEST_RESULTS_DIR)/ops-jspi.json
+	$(DART) test $(TIMEOUT) test/ops/runners/web_jspi_runner_test.dart -p chrome --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-jspi.json
 
 test-ops-atomics:
 	@echo "=== Ops: Web Atomics ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
-	-$(DART) test $(TIMEOUT) test/ops/runners/web_atomics_runner_test.dart -p chrome-coi --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-atomics.json
-	@$(RECONCILE) $(TEST_RESULTS_DIR)/ops-atomics.json
+	$(DART) test $(TIMEOUT) test/ops/runners/web_atomics_runner_test.dart -p chrome-coi --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-atomics.json
 
 # Rust unit + integration tests for both vendored crates. Most of the
 # engine's tests sit behind features we don't ship (ml / ocr / fips /
@@ -275,27 +262,23 @@ test-example: test-example-matrix test-example-macos test-example-web
 test-example-matrix:
 	@echo "=== Example: device matrix (host VM, every profile) ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
-	-cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) test/journeys/ --file-reporter json:../$(TEST_RESULTS_DIR)/example-matrix.json
-	@$(RECONCILE) $(TEST_RESULTS_DIR)/example-matrix.json
+	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) test/journeys/ --file-reporter json:../$(TEST_RESULTS_DIR)/example-matrix.json
 
 test-example-macos:
 	@echo "=== Example: macOS ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
-	-cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart -d macos --file-reporter json:../$(TEST_RESULTS_DIR)/int-macos.json
-	@$(RECONCILE) $(TEST_RESULTS_DIR)/int-macos.json
+	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart -d macos --file-reporter json:../$(TEST_RESULTS_DIR)/int-macos.json
 
 test-example-linux:
 	@echo "=== Example: Linux ==="
 	$(call ensure_gtk)
 	@mkdir -p $(TEST_RESULTS_DIR)
-	-cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart -d linux --file-reporter json:../$(TEST_RESULTS_DIR)/int-linux.json
-	@$(RECONCILE) $(TEST_RESULTS_DIR)/int-linux.json
+	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart -d linux --file-reporter json:../$(TEST_RESULTS_DIR)/int-linux.json
 
 test-example-windows:
 	@echo "=== Example: Windows ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
-	-cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart -d windows --file-reporter json:../$(TEST_RESULTS_DIR)/int-windows.json
-	@$(RECONCILE) $(TEST_RESULTS_DIR)/int-windows.json
+	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart -d windows --file-reporter json:../$(TEST_RESULTS_DIR)/int-windows.json
 
 # Runs on the connected/booted device. CI boots the emulator via setup-android.
 test-example-android:
@@ -307,14 +290,12 @@ test-example-android:
 test-example-ios:
 	@echo "=== Example: iOS ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
-	-cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart --file-reporter json:../$(TEST_RESULTS_DIR)/int-ios.json
-	@$(RECONCILE) $(TEST_RESULTS_DIR)/int-ios.json
+	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart --file-reporter json:../$(TEST_RESULTS_DIR)/int-ios.json
 
 test-example-device:
 	@echo "=== Example: device=$(DEVICE) ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
-	-cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart -d $(DEVICE) --file-reporter json:../$(TEST_RESULTS_DIR)/int-device.json
-	@$(RECONCILE) $(TEST_RESULTS_DIR)/int-device.json
+	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart -d $(DEVICE) --file-reporter json:../$(TEST_RESULTS_DIR)/int-device.json
 
 test-example-web:
 	$(call setup_example_web)

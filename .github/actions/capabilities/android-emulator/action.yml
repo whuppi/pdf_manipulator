@@ -224,8 +224,9 @@ runs:
         # trusted. The reconciler reads the JSON for structure but takes the
         # captured console ($OUT) too: a test whose body printed its pass mark
         # counts as passed even when its teardown was killed. A body that never
-        # passed still fails. This is the same verdict every other surface gets,
-        # just with the body-pass override the device reporter makes available.
+        # passed still fails. Android is the only surface that needs this — the
+        # SwiftShader emulator (macOS-Intel) is where the teardown hangs;
+        # everything else trusts its plain exit code.
         echo ""
         echo "raw command exit was $EXIT (ignored — reconciling from the JSON report)"
         WS="${GITHUB_WORKSPACE:-.}"

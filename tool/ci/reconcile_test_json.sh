@@ -1,25 +1,26 @@
 #!/usr/bin/env bash
 # ────────────────────────────────────────────────────────────────────
-# reconcile_test_json.sh — the single, platform-agnostic test-run verdict.
+# reconcile_test_json.sh — the Android-emulator CI test verdict.
 #
-# Every surface (SDK, web, and all integration platforms) decides pass/fail
-# the SAME way: from the `*test --file-reporter json:` report, not from a
-# flaky exit code or a console tally. One rule, every platform.
+# CI-only, and ONLY for the Android emulator. Every other surface (SDK,
+# desktop, iOS, web) trusts its own exit code or driver — nothing to reconcile.
+# The emulator is the lone exception: on a SwiftShader (software-GPU) emulator,
+# which is the macOS-Intel runner, a teardown watchdog kill -9s a DDS that
+# dispose() hung on (flutter#187984/#187785). That dirties the exit code even
+# on a clean pass AND marks those tests result:"error" — the *teardown*, not
+# the test, failed. So neither the exit code nor the JSON result alone is
+# trusted: this reads the report for structure plus the captured console for
+# body-pass marks, and decides.
 #
 # THE RULE — a started test PASSES iff:
 #     its JSON result is "success"   OR   its body printed a pass marker.
-#   It FAILS otherwise (a non-success result with no marker), and a started
-#   test that never reported a result is INCOMPLETE (a crash mid-body).
+#   It FAILS otherwise (a non-success result with no marker); a started test
+#   that never reported a result is INCOMPLETE (a crash mid-body).
 #
-# Why the marker override exists: on the Android emulator a teardown watchdog
-# kill -9s a DDS that dispose() hung on (flutter#187984/#187785). That dirties
-# the exit code even on a clean pass AND marks those tests result:"error" —
-# because the *teardown*, not the test, failed. The body still passed, so a
-# dispose-on-DDS teardown flake is infra, not a product failure. The marker is
-# the body-pass signal: the Android device reporter prints "✅ <name>" when a
-# test body finishes. Desktop/SDK use the "+N:" compact reporter (no marker)
-# and have no watchdog, so there the result is trustworthy and the override is
-# simply never engaged — pass no console log and the rule falls through to it.
+# The marker is the body-pass signal: the Android device reporter prints
+# "✅ <name>" when a body finishes, so a passed body overrides a teardown-killed
+# result. The console arg is optional (the rule still works on the JSON result
+# alone) — defensive only; the Android caller always passes it.
 #
 # Truncation-robust: a crash mid-suite leaves a testStart with no testDone →
 # caught as INCOMPLETE. Does NOT require the final "done" event (the watchdog
