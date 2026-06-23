@@ -1,0 +1,14 @@
+# actionlint config.
+#
+# Register GitHub-hosted runner labels that actionlint's BUNDLED list
+# hasn't caught up to yet (it ships a static snapshot and lags new images).
+# Listing them here stops the false "unknown runner label" error — these
+# are real, official GitHub images, not self-hosted runners.
+self-hosted-runner:
+  labels:
+    # Windows Server 2025 + Visual Studio 2026 — the image windows-latest is
+    # migrating onto. actions/runner-images issue 14016.
+    - windows-2025-vs2026
+    # macOS 15 on Intel x86_64 — GitHub's last Intel image, being phased out.
+    # actions/runner-images issue 13045.
+    - macos-15-intel

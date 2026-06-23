@@ -53,10 +53,65 @@ int? peekResponseHandleId(Uint8List response) {
   return _scanFieldsForHandleId(response, 3, count);
 }
 
-/// Walks [count] fields starting at [offset]; returns the i32 value
-/// of the field keyed `handleId`, or null. Returns null on any
-/// malformed structure — peeks never throw.
+/// Overwrites the `handleId` i32 in a REQUEST with [newId], returning a
+/// fresh buffer. The Router owns a global handle-id space (per-lane
+/// engine ids collide); this swaps the caller's global id back to the
+/// engine's own id before the request reaches the lane. Returns the
+/// input unchanged when there is no handleId field.
+Uint8List rewriteRequestHandleId(Uint8List request, int newId) {
+  if (request.isEmpty) return request;
+  final opLen = request[0];
+  final fieldsStart = 1 + opLen + 2;
+  if (request.length < fieldsStart) return request;
+  final count = ByteData.sublistView(
+    request,
+    1 + opLen,
+    fieldsStart,
+  ).getUint16(0, Endian.little);
+  return _rewriteHandleIdAt(request, fieldsStart, count, newId);
+}
+
+/// Overwrites the `handleId` i32 in a SUCCESS response with [newId] —
+/// the engine id → Router global id swap done when a handle is created.
+/// Returns the input unchanged for error responses or when no handleId
+/// field is present.
+Uint8List rewriteResponseHandleId(Uint8List response, int newId) {
+  if (response.length < 3 || response[0] != 1) return response;
+  final count = ByteData.sublistView(
+    response,
+    1,
+    3,
+  ).getUint16(0, Endian.little);
+  return _rewriteHandleIdAt(response, 3, count, newId);
+}
+
+/// Copies [bytes] with the `handleId` i32 (found by scanning [count]
+/// fields from [offset]) overwritten by [newId]. Returns the input
+/// unchanged if no handleId field is found — never throws.
+Uint8List _rewriteHandleIdAt(
+  Uint8List bytes,
+  int offset,
+  int count,
+  int newId,
+) {
+  final at = _handleIdValueOffset(bytes, offset, count);
+  if (at == null) return bytes;
+  final out = Uint8List.fromList(bytes);
+  ByteData.sublistView(out, at, at + 4).setInt32(0, newId, Endian.little);
+  return out;
+}
+
+/// The i32 value of the `handleId` field, scanning [count] fields from
+/// [offset], or null. Null on any malformed structure — never throws.
 int? _scanFieldsForHandleId(Uint8List bytes, int offset, int count) {
+  final at = _handleIdValueOffset(bytes, offset, count);
+  if (at == null) return null;
+  return ByteData.sublistView(bytes, at, at + 4).getInt32(0, Endian.little);
+}
+
+/// Byte offset of the `handleId` i32 VALUE in [bytes], scanning [count]
+/// fields from [offset]. Null if absent or malformed.
+int? _handleIdValueOffset(Uint8List bytes, int offset, int count) {
   var pos = offset;
   for (var i = 0; i < count; i++) {
     if (pos + 1 > bytes.length) return null;
@@ -71,13 +126,7 @@ int? _scanFieldsForHandleId(Uint8List bytes, int offset, int count) {
     final isHandle = key == 'handleId' && type == 1;
     final valueLen = _valueLength(bytes, pos, type);
     if (valueLen == null || pos + valueLen > bytes.length) return null;
-    if (isHandle) {
-      return ByteData.sublistView(
-        bytes,
-        pos,
-        pos + 4,
-      ).getInt32(0, Endian.little);
-    }
+    if (isHandle) return pos;
     pos += valueLen;
   }
   return null;

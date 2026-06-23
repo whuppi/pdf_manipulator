@@ -5,15 +5,18 @@
 # The CI workflow only does job orchestration (checkout, compile,
 # upload, publish); every decision and mutation lives here.
 #
-# Seven modes
+# Nine modes
 # ───────────
 #   --gate               Check if this push should trigger a release.
 #   --discover           Find the version, create the stamped tag and
 #                        the GitHub Release.
+#   --check-versions     Fail if the changelog adds >1 unreleased version.
 #   --github-notes       Print GitHub Release notes to stdout.
 #   --update-tag-hashes  Stamp asset hashes into the tag and update it.
 #   --stamp-changelog    Build the filtered CHANGELOG.md for the pub.dev
 #                        tarball.
+#   --stamp-readme       Flatten the README <picture> banner to a single
+#                        <img> for the pub.dev tarball.
 #   --add-git-install    Append the git-install snippet to release notes.
 #   --add-pub-install    Append the pub.dev-install snippet to notes.
 #
@@ -29,6 +32,7 @@
 #                  --add-git-install
 #                  --update-tag-hashes
 #   5. publish   → --stamp-changelog
+#                  --stamp-readme
 #                  dart pub publish
 #                  --add-pub-install
 #
@@ -56,9 +60,11 @@ MODE="${1:---help}"
 TAG="${2:-}"
 VERSION="${TAG:+${TAG#v}}"
 
-source "$SCRIPT_DIR/lib.sh"
+# lib.sh is shared with the build scripts in tool/ — one level up from tool/ci/.
+source "$SCRIPT_DIR/../lib.sh"
+ensure_jq  # this script parses pub.dev + build.json JSON via jq
 
-REPO="${GITHUB_REPOSITORY:-$(_json_get repo)}"
+REPO="${GITHUB_REPOSITORY:-$(json_get '.repo')}"
 REPO_URL="https://github.com/$REPO"
 PKG_NAME="pdf_manipulator"
 
@@ -86,6 +92,7 @@ Modes:
   --github-notes TAG        Print GitHub Release notes to stdout.
   --update-tag-hashes TAG   Stamp asset hashes into the tag (post-upload).
   --stamp-changelog TAG     Build the filtered CHANGELOG.md for pub.dev.
+  --stamp-readme            Flatten the README <picture> banner for pub.dev.
   --add-git-install TAG     Append the git-install snippet to the notes.
   --add-pub-install TAG     Append the pub.dev-install snippet to the notes.
 
@@ -118,10 +125,18 @@ gh_output() {
   echo "  output: $1=$2"
 }
 
-# Configure the git identity used for CI commits.
+# Configure the git identity + push auth used for CI commits.
 git_ci_identity() {
   git config user.name  "github-actions[bot]"
   git config user.email "github-actions[bot]@users.noreply.github.com"
+
+  # The release checkout uses persist-credentials:false (zizmor hardening leaves
+  # no token in git config for later steps to leak), so these pushes have no auth.
+  # Wire gh's token in as a credential helper — the same GH_TOKEN `gh release`
+  # already uses. Skipped on a local dry run, where the push uses your own creds.
+  if [ -n "${GH_TOKEN:-}" ]; then
+    gh auth setup-git
+  fi
 }
 
 # Extract one version's entry (body only, heading excluded) from a
@@ -154,9 +169,8 @@ pick_source_file() {
 
 # Fetch every published version of the package from pub.dev.
 get_published_versions() {
-  curl -sS "https://pub.dev/api/packages/$PKG_NAME" 2>/dev/null \
-    | grep -oE '"version":"[^"]*"' \
-    | sed 's/"version":"//;s/"//' \
+  curl -sS --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 30 "https://pub.dev/api/packages/$PKG_NAME" 2>/dev/null \
+    | jq -r '.versions[].version // empty' 2>/dev/null \
     | sort -t. -k1,1n -k2,2n -k3,3n
 }
 
@@ -211,20 +225,18 @@ JQ
     local src="web_assets/$local_name"
     if [ -f "$src" ]; then
       local hash
-      hash=$( (sha256sum "$src" 2>/dev/null || shasum -a 256 "$src") | cut -d' ' -f1)
+      hash=$(sha256_file "$src")
       web_entries+="  '$asset_name': '$hash',"$'\n'
       echo "  $asset_name ... ${hash:0:12}..." >&2
     fi
   done < <(
-    # Read web assets from build.json, skip wasmBuildOutputs.
-    # Pure bash — no python3, no jq.
-    wasm_outputs=$(sed -n 's/.*"wasmBuildOutputs": *\[\(.*\)\].*/\1/p' build.json | tr -d '" ')
-    sed -n '/"web"/,/}/p' build.json | grep ':' | grep -v '"web"' | while IFS=: read -r key val; do
-      local_name=$(echo "$key" | tr -d ' "')
-      asset_name=$(echo "$val" | tr -d ' ",' )
-      echo "$wasm_outputs" | grep -qw "$local_name" && continue
-      echo "$local_name	$asset_name"
-    done
+    # Read web assets from build.json, skipping the wasmBuildOutputs.
+    wasm_outputs=$(jq -r '.wasmBuildOutputs | join(" ")' build.json)
+    jq -r '.web | to_entries[] | "\(.key)\t\(.value)"' build.json \
+      | while IFS=$'\t' read -r local_name asset_name; do
+          grep -qw "$local_name" <<< "$wasm_outputs" && continue
+          echo "$local_name	$asset_name"
+        done
   )
 
   local all_entries
@@ -248,7 +260,7 @@ JQ
   mv "$tmp" "$hash_file"
 
   local count
-  count=$(echo "$all_entries" | grep -c . || true)
+  count=$(grep -c . <<< "$all_entries" || true)
   echo "  $hash_file → $count hashes"
 }
 
@@ -326,8 +338,8 @@ commits_collapsible() {
   [ -z "$commits" ] && return
 
   local count list
-  count=$(echo "$commits" | grep -c . || true)
-  list=$(echo "$commits" | sed 's/^/- /')
+  count=$(grep -c . <<< "$commits" || true)
+  list=$(sed 's/^/- /' <<< "$commits")
   printf '<details><summary>Commits since %s (%s)</summary>\n\n%s\n\n</details>\n' \
     "${from:-initial}" "$count" "$list"
 }
@@ -506,7 +518,7 @@ cmd_gate() {
       local versions_before
       versions_before=$(git show "${BEFORE}:$target_file" 2>/dev/null \
         | sed -n 's/^## \([^ ]*\).*/\1/p' || true)
-      new_version=$(comm -23 <(echo "$versions_after" | sort) <(echo "$versions_before" | sort) | head -1)
+      new_version=$(comm -23 <(sort <<< "$versions_after") <(sort <<< "$versions_before") | head -1)
     fi
 
     if [[ -n "$new_version" ]]; then
@@ -607,7 +619,7 @@ cmd_discover() {
   fi
 
   if ! grep -q '^  - /vendor/\*\*$' pubspec.yaml; then
-    sed -i.bak '/^false_secrets:/a\  - /vendor/**' pubspec.yaml && rm -f pubspec.yaml.bak
+    awk '/^false_secrets:/{print; print "  - /vendor/**"; next} 1' pubspec.yaml > pubspec.yaml.tmp && mv pubspec.yaml.tmp pubspec.yaml
     echo "  pubspec.yaml += false_secrets /vendor/**"
   fi
 
@@ -718,6 +730,40 @@ cmd_stamp_changelog() {
 
 
 # ════════════════════════════════════════════════════════════════════
+# § 8b — Mode: --stamp-readme
+#
+# pub.dev strips <picture>/<source> when sanitizing the README, dropping
+# the whole block so the banner renders blank. GitHub renders <picture>
+# fine, so the repo keeps the dark/light version and we flatten it to the
+# inner <img> only in the pub.dev tarball, here at publish time.
+#
+# Remove this mode (and its call in create-release.yml) once pub.dev
+# renders <picture>. Tracking:
+#   https://github.com/dart-lang/pub-dev/issues/5923
+#   https://github.com/dart-lang/pub-dev/issues/6363
+#   https://github.com/google/dart-neats/pull/383
+# ════════════════════════════════════════════════════════════════════
+
+cmd_stamp_readme() {
+  echo "=== Flattening README <picture> banner for pub.dev ==="
+  if ! grep -qE '^[[:space:]]*<picture>[[:space:]]*$' README.md; then
+    echo "  no <picture> banner; nothing to flatten"
+    return 0
+  fi
+  # Match <picture>/<source> only as a tag alone on its line (the banner),
+  # never a mention inside comment prose.
+  awk '
+    /^[[:space:]]*<picture>[[:space:]]*$/   { inpic = 1; next }
+    /^[[:space:]]*<\/picture>[[:space:]]*$/ { inpic = 0; next }
+    inpic && /<source/ { next }
+    { print }
+  ' README.md > /tmp/_readme_pubdev.md
+  mv /tmp/_readme_pubdev.md README.md
+  echo "  README.md banner flattened to a single <img>"
+}
+
+
+# ════════════════════════════════════════════════════════════════════
 # § 9 — Modes: --add-git-install / --add-pub-install
 #
 # Append an install snippet to the existing GitHub Release notes.
@@ -813,7 +859,7 @@ dependencies:
 # So a stable heading is NOT satisfied by its `-dev.0` prerelease tag —
 # they're different version strings, hence different tags.
 #
-# This is NOT the pub.dev fold (§3): that one asks "is it on pub.dev?";
+# This is NOT the pub.dev fold (the one that asks "is it on pub.dev?");
 # this one asks "does it exist as a release at all?". Orthogonal.
 #
 # Run it at PR time (block the bad merge) AND in the release workflow
@@ -936,6 +982,7 @@ main() {
     --github-notes)      cmd_github_notes ;;
     --update-tag-hashes) cmd_update_tag_hashes ;;
     --stamp-changelog)   cmd_stamp_changelog ;;
+    --stamp-readme)      cmd_stamp_readme ;;
     --add-git-install)   cmd_add_git_install ;;
     --add-pub-install)   cmd_add_pub_install ;;
     *)

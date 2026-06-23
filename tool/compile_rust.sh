@@ -26,12 +26,18 @@
 # ────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
+# Resolve the script's own dir once — versions.env and lib.sh both hang off it.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Pinned versions live in ONE file (tool/versions.env), never inline. Sourced at
+# top, so every installer function below sees the pins without re-sourcing.
+source "$SCRIPT_DIR/versions.env"
+
 
 # ═══════════════════════════════════════════════════════════════════
 # Paths
 # ═══════════════════════════════════════════════════════════════════
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PKG_ROOT="$(dirname "$SCRIPT_DIR")"
 MANIFEST="$PKG_ROOT/vendor/pdf_oxide/Cargo.toml"
 VENDOR="$PKG_ROOT/vendor/pdf_oxide"
@@ -48,8 +54,41 @@ fi
 
 source "$SCRIPT_DIR/lib.sh"
 
-NATIVE_FEATURES=$(_json_get 'native')
-WASM_FEATURES=$(_json_get 'wasm')
+# ── Standalone-tool installers ──────────────────────────────────────
+# Run on CI via provide_tool; locally the dev is told to install instead.
+_install_cross_gcc() {
+  sudo apt-get update -qq && sudo apt-get install -y -qq gcc-aarch64-linux-gnu
+}
+
+_install_wasm_bindgen() {
+  echo "=== WASM: installing wasm-bindgen-cli $WB_VERSION ==="
+  cargo install wasm-bindgen-cli --version "$WB_VERSION"
+}
+
+_install_binaryen() {
+  echo "=== WASM: installing binaryen (wasm-opt) $BINARYEN_VERSION ==="
+  local url sha
+  case "$(uname -s)" in
+    Linux*)  url="https://github.com/WebAssembly/binaryen/releases/download/$BINARYEN_VERSION/binaryen-$BINARYEN_VERSION-x86_64-linux.tar.gz";   sha="$BINARYEN_SHA256_LINUX_X64" ;;
+    Darwin*) url="https://github.com/WebAssembly/binaryen/releases/download/$BINARYEN_VERSION/binaryen-$BINARYEN_VERSION-arm64-macos.tar.gz";    sha="$BINARYEN_SHA256_MACOS_ARM64" ;;
+    MINGW*|MSYS*) url="https://github.com/WebAssembly/binaryen/releases/download/$BINARYEN_VERSION/binaryen-$BINARYEN_VERSION-x86_64-windows.tar.gz"; sha="$BINARYEN_SHA256_WINDOWS_X64" ;;
+  esac
+  local tmp="${RUNNER_TEMP:-/tmp}"
+  # Convert a Windows temp path (D:\...) to Unix (/d/...) so tar doesn't read
+  # the colon as a remote host.
+  command -v cygpath &>/dev/null && tmp=$(cygpath -u "$tmp")
+  bash "$SCRIPT_DIR/fetch_verified.sh" "$url" "$sha" "$tmp/binaryen.tar.gz" \
+    || { echo "Error: failed to fetch/verify binaryen $BINARYEN_VERSION"; exit 1; }
+  tar xzf "$tmp/binaryen.tar.gz" -C "$tmp"
+  mkdir -p "$HOME/.cargo/bin" "$HOME/.cargo/lib"
+  cp "$tmp/binaryen-$BINARYEN_VERSION/bin/wasm-opt"* "$HOME/.cargo/bin/" \
+    || { echo "Error: could not copy wasm-opt to $HOME/.cargo/bin"; exit 1; }
+  cp "$tmp/binaryen-$BINARYEN_VERSION/lib/"* "$HOME/.cargo/lib/" 2>/dev/null || true
+  rm -rf "$tmp/binaryen.tar.gz" "$tmp/binaryen-$BINARYEN_VERSION"
+}
+
+NATIVE_FEATURES=$(json_get '.features.native')
+WASM_FEATURES=$(json_get '.features.wasm')
 
 if [[ "${1:-}" == "--features" ]]; then
   case "${2:-all}" in
@@ -97,7 +136,10 @@ compile_one() {
 #   $3 = NDK clang prefix (e.g. "aarch64-linux-android")
 compile_android_target() {
   local target="$1" outdir="$2" clang_prefix="$3"
-  local ndk="${ANDROID_NDK_HOME:-$HOME/Library/Android/sdk/ndk/28.0.12433566}"
+  # Prefer ANDROID_NDK_HOME (CI runners set it); else the newest NDK the
+  # dev's Android Studio installed. No version is pinned — CI builds with the
+  # runner's NDK, so a local fallback only needs to find whatever is present.
+  local ndk="${ANDROID_NDK_HOME:-$(latest_version_subdir "$HOME/Library/Android/sdk/ndk")}"
   local toolchain="$ndk/toolchains/llvm/prebuilt"
 
   local host_dir
@@ -116,7 +158,8 @@ compile_android_target() {
     return
   fi
 
-  local linker_var="CARGO_TARGET_$(echo "$target" | tr '[:lower:]-' '[:upper:]_')_LINKER"
+  local linker_var
+  linker_var="CARGO_TARGET_$(tr '[:lower:]-' '[:upper:]_' <<< "$target")_LINKER"
   export "$linker_var=$host_dir/bin/${clang_prefix}21-clang"
   compile_one "$target" "$outdir" "libpdf_oxide.so"
   unset "$linker_var"
@@ -156,14 +199,8 @@ do_linux() {
   compile_one "x86_64-unknown-linux-gnu" "linux-x64" "libpdf_oxide.so"
 
   # Cross-compiler for arm64
-  if ! command -v aarch64-linux-gnu-gcc &>/dev/null; then
-    if [ -n "${CI:-}" ]; then
-      sudo apt-get update -qq && sudo apt-get install -y -qq gcc-aarch64-linux-gnu
-    else
-      echo "Error: aarch64-linux-gnu-gcc not found. Run: sudo apt-get install -y gcc-aarch64-linux-gnu"
-      exit 1
-    fi
-  fi
+  command -v aarch64-linux-gnu-gcc &>/dev/null || provide_tool _install_cross_gcc \
+    "Linux: sudo apt-get install -y gcc-aarch64-linux-gnu"
 
   export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER="aarch64-linux-gnu-gcc"
   compile_one "aarch64-unknown-linux-gnu" "linux-arm64" "libpdf_oxide.so"
@@ -255,51 +292,15 @@ do_wasm() {
   wb_installed=$(wasm-bindgen --version 2>/dev/null | sed 's/wasm-bindgen //' || echo "none")
 
   if [[ "$wb_installed" != "$wb_required" ]]; then
-    echo "=== WASM: installing wasm-bindgen-cli $wb_required (have: $wb_installed) ==="
-    cargo install wasm-bindgen-cli --version "$wb_required"
+    WB_VERSION="$wb_required" provide_tool _install_wasm_bindgen \
+      "Run: cargo install wasm-bindgen-cli --version $wb_required"
   fi
 
   # Ensure wasm-opt (binaryen) is installed.
-  if ! command -v wasm-opt &>/dev/null; then
-    if [ -n "${CI:-}" ]; then
-      echo "=== WASM: installing binaryen (wasm-opt) ==="
-      BINARYEN_VER="version_130"
-      case "$(uname -s)" in
-        Linux*)
-          BINARYEN_URL="https://github.com/WebAssembly/binaryen/releases/download/$BINARYEN_VER/binaryen-$BINARYEN_VER-x86_64-linux.tar.gz"
-          ;;
-        Darwin*)
-          BINARYEN_URL="https://github.com/WebAssembly/binaryen/releases/download/$BINARYEN_VER/binaryen-$BINARYEN_VER-arm64-macos.tar.gz"
-          ;;
-        MINGW*|MSYS*)
-          BINARYEN_URL="https://github.com/WebAssembly/binaryen/releases/download/$BINARYEN_VER/binaryen-$BINARYEN_VER-x86_64-windows.tar.gz"
-          ;;
-      esac
-      echo "  $BINARYEN_VER"
-      local tmp="${RUNNER_TEMP:-/tmp}"
-      # Convert Windows paths (D:\...) to Unix (/d/...) so tar doesn't
-      # interpret the colon as a remote host.
-      if command -v cygpath &>/dev/null; then
-        tmp=$(cygpath -u "$tmp")
-      fi
-      curl -sSL --fail "$BINARYEN_URL" -o "$tmp/binaryen.tar.gz" \
-        || { echo "Error: failed to download binaryen $BINARYEN_VER"; exit 1; }
-      tar xzf "$tmp/binaryen.tar.gz" -C "$tmp"
-      local cargo_bin="$HOME/.cargo/bin"
-      local cargo_lib="$HOME/.cargo/lib"
-      mkdir -p "$cargo_bin" "$cargo_lib"
-      cp "$tmp/binaryen-$BINARYEN_VER/bin/wasm-opt"* "$cargo_bin/" \
-        || { echo "Error: could not copy wasm-opt to $cargo_bin"; exit 1; }
-      cp "$tmp/binaryen-$BINARYEN_VER/lib/"* "$cargo_lib/" 2>/dev/null || true
-      rm -rf "$tmp/binaryen.tar.gz" "$tmp/binaryen-$BINARYEN_VER"
-    else
-      echo "Error: wasm-opt not found. Install binaryen:"
-      echo "  macOS:   brew install binaryen"
-      echo "  Linux:   sudo apt-get install binaryen"
-      echo "  Windows: https://github.com/WebAssembly/binaryen/releases"
-      exit 1
-    fi
-  fi
+  command -v wasm-opt &>/dev/null || provide_tool _install_binaryen \
+    "macOS:   brew install binaryen" \
+    "Linux:   sudo apt-get install binaryen" \
+    "Windows: https://github.com/WebAssembly/binaryen/releases"
 
   # Resolve COMPILE_OUTPUT_DIR before cd — relative paths would
   # break after changing to the vendor directory.
@@ -323,10 +324,13 @@ do_wasm() {
   rm -f "$out"/*.d.ts
 
   echo "=== WASM: optimize ==="
+  # Write to a temp and mv on success: wasm-opt reads and writes the same
+  # path, so a crash mid-write would truncate the only copy.
   wasm-opt -O2 \
     "${WASM_OPT_FLAGS[@]}" \
     "$out/pdf_oxide_bg.wasm" \
-    -o "$out/pdf_oxide_bg.wasm"
+    -o "$out/pdf_oxide_bg.wasm.opt" \
+    && mv "$out/pdf_oxide_bg.wasm.opt" "$out/pdf_oxide_bg.wasm"
 
   echo ""
   echo "=== WASM summary ==="

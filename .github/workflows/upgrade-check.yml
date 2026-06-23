@@ -1,7 +1,8 @@
-# Daily upgrade radar — two independent checks:
-#   flutter       — new Flutter stable → opens (or updates) one upgrade PR.
-#   package-deps  — dependency drift vs the constraint doctrine → warning
-#                   annotations only; this job never goes red on drift.
+# Daily upgrade radar — everything pinned that Dependabot can't see (Flutter
+# SDK, versions.env tools/binaries, zizmor + actionlint gate pins) PLUS the
+# committed lockfiles, all refreshed to latest in-range; drift → opens (or
+# updates) one reviewed PR you full-test before merge. Pin logic lives in
+# tool/ci/upgrade.sh; the lock refresh is `pub upgrade` here.
 # Runner-agnostic — configurable via workflow_dispatch (default: ubuntu-24.04).
 name: Upgrade Check
 
@@ -16,126 +17,125 @@ on:
         options: [ubuntu-24.04, macos-14, windows-2025-vs2026]
         default: ubuntu-24.04
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
+
+# Daily radar — never cancel an in-flight run.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
 
 env:
   DEFAULT_RUNNER: ubuntu-24.04
+
+# Every run step uses bash, on any runner. The runner can be overridden to
+# Windows, where the default shell is pwsh and bash syntax would break.
+defaults:
+  run:
+    shell: bash
 
 jobs:
   inputs:
     name: Resolve inputs
     runs-on: ubuntu-24.04
+    permissions: {}
     outputs:
       runner: ${{ steps.resolve.outputs.runner }}
     steps:
       - id: resolve
-        run: echo "runner=${{ inputs.runner || env.DEFAULT_RUNNER }}" >> $GITHUB_OUTPUT
+        env:
+          OVERRIDE: ${{ inputs.runner }}
+          DEFAULT: ${{ env.DEFAULT_RUNNER }}
+        run: echo "runner=${OVERRIDE:-$DEFAULT}" >> "$GITHUB_OUTPUT"
 
-  check:
-    name: Flutter upgrade check
+  # Every pinned thing Dependabot can't see — the Flutter SDK (.fvmrc), the
+  # tools/binaries + zizmor/actionlint gate pins (tool/versions.env), plus the
+  # committed lockfiles. Pin compare + sha256 recompute live in
+  # tool/ci/upgrade.sh; the lockfiles refresh via `fvm dart pub upgrade`.
+  # One reviewed PR carries it all — full-test it before merge.
+  upgrade:
+    name: Pinned versions + lockfile upgrade
     needs: inputs
     runs-on: ${{ needs.inputs.outputs.runner }}
+    permissions:
+      contents: write       # pushes the chore/upgrades branch
+      pull-requests: write  # opens / edits the upgrade PR
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: dev
+          persist-credentials: false
 
-      - name: Check for new Flutter stable
-        id: check
-        run: |
-          CURRENT=$(sed -n 's/.*"flutter": *"\([^"]*\)".*/\1/p' .fvmrc)
-          RELEASES_JSON=$(curl -sS https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json)
-          STABLE_HASH=$(echo "$RELEASES_JSON" | grep -oE '"stable" *: *"[^"]*"' | head -1 | sed 's/"stable" *: *"//;s/"//')
-          LATEST=$(echo "$RELEASES_JSON" | grep -A5 "\"hash\" *: *\"${STABLE_HASH}\"" | grep -oE '"version" *: *"[^"]*"' | head -1 | sed 's/"version" *: *"//;s/"//')
-
-          echo "current=$CURRENT" >> $GITHUB_OUTPUT
-          echo "latest=$LATEST" >> $GITHUB_OUTPUT
-
-          if [ -z "$LATEST" ]; then
-            echo "needs_upgrade=false" >> $GITHUB_OUTPUT
-            echo "::error::Could not detect latest Flutter stable version"
-          elif [ "$CURRENT" = "$LATEST" ]; then
-            echo "needs_upgrade=false" >> $GITHUB_OUTPUT
-            echo "Already on latest stable: $CURRENT"
-          else
-            echo "needs_upgrade=true" >> $GITHUB_OUTPUT
-            echo "New stable: $CURRENT → $LATEST"
-          fi
-
-      - name: Create or update upgrade PR
-        if: steps.check.outputs.needs_upgrade == 'true'
+      - name: Prepare upgrade branch
+        id: branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CURRENT: ${{ steps.check.outputs.current }}
-          LATEST: ${{ steps.check.outputs.latest }}
         run: |
-          BRANCH="chore/flutter-upgrade"
-          LABEL="flutter-upgrade"
-
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # Ensure label exists
-          gh label create "$LABEL" --description "Auto: Flutter version bump" --color "1d76db" 2>/dev/null || true
-
-          # Find existing open upgrade PR by label (reliable, survives title/body edits)
-          EXISTING_PR=$(gh pr list --label "$LABEL" --state open --json number --jq '.[0].number // empty')
-
+          # persist-credentials:false leaves the remote unauthenticated — wire
+          # gh's token into git so the branch push below works.
+          gh auth setup-git
+          gh label create upgrade --description "Auto: pinned version + lockfile bump" --color "1d76db" 2>/dev/null || true
+          EXISTING_PR=$(gh pr list --label upgrade --state open --json number --jq '.[0].number // empty')
+          echo "existing_pr=$EXISTING_PR" >> "$GITHUB_OUTPUT"
           if [ -n "$EXISTING_PR" ]; then
-            # Check what version the existing PR targets via structured comment
-            EXISTING_VER=$(gh pr view "$EXISTING_PR" --json body --jq '.body' \
-              | grep -oP '<!-- flutter-target: \K[^ ]+(?= -->)' || echo "unknown")
-
-            if [ "$EXISTING_VER" = "$LATEST" ]; then
-              echo "PR #$EXISTING_PR already targets $LATEST"
-              exit 0
-            fi
-
-            echo "Updating PR #$EXISTING_PR: $EXISTING_VER → $LATEST"
-            git fetch origin "$BRANCH" 2>/dev/null || true
-            git checkout -B "$BRANCH" "origin/$BRANCH" 2>/dev/null || git checkout -b "$BRANCH"
+            git fetch origin chore/upgrades 2>/dev/null || true
+            git checkout -B chore/upgrades origin/chore/upgrades 2>/dev/null || git checkout -b chore/upgrades
           else
-            echo "Creating new upgrade PR"
-            git checkout -b "$BRANCH"
+            git checkout -b chore/upgrades
           fi
 
-          # Update both .fvmrc files (root + example)
-          for fvmrc in .fvmrc example/.fvmrc; do
-            sed -i "s/\"flutter\": *\"[^\"]*\"/\"flutter\": \"$LATEST\"/" "$fvmrc"
-          done
+      # Bump .fvmrc + tool/versions.env in place. Pure curl/sed/gh (no Dart), so
+      # it runs before the SDK is even set up.
+      - name: Bump pinned versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash tool/ci/upgrade.sh apply
 
-          git add .fvmrc example/.fvmrc
-          git commit -m "chore: bump Flutter $CURRENT → $LATEST" || {
-            echo ".fvmrc already at $LATEST"
+      # Install the SDK pinned in the just-bumped .fvmrc, so the lock refresh
+      # below resolves against the version a fresh consumer would build on.
+      - uses: ./.github/actions/capabilities/fvm
+
+      - name: Refresh lockfiles to latest in-range
+        run: |
+          fvm dart pub upgrade
+          ( cd example && fvm dart pub upgrade )
+
+      - name: Commit + open or update the PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXISTING_PR: ${{ steps.branch.outputs.existing_pr }}
+        run: |
+          # Glob so a new subpackage lockfile or .fvmrc is staged automatically.
+          # :(glob) is required — a bare **/pubspec.lock skips the repo-root file
+          # (its leading **/ needs a slash), which is the main lockfile.
+          git add tool/versions.env ':(glob)**/.fvmrc' ':(glob)**/pubspec.lock'
+          git commit -m "chore: bump pinned versions + refresh lockfiles" || {
+            echo "Everything already fresh — nothing to bump."
             exit 0
           }
           if [ -n "$EXISTING_PR" ]; then
-            # Live PR branch — append only, never rewrite.
-            git push origin "$BRANCH"
+            # Live PR branch — append only.
+            git push origin chore/upgrades
           else
-            # No open PR references this branch, so any remote copy is
-            # debris from a closed PR whose branch was never deleted —
-            # exactly the state that rejects a plain push. Overwrite it.
-            git push --force origin "$BRANCH"
+            # Any remote copy here is debris from a closed PR. Plain --force,
+            # not --force-with-lease: nothing but the bot pushes this branch,
+            # and lease fails when there's no remote-tracking ref (a fresh
+            # branch, or one deleted after a merge).
+            git push --force origin chore/upgrades
           fi
 
-          # PR body with structured comment for machine parsing
-          PR_BODY="$(cat <<EOF
-          <!-- flutter-target: $LATEST -->
+          PR_BODY="$(cat <<'EOF'
+          Automated refresh of everything Dependabot can't see:
 
-          New Flutter stable release detected.
+          - **Flutter SDK** (`.fvmrc`)
+          - **tools / binaries + the zizmor + actionlint gate pins** (`tool/versions.env`) —
+            sha256s recomputed from the upstream release assets, re-verified by
+            `fetch_verified` on every build
+          - **lockfiles** (`pubspec.lock`, `example/pubspec.lock`) bumped to the
+            latest in-range — what a fresh consumer resolves
 
-          | | Version |
-          |---|---|
-          | Current | \`$CURRENT\` |
-          | New | \`$LATEST\` |
-
-          **What to do:**
-          - CI runs basic checks (analyze + native test) automatically
-          - Add \`ready-to-test\` label for full cross-target test
-          - Green → merge. Red → pull branch, fix, push.
+          Add `ready-to-test` for the full cross-target run, then merge once green.
 
           _Auto-generated by upgrade-check.yml_
           EOF
@@ -144,27 +144,14 @@ jobs:
           if [ -z "$EXISTING_PR" ]; then
             gh pr create \
               --base dev \
-              --head "$BRANCH" \
-              --title "chore: bump Flutter $CURRENT → $LATEST" \
-              --label "$LABEL" \
+              --head chore/upgrades \
+              --title "chore: bump pinned versions + refresh lockfiles" \
+              --label upgrade \
               --draft \
               --body "$PR_BODY"
           else
             gh pr edit "$EXISTING_PR" \
-              --title "chore: bump Flutter $CURRENT → $LATEST" \
+              --title "chore: bump pinned versions + refresh lockfiles" \
               --body "$PR_BODY"
           fi
 
-  package-deps:
-    name: Package dependency report
-    needs: inputs
-    runs-on: ${{ needs.inputs.outputs.runner }}
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: dev
-          submodules: recursive
-      - uses: ./.github/actions/make-target
-        with:
-          make-target: check-deps

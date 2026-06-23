@@ -334,9 +334,6 @@ example/web/pdf_manipulator/
 .dart_tool/hooks_runner/
 .dart_tool/lib/
 
-# pubspec.lock (library, not app — consumers resolve their own deps)
-pubspec.lock
-
 # Generated test fixtures — produced by `make fixtures` (stamp-protected;
 # see docs/TEST_OVERHAUL_PLAN.md). Never committed: the catalog spec is
 # the source of truth, the bytes are reproducible on every platform.

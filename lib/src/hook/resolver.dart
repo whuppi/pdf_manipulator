@@ -5,7 +5,8 @@
 /// runs the same 5-step waterfall for every asset:
 ///
 ///   1. Cached — existing file, ONLY with a proof (see below)
-///   2. Download — fetch from GitHub Releases, hash-verified → use it
+///   2. Download — fetch from GitHub Releases; used with a hash proof,
+///      or a loud warning when neither hash nor source exists
 ///   3. Compile — vendor source on disk → build → use it
 ///   4. Submodule — .gitmodules exists → init recursive + compile → use it
 ///   5. Error — nothing worked, clear message with options
@@ -14,7 +15,9 @@
 /// a matching content hash, or cargo's own freshness receipts (by
 /// falling through to the compile step). "The file exists" is never a
 /// proof: a stale binary looks exactly like a current one until it
-/// crashes on a missing symbol.
+/// crashes on a missing symbol. The one unprovable case — a release asset
+/// with no pinned hash and no source to rebuild from — is used only with a
+/// loud warning, never silently.
 library;
 
 import 'dart:io';
@@ -91,8 +94,26 @@ Future<bool> resolveAsset(ResolveRequest req) async {
     if (await _download(req.downloadUrl, target)) {
       // Verify at download time, not on the next run's cache check —
       // release assets are not immutable by construction; the hash is.
-      if (req.expectedHash != null &&
-          await _sha256Of(target) != req.expectedHash) {
+      // The null-hash case mirrors the cache path exactly so the two can't
+      // disagree: if vendor source exists, cargo can prove freshness —
+      // discard and rebuild; otherwise there is nothing to rebuild from, so
+      // use the download but say so loudly. A missing hash is a gap in
+      // asset_hashes.dart, never a silent license to trust the bytes.
+      final expected = req.expectedHash;
+      if (expected == null) {
+        if (hasVendorSource(req.packageRoot)) {
+          target.deleteSync();
+          return _resolveFromSource(req);
+        }
+        _log.warning(
+          '${req.assetName}: no pinned hash for v${req.version}. Using the '
+          'download WITHOUT verification (no source to rebuild from). '
+          'This usually means asset_hashes.dart is missing an entry.',
+        );
+        _copyIfNeeded(target, req.dest);
+        return true;
+      }
+      if (await _sha256Of(target) != expected) {
         _log.warning(
           '${req.assetName}: downloaded file does not match the '
           'pinned hash — discarding and falling back to source.',

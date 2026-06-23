@@ -12,6 +12,6 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: futureware-tech/simulator-action@v4
+    - uses: futureware-tech/simulator-action@dab10d813144ef59b48d401cd95da151222ef8cd # v4
       with:
         model: ${{ inputs.model }}

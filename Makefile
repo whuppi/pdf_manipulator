@@ -1,4 +1,4 @@
-.PHONY: check analyze check-deps fixtures test-guards \
+.PHONY: check analyze lint-shell fixtures test-guards \
        build build-native build-wasm \
        compile-macos compile-ios compile-android compile-linux compile-windows compile-wasm compile-natives \
        test test-pkg-native test-unit test-rust \
@@ -8,7 +8,7 @@
        test-example-web test-example-web-jspi test-example-web-atomics test-example-web-opfs \
        verify verify-android verify-ios verify-macos \
        verify-linux verify-windows verify-web \
-       clean
+       clean hooks
 
 # ═══════════════════════════════════════════════════════════════════
 # SDK resolution
@@ -30,7 +30,14 @@ VERBOSE := $(if $(CI),--verbose,)
 #
 # make check    Full local gate before PR.
 
-check: analyze test-guards test test-example
+check: lint-shell analyze test-guards test test-example
+
+# make hooks    Activate the repo's git hooks (commit-msg, pre-commit).
+#               Run once after cloning — they stay dormant otherwise.
+#               Idempotent.
+hooks:
+	@git config core.hooksPath .githooks
+	@echo "✓ git hooks active (core.hooksPath → .githooks)"
 
 # ═══════════════════════════════════════════════════════════════════
 # § 2 — Analyze
@@ -43,19 +50,11 @@ check: analyze test-guards test test-example
 analyze: fixtures
 	@DART="$(DART)" FLUTTER="$(FLUTTER)" bash tool/analyze.sh
 
-# ═══════════════════════════════════════════════════════════════════
-# § 2a — Dependency report (network; advisory, never fails)
-# ═══════════════════════════════════════════════════════════════════
-#
-# make check-deps   Report dependency drift against the constraint
-#                   doctrine: regular deps keep low floors (new majors
-#                   → verify+widen), dev deps track latest. Runs daily
-#                   in CI as warnings on the Upgrade Check workflow.
-#                   Not part of `make analyze` — a gate must not go
-#                   red because someone published.
-
-check-deps:
-	$(DART) tool/check_deps.dart
+# make lint-shell  Shell portability gate: shellcheck + a bash 4.0+ scan
+#                  that catches macOS bash 3.2 breaks in scripts and in
+#                  workflow run: blocks. Mirrors the CI workflow-lint job.
+lint-shell:
+	@bash tool/lint_shell.sh
 
 # ═══════════════════════════════════════════════════════════════════
 # § 2b — Fixtures + test-suite guards
@@ -295,7 +294,8 @@ test-example-ios:
 
 test-example-device:
 	@echo "=== Example: device=$(DEVICE) ==="
-	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart -d $(DEVICE)
+	@mkdir -p $(TEST_RESULTS_DIR)
+	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart -d $(DEVICE) --file-reporter json:../$(TEST_RESULTS_DIR)/int-device.json
 
 test-example-web:
 	$(call setup_example_web)

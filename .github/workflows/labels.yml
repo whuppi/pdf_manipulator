@@ -1,0 +1,94 @@
+# Labels — sync the repo's labels to .github/labels.json, the single source of
+# truth. Edit a label there (name, color, description), push to dev, and this
+# makes GitHub match it: creates missing, recolours/redescribes changed, and
+# deletes any label not listed. Never edit labels in the UI; the next run
+# reverts the drift. The sync is authoritative, so labels.json must be complete.
+name: Labels
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - .github/labels.json
+      - .github/workflows/labels.yml
+  workflow_dispatch:
+
+permissions: {}
+
+# One sync at a time; the newest manifest wins, so cancel an in-flight run.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+env:
+  DEFAULT_RUNNER: ubuntu-24.04
+
+jobs:
+  inputs:
+    name: Resolve inputs
+    # Repo-guard: a fork that enables Actions must never sync its own labels.
+    if: github.repository == 'whuppi/pdf_manipulator'
+    runs-on: ubuntu-24.04
+    permissions: {}
+    timeout-minutes: 5
+    outputs:
+      runner: ${{ steps.resolve.outputs.runner }}
+    steps:
+      - id: resolve
+        shell: bash
+        run: echo "runner=${DEFAULT_RUNNER}" >> "$GITHUB_OUTPUT"
+
+  sync:
+    name: Sync labels
+    needs: inputs
+    if: github.repository == 'whuppi/pdf_manipulator'
+    runs-on: ${{ needs.inputs.outputs.runner }}
+    permissions:
+      contents: read  # checkout reads .github/labels.json
+      issues: write   # labels are managed through the Issues API
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Sync labels to .github/labels.json
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          manifest=.github/labels.json
+
+          # Names GitHub currently has (paginated; our set fits one page).
+          existing="$(gh api --paginate "repos/$REPO/labels" --jq '.[].name')"
+
+          # Upsert every label the manifest declares. A failed call aborts the
+          # run (no `|| true`) — a sync that half-applies should be loud.
+          n="$(jq 'length' "$manifest")"
+          i=0
+          while [ "$i" -lt "$n" ]; do
+            name="$(jq -r ".[$i].name" "$manifest")"
+            color="$(jq -r ".[$i].color" "$manifest")"
+            desc="$(jq -r ".[$i].description" "$manifest")"
+            if printf '%s\n' "$existing" | grep -qxF "$name"; then
+              gh api -X PATCH "repos/$REPO/labels/$name" \
+                -f color="$color" -f description="$desc" --silent
+              echo "updated  $name"
+            else
+              gh api -X POST "repos/$REPO/labels" \
+                -f name="$name" -f color="$color" -f description="$desc" --silent
+              echo "created  $name"
+            fi
+            i=$((i + 1))
+          done
+
+          # Authoritative: delete any label the manifest does not list.
+          wanted="$(jq -r '.[].name' "$manifest")"
+          while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            if ! printf '%s\n' "$wanted" | grep -qxF "$name"; then
+              gh api -X DELETE "repos/$REPO/labels/$name" --silent
+              echo "deleted  $name"
+            fi
+          done < <(printf '%s\n' "$existing")

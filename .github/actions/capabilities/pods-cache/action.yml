@@ -4,7 +4,7 @@ description: Cache CocoaPods for iOS builds.
 runs:
   using: composite
   steps:
-    - uses: actions/cache@v5
+    - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       with:
         path: example/ios/Pods
         key: pods-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('example/ios/Podfile') }}

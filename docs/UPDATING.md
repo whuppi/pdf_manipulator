@@ -21,6 +21,21 @@ wasm-bindgen-cli version is read from `vendor/pdf_oxide/Cargo.lock`
 at build time — never hardcoded. `compile_rust.sh` auto-installs the
 matching version before WASM builds.
 
+### Bumping a fork's base tag — update every place it lives
+
+A base tag lives in more than one spot; change all of them together or they
+drift (a stale `baseTag` once slipped past review here). For pdf_oxide moving
+to a new upstream `vX.Y.Z`:
+
+1. the fork's patch branch — rename to `pdf_manipulator/X.Y.Z-patches`; its
+   name is what `analyze.sh` reads when the submodule is on that branch
+2. `build.json` → `baseTag` — `analyze.sh`'s off-branch fallback for its
+   warning-diff. CI checks the submodule out detached, so this is the value
+   CI actually uses; it MUST equal the branch's version
+3. the **Branch** and **Base tag** columns in the table above
+
+office_oxide is the same, under its own branch name and `v0.1.2`.
+
 ### The fork contract
 
 Each fork carries exactly three things — anything else is debris and
@@ -65,11 +80,12 @@ branch not currently checked out.
 `.fvmrc` (root + `example/.fvmrc`) is the single source of truth for
 the Flutter SDK version. Never hardcode the version anywhere else.
 
-`upgrade-check.yml` runs daily. Its `flutter` job detects new Flutter
-stable releases and opens a draft PR on `chore/flutter-upgrade` that
-bumps both files — review, test, merge when ready. Its `package-deps`
-job runs `make check-deps` and surfaces dependency drift as warning
-annotations (advisory only — it never fails the run).
+`upgrade-check.yml` runs daily. Its `upgrade` job detects drift in every
+pinned version Dependabot can't see — the Flutter SDK, the tools and
+verified binaries in `tool/versions.env`, and the zizmor + actionlint gate
+pins — and opens a single draft PR on `chore/upgrades` that bumps them
+(binary sha256s recomputed from the upstream assets). Review, test, merge
+when ready.
 
 ---
 
@@ -267,8 +283,8 @@ handles commit lists, filtering, and publishing. `pubspec.yaml` stays
 
 ### The release pipeline
 
-All logic lives in `tool/release.sh` (7 modes). The workflow
-(`create-release.yml`) is pure job orchestration.
+All logic lives in `tool/ci/release.sh` (run it with `--help` to list its
+modes). The workflow (`create-release.yml`) is pure job orchestration.
 
 ```
 Push to dev (CHANGELOG.pre.md) or prod (CHANGELOG.md)
@@ -281,7 +297,7 @@ Push to dev (CHANGELOG.pre.md) or prod (CHANGELOG.md)
   ├─ 2. discover → release.sh --discover
   │               finds version, validates branch/type match
   │               stamps version + deregisters submodules
-  │               creates orphan tag commit + GitHub Release
+  │               creates stamped tag commit (with a parent) + GitHub Release
   │
   ├─ 3. compile  → checkout tag, build all 6 platforms in parallel
   │
@@ -459,7 +475,7 @@ the full changelog that will be published.
 To preview locally:
 
 ```sh
-bash tool/release.sh --stamp-changelog vX.Y.Z
+bash tool/ci/release.sh --stamp-changelog vX.Y.Z
 cat CHANGELOG.md
 git checkout CHANGELOG.md   # restore
 ```

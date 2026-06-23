@@ -12,7 +12,7 @@ Two INDEPENDENT lane changelogs — do NOT mirror one from the other:
 They share prose but track their OWN version sequences. There is no
 `cp + sed` regen: that mirror falsely assumed every prerelease becomes a
 same-numbered stable, so it manufactured stable headings for versions
-that never shipped — which `tool/release.sh --check-versions` now flags.
+that never shipped — which `tool/ci/release.sh --check-versions` now flags.
 Hand-edit each lane's file directly.
 
 ADDING A VERSION
@@ -59,6 +59,10 @@ CONTENT RULES (never change)
 -->
 
 <!-- Add new versions below, newest first. -->
+
+## 2.1.1
+
+- Fixed the README banner not rendering on pub.dev — the `<picture>` element is flattened to a plain image in the published package ([PR #111](https://github.com/whuppi/pdf_manipulator/pull/111))
 
 ## 2.1.0
 
