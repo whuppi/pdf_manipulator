@@ -60,6 +60,10 @@ CONTENT RULES (never change)
 
 <!-- Add new versions below, newest first. -->
 
+## 2.1.1-dev.0
+
+- Fixed the README banner not rendering on pub.dev — the `<picture>` element is flattened to a plain image in the published package ([PR #111](https://github.com/whuppi/pdf_manipulator/pull/111))
+
 ## 2.1.0-dev.0
 
 - Added document producer and creation-date metadata — `PdfEditor.setProducer()` / `getProducer()` and `setCreationDate()` / `getCreationDate()` (raw PDF date strings, e.g. `D:20240101120000Z`), plus `PdfDoc.producer`, `PdfDoc.creator`, and `PdfDoc.creationDate` read on open
