@@ -11,6 +11,9 @@
 
 set -euo pipefail
 
+# shellcheck source=tool/lib.sh
+source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+
 APK="${1:?Usage: check_alignment.sh <path-to-apk>}"
 
 if [ ! -f "$APK" ]; then
@@ -21,7 +24,7 @@ fi
 # Locate NDK's llvm-objdump.
 ANDROID_NDK_DIR="${ANDROID_NDK:-${ANDROID_NDK_HOME:-}}"
 if [ -z "$ANDROID_NDK_DIR" ] && [ -n "${ANDROID_HOME:-}" ]; then
-  ANDROID_NDK_DIR=$(find "$ANDROID_HOME/ndk" -maxdepth 1 -type d 2>/dev/null | sort -V | tail -1)
+  ANDROID_NDK_DIR=$(latest_version_subdir "$ANDROID_HOME/ndk")
 fi
 
 OBJDUMP=""
@@ -54,7 +57,9 @@ fi
 FAIL=0
 CHECKED=0
 
-for so in $(find "$TMP/lib" \( -path '*/arm64-v8a/*.so' -o -path '*/x86_64/*.so' \) 2>/dev/null); do
+# Read via process substitution, not `for $(find)`: keeps the loop in this
+# shell so FAIL/CHECKED survive, and handles odd filenames safely.
+while IFS= read -r so; do
   name=$(basename "$so")
   arch=$(basename "$(dirname "$so")")
   CHECKED=$((CHECKED + 1))
@@ -63,13 +68,13 @@ for so in $(find "$TMP/lib" \( -path '*/arm64-v8a/*.so' -o -path '*/x86_64/*.so'
   # Alignment shown as 2**N. 2**14 = 16384 (16 KB) or higher passes.
   align=$("$OBJDUMP" -p "$so" 2>/dev/null | grep LOAD | awk '{ print $NF }' | head -1)
 
-  if echo "$align" | grep -qE '2\*\*(1[4-9]|[2-9][0-9])'; then
+  if grep -qE '2\*\*(1[4-9]|[2-9][0-9])' <<< "$align"; then
     echo "  ALIGNED: $arch/$name ($align)"
   else
     echo "  UNALIGNED: $arch/$name ($align)"
     FAIL=1
   fi
-done
+done < <(find "$TMP/lib" \( -path '*/arm64-v8a/*.so' -o -path '*/x86_64/*.so' \) 2>/dev/null)
 
 if [ "$CHECKED" -eq 0 ]; then
   echo "  No arm64-v8a or x86_64 .so files found in APK"

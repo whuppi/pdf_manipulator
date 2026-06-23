@@ -146,24 +146,25 @@ void main() {
 
   group('pinning', () {
     test('a response handle pins later ops to the creating lane', () async {
-      // Lane A creates handle 7.
+      // Lane A creates a handle; the caller receives the Router's global
+      // id for it (the engine's raw id stays inside the lane).
       final open = router.execute(_open());
       await Future<void>.delayed(Duration.zero);
       final laneA = host.lanes.single;
       laneA.pending[1]!.complete(_ok(handleId: 7));
-      await open;
+      final handle = peekResponseHandleId((await open).bytes)!;
 
       // Make lane A busy so least-loaded would pick a fresh lane —
       // the pin must win anyway.
       final busy = router.execute(_open());
       await Future<void>.delayed(Duration.zero);
 
-      final pinned = router.execute(_opOn('extract', 7));
+      final pinned = router.execute(_opOn('extract', handle));
       await Future<void>.delayed(Duration.zero);
       expect(
         laneA.submitted,
         hasLength(3),
-        reason: 'handle 7 lives on lane A — its ops follow it',
+        reason: 'the handle lives on lane A — its ops follow it',
       );
 
       laneA.pending[2]!.complete(_ok());
@@ -176,19 +177,19 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       final laneA = host.lanes.single;
       laneA.pending[1]!.complete(_ok(handleId: 7));
-      await open;
+      final handle = peekResponseHandleId((await open).bytes)!;
 
       laneA.autoResult = _ok();
-      await router.execute(_opOn('docDispose', 7));
+      await router.execute(_opOn('docDispose', handle));
 
-      // Handle 7 is gone: the next op for it is placed, not pinned —
+      // The handle is gone: the next op for it is placed, not pinned —
       // with lane A idle it still lands there, so prove the unpin by
       // checking the pin map indirectly: a BUSY lane A + unpinned op
       // must go elsewhere.
       laneA.autoResult = null;
       final busy = router.execute(_open()); // occupies lane A
       await Future<void>.delayed(Duration.zero);
-      final after = router.execute(_opOn('extract', 7));
+      final after = router.execute(_opOn('extract', handle));
       await Future<void>.delayed(Duration.zero);
 
       expect(
@@ -203,6 +204,64 @@ void main() {
         lane.completeAllPending();
       }
       await Future.wait([busy, after]);
+    });
+
+    test('handles on different lanes never share an id (cross-lane '
+        'collision)', () async {
+      // Two creates fire while the first is in-flight, so the second
+      // spawns a second lane (placement spreads them). Each lane's
+      // engine mints handle id 1 — LaneState.next_handle restarts at 1
+      // per lane, so this is the exact id collision the native runtime
+      // produces under parallel doc+editor+builder load.
+      final createA = router.execute(_open());
+      final createB = router.execute(_open());
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        host.lanes,
+        hasLength(2),
+        reason: 'two in-flight creates spread onto two lanes',
+      );
+      final laneA = host.lanes[0];
+      final laneB = host.lanes[1];
+
+      laneA.pending[1]!.complete(_ok(handleId: 1));
+      laneB.pending[2]!.complete(_ok(handleId: 1));
+      final resA = await createA;
+      final resB = await createB;
+
+      final idA = peekResponseHandleId(resA.bytes);
+      final idB = peekResponseHandleId(resB.bytes);
+
+      // The ids the callers receive must be distinct, or the pin map
+      // conflates the two handles and a handle's later ops route to the
+      // wrong lane — the "editor not found" race.
+      expect(idA, isNotNull);
+      expect(idB, isNotNull);
+      expect(
+        idA,
+        isNot(equals(idB)),
+        reason: 'handles on different lanes must not share an id',
+      );
+
+      // Handle A lives on lane A. Its ops must follow lane A even though
+      // lane B created its handle last (last write wins in a raw-id pin
+      // map, which would mis-route A's ops to lane B).
+      final follow = router.execute(_opOn('extract', idA!));
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        laneA.submitted,
+        hasLength(2),
+        reason: "handle A's ops follow lane A, not the last-pinned lane",
+      );
+      expect(
+        laneB.submitted,
+        hasLength(1),
+        reason: 'lane B only ran its own create',
+      );
+
+      laneA.completeAllPending();
+      laneB.completeAllPending();
+      await follow;
     });
   });
 

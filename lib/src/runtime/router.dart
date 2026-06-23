@@ -42,9 +42,15 @@ class _LaneSlot {
 }
 
 class _Pin {
-  _Pin(this.slot, this.heldToken);
+  _Pin(this.slot, this.engineHandleId, this.heldToken);
 
   final _LaneSlot slot;
+
+  /// The id the engine on [slot] knows this handle by. Per-lane engine
+  /// ids collide across lanes (each lane counts from 1), so the Router
+  /// keys its pin map by a global id and translates back to this on the
+  /// way to the lane.
+  final int engineHandleId;
 
   /// Held token of the job that created the handle — passed with
   /// every op on this handle so web lanes can mount its held readers.
@@ -80,6 +86,7 @@ class Router implements PdfTransport {
   final Map<int, _Pin> _pins = {};
   final Map<int, _HeldResource> _held = {};
   int _nextJobId = 1;
+  int _nextHandleId = 1;
   int _nextResourceId = 1;
   bool _disposed = false;
   bool _initialized = false;
@@ -119,12 +126,20 @@ class Router implements PdfTransport {
       return (bytes: buildCancelledResponse(), resourceIds: const <int, int>{});
     }
 
-    final handleId = peekRequestHandleId(request);
-    final pin = handleId != null ? _pins[handleId] : null;
-    final slot = pin?.slot ?? _placeFor(request);
+    // The caller holds a Router-global handle id; the engine on the
+    // pinned lane knows only its own per-lane id (those collide across
+    // lanes). Translate global → engine before the request leaves so
+    // the lane looks the handle up correctly.
+    var req = request;
+    final globalHandleId = peekRequestHandleId(req);
+    final pin = globalHandleId != null ? _pins[globalHandleId] : null;
+    if (pin != null) {
+      req = rewriteRequestHandleId(req, pin.engineHandleId);
+    }
+    final slot = pin?.slot ?? _placeFor(req);
     final job = LaneJob(
       jobId: _nextJobId++,
-      request: request,
+      request: req,
       sources: sources,
       sinks: sinks,
       keepSources: keepSources,
@@ -148,18 +163,20 @@ class Router implements PdfTransport {
 
     // Pin bookkeeping is response-driven, not op-name-driven: any op
     // whose success carries a handleId created a handle on this lane.
-    final createdHandle = peekResponseHandleId(result.bytes);
-    if (createdHandle != null) {
+    // Mint a Router-global id for it (engine ids collide across lanes),
+    // pin it to the lane + engine id, and hand the caller the global id.
+    var bytes = result.bytes;
+    final engineHandle = peekResponseHandleId(bytes);
+    if (engineHandle != null) {
       final token = result.heldTokens.isEmpty
           ? null
           : result.heldTokens.values.first;
-      _pins[createdHandle] = _Pin(slot, token);
+      final globalId = _nextHandleId++;
+      _pins[globalId] = _Pin(slot, engineHandle, token);
+      bytes = rewriteResponseHandleId(bytes, globalId);
     }
-    if (_disposeOps.contains(peekRequestOp(request))) {
-      final disposedHandle = peekRequestHandleId(request);
-      if (disposedHandle != null) {
-        _pins.remove(disposedHandle);
-      }
+    if (globalHandleId != null && _disposeOps.contains(peekRequestOp(req))) {
+      _pins.remove(globalHandleId);
     }
 
     final resourceIds = <int, int>{};
@@ -169,7 +186,7 @@ class Router implements PdfTransport {
       resourceIds[sourceIndex] = id;
     });
 
-    return (bytes: result.bytes, resourceIds: resourceIds);
+    return (bytes: bytes, resourceIds: resourceIds);
   }
 
   @override

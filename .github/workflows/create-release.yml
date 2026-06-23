@@ -1,6 +1,6 @@
 # Release pipeline: gate → discover → compile → upload → publish.
 #
-# All release logic lives in tool/release.sh. This workflow only
+# All release logic lives in tool/ci/release.sh. This workflow only
 # handles job orchestration.
 #
 # Runners: infra jobs (gate, discover, upload, publish) use one
@@ -33,50 +33,67 @@ on:
         options: [ubuntu-24.04, macos-14, windows-2025-vs2026]
         default: ubuntu-24.04
 
-permissions:
-  contents: write
+permissions: {}
+
+# A release must finish — never cancel an in-flight release run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   COMPILE_OUTPUT_DIR: out
   DEFAULT_RUNNER: ubuntu-24.04
 
+# Every run step uses bash, on any runner. The runner can be overridden to
+# Windows, where the default shell is pwsh and bash syntax would break.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   inputs:
     name: Resolve inputs
     runs-on: ubuntu-24.04
+    permissions: {}
     outputs:
       runner: ${{ steps.resolve.outputs.runner }}
     steps:
       - id: resolve
-        run: echo "runner=${{ inputs.runner || env.DEFAULT_RUNNER }}" >> $GITHUB_OUTPUT
+        env:
+          OVERRIDE: ${{ inputs.runner }}
+          DEFAULT: ${{ env.DEFAULT_RUNNER }}
+        run: echo "runner=${OVERRIDE:-$DEFAULT}" >> "$GITHUB_OUTPUT"
 
   # ── Gate ─────────────────────────────────────────────────────────
   gate:
     name: Release gate
     needs: inputs
     runs-on: ${{ needs.inputs.outputs.runner }}
+    permissions:
+      contents: read  # checkout + changelog gate, read-only
     outputs:
       should_run: ${{ steps.check.outputs.should_run }}
       version: ${{ steps.check.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
           ref: ${{ inputs.branch || github.ref_name }}
+          persist-credentials: false
       # Backstop: even if a faulty merge skipped the PR check, refuse to
       # release a lane whose changelog adds more than one new version.
       # Checks the lane being released (the pushed branch).
       - name: Version sanity
         env:
           BRANCH: ${{ inputs.branch || github.ref_name }}
-        run: bash tool/release.sh --check-versions
+        run: bash tool/ci/release.sh --check-versions
       - name: Check changelog relevance
         id: check
         env:
           BRANCH: ${{ inputs.branch || github.ref_name }}
           BEFORE: ${{ github.event.before }}
           AFTER: ${{ github.sha }}
-        run: bash tool/release.sh --gate
+        run: bash tool/ci/release.sh --gate
 
   # ── Discover version + create release ────────────────────────────
   discover:
@@ -87,22 +104,25 @@ jobs:
       group: release-${{ needs.gate.outputs.version || github.run_id }}
       cancel-in-progress: true
     runs-on: ${{ needs.inputs.outputs.runner }}
+    permissions:
+      contents: write  # release.sh --discover creates the GitHub release
     outputs:
       tag: ${{ steps.find.outputs.tag }}
       version: ${{ steps.find.outputs.version }}
       has_release: ${{ steps.find.outputs.has_release }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
           ref: ${{ inputs.branch || github.ref_name }}
           submodules: recursive
+          persist-credentials: false
       - name: Find + create release
         id: find
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BRANCH: ${{ inputs.branch || github.ref_name }}
-        run: bash tool/release.sh --discover
+        run: bash tool/ci/release.sh --discover
 
   # ── Compile all targets ──────────────────────────────────────────
   compile:
@@ -120,15 +140,18 @@ jobs:
           - { name: windows, runner: windows-2025-vs2026 }
     name: compile-${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read  # checkout + build; artifacts use run storage, no API
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ needs.discover.outputs.tag }}
           submodules: recursive
+          persist-credentials: false
       - uses: ./.github/actions/make-target
         with:
           make-target: compile-${{ matrix.name }}
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bin-${{ matrix.name }}
           path: out/
@@ -139,14 +162,16 @@ jobs:
     needs: [inputs, discover, compile]
     if: needs.discover.outputs.has_release == 'true'
     runs-on: ${{ needs.inputs.outputs.runner }}
+    permissions:
+      contents: write  # uploads binaries + stamps the release tag
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with: { path: artifacts/ }
       - name: Flatten assets
         run: |
           mkdir -p release
           for runner in bin-macos bin-ios bin-android bin-linux bin-windows; do
-            for pdir in artifacts/$runner/*/; do
+            for pdir in "artifacts/$runner"/*/; do
               [ -d "$pdir" ] || continue
               p=$(basename "$pdir")
               for lib in "$pdir"*; do
@@ -190,33 +215,38 @@ jobs:
             exit 1
           fi
           echo "All ${#EXPECTED[@]} binaries present"
-      - uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ needs.discover.outputs.tag }}
-          files: release/*
+      - name: Upload binaries to the release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/checkout@v7
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.discover.outputs.tag }}
+        # gh ships on the runner; the release already exists (discover
+        # created it), so just upload the binaries, clobbering on rerun.
+        run: gh release upload "$TAG" release/* --clobber
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: '${{ needs.discover.outputs.tag }}'
           fetch-depth: 0
+          persist-credentials: false
       - name: Add git install snippet
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash tool/release.sh --add-git-install ${{ needs.discover.outputs.tag }}
+          TAG: ${{ needs.discover.outputs.tag }}
+        run: bash tool/ci/release.sh --add-git-install "$TAG"
       - name: Stamp asset hashes into tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash tool/release.sh --update-tag-hashes ${{ needs.discover.outputs.tag }}
+          TAG: ${{ needs.discover.outputs.tag }}
+        run: bash tool/ci/release.sh --update-tag-hashes "$TAG"
       - name: Preview pub.dev changelog
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.discover.outputs.tag }}
         run: |
           echo "═══════════════════════════════════════════════════"
           echo "  CHANGELOG PREVIEW — review before approving publish"
           echo "═══════════════════════════════════════════════════"
           echo ""
-          bash tool/release.sh --stamp-changelog ${{ needs.discover.outputs.tag }}
+          bash tool/ci/release.sh --stamp-changelog "$TAG"
           cat CHANGELOG.md
 
   # ── Publish to pub.dev ───────────────────────────────────────────
@@ -226,26 +256,37 @@ jobs:
     if: needs.discover.outputs.has_release == 'true'
     runs-on: ${{ needs.inputs.outputs.runner }}
     environment: ${{ inputs.branch || github.ref_name }}
+    permissions:
+      contents: write  # ephemeral stamp commit + release-notes install snippet
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: '${{ needs.discover.outputs.tag }}'
           fetch-depth: 0
-      - uses: dart-lang/setup-dart@v1
+          persist-credentials: false
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
       - name: Install fvm + project SDK
-        run: dart pub global activate fvm && fvm install
+        # Pin the fvm TOOL (the Flutter SDK is pinned in .fvmrc). Version
+        # lives in tool/versions.env so it never floats on @latest.
+        run: |
+          source tool/versions.env
+          dart pub global activate fvm "$FVM_VERSION"
+          fvm install
       - name: Build filtered changelog
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash tool/release.sh --stamp-changelog ${{ needs.discover.outputs.tag }}
+          TAG: ${{ needs.discover.outputs.tag }}
+        run: bash tool/ci/release.sh --stamp-changelog "$TAG"
       - name: Flatten README banner for pub.dev
-        run: bash tool/release.sh --stamp-readme
+        run: bash tool/ci/release.sh --stamp-readme
       - name: Ephemeral commit (clean git for pub publish)
+        env:
+          TAG: ${{ needs.discover.outputs.tag }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "stamp: ${{ needs.discover.outputs.tag }}" --allow-empty
+          git commit -m "stamp: $TAG" --allow-empty
       - name: Materialize pub.dev credentials
         env:
           PUB_CREDS: ${{ secrets.PUB_CREDENTIALS }}
@@ -257,4 +298,5 @@ jobs:
       - name: Add pub.dev install snippet
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash tool/release.sh --add-pub-install ${{ needs.discover.outputs.tag }}
+          TAG: ${{ needs.discover.outputs.tag }}
+        run: bash tool/ci/release.sh --add-pub-install "$TAG"

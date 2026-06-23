@@ -9,6 +9,7 @@ Contributions are welcome.
 ```bash
 git clone --recursive https://github.com/whuppi/pdf_manipulator.git
 cd pdf_manipulator
+make hooks               # activates commit-msg + pre-commit (run once)
 fvm install              # downloads the SDK version pinned in .fvmrc
 fvm dart pub get
 fvm dart test            # build hook compiles Rust from source automatically

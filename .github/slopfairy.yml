@@ -16,7 +16,7 @@ reviews:
     - path: "vendor/**"
       instructions: "Vendored C bindings from pdf_oxide. Do not suggest style changes"
     - path: ".github/**"
-      instructions: "Check workflow security (no pull_request_target misuse, no secrets in forks)"
+      instructions: "Check workflow security: pull_request_target must not check out PR-head code, and untrusted github.event.* values (PR title, branch refs, comment bodies) must never be interpolated into a run: block — they belong in env:. Also flag rolling action refs (@main/@stable) and any secret exposed to fork code."
 
 triage:
   auto_label: true
@@ -32,7 +32,8 @@ personality:
     - Cross-platform: Android, iOS, macOS, Windows, Linux, Web (WASM)
     - Powered by pdf_oxide (Rust) via FFI. Native assets build hook in hook/build.dart
     - Conventional commits enforced (feat:, fix:, ci:, chore:, docs:, etc.)
-    - Release-please manages versions and changelogs
+    - Versions and changelogs are managed by the repo's own release tooling
+      (tool/ci/release.sh), gated on pushes to dev/prod — NOT release-please
     - Default branch is dev, prod branch is for stable releases
     - Linear chain: feature → dev → prod. No skipping.
 

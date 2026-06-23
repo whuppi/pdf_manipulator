@@ -60,9 +60,11 @@ MODE="${1:---help}"
 TAG="${2:-}"
 VERSION="${TAG:+${TAG#v}}"
 
-source "$SCRIPT_DIR/lib.sh"
+# lib.sh is shared with the build scripts in tool/ — one level up from tool/ci/.
+source "$SCRIPT_DIR/../lib.sh"
+ensure_jq  # this script parses pub.dev + build.json JSON via jq
 
-REPO="${GITHUB_REPOSITORY:-$(_json_get repo)}"
+REPO="${GITHUB_REPOSITORY:-$(json_get '.repo')}"
 REPO_URL="https://github.com/$REPO"
 PKG_NAME="pdf_manipulator"
 
@@ -159,9 +161,8 @@ pick_source_file() {
 
 # Fetch every published version of the package from pub.dev.
 get_published_versions() {
-  curl -sS "https://pub.dev/api/packages/$PKG_NAME" 2>/dev/null \
-    | grep -oE '"version":"[^"]*"' \
-    | sed 's/"version":"//;s/"//' \
+  curl -sS --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 30 "https://pub.dev/api/packages/$PKG_NAME" 2>/dev/null \
+    | jq -r '.versions[].version // empty' 2>/dev/null \
     | sort -t. -k1,1n -k2,2n -k3,3n
 }
 
@@ -216,20 +217,18 @@ JQ
     local src="web_assets/$local_name"
     if [ -f "$src" ]; then
       local hash
-      hash=$( (sha256sum "$src" 2>/dev/null || shasum -a 256 "$src") | cut -d' ' -f1)
+      hash=$(sha256_file "$src")
       web_entries+="  '$asset_name': '$hash',"$'\n'
       echo "  $asset_name ... ${hash:0:12}..." >&2
     fi
   done < <(
-    # Read web assets from build.json, skip wasmBuildOutputs.
-    # Pure bash — no python3, no jq.
-    wasm_outputs=$(sed -n 's/.*"wasmBuildOutputs": *\[\(.*\)\].*/\1/p' build.json | tr -d '" ')
-    sed -n '/"web"/,/}/p' build.json | grep ':' | grep -v '"web"' | while IFS=: read -r key val; do
-      local_name=$(echo "$key" | tr -d ' "')
-      asset_name=$(echo "$val" | tr -d ' ",' )
-      echo "$wasm_outputs" | grep -qw "$local_name" && continue
-      echo "$local_name	$asset_name"
-    done
+    # Read web assets from build.json, skipping the wasmBuildOutputs.
+    wasm_outputs=$(jq -r '.wasmBuildOutputs | join(" ")' build.json)
+    jq -r '.web | to_entries[] | "\(.key)\t\(.value)"' build.json \
+      | while IFS=$'\t' read -r local_name asset_name; do
+          grep -qw "$local_name" <<< "$wasm_outputs" && continue
+          echo "$local_name	$asset_name"
+        done
   )
 
   local all_entries
@@ -253,7 +252,7 @@ JQ
   mv "$tmp" "$hash_file"
 
   local count
-  count=$(echo "$all_entries" | grep -c . || true)
+  count=$(grep -c . <<< "$all_entries" || true)
   echo "  $hash_file → $count hashes"
 }
 
@@ -331,8 +330,8 @@ commits_collapsible() {
   [ -z "$commits" ] && return
 
   local count list
-  count=$(echo "$commits" | grep -c . || true)
-  list=$(echo "$commits" | sed 's/^/- /')
+  count=$(grep -c . <<< "$commits" || true)
+  list=$(sed 's/^/- /' <<< "$commits")
   printf '<details><summary>Commits since %s (%s)</summary>\n\n%s\n\n</details>\n' \
     "${from:-initial}" "$count" "$list"
 }
@@ -511,7 +510,7 @@ cmd_gate() {
       local versions_before
       versions_before=$(git show "${BEFORE}:$target_file" 2>/dev/null \
         | sed -n 's/^## \([^ ]*\).*/\1/p' || true)
-      new_version=$(comm -23 <(echo "$versions_after" | sort) <(echo "$versions_before" | sort) | head -1)
+      new_version=$(comm -23 <(sort <<< "$versions_after") <(sort <<< "$versions_before") | head -1)
     fi
 
     if [[ -n "$new_version" ]]; then
@@ -612,7 +611,7 @@ cmd_discover() {
   fi
 
   if ! grep -q '^  - /vendor/\*\*$' pubspec.yaml; then
-    sed -i.bak '/^false_secrets:/a\  - /vendor/**' pubspec.yaml && rm -f pubspec.yaml.bak
+    awk '/^false_secrets:/{print; print "  - /vendor/**"; next} 1' pubspec.yaml > pubspec.yaml.tmp && mv pubspec.yaml.tmp pubspec.yaml
     echo "  pubspec.yaml += false_secrets /vendor/**"
   fi
 
@@ -852,7 +851,7 @@ dependencies:
 # So a stable heading is NOT satisfied by its `-dev.0` prerelease tag —
 # they're different version strings, hence different tags.
 #
-# This is NOT the pub.dev fold (§3): that one asks "is it on pub.dev?";
+# This is NOT the pub.dev fold (the one that asks "is it on pub.dev?");
 # this one asks "does it exist as a release at all?". Orthogonal.
 #
 # Run it at PR time (block the bad merge) AND in the release workflow

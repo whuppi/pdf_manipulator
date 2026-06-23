@@ -4,7 +4,7 @@ description: Cache WASM build output to skip recompilation.
 runs:
   using: composite
   steps:
-    - uses: actions/cache@v5
+    - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       id: wasm-cache
       with:
         path: web_assets/pdf_oxide_bg.wasm

@@ -16,7 +16,7 @@ FLUTTER="${FLUTTER:-fvm flutter}"
 # Enforce via grep. Every lint must be fixed for real — no suppressions.
 
 echo "=== Dart: check for banned // ignore: comments ==="
-IGNORES=$(grep -rn '// ignore:\|// ignore_for_file:' "$PKG_ROOT/lib/" "$PKG_ROOT/bin/" "$PKG_ROOT/test/" "$PKG_ROOT/hook/" 2>/dev/null | grep -v '\.g\.dart' || true)
+IGNORES=$(grep -rnE '// ignore:|// ignore_for_file:' "$PKG_ROOT/lib/" "$PKG_ROOT/bin/" "$PKG_ROOT/test/" "$PKG_ROOT/hook/" 2>/dev/null | grep -v '\.g\.dart' || true)
 if [ -n "$IGNORES" ]; then
   echo "BANNED: // ignore: comments found. Fix the lint, don't suppress it."
   echo "$IGNORES"
@@ -75,6 +75,7 @@ echo "=== Dart: analyze example/ ==="
 # ── Rust analysis (warnings in our patched lines only) ──────────────
 
 source "$SCRIPT_DIR/lib.sh"
+ensure_jq  # cargo-warning filtering + build.json reads parse JSON via jq
 
 NATIVE_FEATURES=$(bash "$SCRIPT_DIR/compile_rust.sh" --features native)
 WASM_FEATURES=$(bash "$SCRIPT_DIR/compile_rust.sh" --features wasm)
@@ -82,8 +83,8 @@ WASM_FEATURES=$(bash "$SCRIPT_DIR/compile_rust.sh" --features wasm)
 # Filter cargo warnings to only lines we changed vs upstream base tag.
 _filter_warnings() {
   local diff_text="$1"
-  # Membership via temp file, not `declare -A` — macOS ships bash 3.2,
-  # which has no associative arrays.
+  # Membership via temp file, not an associative array — macOS ships
+  # bash 3.2, which doesn't have them.
   local changed_keys
   changed_keys=$(mktemp)
   local cur_file=""
@@ -94,8 +95,8 @@ _filter_warnings() {
         ;;
       "@@"*)
         local start count
-        start=$(echo "$line" | sed -n 's/.*+\([0-9][0-9]*\).*/\1/p')
-        count=$(echo "$line" | sed -n 's/.*+[0-9][0-9]*,\([0-9][0-9]*\).*/\1/p')
+        start=$(sed -n 's/.*+\([0-9][0-9]*\).*/\1/p' <<< "$line")
+        count=$(sed -n 's/.*+[0-9][0-9]*,\([0-9][0-9]*\).*/\1/p' <<< "$line")
         count=${count:-1}
         [ "$count" -eq 0 ] && count=1
         for (( i=start; i<start+count; i++ )); do
@@ -107,12 +108,12 @@ _filter_warnings() {
 
   local warns=0 skipped=0
   while IFS= read -r json_line; do
-    echo "$json_line" | grep -q '"reason":"compiler-message"' || continue
-    echo "$json_line" | grep -q '"level":"warning"' || continue
+    grep -q '"reason":"compiler-message"' <<< "$json_line" || continue
+    grep -q '"level":"warning"' <<< "$json_line" || continue
     local span_file span_line msg_text
-    span_file=$(echo "$json_line" | grep -oE '"file_name":"[^"]*"' | head -1 | sed 's/"file_name":"//;s/"//')
-    span_line=$(echo "$json_line" | grep -oE '"line_start":[0-9]+' | head -1 | sed 's/"line_start"://')
-    msg_text=$(echo "$json_line" | sed -n 's/.*"message":"\([^"]*\)".*/\1/p' | head -1)
+    span_file=$(jq -r '.message.spans[0].file_name // empty' <<< "$json_line" 2>/dev/null)
+    span_line=$(jq -r '.message.spans[0].line_start // empty' <<< "$json_line" 2>/dev/null)
+    msg_text=$(jq -r '.message.message // empty' <<< "$json_line" 2>/dev/null)
     if [ -z "$span_file" ] || [ -z "$span_line" ]; then
       skipped=$((skipped + 1))
       continue
@@ -142,9 +143,9 @@ check_rust_warnings() {
   local branch base_tag
   branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
   if [[ "$branch" == *"/"* ]]; then
-    base_tag="v$(echo "$branch" | cut -d/ -f2 | sed 's/-patches$//')"
+    base_tag="v$(cut -d/ -f2 <<< "$branch" | sed 's/-patches$//')"
   else
-    base_tag="v0.3.55"
+    base_tag=$(json_get '.baseTag')
   fi
 
   local diff_output

@@ -14,29 +14,59 @@ runs:
       id: sub
       shell: bash
       run: |
-        echo "pdf_oxide=$(git rev-parse HEAD:vendor/pdf_oxide)" >> $GITHUB_OUTPUT
-        echo "office_oxide=$(git rev-parse HEAD:vendor/office_oxide)" >> $GITHUB_OUTPUT
+        echo "pdf_oxide=$(git rev-parse HEAD:vendor/pdf_oxide)" >> "$GITHUB_OUTPUT"
+        echo "office_oxide=$(git rev-parse HEAD:vendor/office_oxide)" >> "$GITHUB_OUTPUT"
 
     - name: Cache cargo registry
-      uses: actions/cache@v5
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       with:
         path: |
+          ~/.cargo/registry/index
           ~/.cargo/registry/cache
           ~/.cargo/git/db
         key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}
         restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-
 
-    - uses: dtolnay/rust-toolchain@stable
-      with:
-        targets: ${{ inputs.targets }}
-    - uses: mozilla-actions/sccache-action@v0.0.10
-    - shell: bash
+    # Drive the runner's pre-installed rustup directly. Do not swap in
+    # dtolnay/rust-toolchain: it ships no version tags, so it can only be
+    # pinned to a rolling master SHA.
+    - name: Install Rust toolchain
+      shell: bash
+      env:
+        INPUTS_TARGETS: ${{ inputs.targets }}
       run: |
-        echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
-        echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-        echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV
-        echo "SUBMODULE_PDF_OXIDE=${{ steps.sub.outputs.pdf_oxide }}" >> $GITHUB_ENV
-        echo "SUBMODULE_OFFICE_OXIDE=${{ steps.sub.outputs.office_oxide }}" >> $GITHUB_ENV
+        rustup toolchain install stable --profile minimal --no-self-update
+        rustup default stable
+        # targets input is comma- or space-separated; empty → no extra targets
+        for t in $(tr ',' ' ' <<< "$INPUTS_TARGETS"); do
+          rustup target add "$t"
+        done
+        rustc --version
+    - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+    - shell: bash
+      env:
+        STEPS_SUB_OUTPUTS_PDF_OXIDE: ${{ steps.sub.outputs.pdf_oxide }}
+        STEPS_SUB_OUTPUTS_OFFICE_OXIDE: ${{ steps.sub.outputs.office_oxide }}
+      run: |
+        {
+          echo "SCCACHE_GHA_ENABLED=true"
+          echo "RUSTC_WRAPPER=sccache"
+          echo "CARGO_INCREMENTAL=0"
+          # crates.io fetches occasionally drop mid-transfer on CI (curl 56,
+          # connection reset). cargo's default is 3 retries; 10 rides out a
+          # short registry blip instead of failing the whole build.
+          echo "CARGO_NET_RETRY=10"
+        } >> "$GITHUB_ENV"
+        # Submodule pins arrive via env (hoisted from step outputs). Heredoc
+        # with a random delimiter so a stray newline can't inject entries.
+        {
+          echo "SUBMODULE_PDF_OXIDE<<__SUB_PDF__"
+          echo "${STEPS_SUB_OUTPUTS_PDF_OXIDE}"
+          echo "__SUB_PDF__"
+          echo "SUBMODULE_OFFICE_OXIDE<<__SUB_OFFICE__"
+          echo "${STEPS_SUB_OUTPUTS_OFFICE_OXIDE}"
+          echo "__SUB_OFFICE__"
+        } >> "$GITHUB_ENV"
 
     # sccache for build hooks (dart-lang/native#3396 workaround).
     #
@@ -65,5 +95,13 @@ runs:
           SCCACHE_BIN="$(cygpath -m "$SCCACHE_BIN")"
         fi
         mkdir -p "$HOME/.cargo"
-        printf '\n[build]\nrustc-wrapper = "%s"\n' "$SCCACHE_BIN" >> "$HOME/.cargo/config.toml"
+        CFG="$HOME/.cargo/config.toml"
+        # A fresh runner has no config.toml, so the append creates it. Guard
+        # the rare pre-existing case: a second [build] header is a TOML error,
+        # so insert the wrapper UNDER the existing table instead.
+        if [ -f "$CFG" ] && grep -q '^\[build\]' "$CFG"; then
+          sed -i.bak '/^\[build\]/a rustc-wrapper = "'"$SCCACHE_BIN"'"' "$CFG" && rm -f "$CFG.bak"
+        else
+          printf '\n[build]\nrustc-wrapper = "%s"\n' "$SCCACHE_BIN" >> "$CFG"
+        fi
         echo "sccache: server started, cargo config written ($SCCACHE_BIN)"

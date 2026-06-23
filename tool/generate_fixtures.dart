@@ -2,15 +2,21 @@
 //
 // Run via `make fixtures` (test targets depend on it). Flow:
 //
-//   1. Hash the generator's INPUTS (this file, the catalog, the photo
-//      asset). If test/fixtures/generated/.stamp matches → fresh, exit.
-//      File existence is never proof; the stamp is (same rule as the
-//      binary resolver).
-//   2. Otherwise wipe generated/, build every FixtureSpec with
-//      dart-pdf, and emit one Dart file per fixture: bytes as a base64
-//      constant + the spec's declared truths as a const record. Tests
-//      import these files — no dart:io ever runs inside a test, and VM
-//      and browser consume identical bytes through identical code.
+//   1. Hash the generator's INPUTS (this file, test/fixtures/catalog.dart,
+//      pubspec.lock). If test/fixtures/generated/.stamp matches → fresh,
+//      exit. File existence is never proof of freshness; the input hash is
+//      (same discipline as the binary resolver).
+//   2. Otherwise wipe generated/, build every FixtureSpec with dart-pdf,
+//      and emit one Dart file per fixture: bytes as a base64 constant +
+//      the spec's declared truths as a const record. Tests import these
+//      files — no dart:io ever runs inside a test, and VM and browser
+//      consume identical bytes through identical code.
+//
+// generated/ is gitignored — fixtures are NEVER committed. The stamp is
+// purely a local incremental-build cache: a fresh CI runner has no stamp,
+// so CI always regenerates from the current dart-pdf. pubspec.lock is an
+// input (committed, so identical everywhere) so a local `pub upgrade` that
+// moves dart-pdf forces a rebuild instead of leaving stale local fixtures.
 //
 // This is a dev tool: dart:io is at home here, never in tests.
 
@@ -24,7 +30,13 @@ import '../test/fixtures/catalog.dart';
 
 const _generatedDir = 'test/fixtures/generated';
 
-final _inputs = ['tool/generate_fixtures.dart', 'test/fixtures/catalog.dart'];
+// pubspec.lock is an input so a dart-pdf (or transitive) bump invalidates
+// the stamp and forces a rebuild.
+final _inputs = [
+  'tool/generate_fixtures.dart',
+  'test/fixtures/catalog.dart',
+  'pubspec.lock',
+];
 
 Future<void> main() async {
   final stamp = _stampInputs();
@@ -99,7 +111,10 @@ ${exports.join('\n')}
 String _stampInputs() {
   final bytes = <int>[];
   for (final path in _inputs) {
-    bytes.addAll(File(path).readAsBytesSync());
+    // Skip an absent input rather than crash — every committed input is
+    // present, but this keeps the stamp robust if one ever isn't.
+    final file = File(path);
+    if (file.existsSync()) bytes.addAll(file.readAsBytesSync());
   }
   return sha256.convert(bytes).toString();
 }

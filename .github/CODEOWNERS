@@ -12,7 +12,17 @@
 /CHANGELOG.md              @chaudharydeepanshu
 /CHANGELOG.pre.md          @chaudharydeepanshu
 /pubspec.yaml              @chaudharydeepanshu
+/build.json                @chaudharydeepanshu
+# Lockfiles are bot-refreshed (upgrade-check.yml); contributors don't hand-edit them.
+/pubspec.lock              @chaudharydeepanshu
+/example/pubspec.lock      @chaudharydeepanshu
 
 # CI and config: repo owner only
 /.github/                  @chaudharydeepanshu
 /.githooks/                @chaudharydeepanshu
+
+# Build + release + supply-chain machinery: repo owner only.
+# Holds the pinned sha256s (versions.env), the fail-closed download gate
+# (fetch_verified.sh), the publish pipeline + the hash-writing bump bot
+# (tool/ci/). A non-owner edit here is a supply-chain or release risk.
+/tool/                     @chaudharydeepanshu

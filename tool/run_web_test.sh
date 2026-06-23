@@ -31,14 +31,19 @@ LOG="/tmp/_pdf_web_test.log"
 
 chromedriver --port=4444 &>/dev/null &
 CD_PID=$!
-sleep 2
+# Wait for chromedriver to bind :4444 by polling its status endpoint, not a
+# fixed sleep that races on a loaded runner.
+for _ in $(seq 1 50); do
+  curl -fsS --max-time 1 http://127.0.0.1:4444/status >/dev/null 2>&1 && break
+  sleep 0.2
+done
 
 
 # ═══════════════════════════════════════════════════════════════════
 # 2. Run flutter drive (-d web-server, single Chrome via chromedriver)
 # ═══════════════════════════════════════════════════════════════════
 
-cd example
+cd example || exit 1
 "${FLUTTER[@]}" drive \
     --driver=test_driver/integration_test.dart \
     --target=integration_test/pdf_smoke_test.dart \
@@ -56,7 +61,7 @@ DRIVE_PID=$!
 # ═══════════════════════════════════════════════════════════════════
 
 while kill -0 "$DRIVE_PID" 2>/dev/null; do
-    if grep -q 'All tests passed\|Application finished' "$LOG" 2>/dev/null; then
+    if grep -qE 'All tests passed|Application finished' "$LOG" 2>/dev/null; then
         break
     fi
     sleep 0.3

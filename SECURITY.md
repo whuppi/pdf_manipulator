@@ -22,6 +22,20 @@ Report privately via [GitHub Security Advisories](https://github.com/whuppi/pdf_
 
 - **Upstream Rust engine bugs** not triggered through this package — report to [yfedoseev/pdf_oxide](https://github.com/yfedoseev/pdf_oxide).
 
+## Operational notes (known, accepted)
+
+These are conscious trade-offs, documented so they aren't mistaken for oversights:
+
+- **Prebuilt binaries depend on the main repo's Releases.** Source is baked into each release tag (it survives even if the engine submodule repos are deleted), but the prebuilt download URLs point at this repo's Releases. Deleting the main repo 404s them, so fresh installs fall back to compile-from-source (which needs Rust).
+
+- **pub.dev secret scanning is disabled for `vendor/**`.** The vendored engine source is excluded from publish-time secret scanning, so a secret accidentally committed into the engine would not be flagged. Self-inflicted only — we control the engine source.
+
+- **CI runs Chrome with `--no-sandbox`.** Standard for CI runners (no SUID sandbox available); only the trusted example app is ever loaded, and the runner is ephemeral.
+
+- **`git:`-ref consumers fetch the engine at build time.** Depending on this package by git ref initializes the engine submodules from `whuppi/*`. The supply-chain trust is the same as any git dependency.
+
+- **Some pinned binary hashes are self-computed, not upstream-published.** FVM (leoafarias/fvm) and Chrome for Testing publish no digests, so their `tool/versions.env` sha256 pins come from the assets we first downloaded, not from an upstream source of truth. The pins still catch a later swap (a repointed tag, a CDN substitution), but the first download defines trust: had a release already been compromised when `upgrade.sh` first fetched it, the bad hash would simply be recorded. Inherent to the first-to-download problem; not closable without upstream digest publication.
+
 ## Response
 
 Valid reports are fixed and shipped as patch versions.

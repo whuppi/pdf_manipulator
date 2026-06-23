@@ -134,8 +134,11 @@ runs:
       shell: bash
       run: |
         PREFIX=""
-        [ "${{ inputs.headless-display }}" = "true" ] && PREFIX="xvfb-run "
-        ${PREFIX}/tmp/make-run.sh "${{ inputs.make-target }}"
+        [ "${INPUTS_HEADLESS_DISPLAY}" = "true" ] && PREFIX="xvfb-run "
+        ${PREFIX}/tmp/make-run.sh "${INPUTS_MAKE_TARGET}"
+      env:
+        INPUTS_HEADLESS_DISPLAY: ${{ inputs.headless-display }}
+        INPUTS_MAKE_TARGET: ${{ inputs.make-target }}
 
     # Emulator path — the SAME script, executed inside the live emulator
     # by the capability's teardown-watchdog wrapper.
