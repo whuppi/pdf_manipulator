@@ -6,10 +6,9 @@
 # are real, official GitHub images, not self-hosted runners.
 self-hosted-runner:
   labels:
-    # Windows Server 2025 + Visual Studio 2026 — GA since 2026-05-07.
-    # GitHub is migrating windows-latest/windows-2025 onto it by ~2026-06-15.
-    # actions/runner-images issue 14016.
+    # Windows Server 2025 + Visual Studio 2026 — the image windows-latest is
+    # migrating onto. actions/runner-images issue 14016.
     - windows-2025-vs2026
-    # macOS 15 on Intel x86_64 — GitHub's last Intel image, supported until
-    # ~Fall 2027. actions/runner-images issue 13045.
+    # macOS 15 on Intel x86_64 — GitHub's last Intel image, being phased out.
+    # actions/runner-images issue 13045.
     - macos-15-intel
