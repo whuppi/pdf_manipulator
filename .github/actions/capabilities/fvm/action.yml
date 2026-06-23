@@ -97,6 +97,9 @@ runs:
               'exec cmd //c "$(cygpath -w "$here/fvm.bat")" "$@"' \
               > "$DEST/fvm"
             chmod +x "$DEST/fvm"
+            # The \f reads like an escape but is literal here: GitHub runs this
+            # step as bash, whose echo leaves backslashes alone (C:\fvm, not
+            # C: + form-feed). Keep echo, not printf — see the zizmor note below.
             echo "C:\fvm" >> "$GITHUB_PATH"
             ;;
           *)
