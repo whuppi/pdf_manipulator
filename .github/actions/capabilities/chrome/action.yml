@@ -18,9 +18,9 @@ runs:
         echo "Chrome for Testing: $CHROME_VERSION (pinned, verified)"
         INSTALL_DIR="/opt/chrome-for-testing"
         sudo mkdir -p "$INSTALL_DIR"
-        bash tool/fetch_verified.sh "$base/chrome-linux64.zip" "$CHROME_SHA256_LINUX64" /tmp/chrome.zip
+        bash tool/fetch_verified.sh "$base/chrome-linux64.zip" "$CHROME_SHA256_LINUX_X64" /tmp/chrome.zip
         sudo unzip -qo /tmp/chrome.zip -d "$INSTALL_DIR" && rm /tmp/chrome.zip
-        bash tool/fetch_verified.sh "$base/chromedriver-linux64.zip" "$CHROMEDRIVER_SHA256_LINUX64" /tmp/chromedriver.zip
+        bash tool/fetch_verified.sh "$base/chromedriver-linux64.zip" "$CHROMEDRIVER_SHA256_LINUX_X64" /tmp/chromedriver.zip
         sudo unzip -qo /tmp/chromedriver.zip -d "$INSTALL_DIR" && rm /tmp/chromedriver.zip
         sudo chmod +x "$INSTALL_DIR/chrome-linux64/chrome" "$INSTALL_DIR/chromedriver-linux64/chromedriver"
         sudo apt-get remove -y google-chrome-stable 2>/dev/null || true
@@ -39,11 +39,11 @@ runs:
         source tool/versions.env
         base="https://storage.googleapis.com/chrome-for-testing-public/$CHROME_VERSION/mac-arm64"
         echo "Chrome for Testing: $CHROME_VERSION (pinned, verified)"
-        bash tool/fetch_verified.sh "$base/chrome-mac-arm64.zip" "$CHROME_SHA256_MAC_ARM64" /tmp/chrome.zip
+        bash tool/fetch_verified.sh "$base/chrome-mac-arm64.zip" "$CHROME_SHA256_MACOS_ARM64" /tmp/chrome.zip
         unzip -qo /tmp/chrome.zip -d /tmp/chrome-install && rm /tmp/chrome.zip
         sudo rm -rf "/Applications/Google Chrome for Testing.app"
         sudo mv "/tmp/chrome-install/chrome-mac-arm64/Google Chrome for Testing.app" "/Applications/Google Chrome for Testing.app"
-        bash tool/fetch_verified.sh "$base/chromedriver-mac-arm64.zip" "$CHROMEDRIVER_SHA256_MAC_ARM64" /tmp/chromedriver.zip
+        bash tool/fetch_verified.sh "$base/chromedriver-mac-arm64.zip" "$CHROMEDRIVER_SHA256_MACOS_ARM64" /tmp/chromedriver.zip
         unzip -qo /tmp/chromedriver.zip -d /tmp/driver-install && rm /tmp/chromedriver.zip
         sudo mv /tmp/driver-install/chromedriver-mac-arm64/chromedriver /usr/local/bin/chromedriver
         sudo chmod +x /usr/local/bin/chromedriver
@@ -59,9 +59,9 @@ runs:
         echo "Chrome for Testing: $CHROME_VERSION (pinned, verified)"
         INSTALL_DIR="$RUNNER_TEMP/chrome-for-testing"
         mkdir -p "$INSTALL_DIR"
-        bash tool/fetch_verified.sh "$base/chrome-win64.zip" "$CHROME_SHA256_WIN64" "$RUNNER_TEMP/chrome.zip"
+        bash tool/fetch_verified.sh "$base/chrome-win64.zip" "$CHROME_SHA256_WINDOWS_X64" "$RUNNER_TEMP/chrome.zip"
         unzip -qo "$RUNNER_TEMP/chrome.zip" -d "$INSTALL_DIR" && rm "$RUNNER_TEMP/chrome.zip"
-        bash tool/fetch_verified.sh "$base/chromedriver-win64.zip" "$CHROMEDRIVER_SHA256_WIN64" "$RUNNER_TEMP/chromedriver.zip"
+        bash tool/fetch_verified.sh "$base/chromedriver-win64.zip" "$CHROMEDRIVER_SHA256_WINDOWS_X64" "$RUNNER_TEMP/chromedriver.zip"
         unzip -qo "$RUNNER_TEMP/chromedriver.zip" -d "$INSTALL_DIR" && rm "$RUNNER_TEMP/chromedriver.zip"
         # dart test and ChromeDriver look for Chrome at hardcoded paths.
         # Copy entire Chrome for Testing directory (not just exe — Chrome

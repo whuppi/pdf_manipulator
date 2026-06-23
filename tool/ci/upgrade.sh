@@ -196,12 +196,12 @@ if [ -n "$chrome_latest" ] && [ "$chrome_latest" != "$CHROME_VERSION" ]; then
     if [ -n "$cl" ] && [ -n "$dl" ] && [ -n "$cm" ] && [ -n "$dm" ] && [ -n "$cw" ] && [ -n "$dw" ]; then
       drift=1; echo "chrome: $CHROME_VERSION -> $chrome_latest (+ 6 sha256)"
       set_kv CHROME_VERSION "$chrome_latest" "$VERSIONS"
-      set_kv CHROME_SHA256_LINUX64 "$cl" "$VERSIONS"
-      set_kv CHROME_SHA256_MAC_ARM64 "$cm" "$VERSIONS"
-      set_kv CHROME_SHA256_WIN64 "$cw" "$VERSIONS"
-      set_kv CHROMEDRIVER_SHA256_LINUX64 "$dl" "$VERSIONS"
-      set_kv CHROMEDRIVER_SHA256_MAC_ARM64 "$dm" "$VERSIONS"
-      set_kv CHROMEDRIVER_SHA256_WIN64 "$dw" "$VERSIONS"
+      set_kv CHROME_SHA256_LINUX_X64 "$cl" "$VERSIONS"
+      set_kv CHROME_SHA256_MACOS_ARM64 "$cm" "$VERSIONS"
+      set_kv CHROME_SHA256_WINDOWS_X64 "$cw" "$VERSIONS"
+      set_kv CHROMEDRIVER_SHA256_LINUX_X64 "$dl" "$VERSIONS"
+      set_kv CHROMEDRIVER_SHA256_MACOS_ARM64 "$dm" "$VERSIONS"
+      set_kv CHROMEDRIVER_SHA256_WINDOWS_X64 "$dw" "$VERSIONS"
     else
       echo "chrome: $chrome_latest available but an asset download failed — bump by hand"
     fi
