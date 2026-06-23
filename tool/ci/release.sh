@@ -125,10 +125,18 @@ gh_output() {
   echo "  output: $1=$2"
 }
 
-# Configure the git identity used for CI commits.
+# Configure the git identity + push auth used for CI commits.
 git_ci_identity() {
   git config user.name  "github-actions[bot]"
   git config user.email "github-actions[bot]@users.noreply.github.com"
+
+  # The release checkout uses persist-credentials:false (zizmor hardening leaves
+  # no token in git config for later steps to leak), so these pushes have no auth.
+  # Wire gh's token in as a credential helper — the same GH_TOKEN `gh release`
+  # already uses. Skipped on a local dry run, where the push uses your own creds.
+  if [ -n "${GH_TOKEN:-}" ]; then
+    gh auth setup-git
+  fi
 }
 
 # Extract one version's entry (body only, heading excluded) from a
