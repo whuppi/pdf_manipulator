@@ -24,6 +24,9 @@
 # Exit:    0 = every started test finished success
 #          1 = real failure(s) or an incomplete (crashed) run
 #          2 = no usable report (missing/empty/no test events)
+#          3 = reporter format drift (testDone events seen but no ids parsed —
+#              truncation corrupts one line, never all, so zero ids means the
+#              JSON shape changed and the extractor went blind)
 # ────────────────────────────────────────────────────────────────────
 set -uo pipefail
 
@@ -76,6 +79,16 @@ awk '
     if (ndone + 0 == 0) {
       print "❌ report contained no testDone events — no tests ran."
       exit 2
+    }
+    # Wholesale format-drift guard. Truncation corrupts at most the final line,
+    # so testDone events with not one parsed id means the reporter JSON shape
+    # changed and the id/result extractors went blind — fail loud rather than
+    # green a run we can no longer read. (One bad line stays an incomplete, not
+    # this: a real multi-test run always parses some ids.) No apostrophes in awk
+    # comments — the program is single-quoted, so one would end the string.
+    if (count_keys(started) == 0 && count_keys(done) == 0) {
+      print "❌ reporter format drift — testDone events but no test ids parsed; update the extractor."
+      exit 3
     }
     if (fails + 0 > 0) {
       print "❌ real test failure(s):" failids
