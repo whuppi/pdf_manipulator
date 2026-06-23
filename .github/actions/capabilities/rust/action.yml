@@ -21,6 +21,7 @@ runs:
       uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       with:
         path: |
+          ~/.cargo/registry/index
           ~/.cargo/registry/cache
           ~/.cargo/git/db
         key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}
@@ -51,6 +52,10 @@ runs:
           echo "SCCACHE_GHA_ENABLED=true"
           echo "RUSTC_WRAPPER=sccache"
           echo "CARGO_INCREMENTAL=0"
+          # crates.io fetches occasionally drop mid-transfer on CI (curl 56,
+          # connection reset). cargo's default is 3 retries; 10 rides out a
+          # short registry blip instead of failing the whole build.
+          echo "CARGO_NET_RETRY=10"
         } >> "$GITHUB_ENV"
         # Submodule pins arrive via env (hoisted from step outputs). Heredoc
         # with a random delimiter so a stray newline can't inject entries.
