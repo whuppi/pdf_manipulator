@@ -142,11 +142,13 @@ runs:
         OUT=/tmp/emulator-cmd.log
         : > "$OUT"
 
-        # Run the command in the background, output to a log (plain
-        # redirect keeps $! = the command and $? = its real exit code,
-        # unlike a tee pipe). A separate tail streams the log live to the
-        # console so CI output is unchanged.
-        bash -c "$1" > "$OUT" 2>&1 &
+        # Run the command in the background, appending to a log (plain redirect
+        # keeps $! = the command and $? = its real exit code, unlike a tee pipe).
+        # Append-mode so the watchdog below shares this log without clobbering:
+        # both writers seek to EOF atomically, and the command writes a final
+        # tally AFTER the watchdog's kill line. A separate tail streams the log
+        # live to the console so CI output is unchanged.
+        bash -c "$1" >> "$OUT" 2>&1 &
         CMD_PID=$!
         tail -f "$OUT" 2>/dev/null &
         TAIL_PID=$!
@@ -197,6 +199,9 @@ runs:
             kill -9 "$kids" 2>/dev/null || true
           done
         }
+        # Append the watchdog's "WATCHDOG:" kill lines to the same log (EOF-atomic,
+        # no clobber). They stream live via the tail, and the reconciler reads
+        # them from $OUT to tell a watchdog-severed suite teardown from a real one.
         (
           while kill -0 $CMD_PID 2>/dev/null; do
             sleep 30
@@ -204,7 +209,7 @@ runs:
             kill_match uninstall adb
             kill_stuck_dds
           done
-        ) &
+        ) >> "$OUT" 2>&1 &
         WATCHDOG_PID=$!
 
         wait $CMD_PID 2>/dev/null
@@ -223,10 +228,12 @@ runs:
         # #187785). So neither the exit code nor the JSON result alone is
         # trusted. The reconciler reads the JSON for structure but takes the
         # captured console ($OUT) too: a test whose body printed its pass mark
-        # counts as passed even when its teardown was killed. A body that never
-        # passed still fails. Android is the only surface that needs this — the
-        # SwiftShader emulator (macOS-Intel) is where the teardown hangs;
-        # everything else trusts its plain exit code.
+        # counts as passed even when its teardown was killed, and the suite
+        # (tearDownAll) step — which has no body to mark — is treated as severed
+        # by the watchdog (its "WATCHDOG:" line is in $OUT) rather than a real
+        # failure. A body that never passed still fails. Android is the only
+        # surface that needs this — the SwiftShader emulator (macOS-Intel) is
+        # where the teardown hangs; everything else trusts its plain exit code.
         echo ""
         echo "raw command exit was $EXIT (ignored — reconciling from the JSON report)"
         WS="${GITHUB_WORKSPACE:-.}"

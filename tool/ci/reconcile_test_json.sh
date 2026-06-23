@@ -17,6 +17,11 @@
 #   It FAILS otherwise (a non-success result with no marker); a started test
 #   that never reported a result is INCOMPLETE (a crash mid-body).
 #
+#   Exception for the suite teardown: a failed (tearDownAll)/(tearDown) step has
+#   no body, so no marker. When the watchdog fired (it prints "WATCHDOG:"), that
+#   step is the kill severing the suite teardown — reported, non-fatal. With no
+#   watchdog kill it stays a real failure, and a failed setUp step always does.
+#
 # The marker is the body-pass signal: the Android device reporter prints
 # "✅ <name>" when a body finishes, so a passed body overrides a teardown-killed
 # result. The console arg is optional (the rule still works on the JSON result
@@ -49,14 +54,21 @@ fi
 # that lacks the marker), which leaves the rule reading the JSON result alone.
 BODYPASS="$(mktemp)"
 trap 'rm -f "$BODYPASS"' EXIT
+# WATCHDOG_FIRED: emulator-run.sh prints a "WATCHDOG:" line only when it kill -9s
+# a stuck DDS. If it fired, a failed *suite* teardown step (tearDownAll/tearDown,
+# which has no body and so no pass marker) is that kill severing it — collateral,
+# not a real failure. Without a watchdog kill, a teardown failure stays real.
+WATCHDOG_FIRED=0
 if [ -n "$CONSOLE" ] && [ -s "$CONSOLE" ]; then
   sed -n 's/^✅ //p' "$CONSOLE" | sed 's/[[:space:]]*$//' > "$BODYPASS"
+  grep -q 'WATCHDOG:' "$CONSOLE" && WATCHDOG_FIRED=1
 fi
 
-# Two input files: the body-pass names first (loaded while NR==FNR), then the
-# JSON report. Each JSON field is matched then stripped to its value, so
-# extraction survives whitespace or key-order changes in a future reporter.
-awk -v BPF="$BODYPASS" '
+# Two input files: the body-pass names first (the FILENAME==BPF block, which is
+# empty-file safe — NR==FNR would misread the report as names when no console is
+# given), then the JSON report. Each JSON field is matched then stripped to its
+# value, so extraction survives whitespace or key-order changes in a future reporter.
+awk -v BPF="$BODYPASS" -v WD="$WATCHDOG_FIRED" '
   FILENAME == BPF { if (length($0)) bodypass[$0] = 1; next }
 
   /"type":"testStart"/ {
@@ -87,10 +99,18 @@ awk -v BPF="$BODYPASS" '
     sawdone = 1
   }
   END {
-    real_fails = 0; incomplete = 0
+    real_fails = 0; incomplete = 0; td_severed = 0
     for (id in started) {
       passed = (result_of[id] == "success") || (name_of[id] in bodypass)
       if (passed) continue
+      # A failed (tearDownAll)/(tearDown) step has no body, so no pass marker.
+      # When the watchdog fired, that step is the kill severing the suite
+      # teardown — collateral, not a real failure. A setUp step or a real test
+      # still fails here, and a teardown failure with no watchdog kill stays real.
+      if (WD == 1 && name_of[id] ~ /^\(tearDown/) {
+        td_severed++; tdids = tdids " #" id (length(name_of[id]) ? " " name_of[id] : "")
+        continue
+      }
       if (id in done) {
         real_fails++
         failids = failids " #" id (length(name_of[id]) ? " (" name_of[id] ")" : "")
@@ -99,8 +119,8 @@ awk -v BPF="$BODYPASS" '
       }
     }
     printf "── TEST-RESULT RECONCILER ──\n"
-    printf "started=%d  done=%d  body_passed=%d  failures=%d  incomplete=%d  done_event=%s\n", \
-           count_keys(started), ndone + 0, count_keys(bodypass), real_fails, incomplete, \
+    printf "started=%d  done=%d  body_passed=%d  failures=%d  incomplete=%d  teardown_severed=%d  done_event=%s\n", \
+           count_keys(started), ndone + 0, count_keys(bodypass), real_fails, incomplete, td_severed, \
            (sawdone ? (donefail ? "fail" : "ok") : "absent")
     if (ndone + 0 == 0) {
       print "❌ report contained no testDone events — no tests ran."
@@ -114,6 +134,9 @@ awk -v BPF="$BODYPASS" '
       print "❌ reporter format drift — testDone events but no test ids parsed; update the extractor."
       exit 3
     }
+    if (td_severed > 0) {
+      print "ℹ teardown step(s) severed by the watchdog kill — non-fatal:" tdids
+    }
     if (real_fails > 0) {
       print "❌ real test failure(s):" failids
       exit 1
@@ -122,7 +145,7 @@ awk -v BPF="$BODYPASS" '
       print "❌ incomplete run — started tests with no pass marker and no result (crash mid-suite):" incids
       exit 1
     }
-    printf "🎉 %d tests passed (success or body-pass; teardown-only flakes ignored).\n", count_keys(started)
+    printf "🎉 %d tests passed (success or body-pass; watchdog-severed teardowns ignored).\n", count_keys(started) - td_severed
     exit 0
   }
   function count_keys(a,   k, n) { n = 0; for (k in a) n++; return n }
