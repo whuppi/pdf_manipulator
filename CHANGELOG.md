@@ -60,6 +60,10 @@ CONTENT RULES (never change)
 
 <!-- Add new versions below, newest first. -->
 
+## 2.1.1
+
+- Fixed the README
+
 ## 2.1.0
 
 - Added document producer and creation-date metadata — `PdfEditor.setProducer()` / `getProducer()` and `setCreationDate()` / `getCreationDate()` (raw PDF date strings, e.g. `D:20240101120000Z`), plus `PdfDoc.producer`, `PdfDoc.creator`, and `PdfDoc.creationDate` read on open
