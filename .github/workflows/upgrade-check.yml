@@ -106,7 +106,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EXISTING_PR: ${{ steps.branch.outputs.existing_pr }}
         run: |
-          git add .fvmrc example/.fvmrc tool/versions.env pubspec.lock example/pubspec.lock
+          # Glob so a new subpackage lockfile or .fvmrc is staged automatically.
+          # :(glob) is required — a bare **/pubspec.lock skips the repo-root file
+          # (its leading **/ needs a slash), which is the main lockfile.
+          git add tool/versions.env ':(glob)**/.fvmrc' ':(glob)**/pubspec.lock'
           git commit -m "chore: bump pinned versions + refresh lockfiles" || {
             echo "Everything already fresh — nothing to bump."
             exit 0
