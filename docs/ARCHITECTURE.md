@@ -220,7 +220,7 @@ tool/                                       ← .sh = orchestration wrappers; .d
 └── ci/                                     ← invoked directly by workflows, not by make
     ├── release.sh                          ← release pipeline (gate → discover → stamp → publish; --help lists modes)
     ├── upgrade.sh                          ← daily pinned-version bump bot
-    └── reconcile_test_json.sh              ← test pass/fail from the JSON reporter
+    └── reconcile_test_json.sh              ← universal test-run verdict (JSON results + body-pass markers)
 
 vendor/
 ├── pdf_oxide/                              ← forked yfedoseev/pdf_oxide (submodule)
