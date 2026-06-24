@@ -218,6 +218,9 @@ jobs:
       - name: Upload binaries to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # This step runs before any checkout, so gh has no .git to infer the
+          # target repo from. GH_REPO names it, or gh exits "not a git repo".
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.discover.outputs.tag }}
         # gh ships on the runner; the release already exists (discover
         # created it), so just upload the binaries, clobbering on rerun.
