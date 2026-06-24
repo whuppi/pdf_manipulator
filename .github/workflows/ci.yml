@@ -89,6 +89,24 @@ jobs:
         with:
           make-target: analyze
 
+  # Analyze the shipped code (lib/bin/hook) against the OLDEST in-range deps, so
+  # the wide lower bounds are honest, not just the newest a fresh build resolves.
+  # Static analysis only: no fixtures, no native build, no submodules needed.
+  analyze-floor:
+    name: Analyze (floor deps)
+    needs: [inputs, changes]
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ${{ needs.inputs.outputs.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read  # checkout + static analyze, read-only
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with: { persist-credentials: false }
+      - uses: ./.github/actions/make-target
+        with:
+          make-target: analyze-floor
+
   test:
     name: Package tests
     needs: [inputs, changes]
@@ -127,7 +145,7 @@ jobs:
   gate:
     name: CI Gate
     if: always()
-    needs: [inputs, changes, analyze, test, rust]
+    needs: [inputs, changes, analyze, analyze-floor, test, rust]
     runs-on: ${{ needs.inputs.outputs.runner }}
     timeout-minutes: 5
     permissions: {}
@@ -138,6 +156,7 @@ jobs:
           CHANGES: ${{ needs.changes.result }}
           CODE: ${{ needs.changes.outputs.code }}
           ANALYZE: ${{ needs.analyze.result }}
+          FLOOR: ${{ needs.analyze-floor.result }}
           TEST: ${{ needs.test.result }}
           RUST: ${{ needs.rust.result }}
         run: |
@@ -152,8 +171,8 @@ jobs:
             echo "Doc-only PR — CI gate passes"
             exit 0
           fi
-          if [[ "$ANALYZE" != "success" ]] || [[ "$TEST" != "success" ]]; then
-            echo "FAILED: analyze=$ANALYZE test=$TEST"
+          if [[ "$ANALYZE" != "success" ]] || [[ "$FLOOR" != "success" ]] || [[ "$TEST" != "success" ]]; then
+            echo "FAILED: analyze=$ANALYZE floor=$FLOOR test=$TEST"
             exit 1
           fi
           # rust runs only when the engine/features/Makefile/CI change; skipped is OK.
