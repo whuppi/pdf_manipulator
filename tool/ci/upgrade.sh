@@ -152,6 +152,14 @@ flutter_cur="$(json_get '.flutter' "$ROOT/.fvmrc")"
 releases="$(_fetch https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json 2>/dev/null || true)"
 stable_hash="$(jq -r '.current_release.stable // empty' <<< "$releases" 2>/dev/null || true)"
 flutter_latest="$(jq -r --arg h "$stable_hash" '.releases[] | select(.hash == $h) | .version // empty' <<< "$releases" 2>/dev/null | head -1 || true)"
+# Second injection sink, independent of set_kv: flutter_latest flows raw into
+# the sed below. On GNU sed (the ubuntu runner) a value carrying a slash then an
+# `e` command would run a shell command, not just corrupt the file. Stable
+# Flutter versions are plain X.Y.Z, so refuse anything that is not exact semver.
+if [ -n "$flutter_latest" ] && ! printf '%s' "$flutter_latest" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+  echo "::error::refuse: implausible flutter version from upstream: '$flutter_latest'" >&2
+  exit 1
+fi
 if [ -n "$flutter_latest" ] && [ -n "$flutter_cur" ] && [ "$flutter_cur" != "$flutter_latest" ]; then
   drift=1
   echo "flutter: $flutter_cur -> $flutter_latest"
