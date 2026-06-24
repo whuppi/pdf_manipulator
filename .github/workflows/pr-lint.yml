@@ -47,18 +47,25 @@ jobs:
     needs: inputs
     runs-on: ${{ needs.inputs.outputs.runner }}
     timeout-minutes: 5
+    permissions:
+      contents: read  # checkout only; reads tool/commit-types.txt
     steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: Check PR title
         shell: bash
         env:
           TITLE: ${{ github.event.pull_request.title }}
         run: |
-          if ! grep -qE '^(feat|fix|docs|chore|ci|test|refactor|perf|build|deps)(\(.+\))?!?: .+' <<< "$TITLE"; then
+          # Same type list as the commit-msg hook (tool/commit-types.txt).
+          types=$(paste -sd'|' tool/commit-types.txt)
+          if ! grep -qE "^(${types})(\(.+\))?!?: .+" <<< "$TITLE"; then
             echo "::error::PR title must follow Conventional Commits format."
             echo ""
             echo "  <type>[optional scope]: <description>"
             echo ""
-            echo "  Types: feat fix docs chore ci test refactor perf build deps"
+            printf '  Types: %s\n' "$(paste -sd' ' tool/commit-types.txt)"
             echo "  Examples:"
             echo "    feat: add watermark support"
             echo "    fix(web): handle empty PDF edge case"
