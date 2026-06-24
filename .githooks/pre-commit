@@ -2,9 +2,13 @@
 # Reject commits that add files matching .gitignore patterns.
 # Catches accidental `git add -f` of ignored files.
 
-bad_files=$(git diff --cached --name-only --diff-filter=A | while read f; do
-  git check-ignore --quiet "$f" 2>/dev/null && echo "$f"
-done)
+# --no-index is load-bearing: a force-added file is already in the index, and
+# without it git check-ignore treats an indexed path as tracked and reports
+# nothing, so the hook would silently never fire. NUL end to end
+# (core.quotepath=false stops octal-escaping, -z stops newline-splitting) keeps
+# paths with spaces or newlines intact; --stdin avoids a non-POSIX read -d '' loop.
+bad_files=$(git -c core.quotepath=false diff --cached --name-only --diff-filter=A -z \
+  | git check-ignore --no-index --stdin -z 2>/dev/null | tr '\0' '\n')
 
 if [ -n "$bad_files" ]; then
   echo "ERROR: These newly-added files are gitignored:"
