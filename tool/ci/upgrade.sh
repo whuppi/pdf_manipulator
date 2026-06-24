@@ -35,13 +35,15 @@ source "$ROOT/tool/lib.sh"
 
 MODE="${1:-check}"
 case "$MODE" in
-  check|apply) ;;
-  *) echo "usage: tool/ci/upgrade.sh [check|apply]" >&2; exit 2 ;;
+  check|apply|verify-pinned) ;;
+  *) echo "usage: tool/ci/upgrade.sh [check|apply|verify-pinned]" >&2; exit 2 ;;
 esac
 
 ensure_jq
 
 drift=0
+blocked=0   # set when a bump is available but its asset fetch failed; the run
+            # then fails loud at the end instead of exiting 0 into the void.
 
 gh_latest_tag() {  # owner/repo -> latest release tag, verbatim
   gh api "repos/$1/releases/latest" --jq '.tag_name' 2>/dev/null || true
@@ -63,6 +65,20 @@ sha256_of() {  # url
 }
 
 set_kv() {  # KEY value file — replace the KEY="old" line with KEY="new"
+  # versions.env is SOURCED (executed) by every consumer, so a value is only
+  # safe to persist if its SHAPE is known. Validate before writing: a version is
+  # [A-Za-z0-9._+-]+, a sha256 is 64 lowercase hex. This is what keeps the file
+  # safe as a sourced KEY="value" format — a malformed upstream string (say one
+  # carrying a quote) can be neither written nor, therefore, executed on the next
+  # source. A jq-read versions.json would also close this, at the cost of
+  # rewriting every consumer; the shape-gate closes the actual hole without it.
+  case "$1" in
+    *SHA256*)  printf '%s' "$2" | grep -qE '^[0-9a-f]{64}$' \
+                 || { echo "set_kv: refusing non-sha256 for $1: '$2'" >&2; return 1; } ;;
+    *VERSION*) printf '%s' "$2" | grep -qE '^[A-Za-z0-9._+-]+$' \
+                 || { echo "set_kv: refusing malformed version for $1: '$2'" >&2; return 1; } ;;
+    *)         echo "set_kv: unknown key shape '$1' (expect *_VERSION or *_SHA256_*)" >&2; return 1 ;;
+  esac
   # The value travels via the environment — not a sed replacement, not awk -v —
   # so a |, &, or backslash in it stays literal data (sed's replacement string
   # and awk's -v both interpret those). tmp+mv leaves the file intact if awk
@@ -79,6 +95,57 @@ set_kv() {  # KEY value file — replace the KEY="old" line with KEY="new"
     return 1
   fi
 }
+
+# ── verify-pinned: re-hash the CURRENTLY-pinned assets and compare to the
+# stored sha256. A hash that changed while the VERSION did NOT means the
+# upstream asset was swapped under a fixed tag (a repoint) — the one supply-
+# chain attack that version-compare and set_kv's shape-check are both blind to.
+# URL patterns mirror the bump blocks below; keep the two in sync.
+_vp() {  # tool platform url want-sha
+  local got; got="$(sha256_of "$3")"
+  if [ -z "$got" ]; then
+    echo "verify-pinned: $1 $2 — asset fetch failed (skipped; a 404 is a prune, not a tamper)" >&2
+    return 0
+  fi
+  [ "$got" = "$4" ] && return 0
+  echo "::error::verify-pinned: $1 $2 REPOINT — pinned $4, now $got ($3)" >&2
+  return 1
+}
+
+verify_pinned() {
+  local t=0
+  local fu="https://github.com/leoafarias/fvm/releases/download/$FVM_VERSION"
+  _vp fvm linux-x64   "$fu/fvm-$FVM_VERSION-linux-x64.tar.gz"   "$FVM_SHA256_LINUX_X64"   || t=1
+  _vp fvm macos-arm64 "$fu/fvm-$FVM_VERSION-macos-arm64.tar.gz" "$FVM_SHA256_MACOS_ARM64" || t=1
+  _vp fvm macos-x64   "$fu/fvm-$FVM_VERSION-macos-x64.tar.gz"   "$FVM_SHA256_MACOS_X64"   || t=1
+  _vp fvm windows-x64 "$fu/fvm-$FVM_VERSION-windows-x64.zip"    "$FVM_SHA256_WINDOWS_X64" || t=1
+  local bu="https://github.com/WebAssembly/binaryen/releases/download/$BINARYEN_VERSION"
+  _vp binaryen linux-x64   "$bu/binaryen-$BINARYEN_VERSION-x86_64-linux.tar.gz"   "$BINARYEN_SHA256_LINUX_X64"   || t=1
+  _vp binaryen macos-arm64 "$bu/binaryen-$BINARYEN_VERSION-arm64-macos.tar.gz"    "$BINARYEN_SHA256_MACOS_ARM64" || t=1
+  _vp binaryen windows-x64 "$bu/binaryen-$BINARYEN_VERSION-x86_64-windows.tar.gz" "$BINARYEN_SHA256_WINDOWS_X64" || t=1
+  local ru="https://github.com/ekzhang/bore/releases/download/$BORE_VERSION"
+  _vp bore linux-x64   "$ru/bore-$BORE_VERSION-x86_64-unknown-linux-musl.tar.gz" "$BORE_SHA256_LINUX_X64"   || t=1
+  _vp bore macos-arm64 "$ru/bore-$BORE_VERSION-aarch64-apple-darwin.tar.gz"      "$BORE_SHA256_MACOS_ARM64" || t=1
+  _vp bore windows-x64 "$ru/bore-$BORE_VERSION-x86_64-pc-windows-msvc.zip"       "$BORE_SHA256_WINDOWS_X64" || t=1
+  local cu="https://storage.googleapis.com/chrome-for-testing-public/$CHROME_VERSION"
+  _vp chrome linux-x64   "$cu/linux64/chrome-linux64.zip"     "$CHROME_SHA256_LINUX_X64"   || t=1
+  _vp chrome macos-arm64 "$cu/mac-arm64/chrome-mac-arm64.zip" "$CHROME_SHA256_MACOS_ARM64" || t=1
+  _vp chrome windows-x64 "$cu/win64/chrome-win64.zip"         "$CHROME_SHA256_WINDOWS_X64" || t=1
+  _vp chromedriver linux-x64   "$cu/linux64/chromedriver-linux64.zip"     "$CHROMEDRIVER_SHA256_LINUX_X64"   || t=1
+  _vp chromedriver macos-arm64 "$cu/mac-arm64/chromedriver-mac-arm64.zip" "$CHROMEDRIVER_SHA256_MACOS_ARM64" || t=1
+  _vp chromedriver windows-x64 "$cu/win64/chromedriver-win64.zip"         "$CHROMEDRIVER_SHA256_WINDOWS_X64" || t=1
+  if [ "$t" -ne 0 ]; then
+    echo "::error::verify-pinned: a pinned asset changed under a fixed version — possible upstream repoint; do NOT bump, investigate" >&2
+    return 1
+  fi
+  echo "verify-pinned: all pinned assets still match their sha256."
+}
+
+# verify-pinned runs only the tamper check (no drift scan), then exits.
+if [ "$MODE" = verify-pinned ]; then
+  verify_pinned && exit 0
+  exit 1
+fi
 
 # ── Flutter SDK (.fvmrc + example/.fvmrc) ────────────────────────────
 flutter_cur="$(json_get '.flutter' "$ROOT/.fvmrc")"
@@ -112,7 +179,7 @@ if [ -n "$fvm_latest" ] && [ "$fvm_latest" != "$FVM_VERSION" ]; then
       set_kv FVM_SHA256_MACOS_X64 "$mx" "$VERSIONS"
       set_kv FVM_SHA256_WINDOWS_X64 "$win" "$VERSIONS"
     else
-      echo "fvm: $fvm_latest available but an asset download failed — bump by hand"
+      echo "::error::fvm: $fvm_latest available but an asset download failed — bump by hand"; blocked=1
     fi
   else
     drift=1; echo "fvm: $FVM_VERSION -> $fvm_latest (apply fetches + verifies 4 sha256)"
@@ -152,7 +219,7 @@ if [ -n "$bin_latest" ] && [ "$bin_latest" != "$BINARYEN_VERSION" ]; then
       set_kv BINARYEN_SHA256_MACOS_ARM64 "$mac" "$VERSIONS"
       set_kv BINARYEN_SHA256_WINDOWS_X64 "$win" "$VERSIONS"
     else
-      echo "binaryen: $bin_latest available but an asset download failed — bump by hand"
+      echo "::error::binaryen: $bin_latest available but an asset download failed — bump by hand"; blocked=1
     fi
   else
     drift=1; echo "binaryen: $BINARYEN_VERSION -> $bin_latest (apply fetches + verifies 3 sha256)"
@@ -174,7 +241,7 @@ if [ -n "$bore_latest" ] && [ "$bore_latest" != "$BORE_VERSION" ]; then
       set_kv BORE_SHA256_MACOS_ARM64 "$mac" "$VERSIONS"
       set_kv BORE_SHA256_WINDOWS_X64 "$win" "$VERSIONS"
     else
-      echo "bore: $bore_latest available but an asset download failed — bump by hand"
+      echo "::error::bore: $bore_latest available but an asset download failed — bump by hand"; blocked=1
     fi
   else
     drift=1; echo "bore: $BORE_VERSION -> $bore_latest (apply fetches + verifies 3 sha256)"
@@ -185,6 +252,10 @@ fi
 # chrome-for-testing publishes no digests, so each bump re-downloads and
 # self-hashes all 6 assets. The CDN prunes old versions, so this must keep
 # the pin fresh or the chrome action's verified download 404s.
+# We deliberately do NOT mirror these assets to our own release: re-hosting
+# hundreds of MB per bump plus a new upload failure mode is a sledgehammer for
+# CDN pruning that a daily bump + verify-pinned already cover. Freshness rides
+# this radar, not a parallel mirror.
 manifest="$(_fetch https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json 2>/dev/null || true)"
 chrome_latest="$(jq -r '.channels.Stable.version // empty' <<< "$manifest" 2>/dev/null || true)"
 if [ -n "$chrome_latest" ] && [ "$chrome_latest" != "$CHROME_VERSION" ]; then
@@ -203,7 +274,7 @@ if [ -n "$chrome_latest" ] && [ "$chrome_latest" != "$CHROME_VERSION" ]; then
       set_kv CHROMEDRIVER_SHA256_MACOS_ARM64 "$dm" "$VERSIONS"
       set_kv CHROMEDRIVER_SHA256_WINDOWS_X64 "$dw" "$VERSIONS"
     else
-      echo "chrome: $chrome_latest available but an asset download failed — bump by hand"
+      echo "::error::chrome: $chrome_latest available but an asset download failed — bump by hand"; blocked=1
     fi
   else
     drift=1; echo "chrome: $CHROME_VERSION -> $chrome_latest (apply fetches + verifies 6 sha256)"
@@ -211,4 +282,8 @@ if [ -n "$chrome_latest" ] && [ "$chrome_latest" != "$CHROME_VERSION" ]; then
 fi
 
 [ "$drift" -eq 0 ] && echo "All watched pins are current."
+if [ "$blocked" -ne 0 ]; then
+  echo "::error::one or more pins are blocked (upstream had a new version but its asset fetch failed); fix by hand" >&2
+  exit 1
+fi
 exit 0
