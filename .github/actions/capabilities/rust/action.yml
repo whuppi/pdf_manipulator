@@ -56,6 +56,10 @@ runs:
           # connection reset). cargo's default is 3 retries; 10 rides out a
           # short registry blip instead of failing the whole build.
           echo "CARGO_NET_RETRY=10"
+          # HTTP/2 multiplexing intermittently fails crates.io with a framing
+          # layer error (curl 16) that the retry above doesn't catch; HTTP/1.1
+          # avoids that class.
+          echo "CARGO_HTTP_MULTIPLEXING=false"
         } >> "$GITHUB_ENV"
         # Submodule pins arrive via env (hoisted from step outputs). Heredoc
         # with a random delimiter so a stray newline can't inject entries.
