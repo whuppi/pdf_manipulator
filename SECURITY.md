@@ -34,7 +34,7 @@ These are conscious trade-offs, documented so they aren't mistaken for oversight
 
 - **`git:`-ref consumers fetch the engine at build time.** Depending on this package by git ref initializes the engine submodules from `whuppi/*`. The supply-chain trust is the same as any git dependency.
 
-- **Some pinned binary hashes are self-computed, not upstream-published.** FVM (leoafarias/fvm) and Chrome for Testing publish no digests, so their `tool/versions.env` sha256 pins come from the assets we first downloaded, not from an upstream source of truth. The pins still catch a later swap (a repointed tag, a CDN substitution), but the first download defines trust: had a release already been compromised when `upgrade.sh` first fetched it, the bad hash would simply be recorded. Inherent to the first-to-download problem; not closable without upstream digest publication.
+- **Some pinned binary hashes are self-computed, not upstream-published.** FVM (leoafarias/fvm) and Chrome for Testing publish no digests, so their `tool/versions.env` sha256 pins come from the assets we first downloaded, not from an upstream source of truth. The pins still catch a later swap (a repointed tag, a CDN substitution), and `upgrade.sh verify-pinned` re-hashes them on the daily radar while `check-availability` HEADs them on every PR, so a swap or prune surfaces before a build fails on it. But the first download still defines trust: had a release already been compromised when `upgrade.sh` first fetched it, the bad hash would simply be recorded. Inherent to the first-to-download problem; not closable without upstream digest publication.
 
 ## Response
 
