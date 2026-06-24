@@ -156,3 +156,21 @@ jobs:
       - name: shell lint (shellcheck + bash 3.2 portability)
         shell: bash
         run: bash tool/lint_shell.sh
+
+  # Runs on PR activity (not just the daily cron, which GitHub disables after
+  # ~60 idle days): HEADs every pinned asset so a pruned pin fails the PR that
+  # sits on it, before it fail-closes a build. Fails on a definitive 404/410,
+  # warns on transient.
+  pin-availability:
+    name: Pin availability
+    needs: inputs
+    runs-on: ${{ needs.inputs.outputs.runner }}
+    permissions:
+      contents: read  # checkout only; HEADs the pinned asset URLs
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Pinned assets still reachable
+        shell: bash
+        run: bash tool/ci/upgrade.sh check-availability
