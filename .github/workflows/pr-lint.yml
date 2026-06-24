@@ -165,6 +165,7 @@ jobs:
     name: Pin availability
     needs: inputs
     runs-on: ${{ needs.inputs.outputs.runner }}
+    timeout-minutes: 15
     permissions:
       contents: read  # checkout only; HEADs the pinned asset URLs
     steps:
