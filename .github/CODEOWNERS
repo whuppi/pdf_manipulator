@@ -35,3 +35,9 @@
 # so CODEOWNERS here can't match them. The submodule repos' own CODEOWNERS gate
 # their build scripts and lockfiles.
 /vendor/                   @chaudharydeepanshu
+
+# Adding any submodule requires editing .gitmodules, so gating this one file
+# forces owner review for a new submodule at any path. The /vendor/ rule above
+# only covers the existing engine's gitlink bumps; a brand-new submodule (with
+# its own build.rs that cargo runs at compile time) would otherwise land via `*`.
+/.gitmodules               @chaudharydeepanshu
