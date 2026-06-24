@@ -267,14 +267,11 @@ jobs:
           ref: '${{ needs.discover.outputs.tag }}'
           fetch-depth: 0
           persist-credentials: false
-      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
-      - name: Install fvm + project SDK
-        # Pin the fvm TOOL (the Flutter SDK is pinned in .fvmrc). Version
-        # lives in tool/versions.env so it never floats on @latest.
-        run: |
-          source tool/versions.env
-          dart pub global activate fvm "$FVM_VERSION"
-          fvm install
+      # Verified fvm via the shared capability — the same hash-pinned fetch
+      # every other job uses, not an unverified `pub global activate`. This job
+      # holds the pub.dev credentials, so it must not acquire tooling through a
+      # weaker path than the rest of the pipeline.
+      - uses: ./.github/actions/capabilities/fvm
       - name: Build filtered changelog
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
