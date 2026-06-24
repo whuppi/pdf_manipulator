@@ -113,9 +113,17 @@ build: build-native build-wasm
 
 # Triggers the build hook to compile the native binary for the
 # current host. Runs a non-existent test name so dart test starts
-# (invoking the hook) but no actual test executes.
+# (invoking the hook) but no actual test executes. A missing test
+# match and a build-hook compile failure both exit non-zero and the
+# tee pipe masks the code, so gate on the tooling's failure markers:
+# a broken native build must not pass silently.
 build-native:
-	$(DART) test test/ops/runners/native_runner_test.dart --concurrency=1 --name='DOES_NOT_EXIST' || true
+	@tmp=$$(mktemp); \
+	$(DART) test test/ops/runners/native_runner_test.dart --concurrency=1 --name='DOES_NOT_EXIST' 2>&1 | tee "$$tmp" || true; \
+	if grep -qE 'Building assets for package .* failed|returned with exit code|could not compile' "$$tmp"; then \
+		rm -f "$$tmp"; echo "build-native: native build hook failed (see output above)"; exit 1; \
+	fi; \
+	rm -f "$$tmp"
 
 build-wasm:
 	bash tool/compile_rust.sh wasm
