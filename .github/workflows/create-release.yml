@@ -54,6 +54,7 @@ jobs:
   inputs:
     name: Resolve inputs
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     permissions: {}
     outputs:
       runner: ${{ steps.resolve.outputs.runner }}
@@ -69,6 +70,7 @@ jobs:
     name: Release gate
     needs: inputs
     runs-on: ${{ needs.inputs.outputs.runner }}
+    timeout-minutes: 5
     permissions:
       contents: read  # checkout + changelog gate, read-only
     outputs:
@@ -104,6 +106,7 @@ jobs:
       group: release-${{ needs.gate.outputs.version || github.run_id }}
       cancel-in-progress: true
     runs-on: ${{ needs.inputs.outputs.runner }}
+    timeout-minutes: 20
     permissions:
       contents: write  # release.sh --discover creates the GitHub release
     outputs:
@@ -140,6 +143,7 @@ jobs:
           - { name: windows, runner: windows-2025-vs2026 }
     name: compile-${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     permissions:
       contents: read  # checkout + build; artifacts use run storage, no API
     steps:
@@ -162,6 +166,7 @@ jobs:
     needs: [inputs, discover, compile]
     if: needs.discover.outputs.has_release == 'true'
     runs-on: ${{ needs.inputs.outputs.runner }}
+    timeout-minutes: 15
     permissions:
       contents: write  # uploads binaries + stamps the release tag
     steps:
@@ -218,6 +223,9 @@ jobs:
       - name: Upload binaries to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # This step runs before any checkout, so gh has no .git to infer the
+          # target repo from. GH_REPO names it, or gh exits "not a git repo".
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.discover.outputs.tag }}
         # gh ships on the runner; the release already exists (discover
         # created it), so just upload the binaries, clobbering on rerun.
@@ -255,6 +263,7 @@ jobs:
     needs: [inputs, discover, upload-assets]
     if: needs.discover.outputs.has_release == 'true'
     runs-on: ${{ needs.inputs.outputs.runner }}
+    timeout-minutes: 20
     environment: ${{ inputs.branch || github.ref_name }}
     permissions:
       contents: write  # ephemeral stamp commit + release-notes install snippet
@@ -264,14 +273,9 @@ jobs:
           ref: '${{ needs.discover.outputs.tag }}'
           fetch-depth: 0
           persist-credentials: false
-      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
-      - name: Install fvm + project SDK
-        # Pin the fvm TOOL (the Flutter SDK is pinned in .fvmrc). Version
-        # lives in tool/versions.env so it never floats on @latest.
-        run: |
-          source tool/versions.env
-          dart pub global activate fvm "$FVM_VERSION"
-          fvm install
+      # Use the verified fvm capability, not an unverified pub global activate:
+      # this job holds the pub.dev credentials, so don't weaken its tooling path.
+      - uses: ./.github/actions/capabilities/fvm
       - name: Build filtered changelog
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

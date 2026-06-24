@@ -23,16 +23,19 @@ DEST="${3:?usage: fetch_verified.sh <url> <sha256> <dest>}"
 # not a usage error — a missing pin is the exact case to refuse loudly.
 WANT="${2-}"
 WANT="${WANT#sha256:}"
+# Accept only exactly 64 lowercase hex; one rule fails closed on every other
+# shape (empty, TODO, truncated, uppercase, whitespace).
+WANT="$(printf '%s' "$WANT" | tr 'A-Z' 'a-z' | tr -d '[:space:]')"
+if ! printf '%s' "$WANT" | grep -qE '^[0-9a-f]{64}$'; then
+  echo "refusing to download $URL — pin is not a 64-char sha256 (fail-closed)." >&2
+  exit 2
+fi
 
-case "$WANT" in
-  ""|"TODO"|"unknown"|"none")
-    echo "refusing to download $URL — no pinned sha256 (fail-closed)." >&2
-    exit 2
-    ;;
-esac
-
-curl -sSL --fail --retry 3 --retry-delay 2 --max-redirs 5 --connect-timeout 10 --max-time 180 "$URL" -o "$DEST" \
-  || { echo "download failed: $URL" >&2; exit 1; }
+# Bound on stall (under 2KB/s for 30s), not total time, so a large asset on a
+# slow link still finishes; --max-time is the backstop for a hung pipe.
+curl -sSL --fail --retry 3 --retry-delay 2 --max-redirs 5 --connect-timeout 10 \
+     --speed-limit 2048 --speed-time 30 --max-time 1800 "$URL" -o "$DEST" \
+  || { echo "download failed or stalled: $URL" >&2; exit 1; }
 
 # Feed the file on stdin, never as a path argument: GNU coreutils (and Perl
 # shasum) escape the output line — a backslash before the digest — when the

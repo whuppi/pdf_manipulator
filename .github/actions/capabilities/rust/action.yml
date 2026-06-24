@@ -56,6 +56,10 @@ runs:
           # connection reset). cargo's default is 3 retries; 10 rides out a
           # short registry blip instead of failing the whole build.
           echo "CARGO_NET_RETRY=10"
+          # HTTP/2 multiplexing intermittently fails crates.io with a framing
+          # layer error (curl 16) that the retry above doesn't catch; HTTP/1.1
+          # avoids that class.
+          echo "CARGO_HTTP_MULTIPLEXING=false"
         } >> "$GITHUB_ENV"
         # Submodule pins arrive via env (hoisted from step outputs). Heredoc
         # with a random delimiter so a stray newline can't inject entries.
@@ -96,11 +100,15 @@ runs:
         fi
         mkdir -p "$HOME/.cargo"
         CFG="$HOME/.cargo/config.toml"
-        # A fresh runner has no config.toml, so the append creates it. Guard
-        # the rare pre-existing case: a second [build] header is a TOML error,
-        # so insert the wrapper UNDER the existing table instead.
+        # Insert under [build] (a second header is a TOML error) with awk, not a
+        # GNU one-line sed append; that form broke on macOS. Pass the path via
+        # ENVIRON, not awk -v, which would interpret a backslash in it.
         if [ -f "$CFG" ] && grep -q '^\[build\]' "$CFG"; then
-          sed -i.bak '/^\[build\]/a rustc-wrapper = "'"$SCCACHE_BIN"'"' "$CFG" && rm -f "$CFG.bak"
+          sk_w="$SCCACHE_BIN" awk '
+            BEGIN { w = ENVIRON["sk_w"] }
+            { print }
+            /^\[build\]/ && !seen { print "rustc-wrapper = \"" w "\""; seen=1 }
+          ' "$CFG" > "$CFG.tmp" && mv "$CFG.tmp" "$CFG" || rm -f "$CFG.tmp"
         else
           printf '\n[build]\nrustc-wrapper = "%s"\n' "$SCCACHE_BIN" >> "$CFG"
         fi

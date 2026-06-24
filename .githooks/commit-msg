@@ -21,12 +21,15 @@ if printf '%s\n' "$msg" | grep -qE '^Merge '; then
   exit 1
 fi
 
-if ! printf '%s\n' "$msg" | grep -qE '^(feat|fix|docs|chore|ci|test|refactor|perf|build|deps)(\(.+\))?!?: .+'; then
+# Single source of truth for the type list: tool/commit-types.txt (pr-lint.yml
+# validates PR titles against the same file). cwd is the repo root during hooks.
+types=$(paste -sd'|' tool/commit-types.txt)
+if ! printf '%s\n' "$msg" | grep -qE "^(${types})(\(.+\))?!?: .+"; then
   echo "ERROR: Commit message must follow Conventional Commits format."
   echo ""
   echo "  <type>[optional scope]: <description>"
   echo ""
-  echo "  Types: feat fix docs chore ci test refactor perf build deps"
+  printf '  Types: %s\n' "$(paste -sd' ' tool/commit-types.txt)"
   echo "  Examples:"
   echo "    feat: add watermark support"
   echo "    fix(web): handle empty PDF edge case"

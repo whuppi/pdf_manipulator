@@ -80,12 +80,13 @@ branch not currently checked out.
 `.fvmrc` (root + `example/.fvmrc`) is the single source of truth for
 the Flutter SDK version. Never hardcode the version anywhere else.
 
-`upgrade-check.yml` runs daily. Its `upgrade` job detects drift in every
-pinned version Dependabot can't see — the Flutter SDK, the tools and
-verified binaries in `tool/versions.env`, and the zizmor + actionlint gate
-pins — and opens a single draft PR on `chore/upgrades` that bumps them
-(binary sha256s recomputed from the upstream assets). Review, test, merge
-when ready.
+`upgrade-check.yml` runs daily and splits the work by risk into two draft
+PRs. The `pins` job re-hashes the current pins to catch a repoint, then bumps
+every pinned version Dependabot can't see (the Flutter SDK, the tools and
+verified binaries in `tool/versions.env`, the zizmor + actionlint gate pins,
+binary sha256s recomputed from the upstream assets) onto `chore/pins`. The
+`lockfiles` job refreshes `pubspec.lock` onto `chore/lockfiles`. Review, test,
+merge each when ready.
 
 ---
 

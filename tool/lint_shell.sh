@@ -153,6 +153,25 @@ else
   status=1
 fi
 
+# ── 5. versions.env single-writer (set_kv only) ──────────────────────
+# versions.env is sourced (executed), so every write must pass set_kv's shape
+# gate. set_kv writes through a temp file and a rename, never a literal redirect
+# into the file, so a second writer (a redirect, a tee, or an in-place stream
+# edit that names versions.env) would slip an unvalidated value into a sourced
+# file. Flag any such writer. (Constructs are named in prose, not pasted, so
+# this rule doesn't match itself.)
+echo "── versions.env single-writer (set_kv only) ──"
+vw_files=(/dev/null)
+while IFS= read -r f; do vw_files+=("$f"); done < <(git ls-files '*.sh'; git ls-files '.github' | grep -E '\.ya?ml$')
+vw=$(grep -nE '(>>?[[:space:]]*"?[^"[:space:]]*versions\.env|(^|[^[:alnum:]_])tee[[:space:]][^|]*versions\.env|(^|[^[:alnum:]_])sed[[:space:]]+(-[a-zA-Z]+[[:space:]]+)*-i[^|]*versions\.env)' "${vw_files[@]}" 2>/dev/null || true)
+if [ -z "$vw" ]; then
+  echo "  clean — only set_kv writes versions.env"
+else
+  echo "  versions.env written outside set_kv (sourced file; an unvalidated write executes):" >&2
+  printf '%s\n' "$vw" | sed 's/^/    /' >&2
+  status=1
+fi
+
 echo ""
 if [ "$status" -eq 0 ]; then
   echo "Shell lint passed."
