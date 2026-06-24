@@ -96,11 +96,20 @@ runs:
         fi
         mkdir -p "$HOME/.cargo"
         CFG="$HOME/.cargo/config.toml"
-        # A fresh runner has no config.toml, so the append creates it. Guard
-        # the rare pre-existing case: a second [build] header is a TOML error,
-        # so insert the wrapper UNDER the existing table instead.
+        # A fresh runner has no config.toml, so the append creates it. Guard the
+        # rare pre-existing case (a second [build] header is a TOML error) by
+        # inserting the wrapper UNDER the existing table. Done with awk, not a
+        # GNU sed insert: the one-line append form is GNU-only (BSD wants a
+        # two-line backslash form), so it broke on macOS runners. SCCACHE_BIN
+        # rides ENVIRON, not awk -v, so a path is never backslash-interpreted.
+        # (An env var via GITHUB_ENV would be simpler but zizmor flags every
+        # dynamic GITHUB_ENV write as an injection vector — a file write is clean.)
         if [ -f "$CFG" ] && grep -q '^\[build\]' "$CFG"; then
-          sed -i.bak '/^\[build\]/a rustc-wrapper = "'"$SCCACHE_BIN"'"' "$CFG" && rm -f "$CFG.bak"
+          sk_w="$SCCACHE_BIN" awk '
+            BEGIN { w = ENVIRON["sk_w"] }
+            { print }
+            /^\[build\]/ && !seen { print "rustc-wrapper = \"" w "\""; seen=1 }
+          ' "$CFG" > "$CFG.tmp" && mv "$CFG.tmp" "$CFG"
         else
           printf '\n[build]\nrustc-wrapper = "%s"\n' "$SCCACHE_BIN" >> "$CFG"
         fi
