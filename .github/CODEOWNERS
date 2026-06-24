@@ -26,3 +26,12 @@
 # (fetch_verified.sh), the publish pipeline + the hash-writing bump bot
 # (tool/ci/). A non-owner edit here is a supply-chain or release risk.
 /tool/                     @chaudharydeepanshu
+
+# Vendored engine submodules: bumping a gitlink pulls in that commit's build.rs
+# and build-dependencies, which cargo runs at compile time (before any test) in
+# CI. Without this, a bump falls to the maintainers team via `*`; gate the
+# pointer bump to the owner instead. Per-file rules like /vendor/**/build.rs are
+# deliberately absent: those files live inside the submodule repos, not this one,
+# so CODEOWNERS here can't match them. The submodule repos' own CODEOWNERS gate
+# their build scripts and lockfiles.
+/vendor/                   @chaudharydeepanshu
