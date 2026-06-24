@@ -616,8 +616,12 @@ user-facing text (README, pubspec).
    instructions on dev. `rustup target add` and `cargo install` are
    always safe (user-space). System packages auto-install only on CI.
 
-3. **Dart is never called from bash.** Bash reads `build.json` with
-   pure `sed`/`grep`. No python3, no jq, no dart.
+3. **jq is the JSON tool for bash; Dart is never invoked from bash.**
+   Bash reads `build.json` (and any JSON) through `lib.sh`'s jq-backed
+   accessor (`json_get`), never hand-rolled `sed`/`grep` field extraction;
+   `ensure_jq` guarantees jq is present. The native build hook
+   (`hook/build.dart`) reads `build.json` in Dart. Bash never shells out to
+   dart or python.
 
 4. **Capabilities, not layers.** Each CI concern is one action under
    `capabilities/`. No runner layer, no target layer — just
