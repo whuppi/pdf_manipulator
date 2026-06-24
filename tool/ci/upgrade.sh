@@ -210,7 +210,7 @@ if [ -n "$fvm_latest" ] && [ "$fvm_latest" != "$FVM_VERSION" ]; then
       set_kv FVM_SHA256_MACOS_X64 "$mx" "$VERSIONS"
       set_kv FVM_SHA256_WINDOWS_X64 "$win" "$VERSIONS"
     else
-      echo "::error::fvm: $fvm_latest available but an asset download failed — bump by hand"; blocked=1
+      echo "::error::fvm: $fvm_latest available but an asset download failed; bump by hand"; blocked=1
     fi
   else
     drift=1; echo "fvm: $FVM_VERSION -> $fvm_latest (apply fetches + verifies 4 sha256)"
@@ -250,7 +250,7 @@ if [ -n "$bin_latest" ] && [ "$bin_latest" != "$BINARYEN_VERSION" ]; then
       set_kv BINARYEN_SHA256_MACOS_ARM64 "$mac" "$VERSIONS"
       set_kv BINARYEN_SHA256_WINDOWS_X64 "$win" "$VERSIONS"
     else
-      echo "::error::binaryen: $bin_latest available but an asset download failed — bump by hand"; blocked=1
+      echo "::error::binaryen: $bin_latest available but an asset download failed; bump by hand"; blocked=1
     fi
   else
     drift=1; echo "binaryen: $BINARYEN_VERSION -> $bin_latest (apply fetches + verifies 3 sha256)"
@@ -272,7 +272,7 @@ if [ -n "$bore_latest" ] && [ "$bore_latest" != "$BORE_VERSION" ]; then
       set_kv BORE_SHA256_MACOS_ARM64 "$mac" "$VERSIONS"
       set_kv BORE_SHA256_WINDOWS_X64 "$win" "$VERSIONS"
     else
-      echo "::error::bore: $bore_latest available but an asset download failed — bump by hand"; blocked=1
+      echo "::error::bore: $bore_latest available but an asset download failed; bump by hand"; blocked=1
     fi
   else
     drift=1; echo "bore: $BORE_VERSION -> $bore_latest (apply fetches + verifies 3 sha256)"
@@ -301,7 +301,7 @@ if [ -n "$chrome_latest" ] && [ "$chrome_latest" != "$CHROME_VERSION" ]; then
       set_kv CHROMEDRIVER_SHA256_MACOS_ARM64 "$dm" "$VERSIONS"
       set_kv CHROMEDRIVER_SHA256_WINDOWS_X64 "$dw" "$VERSIONS"
     else
-      echo "::error::chrome: $chrome_latest available but an asset download failed — bump by hand"; blocked=1
+      echo "::error::chrome: $chrome_latest available but an asset download failed; bump by hand"; blocked=1
     fi
   else
     drift=1; echo "chrome: $CHROME_VERSION -> $chrome_latest (apply fetches + verifies 6 sha256)"
