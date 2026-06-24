@@ -42,8 +42,8 @@ esac
 ensure_jq
 
 drift=0
-blocked=0   # set when a bump is available but its asset fetch failed; the run
-            # then fails loud at the end instead of exiting 0 into the void.
+blocked=0   # a bump whose asset fetch failed sets this; the run then exits
+            # nonzero at the end instead of passing silently.
 
 gh_latest_tag() {  # owner/repo -> latest release tag, verbatim
   gh api "repos/$1/releases/latest" --jq '.tag_name' 2>/dev/null || true
@@ -65,13 +65,9 @@ sha256_of() {  # url
 }
 
 set_kv() {  # KEY value file — replace the KEY="old" line with KEY="new"
-  # versions.env is SOURCED (executed) by every consumer, so a value is only
-  # safe to persist if its SHAPE is known. Validate before writing: a version is
-  # [A-Za-z0-9._+-]+, a sha256 is 64 lowercase hex. This is what keeps the file
-  # safe as a sourced KEY="value" format — a malformed upstream string (say one
-  # carrying a quote) can be neither written nor, therefore, executed on the next
-  # source. A jq-read versions.json would also close this, at the cost of
-  # rewriting every consumer; the shape-gate closes the actual hole without it.
+  # versions.env is sourced, so a value is executed on read. Validate the shape
+  # before writing (version or 64-hex sha) so a malformed upstream string can't
+  # be persisted and run.
   case "$1" in
     *SHA256*)  printf '%s' "$2" | grep -qE '^[0-9a-f]{64}$' \
                  || { echo "set_kv: refusing non-sha256 for $1: '$2'" >&2; return 1; } ;;
@@ -96,11 +92,8 @@ set_kv() {  # KEY value file — replace the KEY="old" line with KEY="new"
   fi
 }
 
-# ── verify-pinned: re-hash the CURRENTLY-pinned assets and compare to the
-# stored sha256. A hash that changed while the VERSION did NOT means the
-# upstream asset was swapped under a fixed tag (a repoint) — the one supply-
-# chain attack that version-compare and set_kv's shape-check are both blind to.
-# URL patterns mirror the bump blocks below; keep the two in sync.
+# Re-hash the currently-pinned assets to catch a same-version repoint, which
+# version-compare can't see. URL patterns mirror the bump blocks; keep in sync.
 _vp() {  # tool platform url want-sha
   local got; got="$(sha256_of "$3")"
   if [ -z "$got" ]; then
@@ -152,10 +145,8 @@ flutter_cur="$(json_get '.flutter' "$ROOT/.fvmrc")"
 releases="$(_fetch https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json 2>/dev/null || true)"
 stable_hash="$(jq -r '.current_release.stable // empty' <<< "$releases" 2>/dev/null || true)"
 flutter_latest="$(jq -r --arg h "$stable_hash" '.releases[] | select(.hash == $h) | .version // empty' <<< "$releases" 2>/dev/null | head -1 || true)"
-# Second injection sink, independent of set_kv: flutter_latest flows raw into
-# the sed below. On GNU sed (the ubuntu runner) a value carrying a slash then an
-# `e` command would run a shell command, not just corrupt the file. Stable
-# Flutter versions are plain X.Y.Z, so refuse anything that is not exact semver.
+# flutter_latest is interpolated into the sed below, bypassing set_kv. Keep the
+# exact-semver gate or a crafted upstream value becomes sed injection.
 if [ -n "$flutter_latest" ] && ! printf '%s' "$flutter_latest" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
   echo "::error::refuse: implausible flutter version from upstream: '$flutter_latest'" >&2
   exit 1
@@ -260,10 +251,6 @@ fi
 # chrome-for-testing publishes no digests, so each bump re-downloads and
 # self-hashes all 6 assets. The CDN prunes old versions, so this must keep
 # the pin fresh or the chrome action's verified download 404s.
-# We deliberately do NOT mirror these assets to our own release: re-hosting
-# hundreds of MB per bump plus a new upload failure mode is a sledgehammer for
-# CDN pruning that a daily bump + verify-pinned already cover. Freshness rides
-# this radar, not a parallel mirror.
 manifest="$(_fetch https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json 2>/dev/null || true)"
 chrome_latest="$(jq -r '.channels.Stable.version // empty' <<< "$manifest" 2>/dev/null || true)"
 if [ -n "$chrome_latest" ] && [ "$chrome_latest" != "$CHROME_VERSION" ]; then

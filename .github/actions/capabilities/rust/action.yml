@@ -96,14 +96,9 @@ runs:
         fi
         mkdir -p "$HOME/.cargo"
         CFG="$HOME/.cargo/config.toml"
-        # A fresh runner has no config.toml, so the append creates it. Guard the
-        # rare pre-existing case (a second [build] header is a TOML error) by
-        # inserting the wrapper UNDER the existing table. Done with awk, not a
-        # GNU sed insert: the one-line append form is GNU-only (BSD wants a
-        # two-line backslash form), so it broke on macOS runners. SCCACHE_BIN
-        # rides ENVIRON, not awk -v, so a path is never backslash-interpreted.
-        # (An env var via GITHUB_ENV would be simpler but zizmor flags every
-        # dynamic GITHUB_ENV write as an injection vector — a file write is clean.)
+        # Insert under [build] (a second header is a TOML error) with awk, not a
+        # GNU one-line sed append; that form broke on macOS. Pass the path via
+        # ENVIRON, not awk -v, which would interpret a backslash in it.
         if [ -f "$CFG" ] && grep -q '^\[build\]' "$CFG"; then
           sk_w="$SCCACHE_BIN" awk '
             BEGIN { w = ENVIRON["sk_w"] }

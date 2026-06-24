@@ -267,10 +267,8 @@ jobs:
           ref: '${{ needs.discover.outputs.tag }}'
           fetch-depth: 0
           persist-credentials: false
-      # Verified fvm via the shared capability — the same hash-pinned fetch
-      # every other job uses, not an unverified `pub global activate`. This job
-      # holds the pub.dev credentials, so it must not acquire tooling through a
-      # weaker path than the rest of the pipeline.
+      # Use the verified fvm capability, not an unverified pub global activate:
+      # this job holds the pub.dev credentials, so don't weaken its tooling path.
       - uses: ./.github/actions/capabilities/fvm
       - name: Build filtered changelog
         env:

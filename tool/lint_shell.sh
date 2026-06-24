@@ -98,11 +98,6 @@ if ! command -v yq >/dev/null 2>&1; then
   skip_note yq "brew install yq / snap install yq (mikefarah Go build) / choco install yq"
 else
   nonbash=0
-  # Exact-match on the resolved shell, deliberately: no run step uses `bash`
-  # with flags today, and this check's job is Windows-safety (the runner default
-  # is pwsh). Matching only the command word and allowing `sh` would let a step
-  # land on a shell that may be absent on Windows runners. If a step ever needs
-  # `bash -e {0}`, parse the command word THEN, and keep the allowlist bash-only.
   for wf in .github/workflows/*.yml; do
     [ -e "$wf" ] || continue
     bad=$(yq '(.defaults.run.shell // "") as $d | .jobs[] | select(.steps) | .steps[] | select(has("run")) | select((.shell // $d) != "bash") | (.name // .id // "unnamed")' "$wf" 2>/dev/null || true)
@@ -157,16 +152,6 @@ if [ "$gnuism" -eq 0 ]; then
 else
   status=1
 fi
-
-# Two lint ideas were weighed for this gate and deliberately left out, both too
-# noisy to pay their way. A dangling-path check (every referenced script path
-# must resolve) flags an illustrative path in a doc or comment as broken, and a
-# plain substring match also trips on a generated path that lives under a
-# directory whose name ends in the prefix being matched; a precise boundary
-# would need the non-portable regex forms this very file bans. A doc-vs-code
-# tool-ban check (a file claims a tool is unused while code runs it) cannot tell
-# a scoped-true claim (the build hook genuinely uses no jq) from a global-false
-# one, so it would fight a correct doc. Both stay review concerns, not gates.
 
 echo ""
 if [ "$status" -eq 0 ]; then
