@@ -1,5 +1,5 @@
-// FileSource — positioned reads over a file on disk. Native only, so this
-// test needs `dart:io` (test-guards exempts it for that reason).
+// FileSource — positioned reads over a file on disk.
+// io-exempt: native-only; this reads a real on-disk file.
 
 @TestOn('vm')
 library;

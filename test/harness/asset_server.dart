@@ -8,6 +8,8 @@
 //   final channel = spawnHybridUri('/test/harness/asset_server.dart', stayAlive: true);
 //   final port = (await channel.stream.first as double).toInt();
 
+// io-exempt: hybrid-isolate harness; runs an HttpServer so chrome tests can
+// fetch web_assets/.
 import 'dart:io';
 
 import 'package:shelf/shelf.dart';

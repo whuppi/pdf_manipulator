@@ -9,6 +9,7 @@
 @TestOn('vm')
 library;
 
+// io-exempt: reads adapter sources from disk to verify the lanes stay dumb.
 import 'dart:io';
 
 import 'package:test/test.dart';

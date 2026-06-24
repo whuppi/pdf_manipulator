@@ -7,6 +7,7 @@
 // FATAL-aborts ("Callback invoked after it has been deleted") instead
 // of exiting 0.
 
+// io-exempt: subprocess payload (sets exitCode) for the finalizer test.
 import 'dart:io';
 
 import 'package:pdf_manipulator/pdf_manipulator.dart';
