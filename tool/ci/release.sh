@@ -139,6 +139,12 @@ git_ci_identity() {
   fi
 }
 
+# A changelog version is owner-written, but it flows into seds, awk programs,
+# and file paths, so a stray / or & would corrupt them. Accept only semver.
+valid_semver() {  # X.Y.Z with optional -prerelease and +build
+  printf '%s' "$1" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+}
+
 # Extract one version's entry (body only, heading excluded) from a
 # changelog file. The version is regex-escaped before matching.
 extract_entry() {
@@ -210,12 +216,19 @@ stamp_asset_hashes() {
   read -r -d '' jq_filter <<'JQ' || true
 .assets[]|select(.digest!=null and (.name|startswith("Source")|not))|"\(.name)\t\(.digest)"
 JQ
-  release_entries=$(gh api "repos/$REPO/releases/tags/$tag" --jq "$jq_filter" \
-    | sort | while IFS=$'\t' read -r name digest; do
-      hash="${digest#sha256:}"
-      echo "  '$name': '$hash',"
-      echo "  $name ... ${hash:0:12}..." >&2
-    done)
+  # Process substitution (not a `| while` subshell) so a bad digest can `return`
+  # and fail the whole function, and assert the algo so a non-sha256 digest
+  # fails loud instead of stamping a malformed hash.
+  local name digest
+  while IFS=$'\t' read -r name digest; do
+    [ -z "$name" ] && continue
+    case "$digest" in
+      sha256:*) : ;;
+      *) echo "::error::non-sha256 digest for $name: $digest" >&2; return 1 ;;
+    esac
+    release_entries+="  '$name': '${digest#sha256:}',"$'\n'
+    echo "  $name ... ${digest:7:12}..." >&2
+  done < <(gh api "repos/$REPO/releases/tags/$tag" --jq "$jq_filter" | sort)
 
   # Hand-written web assets — hash from the tag's web_assets/ directory.
   # Reads local filenames + asset names from build.json, skipping
@@ -252,8 +265,10 @@ JQ
   local end_marker="  // --- GENERATED HASHES END ---"
   local tmp
   tmp=$(mktemp)
-  awk -v start="$start_marker" -v end="$end_marker" -v entries="$all_entries" '
-    $0 == start { print; print entries; skip=1; next }
+  # entries via ENVIRON, not awk -v, which would interpret a backslash in a
+  # filename; the markers stay -v (fixed literals).
+  sah_entries="$all_entries" awk -v start="$start_marker" -v end="$end_marker" '
+    $0 == start { print; print ENVIRON["sah_entries"]; skip=1; next }
     $0 == end   { print; skip=0; next }
     !skip       { print }
   ' "$hash_file" > "$tmp"
@@ -495,8 +510,11 @@ cmd_gate() {
   fi
 
   local changed_files
-  if ! changed_files=$(git diff --name-only "${BEFORE:-}" "${AFTER:-HEAD}" 2>/dev/null); then
-    echo "Gate: git diff failed (force-push, new branch, or workflow_dispatch) — assuming $target_file changed"
+  if [ -z "${BEFORE:-}" ]; then
+    echo "Gate: no BEFORE (dispatch, force-push, or new branch); assuming $target_file changed"
+    changed_files="$target_file"
+  elif ! changed_files=$(git diff --name-only "$BEFORE" "${AFTER:-HEAD}" 2>/dev/null); then
+    echo "Gate: git diff failed; assuming $target_file changed"
     changed_files="$target_file"
   fi
 
@@ -568,9 +586,9 @@ cmd_discover() {
 
   local version
   version=$(get_changelog_versions "$file" | head -1 || true)
-  if [ -z "$version" ]; then
+  if [ -z "$version" ] || ! valid_semver "$version"; then
     gh_output "has_release" "false"
-    echo "No version heading in $file"
+    echo "No valid version heading in $file"
     return 0
   fi
 
@@ -619,7 +637,14 @@ cmd_discover() {
   fi
 
   if ! grep -q '^  - /vendor/\*\*$' pubspec.yaml; then
-    awk '/^false_secrets:/{print; print "  - /vendor/**"; next} 1' pubspec.yaml > pubspec.yaml.tmp && mv pubspec.yaml.tmp pubspec.yaml
+    if grep -q '^false_secrets:' pubspec.yaml; then
+      awk '/^false_secrets:/{print; print "  - /vendor/**"; next} 1' pubspec.yaml > pubspec.yaml.tmp
+    else
+      { cat pubspec.yaml; printf 'false_secrets:\n  - /vendor/**\n'; } > pubspec.yaml.tmp
+    fi
+    mv pubspec.yaml.tmp pubspec.yaml
+    grep -q '^  - /vendor/\*\*$' pubspec.yaml \
+      || { echo "::error::failed to add false_secrets /vendor/** to pubspec.yaml"; exit 1; }
     echo "  pubspec.yaml += false_secrets /vendor/**"
   fi
 
@@ -652,7 +677,7 @@ cmd_discover() {
     --target "$stamped_sha" \
     --title "$PKG_NAME $version" \
     --notes-file "$notes_file" \
-    "${flags[@]}"
+    "${flags[@]+"${flags[@]}"}"
   rm -f "$notes_file"
   echo "  Created release $tag at $stamped_sha"
 
@@ -901,6 +926,16 @@ cmd_check_versions() {
   local total=0
   if [ -n "$parsed" ]; then
     total=$(grep -c . <<< "$parsed")
+  fi
+  # The top heading is the release candidate that gets stamped; validate its
+  # shape here so a malformed version fails the PR, not the release.
+  if [ -n "$parsed" ]; then
+    local rc_ver
+    rc_ver=$(head -1 <<< "$parsed" | cut -f1)
+    if ! valid_semver "$rc_ver"; then
+      echo "✗ $file: top version '$rc_ver' is not valid semver" >&2
+      return 1
+    fi
   fi
   if [ "$total" -le 1 ]; then
     echo "✓ $file: $total version heading(s) — nothing below the top to check"
