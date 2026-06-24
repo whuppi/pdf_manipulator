@@ -23,8 +23,10 @@ set -euo pipefail
 # ensure_jq + jq for curl'd manifests. In-place version bumps stay targeted
 # sed (to preserve each file's formatting). No python, no dart.
 #
-# Usage:  tool/ci/upgrade.sh check   # report drift, write nothing
-#         tool/ci/upgrade.sh apply   # rewrite the pinned files in place
+# Usage:  tool/ci/upgrade.sh check              # report drift, write nothing
+#         tool/ci/upgrade.sh apply              # rewrite the pinned files in place
+#         tool/ci/upgrade.sh verify-pinned      # re-hash the pins, flag a repoint
+#         tool/ci/upgrade.sh check-availability # HEAD the pins, flag a prune
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"  # tool/ci/ → repo root
 VERSIONS="$ROOT/tool/versions.env"
