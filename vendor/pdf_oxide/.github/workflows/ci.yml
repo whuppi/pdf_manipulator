@@ -1,0 +1,1846 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+# Cancel any in-progress run on the same branch when a new one starts.
+# Saves minutes on force-pushes; main merges are unaffected (each push gets a unique ref).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Warnings-as-errors for every cargo invocation in this workflow.
+  # Clippy + rustdoc are already gated; this closes the gap for
+  # `cargo build` / `cargo test` / feature-powerset / FFI / CLI / MCP /
+  # maturin / node-gyp cdylib / C# cdylib builds.
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  # Check formatting
+  fmt:
+    name: Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+  # C ABI header drift guard: regenerate include/pdf_oxide_c/pdf_oxide.h
+  # with cbindgen and fail if it differs from the committed file. The
+  # header had silently drifted to v0.3.24 (missing every v0.3.50/0.3.51
+  # C symbol) because nothing regenerated it — this job makes
+  # `make c-header-check` a real CI guard so it cannot rot again.
+  c-header:
+    name: C Header Drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+
+      - name: Install cbindgen
+        run: cargo install cbindgen --version 0.29.2 --locked
+
+      - name: Check C header is in sync with src/ffi.rs
+        run: make c-header-check
+
+  # Fixture hygiene: every .pdf under tools/benchmark-harness/fixtures
+  # must start with %PDF- (or be listed in a directory-local .skip).
+  # Catches ISP DNS-hijack HTML, CMS-wrapped PDFs, and 404 pages
+  # entering the corpus silently. See tools/benchmark-harness/README.md.
+  fixture-hygiene:
+    name: Fixture Hygiene
+    runs-on: ubuntu-latest
+    # Only needs the script + skip-lists, which ARE tracked; the actual
+    # fixture corpus is gitignored and fetched separately. If no
+    # fixtures are checked out in CI, the script exits 0 trivially.
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Validate fixtures
+        run: ./tools/benchmark-harness/validate_fixtures.sh --strict
+
+  # Linting with Clippy
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+          components: clippy
+
+      - name: Cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Run Clippy on full workspace
+        run: cargo clippy --all-targets --workspace -- -D warnings
+
+  # Build and test
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
+    # #522 toolchain-drift policy: `-D warnings` is applied ONLY on the
+    # channel we ship (stable). beta/nightly still build/test/doc, so a
+    # genuine compile/test/doc regression there still hard-fails (the
+    # early warning we want), but a NEW beta/nightly lint can no longer
+    # red `main` with zero code change. No `continue-on-error` for any
+    # channel — a real beta/nightly break must stay visible.
+    # NOTE: this also removes the prior nightly flaky-`rust-lld`-SIGBUS
+    # guard; `CARGO_BUILD_JOBS: "2"` (cargo test step) is the remaining
+    # mitigation. If nightly linker SIGBUS recurs, fix it narrowly
+    # (e.g. pin a non-lld linker on the nightly job) — do NOT
+    # re-blanket-soften warnings.
+    env:
+      RUSTFLAGS: ${{ matrix.rust == 'stable' && '-D warnings' || '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        rust: [stable, beta]
+        include:
+          # Nightly on Ubuntu only - catches upcoming Rust changes
+          - os: ubuntu-latest
+            rust: nightly
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Free disk space (Linux)
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/free-disk-space
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+          toolchain: ${{ matrix.rust }}
+
+      - name: Cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          # `cache-bin: false`: rust-cache caches ~/.cargo/bin by default.
+          # On the macos-latest beta runner that cache captured a poisoned
+          # cargo (a rustup-init copy), so a later restore made
+          # `cargo build` run `rustup-init build` → "unexpected argument
+          # 'build'". Not caching the toolchain bin dir removes this class
+          # of failure. The `-v2` key bump abandons the already-poisoned
+          # entries so the next run starts from a clean toolchain.
+          key: ${{ matrix.rust }}-v2
+          cache-bin: "false"
+
+      - name: Build
+        run: cargo build --verbose
+        if: runner.os != 'Linux'
+
+      - name: Run tests
+        run: cargo test --verbose
+        env:
+          CARGO_INCREMENTAL: "0"
+          # Cap parallel link-worker spawns: nightly's bundled rust-lld
+          # SIGBUSes when many test/example binaries link at once on
+          # resource-constrained runners. Same mitigation as the coverage
+          # job. #399.
+          CARGO_BUILD_JOBS: "2"
+
+      - name: Build documentation (warnings as errors on stable)
+        run: cargo doc --no-deps --workspace
+        env:
+          # #522: deny rustdoc warnings only on stable; beta/nightly
+          # still run `cargo doc` (real doc breakage hard-fails) but a
+          # new beta/nightly rustdoc lint must not red `main`.
+          RUSTDOCFLAGS: ${{ matrix.rust == 'stable' && '-D warnings' || '' }}
+
+      # Reclaim disk before the implicit rust-cache save step. The beta
+      # ubuntu job has hit "No space left on device" during cache save
+      # once target/ + target/doc filled the ~48 GB left after
+      # free-disk-space. doc/ and incremental/ are throwaway and not
+      # cached, so dropping them here is free headroom. Reuses the
+      # `rm -rf target/` cleanup pattern from the coverage job.
+      - name: Reclaim disk before cache save
+        if: runner.os == 'Linux'
+        run: rm -rf target/doc target/debug/incremental
+
+  # Rendering / test-support integration tier.
+  #
+  # `rendering` and `test-support` are NOT default features, so the main
+  # `test` job (which runs `cargo test` under default features) compiles
+  # every `#[cfg(feature = "rendering")]` test file to ZERO tests. Without
+  # this job a green CI does not prove the rendering suite passes, and
+  # rendering regressions can land on `main` undetected. This job is the
+  # gate that actually executes that tier.
+  rendering:
+    name: Rendering Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Free disk space (Linux)
+        uses: ./.github/actions/free-disk-space
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+
+      - name: Cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: rendering-v1
+          cache-bin: "false"
+
+      - name: Run rendering + test-support tests
+        run: cargo test --features rendering,test-support,cjk-render-fallback --verbose
+        env:
+          CARGO_INCREMENTAL: "0"
+          # Cap parallel link-worker spawns: rust-lld can SIGBUS when many
+          # test binaries link at once on resource-constrained runners.
+          # Same mitigation as the `test` and coverage jobs (#399).
+          CARGO_BUILD_JOBS: "2"
+
+      - name: Reclaim disk before cache save
+        run: rm -rf target/doc target/debug/incremental
+
+  # Test Python bindings feature (only production-ready feature in v0.1.0)
+  features:
+    name: Feature Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        features:
+          - ""
+          - "python"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+
+      - name: Cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Build with features
+        run: cargo build --no-default-features --features "${{ matrix.features }}"
+        if: matrix.features != ''
+
+      - name: Build without features
+        run: cargo build --no-default-features
+        if: matrix.features == ''
+
+  # FIPS-validated CryptoProvider build + test gate (issue #236).
+  # Confirms `--features fips` compiles, that AwsLcProvider's
+  # 11-test policy/round-trip suite passes, and that the cross-provider
+  # AES byte-equality assertion catches API drift between
+  # `aws-lc-rs` and the default RustCrypto stack.
+  fips:
+    name: FIPS CryptoProvider (aws-lc-rs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install build deps for aws-lc-rs
+        run: sudo apt-get -o Acquire::Retries=3 update && sudo apt-get -o Acquire::Retries=3 install -y cmake nasm
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+
+      - name: Cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: fips
+
+      - name: Build with fips feature
+        run: cargo build --no-default-features --features python,fips,icc
+
+      - name: Run AwsLcProvider tests + cross-provider AES compat
+        run: cargo test --no-default-features --features python,fips,icc --lib crypto::aws_lc_provider
+
+      - name: Run full lib test suite under FIPS feature
+        run: cargo test --no-default-features --features python,fips,icc --lib
+
+      - name: Clippy under FIPS feature
+        run: cargo clippy --no-default-features --features python,fips,icc --lib --tests -- -D warnings
+
+  # Rust examples — core scenarios run + assert output on Linux/macOS/Windows
+  # (#648 class: a Linux-only run would miss per-OS path/CRLF/loader regressions).
+  rust-examples:
+    name: Rust Examples
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+
+      - name: Cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: rust-examples-${{ matrix.os }}
+
+      - name: Build examples (default features)
+        run: cargo build --examples
+
+      # Core tutorial scenarios (01–07): run on every OS and assert real output,
+      # not just exit code, so a silent empty/garbage regression fails CI.
+      - name: Run core Rust examples (cross-OS, with assertions)
+        shell: bash
+        run: |
+          set -uo pipefail
+          PDF=tests/fixtures/simple.pdf
+          out_dir="${RUNNER_TEMP:-/tmp}"
+          fail() { echo "ASSERT FAILED: $1"; exit 1; }
+          run() { # run <expect-substring> -- <cmd...>
+            local expect="$1"; shift; [ "$1" = "--" ] && shift
+            echo "::group::$*"
+            local out; out="$("$@" 2>&1)" || { echo "$out"; fail "non-zero exit: $*"; }
+            echo "$out"
+            [ -n "$(printf '%s' "$out" | tr -d '[:space:]')" ] || fail "empty output: $*"
+            if [ -n "$expect" ]; then printf '%s' "$out" | grep -qF "$expect" || fail "missing '$expect': $*"; fi
+            echo "::endgroup::"
+          }
+          run "Pages:" -- cargo run --quiet --example tutorial_extract_text -- "$PDF"
+          run ""       -- cargo run --quiet --example tutorial_convert_formats -- "$PDF"
+          run ""       -- cargo run --quiet --example tutorial_create_pdf
+          run ""       -- cargo run --quiet --example tutorial_search_text -- "$PDF" "PDF"
+          run ""       -- cargo run --quiet --example tutorial_extract_structured -- "$PDF"
+          run ""       -- cargo run --quiet --example tutorial_edit_document -- "$PDF" "$out_dir/edited.pdf"
+          run ""       -- cargo run --quiet --example tutorial_forms_annotations -- "$PDF"
+
+      # Batch + feature showcases are OS-independent (pure-Rust core) — run once
+      # on Linux to bound CI minutes.
+      - name: Run showcase Rust examples (Linux only)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          PDF=tests/fixtures/simple.pdf
+          cargo build --examples --features signatures
+          cargo run --example tutorial_batch_processing -- "$PDF" "$PDF"
+          cargo run --example showcase_barcode_svg --features barcodes
+          cargo run --example showcase_compliance_validation
+          cargo run --example showcase_dashed_stroke
+          cargo run --example showcase_encrypted_bytes
+          cargo run --example showcase_page_extraction
+          cargo run --example showcase_streaming_table
+          cargo run --example showcase_image_embedding
+          cargo run --example showcase_pdf_ua_image
+          cargo run --example showcase_in_memory_roundtrip
+          cargo run --example showcase_pdfa_conversion
+          cargo run --example showcase_office_conversion
+          cargo run --example showcase_pkcs12_signing --features signatures
+          cargo run --example showcase_rfc3161_timestamp --features signatures
+
+  # CLI build
+  cli:
+    name: CLI Build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # A transient single-OS hiccup (e.g. a Windows cache-save tar
+      # failure) must not cancel the other OSes' builds.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+
+      - name: Cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Build CLI
+        run: cargo build -p pdf_oxide_cli
+
+      - name: Test CLI --help
+        run: cargo run -p pdf_oxide_cli -- --help
+
+  # MCP server build
+  mcp:
+    name: MCP Build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # A transient single-OS hiccup must not cancel the other OSes' builds.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+
+      - name: Cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Build MCP server
+        run: cargo build -p pdf_oxide_mcp
+
+  # OCR auto-surface end-to-end: provisions the models + ONNX Runtime
+  # so the AutoExtractor OCR path (image → text) is actually EXERCISED,
+  # not merely built. Closes the #519 gap where OCR tests skipped for
+  # lack of a provisioned lane.
+  ocr:
+    name: OCR (auto image→text)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+
+      - name: Cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Provision OCR models (english + language packs)
+        run: bash scripts/setup_ocr_models.sh "$GITHUB_WORKSPACE/.ocr-models" chinese arabic cyrillic
+
+      - name: Install ONNX Runtime (for ort load-dynamic)
+        run: |
+          python3 -m pip install --user --quiet onnxruntime
+          so=$(python3 -c 'import onnxruntime,glob,os;print(sorted(glob.glob(os.path.join(os.path.dirname(onnxruntime.__file__),"capi","libonnxruntime.so*")))[-1])')
+          echo "ORT_DYLIB_PATH=$so" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$(dirname "$so"):${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+      - name: Auto OCR-from-image e2e + multi-language (#519)
+        env:
+          PDF_OXIDE_MODEL_DIR: ${{ github.workspace }}/.ocr-models
+        run: |
+          cargo test --features ocr \
+            --test test_auto_ocr_image_519 \
+            --test test_auto_ocr_multilang_519 -- --nocapture
+
+  # Python bindings test
+  python:
+    name: Python Bindings
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
+        with:
+          tool-cache: 'false'
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+
+      - name: Cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: Create virtual environment
+        run: uv venv
+
+      - name: Install maturin
+        run: uv pip install maturin pytest
+
+      - name: Build Python package
+        run: uv run maturin build --release --features python,ocr,barcodes --out dist
+
+      - name: Install wheel
+        shell: bash
+        run: |
+          wheel=$(ls dist/*.whl)
+          uv pip install "$wheel"
+
+      - name: Smoke-test Python bindings
+        run: uv run python -c "import pdf_oxide; print(pdf_oxide.VERSION)"
+
+      - name: Run Python feature-guard tests
+        run: uv run pytest python/tests/ -v --tb=short
+
+      - name: Run Python examples
+        if: matrix.python-version == '3.11'
+        shell: bash
+        run: |
+          PDF="$GITHUB_WORKSPACE/tests/fixtures/simple.pdf"
+          cd examples/python/01-extract-text       && uv run python main.py "$PDF"
+          cd "$GITHUB_WORKSPACE/examples/python/02-convert-formats"  && uv run python main.py "$PDF"
+          cd "$GITHUB_WORKSPACE/examples/python/03-create-pdf"       && uv run python main.py
+          cd "$GITHUB_WORKSPACE/examples/python/04-search-text"      && uv run python main.py "$PDF" "PDF"
+          cd "$GITHUB_WORKSPACE/examples/python/05-extract-structured" && uv run python main.py "$PDF"
+          cd "$GITHUB_WORKSPACE/examples/python/06-edit-document"    && uv run python main.py "$PDF" /tmp/py_edited.pdf
+          cd "$GITHUB_WORKSPACE/examples/python/07-forms-annotations" && uv run python main.py "$PDF"
+          cd "$GITHUB_WORKSPACE/examples/python/08-batch-processing"  && uv run python main.py "$PDF" "$PDF"
+          cd "$GITHUB_WORKSPACE/examples/python/09-new-features/barcode_svg"       && uv run python main.py
+          cd "$GITHUB_WORKSPACE/examples/python/09-new-features/streaming_table"  && uv run python main.py
+          cd "$GITHUB_WORKSPACE/examples/python/09-new-features/pdf_ua_image"     && uv run python main.py
+          cd "$GITHUB_WORKSPACE/examples/python/09-new-features/in_memory_roundtrip" && uv run python main.py
+          cd "$GITHUB_WORKSPACE/examples/python/09-new-features/pkcs12_signing"   && uv run python main.py
+          cd "$GITHUB_WORKSPACE/examples/python/09-new-features/rfc3161_timestamp" && uv run python main.py
+          cd "$GITHUB_WORKSPACE/examples/python/09-new-features/dashed_stroke"    && uv run python main.py
+          cd "$GITHUB_WORKSPACE/examples/python/09-new-features/pdfa_conversion"  && uv run python main.py
+          cd "$GITHUB_WORKSPACE/examples/python/09-new-features/page_extraction"  && uv run python main.py
+          cd "$GITHUB_WORKSPACE/examples/python/09-new-features/encrypted_bytes" && uv run python main.py
+          cd "$GITHUB_WORKSPACE/examples/python/09-new-features/compliance_validation" && uv run python main.py
+          cd "$GITHUB_WORKSPACE/examples/python/09-new-features/image_embedding"    && uv run python main.py
+          cd "$GITHUB_WORKSPACE/examples/python/09-new-features/office_conversion"  && uv run python main.py
+          cd "$GITHUB_WORKSPACE/examples/python/09-new-features/ocr_scanned_pdf"  && uv run python main.py
+
+  # Python examples — core scenarios run + assert output on Linux/macOS/Windows
+  # (the version-matrixed `python` job above runs the full suite on Linux only).
+  python-examples:
+    name: Python Examples (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+
+      - name: Cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: python-examples-${{ matrix.os }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: Build + install wheel
+        shell: bash
+        run: |
+          uv venv
+          uv pip install maturin
+          uv run maturin build --release --features python,barcodes --out dist
+          wheel=$(ls dist/*.whl | head -n1)
+          uv pip install "$wheel"
+
+      # Core scenarios (01–07): run + assert output on every OS.
+      - name: Run Python examples (core, cross-OS, with assertions)
+        shell: bash
+        run: |
+          set -uo pipefail
+          PDF="$GITHUB_WORKSPACE/tests/fixtures/simple.pdf"
+          out_dir="${RUNNER_TEMP:-/tmp}"
+          fail() { echo "ASSERT FAILED: $1"; exit 1; }
+          run() { # run <dir> -- <args...>
+            local dir="$1"; shift; [ "$1" = "--" ] && shift
+            echo "::group::python $dir"
+            local out; out="$(cd "$GITHUB_WORKSPACE/examples/python/$dir" && uv run --project "$GITHUB_WORKSPACE" python main.py "$@" 2>&1)" \
+              || { echo "$out"; fail "exit: $dir"; }
+            echo "$out"
+            [ -n "$(printf '%s' "$out" | tr -d '[:space:]')" ] || fail "empty output: $dir"
+            echo "::endgroup::"
+          }
+          run 01-extract-text       -- "$PDF"
+          run 02-convert-formats    -- "$PDF"
+          run 03-create-pdf         --
+          run 04-search-text        -- "$PDF" "PDF"
+          run 05-extract-structured -- "$PDF"
+          run 06-edit-document      -- "$PDF" "$out_dir/py_edited.pdf"
+          run 07-forms-annotations  -- "$PDF"
+
+  # WASM build check
+  wasm-build:
+    name: WASM Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
+        with:
+          tool-cache: 'false'
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+          target: wasm32-unknown-unknown,wasm32-wasip1
+          components: clippy
+
+      - name: Cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Build WASM
+        run: cargo build --lib --target wasm32-unknown-unknown --features wasm,rendering,barcodes
+
+      - name: Clippy WASM
+        run: cargo clippy --target wasm32-unknown-unknown --no-default-features --features wasm,rendering,barcodes --lib -- -D warnings
+
+      # Generate the Node.js bindings from the debug wasm build and run the
+      # WASM consumer example + the core functional test-parity suite. This is
+      # the WASM leg of the cross-language example/parity verification: it
+      # proves the wasm-bindgen surface actually loads and the same core
+      # behaviors hold as in every other binding. wasm-bindgen-cli is pinned to
+      # the exact `wasm-bindgen` crate version (matching release.yml).
+      - name: Install matching wasm-bindgen-cli
+        run: |
+          WASM_BINDGEN_VERSION=$(grep -A1 'name = "wasm-bindgen"' Cargo.lock | grep version | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "Installing wasm-bindgen-cli@${WASM_BINDGEN_VERSION}"
+          cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION"
+
+      - name: WASM example + core-parity suite (Node consumer)
+        run: |
+          set -eux
+          wasm-bindgen --target nodejs \
+            --out-dir examples/wasm_node/ \
+            target/wasm32-unknown-unknown/debug/pdf_oxide.wasm
+          cd examples/wasm_node
+          node extract_text.mjs
+          node --test core_parity.test.mjs
+
+      # WASI build target (issue #214). Used by sandboxed agent /
+      # serverless deployments via wasmtime / wasmer / Deno. We only
+      # build to keep `cargo +nightly` out of the equation — runtime
+      # validation lives in the consumer projects.
+      - name: Build WASI (wasm32-wasip1)
+        run: cargo build --lib --target wasm32-wasip1 --no-default-features --features wasm,rendering
+
+      # Validate the produced module using wasm-tools.
+      - name: Install wasm-tools
+        uses: taiki-e/install-action@fd2f5e3d644b484055ebf4268f474c565f148f25 # v2
+        with:
+          tool: wasm-tools
+
+      - name: wasm-tools validate (dev build)
+        run: wasm-tools validate target/wasm32-unknown-unknown/debug/pdf_oxide.wasm
+
+      # Release build + wasm-opt -Oz --converge shrinks the bundle before we ship it.
+      - name: Install binaryen (wasm-opt)
+        run: |
+          set -eux
+          ver="120"
+          curl --retry 3 --retry-all-errors -fL -o binaryen.tar.gz "https://github.com/WebAssembly/binaryen/releases/download/version_${ver}/binaryen-version_${ver}-x86_64-linux.tar.gz"
+          tar -xzf binaryen.tar.gz
+          echo "$PWD/binaryen-version_${ver}/bin" >> "$GITHUB_PATH"
+
+      - name: Release WASM build
+        run: cargo build --release --lib --target wasm32-unknown-unknown --no-default-features --features wasm,rendering,barcodes
+
+      - name: wasm-opt -Oz --converge (size gate)
+        shell: bash
+        run: |
+          in="target/wasm32-unknown-unknown/release/pdf_oxide.wasm"
+          out="target/wasm32-unknown-unknown/release/pdf_oxide.opt.wasm"
+          # Rustc emits several post-MVP features for wasm32 — enable each
+          # explicitly or wasm-opt's validator rejects the input module.
+          # --enable-simd added: image/rendering code uses v128 SIMD intrinsics.
+          wasm-opt -Oz --converge \
+            --enable-nontrapping-float-to-int \
+            --enable-bulk-memory \
+            --enable-sign-ext \
+            --enable-mutable-globals \
+            --enable-reference-types \
+            --enable-simd \
+            "$in" -o "$out"
+          before_kb=$(( $(stat -c%s "$in") / 1024 ))
+          after_kb=$(( $(stat -c%s "$out") / 1024 ))
+          echo "Before wasm-opt: ${before_kb} KB"
+          echo "After  wasm-opt: ${after_kb} KB"
+          # Size regression gate. History after -Oz:
+          #   v0.3.47 ~11.25 MB (fast_image_resize SIMD + hayro-jbig2).
+          #   v0.3.48 ~13.23 MB: the office-converter integration (#159)
+          #     adds the docx/pptx/xlsx writers + the bundled DejaVu
+          #     Sans/Bold Unicode-fallback faces (~1.5 MB of
+          #     `include_bytes!`). WASM exposes `to_*_bytes` /
+          #     `open_from_*_bytes` so the fallback fonts are a required
+          #     part of that feature, not dead weight — the growth is
+          #     legitimate, so the ceiling is raised rather than the
+          #     fonts gated off wasm32.
+          #   v0.3.52 ~14.15 MB: the #525 Markdown→PDF styling fix
+          #     adds per-run font dispatch — `parse_inline_runs`, an
+          #     extended `map_font_name` covering all twelve Latin
+          #     Standard-14 faces, and per-run measure/position in
+          #     `render_markdown` — plus on-demand Standard-14
+          #     registration in `PdfWriter::finish` (the latter
+          #     actually shrinks image-only PDFs but the markdown
+          #     pipeline still nets larger). The WASM OCR surface
+          #     stubs (`WasmOcrEngine`, `extract_text_ocr`,
+          #     `model_manifest`) compile in even when `ocr-tract`
+          #     is off, since the `#[cfg(not(...))]` stub bodies and
+          #     wasm-bindgen glue still pay a small cost in the
+          #     default wasm build. Both are legitimate user-facing
+          #     improvements (#525, #524), so the ceiling is raised
+          #     rather than the styling fix gated off wasm32 — same
+          #     precedent the v0.3.48 bump followed.
+          #   #674 ~15.05 MB: the §11 transparency surface (isolated /
+          #     knockout groups, the full blend-mode set, soft-mask
+          #     luminosity/alpha compositing) plus the `IccBackend`
+          #     trait land real compositing code on the rendering path,
+          #     which the wasm build compiles in (`--features
+          #     wasm,rendering,barcodes`). The optional lcms2 backend is
+          #     gated off wasm, so this is the pure-Rust compositor, not
+          #     a vendored CMM — legitimate feature growth, so the
+          #     ceiling is raised rather than §11 gated off wasm32, same
+          #     precedent the v0.3.48 / v0.3.52 bumps followed.
+          # Ceiling leaves ~6% headroom above the ~15.05 MB #674 baseline.
+          max_kb=16384
+          if [ "$after_kb" -gt "$max_kb" ]; then
+            echo "::error::wasm bundle ${after_kb} KB exceeds ceiling ${max_kb} KB"
+            exit 1
+          fi
+          wasm-tools validate "$out"
+
+  # Build the native library once per OS × feature-variant, then share the
+  # resulting artifact with all binding jobs (Go, Node.js, C#, FFI check).
+  # Avoids rebuilding ~400 MB of Rust code N times per CI run.
+  #
+  # Variants:
+  #   default  — icc only (default features); used by Node.js + C# bare guard
+  #   extended — barcodes,rendering,signatures,tsa-client,system-fonts; native targets; used by C#
+  #   go       — same features, but cross-compiled for CGo (aarch64-darwin / mingw64); used by Go
+  build-lib:
+    name: Build lib (${{ matrix.os }}, ${{ matrix.variant }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            variant: default
+            features: ""
+            extra-target: ""
+          - os: ubuntu-latest
+            variant: extended
+            features: "barcodes,rendering,signatures,tsa-client,system-fonts"
+            extra-target: ""
+          - os: macos-latest
+            variant: default
+            features: ""
+            extra-target: ""
+          - os: macos-latest
+            variant: extended
+            features: "barcodes,rendering,signatures,tsa-client,system-fonts"
+            extra-target: ""
+          - os: macos-latest
+            variant: go
+            features: "barcodes,rendering,signatures,tsa-client,system-fonts"
+            extra-target: "aarch64-apple-darwin"
+          - os: windows-latest
+            variant: default
+            features: ""
+            extra-target: ""
+          - os: windows-latest
+            variant: extended
+            features: "barcodes,rendering,signatures,tsa-client,system-fonts"
+            extra-target: ""
+          - os: windows-latest
+            variant: go
+            features: "barcodes,rendering,signatures,tsa-client,system-fonts"
+            extra-target: "x86_64-pc-windows-gnu"
+          # Java JNI shim crate (`pdf_oxide_jni`) — cdylib that exports
+          # `Java_fyi_oxide_pdf_*` symbols. Built with the same
+          # extended feature set so Java tests can exercise rendering /
+          # signatures / TSA. Built on all three host OSes so the Java
+          # binding's JNI surface is exercised cross-OS in PR CI (#458
+          # follow-up: previously Linux-only). release.yml still fans out
+          # to the five JAR-bundled arches for publishing.
+          - os: ubuntu-latest
+            variant: java-jni
+            features: "rendering,signatures,tsa-client"
+            extra-target: ""
+          - os: macos-latest
+            variant: java-jni
+            features: "rendering,signatures,tsa-client"
+            extra-target: ""
+          - os: windows-latest
+            variant: java-jni
+            features: "rendering,signatures,tsa-client"
+            extra-target: ""
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+
+      - name: Add cross-compile target
+        if: matrix.extra-target != ''
+        run: rustup target add ${{ matrix.extra-target }}
+
+      - name: Cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: build-lib-${{ matrix.os }}-${{ matrix.variant }}
+
+      - name: Build library
+        shell: bash
+        run: |
+          FEATURE_FLAG=""
+          [ -n "${{ matrix.features }}" ] && FEATURE_FLAG="--features ${{ matrix.features }}"
+          TARGET_FLAG=""
+          [ -n "${{ matrix.extra-target }}" ] && TARGET_FLAG="--target ${{ matrix.extra-target }}"
+          # The `java-jni` variant builds the JNI shim crate, not
+          # the main pdf_oxide library. Same `--features` flag,
+          # different `-p` package selector.
+          if [ "${{ matrix.variant }}" = "java-jni" ]; then
+            cargo build --release -p pdf_oxide_jni $FEATURE_FLAG $TARGET_FLAG
+          else
+            cargo build --release --lib $FEATURE_FLAG $TARGET_FLAG
+          fi
+
+      # Upload every lib file that exists — paths vary by OS and target.
+      # Downstream jobs download and find the file at its original location.
+      - name: Upload native lib artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-lib-${{ matrix.os }}-${{ matrix.variant }}
+          retention-days: 1
+          if-no-files-found: ignore
+          path: |
+            target/release/libpdf_oxide.so
+            target/release/libpdf_oxide.a
+            target/release/libpdf_oxide.dylib
+            target/release/pdf_oxide.dll
+            target/release/pdf_oxide.lib
+            target/release/libpdf_oxide_jni.so
+            target/release/libpdf_oxide_jni.dylib
+            target/release/pdf_oxide_jni.dll
+            target/x86_64-pc-windows-gnu/release/libpdf_oxide.a
+            target/x86_64-pc-windows-gnu/release/pdf_oxide.dll
+            target/x86_64-pc-windows-gnu/release/pdf_oxide.lib
+            target/aarch64-apple-darwin/release/libpdf_oxide.dylib
+            target/aarch64-apple-darwin/release/libpdf_oxide.a
+            include/pdf_oxide.h
+
+  # Go bindings build and test
+  go:
+    name: Go Bindings (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: [build-lib]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          # go.mod's `go 1.21` directive keeps us compatible with older
+          # consumers; CI builds with the newest patched toolchain (>=1.25
+          # required by govulncheck v1.3+). Pinned to 1.26.4 because the
+          # setup-go `stable` alias lagged at 1.26.3, which govulncheck flags
+          # for GO-2026-5037 (crypto/x509) and GO-2026-5039 (net/textproto),
+          # both fixed in go1.26.4. Bump as new patch releases land.
+          go-version: '1.26.4'
+
+      # Download the pre-built native lib (extended features: barcodes,
+      # rendering, signatures, tsa-client, system-fonts). Artifact preserves
+      # the original target/ directory structure so CGo finds it at the
+      # expected path without any extra staging.
+      - name: Download native lib artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: native-lib-${{ matrix.os }}-${{ matrix.os == 'ubuntu-latest' && 'extended' || 'go' }}
+
+      - name: Go build
+        working-directory: go
+        run: go build -tags pdf_oxide_dev ./...
+
+      - name: Go vet
+        working-directory: go
+        run: go vet -tags pdf_oxide_dev ./...
+
+      - name: Go format check
+        working-directory: go
+        shell: bash
+        run: |
+          diff=$(gofmt -l .)
+          if [ -n "$diff" ]; then
+            echo "The following Go files need formatting:"
+            echo "$diff"
+            echo
+            echo "Run 'gofmt -w .' to fix."
+            exit 1
+          fi
+
+      # golangci-lint v2 — single meta-linter replacing staticcheck /
+      # ineffassign / etc. Use the @v7 action because our
+      # `go/.golangci.yml` is the v2 schema; the @v6 action still
+      # defaults to pulling golangci-lint 1.x which rejects
+      # `linters.default` / `formatters`.
+      # Pin a recent v2 release built with a modern Go toolchain —
+      # v2.0.2 was built with go1.24 and can't typecheck go1.26 stdlib.
+      - name: golangci-lint
+        if: matrix.os == 'ubuntu-latest'
+        uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
+        with:
+          version: v2.11.4
+          working-directory: go
+          args: --build-tags pdf_oxide_dev --timeout 5m
+
+      # govulncheck — module-level vulnerability scanner.
+      - name: govulncheck
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: go
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck -tags pdf_oxide_dev ./...
+
+      # Race detector catches data races that survive linting.
+      - name: Go test -race
+        working-directory: go
+        run: go test -race -count=1 -p 1 -tags pdf_oxide_dev ./...
+
+      # Core scenarios (01–07): run + assert output on Linux/macOS/Windows.
+      - name: Run Go examples (core, cross-OS, with assertions)
+        shell: bash
+        run: |
+          set -uo pipefail
+          PDF="$GITHUB_WORKSPACE/tests/fixtures/simple.pdf"
+          out_dir="${RUNNER_TEMP:-/tmp}"
+          fail() { echo "ASSERT FAILED: $1"; exit 1; }
+          run() { # run <dir> -- <args...>
+            local dir="$1"; shift; [ "$1" = "--" ] && shift
+            cd "$GITHUB_WORKSPACE/examples/go/$dir"
+            echo "::group::go $dir"
+            local out; out="$(go run -tags pdf_oxide_dev main.go "$@" 2>&1)" || { echo "$out"; fail "exit: $dir"; }
+            echo "$out"
+            [ -n "$(printf '%s' "$out" | tr -d '[:space:]')" ] || fail "empty output: $dir"
+            echo "::endgroup::"
+          }
+          run 01-extract-text       -- "$PDF"
+          run 02-convert-formats    -- "$PDF"
+          run 03-create-pdf         --
+          run 04-search-text        -- "$PDF" "PDF"
+          run 05-extract-structured -- "$PDF"
+          run 06-edit-document      -- "$PDF" "$out_dir/go_edited.pdf"
+          run 07-forms-annotations  -- "$PDF"
+
+      # Batch + feature showcases are OS-independent — run once on Linux.
+      - name: Run Go showcase examples (Linux only)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          PDF="$GITHUB_WORKSPACE/tests/fixtures/simple.pdf"
+          cd "$GITHUB_WORKSPACE/examples/go/08-batch-processing"
+          go run -tags pdf_oxide_dev main.go "$PDF" "$PDF"
+          for feat in barcode_svg streaming_table pdf_ua_image in_memory_roundtrip pkcs12_signing rfc3161_timestamp dashed_stroke encrypted_bytes page_extraction pdfa_conversion compliance_validation image_embedding office_conversion; do
+            cd "$GITHUB_WORKSPACE/examples/go/09-new-features/$feat"
+            go run -tags pdf_oxide_dev main.go
+          done
+
+  # JavaScript/TypeScript bindings build and test
+  # Downloads the pre-built Rust staticlib then runs node-gyp rebuild to
+  # produce a real .node addon, matching exactly what ships to npm.
+  nodejs:
+    name: Node.js Bindings (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: [build-lib]
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '20'
+
+      - name: Download native lib artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: native-lib-${{ matrix.os }}-extended
+
+      - name: Stage staticlib for node-gyp
+        shell: bash
+        run: |
+          mkdir -p lib
+          case "${{ matrix.os }}" in
+            ubuntu-latest)
+              cp target/release/libpdf_oxide.a lib/
+              ;;
+            macos-latest)
+              cp target/release/libpdf_oxide.a lib/
+              ;;
+            windows-latest)
+              cp target/release/pdf_oxide.lib lib/
+              ;;
+          esac
+
+      - name: Install dependencies
+        working-directory: js
+        run: npm install --ignore-scripts
+
+      - name: TypeScript type check
+        working-directory: js
+        run: npx tsc --noEmit
+
+      # Build lib/ on every OS via the canonical build (tsc + fix-esm-imports).
+      # `lib/*.js` is gitignored and generated, and the test/example steps below
+      # import the package through it, so it must exist on macOS/Windows too —
+      # not just Linux. Bare `tsc` is NOT enough: the source uses extensionless
+      # relative imports, and `fix-esm-imports.js` rewrites them to explicit
+      # `.js` paths that Node's ESM resolver requires at runtime. publint /
+      # arethetypeswrong also need these real .js + .d.ts files that
+      # package.json's `main` / `types` / `exports` entries point at.
+      - name: Build lib/ (tsc + ESM import fixups)
+        working-directory: js
+        run: npm run build:ts
+
+      # Biome v2 replaces eslint + prettier with a single Rust-core tool.
+      - name: Biome lint+format check
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: js
+        run: npx --yes @biomejs/biome@latest ci .
+
+      # publint — validates package.json so the published tarball works in every module system.
+      - name: publint
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: js
+        run: npx --yes publint
+
+      # @arethetypeswrong/cli — checks that types resolve for every
+      # exports condition. Ignored rules (all node10-specific):
+      # - cjs-resolves-to-esm — our package is ESM-only
+      #   (`"type": "module"`, `engines.node: >=18`); the node 10 CJS
+      #   resolver is the only path that can even hit this.
+      # - no-resolution / internal-resolution-error — the ESM subpath
+      #   exports (`./builders`, `./managers`, `./errors`) don't
+      #   simulate cleanly under node10's CJS resolver. Same
+      #   justification.
+      #
+      # This tolerates ONLY one specific upstream attw crash, not arbitrary
+      # attw failures — a real types-vs-runtime regression still fails CI.
+      # The crash: attw's `extractTarball` (@arethetypeswrong/core
+      # createPackage.js) does
+      # `new Gunzip((chunk) => (unzipped = chunk)).push(tgz, true)`, keeping
+      # only the LAST fflate gunzip chunk. Any package whose *decompressed*
+      # tarball spans multiple fflate chunks (ours is ~1.16 MB / 118 files of
+      # legit .js + .d.ts) ends with an empty final chunk, so `untar` sees no
+      # files and attw aborts with exactly:
+      # "Cannot read properties of undefined (reading 'filename')".
+      # Reproduced against every attw 0.15.0–0.18.2 — no version to pin, and
+      # the package can't be shrunk (no maps/tests/source shipped; all real
+      # API surface). It "used to work" only while the package fit one chunk.
+      # We swallow ONLY that exact signature; any other non-zero exit (i.e. a
+      # genuine export/type problem) still fails the job, as do all other
+      # Node-binding gates. Drop this wrapper once attw fixes chunk handling.
+      - name: arethetypeswrong (types vs runtime)
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: js
+        shell: bash
+        run: |
+          set +e
+          out="$(npx --yes @arethetypeswrong/cli --pack . \
+            --ignore-rules cjs-resolves-to-esm no-resolution internal-resolution-error 2>&1)"
+          rc=$?
+          printf '%s\n' "$out"
+          if [ "$rc" -eq 0 ]; then
+            exit 0
+          fi
+          if printf '%s' "$out" | grep -qF "Cannot read properties of undefined (reading 'filename')"; then
+            echo "::warning::attw hit the known upstream tarball-extraction bug (multi-chunk gunzip drops files); tolerated — see the comment above this step in ci.yml."
+            exit 0
+          fi
+          echo "::error::attw reported a real types-vs-runtime problem (not the known upstream crash)."
+          exit "$rc"
+
+      # npm audit fails on high+ severity transitive vulns.
+      - name: npm audit (prod deps, high severity)
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: js
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Build native addon with node-gyp
+        working-directory: js
+        shell: bash
+        run: |
+          npx node-gyp rebuild
+          ls -la build/Release/pdf_oxide.node
+
+      # Stage the freshly-built addon into the per-OS prebuilds dir the package
+      # resolves at runtime (linux-x64 / darwin-arm64 / win32-x64). This must
+      # run BEFORE the tests below: the compiled lib/ loads the native addon
+      # from prebuilds/, so the lib-backed tests (core-parity, readme-quickstart)
+      # can only load it once it's staged here — on every OS, not just Linux.
+      - name: Stage node-gyp build as prebuilt
+        working-directory: js
+        shell: bash
+        run: |
+          dir="prebuilds/$(node -e "process.stdout.write(process.platform + '-' + process.arch)")"
+          mkdir -p "$dir"
+          cp build/Release/pdf_oxide.node "$dir/pdf_oxide.node"
+          ls -la "$dir"
+
+      - name: Run Node.js tests
+        working-directory: js
+        run: npm test
+
+      - name: Install examples workspace dependencies
+        working-directory: examples/javascript
+        run: npm install --ignore-scripts
+
+      # Core scenarios (01–07): run + assert output on Linux/macOS/Windows. This
+      # is the direct #648 guard (a Windows-Node ESM/loader regression must fail
+      # CI). No `timeout` — macOS/Windows git-bash lack it; the job timeout covers
+      # hangs.
+      - name: Run JavaScript examples (core, cross-OS, with assertions)
+        shell: bash
+        env:
+          NODE_PATH: "${{ github.workspace }}/examples/javascript/node_modules"
+        run: |
+          set -uo pipefail
+          PDF="$GITHUB_WORKSPACE/tests/fixtures/simple.pdf"
+          cd "$GITHUB_WORKSPACE/examples/javascript"
+          fail() { echo "ASSERT FAILED: $1"; exit 1; }
+          run() { # run <expect> -- node script args...
+            local expect="$1"; shift; [ "$1" = "--" ] && shift
+            echo "::group::$*"
+            local out; out="$("$@" 2>&1)" || { echo "$out"; fail "non-zero exit: $*"; }
+            echo "$out"
+            [ -n "$(printf '%s' "$out" | tr -d '[:space:]')" ] || fail "empty output: $*"
+            [ -z "$expect" ] || printf '%s' "$out" | grep -qF "$expect" || fail "missing '$expect': $*"
+            echo "::endgroup::"
+          }
+          run "" -- node 01-extract-text/index.js "$PDF"
+          run "" -- node 02-convert-formats/index.js "$PDF"
+          run "" -- node 03-create-pdf/index.js
+          run "" -- node 04-search-text/index.js "$PDF" "PDF"
+          run "" -- node 05-extract-structured/index.js "$PDF"
+          # 06 deletes a page, so it needs a multi-page input (simple.pdf is 1 page).
+          run "Deleted" -- node 06-edit-document/index.js "$GITHUB_WORKSPACE/tests/fixtures/hello_structure.pdf" "${TMPDIR:-/tmp}/js_edited.pdf"
+          run "" -- node 07-forms-annotations/index.js "$PDF"
+
+      # Batch + feature showcases are OS-independent — run once on Linux.
+      - name: Run JavaScript showcase examples (Linux only)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        env:
+          NODE_PATH: "${{ github.workspace }}/examples/javascript/node_modules"
+        run: |
+          set -euo pipefail
+          PDF="$GITHUB_WORKSPACE/tests/fixtures/simple.pdf"
+          cd "$GITHUB_WORKSPACE/examples/javascript"
+          for ex in \
+            "08-batch-processing/index.js $PDF $PDF" \
+            09-new-features/barcode_svg/index.js \
+            09-new-features/streaming_table/index.js \
+            09-new-features/pdf_ua_image/index.js \
+            09-new-features/in_memory_roundtrip/index.js \
+            09-new-features/pkcs12_signing/index.js \
+            09-new-features/rfc3161_timestamp/index.js \
+            09-new-features/dashed_stroke/index.js \
+            09-new-features/encrypted_bytes/index.js \
+            09-new-features/page_extraction/index.js \
+            09-new-features/compliance_validation/index.js \
+            09-new-features/pdfa_conversion/index.js \
+            09-new-features/image_embedding/index.js \
+            09-new-features/office_conversion/index.js; do
+            echo "--- $ex ---"
+            timeout 120 node $ex
+          done
+
+      - name: Compile TypeScript examples
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: examples/javascript
+        run: npx tsc -p tsconfig.json --noEmit
+
+  # C#/.NET bindings build
+  csharp:
+    name: C# Bindings (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: [build-lib]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5
+        with:
+          dotnet-version: '8.0.x'
+
+      # C# tests require the extended-features lib (barcodes, rendering,
+      # signatures, tsa-client, system-fonts) so UNSUPPORTED stubs don't
+      # shadow the assertions.
+      - name: Download native lib artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: native-lib-${{ matrix.os }}-extended
+
+      - name: Build C# library
+        working-directory: csharp/PdfOxide
+        run: dotnet build -c Release -p:TreatWarningsAsErrors=true
+
+      - name: Build C# tests
+        working-directory: csharp/PdfOxide.Tests
+        run: dotnet build -c Release -p:TreatWarningsAsErrors=true
+
+      # dotnet format verifies whitespace + style conformance without mutating files.
+      - name: dotnet format --verify-no-changes
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: csharp
+        run: dotnet format PdfOxide/PdfOxide.csproj --verify-no-changes --severity warn
+
+      - name: dotnet format tests --verify-no-changes
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: csharp
+        run: dotnet format PdfOxide.Tests/PdfOxide.Tests.csproj --verify-no-changes --severity warn
+
+      # dotnet list package --vulnerable surfaces known CVEs in transitive NuGet deps.
+      - name: dotnet list package --vulnerable (PdfOxide)
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: csharp/PdfOxide
+        shell: bash
+        run: |
+          output=$(dotnet list package --vulnerable --include-transitive 2>&1)
+          echo "$output"
+          # Exit non-zero if any vulnerabilities are reported
+          if echo "$output" | grep -qi "has the following vulnerable packages"; then
+            echo "::error::Vulnerable NuGet packages detected in PdfOxide"
+            exit 1
+          fi
+
+      - name: dotnet list package --vulnerable (PdfOxide.Tests)
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: csharp/PdfOxide.Tests
+        shell: bash
+        run: |
+          output=$(dotnet list package --vulnerable --include-transitive 2>&1)
+          echo "$output"
+          if echo "$output" | grep -qi "has the following vulnerable packages"; then
+            echo "::error::Vulnerable NuGet packages detected in PdfOxide.Tests"
+            exit 1
+          fi
+
+      - name: Stage native lib for C# tests
+        shell: bash
+        run: |
+          case "${{ matrix.os }}" in
+            ubuntu-latest)
+              cp target/release/libpdf_oxide.so csharp/PdfOxide.Tests/bin/Release/net8.0/
+              ;;
+            macos-latest)
+              cp target/release/libpdf_oxide.dylib csharp/PdfOxide.Tests/bin/Release/net8.0/
+              ;;
+            windows-latest)
+              cp target/release/pdf_oxide.dll csharp/PdfOxide.Tests/bin/Release/net8.0/
+              ;;
+          esac
+
+      - name: Run C# tests
+        working-directory: csharp/PdfOxide.Tests
+        run: dotnet test -c Release --no-build --verbosity normal
+
+      # Core scenarios (01–07): run + assert output on Linux/macOS/Windows. The
+      # native lib is resolved per-OS (LD/DYLD_LIBRARY_PATH on Linux/macOS, PATH
+      # on Windows).
+      - name: Run C# examples (core, cross-OS, with assertions)
+        shell: bash
+        env:
+          LD_LIBRARY_PATH: "${{ github.workspace }}/target/release"
+          DYLD_LIBRARY_PATH: "${{ github.workspace }}/target/release"
+        run: |
+          set -uo pipefail
+          PDF="$GITHUB_WORKSPACE/tests/fixtures/simple.pdf"
+          out_dir="${RUNNER_TEMP:-/tmp}"
+          export PATH="$GITHUB_WORKSPACE/target/release:$PATH" # Windows dll search
+          fail() { echo "ASSERT FAILED: $1"; exit 1; }
+          run() { # run <csproj> -- <args...>
+            local proj="$1"; shift; [ "$1" = "--" ] && shift
+            echo "::group::$proj"
+            local out; out="$(dotnet run --project "$proj" -- "$@" 2>&1)" || { echo "$out"; fail "exit: $proj"; }
+            echo "$out"
+            [ -n "$(printf '%s' "$out" | tr -d '[:space:]')" ] || fail "empty output: $proj"
+            echo "::endgroup::"
+          }
+          run examples/csharp/01-extract-text/ExtractText.csproj         -- "$PDF"
+          run examples/csharp/02-convert-formats/ConvertFormats.csproj   -- "$PDF"
+          run examples/csharp/03-create-pdf/CreatePdf.csproj             --
+          run examples/csharp/04-search-text/SearchText.csproj           -- "$PDF" "PDF"
+          run examples/csharp/05-extract-structured/ExtractStructured.csproj -- "$PDF"
+          run examples/csharp/06-edit-document/EditDocument.csproj       -- "$PDF" "$out_dir/cs_edited.pdf"
+          run examples/csharp/07-forms-annotations/FormsAnnotations.csproj -- "$PDF"
+
+      # Batch + feature showcases are OS-independent — run once on Linux.
+      - name: Run C# showcase examples (Linux only)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        env:
+          LD_LIBRARY_PATH: "${{ github.workspace }}/target/release"
+        run: |
+          set -euo pipefail
+          PDF="$GITHUB_WORKSPACE/tests/fixtures/simple.pdf"
+          dotnet run --project examples/csharp/08-batch-processing/BatchProcessing.csproj -- "$PDF" "$PDF"
+          for proj in \
+            examples/csharp/09-new-features/BarcodeSvg/BarcodeSvg.csproj \
+            examples/csharp/09-new-features/StreamingTable/StreamingTable.csproj \
+            examples/csharp/09-new-features/PdfUaImage/PdfUaImage.csproj \
+            examples/csharp/09-new-features/InMemoryRoundtrip/InMemoryRoundtrip.csproj \
+            examples/csharp/09-new-features/Pkcs12Signing/Pkcs12Signing.csproj \
+            examples/csharp/09-new-features/Rfc3161Timestamp/Rfc3161Timestamp.csproj \
+            examples/csharp/09-new-features/DashedStroke/DashedStroke.csproj \
+            examples/csharp/09-new-features/EncryptedBytes/EncryptedBytes.csproj \
+            examples/csharp/09-new-features/PageExtraction/PageExtraction.csproj \
+            examples/csharp/09-new-features/PdfaConversion/PdfaConversion.csproj \
+            examples/csharp/09-new-features/ComplianceValidation/ComplianceValidation.csproj \
+            examples/csharp/09-new-features/ImageEmbedding/ImageEmbedding.csproj \
+            examples/csharp/09-new-features/OfficeConversion/OfficeConversion.csproj; do
+            dotnet run --project "$proj"
+          done
+
+  # Regression guard: verify binding tests pass against a bare-features
+  # native lib (only default "icc" feature, same as the old broken release
+  # build). Tests that use feature-gated APIs must catch
+  # UnsupportedFeatureException rather than assuming the feature is present.
+  # If a future test blindly asserts a feature-gated call succeeds, this job
+  # will catch it before the release ships a broken NuGet / .node / .a.
+  csharp-bare-features:
+    name: C# bindings — bare-features native lib (regression guard)
+    runs-on: ubuntu-latest
+    needs: [build-lib]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Download native lib artifact (default features)
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: native-lib-ubuntu-latest-default
+
+      - name: Build C# library
+        working-directory: csharp/PdfOxide
+        run: dotnet build -c Release
+
+      - name: Build C# tests
+        working-directory: csharp/PdfOxide.Tests
+        run: dotnet build -c Release
+
+      - name: Stage bare-features native lib
+        run: cp target/release/libpdf_oxide.so csharp/PdfOxide.Tests/bin/Release/net8.0/
+
+      - name: Run C# tests against bare-features lib
+        working-directory: csharp/PdfOxide.Tests
+        run: dotnet test -c Release --no-build --verbosity normal
+
+  # Java bindings: build the Maven artifact and run JUnit against
+  # the JAR-embedded native (v0.3.53 new in tree). PR CI runs on
+  # ubuntu only with one JDK floor (11); release.yml fans out to
+  # the full os × JDK matrix. Mirrors the csharp/go/nodejs flow
+  # (pull pre-built native artifact, stage, build, test).
+  java:
+    name: Java Bindings (${{ matrix.os }}, JDK ${{ matrix.jdk }})
+    runs-on: ${{ matrix.os }}
+    needs: [build-lib]
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux exercises the full JDK range (11/17/21); macOS + Windows add
+        # one JDK each so the JNI surface is verified on every host OS without
+        # tripling the JDK matrix on every platform.
+        include:
+          - os: ubuntu-latest
+            jdk: '11'
+          - os: ubuntu-latest
+            jdk: '17'
+          - os: ubuntu-latest
+            jdk: '21'
+          - os: macos-latest
+            jdk: '21'
+          - os: windows-latest
+            jdk: '21'
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up JDK ${{ matrix.jdk }}
+        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
+        with:
+          distribution: 'temurin'
+          java-version: ${{ matrix.jdk }}
+
+      - name: Cache Maven local repository
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4
+        with:
+          path: ~/.m2/repository
+          key: maven-${{ runner.os }}-${{ hashFiles('java/pom.xml') }}
+          restore-keys: |
+            maven-${{ runner.os }}-
+
+      - name: Download Java JNI native lib artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: native-lib-${{ matrix.os }}-java-jni
+
+      - name: Stage native lib into Maven resources
+        shell: bash
+        run: |
+          # The Java NativeLoader resolves
+          # /fyi/oxide/pdf/native/{OS}/{ARCH}/<libname> from the JAR
+          # (see internal/NativeLoader.java). Stage the freshly-built JNI
+          # cdylib at the path matching THIS runner's OS/arch before mvn
+          # package so the embedded-native + JNI tests run cross-OS.
+          case "${{ runner.os }}" in
+            Linux)   OSDIR=Linux;   LIB=libpdf_oxide_jni.so ;;
+            macOS)   OSDIR=Mac;     LIB=libpdf_oxide_jni.dylib ;;
+            Windows) OSDIR=Windows; LIB=pdf_oxide_jni.dll ;;
+            *) echo "::error::unsupported runner.os ${{ runner.os }}"; exit 1 ;;
+          esac
+          # GitHub runners: ubuntu/windows are x86_64; macos-latest is arm64.
+          case "${{ runner.arch }}" in
+            X64)   ARCHDIR=x86_64 ;;
+            ARM64) ARCHDIR=aarch64 ;;
+            *) echo "::error::unsupported runner.arch ${{ runner.arch }}"; exit 1 ;;
+          esac
+          DEST="java/src/main/resources/fyi/oxide/pdf/native/$OSDIR/$ARCHDIR"
+          mkdir -p "$DEST"
+          # The artifact preserves the original target/release/ layout.
+          cp "target/release/$LIB" "$DEST/$LIB"
+          ls -la "$DEST"
+
+      - name: mvn compile
+        working-directory: java
+        run: mvn -B -P!dev compile
+
+      - name: mvn test (Surefire — JNI-backed JUnit)
+        working-directory: java
+        run: mvn -B -P!dev test
+
+      - name: mvn package — build publishable JAR
+        working-directory: java
+        run: mvn -B -P!dev -DskipTests package
+
+      - name: Verify JAR contains embedded native + manifest
+        shell: bash
+        working-directory: java
+        run: |
+          # Resolve the built JAR by glob so this survives version bumps
+          # (pom.xml's <version> is the single source of truth).
+          shopt -s nullglob
+          jars=(target/pdf-oxide-*.jar)
+          shopt -u nullglob
+          [ "${#jars[@]}" -eq 1 ] || { echo "::error::expected exactly one target/pdf-oxide-*.jar, found: ${jars[*]:-<none>}"; exit 1; }
+          JAR="${jars[0]}"
+          # The embedded native path matches THIS runner's OS/arch (the JAR
+          # built on each host bundles only that host's native; release.yml
+          # builds the all-arch fat JAR).
+          case "${{ runner.os }}" in
+            Linux)   NATIVE=fyi/oxide/pdf/native/Linux/x86_64/libpdf_oxide_jni.so ;;
+            macOS)   NATIVE=fyi/oxide/pdf/native/Mac/aarch64/libpdf_oxide_jni.dylib ;;
+            Windows) NATIVE=fyi/oxide/pdf/native/Windows/x86_64/pdf_oxide_jni.dll ;;
+          esac
+          jar tf "$JAR" | grep -q "$NATIVE" \
+            || { echo "::error::Native lib ($NATIVE) missing from JAR"; exit 1; }
+          unzip -p "$JAR" META-INF/MANIFEST.MF | grep -q "Automatic-Module-Name: fyi.oxide.pdf" \
+            || { echo "::error::Manifest missing Automatic-Module-Name"; exit 1; }
+          # Portable file size: GNU stat (-c%s) on Linux, BSD stat (-f%z) on macOS.
+          SIZE=$(stat -c%s "$JAR" 2>/dev/null || stat -f%z "$JAR")
+          echo "::notice::JAR validated: $JAR ($SIZE bytes, native $NATIVE)"
+
+      # Core example (01-extract-text): compile + run against the built JAR
+      # (which self-loads its embedded JNI native lib) and assert output.
+      # Runs once per host OS (Linux's JDK 11 row + the single macOS/Windows
+      # rows) so the JNI load path is exercised on Linux, macOS, and Windows.
+      - name: Run Java example (01-extract-text, with assertion)
+        if: matrix.jdk == '11' || matrix.os != 'ubuntu-latest'
+        shell: bash
+        working-directory: java
+        run: |
+          set -uo pipefail
+          # Classpath separator: ':' on Unix, ';' on Windows (the JDK there is
+          # native Windows even under git-bash).
+          case "${{ runner.os }}" in Windows) SEP=';' ;; *) SEP=':' ;; esac
+          JAR=$(ls target/pdf-oxide-*.jar | head -n1)
+          PDF="$GITHUB_WORKSPACE/tests/fixtures/simple.pdf"
+          # Runtime deps (slf4j-api, org.json) are declared compile-scope and
+          # reach real Maven/Gradle consumers transitively, but the bare JAR
+          # does not bundle them. Resolve the runtime classpath the same way a
+          # consumer would so the smoke test exercises the JAR as published.
+          mvn -B -P!dev -q dependency:build-classpath \
+            -DincludeScope=runtime -Dmdep.outputFile="$RUNNER_TEMP/cp.txt"
+          DEPS=$(cat "$RUNNER_TEMP/cp.txt")
+          mkdir -p "$RUNNER_TEMP/javaex"
+          javac -cp "$JAR" -d "$RUNNER_TEMP/javaex" \
+            "$GITHUB_WORKSPACE/examples/java/01-extract-text/ExtractText.java"
+          out="$(java -cp "$JAR$SEP$RUNNER_TEMP/javaex$SEP$DEPS" ExtractText "$PDF" 2>&1)" \
+            || { echo "$out"; echo "ASSERT FAILED (exit)"; exit 1; }
+          echo "$out"
+          echo "$out" | grep -q "Pages:" || { echo "ASSERT FAILED: missing 'Pages:'"; exit 1; }
+
+      - name: Upload Java JAR artifact
+        if: matrix.jdk == '11' || matrix.os != 'ubuntu-latest'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: java-jar-${{ matrix.os }}
+          retention-days: 7
+          path: java/target/pdf-oxide-*.jar
+
+  # Java format + static analysis (parity with the other bindings'
+  # fmt+lint gates). Pure-bytecode/source checks — no native lib needed,
+  # so this runs standalone and fast. palantir-java-format needs JDK
+  # internals access (java/.mvn/jvm.config provides the add-exports).
+  java-lint:
+    name: Java Lint (Spotless + SpotBugs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5.2.0
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Cache Maven local repository
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4
+        with:
+          path: ~/.m2/repository
+          key: maven-${{ runner.os }}-${{ hashFiles('java/pom.xml') }}
+          restore-keys: |
+            maven-${{ runner.os }}-
+
+      - name: Spotless format check
+        working-directory: java
+        run: mvn -B -P!dev spotless:check
+
+      - name: SpotBugs static analysis
+        working-directory: java
+        run: mvn -B -P!dev compile spotbugs:check
+
+  # Code coverage with enforcement
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      # Free ~25-30 GB of disk before cargo-llvm-cov runs. The instrumented
+      # build writes a second full target tree (target/llvm-cov-target/)
+      # with much larger object files; ubuntu-latest starts with ~14 GB
+      # free and has hit "No space left on device" on the v0.3.38
+      # post-merge run — see #399 Case B. The v0.3.53 PR #533 run also
+      # hit a silent OOM kill mid-build because this callsite previously
+      # missed the `swap-storage: false` override — fixed via the composite
+      # action which locks `swap-storage: false` in (linker needs the
+      # 4 GB swapfile).
+      - name: Free disk space before coverage
+        uses: ./.github/actions/free-disk-space
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+          components: llvm-tools-preview
+
+      - name: Cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      # Drop the regular target/ before the instrumented build so only
+      # one target/* tree is alive at a time. #399 mitigation.
+      - name: Clean target before instrumented build
+        run: rm -rf target/
+
+      - name: Generate coverage
+        env:
+          # Cap parallel link-worker spawns to avoid rust-lld SIGBUS
+          # on the instrumented path (object files are larger). #399.
+          CARGO_BUILD_JOBS: "2"
+        run: |
+          cargo llvm-cov --lib --tests --lcov --output-path lcov.info \
+            --ignore-filename-regex '(cid_mappings/|adobe_glyph_list\.rs|python\.rs|wasm\.rs|ffi\.rs|ocr/|rendering/|bin/)'
+
+      - name: Enforce 85% coverage threshold
+        run: |
+          cargo llvm-cov report \
+            --ignore-filename-regex '(cid_mappings/|adobe_glyph_list\.rs|python\.rs|wasm\.rs|ffi\.rs|ocr/|rendering/|bin/)' \
+            --fail-under-lines 85
+
+      - name: Upload coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: ./lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+  # Benchmark smoke test
+  bench:
+    name: Benchmark Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+
+      - name: Cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Build benchmarks
+        run: cargo bench --no-run
+
+  # Security audit
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Run security audit
+        uses: actions-rust-lang/audit@72c09e02f132669d52284a3323acdb503cfc1a24 # v1
+
+  # cargo-deny: licenses / advisories / bans / sources (single consolidated gate)
+  deny:
+    name: Dependency Check (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Check dependencies
+        uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2.0.20
+        with:
+          command: check
+          arguments: --all-features
+
+  # cargo-geiger: report unsafe code in the dependency tree (informational)
+  geiger:
+    name: Unsafe code audit (cargo-geiger)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: geiger
+      - name: Install cargo-geiger
+        run: cargo install --locked cargo-geiger
+      - name: Run cargo-geiger
+        # --all-features would activate fips+legacy-crypto simultaneously (compile_error!).
+        # Default features give representative unsafe coverage for this informational step.
+        run: cargo geiger 2>/dev/null || true
+
+  # TOML formatting check (taplo)
+  taplo:
+    name: TOML format (taplo)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: taplo
+      - name: Install taplo
+        uses: taiki-e/install-action@fd2f5e3d644b484055ebf4268f474c565f148f25 # v2
+        with:
+          tool: taplo-cli
+      - name: Check TOML formatting
+        run: taplo fmt --check
+
+  # Unused dependencies check (cargo-shear)
+  shear:
+    name: Unused deps (cargo-shear)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: shear
+      - name: Install cargo-shear
+        uses: taiki-e/install-action@fd2f5e3d644b484055ebf4268f474c565f148f25 # v2
+        with:
+          tool: cargo-shear
+      - name: Check for unused dependencies
+        run: cargo shear
+
+  # Feature coverage: build with each feature individually + no-features
+  # + all-features to catch cfg-rot without the O(2^n) cost of a true
+  # powerset. We declare 15+ features; --feature-powerset would fire
+  # 32K+ combinations (infeasible on CI runner budget). --each-feature
+  # gives O(n) builds that catch >95% of cfg bit-rot — the remaining
+  # cases (3+ feature interactions) are rare enough that we prefer
+  # per-release manual feature-matrix audits over routing every PR
+  # through them.
+  features-powerset:
+    name: Feature powerset (cargo-hack)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: hack
+      - name: Install cargo-hack
+        uses: taiki-e/install-action@fd2f5e3d644b484055ebf4268f474c565f148f25 # v2
+        with:
+          tool: cargo-hack
+      - name: Build each feature (singletons + default + all-features)
+        # Exclude `fips` from the powerset: fips+legacy-crypto is a compile_error by design
+        # (FIPS 140-3 forbids MD5). The dedicated `fips` job covers --no-default-features --features fips,icc.
+        run: cargo hack check --each-feature --no-dev-deps --lib --exclude-features fips
+
+  # Public-API semver check (PR only — compares against base branch).
+  #
+  # Non-blocking while we're pre-1.0: Cargo's 0.y.z rule requires
+  # bumping `y` for any breaking change, and cargo-semver-checks
+  # enforces that strictly. The writer layer's internal types
+  # (ContentStreamOp, ContentStreamBuilder, EmbeddedFont) are still
+  # shaking out across releases — CHANGELOG is the source of truth
+  # for breaking changes until the public surface stabilises and we
+  # cut 1.0.
+  semver-checks:
+    name: Semver check (PR only)
+    runs-on: ubuntu-latest
+    # Disabled pre-1.0. Under Cargo's 0.y.z rule every breaking change
+    # demands a `y` bump and cargo-semver-checks enforces that strictly,
+    # which produces a permanent red FAILURE on the PR check list for
+    # any release bundling writer-layer internal changes (the writer
+    # surface — ContentStreamOp / ContentStreamBuilder / EmbeddedFont —
+    # is still shaking out). `continue-on-error: true` keeps the
+    # workflow green but GitHub still renders the job red in the PR UI,
+    # which is noise. Re-enable by flipping `if:` back to
+    # `github.event_name == 'pull_request'` once the public API
+    # stabilises and we cut 1.0. Until then the CHANGELOG is the
+    # source of truth for breaking changes.
+    if: false
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2
+        with:
+          feature-group: default-features
+
+  # MSRV: verify the oldest supported Rust toolchain still builds the library
+  msrv:
+    name: MSRV build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Read MSRV from Cargo.toml
+        id: msrv
+        run: |
+          v=$(grep -E '^rust-version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=${v:-1.82}" >> "$GITHUB_OUTPUT"
+      - uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: msrv
+      - name: Build with MSRV toolchain
+        run: cargo build --lib
+
+  dco:
+    name: DCO check
+    runs-on: ubuntu-latest
+    if: false # temporarily disabled — re-enable before public contributor onboarding
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+      - name: Check DCO sign-off
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+          MISSING=0
+          while IFS= read -r sha; do
+            if ! git log -1 --pretty=full "$sha" | grep -q "^Signed-off-by:"; then
+              echo "::error::Commit $sha is missing a Signed-off-by trailer"
+              MISSING=$((MISSING+1))
+            fi
+          done < <(git log --pretty=format:"%H" "${BASE}..${HEAD}")
+          [ "$MISSING" -eq 0 ] || exit 1
