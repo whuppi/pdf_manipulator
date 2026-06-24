@@ -55,6 +55,7 @@ jobs:
   inputs:
     name: Resolve inputs
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     permissions: {}
     outputs:
       runner: ${{ steps.resolve.outputs.runner }}
@@ -184,6 +185,7 @@ jobs:
     if: always()
     needs: [inputs, test]
     runs-on: ${{ needs.inputs.outputs.runner }}
+    timeout-minutes: 5
     permissions: {}
     steps:
       - name: Evaluate

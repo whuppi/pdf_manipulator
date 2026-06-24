@@ -54,6 +54,7 @@ jobs:
   inputs:
     name: Resolve inputs
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     permissions: {}
     outputs:
       runner: ${{ steps.resolve.outputs.runner }}
@@ -69,6 +70,7 @@ jobs:
     name: Release gate
     needs: inputs
     runs-on: ${{ needs.inputs.outputs.runner }}
+    timeout-minutes: 5
     permissions:
       contents: read  # checkout + changelog gate, read-only
     outputs:
@@ -104,6 +106,7 @@ jobs:
       group: release-${{ needs.gate.outputs.version || github.run_id }}
       cancel-in-progress: true
     runs-on: ${{ needs.inputs.outputs.runner }}
+    timeout-minutes: 20
     permissions:
       contents: write  # release.sh --discover creates the GitHub release
     outputs:
@@ -140,6 +143,7 @@ jobs:
           - { name: windows, runner: windows-2025-vs2026 }
     name: compile-${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     permissions:
       contents: read  # checkout + build; artifacts use run storage, no API
     steps:
@@ -162,6 +166,7 @@ jobs:
     needs: [inputs, discover, compile]
     if: needs.discover.outputs.has_release == 'true'
     runs-on: ${{ needs.inputs.outputs.runner }}
+    timeout-minutes: 15
     permissions:
       contents: write  # uploads binaries + stamps the release tag
     steps:
@@ -258,6 +263,7 @@ jobs:
     needs: [inputs, discover, upload-assets]
     if: needs.discover.outputs.has_release == 'true'
     runs-on: ${{ needs.inputs.outputs.runner }}
+    timeout-minutes: 20
     environment: ${{ inputs.branch || github.ref_name }}
     permissions:
       contents: write  # ephemeral stamp commit + release-notes install snippet

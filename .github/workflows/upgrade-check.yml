@@ -40,6 +40,7 @@ jobs:
   inputs:
     name: Resolve inputs
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     permissions: {}
     outputs:
       runner: ${{ steps.resolve.outputs.runner }}
@@ -57,6 +58,7 @@ jobs:
     name: Pinned versions
     needs: inputs
     runs-on: ${{ needs.inputs.outputs.runner }}
+    timeout-minutes: 30
     permissions:
       contents: write       # pushes the chore/pins branch
       pull-requests: write  # opens / edits the pins PR
@@ -155,6 +157,7 @@ jobs:
     name: Lockfile refresh
     needs: inputs
     runs-on: ${{ needs.inputs.outputs.runner }}
+    timeout-minutes: 20
     permissions:
       contents: write       # pushes the chore/lockfiles branch
       pull-requests: write  # opens / edits the lockfiles PR
