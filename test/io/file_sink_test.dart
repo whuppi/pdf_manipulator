@@ -1,5 +1,5 @@
-// FileSink — streams written chunks to a file on disk. Native only, so this
-// test needs `dart:io` (test-guards exempts it for that reason).
+// FileSink — streams written chunks to a file on disk.
+// io-exempt: native-only; this writes a real on-disk file.
 
 @TestOn('vm')
 library;

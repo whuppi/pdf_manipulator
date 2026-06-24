@@ -30,6 +30,7 @@ jobs:
   inputs:
     name: Resolve inputs
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     outputs:
       runner: ${{ steps.resolve.outputs.runner }}
     steps:
@@ -45,18 +46,26 @@ jobs:
     name: Conventional Commit
     needs: inputs
     runs-on: ${{ needs.inputs.outputs.runner }}
+    timeout-minutes: 5
+    permissions:
+      contents: read  # checkout only; reads tool/commit-types.txt
     steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: Check PR title
         shell: bash
         env:
           TITLE: ${{ github.event.pull_request.title }}
         run: |
-          if ! grep -qE '^(feat|fix|docs|chore|ci|test|refactor|perf|build|deps)(\(.+\))?!?: .+' <<< "$TITLE"; then
+          # Same type list as the commit-msg hook (tool/commit-types.txt).
+          types=$(paste -sd'|' tool/commit-types.txt)
+          if ! grep -qE "^(${types})(\(.+\))?!?: .+" <<< "$TITLE"; then
             echo "::error::PR title must follow Conventional Commits format."
             echo ""
             echo "  <type>[optional scope]: <description>"
             echo ""
-            echo "  Types: feat fix docs chore ci test refactor perf build deps"
+            printf '  Types: %s\n' "$(paste -sd' ' tool/commit-types.txt)"
             echo "  Examples:"
             echo "    feat: add watermark support"
             echo "    fix(web): handle empty PDF edge case"
@@ -72,6 +81,7 @@ jobs:
     name: Promotion Chain
     needs: inputs
     runs-on: ${{ needs.inputs.outputs.runner }}
+    timeout-minutes: 5
     steps:
       - name: Validate promotion path
         shell: bash
@@ -103,6 +113,7 @@ jobs:
     name: Changelog Versions
     needs: inputs
     runs-on: ${{ needs.inputs.outputs.runner }}
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -133,6 +144,7 @@ jobs:
     name: Workflow lint
     needs: inputs
     runs-on: ${{ needs.inputs.outputs.runner }}
+    timeout-minutes: 15
     permissions:
       contents: read  # checkout only; both tools read the workflow files
     steps:
@@ -156,3 +168,22 @@ jobs:
       - name: shell lint (shellcheck + bash 3.2 portability)
         shell: bash
         run: bash tool/lint_shell.sh
+
+  # Runs on PR activity (not just the daily cron, which GitHub disables after
+  # ~60 idle days): HEADs every pinned asset so a pruned pin fails the PR that
+  # sits on it, before it fail-closes a build. Fails on a definitive 404/410,
+  # warns on transient.
+  pin-availability:
+    name: Pin availability
+    needs: inputs
+    runs-on: ${{ needs.inputs.outputs.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read  # checkout only; HEADs the pinned asset URLs
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Pinned assets still reachable
+        shell: bash
+        run: bash tool/ci/upgrade.sh check-availability

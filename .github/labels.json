@@ -1,14 +1,16 @@
 [
-  { "name": "bug",              "color": "D93F0B", "description": "Something broken" },
-  { "name": "feature",          "color": "0E8A16", "description": "New capability" },
-  { "name": "ci",               "color": "BFD4F2", "description": "Build, CI, workflows" },
-  { "name": "web",              "color": "1D76DB", "description": "Web or WASM specific" },
-  { "name": "upstream",         "color": "5319E7", "description": "Needs upstream pdf_oxide change" },
-  { "name": "dependencies",     "color": "0366D6", "description": "Dependency version bumps" },
-  { "name": "ready-to-test",    "color": "FBCA04", "description": "Triggers full test suite" },
-  { "name": "release",          "color": "6F42C1", "description": "Release promotion PR" },
-  { "name": "needs-info",       "color": "D876E3", "description": "Waiting on reporter" },
-  { "name": "wont-fix",         "color": "EEEEEE", "description": "Intentional or out of scope" },
-  { "name": "resolved",         "color": "1A7F37", "description": "Done from maintainer side; auto-closes after a grace period" },
-  { "name": "bot-closing-soon", "color": "CFD3D7", "description": "Auto-close in progress; bot-managed, do not edit" }
+  { "name": "bug",              "color": "D93F0B", "description": "Broken behavior (auto)" },
+  { "name": "feature",          "color": "0E8A16", "description": "New capability (auto)" },
+  { "name": "ci",               "color": "BFD4F2", "description": "Build, CI, or workflow change (auto)" },
+  { "name": "web",              "color": "1D76DB", "description": "Web or WASM specific (auto)" },
+  { "name": "upstream",         "color": "5319E7", "description": "Needs a pdf_oxide change (auto)" },
+  { "name": "dependencies",     "color": "0366D6", "description": "Dependency version bump (auto)" },
+  { "name": "upgrade-pins",     "color": "1D76DB", "description": "Pinned tool or binary bump, review the hashes (auto)" },
+  { "name": "upgrade-locks",    "color": "1D76DB", "description": "Lockfile refresh (auto)" },
+  { "name": "ready-to-test",    "color": "FBCA04", "description": "Triggers the full cross-target test run (manual)" },
+  { "name": "release",          "color": "6F42C1", "description": "Release promotion PR (manual)" },
+  { "name": "needs-info",       "color": "D876E3", "description": "Awaiting the reporter (manual)" },
+  { "name": "wont-fix",         "color": "EEEEEE", "description": "Intentional or out of scope (manual)" },
+  { "name": "resolved",         "color": "1A7F37", "description": "Fixed, auto-closes after a grace period (manual)" },
+  { "name": "bot-closing-soon", "color": "CFD3D7", "description": "Auto-close pending, do not edit (auto)" }
 ]

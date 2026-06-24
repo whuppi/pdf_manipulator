@@ -79,24 +79,28 @@ lint-shell:
 fixtures:
 	$(DART) run tool/generate_fixtures.dart
 
+# Two static guards. Guard 1: tests run identically on VM and browser, so no
+# dart:io; a test that genuinely needs it carries an 'io-exempt: <reason>'
+# comment. Guard 2: content claims go through extract/search/render. Its
+# exclusions are always-fine idioms (sublist(0, 5) is the %PDF magic check,
+# isNot(contains ...)), not per-file opt-outs, so they stay positional;
+# bytegrep-exempt is the per-line opt-out, and pdf_builder_battery is excluded
+# whole rather than marked 15 times.
 test-guards:
-	@bad=$$(grep -rln "dart:io" test/ --include="*.dart" \
-	  | grep -v "test/harness/asset_server.dart" \
-	  | grep -v "test/ops/platform/native/" \
-	  | grep -v "test/io/file_source_test.dart" \
-	  | grep -v "test/io/file_sink_test.dart" \
-	  | grep -v "test/bridge/protocol/wire_sync_test.dart" \
-	  | grep -v "test/runtime/web/lane_worker_sync_test.dart" \
-	  | grep -v "test/runtime/dumb_edges_test.dart" || true); \
+	@bad=$$(for f in $$(grep -rln "dart:io" test/ --include="*.dart"); do \
+	  grep -q "io-exempt:" "$$f" || echo "$$f"; \
+	done); \
 	if [ -n "$$bad" ]; then \
-	  echo "dart:io in tests — tests must run identically on VM and"; \
-	  echo "browser; fixtures are imported Dart source, never file I/O:"; \
+	  echo "dart:io in a test. Tests run identically on VM and browser;"; \
+	  echo "fixtures are imported Dart source, never file I/O. A test that"; \
+	  echo "legitimately needs dart:io carries an 'io-exempt:' comment with"; \
+	  echo "the reason. Missing it:"; \
 	  echo "$$bad"; exit 1; fi
 	@bad=$$(grep -rn "String.fromCharCodes" test/ops/ --include="*.dart" \
 	  | grep -v "sublist(0, 5)" | grep -v "isNot(contains" | grep -v "bytegrep-exempt" \
 	  | grep -v "pdf_builder_battery.dart" || true); \
 	if [ -n "$$bad" ]; then \
-	  echo "byte-grep content assertion — content claims go through"; \
+	  echo "byte-grep content assertion: content claims go through"; \
 	  echo "extract/search/render, or carry a bytegrep-exempt marker"; \
 	  echo "with the reason:"; \
 	  echo "$$bad"; exit 1; fi
@@ -113,9 +117,17 @@ build: build-native build-wasm
 
 # Triggers the build hook to compile the native binary for the
 # current host. Runs a non-existent test name so dart test starts
-# (invoking the hook) but no actual test executes.
+# (invoking the hook) but no actual test executes. A missing test
+# match and a build-hook compile failure both exit non-zero and the
+# tee pipe masks the code, so gate on the tooling's failure markers:
+# a broken native build must not pass silently.
 build-native:
-	$(DART) test test/ops/runners/native_runner_test.dart --concurrency=1 --name='DOES_NOT_EXIST' || true
+	@tmp=$$(mktemp); \
+	$(DART) test test/ops/runners/native_runner_test.dart --concurrency=1 --name='DOES_NOT_EXIST' 2>&1 | tee "$$tmp" || true; \
+	if grep -qE 'Building assets for package .* failed|returned with exit code|could not compile' "$$tmp"; then \
+		rm -f "$$tmp"; echo "build-native: native build hook failed (see output above)"; exit 1; \
+	fi; \
+	rm -f "$$tmp"
 
 build-wasm:
 	bash tool/compile_rust.sh wasm

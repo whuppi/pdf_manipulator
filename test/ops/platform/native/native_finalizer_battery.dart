@@ -9,6 +9,7 @@
 // Subprocess because FATAL aborts the process — test harness can't
 // catch it. Same pattern as Dart SDK's own FFI callback tests.
 
+// io-exempt: spawns a subprocess (a FATAL abort can't be caught in-process).
 import 'dart:io';
 
 import 'package:test/test.dart';

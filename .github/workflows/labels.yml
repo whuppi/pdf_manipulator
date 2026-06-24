@@ -3,6 +3,12 @@
 # makes GitHub match it: creates missing, recolours/redescribes changed, and
 # deletes any label not listed. Never edit labels in the UI; the next run
 # reverts the drift. The sync is authoritative, so labels.json must be complete.
+#
+# Description style: a terse phrase, sentence case, no trailing period; a comma
+# adds at most one substantive qualifier; no prefixes, no semicolons; noun
+# phrase unless the label's whole job is an action. Every one ends with an
+# applier tag: (auto) when a bot applies or manages it in the normal flow,
+# (manual) when you apply it.
 name: Labels
 
 on:

@@ -12,6 +12,7 @@
 @TestOn('vm')
 library;
 
+// io-exempt: reads bridge_api.rs from disk to check Dart/Rust op parity.
 import 'dart:io';
 
 import 'package:pdf_manipulator/src/bridge/protocol/op.dart';

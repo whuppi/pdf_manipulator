@@ -9,6 +9,7 @@
 @TestOn('vm')
 library;
 
+// io-exempt: reads lane_worker.js from disk to pin the web wire contract.
 import 'dart:io';
 
 import 'package:pdf_manipulator/src/runtime/web/lane_protocol.dart';
