@@ -104,7 +104,7 @@ runs:
             BEGIN { w = ENVIRON["sk_w"] }
             { print }
             /^\[build\]/ && !seen { print "rustc-wrapper = \"" w "\""; seen=1 }
-          ' "$CFG" > "$CFG.tmp" && mv "$CFG.tmp" "$CFG"
+          ' "$CFG" > "$CFG.tmp" && mv "$CFG.tmp" "$CFG" || rm -f "$CFG.tmp"
         else
           printf '\n[build]\nrustc-wrapper = "%s"\n' "$SCCACHE_BIN" >> "$CFG"
         fi
