@@ -192,8 +192,11 @@ jobs:
 
       - name: Refresh lockfiles to latest in-range
         run: |
-          fvm dart pub upgrade
-          ( cd example && fvm dart pub upgrade )
+          # Root is a pure-Dart package: --no-example so `dart pub` does not try
+          # to resolve the Flutter example (it has no sky_engine, dart can't).
+          # The example is a Flutter app, so refresh it with `flutter pub`.
+          fvm dart pub upgrade --no-example
+          ( cd example && fvm flutter pub upgrade )
 
       - name: Commit + open or update the lockfiles PR
         env:
