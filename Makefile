@@ -50,6 +50,22 @@ hooks:
 analyze: fixtures
 	@DART="$(DART)" FLUTTER="$(FLUTTER)" bash tool/analyze.sh
 
+# make analyze-floor  Resolve to the OLDEST in-range dependencies and analyze
+#                     the shipped code (lib bin hook). The wide lower bounds
+#                     (e.g. package_config >=2.1.0) are only honest if the code
+#                     analyzes against them, not just the newest a fresh build
+#                     resolves: the dependency half of "works for some, breaks
+#                     for some". Static analysis only, so no fixtures and no
+#                     native build. Tests are excluded on purpose; a consumer
+#                     sees lib, never your tests. Snapshots and restores the lock
+#                     so a local run leaves the tree clean.
+analyze-floor:
+	@cp pubspec.lock pubspec.lock.floorbak; \
+	$(DART) pub downgrade --no-example >/dev/null && $(DART) analyze --fatal-infos lib bin hook; rc=$$?; \
+	mv pubspec.lock.floorbak pubspec.lock; \
+	$(DART) pub get --no-example >/dev/null 2>&1 || true; \
+	exit $$rc
+
 # make lint-shell  Shell portability gate: shellcheck + a bash 4.0+ scan
 #                  that catches macOS bash 3.2 breaks in scripts and in
 #                  workflow run: blocks. Mirrors the CI workflow-lint job.
