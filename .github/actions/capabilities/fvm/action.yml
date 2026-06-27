@@ -86,17 +86,10 @@ runs:
             DEST=/c/fvm
             mkdir -p "$DEST"
             cp -R "$FVM_BIN/." "$DEST/"
-            # fvm ships only fvm.bat on Windows, and Git Bash won't resolve a
-            # bare `fvm` to a .bat (MSYS execvp skips .bat extensions). Drop a
-            # POSIX shim that runs the .bat through cmd, so every later bash
-            # step calls `fvm` exactly like the native launcher elsewhere.
-            printf '%s\n' \
-              '#!/usr/bin/env bash' \
-              'set -euo pipefail' \
-              'here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' \
-              'exec cmd //c "$(cygpath -w "$here/fvm.bat")" "$@"' \
-              > "$DEST/fvm"
-            chmod +x "$DEST/fvm"
+            # fvm 4.x ships a native fvm.exe (plus its src/ runtime), not a .bat.
+            # Git Bash's execvp auto-appends .exe, so a bare `fvm` on PATH
+            # resolves straight to fvm.exe, exactly like the launcher elsewhere.
+            # A POSIX shim file named `fvm` would only shadow the real .exe.
             # The \f reads like an escape but is literal here: GitHub runs this
             # step as bash, whose echo leaves backslashes alone (C:\fvm, not
             # C: + form-feed). Keep echo, not printf — see the zizmor note below.
