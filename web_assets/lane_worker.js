@@ -8,10 +8,10 @@
 // host_write_chunk per I/O mode, run lane_execute, post the result.
 //
 // Numeric protocol codes are INJECTED via the init message (see
-// lane_protocol.dart — the single source of truth). This file
+// protocol.dart — the single source of truth). This file
 // declares no numeric constants of its own.
 //
-// ── Message protocol (tags pinned by lane_protocol.dart + parity test)
+// ── Message protocol (tags pinned by protocol.dart + parity test)
 //
 // Dart → worker:
 //   init         { protocol, ioMode, baseUrl?, wasmModule? } → ready|error
