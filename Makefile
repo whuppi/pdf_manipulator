@@ -1,4 +1,4 @@
-.PHONY: check analyze lint-shell fixtures test-guards \
+.PHONY: check analyze analyze-floor platforms lint-shell fixtures test-guards \
        build build-native build-wasm \
        compile-macos compile-ios compile-android compile-linux compile-windows compile-wasm compile-natives \
        test test-pkg-native test-unit test-rust \
@@ -30,7 +30,7 @@ VERBOSE := $(if $(CI),--verbose,)
 #
 # make check    Full local gate before PR.
 
-check: lint-shell analyze test-guards test test-example
+check: lint-shell analyze platforms test-guards test test-example
 
 # make hooks    Activate the repo's git hooks (commit-msg, pre-commit).
 #               Run once after cloning — they stay dormant otherwise.
@@ -65,6 +65,13 @@ analyze-floor:
 	mv pubspec.lock.floorbak pubspec.lock; \
 	$(DART) pub get --no-example >/dev/null 2>&1 || true; \
 	exit $$rc
+
+# make platforms  Gate pub.dev platform support: pana (the exact analyzer
+#                 pub.dev runs, pinned + radar-tracked) must still report all 6
+#                 platforms, else a regression like an unconditional dart:io/ffi
+#                 import silently drops web. Logic + the why in tool/platforms.sh.
+platforms:
+	@DART="$(DART)" bash tool/platforms.sh
 
 # make lint-shell  Shell portability gate: shellcheck + a bash 4.0+ scan
 #                  that catches macOS bash 3.2 breaks in scripts and in
