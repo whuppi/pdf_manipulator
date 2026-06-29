@@ -32,8 +32,7 @@ import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 import 'package:pdf_manipulator/src/runtime/lane.dart';
 import 'package:pdf_manipulator/src/runtime/native/channel_buffers.dart';
-import 'package:pdf_manipulator/src/runtime/native/bindings.dart'
-    as bindings;
+import 'package:pdf_manipulator/src/runtime/native/bindings.dart' as bindings;
 import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
 import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
