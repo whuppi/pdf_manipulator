@@ -25,19 +25,27 @@
 
 import 'dart:async';
 import 'dart:ffi' as ffi;
+import 'dart:io' show Platform;
 import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 import 'package:pdf_manipulator/src/runtime/lane.dart';
 import 'package:pdf_manipulator/src/runtime/native/channel_buffers.dart';
-import 'package:pdf_manipulator/src/runtime/native/lane_bindings.dart'
+import 'package:pdf_manipulator/src/runtime/native/bindings.dart'
     as bindings;
 import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
 import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
+import 'package:pdf_manipulator/src/types/pdf_config.dart';
+import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 
-part 'native_lane_host.dart';
+part 'host.dart';
+
+/// Creates the native [LaneHost]. The platform conditional import selects this
+/// where dart:io exists. [config] is unused natively — lane sizing comes from
+/// the host.
+LaneHost createLaneHost({PdfConfig? config}) => NativeLaneHost();
 
 /// A read channel kept alive for a handle's lifetime (the engine
 /// moved its source into the document). Opaque to the Router.

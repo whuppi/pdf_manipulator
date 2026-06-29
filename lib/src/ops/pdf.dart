@@ -15,7 +15,7 @@ import 'package:pdf_manipulator/src/types/pdf_task.dart';
 import 'package:meta/meta.dart';
 
 import 'package:pdf_manipulator/src/bridge/pdf_bridge.dart';
-import 'package:pdf_manipulator/src/bridge/create.dart';
+import 'package:pdf_manipulator/src/bridge/create_bridge.dart';
 import 'package:pdf_manipulator/src/bridge/protocol/codec.dart' as codec;
 import 'package:pdf_manipulator/src/ops/pdf_doc.dart';
 

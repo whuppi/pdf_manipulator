@@ -8,7 +8,7 @@
 // so a call racing a kill finds nothing instead of touching freed
 // memory. Keys are never reused.
 //
-// INTERNAL — used by native_lane.dart only.
+// INTERNAL — used by lane.dart only.
 
 @ffi.DefaultAsset('package:pdf_manipulator/src/ffi/native_bindings.g.dart')
 library;

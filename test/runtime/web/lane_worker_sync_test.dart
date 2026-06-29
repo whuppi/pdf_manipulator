@@ -12,7 +12,7 @@ library;
 // io-exempt: reads lane_worker.js from disk to pin the web wire contract.
 import 'dart:io';
 
-import 'package:pdf_manipulator/src/runtime/web/lane_protocol.dart';
+import 'package:pdf_manipulator/src/runtime/web/protocol.dart';
 import 'package:test/test.dart';
 
 Set<String> _extractJsCases(String source) {
@@ -110,7 +110,7 @@ void main() {
           injected,
           contains(key),
           reason:
-              'worker reads P.\$key which lane_protocol.dart '
+              'worker reads P.\$key which protocol.dart '
               'does not inject',
         );
       }

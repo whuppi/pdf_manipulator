@@ -38,7 +38,7 @@
 //
 // Split: this library spans two files. The lane (job lifecycle,
 // 3 I/O modes) lives here; WebLaneHost (worker boot handshake,
-// page-global budget, pristine pool) lives in web_lane_host.dart.
+// page-global budget, pristine pool) lives in host.dart.
 
 import 'dart:async';
 import 'dart:js_interop';
@@ -50,12 +50,21 @@ import 'package:web/web.dart' as web;
 import 'package:web/web.dart' show EventStreamProviders;
 
 import 'package:pdf_manipulator/src/runtime/lane.dart';
-import 'package:pdf_manipulator/src/runtime/web/lane_protocol.dart';
+import 'package:pdf_manipulator/src/runtime/web/protocol.dart';
 import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
+import 'package:pdf_manipulator/src/types/pdf_config.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 
-part 'web_lane_host.dart';
+part 'host.dart';
+
+/// Creates the web [LaneHost]. The platform conditional import selects this
+/// where dart:js_interop exists. [config] supplies the lane-worker URL and an
+/// optional I/O-mode override.
+LaneHost createLaneHost({PdfConfig? config}) => WebLaneHost(
+  laneWorkerUrl: config?.webLaneWorkerUrl,
+  forceMode: config?.webIoMode,
+);
 
 // ── JS interop: SAB + Atomics (main thread: store/notify only) ─────
 
