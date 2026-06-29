@@ -9,6 +9,10 @@ inputs:
   make-target:
     description: "Makefile target to run"
     required: true
+  rust:
+    description: "Install the Rust toolchain (off for Dart-only static jobs)"
+    required: false
+    default: 'true'
   free-disk:
     description: "Reclaim disk for build-heavy jobs (Linux)"
     required: false
@@ -67,9 +71,13 @@ runs:
   steps:
     # ── Always ──
     - uses: ./.github/actions/capabilities/fvm
-    - uses: ./.github/actions/capabilities/rust
 
     # ── On demand ──
+    # Default on: most jobs build the native/wasm engine. Dart-only static
+    # jobs (pana, downgrade-analyze) never invoke cargo, so they pass rust: false.
+    - uses: ./.github/actions/capabilities/rust
+      if: inputs.rust == 'true'
+
     - uses: ./.github/actions/capabilities/free-disk-space
       if: inputs.free-disk == 'true'
 

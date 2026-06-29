@@ -1,6 +1,6 @@
 // WebLaneHost — worker fleet physics for the web lane runtime.
 //
-// Part of web_lane.dart (the lane itself lives there). This file owns
+// Part of lane.dart (the lane itself lives there). This file owns
 // everything about WORKERS AS A RESOURCE, nothing about jobs:
 //
 //   - the boot handshake (spawn → booted → init → ready): the worker
@@ -14,7 +14,7 @@
 //     thousands
 //   - WASM module compile-once caching + I/O mode detection
 
-part of 'web_lane.dart';
+part of 'lane.dart';
 
 // ── Host ────────────────────────────────────────────────────────────
 
@@ -219,7 +219,12 @@ class WebLaneHost implements LaneHost {
 
   /// The detected (or forced) I/O mode — the Router reports this as
   /// the instance's [PdfIoMode].
+  @override
   final PdfIoMode mode;
+
+  @override
+  int get defaultLaneCount =>
+      suggestedLaneCount(web.window.navigator.hardwareConcurrency);
 
   static JSObject? _cachedModule;
   static Future<void>? _compileInFlight;

@@ -233,6 +233,16 @@ if [ -n "$al_latest" ] && [ "$al_latest" != "$ACTIONLINT_VERSION" ]; then
   [ "$MODE" = apply ] && set_kv ACTIONLINT_VERSION "$al_latest" "$VERSIONS"
 fi
 
+# ── pana (PANA_VERSION in versions.env; the `platforms` make target + CI gate).
+# Track pub.dev's LATEST from its own API: the gate must run the same pana
+# pub.dev runs, or it drifts from the platform verdict it exists to predict.
+pana_latest="$(_fetch https://pub.dev/api/packages/pana 2>/dev/null | jq -r '.latest.version // empty' 2>/dev/null || true)"
+if [ -n "$PANA_VERSION" ] && [ -n "$pana_latest" ] && [ "$PANA_VERSION" != "$pana_latest" ]; then
+  drift=1
+  echo "pana: $PANA_VERSION -> $pana_latest"
+  [ "$MODE" = apply ] && set_kv PANA_VERSION "$pana_latest" "$VERSIONS"
+fi
+
 # ── binaryen (version + 3 verified sha256, all in versions.env) ──────
 # Detection is a cheap tag compare; the downloads run only on apply, and any
 # single 404 aborts the whole bump rather than writing a half-correct pin.

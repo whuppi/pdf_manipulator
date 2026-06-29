@@ -138,16 +138,14 @@ lib/
     │   ├── pdf_standalone.dart             ← sign, convertTo, convertToPdf, extractPages
     │   └── pdf_sugar.dart                  ← merge, split, watermark, compress, ...
     │
-    ├── bridge/                              ← BRIDGE
+    ├── bridge/                              ← BRIDGE (platform-blind)
     │   ├── pdf_bridge.dart                 ← abstract PdfBridge + handle contracts
     │   ├── pdf_transport.dart              ← PdfTransport interface
     │   ├── shared_bridge.dart              ← ONE bridge, both platforms; births every PdfTask
     │   ├── shared_bridge_doc.dart          ← doc handle (part)
     │   ├── shared_bridge_editor.dart       ← editor handle (part)
     │   ├── shared_bridge_builder.dart      ← builder + page handles (part)
-    │   ├── create.dart                     ← conditional import router
-    │   ├── _create_native.dart             ← → SharedBridge(Router(NativeLaneHost))
-    │   ├── _create_web.dart                ← → SharedBridge(Router(WebLaneHost))
+    │   ├── create_bridge.dart              ← neutral factory: SharedBridge(Router(createLaneHost()))
     │   │
     │   └── protocol/
     │       ├── binary_codec.dart           ← binary request/response encoding
@@ -156,19 +154,23 @@ lib/
     │
     ├── runtime/                             ← THE LANE RUNTIME
     │   ├── router.dart                     ← shared brain: pinning, placement, dispose
-    │   ├── lane.dart                       ← Lane / LaneHost / LaneJob contracts
+    │   ├── lane.dart                       ← Lane / LaneHost / LaneJob contracts + lane sizing
+    │   ├── host.dart                       ← platform host selector: stub default,
+    │   │                                      dart.library.io → native, js_interop → web
+    │   ├── host_stub.dart                  ← neutral default target (no platform library,
+    │   │                                      so pub.dev keeps web supported)
     │   ├── wire_peek.dart                  ← minimal wire reads (op, handleId)
     │   │
     │   ├── native/
-    │   │   ├── native_lane.dart            ← dumb adapter: 4 verbs over FFI
-    │   │   ├── native_lane_host.dart       ← spawn + one-time FFI bootstrap
+    │   │   ├── lane.dart                   ← dumb adapter: 4 verbs over FFI; exposes createLaneHost
+    │   │   ├── host.dart                   ← spawn + one-time FFI bootstrap
     │   │   ├── channel_buffers.dart        ← condvar memory layout
-    │   │   └── lane_bindings.dart          ← @Native FFI bindings
+    │   │   └── bindings.dart               ← @Native FFI bindings
     │   │
     │   └── web/
-    │       ├── web_lane.dart               ← the lane: job lifecycle, 3 I/O modes
-    │       ├── web_lane_host.dart          ← worker boot handshake, budget, pristine pool
-    │       └── lane_protocol.dart          ← codes injected into lane_worker.js
+    │       ├── lane.dart                   ← the lane: job lifecycle, 3 I/O modes; exposes createLaneHost
+    │       ├── host.dart                   ← worker boot handshake, budget, pristine pool
+    │       └── protocol.dart               ← codes injected into lane_worker.js
     │
     ├── types/                              ← shared types (all exported)
     │   ├── cancel_hook.dart                ← CancelHook: binds PdfTask.cancel to its job
