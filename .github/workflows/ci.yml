@@ -125,6 +125,7 @@ jobs:
       - uses: ./.github/actions/make-target
         with:
           make-target: platforms
+          rust: false  # pana is Dart-only static analysis, no native build to provision
 
   test:
     name: Package tests
