@@ -36,7 +36,7 @@ updates:
       # joins the first group it matches.
       whuppi-ci:
         patterns:
-          - "whuppi/ci"
+          - "whuppi/ci*"
       actions:
         patterns:
           - "*"
