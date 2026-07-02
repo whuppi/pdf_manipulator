@@ -1,0 +1,13 @@
+# zizmor configuration.
+#
+# unpinned-uses: third-party actions must be SHA-pinned (zizmor's default
+# blanket policy). First-party whuppi/ci refs are the exception — they're
+# pinned to an exact, immutable release tag (@vX.Y.Z), bumped by the grouped
+# whuppi-ci Dependabot PR, and the tag is what makes them reproducible. A
+# ref-pin policy accepts the tag ref without demanding a SHA. Local actions
+# (./.github/actions/*) and every third-party action are unaffected.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        "whuppi/ci/*": ref-pin
