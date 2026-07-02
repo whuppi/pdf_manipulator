@@ -6,17 +6,14 @@ set -euo pipefail
 # opens a single reviewed PR with whatever drifted.
 #
 # Watched here (this package's LOCAL pins — clean upstream, real churn):
-#   Flutter SDK   .fvmrc + example/.fvmrc        Google release channel
 #   binaryen      BINARYEN_VERSION + 3 sha256    WebAssembly/binaryen
 #   pana          PANA_VERSION                   pub.dev
-#   zizmor gate   ZIZMOR_VERSION                 PyPI
-#   actionlint    ACTIONLINT_VERSION             rhysd/actionlint
 #
 # Owned elsewhere by design (NOT here):
-#   fvm / Chrome / bore pins       whuppi/ci (shared capabilities download +
-#                                    verify them from whuppi/ci's versions.env;
-#                                    reach this repo via the whuppi-ci Dependabot
-#                                    group after a whuppi/ci release)
+#   Flutter SDK (.fvmrc), lockfiles  the shared upgrade-check reusable workflow
+#   fvm / Chrome / bore pins,        whuppi/ci (its self-upgrade bumps them;
+#     zizmor / actionlint gate pins    they reach this repo via the whuppi-ci
+#                                      Dependabot group after a whuppi/ci release)
 #   pub deps, GitHub-action SHAs   Dependabot (.github/dependabot.yml)
 #   build.json (baseTag, crate,    manual — pdf_oxide source facts; move only
 #     features, outputs)             when the vendored submodule does
@@ -157,43 +154,6 @@ check_availability() {
 # Each check runs alone, then exits.
 if [ "$MODE" = verify-pinned ]; then verify_pinned && exit 0; exit 1; fi
 if [ "$MODE" = check-availability ]; then check_availability && exit 0; exit 1; fi
-
-# ── Flutter SDK (.fvmrc + example/.fvmrc) ────────────────────────────
-flutter_cur="$(json_get '.flutter' "$ROOT/.fvmrc")"
-releases="$(_fetch https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json 2>/dev/null || true)"
-stable_hash="$(jq -r '.current_release.stable // empty' <<< "$releases" 2>/dev/null || true)"
-flutter_latest="$(jq -r --arg h "$stable_hash" '.releases[] | select(.hash == $h) | .version // empty' <<< "$releases" 2>/dev/null | head -1 || true)"
-# flutter_latest is interpolated into the sed below, bypassing set_kv. Keep the
-# exact-semver gate or a crafted upstream value becomes sed injection.
-if [ -n "$flutter_latest" ] && ! printf '%s' "$flutter_latest" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-  echo "::error::refuse: implausible flutter version from upstream: '$flutter_latest'" >&2
-  exit 1
-fi
-if [ -n "$flutter_latest" ] && [ -n "$flutter_cur" ] && [ "$flutter_cur" != "$flutter_latest" ]; then
-  drift=1
-  echo "flutter: $flutter_cur -> $flutter_latest"
-  if [ "$MODE" = apply ]; then
-    for f in "$ROOT/.fvmrc" "$ROOT/example/.fvmrc"; do
-      sed -i.bak "s/\"flutter\": *\"[^\"]*\"/\"flutter\": \"$flutter_latest\"/" "$f" && rm -f "$f.bak"
-    done
-  fi
-fi
-
-# ── zizmor gate (ZIZMOR_VERSION in versions.env; run in pr-lint.yml) ──
-ziz_latest="$(_fetch https://pypi.org/pypi/zizmor/json 2>/dev/null | jq -r '.info.version // empty' 2>/dev/null || true)"
-if [ -n "$ZIZMOR_VERSION" ] && [ -n "$ziz_latest" ] && [ "$ZIZMOR_VERSION" != "$ziz_latest" ]; then
-  drift=1
-  echo "zizmor: $ZIZMOR_VERSION -> $ziz_latest"
-  [ "$MODE" = apply ] && set_kv ZIZMOR_VERSION "$ziz_latest" "$VERSIONS"
-fi
-
-# ── actionlint (the other pr-lint gate; version in versions.env) ─────
-al_latest="$(gh_latest_tag rhysd/actionlint | sed 's/^v//')"
-if [ -n "$al_latest" ] && [ "$al_latest" != "$ACTIONLINT_VERSION" ]; then
-  drift=1
-  echo "actionlint: $ACTIONLINT_VERSION -> $al_latest"
-  [ "$MODE" = apply ] && set_kv ACTIONLINT_VERSION "$al_latest" "$VERSIONS"
-fi
 
 # ── pana (PANA_VERSION in versions.env; the `platforms` make target + CI gate).
 # Track pub.dev's LATEST from its own API: the gate must run the same pana
