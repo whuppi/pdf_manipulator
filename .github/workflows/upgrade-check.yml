@@ -188,7 +188,7 @@ jobs:
           fi
 
       # Resolve against the SDK pinned on current dev — what a fresh consumer builds on.
-      - uses: ./.github/actions/capabilities/fvm
+      - uses: whuppi/ci/actions/capabilities/fvm@v1.0.0
 
       - name: Refresh lockfiles to latest in-range
         run: |

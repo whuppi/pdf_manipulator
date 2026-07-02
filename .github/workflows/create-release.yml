@@ -275,7 +275,7 @@ jobs:
           persist-credentials: false
       # Use the verified fvm capability, not an unverified pub global activate:
       # this job holds the pub.dev credentials, so don't weaken its tooling path.
-      - uses: ./.github/actions/capabilities/fvm
+      - uses: whuppi/ci/actions/capabilities/fvm@v1.0.0
       - name: Build filtered changelog
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
