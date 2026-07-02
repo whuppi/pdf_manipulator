@@ -1,13 +1,12 @@
-# Triage — on a new issue or PR: auto-label (changed files + conventional
-# title) and auto-assign; on PR push: revoke a stale `ready-to-test`; on a
-# dependabot push: post a recreate notice. REST API throughout (fork-PR
-# compatible); file-path labels via actions/labeler.
+# Triage — on a new issue or PR: auto-label + assign; on PR push: revoke a
+# stale `ready-to-test`; on a dependabot push: post a recreate notice. Delegates
+# to the shared reusable workflow.
 #
-# PRIVILEGED. pull_request_target is GitHub's only way to write to fork PRs on
-# a public repo, so every job is hardened to the workflow-security doctrine
-# (no PR checkout, fork data env-only, no GITHUB_ENV writes, least-privilege
-# per-job tokens, repo-guarded, SHA-pinned) — the ignore on the trigger below
-# is only safe while all of that holds.
+# PRIVILEGED. pull_request_target is GitHub's only way to write to fork PRs on a
+# public repo, so the reusable workflow hardens every job to the workflow-
+# security doctrine (no PR checkout, fork data env-only, no GITHUB_ENV writes,
+# least-privilege per-job tokens, owner-guarded, SHA-pinned) — the ignore on the
+# trigger below is only safe while all of that holds.
 name: Triage
 
 on:
@@ -24,153 +23,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: false
 
-env:
-  DEFAULT_RUNNER: ubuntu-24.04
-
 jobs:
-  inputs:
-    name: Resolve inputs
-    # Repo-guard: a fork that enables Actions must never run this
-    # privileged workflow in its own context. Every job carries it.
-    if: github.repository == 'whuppi/pdf_manipulator'
-    runs-on: ubuntu-24.04
-    permissions: {}
-    timeout-minutes: 5
-    outputs:
-      runner: ${{ steps.resolve.outputs.runner }}
-    steps:
-      - id: resolve
-        shell: bash
-        run: echo "runner=${DEFAULT_RUNNER}" >> "$GITHUB_OUTPUT"
-
-  # ── Auto-label by file path (actions/labeler) ──
-  label-by-files:
-    name: Label by changed files
-    needs: inputs
-    if: github.repository == 'whuppi/pdf_manipulator' && github.event_name == 'pull_request_target'
-    runs-on: ${{ needs.inputs.outputs.runner }}
+  triage:
     permissions:
       contents: read        # labeler reads .github/labeler.yml + the PR file list
-      pull-requests: write  # labeler applies matched labels to the PR
-    timeout-minutes: 5
-    steps:
-      - uses: actions/labeler@f27b608878404679385c85cfa523b85ccb86e213 # v6.1.0
-        with:
-          sync-labels: false
-
-  # ── Auto-label by PR title + branch ──
-  label-by-title:
-    name: Label by title
-    needs: inputs
-    if: github.repository == 'whuppi/pdf_manipulator' && github.event_name == 'pull_request_target' && github.event.action == 'opened'
-    runs-on: ${{ needs.inputs.outputs.runner }}
-    permissions:
-      pull-requests: write  # adds labels to the PR
-    timeout-minutes: 5
-    steps:
-      - name: Label by conventional commit title
-        # Untrusted PR data (title, branch refs) flows through env:, never
-        # interpolated into run: — a fork controls these, and inline they
-        # would execute as shell.
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-          TITLE: ${{ github.event.pull_request.title }}
-          HEAD: ${{ github.event.pull_request.head.ref }}
-          BASE: ${{ github.event.pull_request.base.ref }}
-        run: |
-          add_label() {
-            gh api "repos/$REPO/issues/$PR/labels" -f "labels[]=$1" --silent 2>/dev/null || true
-          }
-
-          if grep -qE '^fix(\(|!?:)' <<< "$TITLE"; then
-            add_label "bug"
-          elif grep -qE '^feat(\(|!?:)' <<< "$TITLE"; then
-            add_label "feature"
-          fi
-
-          if [[ "$HEAD" == "dev" && "$BASE" == "prod" ]]; then
-            add_label "release"
-          fi
-
-  # ── Auto-assign maintainer ──
-  assign:
-    name: Assign maintainer
-    needs: inputs
-    if: github.repository == 'whuppi/pdf_manipulator'
-    runs-on: ${{ needs.inputs.outputs.runner }}
-    permissions:
-      issues: write         # assign on issue-opened events
-      pull-requests: write  # assign on PR events
-    timeout-minutes: 5
-    steps:
-      - name: Assign maintainer
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          EVENT_NAME: ${{ github.event_name }}
-          ISSUE_NUM: ${{ github.event.issue.number }}
-          PR_NUM: ${{ github.event.pull_request.number }}
-        run: |
-          if [[ "$EVENT_NAME" == "issues" ]]; then
-            NUM="$ISSUE_NUM"
-          else
-            NUM="$PR_NUM"
-          fi
-          gh api "repos/$REPO/issues/$NUM/assignees" \
-            -f "assignees[]=chaudharydeepanshu" --silent 2>/dev/null || true
-
-  # ── Revoke stale ready-to-test on new commits ──
-  revoke-ready-to-test:
-    name: Revoke ready-to-test
-    needs: inputs
-    if: >-
-      github.repository == 'whuppi/pdf_manipulator' &&
-      github.event_name == 'pull_request_target' &&
-      github.event.action == 'synchronize' &&
-      contains(github.event.pull_request.labels.*.name, 'ready-to-test')
-    runs-on: ${{ needs.inputs.outputs.runner }}
-    permissions:
-      pull-requests: write  # removes the stale label and comments on the PR
-    timeout-minutes: 5
-    steps:
-      - name: Remove label + notify
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-        run: |
-          gh api "repos/$REPO/issues/$PR/labels/ready-to-test" -X DELETE --silent 2>/dev/null || true
-          gh api "repos/$REPO/issues/$PR/comments" \
-            -f "body=Label \`ready-to-test\` removed — new commits pushed. Re-add when ready." \
-            --silent 2>/dev/null || true
-
-  # ── Dependabot recreate notice ──
-  dependabot-needs-recreate:
-    name: Dependabot recreate notice
-    needs: inputs
-    if: >-
-      github.repository == 'whuppi/pdf_manipulator' &&
-      github.event_name == 'pull_request_target' &&
-      github.event.action == 'synchronize' &&
-      github.event.pull_request.user.login == 'dependabot[bot]' &&
-      github.event.sender.login != 'dependabot[bot]'
-    runs-on: ${{ needs.inputs.outputs.runner }}
-    permissions:
-      pull-requests: write  # comments on the PR
-    timeout-minutes: 5
-    steps:
-      - name: Notify maintainer
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-        run: |
-          gh api "repos/$REPO/issues/$PR/comments" \
-            -f "body=New commits pushed — workflows may be outdated. A maintainer with push access should comment \`@dependabot recreate\` to pick up the latest changes." \
-            --silent 2>/dev/null || true
+      issues: write         # assign maintainer on issue-opened events
+      pull-requests: write  # apply labels, revoke ready-to-test, post notices
+    uses: whuppi/ci/.github/workflows/triage.yml@v1.0.0

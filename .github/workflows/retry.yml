@@ -1,25 +1,15 @@
-# Auto-retry — re-runs the failed jobs of a CI / Full Test run once.
+# Auto-retry — re-runs the failed jobs of a CI / Full Test run once, absorbing
+# transient runner infra blips. Delegates to the shared reusable workflow.
 #
-# The test matrix is large and the GitHub-hosted runners blip on infra
-# every run (crates.io DNS, cache reserve, emulator boot, apt). A single
-# transient failure shouldn't need a manual re-run. This fires after a
-# run completes; if it failed on its FIRST attempt, it re-runs only the
-# failed jobs (gh run rerun --failed). The run_attempt == 1 guard means
-# exactly one auto-retry — a genuine failure still fails on attempt 2,
-# so real breakage is never hidden, only infra blips are absorbed.
-#
-# No PR comment needed: GitHub already notifies on the failed attempt,
-# and the run's attempt counter shows a retry happened.
+# ── PRIVILEGED REACTIVE WORKFLOW ─────────────────────────────────────
+# workflow_run is GitHub's only mechanism to react to another run's completion.
+# zizmor flags it categorically. The reusable workflow is hardened to every item
+# of the workflow-security doctrine — no checkout, no artifact ingestion, the
+# only fork-influenced value is the numeric run id handed to `gh run rerun`,
+# least-privilege actions:write, owner-guarded, and run_attempt==1 so it fires
+# at most once. The ignore below is only safe while all of that holds.
 name: Auto-retry
 
-# ── PRIVILEGED REACTIVE WORKFLOW ─────────────────────────────────────
-# workflow_run is GitHub's only mechanism to react to another run's
-# completion. zizmor flags it categorically. This file is hardened to
-# every item of the workflow-security doctrine — no checkout, no
-# artifact ingestion, the only fork-influenced value is the numeric run
-# id handed to `gh run rerun`, least-privilege actions:write, repo-guarded,
-# and run_attempt==1 so it fires at most once. The ignore below is only
-# safe while all of that holds.
 on:
   # zizmor: ignore[dangerous-triggers]
   workflow_run:
@@ -33,46 +23,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.workflow_run.id }}
   cancel-in-progress: false
 
-env:
-  DEFAULT_RUNNER: ubuntu-24.04
-
 jobs:
-  # Not hand-runnable (workflow_run only) — resolves the hardcoded default.
-  inputs:
-    name: Resolve inputs
-    # Repo-guard: a fork that enables Actions must never run this
-    # privileged workflow in its own context.
-    if: github.repository == 'whuppi/pdf_manipulator'
-    runs-on: ubuntu-24.04
-    permissions: {}
-    timeout-minutes: 5
-    outputs:
-      runner: ${{ steps.resolve.outputs.runner }}
-    steps:
-      - id: resolve
-        shell: bash
-        run: echo "runner=${DEFAULT_RUNNER}" >> "$GITHUB_OUTPUT"
-
   retry:
-    name: Re-run failed jobs
-    needs: inputs
-    # Repo-guarded, and only when the run failed on its first attempt.
-    if: >-
-      github.repository == 'whuppi/pdf_manipulator' &&
-      github.event.workflow_run.conclusion == 'failure' &&
-      github.event.workflow_run.run_attempt == 1
-    runs-on: ${{ needs.inputs.outputs.runner }}
     permissions:
       actions: write  # gh run rerun re-runs the failed jobs of the run
-    timeout-minutes: 5
-    steps:
-      - name: Re-run failed jobs
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
-          RUN_NAME: ${{ github.event.workflow_run.name }}
-          REPO: ${{ github.repository }}
-        run: |
-          echo "Re-running failed jobs of '$RUN_NAME' (run $RUN_ID, attempt 1)."
-          gh run rerun "$RUN_ID" --repo "$REPO" --failed
+    uses: whuppi/ci/.github/workflows/retry.yml@v1.0.0
