@@ -1,7 +1,9 @@
 # Release pipeline: gate → discover → compile → upload → publish.
 #
-# All release logic lives in tool/ci/release.sh. This workflow only
-# handles job orchestration.
+# All release logic lives in the shared whuppi/ci release.sh, run via the
+# release-tool action; the one pdf-specific piece — hashing the hand-written
+# web assets — is the local tool/ci/release_hooks.sh extension. This workflow
+# only handles job orchestration.
 #
 # Runners: infra jobs (gate, discover, upload, publish) use one
 # configurable runner (default: ubuntu-24.04). Compile jobs use
@@ -86,16 +88,20 @@ jobs:
       # release a lane whose changelog adds more than one new version.
       # Checks the lane being released (the pushed branch).
       - name: Version sanity
+        uses: whuppi/ci/actions/release-tool@v1.0.1
         env:
           BRANCH: ${{ inputs.branch || github.ref_name }}
-        run: bash tool/ci/release.sh --check-versions
+        with:
+          mode: --check-versions
       - name: Check changelog relevance
         id: check
+        uses: whuppi/ci/actions/release-tool@v1.0.1
         env:
           BRANCH: ${{ inputs.branch || github.ref_name }}
           BEFORE: ${{ github.event.before }}
           AFTER: ${{ github.sha }}
-        run: bash tool/ci/release.sh --gate
+        with:
+          mode: --gate
 
   # ── Discover version + create release ────────────────────────────
   discover:
@@ -122,10 +128,12 @@ jobs:
           persist-credentials: false
       - name: Find + create release
         id: find
+        uses: whuppi/ci/actions/release-tool@v1.0.1
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BRANCH: ${{ inputs.branch || github.ref_name }}
-        run: bash tool/ci/release.sh --discover
+        with:
+          mode: --discover
 
   # ── Compile all targets ──────────────────────────────────────────
   compile:
@@ -236,25 +244,32 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Add git install snippet
+        uses: whuppi/ci/actions/release-tool@v1.0.1
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.discover.outputs.tag }}
-        run: bash tool/ci/release.sh --add-git-install "$TAG"
+        with:
+          mode: --add-git-install
+          tag: ${{ needs.discover.outputs.tag }}
       - name: Stamp asset hashes into tag
+        uses: whuppi/ci/actions/release-tool@v1.0.1
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.discover.outputs.tag }}
-        run: bash tool/ci/release.sh --update-tag-hashes "$TAG"
+        with:
+          mode: --update-tag-hashes
+          tag: ${{ needs.discover.outputs.tag }}
+      - name: Build pub.dev changelog for preview
+        uses: whuppi/ci/actions/release-tool@v1.0.1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          mode: --stamp-changelog
+          tag: ${{ needs.discover.outputs.tag }}
       - name: Preview pub.dev changelog
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.discover.outputs.tag }}
         run: |
           echo "═══════════════════════════════════════════════════"
           echo "  CHANGELOG PREVIEW — review before approving publish"
           echo "═══════════════════════════════════════════════════"
           echo ""
-          bash tool/ci/release.sh --stamp-changelog "$TAG"
           cat CHANGELOG.md
 
   # ── Publish to pub.dev ───────────────────────────────────────────
@@ -275,14 +290,18 @@ jobs:
           persist-credentials: false
       # Use the verified fvm capability, not an unverified pub global activate:
       # this job holds the pub.dev credentials, so don't weaken its tooling path.
-      - uses: ./.github/actions/capabilities/fvm
+      - uses: whuppi/ci/actions/capabilities/fvm@v1.0.1
       - name: Build filtered changelog
+        uses: whuppi/ci/actions/release-tool@v1.0.1
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.discover.outputs.tag }}
-        run: bash tool/ci/release.sh --stamp-changelog "$TAG"
+        with:
+          mode: --stamp-changelog
+          tag: ${{ needs.discover.outputs.tag }}
       - name: Flatten README banner for pub.dev
-        run: bash tool/ci/release.sh --stamp-readme
+        uses: whuppi/ci/actions/release-tool@v1.0.1
+        with:
+          mode: --stamp-readme
       - name: Ephemeral commit (clean git for pub publish)
         env:
           TAG: ${{ needs.discover.outputs.tag }}
@@ -300,7 +319,9 @@ jobs:
       - run: fvm dart pub get --no-example
       - run: fvm dart pub publish --force
       - name: Add pub.dev install snippet
+        uses: whuppi/ci/actions/release-tool@v1.0.1
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.discover.outputs.tag }}
-        run: bash tool/ci/release.sh --add-pub-install "$TAG"
+        with:
+          mode: --add-pub-install
+          tag: ${{ needs.discover.outputs.tag }}

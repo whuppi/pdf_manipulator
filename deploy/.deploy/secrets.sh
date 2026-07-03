@@ -17,7 +17,7 @@
 set -e
 
 REPO="whuppi/pdf_manipulator"
-BWS="${HOME}/bin/bws"
+BWS="${HOME}/bin/bws --color no"
 BW_PREFIX="pdf_manipulator"
 export BWS_SERVER_URL="${BWS_SERVER_URL:-https://vault.bitwarden.eu}"
 

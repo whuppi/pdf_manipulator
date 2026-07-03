@@ -30,6 +30,13 @@ updates:
     labels:
       - "ci"
     groups:
+      # whuppi/ci shared-CI refs bump together in one PR, ahead of the
+      # third-party catch-all so a ci release lands as its own reviewable
+      # change tested by this repo's own CI. Order matters — a dependency
+      # joins the first group it matches.
+      whuppi-ci:
+        patterns:
+          - "whuppi/ci*"
       actions:
         patterns:
           - "*"

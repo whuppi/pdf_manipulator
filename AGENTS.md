@@ -48,6 +48,7 @@ Run these after every code change. A failing test or analyzer error means the ta
 # Setup (needs Rust — https://rustup.rs, FVM — https://fvm.app)
 git clone --recursive https://github.com/whuppi/pdf_manipulator
 cd pdf_manipulator
+make hooks                      # activate git hooks (once after cloning)
 fvm install                     # downloads SDK pinned in .fvmrc
 make check                      # analyze + test-guards + tests (native + 3 web modes) + example
 
@@ -89,7 +90,7 @@ When in doubt, read existing code in this repo and match it. Per-repo style cons
 
 **Conventional commits required.** PR titles must follow `feat:` / `fix:` / `chore:` etc. Enforced by CI (`pr-lint.yml`) and local hook (`.githooks/commit-msg`).
 
-**CI/CD.** Capability-based CI architecture — 14 independent capability actions provisioned by `make-target` orchestrator. Matrix manifests declare capabilities per job. All workflows accept runner override via `workflow_dispatch`. Release pipeline: `create-release.yml` (gate → discover → compile matrix → upload → publish). All release logic in `tool/ci/release.sh`.
+**CI/CD via the shared `whuppi/ci` repo.** Generic capabilities, the hygiene workflows (triage/auto-close/labels/retry), pr-checks, and the SDK/lockfile upgrade PRs come from `whuppi/ci` at an exact pinned version (bumped by a grouped Dependabot PR). The native machinery stays local: rust/wasm capability actions, the compile matrix in `create-release.yml` (gate → discover → compile → upload → publish, run through the shared `release-tool` action), web-asset hashing in `tool/ci/release_hooks.sh`, and the binaryen/pana pins in `tool/versions.env`.
 
 ---
 

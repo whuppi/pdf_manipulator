@@ -5,16 +5,15 @@ set -euo pipefail
 # owns and can bump automatically. upgrade-check.yml runs `apply` daily and
 # opens a single reviewed PR with whatever drifted.
 #
-# Watched here (clean upstream, real churn):
-#   Flutter SDK   .fvmrc + example/.fvmrc        Google release channel
-#   fvm tool      FVM_VERSION + 4 sha256         leoafarias/fvm
-#   Chrome        CHROME_VERSION + 6 sha256      chrome-for-testing (Stable)
+# Watched here (this package's LOCAL pins — clean upstream, real churn):
 #   binaryen      BINARYEN_VERSION + 3 sha256    WebAssembly/binaryen
-#   bore          BORE_VERSION + 3 sha256        ekzhang/bore
-#   zizmor gate   ZIZMOR_VERSION                 PyPI
-#   actionlint    ACTIONLINT_VERSION             rhysd/actionlint
+#   pana          PANA_VERSION                   pub.dev
 #
 # Owned elsewhere by design (NOT here):
+#   Flutter SDK (.fvmrc), lockfiles  the shared upgrade-check reusable workflow
+#   fvm / Chrome / bore pins,        whuppi/ci (its self-upgrade bumps them;
+#     zizmor / actionlint gate pins    they reach this repo via the whuppi-ci
+#                                      Dependabot group after a whuppi/ci release)
 #   pub deps, GitHub-action SHAs   Dependabot (.github/dependabot.yml)
 #   build.json (baseTag, crate,    manual — pdf_oxide source facts; move only
 #     features, outputs)             when the vendored submodule does
@@ -97,26 +96,10 @@ set_kv() {  # KEY value file — replace the KEY="old" line with KEY="new"
 # Every pinned asset as tool<TAB>platform<TAB>url<TAB>sha256. Single source for
 # the checks below; mirrors the bump blocks, so keep the two in sync.
 asset_urls() {
-  local fu="https://github.com/leoafarias/fvm/releases/download/$FVM_VERSION"
-  printf 'fvm\tlinux-x64\t%s\t%s\n'   "$fu/fvm-$FVM_VERSION-linux-x64.tar.gz"   "$FVM_SHA256_LINUX_X64"
-  printf 'fvm\tmacos-arm64\t%s\t%s\n' "$fu/fvm-$FVM_VERSION-macos-arm64.tar.gz" "$FVM_SHA256_MACOS_ARM64"
-  printf 'fvm\tmacos-x64\t%s\t%s\n'   "$fu/fvm-$FVM_VERSION-macos-x64.tar.gz"   "$FVM_SHA256_MACOS_X64"
-  printf 'fvm\twindows-x64\t%s\t%s\n' "$fu/fvm-$FVM_VERSION-windows-x64.zip"    "$FVM_SHA256_WINDOWS_X64"
   local bu="https://github.com/WebAssembly/binaryen/releases/download/$BINARYEN_VERSION"
   printf 'binaryen\tlinux-x64\t%s\t%s\n'   "$bu/binaryen-$BINARYEN_VERSION-x86_64-linux.tar.gz"   "$BINARYEN_SHA256_LINUX_X64"
   printf 'binaryen\tmacos-arm64\t%s\t%s\n' "$bu/binaryen-$BINARYEN_VERSION-arm64-macos.tar.gz"    "$BINARYEN_SHA256_MACOS_ARM64"
   printf 'binaryen\twindows-x64\t%s\t%s\n' "$bu/binaryen-$BINARYEN_VERSION-x86_64-windows.tar.gz" "$BINARYEN_SHA256_WINDOWS_X64"
-  local ru="https://github.com/ekzhang/bore/releases/download/$BORE_VERSION"
-  printf 'bore\tlinux-x64\t%s\t%s\n'   "$ru/bore-$BORE_VERSION-x86_64-unknown-linux-musl.tar.gz" "$BORE_SHA256_LINUX_X64"
-  printf 'bore\tmacos-arm64\t%s\t%s\n' "$ru/bore-$BORE_VERSION-aarch64-apple-darwin.tar.gz"      "$BORE_SHA256_MACOS_ARM64"
-  printf 'bore\twindows-x64\t%s\t%s\n' "$ru/bore-$BORE_VERSION-x86_64-pc-windows-msvc.zip"       "$BORE_SHA256_WINDOWS_X64"
-  local cu="https://storage.googleapis.com/chrome-for-testing-public/$CHROME_VERSION"
-  printf 'chrome\tlinux-x64\t%s\t%s\n'   "$cu/linux64/chrome-linux64.zip"     "$CHROME_SHA256_LINUX_X64"
-  printf 'chrome\tmacos-arm64\t%s\t%s\n' "$cu/mac-arm64/chrome-mac-arm64.zip" "$CHROME_SHA256_MACOS_ARM64"
-  printf 'chrome\twindows-x64\t%s\t%s\n' "$cu/win64/chrome-win64.zip"         "$CHROME_SHA256_WINDOWS_X64"
-  printf 'chromedriver\tlinux-x64\t%s\t%s\n'   "$cu/linux64/chromedriver-linux64.zip"     "$CHROMEDRIVER_SHA256_LINUX_X64"
-  printf 'chromedriver\tmacos-arm64\t%s\t%s\n' "$cu/mac-arm64/chromedriver-mac-arm64.zip" "$CHROMEDRIVER_SHA256_MACOS_ARM64"
-  printf 'chromedriver\twindows-x64\t%s\t%s\n' "$cu/win64/chromedriver-win64.zip"         "$CHROMEDRIVER_SHA256_WINDOWS_X64"
 }
 
 # HTTP status of a URL, following GitHub's asset redirect, or 000 if unreachable.
@@ -172,67 +155,6 @@ check_availability() {
 if [ "$MODE" = verify-pinned ]; then verify_pinned && exit 0; exit 1; fi
 if [ "$MODE" = check-availability ]; then check_availability && exit 0; exit 1; fi
 
-# ── Flutter SDK (.fvmrc + example/.fvmrc) ────────────────────────────
-flutter_cur="$(json_get '.flutter' "$ROOT/.fvmrc")"
-releases="$(_fetch https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json 2>/dev/null || true)"
-stable_hash="$(jq -r '.current_release.stable // empty' <<< "$releases" 2>/dev/null || true)"
-flutter_latest="$(jq -r --arg h "$stable_hash" '.releases[] | select(.hash == $h) | .version // empty' <<< "$releases" 2>/dev/null | head -1 || true)"
-# flutter_latest is interpolated into the sed below, bypassing set_kv. Keep the
-# exact-semver gate or a crafted upstream value becomes sed injection.
-if [ -n "$flutter_latest" ] && ! printf '%s' "$flutter_latest" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-  echo "::error::refuse: implausible flutter version from upstream: '$flutter_latest'" >&2
-  exit 1
-fi
-if [ -n "$flutter_latest" ] && [ -n "$flutter_cur" ] && [ "$flutter_cur" != "$flutter_latest" ]; then
-  drift=1
-  echo "flutter: $flutter_cur -> $flutter_latest"
-  if [ "$MODE" = apply ]; then
-    for f in "$ROOT/.fvmrc" "$ROOT/example/.fvmrc"; do
-      sed -i.bak "s/\"flutter\": *\"[^\"]*\"/\"flutter\": \"$flutter_latest\"/" "$f" && rm -f "$f.bak"
-    done
-  fi
-fi
-
-# ── fvm tool (version + 4 verified sha256, all in versions.env) ──────
-fvm_latest="$(gh_latest_tag leoafarias/fvm | sed 's/^v//')"
-if [ -n "$fvm_latest" ] && [ "$fvm_latest" != "$FVM_VERSION" ]; then
-  if [ "$MODE" = apply ]; then
-    u="https://github.com/leoafarias/fvm/releases/download/$fvm_latest"
-    lx="$(sha256_of "$u/fvm-$fvm_latest-linux-x64.tar.gz")"
-    ma="$(sha256_of "$u/fvm-$fvm_latest-macos-arm64.tar.gz")"
-    mx="$(sha256_of "$u/fvm-$fvm_latest-macos-x64.tar.gz")"
-    win="$(sha256_of "$u/fvm-$fvm_latest-windows-x64.zip")"
-    if [ -n "$lx" ] && [ -n "$ma" ] && [ -n "$mx" ] && [ -n "$win" ]; then
-      drift=1; echo "fvm: $FVM_VERSION -> $fvm_latest (+ 4 sha256)"
-      set_kv FVM_VERSION "$fvm_latest" "$VERSIONS"
-      set_kv FVM_SHA256_LINUX_X64 "$lx" "$VERSIONS"
-      set_kv FVM_SHA256_MACOS_ARM64 "$ma" "$VERSIONS"
-      set_kv FVM_SHA256_MACOS_X64 "$mx" "$VERSIONS"
-      set_kv FVM_SHA256_WINDOWS_X64 "$win" "$VERSIONS"
-    else
-      echo "::error::fvm: $fvm_latest available but an asset download failed; bump by hand"; blocked=1
-    fi
-  else
-    drift=1; echo "fvm: $FVM_VERSION -> $fvm_latest (apply fetches + verifies 4 sha256)"
-  fi
-fi
-
-# ── zizmor gate (ZIZMOR_VERSION in versions.env; run in pr-lint.yml) ──
-ziz_latest="$(_fetch https://pypi.org/pypi/zizmor/json 2>/dev/null | jq -r '.info.version // empty' 2>/dev/null || true)"
-if [ -n "$ZIZMOR_VERSION" ] && [ -n "$ziz_latest" ] && [ "$ZIZMOR_VERSION" != "$ziz_latest" ]; then
-  drift=1
-  echo "zizmor: $ZIZMOR_VERSION -> $ziz_latest"
-  [ "$MODE" = apply ] && set_kv ZIZMOR_VERSION "$ziz_latest" "$VERSIONS"
-fi
-
-# ── actionlint (the other pr-lint gate; version in versions.env) ─────
-al_latest="$(gh_latest_tag rhysd/actionlint | sed 's/^v//')"
-if [ -n "$al_latest" ] && [ "$al_latest" != "$ACTIONLINT_VERSION" ]; then
-  drift=1
-  echo "actionlint: $ACTIONLINT_VERSION -> $al_latest"
-  [ "$MODE" = apply ] && set_kv ACTIONLINT_VERSION "$al_latest" "$VERSIONS"
-fi
-
 # ── pana (PANA_VERSION in versions.env; the `platforms` make target + CI gate).
 # Track pub.dev's LATEST from its own API: the gate must run the same pana
 # pub.dev runs, or it drifts from the platform verdict it exists to predict.
@@ -264,57 +186,6 @@ if [ -n "$bin_latest" ] && [ "$bin_latest" != "$BINARYEN_VERSION" ]; then
     fi
   else
     drift=1; echo "binaryen: $BINARYEN_VERSION -> $bin_latest (apply fetches + verifies 3 sha256)"
-  fi
-fi
-
-# ── bore (version + 3 verified sha256, all in versions.env) ──────────
-bore_latest="$(gh_latest_tag ekzhang/bore)"
-if [ -n "$bore_latest" ] && [ "$bore_latest" != "$BORE_VERSION" ]; then
-  if [ "$MODE" = apply ]; then
-    u="https://github.com/ekzhang/bore/releases/download/$bore_latest"
-    lx="$(sha256_of "$u/bore-$bore_latest-x86_64-unknown-linux-musl.tar.gz")"
-    mac="$(sha256_of "$u/bore-$bore_latest-aarch64-apple-darwin.tar.gz")"
-    win="$(sha256_of "$u/bore-$bore_latest-x86_64-pc-windows-msvc.zip")"
-    if [ -n "$lx" ] && [ -n "$mac" ] && [ -n "$win" ]; then
-      drift=1; echo "bore: $BORE_VERSION -> $bore_latest (+ 3 sha256)"
-      set_kv BORE_VERSION "$bore_latest" "$VERSIONS"
-      set_kv BORE_SHA256_LINUX_X64 "$lx" "$VERSIONS"
-      set_kv BORE_SHA256_MACOS_ARM64 "$mac" "$VERSIONS"
-      set_kv BORE_SHA256_WINDOWS_X64 "$win" "$VERSIONS"
-    else
-      echo "::error::bore: $bore_latest available but an asset download failed; bump by hand"; blocked=1
-    fi
-  else
-    drift=1; echo "bore: $BORE_VERSION -> $bore_latest (apply fetches + verifies 3 sha256)"
-  fi
-fi
-
-# ── Chrome for Testing (version + 6 verified sha256, all in versions.env) ──
-# chrome-for-testing publishes no digests, so each bump re-downloads and
-# self-hashes all 6 assets. The CDN prunes old versions, so this must keep
-# the pin fresh or the chrome action's verified download 404s.
-manifest="$(_fetch https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json 2>/dev/null || true)"
-chrome_latest="$(jq -r '.channels.Stable.version // empty' <<< "$manifest" 2>/dev/null || true)"
-if [ -n "$chrome_latest" ] && [ "$chrome_latest" != "$CHROME_VERSION" ]; then
-  if [ "$MODE" = apply ]; then
-    u="https://storage.googleapis.com/chrome-for-testing-public/$chrome_latest"
-    cl="$(sha256_of "$u/linux64/chrome-linux64.zip")";     dl="$(sha256_of "$u/linux64/chromedriver-linux64.zip")"
-    cm="$(sha256_of "$u/mac-arm64/chrome-mac-arm64.zip")"; dm="$(sha256_of "$u/mac-arm64/chromedriver-mac-arm64.zip")"
-    cw="$(sha256_of "$u/win64/chrome-win64.zip")";         dw="$(sha256_of "$u/win64/chromedriver-win64.zip")"
-    if [ -n "$cl" ] && [ -n "$dl" ] && [ -n "$cm" ] && [ -n "$dm" ] && [ -n "$cw" ] && [ -n "$dw" ]; then
-      drift=1; echo "chrome: $CHROME_VERSION -> $chrome_latest (+ 6 sha256)"
-      set_kv CHROME_VERSION "$chrome_latest" "$VERSIONS"
-      set_kv CHROME_SHA256_LINUX_X64 "$cl" "$VERSIONS"
-      set_kv CHROME_SHA256_MACOS_ARM64 "$cm" "$VERSIONS"
-      set_kv CHROME_SHA256_WINDOWS_X64 "$cw" "$VERSIONS"
-      set_kv CHROMEDRIVER_SHA256_LINUX_X64 "$dl" "$VERSIONS"
-      set_kv CHROMEDRIVER_SHA256_MACOS_ARM64 "$dm" "$VERSIONS"
-      set_kv CHROMEDRIVER_SHA256_WINDOWS_X64 "$dw" "$VERSIONS"
-    else
-      echo "::error::chrome: $chrome_latest available but an asset download failed; bump by hand"; blocked=1
-    fi
-  else
-    drift=1; echo "chrome: $CHROME_VERSION -> $chrome_latest (apply fetches + verifies 6 sha256)"
   fi
 fi
 

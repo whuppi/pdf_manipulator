@@ -1,12 +1,6 @@
-# Resolved-issue lifecycle — one feature, three triggers:
-#   arm      (issues:labeled)   — `resolved` added → post the opt-out notice
-#                                 that starts the 7-day countdown.
-#   keep-open (issue_comment)   — a non-maintainer replies `keep open` → pull
-#                                 `resolved` and ping the maintainers.
-#   sweep    (schedule)         — daily: remind `resolved` issues, then close
-#                                 after the grace window (via actions/stale).
-# Base-repo issue events only — no fork-PR write, so no privileged trigger.
-# Hand-runnable (workflow_dispatch) to run the sweep on demand.
+# Auto-close — resolved-issue lifecycle: arm on `resolved`, honor a
+# `keep open` opt-out, sweep + close after the grace window. Delegates to the
+# shared reusable workflow. Base-repo issue events only — no privileged trigger.
 name: Auto-close
 
 on:
@@ -17,12 +11,6 @@ on:
   issue_comment:
     types: [created]
   workflow_dispatch:
-    inputs:
-      runner:
-        description: "Runner"
-        type: choice
-        options: [ubuntu-24.04, macos-14, windows-2025-vs2026]
-        default: ubuntu-24.04
 
 permissions: {}
 
@@ -32,119 +20,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.issue.number || 'sweep' }}
   cancel-in-progress: false
 
-env:
-  DEFAULT_RUNNER: ubuntu-24.04
-
 jobs:
-  # Hand-runnable (workflow_dispatch) — supports runner selection.
-  inputs:
-    name: Resolve inputs
-    runs-on: ubuntu-24.04
-    permissions: {}
-    timeout-minutes: 5
-    outputs:
-      runner: ${{ steps.resolve.outputs.runner }}
-    steps:
-      - id: resolve
-        shell: bash
-        env:
-          OVERRIDE: ${{ inputs.runner }}
-          DEFAULT: ${{ env.DEFAULT_RUNNER }}
-        run: echo "runner=${OVERRIDE:-$DEFAULT}" >> "$GITHUB_OUTPUT"
-
-  # ── Arm: `resolved` added → post the opt-out notice ──────────────
-  arm:
-    name: Arm auto-close
-    needs: inputs
-    if: github.event_name == 'issues' && github.event.label.name == 'resolved'
-    runs-on: ${{ needs.inputs.outputs.runner }}
+  auto-close:
     permissions:
-      issues: write  # posts the grace-window notice on the issue
-    timeout-minutes: 5
-    steps:
-      - name: Post opt-out notice
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NUM: ${{ github.event.issue.number }}
-          REPO: ${{ github.repository }}
-          MSG: 'Marked resolved, auto-closing in 7 days. Still need it open? Reply `keep open: your reason` (example: keep open: still crashes on Android 14).'
-        run: |
-          gh issue comment "$NUM" --repo "$REPO" --body "$MSG"
-
-  # ── Keep-open: a non-maintainer `keep open` reply pulls `resolved` ─
-  keep-open:
-    name: Keep open on opt-out
-    needs: inputs
-    if: >
-      github.event_name == 'issue_comment' &&
-      github.event.issue.state == 'open' &&
-      github.event.issue.pull_request == null &&
-      contains(github.event.issue.labels.*.name, 'resolved') &&
-      github.event.comment.author_association != 'OWNER' &&
-      github.event.comment.author_association != 'MEMBER' &&
-      github.event.comment.author_association != 'COLLABORATOR'
-    runs-on: ${{ needs.inputs.outputs.runner }}
-    permissions:
-      issues: write  # removes labels and posts a comment on the issue
-    timeout-minutes: 5
-    steps:
-      - name: Keep issue open on opt-out
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BODY: ${{ github.event.comment.body }}
-          WHO: ${{ github.event.comment.user.login }}
-          NUM: ${{ github.event.issue.number }}
-          REPO: ${{ github.repository }}
-        run: |
-          # Comment body via env var, never interpolated into the script (injection-safe).
-          grep -qiE 'keep open' <<< "$BODY" || exit 0
-          # Defang the reflected reason before the bot echoes it back: strip
-          # URLs/markdown links (phishing relay) and @/<> (ping amplification)
-          # so attacker-chosen text can't weaponize the bot's own comment.
-          # The maintainer @-mention and @$WHO (a constrained GitHub login)
-          # are trusted and stay — only the free-text reason is inert.
-          reason=$(printf '%s' "$BODY" | tr '\n' ' ' \
-            | sed -E 's/.*[Kk]eep [Oo]pen//' \
-            | sed -E 's/^[[:space:]:,.-]+//' \
-            | sed -E 's#https?://[^[:space:]]*##g; s#www\.[^[:space:]]*##g' \
-            | sed -E 's/\]\([^)]*\)//g' \
-            | tr -d '@<>`' \
-            | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//' \
-            | cut -c1-280)
-          [ -z "$reason" ] && reason='(no reason given, see the comment)'
-          gh issue edit "$NUM" --repo "$REPO" --remove-label resolved
-          # may also carry the stale marker if it opted out during the close window
-          gh issue edit "$NUM" --repo "$REPO" --remove-label bot-closing-soon 2>/dev/null || true
-          gh issue comment "$NUM" --repo "$REPO" --body \
-            "$(printf '@chaudharydeepanshu @slopfairy kept open by @%s.\nReason: %s' "$WHO" "$reason")"
-
-  # ── Sweep: daily, close `resolved` issues after the grace window ──
-  sweep:
-    name: Close resolved issues
-    needs: inputs
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ${{ needs.inputs.outputs.runner }}
-    permissions:
-      issues: write  # actions/stale labels, comments on, and closes issues
-    timeout-minutes: 10
-    steps:
-      - name: Sweep resolved issues
-        uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10.3.0
-        with:
-          only-labels: 'resolved'
-          days-before-issue-stale: 4
-          days-before-issue-close: 3
-          days-before-pr-stale: -1
-          days-before-pr-close: -1
-          stale-issue-label: 'bot-closing-soon'
-          close-issue-reason: 'completed'
-          remove-stale-when-updated: false
-          operations-per-run: 60
-          stale-issue-message: >
-            Closing in 3 days. If it still affects you, reply
-            `keep open: your reason` and it stays open.
-          close-issue-message: >
-            Auto-closing: marked resolved with no objection in the grace
-            window. Comment any time and it will be looked at.
+      issues: write  # label, comment on, and close resolved issues
+    uses: whuppi/ci/.github/workflows/auto-close.yml@v1.0.1
+    with:
+      # Team slug for the humans (managed in the org, same team CODEOWNERS
+      # uses) + the slopfairy bot as a fixed automation hook. A maintainer
+      # change edits the team, never this line.
+      maintainers-mention: '@whuppi/pdf-manipulator-maintainers @slopfairy'

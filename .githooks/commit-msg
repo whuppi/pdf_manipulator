@@ -1,7 +1,7 @@
 #!/bin/sh
 # Enforce Conventional Commits format.
-# Valid: feat: add watermark | fix(web): handle empty PDF | feat!: breaking change
-# Invalid: added watermark | WIP | misc changes
+# Valid: feat: add share sheet | fix(web): handle empty input | feat!: breaking change
+# Invalid: added a feature | WIP | misc changes
 
 msg=$(head -1 "$1")
 
@@ -31,8 +31,8 @@ if ! printf '%s\n' "$msg" | grep -qE "^(${types})(\(.+\))?!?: .+"; then
   echo ""
   printf '  Types: %s\n' "$(paste -sd' ' tool/commit-types.txt)"
   echo "  Examples:"
-  echo "    feat: add watermark support"
-  echo "    fix(web): handle empty PDF edge case"
+  echo "    feat: add share sheet support"
+  echo "    fix(web): handle empty input edge case"
   echo "    feat!: redesign API (breaking change)"
   echo ""
   printf '  Your message: %s\n' "$msg"
