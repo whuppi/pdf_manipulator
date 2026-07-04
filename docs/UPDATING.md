@@ -375,12 +375,12 @@ flag flipped (`true`, then `false`).
 # Step 1 — allow force-push (allow_force_pushes=true):
 gh api repos/whuppi/pdf_manipulator/branches/prod/protection -X PUT \
   -F "required_status_checks[strict]=true" \
-  -F "required_status_checks[checks][][context]=Conventional Commit" -F "required_status_checks[checks][][app_id]=15368" \
+  -F "required_status_checks[checks][][context]=checks / Conventional Commit" -F "required_status_checks[checks][][app_id]=15368" \
   -F "required_status_checks[checks][][context]=Full Test Gate" -F "required_status_checks[checks][][app_id]=15368" \
   -F "required_status_checks[checks][][context]=CI Gate" -F "required_status_checks[checks][][app_id]=15368" \
   -F "required_pull_request_reviews[dismiss_stale_reviews]=true" \
   -F "required_pull_request_reviews[require_code_owner_reviews]=true" \
-  -F "required_pull_request_reviews[required_approving_review_count]=1" \
+  -F "required_pull_request_reviews[required_approving_review_count]=2" \
   -F "enforce_admins=false" -F "restrictions=null" -F "allow_force_pushes=true" \
   --silent
 
