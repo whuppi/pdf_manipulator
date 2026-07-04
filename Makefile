@@ -69,9 +69,11 @@ analyze-floor:
 # make platforms  Gate pub.dev platform support: pana (the exact analyzer
 #                 pub.dev runs, pinned + radar-tracked) must still report all 6
 #                 platforms, else a regression like an unconditional dart:io/ffi
-#                 import silently drops web. Logic + the why in tool/platforms.sh.
+#                 import silently drops web. Shared gate tool/platforms_gate.sh
+#                 (canonical in whuppi/ci, stamped into tool/); PANA_VERSION
+#                 comes from this repo's tool/versions.env.
 platforms:
-	@DART="$(DART)" bash tool/platforms.sh
+	@DART="$(DART)" bash tool/platforms_gate.sh
 
 # make lint-shell  Shell portability gate: shellcheck + a bash 4.0+ scan
 #                  that catches macOS bash 3.2 breaks in scripts and in
