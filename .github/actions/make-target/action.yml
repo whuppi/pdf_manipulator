@@ -1,10 +1,20 @@
 name: Make Target
 description: >
-  Orchestrator. Provisions capabilities then runs a make target.
-  Generic capabilities come from whuppi/ci (pinned to the shared release);
-  the native/wasm ones (rust, wasm-cache, wasm-build) are pdf-specific and
-  stay local under capabilities/. This file is a flat list of conditional
-  capability calls — zero logic of its own.
+  Thin wrapper over the shared whuppi/ci make-target. Provisions pdf's
+  native/wasm capabilities (rust, wasm-cache, wasm-build) — which whuppi/ci
+  doesn't know about — then DELEGATES the generic orchestration and the make
+  run to whuppi/ci/actions/make-target. Only the pdf-specific glue lives here;
+  the generic capabilities and run logic come from the shared action, so this
+  can't drift structurally the way the old full fork did (one whuppi/ci ref
+  instead of a dozen).
+
+  Ordering: the local capabilities run before the shared action. rust sets
+  SUBMODULE_PDF_OXIDE in $GITHUB_ENV; wasm-cache reads it, and it is forwarded
+  to the shared xcode-cache below as xcode-key-extra. None of the three needs
+  Flutter (compile_rust.sh is pure cargo), so running them before the shared
+  action's fvm install is safe. No pdf job combines free-disk with wasm-build
+  (checked against the full-test matrix), so wasm-build never needs disk
+  reclaimed first — the one ordering the shared action can't provide.
 
 inputs:
   make-target:
@@ -14,6 +24,14 @@ inputs:
     description: "Install the Rust toolchain (off for Dart-only static jobs)"
     required: false
     default: 'true'
+  wasm-cache:
+    description: "Cache WASM build"
+    required: false
+    default: 'false'
+  wasm-build:
+    description: "Compile WASM from source"
+    required: false
+    default: 'false'
   free-disk:
     description: "Reclaim disk for build-heavy jobs (Linux)"
     required: false
@@ -50,14 +68,6 @@ inputs:
     description: "Cache CocoaPods"
     required: false
     default: 'false'
-  wasm-cache:
-    description: "Cache WASM build"
-    required: false
-    default: 'false'
-  wasm-build:
-    description: "Compile WASM from source"
-    required: false
-    default: 'false'
   emulator:
     description: "Boot Android emulator (wraps make-target)"
     required: false
@@ -70,52 +80,12 @@ inputs:
 runs:
   using: composite
   steps:
-    # ── Always ──
-    # Generic capabilities come from whuppi/ci (pinned to the shared release);
-    # the native/wasm ones (rust, wasm-cache, wasm-build) are pdf-specific and
-    # stay local. The shared capabilities were generalized FROM these, so the
-    # behavior is identical — only their home moved.
-    - uses: whuppi/ci/actions/capabilities/fvm@v1.0.7
-
-    # ── On demand ──
-    # Default on: most jobs build the native/wasm engine. Dart-only static
-    # jobs (pana, downgrade-analyze) never invoke cargo, so they pass rust: false.
-    # rust sets SUBMODULE_PDF_OXIDE in $GITHUB_ENV — the xcode/wasm cache keys
-    # below read it, so rust must run before them (it does).
+    # ── pdf-specific capabilities, before the shared run ──
+    # Default on: most jobs build the native/wasm engine. Dart-only static jobs
+    # (pana, downgrade-analyze) pass rust: false. rust sets SUBMODULE_PDF_OXIDE
+    # (read by wasm-cache below and by the shared xcode-cache via xcode-key-extra).
     - uses: ./.github/actions/capabilities/rust
       if: inputs.rust == 'true'
-
-    - uses: whuppi/ci/actions/capabilities/free-disk-space@v1.0.7
-      if: inputs.free-disk == 'true'
-
-    - uses: whuppi/ci/actions/capabilities/java@v1.0.7
-      if: inputs.java == 'true'
-
-    - uses: whuppi/ci/actions/capabilities/chrome@v1.0.7
-      if: inputs.chrome == 'true'
-
-    - uses: whuppi/ci/actions/capabilities/headless-display@v1.0.7
-      if: inputs.headless-display == 'true'
-
-    - uses: whuppi/ci/actions/capabilities/hw-accel@v1.0.7
-      if: inputs.hw-accel == 'true'
-
-    - uses: whuppi/ci/actions/capabilities/gradle-cache@v1.0.7
-      if: inputs.gradle-cache == 'true'
-      with:
-        phase: restore
-
-    # Forward the pdf_oxide submodule rev (set by the rust step above) as the
-    # shared xcode-cache's key-extra, preserving the precise cache key the
-    # local xcode-cache read from env directly.
-    - uses: whuppi/ci/actions/capabilities/xcode-cache@v1.0.7
-      if: inputs.xcode-cache == 'true'
-      with:
-        target: ${{ inputs.xcode-cache-target }}
-        key-extra: ${{ env.SUBMODULE_PDF_OXIDE }}
-
-    - uses: whuppi/ci/actions/capabilities/pods-cache@v1.0.7
-      if: inputs.pods-cache == 'true'
 
     - uses: ./.github/actions/capabilities/wasm-cache
       if: inputs.wasm-cache == 'true'
@@ -123,53 +93,23 @@ runs:
     - uses: ./.github/actions/capabilities/wasm-build
       if: inputs.wasm-build == 'true'
 
-    - uses: whuppi/ci/actions/capabilities/ios-simulator@v1.0.7
-      if: inputs.simulator == 'true'
-
-    # ── Run ──
-    # The run command is authored ONCE, here, into /tmp/make-run.sh:
-    # `flutter doctor -v` immediately before `make <target>`. Both the
-    # direct path and the emulator path execute this same file, so the
-    # two can never drift — doctor always runs against the fully-
-    # provisioned environment (live emulator on Android, host elsewhere)
-    # on the line right before make.
-    - name: Compose run script
-      shell: bash
-      run: |
-        cat > /tmp/make-run.sh << 'EOF'
-        #!/usr/bin/env bash
-        set -uo pipefail
-        echo "::group::flutter doctor -v"
-        fvm flutter doctor -v || true
-        echo "::endgroup::"
-        make "$1"
-        EOF
-        chmod +x /tmp/make-run.sh
-
-    # Direct path — normal and headless merged; xvfb-run is the only
-    # variable (a display prefix), applied to doctor + make alike.
-    - name: ${{ inputs.make-target }}
-      if: inputs.emulator != 'true'
-      shell: bash
-      run: |
-        PREFIX=""
-        [ "${INPUTS_HEADLESS_DISPLAY}" = "true" ] && PREFIX="xvfb-run "
-        ${PREFIX}/tmp/make-run.sh "${INPUTS_MAKE_TARGET}"
-      env:
-        INPUTS_HEADLESS_DISPLAY: ${{ inputs.headless-display }}
-        INPUTS_MAKE_TARGET: ${{ inputs.make-target }}
-
-    # Emulator path — the SAME script, executed inside the live emulator
-    # by the capability's teardown-watchdog wrapper. The shared android-emulator
-    # reconciles the machine report at its default path (test-results/
-    # int-android.json), which is where the android make target writes.
-    - uses: whuppi/ci/actions/capabilities/android-emulator@v1.0.7
-      if: inputs.emulator == 'true'
+    # ── Delegate everything generic to the shared action ──
+    # fvm (always), the on-demand generic capabilities, and the make run all
+    # live in whuppi/ci. xcode-key-extra carries the pdf_oxide submodule rev
+    # that rust hoisted into the env, preserving the exact xcode cache key the
+    # old fork built by hand.
+    - uses: whuppi/ci/actions/make-target@v1.0.7
       with:
-        script: /tmp/make-run.sh "${{ inputs.make-target }}"
-
-    - uses: whuppi/ci/actions/capabilities/gradle-cache@v1.0.7
-      if: always() && inputs.gradle-cache == 'true'
-      with:
-        phase: save
-
+        make-target: ${{ inputs.make-target }}
+        free-disk: ${{ inputs.free-disk }}
+        java: ${{ inputs.java }}
+        chrome: ${{ inputs.chrome }}
+        headless-display: ${{ inputs.headless-display }}
+        hw-accel: ${{ inputs.hw-accel }}
+        gradle-cache: ${{ inputs.gradle-cache }}
+        xcode-cache: ${{ inputs.xcode-cache }}
+        xcode-cache-target: ${{ inputs.xcode-cache-target }}
+        xcode-key-extra: ${{ env.SUBMODULE_PDF_OXIDE }}
+        pods-cache: ${{ inputs.pods-cache }}
+        emulator: ${{ inputs.emulator }}
+        simulator: ${{ inputs.simulator }}
