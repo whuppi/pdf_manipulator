@@ -285,7 +285,7 @@ handles commit lists, filtering, and publishing. `pubspec.yaml` stays
 ### The release pipeline
 
 All logic lives in `tool/ci/release.sh` (run it with `--help` to list its
-modes). The workflow (`create-release.yml`) is pure job orchestration.
+modes). The workflow (`release.yml`) is pure job orchestration.
 
 ```
 Push to dev (CHANGELOG.pre.md) or prod (CHANGELOG.md)

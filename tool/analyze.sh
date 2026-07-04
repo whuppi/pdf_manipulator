@@ -61,7 +61,7 @@ ANALYZE_DIRS="lib bin test hook" EXAMPLE_DIR="example" \
 
 # ── Rust analysis (warnings in our patched lines only) ──────────────
 
-source "$SCRIPT_DIR/lib.sh"
+source "$SCRIPT_DIR/build_lib.sh"
 ensure_jq  # cargo-warning filtering + build.json reads parse JSON via jq
 
 NATIVE_FEATURES=$(bash "$SCRIPT_DIR/compile_rust.sh" --features native)

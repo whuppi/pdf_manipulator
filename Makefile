@@ -1,4 +1,4 @@
-.PHONY: check analyze analyze-floor platforms lint-shell fixtures test-guards \
+.PHONY: check analyze analyze-floor platforms lint-shell format fixtures test-guards \
        build build-native build-wasm \
        compile-macos compile-ios compile-android compile-linux compile-windows compile-wasm compile-natives \
        test test-pkg-native test-unit test-rust \
@@ -80,6 +80,15 @@ platforms:
 #                  workflow run: blocks. Mirrors the CI workflow-lint job.
 lint-shell:
 	@bash tool/lint_shell.sh
+
+# make format  Format all Dart (root + example), each from its own package root
+#              so the resolved language version matches CI. make analyze formats
+#              too; this is a standalone format-only pass.
+format:
+	@$(DART) pub get --no-example >/dev/null
+	@( cd example && $(FLUTTER) pub get >/dev/null )
+	@$(DART) format lib bin test tool hook
+	@( cd example && $(DART) format lib integration_test )
 
 # ═══════════════════════════════════════════════════════════════════
 # § 2b — Fixtures + test-suite guards

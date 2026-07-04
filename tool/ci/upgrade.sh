@@ -32,7 +32,7 @@ VERSIONS="$ROOT/tool/versions.env"
 
 # shellcheck source=/dev/null  # runtime path; not followed at lint time
 source "$VERSIONS"
-source "$ROOT/tool/lib.sh"
+source "$ROOT/tool/build_lib.sh"
 
 MODE="${1:-check}"
 case "$MODE" in

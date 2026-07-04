@@ -88,9 +88,9 @@ When in doubt, read existing code in this repo and match it. Per-repo style cons
 
 **Vendor submodules with patches.** `vendor/pdf_oxide/` and `vendor/office_oxide/` are git submodules with named patch branches. Full inventory in `docs/UPDATING.md`.
 
-**Conventional commits required.** PR titles must follow `feat:` / `fix:` / `chore:` etc. Enforced by CI (`pr-lint.yml`) and local hook (`.githooks/commit-msg`).
+**Conventional commits required.** PR titles must follow `feat:` / `fix:` / `chore:` etc. Enforced by CI (`pr-checks.yml`) and local hook (`.githooks/commit-msg`).
 
-**CI/CD via the shared `whuppi/ci` repo.** Generic capabilities, the hygiene workflows (triage/auto-close/labels/retry), pr-checks, and the SDK/lockfile upgrade PRs come from `whuppi/ci` at an exact pinned version (bumped by a grouped Dependabot PR). The native machinery stays local: rust/wasm capability actions, the compile matrix in `create-release.yml` (gate → discover → compile → upload → publish, run through the shared `release-tool` action), web-asset hashing in `tool/ci/release_hooks.sh`, and the binaryen/pana pins in `tool/versions.env`.
+**CI/CD via the shared `whuppi/ci` repo.** Generic capabilities, the hygiene workflows (triage/auto-close/labels/retry), pr-checks, and the SDK/lockfile upgrade PRs come from `whuppi/ci` at an exact pinned version (bumped by a grouped Dependabot PR). The native machinery stays local: rust/wasm capability actions, the compile matrix in `release.yml` (gate → discover → compile → upload → publish, run through the shared `release-tool` action), web-asset hashing in `tool/ci/release_hooks.sh`, and the binaryen/pana pins in `tool/versions.env`.
 
 ---
 

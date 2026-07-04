@@ -709,8 +709,8 @@ crosses either line, it belongs in the Makefile or a workflow, not under
 |---|---|---|
 | `ci.yml` | PR to prod/dev | Inputs runner (hand-run override) + `rust`/`test` jobs |
 | `full-test.yml` | `ready-to-test` label or dispatch | Inputs runner + per-row matrix |
-| `create-release.yml` | Changelog push or dispatch | Inputs runner + compile matrix |
-| `pr-lint.yml` | PR to prod/dev | Inputs runner (hand-run override) |
+| `release.yml` | Changelog push or dispatch | Inputs runner + compile matrix |
+| `pr-checks.yml` | PR to prod/dev | Inputs runner (hand-run override) |
 | `triage.yml` | Issues / fork PRs | Inputs runner (event-only default) — privileged |
 | `retry.yml` | CI / Full Test completed | Inputs runner (event-only default) — privileged |
 | `auto-close.yml` | Schedule / issues / comments | Inputs runner (hand-run override) |
@@ -750,7 +750,7 @@ receipt — not a dodge. A workflow earns that suppression only after all of:
 
 The suppression is inline (not `zizmor.yml`) so it lives where it applies and
 silences only that one finding; every other audit stays live, and the
-`pr-lint.yml` zizmor gate re-checks the whole tree on every PR. For a new
+`pr-checks.yml` zizmor gate re-checks the whole tree on every PR. For a new
 privileged need, prefer in order: `pull_request` (read-only, clean) →
 `schedule` (base-context poller, clean) → and only if instant fork-write is
 truly required, a hardened workflow with the one receipt.

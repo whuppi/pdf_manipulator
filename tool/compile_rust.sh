@@ -52,7 +52,7 @@ if ! command -v cargo &>/dev/null; then
   exit 1
 fi
 
-source "$SCRIPT_DIR/lib.sh"
+source "$SCRIPT_DIR/build_lib.sh"
 
 # ── Standalone-tool installers ──────────────────────────────────────
 # Run on CI via provide_tool; locally the dev is told to install instead.
