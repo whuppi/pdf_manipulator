@@ -1,6 +1,7 @@
 [
   { "name": "bug",              "color": "D93F0B", "description": "Broken behavior (auto)" },
   { "name": "feature",          "color": "0E8A16", "description": "New capability (auto)" },
+  { "name": "docs",             "color": "0075CA", "description": "Documentation change (auto)" },
   { "name": "ci",               "color": "BFD4F2", "description": "Build, CI, or workflow change (auto)" },
   { "name": "web",              "color": "1D76DB", "description": "Web or WASM specific (auto)" },
   { "name": "upstream",         "color": "5319E7", "description": "Needs a pdf_oxide change (auto)" },

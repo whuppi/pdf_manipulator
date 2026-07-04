@@ -40,3 +40,16 @@ jobs:
       - name: Pinned assets still reachable
         shell: bash
         run: bash tool/ci/upgrade.sh check-availability
+      # The vendored make-target fork pins whuppi/ci capabilities separately
+      # from the workflows and dependabot's whuppi-ci group does NOT reach
+      # inside it — so it has drifted (v1.0.1 vs v1.0.4) before. Fail the PR if
+      # any whuppi/ci ref across .github is on a different version than the rest.
+      - name: whuppi/ci refs share one version
+        shell: bash
+        run: |
+          v=$(grep -rhoE 'whuppi/ci/[^@[:space:]]*@v[0-9.]+' .github | grep -oE 'v[0-9.]+' | sort -u | tr '\n' ' ')
+          if [ "$(printf '%s' "$v" | wc -w)" -gt 1 ]; then
+            echo "::error::whuppi/ci refs span multiple versions: $v"
+            exit 1
+          fi
+          echo "whuppi/ci refs all on: $v"
