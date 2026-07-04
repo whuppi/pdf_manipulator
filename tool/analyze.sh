@@ -1,5 +1,6 @@
 #!/bin/bash
-# Run all static analysis: banned ignores check + Dart + Rust warnings.
+# Run all static analysis: format + the shared Dart core (stamped from
+# whuppi/ci) + Rust warnings.
 # Called by: make analyze
 # Run from package root.
 set -euo pipefail
@@ -10,19 +11,6 @@ PKG_ROOT="$(dirname "$SCRIPT_DIR")"
 # SDK commands (overridable via env for non-FVM setups)
 DART="${DART:-fvm dart}"
 FLUTTER="${FLUTTER:-fvm flutter}"
-
-# ── Ban // ignore: comments ─────────────────────────────────────────
-# Dart has no built-in way to prevent ignore comments in analysis_options.
-# Enforce via grep. Every lint must be fixed for real — no suppressions.
-
-echo "=== Dart: check for banned // ignore: comments ==="
-IGNORES=$(grep -rnE '// ignore:|// ignore_for_file:' "$PKG_ROOT/lib/" "$PKG_ROOT/bin/" "$PKG_ROOT/test/" "$PKG_ROOT/hook/" 2>/dev/null | grep -v '\.g\.dart' || true)
-if [ -n "$IGNORES" ]; then
-  echo "BANNED: // ignore: comments found. Fix the lint, don't suppress it."
-  echo "$IGNORES"
-  exit 1
-fi
-echo "  No // ignore: comments found. Clean."
 
 # ── Resolve BEFORE formatting ───────────────────────────────────────
 # `dart format`'s output depends on the file's resolved LANGUAGE
@@ -64,13 +52,12 @@ format_pkg() {
 format_pkg "$PKG_ROOT" lib bin test tool hook
 format_pkg "$PKG_ROOT/example" lib integration_test
 
-# ── Dart analysis ───────────────────────────────────────────────────
-
-echo "=== Dart: analyze lib/ bin/ test/ hook/ ==="
-$DART analyze --fatal-infos lib/ bin/ test/ hook/
-
-echo "=== Dart: analyze example/ ==="
-( cd "$PKG_ROOT/example" && $FLUTTER analyze --fatal-infos )
+# ── Shared Dart analysis core (stamped from whuppi/ci) ──────────────
+# Suppression-comment ban + dart/flutter analyze --fatal-infos over the
+# package dirs and example. Canonical script lives in whuppi/ci; a gate
+# change lands here through a re-stamp, never an edit to this copy.
+ANALYZE_DIRS="lib bin test hook" EXAMPLE_DIR="example" \
+  DART="$DART" FLUTTER="$FLUTTER" bash "$SCRIPT_DIR/analyze_core.sh"
 
 # ── Rust analysis (warnings in our patched lines only) ──────────────
 
