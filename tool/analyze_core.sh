@@ -3,9 +3,9 @@
 # ────────────────────────────────────────────────────────────────────
 # analyze_core.sh — the ONE Dart static-analysis gate, shared verbatim.
 #
-# Canonical copy: whuppi/ci/tool/analyze_core.sh. Stamped into each
-# package as tool/analyze_core.sh by .claude/scripts/stamp-analyze.sh —
-# DO NOT edit the stamped copy; edit the canonical one and re-stamp.
+# Canonical: whuppi/ci/tool/analyze_core.sh; the workspace stamper copies it
+# verbatim into each consumer's tool/. Edit the canonical + re-stamp — never a
+# stamped copy. pr-checks fails a consumer PR whose stamped copy drifted.
 #
 # What it enforces, identically in every package, locally and in CI:
 #   1. No suppression comments in the analyzed source ("// " then

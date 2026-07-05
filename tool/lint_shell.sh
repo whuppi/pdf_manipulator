@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
+# Canonical: whuppi/ci/tool/lint_shell.sh; the workspace stamper copies it
+# verbatim into each consumer's tool/. Edit the canonical + re-stamp — never a
+# stamped copy. pr-checks fails a consumer PR whose stamped copy drifted.
+#
 # Shell portability + correctness gate — the "zizmor for shell". It lints the
 # git repo at the CURRENT directory, so it runs both ways: `make check` in
 # whuppi/ci (linting itself) and the reusable pr-checks workflow (cd'd into the
