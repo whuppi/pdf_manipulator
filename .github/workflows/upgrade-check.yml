@@ -105,9 +105,10 @@ jobs:
           PR_BODY="$(cat <<'EOF'
           Supply-chain pin bump — review the recomputed hashes in the diff:
 
-          - **binaryen + pana** (`tool/versions.env`) — this repo's own build +
+          - **Pinned assets in `tool/versions.env`**: this repo's own build +
             gate pins; sha256s recomputed from the upstream release assets,
-            re-verified by `fetch_verified` on every build.
+            re-verified by `fetch_verified` on every build. See the diff for
+            which versions moved.
 
           The already-pinned assets were re-hashed before this bump (repoint alarm).
           Add `ready-to-test` for the full cross-target run, then merge once green.
