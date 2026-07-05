@@ -3,8 +3,9 @@
 # ────────────────────────────────────────────────────────────────────
 # platforms_gate.sh — the ONE pub.dev platform-support gate, shared verbatim.
 #
-# Canonical copy: whuppi/ci/tool/platforms_gate.sh. Stamped into each package's
-# tool/ — DO NOT edit the stamped copy; edit the canonical one and re-stamp.
+# Canonical: whuppi/ci/tool/platforms_gate.sh; the workspace stamper copies it
+# verbatim into each consumer's tool/. Edit the canonical + re-stamp — never a
+# stamped copy. pr-checks fails a consumer PR whose stamped copy drifted.
 #
 # Runs pana (pinned to PANA_VERSION, the exact analyzer pub.dev runs) on a lean
 # snapshot of the working tree and fails if the package no longer resolves to
