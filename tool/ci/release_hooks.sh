@@ -9,7 +9,7 @@
 # lib/src/hook/asset_hashes.dart alongside the API digests.
 #
 # Contract: print one "asset_name<TAB>sha256" line per asset. Runs inside the
-# shared release.sh process, so lib.sh helpers (sha256_file, ensure_jq) are
+# shared release.sh process, so build_lib.sh helpers (sha256_file, ensure_jq) are
 # available. Reads local filenames + asset names from build.json, skipping the
 # wasmBuildOutputs (those get hashes from the Release API).
 release_extra_asset_hashes() {

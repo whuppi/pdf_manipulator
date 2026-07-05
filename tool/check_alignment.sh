@@ -11,8 +11,8 @@
 
 set -euo pipefail
 
-# shellcheck source=tool/lib.sh
-source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+# shellcheck source=tool/build_lib.sh
+source "$(cd "$(dirname "$0")" && pwd)/build_lib.sh"
 
 APK="${1:?Usage: check_alignment.sh <path-to-apk>}"
 

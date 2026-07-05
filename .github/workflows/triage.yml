@@ -29,4 +29,4 @@ jobs:
       contents: read        # labeler reads .github/labeler.yml + the PR file list
       issues: write         # assign maintainer on issue-opened events
       pull-requests: write  # apply labels, revoke ready-to-test, post notices
-    uses: whuppi/ci/.github/workflows/triage.yml@v1.0.6
+    uses: whuppi/ci/.github/workflows/triage.yml@v1.0.7

@@ -26,7 +26,7 @@
 # ────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-# Resolve the script's own dir once — versions.env and lib.sh both hang off it.
+# Resolve the script's own dir once — versions.env and build_lib.sh both hang off it.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Pinned versions live in ONE file (tool/versions.env), never inline. Sourced at
@@ -52,7 +52,7 @@ if ! command -v cargo &>/dev/null; then
   exit 1
 fi
 
-source "$SCRIPT_DIR/lib.sh"
+source "$SCRIPT_DIR/build_lib.sh"
 
 # ── Standalone-tool installers ──────────────────────────────────────
 # Run on CI via provide_tool; locally the dev is told to install instead.

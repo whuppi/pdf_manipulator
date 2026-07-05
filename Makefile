@@ -1,4 +1,4 @@
-.PHONY: check analyze analyze-floor platforms lint-shell fixtures test-guards \
+.PHONY: check analyze analyze-floor platforms lint-shell format fixtures test-guards \
        build build-native build-wasm \
        compile-macos compile-ios compile-android compile-linux compile-windows compile-wasm compile-natives \
        test test-pkg-native test-unit test-rust \
@@ -69,15 +69,26 @@ analyze-floor:
 # make platforms  Gate pub.dev platform support: pana (the exact analyzer
 #                 pub.dev runs, pinned + radar-tracked) must still report all 6
 #                 platforms, else a regression like an unconditional dart:io/ffi
-#                 import silently drops web. Logic + the why in tool/platforms.sh.
+#                 import silently drops web. Shared gate tool/platforms_gate.sh
+#                 (canonical in whuppi/ci, stamped into tool/); PANA_VERSION
+#                 comes from this repo's tool/versions.env.
 platforms:
-	@DART="$(DART)" bash tool/platforms.sh
+	@DART="$(DART)" bash tool/platforms_gate.sh
 
 # make lint-shell  Shell portability gate: shellcheck + a bash 4.0+ scan
 #                  that catches macOS bash 3.2 breaks in scripts and in
 #                  workflow run: blocks. Mirrors the CI workflow-lint job.
 lint-shell:
 	@bash tool/lint_shell.sh
+
+# make format  Format all Dart (root + example), each from its own package root
+#              so the resolved language version matches CI. make analyze formats
+#              too; this is a standalone format-only pass.
+format:
+	@$(DART) pub get --no-example >/dev/null
+	@( cd example && $(FLUTTER) pub get >/dev/null )
+	@$(DART) format lib bin test tool hook
+	@( cd example && $(DART) format lib integration_test )
 
 # ═══════════════════════════════════════════════════════════════════
 # § 2b — Fixtures + test-suite guards

@@ -30,7 +30,7 @@ jobs:
     permissions:
       contents: write       # pushes the chore/flutter-sdk + chore/lockfiles branches
       pull-requests: write  # opens / edits the upgrade PRs
-    uses: whuppi/ci/.github/workflows/upgrade-check.yml@v1.0.6
+    uses: whuppi/ci/.github/workflows/upgrade-check.yml@v1.0.7
     with:
       branch: dev
 
@@ -43,6 +43,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write       # pushes the chore/pins branch
+      issues: write         # gh label create fallback (labels.yml is canonical)
       pull-requests: write  # opens / edits the pins PR
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

@@ -250,16 +250,11 @@ git add web_assets/
 
 ### Branch model
 
-| Branch | Purpose | Merge method INTO this branch |
-|---|---|---|
-| feature branches | in-progress work | — |
-| `dev` | integration + prereleases | **Squash and merge** (clean up feature work) |
-| `prod` | stable releases | **Create a merge commit** (preserve SHA chain) |
-
-**Why merge commit for dev→prod:** squash and rebase both create new
-SHAs. Prod and dev diverge. Next promotion shows the entire history as
-"new." Merge commit preserves the original SHAs so both branches share
-the same commit objects.
+The two-lane branch model (`dev` prereleases, `prod` stable) and the
+squash-vs-merge-commit rule are the shared model. See
+whuppi/ci/docs/ARCHITECTURE.md "The versioned-release model + the stamping
+rule". The pdf-specific promotion steps are in `### Prerelease` / `### Stable
+release` below.
 
 ### The rules
 
@@ -273,52 +268,27 @@ the same commit objects.
 
 ### Changelog files
 
-| File | Purpose |
-|---|---|
-| `CHANGELOG.md` | Stable releases — triggers release on `prod` |
-| `CHANGELOG.pre.md` | Prereleases — triggers release on `dev` |
-
-Add a `## X.Y.Z` heading at the top. Write a human summary. CI
-handles commit lists, filtering, and publishing. `pubspec.yaml` stays
-`version: 0.0.0` in git — CI stamps the real version from the tag.
+`CHANGELOG.md` (stable, on `prod`) and `CHANGELOG.pre.md` (prerelease, on
+`dev`), the `## X.Y.Z` heading convention, and the pubspec-stays-`0.0.0`
+stamping rule are the shared model. See whuppi/ci/docs/ARCHITECTURE.md "The
+versioned-release model + the stamping rule".
 
 ### The release pipeline
 
-All logic lives in `tool/ci/release.sh` (run it with `--help` to list its
-modes). The workflow (`create-release.yml`) is pure job orchestration.
+The gate → discover → compile → upload → publish orchestration (changelog
+gate, version discovery, the approval-gate pause, `pub publish`, version-level
+concurrency, idempotent reruns) is the shared release engine. See
+whuppi/ci/docs/ARCHITECTURE.md "The release surface".
 
-```
-Push to dev (CHANGELOG.pre.md) or prod (CHANGELOG.md)
-  │
-  ├─ 1. gate     → release.sh --gate
-  │               checks if the right changelog file changed
-  │               dev only reacts to CHANGELOG.pre.md
-  │               prod only reacts to CHANGELOG.md
-  │
-  ├─ 2. discover → release.sh --discover
-  │               finds version, validates branch/type match
-  │               stamps version + deregisters submodules
-  │               creates stamped tag commit (with a parent) + GitHub Release
-  │
-  ├─ 3. compile  → checkout tag, build all 6 platforms in parallel
-  │
-  ├─ 4. upload   → upload binaries to GitHub Release
-  │               release.sh --add-git-install (install snippet)
-  │               release.sh --update-tag-hashes (asset hashes into tag)
-  │
-  └─ 5. publish  → ⏸ PAUSE (GitHub Environment approval gate)
-                    release.sh --stamp-changelog (filtered CHANGELOG.md)
-                    dart pub publish
-                    release.sh --add-pub-install (install snippet)
-```
+What pdf's release adds on top:
 
-After step 4, the tag has: stamped version + raw vendor source +
-asset hashes. `git: ref: <tag>` users get verified binary downloads.
-
-Concurrency is version-level — two different versions can release in
-parallel. Same version pushed twice: the newer run cancels the stale one.
-
-Every step is idempotent on rerun.
+- **Native compile matrix** — the compile step checks out the tag and builds
+  all 6 platforms in parallel.
+- **Submodule deregistration** — discover deregisters the vendored submodules
+  so the tag ships raw vendor source.
+- **Asset hashes into the tag** — after upload, `--update-tag-hashes` writes
+  the binary hashes back into the tag, so `git: ref: <tag>` users get verified
+  binary downloads.
 
 ### Prerelease
 
@@ -403,8 +373,9 @@ git push origin dev:prod --force-with-lease
 
 ### CI workflows
 
-See ARCHITECTURE.md "CI/CD architecture" for the full workflow table,
-runner model, capability architecture, and action inventory.
+See whuppi/ci/docs/ARCHITECTURE.md for the shared workflow mechanics (capability
+model, runner model, reusable workflows). The pdf-local workflow table is in
+ARCHITECTURE.md "CI/CD architecture".
 
 ### Git hooks
 
