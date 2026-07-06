@@ -19,18 +19,19 @@
 # auto-detected, example is auto-detected, and package-only steps
 # (Rust, fixtures) live in the package's own wrapper AROUND this core.
 #
-# Env (all optional):
-#   DART / FLUTTER   SDK commands            (default: fvm dart / fvm flutter)
-#   ANALYZE_DIRS     root dirs to analyze    (default: the ones that exist
-#                    among lib bin test tool hook)
-#   EXAMPLE_DIR      example app dir          (default: example if present;
+# Env:
+#   DART / FLUTTER   SDK commands — REQUIRED, no fallback. The caller passes
+#                    them; a missing one fails loud, never guesses.
+#   ANALYZE_DIRS     root dirs to analyze — auto-detected from the package shape
+#                    (the ones that exist among lib bin test tool hook)
+#   EXAMPLE_DIR      example app dir — auto-detected (example/ if present;
 #                    set to "" to skip)
 # Run from the package root.
 # ────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-DART="${DART:-fvm dart}"
-FLUTTER="${FLUTTER:-fvm flutter}"
+: "${DART:?analyze_core: DART must be set by the caller, e.g. fvm dart}"
+: "${FLUTTER:?analyze_core: FLUTTER must be set by the caller, e.g. fvm flutter}"
 
 # Auto-detect the analyzable root dirs so one script fits every package
 # shape. example/ is deliberately NOT in this list: it is a separate

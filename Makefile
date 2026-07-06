@@ -73,7 +73,7 @@ analyze-floor:
 #                 (canonical in whuppi/ci, stamped into tool/); PANA_VERSION
 #                 comes from this repo's tool/versions.env.
 platforms:
-	@DART="$(DART)" bash tool/platforms_gate.sh
+	@DART="$(DART)" EXPECTED_PLATFORMS="android ios linux macos windows web" bash tool/platforms_gate.sh
 
 # make lint-shell  Shell portability gate: shellcheck + a bash 4.0+ scan
 #                  that catches macOS bash 3.2 breaks in scripts and in
@@ -403,7 +403,7 @@ verify-windows:
 verify-web:
 	$(call setup_example_web)
 	@echo "=== Verify: Web ==="
-	cd example && $(FLUTTER) build web --release $(VERBOSE)
+	@FLUTTER="$(FLUTTER)" bash tool/verify_web_gate.sh
 
 # ═══════════════════════════════════════════════════════════════════
 # § 8 — Clean

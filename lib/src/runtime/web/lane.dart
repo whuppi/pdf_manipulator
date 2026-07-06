@@ -611,17 +611,9 @@ class WebLane implements Lane {
 
   void _post(Map<String, Object?> fields) {
     final obj = JSObject();
-    fields.forEach((k, v) {
-      obj[k] = switch (v) {
-        null => null,
-        final String s => s.toJS,
-        final int n => n.toJS,
-        final bool b => b.toJS,
-        // JSAny is an erased extension type — this arm absorbs every
-        // remaining value; senders only pass JS-safe types.
-        final JSAny js => js,
-      };
-    });
+    // jsify: canonical Dart->JS conversion, identical on dart2js and dart2wasm.
+    // Already-JS values (buffers, ports) go through _postRaw, not here.
+    fields.forEach((k, v) => obj[k] = v.jsify());
     _worker?.js.postMessage(obj);
   }
 

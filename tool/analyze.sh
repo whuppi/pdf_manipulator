@@ -8,9 +8,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PKG_ROOT="$(dirname "$SCRIPT_DIR")"
 
-# SDK commands (overridable via env for non-FVM setups)
-DART="${DART:-fvm dart}"
-FLUTTER="${FLUTTER:-fvm flutter}"
+# SDK commands — REQUIRED, no fallback. The caller (the Makefile) passes them;
+# a missing one fails loud, never guesses.
+: "${DART:?analyze: DART must be set by the caller, e.g. fvm dart}"
+: "${FLUTTER:?analyze: FLUTTER must be set by the caller, e.g. fvm flutter}"
 
 # ── Resolve BEFORE formatting ───────────────────────────────────────
 # `dart format`'s output depends on the file's resolved LANGUAGE
