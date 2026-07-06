@@ -60,6 +60,11 @@ CONTENT RULES (never change)
 
 <!-- Add new versions below, newest first. -->
 
+## 2.1.2
+
+- Fixed a Flutter Web WASM (`dart2wasm`) compile failure — the `_post` switch over `Object?` was non-exhaustive under dart2wasm (dart2js treats `JSAny` as a catch-all, dart2wasm doesn't), now converted with `jsify()` ([#145](https://github.com/whuppi/pdf_manipulator/issues/145) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #146](https://github.com/whuppi/pdf_manipulator/pull/146))
+- Fixed pub.dev not advertising Flutter Web support — the web runtime now resolves to a stub default that `pana` can analyze, so the package shows web (dart2js) support ([PR #133](https://github.com/whuppi/pdf_manipulator/pull/133))
+
 ## 2.1.1
 
 - Fixed the README banner not rendering on pub.dev — the `<picture>` element is flattened to a plain image in the published package ([PR #111](https://github.com/whuppi/pdf_manipulator/pull/111))
