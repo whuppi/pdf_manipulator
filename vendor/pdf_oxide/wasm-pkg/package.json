@@ -1,0 +1,76 @@
+{
+  "name": "pdf-oxide-wasm",
+  "version": "0.3.64",
+  "description": "Fast, zero-dependency PDF toolkit for Node.js, browsers, and edge runtimes — text extraction, markdown/HTML conversion, search, form filling, creation, and editing. Rust core compiled to WebAssembly.",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yfedoseev/pdf_oxide"
+  },
+  "homepage": "https://github.com/yfedoseev/pdf_oxide/blob/main/docs/getting-started-wasm.md",
+  "bugs": {
+    "url": "https://github.com/yfedoseev/pdf_oxide/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bundler/",
+    "nodejs/",
+    "web/",
+    "README.md"
+  ],
+  "main": "./nodejs/pdf_oxide.js",
+  "module": "./bundler/pdf_oxide.js",
+  "types": "./bundler/pdf_oxide.d.ts",
+  "browser": "./web/pdf_oxide.js",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./bundler/pdf_oxide.d.ts",
+      "browser": "./web/pdf_oxide.js",
+      "bun": "./bundler/pdf_oxide.js",
+      "deno": "./web/pdf_oxide.js",
+      "worker": "./web/pdf_oxide.js",
+      "workerd": "./web/pdf_oxide.js",
+      "node": {
+        "import": "./nodejs/pdf_oxide.js",
+        "require": "./nodejs/pdf_oxide.js",
+        "default": "./nodejs/pdf_oxide.js"
+      },
+      "import": "./bundler/pdf_oxide.js",
+      "default": "./bundler/pdf_oxide.js"
+    },
+    "./bundler": "./bundler/pdf_oxide.js",
+    "./nodejs": "./nodejs/pdf_oxide.js",
+    "./web": "./web/pdf_oxide.js",
+    "./package.json": "./package.json"
+  },
+  "keywords": [
+    "pdf",
+    "wasm",
+    "webassembly",
+    "pdf-parser",
+    "pdf-extract",
+    "text-extraction",
+    "pdf-to-text",
+    "pdf-to-markdown",
+    "pdf-reader",
+    "pdf-search",
+    "pdf-form",
+    "pdf-creation",
+    "markdown-to-pdf",
+    "html-to-pdf",
+    "rust",
+    "rust-wasm",
+    "serverless",
+    "cloudflare-workers",
+    "node",
+    "browser",
+    "zero-dependency",
+    "pdf-metadata",
+    "pdf-merge",
+    "pdf-encrypt",
+    "typescript"
+  ]
+}
