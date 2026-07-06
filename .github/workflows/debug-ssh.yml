@@ -1,7 +1,7 @@
 # ────────────────────────────────────────────────────────────────────
 # debug-ssh.yml — SSH into any runner for interactive debugging.
 #
-# Uses the debug-ssh composite action (bore tunnel, key-only auth).
+# Uses the shared debug-ssh composite action (bore tunnel, key-only auth).
 # Blocking mode — keeps the runner alive until /tmp/stop is touched.
 #
 # Usage:
@@ -31,30 +31,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  DEFAULT_RUNNER: ubuntu-24.04
-
 jobs:
-  # Hand-runnable (workflow_dispatch) — supports runner selection.
-  inputs:
-    name: Resolve inputs
-    runs-on: ubuntu-24.04
-    permissions: {}
-    timeout-minutes: 5
-    outputs:
-      runner: ${{ steps.resolve.outputs.runner }}
-    steps:
-      - id: resolve
-        shell: bash
-        env:
-          OVERRIDE: ${{ inputs.runner }}
-          DEFAULT: ${{ env.DEFAULT_RUNNER }}
-        run: echo "runner=${OVERRIDE:-$DEFAULT}" >> "$GITHUB_OUTPUT"
-
   debug:
-    name: "SSH: ${{ needs.inputs.outputs.runner }}"
-    needs: inputs
-    runs-on: ${{ needs.inputs.outputs.runner }}
+    name: "SSH: ${{ inputs.runner }}"
+    runs-on: ${{ inputs.runner }}
     timeout-minutes: 300
     permissions:
       contents: read  # checkout only; the SSH tunnel needs no token scope
