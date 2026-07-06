@@ -23,4 +23,4 @@ jobs:
     permissions:
       contents: read  # checkout reads .github/labels.json
       issues: write   # labels are managed through the Issues API
-    uses: whuppi/ci/.github/workflows/labels.yml@v1.0.8
+    uses: whuppi/ci/.github/workflows/labels.yml@v2.0.0

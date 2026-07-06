@@ -18,21 +18,21 @@
 # can't satisfy pana's floor, so `activate` fails loudly rather than silently
 # resolving an OLDER pana (a false green that hides the regression).
 #
-# Env:
-#   DART                 SDK command       (default: fvm dart) — a STABLE sdk
-#   PANA_VERSION         required — read from the caller's tool/versions.env
-#   EXPECTED_PLATFORMS   space-separated   (default: android ios linux macos
-#                                            windows web)
+# Env (all REQUIRED, no fallback — the caller passes them; a missing one fails
+# loud, never guesses):
+#   DART                 SDK command — a STABLE sdk
+#   PANA_VERSION         read from the caller's tool/versions.env
+#   EXPECTED_PLATFORMS   space-separated, e.g. android ios linux macos windows web
 # Run from the package root. Needs jq + rsync (both preinstalled on CI runners).
 # ────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
+: "${DART:?platforms_gate: DART must be set by the caller, e.g. fvm dart}"
+: "${EXPECTED_PLATFORMS:?platforms_gate: EXPECTED_PLATFORMS must be set by the caller, e.g. android ios linux macos windows web}"
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PKG_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PKG_ROOT"
-
-DART="${DART:-fvm dart}"
-EXPECTED_PLATFORMS="${EXPECTED_PLATFORMS:-android ios linux macos windows web}"
 
 command -v jq >/dev/null 2>&1 || {
   echo "platforms_gate: jq not found (needed to parse pana output)" >&2

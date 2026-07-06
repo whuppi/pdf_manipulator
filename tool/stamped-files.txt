@@ -1,0 +1,11 @@
+# The tool/*.sh gates stamped verbatim from whuppi/ci into each consumer's tool/.
+# Single source of truth for "what is stamped": the workspace stamper writes
+# exactly this list, and pr-checks fails a consumer PR whose stamped copy drifted
+# from the whuppi/ci version it pins. Blank lines and # comments are ignored.
+#
+# NOT here: commit-types.txt (a consumer override is allowed) and versions.env
+# (legitimately per-repo). Only files that must byte-match the canonical.
+analyze_core.sh
+lint_shell.sh
+platforms_gate.sh
+verify_web_gate.sh
