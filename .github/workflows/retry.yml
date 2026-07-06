@@ -27,4 +27,4 @@ jobs:
   retry:
     permissions:
       actions: write  # gh run rerun re-runs the failed jobs of the run
-    uses: whuppi/ci/.github/workflows/retry.yml@v2.0.0
+    uses: whuppi/ci/.github/workflows/retry.yml@v2.0.1
