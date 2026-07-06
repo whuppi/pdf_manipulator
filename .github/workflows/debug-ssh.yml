@@ -65,7 +65,7 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
-      - uses: whuppi/ci/actions/debug-ssh@v2.0.3
+      - uses: whuppi/ci/actions/debug-ssh@v2.0.4
 
       - name: Keep alive (touch /tmp/stop to end)
         shell: bash
