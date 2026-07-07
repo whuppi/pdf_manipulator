@@ -1,0 +1,72 @@
+[package]
+name = "pdf_oxide_cli"
+version = "0.3.64"
+edition = "2021"
+description = "CLI for pdf-oxide — the fastest PDF toolkit. 22 commands: text extraction, PDF to markdown, search, merge, split, images, compress, encrypt, watermark, forms, and more."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yfedoseev/pdf_oxide"
+homepage = "https://oxide.fyi"
+documentation = "https://pdf.oxide.fyi"
+readme = "README.md"
+keywords = ["pdf", "cli", "text-extraction", "pdf-to-markdown", "pdf-toolkit"]
+categories = ["command-line-utilities", "text-processing"]
+
+[[bin]]
+name = "pdf-oxide"
+path = "src/main.rs"
+doc = false
+
+# src/lib.rs exists only so the CLI can share modules between bin and unit tests.
+# It has no user-facing API and no doctests, so disable doctest collection to
+# keep cargo-shear + cargo doc noise-free.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[features]
+# Build `pdf-oxide` with the OCR model downloader so
+# `pdf-oxide models prefetch [-l <lang>… | --all]` actually fetches
+# (the Docker/CI provisioning path). Without it the CLI still builds
+# and runs; `models prefetch` only ensures the cache dir and warns
+# instead of reporting a misleading success.
+ocr = ["pdf_oxide/ocr"]
+
+[dependencies]
+pdf_oxide = { version = "0.3.64", path = "..", features = ["rendering", "logging"] }
+clap = { version = "4", features = ["derive"] }
+is-terminal = "0.4"
+serde_json = "1.0"
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/pdf_oxide-{ target }-{ version }.tar.gz"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/pdf_oxide-linux-x86_64-{ version }.tar.gz"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-musl]
+pkg-url = "{ repo }/releases/download/v{ version }/pdf_oxide-linux-x86_64-musl-{ version }.tar.gz"
+
+[package.metadata.binstall.overrides.aarch64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/pdf_oxide-linux-aarch64-{ version }.tar.gz"
+
+[package.metadata.binstall.overrides.x86_64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/pdf_oxide-macos-x86_64-{ version }.tar.gz"
+
+[package.metadata.binstall.overrides.aarch64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/pdf_oxide-macos-aarch64-{ version }.tar.gz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/pdf_oxide-windows-x86_64-{ version }.zip"
+pkg-fmt = "zip"
+
+[package.metadata.deb]
+maintainer = "Yury Fedoseev <yfedoseev@gmail.com>"
+copyright = "2025-2026, Yury Fedoseev"
+depends = "$auto"
+section = "utility"
+priority = "optional"
+assets = [["target/release/pdf-oxide", "usr/bin/", "755"]]
