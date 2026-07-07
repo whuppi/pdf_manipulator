@@ -9451,3 +9451,124 @@ final Uint8List testPkcs12 = Uint8List.fromList([
   0x27,
   0x10,
 ]);
+
+/// Minimal AcroForm whose field name, value, and document title are
+/// PDFDocEncoding literals (single Latin-1 bytes: 0xDF, 0xF6, 0xFC) --
+/// the ISO 32000-1 s7.9.2.2 non-UTF-16 branch. Adobe-InDesign-class
+/// producers ship forms with exactly this /T shape. The bytes are NOT
+/// valid UTF-8; a reader that decodes them as UTF-8 sees U+FFFD.
+/// Field "Prüfstraße und Hausnr", value "Königsallee 42, München",
+/// title "Straßen-Formular für Prüfung" -- all invented for this
+/// fixture.
+final Uint8List formPdfdocNamePdf = _build(
+  '%PDF-1.4\n'
+  '1 0 obj\n'
+  '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DR << /Font << /Helv 5 0 R >> >> /DA (/Helv 0 Tf 0 g) >> >>\n'
+  'endobj\n'
+  '2 0 obj\n'
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>\n'
+  'endobj\n'
+  '3 0 obj\n'
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Annots [4 0 R] >>\n'
+  'endobj\n'
+  '4 0 obj\n'
+  '<< /Type /Annot /Subtype /Widget /FT /Tx /T (Pr\u00fcfstra\u00dfe und Hausnr) /V (K\u00f6nigsallee 42, M\u00fcnchen) /Rect [50 700 300 720] /DA (/Helv 12 Tf 0 g) /F 4 >>\n'
+  'endobj\n'
+  '5 0 obj\n'
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\n'
+  'endobj\n'
+  '6 0 obj\n'
+  '<< /Title (Stra\u00dfen-Formular f\u00fcr Pr\u00fcfung) >>\n'
+  'endobj\n'
+  'xref\n'
+  '0 7\n'
+  '0000000000 65535 f \n'
+  '0000000009 00000 n \n'
+  '0000000145 00000 n \n'
+  '0000000202 00000 n \n'
+  '0000000289 00000 n \n'
+  '0000000454 00000 n \n'
+  '0000000551 00000 n \n'
+  'trailer\n'
+  '<< /Size 7 /Root 1 0 R /Info 6 0 R >>\n'
+  'startxref\n'
+  '610\n'
+  '%%EOF\n'
+  '',
+);
+
+/// Minimal AcroForm whose field name is a UTF-16BE hex string with
+/// BOM (`<FEFF...>`) -- the ISO 32000-1 s7.9.2.2 UTF-16 branch.
+/// pdf-lib and headless-Chrome-generated forms ship this /T shape.
+/// Same invented field name as [formPdfdocNamePdf]; no default
+/// value.
+final Uint8List formUtf16NamePdf = _build(
+  '%PDF-1.4\n'
+  '1 0 obj\n'
+  '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DR << /Font << /Helv 5 0 R >> >> /DA (/Helv 0 Tf 0 g) >> >>\n'
+  'endobj\n'
+  '2 0 obj\n'
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>\n'
+  'endobj\n'
+  '3 0 obj\n'
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Annots [4 0 R] >>\n'
+  'endobj\n'
+  '4 0 obj\n'
+  '<< /Type /Annot /Subtype /Widget /FT /Tx /T <FEFF0050007200FC0066007300740072006100DF006500200075006E006400200048006100750073006E0072> /Rect [50 700 300 720] /DA (/Helv 12 Tf 0 g) /F 4 >>\n'
+  'endobj\n'
+  '5 0 obj\n'
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\n'
+  'endobj\n'
+  'xref\n'
+  '0 6\n'
+  '0000000000 65535 f \n'
+  '0000000009 00000 n \n'
+  '0000000145 00000 n \n'
+  '0000000202 00000 n \n'
+  '0000000289 00000 n \n'
+  '0000000492 00000 n \n'
+  'trailer\n'
+  '<< /Size 6 /Root 1 0 R >>\n'
+  'startxref\n'
+  '589\n'
+  '%%EOF\n'
+  '',
+);
+
+/// Minimal AcroForm whose field name is RAW UTF-8 bytes in a literal
+/// string (sharp-s as 0xC3 0x9F) -- spec-violating, but real:
+/// LibreOffice-class producers write /T this way. A spec-strict
+/// PDFDocEncoding decode reads these bytes as mojibake. Same invented
+/// field name as [formPdfdocNamePdf]; no default value.
+final Uint8List formUtf8NamePdf = _build(
+  '%PDF-1.4\n'
+  '1 0 obj\n'
+  '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DR << /Font << /Helv 5 0 R >> >> /DA (/Helv 0 Tf 0 g) >> >>\n'
+  'endobj\n'
+  '2 0 obj\n'
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>\n'
+  'endobj\n'
+  '3 0 obj\n'
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Annots [4 0 R] >>\n'
+  'endobj\n'
+  '4 0 obj\n'
+  '<< /Type /Annot /Subtype /Widget /FT /Tx /T (Pr\u00c3\u00bcfstra\u00c3\u009fe und Hausnr) /Rect [50 700 300 720] /DA (/Helv 12 Tf 0 g) /F 4 >>\n'
+  'endobj\n'
+  '5 0 obj\n'
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\n'
+  'endobj\n'
+  'xref\n'
+  '0 6\n'
+  '0000000000 65535 f \n'
+  '0000000009 00000 n \n'
+  '0000000145 00000 n \n'
+  '0000000202 00000 n \n'
+  '0000000289 00000 n \n'
+  '0000000427 00000 n \n'
+  'trailer\n'
+  '<< /Size 6 /Root 1 0 R >>\n'
+  'startxref\n'
+  '524\n'
+  '%%EOF\n'
+  '',
+);

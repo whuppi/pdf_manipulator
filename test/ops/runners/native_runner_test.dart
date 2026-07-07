@@ -12,6 +12,7 @@ import '../../harness/test_source_sink.dart';
 
 import '../core/pdf_doc_battery.dart';
 import '../core/pdf_editor_battery.dart';
+import '../core/pdf_form_encoding_battery.dart';
 import '../core/pdf_builder_battery.dart';
 import '../core/pdf_standalone_battery.dart';
 import '../core/pdf_sugar_battery.dart';
@@ -47,6 +48,7 @@ void main() {
   // Core tests
   registerDocTests(() => pdf);
   registerEditorTests(() => pdf);
+  registerFormEncodingTests(() => pdf);
   registerBuilderTests(() => pdf);
   registerStandaloneTests(() => pdf);
   registerSugarTests(() => pdf);
