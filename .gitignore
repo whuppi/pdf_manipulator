@@ -238,6 +238,15 @@ unlinked_spec.ds
 **/ios/Flutter/flutter_export_environment.sh
 **/macos/Flutter/GeneratedPluginRegistrant.swift
 **/macos/Flutter/ephemeral/
+
+# Swift Package Manager (Flutter iOS/macOS uses SPM by default since 3.44).
+# Regenerated at build time — the native SPM package versions already follow
+# the Dart deps pinned in pubspec.lock, so Package.resolved is redundant and
+# churns across Xcode versions; .build is pure output. A shipped app that wants
+# reproducible SPM resolution can un-ignore Package.resolved per-repo.
+**/xcshareddata/swiftpm/Package.resolved
+**/.build/
+
 **/android/.gradle/
 **/android/local.properties
 **/android/captures/
