@@ -3,13 +3,16 @@
   "repo": "whuppi/pdf_manipulator",
   "baseTag": "v0.3.64",
   "features": {
-    "native": "icc,legacy-crypto,rendering,signatures,native-bridge",
-    "wasm": "wasm,rendering"
+    "native": "icc,legacy-crypto,rendering,signatures,native-bridge,cjk-form-fonts",
+    "wasm": "wasm,rendering,cjk-form-fonts"
   },
   "web": {
     "pdf_oxide_bg.wasm": "wasm-pdf_oxide_bg.wasm",
     "pdf_oxide.js": "wasm-pdf_oxide.js",
     "lane_worker.js": "wasm-lane_worker.js"
   },
-  "wasmBuildOutputs": ["pdf_oxide_bg.wasm", "pdf_oxide.js"]
+  "wasmBuildOutputs": [
+    "pdf_oxide_bg.wasm",
+    "pdf_oxide.js"
+  ]
 }

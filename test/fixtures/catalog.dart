@@ -243,6 +243,39 @@ final List<FixtureSpec> catalog = [
     },
   ),
   FixtureSpec(
+    name: 'form_fields_de',
+    why:
+        'German AcroForm from a foreign producer — field name and '
+        'default value carry Latin-1-range characters (sharp-s, '
+        'umlauts) in whatever text-string encoding dart-pdf emits. '
+        'Fill-by-name and flatten must survive them.',
+    truths: {
+      'pages': 1,
+      'fieldName': 'Prüfstraße und Hausnr',
+      'textFieldDefault': 'Königsallee 42, München',
+    },
+    build: (photoPng) async {
+      final doc = pw.Document(title: 'Formular');
+      doc.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4,
+          build: (ctx) => pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Text('Anschrift'),
+              pw.TextField(
+                name: 'Prüfstraße und Hausnr',
+                value: 'Königsallee 42, München',
+                width: 250,
+              ),
+            ],
+          ),
+        ),
+      );
+      return _saveDoc(doc);
+    },
+  ),
+  FixtureSpec(
     name: 'annotations',
     why:
         'Link annotations from a foreign producer — '
