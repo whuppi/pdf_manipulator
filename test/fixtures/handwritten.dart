@@ -142,7 +142,19 @@ final Uint8List emptyBytes = Uint8List(0);
 /// Almost a PDF — has header but broken structure.
 final Uint8List brokenPdf = _build('%PDF-1.4\ngarbage after header\n');
 
-Uint8List _build(String content) => Uint8List.fromList(content.codeUnits);
+// Fixture strings are byte strings: each char's code unit IS the byte
+// (Latin-1 escapes like ß emit the single PDFDocEncoding byte 0xDF).
+// A char above U+00FF has no single byte — Uint8List.fromList would
+// silently truncate it to the low byte, corrupting the fixture. Spell
+// multi-byte sequences out as individual \u00XX escapes instead.
+Uint8List _build(String content) {
+  assert(
+    content.codeUnits.every((u) => u <= 0xFF),
+    'handwritten fixture contains a char above U+00FF — it would '
+    'silently truncate to its low byte',
+  );
+  return Uint8List.fromList(content.codeUnits);
+}
 
 final Uint8List bookmarkedPdf = Uint8List.fromList([
   0x25,
