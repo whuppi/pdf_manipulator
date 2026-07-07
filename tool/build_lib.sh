@@ -2,7 +2,7 @@
 # Shared helpers — ONLY functions used by 2+ scripts belong here.
 # Single-use functions stay in their own script. Source, don't execute.
 #
-#   source "$(dirname "$0")/lib.sh"
+#   source "$(dirname "$0")/build_lib.sh"
 #
 # Requires: PKG_ROOT set by the caller (defaults to ".").
 

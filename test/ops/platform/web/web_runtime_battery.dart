@@ -20,7 +20,7 @@ import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 import 'package:web/web.dart' as web;
 
-import 'package:pdf_manipulator/src/runtime/web/web_lane.dart' show WebLaneHost;
+import 'package:pdf_manipulator/src/runtime/web/lane.dart' show WebLaneHost;
 
 import '../../../fixtures/handwritten.dart';
 import '../../../harness/test_source_sink.dart';

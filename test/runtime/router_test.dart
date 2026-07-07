@@ -64,6 +64,12 @@ class FakeLaneHost implements LaneHost {
   final lanes = <FakeLane>[];
 
   @override
+  PdfIoMode get mode => PdfIoMode.native;
+
+  @override
+  int get defaultLaneCount => 2;
+
+  @override
   Lane spawn() {
     final lane = FakeLane();
     lanes.add(lane);
@@ -442,6 +448,10 @@ void main() {
 class _SingleLaneHost implements LaneHost {
   _SingleLaneHost(this.lane);
   final FakeLane lane;
+  @override
+  PdfIoMode get mode => PdfIoMode.native;
+  @override
+  int get defaultLaneCount => 1;
   @override
   Lane spawn() => lane;
 }

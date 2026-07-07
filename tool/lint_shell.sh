@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
-# Shell portability + correctness gate — the "zizmor for shell". Same run
-# locally (make lint-shell) and in CI (pr-lint.yml). Four checks:
+# Canonical: whuppi/ci/tool/lint_shell.sh; the workspace stamper copies it
+# verbatim into each consumer's tool/. Edit the canonical + re-stamp — never a
+# stamped copy. pr-checks fails a consumer PR whose stamped copy drifted.
+#
+# Shell portability + correctness gate — the "zizmor for shell". It lints the
+# git repo at the CURRENT directory, so it runs both ways: `make check` in
+# whuppi/ci (linting itself) and the reusable pr-checks workflow (cd'd into the
+# consumer checkout, linting the consumer). Four checks:
 #   1. shellcheck     — correctness, quoting, broad portability.
 #   2. bash 4.0+ scan — catches macOS-bash-3.2 breaks. macOS is frozen on bash
 #        3.2, so a bash 4.0+ feature under `shell: bash` there is a fatal "bad
@@ -21,10 +27,10 @@
 # comment (grep can't tell code from comment) — name it, as this header does.
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT" || exit 1
-# shellcheck source=tool/lib.sh
-source "tool/lib.sh"
+# Self-contained: no lib.sh source (this gate uses none of its helpers), so it
+# stamps into any package's tool/ without dragging a lib.sh along.
+# Lints the git repo at the CURRENT directory — cd into the repo to lint first.
+git rev-parse --show-toplevel >/dev/null 2>&1 || { echo "lint_shell: run inside a git repo" >&2; exit 2; }
 
 # A missing tool skips ONLY its own check, with a loud warning — it never
 # aborts the run, so an absent shellcheck or yq still lets the grep scans run

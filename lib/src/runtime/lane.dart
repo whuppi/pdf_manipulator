@@ -6,8 +6,8 @@
 // all live in the Router. If an `if` that makes a decision appears in
 // a Lane implementation, the design has failed — move it to the Router.
 //
-//   Native: one Rust thread + mailbox        (native/native_lane.dart)
-//   Web:    one Web Worker                   (web/web_lane.dart)
+//   Native: one Rust thread + mailbox        (native/lane.dart)
+//   Web:    one Web Worker                   (web/lane.dart)
 //
 // INTERNAL — used by the Router only.
 
@@ -15,6 +15,7 @@ import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
+import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 
 /// One operation, fully described. Built by the Router.
 class LaneJob {
@@ -91,4 +92,17 @@ abstract interface class LaneHost {
   /// Create a new lane. Never blocks, never errors (platform budget
   /// pressure queues work instead of failing).
   Lane spawn();
+
+  /// This host's I/O mode — the Router reports it as the instance's
+  /// [PdfIoMode].
+  PdfIoMode get mode;
+
+  /// Lane count when the caller doesn't override it, sized from the
+  /// platform's CPU count.
+  int get defaultLaneCount;
 }
+
+/// One lane per two cores, at least two — headroom for the app's own
+/// threads; idle lanes sleep at zero CPU. Each host sizes from its own
+/// platform's core count.
+int suggestedLaneCount(int cores) => cores ~/ 2 < 2 ? 2 : cores ~/ 2;

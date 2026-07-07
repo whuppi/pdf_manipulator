@@ -1,24 +1,17 @@
-# Daily upgrade radar — everything pinned that Dependabot can't see, split by
-# risk class into TWO reviewed PRs you full-test before merge:
-#   pins      — Flutter SDK (.fvmrc) + tool/versions.env tool/binary pins with
-#               recomputed sha256s. Security-sensitive, so it reviews on its own
-#               and a hash change is never buried in lockfile churn. Re-hashes
-#               the already-pinned assets FIRST (repoint alarm), then bumps.
-#   lockfiles — pubspec.lock refreshed to latest in-range against current dev.
-# Pin logic lives in tool/ci/upgrade.sh; the lock refresh is `pub upgrade` here.
-# Runner-agnostic — configurable via workflow_dispatch (default: ubuntu-24.04).
+# Daily upgrade radar. The generic pieces (Flutter SDK pin + lockfile refresh)
+# run via the shared reusable workflow; the ONE pdf-specific piece stays local:
+# this repo's own pinned binaries (binaryen) + gate tools (pana), bumped by
+# tool/ci/upgrade.sh with recomputed sha256s in its own reviewed PR.
+#
+# The shared tool pins (fvm, Chrome, bore) live in whuppi/ci — its self-upgrade
+# bumps them, and they reach this repo via a whuppi/ci release + the grouped
+# whuppi-ci Dependabot PR.
 name: Upgrade Check
 
 on:
   schedule:
     - cron: '0 8 * * *'  # daily at 8am UTC
   workflow_dispatch:
-    inputs:
-      runner:
-        description: "Runner"
-        type: choice
-        options: [ubuntu-24.04, macos-14, windows-2025-vs2026]
-        default: ubuntu-24.04
 
 permissions: {}
 
@@ -27,40 +20,30 @@ concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
 
-env:
-  DEFAULT_RUNNER: ubuntu-24.04
-
-# Every run step uses bash, on any runner. The runner can be overridden to
-# Windows, where the default shell is pwsh and bash syntax would break.
 defaults:
   run:
     shell: bash
 
 jobs:
-  inputs:
-    name: Resolve inputs
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions: {}
-    outputs:
-      runner: ${{ steps.resolve.outputs.runner }}
-    steps:
-      - id: resolve
-        env:
-          OVERRIDE: ${{ inputs.runner }}
-          DEFAULT: ${{ env.DEFAULT_RUNNER }}
-        run: echo "runner=${OVERRIDE:-$DEFAULT}" >> "$GITHUB_OUTPUT"
+  # Flutter SDK (.fvmrc + example/.fvmrc) + lockfiles, each its own PR.
+  shared:
+    permissions:
+      contents: write       # pushes the chore/flutter-sdk + chore/lockfiles branches
+      pull-requests: write  # opens / edits the upgrade PRs
+    uses: whuppi/ci/.github/workflows/upgrade-check.yml@v2.0.4
+    with:
+      branch: dev
 
-  # Security-sensitive: the Flutter SDK pin (.fvmrc) + tool/versions.env (tool /
-  # binary pins, sha256s recomputed from upstream assets). Kept OFF the lockfile
-  # PR so a reviewer sees every hash change on its own, undiluted by lock churn.
+  # Security-sensitive: this repo's OWN pinned binaries (binaryen) + gate tools
+  # (pana), sha256s recomputed from upstream assets. Kept in its own PR so a
+  # reviewer sees every hash change undiluted.
   pins:
     name: Pinned versions
-    needs: inputs
-    runs-on: ${{ needs.inputs.outputs.runner }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: write       # pushes the chore/pins branch
+      issues: write         # gh label create fallback (labels.yml is canonical)
       pull-requests: write  # opens / edits the pins PR
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -95,8 +78,7 @@ jobs:
             git checkout -b chore/pins
           fi
 
-      # Bump .fvmrc + tool/versions.env in place. Pure curl/jq/sed/gh (no Dart,
-      # no SDK), so it runs before any SDK setup.
+      # Bump tool/versions.env in place. Pure curl/jq/sed/gh (no Dart, no SDK).
       - name: Bump pinned versions
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -107,7 +89,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EXISTING_PR: ${{ steps.branch.outputs.existing_pr }}
         run: |
-          git add tool/versions.env ':(glob)**/.fvmrc'
+          git add tool/versions.env
           git commit -m "chore: bump pinned versions" || {
             echo "Pins already fresh — nothing to bump."
             exit 0
@@ -124,10 +106,10 @@ jobs:
           PR_BODY="$(cat <<'EOF'
           Supply-chain pin bump — review the recomputed hashes in the diff:
 
-          - **Flutter SDK** (`.fvmrc`)
-          - **tools / binaries + the zizmor + actionlint gate pins** (`tool/versions.env`) —
-            sha256s recomputed from the upstream release assets, re-verified by
-            `fetch_verified` on every build
+          - **Pinned assets in `tool/versions.env`**: this repo's own build +
+            gate pins; sha256s recomputed from the upstream release assets,
+            re-verified by `fetch_verified` on every build. See the diff for
+            which versions moved.
 
           The already-pinned assets were re-hashed before this bump (repoint alarm).
           Add `ready-to-test` for the full cross-target run, then merge once green.
@@ -147,97 +129,5 @@ jobs:
           else
             gh pr edit "$EXISTING_PR" \
               --title "chore: bump pinned versions" \
-              --body "$PR_BODY"
-          fi
-
-  # Routine: pubspec.lock refreshed to the latest in-range, resolved against the
-  # SDK currently pinned on dev. Independent of the pins PR by design — an SDK
-  # bump rides pins and gets full-tested before it changes lock resolution.
-  lockfiles:
-    name: Lockfile refresh
-    needs: inputs
-    runs-on: ${{ needs.inputs.outputs.runner }}
-    timeout-minutes: 20
-    permissions:
-      contents: write       # pushes the chore/lockfiles branch
-      pull-requests: write  # opens / edits the lockfiles PR
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: dev
-          persist-credentials: false
-
-      - name: Prepare lockfiles branch
-        id: branch
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          # persist-credentials:false leaves the remote unauthenticated — wire
-          # gh's token into git so the branch push below works.
-          gh auth setup-git
-          gh label create upgrade-locks --description "Auto: lockfile refresh" --color "1d76db" 2>/dev/null || true
-          EXISTING_PR=$(gh pr list --label upgrade-locks --state open --json number --jq '.[0].number // empty')
-          echo "existing_pr=$EXISTING_PR" >> "$GITHUB_OUTPUT"
-          if [ -n "$EXISTING_PR" ]; then
-            git fetch origin chore/lockfiles 2>/dev/null || true
-            git checkout -B chore/lockfiles origin/chore/lockfiles 2>/dev/null || git checkout -b chore/lockfiles
-          else
-            git checkout -b chore/lockfiles
-          fi
-
-      # Resolve against the SDK pinned on current dev — what a fresh consumer builds on.
-      - uses: ./.github/actions/capabilities/fvm
-
-      - name: Refresh lockfiles to latest in-range
-        run: |
-          # Root is a pure-Dart package: --no-example so `dart pub` does not try
-          # to resolve the Flutter example (it has no sky_engine, dart can't).
-          # The example is a Flutter app, so refresh it with `flutter pub`.
-          fvm dart pub upgrade --no-example
-          ( cd example && fvm flutter pub upgrade )
-
-      - name: Commit + open or update the lockfiles PR
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EXISTING_PR: ${{ steps.branch.outputs.existing_pr }}
-        run: |
-          # Glob so a new subpackage lockfile is staged automatically. :(glob) is
-          # required — a bare **/pubspec.lock skips the repo-root file (its
-          # leading **/ needs a slash), which is the main lockfile.
-          git add ':(glob)**/pubspec.lock'
-          git commit -m "chore: refresh lockfiles" || {
-            echo "Lockfiles already fresh — nothing to bump."
-            exit 0
-          }
-          if [ -n "$EXISTING_PR" ]; then
-            git push origin chore/lockfiles
-          else
-            git push --force origin chore/lockfiles
-          fi
-
-          PR_BODY="$(cat <<'EOF'
-          Routine lockfile refresh to the latest in-range — what a fresh consumer resolves:
-
-          - **lockfiles** (`pubspec.lock`, `example/pubspec.lock`)
-
-          Add `ready-to-test` for the full cross-target run, then merge once green.
-
-          _Auto-generated by upgrade-check.yml_
-          EOF
-          )"
-
-          if [ -z "$EXISTING_PR" ]; then
-            gh pr create \
-              --base dev \
-              --head chore/lockfiles \
-              --title "chore: refresh lockfiles" \
-              --label upgrade-locks \
-              --draft \
-              --body "$PR_BODY"
-          else
-            gh pr edit "$EXISTING_PR" \
-              --title "chore: refresh lockfiles" \
               --body "$PR_BODY"
           fi

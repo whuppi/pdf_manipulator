@@ -1,11 +1,13 @@
 [
   { "name": "bug",              "color": "D93F0B", "description": "Broken behavior (auto)" },
   { "name": "feature",          "color": "0E8A16", "description": "New capability (auto)" },
+  { "name": "docs",             "color": "0075CA", "description": "Documentation change (auto)" },
   { "name": "ci",               "color": "BFD4F2", "description": "Build, CI, or workflow change (auto)" },
   { "name": "web",              "color": "1D76DB", "description": "Web or WASM specific (auto)" },
   { "name": "upstream",         "color": "5319E7", "description": "Needs a pdf_oxide change (auto)" },
   { "name": "dependencies",     "color": "0366D6", "description": "Dependency version bump (auto)" },
   { "name": "upgrade-pins",     "color": "1D76DB", "description": "Pinned tool or binary bump, review the hashes (auto)" },
+  { "name": "upgrade-sdk",      "color": "1D76DB", "description": "Flutter SDK bump, review the change (auto)" },
   { "name": "upgrade-locks",    "color": "1D76DB", "description": "Lockfile refresh (auto)" },
   { "name": "ready-to-test",    "color": "FBCA04", "description": "Triggers the full cross-target test run (manual)" },
   { "name": "release",          "color": "6F42C1", "description": "Release promotion PR (manual)" },

@@ -38,7 +38,7 @@
 //
 // Split: this library spans two files. The lane (job lifecycle,
 // 3 I/O modes) lives here; WebLaneHost (worker boot handshake,
-// page-global budget, pristine pool) lives in web_lane_host.dart.
+// page-global budget, pristine pool) lives in host.dart.
 
 import 'dart:async';
 import 'dart:js_interop';
@@ -50,12 +50,21 @@ import 'package:web/web.dart' as web;
 import 'package:web/web.dart' show EventStreamProviders;
 
 import 'package:pdf_manipulator/src/runtime/lane.dart';
-import 'package:pdf_manipulator/src/runtime/web/lane_protocol.dart';
+import 'package:pdf_manipulator/src/runtime/web/protocol.dart';
 import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
+import 'package:pdf_manipulator/src/types/pdf_config.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 
-part 'web_lane_host.dart';
+part 'host.dart';
+
+/// Creates the web [LaneHost]. The platform conditional import selects this
+/// where dart:js_interop exists. [config] supplies the lane-worker URL and an
+/// optional I/O-mode override.
+LaneHost createLaneHost({PdfConfig? config}) => WebLaneHost(
+  laneWorkerUrl: config?.webLaneWorkerUrl,
+  forceMode: config?.webIoMode,
+);
 
 // ── JS interop: SAB + Atomics (main thread: store/notify only) ─────
 
@@ -602,17 +611,9 @@ class WebLane implements Lane {
 
   void _post(Map<String, Object?> fields) {
     final obj = JSObject();
-    fields.forEach((k, v) {
-      obj[k] = switch (v) {
-        null => null,
-        final String s => s.toJS,
-        final int n => n.toJS,
-        final bool b => b.toJS,
-        // JSAny is an erased extension type — this arm absorbs every
-        // remaining value; senders only pass JS-safe types.
-        final JSAny js => js,
-      };
-    });
+    // jsify: canonical Dart->JS conversion, identical on dart2js and dart2wasm.
+    // Already-JS values (buffers, ports) go through _postRaw, not here.
+    fields.forEach((k, v) => obj[k] = v.jsify());
     _worker?.js.postMessage(obj);
   }
 

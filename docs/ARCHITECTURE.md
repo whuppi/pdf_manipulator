@@ -138,16 +138,14 @@ lib/
     │   ├── pdf_standalone.dart             ← sign, convertTo, convertToPdf, extractPages
     │   └── pdf_sugar.dart                  ← merge, split, watermark, compress, ...
     │
-    ├── bridge/                              ← BRIDGE
+    ├── bridge/                              ← BRIDGE (platform-blind)
     │   ├── pdf_bridge.dart                 ← abstract PdfBridge + handle contracts
     │   ├── pdf_transport.dart              ← PdfTransport interface
     │   ├── shared_bridge.dart              ← ONE bridge, both platforms; births every PdfTask
     │   ├── shared_bridge_doc.dart          ← doc handle (part)
     │   ├── shared_bridge_editor.dart       ← editor handle (part)
     │   ├── shared_bridge_builder.dart      ← builder + page handles (part)
-    │   ├── create.dart                     ← conditional import router
-    │   ├── _create_native.dart             ← → SharedBridge(Router(NativeLaneHost))
-    │   ├── _create_web.dart                ← → SharedBridge(Router(WebLaneHost))
+    │   ├── create_bridge.dart              ← neutral factory: SharedBridge(Router(createLaneHost()))
     │   │
     │   └── protocol/
     │       ├── binary_codec.dart           ← binary request/response encoding
@@ -156,19 +154,23 @@ lib/
     │
     ├── runtime/                             ← THE LANE RUNTIME
     │   ├── router.dart                     ← shared brain: pinning, placement, dispose
-    │   ├── lane.dart                       ← Lane / LaneHost / LaneJob contracts
+    │   ├── lane.dart                       ← Lane / LaneHost / LaneJob contracts + lane sizing
+    │   ├── host.dart                       ← platform host selector: stub default,
+    │   │                                      dart.library.io → native, js_interop → web
+    │   ├── host_stub.dart                  ← neutral default target (no platform library,
+    │   │                                      so pub.dev keeps web supported)
     │   ├── wire_peek.dart                  ← minimal wire reads (op, handleId)
     │   │
     │   ├── native/
-    │   │   ├── native_lane.dart            ← dumb adapter: 4 verbs over FFI
-    │   │   ├── native_lane_host.dart       ← spawn + one-time FFI bootstrap
+    │   │   ├── lane.dart                   ← dumb adapter: 4 verbs over FFI; exposes createLaneHost
+    │   │   ├── host.dart                   ← spawn + one-time FFI bootstrap
     │   │   ├── channel_buffers.dart        ← condvar memory layout
-    │   │   └── lane_bindings.dart          ← @Native FFI bindings
+    │   │   └── bindings.dart               ← @Native FFI bindings
     │   │
     │   └── web/
-    │       ├── web_lane.dart               ← the lane: job lifecycle, 3 I/O modes
-    │       ├── web_lane_host.dart          ← worker boot handshake, budget, pristine pool
-    │       └── lane_protocol.dart          ← codes injected into lane_worker.js
+    │       ├── lane.dart                   ← the lane: job lifecycle, 3 I/O modes; exposes createLaneHost
+    │       ├── host.dart                   ← worker boot handshake, budget, pristine pool
+    │       └── protocol.dart               ← codes injected into lane_worker.js
     │
     ├── types/                              ← shared types (all exported)
     │   ├── cancel_hook.dart                ← CancelHook: binds PdfTask.cancel to its job
@@ -209,7 +211,7 @@ bin/
 
 tool/                                       ← .sh = orchestration wrappers; .dart = programs
 │                                              (anything parsing structured data or using a library)
-├── lib.sh                                  ← shared helpers (sourced by 2+ scripts)
+├── build_lib.sh                            ← shared build helpers (sourced by 2+ scripts)
 ├── versions.env                            ← single source of truth for pinned versions + hashes
 ├── analyze.sh                              ← format + Dart + Rust static analysis
 ├── check_alignment.sh                      ← 16 KB ELF alignment check for Android APK
@@ -617,23 +619,17 @@ user-facing text (README, pubspec).
    always safe (user-space). System packages auto-install only on CI.
 
 3. **jq is the JSON tool for bash; Dart is never invoked from bash.**
-   Bash reads `build.json` (and any JSON) through `lib.sh`'s jq-backed
+   Bash reads `build.json` (and any JSON) through `build_lib.sh`'s jq-backed
    accessor (`json_get`), never hand-rolled `sed`/`grep` field extraction;
    `ensure_jq` guarantees jq is present. The native build hook
    (`hook/build.dart`) reads `build.json` in Dart. Bash never shells out to
    dart or python.
 
-4. **Capabilities, not layers.** Each CI concern is one action under
-   `capabilities/`. No runner layer, no target layer — just
-   independent capabilities. Each handles all runners internally
-   via `runner.os` guards. `runner.os` guards exist ONLY inside
-   capability actions — nowhere else.
+4. **The capability model and the single `make-target` orchestrator are
+   the shared model.** See whuppi/ci/docs/ARCHITECTURE.md "make-target —
+   the orchestration contract".
 
-5. **One orchestrator.** `make-target` provisions capabilities then
-   runs `make`. Zero logic — flat list of conditional capability
-   calls. Workflows call `make-target`, never capabilities directly.
-
-6. **Runners are configurable.** Every workflow resolves its runner in
+5. **Runners are configurable.** Every workflow resolves its runner in
    one identical `inputs` job — `runs-on: ${{ needs.inputs.outputs.runner }}`
    on every real job, the only place a literal `runs-on` appears. A
    workflow that can be hand-run (a real `workflow_dispatch`) exposes a
@@ -641,12 +637,12 @@ user-facing text (README, pubspec).
    resolves the hardcoded default through the same job. Test/compile jobs
    add per-row matrix runners.
 
-7. **Matrix row is the manifest.** Each row declares which
+6. **Matrix row is the manifest.** Each row declares which
    capabilities to activate and which runner to use. Adding a new
    combo = one line. Adding a new capability = one action + one
    input on `make-target` + add to rows that need it.
 
-8. **Every job is named.** A job's YAML key (its ID) is the code
+7. **Every job is named.** A job's YAML key (its ID) is the code
    handle — terse, lowercase, used only by `needs:` and
    `${{ needs.<id>.* }}`, and hyphen-free where referenced in a `needs`
    expression (a hyphen reads as minus there, so `rust`, not
@@ -656,102 +652,43 @@ user-facing text (README, pubspec).
 
 ### Actions
 
-```
-.github/actions/
-├── capabilities/          14 independent leaves
-│   ├── fvm/               Flutter SDK (all runners)
-│   ├── rust/              Rust toolchain + sccache (all runners)
-│   ├── java/              JDK (all runners)
-│   ├── chrome/            Chrome + ChromeDriver (Linux/macOS/Windows)
-│   ├── headless-display/  xvfb on Linux, no-op elsewhere
-│   ├── hw-accel/          KVM on Linux, no-op elsewhere
-│   ├── free-disk-space/   Reclaim disk on Linux, no-op elsewhere
-│   ├── gradle-cache/      Two-phase restore/save + daemon stop
-│   ├── xcode-cache/       Xcode derived data cache
-│   ├── pods-cache/        CocoaPods cache
-│   ├── wasm-cache/        WASM build output cache
-│   ├── wasm-build/        Compile WASM from source
-│   ├── android-emulator/  x86_64 + aosp_atd (not macOS ARM — no nested virt)
-│   └── ios-simulator/     macOS only
-├── make-target/           Orchestrator (capabilities → make)
-└── debug-ssh/             SSH tunnel for CI debugging
-```
+pdf carries three local native capabilities under
+`.github/actions/capabilities/`:
 
-Each capability:
-- Is one concern, one action, one file.
-- Handles all valid runners internally (`runner.os` guards).
-- Documents runner behavior in its description (what it does on
-  each runner, including no-ops).
-- Never calls another capability. Independent leaves.
+- **`rust/`** — Rust toolchain + sccache. Sets the `pdf_oxide` submodule
+  rev the wasm and xcode caches key on.
+- **`wasm-cache/`** — caches WASM build output.
+- **`wasm-build/`** — compiles WASM on a cache miss.
 
-**What is — and isn't — a capability (the generic test):** a capability
-*provisions one environmental prerequisite a build/test needs*, runner-
-agnostically. When deciding where something new belongs, ask:
-
-- Is it making the runner *ready* to build/test — installing a tool, restoring
-  a cache, setting up a display / disk / accelerator? → **capability**.
-- Is it the build/test *work* itself (compile, run a suite, produce binaries)?
-  → the **Makefile** (`make <target>`), invoked via `make-target`. Never a
-  capability.
-- Is it project automation that talks to the GitHub API (label a PR, open a
-  release/upgrade PR, re-run a job, close stale issues)? → a **workflow job**
-  or a `tool/` script. Never a capability — it provisions nothing.
-
-A capability holds no build logic and no GitHub-API logic. The moment something
-crosses either line, it belongs in the Makefile or a workflow, not under
-`capabilities/`.
+pdf's local `make-target` wrapper provisions these before delegating the
+generic run to whuppi/ci. The capability model and the "what is a
+capability" test live in whuppi/ci/docs/ARCHITECTURE.md.
 
 ### Workflows
 
-| Workflow | Trigger | Runner model |
-|---|---|---|
-| `ci.yml` | PR to prod/dev | Inputs runner (hand-run override) + `rust`/`test` jobs |
-| `full-test.yml` | `ready-to-test` label or dispatch | Inputs runner + per-row matrix |
-| `create-release.yml` | Changelog push or dispatch | Inputs runner + compile matrix |
-| `pr-lint.yml` | PR to prod/dev | Inputs runner (hand-run override) |
-| `triage.yml` | Issues / fork PRs | Inputs runner (event-only default) — privileged |
-| `retry.yml` | CI / Full Test completed | Inputs runner (event-only default) — privileged |
-| `auto-close.yml` | Schedule / issues / comments | Inputs runner (hand-run override) |
-| `upgrade-check.yml` | Daily / dispatch | Inputs runner (hand-run override) |
-| `debug-ssh.yml` | Dispatch only | Inputs runner (override) |
+`ci.yml`, `full-test.yml`, `release.yml` are local workflows whose jobs
+call pdf's local `make-target` wrapper (which delegates to whuppi/ci); the
+rest are thin callers to whuppi/ci reusable workflows.
 
-The two privileged workflows (`triage`, `retry`) carry the only suppressions
-in the tree — see **Workflow security** below.
+| Workflow | Trigger | Kind |
+|---|---|---|
+| `ci.yml` | PR to prod/dev | Local — jobs call `make-target` (→ whuppi/ci) |
+| `full-test.yml` | `ready-to-test` label or dispatch | Local — matrix jobs call `make-target` |
+| `release.yml` | Changelog push or dispatch | Local — compile matrix + `release-tool` |
+| `debug-ssh.yml` | Dispatch only | Local — uses shared `debug-ssh` action |
+| `pr-checks.yml` | PR to prod/dev | Thin caller → whuppi/ci reusable |
+| `triage.yml` | Issues / fork PRs | Thin caller → whuppi/ci reusable (privileged) |
+| `retry.yml` | CI / Full Test completed | Thin caller → whuppi/ci reusable (privileged) |
+| `auto-close.yml` | Schedule / issues / comments | Thin caller → whuppi/ci reusable |
+| `labels.yml` | Label config push / dispatch | Thin caller → whuppi/ci reusable |
+| `upgrade-check.yml` | Daily / dispatch | Thin caller → whuppi/ci reusable |
 
 ### Workflow security
 
-Two workflows need a write token in a context a fork can trigger:
-`triage.yml` (label/assign fork PRs) and `retry.yml` (re-run a completed
-run). On a public repo GitHub grants fork-PR write only through
-`pull_request_target` or `workflow_run` — the two riskiest triggers in
-Actions, which zizmor flags categorically (`dangerous-triggers`, high
-severity, every persona). There is no clean alternative: `pull_request` from
-a fork is read-only, and the fork-write repo settings are private-repos-only.
-
-So each is hardened against every vector the finding warns about, then carries
-a single `# zizmor: ignore[dangerous-triggers]` on its trigger line as the
-receipt — not a dodge. A workflow earns that suppression only after all of:
-
-1. **No PR checkout** — never check out the fork ref.
-2. **No PR code execution** — only trusted APIs (`gh`, pinned actions).
-3. **Untrusted data is env-only** — PR title/refs/numbers flow through
-   `env:`, never interpolated into `run:` or an evaluating `with:`.
-4. **No `GITHUB_ENV` / `GITHUB_PATH` writes** — closes env-injection.
-5. **No untrusted artifact ingestion** — retry uses only the numeric run id.
-6. **Least-privilege token** — top-level `permissions: {}`, per-job scopes.
-7. **Repo-guard every job** — `if: github.repository == 'whuppi/pdf_manipulator'`
-   so a fork can't run the privileged workflow in its own context.
-8. **SHA-pinned actions.**
-9. **Bounded** — `timeout-minutes`, `concurrency`, and for reruns a one-shot
-   guard (`run_attempt == 1`).
-10. **Literal API arguments** — no dynamic command built from untrusted data.
-
-The suppression is inline (not `zizmor.yml`) so it lives where it applies and
-silences only that one finding; every other audit stays live, and the
-`pr-lint.yml` zizmor gate re-checks the whole tree on every PR. For a new
-privileged need, prefer in order: `pull_request` (read-only, clean) →
-`schedule` (base-context poller, clean) → and only if instant fork-write is
-truly required, a hardened workflow with the one receipt.
+`triage` and `retry` are privileged (fork-triggerable write). The hardening
+(dangerous-triggers, the ten conditions, the single zizmor receipt, the owner
+guard `github.repository_owner == 'whuppi'`) lives once in the shared reusables.
+See whuppi/ci/docs/ARCHITECTURE.md "The repo guard".
 
 ### Test matrix (full-test.yml)
 
@@ -777,12 +714,13 @@ who reads it:
   `pdf_oxide` crate (`crate`, `repo`, its `baseTag`), the cargo `features` per
   target, the wasm outputs. Hand-set; changes only when the vendored submodule
   moves. Read by `hook/build.dart` (`jsonDecode`) and by `compile_rust.sh` /
-  `release.sh` / `analyze.sh` via the `_json_get` helper in `tool/lib.sh`.
+  `release.sh` / `analyze.sh` via the `json_get` helper in `tool/build_lib.sh`.
 - **`tool/versions.env`** — pinned versions + sha256 hashes of the external
-  **instruments** the build downloads: `fvm`, `binaryen`, `bore`,
-  Chrome-for-Testing, plus the `zizmor` + `actionlint` gate pins. Shell
-  `KEY="value"`, sourced by the scripts that use them. Every entry is auto-bumped
-  by `tool/ci/upgrade.sh` — the file is bot-owned, no manual exceptions.
+  **instruments** the build downloads: `binaryen` (+ its three per-platform
+  sha256) and the `pana` pin (the platform gate). Shell `KEY="value"`, sourced
+  by the scripts that use them. Every entry is auto-bumped by `tool/ci/upgrade.sh`
+  — the file is bot-owned, no manual exceptions. The shared tool pins (`fvm`,
+  Chrome, the gate binaries) live in whuppi/ci's own `versions.env`, not here.
 
 The rule: a fact about *what* is built (the crate, its base version, its
 features) belongs in `build.json`; a pinned version of an *external tool* that
@@ -799,7 +737,7 @@ tool pins.
 | binaryen | `compile_rust.sh` | GitHub releases download | Error with instructions |
 | gcc-aarch64 cross | `compile_rust.sh` | Auto-install | Error with instructions |
 | GTK + ninja | Makefile | Auto-install | Error with instructions |
-| build.json reads | `compile_rust.sh`, `release.sh` | Pure bash `sed`/`grep` | Same |
+| build.json reads | `compile_rust.sh`, `release.sh` | jq via `json_get` | Same |
 
 ---
 

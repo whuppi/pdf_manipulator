@@ -125,33 +125,15 @@ jobs:
     timeout-minutes: ${{ matrix.timeout }}
     permissions:
       contents: read  # checkout + caches; no API writes
-    env:
-      FILTER: ${{ needs.inputs.outputs.filter }}
-      PORTABILITY: ${{ needs.inputs.outputs.portability }}
     steps:
       - name: Check filter
         id: filter
-        shell: bash
-        env:
-          NAME: ${{ matrix.name }}
-          MATRIX_PORTABILITY: ${{ matrix.portability }}
-        run: |
-          F="$FILTER"
-          P="$MATRIX_PORTABILITY"
-          # Skip portability rows when portability is off
-          if [[ "$P" == "true" && "$PORTABILITY" != "true" ]]; then
-            echo "Skipped: portability off"
-            echo "match=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [[ "$F" == "all" || -z "$F" ]]; then
-            echo "match=true" >> "$GITHUB_OUTPUT"
-          elif grep -qi "$F" <<< "$NAME"; then
-            echo "match=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "Skipped by filter: $F ∉ $NAME"
-            echo "match=false" >> "$GITHUB_OUTPUT"
-          fi
+        uses: whuppi/ci/actions/matrix-filter@v2.0.4
+        with:
+          name: ${{ matrix.name }}
+          filter: ${{ needs.inputs.outputs.filter }}
+          portability: ${{ needs.inputs.outputs.portability }}
+          row-portability: ${{ matrix.portability || 'false' }}
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         if: steps.filter.outputs.match == 'true'
         with: { submodules: recursive, persist-credentials: false }

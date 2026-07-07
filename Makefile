@@ -1,4 +1,4 @@
-.PHONY: check analyze lint-shell fixtures test-guards \
+.PHONY: check analyze analyze-floor platforms lint-shell format fixtures test-guards \
        build build-native build-wasm \
        compile-macos compile-ios compile-android compile-linux compile-windows compile-wasm compile-natives \
        test test-pkg-native test-unit test-rust \
@@ -30,7 +30,7 @@ VERBOSE := $(if $(CI),--verbose,)
 #
 # make check    Full local gate before PR.
 
-check: lint-shell analyze test-guards test test-example
+check: lint-shell analyze platforms test-guards test test-example
 
 # make hooks    Activate the repo's git hooks (commit-msg, pre-commit).
 #               Run once after cloning — they stay dormant otherwise.
@@ -66,11 +66,29 @@ analyze-floor:
 	$(DART) pub get --no-example >/dev/null 2>&1 || true; \
 	exit $$rc
 
+# make platforms  Gate pub.dev platform support: pana (the exact analyzer
+#                 pub.dev runs, pinned + radar-tracked) must still report all 6
+#                 platforms, else a regression like an unconditional dart:io/ffi
+#                 import silently drops web. Shared gate tool/platforms_gate.sh
+#                 (canonical in whuppi/ci, stamped into tool/); PANA_VERSION
+#                 comes from this repo's tool/versions.env.
+platforms:
+	@DART="$(DART)" EXPECTED_PLATFORMS="android ios linux macos windows web" bash tool/platforms_gate.sh
+
 # make lint-shell  Shell portability gate: shellcheck + a bash 4.0+ scan
 #                  that catches macOS bash 3.2 breaks in scripts and in
 #                  workflow run: blocks. Mirrors the CI workflow-lint job.
 lint-shell:
 	@bash tool/lint_shell.sh
+
+# make format  Format all Dart (root + example), each from its own package root
+#              so the resolved language version matches CI. make analyze formats
+#              too; this is a standalone format-only pass.
+format:
+	@$(DART) pub get --no-example >/dev/null
+	@( cd example && $(FLUTTER) pub get >/dev/null )
+	@$(DART) format lib bin test tool hook
+	@( cd example && $(DART) format lib integration_test )
 
 # ═══════════════════════════════════════════════════════════════════
 # § 2b — Fixtures + test-suite guards
@@ -385,7 +403,7 @@ verify-windows:
 verify-web:
 	$(call setup_example_web)
 	@echo "=== Verify: Web ==="
-	cd example && $(FLUTTER) build web --release $(VERBOSE)
+	@FLUTTER="$(FLUTTER)" bash tool/verify_web_gate.sh
 
 # ═══════════════════════════════════════════════════════════════════
 # § 8 — Clean
