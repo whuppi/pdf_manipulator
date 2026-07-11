@@ -493,7 +493,7 @@ You never choose; the package tries JSPI, then Atomics, then OPFS, and uses the 
 </details>
 
 <details>
-<summary><b>🧩 Advanced: force a mode, or unlock streaming on older browsers</b></summary>
+<summary><b>🧰 Advanced: force a mode, or unlock streaming on older browsers</b></summary>
 
 <br>
 
