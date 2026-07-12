@@ -596,7 +596,7 @@ void registerEditorTests(Pdf Function() createPdf) {
     }, timeout: t(1));
 
     test(
-      'setFormFieldValue survives save + reopen, then flatten (#161)',
+      'setFormFieldValue survives save + reopen, then flatten',
       () async {
         final pdf = createPdf();
         // Session 1: fill and save, WITHOUT flattening.
@@ -693,7 +693,7 @@ void registerEditorTests(Pdf Function() createPdf) {
     }, timeout: t(1));
 
     test(
-      'addImageStamp keeps existing widgets when /Annots is indirect (#161)',
+      'addImageStamp keeps existing widgets when /Annots is indirect',
       () async {
         final pdf = createPdf();
         // Stamp a page whose /Annots is an indirect reference to an array
@@ -728,7 +728,7 @@ void registerEditorTests(Pdf Function() createPdf) {
     );
 
     test(
-      'reopened filled form rasterizes its value (/NeedAppearances) (#161)',
+      'reopened filled form rasterizes its value (/NeedAppearances)',
       () async {
         // The renderer (not just the flattener) must regenerate a widget's
         // appearance from /V when the AcroForm asks for it. Fill a field whose

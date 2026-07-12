@@ -191,7 +191,7 @@ Uint8List _offsetPdf(List<String> objects, {int root = 1}) {
   return Uint8List.fromList(content.codeUnits);
 }
 
-/// #161 (bug 2): a form whose page references its widgets through an INDIRECT
+/// A form whose page references its widgets through an INDIRECT
 /// `/Annots 7 0 R` (obj 7 is the array `[4 0 R]`) rather than a direct array,
 /// with one filled text widget (`Datum` = `01.01.2030`) that carries a real
 /// appearance. `addImageStamp` used to read `/Annots` with an array-only
@@ -220,7 +220,7 @@ final Uint8List indirectAnnotsForm = _offsetPdf([
   _streamBody('', 'q Q\n'),
 ]);
 
-/// #161 (F2): a single text field, near the top of the page, whose `/AP` is an
+/// A single text field, near the top of the page, whose `/AP` is an
 /// empty placeholder (`/Tx BMC EMC`) — the state a form writer leaves when it
 /// sets `/NeedAppearances` instead of drawing the value. Used to prove the
 /// *renderer* (not just the flattener) regenerates the value from `/V`.
