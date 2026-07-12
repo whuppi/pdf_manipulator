@@ -595,38 +595,34 @@ void registerEditorTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
-    test(
-      'setFormFieldValue survives save + reopen, then flatten',
-      () async {
-        final pdf = createPdf();
-        // Session 1: fill and save, WITHOUT flattening.
-        final e1 = await pdf.edit(src(fFormFields));
-        await e1.setFormFieldValue('fullname', 'Jane Roe');
-        final filledSink = TestSink();
-        await e1.save(filledSink);
-        await e1.dispose();
-        // Session 2: a FRESH editor flattens the reopened bytes. The in-session
-        // modified-field map is empty on reopen, so the flattener must
-        // regenerate the appearance from the persisted /V (the save path set
-        // /NeedAppearances) instead of baking the stale placeholder appearance.
-        final e2 = await pdf.edit(src(filledSink.takeBytes()));
-        await e2.flattenForms();
-        final flatSink = TestSink();
-        await e2.save(flatSink);
-        await e2.dispose();
-        final doc = await pdf.open(src(flatSink.takeBytes()));
-        final text = await doc.extract(pages: const PdfPages.all());
-        expect(
-          text,
-          contains('Jane Roe'),
-          reason:
-              'a value set before save must still render after a '
-              'reopen-then-flatten',
-        );
-        await doc.dispose();
-      },
-      timeout: t(1),
-    );
+    test('setFormFieldValue survives save + reopen, then flatten', () async {
+      final pdf = createPdf();
+      // Session 1: fill and save, WITHOUT flattening.
+      final e1 = await pdf.edit(src(fFormFields));
+      await e1.setFormFieldValue('fullname', 'Jane Roe');
+      final filledSink = TestSink();
+      await e1.save(filledSink);
+      await e1.dispose();
+      // Session 2: a FRESH editor flattens the reopened bytes. The in-session
+      // modified-field map is empty on reopen, so the flattener must
+      // regenerate the appearance from the persisted /V (the save path set
+      // /NeedAppearances) instead of baking the stale placeholder appearance.
+      final e2 = await pdf.edit(src(filledSink.takeBytes()));
+      await e2.flattenForms();
+      final flatSink = TestSink();
+      await e2.save(flatSink);
+      await e2.dispose();
+      final doc = await pdf.open(src(flatSink.takeBytes()));
+      final text = await doc.extract(pages: const PdfPages.all());
+      expect(
+        text,
+        contains('Jane Roe'),
+        reason:
+            'a value set before save must still render after a '
+            'reopen-then-flatten',
+      );
+      await doc.dispose();
+    }, timeout: t(1));
 
     // ── Rotation ──
 
