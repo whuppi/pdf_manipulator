@@ -253,6 +253,16 @@ test-ops-atomics:
 # set — the SAME source the build and analyze read — plus test-support,
 # so a feature added to build.json is tested automatically; office_oxide
 # runs default.
+#
+# Debug symbols dominate Rust test-binary size — a stock CI runner can't hold
+# the full-debug build of both crates' test suites even after the free-disk
+# capability runs (see the rust job in ci.yml). Strip debuginfo + the
+# incremental cache for the test build: every test still compiles and runs
+# identically; only interactive backtraces lose symbol names (CI prints the
+# assertion output regardless).
+test-rust: export CARGO_INCREMENTAL := 0
+test-rust: export CARGO_PROFILE_DEV_DEBUG := 0
+test-rust: export CARGO_PROFILE_TEST_DEBUG := 0
 test-rust:
 	@echo "=== Rust: pdf_oxide ==="
 	$(CARGO) test --manifest-path vendor/pdf_oxide/Cargo.toml \
