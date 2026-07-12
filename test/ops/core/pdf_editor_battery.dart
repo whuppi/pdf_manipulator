@@ -753,16 +753,20 @@ void registerEditorTests(Pdf Function() createPdf) {
         await doc.dispose();
 
         final bitmap = img.decodePng(pages.single.data)!;
-        // The field sits near the top of the page; the blank /AP renders nothing
-        // there, so a pre-fix raster is all white. Count dark (text) pixels in
-        // the top third.
-        var dark = 0;
+        // In the broken case this page is provably blank white: empty /AP
+        // (/Tx BMC EMC), blank content (q Q), no widget border. So ANY ink in
+        // the top third — where the field sits — is the regenerated value.
+        // Count non-white pixels, not just near-black ones: a strict dark
+        // threshold reduces the small antialiased value to a few core pixels
+        // whose count varies by rasterizer/DPI across machines, while counting
+        // ink gives a strong 0-vs-many signal that survives those differences.
+        var ink = 0;
         final cutoff = bitmap.height ~/ 3;
         for (final p in bitmap) {
-          if (p.y < cutoff && p.r < 80 && p.g < 80 && p.b < 80) dark++;
+          if (p.y < cutoff && (p.r < 200 || p.g < 200 || p.b < 200)) ink++;
         }
         expect(
-          dark,
+          ink,
           greaterThan(10),
           reason:
               'the reopened value must rasterize, not the blank /AP placeholder',
