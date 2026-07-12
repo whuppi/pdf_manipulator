@@ -156,6 +156,94 @@ Uint8List _build(String content) {
   return Uint8List.fromList(content.codeUnits);
 }
 
+/// Body of a stream object (`<<dict /Length N>>\nstream\n<data>\nendstream`);
+/// `_offsetPdf` wraps it in `N 0 obj … endobj`. ASCII-only, so char length ==
+/// byte length == the `/Length` the reader needs.
+String _streamBody(String dict, String data) =>
+    '<< $dict /Length ${data.length} >>\nstream\n$data\nendstream';
+
+/// Assemble [objects] (each a full object body, numbered 1..N in order) into a
+/// PDF with a correct xref table — byte offsets are computed, not hand-typed,
+/// so hand-authored multi-object fixtures can't drift. ASCII-only: a
+/// StringBuffer char position equals the byte offset.
+Uint8List _offsetPdf(List<String> objects, {int root = 1}) {
+  final b = StringBuffer('%PDF-1.7\n');
+  final offsets = <int>[];
+  for (var i = 0; i < objects.length; i++) {
+    offsets.add(b.length);
+    b.write('${i + 1} 0 obj\n${objects[i]}\nendobj\n');
+  }
+  final xrefOffset = b.length;
+  final size = objects.length + 1;
+  b.write('xref\n0 $size\n0000000000 65535 f \n');
+  for (final off in offsets) {
+    b.write('${off.toString().padLeft(10, '0')} 00000 n \n');
+  }
+  b.write(
+    'trailer\n<< /Size $size /Root $root 0 R >>\n'
+    'startxref\n$xrefOffset\n%%EOF\n',
+  );
+  final content = b.toString();
+  assert(
+    content.codeUnits.every((u) => u <= 0xFF),
+    'fixture contains a char above U+00FF',
+  );
+  return Uint8List.fromList(content.codeUnits);
+}
+
+/// #161 (bug 2): a form whose page references its widgets through an INDIRECT
+/// `/Annots 7 0 R` (obj 7 is the array `[4 0 R]`) rather than a direct array,
+/// with one filled text widget (`Datum` = `01.01.2030`) that carries a real
+/// appearance. `addImageStamp` used to read `/Annots` with an array-only
+/// accessor and drop every existing widget when the reference was indirect;
+/// dart-pdf only ever emits direct arrays, so this precondition can only be
+/// hand-authored.
+final Uint8List indirectAnnotsForm = _offsetPdf([
+  // 1: catalog with an inline AcroForm listing the field
+  '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page — /Annots is an INDIRECT reference (obj 7), not a direct array
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /Helv 5 0 R >> >> /Contents 8 0 R /Annots 7 0 R >>',
+  // 4: merged text field + widget, filled /V, real /AP -> obj 6
+  '<< /FT /Tx /T (Datum) /V (01.01.2030) /Type /Annot /Subtype /Widget /Rect [66 479 204 508] /DA (/Helv 0 Tf 0 g) /AP << /N 6 0 R >> >>',
+  // 5: Helvetica font
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  // 6: the widget's appearance stream — renders the value when flattened
+  _streamBody(
+    '/Type /XObject /Subtype /Form /BBox [0 0 138 29]',
+    '/Tx BMC\nq BT /Helv 10 Tf 2 10 Td (01.01.2030) Tj ET Q\nEMC\n',
+  ),
+  // 7: the INDIRECT /Annots array — a single widget reference
+  '[4 0 R]',
+  // 8: page content stream
+  _streamBody('', 'q Q\n'),
+]);
+
+/// #161 (F2): a single text field, near the top of the page, whose `/AP` is an
+/// empty placeholder (`/Tx BMC EMC`) — the state a form writer leaves when it
+/// sets `/NeedAppearances` instead of drawing the value. Used to prove the
+/// *renderer* (not just the flattener) regenerates the value from `/V`.
+final Uint8List emptyApTextForm = _offsetPdf([
+  // 1: catalog with an inline AcroForm
+  '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page with a real /Contents and the widget in /Annots
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /Helv 5 0 R >> >> /Contents 7 0 R /Annots [4 0 R] >>',
+  // 4: text field + widget near the top of the page, empty /AP -> obj 6
+  '<< /FT /Tx /T (field) /Type /Annot /Subtype /Widget /Rect [72 700 520 740] /DA (/Helv 24 Tf 0 g) /AP << /N 6 0 R >> >>',
+  // 5: Helvetica font
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  // 6: empty appearance stream (the blank the writer left behind)
+  _streamBody(
+    '/Type /XObject /Subtype /Form /BBox [0 0 448 40]',
+    '/Tx BMC\nEMC\n',
+  ),
+  // 7: page content stream (blank white page)
+  _streamBody('', 'q Q\n'),
+]);
+
 final Uint8List bookmarkedPdf = Uint8List.fromList([
   0x25,
   0x50,

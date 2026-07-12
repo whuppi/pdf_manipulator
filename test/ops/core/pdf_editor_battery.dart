@@ -595,6 +595,39 @@ void registerEditorTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
+    test(
+      'setFormFieldValue survives save + reopen, then flatten (#161)',
+      () async {
+        final pdf = createPdf();
+        // Session 1: fill and save, WITHOUT flattening.
+        final e1 = await pdf.edit(src(fFormFields));
+        await e1.setFormFieldValue('fullname', 'Jane Roe');
+        final filledSink = TestSink();
+        await e1.save(filledSink);
+        await e1.dispose();
+        // Session 2: a FRESH editor flattens the reopened bytes. The in-session
+        // modified-field map is empty on reopen, so the flattener must
+        // regenerate the appearance from the persisted /V (the save path set
+        // /NeedAppearances) instead of baking the stale placeholder appearance.
+        final e2 = await pdf.edit(src(filledSink.takeBytes()));
+        await e2.flattenForms();
+        final flatSink = TestSink();
+        await e2.save(flatSink);
+        await e2.dispose();
+        final doc = await pdf.open(src(flatSink.takeBytes()));
+        final text = await doc.extract(pages: const PdfPages.all());
+        expect(
+          text,
+          contains('Jane Roe'),
+          reason:
+              'a value set before save must still render after a '
+              'reopen-then-flatten',
+        );
+        await doc.dispose();
+      },
+      timeout: t(1),
+    );
+
     // ── Rotation ──
 
     test('rotatePage sets rotation on specific page', () async {
@@ -658,6 +691,85 @@ void registerEditorTests(Pdf Function() createPdf) {
       final output = sink.takeBytes();
       expect(output.length, greaterThan(minimalPdf.length));
     }, timeout: t(1));
+
+    test(
+      'addImageStamp keeps existing widgets when /Annots is indirect (#161)',
+      () async {
+        final pdf = createPdf();
+        // Stamp a page whose /Annots is an indirect reference to an array
+        // holding one filled text widget (Datum = 01.01.2030).
+        final e1 = await pdf.edit(src(indirectAnnotsForm));
+        await e1.addImageStamp(
+          0,
+          src(minimalPng),
+          rect: const PdfRect(x: 210, y: 478, width: 300, height: 45),
+        );
+        final stamped = TestSink();
+        await e1.save(stamped);
+        await e1.dispose();
+        // Semantic proof: flatten the reopened doc — the widget's appearance
+        // becomes page content only if the stamp left it attached to the page.
+        final e2 = await pdf.edit(src(stamped.takeBytes()));
+        await e2.flattenForms();
+        final flatSink = TestSink();
+        await e2.save(flatSink);
+        await e2.dispose();
+        final doc = await pdf.open(src(flatSink.takeBytes()));
+        final text = await doc.extract(pages: const PdfPages.all());
+        expect(
+          text,
+          contains('01.01.2030'),
+          reason:
+              'stamping must not disconnect the page\'s existing form widget',
+        );
+        await doc.dispose();
+      },
+      timeout: t(1),
+    );
+
+    test(
+      'reopened filled form rasterizes its value (/NeedAppearances) (#161)',
+      () async {
+        // The renderer (not just the flattener) must regenerate a widget's
+        // appearance from /V when the AcroForm asks for it. Fill a field whose
+        // /AP is a blank placeholder, save (sets /V + /NeedAppearances), reopen,
+        // and RASTERIZE: the value's pixels must appear where the blank /AP would
+        // have drawn nothing. Proof is SEMANTIC — rendered pixels.
+        final pdf = createPdf();
+        final e1 = await pdf.edit(src(emptyApTextForm));
+        await e1.setFormFieldValue('field', 'JANEROE');
+        final filled = TestSink();
+        await e1.save(filled);
+        await e1.dispose();
+
+        final doc = await pdf.open(src(filled.takeBytes()));
+        final pages = <RenderedPage>[];
+        await for (final page in doc.render(
+          pages: const PdfPages.single(0),
+          size: const PdfRenderSize.thumbnail(220),
+        )) {
+          pages.add(page);
+        }
+        await doc.dispose();
+
+        final bitmap = img.decodePng(pages.single.data)!;
+        // The field sits near the top of the page; the blank /AP renders nothing
+        // there, so a pre-fix raster is all white. Count dark (text) pixels in
+        // the top third.
+        var dark = 0;
+        final cutoff = bitmap.height ~/ 3;
+        for (final p in bitmap) {
+          if (p.y < cutoff && p.r < 80 && p.g < 80 && p.b < 80) dark++;
+        }
+        expect(
+          dark,
+          greaterThan(10),
+          reason:
+              'the reopened value must rasterize, not the blank /AP placeholder',
+        );
+      },
+      timeout: t(1),
+    );
 
     test('addImageStamp preserves PNG transparency', () async {
       // A transparent-background PNG keeps its transparency only if the
