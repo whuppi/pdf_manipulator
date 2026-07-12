@@ -60,6 +60,14 @@ CONTENT RULES (never change)
 
 <!-- Add new versions below, newest first. -->
 
+## 2.1.3
+
+- Fixed `setFormFieldValue` reporting field-not-found on forms whose field names are stored as raw UTF-8 (LibreOffice-class producers) — one spec-tolerant text-string decoder now handles UTF-16BE/LE, UTF-8 with and without BOM, and PDFDocEncoding across every read ([#155](https://github.com/whuppi/pdf_manipulator/issues/155), [PR #156](https://github.com/whuppi/pdf_manipulator/pull/156))
+- Fixed `flattenForms` baking mojibake for values outside ASCII (`ß` → `ÃŸ` or `�`) — values decode per ISO 32000-1 §7.9.2.2 and appearance text is written one WinAnsi byte per character instead of UTF-8 ([#155](https://github.com/whuppi/pdf_manipulator/issues/155), [PR #156](https://github.com/whuppi/pdf_manipulator/pull/156))
+- Fixed fill → flatten silently dropping the value on widgets without an appearance stream when the field name is non-ASCII — the flattener and the form extractor now agree on how names decode ([#155](https://github.com/whuppi/pdf_manipulator/issues/155), [PR #156](https://github.com/whuppi/pdf_manipulator/pull/156))
+- Fixed flattening CJK and emoji values drawing nothing — the bundled fallback font now ships in both native and web builds and is embedded when the field's own font cannot render the text ([#155](https://github.com/whuppi/pdf_manipulator/issues/155), [PR #156](https://github.com/whuppi/pdf_manipulator/pull/156))
+- Fixed document metadata (`getTitle` and friends) mangling non-ASCII on read, and metadata writes now encode per spec so other readers see the right text ([#155](https://github.com/whuppi/pdf_manipulator/issues/155), [PR #156](https://github.com/whuppi/pdf_manipulator/pull/156))
+
 ## 2.1.2
 
 - Fixed a Flutter Web WASM (`dart2wasm`) compile failure — the `_post` switch over `Object?` was non-exhaustive under dart2wasm (dart2js treats `JSAny` as a catch-all, dart2wasm doesn't), now converted with `jsify()` ([#145](https://github.com/whuppi/pdf_manipulator/issues/145) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #146](https://github.com/whuppi/pdf_manipulator/pull/146))
