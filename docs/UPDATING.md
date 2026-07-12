@@ -57,6 +57,34 @@ Never `git push --mirror` a working fork: mirror mode deletes every
 remote ref that doesn't exist locally, including `main` and any patch
 branch not currently checked out.
 
+### Disable Actions on the fork
+
+A vendored fork is consumed as **source** — the parent repo's own CI
+(`make test-rust` / `build-wasm` / `check`) is the gate. The fork's inherited
+upstream workflows (Release, language-binding CI, CodeQL, OpenSSF Scorecard,
+scheduled scans) validate nothing this repo uses. On each fork, once:
+
+**Settings → Actions → General → "Disable actions for this repository".**
+
+- **Free-tier drain.** Public-repo Actions are free but not unthrottled — a
+  fork's heavy Rust/scan pipelines burn org-wide runner allocation and can
+  throttle the whole org's hosted runners (every repo's jobs stuck "Waiting for
+  a runner"). One vendored Rust fork here ran 40 workflows in two weeks,
+  producing nothing the parent consumes.
+- **Accidental publish.** S1 pushes the patch branch and a `v*` tag to the fork
+  on every bump; an upstream `on: push tags` Release pipeline fires on that tag
+  and can cut a GitHub release / publish a package from your mirror. Disabling
+  defuses it.
+- **Off by default.** The fork is home; upstream is just the base. Routine fork
+  work — patches, rebases, tag-moves — never needs the fork's own CI; the
+  parent's CI is the gate. The only exception is a deliberate, standalone
+  upstream PR (occasional, never during a fix): flip Actions on for that one PR,
+  then back off. Off is the resting state.
+
+Disable at the **setting** level — never delete the workflow YAMLs. Deleting
+them diverges the mirror from upstream and breaks the clean rebase-on-tag in
+S1; the files stay byte-identical to upstream and just never fire.
+
 ---
 
 ## When to update
