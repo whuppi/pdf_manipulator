@@ -60,6 +60,12 @@ CONTENT RULES (never change)
 
 <!-- Add new versions below, newest first. -->
 
+## 2.1.4-dev.0
+
+- Fixed `flattenForms` dropping a field's value when the fill and the flatten happen in separate editor sessions — a reopened editor carries no in-session modified-field map, so the flattener now regenerates the appearance from the persisted `/V` (saved alongside `/NeedAppearances`) instead of baking the stale placeholder ([#161](https://github.com/whuppi/pdf_manipulator/issues/161) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #162](https://github.com/whuppi/pdf_manipulator/pull/162))
+- Fixed `addImageStamp` erasing a page's existing form widgets when the page references its annotations through an indirect `/Annots` reference rather than a direct array ([#161](https://github.com/whuppi/pdf_manipulator/issues/161) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #162](https://github.com/whuppi/pdf_manipulator/pull/162))
+- Fixed a reopened filled form rendering blank where its value should appear — the renderer now regenerates a widget's appearance from `/V` when the AcroForm sets `/NeedAppearances`, matching the flattener ([PR #162](https://github.com/whuppi/pdf_manipulator/pull/162))
+
 ## 2.1.3-dev.0
 
 - Fixed `setFormFieldValue` reporting field-not-found on forms whose field names are stored as raw UTF-8 (LibreOffice-class producers) — one spec-tolerant text-string decoder now handles UTF-16BE/LE, UTF-8 with and without BOM, and PDFDocEncoding across every read ([#155](https://github.com/whuppi/pdf_manipulator/issues/155), [PR #156](https://github.com/whuppi/pdf_manipulator/pull/156))
