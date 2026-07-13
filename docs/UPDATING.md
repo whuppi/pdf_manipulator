@@ -12,8 +12,8 @@ patch branch.
 
 | Crate | Upstream | Fork | Branch | Base tag | Submodule |
 |---|---|---|---|---|---|
-| pdf_oxide | [`yfedoseev/pdf_oxide`](https://github.com/yfedoseev/pdf_oxide) | [`whuppi/pdf_oxide`](https://github.com/whuppi/pdf_oxide) | `pdf_manipulator/0.3.64-patches` | `v0.3.64` | `vendor/pdf_oxide/` |
-| office_oxide | [`yfedoseev/office_oxide`](https://github.com/yfedoseev/office_oxide) | [`whuppi/office_oxide`](https://github.com/whuppi/office_oxide) | `office_kit/0.1.2-patches` | `v0.1.2` | `vendor/office_oxide/` |
+| pdf_oxide | [`yfedoseev/pdf_oxide`](https://github.com/yfedoseev/pdf_oxide) | [`whuppi/pdf_oxide`](https://github.com/whuppi/pdf_oxide) | `pdf_manipulator/0.3.73-patches` | `v0.3.73` | `vendor/pdf_oxide/` |
+| office_oxide | [`yfedoseev/office_oxide`](https://github.com/yfedoseev/office_oxide) | [`whuppi/office_oxide`](https://github.com/whuppi/office_oxide) | `office_kit/0.1.3-patches` | `v0.1.3` | `vendor/office_oxide/` |
 
 pdf_oxide depends on office_oxide as a path dependency
 (`office_oxide = { path = "../office_oxide" }`).
@@ -34,7 +34,7 @@ to a new upstream `vX.Y.Z`:
    CI actually uses; it MUST equal the branch's version
 3. the **Branch** and **Base tag** columns in the table above
 
-office_oxide is the same, under its own branch name and `v0.1.2`.
+office_oxide is the same, under its own branch name and `v0.1.3`.
 
 ### The fork contract
 
@@ -56,6 +56,34 @@ upstream, so deletion loses nothing.
 Never `git push --mirror` a working fork: mirror mode deletes every
 remote ref that doesn't exist locally, including `main` and any patch
 branch not currently checked out.
+
+### Disable Actions on the fork
+
+A vendored fork is consumed as **source** — the parent repo's own CI
+(`make test-rust` / `build-wasm` / `check`) is the gate. The fork's inherited
+upstream workflows (Release, language-binding CI, CodeQL, OpenSSF Scorecard,
+scheduled scans) validate nothing this repo uses. On each fork, once:
+
+**Settings → Actions → General → "Disable actions for this repository".**
+
+- **Free-tier drain.** Public-repo Actions are free but not unthrottled — a
+  fork's heavy Rust/scan pipelines burn org-wide runner allocation and can
+  throttle the whole org's hosted runners (every repo's jobs stuck "Waiting for
+  a runner"). One vendored Rust fork here ran 40 workflows in two weeks,
+  producing nothing the parent consumes.
+- **Accidental publish.** S1 pushes the patch branch and a `v*` tag to the fork
+  on every bump; an upstream `on: push tags` Release pipeline fires on that tag
+  and can cut a GitHub release / publish a package from your mirror. Disabling
+  defuses it.
+- **Off by default.** The fork is home; upstream is just the base. Routine fork
+  work — patches, rebases, tag-moves — never needs the fork's own CI; the
+  parent's CI is the gate. The only exception is a deliberate, standalone
+  upstream PR (occasional, never during a fix): flip Actions on for that one PR,
+  then back off. Off is the resting state.
+
+Disable at the **setting** level — never delete the workflow YAMLs. Deleting
+them diverges the mirror from upstream and breaks the clean rebase-on-tag in
+S1; the files stay byte-identical to upstream and just never fire.
 
 ---
 
@@ -404,7 +432,7 @@ Last match wins (gitignore semantics): the release/config paths override the def
 1. Runs `cargo check` with all features (same set as CI release builds)
 2. Uses `--message-format=json` to get warnings even from cached builds
 3. Derives the upstream base tag from the branch name automatically
-   (`pdf_manipulator/0.3.64-patches` → `v0.3.64`). No hardcoded tag —
+   (`pdf_manipulator/0.3.73-patches` → `v0.3.73`). No hardcoded tag —
    renaming the branch in S1 step 4 is all that's needed.
 4. Diffs against the base tag to find lines we changed
 5. Fails if any warning falls inside our changed lines
