@@ -55,6 +55,15 @@ CONTENT RULES (never change)
     (or commit) link alone otherwise.
   • No capability inventories — "what's shipped" lives in README +
     docs/CAPABILITY_ROADMAP.md; the changelog says only what CHANGED.
+  • Engine/submodule bump → web re-fetch action (NEVER miss this). When a
+    release bumps a vendored engine submodule (vendor/pdf_oxide,
+    vendor/office_oxide), the web WASM is rebuilt and consumers must
+    re-fetch it, so ALWAYS add the action bullet:
+      - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
+    Native self-updates via the build hook; only web needs the manual step.
+    When cutting a release, diff the submodule pointer against the previous
+    tag (`git ls-tree <prev-tag> vendor/pdf_oxide`) so an engine bump never
+    ships without the bullet.
 ═══════════════════════════════════════════════════════════════════════
 -->
 
@@ -62,12 +71,14 @@ CONTENT RULES (never change)
 
 ## 2.1.4
 
+- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Fixed `flattenForms` dropping a field's value when the fill and the flatten happen in separate editor sessions — a reopened editor carries no in-session modified-field map, so the flattener now regenerates the appearance from the persisted `/V` (saved alongside `/NeedAppearances`) instead of baking the stale placeholder ([#161](https://github.com/whuppi/pdf_manipulator/issues/161) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #162](https://github.com/whuppi/pdf_manipulator/pull/162))
 - Fixed `addImageStamp` erasing a page's existing form widgets when the page references its annotations through an indirect `/Annots` reference rather than a direct array ([#161](https://github.com/whuppi/pdf_manipulator/issues/161) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #162](https://github.com/whuppi/pdf_manipulator/pull/162))
 - Fixed a reopened filled form rendering blank where its value should appear — the renderer now regenerates a widget's appearance from `/V` when the AcroForm sets `/NeedAppearances`, matching the flattener ([PR #162](https://github.com/whuppi/pdf_manipulator/pull/162))
 
 ## 2.1.3
 
+- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Fixed `setFormFieldValue` reporting field-not-found on forms whose field names are stored as raw UTF-8 (LibreOffice-class producers) — one spec-tolerant text-string decoder now handles UTF-16BE/LE, UTF-8 with and without BOM, and PDFDocEncoding across every read ([#155](https://github.com/whuppi/pdf_manipulator/issues/155), [PR #156](https://github.com/whuppi/pdf_manipulator/pull/156))
 - Fixed `flattenForms` baking mojibake for values outside ASCII (`ß` → `ÃŸ` or `�`) — values decode per ISO 32000-1 §7.9.2.2 and appearance text is written one WinAnsi byte per character instead of UTF-8 ([#155](https://github.com/whuppi/pdf_manipulator/issues/155), [PR #156](https://github.com/whuppi/pdf_manipulator/pull/156))
 - Fixed fill → flatten silently dropping the value on widgets without an appearance stream when the field name is non-ASCII — the flattener and the form extractor now agree on how names decode ([#155](https://github.com/whuppi/pdf_manipulator/issues/155), [PR #156](https://github.com/whuppi/pdf_manipulator/pull/156))
@@ -76,6 +87,7 @@ CONTENT RULES (never change)
 
 ## 2.1.2
 
+- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Fixed a Flutter Web WASM (`dart2wasm`) compile failure — the `_post` switch over `Object?` was non-exhaustive under dart2wasm (dart2js treats `JSAny` as a catch-all, dart2wasm doesn't), now converted with `jsify()` ([#145](https://github.com/whuppi/pdf_manipulator/issues/145) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #146](https://github.com/whuppi/pdf_manipulator/pull/146))
 - Fixed pub.dev not advertising Flutter Web support — the web runtime now resolves to a stub default that `pana` can analyze, so the package shows web (dart2js) support ([PR #133](https://github.com/whuppi/pdf_manipulator/pull/133))
 
@@ -85,6 +97,7 @@ CONTENT RULES (never change)
 
 ## 2.1.0
 
+- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Added document producer and creation-date metadata — `PdfEditor.setProducer()` / `getProducer()` and `setCreationDate()` / `getCreationDate()` (raw PDF date strings, e.g. `D:20240101120000Z`), plus `PdfDoc.producer`, `PdfDoc.creator`, and `PdfDoc.creationDate` read on open
 - Fixed `addImageStamp` rendering a transparent-background PNG as a solid black box — the alpha channel now ships as a grayscale `/SMask` and the PNG predictor params are preserved, so transparent areas reveal the page instead of painting black ([#103](https://github.com/whuppi/pdf_manipulator/issues/103) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #104](https://github.com/whuppi/pdf_manipulator/pull/104))
 - Fixed the `RenderedPage.data` doc — `render()` returns PNG-encoded bytes (decode to read pixels), not raw RGBA ([PR #104](https://github.com/whuppi/pdf_manipulator/pull/104))
