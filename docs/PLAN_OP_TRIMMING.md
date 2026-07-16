@@ -81,17 +81,15 @@ pdfa / office) with `apiMembers` (the detector's member table) and
 `featuresFor` (keep-set → cargo features). Grammar + mapping pinned by
 `test/trim/capabilities_test.dart` (13 tests).
 
-### Dual-detector decision (2026-07-16)
+### Dual-detector decision (2026-07-16) — rationale
 
-Both detectors ship behind one selector; public `trim:` grammar unchanged:
-`trim-detector: analyzer` (default, stable, all platforms) |
-`record-use` (EXPERIMENTAL, native+release only, loud failure elsewhere;
-implemented via an internal static `useOp('<op>')` shim inside each public
-op method — zero public API change, deleted when dart-lang/native#2902
-ships instance-method support) | `compare` (trims with analyzer, runs
-both, prints the keep-set diff — the living testbed for RecordUse
-maturity). Our instance-method API is correct Dart design and does NOT
-get reworked for RecordUse's current statics-only limit.
+The detector selector and per-detector behavior are canonical in
+`ARCHITECTURE.md` §Trim. The decision recorded here: BOTH lanes ship —
+analyzer as the stable default, RecordUse tagged EXPERIMENTAL and riding
+along — so the RecordUse integration stays built, in sync, and testable as
+the SDK matures, instead of being re-invented the day it stabilizes. Our
+instance-method API is correct Dart design and does NOT get reworked for
+RecordUse's current statics-only limit (the shim absorbs it).
 
 ### R2 — detector productionization — SHIPPED
 `lib/src/trim/detector.dart` — resolved-AST call-finder over the app's
@@ -99,50 +97,31 @@ lib/. Fail closed: any unresolvable file → full binary + warning.
 Proven end-to-end on example/ (keep=[pdfa, render, signatures], every
 expected member matched incl. sugar).
 
-### The `trim` API (designed 2026-07-16 — auto AND manual, one key)
+### The `trim` API — design rationale (2026-07-16)
 
-```yaml
-hooks:
-  user_defines:
-    pdf_manipulator:
-      trim: auto                       # detector reads the app, keeps what it calls
-      # or full manual override — EXACTLY these capabilities (plus core):
-      trim:
-        keep: [render, signatures]
-      # absent → full default binary
-```
-
-Semantics:
-
-| Value | Meaning |
-|---|---|
-| absent / `false` | full default binary (prebuilt download) |
-| `auto` (canonical; `true` accepted as alias) | detector-computed keep-set |
-| `{keep: [<capability>...]}` | user-supplied keep-set — the full override |
-| anything else / unknown capability name | **BUILD ERROR** printing the valid grammar — config mistakes never silently produce a fallback |
-
-Design invariants (the gold rules):
+The grammar itself is canonical in `ARCHITECTURE.md` §Trim (spec) and the
+README (consumer form) — not restated here. What lives here is WHY it has
+that shape (the gold rules):
 
 1. **One key, one artifact.** Auto and manual both produce the same internal
    thing — a KeepSet of capabilities — feeding one build pipeline. Manual IS
    the detector override; there is no second mechanism.
 2. **Users speak capabilities, never cargo features.** The public vocabulary
-   names what the app does (`render`, `signatures`, `pdfa`, later `office`),
-   stable across engine bumps; the capability→feature map (R1) is internal.
-   Internals like `native-bridge`/`icc` are not expressible — not droppable,
-   not a foot-gun.
+   names what the app does, stable across engine bumps; the
+   capability→feature map is internal. Engine internals
+   (native-bridge/icc/...) are not expressible — not droppable, not a
+   foot-gun.
 3. **Keep-list, not drop-list.** Trim's contract is "ship only what I say";
    an allowlist states it exactly and mirrors the detector's output shape.
    Forgetting a capability fails safe: the typed "not enabled in this build"
    error names exactly what to add to `keep:`.
-4. **Core is always included** (parse/write/edit/forms/extract/builder — the
-   engine's muscle). The keep-list only names the optional heavy modules.
+4. **Core is always included.** The keep-list only names optional heavy
+   modules.
 5. **Config errors are loud.** A typo'd capability or malformed value fails
    the build with the grammar — never a silent full binary (that would be a
    lie about what was requested).
 6. **One source of truth for both platforms.** The pubspec entry drives the
-   native hook (`input.userDefines['trim']`) and web `setup` (which parses
-   the app's pubspec from cwd) identically.
+   native hook and web setup identically.
 
 ### R3 — trim wiring — SHIPPED
 - **Web**: `setup --trim` runs the detector over the app cwd → wasm
@@ -232,9 +211,8 @@ Why this shape (researched against how the futures are actually landing):
   unassigned): the sketched design is Dart AOT emitting relocatable
   objects with per-SYMBOL relocations, native static libs, ONE native
   link, `asset` tags disambiguating symbols. Per-op anchor symbols are
-  exactly the referents that world needs; when it lands, wire Dart-side
-  references to the anchors and swap registry.rs for link-section
-  collection — the units don't change.
+  exactly the referents that world needs (the landing steps are tracked
+  in `CAPABILITY_ROADMAP.md` §When the futures arrive).
 - **Wasm component model** (1.0 in the cloud ecosystem; dart2wasm has
   only proposal issue dart-lang/sdk#56366): composition is typed
   interface functions — units map one-to-one. Browser-side is the

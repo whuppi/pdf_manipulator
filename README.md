@@ -579,7 +579,7 @@ flutter pub run pdf_manipulator:setup --trim
 - The keep-set maps to engine build features; a fresh engine is compiled locally with only those (needs a Rust toolchain; the result is cached, so it's a one-time cost per keep-set).
 - A trimmed-out op answers with a typed "not enabled in this build" error naming what to add to `keep:` — defense in depth on top of the source scan.
 - A typo in `trim:` fails the build printing the valid grammar. A config mistake never silently changes what ships.
-- Measured on the reference machine: the full native library is ~21 MB; with every capability trimmed away it is ~12 MB.
+- The saving depends on your keep-set — trimming every capability away removes roughly half of the native library.
 
 </details>
 

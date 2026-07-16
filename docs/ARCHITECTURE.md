@@ -983,7 +983,9 @@ source in the pub tarball compiles locally.
   detector should make it unreachable).
 - `make shake-audit` keeps the guarantee durable across upstream rebases:
   full vs core-only builds, symbol autopsy, size ceiling, and runtime
-  probes of the typed errors.
+  probes of the typed errors. It is also the measurement tool — current
+  sizes come from running it; the maintained ledger lives in
+  [`PLAN_OP_TRIMMING.md`](PLAN_OP_TRIMMING.md).
 
 ## The one-line summary
 
