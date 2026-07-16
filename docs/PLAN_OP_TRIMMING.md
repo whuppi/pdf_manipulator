@@ -265,10 +265,21 @@ layer costs +2.6 KB total):
      python pull extract.
   2a. DONE — search: module + Pdf::search*/highlight_matches API +
      dispatch typed error + trim probe. rust_bench bin requires extract.
-  2b. TODO — extract-format converters (converters::{markdown,html,
-     whitespace,text_post_processor,table_formatter} + pipeline/
-     converters) — consumers: document.rs to_markdown/html paths (leads
-     into 3).
+  2b. SCOUTED — extract-format converters. The gating itself is small
+     (converters/mod.rs: gate html/markdown/table_formatter/
+     text_post_processor/whitespace/formula_renderer + their re-exports
+     behind extract; ALSO form_xobject_finder behind office — drift catch,
+     it is office-only). Compile fallout is exactly 4 sites, all the mouth
+     of the document.rs cascade (= domino 3's entry points):
+       - converters/mod.rs whitespace re-export (cleanup_markdown,
+         normalize_whitespace, remove_page_artifacts)
+       - document.rs ~6260 (inside assemble_text_from_spans —
+         whitespace::cleanup_plain_text)
+       - document.rs ~11564 (span normalize loop —
+         TextPostProcessor::normalize_unicode_spaces)
+       - document.rs ~16506 (apply_intelligent_text_processing)
+     Reverted to green rather than start the 1.3 MB-file surgery at a
+     session tail; 2b and 3 land together in a focused session.
   3. TODO — the deep cascade: pipeline/ + layout ALGORITHM files
      (text_block, reading_order, clustering, document_analyzer,
      region_classifier — NOT the shared types) + structure::{
