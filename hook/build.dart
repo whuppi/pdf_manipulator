@@ -529,7 +529,7 @@ Future<void> _compileWasm(Uri packageRoot, File dest, String targetFile) async {
 
   final result = await Process.run(
     'bash',
-    [script.path, '--wasm'],
+    [script.path, 'wasm'],
     workingDirectory: p.fromUri(packageRoot),
     environment: {
       ...Platform.environment,
