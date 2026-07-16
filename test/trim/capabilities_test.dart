@@ -58,7 +58,7 @@ void main() {
 
   group('feature mapping', () {
     const defaults =
-        'icc,legacy-crypto,rendering,signatures,native-bridge,pdfa';
+        'icc,legacy-crypto,rendering,signatures,native-bridge,pdfa,office';
 
     test(
       'kept capabilities survive, dropped ones leave, internals untouched',

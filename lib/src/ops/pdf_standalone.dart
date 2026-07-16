@@ -39,6 +39,7 @@ extension PdfStandalone on Pdf {
     required PdfDocumentFormat format,
     String? password,
   }) {
+    TrimRecord.op('office');
     return bridge.convertTo(source, output, format: format, password: password);
   }
 
@@ -48,6 +49,7 @@ extension PdfStandalone on Pdf {
     DataSink output, {
     required PdfDocumentFormat format,
   }) {
+    TrimRecord.op('office');
     return bridge.convertToPdf(document, output, format: format);
   }
 

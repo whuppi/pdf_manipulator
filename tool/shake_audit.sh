@@ -13,7 +13,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VENDOR="$ROOT/vendor/pdf_oxide"
 CORE_FEATURES="icc,legacy-crypto,native-bridge"
-FULL_FEATURES="icc,legacy-crypto,rendering,signatures,native-bridge,pdfa"
+FULL_FEATURES="icc,legacy-crypto,rendering,signatures,native-bridge,pdfa,office"
 # Ceiling with headroom over the measured core-only size; a breach means a
 # heavy module leaked back into the core build.
 CORE_CEILING_BYTES=$((13 * 1024 * 1024))

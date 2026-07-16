@@ -20,7 +20,10 @@ enum PdfCapability {
 
   /// PDF/A validation and conversion (embeds the Liberation faces the
   /// spec requires).
-  pdfa('pdfa', 'pdfa');
+  pdfa('pdfa', 'pdfa'),
+
+  /// PDF ↔ office conversion (DOCX / PPTX / XLSX, both directions).
+  office('office', 'office');
 
   const PdfCapability(this.wire, this.cargoFeature);
 
@@ -45,6 +48,10 @@ enum PdfCapability {
     'PdfDoc.validatePdfUa': PdfCapability.pdfa,
     'PdfEditor.convertToPdfA': PdfCapability.pdfa,
     'convertToPdfA': PdfCapability.pdfa,
+    'Pdf.convertTo': PdfCapability.office,
+    'convertTo': PdfCapability.office,
+    'Pdf.convertToPdf': PdfCapability.office,
+    'convertToPdf': PdfCapability.office,
   };
 
   /// The capability whose [wire] name is [name], or null.
@@ -85,7 +92,7 @@ class TrimConfig {
       '  trim: auto                     # detector decides\n'
       '  trim:\n'
       '    keep: [render, signatures]   # exactly these capabilities\n'
-      'Capabilities: render, signatures, pdfa';
+      'Capabilities: render, signatures, pdfa, office';
 
   /// Parses the raw `trim` user-define value (YAML-decoded).
   static TrimConfig parse(Object? raw) {
