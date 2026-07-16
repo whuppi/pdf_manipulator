@@ -89,6 +89,8 @@ import 'package:path/path.dart' as p;
 
 import 'package:pdf_manipulator/src/hook/asset_hashes.dart';
 import 'package:pdf_manipulator/src/hook/resolver.dart';
+import 'package:pdf_manipulator/src/trim/capabilities.dart';
+import 'package:pdf_manipulator/src/trim/detector.dart';
 
 final _log = Logger('pdf_manipulator:build');
 
@@ -132,7 +134,7 @@ void main(List<String> args) async {
     if (!input.config.buildCodeAssets) return;
 
     _loadBuildConfig(input.packageRoot);
-    _applyUserDefines(input);
+    await _applyUserDefines(input);
 
     final codeConfig = input.config.code;
     final targetTriple = _targetTriple(codeConfig);
@@ -573,36 +575,53 @@ Future<void> _copyWebAsset(Uri packageRoot, File dest, String fileName) async {
 
 String _resolveFeatures() => _effectiveFeatures;
 
-/// Cargo features a consumer may switch off from their app pubspec:
-///
-///   hooks:
-///     user_defines:
-///       pdf_manipulator:
-///         rendering: false
-///         pdfa: false
-///
-/// Opt-out only — keys absent or non-false leave the default set intact.
-/// The trimmed binary returns a typed "not enabled in this build" error
-/// for ops whose feature was dropped.
-const List<String> optionalFeatures = [
-  'rendering',
-  'signatures',
-  'pdfa',
-  'icc',
-  'legacy-crypto',
-];
-
+/// The `trim:` user-define (see docs/PLAN_OP_TRIMMING.md — the public
+/// grammar). `keep:` works everywhere; `auto` runs the detector over the
+/// invoking app when the working directory IS the app (the hooks API
+/// exposes no app root), and fails CLOSED to the full binary otherwise.
+/// A malformed value fails the build loudly with the grammar.
 late String _effectiveFeatures;
 bool _isCustomFeatureSet = false;
 
-void _applyUserDefines(BuildInput input) {
-  final kept = _nativeFeatures
-      .split(',')
-      .where(
-        (f) => !optionalFeatures.contains(f) || input.userDefines[f] != false,
-      )
-      .toList();
-  _effectiveFeatures = kept.join(',');
+Future<void> _applyUserDefines(BuildInput input) async {
+  final TrimConfig config;
+  try {
+    config = TrimConfig.parse(input.userDefines['trim']);
+  } on TrimConfigError catch (e) {
+    throw StateError('$e');
+  }
+
+  Set<PdfCapability>? keep;
+  switch (config.mode) {
+    case TrimMode.off:
+      break;
+    case TrimMode.manual:
+      keep = config.keep;
+    case TrimMode.auto:
+      final cwd = Directory.current.path;
+      final looksLikeApp = File('$cwd/pubspec.yaml').existsSync();
+      if (!looksLikeApp) {
+        stderr.writeln(
+          'pdf_manipulator trim: cannot locate the app source from the '
+          'build hook — keeping the FULL binary (fail closed). Use '
+          'trim: {keep: [...]} for a guaranteed native trim.',
+        );
+        break;
+      }
+      final result = await detectCapabilities(cwd);
+      if (!result.resolved) {
+        stderr.writeln(
+          'pdf_manipulator trim: ${result.unresolvedPaths.length} file(s) '
+          'did not resolve — keeping the FULL binary (fail closed).',
+        );
+        break;
+      }
+      keep = result.keep;
+  }
+
+  _effectiveFeatures = keep == null
+      ? _nativeFeatures
+      : config.featuresFor(_nativeFeatures, keep);
   _isCustomFeatureSet = _effectiveFeatures != _nativeFeatures;
 }
 
