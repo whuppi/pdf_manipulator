@@ -44,6 +44,16 @@ abstract interface class PdfTransport {
   /// Release source I/O resources held from a previous keepSources call.
   Future<void> releaseSource(int resourceId);
 
+  /// Install a prelude: run [request] (with [sourceBytes] as sources[0])
+  /// on every live lane now, and replay it on every future lane before
+  /// that lane's first job. Returns the live lanes' response bytes so the
+  /// caller can surface engine errors; replays on future lanes are
+  /// fire-and-forget.
+  Future<List<Uint8List>> installPrelude(
+    Uint8List request, {
+    required Uint8List sourceBytes,
+  });
+
   /// Detected I/O mode after init. Null before first op.
   PdfIoMode? get ioMode;
 

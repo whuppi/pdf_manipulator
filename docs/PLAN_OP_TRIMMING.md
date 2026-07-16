@@ -170,14 +170,23 @@ font and none is registered" tells the user exactly what to add.
   unchanged) drop them.
 - Gate: full `make check` + web battery (all 3 modes) + native op battery.
 
-### Stage 2 — fonts decoupled (B + C above)
+### Stage 2 — fonts decoupled (B + C above) — DONE 2026-07-16
 
-Registry op in the engine (host/ + one markered touch at the
-`form_fallback.rs` seam), Dart API (`PdfConfig.fallbackFonts` or explicit
-`registerFallbackFont`), companion asset package, typed
-missing-fallback-font error. Default build drops `cjk-form-fonts`.
-−4 MB raw against TODAY'S baseline for everyone (measured as part of
-build B's delta).
+Shipped (local commits): engine registry (`host/fallback_fonts.rs`) +
+`resolve_font_bytes` seam (markered) + `registerFallbackFont` op end to
+end (dispatch, bridge arm, EngineOp, router prelude replay to every
+current AND future lane, `Pdf.registerFallbackFont` public API). Default
+build drops `cjk-form-fonts`; upstream CJK tests keep running via
+test-only features; new Dart tests prove registered-font baking AND
+graceful no-font degradation on native + web (worker replay proven).
+
+Measured defaults after Stage 1+2:
+wasm 18,135,997 raw / 7,485,666 gz (baseline was 25.80 / 11.28 MB —
+**−30% raw, −34% wire**); native dylib 21,109,840 (was 28.66 MB, −26%).
+
+Still open from this workstream: the companion asset package
+(`pdf_manipulator_cjk_fallback`) and README/docs for the new API —
+consumer-facing packaging, decide at release time.
 
 ### Stage 3 — coarse trim via `user_defines` (manual rebuild mode)
 

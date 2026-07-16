@@ -3,8 +3,8 @@
   "repo": "whuppi/pdf_manipulator",
   "baseTag": "v0.3.73",
   "features": {
-    "native": "icc,legacy-crypto,rendering,signatures,native-bridge,cjk-form-fonts",
-    "wasm": "wasm,rendering,cjk-form-fonts"
+    "native": "icc,legacy-crypto,rendering,signatures,native-bridge",
+    "wasm": "wasm,rendering"
   },
   "web": {
     "pdf_oxide_bg.wasm": "wasm-pdf_oxide_bg.wasm",
