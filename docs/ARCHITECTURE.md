@@ -970,9 +970,17 @@ source in the pub tarball compiles locally.
   env, the cargo invocation), `trim_plan.dart` (user-defines → plan,
   recordings → keep-set). `hook/build.dart` and `hook/link.dart` are thin
   callers.
-- Engine-side, each droppable capability is a cargo feature; excluded
-  dispatch arms answer a typed "not enabled in this build" error
-  (defense-in-depth — the detector should make it unreachable).
+- Engine-side, each bridge op is a self-contained UNIT
+  (`vendor/pdf_oxide/src/host/ops/`): a registry entry + handler on one
+  shared calling convention + an exported `pdf_op_<name>_anchor` symbol
+  (inert today; the referent a future Dart static-linking toolchain
+  garbage-collects against). The op still travels as data through the
+  single bridge door — the unit layer carries reachability, the door
+  carries bytes. `registry.rs` is the one swappable backend (explicit
+  table today, linker-driven collection when the platform arrives).
+  Each droppable capability is a cargo feature; excluded handlers answer
+  a typed "not enabled in this build" error (defense-in-depth — the
+  detector should make it unreachable).
 - `make shake-audit` keeps the guarantee durable across upstream rebases:
   full vs core-only builds, symbol autopsy, size ceiling, and runtime
   probes of the typed errors.

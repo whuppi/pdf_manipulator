@@ -213,6 +213,44 @@ what you use (trim)" sections. STILL OPEN at release time: changelog cut
 (Engine updated bullet REQUIRED — submodule pointer changed),
 CAPABILITY_ROADMAP promotion, companion CJK asset package decision.
 
+## The op-unit scaffold (built 2026-07-17)
+
+Every bridge op is now a UNIT — `vendor/pdf_oxide/src/host/ops/` — instead
+of an arm in one match: a registry entry + a handler with one shared
+calling convention (`OpCtx`) + an exported linker anchor
+(`pdf_op_<name>_anchor`, inert today). Family files group along
+capability lines (pdfa / signatures / render / convert vs core
+doc / editor / builder / fonts). `registry.rs` is the ONE swappable
+backend: an explicit table today, linker-driven collection later. The op
+still TRAVELS as data through the single door — required (worker/thread
+crossing, replayable preludes, 3-export ABI); the unit layer carries
+reachability, the door carries bytes.
+
+Why this shape (researched against how the futures are actually landing):
+
+- **Dart static linking** ([dart-lang/sdk#49418], open exploration,
+  unassigned): the sketched design is Dart AOT emitting relocatable
+  objects with per-SYMBOL relocations, native static libs, ONE native
+  link, `asset` tags disambiguating symbols. Per-op anchor symbols are
+  exactly the referents that world needs; when it lands, wire Dart-side
+  references to the anchors and swap registry.rs for link-section
+  collection — the units don't change.
+- **Wasm component model** (1.0 in the cloud ecosystem; dart2wasm has
+  only proposal issue dart-lang/sdk#56366): composition is typed
+  interface functions — units map one-to-one. Browser-side is the
+  furthest future; the analyzer detector covers web regardless.
+- **linkme / link-section crates don't support wasm32** — hence the
+  explicit table as today's backend, not linker magic that would fork
+  per-platform.
+- **Today's payoff**: per-op cargo features (the "not fat" trim beyond
+  capabilities) are now one cfg per registry row + unit, instead of
+  surgery on a 175-line match. Byte autopsy (`cargo bloat`) decides
+  which ops earn a feature.
+
+Fleet note: this is the standard-setter shape for future packages —
+data through one door, reachability through per-unit symbols, registry
+backend swappable, futures made cheap rather than pre-built.
+
 ## Verification status
 
 Stage 3: test-rust PASS · analyze PASS · test-ops-native PASS · the two
