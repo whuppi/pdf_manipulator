@@ -84,6 +84,51 @@ truth on example/) into package tooling. Input: app source root. Output:
 reachable op set → feature set via R1. Fail closed: any unresolvable file
 → full set + a printed warning.
 
+### The `trim` API (designed 2026-07-16 — auto AND manual, one key)
+
+```yaml
+hooks:
+  user_defines:
+    pdf_manipulator:
+      trim: auto                       # detector reads the app, keeps what it calls
+      # or full manual override — EXACTLY these capabilities (plus core):
+      trim:
+        keep: [render, signatures]
+      # absent → full default binary
+```
+
+Semantics:
+
+| Value | Meaning |
+|---|---|
+| absent / `false` | full default binary (prebuilt download) |
+| `auto` (canonical; `true` accepted as alias) | detector-computed keep-set |
+| `{keep: [<capability>...]}` | user-supplied keep-set — the full override |
+| anything else / unknown capability name | **BUILD ERROR** printing the valid grammar — config mistakes never silently produce a fallback |
+
+Design invariants (the gold rules):
+
+1. **One key, one artifact.** Auto and manual both produce the same internal
+   thing — a KeepSet of capabilities — feeding one build pipeline. Manual IS
+   the detector override; there is no second mechanism.
+2. **Users speak capabilities, never cargo features.** The public vocabulary
+   names what the app does (`render`, `signatures`, `pdfa`, later `office`),
+   stable across engine bumps; the capability→feature map (R1) is internal.
+   Internals like `native-bridge`/`icc` are not expressible — not droppable,
+   not a foot-gun.
+3. **Keep-list, not drop-list.** Trim's contract is "ship only what I say";
+   an allowlist states it exactly and mirrors the detector's output shape.
+   Forgetting a capability fails safe: the typed "not enabled in this build"
+   error names exactly what to add to `keep:`.
+4. **Core is always included** (parse/write/edit/forms/extract/builder — the
+   engine's muscle). The keep-list only names the optional heavy modules.
+5. **Config errors are loud.** A typo'd capability or malformed value fails
+   the build with the grammar — never a silent full binary (that would be a
+   lie about what was requested).
+6. **One source of truth for both platforms.** The pubspec entry drives the
+   native hook (`input.userDefines['trim']`) and web `setup` (which parses
+   the app's pubspec from cwd) identically.
+
 ### R3 — trim wiring
 - **Web**: `setup --trim` runs the detector over the app cwd → wasm
   feature set → `resolveWeb(wasmFeaturesOverride:)`. All pieces exist.
