@@ -56,6 +56,12 @@ if [ "$CORE_SIZE" -gt "$CORE_CEILING_BYTES" ]; then
 fi
 echo "symbols + sizes OK (full=$FULL_SIZE core=$CORE_SIZE saved=$((FULL_SIZE - CORE_SIZE)))"
 
+# Record the measurements for tool/verify_readme_sizes.dart — the audit is
+# the only builder/measurer; the verifier only formats + asserts.
+cat > "$ROOT/tool/.shake_sizes.json" <<JSON
+{"nativeFull": $FULL_SIZE, "nativeCore": $CORE_SIZE}
+JSON
+
 echo "== [4/4] runtime probe: excluded op answers typed error =="
 (cd "$VENDOR" && cargo test --lib --release -q \
   --features "$CORE_FEATURES,test-support" trim_probe 2>&1 | tail -2)

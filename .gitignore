@@ -347,3 +347,4 @@ example/web/pdf_manipulator/
 # see docs/TEST_OVERHAUL_PLAN.md). Never committed: the catalog spec is
 # the source of truth, the bytes are reproducible on every platform.
 test/fixtures/generated/
+tool/.shake_sizes.json

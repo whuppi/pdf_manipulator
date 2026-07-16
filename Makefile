@@ -1,7 +1,7 @@
 .PHONY: check analyze analyze-floor platforms lint-shell format fixtures test-guards \
        build build-native build-wasm \
        compile-macos compile-ios compile-android compile-linux compile-windows compile-wasm compile-natives \
-       test test-pkg-native test-unit test-rust shake-audit \
+       test test-pkg-native test-unit test-rust shake-audit verify-readme-sizes \
        test-ops test-ops-native test-ops-web test-ops-opfs test-ops-jspi test-ops-atomics \
        test-example test-example-matrix test-example-macos test-example-linux test-example-windows \
        test-example-android test-example-ios test-example-device \
@@ -265,6 +265,12 @@ test-ops-atomics:
 # typed not-enabled error. SHAKE_AUDIT_WASM=1 adds the wasm size check.
 shake-audit:
 	bash tool/shake_audit.sh
+	@$(DART) run tool/verify_readme_sizes.dart
+
+# Asserts every size number in README.md matches measured reality (the
+# shake-audit record + the wasm artifact). Run after shake-audit.
+verify-readme-sizes:
+	@$(DART) run tool/verify_readme_sizes.dart
 
 test-rust: export CARGO_INCREMENTAL := 0
 test-rust: export CARGO_PROFILE_DEV_DEBUG := 0
