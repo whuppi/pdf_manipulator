@@ -2,223 +2,122 @@
 
 > Working doc for [#167](https://github.com/whuppi/pdf_manipulator/issues/167).
 > Not canonical; promote pieces into CAPABILITY_ROADMAP.md as they land.
-> Status: Stage 0 (measurement) COMPLETE 2026-07-16. Architecture proven by
-> experiment on wasm; native root inventory taken. Numbers marked (measured)
-> are measured; everything else is estimate.
+> All work LOCAL (no pushes) on `feat/op-trimming` + the fork patch branch.
 
-## The architecture (proven on wasm)
-
-We do not build a tree-shaker. The linker already is one (LTO + wasm-gc;
-`lto = true`, `codegen-units = 1` confirmed in the release profile). We build
-the two things Dart lacks:
+## The product shape (decided 2026-07-16, after design review)
 
 ```
-[ DETECTOR ]            [ ROOT OWNERSHIP ]           [ SHAKER ]
-which ops does    →     every GC/linker root    →    LTO strips all code+data
-the app call?           of the binary is one          unreachable from live
-(we build this)         WE gate (we patch this)       roots (exists, proven)
+default        →  prebuilt binary from GitHub Releases — already trimmed of
+                  everything no consumer can ever call (Stages 1-3 below)
+trim: true     →  the DETECTOR reads the app's source, finds which ops it
+                  can reach, and rebuilds the engine with only those
 ```
 
-Precedent: Flutter's icon-font tree-shaking (const_finder) — a targeted
-static analysis for one API surface, shipped without waiting for the SDK.
+One public knob. No per-feature booleans in the public API (they exist only
+as internal plumbing feeding the same build path; a documented
+`trim: {without: [...]}` advanced form ships later ONLY if real users hit
+over-keeping and ask).
 
-## The literal guarantee — what "everything shaken" means
+**One detector: the analyzer call-finder, on every platform.** The
+`@RecordUse` alternative is dead — native-only, release-only, experimental,
+and redundant once one mechanism covers all platforms. `package:analyzer`
+is tooling-only (never imported by `lib/`), so it adds download time, zero
+app bytes.
 
-The promise to a rebuild-mode consumer, stated exactly:
+**Why this is true tree shaking.** Same contract as Dart's own shaker:
+anything not PROVABLY unused is kept. The detector resolves the app's real
+call graph against this package's API; any file it cannot resolve → full
+binary (fail closed). The only possible failure direction is a
+bigger-than-optimal binary — a broken app is not an outcome the design
+permits. The typed "not enabled in this build" engine error is
+defense-in-depth against our own bugs, not an expected path. We build the
+bridge because Dart's shaker cannot see through FFI (dart-lang/sdk#52970):
+we run conservative reachability at the source level, and Rust's
+LTO/wasm-gc does the actual deletion.
 
-> After a trim rebuild, the binary contains the transitive closure of the
-> roots you kept, and nothing else. The linker guarantees this by
-> reachability — it is not a best-effort cleanup pass.
+## Measured ledger (defaults everyone gets, no trim needed)
 
-For that promise to be TRUE, every root class must be inventoried and
-gated. The full root inventory (found by experiment — missing any one of
-these silently re-pins everything behind it, which is exactly what
-rootcut1 measured):
-
-| Root class | Where | Count | Status |
+| Milestone | wasm raw | wire (gz) | native dylib |
 |---|---|---|---|
-| Our lane bridge (wasm) | `host/bridge_api.rs` `lane_init/execute/destroy` | 3 | ours, per-op cfg goes here |
-| Upstream wasm JS API | `src/wasm.rs` `#[wasm_bindgen]` | **289** | dead to us — amputate (Stage 1) |
-| Our lane bridge (native) | `host/native/lane_table.rs` `lane_*`/`channel_*` | ~8 | ours, per-op cfg goes here |
-| Upstream C API | `src/ffi.rs` `#[no_mangle]` | **~420** | dead to us — amputate (Stage 1b, native twin) |
-| `include_bytes!` data | fonts, ICC profiles | — | strips when its referencing code strips (proven: CJK font fell with its feature) |
-| Rust std / alloc / panic / bindgen glue | — | — | the floor; not removable |
+| original baseline | 25.80 MB | 11.28 MB | 28.66 MB |
+| Stage 1 — dead APIs amputated | 22.58 | 9.93 | 25.60 |
+| Stage 2 — fonts → runtime registry | 18.14 | 7.49 | 21.11 |
+| Stage 3 — barcodes off, pdfa feature'd | **17.21** | **7.17 (−36%)** | 21.11 (unchanged, pdfa stays on) |
 
-Honest granularity limits (the guarantee is real, but know its units):
+## Shipped so far (all local commits)
 
-- **Per-op, not per-line.** Keeping `extract` keeps the whole parser the
-  extractor needs. Shared internals used by ANY kept op stay — that is
-  correctness, not leakage.
-- **Debug builds are always full-size** (link hooks do not run). Correct
-  semantics: dev experience untouched, release trims.
-- **The floor exists**: core parser/writer + std + glue, ~4-5 MB raw
-  (estimate) for a forms-only profile before Stage 4.
+- **Stage 1**: `public-api` feature gates upstream's dead-to-us surfaces
+  (289 wasm exports, ~420 C exports). Stable `lane_alloc`/`lane_dealloc`
+  ABI fixed a pre-existing JSPI fragility (worker called renumbered
+  `__wbindgen_export_N` internals). Native −3.06 MB, wasm −3.21 MB raw.
+- **Stage 2**: fallback fonts out of the binary, feature intact.
+  `Pdf.registerFallbackFont` → router prelude (replays to every current +
+  future lane) → engine registry → form baking. Proven end-to-end native +
+  web incl. graceful no-font degradation. −4.4 MB raw.
+- **Stage 3 (in working tree, gates green except one env-flaky web run)**:
+  - `wasm` feature decoupled from `signatures`+`barcodes` (coupling moved
+    to `public-api`, so upstream's JS API still builds when enabled).
+    Barcodes ship OFF (zero Dart ops use them): −0.9 MB raw.
+  - `pdfa` feature gates the compliance module (Liberation family + sRGB
+    live there). ON by default — behavior identical; droppable by trim.
+    Typed "PDF/A support not enabled in this build" from the three
+    dispatch fns when off (mirrors upstream's rendering idiom).
+  - Build plumbing (INTERNAL — the path trim mode drives): user_defines →
+    effective feature set in `hook/build.dart`; custom sets skip the
+    prebuilt download + pinned hash (version-0.0.0 pathway) and compile
+    locally, cargo's feature-aware fingerprint as the cache;
+    `PDF_FEATURES_NATIVE/WASM` env overrides in `compile_rust.sh`;
+    `resolveWeb(wasmFeaturesOverride:)` + `_compileWasm` env passthrough.
+  - `test-rust` runs with `public-api,cjk-form-fonts,pdfa` so upstream
+    suites keep covering everything the defaults exclude.
 
-### The shake verifier — "not leave anything" is proven, not hoped
+## Remaining work
 
-A guard, not a vibe. New CI + local target (`make shake-audit`):
+### R1 — op→feature map (mechanical, next)
+One table in the package: 32 EngineOps (+ sugar/builder composition) →
+cargo features each requires. Guarded by wire_sync-style parity test so a
+new op cannot ship unmapped.
 
-1. Build a minimal profile (e.g. forms-only).
-2. Assert **absent symbols**: `twiggy`/name-section grep (wasm) and `nm`
-   (native) must find ZERO office_oxide / signature / render symbols in a
-   build that excluded them. A hit = a new root leaked in = FAIL.
-3. Assert **size ceilings** per profile (raw + gz budgets, updated on
-   engine bumps like the README size-audit discipline).
-4. Runtime probe: calling an excluded op must return the typed
-   "not in this build" error; a kept op must succeed.
+### R2 — detector productionization
+Promote the validated prototype (resolved-AST call-finder; 13/13 ground
+truth on example/) into package tooling. Input: app source root. Output:
+reachable op set → feature set via R1. Fail closed: any unresolvable file
+→ full set + a printed warning.
 
-This is what makes the guarantee durable across upstream rebases: a tag
-move that adds a new export surface or a new unconditional root fails the
-audit immediately instead of silently re-fattening every user's app.
+### R3 — trim wiring
+- **Web**: `setup --trim` runs the detector over the app cwd → wasm
+  feature set → `resolveWeb(wasmFeaturesOverride:)`. All pieces exist.
+- **Native**: `trim: true` in `hooks: user_defines:` — OPEN QUESTION: where
+  the detector runs. Options: (a) inside the build hook (hook deps may
+  carry analyzer; needs app-root discovery from the hooks API — verify
+  what BuildInput exposes), (b) `setup --trim` also writes a manifest the
+  hook reads via the user-defines path mechanism. Decide by reading the
+  hooks API, prefer (a) if the app root is reachable.
 
-## Stage 0 results — the measured truth (2026-07-16)
+### R4 — shake verifier (`make shake-audit`)
+Trim-profile build + assert absent symbols (nm / wasm names) + size
+ceilings + the typed excluded-op runtime probe. This is what makes the
+guarantee durable across upstream rebases.
 
-Baseline wasm: 25,797,870 raw / 11,284,482 gz. Split: **12.5 MB data
-segments + 10.9 MB code** (+ ~2.4 MB tables/misc).
+### R5 — office/converters gating (the big web)
+office_oxide + src/converters bleed into the extraction pipeline
+(`pipeline/*` references — the two "converters" trees need untangling).
+Measured value: ~1.5 MB raw (rootcut3). Do after R1-R4; needs its own
+entanglement pass.
 
-| Experiment | Cut | raw | gz | Δ raw vs baseline |
-|---|---|---|---|---|
-| baseline | — | 25.80 MB | 11.28 MB | — |
-| A | `rendering` feature | 18.88 MB | 7.91 MB | −6.92 MB (measured) |
-| B | + `cjk-form-fonts` feature | 14.40 MB | 5.46 MB | −11.40 MB (measured) |
-| rootcut1 | convert arms only | 25.61 MB | 11.23 MB | −0.19 MB ← exports pinned everything |
-| rootcut2 | wasm export surface only | 22.58 MB | 9.93 MB | −3.21 MB (measured) |
-| rootcut3 | exports + convert arms | 21.02 MB | 9.35 MB | −4.55 MB; arm cut alone worth 1.49 MB once exports gone — 8× rootcut1 |
+### R6 — consumer docs + changelog + CAPABILITY_ROADMAP promotion
+At release time: README (registerFallbackFont + trim), changelog cut
+(Engine updated bullet per the standard — submodule bumped), companion
+CJK asset package decision.
 
-Readings: (1) the two-API discovery — the binary ships upstream's own
-JS SDK, 289 exports Dart can never call (`lane_worker.js` verified to
-import only `lane_init`/`lane_execute`/`memory`); (2) root-cutting works
-once we own ALL roots; (3) half the binary is DATA and the old roadmap's
-"size is code, not data" claim is disproven; (4) feature-axis alone
-already gives a stamp+forms app **5.46 MB wire instead of 11.28 (−52%)**
-with zero fork edits.
+## Verification status (Stage 3 tree)
 
-Side-find RESOLVED (false alarm): the two `DejaVuSans.ttf` embeds
-(`html_css/paint.rs`, `writer/font_shaping.rs`) both sit inside
-`mod tests {` blocks — compiled only for `cargo test`, never shipped in
-release binaries. No action needed; Stage 1c is closed.
+test-rust PASS · analyze PASS · test-ops-native PASS · web: one jspi
+`engine init` 2s-timeout in the chain run (solo rerun pending — earlier
+identical pattern was environment load; if solo passes, chalk to env like
+the atomics stress OOM, else diff the new feature set's glue).
 
-## The detector — both candidates validated
+## Scratch
 
-**Detector A — analyzer call-finder (prototype WORKS).** ~80 lines on
-`package:analyzer`; resolved-AST walk recording every invocation whose
-element's library is `package:pdf_manipulator/...`. Against `example/lib`:
-156 resolved references, full op-bearing surface, **13/13 ground truth,
-zero misses**. True element resolution — a consumer's own `render` method
-cannot false-positive. Runs anywhere Dart runs → web gets it TODAY via the
-setup command. Must also map **sugar ops** (`pdf_sugar.dart` one-shots
-compose editor ops) and the builder DSL to their underlying EngineOps —
-the map is a maintained table in the package, checked by wire_sync_test
-so a new op cannot ship unmapped.
-
-**Detector B — @RecordUse (rails exist NOW).** `record_use 1.0.0` +
-`hooks 1.0.0` (`LinkInput.recordedUsagesFile`) are live in the current
-SDK. Records calls to statically-resolved fns WITH const args,
-reachability-aware. Shim pattern: `@RecordUse() void useOp(String op)`
-called with a const op name inside each public API method — Dart's own
-AOT tree-shaker becomes the oracle. Native+release only; end-to-end AOT
-spike still UNVERIFIED (timebox it).
-
-**Detection failure policy: fail CLOSED.** Any unresolved file, any
-analysis error, any dynamic pattern the detector cannot prove → full
-binary + a warning. A trim must never break an app. Explicit
-`user_defines` manifest always overrides detection (escape hatch both
-directions: force-trim or force-full).
-
-## The fonts workstream — decouple the fallback WITHOUT losing the feature
-
-Current state (found in fork): `src/fonts/form_fallback.rs` embeds
-`DroidSansFallbackFull.ttf` (CJK, ~4 MB — the measured `data[539]`) and
-`NotoEmoji-Regular.ttf`, behind `cjk-form-fonts` / `cjk-render-fallback`.
-Consumed by the form-fill appearance path in `document_editor.rs` (the
-#155/#156 fix: CJK/emoji values drawing nothing). The engine needs the
-font BYTES AT FILL TIME; nothing requires them to be COMPILED IN —
-embedding was the expedient wiring, not a requirement of the feature.
-
-Options researched:
-
-| Option | Mechanism | Verdict |
-|---|---|---|
-| A. Embedded (today) | `include_bytes!` | works offline, +4 MB on everyone with the feature; the thing we are removing |
-| B. **Injected bytes (RECOMMENDED core)** | engine gains a fallback-font registry: a lane op / config field accepts TTF bytes at runtime; `form_fallback.rs` reads the registry first, embedded bytes demoted to an optional compat feature | keeps the feature fully, moves the 4 MB out of the binary, works native + web, offline-safe (bytes come from the app's own assets) |
-| C. Companion asset package | tiny `pdf_manipulator_cjk_fallback` package shipping the TTF as a Flutter asset; sugar API feeds it to B | opt-in by dependency choice — the cleanest consumer story on top of B |
-| D. Lazy fetch (icu_kit model) | setup/web places the font next to the wasm; worker fetches on first CJK fill; native build hook downloads to cache | good web ergonomics on top of B; adds network-at-op-time only for users who never declared the asset |
-| E. System fonts (native) | load OS-installed CJK font (Android ships Noto CJK) | nice opportunistic FIRST TRY on native before the registry; never the only path (Linux containers, licensing of redistribution not implicated when reading at runtime) |
-| F. Subsetting | pre-subset the shipped font | dead end alone: fill values are unknown ahead of time, so the full font must exist SOMEWHERE at fill time — subsetting only applies to what gets embedded INTO the produced PDF (the engine's existing concern), not to what we ship |
-
-Decision: **B is the mechanism; C is the packaging; D is web sugar; E is a
-native nicety.** End state: default build ships ZERO embedded fallback
-fonts; CJK/emoji form-fill keeps working for anyone who adds the companion
-package (or hands us bytes); the typed error for "value needs a fallback
-font and none is registered" tells the user exactly what to add.
-
-## The stages
-
-### Stage 1 — the everyone-wins amputations (no detector needed)
-
-- **1a wasm**: gate upstream's `pub mod wasm` (289 exports) behind a
-  default-off feature — 2-line markered patch, worker-compat verified.
-  −3.21 MB raw / −1.36 MB gz (measured) for every web user.
-- **1b native twin**: same amputation for upstream's `src/ffi.rs` C API
-  (~420 exports), keeping only `lane_*`/`channel_*` + the log hooks our
-  FFI bindings declare. Delta unmeasured — run the same experiment before
-  shipping.
-- **1c**: CLOSED — DejaVu embeds are test-gated (`mod tests`), never shipped.
-- Test strategy: `make test-rust` runs with `public-api` ENABLED (Makefile-side,
-  ours) so upstream's ffi/wasm test suites keep compiling and covering the
-  amputated surfaces; only shipped builds (build.json feature lists,
-  unchanged) drop them.
-- Gate: full `make check` + web battery (all 3 modes) + native op battery.
-
-### Stage 2 — fonts decoupled (B + C above) — DONE 2026-07-16
-
-Shipped (local commits): engine registry (`host/fallback_fonts.rs`) +
-`resolve_font_bytes` seam (markered) + `registerFallbackFont` op end to
-end (dispatch, bridge arm, EngineOp, router prelude replay to every
-current AND future lane, `Pdf.registerFallbackFont` public API). Default
-build drops `cjk-form-fonts`; upstream CJK tests keep running via
-test-only features; new Dart tests prove registered-font baking AND
-graceful no-font degradation on native + web (worker replay proven).
-
-Measured defaults after Stage 1+2:
-wasm 18,135,997 raw / 7,485,666 gz (baseline was 25.80 / 11.28 MB —
-**−30% raw, −34% wire**); native dylib 21,109,840 (was 28.66 MB, −26%).
-
-Still open from this workstream: the companion asset package
-(`pdf_manipulator_cjk_fallback`) and README/docs for the new API —
-consumer-facing packaging, decide at release time.
-
-### Stage 3 — coarse trim via `user_defines` (manual rebuild mode)
-
-Consumer opt-out in pubspec → cargo `--features`; web gets the same knob
-on setup. Non-default sets fall through the resolution waterfall to local
-compile (Rust toolchain required; loud, actionable error). Cache keyed by
-feature-set hash. Fork patches: decouple `wasm` feature from
-`signatures`+`barcodes`; office_oxide behind a feature. Excluded op =
-typed error. **Ships together with the shake verifier** so the literal
-guarantee is enforced from the first trim release, and wire_sync_test
-becomes feature-aware.
-
-### Stage 4 — per-op roots + detector (automatic rebuild mode)
-
-Feature-per-op-group cfg on OUR dispatch arms (wasm match + native lane
-table together — one op gated in both or neither). Detector output →
-feature set → recompile: native release via link hook (B or A), web via
-setup (A). Manifest override. Fail-closed policy above.
-
-### Stage 5 — data lazy-loading (option D wiring, if demand)
-
-## Order of work
-
-1. Stage 1a/1b/1c amputations (+ measure 1b) — post results to #167
-2. Fonts Stage 2 (kills the single biggest data chunk, keeps DC's feature)
-3. Detector B AOT spike (timeboxed) → pick composition (A-everywhere is
-   the current lean)
-4. Stage 3 user_defines + shake verifier
-5. Stage 4 automatic detection
-6. Stage 5 if demand
-
-## Scratch artifacts
-
-`/tmp/treeshake_rnd/` — experiment wasms, build logs, results.txt,
-detector prototype. All repo files restored; vendor submodules clean.
+`/tmp/treeshake_rnd/` — all experiment artifacts, build logs, results.
+Detector prototype: `/private/tmp/treeshake_rnd/detector/`.

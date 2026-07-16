@@ -114,6 +114,7 @@ void _loadBuildConfig(Uri packageRoot) {
   _webAssets = Map<String, String>.from(json['web'] as Map);
   _wasmBuildOutputs = Set<String>.from(json['wasmBuildOutputs'] as List);
   _nativeFeatures = (json['features'] as Map)['native'] as String;
+  _effectiveFeatures = _nativeFeatures;
 }
 
 String _downloadUrl(String version, String assetName) =>
@@ -131,6 +132,7 @@ void main(List<String> args) async {
     if (!input.config.buildCodeAssets) return;
 
     _loadBuildConfig(input.packageRoot);
+    _applyUserDefines(input);
 
     final codeConfig = input.config.code;
     final targetTriple = _targetTriple(codeConfig);
@@ -185,14 +187,19 @@ Future<void> _resolveNative({
 }) async {
   final assetName = '$targetKey-$libFileName';
 
+  // A consumer-trimmed feature set has no prebuilt release asset and no
+  // pinned hash: version 0.0.0 routes the resolver straight to compile,
+  // and cargo's feature-aware fingerprint is the cache.
+  final effectiveVersion = _isCustomFeatureSet ? '0.0.0' : version;
+
   await resolveAsset(
     ResolveRequest(
       assetName: assetName,
-      downloadUrl: _downloadUrl(version, assetName),
+      downloadUrl: _downloadUrl(effectiveVersion, assetName),
       dest: dest,
-      cacheFile: cacheFile,
-      expectedHash: assetHashes[assetName],
-      version: version,
+      cacheFile: _isCustomFeatureSet ? null : cacheFile,
+      expectedHash: _isCustomFeatureSet ? null : assetHashes[assetName],
+      version: effectiveVersion,
       packageRoot: packageRoot,
       force: force,
       compile: (File d) async {
@@ -220,8 +227,15 @@ Future<int> resolveWeb({
   required String version,
   required Directory destDir,
   bool force = false,
+  String? wasmFeaturesOverride,
 }) async {
   _loadBuildConfig(packageRoot);
+  _wasmFeaturesOverride = wasmFeaturesOverride;
+  // A trimmed set has no prebuilt asset, no pinned hash, and must not
+  // reuse a default-set artifact: force + version 0.0.0 route the
+  // resolver straight to a fresh compile.
+  final effectiveVersion = wasmFeaturesOverride == null ? version : '0.0.0';
+  final effectiveForce = force || wasmFeaturesOverride != null;
 
   if (!destDir.existsSync()) {
     destDir.createSync(recursive: true);
@@ -239,12 +253,14 @@ Future<int> resolveWeb({
     final fresh = await resolveAsset(
       ResolveRequest(
         assetName: assetName,
-        downloadUrl: _downloadUrl(version, assetName),
+        downloadUrl: _downloadUrl(effectiveVersion, assetName),
         dest: dest,
-        expectedHash: assetHashes[assetName],
-        version: version,
+        expectedHash: wasmFeaturesOverride == null
+            ? assetHashes[assetName]
+            : null,
+        version: effectiveVersion,
         packageRoot: packageRoot,
-        force: force,
+        force: effectiveForce,
         compile: isWasmBuildOutput
             ? (File d) => _compileWasm(packageRoot, d, localName)
             : (File d) => _copyWebAsset(packageRoot, d, localName),
@@ -489,11 +505,14 @@ Future<void> _compileNativeFromCli(Uri packageRoot, File dest) async {
 
 // ── Web: WASM build outputs (pdf_oxide.js + pdf_oxide_bg.wasm) ───
 
+String? _wasmFeaturesOverride;
+
 Future<void> _compileWasm(Uri packageRoot, File dest, String targetFile) async {
   final existing = File.fromUri(packageRoot.resolve('web_assets/$targetFile'));
 
-  // Contributor has locally built WASM — copy directly
-  if (existing.existsSync()) {
+  // Contributor has locally built WASM — copy directly (never for a
+  // trimmed set: the local artifact is the default build).
+  if (_wasmFeaturesOverride == null && existing.existsSync()) {
     dest.parent.createSync(recursive: true);
     existing.copySync(dest.path);
     return;
@@ -508,10 +527,16 @@ Future<void> _compileWasm(Uri packageRoot, File dest, String targetFile) async {
     );
   }
 
-  final result = await Process.run('bash', [
-    script.path,
-    '--wasm',
-  ], workingDirectory: p.fromUri(packageRoot));
+  final result = await Process.run(
+    'bash',
+    [script.path, '--wasm'],
+    workingDirectory: p.fromUri(packageRoot),
+    environment: {
+      ...Platform.environment,
+      if (_wasmFeaturesOverride != null)
+        'PDF_FEATURES_WASM': _wasmFeaturesOverride!,
+    },
+  );
   if (result.exitCode != 0) {
     throw StateError(
       'WASM compilation failed (exit ${result.exitCode}).\n'
@@ -546,7 +571,40 @@ Future<void> _copyWebAsset(Uri packageRoot, File dest, String fileName) async {
 // § 5 — CodeConfig mapping
 // ══════════════════════════════════════════════════════════════════
 
-String _resolveFeatures() => _nativeFeatures;
+String _resolveFeatures() => _effectiveFeatures;
+
+/// Cargo features a consumer may switch off from their app pubspec:
+///
+///   hooks:
+///     user_defines:
+///       pdf_manipulator:
+///         rendering: false
+///         pdfa: false
+///
+/// Opt-out only — keys absent or non-false leave the default set intact.
+/// The trimmed binary returns a typed "not enabled in this build" error
+/// for ops whose feature was dropped.
+const List<String> optionalFeatures = [
+  'rendering',
+  'signatures',
+  'pdfa',
+  'icc',
+  'legacy-crypto',
+];
+
+late String _effectiveFeatures;
+bool _isCustomFeatureSet = false;
+
+void _applyUserDefines(BuildInput input) {
+  final kept = _nativeFeatures
+      .split(',')
+      .where(
+        (f) => !optionalFeatures.contains(f) || input.userDefines[f] != false,
+      )
+      .toList();
+  _effectiveFeatures = kept.join(',');
+  _isCustomFeatureSet = _effectiveFeatures != _nativeFeatures;
+}
 
 String _currentLibFileName() {
   if (Platform.isMacOS) return 'lib$_crateName.dylib';

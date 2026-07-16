@@ -271,7 +271,7 @@ test-rust: export CARGO_PROFILE_TEST_DEBUG := 0
 test-rust:
 	@echo "=== Rust: pdf_oxide ==="
 	$(CARGO) test --manifest-path vendor/pdf_oxide/Cargo.toml \
-	  --features "$$(bash tool/compile_rust.sh --features native),test-support,public-api,cjk-form-fonts"
+	  --features "$$(bash tool/compile_rust.sh --features native),test-support,public-api,cjk-form-fonts,pdfa"
 	@echo "=== Rust: office_oxide ==="
 	$(CARGO) test --manifest-path vendor/office_oxide/Cargo.toml
 
