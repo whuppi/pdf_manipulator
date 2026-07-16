@@ -48,10 +48,10 @@ Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extrac
   - [Build from scratch](#build-from-scratch)
   - [CJK & emoji in form fields](#cjk--emoji-in-form-fields)
 - [Error handling](#error-handling)
+- [The engine binary](#the-engine-binary)
 - [Platform support](#platform-support)
   - [Browser support](#browser-support)
   - [Web I/O modes](#web-io-modes)
-- [Ship only what you use (trim)](#ship-only-what-you-use-trim)
 - [Not in the box](#not-in-the-box)
 - [Docs](#docs)
 
@@ -74,7 +74,7 @@ Nothing to do. On iOS, Android, macOS, Windows, and Linux, the build hook downlo
 
 ### Web
 
-Web can't auto-download native assets, so run setup once. It fetches the prebuilt WASM engine. Run it again after any `pub upgrade`, since the asset is tied to the package version:
+Web can't auto-download native assets, so run setup once. It fetches the prebuilt WASM engine (details and a way to shrink it: [The engine binary](#the-engine-binary)). Run it again after any `pub upgrade`, since the asset is tied to the package version:
 
 ```sh
 flutter pub run pdf_manipulator:setup
@@ -93,6 +93,7 @@ pdf_manipulator: X.Y.Z  # exact version
 flutter pub run pdf_manipulator:setup                  # web (default)
 flutter pub run pdf_manipulator:setup <target>         # web|android|ios|macos|linux|windows
 flutter pub run pdf_manipulator:setup --force <target> # re-resolve (debugging)
+flutter pub run pdf_manipulator:setup --trim           # trimmed engine (see The engine binary)
 ```
 
 </details>
@@ -435,21 +436,45 @@ try {
 
 ---
 
-## Platform support
+## The engine binary
 
-Every platform Flutter runs on, one API. Native platforms run a Rust core; web runs that same core compiled to WASM.
+The default binary carries every capability. If your app only uses some of them, trim tells the build to keep what your code can reach and delete the rest at compile time. It follows the same safety rule as Dart's own tree shaking: when the build cannot prove that your app skips something, it keeps it. The worst case is a slightly bigger binary — never a missing feature.
 
-| Target | Architectures | Minimum version | Engine |
-|---|---|---|---|
-| Android | arm64, arm, x64, x86 | API 21 (Android 5.0) | Native (Rust) |
-| iOS | arm64 device, arm64 + x64 simulator | 13.0 | Native (Rust) |
-| macOS | arm64, x64 | 10.15 (Catalina) | Native (Rust) |
-| Linux | x64, arm64 | glibc 2.31+ (Ubuntu 20.04+) | Native (Rust) |
-| Windows | x64, arm64 | Windows 10 | Native (Rust) |
-| Web | All modern browsers | See [browser support](#browser-support) | WASM |
+```yaml
+# pubspec.yaml of YOUR app
+hooks:
+  user_defines:
+    pdf_manipulator:
+      trim: auto              # a source scan decides what to keep
+```
+
+Prefer to say it yourself? The manual form keeps exactly these capabilities (plus the always-included core — parse, write, edit, forms, build):
+
+```yaml
+      trim:
+        keep: [render, signatures]
+```
+
+Capabilities: `render`, `signatures`, `pdfa`, `office`, `extract`. On web, run the setup with the flag after configuring pubspec:
+
+```bash
+flutter pub run pdf_manipulator:setup --trim
+```
 
 <details>
-<summary><b>🧩 how the binary actually shows up (build-time magic)</b></summary>
+<summary><b>🧩 what trim actually does (and the safety contract)</b></summary>
+
+- `auto` resolves your app's real call graph against this package's API. Any file it cannot resolve means the scan cannot prove anything — you get the FULL binary plus a printed warning (fail closed), never a guess.
+- The keep-set maps to engine build features; a fresh engine is compiled locally with only those (needs a Rust toolchain; the result is cached, so it's a one-time cost per keep-set).
+- A trimmed-out op answers with a typed "not enabled in this build" error naming what to add to `keep:` — defense in depth on top of the source scan.
+- A typo in `trim:` fails the build printing the valid grammar. A config mistake never silently changes what ships.
+- The saving depends on your keep-set. Trimming every capability away removes about 70% of the native library (~21.1 MB full → ~6.3 MB core-only, measured by `make shake-audit`).
+- On web the default engine is ~17.2 MB raw, ~7.2 MB gzipped on the wire; a trimmed build shrinks both the same way.
+
+</details>
+
+<details>
+<summary><b>🧩 where the binary comes from (the build-time steps)</b></summary>
 
 <br>
 
@@ -466,6 +491,21 @@ You never call this; it runs at build time. For the curious (or when a build fai
 The vendored Rust source ships in both the pub.dev tarball and git tags. If the repo disappears, published versions still compile from source.
 
 </details>
+
+---
+
+## Platform support
+
+Every platform Flutter runs on, one API. Native platforms run a Rust core; web runs that same core compiled to WASM.
+
+| Target | Architectures | Minimum version | Engine |
+|---|---|---|---|
+| Android | arm64, arm, x64, x86 | API 21 (Android 5.0) | Native (Rust) |
+| iOS | arm64 device, arm64 + x64 simulator | 13.0 | Native (Rust) |
+| macOS | arm64, x64 | 10.15 (Catalina) | Native (Rust) |
+| Linux | x64, arm64 | glibc 2.31+ (Ubuntu 20.04+) | Native (Rust) |
+| Windows | x64, arm64 | Windows 10 | Native (Rust) |
+| Web | All modern browsers | See [browser support](#browser-support) | WASM |
 
 ### Browser support
 
@@ -542,45 +582,6 @@ For local dev, Flutter adds the headers for you:
 ```sh
 flutter run -d chrome --cross-origin-isolation
 ```
-
-</details>
-
----
-
-## Ship only what you use (trim)
-
-The default binary carries every capability. If your app only uses some of them, trim tells the build to keep exactly what your code can reach — the rest is deleted at compile time (the same contract as Dart's own tree shaking: anything not provably unused is kept, so a broken app is not a possible outcome).
-
-```yaml
-# pubspec.yaml of YOUR app
-hooks:
-  user_defines:
-    pdf_manipulator:
-      trim: auto              # a source scan decides what to keep
-```
-
-Prefer to say it yourself? The manual form keeps exactly these capabilities (plus the always-included core — parse, write, edit, forms, extract, build):
-
-```yaml
-      trim:
-        keep: [render, signatures]
-```
-
-Capabilities: `render`, `signatures`, `pdfa`, `office`, `extract`. On web, run the setup with the flag after configuring pubspec:
-
-```bash
-flutter pub run pdf_manipulator:setup --trim
-```
-
-<details>
-<summary><b>🧩 what trim actually does (and the safety contract)</b></summary>
-
-- `auto` resolves your app's real call graph against this package's API. Any file it cannot resolve means the scan cannot prove anything — you get the FULL binary plus a printed warning (fail closed), never a guess.
-- The keep-set maps to engine build features; a fresh engine is compiled locally with only those (needs a Rust toolchain; the result is cached, so it's a one-time cost per keep-set).
-- A trimmed-out op answers with a typed "not enabled in this build" error naming what to add to `keep:` — defense in depth on top of the source scan.
-- A typo in `trim:` fails the build printing the valid grammar. A config mistake never silently changes what ships.
-- The saving depends on your keep-set. Trimming every capability away removes about 70% of the native library (~21.1 MB full → ~6.3 MB core-only, measured by `make shake-audit`).
-- On web the default engine is ~17.2 MB raw, ~7.2 MB gzipped on the wire; a trimmed build shrinks both the same way.
 
 </details>
 
