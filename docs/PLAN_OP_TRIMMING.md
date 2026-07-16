@@ -156,14 +156,31 @@ Design invariants (the gold rules):
   warning (fail closed). Custom feature sets skip the prebuilt download
   and compile locally (version-0.0.0 pathway, cargo fingerprint = cache).
 - **Detector selector**: `trim-detector: analyzer | record-use | compare`.
-  `record-use` is EXPERIMENTAL and cannot drive the build (its data
-  appears in the link phase, after the native compile) — selecting it
-  fails loudly with that explanation. `compare` trims with the analyzer
-  and the link hook (`hook/link.dart`, via `package:record_use` +
-  `input.recordedUses`) prints the RecordUse-observed capability set for
-  diffing. The shim: `TrimRecord.op('<capability>')` const calls in every
-  capability-bearing public op (`record_use_shim.dart`) — deleted when
-  dart-lang/native#2902 lands instance-method support.
+  `record-use` (EXPERIMENTAL) is a FULL drive path following the official
+  link-hook pattern (the font-subsetting shape): the build hook ships the
+  full binary to the link phase; `hook/link.dart` reads
+  `input.recordedUses`, computes the keep-set via `recordedCapabilities`,
+  compiles the trimmed engine through the SHARED compiler, and emits it
+  in place of the full one. Recordings absent (SDK experiment off) → the
+  full binary ships, loudly (fail closed). Debug builds skip linking →
+  full binary by design (fast iteration, release gets the trim). The lane
+  becomes live the day the SDK starts recording — zero changes needed
+  here. `compare` trims with the analyzer and reports the recorded set
+  for diffing. The shim: `TrimRecord.op('<capability>')` const calls in
+  every capability-bearing public op (`record_use_shim.dart`) — deleted
+  when dart-lang/native#2902 lands instance-method support. Wasm cannot
+  be record-use-driven until web reaches hooks (in progress upstream);
+  the analyzer covers web regardless.
+- **One compile path, two callers**: the hook orchestration lives in
+  `lib/src/hook/` — `build_constants.dart` (build.json), `engine_compiler.dart`
+  (CodeConfig→triple/key/linkmode mappers, NDK env, the cargo invocation),
+  `trim_plan.dart` (user-defines → TrimPlan; Recordings → keep-set).
+  `hook/build.dart` and `hook/link.dart` are thin callers. Change compile
+  behavior in the shared module, never in a hook.
+  Tests: `test/trim/trim_plan_test.dart` proves the plan matrix (defer /
+  manual / fail-closed / loud grammar) and the recordings extraction
+  against an in-memory `Recordings` fixture — the drive path is testable
+  today without the SDK experiment.
 
 ### R4 — shake verifier — SHIPPED
 `make shake-audit` (`tool/shake_audit.sh`): full vs core-only release

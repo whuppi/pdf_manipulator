@@ -79,7 +79,6 @@
 //     1. GitHub Release API digests (native + WASM build outputs)
 //     2. Local SHA-256 of hand-written JS (lane_worker.js)
 
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:code_assets/code_assets.dart';
@@ -88,39 +87,19 @@ import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
 
 import 'package:pdf_manipulator/src/hook/asset_hashes.dart';
+import 'package:pdf_manipulator/src/hook/build_constants.dart';
+import 'package:pdf_manipulator/src/hook/engine_compiler.dart';
 import 'package:pdf_manipulator/src/hook/resolver.dart';
-import 'package:pdf_manipulator/src/trim/capabilities.dart';
-import 'package:pdf_manipulator/src/trim/detector.dart';
+import 'package:pdf_manipulator/src/hook/trim_plan.dart';
 
 final _log = Logger('pdf_manipulator:build');
 
 const _assetId = 'src/ffi/native_bindings.g.dart';
 
-// ── build.json — single source of truth for all build constants ──
-// Loaded once per hook invocation. Every constant that's shared with
-// tool/ci/release.sh and tool/compile_rust.sh lives here.
-Map<String, dynamic>? _buildConfig;
-late String _crateName;
-late String _repo;
-late Map<String, String> _webAssets;
-late Set<String> _wasmBuildOutputs;
-late String _nativeFeatures;
-
-void _loadBuildConfig(Uri packageRoot) {
-  if (_buildConfig != null) return;
-  final file = File.fromUri(packageRoot.resolve('build.json'));
-  final json = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
-  _buildConfig = json;
-  _crateName = json['crate'] as String;
-  _repo = json['repo'] as String;
-  _webAssets = Map<String, String>.from(json['web'] as Map);
-  _wasmBuildOutputs = Set<String>.from(json['wasmBuildOutputs'] as List);
-  _nativeFeatures = (json['features'] as Map)['native'] as String;
-  _effectiveFeatures = _nativeFeatures;
-}
-
-String _downloadUrl(String version, String assetName) =>
-    'https://github.com/$_repo/releases/download/v$version/$assetName';
+// build.json constants + the resolved trim plan, loaded once per hook
+// invocation (see lib/src/hook/build_constants.dart / trim_plan.dart).
+late BuildConstants _constants;
+late TrimPlan _plan;
 
 // ══════════════════════════════════════════════════════════════════
 // § 1 — Flutter hook entry point (native only)
@@ -133,14 +112,28 @@ void main(List<String> args) async {
   await build(args, (BuildInput input, BuildOutputBuilder output) async {
     if (!input.config.buildCodeAssets) return;
 
-    _loadBuildConfig(input.packageRoot);
-    await _applyUserDefines(input);
+    _constants = BuildConstants.load(input.packageRoot);
+    _plan = await resolveTrimPlan(
+      trimDefine: input.userDefines['trim'],
+      detectorDefine: input.userDefines['trim-detector'],
+      defaultFeatures: _constants.nativeFeatures,
+      // The hooks API exposes no app root; the working directory is the
+      // app when the consumer runs `flutter build` from their project.
+      appRootCandidate: Directory.current.path,
+    );
+    if (_plan.deferToLink && !input.config.linkingEnabled) {
+      stderr.writeln(
+        'pdf_manipulator trim-detector record-use: linking is disabled in '
+        'this build (debug) — shipping the FULL binary. Release builds '
+        'trim in the link hook.',
+      );
+    }
 
     final codeConfig = input.config.code;
-    final targetTriple = _targetTriple(codeConfig);
-    final linkMode = _linkMode(codeConfig);
+    final targetTriple = targetTripleFor(codeConfig);
+    final linkMode = linkModeFor(codeConfig);
     final libFileName = codeConfig.targetOS.libraryFileName(
-      _crateName,
+      _constants.crate,
       linkMode,
     );
     final outFile = File.fromUri(input.outputDirectory.resolve(libFileName));
@@ -149,7 +142,7 @@ void main(List<String> args) async {
     await _resolveNative(
       packageRoot: input.packageRoot,
       version: readVersion(input.packageRoot),
-      targetKey: _targetKey(codeConfig),
+      targetKey: targetKeyFor(codeConfig),
       libFileName: libFileName,
       dest: outFile,
       cacheFile: File.fromUri(
@@ -192,15 +185,15 @@ Future<void> _resolveNative({
   // A consumer-trimmed feature set has no prebuilt release asset and no
   // pinned hash: version 0.0.0 routes the resolver straight to compile,
   // and cargo's feature-aware fingerprint is the cache.
-  final effectiveVersion = _isCustomFeatureSet ? '0.0.0' : version;
+  final effectiveVersion = _plan.isCustom ? '0.0.0' : version;
 
   await resolveAsset(
     ResolveRequest(
       assetName: assetName,
-      downloadUrl: _downloadUrl(effectiveVersion, assetName),
+      downloadUrl: _constants.downloadUrl(effectiveVersion, assetName),
       dest: dest,
-      cacheFile: _isCustomFeatureSet ? null : cacheFile,
-      expectedHash: _isCustomFeatureSet ? null : assetHashes[assetName],
+      cacheFile: _plan.isCustom ? null : cacheFile,
+      expectedHash: _plan.isCustom ? null : assetHashes[assetName],
       version: effectiveVersion,
       packageRoot: packageRoot,
       force: force,
@@ -231,7 +224,7 @@ Future<int> resolveWeb({
   bool force = false,
   String? wasmFeaturesOverride,
 }) async {
-  _loadBuildConfig(packageRoot);
+  _constants = BuildConstants.load(packageRoot);
   _wasmFeaturesOverride = wasmFeaturesOverride;
   // A trimmed set has no prebuilt asset, no pinned hash, and must not
   // reuse a default-set artifact: force + version 0.0.0 route the
@@ -245,17 +238,17 @@ Future<int> resolveWeb({
 
   var installed = 0;
 
-  for (final entry in _webAssets.entries) {
+  for (final entry in _constants.webAssets.entries) {
     final localName = entry.key;
     final assetName = entry.value;
     final dest = File('${destDir.path}/$localName');
 
-    final isWasmBuildOutput = _wasmBuildOutputs.contains(localName);
+    final isWasmBuildOutput = _constants.wasmBuildOutputs.contains(localName);
 
     final fresh = await resolveAsset(
       ResolveRequest(
         assetName: assetName,
-        downloadUrl: _downloadUrl(effectiveVersion, assetName),
+        downloadUrl: _constants.downloadUrl(effectiveVersion, assetName),
         dest: dest,
         expectedHash: wasmFeaturesOverride == null
             ? assetHashes[assetName]
@@ -367,104 +360,20 @@ Future<void> _compileNativeFromHook(
   LinkMode linkMode,
   File outFile,
 ) async {
-  final manifestPath = p.fromUri(
-    input.packageRoot.resolve('vendor/pdf_oxide/Cargo.toml'),
-  );
-  final targetDir = p.join(p.fromUri(input.outputDirectory), 'cargo_target');
-
-  _log.info('compiling from source for $targetTriple');
-
-  // Ensure the Rust target is installed (fresh CI or formatted laptop)
-  final targetCheck = Process.runSync('rustup', [
-    'target',
-    'list',
-    '--installed',
-  ]);
-  if (targetCheck.exitCode == 0 &&
-      !(targetCheck.stdout as String).contains(targetTriple)) {
-    _log.info('installing Rust target: $targetTriple');
-    Process.runSync('rustup', ['target', 'add', targetTriple]);
-  }
-
-  final env = <String, String>{};
   final codeConfig = input.config.code;
-
-  // Android: use the NDK clang driver Flutter provides
-  if (codeConfig.targetOS == OS.android) {
-    final cc = codeConfig.cCompiler;
-    if (cc != null) {
-      final compilerDir = p.dirname(p.fromUri(cc.compiler));
-      final ndkTriple = targetTriple == 'armv7-linux-androideabi'
-          ? 'armv7a-linux-androideabi'
-          : targetTriple;
-      // The NDK per-API clang driver is a `.cmd` batch wrapper on Windows
-      // hosts (e.g. aarch64-linux-android21-clang.cmd); passing the bare name
-      // makes cargo fail with "could not exec the linker ... program not
-      // found". Append the host executable extension so Android cross-compiles
-      // link from a Windows host as well as Linux/macOS. Platform.isWindows
-      // here is the BUILD host (which runs cargo), not the Android target.
-      final clangExt = Platform.isWindows ? '.cmd' : '';
-      final linker = p.join(compilerDir, '${ndkTriple}21-clang$clangExt');
-      final ar = p.join(compilerDir, 'llvm-ar');
-      final envKey =
-          'CARGO_TARGET_${targetTriple.toUpperCase().replaceAll('-', '_')}';
-      env['${envKey}_LINKER'] = linker;
-      env['${envKey}_AR'] = ar;
-      _log.info('NDK linker: $linker');
-    }
-  }
-
-  // macOS: strip Xcode Developer PATH injections that break cargo
-  if (Platform.isMacOS) {
-    env['PATH'] = Platform.environment['PATH']!
-        .split(':')
-        .where((e) => !e.contains('Contents/Developer/'))
-        .join(':');
-  }
-
-  final result = await Process.run(
-    'cargo',
-    [
-      'build',
-      '--manifest-path',
-      manifestPath,
-      '--lib',
-      '--release',
-      '--target',
-      targetTriple,
-      '--target-dir',
-      targetDir,
-      '--features',
-      _resolveFeatures(),
-    ],
-    environment: {...Platform.environment, ...env},
+  await compileEngineForTarget(
+    packageRoot: input.packageRoot,
+    crateName: _constants.crate,
+    targetTriple: targetTriple,
+    features: _plan.features,
+    targetDir: p.join(p.fromUri(input.outputDirectory), 'cargo_target'),
+    libFileName: codeConfig.targetOS.libraryFileName(
+      _constants.crate,
+      linkMode,
+    ),
+    outFile: outFile,
+    environment: androidLinkerEnv(codeConfig, targetTriple),
   );
-
-  if (result.exitCode != 0) {
-    throw StateError(
-      'cargo build failed (exit ${result.exitCode}).\n'
-      'stderr: ${result.stderr}\n\n'
-      'Ensure Rust is installed: https://rustup.rs\n'
-      'Then: rustup target add $targetTriple',
-    );
-  }
-
-  final compiled = p.join(
-    targetDir,
-    targetTriple,
-    'release',
-    codeConfig.targetOS
-        .libraryFileName(_crateName, linkMode)
-        .replaceAll('-', '_'),
-  );
-
-  if (!File(compiled).existsSync()) {
-    throw StateError('Compiled library not found at $compiled.');
-  }
-
-  outFile.parent.createSync(recursive: true);
-  File(compiled).copySync(outFile.path);
-  _log.info('compiled → ${outFile.path}');
 }
 
 // ── Native: from CLI (no BuildInput — uses compile_rust.sh) ──────
@@ -573,132 +482,9 @@ Future<void> _copyWebAsset(Uri packageRoot, File dest, String fileName) async {
 // § 5 — CodeConfig mapping
 // ══════════════════════════════════════════════════════════════════
 
-String _resolveFeatures() => _effectiveFeatures;
-
-/// The `trim:` user-define (see docs/PLAN_OP_TRIMMING.md — the public
-/// grammar). `keep:` works everywhere; `auto` runs the detector over the
-/// invoking app when the working directory IS the app (the hooks API
-/// exposes no app root), and fails CLOSED to the full binary otherwise.
-/// A malformed value fails the build loudly with the grammar.
-late String _effectiveFeatures;
-bool _isCustomFeatureSet = false;
-
-Future<void> _applyUserDefines(BuildInput input) async {
-  final TrimConfig config;
-  final TrimDetector detector;
-  try {
-    config = TrimConfig.parse(input.userDefines['trim']);
-    detector = TrimDetector.parse(input.userDefines['trim-detector']);
-  } on TrimConfigError catch (e) {
-    throw StateError('$e');
-  }
-  if (detector == TrimDetector.recordUse) {
-    throw StateError(
-      'pdf_manipulator trim-detector record-use is EXPERIMENTAL and cannot '
-      'drive the native build yet: @RecordUse data only exists after AOT '
-      'compilation, which happens after this hook compiles the engine. '
-      'Use trim-detector: compare to observe RecordUse alongside the '
-      'analyzer, or remove the key for the analyzer detector.',
-    );
-  }
-
-  Set<PdfCapability>? keep;
-  switch (config.mode) {
-    case TrimMode.off:
-      break;
-    case TrimMode.manual:
-      keep = config.keep;
-    case TrimMode.auto:
-      final cwd = Directory.current.path;
-      final looksLikeApp = File('$cwd/pubspec.yaml').existsSync();
-      if (!looksLikeApp) {
-        stderr.writeln(
-          'pdf_manipulator trim: cannot locate the app source from the '
-          'build hook — keeping the FULL binary (fail closed). Use '
-          'trim: {keep: [...]} for a guaranteed native trim.',
-        );
-        break;
-      }
-      final result = await detectCapabilities(cwd);
-      if (!result.resolved) {
-        stderr.writeln(
-          'pdf_manipulator trim: ${result.unresolvedPaths.length} file(s) '
-          'did not resolve — keeping the FULL binary (fail closed).',
-        );
-        break;
-      }
-      keep = result.keep;
-  }
-
-  _effectiveFeatures = keep == null
-      ? _nativeFeatures
-      : config.featuresFor(_nativeFeatures, keep);
-  _isCustomFeatureSet = _effectiveFeatures != _nativeFeatures;
-}
-
 String _currentLibFileName() {
-  if (Platform.isMacOS) return 'lib$_crateName.dylib';
-  if (Platform.isLinux) return 'lib$_crateName.so';
-  if (Platform.isWindows) return '$_crateName.dll';
+  if (Platform.isMacOS) return 'lib${_constants.crate}.dylib';
+  if (Platform.isLinux) return 'lib${_constants.crate}.so';
+  if (Platform.isWindows) return '${_constants.crate}.dll';
   throw UnsupportedError('Unsupported platform: ${Platform.operatingSystem}');
-}
-
-LinkMode _linkMode(CodeConfig code) {
-  return switch (code.linkModePreference) {
-    LinkModePreference.dynamic ||
-    LinkModePreference.preferDynamic => DynamicLoadingBundled(),
-    LinkModePreference.static ||
-    LinkModePreference.preferStatic => StaticLinking(),
-    _ => DynamicLoadingBundled(),
-  };
-}
-
-String _targetTriple(CodeConfig code) {
-  if (code.targetOS == OS.iOS &&
-      code.targetArchitecture == Architecture.arm64 &&
-      code.iOS.targetSdk == IOSSdk.iPhoneSimulator) {
-    return 'aarch64-apple-ios-sim';
-  }
-  return switch ((code.targetOS, code.targetArchitecture)) {
-    (OS.android, Architecture.arm) => 'armv7-linux-androideabi',
-    (OS.android, Architecture.arm64) => 'aarch64-linux-android',
-    (OS.android, Architecture.ia32) => 'i686-linux-android',
-    (OS.android, Architecture.x64) => 'x86_64-linux-android',
-    (OS.iOS, Architecture.arm64) => 'aarch64-apple-ios',
-    (OS.iOS, Architecture.x64) => 'x86_64-apple-ios',
-    (OS.linux, Architecture.arm64) => 'aarch64-unknown-linux-gnu',
-    (OS.linux, Architecture.x64) => 'x86_64-unknown-linux-gnu',
-    (OS.macOS, Architecture.arm64) => 'aarch64-apple-darwin',
-    (OS.macOS, Architecture.x64) => 'x86_64-apple-darwin',
-    (OS.windows, Architecture.arm64) => 'aarch64-pc-windows-msvc',
-    (OS.windows, Architecture.x64) => 'x86_64-pc-windows-msvc',
-    (_, _) => throw UnsupportedError(
-      'Unsupported: ${code.targetOS} ${code.targetArchitecture}',
-    ),
-  };
-}
-
-String _targetKey(CodeConfig code) {
-  if (code.targetOS == OS.iOS &&
-      code.targetArchitecture == Architecture.arm64 &&
-      code.iOS.targetSdk == IOSSdk.iPhoneSimulator) {
-    return 'ios-sim-arm64';
-  }
-  return switch ((code.targetOS, code.targetArchitecture)) {
-    (OS.android, Architecture.arm) => 'android-arm',
-    (OS.android, Architecture.arm64) => 'android-arm64',
-    (OS.android, Architecture.ia32) => 'android-x86',
-    (OS.android, Architecture.x64) => 'android-x64',
-    (OS.iOS, Architecture.arm64) => 'ios-arm64',
-    (OS.iOS, Architecture.x64) => 'ios-sim-x64',
-    (OS.linux, Architecture.arm64) => 'linux-arm64',
-    (OS.linux, Architecture.x64) => 'linux-x64',
-    (OS.macOS, Architecture.arm64) => 'macos-arm64',
-    (OS.macOS, Architecture.x64) => 'macos-x64',
-    (OS.windows, Architecture.arm64) => 'windows-arm64',
-    (OS.windows, Architecture.x64) => 'windows-x64',
-    (_, _) => throw UnsupportedError(
-      'Unsupported: ${code.targetOS} ${code.targetArchitecture}',
-    ),
-  };
 }
