@@ -73,10 +73,13 @@ LTO/wasm-gc does the actual deletion.
 
 ## Remaining work
 
-### R1 — op→feature map (mechanical, next)
-One table in the package: 32 EngineOps (+ sugar/builder composition) →
-cargo features each requires. Guarded by wire_sync-style parity test so a
-new op cannot ship unmapped.
+*(all R-items below are SHIPPED as of 2026-07-16 — statuses inline)*
+
+### R1 — capability→feature map — SHIPPED
+`lib/src/trim/capabilities.dart`: `PdfCapability` (render / signatures /
+pdfa / office) with `apiMembers` (the detector's member table) and
+`featuresFor` (keep-set → cargo features). Grammar + mapping pinned by
+`test/trim/capabilities_test.dart` (13 tests).
 
 ### Dual-detector decision (2026-07-16)
 
@@ -90,11 +93,11 @@ both, prints the keep-set diff — the living testbed for RecordUse
 maturity). Our instance-method API is correct Dart design and does NOT
 get reworked for RecordUse's current statics-only limit.
 
-### R2 — detector productionization
-Promote the validated prototype (resolved-AST call-finder; 13/13 ground
-truth on example/) into package tooling. Input: app source root. Output:
-reachable op set → feature set via R1. Fail closed: any unresolvable file
-→ full set + a printed warning.
+### R2 — detector productionization — SHIPPED
+`lib/src/trim/detector.dart` — resolved-AST call-finder over the app's
+lib/. Fail closed: any unresolvable file → full binary + warning.
+Proven end-to-end on example/ (keep=[pdfa, render, signatures], every
+expected member matched incl. sugar).
 
 ### The `trim` API (designed 2026-07-16 — auto AND manual, one key)
 
@@ -141,38 +144,66 @@ Design invariants (the gold rules):
    native hook (`input.userDefines['trim']`) and web `setup` (which parses
    the app's pubspec from cwd) identically.
 
-### R3 — trim wiring
+### R3 — trim wiring — SHIPPED
 - **Web**: `setup --trim` runs the detector over the app cwd → wasm
-  feature set → `resolveWeb(wasmFeaturesOverride:)`. All pieces exist.
-- **Native**: `trim: true` in `hooks: user_defines:` — OPEN QUESTION: where
-  the detector runs. Options: (a) inside the build hook (hook deps may
-  carry analyzer; needs app-root discovery from the hooks API — verify
-  what BuildInput exposes), (b) `setup --trim` also writes a manifest the
-  hook reads via the user-defines path mechanism. Decide by reading the
-  hooks API, prefer (a) if the app root is reachable.
+  feature set → `resolveWeb(wasmFeaturesOverride:)` → trimmed wasm
+  compiled locally (E2E verified: 3 files installed).
+- **Native**: `hook/build.dart` parses the `trim:` user-define via
+  `TrimConfig.parse` (loud `TrimConfigError` fails the build). Manual
+  `keep:` works unconditionally; `auto` uses the option-(a) route with a
+  cwd heuristic (`Directory.current` has a pubspec) because hooks 2.0.2's
+  `BuildInput` exposes NO app root — heuristic miss → FULL binary +
+  warning (fail closed). Custom feature sets skip the prebuilt download
+  and compile locally (version-0.0.0 pathway, cargo fingerprint = cache).
+- **Detector selector**: `trim-detector: analyzer | record-use | compare`.
+  `record-use` is EXPERIMENTAL and cannot drive the build (its data
+  appears in the link phase, after the native compile) — selecting it
+  fails loudly with that explanation. `compare` trims with the analyzer
+  and the link hook (`hook/link.dart`, via `package:record_use` +
+  `input.recordedUses`) prints the RecordUse-observed capability set for
+  diffing. The shim: `TrimRecord.op('<capability>')` const calls in every
+  capability-bearing public op (`record_use_shim.dart`) — deleted when
+  dart-lang/native#2902 lands instance-method support.
 
-### R4 — shake verifier (`make shake-audit`)
-Trim-profile build + assert absent symbols (nm / wasm names) + size
-ceilings + the typed excluded-op runtime probe. This is what makes the
-guarantee durable across upstream rebases.
+### R4 — shake verifier — SHIPPED
+`make shake-audit` (`tool/shake_audit.sh`): full vs core-only release
+builds, nm symbol autopsy (banned public-api C exports absent, lane
+bridge exports present), size assertions (core ≥2 MB smaller than full,
+13 MB ceiling), and the typed not-enabled runtime probes (Rust unit
+tests in `host/dispatch.rs`, cfg-gated to fire only on trimmed builds).
+Measured pre-office-split: full 21,109,840 → core-only 11,804,832
+(−9.3 MB). `SHAKE_AUDIT_WASM=1` adds the wasm size check. Never edit
+the script while an audit is running — bash re-reads shifted bytes.
 
-### R5 — office/converters gating (the big web)
-office_oxide + src/converters bleed into the extraction pipeline
-(`pipeline/*` references — the two "converters" trees need untangling).
-Measured value: ~1.5 MB raw (rootcut3). Do after R1-R4; needs its own
-entanglement pass.
+### R5 — office/converters gating — SHIPPED
+The entanglement turned out clean: the 9 cross-tree consumers only use
+`ConversionOptions` + enums (lightweight, stays); the heavy office code
+is `converters/office/`, the three `*_layout.rs`, `pdf_to_ir`, and one
+contiguous `to_docx/pptx/xlsx` region in document.rs (now its own
+`#[cfg(feature = "office")] impl` block). `office` cargo feature gates
+`office_oxide` (made optional); `public-api` and `python` pull it so
+upstream surfaces keep compiling. Dispatch convert fns answer the typed
+not-enabled error when off. Dart: `office` capability mapped from
+`convertTo`/`convertToPdf` (their `PdfDocumentFormat` is docx/pptx/xlsx
+only — purely office ops, no argument-awareness needed). Defaults KEEP
+office (behavior unchanged); trim drops it.
 
-### R6 — consumer docs + changelog + CAPABILITY_ROADMAP promotion
-At release time: README (registerFallbackFont + trim), changelog cut
-(Engine updated bullet per the standard — submodule bumped), companion
-CJK asset package decision.
+### R6 — consumer docs — README SHIPPED; release items open
+README: "CJK & emoji in form fields" (registerFallbackFont) + "Ship only
+what you use (trim)" sections. STILL OPEN at release time: changelog cut
+(Engine updated bullet REQUIRED — submodule pointer changed),
+CAPABILITY_ROADMAP promotion, companion CJK asset package decision.
 
-## Verification status (Stage 3 tree)
+## Verification status
 
-test-rust PASS · analyze PASS · test-ops-native PASS · web: one jspi
-`engine init` 2s-timeout in the chain run (solo rerun pending — earlier
-identical pattern was environment load; if solo passes, chalk to env like
-the atomics stress OOM, else diff the new feature set's glue).
+Stage 3: test-rust PASS · analyze PASS · test-ops-native PASS · the two
+web flakes (atomics stress OOM, jspi 2s init timeout) both passed solo
+reruns — environmental. R1–R5: trim tests 13/13 · shake-audit PASS
+(pre-office run; post-office rerun in flight) · cargo check green on
+native core / native full+public-api / wasm lib with and without office
+(the 2 unused-import wasm warnings in document_editor.rs are
+pre-existing, present with office on and off). Final full gates
+(analyze / test-rust / test-ops-native) run after the R6 commit.
 
 ## Scratch
 

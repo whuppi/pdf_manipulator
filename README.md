@@ -46,10 +46,12 @@ Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extrac
   - [Read a document](#read-a-document)
   - [Edit a document](#edit-a-document)
   - [Build from scratch](#build-from-scratch)
+  - [CJK & emoji in form fields](#cjk--emoji-in-form-fields)
 - [Error handling](#error-handling)
 - [Platform support](#platform-support)
   - [Browser support](#browser-support)
   - [Web I/O modes](#web-io-modes)
+- [Ship only what you use (trim)](#ship-only-what-you-use-trim)
 - [Not in the box](#not-in-the-box)
 - [Docs](#docs)
 
@@ -395,6 +397,20 @@ Pages: `addA4Page` / `addLetterPage` / `addPage` (custom size). Content: `text`,
 
 ---
 
+### CJK & emoji in form fields
+
+Filling a form with text the field's own font cannot draw (Japanese, Korean, Chinese, emoji) needs a fallback font. The binary doesn't bundle one (that's multiple MB most apps never use) — you register your own once, and every later fill uses it:
+
+```dart
+final fontBytes = await rootBundle.load('assets/NotoSansCJK.otf');
+await pdf.registerFallbackFont(
+    PdfFallbackFontKind.cjk, fontBytes.buffer.asUint8List());
+```
+
+`PdfFallbackFontKind.emoji` works the same way. Without a registered font the fill still succeeds — the value is stored correctly and readers with their own fonts display it; only the baked-in (flattened) appearance falls back to the field's font.
+
+---
+
 ## Error handling
 
 Every failure is a typed subclass of `PdfError`: no string matching, no `PlatformException`. Catch the cases you handle specially; let the rest fall to a catch-all. Each error carries a human-readable `message`.
@@ -526,6 +542,56 @@ For local dev, Flutter adds the headers for you:
 ```sh
 flutter run -d chrome --cross-origin-isolation
 ```
+
+</details>
+
+---
+
+## Ship only what you use (trim)
+
+The default binary carries every capability. If your app only uses some of them, trim tells the build to keep exactly what your code can reach — the rest is deleted at compile time (the same contract as Dart's own tree shaking: anything not provably unused is kept, so a broken app is not a possible outcome).
+
+```yaml
+# pubspec.yaml of YOUR app
+hooks:
+  user_defines:
+    pdf_manipulator:
+      trim: auto              # a source scan decides what to keep
+```
+
+Prefer to say it yourself? The manual form keeps exactly these capabilities (plus the always-included core — parse, write, edit, forms, extract, build):
+
+```yaml
+      trim:
+        keep: [render, signatures]
+```
+
+Capabilities: `render`, `signatures`, `pdfa`, `office`. On web, run the setup with the flag after configuring pubspec:
+
+```bash
+flutter pub run pdf_manipulator:setup --trim
+```
+
+<details>
+<summary><b>🧩 what trim actually does (and the safety contract)</b></summary>
+
+- `auto` resolves your app's real call graph against this package's API. Any file it cannot resolve means the scan cannot prove anything — you get the FULL binary plus a printed warning (fail closed), never a guess.
+- The keep-set maps to engine build features; a fresh engine is compiled locally with only those (needs a Rust toolchain; the result is cached, so it's a one-time cost per keep-set).
+- A trimmed-out op answers with a typed "not enabled in this build" error naming what to add to `keep:` — defense in depth on top of the source scan.
+- A typo in `trim:` fails the build printing the valid grammar. A config mistake never silently changes what ships.
+- Measured on the reference machine: the full native library is ~21 MB; with every capability trimmed away it is ~12 MB.
+
+</details>
+
+<details>
+<summary><b>🧰 EXPERIMENTAL: the <code>trim-detector</code> selector</b></summary>
+
+```yaml
+      trim-detector: compare   # analyzer trims; release links also print
+                               # what the SDK's @RecordUse recording saw
+```
+
+`analyzer` (default) is the stable source scan above. `record-use` rides the Dart SDK's in-progress usage-recording experiment — today it can only observe (its data appears after the native build), so selecting it as the driver fails with an explanation; `compare` runs the analyzer AND prints the recorded capability set on release builds so the two can be diffed while the SDK lane matures.
 
 </details>
 
