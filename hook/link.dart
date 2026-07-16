@@ -33,9 +33,6 @@ void _reportRecordedCapabilities(LinkInput input) {
   final detector = TrimDetector.parse(input.userDefines['trim-detector']);
   if (detector == TrimDetector.analyzer) return;
 
-  // This whole lane is opt-in experimental; consuming the hooks package's
-  // experimental surface is the deliberate choice, not an accident.
-  // ignore: experimental_member_use
   final recordings = input.recordedUses;
   if (recordings == null) {
     stdout.writeln(
