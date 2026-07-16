@@ -9,7 +9,7 @@
 // expressible here: not droppable, not a foot-gun.
 
 /// One optional heavy module of the engine. Core (parse/write/edit/forms/
-/// extract/builder) is always included and has no capability.
+/// builder) is always included and has no capability.
 enum PdfCapability {
   /// Page rasterization (`PdfDoc.render`) and image re-compression
   /// (`PdfEditor.optimizeImages`, the `compress` one-shot).
@@ -23,7 +23,14 @@ enum PdfCapability {
   pdfa('pdfa', 'pdfa'),
 
   /// PDF ↔ office conversion (DOCX / PPTX / XLSX, both directions).
-  office('office', 'office');
+  /// Requires [extract] engine-side (conversion extracts content first) —
+  /// the cargo feature dependency handles it; keep-lists need not pair them.
+  office('office', 'office'),
+
+  /// Text extraction and everything built on it: plain/markdown/HTML
+  /// extraction, search, page/document classification (includes the CJK
+  /// CID→Unicode tables).
+  extract('extract', 'extract');
 
   const PdfCapability(this.wire, this.cargoFeature);
 
@@ -52,6 +59,10 @@ enum PdfCapability {
     'convertTo': PdfCapability.office,
     'Pdf.convertToPdf': PdfCapability.office,
     'convertToPdf': PdfCapability.office,
+    'PdfDoc.extract': PdfCapability.extract,
+    'PdfDoc.search': PdfCapability.extract,
+    'PdfDoc.classifyPage': PdfCapability.extract,
+    'PdfDoc.classifyDocument': PdfCapability.extract,
   };
 
   /// The capability whose [wire] name is [name], or null.
@@ -92,7 +103,7 @@ class TrimConfig {
       '  trim: auto                     # detector decides\n'
       '  trim:\n'
       '    keep: [render, signatures]   # exactly these capabilities\n'
-      'Capabilities: render, signatures, pdfa, office';
+      'Capabilities: render, signatures, pdfa, office, extract';
 
   /// Parses the raw `trim` user-define value (YAML-decoded).
   static TrimConfig parse(Object? raw) {

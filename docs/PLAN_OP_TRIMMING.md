@@ -169,9 +169,8 @@ bridge exports present), size assertions (core ≥2 MB smaller than full,
 tests in `host/dispatch.rs`, cfg-gated to fire only on trimmed builds).
 Measured ledger (core-only = every capability feature off):
 full 21,109,840 → core 11,804,832 (capabilities) → 9,287,920 (+office
-gate) → 8,398,880 (+extract dominoes 1+2a: CID tables + search) — trim
-now deletes 12.7 MB, 60% of the full native library, with extract
-dominoes 2b/3 still to land. `SHAKE_AUDIT_WASM=1` adds the wasm size check. Never edit the
+gate) → 8,398,880 (+extract CID tables + search) → 6,314,544 (+extract
+root gates) — trim deletes 14.8 MB, 70% of the full native library. `SHAKE_AUDIT_WASM=1` adds the wasm size check. Never edit the
 script while an audit is running — bash re-reads shifted bytes.
 
 ### R5 — office/converters gating — SHIPPED
@@ -266,35 +265,24 @@ layer costs +2.6 KB total):
      python pull extract.
   2a. DONE — search: module + Pdf::search*/highlight_matches API +
      dispatch typed error + trim probe. rust_bench bin requires extract.
-  2b. SCOUTED — extract-format converters. The gating itself is small
-     (converters/mod.rs: gate html/markdown/table_formatter/
-     text_post_processor/whitespace/formula_renderer + their re-exports
-     behind extract; ALSO form_xobject_finder behind office — drift catch,
-     it is office-only). Compile fallout is exactly 4 sites, all the mouth
-     of the document.rs cascade (= domino 3's entry points):
-       - converters/mod.rs whitespace re-export (cleanup_markdown,
-         normalize_whitespace, remove_page_artifacts)
-       - document.rs ~6260 (inside assemble_text_from_spans —
-         whitespace::cleanup_plain_text)
-       - document.rs ~11564 (span normalize loop —
-         TextPostProcessor::normalize_unicode_spaces)
-       - document.rs ~16506 (apply_intelligent_text_processing)
-     Reverted to green rather than start the 1.3 MB-file surgery at a
-     session tail; 2b and 3 land together in a focused session.
-  3. TODO — the deep cascade: pipeline/ + layout ALGORITHM files
-     (text_block, reading_order, clustering, document_analyzer,
-     region_classifier — NOT the shared types) + structure::{
-     spatial_table_detector,table_extractor} + extractors::text (minus
-     the two writer enums) + document.rs extraction impl regions +
-     dispatch extract_text/classify_* typed errors. Compiler-as-radar:
-     gate the leaves, chase document.rs errors. Biggest markered surgery
-     in the fork; budget a focused session.
-  4. TODO — public vocabulary LAST (only when 3 lands): extract
-     capability in capabilities.dart (members: PdfDoc.extract,
-     PdfDoc.search, extract/search sugar, classify*), build.json defaults
-     += extract, grammar/README/ARCHITECTURE updates, shake-audit
-     ceiling + ledger, full gates. The capability must not ship while
-     excluded ops still work (that would lie about exclusion).
+  2b+3. DONE — superseded by ROOT GATES. The planned module-gating
+     cascade through document.rs proved unnecessary: because the shipped
+     artifact is a cdylib, only exported symbols are roots — gating just
+     THREE dispatch fns (extract_text, classify_page, classify_document)
+     let LTO delete the entire extraction web (text_block algorithms,
+     reading_order, pipeline, spatial tables, extract-format converters,
+     extractors::text): 8,398,880 → 6,314,544 (−2.08 MB) with ZERO
+     markered patches in document.rs. Module gates are only needed where
+     core references PIN data (the CID tables via font_dict — domino 1)
+     or where an optional dep must not compile (office_oxide). This is
+     the "cut roots, let LTO shake" thesis — module surgery is the
+     exception, not the method. (form_xobject_finder is office-only —
+     minor drift, fold into any future converters touch-up.)
+  4. DONE — public vocabulary: extract capability (members PdfDoc.extract/
+     search/classifyPage/classifyDocument), build.json defaults +=
+     extract, core promise redefined (parse/write/edit/forms/builder),
+     grammar + README + ARCHITECTURE updated, shake-audit ceiling 8 MB,
+     four trim probes.
 - **panic=abort — CLOSED.** Native lane isolation IS `catch_unwind`
   (host/native/lane.rs: one bad PDF → typed "operation panicked" error,
   engine survives). abort would turn any engine panic into a whole-app

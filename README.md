@@ -566,7 +566,7 @@ Prefer to say it yourself? The manual form keeps exactly these capabilities (plu
         keep: [render, signatures]
 ```
 
-Capabilities: `render`, `signatures`, `pdfa`, `office`. On web, run the setup with the flag after configuring pubspec:
+Capabilities: `render`, `signatures`, `pdfa`, `office`, `extract`. On web, run the setup with the flag after configuring pubspec:
 
 ```bash
 flutter pub run pdf_manipulator:setup --trim

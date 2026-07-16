@@ -11,7 +11,7 @@ import 'package:record_use/record_use.dart';
 import 'package:test/test.dart';
 
 const _defaults =
-    'icc,legacy-crypto,rendering,signatures,native-bridge,pdfa,office';
+    'icc,legacy-crypto,rendering,signatures,native-bridge,pdfa,office,extract';
 
 void main() {
   group('resolveTrimPlan', () {

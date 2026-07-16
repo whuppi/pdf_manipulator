@@ -296,7 +296,7 @@ durable architecture in [`ARCHITECTURE.md`](ARCHITECTURE.md) §Trim.
 | `make shake-audit` verifier | DONE | symbols + size ceiling + typed-error probes |
 | Op-unit dispatch layer (entry + handler + linker anchor per op) | DONE | `vendor/pdf_oxide/src/host/ops/`; registry backend swappable |
 | RecordUse drive path (build full → link hook trims on release) | DONE, dormant | Activates itself when the SDK experiment records; fixture-tested today |
-| `extract` capability (the extraction brain) | PLANNED — needs an explicit maintainer call | The byte autopsy (see PLAN_OP_TRIMMING.md) found ONE cut worth making beyond the shipped capabilities: extraction code + CJK CID tables + regex ≈ 2.6-2.9 MB (30% of core). Gates extract/search/planSplitByBookmarks/classify*; office requires it. Redefines the "core always includes extract" promise — decide BEFORE the first trim release. All other per-op cuts measured at 10-60 KB each: not worth their surface. |
+| `extract` capability | DONE | Extraction + search + classification (+ CJK CID tables). Cut via root gates — three dispatch fns gated, LTO deleted the 2.1 MB web with zero document.rs surgery (see PLAN_OP_TRIMMING.md). Core promise is now parse/write/edit/forms/builder. `office` requires `extract` engine-side. All remaining per-op cuts measured at 10-60 KB each: not worth their surface. |
 
 ### When the futures arrive — tracked triggers + exact approach
 

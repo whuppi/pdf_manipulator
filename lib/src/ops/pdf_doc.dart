@@ -105,6 +105,7 @@ class PdfDoc {
     required PdfPages pages,
     PdfExtractionFormat format = PdfExtractionFormat.auto,
   }) {
+    TrimRecord.op('extract');
     _check();
     return _handle.extract(pages: pages, format: format);
   }
@@ -114,6 +115,7 @@ class PdfDoc {
     required String query,
     required PdfPages pages,
   }) {
+    TrimRecord.op('extract');
     _check();
     return _handle.search(query: query, pages: pages);
   }
@@ -167,12 +169,14 @@ class PdfDoc {
 
   /// Classifies a single [page] by its content type (text, image, mixed).
   PdfTask<PdfPageClassification> classifyPage(int page) {
+    TrimRecord.op('extract');
     _check();
     return _handle.classifyPage(page);
   }
 
   /// Classifies the entire document by its overall content type.
   PdfTask<PdfDocumentClassification> classifyDocument() {
+    TrimRecord.op('extract');
     _check();
     return _handle.classifyDocument();
   }

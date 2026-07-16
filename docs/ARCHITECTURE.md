@@ -914,14 +914,15 @@ is kept; the failure direction is a bigger binary, never a broken app.
 ### Vocabulary
 
 Users speak capabilities, never cargo features. Core
-(parse/write/edit/forms/extract/builder) is always included.
+(parse/write/edit/forms/builder) is always included.
 
 | Capability | Gates |
 |---|---|
 | `render` | page rasterization, image re-compression |
 | `signatures` | signing + verification |
 | `pdfa` | PDF/A validation + conversion (bundles the Liberation faces the spec requires) |
-| `office` | PDF ↔ DOCX/PPTX/XLSX (gates the office_oxide crate) |
+| `office` | PDF ↔ DOCX/PPTX/XLSX (gates the office_oxide crate; requires `extract`) |
+| `extract` | text extraction + search + page/document classification (includes the CJK CID→Unicode tables) |
 
 Grammar (`hooks: user_defines: pdf_manipulator:` in the app pubspec):
 `trim: auto` (detector decides) · `trim: {keep: [...]}` (exact manual
