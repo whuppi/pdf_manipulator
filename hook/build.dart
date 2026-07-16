@@ -585,10 +585,21 @@ bool _isCustomFeatureSet = false;
 
 Future<void> _applyUserDefines(BuildInput input) async {
   final TrimConfig config;
+  final TrimDetector detector;
   try {
     config = TrimConfig.parse(input.userDefines['trim']);
+    detector = TrimDetector.parse(input.userDefines['trim-detector']);
   } on TrimConfigError catch (e) {
     throw StateError('$e');
+  }
+  if (detector == TrimDetector.recordUse) {
+    throw StateError(
+      'pdf_manipulator trim-detector record-use is EXPERIMENTAL and cannot '
+      'drive the native build yet: @RecordUse data only exists after AOT '
+      'compilation, which happens after this hook compiles the engine. '
+      'Use trim-detector: compare to observe RecordUse alongside the '
+      'analyzer, or remove the key for the analyzer detector.',
+    );
   }
 
   Set<PdfCapability>? keep;

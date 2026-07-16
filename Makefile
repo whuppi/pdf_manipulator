@@ -1,7 +1,7 @@
 .PHONY: check analyze analyze-floor platforms lint-shell format fixtures test-guards \
        build build-native build-wasm \
        compile-macos compile-ios compile-android compile-linux compile-windows compile-wasm compile-natives \
-       test test-pkg-native test-unit test-rust \
+       test test-pkg-native test-unit test-rust shake-audit \
        test-ops test-ops-native test-ops-web test-ops-opfs test-ops-jspi test-ops-atomics \
        test-example test-example-matrix test-example-macos test-example-linux test-example-windows \
        test-example-android test-example-ios test-example-device \
@@ -260,6 +260,12 @@ test-ops-atomics:
 # incremental cache for the test build: every test still compiles and runs
 # identically; only interactive backtraces lose symbol names (CI prints the
 # assertion output regardless).
+# Trim guarantee verifier: core-only build must drop the heavy modules
+# (symbols absent, size under ceiling) and excluded ops must answer the
+# typed not-enabled error. SHAKE_AUDIT_WASM=1 adds the wasm size check.
+shake-audit:
+	bash tool/shake_audit.sh
+
 test-rust: export CARGO_INCREMENTAL := 0
 test-rust: export CARGO_PROFILE_DEV_DEBUG := 0
 test-rust: export CARGO_PROFILE_TEST_DEBUG := 0

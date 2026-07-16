@@ -91,4 +91,29 @@ void main() {
       }
     });
   });
+
+  group('trim-detector selector', () {
+    test('absent means analyzer', () {
+      expect(TrimDetector.parse(null), TrimDetector.analyzer);
+    });
+
+    test('all three wire names parse', () {
+      expect(TrimDetector.parse('analyzer'), TrimDetector.analyzer);
+      expect(TrimDetector.parse('record-use'), TrimDetector.recordUse);
+      expect(TrimDetector.parse('compare'), TrimDetector.compare);
+    });
+
+    test('unknown detector fails loudly with the valid set', () {
+      expect(
+        () => TrimDetector.parse('recorduse'),
+        throwsA(
+          isA<TrimConfigError>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains('recorduse'), contains('analyzer')),
+          ),
+        ),
+      );
+    });
+  });
 }
