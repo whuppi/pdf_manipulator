@@ -167,10 +167,11 @@ builds, nm symbol autopsy (banned public-api C exports absent, lane
 bridge exports present), size assertions (core ≥2 MB smaller than full,
 13 MB ceiling), and the typed not-enabled runtime probes (Rust unit
 tests in `host/dispatch.rs`, cfg-gated to fire only on trimmed builds).
-Measured (office feature in place): full 21,109,840 → core-only
-9,287,920 — trim deletes 11.8 MB, 56% of the full native library
-(pre-office-split core was 11,804,832; gating office shaved another
-2.5 MB). `SHAKE_AUDIT_WASM=1` adds the wasm size check. Never edit the
+Measured ledger (core-only = every capability feature off):
+full 21,109,840 → core 11,804,832 (capabilities) → 9,287,920 (+office
+gate) → 8,398,880 (+extract dominoes 1+2a: CID tables + search) — trim
+now deletes 12.7 MB, 60% of the full native library, with extract
+dominoes 2b/3 still to land. `SHAKE_AUDIT_WASM=1` adds the wasm size check. Never edit the
 script while an audit is running — bash re-reads shifted bytes.
 
 ### R5 — office/converters gating — SHIPPED
