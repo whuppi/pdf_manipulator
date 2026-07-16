@@ -78,6 +78,18 @@ One table in the package: 32 EngineOps (+ sugar/builder composition) →
 cargo features each requires. Guarded by wire_sync-style parity test so a
 new op cannot ship unmapped.
 
+### Dual-detector decision (2026-07-16)
+
+Both detectors ship behind one selector; public `trim:` grammar unchanged:
+`trim-detector: analyzer` (default, stable, all platforms) |
+`record-use` (EXPERIMENTAL, native+release only, loud failure elsewhere;
+implemented via an internal static `useOp('<op>')` shim inside each public
+op method — zero public API change, deleted when dart-lang/native#2902
+ships instance-method support) | `compare` (trims with analyzer, runs
+both, prints the keep-set diff — the living testbed for RecordUse
+maturity). Our instance-method API is correct Dart design and does NOT
+get reworked for RecordUse's current statics-only limit.
+
 ### R2 — detector productionization
 Promote the validated prototype (resolved-AST call-finder; 13/13 ground
 truth on example/) into package tooling. Input: app source root. Output:
