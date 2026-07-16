@@ -114,7 +114,7 @@ build hooks. Tracking: [dart-lang/native#988](https://github.com/dart-lang/nativ
 
 </details>
 
-That's it — every platform now runs the full engine. Curious where that binary comes from, or want to ship a smaller one with only the features you use? [The engine binary](#the-engine-binary).
+That's it — every platform now runs the full engine. **Before you ship: it can be up to 70% smaller.** One pubspec entry keeps only the features your app uses — [The engine binary](#the-engine-binary).
 
 ---
 
