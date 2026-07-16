@@ -250,13 +250,39 @@ layer costs +2.6 KB total):
 
 ### Verdicts
 
-- **`extract` capability — the one remaining worthwhile cut (~2.6-2.9 MB,
-  30% of core).** Gates extract/search/planSplitByBookmarks/classifyPage/
-  classifyDocument + cid_mappings + the regex stack; `office` requires it.
-  PARKED pending an explicit call: it redefines the public core promise
-  (grammar says core includes extract) — free before the trim release,
-  breaking after. Entanglement pass bigger than office (document.rs is
-  1.3 MB of interwoven source).
+- **`extract` capability — APPROVED (2026-07-17), executing as dominoes.**
+  ~2.6-2.9 MB, 30% of core. Survey verdicts: `layout/` is a chasm (20
+  consumers incl. the writer core — shared geometry/span types must stay;
+  only the algorithms gate); `structure/` splits (tagged-tree machinery
+  serves pdfa/writing; only spatial_table_detector + table_extractor are
+  extract-only); writer needs just two enums from extractors::text
+  (ArtifactType, PaginationSubtype — carve out); planSplitByBookmarks is
+  outline-only → STAYS CORE (do not map it to the capability).
+
+  The domino queue (each lands green + committed before the next):
+  1. DONE — cid_mappings CJK tables (~0.9 MB): lookups return None when
+     off; callers' fallback chains degrade gracefully. office/public-api/
+     python pull extract.
+  2a. DONE — search: module + Pdf::search*/highlight_matches API +
+     dispatch typed error + trim probe. rust_bench bin requires extract.
+  2b. TODO — extract-format converters (converters::{markdown,html,
+     whitespace,text_post_processor,table_formatter} + pipeline/
+     converters) — consumers: document.rs to_markdown/html paths (leads
+     into 3).
+  3. TODO — the deep cascade: pipeline/ + layout ALGORITHM files
+     (text_block, reading_order, clustering, document_analyzer,
+     region_classifier — NOT the shared types) + structure::{
+     spatial_table_detector,table_extractor} + extractors::text (minus
+     the two writer enums) + document.rs extraction impl regions +
+     dispatch extract_text/classify_* typed errors. Compiler-as-radar:
+     gate the leaves, chase document.rs errors. Biggest markered surgery
+     in the fork; budget a focused session.
+  4. TODO — public vocabulary LAST (only when 3 lands): extract
+     capability in capabilities.dart (members: PdfDoc.extract,
+     PdfDoc.search, extract/search sugar, classify*), build.json defaults
+     += extract, grammar/README/ARCHITECTURE updates, shake-audit
+     ceiling + ledger, full gates. The capability must not ship while
+     excluded ops still work (that would lie about exclusion).
 - **panic=abort — CLOSED.** Native lane isolation IS `catch_unwind`
   (host/native/lane.rs: one bad PDF → typed "operation panicked" error,
   engine survives). abort would turn any engine panic into a whole-app
