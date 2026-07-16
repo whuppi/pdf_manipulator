@@ -61,8 +61,6 @@ Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extrac
 
 ## Install
 
-Every platform gets the full engine by default. Where that binary comes from, and how to ship a smaller one with only the features your app uses: [The engine binary](#the-engine-binary).
-
 ### Add the dependency
 
 ```yaml
@@ -115,6 +113,8 @@ This will go away when Dart/Flutter adds WASM/JS asset support to
 build hooks. Tracking: [dart-lang/native#988](https://github.com/dart-lang/native/issues/988)
 
 </details>
+
+That's it — every platform now runs the full engine. Curious where that binary comes from, or want to ship a smaller one with only the features you use? [The engine binary](#the-engine-binary).
 
 ---
 
