@@ -263,10 +263,13 @@ test-ops-atomics:
 test-rust: export CARGO_INCREMENTAL := 0
 test-rust: export CARGO_PROFILE_DEV_DEBUG := 0
 test-rust: export CARGO_PROFILE_TEST_DEBUG := 0
+# public-api is test-only: shipped builds (build.json feature lists) exclude
+# the crate's own wasm/C API surfaces, but the upstream test suites cover
+# them, so tests compile and run WITH the feature.
 test-rust:
 	@echo "=== Rust: pdf_oxide ==="
 	$(CARGO) test --manifest-path vendor/pdf_oxide/Cargo.toml \
-	  --features "$$(bash tool/compile_rust.sh --features native),test-support"
+	  --features "$$(bash tool/compile_rust.sh --features native),test-support,public-api"
 	@echo "=== Rust: office_oxide ==="
 	$(CARGO) test --manifest-path vendor/office_oxide/Cargo.toml
 

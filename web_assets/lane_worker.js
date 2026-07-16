@@ -247,11 +247,18 @@ function wrapJspiImports(imports) {
 // JSPI path drives the wasm-bindgen ABI manually (the generated glue
 // is synchronous; promising() needs the raw export). Mirrors the
 // glue's own calling convention for lane_execute.
+//
+// Buffers go through lane_alloc/lane_dealloc — never the glue's numbered
+// __wbindgen_export_N aliases: those are renumbered whenever the module's
+// export set changes, which turns into memory corruption here.
+// (__wbindgen_add_to_stack_pointer is a fixed name and safe.)
 async function callLaneJspi(requestBytes, sourceLengthsPacked, sinkCount) {
   const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-  const ptr0 = wasm.__wbindgen_export(requestBytes.length, 1) >>> 0;
+  const ptr0 = wasm.lane_alloc(requestBytes.length) >>> 0;
+  if (requestBytes.length && !ptr0) throw new Error('lane_alloc failed');
   new Uint8Array(wasm.memory.buffer).set(requestBytes, ptr0);
-  const ptr1 = wasm.__wbindgen_export(sourceLengthsPacked.length, 1) >>> 0;
+  const ptr1 = wasm.lane_alloc(sourceLengthsPacked.length) >>> 0;
+  if (sourceLengthsPacked.length && !ptr1) throw new Error('lane_alloc failed');
   new Uint8Array(wasm.memory.buffer).set(sourceLengthsPacked, ptr1);
   try {
     await jspiLaneExecute(retptr, lanePtr, ptr0, requestBytes.length, ptr1, sourceLengthsPacked.length, sinkCount);
@@ -259,7 +266,7 @@ async function callLaneJspi(requestBytes, sourceLengthsPacked, sinkCount) {
     const r0 = mem.getInt32(retptr, true);
     const r1 = mem.getInt32(retptr + 4, true);
     const result = new Uint8Array(wasm.memory.buffer, r0, r1).slice();
-    wasm.__wbindgen_export4(r0, r1, 1);
+    wasm.lane_dealloc(r0, r1);
     return result;
   } finally {
     wasm.__wbindgen_add_to_stack_pointer(16);
