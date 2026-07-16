@@ -168,9 +168,11 @@ bridge exports present), size assertions (core ≥2 MB smaller than full,
 13 MB ceiling), and the typed not-enabled runtime probes (Rust unit
 tests in `host/dispatch.rs`, cfg-gated to fire only on trimmed builds).
 Measured ledger (core-only = every capability feature off):
-full 21,109,840 → core 11,804,832 (capabilities) → 9,287,920 (+office
+full 21,145,584 → core 11,804,832 (capabilities) → 9,287,920 (+office
 gate) → 8,398,880 (+extract CID tables + search) → 6,314,544 (+extract
-root gates) — trim deletes 14.8 MB, 70% of the full native library. `SHAKE_AUDIT_WASM=1` adds the wasm size check. Never edit the
+root gates) — trim deletes 14.8 MB, 70% of the full native library.
+Wasm: default 17,213,445 raw / 7,235,769-ish gz → core-only 5,198,079
+raw / 1,939,245 gz — the wire drops 73%. `SHAKE_AUDIT_WASM=1` adds the wasm size check. Never edit the
 script while an audit is running — bash re-reads shifted bytes.
 
 ### R5 — office/converters gating — SHIPPED

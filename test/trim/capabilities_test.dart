@@ -2,6 +2,8 @@
 // else fails LOUDLY. These tests pin the grammar and the loud-failure
 // guarantee (a silent full-binary fallback would lie about the request).
 
+import 'dart:io';
+
 import 'package:pdf_manipulator/src/trim/capabilities.dart';
 import 'package:test/test.dart';
 
@@ -114,6 +116,23 @@ void main() {
           ),
         ),
       );
+    });
+  });
+
+  group('README capability table', () {
+    test('lists every detector member (drift guard)', () {
+      final readme = File('README.md').readAsStringSync();
+      final start = readme.indexOf('| Capability | Keep it if you call |');
+      expect(start, greaterThan(0), reason: 'capability table missing');
+      final table = readme.substring(start, readme.indexOf('\n\n', start));
+      for (final member in PdfCapability.apiMembers.keys) {
+        final method = member.split('.').last;
+        expect(
+          table.contains(method),
+          isTrue,
+          reason: '$method (from apiMembers) is not in the README table',
+        );
+      }
     });
   });
 }

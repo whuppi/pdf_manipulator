@@ -55,6 +55,16 @@ void main(List<String> args) {
     check('native core', [_mb(core)]);
     final pct = ((full - core) * 100 / full).round();
     check('trim percentage', ['about $pct% of the native library']);
+    final wasmCoreRaw = sizes['wasmCoreRaw'] as int?;
+    final wasmCoreGz = sizes['wasmCoreGz'] as int?;
+    if (wasmCoreRaw == null || wasmCoreGz == null) {
+      skips.add(
+        'wasm core sizes (run `SHAKE_AUDIT_WASM=1 make shake-audit`)',
+      );
+    } else {
+      check('wasm core raw', [_mb(wasmCoreRaw)]);
+      check('wasm core gzipped', [_mb(wasmCoreGz)]);
+    }
   }
 
   // ── default wasm, raw + gzipped ──

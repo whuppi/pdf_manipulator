@@ -68,11 +68,19 @@ echo "== [4/4] runtime probe: excluded op answers typed error =="
 
 if [ "${SHAKE_AUDIT_WASM:-0}" = "1" ]; then
   echo "== [wasm] core-only wasm build + size check =="
-  OUT=$(mktemp -d)
-  PDF_FEATURES_WASM="wasm" "$ROOT/tool/compile_rust.sh" wasm "$OUT"
-  WASM_SIZE=$(stat -f%z "$OUT/pdf_oxide_bg.wasm")
-  echo "core wasm: $WASM_SIZE bytes"
-  [ "$WASM_SIZE" -lt 17213445 ] || fail "core-only wasm not smaller than the full default"
+  # compile_rust.sh always writes web_assets/ — preserve the default artifact.
+  DEFAULT_RAW=$(stat -f%z "$ROOT/web_assets/pdf_oxide_bg.wasm")
+  BAK=$(mktemp -d)
+  cp "$ROOT/web_assets/pdf_oxide_bg.wasm" "$ROOT/web_assets/pdf_oxide.js" "$BAK/"
+  PDF_FEATURES_WASM="wasm" bash "$ROOT/tool/compile_rust.sh" wasm
+  WASM_CORE_RAW=$(stat -f%z "$ROOT/web_assets/pdf_oxide_bg.wasm")
+  WASM_CORE_GZ=$(gzip -c "$ROOT/web_assets/pdf_oxide_bg.wasm" | wc -c | tr -d ' ')
+  cp "$BAK/pdf_oxide_bg.wasm" "$BAK/pdf_oxide.js" "$ROOT/web_assets/"
+  echo "core wasm: $WASM_CORE_RAW raw, $WASM_CORE_GZ gzipped"
+  [ "$WASM_CORE_RAW" -lt "$DEFAULT_RAW" ] || fail "core-only wasm not smaller than the full default"
+  cat > "$ROOT/tool/.shake_sizes.json" <<JSON
+{"nativeFull": $FULL_SIZE, "nativeCore": $CORE_SIZE, "wasmCoreRaw": $WASM_CORE_RAW, "wasmCoreGz": $WASM_CORE_GZ}
+JSON
 fi
 
 echo "SHAKE-AUDIT PASS"

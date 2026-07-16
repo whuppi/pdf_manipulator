@@ -442,6 +442,16 @@ try {
 
 The default binary carries every capability. If your app only uses some of them, trim tells the build to keep what your code can reach and delete the rest at compile time. It follows the same safety rule as Dart's own tree shaking: when the build cannot prove that your app skips something, it keeps it. The worst case is a slightly bigger binary — never a missing feature.
 
+What it's worth (measured):
+
+| Engine | Full (default) | Everything trimmed away |
+|---|---|---|
+| Native library | ~21.1 MB | ~6.3 MB |
+| Web — download size (gzipped) | ~7.2 MB | ~1.9 MB |
+| Web — raw wasm | ~17.2 MB | ~5.2 MB |
+
+That's about 70% of the native library and almost three quarters of the web download. Real apps land between the columns — you pay only for what you keep.
+
 ```yaml
 # pubspec.yaml of YOUR app
 hooks:
@@ -457,7 +467,19 @@ Prefer to say it yourself? The manual form keeps exactly these capabilities (plu
         keep: [render, signatures]
 ```
 
-Capabilities: `render`, `signatures`, `pdfa`, `office`, `extract`. On web, run the setup with the flag after configuring pubspec:
+How do you know what to keep? Each capability covers a small set of methods — everything else (merge, split, forms, watermark, encrypt, build…) is core and always included:
+
+| Capability | Keep it if you call |
+|---|---|
+| `render` | `doc.render()`, `editor.optimizeImages()`, the `compress` one-shot |
+| `signatures` | `sign()`, `doc.getSignatures()`, `doc.verifySignatures()` |
+| `pdfa` | `doc.validatePdfA()`, `doc.validatePdfUa()`, `convertToPdfA` |
+| `office` | `convertTo`, `convertToPdf` (DOCX / PPTX / XLSX) |
+| `extract` | `doc.extract()`, `doc.search()`, `doc.classifyPage()`, `doc.classifyDocument()` |
+
+Not sure? Use `trim: auto` — the scan answers this for you. And if you ever guess wrong, the error message names the missing capability.
+
+On web, run the setup with the flag after configuring pubspec:
 
 ```bash
 flutter pub run pdf_manipulator:setup --trim
@@ -470,8 +492,6 @@ flutter pub run pdf_manipulator:setup --trim
 - A trimmed engine is compiled on your machine, so you need [Rust](https://rustup.rs) installed. The result is cached; you pay the compile once.
 - Call something you trimmed away and you get a clear error saying what to add to `keep:`. No crashes, no silent misbehavior.
 - A typo in `trim:` fails the build and prints the valid options.
-- How much it saves depends on what you keep. Trimming everything away removes about 70% of the native library (~21.1 MB full → ~6.3 MB core-only).
-- On web the default engine is ~17.2 MB raw, ~7.2 MB gzipped on the wire; a trimmed build shrinks the same way.
 
 </details>
 
