@@ -464,14 +464,14 @@ flutter pub run pdf_manipulator:setup --trim
 ```
 
 <details>
-<summary><b>🧩 what trim actually does (and the safety contract)</b></summary>
+<summary><b>🧩 how trim works</b></summary>
 
-- `auto` resolves your app's real call graph against this package's API. Any file it cannot resolve means the scan cannot prove anything — you get the FULL binary plus a printed warning (fail closed), never a guess.
-- The keep-set maps to engine build features; a fresh engine is compiled locally with only those (needs a Rust toolchain; the result is cached, so it's a one-time cost per keep-set).
-- A trimmed-out op answers with a typed "not enabled in this build" error naming what to add to `keep:` — defense in depth on top of the source scan.
-- A typo in `trim:` fails the build printing the valid grammar. A config mistake never silently changes what ships.
-- The saving depends on your keep-set. Trimming every capability away removes about 70% of the native library (~21.1 MB full → ~6.3 MB core-only, measured by `make shake-audit`).
-- On web the default engine is ~17.2 MB raw, ~7.2 MB gzipped on the wire; a trimmed build shrinks both the same way.
+- `auto` reads your app's code and keeps every capability it can reach. If any file can't be analyzed, you get the full binary and a warning — it never guesses.
+- A trimmed engine is compiled on your machine, so you need [Rust](https://rustup.rs) installed. The result is cached; you pay the compile once.
+- Call something you trimmed away and you get a clear error saying what to add to `keep:`. No crashes, no silent misbehavior.
+- A typo in `trim:` fails the build and prints the valid options.
+- How much it saves depends on what you keep. Trimming everything away removes about 70% of the native library (~21.1 MB full → ~6.3 MB core-only).
+- On web the default engine is ~17.2 MB raw, ~7.2 MB gzipped on the wire; a trimmed build shrinks the same way.
 
 </details>
 
