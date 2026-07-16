@@ -61,6 +61,8 @@ Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extrac
 
 ## Install
 
+Every platform gets the full engine by default. Where that binary comes from, and how to ship a smaller one with only the features your app uses: [The engine binary](#the-engine-binary).
+
 ### Add the dependency
 
 ```yaml
@@ -74,7 +76,7 @@ Nothing to do. On iOS, Android, macOS, Windows, and Linux, the build hook downlo
 
 ### Web
 
-Web can't auto-download native assets, so run setup once. It fetches the prebuilt WASM engine (details and a way to shrink it: [The engine binary](#the-engine-binary)). Run it again after any `pub upgrade`, since the asset is tied to the package version:
+Web can't auto-download native assets, so run setup once. It fetches the prebuilt WASM engine. Run it again after any `pub upgrade`, since the asset is tied to the package version:
 
 ```sh
 flutter pub run pdf_manipulator:setup
