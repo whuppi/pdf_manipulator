@@ -171,9 +171,11 @@ builds, nm symbol autopsy (banned public-api C exports absent, lane
 bridge exports present), size assertions (core ≥2 MB smaller than full,
 13 MB ceiling), and the typed not-enabled runtime probes (Rust unit
 tests in `host/dispatch.rs`, cfg-gated to fire only on trimmed builds).
-Measured pre-office-split: full 21,109,840 → core-only 11,804,832
-(−9.3 MB). `SHAKE_AUDIT_WASM=1` adds the wasm size check. Never edit
-the script while an audit is running — bash re-reads shifted bytes.
+Measured (office feature in place): full 21,109,840 → core-only
+9,287,920 — trim deletes 11.8 MB, 56% of the full native library
+(pre-office-split core was 11,804,832; gating office shaved another
+2.5 MB). `SHAKE_AUDIT_WASM=1` adds the wasm size check. Never edit the
+script while an audit is running — bash re-reads shifted bytes.
 
 ### R5 — office/converters gating — SHIPPED
 The entanglement turned out clean: the 9 cross-tree consumers only use
@@ -199,11 +201,12 @@ CAPABILITY_ROADMAP promotion, companion CJK asset package decision.
 Stage 3: test-rust PASS · analyze PASS · test-ops-native PASS · the two
 web flakes (atomics stress OOM, jspi 2s init timeout) both passed solo
 reruns — environmental. R1–R5: trim tests 13/13 · shake-audit PASS
-(pre-office run; post-office rerun in flight) · cargo check green on
+(post-office: full 21.1 MB → core 9.29 MB, both runtime probes green) ·
+test-rust PASS (both crates) · test-ops-native 234/234 · cargo check
+green on
 native core / native full+public-api / wasm lib with and without office
 (the 2 unused-import wasm warnings in document_editor.rs are
-pre-existing, present with office on and off). Final full gates
-(analyze / test-rust / test-ops-native) run after the R6 commit.
+pre-existing, present with office on and off) · make analyze PASS.
 
 ## Scratch
 
