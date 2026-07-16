@@ -251,6 +251,50 @@ Fleet note: this is the standard-setter shape for future packages —
 data through one door, reachability through per-unit symbols, registry
 backend swappable, futures made cheap rather than pre-built.
 
+## The core byte autopsy (2026-07-17) — where 9.29 MB lives, and the verdicts
+
+Method that survived scrutiny: macOS linker map (`-Wl,-map`) on the exact
+release build — cargo-bloat's numbers were untrustworthy (its own build,
+strip disabled) and nm address-deltas fabricated a "925 KB KANGXI table"
+(real size: 19 KB source). Trust only per-symbol sizes from the map.
+
+Core (icc,legacy-crypto,native-bridge; 9,290,592 stripped — the op-unit
+layer costs +2.6 KB total):
+
+| Bucket | ~Size | Notes |
+|---|---|---|
+| extraction brain (code) | 1.7 MB | spatial_table_detector 295K · layout::text_block 232K · reading_order 190K · extractors::text 129K · pipeline::converters 118K · document.rs extraction share |
+| CJK CID→Unicode tables (const) | 940 KB | `fonts/cid_mappings/` (adobe gb1/cns1/korea1/japan1) — predefined CMaps for CJK text extraction |
+| regex stack | 450 KB | pulled ~entirely by extraction (markdown/citations/whitespace/search) |
+| always-core (parser, writers, forms+appearances, fonts machinery, crypto, codecs) | ~3.4 MB | the six promises; PDF is a monster spec (MuPDF ~8 MB, pdfium ~10 MB) |
+| unwind/exception metadata | ~1.0 MB | scales with code |
+| Rust runtime | ~0.7 MB | fixed |
+
+### Verdicts
+
+- **`extract` capability — the one remaining worthwhile cut (~2.6-2.9 MB,
+  30% of core).** Gates extract/search/planSplitByBookmarks/classifyPage/
+  classifyDocument + cid_mappings + the regex stack; `office` requires it.
+  PARKED pending an explicit call: it redefines the public core promise
+  (grammar says core includes extract) — free before the trim release,
+  breaking after. Entanglement pass bigger than office (document.rs is
+  1.3 MB of interwoven source).
+- **panic=abort — CLOSED.** Native lane isolation IS `catch_unwind`
+  (host/native/lane.rs: one bad PDF → typed "operation panicked" error,
+  engine survives). abort would turn any engine panic into a whole-app
+  crash — violates the broken-app-is-impossible law. Wasm already ships
+  panic=abort via `release-small` (the JS worker boundary provides the
+  isolation there). Nothing left to win.
+- **writer monomorphization dedup — CLOSED.** Measured, not eyeballed:
+  the honest dedupable waste is the write_full/finish/assemble pairs
+  (Boxed vs Seek writer), ~150-200 KB (2% of core) — the rest of the
+  441 KB "duplication" is distinct generic instantiations, not waste.
+  Price: dyn dispatch in the hottest safety-critical write loop +
+  invasive upstream surgery. Bad trade at 2%.
+- **opt-level=z** — possible ~15-20% of text at CPU cost on every op;
+  wrong default for a PDF engine. Could become a trim option only if
+  users ask.
+
 ## Verification status
 
 Stage 3: test-rust PASS · analyze PASS · test-ops-native PASS · the two
