@@ -901,6 +901,82 @@ Everything in `src/host/` is entirely ours — no patch markers needed.
 
 ---
 
+## Trim — ship only the ops the app calls
+
+The engine cannot be tree-shaken by Dart (the op name crosses FFI as
+runtime data, so every dispatch arm looks reachable). Trim recreates the
+contract at the source level: a detector proves which capabilities the
+app can reach, the keep-set maps to cargo features that delete the
+unreachable dispatch arms and modules, and Rust's LTO erases everything
+behind them. Conservative by construction — anything not provably unused
+is kept; the failure direction is a bigger binary, never a broken app.
+
+### Vocabulary
+
+Users speak capabilities, never cargo features. Core
+(parse/write/edit/forms/extract/builder) is always included.
+
+| Capability | Gates |
+|---|---|
+| `render` | page rasterization, image re-compression |
+| `signatures` | signing + verification |
+| `pdfa` | PDF/A validation + conversion (bundles the Liberation faces the spec requires) |
+| `office` | PDF ↔ DOCX/PPTX/XLSX (gates the office_oxide crate) |
+
+Grammar (`hooks: user_defines: pdf_manipulator:` in the app pubspec):
+`trim: auto` (detector decides) · `trim: {keep: [...]}` (exact manual
+override) · absent/false (full default binary). Malformed values fail
+the build printing the grammar — a config mistake never silently changes
+what ships. Web: `setup --trim` after configuring pubspec.
+
+### Detectors
+
+| Detector | Status | How |
+|---|---|---|
+| `analyzer` (default) | stable | resolved-AST reachability over the app source (`lib/src/trim/detector.dart`); any unresolvable file → full binary + warning (fail closed) |
+| `record-use` | EXPERIMENTAL, internal | the SDK's `@RecordUse` recordings, read in the link hook after AOT; dormant until the SDK experiment activates |
+| `compare` | internal | analyzer trims; the link hook reports the recorded set for diffing |
+
+The experimental lane is deliberately not documented for consumers yet —
+it exists so the RecordUse integration stays built, in sync, and testable
+as the SDK matures (`docs/PLAN_OP_TRIMMING.md` has the full design).
+
+### Build-mode behavior
+
+| | debug build | release build |
+|---|---|---|
+| no trim | prebuilt download | prebuilt download |
+| analyzer trim (auto or `keep:`) | compiles trimmed (Rust needed, once — cargo caches) | compiles trimmed |
+| record-use trim | prebuilt full binary (debug skips linking) | link hook compiles trimmed |
+
+The analyzer lane trims debug builds too, on purpose: a too-narrow
+`keep:` surfaces its typed "not enabled in this build" error at the
+developer's desk, not in release testing. Debug/release parity beats a
+one-time compile.
+
+Rust is required exactly when the resolution waterfall skips the GitHub
+Release download: any custom (trimmed) feature set, version 0.0.0
+consumers (git branch / path), or download failure — then the vendored
+source in the pub tarball compiles locally.
+
+### The machinery
+
+- `lib/src/trim/` — capabilities + grammar (`capabilities.dart`), the
+  analyzer detector (`detector.dart`), the RecordUse shim
+  (`record_use_shim.dart`). Tooling-only: never exported by the barrel,
+  zero bytes in consumer apps.
+- `lib/src/hook/` — ONE compile path, two callers: `build_constants.dart`
+  (build.json), `engine_compiler.dart` (CodeConfig → target mappings, NDK
+  env, the cargo invocation), `trim_plan.dart` (user-defines → plan,
+  recordings → keep-set). `hook/build.dart` and `hook/link.dart` are thin
+  callers.
+- Engine-side, each droppable capability is a cargo feature; excluded
+  dispatch arms answer a typed "not enabled in this build" error
+  (defense-in-depth — the detector should make it unreachable).
+- `make shake-audit` keeps the guarantee durable across upstream rebases:
+  full vs core-only builds, symbol autopsy, size ceiling, and runtime
+  probes of the typed errors.
+
 ## The one-line summary
 
 > **Four layers, two rules. One Router (the shared brain), dumb lane

@@ -583,18 +583,6 @@ flutter pub run pdf_manipulator:setup --trim
 
 </details>
 
-<details>
-<summary><b>🧰 EXPERIMENTAL: the <code>trim-detector</code> selector</b></summary>
-
-```yaml
-      trim-detector: compare   # analyzer trims; release links also print
-                               # what the SDK's @RecordUse recording saw
-```
-
-`analyzer` (default) is the stable source scan above. `record-use` rides the Dart SDK's in-progress usage-recording experiment — today it can only observe (its data appears after the native build), so selecting it as the driver fails with an explanation; `compare` runs the analyzer AND prints the recorded capability set on release builds so the two can be diffed while the SDK lane matures.
-
-</details>
-
 ---
 
 ## Not in the box
