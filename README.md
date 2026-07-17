@@ -480,12 +480,15 @@ Trimming compiles a custom engine on your machine. There is nothing to set up in
 
 <br>
 
-The same commands the build prints when a tool is missing:
+The same commands the build prints when a tool is missing. Two are the same on every OS:
+
+- **Rust**: the one-line installer at [rustup.rs](https://rustup.rs).
+- **`wasm-bindgen-cli`**: `cargo install wasm-bindgen-cli --version <X>` — run the build once; it prints the exact `<X>` the engine needs.
+
+Two differ per OS:
 
 | Tool | macOS | Linux | Windows |
 |---|---|---|---|
-| Rust | [rustup.rs](https://rustup.rs) | [rustup.rs](https://rustup.rs) | [rustup.rs](https://rustup.rs) |
-| `wasm-bindgen-cli` | `cargo install wasm-bindgen-cli --version <X>` — run the build once; it prints the exact `<X>` the engine needs | same | same |
 | `binaryen` | `brew install binaryen` | `sudo apt-get install binaryen` | [binaryen releases](https://github.com/WebAssembly/binaryen/releases) |
 | `jq` | `brew install jq` | `sudo apt-get install jq` | `choco install jq` |
 
