@@ -63,11 +63,11 @@ enum PdfCapability {
   /// Consumed by the detector. Verified against the engine's cfg gates —
   /// update BOTH together.
   ///
-  /// Keys come in two shapes, and one operation may need BOTH entries:
-  /// the detector keys `Class.member` only when the member's enclosing
-  /// element is a class; extension members and top-level functions
-  /// resolve to the bare name. `Pdf.sign` / `sign` are not duplicates —
-  /// do not dedupe.
+  /// Key shapes document the API surface: `Class.member` for class
+  /// members, bare names for extension and one-shot members. The text
+  /// scan matches only the member part (the last segment), so both
+  /// shapes behave identically to it — the qualified forms exist for
+  /// readers and for the README drift guard, not for lookup precision.
   static const Map<String, PdfCapability> apiMembers = {
     'PdfDoc.render': PdfCapability.render,
     'PdfEditor.optimizeImages': PdfCapability.render,
