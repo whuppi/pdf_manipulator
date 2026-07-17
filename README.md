@@ -470,7 +470,10 @@ What it's worth (measured):
 
 That's about 70% of the native library and almost three quarters of the web download gone. Real apps land between the rows — you pay only for what you keep.
 
-One requirement: trimming compiles a custom engine on your machine, so it needs [Rust](https://rustup.rs) — the same one-line installer on macOS, Linux, and Windows. Skip it and the build tells you exactly this. The web path uses a few more build tools (`wasm-bindgen-cli` at an exact version, `binaryen`, `jq`); you do not need to install them up front — each missing one stops the build with its exact install command.
+Trimming compiles a custom engine on your machine. There is nothing to set up in advance — any missing tool stops the build with its exact install command. What it will ask for:
+
+- **Native** (iOS, Android, macOS, Windows, Linux): [Rust](https://rustup.rs) — the same one-line installer on every OS.
+- **Web**: Rust, plus `wasm-bindgen-cli` (the build names the exact version), `binaryen`, and `jq`.
 
 ```yaml
 # pubspec.yaml of YOUR app
