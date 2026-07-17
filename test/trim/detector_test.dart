@@ -52,6 +52,7 @@ Future<void> use(Pdf pdf, DataSource a, DataSource b, DataSink out) =>
 
 Directory _fixture(Map<String, String> files) {
   final dir = Directory.systemTemp.createTempSync('trim_detector_fixture_');
+  File('${dir.path}/pubspec.yaml').writeAsStringSync('name: fixture_app\n');
   for (final e in files.entries) {
     File('${dir.path}/lib/${e.key}')
       ..parent.createSync(recursive: true)
@@ -126,7 +127,6 @@ Stream<RenderedPage> use(PdfDoc doc) =>
     doc.render(pages: const PdfPages.all());
 ''',
     });
-    File('${dir.path}/pubspec.yaml').writeAsStringSync('name: fixture_app\n');
     addTearDown(() => dir.deleteSync(recursive: true));
 
     final result = detectCapabilities(dir.path);
@@ -138,5 +138,21 @@ Stream<RenderedPage> use(PdfDoc doc) =>
           'barrel-mediated usage must be kept — under-keeping strips '
           'code the app calls',
     );
+  });
+
+  test('missing pubspec fails closed — self-imports cannot resolve', () async {
+    final dir = _fixture({'main.dart': _usesEverything});
+    File('${dir.path}/pubspec.yaml').deleteSync();
+    addTearDown(() => dir.deleteSync(recursive: true));
+
+    final result = detectCapabilities(dir.path);
+    expect(
+      result.resolved,
+      isFalse,
+      reason:
+          'without the app name, package:<self>/ barrel imports '
+          'cannot be tracked — the caller must keep the full binary',
+    );
+    expect(result.unresolvedPaths, contains(endsWith('pubspec.yaml')));
   });
 }

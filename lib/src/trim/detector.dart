@@ -72,18 +72,44 @@ DetectorResult detectCapabilities(
 
   final unresolved = <String>[];
   final sources = <String, String>{}; // canonical path → contents
-  for (final root in roots) {
-    for (final entry in Directory(root).listSync(recursive: true)) {
-      if (entry is! File || !entry.path.endsWith('.dart')) continue;
-      try {
-        sources[p.canonicalize(entry.path)] = entry.readAsStringSync();
-      } on IOException {
-        unresolved.add(entry.path);
+
+  // Manual walk: an unreadable directory records itself and skips its
+  // subtree instead of aborting the whole listing with a throw —
+  // filesystem-level failures fall closed like unreadable files do.
+  void walk(Directory dir) {
+    final List<FileSystemEntity> entries;
+    try {
+      entries = dir.listSync(followLinks: false);
+    } on IOException {
+      unresolved.add(dir.path);
+      return;
+    }
+    for (final entry in entries) {
+      if (entry is Directory) {
+        walk(entry);
+      } else if (entry is File && entry.path.endsWith('.dart')) {
+        try {
+          sources[p.canonicalize(entry.path)] = entry.readAsStringSync();
+        } on IOException {
+          unresolved.add(entry.path);
+        }
       }
     }
   }
 
-  final visible = _filesSeeingApi(appRoot, sources);
+  for (final root in roots) {
+    walk(Directory(root));
+  }
+
+  // Without the pubspec there is no app name, so package:<self>/ barrel
+  // imports cannot be resolved — a possible under-keep. Report it as
+  // unresolved: the caller falls back to the full binary.
+  final pubspec = _tryRead('$appRoot/pubspec.yaml');
+  if (pubspec == null) {
+    unresolved.add('$appRoot/pubspec.yaml');
+  }
+
+  final visible = _filesSeeingApi(appRoot, pubspec, sources);
 
   final keep = <PdfCapability>{};
   final matched = <String>{};
@@ -112,15 +138,19 @@ final _directive = RegExp(
 
 /// The files that can see pdf_manipulator's API: a direct import or
 /// export, or an import/export of an app file that RE-EXPORTS it,
-/// tracked transitively (barrel files). When in doubt — an unreadable
-/// pubspec, an unresolvable path — the answer errs toward "sees it"
-/// never being false for a file that does (over-keep direction).
-Set<String> _filesSeeingApi(String appRoot, Map<String, String> sources) {
+/// tracked transitively (barrel files). [pubspec] resolves
+/// `package:<self>/` imports; when it is null the caller has already
+/// recorded the pubspec as unresolved (full-binary fallback).
+Set<String> _filesSeeingApi(
+  String appRoot,
+  String? pubspec,
+  Map<String, String> sources,
+) {
   // package:<appName>/x.dart resolves into <appRoot>/lib/x.dart.
   final nameMatch = RegExp(
     r'^name:\s*(\S+)',
     multiLine: true,
-  ).firstMatch(_tryRead('$appRoot/pubspec.yaml') ?? '');
+  ).firstMatch(pubspec ?? '');
   final selfPrefix = nameMatch == null ? null : 'package:${nameMatch[1]}/';
 
   String? resolve(String fromFile, String uri) {
