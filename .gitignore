@@ -216,6 +216,9 @@ unlinked_spec.ds
 *.lock
 !pubspec.lock
 !uv.lock
+# analyze-floor's lock snapshot — only exists if a run was interrupted
+# (the make target restores + deletes it on every exit path it owns).
+pubspec.lock.floorbak
 
 # Safety net: Dart/Flutter packages have their source in `lib/` and `bin/`.
 # Re-include them explicitly so no upstream pattern can ever sweep them up
