@@ -30,7 +30,7 @@ VERBOSE := $(if $(CI),--verbose,)
 #
 # make check    Full local gate before PR.
 
-check: lint-shell analyze platforms test-guards test test-example
+check: lint-shell analyze platforms verify-tarball test-guards test test-example
 
 # make hooks    Activate the repo's git hooks (commit-msg, pre-commit).
 #               Run once after cloning — they stay dormant otherwise.
@@ -271,6 +271,11 @@ shake-audit:
 # shake-audit record + the wasm artifact). Run after shake-audit.
 verify-readme-sizes:
 	@$(DART) run tool/verify_readme_sizes.dart
+
+# The pub archive must carry everything a consumer source build needs —
+# pub's filtering honors vendored .gitignore files even for tracked paths.
+verify-tarball:
+	@$(DART) run tool/verify_tarball.dart
 
 test-rust: export CARGO_INCREMENTAL := 0
 test-rust: export CARGO_PROFILE_DEV_DEBUG := 0

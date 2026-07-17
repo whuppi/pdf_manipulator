@@ -69,6 +69,11 @@ CONTENT RULES (never change)
 
 <!-- Add new versions below, newest first. -->
 
+## 2.2.1-dev.0
+
+- Fixed the pub.dev package missing a build file (the engine's `Cargo.lock`), which broke `trim` and every compile-from-source path with "No such file or directory" ([#171](https://github.com/whuppi/pdf_manipulator/issues/171)). Installing from a git tag was the workaround; it is no longer needed.
+- Fixed the web compile error message telling you to install `wasm-pack` — it is not used. The build now points at the tool it actually misses, with the exact install command.
+
 ## 2.2.0-dev.0
 
 - **Breaking:** flattening CJK or emoji form values no longer uses a bundled font (it added 4.4 MB to every install). Register one once: `await pdf.registerFallbackFont(PdfFallbackFontKind.cjk, fontBytes)` (`.emoji` for emoji). Without one the value is still saved correctly — only the baked-in look falls back to the field's own font.

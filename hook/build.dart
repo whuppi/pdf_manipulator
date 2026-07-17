@@ -471,9 +471,8 @@ Future<void> _compileWasm(
     throw StateError(
       'WASM compilation failed (exit ${result.exitCode}).\n'
       'stderr: ${result.stderr}\n\n'
-      'Ensure Rust + wasm-pack are installed:\n'
-      '  https://rustup.rs\n'
-      '  cargo install wasm-pack',
+      'Ensure Rust is installed (https://rustup.rs). Any other missing '
+      'tool is named above with its exact install command.',
     );
   }
 
