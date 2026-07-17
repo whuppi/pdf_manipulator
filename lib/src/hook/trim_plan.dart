@@ -77,7 +77,7 @@ Future<TrimPlan> resolveTrimPlan({
       final result = detectCapabilities(appRootCandidate);
       if (!result.resolved) {
         stderr.writeln(
-          'pdf_manipulator trim: ${result.unresolvedPaths.length} file(s) '
+          'pdf_manipulator trim: ${result.unresolvedPaths.length} path(s) '
           'could not be read — keeping the FULL binary (fail closed).',
         );
         break;
