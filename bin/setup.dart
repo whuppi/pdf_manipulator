@@ -105,8 +105,8 @@ Future<void> _setupWeb(bool force, {bool trim = false}) async {
     final result = detectCapabilities(Directory.current.path);
     if (!result.resolved) {
       stdout.writeln(
-        'trim: ${result.unresolvedPaths.length} file(s) could not be '
-        'resolved — keeping the FULL binary (fail closed). First: '
+        'trim: ${result.unresolvedPaths.length} path(s) could not be '
+        'read — keeping the FULL binary (fail closed). First: '
         '${result.unresolvedPaths.first}',
       );
     } else {
