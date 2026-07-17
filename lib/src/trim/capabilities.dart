@@ -210,7 +210,9 @@ enum TrimMode {
 /// default; [recordUse] and [compare] belong to the EXPERIMENTAL RecordUse
 /// lane (see `record_use_shim.dart`).
 enum TrimDetector {
-  /// Resolved-AST reachability over the app source (default, all platforms).
+  /// Dependency-free text scan over the app source (default, all
+  /// platforms). Wire name kept from the resolved-AST era for config
+  /// compatibility.
   analyzer('analyzer'),
 
   /// EXPERIMENTAL — the SDK's `@RecordUse` recording. Usage data only
