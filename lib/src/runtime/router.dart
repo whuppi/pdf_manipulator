@@ -18,9 +18,11 @@
 //
 // INTERNAL — constructed by the per-platform create functions.
 
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/types/cancel_hook.dart';
+import 'package:pdf_manipulator/src/io/memory_source.dart';
 import 'package:pdf_manipulator/src/runtime/lane.dart';
 import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
 import 'package:pdf_manipulator/src/bridge/pdf_transport.dart';
@@ -83,6 +85,7 @@ class Router implements PdfTransport {
   final PdfIoMode _mode;
 
   final List<_LaneSlot> _lanes = [];
+  final List<({Uint8List request, Uint8List bytes})> _preludes = [];
   final Map<int, _Pin> _pins = {};
   final Map<int, _HeldResource> _held = {};
   int _nextJobId = 1;
@@ -212,6 +215,43 @@ class Router implements PdfTransport {
     _held.clear();
   }
 
+  @override
+  Future<List<Uint8List>> installPrelude(
+    Uint8List request, {
+    required Uint8List sourceBytes,
+  }) async {
+    if (_disposed) return const [];
+    await ensureInitialized();
+    _preludes.add((request: request, bytes: sourceBytes));
+    final results = <Uint8List>[];
+    for (final slot in List.of(_lanes)) {
+      results.add(await _runPrelude(slot, request, sourceBytes));
+    }
+    return results;
+  }
+
+  /// Preludes ride the same per-lane FIFO as user jobs, so one queued at
+  /// spawn time always executes before any job routed to that lane later.
+  Future<Uint8List> _runPrelude(
+    _LaneSlot slot,
+    Uint8List request,
+    Uint8List bytes,
+  ) async {
+    final job = LaneJob(
+      jobId: _nextJobId++,
+      request: request,
+      sources: [MemorySource(bytes)],
+      sinks: const [],
+      keepSources: const {},
+    );
+    slot.activeJobs++;
+    try {
+      return (await slot.lane.submit(job)).bytes;
+    } finally {
+      slot.activeJobs--;
+    }
+  }
+
   /// Least-loaded lane, spawning under the cap. (Pinned routing is
   /// resolved by the caller; an unknown handle falls through here —
   /// any lane can host the engine's "not found" error.)
@@ -219,6 +259,11 @@ class Router implements PdfTransport {
     if (_lanes.isEmpty || (_lanes.length < _maxLanes && _allBusy())) {
       final slot = _LaneSlot(_host.spawn());
       _lanes.add(slot);
+      for (final p in _preludes) {
+        // Fire-and-forget on fresh lanes: a failed replay degrades that
+        // lane to the engine's no-fallback warning path, never fails jobs.
+        unawaited(_runPrelude(slot, p.request, p.bytes));
+      }
       return slot;
     }
 

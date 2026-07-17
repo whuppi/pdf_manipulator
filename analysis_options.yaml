@@ -1,6 +1,12 @@
 include: package:lints/recommended.yaml
 
 analyzer:
+  errors:
+    # The RecordUse trim lane (hook/link.dart) deliberately consumes the
+    # hooks package's experimental `recordedUses` surface; the lane itself
+    # is documented as EXPERIMENTAL. Central downgrade — inline
+    # suppression comments are banned by tool/analyze.sh.
+    experimental_member_use: ignore
   language:
     strict-casts: true
     strict-inference: true

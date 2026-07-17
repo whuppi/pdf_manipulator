@@ -251,7 +251,7 @@ capabilities are tracked in their own sections.
 | `setup --force web` | DONE | Re-download web assets (debugging) |
 | SHA-256 hash verification (all assets) | DONE | Native + web, stale detection on setup |
 | `build.json` | DONE | Single source of truth for crate, repo, features, web assets |
-| Link hook (`hook/link.dart`) | DONE | Passthrough today; the foundation for the tree-shaking work in **Binary size — feature trimming** |
+| Link hook (`hook/link.dart`) | DONE | Forwards assets; on release drives the RecordUse trim lane (see **Binary size — trim**) |
 | Automatic web setup via build hook | BLOCKED | See details below |
 
 ### Automatic web setup — what's blocking, what to track
@@ -281,15 +281,36 @@ wires the trigger, `main()` adds one call to `resolveWeb()` and
 
 ---
 
-## Binary size — feature trimming
+## Binary size — trim
 
-| Stage | Approach | Status |
+Shipped: the trim system (issue #167). Consumer docs in the README;
+durable architecture in [`ARCHITECTURE.md`](ARCHITECTURE.md) §Trim;
+size-measuring recipe in [`UPDATING.md`](UPDATING.md) §S5b.
+
+| Piece | Status | Notes |
 |---|---|---|
-| Cargo features via `user_defines` | Consumers opt out of features in pubspec (`hooks: user_defines: pdf_manipulator: {rendering: false, office: false}`); the build hook maps these to `--features` for cargo. One smaller binary, no link-hook changes — user_defines flow through `BuildInput`. Pattern proven by icu_kit's `bundleCldrData` toggle. | PLANNED |
-| Automatic tree-shaking via `@RecordUse` | The compiler records which Dart APIs the app calls; the link hook maps methods to cargo features and recompiles with only what is needed. Zero user config. Blocked upstream: `@RecordUse` instance methods (dart-lang/native#2902), FFI tree-shaking umbrella (dart-lang/sdk#52970). | PLANNED |
-| Web parity | WASM is network-served, so size matters more than native — but per-feature WASM binaries add too much setup complexity. Wait for web build-hook support (dart-lang/native#988), which gives web the same cargo-features path as native. pdf_manipulator's size is CODE (rendering, office, signing), not data, so lazy data loading does not apply. | PLANNED |
+| Capability vocabulary + `trim:` grammar (`auto` / `keep:` / loud errors) | DONE | `lib/src/trim/capabilities.dart` |
+| Analyzer detector (resolved-AST, fail closed) | DONE | `lib/src/trim/detector.dart` |
+| Native trim via `hooks: user_defines:` | DONE | build hook; custom sets compile locally, cargo cache |
+| Web trim via `setup --trim` | DONE | detector → trimmed wasm compile |
+| `make shake-audit` verifier | DONE | symbols + size ceiling + typed-error probes |
+| Trimmed example shell (`example_trimmed/`) | DONE | Config-shell over example/ with `keep: [render]`; `make test-example-trimmed` asserts the contract on a real trimmed binary (core + kept work, excluded ops answer the typed error). Not in CI yet — needs a Rust-provisioned macOS row in full-test.yml. |
+| Op-unit dispatch layer (entry + handler + linker anchor per op) | DONE | `vendor/pdf_oxide/src/host/ops/`; registry backend swappable |
+| RecordUse drive path (build full → link hook trims on release) | DONE, dormant | Activates itself when the SDK experiment records; fixture-tested today |
+| `panic=abort` size lever | WONT_DO | Native lane isolation IS `catch_unwind` (one bad PDF → typed error, engine survives); abort would crash the whole app. Wasm already ships abort via `release-small` — the JS worker boundary isolates there. Nothing left to win. |
+| Writer monomorphization dedup | WONT_DO | Measured honestly: the dedupable Boxed-vs-Seek writer pairs are ~150-200 KB (2% of core) for dyn dispatch in the hottest safety-critical loop plus invasive upstream surgery. Bad trade. |
+| `opt-level=z` trim option | WONT_DO (unless asked) | ~15-20% of code size for CPU cost on every op — wrong default for a PDF engine. Revisit only on real user demand. |
+| `extract` capability | DONE | Extraction + search + classification (+ CJK CID tables). Cut via root gates — three dispatch fns gated, LTO deleted the 2.1 MB web with zero document.rs surgery. Core promise is now parse/write/edit/forms/builder. `office` requires `extract` engine-side. All remaining per-op cuts measured at 10-60 KB each: not worth their surface. |
+| Lazy fallback-font loading (runtime memory, not binary size) | PLANNED, deprioritized | `registerFallbackFont(bytes)` keeps the font resident: one shared copy on native, one per web worker. Bytes-in is the primitive, so a lazy `DataSource` registration (load on first CJK/emoji bake, per worker) and an optional release call can layer on later without breaking the API. Pick up only on real memory-pressure reports from web apps — and design the API surface carefully at that point, not before. |
 
----
+### When the futures arrive — tracked triggers + exact approach
+
+| Trigger to watch | Signal | Approach when it lands |
+|---|---|---|
+| RecordUse experiment stabilizes (dart-lang/native#2902 for instance methods; the SDK record-use experiment flag) | recordings appear in release link hooks | Nothing to build — the lane self-activates. Validate with `trim-detector: compare` on example/ (diff recorded vs analyzer keep-sets). When instance methods land: delete the `record_use_shim*.dart` files, annotate the ops directly. When trust is earned: consider promoting the default detector. |
+| Dart static linking (dart-lang/sdk#49418; `StaticLinking` in code_assets implemented) | hooks accept static libs; SDK defines symbol/asset-tag references | 1) Wire Dart-side references to the `pdf_op_<name>_anchor` symbols (one per public op, using whatever asset-tag syntax ships). 2) Swap `ops/registry.rs` from the explicit table to link-section collection. 3) Add a gc-sections assertion to shake-audit. The detector becomes a cross-check; the linker becomes the mechanism. Units don't change. |
+| Web build hooks (dart-lang/native#988) | hooks run for web targets | Fold `setup --trim` into the hook path: web reads the same `trim:` user-define; delete setup's cwd-detector invocation. Wasm gains the same fail-closed auto flow as native. |
+| Wasm component model in dart2wasm (dart-lang/sdk#56366) | dart2wasm emits/links components | Express op units as WIT interface functions (one-to-one mapping already); component-level linking replaces export-root trimming on web. Furthest future — analyzer covers web until then. |
 
 ## Built in the engine, not shipped
 

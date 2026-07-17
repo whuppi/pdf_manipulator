@@ -22,6 +22,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
@@ -401,6 +402,18 @@ Future<Uint8List> buildSamplePdf(Pdf pdf, {int pages = 40}) async {
 }
 
 // ─── App shell ────────────────────────────────────────────────────
+
+/// The bundled Noto Emoji face. Tries the standalone asset key first,
+/// then the package-prefixed key the example_trimmed shell serves it
+/// under (assets of a dependency package are keyed `packages/<name>/…`).
+Future<ByteData> loadEmojiFont() async {
+  try {
+    return await rootBundle.load('assets/fonts/NotoEmoji-Regular.ttf');
+  } on FlutterError {
+    return rootBundle.load(
+        'packages/pdf_manipulator_example/assets/fonts/NotoEmoji-Regular.ttf');
+  }
+}
 
 void main() => runApp(const ExampleApp());
 
@@ -1742,6 +1755,7 @@ class _EditorTab extends StatefulWidget {
 class _EditorTabState extends State<_EditorTab>
     with _OpsRunner, _PdfPicker, AutomaticKeepAliveClientMixin {
   final _pdf = Pdf();
+  bool _emojiFontLoaded = false;
 
   @override
   bool get wantKeepAlive => true;
@@ -1754,6 +1768,16 @@ class _EditorTabState extends State<_EditorTab>
 
   void _pickFile() => unawaited(
       pick((p) => setState(() => status = 'Loaded (${fmtSize(p.length)})')));
+
+  /// Registers the bundled Noto Emoji face once — the instance keeps it,
+  /// so repeat taps must not stack duplicate registrations.
+  Future<void> _registerEmojiFont() async {
+    if (_emojiFontLoaded) return;
+    final font = await loadEmojiFont();
+    await _pdf.registerFallbackFont(
+        PdfFallbackFontKind.emoji, font.buffer.asUint8List());
+    _emojiFontLoaded = true;
+  }
 
   /// Opens an editor, runs [work], saves the produced bytes.
   Future<void> _edit(
@@ -1996,6 +2020,19 @@ class _EditorTabState extends State<_EditorTab>
                       loading: loading,
                       onRun: () => _edit('SetField', (e) async {
                             await e.setFormFieldValue('name', 'John');
+                            return _saveEditor(e);
+                          })),
+                  _Op(
+                      icon: Icons.emoji_emotions_outlined,
+                      title: 'Fill with emoji + flatten',
+                      subtitle: 'registerFallbackFont bakes what the '
+                          'field font cannot draw',
+                      loading: loading,
+                      onRun: () => _edit('EmojiFill', (e) async {
+                            await _registerEmojiFont();
+                            await e.setFormFieldValue(
+                                'name', 'Loved it \u{1F600}\u{1F389}');
+                            await e.flattenForms();
                             return _saveEditor(e);
                           })),
                   _Section('Redaction'),

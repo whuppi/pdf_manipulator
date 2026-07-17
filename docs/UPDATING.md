@@ -274,6 +274,33 @@ git add web_assets/
 
 ---
 
+## S5b — Measure sizes
+
+`make shake-audit` is the single builder/measurer for every size claim;
+`make verify-readme-sizes` (chained onto it, also standalone) asserts the
+README's numbers against the record in `tool/.shake_sizes.json`.
+
+```sh
+make shake-audit                        # native full + core, symbols, probes
+SHAKE_AUDIT_WASM=1 make shake-audit     # + core-only wasm raw/gzipped
+SHAKE_AUDIT_CAPS=1 make shake-audit     # + per-capability costs (5 builds)
+make verify-readme-sizes                # README numbers vs the record
+```
+
+Run the flagged modes after an engine bump and before a release; the
+README's size table and capability costs come from them. Sizes are quoted
+in decimal MB (1 MB = 1,000,000 bytes).
+
+**Measurement method — trust only the linker map.** For per-module byte
+attribution use `RUSTFLAGS="-C link-arg=-Wl,-map,<file>"` on a forced
+relink and aggregate the map's per-symbol sizes. cargo-bloat builds its
+own differently-configured artifact, and Mach-O `nm` has no symbol sizes
+(address-delta guesses fabricate numbers — a "925 KB table" once measured
+that way was really 19 KB of source). Never edit `tool/shake_audit.sh`
+while an audit is running: bash re-reads the file by offset.
+
+---
+
 ## S6 — Release
 
 ### Branch model
