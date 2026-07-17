@@ -1,13 +1,15 @@
 // The stable trim detector: a dependency-free text scan over the app's
-// source. Only files that import pdf_manipulator count; within them,
-// any capability member name (word-bounded) keeps its capability.
+// source. Files that can see pdf_manipulator's API — a direct import,
+// or an import of an app file that re-exports it (barrel files, tracked
+// transitively) — are searched for capability member names.
 //
-// The scan can only err toward OVER-keeping (a same-named identifier in
-// an importing file keeps a capability the app never calls) — the app
-// always works, the binary is just less trimmed. It cannot realistically
-// under-keep: a call site always spells the member name in the text,
-// including dynamic calls that resolution-based analysis silently skips.
-// Users who want the exact minimum state `trim: {keep: [...]}`.
+// The scan errs toward OVER-keeping (a same-named identifier in a
+// scanned file keeps a capability the app never calls) — the app always
+// works, the binary is just less trimmed. It does not under-keep: a
+// call site always spells the member name in the text, including
+// dynamic calls that resolution-based analysis silently skips, and the
+// re-export tracking covers barrel-mediated usage. Users who want the
+// exact minimum state `trim: {keep: [...]}`.
 //
 // Deliberately NOT built on package:analyzer: a runtime package must
 // never put the analyzer in a consumer's dependency graph (it fights
@@ -15,6 +17,8 @@
 // it here.
 
 import 'dart:io';
+
+import 'package:path/path.dart' as p;
 
 import 'package:pdf_manipulator/src/trim/capabilities.dart';
 
@@ -66,26 +70,29 @@ Future<DetectorResult> detectCapabilities(
     for (final m in byMember.keys) m: RegExp('\\b${RegExp.escape(m)}\\b'),
   };
 
-  final keep = <PdfCapability>{};
-  final matched = <String>{};
   final unresolved = <String>[];
-
+  final sources = <String, String>{}; // canonical path → contents
   for (final root in roots) {
     for (final entry in Directory(root).listSync(recursive: true)) {
       if (entry is! File || !entry.path.endsWith('.dart')) continue;
-      final String source;
       try {
-        source = entry.readAsStringSync();
+        sources[p.canonicalize(entry.path)] = entry.readAsStringSync();
       } on IOException {
         unresolved.add(entry.path);
-        continue;
       }
-      if (!source.contains('package:pdf_manipulator/')) continue;
-      for (final e in patterns.entries) {
-        if (e.value.hasMatch(source)) {
-          keep.addAll(byMember[e.key]!);
-          matched.add(e.key);
-        }
+    }
+  }
+
+  final visible = _filesSeeingApi(appRoot, sources);
+
+  final keep = <PdfCapability>{};
+  final matched = <String>{};
+  for (final path in visible) {
+    final source = sources[path]!;
+    for (final e in patterns.entries) {
+      if (e.value.hasMatch(source)) {
+        keep.addAll(byMember[e.key]!);
+        matched.add(e.key);
       }
     }
   }
@@ -96,4 +103,76 @@ Future<DetectorResult> detectCapabilities(
     unresolvedPaths: unresolved,
     matchedMembers: matched,
   );
+}
+
+final _directive = RegExp(
+  r'''^\s*(import|export)\s+['"]([^'"]+)['"]''',
+  multiLine: true,
+);
+
+/// The files that can see pdf_manipulator's API: a direct import or
+/// export, or an import/export of an app file that RE-EXPORTS it,
+/// tracked transitively (barrel files). When in doubt — an unreadable
+/// pubspec, an unresolvable path — the answer errs toward "sees it"
+/// never being false for a file that does (over-keep direction).
+Set<String> _filesSeeingApi(String appRoot, Map<String, String> sources) {
+  // package:<appName>/x.dart resolves into <appRoot>/lib/x.dart.
+  final nameMatch = RegExp(
+    r'^name:\s*(\S+)',
+    multiLine: true,
+  ).firstMatch(_tryRead('$appRoot/pubspec.yaml') ?? '');
+  final selfPrefix = nameMatch == null ? null : 'package:${nameMatch[1]}/';
+
+  String? resolve(String fromFile, String uri) {
+    if (selfPrefix != null && uri.startsWith(selfPrefix)) {
+      return p.canonicalize(
+        p.join(appRoot, 'lib', uri.substring(selfPrefix.length)),
+      );
+    }
+    if (!uri.contains(':')) {
+      return p.canonicalize(p.join(p.dirname(fromFile), uri));
+    }
+    return null; // other packages / dart: — not app files
+  }
+
+  // Fixpoint: a file re-exposes the API if it exports pdf_manipulator
+  // directly, or exports a file that re-exposes it.
+  final exposes = <String>{};
+  var grew = true;
+  while (grew) {
+    grew = false;
+    for (final e in sources.entries) {
+      if (exposes.contains(e.key)) continue;
+      for (final d in _directive.allMatches(e.value)) {
+        if (d[1] != 'export') continue;
+        final uri = d[2]!;
+        final target = resolve(e.key, uri);
+        if (uri.startsWith('package:pdf_manipulator/') ||
+            (target != null && exposes.contains(target))) {
+          exposes.add(e.key);
+          grew = true;
+          break;
+        }
+      }
+    }
+  }
+
+  return {
+    for (final e in sources.entries)
+      if (_directive.allMatches(e.value).any((d) {
+        final uri = d[2]!;
+        if (uri.startsWith('package:pdf_manipulator/')) return true;
+        final target = resolve(e.key, uri);
+        return target != null && exposes.contains(target);
+      }))
+        e.key,
+  };
+}
+
+String? _tryRead(String path) {
+  try {
+    return File(path).readAsStringSync();
+  } on IOException {
+    return null;
+  }
 }

@@ -475,6 +475,22 @@ Trimming compiles a custom engine on your machine. There is nothing to set up in
 - **Native** (iOS, Android, macOS, Windows, Linux): [Rust](https://rustup.rs) — the same one-line installer on every OS.
 - **Web**: Rust, plus `wasm-bindgen-cli` (the build names the exact version), `binaryen`, and `jq`.
 
+<details>
+<summary><b>🧰 install commands for the web tools</b></summary>
+
+<br>
+
+The same commands the build prints when a tool is missing:
+
+| Tool | macOS | Linux | Windows |
+|---|---|---|---|
+| Rust | [rustup.rs](https://rustup.rs) | [rustup.rs](https://rustup.rs) | [rustup.rs](https://rustup.rs) |
+| `wasm-bindgen-cli` | `cargo install wasm-bindgen-cli --version <X>` — run the build once; it prints the exact `<X>` the engine needs | same | same |
+| `binaryen` | `brew install binaryen` | `sudo apt-get install binaryen` | [binaryen releases](https://github.com/WebAssembly/binaryen/releases) |
+| `jq` | `brew install jq` | `sudo apt-get install jq` | `choco install jq` |
+
+</details>
+
 ```yaml
 # pubspec.yaml of YOUR app
 hooks:

@@ -104,4 +104,39 @@ void main() {
     expect(result.resolved, isTrue);
     expect(result.keep, isEmpty);
   });
+
+  test('usage through a re-export barrel is detected', () async {
+    final dir = _fixture({
+      'deps/barrel.dart':
+          "export 'package:pdf_manipulator/"
+          "pdf_manipulator.dart';\n",
+      // Relative import of the barrel — no direct pdf_manipulator import.
+      'sign_flow.dart': '''
+import 'deps/barrel.dart';
+
+Future<void> use(Pdf pdf, DataSource src, DataSink out) => pdf.sign(src, out,
+    credentials: const PdfSigningCredentials.pem('c', 'k'));
+''',
+      // Second hop: a barrel re-exporting the barrel, imported by name.
+      'deps/deps.dart': "export 'barrel.dart';\n",
+      'render_flow.dart': '''
+import 'package:fixture_app/deps/deps.dart';
+
+Stream<RenderedPage> use(PdfDoc doc) =>
+    doc.render(pages: const PdfPages.all());
+''',
+    });
+    File('${dir.path}/pubspec.yaml').writeAsStringSync('name: fixture_app\n');
+    addTearDown(() => dir.deleteSync(recursive: true));
+
+    final result = await detectCapabilities(dir.path);
+    expect(result.resolved, isTrue);
+    expect(
+      result.keep,
+      containsAll({PdfCapability.signatures, PdfCapability.render}),
+      reason:
+          'barrel-mediated usage must be kept — under-keeping strips '
+          'code the app calls',
+    );
+  });
 }
