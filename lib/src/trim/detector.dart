@@ -146,12 +146,17 @@ Set<String> _filesSeeingApi(
   String? pubspec,
   Map<String, String> sources,
 ) {
-  // package:<appName>/x.dart resolves into <appRoot>/lib/x.dart.
-  final nameMatch = RegExp(
+  // package:<appName>/x.dart resolves into <appRoot>/lib/x.dart. YAML
+  // allows a quoted name (name: "my_app") — the quotes are syntax, not
+  // part of the package name, so strip them or the prefix never matches.
+  final rawName = RegExp(
     r'^name:\s*(\S+)',
     multiLine: true,
-  ).firstMatch(pubspec ?? '');
-  final selfPrefix = nameMatch == null ? null : 'package:${nameMatch[1]}/';
+  ).firstMatch(pubspec ?? '')?[1];
+  final appName = rawName != null && (rawName[0] == '"' || rawName[0] == "'")
+      ? rawName.substring(1, rawName.length - 1)
+      : rawName;
+  final selfPrefix = appName == null ? null : 'package:$appName/';
 
   String? resolve(String fromFile, String uri) {
     if (selfPrefix != null && uri.startsWith(selfPrefix)) {

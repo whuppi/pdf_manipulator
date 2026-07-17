@@ -140,6 +140,31 @@ Stream<RenderedPage> use(PdfDoc doc) =>
     );
   });
 
+  test('quoted pubspec name still resolves self-imports', () async {
+    final dir = _fixture({
+      'deps/barrel.dart':
+          "export 'package:pdf_manipulator/pdf_manipulator.dart';\n",
+      'sign_flow.dart': '''
+import 'package:fixture_app/deps/barrel.dart';
+
+Future<void> use(Pdf pdf, DataSource src, DataSink out) => pdf.sign(src, out,
+    credentials: const PdfSigningCredentials.pem('c', 'k'));
+''',
+    });
+    File('${dir.path}/pubspec.yaml').writeAsStringSync('name: "fixture_app"\n');
+    addTearDown(() => dir.deleteSync(recursive: true));
+
+    final result = detectCapabilities(dir.path);
+    expect(result.resolved, isTrue);
+    expect(
+      result.keep,
+      contains(PdfCapability.signatures),
+      reason:
+          'YAML quotes around the name are syntax, not part of the '
+          'package name — dropping them must not lose the barrel chain',
+    );
+  });
+
   test('missing pubspec fails closed — self-imports cannot resolve', () async {
     final dir = _fixture({'main.dart': _usesEverything});
     File('${dir.path}/pubspec.yaml').deleteSync();
