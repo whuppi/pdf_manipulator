@@ -72,6 +72,12 @@ Set<String> _treeToPaths(String output) {
     final m = entry.firstMatch(line.trimRight());
     if (m == null) continue;
     final depth = m.group(1)!.length ~/ 4;
+    if (depth > stack.length) {
+      // A depth jump means the listing shape changed — growing a
+      // non-nullable list throws anyway, so bail to empty and let the
+      // caller's sanity check fail loudly with the raw output.
+      return {};
+    }
     stack.length = depth;
     stack.add(m.group(2)!);
     paths.add(stack.join('/'));
