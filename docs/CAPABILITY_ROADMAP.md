@@ -300,6 +300,7 @@ size-measuring recipe in [`UPDATING.md`](UPDATING.md) §S5b.
 | Writer monomorphization dedup | WONT_DO | Measured honestly: the dedupable Boxed-vs-Seek writer pairs are ~150-200 KB (2% of core) for dyn dispatch in the hottest safety-critical loop plus invasive upstream surgery. Bad trade. |
 | `opt-level=z` trim option | WONT_DO (unless asked) | ~15-20% of code size for CPU cost on every op — wrong default for a PDF engine. Revisit only on real user demand. |
 | `extract` capability | DONE | Extraction + search + classification (+ CJK CID tables). Cut via root gates — three dispatch fns gated, LTO deleted the 2.1 MB web with zero document.rs surgery. Core promise is now parse/write/edit/forms/builder. `office` requires `extract` engine-side. All remaining per-op cuts measured at 10-60 KB each: not worth their surface. |
+| Lazy fallback-font loading (runtime memory, not binary size) | PLANNED, deprioritized | `registerFallbackFont(bytes)` keeps the font resident: one shared copy on native, one per web worker. Bytes-in is the primitive, so a lazy `DataSource` registration (load on first CJK/emoji bake, per worker) and an optional release call can layer on later without breaking the API. Pick up only on real memory-pressure reports from web apps — and design the API surface carefully at that point, not before. |
 
 ### When the futures arrive — tracked triggers + exact approach
 
