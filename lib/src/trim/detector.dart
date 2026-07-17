@@ -131,10 +131,14 @@ DetectorResult detectCapabilities(
   );
 }
 
+// A whole directive, keyword to semicolon. Its body may carry several
+// URIs (conditional imports: `import 'a.dart' if (x) 'b.dart';`) —
+// every one is a potential path to the API, so all are extracted.
 final _directive = RegExp(
-  r'''^\s*(import|export)\s+['"]([^'"]+)['"]''',
+  r'''^\s*(import|export)\s+([^;]*);''',
   multiLine: true,
 );
+final _directiveUri = RegExp(r'''['"]([^'"]+)['"]''');
 
 /// The files that can see pdf_manipulator's API: a direct import or
 /// export, or an import/export of an app file that RE-EXPORTS it,
@@ -180,17 +184,19 @@ Set<String> _filesSeeingApi(
 
   for (final e in sources.entries) {
     for (final d in _directive.allMatches(e.value)) {
-      final uri = d[2]!;
-      if (uri.startsWith('package:pdf_manipulator/')) {
-        direct.add(e.key);
-        if (d[1] == 'export') seeds.add(e.key);
-        continue;
-      }
-      final target = resolve(e.key, uri);
-      if (target == null) continue;
-      (dependsOn[e.key] ??= {}).add(target);
-      if (d[1] == 'export') {
-        (exportedBy[target] ??= []).add(e.key);
+      for (final u in _directiveUri.allMatches(d[2]!)) {
+        final uri = u[1]!;
+        if (uri.startsWith('package:pdf_manipulator/')) {
+          direct.add(e.key);
+          if (d[1] == 'export') seeds.add(e.key);
+          continue;
+        }
+        final target = resolve(e.key, uri);
+        if (target == null) continue;
+        (dependsOn[e.key] ??= {}).add(target);
+        if (d[1] == 'export') {
+          (exportedBy[target] ??= []).add(e.key);
+        }
       }
     }
   }

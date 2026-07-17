@@ -140,6 +140,32 @@ Stream<RenderedPage> use(PdfDoc doc) =>
     );
   });
 
+  test('conditional imports track every branch URI', () async {
+    final dir = _fixture({
+      'stub.dart': '// inert stub for the non-io branch\n',
+      'deps/barrel.dart':
+          "export 'package:pdf_manipulator/pdf_manipulator.dart';\n",
+      // Only the second (conditional) URI reaches the API.
+      'sign_flow.dart': '''
+import 'stub.dart' if (dart.library.io) 'deps/barrel.dart';
+
+Future<void> use(Pdf pdf, DataSource src, DataSink out) => pdf.sign(src, out,
+    credentials: const PdfSigningCredentials.pem('c', 'k'));
+''',
+    });
+    addTearDown(() => dir.deleteSync(recursive: true));
+
+    final result = detectCapabilities(dir.path);
+    expect(result.resolved, isTrue);
+    expect(
+      result.keep,
+      contains(PdfCapability.signatures),
+      reason:
+          'a conditional import branch is a real path to the API — '
+          'dropping it under-keeps',
+    );
+  });
+
   test('quoted pubspec name still resolves self-imports', () async {
     final dir = _fixture({
       'deps/barrel.dart':
