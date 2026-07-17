@@ -89,10 +89,21 @@ class _MemberFinder extends RecursiveAstVisitor<void> {
     final lib = element.library;
     if (lib == null) return;
     if (!lib.uri.toString().startsWith('package:pdf_manipulator/')) return;
+    // Qualified first, bare on miss. Class members match `Class.member`;
+    // extension members match bare (extensions are InstanceElement
+    // siblings of InterfaceElement, so their qualified key —
+    // `ExtensionName.member` — is deliberately absent from apiMembers).
+    // The fallback keeps detection correct even if a future element
+    // model reshapes that hierarchy; test/trim/detector_test.dart pins
+    // both shapes against a real resolved app.
     final enclosing = element.enclosingElement;
-    final key = enclosing is InterfaceElement
-        ? '${enclosing.name}.${element.name}'
-        : '${element.name}';
+    final bare = '${element.name}';
+    final qualified = enclosing is InstanceElement
+        ? '${enclosing.name}.$bare'
+        : null;
+    final key = PdfCapability.apiMembers.containsKey(qualified)
+        ? qualified!
+        : bare;
     final cap = PdfCapability.apiMembers[key];
     if (cap != null) {
       keep.add(cap);
