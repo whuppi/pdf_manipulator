@@ -57,6 +57,9 @@ enum EngineOp {
   /// Convert a document to PDF.
   convertToPdf('convertToPdf'),
 
+  /// Register a runtime fallback font (form-value baking).
+  registerFallbackFont('registerFallbackFont'),
+
   // ── Editor handle ops ──
 
   /// Open a PDF for editing.

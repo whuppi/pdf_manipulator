@@ -141,6 +141,29 @@ class SharedBridge extends PdfBridge {
   }
 
   @override
+  PdfTask<void> registerFallbackFont(String kind, Uint8List bytes) {
+    final hook = CancelHook();
+    final future = () async {
+      final req = bin.encodeRequest(EngineOp.registerFallbackFont.wire, {
+        'kind': kind,
+        'sourceLength': bytes.length,
+      });
+      final responses = await _transport.installPrelude(
+        req,
+        sourceBytes: bytes,
+      );
+      for (final r in responses) {
+        final map = bin.decodeResponse(r);
+        if (map.containsKey('error')) {
+          // Same contract as [_exec]: engine failures are PdfError.
+          throw PdfEngineError(map['error'] as String? ?? 'Engine error');
+        }
+      }
+    }();
+    return PdfTask.internal(future, hook);
+  }
+
+  @override
   PdfTask<void> convertTo(
     DataSource source,
     DataSink output, {

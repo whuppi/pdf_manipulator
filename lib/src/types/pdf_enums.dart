@@ -121,3 +121,18 @@ enum PdfStampType {
   /// For public release.
   forPublicRelease,
 }
+
+/// Which fallback font a `Pdf.registerFallbackFont` call supplies.
+enum PdfFallbackFontKind {
+  /// CJK and other non-Latin text (a broad-coverage face, e.g. Droid Sans
+  /// Fallback or Noto Sans CJK).
+  cjk('cjk'),
+
+  /// Emoji (rendered monochrome when baked into appearances).
+  emoji('emoji');
+
+  const PdfFallbackFontKind(this.wire);
+
+  /// Wire name the engine expects.
+  final String wire;
+}

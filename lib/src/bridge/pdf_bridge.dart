@@ -3,6 +3,8 @@
 // No algorithms. No helpers. Just the wire.
 // INTERNAL — not exported from the package.
 
+import 'dart:typed_data';
+
 import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
@@ -52,6 +54,10 @@ abstract class PdfBridge {
     DataSink output, {
     required PdfDocumentFormat format,
   });
+
+  /// Register a runtime fallback font for form-value baking.
+  /// [kind] is the engine wire name ('cjk' or 'emoji').
+  PdfTask<void> registerFallbackFont(String kind, Uint8List bytes);
 
   // ── Editor handle ──
 

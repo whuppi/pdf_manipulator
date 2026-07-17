@@ -1,9 +1,9 @@
 .PHONY: check analyze analyze-floor platforms lint-shell format fixtures test-guards \
        build build-native build-wasm \
        compile-macos compile-ios compile-android compile-linux compile-windows compile-wasm compile-natives \
-       test test-pkg-native test-unit test-rust \
+       test test-pkg-native test-unit test-rust shake-audit verify-readme-sizes \
        test-ops test-ops-native test-ops-web test-ops-opfs test-ops-jspi test-ops-atomics \
-       test-example test-example-matrix test-example-macos test-example-linux test-example-windows \
+       test-example test-example-matrix test-example-macos test-example-trimmed test-example-linux test-example-windows \
        test-example-android test-example-ios test-example-device \
        test-example-web test-example-web-jspi test-example-web-atomics test-example-web-opfs \
        verify verify-android verify-ios verify-macos \
@@ -260,13 +260,30 @@ test-ops-atomics:
 # incremental cache for the test build: every test still compiles and runs
 # identically; only interactive backtraces lose symbol names (CI prints the
 # assertion output regardless).
+# Trim guarantee verifier: core-only build must drop the heavy modules
+# (symbols absent, size under ceiling) and excluded ops must answer the
+# typed not-enabled error. SHAKE_AUDIT_WASM=1 adds the wasm size check.
+shake-audit:
+	bash tool/shake_audit.sh
+	@$(DART) run tool/verify_readme_sizes.dart
+
+# Asserts every size number in README.md matches measured reality (the
+# shake-audit record + the wasm artifact). Run after shake-audit.
+verify-readme-sizes:
+	@$(DART) run tool/verify_readme_sizes.dart
+
 test-rust: export CARGO_INCREMENTAL := 0
 test-rust: export CARGO_PROFILE_DEV_DEBUG := 0
 test-rust: export CARGO_PROFILE_TEST_DEBUG := 0
+# public-api + cjk-form-fonts are test-only: shipped builds (build.json
+# feature lists) exclude the crate's own wasm/C API surfaces and the
+# embedded fallback fonts, but the upstream test suites cover both (the
+# CJK flatten tests are self-gated and silently SKIP without the feature),
+# so tests compile and run WITH them.
 test-rust:
 	@echo "=== Rust: pdf_oxide ==="
 	$(CARGO) test --manifest-path vendor/pdf_oxide/Cargo.toml \
-	  --features "$$(bash tool/compile_rust.sh --features native),test-support"
+	  --features "$$(bash tool/compile_rust.sh --features native),test-support,public-api,cjk-form-fonts,pdfa"
 	@echo "=== Rust: office_oxide ==="
 	$(CARGO) test --manifest-path vendor/office_oxide/Cargo.toml
 
@@ -324,6 +341,14 @@ test-example-macos:
 	@echo "=== Example: macOS ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
 	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart -d macos --file-reporter json:../$(TEST_RESULTS_DIR)/int-macos.json
+
+# The trimmed-engine contract, on a REAL trimmed binary: the shell's
+# trim user_define makes the build hook compile keep:[render] from
+# vendor source (needs Rust; first run pays the cargo build).
+test-example-trimmed:
+	@echo "=== Example: macOS (trimmed engine) ==="
+	@mkdir -p $(TEST_RESULTS_DIR)
+	cd example_trimmed && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/trimmed_smoke_test.dart -d macos --file-reporter json:../$(TEST_RESULTS_DIR)/int-trimmed-macos.json
 
 test-example-linux:
 	@echo "=== Example: Linux ==="

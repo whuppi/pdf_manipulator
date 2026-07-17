@@ -5,6 +5,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:pdf_manipulator/pdf_manipulator.dart';
@@ -532,6 +533,36 @@ void main() {
     final sink = MemorySink();
     await e.save(sink);
     await e.dispose();
+    final saved = await pdf.open(_src(sink.takeBytes()));
+    expect(saved.pageCount, 1,
+        reason: 'a save that cannot be re-opened saved nothing');
+    await saved.dispose();
+  });
+
+  testWidgets('registerFallbackFont bakes an emoji form value', (t) async {
+    // Build a form with one text field.
+    final b = await pdf.build();
+    final page = await b.addA4Page();
+    await page.textField(
+        'note', const PdfRect(x: 100, y: 680, width: 200, height: 20));
+    await page.done();
+    final formSink = MemorySink();
+    await b.save(formSink);
+    await b.dispose();
+
+    // Register the app's bundled emoji face (idempotent on the engine
+    // side), fill with a value the field font cannot draw, flatten.
+    final font = await rootBundle.load('assets/fonts/NotoEmoji-Regular.ttf');
+    await pdf.registerFallbackFont(
+        PdfFallbackFontKind.emoji, font.buffer.asUint8List());
+
+    final e = await pdf.edit(_src(formSink.takeBytes()));
+    await e.setFormFieldValue('note', 'Loved it \u{1F600}\u{1F389}');
+    await e.flattenForms();
+    final sink = MemorySink();
+    await e.save(sink);
+    await e.dispose();
+
     final saved = await pdf.open(_src(sink.takeBytes()));
     expect(saved.pageCount, 1,
         reason: 'a save that cannot be re-opened saved nothing');

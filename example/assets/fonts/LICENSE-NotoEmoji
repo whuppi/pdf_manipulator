@@ -1,0 +1,9 @@
+NotoEmoji-Regular.ttf
+
+Noto Emoji (monochrome) — © Google Inc. and contributors.
+Licensed under the SIL Open Font License, Version 1.1.
+https://scripts.sil.org/OFL
+Source: https://github.com/googlefonts/noto-emoji
+
+Bundled by the example app to demonstrate `Pdf.registerFallbackFont`:
+baking emoji form-field values into a flattened appearance.

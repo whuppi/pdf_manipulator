@@ -14,6 +14,7 @@ import 'package:pdf_manipulator/src/types/pdf_task.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/bridge/pdf_bridge.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
+import 'package:pdf_manipulator/src/trim/record_use_shim.dart';
 
 /// Mutable PDF editor — parse once, mutate many times, save once.
 class PdfEditor {
@@ -185,6 +186,7 @@ class PdfEditor {
 
   /// Recompresses images above [minSize] pixels at the given [quality].
   PdfTask<int> optimizeImages({int quality = 75, int minSize = 128}) {
+    TrimRecord.op('render');
     _check();
     return _handle.optimizeImages(quality: quality, minSize: minSize);
   }
@@ -298,6 +300,7 @@ class PdfEditor {
 
   /// Converts the document to PDF/A at the given conformance [level].
   PdfTask<void> convertToPdfA({int level = 1}) {
+    TrimRecord.op('pdfa');
     _check();
     return _handle.convertToPdfA(level: level);
   }

@@ -19,7 +19,10 @@ import 'dart:io';
 import 'package:package_config/package_config.dart';
 
 import '../hook/build.dart' as build;
+import 'package:pdf_manipulator/src/hook/build_constants.dart';
 import 'package:pdf_manipulator/src/hook/resolver.dart';
+import 'package:pdf_manipulator/src/trim/capabilities.dart';
+import 'package:pdf_manipulator/src/trim/detector.dart';
 
 const _help = '''
 Usage: flutter pub run pdf_manipulator:setup [--force] [target]
@@ -53,6 +56,7 @@ void main(List<String> args) async {
   }
 
   final force = args.contains('--force');
+  final trim = args.contains('--trim');
   final targets = args.where((a) => !a.startsWith('-')).toList();
 
   if (targets.isEmpty) {
@@ -61,7 +65,7 @@ void main(List<String> args) async {
 
   for (final target in targets) {
     if (target == 'web') {
-      await _setupWeb(force);
+      await _setupWeb(force, trim: trim);
     } else if (_nativeBuildArgs.containsKey(target)) {
       await _setupNative(target, force);
     } else {
@@ -74,7 +78,7 @@ void main(List<String> args) async {
 
 // ── Web ───────────────────────────────────────────────────────────
 
-Future<void> _setupWeb(bool force) async {
+Future<void> _setupWeb(bool force, {bool trim = false}) async {
   final config = await findPackageConfig(Directory.current);
   if (config == null) {
     stderr.writeln('Error: not inside a Dart/Flutter project.');
@@ -92,9 +96,33 @@ Future<void> _setupWeb(bool force) async {
   final packageRoot = pkg.root;
   final version = readVersion(packageRoot);
 
+  // --trim: scan THIS app's source for reachable capabilities, then
+  // compile a wasm carrying only those. Fail closed: unresolved files
+  // mean the full default build.
+  String? featuresOverride;
+  if (trim) {
+    stdout.writeln('=== Trim: scanning app source ===');
+    final result = await detectCapabilities(Directory.current.path);
+    if (!result.resolved) {
+      stdout.writeln(
+        'trim: ${result.unresolvedPaths.length} file(s) could not be '
+        'resolved — keeping the FULL binary (fail closed). First: '
+        '${result.unresolvedPaths.first}',
+      );
+    } else {
+      final wasmDefaults = BuildConstants.load(packageRoot).wasmFeatures;
+      featuresOverride = TrimConfig.keep(
+        result.keep,
+      ).featuresFor(wasmDefaults, result.keep);
+      final kept = result.keep.map((c) => c.wire).toList()..sort();
+      stdout.writeln('trim: keeping $kept -> features [$featuresOverride]');
+    }
+  }
+
   stdout.writeln('=== Web assets (v$version) ===');
   final destDir = Directory('web/pdf_manipulator');
   final count = await build.resolveWeb(
+    wasmFeaturesOverride: featuresOverride,
     packageRoot: packageRoot,
     version: version,
     destDir: destDir,
