@@ -6,12 +6,11 @@
 // methods yet (dart-lang/native#2902) — delete it and annotate the ops
 // directly when that ships. The call is an empty static: zero behavior,
 // tree-shaken like any other no-op when recording is off.
+//
+// Two variants: web compilers get the un-annotated one. dart2js (Dart
+// 3.12) crashes in SSA codegen on invocations of @RecordUse-annotated
+// statics, and recordings are meaningless on web anyway — link hooks
+// only run for native targets. Keep both variants' signatures identical.
 
-import 'package:meta/meta.dart' show RecordUse;
-
-/// Records that a capability-bearing op is reachable (see library comment).
-abstract final class TrimRecord {
-  /// Marks [capability] (a `PdfCapability.wire` name) as used.
-  @RecordUse()
-  static void op(String capability) {}
-}
+export 'record_use_shim_native.dart'
+    if (dart.library.js_interop) 'record_use_shim_web.dart';
