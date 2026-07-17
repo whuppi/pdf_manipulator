@@ -1,0 +1,119 @@
+# Pre-commit hooks configuration
+# Install: pip install pre-commit
+# Setup: pre-commit install
+# Run: pre-commit run --all-files
+
+repos:
+  # Go code formatting
+  - repo: https://github.com/golangci/golangci-lint
+    rev: v1.55.2
+    hooks:
+      - id: golangci-lint
+        name: golangci-lint
+        description: Go linter with multiple plugins
+        entry: golangci-lint run
+        language: golang
+        language_version: "1.21"
+        types: [go]
+        pass_filenames: false
+        stages: [commit]
+
+  # Go security
+  - repo: https://github.com/securego/gosec
+    rev: v2.18.2
+    hooks:
+      - id: gosec
+        name: gosec
+        description: Security scanner for Go code
+        entry: gosec
+        language: golang
+        language_version: "1.21"
+        types: [go]
+        stages: [commit]
+
+  # General formatting
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+        name: Trim trailing whitespace
+        description: Remove trailing whitespace
+      - id: end-of-file-fixer
+        name: Fix end of file
+        description: Ensure files end with newline
+      - id: check-yaml
+        name: Check YAML
+        description: Validate YAML files
+      - id: check-added-large-files
+        name: Check large files
+        description: Prevent large files from being committed
+        args: [--maxkb=1000]
+      - id: check-case-conflict
+        name: Check case conflict
+        description: Prevent case-sensitive conflicts
+      - id: check-merge-conflict
+        name: Check merge conflict
+        description: Detect merge conflicts
+      - id: check-toml
+        name: Check TOML
+        description: Validate TOML files
+      - id: check-json
+        name: Check JSON
+        description: Validate JSON files
+      - id: detect-private-key
+        name: Detect private keys
+        description: Detect accidentally committed secrets
+
+  # Go format check (not in-place)
+  - repo: https://github.com/tekwizz123/pre-commit-golang
+    rev: v0.0.0-20240105212918-cab0a08d4cc2
+    hooks:
+      - id: go-fmt-import
+        name: go fmt & imports
+        description: Format Go code with gofmt and fix imports
+        types: [go]
+        language: golang
+      - id: golangci-lint-mod
+        name: golangci-lint (mod)
+        description: Run golangci-lint on go.mod
+        files: go.mod$
+        language: golang
+
+  # Markdown linting
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.37.0
+    hooks:
+      - id: markdownlint
+        name: Markdown lint
+        description: Check markdown files
+        types: [markdown]
+        args: [--fix]
+
+  # Shell script linting
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.9.0.6
+    hooks:
+      - id: shellcheck
+        name: ShellCheck
+        description: Lint shell scripts
+        types: [shell]
+        args: [--severity=warning]
+
+  # YAML linting
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.33.0
+    hooks:
+      - id: yamllint
+        name: YAML lint
+        description: Lint YAML files
+        types: [yaml]
+        args: [--strict]
+
+ci:
+  autofix_commit_msg: 'ci(pre-commit): auto fixes from pre-commit hooks'
+  autofix_prs: true
+  autoupdate_branch: ''
+  autoupdate_commit_msg: 'ci(pre-commit): auto update of dependencies'
+  autoupdate_schedule: weekly
+  skip: []
+  submodules: false

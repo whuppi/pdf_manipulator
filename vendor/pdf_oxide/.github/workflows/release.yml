@@ -1,0 +1,2323 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  # #515: PR dry-run — build/validate/package the WHOLE release pipeline
+  # on release-branch PRs so publish-time failures (version drift,
+  # packaging, "already published") fail the PR instead of surfacing
+  # only post-tag (when the merge is done and publishing is
+  # irreversible). Mirrors release-fips.yml. Mutating publish jobs are
+  # hard-gated below so a pull_request can NEVER publish.
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'pyproject.toml'
+      - 'js/**'
+      - 'wasm-pkg/**'
+      - 'csharp/**'
+      - 'go/**'
+      - 'java/**'
+      - 'pdf_oxide_jni/**'
+      - 'ruby/**'
+      - 'php/**'
+      - 'cpp/**'
+      - 'swift/**'
+      - 'objc/**'
+      - 'kotlin/**'
+      - 'scala/**'
+      - 'clojure/**'
+      - 'dart/**'
+      - 'elixir/**'
+      - 'r/**'
+      - 'julia/**'
+      - 'zig/**'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g., v0.1.1)'
+        required: true
+        type: string
+      publish:
+        description: 'Publish to package indexes (false = dry-run, build/validate only)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read   # global default — jobs that need write declare it locally
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Validate tag matches version
+  validate:
+    name: Validate Release
+    runs-on: ubuntu-latest
+    # #515 (maintainer-directed 2026-05-17): the no-publish PR dry-run
+    # runs ONLY on release/* branch PRs (where pre-tag validation is
+    # the point) — never on ordinary feature PRs. Every other job
+    # `needs: validate`, so skipping it here makes release.yml a no-op
+    # on non-release PRs. Real tag-push / dispatch releases are
+    # unaffected (`github.event_name != 'pull_request'`).
+    if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'release/') }}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Get version from Cargo.toml
+        id: version
+        run: |
+          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Detected version: $VERSION"
+
+      - name: Validate tag matches version
+        # #515: no tag on a pull_request dry-run — skip the tag↔version
+        # check (the manifest-consistency steps below still run, which
+        # is the dry-run's value); the tag check applies on real
+        # tag-push / dispatch-publish releases.
+        if: ${{ github.event_name != 'pull_request' }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          EXPECTED_TAG="v$VERSION"
+          if [ "$TAG" != "$EXPECTED_TAG" ]; then
+            echo "Error: Tag '$TAG' does not match Cargo.toml version '$VERSION'"
+            echo "Expected tag: $EXPECTED_TAG"
+            exit 1
+          fi
+
+      - name: Validate version consistency
+        run: |
+          CARGO_VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          PY_VERSION=$(grep '^version = ' pyproject.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          if [ "$CARGO_VERSION" != "$PY_VERSION" ]; then
+            echo "Error: Cargo.toml ($CARGO_VERSION) and pyproject.toml ($PY_VERSION) versions don't match"
+            exit 1
+          fi
+          echo "✓ Cargo.toml and pyproject.toml versions match: $CARGO_VERSION"
+
+      - name: Validate all language binding versions
+        run: |
+          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          JS_VERSION=$(node -p "require('./js/package.json').version")
+          WASM_VERSION=$(node -p "require('./wasm-pkg/package.json').version")
+          CSHARP_VERSION=$(grep '<Version>' csharp/PdfOxide/PdfOxide.csproj | sed 's/.*<Version>\(.*\)<\/Version>.*/\1/')
+          # v0.3.53: Java binding (fyi.oxide:pdf-oxide). Version pinned
+          # in the top-level <version> element of java/pom.xml.
+          JAVA_VERSION=$(grep -m1 '<version>' java/pom.xml | sed 's/.*<version>\(.*\)<\/version>.*/\1/' | tr -d ' ')
+          ERRORS=0
+          for LANG_VER in "js/package.json:$JS_VERSION" "wasm-pkg/package.json:$WASM_VERSION" "csharp/PdfOxide.csproj:$CSHARP_VERSION" "java/pom.xml:$JAVA_VERSION"; do
+            FILE=$(echo $LANG_VER | cut -d: -f1)
+            VER=$(echo $LANG_VER | cut -d: -f2)
+            if [ "$VER" != "$VERSION" ]; then
+              echo "Error: $FILE ($VER) does not match Cargo.toml ($VERSION)"
+              ERRORS=$((ERRORS + 1))
+            fi
+          done
+          if [ $ERRORS -gt 0 ]; then exit 1; fi
+          echo "✓ All language binding versions match: $VERSION"
+
+      # Authoritative, exhaustive check across EVERY binding manifest (the
+      # manual loop above predates the 11 new bindings). sync_version.py's
+      # rules() list is the single source of truth — covers cpp/swift/objc/
+      # kotlin/scala/clojure/dart/elixir/r/julia/zig too.
+      - name: Validate ALL binding versions in sync (sync_version.py)
+        run: python3 scripts/sync_version.py --check
+
+      - name: Verify release is from main branch
+        # #515: a pull_request dry-run is BY DEFINITION not yet on main
+        # (that's what the PR is for) — skip; this check applies only to
+        # a real tag-push / dispatch-publish release.
+        if: ${{ github.event_name != 'pull_request' }}
+        run: |
+          # Fetch main branch
+          git fetch origin main
+          # Get the commit SHA the tag points to
+          TAG_SHA=$(git rev-parse HEAD)
+          # Check if this commit is reachable from main
+          if ! git merge-base --is-ancestor $TAG_SHA origin/main; then
+            echo "Error: Release tags must be created from commits on the main branch"
+            echo "Tag SHA: $TAG_SHA"
+            echo "Please merge your changes to main first, then create the release tag"
+            exit 1
+          fi
+          echo "✓ Verified: Tag points to a commit on main branch"
+
+  # Build binaries for all platforms
+  build-binaries:
+    name: Build ${{ matrix.target }}
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64 (glibc)
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: pdf_oxide-linux-x86_64
+            use_cross: false
+
+          # Linux x86_64 (musl - static)
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact_name: pdf_oxide-linux-x86_64-musl
+            use_cross: false
+
+          # Linux ARM64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_name: pdf_oxide-linux-aarch64
+            use_cross: true
+
+          # macOS x86_64 (Intel)
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: pdf_oxide-macos-x86_64
+            use_cross: false
+
+          # macOS ARM64 (Apple Silicon)
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: pdf_oxide-macos-aarch64
+            use_cross: false
+
+          # Windows x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: pdf_oxide-windows-x86_64
+            use_cross: false
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+          target: ${{ matrix.target }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install musl tools (Linux musl)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get -o Acquire::Retries=3 update && sudo apt-get -o Acquire::Retries=3 install -y musl-tools
+
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y gcc-aarch64-linux-gnu
+
+      - name: Build binaries
+        shell: bash
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && 'aarch64-linux-gnu-gcc' || '' }}
+        run: |
+          cargo build --release -p pdf_oxide_cli --target ${{ matrix.target }}
+          cargo build --release -p pdf_oxide_mcp --target ${{ matrix.target }}
+
+      - name: Build .deb package (Linux x86_64 glibc)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          cargo install cargo-deb
+          cargo deb -p pdf_oxide_cli --no-build --target x86_64-unknown-linux-gnu
+
+      - name: Upload .deb artifact
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: debian-package
+          path: target/x86_64-unknown-linux-gnu/debian/*.deb
+          retention-days: 7
+
+      - name: Create archive (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          mkdir -p dist
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../dist/${{ matrix.artifact_name }}-${VERSION}.tar.gz pdf-oxide pdf-oxide-mcp
+
+      - name: Create archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $VERSION = "${{ needs.validate.outputs.version }}"
+          New-Item -ItemType Directory -Force -Path dist
+          Set-Location target/${{ matrix.target }}/release
+          Compress-Archive -Path @("pdf-oxide.exe", "pdf-oxide-mcp.exe") -DestinationPath ../../../dist/${{ matrix.artifact_name }}-${VERSION}.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/*
+          retention-days: 7
+
+  # Build WASM package
+  build-wasm:
+    name: Build WASM
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+          target: wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-wasm-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build WASM binary
+        run: cargo build --lib --target wasm32-unknown-unknown --features wasm,rendering --release
+
+      - name: Install matching wasm-bindgen-cli
+        run: |
+          WASM_BINDGEN_VERSION=$(grep -A1 'name = "wasm-bindgen"' Cargo.lock | grep version | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "Installing wasm-bindgen-cli@${WASM_BINDGEN_VERSION}"
+          cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION"
+
+      - name: Generate bindings for bundler, nodejs, and web targets
+        # Issue #392: the v0.3.37 artefact shipped a single `--target nodejs`
+        # build, which hard-codes `__dirname` and `require('fs')`. That
+        # crashes in every browser bundler (Vite, webpack, Rollup, esbuild)
+        # and every browser runtime even though the package metadata
+        # advertises browser support.
+        #
+        # Fix: ship all three wasm-bindgen targets side-by-side under
+        # `bundler/`, `nodejs/`, and `web/` subdirectories. The top-level
+        # package.json routes each consumer to the right one through
+        # `exports` conditions (see wasm-pkg/package.json).
+        #
+        # Nested per-directory package.json files pin the module format so
+        # Node unambiguously treats the ESM outputs (bundler/web, which
+        # wasm-bindgen emits as ESM) and the CJS output (nodejs, which
+        # wasm-bindgen emits as CommonJS) correctly regardless of the
+        # top-level `type` setting.
+        run: |
+          for target in bundler nodejs web; do
+            wasm-bindgen --target "$target" --out-dir "wasm-out/$target/" \
+              target/wasm32-unknown-unknown/release/pdf_oxide.wasm
+          done
+          echo '{"type":"module","sideEffects":false}'     > wasm-out/bundler/package.json
+          echo '{"type":"commonjs","sideEffects":false}'   > wasm-out/nodejs/package.json
+          echo '{"type":"module","sideEffects":false}'     > wasm-out/web/package.json
+
+      - name: Copy package files
+        run: |
+          cp wasm-pkg/package.json wasm-out/
+          cp wasm-pkg/README.md wasm-out/
+
+      - name: Upload WASM artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wasm-package
+          path: wasm-out/
+          retention-days: 7
+
+  # Build native libraries for language bindings (cdylib + staticlib).
+  # cdylib (.so/.dylib/.dll): C# (P/Invoke), dynamic-linked Node.js
+  # staticlib (.a):           Go CGo (#334), static-linked Node.js (#335)
+  #
+  # The extra windows-gnu rows cross-compile from Linux via mingw-w64 so we
+  # produce a MinGW-compatible `libpdf_oxide.a` that CGo (which uses MinGW
+  # gcc by default) can actually link. MSVC's `pdf_oxide.lib` is a COFF
+  # archive and isn't link-compatible with MinGW gcc, so those targets stay
+  # cdylib-only and feed the C# / dynamic Node.js bindings.
+  build-native-libs:
+    name: Build native lib (${{ matrix.target }})
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: native-linux-x86_64
+            lib_name: libpdf_oxide.so
+            staticlib_name: libpdf_oxide.a
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_name: native-linux-aarch64
+            lib_name: libpdf_oxide.so
+            staticlib_name: libpdf_oxide.a
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: native-macos-x86_64
+            lib_name: libpdf_oxide.dylib
+            staticlib_name: libpdf_oxide.a
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: native-macos-aarch64
+            lib_name: libpdf_oxide.dylib
+            staticlib_name: libpdf_oxide.a
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: native-windows-x86_64
+            lib_name: pdf_oxide.dll
+            staticlib_name: pdf_oxide.lib
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact_name: native-windows-aarch64
+            lib_name: pdf_oxide.dll
+            staticlib_name: pdf_oxide.lib
+          # Cross-compiled MinGW build — used only by Go CGo on Windows x64.
+          - os: ubuntu-latest
+            target: x86_64-pc-windows-gnu
+            artifact_name: native-windows-x86_64-gnu
+            lib_name: pdf_oxide.dll
+            staticlib_name: libpdf_oxide.a
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+          target: ${{ matrix.target }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-${{ matrix.target }}-native-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: contains(matrix.target, 'aarch64-unknown-linux')
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y gcc-aarch64-linux-gnu
+
+      - name: Install cross-compilation tools (Windows GNU)
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y gcc-mingw-w64-x86-64
+
+      - name: Build cdylib + staticlib
+        shell: bash
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ contains(matrix.target, 'aarch64-unknown-linux') && 'aarch64-linux-gnu-gcc' || '' }}
+          CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: ${{ matrix.target == 'x86_64-pc-windows-gnu' && 'x86_64-w64-mingw32-gcc' || '' }}
+        run: |
+          # Include all optional features the C#/Node.js/Go bindings expose
+          # in their public API surface, INCLUDING `ocr` (#520 — Node/Go/C#
+          # OCR parity with the Python wheel). Without a feature the shipped
+          # libs return _ERR_UNSUPPORTED (8) for that area — a phantom API
+          # that compiles but always fails at runtime. OCR additionally
+          # needs an ONNX Runtime shared lib + provisioned models at
+          # runtime; the auto surface degrades gracefully to native text
+          # with a typed reason when they are absent (see docs/OCR_GUIDE.md).
+          cargo build --release --lib \
+            --features ocr,rendering,signatures,barcodes,tsa-client,system-fonts \
+            --target ${{ matrix.target }}
+          mkdir -p native-out
+          # Shared library (cdylib) — always present
+          cp target/${{ matrix.target }}/release/${{ matrix.lib_name }} native-out/
+          # Static library (staticlib) — produced because Cargo.toml lists
+          # "staticlib" in crate-type. File name differs between MSVC (.lib)
+          # and GNU/Unix (.a).
+          cp target/${{ matrix.target }}/release/${{ matrix.staticlib_name }} native-out/
+          # Also copy the C header
+          cp include/pdf_oxide_c/pdf_oxide.h native-out/
+          ls -la native-out/
+
+      # Shrink staticlib: strip .llvmbc (35MB/lib) + DWARF. Consumed by Go CGo
+      # and node-gyp, neither of which uses the embedded LLVM bitcode. On MSVC
+      # .lib (COFF archive) binutils isn't available, so skip — MSVC output is
+      # also substantially smaller to begin with.
+      - name: Shrink staticlib
+        if: matrix.staticlib_name == 'libpdf_oxide.a'
+        shell: bash
+        run: |
+          # Pass the matrix target so the script picks the right arch-specific
+          # objcopy on cross-compile (host objcopy silently no-ops on the
+          # ARM64 archive, leaving ~100 MB of .llvmbc shipped — the bug that
+          # bit v0.3.55's pdf_oxide-go-ffi-linux-arm64.tar.gz at 73 MB
+          # compressed vs. the expected ~22 MB).
+          bash scripts/shrink-staticlib.sh "native-out/${{ matrix.staticlib_name }}" "${{ matrix.target }}"
+          ls -la native-out/
+
+      - name: Upload native lib
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: native-out/
+          retention-days: 7
+
+      # PHP-binding consumable: a per-platform tarball containing JUST
+      # the cdylib, named `libpdf_oxide-vX.Y.Z-<php_key>.tar.gz`. The
+      # Composer post-install / lazy-loader hook in php/scripts/
+      # download-native-lib.php fetches these directly off the GitHub
+      # Release. Only generated for the 5 platforms PHP supports —
+      # windows-aarch64 + windows-gnu have no PHP downloader entry.
+      - name: Package PHP native asset
+        shell: bash
+        run: |
+          case "${{ matrix.target }}" in
+            x86_64-unknown-linux-gnu)  php_key=linux-x86_64  ;;
+            aarch64-unknown-linux-gnu) php_key=linux-aarch64 ;;
+            x86_64-apple-darwin)       php_key=darwin-x86_64 ;;
+            aarch64-apple-darwin)      php_key=darwin-arm64  ;;
+            x86_64-pc-windows-msvc)    php_key=windows-x64   ;;
+            *) echo "skipping PHP asset for ${{ matrix.target }}"; exit 0 ;;
+          esac
+          version="v${{ needs.validate.outputs.version }}"
+          outfile="libpdf_oxide-${version}-${php_key}.tar.gz"
+          tar -czf "${outfile}" -C native-out "${{ matrix.lib_name }}"
+          ls -la "${outfile}"
+          echo "PHP_ASSET=${outfile}" >> "$GITHUB_ENV"
+          echo "PHP_KEY=${php_key}" >> "$GITHUB_ENV"
+
+      - name: Upload PHP native asset
+        if: env.PHP_ASSET != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: php-native-${{ env.PHP_KEY }}
+          path: ${{ env.PHP_ASSET }}
+          retention-days: 7
+
+  # Java JNI shim — cross-compiled cdylib per supported arch. Mirrors
+  # `build-native-libs` matrix but builds `pdf_oxide_jni` (the JNI
+  # shim crate) instead of `pdf_oxide` (the C ABI lib). The output
+  # gets embedded into the fat JAR by `package-java-jar`.
+  build-java-native:
+    name: Build Java JNI native (${{ matrix.target }})
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: java-native-linux-x86_64
+            lib_name: libpdf_oxide_jni.so
+            jar_arch_dir: Linux/x86_64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_name: java-native-linux-aarch64
+            lib_name: libpdf_oxide_jni.so
+            jar_arch_dir: Linux/aarch64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: java-native-macos-x86_64
+            lib_name: libpdf_oxide_jni.dylib
+            jar_arch_dir: Mac/x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: java-native-macos-aarch64
+            lib_name: libpdf_oxide_jni.dylib
+            jar_arch_dir: Mac/aarch64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: java-native-windows-x86_64
+            lib_name: pdf_oxide_jni.dll
+            jar_arch_dir: Windows/x86_64
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+          target: ${{ matrix.target }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-${{ matrix.target }}-java-jni-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: contains(matrix.target, 'aarch64-unknown-linux')
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y gcc-aarch64-linux-gnu
+
+      - name: Build pdf_oxide_jni cdylib
+        shell: bash
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ contains(matrix.target, 'aarch64-unknown-linux') && 'aarch64-linux-gnu-gcc' || '' }}
+        run: |
+          # Same consumer-facing capabilities as the Node / Go / C#
+          # native cdylib (release.yml:417) and the Python wheel, so OCR
+          # is uniform across bindings. Includes OCR — JAR grows to
+          # ~80 MB but matches v0.3.52's OCR-enabled prebuilt promise.
+          # NOTE: `system-fonts` is NOT listed — the `pdf_oxide_jni`
+          # crate does not re-export it (only `pdf_oxide` does); it is
+          # pulled in transitively by `rendering`, so listing it here
+          # errors with "package does not contain this feature". FIPS
+          # Java builds in ci-fips.yml continue to opt out (no ocr).
+          cargo build --release -p pdf_oxide_jni \
+            --features ocr,rendering,signatures,barcodes,tsa-client \
+            --target ${{ matrix.target }}
+          mkdir -p native-out/${{ matrix.jar_arch_dir }}
+          cp target/${{ matrix.target }}/release/${{ matrix.lib_name }} \
+             native-out/${{ matrix.jar_arch_dir }}/
+          ls -la native-out/${{ matrix.jar_arch_dir }}/
+
+      - name: Upload Java JNI native
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: native-out/
+          retention-days: 7
+
+  # Build the fat JAR with all 5 platform natives embedded. The
+  # JAR is the publishable artifact; consumers
+  # `mvn install fyi.oxide:pdf-oxide:0.3.53` and it just works on
+  # any supported platform via NativeLoader's UUID-suffix extraction.
+  package-java-jar:
+    name: Package Java fat JAR
+    needs: [validate, build-java-native]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up JDK 11 (build floor)
+        uses: actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287 # v5.3.0
+        with:
+          distribution: 'temurin'
+          java-version: '11'
+
+      - name: Cache Maven local repository
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
+        with:
+          path: ~/.m2/repository
+          key: maven-${{ runner.os }}-${{ hashFiles('java/pom.xml') }}
+
+      # Pull each per-arch native into the resource tree the NativeLoader
+      # looks at. Each download-artifact step extracts the artifact's
+      # contents (which already include the {OS}/{ARCH}/ subdirectory
+      # prefix per build-java-native's artifact layout).
+      - name: Download Linux x86_64 native
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: java-native-linux-x86_64
+          path: java/src/main/resources/fyi/oxide/pdf/native/
+
+      - name: Download Linux aarch64 native
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: java-native-linux-aarch64
+          path: java/src/main/resources/fyi/oxide/pdf/native/
+
+      - name: Download macOS x86_64 native
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: java-native-macos-x86_64
+          path: java/src/main/resources/fyi/oxide/pdf/native/
+
+      - name: Download macOS aarch64 native
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: java-native-macos-aarch64
+          path: java/src/main/resources/fyi/oxide/pdf/native/
+
+      - name: Download Windows x86_64 native
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: java-native-windows-x86_64
+          path: java/src/main/resources/fyi/oxide/pdf/native/
+
+      - name: Verify all 5 natives staged
+        shell: bash
+        run: |
+          cd java/src/main/resources/fyi/oxide/pdf/native
+          tree . || find . -type f
+          for path in Linux/x86_64/libpdf_oxide_jni.so \
+                      Linux/aarch64/libpdf_oxide_jni.so \
+                      Mac/x86_64/libpdf_oxide_jni.dylib \
+                      Mac/aarch64/libpdf_oxide_jni.dylib \
+                      Windows/x86_64/pdf_oxide_jni.dll; do
+            [ -f "$path" ] || { echo "::error::missing $path"; exit 1; }
+          done
+
+      - name: mvn package (skip the dev rust-maven-plugin trigger)
+        working-directory: java
+        run: mvn -B -P!dev -DskipTests package
+
+      - name: Verify fat JAR
+        shell: bash
+        working-directory: java
+        run: |
+          # Resolve the built JAR by glob (pom.xml <version> is the single
+          # source of truth — this survives release bumps automatically).
+          shopt -s nullglob
+          jars=(target/pdf-oxide-*.jar)
+          shopt -u nullglob
+          [ "${#jars[@]}" -eq 1 ] || { echo "::error::expected exactly one target/pdf-oxide-*.jar, found: ${jars[*]:-<none>}"; exit 1; }
+          JAR="${jars[0]}"
+          for arch in Linux/x86_64 Linux/aarch64 Mac/x86_64 Mac/aarch64 Windows/x86_64; do
+            jar tf "$JAR" | grep -q "fyi/oxide/pdf/native/$arch/" \
+              || { echo "::error::missing arch in JAR: $arch"; exit 1; }
+          done
+          echo "::notice::Fat JAR validated: $JAR ($(stat -c%s "$JAR") bytes)"
+
+      - name: Upload fat JAR
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: java-jar-fat
+          path: java/target/pdf-oxide-*.jar
+          retention-days: 30
+
+  # Publish to Maven Central via the post-OSSRH central-publishing-
+  # maven-plugin. `autoPublish=false` per pom.xml + the release-gate
+  # convention: the upload reaches VALIDATED state, then a human
+  # flips the Publish button in the Central Portal UI.
+  publish-maven:
+    name: Publish to Maven Central (staged)
+    needs: [package-java-jar, create-release]
+    runs-on: ubuntu-latest
+    # Same convention as publish-npm / publish-pypi / publish-nuget:
+    # gated by the manual workflow_dispatch input + the maintainer
+    # release-gate, and only runs if the tag commit is on main.
+    if: ${{ github.event.inputs.publish == 'true' || github.event_name == 'push' }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up JDK 11
+        uses: actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287 # v5.3.0
+        with:
+          distribution: 'temurin'
+          java-version: '11'
+          # Configure the Central Portal credentials in settings.xml
+          # — token-based (post-OSSRH); the env vars come from secrets.
+          server-id: central
+          server-username: MAVEN_CENTRAL_USERNAME
+          server-password: MAVEN_CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+
+      - name: Download fat JAR
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: java-jar-fat
+          path: java/target/
+
+      # Re-stage natives so mvn deploy can produce sources/javadoc/JAR
+      # outputs the deployer expects (Central Portal validates the
+      # full bundle: JAR + sources + javadoc + .asc + .md5/.sha1).
+      - name: Re-download all platform natives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: java-native-*
+          path: java/src/main/resources/fyi/oxide/pdf/native/
+          merge-multiple: true
+
+      - name: mvn deploy to Central Portal (autoPublish=false)
+        working-directory: java
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: |
+          # `release` profile turns on GPG signing + central-publishing-
+          # maven-plugin with `autoPublish=false` per pom.xml. The
+          # deployment reaches VALIDATED state in Central Portal; a
+          # maintainer flips "Publish" manually from the UI (matches
+          # feedback_release_gate — human gates the public publish).
+          mvn -B -P!dev -Prelease -DskipTests deploy
+
+      - name: Notice — Central Portal staging done
+        run: |
+          echo "::notice::Java JAR uploaded to Central Portal in VALIDATED state."
+          echo "::notice::Sign in at https://central.sonatype.com/ and flip Publish to release."
+
+  # Package per-platform Go FFI tarballs as GitHub Release assets.
+  #
+  # v0.3.31 (#TBD) replaces the previous "commit .a files into go/lib/" flow
+  # with on-demand download: consumers run
+  #   go run github.com/yfedoseev/pdf_oxide/go/cmd/install@v{VERSION}
+  # which fetches the matching asset from the release and prints the
+  # CGO_CFLAGS / CGO_LDFLAGS to export. This keeps the Go module source-only
+  # (~500 KB) and removes ~310 MB of per-release git bloat.
+  package-go-ffi:
+    name: Package Go FFI release assets
+    needs: [validate, build-native-libs]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Download all native-lib artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: native-*
+          path: native-libs
+
+      - name: Pack per-platform go-ffi tarballs + sha256
+        run: |
+          set -euxo pipefail
+          OUT="go-ffi-out"
+          mkdir -p "$OUT"
+
+          pack() {
+            local platform="$1" src_artifact="$2" src_lib="$3"
+            local tmp="tmp-$platform"
+            rm -rf "$tmp"
+            mkdir -p "$tmp/lib/$platform" "$tmp/include"
+
+            cp "native-libs/$src_artifact/$src_lib" "$tmp/lib/$platform/libpdf_oxide.a"
+            cp include/pdf_oxide_c/pdf_oxide.h "$tmp/include/pdf_oxide.h"
+
+            # Normalise platform name for the asset filename (darwin_arm64 -> darwin-arm64)
+            local asset_name="${platform/_/-}"
+            local tgz="$OUT/pdf_oxide-go-ffi-$asset_name.tar.gz"
+            tar -C "$tmp" -czf "$tgz" lib include
+
+            # sha256 file sits alongside the tarball on the release. The Go
+            # installer downloads both and aborts if the hash doesn't match,
+            # so a compromised CDN or typo in an asset name fails closed.
+            (cd "$OUT" && sha256sum "pdf_oxide-go-ffi-$asset_name.tar.gz" > "pdf_oxide-go-ffi-$asset_name.tar.gz.sha256")
+          }
+
+          # pack_shared mirrors pack() but ships the cdylib (.so/.dylib/.dll)
+          # for consumption by the purego backend (CGO_ENABLED=0) which
+          # dlopens the lib at runtime. Archive filename scheme:
+          #   pdf_oxide-go-ffi-shared-<platform>.tar.gz
+          pack_shared() {
+            local platform="$1" src_artifact="$2" src_lib="$3" dest_lib="$4"
+            local tmp="tmp-shared-$platform"
+            rm -rf "$tmp"
+            mkdir -p "$tmp/lib/$platform" "$tmp/include"
+
+            cp "native-libs/$src_artifact/$src_lib" "$tmp/lib/$platform/$dest_lib"
+            cp include/pdf_oxide_c/pdf_oxide.h "$tmp/include/pdf_oxide.h"
+
+            local asset_name="${platform/_/-}"
+            local tgz="$OUT/pdf_oxide-go-ffi-shared-$asset_name.tar.gz"
+            tar -C "$tmp" -czf "$tgz" lib include
+
+            (cd "$OUT" && sha256sum "pdf_oxide-go-ffi-shared-$asset_name.tar.gz" > "pdf_oxide-go-ffi-shared-$asset_name.tar.gz.sha256")
+          }
+
+          pack linux_amd64   native-linux-x86_64       libpdf_oxide.a
+          pack linux_arm64   native-linux-aarch64      libpdf_oxide.a
+          pack darwin_amd64  native-macos-x86_64       libpdf_oxide.a
+          pack darwin_arm64  native-macos-aarch64      libpdf_oxide.a
+          # Windows x64: MinGW cross-compiled .a (CGo uses MinGW gcc).
+          pack windows_amd64 native-windows-x86_64-gnu libpdf_oxide.a
+
+          # Shared-lib variants for the purego backend.
+          pack_shared linux_amd64   native-linux-x86_64  libpdf_oxide.so    libpdf_oxide.so
+          pack_shared linux_arm64   native-linux-aarch64 libpdf_oxide.so    libpdf_oxide.so
+          pack_shared darwin_amd64  native-macos-x86_64  libpdf_oxide.dylib libpdf_oxide.dylib
+          pack_shared darwin_arm64  native-macos-aarch64 libpdf_oxide.dylib libpdf_oxide.dylib
+          # Windows MSVC .dll (what the purego backend Dlopen's) — MinGW also
+          # produces a .dll but the MSVC build is what consumers expect.
+          pack_shared windows_amd64 native-windows-x86_64 pdf_oxide.dll pdf_oxide.dll
+
+          echo "=== Go FFI release assets ==="
+          ls -lh "$OUT/"
+
+      - name: Upload go-ffi assets artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: go-ffi-assets
+          path: |
+            go-ffi-out/*.tar.gz
+            go-ffi-out/*.tar.gz.sha256
+          retention-days: 7
+
+  # Creates the `go/v<version>` sub-module tag.
+  #
+  # IMPORTANT: this runs AFTER `create-release` publishes the release with
+  # its FFI tarballs attached. If the order were reversed, `go install
+  # github.com/.../cmd/install@latest` could briefly resolve the new tag
+  # while the installer then 404s fetching the FFI asset. By only tagging
+  # once the GitHub Release is up, `@latest` is consistent with reality.
+  tag-go-module:
+    name: Tag Go module
+    needs: [validate, create-release]
+    runs-on: ubuntu-latest
+    # Restricted to full releases (no `-rc.1`-style prereleases), matching
+    # verify-go-install. Tagging a Go module drops the tag on module-proxy /
+    # sum.golang.org in minutes, and we don't want RC tags polluting that.
+    # #515 hard-gate: a pull_request (PR dry-run) can NEVER publish;
+    # only a real tag push, or workflow_dispatch with publish=true.
+    if: ${{ !contains(needs.validate.outputs.version, '-') && github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || inputs.publish) }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push go/v<version> tag
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git ls-remote --tags origin "go/v${VERSION}" | grep -q .; then
+            echo "Tag go/v${VERSION} already exists on remote — skipping"
+            exit 0
+          fi
+
+          # Tag the commit that validate.yml resolved to — same SHA that
+          # produced the release assets, so `go install @v${VERSION}`
+          # downloads source that matches the FFI on the release.
+          git tag "go/v${VERSION}" "${{ github.sha }}"
+          git push origin "go/v${VERSION}"
+
+  # Local path verification that the Go module builds correctly against the
+  # freshly-packaged go-ffi asset. Simulates the end-user flow: extract the
+  # archive locally, export CGO_CFLAGS/LDFLAGS (as the installer would print),
+  # then build a tiny consumer against a `replace`-d local checkout. Uses
+  # `replace` so we avoid touching sum.golang.org before the tag propagates.
+  verify-go-install:
+    name: Verify Go build (${{ matrix.os }})
+    needs: [validate, package-go-ffi]
+    runs-on: ${{ matrix.os }}
+    # #515 hard-gate: a pull_request (PR dry-run) can NEVER publish;
+    # only a real tag push, or workflow_dispatch with publish=true.
+    if: ${{ !contains(needs.validate.outputs.version, '-') && github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || inputs.publish) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: '1.22'
+
+      - name: Download go-ffi assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: go-ffi-assets
+          path: go-ffi-assets
+
+      - name: Verify checksum + extract FFI asset
+        id: extract
+        shell: bash
+        run: |
+          set -euxo pipefail
+          # Detect the runner architecture — macos-latest transitioned
+          # from x86_64 to arm64 once, and may flip again. Pick the asset
+          # at runtime so the verification gate tracks the actual runner.
+          arch=$(uname -m)
+          case "${{ matrix.os }}-$arch" in
+            ubuntu-latest-x86_64)  asset=pdf_oxide-go-ffi-linux-amd64.tar.gz;  goarch_dir=linux_amd64  ;;
+            ubuntu-latest-aarch64) asset=pdf_oxide-go-ffi-linux-arm64.tar.gz;  goarch_dir=linux_arm64  ;;
+            macos-latest-arm64)    asset=pdf_oxide-go-ffi-darwin-arm64.tar.gz; goarch_dir=darwin_arm64 ;;
+            macos-latest-x86_64)   asset=pdf_oxide-go-ffi-darwin-amd64.tar.gz; goarch_dir=darwin_amd64 ;;
+            *) echo "unsupported matrix os/arch: ${{ matrix.os }} / $arch" && exit 1 ;;
+          esac
+
+          # Checksum gate — this is the same check the Go installer performs
+          # at runtime. Guards against truncated CI artifacts and divergence
+          # between the .tar.gz and .sha256 we publish.
+          (cd go-ffi-assets && shasum -a 256 -c "${asset}.sha256")
+
+          mkdir -p "$HOME/.pdf_oxide/v${{ needs.validate.outputs.version }}"
+          tar -C "$HOME/.pdf_oxide/v${{ needs.validate.outputs.version }}" \
+              -xzf "go-ffi-assets/$asset"
+          echo "install_dir=$HOME/.pdf_oxide/v${{ needs.validate.outputs.version }}" >> "$GITHUB_OUTPUT"
+          echo "lib_dir=$HOME/.pdf_oxide/v${{ needs.validate.outputs.version }}/lib/$goarch_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Build local consumer with replace directive
+        shell: bash
+        env:
+          CGO_CFLAGS: -I${{ steps.extract.outputs.install_dir }}/include
+        run: |
+          set -euxo pipefail
+
+          case "${{ matrix.os }}" in
+            ubuntu-latest) CGO_LDFLAGS="${{ steps.extract.outputs.lib_dir }}/libpdf_oxide.a -lm -lpthread -ldl -lrt -lgcc_s -lutil -lc" ;;
+            macos-latest)  CGO_LDFLAGS="${{ steps.extract.outputs.lib_dir }}/libpdf_oxide.a -framework CoreFoundation -framework Security -framework SystemConfiguration -liconv -lresolv" ;;
+          esac
+          export CGO_LDFLAGS
+
+          WORK="$(mktemp -d)"
+          cd "$WORK"
+          go mod init verify
+          go mod edit -replace "github.com/yfedoseev/pdf_oxide/go=$GITHUB_WORKSPACE/go"
+          go mod edit -require "github.com/yfedoseev/pdf_oxide/go@v0.0.0"
+          cat > main.go <<'EOT'
+          package main
+
+          import (
+            "fmt"
+            "os"
+
+            pdfoxide "github.com/yfedoseev/pdf_oxide/go"
+          )
+
+          func main() {
+            pdf, err := pdfoxide.FromMarkdown("# verify-go-install\n")
+            if err != nil { fmt.Println("fromMarkdown:", err); os.Exit(1) }
+            defer pdf.Close()
+            out := "out.pdf"
+            if err := pdf.Save(out); err != nil { fmt.Println("save:", err); os.Exit(1) }
+
+            doc, err := pdfoxide.Open(out)
+            if err != nil { fmt.Println("open:", err); os.Exit(1) }
+            defer doc.Close()
+            n, err := doc.PageCount()
+            if err != nil { fmt.Println("pageCount:", err); os.Exit(1) }
+            fmt.Printf("ok pages=%d\n", n)
+          }
+          EOT
+          go build -o verify ./...
+          # Self-contained binary: no runtime lookup of libpdf_oxide.
+          unset LD_LIBRARY_PATH DYLD_LIBRARY_PATH
+          ./verify
+
+  # Build Node.js native addon — one .node file per matrix row (#335).
+  #
+  # Each row downloads the Rust staticlib artifact for its target, stages it
+  # at <repo>/lib/ where js/binding.gyp expects it, runs `node-gyp rebuild` to
+  # produce a real `pdf_oxide.node` addon. The publish-npm-native job later
+  # collects all .node artifacts into js/prebuilds/<triple>/ for bundled
+  # distribution.
+  build-nodejs:
+    name: Build Node.js (${{ matrix.triple }})
+    needs: [validate, build-native-libs]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Pin to ubuntu-22.04 (glibc 2.35) so the .node prebuild runs on
+          # every distro whose glibc is ≥ 2.35 — effectively Debian 12+
+          # (bookworm ships 2.36) and Ubuntu 22.04+ (22.04 ships exactly
+          # 2.35). Debian 11 / Ubuntu 20.04 / RHEL 8 / RHEL 9 (glibc 2.34)
+          # are intentionally NOT supported by this prebuild; users on
+          # those baselines should build from source. Combined with the
+          # static-libstdc++/static-libgcc flags in binding.gyp, this
+          # makes the linux-x64-gnu prebuild self-contained: no system
+          # libstdc++ version mismatch (was failing on Debian 12 /
+          # GLIBCXX_3.4.30 when built against ubuntu-latest).
+          - os: ubuntu-22.04
+            triple: linux-x64-gnu
+            native_artifact: native-linux-x86_64
+            expected_arch: x86_64
+          - os: ubuntu-22.04-arm
+            triple: linux-arm64-gnu
+            native_artifact: native-linux-aarch64
+            expected_arch: arm64
+          # darwin-x64 — cross-compiled from macos-latest (arm64). The
+          # macos-13 (Intel) runner pool was retired 2025-12, so we build
+          # x86_64 on the arm64 host with `node-gyp --arch=x64` (gyp_arch
+          # below), matching how the Rust staticlib / ruby gem / fips
+          # workflows already cross-compile x86_64-apple-darwin. node-gyp
+          # otherwise emits an arm64 .node under the darwin-x64 label —
+          # the wrong-arch binary that bit v0.3.55 (Mach-O CPU type
+          # 0x0100000c ARM64 vs expected 0x01000007 x86_64). The
+          # post-build arch verification step below hard-gates against
+          # that regression.
+          - os: macos-latest
+            triple: darwin-x64
+            native_artifact: native-macos-x86_64
+            expected_arch: x86_64
+            gyp_arch: x64
+          - os: macos-latest
+            triple: darwin-arm64
+            native_artifact: native-macos-aarch64
+            expected_arch: arm64
+          - os: windows-latest
+            triple: win32-x64-msvc
+            native_artifact: native-windows-x86_64
+            expected_arch: x86_64
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '20'
+
+      - name: Download Rust staticlib artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ matrix.native_artifact }}
+          path: lib/
+
+      - name: Install npm dependencies
+        working-directory: js
+        shell: bash
+        run: npm install --ignore-scripts
+
+      - name: Build native addon with node-gyp
+        working-directory: js
+        shell: bash
+        run: |
+          ls -la ../lib/
+          # Cross-compile target arch when the matrix asks for one (e.g.
+          # darwin-x64 built on the arm64 macos-latest host). Native
+          # builds leave gyp_arch empty and node-gyp picks the host arch.
+          ARCH_FLAG=""
+          if [ -n "${{ matrix.gyp_arch }}" ]; then
+            ARCH_FLAG="--arch=${{ matrix.gyp_arch }}"
+          fi
+          npx node-gyp rebuild $ARCH_FLAG
+          ls -la build/Release/
+
+      # node-gyp links release mode but doesn't strip the final .node. On
+      # Linux this was 17 MB shipped; strip takes it to ~12 MB. macOS uses
+      # strip -x (keeps global symbols N-API needs). Windows MSVC emits no
+      # PDB by default for this target, so nothing to strip.
+      - name: Strip .node addon
+        if: runner.os != 'Windows'
+        working-directory: js
+        shell: bash
+        run: |
+          BEFORE=$(wc -c < build/Release/pdf_oxide.node)
+          case "${{ runner.os }}" in
+            Linux)  strip --strip-unneeded build/Release/pdf_oxide.node ;;
+            macOS)  strip -x build/Release/pdf_oxide.node ;;
+          esac
+          AFTER=$(wc -c < build/Release/pdf_oxide.node)
+          echo "pdf_oxide.node: ${BEFORE} -> ${AFTER} bytes"
+
+      # Hard-gate against the wrong-arch publish that bit v0.3.55's
+      # darwin-x64 — Mach-O CPU type 0x0100000c (ARM64) shipped as if
+      # it were x86_64 (0x01000007). `file` prints the architecture
+      # for ELF / Mach-O / PE32+; grep for the expected token and
+      # fail the build if it's missing.
+      - name: Verify .node architecture matches matrix triple
+        if: matrix.expected_arch != ''
+        working-directory: js
+        shell: bash
+        run: |
+          NODE_FILE=build/Release/pdf_oxide.node
+          ARCH_LINE=$(file "$NODE_FILE")
+          echo "file: $ARCH_LINE"
+          case "${{ matrix.expected_arch }}" in
+            x86_64)   GREP_RE='x86[_-]64|x86-64' ;;
+            arm64)    GREP_RE='arm64|aarch64'    ;;
+            *) echo "::error::unknown expected_arch '${{ matrix.expected_arch }}'"; exit 1 ;;
+          esac
+          if ! echo "$ARCH_LINE" | grep -Eq "$GREP_RE"; then
+            echo "::error::Built .node is the WRONG architecture for triple '${{ matrix.triple }}': expected ${{ matrix.expected_arch }}, file reported '$ARCH_LINE'" >&2
+            exit 1
+          fi
+          echo "OK — .node architecture matches expected '${{ matrix.expected_arch }}'"
+
+      - name: Upload .node artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nodejs-${{ matrix.triple }}
+          path: js/build/Release/pdf_oxide.node
+          retention-days: 7
+
+  # Build C# NuGet package
+  build-csharp:
+    name: Build C# NuGet
+    needs: [validate, build-native-libs]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5
+        with:
+          # #333 targets net8.0 + net10.0, so both SDKs must be present for
+          # `dotnet pack` to emit both TFM outputs.
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Download all native libraries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: native-*
+          path: native-libs
+
+      - name: Stage native libraries for NuGet
+        run: |
+          # Copy each platform's native lib to the expected target/ paths
+          mkdir -p target/release
+          mkdir -p target/aarch64-unknown-linux-gnu/release
+          mkdir -p target/aarch64-apple-darwin/release
+          mkdir -p target/aarch64-pc-windows-msvc/release
+
+          # x64 libraries go to target/release/
+          cp native-libs/native-linux-x86_64/libpdf_oxide.so target/release/ 2>/dev/null || true
+          cp native-libs/native-macos-x86_64/libpdf_oxide.dylib target/release/ 2>/dev/null || true
+          cp native-libs/native-windows-x86_64/pdf_oxide.dll target/release/ 2>/dev/null || true
+
+          # ARM64 libraries go to cross-compilation target paths
+          cp native-libs/native-linux-aarch64/libpdf_oxide.so target/aarch64-unknown-linux-gnu/release/ 2>/dev/null || true
+          cp native-libs/native-macos-aarch64/libpdf_oxide.dylib target/aarch64-apple-darwin/release/ 2>/dev/null || true
+          cp native-libs/native-windows-aarch64/pdf_oxide.dll target/aarch64-pc-windows-msvc/release/ 2>/dev/null || true
+
+          echo "=== Staged native libraries ==="
+          find target -name "*.so" -o -name "*.dylib" -o -name "*.dll" | sort
+
+      - name: Build NuGet package
+        working-directory: csharp/PdfOxide
+        run: |
+          dotnet pack -c Release -o ../../nuget-out /p:Version=${{ needs.validate.outputs.version }}
+
+      - name: Verify NativeAOT publish (#333)
+        working-directory: csharp/PdfOxide
+        shell: bash
+        run: |
+          set -euxo pipefail
+          # Prove the binding is AOT-safe: publish a tiny consumer with
+          # PublishAot=true on net10.0 and make sure the trim/AOT analyzer
+          # surfaces no warnings. If LibraryImport regresses, this step
+          # fails with IL2026 / IL3050 / SYSLIB10xx diagnostics instead of
+          # a silent runtime crash in an end-user's published binary.
+          #
+          # AotSmoke lives in a throw-away $TMPDIR directory so the SDK's
+          # default `<Compile Include="**/*.cs">` wildcard can't walk back
+          # into csharp/PdfOxide/ and duplicate every type. Earlier the
+          # step placed a `PdfOxide.link` symlink inside the temp project
+          # as a "ProjectReference fallback", and the wildcard pulled every
+          # .cs file from the main library in through the link — producing
+          # ~80 CS0436 / CS0579 errors. The absolute-path ProjectReference
+          # below needs no symlink at all.
+          #
+          # AllowUnsafeBlocks is mandatory: LibraryImport's source generator
+          # emits `fixed byte*` pinning for every `string` parameter in the
+          # generated P/Invoke stub, which requires unsafe codegen even
+          # though no user-visible unsafe code is involved (SYSLIB1062).
+          PDF_OXIDE_PROJ="$PWD/PdfOxide.csproj"
+          PDF_OXIDE_SO="$(realpath "$PWD/../../target/release/libpdf_oxide.so")"
+          AOT_DIR="$(mktemp -d)"
+          mkdir -p "$AOT_DIR/AotSmoke"
+          cat > "$AOT_DIR/AotSmoke/AotSmoke.csproj" <<EOT
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <OutputType>Exe</OutputType>
+              <TargetFramework>net10.0</TargetFramework>
+              <Nullable>enable</Nullable>
+              <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+              <PublishAot>true</PublishAot>
+              <InvariantGlobalization>true</InvariantGlobalization>
+              <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+            </PropertyGroup>
+            <ItemGroup>
+              <ProjectReference Include="${PDF_OXIDE_PROJ}" />
+            </ItemGroup>
+          </Project>
+          EOT
+          cat > "$AOT_DIR/AotSmoke/Program.cs" <<'EOT'
+          using PdfOxide.Core;
+
+          using var pdf = Pdf.FromMarkdown("# verify-csharp-aot\n\nbody text.");
+          var outPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "verify-aot.pdf");
+          pdf.Save(outPath);
+          using var doc = PdfDocument.Open(outPath);
+          System.Console.WriteLine($"ok pages={doc.PageCount}");
+          EOT
+          dotnet publish "$AOT_DIR/AotSmoke/AotSmoke.csproj" \
+            -c Release -r linux-x64 -o "$AOT_DIR/out"
+          # C# still uses dynamic P/Invoke against libpdf_oxide.so at
+          # runtime (the staticlib path from #334 is Go-only), so stage
+          # the Linux cdylib next to the AOT binary before we execute it.
+          cp "$PDF_OXIDE_SO" "$AOT_DIR/out/"
+          # Run the AOT-compiled binary — no .NET runtime required.
+          env -i PATH=/usr/bin:/bin "$AOT_DIR/out/AotSmoke" \
+            || { echo "AOT smoke test failed"; exit 1; }
+
+      - name: Upload NuGet package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nuget-package
+          path: nuget-out/*.nupkg
+          retention-days: 7
+
+  # Generate Python type stubs (runs once on a supported platform)
+  generate-python-stubs:
+    name: Generate Python type stubs
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: Generate type stubs
+        run: uvx rylai -o python/pdf_oxide/
+
+      - name: Upload type stubs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-type-stubs
+          path: python/pdf_oxide/*.pyi
+          retention-days: 7
+
+  # Build Python wheels
+  build-python-wheels:
+    name: Build Python wheels (${{ matrix.target }})
+    needs: [validate, generate-python-stubs]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64 (glibc)
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: wheels-linux-x86_64
+
+          # Linux ARM64 (glibc)
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_name: wheels-linux-aarch64
+
+          # macOS x86_64 (Intel)
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: wheels-macos-x86_64
+
+          # macOS ARM64 (Apple Silicon)
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: wheels-macos-aarch64
+
+          # Windows x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: wheels-windows-x86_64
+
+          # Windows ARM64
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            artifact_name: wheels-windows-aarch64
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Free disk space (Ubuntu)
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/free-disk-space
+        with:
+          tool-cache: 'false'
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.11'
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+          target: ${{ matrix.target }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: Install maturin
+        run: uv pip install --system maturin
+
+      - name: Install Linux cross-compilation tools
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y gcc-aarch64-linux-gnu
+
+      - name: Download type stubs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-type-stubs
+          path: python/pdf_oxide/
+
+      # Linux glibc wheels build inside the manylinux_2_28 container so the
+      # produced .whl is tagged manylinux_2_28 (glibc ≥ 2.28). This covers
+      # AL2023 / AWS Lambda Python (glibc 2.34), RHEL 8, Ubuntu 20.04,
+      # Debian 11. Building directly on ubuntu-latest tags wheels with the
+      # runner's glibc (2_35+) and locks those distros out — see PR #463
+      # comment thread on 0.3.42/0.3.43 install failure on Lambda Python.
+      # Feature set matches python.yml CI exactly: `python,ocr,barcodes`.
+      # Previously the published wheel only carried `python`, so PyPI users
+      # got a Python wheel without OCR even though CI tested the OCR path.
+      # v0.3.52 enabled OCR for Node / Go / C# prebuilts; Python was missed
+      # — this restores parity. OCR users still need the runtime onnxruntime
+      # Python wheel via `pip install pdf_oxide[ocr]`, per the existing
+      # `[project.optional-dependencies] ocr` declaration in pyproject.toml.
+      # FIPS Python builds opt out via release-fips.yml's
+      # `--no-default-features --features python,fips,icc` (no ocr listed).
+      - name: Build wheels (linux glibc — manylinux_2_28)
+        if: runner.os == 'Linux'
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          target: ${{ matrix.target }}
+          manylinux: '2_28'
+          args: --release --features python,ocr,barcodes --out dist
+
+      - name: Build wheels (macOS / Windows)
+        if: runner.os != 'Linux'
+        shell: bash
+        run: maturin build --release --features python,ocr,barcodes --target ${{ matrix.target }} --out dist
+
+      - name: Verify manylinux_2_28 tag
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! ls dist/*manylinux_2_28*.whl >/dev/null 2>&1; then
+            echo "::error::Expected a manylinux_2_28 wheel for ${{ matrix.target }} but found:"
+            ls -la dist/
+            exit 1
+          fi
+          echo "manylinux_2_28 wheel produced:"
+          ls dist/*manylinux_2_28*.whl
+
+      - name: Build sdist
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: maturin sdist --out dist
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/*
+          retention-days: 7
+
+  # Build Python wheels for musl targets (Docker-based via maturin-action)
+  build-python-wheels-musl:
+    name: Build Python wheels (linux ${{ matrix.target }} musllinux)
+    needs: [validate, generate-python-stubs]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Download type stubs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-type-stubs
+          path: python/pdf_oxide/
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          target: ${{ matrix.target }}
+          manylinux: musllinux_1_2
+          # Mirrors the glibc Python wheel feature set above and python.yml CI:
+          # `python,ocr,barcodes`. Without `ocr`, musl Python users (Alpine,
+          # distroless-musl images) cannot use OCR at all.
+          args: --release --features python,ocr,barcodes --out dist
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-linux-${{ matrix.target }}-musl
+          path: dist/*
+          retention-days: 7
+
+  # Create GitHub Release
+  create-release:
+    name: Create GitHub Release
+    # verify-go-install gates the Go flow end-to-end (checksum match,
+    # CGO_LDFLAGS recipe, FromMarkdown→Save→Open→PageCount) before we ever
+    # publish the release, so a broken .a or a stale cgo_dev.go can't leak
+    # into a tagged release. For prereleases (`-rc.1` etc.) verify-go-install
+    # is skipped; `always() && result != failure` lets the release proceed.
+    needs: [validate, build-binaries, build-python-wheels, build-python-wheels-musl, build-wasm, build-native-libs, build-nodejs, build-csharp, package-go-ffi, verify-go-install]
+    # #515 hard-gate: create-release publishes a GitHub Release (mutating)
+    # — never on a pull_request dry-run; only a real tag / dispatch+publish.
+    if: ${{ always() && needs.verify-go-install.result != 'failure' && needs.package-go-ffi.result == 'success' && github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || inputs.publish) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: artifacts
+
+      - name: Organize release files
+        run: |
+          mkdir -p release-files
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.tar.gz.sha256" -o -name "*.zip" -o -name "*.whl" -o -name "*.deb" -o -name "*.nupkg" \) -exec cp {} release-files/ \;
+          echo "=== Release files ==="
+          ls -lh release-files/
+
+      - name: Extract release notes from CHANGELOG
+        run: |
+          chmod +x .github/scripts/extract-release-notes.sh
+          .github/scripts/extract-release-notes.sh "${{ needs.validate.outputs.version }}"
+
+      - name: Read release title
+        id: title
+        # Defense-in-depth (issue #506): the extract script already fails
+        # loudly on a missing/stale subtitle, but re-validate the title shape
+        # here so a script regression can never publish a bare or wrong title.
+        run: |
+          TITLE="$(cat release-title.txt)"
+          VERSION="${{ needs.validate.outputs.version }}"
+          PREFIX="v${VERSION} | "
+          if [ "${TITLE#"$PREFIX"}" = "$TITLE" ]; then
+            echo "::error::Release title '$TITLE' does not start with expected prefix '${PREFIX}'. Check the '> subtitle' under '## [$VERSION]' in CHANGELOG.md." >&2
+            exit 1
+          fi
+          if [ "${#TITLE}" -lt 20 ]; then
+            echo "::error::Release title '$TITLE' is suspiciously short (<20 chars) — likely a missing or stub subtitle." >&2
+            exit 1
+          fi
+          echo "title=$TITLE" >> "$GITHUB_OUTPUT"
+
+      - name: Create release
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
+        with:
+          name: ${{ steps.title.outputs.title }}
+          body_path: release-notes.md
+          files: release-files/*
+          draft: false
+          prerelease: ${{ contains(needs.validate.outputs.version, '-') }}
+          fail_on_unmatched_files: false
+
+      - name: Install cargo-cyclonedx
+        uses: taiki-e/install-action@ace6ebe54a6a0c86dfb5f7764b17f793b6925bc3 # v2
+        with:
+          tool: cargo-cyclonedx
+
+      - name: Generate SBOM
+        run: cargo cyclonedx --format json --spec-version 1.5 --override-filename sbom.cdx
+
+      - name: Upload SBOM to release
+        # --clobber overwrites an existing asset of the same name instead of
+        # erroring, so a `gh run rerun --failed` of Create GitHub Release stays
+        # idempotent and does not cascade-skip the publish jobs (#548). Matches
+        # the overwrite behaviour softprops/action-gh-release already uses for
+        # the main release assets.
+        run: gh release upload "${{ github.ref_name }}" sbom.cdx.json --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # Publish to crates.io (optional)
+  publish-crates:
+    name: Publish to crates.io
+    needs: [validate, create-release]
+    runs-on: ubuntu-latest
+    # #515 hard-gate: a pull_request (PR dry-run) can NEVER publish;
+    # only a real tag push, or workflow_dispatch with publish=true.
+    if: ${{ !contains(needs.validate.outputs.version, '-') && github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || inputs.publish) }}
+    environment:
+      name: crates-io
+      url: https://crates.io/crates/pdf_oxide
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+
+      - name: Verify crates.io readiness
+        run: cargo publish -p pdf_oxide --dry-run
+
+      - name: Publish to crates.io
+        run: |
+          V="${{ needs.validate.outputs.version }}"
+          for crate in pdf_oxide pdf_oxide_cli pdf_oxide_mcp; do
+            # --retry covers transient network/DNS/5xx blips but NOT a 404
+            # (no --retry-all-errors), so a not-yet-published crate still
+            # falls straight through to the publish branch without delay.
+            if curl -sf --retry 3 --retry-delay 2 "https://crates.io/api/v1/crates/$crate/$V" -H "User-Agent: pdf_oxide-release-ci" > /dev/null; then
+              echo "$crate $V already on crates.io — skipping"
+            else
+              cargo publish -p $crate
+            fi
+          done
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
+
+  # Publish to PyPI (optional)
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [validate, build-python-wheels, create-release]
+    runs-on: ubuntu-latest
+    # #515 hard-gate: a pull_request (PR dry-run) can NEVER publish;
+    # only a real tag push, or workflow_dispatch with publish=true.
+    if: ${{ !contains(needs.validate.outputs.version, '-') && github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || inputs.publish) }}
+    environment:
+      name: pypi
+      url: https://pypi.org/p/pdf_oxide
+    permissions:
+      contents: read
+    steps:
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: wheels
+          pattern: wheels-*
+          merge-multiple: true
+
+      - name: List wheels
+        run: |
+          echo "=== Wheels to publish ==="
+          ls -lh wheels/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          packages-dir: wheels/
+          skip-existing: true
+
+  # Publish to npm
+  publish-npm:
+    name: Publish to npm
+    needs: [validate, build-wasm, create-release]
+    runs-on: ubuntu-latest
+    # #515 hard-gate: a pull_request (PR dry-run) can NEVER publish;
+    # only a real tag push, or workflow_dispatch with publish=true.
+    if: ${{ !contains(needs.validate.outputs.version, '-') && github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || inputs.publish) }}
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/pdf-oxide-wasm
+    permissions:
+      contents: read
+    steps:
+      - name: Download WASM artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: wasm-package
+          path: wasm-out
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: List package contents
+        run: |
+          echo "=== WASM package contents ==="
+          ls -lh wasm-out/
+
+      - name: Publish to npm
+        working-directory: wasm-out
+        run: |
+          V="${{ needs.validate.outputs.version }}"
+          PKG=$(node -p "require('./package.json').name")
+          if npm view "$PKG@$V" version > /dev/null 2>&1; then
+            echo "$PKG $V already on npm — skipping"
+          else
+            npm publish --access public
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # Publish Homebrew formula and Scoop manifest
+  publish-packaging:
+    name: Publish Homebrew & Scoop
+    needs: [validate, create-release]
+    runs-on: ubuntu-latest
+    # #515 hard-gate: a pull_request (PR dry-run) can NEVER publish;
+    # only a real tag push, or workflow_dispatch with publish=true.
+    if: ${{ !contains(needs.validate.outputs.version, '-') && github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || inputs.publish) }}
+    environment:
+      name: packaging
+      url: https://github.com/yfedoseev/homebrew-tap
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Download release archives
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          mkdir -p release-archives
+          cd release-archives
+          gh release download "v${VERSION}" \
+            --pattern "pdf_oxide-macos-aarch64-${VERSION}.tar.gz" \
+            --pattern "pdf_oxide-macos-x86_64-${VERSION}.tar.gz" \
+            --pattern "pdf_oxide-linux-x86_64-musl-${VERSION}.tar.gz" \
+            --pattern "pdf_oxide-windows-x86_64-${VERSION}.zip"
+
+      - name: Compute SHA256 hashes
+        id: hashes
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          cd release-archives
+          echo "macos_arm=$(sha256sum pdf_oxide-macos-aarch64-${VERSION}.tar.gz | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+          echo "macos_x86=$(sha256sum pdf_oxide-macos-x86_64-${VERSION}.tar.gz | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+          echo "linux_x86=$(sha256sum pdf_oxide-linux-x86_64-musl-${VERSION}.tar.gz | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+          echo "windows=$(sha256sum pdf_oxide-windows-x86_64-${VERSION}.zip | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+
+      - name: Generate Homebrew formula
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          sed \
+            -e "s/{{VERSION}}/${VERSION}/g" \
+            -e "s/{{SHA256_MACOS_ARM}}/${{ steps.hashes.outputs.macos_arm }}/g" \
+            -e "s/{{SHA256_MACOS_X86}}/${{ steps.hashes.outputs.macos_x86 }}/g" \
+            -e "s/{{SHA256_LINUX_X86}}/${{ steps.hashes.outputs.linux_x86 }}/g" \
+            .github/templates/pdf-oxide.rb > pdf-oxide.rb
+          echo "=== Generated Homebrew formula ==="
+          cat pdf-oxide.rb
+
+      - name: Generate Scoop manifest
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          sed \
+            -e "s/{{VERSION}}/${VERSION}/g" \
+            -e "s/{{SHA256_WINDOWS}}/${{ steps.hashes.outputs.windows }}/g" \
+            .github/templates/pdf-oxide.json > pdf-oxide.json
+          echo "=== Generated Scoop manifest ==="
+          cat pdf-oxide.json
+
+      - name: Upload packaging artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: packaging-manifests
+          path: |
+            pdf-oxide.rb
+            pdf-oxide.json
+          retention-days: 90
+
+      - name: Push to Homebrew tap
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/yfedoseev/homebrew-tap.git" tap-repo
+          cp pdf-oxide.rb tap-repo/Formula/pdf-oxide.rb
+          cd tap-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/pdf-oxide.rb
+          git commit -m "Update pdf-oxide to ${{ needs.validate.outputs.version }}"
+          git push
+
+      - name: Push Scoop manifest
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/yfedoseev/scoop-pdf-oxide.git" scoop-repo
+          cp pdf-oxide.json scoop-repo/pdf-oxide.json
+          cd scoop-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pdf-oxide.json
+          git commit -m "Update pdf-oxide to ${{ needs.validate.outputs.version }}"
+          git push
+
+  # Publish the main `pdf-oxide` package with bundled prebuilds.
+  # All per-platform .node files are collected from the build-nodejs matrix
+  # and placed under js/prebuilds/<triple>/pdf_oxide.node. The published
+  # tarball ships compiled lib/, prebuilds/, and README — no C++ source, no
+  # binding.gyp, no install-time build hook. `npm publish` invokes the
+  # `prepack` script which runs `tsc` + the ESM-import fixer.
+  publish-npm-native:
+    name: Publish to npm (pdf-oxide)
+    needs: [validate, build-nodejs, create-release]
+    runs-on: ubuntu-latest
+    # #515 hard-gate: a pull_request (PR dry-run) can NEVER publish;
+    # only a real tag push, or workflow_dispatch with publish=true.
+    if: ${{ !contains(needs.validate.outputs.version, '-') && github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || inputs.publish) }}
+    environment:
+      name: npm-native
+      url: https://www.npmjs.com/package/pdf-oxide
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download all nodejs artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: nodejs-*
+          path: nodejs-artifacts
+
+      - name: Collect prebuilds
+        shell: bash
+        run: |
+          set -euxo pipefail
+          # Map triple names to prebuild directory names
+          declare -A TRIPLE_TO_DIR=(
+            [linux-x64-gnu]=linux-x64
+            [linux-arm64-gnu]=linux-arm64
+            [darwin-x64]=darwin-x64
+            [darwin-arm64]=darwin-arm64
+            [win32-x64-msvc]=win32-x64
+          )
+          for triple_dir in nodejs-artifacts/nodejs-*/; do
+            triple=$(basename "$triple_dir" | sed 's/^nodejs-//')
+            dest_dir="${TRIPLE_TO_DIR[$triple]}"
+            if [ -z "$dest_dir" ]; then
+              echo "Warning: unknown triple $triple, skipping"
+              continue
+            fi
+            mkdir -p "js/prebuilds/${dest_dir}"
+            cp "$triple_dir/pdf_oxide.node" "js/prebuilds/${dest_dir}/pdf_oxide.node"
+          done
+          echo "=== Prebuilds ==="
+          find js/prebuilds -type f | sort
+
+      - name: Install devDependencies (TypeScript etc.)
+        working-directory: js
+        run: npm install --ignore-scripts
+
+      - name: Publish to npm
+        working-directory: js
+        run: |
+          V="${{ needs.validate.outputs.version }}"
+          PKG=$(node -p "require('./package.json').name")
+          if npm view "$PKG@$V" version > /dev/null 2>&1; then
+            echo "$PKG $V already on npm — skipping"
+          else
+            npm publish --access public
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # Publish C# NuGet package
+  publish-nuget:
+    name: Publish to NuGet
+    needs: [validate, build-csharp, create-release]
+    runs-on: ubuntu-latest
+    # #515 hard-gate: a pull_request (PR dry-run) can NEVER publish;
+    # only a real tag push, or workflow_dispatch with publish=true.
+    if: ${{ !contains(needs.validate.outputs.version, '-') && github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || inputs.publish) }}
+    environment:
+      name: nuget
+      url: https://www.nuget.org/packages/PdfOxide
+    steps:
+      - name: Setup .NET
+        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Download NuGet package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: nuget-package
+          path: nuget-out
+
+      - name: Publish to NuGet
+        run: |
+          dotnet nuget push nuget-out/*.nupkg \
+            --api-key ${{ secrets.NUGET_API_KEY }} \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+
+  # Build platform-tagged Ruby gems (one cell per platform).  Gems are
+  # platform-tagged, not Ruby-version-tagged — `required_ruby_version`
+  # in the gemspec is the floor — so one cell per platform suffices.
+  build-ruby-gems:
+    name: Build Ruby gem (${{ matrix.gem_platform }})
+    needs: [validate]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            cargo_target: x86_64-unknown-linux-gnu
+            gem_platform: x86_64-linux
+            cdylib: libpdf_oxide.so
+          - os: ubuntu-24.04-arm
+            cargo_target: aarch64-unknown-linux-gnu
+            gem_platform: aarch64-linux
+            cdylib: libpdf_oxide.so
+          # macos-13 (Intel) free-tier runner pool was retired 2025-12;
+          # cross-compile x86_64-apple-darwin from macos-latest (arm64).
+          # The arm64 host can't load the x86_64 cdylib, but the gem
+          # build only needs the artifact present at PDF_OXIDE_CDYLIB_PATH.
+          - os: macos-latest
+            cargo_target: x86_64-apple-darwin
+            gem_platform: x86_64-darwin
+            cdylib: libpdf_oxide.dylib
+          - os: macos-latest
+            cargo_target: aarch64-apple-darwin
+            gem_platform: arm64-darwin
+            cdylib: libpdf_oxide.dylib
+          - os: windows-latest
+            cargo_target: x86_64-pc-windows-msvc
+            gem_platform: x64-mingw-ucrt
+            cdylib: pdf_oxide.dll
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Ruby 3.3
+        uses: ruby/setup-ruby@9eb537ca036ebaed86729dcb9309076e4c5c3b74 # v1.314.0
+        with:
+          ruby-version: '3.3'
+          bundler: '2.6'
+          working-directory: ruby
+          bundler-cache: true
+
+      - name: Set up Rust (target ${{ matrix.cargo_target }})
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+          target: ${{ matrix.cargo_target }}
+
+      - name: Build cdylib (release, target ${{ matrix.cargo_target }})
+        # Mirror ruby.yml's feature set — must match the cdylib that
+        # end users get when they bundle the platform-tagged gem.
+        run: cargo build --release --target ${{ matrix.cargo_target }} --lib --features ocr,rendering,signatures,barcodes,tsa-client,system-fonts
+
+      - name: Stage cdylib into ext/pdf_oxide/ (POSIX)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p ruby/ext/pdf_oxide
+          src="target/${{ matrix.cargo_target }}/release/${{ matrix.cdylib }}"
+          test -f "$src" || { echo "::error::cdylib not produced at $src"; exit 1; }
+          cp "$src" "ruby/ext/pdf_oxide/${{ matrix.cdylib }}"
+
+      - name: Stage cdylib into ext/pdf_oxide/ (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path ruby/ext/pdf_oxide | Out-Null
+          $src = "target/${{ matrix.cargo_target }}/release/${{ matrix.cdylib }}"
+          if (-not (Test-Path $src)) {
+            Write-Error "cdylib not produced at $src"
+            exit 1
+          }
+          Copy-Item $src "ruby/ext/pdf_oxide/${{ matrix.cdylib }}"
+
+      - name: Build platform-tagged gem
+        working-directory: ruby
+        shell: bash
+        env:
+          PDF_OXIDE_CDYLIB_PATH: ${{ github.workspace }}/target/${{ matrix.cargo_target }}/release/${{ matrix.cdylib }}
+        run: |
+          bundle exec rake native:${{ matrix.gem_platform }}
+          ls -la *.gem
+
+      - name: Upload platform gem artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ruby-release-gem-${{ matrix.gem_platform }}
+          path: ruby/pdf_oxide-*-${{ matrix.gem_platform }}.gem
+          if-no-files-found: error
+          retention-days: 7
+
+  # Source gem (platform-less): users who want to recompile the cdylib
+  # at install time, or who are on a platform with no prebuilt gem.
+  build-ruby-source-gem:
+    name: Build Ruby source gem
+    needs: [validate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Ruby 3.3
+        uses: ruby/setup-ruby@9eb537ca036ebaed86729dcb9309076e4c5c3b74 # v1.314.0
+        with:
+          ruby-version: '3.3'
+          working-directory: ruby
+          bundler-cache: true
+
+      - name: Build source gem
+        working-directory: ruby
+        run: bundle exec rake native:source
+
+      - name: Upload source gem artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ruby-release-gem-source
+          path: ruby/pdf_oxide-*.gem
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-rubygems:
+    name: Publish to RubyGems
+    needs: [validate, build-ruby-gems, build-ruby-source-gem, create-release]
+    runs-on: ubuntu-latest
+    # #515 hard-gate: a pull_request (PR dry-run) can NEVER publish;
+    # only a real tag push, or workflow_dispatch with publish=true.
+    if: ${{ !contains(needs.validate.outputs.version, '-') && github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || inputs.publish) }}
+    environment:
+      name: rubygems
+      url: https://rubygems.org/gems/pdf_oxide
+    permissions:
+      contents: read
+    steps:
+      - name: Set up Ruby 3.3
+        uses: ruby/setup-ruby@9eb537ca036ebaed86729dcb9309076e4c5c3b74 # v1.314.0
+        with:
+          ruby-version: '3.3'
+
+      - name: Download all Ruby gem artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: gems
+          pattern: ruby-release-gem-*
+          merge-multiple: true
+
+      - name: List gems to publish
+        run: |
+          echo "=== Gems to publish ==="
+          ls -lh gems/
+
+      - name: Configure RubyGems credentials
+        env:
+          RUBYGEMS_API_KEY: ${{ secrets.RUBYGEMS_API_KEY }}
+        run: |
+          mkdir -p ~/.gem
+          # Credentials file beats `gem push --key` — some gem CLI
+          # versions reject inline keys.  Never echo the token.
+          printf -- "---\n:rubygems_api_key: %s\n" "$RUBYGEMS_API_KEY" > ~/.gem/credentials
+          chmod 600 ~/.gem/credentials
+
+      - name: Publish gems to RubyGems
+        run: |
+          V="${{ needs.validate.outputs.version }}"
+          shopt -s nullglob
+          gems=(gems/pdf_oxide-*.gem)
+          shopt -u nullglob
+          [ "${#gems[@]}" -gt 0 ] || { echo "::error::no gems found in gems/"; exit 1; }
+          for g in "${gems[@]}"; do
+            # Parse the platform tag (or "ruby" for the source gem) so
+            # we can skip-if-already-published — RubyGems rejects a
+            # duplicate version+platform push with a 409.
+            base="$(basename "$g" .gem)"
+            plat="${base#pdf_oxide-${V}-}"
+            [ "$plat" = "$base" ] && plat="ruby"
+            if gem search -re --platform "$plat" pdf_oxide | grep -qE "^pdf_oxide \(${V//./\\.}[ ,]"; then
+              echo "pdf_oxide $V ($plat) already on RubyGems — skipping"
+              continue
+            fi
+            echo "Pushing $g"
+            gem push "$g"
+          done
+
+  # ── New v0.3.69 language bindings ────────────────────────────────────
+  # All gated identically to the established publish jobs: a pull_request
+  # dry-run can NEVER publish; only a real tag push or dispatch+publish,
+  # and never for a prerelease version (contains '-').
+
+  # Kotlin facade → Maven Central (Sonatype Central Portal). The
+  # vanniktech plugin is configured with automaticRelease=false, so the
+  # upload reaches VALIDATED and a maintainer flips Publish — same human
+  # release-gate as publish-maven (Java).
+  publish-kotlin:
+    name: Publish Kotlin to Maven Central (staged)
+    needs: [validate, create-release]
+    runs-on: ubuntu-latest
+    if: ${{ !contains(needs.validate.outputs.version, '-') && github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || inputs.publish) }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287 # v5.3.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@06832c7b30a0129d7fb559bcc6e43d26f6374244 # v4
+
+      # The facade is pure-JVM and depends on fyi.oxide:pdf-oxide — install
+      # it to the local Maven repo so the publish build resolves it (skip
+      # the dev profile's Rust rebuild + tests).
+      - name: Build & install Java binding to local Maven repo
+        working-directory: java
+        run: mvn -q -B -P'!dev' -DskipTests install
+
+      - name: Publish to Maven Central Portal (VALIDATED; human flips Publish)
+        working-directory: kotlin
+        env:
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: gradle publishToMavenCentral --no-daemon --console=plain
+
+      - name: Notice — Central Portal staging done
+        run: |
+          echo "::notice::Kotlin artifact uploaded to Central Portal (VALIDATED)."
+          echo "::notice::Sign in at https://central.sonatype.com/ and flip Publish."
+
+  # Scala facade → Maven Central via sbt-ci-release (already in
+  # scala/project/plugins.sbt). Credentials reuse the Java GPG/Sonatype
+  # secrets. ci-release performs a full release on a non-SNAPSHOT version.
+  publish-scala:
+    name: Publish Scala to Maven Central
+    needs: [validate, create-release]
+    runs-on: ubuntu-latest
+    if: ${{ !contains(needs.validate.outputs.version, '-') && github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || inputs.publish) }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0   # sbt-ci-release/dynver need full history + tags
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287 # v5.3.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up sbt
+        uses: sbt/setup-sbt@234370af1319038bf8dc432f8a7e4b83078a1781 # v1
+
+      - name: Build & install Java binding to local Maven repo
+        working-directory: java
+        run: mvn -q -B -P'!dev' -DskipTests install
+
+      - name: Publish to Maven Central (sbt ci-release)
+        working-directory: scala
+        env:
+          CI: 'true'
+          SONATYPE_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          SONATYPE_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          PGP_SECRET: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          PGP_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+          # The Java job feeds this same secret to setup-java's gpg-private-key,
+          # which wants ASCII-armored text, so the secret is stored armored.
+          # sbt-ci-release instead base64-decodes PGP_SECRET before importing,
+          # so base64-encode the armored key here (only if not already encoded).
+        run: |
+          case "$PGP_SECRET" in
+            *"BEGIN PGP"*)
+              PGP_SECRET="$(printf '%s' "$PGP_SECRET" | base64 -w0)"
+              # The re-encoded value is a new string the runner hasn't been told
+              # to redact; register it so it can never surface in logs.
+              echo "::add-mask::$PGP_SECRET"
+              ;;
+          esac
+          export PGP_SECRET
+          sbt ci-release
+
+  # Clojure facade → Clojars via clojure/build.clj (tools.build + deps-deploy).
+  publish-clojure:
+    name: Publish Clojure to Clojars
+    needs: [validate, create-release]
+    runs-on: ubuntu-latest
+    if: ${{ !contains(needs.validate.outputs.version, '-') && github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || inputs.publish) }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287 # v5.3.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Clojure
+        uses: DeLaGuardo/setup-clojure@f556541eb28a9303896cee0679ba9f60b898300f # 13.5
+        with:
+          cli: latest
+
+      - name: Build & install Java binding to local Maven repo
+        working-directory: java
+        run: mvn -q -B -P'!dev' -DskipTests install
+
+      - name: Deploy to Clojars
+        working-directory: clojure
+        env:
+          CLOJARS_USERNAME: ${{ secrets.CLOJARS_USERNAME }}
+          CLOJARS_PASSWORD: ${{ secrets.CLOJARS_PASSWORD }}
+        run: clojure -T:build deploy
+
+  # Elixir → Hex.pm. The package ships source; the NIF is compiled on the
+  # user's machine via elixir_make. We build the cdylib + set the env so
+  # `mix hex.publish` can compile the project during packaging.
+  publish-elixir:
+    name: Publish Elixir to Hex.pm
+    needs: [validate, create-release]
+    runs-on: ubuntu-latest
+    if: ${{ !contains(needs.validate.outputs.version, '-') && github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || inputs.publish) }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+
+      - name: Build cdylib (shipped binding feature set)
+        run: cargo build --release --lib --features ocr,rendering,signatures,barcodes,tsa-client,system-fonts
+
+      - name: Set up Erlang/Elixir
+        uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1
+        with:
+          otp-version: '27'
+          elixir-version: '1.17'
+
+      - name: Publish package to Hex.pm
+        working-directory: elixir
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+          PDF_OXIDE_INCLUDE_DIR: ${{ github.workspace }}/include
+          PDF_OXIDE_LIB_DIR: ${{ github.workspace }}/target/release
+        run: |
+          mix deps.get
+          mix hex.publish package --yes
+
+  # Dart → pub.dev via OIDC (no long-lived token). The package must have
+  # "Automated publishing" enabled on pub.dev, pointed at this repo + the
+  # v*.*.* tag pattern. Publishes the Dart source; the native lib is
+  # provisioned separately by the consumer (see dart/README.md).
+  publish-dart:
+    name: Publish Dart to pub.dev
+    needs: [validate, create-release]
+    runs-on: ubuntu-latest
+    if: ${{ !contains(needs.validate.outputs.version, '-') && github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || inputs.publish) }}
+    permissions:
+      contents: read
+      id-token: write   # pub.dev OIDC automated publishing
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Dart
+        uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.0
+
+      - name: pub get
+        working-directory: dart
+        run: dart pub get
+
+      # Idempotent like publish-rubygems: pub.dev rejects a re-publish of an
+      # existing version, and the first release is published manually by a
+      # maintainer (to claim the name + enable OIDC). Skip if already there.
+      - name: Skip if this version is already on pub.dev
+        id: pubcheck
+        run: |
+          V="${{ needs.validate.outputs.version }}"
+          if curl -fsSL "https://pub.dev/api/packages/pdf_oxide" \
+               | grep -q "\"version\":\"$V\""; then
+            echo "pdf_oxide $V already on pub.dev — skipping publish"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to pub.dev
+        if: steps.pubcheck.outputs.skip != 'true'
+        working-directory: dart
+        run: dart pub publish --force
+
+  # Objective-C → CocoaPods, WITHOUT the central Trunk index.
+  #
+  # CocoaPods Trunk goes permanently read-only on 2026-12-02
+  # (https://blog.cocoapods.org/CocoaPods-Specs-Repo/), and new Trunk
+  # accounts/pushes are no longer viable. A pod does NOT need Trunk to be
+  # installable, though: this job builds a universal-macOS PdfOxide.xcframework,
+  # zips it with the objc/ sources as the pod's :http source (a binary pod —
+  # the xcframework is never committed), and uploads BOTH that zip and the
+  # podspec as release assets. Consumers then reference it directly:
+  #
+  #   pod 'PdfOxide', :podspec =>
+  #     'https://github.com/yfedoseev/pdf_oxide/releases/download/v0.3.69/PdfOxide.podspec'
+  #
+  # No Trunk account, no COCOAPODS_TRUNK_TOKEN. See objc/PUBLISHING.md.
+  # Requires verification on a real macOS runner (no Apple toolchain in dev).
+  package-cocoapods:
+    name: Package Objective-C CocoaPods asset (no Trunk)
+    needs: [validate, create-release]
+    runs-on: macos-latest
+    if: ${{ !contains(needs.validate.outputs.version, '-') && github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || inputs.publish) }}
+    permissions:
+      contents: write   # upload the xcframework zip + podspec as release assets
+    env:
+      FEATURES: ocr,rendering,signatures,barcodes,tsa-client,system-fonts
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Rust (+ Apple targets)
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+          target: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Build static libs for both macOS arches
+        run: |
+          cargo build --release --lib --features "$FEATURES" --target aarch64-apple-darwin
+          cargo build --release --lib --features "$FEATURES" --target x86_64-apple-darwin
+
+      - name: Assemble PdfOxide.xcframework
+        run: |
+          mkdir -p build/macos/Headers
+          lipo -create \
+            target/aarch64-apple-darwin/release/libpdf_oxide.a \
+            target/x86_64-apple-darwin/release/libpdf_oxide.a \
+            -output build/macos/libpdf_oxide.a
+          cp include/pdf_oxide_c/pdf_oxide.h build/macos/Headers/
+          rm -rf objc/Frameworks/PdfOxide.xcframework
+          mkdir -p objc/Frameworks
+          xcodebuild -create-xcframework \
+            -library build/macos/libpdf_oxide.a -headers build/macos/Headers \
+            -output objc/Frameworks/PdfOxide.xcframework
+
+      - name: Zip pod source + xcframework as the release asset
+        run: |
+          ASSET="PdfOxide-objc-${VERSION}.zip"
+          # Zip the objc/ tree (sources + Frameworks/) so the entries match
+          # the podspec's source_files / vendored_frameworks globs.
+          zip -r "$ASSET" objc -x 'objc/*.o' 'objc/test_api_coverage' 'objc/basic_extraction'
+          echo "ASSET=$ASSET" >> "$GITHUB_ENV"
+
+      - name: Validate podspec (structural lint; no Trunk account needed)
+        run: |
+          gem install cocoapods --no-document
+          # --allow-warnings: vendored static framework + deployment-target
+          # advisories are expected for a binary pod.
+          pod spec lint objc/PdfOxide.podspec --allow-warnings || \
+            echo "::warning::pod spec lint reported issues — review before relying on the pod"
+
+      - name: Upload xcframework zip + podspec to the release
+        run: |
+          gh release upload "v${VERSION}" "$ASSET" objc/PdfOxide.podspec --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Notice — how to consume (no Trunk)
+        run: |
+          echo "::notice::CocoaPods (Trunk-free). Add to Podfile:"
+          echo "::notice::pod 'PdfOxide', :podspec => 'https://github.com/yfedoseev/pdf_oxide/releases/download/v${VERSION}/PdfOxide.podspec'"
