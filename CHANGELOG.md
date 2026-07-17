@@ -71,10 +71,11 @@ CONTENT RULES (never change)
 
 ## 2.2.1
 
-- Renamed the `trim-detector` selector's default from `analyzer` to `scan` (it is a text scan; nothing analyzer-based remains). Only set it explicitly if you opted into the experimental `record-use` / `compare` values — the default needs no config.
-- Fixed the package forcing an old `analyzer` version onto your app, which blocked current freezed / json_serializable and friends ([#171](https://github.com/whuppi/pdf_manipulator/issues/171)). The `analyzer` dependency is gone: `trim: auto` now uses a dependency-free source scan. It can only keep slightly more than you use, never less — state `trim: {keep: [...]}` yourself for the exact minimum.
-- Fixed the pub.dev package missing a build file (the engine's `Cargo.lock`), which broke `trim` and every compile-from-source path with "No such file or directory" ([#171](https://github.com/whuppi/pdf_manipulator/issues/171)). Installing from a git tag was the workaround; it is no longer needed.
-- Fixed the web compile error message telling you to install `wasm-pack` — it is not used. The build now points at the tool it actually misses, with the exact install command.
+- **Breaking:** the `trim-detector` value `analyzer` is now `scan` (the detector is a text scan; nothing analyzer-based remains) → if you wrote `trim-detector: analyzer` explicitly, change it to `scan` or delete the line — it is the default ([PR #172](https://github.com/whuppi/pdf_manipulator/pull/172))
+- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
+- Fixed the package forcing an old `analyzer` version onto your app, which blocked current freezed / json_serializable and friends. The `analyzer` dependency is gone: `trim: auto` now uses a dependency-free source scan. It can only keep slightly more than you use, never less — state `trim: {keep: [...]}` yourself for the exact minimum ([#171](https://github.com/whuppi/pdf_manipulator/issues/171) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #172](https://github.com/whuppi/pdf_manipulator/pull/172))
+- Fixed the pub.dev package missing a build file (the engine's `Cargo.lock`), which broke `trim` and every compile-from-source path with "No such file or directory". Installing from a git tag was the workaround; it is no longer needed ([#171](https://github.com/whuppi/pdf_manipulator/issues/171) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #172](https://github.com/whuppi/pdf_manipulator/pull/172))
+- Fixed the web compile error message telling you to install `wasm-pack` — it is not used. The build now points at the tool it actually misses, with the exact install command ([PR #172](https://github.com/whuppi/pdf_manipulator/pull/172))
 
 ## 2.2.0
 
