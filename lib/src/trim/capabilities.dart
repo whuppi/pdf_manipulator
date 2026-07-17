@@ -206,14 +206,13 @@ enum TrimMode {
 
 /// Which mechanism computes the keep-set for `trim: auto`.
 ///
-/// Selected by the `trim-detector` user-define. [analyzer] is the stable
+/// Selected by the `trim-detector` user-define. [scan] is the stable
 /// default; [recordUse] and [compare] belong to the EXPERIMENTAL RecordUse
 /// lane (see `record_use_shim.dart`).
 enum TrimDetector {
   /// Dependency-free text scan over the app source (default, all
-  /// platforms). Wire name kept from the resolved-AST era for config
-  /// compatibility.
-  analyzer('analyzer'),
+  /// platforms).
+  scan('scan'),
 
   /// EXPERIMENTAL — the SDK's `@RecordUse` recording. Usage data only
   /// exists after AOT compilation (read by the link hook), which is too
@@ -221,7 +220,7 @@ enum TrimDetector {
   /// the SDK lane matures. Use [compare] to observe it.
   recordUse('record-use'),
 
-  /// Trims with [analyzer]; the link hook additionally prints the
+  /// Trims with [scan]; the link hook additionally prints the
   /// RecordUse-recorded capability set so the two can be diffed.
   compare('compare');
 
@@ -230,16 +229,16 @@ enum TrimDetector {
   /// The name used in the `trim-detector` user-define.
   final String wire;
 
-  /// Parses the raw `trim-detector` user-define value. Absent → [analyzer];
+  /// Parses the raw `trim-detector` user-define value. Absent → [scan];
   /// anything unrecognized throws [TrimConfigError].
   static TrimDetector parse(Object? raw) {
-    if (raw == null) return analyzer;
+    if (raw == null) return scan;
     for (final d in TrimDetector.values) {
       if (d.wire == raw) return d;
     }
     throw TrimConfigError(
       'unknown trim-detector "$raw". '
-      'Valid: analyzer (default), record-use (EXPERIMENTAL), compare.',
+      'Valid: scan (default), record-use (EXPERIMENTAL), compare.',
     );
   }
 }
