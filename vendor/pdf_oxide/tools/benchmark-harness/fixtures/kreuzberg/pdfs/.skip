@@ -1,0 +1,21 @@
+# Known-bad fixtures in the Kreuzberg corpus (upstream:
+# https://github.com/Goldziher/kreuzberg). Each file here was observed
+# to lack the `%PDF-` magic header during v0.3.38 regression validation.
+# Filed upstream at TODO(yfedoseev): open issue after first push.
+#
+# Format: one filename per line, `#` for comments. Matched by basename,
+# not full path. Paths are resolved relative to this directory; nested
+# corruption in sub-directories needs its own .skip file.
+
+# AT&T DNS-error HTML interception page (245 KB of <html>...dnserrorassist.att.net/...)
+medium.pdf
+
+# Joomla CMS `akeeba-renderjoomla` HTML wrapper — real PDF bytes follow
+# inside a <div>, but our parser can't un-wrap them.
+nougat_038.pdf
+pdfa_013.pdf
+
+# Intentionally polyglot file (PoC‖GTFO issue 13) — starts with
+# PostScript, the %PDF- header is later in the byte stream. Valid PDF
+# structurally but trips any "does-it-start-with-%PDF-" check.
+proof_of_concept_or_gtfo_v13_october_18th_2016.pdf

@@ -1,0 +1,121 @@
+name: Objective-C Bindings CI
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'objc/**'
+      - 'src/**'
+      - 'include/pdf_oxide_c/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/objc.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'objc/**'
+      - 'src/**'
+      - 'include/pdf_oxide_c/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/objc.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'release' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  PDF_OXIDE_INCLUDE_DIR: ${{ github.workspace }}/include
+  PDF_OXIDE_LIB_DIR: ${{ github.workspace }}/target/release
+
+jobs:
+  test:
+    name: Objective-C on macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+
+      - name: Cache Cargo build
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-build-release-
+
+      - name: Build cdylib (release, shipped binding feature set)
+        run: cargo build --release --lib --features ocr,rendering,signatures,barcodes,tsa-client,system-fonts
+
+      - name: Install clang-format + scan-build (macOS runner lacks them on PATH)
+        # scan-build ships inside the `llvm` formula, not as a standalone tool.
+        run: brew install clang-format llvm
+
+      - name: clang-format check (blocking)
+        working-directory: objc
+        shell: bash
+        run: |
+          find include src examples tests \( -name '*.h' -o -name '*.m' \) \
+            | xargs clang-format --dry-run --Werror --style=file:.clang-format
+
+      - name: Static analysis (Clang Static Analyzer / scan-build)
+        working-directory: objc
+        shell: bash
+        run: |
+          make clean
+          # scan-build lives in the keg-only llvm formula, not on PATH.
+          "$(brew --prefix llvm)/bin/scan-build" --status-bugs make build \
+            PDF_OXIDE_INCLUDE_DIR="${PDF_OXIDE_INCLUDE_DIR}" PDF_OXIDE_LIB_DIR="${PDF_OXIDE_LIB_DIR}"
+
+      - name: Build (clang, -Wall -Wextra)
+        working-directory: objc
+        run: make build PDF_OXIDE_INCLUDE_DIR="${PDF_OXIDE_INCLUDE_DIR}" PDF_OXIDE_LIB_DIR="${PDF_OXIDE_LIB_DIR}"
+
+      - name: Test (api-coverage)
+        working-directory: objc
+        run: DYLD_LIBRARY_PATH="${PDF_OXIDE_LIB_DIR}" ./test_api_coverage
+
+      - name: Run example (basic_extraction, with assertion)
+        working-directory: objc
+        shell: bash
+        run: |
+          set -uo pipefail
+          OUT="$(DYLD_LIBRARY_PATH="${PDF_OXIDE_LIB_DIR}" ./basic_extraction)"
+          echo "$OUT"
+          echo "$OUT" | grep -q "Hello pdf_oxide" || { echo "::error::example output missing expected text"; exit 1; }
+
+      - name: Run example (html_extraction, with assertion)
+        working-directory: objc
+        shell: bash
+        run: |
+          set -uo pipefail
+          OUT="$(DYLD_LIBRARY_PATH="${PDF_OXIDE_LIB_DIR}" ./html_extraction)"
+          echo "$OUT"
+          echo "$OUT" | grep -q "HTML OK" || { echo "::error::html_extraction missing 'HTML OK'"; exit 1; }
+
+      - name: Run example (words_geometry, with assertion)
+        working-directory: objc
+        shell: bash
+        run: |
+          set -uo pipefail
+          OUT="$(DYLD_LIBRARY_PATH="${PDF_OXIDE_LIB_DIR}" ./words_geometry)"
+          echo "$OUT"
+          echo "$OUT" | grep -q "WORDS OK" || { echo "::error::words_geometry missing 'WORDS OK'"; exit 1; }
+
+      - name: Run example (tables_extraction, with assertion)
+        working-directory: objc
+        shell: bash
+        run: |
+          set -uo pipefail
+          OUT="$(DYLD_LIBRARY_PATH="${PDF_OXIDE_LIB_DIR}" ./tables_extraction)"
+          echo "$OUT"
+          echo "$OUT" | grep -q "TABLES OK" || { echo "::error::tables_extraction missing 'TABLES OK'"; exit 1; }
