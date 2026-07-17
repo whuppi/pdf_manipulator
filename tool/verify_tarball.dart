@@ -63,7 +63,9 @@ void main() {
 
 /// Reconstructs full paths from `pub publish --dry-run`'s tree listing.
 Set<String> _treeToPaths(String output) {
-  final entry = RegExp(r'^([│ ]*)(?:├──|└──) (.+?)(?: \(<?\d+ .?B\))?$');
+  final entry = RegExp(
+    r'^([│ ]*)(?:├──|└──) (.+?)(?: \(<?\d+(?:\.\d+)? .?B\))?$',
+  );
   final stack = <String>[];
   final paths = <String>{};
   for (final line in output.split('\n')) {
