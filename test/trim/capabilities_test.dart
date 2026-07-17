@@ -2,6 +2,8 @@
 // else fails LOUDLY. These tests pin the grammar and the loud-failure
 // guarantee (a silent full-binary fallback would lie about the request).
 
+// io-exempt: build-time tooling tests — the parity guards read README.md
+// and the engine's Cargo.toml from disk; trim never runs in a browser.
 import 'dart:io';
 
 import 'package:pdf_manipulator/src/trim/capabilities.dart';

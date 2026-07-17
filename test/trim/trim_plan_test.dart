@@ -3,6 +3,8 @@
 // provable without a real hook invocation — the plan from raw user-define
 // values, the extraction from an in-memory Recordings.
 
+// io-exempt: build-time tooling tests — the fail-closed plan cases probe
+// real directories for a pubspec; trim never runs in a browser.
 import 'dart:io';
 
 import 'package:pdf_manipulator/src/hook/trim_plan.dart';
