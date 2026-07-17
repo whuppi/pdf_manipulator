@@ -165,36 +165,45 @@ Set<String> _filesSeeingApi(
     return null; // other packages / dart: — not app files
   }
 
-  // Fixpoint: a file re-exposes the API if it exports pdf_manipulator
-  // directly, or exports a file that re-exposes it.
-  final exposes = <String>{};
-  var grew = true;
-  while (grew) {
-    grew = false;
-    for (final e in sources.entries) {
-      if (exposes.contains(e.key)) continue;
-      for (final d in _directive.allMatches(e.value)) {
-        if (d[1] != 'export') continue;
-        final uri = d[2]!;
-        final target = resolve(e.key, uri);
-        if (uri.startsWith('package:pdf_manipulator/') ||
-            (target != null && exposes.contains(target))) {
-          exposes.add(e.key);
-          grew = true;
-          break;
-        }
+  // Parse directives once; build the reverse export graph so exposure
+  // propagates as a worklist from the direct exporters — O(files + edges)
+  // instead of re-scanning every file per fixpoint round.
+  final direct = <String>{}; // imports OR exports pdf_manipulator itself
+  final dependsOn = <String, Set<String>>{}; // file → app files it pulls in
+  final exportedBy = <String, List<String>>{}; // target → files exporting it
+  final seeds = <String>[]; // files exporting pdf_manipulator directly
+
+  for (final e in sources.entries) {
+    for (final d in _directive.allMatches(e.value)) {
+      final uri = d[2]!;
+      if (uri.startsWith('package:pdf_manipulator/')) {
+        direct.add(e.key);
+        if (d[1] == 'export') seeds.add(e.key);
+        continue;
+      }
+      final target = resolve(e.key, uri);
+      if (target == null) continue;
+      (dependsOn[e.key] ??= {}).add(target);
+      if (d[1] == 'export') {
+        (exportedBy[target] ??= []).add(e.key);
       }
     }
   }
 
+  // A file re-exposes the API if it exports pdf_manipulator directly,
+  // or exports a file that re-exposes it.
+  final exposes = <String>{};
+  final worklist = [...seeds];
+  while (worklist.isNotEmpty) {
+    final file = worklist.removeLast();
+    if (!exposes.add(file)) continue;
+    worklist.addAll(exportedBy[file] ?? const []);
+  }
+
   return {
     for (final e in sources.entries)
-      if (_directive.allMatches(e.value).any((d) {
-        final uri = d[2]!;
-        if (uri.startsWith('package:pdf_manipulator/')) return true;
-        final target = resolve(e.key, uri);
-        return target != null && exposes.contains(target);
-      }))
+      if (direct.contains(e.key) ||
+          (dependsOn[e.key]?.any(exposes.contains) ?? false))
         e.key,
   };
 }
