@@ -28,3 +28,7 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    # Noto Emoji (OFL) — the Fill-with-emoji card registers it as the
+    # engine's emoji fallback font. See assets/fonts/LICENSE-NotoEmoji.
+    - assets/fonts/NotoEmoji-Regular.ttf

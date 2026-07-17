@@ -3,7 +3,7 @@
        compile-macos compile-ios compile-android compile-linux compile-windows compile-wasm compile-natives \
        test test-pkg-native test-unit test-rust shake-audit verify-readme-sizes \
        test-ops test-ops-native test-ops-web test-ops-opfs test-ops-jspi test-ops-atomics \
-       test-example test-example-matrix test-example-macos test-example-linux test-example-windows \
+       test-example test-example-matrix test-example-macos test-example-trimmed test-example-linux test-example-windows \
        test-example-android test-example-ios test-example-device \
        test-example-web test-example-web-jspi test-example-web-atomics test-example-web-opfs \
        verify verify-android verify-ios verify-macos \
@@ -341,6 +341,14 @@ test-example-macos:
 	@echo "=== Example: macOS ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
 	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart -d macos --file-reporter json:../$(TEST_RESULTS_DIR)/int-macos.json
+
+# The trimmed-engine contract, on a REAL trimmed binary: the shell's
+# trim user_define makes the build hook compile keep:[render] from
+# vendor source (needs Rust; first run pays the cargo build).
+test-example-trimmed:
+	@echo "=== Example: macOS (trimmed engine) ==="
+	@mkdir -p $(TEST_RESULTS_DIR)
+	cd example_trimmed && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/trimmed_smoke_test.dart -d macos --file-reporter json:../$(TEST_RESULTS_DIR)/int-trimmed-macos.json
 
 test-example-linux:
 	@echo "=== Example: Linux ==="

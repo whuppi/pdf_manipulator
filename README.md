@@ -502,6 +502,8 @@ Dependencies are handled for you: `keep: [office]` switches on `extract` as well
 
 Not sure? Use `trim: auto` — the scan answers this for you. And if you ever guess wrong, the error message names the missing capability.
 
+Want to see it live? [`example_trimmed/`](example_trimmed/) runs the full example app under a `keep: [render]` engine — its smoke test asserts that kept capabilities work and excluded ones answer the typed error.
+
 On web, run the setup with the flag after configuring pubspec:
 
 ```bash

@@ -294,6 +294,7 @@ size-measuring recipe in [`UPDATING.md`](UPDATING.md) §S5b.
 | Native trim via `hooks: user_defines:` | DONE | build hook; custom sets compile locally, cargo cache |
 | Web trim via `setup --trim` | DONE | detector → trimmed wasm compile |
 | `make shake-audit` verifier | DONE | symbols + size ceiling + typed-error probes |
+| Trimmed example shell (`example_trimmed/`) | DONE | Config-shell over example/ with `keep: [render]`; `make test-example-trimmed` asserts the contract on a real trimmed binary (core + kept work, excluded ops answer the typed error). Not in CI yet — needs a Rust-provisioned macOS row in full-test.yml. |
 | Op-unit dispatch layer (entry + handler + linker anchor per op) | DONE | `vendor/pdf_oxide/src/host/ops/`; registry backend swappable |
 | RecordUse drive path (build full → link hook trims on release) | DONE, dormant | Activates itself when the SDK experiment records; fixture-tested today |
 | `panic=abort` size lever | WONT_DO | Native lane isolation IS `catch_unwind` (one bad PDF → typed error, engine survives); abort would crash the whole app. Wasm already ships abort via `release-small` — the JS worker boundary isolates there. Nothing left to win. |
