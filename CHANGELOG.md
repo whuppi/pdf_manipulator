@@ -75,7 +75,7 @@ CONTENT RULES (never change)
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Added trim — keep only the features your app uses ([#167](https://github.com/whuppi/pdf_manipulator/issues/167)). Put `trim: auto` under `hooks: user_defines: pdf_manipulator:` in your app pubspec, or choose yourself with `trim: {keep: [render, signatures]}`; on web also run `flutter pub run pdf_manipulator:setup --trim`. Needs [Rust](https://rustup.rs) — the engine compiles once on your machine and is cached. Wrong or missing pieces fail with a clear message, never a broken app.
 - Added `Pdf.registerFallbackFont(PdfFallbackFontKind, Uint8List)`.
-- Changed the default binary: dead engine surfaces, unused barcode support, and the embedded fonts are gone — native 28.7 MB → 21.1 MB, web download 11.3 MB → 7.2 MB gzipped. No action needed.
+- Changed the default binary: dead engine surfaces, unused barcode support, and the embedded fonts are gone — native 28.7 MB → 21.1 MB, gzipped web download 11.3 MB → 7.2 MB. No action needed.
 
 ## 2.1.4
 
