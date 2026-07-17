@@ -46,6 +46,19 @@ enum PdfCapability {
   /// reads the engine manifest and fails on drift).
   final Set<PdfCapability> requires;
 
+  /// [set] closed over [requires], transitively — `{office}` becomes
+  /// `{office, extract}`.
+  static Set<PdfCapability> expandRequires(Set<PdfCapability> set) {
+    final expanded = <PdfCapability>{};
+    void add(PdfCapability c) {
+      if (!expanded.add(c)) return;
+      c.requires.forEach(add);
+    }
+
+    set.forEach(add);
+    return expanded;
+  }
+
   /// Public API members (`Class.member` or top-level function name) whose
   /// reachability implies this capability. Consumed by the detector.
   /// Verified against the engine's cfg gates — update BOTH together.
@@ -91,14 +104,10 @@ class TrimConfig {
   /// Manual keep-set (the full override). Expands [PdfCapability.requires]
   /// transitively, so `keep: [office]` also keeps `extract`.
   factory TrimConfig.keep(Set<PdfCapability> capabilities) {
-    final expanded = <PdfCapability>{};
-    void add(PdfCapability c) {
-      if (!expanded.add(c)) return;
-      c.requires.forEach(add);
-    }
-
-    capabilities.forEach(add);
-    return TrimConfig._(TrimMode.manual, expanded);
+    return TrimConfig._(
+      TrimMode.manual,
+      PdfCapability.expandRequires(capabilities),
+    );
   }
 
   /// No trimming: the full default binary.
@@ -156,12 +165,17 @@ class TrimConfig {
     throw TrimConfigError('unrecognized trim value: $raw.\n$_grammar');
   }
 
-  /// The cargo feature list for [keep], applied to [defaultFeatures]
+  /// The cargo feature list for [keepSet], applied to [defaultFeatures]
   /// (the build.json set): capability features not in the keep-set are
   /// dropped; everything else passes through untouched.
+  ///
+  /// [keepSet] may be unexpanded — [PdfCapability.requires] is applied
+  /// here, so a detector set holding only `office` still keeps `extract`.
+  /// Callers never pre-expand.
   String featuresFor(String defaultFeatures, Set<PdfCapability> keepSet) {
+    final kept = PdfCapability.expandRequires(keepSet);
     final dropped = PdfCapability.values
-        .where((c) => !keepSet.contains(c))
+        .where((c) => !kept.contains(c))
         .map((c) => c.cargoFeature)
         .toSet();
     return defaultFeatures

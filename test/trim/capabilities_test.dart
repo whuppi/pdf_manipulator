@@ -102,6 +102,16 @@ void main() {
       },
     );
 
+    test('featuresFor expands requires itself — detector sets stay raw', () {
+      // Detectors hand over unexpanded sets: office alone must still keep
+      // extract, or the emitted feature list lies about what ships.
+      final c = TrimConfig.keep({PdfCapability.office});
+      expect(
+        c.featuresFor(defaults, {PdfCapability.office}),
+        'icc,legacy-crypto,native-bridge,office,extract',
+      );
+    });
+
     test('empty keep-set drops every capability feature, keeps internals', () {
       final c = TrimConfig.keep(const {});
       expect(
