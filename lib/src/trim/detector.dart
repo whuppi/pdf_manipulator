@@ -1,22 +1,26 @@
-// The stable trim detector: resolved-AST reachability over the app's
-// source. Conservative by contract — any file that fails to resolve makes
-// the scan fail CLOSED (full binary), never a guess. Tooling-only: imported
-// by bin/setup.dart and the build hook, never by the library barrel, so
-// package:analyzer adds no bytes to any app.
+// The stable trim detector: a dependency-free text scan over the app's
+// source. Only files that import pdf_manipulator count; within them,
+// any capability member name (word-bounded) keeps its capability.
+//
+// The scan can only err toward OVER-keeping (a same-named identifier in
+// an importing file keeps a capability the app never calls) — the app
+// always works, the binary is just less trimmed. It cannot realistically
+// under-keep: a call site always spells the member name in the text,
+// including dynamic calls that resolution-based analysis silently skips.
+// Users who want the exact minimum state `trim: {keep: [...]}`.
+//
+// Deliberately NOT built on package:analyzer: a runtime package must
+// never put the analyzer in a consumer's dependency graph (it fights
+// the app's own codegen/lint tooling — issue #171). Do not reintroduce
+// it here.
 
 import 'dart:io';
 
-import 'package:analyzer/dart/analysis/analysis_context_collection.dart';
-import 'package:analyzer/dart/analysis/results.dart';
-import 'package:analyzer/dart/ast/ast.dart';
-import 'package:analyzer/dart/ast/visitor.dart';
-import 'package:analyzer/dart/element/element.dart';
-
 import 'package:pdf_manipulator/src/trim/capabilities.dart';
 
-/// What a scan concluded. [resolved] false means the scan could not prove
-/// reachability (unanalyzable files) — callers MUST fall back to the full
-/// binary and surface [unresolvedPaths].
+/// What a scan concluded. [resolved] false means the scan could not read
+/// part of the app — callers MUST fall back to the full binary and
+/// surface [unresolvedPaths].
 class DetectorResult {
   /// Creates a result; see field docs for the contract.
   const DetectorResult({
@@ -29,13 +33,13 @@ class DetectorResult {
   /// Capabilities the app can reach. Meaningful only when [resolved].
   final Set<PdfCapability> keep;
 
-  /// True when every scanned file resolved — the keep-set is proven.
+  /// True when every scanned file was readable — the keep-set is proven.
   final bool resolved;
 
-  /// Files the analyzer could not resolve (drives the fail-closed path).
+  /// Files the scan could not read (drives the fail-closed path).
   final List<String> unresolvedPaths;
 
-  /// The `Class.member` names that matched, for `compare` mode and logs.
+  /// The member names that matched, for `compare` mode and logs.
   final Set<String> matchedMembers;
 }
 
@@ -50,23 +54,39 @@ Future<DetectorResult> detectCapabilities(
     for (final d in extraDirs)
       if (Directory(d).existsSync()) d,
   ];
-  final collection = AnalysisContextCollection(
-    includedPaths: roots.map((r) => Directory(r).absolute.path).toList(),
-  );
+
+  // Member name → capabilities it implies. Qualified apiMembers keys
+  // collapse to their member part: text has no resolution, `doc.extract`
+  // and a bare `extract` read the same.
+  final byMember = <String, Set<PdfCapability>>{};
+  for (final e in PdfCapability.apiMembers.entries) {
+    byMember.putIfAbsent(e.key.split('.').last, () => {}).add(e.value);
+  }
+  final patterns = {
+    for (final m in byMember.keys) m: RegExp('\\b${RegExp.escape(m)}\\b'),
+  };
 
   final keep = <PdfCapability>{};
   final matched = <String>{};
   final unresolved = <String>[];
 
-  for (final context in collection.contexts) {
-    for (final path in context.contextRoot.analyzedFiles()) {
-      if (!path.endsWith('.dart')) continue;
-      final unit = await context.currentSession.getResolvedUnit(path);
-      if (unit is! ResolvedUnitResult) {
-        unresolved.add(path);
+  for (final root in roots) {
+    for (final entry in Directory(root).listSync(recursive: true)) {
+      if (entry is! File || !entry.path.endsWith('.dart')) continue;
+      final String source;
+      try {
+        source = entry.readAsStringSync();
+      } on IOException {
+        unresolved.add(entry.path);
         continue;
       }
-      unit.unit.accept(_MemberFinder(keep, matched));
+      if (!source.contains('package:pdf_manipulator/')) continue;
+      for (final e in patterns.entries) {
+        if (e.value.hasMatch(source)) {
+          keep.addAll(byMember[e.key]!);
+          matched.add(e.key);
+        }
+      }
     }
   }
 
@@ -76,56 +96,4 @@ Future<DetectorResult> detectCapabilities(
     unresolvedPaths: unresolved,
     matchedMembers: matched,
   );
-}
-
-class _MemberFinder extends RecursiveAstVisitor<void> {
-  _MemberFinder(this.keep, this.matched);
-
-  final Set<PdfCapability> keep;
-  final Set<String> matched;
-
-  void _record(Element? element) {
-    if (element == null) return;
-    final lib = element.library;
-    if (lib == null) return;
-    if (!lib.uri.toString().startsWith('package:pdf_manipulator/')) return;
-    // Qualified first, bare on miss. Class members match `Class.member`;
-    // extension members match bare (extensions are InstanceElement
-    // siblings of InterfaceElement, so their qualified key —
-    // `ExtensionName.member` — is deliberately absent from apiMembers).
-    // The fallback keeps detection correct even if a future element
-    // model reshapes that hierarchy; test/trim/detector_test.dart pins
-    // both shapes against a real resolved app.
-    final enclosing = element.enclosingElement;
-    final bare = '${element.name}';
-    final qualified = enclosing is InstanceElement
-        ? '${enclosing.name}.$bare'
-        : null;
-    final key = PdfCapability.apiMembers.containsKey(qualified)
-        ? qualified!
-        : bare;
-    final cap = PdfCapability.apiMembers[key];
-    if (cap != null) {
-      keep.add(cap);
-      matched.add(key);
-    }
-  }
-
-  @override
-  void visitMethodInvocation(MethodInvocation node) {
-    _record(node.methodName.element);
-    super.visitMethodInvocation(node);
-  }
-
-  @override
-  void visitPropertyAccess(PropertyAccess node) {
-    _record(node.propertyName.element);
-    super.visitPropertyAccess(node);
-  }
-
-  @override
-  void visitPrefixedIdentifier(PrefixedIdentifier node) {
-    _record(node.identifier.element);
-    super.visitPrefixedIdentifier(node);
-  }
 }

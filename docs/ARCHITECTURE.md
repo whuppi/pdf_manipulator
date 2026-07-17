@@ -948,7 +948,7 @@ The design rules behind that grammar:
 
 | Detector | Status | How |
 |---|---|---|
-| `analyzer` (default) | stable | resolved-AST reachability over the app source (`lib/src/trim/detector.dart`); any unresolvable file → full binary + warning (fail closed) |
+| `analyzer` (default) | stable | dependency-free text scan over the app source (`lib/src/trim/detector.dart`): files importing the package are searched for capability member names; errs only toward over-keeping. Wire name kept from the resolved-AST era. Any unreadable file → full binary + warning (fail closed) |
 | `record-use` | EXPERIMENTAL, internal | the SDK's `@RecordUse` recordings, read in the link hook after AOT; dormant until the SDK experiment activates |
 | `compare` | internal | analyzer trims; the link hook reports the recorded set for diffing |
 
@@ -979,7 +979,7 @@ source in the pub tarball compiles locally.
 ### The machinery
 
 - `lib/src/trim/` — capabilities + grammar (`capabilities.dart`), the
-  analyzer detector (`detector.dart`), the RecordUse shim
+  text-scan detector (`detector.dart`), the RecordUse shim
   (`record_use_shim.dart`). Tooling-only: never exported by the barrel,
   zero bytes in consumer apps.
 - `lib/src/hook/` — ONE compile path, two callers: `build_constants.dart`

@@ -1,6 +1,6 @@
 // Turns the `trim` / `trim-detector` user-defines into a build decision,
 // and recorded `@RecordUse` data into a keep-set. Shared by hook/build.dart
-// (analyzer lane, and the defer decision for the RecordUse lane) and
+// (source-scan lane, and the defer decision for the RecordUse lane) and
 // hook/link.dart (the RecordUse lane's trim itself).
 
 import 'dart:io';
@@ -38,7 +38,7 @@ class TrimPlan {
 }
 
 /// Resolves the build hook's trim decision. [appRootCandidate] is where
-/// `trim: auto`'s analyzer scan looks for the app (the hooks API exposes
+/// `trim: auto`'s source scan looks for the app (the hooks API exposes
 /// no app root, so callers pass their best heuristic — a directory
 /// without a pubspec.yaml fails CLOSED to the full binary).
 Future<TrimPlan> resolveTrimPlan({

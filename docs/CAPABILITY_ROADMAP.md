@@ -290,7 +290,7 @@ size-measuring recipe in [`UPDATING.md`](UPDATING.md) §S5b.
 | Piece | Status | Notes |
 |---|---|---|
 | Capability vocabulary + `trim:` grammar (`auto` / `keep:` / loud errors) | DONE | `lib/src/trim/capabilities.dart` |
-| Analyzer detector (resolved-AST, fail closed) | DONE | `lib/src/trim/detector.dart` |
+| Text-scan detector (dependency-free, fail closed, over-keep only) | DONE | `lib/src/trim/detector.dart` — replaced the resolved-AST scan: package:analyzer in a runtime package's deps fights the app's own tooling (#171) |
 | Native trim via `hooks: user_defines:` | DONE | build hook; custom sets compile locally, cargo cache |
 | Web trim via `setup --trim` | DONE | detector → trimmed wasm compile |
 | `make shake-audit` verifier | DONE | symbols + size ceiling + typed-error probes |
