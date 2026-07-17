@@ -489,7 +489,7 @@ The same commands the build prints when a tool is missing:
 | `binaryen` | `brew install binaryen` | `sudo apt-get install binaryen` | [binaryen releases](https://github.com/WebAssembly/binaryen/releases) |
 | `jq` | `brew install jq` | `sudo apt-get install jq` | `choco install jq` |
 
-`<X>`: run the build once — it prints the exact version the engine needs.
+`<X>`: after setting `trim:` in your pubspec, run `flutter pub run pdf_manipulator:setup --trim` once — it prints the exact version the engine needs.
 
 </details>
 
