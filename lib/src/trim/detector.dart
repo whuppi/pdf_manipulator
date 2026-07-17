@@ -49,10 +49,10 @@ class DetectorResult {
 
 /// Scans the app rooted at [appRoot] (its `lib/` plus any additional
 /// [extraDirs], e.g. `bin/`) for reachable pdf_manipulator capabilities.
-Future<DetectorResult> detectCapabilities(
+DetectorResult detectCapabilities(
   String appRoot, {
   List<String> extraDirs = const [],
-}) async {
+}) {
   final roots = <String>[
     Directory('$appRoot/lib').existsSync() ? '$appRoot/lib' : appRoot,
     for (final d in extraDirs)

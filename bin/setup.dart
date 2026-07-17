@@ -102,7 +102,7 @@ Future<void> _setupWeb(bool force, {bool trim = false}) async {
   String? featuresOverride;
   if (trim) {
     stdout.writeln('=== Trim: scanning app source ===');
-    final result = await detectCapabilities(Directory.current.path);
+    final result = detectCapabilities(Directory.current.path);
     if (!result.resolved) {
       stdout.writeln(
         'trim: ${result.unresolvedPaths.length} file(s) could not be '

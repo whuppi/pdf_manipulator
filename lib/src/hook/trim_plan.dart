@@ -74,7 +74,7 @@ Future<TrimPlan> resolveTrimPlan({
         );
         break;
       }
-      final result = await detectCapabilities(appRootCandidate);
+      final result = detectCapabilities(appRootCandidate);
       if (!result.resolved) {
         stderr.writeln(
           'pdf_manipulator trim: ${result.unresolvedPaths.length} file(s) '

@@ -65,7 +65,7 @@ void main() {
     final dir = _fixture({'main.dart': _usesEverything});
     addTearDown(() => dir.deleteSync(recursive: true));
 
-    final result = await detectCapabilities(dir.path);
+    final result = detectCapabilities(dir.path);
     expect(result.resolved, isTrue);
     expect(
       result.keep,
@@ -85,7 +85,7 @@ void main() {
     final dir = _fixture({'reporter.dart': _unrelated});
     addTearDown(() => dir.deleteSync(recursive: true));
 
-    final result = await detectCapabilities(dir.path);
+    final result = detectCapabilities(dir.path);
     expect(result.resolved, isTrue);
     expect(
       result.keep,
@@ -100,7 +100,7 @@ void main() {
     final dir = _fixture({'main.dart': _coreOnly, 'reporter.dart': _unrelated});
     addTearDown(() => dir.deleteSync(recursive: true));
 
-    final result = await detectCapabilities(dir.path);
+    final result = detectCapabilities(dir.path);
     expect(result.resolved, isTrue);
     expect(result.keep, isEmpty);
   });
@@ -129,7 +129,7 @@ Stream<RenderedPage> use(PdfDoc doc) =>
     File('${dir.path}/pubspec.yaml').writeAsStringSync('name: fixture_app\n');
     addTearDown(() => dir.deleteSync(recursive: true));
 
-    final result = await detectCapabilities(dir.path);
+    final result = detectCapabilities(dir.path);
     expect(result.resolved, isTrue);
     expect(
       result.keep,
