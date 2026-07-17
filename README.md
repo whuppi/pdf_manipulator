@@ -404,10 +404,10 @@ Pages: `addA4Page` / `addLetterPage` / `addPage` (custom size). Content: `text`,
 
 Filling a form with text the field's own font cannot draw (Japanese, Korean, Chinese, emoji) needs a fallback font. The binary doesn't bundle one (that's multiple MB most apps never use) — you register your own once, and every later fill uses it.
 
-**1. Download a font.** Any complete `.ttf` / `.otf` face works:
+**1. Download a font.** Any complete `.ttf` or `.otf` file works:
 
-- CJK: [Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC) (or TC / JP / KR — pick the language your forms carry). The pan-CJK builds at [notofonts/noto-cjk](https://github.com/notofonts/noto-cjk) cover all of them in one file if you need several.
-- Emoji: [Noto Emoji](https://fonts.google.com/noto/specimen/Noto+Emoji) — the monochrome one. The baked appearance draws glyph outlines, so color-bitmap emoji fonts do not apply here.
+- For Chinese, Japanese, or Korean: pick the Noto Sans font for your language — [Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC) (Simplified Chinese), [Noto Sans TC](https://fonts.google.com/noto/specimen/Noto+Sans+TC) (Traditional Chinese), [Noto Sans JP](https://fonts.google.com/noto/specimen/Noto+Sans+JP) (Japanese), or [Noto Sans KR](https://fonts.google.com/noto/specimen/Noto+Sans+KR) (Korean). If your forms mix several of these languages, [notofonts/noto-cjk](https://github.com/notofonts/noto-cjk) has combined files that cover all of them at once — a bigger file, but one registration.
+- For emoji: [Noto Emoji](https://fonts.google.com/noto/specimen/Noto+Emoji). Use this black-and-white font, not a color emoji font. The engine draws character shapes into the PDF, and color emoji fonts store pictures instead of shapes, so they cannot be drawn this way.
 
 **2. Put the file in your app's assets** and declare it in `pubspec.yaml`:
 
@@ -425,7 +425,11 @@ await pdf.registerFallbackFont(
     PdfFallbackFontKind.cjk, fontBytes.buffer.asUint8List());
 ```
 
-`PdfFallbackFontKind.emoji` works the same way, with the emoji font. One registration covers the whole `Pdf` instance, on every platform. Without a registered font the fill still succeeds — the value is stored correctly and readers with their own fonts display it; only the baked-in (flattened) appearance falls back to the field's font.
+`PdfFallbackFontKind.emoji` works the same way, with the emoji font. One registration covers the whole `Pdf` instance, on every platform.
+
+The font stays in memory after you register it — that is what makes every later fill fast. On native the engine holds one shared copy; on web each engine worker holds its own copy (workers start only when needed). So when one language is enough, prefer the single-language file over the combined one.
+
+Without a registered font the fill still succeeds — the value is stored correctly and readers with their own fonts display it; only the baked-in (flattened) appearance falls back to the field's font.
 
 ---
 
