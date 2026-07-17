@@ -95,7 +95,7 @@ CONTENT RULES (never change)
 
 ## 2.2.0-dev.0
 
-> Retracted on pub.dev: carried a **Breaking** change as a minor, and the published archive was missing a build file. Everything here ships again, consolidated, in 3.0.0.
+> Retracted on pub.dev: the published archive was missing a build file (the engine's `Cargo.lock`), breaking `trim` and compile-from-source installs. Superseded by 3.0.0, which consolidates everything here.
 
 
 - **Breaking:** flattening CJK or emoji form values no longer uses a bundled font (it added 4.4 MB to every install). Register one once: `await pdf.registerFallbackFont(PdfFallbackFontKind.cjk, fontBytes)` (`.emoji` for emoji). Without one the value is still saved correctly — only the baked-in look falls back to the field's own font.
