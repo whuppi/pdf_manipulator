@@ -402,15 +402,30 @@ Pages: `addA4Page` / `addLetterPage` / `addPage` (custom size). Content: `text`,
 
 ### CJK & emoji in form fields
 
-Filling a form with text the field's own font cannot draw (Japanese, Korean, Chinese, emoji) needs a fallback font. The binary doesn't bundle one (that's multiple MB most apps never use) — you register your own once, and every later fill uses it:
+Filling a form with text the field's own font cannot draw (Japanese, Korean, Chinese, emoji) needs a fallback font. The binary doesn't bundle one (that's multiple MB most apps never use) — you register your own once, and every later fill uses it.
+
+**1. Download a font.** Any complete `.ttf` / `.otf` face works:
+
+- CJK: [Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC) (or TC / JP / KR — pick the language your forms carry). The pan-CJK builds at [notofonts/noto-cjk](https://github.com/notofonts/noto-cjk) cover all of them in one file if you need several.
+- Emoji: [Noto Emoji](https://fonts.google.com/noto/specimen/Noto+Emoji) — the monochrome one. The baked appearance draws glyph outlines, so color-bitmap emoji fonts do not apply here.
+
+**2. Put the file in your app's assets** and declare it in `pubspec.yaml`:
+
+```yaml
+flutter:
+  assets:
+    - assets/fonts/NotoSansSC-Regular.ttf
+```
+
+**3. Register it once at startup**, before the first fill or flatten:
 
 ```dart
-final fontBytes = await rootBundle.load('assets/NotoSansCJK.otf');
+final fontBytes = await rootBundle.load('assets/fonts/NotoSansSC-Regular.ttf');
 await pdf.registerFallbackFont(
     PdfFallbackFontKind.cjk, fontBytes.buffer.asUint8List());
 ```
 
-`PdfFallbackFontKind.emoji` works the same way. Without a registered font the fill still succeeds — the value is stored correctly and readers with their own fonts display it; only the baked-in (flattened) appearance falls back to the field's font.
+`PdfFallbackFontKind.emoji` works the same way, with the emoji font. One registration covers the whole `Pdf` instance, on every platform. Without a registered font the fill still succeeds — the value is stored correctly and readers with their own fonts display it; only the baked-in (flattened) appearance falls back to the field's font.
 
 ---
 
