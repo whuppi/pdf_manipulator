@@ -18,34 +18,59 @@ FULL_FEATURES="icc,legacy-crypto,rendering,signatures,native-bridge,pdfa,office,
 # heavy module leaked back into the core build.
 CORE_CEILING_BYTES=$((8 * 1024 * 1024))
 
+fail() { echo "SHAKE-AUDIT FAIL: $1" >&2; exit 1; }
+
+# File size in bytes — wc -c is POSIX; BSD wc pads with spaces, so trim.
+fsize() {
+  wc -c < "$1" | tr -d ' '
+}
+
+# Exported defined symbols — Apple nm flags on macOS, GNU nm elsewhere.
+defined_syms() {
+  case "$(uname -s)" in
+    Darwin*) nm -gU "$1" ;;
+    *)       nm -g --defined-only "$1" ;;
+  esac
+}
+
 dylib_for() {
   # cargo puts the host cdylib at target/release; feature sets share the dir,
   # so build order matters — we capture sizes immediately after each build.
-  echo "$VENDOR/target/release/libpdf_oxide.dylib"
+  case "$(uname -s)" in
+    Darwin*)      echo "$VENDOR/target/release/libpdf_oxide.dylib" ;;
+    Linux*)       echo "$VENDOR/target/release/libpdf_oxide.so" ;;
+    MINGW*|MSYS*) echo "$VENDOR/target/release/pdf_oxide.dll" ;;
+    *)            fail "unsupported host: $(uname -s)" ;;
+  esac
 }
+
+if [ "${SHAKE_AUDIT_WASM:-0}" = "1" ] || [ "${SHAKE_AUDIT_CAPS:-0}" = "1" ]; then
+  command -v python3 >/dev/null 2>&1 \
+    || fail "python3 is required for the WASM/CAPS measurement merges"
+fi
 
 echo "== [1/4] full-profile build (reference) =="
 (cd "$VENDOR" && cargo build --release --features "$FULL_FEATURES" -q)
-FULL_SIZE=$(stat -f%z "$(dylib_for)")
+FULL_SIZE=$(fsize "$(dylib_for)")
 echo "full dylib: $FULL_SIZE bytes"
 
 echo "== [2/4] core-only trim build =="
 (cd "$VENDOR" && cargo build --release --features "$CORE_FEATURES" -q)
 DYLIB="$(dylib_for)"
-CORE_SIZE=$(stat -f%z "$DYLIB")
+CORE_SIZE=$(fsize "$DYLIB")
 echo "core dylib: $CORE_SIZE bytes"
 
 echo "== [3/4] symbol + size assertions =="
-SYMS=$(nm -gU "$DYLIB")
-fail() { echo "SHAKE-AUDIT FAIL: $1" >&2; exit 1; }
+SYMS=$(defined_syms "$DYLIB")
 
 # Dead public C API must be gone (representative no-mangle exports).
+# Mach-O prefixes C symbols with _; ELF does not — accept both.
 for banned in pdf_document_builder_create pdf_document_load pdf_render_page; do
-  echo "$SYMS" | grep -q "_$banned\$" && fail "banned symbol survived: $banned"
+  echo "$SYMS" | grep -Eq "_?$banned\$" && fail "banned symbol survived: $banned"
 done
 # The lane bridge must be alive (its C surface is lane_* + channel_*).
 for required in lane_job_cancel channel_init_read; do
-  echo "$SYMS" | grep -q "_$required\$" || fail "lane bridge export missing: $required"
+  echo "$SYMS" | grep -Eq "_?$required\$" || fail "lane bridge export missing: $required"
 done
 # Trim must actually delete code: core-only materially smaller than full.
 if [ $((FULL_SIZE - CORE_SIZE)) -lt $((2 * 1024 * 1024)) ]; then
@@ -69,11 +94,11 @@ echo "== [4/4] runtime probe: excluded op answers typed error =="
 if [ "${SHAKE_AUDIT_WASM:-0}" = "1" ]; then
   echo "== [wasm] core-only wasm build + size check =="
   # compile_rust.sh always writes web_assets/ — preserve the default artifact.
-  DEFAULT_RAW=$(stat -f%z "$ROOT/web_assets/pdf_oxide_bg.wasm")
+  DEFAULT_RAW=$(fsize "$ROOT/web_assets/pdf_oxide_bg.wasm")
   BAK=$(mktemp -d)
   cp "$ROOT/web_assets/pdf_oxide_bg.wasm" "$ROOT/web_assets/pdf_oxide.js" "$BAK/"
   PDF_FEATURES_WASM="wasm" bash "$ROOT/tool/compile_rust.sh" wasm
-  WASM_CORE_RAW=$(stat -f%z "$ROOT/web_assets/pdf_oxide_bg.wasm")
+  WASM_CORE_RAW=$(fsize "$ROOT/web_assets/pdf_oxide_bg.wasm")
   WASM_CORE_GZ=$(gzip -c "$ROOT/web_assets/pdf_oxide_bg.wasm" | wc -c | tr -d ' ')
   cp "$BAK/pdf_oxide_bg.wasm" "$BAK/pdf_oxide.js" "$ROOT/web_assets/"
   echo "core wasm: $WASM_CORE_RAW raw, $WASM_CORE_GZ gzipped"
@@ -95,7 +120,7 @@ if [ "${SHAKE_AUDIT_CAPS:-0}" = "1" ]; then
   CORE="icc,legacy-crypto,native-bridge"
   measure() {
     (cd "$VENDOR" && cargo build --release --features "$1" -q)
-    stat -f%z "$(dylib_for)"
+    fsize "$(dylib_for)"
   }
   RENDER=$(( $(measure "$CORE,rendering") - CORE_SIZE ))
   SIGS=$(( $(measure "$CORE,signatures") - CORE_SIZE ))

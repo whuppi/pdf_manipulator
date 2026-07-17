@@ -166,7 +166,8 @@ class TrimConfig {
         .toSet();
     return defaultFeatures
         .split(',')
-        .where((f) => !dropped.contains(f))
+        .map((f) => f.trim())
+        .where((f) => f.isNotEmpty && !dropped.contains(f))
         .join(',');
   }
 }

@@ -14,12 +14,12 @@
 // Use `flutter pub run`, NOT `dart run` — native targets
 // subprocess `flutter build` which needs flutter on PATH.
 
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:package_config/package_config.dart';
 
 import '../hook/build.dart' as build;
+import 'package:pdf_manipulator/src/hook/build_constants.dart';
 import 'package:pdf_manipulator/src/hook/resolver.dart';
 import 'package:pdf_manipulator/src/trim/capabilities.dart';
 import 'package:pdf_manipulator/src/trim/detector.dart';
@@ -110,7 +110,7 @@ Future<void> _setupWeb(bool force, {bool trim = false}) async {
         '${result.unresolvedPaths.first}',
       );
     } else {
-      final wasmDefaults = readWasmFeatures(packageRoot);
+      final wasmDefaults = BuildConstants.load(packageRoot).wasmFeatures;
       featuresOverride = TrimConfig.keep(
         result.keep,
       ).featuresFor(wasmDefaults, result.keep);
@@ -133,16 +133,6 @@ Future<void> _setupWeb(bool force, {bool trim = false}) async {
         ? '$count file(s) installed to ${destDir.path}/'
         : 'All web assets up to date.',
   );
-}
-
-/// The shipped wasm feature set from the package's build.json.
-String readWasmFeatures(Uri packageRoot) {
-  final json =
-      jsonDecode(
-            File.fromUri(packageRoot.resolve('build.json')).readAsStringSync(),
-          )
-          as Map<String, Object?>;
-  return (json['features'] as Map)['wasm'] as String;
 }
 
 // ── Native ────────────────────────────────────────────────────────

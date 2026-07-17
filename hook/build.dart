@@ -96,11 +96,6 @@ final _log = Logger('pdf_manipulator:build');
 
 const _assetId = 'src/ffi/native_bindings.g.dart';
 
-// build.json constants + the resolved trim plan, loaded once per hook
-// invocation (see lib/src/hook/build_constants.dart / trim_plan.dart).
-late BuildConstants _constants;
-late TrimPlan _plan;
-
 // ══════════════════════════════════════════════════════════════════
 // § 1 — Flutter hook entry point (native only)
 //
@@ -112,16 +107,16 @@ void main(List<String> args) async {
   await build(args, (BuildInput input, BuildOutputBuilder output) async {
     if (!input.config.buildCodeAssets) return;
 
-    _constants = BuildConstants.load(input.packageRoot);
-    _plan = await resolveTrimPlan(
+    final constants = BuildConstants.load(input.packageRoot);
+    final plan = await resolveTrimPlan(
       trimDefine: input.userDefines['trim'],
       detectorDefine: input.userDefines['trim-detector'],
-      defaultFeatures: _constants.nativeFeatures,
+      defaultFeatures: constants.nativeFeatures,
       // The hooks API exposes no app root; the working directory is the
       // app when the consumer runs `flutter build` from their project.
       appRootCandidate: Directory.current.path,
     );
-    if (_plan.deferToLink && !input.config.linkingEnabled) {
+    if (plan.deferToLink && !input.config.linkingEnabled) {
       stderr.writeln(
         'pdf_manipulator trim-detector record-use: linking is disabled in '
         'this build (debug) — shipping the FULL binary. Release builds '
@@ -133,13 +128,15 @@ void main(List<String> args) async {
     final targetTriple = targetTripleFor(codeConfig);
     final linkMode = linkModeFor(codeConfig);
     final libFileName = codeConfig.targetOS.libraryFileName(
-      _constants.crate,
+      constants.crate,
       linkMode,
     );
     final outFile = File.fromUri(input.outputDirectory.resolve(libFileName));
 
     // ── Resolve the binary (download, compile, or cache) ──
     await _resolveNative(
+      constants: constants,
+      plan: plan,
       packageRoot: input.packageRoot,
       version: readVersion(input.packageRoot),
       targetKey: targetKeyFor(codeConfig),
@@ -169,6 +166,8 @@ void main(List<String> args) async {
 // only exists inside the hook. Calling from outside writes to the
 // wrong cache. setup --native delegates to `flutter build` instead.
 Future<void> _resolveNative({
+  required BuildConstants constants,
+  required TrimPlan plan,
   required Uri packageRoot,
   required String version,
   required String targetKey,
@@ -185,23 +184,30 @@ Future<void> _resolveNative({
   // A consumer-trimmed feature set has no prebuilt release asset and no
   // pinned hash: version 0.0.0 routes the resolver straight to compile,
   // and cargo's feature-aware fingerprint is the cache.
-  final effectiveVersion = _plan.isCustom ? '0.0.0' : version;
+  final effectiveVersion = plan.isCustom ? '0.0.0' : version;
 
   await resolveAsset(
     ResolveRequest(
       assetName: assetName,
-      downloadUrl: _constants.downloadUrl(effectiveVersion, assetName),
+      downloadUrl: constants.downloadUrl(effectiveVersion, assetName),
       dest: dest,
-      cacheFile: _plan.isCustom ? null : cacheFile,
-      expectedHash: _plan.isCustom ? null : assetHashes[assetName],
+      cacheFile: plan.isCustom ? null : cacheFile,
+      expectedHash: plan.isCustom ? null : assetHashes[assetName],
       version: effectiveVersion,
       packageRoot: packageRoot,
       force: force,
       compile: (File d) async {
         if (buildInput != null && targetTriple != null && linkMode != null) {
-          await _compileNativeFromHook(buildInput, targetTriple, linkMode, d);
+          await _compileNativeFromHook(
+            buildInput,
+            targetTriple,
+            linkMode,
+            d,
+            constants,
+            plan,
+          );
         } else {
-          await _compileNativeFromCli(packageRoot, d);
+          await _compileNativeFromCli(packageRoot, d, constants);
         }
       },
     ),
@@ -224,8 +230,7 @@ Future<int> resolveWeb({
   bool force = false,
   String? wasmFeaturesOverride,
 }) async {
-  _constants = BuildConstants.load(packageRoot);
-  _wasmFeaturesOverride = wasmFeaturesOverride;
+  final constants = BuildConstants.load(packageRoot);
   // A trimmed set has no prebuilt asset, no pinned hash, and must not
   // reuse a default-set artifact: force + version 0.0.0 route the
   // resolver straight to a fresh compile.
@@ -238,17 +243,17 @@ Future<int> resolveWeb({
 
   var installed = 0;
 
-  for (final entry in _constants.webAssets.entries) {
+  for (final entry in constants.webAssets.entries) {
     final localName = entry.key;
     final assetName = entry.value;
     final dest = File('${destDir.path}/$localName');
 
-    final isWasmBuildOutput = _constants.wasmBuildOutputs.contains(localName);
+    final isWasmBuildOutput = constants.wasmBuildOutputs.contains(localName);
 
     final fresh = await resolveAsset(
       ResolveRequest(
         assetName: assetName,
-        downloadUrl: _constants.downloadUrl(effectiveVersion, assetName),
+        downloadUrl: constants.downloadUrl(effectiveVersion, assetName),
         dest: dest,
         expectedHash: wasmFeaturesOverride == null
             ? assetHashes[assetName]
@@ -257,7 +262,8 @@ Future<int> resolveWeb({
         packageRoot: packageRoot,
         force: effectiveForce,
         compile: isWasmBuildOutput
-            ? (File d) => _compileWasm(packageRoot, d, localName)
+            ? (File d) =>
+                  _compileWasm(packageRoot, d, localName, wasmFeaturesOverride)
             : (File d) => _copyWebAsset(packageRoot, d, localName),
       ),
     );
@@ -359,18 +365,17 @@ Future<void> _compileNativeFromHook(
   String targetTriple,
   LinkMode linkMode,
   File outFile,
+  BuildConstants constants,
+  TrimPlan plan,
 ) async {
   final codeConfig = input.config.code;
   await compileEngineForTarget(
     packageRoot: input.packageRoot,
-    crateName: _constants.crate,
+    crateName: constants.crate,
     targetTriple: targetTriple,
-    features: _plan.features,
+    features: plan.features,
     targetDir: p.join(p.fromUri(input.outputDirectory), 'cargo_target'),
-    libFileName: codeConfig.targetOS.libraryFileName(
-      _constants.crate,
-      linkMode,
-    ),
+    libFileName: codeConfig.targetOS.libraryFileName(constants.crate, linkMode),
     outFile: outFile,
     environment: androidLinkerEnv(codeConfig, targetTriple),
   );
@@ -378,7 +383,11 @@ Future<void> _compileNativeFromHook(
 
 // ── Native: from CLI (no BuildInput — uses compile_rust.sh) ──────
 
-Future<void> _compileNativeFromCli(Uri packageRoot, File dest) async {
+Future<void> _compileNativeFromCli(
+  Uri packageRoot,
+  File dest,
+  BuildConstants constants,
+) async {
   final script = File.fromUri(packageRoot.resolve('tool/compile_rust.sh'));
   if (!script.existsSync()) {
     throw StateError(
@@ -399,7 +408,7 @@ Future<void> _compileNativeFromCli(Uri packageRoot, File dest) async {
     );
   }
 
-  final libFileName = _currentLibFileName();
+  final libFileName = _currentLibFileName(constants.crate);
   final compiled = File(
     p.join(
       p.fromUri(packageRoot),
@@ -416,14 +425,17 @@ Future<void> _compileNativeFromCli(Uri packageRoot, File dest) async {
 
 // ── Web: WASM build outputs (pdf_oxide.js + pdf_oxide_bg.wasm) ───
 
-String? _wasmFeaturesOverride;
-
-Future<void> _compileWasm(Uri packageRoot, File dest, String targetFile) async {
+Future<void> _compileWasm(
+  Uri packageRoot,
+  File dest,
+  String targetFile,
+  String? featuresOverride,
+) async {
   final existing = File.fromUri(packageRoot.resolve('web_assets/$targetFile'));
 
   // Contributor has locally built WASM — copy directly (never for a
   // trimmed set: the local artifact is the default build).
-  if (_wasmFeaturesOverride == null && existing.existsSync()) {
+  if (featuresOverride == null && existing.existsSync()) {
     dest.parent.createSync(recursive: true);
     existing.copySync(dest.path);
     return;
@@ -444,8 +456,7 @@ Future<void> _compileWasm(Uri packageRoot, File dest, String targetFile) async {
     workingDirectory: p.fromUri(packageRoot),
     environment: {
       ...Platform.environment,
-      if (_wasmFeaturesOverride != null)
-        'PDF_FEATURES_WASM': _wasmFeaturesOverride!,
+      if (featuresOverride != null) 'PDF_FEATURES_WASM': featuresOverride,
     },
   );
   if (result.exitCode != 0) {
@@ -482,9 +493,9 @@ Future<void> _copyWebAsset(Uri packageRoot, File dest, String fileName) async {
 // § 5 — CodeConfig mapping
 // ══════════════════════════════════════════════════════════════════
 
-String _currentLibFileName() {
-  if (Platform.isMacOS) return 'lib${_constants.crate}.dylib';
-  if (Platform.isLinux) return 'lib${_constants.crate}.so';
-  if (Platform.isWindows) return '${_constants.crate}.dll';
+String _currentLibFileName(String crate) {
+  if (Platform.isMacOS) return 'lib$crate.dylib';
+  if (Platform.isLinux) return 'lib$crate.so';
+  if (Platform.isWindows) return '$crate.dll';
   throw UnsupportedError('Unsupported platform: ${Platform.operatingSystem}');
 }

@@ -151,8 +151,9 @@ Future<void> compileEngineForTarget({
   final env = <String, String>{...environment};
 
   // macOS: strip Xcode Developer PATH injections that break cargo
-  if (Platform.isMacOS) {
-    env['PATH'] = Platform.environment['PATH']!
+  final hostPath = Platform.environment['PATH'];
+  if (Platform.isMacOS && hostPath != null) {
+    env['PATH'] = hostPath
         .split(':')
         .where((e) => !e.contains('Contents/Developer/'))
         .join(':');

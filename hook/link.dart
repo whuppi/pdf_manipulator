@@ -83,9 +83,20 @@ Future<CodeAsset> _trimFromRecordings(LinkInput input, CodeAsset full) async {
     '→ features [$features] — rebuilding the engine.',
   );
 
+  // CodeAsset.file is nullable in the hooks API; without a library file
+  // there is nothing to rebuild — ship the asset unchanged (fail closed).
+  final fullFile = full.file;
+  if (fullFile == null) {
+    stderr.writeln(
+      'pdf_manipulator trim (record-use): incoming code asset ${full.id} '
+      'carries no file — shipping it unchanged.',
+    );
+    return full;
+  }
+
   final codeConfig = input.config.code;
   final targetTriple = targetTripleFor(codeConfig);
-  final libFileName = p.basename(p.fromUri(full.file!));
+  final libFileName = p.basename(p.fromUri(fullFile));
   final outFile = File.fromUri(input.outputDirectory.resolve(libFileName));
 
   await compileEngineForTarget(
@@ -93,7 +104,13 @@ Future<CodeAsset> _trimFromRecordings(LinkInput input, CodeAsset full) async {
     crateName: constants.crate,
     targetTriple: targetTriple,
     features: features,
-    targetDir: p.join(p.fromUri(input.outputDirectory), 'cargo_target'),
+    // Per-asset cargo dir: two code assets in one link run must not share
+    // build state, or the second compile clobbers the first's artifact.
+    targetDir: p.join(
+      p.fromUri(input.outputDirectory),
+      'cargo_target',
+      p.basenameWithoutExtension(libFileName),
+    ),
     libFileName: libFileName,
     outFile: outFile,
     environment: androidLinkerEnv(codeConfig, targetTriple),
