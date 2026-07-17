@@ -1,6 +1,6 @@
 // Everything needed to turn a hook's CodeConfig into a compiled engine:
 // the CodeConfig → target mappings and the cargo invocation itself.
-// Shared by hook/build.dart (default + analyzer-trimmed builds) and
+// Shared by hook/build.dart (default + scan-trimmed builds) and
 // hook/link.dart (RecordUse-trimmed release builds) — ONE compile path,
 // two callers. Change compile behavior here, never in a hook.
 

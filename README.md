@@ -470,7 +470,28 @@ What it's worth (measured):
 
 That's about 70% of the native library and almost three quarters of the web download gone. Real apps land between the rows — you pay only for what you keep.
 
-One requirement: trimming compiles a custom engine on your machine, so it needs [Rust](https://rustup.rs) — the same one-line installer on macOS, Linux, and Windows. Skip it and the build tells you exactly this.
+Trimming compiles a custom engine on your machine. There is nothing to set up in advance — any missing tool stops the build with its exact install command. What it will ask for:
+
+- **Native** (iOS, Android, macOS, Windows, Linux): [Rust](https://rustup.rs) — the same one-line installer on every OS.
+- **Web**: Rust, plus `wasm-bindgen-cli` (the build names the exact version), `binaryen`, and `jq`.
+
+<details>
+<summary><b>🧰 install commands for the web tools</b></summary>
+
+<br>
+
+The same commands the build prints when a tool is missing:
+
+| Tool | macOS | Linux | Windows |
+|---|---|---|---|
+| Rust | [rustup.rs](https://rustup.rs) | [rustup.rs](https://rustup.rs) | [rustup.rs](https://rustup.rs) |
+| `wasm-bindgen-cli` | `cargo install wasm-bindgen-cli --version <X>` | `cargo install wasm-bindgen-cli --version <X>` | `cargo install wasm-bindgen-cli --version <X>` |
+| `binaryen` | `brew install binaryen` | `sudo apt-get install binaryen` | [binaryen releases](https://github.com/WebAssembly/binaryen/releases) |
+| `jq` | `brew install jq` | `sudo apt-get install jq` | `choco install jq` |
+
+`<X>`: after setting `trim:` in your pubspec, run `flutter pub run pdf_manipulator:setup --trim` once — it prints the exact version the engine needs.
+
+</details>
 
 ```yaml
 # pubspec.yaml of YOUR app

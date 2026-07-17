@@ -1,22 +1,30 @@
-// The stable trim detector: resolved-AST reachability over the app's
-// source. Conservative by contract — any file that fails to resolve makes
-// the scan fail CLOSED (full binary), never a guess. Tooling-only: imported
-// by bin/setup.dart and the build hook, never by the library barrel, so
-// package:analyzer adds no bytes to any app.
+// The stable trim detector: a dependency-free text scan over the app's
+// source. Files that can see pdf_manipulator's API — a direct import,
+// or an import of an app file that re-exports it (barrel files, tracked
+// transitively) — are searched for capability member names.
+//
+// The scan errs toward OVER-keeping (a same-named identifier in a
+// scanned file keeps a capability the app never calls) — the app always
+// works, the binary is just less trimmed. It does not under-keep: a
+// call site always spells the member name in the text, including
+// dynamic calls that resolution-based analysis silently skips, and the
+// re-export tracking covers barrel-mediated usage. Users who want the
+// exact minimum state `trim: {keep: [...]}`.
+//
+// Deliberately NOT built on package:analyzer: a runtime package must
+// never put the analyzer in a consumer's dependency graph (it fights
+// the app's own codegen/lint tooling — issue #171). Do not reintroduce
+// it here.
 
 import 'dart:io';
 
-import 'package:analyzer/dart/analysis/analysis_context_collection.dart';
-import 'package:analyzer/dart/analysis/results.dart';
-import 'package:analyzer/dart/ast/ast.dart';
-import 'package:analyzer/dart/ast/visitor.dart';
-import 'package:analyzer/dart/element/element.dart';
+import 'package:path/path.dart' as p;
 
 import 'package:pdf_manipulator/src/trim/capabilities.dart';
 
-/// What a scan concluded. [resolved] false means the scan could not prove
-/// reachability (unanalyzable files) — callers MUST fall back to the full
-/// binary and surface [unresolvedPaths].
+/// What a scan concluded. [resolved] false means the scan could not read
+/// part of the app — callers MUST fall back to the full binary and
+/// surface [unresolvedPaths].
 class DetectorResult {
   /// Creates a result; see field docs for the contract.
   const DetectorResult({
@@ -29,44 +37,89 @@ class DetectorResult {
   /// Capabilities the app can reach. Meaningful only when [resolved].
   final Set<PdfCapability> keep;
 
-  /// True when every scanned file resolved — the keep-set is proven.
+  /// True when every scanned file was readable — the keep-set is proven.
   final bool resolved;
 
-  /// Files the analyzer could not resolve (drives the fail-closed path).
+  /// Files the scan could not read (drives the fail-closed path).
   final List<String> unresolvedPaths;
 
-  /// The `Class.member` names that matched, for `compare` mode and logs.
+  /// The member names that matched, for `compare` mode and logs.
   final Set<String> matchedMembers;
 }
 
 /// Scans the app rooted at [appRoot] (its `lib/` plus any additional
 /// [extraDirs], e.g. `bin/`) for reachable pdf_manipulator capabilities.
-Future<DetectorResult> detectCapabilities(
+DetectorResult detectCapabilities(
   String appRoot, {
   List<String> extraDirs = const [],
-}) async {
+}) {
   final roots = <String>[
     Directory('$appRoot/lib').existsSync() ? '$appRoot/lib' : appRoot,
     for (final d in extraDirs)
       if (Directory(d).existsSync()) d,
   ];
-  final collection = AnalysisContextCollection(
-    includedPaths: roots.map((r) => Directory(r).absolute.path).toList(),
-  );
+
+  // Member name → capabilities it implies. Qualified apiMembers keys
+  // collapse to their member part: text has no resolution, `doc.extract`
+  // and a bare `extract` read the same.
+  final byMember = <String, Set<PdfCapability>>{};
+  for (final e in PdfCapability.apiMembers.entries) {
+    byMember.putIfAbsent(e.key.split('.').last, () => {}).add(e.value);
+  }
+  final patterns = {
+    for (final m in byMember.keys) m: RegExp('\\b${RegExp.escape(m)}\\b'),
+  };
+
+  final unresolved = <String>[];
+  final sources = <String, String>{}; // canonical path → contents
+
+  // Manual walk: an unreadable directory records itself and skips its
+  // subtree instead of aborting the whole listing with a throw —
+  // filesystem-level failures fall closed like unreadable files do.
+  void walk(Directory dir) {
+    final List<FileSystemEntity> entries;
+    try {
+      entries = dir.listSync(followLinks: false);
+    } on IOException {
+      unresolved.add(dir.path);
+      return;
+    }
+    for (final entry in entries) {
+      if (entry is Directory) {
+        walk(entry);
+      } else if (entry is File && entry.path.endsWith('.dart')) {
+        try {
+          sources[p.canonicalize(entry.path)] = entry.readAsStringSync();
+        } on IOException {
+          unresolved.add(entry.path);
+        }
+      }
+    }
+  }
+
+  for (final root in roots) {
+    walk(Directory(root));
+  }
+
+  // Without the pubspec there is no app name, so package:<self>/ barrel
+  // imports cannot be resolved — a possible under-keep. Report it as
+  // unresolved: the caller falls back to the full binary.
+  final pubspec = _tryRead('$appRoot/pubspec.yaml');
+  if (pubspec == null) {
+    unresolved.add('$appRoot/pubspec.yaml');
+  }
+
+  final visible = _filesSeeingApi(appRoot, pubspec, sources);
 
   final keep = <PdfCapability>{};
   final matched = <String>{};
-  final unresolved = <String>[];
-
-  for (final context in collection.contexts) {
-    for (final path in context.contextRoot.analyzedFiles()) {
-      if (!path.endsWith('.dart')) continue;
-      final unit = await context.currentSession.getResolvedUnit(path);
-      if (unit is! ResolvedUnitResult) {
-        unresolved.add(path);
-        continue;
+  for (final path in visible) {
+    final source = sources[path]!;
+    for (final e in patterns.entries) {
+      if (e.value.hasMatch(source)) {
+        keep.addAll(byMember[e.key]!);
+        matched.add(e.key);
       }
-      unit.unit.accept(_MemberFinder(keep, matched));
     }
   }
 
@@ -78,54 +131,98 @@ Future<DetectorResult> detectCapabilities(
   );
 }
 
-class _MemberFinder extends RecursiveAstVisitor<void> {
-  _MemberFinder(this.keep, this.matched);
+// A whole directive, keyword to semicolon. Its body may carry several
+// URIs (conditional imports: `import 'a.dart' if (x) 'b.dart';`) —
+// every one is a potential path to the API, so all are extracted.
+final _directive = RegExp(
+  r'''^\s*(import|export)\s+([^;]*);''',
+  multiLine: true,
+);
+final _directiveUri = RegExp(r'''['"]([^'"]+)['"]''');
 
-  final Set<PdfCapability> keep;
-  final Set<String> matched;
+/// The files that can see pdf_manipulator's API: a direct import or
+/// export, or an import/export of an app file that RE-EXPORTS it,
+/// tracked transitively (barrel files). [pubspec] resolves
+/// `package:<self>/` imports; when it is null the caller has already
+/// recorded the pubspec as unresolved (full-binary fallback).
+Set<String> _filesSeeingApi(
+  String appRoot,
+  String? pubspec,
+  Map<String, String> sources,
+) {
+  // package:<appName>/x.dart resolves into <appRoot>/lib/x.dart. YAML
+  // allows a quoted name (name: "my_app") — the quotes are syntax, not
+  // part of the package name, so strip them or the prefix never matches.
+  final rawName = RegExp(
+    r'^name:\s*(\S+)',
+    multiLine: true,
+  ).firstMatch(pubspec ?? '')?[1];
+  final appName = rawName != null && (rawName[0] == '"' || rawName[0] == "'")
+      ? rawName.substring(1, rawName.length - 1)
+      : rawName;
+  final selfPrefix = appName == null ? null : 'package:$appName/';
 
-  void _record(Element? element) {
-    if (element == null) return;
-    final lib = element.library;
-    if (lib == null) return;
-    if (!lib.uri.toString().startsWith('package:pdf_manipulator/')) return;
-    // Qualified first, bare on miss. Class members match `Class.member`;
-    // extension members match bare (extensions are InstanceElement
-    // siblings of InterfaceElement, so their qualified key —
-    // `ExtensionName.member` — is deliberately absent from apiMembers).
-    // The fallback keeps detection correct even if a future element
-    // model reshapes that hierarchy; test/trim/detector_test.dart pins
-    // both shapes against a real resolved app.
-    final enclosing = element.enclosingElement;
-    final bare = '${element.name}';
-    final qualified = enclosing is InstanceElement
-        ? '${enclosing.name}.$bare'
-        : null;
-    final key = PdfCapability.apiMembers.containsKey(qualified)
-        ? qualified!
-        : bare;
-    final cap = PdfCapability.apiMembers[key];
-    if (cap != null) {
-      keep.add(cap);
-      matched.add(key);
+  String? resolve(String fromFile, String uri) {
+    if (selfPrefix != null && uri.startsWith(selfPrefix)) {
+      return p.canonicalize(
+        p.join(appRoot, 'lib', uri.substring(selfPrefix.length)),
+      );
+    }
+    if (!uri.contains(':')) {
+      return p.canonicalize(p.join(p.dirname(fromFile), uri));
+    }
+    return null; // other packages / dart: — not app files
+  }
+
+  // Parse directives once; build the reverse export graph so exposure
+  // propagates as a worklist from the direct exporters — O(files + edges)
+  // instead of re-scanning every file per fixpoint round.
+  final direct = <String>{}; // imports OR exports pdf_manipulator itself
+  final dependsOn = <String, Set<String>>{}; // file → app files it pulls in
+  final exportedBy = <String, List<String>>{}; // target → files exporting it
+  final seeds = <String>[]; // files exporting pdf_manipulator directly
+
+  for (final e in sources.entries) {
+    for (final d in _directive.allMatches(e.value)) {
+      for (final u in _directiveUri.allMatches(d[2]!)) {
+        final uri = u[1]!;
+        if (uri.startsWith('package:pdf_manipulator/')) {
+          direct.add(e.key);
+          if (d[1] == 'export') seeds.add(e.key);
+          continue;
+        }
+        final target = resolve(e.key, uri);
+        if (target == null) continue;
+        (dependsOn[e.key] ??= {}).add(target);
+        if (d[1] == 'export') {
+          (exportedBy[target] ??= []).add(e.key);
+        }
+      }
     }
   }
 
-  @override
-  void visitMethodInvocation(MethodInvocation node) {
-    _record(node.methodName.element);
-    super.visitMethodInvocation(node);
+  // A file re-exposes the API if it exports pdf_manipulator directly,
+  // or exports a file that re-exposes it.
+  final exposes = <String>{};
+  final worklist = [...seeds];
+  while (worklist.isNotEmpty) {
+    final file = worklist.removeLast();
+    if (!exposes.add(file)) continue;
+    worklist.addAll(exportedBy[file] ?? const []);
   }
 
-  @override
-  void visitPropertyAccess(PropertyAccess node) {
-    _record(node.propertyName.element);
-    super.visitPropertyAccess(node);
-  }
+  return {
+    for (final e in sources.entries)
+      if (direct.contains(e.key) ||
+          (dependsOn[e.key]?.any(exposes.contains) ?? false))
+        e.key,
+  };
+}
 
-  @override
-  void visitPrefixedIdentifier(PrefixedIdentifier node) {
-    _record(node.identifier.element);
-    super.visitPrefixedIdentifier(node);
+String? _tryRead(String path) {
+  try {
+    return File(path).readAsStringSync();
+  } on IOException {
+    return null;
   }
 }

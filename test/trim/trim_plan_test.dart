@@ -58,7 +58,7 @@ void main() {
       },
     );
 
-    test('auto + analyzer with no app at the candidate fails CLOSED', () async {
+    test('auto + scan with no app at the candidate fails CLOSED', () async {
       final noApp = Directory.systemTemp.createTempSync('trim_plan_test');
       addTearDown(() => noApp.deleteSync(recursive: true));
       final plan = await resolveTrimPlan(

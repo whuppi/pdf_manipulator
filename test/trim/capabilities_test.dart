@@ -134,12 +134,12 @@ void main() {
   });
 
   group('trim-detector selector', () {
-    test('absent means analyzer', () {
-      expect(TrimDetector.parse(null), TrimDetector.analyzer);
+    test('absent means scan', () {
+      expect(TrimDetector.parse(null), TrimDetector.scan);
     });
 
     test('all three wire names parse', () {
-      expect(TrimDetector.parse('analyzer'), TrimDetector.analyzer);
+      expect(TrimDetector.parse('scan'), TrimDetector.scan);
       expect(TrimDetector.parse('record-use'), TrimDetector.recordUse);
       expect(TrimDetector.parse('compare'), TrimDetector.compare);
     });
@@ -151,7 +151,7 @@ void main() {
           isA<TrimConfigError>().having(
             (e) => e.message,
             'message',
-            allOf(contains('recorduse'), contains('analyzer')),
+            allOf(contains('recorduse'), contains('scan')),
           ),
         ),
       );

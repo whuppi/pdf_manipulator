@@ -15,6 +15,18 @@ same-numbered stable, so it manufactured stable headings for versions
 that never shipped — which `tool/ci/release.sh --check-versions` now flags.
 Hand-edit each lane's file directly.
 
+VERSION NUMBERS ARE SEMVER — the bullets decide the number
+  Write the entry FIRST, then read it back; the bullets dictate the bump:
+  • Any **Breaking:** bullet → MAJOR. No exceptions — not "it's tiny",
+    not "nobody uses that knob". Caret consumers (^X.Y.Z) auto-upgrade
+    through minors and patches, so a breaking minor/patch ambushes them.
+  • Added / Changed capability → MINOR.
+  • Only Fixed bullets → PATCH.
+  If the heading you were about to write disagrees with its own bullets,
+  the heading is wrong — renumber before merging. Precedent: 2.2.0
+  shipped a **Breaking:** bullet as a minor and had to be retracted;
+  never again.
+
 ADDING A VERSION
   Add a heading at the TOP (newest first) of the right lane's file and
   write the summary. Exactly ONE new (untagged) version may sit at the
@@ -69,7 +81,22 @@ CONTENT RULES (never change)
 
 <!-- Add new versions below, newest first. -->
 
+## 3.0.0
+
+- **Breaking:** flattening CJK or emoji form values no longer uses a bundled font (it added 4.4 MB to every install). Register one once: `await pdf.registerFallbackFont(PdfFallbackFontKind.cjk, fontBytes)` (`.emoji` for emoji). Without one the value is still saved correctly — only the baked-in look falls back to the field's own font.
+- **Breaking** (only if you took the retracted 2.2.0): the `trim-detector` value `analyzer` is now `scan` → change it or delete the line — it is the default ([PR #172](https://github.com/whuppi/pdf_manipulator/pull/172))
+- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
+- Added trim — keep only the features your app uses ([#167](https://github.com/whuppi/pdf_manipulator/issues/167)). Put `trim: auto` under `hooks: user_defines: pdf_manipulator:` in your app pubspec, or choose yourself with `trim: {keep: [render, signatures]}`; on web also run `flutter pub run pdf_manipulator:setup --trim`. Needs [Rust](https://rustup.rs) — the engine compiles once on your machine and is cached. Wrong or missing pieces fail with a clear message, never a broken app.
+- Added `Pdf.registerFallbackFont(PdfFallbackFontKind, Uint8List)`.
+- Changed the default binary: dead engine surfaces, unused barcode support, and the embedded fonts are gone — native 28.7 MB → 21.1 MB, gzipped web download 11.3 MB → 7.2 MB. No action needed.
+- Fixed the package forcing an old `analyzer` version onto your app, which blocked current freezed / json_serializable and friends. The `analyzer` dependency is gone: `trim: auto` uses a dependency-free source scan. It can only keep slightly more than you use, never less — state `trim: {keep: [...]}` yourself for the exact minimum ([#171](https://github.com/whuppi/pdf_manipulator/issues/171) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #172](https://github.com/whuppi/pdf_manipulator/pull/172))
+- Fixed the package archive missing a build file (the engine's `Cargo.lock`), which broke `trim` and every compile-from-source path with "No such file or directory" ([#171](https://github.com/whuppi/pdf_manipulator/issues/171) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #172](https://github.com/whuppi/pdf_manipulator/pull/172))
+- Fixed the web compile error message telling you to install `wasm-pack` — it is not used. The build now points at the tool it actually misses, with the exact install command ([PR #172](https://github.com/whuppi/pdf_manipulator/pull/172))
+
 ## 2.2.0
+
+> Retracted on pub.dev: the published archive was missing a build file (the engine's `Cargo.lock`), breaking `trim` and compile-from-source installs. Superseded by 3.0.0, which consolidates everything here.
+
 
 - **Breaking:** flattening CJK or emoji form values no longer uses a bundled font (it added 4.4 MB to every install). Register one once: `await pdf.registerFallbackFont(PdfFallbackFontKind.cjk, fontBytes)` (`.emoji` for emoji). Without one the value is still saved correctly — only the baked-in look falls back to the field's own font.
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)

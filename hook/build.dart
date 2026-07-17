@@ -28,7 +28,8 @@
 //   2. DOWNLOAD  — fetch from GitHub Releases; verified against the
 //                  pinned hash at download time (or used with a loud
 //                  warning when neither hash nor source exists) → cache
-//   3. COMPILE   — vendor/pdf_oxide/ exists → cargo/wasm-pack → use it
+//   3. COMPILE   — vendor/pdf_oxide/ exists → cargo (native) or
+//                  tool/compile_rust.sh (wasm) → use it
 //   4. SUBMODULE — .gitmodules exists → git init recursive → compile
 //   5. ERROR     — nothing worked, clear message with options
 //
@@ -219,7 +220,7 @@ Future<void> _resolveNative({
 // Flutter serves destDir as static files — no registration needed.
 //
 // Two asset types with different compile fallbacks:
-//   WASM build outputs (pdf_oxide_bg.wasm, pdf_oxide.js) → wasm-pack
+//   WASM build outputs (pdf_oxide_bg.wasm, pdf_oxide.js) → compile_rust.sh
 //   Hand-written JS (lane_worker.js) → copy from package
 //
 // Returns the number of files freshly resolved (0 = all cached).
@@ -471,9 +472,8 @@ Future<void> _compileWasm(
     throw StateError(
       'WASM compilation failed (exit ${result.exitCode}).\n'
       'stderr: ${result.stderr}\n\n'
-      'Ensure Rust + wasm-pack are installed:\n'
-      '  https://rustup.rs\n'
-      '  cargo install wasm-pack',
+      'Ensure Rust is installed (https://rustup.rs). Any other missing '
+      'tool is named above with its exact install command.',
     );
   }
 

@@ -948,9 +948,9 @@ The design rules behind that grammar:
 
 | Detector | Status | How |
 |---|---|---|
-| `analyzer` (default) | stable | resolved-AST reachability over the app source (`lib/src/trim/detector.dart`); any unresolvable file → full binary + warning (fail closed) |
+| `scan` (default) | stable | dependency-free text scan over the app source (`lib/src/trim/detector.dart`): files importing the package (directly or through a re-export barrel) are searched for capability member names; errs only toward over-keeping. Any unreadable file → full binary + warning (fail closed) |
 | `record-use` | EXPERIMENTAL, internal | the SDK's `@RecordUse` recordings, read in the link hook after AOT; dormant until the SDK experiment activates |
-| `compare` | internal | analyzer trims; the link hook reports the recorded set for diffing |
+| `compare` | internal | the scan trims; the link hook reports the recorded set for diffing |
 
 The experimental lane is deliberately not documented for consumers yet —
 both detectors ship so the RecordUse integration stays built, in sync,
@@ -963,10 +963,10 @@ statics-only limit; the shim absorbs it.
 | | debug build | release build |
 |---|---|---|
 | no trim | prebuilt download | prebuilt download |
-| analyzer trim (auto or `keep:`) | compiles trimmed (Rust needed, once — cargo caches) | compiles trimmed |
+| scan trim (auto or `keep:`) | compiles trimmed (Rust needed, once — cargo caches) | compiles trimmed |
 | record-use trim | prebuilt full binary (debug skips linking) | link hook compiles trimmed |
 
-The analyzer lane trims debug builds too, on purpose: a too-narrow
+The scan lane trims debug builds too, on purpose: a too-narrow
 `keep:` surfaces its typed "not enabled in this build" error at the
 developer's desk, not in release testing. Debug/release parity beats a
 one-time compile.
@@ -979,7 +979,7 @@ source in the pub tarball compiles locally.
 ### The machinery
 
 - `lib/src/trim/` — capabilities + grammar (`capabilities.dart`), the
-  analyzer detector (`detector.dart`), the RecordUse shim
+  text-scan detector (`detector.dart`), the RecordUse shim
   (`record_use_shim.dart`). Tooling-only: never exported by the barrel,
   zero bytes in consumer apps.
 - `lib/src/hook/` — ONE compile path, two callers: `build_constants.dart`
