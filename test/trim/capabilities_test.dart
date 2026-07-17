@@ -27,6 +27,33 @@ void main() {
       expect(c.keep, {PdfCapability.render, PdfCapability.pdfa});
     });
 
+    test('keep expands capability dependencies (office brings extract)', () {
+      final c = TrimConfig.parse({
+        'keep': ['office'],
+      });
+      expect(c.keep, {PdfCapability.office, PdfCapability.extract});
+      expect(
+        c.featuresFor(
+          'icc,legacy-crypto,rendering,signatures,native-bridge,pdfa,office,extract',
+          c.keep!,
+        ),
+        'icc,legacy-crypto,native-bridge,office,extract',
+      );
+    });
+
+    test('core is accepted and adds nothing (always included)', () {
+      final c = TrimConfig.parse({
+        'keep': ['core', 'render'],
+      });
+      expect(c.keep, {PdfCapability.render});
+      expect(
+        TrimConfig.parse({
+          'keep': ['core'],
+        }).keep,
+        isEmpty,
+      );
+    });
+
     test('empty keep list is legal — core-only build', () {
       final c = TrimConfig.parse({'keep': <Object>[]});
       expect(c.mode, TrimMode.manual);
@@ -132,6 +159,47 @@ void main() {
           isTrue,
           reason: '$method (from apiMembers) is not in the README table',
         );
+      }
+      for (final cap in PdfCapability.values) {
+        for (final dep in cap.requires) {
+          final row = table
+              .split('\n')
+              .firstWhere((l) => l.contains('`${cap.wire}`'));
+          expect(
+            row.contains('`${dep.wire}`'),
+            isTrue,
+            reason:
+                "README row for '${cap.wire}' does not show its "
+                "'${dep.wire}' dependency",
+          );
+        }
+      }
+    });
+  });
+
+  group('engine parity', () {
+    test('enum requires mirrors the cargo feature graph (drift guard)', () {
+      final manifest = File('vendor/pdf_oxide/Cargo.toml').readAsStringSync();
+      for (final cap in PdfCapability.values) {
+        // The engine feature line, e.g. `office = ["dep:office_oxide", "extract"]`.
+        final line = RegExp(
+          '^${cap.cargoFeature} = \\[(.*?)\\]',
+          multiLine: true,
+          dotAll: true,
+        ).firstMatch(manifest);
+        expect(line, isNotNull, reason: 'engine feature ${cap.cargoFeature}');
+        final deps = line!.group(1)!;
+        for (final other in PdfCapability.values) {
+          final engineDepends = deps.contains('"${other.cargoFeature}"');
+          final enumDepends = cap.requires.contains(other);
+          expect(
+            enumDepends,
+            engineDepends,
+            reason:
+                '${cap.wire} → ${other.wire}: enum says $enumDepends, '
+                'engine manifest says $engineDepends',
+          );
+        }
       }
     });
   });

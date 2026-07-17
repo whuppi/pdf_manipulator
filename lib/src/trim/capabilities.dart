@@ -23,22 +23,28 @@ enum PdfCapability {
   pdfa('pdfa', 'pdfa'),
 
   /// PDF ↔ office conversion (DOCX / PPTX / XLSX, both directions).
-  /// Requires [extract] engine-side (conversion extracts content first) —
-  /// the cargo feature dependency handles it; keep-lists need not pair them.
-  office('office', 'office'),
+  /// Converting a PDF to office extracts its content first, so this
+  /// capability requires [extract] — keep-lists expand it automatically.
+  office('office', 'office', requires: {PdfCapability.extract}),
 
   /// Text extraction and everything built on it: plain/markdown/HTML
   /// extraction, search, page/document classification (includes the CJK
   /// CID→Unicode tables).
   extract('extract', 'extract');
 
-  const PdfCapability(this.wire, this.cargoFeature);
+  const PdfCapability(this.wire, this.cargoFeature, {this.requires = const {}});
 
   /// The name used in `trim: {keep: [...]}`.
   final String wire;
 
   /// The engine feature this capability maps to (internal).
   final String cargoFeature;
+
+  /// Capabilities this one cannot work without. Keep-lists and the
+  /// detector expand these automatically — users never spell them out.
+  /// Must mirror the engine's cargo feature dependencies (a parity test
+  /// reads the engine manifest and fails on drift).
+  final Set<PdfCapability> requires;
 
   /// Public API members (`Class.member` or top-level function name) whose
   /// reachability implies this capability. Consumed by the detector.
@@ -82,9 +88,18 @@ enum PdfCapability {
 class TrimConfig {
   const TrimConfig._(this.mode, this.keep);
 
-  /// Manual keep-set (the full override).
-  factory TrimConfig.keep(Set<PdfCapability> capabilities) =>
-      TrimConfig._(TrimMode.manual, capabilities);
+  /// Manual keep-set (the full override). Expands [PdfCapability.requires]
+  /// transitively, so `keep: [office]` also keeps `extract`.
+  factory TrimConfig.keep(Set<PdfCapability> capabilities) {
+    final expanded = <PdfCapability>{};
+    void add(PdfCapability c) {
+      if (!expanded.add(c)) return;
+      c.requires.forEach(add);
+    }
+
+    capabilities.forEach(add);
+    return TrimConfig._(TrimMode.manual, expanded);
+  }
 
   /// No trimming: the full default binary.
   static const off = TrimConfig._(TrimMode.off, null);
@@ -103,7 +118,8 @@ class TrimConfig {
       '  trim: auto                     # detector decides\n'
       '  trim:\n'
       '    keep: [render, signatures]   # exactly these capabilities\n'
-      'Capabilities: render, signatures, pdfa, office, extract';
+      'Capabilities: render, signatures, pdfa, office, extract '
+      '(and core, which is always included)';
 
   /// Parses the raw `trim` user-define value (YAML-decoded).
   static TrimConfig parse(Object? raw) {
@@ -124,6 +140,9 @@ class TrimConfig {
       }
       final set_ = <PdfCapability>{};
       for (final item in list) {
+        // 'core' is always included — accepting it lets users state the
+        // obvious without an error.
+        if (item == 'core') continue;
         final cap = PdfCapability.byWire('$item');
         if (cap == null) {
           throw TrimConfigError(

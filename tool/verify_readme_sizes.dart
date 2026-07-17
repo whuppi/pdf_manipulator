@@ -58,12 +58,24 @@ void main(List<String> args) {
     final wasmCoreRaw = sizes['wasmCoreRaw'] as int?;
     final wasmCoreGz = sizes['wasmCoreGz'] as int?;
     if (wasmCoreRaw == null || wasmCoreGz == null) {
-      skips.add(
-        'wasm core sizes (run `SHAKE_AUDIT_WASM=1 make shake-audit`)',
-      );
+      skips.add('wasm core sizes (run `SHAKE_AUDIT_WASM=1 make shake-audit`)');
     } else {
       check('wasm core raw', [_mb(wasmCoreRaw)]);
       check('wasm core gzipped', [_mb(wasmCoreGz)]);
+    }
+    for (final (label, key) in [
+      ('render cost', 'capRender'),
+      ('signatures cost', 'capSignatures'),
+      ('pdfa cost', 'capPdfa'),
+      ('office cost', 'capOffice'),
+      ('extract cost', 'capExtract'),
+    ]) {
+      final cost = sizes[key] as int?;
+      if (cost == null) {
+        skips.add('$label (run `SHAKE_AUDIT_CAPS=1 make shake-audit`)');
+      } else {
+        check(label, ['+${(cost / 1000000).toStringAsFixed(1)} MB']);
+      }
     }
   }
 

@@ -444,13 +444,12 @@ The default binary carries every capability. If your app only uses some of them,
 
 What it's worth (measured):
 
-| Engine | Full (default) | Everything trimmed away |
+| | Native library | Web wasm |
 |---|---|---|
-| Native library | ~21.1 MB | ~6.3 MB |
-| Web — download size (gzipped) | ~7.2 MB | ~1.9 MB |
-| Web — raw wasm | ~17.2 MB | ~5.2 MB |
+| **Full engine** (default) | ~21.1 MB | ~17.2 MB (~7.2 MB gzipped) |
+| **Core only** (every capability trimmed; core always remains) | ~6.3 MB | ~5.2 MB (~1.9 MB gzipped) |
 
-That's about 70% of the native library and almost three quarters of the web download. Real apps land between the columns — you pay only for what you keep.
+That's about 70% of the native library and almost three quarters of the web download gone. Real apps land between the rows — you pay only for what you keep.
 
 ```yaml
 # pubspec.yaml of YOUR app
@@ -467,15 +466,18 @@ Prefer to say it yourself? The manual form keeps exactly these capabilities (plu
         keep: [render, signatures]
 ```
 
-How do you know what to keep? Each capability covers a small set of methods — everything else (merge, split, forms, watermark, encrypt, build…) is core and always included:
+How do you know what to keep? Each capability covers a small set of methods. Core is always included:
 
-| Capability | Keep it if you call |
-|---|---|
-| `render` | `doc.render()`, `editor.optimizeImages()`, the `compress` one-shot |
-| `signatures` | `sign()`, `doc.getSignatures()`, `doc.verifySignatures()` |
-| `pdfa` | `doc.validatePdfA()`, `doc.validatePdfUa()`, `convertToPdfA` |
-| `office` | `convertTo`, `convertToPdf` (DOCX / PPTX / XLSX) |
-| `extract` | `doc.extract()`, `doc.search()`, `doc.classifyPage()`, `doc.classifyDocument()` |
+| Capability | Keep it if you call | Also brings | Adds (native) |
+|---|---|---|---|
+| `core` | everything else — merge, split, forms, watermark, encrypt, build… | — | always included (~6.3 MB) |
+| `render` | `doc.render()`, `editor.optimizeImages()`, the `compress` one-shot | — | +4.2 MB |
+| `signatures` | `sign()`, `doc.getSignatures()`, `doc.verifySignatures()` | — | +0.9 MB |
+| `pdfa` | `doc.validatePdfA()`, `doc.validatePdfUa()`, `convertToPdfA` | — | +0.1 MB |
+| `extract` | `doc.extract()`, `doc.search()`, `doc.classifyPage()`, `doc.classifyDocument()` | — | +3.0 MB |
+| `office` | `convertTo`, `convertToPdf` (DOCX / PPTX / XLSX) | `extract`, automatically | +2.5 MB on top of `extract` |
+
+Dependencies are handled for you: `keep: [office]` switches on `extract` as well. Costs are measured one capability at a time, and capabilities share some code — so a combination can total a little less than the sum of its rows.
 
 Not sure? Use `trim: auto` — the scan answers this for you. And if you ever guess wrong, the error message names the missing capability.
 

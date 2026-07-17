@@ -78,9 +78,40 @@ if [ "${SHAKE_AUDIT_WASM:-0}" = "1" ]; then
   cp "$BAK/pdf_oxide_bg.wasm" "$BAK/pdf_oxide.js" "$ROOT/web_assets/"
   echo "core wasm: $WASM_CORE_RAW raw, $WASM_CORE_GZ gzipped"
   [ "$WASM_CORE_RAW" -lt "$DEFAULT_RAW" ] || fail "core-only wasm not smaller than the full default"
-  cat > "$ROOT/tool/.shake_sizes.json" <<JSON
-{"nativeFull": $FULL_SIZE, "nativeCore": $CORE_SIZE, "wasmCoreRaw": $WASM_CORE_RAW, "wasmCoreGz": $WASM_CORE_GZ}
-JSON
+  python3 - "$ROOT/tool/.shake_sizes.json" <<PYEOF
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d.update({"wasmCoreRaw": $WASM_CORE_RAW, "wasmCoreGz": $WASM_CORE_GZ})
+json.dump(d, open(p, "w"))
+PYEOF
+fi
+
+# Per-capability cost measurement (opt-in — five extra release builds).
+# cost(cap) = size(core+cap) − size(core); office is measured over
+# core+extract because the office feature requires extract.
+if [ "${SHAKE_AUDIT_CAPS:-0}" = "1" ]; then
+  echo "== [caps] per-capability native costs =="
+  CORE="icc,legacy-crypto,native-bridge"
+  measure() {
+    (cd "$VENDOR" && cargo build --release --features "$1" -q)
+    stat -f%z "$(dylib_for)"
+  }
+  RENDER=$(( $(measure "$CORE,rendering") - CORE_SIZE ))
+  SIGS=$(( $(measure "$CORE,signatures") - CORE_SIZE ))
+  PDFA=$(( $(measure "$CORE,pdfa") - CORE_SIZE ))
+  EXTRACT_TOTAL=$(measure "$CORE,extract")
+  EXTRACT=$(( EXTRACT_TOTAL - CORE_SIZE ))
+  OFFICE=$(( $(measure "$CORE,extract,office") - EXTRACT_TOTAL ))
+  echo "render=+$RENDER signatures=+$SIGS pdfa=+$PDFA extract=+$EXTRACT office=+$OFFICE"
+  python3 - "$ROOT/tool/.shake_sizes.json" <<PYEOF
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d.update({"capRender": $RENDER, "capSignatures": $SIGS, "capPdfa": $PDFA,
+          "capExtract": $EXTRACT, "capOffice": $OFFICE})
+json.dump(d, open(p, "w"))
+PYEOF
 fi
 
 echo "SHAKE-AUDIT PASS"
