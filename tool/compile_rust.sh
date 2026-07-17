@@ -89,6 +89,10 @@ _install_binaryen() {
 
 NATIVE_FEATURES=$(json_get '.features.native')
 WASM_FEATURES=$(json_get '.features.wasm')
+# Consumer-trimmed builds (setup --without / the build hook) override the
+# shipped defaults; unset means the build.json set.
+NATIVE_FEATURES="${PDF_FEATURES_NATIVE:-$NATIVE_FEATURES}"
+WASM_FEATURES="${PDF_FEATURES_WASM:-$WASM_FEATURES}"
 
 if [[ "${1:-}" == "--features" ]]; then
   case "${2:-all}" in

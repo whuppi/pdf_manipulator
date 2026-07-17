@@ -21,6 +21,7 @@ import 'package:test/test.dart';
 
 import '../../fixtures/generated/fixtures.dart';
 import '../../fixtures/handwritten.dart';
+import '../../fixtures/subset_fallback_font.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
 
@@ -136,7 +137,11 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(2));
 
-    test('CJK value survives fill → flatten → extract', () async {
+    // MUST run before any registerFallbackFont test: on native the font
+    // registry is process-global, so a font registered by an earlier test
+    // would leak into this one and fake a pass. Declaration order is the
+    // guard (the suites run with --concurrency=1).
+    test('CJK value without a fallback font degrades, never crashes', () async {
       final pdf = createPdf();
       const value = '東京都渋谷区 123';
       final editor = await pdf.edit(src(formUtf16NamePdf));
@@ -147,26 +152,58 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       final text = await doc.extract(pages: const PdfPages.all());
-      // Asserted as two runs, not one string: the flattener bakes the
-      // CJK run (embedded fallback font) and the Latin run ' 123'
-      // (/DA font, space glyph included) as separate Tj operators, and
-      // the EXTRACTOR's word-gap heuristic drops the space at the
-      // font-run boundary. Glyph fidelity is this battery's claim;
-      // inter-run spacing belongs to the extraction pipeline.
       expect(
         text,
-        contains('東京都渋谷区'),
+        isNot(contains('東京都渋谷区')),
         reason:
-            'above-Latin-1 values take the fallback-font path; '
-            'flatten must embed a covering font and bake real glyphs',
-      );
-      expect(
-        text,
-        contains('123'),
-        reason: 'the Latin run must bake under the /DA font alongside',
+            'without a registered fallback font (and none compiled in) the '
+            'CJK run cannot bake — it degrades to the /DA path with a '
+            'flatten warning instead of fake glyphs or a crash',
       );
       await doc.dispose();
     }, timeout: t(2));
+
+    test(
+      'CJK value survives fill → flatten → extract (registered font)',
+      () async {
+        final pdf = createPdf();
+        const value = '東京都渋谷区 123';
+        // The subset face covers exactly this value's glyphs; registration
+        // reaches every lane of this instance before the ops below.
+        await pdf.registerFallbackFont(
+          PdfFallbackFontKind.cjk,
+          subsetCjkFallbackFont,
+        );
+        final editor = await pdf.edit(src(formUtf16NamePdf));
+        await editor.setFormFieldValue(_sharedName, value);
+        await editor.flattenForms();
+        final sink = TestSink();
+        await editor.save(sink);
+        await editor.dispose();
+        final doc = await pdf.open(src(sink.takeBytes()));
+        final text = await doc.extract(pages: const PdfPages.all());
+        // Asserted as two runs, not one string: the flattener bakes the
+        // CJK run (embedded fallback font) and the Latin run ' 123'
+        // (/DA font, space glyph included) as separate Tj operators, and
+        // the EXTRACTOR's word-gap heuristic drops the space at the
+        // font-run boundary. Glyph fidelity is this battery's claim;
+        // inter-run spacing belongs to the extraction pipeline.
+        expect(
+          text,
+          contains('東京都渋谷区'),
+          reason:
+              'above-Latin-1 values take the fallback-font path; '
+              'flatten must embed a covering font and bake real glyphs',
+        );
+        expect(
+          text,
+          contains('123'),
+          reason: 'the Latin run must bake under the /DA font alongside',
+        );
+        await doc.dispose();
+      },
+      timeout: t(2),
+    );
 
     test(
       'value with parentheses, backslash and umlauts survives flatten',

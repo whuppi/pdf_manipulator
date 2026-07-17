@@ -46,7 +46,9 @@ Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extrac
   - [Read a document](#read-a-document)
   - [Edit a document](#edit-a-document)
   - [Build from scratch](#build-from-scratch)
+  - [CJK & emoji in form fields](#cjk--emoji-in-form-fields)
 - [Error handling](#error-handling)
+- [The engine binary](#the-engine-binary)
 - [Platform support](#platform-support)
   - [Browser support](#browser-support)
   - [Web I/O modes](#web-io-modes)
@@ -91,6 +93,7 @@ pdf_manipulator: X.Y.Z  # exact version
 flutter pub run pdf_manipulator:setup                  # web (default)
 flutter pub run pdf_manipulator:setup <target>         # web|android|ios|macos|linux|windows
 flutter pub run pdf_manipulator:setup --force <target> # re-resolve (debugging)
+flutter pub run pdf_manipulator:setup --trim           # trimmed engine (see The engine binary)
 ```
 
 </details>
@@ -110,6 +113,8 @@ This will go away when Dart/Flutter adds WASM/JS asset support to
 build hooks. Tracking: [dart-lang/native#988](https://github.com/dart-lang/native/issues/988)
 
 </details>
+
+That's it — every platform now runs the full engine. **Before you ship: it can be up to 70% smaller.** One pubspec entry keeps only the features your app uses — [The engine binary](#the-engine-binary).
 
 ---
 
@@ -395,6 +400,39 @@ Pages: `addA4Page` / `addLetterPage` / `addPage` (custom size). Content: `text`,
 
 ---
 
+### CJK & emoji in form fields
+
+Filling a form with text the field's own font cannot draw (Japanese, Korean, Chinese, emoji) needs a fallback font. The binary doesn't bundle one (that's multiple MB most apps never use) — you register your own once, and every later fill uses it.
+
+**1. Download a font.** Any complete `.ttf` or `.otf` file works:
+
+- For Chinese, Japanese, or Korean: pick the Noto Sans font for your language — [Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC) (Simplified Chinese), [Noto Sans TC](https://fonts.google.com/noto/specimen/Noto+Sans+TC) (Traditional Chinese), [Noto Sans JP](https://fonts.google.com/noto/specimen/Noto+Sans+JP) (Japanese), or [Noto Sans KR](https://fonts.google.com/noto/specimen/Noto+Sans+KR) (Korean). If your forms mix several of these languages, [notofonts/noto-cjk](https://github.com/notofonts/noto-cjk) has combined files that cover all of them at once — a bigger file, but one registration.
+- For emoji: [Noto Emoji](https://fonts.google.com/noto/specimen/Noto+Emoji). Use this black-and-white font: baked emoji come out as black-and-white shapes, like printed text. Color is not possible here — PDF text is drawn from character shapes in one color, and no PDF tool can bake a color emoji font into text. (The stored value keeps the real emoji character either way.)
+
+**2. Put the file in your app's assets** and declare it in `pubspec.yaml`:
+
+```yaml
+flutter:
+  assets:
+    - assets/fonts/NotoSansSC-Regular.ttf
+```
+
+**3. Register it once at startup**, before the first fill or flatten:
+
+```dart
+final fontBytes = await rootBundle.load('assets/fonts/NotoSansSC-Regular.ttf');
+await pdf.registerFallbackFont(
+    PdfFallbackFontKind.cjk, fontBytes.buffer.asUint8List());
+```
+
+`PdfFallbackFontKind.emoji` works the same way, with the emoji font. One registration covers the whole `Pdf` instance, on every platform.
+
+The font stays in memory after you register it — that is what makes every later fill fast. On native the engine holds one shared copy; on web each engine worker holds its own copy (workers start only when needed). So when one language is enough, prefer the single-language file over the combined one.
+
+Without a registered font the fill still succeeds — the value is stored correctly and readers with their own fonts display it; only the baked-in (flattened) appearance falls back to the field's font.
+
+---
+
 ## Error handling
 
 Every failure is a typed subclass of `PdfError`: no string matching, no `PlatformException`. Catch the cases you handle specially; let the rest fall to a catch-all. Each error carries a human-readable `message`.
@@ -419,21 +457,71 @@ try {
 
 ---
 
-## Platform support
+## The engine binary
 
-Every platform Flutter runs on, one API. Native platforms run a Rust core; web runs that same core compiled to WASM.
+The default binary carries every capability. If your app only uses some of them, trim tells the build to keep what your code can reach and delete the rest at compile time. It follows the same safety rule as Dart's own tree shaking: when the build cannot prove that your app skips something, it keeps it. The worst case is a slightly bigger binary — never a missing feature.
 
-| Target | Architectures | Minimum version | Engine |
+What it's worth (measured):
+
+| | Native library | Web wasm |
+|---|---|---|
+| **Full engine** (default) | ~21.1 MB | ~17.2 MB (~7.2 MB gzipped) |
+| **Core only** (every capability trimmed; core always remains) | ~6.3 MB | ~5.2 MB (~1.9 MB gzipped) |
+
+That's about 70% of the native library and almost three quarters of the web download gone. Real apps land between the rows — you pay only for what you keep.
+
+One requirement: trimming compiles a custom engine on your machine, so it needs [Rust](https://rustup.rs) — the same one-line installer on macOS, Linux, and Windows. Skip it and the build tells you exactly this.
+
+```yaml
+# pubspec.yaml of YOUR app
+hooks:
+  user_defines:
+    pdf_manipulator:
+      trim: auto              # a source scan decides what to keep
+```
+
+Prefer to say it yourself? The manual form keeps exactly these capabilities (plus the always-included core — parse, write, edit, forms, build):
+
+```yaml
+      trim:
+        keep: [render, signatures]
+```
+
+How do you know what to keep? Each capability covers a small set of methods. Core is always included:
+
+| Capability | Keep it if you call | Also brings | Adds (native) |
 |---|---|---|---|
-| Android | arm64, arm, x64, x86 | API 21 (Android 5.0) | Native (Rust) |
-| iOS | arm64 device, arm64 + x64 simulator | 13.0 | Native (Rust) |
-| macOS | arm64, x64 | 10.15 (Catalina) | Native (Rust) |
-| Linux | x64, arm64 | glibc 2.31+ (Ubuntu 20.04+) | Native (Rust) |
-| Windows | x64, arm64 | Windows 10 | Native (Rust) |
-| Web | All modern browsers | See [browser support](#browser-support) | WASM |
+| `core` | everything else — merge, split, forms, watermark, encrypt, build… | — | always included (~6.3 MB) |
+| `render` | `doc.render()`, `editor.optimizeImages()`, the `compress` one-shot | — | +4.2 MB |
+| `signatures` | `sign()`, `doc.getSignatures()`, `doc.verifySignatures()` | — | +0.9 MB |
+| `pdfa` | `doc.validatePdfA()`, `doc.validatePdfUa()`, `convertToPdfA` | — | +0.1 MB |
+| `extract` | `doc.extract()`, `doc.search()`, `doc.classifyPage()`, `doc.classifyDocument()` | — | +3.0 MB |
+| `office` | `convertTo`, `convertToPdf` (DOCX / PPTX / XLSX) | `extract`, automatically | +2.5 MB on top of `extract` |
+
+Dependencies are handled for you: `keep: [office]` switches on `extract` as well. Costs are measured one capability at a time, and capabilities share some code — so a combination can total a little less than the sum of its rows.
+
+Not sure? Use `trim: auto` — the scan answers this for you. And if you ever guess wrong, the error message names the missing capability.
+
+Want to see it live? [`example_trimmed/`](example_trimmed/) runs the full example app under a `keep: [render]` engine — its smoke test asserts that kept capabilities work and excluded ones answer the typed error.
+
+On web, run the setup with the flag after configuring pubspec:
+
+```bash
+flutter pub run pdf_manipulator:setup --trim
+```
 
 <details>
-<summary><b>🧩 how the binary actually shows up (build-time magic)</b></summary>
+<summary><b>🧩 how trim works</b></summary>
+
+- `auto` reads your app's code and keeps every capability it can reach. If any file can't be analyzed, you get the full binary and a warning — it never guesses.
+- The trimmed engine compiles once and is cached — later builds reuse it.
+- Call something you trimmed away and you get a clear error saying what to add to `keep:`. No crashes, no silent misbehavior.
+- A typo in `trim:` fails the build and prints the valid options.
+
+</details>
+
+<details>
+<summary><b>🧩 where the binary comes from (the build-time steps)</b></summary>
 
 <br>
 
@@ -450,6 +538,21 @@ You never call this; it runs at build time. For the curious (or when a build fai
 The vendored Rust source ships in both the pub.dev tarball and git tags. If the repo disappears, published versions still compile from source.
 
 </details>
+
+---
+
+## Platform support
+
+Every platform Flutter runs on, one API. Native platforms run a Rust core; web runs that same core compiled to WASM.
+
+| Target | Architectures | Minimum version | Engine |
+|---|---|---|---|
+| Android | arm64, arm, x64, x86 | API 21 (Android 5.0) | Native (Rust) |
+| iOS | arm64 device, arm64 + x64 simulator | 13.0 | Native (Rust) |
+| macOS | arm64, x64 | 10.15 (Catalina) | Native (Rust) |
+| Linux | x64, arm64 | glibc 2.31+ (Ubuntu 20.04+) | Native (Rust) |
+| Windows | x64, arm64 | Windows 10 | Native (Rust) |
+| Web | All modern browsers | See [browser support](#browser-support) | WASM |
 
 ### Browser support
 

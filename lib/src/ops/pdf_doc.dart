@@ -15,6 +15,7 @@ import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
 import 'package:pdf_manipulator/src/types/search_result.dart';
 import 'package:pdf_manipulator/src/bridge/pdf_bridge.dart';
+import 'package:pdf_manipulator/src/trim/record_use_shim.dart';
 
 /// A parsed PDF document — live handle to the Rust engine.
 ///
@@ -104,6 +105,7 @@ class PdfDoc {
     required PdfPages pages,
     PdfExtractionFormat format = PdfExtractionFormat.auto,
   }) {
+    TrimRecord.op('extract');
     _check();
     return _handle.extract(pages: pages, format: format);
   }
@@ -113,12 +115,14 @@ class PdfDoc {
     required String query,
     required PdfPages pages,
   }) {
+    TrimRecord.op('extract');
     _check();
     return _handle.search(query: query, pages: pages);
   }
 
   /// Renders the specified [pages] as rasterized images.
   Stream<RenderedPage> render({required PdfPages pages, PdfRenderSize? size}) {
+    TrimRecord.op('render');
     _check();
     return _handle.render(pages: pages, size: size);
   }
@@ -131,24 +135,28 @@ class PdfDoc {
 
   /// Returns metadata for all digital signatures in the document.
   PdfTask<List<PdfSignatureInfo>> getSignatures() {
+    TrimRecord.op('signatures');
     _check();
     return _handle.getSignatures();
   }
 
   /// Verifies all digital signatures — returns true if all are valid.
   PdfTask<bool> verifySignatures() {
+    TrimRecord.op('signatures');
     _check();
     return _handle.verifySignatures();
   }
 
   /// Validates PDF/A conformance at the given [level] (1, 2, or 3).
   PdfTask<PdfValidationResult> validatePdfA({int level = 2}) {
+    TrimRecord.op('pdfa');
     _check();
     return _handle.validatePdfA(level: level);
   }
 
   /// Validates PDF/UA (accessibility) conformance at the given [level].
   PdfTask<bool> validatePdfUa({int level = 1}) {
+    TrimRecord.op('pdfa');
     _check();
     return _handle.validatePdfUa(level: level);
   }
@@ -161,12 +169,14 @@ class PdfDoc {
 
   /// Classifies a single [page] by its content type (text, image, mixed).
   PdfTask<PdfPageClassification> classifyPage(int page) {
+    TrimRecord.op('extract');
     _check();
     return _handle.classifyPage(page);
   }
 
   /// Classifies the entire document by its overall content type.
   PdfTask<PdfDocumentClassification> classifyDocument() {
+    TrimRecord.op('extract');
     _check();
     return _handle.classifyDocument();
   }

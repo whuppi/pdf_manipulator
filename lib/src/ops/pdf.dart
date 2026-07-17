@@ -6,6 +6,8 @@
 //   pdf_standalone.dart — source in, sink out, no handle (sign, convert)
 //   pdf_sugar.dart     — convenience wrappers over editor/builder
 
+import 'dart:typed_data';
+
 import 'package:pdf_manipulator/src/ops/pdf_editor.dart';
 import 'package:pdf_manipulator/src/ops/pdf_builder.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
@@ -52,6 +54,22 @@ class Pdf {
   Future<PdfIoMode> ensureInitialized() {
     _check();
     return _bridge.ensureInitialized();
+  }
+
+  /// Registers a fallback font for baking form values the field's own font
+  /// cannot render (CJK or emoji) — used by `flattenForms` and the
+  /// `/NeedAppearances` regeneration paths.
+  ///
+  /// [bytes] is a complete TTF/OTF face. It reaches every current and
+  /// future worker of this instance; register once, before the operations
+  /// that need it. Without a registered font (and without the engine's
+  /// optional compiled-in fallback) such values keep the plain `/DA`
+  /// appearance and the flatten records a warning.
+  PdfTask<void> registerFallbackFont(
+    PdfFallbackFontKind kind,
+    Uint8List bytes,
+  ) {
+    return _bridge.registerFallbackFont(kind.wire, bytes);
   }
 
   void _check() {
