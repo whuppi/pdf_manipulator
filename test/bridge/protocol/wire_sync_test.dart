@@ -20,25 +20,42 @@ import 'package:test/test.dart';
 
 // ── Source extractors ──
 
-/// Splits bridge_api.rs into three disjoint sets by function boundary.
+/// Extracts the three Rust op sets. Top-level ops are op_unit!
+/// declarations under host/ops/ (the registry's unit files); the
+/// editorMutate / builderPageOp sub-commands are still match arms inside
+/// bridge_api.rs handlers. An op missing its unit fails the top-level
+/// test; a unit missing its registry row surfaces as an unused-static
+/// warning in `make analyze`.
 ({Set<String> topLevel, Set<String> editMutate, Set<String> pageOp})
 _parseRustDispatch(String source) {
-  // Find function boundaries
+  final unitPattern = RegExp(
+    r'op_unit!\(\s*\w+,\s*"([a-zA-Z]+)"',
+    multiLine: true,
+  );
+  final topLevel = <String>{};
+  final opsDir = Directory('vendor/pdf_oxide/src/host/ops');
+  if (!opsDir.existsSync()) throw StateError('host/ops/ not found');
+  for (final f in opsDir.listSync().whereType<File>()) {
+    if (!f.path.endsWith('.rs')) continue;
+    final s = f.readAsStringSync();
+    topLevel.addAll(unitPattern.allMatches(s).map((m) => m.group(1)!));
+  }
+  if (topLevel.isEmpty) throw StateError('no op_unit! declarations found');
+
+  // Sub-dispatched ops keep their match arms inside bridge_api.rs.
   final mutateStart = source.indexOf('fn handle_editor_mutate(');
   final pageOpStart = source.indexOf('fn handle_builder_page_op(');
 
   if (mutateStart == -1) throw StateError('handle_editor_mutate not found');
   if (pageOpStart == -1) throw StateError('handle_builder_page_op not found');
 
-  // Top-level = everything before handle_editor_mutate
-  final topSource = source.substring(0, mutateStart);
   final mutateSource = source.substring(mutateStart, pageOpStart);
   final pageSource = source.substring(pageOpStart);
 
   final armPattern = RegExp(r'"([a-zA-Z]+)"\s*=>');
 
   return (
-    topLevel: armPattern.allMatches(topSource).map((m) => m.group(1)!).toSet(),
+    topLevel: topLevel,
     editMutate: armPattern
         .allMatches(mutateSource)
         .map((m) => m.group(1)!)
