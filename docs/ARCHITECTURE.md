@@ -930,6 +930,20 @@ override) · absent/false (full default binary). Malformed values fail
 the build printing the grammar — a config mistake never silently changes
 what ships. Web: `setup --trim` after configuring pubspec.
 
+The design rules behind that grammar:
+
+1. One key, one artifact — auto and manual both produce a keep-set
+   feeding one build pipeline; manual IS the detector override.
+2. Users speak capabilities, never cargo features — names stay stable
+   across engine bumps; internals (native-bridge, icc, …) are not
+   expressible, so not droppable.
+3. Keep-list, not drop-list — "ship only what I say" stated exactly;
+   forgetting something fails safe via the typed error.
+4. Core is always included; dependencies expand automatically
+   (`keep: [office]` also keeps `extract`).
+5. Config errors are loud — never a silent full binary.
+6. One pubspec entry drives native and web identically.
+
 ### Detectors
 
 | Detector | Status | How |
@@ -939,8 +953,10 @@ what ships. Web: `setup --trim` after configuring pubspec.
 | `compare` | internal | analyzer trims; the link hook reports the recorded set for diffing |
 
 The experimental lane is deliberately not documented for consumers yet —
-it exists so the RecordUse integration stays built, in sync, and testable
-as the SDK matures (`docs/PLAN_OP_TRIMMING.md` has the full design).
+both detectors ship so the RecordUse integration stays built, in sync,
+and testable as the SDK matures, instead of being re-invented the day it
+stabilizes. The public API does not get reworked for RecordUse's current
+statics-only limit; the shim absorbs it.
 
 ### Build-mode behavior
 
@@ -971,6 +987,12 @@ source in the pub tarball compiles locally.
   env, the cargo invocation), `trim_plan.dart` (user-defines → plan,
   recordings → keep-set). `hook/build.dart` and `hook/link.dart` are thin
   callers.
+- The cutting doctrine: cut ROOTS and let LTO shake. Because the shipped
+  artifact is a cdylib, only exported symbols are roots — gating a few
+  dispatch entry fns lets LTO delete whole subsystems. Module-level cfg
+  gates are the exception, needed only where core references pin data
+  (the CID tables via font parsing) or where an optional dependency must
+  not compile at all (office_oxide).
 - Engine-side, each bridge op is a self-contained UNIT
   (`vendor/pdf_oxide/src/host/ops/`): a registry entry + handler on one
   shared calling convention + an exported `pdf_op_<name>_anchor` symbol
@@ -984,9 +1006,10 @@ source in the pub tarball compiles locally.
   detector should make it unreachable).
 - `make shake-audit` keeps the guarantee durable across upstream rebases:
   full vs core-only builds, symbol autopsy, size ceiling, and runtime
-  probes of the typed errors. It is also the measurement tool — current
-  sizes come from running it; the maintained ledger lives in
-  [`PLAN_OP_TRIMMING.md`](PLAN_OP_TRIMMING.md).
+  probes of the typed errors. It is also the measurement tool — the
+  size-measuring recipe (audit modes, the README verifier, and why the
+  linker map is the only trustworthy instrument) lives in
+  [`UPDATING.md`](UPDATING.md).
 
 ## The one-line summary
 

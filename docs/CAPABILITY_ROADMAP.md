@@ -283,9 +283,9 @@ wires the trigger, `main()` adds one call to `resolveWeb()` and
 
 ## Binary size — trim
 
-Shipped: the trim system (issue #167). Full design + measured ledger in
-[`PLAN_OP_TRIMMING.md`](PLAN_OP_TRIMMING.md); consumer docs in the README;
-durable architecture in [`ARCHITECTURE.md`](ARCHITECTURE.md) §Trim.
+Shipped: the trim system (issue #167). Consumer docs in the README;
+durable architecture in [`ARCHITECTURE.md`](ARCHITECTURE.md) §Trim;
+size-measuring recipe in [`UPDATING.md`](UPDATING.md) §S5b.
 
 | Piece | Status | Notes |
 |---|---|---|
@@ -296,7 +296,10 @@ durable architecture in [`ARCHITECTURE.md`](ARCHITECTURE.md) §Trim.
 | `make shake-audit` verifier | DONE | symbols + size ceiling + typed-error probes |
 | Op-unit dispatch layer (entry + handler + linker anchor per op) | DONE | `vendor/pdf_oxide/src/host/ops/`; registry backend swappable |
 | RecordUse drive path (build full → link hook trims on release) | DONE, dormant | Activates itself when the SDK experiment records; fixture-tested today |
-| `extract` capability | DONE | Extraction + search + classification (+ CJK CID tables). Cut via root gates — three dispatch fns gated, LTO deleted the 2.1 MB web with zero document.rs surgery (see PLAN_OP_TRIMMING.md). Core promise is now parse/write/edit/forms/builder. `office` requires `extract` engine-side. All remaining per-op cuts measured at 10-60 KB each: not worth their surface. |
+| `panic=abort` size lever | WONT_DO | Native lane isolation IS `catch_unwind` (one bad PDF → typed error, engine survives); abort would crash the whole app. Wasm already ships abort via `release-small` — the JS worker boundary isolates there. Nothing left to win. |
+| Writer monomorphization dedup | WONT_DO | Measured honestly: the dedupable Boxed-vs-Seek writer pairs are ~150-200 KB (2% of core) for dyn dispatch in the hottest safety-critical loop plus invasive upstream surgery. Bad trade. |
+| `opt-level=z` trim option | WONT_DO (unless asked) | ~15-20% of code size for CPU cost on every op — wrong default for a PDF engine. Revisit only on real user demand. |
+| `extract` capability | DONE | Extraction + search + classification (+ CJK CID tables). Cut via root gates — three dispatch fns gated, LTO deleted the 2.1 MB web with zero document.rs surgery. Core promise is now parse/write/edit/forms/builder. `office` requires `extract` engine-side. All remaining per-op cuts measured at 10-60 KB each: not worth their surface. |
 
 ### When the futures arrive — tracked triggers + exact approach
 
