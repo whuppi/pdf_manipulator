@@ -207,7 +207,7 @@ Future<void> _resolveNative({
             plan,
           );
         } else {
-          await _compileNativeFromCli(packageRoot, d, constants);
+          await _compileNativeFromCli(packageRoot, d, constants, plan);
         }
       },
     ),
@@ -387,6 +387,7 @@ Future<void> _compileNativeFromCli(
   Uri packageRoot,
   File dest,
   BuildConstants constants,
+  TrimPlan plan,
 ) async {
   final script = File.fromUri(packageRoot.resolve('tool/compile_rust.sh'));
   if (!script.existsSync()) {
@@ -396,10 +397,17 @@ Future<void> _compileNativeFromCli(
     );
   }
 
-  final result = await Process.run('bash', [
-    script.path,
-    '--native',
-  ], workingDirectory: p.fromUri(packageRoot));
+  final result = await Process.run(
+    'bash',
+    [script.path, '--native'],
+    workingDirectory: p.fromUri(packageRoot),
+    environment: {
+      ...Platform.environment,
+      // The script defaults to build.json's feature set; a trimmed plan
+      // must reach this fallback path too, or it silently ships full.
+      if (plan.isCustom) 'PDF_FEATURES_NATIVE': plan.features,
+    },
+  );
   if (result.exitCode != 0) {
     throw StateError(
       'Native compilation failed (exit ${result.exitCode}).\n'

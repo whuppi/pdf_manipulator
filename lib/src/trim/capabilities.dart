@@ -59,9 +59,15 @@ enum PdfCapability {
     return expanded;
   }
 
-  /// Public API members (`Class.member` or top-level function name) whose
-  /// reachability implies this capability. Consumed by the detector.
-  /// Verified against the engine's cfg gates — update BOTH together.
+  /// Public API members whose reachability implies this capability.
+  /// Consumed by the detector. Verified against the engine's cfg gates —
+  /// update BOTH together.
+  ///
+  /// Keys come in two shapes, and one operation may need BOTH entries:
+  /// the detector keys `Class.member` only when the member's enclosing
+  /// element is a class; extension members and top-level functions
+  /// resolve to the bare name. `Pdf.sign` / `sign` are not duplicates —
+  /// do not dedupe.
   static const Map<String, PdfCapability> apiMembers = {
     'PdfDoc.render': PdfCapability.render,
     'PdfEditor.optimizeImages': PdfCapability.render,
