@@ -451,6 +451,8 @@ What it's worth (measured):
 
 That's about 70% of the native library and almost three quarters of the web download gone. Real apps land between the rows — you pay only for what you keep.
 
+One requirement: trimming compiles a custom engine on your machine, so it needs [Rust](https://rustup.rs) — the same one-line installer on macOS, Linux, and Windows. Skip it and the build tells you exactly this.
+
 ```yaml
 # pubspec.yaml of YOUR app
 hooks:
@@ -491,7 +493,7 @@ flutter pub run pdf_manipulator:setup --trim
 <summary><b>🧩 how trim works</b></summary>
 
 - `auto` reads your app's code and keeps every capability it can reach. If any file can't be analyzed, you get the full binary and a warning — it never guesses.
-- A trimmed engine is compiled on your machine, so you need [Rust](https://rustup.rs) installed. The result is cached; you pay the compile once.
+- The trimmed engine compiles once and is cached — later builds reuse it.
 - Call something you trimmed away and you get a clear error saying what to add to `keep:`. No crashes, no silent misbehavior.
 - A typo in `trim:` fails the build and prints the valid options.
 

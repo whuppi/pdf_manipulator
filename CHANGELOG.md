@@ -71,11 +71,11 @@ CONTENT RULES (never change)
 
 ## 2.2.0
 
-- **Breaking:** flattening a form value in a script the field's font cannot draw (CJK, emoji) no longer uses a bundled fallback font — the embedded fonts were 4.4 MB in every install and are gone. Register your own once, then fill and flatten as before: `await pdf.registerFallbackFont(PdfFallbackFontKind.cjk, fontBytes)` (same call with `.emoji` for emoji). Without a registered font the value itself is still stored correctly; only the baked-in appearance falls back to the field's own font.
+- **Breaking:** flattening CJK or emoji form values no longer uses a bundled font (it added 4.4 MB to every install). Register one once: `await pdf.registerFallbackFont(PdfFallbackFontKind.cjk, fontBytes)` (`.emoji` for emoji). Without one the value is still saved correctly — only the baked-in look falls back to the field's own font.
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
-- Added trim — ship only the engine features your app uses ([#167](https://github.com/whuppi/pdf_manipulator/issues/167)). `trim: auto` under `hooks: user_defines: pdf_manipulator:` in your app pubspec scans your code and keeps what it can reach; `trim: {keep: [render, signatures]}` is the manual form; web additionally runs `flutter pub run pdf_manipulator:setup --trim`. Trimming needs the Rust toolchain (compiles a custom engine, cached after the first build). A trimmed-away call fails with an error naming the capability to add; a config typo fails the build with the valid grammar.
-- Added `Pdf.registerFallbackFont(PdfFallbackFontKind, Uint8List)` — runtime registration of the CJK / emoji fallback used when flattening form values.
-- Changed the default binary: upstream API surfaces no Dart op could reach, unused barcode support, and the embedded fallback fonts are gone from every build — native drops from 28.7 MB to 21.1 MB and the web download from 11.3 MB to 7.2 MB gzipped, with no action and no feature loss beyond the fallback-font note above.
+- Added trim — keep only the features your app uses ([#167](https://github.com/whuppi/pdf_manipulator/issues/167)). Put `trim: auto` under `hooks: user_defines: pdf_manipulator:` in your app pubspec, or choose yourself with `trim: {keep: [render, signatures]}`; on web also run `flutter pub run pdf_manipulator:setup --trim`. Needs [Rust](https://rustup.rs) — the engine compiles once on your machine and is cached. Wrong or missing pieces fail with a clear message, never a broken app.
+- Added `Pdf.registerFallbackFont(PdfFallbackFontKind, Uint8List)`.
+- Changed the default binary: dead engine surfaces, unused barcode support, and the embedded fonts are gone — native 28.7 MB → 21.1 MB, web download 11.3 MB → 7.2 MB gzipped. No action needed.
 
 ## 2.1.4
 

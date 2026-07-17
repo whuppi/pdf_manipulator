@@ -120,12 +120,29 @@ Future<void> compileEngineForTarget({
 
   _log.info('compiling from source for $targetTriple (features: $features)');
 
-  final targetCheck = Process.runSync('rustup', [
-    'target',
-    'list',
-    '--installed',
-  ]);
-  if (targetCheck.exitCode == 0 &&
+  // A missing toolchain must be a clear instruction, not a raw
+  // ProcessException from the first rustup/cargo call.
+  try {
+    Process.runSync('cargo', ['--version']);
+  } on ProcessException {
+    throw StateError(
+      'This build needs to compile the PDF engine from source (a trimmed '
+      'feature set has no prebuilt binary), but Rust is not installed.\n'
+      'Install it from https://rustup.rs (macOS, Linux, and Windows), '
+      'then build again.',
+    );
+  }
+
+  ProcessResult? targetCheck0;
+  try {
+    targetCheck0 = Process.runSync('rustup', ['target', 'list', '--installed']);
+  } on ProcessException {
+    // cargo without rustup (e.g. a system package) — skip the target
+    // check; cargo itself reports a missing target clearly.
+  }
+  final targetCheck = targetCheck0;
+  if (targetCheck != null &&
+      targetCheck.exitCode == 0 &&
       !(targetCheck.stdout as String).contains(targetTriple)) {
     _log.info('installing Rust target: $targetTriple');
     Process.runSync('rustup', ['target', 'add', targetTriple]);
