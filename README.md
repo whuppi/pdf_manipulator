@@ -407,7 +407,7 @@ Filling a form with text the field's own font cannot draw (Japanese, Korean, Chi
 **1. Download a font.** Any complete `.ttf` or `.otf` file works:
 
 - For Chinese, Japanese, or Korean: pick the Noto Sans font for your language — [Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC) (Simplified Chinese), [Noto Sans TC](https://fonts.google.com/noto/specimen/Noto+Sans+TC) (Traditional Chinese), [Noto Sans JP](https://fonts.google.com/noto/specimen/Noto+Sans+JP) (Japanese), or [Noto Sans KR](https://fonts.google.com/noto/specimen/Noto+Sans+KR) (Korean). If your forms mix several of these languages, [notofonts/noto-cjk](https://github.com/notofonts/noto-cjk) has combined files that cover all of them at once — a bigger file, but one registration.
-- For emoji: [Noto Emoji](https://fonts.google.com/noto/specimen/Noto+Emoji). Use this black-and-white font, not a color emoji font. The engine draws character shapes into the PDF, and color emoji fonts store pictures instead of shapes, so they cannot be drawn this way.
+- For emoji: [Noto Emoji](https://fonts.google.com/noto/specimen/Noto+Emoji). Use this black-and-white font: baked emoji come out as black-and-white shapes, like printed text. Color is not possible here — PDF text is drawn from character shapes in one color, and no PDF tool can bake a color emoji font into text. (The stored value keeps the real emoji character either way.)
 
 **2. Put the file in your app's assets** and declare it in `pubspec.yaml`:
 
