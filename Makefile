@@ -30,7 +30,7 @@ VERBOSE := $(if $(CI),--verbose,)
 #
 # make check    Full local gate before PR.
 
-check: lint-shell analyze platforms verify-tarball test-guards test test-example
+check: lint-shell analyze analyze-floor platforms verify-tarball test-guards test test-example
 
 # make hooks    Activate the repo's git hooks (commit-msg, pre-commit).
 #               Run once after cloning — they stay dormant otherwise.
@@ -138,6 +138,14 @@ test-guards:
 	  echo "extract/search/render, or carry a bytegrep-exempt marker"; \
 	  echo "with the reason:"; \
 	  echo "$$bad"; exit 1; fi
+	@bad=""; \
+	for f in $$(find test -name "*_battery.dart"); do \
+	  base=$$(basename "$$f"); \
+	  grep -q "$$base" test/ops/runners/*_runner_test.dart || bad="$$bad$$f (imported by no runner — it runs nowhere)\n"; \
+	done; \
+	if [ -n "$$bad" ]; then \
+	  echo "battery/runner completeness violation:"; \
+	  printf "$$bad"; exit 1; fi
 
 # ═══════════════════════════════════════════════════════════════════
 # § 3 — Build (dev iteration)
