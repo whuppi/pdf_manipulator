@@ -216,6 +216,7 @@ tool/                                       ← .sh = orchestration wrappers; .d
 ├── analyze.sh                              ← format + Dart + Rust static analysis
 ├── check_alignment.sh                      ← 16 KB ELF alignment check for Android APK
 ├── compile_rust.sh                         ← Rust → native / wasm / per-target / both
+├── fetch_verified.sh                       ← the one door for hash-verified binary downloads (dormant — no pinned downloads today)
 ├── generate_fixtures.dart                  ← test fixture generator (make fixtures; stamp-protected)
 ├── run_web_test.sh                         ← flutter drive web integration test
 └── ci/                                     ← invoked directly by workflows, not by make

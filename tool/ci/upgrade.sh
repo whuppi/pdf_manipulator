@@ -97,8 +97,8 @@ set_kv() {  # KEY value file — replace the KEY="old" line with KEY="new"
 # Empty today: binaryen (the last pinned download) now builds inside the
 # cargo workspace via the wasm-opt crate, pinned by Cargo.lock instead.
 # To add a new pinned download: put VERSION + per-platform sha256 pins in
-# versions.env, emit their rows here, add a bump block below, and restore
-# tool/fetch_verified.sh from git history for the verified fetch — the
+# versions.env, emit their rows here, add a bump block below, and fetch
+# through tool/fetch_verified.sh (dormant, kept for exactly this) — the
 # verify-pinned / check-availability plumbing below re-arms by itself.
 asset_urls() {
   :
