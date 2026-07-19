@@ -101,6 +101,43 @@ Map<String, String> androidLinkerEnv(CodeConfig code, String targetTriple) {
   return {'${envKey}_LINKER': linker, '${envKey}_AR': ar};
 }
 
+/// Ensures the Rust target [targetTriple] is installed. Probes rustc's
+/// target-libdir first — a target installed by ANY toolchain manager
+/// (rustup, distro package, nix) has one — and only falls back to
+/// rustup when it exists; a rustup-less toolchain missing the target
+/// gets instructions instead of "rustup: command not found".
+void ensureRustTarget(String targetTriple) {
+  try {
+    // target-libdir prints the WOULD-BE path (exit 0) even for
+    // uninstalled targets — only the directory existing proves it.
+    final probe = Process.runSync('rustc', [
+      '--print',
+      'target-libdir',
+      '--target',
+      targetTriple,
+    ]);
+    final libdir = (probe.stdout as String).trim();
+    if (probe.exitCode == 0 &&
+        libdir.isNotEmpty &&
+        Directory(libdir).existsSync()) {
+      return;
+    }
+  } on ProcessException {
+    // rustc missing entirely — the cargo probe above (or below at the
+    // call site) already produced the install-Rust instruction.
+  }
+  try {
+    _log.info('installing Rust target: $targetTriple');
+    Process.runSync('rustup', ['target', 'add', targetTriple]);
+  } on ProcessException {
+    throw StateError(
+      'Rust target $targetTriple is not installed and rustup is not '
+      'available to add it. Install the target through your Rust '
+      "toolchain's own manager, or install rustup: https://rustup.rs",
+    );
+  }
+}
+
 /// Compiles the engine crate for [targetTriple] with [features] and copies
 /// the produced library to [outFile]. Installs the Rust target when it's
 /// missing (fresh CI or formatted laptop).
@@ -133,20 +170,7 @@ Future<void> compileEngineForTarget({
     );
   }
 
-  ProcessResult? targetCheck0;
-  try {
-    targetCheck0 = Process.runSync('rustup', ['target', 'list', '--installed']);
-  } on ProcessException {
-    // cargo without rustup (e.g. a system package) — skip the target
-    // check; cargo itself reports a missing target clearly.
-  }
-  final targetCheck = targetCheck0;
-  if (targetCheck != null &&
-      targetCheck.exitCode == 0 &&
-      !(targetCheck.stdout as String).contains(targetTriple)) {
-    _log.info('installing Rust target: $targetTriple');
-    Process.runSync('rustup', ['target', 'add', targetTriple]);
-  }
+  ensureRustTarget(targetTriple);
 
   final env = <String, String>{...environment};
 

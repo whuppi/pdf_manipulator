@@ -465,33 +465,15 @@ What it's worth (measured):
 
 | | Native library | Web wasm |
 |---|---|---|
-| **Full engine** (default) | ~21.1 MB | ~17.2 MB (~7.2 MB gzipped) |
+| **Full engine** (default) | ~21.1 MB | ~17.5 MB (~7.3 MB gzipped) |
 | **Core only** (every capability trimmed; core always remains) | ~6.3 MB | ~5.2 MB (~1.9 MB gzipped) |
 
 That's about 70% of the native library and almost three quarters of the web download gone. Real apps land between the rows — you pay only for what you keep.
 
-Trimming compiles a custom engine on your machine. There is nothing to set up in advance — any missing tool stops the build with its exact install command. What it will ask for:
+Trimming compiles a custom engine on your machine. There is nothing to set up in advance — if a piece is missing, the build stops with the exact instruction. What it will ask for:
 
 - **Native** (iOS, Android, macOS, Windows, Linux): [Rust](https://rustup.rs) — the same one-line installer on every OS.
-- **Web**: Rust, plus `wasm-bindgen-cli` (the build names the exact version), `binaryen`, and `jq`.
-
-<details>
-<summary><b>🧰 install commands for the web tools</b></summary>
-
-<br>
-
-The same commands the build prints when a tool is missing:
-
-| Tool | macOS | Linux | Windows |
-|---|---|---|---|
-| Rust | [rustup.rs](https://rustup.rs) | [rustup.rs](https://rustup.rs) | [rustup.rs](https://rustup.rs) |
-| `wasm-bindgen-cli` | `cargo install wasm-bindgen-cli --version <X>` | `cargo install wasm-bindgen-cli --version <X>` | `cargo install wasm-bindgen-cli --version <X>` |
-| `binaryen` | `brew install binaryen` | `sudo apt-get install binaryen` | [binaryen releases](https://github.com/WebAssembly/binaryen/releases) |
-| `jq` | `brew install jq` | `sudo apt-get install jq` | `choco install jq` |
-
-`<X>`: after setting `trim:` in your pubspec, run `flutter pub run pdf_manipulator:setup --trim` once — it prints the exact version the engine needs.
-
-</details>
+- **Web**: [Rust](https://rustup.rs) too — nothing more. The web build makes its own helper tools the first time, which adds a few minutes once; every run after that reuses them.
 
 ```yaml
 # pubspec.yaml of YOUR app

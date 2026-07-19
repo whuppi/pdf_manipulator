@@ -82,6 +82,10 @@ Future<TrimPlan> resolveTrimPlan({
         );
         break;
       }
+      stdout.writeln(
+        'pdf_manipulator trim (scan): keeping '
+        '{${describeMatches(result)}}',
+      );
       keep = result.keep;
   }
 

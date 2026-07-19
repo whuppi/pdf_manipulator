@@ -17,9 +17,10 @@ patch branch.
 
 pdf_oxide depends on office_oxide as a path dependency
 (`office_oxide = { path = "../office_oxide" }`).
-wasm-bindgen-cli version is read from `vendor/pdf_oxide/Cargo.lock`
-at build time — never hardcoded. `compile_rust.sh` auto-installs the
-matching version before WASM builds.
+wasm-bindgen + wasm-opt run as library calls inside the fork's
+`bindgen_runner` workspace crate, version-pinned by the same
+`vendor/pdf_oxide/Cargo.lock` as the engine's wasm-bindgen dependency
+— nothing to install, nothing to hardcode.
 
 ### Bumping a fork's base tag — update every place it lives
 
@@ -539,7 +540,7 @@ hand-authored in `test/fixtures/handwritten.dart`.
 | "Handle not found" | Handle disposed or never opened |
 | "Symbol not found" at runtime | Binary older than source — rebuild |
 | `make verify-android` fails without Rust | Hook tries compile → `cargo` not found → error with install URL |
-| `make verify-web` fails without binaryen | `compile_rust.sh` errors with install command (dev) or auto-installs (CI) |
+| First web build takes minutes at "bindgen + optimize" | One-time: cargo builds `bindgen_runner` (binaryen compiles from source); cached afterwards |
 | `make verify-linux` fails without GTK | Makefile errors with `apt-get install` command (dev) or auto-installs (CI) |
 | `flutter build --release` fails but debug works | Build hook routes differently in release — check `hook/link.dart` exists |
 | Google Play rejects APK "16 KB page size" | Rust cdylib needs `-Wl,-z,max-page-size=16384` in `build.rs`. Cargo doesn't inherit NDK's 16 KB default. Any new Rust crate producing a cdylib for Android needs this. See `vendor/pdf_oxide/build.rs`. |

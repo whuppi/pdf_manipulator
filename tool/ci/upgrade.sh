@@ -6,7 +6,6 @@ set -euo pipefail
 # opens a single reviewed PR with whatever drifted.
 #
 # Watched here (this package's LOCAL pins — clean upstream, real churn):
-#   binaryen      BINARYEN_VERSION + 3 sha256    WebAssembly/binaryen
 #   pana          PANA_VERSION                   pub.dev
 #
 # Owned elsewhere by design (NOT here):
@@ -95,11 +94,14 @@ set_kv() {  # KEY value file — replace the KEY="old" line with KEY="new"
 
 # Every pinned asset as tool<TAB>platform<TAB>url<TAB>sha256. Single source for
 # the checks below; mirrors the bump blocks, so keep the two in sync.
+# Empty today: binaryen (the last pinned download) now builds inside the
+# cargo workspace via the wasm-opt crate, pinned by Cargo.lock instead.
+# To add a new pinned download: put VERSION + per-platform sha256 pins in
+# versions.env, emit their rows here, add a bump block below, and restore
+# tool/fetch_verified.sh from git history for the verified fetch — the
+# verify-pinned / check-availability plumbing below re-arms by itself.
 asset_urls() {
-  local bu="https://github.com/WebAssembly/binaryen/releases/download/$BINARYEN_VERSION"
-  printf 'binaryen\tlinux-x64\t%s\t%s\n'   "$bu/binaryen-$BINARYEN_VERSION-x86_64-linux.tar.gz"   "$BINARYEN_SHA256_LINUX_X64"
-  printf 'binaryen\tmacos-arm64\t%s\t%s\n' "$bu/binaryen-$BINARYEN_VERSION-arm64-macos.tar.gz"    "$BINARYEN_SHA256_MACOS_ARM64"
-  printf 'binaryen\twindows-x64\t%s\t%s\n' "$bu/binaryen-$BINARYEN_VERSION-x86_64-windows.tar.gz" "$BINARYEN_SHA256_WINDOWS_X64"
+  :
 }
 
 # HTTP status of a URL, following GitHub's asset redirect, or 000 if unreachable.
@@ -165,29 +167,6 @@ if [ -n "$PANA_VERSION" ] && [ -n "$pana_latest" ] && [ "$PANA_VERSION" != "$pan
   [ "$MODE" = apply ] && set_kv PANA_VERSION "$pana_latest" "$VERSIONS"
 fi
 
-# ── binaryen (version + 3 verified sha256, all in versions.env) ──────
-# Detection is a cheap tag compare; the downloads run only on apply, and any
-# single 404 aborts the whole bump rather than writing a half-correct pin.
-bin_latest="$(gh_latest_tag WebAssembly/binaryen)"
-if [ -n "$bin_latest" ] && [ "$bin_latest" != "$BINARYEN_VERSION" ]; then
-  if [ "$MODE" = apply ]; then
-    u="https://github.com/WebAssembly/binaryen/releases/download/$bin_latest"
-    lx="$(sha256_of "$u/binaryen-$bin_latest-x86_64-linux.tar.gz")"
-    mac="$(sha256_of "$u/binaryen-$bin_latest-arm64-macos.tar.gz")"
-    win="$(sha256_of "$u/binaryen-$bin_latest-x86_64-windows.tar.gz")"
-    if [ -n "$lx" ] && [ -n "$mac" ] && [ -n "$win" ]; then
-      drift=1; echo "binaryen: $BINARYEN_VERSION -> $bin_latest (+ 3 sha256)"
-      set_kv BINARYEN_VERSION "$bin_latest" "$VERSIONS"
-      set_kv BINARYEN_SHA256_LINUX_X64 "$lx" "$VERSIONS"
-      set_kv BINARYEN_SHA256_MACOS_ARM64 "$mac" "$VERSIONS"
-      set_kv BINARYEN_SHA256_WINDOWS_X64 "$win" "$VERSIONS"
-    else
-      echo "::error::binaryen: $bin_latest available but an asset download failed; bump by hand"; blocked=1
-    fi
-  else
-    drift=1; echo "binaryen: $BINARYEN_VERSION -> $bin_latest (apply fetches + verifies 3 sha256)"
-  fi
-fi
 
 [ "$drift" -eq 0 ] && echo "All watched pins are current."
 if [ "$blocked" -ne 0 ]; then

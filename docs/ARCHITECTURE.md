@@ -212,11 +212,10 @@ bin/
 tool/                                       ← .sh = orchestration wrappers; .dart = programs
 │                                              (anything parsing structured data or using a library)
 ├── build_lib.sh                            ← shared build helpers (sourced by 2+ scripts)
-├── versions.env                            ← single source of truth for pinned versions + hashes
+├── versions.env                            ← single source of truth for pinned versions
 ├── analyze.sh                              ← format + Dart + Rust static analysis
 ├── check_alignment.sh                      ← 16 KB ELF alignment check for Android APK
 ├── compile_rust.sh                         ← Rust → native / wasm / per-target / both
-├── fetch_verified.sh                       ← the one door for hash-verified binary downloads
 ├── generate_fixtures.dart                  ← test fixture generator (make fixtures; stamp-protected)
 ├── run_web_test.sh                         ← flutter drive web integration test
 └── ci/                                     ← invoked directly by workflows, not by make
@@ -612,11 +611,13 @@ user-facing text (README, pubspec).
 1. **Makefile is the interface.** CI runs `make <target>`. All build
    logic lives in Makefile and scripts. CI YAML has zero build logic.
 
-2. **Scripts handle their own deps.** Rust targets, wasm-bindgen,
-   binaryen, cross-compilers — auto-installed by the script that
-   needs them. `$CI` env var: auto-install on CI, error with
-   instructions on dev. `rustup target add` and `cargo install` are
-   always safe (user-space). System packages auto-install only on CI.
+2. **Scripts handle their own deps.** Rust targets and cross-compilers
+   are auto-installed by the script that needs them. `$CI` env var:
+   auto-install on CI, error with instructions on dev. `rustup target
+   add` is always safe (user-space). System packages auto-install only
+   on CI. wasm-bindgen + wasm-opt need no installing at all — they run
+   as library calls inside the workspace's `bindgen_runner` crate,
+   version-locked by the engine's own Cargo.lock.
 
 3. **jq is the JSON tool for bash; Dart is never invoked from bash.**
    Bash reads `build.json` (and any JSON) through `build_lib.sh`'s jq-backed
@@ -715,12 +716,12 @@ who reads it:
   target, the wasm outputs. Hand-set; changes only when the vendored submodule
   moves. Read by `hook/build.dart` (`jsonDecode`) and by `compile_rust.sh` /
   `release.sh` / `analyze.sh` via the `json_get` helper in `tool/build_lib.sh`.
-- **`tool/versions.env`** — pinned versions + sha256 hashes of the external
-  **instruments** the build downloads: `binaryen` (+ its three per-platform
-  sha256) and the `pana` pin (the platform gate). Shell `KEY="value"`, sourced
-  by the scripts that use them. Every entry is auto-bumped by `tool/ci/upgrade.sh`
-  — the file is bot-owned, no manual exceptions. The shared tool pins (`fvm`,
-  Chrome, the gate binaries) live in whuppi/ci's own `versions.env`, not here.
+- **`tool/versions.env`** — pinned versions of the external **instruments**
+  that gate the build: today just the `pana` pin (the platform gate). Shell
+  `KEY="value"`, sourced by the scripts that use them. Every entry is
+  auto-bumped by `tool/ci/upgrade.sh` — the file is bot-owned, no manual
+  exceptions. The shared tool pins (`fvm`, Chrome, the gate binaries) live in
+  whuppi/ci's own `versions.env`, not here.
 
 The rule: a fact about *what* is built (the crate, its base version, its
 features) belongs in `build.json`; a pinned version of an *external tool* that
@@ -733,8 +734,7 @@ tool pins.
 | Dep | Owner | CI behavior | Dev behavior |
 |---|---|---|---|
 | Rust targets | `compile_rust.sh`, `hook/build.dart` | Auto-install (safe) | Auto-install (safe) |
-| wasm-bindgen-cli | `compile_rust.sh` | Auto-install (safe) | Auto-install (safe) |
-| binaryen | `compile_rust.sh` | GitHub releases download | Error with instructions |
+| wasm-bindgen + wasm-opt | `bindgen_runner` (vendor workspace crate) | Built by cargo, Cargo.lock-pinned | Same |
 | gcc-aarch64 cross | `compile_rust.sh` | Auto-install | Error with instructions |
 | GTK + ninja | Makefile | Auto-install | Error with instructions |
 | build.json reads | `compile_rust.sh`, `release.sh` | jq via `json_get` | Same |

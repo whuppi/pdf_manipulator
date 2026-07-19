@@ -12,19 +12,19 @@ import 'dart:io';
 /// Grouped by what breaks when it goes missing.
 const requiredFiles = [
   // Engine compile: cargo needs manifest + lock (exact pinned deps);
-  // the wasm path reads the lock for the wasm-bindgen version.
+  // the lock also pins bindgen_runner's wasm-bindgen-cli-support +
+  // wasm-opt to the wasm-bindgen version the engine compiles with.
   'vendor/pdf_oxide/Cargo.toml',
   'vendor/pdf_oxide/Cargo.lock',
   'vendor/office_oxide/Cargo.toml',
   'vendor/office_oxide/Cargo.lock',
-  // Source sentinels — one per vendored crate tree.
+  // Source sentinels — one per vendored crate tree, plus the wasm
+  // post-processing runner the web compile `cargo run`s.
   'vendor/pdf_oxide/src/lib.rs',
   'vendor/office_oxide/src/lib.rs',
-  // The compile scripts + their config.
-  'tool/compile_rust.sh',
-  'tool/build_lib.sh',
-  'tool/fetch_verified.sh',
-  'tool/versions.env',
+  'vendor/pdf_oxide/bindgen_runner/Cargo.toml',
+  'vendor/pdf_oxide/bindgen_runner/src/main.rs',
+  // Build config the hooks read.
   'build.json',
   // Hooks + the hand-written web assets.
   'hook/build.dart',
