@@ -145,6 +145,19 @@ void ensureRustTarget(String targetTriple) {
   }
 }
 
+/// Strips Xcode Developer PATH injections that break cargo on macOS.
+/// Mutates [env]; a no-op on other platforms. Every cargo invocation in
+/// the hooks routes its environment through here.
+void stripXcodeFromPath(Map<String, String> env) {
+  final hostPath = Platform.environment['PATH'];
+  if (Platform.isMacOS && hostPath != null) {
+    env['PATH'] = hostPath
+        .split(':')
+        .where((e) => !e.contains('Contents/Developer/'))
+        .join(':');
+  }
+}
+
 /// Compiles the engine crate for [targetTriple] with [features] and copies
 /// the produced library to [outFile]. Installs the Rust target when it's
 /// missing (fresh CI or formatted laptop).
@@ -180,15 +193,7 @@ Future<void> compileEngineForTarget({
   ensureRustTarget(targetTriple);
 
   final env = <String, String>{...environment};
-
-  // macOS: strip Xcode Developer PATH injections that break cargo
-  final hostPath = Platform.environment['PATH'];
-  if (Platform.isMacOS && hostPath != null) {
-    env['PATH'] = hostPath
-        .split(':')
-        .where((e) => !e.contains('Contents/Developer/'))
-        .join(':');
-  }
+  stripXcodeFromPath(env);
 
   final result = await Process.run(
     'cargo',

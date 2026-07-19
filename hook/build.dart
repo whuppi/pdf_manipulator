@@ -418,15 +418,8 @@ Future<void> _compileWasm(
   final features =
       featuresOverride ?? BuildConstants.load(packageRoot).wasmFeatures;
 
-  // macOS: strip Xcode Developer PATH injections that break cargo
   final env = <String, String>{...Platform.environment};
-  final hostPath = env['PATH'];
-  if (Platform.isMacOS && hostPath != null) {
-    env['PATH'] = hostPath
-        .split(':')
-        .where((e) => !e.contains('Contents/Developer/'))
-        .join(':');
-  }
+  stripXcodeFromPath(env);
 
   _log.info('compiling WASM from source (features: $features)');
   final build = await Process.run('cargo', [
