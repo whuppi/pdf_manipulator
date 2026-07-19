@@ -149,7 +149,9 @@ void ensureRustTarget(String targetTriple) {
 /// Mutates [env]; a no-op on other platforms. Every cargo invocation in
 /// the hooks routes its environment through here.
 void stripXcodeFromPath(Map<String, String> env) {
-  final hostPath = Platform.environment['PATH'];
+  // Prefer a caller-supplied PATH — filtering must not clobber it with
+  // the host's.
+  final hostPath = env['PATH'] ?? Platform.environment['PATH'];
   if (Platform.isMacOS && hostPath != null) {
     env['PATH'] = hostPath
         .split(':')
