@@ -21,7 +21,11 @@ ensure_target() {
   fi
   if command -v rustup >/dev/null 2>&1; then
     echo "  Installing Rust target: $1"
-    rustup target add "$1"
+    # Explicit exit — this library must not rely on callers having set -e.
+    rustup target add "$1" || {
+      echo "Error: rustup target add $1 failed." >&2
+      exit 1
+    }
     return
   fi
   echo "Error: Rust target '$1' is not installed and rustup is not" >&2

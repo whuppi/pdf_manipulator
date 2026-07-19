@@ -126,14 +126,21 @@ void ensureRustTarget(String targetTriple) {
     // rustc missing entirely — the cargo probe above (or below at the
     // call site) already produced the install-Rust instruction.
   }
+  final ProcessResult add;
   try {
     _log.info('installing Rust target: $targetTriple');
-    Process.runSync('rustup', ['target', 'add', targetTriple]);
+    add = Process.runSync('rustup', ['target', 'add', targetTriple]);
   } on ProcessException {
     throw StateError(
       'Rust target $targetTriple is not installed and rustup is not '
       'available to add it. Install the target through your Rust '
       "toolchain's own manager, or install rustup: https://rustup.rs",
+    );
+  }
+  if (add.exitCode != 0) {
+    throw StateError(
+      'rustup target add $targetTriple failed (exit ${add.exitCode}).\n'
+      'stderr: ${add.stderr}',
     );
   }
 }
