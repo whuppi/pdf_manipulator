@@ -27,12 +27,8 @@
 # ────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-# Resolve the script's own dir once — versions.env and build_lib.sh both hang off it.
+# Resolve the script's own dir once — build_lib.sh hangs off it.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-
-# Pinned versions live in ONE file (tool/versions.env), never inline. Sourced at
-# top, so every installer function below sees the pins without re-sourcing.
-source "$SCRIPT_DIR/versions.env"
 
 
 # ═══════════════════════════════════════════════════════════════════
