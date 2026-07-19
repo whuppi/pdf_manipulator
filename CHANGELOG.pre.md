@@ -81,6 +81,13 @@ CONTENT RULES (never change)
 
 <!-- Add new versions below, newest first. -->
 
+## 3.0.0-dev.1
+
+- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
+- Changed the web build to compile its own wasm-bindgen + wasm-opt inside the engine's cargo workspace, version-locked by the engine's `Cargo.lock` — `wasm-bindgen-cli`, `binaryen`, and `jq` are no longer needed, [Rust](https://rustup.rs) is the only requirement on every platform, and the exact-version rejection is gone with the tools ([#177](https://github.com/whuppi/pdf_manipulator/issues/177) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #178](https://github.com/whuppi/pdf_manipulator/pull/178))
+- Fixed `trim: auto` counting member names inside comments as usage — a doc line saying "render them" kept the render capability. The scan now ignores comments, and prints where each kept member was matched, e.g. `render (lib/preview.dart:12)` ([#175](https://github.com/whuppi/pdf_manipulator/issues/175) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #178](https://github.com/whuppi/pdf_manipulator/pull/178))
+- Fixed source builds failing with "rustup: command not found" on Rust installs not managed by rustup (Homebrew, distro packages) — the build now asks rustc itself whether a target is installed and uses rustup only as the fallback ([#176](https://github.com/whuppi/pdf_manipulator/issues/176) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #178](https://github.com/whuppi/pdf_manipulator/pull/178))
+
 ## 3.0.0-dev.0
 
 - **Breaking:** flattening CJK or emoji form values no longer uses a bundled font (it added 4.4 MB to every install). Register one once: `await pdf.registerFallbackFont(PdfFallbackFontKind.cjk, fontBytes)` (`.emoji` for emoji). Without one the value is still saved correctly — only the baked-in look falls back to the field's own font.

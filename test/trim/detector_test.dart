@@ -11,6 +11,7 @@
 
 import 'dart:io';
 
+import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 import 'package:pdf_manipulator/src/trim/capabilities.dart';
@@ -189,6 +190,95 @@ Future<void> use(Pdf pdf, DataSource src, DataSink out) => pdf.sign(src, out,
           'YAML quotes around the name are syntax, not part of the '
           'package name — dropping them must not lose the barrel chain',
     );
+  });
+
+  test('member names in comments do not keep capabilities', () async {
+    final dir = _fixture({
+      // The issue-#175 shape: prose mentioning `render` next to a real
+      // merge call — only merge's capability set may be kept.
+      'main.dart': '''
+import 'package:pdf_manipulator/pdf_manipulator.dart';
+
+// Merge the pages, then render them.
+/// Later we could render thumbnails here.
+/* A block note: sign and extract are not used.
+   /* nested: convertToPdfA */ still inside: convertTo */
+Future<void> use(Pdf pdf, DataSource a, DataSource b, DataSink out) =>
+    pdf.merge([a, b], out);
+''',
+    });
+    addTearDown(() => dir.deleteSync(recursive: true));
+
+    final result = detectCapabilities(dir.path);
+    expect(result.resolved, isTrue);
+    expect(
+      result.keep,
+      isEmpty,
+      reason:
+          'comments are prose, not call sites — a doc line mentioning '
+          'render must not keep the render capability',
+    );
+  });
+
+  test('string contents still match — interpolated calls are real', () async {
+    final dir = _fixture({
+      'main.dart': '''
+import 'package:pdf_manipulator/pdf_manipulator.dart';
+
+String use(PdfDoc doc) => 'pages: \${doc.render(pages: const PdfPages.all())}';
+''',
+    });
+    addTearDown(() => dir.deleteSync(recursive: true));
+
+    final result = detectCapabilities(dir.path);
+    expect(result.resolved, isTrue);
+    expect(
+      result.keep,
+      contains(PdfCapability.render),
+      reason:
+          'a call inside a string interpolation is a real call site — '
+          'blanking strings would under-keep it',
+    );
+  });
+
+  test('// inside a string literal is not a comment', () async {
+    final dir = _fixture({
+      // If string tracking failed, the URL's `//` would blank the rest
+      // of the line — including the real extract call after it.
+      'main.dart': '''
+import 'package:pdf_manipulator/pdf_manipulator.dart';
+
+Future<void> use(PdfDoc doc) async { const u = 'http://x'; await doc.extract(pages: const PdfPages.all()); }
+''',
+    });
+    addTearDown(() => dir.deleteSync(recursive: true));
+
+    final result = detectCapabilities(dir.path);
+    expect(result.resolved, isTrue);
+    expect(
+      result.keep,
+      contains(PdfCapability.extract),
+      reason:
+          'treating the // inside a string as a comment would blank a '
+          'real call on the same line — an under-keep',
+    );
+  });
+
+  test('match sites point at the file and line of the first match', () async {
+    final dir = _fixture({
+      'main.dart': '''
+import 'package:pdf_manipulator/pdf_manipulator.dart';
+
+// A comment mentioning sign must not become the reported site.
+Future<void> use(Pdf pdf, DataSource src, DataSink out) => pdf.sign(src, out,
+    credentials: const PdfSigningCredentials.pem('c', 'k'));
+''',
+    });
+    addTearDown(() => dir.deleteSync(recursive: true));
+
+    final result = detectCapabilities(dir.path);
+    expect(result.resolved, isTrue);
+    expect(result.matchSites['sign'], '${p.join('lib', 'main.dart')}:4');
   });
 
   test('missing pubspec fails closed — self-imports cannot resolve', () async {

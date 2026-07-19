@@ -22,9 +22,10 @@
 /.githooks/                @chaudharydeepanshu
 
 # Build + release + supply-chain machinery: repo owner only.
-# Holds the pinned sha256s (versions.env), the fail-closed download gate
-# (fetch_verified.sh), the publish pipeline + the hash-writing bump bot
-# (tool/ci/). A non-owner edit here is a supply-chain or release risk.
+# Holds the version pins (versions.env), the fail-closed download gate
+# (fetch_verified.sh, dormant), the publish pipeline + the hash-writing
+# bump bot (tool/ci/). A non-owner edit here is a supply-chain or
+# release risk.
 /tool/                     @chaudharydeepanshu
 
 # Vendored engine submodules: bumping a gitlink pulls in that commit's build.rs

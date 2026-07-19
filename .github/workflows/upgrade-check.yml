@@ -1,6 +1,6 @@
 # Daily upgrade radar. The generic pieces (Flutter SDK pin + lockfile refresh)
 # run via the shared reusable workflow; the ONE pdf-specific piece stays local:
-# this repo's own pinned binaries (binaryen) + gate tools (pana), bumped by
+# this repo's own gate tools (pana), bumped by
 # tool/ci/upgrade.sh with recomputed sha256s in its own reviewed PR.
 #
 # The shared tool pins (fvm, Chrome, bore) live in whuppi/ci — its self-upgrade
@@ -34,7 +34,7 @@ jobs:
     with:
       branch: dev
 
-  # Security-sensitive: this repo's OWN pinned binaries (binaryen) + gate tools
+  # Security-sensitive: this repo's OWN gate tools
   # (pana), sha256s recomputed from upstream assets. Kept in its own PR so a
   # reviewer sees every hash change undiluted.
   pins:
@@ -106,10 +106,8 @@ jobs:
           PR_BODY="$(cat <<'EOF'
           Supply-chain pin bump — review the recomputed hashes in the diff:
 
-          - **Pinned assets in `tool/versions.env`**: this repo's own build +
-            gate pins; sha256s recomputed from the upstream release assets,
-            re-verified by `fetch_verified` on every build. See the diff for
-            which versions moved.
+          - **Pins in `tool/versions.env`**: this repo's own gate pins.
+            See the diff for which versions moved.
 
           The already-pinned assets were re-hashed before this bump (repoint alarm).
           Add `ready-to-test` for the full cross-target run, then merge once green.

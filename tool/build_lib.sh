@@ -6,15 +6,32 @@
 #
 # Requires: PKG_ROOT set by the caller (defaults to ".").
 
-# Ensure a Rust target is installed. Adds it if missing.
-# rustup is the user-space toolchain manager (like fvm), so it self-manages
-# both locally and on CI. Standalone tools do NOT — they go through
-# provide_tool below.
+# Ensure a Rust target is installed. Probe rustc itself first — a target
+# installed by ANY toolchain manager (rustup, distro package, nix) has a
+# target-libdir. Only fall back to rustup, and only when rustup exists;
+# a rustup-less toolchain missing the target gets instructions, not a
+# "rustup: command not found" (issue #176).
 ensure_target() {
-  if ! rustup target list --installed | grep -qxF "$1"; then
-    echo "  Installing Rust target: $1"
-    rustup target add "$1"
+  local libdir
+  # target-libdir prints the WOULD-BE path (exit 0) even for uninstalled
+  # targets — only the directory actually existing proves installation.
+  libdir=$(rustc --print target-libdir --target "$1" 2>/dev/null)
+  if [ -n "$libdir" ] && [ -d "$libdir" ]; then
+    return 0
   fi
+  if command -v rustup >/dev/null 2>&1; then
+    echo "  Installing Rust target: $1"
+    # Explicit exit — this library must not rely on callers having set -e.
+    rustup target add "$1" || {
+      echo "Error: rustup target add $1 failed." >&2
+      exit 1
+    }
+    return
+  fi
+  echo "Error: Rust target '$1' is not installed and rustup is not" >&2
+  echo "available to add it. Install the target through your Rust" >&2
+  echo "toolchain's own manager, or install rustup: https://rustup.rs" >&2
+  exit 1
 }
 
 # The single install gate for every standalone tool that is NOT a toolchain

@@ -116,6 +116,7 @@ Future<void> _setupWeb(bool force, {bool trim = false}) async {
       ).featuresFor(wasmDefaults, result.keep);
       final kept = result.keep.map((c) => c.wire).toList()..sort();
       stdout.writeln('trim: keeping $kept -> features [$featuresOverride]');
+      stdout.writeln('trim: matched ${describeMatches(result)}');
     }
   }
 

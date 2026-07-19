@@ -5,7 +5,6 @@ import 'package:pdf_manipulator/src/trim/detector.dart';
 void main() {
   final r = detectCapabilities('example');
   final caps = r.keep.map((c) => c.wire).toList()..sort();
-  final members = r.matchedMembers.toList()..sort();
   print('resolved=${r.resolved} keep=$caps');
-  print('members=$members');
+  print('matched: ${describeMatches(r)}');
 }
