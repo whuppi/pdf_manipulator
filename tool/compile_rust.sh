@@ -8,7 +8,7 @@
 #   ./tool/compile_rust.sh linux        Linux x64 + arm64 (cross-compile)
 #   ./tool/compile_rust.sh android      Android arm64 + arm + x64 + x86
 #   ./tool/compile_rust.sh windows      Windows x64 (+ arm64 on MSVC)
-#   ./tool/compile_rust.sh wasm         WASM + wasm-bindgen + wasm-opt
+#   ./tool/compile_rust.sh wasm         WASM + bindgen_runner (wasm-bindgen + wasm-opt)
 #   ./tool/compile_rust.sh native       Auto-detect what this host can build
 #   ./tool/compile_rust.sh all          native + wasm
 #   ./tool/compile_rust.sh --features   Print feature flags (for Makefile + build.dart)
@@ -17,7 +17,8 @@
 #
 # Prerequisites:
 #   Rust toolchain with targets installed (rustup target add ...)
-#   WASM: cargo install wasm-bindgen-cli; brew/apt install binaryen
+#   WASM: nothing extra — wasm-bindgen + wasm-opt run as library calls
+#   via the workspace's bindgen_runner crate (versions from Cargo.lock)
 #   Android: ANDROID_NDK_HOME set
 #   Linux arm64 cross: apt install gcc-aarch64-linux-gnu
 #
@@ -26,12 +27,8 @@
 # ────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-# Resolve the script's own dir once — versions.env and build_lib.sh both hang off it.
+# Resolve the script's own dir once — build_lib.sh hangs off it.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-
-# Pinned versions live in ONE file (tool/versions.env), never inline. Sourced at
-# top, so every installer function below sees the pins without re-sourcing.
-source "$SCRIPT_DIR/versions.env"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -58,33 +55,6 @@ source "$SCRIPT_DIR/build_lib.sh"
 # Run on CI via provide_tool; locally the dev is told to install instead.
 _install_cross_gcc() {
   sudo apt-get update -qq && sudo apt-get install -y -qq gcc-aarch64-linux-gnu
-}
-
-_install_wasm_bindgen() {
-  echo "=== WASM: installing wasm-bindgen-cli $WB_VERSION ==="
-  cargo install wasm-bindgen-cli --version "$WB_VERSION"
-}
-
-_install_binaryen() {
-  echo "=== WASM: installing binaryen (wasm-opt) $BINARYEN_VERSION ==="
-  local url sha
-  case "$(uname -s)" in
-    Linux*)  url="https://github.com/WebAssembly/binaryen/releases/download/$BINARYEN_VERSION/binaryen-$BINARYEN_VERSION-x86_64-linux.tar.gz";   sha="$BINARYEN_SHA256_LINUX_X64" ;;
-    Darwin*) url="https://github.com/WebAssembly/binaryen/releases/download/$BINARYEN_VERSION/binaryen-$BINARYEN_VERSION-arm64-macos.tar.gz";    sha="$BINARYEN_SHA256_MACOS_ARM64" ;;
-    MINGW*|MSYS*) url="https://github.com/WebAssembly/binaryen/releases/download/$BINARYEN_VERSION/binaryen-$BINARYEN_VERSION-x86_64-windows.tar.gz"; sha="$BINARYEN_SHA256_WINDOWS_X64" ;;
-  esac
-  local tmp="${RUNNER_TEMP:-/tmp}"
-  # Convert a Windows temp path (D:\...) to Unix (/d/...) so tar doesn't read
-  # the colon as a remote host.
-  command -v cygpath &>/dev/null && tmp=$(cygpath -u "$tmp")
-  bash "$SCRIPT_DIR/fetch_verified.sh" "$url" "$sha" "$tmp/binaryen.tar.gz" \
-    || { echo "Error: failed to fetch/verify binaryen $BINARYEN_VERSION"; exit 1; }
-  tar xzf "$tmp/binaryen.tar.gz" -C "$tmp"
-  mkdir -p "$HOME/.cargo/bin" "$HOME/.cargo/lib"
-  cp "$tmp/binaryen-$BINARYEN_VERSION/bin/wasm-opt"* "$HOME/.cargo/bin/" \
-    || { echo "Error: could not copy wasm-opt to $HOME/.cargo/bin"; exit 1; }
-  cp "$tmp/binaryen-$BINARYEN_VERSION/lib/"* "$HOME/.cargo/lib/" 2>/dev/null || true
-  rm -rf "$tmp/binaryen.tar.gz" "$tmp/binaryen-$BINARYEN_VERSION"
 }
 
 NATIVE_FEATURES=$(json_get '.features.native')
@@ -276,35 +246,8 @@ do_native() {
 # WASM
 # ═══════════════════════════════════════════════════════════════════
 
-WASM_OPT_FLAGS=(
-  --enable-bulk-memory
-  --enable-multivalue
-  --enable-mutable-globals
-  --enable-nontrapping-float-to-int
-  --enable-reference-types
-  --enable-sign-ext
-  --enable-simd
-)
-
 do_wasm() {
   local out="$PKG_ROOT/web_assets"
-
-  # Ensure wasm-bindgen-cli matches the Cargo.lock version exactly.
-  local wb_required wb_installed
-  wb_required=$(grep -A1 'name = "wasm-bindgen"' "$VENDOR/Cargo.lock" \
-    | grep version | head -1 | sed 's/.*"\(.*\)"/\1/')
-  wb_installed=$(wasm-bindgen --version 2>/dev/null | sed 's/wasm-bindgen //' || echo "none")
-
-  if [[ "$wb_installed" != "$wb_required" ]]; then
-    WB_VERSION="$wb_required" provide_tool _install_wasm_bindgen \
-      "Run: cargo install wasm-bindgen-cli --version $wb_required"
-  fi
-
-  # Ensure wasm-opt (binaryen) is installed.
-  command -v wasm-opt &>/dev/null || provide_tool _install_binaryen \
-    "macOS:   brew install binaryen" \
-    "Linux:   sudo apt-get install binaryen" \
-    "Windows: https://github.com/WebAssembly/binaryen/releases"
 
   # Resolve COMPILE_OUTPUT_DIR before cd — relative paths would
   # break after changing to the vendor directory.
@@ -319,22 +262,14 @@ do_wasm() {
     --no-default-features \
     --release
 
-  echo "=== WASM: wasm-bindgen ==="
-  wasm-bindgen \
-    --target web \
-    --out-dir "$out" \
-    --out-name pdf_oxide \
-    target/wasm32-unknown-unknown/release/pdf_oxide.wasm
-  rm -f "$out"/*.d.ts
-
-  echo "=== WASM: optimize ==="
-  # Write to a temp and mv on success: wasm-opt reads and writes the same
-  # path, so a crash mid-write would truncate the only copy.
-  wasm-opt -O2 \
-    "${WASM_OPT_FLAGS[@]}" \
-    "$out/pdf_oxide_bg.wasm" \
-    -o "$out/pdf_oxide_bg.wasm.opt" \
-    && mv "$out/pdf_oxide_bg.wasm.opt" "$out/pdf_oxide_bg.wasm"
+  # wasm-bindgen + wasm-opt run as library calls inside the workspace's
+  # bindgen_runner crate, so their versions resolve from the same
+  # Cargo.lock as the wasm-bindgen crate the wasm was compiled with —
+  # no separately installed CLI can drift (issue #177).
+  echo "=== WASM: bindgen + optimize (bindgen_runner) ==="
+  cargo run --release -p bindgen_runner -- \
+    target/wasm32-unknown-unknown/release/pdf_oxide.wasm \
+    "$out"
 
   echo ""
   echo "=== WASM summary ==="

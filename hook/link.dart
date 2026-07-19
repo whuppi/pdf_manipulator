@@ -12,7 +12,7 @@
 // replaces the full one in the bundle. Recordings absent (the SDK
 // experiment is not active) → the full binary ships unchanged, loudly
 // (fail closed). `compare` never modifies assets — it reports the
-// recorded keep-set so it can be diffed against the analyzer's.
+// recorded keep-set so it can be diffed against the scan's.
 
 import 'dart:io';
 
@@ -129,7 +129,7 @@ Future<CodeAsset> _trimFromRecordings(LinkInput input, CodeAsset full) async {
 
 /// Prints the capability set the compiler recorded via `TrimRecord.op`
 /// calls, when the SDK produced recordings. Diagnostics only — lets the
-/// RecordUse lane be diffed against the analyzer while it matures.
+/// RecordUse lane be diffed against the scan while it matures.
 void _reportRecordedCapabilities(LinkInput input) {
   final recordings = input.recordedUses;
   if (recordings == null) {
@@ -145,6 +145,6 @@ void _reportRecordedCapabilities(LinkInput input) {
     'pdf_manipulator trim-detector compare (EXPERIMENTAL): RecordUse '
     'observed capabilities '
     '{${(capabilities.map((c) => c.wire).toList()..sort()).join(', ')}}. '
-    'Diff this against the analyzer keep-set the build used.',
+    'Diff this against the scan keep-set the build used.',
   );
 }

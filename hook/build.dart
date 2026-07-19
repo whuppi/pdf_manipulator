@@ -28,7 +28,8 @@
 //   2. DOWNLOAD  — fetch from GitHub Releases; verified against the
 //                  pinned hash at download time (or used with a loud
 //                  warning when neither hash nor source exists) → cache
-//   3. COMPILE   — vendor/pdf_oxide/ exists → cargo/wasm-pack → use it
+//   3. COMPILE   — vendor/pdf_oxide/ exists → cargo (native and
+//                  wasm; wasm adds the bindgen_runner crate) → use it
 //   4. SUBMODULE — .gitmodules exists → git init recursive → compile
 //   5. ERROR     — nothing worked, clear message with options
 //
@@ -173,11 +174,10 @@ Future<void> _resolveNative({
   required String targetKey,
   required String libFileName,
   required File dest,
-  File? cacheFile,
-  String? targetTriple,
-  LinkMode? linkMode,
-  BuildInput? buildInput,
-  bool force = false,
+  required File cacheFile,
+  required String targetTriple,
+  required LinkMode linkMode,
+  required BuildInput buildInput,
 }) async {
   final assetName = '$targetKey-$libFileName';
 
@@ -195,21 +195,14 @@ Future<void> _resolveNative({
       expectedHash: plan.isCustom ? null : assetHashes[assetName],
       version: effectiveVersion,
       packageRoot: packageRoot,
-      force: force,
-      compile: (File d) async {
-        if (buildInput != null && targetTriple != null && linkMode != null) {
-          await _compileNativeFromHook(
-            buildInput,
-            targetTriple,
-            linkMode,
-            d,
-            constants,
-            plan,
-          );
-        } else {
-          await _compileNativeFromCli(packageRoot, d, constants, plan);
-        }
-      },
+      compile: (File d) => _compileNativeFromHook(
+        buildInput,
+        targetTriple,
+        linkMode,
+        d,
+        constants,
+        plan,
+      ),
     ),
   );
 }
@@ -219,7 +212,7 @@ Future<void> _resolveNative({
 // Flutter serves destDir as static files — no registration needed.
 //
 // Two asset types with different compile fallbacks:
-//   WASM build outputs (pdf_oxide_bg.wasm, pdf_oxide.js) → wasm-pack
+//   WASM build outputs (pdf_oxide_bg.wasm, pdf_oxide.js) → cargo + bindgen_runner
 //   Hand-written JS (lane_worker.js) → copy from package
 //
 // Returns the number of files freshly resolved (0 = all cached).
@@ -381,57 +374,14 @@ Future<void> _compileNativeFromHook(
   );
 }
 
-// ── Native: from CLI (no BuildInput — uses compile_rust.sh) ──────
-
-Future<void> _compileNativeFromCli(
-  Uri packageRoot,
-  File dest,
-  BuildConstants constants,
-  TrimPlan plan,
-) async {
-  final script = File.fromUri(packageRoot.resolve('tool/compile_rust.sh'));
-  if (!script.existsSync()) {
-    throw StateError(
-      'tool/compile_rust.sh not found. Cannot compile from source.\n'
-      'Install from pub.dev or use a git tag with pre-built binaries.',
-    );
-  }
-
-  final result = await Process.run(
-    'bash',
-    [script.path, '--native'],
-    workingDirectory: p.fromUri(packageRoot),
-    environment: {
-      ...Platform.environment,
-      // The script defaults to build.json's feature set; a trimmed plan
-      // must reach this fallback path too, or it silently ships full.
-      if (plan.isCustom) 'PDF_FEATURES_NATIVE': plan.features,
-    },
-  );
-  if (result.exitCode != 0) {
-    throw StateError(
-      'Native compilation failed (exit ${result.exitCode}).\n'
-      'stderr: ${result.stderr}\n\n'
-      'Ensure Rust is installed: https://rustup.rs',
-    );
-  }
-
-  final libFileName = _currentLibFileName(constants.crate);
-  final compiled = File(
-    p.join(
-      p.fromUri(packageRoot),
-      'vendor/pdf_oxide/target/release',
-      libFileName,
-    ),
-  );
-  if (!compiled.existsSync()) {
-    throw StateError('Compiled binary not found at ${compiled.path}');
-  }
-  dest.parent.createSync(recursive: true);
-  compiled.copySync(dest.path);
-}
-
 // ── Web: WASM build outputs (pdf_oxide.js + pdf_oxide_bg.wasm) ───
+//
+// Pure Dart + cargo, like the native hook path: compile the engine to
+// wasm32, then run the workspace's own bindgen_runner crate, which
+// executes wasm-bindgen and wasm-opt as library calls resolved from the
+// engine's Cargo.lock. No wasm-bindgen-cli, binaryen, or jq installs —
+// Rust is the only requirement — and the CLI-vs-crate version drift of
+// issue #177 is structurally impossible.
 
 Future<void> _compileWasm(
   Uri packageRoot,
@@ -439,7 +389,8 @@ Future<void> _compileWasm(
   String targetFile,
   String? featuresOverride,
 ) async {
-  final existing = File.fromUri(packageRoot.resolve('web_assets/$targetFile'));
+  final webAssets = Directory.fromUri(packageRoot.resolve('web_assets'));
+  final existing = File(p.join(webAssets.path, targetFile));
 
   // Contributor has locally built WASM — copy directly (never for a
   // trimmed set: the local artifact is the default build).
@@ -449,41 +400,96 @@ Future<void> _compileWasm(
     return;
   }
 
-  // Compile from source
-  final script = File.fromUri(packageRoot.resolve('tool/compile_rust.sh'));
-  if (!script.existsSync()) {
+  try {
+    Process.runSync('cargo', ['--version']);
+  } on ProcessException {
     throw StateError(
-      'tool/compile_rust.sh not found. Cannot compile WASM.\n'
-      'Install from pub.dev or use a git tag with pre-built binaries.',
+      'This build needs to compile the PDF engine WASM from source, but '
+      'Rust is not installed.\n'
+      'Install it from https://rustup.rs (macOS, Linux, and Windows), '
+      'then rerun setup.',
     );
   }
+  ensureRustTarget('wasm32-unknown-unknown');
 
-  final result = await Process.run(
-    'bash',
-    [script.path, 'wasm'],
-    workingDirectory: p.fromUri(packageRoot),
-    environment: {
-      ...Platform.environment,
-      if (featuresOverride != null) 'PDF_FEATURES_WASM': featuresOverride,
-    },
+  final manifest = p.fromUri(
+    packageRoot.resolve('vendor/pdf_oxide/Cargo.toml'),
   );
-  if (result.exitCode != 0) {
+  final features =
+      featuresOverride ?? BuildConstants.load(packageRoot).wasmFeatures;
+
+  final env = <String, String>{...Platform.environment};
+  stripXcodeFromPath(env);
+
+  _log.info('compiling WASM from source (features: $features)');
+  final build = await Process.run('cargo', [
+    'build',
+    '--manifest-path',
+    manifest,
+    '--lib',
+    '--release',
+    '--target',
+    'wasm32-unknown-unknown',
+    '--no-default-features',
+    '--features',
+    features,
+  ], environment: env);
+  if (build.exitCode != 0) {
     throw StateError(
-      'WASM compilation failed (exit ${result.exitCode}).\n'
-      'stderr: ${result.stderr}\n\n'
-      'Ensure Rust + wasm-pack are installed:\n'
-      '  https://rustup.rs\n'
-      '  cargo install wasm-pack',
+      'WASM engine compile failed (exit ${build.exitCode}).\n'
+      'stderr: ${build.stderr}',
     );
   }
 
-  if (!existing.existsSync()) {
-    throw StateError(
-      'WASM compiled but $targetFile not found at ${existing.path}',
+  // First run also compiles the runner itself (binaryen builds from
+  // source — takes a few minutes once; cargo caches it after).
+  //
+  // A trimmed build writes to a temp dir, NEVER into the package's
+  // web_assets/ — those hold the default build, and a trimmed artifact
+  // landing there would be served to every other consumer of this
+  // package checkout as if it were the full engine.
+  final outDir = featuresOverride == null
+      ? webAssets
+      : Directory.systemTemp.createTempSync('pdf_manipulator_trim_wasm_');
+  try {
+    final rawWasm = p.fromUri(
+      packageRoot.resolve(
+        'vendor/pdf_oxide/target/wasm32-unknown-unknown/release/'
+        'pdf_oxide.wasm',
+      ),
     );
+    final bindgen = await Process.run('cargo', [
+      'run',
+      '--manifest-path',
+      manifest,
+      '--release',
+      '-p',
+      'bindgen_runner',
+      '--',
+      rawWasm,
+      outDir.path,
+    ], environment: env);
+    if (bindgen.exitCode != 0) {
+      throw StateError(
+        'WASM post-processing (wasm-bindgen + wasm-opt) failed '
+        '(exit ${bindgen.exitCode}).\n'
+        'stderr: ${bindgen.stderr}',
+      );
+    }
+
+    final built = File(p.join(outDir.path, targetFile));
+    if (!built.existsSync()) {
+      throw StateError(
+        'WASM compiled but $targetFile not found at ${built.path}',
+      );
+    }
+    dest.parent.createSync(recursive: true);
+    built.copySync(dest.path);
+  } finally {
+    if (featuresOverride != null) {
+      outDir.deleteSync(recursive: true);
+    }
   }
-  dest.parent.createSync(recursive: true);
-  existing.copySync(dest.path);
 }
 
 // ── Web: hand-written JS (lane_worker.js) ────────────────────────
@@ -500,10 +506,3 @@ Future<void> _copyWebAsset(Uri packageRoot, File dest, String fileName) async {
 // ══════════════════════════════════════════════════════════════════
 // § 5 — CodeConfig mapping
 // ══════════════════════════════════════════════════════════════════
-
-String _currentLibFileName(String crate) {
-  if (Platform.isMacOS) return 'lib$crate.dylib';
-  if (Platform.isLinux) return 'lib$crate.so';
-  if (Platform.isWindows) return '$crate.dll';
-  throw UnsupportedError('Unsupported platform: ${Platform.operatingSystem}');
-}

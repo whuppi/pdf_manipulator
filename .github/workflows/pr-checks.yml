@@ -1,7 +1,7 @@
 # PR Checks — conventional-commit title, promotion chain, changelog-version
 # sanity (both lanes), and workflow + shell lint, all via the shared reusable
 # workflow. The one pdf-specific gate stays local: pin-availability HEADs this
-# repo's OWN pinned assets (binaryen) — the shared pins live in whuppi/ci and
+# repo's OWN pins — the shared pins live in whuppi/ci and
 # are checked by its self-check.
 name: PR Checks
 

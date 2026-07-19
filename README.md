@@ -465,12 +465,15 @@ What it's worth (measured):
 
 | | Native library | Web wasm |
 |---|---|---|
-| **Full engine** (default) | ~21.1 MB | ~17.2 MB (~7.2 MB gzipped) |
+| **Full engine** (default) | ~21.1 MB | ~17.5 MB (~7.3 MB gzipped) |
 | **Core only** (every capability trimmed; core always remains) | ~6.3 MB | ~5.2 MB (~1.9 MB gzipped) |
 
 That's about 70% of the native library and almost three quarters of the web download gone. Real apps land between the rows — you pay only for what you keep.
 
-One requirement: trimming compiles a custom engine on your machine, so it needs [Rust](https://rustup.rs) — the same one-line installer on macOS, Linux, and Windows. Skip it and the build tells you exactly this.
+Trimming compiles a custom engine on your machine. There is nothing to set up in advance — if a piece is missing, the build stops with the exact instruction. What it will ask for:
+
+- **Native** (iOS, Android, macOS, Windows, Linux): [Rust](https://rustup.rs) — the same one-line installer on every OS.
+- **Web**: [Rust](https://rustup.rs) too — nothing more. The web build makes its own helper tools the first time, which adds a few minutes once; every run after that reuses them.
 
 ```yaml
 # pubspec.yaml of YOUR app

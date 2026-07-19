@@ -290,7 +290,7 @@ size-measuring recipe in [`UPDATING.md`](UPDATING.md) §S5b.
 | Piece | Status | Notes |
 |---|---|---|
 | Capability vocabulary + `trim:` grammar (`auto` / `keep:` / loud errors) | DONE | `lib/src/trim/capabilities.dart` |
-| Analyzer detector (resolved-AST, fail closed) | DONE | `lib/src/trim/detector.dart` |
+| Text-scan detector (dependency-free, fail closed, over-keep only) | DONE | `lib/src/trim/detector.dart` — replaced the resolved-AST scan: package:analyzer in a runtime package's deps fights the app's own tooling (#171) |
 | Native trim via `hooks: user_defines:` | DONE | build hook; custom sets compile locally, cargo cache |
 | Web trim via `setup --trim` | DONE | detector → trimmed wasm compile |
 | `make shake-audit` verifier | DONE | symbols + size ceiling + typed-error probes |
@@ -307,10 +307,10 @@ size-measuring recipe in [`UPDATING.md`](UPDATING.md) §S5b.
 
 | Trigger to watch | Signal | Approach when it lands |
 |---|---|---|
-| RecordUse experiment stabilizes (dart-lang/native#2902 for instance methods; the SDK record-use experiment flag) | recordings appear in release link hooks | Nothing to build — the lane self-activates. Validate with `trim-detector: compare` on example/ (diff recorded vs analyzer keep-sets). When instance methods land: delete the `record_use_shim*.dart` files, annotate the ops directly. When trust is earned: consider promoting the default detector. |
+| RecordUse experiment stabilizes (dart-lang/native#2902 for instance methods; the SDK record-use experiment flag) | recordings appear in release link hooks | Nothing to build — the lane self-activates. Validate with `trim-detector: compare` on example/ (diff recorded vs scan keep-sets). When instance methods land: delete the `record_use_shim*.dart` files, annotate the ops directly. Separately: `record_use` is pinned `^0.6.0` because ≥1.0.0 needs `meta ^1.19` and Flutter stable pins meta 1.18 — bump the pin when a Flutter stable ships meta ≥1.19 (same API for our use). When trust is earned: consider promoting the default detector. |
 | Dart static linking (dart-lang/sdk#49418; `StaticLinking` in code_assets implemented) | hooks accept static libs; SDK defines symbol/asset-tag references | 1) Wire Dart-side references to the `pdf_op_<name>_anchor` symbols (one per public op, using whatever asset-tag syntax ships). 2) Swap `ops/registry.rs` from the explicit table to link-section collection. 3) Add a gc-sections assertion to shake-audit. The detector becomes a cross-check; the linker becomes the mechanism. Units don't change. |
 | Web build hooks (dart-lang/native#988) | hooks run for web targets | Fold `setup --trim` into the hook path: web reads the same `trim:` user-define; delete setup's cwd-detector invocation. Wasm gains the same fail-closed auto flow as native. |
-| Wasm component model in dart2wasm (dart-lang/sdk#56366) | dart2wasm emits/links components | Express op units as WIT interface functions (one-to-one mapping already); component-level linking replaces export-root trimming on web. Furthest future — analyzer covers web until then. |
+| Wasm component model in dart2wasm (dart-lang/sdk#56366) | dart2wasm emits/links components | Express op units as WIT interface functions (one-to-one mapping already); component-level linking replaces export-root trimming on web. Furthest future — the scan covers web until then. |
 
 ## Built in the engine, not shipped
 

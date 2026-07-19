@@ -1,5 +1,3 @@
-/* @ts-self-types="./pdf_oxide.d.ts" */
-
 /**
  * Allocate `size` bytes (align 1) from the module's global allocator.
  *

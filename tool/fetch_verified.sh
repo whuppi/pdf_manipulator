@@ -10,6 +10,12 @@
 # Pinned hashes live in tool/versions.env (single source). Callers source
 # that, then pass the right per-platform value in.
 #
+# Dormant today — the last pinned download (binaryen) moved into the
+# cargo workspace, Cargo.lock-pinned. This stays as the standing door
+# for the next mutable download source (GitHub release binaries, vendor
+# CDNs); registry deps (crates.io, pub.dev) never need it. Wire a new
+# consumer via asset_urls() in tool/ci/upgrade.sh.
+#
 # Usage:  fetch_verified.sh <url> <sha256> <dest>
 #         (<sha256> may carry an optional "sha256:" prefix)
 # Exit:   0 = downloaded + verified   1 = download or hash failure
