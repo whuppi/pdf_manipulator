@@ -55,6 +55,17 @@ void main(List<String> args) {
     check('native core', [_mb(core)]);
     final pct = ((full - core) * 100 / full).round();
     check('trim percentage', ['about $pct% of the native library']);
+
+    // native size-build (opt-level z) column
+    final fullSize = sizes['nativeFullSize'] as int?;
+    final coreSize = sizes['nativeCoreSize'] as int?;
+    if (fullSize == null || coreSize == null) {
+      skips.add('native size-build sizes (run `make shake-audit`)');
+    } else {
+      check('native full (size build)', [_mb(fullSize)]);
+      check('native core (size build)', [_mb(coreSize)]);
+    }
+
     final wasmCoreRaw = sizes['wasmCoreRaw'] as int?;
     final wasmCoreGz = sizes['wasmCoreGz'] as int?;
     if (wasmCoreRaw == null || wasmCoreGz == null) {
@@ -62,6 +73,21 @@ void main(List<String> args) {
     } else {
       check('wasm core raw', [_mb(wasmCoreRaw)]);
       check('wasm core gzipped', [_mb(wasmCoreGz)]);
+    }
+
+    // wasm size-build (opt-level z) column — full + core, raw + gzipped
+    for (final (label, key) in [
+      ('wasm full raw (size build)', 'wasmFullSizeRaw'),
+      ('wasm full gzipped (size build)', 'wasmFullSizeGz'),
+      ('wasm core raw (size build)', 'wasmCoreSizeRaw'),
+      ('wasm core gzipped (size build)', 'wasmCoreSizeGz'),
+    ]) {
+      final v = sizes[key] as int?;
+      if (v == null) {
+        skips.add('$label (run `SHAKE_AUDIT_WASM=1 make shake-audit`)');
+      } else {
+        check(label, [_mb(v)]);
+      }
     }
     for (final (label, key) in [
       ('render cost', 'capRender'),
@@ -103,7 +129,7 @@ void main(List<String> args) {
   }
 }
 
-/// Formats bytes the way the README quotes sizes: `~N.N MB`, decimal
-/// megabytes (1 MB = 1,000,000 bytes) — the convention every size in this
-/// repo's prose uses.
-String _mb(int bytes) => '~${(bytes / 1000000).toStringAsFixed(1)} MB';
+/// Formats bytes the way the README quotes sizes: `N.N MB`, decimal
+/// megabytes (1 MB = 1,000,000 bytes). No leading `~`, so the check matches
+/// whether the README writes `15.9 MB` or `~15.9 MB` — it's a substring test.
+String _mb(int bytes) => '${(bytes / 1000000).toStringAsFixed(1)} MB';

@@ -46,7 +46,7 @@ class PdfManipulatorConfig {
   /// only permitted to be set — when [keep] is auto.
   final KeepDetector detector;
 
-  /// How the kept set compiles ([EngineBuild.speed] / size / debug).
+  /// What the engine is optimized for ([EngineBuild.speed] / size / debug).
   final EngineBuild build;
 
   /// The only keys allowed under `pdf_manipulator:`. Anything else is a typo

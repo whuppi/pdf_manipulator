@@ -1,6 +1,7 @@
 // The engine build mode — the `build:` user-define read from the app's
 // pubspec by both the native build hook and the web setup script. Orthogonal
-// to keep: keep picks WHICH capabilities compile, this picks HOW they compile.
+// to keep: keep picks WHICH capabilities go in, this picks what the engine is
+// optimized for (speed / size / debugging).
 //
 // All three ride on cargo's `release` profile via CARGO_PROFILE_RELEASE_*
 // env overrides rather than named cargo profiles. That keeps everything in

@@ -268,9 +268,11 @@ test-ops-atomics:
 # incremental cache for the test build: every test still compiles and runs
 # identically; only interactive backtraces lose symbol names (CI prints the
 # assertion output regardless).
-# Trim guarantee verifier: core-only build must drop the heavy modules
+# Keep guarantee verifier: core-only build must drop the heavy modules
 # (symbols absent, size under ceiling) and excluded ops must answer the
-# typed not-enabled error. SHAKE_AUDIT_WASM=1 adds the wasm size check.
+# typed not-enabled error. SHAKE_AUDIT_WASM=1 is the full release measurement:
+# it adds the wasm core + the opt-level-z `build: size` column (native + wasm)
+# that feed the README size table.
 shake-audit:
 	DART="$(DART)" bash tool/shake_audit.sh
 	@$(DART) run tool/verify_readme_sizes.dart

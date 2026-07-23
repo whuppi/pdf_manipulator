@@ -943,8 +943,8 @@ Grammar (`hooks: user_defines: pdf_manipulator:` in the app pubspec) — three
 flat keys: `keep` picks WHICH capabilities compile (`auto` detects · `all`/
 absent keeps everything · `[render, …]` is an exact set); `detector` picks
 HOW `auto` detects (`scan` default · `record-use`/`compare` experimental) and
-is valid ONLY with `keep: auto`; `build` picks HOW the kept set compiles
-(`speed` default+prebuilt · `size` opt-level z · `debug` symbols kept).
+is valid ONLY with `keep: auto`; `build` picks what the engine is optimized
+for (`speed` default+prebuilt · `size` opt-level z · `debug` symbols kept).
 Invalid configs are unrepresentable by design (`lib/src/hook/pdf_config.dart`,
 the ONE parser): unknown keys, bad values, and the one cross-axis coupling
 (`detector` without `keep: auto`) all fail the build LOUDLY — never a silent

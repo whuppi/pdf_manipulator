@@ -74,7 +74,7 @@ Nothing to do. On iOS, Android, macOS, Windows, and Linux, the build hook downlo
 
 ### Web
 
-Web can't auto-download native assets, so run setup once. It fetches the prebuilt WASM engine. Run it again after any `pub upgrade`, since the asset is tied to the package version:
+Web can't auto-download native assets, so run setup once. It fetches the prebuilt WASM engine. Run it again after any `pub upgrade`, because the asset is tied to the package version:
 
 ```sh
 flutter pub run pdf_manipulator:setup
@@ -196,7 +196,7 @@ task.cancel(); // the await above now throws PdfCancelled
 
 Three rules and you're safe:
 
-- **The `cancel()` call never throws** — it sends a stop request and returns. No `try/catch` needed; it's safe to call twice, and a no-op once the task is done.
+- **The `cancel()` call never throws** — it sends a stop request and returns. No `try/catch` needed; it's safe to call twice, and a no-op after the task is done.
 - **`PdfCancelled` only appears when you `await` the task** — never a half-finished result. That's the spot to wrap in `try/catch`.
 - **Never await the task? Nothing to handle** — cancel it and move on, no error, no crash.
 
@@ -461,18 +461,20 @@ try {
 
 ## The engine binary
 
-The default binary carries every capability. If your app only uses some of them, trim tells the build to keep what your code can reach and delete the rest at compile time. It follows the same safety rule as Dart's own tree shaking: when the build cannot prove that your app skips something, it keeps it. The worst case is a slightly bigger binary — never a missing feature.
+The default binary carries every capability. If your app only uses some of them, tell the build which capabilities to `keep` and it deletes the rest at compile time. It follows the same safety rule as Dart's own tree shaking: when the build cannot prove that your app skips something, it keeps it. The worst case is a slightly bigger binary — never a missing feature.
 
-What it's worth (measured):
+Two knobs decide the size — **`keep`** (which capabilities go in) and **`build`** (`speed`, the default, or `size` for denser code, no features lost). Each row is one engine you can build; the columns are the two platforms:
 
-| | Native library | Web wasm |
+| Engine | Native | Web — raw (gzipped) |
 |---|---|---|
-| **Full engine** (default) | ~21.1 MB | ~17.5 MB (~7.3 MB gzipped) |
-| **Core only** (every capability trimmed; core always remains) | ~6.3 MB | ~5.2 MB (~1.9 MB gzipped) |
+| Full · `speed` (default) | 21.1 MB | 17.5 MB (7.3 MB) |
+| Full · `size` | 15.9 MB | 14.4 MB (6.3 MB) |
+| Core only · `speed` | 6.3 MB | 5.2 MB (1.9 MB) |
+| Core only · `size` | 5.1 MB | 4.4 MB (1.7 MB) |
 
-That's about 70% of the native library and almost three quarters of the web download gone. Real apps land between the rows — you pay only for what you keep.
+The top row is the default; the bottom row is the smallest — core + `size`, about three quarters off. `keep` does the heavy lifting (full → core is about 70% of the native library gone); `build: size` shaves another ~15–25% on top. `size` trades a little runtime speed for the bytes: the cost lands on rendering and image work, and is negligible for parse, edit, and metadata.
 
-Trimming compiles a custom engine on your machine. There is nothing to set up in advance — if a piece is missing, the build stops with the exact instruction. What it will ask for:
+A custom engine — only the capabilities you keep — compiles on your machine. There is nothing to set up in advance: if a piece is missing, the build stops with the exact instruction. What it will ask for:
 
 - **Native** (iOS, Android, macOS, Windows, Linux): [Rust](https://rustup.rs) — the same one-line installer on every OS.
 - **Web**: [Rust](https://rustup.rs) too — nothing more. The web build makes its own helper tools the first time, which adds a few minutes once; every run after that reuses them.
@@ -496,7 +498,7 @@ Prefer to say it yourself? The manual form keeps exactly these capabilities (plu
 
 <br>
 
-Alongside `keep` (which picks _which_ capabilities compile) there's `build` (which picks _how_ they compile). It lives in the same pubspec block and works the same on web and native:
+Alongside `keep` (which picks _which_ capabilities go in) there's `build` (what the engine is _optimized for_ — speed, size, or debugging). It lives in the same pubspec block and works the same on web and native:
 
 ```yaml
 hooks:
@@ -542,8 +544,8 @@ flutter pub run pdf_manipulator:setup
 <summary><b>🧩 how keep works</b></summary>
 
 - `auto` reads your app's code and keeps every capability it can reach. If any file can't be analyzed, you get the full binary and a warning — it never guesses.
-- The trimmed engine compiles once and is cached — later builds reuse it.
-- Call something you trimmed away and you get a clear error saying what to add to `keep:`. No crashes, no silent misbehavior.
+- The custom engine compiles once and is cached — later builds reuse it.
+- Call something you left out and you get a clear error saying what to add to `keep:`. No crashes, no silent misbehavior.
 - A typo in `keep:` fails the build and prints the valid options.
 
 </details>
@@ -600,7 +602,7 @@ The engine compiles to WASM and runs in isolated Web Workers, so your UI thread 
 
 On web you don't configure anything; the package auto-detects the best mode the browser supports and uses it. Everything works regardless of mode; the only thing that varies is how fast it reads large files.
 
-Under the hood the modes differ in *how* the WASM engine gets your bytes: the top two stream them on demand, while the fallback copies the whole file into private browser storage first (works everywhere, just a slower first byte).
+Internally the modes differ in *how* the WASM engine gets your bytes: the top two stream them on demand, while the fallback copies the whole file into private browser storage first (works everywhere, just a slower first byte).
 
 | Mode | What it means for you | Streams large files | Picked when |
 |---|---|:---:|---|
@@ -624,7 +626,7 @@ You never choose; the package tries JSPI, then Atomics, then OPFS, and uses the 
 </details>
 
 <details>
-<summary><b>🧰 Advanced: force a mode, or unlock streaming on older browsers</b></summary>
+<summary><b>🧰 Advanced: force a mode, or enable streaming on older browsers</b></summary>
 
 <br>
 
@@ -635,7 +637,7 @@ final pdf = Pdf(config: PdfConfig(webIoMode: PdfIoMode.atomics)); // pin a mode
 final mode = await pdf.ensureInitialized(); // or just check
 ```
 
-**Unlock streaming on older browsers.** Chrome 137+ / Firefox 139+ already stream via JSPI with no setup. For older browsers that have `SharedArrayBuffer`, two server headers switch the fallback from disk-copy (OPFS) to streaming (Atomics):
+**Enable streaming on older browsers.** Chrome 137+ / Firefox 139+ already stream via JSPI with no setup. For older browsers that have `SharedArrayBuffer`, two server headers switch the fallback from disk-copy (OPFS) to streaming (Atomics):
 
 ```
 Cross-Origin-Opener-Policy: same-origin

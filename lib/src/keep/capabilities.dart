@@ -130,15 +130,16 @@ class KeepConfig {
 
   static const _grammar =
       'Valid forms:\n'
-      '  keep: auto                     # detector decides\n'
+      '  keep: all                      # (or omit `keep`) keep everything\n'
+      '  keep: auto                     # a detector decides\n'
       '  keep: [render, signatures]     # exactly these capabilities\n'
       'Capabilities: render, signatures, pdfa, office, extract '
       '(and core, which is always included)';
 
   /// Parses the raw `keep` user-define value (YAML-decoded).
   static KeepConfig parse(Object? raw) {
-    if (raw == null) return all;
-    if (raw == 'auto' || raw == true) return auto;
+    if (raw == null || raw == 'all') return all;
+    if (raw == 'auto') return auto;
     if (raw is List) {
       final set_ = <PdfCapability>{};
       for (final item in raw) {
@@ -156,7 +157,6 @@ class KeepConfig {
       return KeepConfig.keep(set_);
     }
     if (raw is Map) {
-      // The old `keep: {keep: [...]}` / `keep:` nesting — point at the flat form.
       throw PdfConfigError(
         'keep takes a list of capabilities directly, not a map.\n$_grammar',
       );

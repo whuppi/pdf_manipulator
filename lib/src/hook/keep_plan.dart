@@ -10,9 +10,9 @@ import 'package:record_use/record_use.dart';
 import 'package:pdf_manipulator/src/keep/capabilities.dart';
 import 'package:pdf_manipulator/src/keep/detector.dart';
 
-/// What the build hook should do about trimming, resolved from the
-/// user-defines. [PdfConfigError]s from malformed defines propagate —
-/// a config mistake must fail the build loudly.
+/// Which capabilities the build hook keeps, resolved from the config.
+/// [PdfConfigError]s from malformed defines propagate — a config mistake
+/// must fail the build loudly.
 class KeepPlan {
   const KeepPlan._({
     required this.features,

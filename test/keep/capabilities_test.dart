@@ -11,13 +11,13 @@ import 'package:test/test.dart';
 
 void main() {
   group('keep grammar', () {
-    test('absent means keep everything', () {
+    test('absent or `all` means keep everything', () {
       expect(KeepConfig.parse(null).mode, KeepMode.all);
+      expect(KeepConfig.parse('all').mode, KeepMode.all);
     });
 
-    test('auto (canonical) and true (alias) mean auto', () {
+    test('auto means auto', () {
       expect(KeepConfig.parse('auto').mode, KeepMode.auto);
-      expect(KeepConfig.parse(true).mode, KeepMode.auto);
     });
 
     test('a list parses to the exact capability set', () {
@@ -63,11 +63,10 @@ void main() {
       );
     });
 
-    test('the old map form fails loudly, pointing at the flat list', () {
-      // `keep: {keep: [...]}` (the pre-4.0 `trim:` nesting) is no longer legal.
+    test('a map value fails loudly (keep is a list, not a map)', () {
       expect(
         () => KeepConfig.parse({
-          'keep': ['render'],
+          'render': true,
         }),
         throwsA(
           isA<PdfConfigError>().having(
@@ -79,9 +78,10 @@ void main() {
       );
     });
 
-    test('junk scalar values fail loudly', () {
+    test('junk scalar values fail loudly (no true/false aliases)', () {
       expect(() => KeepConfig.parse('yes'), throwsA(isA<PdfConfigError>()));
       expect(() => KeepConfig.parse(42), throwsA(isA<PdfConfigError>()));
+      expect(() => KeepConfig.parse(true), throwsA(isA<PdfConfigError>()));
       expect(() => KeepConfig.parse(false), throwsA(isA<PdfConfigError>()));
     });
   });
