@@ -143,7 +143,9 @@ Future<void> _compileOne(
     outFile: outFile,
     environment: environment,
   );
-  stderr.writeln('  → ${outFile.path}');
+  // Print the produced size (the old bash driver did `du -h` per target) —
+  // handy when eyeballing a release matrix for an unexpectedly large binary.
+  stderr.writeln('  → ${outFile.path} (${outFile.lengthSync()} bytes)');
 }
 
 Future<void> _compileAll(List<_Target> targets, {bool strip = false}) async {
