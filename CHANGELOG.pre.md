@@ -81,6 +81,10 @@ CONTENT RULES (never change)
 
 <!-- Add new versions below, newest first. -->
 
+## 3.0.1-dev.0
+
+- Fixed a cryptic `failed to load manifest ... feature edition2024 is required` cargo error when the engine compiles from source (iOS device builds, git dependencies, or any download-miss) on an older Rust toolchain — the build now checks the required Rust version first and fails with a clear "needs Rust >= 1.88, run `rustup update`" message instead ([#183](https://github.com/whuppi/pdf_manipulator/issues/183) reported by [@mrhazelh](https://github.com/mrhazelh), [PR #185](https://github.com/whuppi/pdf_manipulator/pull/185))
+
 ## 3.0.0-dev.1
 
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
