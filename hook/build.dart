@@ -89,6 +89,7 @@ import 'package:path/path.dart' as p;
 
 import 'package:pdf_manipulator/src/hook/asset_hashes.dart';
 import 'package:pdf_manipulator/src/hook/build_constants.dart';
+import 'package:pdf_manipulator/src/hook/build_profile.dart';
 import 'package:pdf_manipulator/src/hook/engine_compiler.dart';
 import 'package:pdf_manipulator/src/hook/resolver.dart';
 import 'package:pdf_manipulator/src/hook/trim_plan.dart';
@@ -109,6 +110,7 @@ void main(List<String> args) async {
     if (!input.config.buildCodeAssets) return;
 
     final constants = BuildConstants.load(input.packageRoot);
+    final profile = EngineProfile.parse(input.userDefines['profile']);
     final plan = await resolveTrimPlan(
       trimDefine: input.userDefines['trim'],
       detectorDefine: input.userDefines['trim-detector'],
@@ -138,6 +140,7 @@ void main(List<String> args) async {
     await _resolveNative(
       constants: constants,
       plan: plan,
+      profile: profile,
       packageRoot: input.packageRoot,
       version: readVersion(input.packageRoot),
       targetKey: targetKeyFor(codeConfig),
@@ -169,6 +172,7 @@ void main(List<String> args) async {
 Future<void> _resolveNative({
   required BuildConstants constants,
   required TrimPlan plan,
+  required EngineProfile profile,
   required Uri packageRoot,
   required String version,
   required String targetKey,
@@ -181,18 +185,20 @@ Future<void> _resolveNative({
 }) async {
   final assetName = '$targetKey-$libFileName';
 
-  // A consumer-trimmed feature set has no prebuilt release asset and no
-  // pinned hash: version 0.0.0 routes the resolver straight to compile,
-  // and cargo's feature-aware fingerprint is the cache.
-  final effectiveVersion = plan.isCustom ? '0.0.0' : version;
+  // Prebuilt release binaries exist ONLY for the default feature set on the
+  // default profile. A trimmed set or a non-release profile (small/debug) has
+  // no prebuilt and no pinned hash: version 0.0.0 routes the resolver straight
+  // to compile, and cargo's own fingerprint is the cache.
+  final custom = plan.isCustom || !profile.isDefault;
+  final effectiveVersion = custom ? '0.0.0' : version;
 
   await resolveAsset(
     ResolveRequest(
       assetName: assetName,
       downloadUrl: constants.downloadUrl(effectiveVersion, assetName),
       dest: dest,
-      cacheFile: plan.isCustom ? null : cacheFile,
-      expectedHash: plan.isCustom ? null : assetHashes[assetName],
+      cacheFile: custom ? null : cacheFile,
+      expectedHash: custom ? null : assetHashes[assetName],
       version: effectiveVersion,
       packageRoot: packageRoot,
       compile: (File d) => _compileNativeFromHook(
@@ -202,6 +208,7 @@ Future<void> _resolveNative({
         d,
         constants,
         plan,
+        profile,
       ),
     ),
   );
@@ -222,13 +229,15 @@ Future<int> resolveWeb({
   required Directory destDir,
   bool force = false,
   String? wasmFeaturesOverride,
+  EngineProfile profile = EngineProfile.release,
 }) async {
   final constants = BuildConstants.load(packageRoot);
-  // A trimmed set has no prebuilt asset, no pinned hash, and must not
-  // reuse a default-set artifact: force + version 0.0.0 route the
-  // resolver straight to a fresh compile.
-  final effectiveVersion = wasmFeaturesOverride == null ? version : '0.0.0';
-  final effectiveForce = force || wasmFeaturesOverride != null;
+  // A trimmed set OR a non-release profile has no prebuilt asset, no pinned
+  // hash, and must not reuse a default-set artifact: force + version 0.0.0
+  // route the resolver straight to a fresh compile.
+  final custom = wasmFeaturesOverride != null || !profile.isDefault;
+  final effectiveVersion = custom ? '0.0.0' : version;
+  final effectiveForce = force || custom;
 
   if (!destDir.existsSync()) {
     destDir.createSync(recursive: true);
@@ -248,15 +257,18 @@ Future<int> resolveWeb({
         assetName: assetName,
         downloadUrl: constants.downloadUrl(effectiveVersion, assetName),
         dest: dest,
-        expectedHash: wasmFeaturesOverride == null
-            ? assetHashes[assetName]
-            : null,
+        expectedHash: custom ? null : assetHashes[assetName],
         version: effectiveVersion,
         packageRoot: packageRoot,
         force: effectiveForce,
         compile: isWasmBuildOutput
-            ? (File d) =>
-                  _compileWasm(packageRoot, d, localName, wasmFeaturesOverride)
+            ? (File d) => _compileWasm(
+                packageRoot,
+                d,
+                localName,
+                wasmFeaturesOverride,
+                profile,
+              )
             : (File d) => _copyWebAsset(packageRoot, d, localName),
       ),
     );
@@ -360,6 +372,7 @@ Future<void> _compileNativeFromHook(
   File outFile,
   BuildConstants constants,
   TrimPlan plan,
+  EngineProfile profile,
 ) async {
   final codeConfig = input.config.code;
   await compileEngineForTarget(
@@ -370,7 +383,10 @@ Future<void> _compileNativeFromHook(
     targetDir: p.join(p.fromUri(input.outputDirectory), 'cargo_target'),
     libFileName: codeConfig.targetOS.libraryFileName(constants.crate, linkMode),
     outFile: outFile,
-    environment: androidLinkerEnv(codeConfig, targetTriple),
+    environment: {
+      ...androidLinkerEnv(codeConfig, targetTriple),
+      ...profile.cargoEnv,
+    },
   );
 }
 
@@ -388,13 +404,18 @@ Future<void> _compileWasm(
   File dest,
   String targetFile,
   String? featuresOverride,
+  EngineProfile profile,
 ) async {
   final webAssets = Directory.fromUri(packageRoot.resolve('web_assets'));
   final existing = File(p.join(webAssets.path, targetFile));
 
-  // Contributor has locally built WASM — copy directly (never for a
-  // trimmed set: the local artifact is the default build).
-  if (featuresOverride == null && existing.existsSync()) {
+  // web_assets/ holds the DEFAULT build (full features, release profile).
+  // Only that combination may read from / write to it; a trimmed set or a
+  // non-release profile is a per-app artifact that must never land there.
+  final isDefaultBuild = featuresOverride == null && profile.isDefault;
+
+  // Contributor has locally built WASM — copy directly.
+  if (isDefaultBuild && existing.existsSync()) {
     dest.parent.createSync(recursive: true);
     existing.copySync(dest.path);
     return;
@@ -403,18 +424,15 @@ Future<void> _compileWasm(
   final features =
       featuresOverride ?? BuildConstants.load(packageRoot).wasmFeatures;
 
-  // A trimmed build writes to a temp dir, NEVER into the package's
-  // web_assets/ — those hold the default build, and a trimmed artifact
-  // landing there would be served to every other consumer of this
-  // package checkout as if it were the full engine.
-  final outDir = featuresOverride == null
+  final outDir = isDefaultBuild
       ? webAssets
-      : Directory.systemTemp.createTempSync('pdf_manipulator_trim_wasm_');
+      : Directory.systemTemp.createTempSync('pdf_manipulator_wasm_');
   try {
     await compileWasmEngine(
       packageRoot: packageRoot,
       features: features,
       outDir: outDir,
+      cargoEnv: profile.cargoEnv,
     );
 
     final built = File(p.join(outDir.path, targetFile));
@@ -426,7 +444,7 @@ Future<void> _compileWasm(
     dest.parent.createSync(recursive: true);
     built.copySync(dest.path);
   } finally {
-    if (featuresOverride != null) {
+    if (!isDefaultBuild) {
       outDir.deleteSync(recursive: true);
     }
   }

@@ -941,9 +941,14 @@ Users speak capabilities, never cargo features. Core
 
 Grammar (`hooks: user_defines: pdf_manipulator:` in the app pubspec):
 `trim: auto` (detector decides) · `trim: {keep: [...]}` (exact manual
-override) · absent/false (full default binary). Malformed values fail
-the build printing the grammar — a config mistake never silently changes
-what ships. Web: `setup --trim` after configuring pubspec.
+override) · absent/false (full default binary). A sibling `profile:` key
+picks HOW the kept set compiles — `release` (default, prebuilt) · `small`
+(opt-level z) · `debug` (symbols kept). Malformed values fail the build
+printing the grammar — a config mistake never silently changes what ships.
+Both keys are read the SAME way for web and native: the native hook gets
+them from `BuildInput.userDefines`; the web `setup` script reads the same
+pubspec block itself (`lib/src/hook/user_defines.dart`), so the command
+never carries flags and there is one place to configure both.
 
 The design rules behind that grammar:
 

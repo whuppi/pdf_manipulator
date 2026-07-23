@@ -11,6 +11,11 @@
 // --force: web skips hash check and re-downloads. Native runs
 //   `flutter clean` first then rebuilds.
 //
+// There are no config flags. Engine config (profile, trim) lives in the
+// app's pubspec under `hooks: user_defines: pdf_manipulator:` — the SAME
+// block the native build hook reads. Web reads it here too, so the command
+// never changes and there is one place to configure both.
+//
 // Use `flutter pub run`, NOT `dart run` — native targets
 // subprocess `flutter build` which needs flutter on PATH.
 
@@ -20,9 +25,10 @@ import 'package:package_config/package_config.dart';
 
 import '../hook/build.dart' as build;
 import 'package:pdf_manipulator/src/hook/build_constants.dart';
+import 'package:pdf_manipulator/src/hook/build_profile.dart';
 import 'package:pdf_manipulator/src/hook/resolver.dart';
-import 'package:pdf_manipulator/src/trim/capabilities.dart';
-import 'package:pdf_manipulator/src/trim/detector.dart';
+import 'package:pdf_manipulator/src/hook/trim_plan.dart';
+import 'package:pdf_manipulator/src/hook/user_defines.dart';
 
 const _help = '''
 Usage: flutter pub run pdf_manipulator:setup [--force] [target]
@@ -37,8 +43,19 @@ Targets:
   windows          Build + cache native binary for Windows
 
 Options:
-  --force          Re-resolve target (debugging)
+  --force          Re-resolve target (ignore cache / clean rebuild)
   -h, --help       Show this help
+
+Engine config is read from your pubspec.yaml — the same keys for web and
+native, so this command never needs flags:
+
+  hooks:
+    user_defines:
+      pdf_manipulator:
+        profile: release        # release (default) | small | debug
+        trim: {keep: [render]}  # or `trim: auto` to scan your app's source
+
+Native targets pick this block up automatically during `flutter build`.
 ''';
 
 const Map<String, List<String>> _nativeBuildArgs = {
@@ -56,7 +73,6 @@ void main(List<String> args) async {
   }
 
   final force = args.contains('--force');
-  final trim = args.contains('--trim');
   final targets = args.where((a) => !a.startsWith('-')).toList();
 
   if (targets.isEmpty) {
@@ -65,7 +81,7 @@ void main(List<String> args) async {
 
   for (final target in targets) {
     if (target == 'web') {
-      await _setupWeb(force, trim: trim);
+      await _setupWeb(force);
     } else if (_nativeBuildArgs.containsKey(target)) {
       await _setupNative(target, force);
     } else {
@@ -78,7 +94,7 @@ void main(List<String> args) async {
 
 // ── Web ───────────────────────────────────────────────────────────
 
-Future<void> _setupWeb(bool force, {bool trim = false}) async {
+Future<void> _setupWeb(bool force) async {
   final config = await findPackageConfig(Directory.current);
   if (config == null) {
     stderr.writeln('Error: not inside a Dart/Flutter project.');
@@ -95,39 +111,53 @@ Future<void> _setupWeb(bool force, {bool trim = false}) async {
 
   final packageRoot = pkg.root;
   final version = readVersion(packageRoot);
+  final constants = BuildConstants.load(packageRoot);
 
-  // --trim: scan THIS app's source for reachable capabilities, then
-  // compile a wasm carrying only those. Fail closed: unresolved files
-  // mean the full default build.
-  String? featuresOverride;
-  if (trim) {
-    stdout.writeln('=== Trim: scanning app source ===');
-    final result = detectCapabilities(Directory.current.path);
-    if (!result.resolved) {
-      stdout.writeln(
-        'trim: ${result.unresolvedPaths.length} path(s) could not be '
-        'read — keeping the FULL binary (fail closed). First: '
-        '${result.unresolvedPaths.first}',
-      );
-    } else {
-      final wasmDefaults = BuildConstants.load(packageRoot).wasmFeatures;
-      featuresOverride = TrimConfig.keep(
-        result.keep,
-      ).featuresFor(wasmDefaults, result.keep);
-      final kept = result.keep.map((c) => c.wire).toList()..sort();
-      stdout.writeln('trim: keeping $kept -> features [$featuresOverride]');
-      stdout.writeln('trim: matched ${describeMatches(result)}');
-    }
+  // Read the app's `hooks: user_defines: pdf_manipulator:` block — the same
+  // config the native build hook receives. `profile` and `trim` are honored
+  // identically for web and native; the parsers are shared code.
+  final defines = readPdfManipulatorUserDefines(Directory.current.path);
+  final EngineProfile profile;
+  try {
+    profile = EngineProfile.parse(defines['profile']);
+  } on ArgumentError catch (e) {
+    stderr.writeln('Error: ${e.message}');
+    exit(1);
   }
 
+  // `trim: {keep: [...]}` (explicit) or `trim: auto` (scan this app's
+  // source) — resolveTrimPlan runs the SAME logic the native hook does,
+  // failing closed to the full binary when the source can't be resolved.
+  final plan = await resolveTrimPlan(
+    trimDefine: defines['trim'],
+    detectorDefine: defines['trim-detector'],
+    defaultFeatures: constants.wasmFeatures,
+    appRootCandidate: Directory.current.path,
+  );
+
   stdout.writeln('=== Web assets (v$version) ===');
+  if (plan.deferToLink) {
+    // record-use trims in the native link hook, which web has no equivalent
+    // of — so web stays on the full binary. Explicit trim keeps work on web.
+    stdout.writeln(
+      'trim-detector record-use is native-only; web keeps the FULL binary. '
+      'Use `trim: {keep: [...]}` to trim the web engine.',
+    );
+  }
+  if (!profile.isDefault) {
+    stdout.writeln('profile: ${profile.wire} (compiles from source)');
+  }
+  if (plan.isCustom) {
+    stdout.writeln('trim: features [${plan.features}]');
+  }
   final destDir = Directory('web/pdf_manipulator');
   final count = await build.resolveWeb(
-    wasmFeaturesOverride: featuresOverride,
+    wasmFeaturesOverride: plan.isCustom ? plan.features : null,
     packageRoot: packageRoot,
     version: version,
     destDir: destDir,
     force: force,
+    profile: profile,
   );
   stdout.writeln(
     count > 0

@@ -315,6 +315,7 @@ Future<void> compileWasmEngine({
   required Uri packageRoot,
   required String features,
   required Directory outDir,
+  Map<String, String> cargoEnv = const {},
 }) async {
   ensureCargoVersion(packageRoot);
   final manifest = p.fromUri(
@@ -334,7 +335,7 @@ Future<void> compileWasmEngine({
   ensureRustTarget('wasm32-unknown-unknown');
   outDir.createSync(recursive: true);
 
-  final env = <String, String>{...Platform.environment};
+  final env = <String, String>{...Platform.environment, ...cargoEnv};
   stripXcodeFromPath(env);
 
   _log.info('compiling WASM from source (features: $features)');

@@ -93,8 +93,10 @@ pdf_manipulator: X.Y.Z  # exact version
 flutter pub run pdf_manipulator:setup                  # web (default)
 flutter pub run pdf_manipulator:setup <target>         # web|android|ios|macos|linux|windows
 flutter pub run pdf_manipulator:setup --force <target> # re-resolve (debugging)
-flutter pub run pdf_manipulator:setup --trim           # trimmed engine (see The engine binary)
 ```
+
+The command never carries config flags. Trim and profile live in your
+pubspec (see The engine binary) — web reads the same block native does.
 
 </details>
 
@@ -490,6 +492,29 @@ Prefer to say it yourself? The manual form keeps exactly these capabilities (plu
         keep: [render, signatures]
 ```
 
+<details>
+<summary><b>🧩 shrinking or debugging the engine — the <code>profile:</code> knob</b></summary>
+
+<br>
+
+Alongside `trim` (which picks _which_ capabilities compile) there's `profile` (which picks _how_ they compile). It lives in the same pubspec block and works the same on web and native:
+
+```yaml
+hooks:
+  user_defines:
+    pdf_manipulator:
+      profile: release   # release (default) | small | debug
+```
+
+- **`release`** — the shipped default. The prebuilt binaries are this; nothing compiles.
+- **`small`** — optimizes for size over speed (a smaller engine, somewhat slower). Compiles from source, like any trim.
+- **`debug`** — keeps debug symbols so a native engine crash points to a file and line. For diagnosing an engine problem, not for shipping. Compiles from source.
+
+Only `release` has prebuilt binaries — `small` and `debug` always compile on your machine (so they need [Rust](https://rustup.rs), exactly like trim). `profile` and `trim` stack: `small` + a tight `keep:` is the smallest possible engine.
+
+</details>
+
+
 How do you know what to keep? Each capability covers a small set of methods. Core is always included:
 
 | Capability | Keep it if you call | Also brings | Adds (native) |
@@ -507,10 +532,11 @@ Not sure? Use `trim: auto` — the scan answers this for you. And if you ever gu
 
 Want to see it live? [`example_trimmed/`](example_trimmed/) runs the full example app under a `keep: [render]` engine — its smoke test asserts that kept capabilities work and excluded ones answer the typed error.
 
-On web, run the setup with the flag after configuring pubspec:
+On web, just re-run the setup after configuring pubspec — it reads the same
+`trim:` block:
 
 ```bash
-flutter pub run pdf_manipulator:setup --trim
+flutter pub run pdf_manipulator:setup
 ```
 
 <details>

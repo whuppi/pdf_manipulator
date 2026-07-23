@@ -81,8 +81,10 @@ CONTENT RULES (never change)
 
 <!-- Add new versions below, newest first. -->
 
-## 3.0.1-dev.0
+## 4.0.0-dev.0
 
+- **Breaking:** the web-only `flutter pub run pdf_manipulator:setup --trim` flag is gone → put your trim choice in the app pubspec instead, under `hooks: user_defines: pdf_manipulator:` (`trim: auto` for a source scan, or `trim: {keep: [render, ...]}` to choose), then re-run `flutter pub run pdf_manipulator:setup`. Web now reads that block directly — the same one native already used — so there is one config place for both platforms and the setup command never carries flags.
+- Added `profile:` in that same pubspec block — pick HOW the engine compiles: `release` (default, prebuilt), `small` (smaller binary, opt-level z, a little slower), or `debug` (keeps symbols so a native engine crash points to a file and line). `small`/`debug` compile from source like a trim and need [Rust](https://rustup.rs); works for web and native ([PR #185](https://github.com/whuppi/pdf_manipulator/pull/185))
 - Changed the prebuilt-binary download to retry transient failures and resume interrupted transfers over HTTP Range, so a flaky network on a large asset (e.g. the ~180 MB iOS static library) no longer forces a slow from-source compile on a single blip ([PR #185](https://github.com/whuppi/pdf_manipulator/pull/185))
 - Fixed a cryptic `failed to load manifest ... feature edition2024 is required` cargo error when the engine compiles from source (iOS device builds, git dependencies, or any download-miss) on an older Rust toolchain — the build now checks the required Rust version first and stops with a clear message naming the exact version and the `rustup` command to install it ([#183](https://github.com/whuppi/pdf_manipulator/issues/183) reported by [@mrhazelh](https://github.com/mrhazelh), [PR #185](https://github.com/whuppi/pdf_manipulator/pull/185))
 
