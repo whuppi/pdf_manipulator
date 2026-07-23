@@ -81,6 +81,13 @@ CONTENT RULES (never change)
 
 <!-- Add new versions below, newest first. -->
 
+## 4.0.0
+
+- **Breaking:** the engine is configured with three flat keys under `hooks: user_defines: pdf_manipulator:` — `keep` (which capabilities compile: `auto` to scan your source, `[render, …]` for an exact set, or omit for everything), `detector` (how `auto` detects, only valid with `keep: auto`), and `build` (how they compile). Migrating from 3.x: `trim: auto` → `keep: auto`, `trim: {keep: [render, …]}` → `keep: [render, …]`, `trim-detector: X` → `detector: X`, and the web-only `setup --trim` flag is gone — put your choice in pubspec and re-run `flutter pub run pdf_manipulator:setup` (web now reads the same block native does). Invalid configs fail the build loudly, never silently: an unknown key, a bad value, or a `detector` set without `keep: auto` all stop with a clear message ([PR #185](https://github.com/whuppi/pdf_manipulator/pull/185))
+- Added `build:` in that same block — pick HOW the engine compiles: `speed` (default, prebuilt), `size` (smaller binary, opt-level z, a little slower), or `debug` (keeps symbols so a native engine crash points to a file and line). `size` and `debug` compile from source and need [Rust](https://rustup.rs); works for web and native ([PR #185](https://github.com/whuppi/pdf_manipulator/pull/185))
+- Changed the prebuilt-binary download to retry transient failures and resume interrupted transfers over HTTP Range, so a flaky network on a large asset (e.g. the ~180 MB iOS static library) no longer forces a slow from-source compile on a single blip ([PR #185](https://github.com/whuppi/pdf_manipulator/pull/185))
+- Fixed a cryptic `failed to load manifest ... feature edition2024 is required` cargo error when the engine compiles from source (iOS device builds, git dependencies, or any download-miss) on an older Rust toolchain — the build now checks the required Rust version first and stops with a clear message naming the exact version and the `rustup` command to install it ([#183](https://github.com/whuppi/pdf_manipulator/issues/183) reported by [@mrhazelh](https://github.com/mrhazelh), [PR #185](https://github.com/whuppi/pdf_manipulator/pull/185))
+
 ## 3.0.0
 
 - **Breaking:** flattening CJK or emoji form values no longer uses a bundled font (it added 4.4 MB to every install). Register one once: `await pdf.registerFallbackFont(PdfFallbackFontKind.cjk, fontBytes)` (`.emoji` for emoji). Without one the value is still saved correctly — only the baked-in look falls back to the field's own font.

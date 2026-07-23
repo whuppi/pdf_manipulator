@@ -939,15 +939,19 @@ Users speak capabilities, never cargo features. Core
 | `office` | PDF ↔ DOCX/PPTX/XLSX (gates the office_oxide crate; requires `extract`) |
 | `extract` | text extraction + search + page/document classification (includes the CJK CID→Unicode tables) |
 
-Grammar (`hooks: user_defines: pdf_manipulator:` in the app pubspec):
-`trim: auto` (detector decides) · `trim: {keep: [...]}` (exact manual
-override) · absent/false (full default binary). A sibling `profile:` key
-picks HOW the kept set compiles — `release` (default, prebuilt) · `small`
-(opt-level z) · `debug` (symbols kept). Malformed values fail the build
-printing the grammar — a config mistake never silently changes what ships.
-Both keys are read the SAME way for web and native: the native hook gets
-them from `BuildInput.userDefines`; the web `setup` script reads the same
-pubspec block itself (`lib/src/hook/user_defines.dart`), so the command
+Grammar (`hooks: user_defines: pdf_manipulator:` in the app pubspec) — three
+flat keys: `keep` picks WHICH capabilities compile (`auto` detects · `all`/
+absent keeps everything · `[render, …]` is an exact set); `detector` picks
+HOW `auto` detects (`scan` default · `record-use`/`compare` experimental) and
+is valid ONLY with `keep: auto`; `build` picks HOW the kept set compiles
+(`speed` default+prebuilt · `size` opt-level z · `debug` symbols kept).
+Invalid configs are unrepresentable by design (`lib/src/hook/pdf_config.dart`,
+the ONE parser): unknown keys, bad values, and the one cross-axis coupling
+(`detector` without `keep: auto`) all fail the build LOUDLY — never a silent
+change to what ships. All keys are read the SAME way for web and native: the
+native hook gets them from `BuildInput.userDefines`; the web `setup` script
+reads the same pubspec block itself (`lib/src/hook/user_defines.dart`), so the
+command
 never carries flags and there is one place to configure both.
 
 The design rules behind that grammar:
@@ -968,7 +972,7 @@ The design rules behind that grammar:
 
 | Detector | Status | How |
 |---|---|---|
-| `scan` (default) | stable | dependency-free text scan over the app source (`lib/src/trim/detector.dart`): files importing the package (directly or through a re-export barrel) are searched for capability member names; errs only toward over-keeping. Any unreadable file → full binary + warning (fail closed) |
+| `scan` (default) | stable | dependency-free text scan over the app source (`lib/src/keep/detector.dart`): files importing the package (directly or through a re-export barrel) are searched for capability member names; errs only toward over-keeping. Any unreadable file → full binary + warning (fail closed) |
 | `record-use` | EXPERIMENTAL, internal | the SDK's `@RecordUse` recordings, read in the link hook after AOT; dormant until the SDK experiment activates |
 | `compare` | internal | the scan trims; the link hook reports the recorded set for diffing |
 
@@ -998,15 +1002,16 @@ source in the pub tarball compiles locally.
 
 ### The machinery
 
-- `lib/src/trim/` — capabilities + grammar (`capabilities.dart`), the
+- `lib/src/keep/` — capabilities + grammar (`capabilities.dart`), the
   text-scan detector (`detector.dart`), the RecordUse shim
   (`record_use_shim.dart`). Tooling-only: never exported by the barrel,
   zero bytes in consumer apps.
 - `lib/src/hook/` — ONE compile path, two callers: `build_constants.dart`
   (build.json), `engine_compiler.dart` (CodeConfig → target mappings, NDK
-  env, the cargo invocation), `trim_plan.dart` (user-defines → plan,
-  recordings → keep-set). `hook/build.dart` and `hook/link.dart` are thin
-  callers.
+  env, the cargo invocation), `pdf_config.dart` (the one config parser —
+  keep/detector/build, mismatch-proof), `keep_plan.dart` (config → plan,
+  recordings → keep-set), `engine_build.dart` (the `build:` axis).
+  `hook/build.dart` and `hook/link.dart` are thin callers.
 - The cutting doctrine: cut ROOTS and let LTO shake. Because the shipped
   artifact is a cdylib, only exported symbols are roots — gating a few
   dispatch entry fns lets LTO delete whole subsystems. Module-level cfg

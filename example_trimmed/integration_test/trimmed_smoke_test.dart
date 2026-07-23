@@ -6,7 +6,7 @@
 //
 // This is the only suite that runs against a trimmed binary in CI; the
 // full example's suites cover the full binary. Keep the keep-list here
-// in lockstep with ../pubspec.yaml's `trim:` user_define.
+// in lockstep with ../pubspec.yaml's `keep:` user_define.
 
 import 'dart:typed_data';
 

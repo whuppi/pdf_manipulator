@@ -1,14 +1,14 @@
 // readPdfManipulatorUserDefines reads the consuming app's
 // `hooks: user_defines: pdf_manipulator:` block. It must yield the SAME
 // plain-Dart shapes the native hook receives via BuildInput.userDefines,
-// so web and native feed identical values to EngineProfile.parse /
-// resolveTrimPlan. Proven against real temp pubspec files.
+// so web and native feed identical values to EngineBuild.parse /
+// resolveKeepPlan. Proven against real temp pubspec files.
 
 // io-exempt: build-time tooling test — writes temp pubspec files on disk;
 // this reader never runs in a browser.
 import 'dart:io';
 
-import 'package:pdf_manipulator/src/hook/build_profile.dart';
+import 'package:pdf_manipulator/src/hook/engine_build.dart';
 import 'package:pdf_manipulator/src/hook/user_defines.dart';
 import 'package:test/test.dart';
 
@@ -48,53 +48,50 @@ hooks:
       expect(readPdfManipulatorUserDefines(root), isEmpty);
     });
 
-    test('profile is read as a plain string', () {
+    test('build is read as a plain string', () {
       final root = _appWith('''
 name: my_app
 hooks:
   user_defines:
     pdf_manipulator:
-      profile: small
+      build: size
 ''');
       final defines = readPdfManipulatorUserDefines(root);
-      expect(defines['profile'], 'small');
+      expect(defines['build'], 'size');
       // The whole point: the extracted value drives the same parser native uses.
-      expect(EngineProfile.parse(defines['profile']), EngineProfile.small);
+      expect(EngineBuild.parse(defines['build']), EngineBuild.size);
     });
 
-    test('nested trim map/list deep-convert to plain Dart', () {
+    test('block is a plain Map and keep list deep-converts to plain Dart', () {
       final root = _appWith('''
 name: my_app
 hooks:
   user_defines:
     pdf_manipulator:
-      profile: debug
-      trim:
-        keep: [render, signatures]
+      build: debug
+      keep: [render, signatures]
 ''');
       final defines = readPdfManipulatorUserDefines(root);
 
       // Not a YamlMap/YamlList — real Dart collections, so downstream
       // `is Map` / `is List` checks behave exactly as with native defines.
-      final trim = defines['trim'];
-      expect(trim, isA<Map<String, Object?>>());
-      final keep = (trim! as Map)['keep'];
+      expect(defines, isA<Map<String, Object?>>());
+      final keep = defines['keep'];
       expect(keep, isA<List<Object?>>());
       expect(keep, ['render', 'signatures']);
-      expect(EngineProfile.parse(defines['profile']), EngineProfile.debug);
+      expect(EngineBuild.parse(defines['build']), EngineBuild.debug);
     });
 
-    test('inline-map trim shape also converts', () {
+    test('keep: auto is read as a plain scalar', () {
       final root = _appWith('''
 name: my_app
 hooks:
   user_defines:
     pdf_manipulator:
-      trim: {keep: [render]}
+      keep: auto
 ''');
       final defines = readPdfManipulatorUserDefines(root);
-      expect(defines['trim'], isA<Map<String, Object?>>());
-      expect((defines['trim']! as Map)['keep'], ['render']);
+      expect(defines['keep'], 'auto');
     });
   });
 }

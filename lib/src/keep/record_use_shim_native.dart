@@ -4,7 +4,7 @@ import 'package:meta/meta.dart' show RecordUse;
 
 /// Records that a capability-bearing op is reachable (see the conditional
 /// export in record_use_shim.dart).
-abstract final class TrimRecord {
+abstract final class KeepRecord {
   /// Marks [capability] (a `PdfCapability.wire` name) as used.
   @RecordUse()
   static void op(String capability) {}

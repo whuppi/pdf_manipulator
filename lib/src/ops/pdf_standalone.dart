@@ -10,7 +10,7 @@ import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_task.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
-import 'package:pdf_manipulator/src/trim/record_use_shim.dart';
+import 'package:pdf_manipulator/src/keep/record_use_shim.dart';
 
 /// One-shot operations — source in, sink out, no persistent handle.
 extension PdfStandalone on Pdf {
@@ -22,7 +22,7 @@ extension PdfStandalone on Pdf {
     String? reason,
     String? location,
   }) {
-    TrimRecord.op('signatures');
+    KeepRecord.op('signatures');
     return bridge.sign(
       source,
       output,
@@ -39,7 +39,7 @@ extension PdfStandalone on Pdf {
     required PdfDocumentFormat format,
     String? password,
   }) {
-    TrimRecord.op('office');
+    KeepRecord.op('office');
     return bridge.convertTo(source, output, format: format, password: password);
   }
 
@@ -49,7 +49,7 @@ extension PdfStandalone on Pdf {
     DataSink output, {
     required PdfDocumentFormat format,
   }) {
-    TrimRecord.op('office');
+    KeepRecord.op('office');
     return bridge.convertToPdf(document, output, format: format);
   }
 

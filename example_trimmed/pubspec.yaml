@@ -13,13 +13,12 @@ version: 1.0.0+1
 environment:
   sdk: ">=3.10.0 <4.0.0"
 
-# THE trim switch — the one pubspec entry a real consumer flips (see the
+# THE keep switch — the one pubspec entry a real consumer flips (see the
 # package README's "The engine binary" section).
 hooks:
   user_defines:
     pdf_manipulator:
-      trim:
-        keep: [render]
+      keep: [render]
 
 dependencies:
   flutter:

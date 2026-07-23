@@ -11,7 +11,7 @@
 // --force: web skips hash check and re-downloads. Native runs
 //   `flutter clean` first then rebuilds.
 //
-// There are no config flags. Engine config (profile, trim) lives in the
+// There are no config flags. Engine config (keep, build) lives in the
 // app's pubspec under `hooks: user_defines: pdf_manipulator:` — the SAME
 // block the native build hook reads. Web reads it here too, so the command
 // never changes and there is one place to configure both.
@@ -25,10 +25,11 @@ import 'package:package_config/package_config.dart';
 
 import '../hook/build.dart' as build;
 import 'package:pdf_manipulator/src/hook/build_constants.dart';
-import 'package:pdf_manipulator/src/hook/build_profile.dart';
+import 'package:pdf_manipulator/src/hook/keep_plan.dart';
+import 'package:pdf_manipulator/src/hook/pdf_config.dart';
 import 'package:pdf_manipulator/src/hook/resolver.dart';
-import 'package:pdf_manipulator/src/hook/trim_plan.dart';
 import 'package:pdf_manipulator/src/hook/user_defines.dart';
+import 'package:pdf_manipulator/src/keep/capabilities.dart' show PdfConfigError;
 
 const _help = '''
 Usage: flutter pub run pdf_manipulator:setup [--force] [target]
@@ -52,8 +53,9 @@ native, so this command never needs flags:
   hooks:
     user_defines:
       pdf_manipulator:
-        profile: release        # release (default) | small | debug
-        trim: {keep: [render]}  # or `trim: auto` to scan your app's source
+        keep: [render]   # or `keep: auto` to scan your app's source;
+                         # absent = every capability
+        build: speed     # speed (default) | size | debug
 
 Native targets pick this block up automatically during `flutter build`.
 ''';
@@ -113,24 +115,26 @@ Future<void> _setupWeb(bool force) async {
   final version = readVersion(packageRoot);
   final constants = BuildConstants.load(packageRoot);
 
-  // Read the app's `hooks: user_defines: pdf_manipulator:` block — the same
-  // config the native build hook receives. `profile` and `trim` are honored
-  // identically for web and native; the parsers are shared code.
-  final defines = readPdfManipulatorUserDefines(Directory.current.path);
-  final EngineProfile profile;
+  // Read + validate the app's `hooks: user_defines: pdf_manipulator:` block
+  // through the SAME parser the native hook uses — keep/detector/build are
+  // honored identically for web and native. Web reads the pubspec directly,
+  // so it also rejects unknown keys (a typo, a stranded option).
+  final PdfManipulatorConfig cfg;
   try {
-    profile = EngineProfile.parse(defines['profile']);
-  } on ArgumentError catch (e) {
+    cfg = PdfManipulatorConfig.parse(
+      readPdfManipulatorUserDefines(Directory.current.path),
+    );
+  } on PdfConfigError catch (e) {
     stderr.writeln('Error: ${e.message}');
     exit(1);
   }
 
-  // `trim: {keep: [...]}` (explicit) or `trim: auto` (scan this app's
-  // source) — resolveTrimPlan runs the SAME logic the native hook does,
-  // failing closed to the full binary when the source can't be resolved.
-  final plan = await resolveTrimPlan(
-    trimDefine: defines['trim'],
-    detectorDefine: defines['trim-detector'],
+  // `keep: [...]` (explicit) or `keep: auto` (scan this app's source) —
+  // resolveKeepPlan runs the SAME logic the native hook does, failing closed
+  // to the full binary when the source can't be resolved.
+  final plan = await resolveKeepPlan(
+    keep: cfg.keep,
+    detector: cfg.detector,
     defaultFeatures: constants.wasmFeatures,
     appRootCandidate: Directory.current.path,
   );
@@ -138,17 +142,17 @@ Future<void> _setupWeb(bool force) async {
   stdout.writeln('=== Web assets (v$version) ===');
   if (plan.deferToLink) {
     // record-use trims in the native link hook, which web has no equivalent
-    // of — so web stays on the full binary. Explicit trim keeps work on web.
+    // of — so web stays on the full binary. Explicit `keep: [...]` works on web.
     stdout.writeln(
-      'trim-detector record-use is native-only; web keeps the FULL binary. '
-      'Use `trim: {keep: [...]}` to trim the web engine.',
+      'detector record-use is native-only; web keeps the FULL binary. '
+      'Use `keep: [...]` to shrink the web engine.',
     );
   }
-  if (!profile.isDefault) {
-    stdout.writeln('profile: ${profile.wire} (compiles from source)');
+  if (!cfg.build.isDefault) {
+    stdout.writeln('build: ${cfg.build.wire} (compiles from source)');
   }
   if (plan.isCustom) {
-    stdout.writeln('trim: features [${plan.features}]');
+    stdout.writeln('keep: features [${plan.features}]');
   }
   final destDir = Directory('web/pdf_manipulator');
   final count = await build.resolveWeb(
@@ -157,7 +161,7 @@ Future<void> _setupWeb(bool force) async {
     version: version,
     destDir: destDir,
     force: force,
-    profile: profile,
+    engineBuild: cfg.build,
   );
   stdout.writeln(
     count > 0

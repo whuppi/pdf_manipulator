@@ -5,7 +5,7 @@
 // ToLinkHook), and a missing hook fails the build. Debug builds bypass it
 // (assets route ToAppBundle); web assets never pass through here.
 //
-// With `trim: auto` + `trim-detector: record-use`, the build hook ships
+// With `keep: auto` + `detector: record-use`, the build hook ships
 // the FULL engine here and THIS hook trims it: the SDK's `@RecordUse`
 // recordings (which capabilities survived Dart's own tree shake) become a
 // keep-set, the shared engine compiler builds the trimmed library, and it
@@ -22,15 +22,20 @@ import 'package:path/path.dart' as p;
 
 import 'package:pdf_manipulator/src/hook/build_constants.dart';
 import 'package:pdf_manipulator/src/hook/engine_compiler.dart';
-import 'package:pdf_manipulator/src/hook/trim_plan.dart';
-import 'package:pdf_manipulator/src/trim/capabilities.dart';
+import 'package:pdf_manipulator/src/hook/keep_plan.dart';
+import 'package:pdf_manipulator/src/hook/pdf_config.dart';
+import 'package:pdf_manipulator/src/keep/capabilities.dart';
 
 void main(List<String> args) async {
   await link(args, (LinkInput input, LinkOutputBuilder output) async {
-    final detector = TrimDetector.parse(input.userDefines['trim-detector']);
-    final config = TrimConfig.parse(input.userDefines['trim']);
+    final ud = input.userDefines;
+    final cfg = PdfManipulatorConfig.parse({
+      for (final k in PdfManipulatorConfig.knownKeys)
+        if (ud[k] != null) k: ud[k],
+    });
+    final detector = cfg.detector;
     final driving =
-        detector == TrimDetector.recordUse && config.mode == TrimMode.auto;
+        detector == KeepDetector.recordUse && cfg.keep.mode == KeepMode.auto;
 
     for (final asset in input.assets.encodedAssets) {
       if (driving && asset.isCodeAsset) {
@@ -44,7 +49,7 @@ void main(List<String> args) async {
       output.assets.addEncodedAsset(asset);
     }
 
-    if (detector == TrimDetector.compare) {
+    if (detector == KeepDetector.compare) {
       _reportRecordedCapabilities(input);
     }
   });
@@ -57,7 +62,7 @@ Future<CodeAsset> _trimFromRecordings(LinkInput input, CodeAsset full) async {
   final recordings = input.recordedUses;
   if (recordings == null) {
     stderr.writeln(
-      'pdf_manipulator trim-detector record-use: no recorded usages in '
+      'pdf_manipulator detector record-use: no recorded usages in '
       'this build (the SDK record-use experiment is not active) — '
       'shipping the FULL binary (fail closed).',
     );
@@ -66,19 +71,19 @@ Future<CodeAsset> _trimFromRecordings(LinkInput input, CodeAsset full) async {
 
   final constants = BuildConstants.load(input.packageRoot);
   final keep = recordedCapabilities(recordings);
-  final features = TrimConfig.keep(
+  final features = KeepConfig.keep(
     keep,
   ).featuresFor(constants.nativeFeatures, keep);
   if (features == constants.nativeFeatures) {
     stdout.writeln(
-      'pdf_manipulator trim (record-use): every capability is reachable — '
+      'pdf_manipulator keep (record-use): every capability is reachable — '
       'the full binary already is the trimmed binary.',
     );
     return full;
   }
 
   stdout.writeln(
-    'pdf_manipulator trim (record-use, EXPERIMENTAL): recorded keep-set '
+    'pdf_manipulator keep (record-use, EXPERIMENTAL): recorded keep-set '
     '{${(keep.map((c) => c.wire).toList()..sort()).join(', ')}} '
     '→ features [$features] — rebuilding the engine.',
   );
@@ -88,7 +93,7 @@ Future<CodeAsset> _trimFromRecordings(LinkInput input, CodeAsset full) async {
   final fullFile = full.file;
   if (fullFile == null) {
     stderr.writeln(
-      'pdf_manipulator trim (record-use): incoming code asset ${full.id} '
+      'pdf_manipulator keep (record-use): incoming code asset ${full.id} '
       'carries no file — shipping it unchanged.',
     );
     return full;
@@ -127,14 +132,14 @@ Future<CodeAsset> _trimFromRecordings(LinkInput input, CodeAsset full) async {
   );
 }
 
-/// Prints the capability set the compiler recorded via `TrimRecord.op`
+/// Prints the capability set the compiler recorded via `KeepRecord.op`
 /// calls, when the SDK produced recordings. Diagnostics only — lets the
 /// RecordUse lane be diffed against the scan while it matures.
 void _reportRecordedCapabilities(LinkInput input) {
   final recordings = input.recordedUses;
   if (recordings == null) {
     stdout.writeln(
-      'pdf_manipulator trim-detector compare: no recorded usages in this '
+      'pdf_manipulator detector compare: no recorded usages in this '
       'build (the SDK record-use experiment is not active) — nothing to '
       'diff.',
     );
@@ -142,7 +147,7 @@ void _reportRecordedCapabilities(LinkInput input) {
   }
   final capabilities = recordedCapabilities(recordings);
   stdout.writeln(
-    'pdf_manipulator trim-detector compare (EXPERIMENTAL): RecordUse '
+    'pdf_manipulator detector compare (EXPERIMENTAL): RecordUse '
     'observed capabilities '
     '{${(capabilities.map((c) => c.wire).toList()..sort()).join(', ')}}. '
     'Diff this against the scan keep-set the build used.',

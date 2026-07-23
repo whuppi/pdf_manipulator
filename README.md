@@ -95,7 +95,7 @@ flutter pub run pdf_manipulator:setup <target>         # web|android|ios|macos|l
 flutter pub run pdf_manipulator:setup --force <target> # re-resolve (debugging)
 ```
 
-The command never carries config flags. Trim and profile live in your
+The command never carries config flags. `keep` and `build` live in your
 pubspec (see The engine binary) — web reads the same block native does.
 
 </details>
@@ -482,35 +482,34 @@ Trimming compiles a custom engine on your machine. There is nothing to set up in
 hooks:
   user_defines:
     pdf_manipulator:
-      trim: auto              # a source scan decides what to keep
+      keep: auto              # a source scan decides what to keep
 ```
 
 Prefer to say it yourself? The manual form keeps exactly these capabilities (plus the always-included core — parse, write, edit, forms, build):
 
 ```yaml
-      trim:
-        keep: [render, signatures]
+      keep: [render, signatures]
 ```
 
 <details>
-<summary><b>🧩 shrinking or debugging the engine — the <code>profile:</code> knob</b></summary>
+<summary><b>🧩 shrinking or debugging the engine — the <code>build:</code> knob</b></summary>
 
 <br>
 
-Alongside `trim` (which picks _which_ capabilities compile) there's `profile` (which picks _how_ they compile). It lives in the same pubspec block and works the same on web and native:
+Alongside `keep` (which picks _which_ capabilities compile) there's `build` (which picks _how_ they compile). It lives in the same pubspec block and works the same on web and native:
 
 ```yaml
 hooks:
   user_defines:
     pdf_manipulator:
-      profile: release   # release (default) | small | debug
+      build: speed   # speed (default) | size | debug
 ```
 
-- **`release`** — the shipped default. The prebuilt binaries are this; nothing compiles.
-- **`small`** — optimizes for size over speed (a smaller engine, somewhat slower). Compiles from source, like any trim.
+- **`speed`** — the shipped default. The prebuilt binaries are this; nothing compiles.
+- **`size`** — optimizes for size over speed (a smaller engine, somewhat slower). Compiles from source, like any `keep` subset.
 - **`debug`** — keeps debug symbols so a native engine crash points to a file and line. For diagnosing an engine problem, not for shipping. Compiles from source.
 
-Only `release` has prebuilt binaries — `small` and `debug` always compile on your machine (so they need [Rust](https://rustup.rs), exactly like trim). `profile` and `trim` stack: `small` + a tight `keep:` is the smallest possible engine.
+Only `speed` has prebuilt binaries — `size` and `debug` always compile on your machine (so they need [Rust](https://rustup.rs), exactly like a `keep` subset). `build` and `keep` stack: `size` + a tight `keep:` is the smallest possible engine.
 
 </details>
 
@@ -528,24 +527,24 @@ How do you know what to keep? Each capability covers a small set of methods. Cor
 
 Dependencies are handled for you: `keep: [office]` switches on `extract` as well. Costs are measured one capability at a time, and capabilities share some code — so a combination can total a little less than the sum of its rows.
 
-Not sure? Use `trim: auto` — the scan answers this for you. And if you ever guess wrong, the error message names the missing capability.
+Not sure? Use `keep: auto` — the scan answers this for you. And if you ever guess wrong, the error message names the missing capability.
 
 Want to see it live? [`example_trimmed/`](example_trimmed/) runs the full example app under a `keep: [render]` engine — its smoke test asserts that kept capabilities work and excluded ones answer the typed error.
 
 On web, just re-run the setup after configuring pubspec — it reads the same
-`trim:` block:
+`keep:` block:
 
 ```bash
 flutter pub run pdf_manipulator:setup
 ```
 
 <details>
-<summary><b>🧩 how trim works</b></summary>
+<summary><b>🧩 how keep works</b></summary>
 
 - `auto` reads your app's code and keeps every capability it can reach. If any file can't be analyzed, you get the full binary and a warning — it never guesses.
 - The trimmed engine compiles once and is cached — later builds reuse it.
 - Call something you trimmed away and you get a clear error saying what to add to `keep:`. No crashes, no silent misbehavior.
-- A typo in `trim:` fails the build and prints the valid options.
+- A typo in `keep:` fails the build and prints the valid options.
 
 </details>
 

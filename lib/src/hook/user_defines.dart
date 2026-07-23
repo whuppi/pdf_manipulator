@@ -4,8 +4,8 @@
 // The native build hook receives this block already parsed as
 // BuildInput.userDefines. The web setup script is a plain CLI, not a build
 // hook, so it reads the same block itself. That gives web and native ONE
-// config source (the app's pubspec) and ONE set of keys — `profile`,
-// `trim`, `trim-detector` — so the setup/run commands never carry flags.
+// config source (the app's pubspec) and ONE set of keys — `keep`, `build`,
+// `detector` — so the setup/run commands never carry flags.
 
 import 'dart:io';
 
@@ -13,10 +13,10 @@ import 'package:yaml/yaml.dart';
 
 /// Reads `hooks: user_defines: pdf_manipulator:` from [appRoot]'s
 /// pubspec.yaml. Returns an empty map when the file or block is absent — the
-/// defaults (release profile, no trim) then apply. Values are plain Dart
+/// defaults (speed build, keep everything) then apply. Values are plain Dart
 /// (Map/List/scalars), matching exactly what the native hook receives via
-/// `BuildInput.userDefines`, so the downstream parsers (`EngineProfile.parse`,
-/// `resolveTrimPlan`) behave identically for both callers.
+/// `BuildInput.userDefines`, so the downstream parsers (`EngineBuild.parse`,
+/// `resolveKeepPlan`) behave identically for both callers.
 Map<String, Object?> readPdfManipulatorUserDefines(String appRoot) {
   final file = File('$appRoot/pubspec.yaml');
   if (!file.existsSync()) return const {};

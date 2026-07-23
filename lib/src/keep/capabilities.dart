@@ -1,7 +1,7 @@
-// The trim vocabulary: user-facing capabilities → cargo features → the
+// The keep vocabulary: user-facing capabilities → cargo features → the
 // public API members that reach them. One artifact (a keep-set) feeds the
-// whole trim pipeline, whether it came from the detector (`trim: auto`) or
-// the user's keep-list (`trim: {keep: [...]}`).
+// whole keep pipeline, whether it came from the detector (`keep: auto`) or
+// the user's keep-list (`keep: [...]`).
 //
 // Users never see cargo feature names — capabilities are named after the
 // API they call and stay stable across engine bumps. Engine internals
@@ -34,7 +34,7 @@ enum PdfCapability {
 
   const PdfCapability(this.wire, this.cargoFeature, {this.requires = const {}});
 
-  /// The name used in `trim: {keep: [...]}`.
+  /// The name used in `keep: [...]`.
   final String wire;
 
   /// The engine feature this capability maps to (internal).
@@ -99,76 +99,69 @@ enum PdfCapability {
   }
 }
 
-/// The parsed `trim:` user-define. Exactly three legal shapes:
-/// absent/false → [TrimConfig.off]; `auto`/`true` → [TrimConfig.auto];
-/// `{keep: [...]}` → a manual keep-set. Anything else throws
-/// [TrimConfigError] — a config mistake must fail the build loudly,
-/// never silently produce a full binary.
-class TrimConfig {
-  const TrimConfig._(this.mode, this.keep);
+/// The parsed `keep:` user-define. Exactly three legal shapes:
+/// absent → [KeepConfig.all] (keep every capability, the full binary);
+/// `auto`/`true` → [KeepConfig.auto] (detector decides); `[render, ...]` →
+/// a manual keep-set. Anything else throws [PdfConfigError] — a config
+/// mistake must fail the build loudly, never silently produce a full binary.
+class KeepConfig {
+  const KeepConfig._(this.mode, this.keep);
 
   /// Manual keep-set (the full override). Expands [PdfCapability.requires]
   /// transitively, so `keep: [office]` also keeps `extract`.
-  factory TrimConfig.keep(Set<PdfCapability> capabilities) {
-    return TrimConfig._(
-      TrimMode.manual,
+  factory KeepConfig.keep(Set<PdfCapability> capabilities) {
+    return KeepConfig._(
+      KeepMode.manual,
       PdfCapability.expandRequires(capabilities),
     );
   }
 
-  /// No trimming: the full default binary.
-  static const off = TrimConfig._(TrimMode.off, null);
+  /// Keep everything: the full default binary (nothing removed).
+  static const all = KeepConfig._(KeepMode.all, null);
 
   /// Detector-computed keep-set.
-  static const auto = TrimConfig._(TrimMode.auto, null);
+  static const auto = KeepConfig._(KeepMode.auto, null);
 
-  /// Which of the three trim modes this config selects.
-  final TrimMode mode;
+  /// Which of the three keep modes this config selects.
+  final KeepMode mode;
 
-  /// Non-null only for [TrimMode.manual].
+  /// Non-null only for [KeepMode.manual].
   final Set<PdfCapability>? keep;
 
   static const _grammar =
       'Valid forms:\n'
-      '  trim: auto                     # detector decides\n'
-      '  trim:\n'
-      '    keep: [render, signatures]   # exactly these capabilities\n'
+      '  keep: auto                     # detector decides\n'
+      '  keep: [render, signatures]     # exactly these capabilities\n'
       'Capabilities: render, signatures, pdfa, office, extract '
       '(and core, which is always included)';
 
-  /// Parses the raw `trim` user-define value (YAML-decoded).
-  static TrimConfig parse(Object? raw) {
-    if (raw == null || raw == false) return off;
+  /// Parses the raw `keep` user-define value (YAML-decoded).
+  static KeepConfig parse(Object? raw) {
+    if (raw == null) return all;
     if (raw == 'auto' || raw == true) return auto;
-    if (raw is Map) {
-      final keys = raw.keys.map((k) => '$k').toSet();
-      if (keys.length != 1 || !keys.contains('keep')) {
-        throw TrimConfigError(
-          'trim map supports exactly one key: "keep" (got: $keys).\n$_grammar',
-        );
-      }
-      final list = raw['keep'];
-      if (list is! List) {
-        throw TrimConfigError(
-          'trim.keep must be a list of capability names.\n$_grammar',
-        );
-      }
+    if (raw is List) {
       final set_ = <PdfCapability>{};
-      for (final item in list) {
+      for (final item in raw) {
         // 'core' is always included — accepting it lets users state the
         // obvious without an error.
         if (item == 'core') continue;
         final cap = PdfCapability.byWire('$item');
         if (cap == null) {
-          throw TrimConfigError(
-            'unknown capability "$item" in trim.keep.\n$_grammar',
+          throw PdfConfigError(
+            'unknown capability "$item" in keep.\n$_grammar',
           );
         }
         set_.add(cap);
       }
-      return TrimConfig.keep(set_);
+      return KeepConfig.keep(set_);
     }
-    throw TrimConfigError('unrecognized trim value: $raw.\n$_grammar');
+    if (raw is Map) {
+      // The old `keep: {keep: [...]}` / `keep:` nesting — point at the flat form.
+      throw PdfConfigError(
+        'keep takes a list of capabilities directly, not a map.\n$_grammar',
+      );
+    }
+    throw PdfConfigError('unrecognized keep value: $raw.\n$_grammar');
   }
 
   /// The cargo feature list for [keepSet], applied to [defaultFeatures]
@@ -192,10 +185,10 @@ class TrimConfig {
   }
 }
 
-/// Which of the three trim modes a config selects.
-enum TrimMode {
-  /// No trimming — the full default binary.
-  off,
+/// Which of the three keep modes a config selects.
+enum KeepMode {
+  /// Keep everything — the full default binary.
+  all,
 
   /// Detector-computed keep-set.
   auto,
@@ -204,12 +197,12 @@ enum TrimMode {
   manual,
 }
 
-/// Which mechanism computes the keep-set for `trim: auto`.
+/// Which mechanism computes the keep-set for `keep: auto`.
 ///
-/// Selected by the `trim-detector` user-define. [scan] is the stable
-/// default; [recordUse] and [compare] belong to the EXPERIMENTAL RecordUse
-/// lane (see `record_use_shim.dart`).
-enum TrimDetector {
+/// Selected by the `detector` user-define. [scan] is the stable default;
+/// [recordUse] and [compare] belong to the EXPERIMENTAL RecordUse lane
+/// (see `record_use_shim.dart`).
+enum KeepDetector {
   /// Dependency-free text scan over the app source (default, all
   /// platforms).
   scan('scan'),
@@ -224,33 +217,33 @@ enum TrimDetector {
   /// RecordUse-recorded capability set so the two can be diffed.
   compare('compare');
 
-  const TrimDetector(this.wire);
+  const KeepDetector(this.wire);
 
-  /// The name used in the `trim-detector` user-define.
+  /// The name used in the `detector` user-define.
   final String wire;
 
-  /// Parses the raw `trim-detector` user-define value. Absent → [scan];
-  /// anything unrecognized throws [TrimConfigError].
-  static TrimDetector parse(Object? raw) {
+  /// Parses the raw `detector` user-define value. Absent → [scan];
+  /// anything unrecognized throws [PdfConfigError].
+  static KeepDetector parse(Object? raw) {
     if (raw == null) return scan;
-    for (final d in TrimDetector.values) {
+    for (final d in KeepDetector.values) {
       if (d.wire == raw) return d;
     }
-    throw TrimConfigError(
-      'unknown trim-detector "$raw". '
+    throw PdfConfigError(
+      'unknown detector "$raw". '
       'Valid: scan (default), record-use (EXPERIMENTAL), compare.',
     );
   }
 }
 
-/// A malformed `trim:` user-define. Fails the build with the grammar.
-class TrimConfigError extends Error {
+/// A malformed pdf_manipulator config value. Fails the build with the grammar.
+class PdfConfigError extends Error {
   /// Creates the error with [message] (includes the valid grammar).
-  TrimConfigError(this.message);
+  PdfConfigError(this.message);
 
   /// What was wrong plus the valid grammar.
   final String message;
 
   @override
-  String toString() => 'pdf_manipulator trim config error: $message';
+  String toString() => 'pdf_manipulator config error: $message';
 }

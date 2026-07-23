@@ -1,4 +1,4 @@
-// The stable trim detector: a dependency-free text scan over the app's
+// The stable keep detector: a dependency-free text scan over the app's
 // source. Files that can see pdf_manipulator's API — a direct import,
 // or an import of an app file that re-exports it (barrel files, tracked
 // transitively) — are searched for capability member names.
@@ -9,7 +9,7 @@
 // call site always spells the member name in the text, including
 // dynamic calls that resolution-based analysis silently skips, and the
 // re-export tracking covers barrel-mediated usage. Users who want the
-// exact minimum state `trim: {keep: [...]}`.
+// exact minimum state `keep: [...]`.
 //
 // Deliberately NOT built on package:analyzer: a runtime package must
 // never put the analyzer in a consumer's dependency graph (it fights
@@ -20,7 +20,7 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
-import 'package:pdf_manipulator/src/trim/capabilities.dart';
+import 'package:pdf_manipulator/src/keep/capabilities.dart';
 
 /// What a scan concluded. [resolved] false means the scan could not read
 /// part of the app — callers MUST fall back to the full binary and

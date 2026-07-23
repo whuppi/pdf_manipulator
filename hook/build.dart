@@ -89,10 +89,11 @@ import 'package:path/path.dart' as p;
 
 import 'package:pdf_manipulator/src/hook/asset_hashes.dart';
 import 'package:pdf_manipulator/src/hook/build_constants.dart';
-import 'package:pdf_manipulator/src/hook/build_profile.dart';
+import 'package:pdf_manipulator/src/hook/engine_build.dart';
 import 'package:pdf_manipulator/src/hook/engine_compiler.dart';
 import 'package:pdf_manipulator/src/hook/resolver.dart';
-import 'package:pdf_manipulator/src/hook/trim_plan.dart';
+import 'package:pdf_manipulator/src/hook/keep_plan.dart';
+import 'package:pdf_manipulator/src/hook/pdf_config.dart';
 
 final _log = Logger('pdf_manipulator:build');
 
@@ -110,10 +111,19 @@ void main(List<String> args) async {
     if (!input.config.buildCodeAssets) return;
 
     final constants = BuildConstants.load(input.packageRoot);
-    final profile = EngineProfile.parse(input.userDefines['profile']);
-    final plan = await resolveTrimPlan(
-      trimDefine: input.userDefines['trim'],
-      detectorDefine: input.userDefines['trim-detector'],
+    // The build-hook API exposes user-defines by key, not as a key set — so
+    // build the map from the known keys and let the one parser validate it.
+    // (Unknown-key rejection needs the full key set, which only the web path
+    // has; native leans on the value-grammar + axis-mismatch checks.)
+    final ud = input.userDefines;
+    final cfg = PdfManipulatorConfig.parse({
+      for (final k in PdfManipulatorConfig.knownKeys)
+        if (ud[k] != null) k: ud[k],
+    });
+    final engineBuild = cfg.build;
+    final plan = await resolveKeepPlan(
+      keep: cfg.keep,
+      detector: cfg.detector,
       defaultFeatures: constants.nativeFeatures,
       // The hooks API exposes no app root; the working directory is the
       // app when the consumer runs `flutter build` from their project.
@@ -121,7 +131,7 @@ void main(List<String> args) async {
     );
     if (plan.deferToLink && !input.config.linkingEnabled) {
       stderr.writeln(
-        'pdf_manipulator trim-detector record-use: linking is disabled in '
+        'pdf_manipulator detector record-use: linking is disabled in '
         'this build (debug) — shipping the FULL binary. Release builds '
         'trim in the link hook.',
       );
@@ -140,7 +150,7 @@ void main(List<String> args) async {
     await _resolveNative(
       constants: constants,
       plan: plan,
-      profile: profile,
+      engineBuild: engineBuild,
       packageRoot: input.packageRoot,
       version: readVersion(input.packageRoot),
       targetKey: targetKeyFor(codeConfig),
@@ -171,8 +181,8 @@ void main(List<String> args) async {
 // wrong cache. setup --native delegates to `flutter build` instead.
 Future<void> _resolveNative({
   required BuildConstants constants,
-  required TrimPlan plan,
-  required EngineProfile profile,
+  required KeepPlan plan,
+  required EngineBuild engineBuild,
   required Uri packageRoot,
   required String version,
   required String targetKey,
@@ -186,10 +196,10 @@ Future<void> _resolveNative({
   final assetName = '$targetKey-$libFileName';
 
   // Prebuilt release binaries exist ONLY for the default feature set on the
-  // default profile. A trimmed set or a non-release profile (small/debug) has
-  // no prebuilt and no pinned hash: version 0.0.0 routes the resolver straight
-  // to compile, and cargo's own fingerprint is the cache.
-  final custom = plan.isCustom || !profile.isDefault;
+  // default (speed) build. A kept subset or a non-default build (size/debug)
+  // has no prebuilt and no pinned hash: version 0.0.0 routes the resolver
+  // straight to compile, and cargo's own fingerprint is the cache.
+  final custom = plan.isCustom || !engineBuild.isDefault;
   final effectiveVersion = custom ? '0.0.0' : version;
 
   await resolveAsset(
@@ -208,7 +218,7 @@ Future<void> _resolveNative({
         d,
         constants,
         plan,
-        profile,
+        engineBuild,
       ),
     ),
   );
@@ -229,13 +239,13 @@ Future<int> resolveWeb({
   required Directory destDir,
   bool force = false,
   String? wasmFeaturesOverride,
-  EngineProfile profile = EngineProfile.release,
+  EngineBuild engineBuild = EngineBuild.speed,
 }) async {
   final constants = BuildConstants.load(packageRoot);
-  // A trimmed set OR a non-release profile has no prebuilt asset, no pinned
+  // A kept subset OR a non-default build has no prebuilt asset, no pinned
   // hash, and must not reuse a default-set artifact: force + version 0.0.0
   // route the resolver straight to a fresh compile.
-  final custom = wasmFeaturesOverride != null || !profile.isDefault;
+  final custom = wasmFeaturesOverride != null || !engineBuild.isDefault;
   final effectiveVersion = custom ? '0.0.0' : version;
   final effectiveForce = force || custom;
 
@@ -267,7 +277,7 @@ Future<int> resolveWeb({
                 d,
                 localName,
                 wasmFeaturesOverride,
-                profile,
+                engineBuild,
               )
             : (File d) => _copyWebAsset(packageRoot, d, localName),
       ),
@@ -371,8 +381,8 @@ Future<void> _compileNativeFromHook(
   LinkMode linkMode,
   File outFile,
   BuildConstants constants,
-  TrimPlan plan,
-  EngineProfile profile,
+  KeepPlan plan,
+  EngineBuild engineBuild,
 ) async {
   final codeConfig = input.config.code;
   await compileEngineForTarget(
@@ -385,7 +395,7 @@ Future<void> _compileNativeFromHook(
     outFile: outFile,
     environment: {
       ...androidLinkerEnv(codeConfig, targetTriple),
-      ...profile.cargoEnv,
+      ...engineBuild.cargoEnv,
     },
   );
 }
@@ -404,15 +414,15 @@ Future<void> _compileWasm(
   File dest,
   String targetFile,
   String? featuresOverride,
-  EngineProfile profile,
+  EngineBuild engineBuild,
 ) async {
   final webAssets = Directory.fromUri(packageRoot.resolve('web_assets'));
   final existing = File(p.join(webAssets.path, targetFile));
 
-  // web_assets/ holds the DEFAULT build (full features, release profile).
-  // Only that combination may read from / write to it; a trimmed set or a
-  // non-release profile is a per-app artifact that must never land there.
-  final isDefaultBuild = featuresOverride == null && profile.isDefault;
+  // web_assets/ holds the DEFAULT build (full features, speed build).
+  // Only that combination may read from / write to it; a kept subset or a
+  // non-default build is a per-app artifact that must never land there.
+  final isDefaultBuild = featuresOverride == null && engineBuild.isDefault;
 
   // Contributor has locally built WASM — copy directly.
   if (isDefaultBuild && existing.existsSync()) {
@@ -432,7 +442,7 @@ Future<void> _compileWasm(
       packageRoot: packageRoot,
       features: features,
       outDir: outDir,
-      cargoEnv: profile.cargoEnv,
+      cargoEnv: engineBuild.cargoEnv,
     );
 
     final built = File(p.join(outDir.path, targetFile));

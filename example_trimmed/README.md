@@ -15,8 +15,7 @@ One pubspec entry — the switch a real consumer flips:
 hooks:
   user_defines:
     pdf_manipulator:
-      trim:
-        keep: [render]
+      keep: [render]
 ```
 
 `user_defines` bind to the build-root package, so launching from *this*

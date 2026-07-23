@@ -1,6 +1,6 @@
-// Manual smoke: runs the trim detector over example/ and prints the
+// Manual smoke: runs the keep detector over example/ and prints the
 // keep-set. Not part of any gate; kept for quick detector verification.
-import 'package:pdf_manipulator/src/trim/detector.dart';
+import 'package:pdf_manipulator/src/keep/detector.dart';
 
 void main() {
   final r = detectCapabilities('example');
