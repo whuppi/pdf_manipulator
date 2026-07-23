@@ -100,8 +100,8 @@ enum PdfCapability {
 }
 
 /// The parsed `keep:` user-define. Exactly three legal shapes:
-/// absent → [KeepConfig.all] (keep every capability, the full binary);
-/// `auto`/`true` → [KeepConfig.auto] (detector decides); `[render, ...]` →
+/// absent or `all` → [KeepConfig.all] (keep every capability, the full
+/// binary); `auto` → [KeepConfig.auto] (detector decides); `[render, ...]` →
 /// a manual keep-set. Anything else throws [PdfConfigError] — a config
 /// mistake must fail the build loudly, never silently produce a full binary.
 class KeepConfig {
