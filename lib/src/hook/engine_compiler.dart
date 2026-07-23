@@ -206,17 +206,28 @@ void ensureCargoVersion(Uri packageRoot) {
 
   final cmp = _cmpSemver(have, want);
   if (cmp < 0) {
+    // Two clearly-labelled options, each command on its own line so it is
+    // obvious what to copy. rustup is one cross-platform tool — the exact
+    // same commands run on macOS, Linux, and Windows.
     throw StateError(
-      "pdf_manipulator's PDF engine needs Rust >= $required, but yours is "
-      '${token[1]}.\n'
-      'Update it:  rustup update   (or reinstall from https://rustup.rs)',
+      "pdf_manipulator's PDF engine needs Rust $required or newer, but you "
+      'have ${token[1]}.\n'
+      '\n'
+      'Update Rust to the latest, then build again:\n'
+      '    rustup update\n'
+      '\n'
+      'Or install exactly $required:\n'
+      '    rustup toolchain install $required && rustup default $required\n'
+      '\n'
+      '(The same rustup commands work on macOS, Linux, and Windows.)',
     );
   }
   if (cmp > 0) {
     _log.warning(
-      'Rust ${token[1]} is newer than the pinned $required the engine is '
-      'built and tested with. It should work; this note only gives a '
-      'surprising Rust-toolchain change an explanation.',
+      'Rust ${token[1]} is newer than $required, the version this engine is '
+      'built and tested with — it should work. If a Rust change ever breaks '
+      'the build, switch to the tested version and build again:\n'
+      '    rustup toolchain install $required && rustup default $required',
     );
   }
 }
