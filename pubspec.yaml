@@ -37,7 +37,7 @@ dependencies:
 
   # Trim detector (tooling-only: setup + build hook; never in lib barrel,
   # so it adds no bytes to any app)
-  record_use: ^0.6.0
+  record_use: ">=0.6.0 <2.0.0"
 
   # Build hook — path manipulation
   path: ^1.9.0
