@@ -21,6 +21,7 @@
 library;
 
 import 'dart:io';
+import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:logging/logging.dart';
@@ -276,41 +277,111 @@ String readVersion(Uri packageRoot) {
 }
 
 /// Download a file with redirect following. Returns true on success.
+/// Downloads [url] to [dest], retrying transient failures and RESUMING from
+/// the bytes already on disk via an HTTP Range request. This only makes the
+/// download try harder before giving up — the caller's waterfall is
+/// unchanged: a genuine, persistent failure still returns false and falls
+/// through to the source compile. Large assets (the iOS static lib is
+/// ~180 MB) are on the wire long enough to hit a transient blip; a bare
+/// restart-from-zero retry would keep failing at the same point, so each
+/// retry continues where the last one stopped (issue #183 follow-up).
 Future<bool> _download(String url, File dest) async {
+  dest.parent.createSync(recursive: true);
+  // Start clean: any pre-existing file here is a stale/invalid artifact (the
+  // cache check already ran), and resuming a Range request onto a DIFFERENT
+  // file would corrupt it. Resume only against this call's own partial.
+  if (dest.existsSync()) dest.deleteSync();
+
   _log.info('downloading $url');
-  final client = HttpClient();
+  const maxAttempts = 4;
+  for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (attempt > 1) {
+      // Exponential backoff with jitter: ~1s, 2s, 4s (+ up to 1s).
+      final backoff =
+          Duration(seconds: 1 << (attempt - 2)) +
+          Duration(milliseconds: Random().nextInt(1000));
+      _log.info(
+        'download retry $attempt/$maxAttempts in ${backoff.inMilliseconds}ms',
+      );
+      await Future<void>.delayed(backoff);
+    }
+
+    switch (await _downloadAttempt(url, dest)) {
+      case _DownloadOutcome.success:
+        final mb = (dest.lengthSync() / 1024 / 1024).toStringAsFixed(1);
+        _log.info('downloaded ${dest.path} ($mb MB)');
+        return true;
+      case _DownloadOutcome.notFound:
+        // Asset genuinely absent — retrying can't help; fall to compile.
+        return false;
+      case _DownloadOutcome.transient:
+        continue; // retry, resuming from the bytes now on disk
+    }
+  }
+  _log.warning('download failed after $maxAttempts attempts: $url');
+  return false;
+}
+
+enum _DownloadOutcome { success, notFound, transient }
+
+/// One download attempt. Resumes from `dest`'s current length with a Range
+/// request when possible; leaves whatever it managed to write on disk so
+/// the next attempt can continue from there.
+Future<_DownloadOutcome> _downloadAttempt(String url, File dest) async {
+  final existing = dest.existsSync() ? dest.lengthSync() : 0;
+  final client = HttpClient()..connectionTimeout = const Duration(seconds: 30);
   try {
     var uri = Uri.parse(url);
     HttpClientResponse response;
     var redirects = 0;
-    do {
+    while (true) {
       final req = await client.getUrl(uri);
       req.followRedirects = false;
+      // Ask to resume; the redirect target (S3/Azure) honors it. Set on every
+      // hop so it survives the GitHub → storage redirect.
+      if (existing > 0) {
+        req.headers.set(HttpHeaders.rangeHeader, 'bytes=$existing-');
+      }
       response = await req.close();
       if (response.isRedirect && response.headers.value('location') != null) {
         await response.drain<void>();
         uri = Uri.parse(response.headers.value('location')!);
-        redirects++;
+        if (++redirects >= 5) break;
       } else {
         break;
       }
-    } while (redirects < 5);
-
-    if (response.statusCode != 200) {
-      await response.drain<void>();
-      _log.info('download failed (HTTP ${response.statusCode})');
-      return false;
     }
 
-    dest.parent.createSync(recursive: true);
-    final sink = dest.openWrite();
-    await response.pipe(sink);
-    final mb = (dest.lengthSync() / 1024 / 1024).toStringAsFixed(1);
-    _log.info('downloaded ${dest.path} ($mb MB)');
-    return true;
-  } catch (e) {
+    final code = response.statusCode;
+    if (code != 200 && code != 206) {
+      await response.drain<void>();
+      if (code == 404 || code == 410) {
+        _log.info('download unavailable (HTTP $code)');
+        return _DownloadOutcome.notFound;
+      }
+      _log.info('download attempt failed (HTTP $code)');
+      return _DownloadOutcome.transient;
+    }
+
+    // 206 = server honored the Range → append to the partial. 200 = a full
+    // body (first attempt, or the server ignored Range) → start clean.
+    final resume = code == 206 && existing > 0;
+    final sink = dest.openWrite(
+      mode: resume ? FileMode.append : FileMode.write,
+    );
+    try {
+      // Idle timeout: abort if no bytes arrive for 60s (a stalled socket),
+      // so the retry loop can kick in instead of hanging. pipe() closes the
+      // sink; bytes already flushed stay on disk for the next attempt.
+      await response.timeout(const Duration(seconds: 60)).pipe(sink);
+      return _DownloadOutcome.success;
+    } on Exception catch (e) {
+      _log.warning('download interrupted: $e');
+      return _DownloadOutcome.transient;
+    }
+  } on Exception catch (e) {
     _log.warning('download error: $e');
-    return false;
+    return _DownloadOutcome.transient;
   } finally {
     client.close();
   }

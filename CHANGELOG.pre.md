@@ -83,6 +83,7 @@ CONTENT RULES (never change)
 
 ## 3.0.1-dev.0
 
+- Changed the prebuilt-binary download to retry transient failures and resume interrupted transfers over HTTP Range, so a flaky network on a large asset (e.g. the ~180 MB iOS static library) no longer forces a slow from-source compile on a single blip ([PR #185](https://github.com/whuppi/pdf_manipulator/pull/185))
 - Fixed a cryptic `failed to load manifest ... feature edition2024 is required` cargo error when the engine compiles from source (iOS device builds, git dependencies, or any download-miss) on an older Rust toolchain — the build now checks the required Rust version first and stops with a clear message naming the exact version and the `rustup` command to install it ([#183](https://github.com/whuppi/pdf_manipulator/issues/183) reported by [@mrhazelh](https://github.com/mrhazelh), [PR #185](https://github.com/whuppi/pdf_manipulator/pull/185))
 
 ## 3.0.0-dev.1
