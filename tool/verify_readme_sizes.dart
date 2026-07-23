@@ -82,9 +82,7 @@ void main(List<String> args) {
   // ── default wasm, raw + gzipped ──
   final wasm = File(_wasmPath);
   if (!wasm.existsSync()) {
-    skips.add(
-      'wasm sizes ($_wasmPath missing — bash tool/compile_rust.sh wasm)',
-    );
+    skips.add('wasm sizes ($_wasmPath missing — dart tool/compile.dart wasm)');
   } else {
     check('wasm raw', [_mb(wasm.lengthSync())]);
     final gz = gzip.encode(wasm.readAsBytesSync()).length;

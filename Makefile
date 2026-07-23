@@ -172,7 +172,7 @@ build-native:
 	rm -f "$$tmp"
 
 build-wasm:
-	bash tool/compile_rust.sh wasm
+	$(DART) tool/compile.dart wasm
 
 # ═══════════════════════════════════════════════════════════════════
 # § 4 — Compile (release pipeline — one target per CI job)
@@ -187,24 +187,24 @@ build-wasm:
 # make compile-natives   All native targets the host can build.
 
 compile-macos:
-	bash tool/compile_rust.sh macos
+	$(DART) tool/compile.dart macos
 
 compile-ios:
-	bash tool/compile_rust.sh ios
+	$(DART) tool/compile.dart ios
 
 compile-android:
-	bash tool/compile_rust.sh android
+	$(DART) tool/compile.dart android
 
 compile-linux:
-	bash tool/compile_rust.sh linux
+	$(DART) tool/compile.dart linux
 
 compile-windows:
-	bash tool/compile_rust.sh windows
+	$(DART) tool/compile.dart windows
 
 compile-wasm: build-wasm
 
 compile-natives:
-	bash tool/compile_rust.sh native
+	$(DART) tool/compile.dart native
 
 # ═══════════════════════════════════════════════════════════════════
 # § 5 — Test
@@ -272,7 +272,7 @@ test-ops-atomics:
 # (symbols absent, size under ceiling) and excluded ops must answer the
 # typed not-enabled error. SHAKE_AUDIT_WASM=1 adds the wasm size check.
 shake-audit:
-	bash tool/shake_audit.sh
+	DART="$(DART)" bash tool/shake_audit.sh
 	@$(DART) run tool/verify_readme_sizes.dart
 
 # Asserts every size number in README.md matches measured reality (the
@@ -296,7 +296,7 @@ test-rust: export CARGO_PROFILE_TEST_DEBUG := 0
 test-rust:
 	@echo "=== Rust: pdf_oxide ==="
 	$(CARGO) test --manifest-path vendor/pdf_oxide/Cargo.toml \
-	  --features "$$(bash tool/compile_rust.sh --features native),test-support,public-api,cjk-form-fonts,pdfa"
+	  --features "$$($(DART) tool/compile.dart --features native),test-support,public-api,cjk-form-fonts,pdfa"
 	@echo "=== Rust: office_oxide ==="
 	$(CARGO) test --manifest-path vendor/office_oxide/Cargo.toml
 

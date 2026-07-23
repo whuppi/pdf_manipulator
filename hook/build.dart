@@ -400,50 +400,9 @@ Future<void> _compileWasm(
     return;
   }
 
-  try {
-    Process.runSync('cargo', ['--version']);
-  } on ProcessException {
-    throw StateError(
-      'This build needs to compile the PDF engine WASM from source, but '
-      'Rust is not installed.\n'
-      'Install it from https://rustup.rs (macOS, Linux, and Windows), '
-      'then rerun setup.',
-    );
-  }
-  ensureRustTarget('wasm32-unknown-unknown');
-
-  final manifest = p.fromUri(
-    packageRoot.resolve('vendor/pdf_oxide/Cargo.toml'),
-  );
   final features =
       featuresOverride ?? BuildConstants.load(packageRoot).wasmFeatures;
 
-  final env = <String, String>{...Platform.environment};
-  stripXcodeFromPath(env);
-
-  _log.info('compiling WASM from source (features: $features)');
-  final build = await Process.run('cargo', [
-    'build',
-    '--manifest-path',
-    manifest,
-    '--lib',
-    '--release',
-    '--target',
-    'wasm32-unknown-unknown',
-    '--no-default-features',
-    '--features',
-    features,
-  ], environment: env);
-  if (build.exitCode != 0) {
-    throw StateError(
-      'WASM engine compile failed (exit ${build.exitCode}).\n'
-      'stderr: ${build.stderr}',
-    );
-  }
-
-  // First run also compiles the runner itself (binaryen builds from
-  // source — takes a few minutes once; cargo caches it after).
-  //
   // A trimmed build writes to a temp dir, NEVER into the package's
   // web_assets/ — those hold the default build, and a trimmed artifact
   // landing there would be served to every other consumer of this
@@ -452,30 +411,11 @@ Future<void> _compileWasm(
       ? webAssets
       : Directory.systemTemp.createTempSync('pdf_manipulator_trim_wasm_');
   try {
-    final rawWasm = p.fromUri(
-      packageRoot.resolve(
-        'vendor/pdf_oxide/target/wasm32-unknown-unknown/release/'
-        'pdf_oxide.wasm',
-      ),
+    await compileWasmEngine(
+      packageRoot: packageRoot,
+      features: features,
+      outDir: outDir,
     );
-    final bindgen = await Process.run('cargo', [
-      'run',
-      '--manifest-path',
-      manifest,
-      '--release',
-      '-p',
-      'bindgen_runner',
-      '--',
-      rawWasm,
-      outDir.path,
-    ], environment: env);
-    if (bindgen.exitCode != 0) {
-      throw StateError(
-        'WASM post-processing (wasm-bindgen + wasm-opt) failed '
-        '(exit ${bindgen.exitCode}).\n'
-        'stderr: ${bindgen.stderr}',
-      );
-    }
 
     final built = File(p.join(outDir.path, targetFile));
     if (!built.existsSync()) {

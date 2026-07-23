@@ -12,8 +12,15 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VENDOR="$ROOT/vendor/pdf_oxide"
+# shellcheck source=tool/build_lib.sh
+source "$ROOT/tool/build_lib.sh"
+# The audit's own baseline: engine internals with every droppable capability
+# dropped (= the trim system's output for keep={}). Not a build.json concept.
 CORE_FEATURES="icc,legacy-crypto,native-bridge"
-FULL_FEATURES="icc,legacy-crypto,rendering,signatures,native-bridge,pdfa,office,extract"
+# The shipped full native set — the audit compares core against THIS and feeds
+# the README size numbers, so it must be build.json's actual features, never a
+# hand-copied duplicate that silently goes stale.
+FULL_FEATURES=$(json_get '.features.native' "$ROOT/build.json")
 # Ceiling with headroom over the measured core-only size; a breach means a
 # heavy module leaked back into the core build.
 CORE_CEILING_BYTES=$((8 * 1024 * 1024))
@@ -93,11 +100,12 @@ echo "== [4/4] runtime probe: excluded op answers typed error =="
 
 if [ "${SHAKE_AUDIT_WASM:-0}" = "1" ]; then
   echo "== [wasm] core-only wasm build + size check =="
-  # compile_rust.sh always writes web_assets/ — preserve the default artifact.
+  # the wasm build always writes web_assets/ — preserve the default artifact.
   DEFAULT_RAW=$(fsize "$ROOT/web_assets/pdf_oxide_bg.wasm")
   BAK=$(mktemp -d)
   cp "$ROOT/web_assets/pdf_oxide_bg.wasm" "$ROOT/web_assets/pdf_oxide.js" "$BAK/"
-  PDF_FEATURES_WASM="wasm" bash "$ROOT/tool/compile_rust.sh" wasm
+  : "${DART:?shake_audit: DART must be set by the caller (the Makefile passes it)}"
+  ( cd "$ROOT" && PDF_FEATURES_WASM="wasm" $DART tool/compile.dart wasm )
   WASM_CORE_RAW=$(fsize "$ROOT/web_assets/pdf_oxide_bg.wasm")
   WASM_CORE_GZ=$(gzip -c "$ROOT/web_assets/pdf_oxide_bg.wasm" | wc -c | tr -d ' ')
   cp "$BAK/pdf_oxide_bg.wasm" "$BAK/pdf_oxide.js" "$ROOT/web_assets/"
@@ -117,17 +125,16 @@ fi
 # core+extract because the office feature requires extract.
 if [ "${SHAKE_AUDIT_CAPS:-0}" = "1" ]; then
   echo "== [caps] per-capability native costs =="
-  CORE="icc,legacy-crypto,native-bridge"
   measure() {
     (cd "$VENDOR" && cargo build --release --features "$1" -q)
     fsize "$(dylib_for)"
   }
-  RENDER=$(( $(measure "$CORE,rendering") - CORE_SIZE ))
-  SIGS=$(( $(measure "$CORE,signatures") - CORE_SIZE ))
-  PDFA=$(( $(measure "$CORE,pdfa") - CORE_SIZE ))
-  EXTRACT_TOTAL=$(measure "$CORE,extract")
+  RENDER=$(( $(measure "$CORE_FEATURES,rendering") - CORE_SIZE ))
+  SIGS=$(( $(measure "$CORE_FEATURES,signatures") - CORE_SIZE ))
+  PDFA=$(( $(measure "$CORE_FEATURES,pdfa") - CORE_SIZE ))
+  EXTRACT_TOTAL=$(measure "$CORE_FEATURES,extract")
   EXTRACT=$(( EXTRACT_TOTAL - CORE_SIZE ))
-  OFFICE=$(( $(measure "$CORE,extract,office") - EXTRACT_TOTAL ))
+  OFFICE=$(( $(measure "$CORE_FEATURES,extract,office") - EXTRACT_TOTAL ))
   echo "render=+$RENDER signatures=+$SIGS pdfa=+$PDFA extract=+$EXTRACT office=+$OFFICE"
   python3 - "$ROOT/tool/.shake_sizes.json" <<PYEOF
 import json, sys

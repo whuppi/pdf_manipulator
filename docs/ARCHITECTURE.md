@@ -215,7 +215,7 @@ tool/                                       ← .sh = orchestration wrappers; .d
 ├── versions.env                            ← single source of truth for pinned versions
 ├── analyze.sh                              ← format + Dart + Rust static analysis
 ├── check_alignment.sh                      ← 16 KB ELF alignment check for Android APK
-├── compile_rust.sh                         ← Rust → native / wasm / per-target / both
+├── compile.dart                            ← Rust → native / wasm / per-target / both (shares the hook's compile core)
 ├── fetch_verified.sh                       ← the one door for hash-verified binary downloads (dormant — no pinned downloads today)
 ├── generate_fixtures.dart                  ← test fixture generator (make fixtures; stamp-protected)
 ├── run_web_test.sh                         ← flutter drive web integration test
@@ -612,20 +612,30 @@ user-facing text (README, pubspec).
 1. **Makefile is the interface.** CI runs `make <target>`. All build
    logic lives in Makefile and scripts. CI YAML has zero build logic.
 
-2. **Scripts handle their own deps.** Rust targets and cross-compilers
-   are auto-installed by the script that needs them. `$CI` env var:
-   auto-install on CI, error with instructions on dev. `rustup target
-   add` is always safe (user-space). System packages auto-install only
-   on CI. wasm-bindgen + wasm-opt need no installing at all — they run
-   as library calls inside the workspace's `bindgen_runner` crate,
-   version-locked by the engine's own Cargo.lock.
+2. **One compile driver, shared by consumer and CI.** `tool/compile.dart`
+   loops the release target matrix; the consumer build hook
+   (`hook/build.dart`) compiles the single target Flutter asks for. Both
+   call the SAME core — `compileEngineForTarget` / `compileWasmEngine` in
+   `lib/src/hook/engine_compiler.dart` — so the two can't drift. Deps are
+   auto-handled there: Rust targets install via `ensureRustTarget`
+   (rustc-probe first, rustup fallback); the aarch64 Linux cross-linker
+   and the Android NDK auto-install / resolve on CI, error with
+   instructions on dev. wasm-bindgen + wasm-opt need no install at all —
+   they run as library calls inside the `bindgen_runner` crate,
+   version-locked by the engine's own Cargo.lock. The required Rust
+   version is `RUST_VERSION` in `tool/versions.env` — the one pin CI
+   installs AND the build hook's `ensureCargoVersion` gate enforces, so a
+   too-old cargo fails with a clear message instead of cargo's cryptic
+   edition error (issue #183).
 
-3. **jq is the JSON tool for bash; Dart is never invoked from bash.**
-   Bash reads `build.json` (and any JSON) through `build_lib.sh`'s jq-backed
-   accessor (`json_get`), never hand-rolled `sed`/`grep` field extraction;
-   `ensure_jq` guarantees jq is present. The native build hook
-   (`hook/build.dart`) reads `build.json` in Dart. Bash never shells out to
-   dart or python.
+3. **jq is the JSON tool for the remaining bash scripts.** Analysis /
+   gate scripts that need a `build.json` value read it through
+   `build_lib.sh`'s jq-backed accessor (`json_get`), never hand-rolled
+   `sed`/`grep`; `ensure_jq` guarantees jq is present. Compilation is the
+   exception that moved to Dart: `tool/compile.dart` (and the build hook)
+   read `build.json` via `BuildConstants`, and the Makefile invokes the
+   Dart driver for every compile target. So the one former parallel-bash
+   cargo wrapper is now the same code as the consumer path.
 
 4. **The capability model and the single `make-target` orchestrator are
    the shared model.** See whuppi/ci/docs/ARCHITECTURE.md "make-target —
@@ -715,14 +725,18 @@ who reads it:
 - **`build.json`** — facts about the **subject** being built: the vendored
   `pdf_oxide` crate (`crate`, `repo`, its `baseTag`), the cargo `features` per
   target, the wasm outputs. Hand-set; changes only when the vendored submodule
-  moves. Read by `hook/build.dart` (`jsonDecode`) and by `compile_rust.sh` /
-  `release.sh` / `analyze.sh` via the `json_get` helper in `tool/build_lib.sh`.
-- **`tool/versions.env`** — pinned versions of the external **instruments**
-  that gate the build: today just the `pana` pin (the platform gate). Shell
-  `KEY="value"`, sourced by the scripts that use them. Every entry is
-  auto-bumped by `tool/ci/upgrade.sh` — the file is bot-owned, no manual
-  exceptions. The shared tool pins (`fvm`, Chrome, the gate binaries) live in
-  whuppi/ci's own `versions.env`, not here.
+  moves. Read by `hook/build.dart` + `tool/compile.dart` (`jsonDecode` /
+  `BuildConstants`) and by `release.sh` / `analyze.sh` via the `json_get`
+  helper in `tool/build_lib.sh`.
+- **`tool/versions.env`** — the single source of truth for every version this
+  package pins: `RUST_VERSION` (the engine's Rust toolchain — CI installs it,
+  the build hook's gate enforces it) and `PANA_VERSION` (the platform gate).
+  Shell `KEY="value"`, sourced by the scripts + parsed by the Dart hook. Most
+  entries are auto-bumped by `tool/ci/upgrade.sh` (`PANA_VERSION`); `RUST_VERSION`
+  is hand-bumped only — it is the engine's MSRV and rises when the vendored
+  crates actually need a newer toolchain, never automatically. The shared tool
+  pins (`fvm`, Chrome, the gate binaries) live in whuppi/ci's own `versions.env`,
+  not here.
 
 The rule: a fact about *what* is built (the crate, its base version, its
 features) belongs in `build.json`; a pinned version of an *external tool* that
@@ -734,11 +748,11 @@ tool pins.
 
 | Dep | Owner | CI behavior | Dev behavior |
 |---|---|---|---|
-| Rust targets | `compile_rust.sh`, `hook/build.dart` | Auto-install (safe) | Auto-install (safe) |
+| Rust targets | `tool/compile.dart`, `hook/build.dart` | Auto-install (safe) | Auto-install (safe) |
 | wasm-bindgen + wasm-opt | `bindgen_runner` (vendor workspace crate) | Built by cargo, Cargo.lock-pinned | Same |
-| gcc-aarch64 cross | `compile_rust.sh` | Auto-install | Error with instructions |
+| gcc-aarch64 cross | `tool/compile.dart` | Auto-install | Error with instructions |
 | GTK + ninja | Makefile | Auto-install | Error with instructions |
-| build.json reads | `compile_rust.sh`, `release.sh` | jq via `json_get` | Same |
+| build.json reads | `tool/compile.dart` (Dart), `release.sh` (jq) | build.json | Same |
 
 ---
 
