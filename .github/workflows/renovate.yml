@@ -1,19 +1,12 @@
-# Consumer wrapper — calls the shared reusable Renovate runner, the same shape
-# as this repo's upgrade-check.yml wrapper. Renovate scans THIS repo, reads
-# renovate.json5, and opens bump PRs (composites included — the dependabot#6704
-# gap). Dispatch-only + dry-run while proving; enable the schedule and pin
-# @vX.Y.Z once the first dry-run looks right.
+# Consumer wrapper — calls the shared reusable Renovate runner on this repo, the
+# same shape as upgrade-check.yml. Renovate reads renovate.json5, scans workflows
+# AND composite action.yml (the dependabot-core#6704 gap), and opens bump PRs.
 name: Renovate
 
 on:
-  workflow_dispatch:
-    inputs:
-      dryRun:
-        description: "Detect only, open no PRs."
-        type: boolean
-        default: true
-  # schedule:
-  #   - cron: '0 6 * * *'   # enable after the first dry-run proves out
+  schedule:
+    - cron: '0 6 * * *'   # daily
+  workflow_dispatch: {}    # manual trigger
 
 permissions: {}
 
@@ -27,8 +20,9 @@ jobs:
       contents: write        # push bump branches
       pull-requests: write   # open bump PRs
       issues: write          # dependency dashboard
-    uses: whuppi/ci/.github/workflows/renovate.yml@main   # pin @vX.Y.Z at go-live
+    # @main until the whuppi/ci refs land on v2.2.0; then pin @vX.Y.Z.
+    uses: whuppi/ci/.github/workflows/renovate.yml@main
     with:
-      dryRun: ${{ inputs.dryRun }}
+      dryRun: false
     secrets:
       RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
