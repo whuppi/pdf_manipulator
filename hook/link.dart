@@ -21,6 +21,7 @@ import 'package:hooks/hooks.dart';
 import 'package:path/path.dart' as p;
 
 import 'package:pdf_manipulator/src/hook/build_constants.dart';
+import 'package:pdf_manipulator/src/hook/engine_build.dart';
 import 'package:pdf_manipulator/src/hook/engine_compiler.dart';
 import 'package:pdf_manipulator/src/hook/keep_plan.dart';
 import 'package:pdf_manipulator/src/hook/pdf_config.dart';
@@ -42,6 +43,7 @@ void main(List<String> args) async {
         final trimmed = await _trimFromRecordings(
           input,
           CodeAsset.fromEncoded(asset),
+          cfg.build,
         );
         output.assets.code.add(trimmed);
         continue;
@@ -58,7 +60,15 @@ void main(List<String> args) async {
 /// Rebuilds [full]'s library with only the capabilities the compiler
 /// recorded as reachable, or returns [full] unchanged when there is
 /// nothing to prove (no recordings) or nothing to drop.
-Future<CodeAsset> _trimFromRecordings(LinkInput input, CodeAsset full) async {
+///
+/// [build] is the consumer's `build:` profile: the trimmed rebuild must
+/// match the build class the initial compile used, or a `size`/`debug`
+/// consumer on this lane would silently get a `speed` engine back.
+Future<CodeAsset> _trimFromRecordings(
+  LinkInput input,
+  CodeAsset full,
+  EngineBuild build,
+) async {
   final recordings = input.recordedUses;
   if (recordings == null) {
     stderr.writeln(
@@ -118,7 +128,13 @@ Future<CodeAsset> _trimFromRecordings(LinkInput input, CodeAsset full) async {
     ),
     libFileName: libFileName,
     outFile: outFile,
-    environment: androidLinkerEnv(codeConfig, targetTriple),
+    // Mirror the initial compile (build.dart): the build profile's cargo env
+    // MUST ride along, or the trimmed rebuild reverts a size/debug consumer to
+    // the default speed profile.
+    environment: {
+      ...androidLinkerEnv(codeConfig, targetTriple),
+      ...build.cargoEnv,
+    },
   );
 
   // CodeAsset.id is 'package:<package>/<name>' — rebuild both parts so the
