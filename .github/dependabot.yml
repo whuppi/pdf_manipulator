@@ -39,27 +39,10 @@ updates:
     open-pull-requests-limit: 5
     cooldown:
       default-days: 7
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    target-branch: "dev"
-    commit-message:
-      prefix: "ci"
-    labels:
-      - "ci"
-    groups:
-      # whuppi/ci shared-CI refs bump together in one PR, ahead of the
-      # third-party catch-all so a ci release lands as its own reviewable
-      # change tested by this repo's own CI. Order matters — a dependency
-      # joins the first group it matches.
-      whuppi-ci:
-        patterns:
-          - "whuppi/ci*"
-      actions:
-        patterns:
-          - "*"
-    open-pull-requests-limit: 5
-    cooldown:
-      default-days: 7
+  # No github-actions ecosystem here on purpose. EVERY action `uses:` ref —
+  # whuppi/ci and third-party, workflows AND composite action.yml — is owned by
+  # the single `action-refs` sweep in whuppi/ci's upgrade-check.yml (opt-in via
+  # sweepActions). Dependabot can't read composite action.yml (dependabot-core#6704)
+  # and splitting action updates workflow-vs-composite splits the pin, which
+  # pin-availability rejects — so one owner takes all of it, and Dependabot here
+  # owns only pub.
