@@ -1,0 +1,34 @@
+# Consumer wrapper — calls the shared reusable Renovate runner, the same shape
+# as this repo's upgrade-check.yml wrapper. Renovate scans THIS repo, reads
+# renovate.json5, and opens bump PRs (composites included — the dependabot#6704
+# gap). Dispatch-only + dry-run while proving; enable the schedule and pin
+# @vX.Y.Z once the first dry-run looks right.
+name: Renovate
+
+on:
+  workflow_dispatch:
+    inputs:
+      dryRun:
+        description: "Detect only, open no PRs."
+        type: boolean
+        default: true
+  # schedule:
+  #   - cron: '0 6 * * *'   # enable after the first dry-run proves out
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  renovate:
+    permissions:
+      contents: write        # push bump branches
+      pull-requests: write   # open bump PRs
+      issues: write          # dependency dashboard
+    uses: whuppi/ci/.github/workflows/renovate.yml@main   # pin @vX.Y.Z at go-live
+    with:
+      dryRun: ${{ inputs.dryRun }}
+    secrets:
+      RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN }}

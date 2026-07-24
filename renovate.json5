@@ -1,0 +1,53 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: ["config:recommended", ":semanticCommitsDisabled"],
+  // pdf ships its updates to dev, same as the old dependabot target-branch.
+  baseBranches: ["dev"],
+  // Match the old 7-day dependabot cooldown for third-party updates.
+  minimumReleaseAge: "7 days",
+  internalChecksFilter: "strict",
+  prCreation: "not-pending",
+  // Pin actions to SHA + keep the `# vX.Y.Z` comment. Scans composites too,
+  // so this is what closes the #6704 gap (actions/cache in rust/wasm-cache,
+  // whuppi/ci refs in make-target) that dependabot never saw.
+  pinDigests: true,
+  labels: ["ci"],
+  commitMessagePrefix: "ci:",
+  branchPrefix: "renovate/",
+  packageRules: [
+    {
+      description: "All GitHub Actions grouped, weekly (Mondays).",
+      matchManagers: ["github-actions"],
+      groupName: "actions",
+      schedule: ["* * * * 1"],
+    },
+    {
+      description: "Dart/Flutter deps grouped, weekly.",
+      matchManagers: ["pub"],
+      groupName: "deps",
+      schedule: ["* * * * 1"],
+    },
+    {
+      // Evaluated last so it WINS for whuppi/ci refs: own group, no cooldown,
+      // any time (first-party, tested by this repo's own CI before merge).
+      description: "whuppi/ci refs land as one reviewable PR, no cooldown.",
+      matchDepNames: ["whuppi/ci", "whuppi/ci/**"],
+      groupName: "whuppi-ci",
+      minimumReleaseAge: "0 days",
+      schedule: ["at any time"],
+    },
+  ],
+  // Keep pubspec.lock fresh (replaces the lockfiles sweep).
+  lockFileMaintenance: { enabled: true, schedule: ["* * * * 1"] },
+  customManagers: [
+    {
+      // Flutter SDK pin in .fvmrc (replaces the flutter-sdk sweep).
+      customType: "regex",
+      managerFilePatterns: ["/(^|/)\\.fvmrc$/"],
+      matchStrings: ["\"flutter\"\\s*:\\s*\"(?<currentValue>[^\"]+)\""],
+      depNameTemplate: "flutter",
+      datasourceTemplate: "flutter-version",
+      versioningTemplate: "semver",
+    },
+  ],
+}
