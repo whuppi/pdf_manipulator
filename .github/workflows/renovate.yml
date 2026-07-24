@@ -1,0 +1,45 @@
+# Self-hosted Renovate — replaces Dependabot + the upgrade-check sweeps.
+#
+# Renovate scans workflow files AND composite action.yml (Dependabot is blind
+# to composites — dependabot-core#6704), so it keeps every whuppi/ci ref uniform
+# and bumps third-party actions hidden in composites (e.g. actions/cache in
+# rust/wasm-cache). Update rules live in renovate.json5.
+#
+# TOKEN: needs a fine-grained PAT `RENOVATE_TOKEN` with Contents + Workflows +
+# Pull-requests: write. GITHUB_TOKEN cannot write .github/workflows/ files —
+# the same reason RELEASE_TOKEN exists for release stamping.
+#
+# Dispatch-only + dry-run by default while proving. After the first dry-run run
+# looks right: uncomment the schedule and dispatch once with dryRun="" to go live.
+name: Renovate
+on:
+  workflow_dispatch:
+    inputs:
+      dryRun:
+        description: "full = detect only, no PRs. live = opens PRs."
+        type: choice
+        options: ["full", "extract", "live"]
+        default: "full"
+      logLevel:
+        description: "Renovate log level."
+        type: choice
+        options: ["debug", "info"]
+        default: "debug"
+  # schedule:
+  #   - cron: "0 6 * * *"   # enable after the first dry-run proves the config
+permissions:
+  contents: read
+jobs:
+  renovate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: renovatebot/github-action@3064367f740a1a91cca218698a63902689cce200 # v46.1.20
+        with:
+          token: ${{ secrets.RENOVATE_TOKEN }}
+          renovate-version: 43.279.0
+        env:
+          RENOVATE_REPOSITORIES: ${{ github.repository }}
+          RENOVATE_AUTODISCOVER: "false"
+          RENOVATE_DRY_RUN: ${{ github.event.inputs.dryRun == 'live' && '' || github.event.inputs.dryRun }}
+          LOG_LEVEL: ${{ github.event.inputs.logLevel }}
