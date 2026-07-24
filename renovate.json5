@@ -26,6 +26,9 @@
   labels: ["ci"],
   commitMessagePrefix: "ci:",
   branchPrefix: "renovate/",
+  // pdf's update volume is low and grouping + cooldown already bound the PR
+  // count, so no hourly throttle — let the go-live backlog open at once.
+  prHourlyLimit: 0,
   packageRules: [
     {
       description: "All GitHub Actions grouped (SHA-pinned via pinDigests).",
