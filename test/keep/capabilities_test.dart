@@ -52,7 +52,8 @@ void main() {
 
     test('unknown capability fails loudly with the grammar', () {
       expect(
-        () => KeepConfig.parse(['rendering']), // cargo feature, not a capability
+        () =>
+            KeepConfig.parse(['rendering']), // cargo feature, not a capability
         throwsA(
           isA<PdfConfigError>().having(
             (e) => e.message,
@@ -65,9 +66,7 @@ void main() {
 
     test('a map value fails loudly (keep is a list, not a map)', () {
       expect(
-        () => KeepConfig.parse({
-          'render': true,
-        }),
+        () => KeepConfig.parse({'render': true}),
         throwsA(
           isA<PdfConfigError>().having(
             (e) => e.message,

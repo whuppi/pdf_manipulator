@@ -17,7 +17,9 @@ import 'package:pdf_manipulator/src/hook/engine_compiler.dart';
 
 Future<void> main(List<String> args) async {
   if (args.isEmpty) {
-    stderr.writeln('usage: dart run tool/measure_wasm.dart <features> [optLevel]');
+    stderr.writeln(
+      'usage: dart run tool/measure_wasm.dart <features> [optLevel]',
+    );
     exit(2);
   }
   Logger.root.onRecord.listen((r) => stderr.writeln(r.message));

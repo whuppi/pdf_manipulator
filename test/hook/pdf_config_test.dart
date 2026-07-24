@@ -51,21 +51,24 @@ void main() {
         );
       });
 
-      test('detector with an explicit keep list is rejected (axis mismatch)', () {
-        expect(
-          () => PdfManipulatorConfig.parse(const {
-            'keep': ['render'],
-            'detector': 'scan',
-          }),
-          throwsA(
-            isA<PdfConfigError>().having(
-              (e) => e.message,
-              'message',
-              contains('detector: only applies to `keep: auto`'),
+      test(
+        'detector with an explicit keep list is rejected (axis mismatch)',
+        () {
+          expect(
+            () => PdfManipulatorConfig.parse(const {
+              'keep': ['render'],
+              'detector': 'scan',
+            }),
+            throwsA(
+              isA<PdfConfigError>().having(
+                (e) => e.message,
+                'message',
+                contains('detector: only applies to `keep: auto`'),
+              ),
             ),
-          ),
-        );
-      });
+          );
+        },
+      );
 
       test('detector with keep absent (= all) is rejected', () {
         expect(
