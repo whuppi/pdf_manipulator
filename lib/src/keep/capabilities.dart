@@ -140,6 +140,16 @@ class KeepConfig {
   static KeepConfig parse(Object? raw) {
     if (raw == null || raw == 'all') return all;
     if (raw == 'auto') return auto;
+    // keep is not a boolean. A 3.x config carrying `keep: false` (or `no`,
+    // which YAML decodes to false) predates this key — point it at the fix
+    // rather than the generic error below.
+    if (raw is bool) {
+      throw PdfConfigError(
+        'keep: $raw is not valid — keep is not a boolean. '
+        'To keep everything, remove the keep key (or use `keep: all`); '
+        'to keep only some, list them.\n$_grammar',
+      );
+    }
     if (raw is List) {
       final set_ = <PdfCapability>{};
       for (final item in raw) {

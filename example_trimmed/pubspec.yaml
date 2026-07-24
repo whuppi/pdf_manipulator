@@ -1,7 +1,7 @@
 name: pdf_manipulator_example_trimmed
 description: >-
-  The example app under a TRIMMED engine — a configuration shell, not a
-  second app. This pubspec IS the entire difference: the trim user_define
+  The example app under a pared-down engine — a configuration shell, not a
+  second app. This pubspec IS the entire difference: the keep user_define
   below makes the build hook compile the engine with only the render
   capability (plus core, which is always included). App code comes from
   example/, so the two flavors cannot drift apart. Capabilities outside
