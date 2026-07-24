@@ -25,8 +25,17 @@ defaults:
     shell: bash
 
 jobs:
-  # This repo's OWN gate tools (pana) — Flutter SDK + lockfiles are Renovate's
-  # job now. sha256s recomputed from upstream assets, kept in its own PR so a
+  # Flutter SDK (.fvmrc + example/.fvmrc) + lockfiles, each its own PR.
+  shared:
+    permissions:
+      contents: write       # pushes the chore/flutter-sdk + chore/lockfiles branches
+      pull-requests: write  # opens / edits the upgrade PRs
+    uses: whuppi/ci/.github/workflows/upgrade-check.yml@v2.0.4
+    with:
+      branch: dev
+
+  # Security-sensitive: this repo's OWN gate tools
+  # (pana), sha256s recomputed from upstream assets. Kept in its own PR so a
   # reviewer sees every hash change undiluted.
   pins:
     name: Pinned versions

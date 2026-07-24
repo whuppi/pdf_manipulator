@@ -1,0 +1,65 @@
+# Version updates only. Security fixes come from this repo's Dependabot alerts +
+# automated-security-fixes (enabled in settings), not from this file.
+version: 2
+updates:
+  # pub — the root package and the example app. Grouped so a batch of bumps is
+  # a single review PR; prefixed so the title passes the conventional-commit
+  # lint (an unprefixed "Bump foo" title fails it).
+  - package-ecosystem: "pub"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    target-branch: "dev"
+    commit-message:
+      prefix: "chore"
+    labels:
+      - "dependencies"
+    groups:
+      deps:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+  - package-ecosystem: "pub"
+    directory: "/example"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    target-branch: "dev"
+    commit-message:
+      prefix: "chore"
+    labels:
+      - "dependencies"
+    groups:
+      deps:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    target-branch: "dev"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "ci"
+    groups:
+      # whuppi/ci shared-CI refs bump together in one PR, ahead of the
+      # third-party catch-all so a ci release lands as its own reviewable
+      # change tested by this repo's own CI. Order matters — a dependency
+      # joins the first group it matches.
+      whuppi-ci:
+        patterns:
+          - "whuppi/ci*"
+      actions:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
