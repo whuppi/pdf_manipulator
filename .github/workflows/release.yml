@@ -79,7 +79,7 @@ jobs:
       should_run: ${{ steps.check.outputs.should_run }}
       version: ${{ steps.check.outputs.version }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           ref: ${{ inputs.branch || github.ref_name }}
@@ -88,14 +88,14 @@ jobs:
       # release a lane whose changelog adds more than one new version.
       # Checks the lane being released (the pushed branch).
       - name: Version sanity
-        uses: whuppi/ci/actions/release-tool@v2.0.4
+        uses: whuppi/ci/actions/release-tool@v2.4.0
         env:
           BRANCH: ${{ inputs.branch || github.ref_name }}
         with:
           mode: --check-versions
       - name: Check changelog relevance
         id: check
-        uses: whuppi/ci/actions/release-tool@v2.0.4
+        uses: whuppi/ci/actions/release-tool@v2.4.0
         env:
           BRANCH: ${{ inputs.branch || github.ref_name }}
           BEFORE: ${{ github.event.before }}
@@ -120,7 +120,7 @@ jobs:
       version: ${{ steps.find.outputs.version }}
       has_release: ${{ steps.find.outputs.has_release }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           ref: ${{ inputs.branch || github.ref_name }}
@@ -128,7 +128,7 @@ jobs:
           persist-credentials: false
       - name: Find + create release
         id: find
-        uses: whuppi/ci/actions/release-tool@v2.0.4
+        uses: whuppi/ci/actions/release-tool@v2.4.0
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BRANCH: ${{ inputs.branch || github.ref_name }}
@@ -155,7 +155,7 @@ jobs:
     permissions:
       contents: read  # checkout + build; artifacts use run storage, no API
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.discover.outputs.tag }}
           submodules: recursive
@@ -238,27 +238,27 @@ jobs:
         # gh ships on the runner; the release already exists (discover
         # created it), so just upload the binaries, clobbering on rerun.
         run: gh release upload "$TAG" release/* --clobber
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: '${{ needs.discover.outputs.tag }}'
           fetch-depth: 0
           persist-credentials: false
       - name: Add git install snippet
-        uses: whuppi/ci/actions/release-tool@v2.0.4
+        uses: whuppi/ci/actions/release-tool@v2.4.0
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           mode: --add-git-install
           tag: ${{ needs.discover.outputs.tag }}
       - name: Stamp asset hashes into tag
-        uses: whuppi/ci/actions/release-tool@v2.0.4
+        uses: whuppi/ci/actions/release-tool@v2.4.0
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           mode: --update-tag-hashes
           tag: ${{ needs.discover.outputs.tag }}
       - name: Build pub.dev changelog for preview
-        uses: whuppi/ci/actions/release-tool@v2.0.4
+        uses: whuppi/ci/actions/release-tool@v2.4.0
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -283,23 +283,23 @@ jobs:
     permissions:
       contents: write  # ephemeral stamp commit + release-notes install snippet
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: '${{ needs.discover.outputs.tag }}'
           fetch-depth: 0
           persist-credentials: false
       # Use the verified fvm capability, not an unverified pub global activate:
       # this job holds the pub.dev credentials, so don't weaken its tooling path.
-      - uses: whuppi/ci/actions/capabilities/fvm@v2.0.4
+      - uses: whuppi/ci/actions/capabilities/fvm@v2.4.0
       - name: Build filtered changelog
-        uses: whuppi/ci/actions/release-tool@v2.0.4
+        uses: whuppi/ci/actions/release-tool@v2.4.0
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           mode: --stamp-changelog
           tag: ${{ needs.discover.outputs.tag }}
       - name: Flatten README banner for pub.dev
-        uses: whuppi/ci/actions/release-tool@v2.0.4
+        uses: whuppi/ci/actions/release-tool@v2.4.0
         with:
           mode: --stamp-readme
       - name: Ephemeral commit (clean git for pub publish)
@@ -319,7 +319,7 @@ jobs:
       - run: fvm dart pub get --no-example
       - run: fvm dart pub publish --force
       - name: Add pub.dev install snippet
-        uses: whuppi/ci/actions/release-tool@v2.0.4
+        uses: whuppi/ci/actions/release-tool@v2.4.0
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:

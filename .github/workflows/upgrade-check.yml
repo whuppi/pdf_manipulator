@@ -4,8 +4,8 @@
 # tool/ci/upgrade.sh with recomputed sha256s in its own reviewed PR.
 #
 # The shared tool pins (fvm, Chrome, bore) live in whuppi/ci — its self-upgrade
-# bumps them, and they reach this repo via a whuppi/ci release + the grouped
-# whuppi-ci Dependabot PR.
+# bumps them, and they reach this repo via a whuppi/ci release + the
+# composite-refs sweep bumping the whuppi/ci refs (workflows and composites).
 name: Upgrade Check
 
 on:
@@ -25,14 +25,22 @@ defaults:
     shell: bash
 
 jobs:
-  # Flutter SDK (.fvmrc + example/.fvmrc) + lockfiles, each its own PR.
+  # Flutter SDK (.fvmrc + example/.fvmrc) + lockfiles, each its own PR — plus
+  # the action-refs sweep (sweepActions), the SINGLE owner of every action
+  # `uses:` ref: whuppi/ci refs (workflows + composites, uniform) and every
+  # third-party action (workflows + composites) to SHA. Dependabot owns pub only
+  # — the github-actions ecosystem is gone from dependabot.yml. The sweep pushes
+  # .github/workflows/ changes, which GITHUB_TOKEN can't — hence CI_ACTIONS_TOKEN.
   shared:
     permissions:
       contents: write       # pushes the chore/flutter-sdk + chore/lockfiles branches
       pull-requests: write  # opens / edits the upgrade PRs
-    uses: whuppi/ci/.github/workflows/upgrade-check.yml@v2.0.4
+    uses: whuppi/ci/.github/workflows/upgrade-check.yml@v2.4.0
     with:
       branch: dev
+      sweepActions: true
+    secrets:
+      CI_ACTIONS_TOKEN: ${{ secrets.CI_ACTIONS_TOKEN }}
 
   # Security-sensitive: this repo's OWN gate tools
   # (pana), sha256s recomputed from upstream assets. Kept in its own PR so a
@@ -46,7 +54,7 @@ jobs:
       issues: write         # gh label create fallback (labels.yml is canonical)
       pull-requests: write  # opens / edits the pins PR
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: dev
           persist-credentials: false
