@@ -329,6 +329,10 @@ enum _DownloadOutcome { success, notFound, transient }
 /// the next attempt can continue from there.
 Future<_DownloadOutcome> _downloadAttempt(String url, File dest) async {
   final existing = dest.existsSync() ? dest.lengthSync() : 0;
+  // connectionTimeout caps connection ESTABLISHMENT (a handshake hint on most
+  // platforms), not the transfer — a stalled mid-download socket is caught by
+  // the 60s idle timeout on `response` below. If large assets ever hang during
+  // the TLS handshake specifically, this is the knob to raise.
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 30);
   try {
     var uri = Uri.parse(url);

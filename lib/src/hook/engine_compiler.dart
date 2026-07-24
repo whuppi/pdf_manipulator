@@ -197,10 +197,15 @@ void ensureCargoVersion(Uri packageRoot) {
   }
   if (probe.exitCode != 0) return;
 
-  // "cargo 1.84.0 (66221abde 2024-11-19)" → 1.84.0
-  final token = (probe.stdout as String).trim().split(RegExp(r'\s+'));
-  if (token.length < 2) return;
-  final have = _semver(token[1]);
+  // "cargo 1.84.0 (66221abde 2024-11-19)" → 1.84.0. Match the "cargo <semver>"
+  // token directly rather than a fixed word index, so a prefix line (e.g. a
+  // cargo deprecation warning ahead of the version) can't shift the parse.
+  final versionMatch = RegExp(
+    r'cargo\s+(\d+\.\d+\.\d+)',
+  ).firstMatch(probe.stdout as String);
+  if (versionMatch == null) return;
+  final detected = versionMatch.group(1)!;
+  final have = _semver(detected);
   final want = _semver(required);
   if (have == null || want == null) return;
 
@@ -211,7 +216,7 @@ void ensureCargoVersion(Uri packageRoot) {
     // same commands run on macOS, Linux, and Windows.
     throw StateError(
       "pdf_manipulator's PDF engine needs Rust $required or newer, but you "
-      'have ${token[1]}.\n'
+      'have $detected.\n'
       '\n'
       'Update Rust to the latest, then build again:\n'
       '    rustup update\n'
@@ -224,7 +229,7 @@ void ensureCargoVersion(Uri packageRoot) {
   }
   if (cmp > 0) {
     _log.warning(
-      'Rust ${token[1]} is newer than $required, the version this engine is '
+      'Rust $detected is newer than $required, the version this engine is '
       'built and tested with — it should work. If a Rust change ever breaks '
       'the build, switch to the tested version and build again:\n'
       '    rustup toolchain install $required && rustup default $required',

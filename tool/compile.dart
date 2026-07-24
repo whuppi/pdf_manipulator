@@ -153,8 +153,24 @@ Future<void> _compileAll(List<_Target> targets, {bool strip = false}) async {
     await _compileOne(t);
     if (strip) {
       // -S drops debug symbols from the static archive (still large, but
-      // smaller than the un-stripped .a).
-      Process.runSync('strip', ['-S', p.join(_outBase(), t.key, t.lib)]);
+      // smaller than the un-stripped .a). A missing or failing strip leaves a
+      // valid, just-larger .a — warn, never fail the build over it (e.g. a
+      // cross-compile from a host without strip).
+      final archive = p.join(_outBase(), t.key, t.lib);
+      try {
+        final r = Process.runSync('strip', ['-S', archive]);
+        if (r.exitCode != 0) {
+          stderr.writeln(
+            '  ⚠ strip -S failed for $archive (exit ${r.exitCode}) — '
+            'shipping an unstripped archive. ${(r.stderr as String).trim()}',
+          );
+        }
+      } on ProcessException catch (e) {
+        stderr.writeln(
+          '  ⚠ strip unavailable (${e.message}) — '
+          'shipping an unstripped archive: $archive',
+        );
+      }
     }
   }
 }
