@@ -7,6 +7,18 @@
   minimumReleaseAge: "7 days",
   internalChecksFilter: "strict",
   prCreation: "not-pending",
+  // Don't set commit statuses. The RENOVATE_TOKEN has no "Commit statuses:
+  // write" scope, so a status POST 403s and Renovate mis-reports it as
+  // "repository has changed during renovation" and aborts. This only disables
+  // the VISIBLE status; the cooldown above is still enforced internally. To
+  // re-enable the stability-days / merge-confidence checks, add Commit statuses:
+  // write to the token and drop this block.
+  statusCheckWhen: {
+    artifactError: "never",
+    configValidation: "never",
+    mergeConfidence: "never",
+    minimumReleaseAge: "never",
+  },
   // Pin actions to SHA + keep the `# vX.Y.Z` comment. Scans composites too,
   // so this is what closes the #6704 gap (actions/cache in rust/wasm-cache,
   // whuppi/ci refs in make-target) that dependabot never saw.
