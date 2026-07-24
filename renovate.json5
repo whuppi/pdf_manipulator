@@ -16,29 +16,30 @@
   branchPrefix: "renovate/",
   packageRules: [
     {
-      description: "All GitHub Actions grouped, weekly (Mondays).",
+      description: "All GitHub Actions grouped (SHA-pinned via pinDigests).",
       matchManagers: ["github-actions"],
       groupName: "actions",
-      schedule: ["* * * * 1"],
     },
     {
-      description: "Dart/Flutter deps grouped, weekly.",
+      description: "Dart/Flutter deps grouped.",
       matchManagers: ["pub"],
       groupName: "deps",
-      schedule: ["* * * * 1"],
     },
     {
-      // Evaluated last so it WINS for whuppi/ci refs: own group, no cooldown,
-      // any time (first-party, tested by this repo's own CI before merge).
+      // Evaluated last so it WINS for whuppi/ci refs: own group, no cooldown.
+      // pinDigests OFF — these are first-party TAG refs (@vX.Y.Z), which this
+      // repo's zizmor ref-pin policy allows; SHA-pinning them would collide
+      // with the version bump (one branch, two update types).
       description: "whuppi/ci refs land as one reviewable PR, no cooldown.",
       matchDepNames: ["whuppi/ci", "whuppi/ci/**"],
       groupName: "whuppi-ci",
       minimumReleaseAge: "0 days",
-      schedule: ["at any time"],
+      pinDigests: false,
     },
   ],
-  // Keep pubspec.lock fresh (replaces the lockfiles sweep).
-  lockFileMaintenance: { enabled: true, schedule: ["* * * * 1"] },
+  // Keep pubspec.lock fresh (replaces the lockfiles sweep). Grouping + the
+  // 7-day cooldown control noise, so no fixed schedule.
+  lockFileMaintenance: { enabled: true },
   customManagers: [
     {
       // Flutter SDK pin in .fvmrc (replaces the flutter-sdk sweep).
