@@ -24,7 +24,7 @@ jobs:
   auto-close:
     permissions:
       issues: write  # label, comment on, and close resolved issues
-    uses: whuppi/ci/.github/workflows/auto-close.yml@v2.0.4
+    uses: whuppi/ci/.github/workflows/auto-close.yml@v2.0.5
     with:
       # Team slug for the humans (managed in the org, same team CODEOWNERS
       # uses) + the slopfairy bot as a fixed automation hook. A maintainer
