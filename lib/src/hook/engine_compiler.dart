@@ -286,9 +286,15 @@ Map<String, String> androidLinkerEnvFromNdkHome(String targetTriple) {
   final clangPrefix = targetTriple == 'armv7-linux-androideabi'
       ? 'armv7a-linux-androideabi'
       : targetTriple;
-  final key =
-      'CARGO_TARGET_${targetTriple.toUpperCase().replaceAll('-', '_')}_LINKER';
-  return {key: p.join(hostDir, 'bin', '${clangPrefix}21-clang')};
+  final base =
+      'CARGO_TARGET_${targetTriple.toUpperCase().replaceAll('-', '_')}';
+  return {
+    '${base}_LINKER': p.join(hostDir, 'bin', '${clangPrefix}21-clang'),
+    // Point cargo's archiver at the NDK's llvm-ar (same bin/ as the linker),
+    // matching androidLinkerEnv. Without it, cargo falls back to the host ar
+    // for intermediate .rlib archives, which need not be Android-compatible.
+    '${base}_AR': p.join(hostDir, 'bin', 'llvm-ar'),
+  };
 }
 
 /// Newest version-named subdirectory of [base] (e.g. an NDK dir), or null.
@@ -443,6 +449,12 @@ Future<void> compileEngineForTarget({
       targetTriple,
       '--target-dir',
       targetDir,
+      // Symmetric with the WASM path: the features string is authoritative,
+      // never cargo's [features] default. Safe because the native features
+      // string always seeds from build.json's `native` set, which carries the
+      // crate defaults (icc, legacy-crypto) — they are not capabilities, so the
+      // keep plan never drops them.
+      '--no-default-features',
       '--features',
       features,
     ],
