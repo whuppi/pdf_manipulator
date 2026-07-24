@@ -10,6 +10,7 @@ import 'dart:io';
 
 import 'package:pdf_manipulator/src/hook/engine_build.dart';
 import 'package:pdf_manipulator/src/hook/user_defines.dart';
+import 'package:pdf_manipulator/src/keep/capabilities.dart' show PdfConfigError;
 import 'package:test/test.dart';
 
 /// Writes [pubspec] into a fresh temp dir and returns its path.
@@ -92,6 +93,23 @@ hooks:
 ''');
       final defines = readPdfManipulatorUserDefines(root);
       expect(defines['keep'], 'auto');
+    });
+
+    test('malformed pubspec → PdfConfigError naming the file', () {
+      // Unterminated quoted string — loadYaml throws a bare YamlException with
+      // no file context; the reader must wrap it in a config error that says
+      // which pubspec failed.
+      final root = _appWith('name: "my_app');
+      expect(
+        () => readPdfManipulatorUserDefines(root),
+        throwsA(
+          isA<PdfConfigError>().having(
+            (e) => e.message,
+            'message',
+            contains('pubspec.yaml'),
+          ),
+        ),
+      );
     });
   });
 }

@@ -11,6 +11,8 @@ import 'dart:io';
 
 import 'package:yaml/yaml.dart';
 
+import 'package:pdf_manipulator/src/keep/capabilities.dart' show PdfConfigError;
+
 /// Reads `hooks: user_defines: pdf_manipulator:` from [appRoot]'s
 /// pubspec.yaml. Returns an empty map when the file or block is absent — the
 /// defaults (speed build, keep everything) then apply. Values are plain Dart
@@ -20,7 +22,13 @@ import 'package:yaml/yaml.dart';
 Map<String, Object?> readPdfManipulatorUserDefines(String appRoot) {
   final file = File('$appRoot/pubspec.yaml');
   if (!file.existsSync()) return const {};
-  final doc = loadYaml(file.readAsStringSync());
+  final Object? doc;
+  try {
+    doc = loadYaml(file.readAsStringSync());
+  } on YamlException catch (e) {
+    // loadYaml's bare error names no file — say which pubspec failed to parse.
+    throw PdfConfigError('could not parse ${file.path} as YAML: $e');
+  }
   final block = _dig(doc, const ['hooks', 'user_defines', 'pdf_manipulator']);
   final plain = _toDart(block);
   return plain is Map<String, Object?> ? plain : const {};
