@@ -1,0 +1,142 @@
+name: Kotlin Bindings CI
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'kotlin/**'
+      - 'java/**'
+      - 'pdf_oxide_jni/**'
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/kotlin.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'kotlin/**'
+      - 'java/**'
+      - 'pdf_oxide_jni/**'
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/kotlin.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'release' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Kotlin on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ''
+
+      - name: Cache Cargo build
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-build-release-
+
+      # The Kotlin facade has no native code: it depends on the Java binding,
+      # which owns the single JNI bridge (pdf_oxide_jni crate).
+      - name: Build JNI cdylib (release, full feature set)
+        run: cargo build --release -p pdf_oxide_jni --features full
+
+      - name: Resolve JNI library path (per OS)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            echo "PDF_OXIDE_JNI_LIB=${{ github.workspace }}/target/release/libpdf_oxide_jni.dylib" >> "$GITHUB_ENV"
+          else
+            echo "PDF_OXIDE_JNI_LIB=${{ github.workspace }}/target/release/libpdf_oxide_jni.so" >> "$GITHUB_ENV"
+          fi
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@06832c7b30a0129d7fb559bcc6e43d26f6374244 # v4
+
+      # Install the Java binding to the local Maven repo so the facade resolves
+      # `fyi.oxide:pdf-oxide`. Skip the `dev` profile (it would rebuild the Rust
+      # JNI lib via rust-maven-plugin — we already built it above) and its tests.
+      - name: Build & install Java binding to local Maven repo
+        working-directory: java
+        run: mvn -q -B -P'!dev' -DskipTests install
+
+      - name: Install ktlint (pinned + checksum-verified)
+        run: |
+          curl -sSLO https://github.com/pinterest/ktlint/releases/download/1.8.0/ktlint
+          echo "a3fd620207d5c40da6ca789b95e7f823c54e854b7fade7f613e91096a3706d75  ktlint" | sha256sum -c -
+          chmod +x ktlint && sudo mv ktlint /usr/local/bin/
+
+      - name: ktlint check
+        working-directory: kotlin
+        run: ktlint "src/**/*.kt"
+
+      - name: detekt (static analysis)
+        working-directory: kotlin
+        run: gradle detekt --no-daemon --console=plain
+
+      - name: Test (api-coverage, JNI lib via fyi.oxide.pdf.lib.path)
+        working-directory: kotlin
+        run: gradle test --no-daemon --console=plain -DPDF_OXIDE_JNI_LIB="${PDF_OXIDE_JNI_LIB}"
+
+      - name: Run example (BasicExtraction, with assertion)
+        working-directory: kotlin
+        shell: bash
+        run: |
+          set -uo pipefail
+          OUT="$(gradle runExample --no-daemon --console=plain -q -DPDF_OXIDE_JNI_LIB="${PDF_OXIDE_JNI_LIB}")"
+          echo "$OUT"
+          echo "$OUT" | grep -q "Hello pdf_oxide" || { echo "::error::example output missing expected text"; exit 1; }
+
+      - name: Run example (html_extraction, with assertion)
+        working-directory: kotlin
+        shell: bash
+        run: |
+          set -uo pipefail
+          OUT="$(gradle runHtmlExample --no-daemon --console=plain -q -DPDF_OXIDE_JNI_LIB="${PDF_OXIDE_JNI_LIB}")"
+          echo "$OUT"
+          echo "$OUT" | grep -q "HTML OK" || { echo "::error::html_extraction example failed"; exit 1; }
+
+      - name: Run example (words_geometry, with assertion)
+        working-directory: kotlin
+        shell: bash
+        run: |
+          set -uo pipefail
+          OUT="$(gradle runWordsExample --no-daemon --console=plain -q -DPDF_OXIDE_JNI_LIB="${PDF_OXIDE_JNI_LIB}")"
+          echo "$OUT"
+          echo "$OUT" | grep -q "WORDS OK" || { echo "::error::words_geometry example failed"; exit 1; }
+
+      - name: Run example (tables_extraction, with assertion)
+        working-directory: kotlin
+        shell: bash
+        run: |
+          set -uo pipefail
+          OUT="$(gradle runTablesExample --no-daemon --console=plain -q -DPDF_OXIDE_JNI_LIB="${PDF_OXIDE_JNI_LIB}")"
+          echo "$OUT"
+          echo "$OUT" | grep -q "TABLES OK" || { echo "::error::tables_extraction example failed"; exit 1; }
