@@ -65,7 +65,7 @@ Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extrac
 
 ```yaml
 dependencies:
-  pdf_manipulator:
+  pdf_manipulator: ^4.0.0-dev.0
 ```
 
 ### Native
@@ -83,7 +83,7 @@ flutter pub run pdf_manipulator:setup
 Pin the version, too, so a `pub upgrade` can't bump it behind your back and leave that fetched asset stale:
 
 ```yaml
-pdf_manipulator: X.Y.Z  # exact version
+pdf_manipulator: 4.0.0-dev.0  # exact version
 ```
 
 <details>
@@ -483,7 +483,7 @@ A custom engine — only the capabilities you keep — compiles on your machine.
 # pubspec.yaml of YOUR app
 hooks:
   user_defines:
-    pdf_manipulator:
+    pdf_manipulator: ^4.0.0-dev.0
       keep: auto              # a source scan decides what to keep
 ```
 
@@ -503,7 +503,7 @@ Alongside `keep` (which picks _which_ capabilities go in) there's `build` (what 
 ```yaml
 hooks:
   user_defines:
-    pdf_manipulator:
+    pdf_manipulator: ^4.0.0-dev.0
       build: speed   # speed (default) | size | debug
 ```
 
