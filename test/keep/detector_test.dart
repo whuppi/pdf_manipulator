@@ -2,7 +2,7 @@
 // contract IS filesystem scanning, so this test cannot be pure.
 //
 // The detector's one dangerous failure mode is a keep-set that misses a
-// capability the app reaches: `trim: auto` would then strip code the
+// capability the app reaches: `keep: auto` would then strip code the
 // app calls, and the user meets the typed not-enabled error at runtime.
 // The text scan's contract: any spelled member name in a file that
 // imports pdf_manipulator keeps its capability (over-keep is allowed,
@@ -14,8 +14,8 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
-import 'package:pdf_manipulator/src/trim/capabilities.dart';
-import 'package:pdf_manipulator/src/trim/detector.dart';
+import 'package:pdf_manipulator/src/keep/capabilities.dart';
+import 'package:pdf_manipulator/src/keep/detector.dart';
 
 const _usesEverything = '''
 import 'package:pdf_manipulator/pdf_manipulator.dart';
@@ -73,7 +73,7 @@ void main() {
       result.keep,
       PdfCapability.values.toSet(),
       reason:
-          'a missing capability here means trim: auto would strip '
+          'a missing capability here means keep: auto would strip '
           'code the app calls — the runtime typed error a consumer '
           'was promised never to see',
     );

@@ -35,8 +35,12 @@ runs:
       env:
         INPUTS_TARGETS: ${{ inputs.targets }}
       run: |
-        rustup toolchain install stable --profile minimal --no-self-update
-        rustup default stable
+        # RUST_VERSION is the single pin in tool/versions.env — install
+        # exactly it (a rolling `stable` would make CI non-reproducible and
+        # never test the engine's declared MSRV).
+        source tool/versions.env
+        rustup toolchain install "$RUST_VERSION" --profile minimal --no-self-update
+        rustup default "$RUST_VERSION"
         # targets input is comma- or space-separated; empty → no extra targets
         for t in $(tr ',' ' ' <<< "$INPUTS_TARGETS"); do
           rustup target add "$t"

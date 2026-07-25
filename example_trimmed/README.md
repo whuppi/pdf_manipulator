@@ -15,8 +15,7 @@ One pubspec entry — the switch a real consumer flips:
 hooks:
   user_defines:
     pdf_manipulator:
-      trim:
-        keep: [render]
+      keep: [render]
 ```
 
 `user_defines` bind to the build-root package, so launching from *this*
@@ -46,6 +45,6 @@ cd example_trimmed
 flutter run                            # native: compiles the trimmed engine
 flutter test integration_test -d macos # the trimmed-contract smoke
 
-# web needs the trimmed wasm first (run from the app you serve):
-dart run pdf_manipulator:setup --trim
+# web needs the trimmed wasm first (setup reads this app's pubspec trim block):
+dart run pdf_manipulator:setup
 ```

@@ -65,8 +65,8 @@ ANALYZE_DIRS="lib bin test hook" EXAMPLE_DIR="example" \
 source "$SCRIPT_DIR/build_lib.sh"
 ensure_jq  # cargo-warning filtering + build.json reads parse JSON via jq
 
-NATIVE_FEATURES=$(bash "$SCRIPT_DIR/compile_rust.sh" --features native)
-WASM_FEATURES=$(bash "$SCRIPT_DIR/compile_rust.sh" --features wasm)
+NATIVE_FEATURES=$(json_get '.features.native')
+WASM_FEATURES=$(json_get '.features.wasm')
 
 # Filter cargo warnings to only lines we changed vs upstream base tag.
 _filter_warnings() {

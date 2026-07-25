@@ -475,7 +475,7 @@ If the Rust check fails, it prints the exact file:line and warning.
 Fix them before committing.
 
 The feature set lives once in `build.json` (`features.native` /
-`features.wasm`); `compile_rust.sh`, the build hook, `make analyze`,
+`features.wasm`); `tool/compile.dart`, the build hook, `make analyze`,
 and `make test-rust` all read it, so the built, analyzed, and tested
 feature sets can't drift apart.
 

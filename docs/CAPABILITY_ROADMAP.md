@@ -289,17 +289,19 @@ size-measuring recipe in [`UPDATING.md`](UPDATING.md) §S5b.
 
 | Piece | Status | Notes |
 |---|---|---|
-| Capability vocabulary + `trim:` grammar (`auto` / `keep:` / loud errors) | DONE | `lib/src/trim/capabilities.dart` |
-| Text-scan detector (dependency-free, fail closed, over-keep only) | DONE | `lib/src/trim/detector.dart` — replaced the resolved-AST scan: package:analyzer in a runtime package's deps fights the app's own tooling (#171) |
+| Capability vocabulary + `keep:` grammar (`auto` / `[list]` / loud errors) | DONE | `lib/src/keep/capabilities.dart` |
+| Text-scan detector (dependency-free, fail closed, over-keep only) | DONE | `lib/src/keep/detector.dart` — replaced the resolved-AST scan: package:analyzer in a runtime package's deps fights the app's own tooling (#171) |
 | Native trim via `hooks: user_defines:` | DONE | build hook; custom sets compile locally, cargo cache |
-| Web trim via `setup --trim` | DONE | detector → trimmed wasm compile |
+| Web trim via `hooks: user_defines:` (same block as native) | DONE | `setup` reads the app pubspec (`lib/src/hook/user_defines.dart`) and runs the shared `resolveKeepPlan`; no flags |
+| Engine `build:` — speed / size / debug (web + native) | DONE | `lib/src/hook/engine_build.dart`; rides cargo `release` via `CARGO_PROFILE_RELEASE_*` (keeps `panic=unwind` — native-safe); size/debug compile from source |
+| Mismatch-proof config (`keep` / `detector` / `build`, one parser) | DONE | `lib/src/hook/pdf_config.dart` — one parser both callers share; unknown keys + bad values + the `detector`-without-`keep: auto` cross-axis mismatch all fail LOUDLY. Invalid configs unrepresentable by design |
 | `make shake-audit` verifier | DONE | symbols + size ceiling + typed-error probes |
 | Trimmed example shell (`example_trimmed/`) | DONE | Config-shell over example/ with `keep: [render]`; `make test-example-trimmed` asserts the contract on a real trimmed binary (core + kept work, excluded ops answer the typed error). Not in CI yet — needs a Rust-provisioned macOS row in full-test.yml. |
 | Op-unit dispatch layer (entry + handler + linker anchor per op) | DONE | `vendor/pdf_oxide/src/host/ops/`; registry backend swappable |
 | RecordUse drive path (build full → link hook trims on release) | DONE, dormant | Activates itself when the SDK experiment records; fixture-tested today |
 | `panic=abort` size lever | WONT_DO | Native lane isolation IS `catch_unwind` (one bad PDF → typed error, engine survives); abort would crash the whole app. Wasm already ships abort via `release-small` — the JS worker boundary isolates there. Nothing left to win. |
 | Writer monomorphization dedup | WONT_DO | Measured honestly: the dedupable Boxed-vs-Seek writer pairs are ~150-200 KB (2% of core) for dyn dispatch in the hottest safety-critical loop plus invasive upstream surgery. Bad trade. |
-| `opt-level=z` trim option | WONT_DO (unless asked) | ~15-20% of code size for CPU cost on every op — wrong default for a PDF engine. Revisit only on real user demand. |
+| `opt-level=z` size option | DONE | Asked for → shipped as `build: size` (opt-level z on the release profile). Never the default (it costs CPU on every op); opt-in per app via the pubspec `build:` key. |
 | `extract` capability | DONE | Extraction + search + classification (+ CJK CID tables). Cut via root gates — three dispatch fns gated, LTO deleted the 2.1 MB web with zero document.rs surgery. Core promise is now parse/write/edit/forms/builder. `office` requires `extract` engine-side. All remaining per-op cuts measured at 10-60 KB each: not worth their surface. |
 | Lazy fallback-font loading (runtime memory, not binary size) | PLANNED, deprioritized | `registerFallbackFont(bytes)` keeps the font resident: one shared copy on native, one per web worker. Bytes-in is the primitive, so a lazy `DataSource` registration (load on first CJK/emoji bake, per worker) and an optional release call can layer on later without breaking the API. Pick up only on real memory-pressure reports from web apps — and design the API surface carefully at that point, not before. |
 
@@ -309,7 +311,7 @@ size-measuring recipe in [`UPDATING.md`](UPDATING.md) §S5b.
 |---|---|---|
 | RecordUse experiment stabilizes (dart-lang/native#2902 for instance methods; the SDK record-use experiment flag) | recordings appear in release link hooks | Nothing to build — the lane self-activates. Validate with `trim-detector: compare` on example/ (diff recorded vs scan keep-sets). When instance methods land: delete the `record_use_shim*.dart` files, annotate the ops directly. Separately: `record_use` is pinned `^0.6.0` because ≥1.0.0 needs `meta ^1.19` and Flutter stable pins meta 1.18 — bump the pin when a Flutter stable ships meta ≥1.19 (same API for our use). When trust is earned: consider promoting the default detector. |
 | Dart static linking (dart-lang/sdk#49418; `StaticLinking` in code_assets implemented) | hooks accept static libs; SDK defines symbol/asset-tag references | 1) Wire Dart-side references to the `pdf_op_<name>_anchor` symbols (one per public op, using whatever asset-tag syntax ships). 2) Swap `ops/registry.rs` from the explicit table to link-section collection. 3) Add a gc-sections assertion to shake-audit. The detector becomes a cross-check; the linker becomes the mechanism. Units don't change. |
-| Web build hooks (dart-lang/native#988) | hooks run for web targets | Fold `setup --trim` into the hook path: web reads the same `trim:` user-define; delete setup's cwd-detector invocation. Wasm gains the same fail-closed auto flow as native. |
+| Web build hooks (dart-lang/native#988) | hooks run for web targets | Web already reads the same `keep:`/`build:` pubspec block native does (via `setup` → `user_defines.dart` → `resolveKeepPlan`). Remaining win: fold that into an automatic web build hook so the manual `setup` step disappears entirely — wasm gains the same no-command auto flow as native. |
 | Wasm component model in dart2wasm (dart-lang/sdk#56366) | dart2wasm emits/links components | Express op units as WIT interface functions (one-to-one mapping already); component-level linking replaces export-root trimming on web. Furthest future — the scan covers web until then. |
 
 ## Built in the engine, not shipped
