@@ -89,9 +89,11 @@ import 'package:path/path.dart' as p;
 
 import 'package:pdf_manipulator/src/hook/asset_hashes.dart';
 import 'package:pdf_manipulator/src/hook/build_constants.dart';
+import 'package:pdf_manipulator/src/hook/engine_build.dart';
 import 'package:pdf_manipulator/src/hook/engine_compiler.dart';
 import 'package:pdf_manipulator/src/hook/resolver.dart';
-import 'package:pdf_manipulator/src/hook/trim_plan.dart';
+import 'package:pdf_manipulator/src/hook/keep_plan.dart';
+import 'package:pdf_manipulator/src/hook/pdf_config.dart';
 
 final _log = Logger('pdf_manipulator:build');
 
@@ -109,9 +111,19 @@ void main(List<String> args) async {
     if (!input.config.buildCodeAssets) return;
 
     final constants = BuildConstants.load(input.packageRoot);
-    final plan = await resolveTrimPlan(
-      trimDefine: input.userDefines['trim'],
-      detectorDefine: input.userDefines['trim-detector'],
+    // The build-hook API exposes user-defines by key, not as a key set — so
+    // build the map from the known keys and let the one parser validate it.
+    // (Unknown-key rejection needs the full key set, which only the web path
+    // has; native leans on the value-grammar + axis-mismatch checks.)
+    final ud = input.userDefines;
+    final cfg = PdfManipulatorConfig.parse({
+      for (final k in PdfManipulatorConfig.knownKeys)
+        if (ud[k] != null) k: ud[k],
+    });
+    final engineBuild = cfg.build;
+    final plan = await resolveKeepPlan(
+      keep: cfg.keep,
+      detector: cfg.detector,
       defaultFeatures: constants.nativeFeatures,
       // The hooks API exposes no app root; the working directory is the
       // app when the consumer runs `flutter build` from their project.
@@ -119,7 +131,7 @@ void main(List<String> args) async {
     );
     if (plan.deferToLink && !input.config.linkingEnabled) {
       stderr.writeln(
-        'pdf_manipulator trim-detector record-use: linking is disabled in '
+        'pdf_manipulator detector record-use: linking is disabled in '
         'this build (debug) — shipping the FULL binary. Release builds '
         'trim in the link hook.',
       );
@@ -138,6 +150,7 @@ void main(List<String> args) async {
     await _resolveNative(
       constants: constants,
       plan: plan,
+      engineBuild: engineBuild,
       packageRoot: input.packageRoot,
       version: readVersion(input.packageRoot),
       targetKey: targetKeyFor(codeConfig),
@@ -168,7 +181,8 @@ void main(List<String> args) async {
 // wrong cache. setup --native delegates to `flutter build` instead.
 Future<void> _resolveNative({
   required BuildConstants constants,
-  required TrimPlan plan,
+  required KeepPlan plan,
+  required EngineBuild engineBuild,
   required Uri packageRoot,
   required String version,
   required String targetKey,
@@ -181,18 +195,20 @@ Future<void> _resolveNative({
 }) async {
   final assetName = '$targetKey-$libFileName';
 
-  // A consumer-trimmed feature set has no prebuilt release asset and no
-  // pinned hash: version 0.0.0 routes the resolver straight to compile,
-  // and cargo's feature-aware fingerprint is the cache.
-  final effectiveVersion = plan.isCustom ? '0.0.0' : version;
+  // Prebuilt release binaries exist ONLY for the default feature set on the
+  // default (speed) build. A kept subset or a non-default build (size/debug)
+  // has no prebuilt and no pinned hash: version 0.0.0 routes the resolver
+  // straight to compile, and cargo's own fingerprint is the cache.
+  final custom = plan.isCustom || !engineBuild.isDefault;
+  final effectiveVersion = custom ? '0.0.0' : version;
 
   await resolveAsset(
     ResolveRequest(
       assetName: assetName,
       downloadUrl: constants.downloadUrl(effectiveVersion, assetName),
       dest: dest,
-      cacheFile: plan.isCustom ? null : cacheFile,
-      expectedHash: plan.isCustom ? null : assetHashes[assetName],
+      cacheFile: custom ? null : cacheFile,
+      expectedHash: custom ? null : assetHashes[assetName],
       version: effectiveVersion,
       packageRoot: packageRoot,
       compile: (File d) => _compileNativeFromHook(
@@ -202,6 +218,7 @@ Future<void> _resolveNative({
         d,
         constants,
         plan,
+        engineBuild,
       ),
     ),
   );
@@ -222,13 +239,15 @@ Future<int> resolveWeb({
   required Directory destDir,
   bool force = false,
   String? wasmFeaturesOverride,
+  EngineBuild engineBuild = EngineBuild.speed,
 }) async {
   final constants = BuildConstants.load(packageRoot);
-  // A trimmed set has no prebuilt asset, no pinned hash, and must not
-  // reuse a default-set artifact: force + version 0.0.0 route the
-  // resolver straight to a fresh compile.
-  final effectiveVersion = wasmFeaturesOverride == null ? version : '0.0.0';
-  final effectiveForce = force || wasmFeaturesOverride != null;
+  // A kept subset OR a non-default build has no prebuilt asset, no pinned
+  // hash, and must not reuse a default-set artifact: force + version 0.0.0
+  // route the resolver straight to a fresh compile.
+  final custom = wasmFeaturesOverride != null || !engineBuild.isDefault;
+  final effectiveVersion = custom ? '0.0.0' : version;
+  final effectiveForce = force || custom;
 
   if (!destDir.existsSync()) {
     destDir.createSync(recursive: true);
@@ -248,15 +267,18 @@ Future<int> resolveWeb({
         assetName: assetName,
         downloadUrl: constants.downloadUrl(effectiveVersion, assetName),
         dest: dest,
-        expectedHash: wasmFeaturesOverride == null
-            ? assetHashes[assetName]
-            : null,
+        expectedHash: custom ? null : assetHashes[assetName],
         version: effectiveVersion,
         packageRoot: packageRoot,
         force: effectiveForce,
         compile: isWasmBuildOutput
-            ? (File d) =>
-                  _compileWasm(packageRoot, d, localName, wasmFeaturesOverride)
+            ? (File d) => _compileWasm(
+                packageRoot,
+                d,
+                localName,
+                wasmFeaturesOverride,
+                engineBuild,
+              )
             : (File d) => _copyWebAsset(packageRoot, d, localName),
       ),
     );
@@ -359,7 +381,8 @@ Future<void> _compileNativeFromHook(
   LinkMode linkMode,
   File outFile,
   BuildConstants constants,
-  TrimPlan plan,
+  KeepPlan plan,
+  EngineBuild engineBuild,
 ) async {
   final codeConfig = input.config.code;
   await compileEngineForTarget(
@@ -370,7 +393,10 @@ Future<void> _compileNativeFromHook(
     targetDir: p.join(p.fromUri(input.outputDirectory), 'cargo_target'),
     libFileName: codeConfig.targetOS.libraryFileName(constants.crate, linkMode),
     outFile: outFile,
-    environment: androidLinkerEnv(codeConfig, targetTriple),
+    environment: {
+      ...androidLinkerEnv(codeConfig, targetTriple),
+      ...engineBuild.cargoEnv,
+    },
   );
 }
 
@@ -388,94 +414,36 @@ Future<void> _compileWasm(
   File dest,
   String targetFile,
   String? featuresOverride,
+  EngineBuild engineBuild,
 ) async {
   final webAssets = Directory.fromUri(packageRoot.resolve('web_assets'));
   final existing = File(p.join(webAssets.path, targetFile));
 
-  // Contributor has locally built WASM — copy directly (never for a
-  // trimmed set: the local artifact is the default build).
-  if (featuresOverride == null && existing.existsSync()) {
+  // web_assets/ holds the DEFAULT build (full features, speed build).
+  // Only that combination may read from / write to it; a kept subset or a
+  // non-default build is a per-app artifact that must never land there.
+  final isDefaultBuild = featuresOverride == null && engineBuild.isDefault;
+
+  // Contributor has locally built WASM — copy directly.
+  if (isDefaultBuild && existing.existsSync()) {
     dest.parent.createSync(recursive: true);
     existing.copySync(dest.path);
     return;
   }
 
-  try {
-    Process.runSync('cargo', ['--version']);
-  } on ProcessException {
-    throw StateError(
-      'This build needs to compile the PDF engine WASM from source, but '
-      'Rust is not installed.\n'
-      'Install it from https://rustup.rs (macOS, Linux, and Windows), '
-      'then rerun setup.',
-    );
-  }
-  ensureRustTarget('wasm32-unknown-unknown');
-
-  final manifest = p.fromUri(
-    packageRoot.resolve('vendor/pdf_oxide/Cargo.toml'),
-  );
   final features =
       featuresOverride ?? BuildConstants.load(packageRoot).wasmFeatures;
 
-  final env = <String, String>{...Platform.environment};
-  stripXcodeFromPath(env);
-
-  _log.info('compiling WASM from source (features: $features)');
-  final build = await Process.run('cargo', [
-    'build',
-    '--manifest-path',
-    manifest,
-    '--lib',
-    '--release',
-    '--target',
-    'wasm32-unknown-unknown',
-    '--no-default-features',
-    '--features',
-    features,
-  ], environment: env);
-  if (build.exitCode != 0) {
-    throw StateError(
-      'WASM engine compile failed (exit ${build.exitCode}).\n'
-      'stderr: ${build.stderr}',
-    );
-  }
-
-  // First run also compiles the runner itself (binaryen builds from
-  // source — takes a few minutes once; cargo caches it after).
-  //
-  // A trimmed build writes to a temp dir, NEVER into the package's
-  // web_assets/ — those hold the default build, and a trimmed artifact
-  // landing there would be served to every other consumer of this
-  // package checkout as if it were the full engine.
-  final outDir = featuresOverride == null
+  final outDir = isDefaultBuild
       ? webAssets
-      : Directory.systemTemp.createTempSync('pdf_manipulator_trim_wasm_');
+      : Directory.systemTemp.createTempSync('pdf_manipulator_wasm_');
   try {
-    final rawWasm = p.fromUri(
-      packageRoot.resolve(
-        'vendor/pdf_oxide/target/wasm32-unknown-unknown/release/'
-        'pdf_oxide.wasm',
-      ),
+    await compileWasmEngine(
+      packageRoot: packageRoot,
+      features: features,
+      outDir: outDir,
+      cargoEnv: engineBuild.cargoEnv,
     );
-    final bindgen = await Process.run('cargo', [
-      'run',
-      '--manifest-path',
-      manifest,
-      '--release',
-      '-p',
-      'bindgen_runner',
-      '--',
-      rawWasm,
-      outDir.path,
-    ], environment: env);
-    if (bindgen.exitCode != 0) {
-      throw StateError(
-        'WASM post-processing (wasm-bindgen + wasm-opt) failed '
-        '(exit ${bindgen.exitCode}).\n'
-        'stderr: ${bindgen.stderr}',
-      );
-    }
 
     final built = File(p.join(outDir.path, targetFile));
     if (!built.existsSync()) {
@@ -486,7 +454,7 @@ Future<void> _compileWasm(
     dest.parent.createSync(recursive: true);
     built.copySync(dest.path);
   } finally {
-    if (featuresOverride != null) {
+    if (!isDefaultBuild) {
       outDir.deleteSync(recursive: true);
     }
   }

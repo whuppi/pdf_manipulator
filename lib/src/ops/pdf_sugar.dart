@@ -19,7 +19,7 @@ import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/types/pdf_task.dart';
-import 'package:pdf_manipulator/src/trim/record_use_shim.dart';
+import 'package:pdf_manipulator/src/keep/record_use_shim.dart';
 
 /// Convenience wrappers — common multi-step PDF operations in one call.
 extension PdfSugar on Pdf {
@@ -295,7 +295,7 @@ extension PdfSugar on Pdf {
     int imageQuality = 75,
     bool garbageCollect = true,
   }) => PdfTask.group((hook) async {
-    TrimRecord.op('render');
+    KeepRecord.op('render');
     final editor = await hook.guard(edit(source));
     await hook.guard(editor.optimizeImages(quality: imageQuality));
     await hook.guard(
@@ -426,7 +426,7 @@ extension PdfSugar on Pdf {
     int level = 1,
     String? password,
   }) => PdfTask.group((hook) async {
-    TrimRecord.op('pdfa');
+    KeepRecord.op('pdfa');
     final editor = await hook.guard(edit(source, password: password));
     await hook.guard(editor.convertToPdfA(level: level));
     await hook.guard(editor.save(output));

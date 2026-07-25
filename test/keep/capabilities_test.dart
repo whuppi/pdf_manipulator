@@ -1,38 +1,33 @@
-// The trim grammar is a public contract: three legal shapes, everything
+// The keep grammar is a public contract: three legal shapes, everything
 // else fails LOUDLY. These tests pin the grammar and the loud-failure
 // guarantee (a silent full-binary fallback would lie about the request).
 
 // io-exempt: build-time tooling tests — the parity guards read README.md
-// and the engine's Cargo.toml from disk; trim never runs in a browser.
+// and the engine's Cargo.toml from disk; keep never runs in a browser.
 import 'dart:io';
 
-import 'package:pdf_manipulator/src/trim/capabilities.dart';
+import 'package:pdf_manipulator/src/keep/capabilities.dart';
 import 'package:test/test.dart';
 
 void main() {
-  group('trim grammar', () {
-    test('absent and false mean off', () {
-      expect(TrimConfig.parse(null).mode, TrimMode.off);
-      expect(TrimConfig.parse(false).mode, TrimMode.off);
+  group('keep grammar', () {
+    test('absent or `all` means keep everything', () {
+      expect(KeepConfig.parse(null).mode, KeepMode.all);
+      expect(KeepConfig.parse('all').mode, KeepMode.all);
     });
 
-    test('auto (canonical) and true (alias) mean auto', () {
-      expect(TrimConfig.parse('auto').mode, TrimMode.auto);
-      expect(TrimConfig.parse(true).mode, TrimMode.auto);
+    test('auto means auto', () {
+      expect(KeepConfig.parse('auto').mode, KeepMode.auto);
     });
 
-    test('keep list parses to the exact capability set', () {
-      final c = TrimConfig.parse({
-        'keep': ['render', 'pdfa'],
-      });
-      expect(c.mode, TrimMode.manual);
+    test('a list parses to the exact capability set', () {
+      final c = KeepConfig.parse(['render', 'pdfa']);
+      expect(c.mode, KeepMode.manual);
       expect(c.keep, {PdfCapability.render, PdfCapability.pdfa});
     });
 
-    test('keep expands capability dependencies (office brings extract)', () {
-      final c = TrimConfig.parse({
-        'keep': ['office'],
-      });
+    test('a list expands capability dependencies (office brings extract)', () {
+      final c = KeepConfig.parse(['office']);
       expect(c.keep, {PdfCapability.office, PdfCapability.extract});
       expect(
         c.featuresFor(
@@ -44,31 +39,23 @@ void main() {
     });
 
     test('core is accepted and adds nothing (always included)', () {
-      final c = TrimConfig.parse({
-        'keep': ['core', 'render'],
-      });
+      final c = KeepConfig.parse(['core', 'render']);
       expect(c.keep, {PdfCapability.render});
-      expect(
-        TrimConfig.parse({
-          'keep': ['core'],
-        }).keep,
-        isEmpty,
-      );
+      expect(KeepConfig.parse(['core']).keep, isEmpty);
     });
 
-    test('empty keep list is legal — core-only build', () {
-      final c = TrimConfig.parse({'keep': <Object>[]});
-      expect(c.mode, TrimMode.manual);
+    test('empty list is legal — core-only build', () {
+      final c = KeepConfig.parse(<Object>[]);
+      expect(c.mode, KeepMode.manual);
       expect(c.keep, isEmpty);
     });
 
     test('unknown capability fails loudly with the grammar', () {
       expect(
-        () => TrimConfig.parse({
-          'keep': ['rendering'], // cargo feature name, not a capability
-        }),
+        () =>
+            KeepConfig.parse(['rendering']), // cargo feature, not a capability
         throwsA(
-          isA<TrimConfigError>().having(
+          isA<PdfConfigError>().having(
             (e) => e.message,
             'message',
             allOf(contains('rendering'), contains('Valid forms')),
@@ -77,13 +64,24 @@ void main() {
       );
     });
 
-    test('unknown map key and junk values fail loudly', () {
+    test('a map value fails loudly (keep is a list, not a map)', () {
       expect(
-        () => TrimConfig.parse({'without': <Object>[]}),
-        throwsA(isA<TrimConfigError>()),
+        () => KeepConfig.parse({'render': true}),
+        throwsA(
+          isA<PdfConfigError>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains('list'), contains('Valid forms')),
+          ),
+        ),
       );
-      expect(() => TrimConfig.parse('yes'), throwsA(isA<TrimConfigError>()));
-      expect(() => TrimConfig.parse(42), throwsA(isA<TrimConfigError>()));
+    });
+
+    test('junk scalar values fail loudly (no true/false aliases)', () {
+      expect(() => KeepConfig.parse('yes'), throwsA(isA<PdfConfigError>()));
+      expect(() => KeepConfig.parse(42), throwsA(isA<PdfConfigError>()));
+      expect(() => KeepConfig.parse(true), throwsA(isA<PdfConfigError>()));
+      expect(() => KeepConfig.parse(false), throwsA(isA<PdfConfigError>()));
     });
   });
 
@@ -94,7 +92,7 @@ void main() {
     test(
       'kept capabilities survive, dropped ones leave, internals untouched',
       () {
-        final c = TrimConfig.keep({PdfCapability.render});
+        final c = KeepConfig.keep({PdfCapability.render});
         expect(
           c.featuresFor(defaults, c.keep!),
           'icc,legacy-crypto,rendering,native-bridge',
@@ -105,7 +103,7 @@ void main() {
     test('featuresFor expands requires itself — detector sets stay raw', () {
       // Detectors hand over unexpanded sets: office alone must still keep
       // extract, or the emitted feature list lies about what ships.
-      final c = TrimConfig.keep({PdfCapability.office});
+      final c = KeepConfig.keep({PdfCapability.office});
       expect(
         c.featuresFor(defaults, {PdfCapability.office}),
         'icc,legacy-crypto,native-bridge,office,extract',
@@ -113,7 +111,7 @@ void main() {
     });
 
     test('empty keep-set drops every capability feature, keeps internals', () {
-      final c = TrimConfig.keep(const {});
+      final c = KeepConfig.keep(const {});
       expect(
         c.featuresFor(defaults, c.keep!),
         'icc,legacy-crypto,native-bridge',
@@ -133,22 +131,22 @@ void main() {
     });
   });
 
-  group('trim-detector selector', () {
+  group('detector selector', () {
     test('absent means scan', () {
-      expect(TrimDetector.parse(null), TrimDetector.scan);
+      expect(KeepDetector.parse(null), KeepDetector.scan);
     });
 
     test('all three wire names parse', () {
-      expect(TrimDetector.parse('scan'), TrimDetector.scan);
-      expect(TrimDetector.parse('record-use'), TrimDetector.recordUse);
-      expect(TrimDetector.parse('compare'), TrimDetector.compare);
+      expect(KeepDetector.parse('scan'), KeepDetector.scan);
+      expect(KeepDetector.parse('record-use'), KeepDetector.recordUse);
+      expect(KeepDetector.parse('compare'), KeepDetector.compare);
     });
 
     test('unknown detector fails loudly with the valid set', () {
       expect(
-        () => TrimDetector.parse('recorduse'),
+        () => KeepDetector.parse('recorduse'),
         throwsA(
-          isA<TrimConfigError>().having(
+          isA<PdfConfigError>().having(
             (e) => e.message,
             'message',
             allOf(contains('recorduse'), contains('scan')),

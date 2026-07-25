@@ -1,5 +1,5 @@
 // build.json is the single source of truth for build constants, shared
-// with tool/ci/release.sh and tool/compile_rust.sh. Both hooks (build +
+// with tool/ci/release.sh and tool/compile.dart. Both hooks (build +
 // link) and bin/setup.dart load it through this class — never parse
 // build.json anywhere else.
 

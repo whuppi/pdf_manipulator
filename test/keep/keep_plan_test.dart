@@ -1,14 +1,14 @@
-// The trim plan is the build hook's whole trim decision, and
+// The keep plan is the build hook's whole keep decision, and
 // recordedCapabilities is the RecordUse lane's detector. Both must be
 // provable without a real hook invocation — the plan from raw user-define
 // values, the extraction from an in-memory Recordings.
 
 // io-exempt: build-time tooling tests — the fail-closed plan cases probe
-// real directories for a pubspec; trim never runs in a browser.
+// real directories for a pubspec; keep never runs in a browser.
 import 'dart:io';
 
-import 'package:pdf_manipulator/src/hook/trim_plan.dart';
-import 'package:pdf_manipulator/src/trim/capabilities.dart';
+import 'package:pdf_manipulator/src/hook/keep_plan.dart';
+import 'package:pdf_manipulator/src/keep/capabilities.dart';
 import 'package:record_use/record_use.dart';
 import 'package:test/test.dart';
 
@@ -16,11 +16,11 @@ const _defaults =
     'icc,legacy-crypto,rendering,signatures,native-bridge,pdfa,office,extract';
 
 void main() {
-  group('resolveTrimPlan', () {
-    test('trim absent → defaults, nothing custom, nothing deferred', () async {
-      final plan = await resolveTrimPlan(
-        trimDefine: null,
-        detectorDefine: null,
+  group('resolveKeepPlan', () {
+    test('keep all → defaults, nothing custom, nothing deferred', () async {
+      final plan = await resolveKeepPlan(
+        keep: KeepConfig.all,
+        detector: KeepDetector.scan,
         defaultFeatures: _defaults,
         appRootCandidate: Directory.systemTemp.path,
       );
@@ -29,12 +29,10 @@ void main() {
       expect(plan.deferToLink, isFalse);
     });
 
-    test('manual keep trims regardless of detector', () async {
-      final plan = await resolveTrimPlan(
-        trimDefine: {
-          'keep': ['render'],
-        },
-        detectorDefine: 'record-use',
+    test('manual keep list trims regardless of detector', () async {
+      final plan = await resolveKeepPlan(
+        keep: KeepConfig.parse(['render']),
+        detector: KeepDetector.recordUse,
         defaultFeatures: _defaults,
         appRootCandidate: Directory.systemTemp.path,
       );
@@ -46,9 +44,9 @@ void main() {
     test(
       'auto + record-use defers to the link hook with a full build',
       () async {
-        final plan = await resolveTrimPlan(
-          trimDefine: 'auto',
-          detectorDefine: 'record-use',
+        final plan = await resolveKeepPlan(
+          keep: KeepConfig.auto,
+          detector: KeepDetector.recordUse,
           defaultFeatures: _defaults,
           appRootCandidate: Directory.systemTemp.path,
         );
@@ -59,37 +57,25 @@ void main() {
     );
 
     test('auto + scan with no app at the candidate fails CLOSED', () async {
-      final noApp = Directory.systemTemp.createTempSync('trim_plan_test');
+      final noApp = Directory.systemTemp.createTempSync('keep_plan_test');
       addTearDown(() => noApp.deleteSync(recursive: true));
-      final plan = await resolveTrimPlan(
-        trimDefine: 'auto',
-        detectorDefine: null,
+      final plan = await resolveKeepPlan(
+        keep: KeepConfig.auto,
+        detector: KeepDetector.scan,
         defaultFeatures: _defaults,
         appRootCandidate: noApp.path,
       );
       expect(plan.features, _defaults);
       expect(plan.isCustom, isFalse);
     });
-
-    test('malformed trim value propagates the loud grammar error', () {
-      expect(
-        () => resolveTrimPlan(
-          trimDefine: 'yes',
-          detectorDefine: null,
-          defaultFeatures: _defaults,
-          appRootCandidate: Directory.systemTemp.path,
-        ),
-        throwsA(isA<TrimConfigError>()),
-      );
-    });
   });
 
   group('recordedCapabilities', () {
     Recordings recordingsFor(List<CallReference> calls, {String? className}) {
       final library = const Library(
-        'package:pdf_manipulator/src/trim/record_use_shim.dart',
+        'package:pdf_manipulator/src/keep/record_use_shim.dart',
       );
-      final method = Method('op', Class(className ?? 'TrimRecord', library));
+      final method = Method('op', Class(className ?? 'KeepRecord', library));
       return Recordings(calls: {method: calls}, instances: const {});
     }
 
@@ -99,7 +85,7 @@ void main() {
       loadingUnit: const LoadingUnit('1'),
     );
 
-    test('extracts capabilities from TrimRecord.op const calls', () {
+    test('extracts capabilities from KeepRecord.op const calls', () {
       final recordings = recordingsFor([
         callWith('render'),
         callWith('office'),

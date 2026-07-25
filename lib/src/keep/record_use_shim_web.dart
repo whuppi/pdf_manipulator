@@ -5,7 +5,7 @@
 
 /// Records that a capability-bearing op is reachable (see the conditional
 /// export in record_use_shim.dart). No-op on web in every sense.
-abstract final class TrimRecord {
+abstract final class KeepRecord {
   /// Marks [capability] (a `PdfCapability.wire` name) as used.
   static void op(String capability) {}
 }

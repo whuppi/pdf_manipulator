@@ -1,5 +1,5 @@
-// EXPERIMENTAL — the RecordUse trim lane (trim-detector: record-use /
-// compare). Each capability-bearing public op calls [TrimRecord.op] with a
+// EXPERIMENTAL — the RecordUse trim lane (detector: record-use /
+// compare). Each capability-bearing public op calls [KeepRecord.op] with a
 // const capability name; on AOT builds with the SDK's record-use experiment
 // the compiler records reachable calls and the link hook reads them back.
 // This static shim exists ONLY because @RecordUse cannot annotate instance
