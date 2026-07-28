@@ -48,12 +48,22 @@ Uri _hookOutputFor(Directory app) => Uri.directory(
 );
 
 void main() {
-  test('a hook output path resolves to the app that owns it', () {
+  test('both lanes anchors resolve to the app that owns them', () {
     final app = _appUsingOnlyExtract();
 
-    expect(appRootFromHookOutput(_hookOutputFor(app)), app.path);
+    // Native: the hook's output directory.
+    expect(appRootFromDartTool(_hookOutputFor(app)), app.path);
+    // Web: the package config the VM is running under — a different path
+    // under the SAME `.dart_tool/`, so one derivation serves both and they
+    // cannot disagree about which directory the app is.
+    expect(
+      appRootFromDartTool(
+        Uri.file('${app.path}/.dart_tool/package_config.json'),
+      ),
+      app.path,
+    );
     // No `.dart_tool` segment: the app is NOT located. Callers must build.
-    expect(appRootFromHookOutput(Uri.directory('/elsewhere/build/')), isNull);
+    expect(appRootFromDartTool(Uri.directory('/elsewhere/build/')), isNull);
   });
 
   test('driven from that path, the plan trims to what the app uses', () async {
@@ -63,7 +73,7 @@ void main() {
       keep: KeepConfig.auto,
       detector: KeepDetector.scan,
       defaultFeatures: 'render,extract,signatures,office,pdfa',
-      appRootCandidate: appRootFromHookOutput(_hookOutputFor(app))!,
+      appRootCandidate: appRootFromDartTool(_hookOutputFor(app))!,
       scanDirs: const [],
     );
 
@@ -97,7 +107,7 @@ void main() {
       keep: KeepConfig.auto,
       detector: KeepDetector.scan,
       defaultFeatures: 'render,extract,signatures,office,pdfa',
-      appRootCandidate: appRootFromHookOutput(_hookOutputFor(app))!,
+      appRootCandidate: appRootFromDartTool(_hookOutputFor(app))!,
       scanDirs: const [],
     );
     final paths = plan.appDependencies.map((u) => u.toFilePath()).toList();
@@ -118,7 +128,7 @@ void main() {
       keep: KeepConfig.auto,
       detector: KeepDetector.scan,
       defaultFeatures: 'render,extract,signatures,office,pdfa',
-      appRootCandidate: appRootFromHookOutput(_hookOutputFor(app))!,
+      appRootCandidate: appRootFromDartTool(_hookOutputFor(app))!,
       scanDirs: const [],
     );
     final paths = plan.appDependencies.map((u) => u.toFilePath()).toSet();
@@ -147,7 +157,7 @@ void main() {
       keep: KeepConfig.auto,
       detector: KeepDetector.scan,
       defaultFeatures: 'render,extract,signatures,office,pdfa',
-      appRootCandidate: appRootFromHookOutput(_hookOutputFor(app))!,
+      appRootCandidate: appRootFromDartTool(_hookOutputFor(app))!,
       scanDirs: const [],
     );
     final paths = plan.appDependencies.map((u) => u.toFilePath()).toSet();
@@ -173,7 +183,7 @@ Future<void> check(PdfDoc doc) async {
       keep: KeepConfig.auto,
       detector: KeepDetector.scan,
       defaultFeatures: 'render,extract,signatures,office,pdfa',
-      appRootCandidate: appRootFromHookOutput(_hookOutputFor(app))!,
+      appRootCandidate: appRootFromDartTool(_hookOutputFor(app))!,
       scanDirs: scanDirs,
     );
 
@@ -201,7 +211,7 @@ Future<void> check(PdfDoc doc) async {
         keep: KeepConfig.auto,
         detector: KeepDetector.scan,
         defaultFeatures: defaults,
-        appRootCandidate: appRootFromHookOutput(_hookOutputFor(app))!,
+        appRootCandidate: appRootFromDartTool(_hookOutputFor(app))!,
         scanDirs: const ['tolos'], // typo for `tools`
       );
 
@@ -218,7 +228,7 @@ Future<void> check(PdfDoc doc) async {
       keep: KeepConfig.keep({PdfCapability.extract}),
       detector: KeepDetector.scan,
       defaultFeatures: 'render,extract,signatures,office,pdfa',
-      appRootCandidate: appRootFromHookOutput(_hookOutputFor(app))!,
+      appRootCandidate: appRootFromDartTool(_hookOutputFor(app))!,
       scanDirs: const [],
     );
 
@@ -265,6 +275,6 @@ Future<void> check(PdfDoc doc) async {
       isNot(contains('Directory.current')),
       reason: 'the hook read its own working directory as the app root',
     );
-    expect(hook, contains('appRootFromHookOutput'));
+    expect(hook, contains('appRootFromDartTool'));
   });
 }

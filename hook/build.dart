@@ -131,7 +131,7 @@ void main(List<String> args) async {
       // scans pdf_manipulator, finds every capability where it is
       // implemented, and keeps all of them. The output directory is the
       // only handle on the consuming app a build hook is given.
-      appRootCandidate: appRootFromHookOutput(input.outputDirectory),
+      appRootCandidate: appRootFromDartTool(input.outputDirectory),
       scanDirs: cfg.scanDirs,
     );
     if (plan.deferToLink && !input.config.linkingEnabled) {

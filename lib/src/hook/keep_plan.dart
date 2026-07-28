@@ -49,7 +49,7 @@ class KeepPlan {
 /// config and [detector] (both come pre-validated from
 /// `PdfManipulatorConfig`). [appRootCandidate] is where `keep: auto`'s source
 /// scan looks for the app. The hooks API exposes no app root, so callers
-/// derive it (see `appRootFromHookOutput`); null, or a directory without a
+/// derive it (see `appRootFromDartTool`); null, or a directory without a
 /// pubspec.yaml, fails CLOSED to the full binary.
 ///
 /// [scanDirs] are the app-relative directories from the `scan-dirs` config,
