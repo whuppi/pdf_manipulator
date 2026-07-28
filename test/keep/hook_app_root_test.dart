@@ -167,6 +167,56 @@ void main() {
     expect(paths, contains('${app.path}/lib/assets/'));
   });
 
+  test(
+    'a dot-directory the USER made is scanned; tool trees are not',
+    () async {
+      // Skipping every `.`-prefixed directory would be wider than the hazard:
+      // `lib/.generated/` is the app's own source, and dropping it silently
+      // trims away a capability it calls. Only named tool trees are skipped.
+      final app = _appUsingOnlyExtract();
+      Directory('${app.path}/lib/.generated').createSync(recursive: true);
+      File('${app.path}/lib/.generated/api.dart').writeAsStringSync('''
+import 'package:pdf_manipulator/pdf_manipulator.dart';
+
+Future<void> check(PdfDoc doc) async {
+  await doc.getSignatures();
+}
+''');
+      // Tool-owned, and `lib/build/` which is the app's own code, not output.
+      Directory('${app.path}/lib/.dart_tool').createSync(recursive: true);
+      File(
+        '${app.path}/lib/.dart_tool/gen.dart',
+      ).writeAsStringSync('void validatePdfA() {}\n');
+      Directory('${app.path}/lib/build').createSync(recursive: true);
+      File('${app.path}/lib/build/maker.dart').writeAsStringSync('''
+import 'package:pdf_manipulator/pdf_manipulator.dart';
+
+Future<void> shrink(PdfDoc doc) async {
+  await doc.render(pages: PdfPages.all());
+}
+''');
+
+      final plan = await resolveKeepPlan(
+        keep: KeepConfig.auto,
+        detector: KeepDetector.scan,
+        defaultFeatures: 'render,extract,signatures,office,pdfa',
+        appRootCandidate: appRootFromDartTool(_hookOutputFor(app))!,
+        scanDirs: const [],
+      );
+
+      // The user's dot-directory counted.
+      expect(plan.features, contains('signatures'));
+      // `lib/build/` is NOT the SDK's output directory — it is app source.
+      expect(plan.features, contains('render'));
+      // A tool tree never counts, wherever it sits.
+      expect(plan.features, isNot(contains('pdfa')));
+
+      final paths = plan.appDependencies.map((u) => u.toFilePath()).toSet();
+      expect(paths, contains('${app.path}/lib/.generated/'));
+      expect(paths.any((p) => p.contains('.dart_tool')), isFalse);
+    },
+  );
+
   test('scan-dirs widens the scan to a directory outside lib/', () async {
     final app = _appUsingOnlyExtract();
     // Source the default scan cannot see: not lib/, not bin/.

@@ -68,6 +68,12 @@ class DetectorResult {
   final Map<String, String> matchSites;
 }
 
+/// Directories owned by a tool, never by the app. Skipped wherever they
+/// appear: each is generated, holds no app source, and churns on every build
+/// — `.fvm/` in particular carries a whole Flutter SDK, which would both
+/// flood the scan and register thousands of volatile dependencies.
+const _toolDirs = {'.dart_tool', '.git', '.fvm'};
+
 /// Scans the app rooted at [appRoot] for reachable pdf_manipulator
 /// capabilities: its `lib/` and `bin/`, plus any [extraDirs].
 ///
@@ -134,10 +140,17 @@ DetectorResult detectCapabilities(
     scannedDirs.add(dir.path);
     for (final entry in entries) {
       if (entry is Directory) {
-        // Skip generated and tool-owned trees: nothing in them is app
-        // source, and their timestamps churn on every build.
+        // Skip tool-owned trees ONLY, and by name: they hold no app source,
+        // and their contents churn on every build, so registering one as a
+        // dependency re-runs the hook forever. Skipping every `.`-prefixed
+        // directory instead would be wider than the hazard — a dot directory
+        // the USER made (`lib/.generated/`) is their source, and dropping it
+        // silently trims away a capability they call.
         final name = p.basename(entry.path);
-        if (name.startsWith('.') || name == 'build') continue;
+        if (_toolDirs.contains(name)) continue;
+        // `build/` is the SDK's output directory AT THE APP ROOT. Anywhere
+        // else — `lib/build/` — it is the app's own code.
+        if (p.equals(entry.path, p.join(appRoot, 'build'))) continue;
         walk(entry);
       } else if (entry is File && entry.path.endsWith('.dart')) {
         try {
