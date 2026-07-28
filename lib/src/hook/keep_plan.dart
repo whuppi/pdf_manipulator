@@ -102,8 +102,10 @@ Future<KeepPlan> resolveKeepPlan({
       );
       appDependencies = [
         Uri.file('$appRootCandidate/pubspec.yaml'),
-        // Directories catch a file appearing or disappearing...
-        for (final root in result.scannedRoots) Uri.directory(root),
+        // Every directory catches a file appearing or disappearing in IT —
+        // the runner hashes immediate child names, so a parent never sees a
+        // change inside a subdirectory...
+        for (final dir in result.scannedDirs) Uri.directory(dir),
         // ...and the files themselves catch edits to existing ones.
         for (final file in result.scannedFiles) Uri.file(file),
       ];

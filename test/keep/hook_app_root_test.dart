@@ -130,6 +130,33 @@ void main() {
     expect(paths, contains('${app.path}/lib/app.dart'));
   });
 
+  test('every walked directory is registered, not just the roots', () async {
+    // The runner hashes a directory's IMMEDIATE child names (recursive:
+    // false). Registering `lib/` alone therefore notices a file added
+    // directly in `lib/`, but NOT one added in `lib/models/` — that leaves
+    // `lib/`'s child names untouched, so the stale keep decision stands and
+    // the new call site is never seen.
+    final app = _appUsingOnlyExtract();
+    Directory('${app.path}/lib/models').createSync(recursive: true);
+    File('${app.path}/lib/models/doc.dart').writeAsStringSync('// nothing\n');
+    // A subdirectory with no .dart at all still has to invalidate when the
+    // first one lands in it, and only its own hash sees that.
+    Directory('${app.path}/lib/assets').createSync(recursive: true);
+
+    final plan = await resolveKeepPlan(
+      keep: KeepConfig.auto,
+      detector: KeepDetector.scan,
+      defaultFeatures: 'render,extract,signatures,office,pdfa',
+      appRootCandidate: appRootFromHookOutput(_hookOutputFor(app))!,
+      scanDirs: const [],
+    );
+    final paths = plan.appDependencies.map((u) => u.toFilePath()).toSet();
+
+    expect(paths, contains('${app.path}/lib/'));
+    expect(paths, contains('${app.path}/lib/models/'));
+    expect(paths, contains('${app.path}/lib/assets/'));
+  });
+
   test('scan-dirs widens the scan to a directory outside lib/', () async {
     final app = _appUsingOnlyExtract();
     // Source the default scan cannot see: not lib/, not bin/.

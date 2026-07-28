@@ -33,18 +33,21 @@ class DetectorResult {
     required this.unresolvedPaths,
     required this.matchedMembers,
     required this.matchSites,
-    required this.scannedRoots,
+    required this.scannedDirs,
     required this.scannedFiles,
   });
 
-  /// The directories walked. A caller running inside a build hook must
-  /// register these so a file appearing or disappearing invalidates the
-  /// decision.
-  final List<String> scannedRoots;
+  /// EVERY directory walked, not just the roots. A caller running inside a
+  /// build hook must register all of them, because the runner hashes a
+  /// directory's immediate child names only: registering `lib/` alone
+  /// notices a file added directly in `lib/`, but not one added in
+  /// `lib/models/` — that leaves `lib/`'s child names untouched, and the
+  /// stale keep decision stands.
+  final List<String> scannedDirs;
 
-  /// Every `.dart` file read. Registering the roots alone is not enough:
-  /// overwriting a file does not change its directory's mtime, so an edit
-  /// inside `lib/` would go unnoticed and a cached decision would stand.
+  /// Every `.dart` file read. Registering the directories alone is not
+  /// enough: an edit to an existing file changes no directory's child
+  /// names, so the decision would survive it.
   final List<String> scannedFiles;
 
   /// Capabilities the app can reach. Meaningful only when [resolved].
@@ -112,6 +115,7 @@ DetectorResult detectCapabilities(
     if (!Directory(d).existsSync()) unresolved.add(d);
   }
   final sources = <String, String>{}; // canonical path → contents
+  final scannedDirs = <String>[];
 
   // Manual walk: an unreadable directory records itself and skips its
   // subtree instead of aborting the whole listing with a throw —
@@ -124,6 +128,10 @@ DetectorResult detectCapabilities(
       unresolved.add(dir.path);
       return;
     }
+    // Every directory we could read, whether or not it holds `.dart` today:
+    // a directory with none still has to invalidate when the first one
+    // appears in it, and only its OWN child-name hash sees that.
+    scannedDirs.add(dir.path);
     for (final entry in entries) {
       if (entry is Directory) {
         // Skip generated and tool-owned trees: nothing in them is app
@@ -187,7 +195,7 @@ DetectorResult detectCapabilities(
     unresolvedPaths: unresolved,
     matchedMembers: matched,
     matchSites: sites,
-    scannedRoots: roots,
+    scannedDirs: scannedDirs,
     scannedFiles: sources.keys.toList(),
   );
 }
