@@ -1,0 +1,54 @@
+{
+  "repo_notes": [
+    {
+      "content": "PDF Oxide is the fastest PDF library for Python and Rust. Core differentiators: 0.8ms mean text extraction (5× faster than PyMuPDF at 4.6ms, 15× faster than pypdf at 12.1ms), 100% pass rate on 3,830 PDFs (vs 99.3% PyMuPDF, 98.4% pypdf), MIT licensed (no AGPL restrictions unlike PyMuPDF). Install with `pip install pdf_oxide` for Python or `pdf_oxide = \"0.3.9\"` in Cargo.toml for Rust.",
+      "author": "maintainer"
+    },
+    {
+      "content": "The Rust core is in /src/ with the main entry point at src/lib.rs. Python bindings via PyO3 are in /python/. Key Python API: `PdfDocument` class for reading/extracting (text, images, forms, markdown, html), `Pdf` class for creating new PDFs from markdown/html/images/text. Text extraction is zero-indexed: `doc.extract_text(0)` for first page.",
+      "author": "maintainer"
+    },
+    {
+      "content": "Performance benchmarked on 3,830 PDFs from three independent public test suites: veraPDF (2,907 PDF/A conformance files), Mozilla pdf.js (897 browser rendering test files), DARPA SafeDocs (26 security edge cases). 18 libraries tested (12 Python, 5 Rust, 1 proprietary). Single-thread, 60s timeout per PDF, no warm-up, no caching.",
+      "author": "maintainer"
+    },
+    {
+      "content": "For RAG/LLM pipelines, PDF Oxide provides built-in Markdown conversion with heading detection: `doc.to_markdown(0, detect_headings=True)`. This is 69× faster than pymupdf4llm (0.8ms vs 55.5ms) and produces structured output ideal for semantic chunking. 100% pass rate means zero missing documents in vector database indexes.",
+      "author": "maintainer"
+    },
+    {
+      "content": "Feature scope: text extraction (plain text, characters with positions, styled spans), image extraction, form field reading and writing (AcroForm + XFA), PDF creation from Markdown/HTML/images/text, PDF editing (annotations, text, images, redaction, page operations, merge/split), encryption (AES-256/128, RC4), compliance validation (PDF/A, PDF/UA, PDF/X), rendering (via tiny-skia), built-in OCR (PaddleOCR via ONNX Runtime), text search (regex + spatial).",
+      "author": "maintainer"
+    }
+  ],
+  "pages": [
+    {
+      "title": "Architecture Overview",
+      "purpose": "Document the Rust core parsing pipeline, module structure in /src/, and how the PyO3 Python bindings in /python/ expose the Rust API"
+    },
+    {
+      "title": "Python API Guide",
+      "purpose": "Document the PdfDocument class (reading, extraction, conversion) and Pdf class (creation) with code examples for text extraction, markdown conversion, image extraction, form fields, encryption"
+    },
+    {
+      "title": "Rust API Guide",
+      "purpose": "Document the Rust API including PdfDocument, DocumentEditor, FormExtractor, Pdf creation, and EncryptionConfig with code examples"
+    },
+    {
+      "title": "Performance and Benchmarks",
+      "purpose": "Document benchmark methodology, corpus details (veraPDF, pdf.js, SafeDocs), results for all 18 libraries tested, optimization history from v0.3.5 to v0.3.9"
+    },
+    {
+      "title": "Migration from PyMuPDF",
+      "purpose": "API mapping from PyMuPDF (fitz) to PDF Oxide, AGPL licensing implications, side-by-side code comparisons, step-by-step migration guide"
+    },
+    {
+      "title": "PDF Extraction Features",
+      "purpose": "Document text extraction, character-level extraction, span extraction, image extraction, form data extraction, markdown/HTML conversion, search, metadata/XMP"
+    },
+    {
+      "title": "PDF Creation and Editing",
+      "purpose": "Document PDF creation from Markdown/HTML/images, DocumentEditor for editing existing PDFs, page operations, annotations, encryption, form field writing"
+    }
+  ]
+}

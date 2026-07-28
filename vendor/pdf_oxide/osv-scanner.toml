@@ -1,0 +1,61 @@
+# OSV-Scanner configuration for pdf_oxide.
+#
+# Documents the (small) set of known-upstream Rust advisories that have no
+# available — or no currently *adoptable* — fix, with explicit per-CVE
+# justifications and a 90-day review horizon. Re-evaluate every release.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0436"
+# `paste` crate: "no longer maintained" advisory (informational, not a CVE).
+# Used transitively by build-macro crates we don't directly depend on. No
+# remote-code-execution or memory-safety implication; advisory exists solely
+# to flag the unmaintained status. Re-evaluate when transitive consumers
+# move off paste (community is migrating to `pastey` / `quote`).
+ignoreUntil = 2026-08-23
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2023-0071"
+# `rsa` crate: known potential Marvin-attack timing side-channel for RSA
+# decryption keys. NOT exploitable in our usage: pdf_oxide uses RSA only
+# for PAdES signature *verification* of detached signatures (never
+# decryption of attacker-controlled ciphertexts), where the timing channel
+# is not applicable. No fix version released upstream. Re-evaluate when
+# rustcrypto/RSA ships the constant-time rewrite.
+ignoreUntil = 2026-08-23
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0173"
+# `proc-macro-error2` crate: advisory marks it as unmaintained (no CVE, no
+# memory-safety implication). Pulled in transitively:
+#   env_logger → defmt → defmt-macros → proc-macro-error2
+# `env_logger` is a dev dependency only; this crate does not reach published
+# builds. No fix version available upstream. Re-evaluate when defmt or
+# env_logger migrates off proc-macro-error2.
+ignoreUntil = 2026-09-23
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0194"
+# `quick-xml` < 0.41: quadratic-time duplicate-attribute check (DoS only, no
+# memory-safety/RCE). Our direct dependency is already quick-xml 0.41.0 (the
+# fixed version); the only affected instance is quick-xml 0.40.1 pulled
+# transitively by office_oxide 0.1.2, which is the latest 0.1.x and cannot move
+# to 0.41 until office_oxide releases against it. Re-evaluate when it does.
+ignoreUntil = 2026-09-30
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0195"
+# `quick-xml` < 0.41: unbounded namespace-declaration allocation in `NsReader`
+# (memory-exhaustion DoS only). Same situation as RUSTSEC-2026-0194 — fixed in
+# 0.41.0, which we already use directly; only the transitive 0.40.1 via
+# office_oxide 0.1.2 remains. Re-evaluate when office_oxide moves to 0.41.
+ignoreUntil = 2026-09-30
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0192"
+# `ttf-parser` crate: "unmaintained" advisory (informational, not a CVE; no
+# memory-safety or RCE implication — the author has simply stated the crate
+# will receive no further fixes). There is no patched version. We use it only
+# to read embedded-font `cmap` tables; the actively-maintained replacement
+# (`skrifa`, already a dependency for glyph outlines) requires a non-trivial
+# migration of the cmap path. Re-evaluate once that migration lands.
+ignoreUntil = 2026-09-30
