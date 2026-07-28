@@ -1,0 +1,194 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- Target Frameworks: LibraryImport source generator requires
+         net7.0+, and all of netstandard2.1 / net5.0 / net6.0 are out of
+         Microsoft support. Ship the two current LTS runtimes only —
+         net8.0 is supported through Nov 2026, net10.0 through Nov 2028. -->
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- NativeAOT + trimming compatibility. LibraryImport replaces
+         the runtime IL stub that DllImport generated, so all P/Invoke
+         declarations are AOT-safe. Flag the assembly so the trim/AOT
+         analyzers surface any regressions the generator can't catch. -->
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+
+    <!-- NuGet Package Configuration -->
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+    <PackageId>PdfOxide</PackageId>
+    <Version>0.3.73</Version>
+    <Title>PdfOxide</Title>
+    <Authors>pdf_oxide Contributors</Authors>
+    <Company>pdf_oxide Project</Company>
+    <Product>pdf_oxide</Product>
+
+    <!-- Package Description and Metadata -->
+    <Description>Complete .NET bindings for pdf_oxide Rust PDF processing library. Provides idiomatic C# APIs for reading, creating, and editing PDFs with support for text extraction, format conversion (Markdown/HTML), element and annotation access, full text search, and async operations.</Description>
+    <Summary>Production-ready C# bindings for the pdf_oxide Rust PDF library</Summary>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+
+    <!-- Release Notes -->
+    <PackageReleaseNotes>
+v0.3.30 — NativeAOT + LibraryImport migration (#333) + v0.3.30 shipping fixes
+- v0.3.30 was canceled mid-release after the release pipeline surfaced
+  binding.gyp framework wiring, binding.cc C++20 syntax, and a
+  go/.gitignore negation that silently blocked the Go staticlib commits.
+  v0.3.30 rolls the same feature set (#311-#335) forward with those three
+  bugs fixed; no v0.3.30 artifact was ever published to NuGet.
+- Migrated all 881 native declarations from DllImport to LibraryImport
+  so the binding is NativeAOT-publish-ready and trim-safe.
+- Target frameworks trimmed to net8.0 + net10.0 (both current LTS).
+  Drops netstandard2.1 / net5.0 / net6.0 (all out of support).
+- Package now sets IsAotCompatible / IsTrimmable so consumers get early
+  analyzer warnings for any dynamic usage that would break AOT output.
+- Thread-safe, idiomatic API (IDisposable, async/await with CancellationToken,
+  fluent builders) and features unchanged: text/markdown/html extraction,
+  search, form fields, annotations, rendering, digital signatures, OCR,
+  compliance (PDF/A, PDF/X, PDF/UA), page editing, and PDF creation.
+- Cross-platform native libraries bundled for win-x64/arm64, linux-x64/arm64,
+  osx-x64/arm64.
+    </PackageReleaseNotes>
+
+    <!-- Licensing. NuGet deprecated <LicenseUrl> in favour of
+         <PackageLicenseExpression>; keeping both simultaneously triggers a
+         warning and may be rejected by strict feeds. The raw LICENSE files
+         are also embedded (see ItemGroup below) so the full notice ships
+         inside the .nupkg per MIT's "include copyright notice" requirement. -->
+    <PackageLicenseExpression>MIT OR Apache-2.0</PackageLicenseExpression>
+
+    <!-- Repository Information -->
+    <RepositoryUrl>https://github.com/yfedoseev/pdf_oxide</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <RepositoryBranch>main</RepositoryBranch>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+
+    <!-- Project URLs -->
+    <ProjectUrl>https://github.com/yfedoseev/pdf_oxide</ProjectUrl>
+    <DocumentationUrl>https://github.com/yfedoseev/pdf_oxide/wiki</DocumentationUrl>
+    <BugReportUrl>https://github.com/yfedoseev/pdf_oxide/issues</BugReportUrl>
+
+    <!-- Package Tags and Categories -->
+    <PackageTags>pdf;text-extraction;pdf-creation;pdf-editing;rust;pinvoke;ffi;interop;pdf-processing</PackageTags>
+    <Category>Data;Text Processing</Category>
+
+    <!-- Symbol Package Configuration.
+         EmbedAllSources=false (was true) — embedding every Rust/C# source
+         into the .snupkg bloats the symbol package with content that
+         SourceLink can serve on demand from GitHub. Disabling it shrinks the
+         snupkg substantially without losing step-into debugging (SourceLink
+         + the embedded PDB still resolve sources from the git SHA). -->
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <EmbedAllSources>false</EmbedAllSources>
+
+    <!-- Documentation and Code Analysis -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <DocumentationFile>bin\$(Configuration)\$(TargetFramework)\PdfOxide.xml</DocumentationFile>
+
+    <!--
+      Warning suppressions for v0.3.24 first release. These are code-hygiene
+      warnings (missing XML docs, nullable annotations, malformed XML fragments)
+      that don't affect runtime behavior. They will be tightened over subsequent
+      releases rather than blocking the initial ship.
+
+      CS1591 — missing XML comment for publicly visible type or member
+      CS1570 — XML comment has badly formed XML
+      CS1573 — parameter has no matching param tag in XML comment
+      CS1574 — XML comment has cref attribute that could not be resolved
+      CS8618 — non-nullable field/property uninitialized (we rely on builder-set defaults)
+      CS8603 — possible null reference return
+      CS8600 — converting null literal or possible null value to non-nullable type
+      CS8604 — possible null reference argument
+      CS8625 — cannot convert null literal to non-nullable reference type
+      CS8629 — nullable value type may be null
+      CS8765 — nullability of parameter does not match overridden member
+    -->
+    <NoWarn>$(NoWarn);CS1591;CS1570;CS1573;CS1574;CS8618;CS8603;CS8600;CS8604;CS8625;CS8629;CS8765</NoWarn>
+
+    <!-- Code Generation and Safety -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>enable</Nullable>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+
+    <!-- Package Metadata -->
+    <PackageProjectUrl>https://github.com/yfedoseev/pdf_oxide</PackageProjectUrl>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <DebugType>embedded</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+  </PropertyGroup>
+
+  <!-- Package README: the canonical C# binding README lives one level up in csharp/ -->
+  <ItemGroup>
+    <None Include="../README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <!-- Embed dual-licence text in the .nupkg root so `dotnet nuget` clients
+       can surface the full notice alongside the <PackageLicenseExpression>
+       identifier. -->
+  <ItemGroup>
+    <None Include="LICENSE-APACHE" Pack="true" PackagePath="\" />
+    <None Include="LICENSE-MIT" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <!-- Defensively exclude any native PDB files that might land in runtimes/
+       dirs during local builds. nuget.org's .snupkg validator rejects native
+       PDBs (only portable managed PDBs are allowed), so leaving them in
+       would break `dotnet nuget push`. -->
+  <ItemGroup>
+    <None Remove="..\..\target\**\*.pdb" />
+  </ItemGroup>
+
+  <!-- Include native libraries in NuGet package -->
+  <ItemGroup>
+    <!-- x64 -->
+    <None Include="../../target/release/pdf_oxide.dll" Pack="true" PackagePath="runtimes/win-x64/native" Condition="Exists('../../target/release/pdf_oxide.dll')" />
+    <None Include="../../target/release/libpdf_oxide.so" Pack="true" PackagePath="runtimes/linux-x64/native" Condition="Exists('../../target/release/libpdf_oxide.so')" />
+    <None Include="../../target/release/libpdf_oxide.dylib" Pack="true" PackagePath="runtimes/osx-x64/native" Condition="Exists('../../target/release/libpdf_oxide.dylib')" />
+    <!-- ARM64 (Apple Silicon, Graviton, Windows ARM) -->
+    <None Include="../../target/aarch64-unknown-linux-gnu/release/libpdf_oxide.so" Pack="true" PackagePath="runtimes/linux-arm64/native" Condition="Exists('../../target/aarch64-unknown-linux-gnu/release/libpdf_oxide.so')" />
+    <None Include="../../target/aarch64-apple-darwin/release/libpdf_oxide.dylib" Pack="true" PackagePath="runtimes/osx-arm64/native" Condition="Exists('../../target/aarch64-apple-darwin/release/libpdf_oxide.dylib')" />
+    <None Include="../../target/aarch64-pc-windows-msvc/release/pdf_oxide.dll" Pack="true" PackagePath="runtimes/win-arm64/native" Condition="Exists('../../target/aarch64-pc-windows-msvc/release/pdf_oxide.dll')" />
+  </ItemGroup>
+
+  <!-- Runtime configuration for P/Invoke -->
+  <ItemGroup>
+    <RuntimeHostConfigurationOption Include="System.Globalization.Invariant" Value="true" />
+  </ItemGroup>
+
+  <!-- Expose internals to the test project so unit tests can exercise the
+       FFI error-code mapper and other Internal/ types without forcing them
+       public. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="PdfOxide.Tests" />
+  </ItemGroup>
+
+  <!-- No framework-conditional package references needed: net8.0+ includes
+       System.Collections.Immutable, Microsoft.Bcl.AsyncInterfaces (built in
+       via BCL), and System.Text.Json out of the box. #333 dropped all
+       netstandard targets, so this ItemGroup is gone. -->
+
+
+  <!-- Exclude test files from main build -->
+  <ItemGroup>
+    <Compile Remove="Managers/Tests/**/*.cs" />
+  </ItemGroup>
+
+  <!-- Exclude files that don't exist on disk -->
+  <ItemGroup>
+    <Compile Remove="Managers/AnnotationManagerAdvanced.cs" />
+    <Compile Remove="Managers/BarcodeManagerAdvanced.cs" />
+    <Compile Remove="Managers/OcrManagerAdvanced.cs" />
+    <Compile Remove="Managers/RenderingManagerAdvanced.cs" />
+    <Compile Remove="Managers/SignatureManagerAdvanced.cs" />
+  </ItemGroup>
+
+  <!-- BarcodesSignaturesRenderingManager.cs and OCRComplianceCacheManager.cs now compile
+       after adding their required P/Invoke declarations to NativeMethods.cs -->
+
+</Project>
