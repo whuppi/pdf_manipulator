@@ -33,7 +33,19 @@ class DetectorResult {
     required this.unresolvedPaths,
     required this.matchedMembers,
     required this.matchSites,
+    required this.scannedRoots,
+    required this.scannedFiles,
   });
+
+  /// The directories walked. A caller running inside a build hook must
+  /// register these so a file appearing or disappearing invalidates the
+  /// decision.
+  final List<String> scannedRoots;
+
+  /// Every `.dart` file read. Registering the roots alone is not enough:
+  /// overwriting a file does not change its directory's mtime, so an edit
+  /// inside `lib/` would go unnoticed and a cached decision would stand.
+  final List<String> scannedFiles;
 
   /// Capabilities the app can reach. Meaningful only when [resolved].
   final Set<PdfCapability> keep;
@@ -53,14 +65,29 @@ class DetectorResult {
   final Map<String, String> matchSites;
 }
 
-/// Scans the app rooted at [appRoot] (its `lib/` plus any additional
-/// [extraDirs], e.g. `bin/`) for reachable pdf_manipulator capabilities.
+/// Scans the app rooted at [appRoot] for reachable pdf_manipulator
+/// capabilities: its `lib/` and `bin/`, plus any [extraDirs].
+///
+/// Only those directories are read, and only the app's own source — a
+/// capability reached from a package the app depends on is invisible. So
+/// `resolved` means "nothing was unreadable", never "every capability the
+/// app uses was seen": an app whose source lives elsewhere scans clean and
+/// under-keeps. Callers that cannot widen the scan should say so in their
+/// own docs and point users at an explicit keep-set.
 DetectorResult detectCapabilities(
   String appRoot, {
   List<String> extraDirs = const [],
 }) {
+  // Named source directories only — NEVER the bare app root. The root
+  // holds `.dart_tool/`, which the build itself rewrites, and these roots
+  // become hook dependencies: the runner's staleness check takes a
+  // directory's lastModified RECURSIVELY, sees a timestamp after its
+  // cutoff, and stores a sentinel hash that forces the hook to re-run on
+  // every single build (a full engine recompile under `keep: auto`).
+  // Scanning it also reads generated `.dart` and over-keeps.
   final roots = <String>[
-    Directory('$appRoot/lib').existsSync() ? '$appRoot/lib' : appRoot,
+    for (final dir in const ['lib', 'bin'])
+      if (Directory('$appRoot/$dir').existsSync()) '$appRoot/$dir',
     for (final d in extraDirs)
       if (Directory(d).existsSync()) d,
   ];
@@ -77,6 +104,13 @@ DetectorResult detectCapabilities(
   };
 
   final unresolved = <String>[];
+
+  // A configured extra dir that is not there is a typo, not an empty
+  // directory — dropping it silently scans less than the user asked for and
+  // under-keeps. Record it so the caller falls closed instead.
+  for (final d in extraDirs) {
+    if (!Directory(d).existsSync()) unresolved.add(d);
+  }
   final sources = <String, String>{}; // canonical path → contents
 
   // Manual walk: an unreadable directory records itself and skips its
@@ -92,6 +126,10 @@ DetectorResult detectCapabilities(
     }
     for (final entry in entries) {
       if (entry is Directory) {
+        // Skip generated and tool-owned trees: nothing in them is app
+        // source, and their timestamps churn on every build.
+        final name = p.basename(entry.path);
+        if (name.startsWith('.') || name == 'build') continue;
         walk(entry);
       } else if (entry is File && entry.path.endsWith('.dart')) {
         try {
@@ -102,6 +140,10 @@ DetectorResult detectCapabilities(
       }
     }
   }
+
+  // No source directory at all is NOT "the app uses nothing" — it is a
+  // scan that could not run. Record it so the caller falls closed.
+  if (roots.isEmpty) unresolved.add('$appRoot/lib');
 
   for (final root in roots) {
     walk(Directory(root));
@@ -145,6 +187,8 @@ DetectorResult detectCapabilities(
     unresolvedPaths: unresolved,
     matchedMembers: matched,
     matchSites: sites,
+    scannedRoots: roots,
+    scannedFiles: sources.keys.toList(),
   );
 }
 

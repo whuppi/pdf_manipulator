@@ -19,6 +19,7 @@ class KeepPlan {
     required this.isCustom,
     required this.detector,
     required this.deferToLink,
+    this.appDependencies = const [],
   });
 
   /// The cargo feature list the build hook compiles (or downloads) with.
@@ -31,6 +32,13 @@ class KeepPlan {
   /// Which detector the user selected.
   final KeepDetector detector;
 
+  /// The app paths this decision was derived from. A build hook MUST
+  /// register these via `output.dependencies`, or the runner caches the
+  /// decision and never re-runs the hook when the app changes — an app that
+  /// starts calling a trimmed-away capability would keep building without
+  /// it. Empty for every mode that reads no app source.
+  final List<Uri> appDependencies;
+
   /// True for `keep: auto` + `detector: record-use`: the build hook
   /// ships the FULL binary and the link hook trims it on release builds
   /// (recorded usage data only exists after AOT compilation).
@@ -40,17 +48,23 @@ class KeepPlan {
 /// Resolves the build hook's keep decision from the already-parsed [keep]
 /// config and [detector] (both come pre-validated from
 /// `PdfManipulatorConfig`). [appRootCandidate] is where `keep: auto`'s source
-/// scan looks for the app (the hooks API exposes no app root, so callers pass
-/// their best heuristic — a directory without a pubspec.yaml fails CLOSED to
-/// the full binary).
+/// scan looks for the app. The hooks API exposes no app root, so callers
+/// derive it (see `appRootFromHookOutput`); null, or a directory without a
+/// pubspec.yaml, fails CLOSED to the full binary.
+///
+/// [scanDirs] are the app-relative directories from the `scan-dirs` config,
+/// scanned on top of the app's `lib/` and `bin/`. One that does not exist
+/// also fails CLOSED — a typo must not quietly narrow the scan.
 Future<KeepPlan> resolveKeepPlan({
   required KeepConfig keep,
   required KeepDetector detector,
   required String defaultFeatures,
-  required String appRootCandidate,
+  required String? appRootCandidate,
+  required List<String> scanDirs,
 }) async {
   Set<PdfCapability>? keepSet;
   var deferToLink = false;
+  var appDependencies = const <Uri>[];
 
   switch (keep.mode) {
     case KeepMode.all:
@@ -65,7 +79,13 @@ Future<KeepPlan> resolveKeepPlan({
         deferToLink = true;
         break;
       }
-      if (!File('$appRootCandidate/pubspec.yaml').existsSync()) {
+      // Null means the app could not be located at all; a root without a
+      // pubspec means the candidate is not a Dart package. Both are "we do
+      // not know what the app uses", and both must build everything — a
+      // directory that merely is not the app scans perfectly cleanly and
+      // would otherwise produce a confident, wrong trim.
+      if (appRootCandidate == null ||
+          !File('$appRootCandidate/pubspec.yaml').existsSync()) {
         stderr.writeln(
           'pdf_manipulator keep: cannot locate the app source from the '
           'build hook — keeping the FULL binary (fail closed). Use '
@@ -73,7 +93,20 @@ Future<KeepPlan> resolveKeepPlan({
         );
         break;
       }
-      final result = detectCapabilities(appRootCandidate);
+      // scan-dirs are app-relative by contract (PdfManipulatorConfig rejects
+      // absolute ones), so they resolve against the app root the same way
+      // `lib/` does — the hook and the web setup script then agree.
+      final result = detectCapabilities(
+        appRootCandidate,
+        extraDirs: [for (final d in scanDirs) '$appRootCandidate/$d'],
+      );
+      appDependencies = [
+        Uri.file('$appRootCandidate/pubspec.yaml'),
+        // Directories catch a file appearing or disappearing...
+        for (final root in result.scannedRoots) Uri.directory(root),
+        // ...and the files themselves catch edits to existing ones.
+        for (final file in result.scannedFiles) Uri.file(file),
+      ];
       if (!result.resolved) {
         stderr.writeln(
           'pdf_manipulator keep: ${result.unresolvedPaths.length} path(s) '
@@ -96,6 +129,7 @@ Future<KeepPlan> resolveKeepPlan({
     isCustom: features != defaultFeatures,
     detector: detector,
     deferToLink: deferToLink,
+    appDependencies: appDependencies,
   );
 }
 

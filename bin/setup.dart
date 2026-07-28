@@ -132,11 +132,19 @@ Future<void> _setupWeb(bool force) async {
   // `keep: [...]` (explicit) or `keep: auto` (scan this app's source) —
   // resolveKeepPlan runs the SAME logic the native hook does, failing closed
   // to the full binary when the source can't be resolved.
+  //
+  // Directory.current IS the app root here, and this is the one place that's
+  // true: the user runs this command themselves from their project. The build
+  // hook cannot do the same — the runner starts hooks with the working
+  // directory set to the package's own root, so it derives the app from its
+  // output path instead (see `appRootFromHookOutput`). Do not "align" this
+  // line with the hook's; they are correct for different reasons.
   final plan = await resolveKeepPlan(
     keep: cfg.keep,
     detector: cfg.detector,
     defaultFeatures: constants.wasmFeatures,
     appRootCandidate: Directory.current.path,
+    scanDirs: cfg.scanDirs,
   );
 
   stdout.writeln('=== Web assets (v$version) ===');

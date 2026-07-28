@@ -122,6 +122,56 @@ bridge_api.rs
 response bytes
 ```
 
+### Editor mutations — staged, except the destructive ones
+
+`DocumentEditor` never mutates the source `PdfDocument`. It is a
+copy-on-write overlay: each mutation files its *intent* into a staging
+field, and `save_to_bytes()` materializes the whole set in one pass.
+
+```
+editor.rotatePage()   → modified_page_props[page]     (params only)
+editor.deletePage()   → page_order                    (index list)
+editor.addWatermark() → overlay_additions[page]       (elements)
+editor.setTitle()     → modified_info
+                              ↓
+                        save_to_bytes()   ← every byte is produced here
+```
+
+Each Dart call is still a real round-trip to the engine (`_mutate` →
+`handle_editor_mutate` → `dispatch::edit_*`), so a bad argument fails at
+the call, not at save. Only the *writing* is deferred.
+
+**Destructive ops are the exception: they do their work at call time.**
+`applyRedactions` and `eraseRegions` both run the shared
+`destroy_regions_on_page` core immediately — prune glyphs, prune images,
+scrub font subsets — and stage the *result*, not the request:
+
+```
+editor.applyRedactions()
+  │  RegionSet = /Redact annots + regions queued by addRedaction
+  │  destroy_regions_on_page()          ← the removal happens NOW
+  ├─→ redacted_content[page]      = the rewritten content bytes
+  └─→ redacted_orphan_ids        += object ids of the ORIGINAL /Contents
+                              ↓
+                        save_to_bytes()
+                          ├ redacted_content becomes the page's single new
+                          │ /Contents; the cosmetic overlay path is skipped
+                          └ redacted_orphan_ids are dropped BEFORE the
+                            reachability check — pre-redaction bytes can
+                            never be emitted, even if GC would keep them
+```
+
+The asymmetry is deliberate. Ordinary mutations are additive or
+positional, so they compress to a few parameters the writer can compose.
+Removal cannot: the content stream has to be parsed and rewritten, and
+there is no parameter form of "these glyphs are gone." Running it eagerly
+also makes the returned report (regions, glyphs removed, bytes removed)
+and `redactionCount()` truthful before the file is written.
+
+Redaction is therefore a two-phase lifecycle — `addRedaction` marks (lazy,
+like every other op), `applyRedactions` destroys (eager) — while
+`eraseRegions` is the same destructive core in a single call.
+
 ---
 
 ## Source tree

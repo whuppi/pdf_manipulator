@@ -30,11 +30,12 @@ import 'package:pdf_manipulator/src/keep/capabilities.dart';
 
 /// The fully-parsed, validated `pdf_manipulator:` user-defines block.
 class PdfManipulatorConfig {
-  /// Creates a validated config from its three parsed axes.
+  /// Creates a validated config from its parsed axes.
   const PdfManipulatorConfig({
     required this.keep,
     required this.detector,
     required this.build,
+    required this.scanDirs,
   });
 
   /// What capabilities the engine keeps ([KeepConfig.all] / a manual set /
@@ -49,10 +50,16 @@ class PdfManipulatorConfig {
   /// What the engine is optimized for ([EngineBuild.speed] / size / debug).
   final EngineBuild build;
 
+  /// Extra app directories the `keep: auto` scan reads, on top of the app's
+  /// own `lib/` and `bin/`. Paths are relative to the app root. Empty unless
+  /// the user set `scan-dirs`, and only settable alongside a detector that
+  /// actually scans — see [parse].
+  final List<String> scanDirs;
+
   /// The only keys allowed under `pdf_manipulator:`. Anything else is a typo
   /// or a stranded option and fails the build (where the key set is visible —
   /// see [parse]).
-  static const knownKeys = {'keep', 'detector', 'build'};
+  static const knownKeys = {'keep', 'detector', 'build', 'scan-dirs'};
 
   /// Parses [defines] (the raw `pdf_manipulator:` map). Throws [PdfConfigError]
   /// on any invalid value, unknown key, or axis mismatch.
@@ -75,6 +82,7 @@ class PdfManipulatorConfig {
     final keep = KeepConfig.parse(defines['keep']);
     final detector = KeepDetector.parse(defines['detector']);
     final build = EngineBuild.parse(defines['build']);
+    final scanDirs = _parseScanDirs(defines['scan-dirs']);
 
     // The one cross-axis coupling: `detector` picks HOW `auto` detects, so it
     // means nothing unless `keep` is auto. Setting it otherwise is a mistake —
@@ -87,6 +95,69 @@ class PdfManipulatorConfig {
       );
     }
 
-    return PdfManipulatorConfig(keep: keep, detector: detector, build: build);
+    // `scan-dirs` widens the source scan, so it needs a config that actually
+    // scans: `keep: auto`, and a detector other than record-use (which reads
+    // post-AOT recordings in the link hook and never looks at source).
+    if (defines.containsKey('scan-dirs')) {
+      if (keep.mode != KeepMode.auto) {
+        throw PdfConfigError(
+          'scan-dirs: only applies to `keep: auto` '
+          '(keep is currently ${keep.mode.name}).\n'
+          'A manual `keep: [...]` already names every capability, so there '
+          'is nothing to scan for. Either use `keep: auto`, or remove the '
+          '`scan-dirs:` line.',
+        );
+      }
+      if (detector == KeepDetector.recordUse) {
+        throw PdfConfigError(
+          'scan-dirs: does not apply to `detector: ${KeepDetector.recordUse.wire}`, '
+          'which reads recorded usage after compilation instead of scanning '
+          'source.\n'
+          'Either use `detector: ${KeepDetector.scan.wire}`, or remove the '
+          '`scan-dirs:` line.',
+        );
+      }
+    }
+
+    return PdfManipulatorConfig(
+      keep: keep,
+      detector: detector,
+      build: build,
+      scanDirs: scanDirs,
+    );
+  }
+
+  /// Parses the raw `scan-dirs` value: a list of app-relative directory
+  /// paths. Absent → empty.
+  ///
+  /// Absolute paths are rejected — a pubspec is committed and shared, so a
+  /// machine-specific path breaks every other checkout and CI.
+  static List<String> _parseScanDirs(Object? raw) {
+    if (raw == null) return const [];
+    if (raw is! List) {
+      throw PdfConfigError(
+        'scan-dirs: takes a list of app-relative directories.\n'
+        'Example:\n'
+        '  scan-dirs: [tools, packages/shared/lib]',
+      );
+    }
+    final dirs = <String>[];
+    for (final entry in raw) {
+      final dir = entry is String ? entry.trim() : '';
+      if (dir.isEmpty) {
+        throw PdfConfigError(
+          'scan-dirs: every entry must be a non-empty directory path '
+          '(got ${entry == null ? 'null' : '"$entry"'}).',
+        );
+      }
+      if (dir.startsWith('/') || RegExp(r'^[A-Za-z]:[\\/]').hasMatch(dir)) {
+        throw PdfConfigError(
+          'scan-dirs: "$dir" is an absolute path. Paths are relative to your '
+          'app root, so the same pubspec works on every machine and in CI.',
+        );
+      }
+      dirs.add(dir);
+    }
+    return List.unmodifiable(dirs);
   }
 }
