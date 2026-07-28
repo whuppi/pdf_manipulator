@@ -90,6 +90,7 @@ import 'package:path/path.dart' as p;
 import 'package:pdf_manipulator/src/hook/asset_hashes.dart';
 import 'package:pdf_manipulator/src/hook/build_constants.dart';
 import 'package:pdf_manipulator/src/hook/engine_build.dart';
+import 'package:pdf_manipulator/src/hook/app_root.dart';
 import 'package:pdf_manipulator/src/hook/engine_compiler.dart';
 import 'package:pdf_manipulator/src/hook/resolver.dart';
 import 'package:pdf_manipulator/src/hook/keep_plan.dart';
@@ -125,9 +126,13 @@ void main(List<String> args) async {
       keep: cfg.keep,
       detector: cfg.detector,
       defaultFeatures: constants.nativeFeatures,
-      // The hooks API exposes no app root; the working directory is the
-      // app when the consumer runs `flutter build` from their project.
-      appRootCandidate: Directory.current.path,
+      // NOT Directory.current: the runner starts every hook with its
+      // working directory set to the package's OWN root, so reading it
+      // scans pdf_manipulator, finds every capability where it is
+      // implemented, and keeps all of them. The output directory is the
+      // only handle on the consuming app a build hook is given.
+      appRootCandidate: appRootFromDartTool(input.outputDirectory),
+      scanDirs: cfg.scanDirs,
     );
     if (plan.deferToLink && !input.config.linkingEnabled) {
       stderr.writeln(
@@ -167,6 +172,10 @@ void main(List<String> args) async {
     // ── Register with Flutter ──
     _registerCodeAsset(input, output, outFile, linkMode);
     _registerDependencies(input, output);
+    // The app source the keep decision was derived from. Without this the
+    // runner caches the decision and never re-runs the hook, so an app that
+    // starts calling a trimmed-away capability keeps building without it.
+    output.dependencies.addAll(plan.appDependencies);
   });
 }
 

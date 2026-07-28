@@ -20,10 +20,12 @@
 // subprocess `flutter build` which needs flutter on PATH.
 
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:package_config/package_config.dart';
 
 import '../hook/build.dart' as build;
+import 'package:pdf_manipulator/src/hook/app_root.dart';
 import 'package:pdf_manipulator/src/hook/build_constants.dart';
 import 'package:pdf_manipulator/src/hook/keep_plan.dart';
 import 'package:pdf_manipulator/src/hook/pdf_config.dart';
@@ -103,6 +105,25 @@ Future<void> _setupWeb(bool force) async {
     exit(1);
   }
 
+  // NOT Directory.current: this command is user-invoked, so the working
+  // directory is wherever they were standing — run it from a subfolder and
+  // the app's pubspec is not there, which silently reads as "no config at
+  // all" and quietly ships the full engine. The VM knows whose package
+  // resolution is running us, and that answer sits inside the app's own
+  // `.dart_tool/` — the same anchor the build hook derives from, so web and
+  // native cannot disagree about which directory the app is.
+  final packageConfigUri = await Isolate.packageConfig;
+  final appRoot = packageConfigUri == null
+      ? null
+      : appRootFromDartTool(packageConfigUri);
+  if (appRoot == null) {
+    stderr.writeln(
+      'Error: could not locate your app from this command. Run it from '
+      'inside your project (flutter pub run pdf_manipulator:setup).',
+    );
+    exit(1);
+  }
+
   final pkg = config.packages
       .where((p) => p.name == 'pdf_manipulator')
       .firstOrNull;
@@ -121,9 +142,7 @@ Future<void> _setupWeb(bool force) async {
   // so it also rejects unknown keys (a typo, a stranded option).
   final PdfManipulatorConfig cfg;
   try {
-    cfg = PdfManipulatorConfig.parse(
-      readPdfManipulatorUserDefines(Directory.current.path),
-    );
+    cfg = PdfManipulatorConfig.parse(readPdfManipulatorUserDefines(appRoot));
   } on PdfConfigError catch (e) {
     stderr.writeln('Error: ${e.message}');
     exit(1);
@@ -136,7 +155,8 @@ Future<void> _setupWeb(bool force) async {
     keep: cfg.keep,
     detector: cfg.detector,
     defaultFeatures: constants.wasmFeatures,
-    appRootCandidate: Directory.current.path,
+    appRootCandidate: appRoot,
+    scanDirs: cfg.scanDirs,
   );
 
   stdout.writeln('=== Web assets (v$version) ===');

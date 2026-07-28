@@ -105,5 +105,106 @@ void main() {
         );
       });
     });
+
+    group('scan-dirs', () {
+      test('absent → empty, and it parses with keep: auto', () {
+        expect(PdfManipulatorConfig.parse(const {}).scanDirs, isEmpty);
+        final cfg = PdfManipulatorConfig.parse(const {
+          'keep': 'auto',
+          'scan-dirs': ['tools', 'packages/shared/lib'],
+        });
+        expect(cfg.scanDirs, ['tools', 'packages/shared/lib']);
+      });
+
+      // It widens the SOURCE SCAN, so it is stranded on any config that does
+      // not scan — the same rule `detector` follows against `keep`.
+      test('rejected without keep: auto', () {
+        expect(
+          () => PdfManipulatorConfig.parse(const {
+            'keep': ['render'],
+            'scan-dirs': ['tools'],
+          }),
+          throwsA(
+            isA<PdfConfigError>().having(
+              (e) => e.message,
+              'message',
+              allOf(contains('scan-dirs'), contains('keep: auto')),
+            ),
+          ),
+        );
+      });
+
+      test('rejected with detector: record-use (it never reads source)', () {
+        expect(
+          () => PdfManipulatorConfig.parse(const {
+            'keep': 'auto',
+            'detector': 'record-use',
+            'scan-dirs': ['tools'],
+          }),
+          throwsA(
+            isA<PdfConfigError>().having(
+              (e) => e.message,
+              'message',
+              allOf(contains('scan-dirs'), contains('record-use')),
+            ),
+          ),
+        );
+      });
+
+      test('allowed with detector: compare (compare trims with the scan)', () {
+        final cfg = PdfManipulatorConfig.parse(const {
+          'keep': 'auto',
+          'detector': 'compare',
+          'scan-dirs': ['tools'],
+        });
+        expect(cfg.scanDirs, ['tools']);
+      });
+
+      test('a non-list value fails loudly', () {
+        expect(
+          () => PdfManipulatorConfig.parse(const {
+            'keep': 'auto',
+            'scan-dirs': 'tools',
+          }),
+          throwsA(isA<PdfConfigError>()),
+        );
+      });
+
+      test('an empty or non-string entry fails loudly', () {
+        for (final bad in [
+          const ['tools', ''],
+          const ['tools', null],
+          const ['tools', 7],
+        ]) {
+          expect(
+            () =>
+                PdfManipulatorConfig.parse({'keep': 'auto', 'scan-dirs': bad}),
+            throwsA(isA<PdfConfigError>()),
+            reason: 'accepted $bad',
+          );
+        }
+      });
+
+      // A committed pubspec is shared: an absolute path is right on exactly
+      // one machine and wrong in CI and every other checkout.
+      test('an absolute path fails loudly', () {
+        for (final abs in ['/Users/me/app/tools', r'C:\app\tools']) {
+          expect(
+            () => PdfManipulatorConfig.parse({
+              'keep': 'auto',
+              'scan-dirs': [abs],
+            }),
+            throwsA(
+              isA<PdfConfigError>().having(
+                (e) => e.message,
+                'message',
+                contains('relative'),
+              ),
+            ),
+            reason: 'accepted $abs',
+          );
+        }
+      });
+    });
   });
 }

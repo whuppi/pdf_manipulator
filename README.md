@@ -487,6 +487,15 @@ hooks:
       keep: auto              # a source scan decides what to keep
 ```
 
+The scan reads your app's own `lib/` and `bin/`. Keeping source somewhere else? Point it there — paths are relative to your app, and they add to `lib/` and `bin/` rather than replacing them:
+
+```yaml
+      keep: auto
+      scan-dirs: [tools, packages/shared/lib]
+```
+
+The one thing no scan can see is a call made *inside* a package you depend on. If that's your case, name those capabilities yourself with the manual form below — `keep:` takes one value, so it is `auto` or an explicit set, not both.
+
 Prefer to say it yourself? The manual form keeps exactly these capabilities (plus the always-included core — parse, write, edit, forms, build):
 
 ```yaml
