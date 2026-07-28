@@ -23,6 +23,7 @@ void main() {
         detector: KeepDetector.scan,
         defaultFeatures: _defaults,
         appRootCandidate: Directory.systemTemp.path,
+        scanDirs: const [],
       );
       expect(plan.features, _defaults);
       expect(plan.isCustom, isFalse);
@@ -35,6 +36,7 @@ void main() {
         detector: KeepDetector.recordUse,
         defaultFeatures: _defaults,
         appRootCandidate: Directory.systemTemp.path,
+        scanDirs: const [],
       );
       expect(plan.features, 'icc,legacy-crypto,rendering,native-bridge');
       expect(plan.isCustom, isTrue);
@@ -49,6 +51,7 @@ void main() {
           detector: KeepDetector.recordUse,
           defaultFeatures: _defaults,
           appRootCandidate: Directory.systemTemp.path,
+          scanDirs: const [],
         );
         expect(plan.deferToLink, isTrue);
         expect(plan.features, _defaults);
@@ -64,6 +67,7 @@ void main() {
         detector: KeepDetector.scan,
         defaultFeatures: _defaults,
         appRootCandidate: noApp.path,
+        scanDirs: const [],
       );
       expect(plan.features, _defaults);
       expect(plan.isCustom, isFalse);
