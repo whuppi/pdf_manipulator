@@ -160,9 +160,15 @@ jobs:
           ref: ${{ needs.discover.outputs.tag }}
           submodules: recursive
           persist-credentials: false
+      # rust-cache OFF: a release binary is built from scratch, from the
+      # tagged source, every time. A cache hit here would ship an artifact
+      # whose provenance is "whatever was in the cache", and the hook's
+      # download-then-verify path assumes these bytes came from this tag.
+      # Minutes are not a reason to change this.
       - uses: ./.github/actions/make-target
         with:
           make-target: compile-${{ matrix.name }}
+          rust-cache: 'false'
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bin-${{ matrix.name }}

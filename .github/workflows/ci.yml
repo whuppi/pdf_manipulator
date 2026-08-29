@@ -13,6 +13,10 @@ on:
         type: choice
         options: [ubuntu-24.04, macos-14, windows-2025-vs2026]
         default: ubuntu-24.04
+      cold:
+        description: "Cold build — ignore the cargo cache (proves a fresh clone builds)"
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -22,6 +26,10 @@ concurrency:
 
 env:
   DEFAULT_RUNNER: ubuntu-24.04
+  # The cargo cache is on for every PR run; `cold: true` on a manual
+  # dispatch turns it off for the whole run. The routine from-scratch
+  # proof is the scheduled cold Full Test — see full-test.yml.
+  RUST_CACHE: ${{ inputs.cold && 'false' || 'true' }}
 
 jobs:
   inputs:
@@ -94,6 +102,7 @@ jobs:
       - uses: ./.github/actions/make-target
         with:
           make-target: analyze
+          rust-cache: ${{ env.RUST_CACHE }}
 
   # Analyze the shipped code (lib/bin/hook) against the OLDEST in-range deps, so
   # the wide lower bounds are honest, not just the newest a fresh build resolves.
@@ -153,6 +162,7 @@ jobs:
       - uses: ./.github/actions/make-target
         with:
           make-target: test-pkg-native
+          rust-cache: ${{ env.RUST_CACHE }}
 
   # Vendored-engine cargo tests — only when a PR touches the engine, its
   # features, the Makefile, or CI. Skipped on Dart-only PRs.
@@ -179,6 +189,7 @@ jobs:
         with:
           make-target: test-rust
           free-disk: 'true'
+          rust-cache: ${{ env.RUST_CACHE }}
 
   gate:
     name: CI Gate

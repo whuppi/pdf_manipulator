@@ -22,8 +22,20 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
     branches: [prod, dev]
+  # Weekly COLD run of the whole matrix on dev, cargo cache off. Every
+  # other run may reuse a warm target dir, so this is the one routine proof
+  # that a fresh clone still builds every target from vendor source — the
+  # guarantee the pub.dev tarball makes to a consumer with no cache at all.
+  # If it goes red, the caches are hiding a real break; fix the break,
+  # never the schedule.
+  schedule:
+    - cron: '0 6 * * 1'
   workflow_dispatch:
     inputs:
+      cold:
+        description: "Cold build — ignore the cargo cache (proves a fresh clone builds)"
+        type: boolean
+        default: false
       portability:
         description: "Portability — test every valid runner per target"
         type: boolean
@@ -58,6 +70,8 @@ concurrency:
 env:
   DEFAULT_RUNNER: ubuntu-24.04
   DEFAULT_PORTABILITY: 'true'
+  # Cold on the weekly schedule and on `cold: true`; warm otherwise.
+  RUST_CACHE: ${{ (github.event_name == 'schedule' || inputs.cold) && 'false' || 'true' }}
   # Relative on purpose — the release sets this same value, and the
   # compile-* guard rows below rely on it to reproduce the release's
   # output layout (only the compile matrix reads it; other targets ignore it).
@@ -93,6 +107,7 @@ jobs:
     needs: inputs
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
       (github.event.action == 'labeled' && github.event.label.name == 'ready-to-test')
     strategy:
       fail-fast: false
@@ -203,6 +218,7 @@ jobs:
         if: steps.filter.outputs.match == 'true'
         with:
           make-target: ${{ matrix.make }}
+          rust-cache: ${{ env.RUST_CACHE }}
           java: ${{ matrix.java || 'false' }}
           chrome: ${{ matrix.chrome || 'false' }}
           headless-display: ${{ matrix.headless-display || 'false' }}

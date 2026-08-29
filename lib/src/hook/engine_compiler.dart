@@ -396,6 +396,42 @@ Future<void> compileWasmEngine({
   }
 }
 
+/// Where the build hook's cargo invocation puts its `target/` dir.
+///
+/// Default: `<hook output dir>/cargo_target`. The hook must never write
+/// into the package root by default — for a pub.dev consumer that root is
+/// the pub cache, and a `target/` tree there is both a pollution and, on a
+/// read-only cache, a build failure.
+///
+/// CI overrides this through the file `~/.pdf_manipulator/cargo-target-dir`
+/// (one absolute path). Why a file and not an env var: `hooks_runner`
+/// strips the environment down to a fixed allowlist before spawning the
+/// hook, so no variable of ours reaches this code — but `HOME` /
+/// `USERPROFILE` do, and a file under them does. CI points every build
+/// path (hook, `tool/compile.dart`, `cargo test`) at ONE directory so
+/// cargo's fingerprint — the only thing that can reuse the fat-LTO cdylib —
+/// survives across jobs through the cache. The file never exists on a
+/// developer or consumer machine; do not create one to "speed up" a local
+/// build, the default already reuses artifacts across runs.
+String hookCargoTargetDir(
+  Uri outputDirectory, {
+  Map<String, String>? environment,
+}) {
+  final env = environment ?? Platform.environment;
+  final home = Platform.isWindows ? env['USERPROFILE'] : env['HOME'];
+  if (home != null && home.isNotEmpty) {
+    final marker = File(p.join(home, '.pdf_manipulator', 'cargo-target-dir'));
+    if (marker.existsSync()) {
+      final dir = marker.readAsStringSync().trim();
+      if (dir.isNotEmpty && p.isAbsolute(dir)) {
+        _log.info('cargo target dir overridden by ${marker.path}: $dir');
+        return dir;
+      }
+    }
+  }
+  return p.join(p.fromUri(outputDirectory), 'cargo_target');
+}
+
 /// Compiles the engine crate for [targetTriple] with [features] and copies
 /// the produced library to [outFile]. Installs the Rust target when it's
 /// missing (fresh CI or formatted laptop).

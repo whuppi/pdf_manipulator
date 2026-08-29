@@ -14,6 +14,20 @@ inputs:
     description: "Install the Rust toolchain (off for Dart-only static jobs)"
     required: false
     default: 'true'
+  rust-cache:
+    description: >
+      Restore/save the cargo target dir. 'false' = deliberately cold build:
+      release compiles and the scheduled cold Full Test, the runs that prove
+      a fresh clone still builds from source. Leave on everywhere else.
+    required: false
+    default: 'true'
+  rust-cache-save:
+    description: >
+      Whether this run may write the cargo cache (rust-cache save-if). PR
+      runs should mostly read: GitHub hides a PR ref's caches from every
+      other PR, so PR writes only burn quota. `dev` writes the warm source.
+    required: false
+    default: 'true'
   free-disk:
     description: "Reclaim disk for build-heavy jobs (Linux)"
     required: false
@@ -82,8 +96,14 @@ runs:
     # jobs (pana, downgrade-analyze) never invoke cargo, so they pass rust: false.
     # rust sets SUBMODULE_PDF_OXIDE in $GITHUB_ENV — the xcode/wasm cache keys
     # below read it, so rust must run before them (it does).
+    # cache-key is the make target: rows that build different triples or
+    # feature sets must not share a cargo cache.
     - uses: ./.github/actions/capabilities/rust
       if: inputs.rust == 'true'
+      with:
+        cache: ${{ inputs.rust-cache }}
+        cache-key: ${{ inputs.make-target }}
+        save-if: ${{ inputs.rust-cache-save }}
 
     - uses: whuppi/ci/actions/capabilities/free-disk-space@v2.4.1
       if: inputs.free-disk == 'true'

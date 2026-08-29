@@ -1,11 +1,46 @@
 name: Rust
-description: Install Rust toolchain + sccache for fast builds
+description: >
+  Install the pinned Rust toolchain, point every cargo build path at ONE
+  target directory, and cache that directory + the cargo registry with
+  rust-cache.
+
+  Why the target directory is the thing cached (and not per-object
+  compiler output): the engine's final artifact is a cdylib built with fat
+  LTO, and no wrapper cache (sccache, ccache) can cache a crate that
+  invokes the system linker — so with a 100 % wrapper hit rate the
+  expensive step still ran every job. cargo's own fingerprint in target/
+  is the only thing that reuses it, and that only survives if target/ does.
 
 inputs:
   targets:
     description: Extra Rust targets (comma-separated)
     required: false
     default: ''
+  cache:
+    description: >
+      Restore/save the cargo target dir + registry. Pass 'false' for a
+      deliberately COLD build — the release compile jobs and the scheduled
+      cold Full Test — which is the only proof that a fresh clone still
+      builds from source. Never default this to false to "simplify".
+    required: false
+    default: 'true'
+  cache-key:
+    description: >
+      Extra key segment that separates caches whose target/ contents
+      differ (the make target: each builds different triples / features).
+      rust-cache adds rustc host+version, the Cargo.lock/toml hashes, and
+      the CARGO/RUST env on its own.
+    required: false
+    default: ''
+  save-if:
+    description: >
+      Whether this run may WRITE the cache. GitHub scopes caches to the
+      branch that wrote them and lets a PR read only its base and the
+      default branch, so caches written from PR refs are invisible to every
+      other PR and only burn the 10 GB quota. Callers pass 'true' from
+      `dev` (the warm source everyone reads) and on a primary-key miss.
+    required: false
+    default: 'true'
 
 runs:
   using: composite
@@ -17,21 +52,10 @@ runs:
         echo "pdf_oxide=$(git rev-parse HEAD:vendor/pdf_oxide)" >> "$GITHUB_OUTPUT"
         echo "office_oxide=$(git rev-parse HEAD:vendor/office_oxide)" >> "$GITHUB_OUTPUT"
 
-    - name: Cache cargo registry
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: |
-          ~/.cargo/registry/index
-          ~/.cargo/registry/cache
-          ~/.cargo/git/db
-        key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}
-        restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-
-
     # Drive the runner's pre-installed rustup directly. Do not swap in
     # dtolnay/rust-toolchain: it ships no version tags, so it can only be
     # pinned to a rolling master SHA.
     - name: Install Rust toolchain
-      id: toolchain
       shell: bash
       env:
         INPUTS_TARGETS: ${{ inputs.targets }}
@@ -47,33 +71,67 @@ runs:
           rustup target add "$t"
         done
         rustc --version
-        # Hoist the sccache pin for the action step below — a composite
-        # action's `with:` cannot source a file, so the pin crosses as an
-        # output. versions.env explains why it is pinned.
-        echo "sccache=$SCCACHE_VERSION" >> "$GITHUB_OUTPUT"
-    # `version:` MUST stay. Without it the action installs whatever sccache
-    # released last, and versions.env's SCCACHE_VERSION comment documents what
-    # that has cost. Bump the pin there, never here.
-    - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+
+    # ONE cargo target dir for every build path in the job: the consumer
+    # hook (dart test, flutter build inside Gradle / Xcode), tool/compile.dart
+    # (the release cross-compiler) and `cargo test` all land in
+    # vendor/pdf_oxide/target. Same triple + profile + features = same
+    # artifact, reused; and rust-cache below persists that one tree.
+    #
+    # The hook cannot take this from an env var: hooks_runner strips the
+    # environment to a fixed allowlist before spawning it (the same wall
+    # the old sccache wiring had to work around). HOME survives, so the
+    # override is a file under it — see hookCargoTargetDir() in
+    # lib/src/hook/engine_compiler.dart, which also explains why the
+    # default stays inside .dart_tool for consumers.
+    - name: One cargo target dir for every build path
+      shell: bash
+      run: |
+        mkdir -p "$HOME/.pdf_manipulator"
+        printf '%s\n' "$GITHUB_WORKSPACE/vendor/pdf_oxide/target" \
+          > "$HOME/.pdf_manipulator/cargo-target-dir"
+        echo "cargo target dir: $GITHUB_WORKSPACE/vendor/pdf_oxide/target"
+
+    # rust-cache caches ~/.cargo (registry, git deps) and the workspace
+    # target dirs as ONE archive per key, cleaned of incremental + unused
+    # artifacts before save. Why these settings — each one is load-bearing:
+    #   workspaces             both vendored crates; office_oxide is built
+    #                          into pdf_oxide's target when the `office`
+    #                          feature is on, and on its own for its tests.
+    #   cache-workspace-crates rust-cache's default DROPS the workspace's
+    #                          own crates before saving, keeping only deps.
+    #                          Our "workspace crate" IS the vendored engine,
+    #                          which changes only on a fork bump — and its
+    #                          fat-LTO cdylib is the whole point of caching.
+    #   key                    the make target; rows building different
+    #                          triples / features must not share a key.
+    #   cache-on-failure       a red row still saves the deps it built, so
+    #                          the fix-up push is warm.
+    #   save-if                see the input; PR refs mostly read.
+    # Stale-artifact safety: the key carries the rustc version and every
+    # Cargo.lock/Cargo.toml hash; rust-cache prunes artifacts older than
+    # seven days at save time, so a warm cache cannot drift more than a
+    # week from a from-scratch build, and the scheduled cold Full Test
+    # proves from-scratch on top of that.
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      if: inputs.cache == 'true'
       with:
-        version: v${{ steps.toolchain.outputs.sccache }}
+        workspaces: |
+          vendor/pdf_oxide -> target
+          vendor/office_oxide -> target
+        key: ${{ inputs.cache-key }}
+        cache-workspace-crates: true
+        cache-on-failure: true
+        save-if: ${{ inputs.save-if }}
+
     - shell: bash
       env:
         STEPS_SUB_OUTPUTS_PDF_OXIDE: ${{ steps.sub.outputs.pdf_oxide }}
         STEPS_SUB_OUTPUTS_OFFICE_OXIDE: ${{ steps.sub.outputs.office_oxide }}
       run: |
         {
-          echo "SCCACHE_GHA_ENABLED=true"
-          # The cache namespace is chosen HERE, deliberately, instead of by
-          # whatever the sccache binary derives. Bump the number to purge every
-          # cached object on purpose (a poisoned or bloated cache); leave it
-          # alone across sccache and toolchain bumps — rustc's own hash is
-          # already part of every object key, so a toolchain bump never
-          # serves a stale object.
-          echo "SCCACHE_GHA_VERSION=1"
-          echo "RUSTC_WRAPPER=sccache"
-          # Incremental artifacts are useless on a fresh runner and make
-          # sccache refuse to cache the crate. Keep this 0 in CI.
+          # Incremental artifacts are useless on a fresh runner, bloat the
+          # cache, and rust-cache strips them anyway. Keep this 0 in CI.
           echo "CARGO_INCREMENTAL=0"
           # crates.io fetches occasionally drop mid-transfer on CI (curl 56,
           # connection reset). cargo's default is 3 retries; 10 rides out a
@@ -86,6 +144,7 @@ runs:
         } >> "$GITHUB_ENV"
         # Submodule pins arrive via env (hoisted from step outputs). Heredoc
         # with a random delimiter so a stray newline can't inject entries.
+        # The wasm and xcode caches key on SUBMODULE_PDF_OXIDE.
         {
           echo "SUBMODULE_PDF_OXIDE<<__SUB_PDF__"
           echo "${STEPS_SUB_OUTPUTS_PDF_OXIDE}"
@@ -94,45 +153,3 @@ runs:
           echo "${STEPS_SUB_OUTPUTS_OFFICE_OXIDE}"
           echo "__SUB_OFFICE__"
         } >> "$GITHUB_ENV"
-
-    # sccache for build hooks (dart-lang/native#3396 workaround).
-    #
-    # hooks_runner strips SCCACHE_* and RUSTC_WRAPPER env vars before
-    # spawning build.dart. Two workarounds keep sccache working:
-    #
-    # 1. Pre-start the server with SCCACHE_IDLE_TIMEOUT=0 while GHA
-    #    env vars exist. The server reads config at startup and persists.
-    #    Default idle timeout (600s) is too short — the 25+ min gap
-    #    (SDK download + emulator boot + Gradle) kills the server.
-    #
-    # 2. Write rustc-wrapper to $CARGO_HOME/config.toml. Cargo reads
-    #    this file automatically. hooks_runner can't strip a file.
-    #    HOME is in the allowlist, so cargo finds ~/.cargo/config.toml.
-    - name: Configure sccache for build hooks
-      shell: bash
-      run: |
-        export SCCACHE_IDLE_TIMEOUT=0
-        sccache --start-server || true
-
-        SCCACHE_BIN="$(which sccache)"
-        # Cargo on Windows needs a drive-letter path, not Git Bash /c/...
-        # Use cygpath -m for forward-slash Windows path (C:/...) which
-        # works in TOML without escaping backslashes.
-        if command -v cygpath &>/dev/null; then
-          SCCACHE_BIN="$(cygpath -m "$SCCACHE_BIN")"
-        fi
-        mkdir -p "$HOME/.cargo"
-        CFG="$HOME/.cargo/config.toml"
-        # Insert under [build] (a second header is a TOML error) with awk, not a
-        # GNU one-line sed append; that form broke on macOS. Pass the path via
-        # ENVIRON, not awk -v, which would interpret a backslash in it.
-        if [ -f "$CFG" ] && grep -q '^\[build\]' "$CFG"; then
-          sk_w="$SCCACHE_BIN" awk '
-            BEGIN { w = ENVIRON["sk_w"] }
-            { print }
-            /^\[build\]/ && !seen { print "rustc-wrapper = \"" w "\""; seen=1 }
-          ' "$CFG" > "$CFG.tmp" && mv "$CFG.tmp" "$CFG" || rm -f "$CFG.tmp"
-        else
-          printf '\n[build]\nrustc-wrapper = "%s"\n' "$SCCACHE_BIN" >> "$CFG"
-        fi
-        echo "sccache: server started, cargo config written ($SCCACHE_BIN)"
