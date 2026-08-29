@@ -951,6 +951,48 @@ void registerEditorTests(Pdf Function() createPdf) {
       );
     }, timeout: t(2));
 
+    test('an on-word on a radio group selects nothing', () async {
+      // "on" names no state in a group whose states are /Red and /Blue, and
+      // nothing says which kid was meant. Guessing per kid lights every one of
+      // them; the save path already resolves against the group's whole set and
+      // writes /Off. Both paths must agree, and selecting nothing is the honest
+      // answer for an ambiguous word.
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(uncheckedButtonForm));
+      await editor.setFormFieldValue('color', 'on');
+      await editor.flattenForms();
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final flat = sink.takeBytes();
+      expect(
+        await darkFractionInBand(
+          pdf,
+          flat,
+          0.29,
+          0.37,
+          left: 0.10,
+          right: 0.23,
+        ),
+        lessThan(0.05),
+        reason: 'an ambiguous on-word must not light the first kid',
+      );
+      expect(
+        await darkFractionInBand(
+          pdf,
+          flat,
+          0.29,
+          0.37,
+          left: 0.31,
+          right: 0.44,
+        ),
+        lessThan(0.05),
+        reason:
+            'nor the second — the flatten path must resolve against the '
+            'whole group, as the save path does',
+      );
+    }, timeout: t(2));
+
     // ── Rotation ──
 
     test('rotatePage sets rotation on specific page', () async {
