@@ -317,6 +317,41 @@ final Uint8List uncheckedButtonForm = _offsetPdf([
   _streamBody('', 'q Q\n'),
 ]);
 
+/// A radio group whose two on-states are named `/Yes` and `/No` — the shape
+/// that makes "No" a state name rather than a way of saying "off". Both kids
+/// start off; the on state fills its 60x60 box solid black.
+///
+/// | Kid | On-state | Widget rect (PDF y) | x |
+/// |---|---|---|---|
+/// | first | `/Yes` | 700..760 | 72..132 |
+/// | second | `/No` | 700..760 | 200..260 |
+final Uint8List yesNoRadioForm = _offsetPdf([
+  // 1: catalog with an inline AcroForm
+  '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page — both kid widgets in /Annots, blank white content
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 9 0 R /Annots [5 0 R 6 0 R] >>',
+  // 4: radio parent — /Ff bit position 16 (0x8000) is Radio, ISO 32000-1 Table 227
+  '<< /FT /Btn /Ff 32768 /T (answer) /V /Off /Kids [5 0 R 6 0 R] >>',
+  // 5: kid whose on-state is /Yes
+  '<< /Parent 4 0 R /Type /Annot /Subtype /Widget /Rect [72 700 132 760] /AS /Off /AP << /N << /Yes 7 0 R /Off 8 0 R >> >> >>',
+  // 6: kid whose on-state is /No
+  '<< /Parent 4 0 R /Type /Annot /Subtype /Widget /Rect [200 700 260 760] /AS /Off /AP << /N << /No 7 0 R /Off 8 0 R >> >> >>',
+  // 7: shared ON appearance — solid black
+  _streamBody(
+    '/Type /XObject /Subtype /Form /BBox [0 0 60 60]',
+    'q 0 g 0 0 60 60 re f Q\n',
+  ),
+  // 8: shared OFF appearance — white box, hairline border
+  _streamBody(
+    '/Type /XObject /Subtype /Form /BBox [0 0 60 60]',
+    'q 1 g 0 0 60 60 re f 0 G 1 w 0.5 0.5 59 59 re S Q\n',
+  ),
+  // 9: page content stream — blank white page
+  _streamBody('', 'q Q\n'),
+]);
+
 final Uint8List bookmarkedPdf = Uint8List.fromList([
   0x25,
   0x50,

@@ -638,8 +638,10 @@ void registerEditorTests(Pdf Function() createPdf) {
       Pdf pdf,
       Uint8List bytes,
       double top,
-      double bottom,
-    ) async {
+      double bottom, {
+      double left = 0,
+      double right = 1,
+    }) async {
       final doc = await pdf.open(src(bytes));
       final frames = <RenderedPage>[];
       await for (final page in doc.render(
@@ -652,9 +654,12 @@ void registerEditorTests(Pdf Function() createPdf) {
       final bitmap = img.decodePng(frames.single.data)!;
       final y0 = (bitmap.height * top).round();
       final y1 = (bitmap.height * bottom).round();
+      final x0 = (bitmap.width * left).round();
+      final x1 = (bitmap.width * right).round();
       var dark = 0, total = 0;
       for (final p in bitmap) {
         if (p.y < y0 || p.y >= y1) continue;
+        if (p.x < x0 || p.x >= x1) continue;
         total++;
         if (p.r < 100 && p.g < 100 && p.b < 100) dark++;
       }
@@ -866,6 +871,85 @@ void registerEditorTests(Pdf Function() createPdf) {
       },
       timeout: t(2),
     );
+
+    test('a selected radio kid lights, and its sibling does not', () async {
+      // The band holds both kids, so measuring it whole cannot tell "Red is on"
+      // from "both are on". Split it by x: Red sits at 72..132, Blue at
+      // 200..260 on a 612pt page.
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(uncheckedButtonForm));
+      await editor.setFormFieldValue('color', 'Red');
+      await editor.flattenForms();
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final flat = sink.takeBytes();
+      expect(
+        await darkFractionInBand(
+          pdf,
+          flat,
+          0.29,
+          0.37,
+          left: 0.10,
+          right: 0.23,
+        ),
+        greaterThan(0.15),
+        reason: 'the chosen kid must flatten in its on state',
+      );
+      expect(
+        await darkFractionInBand(
+          pdf,
+          flat,
+          0.29,
+          0.37,
+          left: 0.31,
+          right: 0.44,
+        ),
+        lessThan(0.05),
+        reason:
+            'the sibling must stay off — /V names exactly one state, and /AS '
+            'goes to each kid separately',
+      );
+    }, timeout: t(2));
+
+    test('an on-state named /No is selectable, not read as "off"', () async {
+      // A Yes/No radio group really does have a state named /No, so the word
+      // can only mean "off" once the widget has said it offers no such state.
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(yesNoRadioForm));
+      await editor.setFormFieldValue('answer', 'No');
+      await editor.flattenForms();
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final flat = sink.takeBytes();
+      expect(
+        await darkFractionInBand(
+          pdf,
+          flat,
+          0.04,
+          0.12,
+          left: 0.31,
+          right: 0.44,
+        ),
+        greaterThan(0.15),
+        reason:
+            'the /No kid must light — an offered state name wins over the '
+            'word meaning off',
+      );
+      expect(
+        await darkFractionInBand(
+          pdf,
+          flat,
+          0.04,
+          0.12,
+          left: 0.10,
+          right: 0.23,
+        ),
+        lessThan(0.05),
+        reason: 'the /Yes kid must stay off',
+      );
+    }, timeout: t(2));
 
     // ── Rotation ──
 
