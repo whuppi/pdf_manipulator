@@ -723,53 +723,49 @@ void registerEditorTests(Pdf Function() createPdf) {
       timeout: t(1),
     );
 
-    test(
-      'reopened filled form rasterizes its value (/NeedAppearances)',
-      () async {
-        // The renderer (not just the flattener) must regenerate a widget's
-        // appearance from /V when the AcroForm asks for it. Fill a field whose
-        // /AP is a blank placeholder, save (sets /V + /NeedAppearances), reopen,
-        // and RASTERIZE: the value's pixels must appear where the blank /AP would
-        // have drawn nothing. Proof is SEMANTIC — rendered pixels.
-        final pdf = createPdf();
-        final e1 = await pdf.edit(src(emptyApTextForm));
-        await e1.setFormFieldValue('field', 'JANEROE');
-        final filled = TestSink();
-        await e1.save(filled);
-        await e1.dispose();
+    test('reopened filled form rasterizes its value (/NeedAppearances)', () async {
+      // The renderer (not just the flattener) must regenerate a widget's
+      // appearance from /V when the AcroForm asks for it. Fill a field whose
+      // /AP is a blank placeholder, save (sets /V + /NeedAppearances), reopen,
+      // and RASTERIZE: the value's pixels must appear where the blank /AP would
+      // have drawn nothing. Proof is SEMANTIC — rendered pixels.
+      final pdf = createPdf();
+      final e1 = await pdf.edit(src(emptyApTextForm));
+      await e1.setFormFieldValue('field', 'JANEROE');
+      final filled = TestSink();
+      await e1.save(filled);
+      await e1.dispose();
 
-        final doc = await pdf.open(src(filled.takeBytes()));
-        final pages = <RenderedPage>[];
-        await for (final page in doc.render(
-          pages: const PdfPages.single(0),
-          size: const PdfRenderSize.thumbnail(220),
-        )) {
-          pages.add(page);
-        }
-        await doc.dispose();
+      final doc = await pdf.open(src(filled.takeBytes()));
+      final pages = <RenderedPage>[];
+      await for (final page in doc.render(
+        pages: const PdfPages.single(0),
+        size: const PdfRenderSize.thumbnail(220),
+      )) {
+        pages.add(page);
+      }
+      await doc.dispose();
 
-        final bitmap = img.decodePng(pages.single.data)!;
-        // In the broken case this page is provably blank white: empty /AP
-        // (/Tx BMC EMC), blank content (q Q), no widget border. So ANY ink in
-        // the top third — where the field sits — is the regenerated value.
-        // Count non-white pixels, not just near-black ones: a strict dark
-        // threshold reduces the small antialiased value to a few core pixels
-        // whose count varies by rasterizer/DPI across machines, while counting
-        // ink gives a strong 0-vs-many signal that survives those differences.
-        var ink = 0;
-        final cutoff = bitmap.height ~/ 3;
-        for (final p in bitmap) {
-          if (p.y < cutoff && (p.r < 200 || p.g < 200 || p.b < 200)) ink++;
-        }
-        expect(
-          ink,
-          greaterThan(10),
-          reason:
-              'the reopened value must rasterize, not the blank /AP placeholder',
-        );
-      },
-      timeout: t(1),
-    );
+      final bitmap = img.decodePng(pages.single.data)!;
+      // In the broken case this page is provably blank white: empty /AP
+      // (/Tx BMC EMC), blank content (q Q), no widget border. So ANY ink in
+      // the top third — where the field sits — is the regenerated value.
+      // Count non-white pixels, not just near-black ones: a strict dark
+      // threshold reduces the small antialiased value to a few core pixels
+      // whose count varies by rasterizer/DPI across machines, while counting
+      // ink gives a strong 0-vs-many signal that survives those differences.
+      var ink = 0;
+      final cutoff = bitmap.height ~/ 3;
+      for (final p in bitmap) {
+        if (p.y < cutoff && (p.r < 200 || p.g < 200 || p.b < 200)) ink++;
+      }
+      expect(
+        ink,
+        greaterThan(10),
+        reason:
+            'the reopened value must rasterize, not the blank /AP placeholder',
+      );
+    }, timeout: t(1));
 
     test('addImageStamp preserves PNG transparency', () async {
       // A transparent-background PNG keeps its transparency only if the
