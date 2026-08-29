@@ -103,26 +103,52 @@ runs:
     #                          Our "workspace crate" IS the vendored engine,
     #                          which changes only on a fork bump — and its
     #                          fat-LTO cdylib is the whole point of caching.
-    #   key                    the make target; rows building different
-    #                          triples / features must not share a key.
+    #   key                    the make target (rows building different
+    #                          triples / features must not share a key)
+    #                          AND both vendored submodule revs. The revs
+    #                          are what make the mtime pin below safe —
+    #                          see that step. Never drop them from the key.
     #   cache-on-failure       a red row still saves the deps it built, so
     #                          the fix-up push is warm.
     #   save-if                see the input; PR refs mostly read.
-    # Stale-artifact safety: the key carries the rustc version and every
-    # Cargo.lock/Cargo.toml hash; rust-cache prunes artifacts older than
-    # seven days at save time, so a warm cache cannot drift more than a
-    # week from a from-scratch build, and the scheduled cold Full Test
-    # proves from-scratch on top of that.
+    # Stale-artifact safety: the key carries the rustc version, every
+    # Cargo.lock/Cargo.toml hash and the exact vendor revs; rust-cache
+    # prunes artifacts older than seven days at save time, so a warm cache
+    # cannot drift more than a week from a from-scratch build, and the
+    # scheduled cold Full Test proves from-scratch on top of that.
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       if: inputs.cache == 'true'
       with:
         workspaces: |
           vendor/pdf_oxide -> target
           vendor/office_oxide -> target
-        key: ${{ inputs.cache-key }}
+        key: ${{ inputs.cache-key }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}
         cache-workspace-crates: true
         cache-on-failure: true
         save-if: ${{ inputs.save-if }}
+
+    # cargo decides whether a PATH crate (the vendored engine — unlike a
+    # registry crate, which is fingerprinted by content) is fresh by
+    # comparing each source file's mtime with the cached fingerprint's.
+    # A checkout stamps every file with "now", newer than anything in the
+    # restored cache, so without this step the engine crates rebuild on
+    # every run and the cache only ever serves dependencies — exactly the
+    # miss the first warm run showed (deps hit, pdf_oxide + office_oxide
+    # recompiled). Pinning the vendor tree to a fixed past instant makes
+    # cargo trust the restored artifacts.
+    #
+    # This is ONLY correct because the cache key names the exact vendor
+    # revs: same key ⇒ byte-identical sources ⇒ reusing the artifact is
+    # right; any source change ⇒ new rev ⇒ new key ⇒ cold build. Remove
+    # the revs from the key and this step starts serving stale binaries.
+    # Never widen the touch to anything outside vendor/, and never run it
+    # on a developer machine — local builds rely on real mtimes.
+    - name: Pin vendor source mtimes for cargo freshness
+      if: inputs.cache == 'true'
+      shell: bash
+      run: |
+        find vendor -type f -not -path '*/target/*' -exec touch -t 200001010000 {} +
+        echo "vendor mtimes pinned"
 
     - shell: bash
       env:

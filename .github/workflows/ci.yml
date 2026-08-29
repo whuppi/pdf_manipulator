@@ -121,6 +121,7 @@ jobs:
       - uses: ./.github/actions/make-target
         with:
           make-target: analyze-floor
+          rust: false  # Dart-only static analysis, no toolchain or cargo cache to provision
 
   # Gate pub.dev platform support: pana (the same analyzer pub.dev runs) must
   # still report all 6 platforms, so an unconditional dart:io/ffi import that
