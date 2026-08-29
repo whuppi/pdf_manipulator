@@ -179,6 +179,8 @@ runs:
           # Incremental artifacts are useless on a fresh runner, bloat the
           # cache, and rust-cache strips them anyway. Keep this 0 in CI.
           echo "CARGO_INCREMENTAL=0"
+          # PROBE (temporary): print why cargo considers a unit dirty.
+          echo "CARGO_LOG=cargo::core::compiler::fingerprint=info"
           # crates.io fetches occasionally drop mid-transfer on CI (curl 56,
           # connection reset). cargo's default is 3 retries; 10 rides out a
           # short registry blip instead of failing the whole build.
