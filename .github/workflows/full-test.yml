@@ -150,7 +150,7 @@ jobs:
     steps:
       - name: Check filter
         id: filter
-        uses: whuppi/ci/actions/matrix-filter@v2.4.0
+        uses: whuppi/ci/actions/matrix-filter@v2.4.1
         with:
           name: ${{ matrix.name }}
           filter: ${{ needs.inputs.outputs.filter }}
