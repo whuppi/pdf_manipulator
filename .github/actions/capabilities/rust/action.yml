@@ -116,9 +116,19 @@ runs:
     # prunes artifacts older than seven days at save time, so a warm cache
     # cannot drift more than a week from a from-scratch build, and the
     # scheduled cold Full Test proves from-scratch on top of that.
+    #   prefix-key             rust-cache saves ONLY on a primary-key miss;
+    #                          an archive that exists is never re-saved,
+    #                          even when a run rebuilt everything under
+    #                          it. So any change to how artifacts are
+    #                          produced or fingerprinted (the mtime-pin
+    #                          rule below, the target-dir layout, the
+    #                          cleanup settings) MUST bump this prefix, or
+    #                          every existing key keeps serving an archive
+    #                          the new rule can't hit. Bump = one integer.
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       if: inputs.cache == 'true'
       with:
+        prefix-key: v1-rust
         workspaces: |
           vendor/pdf_oxide -> target
           vendor/office_oxide -> target
