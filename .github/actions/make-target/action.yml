@@ -40,9 +40,22 @@ inputs:
     required: false
     default: 'true'
   free-disk:
-    description: "Reclaim disk for build-heavy jobs (Linux)"
+    description: >
+      Guarantee disk headroom for a build-heavy job (Linux). The job never
+      starts its build with less than `min-free-gb` free: when the runner
+      image is short, the shared free-disk-space capability reclaims ~25 GB
+      (~2 min); when it already has the room, nothing is deleted and no
+      time is spent. Never turn this off on a job whose build once overran
+      a runner — the guard is what makes that failure impossible.
     required: false
     default: 'false'
+  min-free-gb:
+    description: >
+      Free space (GB) the build must start with when free-disk is on. Set
+      from the job's measured peak plus margin; the post-build df line
+      below is the evidence for tuning it.
+    required: false
+    default: '40'
   java:
     description: "Install JDK"
     required: false
@@ -116,8 +129,23 @@ runs:
         cache-key: ${{ inputs.rust-cache-key != '' && inputs.rust-cache-key || inputs.make-target }}
         save-if: ${{ inputs.rust-cache-save }}
 
+    # The reclaim is slow (~2 min of apt/rm) and only needed when the
+    # image is short. Runner images grow — the ubuntu-24.04 image went from
+    # ~14 GB free to ~80 GB — so the decision is made from a live df, not
+    # from whatever the image had when the job was written.
+    - name: Disk headroom
+      id: headroom
+      if: inputs.free-disk == 'true' && runner.os == 'Linux'
+      shell: bash
+      env:
+        MIN_GB: ${{ inputs.min-free-gb }}
+      run: |
+        avail_gb=$(( $(df -Pk / | awk 'NR==2{print $4}') / 1024 / 1024 ))
+        echo "free: ${avail_gb} GB, required: ${MIN_GB} GB"
+        if [ "$avail_gb" -lt "$MIN_GB" ]; then echo "reclaim=true" >> "$GITHUB_OUTPUT"; else echo "reclaim=false" >> "$GITHUB_OUTPUT"; fi
+
     - uses: whuppi/ci/actions/capabilities/free-disk-space@v2.4.1
-      if: inputs.free-disk == 'true'
+      if: inputs.free-disk == 'true' && steps.headroom.outputs.reclaim == 'true'
 
     - uses: whuppi/ci/actions/capabilities/java@v2.4.1
       if: inputs.java == 'true'
@@ -204,3 +232,8 @@ runs:
       with:
         phase: save
 
+    # Evidence for min-free-gb: what the build actually left on disk.
+    - name: Disk after build
+      if: always() && inputs.free-disk == 'true' && runner.os == 'Linux'
+      shell: bash
+      run: df -h /

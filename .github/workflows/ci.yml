@@ -186,8 +186,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { submodules: recursive, persist-credentials: false }
-      # free-disk: the engine's debug build overruns a stock runner's
-      # ~14 GB free; the capability reclaims room (Linux only).
+      # free-disk: the engine's debug test build (~330 binaries) once
+      # overran a stock runner's ~14 GB free. The guard checks live
+      # headroom and reclaims only when the image is short (Linux only).
       - uses: ./.github/actions/make-target
         with:
           make-target: test-rust
