@@ -500,10 +500,18 @@ changelog" step of the upload-assets job — right before the publish
 approval gate. Open the workflow run, expand that step, and review
 the full changelog that will be published.
 
-To preview locally:
+To preview locally, run the same mode the publish job runs. `release.sh`
+lives in the shared [whuppi/ci](https://github.com/whuppi/ci) repo, not
+this one — CI reaches it through the `release-tool` action, so locally you
+point at a checkout of that repo (a sibling of this one). Run from this
+package's root, and set `GITHUB_REPOSITORY` — the script requires it while
+loading, whichever mode you ask for, and exits without it. Some modes want
+more: `--check-versions` also needs `BRANCH` (`dev` or `prod`, picking the
+lane it checks). `--help` lists every mode.
 
 ```sh
-bash tool/ci/release.sh --stamp-changelog vX.Y.Z
+GITHUB_REPOSITORY=whuppi/pdf_manipulator \
+  bash ../ci/tool/ci/release.sh --stamp-changelog vX.Y.Z
 cat CHANGELOG.md
 git checkout CHANGELOG.md   # restore
 ```
