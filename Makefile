@@ -110,8 +110,19 @@ format:
 #                        builder battery is exempt wholesale — emitted
 #                        PDF syntax IS its subject)
 
+# Bare `dart`, NOT `dart run`. `dart run` fires every build hook in the
+# dependency graph before the script starts, so generating 13 pure-Dart
+# fixtures would first compile the native engine (fat-LTO cdylib, minutes)
+# in every target that depends on `fixtures` — including `analyze` and the
+# browser rows, which never load it. generate_fixtures.dart imports only
+# dart:* + crypto + the catalog. The consumer hook path loses no coverage:
+# `dart test` in test-unit / test-ops-native runs the hook on every PR.
+# The explicit `pub get` replaces the implicit resolve `dart run` did, so a
+# fresh clone still works; with an up-to-date lockfile it is a no-op.
+# Do not put `run` back "for consistency".
 fixtures:
-	$(DART) run tool/generate_fixtures.dart
+	@$(DART) pub get --no-example >/dev/null
+	$(DART) tool/generate_fixtures.dart
 
 # Two static guards. Guard 1: tests run identically on VM and browser, so no
 # dart:io; a test that genuinely needs it carries an 'io-exempt: <reason>'

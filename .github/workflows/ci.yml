@@ -74,6 +74,12 @@ jobs:
               - 'Makefile'
               - '.github/**'
 
+  # Format + `dart analyze --fatal-infos` on the package and the example,
+  # then `cargo check` of the vendored engine under BOTH shipped feature
+  # sets (native and wasm) with our-code warnings fatal. The Rust half is
+  # what catches a patch that compiles for one target and not the other
+  # before a Full Test spends an hour on it. Needs submodules; does not
+  # need the engine BUILT — the fixtures target is deliberately hook-free.
   analyze:
     name: Analyze
     needs: [inputs, changes]
@@ -127,6 +133,12 @@ jobs:
           make-target: platforms
           rust: false  # pana is Dart-only static analysis, no native build to provision
 
+  # The fast gate's one real build: unit + native ops suites via `dart
+  # test`, which runs hook/build.dart exactly as a downstream package would.
+  # This is the only per-PR proof that the consumer hook still compiles the
+  # engine from vendor source on a clean machine — Full Test is opt-in by
+  # label, so if this job stops building the engine, a broken hook reaches
+  # `dev` unnoticed. Keep it a real build; cache its inputs, don't stub it.
   test:
     name: Package tests
     needs: [inputs, changes]
@@ -144,6 +156,12 @@ jobs:
 
   # Vendored-engine cargo tests — only when a PR touches the engine, its
   # features, the Makefile, or CI. Skipped on Dart-only PRs.
+  # This is the upstream suite running against OUR patches, with the
+  # test-only features the shipped builds exclude. A fork patch that breaks
+  # upstream behaviour we don't exercise from Dart is caught here only.
+  # The `rust` path filter is the trigger contract: widen it if the engine
+  # gains a new input; never narrow it to make Dart PRs faster (they
+  # already skip it).
   rust:
     name: Rust tests
     needs: [inputs, changes]

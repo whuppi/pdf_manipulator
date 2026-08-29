@@ -767,6 +767,11 @@ Single matrix with two tiers in one sorted list:
 | Integration | macOS, Linux, Windows, Android, iOS, Web | Android on macos-intel + win, Web on macos + win |
 | Verify | Android, iOS, macOS, Linux, Web | Android on macos + win, Web on macos + win |
 
+Every row family states, in a comment beside it in `full-test.yml`, the
+claim it proves and what a build from a different host would silently stop
+proving. That comment is the contract: CI gets faster by caching what a row
+builds, never by removing the row or handing it another row's output.
+
 ### Build inputs — `build.json` vs `versions.env`
 
 Two files hold the project's pinned inputs, split by *what the value is*, not by

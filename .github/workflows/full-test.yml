@@ -6,6 +6,14 @@
 # on any machine can build with this package. Each row declares
 # capabilities — make-target provisions them.
 #
+# Every row family below carries a comment naming the claim it proves
+# and what a shortcut would stop proving. That comment is the bar.
+# Make this workflow faster by caching what a row BUILDS (the shared
+# caches keyed on the real inputs); never by deleting a row, feeding it
+# another row's artifact, or building it with a lighter profile than
+# the one it exists to check. A row that passes without doing its own
+# work is a green light with nothing behind it.
+#
 # Runners: per-row in matrix (target-specific). Gate job uses
 # configurable infra runner (default: ubuntu-24.04).
 name: Full Test
@@ -91,6 +99,18 @@ jobs:
       matrix:
         include:
           # ── Package tests ──
+          # Native rows: the package's own suite against an engine the
+          # CONSUMER build hook compiled on that OS — the exact path a
+          # `dart test` in a downstream app takes, so a hook regression on
+          # one OS fails here and not in a user's project.
+          # Web rows: build the wasm on THIS host, then run the ops battery
+          # against that file in all three browser lanes (OPFS, JSPI,
+          # Atomics). The macOS/Windows [P] rows are not redundant with
+          # Linux: wasm-bindgen + wasm-opt run as host tools, so a
+          # host-specific difference (path handling, line endings, a
+          # toolchain that builds differently) only surfaces when that host
+          # builds the artifact it tests. Never hand these rows a
+          # Linux-built wasm.
           - { name: "pkg: Linux (ubuntu-x64)",      runner: ubuntu-24.04,        make: test-pkg-native, timeout: 30 }
           - { name: "pkg: macOS (macos-arm64)",     runner: macos-14,            make: test-pkg-native, timeout: 30 }
           - { name: "pkg: Web (ubuntu-x64)",        runner: ubuntu-24.04,        make: test-ops-web,    timeout: 40, chrome: true, headless-display: true, wasm-cache: true, wasm-build: true }
@@ -99,8 +119,19 @@ jobs:
           - { name: "pkg: Windows (win-x64)",       runner: windows-2025-vs2026, make: test-pkg-native, timeout: 40 }
 
           # ── Integration tests ──
+          # The example app built the way a consumer builds it (the hook
+          # runs inside Gradle / Xcode / the desktop toolchain) and driven
+          # on a real device target. These rows are the only place the
+          # engine is loaded through Flutter's bundling on each platform.
           # Emulator needs Intel — macOS ARM runners are M1 VMs that can't virtualize the emulator:
           # https://docs.github.com/en/actions/reference/runners/github-hosted-runners#limitations-for-arm64-macos-runners
+          # That is exactly why the macos-intel [P] row stays: it is the ONLY
+          # way CI can prove "a Mac host can build the Android side and run
+          # the integration tests" at all, and whuppi/ci uses this row as the
+          # canary that gates folding the Rust capability into the shared
+          # make-target. It is slow because its caches start cold, which is a
+          # caching problem — fix the cache, keep the row. Apple Silicon devs
+          # run this locally fine; only GitHub's ARM VMs can't.
           - { name: "int: Android (ubuntu-x64)",    runner: ubuntu-24.04,        make: test-example-android, timeout: 40, java: true, hw-accel: true, gradle-cache: true, emulator: true }
           - { name: "int: Android (macos-intel) [P]", runner: macos-15-intel,      make: test-example-android, timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
           - { name: "int: Android (win-x64) [P]",       runner: windows-2025-vs2026, make: test-example-android, timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
@@ -113,6 +144,15 @@ jobs:
           - { name: "int: Windows (win-x64)",       runner: windows-2025-vs2026, make: test-example-windows, timeout: 40 }
 
           # ── Verify (release builds) ──
+          # Release-mode consumer builds: every shipped ABI through the hook
+          # with the release profile (fat LTO, codegen-units 1) — the
+          # binary users actually get — plus the post-build gates (16 KB
+          # ELF alignment on Android, the web gate). Integration rows above
+          # run debug builds, so an optimisation-only bug or a
+          # release-profile link failure is caught HERE and nowhere else.
+          # Never build these with a lighter profile to save minutes.
+          # The [P] rows prove a release build from a dev's Mac or Windows
+          # box yields the same shippable artifact, not just Linux CI's.
           - { name: "verify: Android (ubuntu-x64)", runner: ubuntu-24.04,        make: verify-android, timeout: 40, java: true, gradle-cache: true }
           - { name: "verify: Android (macos-arm64) [P]",runner: macos-14,            make: verify-android, timeout: 40, java: true, gradle-cache: true, portability: true }
           - { name: "verify: Android (win-x64) [P]",    runner: windows-2025-vs2026, make: verify-android, timeout: 60, java: true, gradle-cache: true, portability: true }
