@@ -127,28 +127,38 @@ runs:
         cache-on-failure: true
         save-if: ${{ inputs.save-if }}
 
-    # cargo decides whether a PATH crate (the vendored engine — unlike a
-    # registry crate, which is fingerprinted by content) is fresh by
-    # comparing each source file's mtime with the cached fingerprint's.
-    # A checkout stamps every file with "now", newer than anything in the
-    # restored cache, so without this step the engine crates rebuild on
-    # every run and the cache only ever serves dependencies — exactly the
-    # miss the first warm run showed (deps hit, pdf_oxide + office_oxide
-    # recompiled). Pinning the vendor tree to a fixed past instant makes
-    # cargo trust the restored artifacts.
+    # cargo fingerprints a PATH crate (the vendored engine — unlike a
+    # registry crate, which is fingerprinted by content) by its sources'
+    # mtimes, two ways, and both must agree between the run that saved the
+    # cache and the run that restores it:
+    #   1. every source must be OLDER than the cached dep-info, and
+    #   2. the package fingerprint records "the newest file's mtime AND its
+    #      path" and compares that string for equality
+    #      (PrecalculatedComponentsChanged in cargo's fingerprint log).
+    # A checkout stamps every file "now", so (1) fails on every run and the
+    # engine recompiles while the cache only serves dependencies. Pinning
+    # all of vendor/ to one past instant fixes (1) but breaks (2): with
+    # every mtime equal, which file counts as "newest" is decided by
+    # directory-walk order, which differs between runner VMs. So after the
+    # pin, each package's Cargo.toml is bumped one day later — one file,
+    # deterministically the newest — and both runs record the same string.
     #
     # This is ONLY correct because the cache key names the exact vendor
     # revs: same key ⇒ byte-identical sources ⇒ reusing the artifact is
-    # right; any source change ⇒ new rev ⇒ new key ⇒ cold build. Remove
-    # the revs from the key and this step starts serving stale binaries.
-    # Never widen the touch to anything outside vendor/, and never run it
-    # on a developer machine — local builds rely on real mtimes.
+    # right; any source change ⇒ new rev ⇒ new key ⇒ cold build. It was
+    # measured, not assumed: with the pin in place cargo does NOT notice an
+    # edited source file (its mtime is older than the cached dep-info), so
+    # the revs in the key are the ONLY thing standing between this step and
+    # a stale binary. Remove them and it serves one. Never widen the touch
+    # to anything outside vendor/, and never run it on a developer machine —
+    # local builds rely on real mtimes.
     - name: Pin vendor source mtimes for cargo freshness
       if: inputs.cache == 'true'
       shell: bash
       run: |
         find vendor -type f -not -path '*/target/*' -exec touch -t 200001010000 {} +
-        echo "vendor mtimes pinned"
+        find vendor -name Cargo.toml -not -path '*/target/*' -exec touch -t 200001020000 {} +
+        echo "vendor mtimes pinned (Cargo.toml newest)"
 
     - shell: bash
       env:
