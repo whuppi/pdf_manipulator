@@ -137,6 +137,68 @@ runs:
         cache-on-failure: true
         save-if: ${{ inputs.save-if }}
 
+    # rust-cache's save-time cleanup keeps a deps/ entry only when its name
+    # is `<kept-crate>-<hash>`. Both vendored engines declare
+    # crate-type = [cdylib, rlib, staticlib], and cargo drops the hash from
+    # EVERY output of such a unit (libpdf_oxide.so / .rlib / .a,
+    # liboffice_oxide.rlib …), so the matcher deletes exactly the artifacts
+    # this whole cache exists for and cargo rebuilds the fat-LTO engine on
+    # every "warm" run (measured: FailedToReadMetadata(deps/libpdf_oxide.so)
+    # with everything else cached). Until that matcher is fixed upstream,
+    # this second archive carries only the unhashed engine outputs and is
+    # restored on top of rust-cache's. It must stay AFTER the rust-cache
+    # step: main steps run in order (its extraction lands over rust-cache's)
+    # and post steps run in reverse (its save runs before rust-cache's
+    # cleanup can delete the files). Same key ingredients as rust-cache's,
+    # same save gate. Do not fold these paths into rust-cache's workspaces —
+    # they'd be deleted again.
+    #
+    # Two steps, one runs: `actions/cache` saves from its own post step
+    # (after the build, on a primary-key miss), which is what a run that MAY
+    # write needs; a run that must not write uses the restore-only action,
+    # which registers no post step at all. `actions/cache/save` is NOT an
+    # option here — it is a main step, and at the end of this composite it
+    # would run before the build and save nothing under a key that then
+    # blocks the real save forever.
+    - name: Restore + save unhashed engine artifacts
+      if: inputs.cache == 'true' && inputs.save-if == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          vendor/*/target/**/deps/lib*_oxide.rlib
+          vendor/*/target/**/deps/lib*_oxide.rmeta
+          vendor/*/target/**/deps/lib*_oxide.so
+          vendor/*/target/**/deps/lib*_oxide.dylib
+          vendor/*/target/**/deps/lib*_oxide.a
+          vendor/*/target/**/deps/lib*_oxide.d
+          vendor/*/target/**/deps/*_oxide.dll
+          vendor/*/target/**/deps/*_oxide.dll.lib
+          vendor/*/target/**/deps/*_oxide.dll.exp
+          vendor/*/target/**/deps/*_oxide.lib
+          vendor/*/target/**/deps/*_oxide.pdb
+          vendor/*/target/**/deps/*_oxide.wasm
+          vendor/*/target/**/deps/*_oxide.d
+        key: v1-rust-engine-${{ inputs.cache-key }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}-${{ hashFiles('vendor/*/Cargo.lock', 'vendor/*/Cargo.toml', 'tool/versions.env') }}
+    - name: Restore unhashed engine artifacts (read-only)
+      if: inputs.cache == 'true' && inputs.save-if != 'true'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          vendor/*/target/**/deps/lib*_oxide.rlib
+          vendor/*/target/**/deps/lib*_oxide.rmeta
+          vendor/*/target/**/deps/lib*_oxide.so
+          vendor/*/target/**/deps/lib*_oxide.dylib
+          vendor/*/target/**/deps/lib*_oxide.a
+          vendor/*/target/**/deps/lib*_oxide.d
+          vendor/*/target/**/deps/*_oxide.dll
+          vendor/*/target/**/deps/*_oxide.dll.lib
+          vendor/*/target/**/deps/*_oxide.dll.exp
+          vendor/*/target/**/deps/*_oxide.lib
+          vendor/*/target/**/deps/*_oxide.pdb
+          vendor/*/target/**/deps/*_oxide.wasm
+          vendor/*/target/**/deps/*_oxide.d
+        key: v1-rust-engine-${{ inputs.cache-key }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}-${{ hashFiles('vendor/*/Cargo.lock', 'vendor/*/Cargo.toml', 'tool/versions.env') }}
+
     # cargo fingerprints a PATH crate (the vendored engine — unlike a
     # registry crate, which is fingerprinted by content) by its sources'
     # mtimes, two ways, and both must agree between the run that saved the
@@ -179,8 +241,6 @@ runs:
           # Incremental artifacts are useless on a fresh runner, bloat the
           # cache, and rust-cache strips them anyway. Keep this 0 in CI.
           echo "CARGO_INCREMENTAL=0"
-          # PROBE (temporary): print why cargo considers a unit dirty.
-          echo "CARGO_LOG=cargo::core::compiler::fingerprint=info"
           # crates.io fetches occasionally drop mid-transfer on CI (curl 56,
           # connection reset). cargo's default is 3 retries; 10 rides out a
           # short registry blip instead of failing the whole build.
@@ -201,3 +261,4 @@ runs:
           echo "${STEPS_SUB_OUTPUTS_OFFICE_OXIDE}"
           echo "__SUB_OFFICE__"
         } >> "$GITHUB_ENV"
+
