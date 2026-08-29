@@ -7,6 +7,8 @@
 //
 // So this file tests the seam the others skip: the path from a hook's output
 // directory to a keep decision, plus a guard that the hook actually walks it.
+// io-exempt: builds a throwaway fixture app on disk — the hook's app-root
+// resolution can only be proven against a real directory tree.
 import 'dart:io';
 
 import 'package:pdf_manipulator/src/hook/app_root.dart';
