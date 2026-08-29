@@ -306,12 +306,50 @@ test-rust: export CARGO_PROFILE_TEST_DEBUG := 0
 # embedded fallback fonts, but the upstream test suites cover both (the
 # CJK flatten tests are self-gated and silently SKIP without the feature),
 # so tests compile and run WITH them.
+#
+# Two tools make this target fast without dropping a single test:
+#   • cargo-nextest runs every test as its own process across all cores.
+#     `cargo test` runs pdf_oxide's ~300 test binaries one after another
+#     (most hold a handful of tests), so the machine idles. nextest skips
+#     doctests, so `cargo test --doc` runs beside it — same set, nothing lost.
+#     Required, never optional: a silent fallback to `cargo test` would make
+#     "the suite passed" mean two different things on two machines.
+#   • mold links the ~300 debug test binaries (each statically pulls the
+#     whole engine) several times faster than ld. Linux only, and only when
+#     present — CI installs it; a Linux dev machine without it just links
+#     slower. The same RUSTFLAGS go to BOTH cargo invocations below: a
+#     different flag set on the doc run would refingerprint every crate and
+#     compile the engine twice.
+# Both are CI-installed the same way GTK is (see ensure_gtk); a dev machine
+# gets an exact instruction instead of a surprise download.
+define ensure_nextest
+	@$(CARGO) nextest --version >/dev/null 2>&1 || { \
+		if [ -n "$$CI" ] && [ "$$(uname -s)" = Linux ] && [ "$$(uname -m)" = x86_64 ]; then \
+			. tool/versions.env; \
+			bash tool/fetch_verified.sh \
+			  "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-$$NEXTEST_VERSION/cargo-nextest-$$NEXTEST_VERSION-x86_64-unknown-linux-gnu.tar.gz" \
+			  "$$NEXTEST_SHA256_LINUX_X64" /tmp/nextest.tar.gz && \
+			tar -xzf /tmp/nextest.tar.gz -C "$$HOME/.cargo/bin" cargo-nextest; \
+		else echo "Error: cargo-nextest not found. Run: cargo install cargo-nextest --locked"; exit 1; fi; }
+endef
+define ensure_mold
+	@[ "$$(uname -s)" != Linux ] || command -v mold >/dev/null || [ -z "$$CI" ] || \
+		{ sudo apt-get update -qq && sudo apt-get install -y -qq mold; }
+endef
+# RUSTFLAGS resolved in-recipe (after ensure_mold), not at parse time.
+RUST_TEST_FLAGS = $$( [ "$$(uname -s)" = Linux ] && command -v mold >/dev/null && echo "-C link-arg=-fuse-ld=mold" )
+
 test-rust:
+	$(ensure_nextest)
+	$(ensure_mold)
 	@echo "=== Rust: pdf_oxide ==="
-	$(CARGO) test --manifest-path vendor/pdf_oxide/Cargo.toml \
+	RUSTFLAGS="$(RUST_TEST_FLAGS)" $(CARGO) nextest run --no-fail-fast --manifest-path vendor/pdf_oxide/Cargo.toml \
+	  --features "$$($(DART) tool/compile.dart --features native),test-support,public-api,cjk-form-fonts,pdfa"
+	RUSTFLAGS="$(RUST_TEST_FLAGS)" $(CARGO) test --doc --manifest-path vendor/pdf_oxide/Cargo.toml \
 	  --features "$$($(DART) tool/compile.dart --features native),test-support,public-api,cjk-form-fonts,pdfa"
 	@echo "=== Rust: office_oxide ==="
-	$(CARGO) test --manifest-path vendor/office_oxide/Cargo.toml
+	RUSTFLAGS="$(RUST_TEST_FLAGS)" $(CARGO) nextest run --no-fail-fast --manifest-path vendor/office_oxide/Cargo.toml
+	RUSTFLAGS="$(RUST_TEST_FLAGS)" $(CARGO) test --doc --manifest-path vendor/office_oxide/Cargo.toml
 
 # ═══════════════════════════════════════════════════════════════════
 # § 6 — Integration tests (example app)
