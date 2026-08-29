@@ -21,6 +21,17 @@ inputs:
       a fresh clone still builds from source. Leave on everywhere else.
     required: false
     default: 'true'
+  rust-cache-key:
+    description: >
+      Which cargo cache this job shares — name the BUILD, not the job:
+      native (host triple, release), wasm (wasm32 + bindgen_runner),
+      android, ios, check (cargo check, analyze), test (cargo test
+      profile). Rows that build the same thing must share a key or the
+      quota fills with identical archives; rows that build different
+      triples or features must not. Empty = the make target (safe, but
+      one archive per target).
+    required: false
+    default: ''
   rust-cache-save:
     description: >
       Whether this run may write the cargo cache (rust-cache save-if). PR
@@ -96,13 +107,13 @@ runs:
     # jobs (pana, downgrade-analyze) never invoke cargo, so they pass rust: false.
     # rust sets SUBMODULE_PDF_OXIDE in $GITHUB_ENV — the xcode/wasm cache keys
     # below read it, so rust must run before them (it does).
-    # cache-key is the make target: rows that build different triples or
-    # feature sets must not share a cargo cache.
+    # cache-key names the build family (see the rust-cache-key input);
+    # the make target is the fallback so an unlabelled job never shares.
     - uses: ./.github/actions/capabilities/rust
       if: inputs.rust == 'true'
       with:
         cache: ${{ inputs.rust-cache }}
-        cache-key: ${{ inputs.make-target }}
+        cache-key: ${{ inputs.rust-cache-key != '' && inputs.rust-cache-key || inputs.make-target }}
         save-if: ${{ inputs.rust-cache-save }}
 
     - uses: whuppi/ci/actions/capabilities/free-disk-space@v2.4.1

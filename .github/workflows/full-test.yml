@@ -113,6 +113,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Each row's `cache:` names the cargo cache it shares — the build
+          # family (native / wasm / android / ios), never the row. Rows that
+          # build the same triples + features share an archive; a row that
+          # builds something new gets a new family, never a bare copy of
+          # another row's name. See make-target's rust-cache-key input.
           # ── Package tests ──
           # Native rows: the package's own suite against an engine the
           # CONSUMER build hook compiled on that OS — the exact path a
@@ -126,12 +131,12 @@ jobs:
           # toolchain that builds differently) only surfaces when that host
           # builds the artifact it tests. Never hand these rows a
           # Linux-built wasm.
-          - { name: "pkg: Linux (ubuntu-x64)",      runner: ubuntu-24.04,        make: test-pkg-native, timeout: 30 }
-          - { name: "pkg: macOS (macos-arm64)",     runner: macos-14,            make: test-pkg-native, timeout: 30 }
-          - { name: "pkg: Web (ubuntu-x64)",        runner: ubuntu-24.04,        make: test-ops-web,    timeout: 40, chrome: true, headless-display: true, wasm-cache: true, wasm-build: true }
-          - { name: "pkg: Web (macos-arm64) [P]",       runner: macos-14,            make: test-ops-web,    timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
-          - { name: "pkg: Web (win-x64) [P]",           runner: windows-2025-vs2026, make: test-ops-web,    timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
-          - { name: "pkg: Windows (win-x64)",       runner: windows-2025-vs2026, make: test-pkg-native, timeout: 40 }
+          - { name: "pkg: Linux (ubuntu-x64)",      runner: ubuntu-24.04,        make: test-pkg-native,      cache: native,timeout: 30 }
+          - { name: "pkg: macOS (macos-arm64)",     runner: macos-14,            make: test-pkg-native,      cache: native,timeout: 30 }
+          - { name: "pkg: Web (ubuntu-x64)",        runner: ubuntu-24.04,        make: test-ops-web,         cache: wasm,timeout: 40, chrome: true, headless-display: true, wasm-cache: true, wasm-build: true }
+          - { name: "pkg: Web (macos-arm64) [P]",       runner: macos-14,            make: test-ops-web,         cache: wasm,timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "pkg: Web (win-x64) [P]",           runner: windows-2025-vs2026, make: test-ops-web,         cache: wasm,timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "pkg: Windows (win-x64)",       runner: windows-2025-vs2026, make: test-pkg-native,      cache: native,timeout: 40 }
 
           # ── Integration tests ──
           # The example app built the way a consumer builds it (the hook
@@ -147,16 +152,16 @@ jobs:
           # make-target. It is slow because its caches start cold, which is a
           # caching problem — fix the cache, keep the row. Apple Silicon devs
           # run this locally fine; only GitHub's ARM VMs can't.
-          - { name: "int: Android (ubuntu-x64)",    runner: ubuntu-24.04,        make: test-example-android, timeout: 40, java: true, hw-accel: true, gradle-cache: true, emulator: true }
-          - { name: "int: Android (macos-intel) [P]", runner: macos-15-intel,      make: test-example-android, timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
-          - { name: "int: Android (win-x64) [P]",       runner: windows-2025-vs2026, make: test-example-android, timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
-          - { name: "int: iOS (macos-arm64)",       runner: macos-14,            make: test-example-ios,     timeout: 60, xcode-cache: true, xcode-cache-target: ios, pods-cache: true, simulator: true }
-          - { name: "int: Linux (ubuntu-x64)",      runner: ubuntu-24.04,        make: test-example-linux,   timeout: 30, headless-display: true }
-          - { name: "int: macOS (macos-arm64)",     runner: macos-14,            make: test-example-macos,   timeout: 30, xcode-cache: true, xcode-cache-target: macos }
-          - { name: "int: Web (ubuntu-x64)",        runner: ubuntu-24.04,        make: test-example-web,     timeout: 40, chrome: true, headless-display: true, wasm-cache: true, wasm-build: true }
-          - { name: "int: Web (macos-arm64) [P]",       runner: macos-14,            make: test-example-web,     timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
-          - { name: "int: Web (win-x64) [P]",           runner: windows-2025-vs2026, make: test-example-web,     timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
-          - { name: "int: Windows (win-x64)",       runner: windows-2025-vs2026, make: test-example-windows, timeout: 40 }
+          - { name: "int: Android (ubuntu-x64)",    runner: ubuntu-24.04,        make: test-example-android, cache: android,timeout: 40, java: true, hw-accel: true, gradle-cache: true, emulator: true }
+          - { name: "int: Android (macos-intel) [P]", runner: macos-15-intel,      make: test-example-android, cache: android,timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
+          - { name: "int: Android (win-x64) [P]",       runner: windows-2025-vs2026, make: test-example-android, cache: android,timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
+          - { name: "int: iOS (macos-arm64)",       runner: macos-14,            make: test-example-ios,     cache: ios,timeout: 60, xcode-cache: true, xcode-cache-target: ios, pods-cache: true, simulator: true }
+          - { name: "int: Linux (ubuntu-x64)",      runner: ubuntu-24.04,        make: test-example-linux,   cache: native,timeout: 30, headless-display: true }
+          - { name: "int: macOS (macos-arm64)",     runner: macos-14,            make: test-example-macos,   cache: native,timeout: 30, xcode-cache: true, xcode-cache-target: macos }
+          - { name: "int: Web (ubuntu-x64)",        runner: ubuntu-24.04,        make: test-example-web,     cache: wasm,timeout: 40, chrome: true, headless-display: true, wasm-cache: true, wasm-build: true }
+          - { name: "int: Web (macos-arm64) [P]",       runner: macos-14,            make: test-example-web,     cache: wasm,timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "int: Web (win-x64) [P]",           runner: windows-2025-vs2026, make: test-example-web,     cache: wasm,timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "int: Windows (win-x64)",       runner: windows-2025-vs2026, make: test-example-windows, cache: native,timeout: 40 }
 
           # ── Verify (release builds) ──
           # Release-mode consumer builds: every shipped ABI through the hook
@@ -168,16 +173,16 @@ jobs:
           # Never build these with a lighter profile to save minutes.
           # The [P] rows prove a release build from a dev's Mac or Windows
           # box yields the same shippable artifact, not just Linux CI's.
-          - { name: "verify: Android (ubuntu-x64)", runner: ubuntu-24.04,        make: verify-android, timeout: 40, java: true, gradle-cache: true }
-          - { name: "verify: Android (macos-arm64) [P]",runner: macos-14,            make: verify-android, timeout: 40, java: true, gradle-cache: true, portability: true }
-          - { name: "verify: Android (win-x64) [P]",    runner: windows-2025-vs2026, make: verify-android, timeout: 60, java: true, gradle-cache: true, portability: true }
-          - { name: "verify: iOS (macos-arm64)",    runner: macos-14,            make: verify-ios,     timeout: 40, xcode-cache: true, xcode-cache-target: ios, pods-cache: true }
-          - { name: "verify: Linux (ubuntu-x64)",   runner: ubuntu-24.04,        make: verify-linux,   timeout: 30 }
-          - { name: "verify: macOS (macos-arm64)",  runner: macos-14,            make: verify-macos,   timeout: 40, xcode-cache: true, xcode-cache-target: macos }
-          - { name: "verify: Web (ubuntu-x64)",     runner: ubuntu-24.04,        make: verify-web,     timeout: 40, wasm-cache: true, wasm-build: true }
-          - { name: "verify: Web (macos-arm64) [P]",    runner: macos-14,            make: verify-web,     timeout: 40, wasm-cache: true, wasm-build: true, portability: true }
-          - { name: "verify: Web (win-x64) [P]",        runner: windows-2025-vs2026, make: verify-web,     timeout: 40, wasm-cache: true, wasm-build: true, portability: true }
-          - { name: "verify: Windows (win-x64)",    runner: windows-2025-vs2026, make: verify-windows, timeout: 40 }
+          - { name: "verify: Android (ubuntu-x64)", runner: ubuntu-24.04,        make: verify-android,       cache: android,timeout: 40, java: true, gradle-cache: true }
+          - { name: "verify: Android (macos-arm64) [P]",runner: macos-14,            make: verify-android,       cache: android,timeout: 40, java: true, gradle-cache: true, portability: true }
+          - { name: "verify: Android (win-x64) [P]",    runner: windows-2025-vs2026, make: verify-android,       cache: android,timeout: 60, java: true, gradle-cache: true, portability: true }
+          - { name: "verify: iOS (macos-arm64)",    runner: macos-14,            make: verify-ios,           cache: ios,timeout: 40, xcode-cache: true, xcode-cache-target: ios, pods-cache: true }
+          - { name: "verify: Linux (ubuntu-x64)",   runner: ubuntu-24.04,        make: verify-linux,         cache: native,timeout: 30 }
+          - { name: "verify: macOS (macos-arm64)",  runner: macos-14,            make: verify-macos,         cache: native,timeout: 40, xcode-cache: true, xcode-cache-target: macos }
+          - { name: "verify: Web (ubuntu-x64)",     runner: ubuntu-24.04,        make: verify-web,           cache: wasm,timeout: 40, wasm-cache: true, wasm-build: true }
+          - { name: "verify: Web (macos-arm64) [P]",    runner: macos-14,            make: verify-web,           cache: wasm,timeout: 40, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "verify: Web (win-x64) [P]",        runner: windows-2025-vs2026, make: verify-web,           cache: wasm,timeout: 40, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "verify: Windows (win-x64)",    runner: windows-2025-vs2026, make: verify-windows,       cache: native,timeout: 40 }
 
           # ── Release-compile guard — the PR jobs that run
           #    tool/compile.dart (the release cross-compiler). It shares
@@ -190,12 +195,12 @@ jobs:
           #    is the only staticlib path; each OS has its own linker path).
           #    The workflow's relative COMPILE_OUTPUT_DIR reproduces the
           #    release output layout. ──
-          - { name: "compile: macOS (macos-arm64)",  runner: macos-14,            make: compile-macos,   timeout: 30 }
-          - { name: "compile: iOS (macos-arm64)",    runner: macos-14,            make: compile-ios,     timeout: 40 }
-          - { name: "compile: Android (ubuntu-x64)", runner: ubuntu-24.04,        make: compile-android, timeout: 40 }
-          - { name: "compile: Linux (ubuntu-x64)",   runner: ubuntu-24.04,        make: compile-linux,   timeout: 30 }
-          - { name: "compile: WASM (ubuntu-x64)",    runner: ubuntu-24.04,        make: compile-wasm,    timeout: 40 }
-          - { name: "compile: Windows (win-x64)",    runner: windows-2025-vs2026, make: compile-windows, timeout: 40 }
+          - { name: "compile: macOS (macos-arm64)",  runner: macos-14,            make: compile-macos,        cache: native,timeout: 30 }
+          - { name: "compile: iOS (macos-arm64)",    runner: macos-14,            make: compile-ios,          cache: ios,timeout: 40 }
+          - { name: "compile: Android (ubuntu-x64)", runner: ubuntu-24.04,        make: compile-android,      cache: android,timeout: 40 }
+          - { name: "compile: Linux (ubuntu-x64)",   runner: ubuntu-24.04,        make: compile-linux,        cache: native,timeout: 30 }
+          - { name: "compile: WASM (ubuntu-x64)",    runner: ubuntu-24.04,        make: compile-wasm,         cache: wasm,timeout: 40 }
+          - { name: "compile: Windows (win-x64)",    runner: windows-2025-vs2026, make: compile-windows,      cache: native,timeout: 40 }
 
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
@@ -219,6 +224,7 @@ jobs:
         with:
           make-target: ${{ matrix.make }}
           rust-cache: ${{ env.RUST_CACHE }}
+          rust-cache-key: ${{ matrix.cache }}
           java: ${{ matrix.java || 'false' }}
           chrome: ${{ matrix.chrome || 'false' }}
           headless-display: ${{ matrix.headless-display || 'false' }}

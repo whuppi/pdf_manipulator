@@ -102,6 +102,7 @@ jobs:
       - uses: ./.github/actions/make-target
         with:
           make-target: analyze
+          rust-cache-key: check
           rust-cache: ${{ env.RUST_CACHE }}
 
   # Analyze the shipped code (lib/bin/hook) against the OLDEST in-range deps, so
@@ -163,6 +164,7 @@ jobs:
       - uses: ./.github/actions/make-target
         with:
           make-target: test-pkg-native
+          rust-cache-key: native
           rust-cache: ${{ env.RUST_CACHE }}
 
   # Vendored-engine cargo tests — only when a PR touches the engine, its
@@ -189,6 +191,7 @@ jobs:
       - uses: ./.github/actions/make-target
         with:
           make-target: test-rust
+          rust-cache-key: test
           free-disk: 'true'
           rust-cache: ${{ env.RUST_CACHE }}
 
