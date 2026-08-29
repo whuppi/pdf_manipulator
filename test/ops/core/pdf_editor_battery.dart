@@ -624,6 +624,249 @@ void registerEditorTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
+    // Issue #215. A button widget's flattened appearance must follow the value
+    // that was set, not the /AS the document shipped with. Proof is SEMANTIC —
+    // rendered pixels: every widget in `uncheckedButtonForm` starts off (white
+    // box, hairline border) and its on state fills the box solid black, so
+    // "is it on?" is "did that band go dark?". Bands are fractions of the page
+    // height because the rasterizer's exact pixel dimensions vary by platform.
+    //
+    // Band map (PDF y -> fraction from the top of a 792pt page):
+    //   agree 700..760 -> 0.04..0.12   optin 600..660 -> 0.17..0.24
+    //   color 500..560 -> 0.29..0.37
+    Future<double> darkFractionInBand(
+      Pdf pdf,
+      Uint8List bytes,
+      double top,
+      double bottom,
+    ) async {
+      final doc = await pdf.open(src(bytes));
+      final frames = <RenderedPage>[];
+      await for (final page in doc.render(
+        pages: const PdfPages.single(0),
+        size: const PdfRenderSize.thumbnail(240),
+      )) {
+        frames.add(page);
+      }
+      await doc.dispose();
+      final bitmap = img.decodePng(frames.single.data)!;
+      final y0 = (bitmap.height * top).round();
+      final y1 = (bitmap.height * bottom).round();
+      var dark = 0, total = 0;
+      for (final p in bitmap) {
+        if (p.y < y0 || p.y >= y1) continue;
+        total++;
+        if (p.r < 100 && p.g < 100 && p.b < 100) dark++;
+      }
+      return total == 0 ? 0 : dark / total;
+    }
+
+    // The unflattened fixture is the control: every band must be near-white,
+    // so any darkness a later test sees is the value that was set, not the
+    // fixture's own furniture (the hairline border is a few pixels at most).
+    test('uncheckedButtonForm starts with every button off', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(uncheckedButtonForm));
+      await editor.flattenForms();
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final flat = sink.takeBytes();
+      for (final band in const [
+        (name: 'agree', top: 0.04, bottom: 0.12),
+        (name: 'optin', top: 0.17, bottom: 0.24),
+        (name: 'color', top: 0.29, bottom: 0.37),
+      ]) {
+        expect(
+          await darkFractionInBand(pdf, flat, band.top, band.bottom),
+          lessThan(0.02),
+          reason:
+              'untouched ${band.name} must flatten to its off appearance — '
+              'if this band is already dark the later proofs mean nothing',
+        );
+      }
+    }, timeout: t(2));
+
+    test(
+      'setFormFieldValue on a checkbox flattens to the checked appearance',
+      () async {
+        // The literal repro from issue #215: a string value on a /Btn field.
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(uncheckedButtonForm));
+        await editor.setFormFieldValue('agree', 'Yes');
+        await editor.flattenForms();
+        final sink = TestSink();
+        await editor.save(sink);
+        await editor.dispose();
+        expect(
+          await darkFractionInBand(pdf, sink.takeBytes(), 0.04, 0.12),
+          greaterThan(0.05),
+          reason:
+              'the box must flatten checked — a string value on a button '
+              'field is a state name, not text to draw',
+        );
+      },
+      timeout: t(2),
+    );
+
+    test('setFormFieldValue honours a non-/Yes checkbox on-state', () async {
+      // `optin` names its on state /On. A /V hardcoded to /Yes matches no
+      // entry in its /AP /N and leaves the box blank.
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(uncheckedButtonForm));
+      await editor.setFormFieldValue('optin', 'On');
+      await editor.flattenForms();
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      expect(
+        await darkFractionInBand(pdf, sink.takeBytes(), 0.17, 0.24),
+        greaterThan(0.05),
+        reason:
+            "the on state must come from the widget's own /AP /N, not a "
+            'hardcoded /Yes',
+      );
+    }, timeout: t(2));
+
+    test('setFormFieldValue selects a radio kid', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(uncheckedButtonForm));
+      await editor.setFormFieldValue('color', 'Red');
+      await editor.flattenForms();
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      expect(
+        await darkFractionInBand(pdf, sink.takeBytes(), 0.29, 0.37),
+        greaterThan(0.02),
+        reason: 'the selected radio kid must flatten to its on appearance',
+      );
+    }, timeout: t(2));
+
+    test('checkbox value survives save + reopen, then flatten', () async {
+      // Session 1 fills and saves without flattening; session 2 has an empty
+      // in-session field map and must read the persisted /V + /AS.
+      final pdf = createPdf();
+      final e1 = await pdf.edit(src(uncheckedButtonForm));
+      await e1.setFormFieldValue('agree', 'Yes');
+      final filled = TestSink();
+      await e1.save(filled);
+      await e1.dispose();
+
+      final e2 = await pdf.edit(src(filled.takeBytes()));
+      await e2.flattenForms();
+      final flat = TestSink();
+      await e2.save(flat);
+      await e2.dispose();
+      expect(
+        await darkFractionInBand(pdf, flat.takeBytes(), 0.04, 0.12),
+        greaterThan(0.05),
+        reason:
+            'a checkbox checked before save must still flatten checked after '
+            'a reopen — /V and /AS must persist as names',
+      );
+    }, timeout: t(2));
+
+    test('setCheckboxFieldValue checks a box named /Yes', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(uncheckedButtonForm));
+      await editor.setCheckboxFieldValue('agree', true);
+      await editor.flattenForms();
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      expect(
+        await darkFractionInBand(pdf, sink.takeBytes(), 0.04, 0.12),
+        greaterThan(0.05),
+        reason: 'the typed setter must check the box',
+      );
+    }, timeout: t(2));
+
+    test('setCheckboxFieldValue checks a box named /On', () async {
+      // A boolean carries no state name, so the widget's own /AP /N has to
+      // supply it. A hardcoded /Yes leaves this box blank.
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(uncheckedButtonForm));
+      await editor.setCheckboxFieldValue('optin', true);
+      await editor.flattenForms();
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      expect(
+        await darkFractionInBand(pdf, sink.takeBytes(), 0.17, 0.24),
+        greaterThan(0.05),
+        reason:
+            "true must select the widget's only on-state, whatever it is "
+            'called',
+      );
+    }, timeout: t(2));
+
+    test('setCheckboxFieldValue false clears a checked box', () async {
+      // Round trip both ways: check, save, reopen, clear, flatten.
+      final pdf = createPdf();
+      final e1 = await pdf.edit(src(uncheckedButtonForm));
+      await e1.setCheckboxFieldValue('agree', true);
+      final checked = TestSink();
+      await e1.save(checked);
+      await e1.dispose();
+
+      final e2 = await pdf.edit(src(checked.takeBytes()));
+      await e2.setCheckboxFieldValue('agree', false);
+      await e2.flattenForms();
+      final flat = TestSink();
+      await e2.save(flat);
+      await e2.dispose();
+      expect(
+        await darkFractionInBand(pdf, flat.takeBytes(), 0.04, 0.12),
+        lessThan(0.02),
+        reason:
+            'clearing a box that was checked in an earlier session must '
+            'flatten to the off appearance',
+      );
+    }, timeout: t(2));
+
+    test('setFormFieldValue off words clear a checkbox', () async {
+      // Only exact `Off` used to mean off, so every other way of saying it —
+      // `'No'`, `'false'` — fell through to "check the only on-state" and
+      // checked the box the caller was trying to clear.
+      for (final word in const ['Off', 'off', 'No', 'false', '0']) {
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(uncheckedButtonForm));
+        await editor.setFormFieldValue('agree', 'Yes');
+        await editor.setFormFieldValue('agree', word);
+        await editor.flattenForms();
+        final sink = TestSink();
+        await editor.save(sink);
+        await editor.dispose();
+        expect(
+          await darkFractionInBand(pdf, sink.takeBytes(), 0.04, 0.12),
+          lessThan(0.02),
+          reason: '"$word" must clear the box, not check it',
+        );
+      }
+    }, timeout: t(3));
+
+    test(
+      'setFormFieldValue ignores a name the widget does not offer',
+      () async {
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(uncheckedButtonForm));
+        await editor.setFormFieldValue('agree', 'Maybe');
+        await editor.flattenForms();
+        final sink = TestSink();
+        await editor.save(sink);
+        await editor.dispose();
+        expect(
+          await darkFractionInBand(pdf, sink.takeBytes(), 0.04, 0.12),
+          lessThan(0.02),
+          reason:
+              'an unrecognised state name must select nothing rather than '
+              'guess the only on-state',
+        );
+      },
+      timeout: t(2),
+    );
+
     // ── Rotation ──
 
     test('rotatePage sets rotation on specific page', () async {
