@@ -22,7 +22,7 @@ jobs:
   checks:
     permissions:
       contents: read  # the reusable jobs only checkout + lint, read-only
-    uses: whuppi/ci/.github/workflows/pr-checks.yml@v2.6.3
+    uses: whuppi/ci/.github/workflows/pr-checks.yml@v2.7.0
 
   # Runs on PR activity (not just the daily cron, which GitHub disables after
   # ~60 idle days): HEADs every locally-pinned asset so a pruned pin fails the
