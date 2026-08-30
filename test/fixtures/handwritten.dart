@@ -244,6 +244,114 @@ final Uint8List emptyApTextForm = _offsetPdf([
   _streamBody('', 'q Q\n'),
 ]);
 
+/// Three button widgets, every one starting **off**, each carrying a real
+/// two-state `/AP /N` dictionary so the correct output is provable from the
+/// document alone: the on state fills its 60x60 box solid black, the off state
+/// leaves it white with a hairline border.
+///
+/// Hand-authored because the preconditions cannot be produced by any foreign
+/// writer we test against: dart-pdf always names a checkbox's on state `/Yes`,
+/// and emits no radio group at all. `optin` deliberately names its on state
+/// `/On`, so a `/V` hardcoded to `/Yes` matches no appearance state.
+///
+/// | Field | Kind | On-state name | Widget rect (PDF y) |
+/// |---|---|---|---|
+/// | `agree` | checkbox | `/Yes` | 700..760 |
+/// | `optin` | checkbox | `/On` | 600..660 |
+/// | `color` | radio, 2 kids | `/Red`, `/Blue` | 500..560 |
+final Uint8List uncheckedButtonForm = _offsetPdf([
+  // 1: catalog — inline AcroForm listing the three top-level fields
+  '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 8 0 R 11 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page — every widget in /Annots, blank white content
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /Helv 5 0 R >> >> /Contents 17 0 R /Annots [4 0 R 8 0 R 12 0 R 13 0 R] >>',
+  // 4: `agree` — merged checkbox field + widget, off, on-state /Yes
+  '<< /FT /Btn /T (agree) /V /Off /Type /Annot /Subtype /Widget /Rect [72 700 132 760] /AS /Off /AP << /N << /Yes 6 0 R /Off 7 0 R >> >> >>',
+  // 5: Helvetica font
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  // 6: agree ON appearance — solid black
+  _streamBody(
+    '/Type /XObject /Subtype /Form /BBox [0 0 60 60]',
+    'q 0 g 0 0 60 60 re f Q\n',
+  ),
+  // 7: agree OFF appearance — white box, hairline border
+  _streamBody(
+    '/Type /XObject /Subtype /Form /BBox [0 0 60 60]',
+    'q 1 g 0 0 60 60 re f 0 G 1 w 0.5 0.5 59 59 re S Q\n',
+  ),
+  // 8: `optin` — checkbox whose on state is /On, NOT /Yes
+  '<< /FT /Btn /T (optin) /V /Off /Type /Annot /Subtype /Widget /Rect [72 600 132 660] /AS /Off /AP << /N << /On 9 0 R /Off 10 0 R >> >> >>',
+  // 9: optin ON appearance — solid black
+  _streamBody(
+    '/Type /XObject /Subtype /Form /BBox [0 0 60 60]',
+    'q 0 g 0 0 60 60 re f Q\n',
+  ),
+  // 10: optin OFF appearance
+  _streamBody(
+    '/Type /XObject /Subtype /Form /BBox [0 0 60 60]',
+    'q 1 g 0 0 60 60 re f 0 G 1 w 0.5 0.5 59 59 re S Q\n',
+  ),
+  // 11: `color` — radio parent (/Ff bit 16 = Radio), two kid widgets
+  '<< /FT /Btn /Ff 32768 /T (color) /V /Off /Kids [12 0 R 13 0 R] >>',
+  // 12: color kid — on-state /Red
+  '<< /Parent 11 0 R /Type /Annot /Subtype /Widget /Rect [72 500 132 560] /AS /Off /AP << /N << /Red 14 0 R /Off 16 0 R >> >> >>',
+  // 13: color kid — on-state /Blue
+  '<< /Parent 11 0 R /Type /Annot /Subtype /Widget /Rect [200 500 260 560] /AS /Off /AP << /N << /Blue 15 0 R /Off 16 0 R >> >> >>',
+  // 14: Red ON appearance — solid black
+  _streamBody(
+    '/Type /XObject /Subtype /Form /BBox [0 0 60 60]',
+    'q 0 g 0 0 60 60 re f Q\n',
+  ),
+  // 15: Blue ON appearance — solid black
+  _streamBody(
+    '/Type /XObject /Subtype /Form /BBox [0 0 60 60]',
+    'q 0 g 0 0 60 60 re f Q\n',
+  ),
+  // 16: shared radio OFF appearance
+  _streamBody(
+    '/Type /XObject /Subtype /Form /BBox [0 0 60 60]',
+    'q 1 g 0 0 60 60 re f 0 G 1 w 0.5 0.5 59 59 re S Q\n',
+  ),
+  // 17: page content stream — blank white page
+  _streamBody('', 'q Q\n'),
+]);
+
+/// A radio group whose two on-states are named `/Yes` and `/No` — the shape
+/// that makes "No" a state name rather than a way of saying "off". Both kids
+/// start off; the on state fills its 60x60 box solid black.
+///
+/// | Kid | On-state | Widget rect (PDF y) | x |
+/// |---|---|---|---|
+/// | first | `/Yes` | 700..760 | 72..132 |
+/// | second | `/No` | 700..760 | 200..260 |
+final Uint8List yesNoRadioForm = _offsetPdf([
+  // 1: catalog with an inline AcroForm
+  '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page — both kid widgets in /Annots, blank white content
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 9 0 R /Annots [5 0 R 6 0 R] >>',
+  // 4: radio parent — /Ff bit position 16 (0x8000) is Radio, ISO 32000-1 Table 227
+  '<< /FT /Btn /Ff 32768 /T (answer) /V /Off /Kids [5 0 R 6 0 R] >>',
+  // 5: kid whose on-state is /Yes
+  '<< /Parent 4 0 R /Type /Annot /Subtype /Widget /Rect [72 700 132 760] /AS /Off /AP << /N << /Yes 7 0 R /Off 8 0 R >> >> >>',
+  // 6: kid whose on-state is /No
+  '<< /Parent 4 0 R /Type /Annot /Subtype /Widget /Rect [200 700 260 760] /AS /Off /AP << /N << /No 7 0 R /Off 8 0 R >> >> >>',
+  // 7: shared ON appearance — solid black
+  _streamBody(
+    '/Type /XObject /Subtype /Form /BBox [0 0 60 60]',
+    'q 0 g 0 0 60 60 re f Q\n',
+  ),
+  // 8: shared OFF appearance — white box, hairline border
+  _streamBody(
+    '/Type /XObject /Subtype /Form /BBox [0 0 60 60]',
+    'q 1 g 0 0 60 60 re f 0 G 1 w 0.5 0.5 59 59 re S Q\n',
+  ),
+  // 9: page content stream — blank white page
+  _streamBody('', 'q Q\n'),
+]);
+
 final Uint8List bookmarkedPdf = Uint8List.fromList([
   0x25,
   0x50,

@@ -221,6 +221,34 @@ make check
 **Verify zero warnings:** `make analyze` checks Rust warnings in our
 patched lines automatically (see [S7](#s7--verify-our-code-warnings)).
 
+**Never add a test inside a fork.** A patch proves itself from this repo,
+in `test/ops/` — with a fixture in `test/fixtures/handwritten.dart` when
+the engine bug needs a PDF no foreign writer emits. A test file in
+`vendor/` is extra surface every S1 rebase has to carry onto the next base
+tag, for a proof the Dart battery already makes at the level a consumer
+actually experiences (rendered pixels, per ARCHITECTURE.md's testing
+section). The fork carries **patches only** — `src/`, and the build files a
+patch needs.
+
+Prior art: #161 was the same shape as #215 — an engine-side forms bug —
+and landed as a hand-authored fixture plus battery cases here, with the
+submodule bumped and no Rust test.
+
+If a proof genuinely cannot be made from Dart, that is a signal the fix
+belongs upstream: open it as a PR on the upstream repo, where its test
+lives with it (see `universal/external-contributions.md`).
+
+**Watch for a detached submodule.** `git submodule update` leaves
+`vendor/pdf_oxide` on a detached HEAD, so a commit made after it lands on
+no branch and `git push` reports "Everything up-to-date" while pushing
+nothing. Check before committing, and re-point the branch if it happened:
+
+```sh
+cd vendor/pdf_oxide
+git branch --show-current           # empty = detached
+git branch -f <branch-name> HEAD && git checkout <branch-name>
+```
+
 **Commit AND push the submodule, or CI will fail:**
 
 ```sh
