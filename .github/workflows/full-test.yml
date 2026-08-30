@@ -28,6 +28,19 @@ on:
   # guarantee the pub.dev tarball makes to a consumer with no cache at all.
   # If it goes red, the caches are hiding a real break; fix the break,
   # never the schedule.
+  # Push-to-dev is the WARM SOURCE for the whole matrix: PR runs can only
+  # read `dev`'s archives (GitHub scopes caches by ref), so the engine
+  # artifacts every PR row reuses must be written here. The paths are the
+  # cache-key inputs — other merges leave the keys unchanged and skip.
+  push:
+    branches: [dev]
+    paths:
+      - 'vendor/**'
+      - 'build.json'
+      - 'tool/versions.env'
+      - 'Makefile'
+      - 'hook/**'
+      - '.github/**'
   schedule:
     - cron: '0 6 * * 1'
   workflow_dispatch:
@@ -108,6 +121,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'schedule' ||
+      github.event_name == 'push' ||
       (github.event.action == 'labeled' && github.event.label.name == 'ready-to-test')
     strategy:
       fail-fast: false
@@ -210,7 +224,7 @@ jobs:
     steps:
       - name: Check filter
         id: filter
-        uses: whuppi/ci/actions/matrix-filter@v2.4.1
+        uses: whuppi/ci/actions/matrix-filter@v2.5.0
         with:
           name: ${{ matrix.name }}
           filter: ${{ needs.inputs.outputs.filter }}
@@ -225,6 +239,11 @@ jobs:
           make-target: ${{ matrix.make }}
           rust-cache: ${{ env.RUST_CACHE }}
           rust-cache-key: ${{ matrix.cache }}
+          # PR runs read; push-to-dev, dispatch and the weekly run write.
+          # (The weekly run is cold — RUST_CACHE=false — so it writes
+          # nothing for cargo; gradle/xcode/pods/AVD still refresh.)
+          rust-cache-save: ${{ github.event_name != 'pull_request' }}
+          cache-save: ${{ github.event_name != 'pull_request' }}
           java: ${{ matrix.java || 'false' }}
           chrome: ${{ matrix.chrome || 'false' }}
           headless-display: ${{ matrix.headless-display || 'false' }}

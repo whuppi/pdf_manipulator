@@ -6,6 +6,20 @@ name: CI
 on:
   pull_request:
     branches: [prod, dev]
+  # Push-to-dev is the WARM SOURCE. GitHub lets a run read caches from its
+  # own ref, the PR base and the default branch only, so the archives every
+  # PR reads have to be written from `dev` itself — PR runs only read. The
+  # paths are the inputs of the cargo cache key: anything else merged to
+  # dev leaves the key (and the warm archives) unchanged, so no run.
+  push:
+    branches: [dev]
+    paths:
+      - 'vendor/**'
+      - 'build.json'
+      - 'tool/versions.env'
+      - 'Makefile'
+      - 'hook/**'
+      - '.github/**'
   workflow_dispatch:
     inputs:
       runner:
@@ -104,6 +118,10 @@ jobs:
           make-target: analyze
           rust-cache-key: check
           rust-cache: ${{ env.RUST_CACHE }}
+          # Write the cargo cache from dev (the warm source) and from a PR only
+          # when its Rust inputs changed — that PR's key differs from dev's,
+          # so without its own archive every push of it would build cold.
+          rust-cache-save: ${{ github.event_name == 'push' || needs.changes.outputs.rust == 'true' }}
 
   # Analyze the shipped code (lib/bin/hook) against the OLDEST in-range deps, so
   # the wide lower bounds are honest, not just the newest a fresh build resolves.
@@ -166,6 +184,10 @@ jobs:
           make-target: test-pkg-native
           rust-cache-key: native
           rust-cache: ${{ env.RUST_CACHE }}
+          # Write the cargo cache from dev (the warm source) and from a PR only
+          # when its Rust inputs changed — that PR's key differs from dev's,
+          # so without its own archive every push of it would build cold.
+          rust-cache-save: ${{ github.event_name == 'push' || needs.changes.outputs.rust == 'true' }}
 
   # Vendored-engine cargo tests — only when a PR touches the engine, its
   # features, the Makefile, or CI. Skipped on Dart-only PRs.
@@ -195,6 +217,10 @@ jobs:
           rust-cache-key: test
           free-disk: 'true'
           rust-cache: ${{ env.RUST_CACHE }}
+          # Write the cargo cache from dev (the warm source) and from a PR only
+          # when its Rust inputs changed — that PR's key differs from dev's,
+          # so without its own archive every push of it would build cold.
+          rust-cache-save: ${{ github.event_name == 'push' || needs.changes.outputs.rust == 'true' }}
 
   gate:
     name: CI Gate
