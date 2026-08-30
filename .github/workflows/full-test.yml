@@ -209,20 +209,20 @@ jobs:
           #    is the only staticlib path; each OS has its own linker path).
           #    The workflow's relative COMPILE_OUTPUT_DIR reproduces the
           #    release output layout. ──
-          # compile rows get their OWN families (compile-native / -ios /
-          # -android / -wasm). rust-cache writes an archive ONCE per key, from
-          # whichever row finishes first; sharing `android` with the hook rows
-          # meant the first hook row's archive won and the compile row's
-          # per-ABI outputs (4 targets, 3-6 min each) were never saved — every
-          # "warm" compile row rebuilt them all (measured: 16.6 m warm vs 22.7
-          # cold on compile: Android). The hook rows (pkg/int/verify) build one
-          # identical artifact and can keep sharing.
-          - { name: "compile: macOS (macos-arm64)",  runner: macos-14,            make: compile-macos,        cache: compile-native,timeout: 30 }
-          - { name: "compile: iOS (macos-arm64)",    runner: macos-14,            make: compile-ios,          cache: compile-ios,timeout: 40 }
-          - { name: "compile: Android (ubuntu-x64)", runner: ubuntu-24.04,        make: compile-android,      cache: compile-android,timeout: 40 }
-          - { name: "compile: Linux (ubuntu-x64)",   runner: ubuntu-24.04,        make: compile-linux,        cache: compile-native,timeout: 30 }
-          - { name: "compile: WASM (ubuntu-x64)",    runner: ubuntu-24.04,        make: compile-wasm,         cache: compile-wasm,timeout: 40 }
-          - { name: "compile: Windows (win-x64)",    runner: windows-2025-vs2026, make: compile-windows,      cache: compile-native,timeout: 40 }
+          # compile rows share the hook rows' deps archive (`cache:`) but
+          # keep their own engine-artifacts archive (`engine:`): rust-cache
+          # writes an archive once per key from whichever row finishes
+          # first, so their 4-ABI outputs need a key nobody races for —
+          # without it every warm compile row rebuilt every ABI (16.6 m).
+          # A whole second deps archive per compile family (the earlier
+          # fix) cost ~3.5 GB of the 10 GB quota for bytes already in
+          # `android`/`ios`/`native`/`wasm`. See the rust capability.
+          - { name: "compile: macOS (macos-arm64)",  runner: macos-14,            make: compile-macos,        cache: native, engine: compile-native,timeout: 30 }
+          - { name: "compile: iOS (macos-arm64)",    runner: macos-14,            make: compile-ios,          cache: ios, engine: compile-ios,timeout: 40 }
+          - { name: "compile: Android (ubuntu-x64)", runner: ubuntu-24.04,        make: compile-android,      cache: android, engine: compile-android,timeout: 40 }
+          - { name: "compile: Linux (ubuntu-x64)",   runner: ubuntu-24.04,        make: compile-linux,        cache: native, engine: compile-native,timeout: 30 }
+          - { name: "compile: WASM (ubuntu-x64)",    runner: ubuntu-24.04,        make: compile-wasm,         cache: wasm, engine: compile-wasm,timeout: 40 }
+          - { name: "compile: Windows (win-x64)",    runner: windows-2025-vs2026, make: compile-windows,      cache: native, engine: compile-native,timeout: 40 }
 
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
@@ -247,6 +247,7 @@ jobs:
           make-target: ${{ matrix.make }}
           rust-cache: ${{ env.RUST_CACHE }}
           rust-cache-key: ${{ matrix.cache }}
+          rust-engine-key: ${{ matrix.engine || '' }}
           # PR runs read; push-to-dev, dispatch and the weekly run write.
           # (The weekly run is cold — RUST_CACHE=false — so it writes
           # nothing for cargo; gradle/xcode/pods/AVD still refresh.)
