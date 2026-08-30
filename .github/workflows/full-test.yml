@@ -49,6 +49,10 @@ on:
         description: "Cold build — ignore the cargo cache (proves a fresh clone builds)"
         type: boolean
         default: false
+      probe:
+        description: "Diagnostic — log why cargo considers each unit dirty (CARGO_LOG fingerprint); use with a filter"
+        type: boolean
+        default: false
       portability:
         description: "Portability — test every valid runner per target"
         type: boolean
@@ -85,6 +89,9 @@ env:
   DEFAULT_PORTABILITY: 'true'
   # Cold on the weekly schedule and on `cold: true`; warm otherwise.
   RUST_CACHE: ${{ (github.event_name == 'schedule' || inputs.cold) && 'false' || 'true' }}
+  # probe: cargo prints, per unit, why it is rebuilding (dep-info stale,
+  # fingerprint mismatch, missing output). Verbose; dispatch-only.
+  CARGO_LOG: ${{ inputs.probe && 'cargo::core::compiler::fingerprint=info' || '' }}
   # Relative on purpose — the release sets this same value, and the
   # compile-* guard rows below rely on it to reproduce the release's
   # output layout (only the compile matrix reads it; other targets ignore it).
