@@ -21,4 +21,4 @@ jobs:
   cleanup:
     permissions:
       actions: write  # delete caches on refs/pull/N/merge
-    uses: whuppi/ci/.github/workflows/cache-cleanup.yml@v2.6.3
+    uses: whuppi/ci/.github/workflows/cache-cleanup.yml@v2.7.0
