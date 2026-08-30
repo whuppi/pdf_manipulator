@@ -173,9 +173,9 @@ jobs:
           # make-target. It is slow because its caches start cold, which is a
           # caching problem — fix the cache, keep the row. Apple Silicon devs
           # run this locally fine; only GitHub's ARM VMs can't.
-          - { name: "int: Android (ubuntu-x64)",    runner: ubuntu-24.04,        make: test-example-android, cache: android,timeout: 40, java: true, hw-accel: true, gradle-cache: true, emulator: true }
-          - { name: "int: Android (macos-intel) [P]", runner: macos-15-intel,      make: test-example-android, cache: android,timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
-          - { name: "int: Android (win-x64) [P]",       runner: windows-2025-vs2026, make: test-example-android, cache: android,timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
+          - { name: "int: Android (ubuntu-x64)",    runner: ubuntu-24.04,        make: test-example-android, cache: android, engine: int-android,timeout: 40, java: true, hw-accel: true, gradle-cache: true, emulator: true }
+          - { name: "int: Android (macos-intel) [P]", runner: macos-15-intel,      make: test-example-android, cache: android, engine: int-android,timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
+          - { name: "int: Android (win-x64) [P]",       runner: windows-2025-vs2026, make: test-example-android, cache: android, engine: int-android,timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
           - { name: "int: iOS (macos-arm64)",       runner: macos-14,            make: test-example-ios,     cache: ios,timeout: 60, xcode-cache: true, xcode-cache-target: ios, pods-cache: true, simulator: true }
           - { name: "int: Linux (ubuntu-x64)",      runner: ubuntu-24.04,        make: test-example-linux,   cache: native,timeout: 30, headless-display: true }
           - { name: "int: macOS (macos-arm64)",     runner: macos-14,            make: test-example-macos,   cache: native,timeout: 30, xcode-cache: true, xcode-cache-target: macos }
@@ -261,7 +261,10 @@ jobs:
           # rows whose release hook build shares a rust-cache key with an int
           # row that finishes first with a near-empty tree (verify: Android
           # rebuilt four ABIs from source, ~6 min each, on every warm run;
-          # the macos-arm64 twin, alone in its family, took 3.6 min).
+          # the macos-arm64 twin, alone in its family, took 3.6 min), and
+          # the int: Android rows, whose debug hook build for the emulator
+          # ABI recompiled from source (6.4 min) behind a 116 MB rust-cache
+          # tree that never held it.
           rust-ghcr-target: ${{ matrix.engine && 'true' || 'false' }}
           # PR runs read; push-to-dev, dispatch and the weekly run write.
           # (The weekly run is cold — RUST_CACHE=false — so it writes
