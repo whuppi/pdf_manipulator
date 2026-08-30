@@ -299,7 +299,7 @@ runs:
         } >> "$GITHUB_OUTPUT"
     - name: Restore Rust target (ghcr)
       if: inputs.cache == 'true' && inputs.ghcr-target == 'true'
-      uses: whuppi/ci/actions/capabilities/oci-cache@v2.7.1
+      uses: whuppi/ci/actions/capabilities/oci-cache@v2.7.2
       with:
         phase: restore
         name: rust-target

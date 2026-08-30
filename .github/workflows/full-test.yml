@@ -240,7 +240,7 @@ jobs:
     steps:
       - name: Check filter
         id: filter
-        uses: whuppi/ci/actions/matrix-filter@v2.7.1
+        uses: whuppi/ci/actions/matrix-filter@v2.7.2
         with:
           name: ${{ matrix.name }}
           filter: ${{ needs.inputs.outputs.filter }}
