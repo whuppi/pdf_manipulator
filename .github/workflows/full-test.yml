@@ -228,11 +228,12 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.timeout }}
     permissions:
-      contents: read  # checkout + caches; no API writes
+      contents: read   # checkout
+      packages: write  # oci-cache: the big archives live on ghcr.io (read on PRs, write from dev)
     steps:
       - name: Check filter
         id: filter
-        uses: whuppi/ci/actions/matrix-filter@v2.5.1
+        uses: whuppi/ci/actions/matrix-filter@v2.6.0
         with:
           name: ${{ matrix.name }}
           filter: ${{ needs.inputs.outputs.filter }}
@@ -253,6 +254,7 @@ jobs:
           # nothing for cargo; gradle/xcode/pods/AVD still refresh.)
           rust-cache-save: ${{ github.event_name != 'pull_request' }}
           cache-save: ${{ github.event_name != 'pull_request' }}
+          cache-backend: ghcr
           java: ${{ matrix.java || 'false' }}
           chrome: ${{ matrix.chrome || 'false' }}
           headless-display: ${{ matrix.headless-display || 'false' }}
