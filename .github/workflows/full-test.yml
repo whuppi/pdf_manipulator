@@ -194,12 +194,12 @@ jobs:
           # Never build these with a lighter profile to save minutes.
           # The [P] rows prove a release build from a dev's Mac or Windows
           # box yields the same shippable artifact, not just Linux CI's.
-          - { name: "verify: Android (ubuntu-x64)", runner: ubuntu-24.04,        make: verify-android,       cache: android,timeout: 40, java: true, gradle-cache: true }
-          - { name: "verify: Android (macos-arm64) [P]",runner: macos-14,            make: verify-android,       cache: android,timeout: 40, java: true, gradle-cache: true, portability: true }
-          - { name: "verify: Android (win-x64) [P]",    runner: windows-2025-vs2026, make: verify-android,       cache: android,timeout: 60, java: true, gradle-cache: true, portability: true }
+          - { name: "verify: Android (ubuntu-x64)", runner: ubuntu-24.04,        make: verify-android,       cache: android, engine: verify-android,timeout: 40, java: true, gradle-cache: true }
+          - { name: "verify: Android (macos-arm64) [P]",runner: macos-14,            make: verify-android,       cache: android, engine: verify-android,timeout: 40, java: true, gradle-cache: true, portability: true }
+          - { name: "verify: Android (win-x64) [P]",    runner: windows-2025-vs2026, make: verify-android,       cache: android, engine: verify-android,timeout: 60, java: true, gradle-cache: true, portability: true }
           - { name: "verify: iOS (macos-arm64)",    runner: macos-14,            make: verify-ios,           cache: ios,timeout: 40, xcode-cache: true, xcode-cache-target: ios, pods-cache: true }
           - { name: "verify: Linux (ubuntu-x64)",   runner: ubuntu-24.04,        make: verify-linux,         cache: native,timeout: 30 }
-          - { name: "verify: macOS (macos-arm64)",  runner: macos-14,            make: verify-macos,         cache: native,timeout: 40, xcode-cache: true, xcode-cache-target: macos }
+          - { name: "verify: macOS (macos-arm64)",  runner: macos-14,            make: verify-macos,         cache: native, engine: verify-macos,timeout: 40, xcode-cache: true, xcode-cache-target: macos }
           - { name: "verify: Web (ubuntu-x64)",     runner: ubuntu-24.04,        make: verify-web,           cache: wasm,timeout: 40, wasm-cache: true, wasm-build: true }
           - { name: "verify: Web (macos-arm64) [P]",    runner: macos-14,            make: verify-web,           cache: wasm,timeout: 40, wasm-cache: true, wasm-build: true, portability: true }
           - { name: "verify: Web (win-x64) [P]",        runner: windows-2025-vs2026, make: verify-web,           cache: wasm,timeout: 40, wasm-cache: true, wasm-build: true, portability: true }
@@ -256,9 +256,12 @@ jobs:
           rust-cache: ${{ env.RUST_CACHE }}
           rust-cache-key: ${{ matrix.cache }}
           rust-engine-key: ${{ matrix.engine || '' }}
-          # Compile rows keep their whole per-target release tree on ghcr
-          # under their own family (engine): the Actions-cache path shared
-          # the hook rows' key and lost the save race every run.
+          # Rows with an `engine` family keep their whole vendored target
+          # tree on ghcr under that family: the compile rows, and the verify
+          # rows whose release hook build shares a rust-cache key with an int
+          # row that finishes first with a near-empty tree (verify: Android
+          # rebuilt four ABIs from source, ~6 min each, on every warm run;
+          # the macos-arm64 twin, alone in its family, took 3.6 min).
           rust-ghcr-target: ${{ matrix.engine && 'true' || 'false' }}
           # PR runs read; push-to-dev, dispatch and the weekly run write.
           # (The weekly run is cold — RUST_CACHE=false — so it writes
