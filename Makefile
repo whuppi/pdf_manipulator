@@ -306,12 +306,40 @@ test-rust: export CARGO_PROFILE_TEST_DEBUG := 0
 # embedded fallback fonts, but the upstream test suites cover both (the
 # CJK flatten tests are self-gated and silently SKIP without the feature),
 # so tests compile and run WITH them.
+#
+# cargo-nextest runs every test as its own process across all cores.
+# `cargo test` runs pdf_oxide's ~330 test binaries one after another (most
+# hold a handful of tests), so the machine idles — measured 5 min vs 1.8 min
+# for the same 9,078 tests. nextest skips doctests, so `cargo test --doc`
+# runs beside it: same set, nothing lost. Required, never optional — a
+# silent fallback to `cargo test` would make "the suite passed" mean two
+# different things on two machines. CI-installed the same way GTK is (see
+# ensure_gtk): pinned + sha256-verified through fetch_verified.sh; a dev
+# machine gets the exact install command instead of a surprise download.
+# (mold was tried for the ~330 links and measured no gain — the build half
+# is rustc-bound on the runner's cores, not link-bound. Don't re-add it
+# without a measurement.)
+define ensure_nextest
+	@$(CARGO) nextest --version >/dev/null 2>&1 || { \
+		if [ -n "$$CI" ] && [ "$$(uname -s)" = Linux ] && [ "$$(uname -m)" = x86_64 ]; then \
+			. tool/versions.env; \
+			bash tool/fetch_verified.sh \
+			  "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-$$NEXTEST_VERSION/cargo-nextest-$$NEXTEST_VERSION-x86_64-unknown-linux-gnu.tar.gz" \
+			  "$$NEXTEST_SHA256_LINUX_X64" /tmp/nextest.tar.gz && \
+			tar -xzf /tmp/nextest.tar.gz -C "$$HOME/.cargo/bin" cargo-nextest; \
+		else echo "Error: cargo-nextest not found. Run: cargo install cargo-nextest --locked"; exit 1; fi; }
+endef
+
 test-rust:
+	$(ensure_nextest)
 	@echo "=== Rust: pdf_oxide ==="
-	$(CARGO) test --manifest-path vendor/pdf_oxide/Cargo.toml \
+	$(CARGO) nextest run --no-fail-fast --manifest-path vendor/pdf_oxide/Cargo.toml \
+	  --features "$$($(DART) tool/compile.dart --features native),test-support,public-api,cjk-form-fonts,pdfa"
+	$(CARGO) test --doc --manifest-path vendor/pdf_oxide/Cargo.toml \
 	  --features "$$($(DART) tool/compile.dart --features native),test-support,public-api,cjk-form-fonts,pdfa"
 	@echo "=== Rust: office_oxide ==="
-	$(CARGO) test --manifest-path vendor/office_oxide/Cargo.toml
+	$(CARGO) nextest run --no-fail-fast --manifest-path vendor/office_oxide/Cargo.toml
+	$(CARGO) test --doc --manifest-path vendor/office_oxide/Cargo.toml
 
 # ═══════════════════════════════════════════════════════════════════
 # § 6 — Integration tests (example app)
