@@ -20,6 +20,6 @@ jobs:
   prune:
     permissions:
       packages: write  # delete versions of ghcr.io/whuppi/pdf_manipulator/cache
-    uses: whuppi/ci/.github/workflows/oci-cache-prune.yml@v2.6.1
+    uses: whuppi/ci/.github/workflows/oci-cache-prune.yml@v2.6.3
     with:
       retention-days: 14
