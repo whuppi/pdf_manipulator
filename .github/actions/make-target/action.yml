@@ -32,6 +32,13 @@ inputs:
       one archive per target).
     required: false
     default: ''
+  rust-engine-key:
+    description: >
+      Family for the engine-artifacts archive when it must differ from
+      rust-cache-key (the compile rows). See the rust capability's
+      engine-key input.
+    required: false
+    default: ''
   rust-cache-save:
     description: >
       Whether this run may write the cargo cache (rust-cache save-if). PR
@@ -138,6 +145,7 @@ runs:
       with:
         cache: ${{ inputs.rust-cache }}
         cache-key: ${{ inputs.rust-cache-key != '' && inputs.rust-cache-key || inputs.make-target }}
+        engine-key: ${{ inputs.rust-engine-key }}
         save-if: ${{ inputs.rust-cache-save }}
 
     # The reclaim is slow (~2 min of apt/rm) and only needed when the

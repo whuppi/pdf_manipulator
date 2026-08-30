@@ -32,6 +32,20 @@ inputs:
       the CARGO/RUST env on its own.
     required: false
     default: ''
+  engine-key:
+    description: >
+      Family for the unhashed-engine-artifacts archive (see that step).
+      Defaults to cache-key. The compile rows pass their own family here
+      while sharing the hook rows' cache-key: the dependency crates they
+      build are byte-identical to the hook rows' (same triples, same
+      profile), so one deps archive serves both — but their per-ABI engine
+      outputs (4 targets) differ from the hook's (3), and rust-cache writes
+      an archive once per key from whichever row finishes first, so those
+      outputs need a key nobody else races for. Before this split every
+      compile row rebuilt all its ABIs on a warm run (16.6 m), and a full
+      second deps archive per compile family cost ~3.5 GB of a 10 GB quota.
+    required: false
+    default: ''
   save-if:
     description: >
       Whether this run may WRITE the cache. GitHub scopes caches to the
@@ -178,7 +192,7 @@ runs:
           vendor/*/target/**/deps/*_oxide.pdb
           vendor/*/target/**/deps/*_oxide.wasm
           vendor/*/target/**/deps/*_oxide.d
-        key: v1-rust-engine-${{ inputs.cache-key }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}-${{ hashFiles('vendor/*/Cargo.lock', 'vendor/*/Cargo.toml', 'tool/versions.env') }}
+        key: v1-rust-engine-${{ inputs.engine-key != '' && inputs.engine-key || inputs.cache-key }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}-${{ hashFiles('vendor/*/Cargo.lock', 'vendor/*/Cargo.toml', 'tool/versions.env') }}
     - name: Restore unhashed engine artifacts (read-only)
       if: inputs.cache == 'true' && inputs.save-if != 'true'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -197,7 +211,7 @@ runs:
           vendor/*/target/**/deps/*_oxide.pdb
           vendor/*/target/**/deps/*_oxide.wasm
           vendor/*/target/**/deps/*_oxide.d
-        key: v1-rust-engine-${{ inputs.cache-key }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}-${{ hashFiles('vendor/*/Cargo.lock', 'vendor/*/Cargo.toml', 'tool/versions.env') }}
+        key: v1-rust-engine-${{ inputs.engine-key != '' && inputs.engine-key || inputs.cache-key }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}-${{ hashFiles('vendor/*/Cargo.lock', 'vendor/*/Cargo.toml', 'tool/versions.env') }}
 
     # cargo fingerprints a PATH crate (the vendored engine — unlike a
     # registry crate, which is fingerprinted by content) by its sources'
