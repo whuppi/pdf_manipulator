@@ -1,11 +1,48 @@
 name: WASM Cache
 description: Cache WASM build output to skip recompilation.
 
+inputs:
+  save:
+    description: >
+      Whether this run may write the cache. GitHub scopes caches to the ref
+      that wrote them and lets a PR read only its base and the default
+      branch, so a PR's writes are invisible to every other PR and only
+      spend quota. Pass 'false' from PR runs; push-to-dev runs warm.
+    required: false
+    default: 'true'
+
 runs:
   using: composite
   steps:
+    # The key must name EVERY input that changes the bytes of the wasm, and
+    # there are deliberately no restore-keys: the wasm-build capability trusts
+    # a restored file by its mere existence, so a partial-key match would
+    # silently run the browser rows against an artifact built from different
+    # features or a different toolchain — a green run proving nothing.
+    #   runner.os/arch        — wasm-bindgen + wasm-opt are host tools; the
+    #                           [P] web rows exist to prove each host builds
+    #                           a working artifact, so hosts never share one.
+    #   SUBMODULE_PDF_OXIDE   — the engine source AND bindgen_runner (it lives
+    #                           in the vendored workspace, so its Cargo.lock,
+    #                           i.e. the wasm-bindgen/wasm-opt versions, is
+    #                           covered by this rev).
+    #   build.json            — the wasm feature list.
+    #   tool/versions.env     — RUST_VERSION; the same source, different
+    #                           rustc, is a different wasm.
+    # Adding an input that shapes the wasm without adding it here reintroduces
+    # the stale-artifact hole.
+    # Two steps, one runs: `actions/cache` saves from its own post step
+    # (after wasm-build, on a primary-key miss); a run that must not write
+    # uses the restore-only action, which registers no post step.
     - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      if: inputs.save == 'true'
       id: wasm-cache
       with:
         path: web_assets/pdf_oxide_bg.wasm
-        key: wasm-${{ runner.os }}-${{ runner.arch }}-${{ env.SUBMODULE_PDF_OXIDE }}
+        key: wasm-${{ runner.os }}-${{ runner.arch }}-${{ env.SUBMODULE_PDF_OXIDE }}-${{ hashFiles('build.json', 'tool/versions.env') }}
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      if: inputs.save != 'true'
+      id: wasm-cache-ro
+      with:
+        path: web_assets/pdf_oxide_bg.wasm
+        key: wasm-${{ runner.os }}-${{ runner.arch }}-${{ env.SUBMODULE_PDF_OXIDE }}-${{ hashFiles('build.json', 'tool/versions.env') }}

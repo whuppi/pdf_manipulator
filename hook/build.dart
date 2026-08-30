@@ -399,7 +399,7 @@ Future<void> _compileNativeFromHook(
     crateName: constants.crate,
     targetTriple: targetTriple,
     features: plan.features,
-    targetDir: p.join(p.fromUri(input.outputDirectory), 'cargo_target'),
+    targetDir: hookCargoTargetDir(input.outputDirectory),
     libFileName: codeConfig.targetOS.libraryFileName(constants.crate, linkMode),
     outFile: outFile,
     environment: {
