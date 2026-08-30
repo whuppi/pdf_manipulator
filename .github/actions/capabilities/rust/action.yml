@@ -167,6 +167,14 @@ runs:
     # same save gate. Do not fold these paths into rust-cache's workspaces —
     # they'd be deleted again.
     #
+    # The .fingerprint/ and build/ entries are what makes a restored
+    # artifact REUSABLE: cargo keeps one fingerprint dir per unit hash, and
+    # a row whose units differ from the deps archive's saver (the compile
+    # rows: other linker, other targets) finds its artifacts restored but
+    # their fingerprints absent — and rebuilds every ABI (measured: both
+    # caches hit, four 5-minute compiles anyway). The key's v-prefix is
+    # this archive's format version: bump it with any change to these paths.
+    #
     # Two steps, one runs: `actions/cache` saves from its own post step
     # (after the build, on a primary-key miss), which is what a run that MAY
     # write needs; a run that must not write uses the restore-only action,
@@ -192,7 +200,9 @@ runs:
           vendor/*/target/**/deps/*_oxide.pdb
           vendor/*/target/**/deps/*_oxide.wasm
           vendor/*/target/**/deps/*_oxide.d
-        key: v1-rust-engine-${{ inputs.engine-key != '' && inputs.engine-key || inputs.cache-key }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}-${{ hashFiles('vendor/*/Cargo.lock', 'vendor/*/Cargo.toml', 'tool/versions.env') }}
+          vendor/*/target/**/.fingerprint/*_oxide-*
+          vendor/*/target/**/build/*_oxide-*
+        key: v2-rust-engine-${{ inputs.engine-key != '' && inputs.engine-key || inputs.cache-key }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}-${{ hashFiles('vendor/*/Cargo.lock', 'vendor/*/Cargo.toml', 'tool/versions.env') }}
     - name: Restore unhashed engine artifacts (read-only)
       if: inputs.cache == 'true' && inputs.save-if != 'true'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -211,7 +221,9 @@ runs:
           vendor/*/target/**/deps/*_oxide.pdb
           vendor/*/target/**/deps/*_oxide.wasm
           vendor/*/target/**/deps/*_oxide.d
-        key: v1-rust-engine-${{ inputs.engine-key != '' && inputs.engine-key || inputs.cache-key }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}-${{ hashFiles('vendor/*/Cargo.lock', 'vendor/*/Cargo.toml', 'tool/versions.env') }}
+          vendor/*/target/**/.fingerprint/*_oxide-*
+          vendor/*/target/**/build/*_oxide-*
+        key: v2-rust-engine-${{ inputs.engine-key != '' && inputs.engine-key || inputs.cache-key }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}-${{ hashFiles('vendor/*/Cargo.lock', 'vendor/*/Cargo.toml', 'tool/versions.env') }}
 
     # cargo fingerprints a PATH crate (the vendored engine — unlike a
     # registry crate, which is fingerprinted by content) by its sources'
