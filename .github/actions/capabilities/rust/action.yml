@@ -46,6 +46,20 @@ inputs:
       second deps archive per compile family cost ~3.5 GB of a 10 GB quota.
     required: false
     default: ''
+  ghcr-target:
+    description: >
+      'true' = keep this family's WHOLE target trees on the GitHub Container
+      Registry (whuppi/ci oci-cache) instead of rust-cache: the debug
+      trees, every test and bin executable, and the cargo registry. Built
+      for the `test` family: rust-cache keeps only crate-named artifacts,
+      so its ~330 integration-test binaries were rebuilt on every warm run
+      (2.5 min), and the whole tree is gigabytes — fine on GHCR (public,
+      uncapped, pruned at 14 days), not on the 10 GB Actions cache. Keyed
+      on the vendor revs with a `-latest` fallback, so an engine-bump PR
+      rebuilds only what changed. The save half runs from make-target
+      after the build (see its rust-ghcr-target input).
+    required: false
+    default: 'false'
   save-if:
     description: >
       Whether this run may WRITE the cache. GitHub scopes caches to the
@@ -55,6 +69,14 @@ inputs:
       `dev` (the warm source everyone reads) and on a primary-key miss.
     required: false
     default: 'true'
+
+outputs:
+  ghcr-target-key:
+    description: "The oci-cache key for the ghcr-target archive (make-target saves it after the build)"
+    value: ${{ steps.tkey.outputs.key }}
+  ghcr-target-fallback:
+    description: "The floating fallback tag for the ghcr-target archive"
+    value: ${{ steps.tkey.outputs.fallback }}
 
 runs:
   using: composite
@@ -140,7 +162,7 @@ runs:
     #                          every existing key keeps serving an archive
     #                          the new rule can't hit. Bump = one integer.
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      if: inputs.cache == 'true'
+      if: inputs.cache == 'true' && inputs.ghcr-target != 'true'
       with:
         prefix-key: v1-rust
         workspaces: |
@@ -183,7 +205,7 @@ runs:
     # would run before the build and save nothing under a key that then
     # blocks the real save forever.
     - name: Restore + save unhashed engine artifacts
-      if: inputs.cache == 'true' && inputs.save-if == 'true'
+      if: inputs.cache == 'true' && inputs.ghcr-target != 'true' && inputs.save-if == 'true'
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
@@ -204,7 +226,7 @@ runs:
           vendor/*/target/**/build/*_oxide-*
         key: v2-rust-engine-${{ inputs.engine-key != '' && inputs.engine-key || inputs.cache-key }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}-${{ hashFiles('vendor/*/Cargo.lock', 'vendor/*/Cargo.toml', 'tool/versions.env') }}
     - name: Restore unhashed engine artifacts (read-only)
-      if: inputs.cache == 'true' && inputs.save-if != 'true'
+      if: inputs.cache == 'true' && inputs.ghcr-target != 'true' && inputs.save-if != 'true'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
@@ -250,6 +272,38 @@ runs:
     # a stale binary. Remove them and it serves one. Never widen the touch
     # to anything outside vendor/, and never run it on a developer machine —
     # local builds rely on real mtimes.
+    # ghcr-target mode: the whole tree, restored before the mtime pin below
+    # (the pin must run AFTER every restore, or the restored dep-info would
+    # be older than the sources it describes).
+    - name: ghcr-target key
+      id: tkey
+      if: inputs.cache == 'true' && inputs.ghcr-target == 'true'
+      shell: bash
+      env:
+        FAMILY: ${{ inputs.cache-key }}
+        PDF: ${{ steps.sub.outputs.pdf_oxide }}
+        OFFICE: ${{ steps.sub.outputs.office_oxide }}
+        HASHES: ${{ hashFiles('vendor/*/Cargo.lock', 'vendor/*/Cargo.toml', 'tool/versions.env') }}
+      run: |
+        {
+          echo "key=$FAMILY-$RUNNER_OS-$RUNNER_ARCH-$PDF-$OFFICE-$HASHES"
+          echo "fallback=$FAMILY-$RUNNER_OS-$RUNNER_ARCH-latest"
+        } >> "$GITHUB_OUTPUT"
+    - name: Restore Rust target (ghcr)
+      if: inputs.cache == 'true' && inputs.ghcr-target == 'true'
+      uses: whuppi/ci/actions/capabilities/oci-cache@v2.6.3
+      with:
+        phase: restore
+        name: rust-target
+        key: ${{ steps.tkey.outputs.key }}
+        fallback: ${{ steps.tkey.outputs.fallback }}
+        path: |
+          vendor/pdf_oxide/target/debug
+          vendor/office_oxide/target/debug
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+
     - name: Pin vendor source mtimes for cargo freshness
       if: inputs.cache == 'true'
       shell: bash

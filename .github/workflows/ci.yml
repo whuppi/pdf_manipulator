@@ -223,6 +223,10 @@ jobs:
         with:
           make-target: test-rust
           rust-cache-key: test
+          # The test family's whole target trees live on ghcr.io: rust-cache
+          # dropped the ~330 integration-test binaries every save, so warm
+          # runs rebuilt them (2.5 min) — see the rust capability.
+          rust-ghcr-target: 'true'
           free-disk: 'true'
           rust-cache: ${{ env.RUST_CACHE }}
           # Write the cargo cache from dev (the warm source) and from a PR only

@@ -39,6 +39,13 @@ inputs:
       engine-key input.
     required: false
     default: ''
+  rust-ghcr-target:
+    description: >
+      Keep this family's whole Rust target trees on ghcr.io instead of
+      rust-cache (the `test` family). See the rust capability's
+      ghcr-target input; the save runs at the end of this action.
+    required: false
+    default: 'false'
   rust-cache-save:
     description: >
       Whether this run may write the cargo cache (rust-cache save-if). PR
@@ -154,9 +161,11 @@ runs:
     # cache-key names the build family (see the rust-cache-key input);
     # the make target is the fallback so an unlabelled job never shares.
     - uses: ./.github/actions/capabilities/rust
+      id: rust
       if: inputs.rust == 'true'
       with:
         cache: ${{ inputs.rust-cache }}
+        ghcr-target: ${{ inputs.rust-ghcr-target }}
         cache-key: ${{ inputs.rust-cache-key != '' && inputs.rust-cache-key || inputs.make-target }}
         engine-key: ${{ inputs.rust-engine-key }}
         save-if: ${{ inputs.rust-cache-save }}
@@ -274,6 +283,25 @@ runs:
         phase: save
         save: ${{ inputs.cache-save }}
         backend: ${{ inputs.cache-backend }}
+
+    # The save half of the rust capability's ghcr-target mode: the whole
+    # target trees after the build. Gated like every other save (PR runs
+    # read; dev writes). Skipped by oci-cache itself on an exact hit.
+    - name: Save Rust target (ghcr)
+      if: always() && inputs.rust == 'true' && inputs.rust-cache == 'true' && inputs.rust-ghcr-target == 'true'
+      uses: whuppi/ci/actions/capabilities/oci-cache@v2.6.3
+      with:
+        phase: save
+        save: ${{ inputs.rust-cache-save }}
+        name: rust-target
+        key: ${{ steps.rust.outputs.ghcr-target-key }}
+        fallback: ${{ steps.rust.outputs.ghcr-target-fallback }}
+        path: |
+          vendor/pdf_oxide/target/debug
+          vendor/office_oxide/target/debug
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
 
     # Evidence for min-free-gb: what the build actually left on disk.
     - name: Disk after build
