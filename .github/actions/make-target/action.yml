@@ -148,7 +148,7 @@ runs:
     # the native/wasm ones (rust, wasm-cache, wasm-build) are pdf-specific and
     # stay local. The shared capabilities were generalized FROM these, so the
     # behavior is identical — only their home moved.
-    - uses: whuppi/ci/actions/capabilities/fvm@v2.7.2
+    - uses: whuppi/ci/actions/capabilities/fvm@v2.7.3
       with:
         sdk-cache-backend: ${{ inputs.cache-backend }}
         cache-save: ${{ inputs.cache-save }}
@@ -185,22 +185,22 @@ runs:
         echo "free: ${avail_gb} GB, required: ${MIN_GB} GB"
         if [ "$avail_gb" -lt "$MIN_GB" ]; then echo "reclaim=true" >> "$GITHUB_OUTPUT"; else echo "reclaim=false" >> "$GITHUB_OUTPUT"; fi
 
-    - uses: whuppi/ci/actions/capabilities/free-disk-space@v2.7.2
+    - uses: whuppi/ci/actions/capabilities/free-disk-space@v2.7.3
       if: inputs.free-disk == 'true' && steps.headroom.outputs.reclaim == 'true'
 
-    - uses: whuppi/ci/actions/capabilities/java@v2.7.2
+    - uses: whuppi/ci/actions/capabilities/java@v2.7.3
       if: inputs.java == 'true'
 
-    - uses: whuppi/ci/actions/capabilities/chrome@v2.7.2
+    - uses: whuppi/ci/actions/capabilities/chrome@v2.7.3
       if: inputs.chrome == 'true'
 
-    - uses: whuppi/ci/actions/capabilities/headless-display@v2.7.2
+    - uses: whuppi/ci/actions/capabilities/headless-display@v2.7.3
       if: inputs.headless-display == 'true'
 
-    - uses: whuppi/ci/actions/capabilities/hw-accel@v2.7.2
+    - uses: whuppi/ci/actions/capabilities/hw-accel@v2.7.3
       if: inputs.hw-accel == 'true'
 
-    - uses: whuppi/ci/actions/capabilities/gradle-cache@v2.7.2
+    - uses: whuppi/ci/actions/capabilities/gradle-cache@v2.7.3
       if: inputs.gradle-cache == 'true'
       with:
         phase: restore
@@ -210,14 +210,14 @@ runs:
     # Forward the pdf_oxide submodule rev (set by the rust step above) as the
     # shared xcode-cache's key-extra, preserving the precise cache key the
     # local xcode-cache read from env directly.
-    - uses: whuppi/ci/actions/capabilities/xcode-cache@v2.7.2
+    - uses: whuppi/ci/actions/capabilities/xcode-cache@v2.7.3
       if: inputs.xcode-cache == 'true'
       with:
         target: ${{ inputs.xcode-cache-target }}
         key-extra: ${{ env.SUBMODULE_PDF_OXIDE }}
         save: ${{ inputs.cache-save }}
 
-    - uses: whuppi/ci/actions/capabilities/pods-cache@v2.7.2
+    - uses: whuppi/ci/actions/capabilities/pods-cache@v2.7.3
       if: inputs.pods-cache == 'true'
       with:
         save: ${{ inputs.cache-save }}
@@ -230,7 +230,7 @@ runs:
     - uses: ./.github/actions/capabilities/wasm-build
       if: inputs.wasm-build == 'true'
 
-    - uses: whuppi/ci/actions/capabilities/ios-simulator@v2.7.2
+    - uses: whuppi/ci/actions/capabilities/ios-simulator@v2.7.3
       if: inputs.simulator == 'true'
 
     # ── Run ──
@@ -270,7 +270,7 @@ runs:
     # by the capability's teardown-watchdog wrapper. The shared android-emulator
     # reconciles the machine report at its default path (test-results/
     # int-android.json), which is where the android make target writes.
-    - uses: whuppi/ci/actions/capabilities/android-emulator@v2.7.2
+    - uses: whuppi/ci/actions/capabilities/android-emulator@v2.7.3
       if: inputs.emulator == 'true'
       with:
         script: /tmp/make-run.sh "${{ inputs.make-target }}"
@@ -278,7 +278,7 @@ runs:
         avd-cache-backend: ${{ inputs.cache-backend }}
         sdk-cache-backend: ${{ inputs.cache-backend == 'ghcr' && 'ghcr' || '' }}
 
-    - uses: whuppi/ci/actions/capabilities/gradle-cache@v2.7.2
+    - uses: whuppi/ci/actions/capabilities/gradle-cache@v2.7.3
       if: always() && inputs.gradle-cache == 'true'
       with:
         phase: save
@@ -290,7 +290,7 @@ runs:
     # read; dev writes). Skipped by oci-cache itself on an exact hit.
     - name: Save Rust target (ghcr)
       if: always() && inputs.rust == 'true' && inputs.rust-cache == 'true' && inputs.rust-ghcr-target == 'true'
-      uses: whuppi/ci/actions/capabilities/oci-cache@v2.7.2
+      uses: whuppi/ci/actions/capabilities/oci-cache@v2.7.3
       with:
         phase: save
         save: ${{ inputs.rust-cache-save }}

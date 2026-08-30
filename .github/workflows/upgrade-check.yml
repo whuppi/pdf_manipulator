@@ -35,7 +35,7 @@ jobs:
     permissions:
       contents: write       # pushes the chore/flutter-sdk + chore/lockfiles branches
       pull-requests: write  # opens / edits the upgrade PRs
-    uses: whuppi/ci/.github/workflows/upgrade-check.yml@v2.7.2
+    uses: whuppi/ci/.github/workflows/upgrade-check.yml@v2.7.3
     with:
       branch: dev
       sweepActions: true
