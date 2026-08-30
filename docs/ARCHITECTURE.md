@@ -717,14 +717,37 @@ user-facing text (README, pubspec).
 pdf carries three local native capabilities under
 `.github/actions/capabilities/`:
 
-- **`rust/`** — Rust toolchain + sccache. Sets the `pdf_oxide` submodule
-  rev the wasm and xcode caches key on.
+- **`rust/`** — pinned Rust toolchain, one shared cargo target dir, and
+  the cargo cache (rust-cache). Sets the `pdf_oxide` submodule rev the
+  wasm and xcode caches key on.
 - **`wasm-cache/`** — caches WASM build output.
 - **`wasm-build/`** — compiles WASM on a cache miss.
 
 pdf's local `make-target` wrapper provisions these before delegating the
 generic run to whuppi/ci. The capability model and the "what is a
 capability" test live in whuppi/ci/docs/ARCHITECTURE.md.
+
+### Caching — what is cached, why, and the cold guard
+
+The engine's final artifact is a cdylib built with fat LTO. No compiler
+wrapper cache (sccache, ccache) can cache a crate that invokes the system
+linker, so a wrapper at a 100 % hit rate still rebuilt the expensive step
+every job. The only thing that reuses it is cargo's fingerprint inside
+`target/` — so `target/` is what CI caches.
+
+| Piece | How |
+|---|---|
+| One target dir | Every build path in a job — the consumer hook (`dart test`, `flutter build` inside Gradle/Xcode), `tool/compile.dart`, `cargo test` — lands in `vendor/pdf_oxide/target`. The hook learns this from `~/.pdf_manipulator/cargo-target-dir`, a file, because `hooks_runner` strips env vars to an allowlist (`HOME` survives). Consumers never have the file; their hook keeps building inside `.dart_tool`. |
+| The cache | `Swatinem/rust-cache` archives `~/.cargo` + both vendored `target/` dirs per key. Key = rustc host + version, every `Cargo.lock`/`Cargo.toml` hash, the `CARGO`/`RUST` env, the **build family** (`native` / `wasm` / `android` / `ios` / `check` / `test` — each matrix row declares its `cache:`; rows that build the same triples and features share one archive, rows that build something else never do) and both vendored submodule revs. One warm set is ~12 archives, ~6 GB; keyed per row it was 33 archives, ~14 GB, mostly identical bytes. `cache-workspace-crates: true` is required — the default drops the workspace's own crates, and the vendored engine IS the workspace crate. |
+| Path-crate freshness | cargo fingerprints a path crate by source mtimes, and a checkout stamps every file "now", so a restored cache would still rebuild the engine (the first warm run proved it: deps hit, `pdf_oxide` recompiled). After restore, CI pins every file under `vendor/` to a fixed past instant. Safe only because the key names the exact vendor revs: same key ⇒ identical sources ⇒ the artifact is the right one; any change ⇒ new key ⇒ cold. The revs in the key and the mtime pin are one mechanism — never keep one without the other. |
+| Unhashed engine outputs | Both engines are `cdylib + rlib + staticlib`, and cargo emits every output of such a lib unit without a hash (`libpdf_oxide.so`, `.rlib`, `.a`). rust-cache's save-time cleanup keeps a `deps/` entry only when its name is `<crate>-<hash>`, so it deletes exactly those files and the fat-LTO engine rebuilt on every "warm" run (probe: `FailedToReadMetadata(deps/libpdf_oxide.so)` with everything else cached). The rust action therefore keeps a second, small archive of just those outputs, restored over rust-cache's and saved from `actions/cache`'s own post step so it runs before rust-cache's cleanup. Same key ingredients, same save gate. |
+| Staleness bound | rust-cache prunes artifacts older than seven days at save time, so a warm cache can never drift more than a week from a from-scratch build. |
+| The cold guard | `release.yml` compiles with the cache off, always: a release binary's provenance is the tagged source, not "whatever was cached". `full-test.yml` runs the whole matrix cold every Monday, and both workflows take `cold: true` on manual dispatch. This is the routine proof that a fresh clone builds every target from vendor source — the promise the pub.dev tarball makes. |
+| Scope | GitHub lets a run read caches from its own ref, the PR base, and the default branch only. Caches written from a PR ref are invisible to every other PR. `make-target`'s `rust-cache-save` exists so `dev` can be the warm source everyone reads and PRs mostly read. |
+
+The bar this protects: a green row must mean the row did its own work.
+A cache hit skips a rebuild of identical inputs; it never substitutes
+another row's artifact or a lighter profile.
 
 ### Workflows
 
@@ -766,6 +789,11 @@ Single matrix with two tiers in one sorted list:
 | Package | macOS, Linux, Windows, Web | Web on macos + win |
 | Integration | macOS, Linux, Windows, Android, iOS, Web | Android on macos-intel + win, Web on macos + win |
 | Verify | Android, iOS, macOS, Linux, Web | Android on macos + win, Web on macos + win |
+
+Every row family states, in a comment beside it in `full-test.yml`, the
+claim it proves and what a build from a different host would silently stop
+proving. That comment is the contract: CI gets faster by caching what a row
+builds, never by removing the row or handing it another row's output.
 
 ### Build inputs — `build.json` vs `versions.env`
 

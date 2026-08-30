@@ -4,6 +4,12 @@ description: Compile WASM from source if not cached.
 runs:
   using: composite
   steps:
+    # File-existence is the whole gate, which is only safe because the
+    # wasm-cache key upstream names every input that shapes the file (see
+    # that capability). Never widen this to "reuse any wasm lying around"
+    # or download one built on another OS: the web rows on macOS/Windows
+    # exist precisely to prove THIS host's toolchain produces a working
+    # artifact, and a borrowed file makes that row pass without testing it.
     - shell: bash
       run: |
         if [ -f web_assets/pdf_oxide_bg.wasm ]; then

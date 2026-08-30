@@ -13,6 +13,10 @@ on:
         type: choice
         options: [ubuntu-24.04, macos-14, windows-2025-vs2026]
         default: ubuntu-24.04
+      cold:
+        description: "Cold build — ignore the cargo cache (proves a fresh clone builds)"
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -22,6 +26,10 @@ concurrency:
 
 env:
   DEFAULT_RUNNER: ubuntu-24.04
+  # The cargo cache is on for every PR run; `cold: true` on a manual
+  # dispatch turns it off for the whole run. The routine from-scratch
+  # proof is the scheduled cold Full Test — see full-test.yml.
+  RUST_CACHE: ${{ inputs.cold && 'false' || 'true' }}
 
 jobs:
   inputs:
@@ -74,6 +82,12 @@ jobs:
               - 'Makefile'
               - '.github/**'
 
+  # Format + `dart analyze --fatal-infos` on the package and the example,
+  # then `cargo check` of the vendored engine under BOTH shipped feature
+  # sets (native and wasm) with our-code warnings fatal. The Rust half is
+  # what catches a patch that compiles for one target and not the other
+  # before a Full Test spends an hour on it. Needs submodules; does not
+  # need the engine BUILT — the fixtures target is deliberately hook-free.
   analyze:
     name: Analyze
     needs: [inputs, changes]
@@ -88,6 +102,8 @@ jobs:
       - uses: ./.github/actions/make-target
         with:
           make-target: analyze
+          rust-cache-key: check
+          rust-cache: ${{ env.RUST_CACHE }}
 
   # Analyze the shipped code (lib/bin/hook) against the OLDEST in-range deps, so
   # the wide lower bounds are honest, not just the newest a fresh build resolves.
@@ -106,6 +122,7 @@ jobs:
       - uses: ./.github/actions/make-target
         with:
           make-target: analyze-floor
+          rust: false  # Dart-only static analysis, no toolchain or cargo cache to provision
 
   # Gate pub.dev platform support: pana (the same analyzer pub.dev runs) must
   # still report all 6 platforms, so an unconditional dart:io/ffi import that
@@ -127,6 +144,12 @@ jobs:
           make-target: platforms
           rust: false  # pana is Dart-only static analysis, no native build to provision
 
+  # The fast gate's one real build: unit + native ops suites via `dart
+  # test`, which runs hook/build.dart exactly as a downstream package would.
+  # This is the only per-PR proof that the consumer hook still compiles the
+  # engine from vendor source on a clean machine — Full Test is opt-in by
+  # label, so if this job stops building the engine, a broken hook reaches
+  # `dev` unnoticed. Keep it a real build; cache its inputs, don't stub it.
   test:
     name: Package tests
     needs: [inputs, changes]
@@ -141,9 +164,17 @@ jobs:
       - uses: ./.github/actions/make-target
         with:
           make-target: test-pkg-native
+          rust-cache-key: native
+          rust-cache: ${{ env.RUST_CACHE }}
 
   # Vendored-engine cargo tests — only when a PR touches the engine, its
   # features, the Makefile, or CI. Skipped on Dart-only PRs.
+  # This is the upstream suite running against OUR patches, with the
+  # test-only features the shipped builds exclude. A fork patch that breaks
+  # upstream behaviour we don't exercise from Dart is caught here only.
+  # The `rust` path filter is the trigger contract: widen it if the engine
+  # gains a new input; never narrow it to make Dart PRs faster (they
+  # already skip it).
   rust:
     name: Rust tests
     needs: [inputs, changes]
@@ -160,7 +191,9 @@ jobs:
       - uses: ./.github/actions/make-target
         with:
           make-target: test-rust
+          rust-cache-key: test
           free-disk: 'true'
+          rust-cache: ${{ env.RUST_CACHE }}
 
   gate:
     name: CI Gate
