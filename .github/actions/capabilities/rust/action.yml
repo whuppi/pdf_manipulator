@@ -304,6 +304,22 @@ runs:
           ~/.cargo/registry/cache
           ~/.cargo/git/db
 
+    # What the restores actually brought back, per target triple: the
+    # engine outputs and their fingerprints. When a warm row still
+    # compiles, this line says whether the cache was missing something or
+    # cargo rejected what was there (then run Full Test with probe: true).
+    - name: Restored engine artifacts
+      if: inputs.cache == 'true'
+      shell: bash
+      run: |
+        for t in vendor/pdf_oxide/target/*/ vendor/pdf_oxide/target/*/*/; do
+          [ -d "$t/deps" ] || continue
+          so=$(find "$t/deps" -maxdepth 1 \( -name 'lib*_oxide.so' -o -name 'lib*_oxide.dylib' -o -name '*_oxide.dll' -o -name 'lib*_oxide.a' -o -name '*_oxide.wasm' \) 2>/dev/null | wc -l | tr -d ' ')
+          rl=$(find "$t/deps" -maxdepth 1 -name 'lib*_oxide*.rlib' 2>/dev/null | wc -l | tr -d ' ')
+          fp=$(find "$t/.fingerprint" -maxdepth 1 -name '*_oxide-*' 2>/dev/null | wc -l | tr -d ' ')
+          echo "  ${t#vendor/pdf_oxide/target/}: engine outputs=$so rlibs=$rl fingerprints=$fp"
+        done
+
     - name: Pin vendor source mtimes for cargo freshness
       if: inputs.cache == 'true'
       shell: bash
