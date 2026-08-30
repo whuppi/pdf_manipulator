@@ -109,7 +109,8 @@ jobs:
     runs-on: ${{ needs.inputs.outputs.runner }}
     timeout-minutes: 15
     permissions:
-      contents: read  # checkout + build, read-only
+      contents: read   # checkout + build, read-only
+      packages: write  # oci-cache: the Flutter SDK lives on ghcr.io (read on PRs, write from dev)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { submodules: recursive, persist-credentials: false }
@@ -122,6 +123,8 @@ jobs:
           # when its Rust inputs changed — that PR's key differs from dev's,
           # so without its own archive every push of it would build cold.
           rust-cache-save: ${{ github.event_name == 'push' || needs.changes.outputs.rust == 'true' }}
+          cache-backend: ghcr
+          cache-save: ${{ github.event_name == 'push' }}
 
   # Analyze the shipped code (lib/bin/hook) against the OLDEST in-range deps, so
   # the wide lower bounds are honest, not just the newest a fresh build resolves.
@@ -133,7 +136,8 @@ jobs:
     runs-on: ${{ needs.inputs.outputs.runner }}
     timeout-minutes: 15
     permissions:
-      contents: read  # checkout + static analyze, read-only
+      contents: read   # checkout + static analyze, read-only
+      packages: write  # oci-cache: the Flutter SDK lives on ghcr.io (read on PRs, write from dev)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
@@ -175,7 +179,8 @@ jobs:
     runs-on: ${{ needs.inputs.outputs.runner }}
     timeout-minutes: 20
     permissions:
-      contents: read  # checkout + build, read-only
+      contents: read   # checkout + build, read-only
+      packages: write  # oci-cache: the Flutter SDK lives on ghcr.io (read on PRs, write from dev)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { submodules: recursive, persist-credentials: false }
@@ -188,6 +193,8 @@ jobs:
           # when its Rust inputs changed — that PR's key differs from dev's,
           # so without its own archive every push of it would build cold.
           rust-cache-save: ${{ github.event_name == 'push' || needs.changes.outputs.rust == 'true' }}
+          cache-backend: ghcr
+          cache-save: ${{ github.event_name == 'push' }}
 
   # Vendored-engine cargo tests — only when a PR touches the engine, its
   # features, the Makefile, or CI. Skipped on Dart-only PRs.
@@ -204,7 +211,8 @@ jobs:
     runs-on: ${{ needs.inputs.outputs.runner }}
     timeout-minutes: 30
     permissions:
-      contents: read  # checkout + build, read-only
+      contents: read   # checkout + build, read-only
+      packages: write  # oci-cache: the Flutter SDK lives on ghcr.io (read on PRs, write from dev)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { submodules: recursive, persist-credentials: false }
@@ -221,6 +229,8 @@ jobs:
           # when its Rust inputs changed — that PR's key differs from dev's,
           # so without its own archive every push of it would build cold.
           rust-cache-save: ${{ github.event_name == 'push' || needs.changes.outputs.rust == 'true' }}
+          cache-backend: ghcr
+          cache-save: ${{ github.event_name == 'push' }}
 
   gate:
     name: CI Gate

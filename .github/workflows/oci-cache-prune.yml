@@ -1,0 +1,25 @@
+# Retention for the ghcr-backed caches (Flutter SDK, Gradle home, AVD
+# snapshot — see make-target's cache-backend). GHCR never evicts, so this
+# is the only thing that deletes an old archive: versions not updated for
+# 14 days and untagged ones go; the `*-latest` fallback tags every warm run
+# reads are never pruned. Daily, plus on demand.
+name: OCI cache prune
+
+on:
+  schedule:
+    - cron: '30 5 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: oci-cache-prune
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    permissions:
+      packages: write  # delete versions of ghcr.io/whuppi/pdf_manipulator/cache
+    uses: whuppi/ci/.github/workflows/oci-cache-prune.yml@v2.6.0
+    with:
+      retention-days: 14
