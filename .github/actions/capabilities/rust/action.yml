@@ -275,12 +275,20 @@ runs:
     # ghcr-target mode: the whole tree, restored before the mtime pin below
     # (the pin must run AFTER every restore, or the restored dep-info would
     # be older than the sources it describes).
+    #
+    # The family is engine-key when set, else cache-key. The compile rows
+    # MUST NOT share the hook rows' family: rust-cache saves once per key
+    # from whichever job finishes first, and the hook rows (near-empty
+    # vendor target) always finish before a compile row, so the compile
+    # row's four-ABI dependency tree was never saved — every "warm" run
+    # rebuilt all of it (22 minutes for Android). One family per compile
+    # target, whole target dir, on ghcr: nothing can shadow it.
     - name: ghcr-target key
       id: tkey
       if: inputs.cache == 'true' && inputs.ghcr-target == 'true'
       shell: bash
       env:
-        FAMILY: ${{ inputs.cache-key }}
+        FAMILY: ${{ inputs.engine-key != '' && inputs.engine-key || inputs.cache-key }}
         PDF: ${{ steps.sub.outputs.pdf_oxide }}
         OFFICE: ${{ steps.sub.outputs.office_oxide }}
         HASHES: ${{ hashFiles('vendor/*/Cargo.lock', 'vendor/*/Cargo.toml', 'tool/versions.env') }}
@@ -298,8 +306,8 @@ runs:
         key: ${{ steps.tkey.outputs.key }}
         fallback: ${{ steps.tkey.outputs.fallback }}
         path: |
-          vendor/pdf_oxide/target/debug
-          vendor/office_oxide/target/debug
+          vendor/pdf_oxide/target
+          vendor/office_oxide/target
           ~/.cargo/registry/index
           ~/.cargo/registry/cache
           ~/.cargo/git/db

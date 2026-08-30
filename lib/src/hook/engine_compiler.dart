@@ -506,6 +506,14 @@ Future<void> compileEngineForTarget({
     );
   }
 
+  // Cargo reports on stderr what it rebuilt (and, under CARGO_LOG, why).
+  // A silent success hides a cold rebuild behind a warm cache; CI's
+  // compile rows are diagnosed from these lines.
+  final report = (result.stderr as String).trim();
+  if (report.isNotEmpty) {
+    _log.info(report);
+  }
+
   final compiled = p.join(
     targetDir,
     targetTriple,
