@@ -1,0 +1,14 @@
+[package]
+name = "bindgen_runner"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# wasm-bindgen-cli-support must match the wasm-bindgen version the wasm
+# was compiled with. Both crates release in lockstep upstream and this
+# workspace's Cargo.lock pins them together; if they ever diverge,
+# wasm-bindgen's own schema check fails the build loudly.
+[dependencies]
+anyhow = "1"
+wasm-bindgen-cli-support = "0.2"
+wasm-opt = "0.116"
