@@ -253,6 +253,9 @@ abstract class BridgeEditorHandle {
   /// Sets a form field's value by [fieldName].
   PdfTask<void> setFormFieldValue(String fieldName, String value);
 
+  /// Checks or clears the checkbox field identified by [fieldName].
+  PdfTask<void> setCheckboxFieldValue(String fieldName, bool checked);
+
   /// Crops margins from all pages.
   PdfTask<void> cropMargins({
     double left = 0,

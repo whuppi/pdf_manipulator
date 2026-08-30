@@ -217,6 +217,12 @@ class _SharedEditorHandle extends BridgeEditorHandle {
   PdfTask<void> setFormFieldValue(String fieldName, String value) =>
       _mutate('setFormFieldValue', {'fieldName': fieldName, 'value': value});
   @override
+  PdfTask<void> setCheckboxFieldValue(String fieldName, bool checked) =>
+      _mutate('setCheckboxFieldValue', {
+        'fieldName': fieldName,
+        'checked': checked,
+      });
+  @override
   PdfTask<void> cropMargins({
     double left = 0,
     double right = 0,

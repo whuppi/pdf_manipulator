@@ -100,8 +100,15 @@ set_kv() {  # KEY value file — replace the KEY="old" line with KEY="new"
 # versions.env, emit their rows here, add a bump block below, and fetch
 # through tool/fetch_verified.sh (dormant, kept for exactly this) — the
 # verify-pinned / check-availability plumbing below re-arms by itself.
+# One line per pinned download: tool <TAB> platform <TAB> url <TAB> sha256.
 asset_urls() {
-  :
+  printf 'nextest\tlinux-x64\t%s\t%s\n' "$(nextest_url "$NEXTEST_VERSION")" "$NEXTEST_SHA256_LINUX_X64"
+}
+
+# The direct release asset, not the get.nexte.st redirector: a pin must name
+# the exact bytes it was hashed against, and a redirector can be repointed.
+nextest_url() {  # version -> url
+  printf 'https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-%s/cargo-nextest-%s-x86_64-unknown-linux-gnu.tar.gz' "$1" "$1"
 }
 
 # HTTP status of a URL, following GitHub's asset redirect, or 000 if unreachable.
@@ -167,6 +174,26 @@ if [ -n "$PANA_VERSION" ] && [ -n "$pana_latest" ] && [ "$PANA_VERSION" != "$pan
   [ "$MODE" = apply ] && set_kv PANA_VERSION "$pana_latest" "$VERSIONS"
 fi
 
+# ── cargo-nextest (NEXTEST_VERSION + NEXTEST_SHA256_LINUX_X64; `make test-rust`).
+# Track the latest GitHub release; a bump only lands together with the
+# recomputed sha256 of the new asset — a version without its hash would make
+# fetch_verified.sh refuse every CI test run.
+nextest_tag="$(gh_latest_tag nextest-rs/nextest)"
+nextest_latest="${nextest_tag#cargo-nextest-}"
+if [ -n "$NEXTEST_VERSION" ] && [ -n "$nextest_latest" ] && [ "$NEXTEST_VERSION" != "$nextest_latest" ]; then
+  drift=1
+  echo "nextest: $NEXTEST_VERSION -> $nextest_latest"
+  if [ "$MODE" = apply ]; then
+    nextest_sha="$(sha256_of "$(nextest_url "$nextest_latest")")"
+    if [ -n "$nextest_sha" ]; then
+      set_kv NEXTEST_VERSION "$nextest_latest" "$VERSIONS"
+      set_kv NEXTEST_SHA256_LINUX_X64 "$nextest_sha" "$VERSIONS"
+    else
+      echo "::error::nextest $nextest_latest: asset fetch failed; pin left at $NEXTEST_VERSION" >&2
+      blocked=1
+    fi
+  fi
+fi
 
 [ "$drift" -eq 0 ] && echo "All watched pins are current."
 if [ "$blocked" -ne 0 ]; then

@@ -14,10 +14,83 @@ inputs:
     description: "Install the Rust toolchain (off for Dart-only static jobs)"
     required: false
     default: 'true'
-  free-disk:
-    description: "Reclaim disk for build-heavy jobs (Linux)"
+  rust-cache:
+    description: >
+      Restore/save the cargo target dir. 'false' = deliberately cold build:
+      release compiles and the scheduled cold Full Test, the runs that prove
+      a fresh clone still builds from source. Leave on everywhere else.
+    required: false
+    default: 'true'
+  rust-cache-key:
+    description: >
+      Which cargo cache this job shares — name the BUILD, not the job:
+      native (host triple, release), wasm (wasm32 + bindgen_runner),
+      android, ios, check (cargo check, analyze), test (cargo test
+      profile). Rows that build the same thing must share a key or the
+      quota fills with identical archives; rows that build different
+      triples or features must not. Empty = the make target (safe, but
+      one archive per target).
+    required: false
+    default: ''
+  rust-engine-key:
+    description: >
+      Family for the engine-artifacts archive when it must differ from
+      rust-cache-key (the compile rows). See the rust capability's
+      engine-key input.
+    required: false
+    default: ''
+  rust-ghcr-target:
+    description: >
+      Keep this family's whole Rust target trees on ghcr.io instead of
+      rust-cache (the `test` family). See the rust capability's
+      ghcr-target input; the save runs at the end of this action.
     required: false
     default: 'false'
+  rust-cache-save:
+    description: >
+      Whether this run may write the cargo cache (rust-cache save-if). PR
+      runs should mostly read: GitHub hides a PR ref's caches from every
+      other PR, so PR writes only burn quota. `dev` writes the warm source.
+    required: false
+    default: 'true'
+  cache-save:
+    description: >
+      Whether this run may WRITE the gradle / xcode / pods / AVD / wasm
+      caches (restores are unconditional). GitHub scopes a cache to the ref
+      that wrote it and lets a PR read only its base and the default
+      branch, so archives written from a PR ref are invisible to every
+      other PR and only spend the 10 GB quota — evicting the `dev` archives
+      everyone should be reading. Callers pass 'false' on pull_request runs;
+      the push-to-dev runs are the one warm source.
+    required: false
+    default: 'true'
+  cache-backend:
+    description: >
+      Store for the big caches — Flutter SDK, Gradle home, AVD snapshot:
+      'gha' (actions/cache, 10 GB per repo, LRU-evicted) or 'ghcr'
+      (whuppi/ci's oci-cache on the GitHub Container Registry — free and
+      uncapped for this public repo). Every workflow here passes 'ghcr':
+      a fully warm dev set is ~19 GB and the gha quota is reserved for the
+      Rust engine/deps archives, which need actions/cache's semantics.
+    required: false
+    default: 'gha'
+  free-disk:
+    description: >
+      Guarantee disk headroom for a build-heavy job (Linux). The job never
+      starts its build with less than `min-free-gb` free: when the runner
+      image is short, the shared free-disk-space capability reclaims ~25 GB
+      (~2 min); when it already has the room, nothing is deleted and no
+      time is spent. Never turn this off on a job whose build once overran
+      a runner — the guard is what makes that failure impossible.
+    required: false
+    default: 'false'
+  min-free-gb:
+    description: >
+      Free space (GB) the build must start with when free-disk is on. Set
+      from the job's measured peak plus margin; the post-build df line
+      below is the evidence for tuning it.
+    required: false
+    default: '40'
   java:
     description: "Install JDK"
     required: false
@@ -75,55 +148,89 @@ runs:
     # the native/wasm ones (rust, wasm-cache, wasm-build) are pdf-specific and
     # stay local. The shared capabilities were generalized FROM these, so the
     # behavior is identical — only their home moved.
-    - uses: whuppi/ci/actions/capabilities/fvm@v2.4.0
+    - uses: whuppi/ci/actions/capabilities/fvm@v2.7.3
+      with:
+        sdk-cache-backend: ${{ inputs.cache-backend }}
+        cache-save: ${{ inputs.cache-save }}
 
     # ── On demand ──
     # Default on: most jobs build the native/wasm engine. Dart-only static
     # jobs (pana, downgrade-analyze) never invoke cargo, so they pass rust: false.
     # rust sets SUBMODULE_PDF_OXIDE in $GITHUB_ENV — the xcode/wasm cache keys
     # below read it, so rust must run before them (it does).
+    # cache-key names the build family (see the rust-cache-key input);
+    # the make target is the fallback so an unlabelled job never shares.
     - uses: ./.github/actions/capabilities/rust
+      id: rust
       if: inputs.rust == 'true'
+      with:
+        cache: ${{ inputs.rust-cache }}
+        ghcr-target: ${{ inputs.rust-ghcr-target }}
+        cache-key: ${{ inputs.rust-cache-key != '' && inputs.rust-cache-key || inputs.make-target }}
+        engine-key: ${{ inputs.rust-engine-key }}
+        save-if: ${{ inputs.rust-cache-save }}
 
-    - uses: whuppi/ci/actions/capabilities/free-disk-space@v2.4.0
-      if: inputs.free-disk == 'true'
+    # The reclaim is slow (~2 min of apt/rm) and only needed when the
+    # image is short. Runner images grow — the ubuntu-24.04 image went from
+    # ~14 GB free to ~80 GB — so the decision is made from a live df, not
+    # from whatever the image had when the job was written.
+    - name: Disk headroom
+      id: headroom
+      if: inputs.free-disk == 'true' && runner.os == 'Linux'
+      shell: bash
+      env:
+        MIN_GB: ${{ inputs.min-free-gb }}
+      run: |
+        avail_gb=$(( $(df -Pk / | awk 'NR==2{print $4}') / 1024 / 1024 ))
+        echo "free: ${avail_gb} GB, required: ${MIN_GB} GB"
+        if [ "$avail_gb" -lt "$MIN_GB" ]; then echo "reclaim=true" >> "$GITHUB_OUTPUT"; else echo "reclaim=false" >> "$GITHUB_OUTPUT"; fi
 
-    - uses: whuppi/ci/actions/capabilities/java@v2.4.0
+    - uses: whuppi/ci/actions/capabilities/free-disk-space@v2.7.3
+      if: inputs.free-disk == 'true' && steps.headroom.outputs.reclaim == 'true'
+
+    - uses: whuppi/ci/actions/capabilities/java@v2.7.3
       if: inputs.java == 'true'
 
-    - uses: whuppi/ci/actions/capabilities/chrome@v2.4.0
+    - uses: whuppi/ci/actions/capabilities/chrome@v2.7.3
       if: inputs.chrome == 'true'
 
-    - uses: whuppi/ci/actions/capabilities/headless-display@v2.4.0
+    - uses: whuppi/ci/actions/capabilities/headless-display@v2.7.3
       if: inputs.headless-display == 'true'
 
-    - uses: whuppi/ci/actions/capabilities/hw-accel@v2.4.0
+    - uses: whuppi/ci/actions/capabilities/hw-accel@v2.7.3
       if: inputs.hw-accel == 'true'
 
-    - uses: whuppi/ci/actions/capabilities/gradle-cache@v2.4.0
+    - uses: whuppi/ci/actions/capabilities/gradle-cache@v2.7.3
       if: inputs.gradle-cache == 'true'
       with:
         phase: restore
+        save: ${{ inputs.cache-save }}
+        backend: ${{ inputs.cache-backend }}
 
     # Forward the pdf_oxide submodule rev (set by the rust step above) as the
     # shared xcode-cache's key-extra, preserving the precise cache key the
     # local xcode-cache read from env directly.
-    - uses: whuppi/ci/actions/capabilities/xcode-cache@v2.4.0
+    - uses: whuppi/ci/actions/capabilities/xcode-cache@v2.7.3
       if: inputs.xcode-cache == 'true'
       with:
         target: ${{ inputs.xcode-cache-target }}
         key-extra: ${{ env.SUBMODULE_PDF_OXIDE }}
+        save: ${{ inputs.cache-save }}
 
-    - uses: whuppi/ci/actions/capabilities/pods-cache@v2.4.0
+    - uses: whuppi/ci/actions/capabilities/pods-cache@v2.7.3
       if: inputs.pods-cache == 'true'
+      with:
+        save: ${{ inputs.cache-save }}
 
     - uses: ./.github/actions/capabilities/wasm-cache
       if: inputs.wasm-cache == 'true'
+      with:
+        save: ${{ inputs.cache-save }}
 
     - uses: ./.github/actions/capabilities/wasm-build
       if: inputs.wasm-build == 'true'
 
-    - uses: whuppi/ci/actions/capabilities/ios-simulator@v2.4.0
+    - uses: whuppi/ci/actions/capabilities/ios-simulator@v2.7.3
       if: inputs.simulator == 'true'
 
     # ── Run ──
@@ -163,13 +270,42 @@ runs:
     # by the capability's teardown-watchdog wrapper. The shared android-emulator
     # reconciles the machine report at its default path (test-results/
     # int-android.json), which is where the android make target writes.
-    - uses: whuppi/ci/actions/capabilities/android-emulator@v2.4.0
+    - uses: whuppi/ci/actions/capabilities/android-emulator@v2.7.3
       if: inputs.emulator == 'true'
       with:
         script: /tmp/make-run.sh "${{ inputs.make-target }}"
+        avd-cache-save: ${{ inputs.cache-save }}
+        avd-cache-backend: ${{ inputs.cache-backend }}
+        sdk-cache-backend: ${{ inputs.cache-backend == 'ghcr' && 'ghcr' || '' }}
 
-    - uses: whuppi/ci/actions/capabilities/gradle-cache@v2.4.0
+    - uses: whuppi/ci/actions/capabilities/gradle-cache@v2.7.3
       if: always() && inputs.gradle-cache == 'true'
       with:
         phase: save
+        save: ${{ inputs.cache-save }}
+        backend: ${{ inputs.cache-backend }}
 
+    # The save half of the rust capability's ghcr-target mode: the whole
+    # target trees after the build. Gated like every other save (PR runs
+    # read; dev writes). Skipped by oci-cache itself on an exact hit.
+    - name: Save Rust target (ghcr)
+      if: always() && inputs.rust == 'true' && inputs.rust-cache == 'true' && inputs.rust-ghcr-target == 'true'
+      uses: whuppi/ci/actions/capabilities/oci-cache@v2.7.3
+      with:
+        phase: save
+        save: ${{ inputs.rust-cache-save }}
+        name: rust-target
+        key: ${{ steps.rust.outputs.ghcr-target-key }}
+        fallback: ${{ steps.rust.outputs.ghcr-target-fallback }}
+        path: |
+          vendor/pdf_oxide/target
+          vendor/office_oxide/target
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+
+    # Evidence for min-free-gb: what the build actually left on disk.
+    - name: Disk after build
+      if: always() && inputs.free-disk == 'true' && runner.os == 'Linux'
+      shell: bash
+      run: df -h /

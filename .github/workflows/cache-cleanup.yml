@@ -1,0 +1,24 @@
+# Cache cleanup — deletes every Actions cache a closed PR's merge ref wrote.
+# PR runs are read-only for the big archives, but a PR whose Rust inputs
+# changed writes its own cargo cache (see ci.yml), and those bytes are
+# readable by nobody once the PR closes; left alone they count against the
+# 10 GB quota until GitHub evicts something — usually a live `dev` archive.
+# Same-repo PRs only (a fork PR runs with a read-only token and is skipped);
+# never switch this to pull_request_target.
+name: Cache cleanup
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions: {}
+
+concurrency:
+  group: cache-cleanup-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    permissions:
+      actions: write  # delete caches on refs/pull/N/merge
+    uses: whuppi/ci/.github/workflows/cache-cleanup.yml@v2.7.3

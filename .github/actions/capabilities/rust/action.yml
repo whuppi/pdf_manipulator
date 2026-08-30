@@ -1,11 +1,82 @@
 name: Rust
-description: Install Rust toolchain + sccache for fast builds
+description: >
+  Install the pinned Rust toolchain, point every cargo build path at ONE
+  target directory, and cache that directory + the cargo registry with
+  rust-cache.
+
+  Why the target directory is the thing cached (and not per-object
+  compiler output): the engine's final artifact is a cdylib built with fat
+  LTO, and no wrapper cache (sccache, ccache) can cache a crate that
+  invokes the system linker — so with a 100 % wrapper hit rate the
+  expensive step still ran every job. cargo's own fingerprint in target/
+  is the only thing that reuses it, and that only survives if target/ does.
 
 inputs:
   targets:
     description: Extra Rust targets (comma-separated)
     required: false
     default: ''
+  cache:
+    description: >
+      Restore/save the cargo target dir + registry. Pass 'false' for a
+      deliberately COLD build — the release compile jobs and the scheduled
+      cold Full Test — which is the only proof that a fresh clone still
+      builds from source. Never default this to false to "simplify".
+    required: false
+    default: 'true'
+  cache-key:
+    description: >
+      Extra key segment that separates caches whose target/ contents
+      differ (the make target: each builds different triples / features).
+      rust-cache adds rustc host+version, the Cargo.lock/toml hashes, and
+      the CARGO/RUST env on its own.
+    required: false
+    default: ''
+  engine-key:
+    description: >
+      Family for the unhashed-engine-artifacts archive (see that step).
+      Defaults to cache-key. The compile rows pass their own family here
+      while sharing the hook rows' cache-key: the dependency crates they
+      build are byte-identical to the hook rows' (same triples, same
+      profile), so one deps archive serves both — but their per-ABI engine
+      outputs (4 targets) differ from the hook's (3), and rust-cache writes
+      an archive once per key from whichever row finishes first, so those
+      outputs need a key nobody else races for. Before this split every
+      compile row rebuilt all its ABIs on a warm run (16.6 m), and a full
+      second deps archive per compile family cost ~3.5 GB of a 10 GB quota.
+    required: false
+    default: ''
+  ghcr-target:
+    description: >
+      'true' = keep this family's WHOLE target trees on the GitHub Container
+      Registry (whuppi/ci oci-cache) instead of rust-cache: the debug
+      trees, every test and bin executable, and the cargo registry. Built
+      for the `test` family: rust-cache keeps only crate-named artifacts,
+      so its ~330 integration-test binaries were rebuilt on every warm run
+      (2.5 min), and the whole tree is gigabytes — fine on GHCR (public,
+      uncapped, pruned at 14 days), not on the 10 GB Actions cache. Keyed
+      on the vendor revs with a `-latest` fallback, so an engine-bump PR
+      rebuilds only what changed. The save half runs from make-target
+      after the build (see its rust-ghcr-target input).
+    required: false
+    default: 'false'
+  save-if:
+    description: >
+      Whether this run may WRITE the cache. GitHub scopes caches to the
+      branch that wrote them and lets a PR read only its base and the
+      default branch, so caches written from PR refs are invisible to every
+      other PR and only burn the 10 GB quota. Callers pass 'true' from
+      `dev` (the warm source everyone reads) and on a primary-key miss.
+    required: false
+    default: 'true'
+
+outputs:
+  ghcr-target-key:
+    description: "The oci-cache key for the ghcr-target archive (make-target saves it after the build)"
+    value: ${{ steps.tkey.outputs.key }}
+  ghcr-target-fallback:
+    description: "The floating fallback tag for the ghcr-target archive"
+    value: ${{ steps.tkey.outputs.fallback }}
 
 runs:
   using: composite
@@ -16,16 +87,6 @@ runs:
       run: |
         echo "pdf_oxide=$(git rev-parse HEAD:vendor/pdf_oxide)" >> "$GITHUB_OUTPUT"
         echo "office_oxide=$(git rev-parse HEAD:vendor/office_oxide)" >> "$GITHUB_OUTPUT"
-
-    - name: Cache cargo registry
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: |
-          ~/.cargo/registry/index
-          ~/.cargo/registry/cache
-          ~/.cargo/git/db
-        key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}
-        restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-
 
     # Drive the runner's pre-installed rustup directly. Do not swap in
     # dtolnay/rust-toolchain: it ships no version tags, so it can only be
@@ -46,15 +107,243 @@ runs:
           rustup target add "$t"
         done
         rustc --version
-    - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
+    # ONE cargo target dir for every build path in the job: the consumer
+    # hook (dart test, flutter build inside Gradle / Xcode), tool/compile.dart
+    # (the release cross-compiler) and `cargo test` all land in
+    # vendor/pdf_oxide/target. Same triple + profile + features = same
+    # artifact, reused; and rust-cache below persists that one tree.
+    #
+    # The hook cannot take this from an env var: hooks_runner strips the
+    # environment to a fixed allowlist before spawning it (the same wall
+    # the old sccache wiring had to work around). HOME survives, so the
+    # override is a file under it — see hookCargoTargetDir() in
+    # lib/src/hook/engine_compiler.dart, which also explains why the
+    # default stays inside .dart_tool for consumers.
+    - name: One cargo target dir for every build path
+      shell: bash
+      run: |
+        mkdir -p "$HOME/.pdf_manipulator"
+        printf '%s\n' "$GITHUB_WORKSPACE/vendor/pdf_oxide/target" \
+          > "$HOME/.pdf_manipulator/cargo-target-dir"
+        echo "cargo target dir: $GITHUB_WORKSPACE/vendor/pdf_oxide/target"
+
+    # rust-cache caches ~/.cargo (registry, git deps) and the workspace
+    # target dirs as ONE archive per key, cleaned of incremental + unused
+    # artifacts before save. Why these settings — each one is load-bearing:
+    #   workspaces             both vendored crates; office_oxide is built
+    #                          into pdf_oxide's target when the `office`
+    #                          feature is on, and on its own for its tests.
+    #   cache-workspace-crates rust-cache's default DROPS the workspace's
+    #                          own crates before saving, keeping only deps.
+    #                          Our "workspace crate" IS the vendored engine,
+    #                          which changes only on a fork bump — and its
+    #                          fat-LTO cdylib is the whole point of caching.
+    #   key                    the make target (rows building different
+    #                          triples / features must not share a key)
+    #                          AND both vendored submodule revs. The revs
+    #                          are what make the mtime pin below safe —
+    #                          see that step. Never drop them from the key.
+    #   cache-on-failure       a red row still saves the deps it built, so
+    #                          the fix-up push is warm.
+    #   save-if                see the input; PR refs mostly read.
+    # Stale-artifact safety: the key carries the rustc version, every
+    # Cargo.lock/Cargo.toml hash and the exact vendor revs; rust-cache
+    # prunes artifacts older than seven days at save time, so a warm cache
+    # cannot drift more than a week from a from-scratch build, and the
+    # scheduled cold Full Test proves from-scratch on top of that.
+    #   prefix-key             rust-cache saves ONLY on a primary-key miss;
+    #                          an archive that exists is never re-saved,
+    #                          even when a run rebuilt everything under
+    #                          it. So any change to how artifacts are
+    #                          produced or fingerprinted (the mtime-pin
+    #                          rule below, the target-dir layout, the
+    #                          cleanup settings) MUST bump this prefix, or
+    #                          every existing key keeps serving an archive
+    #                          the new rule can't hit. Bump = one integer.
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      if: inputs.cache == 'true' && inputs.ghcr-target != 'true'
+      with:
+        prefix-key: v1-rust
+        workspaces: |
+          vendor/pdf_oxide -> target
+          vendor/office_oxide -> target
+        key: ${{ inputs.cache-key }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}
+        cache-workspace-crates: true
+        cache-on-failure: true
+        save-if: ${{ inputs.save-if }}
+
+    # rust-cache's save-time cleanup keeps a deps/ entry only when its name
+    # is `<kept-crate>-<hash>`. Both vendored engines declare
+    # crate-type = [cdylib, rlib, staticlib], and cargo drops the hash from
+    # EVERY output of such a unit (libpdf_oxide.so / .rlib / .a,
+    # liboffice_oxide.rlib …), so the matcher deletes exactly the artifacts
+    # this whole cache exists for and cargo rebuilds the fat-LTO engine on
+    # every "warm" run (measured: FailedToReadMetadata(deps/libpdf_oxide.so)
+    # with everything else cached). Until that matcher is fixed upstream,
+    # this second archive carries only the unhashed engine outputs and is
+    # restored on top of rust-cache's. It must stay AFTER the rust-cache
+    # step: main steps run in order (its extraction lands over rust-cache's)
+    # and post steps run in reverse (its save runs before rust-cache's
+    # cleanup can delete the files). Same key ingredients as rust-cache's,
+    # same save gate. Do not fold these paths into rust-cache's workspaces —
+    # they'd be deleted again.
+    #
+    # The .fingerprint/ and build/ entries are what makes a restored
+    # artifact REUSABLE: cargo keeps one fingerprint dir per unit hash, and
+    # a row whose units differ from the deps archive's saver (the compile
+    # rows: other linker, other targets) finds its artifacts restored but
+    # their fingerprints absent — and rebuilds every ABI (measured: both
+    # caches hit, four 5-minute compiles anyway). The key's v-prefix is
+    # this archive's format version: bump it with any change to these paths.
+    #
+    # Two steps, one runs: `actions/cache` saves from its own post step
+    # (after the build, on a primary-key miss), which is what a run that MAY
+    # write needs; a run that must not write uses the restore-only action,
+    # which registers no post step at all. `actions/cache/save` is NOT an
+    # option here — it is a main step, and at the end of this composite it
+    # would run before the build and save nothing under a key that then
+    # blocks the real save forever.
+    - name: Restore + save unhashed engine artifacts
+      if: inputs.cache == 'true' && inputs.ghcr-target != 'true' && inputs.save-if == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          vendor/*/target/**/deps/lib*_oxide.rlib
+          vendor/*/target/**/deps/lib*_oxide.rmeta
+          vendor/*/target/**/deps/lib*_oxide.so
+          vendor/*/target/**/deps/lib*_oxide.dylib
+          vendor/*/target/**/deps/lib*_oxide.a
+          vendor/*/target/**/deps/lib*_oxide.d
+          vendor/*/target/**/deps/*_oxide.dll
+          vendor/*/target/**/deps/*_oxide.dll.lib
+          vendor/*/target/**/deps/*_oxide.dll.exp
+          vendor/*/target/**/deps/*_oxide.lib
+          vendor/*/target/**/deps/*_oxide.pdb
+          vendor/*/target/**/deps/*_oxide.wasm
+          vendor/*/target/**/deps/*_oxide.d
+          vendor/*/target/**/.fingerprint/*_oxide-*
+          vendor/*/target/**/build/*_oxide-*
+        key: v2-rust-engine-${{ inputs.engine-key != '' && inputs.engine-key || inputs.cache-key }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}-${{ hashFiles('vendor/*/Cargo.lock', 'vendor/*/Cargo.toml', 'tool/versions.env') }}
+    - name: Restore unhashed engine artifacts (read-only)
+      if: inputs.cache == 'true' && inputs.ghcr-target != 'true' && inputs.save-if != 'true'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          vendor/*/target/**/deps/lib*_oxide.rlib
+          vendor/*/target/**/deps/lib*_oxide.rmeta
+          vendor/*/target/**/deps/lib*_oxide.so
+          vendor/*/target/**/deps/lib*_oxide.dylib
+          vendor/*/target/**/deps/lib*_oxide.a
+          vendor/*/target/**/deps/lib*_oxide.d
+          vendor/*/target/**/deps/*_oxide.dll
+          vendor/*/target/**/deps/*_oxide.dll.lib
+          vendor/*/target/**/deps/*_oxide.dll.exp
+          vendor/*/target/**/deps/*_oxide.lib
+          vendor/*/target/**/deps/*_oxide.pdb
+          vendor/*/target/**/deps/*_oxide.wasm
+          vendor/*/target/**/deps/*_oxide.d
+          vendor/*/target/**/.fingerprint/*_oxide-*
+          vendor/*/target/**/build/*_oxide-*
+        key: v2-rust-engine-${{ inputs.engine-key != '' && inputs.engine-key || inputs.cache-key }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}-${{ hashFiles('vendor/*/Cargo.lock', 'vendor/*/Cargo.toml', 'tool/versions.env') }}
+
+    # cargo fingerprints a PATH crate (the vendored engine — unlike a
+    # registry crate, which is fingerprinted by content) by its sources'
+    # mtimes, two ways, and both must agree between the run that saved the
+    # cache and the run that restores it:
+    #   1. every source must be OLDER than the cached dep-info, and
+    #   2. the package fingerprint records "the newest file's mtime AND its
+    #      path" and compares that string for equality
+    #      (PrecalculatedComponentsChanged in cargo's fingerprint log).
+    # A checkout stamps every file "now", so (1) fails on every run and the
+    # engine recompiles while the cache only serves dependencies. Pinning
+    # all of vendor/ to one past instant fixes (1) but breaks (2): with
+    # every mtime equal, which file counts as "newest" is decided by
+    # directory-walk order, which differs between runner VMs. So after the
+    # pin, each package's Cargo.toml is bumped one day later — one file,
+    # deterministically the newest — and both runs record the same string.
+    #
+    # This is ONLY correct because the cache key names the exact vendor
+    # revs: same key ⇒ byte-identical sources ⇒ reusing the artifact is
+    # right; any source change ⇒ new rev ⇒ new key ⇒ cold build. It was
+    # measured, not assumed: with the pin in place cargo does NOT notice an
+    # edited source file (its mtime is older than the cached dep-info), so
+    # the revs in the key are the ONLY thing standing between this step and
+    # a stale binary. Remove them and it serves one. Never widen the touch
+    # to anything outside vendor/, and never run it on a developer machine —
+    # local builds rely on real mtimes.
+    # ghcr-target mode: the whole tree, restored before the mtime pin below
+    # (the pin must run AFTER every restore, or the restored dep-info would
+    # be older than the sources it describes).
+    #
+    # The family is engine-key when set, else cache-key. The compile rows
+    # MUST NOT share the hook rows' family: rust-cache saves once per key
+    # from whichever job finishes first, and the hook rows (near-empty
+    # vendor target) always finish before a compile row, so the compile
+    # row's four-ABI dependency tree was never saved — every "warm" run
+    # rebuilt all of it (22 minutes for Android). One family per compile
+    # target, whole target dir, on ghcr: nothing can shadow it.
+    - name: ghcr-target key
+      id: tkey
+      if: inputs.cache == 'true' && inputs.ghcr-target == 'true'
+      shell: bash
+      env:
+        FAMILY: ${{ inputs.engine-key != '' && inputs.engine-key || inputs.cache-key }}
+        PDF: ${{ steps.sub.outputs.pdf_oxide }}
+        OFFICE: ${{ steps.sub.outputs.office_oxide }}
+        HASHES: ${{ hashFiles('vendor/*/Cargo.lock', 'vendor/*/Cargo.toml', 'tool/versions.env') }}
+      run: |
+        {
+          echo "key=$FAMILY-$RUNNER_OS-$RUNNER_ARCH-$PDF-$OFFICE-$HASHES"
+          echo "fallback=$FAMILY-$RUNNER_OS-$RUNNER_ARCH-latest"
+        } >> "$GITHUB_OUTPUT"
+    - name: Restore Rust target (ghcr)
+      if: inputs.cache == 'true' && inputs.ghcr-target == 'true'
+      uses: whuppi/ci/actions/capabilities/oci-cache@v2.7.3
+      with:
+        phase: restore
+        name: rust-target
+        key: ${{ steps.tkey.outputs.key }}
+        fallback: ${{ steps.tkey.outputs.fallback }}
+        path: |
+          vendor/pdf_oxide/target
+          vendor/office_oxide/target
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+
+    # What the restores actually brought back, per target triple: the
+    # engine outputs and their fingerprints. When a warm row still
+    # compiles, this line says whether the cache was missing something or
+    # cargo rejected what was there (then run Full Test with probe: true).
+    - name: Restored engine artifacts
+      if: inputs.cache == 'true'
+      shell: bash
+      run: |
+        for t in vendor/pdf_oxide/target/*/ vendor/pdf_oxide/target/*/*/; do
+          [ -d "$t/deps" ] || continue
+          so=$(find "$t/deps" -maxdepth 1 \( -name 'lib*_oxide.so' -o -name 'lib*_oxide.dylib' -o -name '*_oxide.dll' -o -name 'lib*_oxide.a' -o -name '*_oxide.wasm' \) 2>/dev/null | wc -l | tr -d ' ')
+          rl=$(find "$t/deps" -maxdepth 1 -name 'lib*_oxide*.rlib' 2>/dev/null | wc -l | tr -d ' ')
+          fp=$(find "$t/.fingerprint" -maxdepth 1 -name '*_oxide-*' 2>/dev/null | wc -l | tr -d ' ')
+          echo "  ${t#vendor/pdf_oxide/target/}: engine outputs=$so rlibs=$rl fingerprints=$fp"
+        done
+
+    - name: Pin vendor source mtimes for cargo freshness
+      if: inputs.cache == 'true'
+      shell: bash
+      run: |
+        find vendor -type f -not -path '*/target/*' -exec touch -t 200001010000 {} +
+        find vendor -name Cargo.toml -not -path '*/target/*' -exec touch -t 200001020000 {} +
+        echo "vendor mtimes pinned (Cargo.toml newest)"
+
     - shell: bash
       env:
         STEPS_SUB_OUTPUTS_PDF_OXIDE: ${{ steps.sub.outputs.pdf_oxide }}
         STEPS_SUB_OUTPUTS_OFFICE_OXIDE: ${{ steps.sub.outputs.office_oxide }}
       run: |
         {
-          echo "SCCACHE_GHA_ENABLED=true"
-          echo "RUSTC_WRAPPER=sccache"
+          # Incremental artifacts are useless on a fresh runner, bloat the
+          # cache, and rust-cache strips them anyway. Keep this 0 in CI.
           echo "CARGO_INCREMENTAL=0"
           # crates.io fetches occasionally drop mid-transfer on CI (curl 56,
           # connection reset). cargo's default is 3 retries; 10 rides out a
@@ -67,6 +356,7 @@ runs:
         } >> "$GITHUB_ENV"
         # Submodule pins arrive via env (hoisted from step outputs). Heredoc
         # with a random delimiter so a stray newline can't inject entries.
+        # The wasm and xcode caches key on SUBMODULE_PDF_OXIDE.
         {
           echo "SUBMODULE_PDF_OXIDE<<__SUB_PDF__"
           echo "${STEPS_SUB_OUTPUTS_PDF_OXIDE}"
@@ -76,44 +366,3 @@ runs:
           echo "__SUB_OFFICE__"
         } >> "$GITHUB_ENV"
 
-    # sccache for build hooks (dart-lang/native#3396 workaround).
-    #
-    # hooks_runner strips SCCACHE_* and RUSTC_WRAPPER env vars before
-    # spawning build.dart. Two workarounds keep sccache working:
-    #
-    # 1. Pre-start the server with SCCACHE_IDLE_TIMEOUT=0 while GHA
-    #    env vars exist. The server reads config at startup and persists.
-    #    Default idle timeout (600s) is too short — the 25+ min gap
-    #    (SDK download + emulator boot + Gradle) kills the server.
-    #
-    # 2. Write rustc-wrapper to $CARGO_HOME/config.toml. Cargo reads
-    #    this file automatically. hooks_runner can't strip a file.
-    #    HOME is in the allowlist, so cargo finds ~/.cargo/config.toml.
-    - name: Configure sccache for build hooks
-      shell: bash
-      run: |
-        export SCCACHE_IDLE_TIMEOUT=0
-        sccache --start-server || true
-
-        SCCACHE_BIN="$(which sccache)"
-        # Cargo on Windows needs a drive-letter path, not Git Bash /c/...
-        # Use cygpath -m for forward-slash Windows path (C:/...) which
-        # works in TOML without escaping backslashes.
-        if command -v cygpath &>/dev/null; then
-          SCCACHE_BIN="$(cygpath -m "$SCCACHE_BIN")"
-        fi
-        mkdir -p "$HOME/.cargo"
-        CFG="$HOME/.cargo/config.toml"
-        # Insert under [build] (a second header is a TOML error) with awk, not a
-        # GNU one-line sed append; that form broke on macOS. Pass the path via
-        # ENVIRON, not awk -v, which would interpret a backslash in it.
-        if [ -f "$CFG" ] && grep -q '^\[build\]' "$CFG"; then
-          sk_w="$SCCACHE_BIN" awk '
-            BEGIN { w = ENVIRON["sk_w"] }
-            { print }
-            /^\[build\]/ && !seen { print "rustc-wrapper = \"" w "\""; seen=1 }
-          ' "$CFG" > "$CFG.tmp" && mv "$CFG.tmp" "$CFG" || rm -f "$CFG.tmp"
-        else
-          printf '\n[build]\nrustc-wrapper = "%s"\n' "$SCCACHE_BIN" >> "$CFG"
-        fi
-        echo "sccache: server started, cargo config written ($SCCACHE_BIN)"

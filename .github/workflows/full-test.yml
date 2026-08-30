@@ -6,6 +6,14 @@
 # on any machine can build with this package. Each row declares
 # capabilities — make-target provisions them.
 #
+# Every row family below carries a comment naming the claim it proves
+# and what a shortcut would stop proving. That comment is the bar.
+# Make this workflow faster by caching what a row BUILDS (the shared
+# caches keyed on the real inputs); never by deleting a row, feeding it
+# another row's artifact, or building it with a lighter profile than
+# the one it exists to check. A row that passes without doing its own
+# work is a green light with nothing behind it.
+#
 # Runners: per-row in matrix (target-specific). Gate job uses
 # configurable infra runner (default: ubuntu-24.04).
 name: Full Test
@@ -14,8 +22,37 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
     branches: [prod, dev]
+  # Weekly COLD run of the whole matrix on dev, cargo cache off. Every
+  # other run may reuse a warm target dir, so this is the one routine proof
+  # that a fresh clone still builds every target from vendor source — the
+  # guarantee the pub.dev tarball makes to a consumer with no cache at all.
+  # If it goes red, the caches are hiding a real break; fix the break,
+  # never the schedule.
+  # Push-to-dev is the WARM SOURCE for the whole matrix: PR runs can only
+  # read `dev`'s archives (GitHub scopes caches by ref), so the engine
+  # artifacts every PR row reuses must be written here. The paths are the
+  # cache-key inputs — other merges leave the keys unchanged and skip.
+  push:
+    branches: [dev]
+    paths:
+      - 'vendor/**'
+      - 'build.json'
+      - 'tool/versions.env'
+      - 'Makefile'
+      - 'hook/**'
+      - '.github/**'
+  schedule:
+    - cron: '0 6 * * 1'
   workflow_dispatch:
     inputs:
+      cold:
+        description: "Cold build — ignore the cargo cache (proves a fresh clone builds)"
+        type: boolean
+        default: false
+      probe:
+        description: "Diagnostic — log why cargo considers each unit dirty (CARGO_LOG fingerprint); use with a filter"
+        type: boolean
+        default: false
       portability:
         description: "Portability — test every valid runner per target"
         type: boolean
@@ -50,6 +87,11 @@ concurrency:
 env:
   DEFAULT_RUNNER: ubuntu-24.04
   DEFAULT_PORTABILITY: 'true'
+  # Cold on the weekly schedule and on `cold: true`; warm otherwise.
+  RUST_CACHE: ${{ (github.event_name == 'schedule' || inputs.cold) && 'false' || 'true' }}
+  # probe: cargo prints, per unit, why it is rebuilding (dep-info stale,
+  # fingerprint mismatch, missing output). Verbose; dispatch-only.
+  CARGO_LOG: ${{ inputs.probe && 'cargo::core::compiler::fingerprint=info' || '' }}
   # Relative on purpose — the release sets this same value, and the
   # compile-* guard rows below rely on it to reproduce the release's
   # output layout (only the compile matrix reads it; other targets ignore it).
@@ -85,44 +127,83 @@ jobs:
     needs: inputs
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      github.event_name == 'push' ||
       (github.event.action == 'labeled' && github.event.label.name == 'ready-to-test')
     strategy:
       fail-fast: false
       matrix:
         include:
+          # Each row's `cache:` names the cargo cache it shares — the build
+          # family (native / wasm / android / ios), never the row. Rows that
+          # build the same triples + features share an archive; a row that
+          # builds something new gets a new family, never a bare copy of
+          # another row's name. See make-target's rust-cache-key input.
           # ── Package tests ──
-          - { name: "pkg: Linux (ubuntu-x64)",      runner: ubuntu-24.04,        make: test-pkg-native, timeout: 30 }
-          - { name: "pkg: macOS (macos-arm64)",     runner: macos-14,            make: test-pkg-native, timeout: 30 }
-          - { name: "pkg: Web (ubuntu-x64)",        runner: ubuntu-24.04,        make: test-ops-web,    timeout: 40, chrome: true, headless-display: true, wasm-cache: true, wasm-build: true }
-          - { name: "pkg: Web (macos-arm64) [P]",       runner: macos-14,            make: test-ops-web,    timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
-          - { name: "pkg: Web (win-x64) [P]",           runner: windows-2025-vs2026, make: test-ops-web,    timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
-          - { name: "pkg: Windows (win-x64)",       runner: windows-2025-vs2026, make: test-pkg-native, timeout: 40 }
+          # Native rows: the package's own suite against an engine the
+          # CONSUMER build hook compiled on that OS — the exact path a
+          # `dart test` in a downstream app takes, so a hook regression on
+          # one OS fails here and not in a user's project.
+          # Web rows: build the wasm on THIS host, then run the ops battery
+          # against that file in all three browser lanes (OPFS, JSPI,
+          # Atomics). The macOS/Windows [P] rows are not redundant with
+          # Linux: wasm-bindgen + wasm-opt run as host tools, so a
+          # host-specific difference (path handling, line endings, a
+          # toolchain that builds differently) only surfaces when that host
+          # builds the artifact it tests. Never hand these rows a
+          # Linux-built wasm.
+          - { name: "pkg: Linux (ubuntu-x64)",      runner: ubuntu-24.04,        make: test-pkg-native,      cache: native,timeout: 30 }
+          - { name: "pkg: macOS (macos-arm64)",     runner: macos-14,            make: test-pkg-native,      cache: native,timeout: 30 }
+          - { name: "pkg: Web (ubuntu-x64)",        runner: ubuntu-24.04,        make: test-ops-web,         cache: wasm, engine: pkg-web,timeout: 40, chrome: true, headless-display: true, wasm-cache: true, wasm-build: true }
+          - { name: "pkg: Web (macos-arm64) [P]",       runner: macos-14,            make: test-ops-web,         cache: wasm, engine: pkg-web,timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "pkg: Web (win-x64) [P]",           runner: windows-2025-vs2026, make: test-ops-web,         cache: wasm, engine: pkg-web,timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "pkg: Windows (win-x64)",       runner: windows-2025-vs2026, make: test-pkg-native,      cache: native,timeout: 40 }
 
           # ── Integration tests ──
+          # The example app built the way a consumer builds it (the hook
+          # runs inside Gradle / Xcode / the desktop toolchain) and driven
+          # on a real device target. These rows are the only place the
+          # engine is loaded through Flutter's bundling on each platform.
           # Emulator needs Intel — macOS ARM runners are M1 VMs that can't virtualize the emulator:
           # https://docs.github.com/en/actions/reference/runners/github-hosted-runners#limitations-for-arm64-macos-runners
-          - { name: "int: Android (ubuntu-x64)",    runner: ubuntu-24.04,        make: test-example-android, timeout: 40, java: true, hw-accel: true, gradle-cache: true, emulator: true }
-          - { name: "int: Android (macos-intel) [P]", runner: macos-15-intel,      make: test-example-android, timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
-          - { name: "int: Android (win-x64) [P]",       runner: windows-2025-vs2026, make: test-example-android, timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
-          - { name: "int: iOS (macos-arm64)",       runner: macos-14,            make: test-example-ios,     timeout: 60, xcode-cache: true, xcode-cache-target: ios, pods-cache: true, simulator: true }
-          - { name: "int: Linux (ubuntu-x64)",      runner: ubuntu-24.04,        make: test-example-linux,   timeout: 30, headless-display: true }
-          - { name: "int: macOS (macos-arm64)",     runner: macos-14,            make: test-example-macos,   timeout: 30, xcode-cache: true, xcode-cache-target: macos }
-          - { name: "int: Web (ubuntu-x64)",        runner: ubuntu-24.04,        make: test-example-web,     timeout: 40, chrome: true, headless-display: true, wasm-cache: true, wasm-build: true }
-          - { name: "int: Web (macos-arm64) [P]",       runner: macos-14,            make: test-example-web,     timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
-          - { name: "int: Web (win-x64) [P]",           runner: windows-2025-vs2026, make: test-example-web,     timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
-          - { name: "int: Windows (win-x64)",       runner: windows-2025-vs2026, make: test-example-windows, timeout: 40 }
+          # That is exactly why the macos-intel [P] row stays: it is the ONLY
+          # way CI can prove "a Mac host can build the Android side and run
+          # the integration tests" at all, and whuppi/ci uses this row as the
+          # canary that gates folding the Rust capability into the shared
+          # make-target. It is slow because its caches start cold, which is a
+          # caching problem — fix the cache, keep the row. Apple Silicon devs
+          # run this locally fine; only GitHub's ARM VMs can't.
+          - { name: "int: Android (ubuntu-x64)",    runner: ubuntu-24.04,        make: test-example-android, cache: android, engine: int-android,timeout: 40, java: true, hw-accel: true, gradle-cache: true, emulator: true }
+          - { name: "int: Android (macos-intel) [P]", runner: macos-15-intel,      make: test-example-android, cache: android, engine: int-android,timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
+          - { name: "int: Android (win-x64) [P]",       runner: windows-2025-vs2026, make: test-example-android, cache: android, engine: int-android,timeout: 60, java: true, hw-accel: true, gradle-cache: true, emulator: true, portability: true }
+          - { name: "int: iOS (macos-arm64)",       runner: macos-14,            make: test-example-ios,     cache: ios,timeout: 60, xcode-cache: true, xcode-cache-target: ios, pods-cache: true, simulator: true }
+          - { name: "int: Linux (ubuntu-x64)",      runner: ubuntu-24.04,        make: test-example-linux,   cache: native,timeout: 30, headless-display: true }
+          - { name: "int: macOS (macos-arm64)",     runner: macos-14,            make: test-example-macos,   cache: native,timeout: 30, xcode-cache: true, xcode-cache-target: macos }
+          - { name: "int: Web (ubuntu-x64)",        runner: ubuntu-24.04,        make: test-example-web,     cache: wasm,timeout: 40, chrome: true, headless-display: true, wasm-cache: true, wasm-build: true }
+          - { name: "int: Web (macos-arm64) [P]",       runner: macos-14,            make: test-example-web,     cache: wasm,timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "int: Web (win-x64) [P]",           runner: windows-2025-vs2026, make: test-example-web,     cache: wasm,timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "int: Windows (win-x64)",       runner: windows-2025-vs2026, make: test-example-windows, cache: native,timeout: 40 }
 
           # ── Verify (release builds) ──
-          - { name: "verify: Android (ubuntu-x64)", runner: ubuntu-24.04,        make: verify-android, timeout: 40, java: true, gradle-cache: true }
-          - { name: "verify: Android (macos-arm64) [P]",runner: macos-14,            make: verify-android, timeout: 40, java: true, gradle-cache: true, portability: true }
-          - { name: "verify: Android (win-x64) [P]",    runner: windows-2025-vs2026, make: verify-android, timeout: 60, java: true, gradle-cache: true, portability: true }
-          - { name: "verify: iOS (macos-arm64)",    runner: macos-14,            make: verify-ios,     timeout: 40, xcode-cache: true, xcode-cache-target: ios, pods-cache: true }
-          - { name: "verify: Linux (ubuntu-x64)",   runner: ubuntu-24.04,        make: verify-linux,   timeout: 30 }
-          - { name: "verify: macOS (macos-arm64)",  runner: macos-14,            make: verify-macos,   timeout: 40, xcode-cache: true, xcode-cache-target: macos }
-          - { name: "verify: Web (ubuntu-x64)",     runner: ubuntu-24.04,        make: verify-web,     timeout: 40, wasm-cache: true, wasm-build: true }
-          - { name: "verify: Web (macos-arm64) [P]",    runner: macos-14,            make: verify-web,     timeout: 40, wasm-cache: true, wasm-build: true, portability: true }
-          - { name: "verify: Web (win-x64) [P]",        runner: windows-2025-vs2026, make: verify-web,     timeout: 40, wasm-cache: true, wasm-build: true, portability: true }
-          - { name: "verify: Windows (win-x64)",    runner: windows-2025-vs2026, make: verify-windows, timeout: 40 }
+          # Release-mode consumer builds: every shipped ABI through the hook
+          # with the release profile (fat LTO, codegen-units 1) — the
+          # binary users actually get — plus the post-build gates (16 KB
+          # ELF alignment on Android, the web gate). Integration rows above
+          # run debug builds, so an optimisation-only bug or a
+          # release-profile link failure is caught HERE and nowhere else.
+          # Never build these with a lighter profile to save minutes.
+          # The [P] rows prove a release build from a dev's Mac or Windows
+          # box yields the same shippable artifact, not just Linux CI's.
+          - { name: "verify: Android (ubuntu-x64)", runner: ubuntu-24.04,        make: verify-android,       cache: android, engine: verify-android,timeout: 40, java: true, gradle-cache: true }
+          - { name: "verify: Android (macos-arm64) [P]",runner: macos-14,            make: verify-android,       cache: android, engine: verify-android,timeout: 40, java: true, gradle-cache: true, portability: true }
+          - { name: "verify: Android (win-x64) [P]",    runner: windows-2025-vs2026, make: verify-android,       cache: android, engine: verify-android,timeout: 60, java: true, gradle-cache: true, portability: true }
+          - { name: "verify: iOS (macos-arm64)",    runner: macos-14,            make: verify-ios,           cache: ios,timeout: 40, xcode-cache: true, xcode-cache-target: ios, pods-cache: true }
+          - { name: "verify: Linux (ubuntu-x64)",   runner: ubuntu-24.04,        make: verify-linux,         cache: native,timeout: 30 }
+          - { name: "verify: macOS (macos-arm64)",  runner: macos-14,            make: verify-macos,         cache: native, engine: verify-macos,timeout: 40, xcode-cache: true, xcode-cache-target: macos }
+          - { name: "verify: Web (ubuntu-x64)",     runner: ubuntu-24.04,        make: verify-web,           cache: wasm,timeout: 40, wasm-cache: true, wasm-build: true }
+          - { name: "verify: Web (macos-arm64) [P]",    runner: macos-14,            make: verify-web,           cache: wasm,timeout: 40, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "verify: Web (win-x64) [P]",        runner: windows-2025-vs2026, make: verify-web,           cache: wasm,timeout: 40, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "verify: Windows (win-x64)",    runner: windows-2025-vs2026, make: verify-windows,       cache: native,timeout: 40 }
 
           # ── Release-compile guard — the PR jobs that run
           #    tool/compile.dart (the release cross-compiler). It shares
@@ -135,22 +216,31 @@ jobs:
           #    is the only staticlib path; each OS has its own linker path).
           #    The workflow's relative COMPILE_OUTPUT_DIR reproduces the
           #    release output layout. ──
-          - { name: "compile: macOS (macos-arm64)",  runner: macos-14,            make: compile-macos,   timeout: 30 }
-          - { name: "compile: iOS (macos-arm64)",    runner: macos-14,            make: compile-ios,     timeout: 40 }
-          - { name: "compile: Android (ubuntu-x64)", runner: ubuntu-24.04,        make: compile-android, timeout: 40 }
-          - { name: "compile: Linux (ubuntu-x64)",   runner: ubuntu-24.04,        make: compile-linux,   timeout: 30 }
-          - { name: "compile: WASM (ubuntu-x64)",    runner: ubuntu-24.04,        make: compile-wasm,    timeout: 40 }
-          - { name: "compile: Windows (win-x64)",    runner: windows-2025-vs2026, make: compile-windows, timeout: 40 }
+          # compile rows share the hook rows' deps archive (`cache:`) but
+          # keep their own engine-artifacts archive (`engine:`): rust-cache
+          # writes an archive once per key from whichever row finishes
+          # first, so their 4-ABI outputs need a key nobody races for —
+          # without it every warm compile row rebuilt every ABI (16.6 m).
+          # A whole second deps archive per compile family (the earlier
+          # fix) cost ~3.5 GB of the 10 GB quota for bytes already in
+          # `android`/`ios`/`native`/`wasm`. See the rust capability.
+          - { name: "compile: macOS (macos-arm64)",  runner: macos-14,            make: compile-macos,        cache: native, engine: compile-native,timeout: 30 }
+          - { name: "compile: iOS (macos-arm64)",    runner: macos-14,            make: compile-ios,          cache: ios, engine: compile-ios,timeout: 40 }
+          - { name: "compile: Android (ubuntu-x64)", runner: ubuntu-24.04,        make: compile-android,      cache: android, engine: compile-android,timeout: 40 }
+          - { name: "compile: Linux (ubuntu-x64)",   runner: ubuntu-24.04,        make: compile-linux,        cache: native, engine: compile-native,timeout: 30 }
+          - { name: "compile: WASM (ubuntu-x64)",    runner: ubuntu-24.04,        make: compile-wasm,         cache: wasm, engine: compile-wasm,timeout: 40 }
+          - { name: "compile: Windows (win-x64)",    runner: windows-2025-vs2026, make: compile-windows,      cache: native, engine: compile-native,timeout: 40 }
 
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.timeout }}
     permissions:
-      contents: read  # checkout + caches; no API writes
+      contents: read   # checkout
+      packages: write  # oci-cache: the big archives live on ghcr.io (read on PRs, write from dev)
     steps:
       - name: Check filter
         id: filter
-        uses: whuppi/ci/actions/matrix-filter@v2.4.0
+        uses: whuppi/ci/actions/matrix-filter@v2.7.3
         with:
           name: ${{ matrix.name }}
           filter: ${{ needs.inputs.outputs.filter }}
@@ -163,6 +253,27 @@ jobs:
         if: steps.filter.outputs.match == 'true'
         with:
           make-target: ${{ matrix.make }}
+          rust-cache: ${{ env.RUST_CACHE }}
+          rust-cache-key: ${{ matrix.cache }}
+          rust-engine-key: ${{ matrix.engine || '' }}
+          # Rows with an `engine` family keep their whole vendored target
+          # tree on ghcr under that family: the compile rows, and the verify
+          # rows whose release hook build shares a rust-cache key with an int
+          # row that finishes first with a near-empty tree (verify: Android
+          # rebuilt four ABIs from source, ~6 min each, on every warm run;
+          # the macos-arm64 twin, alone in its family, took 3.6 min), and
+          # the int: Android rows, whose debug hook build for the emulator
+          # ABI recompiled from source (6.4 min) behind a 116 MB rust-cache
+          # tree that never held it, and the pkg: Web rows, where `dart test
+          # -p chrome` runs the HOST build hook first — 4.5 min of Linux
+          # engine compile (10 on Windows) that the wasm family never held.
+          rust-ghcr-target: ${{ matrix.engine && 'true' || 'false' }}
+          # PR runs read; push-to-dev, dispatch and the weekly run write.
+          # (The weekly run is cold — RUST_CACHE=false — so it writes
+          # nothing for cargo; gradle/xcode/pods/AVD still refresh.)
+          rust-cache-save: ${{ github.event_name != 'pull_request' }}
+          cache-save: ${{ github.event_name != 'pull_request' }}
+          cache-backend: ghcr
           java: ${{ matrix.java || 'false' }}
           chrome: ${{ matrix.chrome || 'false' }}
           headless-display: ${{ matrix.headless-display || 'false' }}

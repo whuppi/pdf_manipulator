@@ -266,9 +266,23 @@ class PdfEditor {
   }
 
   /// Sets the value of the form field identified by [fieldName].
+  ///
+  /// On a button field (checkbox or radio) the value is an appearance-state
+  /// name — `'Yes'`, `'On'`, or whichever name that widget uses — not text to
+  /// draw. Pass `'Off'` to clear it. Use [setCheckboxFieldValue] for a
+  /// checkbox whose state name you do not know.
   PdfTask<void> setFormFieldValue(String fieldName, String value) {
     _check();
     return _handle.setFormFieldValue(fieldName, value);
+  }
+
+  /// Checks or clears the checkbox field identified by [fieldName].
+  ///
+  /// Selects whichever on-state the widget offers, so this works on a box
+  /// named `/On` or `/1` as well as the common `/Yes`.
+  PdfTask<void> setCheckboxFieldValue(String fieldName, bool checked) {
+    _check();
+    return _handle.setCheckboxFieldValue(fieldName, checked);
   }
 
   /// Crops all pages by the specified margins (in points).

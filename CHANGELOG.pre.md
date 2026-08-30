@@ -81,6 +81,13 @@ CONTENT RULES (never change)
 
 <!-- Add new versions below, newest first. -->
 
+## 4.2.0-dev.0
+
+- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
+- Added `setCheckboxFieldValue(fieldName, checked)` for a checkbox whose on-state name you do not know. A checkbox is on when its value names one of the states in its `/AP /N` dictionary, and that name is a convention rather than a rule — `/Yes` is the common one, `/On` and `/1` are not rare. Passing `true` picks whichever name that widget offers. `setFormFieldValue` still takes the name directly when you do know it.
+- Fixed a checkbox flattening as an empty box after it was checked. `setFormFieldValue` passed every value through as text, so a checkbox kept the unchecked state it was parsed with and `flattenForms` baked that empty appearance into the page. `/V` and `/AS` were written as text strings too, which name no appearance state, so the value was also lost when the file was opened again. A button's value is now read as a state name, resolved against the states that widget actually offers, and written as a name; flattening draws the state that was set, using the widget's own artwork where the document supplies it ([#215](https://github.com/whuppi/pdf_manipulator/issues/215) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack))
+- Fixed radio groups being impossible to select. `/AS` was written to the parent field, but a radio group's appearance states live on its kid widgets, so nothing changed on the page. The two button flags were also swapped when reading a widget — ISO 32000-1 puts Radio at bit position 16 and Pushbutton at 17 — so a spec-conformant radio group was read as a push button, which has no state to track. Setting a group's value now turns on the kid that offers that state and clears its siblings
+
 ## 4.1.0-dev.0
 
 - Added `scan-dirs`: extra directories for `keep: auto` to scan, on top of your app's `lib/` and `bin/`. Code living somewhere else — a `tools/` folder, a sibling package in a monorepo — was invisible to the scan, so a capability you really call could be trimmed away. Now you point at it: `scan-dirs: [tools, packages/shared/lib]`, paths relative to your app. It only applies where there is a scan to widen (`keep: auto`, and not `detector: record-use`), and a directory that isn't there keeps the full binary rather than quietly scanning less than you asked for.
