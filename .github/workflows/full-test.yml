@@ -154,9 +154,9 @@ jobs:
           # Linux-built wasm.
           - { name: "pkg: Linux (ubuntu-x64)",      runner: ubuntu-24.04,        make: test-pkg-native,      cache: native,timeout: 30 }
           - { name: "pkg: macOS (macos-arm64)",     runner: macos-14,            make: test-pkg-native,      cache: native,timeout: 30 }
-          - { name: "pkg: Web (ubuntu-x64)",        runner: ubuntu-24.04,        make: test-ops-web,         cache: wasm,timeout: 40, chrome: true, headless-display: true, wasm-cache: true, wasm-build: true }
-          - { name: "pkg: Web (macos-arm64) [P]",       runner: macos-14,            make: test-ops-web,         cache: wasm,timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
-          - { name: "pkg: Web (win-x64) [P]",           runner: windows-2025-vs2026, make: test-ops-web,         cache: wasm,timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "pkg: Web (ubuntu-x64)",        runner: ubuntu-24.04,        make: test-ops-web,         cache: wasm, engine: pkg-web,timeout: 40, chrome: true, headless-display: true, wasm-cache: true, wasm-build: true }
+          - { name: "pkg: Web (macos-arm64) [P]",       runner: macos-14,            make: test-ops-web,         cache: wasm, engine: pkg-web,timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
+          - { name: "pkg: Web (win-x64) [P]",           runner: windows-2025-vs2026, make: test-ops-web,         cache: wasm, engine: pkg-web,timeout: 40, chrome: true, wasm-cache: true, wasm-build: true, portability: true }
           - { name: "pkg: Windows (win-x64)",       runner: windows-2025-vs2026, make: test-pkg-native,      cache: native,timeout: 40 }
 
           # ── Integration tests ──
@@ -264,7 +264,9 @@ jobs:
           # the macos-arm64 twin, alone in its family, took 3.6 min), and
           # the int: Android rows, whose debug hook build for the emulator
           # ABI recompiled from source (6.4 min) behind a 116 MB rust-cache
-          # tree that never held it.
+          # tree that never held it, and the pkg: Web rows, where `dart test
+          # -p chrome` runs the HOST build hook first — 4.5 min of Linux
+          # engine compile (10 on Windows) that the wasm family never held.
           rust-ghcr-target: ${{ matrix.engine && 'true' || 'false' }}
           # PR runs read; push-to-dev, dispatch and the weekly run write.
           # (The weekly run is cold — RUST_CACHE=false — so it writes
