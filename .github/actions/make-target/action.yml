@@ -298,8 +298,8 @@ runs:
         key: ${{ steps.rust.outputs.ghcr-target-key }}
         fallback: ${{ steps.rust.outputs.ghcr-target-fallback }}
         path: |
-          vendor/pdf_oxide/target/debug
-          vendor/office_oxide/target/debug
+          vendor/pdf_oxide/target
+          vendor/office_oxide/target
           ~/.cargo/registry/index
           ~/.cargo/registry/cache
           ~/.cargo/git/db

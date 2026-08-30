@@ -256,6 +256,10 @@ jobs:
           rust-cache: ${{ env.RUST_CACHE }}
           rust-cache-key: ${{ matrix.cache }}
           rust-engine-key: ${{ matrix.engine || '' }}
+          # Compile rows keep their whole per-target release tree on ghcr
+          # under their own family (engine): the Actions-cache path shared
+          # the hook rows' key and lost the save race every run.
+          rust-ghcr-target: ${{ matrix.engine && 'true' || 'false' }}
           # PR runs read; push-to-dev, dispatch and the weekly run write.
           # (The weekly run is cold — RUST_CACHE=false — so it writes
           # nothing for cargo; gradle/xcode/pods/AVD still refresh.)
