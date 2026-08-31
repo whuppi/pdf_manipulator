@@ -23,7 +23,7 @@ hooks:
 
 dependencies:
   # Build hook — native asset compilation protocol
-  code_assets: ^1.2.0
+  code_assets: ">=1.2.0 <3.0.0"
   hooks: ^2.0.2
 
   # Build hook — SHA256 verification of downloaded pre-built binaries
