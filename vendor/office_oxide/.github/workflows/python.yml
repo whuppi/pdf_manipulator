@@ -1,0 +1,253 @@
+name: Python Bindings CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  release:
+    types: [ published ]
+
+# Cancel in-progress runs on the same ref when a new commit arrives.
+# Release events are excluded so a publish run is never interrupted.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'release' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Least-privilege default token (OpenSSF Scorecard Token-Permissions). Jobs
+# opt into wider scopes only where they actually need them.
+permissions:
+  contents: read
+
+jobs:
+  # Test job - builds extension and runs tests
+  test:
+    name: Test Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13', '3.14']
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          allow-prereleases: true
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache Cargo index
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache Cargo build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+
+      - name: Create virtual environment with uv
+        run: uv venv
+
+      - name: Install maturin
+        run: uv pip install maturin pytest
+
+      - name: Build Python wheel
+        run: uv run maturin build --release --features python --out dist
+
+      - name: Install built wheel
+        shell: bash
+        run: |
+          wheel=$(ls dist/*.whl)
+          uv run pip install "$wheel"
+
+      - name: Run Rust tests with Python feature
+        # Skip on macOS due to extension-module linking restrictions
+        if: runner.os != 'macOS'
+        run: cargo test --lib --tests --features python
+
+      - name: Test Python import
+        run: uv run python -c "import office_oxide; print('office_oxide imported successfully')"
+
+  # Lint job - check code quality
+  lint:
+    name: Lint and Format Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Run Clippy with Python feature
+        run: cargo clippy --features python --all-targets -- -D warnings
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+
+      - name: Pin Python version
+        run: uv python pin 3.11
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Run Ruff
+        run: uv run ruff check python/
+
+  # Build Linux wheels (manylinux + musllinux, x86_64 + aarch64)
+  # Only build wheels on release — cross-compilation is slow and not needed on every push
+  build-wheels-linux:
+    name: Build wheels (linux ${{ matrix.target }} ${{ matrix.manylinux }})
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64
+            manylinux: manylinux_2_28
+          - target: aarch64
+            manylinux: manylinux_2_28
+          - target: x86_64
+            manylinux: musllinux_1_2
+          - target: aarch64
+            manylinux: musllinux_1_2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      - name: Build wheels
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --release --features python --out dist
+      - name: Upload wheels as artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-linux-${{ matrix.target }}-${{ matrix.manylinux }}
+          path: dist/*.whl
+
+  # Build macOS wheels (x86_64 + arm64)
+  build-wheels-macos:
+    name: Build wheels (macos ${{ matrix.target }})
+    if: github.event_name == 'release'
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      - name: Build wheels
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --features python --out dist
+      - name: Upload wheels as artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-macos-${{ matrix.target }}
+          path: dist/*.whl
+
+  # Build Windows wheels (x64 + arm64)
+  build-wheels-windows:
+    name: Build wheels (windows ${{ matrix.target }})
+    if: github.event_name == 'release'
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x64, aarch64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+          architecture: x64
+      - name: Build wheels
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --features python --out dist
+      - name: Upload wheels as artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-windows-${{ matrix.target }}
+          path: dist/*.whl
+
+  # Build source distribution (universal fallback for any Rust-capable platform)
+  build-sdist:
+    name: Build source distribution
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build sdist
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+        with:
+          command: sdist
+          args: --out dist
+      - name: Upload sdist as artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  # Publish to PyPI on release
+  publish:
+    name: Publish to PyPI
+    needs: [test, lint, build-wheels-linux, build-wheels-macos, build-wheels-windows, build-sdist]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' && github.event.action == 'published'
+
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sdist
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true

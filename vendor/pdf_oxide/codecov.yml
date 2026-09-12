@@ -1,0 +1,20 @@
+coverage:
+  status:
+    project:
+      default:
+        target: 85%
+        threshold: 1%
+    patch:
+      default:
+        target: 80%
+ignore:
+  - "src/fonts/cid_mappings/**"
+  - "src/fonts/adobe_glyph_list.rs"
+  - "src/python.rs"
+  - "src/wasm.rs"
+  - "src/ocr/**"
+  - "src/rendering/**"
+  - "src/bin/**"
+  - "tests/**"
+  - "benches/**"
+  - "examples/**"

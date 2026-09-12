@@ -1,0 +1,448 @@
+# Contributing to office_oxide
+
+Thank you for your interest in contributing! This document provides guidelines and information for contributors.
+
+## The rules that matter most
+
+These apply to **everyone, including the maintainer** — office_oxide is a
+correctness-critical parser, and a subtle regression can silently corrupt output
+for many documents.
+
+1. **Open or find an accepted issue before non-trivial work**, and agree the
+   approach there first. **Drive-by pull requests with no linked, accepted issue
+   may be closed without detailed review.** Bug/typo/docs fixes are exempt.
+2. **Any change to parsing, extraction, or the document IR must be proven not to
+   regress on real Office files.** These paths are heuristic and fail silently.
+   Ship a minimal synthetic reproducer (in code) for every bug fix, and run your
+   **own** corpus of real `.docx/.xlsx/.pptx/.doc/.xls/.ppt` (the project corpus
+   is private, not distributed) — report what you tested in the PR, vs both
+   `main` and the latest release.
+
+### Contribution quality & AI-assisted work
+Maintainer review time is the scarcest resource — a contribution must be worth
+more than the time it takes to review it. We are not anti-AI; we are anti-slop.
+- **You are responsible for everything you submit**, including code an AI wrote —
+  licence, correctness, provenance. You must be able to **explain every line**.
+- **Write issues, PR descriptions, and replies yourself.** Autonomous agents must
+  not open issues/PRs; such PRs may be closed. **Disclose AI assistance** (tool +
+  extent). We do not accept fully or predominantly AI-generated PRs.
+- **No third-party/customer documents committed as fixtures** — build minimal
+  synthetic ones in code. Name tests by defect class, not issue/PR number.
+- **Fill in the templates.** Issues and PRs opened without filling in their
+  template are **closed automatically** (edit + reopen). Maintainers, drafts, and
+  `skip-template-check` are exempt.
+
+## Table of Contents
+
+- [Code of Conduct](#code-of-conduct)
+- [Getting Started](#getting-started)
+- [Development Setup](#development-setup)
+- [Project Structure](#project-structure)
+- [Where Help Is Wanted](#where-help-is-wanted)
+- [Development Workflow](#development-workflow)
+- [Coding Standards](#coding-standards)
+- [Testing](#testing)
+- [Documentation](#documentation)
+- [Submitting Changes](#submitting-changes)
+- [License](#license)
+
+## Code of Conduct
+
+This project adheres to the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code. Please report unacceptable behavior by opening an issue or contacting the maintainers.
+
+## Getting Started
+
+### Prerequisites
+
+- **Rust**: 1.85+ ([Install Rust](https://rustup.rs/))
+- **Python**: 3.8+ (for Python bindings)
+- **Git**: For version control
+
+### Optional Tools
+
+- **cargo-watch**: Auto-reload on file changes
+  ```bash
+  cargo install cargo-watch
+  ```
+
+- **cargo-llvm-cov**: Code coverage
+  ```bash
+  cargo install cargo-llvm-cov
+  ```
+
+- **maturin**: Python packaging
+  ```bash
+  pip install maturin
+  # or
+  uv tool install maturin
+  ```
+
+- **pre-commit**: Git hooks
+  ```bash
+  pip install pre-commit
+  pre-commit install
+  ```
+
+## Development Setup
+
+1. **Fork and clone** the repository:
+   ```bash
+   git clone https://github.com/YOUR_USERNAME/office_oxide.git
+   cd office_oxide
+   ```
+
+2. **Build the project**:
+   ```bash
+   cargo build
+   ```
+
+3. **Run tests**:
+   ```bash
+   cargo test
+   ```
+
+4. **Set up pre-commit hooks** (recommended):
+   ```bash
+   pre-commit install
+   ```
+
+## Project Structure
+
+```
+office_oxide/
+├── src/
+│   ├── lib.rs             # Unified Document API + convenience functions
+│   ├── core/              # Shared OPC/ZIP/XML/theme primitives (55 tests)
+│   ├── cfb/               # CFBF/OLE2 container reader (18 tests)
+│   ├── docx/              # Word document (.docx) — read/write/edit (36 tests)
+│   ├── xlsx/              # Excel spreadsheet (.xlsx) — read/write/edit (57 tests)
+│   ├── pptx/              # PowerPoint presentation (.pptx) — read/write/edit (40 tests)
+│   ├── doc/               # Legacy Word Binary (.doc) (15 tests)
+│   ├── xls/               # Legacy Excel Binary (.xls) (24 tests)
+│   ├── ppt/               # Legacy PowerPoint Binary (.ppt) (15 tests)
+│   ├── ir.rs              # Format-agnostic DocumentIR
+│   ├── ir_render.rs       # IR → plain_text / markdown / html
+│   ├── create.rs          # IR → DOCX/XLSX/PPTX creation
+│   ├── edit.rs            # Unified EditableDocument API
+│   ├── python.rs          # PyO3 bindings (feature = python)
+│   ├── wasm.rs            # wasm-bindgen bindings (feature = wasm)
+│   └── ffi.rs             # C FFI for Go/C#/Node.js (cdylib + staticlib)
+├── crates/
+│   ├── office_oxide_cli/  # CLI binary: office-oxide
+│   └── office_oxide_mcp/  # MCP server binary: office-oxide-mcp
+├── examples/
+│   ├── rust/              # extract.rs, make_smoke.rs
+│   ├── python/            # extract.py, read_xlsx.py, replace.py
+│   ├── go/                # extract, read_xlsx, replace
+│   ├── javascript/        # extract.mjs, read_xlsx.mjs, replace.mjs
+│   └── c/                 # extract.c
+├── python/                # Python package: office_oxide/__init__.py, _native.pyi
+├── go/                    # Go bindings (CGo over C FFI)
+├── js/                    # Node.js native bindings (koffi)
+├── wasm-pkg/              # WASM npm package config
+├── csharp/                # C# / .NET bindings (P/Invoke)
+├── include/               # C header: office_oxide_c/office_oxide.h
+└── docs/                  # Architecture, per-language getting-started guides
+```
+
+## Where Help Is Wanted
+
+Individual issues come and go; these areas are durably open. Pick one, then open an
+issue describing what you intend to do **before** writing non-trivial code — see
+[the rules that matter most](#the-rules-that-matter-most).
+
+| Area | What it looks like | Extra bar for this area |
+| --- | --- | --- |
+| **Legacy binary formats** (`src/doc/`, `src/xls/`, `src/ppt/`) | Structures the parsers don't read yet — outline levels, fields, embedded objects, legacy code-page decode. Every claim traced to the MS-DOC / MS-XLS / MS-PPT spec section it comes from. | A **real** file that exercises the new path, not only a synthetic one. A parser change whose new branches are reached by no real document is not yet proven. |
+| **IR and renderers** (`src/ir.rs`, `src/ir_render.rs`) | Fidelity gaps in `plain_text` / `markdown` / `html` — spacing, nesting, list numbering, table shape. | Before/after output for the affected documents, and confirmation the other two renderers didn't shift. |
+| **Binding parity** (`go/`, `js/`, `csharp/`, `src/wasm.rs`) | The Python surface leads and the others lag. Closing one specific gap is a well-scoped task. | An example under `examples/<lang>/` plus a test in that binding's CI job. |
+| **Robustness** | Malformed, truncated or hostile files must return an error — never panic, hang, or allocate unboundedly. | A synthetic malformed input as a test, and a statement that it fails before your fix. |
+| **Docs and examples** (`docs/`, `examples/`) | Getting-started guides, per-language examples, corrections. | Exempt from the accepted-issue rule — just open the PR. |
+
+Smaller entry points are labelled
+[`good first issue`](https://github.com/yfedoseev/office_oxide/labels/good%20first%20issue)
+and [`help wanted`](https://github.com/yfedoseev/office_oxide/labels/help%20wanted).
+They are applied sparingly, so an empty list is normal rather than a sign that
+nothing needs doing — the table above is the better starting point.
+
+## Development Workflow
+
+### 1. Pick a Task
+
+- Browse [open issues](https://github.com/yfedoseev/office_oxide/issues), or pick an
+  area from [Where Help Is Wanted](#where-help-is-wanted).
+- Comment on the issue to claim it, and **wait for a maintainer to accept the
+  approach** before writing non-trivial code. Work that arrives as a finished pull
+  request with no agreed issue may be closed without detailed review, however good
+  it is — agreeing the shape first is what protects your time, not just ours.
+- No issue that fits? Open one. The
+  [Feature Request](https://github.com/yfedoseev/office_oxide/issues/new?template=feature_request.yml)
+  template asks for the problem before the solution; if your work is one step of a
+  larger plan, describe the whole plan there so the scope is agreed once.
+
+### 2. Create a Branch
+
+```bash
+git checkout -b feature/your-feature-name
+# or
+git checkout -b fix/your-bug-fix
+```
+
+Branch naming:
+- `feature/` - New features
+- `fix/` - Bug fixes
+- `docs/` - Documentation updates
+- `test/` - Test additions
+- `refactor/` - Code refactoring
+
+### 3. Make Changes
+
+Write code following our [Coding Standards](#coding-standards).
+
+### 4. Test Your Changes
+
+```bash
+# Run all tests
+cargo test
+
+# Run tests for a specific module (all in the same crate)
+cargo test docx::
+
+# Run with features
+cargo test --features python
+
+# Build and verify examples
+cargo build --examples
+
+# Watch mode (auto-reload)
+cargo watch -x test
+```
+
+### 5. Format and Lint
+
+```bash
+# Format code
+cargo fmt
+
+# Run linter
+cargo clippy -- -D warnings
+
+# Or use the Makefile
+make check-all
+```
+
+### 6. Commit Your Changes
+
+Follow [Conventional Commits](https://www.conventionalcommits.org/):
+
+```bash
+git commit -m "feat(xlsx): expand shared formulas on read"
+git commit -m "fix(doc): correct code-page decode for legacy text runs"
+git commit -m "docs: document the DocumentIR table model"
+```
+
+Commit types:
+- `feat`: New feature
+- `fix`: Bug fix
+- `docs`: Documentation only
+- `test`: Adding tests
+- `refactor`: Code refactoring
+- `perf`: Performance improvement
+- `chore`: Maintenance tasks
+
+### 7. Push and Create Pull Request
+
+```bash
+git push origin feature/your-feature-name
+```
+
+Then create a pull request on GitHub.
+
+## Coding Standards
+
+### Rust
+
+#### Style
+
+- Follow [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/)
+- Use `rustfmt` (configured in `rustfmt.toml`)
+- Maximum line length: 100 characters
+- Use 4 spaces for indentation
+
+#### Naming Conventions
+
+```rust
+// Modules and crates
+mod document_parser;
+
+// Types (structs, enums, traits)
+struct DocxDocument;
+enum DocumentFormat;
+trait Extractable;
+
+// Functions and methods
+fn parse_document() -> Result<Document>;
+
+// Constants
+const MAX_RECURSION_DEPTH: usize = 100;
+```
+
+#### Error Handling
+
+```rust
+// Use Result<T> for fallible operations
+pub fn open(path: &Path) -> Result<Document> {
+    let file = File::open(path)?;
+    let doc = parse_file(file)?;
+    Ok(doc)
+}
+
+// Avoid unwrap() in library code (only in tests and examples)
+```
+
+#### Safety
+
+- Avoid `unsafe` unless absolutely necessary
+- Document all `unsafe` blocks with safety invariants
+- Prefer safe abstractions from the standard library
+
+### Python
+
+- Follow [PEP 8](https://pep8.org/)
+- Use `ruff` for formatting and linting
+- Type hints for all public functions
+- Docstrings in Google style
+
+## Testing
+
+### Unit Tests
+
+Build the input **in code**. No third-party or customer document is committed as
+a fixture, so tests construct the bytes they need and parse them from memory:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn heading_style_becomes_a_heading() {
+        let bytes = build_minimal_docx(/* the one construct under test */);
+        let doc = Document::from_reader(Cursor::new(bytes), DocumentFormat::Docx).unwrap();
+        assert!(doc.plain_text().contains("Hello"));
+    }
+}
+```
+
+Name the test after the **defect class** it guards (`heading_style_becomes_a_heading`),
+not after an issue or PR number.
+
+#### File naming
+
+Every file in `tests/` is named `test_<area>.rs` — `test_docx_integration.rs`,
+`test_robustness_and_safety.rs`. The prefix makes test files sort together and
+makes it unambiguous, in a diff or a grep, that a file is a test rather than a
+fixture or a helper.
+
+The one exception is `tests/common/`, which holds shared builders rather than
+tests; Cargo would otherwise compile it as its own test binary.
+
+Tests in the other bindings keep their own ecosystem's convention, which is
+mandatory or idiomatic there and not ours to override: `*_test.go` (Go
+requires it), `*.test.mjs` (Node), `*Tests.cs` (.NET).
+
+Ready-made builders already exist — reuse them rather than writing another:
+
+- `tests/common/mod.rs` — a synthetic `.doc` writer (`build_doc`, `open_doc`,
+  `prose_grpprl`, `row_grpprl`, `cell_grpprl`) that emits a real CFB/OLE2 container.
+- `tests/test_docx_integration.rs` — `DocxBuilder`, which assembles a minimal OPC
+  package part by part.
+
+### Integration Tests
+
+Located in each crate's `tests/` directory.
+
+### Coverage Goals
+
+- **Library code**: 85%+ coverage (enforced in CI)
+- **Critical paths**: 100% coverage (parsing, error handling)
+
+Check coverage:
+```bash
+cargo llvm-cov --lib --tests --html
+open target/llvm-cov/html/index.html
+```
+
+## Documentation
+
+### Code Documentation
+
+- All public items must have doc comments
+- Include examples in doc comments
+- Run `cargo doc --no-deps` to check rendered docs
+
+### Examples
+
+```rust
+use office_oxide::Document;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let doc = Document::open("report.docx")?;
+    println!("{}", doc.plain_text());
+    Ok(())
+}
+```
+
+## Submitting Changes
+
+### Pull Request Checklist
+
+Before submitting a PR, ensure:
+
+- [ ] Code compiles without warnings
+- [ ] All tests pass (`cargo test`)
+- [ ] Code is formatted (`cargo fmt`)
+- [ ] Clippy passes (`cargo clippy -- -D warnings`)
+- [ ] New code has tests
+- [ ] Documentation is updated
+- [ ] Commit messages follow conventions
+- [ ] PR description explains changes clearly
+
+### Review Process
+
+1. Maintainers will review your PR
+2. Address feedback and push updates
+3. Once approved, your PR will be merged
+4. Your changes will appear in the next release
+
+## Developer Certificate of Origin (DCO)
+
+All commits must carry a `Signed-off-by` trailer certifying that you wrote the code and have the right to contribute it under the project's MIT OR Apache-2.0 license. Add it with:
+
+```bash
+git commit -s -m "feat(docx): add heading extraction"
+# Produces: Signed-off-by: Your Name <you@example.com>
+```
+
+Sign-off (`-s`) certifies your right to contribute. A strict DCO CI check is currently disabled for this repo; the **CLA check** (below) is the enforced gate on pull requests.
+
+**CLA** — non-trivial contributions are also accepted under the project's [Contributor License Agreement](CLA.md). It is a *licence, not an assignment*: you keep ownership and grant the project a broad copyright + patent licence including the right to relicense future versions. Trivial changes (typos, formatting, docs) are exempt. Once the CLA bot is enabled it records your one-click sign-off on your first PR; until then the DCO sign-off above is the operative requirement.
+
+## License
+
+By contributing, you agree that the **outbound licence for released code is MIT OR Apache-2.0** (inbound = outbound for what ships to users). In addition, **non-trivial contributions are made under the project's [Contributor License Agreement](CLA.md)**, which grants the Maintainer a broader, sub-licensable copyright and patent licence so the project can relicense *future* versions if needed. The CLA does not change the licence of any already-published release. Trivial changes are exempt and remain inbound = outbound only.
+
+This means:
+- Your code will be available under permissive open-source licenses
+- Users can choose either MIT or Apache-2.0 for their needs
+- See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE) for full terms
+
+## Questions?
+
+- Read code comments and documentation
+- Check `docs/` for architecture and specification docs
+- Open an issue for questions
+- Join discussions on GitHub Discussions
+
+Thank you for contributing!

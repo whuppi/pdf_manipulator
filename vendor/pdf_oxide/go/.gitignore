@@ -1,0 +1,14 @@
+# Build artifacts
+*.o
+*.a
+*.test
+
+# Locally-generated cgo_flags.go from `go run .../cmd/install --write-flags=.`
+# Paths inside it are per-machine. Users add this to their project's .gitignore
+# too; the entry here protects `-tags pdf_oxide_dev` contributors.
+cgo_flags.go
+
+# Installed native libs (downloaded by cmd/install). These never belong in
+# git — v0.3.31 replaced the commit-back flow with on-demand download to
+# GitHub Release assets.
+lib/*/

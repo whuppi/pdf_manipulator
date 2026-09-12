@@ -1,0 +1,36 @@
+%PDF-1.4
+1 0 obj
+<< /Outlines 2 0 R /Pages 3 0 R /Type /Catalog >>
+endobj
+2 0 obj
+<< /Count 2 /First 4 0 R /Last 5 0 R /Type /Outline >>
+endobj
+3 0 obj
+<< /Count 1 /Kids [ 6 0 R ] /Type /Pages >>
+endobj
+4 0 obj
+<< /A << /D [ 6 0 R /Fit ] /S /GoTo >> /Next 5 0 R /Parent 2 0 R /Title (Outline with Embedded Action) /Type /Outline >>
+endobj
+5 0 obj
+<< /A 7 0 R /Parent 2 0 R /Prev 4 0 R /Title (Outline with Indirectly Referenced Action) /Type /Outline >>
+endobj
+6 0 obj
+<< /MediaBox [ 0 0 612 792 ] /Parent 3 0 R /Type /Page >>
+endobj
+7 0 obj
+<< /D [ 6 0 R /Fit ] /S /GoTo /Type /Action >>
+endobj
+xref
+0 8
+0000000000 65535 f 
+0000000009 00000 n 
+0000000074 00000 n 
+0000000144 00000 n 
+0000000203 00000 n 
+0000000339 00000 n 
+0000000461 00000 n 
+0000000534 00000 n 
+trailer << /Size 8 /Root 1 0 R >>
+startxref
+596
+%%EOF
