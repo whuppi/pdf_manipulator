@@ -44,11 +44,28 @@ ENTRY SHAPE
   - **Breaking:** <what changed> → <migration step, INLINE>   ← always first
   - <upgrade action, e.g. "re-run setup --force web">         ← any required action next
   - Added/Changed <capability or improvement>                ← then improvements
-  - Fixed <bug> ([#N](issue-url) reported by [@user](abs-url), [PR #N](abs-url))  ← fixes last
+  - Fixed <symptom> — <the fix, one clause> ([#N](issue-url) reported by [@user](abs-url))  ← fixes last
 
   Order IS the grouping — Breaking → action → added/changed → fixed. No
   `###` subsections: bullet order carries the categories. Only Breaking
   is bold-tagged; everything else is verb-led. Fixes start with "Fixed".
+
+BULLET SHAPE — one change, one sentence
+  A reader asks two things: does this touch me, and what do I change.
+  Answer those and stop.
+  • `<Verb> <what the reader sees changed> — <one clause: the fix or
+    the why> (<issue credit>)`. A Fixed bullet names the symptom first,
+    as the user met it (the error text, the wrong result), then the fix.
+  • One sentence. A **Breaking** bullet may add a second: the migration.
+    No trailing period.
+  • Under 40 words is the target; 60 is the wall, 80 for a Breaking
+    bullet whose migration is inline. `make test-guards` counts.
+  • The cause, the mechanism, the spec citation and the proof belong in
+    the PR, which the "Commits since" list under every entry already
+    reaches. A bullet that explains why the bug existed is a PR body in
+    the wrong file.
+  • Short is not vague: "Fixed image optimization" is short and useless;
+    the symptom and the change must both survive the cut.
 
   EXCEPTION — the genesis entry (a ground-up rewrite, no prior version)
   uses facet tags instead of deltas: **Engine:** / **API:** / **I/O:** /
@@ -60,11 +77,14 @@ CONTENT RULES (never change)
     can't rely on anything that later moves.)
   • NEVER link a living doc (README, docs/*) from an entry — it rots when
     the doc moves on. The migration guide is reached from the README.
-  • Links point only at IMMUTABLE targets — a PR, commit, or issue:
+  • Links point only at IMMUTABLE targets. Credit the issue and its
+    reporter when a reported issue drove the change:
     ([#N](https://github.com/whuppi/pdf_manipulator/issues/N) reported by
-    [@user](https://github.com/user), [PR #N](https://github.com/whuppi/pdf_manipulator/pull/N)).
-    Credit the issue + reporter when a reported issue drove the fix; the PR
-    (or commit) link alone otherwise.
+    [@user](https://github.com/user)). No PR links in bullets: the release
+    tooling appends a "Commits since" list with every PR number under
+    each entry, so the trail exists without lengthening the line. A PR in
+    another repository (a contributor's engine fix) may be linked as the
+    credit, since no commit list here reaches it.
   • No capability inventories — "what's shipped" lives in README +
     docs/CAPABILITY_ROADMAP.md; the changelog says only what CHANGED.
   • Engine/submodule bump → web re-fetch action (NEVER miss this). When a
@@ -83,100 +103,100 @@ CONTENT RULES (never change)
 
 ## 5.0.0-dev.0
 
+- **Breaking:** `PdfEditor.optimizeImages(quality:, minSize:)` is removed → use `reduceImages(PdfImagePolicy(jpegQuality: quality, minPixels: minSize, convertCmykToRgb: true))`; the count it returned is `report.changed`
+- **Breaking:** `compress(imageQuality:)` → `compress(images:)`, a `PdfImagePolicy` defaulting to `PdfImagePolicy.ebook` (150 ppi, JPEG quality 75), so a plain `compress` now downsamples images drawn above 225 ppi; pass `PdfImagePolicy(jpegQuality: q)` for the old behaviour
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
-- **Breaking:** `PdfEditor.optimizeImages(quality:, minSize:)` is removed; `reduceImages(PdfImagePolicy)` is the one image reducer. The old behaviour is `reduceImages(PdfImagePolicy(jpegQuality: quality, minPixels: minSize, convertCmykToRgb: true))`, and the count it returned is `report.changed`
-- **Breaking:** `compress(source, output, imageQuality:)` is now `compress(source, output, images:)`, taking a `PdfImagePolicy` and defaulting to `PdfImagePolicy.ebook` (150 ppi, JPEG quality 75), so a plain `compress` call now downsamples images that are drawn above 225 ppi. Pass `PdfImagePolicy(jpegQuality: q)` for the old quality-only behaviour
-- Added `PdfEditor.pageImages(page)`: the image XObjects placed on a page, each with its resource name, placement bounds in points and full transform. The name is what `resizeImage` takes, which until now no API could tell you — `resizeImage` is finally usable from the public surface and covered by a test that resizes a listed image and reads the new bounds back after save
-- Added `PdfEditor.repositionImage(page, name, x:, y:)` and `PdfEditor.setImageBounds(page, name, bounds)`: move, or move and resize, an image by the name `pageImages` lists — the three image edits now share one vocabulary, and each is verified by listing the image again after save. Fixed all three applying their values to the image's own `cm` while the listing reports the composed matrix — an image drawn under an enclosing transform (every dart-pdf page, for one) moved to `x + offset` instead of `x`; the edits now compose, so the listing after save reads back exactly what was set
-- Added `PdfEditor.reduceImages(PdfImagePolicy)`. It measures how large every image is drawn (pixels per inch through the page transform, forms included), downsamples the ones drawn far above the policy's target, and re-encodes each with the codec that fits it: JPEG for photos, Flate with PNG predictors when the policy is lossless, CCITT Group 4 for 1-bit scans and stencil masks. The presets are `PdfImagePolicy.screen` (72 ppi), `.ebook` (150), `.print` (300) and `.lossless`, and every knob is open for your own numbers. Soft masks are resampled together with their image. A shared image is decided once, for the placement that needs the most pixels. An image stored as JPEG is left alone unless it is downsampled. A replacement is written only when it is smaller than the original. The call returns a `PdfImageReport` with one typed row per image: what it was, what happened to it, and the reason when it was kept (JPEG 2000, JBIG2, spot-colour and colour-key masked images stay as stored, and the row says which). Only images drawn by page content (directly or through Form XObjects) are visited: an image referenced solely from an annotation appearance stream or a pattern, and inline images, stay as stored and are not in the report
-- Added `compress(source, output, images: PdfImagePolicy.screen)`: the one-shot now takes the same policy
-- Fixed a staged image replacement being dropped on save. The full-rewrite writer copied every XObject and ExtGState referenced from a page's resources straight from the source file, and its final sweep skips objects already written — so `optimizeImages` reported a count while the saved file kept the original bytes for every image drawn on a page. The resource walk now writes the staged object
-- Fixed `pageImages` listing Form XObjects as images: upstream's walker records every `Do`; the list is now filtered through the page's resources (inherited ones included) to `/Subtype /Image`, so every listed name is a valid `resizeImage` target
+- Added `PdfEditor.pageImages(page)` — every image XObject drawn on a page with its resource name, bounds and transform; the name is what `resizeImage` takes
+- Added `PdfEditor.repositionImage(page, name, x:, y:)` and `setImageBounds(page, name, bounds)` — move, or move and resize, an image by the name `pageImages` lists
+- Added `PdfEditor.reduceImages(PdfImagePolicy)` — downsamples images to the resolution they are drawn at and re-encodes them by kind (JPEG, predicted Flate, CCITT G4), soft masks included, presets `screen`/`ebook`/`print`/`lossless`, one `PdfImageReport` row per image with the reason when it is kept; images reached only through annotation appearances, patterns or inline `BI … EI` stay as stored
+- Added `compress(images: PdfImagePolicy.screen)` — the one-shot takes the same policy
+- Fixed images optimized in an edit session being saved unchanged — the full-rewrite writer copied page-referenced XObjects from the source and skipped the staged replacement
+- Fixed `pageImages` listing Form XObjects — only `/Subtype /Image` resources are listed, so every name is a valid `resizeImage` target
 
 ## 4.2.1-dev.0
 
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
-- Fixed a DOCX table converting to PDF at several times its declared width, with most columns off the page. The converter sized every column from a sample of its cell content and never read the widths the document declares in `w:tblGrid`, so no edit to `w:tblW`, `w:gridCol` or `w:tcW` could change the layout. Declared widths now drive the columns, scaled down proportionally when they exceed the printable width; content sampling remains only for tables that declare no widths, and can no longer size a table past the page edge ([#243](https://github.com/whuppi/pdf_manipulator/issues/243) reported by [@kampmapa1-design](https://github.com/kampmapa1-design))
-- Fixed a web instance failing to start with `WASM init failed: Out of memory` during rapid create-and-dispose churn. The page-wide worker budget freed a slot the moment `worker.terminate()` was called, but the browser releases a worker's WASM memory later, on its own schedule, so a burst of disposes let new workers boot into memory that dead ones still held. Every worker now holds a liveness lock for its lifetime in all three I/O modes (OPFS reclaim already used it), and a slot returns only when the browser confirms the worker is gone — the next boot past the cap waits its turn, as the native lane budget already did
-- Vendored engines synced upstream: pdf_oxide v0.3.73 → v0.3.78 (extraction, rendering and table-structure fixes; the R6 encryption key fix we carried as a patch landed upstream, and our `/Perms` fix rides on top) and office_oxide v0.1.3 → v0.1.11 (write-path correctness fixes, legacy `.doc` tables and lists)
+- Fixed a DOCX table converting to PDF several times wider than declared, columns off the page — the converter now honours the `w:tblGrid` widths, scaled to the printable width ([#243](https://github.com/whuppi/pdf_manipulator/issues/243) reported by [@kampmapa1-design](https://github.com/kampmapa1-design))
+- Fixed a web instance failing with `WASM init failed: Out of memory` during rapid create-and-dispose churn — a worker slot is freed when the browser confirms the worker is gone, not at `terminate()`
+- Vendored engines synced upstream: pdf_oxide v0.3.73 → v0.3.78 and office_oxide v0.1.3 → v0.1.11 (extraction, rendering, table-structure and legacy `.doc` fixes)
 
 ## 4.2.0-dev.0
 
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
-- Added `setCheckboxFieldValue(fieldName, checked)` for a checkbox whose on-state name you do not know. A checkbox is on when its value names one of the states in its `/AP /N` dictionary, and that name is a convention rather than a rule — `/Yes` is the common one, `/On` and `/1` are not rare. Passing `true` picks whichever name that widget offers. `setFormFieldValue` still takes the name directly when you do know it.
-- Fixed a checkbox flattening as an empty box after it was checked. `setFormFieldValue` passed every value through as text, so a checkbox kept the unchecked state it was parsed with and `flattenForms` baked that empty appearance into the page. `/V` and `/AS` were written as text strings too, which name no appearance state, so the value was also lost when the file was opened again. A button's value is now read as a state name, resolved against the states that widget actually offers, and written as a name; flattening draws the state that was set, using the widget's own artwork where the document supplies it ([#215](https://github.com/whuppi/pdf_manipulator/issues/215) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack))
-- Fixed radio groups being impossible to select. `/AS` was written to the parent field, but a radio group's appearance states live on its kid widgets, so nothing changed on the page. The two button flags were also swapped when reading a widget — ISO 32000-1 puts Radio at bit position 16 and Pushbutton at 17 — so a spec-conformant radio group was read as a push button, which has no state to track. Setting a group's value now turns on the kid that offers that state and clears its siblings
+- Added `setCheckboxFieldValue(fieldName, checked)` — checks a checkbox without knowing its on-state name (`/Yes`, `/On`, `/1` …); `setFormFieldValue` still takes the name directly
+- Fixed a checked checkbox flattening as an empty box and losing its value on reopen — button values are read, resolved and written as appearance-state names, and flattening draws the state that was set ([#215](https://github.com/whuppi/pdf_manipulator/issues/215) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack))
+- Fixed radio groups being impossible to select — the state is set on the kid widget that offers it (siblings cleared), and the Radio/Pushbutton flag bits are read per ISO 32000-1
 
 ## 4.1.0-dev.0
 
-- Added `scan-dirs`: extra directories for `keep: auto` to scan, on top of your app's `lib/` and `bin/`. Code living somewhere else — a `tools/` folder, a sibling package in a monorepo — was invisible to the scan, so a capability you really call could be trimmed away. Now you point at it: `scan-dirs: [tools, packages/shared/lib]`, paths relative to your app. It only applies where there is a scan to widen (`keep: auto`, and not `detector: record-use`), and a directory that isn't there keeps the full binary rather than quietly scanning less than you asked for.
-- Verify your app after upgrading: `keep: auto` now actually trims the native engine, so a build that had been silently shipping every capability gets a smaller one. If anything is missing, state it yourself with `keep: [render, …]`.
-- Fixed `setup` ignoring your config when run from a subfolder of your project. It read the config and scanned for source relative to wherever you were standing, so from anywhere but the app root it found no pubspec, silently read that as "nothing configured", and shipped the full web engine. Both lanes now locate your app the same way — from a path inside its own `.dart_tool/`, which neither the working directory nor where you invoke the command can move.
-- Fixed `keep: auto` keeping every capability on native no matter what your app used. The build hook read its own working directory as your app's source, but hooks are started inside the package they belong to — so the scan matched pdf_manipulator's own implementations and concluded you used all of them, every time, while reporting success. It now derives your app from the hook's output path. Web was never affected: you run `setup` from your own project, so its scan was always looking in the right place.
-- Fixed the native keep decision being cached for good. The hook registered none of your source as a build dependency, so once it had decided it never looked again — add a `sign()` call to an app that had already been built and the engine kept compiling without signature support. The source the scan reads is now a hook dependency, so the decision re-evaluates when your app changes.
+- Added `scan-dirs` — extra directories for `keep: auto` to scan beyond `lib/` and `bin/` (`scan-dirs: [tools, packages/shared/lib]`, relative to your app); a directory that is not there keeps the full binary rather than scanning less
+- Verify your app after upgrading: `keep: auto` now actually trims the native engine; if something is missing, state it with `keep: [render, …]`
+- Fixed `setup` ignoring your config when run from a subfolder of your project — both lanes now locate your app from its own `.dart_tool/`, not from the working directory
+- Fixed `keep: auto` keeping every capability on native — the build hook scanned its own package instead of your app; it now derives your app from the hook's output path (web was never affected)
+- Fixed the native keep decision never re-evaluating — your source is now a hook dependency, so adding a `sign()` call recompiles the engine with signatures
 
 ## 4.0.0-dev.0
 
-- **Breaking:** the engine is configured with three flat keys under `hooks: user_defines: pdf_manipulator:` — `keep` (which capabilities compile: `auto` to scan your source, `[render, …]` for an exact set, or omit for everything), `detector` (how `auto` detects, only valid with `keep: auto`), and `build` (how they compile). Migrating from 3.x: `trim: auto` → `keep: auto`, `trim: {keep: [render, …]}` → `keep: [render, …]`, `trim-detector: X` → `detector: X`, and the web-only `setup --trim` flag is gone — put your choice in pubspec and re-run `flutter pub run pdf_manipulator:setup` (web now reads the same block native does). Invalid configs fail the build loudly, never silently: an unknown key, a bad value, or a `detector` set without `keep: auto` all stop with a clear message ([PR #185](https://github.com/whuppi/pdf_manipulator/pull/185))
-- Added `build:` in that same block — pick HOW the engine compiles: `speed` (default, prebuilt), `size` (smaller binary, opt-level z, a little slower), or `debug` (keeps symbols so a native engine crash points to a file and line). `size` and `debug` compile from source and need [Rust](https://rustup.rs); works for web and native ([PR #185](https://github.com/whuppi/pdf_manipulator/pull/185))
-- Changed the prebuilt-binary download to retry transient failures and resume interrupted transfers over HTTP Range, so a flaky network on a large asset (e.g. the ~180 MB iOS static library) no longer forces a slow from-source compile on a single blip ([PR #185](https://github.com/whuppi/pdf_manipulator/pull/185))
-- Fixed a cryptic `failed to load manifest ... feature edition2024 is required` cargo error when the engine compiles from source (iOS device builds, git dependencies, or any download-miss) on an older Rust toolchain — the build now checks the required Rust version first and stops with a clear message naming the exact version and the `rustup` command to install it ([#183](https://github.com/whuppi/pdf_manipulator/issues/183) reported by [@mrhazelh](https://github.com/mrhazelh), [PR #185](https://github.com/whuppi/pdf_manipulator/pull/185))
+- **Breaking:** the engine is configured with three flat keys under `hooks: user_defines: pdf_manipulator:` — `keep` (`auto`, `[render, …]`, or omit for everything), `detector` (only with `keep: auto`) and `build`. Migrate: `trim: auto` → `keep: auto`, `trim: {keep: […]}` → `keep: […]`, `trim-detector: X` → `detector: X`, drop `setup --trim` and re-run `flutter pub run pdf_manipulator:setup`; an invalid config fails the build with a clear message
+- Added `build:` in the same block — `speed` (default, prebuilt), `size` (smaller, opt-level z) or `debug` (symbols for native crash traces); `size` and `debug` compile from source and need [Rust](https://rustup.rs)
+- Changed the prebuilt-binary download to retry and resume over HTTP Range, so one network blip on a large asset no longer forces a from-source compile
+- Fixed a cryptic `feature edition2024 is required` cargo error on older Rust toolchains — the build checks the required Rust version first and names the `rustup` command to run ([#183](https://github.com/whuppi/pdf_manipulator/issues/183) reported by [@mrhazelh](https://github.com/mrhazelh))
 
 ## 3.0.0-dev.1
 
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
-- Changed the web build to compile its own wasm-bindgen + wasm-opt inside the engine's cargo workspace, version-locked by the engine's `Cargo.lock` — `wasm-bindgen-cli`, `binaryen`, and `jq` are no longer needed, [Rust](https://rustup.rs) is the only requirement on every platform, and the exact-version rejection is gone with the tools ([#177](https://github.com/whuppi/pdf_manipulator/issues/177) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #178](https://github.com/whuppi/pdf_manipulator/pull/178))
-- Fixed `trim: auto` counting member names inside comments as usage — a doc line saying "render them" kept the render capability. The scan now ignores comments, and prints where each kept member was matched, e.g. `render (lib/preview.dart:12)` ([#175](https://github.com/whuppi/pdf_manipulator/issues/175) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #178](https://github.com/whuppi/pdf_manipulator/pull/178))
-- Fixed source builds failing with "rustup: command not found" on Rust installs not managed by rustup (Homebrew, distro packages) — the build now asks rustc itself whether a target is installed and uses rustup only as the fallback ([#176](https://github.com/whuppi/pdf_manipulator/issues/176) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #178](https://github.com/whuppi/pdf_manipulator/pull/178))
+- Changed the web build to compile wasm-bindgen and wasm-opt inside the engine's cargo workspace — `wasm-bindgen-cli`, `binaryen` and `jq` are no longer needed, [Rust](https://rustup.rs) is the only requirement ([#177](https://github.com/whuppi/pdf_manipulator/issues/177) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack))
+- Fixed `trim: auto` counting member names inside comments as usage — the scan ignores comments and prints where each kept member matched, e.g. `render (lib/preview.dart:12)` ([#175](https://github.com/whuppi/pdf_manipulator/issues/175) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack))
+- Fixed source builds failing with "rustup: command not found" on Rust installs not managed by rustup — the build asks rustc which targets are installed and uses rustup only as the fallback ([#176](https://github.com/whuppi/pdf_manipulator/issues/176) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack))
 
 ## 3.0.0-dev.0
 
-- **Breaking:** flattening CJK or emoji form values no longer uses a bundled font (it added 4.4 MB to every install). Register one once: `await pdf.registerFallbackFont(PdfFallbackFontKind.cjk, fontBytes)` (`.emoji` for emoji). Without one the value is still saved correctly — only the baked-in look falls back to the field's own font.
-- **Breaking** (only if you took the retracted 2.2.0): the `trim-detector` value `analyzer` is now `scan` → change it or delete the line — it is the default ([PR #172](https://github.com/whuppi/pdf_manipulator/pull/172))
+- **Breaking:** flattening CJK or emoji form values no longer uses a bundled font (4.4 MB on every install) → register one: `await pdf.registerFallbackFont(PdfFallbackFontKind.cjk, fontBytes)` (`.emoji` for emoji); without one the value is still saved, only the baked-in look falls back to the field's font
+- **Breaking** (only if you took the retracted 2.2.0): `trim-detector: analyzer` is now `scan` → change it or delete the line, it is the default
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
-- Added trim — keep only the features your app uses ([#167](https://github.com/whuppi/pdf_manipulator/issues/167)). Put `trim: auto` under `hooks: user_defines: pdf_manipulator:` in your app pubspec, or choose yourself with `trim: {keep: [render, signatures]}`; on web also run `flutter pub run pdf_manipulator:setup --trim`. Needs [Rust](https://rustup.rs) — the engine compiles once on your machine and is cached. Wrong or missing pieces fail with a clear message, never a broken app.
-- Added `Pdf.registerFallbackFont(PdfFallbackFontKind, Uint8List)`.
-- Changed the default binary: dead engine surfaces, unused barcode support, and the embedded fonts are gone — native 28.7 MB → 21.1 MB, gzipped web download 11.3 MB → 7.2 MB. No action needed.
-- Fixed the package forcing an old `analyzer` version onto your app, which blocked current freezed / json_serializable and friends. The `analyzer` dependency is gone: `trim: auto` uses a dependency-free source scan. It can only keep slightly more than you use, never less — state `trim: {keep: [...]}` yourself for the exact minimum ([#171](https://github.com/whuppi/pdf_manipulator/issues/171) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #172](https://github.com/whuppi/pdf_manipulator/pull/172))
-- Fixed the package archive missing a build file (the engine's `Cargo.lock`), which broke `trim` and every compile-from-source path with "No such file or directory" ([#171](https://github.com/whuppi/pdf_manipulator/issues/171) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #172](https://github.com/whuppi/pdf_manipulator/pull/172))
-- Fixed the web compile error message telling you to install `wasm-pack` — it is not used. The build now points at the tool it actually misses, with the exact install command ([PR #172](https://github.com/whuppi/pdf_manipulator/pull/172))
+- Added trim — keep only the features your app uses: `trim: auto` under `hooks: user_defines: pdf_manipulator:`, or `trim: {keep: [render, signatures]}`; on web also run `flutter pub run pdf_manipulator:setup --trim`; needs [Rust](https://rustup.rs), compiled once and cached ([#167](https://github.com/whuppi/pdf_manipulator/issues/167))
+- Added `Pdf.registerFallbackFont(PdfFallbackFontKind, Uint8List)`
+- Changed the default binary — dead engine surfaces, barcode support and the embedded fonts are gone: native 28.7 MB → 21.1 MB, gzipped web download 11.3 MB → 7.2 MB; no action needed
+- Fixed the package forcing an old `analyzer` version onto your app — the dependency is gone; `trim: auto` uses a dependency-free scan that can only keep slightly more than you use, never less ([#171](https://github.com/whuppi/pdf_manipulator/issues/171) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack))
+- Fixed the package archive missing the engine's `Cargo.lock`, which broke `trim` and every compile-from-source path ([#171](https://github.com/whuppi/pdf_manipulator/issues/171) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack))
+- Fixed the web compile error telling you to install `wasm-pack` — it now names the tool it actually misses, with the install command
 
 ## 2.2.0-dev.0
 
 > Retracted on pub.dev: the published archive was missing a build file (the engine's `Cargo.lock`), breaking `trim` and compile-from-source installs. Superseded by 3.0.0, which consolidates everything here.
 
 
-- **Breaking:** flattening CJK or emoji form values no longer uses a bundled font (it added 4.4 MB to every install). Register one once: `await pdf.registerFallbackFont(PdfFallbackFontKind.cjk, fontBytes)` (`.emoji` for emoji). Without one the value is still saved correctly — only the baked-in look falls back to the field's own font.
+- **Breaking:** flattening CJK or emoji form values no longer uses a bundled font (4.4 MB on every install) → register one: `await pdf.registerFallbackFont(PdfFallbackFontKind.cjk, fontBytes)` (`.emoji` for emoji); without one the value is still saved, only the baked-in look falls back to the field's font
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
-- Added trim — keep only the features your app uses ([#167](https://github.com/whuppi/pdf_manipulator/issues/167)). Put `trim: auto` under `hooks: user_defines: pdf_manipulator:` in your app pubspec, or choose yourself with `trim: {keep: [render, signatures]}`; on web also run `flutter pub run pdf_manipulator:setup --trim`. Needs [Rust](https://rustup.rs) — the engine compiles once on your machine and is cached. Wrong or missing pieces fail with a clear message, never a broken app.
-- Added `Pdf.registerFallbackFont(PdfFallbackFontKind, Uint8List)`.
-- Changed the default binary: dead engine surfaces, unused barcode support, and the embedded fonts are gone — native 28.7 MB → 21.1 MB, gzipped web download 11.3 MB → 7.2 MB. No action needed.
+- Added trim — keep only the features your app uses: `trim: auto` under `hooks: user_defines: pdf_manipulator:`, or `trim: {keep: [render, signatures]}`; on web also run `flutter pub run pdf_manipulator:setup --trim`; needs [Rust](https://rustup.rs), compiled once and cached ([#167](https://github.com/whuppi/pdf_manipulator/issues/167))
+- Added `Pdf.registerFallbackFont(PdfFallbackFontKind, Uint8List)`
+- Changed the default binary — dead engine surfaces, barcode support and the embedded fonts are gone: native 28.7 MB → 21.1 MB, gzipped web download 11.3 MB → 7.2 MB; no action needed
 
 ## 2.1.4-dev.0
 
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
-- Fixed `flattenForms` dropping a field's value when the fill and the flatten happen in separate editor sessions — a reopened editor carries no in-session modified-field map, so the flattener now regenerates the appearance from the persisted `/V` (saved alongside `/NeedAppearances`) instead of baking the stale placeholder ([#161](https://github.com/whuppi/pdf_manipulator/issues/161) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #162](https://github.com/whuppi/pdf_manipulator/pull/162))
-- Fixed `addImageStamp` erasing a page's existing form widgets when the page references its annotations through an indirect `/Annots` reference rather than a direct array ([#161](https://github.com/whuppi/pdf_manipulator/issues/161) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #162](https://github.com/whuppi/pdf_manipulator/pull/162))
-- Fixed a reopened filled form rendering blank where its value should appear — the renderer now regenerates a widget's appearance from `/V` when the AcroForm sets `/NeedAppearances`, matching the flattener ([PR #162](https://github.com/whuppi/pdf_manipulator/pull/162))
+- Fixed `flattenForms` dropping a field's value when fill and flatten happen in separate editor sessions — the appearance is regenerated from the persisted `/V` ([#161](https://github.com/whuppi/pdf_manipulator/issues/161) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack))
+- Fixed `addImageStamp` erasing a page's form widgets when `/Annots` is an indirect reference ([#161](https://github.com/whuppi/pdf_manipulator/issues/161) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack))
+- Fixed a reopened filled form rendering blank where its value should appear — the renderer regenerates a widget's appearance from `/V` under `/NeedAppearances`, matching the flattener
 
 ## 2.1.3-dev.0
 
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
-- Fixed `setFormFieldValue` reporting field-not-found on forms whose field names are stored as raw UTF-8 (LibreOffice-class producers) — one spec-tolerant text-string decoder now handles UTF-16BE/LE, UTF-8 with and without BOM, and PDFDocEncoding across every read ([#155](https://github.com/whuppi/pdf_manipulator/issues/155), [PR #156](https://github.com/whuppi/pdf_manipulator/pull/156))
-- Fixed `flattenForms` baking mojibake for values outside ASCII (`ß` → `ÃŸ` or `�`) — values decode per ISO 32000-1 §7.9.2.2 and appearance text is written one WinAnsi byte per character instead of UTF-8 ([#155](https://github.com/whuppi/pdf_manipulator/issues/155), [PR #156](https://github.com/whuppi/pdf_manipulator/pull/156))
-- Fixed fill → flatten silently dropping the value on widgets without an appearance stream when the field name is non-ASCII — the flattener and the form extractor now agree on how names decode ([#155](https://github.com/whuppi/pdf_manipulator/issues/155), [PR #156](https://github.com/whuppi/pdf_manipulator/pull/156))
-- Fixed flattening CJK and emoji values drawing nothing — the bundled fallback font now ships in both native and web builds and is embedded when the field's own font cannot render the text ([#155](https://github.com/whuppi/pdf_manipulator/issues/155), [PR #156](https://github.com/whuppi/pdf_manipulator/pull/156))
-- Fixed document metadata (`getTitle` and friends) mangling non-ASCII on read, and metadata writes now encode per spec so other readers see the right text ([#155](https://github.com/whuppi/pdf_manipulator/issues/155), [PR #156](https://github.com/whuppi/pdf_manipulator/pull/156))
+- Fixed `setFormFieldValue` reporting field-not-found on forms whose field names are raw UTF-8 (LibreOffice-class producers) — one spec-tolerant text-string decoder covers UTF-16, UTF-8 and PDFDocEncoding ([#155](https://github.com/whuppi/pdf_manipulator/issues/155))
+- Fixed `flattenForms` baking mojibake for values outside ASCII (`ß` → `ÃŸ`) — values decode per ISO 32000-1 §7.9.2.2 and appearance text is written in WinAnsi ([#155](https://github.com/whuppi/pdf_manipulator/issues/155))
+- Fixed fill → flatten silently dropping the value on widgets without an appearance stream when the field name is non-ASCII — the flattener and the form extractor decode names the same way ([#155](https://github.com/whuppi/pdf_manipulator/issues/155))
+- Fixed flattening CJK and emoji values drawing nothing — the bundled fallback font ships in native and web builds ([#155](https://github.com/whuppi/pdf_manipulator/issues/155))
+- Fixed document metadata (`getTitle` and friends) mangling non-ASCII on read, and writes now encode per spec ([#155](https://github.com/whuppi/pdf_manipulator/issues/155))
 
 ## 2.1.2-dev.0
 
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
-- Fixed a Flutter Web WASM (`dart2wasm`) compile failure — the `_post` switch over `Object?` was non-exhaustive under dart2wasm (dart2js treats `JSAny` as a catch-all, dart2wasm doesn't), now converted with `jsify()` ([#145](https://github.com/whuppi/pdf_manipulator/issues/145) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #146](https://github.com/whuppi/pdf_manipulator/pull/146))
-- Fixed pub.dev not advertising Flutter Web support — the web runtime now resolves to a stub default that `pana` can analyze, so the package shows web (dart2js) support ([PR #133](https://github.com/whuppi/pdf_manipulator/pull/133))
+- Fixed a Flutter Web WASM (`dart2wasm`) compile failure — a switch over `Object?` that dart2js accepted was non-exhaustive under dart2wasm ([#145](https://github.com/whuppi/pdf_manipulator/issues/145) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack))
+- Fixed pub.dev not advertising Flutter Web support — the web runtime resolves to a stub default that `pana` can analyze
 
 ## 2.1.1-dev.0
 
-- Fixed the README banner not rendering on pub.dev — the `<picture>` element is flattened to a plain image in the published package ([PR #111](https://github.com/whuppi/pdf_manipulator/pull/111))
+- Fixed the README banner not rendering on pub.dev — the `<picture>` element is flattened to a plain image in the published package
 
 ## 2.1.0-dev.0
 
@@ -185,8 +205,8 @@ CONTENT RULES (never change)
 
 ## 2.0.2-dev.0
 
-- Fixed `addImageStamp` rendering a transparent-background PNG as a solid black box — the alpha channel now ships as a grayscale `/SMask` and the PNG predictor params are preserved, so transparent areas reveal the page instead of painting black ([#103](https://github.com/whuppi/pdf_manipulator/issues/103) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack), [PR #104](https://github.com/whuppi/pdf_manipulator/pull/104))
-- Fixed the `RenderedPage.data` doc — `render()` returns PNG-encoded bytes (decode to read pixels), not raw RGBA ([PR #104](https://github.com/whuppi/pdf_manipulator/pull/104))
+- Fixed `addImageStamp` rendering a transparent-background PNG as a solid black box — the alpha channel ships as a grayscale `/SMask` ([#103](https://github.com/whuppi/pdf_manipulator/issues/103) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack))
+- Fixed the `RenderedPage.data` doc — `render()` returns PNG-encoded bytes (decode to read pixels), not raw RGBA
 
 ## 2.0.1-dev.0
 
@@ -214,8 +234,8 @@ own *lane* — a dedicated Rust thread (native) or Web Worker (web).
 
 ## 1.0.6-dev.0
 
-- Fixed release build routing for consumer builds ([PR #80](https://github.com/whuppi/pdf_manipulator/pull/80), [@Binary-Parse](https://github.com/Binary-Parse))
-- Fixed Windows NDK linker `.cmd` extension for Android cross-compilation ([PR #81](https://github.com/whuppi/pdf_manipulator/pull/81), [@Binary-Parse](https://github.com/Binary-Parse))
+- Fixed release build routing for consumer builds (by [@Binary-Parse](https://github.com/Binary-Parse))
+- Fixed Windows NDK linker `.cmd` extension for Android cross-compilation (by [@Binary-Parse](https://github.com/Binary-Parse))
 - Added CI verify tests — release builds now verified on all 6 targets (Android, iOS, macOS, Linux, Windows, Web)
 
 ## 1.0.5-dev.0
