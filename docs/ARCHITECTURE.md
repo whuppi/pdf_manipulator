@@ -576,12 +576,15 @@ FATAL abort on Windows). The order:
 ### Kill semantics (web)
 
 `worker.terminate()` frees the worker, its WASM heap, and every open
-OPFS `SyncAccessHandle` in one stroke. The lane completes its pending
-submits as cancelled on the Dart side; the host reclaims the dead
-worker's OPFS directory once its liveness lock confirms the agent is
-gone (see **OPFS mode**, under Streaming I/O). A killed-before-use
-worker is returned to the pristine pool instead of terminated (see
-budget below).
+OPFS `SyncAccessHandle` in one stroke — asynchronously: the call is a
+request, and the browser reaps the agent on its own schedule. The lane
+completes its pending submits as cancelled on the Dart side at once.
+Every worker holds a Web Lock from before `ready` until it dies, in
+every I/O mode; the host acquires that lock as the death certificate,
+and only then returns the worker's budget slot and (OPFS mode)
+reclaims its directory (see **OPFS mode**, under Streaming I/O). A
+killed-before-use worker is returned to the pristine pool instead of
+terminated (see budget below).
 
 ### Parallel ops + the budgets
 
@@ -593,9 +596,16 @@ budget below).
   Past the cap, lane spawns queue FIFO inside Rust — an op can
   wait, it can never fail for capacity.
 - **Web global budget:** at most 64 live workers page-wide, FIFO
-  waiters past the cap. Lanes killed before receiving work return
-  their worker to a pristine pool, so rapid create+dispose churn
-  recycles workers instead of booting thousands.
+  waiters past the cap. A slot returns when the browser confirms the
+  worker is dead (its liveness lock becomes acquirable), never when
+  `terminate()` is merely called — the budget counts the WASM memory
+  the browser still holds, not the intent to free it, exactly as the
+  native budget counts threads that have actually exited. Under rapid
+  create+dispose churn the next boot past the cap therefore waits in
+  the FIFO instead of failing with "Cannot allocate Wasm memory" while
+  dead workers are still being reaped. Lanes killed before receiving
+  work return their worker to a pristine pool, so churn recycles
+  workers instead of booting thousands.
 - The web worker boot uses an explicit `booted → init → ready`
   handshake: the worker announces when its message handler is
   attached, because a message posted before that is silently

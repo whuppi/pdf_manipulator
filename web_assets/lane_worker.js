@@ -286,13 +286,17 @@ async function callLaneJspi(requestBytes, sourceLengthsPacked, sinkCount) {
 // guarantee, the web's equivalent of the native lane's
 // every-job-posts-exactly-once contract.
 let opfsDirParts = null;
+let livenessLockName = null;
 let laneDirPromise = null;
 
-function acquireDirLock() {
-  if (!opfsDirParts) return Promise.resolve();
-  const name = opfsDirParts.join('/');
+// Held from before `ready` until this agent dies, in every I/O mode.
+// The host's worker budget frees this worker's slot only when it can
+// acquire the lock — the browser's own word that the worker, and the
+// WASM memory behind it, is gone. OPFS reclaim keys on the same grant.
+function acquireLivenessLock() {
+  if (!livenessLockName || !('locks' in navigator)) return Promise.resolve();
   return new Promise((granted) => {
-    navigator.locks.request(name, () => {
+    navigator.locks.request(livenessLockName, () => {
       granted();
       return new Promise(() => {}); // held until this agent dies
     });
@@ -450,13 +454,15 @@ self.onmessage = async (e) => {
     case 'init': {
       P = msg.protocol;
       opfsDirParts = msg.opfsDir || null;
+      livenessLockName = msg.livenessLock || null;
       ioMode = msg.ioMode;
       if (msg.baseUrl) wasmBaseUrl = msg.baseUrl;
       if (msg.wasmModule) precompiledModule = msg.wasmModule;
       try {
-        // The liveness lock must be held BEFORE ready: no file may
-        // ever exist without the death signal that reclaims it.
-        await acquireDirLock();
+        // The liveness lock must be held BEFORE the WASM instance
+        // exists: the host's budget slot, and any OPFS file, must
+        // never outlive the death signal that releases them.
+        await acquireLivenessLock();
         await ensureInit();
         const { lane_init } = await import(wasmBaseUrl + 'pdf_oxide.js');
         lanePtr = lane_init();

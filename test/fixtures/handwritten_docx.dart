@@ -28,18 +28,19 @@ const docxWideTableGridCols = [
 Uint8List buildWideTableDocx() {
   final cells = StringBuffer();
   for (var i = 0; i < docxWideTableGridCols.length; i++) {
-    cells.write('<w:tc><w:tcPr>'
-        '<w:tcW w:w="${docxWideTableGridCols[i]}" w:type="dxa"/>'
-        '</w:tcPr><w:p><w:r><w:t xml:space="preserve">'
-        '${docxWideTableMarkers[i]} plain body prose that wraps fine'
-        '</w:t></w:r></w:p></w:tc>');
+    cells.write(
+      '<w:tc><w:tcPr>'
+      '<w:tcW w:w="${docxWideTableGridCols[i]}" w:type="dxa"/>'
+      '</w:tcPr><w:p><w:r><w:t xml:space="preserve">'
+      '${docxWideTableMarkers[i]} plain body prose that wraps fine'
+      '</w:t></w:r></w:p></w:tc>',
+    );
   }
-  final grid = docxWideTableGridCols
-      .map((w) => '<w:gridCol w:w="$w"/>')
-      .join();
+  final grid = docxWideTableGridCols.map((w) => '<w:gridCol w:w="$w"/>').join();
 
   const ns = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
-  final document = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+  final document =
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
       '<w:document xmlns:w="$ns"><w:body>'
       '<w:tbl><w:tblPr>'
       '<w:tblW w:w="0" w:type="auto"/>'
@@ -64,7 +65,8 @@ Uint8List buildWideTableDocx() {
       '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
       '</Types>';
 
-  const rels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+  const rels =
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
       '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
       '<Relationship Id="rId1" '
       'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '

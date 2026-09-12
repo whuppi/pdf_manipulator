@@ -169,21 +169,46 @@ class WebLaneHost implements LaneHost {
     }
   }
 
-  /// Reclaims a retired worker's OPFS directory. Awaits the worker's
-  /// liveness lock first — granted only once the browser confirms the
-  /// agent is dead — then deletes. Holding the lock through the
-  /// deletion also serializes any competing reclaim of the same dir.
-  static Future<void> _reclaimWorkerDir(String workerId) async {
+  /// Terminates [worker] and returns its budget slot only once the
+  /// browser confirms the agent is dead. `terminate()` is a request:
+  /// the worker's WASM memory — and the address-space reservation the
+  /// browser holds for it — is released later, asynchronously. A slot
+  /// freed at the call let rapid create+dispose churn boot a new
+  /// worker into that window, and its instantiate failed with "Cannot
+  /// allocate Wasm memory" while dozens of dead workers were still
+  /// being reaped. The budget counts what the browser holds, not what
+  /// we asked for — the web twin of the native lane table, where a
+  /// dying thread's last act is handing its slot to the next waiter.
+  ///
+  /// The worker's liveness lock is the death certificate (the same
+  /// signal OPFS reclaim keys on); a used OPFS worker's directory is
+  /// deleted under the same grant. Where Web Locks are unavailable
+  /// (non-secure context) no death signal exists, so the slot frees
+  /// at once and the next session sweep remains the OPFS backstop.
+  void _terminateAndReleaseSlot(LaneWorker worker) {
+    worker.js.terminate();
+    unawaited(_releaseSlotWhenDead(worker));
+  }
+
+  static Future<void> _releaseSlotWhenDead(LaneWorker worker) async {
     try {
       await web.window.navigator.locks
           .request(
-            _workerLockName(workerId),
-            ((web.Lock? lock) => _deleteDeadWorkerDir(workerId).toJS).toJS,
+            worker.lockName,
+            ((web.Lock? lock) {
+              final dir = worker.opfsDir;
+              final done = dir == null
+                  ? Future<void>.value()
+                  : _deleteDeadWorkerDir(dir);
+              return done.toJS;
+            }).toJS,
           )
           .toDart;
     } catch (_) {
-      // Web Locks unavailable (non-secure context): the next page's
-      // session sweep is the backstop.
+      // No death signal available — fall through to the release.
+    } finally {
+      _liveBudget--;
+      _wakeWaiter();
     }
   }
 
@@ -273,13 +298,8 @@ class WebLaneHost implements LaneHost {
       if (pool != null && pool.isNotEmpty) return pool.removeLast();
       if (_liveBudget < _maxWorkers) {
         _liveBudget++;
-        try {
-          return await _bootWorker();
-        } catch (_) {
-          _liveBudget--;
-          _wakeWaiter();
-          rethrow;
-        }
+        // A failed boot returns its own slot (see _bootWorker).
+        return await _bootWorker();
       }
       final waiter = Completer<void>();
       _waiters.add(waiter);
@@ -298,24 +318,16 @@ class WebLaneHost implements LaneHost {
   void returnPristine(LaneWorker worker) {
     final pool = _pool[_spareKey] ??= [];
     if (pool.length >= _maxPooled) {
-      worker.js.terminate();
-      _liveBudget--;
+      _terminateAndReleaseSlot(worker);
     } else {
       pool.add(worker);
+      _wakeWaiter();
     }
-    _wakeWaiter();
   }
 
-  /// Terminates a USED worker and reclaims its OPFS directory once
-  /// the liveness lock confirms the agent is gone.
-  void retire(LaneWorker worker) {
-    worker.js.terminate();
-    _liveBudget--;
-    if (worker.opfsDir != null) {
-      unawaited(_reclaimWorkerDir(worker.opfsDir!));
-    }
-    _wakeWaiter();
-  }
+  /// Terminates a USED worker; its slot and OPFS directory return
+  /// once the liveness lock confirms the agent is gone.
+  void retire(LaneWorker worker) => _terminateAndReleaseSlot(worker);
 
   static void _wakeWaiter() {
     if (_waiters.isNotEmpty) _waiters.removeAt(0).complete();
@@ -342,9 +354,8 @@ class WebLaneHost implements LaneHost {
           .catchError((Object _) {
             // A failed prewarm is silent by design — the first real take
             // boots inline and surfaces the error on the op that needs it.
+            // The slot came back through _bootWorker's own failure path.
             _warming.remove(_spareKey);
-            _liveBudget--;
-            _wakeWaiter();
           }),
     );
   }
@@ -353,10 +364,20 @@ class WebLaneHost implements LaneHost {
   /// temporary listener is detached before the worker is handed out;
   /// an idle ready worker sends nothing, so no message can be lost.
   Future<LaneWorker> _bootWorker() async {
-    // OPFS mode only: the worker gets its own directory + liveness
-    // lock. The other modes touch no disk — no dir, no lock.
-    final workerId = mode == PdfIoMode.opfs ? _newSessionId() : null;
-    final worker = _spawnWorker();
+    // Every worker holds a liveness lock for its lifetime, in every
+    // mode: it is the budget's death signal. Only OPFS mode also gives
+    // the worker a directory under the same name.
+    final workerId = _newSessionId();
+    final lockName = _workerLockName(workerId);
+    final opfsDir = mode == PdfIoMode.opfs ? workerId : null;
+    final web.Worker worker;
+    try {
+      worker = _spawnWorker();
+    } catch (_) {
+      _liveBudget--;
+      _wakeWaiter();
+      rethrow;
+    }
     final booted = Completer<void>();
     final ready = Completer<void>();
     // On boot failure both completers carry the error but only `booted`
@@ -413,11 +434,12 @@ class WebLaneHost implements LaneHost {
           return p;
         }();
       if (wasmModule != null) init['wasmModule'] = wasmModule;
-      if (workerId != null) {
+      init['livenessLock'] = lockName.toJS;
+      if (opfsDir != null) {
         init['opfsDir'] = [
           opfsRootDir.toJS,
           opfsSessionId.toJS,
-          workerId.toJS,
+          opfsDir.toJS,
         ].toJS;
       }
       worker.postMessage(init);
@@ -426,11 +448,13 @@ class WebLaneHost implements LaneHost {
       // arrive as worker error messages; a 21MB wasm on a slow network
       // takes as long as it takes and is not a failure.
       await ready.future;
-      return LaneWorker(worker, workerId);
+      return LaneWorker(worker, opfsDir, lockName);
     } catch (_) {
       // A worker that never readied wrote no files (writing requires
-      // work, work requires ready) — terminate without reclaim.
-      worker.terminate();
+      // work, work requires ready) — no directory to reclaim, but it
+      // may already hold its lock with a WASM instance behind it, so
+      // its slot returns the same way every other worker's does.
+      _terminateAndReleaseSlot(LaneWorker(worker, null, lockName));
       rethrow;
     } finally {
       unawaited(sub.cancel());
@@ -509,8 +533,8 @@ class WebLaneHost implements LaneHost {
 /// the key the host reclaims by after the worker is retired.
 class LaneWorker {
   /// Wraps a [js] worker with its OPFS directory name (null outside
-  /// OPFS mode).
-  LaneWorker(this.js, this.opfsDir);
+  /// OPFS mode) and the name of the liveness lock it holds.
+  LaneWorker(this.js, this.opfsDir, this.lockName);
 
   /// The underlying Web Worker.
   final web.Worker js;
@@ -518,4 +542,8 @@ class LaneWorker {
   /// The worker's own directory name under the session, or null when
   /// the mode touches no disk.
   final String? opfsDir;
+
+  /// The Web Lock the worker holds from before `ready` until the
+  /// browser tears it down — the host's death signal.
+  final String lockName;
 }
