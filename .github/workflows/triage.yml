@@ -5,8 +5,9 @@
 # PRIVILEGED. pull_request_target is GitHub's only way to write to fork PRs on a
 # public repo, so the reusable workflow hardens every job to the workflow-
 # security doctrine (no PR checkout, fork data env-only, no GITHUB_ENV writes,
-# least-privilege per-job tokens, owner-guarded, SHA-pinned) — the ignore on the
-# trigger below is only safe while all of that holds.
+# least-privilege per-job tokens, owner-guarded, SHA-pinned) — the
+# dangerous-triggers policy for this file in .github/zizmor.yml is only
+# sound while all of that holds.
 name: Triage
 
 on:
@@ -28,4 +29,4 @@ jobs:
       contents: read        # labeler reads .github/labeler.yml + the PR file list
       issues: write         # assign maintainer on issue-opened events
       pull-requests: write  # apply labels, revoke ready-to-test, post notices
-    uses: whuppi/ci/.github/workflows/triage.yml@v2.7.4
+    uses: whuppi/ci/.github/workflows/triage.yml@v2.7.3
