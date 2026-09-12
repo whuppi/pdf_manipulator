@@ -21,6 +21,8 @@ class PdfImagePolicy {
     this.allowLossy = true,
     this.convertCmykToRgb = false,
     this.minPixels = 32,
+    this.minSavings = 0.10,
+    this.chromaSubsampling = PdfChromaSubsampling.auto,
   });
 
   /// On-screen reading: 72 ppi colour and gray, 300 ppi bilevel,
@@ -43,18 +45,20 @@ class PdfImagePolicy {
   );
 
   /// Desktop printing: 300 ppi colour and gray, 1200 ppi bilevel,
-  /// JPEG quality 85, CMYK kept.
+  /// JPEG quality 85 with full chroma (what Distiller's print and prepress
+  /// settings pin), CMYK kept.
   static const print = PdfImagePolicy(
     colorDpi: 300,
     grayDpi: 300,
     monoDpi: 1200,
     jpegQuality: 85,
+    chromaSubsampling: PdfChromaSubsampling.full,
   );
 
   /// Shrink without changing a pixel: no downsampling, no lossy codec;
   /// lossless sources are re-packed with predictors, bilevel images
   /// become CCITT Group 4.
-  static const lossless = PdfImagePolicy(allowLossy: false);
+  static const lossless = PdfImagePolicy(allowLossy: false, minSavings: 0);
 
   /// Target resolution for RGB and CMYK images.
   final double? colorDpi;
@@ -84,8 +88,36 @@ class PdfImagePolicy {
   /// Images narrower or shorter than this many pixels are left alone.
   final int minPixels;
 
+  /// A re-encode is written only when it saves at least this fraction of
+  /// the image's stored bytes (soft mask included); below it the image is
+  /// kept and its row says `belowMinSavings`. Guards the trade of quality
+  /// for a few percent. 0 accepts any reduction, which is what
+  /// [lossless] uses, since it trades no quality.
+  final double minSavings;
+
+  /// Chroma subsampling for every JPEG written; gray images are unaffected.
+  final PdfChromaSubsampling chromaSubsampling;
+
   @override
   String toString() =>
       'PdfImagePolicy(color: $colorDpi, gray: $grayDpi, mono: $monoDpi, '
-      'q$jpegQuality, lossy: $allowLossy, cmyk→rgb: $convertCmykToRgb)';
+      'q$jpegQuality ${chromaSubsampling.name}, lossy: $allowLossy, '
+      'cmyk→rgb: $convertCmykToRgb, minSavings: $minSavings)';
+}
+
+/// How the colour channels of a written JPEG are subsampled.
+///
+/// Distiller and Ghostscript tie this to the preset (4:2:0 for screen and
+/// ebook, 4:4:4 for print and prepress); libvips ties it to quality
+/// (4:4:4 from quality 90). [auto] is the libvips rule; the presets pin
+/// what Distiller pins.
+enum PdfChromaSubsampling {
+  /// 4:4:4 when `jpegQuality` is 90 or more, 4:2:0 below.
+  auto,
+
+  /// 4:4:4 — every colour sample kept; text and hard colour edges stay crisp.
+  full,
+
+  /// 4:2:0 — colour at half resolution both ways; smallest, fine for photos.
+  half,
 }

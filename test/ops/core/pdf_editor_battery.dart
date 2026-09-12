@@ -851,7 +851,7 @@ void registerEditorTests(Pdf Function() createPdf) {
           );
           expect(
             row.action == PdfImageAction.recompressed ||
-                row.keepReason == PdfImageKeepReason.notSmaller ||
+                row.keepReason == PdfImageKeepReason.belowMinSavings ||
                 // A palette image stays as stored under lossless (design
                 // row 7): only a lossy codec or a downsample could beat it.
                 (row.indexed &&
@@ -997,6 +997,33 @@ void registerEditorTests(Pdf Function() createPdf) {
       expect(screenRow.action, PdfImageAction.kept);
       expect(screenRow.keepReason, PdfImageKeepReason.tooSmall);
       await freshEditor.dispose();
+    }, timeout: t(1));
+
+    test('reduceImages honours minSavings before trading quality', () async {
+      // fImages: a 72 ppi Flate photo, so screen-level policies recompress
+      // it to JPEG rather than downsample. The same trade is refused when
+      // the policy demands a saving no JPEG can deliver.
+      final pdf = createPdf();
+      final greedy = await pdf.edit(src(fImages));
+      final refused = await greedy.reduceImages(
+        const PdfImagePolicy(jpegQuality: 60, minSavings: 0.999),
+      );
+      expect(refused.changed, 0);
+      expect(
+        refused.images.map((r) => r.keepReason),
+        everyElement(PdfImageKeepReason.belowMinSavings),
+      );
+      await greedy.dispose();
+      final willing = await pdf.edit(src(fImages));
+      final accepted = await willing.reduceImages(
+        const PdfImagePolicy(jpegQuality: 60, minSavings: 0),
+      );
+      expect(accepted.changed, accepted.images.length);
+      expect(
+        accepted.images.map((r) => r.action),
+        everyElement(PdfImageAction.recompressed),
+      );
+      await willing.dispose();
     }, timeout: t(1));
 
     test('reduceImages is idempotent', () async {

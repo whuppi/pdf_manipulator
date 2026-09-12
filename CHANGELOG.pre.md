@@ -110,6 +110,7 @@ CONTENT RULES (never change)
 - Added `PdfEditor.repositionImage(page, name, x:, y:)` and `setImageBounds(page, name, bounds)` — move, or move and resize, an image by the name `pageImages` lists
 - Added `PdfEditor.reduceImages(PdfImagePolicy)` — downsamples images to the resolution they are drawn at and re-encodes them by kind (JPEG, predicted Flate, CCITT G4), soft masks included, presets `screen`/`ebook`/`print`/`lossless`, one `PdfImageReport` row per image with the reason when it is kept; images reached only through annotation appearances, patterns or inline `BI … EI` stay as stored
 - Added `compress(images: PdfImagePolicy.screen)` — the one-shot takes the same policy
+- Added `PdfImagePolicy.minSavings` (default 10%: a lossy re-encode must earn its bytes, as Acrobat's optimizer and jpegoptim's threshold guard) and `chromaSubsampling` (`auto` = 4:4:4 from quality 90 like libvips, `full`, `half`; `print` pins `full` as Distiller does)
 - Fixed images optimized in an edit session being saved unchanged — the full-rewrite writer copied page-referenced XObjects from the source and skipped the staged replacement
 - Fixed `pageImages` listing Form XObjects — only `/Subtype /Image` resources are listed, so every name is a valid `resizeImage` target
 

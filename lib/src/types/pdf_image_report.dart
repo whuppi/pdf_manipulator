@@ -86,8 +86,8 @@ enum PdfImageKeepReason {
   /// Nothing the policy allows could make it smaller.
   alreadyOptimal,
 
-  /// Re-encoding produced no smaller stream.
-  notSmaller,
+  /// Re-encoding did not save the policy's `minSavings` share of the bytes.
+  belowMinSavings,
 
   /// The stored samples could not be decoded, so nothing was rewritten.
   undecodable,

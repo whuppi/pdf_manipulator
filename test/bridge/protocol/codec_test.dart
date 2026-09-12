@@ -163,7 +163,11 @@ void main() {
       expect(args['allowLossy'], isFalse);
       expect(args['jpegQuality'], 75);
       expect(args['minPixels'], 32);
+      expect(args['minSavings'], 0);
+      expect(args['chroma'], 'auto');
       final screen = encodeImagePolicy(PdfImagePolicy.screen);
+      expect(screen['minSavings'], 0.10);
+      expect(encodeImagePolicy(PdfImagePolicy.print)['chroma'], 'full');
       expect(screen['colorDpi'], 72);
       expect(screen['monoDpi'], 300);
       expect(screen['threshold'], 1.5);
