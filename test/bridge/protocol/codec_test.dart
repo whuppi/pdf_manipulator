@@ -165,6 +165,7 @@ void main() {
       expect(args['minPixels'], 32);
       expect(args['minSavings'], 0);
       expect(args['chroma'], 'auto');
+      expect(args['recompressJpeg'], isFalse);
       final screen = encodeImagePolicy(PdfImagePolicy.screen);
       expect(screen['minSavings'], 0.10);
       expect(encodeImagePolicy(PdfImagePolicy.print)['chroma'], 'full');

@@ -372,6 +372,7 @@ Map<String, Object?> encodeImagePolicy(PdfImagePolicy policy) => {
   'minPixels': policy.minPixels,
   'minSavings': policy.minSavings,
   'chroma': policy.chromaSubsampling.name,
+  'recompressJpeg': policy.recompressJpeg,
 };
 
 T _enumByWireName<T extends Enum>(List<T> values, Object? wire, String what) {

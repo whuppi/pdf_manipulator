@@ -1026,6 +1026,37 @@ void registerEditorTests(Pdf Function() createPdf) {
       await willing.dispose();
     }, timeout: t(1));
 
+    test('reduceImages recompresses a stored JPEG only when asked', () async {
+      // fImagesJpeg page 0: a quality-90 JPEG drawn at 72 ppi — within
+      // resolution, so only recompressJpeg can touch it.
+      final pdf = createPdf();
+      const asked = PdfImagePolicy(jpegQuality: 50, recompressJpeg: true);
+      final editor = await pdf.edit(src(fImagesJpeg));
+      final report = await editor.reduceImages(asked);
+      final page0 = report.images.first;
+      expect(page0.action, PdfImageAction.recompressed, reason: '$page0');
+      expect(page0.widthAfter, page0.width);
+      expect(page0.bytesAfter, lessThan(page0.bytesBefore));
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final saved = sink.takeBytes();
+      // The default leaves a stored JPEG alone unless it is downsampled.
+      final quiet = await pdf.edit(src(fImagesJpeg));
+      final untouched = await quiet.reduceImages(
+        const PdfImagePolicy(jpegQuality: 50),
+      );
+      expect(untouched.images.first.action, PdfImageAction.kept);
+      await quiet.dispose();
+      // A second pass at the same quality finds nothing worth the trade.
+      final again = await pdf.edit(src(saved));
+      expect(
+        (await again.reduceImages(asked)).images.first.action,
+        PdfImageAction.kept,
+      );
+      await again.dispose();
+    }, timeout: t(1));
+
     test('reduceImages is idempotent', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(fImagesHires));

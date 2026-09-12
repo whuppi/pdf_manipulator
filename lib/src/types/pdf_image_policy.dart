@@ -6,8 +6,8 @@ import 'package:meta/meta.dart';
 /// page (a 128-pixel image drawn 32 points wide is 288 ppi). An image is
 /// downsampled only when it exceeds its target by more than [downsampleThreshold],
 /// and only to the target — never below what the largest placement needs.
-/// The presets follow Ghostscript's `/screen`, `/ebook` and `/printer`
-/// resolutions.
+/// The presets are the three resolutions print and screen workflows have
+/// settled on: 72, 150 and 300 ppi.
 @immutable
 class PdfImagePolicy {
   /// Creates a policy; every `null` resolution means "never downsample
@@ -23,6 +23,7 @@ class PdfImagePolicy {
     this.minPixels = 32,
     this.minSavings = 0.10,
     this.chromaSubsampling = PdfChromaSubsampling.auto,
+    this.recompressJpeg = false,
   });
 
   /// On-screen reading: 72 ppi colour and gray, 300 ppi bilevel,
@@ -45,8 +46,7 @@ class PdfImagePolicy {
   );
 
   /// Desktop printing: 300 ppi colour and gray, 1200 ppi bilevel,
-  /// JPEG quality 85 with full chroma (what Distiller's print and prepress
-  /// settings pin), CMYK kept.
+  /// JPEG quality 85 with full chroma, CMYK kept.
   static const print = PdfImagePolicy(
     colorPpi: 300,
     grayPpi: 300,
@@ -98,19 +98,28 @@ class PdfImagePolicy {
   /// Chroma subsampling for every JPEG written; gray images are unaffected.
   final PdfChromaSubsampling chromaSubsampling;
 
+  /// Whether an image already stored as JPEG is re-encoded at
+  /// [jpegQuality] even when it is not downsampled. Off by default: every
+  /// JPEG generation loses detail, so a stored JPEG is left alone unless
+  /// its pixels change. Turn it on for a photo PDF whose images are at
+  /// the right resolution but stored at a higher quality than you need;
+  /// [minSavings] still applies, so a JPEG already at or below that
+  /// quality is kept and a second run changes nothing.
+  final bool recompressJpeg;
+
   @override
   String toString() =>
       'PdfImagePolicy(color: $colorPpi, gray: $grayPpi, mono: $monoPpi, '
       'q$jpegQuality ${chromaSubsampling.name}, lossy: $allowLossy, '
-      'cmyk→rgb: $convertCmykToRgb, minSavings: $minSavings)';
+      'recompressJpeg: $recompressJpeg, cmyk→rgb: $convertCmykToRgb, '
+      'minSavings: $minSavings)';
 }
 
 /// How the colour channels of a written JPEG are subsampled.
 ///
-/// Distiller and Ghostscript tie this to the preset (4:2:0 for screen and
-/// ebook, 4:4:4 for print and prepress); libvips ties it to quality
-/// (4:4:4 from quality 90). [auto] is the libvips rule; the presets pin
-/// what Distiller pins.
+/// [auto] follows quality: 4:2:0 below 90, 4:4:4 from 90. The `print`
+/// preset pins [full], because printed text and hard colour edges show
+/// chroma smearing that a screen hides.
 enum PdfChromaSubsampling {
   /// 4:4:4 when `jpegQuality` is 90 or more, 4:2:0 below.
   auto,

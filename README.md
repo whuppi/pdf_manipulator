@@ -346,7 +346,7 @@ await for (final page in doc.render(
 await doc.dispose();
 ```
 
-Also on the document: `extract` (plain / markdown / html), `extractImages`, `getSignatures` / `verifySignatures`, `validatePdfA` / `validatePdfUa`, `classifyPage` / `classifyDocument`, `planSplitByBookmarks`, plus metadata getters (`title`, `author`, `version`, `isTagged`).
+Also on the document: `extract` (plain / markdown / html), `extractImages`, `signatures` / `verifySignatures`, `validatePdfA` / `validatePdfUa`, `classifyPage` / `classifyDocument`, `planSplitByBookmarks`, plus metadata getters (`title`, `author`, `version`, `isTagged`).
 
 ### Edit a document
 
