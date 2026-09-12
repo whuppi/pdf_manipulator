@@ -11,3 +11,15 @@ rules:
     config:
       policies:
         "whuppi/ci/*": ref-pin
+  # dangerous-triggers: two workflows carry the privileged triggers GitHub
+  # offers for their job and nothing else can do — retry.yml reacts to a
+  # finished run (workflow_run), triage.yml writes labels on fork PRs
+  # (pull_request_target). Each file's header states the hardening that
+  # makes the trigger sound (no checkout of fork code, no artifact
+  # ingestion, owner guard, least privilege). The policy lives here, once,
+  # so the exception is reviewed in one place; no workflow silences the
+  # audit inline.
+  dangerous-triggers:
+    ignore:
+      - retry.yml
+      - triage.yml
