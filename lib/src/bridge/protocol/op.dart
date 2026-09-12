@@ -83,6 +83,9 @@ enum EngineOp {
   /// Get a page's media box rectangle.
   editorPageMediaBox('editorPageMediaBox'),
 
+  /// List the image XObjects placed on a page.
+  editorPageImages('editorPageImages'),
+
   /// Count pending redaction marks on a page.
   editorRedactionCount('editorRedactionCount'),
 

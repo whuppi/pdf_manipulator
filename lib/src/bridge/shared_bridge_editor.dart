@@ -238,6 +238,12 @@ class _SharedEditorHandle extends BridgeEditorHandle {
   PdfTask<void> convertToPdfA({int level = 1}) =>
       _mutate('convertToPdfA', {'level': level});
   @override
+  PdfTask<List<PdfPageImage>> pageImages(int page) => _exec(
+    EngineOp.editorPageImages,
+    {'page': page},
+  ).map(codec.decodePageImages);
+
+  @override
   PdfTask<void> resizeImage(
     int page,
     String imageName, {

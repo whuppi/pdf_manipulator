@@ -9,8 +9,10 @@ import 'package:pdf_manipulator/src/ops/pdf.dart';
 import 'package:pdf_manipulator/src/ops/pdf_doc.dart';
 import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
+import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_task.dart';
+import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/bridge/pdf_bridge.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
@@ -299,6 +301,16 @@ class PdfEditor {
       top: top,
       bottom: bottom,
     );
+  }
+
+  /// Lists the images placed on [page] (0-based): each one's resource
+  /// [PdfPageImage.name], its placement [PdfPageImage.bounds] in points
+  /// and the full [PdfPageImage.transform]. The name is what [resizeImage]
+  /// takes. A page with no images returns an empty list; a page index out
+  /// of range throws [PdfEngineError].
+  PdfTask<List<PdfPageImage>> pageImages(int page) {
+    _check();
+    return _handle.pageImages(page);
   }
 
   /// Resizes the named image on [page] to [width] x [height] points.

@@ -81,6 +81,11 @@ CONTENT RULES (never change)
 
 <!-- Add new versions below, newest first. -->
 
+## 4.3.0-dev.0
+
+- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
+- Added `PdfEditor.pageImages(page)`: the image XObjects placed on a page, each with its resource name, placement bounds in points and full transform. The name is what `resizeImage` takes, which until now no API could tell you — `resizeImage` is finally usable from the public surface and covered by a test that resizes a listed image and reads the new bounds back after save
+
 ## 4.2.1-dev.0
 
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)

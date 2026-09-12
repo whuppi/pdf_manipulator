@@ -230,6 +230,8 @@ lib/
     │   ├── pdf_config.dart                 ← PdfConfig (webIoMode, URLs)
     │   ├── pdf_enums.dart                  ← PdfIoMode, PdfEncryptionAlgorithm, ...
     │   ├── pdf_image.dart                  ← PdfImage, RenderedPage
+    │   ├── pdf_matrix.dart                 ← PdfMatrix: a PDF affine transform
+    │   ├── pdf_page_image.dart             ← PdfPageImage: an image XObject as placed on a page
     │   ├── pdf_page_info.dart              ← PdfPageInfo
     │   ├── pdf_pages.dart                  ← PdfPages sealed (all, single, range)
     │   ├── pdf_params.dart                 ← PdfSaveOptions, PdfEncryption, ...

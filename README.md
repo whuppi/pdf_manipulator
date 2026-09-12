@@ -364,7 +364,7 @@ await editor.save(output); // see save options below
 await editor.dispose();
 ```
 
-Also on the editor: `selectPages`, `rotatePage` / `rotateAllPages`, `addStamp` / `addImageStamp`, `embedFile`, `eraseRegions`, `cropMargins`, `resizeImage`, `flattenForms` / `flattenAllAnnotations`, `setFormFieldValue`, `unembedStandardFonts`, `convertToPdfA`, `scrubMetadata`, and metadata get/set.
+Also on the editor: `selectPages`, `rotatePage` / `rotateAllPages`, `addStamp` / `addImageStamp`, `embedFile`, `eraseRegions`, `cropMargins`, `pageImages` / `resizeImage`, `flattenForms` / `flattenAllAnnotations`, `setFormFieldValue`, `unembedStandardFonts`, `convertToPdfA`, `scrubMetadata`, and metadata get/set.
 
 Save options:
 

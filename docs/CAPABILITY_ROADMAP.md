@@ -49,7 +49,7 @@ Five files, strict rules:
 | Get form fields (list all) | `get_form_fields` | — | PLANNED |
 | Get form field value | `get_form_field_value` | — | PLANNED |
 | Has form field | `has_form_field` | — | PLANNED |
-| Get page images (list metadata) | `get_page_images` | — | PLANNED |
+| Get page images (list metadata) | `get_page_images` | `pageImages()` | DONE — name, placement bounds and the full transform per image XObject on a page |
 | Producer / Creator metadata | `producer`, `creator` | `producer`, `creator` (decoded on open) | DONE |
 | Creation date | `creation_date` | `creationDate` (decoded on open) | DONE |
 
@@ -87,7 +87,7 @@ Five files, strict rules:
 | Flatten all annotations | `flatten_all_annotations` | `flattenAllAnnotations()` | DONE |
 | Set form field value | `set_form_field_value` | `setFormFieldValue()` | DONE |
 | Crop margins | `crop_margins` | `cropMargins()` | DONE |
-| Resize image | `resize_image` | `resizeImage()` | DONE — untestable from the public surface: no API lists image XObject names, so a caller cannot know a valid name to pass. Add an image-name listing (e.g. on `extractImages`) to make this testable and usable. |
+| Resize image | `resize_image` | `resizeImage()` | DONE — `pageImages()` supplies the XObject name; the editor battery resizes a listed image and reads the new bounds back from the saved bytes |
 | Convert to PDF/A | via bridge | `convertToPdfA()` | DONE |
 | Add redaction | `add_redaction` | `addRedaction()` | DONE |
 | Redaction count | `redaction_count` | `redactionCount()` | DONE |

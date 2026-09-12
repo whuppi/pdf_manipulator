@@ -11,6 +11,7 @@ import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/pdf_image.dart';
+import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
 import 'package:pdf_manipulator/src/types/pdf_task.dart';
@@ -266,6 +267,9 @@ abstract class BridgeEditorHandle {
 
   /// Converts the document to PDF/A conformance at [level].
   PdfTask<void> convertToPdfA({int level = 1});
+
+  /// Lists the image XObjects placed on [page].
+  PdfTask<List<PdfPageImage>> pageImages(int page);
 
   /// Resizes an embedded image on [page] by [imageName].
   PdfTask<void> resizeImage(

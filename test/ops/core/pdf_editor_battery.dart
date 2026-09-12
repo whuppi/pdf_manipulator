@@ -359,6 +359,67 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
     }, timeout: t(1));
 
+    // ── Page images ──
+
+    test(
+      'pageImages lists each page\'s image and its name resizes it',
+      () async {
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(fImages));
+        // One embedded PNG per page, placed axis-aligned by dart-pdf.
+        for (var page = 0; page < fImagesTruth.pages; page++) {
+          final images = await editor.pageImages(page);
+          expect(images, hasLength(1), reason: 'page $page');
+          final image = images.single;
+          expect(image.name, isNotEmpty);
+          expect(image.bounds.width, greaterThan(0));
+          expect(image.bounds.height, greaterThan(0));
+          expect(image.transform.isAxisAligned, isTrue);
+          expect(image.transform.a, image.bounds.width);
+          expect(image.transform.d, image.bounds.height);
+          expect(image.transform.e, image.bounds.x);
+          expect(image.transform.f, image.bounds.y);
+        }
+        // The listed name is what resizeImage takes: halve the first image,
+        // save, and read the new placement back from the saved bytes.
+        final before = (await editor.pageImages(0)).single;
+        await editor.resizeImage(
+          0,
+          before.name,
+          width: before.bounds.width / 2,
+          height: before.bounds.height / 2,
+        );
+        final sink = TestSink();
+        await editor.save(sink);
+        await editor.dispose();
+        final reopened = await pdf.edit(src(sink.takeBytes()));
+        final after = (await reopened.pageImages(0)).single;
+        expect(after.name, before.name);
+        expect(after.bounds.width, closeTo(before.bounds.width / 2, 0.01));
+        expect(after.bounds.height, closeTo(before.bounds.height / 2, 0.01));
+        await reopened.dispose();
+      },
+      timeout: t(1),
+    );
+
+    test('pageImages on an imageless page is empty', () async {
+      final editor = await createPdf().edit(src(minimalPdf));
+      expect(await editor.pageImages(0), isEmpty);
+      await editor.dispose();
+    }, timeout: t(1));
+
+    test('pageImages with an out-of-range page throws typed error', () async {
+      final editor = await createPdf().edit(src(minimalPdf));
+      await expectLater(
+        editor.pageImages(99),
+        throwsA(isA<PdfEngineError>()),
+        reason:
+            'page 99 of a 1-page PDF does not exist — an empty list '
+            'would hide caller bugs',
+      );
+      await editor.dispose();
+    }, timeout: t(1));
+
     test('unembedStandardFonts on a font-free PDF reports zero', () async {
       // The minimal fixture embeds nothing — the only correct answer
       // is exactly 0. Any positive count means the engine invented

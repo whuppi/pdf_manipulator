@@ -12,6 +12,8 @@ import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_image.dart';
+import 'package:pdf_manipulator/src/types/pdf_matrix.dart';
+import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_info.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
@@ -199,6 +201,13 @@ EngineRequest editorPageMediaBoxOp({
   'page': page,
 });
 
+/// Builds an editor page-images request.
+EngineRequest editorPageImagesOp({required int handleId, required int page}) =>
+    EngineRequest(EngineOp.editorPageImages, {
+      'handleId': handleId,
+      'page': page,
+    });
+
 /// Builds an editor merge-from request.
 EngineRequest editorMergeFromOp({
   required int handleId,
@@ -316,6 +325,32 @@ List<SearchResult> decodeSearchResults(Map<String, Object?> r) {
         y: (m['y'] as num).toDouble(),
         width: (m['width'] as num).toDouble(),
         height: (m['height'] as num).toDouble(),
+      ),
+    );
+  }).toList();
+}
+
+/// Decodes the image placements of a page from a response map.
+List<PdfPageImage> decodePageImages(Map<String, Object?> r) {
+  final images = r['images'] as List? ?? [];
+  return images.map((i) {
+    final m = _asMap(i);
+    double n(String k) => (m[k] as num).toDouble();
+    return PdfPageImage(
+      name: m['name'] as String? ?? '',
+      bounds: PdfRect(
+        x: n('x'),
+        y: n('y'),
+        width: n('width'),
+        height: n('height'),
+      ),
+      transform: PdfMatrix(
+        a: n('a'),
+        b: n('b'),
+        c: n('c'),
+        d: n('d'),
+        e: n('e'),
+        f: n('f'),
       ),
     );
   }).toList();

@@ -120,6 +120,37 @@ void main() {
     });
   });
 
+  group('decodePageImages', () {
+    test('parses name, bounds and transform', () {
+      final images = decodePageImages({
+        'images': [
+          {
+            'name': 'Im1',
+            'x': 72.0,
+            'y': 500.0,
+            'width': 128.0,
+            'height': 96.0,
+            'a': 128.0,
+            'b': 0.0,
+            'c': 0.0,
+            'd': 96.0,
+            'e': 72.0,
+            'f': 500.0,
+          },
+        ],
+      });
+      expect(images, hasLength(1));
+      expect(images.single.name, 'Im1');
+      expect(images.single.bounds.width, 128.0);
+      expect(images.single.transform.d, 96.0);
+      expect(images.single.transform.isAxisAligned, isTrue);
+    });
+
+    test('handles missing images key', () {
+      expect(decodePageImages({}), isEmpty);
+    });
+  });
+
   group('decodeEncryptionAlgorithm', () {
     test('parses known algorithms', () {
       expect(decodeEncryptionAlgorithm(1), PdfEncryptionAlgorithm.rc4_40);
