@@ -187,6 +187,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
         const pageWidthPt =
             792.0; // 15840 twips landscape, as the DOCX declares
         final lefts = <double>[];
+        var lastWidth = 0.0;
         for (final marker in docxWideTableMarkers) {
           final hits = await doc.search(
             query: marker,
@@ -203,6 +204,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
                 '$pageWidthPt pt page (declared widths ignored, issue #243)',
           );
           lefts.add(hit.rect.x);
+          lastWidth = hit.rect.width;
         }
         // "On the page" alone would also pass a content-sampled layout, so
         // check the geometry: each column's left edge advances by its
@@ -219,6 +221,19 @@ void registerStandaloneTests(Pdf Function() createPdf) {
           );
           scales.add(gap / (docxWideTableGridCols[i - 1] / 20.0));
         }
+        // The declared widths exceed the printable width, so the converter
+        // scales them down to fill it: the row must span most of the page.
+        // A layout that shrank every column (or fell back to the 20 pt
+        // minimum) would keep every marker on the page and still be wrong.
+        final rightEdge = lefts.last + lastWidth;
+        expect(
+          rightEdge - lefts.first,
+          greaterThanOrEqualTo(pageWidthPt * 0.75),
+          reason:
+              'the row spans only ${rightEdge - lefts.first} pt of the '
+              '$pageWidthPt pt page — declared widths were shrunk, not '
+              'honored (issue #243)',
+        );
         final k = scales.reduce((a, b) => a + b) / scales.length;
         for (var i = 0; i < scales.length; i++) {
           expect(

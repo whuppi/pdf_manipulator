@@ -14,7 +14,7 @@ List<String> get docxWideTableMarkers =>
 
 /// The exact declared column widths from issue #243, in twips.
 /// Sum = 14,796 twips (10.275 in) on a landscape page whose usable
-/// width (pgSz − margins) is 14,400 twips (10 in) — 2.6% over, which a
+/// width (pgSz − margins) is 14,400 twips (10 in) — 2.75% over, which a
 /// correct renderer honors nearly as-is or clips slightly.
 const docxWideTableGridCols = [
   666, 1330, 1237, 1401, 1258, 1236, 2160, 1440, 1260, 1440, 1368, //
