@@ -7,11 +7,11 @@
 # of the workflow-security doctrine — no checkout, no artifact ingestion, the
 # only fork-influenced value is the numeric run id handed to `gh run rerun`,
 # least-privilege actions:write, owner-guarded, and run_attempt==1 so it fires
-# at most once. The ignore below is only safe while all of that holds.
+# at most once. The dangerous-triggers policy for this file in
+# .github/zizmor.yml is only sound while all of that holds.
 name: Auto-retry
 
 on:
-  # zizmor: ignore[dangerous-triggers]
   workflow_run:
     workflows: [CI, Full Test]
     types: [completed]
@@ -27,4 +27,4 @@ jobs:
   retry:
     permissions:
       actions: write  # gh run rerun re-runs the failed jobs of the run
-    uses: whuppi/ci/.github/workflows/retry.yml@v2.7.3
+    uses: whuppi/ci/.github/workflows/retry.yml@v2.7.6

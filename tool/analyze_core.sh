@@ -43,9 +43,10 @@ if [ -z "${ANALYZE_DIRS:-}" ]; then
     [ -d "$d" ] && ANALYZE_DIRS="${ANALYZE_DIRS:+$ANALYZE_DIRS }$d"
   done
 fi
-# ANALYZE_DIRS is a space-separated dir list meant to word-split into args.
-# shellcheck disable=SC2086
-set -- $ANALYZE_DIRS
+# ANALYZE_DIRS is a space-separated dir list; split it explicitly. The
+# array-or-nothing expansion keeps an empty list safe under set -u on bash 3.2.
+read -ra analyze_dirs <<< "$ANALYZE_DIRS"
+set -- ${analyze_dirs[@]+"${analyze_dirs[@]}"}
 if [ "$#" -eq 0 ]; then
   echo "analyze_core: no analyzable dirs found — run from the package root." >&2
   exit 2

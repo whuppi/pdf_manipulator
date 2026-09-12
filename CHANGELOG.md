@@ -81,6 +81,13 @@ CONTENT RULES (never change)
 
 <!-- Add new versions below, newest first. -->
 
+## 4.2.1
+
+- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
+- Fixed a DOCX table converting to PDF at several times its declared width, with most columns off the page. The converter sized every column from a sample of its cell content and never read the widths the document declares in `w:tblGrid`, so no edit to `w:tblW`, `w:gridCol` or `w:tcW` could change the layout. Declared widths now drive the columns, scaled down proportionally when they exceed the printable width; content sampling remains only for tables that declare no widths, and can no longer size a table past the page edge ([#243](https://github.com/whuppi/pdf_manipulator/issues/243) reported by [@kampmapa1-design](https://github.com/kampmapa1-design))
+- Fixed a web instance failing to start with `WASM init failed: Out of memory` during rapid create-and-dispose churn. The page-wide worker budget freed a slot the moment `worker.terminate()` was called, but the browser releases a worker's WASM memory later, on its own schedule, so a burst of disposes let new workers boot into memory that dead ones still held. Every worker now holds a liveness lock for its lifetime in all three I/O modes (OPFS reclaim already used it), and a slot returns only when the browser confirms the worker is gone — the next boot past the cap waits its turn, as the native lane budget already did
+- Vendored engines synced upstream: pdf_oxide v0.3.73 → v0.3.78 (extraction, rendering and table-structure fixes; the R6 encryption key fix we carried as a patch landed upstream, and our `/Perms` fix rides on top) and office_oxide v0.1.3 → v0.1.11 (write-path correctness fixes, legacy `.doc` tables and lists)
+
 ## 4.2.0
 
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)

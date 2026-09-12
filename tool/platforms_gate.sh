@@ -77,9 +77,10 @@ fi
 pana_used="$(jq -r '.runtimeInfo.panaVersion // "?"' "$out")"
 
 missing=""
-# EXPECTED_PLATFORMS is a space-separated list meant to word-split.
-# shellcheck disable=SC2086
-set -- $EXPECTED_PLATFORMS
+# EXPECTED_PLATFORMS is a space-separated list; split it explicitly (the
+# array-or-nothing expansion keeps an empty list safe under set -u on bash 3.2).
+read -ra expected_platforms <<< "$EXPECTED_PLATFORMS"
+set -- ${expected_platforms[@]+"${expected_platforms[@]}"}
 for platform in "$@"; do
   if ! jq -e --arg t "platform:$platform" '.tags | index($t)' "$out" >/dev/null 2>&1; then
     missing="$missing $platform"

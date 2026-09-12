@@ -10,6 +10,7 @@ import 'package:test/test.dart';
 
 import '../../fixtures/generated/fixtures.dart';
 import '../../fixtures/handwritten.dart';
+import '../../fixtures/handwritten_docx.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
 
@@ -167,5 +168,85 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       final pdfBytes = pdfSink.takeBytes();
       expect(String.fromCharCodes(pdfBytes.sublist(0, 5)), startsWith('%PDF'));
     }, timeout: t(1));
+
+    test(
+      'convertToPdf DOCX fixed-layout table honors declared column widths',
+      () async {
+        // Issue #243: the fixture's 11 gridCol widths sum to 10.275 in on a
+        // 10 in usable landscape page, yet the engine laid the table out at
+        // ~3.4x that width — text runs out past x=2500 pt on a 792 pt page.
+        // Every column marker must land inside the page.
+        final pdf = createPdf();
+        final sink = TestSink();
+        await pdf.convertToPdf(
+          src(buildWideTableDocx()),
+          sink,
+          format: PdfDocumentFormat.docx,
+        );
+        final doc = await pdf.open(src(sink.takeBytes()));
+        const pageWidthPt =
+            792.0; // 15840 twips landscape, as the DOCX declares
+        final lefts = <double>[];
+        var lastWidth = 0.0;
+        for (final marker in docxWideTableMarkers) {
+          final hits = await doc.search(
+            query: marker,
+            pages: const PdfPages.all(),
+          );
+          expect(hits, hasLength(1), reason: '$marker: one hit expected');
+          final hit = hits.single;
+          // The buggy layout ran the row out to ~3074 pt on this page.
+          expect(
+            hit.rect.x + hit.rect.width,
+            lessThanOrEqualTo(pageWidthPt + 1),
+            reason:
+                '$marker spans to x=${hit.rect.x + hit.rect.width} — off the '
+                '$pageWidthPt pt page (declared widths ignored, issue #243)',
+          );
+          lefts.add(hit.rect.x);
+          lastWidth = hit.rect.width;
+        }
+        // "On the page" alone would also pass a content-sampled layout, so
+        // check the geometry: each column's left edge advances by its
+        // declared gridCol width times ONE scale factor. Identical prose in
+        // every cell makes a sampled layout step by equal gaps instead, and
+        // the 666-twip first column gives that away at once.
+        final scales = <double>[];
+        for (var i = 1; i < lefts.length; i++) {
+          final gap = lefts[i] - lefts[i - 1];
+          expect(
+            gap,
+            greaterThan(0),
+            reason: 'columns must advance left→right',
+          );
+          scales.add(gap / (docxWideTableGridCols[i - 1] / 20.0));
+        }
+        // The declared widths exceed the printable width, so the converter
+        // scales them down to fill it: the row must span most of the page.
+        // A layout that shrank every column (or fell back to the 20 pt
+        // minimum) would keep every marker on the page and still be wrong.
+        final rightEdge = lefts.last + lastWidth;
+        expect(
+          rightEdge - lefts.first,
+          greaterThanOrEqualTo(pageWidthPt * 0.75),
+          reason:
+              'the row spans only ${rightEdge - lefts.first} pt of the '
+              '$pageWidthPt pt page — declared widths were shrunk, not '
+              'honored (issue #243)',
+        );
+        final k = scales.reduce((a, b) => a + b) / scales.length;
+        for (var i = 0; i < scales.length; i++) {
+          expect(
+            scales[i],
+            closeTo(k, k * 0.03),
+            reason:
+                'column ${i + 1} width is not the declared gridCol scaled by '
+                'the table-wide factor $k (issue #243)',
+          );
+        }
+        await doc.dispose();
+      },
+      timeout: t(1),
+    );
   });
 }

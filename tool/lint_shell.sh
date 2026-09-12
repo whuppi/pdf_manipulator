@@ -22,6 +22,16 @@
 #        (in-place sed, perl-regex grep, and friends). A curated blocklist,
 #        not exhaustive: no static tool covers all of coreutils, so the macOS
 #        CI leg (real BSD) stays the backstop. Add gotchas here as they bite.
+#   5. versions.env single-writer — only set_kv may write the sourced pin file.
+#   6. no inline lint suppressions — a finding is fixed at its cause, never
+#        silenced next to the line. The check rejects the inline markers of
+#        every linter in the fleet (shellcheck's per-line disable, zizmor's
+#        per-line ignore, actionlint's disable comment, the Dart analyzer's
+#        ignore and ignore-for-file comments, Python's noqa and type-ignore
+#        comments) in every tracked file except Markdown, which names them
+#        in prose. Tool-level policy declared once in a reviewed config file
+#        (zizmor.yml's per-rule ignore for a structurally required trigger)
+#        is not an inline suppression and is out of this check's scope.
 #
 # Both scans are plain grep: never paste a flagged construct verbatim into a
 # comment (grep can't tell code from comment) — name it, as this header does.
@@ -175,6 +185,24 @@ if [ -z "$vw" ]; then
 else
   echo "  versions.env written outside set_kv (sourced file; an unvalidated write executes):" >&2
   printf '%s\n' "$vw" | sed 's/^/    /' >&2
+  status=1
+fi
+
+# ── 6. no inline lint suppressions ──────────────────────────────────
+# Markers are matched with a quantifier between their words, so this file's
+# own pattern text never matches itself (the header names them in prose).
+echo "── no inline lint suppressions (tracked files, Markdown excepted) ──"
+sup_files=(/dev/null)
+while IFS= read -r f; do
+  case "$f" in *.md|*.MD|tool/lint_shell.sh) continue ;; esac
+  sup_files+=("$f")
+done < <(git ls-files)
+sup=$(grep -nE '(shellcheck[[:space:]]+disable=|zizmor:[[:space:]]+ignore\[|actionlint-[d]isable|//[[:space:]]+ignore(_for_file)?:|#[[:space:]]+noqa([[:space:]:]|$)|#[[:space:]]+type:[[:space:]]+ignore|#[[:space:]]+pylint:[[:space:]]+disable|#[[:space:]]+nosec|eslint-[d]isable)' "${sup_files[@]}" 2>/dev/null || true)
+if [ -z "$sup" ]; then
+  echo "  clean — no linter is silenced inline"
+else
+  echo "  inline suppression — fix the finding at its cause (a structurally required exception belongs in the tool's config file, with its reason):" >&2
+  printf '%s\n' "$sup" | sed 's/^/    /' >&2
   status=1
 fi
 
