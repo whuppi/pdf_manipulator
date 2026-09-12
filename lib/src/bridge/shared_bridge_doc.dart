@@ -172,7 +172,7 @@ class _SharedDocHandle extends BridgeDocHandle {
   }
 
   @override
-  PdfTask<List<PdfSignatureInfo>> getSignatures() => _exec(
+  PdfTask<List<PdfSignatureInfo>> get signatures => _exec(
     EngineOp.getSignatures,
     {},
   ).map((map) => codec.decodeSignatures(map));

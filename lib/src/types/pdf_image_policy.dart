@@ -4,7 +4,7 @@ import 'package:meta/meta.dart';
 ///
 /// Resolution targets are pixels per inch as the image is drawn on the
 /// page (a 128-pixel image drawn 32 points wide is 288 ppi). An image is
-/// downsampled only when it exceeds its target by more than [threshold],
+/// downsampled only when it exceeds its target by more than [downsampleThreshold],
 /// and only to the target — never below what the largest placement needs.
 /// The presets follow Ghostscript's `/screen`, `/ebook` and `/printer`
 /// resolutions.
@@ -13,10 +13,10 @@ class PdfImagePolicy {
   /// Creates a policy; every `null` resolution means "never downsample
   /// that class of image".
   const PdfImagePolicy({
-    this.colorDpi,
-    this.grayDpi,
-    this.monoDpi,
-    this.threshold = 1.5,
+    this.colorPpi,
+    this.grayPpi,
+    this.monoPpi,
+    this.downsampleThreshold = 1.5,
     this.jpegQuality = 75,
     this.allowLossy = true,
     this.convertCmykToRgb = false,
@@ -28,9 +28,9 @@ class PdfImagePolicy {
   /// On-screen reading: 72 ppi colour and gray, 300 ppi bilevel,
   /// JPEG quality 60, CMYK converted to RGB.
   static const screen = PdfImagePolicy(
-    colorDpi: 72,
-    grayDpi: 72,
-    monoDpi: 300,
+    colorPpi: 72,
+    grayPpi: 72,
+    monoPpi: 300,
     jpegQuality: 60,
     convertCmykToRgb: true,
   );
@@ -38,9 +38,9 @@ class PdfImagePolicy {
   /// E-readers and tablets: 150 ppi colour and gray, 300 ppi bilevel,
   /// JPEG quality 75, CMYK converted to RGB.
   static const ebook = PdfImagePolicy(
-    colorDpi: 150,
-    grayDpi: 150,
-    monoDpi: 300,
+    colorPpi: 150,
+    grayPpi: 150,
+    monoPpi: 300,
     convertCmykToRgb: true,
   );
 
@@ -48,9 +48,9 @@ class PdfImagePolicy {
   /// JPEG quality 85 with full chroma (what Distiller's print and prepress
   /// settings pin), CMYK kept.
   static const print = PdfImagePolicy(
-    colorDpi: 300,
-    grayDpi: 300,
-    monoDpi: 1200,
+    colorPpi: 300,
+    grayPpi: 300,
+    monoPpi: 1200,
     jpegQuality: 85,
     chromaSubsampling: PdfChromaSubsampling.full,
   );
@@ -61,17 +61,17 @@ class PdfImagePolicy {
   static const lossless = PdfImagePolicy(allowLossy: false, minSavings: 0);
 
   /// Target resolution for RGB and CMYK images.
-  final double? colorDpi;
+  final double? colorPpi;
 
   /// Target resolution for gray images.
-  final double? grayDpi;
+  final double? grayPpi;
 
   /// Target resolution for bilevel images (scans, stencil masks).
-  final double? monoDpi;
+  final double? monoPpi;
 
   /// Downsample only when the effective resolution exceeds the target
   /// times this factor.
-  final double threshold;
+  final double downsampleThreshold;
 
   /// Quality (1–100) for every JPEG written.
   final int jpegQuality;
@@ -100,7 +100,7 @@ class PdfImagePolicy {
 
   @override
   String toString() =>
-      'PdfImagePolicy(color: $colorDpi, gray: $grayDpi, mono: $monoDpi, '
+      'PdfImagePolicy(color: $colorPpi, gray: $grayPpi, mono: $monoPpi, '
       'q$jpegQuality ${chromaSubsampling.name}, lossy: $allowLossy, '
       'cmyk→rgb: $convertCmykToRgb, minSavings: $minSavings)';
 }

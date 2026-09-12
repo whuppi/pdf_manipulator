@@ -167,7 +167,7 @@ final path = await plugin.pdfCompressor(
 
 // v1
 await pdf.compress(source, sink); // PdfImagePolicy.ebook: 150 ppi, JPEG q75
-await pdf.compress(source, sink, images: PdfImagePolicy(colorDpi: 150, jpegQuality: 70));
+await pdf.compress(source, sink, images: PdfImagePolicy(colorPpi: 150, jpegQuality: 70));
 ```
 
 `imageQuality` and `imageScale` (a blind factor) are replaced by one `PdfImagePolicy`: a resolution target per image class, so each image is downsampled to the pixels per inch it is actually drawn at (`screen` 72, `ebook` 150, `print` 300, or your own numbers), plus the JPEG quality. `PdfEditor.reduceImages(policy)` runs the same reducer inside an edit session and returns a per-image report. `unEmbedFonts` is now a separate editor method:

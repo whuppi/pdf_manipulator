@@ -69,9 +69,9 @@ class PdfEditor {
   // ── Metadata ──
 
   /// Returns the document title metadata.
-  PdfTask<String> getTitle() {
+  PdfTask<String> get title {
     _check();
-    return _handle.getTitle();
+    return _handle.title;
   }
 
   /// Sets the document title metadata.
@@ -81,9 +81,9 @@ class PdfEditor {
   }
 
   /// Returns the document author metadata.
-  PdfTask<String> getAuthor() {
+  PdfTask<String> get author {
     _check();
-    return _handle.getAuthor();
+    return _handle.author;
   }
 
   /// Sets the document author metadata.
@@ -93,9 +93,9 @@ class PdfEditor {
   }
 
   /// Returns the document subject metadata.
-  PdfTask<String> getSubject() {
+  PdfTask<String> get subject {
     _check();
-    return _handle.getSubject();
+    return _handle.subject;
   }
 
   /// Sets the document subject metadata.
@@ -105,9 +105,9 @@ class PdfEditor {
   }
 
   /// Returns the document keywords metadata.
-  PdfTask<String> getKeywords() {
+  PdfTask<String> get keywords {
     _check();
-    return _handle.getKeywords();
+    return _handle.keywords;
   }
 
   /// Sets the document keywords metadata.
@@ -117,9 +117,9 @@ class PdfEditor {
   }
 
   /// Returns the document producer metadata (the software that produced the PDF).
-  PdfTask<String> getProducer() {
+  PdfTask<String> get producer {
     _check();
-    return _handle.getProducer();
+    return _handle.producer;
   }
 
   /// Sets the document producer metadata.
@@ -130,9 +130,9 @@ class PdfEditor {
 
   /// Returns the document creation date as a raw PDF date string
   /// (e.g. `D:20240101120000Z`).
-  PdfTask<String> getCreationDate() {
+  PdfTask<String> get creationDate {
     _check();
-    return _handle.getCreationDate();
+    return _handle.creationDate;
   }
 
   /// Sets the document creation date. Expects a raw PDF date string
@@ -157,9 +157,9 @@ class PdfEditor {
   }
 
   /// Returns the media box (bounding rectangle) of the given [page].
-  PdfTask<PdfRect> getPageMediaBox(int page) {
+  PdfTask<PdfRect> pageMediaBox(int page) {
     _check();
-    return _handle.getPageMediaBox(page);
+    return _handle.pageMediaBox(page);
   }
 
   /// Removes the given [page] (0-based index) from the document.

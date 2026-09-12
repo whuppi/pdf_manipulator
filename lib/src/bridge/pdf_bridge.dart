@@ -106,7 +106,7 @@ abstract class BridgeDocHandle {
   Stream<PdfImage> extractImages({required PdfPages pages});
 
   /// Returns signature info for all signatures in the document.
-  PdfTask<List<PdfSignatureInfo>> getSignatures();
+  PdfTask<List<PdfSignatureInfo>> get signatures;
 
   /// Verifies all digital signatures, returning true if all valid.
   PdfTask<bool> verifySignatures();
@@ -146,37 +146,37 @@ abstract class BridgeEditorHandle {
   // ── Metadata ──
 
   /// Returns the document title.
-  PdfTask<String> getTitle();
+  PdfTask<String> get title;
 
   /// Sets the document title.
   PdfTask<void> setTitle(String value);
 
   /// Returns the document author.
-  PdfTask<String> getAuthor();
+  PdfTask<String> get author;
 
   /// Sets the document author.
   PdfTask<void> setAuthor(String value);
 
   /// Returns the document subject.
-  PdfTask<String> getSubject();
+  PdfTask<String> get subject;
 
   /// Sets the document subject.
   PdfTask<void> setSubject(String value);
 
   /// Returns the document keywords.
-  PdfTask<String> getKeywords();
+  PdfTask<String> get keywords;
 
   /// Sets the document keywords.
   PdfTask<void> setKeywords(String value);
 
   /// Returns the document producer.
-  PdfTask<String> getProducer();
+  PdfTask<String> get producer;
 
   /// Sets the document producer.
   PdfTask<void> setProducer(String value);
 
   /// Returns the document creation date (raw PDF date string).
-  PdfTask<String> getCreationDate();
+  PdfTask<String> get creationDate;
 
   /// Sets the document creation date (raw PDF date string).
   PdfTask<void> setCreationDate(String value);
@@ -190,7 +190,7 @@ abstract class BridgeEditorHandle {
   PdfTask<void> rotateAllPages({required int degrees});
 
   /// Returns the media box rectangle for [page].
-  PdfTask<PdfRect> getPageMediaBox(int page);
+  PdfTask<PdfRect> pageMediaBox(int page);
 
   /// Deletes a single [page].
   PdfTask<void> deletePage(int page);

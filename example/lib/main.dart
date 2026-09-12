@@ -1207,8 +1207,7 @@ class _DocTabState extends State<_DocTab>
                       icon: Icons.draw,
                       title: 'List signatures',
                       loading: loading,
-                      onRun: () => runTask(
-                          'Signatures', () => doc.getSignatures(),
+                      onRun: () => runTask('Signatures', () => doc.signatures,
                           done: (sigs) => '${sigs.length} signature(s)')),
                   _Op(
                       icon: Icons.verified_user,
@@ -1886,7 +1885,7 @@ class _EditorTabState extends State<_EditorTab>
                       title: 'Get page 0 media box',
                       loading: loading,
                       onRun: () => _edit('MediaBox', (e) async {
-                            final r = await e.getPageMediaBox(0);
+                            final r = await e.pageMediaBox(0);
                             setState(() => status =
                                 'Page 0: ${r.width.toStringAsFixed(0)}×'
                                     '${r.height.toStringAsFixed(0)} at '

@@ -533,7 +533,7 @@ How do you know what to keep? Each capability covers a small set of methods. Cor
 |---|---|---|---|
 | `core` | everything else — merge, split, forms, watermark, encrypt, build… | — | always included (~6.3 MB) |
 | `render` | `doc.render()`, `editor.reduceImages()`, the `compress` one-shot | — | +4.2 MB |
-| `signatures` | `sign()`, `doc.getSignatures()`, `doc.verifySignatures()` | — | +0.9 MB |
+| `signatures` | `sign()`, `doc.signatures`, `doc.verifySignatures()` | — | +0.9 MB |
 | `pdfa` | `doc.validatePdfA()`, `doc.validatePdfUa()`, `convertToPdfA` | — | +0.1 MB |
 | `extract` | `doc.extract()`, `doc.search()`, `doc.classifyPage()`, `doc.classifyDocument()` | — | +3.0 MB |
 | `office` | `convertTo`, `convertToPdf` (DOCX / PPTX / XLSX) | `extract`, automatically | +2.5 MB on top of `extract` |

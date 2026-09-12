@@ -105,6 +105,7 @@ CONTENT RULES (never change)
 
 - **Breaking:** `PdfEditor.optimizeImages(quality:, minSize:)` is removed → use `reduceImages(PdfImagePolicy(jpegQuality: quality, minPixels: minSize, convertCmykToRgb: true))`; the count it returned is `report.changed`
 - **Breaking:** `compress(imageQuality:)` → `compress(images:)`, a `PdfImagePolicy` defaulting to `PdfImagePolicy.ebook` (150 ppi, JPEG quality 75), so a plain `compress` now downsamples images drawn above 225 ppi; pass `PdfImagePolicy(jpegQuality: q)` for the old behaviour
+- **Breaking:** the editor's argument-less reads are getters, as Effective Dart asks (no `get` prefix; a property reads as a noun): `getTitle()` → `title`, `getAuthor()` → `author`, `getSubject()` → `subject`, `getKeywords()` → `keywords`, `getProducer()` → `producer`, `getCreationDate()` → `creationDate`, and on `PdfDoc` `getSignatures()` → `signatures`; the one read with an argument is a noun method, `getPageMediaBox(page)` → `pageMediaBox(page)`
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Added `PdfEditor.pageImages(page)` — every image XObject drawn on a page with its resource name, bounds and transform; the name is what `resizeImage` takes
 - Added `PdfEditor.repositionImage(page, name, x:, y:)` and `setImageBounds(page, name, bounds)` — move, or move and resize, an image by the name `pageImages` lists

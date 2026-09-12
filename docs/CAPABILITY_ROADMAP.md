@@ -36,7 +36,7 @@ Five files, strict rules:
 | Search text | `search_text` | `search()` | DONE |
 | Render pages | `render_pages_streamed` | `render()` | DONE |
 | Extract images | `extract_images_streamed` | `extractImages()` | DONE |
-| Get signatures | `get_signatures` | `getSignatures()` | DONE |
+| Get signatures | `get_signatures` | `signatures` | DONE |
 | Verify signatures | `verify_signatures` | `verifySignatures()` | DONE |
 | Validate PDF/A | `validate_pdfa` | `validatePdfA()` | DONE |
 | Validate PDF/UA | `validate_pdfua` | `validatePdfUa()` | DONE |
@@ -63,12 +63,12 @@ Five files, strict rules:
 | Set author | `set_author` | `setAuthor()` | DONE |
 | Set subject | `set_subject` | `setSubject()` | DONE |
 | Set keywords | `set_keywords` | `setKeywords()` | DONE |
-| Get title | `title` | `getTitle()` | DONE |
-| Get author | `author` | `getAuthor()` | DONE |
-| Get subject | `subject` | `getSubject()` | DONE |
-| Get keywords | `keywords` | `getKeywords()` | DONE |
-| Get producer | `producer` | `getProducer()` | DONE |
-| Get creation date | `creation_date` | `getCreationDate()` | DONE |
+| Get title | `title` | `title` | DONE |
+| Get author | `author` | `author` | DONE |
+| Get subject | `subject` | `subject` | DONE |
+| Get keywords | `keywords` | `keywords` | DONE |
+| Get producer | `producer` | `producer` | DONE |
+| Get creation date | `creation_date` | `creationDate` | DONE |
 | Scrub metadata | via bridge | `scrubMetadata()` | DONE |
 | Rotate page | `rotate_page_by` | `rotatePage()` | DONE |
 | Rotate all pages | `rotate_all_pages` | `rotateAllPages()` | DONE |
@@ -93,7 +93,7 @@ Five files, strict rules:
 | Add redaction | `add_redaction` | `addRedaction()` | DONE |
 | Redaction count | `redaction_count` | `redactionCount()` | DONE |
 | Apply redactions | `apply_all_redactions` | `applyRedactions()` | DONE |
-| Get page media box | `get_page_media_box` | `getPageMediaBox()` | DONE |
+| Get page media box | `get_page_media_box` | `pageMediaBox()` | DONE |
 | Is modified | `is_modified` | `isModified` | DONE |
 | Page count | `current_page_count` | `pageCount` | DONE |
 | Version | `version` | `version` | DONE |

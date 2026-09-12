@@ -157,9 +157,9 @@ void main() {
   group('encodeImagePolicy', () {
     test('omits null resolutions and carries every knob', () {
       final args = encodeImagePolicy(PdfImagePolicy.lossless);
-      expect(args.containsKey('colorDpi'), isFalse);
-      expect(args.containsKey('grayDpi'), isFalse);
-      expect(args.containsKey('monoDpi'), isFalse);
+      expect(args.containsKey('colorPpi'), isFalse);
+      expect(args.containsKey('grayPpi'), isFalse);
+      expect(args.containsKey('monoPpi'), isFalse);
       expect(args['allowLossy'], isFalse);
       expect(args['jpegQuality'], 75);
       expect(args['minPixels'], 32);
@@ -168,9 +168,9 @@ void main() {
       final screen = encodeImagePolicy(PdfImagePolicy.screen);
       expect(screen['minSavings'], 0.10);
       expect(encodeImagePolicy(PdfImagePolicy.print)['chroma'], 'full');
-      expect(screen['colorDpi'], 72);
-      expect(screen['monoDpi'], 300);
-      expect(screen['threshold'], 1.5);
+      expect(screen['colorPpi'], 72);
+      expect(screen['monoPpi'], 300);
+      expect(screen['downsampleThreshold'], 1.5);
       expect(screen['convertCmykToRgb'], isTrue);
     });
   });

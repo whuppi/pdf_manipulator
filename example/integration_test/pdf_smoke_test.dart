@@ -100,7 +100,7 @@ void main() {
 
   testWidgets('signatures + verify', (t) async {
     final doc = await pdf.open(_src(minimalPdf));
-    expect(await doc.getSignatures(), isEmpty,
+    expect(await doc.signatures, isEmpty,
         reason: 'unsigned fixture — a phantom signature is worse '
             'than none');
     expect(await doc.verifySignatures(), isFalse);
@@ -354,7 +354,7 @@ void main() {
     await pdf.sign(_src(minimalPdf), sink,
         credentials: const PdfSigningCredentials.pem(testCertPem, testKeyPem));
     final doc = await pdf.open(_src(sink.takeBytes()));
-    expect(await doc.getSignatures(), isNotEmpty,
+    expect(await doc.signatures, isNotEmpty,
         reason: 'a signed PDF with no retrievable signature is not '
             'signed');
     await doc.dispose();
@@ -399,10 +399,10 @@ void main() {
     await e.setAuthor('A');
     await e.setSubject('S');
     await e.setKeywords('K');
-    expect(await e.getTitle(), 'T');
-    expect(await e.getAuthor(), 'A');
-    expect(await e.getSubject(), 'S');
-    expect(await e.getKeywords(), 'K');
+    expect(await e.title, 'T');
+    expect(await e.author, 'A');
+    expect(await e.subject, 'S');
+    expect(await e.keywords, 'K');
     expect(await e.isModified, isTrue);
     expect(await e.pageCount, 1);
     expect(await e.version, isNotEmpty);
@@ -424,7 +424,7 @@ void main() {
     final e = await pdf.edit(_src(twoPage));
     await e.rotatePage(0, degrees: 90);
     await e.rotateAllPages(degrees: 180);
-    final mb = await e.getPageMediaBox(0);
+    final mb = await e.pageMediaBox(0);
     expect(mb.width, greaterThan(0));
     await e.movePage(from: 0, to: 1);
     await e.deletePage(1);

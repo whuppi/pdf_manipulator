@@ -380,9 +380,9 @@ void registerDocTests(Pdf Function() createPdf) {
 
     // ── Signatures ────────────────────────────────────────────────
 
-    test('getSignatures empty for unsigned PDF', () async {
+    test('signatures empty for unsigned PDF', () async {
       final doc = await createPdf().open(src(minimalPdf));
-      expect(await doc.getSignatures(), isEmpty);
+      expect(await doc.signatures, isEmpty);
       await doc.dispose();
     }, timeout: t(1));
 

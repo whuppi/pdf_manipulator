@@ -30,7 +30,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(signed));
       expect(doc.pageCount, 1);
       expect(signed.length, greaterThan(minimalPdf.length));
-      final sigs = await doc.getSignatures();
+      final sigs = await doc.signatures;
       expect(sigs, isNotEmpty);
       expect(sigs.first.signerName, isNotNull);
       expect(sigs.first.signerName, isNotEmpty);
@@ -48,7 +48,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       final signed = sink.takeBytes();
       final doc = await pdf.open(src(signed));
       expect(doc.pageCount, 1);
-      final sigs = await doc.getSignatures();
+      final sigs = await doc.signatures;
       expect(sigs, isNotEmpty);
       expect(sigs.first.signerName, isNotNull);
       await doc.dispose();

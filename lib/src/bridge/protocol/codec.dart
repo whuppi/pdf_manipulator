@@ -362,10 +362,10 @@ List<PdfPageImage> decodePageImages(Map<String, Object?> r) {
 /// Encodes an image policy as flat `reduceImages` arguments. A `null`
 /// resolution is omitted, which the engine reads as "never downsample".
 Map<String, Object?> encodeImagePolicy(PdfImagePolicy policy) => {
-  if (policy.colorDpi != null) 'colorDpi': policy.colorDpi,
-  if (policy.grayDpi != null) 'grayDpi': policy.grayDpi,
-  if (policy.monoDpi != null) 'monoDpi': policy.monoDpi,
-  'threshold': policy.threshold,
+  if (policy.colorPpi != null) 'colorPpi': policy.colorPpi,
+  if (policy.grayPpi != null) 'grayPpi': policy.grayPpi,
+  if (policy.monoPpi != null) 'monoPpi': policy.monoPpi,
+  'downsampleThreshold': policy.downsampleThreshold,
   'jpegQuality': policy.jpegQuality,
   'allowLossy': policy.allowLossy,
   'convertCmykToRgb': policy.convertCmykToRgb,

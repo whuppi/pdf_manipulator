@@ -134,10 +134,10 @@ class PdfDoc {
   }
 
   /// Returns metadata for all digital signatures in the document.
-  PdfTask<List<PdfSignatureInfo>> getSignatures() {
+  PdfTask<List<PdfSignatureInfo>> get signatures {
     KeepRecord.op('signatures');
     _check();
-    return _handle.getSignatures();
+    return _handle.signatures;
   }
 
   /// Verifies all digital signatures — returns true if all are valid.

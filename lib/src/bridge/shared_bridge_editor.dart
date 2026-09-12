@@ -65,37 +65,37 @@ class _SharedEditorHandle extends BridgeEditorHandle {
   ).map((map) => map['modified'] as bool? ?? false);
 
   @override
-  PdfTask<String> getTitle() => _exec(
+  PdfTask<String> get title => _exec(
     EngineOp.editorGetMetadata,
     {},
   ).map((map) => codec.decodeEditorMetadata(map).title);
 
   @override
-  PdfTask<String> getAuthor() => _exec(
+  PdfTask<String> get author => _exec(
     EngineOp.editorGetMetadata,
     {},
   ).map((map) => codec.decodeEditorMetadata(map).author);
 
   @override
-  PdfTask<String> getSubject() => _exec(
+  PdfTask<String> get subject => _exec(
     EngineOp.editorGetMetadata,
     {},
   ).map((map) => codec.decodeEditorMetadata(map).subject);
 
   @override
-  PdfTask<String> getKeywords() => _exec(
+  PdfTask<String> get keywords => _exec(
     EngineOp.editorGetMetadata,
     {},
   ).map((map) => codec.decodeEditorMetadata(map).keywords);
 
   @override
-  PdfTask<String> getProducer() => _exec(
+  PdfTask<String> get producer => _exec(
     EngineOp.editorGetMetadata,
     {},
   ).map((map) => codec.decodeEditorMetadata(map).producer);
 
   @override
-  PdfTask<String> getCreationDate() => _exec(
+  PdfTask<String> get creationDate => _exec(
     EngineOp.editorGetMetadata,
     {},
   ).map((map) => codec.decodeEditorMetadata(map).creationDate);
@@ -129,7 +129,7 @@ class _SharedEditorHandle extends BridgeEditorHandle {
   PdfTask<void> rotateAllPages({required int degrees}) =>
       _mutate('rotateAll', {'degrees': degrees});
   @override
-  PdfTask<PdfRect> getPageMediaBox(int page) => _exec(
+  PdfTask<PdfRect> pageMediaBox(int page) => _exec(
     EngineOp.editorPageMediaBox,
     {'page': page},
   ).map((map) => codec.decodeMediaBox(map));

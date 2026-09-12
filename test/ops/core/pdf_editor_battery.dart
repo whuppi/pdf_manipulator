@@ -59,7 +59,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final output = sink.takeBytes();
       final e2 = await pdf.edit(src(output));
       expect(
-        await e2.getTitle(),
+        await e2.title,
         contains('Behavioral Test Title'),
         reason: 'the title must survive save and re-open',
       );
@@ -80,7 +80,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final metaPdf = prepSink.takeBytes();
 
       final check = await pdf.edit(src(metaPdf));
-      expect(await check.getTitle(), contains('ScrubMeTitle'));
+      expect(await check.title, contains('ScrubMeTitle'));
       await check.dispose();
 
       final editor = await pdf.edit(src(metaPdf));
@@ -90,42 +90,42 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final after = await pdf.edit(src(sink.takeBytes()));
       expect(
-        await after.getTitle(),
+        await after.title,
         isNot(contains('ScrubMeTitle')),
         reason: 'scrubbed metadata must be gone from the document',
       );
-      expect(await after.getAuthor(), isNot(contains('ScrubMeAuthor')));
+      expect(await after.author, isNot(contains('ScrubMeAuthor')));
       await after.dispose();
     }, timeout: t(1));
 
-    test('setAuthor + getAuthor roundtrips', () async {
+    test('setAuthor + author roundtrips', () async {
       final editor = await createPdf().edit(src(minimalPdf));
       await editor.setAuthor('Test Author');
-      final author = await editor.getAuthor();
+      final author = await editor.author;
       expect(author, contains('Test Author'));
       await editor.dispose();
     }, timeout: t(1));
 
-    test('setSubject + getSubject roundtrips', () async {
+    test('setSubject + subject roundtrips', () async {
       final editor = await createPdf().edit(src(minimalPdf));
       await editor.setSubject('Test Subject');
-      final subject = await editor.getSubject();
+      final subject = await editor.subject;
       expect(subject, contains('Test Subject'));
       await editor.dispose();
     }, timeout: t(1));
 
-    test('setKeywords + getKeywords roundtrips', () async {
+    test('setKeywords + keywords roundtrips', () async {
       final editor = await createPdf().edit(src(minimalPdf));
       await editor.setKeywords('dart, pdf, test');
-      final kw = await editor.getKeywords();
+      final kw = await editor.keywords;
       expect(kw, contains('dart'));
       await editor.dispose();
     }, timeout: t(1));
 
-    test('setProducer + getProducer roundtrips', () async {
+    test('setProducer + producer roundtrips', () async {
       final editor = await createPdf().edit(src(minimalPdf));
       await editor.setProducer('pdf_manipulator');
-      final producer = await editor.getProducer();
+      final producer = await editor.producer;
       expect(producer, contains('pdf_manipulator'));
       await editor.dispose();
     }, timeout: t(1));
@@ -139,17 +139,17 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final e2 = await pdf.edit(src(sink.takeBytes()));
       expect(
-        await e2.getProducer(),
+        await e2.producer,
         contains('Behavioral Producer'),
         reason: 'the producer must survive save and re-open',
       );
       await e2.dispose();
     }, timeout: t(1));
 
-    test('setCreationDate + getCreationDate roundtrips', () async {
+    test('setCreationDate + creationDate roundtrips', () async {
       final editor = await createPdf().edit(src(minimalPdf));
       await editor.setCreationDate('D:20240101120000Z');
-      final date = await editor.getCreationDate();
+      final date = await editor.creationDate;
       expect(date, contains('20240101'));
       await editor.dispose();
     }, timeout: t(1));
@@ -198,9 +198,9 @@ void registerEditorTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
-    test('getPageMediaBox returns correct A4 dimensions', () async {
+    test('pageMediaBox returns correct A4 dimensions', () async {
       final editor = await createPdf().edit(src(minimalPdf));
-      final box = await editor.getPageMediaBox(0);
+      final box = await editor.pageMediaBox(0);
       expect(box.width, closeTo(595, 1));
       expect(box.height, closeTo(842, 1));
       await editor.dispose();
@@ -247,7 +247,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final twoPage = mergeSink.takeBytes();
 
       final editor = await pdf.edit(src(twoPage));
-      final boxBefore = await editor.getPageMediaBox(0);
+      final boxBefore = await editor.pageMediaBox(0);
       await editor.movePage(from: 0, to: 1);
       final sink = TestSink();
       await editor.save(sink);
@@ -967,9 +967,9 @@ void registerEditorTests(Pdf Function() createPdf) {
       // targeting 8 px (extractImages filters out anything narrower),
       // while a fresh editor under the real preset proves tooSmall wins.
       const policy = PdfImagePolicy(
-        colorDpi: 144,
-        grayDpi: 144,
-        monoDpi: 300,
+        colorPpi: 144,
+        grayPpi: 144,
+        monoPpi: 300,
         jpegQuality: 60,
         minPixels: 8,
       );
@@ -1175,7 +1175,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       expect(doc.pages[0].rotation, 90);
       await doc.dispose();
       final e2 = await pdf.edit(src(out));
-      expect(await e2.getTitle(), contains('Triple Edit'));
+      expect(await e2.title, contains('Triple Edit'));
       await e2.dispose();
     }, timeout: t(1));
 
@@ -2015,10 +2015,10 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
     }, timeout: t(1));
 
-    test('getTitle roundtrips with setTitle', () async {
+    test('title roundtrips with setTitle', () async {
       final editor = await createPdf().edit(src(minimalPdf));
       await editor.setTitle('RoundtripTitle');
-      expect(await editor.getTitle(), contains('RoundtripTitle'));
+      expect(await editor.title, contains('RoundtripTitle'));
       await editor.dispose();
     }, timeout: t(1));
   });

@@ -74,7 +74,7 @@ enum PdfCapability {
     'compress': PdfCapability.render,
     'Pdf.sign': PdfCapability.signatures,
     'sign': PdfCapability.signatures,
-    'PdfDoc.getSignatures': PdfCapability.signatures,
+    'PdfDoc.signatures': PdfCapability.signatures,
     'PdfDoc.verifySignatures': PdfCapability.signatures,
     'PdfDoc.validatePdfA': PdfCapability.pdfa,
     'PdfDoc.validatePdfUa': PdfCapability.pdfa,
