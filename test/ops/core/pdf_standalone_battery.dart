@@ -186,28 +186,48 @@ void registerStandaloneTests(Pdf Function() createPdf) {
         final doc = await pdf.open(src(sink.takeBytes()));
         const pageWidthPt =
             792.0; // 15840 twips landscape, as the DOCX declares
+        final lefts = <double>[];
         for (final marker in docxWideTableMarkers) {
           final hits = await doc.search(
             query: marker,
             pages: const PdfPages.all(),
           );
+          expect(hits, hasLength(1), reason: '$marker: one hit expected');
+          final hit = hits.single;
+          // The buggy layout ran the row out to ~3074 pt on this page.
           expect(
-            hits,
-            isNotEmpty,
-            reason: '$marker not found in converted PDF',
+            hit.rect.x + hit.rect.width,
+            lessThanOrEqualTo(pageWidthPt + 1),
+            reason:
+                '$marker spans to x=${hit.rect.x + hit.rect.width} — off the '
+                '$pageWidthPt pt page (declared widths ignored, issue #243)',
           );
-          // search() reports the whole line's rect, so the right edge is the
-          // measure: the buggy layout put it at ~3074 pt on this 792 pt page.
-          for (final hit in hits) {
-            expect(
-              hit.rect.x + hit.rect.width,
-              lessThanOrEqualTo(pageWidthPt + 1),
-              reason:
-                  '$marker line spans to x=${hit.rect.x + hit.rect.width} — '
-                  'off the $pageWidthPt pt page (declared widths ignored, '
-                  'issue #243)',
-            );
-          }
+          lefts.add(hit.rect.x);
+        }
+        // "On the page" alone would also pass a content-sampled layout, so
+        // check the geometry: each column's left edge advances by its
+        // declared gridCol width times ONE scale factor. Identical prose in
+        // every cell makes a sampled layout step by equal gaps instead, and
+        // the 666-twip first column gives that away at once.
+        final scales = <double>[];
+        for (var i = 1; i < lefts.length; i++) {
+          final gap = lefts[i] - lefts[i - 1];
+          expect(
+            gap,
+            greaterThan(0),
+            reason: 'columns must advance left→right',
+          );
+          scales.add(gap / (docxWideTableGridCols[i - 1] / 20.0));
+        }
+        final k = scales.reduce((a, b) => a + b) / scales.length;
+        for (var i = 0; i < scales.length; i++) {
+          expect(
+            scales[i],
+            closeTo(k, k * 0.03),
+            reason:
+                'column ${i + 1} width is not the declared gridCol scaled by '
+                'the table-wide factor $k (issue #243)',
+          );
         }
         await doc.dispose();
       },
