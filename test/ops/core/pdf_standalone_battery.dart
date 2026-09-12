@@ -10,6 +10,7 @@ import 'package:test/test.dart';
 
 import '../../fixtures/generated/fixtures.dart';
 import '../../fixtures/handwritten.dart';
+import '../../fixtures/handwritten_docx.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
 
@@ -166,6 +167,42 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       );
       final pdfBytes = pdfSink.takeBytes();
       expect(String.fromCharCodes(pdfBytes.sublist(0, 5)), startsWith('%PDF'));
+    }, timeout: t(1));
+
+    test('convertToPdf DOCX fixed-layout table honors declared column widths',
+        () async {
+      // Issue #243: the fixture's 11 gridCol widths sum to 10.275 in on a
+      // 10 in usable landscape page, yet the engine laid the table out at
+      // ~3.4x that width — text runs out past x=2500 pt on a 792 pt page.
+      // Every column marker must land inside the page.
+      final pdf = createPdf();
+      final sink = TestSink();
+      await pdf.convertToPdf(
+        src(buildWideTableDocx()),
+        sink,
+        format: PdfDocumentFormat.docx,
+      );
+      final doc = await pdf.open(src(sink.takeBytes()));
+      const pageWidthPt = 792.0; // 15840 twips landscape, as the DOCX declares
+      for (final marker in docxWideTableMarkers) {
+        final hits = await doc.search(
+          query: marker,
+          pages: const PdfPages.all(),
+        );
+        expect(hits, isNotEmpty, reason: '$marker not found in converted PDF');
+        // search() reports the whole line's rect, so the right edge is the
+        // measure: the buggy layout put it at ~3074 pt on this 792 pt page.
+        for (final hit in hits) {
+          expect(
+            hit.rect.x + hit.rect.width,
+            lessThanOrEqualTo(pageWidthPt + 1),
+            reason: '$marker line spans to x=${hit.rect.x + hit.rect.width} — '
+                'off the $pageWidthPt pt page (declared widths ignored, '
+                'issue #243)',
+          );
+        }
+      }
+      await doc.dispose();
     }, timeout: t(1));
   });
 }
