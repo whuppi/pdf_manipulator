@@ -77,6 +77,7 @@ Five files, strict rules:
 | Select pages | `select_pages` | `selectPages()` | DONE |
 | Merge from another PDF | `merge_from_reader` | `mergeFrom()` | DONE |
 | Reduce images by policy | via bridge (`host/images/`) | `reduceImages(PdfImagePolicy)` | DONE — presets `screen`/`ebook`/`print`/`lossless`; typed `PdfImageReport`, one row per image XObject |
+| Reduce images inside annotation appearances, patterns and inline images | — | — | PLANNED — `reduceImages` visits page content and Form XObjects only; appearance streams, pattern content and `BI … EI` images are left as stored |
 | Unembed standard fonts | via bridge | `unembedStandardFonts()` | DONE |
 | Add watermark | via bridge | `addWatermark()` | DONE |
 | Add stamp | via bridge | `addStamp()` | DONE |

@@ -196,7 +196,10 @@ class PdfEditor {
   /// and transforms afterwards. A replacement is written only when it is
   /// smaller than the original; soft masks are resampled with their
   /// image; JPEG 2000, JBIG2, spot-colour and colour-key-masked images
-  /// are reported as kept.
+  /// are reported as kept. Only images drawn by page content (directly or
+  /// through Form XObjects) are visited: an image referenced solely from an
+  /// annotation appearance stream or a pattern, and inline `BI … EI`
+  /// images, are left as stored and do not appear in the report.
   PdfTask<PdfImageReport> reduceImages(PdfImagePolicy policy) {
     KeepRecord.op('render');
     _check();
