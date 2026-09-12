@@ -378,42 +378,45 @@ class WebLaneHost implements LaneHost {
       _wakeWaiter();
       rethrow;
     }
-    final booted = Completer<void>();
-    final ready = Completer<void>();
-    // On boot failure both completers carry the error but only `booted`
-    // is awaited (its throw aborts before the `ready` await exists) —
-    // mark `ready` observed so the abandoned error can't surface as an
-    // unhandled async error in the caller's zone.
-    ready.future.ignore();
-    late final StreamSubscription<web.MessageEvent> sub;
-    sub = EventStreamProviders.messageEvent.forTarget(worker).listen((event) {
-      final obj = event.data as JSObject?;
-      if (obj == null) return;
-      final type = (obj[LaneMsgFields.type] as JSString?)?.toDart;
-      if (type == LaneMsg.booted && !booted.isCompleted) {
-        booted.complete();
-      } else if (type == LaneMsg.ready && !ready.isCompleted) {
-        ready.complete();
-      } else if ((type == LaneMsg.error || type == LaneMsg.bootFailed) &&
-          !ready.isCompleted) {
-        final error = StateError(
-          (obj['error'] as JSString?)?.toDart ?? 'web lane init failed',
-        );
-        if (!booted.isCompleted) booted.completeError(error);
-        ready.completeError(error);
-      }
-    });
-    final errSub = EventStreamProviders.errorEvent.forTarget(worker).listen((
-      event,
-    ) {
-      if (!ready.isCompleted) {
-        final error = StateError('worker script failed to load');
-        if (!booted.isCompleted) booted.completeError(error);
-        ready.completeError(error);
-      }
-    });
-
+    // Everything after the spawn runs inside the slot-owning try: a throw
+    // anywhere here must still terminate the worker and return the slot.
+    StreamSubscription<web.MessageEvent>? sub;
+    StreamSubscription<web.Event>? errSub;
     try {
+      final booted = Completer<void>();
+      final ready = Completer<void>();
+      // On boot failure both completers carry the error but only `booted`
+      // is awaited (its throw aborts before the `ready` await exists) —
+      // mark `ready` observed so the abandoned error can't surface as an
+      // unhandled async error in the caller's zone.
+      ready.future.ignore();
+      sub = EventStreamProviders.messageEvent.forTarget(worker).listen((event) {
+        final obj = event.data as JSObject?;
+        if (obj == null) return;
+        final type = (obj[LaneMsgFields.type] as JSString?)?.toDart;
+        if (type == LaneMsg.booted && !booted.isCompleted) {
+          booted.complete();
+        } else if (type == LaneMsg.ready && !ready.isCompleted) {
+          ready.complete();
+        } else if ((type == LaneMsg.error || type == LaneMsg.bootFailed) &&
+            !ready.isCompleted) {
+          final error = StateError(
+            (obj['error'] as JSString?)?.toDart ?? 'web lane init failed',
+          );
+          if (!booted.isCompleted) booted.completeError(error);
+          ready.completeError(error);
+        }
+      });
+      errSub = EventStreamProviders.errorEvent.forTarget(worker).listen((
+        event,
+      ) {
+        if (!ready.isCompleted) {
+          final error = StateError('worker script failed to load');
+          if (!booted.isCompleted) booted.completeError(error);
+          ready.completeError(error);
+        }
+      });
+
       final wasmModule = await _wasmModule();
       // The worker announces `booted` once its message handler is
       // attached; posting before that drops the message silently
@@ -457,8 +460,8 @@ class WebLaneHost implements LaneHost {
       _terminateAndReleaseSlot(LaneWorker(worker, null, lockName));
       rethrow;
     } finally {
-      unawaited(sub.cancel());
-      unawaited(errSub.cancel());
+      unawaited(sub?.cancel() ?? Future<void>.value());
+      unawaited(errSub?.cancel() ?? Future<void>.value());
     }
   }
 
