@@ -11,6 +11,8 @@ import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_task.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
@@ -186,11 +188,19 @@ class PdfEditor {
 
   // ── Optimization ──
 
-  /// Recompresses images above [minSize] pixels at the given [quality].
-  PdfTask<int> optimizeImages({int quality = 75, int minSize = 128}) {
+  /// Re-encodes and downsamples every image drawn on the document's pages
+  /// under [policy] — `PdfImagePolicy.screen`, `.ebook`, `.print`,
+  /// `.lossless`, or your own numbers — and reports one row per image.
+  ///
+  /// Placement never changes: [pageImages] reads the same names, bounds
+  /// and transforms afterwards. A replacement is written only when it is
+  /// smaller than the original; soft masks are resampled with their
+  /// image; JPEG 2000, JBIG2, spot-colour and colour-key-masked images
+  /// are reported as kept.
+  PdfTask<PdfImageReport> reduceImages(PdfImagePolicy policy) {
     KeepRecord.op('render');
     _check();
-    return _handle.optimizeImages(quality: quality, minSize: minSize);
+    return _handle.reduceImages(policy);
   }
 
   /// Removes embedded copies of standard PDF fonts to reduce file size.
@@ -322,6 +332,26 @@ class PdfEditor {
   }) {
     _check();
     return _handle.resizeImage(page, imageName, width: width, height: height);
+  }
+
+  /// Moves the named image on [page] so its lower-left corner sits at
+  /// ([x], [y]) in points; the size is unchanged. Names come from
+  /// [pageImages].
+  PdfTask<void> repositionImage(
+    int page,
+    String imageName, {
+    required double x,
+    required double y,
+  }) {
+    _check();
+    return _handle.repositionImage(page, imageName, x: x, y: y);
+  }
+
+  /// Moves and resizes the named image on [page] to [bounds] in points in
+  /// one edit. Names come from [pageImages], whose `bounds` this mirrors.
+  PdfTask<void> setImageBounds(int page, String imageName, PdfRect bounds) {
+    _check();
+    return _handle.setImageBounds(page, imageName, bounds);
   }
 
   /// Converts the document to PDF/A at the given conformance [level].

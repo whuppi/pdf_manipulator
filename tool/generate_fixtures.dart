@@ -126,7 +126,7 @@ String _emitBytes(
   List<int> bytes, [
   String doc =
       'Photo-like 128x128 PNG (seeded noise) — JPEG-q50 beats its Flate\n'
-      '/// stream, so optimizeImages finds work. Decoded once at first use.',
+      '/// stream, so reduceImages finds work. Decoded once at first use.',
 ]) {
   final b64 = base64Encode(bytes);
   final chunks = <String>[

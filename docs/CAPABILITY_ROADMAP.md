@@ -76,7 +76,7 @@ Five files, strict rules:
 | Move page | via bridge | `movePage()` | DONE |
 | Select pages | `select_pages` | `selectPages()` | DONE |
 | Merge from another PDF | `merge_from_reader` | `mergeFrom()` | DONE |
-| Optimize images | via bridge | `optimizeImages()` | DONE |
+| Reduce images by policy | via bridge (`host/images/`) | `reduceImages(PdfImagePolicy)` | DONE — presets `screen`/`ebook`/`print`/`lossless`; typed `PdfImageReport`, one row per image XObject |
 | Unembed standard fonts | via bridge | `unembedStandardFonts()` | DONE |
 | Add watermark | via bridge | `addWatermark()` | DONE |
 | Add stamp | via bridge | `addStamp()` | DONE |
@@ -108,8 +108,8 @@ Five files, strict rules:
 | Merge selective pages from | `merge_pages_from` | — | PLANNED |
 | Apply redactions destructive | `apply_redactions_destructive` | — | PLANNED |
 | Sanitize document | `sanitize_document` | — | PLANNED |
-| Reposition image | `reposition_image` | — | PLANNED |
-| Set image bounds | `set_image_bounds` | — | PLANNED |
+| Reposition image | `reposition_image` | `repositionImage()` | DONE — verified through `pageImages()` after save |
+| Set image bounds | `set_image_bounds` | `setImageBounds()` | DONE — takes the same `PdfRect` `pageImages()` reports; verified after save |
 | Remove form field | `remove_form_field` | — | PLANNED |
 | Set form field readonly | `set_form_field_readonly` | — | PLANNED |
 | Set form field required | `set_form_field_required` | — | PLANNED |
@@ -197,7 +197,7 @@ Five files, strict rules:
 | `rotateAllPages` | editor: edit → rotateAllPages → save | DONE |
 | `flattenForms` | editor: edit → flattenForms → save | DONE |
 | `applyRedactions` | editor: edit → applyRedactions → save | DONE |
-| `compress` | editor: edit → optimizeImages → save(compress) | DONE |
+| `compress` | editor: edit → reduceImages(policy) → save(compress) | DONE |
 | `embedFile` | editor: edit → embedFile → save | DONE |
 | `eraseRegions` | editor: edit → eraseRegions → save | DONE |
 | `addStamp` | editor: edit → addStamp → save | DONE |

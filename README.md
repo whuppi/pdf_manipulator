@@ -311,7 +311,8 @@ await pdf.watermark(source, output,
     text: 'CONFIDENTIAL',
     style: PdfWatermarkStyle(opacity: 0.2, fontSize: 60));
 
-await pdf.compress(source, output, imageQuality: 75);
+await pdf.compress(source, output); // images to 150 ppi (PdfImagePolicy.ebook), streams deflated, unused objects dropped
+await pdf.compress(source, output, images: PdfImagePolicy.screen); // 72 ppi
 
 await pdf.encrypt(source, output,
     encryption: PdfEncryptionConfig(
@@ -358,13 +359,14 @@ await editor.setTitle('Q4 Report');
 await editor.mergeFrom(appendix);
 await editor.deletePage(4);
 await editor.addWatermark(0, 'FINAL', style: PdfWatermarkStyle(opacity: 0.15));
-await editor.optimizeImages(quality: 70);
+final report = await editor.reduceImages(PdfImagePolicy.ebook); // 150 ppi, JPEG q75
+print('${report.changed} images, ${report.bytesBefore} → ${report.bytesAfter} bytes');
 
 await editor.save(output); // see save options below
 await editor.dispose();
 ```
 
-Also on the editor: `selectPages`, `rotatePage` / `rotateAllPages`, `addStamp` / `addImageStamp`, `embedFile`, `eraseRegions`, `cropMargins`, `pageImages` / `resizeImage`, `flattenForms` / `flattenAllAnnotations`, `setFormFieldValue`, `unembedStandardFonts`, `convertToPdfA`, `scrubMetadata`, and metadata get/set.
+Also on the editor: `selectPages`, `rotatePage` / `rotateAllPages`, `addStamp` / `addImageStamp`, `embedFile`, `eraseRegions`, `cropMargins`, `pageImages` / `resizeImage` / `repositionImage` / `setImageBounds`, `flattenForms` / `flattenAllAnnotations`, `setFormFieldValue`, `unembedStandardFonts`, `convertToPdfA`, `scrubMetadata`, and metadata get/set.
 
 Save options:
 
@@ -530,7 +532,7 @@ How do you know what to keep? Each capability covers a small set of methods. Cor
 | Capability | Keep it if you call | Also brings | Adds (native) |
 |---|---|---|---|
 | `core` | everything else — merge, split, forms, watermark, encrypt, build… | — | always included (~6.3 MB) |
-| `render` | `doc.render()`, `editor.optimizeImages()`, the `compress` one-shot | — | +4.2 MB |
+| `render` | `doc.render()`, `editor.reduceImages()`, the `compress` one-shot | — | +4.2 MB |
 | `signatures` | `sign()`, `doc.getSignatures()`, `doc.verifySignatures()` | — | +0.9 MB |
 | `pdfa` | `doc.validatePdfA()`, `doc.validatePdfUa()`, `convertToPdfA` | — | +0.1 MB |
 | `extract` | `doc.extract()`, `doc.search()`, `doc.classifyPage()`, `doc.classifyDocument()` | — | +3.0 MB |

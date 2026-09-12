@@ -11,7 +11,10 @@
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
+import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_image.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_matrix.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_info.dart';
@@ -354,6 +357,69 @@ List<PdfPageImage> decodePageImages(Map<String, Object?> r) {
       ),
     );
   }).toList();
+}
+
+/// Encodes an image policy as flat `reduceImages` arguments. A `null`
+/// resolution is omitted, which the engine reads as "never downsample".
+Map<String, Object?> encodeImagePolicy(PdfImagePolicy policy) => {
+  if (policy.colorDpi != null) 'colorDpi': policy.colorDpi,
+  if (policy.grayDpi != null) 'grayDpi': policy.grayDpi,
+  if (policy.monoDpi != null) 'monoDpi': policy.monoDpi,
+  'threshold': policy.threshold,
+  'jpegQuality': policy.jpegQuality,
+  'allowLossy': policy.allowLossy,
+  'convertCmykToRgb': policy.convertCmykToRgb,
+  'minPixels': policy.minPixels,
+};
+
+T _enumByWireName<T extends Enum>(List<T> values, Object? wire, String what) {
+  final name = wire as String? ?? '';
+  for (final v in values) {
+    if (v.name == name) return v;
+  }
+  throw PdfEngineError('unknown image $what "$name" on the wire');
+}
+
+/// Decodes a `reduceImages` report from a response map.
+PdfImageReport decodeImageReport(Map<String, Object?> r) {
+  final rows = r['images'] as List? ?? [];
+  return PdfImageReport(
+    rows.map((i) {
+      final m = _asMap(i);
+      int n(String k) => (m[k] as num).toInt();
+      final ppi = (m['ppiMin'] as num?)?.toDouble() ?? -1;
+      final action = _enumByWireName(
+        PdfImageAction.values,
+        m['action'],
+        'action',
+      );
+      final reason = m['keepReason'] as String? ?? '';
+      return PdfImageOutcome(
+        objectId: n('objectId'),
+        encoding: _enumByWireName(
+          PdfImageEncoding.values,
+          m['encoding'],
+          'encoding',
+        ),
+        color: _enumByWireName(PdfImageColor.values, m['color'], 'color'),
+        indexed: m['indexed'] as bool? ?? false,
+        bits: n('bits'),
+        width: n('width'),
+        height: n('height'),
+        hasSoftMask: m['softMask'] as bool? ?? false,
+        uses: n('uses'),
+        ppiMin: ppi < 0 ? null : ppi,
+        action: action,
+        keepReason: reason.isEmpty
+            ? null
+            : _enumByWireName(PdfImageKeepReason.values, reason, 'keep reason'),
+        bytesBefore: n('bytesBefore'),
+        bytesAfter: n('bytesAfter'),
+        widthAfter: n('widthAfter'),
+        heightAfter: n('heightAfter'),
+      );
+    }).toList(),
+  );
 }
 
 /// Decodes digital-signature info from a response map.

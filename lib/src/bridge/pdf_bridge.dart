@@ -11,6 +11,8 @@ import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/pdf_image.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
@@ -204,8 +206,8 @@ abstract class BridgeEditorHandle {
 
   // ── Optimization ──
 
-  /// Recompresses images, returning the count of optimized images.
-  PdfTask<int> optimizeImages({int quality = 75, int minSize = 128});
+  /// Re-encodes and downsamples images under [policy]; one row per image.
+  PdfTask<PdfImageReport> reduceImages(PdfImagePolicy policy);
 
   /// Removes embedded standard fonts, returning count unembedded.
   PdfTask<int> unembedStandardFonts();
@@ -278,6 +280,17 @@ abstract class BridgeEditorHandle {
     required double width,
     required double height,
   });
+
+  /// Moves an embedded image on [page] by [imageName] to ([x], [y]).
+  PdfTask<void> repositionImage(
+    int page,
+    String imageName, {
+    required double x,
+    required double y,
+  });
+
+  /// Moves and resizes an embedded image on [page] by [imageName].
+  PdfTask<void> setImageBounds(int page, String imageName, PdfRect bounds);
 
   // ── Redaction ──
 

@@ -119,6 +119,26 @@ void registerSugarTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
+    test('compress with an image policy shrinks a photo PDF', () async {
+      final pdf = createPdf();
+      final sink = TestSink();
+      await pdf.compress(
+        src(fImagesHires),
+        sink,
+        images: PdfImagePolicy.screen,
+      );
+      final output = sink.takeBytes();
+      expect(output.length, lessThan(fImagesHires.length ~/ 4));
+      final doc = await pdf.open(src(output));
+      expect(doc.pageCount, 1);
+      final images = await doc
+          .extractImages(pages: const PdfPages.single(0))
+          .toList();
+      expect(images.single.width, 32);
+      expect(images.single.height, 32);
+      await doc.dispose();
+    }, timeout: t(1));
+
     // ── Delete ──
 
     test('deletePages from 2-page → 1 page', () async {

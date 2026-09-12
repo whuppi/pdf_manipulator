@@ -91,6 +91,20 @@ void registerEditorStressTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
+    test(
+      'reduceImages over a 1000-page PDF completes and keeps placement',
+      () async {
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(largePdf));
+        final before = await editor.pageImages(0);
+        await editor.reduceImages(PdfImagePolicy.screen);
+        final after = await editor.pageImages(0);
+        expect(after, before);
+        await editor.dispose();
+      },
+      timeout: t(2),
+    );
+
     test('compress 1000-page PDF', () async {
       final pdf = createPdf();
       final sink = TestSink();

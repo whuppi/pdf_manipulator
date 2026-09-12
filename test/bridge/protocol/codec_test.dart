@@ -4,7 +4,10 @@
 
 import 'dart:typed_data';
 
+import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
@@ -148,6 +151,90 @@ void main() {
 
     test('handles missing images key', () {
       expect(decodePageImages({}), isEmpty);
+    });
+  });
+
+  group('encodeImagePolicy', () {
+    test('omits null resolutions and carries every knob', () {
+      final args = encodeImagePolicy(PdfImagePolicy.lossless);
+      expect(args.containsKey('colorDpi'), isFalse);
+      expect(args.containsKey('grayDpi'), isFalse);
+      expect(args.containsKey('monoDpi'), isFalse);
+      expect(args['allowLossy'], isFalse);
+      expect(args['jpegQuality'], 75);
+      expect(args['minPixels'], 32);
+      final screen = encodeImagePolicy(PdfImagePolicy.screen);
+      expect(screen['colorDpi'], 72);
+      expect(screen['monoDpi'], 300);
+      expect(screen['threshold'], 1.5);
+      expect(screen['convertCmykToRgb'], isTrue);
+    });
+  });
+
+  group('decodeImageReport', () {
+    Map<String, Object?> row({String action = 'kept', String reason = ''}) => {
+      'objectId': 7,
+      'encoding': 'jpeg',
+      'color': 'cmyk',
+      'indexed': false,
+      'bits': 8,
+      'width': 64,
+      'height': 64,
+      'softMask': true,
+      'uses': 2,
+      'ppiMin': 288.0,
+      'action': action,
+      'keepReason': reason,
+      'bytesBefore': 1000,
+      'bytesAfter': 400,
+      'widthAfter': 16,
+      'heightAfter': 16,
+    };
+
+    test('parses a row and the report sums', () {
+      final report = decodeImageReport({
+        'images': [row(action: 'downsampled'), row(reason: 'withinResolution')],
+      });
+      expect(report.images, hasLength(2));
+      final first = report.images.first;
+      expect(first.objectId, 7);
+      expect(first.encoding, PdfImageEncoding.jpeg);
+      expect(first.color, PdfImageColor.cmyk);
+      expect(first.hasSoftMask, isTrue);
+      expect(first.ppiMin, 288.0);
+      expect(first.action, PdfImageAction.downsampled);
+      expect(first.keepReason, isNull);
+      expect(first.widthAfter, 16);
+      expect(
+        report.images.last.keepReason,
+        PdfImageKeepReason.withinResolution,
+      );
+      expect(report.changed, 1);
+      expect(report.bytesBefore, 2000);
+      expect(report.bytesAfter, 800);
+    });
+
+    test('a negative ppi means no placement', () {
+      final r = row()..['ppiMin'] = -1.0;
+      expect(
+        decodeImageReport({
+          'images': [r],
+        }).images.single.ppiMin,
+        isNull,
+      );
+    });
+
+    test('an unknown wire name is a typed error', () {
+      expect(
+        () => decodeImageReport({
+          'images': [row(action: 'vanished')],
+        }),
+        throwsA(isA<PdfEngineError>()),
+      );
+    });
+
+    test('missing key yields an empty report', () {
+      expect(decodeImageReport({}).images, isEmpty);
     });
   });
 

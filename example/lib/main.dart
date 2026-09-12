@@ -1448,7 +1448,7 @@ class _SugarTabState extends State<_SugarTab>
                       loading: loading,
                       onRun: () => runFlow('Compress', () async {
                             final sink = DemoSink();
-                            await _pdf.compress(src, sink, imageQuality: 75);
+                            await _pdf.compress(src, sink);
                             final r = sink.takeBytes();
                             final pct = ((1 - r.length / bytes!.length) * 100)
                                 .toStringAsFixed(1);
@@ -1904,12 +1904,15 @@ class _EditorTabState extends State<_EditorTab>
                           })),
                   _Section('Optimization'),
                   _Op(
-                      icon: Icons.compress,
-                      title: 'Optimize images (q60)',
+                      icon: Icons.photo_size_select_small,
+                      title: 'Reduce images (screen preset)',
                       loading: loading,
-                      onRun: () => _edit('OptimizeImg', (e) async {
-                            final n = await e.optimizeImages(quality: 60);
-                            setState(() => status = 'Optimized $n images');
+                      onRun: () => _edit('ReduceImg', (e) async {
+                            final report =
+                                await e.reduceImages(PdfImagePolicy.screen);
+                            setState(() => status = 'Reduced ${report.changed} of '
+                                '${report.images.length} images: '
+                                '${report.bytesBefore} → ${report.bytesAfter} bytes');
                             return _saveEditor(
                                 e,
                                 const PdfSaveOptions.fullRewrite(
@@ -2103,7 +2106,7 @@ class _EditorTabState extends State<_EditorTab>
                                   style: const PdfWatermarkStyle(
                                       opacity: 0.15, fontSize: 40));
                             }
-                            await e.optimizeImages(quality: 70);
+                            await e.reduceImages(PdfImagePolicy.ebook);
                             await e.setTitle('Processed');
                             return _saveEditor(
                                 e,

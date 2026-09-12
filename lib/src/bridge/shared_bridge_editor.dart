@@ -151,10 +151,10 @@ class _SharedEditorHandle extends BridgeEditorHandle {
   // ── Optimization ──
 
   @override
-  PdfTask<int> optimizeImages({int quality = 75, int minSize = 128}) => _exec(
+  PdfTask<PdfImageReport> reduceImages(PdfImagePolicy policy) => _exec(
     EngineOp.editorMutate,
-    {'editOp': 'optimizeImages', 'quality': quality, 'minSize': minSize},
-  ).map((map) => map['count'] as int? ?? 0);
+    {'editOp': 'reduceImages', ...codec.encodeImagePolicy(policy)},
+  ).map(codec.decodeImageReport);
   @override
   PdfTask<int> unembedStandardFonts() => _exec(EngineOp.editorMutate, {
     'editOp': 'unembedStandardFonts',
@@ -255,6 +255,30 @@ class _SharedEditorHandle extends BridgeEditorHandle {
     'width': width,
     'height': height,
   });
+
+  @override
+  PdfTask<void> repositionImage(
+    int page,
+    String imageName, {
+    required double x,
+    required double y,
+  }) => _mutate('repositionImage', {
+    'page': page,
+    'imageName': imageName,
+    'x': x,
+    'y': y,
+  });
+
+  @override
+  PdfTask<void> setImageBounds(int page, String imageName, PdfRect bounds) =>
+      _mutate('setImageBounds', {
+        'page': page,
+        'imageName': imageName,
+        'x': bounds.x,
+        'y': bounds.y,
+        'width': bounds.width,
+        'height': bounds.height,
+      });
 
   // ── Redaction ──
 

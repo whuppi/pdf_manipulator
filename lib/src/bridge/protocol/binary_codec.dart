@@ -243,10 +243,25 @@ void _writeI32(BytesBuilder buf, int v) {
   buf.add(bd.buffer.asUint8List());
 }
 
+// An i64 travels as two 32-bit halves: dart2js has no 64-bit ByteData
+// accessor, and JS numbers are exact to 2^53, which every count on this
+// wire stays under. The arithmetic split (not bit masks, which are 32-bit
+// in JS) keeps the VM and the browser reading the same bytes.
+const _two32 = 4294967296;
+
 void _writeI64(BytesBuilder buf, int v) {
-  final bd = ByteData(8)..setInt64(0, v, Endian.little);
+  final hi = (v / _two32).floor();
+  final lo = v - hi * _two32;
+  final bd = ByteData(8)
+    ..setUint32(0, lo, Endian.little)
+    ..setInt32(4, hi, Endian.little);
   buf.add(bd.buffer.asUint8List());
 }
+
+/// Reads the i64 at [pos] the way [_writeI64] wrote it.
+int readI64(ByteData bd, int pos) =>
+    bd.getInt32(pos + 4, Endian.little) * _two32 +
+    bd.getUint32(pos, Endian.little);
 
 void _writeF64(BytesBuilder buf, double v) {
   final bd = ByteData(8)..setFloat64(0, v, Endian.little);
@@ -280,7 +295,7 @@ class _Reader {
   }
 
   int i64() {
-    final v = _bd.getInt64(_pos, Endian.little);
+    final v = readI64(_bd, _pos);
     _pos += 8;
     return v;
   }

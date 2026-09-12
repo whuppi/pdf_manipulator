@@ -465,11 +465,11 @@ void main() {
     await saved.dispose();
   });
 
-  testWidgets('editor optimizeImages + unembedStandardFonts', (t) async {
+  testWidgets('editor reduceImages + unembedStandardFonts', (t) async {
     final e = await pdf.edit(_src(minimalPdf));
-    expect(await e.optimizeImages(), 0,
-        reason: 'no images in the fixture — a nonzero count is '
-            'invented work');
+    final report = await e.reduceImages(PdfImagePolicy.screen);
+    expect(report.images, isEmpty,
+        reason: 'no images in the fixture — a report row is invented work');
     expect(await e.unembedStandardFonts(), 0);
     final sink = MemorySink();
     await e.save(sink);
