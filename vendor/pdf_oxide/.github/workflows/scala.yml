@@ -1,0 +1,135 @@
+name: Scala Bindings CI
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'scala/**'
+      - 'java/**'
+      - 'pdf_oxide_jni/**'
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/scala.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'scala/**'
+      - 'java/**'
+      - 'pdf_oxide_jni/**'
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/scala.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'release' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Scala on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          cache: false
+          rustflags: ''
+
+      - name: Cache Cargo build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-build-release-
+
+      # The Scala facade has no native code: it depends on the Java binding,
+      # which owns the single JNI bridge (pdf_oxide_jni crate).
+      - name: Build JNI cdylib (release, full feature set)
+        run: cargo build --release -p pdf_oxide_jni --features full
+
+      - name: Resolve JNI library path (per OS)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            echo "PDF_OXIDE_JNI_LIB=${{ github.workspace }}/target/release/libpdf_oxide_jni.dylib" >> "$GITHUB_ENV"
+          else
+            echo "PDF_OXIDE_JNI_LIB=${{ github.workspace }}/target/release/libpdf_oxide_jni.so" >> "$GITHUB_ENV"
+          fi
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up sbt
+        uses: sbt/setup-sbt@c7d2d6258b4bd0d3ec5129e6b3453199d3c79729 # v1.5.8
+
+      # Install the Java binding to the local Maven repo so the facade resolves
+      # `fyi.oxide:pdf-oxide` (skip the dev profile's Rust rebuild + tests).
+      - name: Build & install Java binding to local Maven repo
+        working-directory: java
+        run: mvn -q -B -P'!dev' -DskipTests install
+
+      - name: Format check (scalafmt)
+        working-directory: scala
+        run: sbt scalafmtCheckAll
+
+      - name: Lint check (scalafix)
+        working-directory: scala
+        run: sbt "scalafixAll --check"
+
+      - name: Test (api-coverage)
+        working-directory: scala
+        run: sbt -DPDF_OXIDE_JNI_LIB="${PDF_OXIDE_JNI_LIB}" test
+
+      - name: Run example (BasicExtraction, with assertion)
+        working-directory: scala
+        shell: bash
+        run: |
+          set -uo pipefail
+          OUT="$(sbt -Dfyi.oxide.pdf.lib.path="${PDF_OXIDE_JNI_LIB}" --error 'runMain examples.basicExtraction')"
+          echo "$OUT"
+          echo "$OUT" | grep -q "Hello pdf_oxide" || { echo "::error::example output missing expected text"; exit 1; }
+
+      - name: Run example (html_extraction, with assertion)
+        working-directory: scala
+        shell: bash
+        run: |
+          set -uo pipefail
+          OUT="$(sbt -Dfyi.oxide.pdf.lib.path="${PDF_OXIDE_JNI_LIB}" --error 'runMain examples.htmlExtraction')"
+          echo "$OUT"
+          echo "$OUT" | grep -q "HTML OK" || { echo "::error::html_extraction example failed"; exit 1; }
+
+      - name: Run example (words_geometry, with assertion)
+        working-directory: scala
+        shell: bash
+        run: |
+          set -uo pipefail
+          OUT="$(sbt -Dfyi.oxide.pdf.lib.path="${PDF_OXIDE_JNI_LIB}" --error 'runMain examples.wordsGeometry')"
+          echo "$OUT"
+          echo "$OUT" | grep -q "WORDS OK" || { echo "::error::words_geometry example failed"; exit 1; }
+
+      - name: Run example (tables_extraction, with assertion)
+        working-directory: scala
+        shell: bash
+        run: |
+          set -uo pipefail
+          OUT="$(sbt -Dfyi.oxide.pdf.lib.path="${PDF_OXIDE_JNI_LIB}" --error 'runMain examples.tablesExtraction')"
+          echo "$OUT"
+          echo "$OUT" | grep -q "TABLES OK" || { echo "::error::tables_extraction example failed"; exit 1; }

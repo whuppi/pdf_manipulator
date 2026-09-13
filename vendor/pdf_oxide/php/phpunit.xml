@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/11.0/phpunit.xsd"
+         bootstrap="tests/bootstrap.php"
+         colors="true"
+         failOnWarning="true"
+         failOnRisky="true"
+         beStrictAboutOutputDuringTests="true">
+    <testsuites>
+        <!--
+             Two named suites so CI can run them as separate jobs:
+
+               vendor/bin/phpunit (testsuite Unit)          (no cdylib needed)
+               vendor/bin/phpunit (testsuite Integration)   (cdylib REQUIRED;
+                                                              tests self-skip)
+         -->
+        <testsuite name="Unit">
+            <directory>tests/Unit</directory>
+        </testsuite>
+        <testsuite name="Integration">
+            <directory>tests/Integration</directory>
+        </testsuite>
+    </testsuites>
+
+    <source>
+        <include>
+            <directory suffix=".php">src</directory>
+        </include>
+    </source>
+
+    <!--
+         <coverage> block intentionally omitted: when set with no driver
+         installed PHPUnit emits "No code coverage driver available" and
+         failOnWarning trips. Pass coverage flags on the CLI when running
+         locally with Xdebug/PCOV.
+    -->
+
+    <php>
+        <ini name="error_reporting" value="-1"/>
+        <ini name="display_errors" value="On"/>
+        <ini name="display_startup_errors" value="On"/>
+        <ini name="memory_limit" value="256M"/>
+    </php>
+</phpunit>
