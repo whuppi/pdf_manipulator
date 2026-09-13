@@ -12,7 +12,7 @@
 /// builder) is always included and has no capability.
 enum PdfCapability {
   /// Page rasterization (`PdfDoc.render`) and image re-compression
-  /// (`PdfEditor.optimizeImages`, the `compress` one-shot).
+  /// (`PdfEditor.reduceImages`, the `compress` one-shot).
   render('render', 'rendering'),
 
   /// Digital signatures: signing and verification.
@@ -70,11 +70,11 @@ enum PdfCapability {
   /// readers and for the README drift guard, not for lookup precision.
   static const Map<String, PdfCapability> apiMembers = {
     'PdfDoc.render': PdfCapability.render,
-    'PdfEditor.optimizeImages': PdfCapability.render,
+    'PdfEditor.reduceImages': PdfCapability.render,
     'compress': PdfCapability.render,
     'Pdf.sign': PdfCapability.signatures,
     'sign': PdfCapability.signatures,
-    'PdfDoc.getSignatures': PdfCapability.signatures,
+    'PdfDoc.signatures': PdfCapability.signatures,
     'PdfDoc.verifySignatures': PdfCapability.signatures,
     'PdfDoc.validatePdfA': PdfCapability.pdfa,
     'PdfDoc.validatePdfUa': PdfCapability.pdfa,

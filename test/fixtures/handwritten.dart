@@ -220,6 +220,353 @@ final Uint8List indirectAnnotsForm = _offsetPdf([
   _streamBody('', 'q Q\n'),
 ]);
 
+/// One page that draws an image XObject (`/Im1`, 2×2 DeviceGray) and a
+/// Form XObject (`/Fx1`, a filled square) with `/Resources` inherited from
+/// the `Pages` node. `pageImages` must list `/Im1` alone: a `Do` is not an
+/// image until its resource says `/Subtype /Image`. dart-pdf never puts a
+/// form on a page and always writes page-level resources, so both
+/// preconditions need hand-authoring.
+final Uint8List imageAndFormPdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree — carries the /Resources the page inherits
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 /Resources << /XObject << /Im1 4 0 R /Fx1 5 0 R >> >> >>',
+  // 3: page without its own /Resources
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 6 0 R >>',
+  // 4: the image — 2×2 gray, 8 bpc, unfiltered; 'ABCD' are the four samples
+  _streamBody(
+    '/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8',
+    'ABCD',
+  ),
+  // 5: the form — a filled 50×50 square
+  _streamBody(
+    '/Type /XObject /Subtype /Form /BBox [0 0 50 50]',
+    '0 0 50 50 re f\n',
+  ),
+  // 6: page content — image at (40, 700) scaled 100×50, then the form at (200, 600)
+  _streamBody(
+    '',
+    'q 100 0 0 50 40 700 cm /Im1 Do Q\nq 1 0 0 1 200 600 cm /Fx1 Do Q\n',
+  ),
+]);
+
+/// Returns `width*height` two-digit hex bytes (rows in order, no
+/// whitespace), value `((x + y) * 255 / (width + height - 2)).round()`
+/// per pixel, ending with `>`. [repeat] writes each pixel's byte that
+/// many times in a row — the RGB triple [colorKeyMaskPdf] needs from a
+/// one-channel gradient. [lowByte], when given, is appended once after
+/// each pixel's byte(s) — the 16-bit-per-component low byte
+/// [gray16RawPdf] needs.
+String _grayGradientHex(int width, int height, {int repeat = 1, int? lowByte}) {
+  final buf = StringBuffer();
+  for (var y = 0; y < height; y++) {
+    for (var x = 0; x < width; x++) {
+      final hex = ((x + y) * 255 / (width + height - 2))
+          .round()
+          .toRadixString(16)
+          .padLeft(2, '0');
+      for (var i = 0; i < repeat; i++) {
+        buf.write(hex);
+      }
+      if (lowByte != null) buf.write(lowByte.toRadixString(16).padLeft(2, '0'));
+    }
+  }
+  buf.write('>');
+  return buf.toString();
+}
+
+/// ASCII bytes of [text] as two hex digits each, ending with `>` — the
+/// `/Filter /ASCIIHexDecode` encoding [xfaFormPdf]'s XDP packet needs.
+String _asciiHex(String text) {
+  final buf = StringBuffer();
+  for (final unit in text.codeUnits) {
+    buf.write(unit.toRadixString(16).padLeft(2, '0'));
+  }
+  buf.write('>');
+  return buf.toString();
+}
+
+/// A 16×16 DeviceGray image drawn only inside a Form XObject (`/Fx1`,
+/// `/Matrix [0.25 0 0 0.25 0 0]`), composed with the page's own `cm` to
+/// a 4 pt placement (288 ppi). `page_image_handles` must recurse into
+/// Form XObjects to find it; dart-pdf never nests an image inside a
+/// form this way.
+final Uint8List imageInFormPdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page — resources hold only the form; the form holds the image
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Fx1 5 0 R >> >> /Contents 6 0 R >>',
+  // 4: the image — 16×16 gray, 8 bpc, ASCIIHex gradient
+  _streamBody(
+    '/Type /XObject /Subtype /Image /Width 16 /Height 16 '
+    '/ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /ASCIIHexDecode',
+    _grayGradientHex(16, 16),
+  ),
+  // 5: the form — scales its own coordinate space by 0.25 before drawing
+  _streamBody(
+    '/Type /XObject /Subtype /Form /BBox [0 0 16 16] '
+        '/Matrix [0.25 0 0 0.25 0 0] /Resources << /XObject << /Im1 4 0 R >> >>',
+    'q 16 0 0 16 0 0 cm /Im1 Do Q\n',
+  ),
+  // 6: page content — the form placed at (100, 100), scale 1
+  _streamBody('', 'q 1 0 0 1 100 100 cm /Fx1 Do Q\n'),
+]);
+
+/// One 32×32 DeviceGray XObject (`/Im1`) shared by two pages through
+/// inherited `/Resources`, drawn at 32 pt (72 ppi) on page 0 and 8 pt
+/// (288 ppi) on page 1. Proves a shared image is decided once, not once
+/// per placement — dart-pdf never reuses one XObject across pages.
+final Uint8List sharedImagePdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree — the shared image lives in the INHERITED /Resources
+  '<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /Resources << /XObject << /Im1 5 0 R >> >> >>',
+  // 3: page 0 — no /Resources of its own
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 6 0 R >>',
+  // 4: page 1 — no /Resources of its own
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 7 0 R >>',
+  // 5: the image — 32×32 gray, 8 bpc, ASCIIHex gradient
+  _streamBody(
+    '/Type /XObject /Subtype /Image /Width 32 /Height 32 '
+    '/ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /ASCIIHexDecode',
+    _grayGradientHex(32, 32),
+  ),
+  // 6: page 0 content — placed at 32 pt (72 ppi)
+  _streamBody('', 'q 32 0 0 32 50 50 cm /Im1 Do Q\n'),
+  // 7: page 1 content — placed at 8 pt (288 ppi)
+  _streamBody('', 'q 8 0 0 8 50 50 cm /Im1 Do Q\n'),
+]);
+
+/// A Separation (spot-colour) image — `/ColorSpace [/Separation /Spot
+/// /DeviceGray << /FunctionType 2 ... >>]` — a colour space the image
+/// reducer's design marks unsupported. No producer available to this
+/// suite writes Separation images; only hand-authoring can.
+final Uint8List separationImagePdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R >>',
+  // 4: the image — 32×32 Separation, 8 bpc, ASCIIHex gradient
+  _streamBody(
+    '/Type /XObject /Subtype /Image /Width 32 /Height 32 '
+    '/ColorSpace [/Separation /Spot /DeviceGray '
+    '<< /FunctionType 2 /Domain [0 1] /C0 [1] /C1 [0] /N 1 >>] '
+    '/BitsPerComponent 8 /Filter /ASCIIHexDecode',
+    _grayGradientHex(32, 32),
+  ),
+  // 5: page content — placed at 8 pt (288 ppi)
+  _streamBody('', 'q 8 0 0 8 50 50 cm /Im1 Do Q\n'),
+]);
+
+/// A DeviceRGB image with a colour-key mask (`/Mask [0 0 0 0 0 0]`) — a
+/// masking scheme distinct from a soft mask or a stencil, and one the
+/// image reducer's design marks unsupported. No local producer writes
+/// colour-key masks; only hand-authoring can.
+final Uint8List colorKeyMaskPdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R >>',
+  // 4: the image — 32×32 RGB, 8 bpc, ASCIIHex gradient tripled per pixel
+  _streamBody(
+    '/Type /XObject /Subtype /Image /Width 32 /Height 32 '
+    '/ColorSpace /DeviceRGB /BitsPerComponent 8 /Mask [0 0 0 0 0 0] '
+    '/Filter /ASCIIHexDecode',
+    _grayGradientHex(32, 32, repeat: 3),
+  ),
+  // 5: page content — placed at 8 pt (288 ppi)
+  _streamBody('', 'q 8 0 0 8 50 50 cm /Im1 Do Q\n'),
+]);
+
+/// A stencil (`/ImageMask true`) drawn at 8 pt (288 ppi): 16 rows that
+/// paint, 16 that do not. Proves the reducer's CCITT rewrite keeps
+/// `/ImageMask true` and the mask's shape survives resampling.
+final Uint8List stencilImageMaskPdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R >>',
+  // 4: the stencil — 16 rows paint (0), 16 rows do not (1); 4 bytes/row
+  _streamBody(
+    '/Type /XObject /Subtype /Image /ImageMask true /Width 32 /Height 32 '
+        '/BitsPerComponent 1 /Filter /ASCIIHexDecode',
+    '${List.filled(16, '00000000').join()}${List.filled(16, 'FFFFFFFF').join()}>',
+  ),
+  // 5: page content — fill colour blue, stencil placed at 8 pt (288 ppi)
+  _streamBody('', '0 0 1 rg q 8 0 0 8 50 50 cm /Im1 Do Q\n'),
+]);
+
+/// A bogus one-byte JBIG2 stream (`/Filter [/ASCIIHexDecode
+/// /JBIG2Decode]`) — classification only, this package never decodes
+/// JBIG2. No local producer writes JBIG2, and no JBIG2 encoder exists in
+/// this toolchain either, so the stub is hand-authored and never meant
+/// to decode.
+final Uint8List jbig2StubPdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R >>',
+  // 4: the image — 32×32 gray, 1 bpc, a bogus one-byte JBIG2 payload
+  _streamBody(
+    '/Type /XObject /Subtype /Image /Width 32 /Height 32 '
+        '/ColorSpace /DeviceGray /BitsPerComponent 1 '
+        '/Filter [/ASCIIHexDecode /JBIG2Decode]',
+    '00>',
+  ),
+  // 5: page content — placed at 8 pt (288 ppi)
+  _streamBody('', 'q 8 0 0 8 50 50 cm /Im1 Do Q\n'),
+]);
+
+/// A 1-bit DeviceGray image stored RAW (`/Filter /ASCIIHexDecode`, no
+/// CCITT) — 16 black rows then 16 white, drawn at 8 pt (288 ppi). No
+/// local tool (ImageMagick 7.1.2, Pillow 12.2) writes a non-CCITT 1-bit
+/// image into a PDF; only hand-authoring proves the reducer recompresses
+/// a lossless 1-bit source to CCITT G4 rather than leaving it alone.
+final Uint8List bilevelRawPdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R >>',
+  // 4: the image — 32×32 gray, 1 bpc, ASCIIHex, 16 black rows then 16 white
+  _streamBody(
+    '/Type /XObject /Subtype /Image /Width 32 /Height 32 '
+        '/ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /ASCIIHexDecode',
+    '${List.filled(16, '00000000').join()}${List.filled(16, 'FFFFFFFF').join()}>',
+  ),
+  // 5: page content — placed at 8 pt (288 ppi)
+  _streamBody('', 'q 8 0 0 8 50 50 cm /Im1 Do Q\n'),
+]);
+
+/// A 16-bit-per-component DeviceGray image stored RAW (`/Filter
+/// /ASCIIHexDecode`), drawn at 32 pt (72 ppi). No local tool writes a
+/// 16-bit sample into a PDF at all; only hand-authoring proves the
+/// reducer collapses 16-bit sources to 8-bit.
+final Uint8List gray16RawPdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R >>',
+  // 4: the image — 32×32 gray, 16 bpc, ASCIIHex; low byte fixed 0x80
+  _streamBody(
+    '/Type /XObject /Subtype /Image /Width 32 /Height 32 '
+    '/ColorSpace /DeviceGray /BitsPerComponent 16 /Filter /ASCIIHexDecode',
+    _grayGradientHex(32, 32, lowByte: 0x80),
+  ),
+  // 5: page content — placed at 32 pt (72 ppi)
+  _streamBody('', 'q 32 0 0 32 50 50 cm /Im1 Do Q\n'),
+]);
+
+/// One page whose `/CropBox` is inset from its `/MediaBox` by a foreign
+/// producer — `pageCropBox` must report the CropBox's own rect, never the
+/// MediaBox. Crop rect in x/y/width/height: x 72, y 72, w 468, h 648. No
+/// generator producer sets `/CropBox` distinct from `/MediaBox`, so only
+/// hand-authoring can precondition this.
+final Uint8List croppedPagePdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page — MediaBox 612x792, CropBox inset to [72 72 540 720]
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /CropBox [72 72 540 720] /Resources << /Font << /Helv 4 0 R >> >> /Contents 5 0 R >>',
+  // 4: Helvetica font
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  // 5: page content — the marker text
+  _streamBody('', 'BT /Helv 24 Tf 100 400 Td (CROP) Tj ET\n'),
+]);
+
+/// A catalog whose `/OpenAction` runs JavaScript on open — the shape
+/// `sanitize` must strip. The page carries its own marker text so the
+/// same fixture can prove the page content survives sanitizing while the
+/// action does not. No generator producer writes `/OpenAction`, so only
+/// hand-authoring can precondition this.
+final Uint8List openActionJavaScriptPdf = _offsetPdf([
+  // 1: catalog — OpenAction fires a JavaScript alert
+  '<< /Type /Catalog /Pages 2 0 R /OpenAction << /S /JavaScript /JS (app.alert\\(1\\)) >> >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /Helv 4 0 R >> >> /Contents 5 0 R >>',
+  // 4: Helvetica font
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  // 5: page content — the marker text
+  _streamBody('', 'BT /Helv 24 Tf 100 400 Td (SANITIZE) Tj ET\n'),
+]);
+
+/// An XFA form whose `/AcroForm` has no AcroForm fields at all (`/Fields
+/// []`) and carries its whole form in `/XFA 4 0 R` — object 4 is an
+/// ASCIIHex-encoded XDP (built by [_asciiHex]) holding one `form1`
+/// subform with a text field (`given`) and a checkbox field (`agree`).
+/// Read against `vendor/pdf_oxide/src/xfa/parser.rs` and
+/// `integration.rs`: `form1` becomes the analyzer's one page because
+/// `parse_template` starts a page on the first `<subform>` it sees
+/// regardless of name (`current_page.is_none()`), so no extra `pageSet`
+/// element is needed. Declared truths from that code path: `hasXfa true`,
+/// `fieldCount 2` (`XfaForm.field_count()`), `pageCount 1` (one non-empty
+/// page pushed at end of `parse_template`), `fieldTypes ['Checkbox',
+/// 'Text']` (`XfaFieldType::from_xfa_name` maps `checkButton` ->
+/// `Checkbox` and `textEdit` -> `Text`; `analyze_xfa_document` `{:?}`-
+/// formats, sorts and dedups them). No generator producer writes XFA, so
+/// only hand-authoring can precondition this.
+final Uint8List xfaFormPdf = _offsetPdf([
+  // 1: catalog — no AcroForm fields, the whole form lives in the XFA packet
+  '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [] /XFA 4 0 R >> >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>',
+  // 4: the XFA packet — ASCIIHex-encoded XDP, one subform, two fields
+  _streamBody(
+    '/Filter /ASCIIHexDecode',
+    _asciiHex(
+      '<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">'
+      '<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">'
+      '<subform name="form1">'
+      '<field name="given"><ui><textEdit/></ui></field>'
+      '<field name="agree"><ui><checkButton/></ui></field>'
+      '</subform></template></xdp:xdp>',
+    ),
+  ),
+]);
+
+/// One embedded file (`notes.txt`) reachable only through the document's
+/// `/Names /EmbeddedFiles` tree — the shape an attachments-listing read
+/// must walk, not a page annotation. The file spec (obj 5) carries `/F`,
+/// `/UF` and `/Desc`; the embedded stream (obj 6) is unfiltered so its
+/// declared `/Params /Size 11` is also its real byte count. No generator
+/// producer embeds a file this way, so only hand-authoring can
+/// precondition this.
+final Uint8List attachmentPdf = _offsetPdf([
+  // 1: catalog — embedded-files name tree pointing at the filespec (obj 5)
+  '<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(notes.txt) 5 0 R] >> >> >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>',
+  // 4: blank page content stream
+  _streamBody('', 'q Q\n'),
+  // 5: file spec — /F, /UF, /Desc, /EF pointing at the embedded stream (obj 6)
+  '<< /Type /Filespec /F (notes.txt) /UF (notes.txt) /Desc (Meeting notes) /EF << /F 6 0 R >> >>',
+  // 6: the embedded file — unfiltered; /Params /Size matches the 11 real bytes
+  _streamBody(
+    '/Type /EmbeddedFile /Subtype /text#2Fplain /Params << /Size 11 >>',
+    'hello notes',
+  ),
+]);
+
 /// A single text field, near the top of the page, whose `/AP` is an
 /// empty placeholder (`/Tx BMC EMC`) — the state a form writer leaves when it
 /// sets `/NeedAppearances` instead of drawing the value. Used to prove the

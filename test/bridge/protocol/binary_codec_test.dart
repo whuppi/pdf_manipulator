@@ -43,6 +43,14 @@ void main() {
       expect(r.fields['size'], big);
     });
 
+    test('int64 round-trips a negative value and a 2^52 value', () {
+      // Both halves matter: a negative high word and a low word above 2^31.
+      for (final v in [-1, -0x100000000 - 5, 0xFFFFFFFF, 1 << 52]) {
+        final bytes = encodeRequest('test', {'v': v});
+        expect(_parseRequest(bytes).fields['v'], v, reason: '$v');
+      }
+    });
+
     test('double value', () {
       final bytes = encodeRequest('test', {'opacity': 0.75});
       final r = _parseRequest(bytes);
@@ -248,8 +256,13 @@ void main() {
   switch (type) {
     case 1: // i32
       return (value: bd.getInt32(pos, Endian.little), nextPos: pos + 4);
-    case 2: // i64
-      return (value: bd.getInt64(pos, Endian.little), nextPos: pos + 8);
+    case 2: // i64 — two halves, the only form dart2js can read
+      return (
+        value:
+            bd.getInt32(pos + 4, Endian.little) * 4294967296 +
+            bd.getUint32(pos, Endian.little),
+        nextPos: pos + 8,
+      );
     case 3: // f64
       return (value: bd.getFloat64(pos, Endian.little), nextPos: pos + 8);
     case 4: // bool
@@ -331,7 +344,10 @@ void _addValue(BytesBuilder buf, Object value) {
         buf.add(bd.buffer.asUint8List());
       } else {
         buf.addByte(2);
-        final bd = ByteData(8)..setInt64(0, v, Endian.little);
+        final hi = (v / 4294967296).floor();
+        final bd = ByteData(8)
+          ..setUint32(0, v - hi * 4294967296, Endian.little)
+          ..setInt32(4, hi, Endian.little);
         buf.add(bd.buffer.asUint8List());
       }
     case final double v:

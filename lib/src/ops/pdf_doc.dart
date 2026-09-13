@@ -6,13 +6,18 @@
 // PdfStandalone for one-shot export ops.
 
 import 'package:pdf_manipulator/src/ops/pdf.dart';
+import 'package:pdf_manipulator/src/types/data_sink.dart';
+import 'package:pdf_manipulator/src/types/errors.dart';
+import 'package:pdf_manipulator/src/types/pdf_attachment.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
+import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
 import 'package:pdf_manipulator/src/types/pdf_task.dart';
 import 'package:pdf_manipulator/src/types/pdf_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_info.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
+import 'package:pdf_manipulator/src/types/pdf_xfa_info.dart';
 import 'package:pdf_manipulator/src/types/search_result.dart';
 import 'package:pdf_manipulator/src/bridge/pdf_bridge.dart';
 import 'package:pdf_manipulator/src/keep/record_use_shim.dart';
@@ -134,10 +139,10 @@ class PdfDoc {
   }
 
   /// Returns metadata for all digital signatures in the document.
-  PdfTask<List<PdfSignatureInfo>> getSignatures() {
+  PdfTask<List<PdfSignatureInfo>> get signatures {
     KeepRecord.op('signatures');
     _check();
-    return _handle.getSignatures();
+    return _handle.signatures;
   }
 
   /// Verifies all digital signatures — returns true if all are valid.
@@ -179,6 +184,53 @@ class PdfDoc {
     KeepRecord.op('extract');
     _check();
     return _handle.classifyDocument();
+  }
+
+  /// Reads every AcroForm field of the document.
+  PdfTask<List<PdfFormField>> get formFields {
+    _check();
+    return _handle.formFields;
+  }
+
+  /// Reads the AcroForm field named [name], or `null` when no field has
+  /// that fully qualified name.
+  PdfTask<PdfFormField?> formField(String name) {
+    _check();
+    return formFields.map((fields) {
+      for (final field in fields) {
+        if (field.name == name) return field;
+      }
+      return null;
+    });
+  }
+
+  /// Exports every AcroForm field's current value to [output] in [format].
+  PdfTask<void> exportFormData(
+    DataSink output, {
+    PdfFormDataFormat format = PdfFormDataFormat.xfdf,
+  }) {
+    _check();
+    return _handle.exportFormData(output, format: format.name);
+  }
+
+  /// What the document's XFA packet declares, or `null` when the document
+  /// has no XFA form.
+  PdfTask<PdfXfaInfo?> get xfa {
+    _check();
+    return _handle.xfa;
+  }
+
+  /// Lists the files embedded in the document, metadata only.
+  PdfTask<List<PdfAttachment>> get attachments {
+    _check();
+    return _handle.attachments;
+  }
+
+  /// Writes the embedded file named [name] to [output]. An unknown name
+  /// throws [PdfEngineError].
+  PdfTask<void> extractAttachment(String name, DataSink output) {
+    _check();
+    return _handle.extractAttachment(name, output);
   }
 
   // ── Lifecycle ──

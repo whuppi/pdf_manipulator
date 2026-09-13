@@ -181,7 +181,7 @@ void main() {
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
 Future<void> check(PdfDoc doc) async {
-  await doc.getSignatures();
+  await doc.signatures;
 }
 ''');
       // Tool-owned, and `lib/build/` which is the app's own code, not output.
@@ -227,7 +227,7 @@ Future<void> shrink(PdfDoc doc) async {
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
 Future<void> check(PdfDoc doc) async {
-  await doc.getSignatures();
+  await doc.signatures;
 }
 ''');
 

@@ -230,6 +230,10 @@ lib/
     │   ├── pdf_config.dart                 ← PdfConfig (webIoMode, URLs)
     │   ├── pdf_enums.dart                  ← PdfIoMode, PdfEncryptionAlgorithm, ...
     │   ├── pdf_image.dart                  ← PdfImage, RenderedPage
+    │   ├── pdf_matrix.dart                 ← PdfMatrix: a PDF affine transform
+    │   ├── pdf_page_image.dart             ← PdfPageImage: an image XObject as placed on a page
+    │   ├── pdf_image_policy.dart           ← PdfImagePolicy: reduceImages knobs + screen/ebook/print/lossless presets
+    │   ├── pdf_image_report.dart           ← PdfImageReport/PdfImageOutcome + the encoding/color/action/reason enums
     │   ├── pdf_page_info.dart              ← PdfPageInfo
     │   ├── pdf_pages.dart                  ← PdfPages sealed (all, single, range)
     │   ├── pdf_params.dart                 ← PdfSaveOptions, PdfEncryption, ...
@@ -286,7 +290,14 @@ vendor/pdf_oxide/src/
 │   ├── dispatch.rs                         ← every op as a typed function
 │   ├── positioned_write.rs                 ← CountingWriter + SeekWriter
 │   ├── sign.rs                             ← O(1) signing with AcroForm
-│   ├── image_optimizer.rs                  ← JPEG recompress
+│   ├── images/                             ← image reducer behind reduceImages and compress, five stages
+│   │   ├── inventory.rs                    ← which XObjects are images; every painted image with its placements (core)
+│   │   ├── classify.rs                     ← Encoding × ColorModel × Masks from the dictionary; the support verdict
+│   │   ├── policy.rs                       ← Policy, effective ppi, the pure decision table (unit-tested)
+│   │   ├── execute.rs                      ← decode (extractor) → resample → encode → dict rewrite → stage; the driver
+│   │   ├── encode.rs                       ← Flate+PNG predictors, JPEG, CCITT G4 (round-trip unit tests)
+│   │   ├── resample.rs                     ← Triangle resize; bilevel area-average + threshold
+│   │   └── report.rs                       ← Outcome/Report + wire names
 │   ├── font_optimizer.rs                   ← Standard 14 unembedding
 │   ├── constants.rs                        ← buffer sizes
 │   ├── lane_state.rs                       ← per-lane engine state (no locks)
@@ -908,7 +919,7 @@ test/
 │   └── streaming_guard_test.dart   Tests the guards themselves
 │
 ├── ops/
-│   ├── core/                       7 shared batteries (*_battery.dart —
+│   ├── core/                       8 shared batteries (*_battery.dart —
 │   │                               register-only, no main; runners call them)
 │   ├── stress/                     6 stress batteries (1000-page)
 │   ├── platform/                   guarantees only ONE platform can break
@@ -985,7 +996,8 @@ this table summarizes what each patched file carries and why.
 | `Cargo.toml` | `native-bridge` deps + `office_oxide` as path dependency |
 | `lib.rs` | `pub mod host;` |
 | `document.rs` | External reader variant + `from_external_reader()` (O(1)-memory open), info/encryption/permissions accessors, `collect_refs_of()` (zero-clone GC), streaming `to_docx/pptx/xlsx_writer_flow()`, scan-all `/Subtype` Form detection |
-| `editor/document_editor.rs` | State accessors, `merge_from_reader()` + shared merge core, zero-clone GC BFS + `stage_trimmed_pages_for_gc()`, `write_full_to_writer(PositionedWrite)` (function-wide streaming offsets), per-save page-ref cache, scoped destructive erase (`erase_regions_destructive`), appearance generation for AP-less annotation types, §12.5.5 appearance placement, `add_page_annotation()`, `all_media_boxes()` |
+| `editor/document_editor.rs` | State accessors, `merge_from_reader()` + shared merge core, zero-clone GC BFS + `stage_trimmed_pages_for_gc()`, `write_full_to_writer(PositionedWrite)` (function-wide streaming offsets), per-save page-ref cache, scoped destructive erase (`erase_regions_destructive`), appearance generation for AP-less annotation types, §12.5.5 appearance placement, `add_page_annotation()`, `all_media_boxes()`, image modifications applied in page space (`rewrite_content_stream_with_image_mods` composes with the enclosing CTM, matching `get_page_images`), `staged_or_source_object()` so the resource walk writes a staged XObject/ExtGState instead of the source copy (the sweep skips ids already written), form field properties reach the saved file (`flush_form_fields_to_modified_objects` writes every dirty wrapper's `/TU`, `/Rect`, `/MaxLen`, `/Q`, `/Ff`, `/MK`, `/BS`, `/DA`, not only `/V`) and `remove_deleted_form_fields_from_acroform` drops removed fields from `/Fields` and `/Annots` |
+| `extractors/images.rs` | `PdfImageHandle::object_ref()` and `ctm()` — the identity and composed placement the host image reducer groups and measures by |
 | `encryption/mod.rs` + `encryption/algorithms.rs` | Raw file key exposed to the writer (`file_key`, `build_with_key`) so streams encrypt with the key the dict advertises; PDF 2.0 Algorithm 10 (`/Perms` for R6) |
 | `compliance/converter.rs` | Expose `convert_with_editor`, bundled 12 Liberation fonts (WASM has no system fonts) |
 | `writer/pdf_writer.rs` | `finish_to_writer(PositionedWrite)` — streaming save |

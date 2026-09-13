@@ -119,6 +119,26 @@ void registerSugarTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
+    test('compress with an image policy shrinks a photo PDF', () async {
+      final pdf = createPdf();
+      final sink = TestSink();
+      await pdf.compress(
+        src(fImagesHires),
+        sink,
+        images: PdfImagePolicy.screen,
+      );
+      final output = sink.takeBytes();
+      expect(output.length, lessThan(fImagesHires.length ~/ 4));
+      final doc = await pdf.open(src(output));
+      expect(doc.pageCount, 1);
+      final images = await doc
+          .extractImages(pages: const PdfPages.single(0))
+          .toList();
+      expect(images.single.width, 32);
+      expect(images.single.height, 32);
+      await doc.dispose();
+    }, timeout: t(1));
+
     // ── Delete ──
 
     test('deletePages from 2-page → 1 page', () async {
@@ -326,7 +346,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       // Semantic presence: flatten the stamp annotation into page
       // content, then the stamp's appearance text must be extractable.
       final e = await pdf.edit(src(output));
-      await e.flattenAllAnnotations();
+      await e.flattenAnnotations();
       final flatSink = TestSink();
       await e.save(flatSink);
       await e.dispose();
@@ -364,7 +384,7 @@ void registerSugarTests(Pdf Function() createPdf) {
     test('background watermark text is extractable on every page', () async {
       // The background layer draws INTO the content stream — its text
       // must come back out of extraction (the semantic presence proof;
-      // the annotation layer's proof rides flattenAllAnnotations in
+      // the annotation layer's proof rides flattenAnnotations in
       // the stamp test above).
       final pdf = createPdf();
       final sink = TestSink();

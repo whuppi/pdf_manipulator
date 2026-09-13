@@ -7,6 +7,8 @@
 // Presence proofs are SEMANTIC: annotation appearances are proven by
 // flattening into content and extracting — never by grepping bytes.
 
+import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:image/image.dart' as img;
@@ -15,6 +17,7 @@ import 'package:test/test.dart';
 
 import '../../fixtures/generated/fixtures.dart';
 import '../../fixtures/handwritten.dart';
+import '../../fixtures/third_party/tp_image_kinds.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
 
@@ -57,7 +60,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final output = sink.takeBytes();
       final e2 = await pdf.edit(src(output));
       expect(
-        await e2.getTitle(),
+        await e2.title,
         contains('Behavioral Test Title'),
         reason: 'the title must survive save and re-open',
       );
@@ -78,7 +81,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final metaPdf = prepSink.takeBytes();
 
       final check = await pdf.edit(src(metaPdf));
-      expect(await check.getTitle(), contains('ScrubMeTitle'));
+      expect(await check.title, contains('ScrubMeTitle'));
       await check.dispose();
 
       final editor = await pdf.edit(src(metaPdf));
@@ -88,42 +91,42 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final after = await pdf.edit(src(sink.takeBytes()));
       expect(
-        await after.getTitle(),
+        await after.title,
         isNot(contains('ScrubMeTitle')),
         reason: 'scrubbed metadata must be gone from the document',
       );
-      expect(await after.getAuthor(), isNot(contains('ScrubMeAuthor')));
+      expect(await after.author, isNot(contains('ScrubMeAuthor')));
       await after.dispose();
     }, timeout: t(1));
 
-    test('setAuthor + getAuthor roundtrips', () async {
+    test('setAuthor + author roundtrips', () async {
       final editor = await createPdf().edit(src(minimalPdf));
       await editor.setAuthor('Test Author');
-      final author = await editor.getAuthor();
+      final author = await editor.author;
       expect(author, contains('Test Author'));
       await editor.dispose();
     }, timeout: t(1));
 
-    test('setSubject + getSubject roundtrips', () async {
+    test('setSubject + subject roundtrips', () async {
       final editor = await createPdf().edit(src(minimalPdf));
       await editor.setSubject('Test Subject');
-      final subject = await editor.getSubject();
+      final subject = await editor.subject;
       expect(subject, contains('Test Subject'));
       await editor.dispose();
     }, timeout: t(1));
 
-    test('setKeywords + getKeywords roundtrips', () async {
+    test('setKeywords + keywords roundtrips', () async {
       final editor = await createPdf().edit(src(minimalPdf));
       await editor.setKeywords('dart, pdf, test');
-      final kw = await editor.getKeywords();
+      final kw = await editor.keywords;
       expect(kw, contains('dart'));
       await editor.dispose();
     }, timeout: t(1));
 
-    test('setProducer + getProducer roundtrips', () async {
+    test('setProducer + producer roundtrips', () async {
       final editor = await createPdf().edit(src(minimalPdf));
       await editor.setProducer('pdf_manipulator');
-      final producer = await editor.getProducer();
+      final producer = await editor.producer;
       expect(producer, contains('pdf_manipulator'));
       await editor.dispose();
     }, timeout: t(1));
@@ -137,17 +140,17 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final e2 = await pdf.edit(src(sink.takeBytes()));
       expect(
-        await e2.getProducer(),
+        await e2.producer,
         contains('Behavioral Producer'),
         reason: 'the producer must survive save and re-open',
       );
       await e2.dispose();
     }, timeout: t(1));
 
-    test('setCreationDate + getCreationDate roundtrips', () async {
+    test('setCreationDate + creationDate roundtrips', () async {
       final editor = await createPdf().edit(src(minimalPdf));
       await editor.setCreationDate('D:20240101120000Z');
-      final date = await editor.getCreationDate();
+      final date = await editor.creationDate;
       expect(date, contains('20240101'));
       await editor.dispose();
     }, timeout: t(1));
@@ -196,11 +199,93 @@ void registerEditorTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
-    test('getPageMediaBox returns correct A4 dimensions', () async {
+    test('pageMediaBox returns correct A4 dimensions', () async {
       final editor = await createPdf().edit(src(minimalPdf));
-      final box = await editor.getPageMediaBox(0);
+      final box = await editor.pageMediaBox(0);
       expect(box.width, closeTo(595, 1));
       expect(box.height, closeTo(842, 1));
+      await editor.dispose();
+    }, timeout: t(1));
+
+    test('pageCropBox is null when the page has no CropBox', () async {
+      final editor = await createPdf().edit(src(minimalPdf));
+      expect(await editor.pageCropBox(0), isNull);
+      await editor.dispose();
+    }, timeout: t(1));
+
+    test('pageCropBox reports the CropBox truth on croppedPagePdf', () async {
+      final editor = await createPdf().edit(src(croppedPagePdf));
+      final box = await editor.pageCropBox(0);
+      expect(box, isNotNull);
+      expect(box!.x, closeTo(72, 0.01));
+      expect(box.y, closeTo(72, 0.01));
+      expect(box.width, closeTo(468, 0.01));
+      expect(box.height, closeTo(648, 0.01));
+      await editor.dispose();
+    }, timeout: t(1));
+
+    test(
+      'setPageCropBox then save → reopen reads it back and crops render',
+      () async {
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(minimalPdf));
+        const box = PdfRect(x: 10, y: 20, width: 300, height: 400);
+        await editor.setPageCropBox(0, box);
+        final read = await editor.pageCropBox(0);
+        expect(read, isNotNull);
+        expect(read!.x, closeTo(10, 0.01));
+        expect(read.y, closeTo(20, 0.01));
+        expect(read.width, closeTo(300, 0.01));
+        expect(read.height, closeTo(400, 0.01));
+        final sink = TestSink();
+        await editor.save(sink);
+        await editor.dispose();
+        final reopened = await pdf.edit(src(sink.takeBytes()));
+        final reread = await reopened.pageCropBox(0);
+        expect(reread, isNotNull);
+        expect(reread!.width, closeTo(300, 0.01));
+        expect(reread.height, closeTo(400, 0.01));
+        await reopened.dispose();
+      },
+      timeout: t(1),
+    );
+
+    test('setPageMediaBox then save → pageMediaBox reads it back', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(minimalPdf));
+      const box = PdfRect(x: 5, y: 15, width: 400, height: 500);
+      await editor.setPageMediaBox(0, box);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final reopened = await pdf.edit(src(sink.takeBytes()));
+      final read = await reopened.pageMediaBox(0);
+      expect(read.x, closeTo(5, 0.01));
+      expect(read.y, closeTo(15, 0.01));
+      expect(read.width, closeTo(400, 0.01));
+      expect(read.height, closeTo(500, 0.01));
+      await reopened.dispose();
+    }, timeout: t(1));
+
+    test('setPageRotation is absolute, not additive', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(minimalPdf));
+      await editor.setPageRotation(0, degrees: 90);
+      await editor.setPageRotation(0, degrees: 90);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final doc = await pdf.open(src(sink.takeBytes()));
+      expect(doc.pages[0].rotation, 90);
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('setPageRotation rejects a non-multiple-of-90', () async {
+      final editor = await createPdf().edit(src(minimalPdf));
+      expect(
+        () => editor.setPageRotation(0, degrees: 45),
+        throwsA(isA<PdfInvalidArgument>()),
+      );
       await editor.dispose();
     }, timeout: t(1));
 
@@ -245,7 +330,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final twoPage = mergeSink.takeBytes();
 
       final editor = await pdf.edit(src(twoPage));
-      final boxBefore = await editor.getPageMediaBox(0);
+      final boxBefore = await editor.pageMediaBox(0);
       await editor.movePage(from: 0, to: 1);
       final sink = TestSink();
       await editor.save(sink);
@@ -291,6 +376,52 @@ void registerEditorTests(Pdf Function() createPdf) {
       expect(doc.pageCount, 1);
       await doc.dispose();
     }, timeout: t(1));
+
+    test('applyRedactions removes glyphs and reports the count', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(croppedPagePdf));
+      await editor.addRedaction(
+        0,
+        const PdfRect(x: 90, y: 385, width: 200, height: 40),
+      );
+      final report = await editor.applyRedactions();
+      expect(
+        report.glyphsRemoved,
+        greaterThan(0),
+        reason: 'the report must reflect the glyphs the redaction destroyed',
+      );
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final doc = await pdf.open(src(sink.takeBytes()));
+      final text = await doc.extract(pages: const PdfPages.all());
+      expect(text, isNot(contains('CROP')));
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test(
+      'sanitize(javascript: true) strips the OpenAction, keeps content',
+      () async {
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(openActionJavaScriptPdf));
+        await editor.sanitize(
+          const PdfSanitizeOptions(
+            metadata: false,
+            javascript: true,
+            embeddedFiles: false,
+          ),
+        );
+        final sink = TestSink();
+        await editor.save(sink);
+        await editor.dispose();
+        final doc = await pdf.open(src(sink.takeBytes()));
+        expect(doc.pageCount, 1);
+        final text = await doc.extract(pages: const PdfPages.all());
+        expect(text, contains('SANITIZE'));
+        await doc.dispose();
+      },
+      timeout: t(1),
+    );
 
     // ── Encryption ──
 
@@ -341,21 +472,774 @@ void registerEditorTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
-    // ── Optimization ──
+    // ── Page images ──
 
-    test('optimizeImages returns count on imageless PDF', () async {
-      final editor = await createPdf().edit(src(minimalPdf));
-      final count = await editor.optimizeImages(quality: 75);
-      expect(count, 0);
+    test(
+      'pageImages lists each page\'s image and its name resizes it',
+      () async {
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(fImages));
+        // One embedded PNG per page, placed axis-aligned by dart-pdf.
+        for (var page = 0; page < fImagesTruth.pages; page++) {
+          final images = await editor.pageImages(page);
+          expect(images, hasLength(1), reason: 'page $page');
+          final image = images.single;
+          expect(image.name, isNotEmpty);
+          expect(image.bounds.width, greaterThan(0));
+          expect(image.bounds.height, greaterThan(0));
+          expect(image.transform.isAxisAligned, isTrue);
+          expect(image.transform.a, image.bounds.width);
+          expect(image.transform.d, image.bounds.height);
+          expect(image.transform.e, image.bounds.x);
+          expect(image.transform.f, image.bounds.y);
+        }
+        // The listed name is what resizeImage takes: halve the first image,
+        // save, and read the new placement back from the saved bytes.
+        final before = (await editor.pageImages(0)).single;
+        await editor.resizeImage(
+          0,
+          before.name,
+          width: before.bounds.width / 2,
+          height: before.bounds.height / 2,
+        );
+        final sink = TestSink();
+        await editor.save(sink);
+        await editor.dispose();
+        final reopened = await pdf.edit(src(sink.takeBytes()));
+        final after = (await reopened.pageImages(0)).single;
+        expect(after.name, before.name);
+        expect(after.bounds.width, closeTo(before.bounds.width / 2, 0.01));
+        expect(after.bounds.height, closeTo(before.bounds.height / 2, 0.01));
+        await reopened.dispose();
+      },
+      timeout: t(1),
+    );
+
+    test('repositionImage moves a listed image; setImageBounds moves and '
+        'resizes it', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(fImages));
+      final first = (await editor.pageImages(0)).single;
+      await editor.repositionImage(
+        0,
+        first.name,
+        x: first.bounds.x + 20,
+        y: first.bounds.y - 30,
+      );
+      final second = (await editor.pageImages(1)).single;
+      const target = PdfRect(x: 10, y: 20, width: 40, height: 50);
+      await editor.setImageBounds(1, second.name, target);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final reopened = await pdf.edit(src(sink.takeBytes()));
+      final moved = (await reopened.pageImages(0)).single;
+      expect(moved.bounds.x, closeTo(first.bounds.x + 20, 0.01));
+      expect(moved.bounds.y, closeTo(first.bounds.y - 30, 0.01));
+      expect(moved.bounds.width, closeTo(first.bounds.width, 0.01));
+      expect(moved.bounds.height, closeTo(first.bounds.height, 0.01));
+      final set = (await reopened.pageImages(1)).single;
+      expect(set.bounds.x, closeTo(target.x, 0.01));
+      expect(set.bounds.y, closeTo(target.y, 0.01));
+      expect(set.bounds.width, closeTo(target.width, 0.01));
+      expect(set.bounds.height, closeTo(target.height, 0.01));
+      await reopened.dispose();
+    }, timeout: t(1));
+
+    test('pageImages lists image XObjects only, not a form drawn beside '
+        'them', () async {
+      // The fixture draws /Fx1 (a form) after /Im1; both are `Do` operators.
+      final editor = await createPdf().edit(src(imageAndFormPdf));
+      final images = await editor.pageImages(0);
+      expect(images.map((i) => i.name), ['Im1']);
+      final bounds = images.single.bounds;
+      expect(bounds.x, closeTo(40, 0.01));
+      expect(bounds.y, closeTo(700, 0.01));
+      expect(bounds.width, closeTo(100, 0.01));
+      expect(bounds.height, closeTo(50, 0.01));
       await editor.dispose();
     }, timeout: t(1));
 
-    test('optimizeImages returns non-zero on image PDF', () async {
+    // ── Reduce images ──
+
+    test('reduceImages screen preset downsamples a 288 ppi image to 72 ppi '
+        'and keeps its placement', () async {
       final pdf = createPdf();
-      final imageBytes = fImages;
-      final editor = await pdf.edit(src(imageBytes));
-      final count = await editor.optimizeImages(quality: 50);
-      expect(count, greaterThan(0));
+      final editor = await pdf.edit(src(fImagesHires));
+      final before = await editor.pageImages(0);
+      final report = await editor.reduceImages(PdfImagePolicy.screen);
+      final row = report.images.single;
+      expect(row.encoding, PdfImageEncoding.raw);
+      expect(row.color, PdfImageColor.rgb);
+      expect(row.width, fImagesHiresTruth.imageWidth);
+      expect(row.ppiMin, closeTo(fImagesHiresTruth.ppi, 0.5));
+      expect(row.action, PdfImageAction.downsampled);
+      // 128 px × 72 / 288 = 32 px.
+      expect(row.widthAfter, 32);
+      expect(row.heightAfter, 32);
+      expect(row.bytesAfter, lessThan(row.bytesBefore));
+      expect(report.changed, 1);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final saved = sink.takeBytes();
+      expect(saved.length, lessThan(fImagesHires.length));
+      final reopened = await pdf.edit(src(saved));
+      final after = await reopened.pageImages(0);
+      expect(after.single.name, before.single.name);
+      expect(after.single.bounds.x, closeTo(before.single.bounds.x, 0.01));
+      expect(
+        after.single.bounds.width,
+        closeTo(before.single.bounds.width, 0.01),
+      );
+      await reopened.dispose();
+      final doc = await pdf.open(src(saved));
+      final images = await doc
+          .extractImages(pages: const PdfPages.single(0))
+          .toList();
+      expect(images.single.width, 32);
+      expect(images.single.height, 32);
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('reduceImages classifies every fixture kind', () async {
+      final pdf = createPdf();
+
+      Future<void> assertClassification(
+        Uint8List bytes, {
+        required PdfImageEncoding encoding,
+        required PdfImageColor color,
+        required bool indexed,
+        required int bits,
+        required bool softMask,
+        required int width,
+        required int uses,
+        double? ppiMin,
+      }) async {
+        final editor = await pdf.edit(src(bytes));
+        final row = (await editor.reduceImages(
+          PdfImagePolicy.lossless,
+        )).images.single;
+        expect(row.encoding, encoding);
+        expect(row.color, color);
+        expect(row.indexed, indexed);
+        expect(row.bits, bits);
+        expect(row.hasSoftMask, softMask);
+        expect(row.width, width);
+        expect(row.uses, uses);
+        if (ppiMin != null) expect(row.ppiMin, closeTo(ppiMin, 0.5));
+        await editor.dispose();
+      }
+
+      await assertClassification(
+        fImagesHires,
+        encoding: PdfImageEncoding.raw,
+        color: PdfImageColor.rgb,
+        indexed: false,
+        bits: 8,
+        softMask: true,
+        width: fImagesHiresTruth.imageWidth,
+        uses: 1,
+        ppiMin: fImagesHiresTruth.ppi.toDouble(),
+      );
+
+      final jpegEditor = await pdf.edit(src(fImagesJpeg));
+      final jpegReport = await jpegEditor.reduceImages(PdfImagePolicy.lossless);
+      expect(jpegReport.images, hasLength(2));
+      for (final row in jpegReport.images) {
+        expect(row.encoding, PdfImageEncoding.jpeg);
+        expect(row.color, PdfImageColor.rgb);
+        expect(row.bits, 8);
+        expect(row.hasSoftMask, isFalse);
+        expect(row.width, fImagesJpegTruth.imageWidth);
+        expect(row.uses, 1);
+      }
+      await jpegEditor.dispose();
+
+      await assertClassification(
+        tpKindGray,
+        encoding: PdfImageEncoding.values.byName(tpKindGrayTruth.encoding),
+        color: PdfImageColor.values.byName(tpKindGrayTruth.color),
+        indexed: tpKindGrayTruth.indexed,
+        bits: tpKindGrayTruth.bits,
+        softMask: tpKindGrayTruth.softMask,
+        width: tpKindGrayTruth.width,
+        uses: 1,
+        ppiMin: tpKindGrayTruth.ppi.toDouble(),
+      );
+      await assertClassification(
+        tpKindCmykJpeg,
+        encoding: PdfImageEncoding.values.byName(tpKindCmykJpegTruth.encoding),
+        color: PdfImageColor.values.byName(tpKindCmykJpegTruth.color),
+        indexed: tpKindCmykJpegTruth.indexed,
+        bits: tpKindCmykJpegTruth.bits,
+        softMask: tpKindCmykJpegTruth.softMask,
+        width: tpKindCmykJpegTruth.width,
+        uses: 1,
+      );
+      await assertClassification(
+        tpKindIndexed,
+        encoding: PdfImageEncoding.values.byName(tpKindIndexedTruth.encoding),
+        color: PdfImageColor.values.byName(tpKindIndexedTruth.color),
+        indexed: tpKindIndexedTruth.indexed,
+        bits: tpKindIndexedTruth.bits,
+        softMask: tpKindIndexedTruth.softMask,
+        width: tpKindIndexedTruth.width,
+        uses: 1,
+      );
+      await assertClassification(
+        tpKindBilevelG4,
+        encoding: PdfImageEncoding.values.byName(tpKindBilevelG4Truth.encoding),
+        color: PdfImageColor.values.byName(tpKindBilevelG4Truth.color),
+        indexed: tpKindBilevelG4Truth.indexed,
+        bits: tpKindBilevelG4Truth.bits,
+        softMask: tpKindBilevelG4Truth.softMask,
+        width: tpKindBilevelG4Truth.width,
+        uses: 1,
+        ppiMin: tpKindBilevelG4Truth.ppi.toDouble(),
+      );
+      await assertClassification(
+        bilevelRawPdf,
+        encoding: PdfImageEncoding.raw,
+        color: PdfImageColor.bilevel,
+        indexed: false,
+        bits: 1,
+        softMask: false,
+        width: 32,
+        uses: 1,
+      );
+      await assertClassification(
+        gray16RawPdf,
+        encoding: PdfImageEncoding.raw,
+        color: PdfImageColor.gray,
+        indexed: false,
+        bits: 16,
+        softMask: false,
+        width: 32,
+        uses: 1,
+      );
+      await assertClassification(
+        stencilImageMaskPdf,
+        encoding: PdfImageEncoding.raw,
+        color: PdfImageColor.bilevel,
+        indexed: false,
+        bits: 1,
+        softMask: false,
+        width: 32,
+        uses: 1,
+      );
+      await assertClassification(
+        separationImagePdf,
+        encoding: PdfImageEncoding.raw,
+        color: PdfImageColor.other,
+        indexed: false,
+        bits: 8,
+        softMask: false,
+        width: 32,
+        uses: 1,
+      );
+      await assertClassification(
+        colorKeyMaskPdf,
+        encoding: PdfImageEncoding.raw,
+        color: PdfImageColor.rgb,
+        indexed: false,
+        bits: 8,
+        softMask: false,
+        width: 32,
+        uses: 1,
+      );
+      await assertClassification(
+        jbig2StubPdf,
+        encoding: PdfImageEncoding.jbig2,
+        color: PdfImageColor.bilevel,
+        indexed: false,
+        bits: 1,
+        softMask: false,
+        width: 32,
+        uses: 1,
+      );
+      await assertClassification(
+        sharedImagePdf,
+        encoding: PdfImageEncoding.raw,
+        color: PdfImageColor.gray,
+        indexed: false,
+        bits: 8,
+        softMask: false,
+        width: 32,
+        uses: 2,
+        ppiMin: 72,
+      );
+      await assertClassification(
+        imageInFormPdf,
+        encoding: PdfImageEncoding.raw,
+        color: PdfImageColor.gray,
+        indexed: false,
+        bits: 8,
+        softMask: false,
+        width: 16,
+        uses: 1,
+        ppiMin: 288,
+      );
+    }, timeout: t(1));
+
+    test(
+      'reduceImages never re-encodes a JPEG it does not downsample',
+      () async {
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(fImagesJpeg));
+        final report = await editor.reduceImages(PdfImagePolicy.screen);
+        expect(report.images, hasLength(2));
+        final kept = report.images.firstWhere(
+          (row) => row.action == PdfImageAction.kept,
+        );
+        expect(kept.keepReason, PdfImageKeepReason.withinResolution);
+        final downsampled = report.images.firstWhere(
+          (row) => row.action == PdfImageAction.downsampled,
+        );
+        expect(downsampled.widthAfter, 32);
+        expect(downsampled.heightAfter, 32);
+        final sink = TestSink();
+        await editor.save(sink);
+        await editor.dispose();
+        final saved = sink.takeBytes();
+        final doc = await pdf.open(src(saved));
+        final page0 = await doc
+            .extractImages(pages: const PdfPages.single(0))
+            .toList();
+        expect(page0.single.width, 128);
+        expect(page0.single.height, 128);
+        expect(page0.single.format, 'jpeg');
+        final page1 = await doc
+            .extractImages(pages: const PdfPages.single(1))
+            .toList();
+        expect(page1.single.width, 32);
+        expect(page1.single.height, 32);
+        expect(page1.single.format, 'jpeg');
+        await doc.dispose();
+
+        final freshEditor = await pdf.edit(src(fImagesJpeg));
+        final losslessReport = await freshEditor.reduceImages(
+          PdfImagePolicy.lossless,
+        );
+        for (final row in losslessReport.images) {
+          expect(row.action, PdfImageAction.kept);
+          expect(row.keepReason, PdfImageKeepReason.alreadyOptimal);
+        }
+        await freshEditor.dispose();
+      },
+      timeout: t(1),
+    );
+
+    test('reduceImages co-resamples the soft mask with its image', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(fImagesSmask));
+      final report = await editor.reduceImages(PdfImagePolicy.screen);
+      final row = report.images.single;
+      expect(row.action, PdfImageAction.downsampled);
+      expect(row.widthAfter, 8);
+      expect(row.hasSoftMask, isTrue);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final saved = sink.takeBytes();
+      final doc = await pdf.open(src(saved));
+      final images = await doc
+          .extractImages(pages: const PdfPages.single(0))
+          .toList();
+      expect(images.single.width, 8);
+      expect(images.single.height, 8);
+      await doc.dispose();
+
+      final before = await _renderFirstPage(pdf, fImagesSmask);
+      final after = await _renderFirstPage(pdf, saved);
+      expect(_psnr(before, after), greaterThanOrEqualTo(30));
+    }, timeout: t(1));
+
+    test('reduceImages converts a CMYK JPEG to RGB under screen and keeps it '
+        'under print', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(tpKindCmykJpeg));
+      final report = await editor.reduceImages(PdfImagePolicy.screen);
+      final row = report.images.single;
+      expect(row.action, PdfImageAction.downsampled);
+      expect(row.widthAfter, 16);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final doc = await pdf.open(src(sink.takeBytes()));
+      final images = await doc
+          .extractImages(pages: const PdfPages.single(0))
+          .toList();
+      expect(images.single.width, 16);
+      expect(images.single.height, 16);
+      expect(images.single.colorSpace, contains('RGB'));
+      await doc.dispose();
+
+      final printEditor = await pdf.edit(src(tpKindCmykJpeg));
+      final printReport = await printEditor.reduceImages(PdfImagePolicy.print);
+      final printRow = printReport.images.single;
+      expect(printRow.action, PdfImageAction.kept);
+      expect(printRow.keepReason, PdfImageKeepReason.withinResolution);
+      expect(printReport.changed, 0);
+      await printEditor.dispose();
+    }, timeout: t(1));
+
+    test('reduceImages writes CCITT G4 for bilevel images', () async {
+      final pdf = createPdf();
+
+      final editor = await pdf.edit(src(bilevelRawPdf));
+      final report = await editor.reduceImages(PdfImagePolicy.screen);
+      final row = report.images.single;
+      expect(row.action, PdfImageAction.recompressed);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final saved = sink.takeBytes();
+      final doc = await pdf.open(src(saved));
+      final images = await doc
+          .extractImages(pages: const PdfPages.single(0))
+          .toList();
+      expect(images.single.format, 'raw');
+      expect(images.single.width, 32);
+      expect(images.single.height, 32);
+      expect(images.single.bitsPerComponent, 1);
+      await doc.dispose();
+      final before = await _renderFirstPage(pdf, bilevelRawPdf);
+      final after = await _renderFirstPage(pdf, saved);
+      expect(_psnr(before, after), double.infinity);
+
+      final g4Editor = await pdf.edit(src(tpKindBilevelG4));
+      final g4Report = await g4Editor.reduceImages(PdfImagePolicy.screen);
+      final g4Row = g4Report.images.single;
+      expect(g4Row.action, PdfImageAction.downsampled);
+      expect(g4Row.widthAfter, 16);
+      expect(g4Row.heightAfter, 16);
+      expect(g4Row.bytesAfter, lessThan(g4Row.bytesBefore));
+      await g4Editor.dispose();
+
+      final stencilEditor = await pdf.edit(src(stencilImageMaskPdf));
+      final stencilReport = await stencilEditor.reduceImages(
+        PdfImagePolicy.screen,
+      );
+      final stencilRow = stencilReport.images.single;
+      expect(stencilRow.action, PdfImageAction.recompressed);
+      final stencilSink = TestSink();
+      await stencilEditor.save(stencilSink);
+      await stencilEditor.dispose();
+      final stencilSaved = stencilSink.takeBytes();
+      final stencilBefore = await _renderFirstPage(pdf, stencilImageMaskPdf);
+      final stencilAfter = await _renderFirstPage(pdf, stencilSaved);
+      expect(_psnr(stencilBefore, stencilAfter), double.infinity);
+    }, timeout: t(1));
+
+    test('reduceImages downsamples a gray image to a gray JPEG', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(tpKindGray));
+      final row = (await editor.reduceImages(
+        PdfImagePolicy.screen,
+      )).images.single;
+      expect(row.action, PdfImageAction.downsampled, reason: '$row');
+      expect(row.widthAfter, 16);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final doc = await pdf.open(src(sink.takeBytes()));
+      final image =
+          (await doc.extractImages(pages: const PdfPages.single(0)).toList())
+              .single;
+      expect(image.width, 16);
+      expect(image.format, 'jpeg');
+      expect(image.colorSpace, contains('Gray'));
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('reduceImages lossless changes no pixel', () async {
+      final pdf = createPdf();
+      final fixtures = <(String, Uint8List)>[
+        ('fImagesHires', fImagesHires),
+        ('tpKindGray', tpKindGray),
+        ('tpKindIndexed', tpKindIndexed),
+        ('gray16RawPdf', gray16RawPdf),
+        ('bilevelRawPdf', bilevelRawPdf),
+      ];
+      for (final (name, bytes) in fixtures) {
+        final editor = await pdf.edit(src(bytes));
+        final report = await editor.reduceImages(PdfImagePolicy.lossless);
+        for (final row in report.images) {
+          expect(
+            row.bytesAfter,
+            lessThanOrEqualTo(row.bytesBefore),
+            reason: name,
+          );
+          // A row the engine could not decode would satisfy every other
+          // assertion here by doing nothing; lossless must have read it.
+          expect(
+            row.keepReason,
+            isNot(PdfImageKeepReason.undecodable),
+            reason: name,
+          );
+          expect(
+            row.action == PdfImageAction.recompressed ||
+                row.keepReason == PdfImageKeepReason.belowMinSavings ||
+                // A palette image stays as stored under lossless (design
+                // row 7): only a lossy codec or a downsample could beat it.
+                (row.indexed &&
+                    row.keepReason == PdfImageKeepReason.alreadyOptimal),
+            isTrue,
+            reason: '$name: $row',
+          );
+        }
+        final sink = TestSink();
+        await editor.save(sink);
+        await editor.dispose();
+        final saved = sink.takeBytes();
+        final before = await _renderFirstPage(pdf, bytes);
+        final after = await _renderFirstPage(pdf, saved);
+        expect(_psnr(before, after), double.infinity, reason: name);
+      }
+
+      final gray16Editor = await pdf.edit(src(gray16RawPdf));
+      final gray16Report = await gray16Editor.reduceImages(
+        PdfImagePolicy.lossless,
+      );
+      final gray16Row = gray16Report.images.single;
+      expect(gray16Row.action, PdfImageAction.recompressed);
+      final gray16Sink = TestSink();
+      await gray16Editor.save(gray16Sink);
+      await gray16Editor.dispose();
+      final doc = await pdf.open(src(gray16Sink.takeBytes()));
+      final images = await doc
+          .extractImages(pages: const PdfPages.single(0))
+          .toList();
+      expect(images.single.bitsPerComponent, 8);
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('reduceImages keeps unsupported kinds with a reason', () async {
+      final pdf = createPdf();
+
+      Future<void> assertUnsupported(
+        Uint8List bytes,
+        PdfImageKeepReason reason,
+      ) async {
+        final editor = await pdf.edit(src(bytes));
+        final report = await editor.reduceImages(PdfImagePolicy.screen);
+        final row = report.images.single;
+        expect(row.action, PdfImageAction.kept);
+        expect(row.keepReason, reason);
+        expect(report.changed, 0);
+        await editor.dispose();
+      }
+
+      await assertUnsupported(
+        separationImagePdf,
+        PdfImageKeepReason.unsupportedColor,
+      );
+      await assertUnsupported(
+        colorKeyMaskPdf,
+        PdfImageKeepReason.unsupportedColorKeyMask,
+      );
+      await assertUnsupported(
+        jbig2StubPdf,
+        PdfImageKeepReason.unsupportedJbig2,
+      );
+
+      final editor = await pdf.edit(src(separationImagePdf));
+      final before = (await editor.pageImages(0)).single;
+      await editor.reduceImages(PdfImagePolicy.screen);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final reopened = await pdf.edit(src(sink.takeBytes()));
+      final after = (await reopened.pageImages(0)).single;
+      expect(after.name, before.name);
+      expect(after.bounds.width, closeTo(before.bounds.width, 0.01));
+      expect(after.bounds.height, closeTo(before.bounds.height, 0.01));
+      await reopened.dispose();
+    }, timeout: t(1));
+
+    test('reduceImages decides once for a shared XObject', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(sharedImagePdf));
+      final beforePage0 = await editor.pageImages(0);
+      final beforePage1 = await editor.pageImages(1);
+      final report = await editor.reduceImages(PdfImagePolicy.screen);
+      expect(report.images, hasLength(1));
+      final row = report.images.single;
+      expect(row.uses, 2);
+      expect(row.ppiMin, closeTo(72, 0.5));
+      expect(row.action, PdfImageAction.recompressed);
+      expect(row.widthAfter, 32);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final reopened = await pdf.edit(src(sink.takeBytes()));
+      final afterPage0 = await reopened.pageImages(0);
+      final afterPage1 = await reopened.pageImages(1);
+      expect(afterPage0.single.name, beforePage0.single.name);
+      expect(
+        afterPage0.single.bounds.width,
+        closeTo(beforePage0.single.bounds.width, 0.01),
+      );
+      expect(afterPage1.single.name, beforePage1.single.name);
+      expect(
+        afterPage1.single.bounds.width,
+        closeTo(beforePage1.single.bounds.width, 0.01),
+      );
+      await reopened.dispose();
+    }, timeout: t(1));
+
+    test('reduceImages sees an image drawn inside a form XObject', () async {
+      final pdf = createPdf();
+      // imageInFormPdf is 16 px wide — below the presets' minPixels: 32 —
+      // so this policy lowers the floor to prove the downsample path,
+      // targeting 8 px (extractImages filters out anything narrower),
+      // while a fresh editor under the real preset proves tooSmall wins.
+      const policy = PdfImagePolicy(
+        colorPpi: 144,
+        grayPpi: 144,
+        monoPpi: 300,
+        jpegQuality: 60,
+        minPixels: 8,
+      );
+      final editor = await pdf.edit(src(imageInFormPdf));
+      final report = await editor.reduceImages(policy);
+      final row = report.images.single;
+      expect(row.action, PdfImageAction.downsampled);
+      expect(row.widthAfter, 8);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final doc = await pdf.open(src(sink.takeBytes()));
+      final images = await doc
+          .extractImages(pages: const PdfPages.single(0))
+          .toList();
+      expect(images.single.width, 8);
+      expect(images.single.height, 8);
+      await doc.dispose();
+
+      final freshEditor = await pdf.edit(src(imageInFormPdf));
+      final screenReport = await freshEditor.reduceImages(
+        PdfImagePolicy.screen,
+      );
+      final screenRow = screenReport.images.single;
+      expect(screenRow.action, PdfImageAction.kept);
+      expect(screenRow.keepReason, PdfImageKeepReason.tooSmall);
+      await freshEditor.dispose();
+    }, timeout: t(1));
+
+    test('reduceImages honours minSavings before trading quality', () async {
+      // fImages: a 72 ppi Flate photo, so screen-level policies recompress
+      // it to JPEG rather than downsample. The same trade is refused when
+      // the policy demands a saving no JPEG can deliver.
+      final pdf = createPdf();
+      final greedy = await pdf.edit(src(fImages));
+      final refused = await greedy.reduceImages(
+        const PdfImagePolicy(jpegQuality: 60, minSavings: 0.999),
+      );
+      expect(refused.changed, 0);
+      expect(
+        refused.images.map((r) => r.keepReason),
+        everyElement(PdfImageKeepReason.belowMinSavings),
+      );
+      await greedy.dispose();
+      final willing = await pdf.edit(src(fImages));
+      final accepted = await willing.reduceImages(
+        const PdfImagePolicy(jpegQuality: 60, minSavings: 0),
+      );
+      expect(accepted.changed, accepted.images.length);
+      expect(
+        accepted.images.map((r) => r.action),
+        everyElement(PdfImageAction.recompressed),
+      );
+      await willing.dispose();
+    }, timeout: t(1));
+
+    test('reduceImages recompresses a stored JPEG only when asked', () async {
+      // fImagesJpeg page 0: a quality-90 JPEG drawn at 72 ppi — within
+      // resolution, so only recompressJpeg can touch it.
+      final pdf = createPdf();
+      const asked = PdfImagePolicy(jpegQuality: 50, recompressJpeg: true);
+      final editor = await pdf.edit(src(fImagesJpeg));
+      final report = await editor.reduceImages(asked);
+      final page0 = report.images.first;
+      expect(page0.action, PdfImageAction.recompressed, reason: '$page0');
+      expect(page0.widthAfter, page0.width);
+      expect(page0.bytesAfter, lessThan(page0.bytesBefore));
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final saved = sink.takeBytes();
+      // The default leaves a stored JPEG alone unless it is downsampled.
+      final quiet = await pdf.edit(src(fImagesJpeg));
+      final untouched = await quiet.reduceImages(
+        const PdfImagePolicy(jpegQuality: 50),
+      );
+      expect(untouched.images.first.action, PdfImageAction.kept);
+      await quiet.dispose();
+      // A second pass at the same quality finds nothing worth the trade.
+      final again = await pdf.edit(src(saved));
+      expect(
+        (await again.reduceImages(asked)).images.first.action,
+        PdfImageAction.kept,
+      );
+      await again.dispose();
+    }, timeout: t(1));
+
+    test('reduceImages is idempotent', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(fImagesHires));
+      await editor.reduceImages(PdfImagePolicy.screen);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final reopened = await pdf.edit(src(sink.takeBytes()));
+      final report = await reopened.reduceImages(PdfImagePolicy.screen);
+      expect(report.changed, 0);
+      for (final row in report.images) {
+        expect(row.action, PdfImageAction.kept);
+        expect(row.keepReason, PdfImageKeepReason.withinResolution);
+      }
+      await reopened.dispose();
+    }, timeout: t(1));
+
+    test(
+      'reduceImages a second time in the same session sees the first',
+      () async {
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(fImagesHires));
+        await editor.reduceImages(PdfImagePolicy.screen);
+        final second = await editor.reduceImages(PdfImagePolicy.screen);
+        expect(second.changed, 0);
+        final sink = TestSink();
+        await editor.save(sink);
+        await editor.dispose();
+        final doc = await pdf.open(src(sink.takeBytes()));
+        final images = await doc
+            .extractImages(pages: const PdfPages.single(0))
+            .toList();
+        expect(images.single.width, 32);
+        expect(images.single.height, 32);
+        await doc.dispose();
+      },
+      timeout: t(1),
+    );
+
+    test('pageImages on an imageless page is empty', () async {
+      final editor = await createPdf().edit(src(minimalPdf));
+      expect(await editor.pageImages(0), isEmpty);
+      await editor.dispose();
+    }, timeout: t(1));
+
+    test('pageImages with an out-of-range page throws typed error', () async {
+      final editor = await createPdf().edit(src(minimalPdf));
+      await expectLater(
+        editor.pageImages(99),
+        throwsA(isA<PdfEngineError>()),
+        reason:
+            'page 99 of a 1-page PDF does not exist — an empty list '
+            'would hide caller bugs',
+      );
       await editor.dispose();
     }, timeout: t(1));
 
@@ -391,7 +1275,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       // both appearance texts must come back out of extraction.
       final pdf2 = createPdf();
       final flat = await pdf2.edit(src(sink.takeBytes()));
-      await flat.flattenAllAnnotations();
+      await flat.flattenAnnotations();
       final flatSink = TestSink();
       await flat.save(flatSink);
       await flat.dispose();
@@ -419,7 +1303,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await e.dispose();
       final pdf2 = createPdf();
       final flat = await pdf2.edit(src(sink.takeBytes()));
-      await flat.flattenAllAnnotations();
+      await flat.flattenAnnotations();
       final flatSink = TestSink();
       await flat.save(flatSink);
       await flat.dispose();
@@ -451,16 +1335,16 @@ void registerEditorTests(Pdf Function() createPdf) {
       expect(doc.pages[0].rotation, 90);
       await doc.dispose();
       final e2 = await pdf.edit(src(out));
-      expect(await e2.getTitle(), contains('Triple Edit'));
+      expect(await e2.title, contains('Triple Edit'));
       await e2.dispose();
     }, timeout: t(1));
 
     // ── Content ──
 
-    test('flattenAllAnnotations produces valid PDF', () async {
+    test('flattenAnnotations produces valid PDF', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
-      await editor.flattenAllAnnotations();
+      await editor.flattenAnnotations();
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -469,13 +1353,13 @@ void registerEditorTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
-    test('flattenAllAnnotations consumes foreign link annotations', () async {
+    test('flattenAnnotations consumes foreign link annotations', () async {
       // dart-pdf link annotations carry foreign appearance
       // conventions — flatten must digest them without losing the
       // page's text content.
       final pdf = createPdf();
       final editor = await pdf.edit(src(fAnnotations));
-      await editor.flattenAllAnnotations();
+      await editor.flattenAnnotations();
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -537,7 +1421,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final output = sink.takeBytes();
       final flat = await pdf.edit(src(output));
-      await flat.flattenAllAnnotations();
+      await flat.flattenAnnotations();
       final flatSink = TestSink();
       await flat.save(flatSink);
       await flat.dispose();
@@ -1222,6 +2106,34 @@ void registerEditorTests(Pdf Function() createPdf) {
       expect(sink.takeBytes().length, greaterThan(minimalPdf.length));
     }, timeout: t(1));
 
+    test('embedFile writes description, mime type and bytes', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(minimalPdf));
+      final fileData = Uint8List.fromList(utf8.encode('hello notes'));
+      await editor.embedFile(
+        'notes.txt',
+        src(fileData),
+        description: 'Meeting notes',
+        mimeType: 'text/plain',
+        relationship: PdfAttachmentRelationship.supplement,
+      );
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+
+      final doc = await pdf.open(src(sink.takeBytes()));
+      final files = await doc.attachments;
+      expect(files, hasLength(1));
+      expect(files.single.name, 'notes.txt');
+      expect(files.single.description, 'Meeting notes');
+      expect(files.single.mimeType, 'text/plain');
+      expect(files.single.size, fileData.length);
+      final extracted = TestSink();
+      await doc.extractAttachment('notes.txt', extracted);
+      await doc.dispose();
+      expect(extracted.takeBytes(), fileData);
+    }, timeout: t(1));
+
     test('eraseRegions produces valid output', () async {
       final pdf = createPdf();
       final formBytes = fFormFields;
@@ -1237,6 +2149,39 @@ void registerEditorTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
+    test('eraseRegions destroys only the region it was given', () async {
+      // The marker sits at (100, 400) on the cropped fixture. A region
+      // over it must destroy it; a region elsewhere on the page must
+      // leave it extractable — the pair pins the rectangle's meaning.
+      final pdf = createPdf();
+
+      Future<String> eraseThenExtract(PdfRect region) async {
+        final editor = await pdf.edit(src(croppedPagePdf));
+        await editor.eraseRegions(0, [region]);
+        final sink = TestSink();
+        await editor.save(sink);
+        await editor.dispose();
+        final doc = await pdf.open(src(sink.takeBytes()));
+        final text = await doc.extract(pages: const PdfPages.all());
+        await doc.dispose();
+        return text;
+      }
+
+      expect(
+        await eraseThenExtract(
+          const PdfRect(x: 90, y: 385, width: 200, height: 40),
+        ),
+        isNot(contains('CROP')),
+      );
+      expect(
+        await eraseThenExtract(
+          const PdfRect(x: 90, y: 100, width: 200, height: 40),
+        ),
+        contains('CROP'),
+        reason: 'a region far from the text must leave it alone',
+      );
+    }, timeout: t(1));
+
     test('flattenForms preserves page count', () async {
       final pdf = createPdf();
       final formBytes = fFormFields;
@@ -1249,6 +2194,200 @@ void registerEditorTests(Pdf Function() createPdf) {
       expect(doc.pageCount, 1);
       await doc.dispose();
     }, timeout: t(1));
+
+    test('flattenForms(page: 0) flattens only page 0\'s field', () async {
+      // Merging the form with itself gives two pages carrying the same
+      // field names, so the proof is the count: every field is
+      // registered before, and exactly page 1's survive the flatten.
+      final pdf = createPdf();
+      final mergeSink = TestSink();
+      await pdf.merge([src(fFormFields), src(fFormFields)], mergeSink);
+      final merged = mergeSink.takeBytes();
+
+      final before = await pdf.open(src(merged));
+      final beforeFields = await before.formFields;
+      await before.dispose();
+      expect(
+        beforeFields,
+        hasLength(fFormFieldsTruth.fieldNames.length * 2),
+        reason: 'both merged copies register their fields',
+      );
+
+      final editor = await pdf.edit(src(merged));
+      expect(await editor.pageCount, 2);
+      await editor.flattenForms(page: 0);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+
+      final doc = await pdf.open(src(sink.takeBytes()));
+      expect(doc.pageCount, 2);
+      final afterFields = await doc.formFields;
+      await doc.dispose();
+      expect(
+        afterFields,
+        hasLength(fFormFieldsTruth.fieldNames.length),
+        reason: "flattening page 0 must remove page 0's fields only",
+      );
+      expect(
+        afterFields.map((f) => f.name).toSet(),
+        fFormFieldsTruth.fieldNames.toSet(),
+      );
+    }, timeout: t(1));
+
+    test('flattenAnnotations(page: 0) flattens only that page', () async {
+      // What this proves: page 1 is left alone — it carries no text at
+      // all after a flatten scoped to page 0. It does NOT prove page 0's
+      // stamp was drawn into content: extraction reads an unflattened
+      // annotation's appearance too, so the two are indistinguishable
+      // here. 'leaves page 1 stamp untouched' below is that proof.
+      final pdf = createPdf();
+      final mergeSink = TestSink();
+      await pdf.merge([src(minimalPdf), src(minimalPdf)], mergeSink);
+      final editor = await pdf.edit(src(mergeSink.takeBytes()));
+      expect(await editor.pageCount, 2);
+      const rect = PdfRect(x: 50, y: 650, width: 200, height: 60);
+      await editor.addStamp(0, type: PdfStampType.approved, rect: rect);
+      await editor.flattenAnnotations(page: 0);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final doc = await pdf.open(src(sink.takeBytes()));
+      final page0 = await doc.extract(pages: const PdfPages.single(0));
+      final page1 = await doc.extract(pages: const PdfPages.single(1));
+      expect(
+        page0.toUpperCase(),
+        contains('APPROVED'),
+        reason: 'page 0 was flattened — its stamp text is now page content',
+      );
+      expect(
+        page1,
+        isEmpty,
+        reason: 'page 1 had no stamp and flatten(page: 0) must not touch it',
+      );
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('flattenAnnotations(page: 0) leaves page 1 stamp untouched', () async {
+      // Two stamps, one session, then a page-scoped flatten in the next:
+      // page 0's stamp becomes page content, page 1's stays an annotation.
+      // Neither page may carry the other's text.
+      final pdf = createPdf();
+      final mergeSink = TestSink();
+      await pdf.merge([src(minimalPdf), src(minimalPdf)], mergeSink);
+      final editor = await pdf.edit(src(mergeSink.takeBytes()));
+      const rect = PdfRect(x: 50, y: 650, width: 200, height: 60);
+      await editor.addStamp(0, type: PdfStampType.approved, rect: rect);
+      await editor.addStamp(1, type: PdfStampType.draft, rect: rect);
+      final stamped = TestSink();
+      await editor.save(stamped);
+      await editor.dispose();
+
+      final flat = await pdf.edit(src(stamped.takeBytes()));
+      await flat.flattenAnnotations(page: 0);
+      final sink = TestSink();
+      await flat.save(sink);
+      await flat.dispose();
+
+      final doc = await pdf.open(src(sink.takeBytes()));
+      final page0 = (await doc.extract(
+        pages: const PdfPages.single(0),
+      )).toUpperCase();
+      final page1 = (await doc.extract(
+        pages: const PdfPages.single(1),
+      )).toUpperCase();
+      await doc.dispose();
+      expect(
+        page0,
+        contains('APPROVED'),
+        reason: "page 0's stamp must be drawn into page 0's content",
+      );
+      expect(page0, isNot(contains('DRAFT')));
+      expect(
+        page1,
+        contains('DRAFT'),
+        reason: "page 1 keeps its own stamp when only page 0 is flattened",
+      );
+      expect(page1, isNot(contains('APPROVED')));
+    }, timeout: t(1));
+
+    test('mergeFrom(pages:) appends only the pages named', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(minimalPdf));
+      await editor.mergeFrom(src(fThreePageMarkers), pages: [1]);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final doc = await pdf.open(src(sink.takeBytes()));
+      expect(doc.pageCount, 2);
+      final page1 = await doc.extract(pages: const PdfPages.single(1));
+      await doc.dispose();
+      expect(page1, contains(fThreePageMarkersTruth.markers[1]));
+      expect(page1, isNot(contains(fThreePageMarkersTruth.markers[0])));
+      expect(page1, isNot(contains(fThreePageMarkersTruth.markers[2])));
+    }, timeout: t(1));
+
+    test(
+      'mergeFrom(pages:) past the last page of the other document errors',
+      () async {
+        final editor = await createPdf().edit(src(minimalPdf));
+        await expectLater(
+          editor.mergeFrom(src(fThreePageMarkers), pages: [3]),
+          throwsA(isA<PdfEngineError>()),
+        );
+        await editor.dispose();
+      },
+      timeout: t(1),
+    );
+
+    test('mergeFrom carries the merged document\'s form fields', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(minimalPdf));
+      await editor.mergeFrom(src(fFormFields));
+      final merged = TestSink();
+      await editor.save(merged);
+      await editor.dispose();
+      final mergedBytes = merged.takeBytes();
+
+      final doc = await pdf.open(src(mergedBytes));
+      expect(doc.pageCount, 2);
+      final names = (await doc.formFields).map((f) => f.name).toSet();
+      await doc.dispose();
+      expect(
+        names,
+        containsAll(fFormFieldsTruth.fieldNames),
+        reason: 'merging a form must register its fields in the AcroForm',
+      );
+
+      // A listed field is a reachable field: fill it, flatten, read it back
+      // out of the page content.
+      final filler = await pdf.edit(src(mergedBytes));
+      await filler.setFormFieldValue('fullname', 'MERGEDFILL');
+      await filler.flattenForms();
+      final filled = TestSink();
+      await filler.save(filled);
+      await filler.dispose();
+      final out = await pdf.open(src(filled.takeBytes()));
+      final text = await out.extract(pages: const PdfPages.all());
+      await out.dispose();
+      expect(text, contains('MERGEDFILL'));
+    }, timeout: t(1));
+
+    test(
+      'clearEraseRegions does not error on a page with no queued erase',
+      () async {
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(minimalPdf));
+        await editor.clearEraseRegions(0);
+        final sink = TestSink();
+        await editor.save(sink);
+        await editor.dispose();
+        final doc = await pdf.open(src(sink.takeBytes()));
+        expect(doc.pageCount, 1);
+        await doc.dispose();
+      },
+      timeout: t(1),
+    );
 
     // ── Save options ──
 
@@ -1291,11 +2430,47 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
     }, timeout: t(1));
 
-    test('getTitle roundtrips with setTitle', () async {
+    test('title roundtrips with setTitle', () async {
       final editor = await createPdf().edit(src(minimalPdf));
       await editor.setTitle('RoundtripTitle');
-      expect(await editor.getTitle(), contains('RoundtripTitle'));
+      expect(await editor.title, contains('RoundtripTitle'));
       await editor.dispose();
     }, timeout: t(1));
   });
+}
+
+/// Renders [bytes]' first page at thumbnail size and decodes it, for
+/// reduceImages tests that must prove pixels survived unchanged (or
+/// close enough) across a save/reopen round trip.
+Future<img.Image> _renderFirstPage(Pdf pdf, Uint8List bytes) async {
+  final doc = await pdf.open(src(bytes));
+  final frames = <RenderedPage>[];
+  await for (final page in doc.render(
+    pages: const PdfPages.single(0),
+    size: const PdfRenderSize.thumbnail(200),
+  )) {
+    frames.add(page);
+  }
+  await doc.dispose();
+  return img.decodePng(frames.single.data)!;
+}
+
+/// Peak signal-to-noise ratio over the RGB channels of two equally-sized
+/// images; `double.infinity` when they are bit-identical.
+double _psnr(img.Image a, img.Image b) {
+  assert(a.width == b.width && a.height == b.height);
+  var sumSquares = 0.0;
+  for (var y = 0; y < a.height; y++) {
+    for (var x = 0; x < a.width; x++) {
+      final pa = a.getPixel(x, y);
+      final pb = b.getPixel(x, y);
+      final dr = pa.r - pb.r;
+      final dg = pa.g - pb.g;
+      final db = pa.b - pb.b;
+      sumSquares += dr * dr + dg * dg + db * db;
+    }
+  }
+  final meanSquareError = sumSquares / (a.width * a.height * 3);
+  if (meanSquareError == 0) return double.infinity;
+  return 10 * math.log(255 * 255 / meanSquareError) / math.ln10;
 }

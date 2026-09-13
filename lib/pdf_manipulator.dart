@@ -33,14 +33,23 @@ export 'src/ops/pdf_sugar.dart';
 
 // Types
 export 'src/types/errors.dart';
+export 'src/types/pdf_attachment.dart';
 export 'src/types/pdf_config.dart';
 export 'src/types/pdf_enums.dart';
+export 'src/types/pdf_form_field.dart';
 export 'src/types/pdf_image.dart';
+export 'src/types/pdf_image_policy.dart';
+export 'src/types/pdf_image_report.dart';
+export 'src/types/pdf_matrix.dart';
+export 'src/types/pdf_page_image.dart';
 export 'src/types/pdf_page_info.dart';
 export 'src/types/pdf_pages.dart';
 export 'src/types/pdf_params.dart';
 export 'src/types/pdf_rect.dart';
+export 'src/types/pdf_redaction_report.dart';
+export 'src/types/pdf_sanitize_options.dart';
 export 'src/types/pdf_signature.dart';
+export 'src/types/pdf_xfa_info.dart';
 export 'src/types/data_sink.dart';
 export 'src/types/data_source.dart';
 export 'src/types/search_result.dart';

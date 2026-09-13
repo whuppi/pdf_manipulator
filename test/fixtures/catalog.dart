@@ -15,6 +15,7 @@
 
 import 'dart:typed_data';
 
+import 'package:image/image.dart' as img;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
@@ -184,7 +185,7 @@ final List<FixtureSpec> catalog = [
     name: 'images',
     why:
         'Three pages, one embedded PNG each — extractImages, render, '
-        'and optimizeImages need real raster XObjects from a foreign '
+        'and reduceImages need real raster XObjects from a foreign '
         'writer.',
     truths: {
       'pages': 3,
@@ -209,6 +210,139 @@ final List<FixtureSpec> catalog = [
           ),
         );
       }
+      return _saveDoc(doc);
+    },
+  ),
+  FixtureSpec(
+    name: 'images_hires',
+    why:
+        'One 128² image placed at 32 pt — 288 ppi, well above screen '
+        'resolution. The reduceImages battery needs a real high-density '
+        'placement to prove downsampling, not just a downsample it '
+        'invents against re-derived output.',
+    truths: {
+      'pages': 1,
+      'imageCount': 1,
+      'imageWidth': 128,
+      'imageHeight': 128,
+      'placedPt': 32,
+      'ppi': 288,
+    },
+    build: (photoPng) async {
+      final doc = pw.Document(title: 'Image Hires');
+      final image = pw.MemoryImage(photoPng);
+      doc.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4,
+          build: (ctx) => pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Text('HIRES-0'),
+              pw.Image(image, width: 32, height: 32),
+            ],
+          ),
+        ),
+      );
+      return _saveDoc(doc);
+    },
+  ),
+  FixtureSpec(
+    name: 'images_jpeg',
+    why:
+        'A DCT-encoded XObject on two pages at two densities — the '
+        'reducer must classify JPEG source encoding and, per policy, '
+        'leave an already-optimal placement alone while downsampling '
+        'an over-dense one, never re-encoding a JPEG it does not '
+        'resize.',
+    truths: {
+      'pages': 2,
+      'imageCount': 2,
+      'imageWidth': 128,
+      'imageHeight': 128,
+      'ppiPage0': 72,
+      'ppiPage1': 288,
+    },
+    build: (photoPng) async {
+      final jpeg = Uint8List.fromList(
+        img.encodeJpg(img.decodePng(photoPng)!, quality: 90),
+      );
+      final doc = pw.Document(title: 'Image Jpeg');
+      doc.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4,
+          build: (ctx) => pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Text('JPEGPAGE-0'),
+              pw.Image(pw.MemoryImage(jpeg), width: 128, height: 128),
+            ],
+          ),
+        ),
+      );
+      doc.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4,
+          build: (ctx) => pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Text('JPEGPAGE-1'),
+              pw.Image(
+                pw.MemoryImage(Uint8List.fromList(jpeg)),
+                width: 32,
+                height: 32,
+              ),
+            ],
+          ),
+        ),
+      );
+      return _saveDoc(doc);
+    },
+  ),
+  FixtureSpec(
+    name: 'images_smask',
+    why:
+        'A soft-masked image at 288 ppi — the reducer must co-resample '
+        'the /SMask alongside the base image, not just the RGB '
+        'channels.',
+    truths: {
+      'pages': 1,
+      'imageCount': 1,
+      'imageWidth': 32,
+      'imageHeight': 32,
+      'placedPt': 8,
+      'ppi': 288,
+      'softMask': true,
+    },
+    build: (photoPng) async {
+      // Photo content, not a flat colour: a flat 32×32 deflates to a few
+      // dozen bytes, which no downsampled JPEG can beat, so the reducer's
+      // size guard would (rightly) keep it and the mask path would never run.
+      final photo = img.copyResize(
+        img.decodePng(photoPng)!,
+        width: 32,
+        height: 32,
+      );
+      final rgba = img.Image(width: 32, height: 32, numChannels: 4);
+      for (var y = 0; y < 32; y++) {
+        for (var x = 0; x < 32; x++) {
+          final p = photo.getPixel(x, y);
+          rgba.setPixelRgba(x, y, p.r, p.g, p.b, x * 8);
+        }
+      }
+      final png = img.encodePng(rgba);
+      final doc = pw.Document(title: 'Image Smask');
+      doc.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4,
+          build: (ctx) => pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Text('SMASKPAGE-0'),
+              pw.Image(pw.MemoryImage(png), width: 8, height: 8),
+            ],
+          ),
+        ),
+      );
       return _saveDoc(doc);
     },
   ),
@@ -276,10 +410,51 @@ final List<FixtureSpec> catalog = [
     },
   ),
   FixtureSpec(
+    name: 'form_fields_props',
+    why:
+        'AcroForm fields carrying properties beyond name/value — max '
+        'length and a tooltip (alternate name) — from a foreign '
+        'producer. Field-property reads must resolve /MaxLen and /TU, '
+        'not just /T and /V.',
+    truths: {
+      'pages': 1,
+      'fieldNames': ['city', 'ok', 'notes'],
+      'cityMaxLength': 12,
+      'cityTooltip': 'Your city',
+    },
+    build: (photoPng) async {
+      final doc = pw.Document(title: 'Form Fields Props');
+      doc.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4,
+          build: (ctx) => pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Text('City'),
+              pw.TextField(
+                name: 'city',
+                maxLength: 12,
+                alternateName: 'Your city',
+                width: 200,
+              ),
+              pw.SizedBox(height: 12),
+              pw.Text('OK to proceed'),
+              pw.Checkbox(name: 'ok', value: false),
+              pw.SizedBox(height: 12),
+              pw.Text('Notes'),
+              pw.TextField(name: 'notes', width: 200),
+            ],
+          ),
+        ),
+      );
+      return _saveDoc(doc);
+    },
+  ),
+  FixtureSpec(
     name: 'annotations',
     why:
         'Link annotations from a foreign producer — '
-        'flattenAllAnnotations must consume annotation dictionaries '
+        'flattenAnnotations must consume annotation dictionaries '
         'with foreign appearance conventions.',
     truths: {'pages': 1, 'annotCount': 2, 'url': 'https://example.com/interop'},
     build: (photoPng) async {

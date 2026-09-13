@@ -16,6 +16,30 @@ import '../../harness/timeouts.dart';
 
 void registerStandaloneTests(Pdf Function() createPdf) {
   group('standalone', () {
+    // ── XFA conversion ──
+
+    test(
+      'convertXfaToAcroForm turns the XFA packet into real fields',
+      () async {
+        final pdf = createPdf();
+        final sink = TestSink();
+        await pdf.convertXfaToAcroForm(src(xfaFormPdf), sink);
+        final doc = await pdf.open(src(sink.takeBytes()));
+        expect(doc.pageCount, greaterThanOrEqualTo(1));
+        final names = (await doc.formFields).map((f) => f.name).toList();
+        await doc.dispose();
+        expect(names, containsAll(<String>['given', 'agree']));
+      },
+      timeout: t(1),
+    );
+
+    test('convertXfaToAcroForm refuses a document with no XFA', () async {
+      await expectLater(
+        createPdf().convertXfaToAcroForm(src(minimalPdf), TestSink()),
+        throwsA(isA<PdfEngineError>()),
+      );
+    }, timeout: t(1));
+
     // ── Sign ──
 
     test('sign with PKCS12 adds a retrievable signature', () async {
@@ -30,7 +54,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(signed));
       expect(doc.pageCount, 1);
       expect(signed.length, greaterThan(minimalPdf.length));
-      final sigs = await doc.getSignatures();
+      final sigs = await doc.signatures;
       expect(sigs, isNotEmpty);
       expect(sigs.first.signerName, isNotNull);
       expect(sigs.first.signerName, isNotEmpty);
@@ -48,7 +72,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       final signed = sink.takeBytes();
       final doc = await pdf.open(src(signed));
       expect(doc.pageCount, 1);
-      final sigs = await doc.getSignatures();
+      final sigs = await doc.signatures;
       expect(sigs, isNotEmpty);
       expect(sigs.first.signerName, isNotNull);
       await doc.dispose();
