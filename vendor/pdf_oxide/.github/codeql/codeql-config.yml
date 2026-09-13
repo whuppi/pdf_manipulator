@@ -1,0 +1,26 @@
+name: "pdf_oxide CodeQL config"
+
+# Exclude paths that contain unavoidable PDF-spec crypto patterns
+# that CodeQL flags as security issues but are required by the
+# ISO 32000-1 PDF specification and gated at runtime by the
+# CryptoProvider trait (see issue #236).
+paths-ignore:
+  # All test code — hardcoded test vectors / fixed IVs in #[test]
+  # blocks are intentional and don't reach production paths.
+  - "**/tests/**"
+  - "**/*test*.rs"
+  - "examples/**"
+  - "benches/**"
+
+# Suppress queries that flag PDF-spec-mandated patterns:
+#  * hardcoded zero IV — ISO 32000-1 §7.6.3.4 Algorithm 8 step (g)
+#    requires a zero IV for the AES-256 key-wrap of UE/OE entries
+#    on Standard Security Handler R=5/R=6.
+#  * weak cryptographic algorithm — RC4 / MD5 / SHA-1 are
+#    required by R<=4 PDFs (read path). They are gated off under
+#    the FIPS provider via Error::AlgorithmNotPermitted.
+query-filters:
+  - exclude:
+      id: rust/hard-coded-cryptographic-value
+  - exclude:
+      id: rust/weak-cryptographic-algorithm
