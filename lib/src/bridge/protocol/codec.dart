@@ -462,7 +462,7 @@ T _enumByWireName<T extends Enum>(List<T> values, Object? wire, String what) {
   for (final v in values) {
     if (v.name == name) return v;
   }
-  throw PdfEngineError('unknown image $what "$name" on the wire');
+  throw PdfEngineError('unknown $what "$name" on the wire');
 }
 
 /// Decodes a `reduceImages` report from a response map.
