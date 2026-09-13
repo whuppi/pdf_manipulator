@@ -13,6 +13,15 @@ void registerEditorStressTests(Pdf Function() createPdf) {
   group('stress editor', tags: 'stress', () {
     final largePdf = fThousandPage;
 
+    test('pageImages across the first 100 pages of a 1000-page PDF', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(largePdf));
+      for (var page = 0; page < 100; page++) {
+        expect(await editor.pageImages(page), isEmpty, reason: 'page $page');
+      }
+      await editor.dispose();
+    }, timeout: t(2));
+
     test('watermark 1000 pages', () async {
       final pdf = createPdf();
       final sink = TestSink();
@@ -81,6 +90,20 @@ void registerEditorStressTests(Pdf Function() createPdf) {
       );
       await doc.dispose();
     }, timeout: t(1));
+
+    test(
+      'reduceImages over a 1000-page PDF completes and keeps placement',
+      () async {
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(largePdf));
+        final before = await editor.pageImages(0);
+        await editor.reduceImages(PdfImagePolicy.screen);
+        final after = await editor.pageImages(0);
+        expect(after, before);
+        await editor.dispose();
+      },
+      timeout: t(2),
+    );
 
     test('compress 1000-page PDF', () async {
       final pdf = createPdf();

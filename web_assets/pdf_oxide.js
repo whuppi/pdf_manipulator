@@ -81,40 +81,40 @@ export function lane_init() {
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
-        __wbg___wbindgen_throw_344f42d3211c4765: function(arg0, arg1) {
+        __wbg___wbindgen_throw_5d9e815e6fdf150f: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
         },
-        __wbg_getRandomValues_bf16787eede473f5: function() { return handleError(function (arg0, arg1) {
+        __wbg_getRandomValues_26c0cdf963e46393: function() { return handleError(function (arg0, arg1) {
             globalThis.crypto.getRandomValues(getArrayU8FromWasm0(arg0, arg1));
         }, arguments); },
-        __wbg_getRandomValues_cc7f052a444bb2ce: function() { return handleError(function (arg0, arg1) {
+        __wbg_getRandomValues_436a51d0629d84e1: function() { return handleError(function (arg0, arg1) {
             globalThis.crypto.getRandomValues(getArrayU8FromWasm0(arg0, arg1));
         }, arguments); },
-        __wbg_getTime_d6f070c088c9b5ed: function(arg0) {
+        __wbg_getTime_65922ba0b59d55a7: function(arg0) {
             const ret = getObject(arg0).getTime();
             return ret;
         },
-        __wbg_getTimezoneOffset_dc9862c79e5a81a3: function(arg0) {
+        __wbg_getTimezoneOffset_6e4850ad528ac37d: function(arg0) {
             const ret = getObject(arg0).getTimezoneOffset();
             return ret;
         },
-        __wbg_host_read_at_a640716dbeb44089: function(arg0, arg1, arg2, arg3) {
+        __wbg_host_read_at_9846ac94fd847750: function(arg0, arg1, arg2, arg3) {
             const ret = host_read_at(arg0 >>> 0, arg1 >>> 0, arg2 >>> 0, arg3 >>> 0);
             return ret;
         },
-        __wbg_host_write_chunk_9e119101838a73c1: function(arg0, arg1, arg2) {
+        __wbg_host_write_chunk_d8ab01a752df09ac: function(arg0, arg1, arg2) {
             const ret = host_write_chunk(arg0 >>> 0, arg1 >>> 0, arg2 >>> 0);
             return ret;
         },
-        __wbg_new_0_3da9e97f24fc69be: function() {
+        __wbg_new_0_35540e542ba689d2: function() {
             const ret = new Date();
             return addHeapObject(ret);
         },
-        __wbg_new_cc984128914cfc6f: function(arg0) {
+        __wbg_new_180f1022bb6ee517: function(arg0) {
             const ret = new Date(getObject(arg0));
             return addHeapObject(ret);
         },
-        __wbindgen_cast_0000000000000001: function(arg0) {
+        __wbindgen_generic_0000000000000001: function(arg0) {
             // Cast intrinsic for `F64 -> Externref`.
             const ret = arg0;
             return addHeapObject(ret);
@@ -225,11 +225,15 @@ function __wbg_finalize_init(instance, module) {
 
 async function __wbg_load(module, imports) {
     if (typeof Response === 'function' && module instanceof Response) {
+        if (!module.ok) {
+            throw new Error(`failed to fetch Wasm: ${module.status} ${module.statusText} fetching '${module.url}'`);
+        }
+
         if (typeof WebAssembly.instantiateStreaming === 'function') {
             try {
                 return await WebAssembly.instantiateStreaming(module, imports);
             } catch (e) {
-                const validResponse = module.ok && expectedResponseType(module.type);
+                const validResponse = expectedResponseType(module.type);
 
                 if (validResponse && module.headers.get('Content-Type') !== 'application/wasm') {
                     console.warn("`WebAssembly.instantiateStreaming` failed because your server does not serve Wasm with `application/wasm` MIME type. Falling back to `WebAssembly.instantiate` which is slower. Original error:\n", e);

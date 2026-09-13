@@ -15,6 +15,7 @@ import 'package:pdf_manipulator/src/ops/pdf_standalone.dart';
 import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
@@ -257,7 +258,9 @@ extension PdfSugar on Pdf {
   PdfTask<void> applyRedactions(DataSource source, DataSink output) =>
       PdfTask.group((hook) async {
         final editor = await hook.guard(edit(source));
-        await hook.guard(editor.applyRedactions());
+        await hook.guard(
+          editor.applyRedactions(),
+        ); // report discarded: one-shot
         await hook.guard(editor.save(output));
         await editor.dispose();
       });
@@ -288,16 +291,19 @@ extension PdfSugar on Pdf {
     await editor.dispose();
   });
 
-  /// Compresses the PDF by optimizing images and optionally garbage-collecting.
+  /// Compresses the PDF: images through `PdfEditor.reduceImages` under
+  /// [images] (`PdfImagePolicy.ebook` unless you pass another preset or
+  /// your own numbers), then a full rewrite with stream compression and,
+  /// by default, garbage collection.
   PdfTask<void> compress(
     DataSource source,
     DataSink output, {
-    int imageQuality = 75,
+    PdfImagePolicy images = PdfImagePolicy.ebook,
     bool garbageCollect = true,
   }) => PdfTask.group((hook) async {
     KeepRecord.op('render');
     final editor = await hook.guard(edit(source));
-    await hook.guard(editor.optimizeImages(quality: imageQuality));
+    await hook.guard(editor.reduceImages(images));
     await hook.guard(
       editor.save(
         output,

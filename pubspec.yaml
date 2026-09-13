@@ -23,7 +23,7 @@ hooks:
 
 dependencies:
   # Build hook — native asset compilation protocol
-  code_assets: ^1.2.0
+  code_assets: ">=1.2.0 <3.0.0"
   hooks: ^2.0.2
 
   # Build hook — SHA256 verification of downloaded pre-built binaries
@@ -72,6 +72,11 @@ dev_dependencies:
 
   # Test runner
   test: ^1.31.1
+
+  # ZIP writer for the hand-authored DOCX fixture (an OOXML file is a
+  # zip of XML parts). Independent producer — never this package's own
+  # convertTo writer. Dev-only: ships nowhere.
+  archive: ^4.0.9
 
   # PNG decode for render-output pixel assertions (the image-stamp
   # transparency test reads pixels out of doc.render()'s PNG frames).

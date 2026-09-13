@@ -242,7 +242,7 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
     test('PDFDocEncoding document title decodes on read', () async {
       final editor = await createPdf().edit(src(formPdfdocNamePdf));
       expect(
-        await editor.getTitle(),
+        await editor.title,
         'Straßen-Formular für Prüfung',
         reason:
             'the /Title bytes are PDFDocEncoding (not valid UTF-8) — '

@@ -31,13 +31,12 @@ PKG_ROOT="$(dirname "$SCRIPT_DIR")"
 
 cd "$PKG_ROOT/example"
 
+# FLUTTER is a command line (e.g. "fvm flutter"); split it explicitly once.
+read -ra flutter_cmd <<< "$FLUTTER"
 echo "verify_web_gate: dart2js   — $FLUTTER build web"
-# FLUTTER is intentionally word-split (e.g. "fvm flutter").
-# shellcheck disable=SC2086
-$FLUTTER build web --release
+"${flutter_cmd[@]}" build web --release
 
 echo "verify_web_gate: dart2wasm — $FLUTTER build web --wasm"
-# shellcheck disable=SC2086
-$FLUTTER build web --wasm --release
+"${flutter_cmd[@]}" build web --wasm --release
 
 echo "verify_web_gate: OK — example compiles under dart2js and dart2wasm"

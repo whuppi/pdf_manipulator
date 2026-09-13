@@ -46,6 +46,21 @@ enum EngineOp {
   /// Classify the entire document.
   classifyDocument('classifyDocument'),
 
+  /// Read every AcroForm field of a document.
+  formFields('formFields'),
+
+  /// Export AcroForm field values as FDF or XFDF.
+  exportFormData('exportFormData'),
+
+  /// Read the document's XFA structure, or its absence.
+  xfa('xfa'),
+
+  /// List the files embedded in the document.
+  attachments('attachments'),
+
+  /// Stream one embedded file's bytes to a sink.
+  extractAttachment('extractAttachment'),
+
   // ── Standalone write ──
 
   /// Digitally sign a PDF.
@@ -56,6 +71,9 @@ enum EngineOp {
 
   /// Convert a document to PDF.
   convertToPdf('convertToPdf'),
+
+  /// Convert an XFA document into a plain AcroForm document.
+  convertXfaToAcroForm('convertXfaToAcroForm'),
 
   /// Register a runtime fallback font (form-value baking).
   registerFallbackFont('registerFallbackFont'),
@@ -82,6 +100,12 @@ enum EngineOp {
 
   /// Get a page's media box rectangle.
   editorPageMediaBox('editorPageMediaBox'),
+
+  /// Get a page's crop box rectangle, or absence when unset.
+  editorPageCropBox('editorPageCropBox'),
+
+  /// List the image XObjects placed on a page.
+  editorPageImages('editorPageImages'),
 
   /// Count pending redaction marks on a page.
   editorRedactionCount('editorRedactionCount'),

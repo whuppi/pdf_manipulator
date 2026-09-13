@@ -100,7 +100,7 @@ void main() {
 
   testWidgets('signatures + verify', (t) async {
     final doc = await pdf.open(_src(minimalPdf));
-    expect(await doc.getSignatures(), isEmpty,
+    expect(await doc.signatures, isEmpty,
         reason: 'unsigned fixture — a phantom signature is worse '
             'than none');
     expect(await doc.verifySignatures(), isFalse);
@@ -354,7 +354,7 @@ void main() {
     await pdf.sign(_src(minimalPdf), sink,
         credentials: const PdfSigningCredentials.pem(testCertPem, testKeyPem));
     final doc = await pdf.open(_src(sink.takeBytes()));
-    expect(await doc.getSignatures(), isNotEmpty,
+    expect(await doc.signatures, isNotEmpty,
         reason: 'a signed PDF with no retrievable signature is not '
             'signed');
     await doc.dispose();
@@ -399,10 +399,10 @@ void main() {
     await e.setAuthor('A');
     await e.setSubject('S');
     await e.setKeywords('K');
-    expect(await e.getTitle(), 'T');
-    expect(await e.getAuthor(), 'A');
-    expect(await e.getSubject(), 'S');
-    expect(await e.getKeywords(), 'K');
+    expect(await e.title, 'T');
+    expect(await e.author, 'A');
+    expect(await e.subject, 'S');
+    expect(await e.keywords, 'K');
     expect(await e.isModified, isTrue);
     expect(await e.pageCount, 1);
     expect(await e.version, isNotEmpty);
@@ -424,7 +424,7 @@ void main() {
     final e = await pdf.edit(_src(twoPage));
     await e.rotatePage(0, degrees: 90);
     await e.rotateAllPages(degrees: 180);
-    final mb = await e.getPageMediaBox(0);
+    final mb = await e.pageMediaBox(0);
     expect(mb.width, greaterThan(0));
     await e.movePage(from: 0, to: 1);
     await e.deletePage(1);
@@ -465,11 +465,11 @@ void main() {
     await saved.dispose();
   });
 
-  testWidgets('editor optimizeImages + unembedStandardFonts', (t) async {
+  testWidgets('editor reduceImages + unembedStandardFonts', (t) async {
     final e = await pdf.edit(_src(minimalPdf));
-    expect(await e.optimizeImages(), 0,
-        reason: 'no images in the fixture — a nonzero count is '
-            'invented work');
+    final report = await e.reduceImages(PdfImagePolicy.screen);
+    expect(report.images, isEmpty,
+        reason: 'no images in the fixture — a report row is invented work');
     expect(await e.unembedStandardFonts(), 0);
     final sink = MemorySink();
     await e.save(sink);
@@ -529,7 +529,7 @@ void main() {
   testWidgets('editor flatten forms + annotations', (t) async {
     final e = await pdf.edit(_src(minimalPdf));
     await e.flattenForms();
-    await e.flattenAllAnnotations();
+    await e.flattenAnnotations();
     final sink = MemorySink();
     await e.save(sink);
     await e.dispose();

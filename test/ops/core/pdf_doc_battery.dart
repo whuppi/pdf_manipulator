@@ -8,6 +8,8 @@
 // fixtures (a second independent producer), and the committed
 // qpdf-encrypted fixture.
 
+import 'dart:convert';
+
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
@@ -380,9 +382,9 @@ void registerDocTests(Pdf Function() createPdf) {
 
     // ── Signatures ────────────────────────────────────────────────
 
-    test('getSignatures empty for unsigned PDF', () async {
+    test('signatures empty for unsigned PDF', () async {
       final doc = await createPdf().open(src(minimalPdf));
-      expect(await doc.getSignatures(), isEmpty);
+      expect(await doc.signatures, isEmpty);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -454,6 +456,60 @@ void registerDocTests(Pdf Function() createPdf) {
         reason:
             'diacritics and symbols must round-trip — a reader '
             'that mangles encoding passes every ASCII test',
+      );
+      await doc.dispose();
+    }, timeout: t(1));
+
+    // ── XFA ──
+
+    test('xfa reports the packet\'s field count and types', () async {
+      final doc = await createPdf().open(src(xfaFormPdf));
+      final xfa = await doc.xfa;
+      await doc.dispose();
+      expect(xfa, isNotNull);
+      expect(xfa!.fieldCount, 2);
+      expect(xfa.pageCount, 1);
+      expect(xfa.fieldTypes, ['Checkbox', 'Text']);
+    }, timeout: t(1));
+
+    test('xfa is null on a document with no XFA', () async {
+      final doc = await createPdf().open(src(minimalPdf));
+      expect(await doc.xfa, isNull);
+      await doc.dispose();
+    }, timeout: t(1));
+
+    // ── Attachments ──
+
+    test('attachments lists the embedded file with its metadata', () async {
+      final doc = await createPdf().open(src(attachmentPdf));
+      final files = await doc.attachments;
+      await doc.dispose();
+      expect(files, hasLength(1));
+      expect(files.single.name, 'notes.txt');
+      expect(files.single.description, 'Meeting notes');
+      expect(files.single.mimeType, 'text/plain');
+      expect(files.single.size, 11);
+    }, timeout: t(1));
+
+    test('attachments is empty on a document with no embedded files', () async {
+      final doc = await createPdf().open(src(minimalPdf));
+      expect(await doc.attachments, isEmpty);
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('extractAttachment round-trips the embedded bytes', () async {
+      final doc = await createPdf().open(src(attachmentPdf));
+      final sink = TestSink();
+      await doc.extractAttachment('notes.txt', sink);
+      await doc.dispose();
+      expect(sink.takeBytes(), utf8.encode('hello notes'));
+    }, timeout: t(1));
+
+    test('extractAttachment on an unknown name errors', () async {
+      final doc = await createPdf().open(src(attachmentPdf));
+      await expectLater(
+        doc.extractAttachment('absent.txt', TestSink()),
+        throwsA(isA<PdfEngineError>()),
       );
       await doc.dispose();
     }, timeout: t(1));

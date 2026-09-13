@@ -12,8 +12,8 @@ patch branch.
 
 | Crate | Upstream | Fork | Branch | Base tag | Submodule |
 |---|---|---|---|---|---|
-| pdf_oxide | [`yfedoseev/pdf_oxide`](https://github.com/yfedoseev/pdf_oxide) | [`whuppi/pdf_oxide`](https://github.com/whuppi/pdf_oxide) | `pdf_manipulator/0.3.73-patches` | `v0.3.73` | `vendor/pdf_oxide/` |
-| office_oxide | [`yfedoseev/office_oxide`](https://github.com/yfedoseev/office_oxide) | [`whuppi/office_oxide`](https://github.com/whuppi/office_oxide) | `office_kit/0.1.3-patches` | `v0.1.3` | `vendor/office_oxide/` |
+| pdf_oxide | [`yfedoseev/pdf_oxide`](https://github.com/yfedoseev/pdf_oxide) | [`whuppi/pdf_oxide`](https://github.com/whuppi/pdf_oxide) | `pdf_manipulator/0.3.78-patches` | `v0.3.78` | `vendor/pdf_oxide/` |
+| office_oxide | [`yfedoseev/office_oxide`](https://github.com/yfedoseev/office_oxide) | [`whuppi/office_oxide`](https://github.com/whuppi/office_oxide) | `office_kit/0.1.11-patches` | `v0.1.11` | `vendor/office_oxide/` |
 
 pdf_oxide depends on office_oxide as a path dependency
 (`office_oxide = { path = "../office_oxide" }`).
@@ -35,7 +35,7 @@ to a new upstream `vX.Y.Z`:
    CI actually uses; it MUST equal the branch's version
 3. the **Branch** and **Base tag** columns in the table above
 
-office_oxide is the same, under its own branch name and `v0.1.3`.
+office_oxide is the same, under its own branch name and `v0.1.11`.
 
 ### The fork contract
 
@@ -221,22 +221,38 @@ make check
 **Verify zero warnings:** `make analyze` checks Rust warnings in our
 patched lines automatically (see [S7](#s7--verify-our-code-warnings)).
 
-**Never add a test inside a fork.** A patch proves itself from this repo,
-in `test/ops/` — with a fixture in `test/fixtures/handwritten.dart` when
-the engine bug needs a PDF no foreign writer emits. A test file in
-`vendor/` is extra surface every S1 rebase has to carry onto the next base
-tag, for a proof the Dart battery already makes at the level a consumer
-actually experiences (rendered pixels, per ARCHITECTURE.md's testing
-section). The fork carries **patches only** — `src/`, and the build files a
-patch needs.
+**Tests in the fork: `host/` unit tests for pure functions only, nothing
+else.** A patch proves itself from this repo, in `test/ops/` — with a
+fixture in `test/fixtures/handwritten.dart` when the engine bug needs a
+PDF no foreign writer emits. Upstream files and `tests/` never carry a
+test of ours: a test in a patched upstream file is extra surface every S1
+rebase has to carry onto the next base tag, for a proof the Dart battery
+already makes at the level a consumer actually experiences (rendered
+pixels, per ARCHITECTURE.md's testing section).
+
+`host/` is different on both counts: it is never rebased, and it holds
+pure functions whose invariants a consumer cannot observe at the right
+granularity — the lane budget, the shared-buffer byte layout, a CCITT
+polarity, a PNG predictor round trip. Those may carry `#[cfg(test)]` unit
+tests, under one boundary: **no PDF bytes, no `PdfDocument`, no
+`DocumentEditor` inside a `host/` test.** The moment a test needs a
+document, it is a behaviour a consumer can see, and it belongs in
+`test/ops/`. One named exception: the trim probes — modules whose name
+contains `trim_probe`, under `#[cfg(all(test, not(feature = "…")))]` in
+`host/dispatch.rs`, run by `tool/shake_audit.sh` against a trimmed build — open a minimal
+in-memory PDF to prove an excluded op answers with the typed "not enabled
+in this build" error, a build that no Dart test can be compiled against.
+`make test-guards` enforces both the boundary and the exception's shape
+(`tool/check_fork_tests.sh`).
 
 Prior art: #161 was the same shape as #215 — an engine-side forms bug —
 and landed as a hand-authored fixture plus battery cases here, with the
 submodule bumped and no Rust test.
 
-If a proof genuinely cannot be made from Dart, that is a signal the fix
-belongs upstream: open it as a PR on the upstream repo, where its test
-lives with it (see `universal/external-contributions.md`).
+If a proof genuinely cannot be made from Dart and is not a pure `host/`
+function, that is a signal the fix belongs upstream: open it as a PR on
+the upstream repo, where its test lives with it
+(see `universal/external-contributions.md`).
 
 **Watch for a detached submodule.** `git submodule update` leaves
 `vendor/pdf_oxide` on a detached HEAD, so a commit made after it lands on
@@ -488,7 +504,7 @@ Last match wins (gitignore semantics): the release/config paths override the def
 1. Runs `cargo check` with all features (same set as CI release builds)
 2. Uses `--message-format=json` to get warnings even from cached builds
 3. Derives the upstream base tag from the branch name automatically
-   (`pdf_manipulator/0.3.73-patches` → `v0.3.73`). No hardcoded tag —
+   (`pdf_manipulator/0.3.78-patches` → `v0.3.78`). No hardcoded tag —
    renaming the branch in S1 step 4 is all that's needed.
 4. Diffs against the base tag to find lines we changed
 5. Fails if any warning falls inside our changed lines

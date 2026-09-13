@@ -172,7 +172,7 @@ class _SharedDocHandle extends BridgeDocHandle {
   }
 
   @override
-  PdfTask<List<PdfSignatureInfo>> getSignatures() => _exec(
+  PdfTask<List<PdfSignatureInfo>> get signatures => _exec(
     EngineOp.getSignatures,
     {},
   ).map((map) => codec.decodeSignatures(map));
@@ -212,6 +212,26 @@ class _SharedDocHandle extends BridgeDocHandle {
     EngineOp.classifyDocument,
     {},
   ).map((map) => codec.decodeClassifyDocument(map));
+
+  @override
+  PdfTask<List<PdfFormField>> get formFields =>
+      _exec(EngineOp.formFields, {}).map(codec.decodeFormFields);
+
+  @override
+  PdfTask<void> exportFormData(DataSink output, {required String format}) =>
+      _exec(EngineOp.exportFormData, {'format': format}, sinks: [output]);
+
+  @override
+  PdfTask<PdfXfaInfo?> get xfa =>
+      _exec(EngineOp.xfa, {}).map(codec.decodeXfaInfo);
+
+  @override
+  PdfTask<List<PdfAttachment>> get attachments =>
+      _exec(EngineOp.attachments, {}).map(codec.decodeAttachments);
+
+  @override
+  PdfTask<void> extractAttachment(String name, DataSink output) =>
+      _exec(EngineOp.extractAttachment, {'name': name}, sinks: [output]);
 
   @override
   Future<void> dispose() async {
