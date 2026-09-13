@@ -275,6 +275,17 @@ String _grayGradientHex(int width, int height, {int repeat = 1, int? lowByte}) {
   return buf.toString();
 }
 
+/// ASCII bytes of [text] as two hex digits each, ending with `>` — the
+/// `/Filter /ASCIIHexDecode` encoding [xfaFormPdf]'s XDP packet needs.
+String _asciiHex(String text) {
+  final buf = StringBuffer();
+  for (final unit in text.codeUnits) {
+    buf.write(unit.toRadixString(16).padLeft(2, '0'));
+  }
+  buf.write('>');
+  return buf.toString();
+}
+
 /// A 16×16 DeviceGray image drawn only inside a Form XObject (`/Fx1`,
 /// `/Matrix [0.25 0 0 0.25 0 0]`), composed with the page's own `cm` to
 /// a 4 pt placement (288 ppi). `page_image_handles` must recurse into
@@ -457,6 +468,103 @@ final Uint8List gray16RawPdf = _offsetPdf([
   ),
   // 5: page content — placed at 32 pt (72 ppi)
   _streamBody('', 'q 32 0 0 32 50 50 cm /Im1 Do Q\n'),
+]);
+
+/// One page whose `/CropBox` is inset from its `/MediaBox` by a foreign
+/// producer — `pageCropBox` must report the CropBox's own rect, never the
+/// MediaBox. Crop rect in x/y/width/height: x 72, y 72, w 468, h 648. No
+/// generator producer sets `/CropBox` distinct from `/MediaBox`, so only
+/// hand-authoring can precondition this.
+final Uint8List croppedPagePdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page — MediaBox 612x792, CropBox inset to [72 72 540 720]
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /CropBox [72 72 540 720] /Resources << /Font << /Helv 4 0 R >> >> /Contents 5 0 R >>',
+  // 4: Helvetica font
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  // 5: page content — the marker text
+  _streamBody('', 'BT /Helv 24 Tf 100 400 Td (CROP) Tj ET\n'),
+]);
+
+/// A catalog whose `/OpenAction` runs JavaScript on open — the shape
+/// `sanitize` must strip. The page carries its own marker text so the
+/// same fixture can prove the page content survives sanitizing while the
+/// action does not. No generator producer writes `/OpenAction`, so only
+/// hand-authoring can precondition this.
+final Uint8List openActionJavaScriptPdf = _offsetPdf([
+  // 1: catalog — OpenAction fires a JavaScript alert
+  '<< /Type /Catalog /Pages 2 0 R /OpenAction << /S /JavaScript /JS (app.alert\\(1\\)) >> >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /Helv 4 0 R >> >> /Contents 5 0 R >>',
+  // 4: Helvetica font
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  // 5: page content — the marker text
+  _streamBody('', 'BT /Helv 24 Tf 100 400 Td (SANITIZE) Tj ET\n'),
+]);
+
+/// An XFA form whose `/AcroForm` has no AcroForm fields at all (`/Fields
+/// []`) and carries its whole form in `/XFA 4 0 R` — object 4 is an
+/// ASCIIHex-encoded XDP (built by [_asciiHex]) holding one `form1`
+/// subform with a text field (`given`) and a checkbox field (`agree`).
+/// Read against `vendor/pdf_oxide/src/xfa/parser.rs` and
+/// `integration.rs`: `form1` becomes the analyzer's one page because
+/// `parse_template` starts a page on the first `<subform>` it sees
+/// regardless of name (`current_page.is_none()`), so no extra `pageSet`
+/// element is needed. Declared truths from that code path: `hasXfa true`,
+/// `fieldCount 2` (`XfaForm.field_count()`), `pageCount 1` (one non-empty
+/// page pushed at end of `parse_template`), `fieldTypes ['Checkbox',
+/// 'Text']` (`XfaFieldType::from_xfa_name` maps `checkButton` ->
+/// `Checkbox` and `textEdit` -> `Text`; `analyze_xfa_document` `{:?}`-
+/// formats, sorts and dedups them). No generator producer writes XFA, so
+/// only hand-authoring can precondition this.
+final Uint8List xfaFormPdf = _offsetPdf([
+  // 1: catalog — no AcroForm fields, the whole form lives in the XFA packet
+  '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [] /XFA 4 0 R >> >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>',
+  // 4: the XFA packet — ASCIIHex-encoded XDP, one subform, two fields
+  _streamBody(
+    '/Filter /ASCIIHexDecode',
+    _asciiHex(
+      '<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">'
+      '<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">'
+      '<subform name="form1">'
+      '<field name="given"><ui><textEdit/></ui></field>'
+      '<field name="agree"><ui><checkButton/></ui></field>'
+      '</subform></template></xdp:xdp>',
+    ),
+  ),
+]);
+
+/// One embedded file (`notes.txt`) reachable only through the document's
+/// `/Names /EmbeddedFiles` tree — the shape an attachments-listing read
+/// must walk, not a page annotation. The file spec (obj 5) carries `/F`,
+/// `/UF` and `/Desc`; the embedded stream (obj 6) is unfiltered so its
+/// declared `/Params /Size 11` is also its real byte count. No generator
+/// producer embeds a file this way, so only hand-authoring can
+/// precondition this.
+final Uint8List attachmentPdf = _offsetPdf([
+  // 1: catalog — embedded-files name tree pointing at the filespec (obj 5)
+  '<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(notes.txt) 5 0 R] >> >> >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>',
+  // 4: blank page content stream
+  _streamBody('', 'q Q\n'),
+  // 5: file spec — /F, /UF, /Desc, /EF pointing at the embedded stream (obj 6)
+  '<< /Type /Filespec /F (notes.txt) /UF (notes.txt) /Desc (Meeting notes) /EF << /F 6 0 R >> >>',
+  // 6: the embedded file — unfiltered; /Params /Size matches the 11 real bytes
+  _streamBody(
+    '/Type /EmbeddedFile /Subtype /text#2Fplain /Params << /Size 11 >>',
+    'hello notes',
+  ),
 ]);
 
 /// A single text field, near the top of the page, whose `/AP` is an

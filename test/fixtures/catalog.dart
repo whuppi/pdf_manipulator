@@ -410,10 +410,51 @@ final List<FixtureSpec> catalog = [
     },
   ),
   FixtureSpec(
+    name: 'form_fields_props',
+    why:
+        'AcroForm fields carrying properties beyond name/value — max '
+        'length and a tooltip (alternate name) — from a foreign '
+        'producer. Field-property reads must resolve /MaxLen and /TU, '
+        'not just /T and /V.',
+    truths: {
+      'pages': 1,
+      'fieldNames': ['city', 'ok', 'notes'],
+      'cityMaxLength': 12,
+      'cityTooltip': 'Your city',
+    },
+    build: (photoPng) async {
+      final doc = pw.Document(title: 'Form Fields Props');
+      doc.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4,
+          build: (ctx) => pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Text('City'),
+              pw.TextField(
+                name: 'city',
+                maxLength: 12,
+                alternateName: 'Your city',
+                width: 200,
+              ),
+              pw.SizedBox(height: 12),
+              pw.Text('OK to proceed'),
+              pw.Checkbox(name: 'ok', value: false),
+              pw.SizedBox(height: 12),
+              pw.Text('Notes'),
+              pw.TextField(name: 'notes', width: 200),
+            ],
+          ),
+        ),
+      );
+      return _saveDoc(doc);
+    },
+  ),
+  FixtureSpec(
     name: 'annotations',
     why:
         'Link annotations from a foreign producer — '
-        'flattenAllAnnotations must consume annotation dictionaries '
+        'flattenAnnotations must consume annotation dictionaries '
         'with foreign appearance conventions.',
     truths: {'pages': 1, 'annotCount': 2, 'url': 'https://example.com/interop'},
     build: (photoPng) async {

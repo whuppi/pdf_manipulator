@@ -99,6 +99,8 @@ format:
 # make test-guards   Mechanical guards over the test suite and the changelogs:
 #                      - changelog bullets stay one sentence: at most 60 words
 #                        (80 for a Breaking bullet), tool/check_changelog_shape.sh
+#                      - fork tests: host/ unit tests for pure functions only;
+#                        none in patched upstream files or tests/, tool/check_fork_tests.sh
 #                      - no dart:io in tests (fixtures are imported Dart
 #                        source, so VM and browser consume identical
 #                        bytes; exempt: the hybrid asset server, native
@@ -135,6 +137,7 @@ fixtures:
 # whole rather than marked 15 times.
 test-guards:
 	@./tool/check_changelog_shape.sh
+	@./tool/check_fork_tests.sh
 	@bad=$$(for f in $$(grep -rln "dart:io" test/ --include="*.dart"); do \
 	  grep -q "io-exempt:" "$$f" || echo "$$f"; \
 	done); \

@@ -2012,7 +2012,7 @@ class _EditorTabState extends State<_EditorTab>
                       title: 'Flatten all annotations',
                       loading: loading,
                       onRun: () => _edit('FlattenAnnot', (e) async {
-                            await e.flattenAllAnnotations();
+                            await e.flattenAnnotations();
                             return _saveEditor(e);
                           })),
                   _Op(

@@ -3,7 +3,9 @@ import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
+import 'package:pdf_manipulator/src/types/pdf_attachment.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
+import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/pdf_image.dart';
@@ -11,7 +13,10 @@ import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
+import 'package:pdf_manipulator/src/types/pdf_redaction_report.dart';
+import 'package:pdf_manipulator/src/types/pdf_sanitize_options.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
+import 'package:pdf_manipulator/src/types/pdf_xfa_info.dart';
 import 'package:pdf_manipulator/src/types/search_result.dart';
 import 'package:pdf_manipulator/src/bridge/pdf_bridge.dart';
 import 'package:pdf_manipulator/src/bridge/pdf_transport.dart';
@@ -179,6 +184,18 @@ class SharedBridge extends PdfBridge {
       'format': format.name,
       'password': password,
     },
+    sources: [source],
+    sinks: [output],
+  );
+
+  @override
+  PdfTask<void> convertXfaToAcroForm(
+    DataSource source,
+    DataSink output, {
+    String? password,
+  }) => _exec(
+    EngineOp.convertXfaToAcroForm,
+    {'sourceLength': source.length, 'password': password},
     sources: [source],
     sinks: [output],
   );

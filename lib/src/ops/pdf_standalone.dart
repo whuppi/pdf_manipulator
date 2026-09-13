@@ -6,6 +6,7 @@
 
 import 'package:pdf_manipulator/src/ops/pdf.dart';
 import 'package:pdf_manipulator/src/types/data_sink.dart';
+import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_task.dart';
@@ -52,6 +53,14 @@ extension PdfStandalone on Pdf {
     KeepRecord.op('office');
     return bridge.convertToPdf(document, output, format: format);
   }
+
+  /// Converts the XFA form in [source] into a plain AcroForm document
+  /// written to [output]. A document without XFA throws [PdfEngineError].
+  PdfTask<void> convertXfaToAcroForm(
+    DataSource source,
+    DataSink output, {
+    String? password,
+  }) => bridge.convertXfaToAcroForm(source, output, password: password);
 
   /// Extracts specific [pages] from [source] into [output].
   PdfTask<void> extractPages(

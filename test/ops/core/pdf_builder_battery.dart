@@ -185,7 +185,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       // The builder watermark is an ANNOTATION — invisible to plain
       // extraction. Flatten it into content; then it must extract.
       final e = await pdf.edit(src(sink.takeBytes()));
-      await e.flattenAllAnnotations();
+      await e.flattenAnnotations();
       final flatSink = TestSink();
       await e.save(flatSink);
       await e.dispose();
@@ -214,6 +214,32 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.save(sink);
       await builder.dispose();
       expect(sink.takeBytes().length, greaterThan(minimalPdf.length));
+    }, timeout: t(1));
+
+    test('image is placed at the rect it was given', () async {
+      // The placement rect is width × height at (x, y) — not a far
+      // corner. Read it back through the editor's page-image list, which
+      // reports the real transform from the content stream.
+      final pdf = createPdf();
+      final builder = await pdf.build();
+      final page = await builder.addA4Page();
+      await page.image(
+        src(minimalPng),
+        const PdfRect(x: 50, y: 500, width: 100, height: 120),
+      );
+      await page.done();
+      final sink = TestSink();
+      await builder.save(sink);
+      await builder.dispose();
+
+      final editor = await pdf.edit(src(sink.takeBytes()));
+      final images = await editor.pageImages(0);
+      await editor.dispose();
+      expect(images, hasLength(1));
+      expect(images.single.bounds.x, closeTo(50, 0.01));
+      expect(images.single.bounds.y, closeTo(500, 0.01));
+      expect(images.single.bounds.width, closeTo(100, 0.01));
+      expect(images.single.bounds.height, closeTo(120, 0.01));
     }, timeout: t(1));
 
     test('textField embeds field name', () async {

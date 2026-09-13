@@ -20,6 +20,11 @@ Five files, strict rules:
 | `pdf_standalone.dart` | Source in, sink out, no handle | Non-mutating one-shot ops |
 | `pdf_sugar.dart` | Convenience wrappers | Over editor/builder only, never standalone (rare exception allowed) |
 
+**Where reads live.** `PdfDoc` answers questions about a document as it
+is. `PdfEditor` answers questions about the session's staged state — the
+same names, when both exist. Exports (source in, sink out) live on
+`PdfDoc` or `PdfStandalone`.
+
 ---
 
 ## PdfDoc — read-only queries
@@ -43,12 +48,14 @@ Five files, strict rules:
 | Classify page | `classify_page` | `classifyPage()` | DONE |
 | Classify document | `classify_document` | `classifyDocument()` | DONE |
 | Plan split by bookmarks | `plan_split_by_bookmarks` | `planSplitByBookmarks()` | DONE |
-| Get page crop box | `get_page_crop_box` | — | PLANNED |
-| Has XFA forms | `has_xfa` | — | PLANNED |
-| Analyze XFA | `analyze_xfa` | — | PLANNED |
-| Get form fields (list all) | `get_form_fields` | — | PLANNED |
-| Get form field value | `get_form_field_value` | — | PLANNED |
-| Has form field | `has_form_field` | — | PLANNED |
+| Get page crop box | `get_page_crop_box` | — | DONE — moved to `PdfEditor.pageCropBox` (staged-state read, see the header rule above) |
+| Has XFA forms | `has_xfa` | `xfa != null` | DONE — `xfa` is `null` on `minimalPdf` and non-null on `xfaFormPdf`; not a separate member (one concept, one name) |
+| Analyze XFA | `analyze_xfa_document` | `xfa` | DONE — on `xfaFormPdf` `fieldCount` is 2, `pageCount` 1 and `fieldTypes` `['Checkbox', 'Text']`, the analyzer's own names |
+| List attachments | host name-tree walk (`host/attachments.rs`) | `attachments` | DONE — on `attachmentPdf` one entry with name, description, mime `text/plain` and declared size 11; empty on `minimalPdf` |
+| Extract one attachment | host name-tree walk (`host/attachments.rs`) | `extractAttachment(name, sink)` | DONE — the bytes written equal `hello notes`; an unknown name throws `PdfEngineError` |
+| Get form fields (list all) | `FormExtractor::extract_fields` | `formFields` | DONE — on `fFormFields` the field names and the text field's default value match the fixture truths; on `fFormFieldsProps` `maxLength`/`tooltip` match |
+| Get form field value | `FormExtractor::extract_fields` | `formField(name)?.value` | DONE — same fixtures; `formFieldValue(name)` is `formField(name)?.value`, no separate wire op |
+| Has form field | `FormExtractor::extract_fields` | `formField(name) != null` | DONE — `formField('nope')` is `null` on `fFormFieldsProps`; not a separate member (one concept, one name) |
 | Get page images (list metadata) | `get_page_images` | `pageImages()` | DONE — name, placement bounds and the full transform per image XObject on a page |
 | Producer / Creator metadata | `producer`, `creator` | `producer`, `creator` (decoded on open) | DONE |
 | Creation date | `creation_date` | `creationDate` (decoded on open) | DONE |
@@ -75,58 +82,58 @@ Five files, strict rules:
 | Delete page | via bridge | `deletePage()` | DONE |
 | Move page | via bridge | `movePage()` | DONE |
 | Select pages | `select_pages` | `selectPages()` | DONE |
-| Merge from another PDF | `merge_from_reader` | `mergeFrom()` | DONE |
+| Merge from another PDF | `merge_from_reader` | `mergeFrom()` | DONE — the merged document's `/AcroForm /Fields` come with its pages, so `formFields` lists `fullname` and `agree` after merging a form into `minimalPdf` |
 | Reduce images by policy | via bridge (`host/images/`) | `reduceImages(PdfImagePolicy)` | DONE — presets `screen`/`ebook`/`print`/`lossless`; typed `PdfImageReport`, one row per image XObject |
 | Reduce images inside annotation appearances, patterns and inline images | — | — | PLANNED — `reduceImages` visits page content and Form XObjects only; appearance streams, pattern content and `BI … EI` images are left as stored |
 | Unembed standard fonts | via bridge | `unembedStandardFonts()` | DONE |
 | Add watermark | via bridge | `addWatermark()` | DONE |
 | Add stamp | via bridge | `addStamp()` | DONE |
 | Add image stamp | via bridge | `addImageStamp()` | DONE |
-| Embed file | `embed_file` | `embedFile()` | DONE |
+| Embed file | `embed_file_with_options` | `embedFile()` | DONE — `attachments` lists the embedded file after save and `extractAttachment` returns its bytes |
 | Erase regions | `erase_regions` | `eraseRegions()` | DONE |
-| Flatten forms | `flatten_forms` | `flattenForms()` | DONE |
-| Flatten all annotations | `flatten_all_annotations` | `flattenAllAnnotations()` | DONE |
+| Flatten forms | `flatten_forms` | `flattenForms({page})` | DONE — no `page` flattens every page, matching the old no-arg behaviour |
+| Flatten all annotations | `flatten_all_annotations` | `flattenAnnotations({page})` | DONE — renamed from `flattenAllAnnotations()`; "All" is now the no-`page` default, not the only mode |
 | Set form field value | `set_form_field_value` | `setFormFieldValue()` | DONE |
 | Crop margins | `crop_margins` | `cropMargins()` | DONE |
 | Resize image | `resize_image` | `resizeImage()` | DONE — `pageImages()` supplies the XObject name; the editor battery resizes a listed image and reads the new bounds back from the saved bytes |
 | Convert to PDF/A | via bridge | `convertToPdfA()` | DONE |
 | Add redaction | `add_redaction` | `addRedaction()` | DONE |
 | Redaction count | `redaction_count` | `redactionCount()` | DONE |
-| Apply redactions | `apply_all_redactions` | `applyRedactions()` | DONE |
+| Apply redactions | `apply_redactions_destructive` | `applyRedactions()` | DONE — destroys the content now and returns a `PdfRedactionReport` (`glyphsRemoved > 0` and the redacted text gone after save) |
 | Get page media box | `get_page_media_box` | `pageMediaBox()` | DONE |
+| Get page crop box | `get_page_crop_box` | `pageCropBox()` | DONE — `null` when the page has no `/CropBox`; the handwritten `croppedPagePdf` truth (x 72, y 72, w 468, h 648) proves it is not the inherited MediaBox |
 | Is modified | `is_modified` | `isModified` | DONE |
 | Page count | `current_page_count` | `pageCount` | DONE |
 | Version | `version` | `version` | DONE |
 | Save | `write_full_to_writer` | `save()` | DONE |
 | Set producer | `set_producer` | `setProducer()` | DONE |
 | Set creation date | `set_creation_date` | `setCreationDate()` | DONE |
-| Set page media box | `set_page_media_box` | — | PLANNED |
-| Set page crop box | `set_page_crop_box` | — | PLANNED |
-| Set page rotation | `set_page_rotation` | — | PLANNED |
-| Flatten forms on single page | `flatten_forms_on_page` | — | PLANNED |
-| Flatten annotations on single page | `flatten_page_annotations` | — | PLANNED |
-| Clear erase regions | `clear_erase_regions` | — | PLANNED |
-| Merge selective pages from | `merge_pages_from` | — | PLANNED |
-| Apply redactions destructive | `apply_redactions_destructive` | — | PLANNED |
-| Sanitize document | `sanitize_document` | — | PLANNED |
+| Set page media box | `set_page_media_box` | `setPageMediaBox()` | DONE — round-tripped through save and `pageMediaBox()` |
+| Set page crop box | `set_page_crop_box` | `setPageCropBox()` | DONE — round-tripped through save and `pageCropBox()` |
+| Set page rotation | `set_page_rotation` | `setPageRotation()` | DONE — absolute (unlike `rotatePage`, which is relative): setting 90 twice leaves the page at 90, not 180 |
+| Flatten forms on single page | `flatten_forms_on_page` | `flattenForms(page:)` | DONE — flattening page 0 of a two-page form bakes page 0's field text into content while page 1's field stays an unflattened annotation |
+| Flatten annotations on single page | `flatten_page_annotations` | `flattenAnnotations(page:)` | DONE — same page-scoping proof as `flattenForms(page:)`, on stamped pages; `flattenAllAnnotations()` is gone, the mode is a parameter now |
+| Clear erase regions | `clear_erase_regions` | `clearEraseRegions()` | DONE — wired to the engine's queued (non-destructive) erase map; `eraseRegions()` itself is destructive by contract (see `host/dispatch.rs::edit_erase_regions`), so this only ever clears cosmetic overlays queued by the engine's non-public `erase_regions` path, not anything the public `eraseRegions()` did |
+| Merge selective pages from | `merge_pages_from_reader` | `mergeFrom(pages:)` | DONE — merging page `[1]` of `fThreePageMarkers` into `minimalPdf` gives 2 pages whose page 1 extracts `MARKER-TWO` and neither other marker; an out-of-range index throws `PdfEngineError` |
+| Sanitize document | `sanitize_document` | `sanitize()` | DONE — `PdfSanitizeOptions`; `scrubMetadata()` is `sanitize(const PdfSanitizeOptions(javascript: false))` |
 | Reposition image | `reposition_image` | `repositionImage()` | DONE — verified through `pageImages()` after save |
 | Set image bounds | `set_image_bounds` | `setImageBounds()` | DONE — takes the same `PdfRect` `pageImages()` reports; verified after save |
-| Remove form field | `remove_form_field` | — | PLANNED |
-| Set form field readonly | `set_form_field_readonly` | — | PLANNED |
-| Set form field required | `set_form_field_required` | — | PLANNED |
-| Set form field tooltip | `set_form_field_tooltip` | — | PLANNED |
-| Set form field rect | `set_form_field_rect` | — | PLANNED |
-| Set form field max length | `set_form_field_max_length` | — | PLANNED |
-| Set form field alignment | `set_form_field_alignment` | — | PLANNED |
-| Set form field background color | `set_form_field_background_color` | — | PLANNED |
-| Set form field border color | `set_form_field_border_color` | — | PLANNED |
-| Set form field border width | `set_form_field_border_width` | — | PLANNED |
-| Set form field default appearance | `set_form_field_default_appearance` | — | PLANNED |
-| Set form field flags | `set_form_field_flags` | — | PLANNED |
-| Convert XFA to AcroForm | `convert_xfa_to_acroform` | — | PLANNED |
-| Embed file with options | `embed_file_with_options` | — | PLANNED |
-| Export form data FDF | `export_form_data_fdf` | — | PLANNED |
-| Export form data XFDF | `export_form_data_xfdf` | — | PLANNED |
+| Remove form field | `remove_form_field` | `removeFormField()` | DONE — removed from `/AcroForm /Fields` and every page's `/Annots` on save; `formField(name)` is `null` on reopen, the other fields stay listed |
+| Set form field readonly | `set_form_field_readonly` | `setFormFieldReadOnly()` | DONE — `formField(name).readOnly` reads back `true` after save + reopen |
+| Set form field required | `set_form_field_required` | `setFormFieldRequired()` | DONE — `formField(name).required` reads back `true` after save + reopen |
+| Set form field tooltip | `set_form_field_tooltip` | `setFormFieldTooltip()` | DONE — `formField(name).tooltip` reads back the new `/TU` after save + reopen |
+| Set form field rect | `set_form_field_rect` | `setFormFieldBounds()` | DONE — `formField(name).bounds` reads back the new `/Rect` after save + reopen |
+| Set form field max length | `set_form_field_max_length` | `setFormFieldMaxLength()` | DONE — `formField(name).maxLength` reads back the new `/MaxLen`, not the fixture default, after save + reopen |
+| Set form field alignment | `set_form_field_alignment` | `setFormFieldAlignment()` | DONE — `formField(name).alignment` reads back `PdfTextAlignment.center` after save + reopen |
+| Set form field background color | `set_form_field_background_color` | `setFormFieldBackgroundColor()` | DONE — proven with border color/width and appearance: the field still flattens, `extract()` shows the filled value, and the rendered page differs from the unstyled render |
+| Set form field border color | `set_form_field_border_color` | `setFormFieldBorderColor()` | DONE — same proof as background color |
+| Set form field border width | `set_form_field_border_width` | `setFormFieldBorderWidth()` | DONE — same proof as background color |
+| Set form field default appearance | `set_form_field_default_appearance` | `setFormFieldAppearance()` | DONE — dispatch builds the `/{font} {size} Tf {r} {g} {b} rg` DA string; same proof as background color |
+| Set form field flags | `set_form_field_flags` | `setFormFieldFlags()` | DONE — `{readOnly, required}` reads back both flags via `formField(name)`; `{multiline}` leaves the field listed and still flattenable (the type carries only readOnly/required as named properties) |
+| Convert XFA to AcroForm | `convert_xfa_document` | `PdfStandalone.convertXfaToAcroForm()` | DONE — converting `xfaFormPdf` yields a document that opens with a page and whose `formFields` lists `given` and `agree`; a document without XFA throws `PdfEngineError` |
+| Embed file with options | `embed_file_with_options` | `embedFile(description:, mimeType:, relationship:)` | DONE — after save, `attachments` reads back the description, the mime type and the declared size |
+| Export form data FDF | `FdfWriter::from_fields` | `exportFormData(format: .fdf)` | DONE — `fullname` filled with `'Ada'`, saved, reopened, exported, and `/T (fullname) /V (Ada)` parsed from the decoded FDF text (not a byte-grep) |
+| Export form data XFDF | `XfdfWriter::from_fields` | `exportFormData(format: .xfdf)` | DONE — same fixture; the `<field name="fullname"><value>Ada</value></field>` pair is parsed out of the XML, not substring-matched |
 
 ---
 
@@ -341,7 +348,8 @@ The planned route to expose these without bloating the default is per-feature op
 | Capability | Status | Why |
 |---|---|---|
 | Builder output hardening (compress streams by default; richer typesetting) | PLANNED | Builder output is valid but naively shaped vs real-world PDFs; product decision, deliberately separate from the test overhaul. |
-| Attachment-listing read API | PLANNED | embedFile currently has no semantic presence proof — tests fall back to structural checks until attachments can be enumerated. |
+| Attachment-listing read API | DONE | `PdfDoc.attachments` and `PdfDoc.extractAttachment` — `embedFile` is now proven by listing the saved file and round-tripping its bytes. |
+| Annotation-listing read API | PLANNED | `flattenAnnotations` has no semantic presence proof of its own: `extract` reads an annotation's appearance text whether or not it was flattened, so a test can show page scoping only through side effects. Listing a page's annotations (subtype, rect) would let a battery assert "gone after flatten" directly, as `formFields` now does for forms. |
 | Typed wire error codes (PdfWrongPassword, PdfCorrupted, … from Rust) | PLANNED | Engine failures are typed as `PdfEngineError(message)` today; per-kind types need error codes on the wire protocol. |
 
 ---

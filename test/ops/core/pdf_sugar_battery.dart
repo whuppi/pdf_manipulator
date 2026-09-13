@@ -346,7 +346,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       // Semantic presence: flatten the stamp annotation into page
       // content, then the stamp's appearance text must be extractable.
       final e = await pdf.edit(src(output));
-      await e.flattenAllAnnotations();
+      await e.flattenAnnotations();
       final flatSink = TestSink();
       await e.save(flatSink);
       await e.dispose();
@@ -384,7 +384,7 @@ void registerSugarTests(Pdf Function() createPdf) {
     test('background watermark text is extractable on every page', () async {
       // The background layer draws INTO the content stream — its text
       // must come back out of extraction (the semantic presence proof;
-      // the annotation layer's proof rides flattenAllAnnotations in
+      // the annotation layer's proof rides flattenAnnotations in
       // the stamp test above).
       final pdf = createPdf();
       final sink = TestSink();

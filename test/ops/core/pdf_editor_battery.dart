@@ -7,6 +7,7 @@
 // Presence proofs are SEMANTIC: annotation appearances are proven by
 // flattening into content and extracting — never by grepping bytes.
 
+import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -206,6 +207,88 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
     }, timeout: t(1));
 
+    test('pageCropBox is null when the page has no CropBox', () async {
+      final editor = await createPdf().edit(src(minimalPdf));
+      expect(await editor.pageCropBox(0), isNull);
+      await editor.dispose();
+    }, timeout: t(1));
+
+    test('pageCropBox reports the CropBox truth on croppedPagePdf', () async {
+      final editor = await createPdf().edit(src(croppedPagePdf));
+      final box = await editor.pageCropBox(0);
+      expect(box, isNotNull);
+      expect(box!.x, closeTo(72, 0.01));
+      expect(box.y, closeTo(72, 0.01));
+      expect(box.width, closeTo(468, 0.01));
+      expect(box.height, closeTo(648, 0.01));
+      await editor.dispose();
+    }, timeout: t(1));
+
+    test(
+      'setPageCropBox then save → reopen reads it back and crops render',
+      () async {
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(minimalPdf));
+        const box = PdfRect(x: 10, y: 20, width: 300, height: 400);
+        await editor.setPageCropBox(0, box);
+        final read = await editor.pageCropBox(0);
+        expect(read, isNotNull);
+        expect(read!.x, closeTo(10, 0.01));
+        expect(read.y, closeTo(20, 0.01));
+        expect(read.width, closeTo(300, 0.01));
+        expect(read.height, closeTo(400, 0.01));
+        final sink = TestSink();
+        await editor.save(sink);
+        await editor.dispose();
+        final reopened = await pdf.edit(src(sink.takeBytes()));
+        final reread = await reopened.pageCropBox(0);
+        expect(reread, isNotNull);
+        expect(reread!.width, closeTo(300, 0.01));
+        expect(reread.height, closeTo(400, 0.01));
+        await reopened.dispose();
+      },
+      timeout: t(1),
+    );
+
+    test('setPageMediaBox then save → pageMediaBox reads it back', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(minimalPdf));
+      const box = PdfRect(x: 5, y: 15, width: 400, height: 500);
+      await editor.setPageMediaBox(0, box);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final reopened = await pdf.edit(src(sink.takeBytes()));
+      final read = await reopened.pageMediaBox(0);
+      expect(read.x, closeTo(5, 0.01));
+      expect(read.y, closeTo(15, 0.01));
+      expect(read.width, closeTo(400, 0.01));
+      expect(read.height, closeTo(500, 0.01));
+      await reopened.dispose();
+    }, timeout: t(1));
+
+    test('setPageRotation is absolute, not additive', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(minimalPdf));
+      await editor.setPageRotation(0, degrees: 90);
+      await editor.setPageRotation(0, degrees: 90);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final doc = await pdf.open(src(sink.takeBytes()));
+      expect(doc.pages[0].rotation, 90);
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('setPageRotation rejects a non-multiple-of-90', () async {
+      final editor = await createPdf().edit(src(minimalPdf));
+      expect(
+        () => editor.setPageRotation(0, degrees: 45),
+        throwsA(isA<PdfInvalidArgument>()),
+      );
+      await editor.dispose();
+    }, timeout: t(1));
+
     test('mergeFrom increases page count', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
@@ -293,6 +376,52 @@ void registerEditorTests(Pdf Function() createPdf) {
       expect(doc.pageCount, 1);
       await doc.dispose();
     }, timeout: t(1));
+
+    test('applyRedactions removes glyphs and reports the count', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(croppedPagePdf));
+      await editor.addRedaction(
+        0,
+        const PdfRect(x: 90, y: 385, width: 200, height: 40),
+      );
+      final report = await editor.applyRedactions();
+      expect(
+        report.glyphsRemoved,
+        greaterThan(0),
+        reason: 'the report must reflect the glyphs the redaction destroyed',
+      );
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final doc = await pdf.open(src(sink.takeBytes()));
+      final text = await doc.extract(pages: const PdfPages.all());
+      expect(text, isNot(contains('CROP')));
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test(
+      'sanitize(javascript: true) strips the OpenAction, keeps content',
+      () async {
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(openActionJavaScriptPdf));
+        await editor.sanitize(
+          const PdfSanitizeOptions(
+            metadata: false,
+            javascript: true,
+            embeddedFiles: false,
+          ),
+        );
+        final sink = TestSink();
+        await editor.save(sink);
+        await editor.dispose();
+        final doc = await pdf.open(src(sink.takeBytes()));
+        expect(doc.pageCount, 1);
+        final text = await doc.extract(pages: const PdfPages.all());
+        expect(text, contains('SANITIZE'));
+        await doc.dispose();
+      },
+      timeout: t(1),
+    );
 
     // ── Encryption ──
 
@@ -1146,7 +1275,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       // both appearance texts must come back out of extraction.
       final pdf2 = createPdf();
       final flat = await pdf2.edit(src(sink.takeBytes()));
-      await flat.flattenAllAnnotations();
+      await flat.flattenAnnotations();
       final flatSink = TestSink();
       await flat.save(flatSink);
       await flat.dispose();
@@ -1174,7 +1303,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await e.dispose();
       final pdf2 = createPdf();
       final flat = await pdf2.edit(src(sink.takeBytes()));
-      await flat.flattenAllAnnotations();
+      await flat.flattenAnnotations();
       final flatSink = TestSink();
       await flat.save(flatSink);
       await flat.dispose();
@@ -1212,10 +1341,10 @@ void registerEditorTests(Pdf Function() createPdf) {
 
     // ── Content ──
 
-    test('flattenAllAnnotations produces valid PDF', () async {
+    test('flattenAnnotations produces valid PDF', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
-      await editor.flattenAllAnnotations();
+      await editor.flattenAnnotations();
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -1224,13 +1353,13 @@ void registerEditorTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
-    test('flattenAllAnnotations consumes foreign link annotations', () async {
+    test('flattenAnnotations consumes foreign link annotations', () async {
       // dart-pdf link annotations carry foreign appearance
       // conventions — flatten must digest them without losing the
       // page's text content.
       final pdf = createPdf();
       final editor = await pdf.edit(src(fAnnotations));
-      await editor.flattenAllAnnotations();
+      await editor.flattenAnnotations();
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -1292,7 +1421,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final output = sink.takeBytes();
       final flat = await pdf.edit(src(output));
-      await flat.flattenAllAnnotations();
+      await flat.flattenAnnotations();
       final flatSink = TestSink();
       await flat.save(flatSink);
       await flat.dispose();
@@ -1977,6 +2106,34 @@ void registerEditorTests(Pdf Function() createPdf) {
       expect(sink.takeBytes().length, greaterThan(minimalPdf.length));
     }, timeout: t(1));
 
+    test('embedFile writes description, mime type and bytes', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(minimalPdf));
+      final fileData = Uint8List.fromList(utf8.encode('hello notes'));
+      await editor.embedFile(
+        'notes.txt',
+        src(fileData),
+        description: 'Meeting notes',
+        mimeType: 'text/plain',
+        relationship: PdfAttachmentRelationship.supplement,
+      );
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+
+      final doc = await pdf.open(src(sink.takeBytes()));
+      final files = await doc.attachments;
+      expect(files, hasLength(1));
+      expect(files.single.name, 'notes.txt');
+      expect(files.single.description, 'Meeting notes');
+      expect(files.single.mimeType, 'text/plain');
+      expect(files.single.size, fileData.length);
+      final extracted = TestSink();
+      await doc.extractAttachment('notes.txt', extracted);
+      await doc.dispose();
+      expect(extracted.takeBytes(), fileData);
+    }, timeout: t(1));
+
     test('eraseRegions produces valid output', () async {
       final pdf = createPdf();
       final formBytes = fFormFields;
@@ -1992,6 +2149,39 @@ void registerEditorTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
+    test('eraseRegions destroys only the region it was given', () async {
+      // The marker sits at (100, 400) on the cropped fixture. A region
+      // over it must destroy it; a region elsewhere on the page must
+      // leave it extractable — the pair pins the rectangle's meaning.
+      final pdf = createPdf();
+
+      Future<String> eraseThenExtract(PdfRect region) async {
+        final editor = await pdf.edit(src(croppedPagePdf));
+        await editor.eraseRegions(0, [region]);
+        final sink = TestSink();
+        await editor.save(sink);
+        await editor.dispose();
+        final doc = await pdf.open(src(sink.takeBytes()));
+        final text = await doc.extract(pages: const PdfPages.all());
+        await doc.dispose();
+        return text;
+      }
+
+      expect(
+        await eraseThenExtract(
+          const PdfRect(x: 90, y: 385, width: 200, height: 40),
+        ),
+        isNot(contains('CROP')),
+      );
+      expect(
+        await eraseThenExtract(
+          const PdfRect(x: 90, y: 100, width: 200, height: 40),
+        ),
+        contains('CROP'),
+        reason: 'a region far from the text must leave it alone',
+      );
+    }, timeout: t(1));
+
     test('flattenForms preserves page count', () async {
       final pdf = createPdf();
       final formBytes = fFormFields;
@@ -2004,6 +2194,200 @@ void registerEditorTests(Pdf Function() createPdf) {
       expect(doc.pageCount, 1);
       await doc.dispose();
     }, timeout: t(1));
+
+    test('flattenForms(page: 0) flattens only page 0\'s field', () async {
+      // Merging the form with itself gives two pages carrying the same
+      // field names, so the proof is the count: every field is
+      // registered before, and exactly page 1's survive the flatten.
+      final pdf = createPdf();
+      final mergeSink = TestSink();
+      await pdf.merge([src(fFormFields), src(fFormFields)], mergeSink);
+      final merged = mergeSink.takeBytes();
+
+      final before = await pdf.open(src(merged));
+      final beforeFields = await before.formFields;
+      await before.dispose();
+      expect(
+        beforeFields,
+        hasLength(fFormFieldsTruth.fieldNames.length * 2),
+        reason: 'both merged copies register their fields',
+      );
+
+      final editor = await pdf.edit(src(merged));
+      expect(await editor.pageCount, 2);
+      await editor.flattenForms(page: 0);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+
+      final doc = await pdf.open(src(sink.takeBytes()));
+      expect(doc.pageCount, 2);
+      final afterFields = await doc.formFields;
+      await doc.dispose();
+      expect(
+        afterFields,
+        hasLength(fFormFieldsTruth.fieldNames.length),
+        reason: "flattening page 0 must remove page 0's fields only",
+      );
+      expect(
+        afterFields.map((f) => f.name).toSet(),
+        fFormFieldsTruth.fieldNames.toSet(),
+      );
+    }, timeout: t(1));
+
+    test('flattenAnnotations(page: 0) flattens only that page', () async {
+      // What this proves: page 1 is left alone — it carries no text at
+      // all after a flatten scoped to page 0. It does NOT prove page 0's
+      // stamp was drawn into content: extraction reads an unflattened
+      // annotation's appearance too, so the two are indistinguishable
+      // here. 'leaves page 1 stamp untouched' below is that proof.
+      final pdf = createPdf();
+      final mergeSink = TestSink();
+      await pdf.merge([src(minimalPdf), src(minimalPdf)], mergeSink);
+      final editor = await pdf.edit(src(mergeSink.takeBytes()));
+      expect(await editor.pageCount, 2);
+      const rect = PdfRect(x: 50, y: 650, width: 200, height: 60);
+      await editor.addStamp(0, type: PdfStampType.approved, rect: rect);
+      await editor.flattenAnnotations(page: 0);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final doc = await pdf.open(src(sink.takeBytes()));
+      final page0 = await doc.extract(pages: const PdfPages.single(0));
+      final page1 = await doc.extract(pages: const PdfPages.single(1));
+      expect(
+        page0.toUpperCase(),
+        contains('APPROVED'),
+        reason: 'page 0 was flattened — its stamp text is now page content',
+      );
+      expect(
+        page1,
+        isEmpty,
+        reason: 'page 1 had no stamp and flatten(page: 0) must not touch it',
+      );
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('flattenAnnotations(page: 0) leaves page 1 stamp untouched', () async {
+      // Two stamps, one session, then a page-scoped flatten in the next:
+      // page 0's stamp becomes page content, page 1's stays an annotation.
+      // Neither page may carry the other's text.
+      final pdf = createPdf();
+      final mergeSink = TestSink();
+      await pdf.merge([src(minimalPdf), src(minimalPdf)], mergeSink);
+      final editor = await pdf.edit(src(mergeSink.takeBytes()));
+      const rect = PdfRect(x: 50, y: 650, width: 200, height: 60);
+      await editor.addStamp(0, type: PdfStampType.approved, rect: rect);
+      await editor.addStamp(1, type: PdfStampType.draft, rect: rect);
+      final stamped = TestSink();
+      await editor.save(stamped);
+      await editor.dispose();
+
+      final flat = await pdf.edit(src(stamped.takeBytes()));
+      await flat.flattenAnnotations(page: 0);
+      final sink = TestSink();
+      await flat.save(sink);
+      await flat.dispose();
+
+      final doc = await pdf.open(src(sink.takeBytes()));
+      final page0 = (await doc.extract(
+        pages: const PdfPages.single(0),
+      )).toUpperCase();
+      final page1 = (await doc.extract(
+        pages: const PdfPages.single(1),
+      )).toUpperCase();
+      await doc.dispose();
+      expect(
+        page0,
+        contains('APPROVED'),
+        reason: "page 0's stamp must be drawn into page 0's content",
+      );
+      expect(page0, isNot(contains('DRAFT')));
+      expect(
+        page1,
+        contains('DRAFT'),
+        reason: "page 1 keeps its own stamp when only page 0 is flattened",
+      );
+      expect(page1, isNot(contains('APPROVED')));
+    }, timeout: t(1));
+
+    test('mergeFrom(pages:) appends only the pages named', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(minimalPdf));
+      await editor.mergeFrom(src(fThreePageMarkers), pages: [1]);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final doc = await pdf.open(src(sink.takeBytes()));
+      expect(doc.pageCount, 2);
+      final page1 = await doc.extract(pages: const PdfPages.single(1));
+      await doc.dispose();
+      expect(page1, contains(fThreePageMarkersTruth.markers[1]));
+      expect(page1, isNot(contains(fThreePageMarkersTruth.markers[0])));
+      expect(page1, isNot(contains(fThreePageMarkersTruth.markers[2])));
+    }, timeout: t(1));
+
+    test(
+      'mergeFrom(pages:) past the last page of the other document errors',
+      () async {
+        final editor = await createPdf().edit(src(minimalPdf));
+        await expectLater(
+          editor.mergeFrom(src(fThreePageMarkers), pages: [3]),
+          throwsA(isA<PdfEngineError>()),
+        );
+        await editor.dispose();
+      },
+      timeout: t(1),
+    );
+
+    test('mergeFrom carries the merged document\'s form fields', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(minimalPdf));
+      await editor.mergeFrom(src(fFormFields));
+      final merged = TestSink();
+      await editor.save(merged);
+      await editor.dispose();
+      final mergedBytes = merged.takeBytes();
+
+      final doc = await pdf.open(src(mergedBytes));
+      expect(doc.pageCount, 2);
+      final names = (await doc.formFields).map((f) => f.name).toSet();
+      await doc.dispose();
+      expect(
+        names,
+        containsAll(fFormFieldsTruth.fieldNames),
+        reason: 'merging a form must register its fields in the AcroForm',
+      );
+
+      // A listed field is a reachable field: fill it, flatten, read it back
+      // out of the page content.
+      final filler = await pdf.edit(src(mergedBytes));
+      await filler.setFormFieldValue('fullname', 'MERGEDFILL');
+      await filler.flattenForms();
+      final filled = TestSink();
+      await filler.save(filled);
+      await filler.dispose();
+      final out = await pdf.open(src(filled.takeBytes()));
+      final text = await out.extract(pages: const PdfPages.all());
+      await out.dispose();
+      expect(text, contains('MERGEDFILL'));
+    }, timeout: t(1));
+
+    test(
+      'clearEraseRegions does not error on a page with no queued erase',
+      () async {
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(minimalPdf));
+        await editor.clearEraseRegions(0);
+        final sink = TestSink();
+        await editor.save(sink);
+        await editor.dispose();
+        final doc = await pdf.open(src(sink.takeBytes()));
+        expect(doc.pageCount, 1);
+        await doc.dispose();
+      },
+      timeout: t(1),
+    );
 
     // ── Save options ──
 

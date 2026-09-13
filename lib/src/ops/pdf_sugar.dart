@@ -258,7 +258,9 @@ extension PdfSugar on Pdf {
   PdfTask<void> applyRedactions(DataSource source, DataSink output) =>
       PdfTask.group((hook) async {
         final editor = await hook.guard(edit(source));
-        await hook.guard(editor.applyRedactions());
+        await hook.guard(
+          editor.applyRedactions(),
+        ); // report discarded: one-shot
         await hook.guard(editor.save(output));
         await editor.dispose();
       });

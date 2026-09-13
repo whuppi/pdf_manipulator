@@ -10,7 +10,9 @@ import 'package:pdf_manipulator/src/ops/pdf_doc.dart';
 import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:pdf_manipulator/src/types/errors.dart';
+import 'package:pdf_manipulator/src/types/pdf_attachment.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
+import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_task.dart';
@@ -18,6 +20,8 @@ import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/bridge/pdf_bridge.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
+import 'package:pdf_manipulator/src/types/pdf_redaction_report.dart';
+import 'package:pdf_manipulator/src/types/pdf_sanitize_options.dart';
 import 'package:pdf_manipulator/src/keep/record_use_shim.dart';
 
 /// Mutable PDF editor — parse once, mutate many times, save once.
@@ -162,6 +166,38 @@ class PdfEditor {
     return _handle.pageMediaBox(page);
   }
 
+  /// Returns the crop box (visible/printable rectangle) of the given
+  /// [page], or `null` when the page has no `/CropBox` (it then defaults
+  /// to the media box; absence is reported rather than the inherited
+  /// value).
+  PdfTask<PdfRect?> pageCropBox(int page) {
+    _check();
+    return _handle.pageCropBox(page);
+  }
+
+  /// Sets the media box (bounding rectangle) of the given [page].
+  PdfTask<void> setPageMediaBox(int page, PdfRect box) {
+    _check();
+    return _handle.setPageMediaBox(page, box);
+  }
+
+  /// Sets the crop box (visible/printable rectangle) of the given [page].
+  PdfTask<void> setPageCropBox(int page, PdfRect box) {
+    _check();
+    return _handle.setPageCropBox(page, box);
+  }
+
+  /// Sets the absolute rotation of [page] to [degrees] (0, 90, 180 or
+  /// 270), replacing any existing rotation. Unlike [rotatePage] this does
+  /// not add to the current rotation.
+  PdfTask<void> setPageRotation(int page, {required int degrees}) {
+    _check();
+    if (degrees % 90 != 0) {
+      throw PdfInvalidArgument('degrees must be a multiple of 90: $degrees');
+    }
+    return _handle.setPageRotation(page, degrees: degrees);
+  }
+
   /// Removes the given [page] (0-based index) from the document.
   PdfTask<void> deletePage(int page) {
     _check();
@@ -180,10 +216,12 @@ class PdfEditor {
     return _handle.selectPages(pages);
   }
 
-  /// Appends all pages from [otherPdf] at the end of this document.
-  PdfTask<void> mergeFrom(DataSource otherPdf) {
+  /// Appends pages from [otherPdf] at the end of this document: every
+  /// page, or only [pages] (0-based, in the order given). An index past
+  /// the other document's last page throws [PdfEngineError].
+  PdfTask<void> mergeFrom(DataSource otherPdf, {List<int>? pages}) {
     _check();
-    return _handle.mergeFrom(otherPdf);
+    return _handle.mergeFrom(otherPdf, pages: pages);
   }
 
   // ── Optimization ──
@@ -257,9 +295,25 @@ class PdfEditor {
   // ── Content ──
 
   /// Embeds [data] as an attached file with the given [name].
-  PdfTask<void> embedFile(String name, DataSource data) {
+  ///
+  /// [description] and [mimeType] go into the file spec, where
+  /// `PdfDoc.attachments` reads them back; [relationship] states how the
+  /// file relates to this document.
+  PdfTask<void> embedFile(
+    String name,
+    DataSource data, {
+    String? description,
+    String? mimeType,
+    PdfAttachmentRelationship? relationship,
+  }) {
     _check();
-    return _handle.embedFile(name, data);
+    return _handle.embedFile(
+      name,
+      data,
+      description: description,
+      mimeType: mimeType,
+      relationship: relationship,
+    );
   }
 
   /// Erases content within the specified [regions] on [page].
@@ -268,16 +322,27 @@ class PdfEditor {
     return _handle.eraseRegions(page, regions);
   }
 
-  /// Flattens all interactive form fields into static content.
-  PdfTask<void> flattenForms() {
+  /// Clears the destructive-erase regions queued on [page] by
+  /// [eraseRegions] without applying them.
+  PdfTask<void> clearEraseRegions(int page) {
     _check();
-    return _handle.flattenForms();
+    return _handle.clearEraseRegions(page);
   }
 
-  /// Flattens all annotations (forms, comments, stamps) into static content.
-  PdfTask<void> flattenAllAnnotations() {
+  /// Flattens interactive form fields into static content. With no
+  /// [page], every page is flattened; with [page], only that page's
+  /// widgets are, leaving the rest of the form fillable.
+  PdfTask<void> flattenForms({int? page}) {
     _check();
-    return _handle.flattenAllAnnotations();
+    return _handle.flattenForms(page: page);
+  }
+
+  /// Flattens annotations (forms, comments, stamps) into static content.
+  /// With no [page], every page is flattened; with [page], only that
+  /// page's annotations are.
+  PdfTask<void> flattenAnnotations({int? page}) {
+    _check();
+    return _handle.flattenAnnotations(page: page);
   }
 
   /// Sets the value of the form field identified by [fieldName].
@@ -357,6 +422,92 @@ class PdfEditor {
     return _handle.setImageBounds(page, imageName, bounds);
   }
 
+  // ── Form field properties ──
+
+  /// Removes the form field [name], and its widget annotation, from the
+  /// document.
+  PdfTask<void> removeFormField(String name) {
+    _check();
+    return _handle.removeFormField(name);
+  }
+
+  /// Sets whether the form field [name] can be edited by the user.
+  PdfTask<void> setFormFieldReadOnly(String name, bool readOnly) {
+    _check();
+    return _handle.setFormFieldReadOnly(name, readOnly);
+  }
+
+  /// Sets whether the form field [name] must have a value on submit.
+  PdfTask<void> setFormFieldRequired(String name, bool required) {
+    _check();
+    return _handle.setFormFieldRequired(name, required);
+  }
+
+  /// Sets the form field [name]'s tooltip, shown when a viewer hovers it.
+  PdfTask<void> setFormFieldTooltip(String name, String tooltip) {
+    _check();
+    return _handle.setFormFieldTooltip(name, tooltip);
+  }
+
+  /// Sets the bounding rectangle of the form field [name]'s first widget.
+  PdfTask<void> setFormFieldBounds(String name, PdfRect bounds) {
+    _check();
+    return _handle.setFormFieldBounds(name, bounds);
+  }
+
+  /// Sets the maximum number of characters the text field [name] accepts.
+  PdfTask<void> setFormFieldMaxLength(String name, int maxLength) {
+    _check();
+    return _handle.setFormFieldMaxLength(name, maxLength);
+  }
+
+  /// Sets the text field [name]'s content alignment.
+  PdfTask<void> setFormFieldAlignment(String name, PdfTextAlignment alignment) {
+    _check();
+    return _handle.setFormFieldAlignment(name, alignment);
+  }
+
+  /// Sets the form field [name]'s widget background color.
+  PdfTask<void> setFormFieldBackgroundColor(String name, PdfColor color) {
+    _check();
+    return _handle.setFormFieldBackgroundColor(name, color);
+  }
+
+  /// Sets the form field [name]'s widget border color.
+  PdfTask<void> setFormFieldBorderColor(String name, PdfColor color) {
+    _check();
+    return _handle.setFormFieldBorderColor(name, color);
+  }
+
+  /// Sets the form field [name]'s widget border width, in points.
+  PdfTask<void> setFormFieldBorderWidth(String name, double width) {
+    _check();
+    return _handle.setFormFieldBorderWidth(name, width);
+  }
+
+  /// Sets the form field [name]'s default appearance: [font] is a resource
+  /// name such as `Helv`, [fontSize] in points, and text [color].
+  PdfTask<void> setFormFieldAppearance(
+    String name, {
+    required String font,
+    required double fontSize,
+    PdfColor color = PdfColor.black,
+  }) {
+    _check();
+    return _handle.setFormFieldAppearance(
+      name,
+      font: font,
+      fontSize: fontSize,
+      color: color,
+    );
+  }
+
+  /// Sets the form field [name]'s `/Ff` bits to the OR of [flags].
+  PdfTask<void> setFormFieldFlags(String name, Set<PdfFormFieldFlag> flags) {
+    _check();
+    return _handle.setFormFieldFlags(name, flags);
+  }
+
   /// Converts the document to PDF/A at the given conformance [level].
   PdfTask<void> convertToPdfA({int level = 1}) {
     KeepRecord.op('pdfa');
@@ -378,16 +529,24 @@ class PdfEditor {
     return _handle.redactionCount(page);
   }
 
-  /// Permanently applies all pending redaction marks, removing content.
-  PdfTask<void> applyRedactions() {
+  /// Permanently applies all pending redaction marks, removing content,
+  /// and reports what was removed.
+  PdfTask<PdfRedactionReport> applyRedactions() {
     _check();
     return _handle.applyRedactions();
   }
 
   /// Removes all document metadata (title, author, timestamps, etc.).
+  /// Equivalent to `sanitize(const PdfSanitizeOptions(javascript: false))`.
   PdfTask<void> scrubMetadata() {
     _check();
     return _handle.scrubMetadata();
+  }
+
+  /// Strips metadata, JavaScript and/or embedded files per [options].
+  PdfTask<void> sanitize(PdfSanitizeOptions options) {
+    _check();
+    return _handle.sanitize(options);
   }
 
   // ── Save ──

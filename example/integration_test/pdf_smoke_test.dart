@@ -529,7 +529,7 @@ void main() {
   testWidgets('editor flatten forms + annotations', (t) async {
     final e = await pdf.edit(_src(minimalPdf));
     await e.flattenForms();
-    await e.flattenAllAnnotations();
+    await e.flattenAnnotations();
     final sink = MemorySink();
     await e.save(sink);
     await e.dispose();

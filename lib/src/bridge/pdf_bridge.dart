@@ -7,7 +7,9 @@ import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
+import 'package:pdf_manipulator/src/types/pdf_attachment.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
+import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/pdf_image.dart';
@@ -15,8 +17,11 @@ import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
+import 'package:pdf_manipulator/src/types/pdf_redaction_report.dart';
+import 'package:pdf_manipulator/src/types/pdf_sanitize_options.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
 import 'package:pdf_manipulator/src/types/pdf_task.dart';
+import 'package:pdf_manipulator/src/types/pdf_xfa_info.dart';
 import 'package:pdf_manipulator/src/types/search_result.dart';
 
 /// Abstract bridge. Only FFI-level methods.
@@ -48,6 +53,13 @@ abstract class PdfBridge {
     DataSource source,
     DataSink output, {
     required PdfDocumentFormat format,
+    String? password,
+  });
+
+  /// Converts an XFA document into a plain AcroForm document.
+  PdfTask<void> convertXfaToAcroForm(
+    DataSource source,
+    DataSink output, {
     String? password,
   });
 
@@ -126,6 +138,21 @@ abstract class BridgeDocHandle {
   /// Classifies the entire document by content type.
   PdfTask<PdfDocumentClassification> classifyDocument();
 
+  /// Reads every AcroForm field of the document.
+  PdfTask<List<PdfFormField>> get formFields;
+
+  /// Exports AcroForm field values as FDF or XFDF to [output].
+  PdfTask<void> exportFormData(DataSink output, {required String format});
+
+  /// Reads the document's XFA structure, or null when it has none.
+  PdfTask<PdfXfaInfo?> get xfa;
+
+  /// Lists the files embedded in the document.
+  PdfTask<List<PdfAttachment>> get attachments;
+
+  /// Streams the embedded file named [name] to [output].
+  PdfTask<void> extractAttachment(String name, DataSink output);
+
   // ── Lifecycle ──
 
   /// Releases the document handle and any held resources.
@@ -192,6 +219,18 @@ abstract class BridgeEditorHandle {
   /// Returns the media box rectangle for [page].
   PdfTask<PdfRect> pageMediaBox(int page);
 
+  /// Returns the crop box rectangle for [page], or `null` when unset.
+  PdfTask<PdfRect?> pageCropBox(int page);
+
+  /// Sets the media box rectangle for [page].
+  PdfTask<void> setPageMediaBox(int page, PdfRect box);
+
+  /// Sets the crop box rectangle for [page].
+  PdfTask<void> setPageCropBox(int page, PdfRect box);
+
+  /// Sets the absolute rotation of [page] in degrees.
+  PdfTask<void> setPageRotation(int page, {required int degrees});
+
   /// Deletes a single [page].
   PdfTask<void> deletePage(int page);
 
@@ -201,8 +240,9 @@ abstract class BridgeEditorHandle {
   /// Retains only the specified [pages], removing all others.
   PdfTask<void> selectPages(List<int> pages);
 
-  /// Appends pages from [otherPdf] into this document.
-  PdfTask<void> mergeFrom(DataSource otherPdf);
+  /// Appends pages from [otherPdf] into this document; [pages] selects
+  /// which ones, in the order given.
+  PdfTask<void> mergeFrom(DataSource otherPdf, {List<int>? pages});
 
   // ── Optimization ──
 
@@ -242,16 +282,28 @@ abstract class BridgeEditorHandle {
   // ── Content ──
 
   /// Embeds a file attachment with the given [name].
-  PdfTask<void> embedFile(String name, DataSource data);
+  PdfTask<void> embedFile(
+    String name,
+    DataSource data, {
+    String? description,
+    String? mimeType,
+    PdfAttachmentRelationship? relationship,
+  });
 
   /// Erases content within [regions] on [page].
   PdfTask<void> eraseRegions(int page, List<PdfRect> regions);
 
-  /// Flattens all interactive form fields into static content.
-  PdfTask<void> flattenForms();
+  /// Flattens interactive form fields into static content. `page == null`
+  /// flattens every page; otherwise only that page's widgets.
+  PdfTask<void> flattenForms({int? page});
 
-  /// Flattens all annotations into page content.
-  PdfTask<void> flattenAllAnnotations();
+  /// Flattens annotations into page content. `page == null` flattens every
+  /// page; otherwise only that page's annotations.
+  PdfTask<void> flattenAnnotations({int? page});
+
+  /// Clears the queued destructive-erase regions on [page] without
+  /// applying them.
+  PdfTask<void> clearEraseRegions(int page);
 
   /// Sets a form field's value by [fieldName].
   PdfTask<void> setFormFieldValue(String fieldName, String value);
@@ -292,6 +344,49 @@ abstract class BridgeEditorHandle {
   /// Moves and resizes an embedded image on [page] by [imageName].
   PdfTask<void> setImageBounds(int page, String imageName, PdfRect bounds);
 
+  // ── Form field properties ──
+
+  /// Removes the form field [name] and its widget.
+  PdfTask<void> removeFormField(String name);
+
+  /// Sets the form field [name]'s read-only flag.
+  PdfTask<void> setFormFieldReadOnly(String name, bool readOnly);
+
+  /// Sets the form field [name]'s required flag.
+  PdfTask<void> setFormFieldRequired(String name, bool required);
+
+  /// Sets the form field [name]'s tooltip.
+  PdfTask<void> setFormFieldTooltip(String name, String tooltip);
+
+  /// Sets the form field [name]'s bounding rectangle.
+  PdfTask<void> setFormFieldBounds(String name, PdfRect bounds);
+
+  /// Sets the form field [name]'s maximum text length.
+  PdfTask<void> setFormFieldMaxLength(String name, int maxLength);
+
+  /// Sets the form field [name]'s text alignment.
+  PdfTask<void> setFormFieldAlignment(String name, PdfTextAlignment alignment);
+
+  /// Sets the form field [name]'s background color.
+  PdfTask<void> setFormFieldBackgroundColor(String name, PdfColor color);
+
+  /// Sets the form field [name]'s border color.
+  PdfTask<void> setFormFieldBorderColor(String name, PdfColor color);
+
+  /// Sets the form field [name]'s border width.
+  PdfTask<void> setFormFieldBorderWidth(String name, double width);
+
+  /// Sets the form field [name]'s default appearance.
+  PdfTask<void> setFormFieldAppearance(
+    String name, {
+    required String font,
+    required double fontSize,
+    PdfColor color = PdfColor.black,
+  });
+
+  /// Sets the form field [name]'s flag bits.
+  PdfTask<void> setFormFieldFlags(String name, Set<PdfFormFieldFlag> flags);
+
   // ── Redaction ──
 
   /// Marks a [region] on [page] for redaction.
@@ -300,11 +395,15 @@ abstract class BridgeEditorHandle {
   /// Returns the number of pending redaction marks on [page].
   PdfTask<int> redactionCount(int page);
 
-  /// Permanently applies all pending redactions.
-  PdfTask<void> applyRedactions();
+  /// Permanently applies all pending redactions, removing content, and
+  /// reports what was removed.
+  PdfTask<PdfRedactionReport> applyRedactions();
 
   /// Removes all metadata from the document.
   PdfTask<void> scrubMetadata();
+
+  /// Strips metadata, JavaScript and/or embedded files per [options].
+  PdfTask<void> sanitize(PdfSanitizeOptions options);
 
   // ── Save ──
 

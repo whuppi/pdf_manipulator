@@ -106,12 +106,23 @@ CONTENT RULES (never change)
 - **Breaking:** `PdfEditor.optimizeImages(quality:, minSize:)` is removed → use `reduceImages(PdfImagePolicy(jpegQuality: quality, minPixels: minSize, convertCmykToRgb: true))`; the count it returned is `report.changed`
 - **Breaking:** `compress(imageQuality:)` → `compress(images:)`, a `PdfImagePolicy` defaulting to `PdfImagePolicy.ebook` (150 ppi, JPEG quality 75), so a plain `compress` now downsamples images drawn above 225 ppi; pass `PdfImagePolicy(jpegQuality: q)` for the old behaviour
 - **Breaking:** the editor's argument-less reads are getters (a property reads as a noun, never with a `get` prefix): `getTitle()` → `title`, `getAuthor()` → `author`, `getSubject()` → `subject`, `getKeywords()` → `keywords`, `getProducer()` → `producer`, `getCreationDate()` → `creationDate`, and on `PdfDoc` `getSignatures()` → `signatures`; the one read with an argument is a noun method, `getPageMediaBox(page)` → `pageMediaBox(page)`
+- **Breaking:** `flattenAllAnnotations()` is `flattenAnnotations({int? page})`, and `flattenForms()` gains the same optional `page`; without it both flatten every page as before
+- **Breaking:** `applyRedactions()` now returns a `PdfRedactionReport` (regions, glyphs removed, images modified or removed, paths pruned) instead of `void`; awaiting it still applies the redactions
+- **Breaking:** `mergeFrom(other)` gains `pages:` (a 0-based list; `null` merges every page) and `embedFile(name, data)` gains `description:`, `mimeType:` and `relationship:`; positional callers are unchanged
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Added `PdfEditor.pageImages(page)` — every image XObject drawn on a page with its resource name, bounds and transform; the name is what `resizeImage` takes
 - Added `PdfEditor.repositionImage(page, name, x:, y:)` and `setImageBounds(page, name, bounds)` — move, or move and resize, an image by the name `pageImages` lists
 - Added `PdfEditor.reduceImages(PdfImagePolicy)` — downsamples images to the resolution they are drawn at and re-encodes them by kind (JPEG, predicted Flate, CCITT G4), soft masks included, presets `screen`/`ebook`/`print`/`lossless`, one `PdfImageReport` row per image with the reason when it is kept; images reached only through annotation appearances, patterns or inline `BI … EI` stay as stored
 - Added `compress(images: PdfImagePolicy.screen)` — the one-shot takes the same policy
 - Added `PdfImagePolicy.minSavings` (default 10%: a lossy re-encode must earn its bytes or the image is kept), `chromaSubsampling` (`auto` = 4:4:4 from quality 90, `full`, `half`; `print` pins `full`) and `recompressJpeg` (re-encode stored JPEGs at `jpegQuality` even when not downsampled; off by default)
+- Added `PdfEditor.pageCropBox(page)` (`null` when the page has no CropBox), `setPageMediaBox`, `setPageCropBox` and `setPageRotation(page, degrees:)` (absolute, where `rotatePage` is relative)
+- Added `PdfEditor.clearEraseRegions(page)` to drop the regions queued by `eraseRegions` before save
+- Added `PdfEditor.sanitize(PdfSanitizeOptions)` — strip metadata, JavaScript actions and embedded files in one pass; `scrubMetadata()` is its metadata-only form
+- Added `PdfDoc.formFields` and `formField(name)` — every AcroForm field with its type, typed value, tooltip, bounds, max length, alignment and read-only/required flags
+- Added the form field property setters on `PdfEditor`: `removeFormField`, `setFormFieldReadOnly`, `setFormFieldRequired`, `setFormFieldTooltip`, `setFormFieldBounds`, `setFormFieldMaxLength`, `setFormFieldAlignment`, `setFormFieldBackgroundColor`, `setFormFieldBorderColor`, `setFormFieldBorderWidth`, `setFormFieldAppearance` and `setFormFieldFlags` — each read back after save by `formFields`
+- Added `PdfDoc.exportFormData(sink, format:)` — the filled values as FDF or XFDF
+- Added `PdfDoc.xfa` (`PdfXfaInfo` with field count, page count and field types, or `null` without an XFA packet) and the one-shot `convertXfaToAcroForm(source, output)` that rewrites an XFA form as a plain AcroForm
+- Added `PdfDoc.attachments` (name, size, description, MIME type, read from the name tree without decoding the files) and `extractAttachment(name, sink)`
 - Fixed images optimized in an edit session being saved unchanged — the full-rewrite writer copied page-referenced XObjects from the source and skipped the staged replacement
 - Fixed `pageImages` listing Form XObjects — only `/Subtype /Image` resources are listed, so every name is a valid `resizeImage` target
 
@@ -120,6 +131,12 @@ CONTENT RULES (never change)
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Fixed a DOCX table converting to PDF several times wider than declared, columns off the page — the converter now honours the `w:tblGrid` widths, scaled to the printable width ([#243](https://github.com/whuppi/pdf_manipulator/issues/243) reported by [@kampmapa1-design](https://github.com/kampmapa1-design))
 - Fixed a web instance failing with `WASM init failed: Out of memory` during rapid create-and-dispose churn — a worker slot is freed when the browser confirms the worker is gone, not at `terminate()`
+- Fixed `pageMediaBox` returning the box's far corner as its width and height whenever the MediaBox origin is not (0, 0)
+- Fixed form field property changes being lost on save unless the form was also flattened — the engine wrote only the value; every property and a removed field now reach the saved file
+- Fixed `eraseRegions` and `addRedaction` acting on the wrong rectangle — the width and height were passed where the far corner was expected, so every region past the origin was off by its own size
+- Fixed `addStamp` losing the stamp on save when its rectangle sits high on the page — the same size-for-corner mix-up placed the label above the page edge; the builder's `image` was drawn at the wrong size for the same reason
+- Fixed `mergeFrom` dropping the merged document's form fields — the pages arrived but no `/Fields` entry pointed at them, so they could not be listed or filled; the AcroForm is carried across now
+- Fixed an embedded file's MIME type being written as `text#232Fplain` — the solidus was escaped twice
 - Vendored engines synced upstream: pdf_oxide v0.3.73 → v0.3.78 and office_oxide v0.1.3 → v0.1.11 (extraction, rendering, table-structure and legacy `.doc` fixes)
 
 ## 4.2.0-dev.0

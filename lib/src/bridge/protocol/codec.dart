@@ -10,8 +10,10 @@
 
 import 'dart:typed_data';
 
+import 'package:pdf_manipulator/src/types/pdf_attachment.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/errors.dart';
+import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
 import 'package:pdf_manipulator/src/types/pdf_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
@@ -21,7 +23,9 @@ import 'package:pdf_manipulator/src/types/pdf_page_info.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
+import 'package:pdf_manipulator/src/types/pdf_redaction_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
+import 'package:pdf_manipulator/src/types/pdf_xfa_info.dart';
 import 'package:pdf_manipulator/src/types/search_result.dart';
 import 'package:pdf_manipulator/src/bridge/protocol/op.dart';
 
@@ -211,13 +215,16 @@ EngineRequest editorPageImagesOp({required int handleId, required int page}) =>
       'page': page,
     });
 
-/// Builds an editor merge-from request.
+/// Builds an editor merge-from request. Omitting [pages] merges every
+/// page of the other document.
 EngineRequest editorMergeFromOp({
   required int handleId,
   required Uint8List otherBytes,
+  List<int>? pages,
 }) => EngineRequest(EngineOp.editorMergeFrom, {
   'handleId': handleId,
   'otherBytes': otherBytes,
+  if (pages != null) 'pages': pages,
 });
 
 // ── Builder handle ops ──
@@ -358,6 +365,81 @@ List<PdfPageImage> decodePageImages(Map<String, Object?> r) {
     );
   }).toList();
 }
+
+/// Decodes the AcroForm fields of a document from a `formFields` response.
+List<PdfFormField> decodeFormFields(Map<String, Object?> r) {
+  final fields = r['fields'] as List? ?? [];
+  return fields.map((f) {
+    final m = _asMap(f);
+    final type = _enumByWireName(
+      PdfFormFieldType.values,
+      m['type'],
+      'field type',
+    );
+    final value = _decodeFormFieldValue(m);
+    final tooltip = m['tooltip'] as String? ?? '';
+    final maxLength = m['maxLength'] as int? ?? -1;
+    final alignment = m['alignment'] as int? ?? -1;
+    return PdfFormField(
+      name: m['name'] as String? ?? '',
+      type: type,
+      value: value,
+      tooltip: tooltip.isEmpty ? null : tooltip,
+      bounds: m['hasBounds'] == true
+          ? PdfRect(
+              x: (m['x'] as num).toDouble(),
+              y: (m['y'] as num).toDouble(),
+              width: (m['width'] as num).toDouble(),
+              height: (m['height'] as num).toDouble(),
+            )
+          : null,
+      maxLength: maxLength < 0 ? null : maxLength,
+      alignment: alignment < 0 ? null : PdfTextAlignment.values[alignment],
+      readOnly: m['readOnly'] as bool? ?? false,
+      required: m['required'] as bool? ?? false,
+    );
+  }).toList();
+}
+
+/// Decodes an `xfa` response. `null` means the document has no XFA.
+PdfXfaInfo? decodeXfaInfo(Map<String, Object?> r) {
+  if (r['has'] != true) return null;
+  final fieldCount = r['fieldCount'] as int? ?? -1;
+  final pageCount = r['pageCount'] as int? ?? -1;
+  return PdfXfaInfo(
+    fieldCount: fieldCount < 0 ? null : fieldCount,
+    pageCount: pageCount < 0 ? null : pageCount,
+    fieldTypes: (r['fieldTypes'] as List? ?? const []).cast<String>(),
+  );
+}
+
+/// Decodes the embedded-file listing from an `attachments` response.
+List<PdfAttachment> decodeAttachments(Map<String, Object?> r) {
+  final items = r['attachments'] as List? ?? [];
+  return items.map((a) {
+    final m = _asMap(a);
+    final size = (m['size'] as num?)?.toInt() ?? -1;
+    final description = m['description'] as String? ?? '';
+    final mimeType = m['mimeType'] as String? ?? '';
+    return PdfAttachment(
+      name: m['name'] as String? ?? '',
+      size: size < 0 ? null : size,
+      description: description.isEmpty ? null : description,
+      mimeType: mimeType.isEmpty ? null : mimeType,
+    );
+  }).toList();
+}
+
+PdfFormFieldValue _decodeFormFieldValue(Map<String, Object?> m) =>
+    switch (m['valueKind'] as String? ?? 'none') {
+      'text' => PdfTextValue(m['text'] as String? ?? ''),
+      'checked' => PdfCheckedValue(m['checked'] as bool? ?? false),
+      'choice' => PdfChoiceValue(m['text'] as String? ?? ''),
+      'multiChoice' => PdfMultiChoiceValue(
+        (m['choices'] as List? ?? []).cast<String>(),
+      ),
+      _ => const PdfNoValue(),
+    };
 
 /// Encodes an image policy as flat `reduceImages` arguments. A `null`
 /// resolution is omitted, which the engine reads as "never downsample".
@@ -532,6 +614,29 @@ PdfRect decodeMediaBox(Map<String, Object?> r) => PdfRect(
   height: (r['height'] as num).toDouble(),
 );
 
+/// Decodes a crop-box rectangle from a response map; `null` when the page
+/// has no `/CropBox` (`has: false`).
+PdfRect? decodeCropBox(Map<String, Object?> r) {
+  if (r['has'] != true) return null;
+  return PdfRect(
+    x: (r['x'] as num).toDouble(),
+    y: (r['y'] as num).toDouble(),
+    width: (r['width'] as num).toDouble(),
+    height: (r['height'] as num).toDouble(),
+  );
+}
+
+/// Decodes a redaction report from an `applyRedactions` response map.
+PdfRedactionReport decodeRedactionReport(Map<String, Object?> r) =>
+    PdfRedactionReport(
+      regions: r['regions'] as int? ?? 0,
+      glyphsRemoved: r['glyphsRemoved'] as int? ?? 0,
+      imagesModified: r['imagesModified'] as int? ?? 0,
+      imagesRemoved: r['imagesRemoved'] as int? ?? 0,
+      pathsPruned: r['pathsPruned'] as int? ?? 0,
+      xobjectsSpecialized: r['xobjectsSpecialized'] as int? ?? 0,
+    );
+
 /// Decodes the handle ID from an editor-open response.
 int decodeEditorOpen(Map<String, Object?> r) => r['handleId'] as int;
 
@@ -603,6 +708,17 @@ Map<String, Object?> encodeRectArgs(PdfRect rect) => {
   'width': rect.width,
   'height': rect.height,
 };
+
+/// Encodes a [PdfColor] as flat `r`, `g`, `b` wire arguments.
+Map<String, Object?> encodeColorArgs(PdfColor color) => {
+  'r': color.r,
+  'g': color.g,
+  'b': color.b,
+};
+
+/// Encodes a set of [PdfFormFieldFlag] as the OR of their `/Ff` bits.
+int encodeFormFieldFlags(Set<PdfFormFieldFlag> flags) =>
+    flags.fold(0, (acc, f) => acc | f.bit);
 
 // ── Private helpers ──
 

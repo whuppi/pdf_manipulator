@@ -60,8 +60,16 @@ DRIVE_PID=$!
 # 3. Poll log for terminal line
 # ═══════════════════════════════════════════════════════════════════
 
+# A drive that never reaches a terminal line would block the whole gate;
+# the deadline turns a hang into a loud failure (the log says where it
+# stopped). Ten minutes covers a cold web build on a loaded runner.
+DEADLINE=$((SECONDS + ${WEB_TEST_DEADLINE:-600}))
 while kill -0 "$DRIVE_PID" 2>/dev/null; do
     if grep -qE 'All tests passed|Application finished' "$LOG" 2>/dev/null; then
+        break
+    fi
+    if [ "$SECONDS" -ge "$DEADLINE" ]; then
+        echo "=== Example web $MODE: no terminal line after $((SECONDS)) s — killing the drive ==="
         break
     fi
     sleep 0.3
@@ -73,6 +81,9 @@ done
 # ═══════════════════════════════════════════════════════════════════
 
 kill "$DRIVE_PID" 2>/dev/null; wait "$DRIVE_PID" 2>/dev/null
+# chromedriver forks the browser; killing chromedriver alone orphans it,
+# and every orphan keeps a core busy until someone notices.
+pkill -TERM -P "$CD_PID" 2>/dev/null
 kill "$CD_PID"    2>/dev/null; wait "$CD_PID"    2>/dev/null
 
 rm -f flutter_*.log
