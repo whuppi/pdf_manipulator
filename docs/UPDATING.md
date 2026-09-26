@@ -152,13 +152,16 @@ done
 ```sh
 git rebase vNEW
 (cd ../.. && make test-rust)
+(cd ../.. && make check-keep-sets)
 ```
 
 Resolve conflicts commit by commit. `Cargo.lock` conflicts: take the
 base (`git checkout vNEW -- Cargo.lock`) and let cargo re-add our
 feature deps on the next build. `make test-rust` runs the full `cargo
 test` (not `--lib`) for both crates — the `tests/` tree catches
-signature drift the lib tests miss.
+signature drift the lib tests miss. `make check-keep-sets` compiles
+every keep-set for both targets, so upstream code that uses something
+one of our feature gates removes fails here, before any wasm build.
 
 ### 4. Rename branch
 
@@ -188,7 +191,11 @@ cd ../..
 make build-wasm
 make clean
 make check
+make shake-audit
 ```
+
+`make shake-audit` builds the core-only binary and runs the trim
+probes against it; see [S5b](#s5b--measure-sizes) for its modes.
 
 ### 7. Commit
 
@@ -214,6 +221,7 @@ grep -rl "pdf_manipulator patch" src/ --include="*.rs"
 cd ../..
 
 make test-rust
+make check-keep-sets
 make build-wasm
 make check
 ```
@@ -534,6 +542,10 @@ feature sets can't drift apart.
 | `type X is more private than item Y` | `pub` fn takes `pub(crate)` args | Narrow the fn to `pub(crate)`, or widen the arg type |
 | `function X is never used` | Patch replaced callers with a new variant | Prefix with underscore: `_fn_name` |
 | `unused Result that must be used` | `.write_all(…)` without `?` | Add `?` to propagate the error |
+
+The warning check above runs at the full feature set only.
+`make check-keep-sets` checks errors at every keep-set; it does not
+check warnings at reduced sets.
 
 ---
 

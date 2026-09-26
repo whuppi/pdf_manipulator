@@ -71,6 +71,7 @@ jobs:
     outputs:
       code: ${{ steps.filter.outputs.code }}
       rust: ${{ steps.filter.outputs.rust }}
+      keepsets: ${{ steps.filter.outputs.keepsets }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -86,6 +87,8 @@ jobs:
               - 'vendor/**'
               - 'web_assets/**'
               - 'example/**'
+              - 'build.json'
+              - 'tool/**'
               - 'pubspec.yaml'
               - 'analysis_options.yaml'
               - 'Makefile'
@@ -95,6 +98,16 @@ jobs:
               - 'build.json'
               - 'Makefile'
               - '.github/**'
+            keepsets:
+              - 'vendor/**'
+              - 'build.json'
+              - 'Makefile'
+              - '.github/**'
+              - 'lib/src/keep/**'
+              - 'lib/src/hook/build_constants.dart'
+              - 'tool/keep_sets.dart'
+              - 'tool/check_keep_sets.sh'
+              - 'tool/build_lib.sh'
 
   # Format + `dart analyze --fatal-infos` on the package and the example,
   # then `cargo check` of the vendored engine under BOTH shipped feature
@@ -236,10 +249,39 @@ jobs:
           cache-backend: ghcr
           cache-save: ${{ github.event_name == 'push' }}
 
+  # Every keep-set a user can write (`tool/keep_sets.dart`) compiled against
+  # the vendored engine — a feature-gate break that the full-set build in
+  # `analyze` hides is caught here. Runs only when a PR touches
+  # the engine, its features, or the keep vocabulary; its own path filter is
+  # the trigger contract.
+  keepsets:
+    name: Keep-set checks
+    needs: [inputs, changes]
+    if: needs.changes.outputs.keepsets == 'true'
+    runs-on: ${{ needs.inputs.outputs.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read   # checkout + build, read-only
+      packages: write  # oci-cache: the Flutter SDK lives on ghcr.io (read on PRs, write from dev)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { submodules: recursive, persist-credentials: false }
+      - uses: ./.github/actions/make-target
+        with:
+          make-target: check-keep-sets
+          rust-cache-key: keepsets
+          rust-cache: ${{ env.RUST_CACHE }}
+          # Write the cargo cache from dev (the warm source) and from a PR only
+          # when its keep-set inputs changed — that PR's key differs from dev's,
+          # so without its own archive every push of it would build cold.
+          rust-cache-save: ${{ github.event_name == 'push' || needs.changes.outputs.keepsets == 'true' }}
+          cache-backend: ghcr
+          cache-save: ${{ github.event_name == 'push' }}
+
   gate:
     name: CI Gate
     if: always()
-    needs: [inputs, changes, analyze, analyze-floor, platforms, test, rust]
+    needs: [inputs, changes, analyze, analyze-floor, platforms, test, rust, keepsets]
     runs-on: ${{ needs.inputs.outputs.runner }}
     timeout-minutes: 5
     permissions: {}
@@ -254,6 +296,7 @@ jobs:
           PLATFORMS: ${{ needs.platforms.result }}
           TEST: ${{ needs.test.result }}
           RUST: ${{ needs.rust.result }}
+          KEEPSETS: ${{ needs.keepsets.result }}
         run: |
           # A failed (not skipped) changes job clears its outputs, so CODE
           # arrives empty — which must NOT read as "doc-only". Gate on the
@@ -273,6 +316,11 @@ jobs:
           # rust runs only when the engine/features/Makefile/CI change; skipped is OK.
           if [[ "$RUST" != "success" && "$RUST" != "skipped" ]]; then
             echo "FAILED: rust=$RUST"
+            exit 1
+          fi
+          # keepsets runs only when the engine/keep vocabulary changes; skipped is OK.
+          if [[ "$KEEPSETS" != "success" && "$KEEPSETS" != "skipped" ]]; then
+            echo "FAILED: keepsets=$KEEPSETS"
             exit 1
           fi
           echo "All CI checks passed"
