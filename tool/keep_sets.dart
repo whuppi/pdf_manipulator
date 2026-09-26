@@ -53,7 +53,7 @@ List<Set<PdfCapability>> _validKeepSets() {
   for (var mask = 0; mask < (1 << caps.length); mask++) {
     final set = <PdfCapability>{};
     for (var i = 0; i < caps.length; i++) {
-      if (mask & (1 << i) != 0) set.add(caps[i]);
+      if ((mask & (1 << i)) != 0) set.add(caps[i]);
     }
     if (PdfCapability.expandRequires(set).length == set.length) {
       valid.add(set);
