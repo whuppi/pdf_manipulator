@@ -6,6 +6,7 @@
 // and the engine's Cargo.toml from disk; keep never runs in a browser.
 import 'dart:io';
 
+import 'package:pdf_manipulator/src/hook/build_constants.dart';
 import 'package:pdf_manipulator/src/keep/capabilities.dart';
 import 'package:test/test.dart';
 
@@ -188,6 +189,23 @@ void main() {
   });
 
   group('engine parity', () {
+    test(
+      'native and wasm carry the same engine apart from each target\'s bridge',
+      () {
+        final c = BuildConstants.load(Directory.current.uri);
+        final native = c.nativeFeatures.split(',').toSet()
+          ..remove('native-bridge');
+        final wasm = c.wasmFeatures.split(',').toSet()..remove('wasm');
+        expect(
+          native,
+          wasm,
+          reason:
+              'native \\ wasm = ${native.difference(wasm)}, '
+              'wasm \\ native = ${wasm.difference(native)}',
+        );
+      },
+    );
+
     test('enum requires mirrors the cargo feature graph (drift guard)', () {
       final manifest = File('vendor/pdf_oxide/Cargo.toml').readAsStringSync();
       for (final cap in PdfCapability.values) {

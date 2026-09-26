@@ -1,4 +1,4 @@
-.PHONY: check analyze analyze-floor platforms lint-shell format fixtures test-guards \
+.PHONY: check analyze check-keep-sets analyze-floor platforms lint-shell format fixtures test-guards \
        build build-native build-wasm \
        compile-macos compile-ios compile-android compile-linux compile-windows compile-wasm compile-natives \
        test test-pkg-native test-unit test-rust shake-audit verify-readme-sizes \
@@ -30,7 +30,7 @@ VERBOSE := $(if $(CI),--verbose,)
 #
 # make check    Full local gate before PR.
 
-check: lint-shell analyze analyze-floor platforms verify-tarball test-guards test test-example
+check: lint-shell analyze check-keep-sets analyze-floor platforms verify-tarball test-guards test test-example
 
 # make hooks    Activate the repo's git hooks (commit-msg, pre-commit).
 #               Run once after cloning — they stay dormant otherwise.
@@ -49,6 +49,14 @@ hooks:
 
 analyze: fixtures
 	@DART="$(DART)" FLUTTER="$(FLUTTER)" bash tool/analyze.sh
+
+# make check-keep-sets  Compiles every valid keep-set (`tool/keep_sets.dart`,
+#                       from capabilities.dart's requires graph) against the
+#                       vendored engine, for both targets. Catches a
+#                       feature-gate break the full-set build in `analyze`
+#                       hides.
+check-keep-sets:
+	@DART="$(DART)" bash tool/check_keep_sets.sh
 
 # make analyze-floor  Resolve to the OLDEST in-range dependencies and analyze
 #                     the shipped code (lib bin hook). The wide lower bounds

@@ -101,6 +101,12 @@ CONTENT RULES (never change)
 
 <!-- Add new versions below, newest first. -->
 
+## 5.0.1-dev.0
+
+- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
+- Fixed a `keep:` list without `extract`, such as `keep: []`, failing to compile the engine with `cannot find search in crate` — the search module now compiles in every keep-set ([#256](https://github.com/whuppi/pdf_manipulator/issues/256) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack))
+- Fixed a PDF encrypted with Standard Security R2–R4 (RC4) failing to open on web with `compiled without 'legacy-crypto'` — the web engine now carries the same legacy encryption and ICC colour support as native ([#257](https://github.com/whuppi/pdf_manipulator/issues/257) reported by [@crurui](https://github.com/crurui))
+
 ## 5.0.0-dev.0
 
 - **Breaking:** `PdfEditor.optimizeImages(quality:, minSize:)` is removed → use `reduceImages(PdfImagePolicy(jpegQuality: quality, minPixels: minSize, convertCmykToRgb: true))`; the count it returned is `report.changed`
