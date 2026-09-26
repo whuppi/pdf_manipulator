@@ -50,15 +50,24 @@ FAILED=0
 TOTAL=0
 FAIL_LOGS=()
 
-# Runs one target's whole lattice. Reads the line list from `dart run
-# tool/keep_sets.dart`, checks each against the vendored crate.
+# One `cargo check` of the vendored crate: target, features, log file.
+cargo_check() {
+  local manifest="$PKG_ROOT/vendor/pdf_oxide/Cargo.toml"
+  if [ "$1" = wasm ]; then
+    cargo check --lib --manifest-path "$manifest" --target wasm32-unknown-unknown \
+      --no-default-features --features "$2" > "$3" 2>&1
+  else
+    cargo check --lib --manifest-path "$manifest" --profile test \
+      --no-default-features --features "$2" > "$3" 2>&1
+  fi
+}
+
+# Runs one target's whole lattice. Reads the line list from
+# tool/keep_sets.dart, checks each against the vendored crate.
 check_target() {
   local target="$1"
-  local wasm_flag="" profile_flag="--profile test"
   if [ "$target" = wasm ]; then
     ensure_target wasm32-unknown-unknown
-    wasm_flag="--target wasm32-unknown-unknown"
-    profile_flag=""
   fi
 
   # The list is captured first, so a failing generator stops the run
@@ -77,11 +86,7 @@ check_target() {
     TOTAL=$((TOTAL + 1))
     log="$WORKDIR/$target-$TOTAL.log"
     start=$(date +%s)
-    # shellcheck disable=SC2086 # wasm_flag/profile_flag are caller-controlled flags, split on purpose.
-    if cargo check --lib \
-        --manifest-path "$PKG_ROOT/vendor/pdf_oxide/Cargo.toml" \
-        --no-default-features --features "$features" \
-        $profile_flag $wasm_flag > "$log" 2>&1; then
+    if cargo_check "$target" "$features" "$log"; then
       status=ok
     else
       status=FAIL
