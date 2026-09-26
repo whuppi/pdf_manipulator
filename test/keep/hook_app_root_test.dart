@@ -11,6 +11,7 @@
 // resolution can only be proven against a real directory tree.
 import 'dart:io';
 
+import 'package:path/path.dart' as p;
 import 'package:pdf_manipulator/src/hook/app_root.dart';
 import 'package:pdf_manipulator/src/hook/keep_plan.dart';
 import 'package:pdf_manipulator/src/keep/capabilities.dart';
@@ -48,6 +49,16 @@ Future<void> readIt(PdfDoc doc) async {
 Uri _hookOutputFor(Directory app) => Uri.directory(
   '${app.path}/.dart_tool/hooks_runner/shared/pdf_manipulator/build/9fb02c/',
 );
+
+/// [rel] (`/`-separated) under [app], in the form [_depPaths] compares.
+/// Windows paths differ in case and separator for the same file, so both
+/// sides go through `p.canonicalize`, the identity the detector keys by.
+String _at(Directory app, String rel) =>
+    p.canonicalize(p.joinAll([app.path, ...rel.split('/')]));
+
+/// The plan's dependencies, canonicalized like [_at].
+Set<String> _depPaths(KeepPlan plan) =>
+    plan.appDependencies.map((u) => p.canonicalize(u.toFilePath())).toSet();
 
 void main() {
   test('both lanes anchors resolve to the app that owns them', () {
@@ -115,7 +126,7 @@ void main() {
     final paths = plan.appDependencies.map((u) => u.toFilePath()).toList();
 
     expect(
-      paths.where((p) => p.contains('.dart_tool')),
+      paths.where((path) => path.contains('.dart_tool')),
       isEmpty,
       reason: 'a build-volatile path became a hook dependency: $paths',
     );
@@ -133,13 +144,13 @@ void main() {
       appRootCandidate: appRootFromDartTool(_hookOutputFor(app))!,
       scanDirs: const [],
     );
-    final paths = plan.appDependencies.map((u) => u.toFilePath()).toSet();
+    final paths = _depPaths(plan);
 
-    expect(paths, contains('${app.path}/pubspec.yaml'));
+    expect(paths, contains(_at(app, 'pubspec.yaml')));
     // The directory catches a file appearing or disappearing...
-    expect(paths, contains('${app.path}/lib/'));
+    expect(paths, contains(_at(app, 'lib/')));
     // ...and the file catches an edit, which the directory's mtime does not.
-    expect(paths, contains('${app.path}/lib/app.dart'));
+    expect(paths, contains(_at(app, 'lib/app.dart')));
   });
 
   test('every walked directory is registered, not just the roots', () async {
@@ -162,11 +173,11 @@ void main() {
       appRootCandidate: appRootFromDartTool(_hookOutputFor(app))!,
       scanDirs: const [],
     );
-    final paths = plan.appDependencies.map((u) => u.toFilePath()).toSet();
+    final paths = _depPaths(plan);
 
-    expect(paths, contains('${app.path}/lib/'));
-    expect(paths, contains('${app.path}/lib/models/'));
-    expect(paths, contains('${app.path}/lib/assets/'));
+    expect(paths, contains(_at(app, 'lib/')));
+    expect(paths, contains(_at(app, 'lib/models/')));
+    expect(paths, contains(_at(app, 'lib/assets/')));
   });
 
   test(
@@ -213,9 +224,9 @@ Future<void> shrink(PdfDoc doc) async {
       // A tool tree never counts, wherever it sits.
       expect(plan.features, isNot(contains('pdfa')));
 
-      final paths = plan.appDependencies.map((u) => u.toFilePath()).toSet();
-      expect(paths, contains('${app.path}/lib/.generated/'));
-      expect(paths.any((p) => p.contains('.dart_tool')), isFalse);
+      final paths = _depPaths(plan);
+      expect(paths, contains(_at(app, 'lib/.generated/')));
+      expect(paths.any((path) => path.contains('.dart_tool')), isFalse);
     },
   );
 
@@ -249,8 +260,8 @@ Future<void> check(PdfDoc doc) async {
     expect(widened.isCustom, isTrue);
     // The widened directory is registered too, or editing it would not
     // re-run the hook.
-    final paths = widened.appDependencies.map((u) => u.toFilePath()).toSet();
-    expect(paths, contains('${app.path}/tools/report.dart'));
+    final paths = _depPaths(widened);
+    expect(paths, contains(_at(app, 'tools/report.dart')));
   });
 
   test(
