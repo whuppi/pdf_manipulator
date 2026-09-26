@@ -87,6 +87,8 @@ jobs:
               - 'vendor/**'
               - 'web_assets/**'
               - 'example/**'
+              - 'build.json'
+              - 'tool/**'
               - 'pubspec.yaml'
               - 'analysis_options.yaml'
               - 'Makefile'

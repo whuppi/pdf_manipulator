@@ -237,7 +237,7 @@ compile-natives:
 #
 # make test              Unit + all ops (native + 3 web modes).
 # make test-pkg-native   Unit + native ops only (CI fast gate).
-# make test-unit         Types + bridge + runtime + harness (pure Dart, VM).
+# make test-unit         Every test/ folder but ops/ and fixtures/ (VM).
 # make test-ops          All 4 ops runners.
 # make test-ops-native   Ops: native FFI.
 # make test-ops-web      Ops: all 3 web modes.
@@ -250,10 +250,14 @@ test: fixtures test-unit test-ops
 
 test-pkg-native: fixtures test-unit test-ops-native
 
+# The folders are derived, never listed: a new test/ folder runs here the
+# day it lands. ops/ runs through its own runners; fixtures/ is data.
+UNIT_TEST_DIRS := $(filter-out test/ops/ test/fixtures/,$(sort $(wildcard test/*/)))
+
 test-unit:
-	@echo "=== Unit: types + io + bridge + runtime + harness ==="
+	@echo "=== Unit: $(UNIT_TEST_DIRS) ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
-	$(DART) test $(TIMEOUT) test/types/ test/io/ test/bridge/ test/runtime/ test/harness/ -p vm --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/unit.json
+	$(DART) test $(TIMEOUT) $(UNIT_TEST_DIRS) -p vm --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/unit.json
 
 test-ops: fixtures test-ops-native test-ops-web
 
