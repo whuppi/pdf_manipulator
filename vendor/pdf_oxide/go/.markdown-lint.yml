@@ -1,0 +1,89 @@
+# Markdown linting configuration
+# Install: npm install -g markdownlint-cli
+# Run: markdownlint -c .markdown-lint.yml *.md
+
+---
+default: true
+
+rules:
+  # Line length
+  line-length:
+    line_length: 120
+    heading_line_length: 120
+    header_line_length: 120
+    code_line_length: 120
+    code_blocks: true
+    headers: true
+
+  # Headings
+  heading-style:
+    style: consistent
+  heading-increment:
+    strict: true
+  no-duplicate-headings:
+    siblings_only: true
+
+  # Lists
+  list-marker-space:
+    ul_single: false
+    ol_single: false
+  no-hard-tabs: true
+  list-indent:
+    indent: 4
+    start_indented: false
+
+  # Code blocks
+  code-block-style:
+    style: consistent
+  code-fence-style:
+    style: backtick
+    language: always
+
+  # Links & images
+  no-bare-urls: true
+  link-image-reference-definitions:
+    prefer_inline: false
+  link-fragments:
+    allow: true
+
+  # Content
+  no-trailing-spaces: true
+  no-multiple-spaces: true
+  trailing-punctuation: true
+  no-inline-html: false
+  ul-indent:
+    indent: 4
+  ol-prefix:
+    style: ordered
+
+  # Emphasis
+  no-emphasis-as-heading: true
+  emphasis-style:
+    style: consistent
+
+  # Validation
+  no-empty-links: true
+  proper-names: false
+  fenced-code-language:
+    allowed_languages:
+      - bash
+      - go
+      - python
+      - java
+      - csharp
+      - javascript
+      - typescript
+      - yaml
+      - json
+      - markdown
+      - sh
+      - shell
+      - text
+
+  # Files
+  no-multiple-blanks: true
+  blanks-around-headings: true
+  blanks-around-lists: true
+  blanks-around-blockquotes: true
+
+extends: markdownlint/style/mdAll

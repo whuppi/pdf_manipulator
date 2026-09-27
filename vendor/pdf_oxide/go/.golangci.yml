@@ -1,0 +1,145 @@
+# golangci-lint v2 configuration for the pdf_oxide Go bindings.
+# Upgraded from v1 — v2 uses `version: "2"` + new `linters.default` / `linters.settings`
+# / `linters.exclusions` schema. Run: `golangci-lint run --build-tags pdf_oxide_dev ./...`
+
+version: "2"
+
+run:
+  build-tags:
+    - pdf_oxide_dev
+  timeout: 5m
+  allow-parallel-runners: true
+
+linters:
+  default: none
+  enable:
+    # Correctness (always-on)
+    - errcheck
+    - govet
+    - staticcheck       # absorbs gosimple + stylecheck + unused in v2
+    - ineffassign
+    # Note: typecheck is always enabled implicitly in v2 — do not list it.
+
+    # Security
+    - gosec
+    - nolintlint
+
+    # Performance
+    - prealloc
+    - bodyclose
+    - unconvert
+
+    # Error handling
+    - errorlint
+    - nilerr
+
+    # Style
+    - misspell
+    - revive
+    - unparam
+    - dogsled
+
+  settings:
+    gosec:
+      confidence: high
+      severity: high
+      excludes:
+        - G115  # intentional signed/unsigned round-trips at the cgo boundary
+        - G204  # subprocess from environment (build scripts only)
+    # misspell: intentionally not configured. The codebase mixes US and
+    # UK spellings (e.g. "colour", "finalisation") so we don't set
+    # `locale`. Only hard misspellings get flagged. golangci-lint v2.0.2
+    # rejects `locale: ""` (the enum only allows 'US' / 'UK'), so the
+    # whole `misspell:` block is omitted rather than set to an empty
+    # string. If a British spelling does get flagged, `//nolint:misspell`
+    # on the specific line is the workaround.
+    prealloc:
+      simple: true
+      range-loops: true
+      for-loops: false
+    errorlint:
+      # v2 key rename: `check-error-type-assertions` became `asserts`.
+      asserts: true
+      errorf: true
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-naming
+        - name: error-strings
+        - name: errorf
+        - name: exported
+        - name: if-return
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unnecessary-stmt
+        - name: var-declaration
+        # var-naming intentionally omitted: enabling it would demand
+        # renaming exported symbols `FromHtml` → `FromHTML`, `ToHtml` →
+        # `ToHTML`, `ToHtmlAll` → `ToHTMLAll`, which are breaking API
+        # changes for downstream Go users. Left off until a major
+        # version bump makes those renames tolerable.
+        - name: waitgroup-by-value
+        - name: unhandled-error
+          arguments:
+            - "fmt.Fprint"
+            - "fmt.Fprintf"
+            - "fmt.Fprintln"
+            - "fmt.Sprintf"
+            - "io.WriteString"
+            - "json.Marshal"
+            - "json.MarshalIndent"
+            - "bytes.Buffer.WriteString"
+            - "bytes.Buffer.WriteByte"
+            - "strings.Builder.WriteString"
+
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - unparam
+          - dogsled
+          - revive
+      - path: ^pdf_oxide\.go$
+        # cgo root file: pointer arithmetic, opaque handles; staticcheck's `unused`
+        # can't see through the FFI boundary.
+        linters:
+          - unused
+          - unconvert
+      - path: ^cmd/install/main\.go$
+        # Install helper: reads env vars, runs subprocesses, prints usage — these
+        # patterns trip gosec/errcheck/unparam but are intentional for a CLI helper.
+        linters:
+          - gosec
+          - errcheck
+          - unparam
+          - revive
+          - staticcheck
+          - unconvert
+      - path: ^cmd/bench/main\.go$
+        linters:
+          - gosec
+          - errcheck
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/yfedoseev/pdf_oxide/go

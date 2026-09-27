@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Pre-commit hook: prevents accidental commits of Go native libraries.
+#
+# As of v0.3.31, native Rust libraries for the Go module are NOT committed —
+# they're downloaded on demand from GitHub Releases by the installer at
+# go/cmd/install. Any `.a` / `.so` / `.dylib` / `.dll` showing up under
+# go/lib/ is almost certainly a stale local Rust build that should not land
+# in git.
+#
+# Install:   git config --local core.hooksPath .githooks
+# Uninstall: git config --local --unset core.hooksPath
+
+set -euo pipefail
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR \
+    | grep -E '^go/lib/.*\.(so|dylib|dll|a)$' || true)
+
+if [ -z "$staged" ]; then
+    exit 0
+fi
+
+echo >&2 "-----------------------------------------------------------------------"
+echo >&2 "pdf_oxide pre-commit hook: blocking commit of Go native libraries."
+echo >&2 ""
+echo >&2 "The following files are staged:"
+echo >&2 ""
+echo >&2 "$staged" | sed 's/^/  /' >&2
+echo >&2 ""
+echo >&2 "Since v0.3.31, native libraries for the Go module are distributed"
+echo >&2 "through GitHub Release assets, not committed to git. Unstage them:"
+echo >&2 ""
+echo >&2 "  git restore --staged go/lib/"
+echo >&2 ""
+echo >&2 "-----------------------------------------------------------------------"
+exit 1

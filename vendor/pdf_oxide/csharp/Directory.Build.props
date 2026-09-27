@@ -1,0 +1,9 @@
+<Project>
+  <!--
+    Cross-project C# hygiene. Deliberately empty today: the cross-project CI gates
+    are `dotnet format verify-no-changes` + `dotnet list package vulnerable`
+    (see .github/workflows/ci.yml). Analyzer packs (Meziantou / Sonar /
+    StyleCop / AnalysisMode Recommended) generate thousands of findings on
+    pre-existing code and are tracked as follow-up tasks.
+  -->
+</Project>
