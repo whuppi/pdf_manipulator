@@ -1,0 +1,854 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.1.11] - 2026-09-11
+
+> Write-path correctness. 16 issues closed and the OOXML validation gate that found them.
+>
+> v0.1.10 shipped with a green suite and a write path that produced documents Word and PowerPoint refuse to open: nothing checked that the files we *write* are valid OOXML, because generated output was only round-tripped through our own deliberately lenient parser. #199 came in from a user; chasing it with a schema validator turned up fifteen more.
+>
+> Verified against 6,062 real Office documents arm-to-arm with v0.1.10 — **0 extraction regressions**, and `save_as` conversions that schema-validate go from **2,387/5,921 (40.3%) to 5,918/5,921 (99.9%)**. The sweep itself found nine further defects the unit suite could not see, four of them introduced by fixes in this release.
+
+### Verified
+
+Swept **6,062 real Office documents** (LibreOffice QA, Apache POI, OpenXML SDK, python-pptx, ClosedXML, calamine, PhpSpreadsheet and others) arm-to-arm against v0.1.10, on two axes.
+
+**Extraction — no regressions.** 6,062 files × 4 surfaces = 24,248 observations per arm. **0 ok→not-ok**, 3 recoveries. The only text change is one file where a time that rounded up to a whole day now carries into the date instead of rendering hour 24. Three anomalous status transitions were re-measured quiescently and were load artifacts, not regressions — the sweep README warns about exactly that.
+
+**Conversion — the axis this release changes.** Every file through `Document::save_as`, then schema-validated:
+
+| source | v0.1.10 | v0.1.11 |
+|---|---|---|
+| `.doc` → `.docx` | 92 / 201 | **201 / 201** |
+| `.docx` → `.docx` | 60 / 2509 | **2507 / 2509** |
+| `.ppt` → `.pptx` | 0 / 176 | **176 / 176** |
+| `.pptx` → `.pptx` | 0 / 791 | **791 / 791** |
+| `.xls` → `.xlsx` | 469 / 475 | **475 / 475** |
+| `.xlsx` → `.xlsx` | 1766 / 1769 | **1768 / 1769** |
+| **total** | **2387 / 5921 (40.3%)** | **5918 / 5921 (99.9%)** |
+
+Zero regressions. The three remaining files fail identically under v0.1.10: two carry a malformed `dcterms:modified` in the source (`2015sss-06-20T07:40:00Z`) that is copied through verbatim, and one is a deeply nested table.
+
+The sweep found **nine defects the unit suite could not see**, all fixed here — including three element-ordering defects of the same shape (`w:pPr`, `w:tblPr`, `w:tcPr`), two namespace declarations missing from parts that use them, and one duplicate attribute I introduced while fixing a missing one.
+
+### Added
+
+- **An OOXML validation gate ([#201](https://github.com/yfedoseev/office_oxide/issues/201)).** Nothing checked that the documents this library *writes* are valid — generated files were only round-tripped through our own lenient parser, so a document Word refuses to open passed the whole suite. `scripts/ooxml-validate/` now fetches the ISO/IEC 29500-4 schemas (not committed, per CONTRIBUTING #4), `cargo run --example gen_validation_corpus` produces 30 packages across the markdown path, the builder APIs, all nine `save_as` conversion pairs and out-of-range values, and both validators run in CI. Writing it immediately found three more defects: `w:titlePg` emitted in the wrong `CT_SectPr` position, `xml:space` on an XLSX `<t>` where it is not allowed, and an empty `p:txBody` on a slide whose only content was a table.
+
+### Security
+
+- **A sub-1 KB `.docx` could abort the process (`CWE-770`).** `w:gridSpan` was parsed as an unbounded `u32` and summed straight into an allocation, so a 978-byte file could request 34 GB and abort. Measured: 1e6 → 11 MB, 8e6 → 64 MB, `u32::MAX` → abort, i.e. ~35,000,000× amplification. This ran on `to_ir()`, which backs `save_as`, `to_markdown`, the MCP `extract` tool and every binding, and an `abort()` is not catchable — no caller could defend against it. Spans are now clamped where the IR cell is built, in the converter's column count, and defensively in `ir_render::table_grid`, since `DocumentIR` is `Deserialize` and can arrive from an untrusted source.
+- **A hostile `.pptx` could hang `save_as` indefinitely.** `col_span`/`row_span` drove the DOCX writer's grid loop with the bounds check *inside* the loop body, so the iteration still ran `row_span × col_span` times — up to 1.8×10¹⁹ — doing nothing. Nothing allocated, so nothing ever stopped it. The check is now hoisted and the spans clamped, and PPTX spans are clamped at parse time.
+- **A deeply nested IR overflowed the writer's stack.** The readers have bounded nesting via `DepthGuard`/`MAX_NESTING_DEPTH`; the writers had no equivalent, so nesting past a few thousand levels aborted. The same guard now covers both DOCX writer recursions.
+
+- **A negate overflow panicked the writer.** `first_line_indent_twips = i32::MIN` reached `(-v).to_string()` and `-i32::MIN` overflows; the reader had the mirror problem on `w:hanging="-2147483648"`. Both now use the magnitude, which is what `ST_TwipsMeasure` wants — the attribute is unsigned.
+
+Known and not fixed: dropping a deeply nested `Element` is itself recursive and can overflow a small stack independently of the writers. That affects any consumer deserialising such an IR and needs an iterative `Drop`.
+
+### Fixed
+
+- **Two regressions caught by the v0.1.10 → v0.1.11 corpus sweep**, both introduced by fixes in this release. Speaker notes reached `plain_text` and markdown but not HTML, because moving them out of `Section::elements` for [#203](https://github.com/yfedoseev/office_oxide/issues/203) dropped them from the one renderer that was never updated; HTML now emits them in a labelled `<aside class="speaker-notes">`, which is better than v0.1.10, where they were indistinguishable from slide body text. And [#207](https://github.com/yfedoseev/office_oxide/issues/207)'s built-in format resolution widened `apply_format`'s custom-code branch, so a built-in code was fed to `apply_custom` and rendered literally — a cell formatted `mm:ss.0` came out as `mm:ss0.6`. The render paths now pass the workbook's *declared* code only.
+
+- **The PPTX writer flattened structure into text ([#214](https://github.com/yfedoseev/office_oxide/issues/214)).** Tables were joined with literal tabs and newlines into a single run, losing the grid and every cell boundary; they are now written as a real `a:tbl` in a `p:graphicFrame`. Bullet lists were emitted at level 0 with no `marL`/`indent`, so nesting was invisible and the glyph sat at the same x as its text. Footnote and endnote bodies fell into a catch-all and were dropped entirely.
+
+- **The markdown front end dropped fenced code blocks and list nesting ([#215](https://github.com/yfedoseev/office_oxide/issues/215)).** A ` ```rust ` fence produced no `Element::CodeBlock` at all — the language leaked into the text as an ordinary paragraph — and `ListItem::nested` was hardcoded to `None`, so every bullet flattened to level 0. The second of those is also why the earlier "3-level nested lists" coverage could not have caught [#211](https://github.com/yfedoseev/office_oxide/issues/211): the markdown path never populated the field.
+
+- **Every binding discarded the writer's "value not written" signal ([#209](https://github.com/yfedoseev/office_oxide/issues/209)).** `sheet_set_cell` and the PPTX slide setters return `bool` precisely so a silent no-op is detectable — the Rust API was fixed for that regression and all six bindings reintroduced it. The C FFI entry points now return a status, Python raises `IndexError`, and C# throws; an unrecognised FFI `value_type` is rejected instead of erasing the existing cell; and `CellData::Boolean`/`Formula`, previously unreachable from any binding, have `value_type` 3 and 4. Go silently wrote an **empty** cell for `int64`, `float32`, `uint` and a styled `bool`, and C# used a locale-dependent `ToString()` that turned a `decimal` into text (`"1,5"` under `de-DE`); both now cover the full numeric set, with C# using the invariant culture.
+
+- **`replace_text` reported success for XLSX, where it is not implemented ([#210](https://github.com/yfedoseev/office_oxide/issues/210)).** It returned `0`, which is indistinguishable from "the text was not present", so the CLI exited 0, the MCP tool returned a non-error result, and the file was rewritten anyway — with the MCP schema advertising XLSX support. It now returns an error naming the unsupported format, and the MCP tool description no longer claims XLSX. The edit path is also byte-deterministic again: parts, part relationships and content-type overrides were iterated out of `HashMap`s, so saving an unchanged document produced a different byte stream every time.
+
+- **IR fields the API accepted were never emitted ([#213](https://github.com/yfedoseev/office_oxide/issues/213)).** `TextSpan::hyperlink` was read and explicitly discarded, so a markdown link's URL was not recoverable from the output at all — DOCX now emits `w:hyperlink` with an external relationship, and run coalescing treats the URL as part of a run's identity so a link is no longer swallowed by an adjacent plain run. PPTX dropped `InlineContent::LineBreak` (joining the words on either side), underline and strikethrough, and image alt text; XLSX and PPTX omitted `xml:space="preserve"`, so leading and trailing spaces were stripped by conformant consumers; `Paragraph::tabs` reached no writer, costing dot-leader tables of contents both their leaders and their alignment; and `frame_position`, `Section::background_rgb` and `Table::caption` were likewise dropped — the caption was emitted only as a `Caption`-styled paragraph, so it was lost on round-trip while accumulating a phantom body paragraph on every cycle.
+
+- **The XLSX write bridge discarded typed cell data ([#212](https://github.com/yfedoseev/office_oxide/issues/212)).** It re-parsed the *rendered* string instead of using the `data_type`, `raw_number` and `number_format` the reader had recorded, so on any XLSX round trip `"007"` became `7`, currency and date cells became text, and a cell whose text reads `inf` or `NaN` became an Excel error cell. `ir_to_xlsx` also ended in a catch-all that swallowed lists, code blocks, notes and everything inside a text box — and since PPTX wraps slide bodies in a text box, PPTX → XLSX lost almost all of its text. `CellStyle::number_format_code` is new, so a format read from a source document is carried through instead of flattened to `General`.
+
+- **Nested content was silently dropped on write ([#211](https://github.com/yfedoseev/office_oxide/issues/211)).** `ListItem::nested` was consumed by the renderers but by no writer, so every list item below level 0 vanished from the output while the API reported success — on any document opened and re-saved. A heading nested in a table cell, text box, header or note also lost its alignment, unlike the identical heading at top level.
+
+- **Generated DOCX carried dangling cross-part references ([#208](https://github.com/yfedoseev/office_oxide/issues/208)).** These are schema-valid and still make Word report unreadable content, so neither the XSDs nor any existing test caught them. A list in a header, footer or note emitted `w:numId`/`ListParagraph` while the numbering part and the style were gated on the body alone; the note-reference character styles were gated on a note part existing, though a run can carry a reference without one; `footnotes.xml` never contained the separator notes Word expects; a `w:type="first"` header was written without `w:titlePg` and a `w:type="even"` one without `settings.xml`, so neither was ever shown; a multi-section document emitted duplicate `w:type` values in the final `sectPr`; and an ordered list nested in a cell, text box or header used the bullet definition, disagreeing with the same list at top level.
+
+- **A workbook's own `numFmt` override was ignored for built-in ids ([#207](https://github.com/yfedoseev/office_oxide/issues/207)).** [ECMA-376] §18.8.30 lets a workbook redefine ids 0-163, but the date check consulted the id before the declaration, so a number formatted `0.00" kg"` under id 14 was read back as `1900-01-02`. `StyleSheet::number_format_for` now also resolves built-in ids instead of returning `None` for the majority of real formatted cells, with `number_format_override_for` exposing the explicit declaration alone. Separately, a time fraction that rounds up to a whole day now carries into the date rather than producing hour 24, which no date library accepts.
+
+- **The XLSX writer produced unparseable, invalid or silently wrong output on unusual input ([#206](https://github.com/yfedoseev/office_oxide/issues/206)).** A control character in a sheet name made `xl/workbook.xml` unparseable — `sanitize_xml_text` guarded element text but had never been applied to an attribute. `merge_cells` overflowed `usize` and panicked inside `save()`. `add_row` bypassed the grid check `set_cell` enforces and wrote cells past column XFD. Colours, column widths and font sizes were written through unvalidated (`inf`, `FFred`, `sz="0"`); half-point font sizes were truncated by integer division; a zero-sheet workbook emitted an invalid empty `<sheets/>`; a styled empty cell silently dropped its style; a formula kept a caller's leading `=`; and `styles.xml` was non-deterministic because it iterated a `HashMap`.
+
+- **The XLSX edit path corrupted workbooks ([#205](https://github.com/yfedoseev/office_oxide/issues/205)).** A self-closing `<row .../>` — what Excel writes for a row carrying only a custom height — made `set_cell` insert the new cell into the **next** row, so a cell whose reference said row 1 ended up inside row 2. The same fix class had already been applied to self-closing `<c>` and was never carried over to `<row>`. Cells and rows are now also inserted in ascending order as [ECMA-376] §18.3.1.73 requires, control characters are stripped, and non-finite numbers become error cells instead of raw `NaN`/`inf` — both guards the writer already had and the editor lacked.
+
+- **PPTX attribute values were written without range validation ([#204](https://github.com/yfedoseev/office_oxide/issues/204)).** `p:sldSz`, `a:rPr/@sz`, `a:srgbClr/@val` and `a:ext` all took caller input straight into restricted XSD types. `font_size(f64::NAN)` became `sz="0"` through a saturating float cast, and `.color("#FF0000")` — the form every CSS-adjacent API accepts — produced an invalid file. The slide-size case needed no explicit API call: the IR bridge converts a source page size straight to EMU, so any page under an inch produced an invalid deck.
+
+- **Speaker notes were promoted onto the visible slide ([#203](https://github.com/yfedoseev/office_oxide/issues/203)).** The PPTX converter appended notes to the slide's `elements` as an ordinary paragraph, so every writer treated them as body text and a round trip published a presenter's private notes to the audience with no marker. Notes now live in `Section::speaker_notes` and round-trip into `ppt/notesSlides/`; the renderers still surface them, labelled.
+
+- **DOCX documents were schema-invalid in six ways ([#200](https://github.com/yfedoseev/office_oxide/issues/200)).** `w:tblGrid` was written only when explicit column widths were known, so every markdown table was invalid; the simple `add_table` writer emitted neither `w:tblPr` nor `w:tblGrid`; `numbering.xml` interleaved `w:abstractNum` and `w:num` instead of writing all of the former first; both floating-anchor writers put `wp:docPr` before the wrap element; `w:pgMar` omitted the required `w:gutter`; and `w:pPr` children were emitted in the wrong order. The `w:pPr` fix covers more than the reported `spacing`/`ind` pair — `w:numPr`, `w:pBdr` and `w:shd` were also misplaced, and the whole block now follows the `CT_PPrBase` sequence.
+
+- **PPTX packages were missing the theme, `presProps.xml` and the layout→master relationship ([#202](https://github.com/yfedoseev/office_oxide/issues/202)).** The slide layout had no `_rels` part at all, so it was orphaned from its master — a hard `shall` in [ISO/IEC 29500-1] §13.3.9 and a likely reason PowerPoint's repair failed rather than succeeded. There was also no theme, which left [#199](https://github.com/yfedoseev/office_oxide/issues/199)'s colour map naming slots that did not exist.
+
+- **PPTX slide masters were missing the required `p:clrMap` ([#199](https://github.com/yfedoseev/office_oxide/issues/199)).** `CT_SlideMaster` is a strict sequence — `cSld`, `clrMap`, `sldLayoutIdLst` — and the colour map was never written at all, so every deck this library produced was schema-invalid and PowerPoint's repair had no colour mapping to recover.
+
+## [0.1.10] - 2026-09-09
+
+> Correctness release. 69 issues closed, concentrated in one defect shape: **the parser read a value correctly and the converter then dropped it**. Every format is affected; DOCX most of all. Also closes six security-relevant robustness gaps, adds editing to the WASM/MCP/CLI surfaces, and replaces several silent empty-successes with named errors. No breaking API changes; some previously-empty fields are now populated, and some previously-`Ok(empty)` reads are now `Err`.
+>
+> Verified against a 3,036-file corpus of real Office documents (Apache POI, Tika, LibreOffice QA, ClosedXML, OpenXML SDK test suites) compared arm-to-arm against v0.1.9: zero panics, zero crashes, zero timeouts, and no content regression. The harness that did it ships in `scripts/regression-sweep/`.
+
+### Added
+
+- **Editing on every surface ([#62](https://github.com/yfedoseev/office_oxide/issues/62)).** `replace_text` and save now reach the CLI, MCP server and WASM build, not just the Rust and Python APIs.
+- **Inline base64 images in markdown ([#100](https://github.com/yfedoseev/office_oxide/issues/100)).** `to_markdown_with(MarkdownOptions { image_embed: ImageEmbed::Base64 })` emits `[image-base64:...]` at each image's position in the flow; the MCP `extract` tool exposes it as the `markdown-with-images` format.
+- **Per-platform npm packages ([#61](https://github.com/yfedoseev/office_oxide/issues/61)).** The JS package now uses `optionalDependencies` for its six platform binaries instead of shipping all of them to every install.
+- **Document metadata is read ([#174](https://github.com/yfedoseev/office_oxide/issues/174)).** `ir::Metadata` title, author and dates were always `None` even though `CoreProperties::parse` existed and worked.
+- **Footnotes, endnotes, comments and speaker notes ([#142](https://github.com/yfedoseev/office_oxide/issues/142), [#143](https://github.com/yfedoseev/office_oxide/issues/143), [#165](https://github.com/yfedoseev/office_oxide/issues/165), [#195](https://github.com/yfedoseev/office_oxide/issues/195)).** DOCX `footnotes.xml`/`endnotes.xml`/`comments.xml`, XLSX `xl/comments*.xml`, PPTX `ppt/comments/*` and `notesSlides`, and the `.doc` subdocuments the FIB's `ccp*` lengths had been parsed for and never used.
+- **Legacy images reach the IR ([#186](https://github.com/yfedoseev/office_oxide/issues/186)).** `.doc`/`.xls`/`.ppt` extracted pictures were being dropped during conversion.
+
+### Fixed
+
+#### Content silently dropped on read
+
+- **XML entities and character references were deleted from text ([#156](https://github.com/yfedoseev/office_oxide/issues/156)).** `AT&T` extracted as `ATT`. quick-xml emits entity references as `Event::GeneralRef`, a separate event from `Event::Text`, and 30 handlers across every format matched only the latter. Attribute values were affected too — the root cause behind [#147](https://github.com/yfedoseev/office_oxide/issues/147). This one change recovers apostrophes, ampersands and non-ASCII characters across the whole corpus.
+- **DOCX text-box content ([#140](https://github.com/yfedoseev/office_oxide/issues/140), [#102](https://github.com/yfedoseev/office_oxide/issues/102)) and transparent paragraph wrappers ([#141](https://github.com/yfedoseev/office_oxide/issues/141)).** `w:txbxContent` was never read; `w:ins`, `w:fldSimple`, `w:ruby` and `w:smartTag` text was dropped on the floor. Both returned `Ok`.
+- **DOCX `w:cr`, `w:noBreakHyphen` and `w:sym` ([#152](https://github.com/yfedoseev/office_oxide/issues/152)).** `e-mail` extracted as `email`.
+- **DOCX `altChunk`, image alt text and HYPERLINK field URLs ([#155](https://github.com/yfedoseev/office_oxide/issues/155)); internal `w:anchor` hyperlinks and `w:tblCaption` ([#189](https://github.com/yfedoseev/office_oxide/issues/189)).**
+- **XLSX cell hyperlinks ([#164](https://github.com/yfedoseev/office_oxide/issues/164)).** Parsed into `Worksheet::hyperlinks`, then never rendered — while DOCX and PPTX both emitted links.
+- **PPTX SmartArt and chart text ([#149](https://github.com/yfedoseev/office_oxide/issues/149)); `a:tbl` merge continuation cells ([#148](https://github.com/yfedoseev/office_oxide/issues/148)).** `graphicFrame` handled only the table URI, and dropped `vMerge`/`hMerge` cells shifted every cell to their right one column left.
+- **DOCX `mc:AlternateContent` extracted both `Choice` and `Fallback` ([#163](https://github.com/yfedoseev/office_oxide/issues/163)) — shape text came out twice.**
+
+#### Formatting parsed and then discarded
+
+- **DOCX style-based formatting was never applied ([#194](https://github.com/yfedoseev/office_oxide/issues/194)).** Only direct `w:rPr`/`w:pPr` survived, so an ordinarily-styled document lost all of its formatting.
+- **DOCX run and paragraph properties ([#181](https://github.com/yfedoseev/office_oxide/issues/181), [#182](https://github.com/yfedoseev/office_oxide/issues/182)).** Indent, spacing, line spacing and keep/page-break flags were lost on read — only alignment survived; underline, highlight, `vertAlign`, caps and smallCaps left half of `TextSpan`'s fields permanently empty.
+- **DOCX table geometry ([#180](https://github.com/yfedoseev/office_oxide/issues/180)) and borders ([#190](https://github.com/yfedoseev/office_oxide/issues/190)).** `tblW`, `gridCol`, `tcW`, `tblCellMar` and `trHeight` were all lost, so the library could not read back the widths of tables it had written; `w:pBdr` was narrowed to a boolean and `tblBorders`/`tcBorders` were not parsed at all.
+- **DOCX `w:themeColor` never resolved and discarded the `w:val` fallback ([#175](https://github.com/yfedoseev/office_oxide/issues/175)).** `resolve_color` existed and was never called.
+- **DOCX headings, lists and breaks ([#154](https://github.com/yfedoseev/office_oxide/issues/154), [#187](https://github.com/yfedoseev/office_oxide/issues/187), [#188](https://github.com/yfedoseev/office_oxide/issues/188), [#185](https://github.com/yfedoseev/office_oxide/issues/185), [#135](https://github.com/yfedoseev/office_oxide/issues/135)).** Headings were identified only via `outlineLvl`, missing style-name and `Heading1..9` conventions; `w:numId="0"` (explicitly *no* numbering) was turned into a bullet list; `List::start_number` and `List::style` were never populated, so a list starting at 5 rendered as 1 and `a) b) c)` was indistinguishable from `1. 2. 3.`; page breaks were reported as `ThematicBreak` and column breaks dropped; `w:outlineLvl="9"` (body text) rendered as a heading.
+- **DOCX sections ([#177](https://github.com/yfedoseev/office_oxide/issues/177), [#178](https://github.com/yfedoseev/office_oxide/issues/178), [#191](https://github.com/yfedoseev/office_oxide/issues/191)).** Column layout was written in full and read back with only the count; first-page and even-page headers were merged into one and every section received every section's headers; `Section::break_type` was hardcoded from the section index, with continuous/nextPage inverted.
+- **XLSX ([#184](https://github.com/yfedoseev/office_oxide/issues/184), [#179](https://github.com/yfedoseev/office_oxide/issues/179), [#193](https://github.com/yfedoseev/office_oxide/issues/193)) and PPTX ([#183](https://github.com/yfedoseev/office_oxide/issues/183), [#150](https://github.com/yfedoseev/office_oxide/issues/150), [#192](https://github.com/yfedoseev/office_oxide/issues/192)).** Cell font formatting reached the IR in prose mode but not table mode — the same cell rendered differently depending on the shape of the sheet around it; landscape orientation was not applied to `paperSize` dimensions; hidden sheets and slides were extracted with no indication; PPTX run underline, font name, baseline, caps and spacing were never parsed; level-0 bullets rendered as plain paragraphs and `a:buAutoNum` numbering was lost; `TableRow::is_header` was set from row position rather than `a:tblPr/@firstRow`.
+
+#### Wrong values
+
+- **XLSX number formats ([#147](https://github.com/yfedoseev/office_oxide/issues/147)).** Quoted literals in custom formats were read as date tokens, so `12,500,000` rendered as `36123-11-01`. Format sections are now selected by their condition rather than by position, `?` is treated as a digit placeholder, and a format's code is no longer printed in place of its value.
+- **XLSX cell placement ([#146](https://github.com/yfedoseev/office_oxide/issues/146)).** The column reference was discarded, so sparse or unordered rows put every value under the wrong header. Cells whose `r` attribute is absent now take the next column, and rows without `r` are numbered in document order, per ECMA-376 18.3.1.4 and 18.3.1.73.
+- **XLS dates ([#172](https://github.com/yfedoseev/office_oxide/issues/172)).** `FORMAT` and `XF` records were never parsed, so dates extracted as raw serials (`38971` instead of a date).
+- **`.doc` outline levels ([#139](https://github.com/yfedoseev/office_oxide/issues/139)).** The line-shape heading heuristic now defers to real outline data where it exists.
+
+#### Silent success on unreadable input
+
+- **Word 6.0/95 files were accepted and parsed with Word 97 offsets ([#167](https://github.com/yfedoseev/office_oxide/issues/167)).** 426,450 characters extracted as an empty string with `Ok`. Now a named error.
+- **Encrypted legacy files ([#169](https://github.com/yfedoseev/office_oxide/issues/169)) and encrypted OOXML packages ([#119](https://github.com/yfedoseev/office_oxide/issues/119), partial).** Both returned empty text or a corrupt-zip failure; both now say the file is password-protected. Reading and writing ECMA-376 agile encryption is **not** implemented — see *Known gaps*.
+- **Valid real-world `.doc`/`.ppt` files extracted as an empty string with `Ok` ([#168](https://github.com/yfedoseev/office_oxide/issues/168)).** The reported cause — a three-piece piece table — parses correctly and now has a test pinning it. The real defect was three silent empty-with-`Ok` returns in the `.doc` reader, which now name the structure that failed.
+- **OOXML robustness ([#145](https://github.com/yfedoseev/office_oxide/issues/145), [#176](https://github.com/yfedoseev/office_oxide/issues/176)).** Truncated XML, wrong-format packages and duplicate parts all returned `Ok`; a malformed theme part made the whole document unreadable while a missing theme was fine.
+- **`with_parse_stack` converted every internal panic into "unsupported format" ([#161](https://github.com/yfedoseev/office_oxide/issues/161)),** hiding real bugs and blinding the fuzz target.
+
+#### Security and robustness
+
+- **Unbounded parser recursion ([#151](https://github.com/yfedoseev/office_oxide/issues/151)).** A 1.6 KB `.docx` aborted the process with a stack overflow no caller could catch. Nesting is now capped at an empirically calibrated depth, with the excess reported rather than silently truncated.
+- **No decompression limit on OOXML parts ([#144](https://github.com/yfedoseev/office_oxide/issues/144)).** A 2 MB `.docx` expanded to 2 GiB in memory and returned `Ok`. Parts are now bounded.
+- **Emitted URLs were not scheme-filtered and markdown output was unescaped ([#157](https://github.com/yfedoseev/office_oxide/issues/157)).** `javascript:` reached `href`.
+- **The write path emitted XML-illegal control characters ([#158](https://github.com/yfedoseev/office_oxide/issues/158)),** producing documents Word, Excel and LibreOffice all reject.
+- **`replace_text` corrupted the document on `&` ([#159](https://github.com/yfedoseev/office_oxide/issues/159)),** never matched escaped text, and injected raw markup.
+- **Panic on a malformed CFB header ([#138](https://github.com/yfedoseev/office_oxide/issues/138)).** An unvalidated sector shift overflowed in `cfb/header.rs`.
+- **Element dispatch ignored XML namespaces ([#162](https://github.com/yfedoseev/office_oxide/issues/162)),** so foreign-namespace text was extracted as document content.
+- **XLSX/PPTX writers validated nothing ([#173](https://github.com/yfedoseev/office_oxide/issues/173), [#160](https://github.com/yfedoseev/office_oxide/issues/160)).** An out-of-range sheet index silently dropped data, illegal sheet names and out-of-grid cells were accepted, and non-finite numbers were written as `<v>inf</v>`/`<v>NaN</v>` — a schema-invalid workbook, returned as `Ok`.
+
+#### Renderers disagreeing with each other
+
+- **DOCX had two markdown renderers that disagreed ([#137](https://github.com/yfedoseev/office_oxide/issues/137), [#166](https://github.com/yfedoseev/office_oxide/issues/166), [#136](https://github.com/yfedoseev/office_oxide/issues/136), [#134](https://github.com/yfedoseev/office_oxide/issues/134)),** and the IR path duplicated each section's first heading. Headers and footers appeared only in markdown, `<img>` was emitted without a source, and markdown `---` leaked into `plain_text`. `Heading::level`'s documented invariant is now enforced, and the `outline_level` doc comment no longer states its value space backwards.
+- **Adjacent emphasis runs were not coalesced ([#153](https://github.com/yfedoseev/office_oxide/issues/153)),** producing literal `****` in the output, and `vertAlign` was lost.
+- **PPT slide-master placeholder prompts were extracted as content ([#170](https://github.com/yfedoseev/office_oxide/issues/170)).** "Click to edit Master title style" is no longer document text.
+- **IR round-trip was unbounded ([#171](https://github.com/yfedoseev/office_oxide/issues/171)).** Image alt text was written back as body text, growing the document on every generation.
+
+#### Packaging
+
+- **`go/cmd/install` 404'd on every run ([#110](https://github.com/yfedoseev/office_oxide/issues/110)).** The download URL put the version in the asset filename.
+
+### Testing
+
+- **Mechanical gates for parser correctness ([#133](https://github.com/yfedoseev/office_oxide/issues/133)).** SPRM opcode identity is now asserted against a table transcribed from [MS-DOC], so a wrong opcode fails a test rather than silently mis-parsing.
+- **Release regression sweep (`scripts/regression-sweep/`).** Two arms — the previous tag and the release branch — run over a corpus of real Office documents, compared on two axes: status transitions and word-level content change. `vanished.py` is the check that decides content loss, because byte totals cannot: restoring a dropped `&` makes output longer and dropping 65,536 rows of grid padding makes it far shorter, and both swamp any aggregate. It found seven defects that 800+ synthetic tests could not see, including two introduced during this release.
+- The suite grew from 792 to 818 tests, all fixtures built in code.
+
+### Known gaps
+
+- **[#119](https://github.com/yfedoseev/office_oxide/issues/119) is deliberately partial.** An encrypted OOXML file now reports that it is password-protected instead of failing as a corrupt zip. Reading and writing ECMA-376 agile encryption is not implemented: it needs four cryptography dependencies plus a CFB writer that does not exist here, and neither half can be verified in this repository without an Office-produced encrypted fixture. Shipping encryption that does not interoperate with Word would be the same confidently-wrong failure the rest of this release removes.
+- **No external reference panel.** Every judgement in the regression sweep is 0.1.10 against v0.1.9, so a defect both versions share does not show up. Comparing against LibreOffice, Tika or pandoc remains future work.
+
+
+## [0.1.9] - 2026-09-01
+
+> Legacy binary `.doc` structure release: tables, lists, and tab stops are now recovered into the IR, closing the long-standing fidelity gap against the `.docx` path. Plus an IR list-nesting fix, green lint gates, and a dependency refresh. No breaking API changes.
+>
+> Both `.doc` features in this release were contributed by **[@xugangqiang](https://github.com/xugangqiang)** — thank you.
+
+### Added
+
+- **`.doc`: tables are extracted into the IR ([#115](https://github.com/yfedoseev/office_oxide/issues/115), [#116](https://github.com/yfedoseev/office_oxide/pull/116)).** For legacy binary Word files, `Document::to_ir()` (and therefore `to_ir_json()`, `to_markdown()`, and every binding built on them) previously emitted only `Paragraph` and heuristic `Heading` elements — table structure that exists in the file was silently dropped, while the `.docx` path emitted `Table` elements from the same API. Tables are now rebuilt by walking the structured paragraphs from the PAPX FKP of the table stream: a row ends at a `sprmTDefTable` row-terminator paragraph, a cell at a `\x07`-terminated paragraph. `col_span` is computed from the shared column-grid edges (the column-boundary union, Apache POI `buildTableCellEdgesArray` style) with a 4-twip snap tolerance, since Word rounds per row; `row_span` is driven by the **2-bit** `TCGRF.fVertMerge` field (`fvmClear` / `fvmMerge` / `fvmRestart`), including a guard for Word's whole-TAP-copy quirk where continuation rows wrongly carry `fvmRestart`. Nested tables (`itap > 1`) are flattened with a visible notice rather than silently mis-rendered. Carries shared parser hardening that underpins the walk: non-monotonic CP now returns `Err`, a `cw == 0` FKP re-read off-by-one is fixed, `fc_to_cp` is overflow-protected, and `decode_cp_range` is byte-clamped against a DoS. Every fixture is a minimal synthetic `.doc` built in code. Thanks @xugangqiang.
+- **`.doc`: lists and tab stops are extracted into the IR ([#115](https://github.com/yfedoseev/office_oxide/issues/115), [#120](https://github.com/yfedoseev/office_oxide/pull/120)).** Building on the table walker. **Lists** key membership on the list format override id (`ilfo`, set by `sprmPIlfo` `0x460B`) per [MS-DOC] §2.4.6.3 rather than on the level SPRM alone, read as a signed `i16`: `0x0000` and `0xF801` mean "not in a list"; `0x0001`–`0x07FE` index into `PlfLfo.rgLfo`; `0xF802`–`0xFFFF` are the negation of a 1-based index and are still list items. Consecutive list paragraphs group into a nested `Element::List`, with nesting driven by `ilvl`. **Tab stops** are decoded from `sprmPChgTabs` (`0xC615`) and `sprmPChgTabsPapx` (`0xC60D`) — both carry a 1-byte `cb`, with `cb == 255` an escape for `0xC615` that derives the operand length from the payload's own `cDel`/`cAdd` counts, and the two opcodes differing only in their delete block (`PchgTabsDelClose`, `1 + 4·cDel`, vs `PchgTabsDel`, `1 + 2·cDel`) — and surfaced on the paragraph's `tabs`. The `0xXXXX` opcode identities and the `cb`/delete-block byte contracts are asserted directly, so the tests double as a spec-conformance gate. Two known gaps remain, documented rather than papered over: a negated `ilfo` is not yet resolved to a positive index, and a list whose `ilfo` is inherited only through a paragraph style is not yet detected. Thanks @xugangqiang.
+
+### Fixed
+
+- **IR: a list whose items all sit at the same non-zero depth no longer loses every item but the first ([#122](https://github.com/yfedoseev/office_oxide/pull/122)).** `ir::build_nested_list` decided each item's children by comparing the following items against the run's `base_level` instead of against that item's own level. When every item in a run was deeper than `base_level`, the first item claimed the whole run as its child range, discarded it (because the item itself was not shallow enough to be a parent), and still advanced the cursor past the range — silently dropping the rest. Both call sites pass a hard-coded `base_level` of 0, so **any list whose items all sit at level ≥ 1 lost all but its first item**: a PowerPoint placeholder whose bullets are all `<a:p lvl="1">` is an ordinary shape, and it measured 3 bullets in → 1 list item out. DOCX reached the same path through `<w:numPr w:ilvl>`. Grouping now uses each item's own depth and always advances to the end of the consumed range.
+
+### CI / tooling (dev-only, not shipped)
+
+- **Clippy: constant-size `chunks_exact` rewritten as `as_chunks` ([#124](https://github.com/yfedoseev/office_oxide/pull/124)).** Rust 1.98's clippy added `chunks_exact_to_as_chunks`; two call sites (`src/cfb/reader.rs`, `src/ppt/text.rs`) tripped it, and both the Clippy and Lint jobs run with `-D warnings`, so `main` itself failed. `as_chunks::<N>()` discards the remainder exactly as `chunks_exact` did, so behaviour is identical, and it hands `from_le_bytes` a `[u8; N]` directly. `as_chunks` stabilised in Rust 1.88, this workspace's declared `rust-version`, so the MSRV job is unaffected.
+- **Python lint: 31 ruff findings cleared and the linter pinned to a minor series ([#123](https://github.com/yfedoseev/office_oxide/pull/123)).** `ruff>=0.4` was unpinned, so CI resolved whatever ruff published most recently and each release turned on new default rules — the gate changed under the repo with no commit, reddening every open PR including bumps that touch no Python at all. 29 of the findings were in the `_native.pyi` stub (PYI044/PYI026/PYI034/PYI036, PEP 604/585 unions — valid in a stub regardless of the `requires-python = ">=3.8"` runtime floor, since stubs are never evaluated at runtime), the other 2 import and `__all__` ordering. `ruff` is now pinned `>=0.16,<0.17`.
+- **Dependency refresh**: `pyo3` 0.29.0 → 0.29.2, `thiserror` 2.0.19 → 2.0.20, `clap` 4.6.4 → 4.6.6, `log` 0.4.33 → 0.4.34, `fast-float2` 0.2.3 → 0.2.4, `koffi` 3.1.2 → 3.1.6 (JS binding), plus a bulk in-semver lockfile refresh ([#99](https://github.com/yfedoseev/office_oxide/pull/99)). Pinned GitHub Actions: `ossf/scorecard-action` 2.4.3 → 2.4.4, `pypa/gh-action-pypi-publish` 1.14.1 → 1.14.2.
+
+## [0.1.8] - 2026-07-22
+
+> PPT97 (legacy binary `.ppt`) text-extraction correctness release. No breaking API changes.
+
+### Fixed
+
+- **PPT: `PlainText()` / `ToMarkdown()` / `ToIRJSON()` no longer return stale or embedded-metadata text instead of real slide content on legacy binary `.ppt` files ([#85](https://github.com/yfedoseev/office_oxide/issues/85)).** PPT97 uses incremental ("fast") saves — each save appends new/changed records to the end of the "PowerPoint Document" stream, leaving superseded copies of earlier records (e.g. a pre-edit `Slide` container) behind in the stream with nothing to compact them away. The extractor scanned front-to-back and trusted whichever slide-shaped data it found first, so stale leftovers could win over current content, and in the worst case a corrupted/oversized declared record length (the record iterator bounded child data against the whole stream rather than its own enclosing container) could derail the scan and swallow unrelated later records. Slide content is now resolved through the PPT97 persist object directory instead — `Current User` stream → `UserEditAtom` chain (`offsetLastEdit`) → merged `PersistDirectoryAtom` entries, per [MS-PPT] 2.1.2 — so the *current* copy of each slide's records is used regardless of scan order, and the record iterator now bounds each record against its own container. Also resolves `OutlineTextRefAtom` indirection, where a placeholder shape stores text only as an index back into the slide's outline-text cache rather than embedding it directly — needed for correctness against a real-world corpus, not just the reported bug. Verified against 176 real-world `.ppt` files (LibreOffice QA data, Apache POI/Tika test resources, OSS-Fuzz regression cases): zero crashes either side vs. v0.1.7, and every file with changed output gained previously-missing content (stale duplicates collapsed, indexed placeholder text now resolved) with no garbled output observed. Thanks to the reporter of #85.
+
+## [0.1.7] - 2026-07-19
+
+> Round-trip and robustness release: the write↔parse IR cycle is now a fixed point for DOCX/PPTX, oversized XLSX sheets are bounded instead of stalling, plus the earlier XLSX cell-type/DOCX-truncation/XLSX-edit fixes, a dependency refresh, and CI-hardening + IP-governance groundwork. No breaking API changes.
+
+### Added
+
+- **IR spreadsheet cells now carry their semantic type and number format ([#72](https://github.com/yfedoseev/office_oxide/issues/72)).** Previously `Document::to_ir()` (and therefore the WASM `toIr()` surface) flattened every XLSX cell to a display string, so consumers could not tell a number or date cell from text — a `42` and a `"42"` looked identical, and a date serial under a date format was indistinguishable from a number. `TableCell` gains four optional, `serde`-defaulted fields populated on the XLSX grid path: `data_type` (`text` / `number` / `date` / `boolean` / `error`, via the new `CellDataType` enum), `raw_number` (the underlying `f64` — dates as an Excel serial, booleans as `1.0`/`0.0`), `number_format` (the format code, e.g. `"#,##0.00"`), and `number_format_id` (built-in or custom `numFmtId`, e.g. `14` for a date). The fields are `#[serde(skip_serializing_if = "Option::is_none")]`, so DOCX/PPTX table cells and existing JSON consumers are unaffected. Format metadata is surfaced on **every** non-empty cell — including text cells — so a caller can also tell that a text cell sits in a date-formatted column (a real case from the reporter's workbook, where a "date" column held typed-in text). Built-in format IDs (which never appear in `<numFmts>`) resolve to their canonical code via a new `numfmt::builtin_format_code`, so `number_format` is populated for built-ins like `14` → `"m/d/yyyy"` and `4` → `"#,##0.00"`, not just custom formats. Reuses the existing date-detection and number-format resolution logic rather than duplicating it. Thanks to the reporter for the clear request.
+
+### Fixed
+
+- **DOCX: `to_markdown()` / `docx_to_ir` no longer silently truncate the body on paragraphs with a bordered `<w:pBdr>` ([#71](https://github.com/yfedoseev/office_oxide/issues/71)).** A paragraph carrying Word's horizontal-rule idiom (an empty paragraph whose `pPr` holds a bottom-border-only `<w:pBdr>`) desynced the reader: after detecting the self-closing `<w:bottom/>` edge, the `pBdr` scanner issued a stray extra read that swallowed the `</w:pBdr>` close tag when no whitespace separated them (i.e. in real, non-pretty-printed Word output). With the border's end tag consumed and the loop keyed to break only on `</w:pBdr>`, the shared reader ran to EOF — dropping every subsequent paragraph and table and returning `Ok` with a partial document. The scanner now walks the `<w:pBdr>` subtree with a balanced depth counter and exits at the matching close, so trailing content is preserved. Thanks to the reporter for the precise measurements.
+- **XLSX edit: `set_cell` no longer strips a cell's attributes, and no longer deletes the next cell when writing into an empty-but-styled one.** `set_cell_in_xml` rebuilt the `<c>` element from scratch — emitting only `r` and `t` — so every other attribute of the overwritten cell was discarded, most importantly `s`, the style index: a currency or date cell came back with no number format. Worse, the replacement located the end of the cell by searching for `</c>` *before* checking whether the opening tag was self-closing; an empty-but-styled cell is written `<c r="A1" s="5"/>` with no `</c>`, so the search ran on and found the **next** cell's closing tag, and the splice swallowed the cell in between. Both defects converge on the same real workflow — injecting values into a pre-formatted spreadsheet template, whose data rows are made entirely of styled, empty cells: the write silently destroyed a neighbouring cell and stripped the formatting off the one it wrote. `set_cell` now carries every attribute of the existing cell through verbatim (except `r` and `t`, which it owns) and delimits the opening tag before deciding how the element ends.
+- **DOCX/PPTX: `create_from_ir` (and `create_from_markdown`) round-trips are now idempotent ([#79](https://github.com/yfedoseev/office_oxide/issues/79)).** Writing an IR and reading it back drifted on every cycle: a document/slide title is surfaced by the parsers as **both** `section.title` **and** a leading heading, and the writer re-emitted the title on top of that heading. For DOCX this materialised a duplicate H1 that grew monotonically each write→parse cycle; for PPTX the title was re-emitted as body text and — because `emit_pptx_element` had **no arm for `Element::TextBox`**, the wrapper the parser puts slide-body content in — the real body (bullets, paragraphs) was silently dropped, leaving only the title echo. The writer now skips a standalone title when it is already the section's leading heading (both formats) and emits `Element::TextBox` content into the slide body, so `parse(write(x))` is a fixed point. Covered by a new `ir_roundtrip_idempotence` test for all three OOXML formats.
+
+### Changed
+
+- **XLSX: worksheets are capped at 10,000 rows when materialised into the IR ([#29](https://github.com/yfedoseev/office_oxide/issues/29)).** A worksheet is converted eagerly into a single in-memory `Table`, which downstream cannot render to an unbounded PDF, so a pathological sheet (e.g. a 200k-row fixture) exploded memory and stalled rendering. Beyond the cap the remaining rows are dropped and a **visible truncation notice** (`[N of M rows not shown — worksheet truncated at 10000 rows]`) is appended, so the omission is obvious in text/markdown/PDF rather than silent or hanging. Ordinary large spreadsheets are unaffected.
+- **Refreshed `Cargo.lock` to latest semver-compatible versions** (in-semver, no manifest changes): `clap` 4.6.1 → 4.6.2, `futures-*` 0.3.32 → 0.3.33, `portable-atomic` 1.13.1 → 1.14.0, `simd-adler32` 0.3.9 → 0.3.10, `thiserror` 2.0.18 → 2.0.19, `syn` 2.0.118 → 2.0.119, and others. `thiserror-impl` 2.0.19 now depends on `syn` 3.0, so the tree carries a second `syn` major transitively; `cargo deny` is clean.
+
+### CI / tooling & governance (dev-only, except NOTICE/TRADEMARKS which ship in the crate)
+
+- **CI hardening.** Least-privilege default `GITHUB_TOKEN` permissions on the Python workflow (OpenSSF Scorecard Token-Permissions); a `cargo-fuzz` target (`fuzz/`) that feeds arbitrary bytes to every format parser (must never panic/hang); deterministic PR-quality gates (Conventional-Commits title, no committed compiled/binary artifacts, AI-assistance labelling); and template-compliance + CLA-assistant workflows. The `pull_request_target` workflows only read event/API strings and never check out or run PR code.
+- **IP governance.** Added [`CLA.md`](CLA.md) (contributor licence agreement — a licence, not an assignment), [`TRADEMARKS.md`](TRADEMARKS.md), [`NOTICE`](NOTICE), and [`AGENTS.md`](AGENTS.md); `NOTICE` and `TRADEMARKS.md` are now included in the published crate package. The code remains dual-licensed `MIT OR Apache-2.0`.
+
+## [0.1.6] - 2026-07-13
+
+> Fixes PPTX slides created by `PptxWriter` / `create_from_markdown` rendering blank in LibreOffice Impress.
+
+### Fixed
+
+- **PPTX placeholder shapes now carry explicit geometry ([#69](https://github.com/yfedoseev/office_oxide/issues/69)).** The generated title and body placeholders previously emitted an empty `<p:spPr/>` with no `<a:xfrm>`, relying on the slide layout for position/size. PowerPoint resolves that from the layout, but LibreOffice Impress does not — so slides rendered blank. The writer now emits an explicit `<a:xfrm>` (offset + extent) on each placeholder, derived from PowerPoint's default Office-theme rectangles and scaled to the presentation size (`set_presentation_size`). Thanks @holgerreppert for the detailed report.
+
+## [0.1.5] - 2026-07-13
+
+> Dependency-maintenance release. No API or behavior changes — all 424 tests pass and every feature build (default, `parallel`, `mmap`, `python`, `wasm`) compiles clean.
+
+### Changed
+
+- **Refreshed all Rust dependencies to their latest semver-compatible versions** (lockfile): `clap` 4.5 → 4.6.1, `wasm-bindgen` 0.2.114 → 0.2.126, `js-sys` 0.3.91 → 0.3.103, `libc` 0.2.182 → 0.2.186, `serde_json` 1.0.149 → 1.0.150, `crossbeam-deque` 0.8.6 → 0.8.7, `crossbeam-utils` 0.8.21 → 0.8.22, plus `quote`/`syn`/`itoa`/`either` and others. The crate's version requirements were already broad enough to permit these — intentionally kept loose so downstreams aren't over-constrained.
+- **JS binding: `koffi` 2.9 → 3.1.1** (major). Uses only stable core APIs (`load`, `decode`, `disposable`, `func`); koffi 3.x ships native binaries as platform-specific optional packages. Node engine requirement (`>=18`) unchanged.
+
+### CI / tooling (dev-only, not shipped)
+
+- **Pinned GitHub Actions bumped to latest (SHA-pinned):** `checkout` v4 → v7.0.0, `codecov-action` v5 → v7.0.0, `codeql-action` v3 → v4.37.0, `attest-build-provenance` v2 → v4.1.1, `setup-go` v5 → v6.5.0, `setup-dotnet` v4 → v5.4.0, `setup-python` v6.2 → v6.3.0, `setup-uv` v8.1 → v8.3.2, `cargo-deny-action` → v2.0.20, `scorecard-action` → v2.4.3, `action-gh-release` v2 → v3.0.1, `rust-cache` → v2.9.1, `install-action` → v2.83.2, and `actions/cache` moved from a `@v5` tag to a SHA-pinned v6.1.0. Also unified a stray `download-artifact@v4` to v8.0.1 and corrected a stale `github-script` version comment. Subsumes Dependabot #40/#41/#43/#44/#45.
+- **pre-commit hooks:** `cargo-deny` 0.19.0 → 0.20.2, `ruff-pre-commit` v0.15.5 → v0.15.21, `ty-pre-commit` v0.0.18 → v0.0.59.
+- **C# test deps (test-only):** `Microsoft.NET.Test.Sdk` 17.10 → 18.7.0, `xunit` 2.9.0 → 2.9.3, `xunit.runner.visualstudio` 2.8.2 → 3.1.5.
+
+### Notes
+
+- No new advisories (`cargo audit` / `cargo deny` clean, 81 deps).
+- Benchmark competitor pins in `scripts/bench-requirements.txt` are intentionally frozen until the next full benchmark re-run (bumping them would desync the numbers in BENCHMARKS.md), so Dependabot #53/#54 are out of scope here.
+- `download-artifact` v4 → v8 and `attest-build-provenance` v2 → v4 run in the release workflow, which only fully executes on a tag; they are validated when v0.1.5 is tagged.
+
+## [0.1.4] - 2026-07-13
+
+> Build-compatibility fix that unblocks downstream crates from moving to quick-xml ≥ 0.41 (and clearing RUSTSEC-2026-0194 / RUSTSEC-2026-0195) when office_oxide shares a dependency tree with a crate that enables quick-xml's `encoding` feature.
+
+### Fixed
+
+- **quick-xml `encoding`-feature build break** — `unescape_attr_value` called `Attribute::unescape_value()`, which quick-xml gates behind `#[cfg(not(feature = "encoding"))]`. Cargo feature unification turns `encoding` on transitively whenever another crate in the tree enables it (e.g. `calamine ≥ 0.36`), so office_oxide failed to compile with `error[E0599]: no method named unescape_value`. This forced downstreams (e.g. `kreuzberg`) to pin `calamine 0.35`, keeping a vulnerable quick-xml < 0.41 in the tree. The helper now decodes the raw attribute bytes as UTF-8 and expands entities via `escape::unescape`, which is feature-independent. Thanks @waxzce (#63) and @Goldziher (#64).
+
+### Changed
+
+- **`zip` 8.1 → 8.6** and assorted transitive dependency refreshes. Via #64 (@Goldziher).
+
+## [0.1.3] - 2026-07-04
+
+> Security patch: clears every open RustSec advisory in the dependency tree — an untrusted-XML DoS (quick-xml), two pyo3 soundness/OOB fixes, and a memmap2 unsound-pointer fix — plus Linux aarch64 wheels on PyPI.
+
+### Security
+
+- **quick-xml 0.40 → 0.41 (RUSTSEC-2026-0194 / RUSTSEC-2026-0195)** — quick-xml 0.40's `NamespaceResolver::push` performs an unbounded per-`xmlns` heap allocation inside `NsReader` *before* the parse event is returned, so a crafted Office document (DOCX/XLSX/PPTX) declaring many namespaces could exhaust memory and crash the reader — a denial-of-service on untrusted input. Upgraded to quick-xml 0.41, which bounds the allocation. Thanks @smissingham (#58); tracked in #59.
+- **pyo3 0.28 → 0.29 (RUSTSEC-2026-0176 / RUSTSEC-2026-0177)** — fixes an out-of-bounds read in `nth` / `nth_back` for `PyList` and `PyTuple` iterators, and a missing `Sync` bound on `PyCFunction::new_closure` closures, in the Python binding. Via Dependabot (#52).
+- **memmap2 0.9.10 → 0.9.11 (RUSTSEC-2026-0186)** — fixes an unchecked pointer offset (unsoundness). Via Dependabot (#55).
+
+### Packaging
+
+- **Linux aarch64 wheels + source distribution on PyPI (#51)** — `pip install office-oxide` on Linux/arm64 (AWS Graviton, Apple-Silicon Docker, Raspberry Pi) failed with "no compatible wheel"; the release workflow now builds `manylinux` aarch64 wheels and an sdist alongside the existing x86_64/macOS wheels. Thanks @regularkevvv.
+
+## [0.1.2] - 2026-05-14
+
+> Round-trip fidelity, IR layout features, embedded fonts, XLSX number formatting, and an O(1) style-lookup perf win.
+
+### Performance
+
+- **XLSX styles**: cell-format lookups now use a `HashMap`, replacing
+  the linear `Vec` scan in `format_cell_value` / `is_date_cell`.
+  Per-cell formatting becomes O(1); large styled workbooks parse
+  noticeably faster with no API change.
+
+### Round-trip fidelity (PDF → office → PDF)
+
+- **Alignment, spacing, footers, and horizontal rules** preserved end-to-end
+  through both `to_docx` and `to_pptx` writers.
+- **Images, fonts, and column layouts** preserved across DOCX, PPTX, and
+  XLSX. Source-PDF font programs that previously registered as empty
+  subsets now embed correctly.
+- **`Element::ThematicBreak`** encoded in PPTX as a centered 30-char run
+  of `U+2500 BOX DRAWINGS LIGHT HORIZONTAL`. Downstream PDF renderers
+  detect the all-U+2500 content and re-emit a real horizontal rule.
+- **DOCX horizontal rules** recovered from the conventional encoding
+  (empty paragraph + `<w:pBdr><w:bottom/>`) back into `Element::ThematicBreak`.
+
+### DOCX
+
+- **`<w:framePr>` parsed into IR** as `FramePosition` (twips, page-anchored)
+  on both `Paragraph` and `Heading`. Used by layout-preserving paths
+  (e.g. pdf_oxide's `to_docx_bytes_layout`).
+- **Floating drawings and vector shapes**: `<wp:anchor>` images plus
+  `<wps:wsp>` preset shapes (line, rect) with stroke/fill RGB and
+  stroke width round-trip through `DrawingInfo`.
+- **Per-section page sizes** preserved through `to_ir`; multi-section IR
+  emits per-section `<w:sectPr>`.
+- **`<w:sz>` preserved** through to IR's `font_size_half_pt`.
+- **Run colour** from `<w:rPr><w:color w:val="RRGGBB"/>` propagated into
+  `TextSpan.color` during `to_ir`, so PDF→DOCX→PDF round-trips keep
+  coloured text. Only the `ColorRef::Rgb` variant is plumbed today;
+  theme / system / `auto` colours still fall through to the renderer
+  default (proper resolution needs `theme.xml` threaded into the
+  convert path).
+- **Headers and footers** now included in `to_markdown` and `to_ir`
+  (previously silently dropped).
+- **Embedded fonts** under `/word/fonts/` exposed on
+  `DocxDocument.embedded_fonts`. `strip_embedded_font_filename` recovers
+  the original face name from `font_<n>_<face>.<ext>` (fixes greedy
+  alphabetic-trim regression where `TeXGyreTermesX-` was returned
+  instead of `TeXGyreTermesX-Regular`).
+- **`parse_drawing` decomposed** into focused recursive helpers
+  (`parse_inline_or_anchor_body`, `parse_anchor_position`,
+  `parse_shape_properties`, etc.) for readability.
+- **Run-level `<w:rFonts w:ascii>` plumbed into `TextSpan.font_name`**;
+  `<w:cols>` propagated to `Section.columns`.
+
+### PPTX
+
+- **Pagination**: each slide forces a `SectionBreakType::NextPage` so two
+  slides never share a rendered page.
+- **Real Title+Body slide layout** emitted by the writer instead of a blank
+  layout, so PowerPoint shows placeholder hints in edit mode.
+- **Slide background**: `<p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr>`
+  parsed into `Slide.background_rgb` and propagated to `Section.background_rgb`.
+- **Positioned text boxes**: shapes with explicit `<a:xfrm>` coordinates
+  wrap their content in `Element::TextBox` so downstream renderers can
+  place them at absolute EMU coordinates. Zero-size shapes skip the wrapper.
+- **Slide size → page setup**: `<p:sldSz cx=… cy=…>` propagated to each
+  section's `PageSetup`.
+- **Run font sizes preserved** via new `TextRun.font_size_hundredths_pt`
+  (parsed from `<a:rPr sz="…"/>`).
+- **Run colour preserved** via new `TextRun.color_rgb: Option<[u8; 3]>`
+  parsed from `<a:rPr><a:solidFill><a:srgbClr val="RRGGBB"/></a:solidFill>`
+  and propagated to `TextSpan.color` in IR. The parser tracks an
+  `in_solid_fill` flag so sibling effects (e.g. `<a:hl><a:srgbClr/>`
+  for hyperlink colour) don't leak into the run's own fill; non-sRGB
+  fills (gradient, scheme colour) fall back to `None`.
+- **Paragraph alignment** parsed from `<a:pPr algn="…"/>` (all five
+  variants: `l` / `ctr` / `r` / `just` / `dist`) into
+  `TextParagraph.alignment`. **Space-before** parsed from
+  `<a:spcBef><a:spcPts val=…/>`.
+- **Title alignment propagation**: `find_title` returns text + first
+  paragraph's alignment, seeding both `Section.title` and the synthesised
+  level-2 Heading's alignment.
+- **Picture shapes** now carry `embed_rid`, `data`, and `format`
+  (resolved via a pre-built media map at parse time, so the parallel
+  slide parser doesn't need the OPC reader).
+- **Font embedding** under `/ppt/fonts/`.
+- **Structured chart text extraction**: `<c:chart>` parts parsed into
+  per-chart text blocks rendered as `## Chart N` in markdown / search /
+  PDF without needing a graphical chart renderer.
+- **Compaction**: consecutive H1/H2 cover-page headings fold into one
+  slide instead of fragmenting; long XLSX paragraphs split across cells
+  to respect ~32k char-per-cell limits.
+- **Slide cap**: writer caps at ~250 slides (PowerPoint's hard limit).
+
+### XLSX
+
+- **Per-worksheet `page_setup`** round-trips via `<pageMargins>` (inches)
+  and `<pageSetup>` (paperWidth/paperHeight with mm/cm/in suffix or
+  `paperSize` enum 1–13). New `Worksheet.page_setup`.
+- **`numfmt` module** (`crate::xlsx::numfmt`): built-in IDs 0–44 (general,
+  fixed, commas, percent, currency, scientific, accounting) and a
+  simplified custom format-string parser (multi-section, `[Red]` color
+  directives stripped, currency prefix from `[$€-407]`, quoted literal
+  suffix, percent and thousands separators). Applied to numeric cells
+  during `format_cell_value` and `write_cell_value_fast`.
+- **Font sizes** preserved through IR; long-text single-column sheets
+  emit as paragraphs instead of a tall 1-column GFM table.
+- **Unique worksheet names** in `ir_to_xlsx` (duplicates suffixed with
+  `_2`, `_3`, …).
+- **Drawings**: `xl/drawings/drawingN.xml` parsed into
+  `Worksheet.images` (`WorksheetPicture` with EMU coords + bytes) and
+  `Worksheet.text_shapes` (`WorksheetTextShape` for layout-mode text
+  boxes from `to_xlsx_bytes_layout`).
+- **Embedded fonts** under `/xl/fonts/`.
+
+### IR enrichment
+
+- **New types**: `Shape` (vector shape anchored at absolute EMU coords),
+  `ShapeGeom` (`Line`, `Rect`), `FramePosition` (twip-anchored frame).
+- **`Heading`** gains `frame_position` + `alignment`.
+- **`Section`** gains `background_rgb`.
+- **`ParagraphAlignment`** gains the `Distribute` variant.
+- **`Element::Shape(Shape)`** variant for vector shapes.
+- **New helpers**: `first_inline_font_size_pt`, `inline_to_element_block`,
+  `build_nested_list` (flat / 2-level / 3-level recursion).
+- **Centralized defaults** in `ir_render::block_default`: ThematicBreak
+  renders as `"---"` / `<hr />`; PageBreak / ColumnBreak / Shape are
+  invisible in flow; TextBox / Footnote / Endnote recursively render
+  children. Adding a new `Element` variant forces a compile error
+  in `block_default::default_plain` instead of silent fallthrough.
+
+### Core
+
+- **`crate::core::core_properties`**: shared `docProps/core.xml` generator
+  used by all three writers. Emits `dc:title`, `dc:creator`, `dc:subject`,
+  `dc:description`, `cp:keywords`, `dcterms:created`, `dcterms:modified`
+  from the IR's `Metadata`. Empty fields are omitted entirely.
+- **`crate::core::embedded_fonts`**: unified font-embedding helper
+  (`write_embedded_fonts`, `sanitize_font_filename`). All three formats
+  share the layout `<prefix>font_<n>_<safe_name>.ttf`.
+- **`HalfPoint::from_word_sz` / `from_drawingml_sz` / `to_drawingml_sz` /
+  `from_points_rounded`**: cross-format font-size invariants
+  (DrawingML hundredths-of-a-point vs WML half-points).
+
+### Dependencies
+
+- **`quick-xml` 0.37 → 0.40**: upstream removed `BytesText::unescape()`
+  and deprecated `Attribute::unescape_value()` (its replacement
+  `normalized_value()` has different semantics — no entity
+  unescaping). Migration added two helpers in `core::xml`:
+  `unescape_text(BytesText) -> Result<String>` (used by 6 call sites)
+  and `unescape_attr_value` (used by 6 call sites, with
+  `#[allow(deprecated)]` localised to the helper so call sites stay
+  deprecation-free). 535 / 535 tests still pass; clippy clean.
+- **`koffi` 2.16.1 → 2.16.2** in `js/` (patch bump).
+
+### Documentation
+
+- **CLI / MCP crate-level docs**: `office_oxide_cli` and
+  `office_oxide_mcp` previously opened with `mod commands;` /
+  `mod protocol;` and had no crate-level rustdoc. Added a short
+  `//!` block plus `#![warn(missing_docs)]` so future items in
+  either binary stay documented.
+  `RUSTDOCFLAGS="-D missing_docs" cargo doc --workspace --no-deps
+  --features parallel,mmap` now passes with zero errors.
+
+### Tests
+
+- **+98 unit tests** across the modules touched in this release:
+  `core::embedded_fonts`, `core::core_properties`, `core::units`,
+  `xlsx::numfmt`, `xlsx::worksheet`, `docx::formatting`, `docx::mod`,
+  `pptx::slide`, `ir`, `ir_render`.
+- **535 / 535 tests pass** across default, `--features parallel`,
+  `--features mmap`, and `--features parallel,mmap` builds.
+- `cargo fmt` clean. `cargo clippy --workspace --all-targets -- -D warnings`
+  clean.
+
+### Bindings
+
+- **Python wheel** (maturin, PyO3 0.28) builds cleanly and exposes
+  `Document`, `EditableDocument`, `XlsxWriter`, `PptxWriter`,
+  `OfficeOxideError`, `create_from_markdown`, `extract_text`,
+  `to_markdown`, `to_html`, `version`.
+- **WASM** package (`wasm-pack build --target web/node/bundler`) builds
+  cleanly with `--features wasm`.
+- **C#** package bumped to 0.1.2 (csproj only — no API changes).
+
+[0.1.2]: https://github.com/yfedoseev/office_oxide/compare/v0.1.1...v0.1.2
+
+## [0.1.1] - 2026-04-30
+
+> Richer IR type system, DOCX writer output, improved PPTX/XLSX IR renderers, and writer APIs in all language bindings
+
+### IR — extended type system
+
+- **`TextSpan`** gains nine typography fields: `font_name`, `font_size_half_pt`,
+  `color`, `highlight`, `underline` (`UnderlineStyle` enum), `vertical_align`
+  (`VerticalAlign`: Superscript / Subscript / Baseline), `all_caps`,
+  `small_caps`, `char_spacing_half_pt`.
+- **`Paragraph`** gains twelve layout fields: `alignment` (`ParagraphAlignment`:
+  Left / Center / Right / Justify / Distribute), `indent_left_twips`,
+  `indent_right_twips`, `first_line_indent_twips`, `space_before_twips`,
+  `space_after_twips`, `line_spacing` (`LineSpacing`: Auto / Multiple / Exact /
+  AtLeast), `background_color`, `border` (`ParagraphBorder`), `keep_with_next`,
+  `keep_together`, `page_break_before`, `outline_level`.
+- **`Table`** gains `width_twips`, `column_widths_twips`, `border`
+  (`TableBorder`), `alignment` (`TableAlignment`), `indent_left_twips`,
+  `cell_padding_twips`, `caption`.
+- **`TableRow`** gains `height_twips`, `allow_break`, `repeat_as_header`.
+- **`TableCell`** gains `background_color`, `border`, `vertical_align`
+  (`CellVerticalAlign`), `text_align`, `width_twips`, `padding` (`CellPadding`),
+  `text_direction` (`TextDirection`).
+- **`Image`** gains `data`, `format` (`ImageFormat`), `pixel_width`,
+  `pixel_height`, `display_width_emu`, `display_height_emu`, `decorative`,
+  `positioning` (`ImagePositioning`: Inline or Floating with `FloatingImage`).
+- **`Section`** gains `page_setup` (`PageSetup`), `columns` (`ColumnLayout`),
+  `break_type` (`SectionBreakType`), and six header/footer slots
+  (`header`, `footer`, `first_page_header`, `first_page_footer`,
+  `even_page_header`, `even_page_footer`).
+- **`Metadata`** gains `author`, `subject`, `keywords`, `created`, `modified`,
+  `description` (written to `docProps/core.xml`).
+- **New `Element` variants**: `TextBox`, `PageBreak`, `ColumnBreak`,
+  `Footnote(Note)`, `Endnote(Note)`, `CodeBlock`.
+- **`List`** gains `start_number`, `style` (`ListStyle`), `level`.
+  `ListItem.content` promoted from `Vec<InlineContent>` to `Vec<Element>`
+  to allow block-level content (tables, images) inside list items.
+- **`InlineContent`** gains `FootnoteRef` and `EndnoteRef` variants.
+- **New supporting types**: `BorderLine`, `TableBorder`, `ParagraphBorder`,
+  `CellPadding`, `FloatingImage`, `HeaderFooter`, `TextBox`, `Note`,
+  `FootnoteRef`, `CodeBlock`, `PageSetup`, `ColumnLayout`.
+- **New enums**: `UnderlineStyle`, `ParagraphAlignment`, `LineSpacing`,
+  `BorderStyle`, `CellVerticalAlign`, `TableAlignment`, `TextDirection`,
+  `ImageFormat`, `ImagePositioning`, `SectionBreakType`, `VerticalAlign`,
+  `FloatAnchor`, `TextWrap`, `ListStyle`.
+- All new fields are `Option<_>` or default to `false`/`None` — fully
+  backwards compatible; existing callers require only `..Default::default()`
+  on struct literals.
+
+### DocxWriter — OOXML emission for all new fields
+
+- **Run properties**: `<w:rFonts>`, `<w:sz>`/`<w:szCs>`, `<w:color>`,
+  `<w:shd>` (highlight), `<w:u>`, `<w:vertAlign>`, `<w:caps>`,
+  `<w:smallCaps>`, `<w:spacing>` (character spacing).
+- **Paragraph properties**: `<w:jc>`, `<w:ind>`, `<w:spacing>` (before/after/
+  line), `<w:pBdr>`, `<w:shd>`, `<w:keepNext>`, `<w:keepLines>`,
+  `<w:pageBreakBefore>`, `<w:outlineLvl>`.
+- **Table**: `<w:tblW>`, `<w:tblInd>`, `<w:tblBorders>`, `<w:jc>` (table),
+  `<w:tblCellMar>`, `<w:tblGrid>`/`<w:gridCol>`.
+- **Table row**: `<w:trHeight>`, `<w:tblHeader>`, `<w:cantSplit>`.
+- **Table cell**: `<w:tcW>`, `<w:gridSpan>`, `<w:vMerge>`, `<w:shd>` (cell),
+  `<w:tcBorders>`, `<w:vAlign>`, `<w:textDirection>`, `<w:tcMar>` (per-edge
+  padding), cell-level `text_align` propagated to contained paragraphs.
+- **Table caption**: emitted as a `Caption`-styled paragraph before `<w:tbl>`.
+- **Images**: inline `<wp:inline>` and floating `<wp:anchor>` with
+  `<wp:wrapSquare>` / `<wp:wrapTight>` / `<wp:wrapThrough>` /
+  `<wp:wrapTopAndBottom>` / `<wp:wrapNone>`.
+- **Text boxes**: `<wp:anchor>` + `<wps:txbx>` + `<w:txbxContent>`.
+- **Sections**: `<w:sectPr>` with `<w:pgSz>`, `<w:pgMar>`, `<w:cols>` (uniform
+  and per-column widths with separator rule), `<w:type>` (Continuous / NextPage
+  / EvenPage / OddPage). Header/footer parts written to `/word/header*.xml` and
+  `/word/footer*.xml` with correct relationship entries.
+- **Footnotes / endnotes**: `/word/footnotes.xml` and `/word/endnotes.xml`
+  parts; inline `<w:footnoteReference>` / `<w:endnoteReference>` runs with
+  `FootnoteReference` / `EndnoteReference` character styles.
+- **`{PAGE}` / `{NUMPAGES}` sentinels** in header/footer text spans emitted as
+  `<w:fldChar>` / `<w:instrText>` field runs.
+- **Page break**: `<w:br w:type="page">`. **Column break**: `<w:br
+  w:type="column">`.
+- **Code blocks**: `Code`-styled paragraph with preserved whitespace and
+  line breaks.
+- **Lists**: `<w:numFmt>` driven by `ListStyle`; `<w:startOverride>` for
+  non-1 `start_number`; block-level item content (tables, images) written
+  alongside the numbered paragraph.
+- **Metadata**: `author`, `subject`, `keywords`, `description`, `created`,
+  `modified` written to `docProps/core.xml` as Dublin Core properties.
+
+### PPTX IR renderer — `ir_to_pptx`
+
+- **Rich text runs**: paragraphs and headings now emit styled `<a:r>` runs via
+  `add_rich_text()` — bold, italic, font size, color, and font name from
+  `TextSpan` are all preserved. Previously all formatting was stripped.
+- **Table elements**: rendered as tab-separated cell text (rows joined with `\n`)
+  instead of being silently dropped.
+- **Image elements**: embedded as native PPTX media via the new
+  `SlideData::add_image()` API — writes a `<p:pic>` shape with `<p:blipFill>`
+  and an OPC media part. PNG, JPEG, and GIF are supported.
+- **CodeBlock elements**: rendered with Courier New font run instead of being
+  silently dropped.
+- **Slide dimensions**: first `Section.page_setup` is now forwarded to
+  `PptxWriter::set_presentation_size()` (1 twip = 914 400/1 440 EMU), fixing
+  clipped output for landscape A4 and other non-16:9 documents.
+- **New `PptxWriter::set_presentation_size(cx, cy)`** method; emits `<p:sldSz>`
+  with the correct EMU values instead of always writing the 16:9 default.
+
+### XLSX IR renderer — `ir_to_xlsx`
+
+- **Header row styling**: rows with `TableRow.is_header = true` are now written
+  with bold weight and a grey (`D3D3D3`) background via `set_cell_styled()`.
+  `TableCell.background_color` overrides the default grey when set.
+- **Cell background color**: non-header cells with `TableCell.background_color`
+  set now get a solid fill style applied.
+- **Column widths**: `Table.column_widths_twips` is now converted to Excel
+  character-width units (`twips × 96 / (1440 × 7)`, clamped 3–80) and written
+  via `set_column_width()`.
+- **Merged cells**: `TableCell.col_span` and `row_span` > 1 now emit a
+  `<mergeCells>/<mergeCell ref="…"/>` block in the worksheet XML instead of
+  being ignored.
+- **New `SheetData::merge_cells(row, col, row_span, col_span)`** method; inserts
+  `<mergeCells>` between `</sheetData>` and `</worksheet>`.
+- Row cursor tracks absolute position across all elements in a section, so
+  paragraphs and headings interleaved with tables land in the correct rows.
+
+### Writer APIs — all language bindings
+
+`XlsxWriter` and `PptxWriter` (previously Rust-only) are now callable from
+every binding layer via a new index-based C FFI surface:
+
+**New C FFI symbols** (`include/office_oxide_c/office_oxide.h`):
+
+- `office_xlsx_writer_new/free`, `office_xlsx_writer_add_sheet` (returns sheet
+  index), `office_xlsx_sheet_set_cell`, `office_xlsx_sheet_set_cell_styled`
+  (bold + hex background), `office_xlsx_sheet_merge_cells`,
+  `office_xlsx_sheet_set_column_width`, `office_xlsx_writer_save`,
+  `office_xlsx_writer_to_bytes`
+- `office_pptx_writer_new/free`, `office_pptx_writer_set_presentation_size`,
+  `office_pptx_writer_add_slide` (returns slide index),
+  `office_pptx_slide_set_title`, `office_pptx_slide_add_text`,
+  `office_pptx_slide_add_image` (PNG/JPEG/GIF bytes + EMU geometry),
+  `office_pptx_writer_save`, `office_pptx_writer_to_bytes`
+
+**Go** — `XlsxWriter` and `PptxWriter` structs with CGo wrappers and
+`runtime.SetFinalizer` for safe GC.
+
+**C# / .NET** — new `OfficeOxide.XlsxWriter` and `OfficeOxide.PptxWriter`
+classes (`IDisposable`); P/Invoke declarations added to `NativeMethods`.
+
+**Node.js** — `XlsxWriter` and `PptxWriter` ESM + CJS classes; koffi
+function prototypes; TypeScript `ImageFormat` type and class declarations.
+
+**Python** — `XlsxWriter` and `PyO3PptxWriter` PyO3 classes calling Rust
+directly (no C FFI round-trip); exported from `office_oxide` with full type
+stubs in `_native.pyi`.
+
+### Bug fixes
+
+- `TableCell.padding` (`CellPadding`) was defined in the IR but silently
+  dropped by the writer; now emits `<w:tcMar>` with per-edge twip values.
+- `TableCell.text_align` was defined in the IR but silently dropped; now
+  propagated to contained paragraphs (respects pre-existing paragraph
+  alignment, so explicit paragraph alignment is never overwritten).
+- `Table.caption` was defined in the IR but silently dropped; now emitted
+  as a `Caption`-styled paragraph immediately before the table.
+
+## [0.1.0] - 2026-04-27
+
+> Initial public release
+
+### Cross-language bindings
+
+- **Rust core** (`office_oxide` on crates.io): unified `Document` handle for
+  all six formats, `EditableDocument` for DOCX/XLSX/PPTX editing, format-
+  agnostic `DocumentIR`.
+- **Python** (`office-oxide` on PyPI): context-manager `Document` /
+  `EditableDocument`, `os.PathLike` support, complete type stubs in
+  `_native.pyi` (`Literal` format names, `_Path` alias).
+- **Go** (`github.com/yfedoseev/office_oxide/go`): CGo wrapper over the C FFI
+  with idiomatic `Open` / `Close` / error-return API, `go/cmd/install` helper
+  that fetches the matching native archive and prints the
+  `CGO_CFLAGS` / `CGO_LDFLAGS` to export.
+- **C# / .NET** (`OfficeOxide` on NuGet): `LibraryImport` P/Invoke,
+  `IDisposable`, `async/await`, `IsAotCompatible=true`, `IsTrimmable=true`.
+  Four `SetCell` overloads + `SetCellEmpty`. Net 8 and net 10 target
+  frameworks.
+- **Node.js native** (`office-oxide` on npm): [koffi](https://koffi.dev)-based,
+  no node-gyp, ESM + CJS entry points with an `exports` map, TypeScript
+  definitions, `Symbol.dispose` support, platform prebuilds staged into
+  `prebuilds/<platform>-<arch>/`.
+- **WASM** (`office-oxide-wasm` on npm): three sub-path exports — default
+  ESM for bundlers, `office-oxide-wasm/node` for CJS, `office-oxide-wasm/web`
+  for native-ESM browser imports. TypeScript definitions shipped.
+- **C FFI** (`include/office_oxide_c/office_oxide.h`): stable
+  `office_document_*` / `office_editable_*` surface with out-param error
+  codes and explicit memory ownership. Exported from the cdylib + staticlib;
+  the substrate that Go, C#, and Node-native link against.
+
+### Tooling
+
+- **CLI** (`office-oxide` binary): `text`, `markdown`, `html`, `info`, `ir`
+  subcommands.
+- **MCP server** (`office-oxide-mcp` binary): `extract` and `info` tools
+  over JSON-RPC 2.0 / stdio.
+
+### Performance
+
+- Up to 100× faster than `python-docx`, `openpyxl`, `python-pptx`, `xlrd`.
+- Beats `calamine` on XLSX and all Rust / Python alternatives on .xls.
+- **100% pass rate on valid Office files** (6,062-file corpus: LibreOffice,
+  Apache POI, python-pptx, python-docx, Pandoc, etc.). All 97 non-passing
+  files are invalid inputs — corrupted ZIPs, missing required parts, malformed
+  XML, or non-Office files with Office extensions.
+
+### Documentation & examples
+
+- Per-language getting-started guides in [`docs/`](docs/): Rust, Python,
+  Go, C#, JavaScript (native), WASM, and C / raw FFI.
+- Per-binding READMEs in [`python/`](python/README.md), [`go/`](go/README.md),
+  [`csharp/OfficeOxide/`](csharp/OfficeOxide/README.md),
+  [`js/`](js/README.md), [`wasm-pkg/`](wasm-pkg/README.md).
+- Identical `extract` / `replace` / `read_xlsx` demos per language under
+  [`examples/`](examples/).
+
+### Release CI
+
+- Version parity across `Cargo.toml`, `pyproject.toml`,
+  `wasm-pkg/package.json`, `js/package.json`, and
+  `csharp/OfficeOxide/OfficeOxide.csproj`.
+- 6-target native-lib build matrix producing `.tar.gz` / `.zip` archives
+  with the shared library, static archive, and public header.
+- 3-target WASM build (bundler / nodejs / web) with per-target module-type
+  hints so Node + bundlers + browsers each load the right code.
+- NuGet packaging with `runtimes/<rid>/native/` prebuilts, Node
+  `prebuilds/<platform>-<arch>/` staging, and a `go/v*` module tag for the
+  Go module proxy.
+
+## [0.1.0-draft] - 2026-04-07 (not released)
+
+> Internal milestone before the public release above.
+
+Single consolidated `office_oxide` crate with modules per format, plus
+companion workspace crates `office_oxide_cli` and `office_oxide_mcp`.
+
+### Added
+
+- **Unified API** (`crate::Document`)
+  - `Document::open()`, `Document::from_reader()`, `plain_text()`,
+    `to_markdown()`, `to_html()`, `to_ir()`, `format_name()`
+  - Format auto-detection from file extension for all 6 formats
+  - `as_docx()` / `as_xlsx()` / `as_pptx()` / `as_doc()` / `as_xls()` /
+    `as_ppt()` escape hatches for format-specific types
+  - Convenience functions: `extract_text()`, `to_markdown()`, `to_html()`
+    at crate root
+
+- **Format-agnostic IR** (`crate::ir::DocumentIR`)
+  - Sections, Elements (Heading, Paragraph, Table, List, Image,
+    ThematicBreak), serializable to/from JSON
+  - DOCX→IR: heading detection via outline level + style resolution,
+    list grouping, table vMerge → row_span
+  - XLSX→IR: worksheets → sections, cell grids → tables, first row as
+    header
+  - PPTX→IR: slides → sections, spatial sort, title placeholder → section
+    title
+  - IR renderers: `plain_text()` and `to_markdown()`
+
+- **OOXML module — `crate::docx`** (36 tests)
+  - SAX-style parsing of `document.xml`, `styles.xml`, `numbering.xml`
+  - Hyperlink resolution, heading detection, list grouping
+  - Plain text, Markdown, HTML extraction
+
+- **OOXML module — `crate::xlsx`** (57 tests)
+  - Shared string table, cell parsing, 1900 date system with Lotus bug
+  - Built-in + custom number format detection
+  - CSV (RFC 4180), Markdown (pipe tables), HTML output
+  - Rich-text and style support
+
+- **OOXML module — `crate::pptx`** (40 tests)
+  - Slide parsing with spatial sort, shape types (AutoShape, Picture,
+    Group, GraphicFrame, Connector), text body extraction
+  - Notes slide support, inline hyperlink resolution
+  - Plain text, Markdown, HTML extraction
+
+- **Legacy module — `crate::cfb`** (18 tests)
+  - Pure Rust CFBF / OLE2 container reader
+  - Supports v3 (512-byte) and v4 (4096-byte) sectors, mini-streams,
+    case-insensitive stream access, path-based lookup
+
+- **Legacy module — `crate::doc`** (15 tests)
+  - Word Binary (.doc) parser built on `crate::cfb`
+  - FIB parsing, piece-table extraction, dual encoding
+    (compressed CP1252 + Unicode UTF-16LE)
+  - Field-code stripping and special-char sanitization
+
+- **Legacy module — `crate::xls`** (24 tests)
+  - Excel Binary (.xls) BIFF8 parser built on `crate::cfb`
+  - CONTINUE record merging, SST (compressed + wide + rich text),
+    RK decode
+  - Cell records: LABELSST, NUMBER, RK, MULRK, FORMULA, BOOLERR,
+    LABEL, BLANK
+
+- **Legacy module — `crate::ppt`** (15 tests)
+  - PowerPoint Binary (.ppt) parser built on `crate::cfb`
+  - 8-byte record headers, container vs atom records
+  - Text extraction from TextCharsAtom (UTF-16LE) and TextBytesAtom
+    (Latin-1), SlideListWithText grouping
+
+- **Shared core — `crate::core`** (55 tests)
+  - `OpcReader` / `OpcWriter` for ZIP-based OPC packages
+  - Theme parsing, color resolution, unit types (`Twip`, `HalfPoint`,
+    `Emu`)
+  - Namespace-aware XML utilities with OOXML Strict support
+
+- **Creation API** — write OOXML documents from scratch
+  - `crate::docx::write::DocxWriter`, `crate::xlsx::write::XlsxWriter`,
+    `crate::pptx::write::PptxWriter`
+  - `crate::create::create_from_ir()` and
+    `create_from_ir_to_writer()` for IR-to-format conversion
+
+- **Editing API** — modify existing documents while preserving unmodified
+  parts
+  - `crate::docx::edit::EditableDocx`, `crate::xlsx::edit::EditableXlsx`,
+    `crate::pptx::edit::EditablePptx`
+  - Unified `crate::edit::EditableDocument` with `replace_text()`
+    and `set_cell()`
+  - `crate::core::editable::EditablePackage` round-trips rels via
+    `RelationshipsBuilder::add_with_id()`
+
+- **Python bindings** — PyO3 0.28, extension module `office_oxide._native`
+  - Type stubs (`_native.pyi`) and PEP 561 `py.typed` marker
+  - Wheels for Linux, macOS, Windows across Python 3.8–3.14
+
+- **WASM bindings** — `wasm-bindgen`, `WasmDocument` class
+  - `new(data, format)`, `plainText()`, `toMarkdown()`, `toHtml()`,
+    `toIr()`
+  - npm package `office-oxide-wasm`
+
+- **CLI** — `office_oxide_cli` workspace crate, binary `office-oxide`
+  - Subcommands: `text`, `markdown`, `html`, `info`, `ir`
+
+- **MCP server** — `office_oxide_mcp` workspace crate, binary
+  `office-oxide-mcp`
+  - JSON-RPC 2.0 over stdin/stdout
+  - Tools: `extract` (text / markdown / html / ir), `info`
+
+- **Feature flags**
+  - `python` — PyO3 extension module
+  - `wasm` — wasm-bindgen bindings
+  - `mmap` — `memmap2`-backed file reading
+  - `parallel` — `rayon`-based parallel parsing
+
+### Robustness
+
+- OOXML Strict namespace support via dual-namespace matching
+  (`strict_alternate()`) and relationship-type normalization
+- Case-insensitive ZIP entry lookup with backslash path normalization
+- Namespace-agnostic attribute lookup (`optional_prefixed_attr_str()`)
+  for `d3p1:id` and similar
+- Percent-encoding decoding in `PartName::new()`
+- CRC checksum tolerance in `read_zip_entry()` (accepts data on mismatch)
+- Tolerant numeric parsing: `parse_numeric()` strips unit suffixes,
+  handles decimals
+- Shared-string DoS cap: `MAX_CELL_STRING_LEN = 32_768` in `xlsx`
+- Optional parts (`numbering.xml`, theme) degrade gracefully on read
+  errors
+- XLSX border aliases: `start`/`end` mapped to `left`/`right` for Strict
+  OOXML
+
+### Validation
+
+- **98.4% pass rate on a 6,062-file corpus** (5,965 / 6,062) across 11
+  open-source test suites (LibreOffice Core, Apache POI, Open XML SDK,
+  ClosedXML, Pandoc, python-docx, python-pptx, Apache Tika, calamine,
+  openpreserve, oletools)
+- Zero failures on legitimate Word 97+ / Excel 97+ / PowerPoint 97+
+  files — all 97 non-passing files are invalid inputs: 43 invalid
+  ZIP/CFB archives, 21 missing required parts, 18 malformed XML, and
+  15 non-Office files (WordPerfect, pre-OLE2 Excel 3/4) misnamed with
+  Office extensions
+- See [BENCHMARKS.md](BENCHMARKS.md) for per-format timings and the
+  full failure breakdown
+
+[0.1.1]: https://github.com/yfedoseev/office_oxide/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/yfedoseev/office_oxide/releases/tag/v0.1.0

@@ -1,0 +1,33 @@
+name: Version Consistency
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths-ignore:
+      - 'CHANGELOG.md'
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE*'
+      - '.gitignore'
+  pull_request:
+    branches: [ main, develop ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'release' }}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: All bindings match Cargo.toml version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Verify every binding version == Cargo.toml ([package] version)
+        run: python3 scripts/sync_version.py --check

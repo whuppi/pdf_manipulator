@@ -1,0 +1,34 @@
+# Overrides on top of detekt's default rules (buildUponDefaultConfig = true).
+# Only rules that conflict with the FFI binding's required shape are relaxed;
+# everything else stays at detekt defaults. Formatting/line-length is owned by
+# ktlint (a separate gate), so detekt here focuses on complexity & bug rules.
+naming:
+  FunctionNaming:
+    # The JNA CLib interface must use snake_case to map the C-ABI symbol names.
+    active: false
+  ClassNaming:
+    # The internal `Native_` object mirrors the C namespace.
+    active: false
+style:
+  MagicNumber:
+    active: false
+  MaxLineLength:
+    # ktlint governs formatting/line length; avoid double-governance.
+    active: false
+complexity:
+  TooManyFunctions:
+    # An FFI binding surfaces one function per C entry point; the JNA interface
+    # mirrors all ~hundreds of C symbols. Raise the thresholds accordingly.
+    thresholdInFiles: 400
+    thresholdInClasses: 200
+    thresholdInInterfaces: 400
+    thresholdInObjects: 50
+  LongParameterList:
+    # The bbox/out-param C-ABI signatures take (list,index,x,y,w,h,code) etc.
+    # — these mirror the native function shape, not our design.
+    functionThreshold: 9
+    constructorThreshold: 9
+  LargeClass:
+    # The internal CLib JNA interface mirrors the entire C ABI (~hundreds of
+    # extern fns) in one place by design; splitting it would not aid clarity.
+    active: false
