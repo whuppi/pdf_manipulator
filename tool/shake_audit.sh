@@ -14,9 +14,24 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VENDOR="$ROOT/vendor/pdf_oxide"
 # shellcheck source=tool/build_lib.sh
 source "$ROOT/tool/build_lib.sh"
+
+fail() { echo "SHAKE-AUDIT FAIL: $1" >&2; exit 1; }
+
 # The audit's own baseline: engine internals with every droppable capability
-# dropped (= the trim system's output for keep={}). Not a build.json concept.
-CORE_FEATURES="icc,legacy-crypto,native-bridge"
+# dropped — the `[]` keep-set tool/keep_sets.dart prints for native, never a
+# hand copy that silently goes stale when a capability is added.
+: "${DART:?shake_audit: DART must be set by the caller (the Makefile passes it)}"
+# The features of the first line keep_sets.dart prints for $1. The output is
+# captured whole before it is cut: piping it into `head` closes the pipe
+# early, and Dart throws on a write to a closed pipe.
+empty_keep_set() {
+  local sets
+  sets=$(cd "$ROOT" && $DART tool/keep_sets.dart "$1") \
+    || fail "tool/keep_sets.dart $1 failed"
+  printf '%s\n' "$sets" | sed -n '1p' | cut -f2
+}
+CORE_FEATURES=$(empty_keep_set native)
+[ -n "$CORE_FEATURES" ] || fail "tool/keep_sets.dart native produced no [] features line"
 # The shipped full native set — the audit compares core against THIS and feeds
 # the README size numbers, so it must be build.json's actual features, never a
 # hand-copied duplicate that silently goes stale.
@@ -24,8 +39,6 @@ FULL_FEATURES=$(json_get '.features.native' "$ROOT/build.json")
 # Ceiling with headroom over the measured core-only size; a breach means a
 # heavy module leaked back into the core build.
 CORE_CEILING_BYTES=$((8 * 1024 * 1024))
-
-fail() { echo "SHAKE-AUDIT FAIL: $1" >&2; exit 1; }
 
 # File size in bytes — wc -c is POSIX; BSD wc pads with spaces, so trim.
 fsize() {
@@ -52,9 +65,9 @@ dylib_for() {
 }
 
 # Merge key/value size numbers into .shake_sizes.json (create if absent).
-# MERGE, never overwrite — so a native-only run keeps the wasm/size/cap
-# numbers a heavier run recorded earlier, instead of wiping them (which would
-# silently drop the README from CI verification).
+# MERGE, never overwrite — a native-only run would otherwise wipe the
+# numbers a heavier run recorded, and `make verify-readme-sizes` would then
+# fail.
 merge_sizes() {
   python3 - "$ROOT/tool/.shake_sizes.json" "$@" <<'PY'
 import json, os, sys
@@ -142,12 +155,15 @@ if [ "${SHAKE_AUDIT_WASM:-0}" = "1" ]; then
 
   echo "== [wasm] core (speed) + full/core (size), each staged to a temp dir =="
   WASM_FULL_FEATURES=$(json_get '.features.wasm' "$ROOT/build.json")
-  read -r WASM_CORE_RAW WASM_CORE_GZ <<< "$(measure_wasm "wasm")"
+  WASM_CORE_FEATURES=$(empty_keep_set wasm)
+  [ -n "$WASM_CORE_FEATURES" ] \
+    || fail "tool/keep_sets.dart wasm produced no [] features line"
+  read -r WASM_CORE_RAW WASM_CORE_GZ <<< "$(measure_wasm "$WASM_CORE_FEATURES")"
   DEFAULT_RAW=$(fsize "$ROOT/web_assets/pdf_oxide_bg.wasm")
   [ "$WASM_CORE_RAW" -lt "$DEFAULT_RAW" ] \
     || fail "core-only wasm not smaller than the full default"
   read -r WASM_FULL_SIZE_RAW WASM_FULL_SIZE_GZ <<< "$(measure_wasm "$WASM_FULL_FEATURES" z)"
-  read -r WASM_CORE_SIZE_RAW WASM_CORE_SIZE_GZ <<< "$(measure_wasm "wasm" z)"
+  read -r WASM_CORE_SIZE_RAW WASM_CORE_SIZE_GZ <<< "$(measure_wasm "$WASM_CORE_FEATURES" z)"
   echo "wasm core=$WASM_CORE_RAW/$WASM_CORE_GZ full-size=$WASM_FULL_SIZE_RAW/$WASM_FULL_SIZE_GZ core-size=$WASM_CORE_SIZE_RAW/$WASM_CORE_SIZE_GZ"
   merge_sizes \
     wasmCoreRaw "$WASM_CORE_RAW" wasmCoreGz "$WASM_CORE_GZ" \

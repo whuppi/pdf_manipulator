@@ -16,6 +16,7 @@ import 'package:test/test.dart';
 import '../../fixtures/generated/fixtures.dart';
 import '../../fixtures/handwritten.dart';
 import '../../fixtures/third_party/tp_encrypted.dart';
+import '../../fixtures/third_party/tp_encrypted_legacy.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
 
@@ -446,6 +447,18 @@ void registerDocTests(Pdf Function() createPdf) {
       },
       timeout: t(1),
     );
+
+    for (final legacy in tpEncryptedLegacy) {
+      test('legacy-encrypted fixture (qpdf): ${legacy.name} opens without a '
+          'password', () async {
+        final doc = await createPdf().open(src(legacy.bytes));
+        expect(doc.isEncrypted, isTrue);
+        expect(doc.pageCount, tpEncryptedLegacyTruth.pages);
+        final text = await doc.extract(pages: const PdfPages.all());
+        expect(text, contains(tpEncryptedLegacyTruth.marker));
+        await doc.dispose();
+      }, timeout: t(1));
+    }
 
     test('unicode text survives extraction intact', () async {
       final doc = await createPdf().open(src(fUnicode));

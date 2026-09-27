@@ -4,9 +4,9 @@
 //   3. every EXCLUDED capability answers the typed not-enabled error —
 //      never a crash, never a silent no-op
 //
-// This is the only suite that runs against a trimmed binary in CI; the
-// full example's suites cover the full binary. Keep the keep-list here
-// in lockstep with ../pubspec.yaml's `keep:` user_define.
+// This is the only suite that runs against a trimmed binary; the full
+// example's suites cover the full binary. Keep the keep-list here in
+// lockstep with ../pubspec.yaml's `keep:` user_define.
 
 import 'dart:typed_data';
 

@@ -473,12 +473,12 @@ Two knobs decide the size — **`keep`** (which capabilities go in) and **`build
 
 | Engine | Native | Web — raw (gzipped) |
 |---|---|---|
-| Full · `speed` (default) | 21.1 MB | 17.5 MB (7.3 MB) |
-| Full · `size` | 15.9 MB | 14.4 MB (6.3 MB) |
-| Core only · `speed` | 6.3 MB | 5.2 MB (1.9 MB) |
-| Core only · `size` | 5.1 MB | 4.4 MB (1.7 MB) |
+| Full · `speed` (default) | 22.7 MB | 18.7 MB (7.7 MB) |
+| Full · `size` | 16.7 MB | 15.1 MB (6.6 MB) |
+| Core only · `speed` | 6.7 MB | 5.6 MB (2.1 MB) |
+| Core only · `size` | 5.4 MB | 4.7 MB (1.8 MB) |
 
-The top row is the default; the bottom row is the smallest — core + `size`, about three quarters off. `keep` does the heavy lifting (full → core is about 70% of the native library gone); `build: size` shaves another ~15–25% on top. `size` trades a little runtime speed for the bytes: the cost lands on rendering and image work, and is negligible for parse, edit, and metadata.
+The top row is the default; the bottom row is the smallest — core + `size`, about three quarters off. `keep` does the heavy lifting (full → core is about 71% of the native library gone); `build: size` shaves another ~20–25% on top. `size` trades a little runtime speed for the bytes: the cost lands on rendering and image work, and is negligible for parse, edit, and metadata.
 
 A custom engine — only the capabilities you keep — compiles on your machine. There is nothing to set up in advance: if a piece is missing, the build stops with the exact instruction. What it will ask for:
 
@@ -535,12 +535,12 @@ How do you know what to keep? Each capability covers a small set of methods. Cor
 
 | Capability | Keep it if you call | Also brings | Adds (native) |
 |---|---|---|---|
-| `core` | everything else — merge, split, forms, watermark, encrypt, build… | — | always included (~6.3 MB) |
-| `render` | `doc.render()`, `editor.reduceImages()`, the `compress` one-shot | — | +4.2 MB |
-| `signatures` | `sign()`, `doc.signatures`, `doc.verifySignatures()` | — | +0.9 MB |
+| `core` | everything else — merge, split, forms, watermark, encrypt, build… | — | always included (~6.7 MB) |
+| `render` | `doc.render()`, `editor.reduceImages()`, the `compress` one-shot | — | +4.8 MB |
+| `signatures` | `sign()`, `doc.signatures`, `doc.verifySignatures()` | — | +1.0 MB |
 | `pdfa` | `doc.validatePdfA()`, `doc.validatePdfUa()`, `convertToPdfA` | — | +0.1 MB |
-| `extract` | `doc.extract()`, `doc.search()`, `doc.classifyPage()`, `doc.classifyDocument()` | — | +3.0 MB |
-| `office` | `convertTo`, `convertToPdf` (DOCX / PPTX / XLSX) | `extract`, automatically | +2.5 MB on top of `extract` |
+| `extract` | `doc.extract()`, `doc.search()`, `doc.classifyPage()`, `doc.classifyDocument()` | — | +3.2 MB |
+| `office` | `convertTo`, `convertToPdf` (DOCX / PPTX / XLSX) | `extract`, automatically | +2.9 MB on top of `extract` |
 
 Dependencies are handled for you: `keep: [office]` switches on `extract` as well. Costs are measured one capability at a time, and capabilities share some code — so a combination can total a little less than the sum of its rows.
 
