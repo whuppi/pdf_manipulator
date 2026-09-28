@@ -168,9 +168,10 @@ sealed class PdfSaveOptions {
     PdfEncryption encryption,
   }) = PdfSaveFullRewrite;
 
-  /// Incremental — append only changed objects. Fastest for small
-  /// edits on large files. Preserves digital signatures. No GC,
-  /// no compression, no encryption changes possible.
+  /// Incremental — today a full rewrite without compression or garbage
+  /// collection. Nothing is appended to the original bytes, so a digital
+  /// signature does not survive it, and pages removed in the session are
+  /// not written. No encryption changes possible.
   const factory PdfSaveOptions.incremental() = PdfSaveIncremental;
 }
 
@@ -193,7 +194,7 @@ class PdfSaveFullRewrite extends PdfSaveOptions {
   final PdfEncryption encryption;
 }
 
-/// Incremental save — append-only, preserves signatures.
+/// Incremental save — see [PdfSaveOptions.incremental] for what it writes.
 class PdfSaveIncremental extends PdfSaveOptions {
   /// Creates incremental save options.
   const PdfSaveIncremental();

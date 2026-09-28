@@ -10130,7 +10130,8 @@ final Uint8List formUtf8NamePdf = _build(
 
 /// Eight pages in a two-level page tree, where every structure that can
 /// point at a page does: the catalog `/Dests` dictionary, a `/Names /Dests`
-/// name tree, an outline item per page, a link annotation from each page to
+/// name tree (with an alias per page that names the page's destination by
+/// name), an outline item per page, a link annotation from each page to
 /// the next, an `/OpenAction` to the last page, and one AcroForm text field
 /// per page. The pages carry no `/MediaBox` and no `/Resources` of their
 /// own: both are inherited from the two inner `/Pages` nodes (300×400, font
@@ -10168,9 +10169,12 @@ final Uint8List pagePrunePdf = () {
   }
 
   final dests = '<< ${all((i) => '/d$i [${ref(page(i))} /Fit]')} >>';
+  // Each alias names page i's destination by name, and sorts before it,
+  // so a single pass over the array meets the alias first.
   final nameTree =
-      '<< /Names [${all((i) => '(n$i) [${ref(page(i))} /Fit]')}] '
-      '/Limits [(n0) (n${n - 1})] >>';
+      '<< /Names [${all((i) => '(${pagePruneTruth.alias(i)}) (n$i)')} '
+      '${all((i) => '(n$i) [${ref(page(i))} /Fit]')}] '
+      '/Limits [(${pagePruneTruth.alias(0)}) (n${n - 1})] >>';
   final outlines =
       '<< /Type /Outlines /First ${ref(page(0) + 4)} '
       '/Last ${ref(page(n - 1) + 4)} /Count $n >>';
@@ -10227,6 +10231,9 @@ class PagePruneTruth {
 
   /// The value of page [i]'s form field.
   String value(int i) => 'VALUE-$i-SECRET';
+
+  /// The name-tree key of the named destination that names page [i]'s.
+  String alias(int i) => 'alias$i';
 
   /// Page [i]'s content stream as its hex bytes, `>` included.
   String contentHex(int i) {

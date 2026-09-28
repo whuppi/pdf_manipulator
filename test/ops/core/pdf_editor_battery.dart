@@ -18,6 +18,7 @@ import 'package:test/test.dart';
 import '../../fixtures/generated/fixtures.dart';
 import '../../fixtures/handwritten.dart';
 import '../../fixtures/third_party/tp_image_kinds.dart';
+import '../../harness/page_prune_expect.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
 
@@ -422,6 +423,27 @@ void registerEditorTests(Pdf Function() createPdf) {
       },
       timeout: t(1),
     );
+
+    for (final (name, options) in const [
+      ('a save without GC', PdfSaveOptions.fullRewrite(garbageCollect: false)),
+      ('an incremental save', PdfSaveOptions.incremental()),
+    ]) {
+      test(
+        'deletePage then $name writes nothing of the deleted pages',
+        () async {
+          final pdf = createPdf();
+          final editor = await pdf.edit(src(pagePrunePdf));
+          for (var i = pagePruneTruth.pageCount - 1; i >= 1; i--) {
+            await editor.deletePage(i);
+          }
+          final sink = TestSink();
+          await editor.save(sink, options: options);
+          await editor.dispose();
+          await expectOnlyPrunedPages(pdf, sink.takeBytes(), const [0]);
+        },
+        timeout: t(2),
+      );
+    }
 
     // ── Encryption ──
 

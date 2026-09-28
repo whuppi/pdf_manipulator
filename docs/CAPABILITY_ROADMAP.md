@@ -106,6 +106,7 @@ same names, when both exist. Exports (source in, sink out) live on
 | Page count | `current_page_count` | `pageCount` | DONE |
 | Version | `version` | `version` | DONE |
 | Save | `write_full_to_writer` | `save()` | DONE |
+| Incremental save (append to the original bytes) | `save_with_options` (file path only, not on the bridge) | `save(options: PdfSaveOptions.incremental())` | PLANNED — the mode is a full rewrite without compression or garbage collection today: nothing is appended, so a signature does not survive it, and pages removed in the session are not written (the page-prune battery proves it). A real append keeps the original bytes, so it must refuse after a page removal or a destructive redaction, since those bytes still hold what was removed |
 | Set producer | `set_producer` | `setProducer()` | DONE |
 | Set creation date | `set_creation_date` | `setCreationDate()` | DONE |
 | Set page media box | `set_page_media_box` | `setPageMediaBox()` | DONE — round-tripped through save and `pageMediaBox()` |

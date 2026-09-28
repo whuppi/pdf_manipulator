@@ -105,6 +105,7 @@ CONTENT RULES (never change)
 
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Fixed `extractPages` and `deletePages` writing the pages they drop into the output, so the output kept its original size and the dropped pages' text, images and form values — a save now writes nothing only a dropped page reaches, and drops the links, bookmark targets and form fields that pointed at one ([#261](https://github.com/whuppi/pdf_manipulator/issues/261) reported by [@crurui](https://github.com/crurui))
+- Fixed the documentation of `PdfSaveOptions.incremental()`, which promised an append that keeps digital signatures — the mode writes a full rewrite without compression or garbage collection, so a signature does not survive it; use `sign` last when a document must stay signed
 
 ## 5.0.1-dev.0
 

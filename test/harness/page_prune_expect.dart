@@ -9,7 +9,7 @@ import 'test_source_sink.dart';
 /// Proves that [out], made from [pagePrunePdf], holds the pages in [kept]
 /// (in that order) and nothing of the others (#261).
 ///
-/// A dropped page's content stream and field value are absent from the raw
+/// A dropped page's content stream, field value and alias name are absent from the raw
 /// bytes: the save copies an `ASCIIHexDecode` stream and a string byte for
 /// byte, so their absence means the objects were not written. Each kept page
 /// still shows its text and the media box it inherited from an inner
@@ -34,6 +34,11 @@ Future<void> expectOnlyPrunedPages(
       raw.contains(truth.value(i)),
       keep,
       reason: 'page $i field ${keep ? 'kept' : 'written though dropped'}',
+    );
+    expect(
+      raw.contains('(${truth.alias(i)})'),
+      keep,
+      reason: 'page $i alias ${keep ? 'kept' : 'left naming a removed name'}',
     );
   }
 
