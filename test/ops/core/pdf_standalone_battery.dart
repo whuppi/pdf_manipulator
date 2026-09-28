@@ -11,6 +11,7 @@ import 'package:test/test.dart';
 import '../../fixtures/generated/fixtures.dart';
 import '../../fixtures/handwritten.dart';
 import '../../fixtures/handwritten_docx.dart';
+import '../../harness/page_prune_expect.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
 
@@ -133,6 +134,40 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       );
       await doc.dispose();
     }, timeout: t(1));
+
+    test(
+      'extractPages writes nothing only a dropped page reaches (#261)',
+      () async {
+        final pdf = createPdf();
+        final sink = TestSink();
+        await pdf.extractPages(src(pagePrunePdf), sink, pages: const [0]);
+        await expectOnlyPrunedPages(pdf, sink.takeBytes(), const [0]);
+      },
+      timeout: t(2),
+    );
+
+    test(
+      'extractPages across both inner page nodes keeps the given order',
+      () async {
+        final pdf = createPdf();
+        final sink = TestSink();
+        await pdf.extractPages(src(pagePrunePdf), sink, pages: const [5, 2]);
+        await expectOnlyPrunedPages(pdf, sink.takeBytes(), const [5, 2]);
+      },
+      timeout: t(2),
+    );
+
+    test(
+      'extractPages of every page flattens the tree and keeps inheritance',
+      () async {
+        final pdf = createPdf();
+        final sink = TestSink();
+        final all = [for (var i = 0; i < pagePruneTruth.pageCount; i++) i];
+        await pdf.extractPages(src(pagePrunePdf), sink, pages: all);
+        await expectOnlyPrunedPages(pdf, sink.takeBytes(), all);
+      },
+      timeout: t(2),
+    );
 
     // ── Convert ──
 

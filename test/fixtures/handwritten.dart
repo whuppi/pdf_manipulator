@@ -10127,3 +10127,113 @@ final Uint8List formUtf8NamePdf = _build(
   '%%EOF\n'
   '',
 );
+
+/// Eight pages in a two-level page tree, where every structure that can
+/// point at a page does: the catalog `/Dests` dictionary, a `/Names /Dests`
+/// name tree, an outline item per page, a link annotation from each page to
+/// the next, an `/OpenAction` to the last page, and one AcroForm text field
+/// per page. The pages carry no `/MediaBox` and no `/Resources` of their
+/// own: both are inherited from the two inner `/Pages` nodes (300×400, font
+/// `/F1`), so a save that re-parents a page must copy them onto it.
+///
+/// Page `i` shows the text `PAGE-i-SECRET` from an `ASCIIHexDecode` content
+/// stream, which a save copies byte for byte, and its field holds the value
+/// `VALUE-i-SECRET`: [pagePruneTruth] gives the raw bytes of both, so a test
+/// can prove a dropped page's objects are absent from the output. dart-pdf
+/// and qpdf write neither the inherited attributes nor this set of page
+/// references, so the fixture is hand-authored (#261).
+final Uint8List pagePrunePdf = () {
+  final n = pagePruneTruth.pageCount;
+  // Objects 1–9 are shared; page i owns objects 10 + 5i … 14 + 5i: the
+  // page, its content, its link, its field widget, its outline item.
+  int page(int i) => 10 + 5 * i;
+  String ref(int id) => '$id 0 R';
+  String all(String Function(int i) f) =>
+      [for (var i = 0; i < n; i++) f(i)].join(' ');
+
+  final catalog =
+      '<< /Type /Catalog /Pages 2 0 R /Dests 5 0 R /Names 6 0 R '
+      '/Outlines 8 0 R /OpenAction [${ref(page(n - 1))} /Fit] '
+      '/AcroForm << /Fields [${all((i) => ref(page(i) + 3))}] '
+      '/DR << /Font << /Helv 9 0 R >> >> /DA (/Helv 12 Tf 0 g) >> >>';
+  final root =
+      '<< /Type /Pages /Kids [3 0 R 4 0 R] /Count $n /MediaBox [0 0 612 792] >>';
+  String inner(int half) {
+    final kids = [
+      for (var i = 0; i < n ~/ 2; i++) ref(page(half * n ~/ 2 + i)),
+    ];
+    return '<< /Type /Pages /Parent 2 0 R /Count ${n ~/ 2} '
+        '/Kids [${kids.join(' ')}] /MediaBox [0 0 300 400] '
+        '/Resources << /Font << /F1 9 0 R >> >> >>';
+  }
+
+  final dests = '<< ${all((i) => '/d$i [${ref(page(i))} /Fit]')} >>';
+  final nameTree =
+      '<< /Names [${all((i) => '(n$i) [${ref(page(i))} /Fit]')}] '
+      '/Limits [(n0) (n${n - 1})] >>';
+  final outlines =
+      '<< /Type /Outlines /First ${ref(page(0) + 4)} '
+      '/Last ${ref(page(n - 1) + 4)} /Count $n >>';
+  const font = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>';
+
+  String pageDict(int i) =>
+      '<< /Type /Page /Parent ${i < n ~/ 2 ? 3 : 4} 0 R '
+      '/Contents ${ref(page(i) + 1)} '
+      '/Annots [${ref(page(i) + 2)} ${ref(page(i) + 3)}] >>';
+  String link(int i) =>
+      '<< /Type /Annot /Subtype /Link /Rect [0 0 20 20] '
+      '/Dest [${ref(page((i + 1) % n))} /Fit] >>';
+  String widget(int i) =>
+      '<< /Type /Annot /Subtype /Widget /FT /Tx /T (field_$i) '
+      '/V (${pagePruneTruth.value(i)}) /Rect [20 20 200 40] '
+      '/P ${ref(page(i))} >>';
+  String item(int i) {
+    final prev = i > 0 ? ' /Prev ${ref(page(i - 1) + 4)}' : '';
+    final next = i < n - 1 ? ' /Next ${ref(page(i + 1) + 4)}' : '';
+    return '<< /Title (Page $i) /Parent 8 0 R '
+        '/Dest [${ref(page(i))} /Fit]$prev$next >>';
+  }
+
+  return _offsetPdf([
+    catalog,
+    root,
+    inner(0),
+    inner(1),
+    dests,
+    '<< /Dests 7 0 R >>',
+    nameTree,
+    outlines,
+    font,
+    for (var i = 0; i < n; i++) ...[
+      pageDict(i),
+      _streamBody('/Filter /ASCIIHexDecode', pagePruneTruth.contentHex(i)),
+      link(i),
+      widget(i),
+      item(i),
+    ],
+  ]);
+}();
+
+/// What [pagePrunePdf] holds, per page.
+const pagePruneTruth = PagePruneTruth._();
+
+class PagePruneTruth {
+  const PagePruneTruth._();
+
+  int get pageCount => 8;
+
+  /// The visible text of page [i].
+  String marker(int i) => 'PAGE-$i-SECRET';
+
+  /// The value of page [i]'s form field.
+  String value(int i) => 'VALUE-$i-SECRET';
+
+  /// Page [i]'s content stream as its hex bytes, `>` included.
+  String contentHex(int i) {
+    final ops = 'BT /F1 18 Tf 20 200 Td (${marker(i)}) Tj ET';
+    return '${ops.codeUnits.map((u) => u.toRadixString(16).padLeft(2, '0')).join()}>';
+  }
+
+  /// Every page's inherited media box, width and height.
+  (double, double) get mediaBox => (300, 400);
+}

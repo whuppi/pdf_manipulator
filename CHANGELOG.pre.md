@@ -101,6 +101,11 @@ CONTENT RULES (never change)
 
 <!-- Add new versions below, newest first. -->
 
+## 5.0.2-dev.0
+
+- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
+- Fixed `extractPages` and `deletePages` writing the pages they drop into the output, so the output kept its original size and the dropped pages' text, images and form values — a save now writes nothing only a dropped page reaches, and drops the links, bookmark targets and form fields that pointed at one ([#261](https://github.com/whuppi/pdf_manipulator/issues/261) reported by [@crurui](https://github.com/crurui))
+
 ## 5.0.1-dev.0
 
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
