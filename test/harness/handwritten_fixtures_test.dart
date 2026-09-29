@@ -71,6 +71,7 @@ void main() {
     'formUtf8NamePdf': formUtf8NamePdf,
     'pagePrunePdf': pagePrunePdf,
     'certifiedPdf(2)': certifiedPdf(2),
+    'structTreePdf': structTreePdf,
   };
   for (final MapEntry(key: name, value: pdf) in fixtures.entries) {
     test('$name: its xref points where it says', () {

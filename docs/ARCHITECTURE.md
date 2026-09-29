@@ -382,7 +382,7 @@ Future<...> execute(
 | mergeFrom | reader[0] secondary PDF | — |
 | addImageStamp / embedFile / builder.image | reader[0] secondary data | — |
 | convertTo (PDF → DOCX/PPTX/XLSX) | reader[0] on demand | streaming ZIP via office_oxide |
-| convertToPdf (DOCX/PPTX/XLSX → PDF) | reader[0] on demand | CountingWriter streams objects |
+| convertToPdf (DOCX/PPTX/XLSX → PDF) | whole input buffered (office_oxide reads the ZIP from an in-memory cursor) | CountingWriter streams objects |
 
 ### PositionedWrite — Write without Seek
 

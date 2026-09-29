@@ -169,6 +169,31 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       timeout: t(2),
     );
 
+    test('extractPages writes a reference to a dropped page as null', () async {
+      final pdf = createPdf();
+      final sink = TestSink();
+      await pdf.extractPages(src(structTreePdf), sink, pages: const [0]);
+      final out = sink.takeBytes();
+      // bytegrep-exempt: the claim is about references in the file.
+      final raw = String.fromCharCodes(out); // bytegrep-exempt
+      for (final id in const [4, 10]) {
+        expect(
+          RegExp('(?<![0-9])$id 0 R').hasMatch(raw),
+          isFalse,
+          reason: 'object $id is not written, so nothing may point at it',
+        );
+      }
+      expect(raw, contains('/Pg null'));
+      expect(raw, contains('/IRT null'));
+      final doc = await pdf.open(src(out));
+      expect(doc.pageCount, 1);
+      expect(
+        await doc.extract(pages: const PdfPages.all()),
+        contains('TAGGED-0'),
+      );
+      await doc.dispose();
+    }, timeout: t(1));
+
     test('extractPages refuses a page listed twice', () {
       expect(
         () => createPdf().extractPages(

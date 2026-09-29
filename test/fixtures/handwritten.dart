@@ -10294,3 +10294,42 @@ Uint8List certifiedPdf(int level) {
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
   ]);
 }
+
+/// Two tagged pages whose structure tree and annotations cross pages: each
+/// page has a `/StructElem` with `/Pg` naming it, `/ParentTree` maps both
+/// pages' content, and the note on page 0 replies (`/IRT`) to the note on
+/// page 1. Dropping page 1 leaves the structure element and the reply
+/// pointing at objects the save does not write (objects 4 and 10).
+final Uint8List structTreePdf = () {
+  const resources = '/Resources << /Font << /F1 5 0 R >> >>';
+  String page(int i) =>
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] $resources '
+      '/Contents ${7 + i} 0 R /StructParents $i /Annots [${9 + i} 0 R] >>';
+  String content(int i) => _streamBody(
+    '',
+    '/P << /MCID 0 >> BDC BT /F1 12 Tf 20 200 Td (TAGGED-$i) Tj ET EMC',
+  );
+  String element(int i) =>
+      '<< /Type /StructElem /S /P /P 6 0 R /Pg ${3 + i} 0 R /K 0 >>';
+  const catalog =
+      '<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R '
+      '/MarkInfo << /Marked true >> >>';
+  const reply =
+      '<< /Type /Annot /Subtype /Text /Rect [0 0 20 20] /Contents (reply) '
+      '/IRT 10 0 R >>';
+  return _offsetPdf([
+    catalog,
+    '<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>',
+    page(0),
+    page(1),
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    '<< /Type /StructTreeRoot /K [11 0 R 12 0 R] /ParentTree 13 0 R >>',
+    content(0),
+    content(1),
+    reply,
+    '<< /Type /Annot /Subtype /Text /Rect [0 0 20 20] /Contents (note) >>',
+    element(0),
+    element(1),
+    '<< /Nums [0 [11 0 R] 1 [12 0 R]] >>',
+  ]);
+}();
