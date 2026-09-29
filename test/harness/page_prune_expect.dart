@@ -44,6 +44,11 @@ Future<void> expectOnlyPrunedPages(
 
   final doc = await pdf.open(src(out));
   expect(doc.pageCount, kept.length);
+  expect(
+    [for (final page in doc.pages) page.label],
+    [for (final i in kept) truth.label(i)],
+    reason: 'each kept page keeps its label',
+  );
   for (var p = 0; p < kept.length; p++) {
     final text = await doc.extract(pages: PdfPages.single(p));
     expect(text, contains(truth.marker(kept[p])));

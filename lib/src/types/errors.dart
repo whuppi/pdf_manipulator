@@ -105,6 +105,17 @@ class PdfCryptoError extends PdfError {
   final Object? cause;
 }
 
+/// An incremental save cannot carry the staged edits: they remove
+/// content the original bytes would keep, change page content, or the
+/// source is encrypted, repaired or certified against the change. Nothing
+/// was written to the sink; save with `PdfSaveOptions.fullRewrite()`
+/// instead. Carried on the wire as response status 3, never matched by
+/// message text.
+class PdfIncrementalRefused extends PdfError {
+  /// Creates an incremental-refused error.
+  const PdfIncrementalRefused(super.message);
+}
+
 /// The operation was cancelled — its `Pdf` instance was disposed, or
 /// the task itself was cancelled. Carried on the wire as response
 /// status 2, never matched by message text.

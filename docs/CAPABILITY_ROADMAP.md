@@ -33,7 +33,7 @@ same names, when both exist. Exports (source in, sink out) live on
 |---|---|---|---|
 | Page count | `current_page_count` | `pageCount` | DONE |
 | Version | `version` | `version` | DONE |
-| Page list (dimensions, rotation) | `get_page_media_box`, `get_page_rotation` | `pages` (decoded on open) | DONE |
+| Page list (dimensions, rotation, label) | `get_page_media_box`, `get_page_rotation`, `PageLabelExtractor` | `pages` (decoded on open) | DONE — `label` is `null` when the document has no `/PageLabels` |
 | Title / Author / Subject / Keywords | `title`, `author`, `subject`, `keywords` | decoded on open | DONE |
 | Encryption info | via open result | `isEncrypted`, `encryptionAlgorithm`, `permissions` | DONE |
 | Is tagged | via open result | `isTagged` | DONE |
@@ -42,7 +42,7 @@ same names, when both exist. Exports (source in, sink out) live on
 | Render pages | `render_pages_streamed` | `render()` | DONE |
 | Extract images | `extract_images_streamed` | `extractImages()` | DONE |
 | Get signatures | `get_signatures` | `signatures` | DONE |
-| Verify signatures | `verify_signatures` | `verifySignatures()` | DONE |
+| Verify signatures | `verify_signatures` | `verifySignatures()` | PLANNED — the engine op is a stub that returns `false` for every document, signed or not; the Dart call exists, the check does not |
 | Validate PDF/A | `validate_pdfa` | `validatePdfA()` | DONE |
 | Validate PDF/UA | `validate_pdfua` | `validatePdfUa()` | DONE |
 | Classify page | `classify_page` | `classifyPage()` | DONE |
@@ -106,7 +106,7 @@ same names, when both exist. Exports (source in, sink out) live on
 | Page count | `current_page_count` | `pageCount` | DONE |
 | Version | `version` | `version` | DONE |
 | Save | `write_full_to_writer` | `save()` | DONE |
-| Incremental save (append to the original bytes) | `save_with_options` (file path only, not on the bridge) | `save(options: PdfSaveOptions.incremental())` | PLANNED — the mode is a full rewrite without compression or garbage collection today: nothing is appended, so a signature does not survive it, and pages removed in the session are not written (the page-prune battery proves it). A real append keeps the original bytes, so it must refuse after a page removal or a destructive redaction, since those bytes still hold what was removed |
+| Incremental save (append to the original bytes) | `host/incremental.rs` | `save(options: PdfSaveOptions.incremental())` | DONE — the output starts with the source bytes, byte for byte, then one update section in the source's xref style (table or stream); a signed source keeps every byte its signature covers. Throws `PdfIncrementalRefused`, writing nothing, after a page removal, reorder or merge, redaction or scrub, a content, annotation or flatten edit, an added or removed form field, an embedded file, and on an encrypted, repaired or DocMDP-certified source the change is not allowed on |
 | Set producer | `set_producer` | `setProducer()` | DONE |
 | Set creation date | `set_creation_date` | `setCreationDate()` | DONE |
 | Set page media box | `set_page_media_box` | `setPageMediaBox()` | DONE — round-tripped through save and `pageMediaBox()` |

@@ -96,6 +96,7 @@ void main() {
         PdfCryptoError() => 'crypto',
         PdfEngineError() => 'engine',
         PdfCancelled() => 'cancelled',
+        PdfIncrementalRefused() => 'incremental refused',
       };
       expect(desc, equals('corrupted'));
     });

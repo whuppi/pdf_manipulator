@@ -71,7 +71,7 @@ final Uint8List minimalPdf = _build(
   '0000000058 00000 n \n'
   '0000000115 00000 n \n'
   'trailer\n<< /Size 4 /Root 1 0 R >>\n'
-  'startxref\n190\n%%EOF\n',
+  'startxref\n186\n%%EOF\n',
 );
 
 /// Hand-written single-page PDF whose content stream is UNCOMPRESSED
@@ -124,6 +124,24 @@ final Uint8List letterPdf = _build(
   '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n'
   '3 0 obj\n<< /Type /Page /Parent 2 0 R '
   '/MediaBox [0 0 612 792] >>\nendobj\n'
+  'xref\n0 4\n'
+  '0000000000 65535 f \n'
+  '0000000009 00000 n \n'
+  '0000000058 00000 n \n'
+  '0000000115 00000 n \n'
+  'trailer\n<< /Size 4 /Root 1 0 R >>\n'
+  'startxref\n186\n%%EOF\n',
+);
+
+/// [minimalPdf] with its `startxref` pointing 4 bytes past the `xref`
+/// keyword, so a reader must rebuild the cross-reference table to open it.
+/// qpdf reports it damaged ("xref not found") and reconstructs it.
+final Uint8List staleStartxrefPdf = _build(
+  '%PDF-1.4\n'
+  '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n'
+  '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n'
+  '3 0 obj\n<< /Type /Page /Parent 2 0 R '
+  '/MediaBox [0 0 595 842] >>\nendobj\n'
   'xref\n0 4\n'
   '0000000000 65535 f \n'
   '0000000009 00000 n \n'
@@ -10131,7 +10149,7 @@ final Uint8List formUtf8NamePdf = _build(
 /// Eight pages in a two-level page tree, where every structure that can
 /// point at a page does: the catalog `/Dests` dictionary, a `/Names /Dests`
 /// name tree (with an alias per page that names the page's destination by
-/// name), an outline item per page, a link annotation from each page to
+/// name), `/PageLabels` (i, ii, then P-1 …), an outline item per page, a link annotation from each page to
 /// the next, an `/OpenAction` to the last page, and one AcroForm text field
 /// per page. The pages carry no `/MediaBox` and no `/Resources` of their
 /// own: both are inherited from the two inner `/Pages` nodes (300×400, font
@@ -10155,6 +10173,7 @@ final Uint8List pagePrunePdf = () {
   final catalog =
       '<< /Type /Catalog /Pages 2 0 R /Dests 5 0 R /Names 6 0 R '
       '/Outlines 8 0 R /OpenAction [${ref(page(n - 1))} /Fit] '
+      '/PageLabels << /Nums [0 << /S /r >> 2 << /S /D /P (P-) >>] >> '
       '/AcroForm << /Fields [${all((i) => ref(page(i) + 3))}] '
       '/DR << /Font << /Helv 9 0 R >> >> /DA (/Helv 12 Tf 0 g) >> >>';
   final root =
@@ -10235,6 +10254,9 @@ class PagePruneTruth {
   /// The name-tree key of the named destination that names page [i]'s.
   String alias(int i) => 'alias$i';
 
+  /// Page [i]'s label: lower-case roman for the first two, then `P-1` on.
+  String label(int i) => i < 2 ? const ['i', 'ii'][i] : 'P-${i - 1}';
+
   /// Page [i]'s content stream as its hex bytes, `>` included.
   String contentHex(int i) {
     final ops = 'BT /F1 18 Tf 20 200 Td (${marker(i)}) Tj ET';
@@ -10243,4 +10265,32 @@ class PagePruneTruth {
 
   /// Every page's inherited media box, width and height.
   (double, double) get mediaBox => (300, 400);
+}
+
+/// A one-page form certified at DocMDP [level] (ISO 32000-1 §12.8.2.2):
+/// the catalog's `/Perms /DocMDP` names a signature dictionary whose
+/// `/Reference` carries the level. The signature itself is a placeholder:
+/// the incremental save reads only the level, and no reader in the
+/// battery verifies the bytes. It has one text field, `name`.
+Uint8List certifiedPdf(int level) {
+  const catalog =
+      '<< /Type /Catalog /Pages 2 0 R /Perms << /DocMDP 5 0 R >> '
+      '/AcroForm << /Fields [4 0 R] /DR << /Font << /Helv 6 0 R >> >> '
+      '/DA (/Helv 12 Tf 0 g) >> >>';
+  const widget =
+      '<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [20 20 200 40] '
+      '/P 3 0 R /DA (/Helv 12 Tf 0 g) >>';
+  final signature =
+      '<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached '
+      '/Contents <00> /ByteRange [0 0 0 0] /Reference [<< /Type /SigRef '
+      '/TransformMethod /DocMDP /TransformParams << /Type /TransformParams '
+      '/P $level /V /1.2 >> >>] >>';
+  return _offsetPdf([
+    catalog,
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [4 0 R] >>',
+    widget,
+    signature,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ]);
 }

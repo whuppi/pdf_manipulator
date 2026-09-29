@@ -169,6 +169,17 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       timeout: t(2),
     );
 
+    test('extractPages refuses a page listed twice', () {
+      expect(
+        () => createPdf().extractPages(
+          src(pagePrunePdf),
+          TestSink(),
+          pages: const [0, 0],
+        ),
+        throwsA(isA<PdfInvalidArgument>()),
+      );
+    }, timeout: t(1));
+
     // ── Convert ──
 
     test('convertTo DOCX produces valid ZIP', () async {

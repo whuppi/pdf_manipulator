@@ -349,7 +349,7 @@ await for (final page in doc.render(
 await doc.dispose();
 ```
 
-Also on the document: `extract` (plain / markdown / html), `extractImages`, `signatures` / `verifySignatures`, `validatePdfA` / `validatePdfUa`, `classifyPage` / `classifyDocument`, `planSplitByBookmarks`, `formFields` / `formField(name)`, `exportFormData` (FDF / XFDF), `xfa`, `attachments` / `extractAttachment`, plus metadata getters (`title`, `author`, `version`, `isTagged`).
+Also on the document: `extract` (plain / markdown / html), `extractImages`, `signatures` / `verifySignatures` (not implemented yet: it returns `false` for every document), `validatePdfA` / `validatePdfUa`, `classifyPage` / `classifyDocument`, `planSplitByBookmarks`, `formFields` / `formField(name)`, `exportFormData` (FDF / XFDF), `xfa`, `attachments` / `extractAttachment`, plus metadata getters (`title`, `author`, `version`, `isTagged`).
 
 ### Edit a document
 
@@ -375,7 +375,7 @@ Save options:
 
 - `PdfSaveOptions.fullRewrite()` — default; recompresses and drops unused objects.
 - `PdfSaveOptions.fullRewrite(encryption: ...)` — encrypt on save (or `PdfEncryption.remove()` to strip it).
-- `PdfSaveOptions.incremental()` — appends changes; faster, larger file.
+- `PdfSaveOptions.incremental()` — keeps the original bytes and appends the changes, so an existing signature stays valid. An edit an append cannot carry (a removed page, a redaction, a content edit) throws `PdfIncrementalRefused` and writes nothing; save it with `fullRewrite()`.
 
 Redaction is a mark-then-apply lifecycle (the content is removed, not just hidden):
 

@@ -101,11 +101,16 @@ CONTENT RULES (never change)
 
 <!-- Add new versions below, newest first. -->
 
-## 5.0.2-dev.0
+## 6.0.0-dev.0
 
+- **Breaking:** `PdfSaveOptions.incremental()` now appends the edits to the original bytes, so a signature over them stays valid, and throws `PdfIncrementalRefused` when an append cannot carry them (pages removed or reordered, redaction, content edits, an encrypted or repaired source) → catch it and save with `PdfSaveOptions.fullRewrite()`
+- **Breaking:** `PdfError` has a new subtype, `PdfIncrementalRefused` → add a case to every exhaustive `switch` over `PdfError`
+- **Breaking:** `extractPages` and `selectPages` throw `PdfInvalidArgument` for a page listed twice, which used to write a damaged file → list each page once
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Fixed `extractPages` and `deletePages` writing the pages they drop into the output, so the output kept its original size and the dropped pages' text, images and form values — a save now writes nothing only a dropped page reaches, and drops the links, bookmark targets and form fields that pointed at one ([#261](https://github.com/whuppi/pdf_manipulator/issues/261) reported by [@crurui](https://github.com/crurui))
-- Fixed the documentation of `PdfSaveOptions.incremental()`, which promised an append that keeps digital signatures — the mode writes a full rewrite without compression or garbage collection, so a signature does not survive it; use `sign` last when a document must stay signed
+- Fixed page labels shifting onto the wrong pages after `extractPages`, `deletePages` or a reorder — each kept page keeps its label
+- Fixed `PdfPageInfo.label` always being `null` — it now holds the page's label when the document has page labels
+- Fixed `sign` writing a cross-reference table that other readers had to repair — each entry is now 20 bytes
 
 ## 5.0.1-dev.0
 

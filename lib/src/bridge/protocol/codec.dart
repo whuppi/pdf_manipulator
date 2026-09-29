@@ -298,6 +298,7 @@ List<PdfPageInfo> decodePageList(Map<String, Object?> r) {
       width: (m['width'] as num).toDouble(),
       height: (m['height'] as num).toDouble(),
       rotation: (m['rotation'] as num?)?.toInt() ?? 0,
+      label: m['label'] as String?,
     );
   }).toList();
 }
@@ -738,8 +739,6 @@ Map<String, Object?> encodeSaveArgs(PdfSaveOptions options) {
       },
     PdfSaveIncremental() => {
       'saveMode': 1,
-      'compress': false,
-      'garbageCollect': false,
       ..._encodeEncryption(const PdfEncryption.keep()),
     },
   };

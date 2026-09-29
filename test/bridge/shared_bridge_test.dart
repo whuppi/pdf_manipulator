@@ -42,8 +42,9 @@ void main() {
         options: const PdfSaveOptions.incremental(),
       );
       expect(req.args['saveMode'], 1);
-      expect(req.args['compress'], false);
-      expect(req.args['garbageCollect'], false);
+      // An append neither compresses nor collects; the keys would lie.
+      expect(req.args.containsKey('compress'), isFalse);
+      expect(req.args.containsKey('garbageCollect'), isFalse);
     });
 
     test('editorSaveOp encodes encryption', () {

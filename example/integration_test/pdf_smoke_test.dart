@@ -623,8 +623,8 @@ void main() {
     final s2 = MemorySink();
     await e.save(s2, options: const PdfSaveOptions.incremental());
     expect(s2.takeBytes().length, greaterThan(minimalPdf.length),
-        reason: 'the incremental mode writes an uncompressed rewrite that '
-            'carries the new title — output must be strictly larger');
+        reason: 'incremental save appends the modification after the '
+            'original bytes — output must be strictly larger');
 
     final s3 = MemorySink();
     await e.save(s3,
