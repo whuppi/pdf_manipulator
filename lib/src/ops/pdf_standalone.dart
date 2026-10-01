@@ -62,20 +62,26 @@ extension PdfStandalone on Pdf {
     String? password,
   }) => bridge.convertXfaToAcroForm(source, output, password: password);
 
-  /// Extracts specific [pages] from [source] into [output].
+  /// Extracts specific [pages] from [source] into [output], in the order
+  /// given. A page listed twice throws [PdfInvalidArgument].
   PdfTask<void> extractPages(
     DataSource source,
     DataSink output, {
     required List<int> pages,
     String? password,
-  }) => PdfTask.group((hook) async {
-    final handle = await hook.guard(
-      bridge.openEditor(source, password: password),
-    );
-    try {
-      await hook.guard(handle.extractPages(pages, output));
-    } finally {
-      await handle.dispose();
+  }) {
+    if (pages.toSet().length != pages.length) {
+      throw PdfInvalidArgument('a page is listed twice: $pages');
     }
-  });
+    return PdfTask.group((hook) async {
+      final handle = await hook.guard(
+        bridge.openEditor(source, password: password),
+      );
+      try {
+        await hook.guard(handle.extractPages(pages, output));
+      } finally {
+        await handle.dispose();
+      }
+    });
+  }
 }

@@ -45,6 +45,12 @@ Map<String, Object?> decodeResponse(Uint8List bytes) {
   if (status == 2) {
     throw const PdfCancelled();
   }
+  // Status 3 = an incremental save refused the staged edits; the caller
+  // falls back to a full rewrite, so it gets its own type.
+  if (status == 3) {
+    final msgLen = r.u32();
+    throw PdfIncrementalRefused(utf8.decode(r.bytes(msgLen)));
+  }
   final fieldCount = r.u16();
   final map = <String, Object?>{};
   for (var i = 0; i < fieldCount; i++) {

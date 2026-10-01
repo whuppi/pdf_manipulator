@@ -15,6 +15,7 @@ import 'package:test/test.dart';
 
 import '../../fixtures/generated/fixtures.dart';
 import '../../fixtures/handwritten.dart';
+import '../../harness/page_prune_expect.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
 
@@ -568,6 +569,21 @@ void registerSugarTests(Pdf Function() createPdf) {
       );
       await doc.dispose();
     }, timeout: t(1));
+
+    test(
+      'deletePages writes nothing only a deleted page reaches (#261)',
+      () async {
+        final pdf = createPdf();
+        final sink = TestSink();
+        await pdf.deletePages(
+          src(pagePrunePdf),
+          sink,
+          pages: const [0, 1, 2, 4, 5, 7],
+        );
+        await expectOnlyPrunedPages(pdf, sink.takeBytes(), const [3, 6]);
+      },
+      timeout: t(2),
+    );
 
     test('watermark preserves the existing page text', () async {
       final pdf = createPdf();

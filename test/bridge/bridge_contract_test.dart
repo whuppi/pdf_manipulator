@@ -13,6 +13,7 @@
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart';
+import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/bridge/protocol/op.dart';
 import 'package:test/test.dart';
 
@@ -66,6 +67,20 @@ void main() {
       expect(response[0], 0);
       final map = decodeResponse(response);
       expect(map['error'], 'test error');
+    });
+
+    test('incremental-refused response has status 3 and throws its type', () {
+      final response = _buildErrorResponse('refused')..[0] = 3;
+      expect(
+        () => decodeResponse(response),
+        throwsA(
+          isA<PdfIncrementalRefused>().having(
+            (e) => e.message,
+            'message',
+            'refused',
+          ),
+        ),
+      );
     });
 
     test('ok response has status 1', () {

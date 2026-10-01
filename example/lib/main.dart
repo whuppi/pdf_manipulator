@@ -81,7 +81,7 @@ final minimalPdf = Uint8List.fromList(
           '0000000058 00000 n \n'
           '0000000115 00000 n \n'
           'trailer\n<< /Size 4 /Root 1 0 R >>\n'
-          'startxref\n190\n%%EOF\n'
+          'startxref\n186\n%%EOF\n'
       .codeUnits,
 );
 

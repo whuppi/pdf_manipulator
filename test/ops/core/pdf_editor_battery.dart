@@ -17,7 +17,10 @@ import 'package:test/test.dart';
 
 import '../../fixtures/generated/fixtures.dart';
 import '../../fixtures/handwritten.dart';
+import '../../fixtures/third_party/tp_encrypted.dart';
 import '../../fixtures/third_party/tp_image_kinds.dart';
+import '../../fixtures/third_party/tp_page_prune_objstm.dart';
+import '../../harness/page_prune_expect.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
 
@@ -422,6 +425,214 @@ void registerEditorTests(Pdf Function() createPdf) {
       },
       timeout: t(1),
     );
+
+    for (final (name, source) in [
+      ('', pagePrunePdf),
+      (' (object streams)', tpPagePruneObjStm),
+    ]) {
+      test('deletePage then a save without GC writes nothing of the deleted '
+          'pages$name', () async {
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(source));
+        for (var i = pagePruneTruth.pageCount - 1; i >= 1; i--) {
+          await editor.deletePage(i);
+        }
+        final sink = TestSink();
+        await editor.save(
+          sink,
+          // Uncompressed, so a copied object stream shows its contents.
+          options: const PdfSaveOptions.fullRewrite(
+            garbageCollect: false,
+            compress: false,
+          ),
+        );
+        await editor.dispose();
+        await expectOnlyPrunedPages(pdf, sink.takeBytes(), const [0]);
+      }, timeout: t(2));
+    }
+
+    test('selectPages refuses a page listed twice', () async {
+      final editor = await createPdf().edit(src(pagePrunePdf));
+      expect(
+        () => editor.selectPages(const [1, 0, 1]),
+        throwsA(isA<PdfInvalidArgument>()),
+      );
+      await editor.dispose();
+    }, timeout: t(1));
+
+    // ── Incremental save ──
+
+    /// Saves [editor] incrementally and checks the output begins with
+    /// [source], byte for byte.
+    Future<Uint8List> saveIncremental(
+      PdfEditor editor,
+      Uint8List source,
+    ) async {
+      final sink = TestSink();
+      await editor.save(sink, options: const PdfSaveOptions.incremental());
+      await editor.dispose();
+      final out = sink.takeBytes();
+      expect(out.length, greaterThan(source.length));
+      expect(
+        out.sublist(0, source.length),
+        source,
+        reason: 'an incremental save keeps every original byte',
+      );
+      return out;
+    }
+
+    for (final (name, source) in [
+      ('a classic xref table', minimalPdf),
+      ('a cross-reference stream', tpPagePruneObjStm),
+    ]) {
+      test('incremental setTitle appends to $name', () async {
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(source));
+        await editor.setTitle('Appended');
+        final out = await saveIncremental(editor, source);
+        final doc = await pdf.open(src(out));
+        expect(doc.title, 'Appended');
+        await doc.dispose();
+      }, timeout: t(1));
+    }
+
+    test('incremental form fill and page rotation read back', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(fFormFields));
+      await editor.setFormFieldValue('fullname', 'Ada');
+      await editor.setPageRotation(0, degrees: 90);
+      final out = await saveIncremental(editor, fFormFields);
+      final doc = await pdf.open(src(out));
+      expect(doc.pages.first.rotation, 90);
+      final field = await doc.formField('fullname');
+      expect((field?.value as PdfTextValue?)?.text, 'Ada');
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('incremental save keeps every byte a signature covers', () async {
+      final pdf = createPdf();
+      final signSink = TestSink();
+      await pdf.sign(
+        src(minimalPdf),
+        signSink,
+        credentials: PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
+      );
+      final signed = signSink.takeBytes();
+      // bytegrep-exempt: the claim is about which bytes the signature covers.
+      final range = RegExp(
+        r'/ByteRange\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*\]',
+      ).firstMatch(String.fromCharCodes(signed)); // bytegrep-exempt
+      expect(range, isNotNull);
+      final covered = int.parse(range!.group(3)!) + int.parse(range.group(4)!);
+      expect(covered, signed.length, reason: 'the signature covers the file');
+
+      final editor = await pdf.edit(src(signed));
+      await editor.setTitle('After signing');
+      // saveIncremental proves the first signed.length bytes are unchanged,
+      // so the digest over the signed ranges is unchanged too.
+      final out = await saveIncremental(editor, signed);
+      final doc = await pdf.open(src(out));
+      expect(doc.title, 'After signing');
+      expect(await doc.signatures, isNotEmpty);
+      await doc.dispose();
+    }, timeout: t(2));
+
+    for (final (name, edit) in <(String, Future<void> Function(PdfEditor))>[
+      ('deletePage', (e) => e.deletePage(1)),
+      ('movePage', (e) => e.movePage(from: 0, to: 1)),
+      (
+        'applyRedactions',
+        (e) async {
+          await e.addRedaction(
+            0,
+            const PdfRect(x: 0, y: 0, width: 100, height: 100),
+          );
+          await e.applyRedactions();
+        },
+      ),
+    ]) {
+      test('incremental save refuses after $name', () async {
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(pagePrunePdf));
+        await edit(editor);
+        final sink = TestSink();
+        await expectLater(
+          editor.save(sink, options: const PdfSaveOptions.incremental()),
+          throwsA(isA<PdfIncrementalRefused>()),
+        );
+        expect(sink.takeBytes(), isEmpty, reason: 'a refusal writes nothing');
+        // The editor is unchanged, so a full rewrite still saves the edit.
+        final full = TestSink();
+        await editor.save(full);
+        expect(full.takeBytes(), isNotEmpty);
+        await editor.dispose();
+      }, timeout: t(1));
+    }
+
+    test('a DocMDP level 1 certification refuses even a field value', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(certifiedPdf(1)));
+      await editor.setFormFieldValue('name', 'Ada');
+      await expectLater(
+        editor.save(TestSink(), options: const PdfSaveOptions.incremental()),
+        throwsA(isA<PdfIncrementalRefused>()),
+      );
+      await editor.dispose();
+    }, timeout: t(1));
+
+    test('a DocMDP level 2 certification allows a field value', () async {
+      final pdf = createPdf();
+      final source = certifiedPdf(2);
+      final editor = await pdf.edit(src(source));
+      await editor.setFormFieldValue('name', 'Ada');
+      final out = await saveIncremental(editor, source);
+      final doc = await pdf.open(src(out));
+      final field = await doc.formField('name');
+      expect((field?.value as PdfTextValue?)?.text, 'Ada');
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('a DocMDP level 2 certification refuses a metadata change', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(certifiedPdf(2)));
+      await editor.setTitle('Nope');
+      await expectLater(
+        editor.save(TestSink(), options: const PdfSaveOptions.incremental()),
+        throwsA(isA<PdfIncrementalRefused>()),
+      );
+      await editor.dispose();
+    }, timeout: t(1));
+
+    test('incremental save refuses a source it had to repair', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(staleStartxrefPdf));
+      await editor.setTitle('Nope');
+      await expectLater(
+        editor.save(TestSink(), options: const PdfSaveOptions.incremental()),
+        throwsA(
+          isA<PdfIncrementalRefused>().having(
+            (e) => e.message,
+            'message',
+            contains('rebuilt on open'),
+          ),
+        ),
+      );
+      await editor.dispose();
+    }, timeout: t(1));
+
+    test('incremental save refuses an encrypted source', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(
+        src(tpEncrypted),
+        password: tpEncryptedTruth.userPassword,
+      );
+      await editor.setTitle('Nope');
+      await expectLater(
+        editor.save(TestSink(), options: const PdfSaveOptions.incremental()),
+        throwsA(isA<PdfIncrementalRefused>()),
+      );
+      await editor.dispose();
+    }, timeout: t(1));
 
     // ── Encryption ──
 

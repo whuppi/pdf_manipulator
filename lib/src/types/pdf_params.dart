@@ -2,6 +2,7 @@
 
 import 'dart:typed_data';
 
+import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 
 /// RGB color for watermarks and annotations.
@@ -168,9 +169,18 @@ sealed class PdfSaveOptions {
     PdfEncryption encryption,
   }) = PdfSaveFullRewrite;
 
-  /// Incremental — append only changed objects. Fastest for small
-  /// edits on large files. Preserves digital signatures. No GC,
-  /// no compression, no encryption changes possible.
+  /// Incremental — the original bytes, unchanged, then the changed
+  /// objects appended (ISO 32000-1 §7.5.6). A digital signature over the
+  /// original bytes stays valid.
+  ///
+  /// It throws [PdfIncrementalRefused], writing nothing, when an append
+  /// cannot carry the edits: pages were removed, reordered or merged in;
+  /// content was redacted, scrubbed, drawn, erased or flattened; form
+  /// fields or annotations were added, removed or changed beyond a value;
+  /// files were embedded; the source is encrypted, was repaired on open,
+  /// or carries a certifying signature that forbids the change. Removed
+  /// content would survive in the original bytes, so save those with
+  /// [PdfSaveOptions.fullRewrite].
   const factory PdfSaveOptions.incremental() = PdfSaveIncremental;
 }
 
@@ -193,7 +203,7 @@ class PdfSaveFullRewrite extends PdfSaveOptions {
   final PdfEncryption encryption;
 }
 
-/// Incremental save — append-only, preserves signatures.
+/// Incremental save — see [PdfSaveOptions.incremental] for what it writes.
 class PdfSaveIncremental extends PdfSaveOptions {
   /// Creates incremental save options.
   const PdfSaveIncremental();

@@ -269,7 +269,9 @@ runs:
     # measured, not assumed: with the pin in place cargo does NOT notice an
     # edited source file (its mtime is older than the cached dep-info), so
     # the revs in the key are the ONLY thing standing between this step and
-    # a stale binary. Remove them and it serves one. Never widen the touch
+    # a stale binary. Remove them and it serves one. The ghcr mode's
+    # fallback key is the one restore that brings another rev's target;
+    # the step that drops its engine units runs before this pin. Never widen the touch
     # to anything outside vendor/, and never run it on a developer machine —
     # local builds rely on real mtimes.
     # ghcr-target mode: the whole tree, restored before the mtime pin below
@@ -298,6 +300,7 @@ runs:
           echo "fallback=$FAMILY-$RUNNER_OS-$RUNNER_ARCH-latest"
         } >> "$GITHUB_OUTPUT"
     - name: Restore Rust target (ghcr)
+      id: ghcr
       if: inputs.cache == 'true' && inputs.ghcr-target == 'true'
       uses: whuppi/ci/actions/capabilities/oci-cache@v2.7.8
       with:
@@ -311,6 +314,20 @@ runs:
           ~/.cargo/registry/index
           ~/.cargo/registry/cache
           ~/.cargo/git/db
+
+    # The fallback key restores the target of ANOTHER vendor rev (the
+    # family's latest). Its dependency crates are still right (registry
+    # crates are fingerprinted by content), but its engine units are not,
+    # and the mtime pin below would make cargo accept them: the row would
+    # link the old engine and test it as the new one. So on anything but
+    # an exact hit, drop the engine units' fingerprints; cargo rebuilds
+    # the two engine crates under the pin and reuses every dependency.
+    - name: Drop engine units a fallback restore brought
+      if: inputs.cache == 'true' && inputs.ghcr-target == 'true' && steps.ghcr.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        find vendor -path '*/target/*' -path '*/.fingerprint/*' -type d -name '*_oxide-*' -prune -exec rm -rf {} +
+        echo "fallback restore: engine fingerprints dropped, the engine rebuilds"
 
     # What the restores actually brought back, per target triple: the
     # engine outputs and their fingerprints. When a warm row still

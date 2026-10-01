@@ -210,9 +210,13 @@ class PdfEditor {
     return _handle.movePage(from: from, to: to);
   }
 
-  /// Keeps only the specified [pages] (by index), removing all others.
+  /// Keeps only the specified [pages] (by index), in the order given,
+  /// removing all others. A page listed twice throws [PdfInvalidArgument].
   PdfTask<void> selectPages(List<int> pages) {
     _check();
+    if (pages.toSet().length != pages.length) {
+      throw PdfInvalidArgument('a page is listed twice: $pages');
+    }
     return _handle.selectPages(pages);
   }
 

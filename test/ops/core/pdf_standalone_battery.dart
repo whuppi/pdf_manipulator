@@ -11,6 +11,7 @@ import 'package:test/test.dart';
 import '../../fixtures/generated/fixtures.dart';
 import '../../fixtures/handwritten.dart';
 import '../../fixtures/handwritten_docx.dart';
+import '../../harness/page_prune_expect.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
 
@@ -132,6 +133,76 @@ void registerStandaloneTests(Pdf Function() createPdf) {
             'into the output',
       );
       await doc.dispose();
+    }, timeout: t(1));
+
+    test(
+      'extractPages writes nothing only a dropped page reaches (#261)',
+      () async {
+        final pdf = createPdf();
+        final sink = TestSink();
+        await pdf.extractPages(src(pagePrunePdf), sink, pages: const [0]);
+        await expectOnlyPrunedPages(pdf, sink.takeBytes(), const [0]);
+      },
+      timeout: t(2),
+    );
+
+    test(
+      'extractPages across both inner page nodes keeps the given order',
+      () async {
+        final pdf = createPdf();
+        final sink = TestSink();
+        await pdf.extractPages(src(pagePrunePdf), sink, pages: const [5, 2]);
+        await expectOnlyPrunedPages(pdf, sink.takeBytes(), const [5, 2]);
+      },
+      timeout: t(2),
+    );
+
+    test(
+      'extractPages of every page flattens the tree and keeps inheritance',
+      () async {
+        final pdf = createPdf();
+        final sink = TestSink();
+        final all = [for (var i = 0; i < pagePruneTruth.pageCount; i++) i];
+        await pdf.extractPages(src(pagePrunePdf), sink, pages: all);
+        await expectOnlyPrunedPages(pdf, sink.takeBytes(), all);
+      },
+      timeout: t(2),
+    );
+
+    test('extractPages writes a reference to a dropped page as null', () async {
+      final pdf = createPdf();
+      final sink = TestSink();
+      await pdf.extractPages(src(structTreePdf), sink, pages: const [0]);
+      final out = sink.takeBytes();
+      // bytegrep-exempt: the claim is about references in the file.
+      final raw = String.fromCharCodes(out); // bytegrep-exempt
+      for (final id in const [4, 10]) {
+        expect(
+          RegExp('(?<![0-9])$id 0 R').hasMatch(raw),
+          isFalse,
+          reason: 'object $id is not written, so nothing may point at it',
+        );
+      }
+      expect(raw, contains('/Pg null'));
+      expect(raw, contains('/IRT null'));
+      final doc = await pdf.open(src(out));
+      expect(doc.pageCount, 1);
+      expect(
+        await doc.extract(pages: const PdfPages.all()),
+        contains('TAGGED-0'),
+      );
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('extractPages refuses a page listed twice', () {
+      expect(
+        () => createPdf().extractPages(
+          src(pagePrunePdf),
+          TestSink(),
+          pages: const [0, 0],
+        ),
+        throwsA(isA<PdfInvalidArgument>()),
+      );
     }, timeout: t(1));
 
     // ── Convert ──
