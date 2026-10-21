@@ -161,7 +161,7 @@ runs:
     #                          cleanup settings) MUST bump this prefix, or
     #                          every existing key keeps serving an archive
     #                          the new rule can't hit. Bump = one integer.
-    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+    - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       if: inputs.cache == 'true' && inputs.ghcr-target != 'true'
       with:
         prefix-key: v1-rust
@@ -299,7 +299,7 @@ runs:
         } >> "$GITHUB_OUTPUT"
     - name: Restore Rust target (ghcr)
       if: inputs.cache == 'true' && inputs.ghcr-target == 'true'
-      uses: whuppi/ci/actions/capabilities/oci-cache@v2.7.8
+      uses: whuppi/ci/actions/capabilities/oci-cache@v2.7.9
       with:
         phase: restore
         name: rust-target
