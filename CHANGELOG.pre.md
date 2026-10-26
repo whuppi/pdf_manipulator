@@ -108,6 +108,7 @@ CONTENT RULES (never change)
 - **Breaking:** `extractPages` and `selectPages` throw `PdfInvalidArgument` for a page listed twice, which used to write a damaged file → list each page once
 - **Breaking:** engine failures throw their own `PdfError` subtype (`PdfCorrupted`, `PdfPasswordRequired`, `PdfWrongPassword`, `PdfPageRangeError`, `PdfUnsupported`, `PdfInvalidArgument`, `PdfIoError`, `PdfCryptoError`) where they threw `PdfEngineError` → catch the subtype, or `PdfError` for all of them
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
+- Added `PdfDoc.annotations(page)`, which lists a page's annotations (subtype, rectangle, contents, author, form field name) as `PdfAnnotationInfo`
 - Fixed an empty input to `merge` or any other multi-source op shifting every source after it, so the op read the wrong documents — an empty input now throws `PdfCorrupted`
 - Fixed `extractPages` and `deletePages` writing the pages they drop into the output, so the output kept its original size and the dropped pages' text, images and form values — a save now writes nothing only a dropped page reaches, and drops the links, bookmark targets and form fields that pointed at one ([#261](https://github.com/whuppi/pdf_manipulator/issues/261) reported by [@crurui](https://github.com/crurui))
 - Fixed page labels shifting onto the wrong pages after `extractPages`, `deletePages` or a reorder — each kept page keeps its label

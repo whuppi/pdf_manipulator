@@ -58,6 +58,9 @@ enum EngineOp {
   /// List the files embedded in the document.
   attachments('attachments'),
 
+  /// List one page's annotations.
+  annotations('annotations'),
+
   /// Stream one embedded file's bytes to a sink.
   extractAttachment('extractAttachment'),
 

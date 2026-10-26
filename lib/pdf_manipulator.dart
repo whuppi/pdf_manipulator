@@ -33,6 +33,7 @@ export 'src/ops/pdf_sugar.dart';
 
 // Types
 export 'src/types/errors.dart';
+export 'src/types/pdf_annotation.dart';
 export 'src/types/pdf_attachment.dart';
 export 'src/types/pdf_config.dart';
 export 'src/types/pdf_enums.dart';

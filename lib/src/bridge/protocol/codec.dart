@@ -10,6 +10,7 @@
 
 import 'dart:typed_data';
 
+import 'package:pdf_manipulator/src/types/pdf_annotation.dart';
 import 'package:pdf_manipulator/src/types/pdf_attachment.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/errors.dart';
@@ -427,6 +428,33 @@ List<PdfAttachment> decodeAttachments(Map<String, Object?> r) {
       size: size < 0 ? null : size,
       description: description.isEmpty ? null : description,
       mimeType: mimeType.isEmpty ? null : mimeType,
+    );
+  }).toList();
+}
+
+/// Decodes a page's annotation listing from an `annotations` response.
+List<PdfAnnotationInfo> decodeAnnotations(Map<String, Object?> r) {
+  final items = r['annotations'] as List? ?? [];
+  return items.map((a) {
+    final m = _asMap(a);
+    final subtypeName = m['subtype'] as String? ?? '';
+    final contents = m['contents'] as String? ?? '';
+    final author = m['author'] as String? ?? '';
+    final fieldName = m['fieldName'] as String? ?? '';
+    return PdfAnnotationInfo(
+      subtype: PdfAnnotationSubtype.fromPdfName(subtypeName),
+      subtypeName: subtypeName,
+      rect: (m['hasRect'] as bool? ?? false)
+          ? PdfRect(
+              x: (m['x'] as num?)?.toDouble() ?? 0,
+              y: (m['y'] as num?)?.toDouble() ?? 0,
+              width: (m['width'] as num?)?.toDouble() ?? 0,
+              height: (m['height'] as num?)?.toDouble() ?? 0,
+            )
+          : null,
+      contents: contents.isEmpty ? null : contents,
+      author: author.isEmpty ? null : author,
+      fieldName: fieldName.isEmpty ? null : fieldName,
     );
   }).toList();
 }

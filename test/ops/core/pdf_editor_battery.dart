@@ -2137,6 +2137,27 @@ void registerEditorTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
+    test('addStamp is listed by annotations with the placed rect', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(minimalPdf));
+      const rect = PdfRect(x: 50, y: 650, width: 200, height: 60);
+      await editor.addStamp(0, type: PdfStampType.approved, rect: rect);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final doc = await pdf.open(src(sink.takeBytes()));
+      final rows = await doc.annotations(0);
+      await doc.dispose();
+      expect(rows, hasLength(1));
+      final stamp = rows.single;
+      expect(stamp.subtype, PdfAnnotationSubtype.stamp);
+      expect(stamp.rect, isNotNull);
+      expect(stamp.rect!.x, closeTo(rect.x, 0.5));
+      expect(stamp.rect!.y, closeTo(rect.y, 0.5));
+      expect(stamp.rect!.width, closeTo(rect.width, 0.5));
+      expect(stamp.rect!.height, closeTo(rect.height, 0.5));
+    }, timeout: t(1));
+
     test('addImageStamp embeds image data', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
@@ -2494,7 +2515,21 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.save(stamped);
       await editor.dispose();
 
-      final flat = await pdf.edit(src(stamped.takeBytes()));
+      final stampedBytes = stamped.takeBytes();
+      final before = await pdf.open(src(stampedBytes));
+      expect(await before.annotations(0), hasLength(1));
+      expect(
+        (await before.annotations(0)).single.subtype,
+        PdfAnnotationSubtype.stamp,
+      );
+      expect(await before.annotations(1), hasLength(1));
+      expect(
+        (await before.annotations(1)).single.subtype,
+        PdfAnnotationSubtype.stamp,
+      );
+      await before.dispose();
+
+      final flat = await pdf.edit(src(stampedBytes));
       await flat.flattenAnnotations(page: 0);
       final sink = TestSink();
       await flat.save(sink);
@@ -2507,7 +2542,6 @@ void registerEditorTests(Pdf Function() createPdf) {
       final page1 = (await doc.extract(
         pages: const PdfPages.single(1),
       )).toUpperCase();
-      await doc.dispose();
       expect(
         page0,
         contains('APPROVED'),
@@ -2520,6 +2554,15 @@ void registerEditorTests(Pdf Function() createPdf) {
         reason: "page 1 keeps its own stamp when only page 0 is flattened",
       );
       expect(page1, isNot(contains('APPROVED')));
+      expect(
+        await doc.annotations(0),
+        isEmpty,
+        reason: 'flatten(page: 0) must remove page 0\'s stamp annotation',
+      );
+      final afterPage1 = await doc.annotations(1);
+      expect(afterPage1, hasLength(1));
+      expect(afterPage1.single.subtype, PdfAnnotationSubtype.stamp);
+      await doc.dispose();
     }, timeout: t(1));
 
     test('mergeFrom(pages:) appends only the pages named', () async {

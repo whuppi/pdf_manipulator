@@ -510,6 +510,46 @@ void registerDocTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
+    // ── Annotations ──
+
+    test('annotations lists nothing on a page with no /Annots', () async {
+      final doc = await createPdf().open(src(minimalPdf));
+      expect(await doc.annotations(0), isEmpty);
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('annotations past the end throws PdfPageRangeError', () async {
+      final doc = await createPdf().open(src(minimalPdf));
+      await expectLater(
+        doc.annotations(1),
+        throwsA(
+          isA<PdfPageRangeError>()
+              .having((e) => e.page, 'page', 1)
+              .having((e) => e.pageCount, 'pageCount', 1),
+        ),
+      );
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('annotations lists every form widget with its field name', () async {
+      final doc = await createPdf().open(src(fFormFields));
+      final rows = await doc.annotations(0);
+      await doc.dispose();
+      expect(rows, isNotEmpty);
+      for (final row in rows) {
+        expect(row.subtype, PdfAnnotationSubtype.widget);
+        expect(
+          row.author,
+          isNull,
+          reason: "a widget's /T is its field name, not an author",
+        );
+      }
+      expect(
+        rows.map((r) => r.fieldName).whereType<String>().toSet(),
+        fFormFieldsTruth.fieldNames.toSet(),
+      );
+    }, timeout: t(1));
+
     test('extractAttachment round-trips the embedded bytes', () async {
       final doc = await createPdf().open(src(attachmentPdf));
       final sink = TestSink();

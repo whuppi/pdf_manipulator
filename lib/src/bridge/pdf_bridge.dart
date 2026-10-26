@@ -7,6 +7,7 @@ import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
+import 'package:pdf_manipulator/src/types/pdf_annotation.dart';
 import 'package:pdf_manipulator/src/types/pdf_attachment.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
@@ -149,6 +150,9 @@ abstract class BridgeDocHandle {
 
   /// Lists the files embedded in the document.
   PdfTask<List<PdfAttachment>> get attachments;
+
+  /// Lists the annotations on one page.
+  PdfTask<List<PdfAnnotationInfo>> annotations(int page);
 
   /// Streams the embedded file named [name] to [output].
   PdfTask<void> extractAttachment(String name, DataSink output);

@@ -224,6 +224,10 @@ class _SharedDocHandle extends BridgeDocHandle {
       _exec(EngineOp.attachments, {}).map(codec.decodeAttachments);
 
   @override
+  PdfTask<List<PdfAnnotationInfo>> annotations(int page) =>
+      _exec(EngineOp.annotations, {'page': page}).map(codec.decodeAnnotations);
+
+  @override
   PdfTask<void> extractAttachment(String name, DataSink output) =>
       _exec(EngineOp.extractAttachment, {'name': name}, sinks: [output]);
 

@@ -8,6 +8,7 @@
 import 'package:pdf_manipulator/src/ops/pdf.dart';
 import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/errors.dart';
+import 'package:pdf_manipulator/src/types/pdf_annotation.dart';
 import 'package:pdf_manipulator/src/types/pdf_attachment.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
@@ -225,6 +226,14 @@ class PdfDoc {
   PdfTask<List<PdfAttachment>> get attachments {
     _check();
     return _handle.attachments;
+  }
+
+  /// Lists the annotations on [page] (0-based), in /Annots order: links,
+  /// comments, stamps, form widgets. Throws [PdfPageRangeError] for a
+  /// page past the end.
+  PdfTask<List<PdfAnnotationInfo>> annotations(int page) {
+    _check();
+    return _handle.annotations(page);
   }
 
   /// Writes the embedded file named [name] to [output]. An unknown name

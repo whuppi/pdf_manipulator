@@ -5,6 +5,7 @@
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/types/errors.dart';
+import 'package:pdf_manipulator/src/types/pdf_annotation.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
@@ -527,6 +528,75 @@ void main() {
       expect(files[1].size, isNull, reason: '-1 on the wire decodes to null');
       expect(files[1].description, isNull);
       expect(files[1].mimeType, isNull);
+    });
+  });
+
+  group('decodeAnnotations', () {
+    test('parses a row with a rect and all strings', () {
+      final rows = decodeAnnotations({
+        'annotations': [
+          {
+            'subtype': 'Stamp',
+            'hasRect': true,
+            'x': 50.0,
+            'y': 650.0,
+            'width': 200.0,
+            'height': 60.0,
+            'contents': 'Approved',
+            'author': 'Alice',
+            'fieldName': 'sig1',
+          },
+        ],
+      });
+      expect(rows, hasLength(1));
+      final row = rows.single;
+      expect(row.subtype, PdfAnnotationSubtype.stamp);
+      expect(row.subtypeName, 'Stamp');
+      expect(row.rect, isNotNull);
+      expect(row.rect!.x, 50.0);
+      expect(row.rect!.y, 650.0);
+      expect(row.rect!.width, 200.0);
+      expect(row.rect!.height, 60.0);
+      expect(row.contents, 'Approved');
+      expect(row.author, 'Alice');
+      expect(row.fieldName, 'sig1');
+    });
+
+    test('hasRect false and empty strings decode to null fields', () {
+      final rows = decodeAnnotations({
+        'annotations': [
+          {
+            'subtype': 'Link',
+            'hasRect': false,
+            'x': 0.0,
+            'y': 0.0,
+            'width': 0.0,
+            'height': 0.0,
+            'contents': '',
+            'author': '',
+            'fieldName': '',
+          },
+        ],
+      });
+      final row = rows.single;
+      expect(row.subtype, PdfAnnotationSubtype.link);
+      expect(row.rect, isNull);
+      expect(row.contents, isNull);
+      expect(row.author, isNull);
+      expect(row.fieldName, isNull);
+    });
+
+    test('maps "3D" to threeD, "Foo" and "" to unknown', () {
+      final rows = decodeAnnotations({
+        'annotations': [
+          {'subtype': '3D', 'hasRect': false},
+          {'subtype': 'Foo', 'hasRect': false},
+          {'subtype': '', 'hasRect': false},
+        ],
+      });
+      expect(rows[0].subtype, PdfAnnotationSubtype.threeD);
+      expect(rows[1].subtype, PdfAnnotationSubtype.unknown);
+      expect(rows[2].subtype, PdfAnnotationSubtype.unknown);
     });
   });
 
