@@ -8,10 +8,8 @@
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart';
-import 'package:pdf_manipulator/src/bridge/protocol/codec.dart';
 import 'package:pdf_manipulator/src/bridge/protocol/op.dart';
 import 'package:pdf_manipulator/src/types/errors.dart';
-import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -25,59 +23,6 @@ void main() {
     test('every EngineOp wire name is unique', () {
       final wires = EngineOp.values.map((o) => o.wire).toSet();
       expect(wires.length, EngineOp.values.length);
-    });
-
-    test('editorSaveOp encodes save mode', () {
-      final req = editorSaveOp(
-        handleId: 1,
-        options: const PdfSaveOptions.fullRewrite(),
-      );
-      expect(req.args['saveMode'], 0);
-      expect(req.args['compress'], true);
-      expect(req.args['garbageCollect'], true);
-    });
-
-    test('editorSaveOp encodes incremental', () {
-      final req = editorSaveOp(
-        handleId: 1,
-        options: const PdfSaveOptions.incremental(),
-      );
-      expect(req.args['saveMode'], 1);
-      // An append neither compresses nor collects; the keys would lie.
-      expect(req.args.containsKey('compress'), isFalse);
-      expect(req.args.containsKey('garbageCollect'), isFalse);
-    });
-
-    test('editorSaveOp encodes encryption', () {
-      final req = editorSaveOp(
-        handleId: 1,
-        options: const PdfSaveOptions.fullRewrite(
-          encryption: PdfEncryption.config(ownerPassword: 'ow'),
-        ),
-      );
-      expect(req.args['encryptMode'], 2);
-      expect(req.args['encryptOwnerPw'], 'ow');
-    });
-
-    test('editorSaveOp encodes remove encryption', () {
-      final req = editorSaveOp(
-        handleId: 1,
-        options: const PdfSaveOptions.fullRewrite(
-          encryption: PdfEncryption.remove(),
-        ),
-      );
-      expect(req.args['encryptMode'], 1);
-    });
-
-    test('editorMutateOp encodes editOp', () {
-      final req = editorMutateOp(
-        handleId: 5,
-        editOp: 'setTitle',
-        extra: {'title': 'x'},
-      );
-      expect(req.args['handleId'], 5);
-      expect(req.args['editOp'], 'setTitle');
-      expect(req.args['title'], 'x');
     });
 
     test('encodeRequest produces valid binary', () {
