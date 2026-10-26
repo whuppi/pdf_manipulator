@@ -65,6 +65,25 @@ class _SharedBuilderHandle extends BridgeBuilderHandle {
 // Page builder handle
 // ══════════════════════════════════════════════════════════════════
 
+/// The stamp-type names the engine's WASM-party `parse_wasm_stamp_type`
+/// accepts, one per `PdfStampType` value.
+String stampWireName(PdfStampType type) => switch (type) {
+  PdfStampType.approved => 'Approved',
+  PdfStampType.experimental => 'Experimental',
+  PdfStampType.notApproved => 'NotApproved',
+  PdfStampType.asIs => 'AsIs',
+  PdfStampType.expired => 'Expired',
+  PdfStampType.notForPublicRelease => 'NotForPublicRelease',
+  PdfStampType.confidential => 'Confidential',
+  PdfStampType.final_ => 'Final',
+  PdfStampType.sold => 'Sold',
+  PdfStampType.departmental => 'Departmental',
+  PdfStampType.forComment => 'ForComment',
+  PdfStampType.topSecret => 'TopSecret',
+  PdfStampType.draft => 'Draft',
+  PdfStampType.forPublicRelease => 'ForPublicRelease',
+};
+
 class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
   _SharedPageBuilderHandle(this._bridge, this._handleId);
   final SharedBridge _bridge;
@@ -182,6 +201,182 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
   @override
   PdfTask<void> footnote(String refMark, String noteText) =>
       _op('footnote', {'refMark': refMark, 'noteText': noteText});
+  @override
+  PdfTask<void> inline(String text) => _op('inline', {'text': text});
+  @override
+  PdfTask<void> inlineBold(String text) => _op('inlineBold', {'text': text});
+  @override
+  PdfTask<void> inlineItalic(String text) =>
+      _op('inlineItalic', {'text': text});
+  @override
+  PdfTask<void> inlineColor(String text, PdfColor color) =>
+      _op('inlineColor', {'text': text, ...codec.encodeColorArgs(color)});
+  @override
+  PdfTask<void> textInRect(
+    PdfRect rect,
+    String text, {
+    PdfCellAlign align = PdfCellAlign.left,
+  }) => _op('textInRect', {
+    ...codec.encodeRectArgs(rect),
+    'text': text,
+    'align': align.index,
+  });
+  @override
+  PdfTask<void> rect(PdfRect rect) =>
+      _op('rect', {...codec.encodeRectArgs(rect)});
+  @override
+  PdfTask<void> filledRect(PdfRect rect, PdfColor color) => _op('filledRect', {
+    ...codec.encodeRectArgs(rect),
+    ...codec.encodeColorArgs(color),
+  });
+  @override
+  PdfTask<void> line(double x1, double y1, double x2, double y2) =>
+      _op('line', {'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2});
+  @override
+  PdfTask<void> strokeRect(
+    PdfRect rect, {
+    double width = 1,
+    PdfColor color = PdfColor.black,
+    List<double>? dash,
+    double dashPhase = 0,
+  }) => _op('strokeRect', {
+    ...codec.encodeRectArgs(rect),
+    'lineWidth': width,
+    ...codec.encodeColorArgs(color),
+    'dash': dash,
+    'dashPhase': dashPhase,
+  });
+  @override
+  PdfTask<void> strokeLine(
+    double x1,
+    double y1,
+    double x2,
+    double y2, {
+    double width = 1,
+    PdfColor color = PdfColor.black,
+    List<double>? dash,
+    double dashPhase = 0,
+  }) => _op('strokeLine', {
+    'x1': x1,
+    'y1': y1,
+    'x2': x2,
+    'y2': y2,
+    'lineWidth': width,
+    ...codec.encodeColorArgs(color),
+    'dash': dash,
+    'dashPhase': dashPhase,
+  });
+  @override
+  PdfTask<void> highlight({PdfColor color = PdfColor.yellow}) =>
+      _op('highlight', codec.encodeColorArgs(color));
+  @override
+  PdfTask<void> underline({PdfColor color = PdfColor.black}) =>
+      _op('underline', codec.encodeColorArgs(color));
+  @override
+  PdfTask<void> strikeout({PdfColor color = PdfColor.black}) =>
+      _op('strikeout', codec.encodeColorArgs(color));
+  @override
+  PdfTask<void> squiggly({PdfColor color = PdfColor.black}) =>
+      _op('squiggly', codec.encodeColorArgs(color));
+  @override
+  PdfTask<void> stickyNote(String text, {double? x, double? y}) {
+    if ((x == null) != (y == null)) {
+      throw ArgumentError('stickyNote takes x and y together or neither');
+    }
+    return _op('stickyNote', {'text': text, 'x': x, 'y': y});
+  }
+
+  @override
+  PdfTask<void> stamp(PdfStampType type) =>
+      _op('stamp', {'stampType': stampWireName(type)});
+  @override
+  PdfTask<void> freeText(PdfRect rect, String text) =>
+      _op('freeText', {...codec.encodeRectArgs(rect), 'text': text});
+  @override
+  PdfTask<void> watermarkConfidential() => _op('watermarkConfidential');
+  @override
+  PdfTask<void> watermarkDraft() => _op('watermarkDraft');
+  @override
+  PdfTask<void> linkNamed(String destination) =>
+      _op('linkNamed', {'destination': destination});
+  @override
+  PdfTask<void> linkJavaScript(String script) =>
+      _op('linkJavaScript', {'script': script});
+  @override
+  PdfTask<void> onOpen(String script) => _op('onOpen', {'script': script});
+  @override
+  PdfTask<void> onClose(String script) => _op('onClose', {'script': script});
+  @override
+  PdfTask<void> imageArtifact(DataSource imageData, PdfRect rect) =>
+      _bridge._exec(
+        EngineOp.builderPageOp,
+        {
+          'handleId': _handleId,
+          'pageOp': 'imageArtifact',
+          'sourceLength': imageData.length,
+          ...codec.encodeRectArgs(rect),
+        },
+        sources: [imageData],
+      );
+  @override
+  PdfTask<void> table(
+    List<PdfTableColumn> columns,
+    List<List<String>> rows, {
+    bool hasHeader = true,
+  }) {
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].length != columns.length) {
+        throw ArgumentError(
+          'table row $i has ${rows[i].length} cells but the table has '
+          '${columns.length} columns',
+        );
+      }
+    }
+    return _op('table', {
+      'headers': columns.map((c) => c.header).toList(),
+      'widths': columns.map((c) => c.width ?? -1.0).toList(),
+      'aligns': columns.map((c) => c.align.index).toList(),
+      'cells': [for (final row in rows) ...row],
+      'columnCount': columns.length,
+      'hasHeader': hasHeader,
+    });
+  }
+
+  @override
+  PdfTask<void> streamingTable(
+    List<PdfTableColumn> columns,
+    List<List<PdfTableCell>> rows, {
+    bool repeatHeader = true,
+    PdfTableSizing sizing = PdfTableSizing.fixed,
+    int sampleRows = 50,
+    double minColumnWidth = 20,
+    double maxColumnWidth = 400,
+    int maxRowSpan = 1,
+  }) {
+    for (final column in columns) {
+      if (column.width == null) {
+        throw ArgumentError(
+          'streamingTable requires an explicit width on every column; '
+          '"${column.header}" has none',
+        );
+      }
+    }
+    return _op('streamingTable', {
+      'headers': columns.map((c) => c.header).toList(),
+      'widths': columns.map((c) => c.width!).toList(),
+      'aligns': columns.map((c) => c.align.index).toList(),
+      'cells': [for (final row in rows) ...row.map((c) => c.text)],
+      'rowSpans': [for (final row in rows) ...row.map((c) => c.rowSpan)],
+      'columnCount': columns.length,
+      'repeatHeader': repeatHeader,
+      'mode': sizing.wire,
+      'sampleRows': sampleRows,
+      'minColWidth': minColumnWidth,
+      'maxColWidth': maxColumnWidth,
+      'maxRowSpan': maxRowSpan,
+    });
+  }
+
   @override
   PdfTask<void> columns(int columnCount, double gapPt, String text) => _op(
     'columns',

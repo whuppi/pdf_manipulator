@@ -348,7 +348,7 @@ The planned route to expose these without bloating the default is per-feature op
 
 | Capability | Status | Why |
 |---|---|---|
-| Builder output hardening (compress streams by default; richer typesetting) | PLANNED | Builder output is valid but naively shaped vs real-world PDFs; product decision, deliberately separate from the test overhaul. |
+| Builder output hardening (compress streams by default; richer typesetting) | DONE | `PdfBuilder.save` Flate-compresses by default (`compress: false` keeps streams plain); the page builder reaches every page operation the engine's builder has, and a wire-sync test fails when the engine adds one Dart lacks. |
 | Attachment-listing read API | DONE | `PdfDoc.attachments` and `PdfDoc.extractAttachment` — `embedFile` is now proven by listing the saved file and round-tripping its bytes. |
 | Annotation-listing read API | DONE | `PdfDoc.annotations(page)` — a battery now asserts "gone after flatten" directly, as `formFields` does for forms. |
 | Typed wire error codes (PdfWrongPassword, PdfCorrupted, … from Rust) | DONE | Every engine failure reaches Dart as its `PdfError` subtype; kinds on the wire. |

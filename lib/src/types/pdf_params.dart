@@ -30,6 +30,9 @@ class PdfColor {
 
   /// Red (1, 0, 0).
   static const red = PdfColor(1, 0, 0);
+
+  /// Yellow (1, 1, 0).
+  static const yellow = PdfColor(1, 1, 0);
 }
 
 /// Permission flags for encrypted PDFs.

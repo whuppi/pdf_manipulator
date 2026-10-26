@@ -50,6 +50,7 @@ export 'src/types/pdf_rect.dart';
 export 'src/types/pdf_redaction_report.dart';
 export 'src/types/pdf_sanitize_options.dart';
 export 'src/types/pdf_signature.dart';
+export 'src/types/pdf_table.dart';
 export 'src/types/pdf_xfa_info.dart';
 export 'src/types/data_sink.dart';
 export 'src/types/data_source.dart';

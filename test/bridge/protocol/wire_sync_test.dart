@@ -199,5 +199,61 @@ void main() {
     expect(dart, rust);
   });
 
+  group('WasmPageOp ↔ host PageOp parity', () {
+    /// Variant names of a Rust enum body: every line whose first token
+    /// starts an uppercase identifier (variant vs field/comment lines).
+    Set<String> variants(String body) {
+      final names = <String>{};
+      for (final line in body.split('\n')) {
+        final t = line.trim();
+        if (t == '}' || t.isEmpty) continue;
+        final first = RegExp(r'^([A-Z][A-Za-z0-9]*)').firstMatch(t);
+        if (first != null) names.add(first.group(1)!);
+      }
+      return names;
+    }
+
+    test('every WasmPageOp variant has a host PageOp', () {
+      final wasmSource = File(
+        'vendor/pdf_oxide/src/wasm.rs',
+      ).readAsStringSync();
+      final hostSource = File(
+        'vendor/pdf_oxide/src/host/dispatch.rs',
+      ).readAsStringSync();
+
+      final wasmStart = wasmSource.indexOf('enum WasmPageOp {');
+      if (wasmStart == -1) fail('enum WasmPageOp not found');
+      final wasmBody = wasmSource.substring(
+        wasmStart,
+        wasmSource.indexOf('\n}', wasmStart),
+      );
+      final hostStart = hostSource.indexOf('pub enum PageOp {');
+      if (hostStart == -1) fail('pub enum PageOp not found');
+      final hostBody = hostSource.substring(
+        hostStart,
+        hostSource.indexOf('\n}', hostStart),
+      );
+      final hostVariants = variants(hostBody);
+
+      // Engine variants the host intentionally does not mirror as its
+      // own PageOp call:
+      // * BarcodeImage — same engine call as Image (image_from_bytes).
+      // * ImageWithAlt — the existing `image` page op.
+      const explained = {'BarcodeImage', 'ImageWithAlt'};
+
+      final missing = variants(
+        wasmBody,
+      ).difference(hostVariants).difference(explained).toList();
+      expect(
+        missing,
+        isEmpty,
+        reason:
+            'WasmPageOp variants without a host PageOp — add every '
+            'variant to host/dispatch.rs so the Dart page builder can '
+            'reach it too: $missing',
+      );
+    });
+  });
+
   // ── Web worker.js sync ──
 }

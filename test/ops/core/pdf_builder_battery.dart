@@ -700,4 +700,523 @@ void registerBuilderTests(Pdf Function() createPdf) {
       timeout: t(1),
     );
   });
+
+  // One test per page-op method: the effect is proven in the saved
+  // file — extracted text, the annotation list, or the uncompressed
+  // content stream's own operators.
+  group('page op parity', () {
+    Future<Uint8List> savePlain(
+      Pdf pdf,
+      Future<void> Function(PdfPageBuilder page) content, {
+      bool compress = true,
+    }) async {
+      final builder = await pdf.build();
+      final page = await builder.addA4Page();
+      await content(page);
+      await page.done();
+      final sink = TestSink();
+      await builder.save(sink, compress: compress);
+      await builder.dispose();
+      return sink.takeBytes();
+    }
+
+    Future<PdfDoc> openOf(Pdf pdf, Uint8List bytes) => pdf.open(src(bytes));
+
+    test('inline writes text', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.at(72, 720);
+        await page.inline('Hello Inline');
+      });
+      final doc = await openOf(pdf, bytes);
+      expect(
+        await doc.extract(pages: const PdfPages.all()),
+        contains('Hello Inline'),
+      );
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('inlineBold writes text', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.at(72, 720);
+        await page.inlineBold('Hello Bold');
+      });
+      final doc = await openOf(pdf, bytes);
+      expect(
+        await doc.extract(pages: const PdfPages.all()),
+        contains('Hello Bold'),
+      );
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('inlineItalic writes text', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.at(72, 720);
+        await page.inlineItalic('Hello Italic');
+      });
+      final doc = await openOf(pdf, bytes);
+      expect(
+        await doc.extract(pages: const PdfPages.all()),
+        contains('Hello Italic'),
+      );
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('inlineColor writes text', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.at(72, 720);
+        await page.inlineColor('Hello Colour', PdfColor.red);
+      });
+      final doc = await openOf(pdf, bytes);
+      expect(
+        await doc.extract(pages: const PdfPages.all()),
+        contains('Hello Colour'),
+      );
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('textInRect writes text', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.textInRect(
+          const PdfRect(x: 50, y: 600, width: 300, height: 100),
+          'Rect caption',
+        );
+      });
+      final doc = await openOf(pdf, bytes);
+      expect(
+        await doc.extract(pages: const PdfPages.all()),
+        contains('Rect caption'),
+      );
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('table writes every cell', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.table(
+          const [
+            PdfTableColumn('SKU', width: 100),
+            PdfTableColumn('Qty', width: 60, align: PdfCellAlign.right),
+          ],
+          const [
+            ['A-1', '12'],
+            ['B-2', '3'],
+          ],
+        );
+      });
+      final doc = await openOf(pdf, bytes);
+      final text = await doc.extract(pages: const PdfPages.all());
+      expect(text, contains('SKU'));
+      expect(text, contains('A-1'));
+      expect(text, contains('B-2'));
+      expect(text, contains('12'));
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('table refuses a row whose length differs from the columns', () async {
+      final pdf = createPdf();
+      final builder = await pdf.build();
+      final page = await builder.addA4Page();
+      expect(
+        () => page.table(
+          const [PdfTableColumn('SKU')],
+          const [
+            ['1'],
+            ['2', '3'],
+          ],
+        ),
+        throwsArgumentError,
+        reason: 'the second row has 2 cells but the table has 1 column',
+      );
+      await builder.dispose();
+    }, timeout: t(1));
+
+    test('streamingTable writes its cells', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.streamingTable(
+          const [
+            PdfTableColumn('Item', width: 120),
+            PdfTableColumn('Count', width: 60, align: PdfCellAlign.center),
+          ],
+          const [
+            [PdfTableCell('Saw', rowSpan: 2)],
+            [PdfTableCell('Hammer'), PdfTableCell('7')],
+          ],
+        );
+      });
+      final doc = await openOf(pdf, bytes);
+      final text = await doc.extract(pages: const PdfPages.all());
+      expect(text, contains('Item'));
+      expect(text, contains('Hammer'));
+      expect(text, contains('7'));
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('streamingTable refuses a column without a width', () async {
+      final pdf = createPdf();
+      final builder = await pdf.build();
+      final page = await builder.addA4Page();
+      expect(
+        () => page.streamingTable(
+          const [PdfTableColumn('Item')],
+          const [
+            [PdfTableCell('Saw')],
+          ],
+        ),
+        throwsArgumentError,
+        reason:
+            'auto sizing needs the sample mode, which streaming '
+            'tables reach only through explicit widths',
+      );
+      await builder.dispose();
+    }, timeout: t(1));
+
+    test('highlight marks the text', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.text('Marked sentence');
+        await page.highlight();
+      });
+      final doc = await openOf(pdf, bytes);
+      final annotations = await doc.annotations(0);
+      expect(annotations, hasLength(1));
+      expect(annotations.single.subtype, PdfAnnotationSubtype.highlight);
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('underline marks the text', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.text('Underlined sentence');
+        await page.underline();
+      });
+      final doc = await openOf(pdf, bytes);
+      expect(
+        (await doc.annotations(0)).single.subtype,
+        PdfAnnotationSubtype.underline,
+      );
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('strikeout marks the text', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.text('Struck sentence');
+        await page.strikeout();
+      });
+      final doc = await openOf(pdf, bytes);
+      expect(
+        (await doc.annotations(0)).single.subtype,
+        PdfAnnotationSubtype.strikeOut,
+      );
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('squiggly marks the text', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.text('Misspelled word');
+        await page.squiggly();
+      });
+      final doc = await openOf(pdf, bytes);
+      expect(
+        (await doc.annotations(0)).single.subtype,
+        PdfAnnotationSubtype.squiggly,
+      );
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('stickyNote at the cursor carries its text', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.text('Body text');
+        await page.stickyNote('Please review this');
+      });
+      final doc = await openOf(pdf, bytes);
+      final annotations = await doc.annotations(0);
+      expect(annotations.single.subtype, PdfAnnotationSubtype.text);
+      expect(annotations.single.contents, 'Please review this');
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('stickyNote at explicit coordinates carries its text', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.text('Body text');
+        await page.stickyNote('Corner note', x: 400, y: 500);
+      });
+      final doc = await openOf(pdf, bytes);
+      final annotations = await doc.annotations(0);
+      expect(annotations.single.subtype, PdfAnnotationSubtype.text);
+      expect(annotations.single.contents, 'Corner note');
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('stickyNote with only one coordinate is refused in Dart', () async {
+      final pdf = createPdf();
+      final builder = await pdf.build();
+      final page = await builder.addA4Page();
+      expect(
+        () => page.stickyNote('half-placed', x: 100),
+        throwsArgumentError,
+        reason: 'a note at x-only has no y to land on',
+      );
+      await builder.dispose();
+    }, timeout: t(1));
+
+    test('stamp lands a stamp annotation', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.at(72, 600);
+        await page.stamp(PdfStampType.approved);
+      });
+      final doc = await openOf(pdf, bytes);
+      expect(
+        (await doc.annotations(0)).single.subtype,
+        PdfAnnotationSubtype.stamp,
+      );
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('freeText lands a free-text annotation with the text', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.freeText(
+          const PdfRect(x: 50, y: 500, width: 200, height: 60),
+          'Direct on page',
+        );
+      });
+      final doc = await openOf(pdf, bytes);
+      final annotations = await doc.annotations(0);
+      expect(annotations.single.subtype, PdfAnnotationSubtype.freeText);
+      expect(annotations.single.contents, 'Direct on page');
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('linkNamed lands a link annotation', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.text('Jump to section');
+        await page.linkNamed('sec-2');
+      });
+      final doc = await openOf(pdf, bytes);
+      expect(
+        (await doc.annotations(0)).single.subtype,
+        PdfAnnotationSubtype.link,
+      );
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('linkJavaScript lands a JavaScript link', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.text('Run script');
+        await page.linkJavaScript('app.alert("hello")');
+      });
+      final doc = await openOf(pdf, bytes);
+      expect(
+        (await doc.annotations(0)).single.subtype,
+        PdfAnnotationSubtype.link,
+      );
+      expect(String.fromCharCodes(bytes), contains('app.alert'));
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('watermarkConfidential flattens to CONFIDENTIAL', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.text('Body');
+        await page.watermarkConfidential();
+      });
+      // The watermark is an annotation — flatten it into content, then
+      // extraction sees the letters.
+      final e = await pdf.edit(src(bytes));
+      await e.flattenAnnotations();
+      final flatSink = TestSink();
+      await e.save(flatSink);
+      await e.dispose();
+      final doc = await pdf.open(src(flatSink.takeBytes()));
+      expect(
+        (await doc.extract(pages: const PdfPages.all())).toUpperCase(),
+        contains('CONFIDENTIAL'),
+      );
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('watermarkDraft flattens to DRAFT', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.text('Body');
+        await page.watermarkDraft();
+      });
+      final e = await pdf.edit(src(bytes));
+      await e.flattenAnnotations();
+      final flatSink = TestSink();
+      await e.save(flatSink);
+      await e.dispose();
+      final doc = await pdf.open(src(flatSink.takeBytes()));
+      expect(
+        (await doc.extract(pages: const PdfPages.all())).toUpperCase(),
+        contains('DRAFT'),
+      );
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('onOpen and onClose carry the page actions', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.text('Body');
+        await page.onOpen('app.alert("opened")');
+        await page.onClose('app.alert("closed")');
+      });
+      final asString = String.fromCharCodes(bytes);
+      expect(asString, contains('/AA'));
+      expect(asString, contains('opened'));
+      expect(asString, contains('closed'));
+    }, timeout: t(1));
+
+    test(
+      'imageArtifact places an image XObject and the page renders',
+      () async {
+        final pdf = createPdf();
+        final bytes = await savePlain(pdf, (page) async {
+          await page.text('Body');
+          await page.imageArtifact(
+            src(minimalPng),
+            const PdfRect(x: 50, y: 400, width: 100, height: 100),
+          );
+        });
+        final asString = String.fromCharCodes(bytes);
+        expect(
+          asString,
+          contains('/XObject'),
+          reason:
+              'the artifact image '
+              'is an XObject like any placed image',
+        );
+        final doc = await openOf(pdf, bytes);
+        var frames = 0;
+        await for (final page in doc.render(
+          pages: const PdfPages.single(0),
+          size: const PdfRenderSize.thumbnail(240),
+        )) {
+          expect(page.data, isNotEmpty);
+          frames++;
+        }
+        expect(frames, 1, reason: 'page 0 must render with the artifact');
+        await doc.dispose();
+      },
+      timeout: t(1),
+    );
+
+    test('rect emits the re operator', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.rect(const PdfRect(x: 50, y: 300, width: 100, height: 60));
+      }, compress: false);
+      expect(
+        String.fromCharCodes(bytes),
+        matches(RegExp(r'\b50(\.0+)? 300(\.0+)? 100(\.0+)? 60(\.0+)? re\b')),
+      );
+    }, timeout: t(1));
+
+    test('filledRect emits the fill colour rg', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.filledRect(
+          const PdfRect(x: 50, y: 300, width: 100, height: 60),
+          PdfColor.red,
+        );
+      }, compress: false);
+      final asString = String.fromCharCodes(bytes);
+      expect(asString, matches(RegExp(r'1(\.0+)? 0(\.0+)? 0(\.0+)? rg')));
+      expect(asString, matches(RegExp(r'\bre\b')));
+    }, timeout: t(1));
+
+    test('line emits the l operator', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.line(50, 300, 150, 360);
+      }, compress: false);
+      expect(String.fromCharCodes(bytes), matches(RegExp(r'\bl\s')));
+    }, timeout: t(1));
+
+    test(
+      'strokeRect plain dashes nothing; the dashed form sets the dash',
+      () async {
+        final pdf = createPdf();
+        final solid = await savePlain(pdf, (page) async {
+          await page.strokeRect(
+            const PdfRect(x: 50, y: 300, width: 100, height: 60),
+          );
+        }, compress: false);
+        expect(String.fromCharCodes(solid), matches(RegExp(r'\bre\b')));
+        expect(String.fromCharCodes(solid), isNot(contains('] 0 d')));
+
+        final dashed = await savePlain(pdf, (page) async {
+          await page.strokeRect(
+            const PdfRect(x: 50, y: 300, width: 100, height: 60),
+            dash: const [3, 2],
+            dashPhase: 0,
+          );
+        }, compress: false);
+        final asString = String.fromCharCodes(dashed);
+        expect(
+          asString,
+          matches(RegExp(r'\[3(\.0+)? 2(\.0+)?\] 0(\.0+)? d\b')),
+        );
+      },
+      timeout: t(1),
+    );
+
+    test(
+      'strokeLine plain dashes nothing; the dashed form sets the dash',
+      () async {
+        final pdf = createPdf();
+        final solid = await savePlain(pdf, (page) async {
+          await page.strokeLine(50, 300, 150, 360);
+        }, compress: false);
+        expect(String.fromCharCodes(solid), matches(RegExp(r'\bl\s')));
+        expect(String.fromCharCodes(solid), isNot(contains('] 0 d')));
+
+        final dashed = await savePlain(pdf, (page) async {
+          await page.strokeLine(50, 300, 150, 360, dash: const [3, 2]);
+        }, compress: false);
+        expect(
+          String.fromCharCodes(dashed),
+          matches(RegExp(r'\[3(\.0+)? 2(\.0+)?\] 0(\.0+)? d\b')),
+        );
+      },
+      timeout: t(1),
+    );
+
+    test('the ops that need text are refused on a bare page', () async {
+      final builder = await createPdf().build();
+      final page = await builder.addA4Page();
+      await expectLater(
+        page.linkNamed('sec-2'),
+        throwsA(isA<PdfInvalidArgument>()),
+        reason: 'a named destination needs text to anchor on',
+      );
+      await expectLater(
+        page.linkJavaScript('app.alert(1)'),
+        throwsA(isA<PdfInvalidArgument>()),
+        reason: 'a script link needs text to anchor on',
+      );
+      await expectLater(
+        page.highlight(),
+        throwsA(isA<PdfInvalidArgument>()),
+        reason: 'a highlight needs text to cover',
+      );
+      await expectLater(page.underline(), throwsA(isA<PdfInvalidArgument>()));
+      await expectLater(page.strikeout(), throwsA(isA<PdfInvalidArgument>()));
+      await expectLater(page.squiggly(), throwsA(isA<PdfInvalidArgument>()));
+      await builder.dispose();
+    }, timeout: t(1));
+  });
 }

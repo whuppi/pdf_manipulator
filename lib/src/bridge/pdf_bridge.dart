@@ -21,6 +21,7 @@ import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/types/pdf_redaction_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_sanitize_options.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
+import 'package:pdf_manipulator/src/types/pdf_table.dart';
 import 'package:pdf_manipulator/src/types/pdf_task.dart';
 import 'package:pdf_manipulator/src/types/pdf_xfa_info.dart';
 import 'package:pdf_manipulator/src/types/search_result.dart';
@@ -548,6 +549,123 @@ abstract class BridgePageBuilderHandle {
 
   /// Adds a footnote with [refMark] and [noteText].
   PdfTask<void> footnote(String refMark, String noteText);
+
+  /// Writes inline [text] at the cursor without moving to a new line.
+  PdfTask<void> inline(String text);
+
+  /// Writes inline bold [text] at the cursor.
+  PdfTask<void> inlineBold(String text);
+
+  /// Writes inline italic [text] at the cursor.
+  PdfTask<void> inlineItalic(String text);
+
+  /// Writes inline [text] in [color] at the cursor.
+  PdfTask<void> inlineColor(String text, PdfColor color);
+
+  /// Wraps [text] inside [rect] with the given [align].
+  PdfTask<void> textInRect(
+    PdfRect rect,
+    String text, {
+    PdfCellAlign align = PdfCellAlign.left,
+  });
+
+  /// Draws an unfilled rectangle with the current stroke state.
+  PdfTask<void> rect(PdfRect rect);
+
+  /// Draws [rect] filled with [color].
+  PdfTask<void> filledRect(PdfRect rect, PdfColor color);
+
+  /// Draws a straight line from ([x1], [y1]) to ([x2], [y2]).
+  PdfTask<void> line(double x1, double y1, double x2, double y2);
+
+  /// Draws a stroked rectangle around [rect]. A non-empty [dash] makes
+  /// it dashed with the given [dashPhase].
+  PdfTask<void> strokeRect(
+    PdfRect rect, {
+    double width = 1,
+    PdfColor color = PdfColor.black,
+    List<double>? dash,
+    double dashPhase = 0,
+  });
+
+  /// Draws a stroked line between the two points. A non-empty [dash]
+  /// makes it dashed with the given [dashPhase].
+  PdfTask<void> strokeLine(
+    double x1,
+    double y1,
+    double x2,
+    double y2, {
+    double width = 1,
+    PdfColor color = PdfColor.black,
+    List<double>? dash,
+    double dashPhase = 0,
+  });
+
+  /// Adds a highlight annotation over the last-written text.
+  PdfTask<void> highlight({PdfColor color = PdfColor.yellow});
+
+  /// Adds an underline annotation over the last-written text.
+  PdfTask<void> underline({PdfColor color = PdfColor.black});
+
+  /// Adds a strikeout annotation over the last-written text.
+  PdfTask<void> strikeout({PdfColor color = PdfColor.black});
+
+  /// Adds a squiggly annotation over the last-written text.
+  PdfTask<void> squiggly({PdfColor color = PdfColor.black});
+
+  /// Adds a sticky note ([text]) at the cursor, or at ([x], [y]) when
+  /// both are set.
+  PdfTask<void> stickyNote(String text, {double? x, double? y});
+
+  /// Adds a stamp of [type] at the cursor.
+  PdfTask<void> stamp(PdfStampType type);
+
+  /// Adds a free-text annotation inside [rect].
+  PdfTask<void> freeText(PdfRect rect, String text);
+
+  /// Adds the preset CONFIDENTIAL watermark.
+  PdfTask<void> watermarkConfidential();
+
+  /// Adds the preset DRAFT watermark.
+  PdfTask<void> watermarkDraft();
+
+  /// Adds a named-destination link to [destination] on the last text.
+  PdfTask<void> linkNamed(String destination);
+
+  /// Adds a JavaScript link running [script] on the last text.
+  PdfTask<void> linkJavaScript(String script);
+
+  /// Runs [script] when the page opens.
+  PdfTask<void> onOpen(String script);
+
+  /// Runs [script] when the page closes.
+  PdfTask<void> onClose(String script);
+
+  /// Places [imageData] inside [rect] as an artifact (excluded from
+  /// reading order).
+  PdfTask<void> imageArtifact(DataSource imageData, PdfRect rect);
+
+  /// Lays out a buffered table from [columns] and [rows]. Rows are
+  /// known up front; each row's length must equal [columns]' length.
+  PdfTask<void> table(
+    List<PdfTableColumn> columns,
+    List<List<String>> rows, {
+    bool hasHeader = true,
+  });
+
+  /// Lays out a streaming table from [columns] and [rows] with
+  /// [`PdfTableCell`] rowspans and column [sizing]; every column needs
+  /// an explicit width.
+  PdfTask<void> streamingTable(
+    List<PdfTableColumn> columns,
+    List<List<PdfTableCell>> rows, {
+    bool repeatHeader = true,
+    PdfTableSizing sizing = PdfTableSizing.fixed,
+    int sampleRows = 50,
+    double minColumnWidth = 20,
+    double maxColumnWidth = 400,
+    int maxRowSpan = 1,
+  });
 
   /// Lays out [text] across [columnCount] columns with [gapPt] gap.
   PdfTask<void> columns(int columnCount, double gapPt, String text);

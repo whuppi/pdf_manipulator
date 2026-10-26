@@ -72,6 +72,12 @@ void main() {
     'pagePrunePdf': pagePrunePdf,
     'certifiedPdf(2)': certifiedPdf(2),
     'structTreePdf': structTreePdf,
+    'noSizePdf': noSizePdf,
+    'freeEntryPdf': freeEntryPdf,
+    'genOnePdf': genOnePdf,
+    // brokenObjectPdf stays out: its xref entry deliberately does not point
+    // where it says (object 4 is nowhere in the file), which is the damage
+    // the fixture carries, not a fixture bug.
   };
   for (final MapEntry(key: name, value: pdf) in fixtures.entries) {
     test('$name: its xref points where it says', () {

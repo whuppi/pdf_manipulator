@@ -160,6 +160,105 @@ final Uint8List emptyBytes = Uint8List(0);
 /// Almost a PDF — has header but broken structure.
 final Uint8List brokenPdf = _build('%PDF-1.4\ngarbage after header\n');
 
+/// A valid one-page PDF whose trailer has NO /Size, with 120 objects: the
+/// 116 extra dictionaries are reachable from nothing, so only the
+/// full-rewrite sweep reaches them. A reader that sizes new ids from a
+/// fallback when /Size is missing collides new objects into ids that the
+/// source already uses (it has objects far past 100).
+final noSizePdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /Helv 5 0 R >> >> /Contents 4 0 R >>',
+  // 4: content stream — a marker the battery proves by extraction
+  _streamBody('', 'q BT /Helv 12 Tf 72 720 Td (nosizemark) Tj ET Q\n'),
+  // 5: Helvetica font
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  // 6..120: scratch dictionaries reachable from nothing
+  for (var i = 6; i <= 120; i++) '<< /Type /Scratch /N $i >>',
+], trailerSize: false);
+
+/// A valid one-page PDF whose xref lists one free entry (object 3, the
+/// page) beside its in-use objects — the free-list body that a save with
+/// forbidden free entries would punch a hole in. Object numbers actually
+/// in use run 1, 2, 4; the sweep must skip 3 without erroring.
+final freeEntryPdf = _offsetPdf(
+  [
+    // 1: catalog
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    // 2: page tree
+    '<< /Type /Pages /Kids [4 0 R] /Count 1 >>',
+    // 3: a FREE xref entry — the body below is dead, marked unused
+    'zz dead body: its xref entry says f and no object reads it',
+    // 4: page
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>',
+  ],
+  freeIds: {3},
+);
+
+/// A valid one-page PDF whose font is object 5 at generation 1, referenced
+/// as `5 1 R`: the shape a file takes after an editor freed a number and
+/// reused it. A full rewrite writes every object at generation 0, so it
+/// must write every reference at generation 0 too.
+final genOnePdf = _offsetPdf(
+  [
+    // 1: catalog
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    // 2: page tree
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    // 3: page, its font at generation 1
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /Helv 5 1 R >> >> /Contents 4 0 R >>',
+    // 4: content stream
+    _streamBody('', 'q BT /Helv 12 Tf 72 720 Td (genonemark) Tj ET Q\n'),
+    // 5: Helvetica font, generation 1
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ],
+  generations: {5: 1},
+);
+
+/// A valid PDF except that the xref entry for object 4 (the page's
+/// content stream) points at a non-object offset. The stream is nowhere
+/// in the file, so the full-rewrite sweep cannot load it from where the
+/// table says. Deliberately left out of handwritten_fixtures_test.dart:
+/// its xref does not point where it says — that is the damage the
+/// fixture carries, not a fixture bug.
+final brokenObjectPdf = _brokenObjectPdf();
+
+Uint8List _brokenObjectPdf() {
+  final b = StringBuffer('%PDF-1.7\n');
+  final objects = <String>[
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /Helv 5 0 R >> >> /Contents 4 0 R >>',
+  ];
+  final offsets = <int>[];
+  for (var i = 0; i < objects.length; i++) {
+    offsets.add(b.length);
+    b.write('${i + 1} 0 obj\n${objects[i]}\nendobj\n');
+  }
+  // The not-an-object bytes the content stream's entry points at. The
+  // stream object itself is nowhere in the file — no recovery search can
+  // find a `4 0 obj` header — so the sweep cannot load it at all.
+  final garbageOffset = b.length;
+  b.write('garbage with no object header\n');
+  final xrefOffset = b.length;
+  b.write(
+    'xref\n0 5\n'
+    '0000000000 65535 f \n'
+    '${offsets[0].toString().padLeft(10, '0')} 00000 n \n'
+    '${offsets[1].toString().padLeft(10, '0')} 00000 n \n'
+    '${offsets[2].toString().padLeft(10, '0')} 00000 n \n'
+    '${garbageOffset.toString().padLeft(10, '0')} 00000 n \n'
+    'trailer\n<< /Size 5 /Root 1 0 R >>\n'
+    'startxref\n$xrefOffset\n%%EOF\n',
+  );
+  final content = b.toString();
+  assert(content.codeUnits.every((u) => u <= 0xFF));
+  return Uint8List.fromList(content.codeUnits);
+}
+
 // Fixture strings are byte strings: each char's code unit IS the byte
 // (Latin-1 escapes like ß emit the single PDFDocEncoding byte 0xDF).
 // A char above U+00FF has no single byte — Uint8List.fromList would
@@ -184,21 +283,39 @@ String _streamBody(String dict, String data) =>
 /// PDF with a correct xref table — byte offsets are computed, not hand-typed,
 /// so hand-authored multi-object fixtures can't drift. ASCII-only: a
 /// StringBuffer char position equals the byte offset.
-Uint8List _offsetPdf(List<String> objects, {int root = 1}) {
+///
+/// [trailerSize] omits the trailer's /Size (which readers must then take
+/// from the xref table itself). [freeIds] marks an in-use object number
+/// as a free xref entry — its body still sits in the file unaddressed.
+Uint8List _offsetPdf(
+  List<String> objects, {
+  int root = 1,
+  bool trailerSize = true,
+  Set<int> freeIds = const {},
+  Map<int, int> generations = const {},
+}) {
   final b = StringBuffer('%PDF-1.7\n');
   final offsets = <int>[];
   for (var i = 0; i < objects.length; i++) {
     offsets.add(b.length);
-    b.write('${i + 1} 0 obj\n${objects[i]}\nendobj\n');
+    final gen = generations[i + 1] ?? 0;
+    b.write('${i + 1} $gen obj\n${objects[i]}\nendobj\n');
   }
   final xrefOffset = b.length;
   final size = objects.length + 1;
   b.write('xref\n0 $size\n0000000000 65535 f \n');
-  for (final off in offsets) {
-    b.write('${off.toString().padLeft(10, '0')} 00000 n \n');
+  for (var i = 0; i < offsets.length; i++) {
+    final gen = (generations[i + 1] ?? 0).toString().padLeft(5, '0');
+    final entry = freeIds.contains(i + 1)
+        ? '0000000000 00001 f \n'
+        : '${offsets[i].toString().padLeft(10, '0')} $gen n \n';
+    b.write(entry);
   }
+  final trailer = trailerSize
+      ? 'trailer\n<< /Size $size /Root $root 0 R >>\n'
+      : 'trailer\n<< /Root $root 0 R >>\n';
   b.write(
-    'trailer\n<< /Size $size /Root $root 0 R >>\n'
+    '$trailer'
     'startxref\n$xrefOffset\n%%EOF\n',
   );
   final content = b.toString();

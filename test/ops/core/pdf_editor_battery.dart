@@ -635,6 +635,92 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
     }, timeout: t(1));
 
+    // ── Full rewrite: loud failures and exact renumbering ──
+
+    test(
+      'no /Size trailer: new ids never collide through a full rewrite',
+      () async {
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(noSizePdf));
+        await editor.setTitle('NoSizeTitle');
+        // Background layer draws into page content, so extraction proves it.
+        await editor.addWatermark(
+          0,
+          'NOSIZEWATERMARK',
+          layer: PdfWatermarkLayer.background,
+        );
+        final sink = TestSink();
+        await editor.save(sink, options: const PdfSaveOptions.fullRewrite());
+        await editor.dispose();
+        final out = sink.takeBytes();
+        final e2 = await pdf.edit(src(out));
+        expect(await e2.pageCount, 1);
+        expect(
+          await e2.title,
+          contains('NoSizeTitle'),
+          reason: 'the title must survive the rewrite',
+        );
+        await e2.dispose();
+        final doc = await pdf.open(src(out));
+        final text = await doc.extract(pages: const PdfPages.all());
+        expect(text, contains('nosizemark'));
+        expect(text, contains('NOSIZEWATERMARK'));
+        await doc.dispose();
+      },
+      timeout: t(1),
+    );
+
+    test('a full rewrite writes every reference at generation 0', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(genOnePdf));
+      await editor.setTitle('GenOne');
+      final sink = TestSink();
+      await editor.save(sink, options: const PdfSaveOptions.fullRewrite());
+      await editor.dispose();
+      final out = sink.takeBytes();
+      // bytegrep-exempt: the claim is about how references are spelled;
+      // this engine reads `5 1 R` to a `5 0 obj` anyway, other readers
+      // treat it as null.
+      expect(String.fromCharCodes(out), isNot(contains(' 1 R')));
+      final doc = await pdf.open(src(out));
+      expect(
+        await doc.extract(pages: const PdfPages.all()),
+        contains('genonemark'),
+      );
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('free xref entries survive a full rewrite (GC off)', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(freeEntryPdf));
+      final sink = TestSink();
+      await editor.save(
+        sink,
+        options: const PdfSaveOptions.fullRewrite(garbageCollect: false),
+      );
+      await editor.dispose();
+      final doc = await pdf.open(src(sink.takeBytes()));
+      expect(doc.pageCount, 1);
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test(
+      'an unloadable in-use object fails the save, writing nothing',
+      () async {
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(brokenObjectPdf));
+        await expectLater(
+          editor.save(
+            TestSink(),
+            options: const PdfSaveOptions.fullRewrite(garbageCollect: false),
+          ),
+          throwsA(isA<PdfCorrupted>()),
+        );
+        await editor.dispose();
+      },
+      timeout: t(1),
+    );
+
     // ── Encryption ──
 
     test('save with encryption config applies encryption', () async {
