@@ -6,6 +6,8 @@
 // own output and extraction cannot see them (exempt from the
 // byte-grep guard for exactly that reason).
 
+import 'dart:typed_data';
+
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
@@ -54,6 +56,56 @@ void registerBuilderTests(Pdf Function() createPdf) {
       expect(asString, contains('Custom Builder Title'));
       expect(asString, contains('Builder Author'));
     }, timeout: t(1));
+
+    test('save compresses by default; compress: false stays plain', () async {
+      final pdf = createPdf();
+      final sentence = 'The quick brown fox jumps over the lazy dog.';
+
+      // One save consumes the builder handle, so the two variants are
+      // two builds of the same content. `compress == null` omits the
+      // argument and exercises the default.
+      Future<Uint8List> buildAndSave(bool? compress) async {
+        final builder = await pdf.build();
+        final page = await builder.addA4Page();
+        for (var i = 0; i < 40; i++) {
+          await page.paragraph(sentence);
+        }
+        await page.done();
+        final sink = TestSink();
+        if (compress == null) {
+          await builder.save(sink);
+        } else {
+          await builder.save(sink, compress: compress);
+        }
+        await builder.dispose();
+        return sink.takeBytes();
+      }
+
+      final plain = await buildAndSave(false);
+      final zipped = await buildAndSave(null);
+      expect(
+        zipped.length,
+        lessThan(plain.length),
+        reason: 'the default save must be smaller than the plain one',
+      );
+      expect(
+        String.fromCharCodes(zipped),
+        contains('/FlateDecode'),
+        reason: 'the default save must Flate-compress its streams',
+      );
+      final zippedDoc = await pdf.open(src(zipped));
+      final zippedText = await zippedDoc.extract(pages: const PdfPages.all());
+      await zippedDoc.dispose();
+      final plainDoc = await pdf.open(src(plain));
+      final plainText = await plainDoc.extract(pages: const PdfPages.all());
+      await plainDoc.dispose();
+      expect(
+        zippedText,
+        plainText,
+        reason: 'both saves must read back the same text',
+      );
+      expect(zippedText, contains('The quick brown fox'));
+    }, timeout: t(3));
 
     test('double dispose is safe', () async {
       final builder = await createPdf().build();

@@ -454,8 +454,9 @@ abstract class BridgeBuilderHandle {
     required double height,
   });
 
-  /// Saves the built document to [output].
-  PdfTask<void> save(DataSink output);
+  /// Saves the built document to [output]. Streams are Flate-compressed
+  /// unless [compress] is false.
+  PdfTask<void> save(DataSink output, {bool compress = true});
 
   /// Releases the builder handle.
   Future<void> dispose();

@@ -77,10 +77,12 @@ class PdfBuilder {
 
   // ── Save ──
 
-  /// Writes the constructed PDF to [output].
-  PdfTask<void> save(DataSink output) {
+  /// Writes the document to [output]. Page content and font streams are
+  /// Flate-compressed unless [compress] is false, which keeps them
+  /// readable as plain text for debugging.
+  PdfTask<void> save(DataSink output, {bool compress = true}) {
     _check();
-    return _handle.save(output);
+    return _handle.save(output, compress: compress);
   }
 
   // ── Lifecycle ──

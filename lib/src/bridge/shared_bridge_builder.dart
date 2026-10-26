@@ -52,9 +52,9 @@ class _SharedBuilderHandle extends BridgeBuilderHandle {
   }).map((_) => _SharedPageBuilderHandle(_bridge, _handleId));
 
   @override
-  PdfTask<void> save(DataSink output) => _bridge._exec(
+  PdfTask<void> save(DataSink output, {bool compress = true}) => _bridge._exec(
     EngineOp.builderSave,
-    {'handleId': _handleId},
+    {'handleId': _handleId, 'compress': compress},
     sinks: [output],
   );
   @override
