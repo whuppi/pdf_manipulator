@@ -1,0 +1,20 @@
+[package]
+name = "memprobe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+pdf_oxide = { path = "../../vendor/pdf_oxide", default-features = false, features = [
+    "icc",
+    "legacy-crypto",
+    "rendering",
+    "signatures",
+    "native-bridge",
+    "pdfa",
+    "office",
+    "extract",
+    "test-support",
+] }
+
+[workspace]

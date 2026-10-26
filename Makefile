@@ -252,7 +252,7 @@ compile-natives:
 # make test-ops-atomics  Ops: web Atomics.
 # make test-rust         cargo tests for both vendored crates.
 
-test: fixtures test-unit test-ops
+test: fixtures test-unit test-ops test-memory
 
 test-pkg-native: fixtures test-unit test-ops-native
 
@@ -266,6 +266,11 @@ test-unit:
 	$(DART) test $(TIMEOUT) $(UNIT_TEST_DIRS) -p vm --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/unit.json
 
 test-ops: fixtures test-ops-native test-ops-web
+
+# Memory wall probe (tool/memprobe): release only — debug builds hold
+# far more and would measure the profiler, not the engine.
+test-memory:
+	CARGO_TARGET_DIR="$(CURDIR)/target/memprobe" $(CARGO) run --release --manifest-path tool/memprobe/Cargo.toml
 
 test-ops-native:
 	@echo "=== Ops: Native ==="

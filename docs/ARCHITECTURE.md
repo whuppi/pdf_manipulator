@@ -28,8 +28,8 @@ Eight load-bearing guarantees. Every architectural decision serves one.
 5. **Bounded-buffer I/O.** Every op streams its input and output through
    fixed-size buffers (64KB read, 256KB write); the transport never scales
    with file size, on either platform. Test guards throw on any over-budget
-   `readAt` / `write`, proving the *transport* is O(1). (Full peak-memory
-   verification of Rust-internal processing is roadmapped, not yet automated.)
+   `readAt` / `write`, proving the *transport* is O(1). Rust-internal peak
+   memory is measured per op by `make test-memory`; see **The rule** below.
 
 6. **Upstream untouched.** `ffi.rs` and `wasm.rs` — upstream's own
    binding surfaces — are never called and never modified. Upstream
@@ -370,10 +370,12 @@ enum IS the protocol.
 The transport is O(1) on every path: input and output move through
 fixed-size buffers (64KB read, 256KB write), never a full-file buffer
 on the Dart side. Test guards enforce the chunk limits mechanically
-(see **Test architecture**). Full Rust-internal peak-memory
-verification — catching any intermediate accumulation during
-processing — is designed and tracked in the capability roadmap, not
-yet automated.
+(see **Test architecture**). Rust-internal peak memory is a separate
+claim, measured by `make test-memory` (tool/memprobe): incremental save
+and sign hold under 16 MiB on any input; open, extractPages, the full
+rewrite and merge still hold the parsed document (about twice the file
+on a 10,000-page input) and read a large stream whole, and the probe's
+ceilings pin those numbers until they are bounded.
 
 ### Transport contract
 
@@ -1015,7 +1017,7 @@ this table summarizes what each patched file carries and why.
 |---|---|
 | `Cargo.toml` | `native-bridge` deps + `office_oxide` as path dependency |
 | `lib.rs` | The shared widget-appearance regeneration helpers, the `pdfa` gate, the two `public-api` gates, `pub mod host;` |
-| `document.rs` | External reader variant + `from_external_reader()` (O(1)-memory open), info/encryption/permissions accessors, `collect_refs_of()` (zero-clone GC), streaming `to_docx/pptx/xlsx_writer_flow()`, scan-all `/Subtype` Form detection, raw source access for the incremental save (`source_len`, `read_source_at`, `header_offset`, `xref_repaired`, `object_generation`) |
+| `document.rs` | External reader variant + `from_external_reader()` (reads the source through a 64KB window; the open still parses and holds the objects it touches), info/encryption/permissions accessors, `collect_refs_of()` (zero-clone GC), streaming `to_docx/pptx/xlsx_writer_flow()`, scan-all `/Subtype` Form detection, raw source access for the incremental save (`source_len`, `read_source_at`, `header_offset`, `xref_repaired`, `object_generation`) |
 | `editor/document_editor.rs` | State accessors, `merge_from_reader()` + shared merge core, zero-clone GC BFS that follows the save's page-prune plan (`host/page_prune.rs`: dropped pages, inner `/Pages` nodes and the dropped pages' own annotations are never written, kept pages are re-parented to the root with their inherited attributes, and destinations, outline items, links, `/OpenAction` and form fields that pointed at a dropped page are removed), `write_full_to_writer(PositionedWrite)` (function-wide streaming offsets), per-save page-ref cache, scoped destructive erase (`erase_regions_destructive`), appearance generation for AP-less annotation types, §12.5.5 appearance placement, `add_page_annotation()`, `all_media_boxes()`, image modifications applied in page space (`rewrite_content_stream_with_image_mods` composes with the enclosing CTM, matching `get_page_images`), `staged_or_source_object()` so the resource walk writes a staged XObject/ExtGState instead of the source copy (the sweep skips ids already written), form field properties reach the saved file (`flush_form_fields_to_modified_objects` writes every dirty wrapper's `/TU`, `/Rect`, `/MaxLen`, `/Q`, `/Ff`, `/MK`, `/BS`, `/DA`, not only `/V`) and `remove_deleted_form_fields_from_acroform` drops removed fields from `/Fields` and `/Annots`, `incremental_refusal()` / `incremental_value_only()` / `incremental_objects()` (what an append can carry, and the objects it appends), and the full-rewrite sweep never copies a source object stream or xref stream |
 | `extractors/images.rs` | `PdfImageHandle::object_ref()` and `ctm()` — the identity and composed placement the host image reducer groups and measures by |
 | `encryption/mod.rs` + `encryption/algorithms.rs` | Raw file key exposed to the writer (`file_key`, `build_with_key`) so streams encrypt with the key the dict advertises; PDF 2.0 Algorithm 10 (`/Perms` for R6) |
