@@ -349,7 +349,7 @@ await for (final page in doc.render(
 await doc.dispose();
 ```
 
-Also on the document: `extract` (plain / markdown / html), `extractImages`, `signatures` / `verifySignatures` (not implemented yet: it returns `false` for every document), `validatePdfA` / `validatePdfUa`, `classifyPage` / `classifyDocument`, `planSplitByBookmarks`, `formFields` / `formField(name)`, `exportFormData` (FDF / XFDF), `xfa`, `attachments` / `extractAttachment`, `annotations(page)`, plus metadata getters (`title`, `author`, `version`, `isTagged`).
+Also on the document: `extract` (plain / markdown / html), `extractImages`, `signatures` / `verifySignatures` (digest and signer key; certificate trust is not checked), `validatePdfA` / `validatePdfUa`, `classifyPage` / `classifyDocument`, `planSplitByBookmarks`, `formFields` / `formField(name)`, `exportFormData` (FDF / XFDF), `xfa`, `attachments` / `extractAttachment`, `annotations(page)`, plus metadata getters (`title`, `author`, `version`, `isTagged`).
 
 ### Edit a document
 

@@ -534,6 +534,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(out));
       expect(doc.title, 'After signing');
       expect(await doc.signatures, isNotEmpty);
+      expect(await doc.verifySignatures(), isTrue);
       await doc.dispose();
     }, timeout: t(2));
 

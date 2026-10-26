@@ -42,7 +42,7 @@ same names, when both exist. Exports (source in, sink out) live on
 | Render pages | `render_pages_streamed` | `render()` | DONE |
 | Extract images | `extract_images_streamed` | `extractImages()` | DONE |
 | Get signatures | `get_signatures` | `signatures` | DONE |
-| Verify signatures | `verify_signatures` | `verifySignatures()` | PLANNED — the engine op is a stub that returns `false` for every document, signed or not; the Dart call exists, the check does not |
+| Verify signatures | `verify_signatures` | `verifySignatures()` | DONE — digest over the ByteRange and signer key; no trust chain or revocation |
 | Validate PDF/A | `validate_pdfa` | `validatePdfA()` | DONE |
 | Validate PDF/UA | `validate_pdfua` | `validatePdfUa()` | DONE |
 | Classify page | `classify_page` | `classifyPage()` | DONE |
@@ -359,5 +359,5 @@ The planned route to expose these without bloating the default is per-feature op
 
 | Gap | Detail | Status |
 |---|---|---|
-| Field-action silent no-op | `fieldKeystroke`/`fieldFormat`/`fieldValidate`/`fieldCalculate` attach to the most-recently-added field; on a page with no field the call silently does nothing. A typed error would surface caller bugs. | PLANNED |
+| Field-action and link no-op | The four field scripts on a page with no form field, and `linkUrl`/`linkPage` on a page with no text, throw `PdfInvalidArgument` instead of succeeding without effect. | DONE |
 | True O(1) memory verification | The Dart-side chunk guards catch transport violations only; Rust-internal Vec accumulation is invisible to them. Wire a tracking allocator into the Rust test harness: baseline → run op on a 50MB+ input → assert peak allocation stays under a fixed bound (~5MB). | PLANNED |

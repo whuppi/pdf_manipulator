@@ -7,6 +7,7 @@
 import 'package:pdf_manipulator/src/ops/pdf.dart';
 import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
+import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_task.dart';
 import 'package:pdf_manipulator/src/bridge/pdf_bridge.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
@@ -168,29 +169,34 @@ class PdfPageBuilder {
   // ── Field scripts ──
 
   /// Sets a JavaScript keystroke action on the most-recently-added
-  /// form field. A page with no field yet ignores the call.
+  /// form field. Throws [PdfInvalidArgument] when this page has no
+  /// form field yet.
   PdfTask<void> fieldKeystroke(String script) => _handle.fieldKeystroke(script);
 
   /// Sets a JavaScript format action on the most-recently-added
-  /// form field. A page with no field yet ignores the call.
+  /// form field. Throws [PdfInvalidArgument] when this page has no
+  /// form field yet.
   PdfTask<void> fieldFormat(String script) => _handle.fieldFormat(script);
 
   /// Sets a JavaScript validate action on the most-recently-added
-  /// form field. A page with no field yet ignores the call.
+  /// form field. Throws [PdfInvalidArgument] when this page has no
+  /// form field yet.
   PdfTask<void> fieldValidate(String script) => _handle.fieldValidate(script);
 
   /// Sets a JavaScript calculate action on the most-recently-added
-  /// form field. A page with no field yet ignores the call.
+  /// form field. Throws [PdfInvalidArgument] when this page has no
+  /// form field yet.
   PdfTask<void> fieldCalculate(String script) => _handle.fieldCalculate(script);
 
   // ── Links ──
 
-  /// Adds a URL hyperlink anchored on the last-written text. A page
-  /// with no text yet ignores the call.
+  /// Adds a URL hyperlink anchored on the last-written text. Throws
+  /// [PdfInvalidArgument] when this page has no text yet.
   PdfTask<void> linkUrl(String url) => _handle.linkUrl(url);
 
   /// Adds an internal link to [targetPage] (0-based), anchored on
-  /// the last-written text. A page with no text yet ignores the call.
+  /// the last-written text. Throws [PdfInvalidArgument] when this
+  /// page has no text yet.
   PdfTask<void> linkPage(int targetPage) => _handle.linkPage(targetPage);
 
   // ── Layout ──

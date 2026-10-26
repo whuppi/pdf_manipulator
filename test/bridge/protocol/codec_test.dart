@@ -308,13 +308,35 @@ void main() {
     test('parses signature list', () {
       final sigs = decodeSignatures({
         'signatures': [
-          {'signerName': 'Alice', 'reason': 'Approval', 'isValid': true},
+          {
+            'signerName': 'Alice',
+            'reason': 'Approval',
+            'isValid': true,
+            'coversWholeDocument': true,
+            'signingTime': 0,
+          },
         ],
       });
       expect(sigs, hasLength(1));
       expect(sigs[0].signerName, 'Alice');
       expect(sigs[0].isValid, isTrue);
+      expect(sigs[0].coversWholeDocument, isTrue);
+      expect(sigs[0].signingTime, DateTime.utc(1970));
     });
+
+    test(
+      'coversWholeDocument defaults false and absence of time stays null',
+      () {
+        final sigs = decodeSignatures({
+          'signatures': [
+            {'signerName': 'Bob', 'isValid': false},
+          ],
+        });
+        expect(sigs, hasLength(1));
+        expect(sigs[0].coversWholeDocument, isFalse);
+        expect(sigs[0].signingTime, isNull);
+      },
+    );
   });
 
   group('decodeValidationResult', () {

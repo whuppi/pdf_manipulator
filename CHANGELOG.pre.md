@@ -107,8 +107,11 @@ CONTENT RULES (never change)
 - **Breaking:** `PdfError` has a new subtype, `PdfIncrementalRefused` → add a case to every exhaustive `switch` over `PdfError`
 - **Breaking:** `extractPages` and `selectPages` throw `PdfInvalidArgument` for a page listed twice, which used to write a damaged file → list each page once
 - **Breaking:** engine failures throw their own `PdfError` subtype (`PdfCorrupted`, `PdfPasswordRequired`, `PdfWrongPassword`, `PdfPageRangeError`, `PdfUnsupported`, `PdfInvalidArgument`, `PdfIoError`, `PdfCryptoError`) where they threw `PdfEngineError` → catch the subtype, or `PdfError` for all of them
+- **Breaking:** the page builder's `fieldKeystroke`, `fieldFormat`, `fieldValidate` and `fieldCalculate` throw `PdfInvalidArgument` on a page with no form field, and `linkUrl` and `linkPage` on a page with no text, where they did nothing → add the field or text first
+- **Breaking:** `PdfSignatureInfo` has a required `coversWholeDocument` parameter → pass it where you construct one, in test fakes for example
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Added `PdfDoc.annotations(page)`, which lists a page's annotations (subtype, rectangle, contents, author, form field name) as `PdfAnnotationInfo`
+- Changed `PdfDoc.verifySignatures` to check each signature's digest and signer key, where it returned `false` for every document; `PdfSignatureInfo` has `isValid`, `coversWholeDocument` and `signingTime` filled
 - Fixed an empty input to `merge` or any other multi-source op shifting every source after it, so the op read the wrong documents — an empty input now throws `PdfCorrupted`
 - Fixed `extractPages` and `deletePages` writing the pages they drop into the output, so the output kept its original size and the dropped pages' text, images and form values — a save now writes nothing only a dropped page reaches, and drops the links, bookmark targets and form fields that pointed at one ([#261](https://github.com/whuppi/pdf_manipulator/issues/261) reported by [@crurui](https://github.com/crurui))
 - Fixed page labels shifting onto the wrong pages after `extractPages`, `deletePages` or a reorder — each kept page keeps its label

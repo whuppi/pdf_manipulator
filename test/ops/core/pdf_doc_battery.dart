@@ -9,6 +9,7 @@
 // qpdf-encrypted fixture.
 
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
@@ -580,4 +581,119 @@ void registerDocTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
   });
+
+  group('verifySignatures', () {
+    Future<Uint8List> signWith(
+      Pdf pdf,
+      PdfSigningCredentials credentials,
+    ) async {
+      final sink = TestSink();
+      await pdf.sign(src(minimalPdf), sink, credentials: credentials);
+      return sink.takeBytes();
+    }
+
+    test('signed pkcs12 verifies and covers the whole document', () async {
+      final pdf = createPdf();
+      final signed = await signWith(
+        pdf,
+        PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
+      );
+      final doc = await pdf.open(src(signed));
+      expect(await doc.verifySignatures(), isTrue);
+      final sigs = await doc.signatures;
+      expect(sigs, hasLength(1));
+      expect(sigs.single.isValid, isTrue);
+      expect(sigs.single.coversWholeDocument, isTrue);
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('changing one header digit breaks the signature', () async {
+      final pdf = createPdf();
+      final signed = await signWith(
+        pdf,
+        PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
+      );
+      final header = Uint8List.fromList('%PDF-1.4'.codeUnits);
+      var at = -1;
+      for (var i = 0; i + header.length <= signed.length; i++) {
+        if (signed[i] == header[0] && _matches(signed, i, header)) {
+          at = i;
+          break;
+        }
+      }
+      expect(at, 0, reason: 'the header sits at byte 0');
+      final tampered = Uint8List.fromList(signed);
+      tampered[at + 7] = 0x35; // '4' -> '5'
+      final doc = await pdf.open(src(tampered));
+      expect(await doc.verifySignatures(), isFalse);
+      expect((await doc.signatures).single.isValid, isFalse);
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('unsigned document does not verify', () async {
+      final pdf = createPdf();
+      final doc = await pdf.open(src(minimalPdf));
+      expect(await doc.verifySignatures(), isFalse);
+      expect(await doc.signatures, isEmpty);
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test(
+      'incremental save keeps the signature valid over its revision',
+      () async {
+        final pdf = createPdf();
+        final signed = await signWith(
+          pdf,
+          PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
+        );
+        final editor = await pdf.edit(src(signed));
+        await editor.setTitle('x');
+        final sink = TestSink();
+        await editor.save(sink, options: const PdfSaveOptions.incremental());
+        await editor.dispose();
+
+        final doc = await pdf.open(src(sink.takeBytes()));
+        expect(await doc.verifySignatures(), isTrue);
+        expect((await doc.signatures).single.coversWholeDocument, isFalse);
+        await doc.dispose();
+      },
+      timeout: t(1),
+    );
+
+    test('a full rewrite after signing breaks the signature', () async {
+      final pdf = createPdf();
+      final signed = await signWith(
+        pdf,
+        PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
+      );
+      final editor = await pdf.edit(src(signed));
+      await editor.setTitle('x');
+      final sink = TestSink();
+      await editor.save(sink, options: const PdfSaveOptions.fullRewrite());
+      await editor.dispose();
+
+      final doc = await pdf.open(src(sink.takeBytes()));
+      expect(await doc.verifySignatures(), isFalse);
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('signed pem verifies', () async {
+      final pdf = createPdf();
+      final signed = await signWith(
+        pdf,
+        const PdfSigningCredentials.pem(testCertPem, testKeyPem),
+      );
+      final doc = await pdf.open(src(signed));
+      expect(await doc.verifySignatures(), isTrue);
+      await doc.dispose();
+    }, timeout: t(1));
+  });
+}
+
+/// Finds [needle] in [haystack] at `at`.
+bool _matches(Uint8List haystack, int at, Uint8List needle) {
+  for (var i = 0; i < needle.length; i++) {
+    if (haystack[at + i] != needle[i]) return false;
+  }
+  return true;
 }

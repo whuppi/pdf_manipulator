@@ -146,8 +146,11 @@ class PdfDoc {
     return _handle.signatures;
   }
 
-  /// Meant to verify every digital signature. Not implemented yet: the
-  /// engine returns `false` for every document, signed or not.
+  /// Whether the document has at least one signature and every
+  /// signature verifies: the digest of the bytes each one covers
+  /// matches, and the signer's key verifies it. Certificate trust and
+  /// revocation are not checked. A signature over an earlier revision
+  /// still counts; see [PdfSignatureInfo.coversWholeDocument].
   PdfTask<bool> verifySignatures() {
     KeepRecord.op('signatures');
     _check();

@@ -541,13 +541,16 @@ List<PdfSignatureInfo> decodeSignatures(Map<String, Object?> r) {
   final sigsRaw = r['signatures'] as List? ?? [];
   return sigsRaw.map((s) {
     final m = _asMap(s);
-    final timeStr = m['signingTime'] as String?;
+    final secs = m['signingTime'] as int?;
     return PdfSignatureInfo(
       signerName: m['signerName'] as String?,
       reason: m['reason'] as String?,
       location: m['location'] as String?,
-      signingTime: timeStr != null ? DateTime.tryParse(timeStr) : null,
+      signingTime: secs != null
+          ? DateTime.fromMillisecondsSinceEpoch(secs * 1000, isUtc: true)
+          : null,
       isValid: m['isValid'] as bool? ?? false,
+      coversWholeDocument: m['coversWholeDocument'] as bool? ?? false,
     );
   }).toList();
 }

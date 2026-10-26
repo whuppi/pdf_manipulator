@@ -302,6 +302,13 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final output = sink.takeBytes();
       final doc = await pdf.open(src(output));
       expect(doc.pageCount, 1);
+      final annotations = await doc.annotations(0);
+      expect(
+        annotations,
+        hasLength(1),
+        reason: "the link is the page's only annotation",
+      );
+      expect(annotations.single.subtype, PdfAnnotationSubtype.link);
       await doc.dispose();
       // The URL lives in a /URI action dict — extraction cannot see
       // it; the raw-bytes check IS the right level for this claim.
@@ -427,9 +434,6 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final builder = await pdf.build();
       final page = await builder.addA4Page();
-      // Actions attach to the most-recently-added field — a bare-page
-      // call is a silent no-op (sharp edge, tracked in
-      // CAPABILITY_ROADMAP).
       await page.textField(
         'actionfield',
         const PdfRect(x: 50, y: 700, width: 200, height: 20),
@@ -454,9 +458,6 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final builder = await pdf.build();
       final page = await builder.addA4Page();
-      // Actions attach to the most-recently-added field — a bare-page
-      // call is a silent no-op (sharp edge, tracked in
-      // CAPABILITY_ROADMAP).
       await page.textField(
         'actionfield',
         const PdfRect(x: 50, y: 700, width: 200, height: 20),
@@ -481,9 +482,6 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final builder = await pdf.build();
       final page = await builder.addA4Page();
-      // Actions attach to the most-recently-added field — a bare-page
-      // call is a silent no-op (sharp edge, tracked in
-      // CAPABILITY_ROADMAP).
       await page.textField(
         'actionfield',
         const PdfRect(x: 50, y: 700, width: 200, height: 20),
@@ -508,9 +506,6 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final builder = await pdf.build();
       final page = await builder.addA4Page();
-      // Actions attach to the most-recently-added field — a bare-page
-      // call is a silent no-op (sharp edge, tracked in
-      // CAPABILITY_ROADMAP).
       await page.textField(
         'actionfield',
         const PdfRect(x: 50, y: 700, width: 200, height: 20),
@@ -557,7 +552,100 @@ void registerBuilderTests(Pdf Function() createPdf) {
       expect(String.fromCharCodes(output), contains('/Fit'));
       final doc = await pdf.open(src(output));
       expect(doc.pageCount, 2);
+      final annotations = await doc.annotations(0);
+      expect(
+        annotations,
+        hasLength(1),
+        reason: "the link is page 0's only annotation",
+      );
+      expect(annotations.single.subtype, PdfAnnotationSubtype.link);
       await doc.dispose();
     }, timeout: t(1));
+
+    test('fieldKeystroke on a bare page throws PdfInvalidArgument', () async {
+      final builder = await createPdf().build();
+      final page = await builder.addA4Page();
+      await expectLater(
+        page.fieldKeystroke('AFNumber_Keystroke(2, 0, 0, 0, "", true)'),
+        throwsA(isA<PdfInvalidArgument>()),
+        reason: 'a field script with no field must be refused',
+      );
+      await builder.dispose();
+    }, timeout: t(1));
+
+    test('fieldFormat on a bare page throws PdfInvalidArgument', () async {
+      final builder = await createPdf().build();
+      final page = await builder.addA4Page();
+      await expectLater(
+        page.fieldFormat('AFNumber_Format(2, 0, 0, 0, "", true)'),
+        throwsA(isA<PdfInvalidArgument>()),
+        reason: 'a field script with no field must be refused',
+      );
+      await builder.dispose();
+    }, timeout: t(1));
+
+    test('fieldValidate on a bare page throws PdfInvalidArgument', () async {
+      final builder = await createPdf().build();
+      final page = await builder.addA4Page();
+      await expectLater(
+        page.fieldValidate('AFRange_Validate(true, 0, true, 100)'),
+        throwsA(isA<PdfInvalidArgument>()),
+        reason: 'a field script with no field must be refused',
+      );
+      await builder.dispose();
+    }, timeout: t(1));
+
+    test('fieldCalculate on a bare page throws PdfInvalidArgument', () async {
+      final builder = await createPdf().build();
+      final page = await builder.addA4Page();
+      await expectLater(
+        page.fieldCalculate('AFSimple_Calculate("SUM", new Array("f1"))'),
+        throwsA(isA<PdfInvalidArgument>()),
+        reason: 'a field script with no field must be refused',
+      );
+      await builder.dispose();
+    }, timeout: t(1));
+
+    test('linkUrl on a bare page throws PdfInvalidArgument', () async {
+      final builder = await createPdf().build();
+      final page = await builder.addA4Page();
+      await expectLater(
+        page.linkUrl('https://example.com'),
+        throwsA(isA<PdfInvalidArgument>()),
+        reason: 'a link with no text must be refused',
+      );
+      await builder.dispose();
+    }, timeout: t(1));
+
+    test('linkPage on a bare page throws PdfInvalidArgument', () async {
+      final builder = await createPdf().build();
+      final page = await builder.addA4Page();
+      await expectLater(
+        page.linkPage(0),
+        throwsA(isA<PdfInvalidArgument>()),
+        reason: 'a link with no text must be refused',
+      );
+      await builder.dispose();
+    }, timeout: t(1));
+
+    test(
+      'fieldKeystroke after newPageSameSize throws PdfInvalidArgument',
+      () async {
+        final builder = await createPdf().build();
+        final page = await builder.addA4Page();
+        await page.textField(
+          'actionfield',
+          const PdfRect(x: 50, y: 700, width: 200, height: 20),
+        );
+        await page.newPageSameSize();
+        await expectLater(
+          page.fieldKeystroke('AFNumber_Keystroke(2, 0, 0, 0, "", true)'),
+          throwsA(isA<PdfInvalidArgument>()),
+          reason: 'the field was left on the previous page',
+        );
+        await builder.dispose();
+      },
+      timeout: t(1),
+    );
   });
 }
