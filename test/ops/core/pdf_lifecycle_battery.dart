@@ -18,7 +18,7 @@ void registerLifecycleTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       await expectLater(
         pdf.open(TestSource(Uint8List.fromList([1, 2, 3, 4]))),
-        throwsA(isA<PdfEngineError>()),
+        throwsA(isA<PdfCorrupted>()),
         reason:
             'engine failures are PdfError — never a bare '
             'StateError, which is reserved for use-after-dispose',
@@ -26,11 +26,26 @@ void registerLifecycleTests(Pdf Function() createPdf) {
       await pdf.dispose();
     }, timeout: t(1));
 
-    test('open empty bytes throws the typed engine error', () async {
+    test('open empty bytes throws PdfCorrupted', () async {
       final pdf = createPdf();
       await expectLater(
         pdf.open(TestSource(Uint8List(0))),
-        throwsA(isA<PdfEngineError>()),
+        throwsA(isA<PdfCorrupted>()),
+        reason: 'an empty file reaches the parser and fails its header check',
+      );
+      await pdf.dispose();
+    }, timeout: t(1));
+
+    test('an empty first source keeps the next one at its own index', () async {
+      // A transport that drops an empty source slides the second
+      // document into slot 0, and the merge writes it alone.
+      final pdf = createPdf();
+      await expectLater(
+        pdf.merge([
+          TestSource(Uint8List(0)),
+          TestSource(minimalPdf),
+        ], TestSink()),
+        throwsA(isA<PdfCorrupted>()),
       );
       await pdf.dispose();
     }, timeout: t(1));

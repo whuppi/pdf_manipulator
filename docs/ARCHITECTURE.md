@@ -329,7 +329,9 @@ through the transport's I/O channels, never through the codec.
 ```
 Request:  [op_len: u8] [op: UTF-8] [field_count: u16 LE] [fields...]
 Response: [status: u8]  [field_count: u16 LE] [fields...]
-            status 0 → [msg_len: u32 LE] [msg: UTF-8]  (error)
+            status 0 → [kind: u8] [field_count: u16 LE] [fields...]
+                       (error; field `message` always present,
+                        pageRange kind also carries `page`, `pageCount`)
             status 1 → fields                           (ok)
             status 2 → (no payload)                     (cancelled)
 
@@ -338,6 +340,22 @@ Field:    [key_len: u8] [key: UTF-8] [type: u8] [value]
 Types:    0=null  1=i32  2=i64  3=f64  4=bool  5=string  6=bytes
           7=int_list  8=float_list  9=string_list  10=map_list
 ```
+
+Error kinds (byte 1 of a status-0 response) and the Dart type each
+throws:
+
+| Kind | Name | Dart type |
+|---|---|---|
+| 0 | engine | `PdfEngineError` |
+| 1 | invalidArgument | `PdfInvalidArgument` |
+| 2 | io | `PdfIoError` |
+| 3 | corrupted | `PdfCorrupted` |
+| 4 | unsupported | `PdfUnsupported` |
+| 5 | passwordRequired | `PdfPasswordRequired` |
+| 6 | wrongPassword | `PdfWrongPassword` |
+| 7 | crypto | `PdfCryptoError` |
+| 8 | pageRange | `PdfPageRangeError` (fields `page`, `pageCount`) |
+| 9 | incrementalRefused | `PdfIncrementalRefused` |
 
 Op names are the EngineOp `.wire` strings (`"open"`, `"extract"`,
 `"editorMutate"`, etc.). No numeric mapping to keep in sync — the

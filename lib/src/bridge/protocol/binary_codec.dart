@@ -16,6 +16,41 @@ const _tF64List = 8;
 const _tStringList = 9;
 const _tMapList = 10;
 
+/// The error kind in byte 1 of an error response. A value's index is its
+/// wire byte, the same as Rust's `ErrorKind`, and the wire sync test
+/// fails when the two differ. An unknown byte decodes as [engine].
+enum WireErrorKind {
+  /// Thrown as [PdfEngineError].
+  engine,
+
+  /// Thrown as [PdfInvalidArgument].
+  invalidArgument,
+
+  /// Thrown as [PdfIoError].
+  io,
+
+  /// Thrown as [PdfCorrupted].
+  corrupted,
+
+  /// Thrown as [PdfUnsupported].
+  unsupported,
+
+  /// Thrown as [PdfPasswordRequired].
+  passwordRequired,
+
+  /// Thrown as [PdfWrongPassword].
+  wrongPassword,
+
+  /// Thrown as [PdfCryptoError].
+  crypto,
+
+  /// Thrown as [PdfPageRangeError], from the `page` and `pageCount` fields.
+  pageRange,
+
+  /// Thrown as [PdfIncrementalRefused].
+  incrementalRefused,
+}
+
 /// Encodes an operation name and fields into a binary request payload.
 Uint8List encodeRequest(String op, Map<String, Object?> fields) {
   final buf = BytesBuilder(copy: false);
@@ -31,26 +66,50 @@ Uint8List encodeRequest(String op, Map<String, Object?> fields) {
 }
 
 /// Decodes a binary response payload into a field map.
+///
+/// Every engine failure is a [PdfError], thrown here so callers can
+/// pattern-match it — and so it can never be mistaken for a
+/// [StateError], which is reserved for programmer errors (use after
+/// dispose). Status 0 carries an error kind that maps to a [PdfError]
+/// subtype; status 2 throws [PdfCancelled]. Every other status returns
+/// the field map.
 Map<String, Object?> decodeResponse(Uint8List bytes) {
-  if (bytes.isEmpty) return {'error': 'empty response'};
+  if (bytes.isEmpty) throw const PdfEngineError('empty response');
   final r = _Reader(bytes);
   final status = r.u8();
   if (status == 0) {
-    final msgLen = r.u32();
-    final msg = utf8.decode(r.bytes(msgLen));
-    return {'error': msg};
+    final byte = r.u8();
+    final map = _readFields(r);
+    final message = map['message'] as String? ?? '';
+    final kind = byte < WireErrorKind.values.length
+        ? WireErrorKind.values[byte]
+        : WireErrorKind.engine;
+    throw switch (kind) {
+      WireErrorKind.engine => PdfEngineError(message),
+      WireErrorKind.invalidArgument => PdfInvalidArgument(message),
+      WireErrorKind.io => PdfIoError(message),
+      WireErrorKind.corrupted => PdfCorrupted(message),
+      WireErrorKind.unsupported => PdfUnsupported(message),
+      WireErrorKind.passwordRequired => const PdfPasswordRequired(),
+      WireErrorKind.wrongPassword => const PdfWrongPassword(),
+      WireErrorKind.crypto => PdfCryptoError(message),
+      WireErrorKind.pageRange => PdfPageRangeError(
+        page: map['page'] as int? ?? 0,
+        pageCount: map['pageCount'] as int? ?? 0,
+      ),
+      WireErrorKind.incrementalRefused => PdfIncrementalRefused(message),
+    };
   }
   // Status 2 = cancelled (dispose or task cancel). Thrown here so
   // every op maps it to the one typed error with zero per-op code.
   if (status == 2) {
     throw const PdfCancelled();
   }
-  // Status 3 = an incremental save refused the staged edits; the caller
-  // falls back to a full rewrite, so it gets its own type.
-  if (status == 3) {
-    final msgLen = r.u32();
-    throw PdfIncrementalRefused(utf8.decode(r.bytes(msgLen)));
-  }
+  return _readFields(r);
+}
+
+/// Reads a field-counted block of key-value fields into a map.
+Map<String, Object?> _readFields(_Reader r) {
   final fieldCount = r.u16();
   final map = <String, Object?>{};
   for (var i = 0; i < fieldCount; i++) {

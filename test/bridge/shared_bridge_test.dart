@@ -10,6 +10,7 @@ import 'dart:typed_data';
 import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart';
 import 'package:pdf_manipulator/src/bridge/protocol/codec.dart';
 import 'package:pdf_manipulator/src/bridge/protocol/op.dart';
+import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:test/test.dart';
 
@@ -87,9 +88,11 @@ void main() {
       expect(String.fromCharCodes(bytes.sublist(1, 5)), 'open');
     });
 
-    test('decodeResponse handles empty response as error', () {
-      final map = decodeResponse(Uint8List(0));
-      expect(map['error'], 'empty response');
+    test('decodeResponse throws PdfEngineError on empty response', () {
+      expect(
+        () => decodeResponse(Uint8List(0)),
+        throwsA(isA<PdfEngineError>()),
+      );
     });
   });
 }

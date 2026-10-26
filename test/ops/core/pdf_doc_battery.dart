@@ -99,7 +99,7 @@ void registerDocTests(Pdf Function() createPdf) {
 
         await expectLater(
           pdf.open(src(encBytes), password: 'not-the-password'),
-          throwsA(isA<PdfEngineError>()),
+          throwsA(isA<PdfWrongPassword>()),
           reason:
               'a wrong password must refuse loudly — silently '
               'opening would defeat the encryption',
@@ -123,7 +123,7 @@ void registerDocTests(Pdf Function() createPdf) {
 
       await expectLater(
         pdf.open(src(encBytes)),
-        throwsA(isA<PdfEngineError>()),
+        throwsA(isA<PdfPasswordRequired>()),
       );
     }, timeout: t(1));
 
@@ -438,11 +438,11 @@ void registerDocTests(Pdf Function() createPdf) {
 
         await expectLater(
           pdf.open(src(tpEncrypted), password: 'wrong'),
-          throwsA(isA<PdfEngineError>()),
+          throwsA(isA<PdfWrongPassword>()),
         );
         await expectLater(
           pdf.open(src(tpEncrypted)),
-          throwsA(isA<PdfEngineError>()),
+          throwsA(isA<PdfPasswordRequired>()),
         );
       },
       timeout: t(1),

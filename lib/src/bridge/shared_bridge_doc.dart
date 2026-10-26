@@ -143,9 +143,6 @@ class _SharedDocHandle extends BridgeDocHandle {
     await _bridge._transport.execute(req, sinks: [sink]);
     for (final frame in sink.frames) {
       final map = bin.decodeResponse(frame);
-      if (map.containsKey('error')) {
-        throw PdfEngineError(map['error'] as String);
-      }
       yield codec.decodeRenderedPage(map);
     }
   }
@@ -163,9 +160,6 @@ class _SharedDocHandle extends BridgeDocHandle {
       await _bridge._transport.execute(req, sinks: [sink]);
       for (final frame in sink.frames) {
         final map = bin.decodeResponse(frame);
-        if (map.containsKey('error')) {
-          throw PdfEngineError(map['error'] as String);
-        }
         yield codec.decodePdfImage(map);
       }
     }

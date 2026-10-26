@@ -15,6 +15,7 @@ library;
 // io-exempt: reads bridge_api.rs from disk to check Dart/Rust op parity.
 import 'dart:io';
 
+import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart';
 import 'package:pdf_manipulator/src/bridge/protocol/op.dart';
 import 'package:test/test.dart';
 
@@ -172,6 +173,30 @@ void main() {
         reason: 'Page sub-ops leaked into top-level dispatch: $pageInTop',
       );
     });
+  });
+
+  // ── Error kinds ──
+
+  test('WireErrorKind matches Rust ErrorKind name for name, byte for byte', () {
+    final source = File(
+      'vendor/pdf_oxide/src/host/binary_codec.rs',
+    ).readAsStringSync();
+    final start = source.indexOf('pub enum ErrorKind {');
+    if (start == -1) fail('pub enum ErrorKind not found');
+    final body = source.substring(start, source.indexOf('}', start));
+    final rust = {
+      for (final m in RegExp(
+        r'^\s*(\w+) = (\d+),',
+        multiLine: true,
+      ).allMatches(body))
+        int.parse(m.group(2)!): m.group(1)!,
+    };
+    final dart = {
+      for (final k in WireErrorKind.values)
+        k.index: '${k.name[0].toUpperCase()}${k.name.substring(1)}',
+    };
+    expect(rust, isNotEmpty);
+    expect(dart, rust);
   });
 
   // ── Web worker.js sync ──

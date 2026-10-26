@@ -351,7 +351,7 @@ The planned route to expose these without bloating the default is per-feature op
 | Builder output hardening (compress streams by default; richer typesetting) | PLANNED | Builder output is valid but naively shaped vs real-world PDFs; product decision, deliberately separate from the test overhaul. |
 | Attachment-listing read API | DONE | `PdfDoc.attachments` and `PdfDoc.extractAttachment` — `embedFile` is now proven by listing the saved file and round-tripping its bytes. |
 | Annotation-listing read API | PLANNED | `flattenAnnotations` has no semantic presence proof of its own: `extract` reads an annotation's appearance text whether or not it was flattened, so a test can show page scoping only through side effects. Listing a page's annotations (subtype, rect) would let a battery assert "gone after flatten" directly, as `formFields` now does for forms. |
-| Typed wire error codes (PdfWrongPassword, PdfCorrupted, … from Rust) | PLANNED | Engine failures are typed as `PdfEngineError(message)` today; per-kind types need error codes on the wire protocol. |
+| Typed wire error codes (PdfWrongPassword, PdfCorrupted, … from Rust) | DONE | Every engine failure reaches Dart as its `PdfError` subtype; kinds on the wire. |
 
 ---
 

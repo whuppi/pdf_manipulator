@@ -109,8 +109,8 @@ class PdfCryptoError extends PdfError {
 /// content the original bytes would keep, change page content, or the
 /// source is encrypted, repaired or certified against the change. Nothing
 /// was written to the sink; save with `PdfSaveOptions.fullRewrite()`
-/// instead. Carried on the wire as response status 3, never matched by
-/// message text.
+/// instead. Carried on the wire as error kind incrementalRefused,
+/// never matched by message text.
 class PdfIncrementalRefused extends PdfError {
   /// Creates an incremental-refused error.
   const PdfIncrementalRefused(super.message);

@@ -91,7 +91,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
             'wrong',
           ),
         ),
-        throwsA(isA<PdfEngineError>()),
+        throwsA(isA<PdfCryptoError>()),
         reason:
             'a broken certificate is an engine failure with a '
             'message — never an untyped throw',
@@ -107,7 +107,11 @@ void registerStandaloneTests(Pdf Function() createPdf) {
         final sink = TestSink();
         await expectLater(
           pdf.extractPages(src(minimalPdf), sink, pages: const [99]),
-          throwsA(isA<PdfEngineError>()),
+          throwsA(
+            isA<PdfPageRangeError>()
+                .having((e) => e.page, 'page', 99)
+                .having((e) => e.pageCount, 'pageCount', 1),
+          ),
           reason:
               'page 99 of a 1-page PDF does not exist — silently '
               'producing an empty PDF would hide caller bugs',

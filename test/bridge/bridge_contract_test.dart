@@ -62,15 +62,23 @@ void main() {
   });
 
   group('response decoding contract', () {
-    test('error response has status 0', () {
-      final response = _buildErrorResponse('test error');
+    test('error response has status 0 and throws by kind', () {
+      final response = _buildErrorResponse(0, 'test error');
       expect(response[0], 0);
-      final map = decodeResponse(response);
-      expect(map['error'], 'test error');
+      expect(
+        () => decodeResponse(response),
+        throwsA(
+          isA<PdfEngineError>().having(
+            (e) => e.message,
+            'message',
+            'test error',
+          ),
+        ),
+      );
     });
 
-    test('incremental-refused response has status 3 and throws its type', () {
-      final response = _buildErrorResponse('refused')..[0] = 3;
+    test('incremental-refused is error kind 9 and throws its type', () {
+      final response = _buildErrorResponse(9, 'refused');
       expect(
         () => decodeResponse(response),
         throwsA(
@@ -141,10 +149,15 @@ void main() {
   });
 }
 
-Uint8List _buildErrorResponse(String msg) {
+Uint8List _buildErrorResponse(int kind, String msg) {
   final buf = BytesBuilder();
-  buf.addByte(0);
+  buf.addByte(0); // status = error
+  buf.addByte(kind);
   final msgBytes = Uint8List.fromList(msg.codeUnits);
+  buf.add(const [1, 0]); // field_count = 1 LE
+  buf.addByte(7); // key length of "message"
+  buf.add(Uint8List.fromList('message'.codeUnits));
+  buf.addByte(5); // string type
   buf.add(
     (ByteData(
       4,

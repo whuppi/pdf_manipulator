@@ -21,7 +21,6 @@ import 'package:pdf_manipulator/src/types/search_result.dart';
 import 'package:pdf_manipulator/src/bridge/pdf_bridge.dart';
 import 'package:pdf_manipulator/src/bridge/pdf_transport.dart';
 import 'package:pdf_manipulator/src/types/pdf_task.dart';
-import 'package:pdf_manipulator/src/types/errors.dart';
 
 import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart' as bin;
 import 'package:pdf_manipulator/src/bridge/protocol/codec.dart' as codec;
@@ -67,15 +66,7 @@ class SharedBridge extends PdfBridge {
         sinks: sinks,
         cancel: hook,
       );
-      final map = bin.decodeResponse(res.bytes);
-      if (map.containsKey('error')) {
-        // Typed by contract: every engine failure is a PdfError, so
-        // callers can pattern-match it — and so it can never be
-        // mistaken for a StateError, which is reserved for programmer
-        // errors (use after dispose).
-        throw PdfEngineError(map['error'] as String? ?? 'Engine error');
-      }
-      return map;
+      return bin.decodeResponse(res.bytes);
     }();
     return PdfTask.internal(future, hook);
   }
@@ -95,13 +86,10 @@ class SharedBridge extends PdfBridge {
         keepSources: {0},
         cancel: hook,
       );
-      final map = bin.decodeResponse(res.bytes);
-      if (map.containsKey('error')) {
-        // Engine failures are PdfError, never StateError (reserved
-        // for use-after-dispose) — same contract as [_exec].
-        throw PdfEngineError(map['error'] as String? ?? 'Engine error');
-      }
-      return (map: map, resourceId: res.resourceIds[0]);
+      return (
+        map: bin.decodeResponse(res.bytes),
+        resourceId: res.resourceIds[0],
+      );
     }();
     return PdfTask.internal(future, hook);
   }
@@ -161,11 +149,7 @@ class SharedBridge extends PdfBridge {
         sourceBytes: bytes,
       );
       for (final r in responses) {
-        final map = bin.decodeResponse(r);
-        if (map.containsKey('error')) {
-          // Same contract as [_exec]: engine failures are PdfError.
-          throw PdfEngineError(map['error'] as String? ?? 'Engine error');
-        }
+        bin.decodeResponse(r);
       }
     }();
     return PdfTask.internal(future, hook);
