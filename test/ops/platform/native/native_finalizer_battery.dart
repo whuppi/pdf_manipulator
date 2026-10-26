@@ -42,5 +42,7 @@ void registerNativeFinalizerTests() {
           : 'Process crashed (exit $exitCode) — dangling NativeCallable.\n'
                 'stderr: ${await process.stderr.transform(const SystemEncoding().decoder).join()}',
     );
-  }, timeout: t(1));
+    // Above the 30 s hang detector, so a slow subprocess start is never
+    // reported as a failure the detector would not call a hang.
+  }, timeout: t(35));
 }

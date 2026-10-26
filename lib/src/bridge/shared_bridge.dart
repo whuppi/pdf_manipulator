@@ -125,6 +125,8 @@ class SharedBridge extends PdfBridge {
       'sourceLength': source.length,
       'reason': reason,
       'location': location,
+      // The engine has no clock on the web; the signing time comes from here.
+      'signedAt': DateTime.now().millisecondsSinceEpoch ~/ 1000,
     };
     switch (credentials) {
       case PdfPkcs12Credentials(:final data, :final password):

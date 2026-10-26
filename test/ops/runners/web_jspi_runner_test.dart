@@ -48,7 +48,9 @@ void main() {
       ),
     );
     booted = true;
-  }, timeout: t(2));
+    // Harness setup, not the engine: spawning the hybrid asset server
+    // compiles an isolate, which takes seconds on a loaded machine.
+  }, timeout: t(10));
 
   test('verify I/O mode is jspi', () async {
     final doc = await pdf.open(src(minimalPdf));

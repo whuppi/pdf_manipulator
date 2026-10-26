@@ -183,7 +183,7 @@ same names, when both exist. Exports (source in, sink out) live on
 
 | Capability | Rust | Dart | Status |
 |---|---|---|---|
-| Sign PDF (PKCS12 / PEM) | `handle_sign` | `sign()` | DONE |
+| Sign PDF (PKCS12 / PEM) | `handle_sign` | `sign()` | DONE — keeps the catalog and earlier signatures; update section in the source's xref style |
 | Convert to format (DOCX/PPTX/XLSX) | `handle_convert_to` | `convertTo()` | DONE |
 | Convert to PDF | `handle_convert_to_pdf` | `convertToPdf()` | DONE |
 | Extract pages | `handle_editor_extract_pages` | `extractPages()` | DONE |

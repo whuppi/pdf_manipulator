@@ -3,6 +3,7 @@
 // with no handle exposed. These ops live here and nowhere else —
 // sugar composes extractPages internally but never re-proves it.
 
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/pdf_manipulator.dart';
@@ -11,6 +12,7 @@ import 'package:test/test.dart';
 import '../../fixtures/generated/fixtures.dart';
 import '../../fixtures/handwritten.dart';
 import '../../fixtures/handwritten_docx.dart';
+import '../../fixtures/third_party/tp_page_prune_objstm.dart';
 import '../../harness/page_prune_expect.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
@@ -95,6 +97,233 @@ void registerStandaloneTests(Pdf Function() createPdf) {
         reason:
             'a broken certificate is an engine failure with a '
             'message — never an untyped throw',
+      );
+    }, timeout: t(1));
+
+    test('sign keeps the catalog: bookmarks survive', () async {
+      final pdf = createPdf();
+      final unsigned = await pdf.open(src(bookmarkedPdf));
+      final titles = (await unsigned.planSplitByBookmarks())
+          .map((s) => s.title)
+          .toList();
+      await unsigned.dispose();
+      final sink = TestSink();
+      await pdf.sign(
+        src(bookmarkedPdf),
+        sink,
+        credentials: PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
+      );
+      final doc = await pdf.open(src(sink.takeBytes()));
+      expect(
+        (await doc.planSplitByBookmarks()).map((s) => s.title),
+        titles,
+        reason:
+            'signing must not replace the catalog — the outline tree '
+            'the bookmarks read lives there',
+      );
+      expect(await doc.verifySignatures(), isTrue);
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('sign keeps the form: fields and their values survive', () async {
+      final pdf = createPdf();
+      final unsigned = await pdf.open(src(fFormFields));
+      final valuesBefore = {
+        for (final f in await unsigned.formFields) f.name: f.value,
+      };
+      await unsigned.dispose();
+      final sink = TestSink();
+      await pdf.sign(
+        src(fFormFields),
+        sink,
+        credentials: PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
+      );
+      final doc = await pdf.open(src(sink.takeBytes()));
+      final fields = await doc.formFields;
+      expect(fields.map((f) => f.name).toSet(), {
+        ...fFormFieldsTruth.fieldNames,
+        'Sig1',
+      });
+      for (final f in fields) {
+        if (f.name == 'Sig1') continue;
+        final before = valuesBefore[f.name]!;
+        switch (before) {
+          case PdfTextValue(:final text):
+            expect(
+              f.value,
+              isA<PdfTextValue>().having((v) => v.text, 'text', text),
+              reason: 'field ${f.name}',
+            );
+          case PdfCheckedValue(:final checked):
+            expect(
+              f.value,
+              isA<PdfCheckedValue>().having(
+                (v) => v.checked,
+                'checked',
+                checked,
+              ),
+              reason: 'field ${f.name}',
+            );
+          case PdfChoiceValue(:final choice):
+            expect(
+              f.value,
+              isA<PdfChoiceValue>().having((v) => v.choice, 'choice', choice),
+              reason: 'field ${f.name}',
+            );
+          case PdfMultiChoiceValue(:final choices):
+            expect(
+              f.value,
+              isA<PdfMultiChoiceValue>().having(
+                (v) => v.choices,
+                'choices',
+                choices,
+              ),
+              reason: 'field ${f.name}',
+            );
+          default:
+            expect(
+              f.value.runtimeType,
+              before.runtimeType,
+              reason: 'field ${f.name}',
+            );
+        }
+      }
+      expect(await doc.verifySignatures(), isTrue);
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('sign twice keeps both signatures on Sig1 and Sig2', () async {
+      final pdf = createPdf();
+      final first = TestSink();
+      await pdf.sign(
+        src(minimalPdf),
+        first,
+        credentials: PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
+      );
+      final second = TestSink();
+      await pdf.sign(
+        src(first.takeBytes()),
+        second,
+        credentials: PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
+      );
+      final doc = await pdf.open(src(second.takeBytes()));
+      final sigs = await doc.signatures;
+      expect(sigs, hasLength(2));
+      expect((await doc.formFields).map((f) => f.name).toSet(), {
+        'Sig1',
+        'Sig2',
+      }, reason: 'the second signature must not replace the first field');
+      expect(await doc.verifySignatures(), isTrue);
+      expect(sigs.first.coversWholeDocument, isFalse);
+      expect(sigs.last.coversWholeDocument, isTrue);
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('sign an xref-stream source writes a stream-style update', () async {
+      final pdf = createPdf();
+      final sink = TestSink();
+      await pdf.sign(
+        src(tpPagePruneObjStm),
+        sink,
+        credentials: PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
+      );
+      final signed = sink.takeBytes();
+      final appended = latin1.decode(signed.sublist(tpPagePruneObjStm.length));
+      expect(appended, contains('/Type /XRef'));
+      expect(
+        appended.contains('\nxref\n'),
+        isFalse,
+        reason: 'a stream-style source never gets a classic table back',
+      );
+      final doc = await pdf.open(src(signed));
+      expect(await doc.verifySignatures(), isTrue);
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('sign an encrypted source refuses with no output', () async {
+      final pdf = createPdf();
+      final encSink = TestSink();
+      await pdf.encrypt(
+        src(minimalPdf),
+        encSink,
+        encryption: const PdfEncryptionConfig(
+          ownerPassword: 'owner-pw',
+          userPassword: 'user-pw',
+        ),
+      );
+      final sink = TestSink();
+      await expectLater(
+        pdf.sign(
+          src(encSink.takeBytes()),
+          sink,
+          credentials: PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
+        ),
+        throwsA(isA<PdfUnsupported>()),
+        reason:
+            'signing an encrypted source is refused before any byte '
+            'is written, never a broken file',
+      );
+      expect(sink.takeBytes(), isEmpty);
+    }, timeout: t(1));
+
+    test(
+      'sign reads back a reason with separators and a non-ASCII location',
+      () async {
+        final pdf = createPdf();
+        final sink = TestSink();
+        await pdf.sign(
+          src(minimalPdf),
+          sink,
+          credentials: PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
+          reason: 'a (b) \\ c',
+          location: 'Zürich',
+        );
+        final doc = await pdf.open(src(sink.takeBytes()));
+        final sigs = await doc.signatures;
+        expect(sigs, hasLength(1));
+        expect(sigs.single.reason, 'a (b) \\ c');
+        expect(sigs.single.location, 'Zürich');
+        expect(await doc.verifySignatures(), isTrue);
+        await doc.dispose();
+      },
+      timeout: t(1),
+    );
+
+    test('sign adds the widget to page 0 annotations', () async {
+      final pdf = createPdf();
+      final sink = TestSink();
+      await pdf.sign(
+        src(minimalPdf),
+        sink,
+        credentials: PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
+      );
+      final doc = await pdf.open(src(sink.takeBytes()));
+      final annots = await doc.annotations(0);
+      expect(annots, hasLength(1));
+      expect(annots.single.subtype, PdfAnnotationSubtype.widget);
+      expect(annots.single.fieldName, 'Sig1');
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('sign writes the signing time', () async {
+      final before = DateTime.now().toUtc().subtract(
+        const Duration(seconds: 2),
+      );
+      final pdf = createPdf();
+      final sink = TestSink();
+      await pdf.sign(
+        src(minimalPdf),
+        sink,
+        credentials: PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
+      );
+      final doc = await pdf.open(src(sink.takeBytes()));
+      final time = (await doc.signatures).single.signingTime;
+      await doc.dispose();
+      expect(time, isNotNull);
+      expect(
+        time!.isAfter(before),
+        isTrue,
+        reason: '/M is the time of signing',
       );
     }, timeout: t(1));
 
