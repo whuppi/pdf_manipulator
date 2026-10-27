@@ -1533,7 +1533,11 @@ void registerEditorTests(Pdf Function() createPdf) {
       final editor = await createPdf().edit(src(minimalPdf));
       await expectLater(
         editor.pageImages(99),
-        throwsA(isA<PdfEngineError>()),
+        throwsA(
+          isA<PdfPageRangeError>()
+              .having((e) => e.page, 'page', 99)
+              .having((e) => e.pageCount, 'pageCount', 1),
+        ),
         reason:
             'page 99 of a 1-page PDF does not exist — an empty list '
             'would hide caller bugs',
@@ -2762,6 +2766,51 @@ void registerEditorTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
+    test('a full rewrite copies an unchanged image stream raw', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(rampImagePdf));
+      final sink = TestSink();
+      await editor.save(
+        sink,
+        options: const PdfSaveOptions.fullRewrite(compress: false),
+      );
+      await editor.dispose();
+      final out = sink.takeBytes();
+      expect(
+        _indexOfRamp(out),
+        isNonNegative,
+        reason: 'raw copy must keep the bytes', // bytegrep-exempt
+      );
+      final reopened = await pdf.edit(src(out));
+      final images = await reopened.pageImages(0);
+      expect(images, hasLength(1));
+      await reopened.dispose();
+      final doc = await pdf.open(src(out));
+      expect(await doc.extractImages(pages: const PdfPages.all()).length, 1);
+      await doc.dispose();
+    }, timeout: t(2));
+
+    test(
+      'a compressed full rewrite deflates an unchanged image stream',
+      () async {
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(rampImagePdf));
+        final sink = TestSink();
+        await editor.save(
+          sink,
+          options: const PdfSaveOptions.fullRewrite(compress: true),
+        );
+        await editor.dispose();
+        final out = sink.takeBytes();
+        // The claim is about the stream's /Filter, not content.
+        final raw = String.fromCharCodes(out); // bytegrep-exempt: /Filter
+        expect(raw, contains('/FlateDecode'));
+        expect(out.length, lessThan(rampImageBytes));
+        expect((await _renderFirstPage(pdf, out)).width, greaterThan(0));
+      },
+      timeout: t(2),
+    );
+
     // ── Getters ──
 
     test('version returns non-empty string', () async {
@@ -2778,6 +2827,22 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
     }, timeout: t(1));
   });
+}
+
+/// Where [rampImagePdf]'s whole image stream starts in [out], or -1.
+int _indexOfRamp(Uint8List out) {
+  for (var s = 0; s + rampImageBytes <= out.length; s++) {
+    if (out[s] != 0) continue;
+    var all = true;
+    for (var i = 0; i < rampImageBytes; i++) {
+      if (out[s + i] != i % 256) {
+        all = false;
+        break;
+      }
+    }
+    if (all) return s;
+  }
+  return -1;
 }
 
 /// Renders [bytes]' first page at thumbnail size and decodes it, for

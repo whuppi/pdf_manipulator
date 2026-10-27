@@ -532,6 +532,83 @@ void registerDocTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
+    // Page 1 of a one-page document: every PdfDoc method that takes a
+    // page answers PdfPageRangeError, never the engine's own error.
+    final docPageOps = <String, Future<Object?> Function(PdfDoc doc)>{
+      'extract': (d) => d.extract(pages: const PdfPages.single(1)),
+      'extract list': (d) => d.extract(pages: const PdfPages.list([0, 1])),
+      'search': (d) => d.search(query: 'x', pages: const PdfPages.single(1)),
+      'classifyPage': (d) => d.classifyPage(1),
+      'annotations': (d) => d.annotations(1),
+      'render': (d) => d.render(pages: const PdfPages.single(1)).toList(),
+      'render list': (d) => d.render(pages: const PdfPages.list([1])).toList(),
+      'extractImages': (d) =>
+          d.extractImages(pages: const PdfPages.single(1)).toList(),
+    };
+    for (final entry in docPageOps.entries) {
+      test('${entry.key} past the end throws PdfPageRangeError', () async {
+        final doc = await createPdf().open(src(minimalPdf));
+        await expectLater(
+          entry.value(doc),
+          throwsA(
+            isA<PdfPageRangeError>()
+                .having((e) => e.page, 'page', 1)
+                .having((e) => e.pageCount, 'pageCount', 1),
+          ),
+          reason: entry.key,
+        );
+        await doc.dispose();
+      }, timeout: t(1));
+    }
+
+    // Page 1 of a one-page document, for every PdfEditor method that
+    // takes a page index.
+    const box = PdfRect(x: 0, y: 0, width: 10, height: 10);
+    final editorPageOps = <String, Future<Object?> Function(PdfEditor e)>{
+      'rotatePage': (e) => e.rotatePage(1, degrees: 90),
+      'pageMediaBox': (e) => e.pageMediaBox(1),
+      'pageCropBox': (e) => e.pageCropBox(1),
+      'setPageMediaBox': (e) => e.setPageMediaBox(1, box),
+      'setPageCropBox': (e) => e.setPageCropBox(1, box),
+      'setPageRotation': (e) => e.setPageRotation(1, degrees: 90),
+      'deletePage': (e) => e.deletePage(1),
+      'movePage from': (e) => e.movePage(from: 1, to: 0),
+      'movePage to': (e) => e.movePage(from: 0, to: 1),
+      'selectPages': (e) => e.selectPages([1]),
+      'eraseRegions': (e) => e.eraseRegions(1, [box]),
+      'clearEraseRegions': (e) => e.clearEraseRegions(1),
+      'flattenForms': (e) => e.flattenForms(page: 1),
+      'flattenAnnotations': (e) => e.flattenAnnotations(page: 1),
+      'pageImages': (e) => e.pageImages(1),
+      'resizeImage': (e) => e.resizeImage(1, 'Im0', width: 10, height: 10),
+      'repositionImage': (e) => e.repositionImage(1, 'Im0', x: 0, y: 0),
+      'setImageBounds': (e) => e.setImageBounds(1, 'Im0', box),
+      'addRedaction': (e) => e.addRedaction(1, box),
+      'redactionCount': (e) => e.redactionCount(1),
+      'addWatermark': (e) => e.addWatermark(1, 'W'),
+      'addStamp': (e) => e.addStamp(1, type: PdfStampType.draft, rect: box),
+      'addImageStamp': (e) => e.addImageStamp(1, src(minimalPng), rect: box),
+    };
+    for (final entry in editorPageOps.entries) {
+      test(
+        'editor ${entry.key} past the end throws PdfPageRangeError',
+        () async {
+          final editor = await createPdf().edit(src(minimalPdf));
+          await expectLater(
+            entry.value(editor),
+            throwsA(
+              isA<PdfPageRangeError>()
+                  .having((e) => e.page, 'page', 1)
+                  .having((e) => e.pageCount, 'pageCount', 1),
+            ),
+            reason: entry.key,
+          );
+          await editor.dispose();
+        },
+        timeout: t(1),
+      );
+    }
+
     test('annotations lists every form widget with its field name', () async {
       final doc = await createPdf().open(src(fFormFields));
       final rows = await doc.annotations(0);

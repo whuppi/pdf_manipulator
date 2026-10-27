@@ -113,10 +113,14 @@ CONTENT RULES (never change)
 - Added `PdfDoc.annotations(page)`, which lists a page's annotations (subtype, rectangle, contents, author, form field name) as `PdfAnnotationInfo`
 - Added the page builder methods the engine already had: `inline`, `inlineBold`, `inlineItalic`, `inlineColor`, `textInRect`, `rect`, `filledRect`, `line`, `strokeRect`, `strokeLine`, `highlight`, `underline`, `strikeout`, `squiggly`, `stickyNote`, `stamp`, `freeText`, `watermarkConfidential`, `watermarkDraft`, `linkNamed`, `linkJavaScript`, `onOpen`, `onClose`, `imageArtifact`, `table` and `streamingTable`
 - Changed `PdfBuilder.save` to Flate-compress page content and font streams; `save(output, compress: false)` keeps them plain for debugging
+- Changed a full-rewrite save to copy each unchanged stream from the source in 64 KB pieces, so a page holding a 60 MB image saves in under 1 MB of engine memory
 - Changed `PdfDoc.verifySignatures` to check each signature's digest and signer key, where it returned `false` for every document; `PdfSignatureInfo` has `isValid`, `coversWholeDocument` and `signingTime` filled
 - Fixed an empty input to `merge` or any other multi-source op shifting every source after it, so the op read the wrong documents — an empty input now throws `PdfCorrupted`
 - Fixed a full-rewrite save of a file with no `/Size` writing new objects over existing ones, and dropping an object it could not read without a word — it now throws `PdfCorrupted`
 - Fixed a full-rewrite save of a file holding objects above generation 0 writing references other readers resolve to nothing — each reference now names the generation its object is written at
+- Fixed `render` and `extractImages` returning an empty stream when the engine failed, a page past the end included — they throw the engine's error
+- Fixed a full-rewrite save writing an object over 100 MB truncated — it throws instead
+- Fixed a page index past the end reaching the engine as a huge number or a generic error — every operation that takes a page throws `PdfPageRangeError` with the page and the page count
 - Fixed `extractPages` and `deletePages` writing the pages they drop into the output, so the output kept its original size and the dropped pages' text, images and form values — a save now writes nothing only a dropped page reaches, and drops the links, bookmark targets and form fields that pointed at one ([#261](https://github.com/whuppi/pdf_manipulator/issues/261) reported by [@crurui](https://github.com/crurui))
 - Fixed page labels shifting onto the wrong pages after `extractPages`, `deletePages` or a reorder — each kept page keeps its label
 - Fixed `PdfPageInfo.label` always being `null` — it now holds the page's label when the document has page labels

@@ -385,6 +385,29 @@ final Uint8List imageAndFormPdf = _offsetPdf([
   ),
 ]);
 
+/// Length of [rampImagePdf]'s image stream: 640×480 gray samples.
+const int rampImageBytes = 640 * 480;
+
+/// One page drawing a 640×480 DeviceGray image whose unfiltered stream is
+/// [rampImageBytes] bytes of a repeating 0..255 ramp, so a save that copies
+/// the stream raw can be proven byte for byte.
+final Uint8List rampImagePdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R >>',
+  // 4: the image, 300 KB with no /Filter
+  _streamBody(
+    '/Type /XObject /Subtype /Image /Width 640 /Height 480 '
+    '/ColorSpace /DeviceGray /BitsPerComponent 8',
+    String.fromCharCodes(List<int>.generate(rampImageBytes, (i) => i % 256)),
+  ),
+  // 5: page content
+  _streamBody('', 'q 320 0 0 240 100 400 cm /Im1 Do Q\n'),
+]);
+
 /// Returns `width*height` two-digit hex bytes (rows in order, no
 /// whitespace), value `((x + y) * 255 / (width + height - 2)).round()`
 /// per pixel, ending with `>`. [repeat] writes each pixel's byte that

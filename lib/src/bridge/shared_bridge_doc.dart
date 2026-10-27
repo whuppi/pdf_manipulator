@@ -140,7 +140,9 @@ class _SharedDocHandle extends BridgeDocHandle {
       if (size?.maxHeight != null) 'maxHeight': size!.maxHeight,
       'hasSink': true,
     });
-    await _bridge._transport.execute(req, sinks: [sink]);
+    final res = await _bridge._transport.execute(req, sinks: [sink]);
+    // An error response means the op failed: throw it before any frame.
+    bin.decodeResponse(res.bytes);
     for (final frame in sink.frames) {
       final map = bin.decodeResponse(frame);
       yield codec.decodeRenderedPage(map);
@@ -157,7 +159,9 @@ class _SharedDocHandle extends BridgeDocHandle {
         'page': page,
         'hasSink': true,
       });
-      await _bridge._transport.execute(req, sinks: [sink]);
+      final res = await _bridge._transport.execute(req, sinks: [sink]);
+      // An error response means the op failed: throw it before any frame.
+      bin.decodeResponse(res.bytes);
       for (final frame in sink.frames) {
         final map = bin.decodeResponse(frame);
         yield codec.decodePdfImage(map);

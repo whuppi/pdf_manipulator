@@ -25,6 +25,7 @@ fn limit(op: &str, input: &str) -> usize {
         // Streaming today; the target is the ceiling.
         ("incrementalSave" | "sign", "many") => 16 * MIB,
         ("open" | "incrementalSave" | "sign", "huge") => 16 * MIB,
+        ("extractPages" | "fullRewriteSave" | "compress", "huge") => 16 * MIB,
         // Target 16 MiB, t-402: open resolves every page and the object
         // cache keeps every object it parses (81 MB / 44 MB measured).
         ("open", "many") => 96 * MIB,
@@ -33,10 +34,9 @@ fn limit(op: &str, input: &str) -> usize {
         // object of every source until the save ends (85 / 84 / 234 MB).
         ("fullRewriteSave" | "compress", "many") => 96 * MIB,
         ("merge", "many") => 240 * MIB,
-        // Target 8 MiB, t-222 (H1): load_object reads the 60 MB image
-        // stream whole, about three copies at the peak (189 / 252 MB).
-        ("extractPages" | "fullRewriteSave" | "compress", "huge") => 192 * MIB,
-        ("merge", "huge") => 256 * MIB,
+        // Target 16 MiB, t-403: the merge imports the second copy's 60 MB
+        // stream whole (189 MB measured).
+        ("merge", "huge") => 192 * MIB,
         _ => panic!("no memory limit for {op} on {input}: add one to limit()"),
     }
 }
