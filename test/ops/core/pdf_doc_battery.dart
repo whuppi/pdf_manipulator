@@ -734,7 +734,9 @@ void registerDocTests(Pdf Function() createPdf) {
         pdf,
         PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
       );
-      final header = Uint8List.fromList('%PDF-1.4'.codeUnits);
+      // The header literal comes from the fixture itself: its version
+      // has changed across producers and only the tamper target matters.
+      final header = minimalPdf.sublist(0, 8);
       var at = -1;
       for (var i = 0; i + header.length <= signed.length; i++) {
         if (signed[i] == header[0] && _matches(signed, i, header)) {

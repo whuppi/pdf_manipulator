@@ -4,6 +4,9 @@
 // and never notice; the incremental save refuses repaired sources, which
 // is how the last one was found.
 
+// io-exempt: the source-scan wall reads handwritten.dart's own text to
+// assert every valid fixture builds through _offsetPdf.
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
@@ -46,6 +49,7 @@ String? xrefProblem(Uint8List pdf) {
 void main() {
   final fixtures = <String, Uint8List>{
     'minimalPdf': minimalPdf,
+    'recoverProbePdf': recoverProbePdf,
     'leakProbePdf': leakProbePdf,
     'letterPdf': letterPdf,
     'indirectAnnotsForm': indirectAnnotsForm,
@@ -87,5 +91,28 @@ void main() {
 
   test('staleStartxrefPdf is stale on purpose', () {
     expect(xrefProblem(staleStartxrefPdf), contains('not a section'));
+  });
+
+  // Every VALID hand-built fixture must come from _offsetPdf, whose
+  // offsets are correct by construction — a hand-typed table can drift
+  // as the file grows. _build stays only inside the two deliberately
+  // broken declarations.
+  test('handwritten.dart builds valid fixtures only through _offsetPdf', () {
+    final source = File('test/fixtures/handwritten.dart').readAsStringSync();
+    for (final match in RegExp('= _build\\(').allMatches(source)) {
+      // The call's own line names its declaration, up to the '='.
+      final lineStart = source.lastIndexOf('\n', match.start - 2) + 1;
+      final declLine = source.substring(lineStart, match.start).trim();
+      final owner = RegExp(r'^final .*?(\w+)\s*$').firstMatch(declLine);
+      final name = owner?.group(1) ?? declLine;
+      expect(
+        const {'staleStartxrefPdf', 'brokenPdf'}.contains(name),
+        isTrue,
+        reason:
+            'fixture "$name" hand-builds its bytes; '
+            'only deliberate damage may use _build — every valid fixture '
+            'goes through _offsetPdf',
+      );
+    }
   });
 }
