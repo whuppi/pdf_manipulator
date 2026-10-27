@@ -26,16 +26,9 @@ import 'package:pdf_manipulator/src/keep/record_use_shim.dart';
 /// Mutable PDF editor — parse once, mutate many times, save once.
 class PdfEditor {
   /// Internal constructor — use [Pdf.edit] to create instances.
-  PdfEditor.internal(PdfBridge _, BridgeEditorHandle handle, {String? password})
-    : _handle = handle,
-      _sourceEncryption = handle.sourceEncryption,
-      _sourcePermissions = handle.sourcePermissions,
-      _password = password;
+  PdfEditor.internal(PdfBridge _, BridgeEditorHandle handle) : _handle = handle;
 
   final BridgeEditorHandle _handle;
-  final PdfEncryptionAlgorithm? _sourceEncryption;
-  final PdfPermissions? _sourcePermissions;
-  final String? _password;
   bool _disposed = false;
 
   void _check() {
@@ -553,32 +546,7 @@ class PdfEditor {
     PdfSaveOptions options = const PdfSaveOptions.fullRewrite(),
   }) {
     _check();
-    final resolved = _resolveEncryption(options);
-    return _handle.save(output, options: resolved);
-  }
-
-  PdfSaveOptions _resolveEncryption(PdfSaveOptions options) {
-    if (_sourceEncryption == null) return options;
-    return switch (options) {
-      PdfSaveFullRewrite(
-        :final compress,
-        :final garbageCollect,
-        :final encryption,
-      ) =>
-        encryption is PdfEncryptionKeep
-            ? PdfSaveOptions.fullRewrite(
-                compress: compress,
-                garbageCollect: garbageCollect,
-                encryption: PdfEncryption.config(
-                  ownerPassword: _password ?? '',
-                  userPassword: _password ?? '',
-                  algorithm: _sourceEncryption,
-                  permissions: _sourcePermissions ?? const PdfPermissions.all(),
-                ),
-              )
-            : options,
-      PdfSaveIncremental() => options,
-    };
+    return _handle.save(output, options: options);
   }
 
   // ── Lifecycle ──

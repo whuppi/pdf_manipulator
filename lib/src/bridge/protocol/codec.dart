@@ -60,7 +60,7 @@ PdfEncryptionAlgorithm? decodeEncryptionAlgorithmFromMap(
 PdfPermissions? decodePermissionsFromMap(Map<String, Object?> r) {
   final isEncrypted = r['isEncrypted'] as bool? ?? false;
   if (!isEncrypted) return null;
-  final bits = r['permissionBits'] as int? ?? 0xFF;
+  final bits = r['permissionBits'] as int? ?? -1;
   return decodePermissions(bits);
 }
 
@@ -414,21 +414,7 @@ PdfRedactionReport decodeRedactionReport(Map<String, Object?> r) =>
     );
 
 /// Decodes the handle ID from an editor-open response.
-/// Decodes the handle id and the source's encryption facts from an
-/// editor-open response.
-({
-  int handleId,
-  PdfEncryptionAlgorithm? encryption,
-  PdfPermissions? permissions,
-})
-decodeEditorOpen(Map<String, Object?> r) {
-  final isEncrypted = r['isEncrypted'] as bool? ?? false;
-  return (
-    handleId: r['handleId'] as int,
-    encryption: isEncrypted ? decodeEncryptionAlgorithmFromMap(r) : null,
-    permissions: decodePermissionsFromMap(r),
-  );
-}
+int decodeEditorOpen(Map<String, Object?> r) => r['handleId'] as int;
 
 // ════════════════════════════════════════════════════════════════════
 // HELPERS — shared encoding utilities
@@ -569,14 +555,14 @@ PdfEncryptionAlgorithm? decodeEncryptionAlgorithm(int code) => switch (code) {
 
 /// Decodes permission bits into a [PdfPermissions] instance.
 PdfPermissions decodePermissions(int bits) => PdfPermissions(
-  print: bits & 1 != 0,
-  printHq: bits & 2 != 0,
-  modify: bits & 4 != 0,
-  copy: bits & 8 != 0,
-  annotate: bits & 16 != 0,
-  fillForms: bits & 32 != 0,
-  accessibility: bits & 64 != 0,
-  assemble: bits & 128 != 0,
+  print: bits & (1 << 2) != 0,
+  modify: bits & (1 << 3) != 0,
+  copy: bits & (1 << 4) != 0,
+  annotate: bits & (1 << 5) != 0,
+  fillForms: bits & (1 << 8) != 0,
+  accessibility: bits & (1 << 9) != 0,
+  assemble: bits & (1 << 10) != 0,
+  printHq: bits & (1 << 11) != 0,
 );
 
 Map<String, Object?> _asMap(Object? obj) {

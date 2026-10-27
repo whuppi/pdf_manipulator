@@ -12,22 +12,10 @@ part of 'shared_bridge.dart';
 // ══════════════════════════════════════════════════════════════════
 
 class _SharedEditorHandle extends BridgeEditorHandle {
-  _SharedEditorHandle(
-    this._bridge,
-    this._handleId,
-    this._resourceId,
-    this.sourceEncryption,
-    this.sourcePermissions,
-  );
+  _SharedEditorHandle(this._bridge, this._handleId, this._resourceId);
   final SharedBridge _bridge;
   final int _handleId;
   final int? _resourceId;
-
-  @override
-  final PdfEncryptionAlgorithm? sourceEncryption;
-
-  @override
-  final PdfPermissions? sourcePermissions;
 
   PdfTask<Map<String, Object?>> _exec(
     EngineOp op,

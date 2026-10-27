@@ -118,7 +118,7 @@ class Pdf {
       final handle = await hook.guard(
         _bridge.openEditor(source, password: password),
       );
-      return PdfEditor.internal(_bridge, handle, password: password);
+      return PdfEditor.internal(_bridge, handle);
     });
   }
 

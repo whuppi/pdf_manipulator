@@ -123,6 +123,8 @@ CONTENT RULES (never change)
 - Fixed `render` and `extractImages` returning an empty stream when the engine failed, a page past the end included — they throw the engine's error
 - Fixed a full-rewrite save writing an object over 100 MB truncated — it throws instead
 - Fixed a page index past the end reaching the engine as a huge number or a generic error — every operation that takes a page throws `PdfPageRangeError` with the page and the page count
+- Fixed a save that keeps an encrypted document's encryption setting its owner password to the password it was opened with, so anyone who could open the result had owner rights and its permissions were void — the save now reuses the source's own encryption dictionary and key
+- Fixed `PdfDoc.permissions` reporting the wrong flags (a print-allowed file read as `print: false`) — the engine's `/P` word is read at its spec bit positions
 - Fixed `extractPages` and `deletePages` writing the pages they drop into the output, so the output kept its original size and the dropped pages' text, images and form values — a save now writes nothing only a dropped page reaches, and drops the links, bookmark targets and form fields that pointed at one ([#261](https://github.com/whuppi/pdf_manipulator/issues/261) reported by [@crurui](https://github.com/crurui))
 - Fixed page labels shifting onto the wrong pages after `extractPages`, `deletePages` or a reorder — each kept page keeps its label
 - Fixed `PdfPageInfo.label` always being `null` — it now holds the page's label when the document has page labels

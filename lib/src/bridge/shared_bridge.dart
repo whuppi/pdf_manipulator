@@ -213,16 +213,8 @@ class SharedBridge extends PdfBridge {
         'sourceLength': source.length,
         'password': password,
       }, source: source).map((res) {
-        final (:handleId, :encryption, :permissions) = codec.decodeEditorOpen(
-          res.map,
-        );
-        return _SharedEditorHandle(
-          this,
-          handleId,
-          res.resourceId,
-          encryption,
-          permissions,
-        );
+        final handleId = codec.decodeEditorOpen(res.map);
+        return _SharedEditorHandle(this, handleId, res.resourceId);
       });
 
   @override

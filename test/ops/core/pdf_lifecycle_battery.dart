@@ -176,5 +176,155 @@ void registerLifecycleTests(Pdf Function() createPdf) {
       await editor.dispose();
       await pdf.dispose();
     }, timeout: t(1));
+
+    // ── Keeping the source's encryption ──
+
+    group('save keeps the source encryption', () {
+      const printOnly = PdfPermissions(
+        print: true,
+        printHq: false,
+        modify: false,
+        copy: false,
+        annotate: false,
+        fillForms: false,
+        accessibility: false,
+        assemble: false,
+      );
+
+      Future<Uint8List> encrypted(
+        Pdf pdf,
+        PdfEncryptionAlgorithm algorithm,
+      ) async {
+        final sink = TestSink();
+        await pdf.encrypt(
+          src(minimalPdf),
+          sink,
+          encryption: PdfEncryptionConfig(
+            ownerPassword: 'owner-pw',
+            userPassword: 'user-pw',
+            algorithm: algorithm,
+            permissions: printOnly,
+          ),
+        );
+        return sink.takeBytes();
+      }
+
+      Future<Uint8List> keepSave(Pdf pdf, Uint8List source) async {
+        final editor = await pdf.edit(src(source), password: 'user-pw');
+        await editor.setTitle('kept');
+        final sink = TestSink();
+        await editor.save(sink);
+        await editor.dispose();
+        return sink.takeBytes();
+      }
+
+      // The encryption dictionary's own bytes: a reader here reports no
+      // owner-versus-user authentication, so the claim that the user
+      // password stays a user password is read off /O, /U and /ID.
+      String entry(Uint8List pdfBytes, String pattern) {
+        // bytegrep-exempt: the claim is about the encryption dictionary.
+        final text = String.fromCharCodes(pdfBytes); // bytegrep-exempt
+        final match = RegExp(pattern).firstMatch(text);
+        expect(match, isNotNull, reason: 'no $pattern in the output');
+        return match!.group(1)!;
+      }
+
+      for (final algorithm in [
+        PdfEncryptionAlgorithm.aes256,
+        PdfEncryptionAlgorithm.aes128,
+        PdfEncryptionAlgorithm.rc4_128,
+      ]) {
+        test(
+          '${algorithm.name}: owner, user and permissions survive',
+          () async {
+            final pdf = createPdf();
+            final source = await encrypted(pdf, algorithm);
+            final out = await keepSave(pdf, source);
+
+            final asUser = await pdf.open(src(out), password: 'user-pw');
+            expect(asUser.isEncrypted, isTrue);
+            expect(asUser.title, 'kept');
+            final original = await pdf.open(src(source), password: 'user-pw');
+            expect(
+              asUser.permissions?.toBits(),
+              original.permissions?.toBits(),
+              reason: 'the permissions read back are the source\'s',
+            );
+            await original.dispose();
+            await asUser.dispose();
+
+            final asOwner = await pdf.open(src(out), password: 'owner-pw');
+            expect(asOwner.title, 'kept');
+            await asOwner.dispose();
+
+            expect(
+              entry(out, r'/P\s*(-?\d+)'),
+              printOnly.toBits().toString(),
+              reason: '/P is the print-only permission word',
+            );
+            for (final key in ['O', 'U']) {
+              final pattern = '/$key\\s*<([0-9A-Fa-f]+)>';
+              expect(
+                entry(out, pattern),
+                entry(source, pattern),
+                reason: '/$key must be the source\'s, so owner != user',
+              );
+            }
+            const idPattern = r'/ID\s*\[\s*<([0-9A-Fa-f]+)>';
+            expect(entry(out, idPattern), entry(source, idPattern));
+            await pdf.dispose();
+          },
+          timeout: t(1),
+        );
+      }
+
+      test('remove opens with no password', () async {
+        final pdf = createPdf();
+        final source = await encrypted(pdf, PdfEncryptionAlgorithm.aes256);
+        final editor = await pdf.edit(src(source), password: 'user-pw');
+        final sink = TestSink();
+        await editor.save(
+          sink,
+          options: const PdfSaveOptions.fullRewrite(
+            encryption: PdfEncryption.remove(),
+          ),
+        );
+        await editor.dispose();
+        final doc = await pdf.open(src(sink.takeBytes()));
+        expect(doc.isEncrypted, isFalse);
+        await doc.dispose();
+        await pdf.dispose();
+      }, timeout: t(1));
+
+      test('an explicit config replaces the passwords', () async {
+        final pdf = createPdf();
+        final source = await encrypted(pdf, PdfEncryptionAlgorithm.aes256);
+        final editor = await pdf.edit(src(source), password: 'user-pw');
+        final sink = TestSink();
+        await editor.save(
+          sink,
+          options: const PdfSaveOptions.fullRewrite(
+            encryption: PdfEncryption.config(
+              ownerPassword: 'new-owner',
+              userPassword: 'new-user',
+            ),
+          ),
+        );
+        await editor.dispose();
+        final out = sink.takeBytes();
+
+        final doc = await pdf.open(src(out), password: 'new-user');
+        expect(doc.isEncrypted, isTrue);
+        await doc.dispose();
+        for (final old in ['user-pw', 'owner-pw']) {
+          await expectLater(
+            pdf.open(src(out), password: old),
+            throwsA(isA<PdfWrongPassword>()),
+            reason: 'the old $old must not open the new file',
+          );
+        }
+        await pdf.dispose();
+      }, timeout: t(1));
+    });
   });
 }

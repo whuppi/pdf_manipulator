@@ -175,12 +175,6 @@ abstract class BridgeEditorHandle {
   /// Whether the document has unsaved modifications.
   PdfTask<bool> get isModified;
 
-  /// Encryption algorithm of the source document, null when unencrypted.
-  PdfEncryptionAlgorithm? get sourceEncryption;
-
-  /// Permission flags of the source document, null when unencrypted.
-  PdfPermissions? get sourcePermissions;
-
   // ── Metadata ──
 
   /// Returns the document title.

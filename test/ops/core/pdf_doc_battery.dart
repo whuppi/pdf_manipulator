@@ -83,6 +83,41 @@ void registerDocTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
+    test('permissions read back exactly as they were written', () async {
+      final pdf = createPdf();
+      const written = PdfPermissions(
+        print: true,
+        printHq: false,
+        modify: false,
+        copy: false,
+        annotate: true,
+        fillForms: true,
+        accessibility: true,
+        assemble: false,
+      );
+      final encSink = TestSink();
+      await pdf.encrypt(
+        src(minimalPdf),
+        encSink,
+        encryption: const PdfEncryptionConfig(
+          ownerPassword: 'owner-pw',
+          userPassword: 'user-pw',
+          permissions: written,
+        ),
+      );
+      final doc = await pdf.open(src(encSink.takeBytes()), password: 'user-pw');
+      final read = doc.permissions!;
+      await doc.dispose();
+      expect(read.print, isTrue);
+      expect(read.printHq, isFalse);
+      expect(read.modify, isFalse);
+      expect(read.copy, isFalse);
+      expect(read.annotate, isTrue);
+      expect(read.fillForms, isTrue);
+      expect(read.accessibility, isTrue);
+      expect(read.assemble, isFalse);
+    }, timeout: t(1));
+
     test(
       'user-password PDF refuses a wrong password with typed error',
       () async {

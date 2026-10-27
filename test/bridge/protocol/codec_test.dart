@@ -167,44 +167,51 @@ void main() {
   });
 
   group('decodePermissions', () {
-    test('parses permission bits', () {
-      final perms = decodePermissions(0xFF);
+    test('reads the /P word at its spec bit positions', () {
+      final perms = decodePermissions(-1);
       expect(perms.print, isTrue);
       expect(perms.copy, isTrue);
+      expect(perms.printHq, isTrue);
+      expect(perms.assemble, isTrue);
+    });
+
+    test('decodes what toBits encodes, flag by flag', () {
+      const cases = [
+        PdfPermissions(print: true, copy: false),
+        PdfPermissions(print: false, copy: true, fillForms: true),
+        PdfPermissions(printHq: true, assemble: true, accessibility: false),
+      ];
+      for (final p in cases) {
+        final back = decodePermissions(p.toBits());
+        expect(
+          [
+            back.print,
+            back.printHq,
+            back.modify,
+            back.copy,
+            back.annotate,
+            back.fillForms,
+            back.accessibility,
+            back.assemble,
+          ],
+          [
+            p.print,
+            p.printHq,
+            p.modify,
+            p.copy,
+            p.annotate,
+            p.fillForms,
+            p.accessibility,
+            p.assemble,
+          ],
+        );
+      }
     });
 
     test('zero bits means all false', () {
       final perms = decodePermissions(0);
       expect(perms.print, isFalse);
       expect(perms.copy, isFalse);
-    });
-  });
-
-  group('decodeEditorOpen', () {
-    test('parses handle id and encryption facts', () {
-      final result = decodeEditorOpen({
-        'handleId': 7,
-        'isEncrypted': true,
-        'encryptionAlgorithm': 4,
-        'permissionBits': 0x7F,
-      });
-      expect(result.handleId, 7);
-      expect(result.encryption, PdfEncryptionAlgorithm.aes256);
-      expect(result.permissions, isNotNull);
-      expect(result.permissions!.print, isTrue);
-      expect(result.permissions!.assemble, isFalse);
-    });
-
-    test('unencrypted response gives null for both', () {
-      final result = decodeEditorOpen({
-        'handleId': 3,
-        'isEncrypted': false,
-        'encryptionAlgorithm': 0,
-        'permissionBits': 0xFF,
-      });
-      expect(result.handleId, 3);
-      expect(result.encryption, isNull);
-      expect(result.permissions, isNull);
     });
   });
 
