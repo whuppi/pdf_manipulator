@@ -4,7 +4,7 @@
 //! each of them through pdf_oxide's `test-support` probe door, tracking
 //! the allocator's high-water mark over the allocation level the
 //! process already holds when the step starts. One line per step:
-//! `<op> <input> peak_over_baseline=<bytes> limit=<bytes> ok|FAIL`.
+//! `<op> <input> peak_over_baseline=<bytes> limit=<bytes> ok|FAIL wall_ms=<n>`.
 //! Exits 1 on any FAIL, and removes its temp dir at the end.
 
 mod alloc;
@@ -256,7 +256,9 @@ fn step(
     alloc::reset_peak();
     let base = alloc::current();
     let mut state = pdf_oxide::host::lane_state::LaneState::new();
+    let started = std::time::Instant::now();
     let result = body(&mut state);
+    let wall_ms = started.elapsed().as_millis();
     let peak = alloc::peak_over(base);
     drop(state);
     if let Err(e) = &result {
@@ -267,7 +269,7 @@ fn step(
         failed.set(true);
     }
     println!(
-        "{op} {input} peak_over_baseline={peak} limit={limit} {}",
+        "{op} {input} peak_over_baseline={peak} limit={limit} {} wall_ms={wall_ms}",
         if ok { "ok" } else { "FAIL" }
     );
 }
