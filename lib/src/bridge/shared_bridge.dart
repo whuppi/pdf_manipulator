@@ -58,6 +58,7 @@ class SharedBridge extends PdfBridge {
     Map<String, Object?> args, {
     List<DataSource> sources = const [],
     List<DataSink> sinks = const [],
+    Set<int> keepSources = const {},
   }) {
     final hook = CancelHook();
     final future = () async {
@@ -66,6 +67,7 @@ class SharedBridge extends PdfBridge {
         req,
         sources: sources,
         sinks: sinks,
+        keepSources: keepSources,
         cancel: hook,
       );
       return bin.decodeResponse(res.bytes);

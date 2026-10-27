@@ -44,7 +44,7 @@ class _LaneSlot {
 }
 
 class _Pin {
-  _Pin(this.slot, this.engineHandleId, this.heldToken);
+  _Pin(this.slot, this.engineHandleId, this.groupId);
 
   final _LaneSlot slot;
 
@@ -54,16 +54,22 @@ class _Pin {
   /// way to the lane.
   final int engineHandleId;
 
-  /// Held token of the job that created the handle — passed with
-  /// every op on this handle so web lanes can mount its held readers.
-  final Object? heldToken;
+  /// Id of the job that created the handle. Every source the handle
+  /// keeps, from that job or a later one, belongs to this group; it is
+  /// passed with every op on the handle so web lanes can mount the
+  /// group's held readers.
+  final int groupId;
+
+  /// The one resource that covers every channel this handle keeps; null
+  /// until the first job that keeps a source succeeds.
+  int? resourceId;
 }
 
 class _HeldResource {
-  _HeldResource(this.slot, this.token);
+  _HeldResource(this.slot, this.tokens);
 
   final _LaneSlot slot;
-  final Object token;
+  final List<Object> tokens;
 }
 
 /// The shared routing brain. One per Pdf() instance.
@@ -146,7 +152,7 @@ class Router implements PdfTransport {
       sources: sources,
       sinks: sinks,
       keepSources: keepSources,
-      heldToken: pin?.heldToken,
+      heldGroupId: pin?.groupId,
     );
 
     slot.activeJobs++;
@@ -169,34 +175,71 @@ class Router implements PdfTransport {
     // Mint a Router-global id for it (engine ids collide across lanes),
     // pin it to the lane + engine id, and hand the caller the global id.
     var bytes = result.bytes;
+
+    // Only a success promotes kept channels. A failed (or cancelled)
+    // job leaves its channels with the lane, which holds them until
+    // released: free them now, nothing will ever name them again.
+    // A router disposed meanwhile already killed every lane.
+    final succeeded = bytes.isNotEmpty && bytes[0] == 1;
+    if (!succeeded) {
+      if (!_disposed) {
+        for (final token in result.heldTokens.values) {
+          slot.lane.releaseHeld(token);
+        }
+      }
+      return (bytes: bytes, resourceIds: const <int, int>{});
+    }
+
+    var owner = pin;
     final engineHandle = peekResponseHandleId(bytes);
     if (engineHandle != null) {
-      final token = result.heldTokens.isEmpty
-          ? null
-          : result.heldTokens.values.first;
       final globalId = _nextHandleId++;
-      _pins[globalId] = _Pin(slot, engineHandle, token);
+      owner = _Pin(slot, engineHandle, job.jobId);
+      _pins[globalId] = owner;
       bytes = rewriteResponseHandleId(bytes, globalId);
+    }
+    if (owner != null && result.heldTokens.isNotEmpty) {
+      // A later job on a live handle that keeps sources (a merge) adds
+      // them to the handle's one resource, released with it.
+      final resource = owner.resourceId == null
+          ? null
+          : _held[owner.resourceId];
+      if (resource == null) {
+        owner.resourceId = _newResource(slot, result.heldTokens.values);
+      } else {
+        resource.tokens.addAll(result.heldTokens.values);
+      }
     }
     if (globalHandleId != null && _disposeOps.contains(peekRequestOp(req))) {
       _pins.remove(globalHandleId);
     }
 
-    final resourceIds = <int, int>{};
-    result.heldTokens.forEach((sourceIndex, token) {
-      final id = _nextResourceId++;
-      _held[id] = _HeldResource(slot, token);
-      resourceIds[sourceIndex] = id;
-    });
-
+    final resourceId =
+        owner?.resourceId ??
+        (result.heldTokens.isEmpty
+            ? null
+            : _newResource(slot, result.heldTokens.values));
+    final resourceIds = <int, int>{
+      if (resourceId != null)
+        for (final sourceIndex in result.heldTokens.keys)
+          sourceIndex: resourceId,
+    };
     return (bytes: bytes, resourceIds: resourceIds);
+  }
+
+  int _newResource(_LaneSlot slot, Iterable<Object> tokens) {
+    final id = _nextResourceId++;
+    _held[id] = _HeldResource(slot, List.of(tokens));
+    return id;
   }
 
   @override
   Future<void> releaseSource(int resourceId) async {
     final resource = _held.remove(resourceId);
     if (resource == null) return; // already gone (dispose covered it)
-    resource.slot.lane.releaseHeld(resource.token);
+    for (final token in resource.tokens) {
+      resource.slot.lane.releaseHeld(token);
+    }
   }
 
   @override

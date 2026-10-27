@@ -124,6 +124,24 @@ void main() {
       );
     });
 
+    test('held readers: the worker and the web lane share one group order', () {
+      // A handle's held set is its creating job's group: the worker mounts
+      // the group's readers in creation order and files a later job's kept
+      // readers under that group; the lane serves reads in the same order.
+      final laneSource = File(
+        'lib/src/runtime/web/lane.dart',
+      ).readAsStringSync();
+      expect(laneSource, contains("msg['heldGroupId']"));
+      expect(laneSource, contains("'heldGroupId': heldGroupId"));
+      expect(workerSource, contains('r.heldGroupId === heldGroupId'));
+      expect(workerSource, contains('heldGroupId ?? jobId'));
+      expect(
+        laneSource,
+        contains('(_heldSources[group] ??= []).addAll'),
+        reason: 'kept sources append after the group\'s earlier ones',
+      );
+    });
+
     test('worker contains no routing or queuing logic', () {
       for (final word in [
         'pinnedHandles',

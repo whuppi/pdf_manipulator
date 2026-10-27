@@ -294,6 +294,78 @@ void main() {
         reason: 'release is idempotent and unknown ids are no-ops',
       );
     });
+
+    test('a later job that keeps a source joins the handle\'s one resource, '
+        'in the creating job\'s group', () async {
+      final open = router.execute(_open(), keepSources: {0});
+      await Future<void>.delayed(Duration.zero);
+      final lane = host.lanes.single;
+      lane.pending[1]!.complete(_ok(handleId: 7, held: {0: 'editor-src'}));
+      final opened = await open;
+      final handle = peekResponseHandleId(opened.bytes)!;
+      final editorResource = opened.resourceIds[0]!;
+      expect(lane.submitted[0].heldGroupId, isNull);
+
+      final merge = router.execute(
+        _opOn('editorMergeFrom', handle),
+        keepSources: {0},
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        lane.submitted[1].heldGroupId,
+        1,
+        reason: 'the merge runs in the group of the job that made the handle',
+      );
+      lane.pending[2]!.complete(_ok(held: {0: 'merge-src'}));
+      final merged = await merge;
+      expect(
+        merged.resourceIds[0],
+        editorResource,
+        reason: 'one resource id per handle',
+      );
+
+      await router.releaseSource(editorResource);
+      expect(lane.releasedTokens, ['editor-src', 'merge-src']);
+    });
+
+    test(
+      'a failed job registers nothing and frees its kept channels',
+      () async {
+        final open = router.execute(_open(), keepSources: {0});
+        await Future<void>.delayed(Duration.zero);
+        final lane = host.lanes.single;
+        lane.pending[1]!.complete(_ok(handleId: 7, held: {0: 'editor-src'}));
+        final opened = await open;
+        final handle = peekResponseHandleId(opened.bytes)!;
+
+        final merge = router.execute(
+          _opOn('editorMergeFrom', handle),
+          keepSources: {0},
+        );
+        await Future<void>.delayed(Duration.zero);
+        lane.pending[2]!.complete(
+          LaneSubmitResult(buildErrorResponse('bad pdf'), const {
+            0: 'merge-src',
+          }),
+        );
+        final failed = await merge;
+
+        expect(failed.resourceIds, isEmpty);
+        expect(lane.releasedTokens, [
+          'merge-src',
+        ], reason: 'the failed merge\'s channel is freed, the editor\'s stays');
+
+        final failedOpen = router.execute(_open(), keepSources: {0});
+        await Future<void>.delayed(Duration.zero);
+        lane.pending[3]!.complete(
+          LaneSubmitResult(buildErrorResponse('bad pdf'), const {
+            0: 'open-src',
+          }),
+        );
+        expect((await failedOpen).resourceIds, isEmpty);
+        expect(lane.releasedTokens, ['merge-src', 'open-src']);
+      },
+    );
   });
 
   group('dispose', () {

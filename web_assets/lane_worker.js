@@ -16,12 +16,12 @@
 // Dart → worker:
 //   init         { protocol, ioMode, baseUrl?, wasmModule? } → ready|error
 //   exec         { jobId, requestBytes, sourceLengths: number[],
-//                  sinkCount, keepSources: number[], heldJobId?,
+//                  sinkCount, keepSources: number[], heldGroupId?,
 //                  opfsFiles: (string|null)[], sab?, writeSab? }
 //                → result { jobId, data } | error { jobId, message }
 //   readAtResult { bytes? , error?, cancelled? }    (JSPI reads)
 //   chunkAck     { error?, cancelled? }             (JSPI writes)
-//   releaseHeld  { heldJobId }
+//   releaseHeld  { heldGroupId }
 //   opfsWrite    { jobId, filename, chunk, offset, last } → opfsWriteAck
 //   opfsDrop     { jobId }
 //
@@ -54,10 +54,10 @@ let wasmBaseUrl = (() => {
 // ═══════════════════════════════════════════════════════════════════
 // Reader registry — physics only. The Dart side decides WHICH
 // sources are kept (keepSources) and WHICH held set an op reuses
-// (heldJobId); this registry just stores and looks up.
+// (heldGroupId); this registry just stores and looks up.
 // ═══════════════════════════════════════════════════════════════════
 
-const readers = new Map();   // readerId → {length, opfsHandle, opfsFile, heldJobId|null}
+const readers = new Map();   // readerId → {length, opfsHandle, opfsFile, heldGroupId|null}
 let nextReaderId = 1;
 
 let activeReaderMap = null;  // sourceIndex → readerId, per exec
@@ -364,7 +364,7 @@ async function opfsDrop(jobId) {
 
 async function exec(msg) {
   const { jobId, requestBytes, sourceLengths, sinkCount, keepSources,
-          heldJobId, opfsFiles } = msg;
+          heldGroupId, opfsFiles } = msg;
 
   await ensureInit();
   activeSab = msg.sab || null;
@@ -375,9 +375,9 @@ async function exec(msg) {
 
   // Held readers of the handle this op targets come first (index 0),
   // exactly as the engine moved them into the document.
-  if (heldJobId != null) {
+  if (heldGroupId != null) {
     for (const [id, r] of readers) {
-      if (r.heldJobId === heldJobId) {
+      if (r.heldGroupId === heldGroupId) {
         readerIds.push(id);
         finalLengths.push(r.length);
       }
@@ -398,7 +398,7 @@ async function exec(msg) {
       jobFiles.get(jobId)?.delete(file);
     }
     const id = nextReaderId++;
-    readers.set(id, { length, opfsHandle: handle, opfsFile: file, heldJobId: null });
+    readers.set(id, { length, opfsHandle: handle, opfsFile: file, heldGroupId: null });
     readerIds.push(id);
     finalLengths.push(length);
   }
@@ -419,20 +419,21 @@ async function exec(msg) {
 
     // Promote kept readers to held (success responses only — status 1).
     // keepSources indexes the op's OWN sources, which sit after the
-    // held block in readerIds.
+    // held block in readerIds. They join the handle's group when the
+    // op targets an existing handle, else the job starts the group.
     const keep = new Set(keepSources || []);
     if (responseBytes.length > 0 && responseBytes[0] === 1 && keep.size > 0) {
       for (const idx of keep) {
         const rid = readerIds[heldCount + idx];
         const r = readers.get(rid);
-        if (r) r.heldJobId = jobId;
+        if (r) r.heldGroupId = heldGroupId ?? jobId;
       }
     }
   } finally {
     // Drop this op's non-promoted readers; held ones stay. Dropping
     // deletes each reader's OPFS file — same agent, no race possible.
     for (const [id, r] of readers) {
-      if (r.heldJobId === null) await dropReader(id, r);
+      if (r.heldGroupId === null) await dropReader(id, r);
     }
     activeReaderMap = null;
     activeSab = null;
@@ -485,7 +486,7 @@ self.onmessage = async (e) => {
 
     case 'releaseHeld': {
       for (const [id, r] of readers) {
-        if (r.heldJobId === msg.heldJobId) await dropReader(id, r);
+        if (r.heldGroupId === msg.heldGroupId) await dropReader(id, r);
       }
       return;
     }

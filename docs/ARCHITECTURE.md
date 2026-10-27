@@ -110,17 +110,25 @@ response bytes  →  decodeResponse  →  PdfDoc
 editor.mergeFrom(otherPdf)
   ↓
 SharedBridge._exec(editorMergeFrom, {sourceLength: N},
-    sources: [otherPdf])     ← secondary source at index 0
+    sources: [otherPdf],     ← secondary source at index 0
+    keepSources: {0})        ← kept for the editor's lifetime
   ↓
 Router.execute(bytes,
-    sources: [otherPdf])     ← lane serves readAt by sourceIndex
+    sources: [otherPdf],     ← lane serves readAt by sourceIndex
+    keepSources: {0})        ← on success the channel joins the editor's one resource
   ↓
 bridge_api.rs
   │  source[0] = otherPdf via readAt callback (64KB chunks)
   │  editor.merge_from_reader(BoxedReader for source[0])
+  │    walks the page graphs and records ids only; the reader stays
+  │    inside the editor, and the save streams each object from it
   ↓
 response bytes
 ```
+
+The editor's own source and every merge source share one resource id
+and one release (`editorDispose`, then `releaseSource`). A merge that
+fails registers nothing: the Router frees its kept channel at once.
 
 ### Editor mutations — staged, except the destructive ones
 
@@ -376,8 +384,10 @@ input and on a page holding one 60 MB stream: open, extractPages, the
 full and the incremental save, sign and compress stay under 16 MiB on
 both. The engine reads through an object cache bounded at 8 MiB, copies
 unchanged streams in 64KB pieces, and reads page facts without keeping
-the page dictionaries. Merge still holds the imported document until the
-save; its ceiling is pinned at today's peak.
+the page dictionaries. Merge stays under 16 MiB too: it keeps the merged
+document open with its own 1 MiB object cache, records only the ids of the
+objects each page reaches, and the save writes every merged object one at a
+time (streams in 64KB pieces) from that document.
 
 ### Transport contract
 
@@ -401,7 +411,7 @@ Future<...> execute(
 | editorSave | pinned reader[0] | PositionedWrite streams objects |
 | builderSave | — | PositionedWrite streams objects |
 | sign | reader[0] 64KB chunks | writer[0] sequential |
-| mergeFrom | reader[0] secondary PDF | — |
+| mergeFrom | reader[0] secondary PDF, kept for the handle's lifetime and read again by the save | — |
 | addImageStamp / embedFile / builder.image | reader[0] secondary data | — |
 | convertTo (PDF → DOCX/PPTX/XLSX) | reader[0] on demand | streaming ZIP via office_oxide |
 | convertToPdf (DOCX/PPTX/XLSX → PDF) | whole input buffered (office_oxide reads the ZIP from an in-memory cursor) | CountingWriter streams objects |
@@ -447,10 +457,14 @@ All three modes produce the same `Read+Seek` trait on the Rust side.
 three. Only OPFS pre-copies to disk.
 
 **Web reader registry:** each lane worker keeps a reader map.
-Held readers (kept sources from handle-creating ops) mount FIRST in
-each exec's reader list; the job's own sources follow. Non-held
+Held readers belong to a group: the id of the job that created the
+handle. A later job on that handle that keeps a source (a merge) files
+its reader in the same group, after the earlier ones. A handle's held
+set (the editor's source at index 0, then each merge in order) mounts
+FIRST in each exec's reader list; the job's own sources follow. Non-held
 readers are dropped in `finally`; held ones survive until the
-handle's dispose releases them. Exactly symmetric with native's
+handle's dispose releases the group. Dart serves held reads in the same
+order (a parity test pins it). Exactly symmetric with native's
 held-channel adoption.
 
 ### Backpressure

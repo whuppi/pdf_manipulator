@@ -163,11 +163,12 @@ class WebLane implements Lane {
   /// Outstanding OPFS pre-copy ack.
   Completer<String?>? _opfsAck;
 
-  /// heldToken (creating jobId) → that job's kept DataSources. On
-  /// JSPI/Atomics a held reader's bytes still live here in Dart, so
-  /// ops on the handle (which carry no sources of their own) must
-  /// serve reads from the CREATING job's sources. Mount order
-  /// mirrors the worker's reader map: held first, own sources after.
+  /// Held group (the handle's creating jobId) → the DataSources its
+  /// jobs kept, in the order they were kept. On JSPI/Atomics a held
+  /// reader's bytes still live here in Dart, so ops on the handle
+  /// (which carry no sources of their own) must serve reads from the
+  /// group's sources. Mount order mirrors the worker's reader map:
+  /// held first, own sources after.
   final Map<int, List<DataSource>> _heldSources = {};
 
   // ── Lane verbs ──
@@ -214,11 +215,15 @@ class WebLane implements Lane {
   @override
   void releaseHeld(Object token) {
     if (_killed) return;
-    final heldJobId = token as int;
-    _heldSources.remove(heldJobId);
-    // The worker drops the held readers AND deletes their OPFS files
-    // — it owns them (same agent as the open handles: no race).
-    _post({LaneMsgFields.type: LaneMsg.releaseHeld, 'heldJobId': heldJobId});
+    final heldGroupId = token as int;
+    _heldSources.remove(heldGroupId);
+    // The worker drops the group's held readers AND deletes their OPFS
+    // files — it owns them (same agent as the open handles: no race).
+    // Every token of a handle names the same group, so a repeat is a no-op.
+    _post({
+      LaneMsgFields.type: LaneMsg.releaseHeld,
+      'heldGroupId': heldGroupId,
+    });
   }
 
   @override
@@ -312,8 +317,8 @@ class WebLane implements Lane {
         ..['sourceLengths'] = [for (final s in job.sources) s.length.toJS].toJS
         ..['sinkCount'] = job.sinks.length.toJS
         ..['keepSources'] = [for (final i in job.keepSources) i.toJS].toJS;
-      if (job.heldToken != null) {
-        msg['heldJobId'] = (job.heldToken! as int).toJS;
+      if (job.heldGroupId != null) {
+        msg['heldGroupId'] = job.heldGroupId!.toJS;
       }
       if (entry.opfsFiles.any((f) => f != null)) {
         msg['opfsFiles'] = [for (final f in entry.opfsFiles) f?.toJS].toJS;
@@ -424,18 +429,20 @@ class WebLane implements Lane {
 
     final heldTokens = <int, Object>{};
     if (entry.job.keepSources.isNotEmpty && bytes.isNotEmpty && bytes[0] == 1) {
-      // Token = the creating job's id — the same id the worker used
-      // to mark its promoted readers (heldJobId). Ascending index
-      // order matches the worker's reader-creation order, which is
-      // what held-read serving relies on.
+      // Token = the handle's group id (its creating job) — the same id
+      // the worker used to mark its promoted readers (heldGroupId).
+      // Ascending index order matches the worker's reader-creation
+      // order, and a later job's sources append after the group's
+      // earlier ones: that is what held-read serving relies on.
+      final group = entry.job.heldGroupId ?? entry.job.jobId;
       final kept = entry.job.keepSources.toList()..sort();
       for (final i in kept) {
-        heldTokens[i] = entry.job.jobId;
+        heldTokens[i] = group;
       }
-      _heldSources[entry.job.jobId] = [
+      (_heldSources[group] ??= []).addAll([
         for (final i in kept)
           if (i < entry.job.sources.length) entry.job.sources[i],
-      ];
+      ]);
     }
 
     return LaneSubmitResult(bytes, heldTokens);
@@ -455,10 +462,10 @@ class WebLane implements Lane {
     // then this job's own sources. Mirror that order exactly: a
     // held-reader index resolves to the CREATING job's kept sources;
     // anything past them is this job's own.
-    final heldToken = entry.job.heldToken;
-    final heldSources = heldToken == null
+    final heldGroupId = entry.job.heldGroupId;
+    final heldSources = heldGroupId == null
         ? const <DataSource>[]
-        : _heldSources[heldToken as int] ?? const <DataSource>[];
+        : _heldSources[heldGroupId] ?? const <DataSource>[];
 
     Uint8List? bytes;
     String? error;

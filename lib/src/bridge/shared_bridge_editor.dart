@@ -22,11 +22,13 @@ class _SharedEditorHandle extends BridgeEditorHandle {
     Map<String, Object?> args, {
     List<DataSource> sources = const [],
     List<DataSink> sinks = const [],
+    Set<int> keepSources = const {},
   }) => _bridge._exec(
     op,
     {'handleId': _handleId, ...args},
     sources: sources,
     sinks: sinks,
+    keepSources: keepSources,
   );
 
   PdfTask<void> _mutate(
@@ -159,6 +161,9 @@ class _SharedEditorHandle extends BridgeEditorHandle {
     EngineOp.editorMergeFrom,
     {'sourceLength': otherPdf.length, if (pages != null) 'pages': pages},
     sources: [otherPdf],
+    // The editor keeps the merged document open to save from it; the
+    // channel lives until the editor is disposed.
+    keepSources: {0},
   );
 
   // ── Optimization ──

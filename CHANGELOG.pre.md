@@ -114,6 +114,8 @@ CONTENT RULES (never change)
 - Added the page builder methods the engine already had: `inline`, `inlineBold`, `inlineItalic`, `inlineColor`, `textInRect`, `rect`, `filledRect`, `line`, `strokeRect`, `strokeLine`, `highlight`, `underline`, `strikeout`, `squiggly`, `stickyNote`, `stamp`, `freeText`, `watermarkConfidential`, `watermarkDraft`, `linkNamed`, `linkJavaScript`, `onOpen`, `onClose`, `imageArtifact`, `table` and `streamingTable`
 - Changed `PdfBuilder.save` to Flate-compress page content and font streams; `save(output, compress: false)` keeps them plain for debugging
 - Changed `open`, `edit`, `extractPages`, a full-rewrite save and `compress` to hold a bounded window of the document instead of all of it: a 38 MB, 10,000-page file now opens and saves in under 16 MB of engine memory, where it took up to 85 MB
+- Changed `mergeFrom` to keep the merged file open until the editor is disposed and copy its objects one at a time at save: merging a 10,000-page file takes under 16 MB of engine memory and about 2 seconds, where it took 163 MB and minutes
+- Added rotation, media box and crop box edits on merged pages; stamps, watermarks, erases and redactions on a merged page throw `PdfUnsupported`
 - Changed `edit` to open the source once; an editor used to hold the document twice
 - Changed a full-rewrite save to copy each unchanged stream from the source in 64 KB pieces, so a page holding a 60 MB image saves in under 1 MB of engine memory
 - Changed `PdfDoc.verifySignatures` to check each signature's digest and signer key, where it returned `false` for every document; `PdfSignatureInfo` has `isValid`, `coversWholeDocument` and `signingTime` filled
@@ -127,6 +129,10 @@ CONTENT RULES (never change)
 - Fixed `PdfDoc.permissions` reporting the wrong flags (a print-allowed file read as `print: false`) — the engine's `/P` word is read at its spec bit positions
 - Fixed a page tree whose inner nodes each hold one page reporting those nodes as pages — every node is read before it counts as a page
 - Fixed `rotateAll` and other per-page edits slowing down with the square of the page count on large documents
+- Fixed a merged page losing the resources, page size and rotation it inherited from its source page tree, which could leave it blank
+- Fixed a merge copying the source's whole page tree into the output when a merged page linked to a page that was not merged — such a link's target is written as null
+- Fixed page edits on a document with merged pages hitting the wrong page, and `movePage` crashing the engine — they apply to the merged page or refuse with a typed error
+- Fixed a failed `open` or `edit` keeping its source channel until the instance was disposed
 - Fixed `extractPages` and `deletePages` writing the pages they drop into the output, so the output kept its original size and the dropped pages' text, images and form values — a save now writes nothing only a dropped page reaches, and drops the links, bookmark targets and form fields that pointed at one ([#261](https://github.com/whuppi/pdf_manipulator/issues/261) reported by [@crurui](https://github.com/crurui))
 - Fixed page labels shifting onto the wrong pages after `extractPages`, `deletePages` or a reorder — each kept page keeps its label
 - Fixed `PdfPageInfo.label` always being `null` — it now holds the page's label when the document has page labels

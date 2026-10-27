@@ -2718,6 +2718,134 @@ void registerEditorTests(Pdf Function() createPdf) {
       expect(text, contains('MERGEDFILL'));
     }, timeout: t(1));
 
+    // ── A merged page is streamed from the merged document at save ──
+
+    test('a merged page keeps its text', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(minimalPdf));
+      await editor.mergeFrom(src(fThreePageMarkers), pages: [2]);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+
+      final doc = await pdf.open(src(sink.takeBytes()));
+      expect(doc.pageCount, 2);
+      final text = await doc.extract(pages: const PdfPages.single(1));
+      await doc.dispose();
+      expect(text, contains(fThreePageMarkersTruth.markers[2]));
+    }, timeout: t(1));
+
+    test('a merged page keeps its link', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(minimalPdf));
+      await editor.mergeFrom(src(pagePrunePdf), pages: [2]);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+
+      final doc = await pdf.open(src(sink.takeBytes()));
+      expect(doc.pageCount, 2);
+      final annots = await doc.annotations(1);
+      await doc.dispose();
+      expect(
+        annots.map((a) => a.subtype),
+        contains(PdfAnnotationSubtype.link),
+        reason: 'the merged page lists the link it was merged with',
+      );
+    }, timeout: t(1));
+
+    test('a merged page keeps the attributes its page tree gave it', () async {
+      // pagePrunePdf pages carry no /MediaBox and no /Resources of their own:
+      // both come from the /Pages node above them.
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(minimalPdf));
+      await editor.mergeFrom(src(pagePrunePdf), pages: [2]);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+
+      final doc = await pdf.open(src(sink.takeBytes()));
+      final (width, height) = pagePruneTruth.mediaBox;
+      expect(doc.pages[1].width, closeTo(width, 0.5));
+      expect(doc.pages[1].height, closeTo(height, 0.5));
+      final text = await doc.extract(pages: const PdfPages.single(1));
+      expect(text, contains(pagePruneTruth.marker(2)));
+      RenderedPage? rendered;
+      await for (final page in doc.render(pages: const PdfPages.single(1))) {
+        rendered = page;
+      }
+      await doc.dispose();
+      final bitmap = img.decodePng(rendered!.data)!;
+      final first = bitmap.getPixel(0, 0);
+      final (r, g, b) = (first.r, first.g, first.b);
+      var inked = false;
+      for (final pixel in bitmap) {
+        if (pixel.r != r || pixel.g != g || pixel.b != b) {
+          inked = true;
+          break;
+        }
+      }
+      expect(inked, isTrue, reason: 'the merged page renders its text');
+    }, timeout: t(1));
+
+    test(
+      'a link to a page that was not merged is dropped, not imported',
+      () async {
+        // The link on page 2 of pagePrunePdf points at page 3.
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(minimalPdf));
+        await editor.mergeFrom(src(pagePrunePdf), pages: [2]);
+        final sink = TestSink();
+        await editor.save(sink);
+        await editor.dispose();
+
+        final doc = await pdf.open(src(sink.takeBytes()));
+        expect(doc.pageCount, 2, reason: 'no source page tree came along');
+        await doc.dispose();
+      },
+      timeout: t(1),
+    );
+
+    test('rotatePage on a merged page rotates it and no source page', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(minimalPdf));
+      await editor.mergeFrom(src(pagePrunePdf), pages: [2]);
+      await editor.rotatePage(1, degrees: 90);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+
+      final doc = await pdf.open(src(sink.takeBytes()));
+      expect(doc.pages[0].rotation, 0);
+      expect(doc.pages[1].rotation, 90);
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('content edits on a merged page throw PdfUnsupported', () async {
+      final editor = await createPdf().edit(src(minimalPdf));
+      await editor.mergeFrom(src(pagePrunePdf), pages: [2]);
+      await expectLater(
+        editor.addStamp(
+          1,
+          type: PdfStampType.draft,
+          rect: const PdfRect(x: 50, y: 50, width: 200, height: 60),
+        ),
+        throwsA(isA<PdfUnsupported>()),
+      );
+      await editor.dispose();
+    }, timeout: t(1));
+
+    test('movePage on a merged document throws and does not panic', () async {
+      final editor = await createPdf().edit(src(minimalPdf));
+      await editor.mergeFrom(src(pagePrunePdf), pages: [2]);
+      await expectLater(
+        editor.movePage(from: 0, to: 1),
+        throwsA(isA<PdfUnsupported>()),
+      );
+      expect(await editor.pageCount, 2);
+      await editor.dispose();
+    }, timeout: t(1));
+
     test(
       'clearEraseRegions does not error on a page with no queued erase',
       () async {
