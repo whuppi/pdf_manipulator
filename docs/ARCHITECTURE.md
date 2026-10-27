@@ -695,6 +695,21 @@ The lane survives; only that job dies — its result posts as
 cancelled. Fire-and-forget tasks absorb the cancelled outcome
 silently; real failures on unlistened tasks are re-raised loudly.
 
+**Mid-loop cancel.** The engine's CPU loops (all-pages extract, search,
+image reduction, validation, PDF/A conversion, render, image
+extraction, the editor save's page loop) poll a `CancelCheck` once per
+page, image or rule batch, so a cancel stops them within one unit even
+when the loop makes no I/O call. On native the check reads the lane and
+job flags. On the web it reads a per-job cancel word in a
+`SharedArrayBuffer` (`host_cancelled`), which exists only on
+cross-origin isolated pages. Without it, web cancel lands at the next
+source read or sink write, and a running OPFS op (no I/O waits at all)
+is stopped only by `Pdf.dispose`.
+
+`render` and `extractImages` stream: each frame reaches the consumer as
+the engine writes it, an error response ends the stream after the frames
+already delivered, and cancelling the subscription cancels the job.
+
 ---
 
 ## CI/CD architecture

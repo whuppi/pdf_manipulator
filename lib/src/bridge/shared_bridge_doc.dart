@@ -127,47 +127,47 @@ class _SharedDocHandle extends BridgeDocHandle {
     });
   }
 
+  /// Frames reach the stream as the engine writes them. An error
+  /// response ends the stream with its error after the frames already
+  /// delivered; cancelling the subscription cancels the job.
   @override
-  Stream<RenderedPage> render({
-    required PdfPages pages,
-    PdfRenderSize? size,
-  }) async* {
-    final sink = _FrameCollectorSink();
-    final req = bin.encodeRequest(EngineOp.render.wire, {
-      'handleId': _handleId,
-      'pageIndices': _pages(pages),
-      if (size?.maxWidth != null) 'maxWidth': size!.maxWidth,
-      if (size?.maxHeight != null) 'maxHeight': size!.maxHeight,
-      'hasSink': true,
-    });
-    final res = await _bridge._transport.execute(req, sinks: [sink]);
-    // An error response means the op failed: throw it before any frame.
-    bin.decodeResponse(res.bytes);
-    for (final frame in sink.frames) {
-      final map = bin.decodeResponse(frame);
-      yield codec.decodeRenderedPage(map);
-    }
-  }
+  Stream<RenderedPage> render({required PdfPages pages, PdfRenderSize? size}) =>
+      _streamFrames((hook, sink) async {
+        final req = bin.encodeRequest(EngineOp.render.wire, {
+          'handleId': _handleId,
+          'pageIndices': _pages(pages),
+          if (size?.maxWidth != null) 'maxWidth': size!.maxWidth,
+          if (size?.maxHeight != null) 'maxHeight': size!.maxHeight,
+          'hasSink': true,
+        });
+        final res = await _bridge._transport.execute(
+          req,
+          sinks: [sink],
+          cancel: hook,
+        );
+        bin.decodeResponse(res.bytes);
+      }, codec.decodeRenderedPage);
 
+  /// Same delivery order as [render]: frames as written, the final
+  /// response last, a cancelled subscription cancels the job.
   @override
-  Stream<PdfImage> extractImages({required PdfPages pages}) async* {
-    final pageIndices = _pages(pages);
-    for (final page in pageIndices) {
-      final sink = _FrameCollectorSink();
-      final req = bin.encodeRequest(EngineOp.extractImages.wire, {
-        'handleId': _handleId,
-        'page': page,
-        'hasSink': true,
-      });
-      final res = await _bridge._transport.execute(req, sinks: [sink]);
-      // An error response means the op failed: throw it before any frame.
-      bin.decodeResponse(res.bytes);
-      for (final frame in sink.frames) {
-        final map = bin.decodeResponse(frame);
-        yield codec.decodePdfImage(map);
-      }
-    }
-  }
+  Stream<PdfImage> extractImages({required PdfPages pages}) =>
+      _streamFrames((hook, sink) async {
+        for (final page in _pages(pages)) {
+          if (hook.isCancelled) return;
+          final req = bin.encodeRequest(EngineOp.extractImages.wire, {
+            'handleId': _handleId,
+            'page': page,
+            'hasSink': true,
+          });
+          final res = await _bridge._transport.execute(
+            req,
+            sinks: [sink],
+            cancel: hook,
+          );
+          bin.decodeResponse(res.bytes);
+        }
+      }, codec.decodePdfImage);
 
   @override
   PdfTask<List<PdfSignatureInfo>> get signatures => _exec(

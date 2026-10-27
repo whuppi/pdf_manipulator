@@ -17,7 +17,8 @@
 //   init         { protocol, ioMode, baseUrl?, wasmModule? } → ready|error
 //   exec         { jobId, requestBytes, sourceLengths: number[],
 //                  sinkCount, keepSources: number[], heldGroupId?,
-//                  opfsFiles: (string|null)[], sab?, writeSab? }
+//                  opfsFiles: (string|null)[], sab?, writeSab?,
+//                  cancelSab? }
 //                → result { jobId, data } | error { jobId, message }
 //   readAtResult { bytes? , error?, cancelled? }    (JSPI reads)
 //   chunkAck     { error?, cancelled? }             (JSPI writes)
@@ -63,6 +64,7 @@ let nextReaderId = 1;
 let activeReaderMap = null;  // sourceIndex → readerId, per exec
 let activeSab = null;        // per-exec read SAB (atomics)
 let activeWriteSab = null;   // per-exec write-ack SAB (atomics)
+let activeCancelSab = null;  // per-exec cancel word, any mode with SharedArrayBuffer
 let jspiReadResolve = null;
 let jspiWriteResolve = null;
 
@@ -143,10 +145,21 @@ function readViaJspi(sourceIndex, offset, count, bufPtr) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// host_cancelled — called by WASM from inside the engine's CPU loops
+// ═══════════════════════════════════════════════════════════════════
+
+// Synchronous in every mode (never in JSPI_ASYNC_IMPORTS): it reads
+// the job's cancel word and never suspends. 0 when the job has none.
+function hostCancelled() {
+  return activeCancelSab ? Atomics.load(new Int32Array(activeCancelSab), 0) : 0;
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // host_write_chunk — called by WASM, with backpressure
 // ═══════════════════════════════════════════════════════════════════
 
 function hostWriteChunk(sinkIndex, bufPtr, len) {
+  if (hostCancelled() !== 0) return P.hostIoCancelled;
   const chunk = new Uint8Array(wasm.memory.buffer).slice(bufPtr, bufPtr + len);
   switch (ioMode) {
     case 'atomics': return writeViaAtomics(sinkIndex, chunk);
@@ -197,6 +210,7 @@ async function ensureInit() {
 
   self.host_read_at = hostReadAt;
   self.host_write_chunk = hostWriteChunk;
+  self.host_cancelled = hostCancelled;
 
   const jsModule = await import(wasmBaseUrl + 'pdf_oxide.js');
 
@@ -369,6 +383,7 @@ async function exec(msg) {
   await ensureInit();
   activeSab = msg.sab || null;
   activeWriteSab = msg.writeSab || null;
+  activeCancelSab = msg.cancelSab || null;
 
   const readerIds = [];
   const finalLengths = [];
@@ -438,6 +453,7 @@ async function exec(msg) {
     activeReaderMap = null;
     activeSab = null;
     activeWriteSab = null;
+    activeCancelSab = null;
     jspiWriteResolve = null;
   }
 

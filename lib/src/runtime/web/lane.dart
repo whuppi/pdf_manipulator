@@ -22,7 +22,10 @@
 //   running — the job's NEXT I/O is answered with the cancelled
 //             status (and a parked Atomics wait / outstanding JSPI
 //             read is answered immediately); the engine unwinds at
-//             that boundary, mirroring native exactly.
+//             that boundary, mirroring native exactly. Where the page
+//             has SharedArrayBuffer the job also carries a cancel word
+//             the engine's CPU loops poll, so it stops within one page
+//             even when it makes no I/O call.
 //   kill    — worker.terminate(): the browser frees the worker and
 //             its WASM heap; every pending job completes cancelled.
 //             The worker's OPFS directory is reclaimed by the host
@@ -128,6 +131,11 @@ class _WebJob {
   JSObject? sab;
   JSObject? writeSab;
 
+  /// The per-job cancel word, in every mode where the page has
+  /// SharedArrayBuffer (null otherwise: the job then cancels at its
+  /// next I/O boundary only).
+  JSObject? cancelSab;
+
   /// OPFS filenames pre-copied for this job's sources (index-aligned;
   /// null where no pre-copy happened). Pure exec-message data — the
   /// WORKER owns the files themselves and their deletion.
@@ -198,6 +206,11 @@ class WebLane implements Lane {
     final running = _running;
     if (running == null || running.job.jobId != jobId) return;
     running.cancelled = true;
+
+    // The engine's CPU loops poll this word between pages, so the job
+    // stops within one page even while the worker never touches I/O.
+    final cancelSab = running.cancelSab;
+    if (cancelSab != null) _atomicsStore(_I32(cancelSab, 0, 1), 0, 1);
 
     // Wake anything parked RIGHT NOW — same instant-wake contract as
     // the native channel registry.
@@ -322,6 +335,10 @@ class WebLane implements Lane {
       }
       if (entry.opfsFiles.any((f) => f != null)) {
         msg['opfsFiles'] = [for (final f in entry.opfsFiles) f?.toJS].toJS;
+      }
+      if (globalContext.hasProperty('SharedArrayBuffer'.toJS).toDart) {
+        entry.cancelSab = _Sab(SabLayout.cancelSabBytes);
+        msg['cancelSab'] = entry.cancelSab;
       }
       if (_host.mode == PdfIoMode.atomics) {
         entry.sab = _Sab(SabLayout.readSabBytes);

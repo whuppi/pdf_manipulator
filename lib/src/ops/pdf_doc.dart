@@ -127,6 +127,10 @@ class PdfDoc {
   }
 
   /// Renders the specified [pages] as rasterized images.
+  ///
+  /// Each page is delivered as soon as it is rendered. A failure ends
+  /// the stream with its error after the pages already delivered.
+  /// Cancelling the subscription cancels the render.
   Stream<RenderedPage> render({required PdfPages pages, PdfRenderSize? size}) {
     KeepRecord.op('render');
     _check();
@@ -134,6 +138,8 @@ class PdfDoc {
   }
 
   /// Extracts embedded images from the specified [pages].
+  ///
+  /// Delivery order and cancellation are those of [render].
   Stream<PdfImage> extractImages({required PdfPages pages}) {
     _check();
     return _handle.extractImages(pages: pages);

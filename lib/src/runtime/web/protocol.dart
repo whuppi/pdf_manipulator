@@ -58,6 +58,11 @@ abstract final class SabLayout {
 
   /// Write-ack SAB is a single i32 status word.
   static const writeSabBytes = 4;
+
+  /// Cancel SAB is a single i32: 0 until the job is cancelled, then 1.
+  /// The worker reads it from inside the engine's CPU loops, so a
+  /// cancel lands within one page without any I/O call.
+  static const cancelSabBytes = 4;
 }
 
 /// Message type tags between WebLane (Dart) and lane_worker.js.

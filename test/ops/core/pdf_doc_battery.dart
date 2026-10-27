@@ -397,6 +397,15 @@ void registerDocTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
+    test('validate on a damaged file never reports it compliant', () async {
+      final doc = await createPdf().open(src(brokenObjectPdf));
+      final a = await doc.validatePdfA();
+      expect(a.compliant, isFalse);
+      expect(a.errors, greaterThan(0), reason: 'a real error count, not -1');
+      expect(await doc.validatePdfUa(), isFalse);
+      await doc.dispose();
+    }, timeout: t(1));
+
     // ── Classify ──────────────────────────────────────────────────
 
     test('classifyPage returns type and confidence in range', () async {

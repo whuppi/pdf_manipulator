@@ -27,14 +27,19 @@ const maxReadChunk = 64 * 1024;
 const maxWriteChunk = 256 * 1024;
 
 class TestSource implements DataSource {
-  TestSource(this._data);
+  TestSource(this._data, {this.onRead});
   final Uint8List _data;
+
+  /// Called on every [readAt], before the bytes are returned. Tests
+  /// count reads and mark moments in an op through it.
+  final void Function(int offset, int count)? onRead;
 
   @override
   int get length => _data.length;
 
   @override
   Uint8List readAt(int offset, int count) {
+    onRead?.call(offset, count);
     if (count > maxReadChunk) {
       throw StateError(
         'O(1) SOURCE violation: readAt requested $count bytes '
