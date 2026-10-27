@@ -291,7 +291,7 @@ git commit -m "build: update submodule — <description>"
 | Step | File | Action |
 |---|---|---|
 | 1 | `host/dispatch.rs` | Typed function + result struct |
-| 2 | `host/bridge_api.rs` | Match arm (call dispatch, encode response) |
+| 2 | `host/ops/<unit>.rs` + `host/ops/registry.rs` | `op_unit!` with its handler (call dispatch, encode response) and its registry row |
 | 3 | `protocol/op.dart` | Add `EngineOp` value |
 | 4 | `protocol/codec.dart` | Request builder + response decoder |
 | 5 | `ops/pdf_doc.dart` | Public method |
@@ -309,7 +309,7 @@ Edit mutations are sub-dispatched inside `editorMutate`:
 | Step | File | Action |
 |---|---|---|
 | 1 | `host/dispatch.rs` | `edit_*()` function |
-| 2 | `host/bridge_api.rs` | Match arm in `handle_editor_mutate` |
+| 2 | `host/ops/editor.rs` | Match arm in `do_editor_mutate` |
 | 3 | `protocol/codec.dart` | Param encoder if needed |
 | 4 | `shared_bridge.dart` | `_mutate('opName', params)` on editor handle |
 | 5 | `ops/pdf_editor.dart` | Public method |
@@ -600,7 +600,7 @@ hand-authored in `test/fixtures/handwritten.dart`.
 | Build hook fails on consumer machine | Binary missing for target — check GitHub Release assets |
 | WASM test fails | Rebuild: `make build-wasm` |
 | Native passes, web fails | bridge_api.rs WASM path missing the op |
-| wire_sync_test fails | EngineOp without matching bridge_api.rs arm |
+| wire_sync_test fails | EngineOp or PageOp without a matching op unit or arm under `host/ops/` |
 | "Handle not found" | Handle disposed or never opened |
 | "Symbol not found" at runtime | Binary older than source — rebuild |
 | `make verify-android` fails without Rust | Hook tries compile → `cargo` not found → error with install URL |

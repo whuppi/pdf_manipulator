@@ -34,9 +34,10 @@ enum PdfFormFieldType {
 }
 
 /// A field's value, typed by the field kind: [PdfTextValue] for text
-/// fields, [PdfCheckedValue] for a checkbox or radio button,
-/// [PdfChoiceValue] for a single-select choice field, [PdfMultiChoiceValue]
-/// for a multi-select list box, [PdfNoValue] when the field has no value.
+/// fields, [PdfCheckedValue] for a checkbox, [PdfChoiceValue] for a
+/// single-select choice field or a radio group (the selected option's export
+/// name), [PdfMultiChoiceValue] for a multi-select list box, [PdfNoValue]
+/// when the field has no value (a radio group with nothing selected).
 sealed class PdfFormFieldValue {
   const PdfFormFieldValue();
 }

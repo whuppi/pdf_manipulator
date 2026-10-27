@@ -1,10 +1,11 @@
 // Cross-verification: the Dart EngineOp enum vs the Rust dispatcher.
 //
-// Parses bridge_api.rs from disk, extracts every match arm
-// programmatically, and checks parity with EngineOp. If an op exists
-// in one layer but not the other, this test fails. One known
-// exception: 'watermark' appears in both edit and page dispatch
-// (editor watermark + builder page watermark).
+// Parses the op units under host/ops/ from disk, extracts every op_unit!
+// declaration and sub-op match arm programmatically, and checks parity
+// with EngineOp and PageOp. If an op exists in one layer but not the
+// other, this test fails. One known exception: 'watermark' appears in
+// both edit and page dispatch (editor watermark + builder page
+// watermark).
 //
 // The web twin (lane_worker.js ↔ lane protocol) lives in
 // test/runtime/web/lane_worker_sync_test.dart.
@@ -12,7 +13,7 @@
 @TestOn('vm')
 library;
 
-// io-exempt: reads bridge_api.rs from disk to check Dart/Rust op parity.
+// io-exempt: reads the host op units from disk to check Dart/Rust op parity.
 import 'dart:io';
 
 import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart';
@@ -21,37 +22,49 @@ import 'package:test/test.dart';
 
 // ── Source extractors ──
 
+const _opsDir = 'vendor/pdf_oxide/src/host/ops';
+
+/// The text of [source] from the `fn` named [from] up to the `fn` named
+/// [to]: the one function whose match holds the sub-op arms.
+String _slice(String source, String from, String to) {
+  final start = source.indexOf('fn $from(');
+  if (start == -1) throw StateError('fn $from not found');
+  final end = source.indexOf('fn $to(', start);
+  if (end == -1) throw StateError('fn $to not found after fn $from');
+  return source.substring(start, end);
+}
+
 /// Extracts the three Rust op sets. Top-level ops are op_unit!
 /// declarations under host/ops/ (the registry's unit files); the
-/// editorMutate / builderPageOp sub-commands are still match arms inside
-/// bridge_api.rs handlers. An op missing its unit fails the top-level
-/// test; a unit missing its registry row surfaces as an unused-static
-/// warning in `make analyze`.
+/// editorMutate / builderPageOp sub-commands are the match arms of
+/// their own handler functions, each slice ending where the next
+/// function starts. An op missing its unit fails the top-level test.
 ({Set<String> topLevel, Set<String> editMutate, Set<String> pageOp})
-_parseRustDispatch(String source) {
+_parseRustDispatch() {
   final unitPattern = RegExp(
     r'op_unit!\(\s*\w+,\s*"([a-zA-Z]+)"',
     multiLine: true,
   );
   final topLevel = <String>{};
-  final opsDir = Directory('vendor/pdf_oxide/src/host/ops');
-  if (!opsDir.existsSync()) throw StateError('host/ops/ not found');
-  for (final f in opsDir.listSync().whereType<File>()) {
+  final dir = Directory(_opsDir);
+  if (!dir.existsSync()) throw StateError('host/ops/ not found');
+  for (final f in dir.listSync().whereType<File>()) {
     if (!f.path.endsWith('.rs')) continue;
     final s = f.readAsStringSync();
     topLevel.addAll(unitPattern.allMatches(s).map((m) => m.group(1)!));
   }
   if (topLevel.isEmpty) throw StateError('no op_unit! declarations found');
 
-  // Sub-dispatched ops keep their match arms inside bridge_api.rs.
-  final mutateStart = source.indexOf('fn handle_editor_mutate(');
-  final pageOpStart = source.indexOf('fn handle_builder_page_op(');
-
-  if (mutateStart == -1) throw StateError('handle_editor_mutate not found');
-  if (pageOpStart == -1) throw StateError('handle_builder_page_op not found');
-
-  final mutateSource = source.substring(mutateStart, pageOpStart);
-  final pageSource = source.substring(pageOpStart);
+  final mutateSource = _slice(
+    File('$_opsDir/editor.rs').readAsStringSync(),
+    'do_editor_mutate',
+    'handle_editor_save',
+  );
+  final pageSource = _slice(
+    File('$_opsDir/builder.rs').readAsStringSync(),
+    'handle_builder_page_op',
+    'handle_builder_save',
+  );
 
   final armPattern = RegExp(r'"([a-zA-Z]+)"\s*=>');
 
@@ -63,6 +76,32 @@ _parseRustDispatch(String source) {
         .toSet(),
     pageOp: armPattern.allMatches(pageSource).map((m) => m.group(1)!).toSet(),
   );
+}
+
+/// The `module::STATIC` keys of every op_unit! declaration, and of every
+/// row of the registry table.
+({Set<String> units, Set<String> rows}) _parseUnitsAndRows() {
+  final unitPattern = RegExp(r'op_unit!\(\s*(\w+),', multiLine: true);
+  final units = <String>{};
+  for (final f in Directory(_opsDir).listSync().whereType<File>()) {
+    if (!f.path.endsWith('.rs')) continue;
+    final module = f.uri.pathSegments.last.replaceFirst('.rs', '');
+    final s = f.readAsStringSync();
+    units.addAll(
+      unitPattern.allMatches(s).map((m) => '$module::${m.group(1)}'),
+    );
+  }
+  final registry = File('$_opsDir/registry.rs').readAsStringSync();
+  final tableStart = registry.indexOf('static OPS');
+  if (tableStart == -1) throw StateError('static OPS not found');
+  final table = registry.substring(
+    tableStart,
+    registry.indexOf('];', tableStart),
+  );
+  final rows = RegExp(
+    r'&(\w+::\w+),',
+  ).allMatches(table).map((m) => m.group(1)!).toSet();
+  return (units: units, rows: rows);
 }
 
 void main() {
@@ -92,17 +131,15 @@ void main() {
     });
   });
 
-  // ── Rust bridge_api.rs sync ──
+  // ── Rust op units sync ──
 
-  group('bridge_api.rs ↔ EngineOp', () {
+  group('host op units ↔ EngineOp', () {
     late Set<String> rustTopLevel;
     late Set<String> rustEditMutate;
     late Set<String> rustPageOp;
 
     setUpAll(() {
-      final file = File('vendor/pdf_oxide/src/host/bridge_api.rs');
-      if (!file.existsSync()) fail('bridge_api.rs not found');
-      final parsed = _parseRustDispatch(file.readAsStringSync());
+      final parsed = _parseRustDispatch();
       rustTopLevel = parsed.topLevel;
       rustEditMutate = parsed.editMutate;
       rustPageOp = parsed.pageOp;
@@ -171,6 +208,45 @@ void main() {
         pageInTop,
         isEmpty,
         reason: 'Page sub-ops leaked into top-level dispatch: $pageInTop',
+      );
+    });
+  });
+
+  // ── Page-op parity ──
+
+  group('page-op parity', () {
+    test('every Dart PageOp has a Rust arm and every Rust arm a PageOp', () {
+      final dart = PageOp.values.map((op) => op.wire).toSet();
+      final rust = _parseRustDispatch().pageOp;
+      expect(
+        dart.difference(rust),
+        isEmpty,
+        reason: 'Dart PageOp values the host builder does not match',
+      );
+      expect(
+        rust.difference(dart),
+        isEmpty,
+        reason: 'host builder page-op arms with no Dart PageOp',
+      );
+    });
+
+    test('no duplicate PageOp wire names', () {
+      final wires = PageOp.values.map((op) => op.wire).toList();
+      expect(wires.toSet().length, wires.length);
+    });
+
+    test('every op_unit! has a registry row and every row a unit', () {
+      final parsed = _parseUnitsAndRows();
+      expect(parsed.units, isNotEmpty);
+      expect(
+        parsed.units.difference(parsed.rows),
+        isEmpty,
+        reason: 'op_unit! declarations missing from registry.rs',
+      );
+      expect(
+        parsed.rows.difference(parsed.units),
+        isEmpty,
+        reason: 'registry.rs rows with no op_unit! declaration',
       );
     });
   });

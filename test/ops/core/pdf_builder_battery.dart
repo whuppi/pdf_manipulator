@@ -341,6 +341,97 @@ void registerBuilderTests(Pdf Function() createPdf) {
       expect(String.fromCharCodes(sink.takeBytes()), contains('mycombo'));
     }, timeout: t(1));
 
+    test('radioGroup lists as a radio field with its selected value', () async {
+      final pdf = createPdf();
+      final builder = await pdf.build();
+      final page = await builder.addA4Page();
+      await page.radioGroup('size', const [
+        (value: 'small', rect: PdfRect(x: 50, y: 700, width: 14, height: 14)),
+        (value: 'large', rect: PdfRect(x: 50, y: 670, width: 14, height: 14)),
+      ], selected: 'large');
+      await page.radioGroup('colour', const [
+        (value: 'red', rect: PdfRect(x: 150, y: 700, width: 14, height: 14)),
+        (value: 'blue', rect: PdfRect(x: 150, y: 670, width: 14, height: 14)),
+      ]);
+      await page.done();
+      final sink = TestSink();
+      await builder.save(sink);
+      await builder.dispose();
+      final built = sink.takeBytes();
+      final doc = await pdf.open(src(built));
+      final fields = {for (final f in await doc.formFields) f.name: f};
+      expect(fields.keys, containsAll(['size', 'colour']));
+      expect(fields['size']!.type, PdfFormFieldType.radioGroup);
+      expect(fields['colour']!.type, PdfFormFieldType.radioGroup);
+      expect(
+        fields['size']!.value,
+        isA<PdfChoiceValue>().having((v) => v.choice, 'choice', 'large'),
+      );
+      expect(fields['colour']!.value, isA<PdfNoValue>());
+      await doc.dispose();
+
+      // Setting a radio group's value takes the option name.
+      final editor = await pdf.edit(src(built));
+      await editor.setFormFieldValue('size', 'small');
+      await editor.setFormFieldValue('colour', 'blue');
+      final resaved = TestSink();
+      await editor.save(resaved);
+      await editor.dispose();
+      final reopened = await pdf.open(src(resaved.takeBytes()));
+      final after = {for (final f in await reopened.formFields) f.name: f};
+      expect(
+        after['size']!.value,
+        isA<PdfChoiceValue>().having((v) => v.choice, 'choice', 'small'),
+      );
+      expect(
+        after['colour']!.value,
+        isA<PdfChoiceValue>().having((v) => v.choice, 'choice', 'blue'),
+      );
+      await reopened.dispose();
+    }, timeout: t(1));
+
+    test(
+      'radioGroup keeps option names Yes and No; a checkbox stays checked',
+      () async {
+        final pdf = createPdf();
+        final builder = await pdf.build();
+        final page = await builder.addA4Page();
+        await page.radioGroup('picksNo', const [
+          (value: 'Yes', rect: PdfRect(x: 50, y: 700, width: 14, height: 14)),
+          (value: 'No', rect: PdfRect(x: 50, y: 670, width: 14, height: 14)),
+        ], selected: 'No');
+        await page.radioGroup('picksYes', const [
+          (value: 'Yes', rect: PdfRect(x: 150, y: 700, width: 14, height: 14)),
+          (value: 'No', rect: PdfRect(x: 150, y: 670, width: 14, height: 14)),
+        ], selected: 'Yes');
+        await page.checkbox(
+          'agree',
+          const PdfRect(x: 250, y: 700, width: 14, height: 14),
+          checked: true,
+        );
+        await page.done();
+        final sink = TestSink();
+        await builder.save(sink);
+        await builder.dispose();
+        final doc = await pdf.open(src(sink.takeBytes()));
+        final fields = {for (final f in await doc.formFields) f.name: f};
+        expect(
+          fields['picksNo']!.value,
+          isA<PdfChoiceValue>().having((v) => v.choice, 'choice', 'No'),
+        );
+        expect(
+          fields['picksYes']!.value,
+          isA<PdfChoiceValue>().having((v) => v.choice, 'choice', 'Yes'),
+        );
+        expect(
+          fields['agree']!.value,
+          isA<PdfCheckedValue>().having((v) => v.checked, 'checked', isTrue),
+        );
+        await doc.dispose();
+      },
+      timeout: t(1),
+    );
+
     test('linkUrl produces valid PDF with annotation', () async {
       final pdf = createPdf();
       final builder = await pdf.build();

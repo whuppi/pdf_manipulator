@@ -89,29 +89,29 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
   final SharedBridge _bridge;
   final int _handleId;
 
-  PdfTask<void> _op(String op, [Map<String, Object?> extra = const {}]) =>
+  PdfTask<void> _op(PageOp op, [Map<String, Object?> extra = const {}]) =>
       _bridge._exec(EngineOp.builderPageOp, {
         'handleId': _handleId,
-        'pageOp': op,
+        'pageOp': op.wire,
         ...extra,
       });
 
   @override
   PdfTask<void> font(String name, double size) =>
-      _op('font', {'name': name, 'size': size});
+      _op(PageOp.font, {'name': name, 'size': size});
   @override
-  PdfTask<void> at(double x, double y) => _op('at', {'x': x, 'y': y});
+  PdfTask<void> at(double x, double y) => _op(PageOp.at, {'x': x, 'y': y});
   @override
-  PdfTask<void> text(String text) => _op('text', {'text': text});
+  PdfTask<void> text(String text) => _op(PageOp.text, {'text': text});
   @override
   PdfTask<void> heading(int level, String text) =>
-      _op('heading', {'level': level, 'text': text});
+      _op(PageOp.heading, {'level': level, 'text': text});
   @override
-  PdfTask<void> paragraph(String text) => _op('paragraph', {'text': text});
+  PdfTask<void> paragraph(String text) => _op(PageOp.paragraph, {'text': text});
   @override
-  PdfTask<void> space(double points) => _op('space', {'points': points});
+  PdfTask<void> space(double points) => _op(PageOp.space, {'points': points});
   @override
-  PdfTask<void> horizontalRule() => _op('horizontalRule');
+  PdfTask<void> horizontalRule() => _op(PageOp.horizontalRule);
   @override
   PdfTask<void> image(
     DataSource imageData,
@@ -121,7 +121,7 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
     EngineOp.builderPageOp,
     {
       'handleId': _handleId,
-      'pageOp': 'image',
+      'pageOp': PageOp.image.wire,
       'sourceLength': imageData.length,
       ...codec.encodeRectArgs(rect),
       'altText': altText,
@@ -129,17 +129,17 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
     sources: [imageData],
   );
   @override
-  PdfTask<void> watermark(String text) => _op('watermark', {'text': text});
+  PdfTask<void> watermark(String text) => _op(PageOp.watermark, {'text': text});
   @override
   PdfTask<void> textField(String name, PdfRect rect, {String? defaultValue}) =>
-      _op('textField', {
+      _op(PageOp.textField, {
         'name': name,
         ...codec.encodeRectArgs(rect),
         'defaultValue': defaultValue,
       });
   @override
   PdfTask<void> checkbox(String name, PdfRect rect, {bool checked = false}) =>
-      _op('checkbox', {
+      _op(PageOp.checkbox, {
         'name': name,
         ...codec.encodeRectArgs(rect),
         'checked': checked,
@@ -150,7 +150,7 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
     PdfRect rect,
     List<String> options, {
     String? selected,
-  }) => _op('comboBox', {
+  }) => _op(PageOp.comboBox, {
     'name': name,
     ...codec.encodeRectArgs(rect),
     'options': options,
@@ -158,18 +158,18 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
   });
   @override
   PdfTask<void> pushButton(String name, PdfRect rect, String caption) => _op(
-    'pushButton',
+    PageOp.pushButton,
     {'name': name, ...codec.encodeRectArgs(rect), 'caption': caption},
   );
   @override
   PdfTask<void> signatureField(String name, PdfRect rect) =>
-      _op('signatureField', {'name': name, ...codec.encodeRectArgs(rect)});
+      _op(PageOp.signatureField, {'name': name, ...codec.encodeRectArgs(rect)});
   @override
   PdfTask<void> radioGroup(
     String name,
     List<({String value, PdfRect rect})> options, {
     String? selected,
-  }) => _op('radioGroup', {
+  }) => _op(PageOp.radioGroup, {
     'name': name,
     'options': options
         .map(
@@ -183,55 +183,56 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
   });
   @override
   PdfTask<void> fieldKeystroke(String script) =>
-      _op('fieldKeystroke', {'script': script});
+      _op(PageOp.fieldKeystroke, {'script': script});
   @override
   PdfTask<void> fieldFormat(String script) =>
-      _op('fieldFormat', {'script': script});
+      _op(PageOp.fieldFormat, {'script': script});
   @override
   PdfTask<void> fieldValidate(String script) =>
-      _op('fieldValidate', {'script': script});
+      _op(PageOp.fieldValidate, {'script': script});
   @override
   PdfTask<void> fieldCalculate(String script) =>
-      _op('fieldCalculate', {'script': script});
+      _op(PageOp.fieldCalculate, {'script': script});
   @override
-  PdfTask<void> linkUrl(String url) => _op('linkUrl', {'url': url});
+  PdfTask<void> linkUrl(String url) => _op(PageOp.linkUrl, {'url': url});
   @override
   PdfTask<void> linkPage(int targetPage) =>
-      _op('linkPage', {'targetPage': targetPage});
+      _op(PageOp.linkPage, {'targetPage': targetPage});
   @override
   PdfTask<void> footnote(String refMark, String noteText) =>
-      _op('footnote', {'refMark': refMark, 'noteText': noteText});
+      _op(PageOp.footnote, {'refMark': refMark, 'noteText': noteText});
   @override
-  PdfTask<void> inline(String text) => _op('inline', {'text': text});
+  PdfTask<void> inline(String text) => _op(PageOp.inline, {'text': text});
   @override
-  PdfTask<void> inlineBold(String text) => _op('inlineBold', {'text': text});
+  PdfTask<void> inlineBold(String text) =>
+      _op(PageOp.inlineBold, {'text': text});
   @override
   PdfTask<void> inlineItalic(String text) =>
-      _op('inlineItalic', {'text': text});
+      _op(PageOp.inlineItalic, {'text': text});
   @override
   PdfTask<void> inlineColor(String text, PdfColor color) =>
-      _op('inlineColor', {'text': text, ...codec.encodeColorArgs(color)});
+      _op(PageOp.inlineColor, {'text': text, ...codec.encodeColorArgs(color)});
   @override
   PdfTask<void> textInRect(
     PdfRect rect,
     String text, {
     PdfCellAlign align = PdfCellAlign.left,
-  }) => _op('textInRect', {
+  }) => _op(PageOp.textInRect, {
     ...codec.encodeRectArgs(rect),
     'text': text,
     'align': align.index,
   });
   @override
   PdfTask<void> rect(PdfRect rect) =>
-      _op('rect', {...codec.encodeRectArgs(rect)});
+      _op(PageOp.rect, {...codec.encodeRectArgs(rect)});
   @override
-  PdfTask<void> filledRect(PdfRect rect, PdfColor color) => _op('filledRect', {
-    ...codec.encodeRectArgs(rect),
-    ...codec.encodeColorArgs(color),
-  });
+  PdfTask<void> filledRect(PdfRect rect, PdfColor color) => _op(
+    PageOp.filledRect,
+    {...codec.encodeRectArgs(rect), ...codec.encodeColorArgs(color)},
+  );
   @override
   PdfTask<void> line(double x1, double y1, double x2, double y2) =>
-      _op('line', {'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2});
+      _op(PageOp.line, {'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2});
   @override
   PdfTask<void> strokeRect(
     PdfRect rect, {
@@ -239,7 +240,7 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
     PdfColor color = PdfColor.black,
     List<double>? dash,
     double dashPhase = 0,
-  }) => _op('strokeRect', {
+  }) => _op(PageOp.strokeRect, {
     ...codec.encodeRectArgs(rect),
     'lineWidth': width,
     ...codec.encodeColorArgs(color),
@@ -256,7 +257,7 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
     PdfColor color = PdfColor.black,
     List<double>? dash,
     double dashPhase = 0,
-  }) => _op('strokeLine', {
+  }) => _op(PageOp.strokeLine, {
     'x1': x1,
     'y1': y1,
     'x2': x2,
@@ -268,51 +269,52 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
   });
   @override
   PdfTask<void> highlight({PdfColor color = PdfColor.yellow}) =>
-      _op('highlight', codec.encodeColorArgs(color));
+      _op(PageOp.highlight, codec.encodeColorArgs(color));
   @override
   PdfTask<void> underline({PdfColor color = PdfColor.black}) =>
-      _op('underline', codec.encodeColorArgs(color));
+      _op(PageOp.underline, codec.encodeColorArgs(color));
   @override
   PdfTask<void> strikeout({PdfColor color = PdfColor.black}) =>
-      _op('strikeout', codec.encodeColorArgs(color));
+      _op(PageOp.strikeout, codec.encodeColorArgs(color));
   @override
   PdfTask<void> squiggly({PdfColor color = PdfColor.black}) =>
-      _op('squiggly', codec.encodeColorArgs(color));
+      _op(PageOp.squiggly, codec.encodeColorArgs(color));
   @override
   PdfTask<void> stickyNote(String text, {double? x, double? y}) {
     if ((x == null) != (y == null)) {
       throw ArgumentError('stickyNote takes x and y together or neither');
     }
-    return _op('stickyNote', {'text': text, 'x': x, 'y': y});
+    return _op(PageOp.stickyNote, {'text': text, 'x': x, 'y': y});
   }
 
   @override
   PdfTask<void> stamp(PdfStampType type) =>
-      _op('stamp', {'stampType': stampWireName(type)});
+      _op(PageOp.stamp, {'stampType': stampWireName(type)});
   @override
   PdfTask<void> freeText(PdfRect rect, String text) =>
-      _op('freeText', {...codec.encodeRectArgs(rect), 'text': text});
+      _op(PageOp.freeText, {...codec.encodeRectArgs(rect), 'text': text});
   @override
-  PdfTask<void> watermarkConfidential() => _op('watermarkConfidential');
+  PdfTask<void> watermarkConfidential() => _op(PageOp.watermarkConfidential);
   @override
-  PdfTask<void> watermarkDraft() => _op('watermarkDraft');
+  PdfTask<void> watermarkDraft() => _op(PageOp.watermarkDraft);
   @override
   PdfTask<void> linkNamed(String destination) =>
-      _op('linkNamed', {'destination': destination});
+      _op(PageOp.linkNamed, {'destination': destination});
   @override
   PdfTask<void> linkJavaScript(String script) =>
-      _op('linkJavaScript', {'script': script});
+      _op(PageOp.linkJavaScript, {'script': script});
   @override
-  PdfTask<void> onOpen(String script) => _op('onOpen', {'script': script});
+  PdfTask<void> onOpen(String script) => _op(PageOp.onOpen, {'script': script});
   @override
-  PdfTask<void> onClose(String script) => _op('onClose', {'script': script});
+  PdfTask<void> onClose(String script) =>
+      _op(PageOp.onClose, {'script': script});
   @override
   PdfTask<void> imageArtifact(DataSource imageData, PdfRect rect) =>
       _bridge._exec(
         EngineOp.builderPageOp,
         {
           'handleId': _handleId,
-          'pageOp': 'imageArtifact',
+          'pageOp': PageOp.imageArtifact.wire,
           'sourceLength': imageData.length,
           ...codec.encodeRectArgs(rect),
         },
@@ -332,7 +334,7 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
         );
       }
     }
-    return _op('table', {
+    return _op(PageOp.table, {
       'headers': columns.map((c) => c.header).toList(),
       'widths': columns.map((c) => c.width ?? -1.0).toList(),
       'aligns': columns.map((c) => c.align.index).toList(),
@@ -361,7 +363,7 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
         );
       }
     }
-    return _op('streamingTable', {
+    return _op(PageOp.streamingTable, {
       'headers': columns.map((c) => c.header).toList(),
       'widths': columns.map((c) => c.width!).toList(),
       'aligns': columns.map((c) => c.align.index).toList(),
@@ -379,13 +381,13 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
 
   @override
   PdfTask<void> columns(int columnCount, double gapPt, String text) => _op(
-    'columns',
+    PageOp.columns,
     {'columnCount': columnCount, 'gapPt': gapPt, 'text': text},
   );
   @override
-  PdfTask<void> newline() => _op('newline');
+  PdfTask<void> newline() => _op(PageOp.newline);
   @override
-  PdfTask<void> newPageSameSize() => _op('newPageSameSize');
+  PdfTask<void> newPageSameSize() => _op(PageOp.newPageSameSize);
   @override
   PdfTask<void> done() =>
       _bridge._exec(EngineOp.builderPageDone, {'handleId': _handleId});

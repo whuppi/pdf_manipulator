@@ -98,7 +98,7 @@ Router.execute(bytes, sources: [source], keepSources: {0})
   └── Web:    postMessage → lane_worker.js → lane_execute via WASM
   ↓
 bridge_api.rs  (SAME code, both targets)
-  │  Request::parse(bytes)  →  match "open"  →  dispatch::open_document
+  │  Request::parse(bytes)  →  registry::find("open")  →  dispatch::open_document
   │  source bytes served on demand via readAt callback
   ↓
 response bytes  →  decodeResponse  →  PdfDoc
@@ -293,7 +293,12 @@ vendor/
 vendor/pdf_oxide/src/
 ├── host/                                   ← OUR CODE
 │   ├── mod.rs
-│   ├── bridge_api.rs                       ← single entry, cfg-gated
+│   ├── bridge_api.rs                       ← the door: parse the request, dispatch through the registry; cfg-gated
+│   ├── ops/                                ← one op unit per bridge op, each carrying its own handler body
+│   │   ├── mod.rs                          ← OpCtx, OpEntry, the op_unit! macro
+│   │   ├── registry.rs                     ← the table of units; the one swappable backend
+│   │   ├── support.rs                      ← helpers shared by several units (page checks, source opening, handle wrappers)
+│   │   └── builder.rs, convert.rs, doc.rs, editor.rs, fonts.rs, pdfa.rs, render.rs, signatures.rs
 │   ├── binary_codec.rs                     ← wire format parser/encoder
 │   ├── dispatch.rs                         ← every op as a typed function
 │   ├── incremental.rs                      ← append-only save: source bytes, then one update section; refusals
@@ -1179,8 +1184,10 @@ source in the pub tarball compiles locally.
   (`vendor/pdf_oxide/src/host/ops/`): a registry entry + handler on one
   shared calling convention + an exported `pdf_op_<name>_anchor` symbol
   (inert today; the referent a future Dart static-linking toolchain
-  garbage-collects against). The op still travels as data through the
-  single bridge door — the unit layer carries reachability, the door
+  garbage-collects against). Each unit carries its own handler body in
+  its unit file; `bridge_api.rs` is the door only (parse the request,
+  dispatch through the registry). The op still travels as data through
+  the single bridge door — the unit layer carries reachability, the door
   carries bytes. `registry.rs` is the one swappable backend (explicit
   table today, linker-driven collection when the platform arrives).
   Each droppable capability is a cargo feature; excluded handlers answer

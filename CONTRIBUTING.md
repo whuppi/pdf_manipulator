@@ -77,8 +77,8 @@ The maintainer handles releases.
 - Match existing code in the repo.
 - No `dart:io` in the public API barrel — must stay web-safe.
 - **Shared brain, dumb edges.** Every decision lives in shared code —
-  the Dart `Router` for orchestration, Rust `bridge_api.rs` for
-  dispatch. The four platform adapter files (native + web lane
+  the Dart `Router` for orchestration, Rust `bridge_api.rs` and the op
+  units under `host/ops/` for dispatch. The four platform adapter files (native + web lane
   adapters) and `lane_worker.js` only translate verbs into physics; a
   routing `if` in any of them fails `runtime/dumb_edges_test.dart`.
 - Tests in `test/` mirror the `lib/src/` structure. Read the test
