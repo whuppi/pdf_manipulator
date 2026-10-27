@@ -180,6 +180,34 @@ void main() {
     });
   });
 
+  group('decodeEditorOpen', () {
+    test('parses handle id and encryption facts', () {
+      final result = decodeEditorOpen({
+        'handleId': 7,
+        'isEncrypted': true,
+        'encryptionAlgorithm': 4,
+        'permissionBits': 0x7F,
+      });
+      expect(result.handleId, 7);
+      expect(result.encryption, PdfEncryptionAlgorithm.aes256);
+      expect(result.permissions, isNotNull);
+      expect(result.permissions!.print, isTrue);
+      expect(result.permissions!.assemble, isFalse);
+    });
+
+    test('unencrypted response gives null for both', () {
+      final result = decodeEditorOpen({
+        'handleId': 3,
+        'isEncrypted': false,
+        'encryptionAlgorithm': 0,
+        'permissionBits': 0xFF,
+      });
+      expect(result.handleId, 3);
+      expect(result.encryption, isNull);
+      expect(result.permissions, isNull);
+    });
+  });
+
   group('decodeSearchResults', () {
     test('parses hits', () {
       final results = decodeSearchResults({

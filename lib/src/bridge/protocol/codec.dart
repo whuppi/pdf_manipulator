@@ -414,7 +414,21 @@ PdfRedactionReport decodeRedactionReport(Map<String, Object?> r) =>
     );
 
 /// Decodes the handle ID from an editor-open response.
-int decodeEditorOpen(Map<String, Object?> r) => r['handleId'] as int;
+/// Decodes the handle id and the source's encryption facts from an
+/// editor-open response.
+({
+  int handleId,
+  PdfEncryptionAlgorithm? encryption,
+  PdfPermissions? permissions,
+})
+decodeEditorOpen(Map<String, Object?> r) {
+  final isEncrypted = r['isEncrypted'] as bool? ?? false;
+  return (
+    handleId: r['handleId'] as int,
+    encryption: isEncrypted ? decodeEncryptionAlgorithmFromMap(r) : null,
+    permissions: decodePermissionsFromMap(r),
+  );
+}
 
 // ════════════════════════════════════════════════════════════════════
 // HELPERS — shared encoding utilities

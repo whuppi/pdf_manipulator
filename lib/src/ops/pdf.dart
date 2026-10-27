@@ -115,23 +115,10 @@ class Pdf {
   PdfTask<PdfEditor> edit(DataSource source, {String? password}) {
     _check();
     return PdfTask.group((hook) async {
-      final doc = await hook.guard(open(source, password: password));
-      try {
-        final handle = await hook.guard(
-          _bridge.openEditor(source, password: password),
-        );
-        return PdfEditor.internal(
-          _bridge,
-          handle,
-          sourceEncryption: doc.encryptionAlgorithm,
-          sourcePermissions: doc.permissions,
-          password: password,
-          sourceDoc: doc,
-        );
-      } catch (e) {
-        await doc.dispose();
-        rethrow;
-      }
+      final handle = await hook.guard(
+        _bridge.openEditor(source, password: password),
+      );
+      return PdfEditor.internal(_bridge, handle, password: password);
     });
   }
 

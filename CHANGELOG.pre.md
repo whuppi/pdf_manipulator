@@ -113,6 +113,8 @@ CONTENT RULES (never change)
 - Added `PdfDoc.annotations(page)`, which lists a page's annotations (subtype, rectangle, contents, author, form field name) as `PdfAnnotationInfo`
 - Added the page builder methods the engine already had: `inline`, `inlineBold`, `inlineItalic`, `inlineColor`, `textInRect`, `rect`, `filledRect`, `line`, `strokeRect`, `strokeLine`, `highlight`, `underline`, `strikeout`, `squiggly`, `stickyNote`, `stamp`, `freeText`, `watermarkConfidential`, `watermarkDraft`, `linkNamed`, `linkJavaScript`, `onOpen`, `onClose`, `imageArtifact`, `table` and `streamingTable`
 - Changed `PdfBuilder.save` to Flate-compress page content and font streams; `save(output, compress: false)` keeps them plain for debugging
+- Changed `open`, `edit`, `extractPages`, a full-rewrite save and `compress` to hold a bounded window of the document instead of all of it: a 38 MB, 10,000-page file now opens and saves in under 16 MB of engine memory, where it took up to 85 MB
+- Changed `edit` to open the source once; an editor used to hold the document twice
 - Changed a full-rewrite save to copy each unchanged stream from the source in 64 KB pieces, so a page holding a 60 MB image saves in under 1 MB of engine memory
 - Changed `PdfDoc.verifySignatures` to check each signature's digest and signer key, where it returned `false` for every document; `PdfSignatureInfo` has `isValid`, `coversWholeDocument` and `signingTime` filled
 - Fixed an empty input to `merge` or any other multi-source op shifting every source after it, so the op read the wrong documents — an empty input now throws `PdfCorrupted`

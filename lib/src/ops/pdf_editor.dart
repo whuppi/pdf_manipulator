@@ -6,7 +6,6 @@
 // it must NOT be exposed here — wrap it as standalone or doc query instead.
 
 import 'package:pdf_manipulator/src/ops/pdf.dart';
-import 'package:pdf_manipulator/src/ops/pdf_doc.dart';
 import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:pdf_manipulator/src/types/errors.dart';
@@ -27,23 +26,16 @@ import 'package:pdf_manipulator/src/keep/record_use_shim.dart';
 /// Mutable PDF editor — parse once, mutate many times, save once.
 class PdfEditor {
   /// Internal constructor — use [Pdf.edit] to create instances.
-  PdfEditor.internal(
-    PdfBridge _,
-    this._handle, {
-    PdfEncryptionAlgorithm? sourceEncryption,
-    PdfPermissions? sourcePermissions,
-    String? password,
-    PdfDoc? sourceDoc,
-  }) : _sourceEncryption = sourceEncryption,
-       _sourcePermissions = sourcePermissions,
-       _password = password,
-       _sourceDoc = sourceDoc;
+  PdfEditor.internal(PdfBridge _, BridgeEditorHandle handle, {String? password})
+    : _handle = handle,
+      _sourceEncryption = handle.sourceEncryption,
+      _sourcePermissions = handle.sourcePermissions,
+      _password = password;
 
   final BridgeEditorHandle _handle;
   final PdfEncryptionAlgorithm? _sourceEncryption;
   final PdfPermissions? _sourcePermissions;
   final String? _password;
-  final PdfDoc? _sourceDoc;
   bool _disposed = false;
 
   void _check() {
@@ -596,8 +588,5 @@ class PdfEditor {
     if (_disposed) return;
     _disposed = true;
     await _handle.dispose();
-    // Dispose the doc handle that edit() opened for metadata reading.
-    // Without this, the doc handle leaks (pinned worker, held source).
-    await _sourceDoc?.dispose();
   }
 }

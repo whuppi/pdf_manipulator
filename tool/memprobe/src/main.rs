@@ -26,14 +26,10 @@ fn limit(op: &str, input: &str) -> usize {
         ("incrementalSave" | "sign", "many") => 16 * MIB,
         ("open" | "incrementalSave" | "sign", "huge") => 16 * MIB,
         ("extractPages" | "fullRewriteSave" | "compress", "huge") => 16 * MIB,
-        // Target 16 MiB, t-402: open resolves every page and the object
-        // cache keeps every object it parses (81 MB / 44 MB measured).
-        ("open", "many") => 96 * MIB,
-        ("extractPages", "many") => 48 * MIB,
-        // Target 16 MiB, t-403: the full rewrite and the merge hold every
-        // object of every source until the save ends (85 / 84 / 234 MB).
-        ("fullRewriteSave" | "compress", "many") => 96 * MIB,
-        ("merge", "many") => 240 * MIB,
+        ("open" | "extractPages" | "fullRewriteSave" | "compress", "many") => 16 * MIB,
+        // Target 16 MiB, t-403: the merge rebuilds every imported object
+        // and holds the second document until the save (163 MB measured).
+        ("merge", "many") => 176 * MIB,
         // Target 16 MiB, t-403: the merge imports the second copy's 60 MB
         // stream whole (189 MB measured).
         ("merge", "huge") => 192 * MIB,

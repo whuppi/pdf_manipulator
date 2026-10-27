@@ -138,5 +138,43 @@ void registerLifecycleTests(Pdf Function() createPdf) {
       expect(() => doc.extract(pages: const PdfPages.all()), throwsStateError);
       await pdf.dispose();
     }, timeout: t(1));
+
+    // ── Editor handle lifecycle ──
+
+    test('edit then dispose on a plain source', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(minimalPdf));
+      expect(await editor.pageCount, 1);
+      await editor.dispose();
+      await editor.dispose();
+      await pdf.dispose();
+    }, timeout: t(1));
+
+    test('edit then dispose on an encrypted source', () async {
+      final pdf = createPdf();
+      final encryptor = await pdf.edit(src(minimalPdf));
+      final encSink = TestSink();
+      await encryptor.save(
+        encSink,
+        options: const PdfSaveOptions.fullRewrite(
+          encryption: PdfEncryption.config(
+            ownerPassword: 'pw',
+            userPassword: 'pw',
+          ),
+        ),
+      );
+      await encryptor.dispose();
+      final encrypted = encSink.takeBytes();
+
+      final doc = await pdf.open(src(encrypted), password: 'pw');
+      expect(doc.isEncrypted, isTrue);
+      await doc.dispose();
+
+      final editor = await pdf.edit(src(encrypted), password: 'pw');
+      expect(await editor.pageCount, 1);
+      await editor.dispose();
+      await editor.dispose();
+      await pdf.dispose();
+    }, timeout: t(1));
   });
 }

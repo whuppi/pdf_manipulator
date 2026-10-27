@@ -360,4 +360,4 @@ The planned route to expose these without bloating the default is per-feature op
 | Gap | Detail | Status |
 |---|---|---|
 | Field-action and link no-op | The four field scripts on a page with no form field, and `linkUrl`/`linkPage` on a page with no text, throw `PdfInvalidArgument` instead of succeeding without effect. | DONE |
-| True O(1) memory verification | `make test-memory` (tool/memprobe) measures the Rust peak of open, extractPages, full-rewrite and incremental save, sign, compress and merge on a 10,000-page input and a 60 MB-stream input, each against a ceiling in `make check`. Incremental save and sign stay under 16 MiB; open, extractPages, the full rewrite and merge do not yet, and their ceilings are today's peaks until the bounded rewrites land. | DONE |
+| True O(1) memory verification | `make test-memory` (tool/memprobe) measures the Rust peak of open, extractPages, full-rewrite and incremental save, sign, compress and merge on a 10,000-page input and a 60 MB-stream input, each against a ceiling in `make check`. Every op stays under 16 MiB except merge, whose ceiling is today's peak until it imports object by object. | DONE |
