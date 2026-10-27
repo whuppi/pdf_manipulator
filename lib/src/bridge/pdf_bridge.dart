@@ -654,8 +654,9 @@ abstract class BridgePageBuilderHandle {
   });
 
   /// Lays out a streaming table from [columns] and [rows] with
-  /// [`PdfTableCell`] rowspans and column [sizing]; every column needs
-  /// an explicit width.
+  /// [`PdfTableCell`] rowspans (within [maxRowSpan]) and column
+  /// [sizing]; every column needs an explicit width and every row one
+  /// cell per column.
   PdfTask<void> streamingTable(
     List<PdfTableColumn> columns,
     List<List<PdfTableCell>> rows, {

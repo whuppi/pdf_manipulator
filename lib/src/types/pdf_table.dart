@@ -42,7 +42,9 @@ class PdfTableCell {
   /// Cell text.
   final String text;
 
-  /// Columns this cell spans (1 = a normal cell).
+  /// Rows this cell spans downward (1 = this row only). Each row still
+  /// lists one cell per column; a cell a span from above covers is a
+  /// placeholder and is written empty.
   final int rowSpan;
 }
 

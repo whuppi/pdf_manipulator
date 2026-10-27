@@ -363,6 +363,22 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
         );
       }
     }
+    for (final row in rows) {
+      if (row.length != columns.length) {
+        throw ArgumentError(
+          'streamingTable rows need one cell per column: a row has '
+          '${row.length} cells for ${columns.length} columns',
+        );
+      }
+      for (final cell in row) {
+        if (cell.rowSpan < 1 || cell.rowSpan > maxRowSpan) {
+          throw ArgumentError(
+            'streamingTable cell "${cell.text}" spans ${cell.rowSpan} rows; '
+            'rowSpan must be 1 to maxRowSpan ($maxRowSpan)',
+          );
+        }
+      }
+    }
     return _op(PageOp.streamingTable, {
       'headers': columns.map((c) => c.header).toList(),
       'widths': columns.map((c) => c.width!).toList(),

@@ -145,6 +145,8 @@ CONTENT RULES (never change)
 - Fixed `PdfPageInfo.label` always being `null` — it now holds the page's label when the document has page labels
 - Fixed `sign` dropping the document's bookmarks, form fields, page labels and every other catalog entry, and replacing an earlier signature — the signature now appends to the existing form and page ([#263](https://github.com/whuppi/pdf_manipulator/issues/263))
 - Fixed `PdfSignatureInfo` showing a non-ASCII signer name, reason or location as garbled text — UTF-16 text strings are decoded
+- Fixed `image()` and `imageArtifact()` with bytes that are not an image succeeding and drawing nothing — they throw `PdfInvalidArgument`
+- Fixed `streamingTable` rows with a `rowSpan` above 1 never drawing, and `PdfTableCell.rowSpan` documented as a column span — it is the rows a cell spans, each row still lists one cell per column, and a row with the wrong cell count throws `ArgumentError`
 - Fixed `sign` writing a cross-reference table that other readers had to repair — each entry is now 20 bytes
 
 ## 5.0.1-dev.0

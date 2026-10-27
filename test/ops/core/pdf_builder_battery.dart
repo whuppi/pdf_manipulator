@@ -268,6 +268,35 @@ void registerBuilderTests(Pdf Function() createPdf) {
       expect(sink.takeBytes().length, greaterThan(minimalPdf.length));
     }, timeout: t(1));
 
+    test('image with bytes that are not an image throws and the builder '
+        'stays usable', () async {
+      final pdf = createPdf();
+      final builder = await pdf.build();
+      final page = await builder.addA4Page();
+      final garbage = Uint8List.fromList(const [1, 2, 3, 4, 5, 6, 7, 8]);
+      const rect = PdfRect(x: 50, y: 500, width: 100, height: 100);
+      await expectLater(
+        page.image(src(garbage), rect),
+        throwsA(isA<PdfInvalidArgument>()),
+        reason: 'the caller passed bytes that decode to no image',
+      );
+      await expectLater(
+        page.imageArtifact(src(garbage), rect),
+        throwsA(isA<PdfInvalidArgument>()),
+      );
+      await page.text('after the failed image');
+      await page.done();
+      final sink = TestSink();
+      await builder.save(sink);
+      await builder.dispose();
+      final doc = await pdf.open(src(sink.takeBytes()));
+      expect(
+        await doc.extract(pages: const PdfPages.all()),
+        contains('after the failed image'),
+      );
+      await doc.dispose();
+    }, timeout: t(1));
+
     test('image is placed at the rect it was given', () async {
       // The placement rect is width × height at (x, y) — not a far
       // corner. Read it back through the editor's page-image list, which
@@ -983,7 +1012,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
             PdfTableColumn('Count', width: 60, align: PdfCellAlign.center),
           ],
           const [
-            [PdfTableCell('Saw', rowSpan: 2)],
+            [PdfTableCell('Saw'), PdfTableCell('3')],
             [PdfTableCell('Hammer'), PdfTableCell('7')],
           ],
         );
@@ -991,9 +1020,67 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final doc = await openOf(pdf, bytes);
       final text = await doc.extract(pages: const PdfPages.all());
       expect(text, contains('Item'));
+      expect(text, contains('Saw'));
       expect(text, contains('Hammer'));
       expect(text, contains('7'));
       await doc.dispose();
+    }, timeout: t(1));
+
+    test('streamingTable draws a cell that spans two rows', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.streamingTable(
+          const [
+            PdfTableColumn('Item', width: 120),
+            PdfTableColumn('Count', width: 60, align: PdfCellAlign.center),
+          ],
+          const [
+            [PdfTableCell('Saw', rowSpan: 2), PdfTableCell('3')],
+            [PdfTableCell(''), PdfTableCell('4')],
+            [PdfTableCell('Hammer'), PdfTableCell('7')],
+          ],
+          maxRowSpan: 2,
+        );
+      });
+      final doc = await openOf(pdf, bytes);
+      final text = await doc.extract(pages: const PdfPages.all());
+      for (final expected in ['Saw', '3', '4', 'Hammer', '7']) {
+        expect(text, contains(expected));
+      }
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('streamingTable refuses a row without one cell per column', () async {
+      final builder = await createPdf().build();
+      final page = await builder.addA4Page();
+      expect(
+        () => page.streamingTable(
+          const [
+            PdfTableColumn('Item', width: 120),
+            PdfTableColumn('Count', width: 60),
+          ],
+          const [
+            [PdfTableCell('Saw')],
+          ],
+        ),
+        throwsArgumentError,
+      );
+      await builder.dispose();
+    }, timeout: t(1));
+
+    test('streamingTable refuses a rowSpan above maxRowSpan', () async {
+      final builder = await createPdf().build();
+      final page = await builder.addA4Page();
+      expect(
+        () => page.streamingTable(
+          const [PdfTableColumn('Item', width: 120)],
+          const [
+            [PdfTableCell('Saw', rowSpan: 2)],
+          ],
+        ),
+        throwsArgumentError,
+      );
+      await builder.dispose();
     }, timeout: t(1));
 
     test('streamingTable refuses a column without a width', () async {

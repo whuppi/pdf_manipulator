@@ -340,8 +340,10 @@ class PdfPageBuilder {
   }) => _handle.table(columns, rows, hasHeader: hasHeader);
 
   /// Lays out [rows] as a streaming table under [columns] with
-  /// [sizing]; every column needs an explicit width and any other one
-  /// throws [ArgumentError] before anything is sent.
+  /// [sizing]; every column needs an explicit width, every row one cell
+  /// per column, and every [PdfTableCell.rowSpan] must lie within
+  /// [maxRowSpan]: any other table throws [ArgumentError] before
+  /// anything is sent.
   PdfTask<void> streamingTable(
     List<PdfTableColumn> columns,
     List<List<PdfTableCell>> rows, {
