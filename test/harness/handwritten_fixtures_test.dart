@@ -69,6 +69,7 @@ void main() {
     'emptyApTextForm': emptyApTextForm,
     'uncheckedButtonForm': uncheckedButtonForm,
     'yesNoRadioForm': yesNoRadioForm,
+    'inheritedFieldAttrsForm': inheritedFieldAttrsForm,
     'bookmarkedPdf': bookmarkedPdf,
     'formPdfdocNamePdf': formPdfdocNamePdf,
     'formUtf16NamePdf': formUtf16NamePdf,

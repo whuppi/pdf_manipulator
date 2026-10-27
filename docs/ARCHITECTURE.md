@@ -1059,7 +1059,7 @@ this table summarizes what each patched file carries and why.
 | `encryption/mod.rs` + `encryption/algorithms.rs` | Raw file key exposed to the writer (`file_key`, `build_with_key`) so streams encrypt with the key the dict advertises; PDF 2.0 Algorithm 10 (`/Perms` for R6) |
 | `compliance/converter.rs` | Expose `convert_with_editor`, bundled 12 Liberation fonts (WASM has no system fonts) |
 | `writer/pdf_writer.rs` | `finish_to_writer(PositionedWrite)` — streaming save |
-| `writer/document_builder.rs` | `build_to_writer(PositionedWrite)` + `assemble_writer()` |
+| `writer/document_builder.rs` | `build_to_writer(PositionedWrite)` + `assemble_writer()`; per-page state on the page record, a `PageBuilder` that applies page ops at once through `&mut self` (`FluentPageBuilder` wraps it), and `begin_page` / `end_page` / `page_mut` / `page_has_form_field` / `page_has_text` for the host |
 | `writer/stamp.rs` + `writer/appearance_stream.rs` + `writer/annotation_builder.rs` | Rubber-stamp normal appearance (label + inline font + text escaping) and the appearance-generation dispatch |
 | `converters/office/mod.rs` | Finalize-callback core refactor for streaming, `convert_X_reader_to_writer()`, `ir_to_pdf_writer()`, fallback-font loader visibility |
 | `text/word_boundary.rs` | Geometric-gap threshold contract documentation |

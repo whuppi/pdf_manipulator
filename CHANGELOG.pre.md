@@ -138,6 +138,8 @@ CONTENT RULES (never change)
 - Fixed a failed `open` or `edit` keeping its source channel until the instance was disposed
 - Fixed `PdfPageBuilder.radioGroup` always failing with "unknown pageOp"
 - Fixed a radio option named Yes, No, On or Off reading back as a checked flag instead of its name
+- Fixed `formFields` misreading a field whose type, flags or value live on an ancestor field (a radio group read as a checkbox), and reporting a nameless parent as a field with an empty name
+- Fixed page builder calls on a disposed or unknown builder being queued without an error — each call now applies at once and fails where it is made
 - Fixed `extractPages` and `deletePages` writing the pages they drop into the output, so the output kept its original size and the dropped pages' text, images and form values — a save now writes nothing only a dropped page reaches, and drops the links, bookmark targets and form fields that pointed at one ([#261](https://github.com/whuppi/pdf_manipulator/issues/261) reported by [@crurui](https://github.com/crurui))
 - Fixed page labels shifting onto the wrong pages after `extractPages`, `deletePages` or a reorder — each kept page keeps its label
 - Fixed `PdfPageInfo.label` always being `null` — it now holds the page's label when the document has page labels

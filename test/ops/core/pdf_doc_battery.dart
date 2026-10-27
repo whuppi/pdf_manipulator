@@ -672,6 +672,27 @@ void registerDocTests(Pdf Function() createPdf) {
       );
     }, timeout: t(1));
 
+    test(
+      'formFields resolve /FT, /Ff and /V inherited from ancestors',
+      () async {
+        final doc = await createPdf().open(src(inheritedFieldAttrsForm));
+        final fields = {for (final f in await doc.formFields) f.name: f};
+        await doc.dispose();
+        // Neither the nameless grandparent (it carries /FT) nor the two
+        // widgets without /T is a field of its own.
+        expect(fields.keys.toSet(), {'choice', 'group', 'group.kid'});
+        final radio = fields['choice']!;
+        expect(radio.type, PdfFormFieldType.radioGroup);
+        expect(radio.value, isA<PdfChoiceValue>());
+        expect((radio.value as PdfChoiceValue).choice, 'B');
+        final kid = fields['group.kid']!;
+        expect(kid.type, PdfFormFieldType.text);
+        expect(kid.value, isA<PdfTextValue>());
+        expect((kid.value as PdfTextValue).text, 'shared');
+      },
+      timeout: t(1),
+    );
+
     test('extractAttachment round-trips the embedded bytes', () async {
       final doc = await createPdf().open(src(attachmentPdf));
       final sink = TestSink();

@@ -509,6 +509,54 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
+    test('content after done() without addPage lands on a new page', () async {
+      final pdf = createPdf();
+      final builder = await pdf.build();
+      final page = await builder.addA4Page();
+      await page.text('First');
+      await page.done();
+      await page.text('Second');
+      final sink = TestSink();
+      await builder.save(sink);
+      await builder.dispose();
+      final doc = await pdf.open(src(sink.takeBytes()));
+      expect(doc.pageCount, 2);
+      final first = await doc.extract(pages: const PdfPages.single(0));
+      final second = await doc.extract(pages: const PdfPages.single(1));
+      expect(first, contains('First'));
+      expect(first, isNot(contains('Second')));
+      expect(second, contains('Second'));
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test(
+      'newPageSameSize keeps the size and clears text and field state',
+      () async {
+        final pdf = createPdf();
+        final builder = await pdf.build();
+        final page = await builder.addPage(width: 300, height: 400);
+        await page.text('one');
+        await page.newPageSameSize();
+        await expectLater(
+          page.linkUrl('https://example.com'),
+          throwsA(isA<PdfInvalidArgument>()),
+          reason: 'the text was left on the previous page',
+        );
+        await page.text('two');
+        final sink = TestSink();
+        await builder.save(sink);
+        await builder.dispose();
+        final doc = await pdf.open(src(sink.takeBytes()));
+        expect(doc.pageCount, 2);
+        for (final page in doc.pages) {
+          expect(page.width, closeTo(300, 2));
+          expect(page.height, closeTo(400, 2));
+        }
+        await doc.dispose();
+      },
+      timeout: t(1),
+    );
+
     test('newline separates the surrounding text', () async {
       final pdf = createPdf();
       final builder = await pdf.build();

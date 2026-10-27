@@ -842,6 +842,32 @@ final Uint8List yesNoRadioForm = _offsetPdf([
   _streamBody('', 'q Q\n'),
 ]);
 
+/// A radio group whose `/FT /Btn` and radio `/Ff` sit on the grandparent
+/// only; the parent carries `/T (choice)` and the selected `/V /B`; the two
+/// widgets (`/AS /A` and `/AS /B`) carry no `/T`. Also holds a text-field
+/// group (`/FT /Tx` and `/V (shared)` on the parent) whose kid `/T (kid)`
+/// inherits both.
+final Uint8List inheritedFieldAttrsForm = _offsetPdf([
+  // 1: catalog with an inline AcroForm
+  '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 8 0 R] >> >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [6 0 R 7 0 R] >>',
+  // 4: grandparent — /FT and /Ff (radio, 0x8000) live only here
+  '<< /FT /Btn /Ff 32768 /Kids [5 0 R] >>',
+  // 5: parent — the field name and the selected option
+  '<< /Parent 4 0 R /T (choice) /V /B /Kids [6 0 R 7 0 R] >>',
+  // 6: widget for /A, no /T
+  '<< /Parent 5 0 R /Type /Annot /Subtype /Widget /Rect [72 700 132 760] /AS /Off >>',
+  // 7: widget for /B, no /T
+  '<< /Parent 5 0 R /Type /Annot /Subtype /Widget /Rect [200 700 260 760] /AS /B >>',
+  // 8: text group — /FT and /V live on the parent
+  '<< /T (group) /FT /Tx /V (shared) /Kids [9 0 R] >>',
+  // 9: kid with its own /T and nothing else
+  '<< /Parent 8 0 R /T (kid) >>',
+]);
+
 /// A two-page document with a two-item outline tree (Chapter 1, Chapter 2)
 /// whose destinations point at the /Fit view of their pages — the shape
 /// the bookmark reader walks. dart-pdf emits no /Outlines, so only
