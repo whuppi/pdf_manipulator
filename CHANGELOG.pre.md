@@ -151,6 +151,7 @@ CONTENT RULES (never change)
 - Fixed `image()` and `imageArtifact()` with bytes that are not an image succeeding and drawing nothing — they throw `PdfInvalidArgument`
 - Fixed `streamingTable` rows with a `rowSpan` above 1 never drawing, and `PdfTableCell.rowSpan` documented as a column span — it is the rows a cell spans, each row still lists one cell per column, and a row with the wrong cell count throws `ArgumentError`
 - Fixed `sign` writing a cross-reference table that other readers had to repair — each entry is now 20 bytes
+- Fixed a full-rewrite save dropping objects the kept pages use (content streams, colour spaces, fonts, structure) on files with a nested page tree or many objects, leaving pages blank or text missing
 
 ## 5.0.1-dev.0
 

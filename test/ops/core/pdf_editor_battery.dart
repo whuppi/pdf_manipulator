@@ -18,6 +18,7 @@ import 'package:test/test.dart';
 import '../../fixtures/generated/fixtures.dart';
 import '../../fixtures/handwritten.dart';
 import '../../fixtures/third_party/tp_encrypted.dart';
+import '../../fixtures/third_party/tp_encrypted_legacy.dart';
 import '../../fixtures/third_party/tp_image_kinds.dart';
 import '../../fixtures/third_party/tp_page_prune_objstm.dart';
 import '../../harness/page_prune_expect.dart';
@@ -448,6 +449,62 @@ void registerEditorTests(Pdf Function() createPdf) {
         );
         await editor.dispose();
         await expectOnlyPrunedPages(pdf, sink.takeBytes(), const [0]);
+      }, timeout: t(2));
+    }
+
+    // A full rewrite loses nothing a page paints or says: every page of
+    // every third-party file renders to the same pixels and extracts the
+    // same text as in the source.
+    Future<List<(String, Uint8List)>> renderPages(PdfDoc doc) async {
+      final out = <(String, Uint8List)>[];
+      for (var i = 0; i < doc.pageCount; i++) {
+        final page = doc.pages[i];
+        final side = (math.max(page.width, page.height) * 50 / 72).ceil();
+        final rendered = await doc
+            .render(
+              pages: PdfPages.single(i),
+              size: PdfRenderSize(maxWidth: side, maxHeight: side),
+            )
+            .single;
+        final text = await doc.extract(pages: PdfPages.single(i));
+        out.add((text, rendered.data));
+      }
+      return out;
+    }
+
+    for (final (name, source, password) in [
+      ('tpEncrypted', tpEncrypted, tpEncryptedTruth.userPassword),
+      for (final legacy in tpEncryptedLegacy)
+        ('legacy ${legacy.name}', legacy.bytes, null),
+      ('tpKindGray', tpKindGray, null),
+      ('tpKindCmykJpeg', tpKindCmykJpeg, null),
+      ('tpKindIndexed', tpKindIndexed, null),
+      ('tpKindBilevelG4', tpKindBilevelG4, null),
+      ('tpPagePruneObjStm', tpPagePruneObjStm, null),
+    ]) {
+      test('a full rewrite of $name keeps every page, its text and its '
+          'pixels', () async {
+        final pdf = createPdf();
+        final original = await pdf.open(src(source), password: password);
+        final editor = await pdf.edit(src(source), password: password);
+        final sink = TestSink();
+        await editor.save(
+          sink,
+          options: const PdfSaveOptions.fullRewrite(
+            encryption: PdfEncryption.remove(),
+          ),
+        );
+        await editor.dispose();
+        final rewritten = await pdf.open(src(sink.takeBytes()));
+        expect(rewritten.pageCount, original.pageCount);
+        final before = await renderPages(original);
+        final after = await renderPages(rewritten);
+        for (var i = 0; i < before.length; i++) {
+          expect(after[i].$1, before[i].$1, reason: 'text of page $i');
+          expect(after[i].$2, before[i].$2, reason: 'render of page $i');
+        }
+        await original.dispose();
+        await rewritten.dispose();
       }, timeout: t(2));
     }
 
