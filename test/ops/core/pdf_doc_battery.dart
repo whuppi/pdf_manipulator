@@ -218,6 +218,45 @@ void registerDocTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
+    // All pages arrive as one frame per page; the joined result must be
+    // exactly what the per-page ops give plus the page glue.
+    for (final (format, glue) in [
+      (PdfExtractionFormat.text, '\n'),
+      (PdfExtractionFormat.html, '\n'),
+      (PdfExtractionFormat.markdown, '\n---\n\n'),
+    ]) {
+      test(
+        'extract all ${format.name} equals the pages joined by the glue',
+        () async {
+          final doc = await createPdf().open(src(dashTextThreePagePdf));
+          final all = await doc.extract(
+            pages: const PdfPages.all(),
+            format: format,
+          );
+          final pages = [
+            for (var i = 0; i < 3; i++)
+              await doc.extract(pages: PdfPages.single(i), format: format),
+          ];
+          expect(all, pages.join(glue));
+          expect(pages[0], contains('FIRSTPAGE'));
+          expect(pages[1], contains('SECONDPAGE'));
+          expect(pages[2], contains('THIRDPAGE'));
+          await doc.dispose();
+        },
+        timeout: t(1),
+      );
+    }
+
+    test('extract all markdown holds exactly two page separators', () async {
+      final doc = await createPdf().open(src(dashTextThreePagePdf));
+      final md = await doc.extract(
+        pages: const PdfPages.all(),
+        format: PdfExtractionFormat.markdown,
+      );
+      expect('\n---\n\n'.allMatches(md), hasLength(2));
+      await doc.dispose();
+    }, timeout: t(1));
+
     test('extract single page returns only that page text', () async {
       final bytes = fTwoPageMarkers;
       final doc = await createPdf().open(src(bytes));

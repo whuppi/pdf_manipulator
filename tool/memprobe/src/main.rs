@@ -29,6 +29,7 @@ fn limit(op: &str, input: &str) -> usize {
         ("open" | "extractPages" | "fullRewriteSave" | "compress", "many") => 16 * MIB,
         ("merge", "many" | "huge") => 16 * MIB,
         ("extractAfterMerge", "many") => 16 * MIB,
+        ("extractAll", "many" | "huge") => 16 * MIB,
         _ => panic!("no memory limit for {op} on {input}: add one to limit()"),
     }
 }
@@ -69,6 +70,23 @@ fn run() -> Result<(), String> {
         step(&failed, "open", name, limit("open", name), |st| {
             let resp = call(st, re("open"), vec![source(path)], vec![])?;
             let hid = resp.i32("handleId").expect("open returns handleId");
+            call(st, re("docDispose").put("handleId", i32v(hid)), vec![], vec![])?;
+            Ok(())
+        });
+
+        // extract of all pages to a sink: one frame per page, so the
+        // engine holds one page of text at a time.
+        step(&failed, "extractAll", name, limit("extractAll", name), |st| {
+            let resp = call(st, re("open"), vec![source(path)], vec![])?;
+            let hid = resp.i32("handleId").expect("open returns handleId");
+            call(
+                st,
+                re("extract")
+                    .put("handleId", i32v(hid))
+                    .put("format", strv("plainText")),
+                vec![],
+                vec![sink(&open_sink(name, "extractall"))],
+            )?;
             call(st, re("docDispose").put("handleId", i32v(hid)), vec![], vec![])?;
             Ok(())
         });

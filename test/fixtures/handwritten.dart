@@ -86,6 +86,24 @@ final Uint8List leakProbePdf = _offsetPdf([
   '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
 ]);
 
+/// Three pages of uncompressed text; the middle page's own text holds a
+/// `---` run, so a separator count cannot be fooled by page content.
+final Uint8List dashTextThreePagePdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R] /Count 3 >>',
+  // 3, 5, 7: pages
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 9 0 R >> >> /Contents 4 0 R >>',
+  _streamBody('', 'BT /F1 18 Tf 72 720 Td (FIRSTPAGE alpha) Tj ET'),
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 9 0 R >> >> /Contents 6 0 R >>',
+  _streamBody('', 'BT /F1 18 Tf 72 720 Td (SECONDPAGE --- beta) Tj ET'),
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 9 0 R >> >> /Contents 8 0 R >>',
+  _streamBody('', 'BT /F1 18 Tf 72 720 Td (THIRDPAGE gamma) Tj ET'),
+  // 9: Helvetica font
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+]);
+
 /// The marker drawn (uncompressed) inside [leakProbePdf].
 const leakProbeMarker = 'LEAKMARK SECRET CONTENT HERE';
 

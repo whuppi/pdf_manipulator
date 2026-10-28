@@ -44,9 +44,23 @@ class _SharedDocHandle extends BridgeDocHandle {
     final fmt = _bridge._encodeExtractionFormat(format);
     return PdfTask.group((hook) async {
       return switch (pages) {
-        PdfPagesAll() => codec.decodeExtractResult(
-          await hook.guard(_exec(EngineOp.extract, {'format': fmt})),
-        ),
+        PdfPagesAll() => () async {
+          // One frame per page keeps the engine at one page of text; the
+          // final response is decoded first so an engine error wins.
+          final buf = StringBuffer();
+          final sink = _FrameCollectorSink((frame) {
+            onEngineFrame?.call();
+            buf.write(codec.decodeExtractResult(bin.decodeResponse(frame)));
+          });
+          await hook.guard(
+            _exec(
+              EngineOp.extract,
+              {'format': fmt, 'hasSink': true},
+              sinks: [sink],
+            ),
+          );
+          return buf.toString();
+        }(),
         PdfPagesSingle(:final index) => codec.decodeExtractResult(
           await hook.guard(
             _exec(EngineOp.extract, {'format': fmt, 'page': index}),
