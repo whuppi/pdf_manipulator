@@ -142,6 +142,18 @@ void main() {
       );
     });
 
+    test('result and error posts each carry the peak-memory field', () {
+      final field = LaneMsgFields.peakBytes;
+      for (final tag in [LaneMsg.result, LaneMsg.error]) {
+        final post = RegExp("postMessage\\(\\{ type: '$tag'[^\\n]*\\b$field:");
+        expect(
+          post.hasMatch(workerSource),
+          isTrue,
+          reason: 'the $tag post must carry $field',
+        );
+      }
+    });
+
     test('worker contains no routing or queuing logic', () {
       for (final word in [
         'pinnedHandles',

@@ -640,6 +640,12 @@ reclaims its directory (see **OPFS mode**, under Streaming I/O). A
 killed-before-use worker is returned to the pristine pool instead of
 terminated (see budget below).
 
+A web worker is retired after a job that grew its WASM memory to 256 MiB
+or more (linear memory never shrinks): the worker reports its memory
+size with every `result` and `error`, and the Router kills the lane once
+it is idle with no pinned handle or held source on it. The next op
+spawns a replacement.
+
 ### Parallel ops + the budgets
 
 - Ops on different handles run on different lanes — truly parallel.
@@ -956,12 +962,13 @@ tool pins.
 Every stress test makes two separate checks. The test timeout
 (`t(60)`) is a hang guard only. Speed is a ratio budget:
 `stressTest` in `harness/perf.dart` times a fixed calibration (open and
-extract of a tiny PDF 20 times through the same engine) before and
-after the operation, divides the operation's time by the slower
-calibration, and fails above the test's `ratio`. Machine load slows both
-sides, so the check does not fail on a busy machine and still fails on
-a real slowdown. Each `ratio` is 3x the largest ratio observed over three
-runs, recorded in the comment above the test.
+extract of a tiny PDF 20 times through the same engine, after one
+untimed warm-up, the fastest of three samples) before and after the
+operation, divides the operation's time by the slower of the two, and
+fails above the test's `ratio`. Machine load slows both sides, so the
+check does not fail on a busy machine and still fails on a real
+slowdown. Each `ratio` is 3x the largest ratio observed over four runs
+(one in reverse test order), recorded in the comment above the test.
 
 ### Structure
 

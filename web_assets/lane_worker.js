@@ -530,9 +530,11 @@ self.onmessage = async (e) => {
         const owned = responseBytes.buffer.byteLength === responseBytes.byteLength
             ? responseBytes.buffer
             : responseBytes.buffer.slice(responseBytes.byteOffset, responseBytes.byteOffset + responseBytes.byteLength);
-        self.postMessage({ type: 'result', jobId: msg.jobId, data: owned }, [owned]);
+        // After a job, byteLength is the worker's lifetime peak: linear
+        // memory never shrinks. The Router retires a worker past its cap.
+        self.postMessage({ type: 'result', jobId: msg.jobId, data: owned, mem: wasm.memory.buffer.byteLength }, [owned]);
       } catch (err) {
-        self.postMessage({ type: 'error', jobId: msg.jobId, message: err.message || String(err) });
+        self.postMessage({ type: 'error', jobId: msg.jobId, message: err.message || String(err), mem: wasm ? wasm.memory.buffer.byteLength : null });
       }
       return;
     }

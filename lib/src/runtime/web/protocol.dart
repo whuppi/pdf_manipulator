@@ -129,6 +129,10 @@ abstract final class LaneMsg {
 abstract final class LaneMsgFields {
   /// The discriminator field on every message.
   static const type = 'type';
+
+  /// Worker → Dart, on `result` and `error`: the worker's committed
+  /// WASM linear memory in bytes after the job (its lifetime peak).
+  static const peakBytes = 'mem';
 }
 
 /// The protocol object injected into the worker's init message.

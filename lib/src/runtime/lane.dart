@@ -60,10 +60,14 @@ class LaneJob {
 class LaneSubmitResult {
   /// Creates a result. [heldTokens] maps kept source indices to
   /// opaque lane-owned tokens for later [Lane.releaseHeld].
-  LaneSubmitResult(this.bytes, this.heldTokens);
+  LaneSubmitResult(this.bytes, this.heldTokens, {this.peakBytes});
 
   /// Binary response bytes (success or engine-encoded error).
   final Uint8List bytes;
+
+  /// The lane's lifetime peak committed memory after this job, when the
+  /// lane can tell (web workers); null otherwise, always on native.
+  final int? peakBytes;
 
   /// Kept-channel tokens by source index. Opaque to the Router.
   final Map<int, Object> heldTokens;

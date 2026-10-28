@@ -33,6 +33,11 @@ import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 /// Ops that destroy a handle — their success removes the pin.
 const _disposeOps = {'docDispose', 'editorDispose', 'builderDispose'};
 
+/// A web worker whose WASM memory peaked at or above this is retired
+/// once it is idle: linear memory never shrinks, so one huge job would
+/// otherwise leave the worker large forever.
+const kDefaultWorkerRecycleBytes = 256 * 1024 * 1024;
+
 class _LaneSlot {
   _LaneSlot(this.lane);
 
@@ -81,13 +86,16 @@ class Router implements PdfTransport {
     required LaneHost host,
     required int maxLanes,
     required PdfIoMode mode,
+    int workerRecycleBytes = kDefaultWorkerRecycleBytes,
   }) : assert(maxLanes >= 1, 'maxLanes must be at least 1'),
        _host = host,
        _maxLanes = maxLanes,
-       _mode = mode;
+       _mode = mode,
+       _workerRecycleBytes = workerRecycleBytes;
 
   final LaneHost _host;
   final int _maxLanes;
+  final int _workerRecycleBytes;
   final PdfIoMode _mode;
 
   final List<_LaneSlot> _lanes = [];
@@ -186,6 +194,7 @@ class Router implements PdfTransport {
         for (final token in result.heldTokens.values) {
           slot.lane.releaseHeld(token);
         }
+        _maybeRecycle(slot, result);
       }
       return (bytes: bytes, resourceIds: const <int, int>{});
     }
@@ -224,7 +233,22 @@ class Router implements PdfTransport {
         for (final sourceIndex in result.heldTokens.keys)
           sourceIndex: resourceId,
     };
+    _maybeRecycle(slot, result);
     return (bytes: bytes, resourceIds: resourceIds);
+  }
+
+  /// Retires an idle lane whose worker grew past the recycle threshold.
+  /// Native lanes never recycle: their results carry no [LaneSubmitResult.peakBytes].
+  /// A pin or held resource on the slot keeps it alive; the next op
+  /// spawns a replacement lane through [_placeFor].
+  void _maybeRecycle(_LaneSlot slot, LaneSubmitResult result) {
+    final peak = result.peakBytes;
+    if (_disposed || peak == null || peak < _workerRecycleBytes) return;
+    if (slot.activeJobs > 0) return;
+    if (_pins.values.any((p) => p.slot == slot)) return;
+    if (_held.values.any((r) => r.slot == slot)) return;
+    if (!_lanes.remove(slot)) return;
+    slot.lane.kill();
   }
 
   int _newResource(_LaneSlot slot, Iterable<Object> tokens) {

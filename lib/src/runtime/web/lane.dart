@@ -423,7 +423,10 @@ class WebLane implements Lane {
       case LaneMsg.result:
         if (entry != null) {
           final bytes = _bytes(obj, 'data');
-          _finish(entry, _buildResult(entry, bytes));
+          _finish(
+            entry,
+            _buildResult(entry, bytes, _int(obj, LaneMsgFields.peakBytes)),
+          );
         }
 
       case LaneMsg.error:
@@ -432,12 +435,19 @@ class WebLane implements Lane {
           final bytes = entry.cancelled
               ? buildCancelledResponse()
               : buildErrorResponse(message);
-          _finish(entry, LaneSubmitResult(bytes, const {}));
+          _finish(
+            entry,
+            LaneSubmitResult(
+              bytes,
+              const {},
+              peakBytes: _int(obj, LaneMsgFields.peakBytes),
+            ),
+          );
         }
     }
   }
 
-  LaneSubmitResult _buildResult(_WebJob entry, Uint8List bytes) {
+  LaneSubmitResult _buildResult(_WebJob entry, Uint8List bytes, int? peak) {
     // Cancelled mid-op: the caller sees the typed status, identical
     // to native's run_job. (Set-once flag — cannot misfire.)
     if (entry.cancelled) {
@@ -462,7 +472,7 @@ class WebLane implements Lane {
       ]);
     }
 
-    return LaneSubmitResult(bytes, heldTokens);
+    return LaneSubmitResult(bytes, heldTokens, peakBytes: peak);
   }
 
   // ── I/O serving ──
