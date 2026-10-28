@@ -28,6 +28,7 @@ fn limit(op: &str, input: &str) -> usize {
         ("extractPages" | "fullRewriteSave" | "compress", "huge") => 16 * MIB,
         ("open" | "extractPages" | "fullRewriteSave" | "compress", "many") => 16 * MIB,
         ("merge", "many" | "huge") => 16 * MIB,
+        ("extractAfterMerge", "many") => 16 * MIB,
         _ => panic!("no memory limit for {op} on {input}: add one to limit()"),
     }
 }
@@ -172,6 +173,39 @@ fn run() -> Result<(), String> {
             dispose(st, hid);
             Ok(())
         });
+
+        // merge a copy, then extract the first page of the merged part to a
+        // sink: the extract streams one page, never the merged document.
+        if name == "many" {
+            step(&failed, "extractAfterMerge", name, limit("extractAfterMerge", name), |st| {
+                let resp = call(st, re("editorOpen"), vec![source(path)], vec![])?;
+                let hid = resp.i32("handleId").expect("editorOpen returns handleId");
+                let merged_first = call(
+                    st,
+                    re("editorGetMetadata").put("handleId", i32v(hid)),
+                    vec![],
+                    vec![],
+                )?
+                .i32("pageCount")
+                .expect("editorGetMetadata returns pageCount");
+                call(
+                    st,
+                    re("editorMergeFrom").put("handleId", i32v(hid)),
+                    vec![source(path)],
+                    vec![],
+                )?;
+                call(
+                    st,
+                    re("editorExtractPages")
+                        .put("handleId", i32v(hid))
+                        .put("pages", wire::Value::IntList(vec![merged_first])),
+                    vec![],
+                    vec![sink(&open_sink(name, "extract_merged"))],
+                )?;
+                dispose(st, hid);
+                Ok(())
+            });
+        }
     }
 
     let _ = std::fs::remove_dir_all(&dir);

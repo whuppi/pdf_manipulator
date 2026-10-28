@@ -2835,15 +2835,94 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
     }, timeout: t(1));
 
-    test('movePage on a merged document throws and does not panic', () async {
-      final editor = await createPdf().edit(src(minimalPdf));
-      await editor.mergeFrom(src(pagePrunePdf), pages: [2]);
-      await expectLater(
-        editor.movePage(from: 0, to: 1),
-        throwsA(isA<PdfUnsupported>()),
-      );
-      expect(await editor.pageCount, 2);
+    // ── Page edits reach merged pages like any other ──
+
+    // fTwoPageMarkers (ALPHA, BRAVO) with fThreePageMarkers merged in: the
+    // pages read ALPHA, BRAVO, ONE, TWO, THREE.
+    final mergedMarkers = [
+      fTwoPageMarkersTruth.page0Marker,
+      fTwoPageMarkersTruth.page1Marker,
+      ...fThreePageMarkersTruth.markers,
+    ];
+
+    Future<PdfEditor> editorWithMergedMarkers(Pdf pdf) async {
+      final editor = await pdf.edit(src(fTwoPageMarkers));
+      await editor.mergeFrom(src(fThreePageMarkers));
+      return editor;
+    }
+
+    /// The marker found on each page of [bytes], in page order.
+    Future<List<String>> markersOf(Pdf pdf, Uint8List bytes) async {
+      final doc = await pdf.open(src(bytes));
+      final found = <String>[];
+      for (var page = 0; page < doc.pageCount; page++) {
+        final text = await doc.extract(pages: PdfPages.single(page));
+        found.add(mergedMarkers.singleWhere(text.contains));
+      }
+      await doc.dispose();
+      return found;
+    }
+
+    Future<Uint8List> saved(PdfEditor editor) async {
+      final sink = TestSink();
+      await editor.save(sink);
+      return sink.takeBytes();
+    }
+
+    test('deletePage removes a merged page', () async {
+      final pdf = createPdf();
+      final editor = await editorWithMergedMarkers(pdf);
+      await editor.deletePage(3);
+      expect(await editor.pageCount, 4);
+      final markers = await markersOf(pdf, await saved(editor));
       await editor.dispose();
+      expect(markers, [
+        mergedMarkers[0],
+        mergedMarkers[1],
+        mergedMarkers[2],
+        mergedMarkers[4],
+      ]);
+    }, timeout: t(1));
+
+    test('movePage moves a merged page ahead of source pages', () async {
+      final pdf = createPdf();
+      final editor = await editorWithMergedMarkers(pdf);
+      await editor.movePage(from: 4, to: 0);
+      final markers = await markersOf(pdf, await saved(editor));
+      await editor.dispose();
+      expect(markers, [
+        mergedMarkers[4],
+        mergedMarkers[0],
+        mergedMarkers[1],
+        mergedMarkers[2],
+        mergedMarkers[3],
+      ]);
+    }, timeout: t(1));
+
+    test(
+      'selectPages keeps merged and source pages in the order given',
+      () async {
+        final pdf = createPdf();
+        final editor = await editorWithMergedMarkers(pdf);
+        await editor.selectPages([4, 0]);
+        expect(await editor.pageCount, 2);
+        final markers = await markersOf(pdf, await saved(editor));
+        await editor.dispose();
+        expect(markers, [mergedMarkers[4], mergedMarkers[0]]);
+      },
+      timeout: t(1),
+    );
+
+    test('extractPages after a merge keeps source and merged pages', () async {
+      final pdf = createPdf();
+      final editor = await editorWithMergedMarkers(pdf);
+      final merged = await saved(editor);
+      await editor.dispose();
+
+      final sink = TestSink();
+      await pdf.extractPages(src(merged), sink, pages: const [1, 3]);
+      final markers = await markersOf(pdf, sink.takeBytes());
+      expect(markers, [mergedMarkers[1], mergedMarkers[3]]);
     }, timeout: t(1));
 
     test(
