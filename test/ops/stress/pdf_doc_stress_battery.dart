@@ -7,46 +7,60 @@ import 'package:test/test.dart';
 
 import '../../fixtures/generated/fixtures.dart';
 import '../../harness/test_source_sink.dart';
-import '../../harness/timeouts.dart';
+import '../../harness/perf.dart';
 
 void registerDocStressTests(Pdf Function() createPdf) {
   group('stress doc', tags: 'stress', () {
     final largePdf = fThousandPage;
 
-    test('open 1000-page PDF', () async {
+    // Observed op/calibration: 1.36, 1.16, 1.39.
+    stressTest('open 1000-page PDF', createPdf, ratio: 5, () async {
       final doc = await createPdf().open(src(largePdf));
       expect(doc.pageCount, fThousandPageTruth.pages);
       await doc.dispose();
-    }, timeout: t(1));
+    });
 
-    test('extract text from 1000-page PDF', () async {
-      final doc = await createPdf().open(src(largePdf));
-      final text = await doc.extract(pages: const PdfPages.all());
-      expect(text.length, greaterThan(1000));
-      expect(text, contains('Lorem ipsum'));
-      await doc.dispose();
-    }, timeout: t(1));
+    // Observed op/calibration: 26.47, 28.25, 28.41.
+    stressTest(
+      'extract text from 1000-page PDF',
+      createPdf,
+      ratio: 86,
+      () async {
+        final doc = await createPdf().open(src(largePdf));
+        final text = await doc.extract(pages: const PdfPages.all());
+        expect(text.length, greaterThan(1000));
+        expect(text, contains('Lorem ipsum'));
+        await doc.dispose();
+      },
+    );
 
-    test('extract single page from middle', () async {
-      final doc = await createPdf().open(src(largePdf));
-      final text = await doc.extract(pages: const PdfPages.single(100));
-      expect(
-        text,
-        contains('${fThousandPageTruth.markerPrefix}100'),
-        reason:
-            'every page carries its own marker — the wrong '
-            'page (or garbage) cannot fake this',
-      );
-      expect(
-        text,
-        isNot(contains('${fThousandPageTruth.markerPrefix}99\n')),
-        reason: 'a neighboring page bleeding in is a paging bug',
-      );
-      expect(text, contains('Lorem ipsum'));
-      await doc.dispose();
-    }, timeout: t(1));
+    // Observed op/calibration: 19.36, 18.32, 19.64.
+    stressTest(
+      'extract single page from middle',
+      createPdf,
+      ratio: 59,
+      () async {
+        final doc = await createPdf().open(src(largePdf));
+        final text = await doc.extract(pages: const PdfPages.single(100));
+        expect(
+          text,
+          contains('${fThousandPageTruth.markerPrefix}100'),
+          reason:
+              'every page carries its own marker — the wrong '
+              'page (or garbage) cannot fake this',
+        );
+        expect(
+          text,
+          isNot(contains('${fThousandPageTruth.markerPrefix}99\n')),
+          reason: 'a neighboring page bleeding in is a paging bug',
+        );
+        expect(text, contains('Lorem ipsum'));
+        await doc.dispose();
+      },
+    );
 
-    test('search across 1000-page PDF', () async {
+    // Observed op/calibration: 33.02, 34.73, 34.84.
+    stressTest('search across 1000-page PDF', createPdf, ratio: 105, () async {
       final doc = await createPdf().open(src(largePdf));
       final results = await doc.search(
         query: 'Lorem',
@@ -62,9 +76,10 @@ void registerDocStressTests(Pdf Function() createPdf) {
         expect(r.page, inInclusiveRange(0, 999));
       }
       await doc.dispose();
-    }, timeout: t(1));
+    });
 
-    test('render first page', () async {
+    // Observed op/calibration: 15.86, 7.8, 7.88.
+    stressTest('render first page', createPdf, ratio: 48, () async {
       final doc = await createPdf().open(src(largePdf));
       int count = 0;
       await for (final page in doc.render(pages: const PdfPages.single(0))) {
@@ -73,9 +88,10 @@ void registerDocStressTests(Pdf Function() createPdf) {
       }
       expect(count, 1);
       await doc.dispose();
-    }, timeout: t(1));
+    });
 
-    test('render pages 100-109', () async {
+    // Observed op/calibration: 8.28, 7.3, 8.07.
+    stressTest('render pages 100-109', createPdf, ratio: 25, () async {
       final doc = await createPdf().open(src(largePdf));
       int count = 0;
       await for (final _ in doc.render(
@@ -85,9 +101,10 @@ void registerDocStressTests(Pdf Function() createPdf) {
       }
       expect(count, 10);
       await doc.dispose();
-    }, timeout: t(1));
+    });
 
-    test('convertTo DOCX', () async {
+    // Observed op/calibration: 44.05, 43.12, 39.66.
+    stressTest('convertTo DOCX', createPdf, ratio: 133, () async {
       final pdf = createPdf();
       final sink = TestSink();
       await pdf.convertTo(src(largePdf), sink, format: PdfDocumentFormat.docx);
@@ -99,6 +116,6 @@ void registerDocStressTests(Pdf Function() createPdf) {
             'DOCX is a ZIP — wrong magic means the converter '
             'wrote something else',
       );
-    }, timeout: t(1));
+    });
   });
 }

@@ -953,6 +953,16 @@ tool pins.
    feature silently did nothing, does this go red?" If not, it is
    not a test.
 
+Every stress test makes two separate checks. The test timeout
+(`t(60)`) is a hang guard only. Speed is a ratio budget:
+`stressTest` in `harness/perf.dart` times a fixed calibration (open and
+extract of a tiny PDF 20 times through the same engine) before and
+after the operation, divides the operation's time by the slower
+calibration, and fails above the test's `ratio`. Machine load slows both
+sides, so the check does not fail on a busy machine and still fails on
+a real slowdown. Each `ratio` is 3x the largest ratio observed over three
+runs, recorded in the comment above the test.
+
 ### Structure
 
 ```
@@ -971,6 +981,7 @@ test/
 │
 ├── harness/                        MACHINERY — not data
 │   ├── asset_server.dart           HTTP server for web test assets
+│   ├── perf.dart                   stressTest() — hang guard + ratio budget
 │   ├── slow_source.dart            Parks the engine on a read (cancel tests)
 │   ├── test_source_sink.dart       TestSource + TestSink (O(1) guards)
 │   ├── timeouts.dart               t() — per-test timeout helper
