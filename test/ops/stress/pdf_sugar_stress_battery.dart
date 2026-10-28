@@ -13,8 +13,8 @@ void registerSugarStressTests(Pdf Function() createPdf) {
   group('stress sugar', tags: 'stress', () {
     final largePdf = fThousandPage;
 
-    // Observed op/calibration: 67.75, 69.58, 56.
-    stressTest('split every 100 pages', createPdf, ratio: 209, () async {
+    // Observed op/calibration: 79.72, 76.7, 75.67, 64.74.
+    stressTest('split every 100 pages', createPdf, ratio: 240, () async {
       final pdf = createPdf();
       final sinks = <TestSink>[];
       await pdf.split(src(largePdf), (i) {
@@ -32,8 +32,8 @@ void registerSugarStressTests(Pdf Function() createPdf) {
       }
     });
 
-    // Observed op/calibration: 28.07, 31.35, 25.69.
-    stressTest('splitBySize generous limit', createPdf, ratio: 95, () async {
+    // Observed op/calibration: 33.2, 29.9, 33.64, 34.3.
+    stressTest('splitBySize generous limit', createPdf, ratio: 103, () async {
       final pdf = createPdf();
       final smallPdf = fHundredPage;
       final sinks = <TestSink>[];
@@ -52,8 +52,8 @@ void registerSugarStressTests(Pdf Function() createPdf) {
       expect(totalPages, fHundredPageTruth.pages);
     });
 
-    // Observed op/calibration: 162.04, 170.74, 129.98.
-    stressTest('splitBySize tight limit', createPdf, ratio: 513, () async {
+    // Observed op/calibration: 194.71, 210.7, 193.14, 196.49.
+    stressTest('splitBySize tight limit', createPdf, ratio: 633, () async {
       final pdf = createPdf();
       final smallPdf = fHundredPage;
       final sinks = <TestSink>[];
@@ -78,11 +78,11 @@ void registerSugarStressTests(Pdf Function() createPdf) {
       );
     });
 
-    // Observed op/calibration: 105.74, 110.74, 68.51.
+    // Observed op/calibration: 114.16, 123.5, 119.84, 125.82.
     stressTest(
       'splitBySize smaller than single page',
       createPdf,
-      ratio: 333,
+      ratio: 378,
       () async {
         final pdf = createPdf();
         final smallPdf = fHundredPage;
@@ -106,11 +106,11 @@ void registerSugarStressTests(Pdf Function() createPdf) {
       },
     );
 
-    // Observed op/calibration: 21.6, 21.63, 19.63.
+    // Observed op/calibration: 21.71, 23.43, 22.63, 25.18.
     stressTest(
       'splitBySize equal to full PDF → 1 chunk',
       createPdf,
-      ratio: 65,
+      ratio: 76,
       () async {
         final pdf = createPdf();
         final smallPdf = fHundredPage;
@@ -127,11 +127,11 @@ void registerSugarStressTests(Pdf Function() createPdf) {
       },
     );
 
-    // Observed op/calibration: 34.18, 34.86, 32.17.
+    // Observed op/calibration: 38.35, 37.65, 39.52, 35.28.
     stressTest(
       'splitBySize returns chunk byte sizes',
       createPdf,
-      ratio: 105,
+      ratio: 119,
       () async {
         final pdf = createPdf();
         final smallPdf = fHundredPage;
@@ -149,7 +149,7 @@ void registerSugarStressTests(Pdf Function() createPdf) {
       },
     );
 
-    // Observed op/calibration: 9.32, 3.93, 9.49.
+    // Observed op/calibration: 9.57, 9.48, 9.44, 9.48.
     stressTest('delete 990 pages', createPdf, ratio: 29, () async {
       final pdf = createPdf();
       final sink = TestSink();
@@ -163,11 +163,11 @@ void registerSugarStressTests(Pdf Function() createPdf) {
       await doc.dispose();
     });
 
-    // Observed op/calibration: 107.31, 47.93, 109.03.
+    // Observed op/calibration: 134.14, 128.12, 107.91, 125.97.
     stressTest(
       'merge two 1000-page PDFs → 2000 pages',
       createPdf,
-      ratio: 328,
+      ratio: 403,
       () async {
         final pdf = createPdf();
         final sink = TestSink();
@@ -178,11 +178,11 @@ void registerSugarStressTests(Pdf Function() createPdf) {
       },
     );
 
-    // Observed op/calibration: 1.93, 1.95, 1.69.
+    // Observed op/calibration: 2.16, 2.11, 2.37, 1.87.
     stressTest(
       'splitBySize on varied-size pages',
       createPdf,
-      ratio: 6,
+      ratio: 8,
       () async {
         final pdf = createPdf();
         final variedPdf = fMultisize;

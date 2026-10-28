@@ -13,11 +13,11 @@ void registerStandaloneStressTests(Pdf Function() createPdf) {
   group('stress standalone', tags: 'stress', () {
     final largePdf = fThousandPage;
 
-    // Observed op/calibration: 4.97, 5.19, 4.97.
+    // Observed op/calibration: 5.48, 5.17, 5.17, 4.9.
     stressTest(
       'extractPages first 10 from 1000-page',
       createPdf,
-      ratio: 16,
+      ratio: 17,
       () async {
         final pdf = createPdf();
         final sink = TestSink();

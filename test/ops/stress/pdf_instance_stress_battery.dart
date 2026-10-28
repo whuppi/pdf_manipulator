@@ -11,11 +11,11 @@ import '../../harness/perf.dart';
 
 void registerInstanceStressTests(Pdf Function() createPdf) {
   group('instance stress', tags: 'stress', () {
-    // Observed op/calibration: 3.68, 4.01, 3.88.
+    // Observed op/calibration: 4.44, 4.42, 4.24, 4.17.
     stressTest(
       '100x rapid open/dispose cycles',
       createPdf,
-      ratio: 13,
+      ratio: 14,
       ownsPdf: true,
       () async {
         final pdf = createPdf();
@@ -28,11 +28,11 @@ void registerInstanceStressTests(Pdf Function() createPdf) {
       },
     );
 
-    // Observed op/calibration: 3.66, 4.31, 3.97.
+    // Observed op/calibration: 4.37, 4.21, 4.08, 4.58.
     stressTest(
       '100x rapid editor open/dispose cycles',
       createPdf,
-      ratio: 13,
+      ratio: 14,
       ownsPdf: true,
       () async {
         final pdf = createPdf();
@@ -45,11 +45,11 @@ void registerInstanceStressTests(Pdf Function() createPdf) {
       },
     );
 
-    // Observed op/calibration: 1.51, 1.52, 1.64.
+    // Observed op/calibration: 1.64, 1.83, 1.84, 1.71.
     stressTest(
-      '50x parallel open across 5 instances',
+      '6,0x parallel open across 6, instances',
       createPdf,
-      ratio: 5,
+      ratio: 6,
       ownsPdf: true,
       () async {
         final instances = List.generate(5, (_) => createPdf());
@@ -68,11 +68,11 @@ void registerInstanceStressTests(Pdf Function() createPdf) {
       },
     );
 
-    // Observed op/calibration: 3.84, 3.94, 3.9.
+    // Observed op/calibration: 4.28, 4.16, 4.04, 3.89.
     stressTest(
       'interleaved doc+editor+sugar on same instance',
       createPdf,
-      ratio: 12,
+      ratio: 13,
       ownsPdf: true,
       () async {
         final pdf = createPdf();
@@ -94,7 +94,7 @@ void registerInstanceStressTests(Pdf Function() createPdf) {
       },
     );
 
-    // Observed op/calibration: 0.36, 0.35, 0.35.
+    // Observed op/calibration: 0.39, 0.42, 0.4, 0.46.
     stressTest(
       'dispose under load — open 10 docs then kill',
       createPdf,

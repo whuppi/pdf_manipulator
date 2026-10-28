@@ -13,18 +13,18 @@ void registerDocStressTests(Pdf Function() createPdf) {
   group('stress doc', tags: 'stress', () {
     final largePdf = fThousandPage;
 
-    // Observed op/calibration: 1.36, 1.16, 1.39.
-    stressTest('open 1000-page PDF', createPdf, ratio: 5, () async {
+    // Observed op/calibration: 3.13, 3.8, 6.14, 5.38.
+    stressTest('open 1000-page PDF', createPdf, ratio: 19, () async {
       final doc = await createPdf().open(src(largePdf));
       expect(doc.pageCount, fThousandPageTruth.pages);
       await doc.dispose();
     });
 
-    // Observed op/calibration: 26.47, 28.25, 28.41.
+    // Observed op/calibration: 36, 37.69, 34.07, 52.64.
     stressTest(
       'extract text from 1000-page PDF',
       createPdf,
-      ratio: 86,
+      ratio: 158,
       () async {
         final doc = await createPdf().open(src(largePdf));
         final text = await doc.extract(pages: const PdfPages.all());
@@ -34,11 +34,11 @@ void registerDocStressTests(Pdf Function() createPdf) {
       },
     );
 
-    // Observed op/calibration: 19.36, 18.32, 19.64.
+    // Observed op/calibration: 25.59, 26.69, 25.32, 44.16.
     stressTest(
       'extract single page from middle',
       createPdf,
-      ratio: 59,
+      ratio: 133,
       () async {
         final doc = await createPdf().open(src(largePdf));
         final text = await doc.extract(pages: const PdfPages.single(100));
@@ -59,8 +59,8 @@ void registerDocStressTests(Pdf Function() createPdf) {
       },
     );
 
-    // Observed op/calibration: 33.02, 34.73, 34.84.
-    stressTest('search across 1000-page PDF', createPdf, ratio: 105, () async {
+    // Observed op/calibration: 46.48, 41.39, 44.39, 47.51.
+    stressTest('search across 1000-page PDF', createPdf, ratio: 143, () async {
       final doc = await createPdf().open(src(largePdf));
       final results = await doc.search(
         query: 'Lorem',
@@ -78,8 +78,8 @@ void registerDocStressTests(Pdf Function() createPdf) {
       await doc.dispose();
     });
 
-    // Observed op/calibration: 15.86, 7.8, 7.88.
-    stressTest('render first page', createPdf, ratio: 48, () async {
+    // Observed op/calibration: 14.43, 10.03, 8.32, 14.46.
+    stressTest('render first page', createPdf, ratio: 44, () async {
       final doc = await createPdf().open(src(largePdf));
       int count = 0;
       await for (final page in doc.render(pages: const PdfPages.single(0))) {
@@ -90,8 +90,8 @@ void registerDocStressTests(Pdf Function() createPdf) {
       await doc.dispose();
     });
 
-    // Observed op/calibration: 8.28, 7.3, 8.07.
-    stressTest('render pages 100-109', createPdf, ratio: 25, () async {
+    // Observed op/calibration: 11.74, 11.87, 12.13, 13.03.
+    stressTest('render pages 100-109', createPdf, ratio: 40, () async {
       final doc = await createPdf().open(src(largePdf));
       int count = 0;
       await for (final _ in doc.render(
@@ -103,8 +103,8 @@ void registerDocStressTests(Pdf Function() createPdf) {
       await doc.dispose();
     });
 
-    // Observed op/calibration: 44.05, 43.12, 39.66.
-    stressTest('convertTo DOCX', createPdf, ratio: 133, () async {
+    // Observed op/calibration: 59.82, 61.87, 60.14, 64.18.
+    stressTest('convertTo DOCX', createPdf, ratio: 193, () async {
       final pdf = createPdf();
       final sink = TestSink();
       await pdf.convertTo(src(largePdf), sink, format: PdfDocumentFormat.docx);

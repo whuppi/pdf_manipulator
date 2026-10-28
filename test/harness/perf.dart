@@ -34,7 +34,8 @@ void stressTest(
 /// calibration workload, measured right before and right after it.
 ///
 /// The calibration is one fixed engine call through [pdf]: open and
-/// extract `minimalPdf` 20 times. It is the divisor because [op] is
+/// extract `minimalPdf` 20 times, after one untimed warm-up run, as the
+/// minimum of 3 timed samples. It is the divisor because [op] is
 /// engine-bound too, so a busy machine or a busy engine thread slows
 /// both alike. A fixed CPU loop is measured as well and printed: it
 /// tracks core contention only, not engine-thread scheduling, so it
@@ -59,7 +60,9 @@ Future<void> expectWithinBudget(
   final observed = opMs / calMs;
   print(
     'PERF $name op=${opMs.toStringAsFixed(1)}ms '
-    'cal=${calMs.toStringAsFixed(1)}ms cpu=${cpuMs.toStringAsFixed(1)}ms '
+    'cal=${calMs.toStringAsFixed(1)}ms '
+    'samples=${[...before.samples, ...after.samples].map((s) => s.toStringAsFixed(1)).join('/')} '
+    'cpu=${cpuMs.toStringAsFixed(1)}ms '
     'ratio=${observed.toStringAsFixed(2)} budget=$ratio',
   );
   expect(
@@ -73,9 +76,13 @@ Future<void> expectWithinBudget(
 }
 
 class _Calibration {
-  const _Calibration(this.engineMs, this.cpuMs);
-  final double engineMs;
+  const _Calibration(this.samples, this.cpuMs);
+  final List<double> samples;
   final double cpuMs;
+
+  /// Noise only adds time to a fixed workload, so the minimum is the
+  /// estimate.
+  double get engineMs => samples.reduce((a, b) => a < b ? a : b);
 }
 
 Future<_Calibration> _calibrate(Pdf pdf) async {
@@ -88,15 +95,22 @@ Future<_Calibration> _calibrate(Pdf pdf) async {
   // Reads the loop result so no compiler can drop the loop as dead code.
   if (x < 0) throw StateError('the loop masks x to a non-negative value');
 
-  final engine = Stopwatch()..start();
+  // The first run pays lane spin-up and first-open costs, so it is not timed.
+  await _engineWorkload(pdf);
+  final samples = <double>[];
+  for (var i = 0; i < 3; i++) {
+    final engine = Stopwatch()..start();
+    await _engineWorkload(pdf);
+    engine.stop();
+    samples.add(engine.elapsedMicroseconds / 1000);
+  }
+  return _Calibration(samples, cpu.elapsedMicroseconds / 1000);
+}
+
+Future<void> _engineWorkload(Pdf pdf) async {
   for (var i = 0; i < 20; i++) {
     final doc = await pdf.open(src(minimalPdf));
     await doc.extract(pages: const PdfPages.all());
     await doc.dispose();
   }
-  engine.stop();
-  return _Calibration(
-    engine.elapsedMicroseconds / 1000,
-    cpu.elapsedMicroseconds / 1000,
-  );
 }

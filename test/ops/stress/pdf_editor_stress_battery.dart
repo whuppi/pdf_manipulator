@@ -13,11 +13,11 @@ void registerEditorStressTests(Pdf Function() createPdf) {
   group('stress editor', tags: 'stress', () {
     final largePdf = fThousandPage;
 
-    // Observed op/calibration: 3.29, 3.36, 3.66.
+    // Observed op/calibration: 3.78, 3.35, 3.53, 3.33.
     stressTest(
       'pageImages across the first 100 pages of a 1000-page PDF',
       createPdf,
-      ratio: 11,
+      ratio: 12,
       () async {
         final pdf = createPdf();
         final editor = await pdf.edit(src(largePdf));
@@ -28,8 +28,8 @@ void registerEditorStressTests(Pdf Function() createPdf) {
       },
     );
 
-    // Observed op/calibration: 142.74, 144.49, 134.63.
-    stressTest('watermark 1000 pages', createPdf, ratio: 434, () async {
+    // Observed op/calibration: 199.86, 183.69, 187.38, 195.93.
+    stressTest('watermark 1000 pages', createPdf, ratio: 600, () async {
       final pdf = createPdf();
       final sink = TestSink();
       // Background layer draws into page content, so extraction can
@@ -53,11 +53,11 @@ void registerEditorStressTests(Pdf Function() createPdf) {
       await doc.dispose();
     });
 
-    // Observed op/calibration: 19.14, 19.61, 19.66.
+    // Observed op/calibration: 31.43, 24.47, 24.73, 24.21.
     stressTest(
       'encrypt then decrypt 1000-page PDF',
       createPdf,
-      ratio: 59,
+      ratio: 95,
       () async {
         final pdf = createPdf();
         final encSink = TestSink();
@@ -77,11 +77,11 @@ void registerEditorStressTests(Pdf Function() createPdf) {
       },
     );
 
-    // Observed op/calibration: 35.25, 38.36, 44.23.
+    // Observed op/calibration: 66.35, 58.49, 61.99, 60.61.
     stressTest(
       'editor watermark first 10 pages',
       createPdf,
-      ratio: 133,
+      ratio: 200,
       () async {
         final pdf = createPdf();
         final editor = await pdf.edit(src(largePdf));
@@ -110,11 +110,11 @@ void registerEditorStressTests(Pdf Function() createPdf) {
       },
     );
 
-    // Observed op/calibration: 8.81, 9.28, 10.13.
+    // Observed op/calibration: 11.79, 13.48, 13.58, 15.91.
     stressTest(
       'reduceImages over a 1000-page PDF completes and keeps placement',
       createPdf,
-      ratio: 31,
+      ratio: 48,
       () async {
         final pdf = createPdf();
         final editor = await pdf.edit(src(largePdf));
@@ -126,8 +126,8 @@ void registerEditorStressTests(Pdf Function() createPdf) {
       },
     );
 
-    // Observed op/calibration: 16.96, 23.03, 26.16.
-    stressTest('compress 1000-page PDF', createPdf, ratio: 79, () async {
+    // Observed op/calibration: 33.44, 32.81, 31.67, 40.82.
+    stressTest('compress 1000-page PDF', createPdf, ratio: 123, () async {
       final pdf = createPdf();
       final sink = TestSink();
       await pdf.compress(src(largePdf), sink);
@@ -136,7 +136,7 @@ void registerEditorStressTests(Pdf Function() createPdf) {
       await doc.dispose();
     });
 
-    // Observed op/calibration: 0.33, 0.34, 0.29.
+    // Observed op/calibration: 0.35, 0.34, 0.33, 0.43.
     stressTest('flattenForms on form PDF', createPdf, ratio: 2, () async {
       final pdf = createPdf();
       final formPdf = fFormFields;

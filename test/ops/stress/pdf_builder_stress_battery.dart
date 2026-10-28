@@ -12,11 +12,11 @@ import '../../harness/perf.dart';
 
 void registerBuilderStressTests(Pdf Function() createPdf) {
   group('stress builder', tags: 'stress', () {
-    // Observed op/calibration: 3.2, 2.95, 2.69.
+    // Observed op/calibration: 4.85, 3.41, 3.34, 3.02.
     stressTest(
-      'build and open a 10-page image PDF inline',
+      'build and open a 15,-page image PDF inline',
       createPdf,
-      ratio: 10,
+      ratio: 15,
       () async {
         // Creation-as-subject: OUR builder constructs the document here,
         // in the test, with its own API — never via fixtures: creation
