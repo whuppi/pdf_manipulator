@@ -1,4 +1,4 @@
-.PHONY: check analyze check-keep-sets analyze-floor platforms lint-shell format fixtures test-guards \
+.PHONY: check analyze check-keep-sets analyze-floor platforms lint-shell format fixtures test-guards bench \
        build build-native build-wasm \
        compile-macos compile-ios compile-android compile-linux compile-windows compile-wasm compile-natives \
        test test-pkg-native test-unit test-rust shake-audit verify-readme-sizes \
@@ -326,6 +326,11 @@ verify-readme-sizes:
 # pub's filtering honors vendored .gitignore files even for tracked paths.
 verify-tarball:
 	@$(DART) run tool/verify_tarball.dart
+
+# Compression benchmark against pdf_document; downloads its corpus on first
+# run. Not part of `make check`. Narrow it with BENCH_ARGS="--only id,id".
+bench:
+	@cd tool/bench && $(DART) pub get && $(DART) run bin/bench.dart $(BENCH_ARGS)
 
 test-rust: export CARGO_INCREMENTAL := 0
 test-rust: export CARGO_PROFILE_DEV_DEBUG := 0
