@@ -890,6 +890,79 @@ void registerEditorTests(Pdf Function() createPdf) {
       timeout: t(1),
     );
 
+    test(
+      'a full rewrite at deflate level 9 is smaller than at level 0',
+      () async {
+        final pdf = createPdf();
+        Future<int> savedLength(int level) async {
+          final editor = await pdf.edit(src(repeatedStreamPdf(5000)));
+          final sink = TestSink();
+          await editor.save(
+            sink,
+            options: PdfSaveOptions.fullRewrite(deflateLevel: level),
+          );
+          await editor.dispose();
+          return sink.takeBytes().length;
+        }
+
+        expect(await savedLength(9), lessThan(await savedLength(0)));
+      },
+      timeout: t(1),
+    );
+
+    test(
+      'a save does not change the editor: saving twice writes the same bytes, '
+      'a fresh editor\'s too',
+      () async {
+        final pdf = createPdf();
+        Future<Uint8List> saveBytes(
+          PdfEditor editor,
+          PdfSaveOptions options,
+        ) async {
+          final sink = TestSink();
+          await editor.save(sink, options: options);
+          return sink.takeBytes();
+        }
+
+        for (final objectStreams in [true, false]) {
+          final options = PdfSaveOptions.fullRewrite(
+            objectStreams: objectStreams,
+          );
+          // The stream is long enough to be deflated while streaming, and the
+          // watermark stages new objects: both allocate ids in the save.
+          final editor = await pdf.edit(src(repeatedStreamPdf(20000)));
+          await editor.addWatermark(0, 'DRAFT');
+          final first = await saveBytes(editor, options);
+          final second = await saveBytes(editor, options);
+          await editor.dispose();
+
+          final fresh = await pdf.edit(src(repeatedStreamPdf(20000)));
+          await fresh.addWatermark(0, 'DRAFT');
+          final freshBytes = await saveBytes(fresh, options);
+          await fresh.dispose();
+
+          expect(second, first, reason: 'objectStreams: $objectStreams');
+          expect(first, freshBytes, reason: 'objectStreams: $objectStreams');
+        }
+      },
+      timeout: t(2),
+    );
+
+    test('a deflate level outside 0 to 9 is an ArgumentError', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(minimalPdf));
+      for (final level in [-1, 10]) {
+        expect(
+          () => editor.save(
+            TestSink(),
+            options: PdfSaveOptions.fullRewrite(deflateLevel: level),
+          ),
+          throwsArgumentError,
+        );
+      }
+      await editor.dispose();
+    }, timeout: t(1));
+
     test('compress keeps the source document information', () async {
       final pdf = createPdf();
       final sink = TestSink();

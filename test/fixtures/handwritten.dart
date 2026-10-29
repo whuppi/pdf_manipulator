@@ -4,6 +4,7 @@
 // truncated) and the uncompressed leak probe that only handwriting
 // can provide.
 
+import 'dart:math';
 import 'dart:typed_data';
 
 const testCertPem = '''
@@ -119,6 +120,36 @@ final Uint8List dashTextThreePagePdf = _offsetPdf([
 
 /// The marker drawn (uncompressed) inside [leakProbePdf].
 const leakProbeMarker = 'LEAKMARK SECRET CONTENT HERE';
+
+/// One blank page and one unfiltered stream of [length] pseudo-random bytes.
+/// Random bytes do not deflate, so a rewrite keeps the stream as it is.
+Uint8List randomStreamPdf(int length) {
+  final random = Random(7);
+  final data = String.fromCharCodes(
+    List.generate(length, (_) => random.nextInt(256)),
+  );
+  return _offsetPdf([
+    '<< /Type /Catalog /Pages 2 0 R /Extra 4 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] >>',
+    _streamBody('', data),
+  ]);
+}
+
+/// One blank page and one unfiltered stream of repeated text, [lines] lines
+/// long: a rewrite deflates it to a small part of its size.
+Uint8List repeatedStreamPdf(int lines) {
+  final data = List.generate(
+    lines,
+    (i) => 'line ${i % 7} of the repeated stream\n',
+  ).join();
+  return _offsetPdf([
+    '<< /Type /Catalog /Pages 2 0 R /Extra 4 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] >>',
+    _streamBody('', data),
+  ]);
+}
 
 /// Minimal valid PDF — US Letter page (612×792 points).
 final Uint8List letterPdf = _offsetPdf([

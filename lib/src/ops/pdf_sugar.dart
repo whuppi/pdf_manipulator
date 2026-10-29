@@ -8,8 +8,10 @@
 // Sugar composes the public consumer API only.
 
 import 'dart:async';
+import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:pdf_manipulator/src/io/memory_sink.dart';
 import 'package:pdf_manipulator/src/ops/pdf.dart';
 import 'package:pdf_manipulator/src/ops/pdf_standalone.dart';
 import 'package:pdf_manipulator/src/types/data_sink.dart';
@@ -295,6 +297,9 @@ extension PdfSugar on Pdf {
   /// [images] (`PdfImagePolicy.ebook` unless you pass another preset or
   /// your own numbers), then a full rewrite with stream compression and,
   /// by default, garbage collection.
+  ///
+  /// It never makes a file larger: when the result is not smaller than
+  /// [source], [output] receives the bytes of [source] unchanged.
   PdfTask<void> compress(
     DataSource source,
     DataSink output, {
@@ -304,15 +309,31 @@ extension PdfSugar on Pdf {
     KeepRecord.op('render');
     final editor = await hook.guard(edit(source));
     await hook.guard(editor.reduceImages(images));
-    await hook.guard(
-      editor.save(
-        output,
-        options: PdfSaveOptions.fullRewrite(
-          compress: true,
-          garbageCollect: garbageCollect,
-        ),
-      ),
+    final options = PdfSaveOptions.fullRewrite(
+      compress: true,
+      garbageCollect: garbageCollect,
     );
+    if (source.length <= _compressInMemoryLimit) {
+      final result = MemorySink();
+      await hook.guard(editor.save(result, options: options));
+      final bytes = result.takeBytes();
+      if (bytes.length < source.length) {
+        for (var at = 0; at < bytes.length; at += _compressChunk) {
+          final end = min(at + _compressChunk, bytes.length);
+          await output.write(Uint8List.sublistView(bytes, at, end));
+        }
+      } else {
+        await _copyUnchanged(source, output);
+      }
+    } else {
+      final counter = _ByteCountSink();
+      await hook.guard(editor.save(counter, options: options));
+      if (counter.length < source.length) {
+        await hook.guard(editor.save(output, options: options));
+      } else {
+        await _copyUnchanged(source, output);
+      }
+    }
     await editor.dispose();
   });
 
@@ -455,6 +476,26 @@ extension PdfSugar on Pdf {
         await hook.guard(builder.save(output));
         await builder.dispose();
       });
+}
+
+/// A source up to this size is compressed into memory and compared with the
+/// source; a larger one is measured with a byte count first.
+const _compressInMemoryLimit = 4 * 1024 * 1024;
+
+const _compressChunk = 64 * 1024;
+
+Future<void> _copyUnchanged(DataSource source, DataSink output) async {
+  for (var at = 0; at < source.length;) {
+    final chunk = await source.readAt(
+      at,
+      min(_compressChunk, source.length - at),
+    );
+    if (chunk.isEmpty) {
+      throw StateError('source ended at $at of ${source.length} bytes');
+    }
+    await output.write(chunk);
+    at += chunk.length;
+  }
 }
 
 class _ByteCountSink implements DataSink {

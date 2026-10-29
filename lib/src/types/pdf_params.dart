@@ -167,11 +167,14 @@ sealed class PdfSaveOptions {
   /// Full rewrite — rebuild the entire PDF. Supports compression,
   /// garbage collection, and encryption changes. Objects are packed into
   /// object streams with a cross-reference stream (PDF 1.5) unless
-  /// [objectStreams] is false.
+  /// [objectStreams] is false. A stream with no filter or a single
+  /// FlateDecode is deflated again at [deflateLevel] and written so only when
+  /// that is smaller than the bytes the source held.
   const factory PdfSaveOptions.fullRewrite({
     bool compress,
     bool garbageCollect,
     bool objectStreams,
+    int deflateLevel,
     PdfEncryption encryption,
   }) = PdfSaveFullRewrite;
 
@@ -197,6 +200,7 @@ class PdfSaveFullRewrite extends PdfSaveOptions {
     this.compress = true,
     this.garbageCollect = true,
     this.objectStreams = true,
+    this.deflateLevel = 9,
     this.encryption = const PdfEncryption.keep(),
   });
 
@@ -209,6 +213,11 @@ class PdfSaveFullRewrite extends PdfSaveOptions {
   /// Whether to pack the non-stream objects into object streams and write
   /// a cross-reference stream (PDF 1.5) instead of a classic table.
   final bool objectStreams;
+
+  /// The zlib level, 0 (stored) to 9 (smallest), of every stream the save
+  /// deflates. Saving with a level outside that range throws an
+  /// [ArgumentError].
+  final int deflateLevel;
 
   /// Encryption intent for the output.
   final PdfEncryption encryption;

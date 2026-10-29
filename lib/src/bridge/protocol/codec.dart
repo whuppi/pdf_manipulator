@@ -505,6 +505,7 @@ Map<String, Object?> encodeSaveArgs(PdfSaveOptions options) {
       :final compress,
       :final garbageCollect,
       :final objectStreams,
+      :final deflateLevel,
       :final encryption,
     ) =>
       {
@@ -512,6 +513,7 @@ Map<String, Object?> encodeSaveArgs(PdfSaveOptions options) {
         'compress': compress,
         'garbageCollect': garbageCollect,
         'objectStreams': objectStreams,
+        'deflateLevel': _checkedDeflateLevel(deflateLevel),
         ..._encodeEncryption(encryption),
       },
     PdfSaveIncremental() => {
@@ -519,6 +521,13 @@ Map<String, Object?> encodeSaveArgs(PdfSaveOptions options) {
       ..._encodeEncryption(const PdfEncryption.keep()),
     },
   };
+}
+
+int _checkedDeflateLevel(int level) {
+  if (level < 0 || level > 9) {
+    throw ArgumentError.value(level, 'deflateLevel', 'must be 0 to 9');
+  }
+  return level;
 }
 
 Map<String, Object?> _encodeEncryption(PdfEncryption encryption) {

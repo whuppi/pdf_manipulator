@@ -120,6 +120,57 @@ void registerSugarTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
+    test('compress shrinks a source that deflates', () async {
+      final pdf = createPdf();
+      final source = repeatedStreamPdf(5000);
+      final sink = TestSink();
+      await pdf.compress(src(source), sink, images: PdfImagePolicy.lossless);
+      expect(sink.takeBytes().length, lessThan(source.length ~/ 4));
+    }, timeout: t(1));
+
+    test('compress of a small source never writes a larger file', () async {
+      final pdf = createPdf();
+      // Random bytes do not deflate and the rewrite saves nothing else, so
+      // its result is not smaller: the output is the source, byte for byte.
+      final source = randomStreamPdf(20000);
+      expect(source.length, lessThanOrEqualTo(4 * 1024 * 1024));
+      final sink = TestSink();
+      await pdf.compress(src(source), sink, images: PdfImagePolicy.lossless);
+      expect(sink.takeBytes(), source);
+    }, timeout: t(1));
+
+    test(
+      'compress of a source over 4 MiB never writes a larger file',
+      () async {
+        final pdf = createPdf();
+        final source = randomStreamPdf(4 * 1024 * 1024 + 4096);
+        expect(source.length, greaterThan(4 * 1024 * 1024));
+        final sink = TestSink();
+        await pdf.compress(src(source), sink, images: PdfImagePolicy.lossless);
+        expect(sink.takeBytes(), source);
+      },
+      timeout: t(3),
+    );
+
+    test('compress of a source over 4 MiB that deflates writes the file it '
+        'counted', () async {
+      final pdf = createPdf();
+      final source = repeatedStreamPdf(160000);
+      expect(source.length, greaterThan(4 * 1024 * 1024));
+      final sink = TestSink();
+      await pdf.compress(src(source), sink, images: PdfImagePolicy.lossless);
+      final output = sink.takeBytes();
+      expect(output.length, lessThan(source.length ~/ 4));
+
+      // The counting save and the writing save are two saves of one
+      // editor: the bytes counted are the bytes a fresh editor saves.
+      final editor = await pdf.edit(src(source));
+      final fresh = TestSink();
+      await editor.save(fresh, options: const PdfSaveOptions.fullRewrite());
+      await editor.dispose();
+      expect(output, fresh.takeBytes());
+    }, timeout: t(3));
+
     test('compress reads its source in few, whole chunks', () async {
       final pdf = createPdf();
       final source = fThousandPage;
