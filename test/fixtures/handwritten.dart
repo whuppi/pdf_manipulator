@@ -9294,3 +9294,62 @@ final Uint8List structTreePdf = () {
     '<< /Nums [0 [11 0 R] 1 [12 0 R]] >>',
   ]);
 }();
+
+/// The text of [inheritedPageAttrsPdf]'s page.
+const inheritedPageMarker = 'INHERITEDTEXT';
+
+/// One page whose /MediaBox (300 x 400), /Rotate (90) and /Resources live
+/// only on its /Pages node, so a merge must carry what the page tree gave it.
+final Uint8List inheritedPageAttrsPdf = () {
+  const pages =
+      '<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] '
+      '/Rotate 90 /Resources << /Font << /F1 5 0 R >> >> >>';
+  return _offsetPdf([
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    pages,
+    '<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>',
+    _streamBody('', 'BT /F1 18 Tf 20 200 Td ($inheritedPageMarker) Tj ET'),
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ]);
+}();
+
+/// Three pages under a nested page tree: the root holds an inner /Pages node
+/// (pages 4 and 5) and page 6, none with a /Rotate of its own.
+final Uint8List nestedPageTreePdf = _offsetPdf([
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  '<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 3 >>',
+  '<< /Type /Pages /Parent 2 0 R /Kids [4 0 R 5 0 R] /Count 2 >>',
+  '<< /Type /Page /Parent 3 0 R /MediaBox [0 0 100 100] >>',
+  '<< /Type /Page /Parent 3 0 R /MediaBox [0 0 100 100] >>',
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>',
+]);
+
+/// A field `a` whose kid `b` lists `a` as its own kid: a /Kids cycle a reader
+/// must end.
+final Uint8List kidsCycleForm = _offsetPdf([
+  '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>',
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>',
+  '<< /T (a) /FT /Tx /Kids [5 0 R] >>',
+  '<< /T (b) /Parent 4 0 R /Kids [4 0 R] >>',
+]);
+
+/// [groups] radio groups. Group `i` is a parent field `g<i>` with one kid
+/// widget that is a named field of its own, `g<i>.k`, whose only state is
+/// `/On`: changing the parent's value and the kid's tooltip both stage the
+/// kid widget, so the save must resolve the two edits in a fixed order.
+Uint8List radioGroupsForm(int groups) {
+  final parents = [for (var i = 0; i < groups; i++) '${4 + 2 * i} 0 R'];
+  String kid(int parent) =>
+      '<< /Subtype /Widget /Parent $parent 0 R /T (k) /Rect [0 0 10 10] '
+      '/AS /Off /AP << /N << /On << >> /Off << >> >> >> >>';
+  return _offsetPdf([
+    '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [${parents.join(' ')}] >> >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>',
+    for (var i = 0; i < groups; i++) ...[
+      '<< /FT /Btn /Ff 32768 /T (g$i) /Kids [${5 + 2 * i} 0 R] /V /Off >>',
+      kid(4 + 2 * i),
+    ],
+  ]);
+}

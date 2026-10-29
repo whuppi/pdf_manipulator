@@ -598,6 +598,7 @@ void registerEditorTests(Pdf Function() createPdf) {
     for (final (name, edit) in <(String, Future<void> Function(PdfEditor))>[
       ('deletePage', (e) => e.deletePage(1)),
       ('movePage', (e) => e.movePage(from: 0, to: 1)),
+      ('mergeFrom', (e) => e.mergeFrom(src(minimalPdf))),
       (
         'applyRedactions',
         (e) async {
@@ -2890,6 +2891,143 @@ void registerEditorTests(Pdf Function() createPdf) {
         throwsA(isA<PdfUnsupported>()),
       );
       await editor.dispose();
+    }, timeout: t(1));
+
+    test(
+      'setPageMediaBox on a merged page changes it and no source page',
+      () async {
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(minimalPdf));
+        await editor.mergeFrom(src(pagePrunePdf), pages: [2]);
+        final before = await editor.pageMediaBox(0);
+        await editor.setPageMediaBox(
+          1,
+          const PdfRect(x: 0, y: 0, width: 100, height: 200),
+        );
+        final sink = TestSink();
+        await editor.save(sink);
+        await editor.dispose();
+
+        final doc = await pdf.open(src(sink.takeBytes()));
+        expect(doc.pages[0].width, closeTo(before.width, 0.5));
+        expect(doc.pages[0].height, closeTo(before.height, 0.5));
+        expect(doc.pages[1].width, closeTo(100, 0.5));
+        expect(doc.pages[1].height, closeTo(200, 0.5));
+        await doc.dispose();
+      },
+      timeout: t(1),
+    );
+
+    test('redaction, erase and form flattening on a merged page throw '
+        'PdfUnsupported while the source page stays editable', () async {
+      final editor = await createPdf().edit(src(minimalPdf));
+      await editor.mergeFrom(src(pagePrunePdf), pages: [2]);
+      const region = PdfRect(x: 0, y: 0, width: 10, height: 10);
+      await expectLater(
+        editor.addRedaction(1, region),
+        throwsA(isA<PdfUnsupported>()),
+      );
+      await expectLater(
+        editor.eraseRegions(1, [region]),
+        throwsA(isA<PdfUnsupported>()),
+      );
+      await expectLater(
+        editor.flattenForms(page: 1),
+        throwsA(isA<PdfUnsupported>()),
+      );
+      await editor.eraseRegions(0, [region]);
+      await editor.dispose();
+    }, timeout: t(1));
+
+    test('a merged page inherits /MediaBox, /Rotate and /Resources from its '
+        'page tree', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(minimalPdf));
+      await editor.mergeFrom(src(inheritedPageAttrsPdf));
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+
+      final doc = await pdf.open(src(sink.takeBytes()));
+      expect(doc.pageCount, 2);
+      expect(doc.pages[1].width, closeTo(300, 0.5));
+      expect(doc.pages[1].height, closeTo(400, 0.5));
+      expect(doc.pages[1].rotation, 90);
+      expect(
+        await doc.extract(pages: const PdfPages.single(1)),
+        contains(inheritedPageMarker),
+        reason: 'the inherited /Resources font is imported with the page',
+      );
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('a failed mergeFrom leaves the editor unchanged', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(minimalPdf));
+      await expectLater(
+        editor.mergeFrom(src(fThreePageMarkers), pages: [5]),
+        throwsA(isA<PdfEngineError>()),
+      );
+      expect(await editor.pageCount, 1);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final doc = await pdf.open(src(sink.takeBytes()));
+      expect(doc.pageCount, 1);
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('deleting a merged page takes its form field with it', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(minimalPdf));
+      await editor.mergeFrom(src(fFormFields));
+      await editor.mergeFrom(src(fFormFieldsDe));
+      await editor.deletePage(2);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+
+      final doc = await pdf.open(src(sink.takeBytes()));
+      expect(doc.pageCount, 2);
+      final names = (await doc.formFields).map((f) => f.name).toSet();
+      await doc.dispose();
+      expect(names, fFormFieldsTruth.fieldNames.toSet());
+    }, timeout: t(1));
+
+    test('deleting every merged page leaves the source pages', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(fTwoPageMarkers));
+      await editor.mergeFrom(src(fThreePageMarkers));
+      for (var i = 0; i < fThreePageMarkersTruth.markers.length; i++) {
+        await editor.deletePage(2);
+      }
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+
+      final doc = await pdf.open(src(sink.takeBytes()));
+      expect(doc.pageCount, 2);
+      final text = await doc.extract(pages: const PdfPages.all());
+      await doc.dispose();
+      expect(text, contains(fTwoPageMarkersTruth.page0Marker));
+      expect(text, contains(fTwoPageMarkersTruth.page1Marker));
+      for (final marker in fThreePageMarkersTruth.markers) {
+        expect(text, isNot(contains(marker)));
+      }
+    }, timeout: t(1));
+
+    test('rotateAllPages reaches every page of a nested page tree', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(nestedPageTreePdf));
+      await editor.rotateAllPages(degrees: 90);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+
+      final doc = await pdf.open(src(sink.takeBytes()));
+      expect(doc.pageCount, 3);
+      expect([for (final p in doc.pages) p.rotation], [90, 90, 90]);
+      await doc.dispose();
     }, timeout: t(1));
 
     // ── Page edits reach merged pages like any other ──

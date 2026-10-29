@@ -732,6 +732,13 @@ void registerDocTests(Pdf Function() createPdf) {
       timeout: t(1),
     );
 
+    test('formFields ends a /Kids cycle and lists each field once', () async {
+      final doc = await createPdf().open(src(kidsCycleForm));
+      final names = [for (final f in await doc.formFields) f.name];
+      await doc.dispose();
+      expect(names, unorderedEquals(['a', 'a.b']));
+    }, timeout: t(1));
+
     test('extractAttachment round-trips the embedded bytes', () async {
       final doc = await createPdf().open(src(attachmentPdf));
       final sink = TestSink();

@@ -80,6 +80,10 @@ void main() {
     'noSizePdf': noSizePdf,
     'freeEntryPdf': freeEntryPdf,
     'genOnePdf': genOnePdf,
+    'inheritedPageAttrsPdf': inheritedPageAttrsPdf,
+    'nestedPageTreePdf': nestedPageTreePdf,
+    'kidsCycleForm': kidsCycleForm,
+    'radioGroupsForm(40)': radioGroupsForm(40),
     // brokenObjectPdf stays out: its xref entry deliberately does not point
     // where it says (object 4 is nowhere in the file), which is the damage
     // the fixture carries, not a fixture bug.

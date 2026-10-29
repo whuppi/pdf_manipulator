@@ -15,6 +15,18 @@ patch branch.
 | pdf_oxide | [`yfedoseev/pdf_oxide`](https://github.com/yfedoseev/pdf_oxide) | [`whuppi/pdf_oxide`](https://github.com/whuppi/pdf_oxide) | `pdf_manipulator/0.3.78-patches` | `v0.3.78` | `vendor/pdf_oxide/` |
 | office_oxide | [`yfedoseev/office_oxide`](https://github.com/yfedoseev/office_oxide) | [`whuppi/office_oxide`](https://github.com/whuppi/office_oxide) | `office_kit/0.1.11-patches` | `v0.1.11` | `vendor/office_oxide/` |
 
+**Terms used in this doc:**
+
+| Term | Means |
+|---|---|
+| upstream | The project our fork tracks: `yfedoseev/pdf_oxide` (and `yfedoseev/office_oxide`). Its git remote in the submodule is `upstream`. We never change it; S1 takes its releases into our fork. |
+| our fork | `whuppi/pdf_oxide` (and `whuppi/office_oxide`), the git remote `origin`. Every change we make to the engine is a commit on our fork's patch branch. |
+| upstream code | A file in our fork that came from upstream. We change it only between patch markers (S2), so S1 can rebase our patches onto the next upstream release. |
+| fork-only code | `src/host/` in our fork. Upstream has no such folder, so it needs no markers and S1 never rebases it. |
+
+No recipe here sends a change upstream. Contributing to upstream is a
+separate, optional choice of the maintainer.
+
 pdf_oxide depends on office_oxide as a path dependency
 (`office_oxide = { path = "../office_oxide" }`).
 wasm-bindgen + wasm-opt run as library calls inside the fork's
@@ -76,11 +88,11 @@ scheduled scans) validate nothing this repo uses. On each fork, once:
   on every bump; an upstream `on: push tags` Release pipeline fires on that tag
   and can cut a GitHub release / publish a package from your mirror. Disabling
   defuses it.
-- **Off by default.** The fork is home; upstream is just the base. Routine fork
-  work — patches, rebases, tag-moves — never needs the fork's own CI; the
-  parent's CI is the gate. The only exception is a deliberate, standalone
-  upstream PR (occasional, never during a fix): flip Actions on for that one PR,
-  then back off. Off is the resting state.
+- **Off by default.** Our fork is home; upstream is only the base. Routine
+  fork work (patches, rebases, tag moves) never needs the fork's own CI; the
+  parent's CI is the gate. The one exception is a pull request to upstream
+  that the maintainer chose to open: flip Actions on for that one PR, then back
+  off. Off is the resting state.
 
 Disable at the **setting** level — never delete the workflow YAMLs. Deleting
 them diverges the mirror from upstream and breaks the clean rebase-on-tag in
@@ -208,12 +220,11 @@ git commit -m "build: sync upstream vNEW + rebuild WASM"
 
 ## S2 — Edit patches
 
-Our `host/` directory is entirely our code — edit freely, no markers
-needed (the module itself is the marker). Everything outside `host/`
-is upstream code: **mark every change there** with paired
+Every change happens in our fork. `src/host/` is fork-only code: edit it
+freely, with no markers (the folder itself is the marker). Everything
+outside `host/` is upstream code: **mark every change there** with paired
 `── pdf_manipulator patch ──` / `── end pdf_manipulator patch ──`
-boundaries. The markers are the authoritative inventory of what we
-patch:
+lines. The markers are the full list of what we changed in upstream code:
 
 ```sh
 cd vendor/pdf_oxide
@@ -229,38 +240,46 @@ make check
 **Verify zero warnings:** `make analyze` checks Rust warnings in our
 patched lines automatically (see [S7](#s7--verify-our-code-warnings)).
 
-**Tests in the fork: `host/` unit tests for pure functions only, nothing
-else.** A patch proves itself from this repo, in `test/ops/` — with a
-fixture in `test/fixtures/handwritten.dart` when the engine bug needs a
-PDF no foreign writer emits. Upstream files and `tests/` never carry a
-test of ours: a test in a patched upstream file is extra surface every S1
-rebase has to carry onto the next base tag, for a proof the Dart battery
-already makes at the level a consumer actually experiences (rendered
-pixels, per ARCHITECTURE.md's testing section).
+**Tests in the fork: prove from Dart first.** A patch proves itself from
+this repo, in `test/ops/`, at the level a consumer sees (rendered pixels,
+saved bytes, per ARCHITECTURE.md's testing section). When the engine bug
+needs a PDF that no other writer makes, add a fixture to
+`test/fixtures/handwritten.dart`.
 
-`host/` is different on both counts: it is never rebased, and it holds
-pure functions whose invariants a consumer cannot observe at the right
-granularity — the lane budget, the shared-buffer byte layout, a CCITT
-polarity, a PNG predictor round trip. Those may carry `#[cfg(test)]` unit
-tests, under one boundary: **no PDF bytes, no `PdfDocument`, no
-`DocumentEditor` inside a `host/` test.** The moment a test needs a
-document, it is a behaviour a consumer can see, and it belongs in
-`test/ops/`. One named exception: the trim probes — modules whose name
-contains `trim_probe`, under `#[cfg(all(test, not(feature = "…")))]` in
-`host/dispatch.rs`, run by `tool/shake_audit.sh` against a trimmed build — open a minimal
-in-memory PDF to prove an excluded op answers with the typed "not enabled
-in this build" error, a build that no Dart test can be compiled against.
-`make test-guards` enforces both the boundary and the exception's shape
-(`tool/check_fork_tests.sh`).
+Upstream code and `tests/` never get a test of ours. Every S1 rebase
+has to carry such a test onto the next base tag, and the patch markers
+do not list it, so nobody sees what it costs.
 
-Prior art: #161 was the same shape as #215 — an engine-side forms bug —
-and landed as a hand-authored fixture plus battery cases here, with the
+A Rust test of ours lives in fork-only code (`host/`), which is never rebased. There are
+three kinds:
+
+- **Pure unit tests**, in a `#[cfg(test)]` module beside the code: the
+  lane budget, the shared-buffer byte layout, a CCITT polarity, a PNG
+  predictor round trip. They use no PDF bytes, no `PdfDocument` and no
+  `DocumentEditor`.
+- **Engine proofs**, in `host/engine_proofs/`: a test that opens a
+  document because no Dart battery can see what it proves. Two cases
+  qualify: a path that only the Rust API reaches (for example
+  `write_incremental`), and an internal property that never reaches the
+  bytes or pixels (for example how often an object stream is decoded).
+  The test's doc comment names its case. When a Dart battery can make the
+  proof, the proof goes in the battery. If a test needs a private engine
+  item, add the smallest `pub(crate)` accessor inside a patch block.
+- **Trim probes**, in modules whose name contains `trim_probe`, under
+  `#[cfg(all(test, not(feature = "…")))]` in `host/dispatch.rs`.
+  `tool/shake_audit.sh` runs them against a trimmed build. They open a
+  minimal in-memory PDF to prove that an excluded op answers with the
+  typed "not enabled in this build" error. No Dart test can be compiled
+  against that build.
+
+`make test-guards` enforces all of this (`tool/check_fork_tests.sh`): no
+`#[test]` added to upstream code since the base tag, no document in a
+`host/` test outside `engine_proofs/` and the trim probes, and a doc
+comment on every engine proof.
+
+Prior art: #161 had the same shape as #215, an engine-side forms bug. It
+landed as a hand-written fixture plus battery cases here, with the
 submodule bumped and no Rust test.
-
-If a proof genuinely cannot be made from Dart and is not a pure `host/`
-function, that is a signal the fix belongs upstream: open it as a PR on
-the upstream repo, where its test lives with it
-(see `universal/external-contributions.md`).
 
 **Watch for a detached submodule.** `git submodule update` leaves
 `vendor/pdf_oxide` on a detached HEAD, so a commit made after it lands on

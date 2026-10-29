@@ -16,6 +16,7 @@ import '../core/pdf_form_encoding_battery.dart';
 import '../core/pdf_builder_battery.dart';
 import '../core/pdf_standalone_battery.dart';
 import '../core/pdf_sugar_battery.dart';
+import '../core/pdf_determinism_battery.dart';
 import '../core/pdf_cancel_battery.dart';
 import '../core/pdf_lifecycle_battery.dart';
 import '../core/pdf_instance_battery.dart';
@@ -69,6 +70,7 @@ void main() {
   registerBuilderTests(() => pdf);
   registerStandaloneTests(() => pdf);
   registerSugarTests(() => pdf);
+  registerDeterminismTests(() => pdf);
   registerCancelTests(() => pdf);
   registerLifecycleTests(
     () => Pdf(
