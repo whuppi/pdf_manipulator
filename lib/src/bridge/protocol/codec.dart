@@ -504,12 +504,14 @@ Map<String, Object?> encodeSaveArgs(PdfSaveOptions options) {
     PdfSaveFullRewrite(
       :final compress,
       :final garbageCollect,
+      :final objectStreams,
       :final encryption,
     ) =>
       {
         'saveMode': 0,
         'compress': compress,
         'garbageCollect': garbageCollect,
+        'objectStreams': objectStreams,
         ..._encodeEncryption(encryption),
       },
     PdfSaveIncremental() => {

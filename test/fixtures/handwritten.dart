@@ -68,6 +68,19 @@ final Uint8List minimalPdf = _offsetPdf([
   '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] >>',
 ]);
 
+/// [minimalPdf] with a document information dictionary (object 4) that
+/// names a title, an author and a creator.
+final Uint8List infoPdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] >>',
+  // 4: document information
+  '<< /Title (Source Title) /Author (Source Author) /Creator (Source Creator) >>',
+], info: 4);
+
 /// Hand-written single-page PDF whose content stream is UNCOMPRESSED
 /// and contains the visible marker text below. Exists for exactly one
 /// purpose: proving that encryption removes plaintext from the raw

@@ -828,6 +828,140 @@ void registerEditorTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
+    // ── Object streams and the cross-reference stream ──
+
+    test('a full rewrite packs objects into object streams and ends in an '
+        'xref stream', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(minimalPdf));
+      await editor.setTitle('Packed');
+      final sink = TestSink();
+      await editor.save(sink, options: const PdfSaveOptions.fullRewrite());
+      await editor.dispose();
+      final out = sink.takeBytes();
+      // bytegrep-exempt: the claim is the file layout itself.
+      final text = String.fromCharCodes(out); // bytegrep-exempt
+
+      expect(text, matches(RegExp(r'^%PDF-1\.[5-9]')));
+      expect(text, contains('/Type /ObjStm'));
+      expect(text, contains('/Type /XRef'));
+      expect(text, isNot(contains('\nxref\n')));
+      expect(text, isNot(contains('trailer')));
+      // The title sits in a packed object, not as a plain string.
+      expect(text, isNot(contains('Packed')));
+      final reread = await pdf.edit(src(out));
+      expect(await reread.title, 'Packed');
+      expect(await reread.pageCount, 1);
+      await reread.dispose();
+    }, timeout: t(1));
+
+    // ── Document information survives a rewrite ──
+
+    Future<void> expectSourceInfo(Pdf pdf, Uint8List out, String reason) async {
+      final doc = await pdf.open(src(out));
+      expect(doc.title, 'Source Title', reason: '$reason: title');
+      expect(doc.author, 'Source Author', reason: '$reason: author');
+      expect(doc.creator, 'Source Creator', reason: '$reason: creator');
+      await doc.dispose();
+    }
+
+    test('a full rewrite keeps the source document information', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(infoPdf));
+      final sink = TestSink();
+      await editor.save(sink, options: const PdfSaveOptions.fullRewrite());
+      await editor.dispose();
+      await expectSourceInfo(pdf, sink.takeBytes(), 'packed');
+    }, timeout: t(1));
+
+    test(
+      'a classic full rewrite keeps the source document information',
+      () async {
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(infoPdf));
+        final sink = TestSink();
+        await editor.save(
+          sink,
+          options: const PdfSaveOptions.fullRewrite(objectStreams: false),
+        );
+        await editor.dispose();
+        await expectSourceInfo(pdf, sink.takeBytes(), 'classic');
+      },
+      timeout: t(1),
+    );
+
+    test('compress keeps the source document information', () async {
+      final pdf = createPdf();
+      final sink = TestSink();
+      await pdf.compress(src(infoPdf), sink, images: PdfImagePolicy.lossless);
+      await expectSourceInfo(pdf, sink.takeBytes(), 'compress');
+    }, timeout: t(1));
+
+    test(
+      'editing only the title keeps the other document information',
+      () async {
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(infoPdf));
+        await editor.setTitle('New Title');
+        final sink = TestSink();
+        await editor.save(sink, options: const PdfSaveOptions.fullRewrite());
+        await editor.dispose();
+        final doc = await pdf.open(src(sink.takeBytes()));
+        expect(doc.title, 'New Title');
+        expect(doc.author, 'Source Author');
+        expect(doc.creator, 'Source Creator');
+        await doc.dispose();
+      },
+      timeout: t(1),
+    );
+
+    for (final algorithm in PdfEncryptionAlgorithm.values) {
+      test('an encrypted full rewrite with $algorithm reads back through its '
+          'object streams', () async {
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(minimalPdf));
+        await editor.setTitle('Secret Title');
+        final sink = TestSink();
+        await editor.save(
+          sink,
+          options: PdfSaveOptions.fullRewrite(
+            encryption: PdfEncryption.config(
+              ownerPassword: 'owner',
+              userPassword: 'user',
+              algorithm: algorithm,
+            ),
+          ),
+        );
+        await editor.dispose();
+        final out = sink.takeBytes();
+        // bytegrep-exempt: the claim is the file layout itself.
+        expect(
+          String.fromCharCodes(out), // bytegrep-exempt
+          contains('/Type /ObjStm'),
+        );
+
+        final doc = await pdf.open(src(out), password: 'user');
+        expect(doc.isEncrypted, isTrue);
+        expect(doc.title, 'Secret Title');
+        expect(doc.pageCount, 1);
+        await doc.dispose();
+
+        // Keeping the source's encryption writes the same layout.
+        final again = await pdf.edit(src(out), password: 'user');
+        expect(await again.title, 'Secret Title');
+        final keptSink = TestSink();
+        await again.save(keptSink, options: const PdfSaveOptions.fullRewrite());
+        await again.dispose();
+        final kept = await pdf.open(
+          src(keptSink.takeBytes()),
+          password: 'user',
+        );
+        expect(kept.title, 'Secret Title');
+        expect(kept.pageCount, 1);
+        await kept.dispose();
+      }, timeout: t(1));
+    }
+
     // ── Page images ──
 
     test(

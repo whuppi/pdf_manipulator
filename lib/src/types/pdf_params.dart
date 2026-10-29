@@ -165,10 +165,13 @@ sealed class PdfSaveOptions {
   const PdfSaveOptions();
 
   /// Full rewrite — rebuild the entire PDF. Supports compression,
-  /// garbage collection, and encryption changes.
+  /// garbage collection, and encryption changes. Objects are packed into
+  /// object streams with a cross-reference stream (PDF 1.5) unless
+  /// [objectStreams] is false.
   const factory PdfSaveOptions.fullRewrite({
     bool compress,
     bool garbageCollect,
+    bool objectStreams,
     PdfEncryption encryption,
   }) = PdfSaveFullRewrite;
 
@@ -193,6 +196,7 @@ class PdfSaveFullRewrite extends PdfSaveOptions {
   const PdfSaveFullRewrite({
     this.compress = true,
     this.garbageCollect = true,
+    this.objectStreams = true,
     this.encryption = const PdfEncryption.keep(),
   });
 
@@ -201,6 +205,10 @@ class PdfSaveFullRewrite extends PdfSaveOptions {
 
   /// Whether to remove unreferenced objects.
   final bool garbageCollect;
+
+  /// Whether to pack the non-stream objects into object streams and write
+  /// a cross-reference stream (PDF 1.5) instead of a classic table.
+  final bool objectStreams;
 
   /// Encryption intent for the output.
   final PdfEncryption encryption;

@@ -4,6 +4,7 @@ import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
 import '../fixtures/handwritten.dart';
+import 'plain_bytes.dart';
 import 'test_source_sink.dart';
 
 /// Proves that [out], made from [pagePrunePdf], holds the pages in [kept]
@@ -20,7 +21,9 @@ Future<void> expectOnlyPrunedPages(
   List<int> kept,
 ) async {
   // bytegrep-exempt: a leak negative, the claim is about written bytes.
-  final raw = String.fromCharCodes(out); // bytegrep-exempt
+  final raw = String.fromCharCodes(
+    await plainBytes(pdf, out),
+  ); // bytegrep-exempt
   final truth = pagePruneTruth;
   for (var i = 0; i < truth.pageCount; i++) {
     final keep = kept.contains(i);

@@ -125,6 +125,7 @@ CONTENT RULES (never change)
 - Changed cancellation to stop text extraction, search, validation, `reduceImages`, `convertToPdfA` and saves within one page, where it waited for the next read or write; on the web this needs a cross-origin isolated page
 - Changed `edit` to open the source once; an editor used to hold the document twice
 - Changed a full-rewrite save to copy each unchanged stream from the source in 64 KB pieces, so a page holding a 60 MB image saves in under 1 MB of engine memory
+- Changed a full-rewrite save to pack objects into object streams with a cross-reference stream (PDF 1.5), which makes files smaller; `PdfSaveOptions.fullRewrite(objectStreams: false)` writes the classic layout
 - Changed `PdfDoc.verifySignatures` to check each signature's digest and signer key, where it returned `false` for every document; `PdfSignatureInfo` has `isValid`, `coversWholeDocument` and `signingTime` filled
 - Fixed an empty input to `merge` or any other multi-source op shifting every source after it, so the op read the wrong documents — an empty input now throws `PdfCorrupted`
 - Fixed a full-rewrite save of a file with no `/Size` writing new objects over existing ones, and dropping an object it could not read without a word — it now throws `PdfCorrupted`
@@ -153,6 +154,8 @@ CONTENT RULES (never change)
 - Fixed `streamingTable` rows with a `rowSpan` above 1 never drawing, and `PdfTableCell.rowSpan` documented as a column span — it is the rows a cell spans, each row still lists one cell per column, and a row with the wrong cell count throws `ArgumentError`
 - Fixed `sign` writing a cross-reference table that other readers had to repair — each entry is now 20 bytes
 - Fixed a full-rewrite save dropping objects the kept pages use (content streams, colour spaces, fonts, structure) on files with a nested page tree or many objects, leaving pages blank or text missing
+- Fixed `compress` and every other full-rewrite save making a file with object streams up to six times larger — the save keeps its objects packed
+- Fixed `compress` and every other full-rewrite save dropping the document's title, author, dates and file identifier unless the title was edited — the saved file keeps the source's `/Info` and `/ID`, and an edited title replaces the old `/Info` instead of leaving it behind
 - Fixed the same input saving to different bytes on every run, so `compress` and every other rewriting save could not be compared or cached by hash — objects are written in id order, so only the random AES IVs of an encrypted save differ
 
 ## 5.0.1-dev.0

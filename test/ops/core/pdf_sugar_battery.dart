@@ -454,11 +454,26 @@ void registerSugarTests(Pdf Function() createPdf) {
         final doc = await pdf.open(src(output));
         expect(doc.pageCount, 2, reason: '${entry.key}: page count preserved');
         await doc.dispose();
+        // The foreground layer is an annotation: flatten it into the page
+        // content, then its text must extract beside the original text.
+        final flattening = await pdf.edit(src(output));
+        await flattening.flattenAnnotations();
+        final flatSink = TestSink();
+        await flattening.save(flatSink);
+        await flattening.dispose();
+        final flat = await pdf.open(src(flatSink.takeBytes()));
+        final text = await flat.extract(pages: const PdfPages.all());
         expect(
-          output.length,
-          greaterThan(input.length),
-          reason: '${entry.key}: watermark increases file size',
+          text,
+          contains('POS'),
+          reason: '${entry.key}: the watermark is on the page',
         );
+        expect(
+          text,
+          contains('ALPHA UNIQUE'),
+          reason: '${entry.key}: the page content is kept',
+        );
+        await flat.dispose();
       }
     }, timeout: t(1));
 

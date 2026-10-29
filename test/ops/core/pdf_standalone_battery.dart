@@ -14,6 +14,7 @@ import '../../fixtures/handwritten.dart';
 import '../../fixtures/handwritten_docx.dart';
 import '../../fixtures/third_party/tp_page_prune_objstm.dart';
 import '../../harness/page_prune_expect.dart';
+import '../../harness/plain_bytes.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
 
@@ -408,7 +409,8 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       await pdf.extractPages(src(structTreePdf), sink, pages: const [0]);
       final out = sink.takeBytes();
       // bytegrep-exempt: the claim is about references in the file.
-      final raw = String.fromCharCodes(out); // bytegrep-exempt
+      final plain = await plainBytes(pdf, out);
+      final raw = String.fromCharCodes(plain); // bytegrep-exempt
       for (final id in const [4, 10]) {
         expect(
           RegExp('(?<![0-9])$id 0 R').hasMatch(raw),
