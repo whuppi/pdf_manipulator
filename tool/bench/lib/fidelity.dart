@@ -30,45 +30,91 @@ class Fidelity {
   final bool textEqual;
 }
 
-/// Renders every page of [source] and [candidate] at [dpi] with the
-/// package's own renderer and compares them page by page, so only one pair
-/// of bitmaps is alive at a time. [maxPages] of 0 compares every page.
-Future<Fidelity> compare(
+/// The fidelity of one candidate, or the error that stopped its comparison.
+typedef Outcome = ({Fidelity? fidelity, String? error});
+
+/// Renders every page of [source] and of each of [candidates] at [dpi] with
+/// the package's own renderer and compares them page by page, so only one
+/// page of bitmaps is alive at a time. Each source page is rendered once,
+/// and decoded only when some candidate's render differs from it. [maxPages]
+/// of 0 compares every page. A candidate that fails gets an error outcome
+/// and does not stop the others.
+Future<List<Outcome>> compareAll(
   PdfDoc source,
-  PdfDoc candidate, {
+  List<PdfDoc> candidates, {
   int dpi = 100,
   int maxPages = 0,
 }) async {
-  final count = math.min(source.pageCount, candidate.pageCount);
-  final limit = maxPages > 0 ? math.min(count, maxPages) : count;
-  var worstRmse = 0.0;
-  var worstRmsePage = 0;
-  var worstSsim = 1.0;
-  var worstSsimPage = 0;
-  for (var i = 0; i < limit; i++) {
+  final n = candidates.length;
+  final limits = [
+    for (final c in candidates)
+      () {
+        final count = math.min(source.pageCount, c.pageCount);
+        return maxPages > 0 ? math.min(count, maxPages) : count;
+      }(),
+  ];
+  final errors = List<String?>.filled(n, null);
+  final worstRmse = List<double>.filled(n, 0);
+  final worstRmsePage = List<int>.filled(n, 0);
+  final worstSsim = List<double>.filled(n, 1);
+  final worstSsimPage = List<int>.filled(n, 0);
+  final longest = limits.fold(0, math.max);
+
+  for (var i = 0; i < longest; i++) {
     final size = _sizeFor(source.pages[i], dpi);
-    final a = await _render(source, i, size);
-    final b = await _render(candidate, i, size);
-    final pair = _score(a, b);
-    if (pair.rmse > worstRmse) {
-      worstRmse = pair.rmse;
-      worstRmsePage = i;
-    }
-    if (pair.ssim < worstSsim) {
-      worstSsim = pair.ssim;
-      worstSsimPage = i;
+    final sourcePng = await _render(source, i, size);
+    img.Image? decoded;
+    for (var k = 0; k < n; k++) {
+      if (errors[k] != null || i >= limits[k]) continue;
+      try {
+        final png = await _render(candidates[k], i, size);
+        var rmse = 0.0;
+        var ssim = 1.0;
+        if (!_equal(sourcePng, png)) {
+          final a = decoded ??= _decode(sourcePng, i);
+          final pair = _score(a, _decode(png, i));
+          rmse = pair.rmse;
+          ssim = pair.ssim;
+        }
+        if (rmse > worstRmse[k]) {
+          worstRmse[k] = rmse;
+          worstRmsePage[k] = i;
+        }
+        if (ssim < worstSsim[k]) {
+          worstSsim[k] = ssim;
+          worstSsimPage[k] = i;
+        }
+      } on Object catch (e) {
+        errors[k] = e.toString().split('\n').first;
+      }
     }
   }
+
   final textA = await source.extract(pages: const PdfPages.all());
-  final textB = await candidate.extract(pages: const PdfPages.all());
-  return Fidelity(
-    pages: limit,
-    worstRmse: worstRmse,
-    worstRmsePage: worstRmsePage,
-    worstSsim: worstSsim,
-    worstSsimPage: worstSsimPage,
-    textEqual: textA == textB,
-  );
+  final outcomes = <Outcome>[];
+  for (var k = 0; k < n; k++) {
+    if (errors[k] == null) {
+      try {
+        final textB = await candidates[k].extract(pages: const PdfPages.all());
+        outcomes.add((
+          fidelity: Fidelity(
+            pages: limits[k],
+            worstRmse: worstRmse[k],
+            worstRmsePage: worstRmsePage[k],
+            worstSsim: worstSsim[k],
+            worstSsimPage: worstSsimPage[k],
+            textEqual: textA == textB,
+          ),
+          error: null,
+        ));
+        continue;
+      } on Object catch (e) {
+        errors[k] = e.toString().split('\n').first;
+      }
+    }
+    outcomes.add((fidelity: null, error: errors[k]));
+  }
+  return outcomes;
 }
 
 PdfRenderSize _sizeFor(PdfPageInfo page, int dpi) {
@@ -78,13 +124,25 @@ PdfRenderSize _sizeFor(PdfPageInfo page, int dpi) {
   return PdfRenderSize(maxWidth: side, maxHeight: side);
 }
 
-Future<img.Image> _render(PdfDoc doc, int page, PdfRenderSize size) async {
+Future<Uint8List> _render(PdfDoc doc, int page, PdfRenderSize size) async {
   final rendered = await doc
       .render(pages: PdfPages.single(page), size: size)
       .single;
-  final decoded = img.decodePng(rendered.data);
+  return rendered.data;
+}
+
+img.Image _decode(Uint8List png, int page) {
+  final decoded = img.decodePng(png);
   if (decoded == null) throw StateError('page $page: render is not a PNG');
   return decoded;
+}
+
+bool _equal(Uint8List a, Uint8List b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
 }
 
 ({double rmse, double ssim}) _score(img.Image a, img.Image b) {
