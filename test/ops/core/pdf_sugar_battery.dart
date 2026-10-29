@@ -120,6 +120,26 @@ void registerSugarTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
+    test('compress reads its source in few, whole chunks', () async {
+      final pdf = createPdf();
+      final source = fThousandPage;
+      var reads = 0;
+      await pdf.compress(
+        TestSource(source, onRead: (_, _) => reads++),
+        TestSink(),
+      );
+      // Every read is a round trip to the host: a thread wake-up on native,
+      // a suspension or an Atomics.wait on the web. This 1000-page file is
+      // 10 chunks and reads 163 times; a reader that asks for the size the
+      // engine wants, not a whole chunk, reads it 383 times.
+      final chunks = (source.length / maxReadChunk).ceil();
+      expect(
+        reads,
+        lessThanOrEqualTo(chunks * 20),
+        reason: 'source is $chunks chunks',
+      );
+    }, timeout: t(3));
+
     test('compress with an image policy shrinks a photo PDF', () async {
       final pdf = createPdf();
       final sink = TestSink();
