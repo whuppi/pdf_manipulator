@@ -205,6 +205,20 @@ build-native:
 build-wasm:
 	$(DART) tool/compile.dart wasm
 
+# The wasm the web tests load. A file target, so it rebuilds exactly when an
+# engine input is newer: every Rust source and manifest under vendor/ (the
+# build output dirs excluded), the wasm feature list in build.json, and the
+# Dart that drives the compile. `make build-wasm` forces a rebuild; the web
+# test targets depend on this file, never on the phony target.
+WASM_OUT := web_assets/pdf_oxide_bg.wasm
+WASM_INPUTS := $(shell find vendor \( -name target -o -name .git \) -prune -o \
+		-type f \( -name '*.rs' -o -name Cargo.toml -o -name Cargo.lock \) -print) \
+	build.json tool/compile.dart \
+	lib/src/hook/engine_compiler.dart lib/src/hook/build_constants.dart
+
+$(WASM_OUT): $(WASM_INPUTS)
+	$(DART) tool/compile.dart wasm
+
 # ═══════════════════════════════════════════════════════════════════
 # § 4 — Compile (release pipeline — one target per CI job)
 # ═══════════════════════════════════════════════════════════════════
@@ -279,17 +293,17 @@ test-ops-native:
 
 test-ops-web: fixtures test-ops-opfs test-ops-jspi test-ops-atomics
 
-test-ops-opfs:
+test-ops-opfs: $(WASM_OUT)
 	@echo "=== Ops: Web OPFS ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
 	$(DART) test $(TIMEOUT) test/ops/runners/web_opfs_runner_test.dart -p chrome --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-opfs.json
 
-test-ops-jspi:
+test-ops-jspi: $(WASM_OUT)
 	@echo "=== Ops: Web JSPI ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
 	$(DART) test $(TIMEOUT) test/ops/runners/web_jspi_runner_test.dart -p chrome --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-jspi.json
 
-test-ops-atomics:
+test-ops-atomics: $(WASM_OUT)
 	@echo "=== Ops: Web Atomics ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
 	$(DART) test $(TIMEOUT) test/ops/runners/web_atomics_runner_test.dart -p chrome-coi --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-atomics.json
@@ -466,21 +480,21 @@ test-example-device:
 	@mkdir -p $(TEST_RESULTS_DIR)
 	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart -d $(DEVICE) --file-reporter json:../$(TEST_RESULTS_DIR)/int-device.json
 
-test-example-web:
+test-example-web: $(WASM_OUT)
 	$(call setup_example_web)
 	$(call run_example_web,JSPI,jspi)
 	$(call run_example_web,Atomics,atomics)
 	$(call run_example_web,OPFS,opfs)
 
-test-example-web-jspi:
+test-example-web-jspi: $(WASM_OUT)
 	$(call setup_example_web)
 	$(call run_example_web,JSPI,jspi)
 
-test-example-web-atomics:
+test-example-web-atomics: $(WASM_OUT)
 	$(call setup_example_web)
 	$(call run_example_web,Atomics,atomics)
 
-test-example-web-opfs:
+test-example-web-opfs: $(WASM_OUT)
 	$(call setup_example_web)
 	$(call run_example_web,OPFS,opfs)
 

@@ -133,7 +133,7 @@ void main() {
     final doc = await pdf.open(_src(minimalPdf));
     await expectLater(
       doc.planSplitByBookmarks(),
-      throwsA(isA<PdfEngineError>()
+      throwsA(isA<PdfInvalidArgument>()
           .having((e) => e.message, 'message', contains('no bookmarks'))),
       reason: 'the engine refuses with an actionable message — '
           'inventing chapter splits would be worse',
@@ -277,9 +277,10 @@ void main() {
     final encBytes = encSink.takeBytes();
 
     // The lock is real: no password / wrong password must refuse.
-    await expectLater(pdf.open(_src(encBytes)), throwsA(isA<PdfEngineError>()));
+    await expectLater(
+        pdf.open(_src(encBytes)), throwsA(isA<PdfPasswordRequired>()));
     await expectLater(pdf.open(_src(encBytes), password: 'wrong'),
-        throwsA(isA<PdfEngineError>()));
+        throwsA(isA<PdfWrongPassword>()));
 
     final doc1 = await pdf.open(_src(encBytes), password: 'user-pw');
     expect(doc1.isEncrypted, isTrue);

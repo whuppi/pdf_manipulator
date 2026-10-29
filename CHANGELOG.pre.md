@@ -194,6 +194,8 @@ CONTENT RULES (never change)
 - Fixed `eraseRegions` and `addRedaction` acting on the wrong rectangle — the width and height were passed where the far corner was expected, so every region past the origin was off by its own size
 - Fixed `addStamp` losing the stamp on save when its rectangle sits high on the page — the same size-for-corner mix-up placed the label above the page edge; the builder's `image` was drawn at the wrong size for the same reason
 - Fixed `mergeFrom` dropping the merged document's form fields — the pages arrived but no `/Fields` entry pointed at them, so they could not be listed or filled; the AcroForm is carried across now
+- Fixed `compress` and full-rewrite saves taking 25 seconds on a 3.8 MB file whose object streams hold large arrays, and 460 ms on a 10-page file of 3,500 objects — each object read more of the file than it needed, and the first now takes half a second, the second 60 ms
+- Fixed an LZW stream decoding to wrong bytes without an error when it sets `/EarlyChange 0` or needs the other code-width switch — `/EarlyChange` is read now (default 1), and LZW files decode about twice as fast
 - Fixed an embedded file's MIME type being written as `text#232Fplain` — the solidus was escaped twice
 - Vendored engines synced upstream: pdf_oxide v0.3.73 → v0.3.78 and office_oxide v0.1.3 → v0.1.11 (extraction, rendering, table-structure and legacy `.doc` fixes)
 
