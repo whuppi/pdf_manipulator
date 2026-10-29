@@ -118,6 +118,7 @@ CONTENT RULES (never change)
 - Changed `mergeFrom` to keep the merged file open until the editor is disposed and copy its objects one at a time at save: merging a 10,000-page file takes under 16 MB of engine memory and about 2 seconds, where it took 163 MB and minutes
 - Added rotation, media box and crop box edits on merged pages; stamps, watermarks, erases and redactions on a merged page throw `PdfUnsupported`
 - Changed page edits to work on merged pages: `deletePage`, `movePage` and `selectPages` take a merged page like any other, where they threw `PdfUnsupported` on a document with merged pages
+- Changed reading a source on native platforms to fetch it in 64 KB pieces instead of one round trip per read: compressing a 70-page scan takes 18 ms, where it took 29 ms
 - Changed `PdfDoc.extract` of all pages to stream one page at a time from the engine: extracting text from a 10,000-page file takes under 16 MB of engine memory, where its first call held 281 MB
 - Changed the web lanes to retire a worker after a job that grew its memory past 256 MB, once nothing still needs it; WebAssembly memory never shrinks, so one large job no longer leaves a large worker behind
 - Changed `PdfDoc.render` and `extractImages` to deliver each page as the engine produces it, where they held every page until the last; cancelling the subscription stops the engine
