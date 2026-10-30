@@ -1346,11 +1346,20 @@ void registerEditorTests(Pdf Function() createPdf) {
     }, timeout: t(1));
 
     test(
-      'reduceImages never re-encodes a JPEG it does not downsample',
+      'reduceImages never re-encodes a JPEG it does not downsample unless asked',
       () async {
         final pdf = createPdf();
         final editor = await pdf.edit(src(fImagesJpeg));
-        final report = await editor.reduceImages(PdfImagePolicy.screen);
+        // screen's resolutions without its recompressJpeg.
+        final report = await editor.reduceImages(
+          const PdfImagePolicy(
+            colorPpi: 72,
+            grayPpi: 72,
+            monoPpi: 300,
+            jpegQuality: 60,
+            convertCmykToRgb: true,
+          ),
+        );
         expect(report.images, hasLength(2));
         final kept = report.images.firstWhere(
           (row) => row.action == PdfImageAction.kept,
@@ -1787,7 +1796,15 @@ void registerEditorTests(Pdf Function() createPdf) {
       expect(report.changed, 0);
       for (final row in report.images) {
         expect(row.action, PdfImageAction.kept);
-        expect(row.keepReason, PdfImageKeepReason.withinResolution);
+        // screen re-encodes stored JPEGs, so a JPEG it already wrote is
+        // judged and found optimal rather than skipped by resolution.
+        expect(
+          row.keepReason,
+          isIn([
+            PdfImageKeepReason.withinResolution,
+            PdfImageKeepReason.alreadyOptimal,
+          ]),
+        );
       }
       await reopened.dispose();
     }, timeout: t(1));
