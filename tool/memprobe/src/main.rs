@@ -30,6 +30,7 @@ fn limit(op: &str, input: &str) -> usize {
         ("merge", "many" | "huge") => 16 * MIB,
         ("extractAfterMerge", "many") => 16 * MIB,
         ("extractAll", "many" | "huge") => 16 * MIB,
+        ("fullRewriteSave", "encrypted") => 16 * MIB,
         _ => panic!("no memory limit for {op} on {input}: add one to limit()"),
     }
 }
@@ -53,10 +54,13 @@ fn run() -> Result<(), String> {
     eprintln!("memprobe: generating inputs ...");
     generate_many(&many)?;
     generate_huge(&huge)?;
+    let encrypted = dir.join("encrypted.pdf");
+    generate_encrypted(&huge, &encrypted)?;
     eprintln!(
-        "memprobe: inputs ready: many={} huge={} bytes",
+        "memprobe: inputs ready: many={} huge={} encrypted={} bytes",
         std::fs::metadata(&many).map(|m| m.len()).unwrap_or(0),
         std::fs::metadata(&huge).map(|m| m.len()).unwrap_or(0),
+        std::fs::metadata(&encrypted).map(|m| m.len()).unwrap_or(0),
     );
 
     let (cert, key) = credentials();
@@ -225,6 +229,25 @@ fn run() -> Result<(), String> {
             });
         }
     }
+
+    // The encrypted source: every stream is decrypted while it is copied, so
+    // the save holds the same few buffers as the plain one.
+    step(&failed, "fullRewriteSave", "encrypted", limit("fullRewriteSave", "encrypted"), |st| {
+        let resp = call(st, re("editorOpen"), vec![source(&encrypted)], vec![])?;
+        let hid = resp.i32("handleId").expect("editorOpen returns handleId");
+        call(
+            st,
+            re("editorMutate")
+                .put("handleId", i32v(hid))
+                .put("editOp", strv("rotateAll"))
+                .put("degrees", i32v(90)),
+            vec![],
+            vec![],
+        )?;
+        save_full(st, hid, &open_sink("encrypted", "full"))?;
+        dispose(st, hid);
+        Ok(())
+    });
 
     let _ = std::fs::remove_dir_all(&dir);
     if failed.get() {
@@ -501,6 +524,24 @@ fn generate_huge(path: &Path) -> Result<(), String> {
     out.put(&format!("startxref\n{xref_at}\n%%EOF\n"))?;
     out.flush()?;
     Ok(())
+}
+
+/// `huge`, AES-256 encrypted under an empty user password: the same 60 MiB
+/// image stream, stored as ciphertext. Built whole in memory, which is
+/// outside the measured steps.
+fn generate_encrypted(huge: &Path, path: &Path) -> Result<(), String> {
+    use pdf_oxide::editor::{DocumentEditor, EncryptionAlgorithm, EncryptionConfig, SaveOptions};
+
+    let plain = std::fs::read(huge).map_err(|e| format!("encrypted: {e}"))?;
+    let mut editor = DocumentEditor::from_bytes(plain).map_err(|e| format!("encrypted: {e}"))?;
+    let config = EncryptionConfig::new("", "owner").with_algorithm(EncryptionAlgorithm::Aes256);
+    let bytes = editor
+        .save_to_bytes_with_options(SaveOptions {
+            compress: false,
+            ..SaveOptions::with_encryption(config)
+        })
+        .map_err(|e| format!("encrypted: {e}"))?;
+    std::fs::write(path, bytes).map_err(|e| format!("encrypted: {e}"))
 }
 
 /// The PEM text between the fixture's markers — the key material keeps

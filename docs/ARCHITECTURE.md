@@ -31,9 +31,11 @@ Eight load-bearing guarantees. Every architectural decision serves one.
    `readAt` / `write`, proving the *transport* is O(1). Rust-internal peak
    memory is measured per op by `make test-memory`; see **The rule** below.
 
-6. **Upstream untouched.** `ffi.rs` and `wasm.rs` — upstream's own
-   binding surfaces — are never called and never modified. Upstream
-   merges stay clean.
+6. **Upstream bindings uncalled.** `ffi.rs` and `wasm.rs` — upstream's
+   own binding surfaces — are never called by the host, and are patched
+   only where the engine's own types force it (a type they use changed
+   shape), between markers, so every feature still builds. Upstream merges
+   stay clean.
 
 7. **Lanes, not pools.** Every instance owns isolated lanes — a
    detached Rust thread with its own engine state (native) or a Web
@@ -76,8 +78,9 @@ the main isolate — zero routing decisions, zero PDF knowledge.
 **Layer 4 — Rust** (`vendor/pdf_oxide/src/host/`, entirely ours) — one entry
 point (`bridge_api.rs`, cfg-gated for native `extern "C"` and WASM
 `#[wasm_bindgen]`) over a binary parser and one typed dispatch function
-per op. Upstream's own `ffi.rs` / `wasm.rs` are never called or modified
-(see **Upstream patches**).
+per op. Upstream's own `ffi.rs` / `wasm.rs` are never called by the host and
+are patched only where the engine's own types force it (see **Upstream
+patches**).
 
 ---
 
@@ -327,8 +330,8 @@ vendor/pdf_oxide/src/
 │       └── js_writer.rs                    ← Write via host_write_chunk
 │
 ├── compliance/fonts/                       ← 12 Liberation TTF files (SIL OFL)
-├── ffi.rs                                  ← UPSTREAM (untouched)
-├── wasm.rs                                 ← UPSTREAM (untouched)
+├── ffi.rs                                  ← UPSTREAM (never called; patched only where the engine's types force it)
+├── wasm.rs                                 ← UPSTREAM (never called; patched only where the engine's types force it)
 └── (engine: document.rs, editor/, renderer/, search/, signatures/, ...)
 ```
 
@@ -387,9 +390,13 @@ on the Dart side. Test guards enforce the chunk limits mechanically
 claim, measured by `make test-memory` (tool/memprobe) on a 10,000-page
 input and on a page holding one 60 MB stream: open, extractPages, the
 full and the incremental save, sign and compress stay under 16 MiB on
-both. The engine reads through an object cache bounded at 8 MiB, copies
-unchanged streams in 64KB pieces, and reads page facts without keeping
-the page dictionaries. Merge stays under 16 MiB too: it keeps the merged
+both, and so does the full save of a 60 MB stream encrypted with AES-256.
+The engine reads through an object cache bounded at 8 MiB, copies
+unchanged streams in 64KB pieces (an encrypted stream is decrypted in the
+same pieces), and reads page facts without keeping the page dictionaries.
+A stream of a document is a window onto the document's bytes that reads
+itself; only the listed whole reads (`engine_proofs/whole_reads.txt`) hold a
+stream's data in one buffer. Merge stays under 16 MiB too: it keeps the merged
 document open with its own 1 MiB object cache, records only the ids of the
 objects each page reaches, and the save writes every merged object one at a
 time (streams in 64KB pieces) from that document.
@@ -1071,7 +1078,12 @@ this table summarizes what each patched file carries and why.
 |---|---|
 | `Cargo.toml` | `native-bridge` deps + `office_oxide` as path dependency |
 | `lib.rs` | The shared widget-appearance regeneration helpers, the `pdfa` gate, the two `public-api` gates, `pub mod host;` |
-| `document.rs` | External reader variant + `from_external_reader()` (reads the source through a 64KB window; parsed objects live in a cache bounded at 8 MiB), info/encryption/permissions accessors, `collect_refs_of()` (zero-clone GC), streaming `to_docx/pptx/xlsx_writer_flow()`, scan-all `/Subtype` Form detection, raw source access for the incremental save (`source_len`, `read_source_at`, `header_offset`, `xref_repaired`, `object_generation`) |
+| `document.rs` | External reader variant + `from_external_reader()` (reads the source through a 64KB window; parsed objects live in a cache bounded at 8 MiB), info/encryption/permissions accessors, `collect_refs_of()` (zero-clone GC), streaming `to_docx/pptx/xlsx_writer_flow()`, scan-all `/Subtype` Form detection, raw source access for the incremental save (`source_len`, `read_source_at`, `header_offset`, `xref_repaired`, `object_generation`), the loader that reads an object through a growing window (a stream is its dictionary and an extent, `/Length` verified against `endstream` or repaired by a windowed scan, no size limit), `stream_head()` over `load_object()`, `reopen()` and `source_bytes_whole()` in place of the `source_bytes` field |
+| `object.rs` + `objstm.rs` | `StreamBody::{Inline, Extent}`: an `Extent` is a window onto its document's bytes (`Source`) that decrypts itself when read (`raw_reader`, `read_whole_raw`, `decrypted_len`); `decode_stream_data()` is the one named whole read of decoded bytes; `parse_object_stream` and `decode_object_stream` take no decryption closure |
+| `encryption/stream.rs` + `encryption/handler.rs` + `encryption/write_handler.rs` + `encryption/rc4.rs` + `crypto/` | `Decrypt` and `Encrypt` adapters (AES-CBC holding back the last block, RC4 as a keystream through the provider's new `rc4_stream`, which a FIPS provider refuses as it refuses `rc4`), `cipher_for` / `stream_cipher` (an object's key, no data) |
+| `writer/object_serializer.rs` | `write_indirect`, `write_indirect_encrypted` and `write_stream_open`: an extent body is written in 64 KiB pieces, `/Length` counted from the decrypted length |
+| `source.rs` | Fork-only: `Source` (the reader and the encryption handler behind one lock each), `SourceRead`, `SourceCursor`, `Window`, `Counter` |
+
 | `editor/document_editor.rs` | State accessors, `merge_from_reader()` + shared merge core, zero-clone GC BFS that follows the save's page-prune plan (`host/page_prune.rs`: dropped pages, inner `/Pages` nodes and the dropped pages' own annotations are never written, kept pages are re-parented to the root with their inherited attributes, and destinations, outline items, links, `/OpenAction` and form fields that pointed at a dropped page are removed), `write_full_to_writer(PositionedWrite)` (function-wide streaming offsets), per-save page-ref cache, scoped destructive erase (`erase_regions_destructive`), appearance generation for AP-less annotation types, §12.5.5 appearance placement, `add_page_annotation()`, `all_media_boxes()`, image modifications applied in page space (`rewrite_content_stream_with_image_mods` composes with the enclosing CTM, matching `get_page_images`), `staged_or_source_object()` so the resource walk writes a staged XObject/ExtGState instead of the source copy (the sweep skips ids already written), form field properties reach the saved file (`flush_form_fields_to_modified_objects` writes every dirty wrapper's `/TU`, `/Rect`, `/MaxLen`, `/Q`, `/Ff`, `/MK`, `/BS`, `/DA`, not only `/V`) and `remove_deleted_form_fields_from_acroform` drops removed fields from `/Fields` and `/Annots`, `incremental_refusal()` / `incremental_value_only()` / `incremental_objects()` (what an append can carry, and the objects it appends), and the full-rewrite sweep never copies a source object stream or xref stream |
 | `extractors/images.rs` | `PdfImageHandle::object_ref()` and `ctm()` — the identity and composed placement the host image reducer groups and measures by |
 | `encryption/mod.rs` + `encryption/algorithms.rs` | Raw file key exposed to the writer (`file_key`, `build_with_key`) so streams encrypt with the key the dict advertises; PDF 2.0 Algorithm 10 (`/Perms` for R6) |
