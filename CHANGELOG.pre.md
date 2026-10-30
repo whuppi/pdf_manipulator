@@ -133,6 +133,7 @@ CONTENT RULES (never change)
 - Changed `compress` to write one copy of identical images, ICC profiles and embedded fonts
 - Added `PdfSaveOptions.fullRewrite(pruneResources:)`
 - Changed `compress` to drop the fonts, images, colour spaces and other resources a page lists but no content of it uses; a resource any content might use, or whose content cannot be fully read, is kept
+- Fixed text extraction of a page with many separate text runs on one line taking minutes to hours — a million characters now extract in about three seconds
 - Changed `PdfImagePolicy.screen` to re-encode a stored JPEG at its quality even when the image is not downsampled (`recompressJpeg: true`); `ebook` and `print` still keep stored JPEGs
 - Changed `PdfDoc.verifySignatures` to check each signature's digest and signer key, where it returned `false` for every document; `PdfSignatureInfo` has `isValid`, `coversWholeDocument` and `signingTime` filled
 - Fixed an empty input to `merge` or any other multi-source op shifting every source after it, so the op read the wrong documents — an empty input now throws `PdfCorrupted`
