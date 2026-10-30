@@ -1749,6 +1749,32 @@ void registerEditorTests(Pdf Function() createPdf) {
       await again.dispose();
     }, timeout: t(1));
 
+    test('screen re-encodes a stored JPEG, ebook keeps it', () async {
+      // fImagesJpeg page 0: a quality-90 JPEG drawn at 72 ppi, which
+      // neither preset downsamples.
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(fImagesJpeg));
+      final screen = await editor.reduceImages(PdfImagePolicy.screen);
+      final page0 = screen.images.first;
+      expect(page0.action, PdfImageAction.recompressed, reason: '$page0');
+      expect(page0.bytesAfter, lessThan(page0.bytesBefore));
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final ebook = await pdf.edit(src(fImagesJpeg));
+      expect(
+        (await ebook.reduceImages(PdfImagePolicy.ebook)).images.first.action,
+        PdfImageAction.kept,
+      );
+      await ebook.dispose();
+      final again = await pdf.edit(src(sink.takeBytes()));
+      expect(
+        (await again.reduceImages(PdfImagePolicy.screen)).images.first.action,
+        PdfImageAction.kept,
+      );
+      await again.dispose();
+    }, timeout: t(1));
+
     test('reduceImages is idempotent', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(fImagesHires));

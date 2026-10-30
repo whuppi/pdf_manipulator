@@ -26,14 +26,16 @@ class PdfImagePolicy {
     this.recompressJpeg = false,
   });
 
-  /// On-screen reading: 72 ppi colour and gray, 300 ppi bilevel,
-  /// JPEG quality 60, CMYK converted to RGB.
+  /// On-screen reading, smallest file: 72 ppi colour and gray, 300 ppi
+  /// bilevel, JPEG quality 60, CMYK converted to RGB, and a stored JPEG
+  /// re-encoded at quality 60 even when it is not downsampled.
   static const screen = PdfImagePolicy(
     colorPpi: 72,
     grayPpi: 72,
     monoPpi: 300,
     jpegQuality: 60,
     convertCmykToRgb: true,
+    recompressJpeg: true,
   );
 
   /// E-readers and tablets: 150 ppi colour and gray, 300 ppi bilevel,

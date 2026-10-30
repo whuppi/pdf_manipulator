@@ -87,6 +87,7 @@ void main() {
       expect(screen['monoPpi'], 300);
       expect(screen['downsampleThreshold'], 1.5);
       expect(screen['convertCmykToRgb'], isTrue);
+      expect(screen['recompressJpeg'], isTrue);
     });
   });
 
