@@ -30,6 +30,8 @@ fn limit(op: &str, input: &str) -> usize {
         ("merge", "many" | "huge") => 16 * MIB,
         ("extractAfterMerge", "many") => 16 * MIB,
         ("extractAll", "many" | "huge") => 16 * MIB,
+        // The text is read as operators, one token at a time.
+        ("extractAll", "content-fl" | "content-a85" | "content-lzw" | "forms") => 16 * MIB,
         ("fullRewriteSave", "encrypted") => 16 * MIB,
         // The resource prune reads every content once, as operators.
         ("compress", "content-fl" | "content-a85" | "content-lzw" | "forms" | "encrypted") => {
@@ -267,8 +269,8 @@ fn run() -> Result<(), String> {
     });
 
     // compress of the sources the resource prune reads: one page of 96 MiB
-    // of text and inline images in each of three encodings, 2,000 forms of
-    // 64 KiB each, and the encrypted source.
+    // of path content and inline images in each of three encodings, 2,000
+    // forms of 64 KiB each, and the encrypted source.
     let compress_inputs: Vec<(&str, &Path)> = contents
         .iter()
         .map(|(name, path)| (*name, path.as_path()))
@@ -280,6 +282,31 @@ fn run() -> Result<(), String> {
             let hid = resp.i32("handleId").expect("editorOpen returns handleId");
             save_full(st, hid, &open_sink(name, "compressed"), true)?;
             dispose(st, hid);
+            Ok(())
+        });
+    }
+
+    // extractAll of the same sources: pages of a few KiB of text among 96 MiB
+    // of path content and 2,000 forms, read as operators and never as one
+    // page's bytes.
+    let extract_inputs: Vec<(&str, &Path)> = contents
+        .iter()
+        .map(|(name, path)| (*name, path.as_path()))
+        .chain([("forms", forms.as_path())])
+        .collect();
+    for (name, path) in extract_inputs {
+        step(&failed, "extractAll", name, limit("extractAll", name), |st| {
+            let resp = call(st, re("open"), vec![source(path)], vec![])?;
+            let hid = resp.i32("handleId").expect("open returns handleId");
+            call(
+                st,
+                re("extract")
+                    .put("handleId", i32v(hid))
+                    .put("format", strv("plainText")),
+                vec![],
+                vec![sink(&open_sink(name, "extractall"))],
+            )?;
+            call(st, re("docDispose").put("handleId", i32v(hid)), vec![], vec![])?;
             Ok(())
         });
     }
@@ -413,6 +440,27 @@ impl Xorshift {
                 x >>= 4;
                 remaining -= 1;
             }
+        }
+    }
+
+    /// Appends line segments (`x y m x y l n`) to `buf` until it holds at
+    /// least `target` bytes: path content that Flate cannot shrink, that shows
+    /// no text and paints nothing, so no path is left for table detection to
+    /// keep.
+    fn fill_paths(&mut self, buf: &mut String, target: usize) {
+        while buf.len() < target {
+            let n = self.next();
+            buf.push_str(&format!(
+                "{}.{} {}.{} m {}.{} {}.{} l n\n",
+                n & 0x3FF,
+                (n >> 10) & 0x3F,
+                (n >> 16) & 0x3FF,
+                (n >> 26) & 0x3F,
+                (n >> 32) & 0x3FF,
+                (n >> 42) & 0x3F,
+                (n >> 48) & 0x3FF,
+                (n >> 58) & 0x3F,
+            ));
         }
     }
 
@@ -652,8 +700,10 @@ impl ContentFilter {
 /// Decoded bytes of the `content` input's one content stream.
 const CONTENT_BYTES: usize = 96 * MIB;
 
-/// The decoded content, produced as it is read: sections of `(<hex>) Tj`
-/// lines, each followed by an inline image whose raw data holds `\nEI\n`.
+/// The decoded content, produced as it is read: a few KiB of `(<hex>) Tj`
+/// text first, then sections of line segments, each followed by an inline
+/// image whose raw data holds `\nEI\n`. The page shows a few KiB of text, so
+/// extracting it holds that text and not the 96 MiB the stream is.
 struct ContentText {
     rng: Xorshift,
     produced: usize,
@@ -667,13 +717,19 @@ impl ContentText {
     }
 
     fn next_section(&mut self) {
-        let mut text = String::from("BT /F1 10 Tf 10 10 Td\n");
-        for _ in 0..40 {
-            text.push('(');
-            self.rng.fill_hex(&mut text, 96);
-            text.push_str(") Tj\n");
+        let mut text = String::new();
+        if self.produced == 0 {
+            text.push_str("BT /F1 10 Tf 10 10 Td\n");
+            for _ in 0..40 {
+                text.push('(');
+                self.rng.fill_hex(&mut text, 96);
+                text.push_str(") Tj\n");
+            }
+            text.push_str("ET\n");
+        } else {
+            self.rng.fill_paths(&mut text, 4096);
         }
-        text.push_str("ET q BI /W 8 /H 8 /BPC 8 /CS /G ID ");
+        text.push_str("q BI /W 8 /H 8 /BPC 8 /CS /G ID ");
         let mut image = [0u8; 64];
         self.rng.fill_bytes(&mut image);
         image[20..24].copy_from_slice(b"\nEI\n");
@@ -809,8 +865,10 @@ fn generate_content(path: &Path, filter: ContentFilter) -> Result<(), String> {
     std::fs::remove_file(&body_path).map_err(io)
 }
 
-/// A one-page PDF that paints 2,000 forms of 64 KiB, each with resources of
-/// its own that list a font its text does not use.
+/// A one-page PDF that paints 2,000 forms of 64 KiB of path content, each
+/// with three two-character words of text (a character costs the extractor
+/// a record of a few hundred bytes, so the page's text stays small) and
+/// resources of its own that list a font its text does not use.
 fn generate_forms(path: &Path) -> Result<(), String> {
     const FORMS: usize = 2000;
     const FIRST_FORM: usize = 7;
@@ -836,12 +894,13 @@ fn generate_forms(path: &Path) -> Result<(), String> {
     let mut rng = Xorshift::new(0xF0F0);
     for form in 0..FORMS {
         let mut text = String::from("BT /F1 10 Tf 10 10 Td\n");
-        for _ in 0..635 {
+        for _ in 0..3 {
             text.push('(');
-            rng.fill_hex(&mut text, 96);
+            rng.fill_hex(&mut text, 2);
             text.push_str(") Tj\n");
         }
         text.push_str("ET\n");
+        rng.fill_paths(&mut text, 64 * 1024);
         out.stream(
             FIRST_FORM + form,
             "/Type /XObject /Subtype /Form /BBox [0 0 612 792] \
