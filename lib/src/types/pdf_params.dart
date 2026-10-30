@@ -171,13 +171,15 @@ sealed class PdfSaveOptions {
   /// FlateDecode is deflated again at [deflateLevel] and written so only when
   /// that is smaller than the bytes the source held. With [mergeDuplicates]
   /// the save writes one copy of each set of identical images, ICC profiles
-  /// and embedded fonts.
+  /// and embedded fonts. With [pruneResources] the save drops the entries of
+  /// each page's resource dictionaries that no content names.
   const factory PdfSaveOptions.fullRewrite({
     bool compress,
     bool garbageCollect,
     bool objectStreams,
     int deflateLevel,
     bool mergeDuplicates,
+    bool pruneResources,
     PdfEncryption encryption,
   }) = PdfSaveFullRewrite;
 
@@ -205,6 +207,7 @@ class PdfSaveFullRewrite extends PdfSaveOptions {
     this.objectStreams = true,
     this.deflateLevel = 9,
     this.mergeDuplicates = false,
+    this.pruneResources = false,
     this.encryption = const PdfEncryption.keep(),
   });
 
@@ -230,6 +233,15 @@ class PdfSaveFullRewrite extends PdfSaveOptions {
   /// `/OC`, `/StructParent` or `/StructParents` is never merged. A stream of
   /// an encrypted source is merged only when its data is at most 256 KiB.
   final bool mergeDuplicates;
+
+  /// Whether to drop, from each resource dictionary of a kept or merged
+  /// page, the fonts, images, color spaces, graphics states, patterns,
+  /// shadings and property lists that no content using the dictionary
+  /// names, and with [garbageCollect] the objects only those entries
+  /// reached. A dictionary whose content cannot be read in full, or that
+  /// another object also points at, stays whole, and so do the resources of
+  /// a page the save edits. The form's default resources are never touched.
+  final bool pruneResources;
 
   /// Encryption intent for the output.
   final PdfEncryption encryption;

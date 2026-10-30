@@ -215,6 +215,48 @@ void registerSugarTests(Pdf Function() createPdf) {
       expect(merging.takeBytes().length, lessThan(aloneLength * 1.3));
     }, timeout: t(2));
 
+    test('compress drops the fonts and images no content uses', () async {
+      final pdf = createPdf();
+      final sink = TestSink();
+      await pdf.compress(
+        src(unusedResourcesPdf),
+        sink,
+        images: PdfImagePolicy.lossless,
+      );
+      final pruned = sink.takeBytes();
+
+      final editor = await pdf.edit(src(unusedResourcesPdf));
+      final keptSink = TestSink();
+      await editor.save(
+        keptSink,
+        options: const PdfSaveOptions.fullRewrite(
+          mergeDuplicates: true,
+          pruneResources: false,
+        ),
+      );
+      await editor.dispose();
+      final kept = keptSink.takeBytes();
+      // The unused image alone is 16 KiB of bytes that do not deflate.
+      expect(pruned.length, lessThan(kept.length - 16 * 1024));
+
+      final before = await pdf.open(src(unusedResourcesPdf));
+      final after = await pdf.open(src(pruned));
+      final text = await after.extract(pages: const PdfPages.all());
+      expect(text, await before.extract(pages: const PdfPages.all()));
+      expect(text, contains(unusedResourcesMarker));
+      final expected = await before
+          .extractImages(pages: const PdfPages.all())
+          .toList();
+      final actual = await after
+          .extractImages(pages: const PdfPages.all())
+          .toList();
+      expect(actual, hasLength(expected.length));
+      expect(actual.single.width, expected.single.width);
+      expect(actual.single.data, expected.single.data);
+      await before.dispose();
+      await after.dispose();
+    }, timeout: t(2));
+
     test('compress shrinks a source that deflates', () async {
       final pdf = createPdf();
       final source = repeatedStreamPdf(5000);

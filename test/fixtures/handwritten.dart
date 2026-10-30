@@ -186,6 +186,40 @@ Uint8List _imageAndFontPdf() {
   ]);
 }
 
+/// The text drawn on the page of [unusedResourcesPdf].
+const unusedResourcesMarker = 'USEDRESOURCES PAGE';
+
+/// One page that draws text in Helvetica and one 128×128 gray image, and
+/// whose resources also list an embedded TrueType font and a second image of
+/// pseudo-random bytes (they do not deflate) that no content uses.
+final Uint8List unusedResourcesPdf = _unusedResourcesPdf();
+
+Uint8List _unusedResourcesPdf() {
+  final random = Random(23);
+  String pixels() => String.fromCharCodes(
+    List.generate(128 * 128, (_) => random.nextInt(256)),
+  );
+  final font = String.fromCharCodes(subsetCjkFallbackFont);
+  const image =
+      '/Type /XObject /Subtype /Image /Width 128 /Height 128 '
+      '/ColorSpace /DeviceGray /BitsPerComponent 8';
+  return _offsetPdf([
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R /F2 6 0 R >> /XObject << /Im1 8 0 R /Im2 10 0 R >> >> /Contents 4 0 R >>',
+    _streamBody(
+      '',
+      'BT /F1 18 Tf 72 780 Td ($unusedResourcesMarker) Tj ET q 200 0 0 200 72 500 cm /Im1 Do Q',
+    ),
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    '<< /Type /Font /Subtype /TrueType /BaseFont /UnusedFace /FontDescriptor 7 0 R >>',
+    '<< /Type /FontDescriptor /FontName /UnusedFace /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 9 0 R >>',
+    _streamBody(image, pixels()),
+    _streamBody('/Length1 ${font.length}', font),
+    _streamBody(image, pixels()),
+  ]);
+}
+
 /// Minimal valid PDF — US Letter page (612×792 points).
 final Uint8List letterPdf = _offsetPdf([
   // 1: catalog

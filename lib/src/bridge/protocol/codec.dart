@@ -507,6 +507,7 @@ Map<String, Object?> encodeSaveArgs(PdfSaveOptions options) {
       :final objectStreams,
       :final deflateLevel,
       :final mergeDuplicates,
+      :final pruneResources,
       :final encryption,
     ) =>
       {
@@ -516,6 +517,7 @@ Map<String, Object?> encodeSaveArgs(PdfSaveOptions options) {
         'objectStreams': objectStreams,
         'deflateLevel': _checkedDeflateLevel(deflateLevel),
         'mergeDuplicates': mergeDuplicates,
+        'pruneResources': pruneResources,
         ..._encodeEncryption(encryption),
       },
     PdfSaveIncremental() => {

@@ -31,6 +31,10 @@ fn limit(op: &str, input: &str) -> usize {
         ("extractAfterMerge", "many") => 16 * MIB,
         ("extractAll", "many" | "huge") => 16 * MIB,
         ("fullRewriteSave", "encrypted") => 16 * MIB,
+        // The resource prune reads every content once, as operators.
+        ("compress", "content-fl" | "content-a85" | "content-lzw" | "forms" | "encrypted") => {
+            16 * MIB
+        },
         _ => panic!("no memory limit for {op} on {input}: add one to limit()"),
     }
 }
@@ -56,11 +60,24 @@ fn run() -> Result<(), String> {
     generate_huge(&huge)?;
     let encrypted = dir.join("encrypted.pdf");
     generate_encrypted(&huge, &encrypted)?;
+    let mut contents = Vec::new();
+    for (name, filter) in [
+        ("content-fl", ContentFilter::Flate),
+        ("content-a85", ContentFilter::Ascii85Flate),
+        ("content-lzw", ContentFilter::Lzw),
+    ] {
+        let path = dir.join(format!("{name}.pdf"));
+        generate_content(&path, filter)?;
+        contents.push((name, path));
+    }
+    let forms = dir.join("forms.pdf");
+    generate_forms(&forms)?;
     eprintln!(
-        "memprobe: inputs ready: many={} huge={} encrypted={} bytes",
+        "memprobe: inputs ready: many={} huge={} encrypted={} forms={} bytes",
         std::fs::metadata(&many).map(|m| m.len()).unwrap_or(0),
         std::fs::metadata(&huge).map(|m| m.len()).unwrap_or(0),
         std::fs::metadata(&encrypted).map(|m| m.len()).unwrap_or(0),
+        std::fs::metadata(&forms).map(|m| m.len()).unwrap_or(0),
     );
 
     let (cert, key) = credentials();
@@ -125,7 +142,7 @@ fn run() -> Result<(), String> {
                 vec![],
                 vec![],
             )?;
-            save_full(st, hid, &open_sink(name, "full"))?;
+            save_full(st, hid, &open_sink(name, "full"), false)?;
             dispose(st, hid);
             Ok(())
         });
@@ -176,7 +193,7 @@ fn run() -> Result<(), String> {
         step(&failed, "compress", name, limit("compress", name), |st| {
             let resp = call(st, re("editorOpen"), vec![source(path)], vec![])?;
             let hid = resp.i32("handleId").expect("editorOpen returns handleId");
-            save_full(st, hid, &open_sink(name, "compressed"))?;
+            save_full(st, hid, &open_sink(name, "compressed"), true)?;
             dispose(st, hid);
             Ok(())
         });
@@ -191,7 +208,7 @@ fn run() -> Result<(), String> {
                 vec![source(path)],
                 vec![],
             )?;
-            save_full(st, hid, &open_sink(name, "merged"))?;
+            save_full(st, hid, &open_sink(name, "merged"), false)?;
             dispose(st, hid);
             Ok(())
         });
@@ -244,10 +261,28 @@ fn run() -> Result<(), String> {
             vec![],
             vec![],
         )?;
-        save_full(st, hid, &open_sink("encrypted", "full"))?;
+        save_full(st, hid, &open_sink("encrypted", "full"), false)?;
         dispose(st, hid);
         Ok(())
     });
+
+    // compress of the sources the resource prune reads: one page of 96 MiB
+    // of text and inline images in each of three encodings, 2,000 forms of
+    // 64 KiB each, and the encrypted source.
+    let compress_inputs: Vec<(&str, &Path)> = contents
+        .iter()
+        .map(|(name, path)| (*name, path.as_path()))
+        .chain([("forms", forms.as_path()), ("encrypted", encrypted.as_path())])
+        .collect();
+    for (name, path) in compress_inputs {
+        step(&failed, "compress", name, limit("compress", name), |st| {
+            let resp = call(st, re("editorOpen"), vec![source(path)], vec![])?;
+            let hid = resp.i32("handleId").expect("editorOpen returns handleId");
+            save_full(st, hid, &open_sink(name, "compressed"), true)?;
+            dispose(st, hid);
+            Ok(())
+        });
+    }
 
     let _ = std::fs::remove_dir_all(&dir);
     if failed.get() {
@@ -289,11 +324,13 @@ fn call(
     wire::parse_response(&resp)
 }
 
-/// Full-rewrite save of an open editor to `sink` (compress + GC).
+/// Full-rewrite save of an open editor to `sink` (compress + GC), dropping
+/// the unused resource entries when `prune` is set.
 fn save_full(
     state: &mut pdf_oxide::host::lane_state::LaneState,
     hid: i32,
     sink_path: &Path,
+    prune: bool,
 ) -> Result<(), String> {
     call(
         state,
@@ -301,6 +338,7 @@ fn save_full(
             .put("handleId", i32v(hid))
             .put("compress", wire::Value::Bool(true))
             .put("garbageCollect", wire::Value::Bool(true))
+            .put("pruneResources", wire::Value::Bool(prune))
             .put("saveMode", i32v(0))
             .put("encryptMode", i32v(0)),
         vec![],
@@ -524,6 +562,298 @@ fn generate_huge(path: &Path) -> Result<(), String> {
     out.put(&format!("startxref\n{xref_at}\n%%EOF\n"))?;
     out.flush()?;
     Ok(())
+}
+
+/// A hand-written PDF: objects are marked as they start, and the table is
+/// written from the marks.
+struct PdfOut {
+    w: std::io::BufWriter<File>,
+    at: u64,
+    offsets: Vec<u64>,
+}
+
+impl PdfOut {
+    fn create(path: &Path) -> Result<Self, String> {
+        let file = File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut out = Self { w: std::io::BufWriter::new(file), at: 0, offsets: vec![0] };
+        out.put("%PDF-1.4\n")?;
+        Ok(out)
+    }
+
+    fn put(&mut self, s: &str) -> Result<(), String> {
+        self.w.write_all(s.as_bytes()).map_err(|e| format!("pdf: {e}"))?;
+        self.at += s.len() as u64;
+        Ok(())
+    }
+
+    /// Starts object `id`, which must be the next one.
+    fn begin(&mut self, id: usize) -> Result<(), String> {
+        assert_eq!(id, self.offsets.len(), "objects are written in order");
+        self.offsets.push(self.at);
+        self.put(&format!("{id} 0 obj\n"))
+    }
+
+    fn object(&mut self, id: usize, body: &str) -> Result<(), String> {
+        self.begin(id)?;
+        self.put(body)?;
+        self.put("\nendobj\n")
+    }
+
+    /// A stream object whose data is `data`, from a reader of `len` bytes.
+    fn stream(
+        &mut self,
+        id: usize,
+        dict: &str,
+        len: u64,
+        mut data: impl std::io::Read,
+    ) -> Result<(), String> {
+        self.begin(id)?;
+        self.put(&format!("<< {dict} /Length {len} >>\nstream\n"))?;
+        let copied = std::io::copy(&mut data, &mut self.w).map_err(|e| format!("pdf: {e}"))?;
+        assert_eq!(copied, len, "the stream is as long as it was said to be");
+        self.at += copied;
+        self.put("\nendstream\nendobj\n")
+    }
+
+    /// The table and trailer; the catalog is object 1.
+    fn finish(mut self) -> Result<(), String> {
+        let xref_at = self.at;
+        let mut table = format!("xref\n0 {}\n0000000000 65535 f \n", self.offsets.len());
+        for offset in self.offsets.iter().skip(1) {
+            table.push_str(&format!("{offset:010} 00000 n \n"));
+        }
+        self.put(&table)?;
+        self.put(&format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref_at}\n%%EOF\n",
+            self.offsets.len()
+        ))?;
+        self.w.flush().map_err(|e| format!("pdf: {e}"))
+    }
+}
+
+/// How the `content` input is encoded.
+#[derive(Clone, Copy)]
+enum ContentFilter {
+    Flate,
+    Ascii85Flate,
+    Lzw,
+}
+
+impl ContentFilter {
+    fn entry(self) -> &'static str {
+        match self {
+            ContentFilter::Flate => "/Filter /FlateDecode",
+            ContentFilter::Ascii85Flate => "/Filter [/ASCII85Decode /FlateDecode]",
+            ContentFilter::Lzw => "/Filter /LZWDecode",
+        }
+    }
+}
+
+/// Decoded bytes of the `content` input's one content stream.
+const CONTENT_BYTES: usize = 96 * MIB;
+
+/// The decoded content, produced as it is read: sections of `(<hex>) Tj`
+/// lines, each followed by an inline image whose raw data holds `\nEI\n`.
+struct ContentText {
+    rng: Xorshift,
+    produced: usize,
+    section: Vec<u8>,
+    at: usize,
+}
+
+impl ContentText {
+    fn new() -> Self {
+        Self { rng: Xorshift::new(0xC0FFEE), produced: 0, section: Vec::new(), at: 0 }
+    }
+
+    fn next_section(&mut self) {
+        let mut text = String::from("BT /F1 10 Tf 10 10 Td\n");
+        for _ in 0..40 {
+            text.push('(');
+            self.rng.fill_hex(&mut text, 96);
+            text.push_str(") Tj\n");
+        }
+        text.push_str("ET q BI /W 8 /H 8 /BPC 8 /CS /G ID ");
+        let mut image = [0u8; 64];
+        self.rng.fill_bytes(&mut image);
+        image[20..24].copy_from_slice(b"\nEI\n");
+        self.section.clear();
+        self.section.extend_from_slice(text.as_bytes());
+        self.section.extend_from_slice(&image);
+        self.section.extend_from_slice(b"\nEI Q\n");
+        self.produced += self.section.len();
+        self.at = 0;
+    }
+}
+
+impl std::io::Read for ContentText {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.at == self.section.len() {
+            if self.produced >= CONTENT_BYTES {
+                return Ok(0);
+            }
+            self.next_section();
+        }
+        let n = buf.len().min(self.section.len() - self.at);
+        buf[..n].copy_from_slice(&self.section[self.at..self.at + n]);
+        self.at += n;
+        Ok(n)
+    }
+}
+
+/// Writes ASCII85 groups of what it is given; `finish` ends the data.
+struct Ascii85Writer<W: Write> {
+    inner: W,
+    group: [u8; 4],
+    held: usize,
+}
+
+impl<W: Write> Ascii85Writer<W> {
+    fn new(inner: W) -> Self {
+        Self { inner, group: [0; 4], held: 0 }
+    }
+
+    fn digits(value: u32) -> [u8; 5] {
+        let mut value = value;
+        let mut digits = [0u8; 5];
+        for digit in digits.iter_mut().rev() {
+            *digit = (value % 85) as u8 + b'!';
+            value /= 85;
+        }
+        digits
+    }
+
+    fn finish(mut self) -> std::io::Result<W> {
+        if self.held > 0 {
+            let mut padded = self.group;
+            padded[self.held..].fill(0);
+            let digits = Self::digits(u32::from_be_bytes(padded));
+            self.inner.write_all(&digits[..self.held + 1])?;
+        }
+        self.inner.write_all(b"~>")?;
+        Ok(self.inner)
+    }
+}
+
+impl<W: Write> Write for Ascii85Writer<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        for &byte in buf {
+            self.group[self.held] = byte;
+            self.held += 1;
+            if self.held == 4 {
+                self.held = 0;
+                match u32::from_be_bytes(self.group) {
+                    0 => self.inner.write_all(b"z")?,
+                    value => self.inner.write_all(&Self::digits(value))?,
+                }
+            }
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// A one-page PDF whose one content stream is [`CONTENT_BYTES`] of text and
+/// inline images, encoded in `filter`. The page lists a second font that
+/// nothing uses. The encoded stream is written beside the file first, since
+/// its length goes before it.
+fn generate_content(path: &Path, filter: ContentFilter) -> Result<(), String> {
+    use flate2::{write::ZlibEncoder, Compression};
+    use std::io::BufWriter;
+
+    let body_path = path.with_extension("body");
+    let io = |e: std::io::Error| format!("content: {e}");
+    {
+        let mut body = BufWriter::new(File::create(&body_path).map_err(io)?);
+        let mut text = ContentText::new();
+        match filter {
+            ContentFilter::Flate => {
+                let mut encoder = ZlibEncoder::new(&mut body, Compression::fast());
+                std::io::copy(&mut text, &mut encoder).map_err(io)?;
+                encoder.finish().map_err(io)?;
+            },
+            ContentFilter::Ascii85Flate => {
+                let mut encoder =
+                    ZlibEncoder::new(Ascii85Writer::new(&mut body), Compression::fast());
+                std::io::copy(&mut text, &mut encoder).map_err(io)?;
+                encoder.finish().map_err(io)?.finish().map_err(io)?;
+            },
+            ContentFilter::Lzw => {
+                let mut encoder = weezl::encode::Encoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8);
+                encoder
+                    .into_stream(&mut body)
+                    .encode_all(std::io::BufReader::new(&mut text))
+                    .status
+                    .map_err(io)?;
+            },
+        }
+        body.flush().map_err(io)?;
+    }
+    let len = std::fs::metadata(&body_path).map_err(io)?.len();
+
+    let mut out = PdfOut::create(path)?;
+    out.object(1, "<< /Type /Catalog /Pages 2 0 R >>")?;
+    out.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")?;
+    out.object(
+        3,
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+         /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> /Contents 4 0 R >>",
+    )?;
+    out.stream(4, filter.entry(), len, File::open(&body_path).map_err(io)?)?;
+    out.object(5, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")?;
+    out.object(6, "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>")?;
+    out.finish()?;
+    std::fs::remove_file(&body_path).map_err(io)
+}
+
+/// A one-page PDF that paints 2,000 forms of 64 KiB, each with resources of
+/// its own that list a font its text does not use.
+fn generate_forms(path: &Path) -> Result<(), String> {
+    const FORMS: usize = 2000;
+    const FIRST_FORM: usize = 7;
+
+    let mut out = PdfOut::create(path)?;
+    out.object(1, "<< /Type /Catalog /Pages 2 0 R >>")?;
+    out.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")?;
+    let mut names = String::new();
+    for form in 0..FORMS {
+        names.push_str(&format!("/Fm{form} {} 0 R ", FIRST_FORM + form));
+    }
+    out.object(
+        3,
+        &format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+             /Resources << /XObject << {names}>> >> /Contents 4 0 R >>"
+        ),
+    )?;
+    let page: String = (0..FORMS).map(|form| format!("/Fm{form} Do\n")).collect();
+    out.stream(4, "", page.len() as u64, page.as_bytes())?;
+    out.object(5, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")?;
+    out.object(6, "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>")?;
+    let mut rng = Xorshift::new(0xF0F0);
+    for form in 0..FORMS {
+        let mut text = String::from("BT /F1 10 Tf 10 10 Td\n");
+        for _ in 0..635 {
+            text.push('(');
+            rng.fill_hex(&mut text, 96);
+            text.push_str(") Tj\n");
+        }
+        text.push_str("ET\n");
+        out.stream(
+            FIRST_FORM + form,
+            "/Type /XObject /Subtype /Form /BBox [0 0 612 792] \
+             /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >>",
+            text.len() as u64,
+            text.as_bytes(),
+        )?;
+        if form % 500 == 0 {
+            eprintln!("memprobe: forms: form {form}/{FORMS}");
+        }
+    }
+    out.finish()
 }
 
 /// `huge`, AES-256 encrypted under an empty user password: the same 60 MiB

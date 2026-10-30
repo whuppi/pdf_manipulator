@@ -16,5 +16,9 @@ pdf_oxide = { path = "../../vendor/pdf_oxide", default-features = false, feature
     "extract",
     "test-support",
 ] }
+# The content inputs are encoded as they are generated, in the same filters
+# the engine reads.
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
+weezl = "0.2"
 
 [workspace]
