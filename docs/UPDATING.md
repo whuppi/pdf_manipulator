@@ -224,7 +224,11 @@ Every change happens in our fork. `src/host/` is fork-only code: edit it
 freely, with no markers (the folder itself is the marker). Everything
 outside `host/` is upstream code: **mark every change there** with paired
 `── pdf_manipulator patch ──` / `── end pdf_manipulator patch ──`
-lines. The markers are the full list of what we changed in upstream code:
+lines. Blocks do not nest, and every open has its end;
+`tool/check_patch_markers.sh` (run by `make test-guards`) fails on an end
+without an open, an open never closed, an open inside an open, and any
+line that mentions the phrase but is neither marker form. The markers are
+the full list of what we changed in upstream code:
 
 ```sh
 cd vendor/pdf_oxide

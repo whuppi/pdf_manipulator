@@ -109,6 +109,9 @@ format:
 #                        (80 for a Breaking bullet), tool/check_changelog_shape.sh
 #                      - fork tests: host/ unit tests for pure functions only;
 #                        none in patched upstream files or tests/, tool/check_fork_tests.sh
+#                      - fork patch markers pair: no end without an open, no open
+#                        left open or nested, no typo'd marker line in upstream
+#                        code, tool/check_patch_markers.sh
 #                      - no dart:io in tests (fixtures are imported Dart
 #                        source, so VM and browser consume identical
 #                        bytes; exempt: the hybrid asset server, native
@@ -146,6 +149,7 @@ fixtures:
 test-guards:
 	@./tool/check_changelog_shape.sh
 	@./tool/check_fork_tests.sh
+	@./tool/check_patch_markers.sh
 	@bad=$$(for f in $$(grep -rln "dart:io" test/ --include="*.dart"); do \
 	  grep -q "io-exempt:" "$$f" || echo "$$f"; \
 	done); \
