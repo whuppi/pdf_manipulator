@@ -120,6 +120,101 @@ void registerSugarTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
+    test('compress writes one copy of an image and a font merged in three '
+        'times', () async {
+      final pdf = createPdf();
+      final mergeSink = TestSink();
+      await pdf.merge([
+        src(imageAndFontPdf),
+        src(imageAndFontPdf),
+        src(imageAndFontPdf),
+      ], mergeSink);
+      final merged = mergeSink.takeBytes();
+
+      final aloneSink = TestSink();
+      await pdf.compress(
+        src(imageAndFontPdf),
+        aloneSink,
+        images: PdfImagePolicy.lossless,
+      );
+      final alone = aloneSink.takeBytes();
+      expect(alone.length, lessThan(imageAndFontPdf.length));
+
+      final sink = TestSink();
+      await pdf.compress(src(merged), sink, images: PdfImagePolicy.lossless);
+      final output = sink.takeBytes();
+      expect(output.length, lessThan(alone.length * 1.3));
+
+      final before = await pdf.open(src(merged));
+      final after = await pdf.open(src(output));
+      expect(after.pageCount, 3);
+      final text = await after.extract(pages: const PdfPages.all());
+      expect(text, await before.extract(pages: const PdfPages.all()));
+      expect(
+        RegExp(imageAndFontMarker).allMatches(text),
+        hasLength(3),
+        reason: 'the text of every page survives',
+      );
+      for (var page = 0; page < 3; page++) {
+        final expected = await before
+            .extractImages(pages: PdfPages.single(page))
+            .toList();
+        final actual = await after
+            .extractImages(pages: PdfPages.single(page))
+            .toList();
+        expect(actual, hasLength(1));
+        expect(actual.single.width, expected.single.width);
+        expect(actual.single.data, expected.single.data);
+      }
+      final renderedBefore = await before
+          .render(pages: const PdfPages.all())
+          .map((p) => p.data)
+          .toList();
+      final renderedAfter = await after
+          .render(pages: const PdfPages.all())
+          .map((p) => p.data)
+          .toList();
+      expect(renderedAfter, hasLength(3));
+      for (var page = 0; page < 3; page++) {
+        expect(renderedAfter[page], renderedBefore[page]);
+      }
+      await before.dispose();
+      await after.dispose();
+    }, timeout: t(2));
+
+    test('a full rewrite without mergeDuplicates keeps every copy', () async {
+      final pdf = createPdf();
+      final mergeSink = TestSink();
+      await pdf.merge([
+        src(imageAndFontPdf),
+        src(imageAndFontPdf),
+        src(imageAndFontPdf),
+      ], mergeSink);
+      final merged = mergeSink.takeBytes();
+      final aloneSink = TestSink();
+      await pdf.compress(
+        src(imageAndFontPdf),
+        aloneSink,
+        images: PdfImagePolicy.lossless,
+      );
+
+      final editor = await pdf.edit(src(merged));
+      final kept = TestSink();
+      await editor.save(
+        kept,
+        options: const PdfSaveOptions.fullRewrite(mergeDuplicates: false),
+      );
+      final merging = TestSink();
+      await editor.save(
+        merging,
+        options: const PdfSaveOptions.fullRewrite(mergeDuplicates: true),
+      );
+      await editor.dispose();
+      final aloneLength = aloneSink.takeBytes().length;
+      expect(kept.takeBytes().length, greaterThan(aloneLength * 2.5));
+      expect(merging.takeBytes().length, lessThan(aloneLength * 1.3));
+    }, timeout: t(2));
+
     test('compress shrinks a source that deflates', () async {
       final pdf = createPdf();
       final source = repeatedStreamPdf(5000);

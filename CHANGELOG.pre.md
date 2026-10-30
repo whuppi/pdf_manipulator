@@ -129,6 +129,8 @@ CONTENT RULES (never change)
 - Added `PdfSaveOptions.fullRewrite(deflateLevel:)`, the zlib level (0 to 9) of the streams a save deflates, default 9
 - Changed a full-rewrite save to re-deflate Flate streams at the save's level, keeping a stream's source bytes when the result is not smaller
 - Changed `compress` to write the source unchanged when its result is not smaller
+- Added `PdfSaveOptions.fullRewrite(mergeDuplicates:)`, which writes one copy of each set of identical images, ICC profiles and embedded fonts across the document and every merged source, default false
+- Changed `compress` to write one copy of identical images, ICC profiles and embedded fonts
 - Changed `PdfDoc.verifySignatures` to check each signature's digest and signer key, where it returned `false` for every document; `PdfSignatureInfo` has `isValid`, `coversWholeDocument` and `signingTime` filled
 - Fixed an empty input to `merge` or any other multi-source op shifting every source after it, so the op read the wrong documents — an empty input now throws `PdfCorrupted`
 - Fixed a full-rewrite save of a file with no `/Size` writing new objects over existing ones, and dropping an object it could not read without a word — it now throws `PdfCorrupted`

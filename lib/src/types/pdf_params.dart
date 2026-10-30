@@ -169,12 +169,15 @@ sealed class PdfSaveOptions {
   /// object streams with a cross-reference stream (PDF 1.5) unless
   /// [objectStreams] is false. A stream with no filter or a single
   /// FlateDecode is deflated again at [deflateLevel] and written so only when
-  /// that is smaller than the bytes the source held.
+  /// that is smaller than the bytes the source held. With [mergeDuplicates]
+  /// the save writes one copy of each set of identical images, ICC profiles
+  /// and embedded fonts.
   const factory PdfSaveOptions.fullRewrite({
     bool compress,
     bool garbageCollect,
     bool objectStreams,
     int deflateLevel,
+    bool mergeDuplicates,
     PdfEncryption encryption,
   }) = PdfSaveFullRewrite;
 
@@ -201,6 +204,7 @@ class PdfSaveFullRewrite extends PdfSaveOptions {
     this.garbageCollect = true,
     this.objectStreams = true,
     this.deflateLevel = 9,
+    this.mergeDuplicates = false,
     this.encryption = const PdfEncryption.keep(),
   });
 
@@ -218,6 +222,14 @@ class PdfSaveFullRewrite extends PdfSaveOptions {
   /// deflates. Saving with a level outside that range throws an
   /// [ArgumentError].
   final int deflateLevel;
+
+  /// Whether to write one copy of each set of identical image XObjects,
+  /// ICC profiles and embedded font programs, across the document and
+  /// every merged source, and point every reference at it. Two streams are
+  /// one when their dictionaries and encoded bytes are equal; a stream with
+  /// `/OC`, `/StructParent` or `/StructParents` is never merged. A stream of
+  /// an encrypted source is merged only when its data is at most 256 KiB.
+  final bool mergeDuplicates;
 
   /// Encryption intent for the output.
   final PdfEncryption encryption;

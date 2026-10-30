@@ -7,6 +7,8 @@
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'subset_fallback_font.dart';
+
 const testCertPem = '''
 -----BEGIN CERTIFICATE-----
 MIIDSTCCAjGgAwIBAgIUexfMwJDl5Rlv9CCPzlG2ZMWIrigwDQYJKoZIhvcNAQEL
@@ -148,6 +150,39 @@ Uint8List repeatedStreamPdf(int lines) {
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
     '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] >>',
     _streamBody('', data),
+  ]);
+}
+
+/// The text drawn on the page of [imageAndFontPdf].
+const imageAndFontMarker = 'IMAGEFONT PAGE';
+
+/// One page with text, a 128×128 gray image of pseudo-random bytes (they do
+/// not deflate) and an embedded TrueType font program. Merged with itself,
+/// every merged page carries its own copy of the image and the font file.
+final Uint8List imageAndFontPdf = _imageAndFontPdf();
+
+Uint8List _imageAndFontPdf() {
+  final random = Random(11);
+  final pixels = String.fromCharCodes(
+    List.generate(128 * 128, (_) => random.nextInt(256)),
+  );
+  final font = String.fromCharCodes(subsetCjkFallbackFont);
+  return _offsetPdf([
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R /F2 6 0 R >> /XObject << /Im1 8 0 R >> >> /Contents 4 0 R >>',
+    _streamBody(
+      '',
+      'BT /F1 18 Tf 72 780 Td ($imageAndFontMarker) Tj ET q 200 0 0 200 72 500 cm /Im1 Do Q',
+    ),
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    '<< /Type /Font /Subtype /TrueType /BaseFont /SubsetFace /FontDescriptor 7 0 R >>',
+    '<< /Type /FontDescriptor /FontName /SubsetFace /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 9 0 R >>',
+    _streamBody(
+      '/Type /XObject /Subtype /Image /Width 128 /Height 128 /ColorSpace /DeviceGray /BitsPerComponent 8',
+      pixels,
+    ),
+    _streamBody('/Length1 ${font.length}', font),
   ]);
 }
 

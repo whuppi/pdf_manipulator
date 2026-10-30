@@ -295,8 +295,9 @@ extension PdfSugar on Pdf {
 
   /// Compresses the PDF: images through `PdfEditor.reduceImages` under
   /// [images] (`PdfImagePolicy.ebook` unless you pass another preset or
-  /// your own numbers), then a full rewrite with stream compression and,
-  /// by default, garbage collection.
+  /// your own numbers), then a full rewrite with stream compression, one
+  /// copy of identical images, ICC profiles and embedded fonts and, by
+  /// default, garbage collection.
   ///
   /// It never makes a file larger: when the result is not smaller than
   /// [source], [output] receives the bytes of [source] unchanged.
@@ -312,6 +313,7 @@ extension PdfSugar on Pdf {
     final options = PdfSaveOptions.fullRewrite(
       compress: true,
       garbageCollect: garbageCollect,
+      mergeDuplicates: true,
     );
     if (source.length <= _compressInMemoryLimit) {
       final result = MemorySink();
