@@ -50,6 +50,11 @@ fn limit(op: &str, input: &str) -> usize {
         // measured peak (53.3 MiB; the renderer before this held 170 MiB);
         // the target is a decoder that streams progressive scans.
         ("render", "hugeJpeg") => 56 * MIB,
+        // A 2000 pt square at 300 dpi again, now with eight groups inside one
+        // another, a soft mask, blends and patterns: each level holds one band
+        // of its own, and the band is cut by the depth, so the host holds the
+        // same few megabytes a page of plain paths does.
+        ("render", "groups") => 16 * MIB,
         ("fullRewriteSave", "encrypted") => 16 * MIB,
         // The resource prune reads every content once, as operators.
         ("compress", "content-fl" | "content-a85" | "content-lzw" | "forms" | "encrypted") => {
@@ -367,6 +372,16 @@ fn run() -> Result<(), String> {
         render_to_sink(st, &huge_jpeg, 150, &open_sink("hugeJpeg", "render"))
     });
     verify_render_wire(&failed, "hugeJpeg", &open_sink("hugeJpeg", "render"));
+
+    // render of one large page of transparency groups nested eight deep, a
+    // soft mask, blends and tiling patterns, one of them over the raster
+    // budget, at 300 dpi.
+    let groups = dir.join("groups.pdf");
+    generate_groups(&groups)?;
+    step(&failed, "render", "groups", limit("render", "groups"), |st| {
+        render_to_sink(st, &groups, 300, &open_sink("groups", "render"))
+    });
+    verify_render_wire(&failed, "groups", &open_sink("groups", "render"));
 
     let _ = std::fs::remove_dir_all(&dir);
     if failed.get() {
@@ -810,6 +825,97 @@ fn generate_many(path: &Path) -> Result<(), String> {
         vec![sink(path)],
     )?;
     Ok(())
+}
+
+/// A one-page PDF 2000 points square of transparency groups nested eight deep
+/// (isolated and not, knockout at the third and sixth), each holding rows of
+/// small alpha rectangles, the fifth under a luminosity soft mask; on it a
+/// blend mode, a small tiling pattern and a tiling pattern whose 600 point
+/// cell is a raster of 25 MiB at 300 dpi, drawn tile by tile.
+fn generate_groups(path: &Path) -> Result<(), String> {
+    const LEVELS: usize = 8;
+    let mut out = PdfOut::create(path)?;
+    out.object(1, "<< /Type /Catalog /Pages 2 0 R >>")?;
+    out.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")?;
+    // Objects 5 to 12 are the groups, 13 the mask group, 14 and 15 the patterns.
+    out.object(
+        3,
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 2000 2000] /Contents 4 0 R \
+         /Resources << /XObject << /N1 5 0 R >> /Pattern << /P1 14 0 R /P2 15 0 R >> \
+         /ExtGState << /Mul << /BM /Multiply /ca 0.8 >> /Hue << /BM /Hue >> >> >> >>",
+    )?;
+    let content = "/Pattern cs /P2 scn 0 0 2000 2000 re f\n\
+                   q /Mul gs 1 0 0 1 100 100 cm /N1 Do Q\n\
+                   q /Hue gs 0.9 0.4 0.1 rg 200 200 1600 300 re f Q\n\
+                   /Pattern cs /P1 scn 300 1500 1400 300 re f\n";
+    out.stream(4, "", content.len() as u64, content.as_bytes())?;
+    for level in 1..=LEVELS {
+        let size = 1800 - 120 * level;
+        let isolated = if level % 2 == 1 { "true" } else { "false" };
+        let knockout = if level == 3 || level == 6 { " /K true" } else { "" };
+        let mask = if level == 5 { "/SM gs " } else { "" };
+        let mut body = format!("{:.2} 0.5 0.6 rg 0 0 {size} {size} re f /Half gs\n", 0.2 + 0.08 * level as f32);
+        // A knockout group replays its content before each element, so it
+        // holds few.
+        let (rows, columns) = if knockout.is_empty() { (30, 8) } else { (5, 4) };
+        for row in 0..rows {
+            for column in 0..columns {
+                body.push_str(&format!(
+                    "{:.2} {:.2} 0.3 rg {} {} 80 20 re f\n",
+                    0.1 * column as f32,
+                    0.03 * row as f32,
+                    20 + column * 100,
+                    20 + row * 40
+                ));
+            }
+        }
+        if level < LEVELS {
+            body.push_str(&format!("/Full gs q {mask}0.98 0.1 -0.1 0.98 40 30 cm /N{} Do Q\n", level + 1));
+        }
+        let resources = format!(
+            "/XObject << /N{} {} 0 R >> /ExtGState << /Half << /ca 0.7 >> /Full << /ca 1 >> \
+             /SM << /SMask << /Type /Mask /S /Luminosity /G 13 0 R >> >> >>",
+            level + 1,
+            5 + level
+        );
+        out.stream(
+            4 + level,
+            &format!(
+                "/Type /XObject /Subtype /Form /BBox [0 0 {size} {size}] \
+                 /Group << /S /Transparency /I {isolated}{knockout} >> /Resources << {resources} >>"
+            ),
+            body.len() as u64,
+            body.as_bytes(),
+        )?;
+    }
+    let mask = "0.4 g 0 0 1000 1000 re f q 0 0 1000 600 re W n /Sh sh Q";
+    out.stream(
+        13,
+        "/Type /XObject /Subtype /Form /BBox [0 0 1000 1000] \
+         /Group << /S /Transparency /CS /DeviceGray >> \
+         /Resources << /Shading << /Sh << /ShadingType 2 /ColorSpace /DeviceGray \
+         /Coords [0 0 1000 1000] /Function << /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >> \
+         /Extend [true true] >> >> >>",
+        mask.len() as u64,
+        mask.as_bytes(),
+    )?;
+    let small = "1 0 0 rg 0 0 10 10 re f 0 0 1 rg 10 10 10 10 re f";
+    out.stream(
+        14,
+        "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /Resources << >> \
+         /BBox [0 0 20 20] /XStep 20 /YStep 20",
+        small.len() as u64,
+        small.as_bytes(),
+    )?;
+    let large = "0.9 0.95 1 rg 0 0 600 600 re f 0.3 0.3 0.7 RG 8 w 20 20 560 560 re S 0.7 0.4 0.2 rg 150 150 m 450 200 l 300 480 l f";
+    out.stream(
+        15,
+        "/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /Resources << >> \
+         /BBox [0 0 600 600] /XStep 620 /YStep 620",
+        large.len() as u64,
+        large.as_bytes(),
+    )?;
+    out.finish()
 }
 
 /// Incompressible bytes, `left` of them, read in whatever pieces are asked for.

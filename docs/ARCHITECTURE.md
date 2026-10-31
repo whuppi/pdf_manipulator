@@ -761,6 +761,25 @@ rows its band needs run against the order the stream gives them. The open
 decodes of a page share a 4 MiB budget; one put out is read again from its
 first row when it is next drawn.
 
+Every other buffer a page needs is a window onto the page too: a transparency
+group (isolated or not, with knockout), a soft mask, a blend mode that needs a
+copy of the backdrop, a Type 3 glyph, a text clip and a pattern cell each get a
+pixmap of the band's rows, at their place in the page, and every composite is
+per pixel, so a band holds the bytes the whole page holds. The band's height is
+cut by the depth of that nesting, so memory follows the nesting and not the
+page. A group's content is clipped to its `/BBox` (a knockout group too),
+because the band culling takes the box for the form's extent. Whether a soft
+mask's group paints nothing (a mask that does is dropped, as the other
+renderers drop it) is decided once for the page, by drawing the group over the
+page's own bands, because a band the group does not reach cannot tell. The
+content of a form, a pattern cell, a glyph procedure and a soft-mask group is
+read as operators; a knockout group holds its operators, since it replays them
+before each element. A tiling pattern whose cell raster fits the 2 MiB budget
+is drawn once to a texture, as it always was; one over the budget is drawn
+tile by tile into the band, where the tiles sit on the lattice and not on the
+pixel grid (the one documented difference), and a turned lattice shows its
+content instead of the flat average colour a texture gives it.
+
 ---
 
 ## CI/CD architecture
