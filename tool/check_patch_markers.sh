@@ -12,7 +12,8 @@
 #
 # An open marker is a `//` or `#` comment line that starts with
 # `── pdf_manipulator patch`, followed by `:` or ` ──`; a close marker is the
-# whole line `── end pdf_manipulator patch ──` behind the same prefix.
+# whole line `── end pdf_manipulator patch ──` behind the same prefix. In
+# Markdown the same two lines sit inside an HTML comment, `<!-- … -->`.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -25,8 +26,8 @@ git -C "$dir" ls-files --cached --others --exclude-standard -z \
 import re
 import sys
 
-OPEN = re.compile(r"^\s*(//|#)[ \t]*── pdf_manipulator patch(:| ──|$)")
-CLOSE = re.compile(r"^\s*(//|#)[ \t]*── end pdf_manipulator patch ──\s*$")
+OPEN = re.compile(r"^\s*((//|#)[ \t]*── pdf_manipulator patch(:| ──|$)|<!--[ \t]*── pdf_manipulator patch(:[^>]*)? ──[ \t]*-->\s*$)")
+CLOSE = re.compile(r"^\s*((//|#)[ \t]*── end pdf_manipulator patch ──|<!--[ \t]*── end pdf_manipulator patch ──[ \t]*-->)\s*$")
 PHRASE = "pdf_manipulator patch"
 ROOT = "vendor/pdf_oxide/"
 
