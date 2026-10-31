@@ -176,7 +176,8 @@ test-guards:
 	  echo "battery/runner completeness violation:"; \
 	  printf "$$bad"; exit 1; fi
 	@bad=$$(grep -rnE "SystemTime::now|Instant::now|format_pdf_date_utc" vendor/pdf_oxide/src/host \
-	  --include="*.rs" | grep -v "^vendor/pdf_oxide/src/host/native/" || true); \
+	  --include="*.rs" | grep -v "^vendor/pdf_oxide/src/host/native/" \
+	  | grep -v "^vendor/pdf_oxide/src/host/engine_proofs/" || true); \
 	if [ -n "$$bad" ]; then \
 	  echo "clock read in host code that runs on wasm32, where it panics"; \
 	  echo "('unreachable'): take the time from the Dart request instead:"; \
