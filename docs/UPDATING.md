@@ -180,8 +180,14 @@ one of our feature gates removes fails here, before any wasm build.
 ```sh
 git branch -m pdf_manipulator/OLD-patches pdf_manipulator/NEW-patches
 git push origin pdf_manipulator/NEW-patches
+gh api -X PATCH repos/whuppi/pdf_oxide -f default_branch=pdf_manipulator/NEW-patches
 git push origin --delete pdf_manipulator/OLD-patches
 ```
+
+The patches branch is the fork's default branch on GitHub, so a visitor lands
+on our code and on the README that says what the fork is. GitHub refuses to
+delete the default branch, so the new branch becomes the default before the
+old one is deleted.
 
 ### 5. Sync the fork mirror
 
