@@ -54,10 +54,23 @@ fn limit(op: &str, input: &str) -> usize {
         // time and written as PNG rows; the progressive JPEG goes through
         // byte for byte in 64 KiB reads and 256 KiB data frames.
         ("extractImages", "huge" | "hugeJpeg") => 16 * MIB,
+        // The same 60 MiB image, row by row.
+        ("extractImages", "hugeFax") => 16 * MIB,
         // The same strips go through the row resampler to the placement's
         // size and into a JPEG encoder that takes MCU rows, so the host holds
         // a strip, the resampler's rows and the encoded output (under 1 MiB).
         ("reduceImages", "huge") => 16 * MIB,
+        // The 50 MiB packed bitmap of the huge fax decodes two transition
+        // lines and one row at a time, in render, extract and reduce alike.
+        ("render" | "reduceImages", "hugeFax") => 16 * MIB,
+        // The ruled exception: JBIG2 composes the page bitmap before its
+        // callback runs (d-122), so the host holds the codestream, its
+        // globals, the decoder's 1-bit page bitmap and the packed copy its
+        // callback fills before that bitmap is freed. The targets are
+        // the measured peaks rounded up to the next MiB; a decoder that
+        // streams regions is the task that stops it being an exception.
+        ("render", "hugeJbig2") => 98 * MIB,
+        ("extractImages", "hugeJbig2") => 96 * MIB,
         // The ruled exception again: the progressive JPEG is decoded whole, by
         // the inverse DCT at the reduction that covers the placement.
         ("reduceImages", "hugeJpeg") => 56 * MIB,
@@ -392,14 +405,14 @@ fn run() -> Result<(), String> {
         (
             "huge",
             &huge_drawn,
-            ExpectedImage { width: 8192, height: 7680, encoding: "raw", color: "gray" },
-            ExpectedImage { width: 845, height: 792, encoding: "jpeg", color: "gray" },
+            ExpectedImage { width: 8192, height: 7680, encoding: "raw", color: "gray", depth: 8 },
+            ExpectedImage { width: 845, height: 792, encoding: "jpeg", color: "gray", depth: 8 },
         ),
         (
             "hugeJpeg",
             &huge_jpeg,
-            ExpectedImage { width: 4096, height: 3072, encoding: "jpeg", color: "rgb" },
-            ExpectedImage { width: 1056, height: 792, encoding: "jpeg", color: "rgb" },
+            ExpectedImage { width: 4096, height: 3072, encoding: "jpeg", color: "rgb", depth: 8 },
+            ExpectedImage { width: 1056, height: 792, encoding: "jpeg", color: "rgb", depth: 8 },
         ),
     ] {
         let extract_file = open_sink(name, "extract");
@@ -438,6 +451,95 @@ fn run() -> Result<(), String> {
             std::fs::metadata(&reduced_file).map(|m| m.len()).unwrap_or(0)
         );
     }
+
+    // The huge fax: a 50 MiB packed bitmap that decodes a row at a time.
+    // Render and the extraction read back; the reduction by extracting the
+    // file it wrote.
+    let huge_fax = dir.join("huge-fax.pdf");
+    generate_huge_fax(&huge_fax)?;
+    step(&failed, "render", "hugeFax", limit("render", "hugeFax"), |st| {
+        render_to_sink(st, &huge_fax, 150, &open_sink("hugeFax", "render"))
+    });
+    verify_render_wire(&failed, "hugeFax", &open_sink("hugeFax", "render"));
+    let fax_extract = open_sink("hugeFax", "extract");
+    step(&failed, "extractImages", "hugeFax", limit("extractImages", "hugeFax"), |st| {
+        extract_to_sink(st, &huge_fax, &fax_extract)
+    });
+    verify_extract_wire(
+        &failed,
+        "hugeFax",
+        &fax_extract,
+        &ExpectedImage {
+            width: 20000,
+            height: 20000,
+            encoding: "ccitt",
+            color: "bilevel",
+            depth: 1,
+        },
+        None,
+    );
+    let fax_reduced = open_sink("hugeFax", "reduced");
+    step(&failed, "reduceImages", "hugeFax", limit("reduceImages", "hugeFax"), |st| {
+        reduce_to_sink(st, &huge_fax, &fax_reduced)
+    });
+    let fax_again = open_sink("hugeFax", "reduced-extract");
+    let mut state = pdf_oxide::host::lane_state::LaneState::new();
+    let written_fax = if fax_reduced.exists() {
+        extract_to_sink(&mut state, &fax_reduced, &fax_again)
+    } else {
+        Err("the reduction wrote no file".to_string())
+    };
+    match written_fax {
+        Ok(()) => {
+            // The reduction re-encodes a bilevel image as Group 4 at the
+            // mono resolutions the step set.
+            verify_extract_wire(
+                &failed,
+                "hugeFax reduced",
+                &fax_again,
+                &                ExpectedImage {
+                    // The reducer scales both axes by the placement's ppi
+                    // under the placement mono 300 ppi (20000/792 pt), so
+                    // the square bitmap comes out 3300 x 3300.
+                    width: 3300,
+                    height: 3300,
+                    encoding: "ccitt",
+                    color: "bilevel",
+                    depth: 1,
+                },
+                None,
+            );
+        },
+        Err(e) => {
+            eprintln!("memprobe: reduceImages hugeFax: read back: {e}");
+            failed.set(true);
+        },
+    }
+    // The ruled exception: JBIG2 holds one page bitmap. Render and
+    // extraction at the measured peak.
+    let huge_jbig2 = dir.join("huge-jbig2.pdf");
+    generate_huge_jbig2(&huge_jbig2)?;
+    step(&failed, "render", "hugeJbig2", limit("render", "hugeJbig2"), |st| {
+        render_to_sink(st, &huge_jbig2, 150, &open_sink("hugeJbig2", "render"))
+    });
+    verify_render_wire(&failed, "hugeJbig2", &open_sink("hugeJbig2", "render"));
+    let jbig2_extract = open_sink("hugeJbig2", "extract");
+    step(&failed, "extractImages", "hugeJbig2", limit("extractImages", "hugeJbig2"), |st| {
+        extract_to_sink(st, &huge_jbig2, &jbig2_extract)
+    });
+    verify_extract_wire(
+        &failed,
+        "hugeJbig2",
+        &jbig2_extract,
+        &ExpectedImage {
+            width: 20000,
+            height: 20000,
+            encoding: "jbig2",
+            color: "bilevel",
+            depth: 1,
+        },
+        None,
+    );
 
     // render of one large page of transparency groups nested eight deep, a
     // soft mask, blends and tiling patterns, one of them over the raster
@@ -623,6 +725,9 @@ struct ExpectedImage {
     height: i32,
     encoding: &'static str,
     color: &'static str,
+    /// The PNG's bit depth: 8 for the gray and RGB rasters, 1 for a bilevel
+    /// one.
+    depth: u8,
 }
 
 /// The length of the one DCT stream a probe input holds, from its
@@ -755,9 +860,15 @@ fn check_extract_wire(
                 let (w, h, jpeg, walk) = open.take().ok_or("an end outside an item")?;
                 if !jpeg {
                     let (depth, colour) = walk.finish(w, h)?;
-                    let want = if expect.color == "gray" { 0 } else { 2 };
-                    if depth != 8 || colour != want {
-                        return Err(format!("IHDR depth {depth} colour type {colour}, expected 8-bit type {want}"));
+                    let want = match expect.color {
+                        "gray" | "bilevel" => 0,
+                        _ => 2,
+                    };
+                    if depth != expect.depth || colour != want {
+                        return Err(format!(
+                            "IHDR depth {depth} colour type {colour}, expected {}-bit type {want}",
+                            expect.depth
+                        ));
                     }
                 }
                 items += 1;
@@ -1267,6 +1378,105 @@ fn generate_huge_jpeg(path: &Path) -> Result<(), String> {
          /BitsPerComponent 8 /Filter /DCTDecode",
         jpeg.len() as u64,
         std::io::Cursor::new(jpeg),
+    )?;
+    out.finish()
+}
+
+/// A one-page Letter PDF filled by one 20000 x 20000 Group 4 fax image. An
+/// inked band of 1000 px drifts across the page as the rows go, and the
+/// codestream is written row by row as each row is made: the packed bitmap it
+/// decodes to is 50 MiB, which no step may hold.
+fn generate_huge_fax(path: &Path) -> Result<(), String> {
+    const W: u32 = 20000;
+    const H: u32 = 20000;
+    let mut encoder = fax::encoder::Encoder::new(fax::VecWriter::new());
+    for y in 0..H {
+        let left = ((y as usize * 997) % (W as usize - 1000)) as usize;
+        let row = std::iter::repeat(fax::Color::White)
+            .take(left)
+            .chain(std::iter::repeat(fax::Color::Black).take(1000))
+            .chain(std::iter::repeat(fax::Color::White).take(W as usize - left - 1000));
+        encoder.encode_line(row, W).map_err(|e| format!("hugeFax: {e:?}"))?;
+    }
+    let code = encoder.finish().expect("the fax finishes").finish();
+    let content = "q 612 0 0 792 0 0 cm /Im0 Do Q";
+    let mut out = PdfOut::create(path)?;
+    out.object(1, "<< /Type /Catalog /Pages 2 0 R >>")?;
+    out.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")?;
+    out.object(
+        3,
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+         /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>",
+    )?;
+    out.stream(4, "", content.len() as u64, content.as_bytes())?;
+    out.stream(
+        5,
+        "/Type /XObject /Subtype /Image /Width 20000 /Height 20000 /ColorSpace /DeviceGray \
+         /BitsPerComponent 1 /Filter /CCITTFaxDecode \
+         /DecodeParms << /K -1 /Columns 20000 /Rows 20000 >>",
+        code.len() as u64,
+        std::io::Cursor::new(code),
+    )?;
+    out.finish()
+}
+
+/// A one-page Letter PDF filled by one 20000 x 20000 JBIG2 image: the picture
+/// `generate_huge_fax` draws, in one immediate generic region coded with MMR
+/// (T.6), beside the page-information segment that declares the size. This is
+/// the ruled exception (d-122): JBIG2 composes the page bitmap before its
+/// callback runs, so the page bitmap is held.
+fn generate_huge_jbig2(path: &Path) -> Result<(), String> {
+    const W: u32 = 20000;
+    const H: u32 = 20000;
+    let mut page = Vec::new();
+    for v in [W, H, 0, 0] {
+        page.extend_from_slice(&v.to_be_bytes());
+    }
+    // Flags and striping: bitmap-owned page, single strip.
+    page.extend_from_slice(&[0, 0, 0]);
+    let mut region = Vec::new();
+    for v in [W, H, 0, 0] {
+        region.extend_from_slice(&v.to_be_bytes());
+    }
+    // Flags: generic region, MMR overwrite of the default template.
+    region.extend_from_slice(&[0, 0x01]);
+    let mut encoder = fax::encoder::Encoder::new(fax::VecWriter::new());
+    for y in 0..H {
+        let left = ((y as usize * 997) % (W as usize - 1000)) as usize;
+        let row = std::iter::repeat(fax::Color::White)
+            .take(left)
+            .chain(std::iter::repeat(fax::Color::Black).take(1000))
+            .chain(std::iter::repeat(fax::Color::White).take(W as usize - left - 1000));
+        encoder.encode_line(row, W).map_err(|e| format!("hugeJbig2: {e:?}"))?;
+    }
+    let mmr = encoder.finish().expect("the MMR finishes").finish();
+    region.extend_from_slice(&mmr);
+    let bytes = {
+        let mut out = Vec::new();
+        for (number, kind, data) in [(0u32, 48u8, page), (1u32, 38u8, region)] {
+            out.extend_from_slice(&number.to_be_bytes());
+            out.extend_from_slice(&[kind, 0x00, 0x01]);
+            out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            out.extend_from_slice(&data);
+        }
+        out
+    };
+    let content = "q 612 0 0 792 0 0 cm /Im0 Do Q";
+    let mut out = PdfOut::create(path)?;
+    out.object(1, "<< /Type /Catalog /Pages 2 0 R >>")?;
+    out.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")?;
+    out.object(
+        3,
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+         /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>",
+    )?;
+    out.stream(4, "", content.len() as u64, content.as_bytes())?;
+    out.stream(
+        5,
+        "/Type /XObject /Subtype /Image /Width 20000 /Height 20000 /ColorSpace /DeviceGray \
+         /BitsPerComponent 1 /Filter /JBIG2Decode",
+        bytes.len() as u64,
+        std::io::Cursor::new(bytes),
     )?;
     out.finish()
 }

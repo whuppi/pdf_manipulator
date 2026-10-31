@@ -22,5 +22,7 @@ flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
 weezl = "0.2"
 # The progressive JPEG input is encoded as it is generated.
 jpeg-encoder = "0.7.1"
+# The huge fax and JBIG2 inputs are T.6-coded row by row as they are made.
+fax = "0.3"
 
 [workspace]
