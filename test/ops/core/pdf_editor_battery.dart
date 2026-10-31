@@ -22,6 +22,7 @@ import '../../fixtures/third_party/tp_encrypted_legacy.dart';
 import '../../fixtures/third_party/tp_image_kinds.dart';
 import '../../fixtures/third_party/tp_page_prune_objstm.dart';
 import '../../harness/page_prune_expect.dart';
+import '../../harness/render_pages.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
 
@@ -460,14 +461,13 @@ void registerEditorTests(Pdf Function() createPdf) {
       for (var i = 0; i < doc.pageCount; i++) {
         final page = doc.pages[i];
         final side = (math.max(page.width, page.height) * 50 / 72).ceil();
-        final rendered = await doc
-            .render(
-              pages: PdfPages.single(i),
-              size: PdfRenderSize.fit(maxWidth: side, maxHeight: side),
-            )
-            .single;
+        final rendered = await renderToMemory(
+          doc,
+          pages: PdfPages.single(i),
+          size: PdfRenderSize.fit(maxWidth: side, maxHeight: side),
+        );
         final text = await doc.extract(pages: PdfPages.single(i));
-        out.add((text, rendered.data));
+        out.add((text, rendered.single.data));
       }
       return out;
     }
@@ -2137,13 +2137,11 @@ void registerEditorTests(Pdf Function() createPdf) {
       double right = 1,
     }) async {
       final doc = await pdf.open(src(bytes));
-      final frames = <RenderedPage>[];
-      await for (final page in doc.render(
+      final frames = await renderToMemory(
+        doc,
         pages: const PdfPages.single(0),
         size: const PdfRenderSize.thumbnail(240),
-      )) {
-        frames.add(page);
-      }
+      );
       await doc.dispose();
       final bitmap = img.decodePng(frames.single.data)!;
       final y0 = (bitmap.height * top).round();
@@ -2621,13 +2619,11 @@ void registerEditorTests(Pdf Function() createPdf) {
       await e1.dispose();
 
       final doc = await pdf.open(src(filled.takeBytes()));
-      final pages = <RenderedPage>[];
-      await for (final page in doc.render(
+      final pages = await renderToMemory(
+        doc,
         pages: const PdfPages.single(0),
         size: const PdfRenderSize.thumbnail(220),
-      )) {
-        pages.add(page);
-      }
+      );
       await doc.dispose();
 
       final bitmap = img.decodePng(pages.single.data)!;
@@ -2674,17 +2670,15 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
 
       final doc = await pdf.open(src(stamped.takeBytes()));
-      final pages = <RenderedPage>[];
-      await for (final page in doc.render(
+      final pages = await renderToMemory(
+        doc,
         pages: const PdfPages.single(0),
         size: const PdfRenderSize.thumbnail(160),
-      )) {
-        pages.add(page);
-      }
+      );
       await doc.dispose();
 
       expect(pages, hasLength(1));
-      // doc.render() yields PNG-encoded frames — decode to pixels.
+      // render writes a PNG to the sink — decode to pixels.
       final decoded = img.decodePng(pages.single.data);
       expect(decoded, isNotNull, reason: 'rendered page must be a valid PNG');
       final bitmap = decoded!;
@@ -3078,12 +3072,12 @@ void registerEditorTests(Pdf Function() createPdf) {
       expect(doc.pages[1].height, closeTo(height, 0.5));
       final text = await doc.extract(pages: const PdfPages.single(1));
       expect(text, contains(pagePruneTruth.marker(2)));
-      RenderedPage? rendered;
-      await for (final page in doc.render(pages: const PdfPages.single(1))) {
-        rendered = page;
-      }
+      final rendered = await renderToMemory(
+        doc,
+        pages: const PdfPages.single(1),
+      );
       await doc.dispose();
-      final bitmap = img.decodePng(rendered!.data)!;
+      final bitmap = img.decodePng(rendered.single.data)!;
       final first = bitmap.getPixel(0, 0);
       final (r, g, b) = (first.r, first.g, first.b);
       var inked = false;
@@ -3502,13 +3496,11 @@ int _indexOfRamp(Uint8List out) {
 /// close enough) across a save/reopen round trip.
 Future<img.Image> _renderFirstPage(Pdf pdf, Uint8List bytes) async {
   final doc = await pdf.open(src(bytes));
-  final frames = <RenderedPage>[];
-  await for (final page in doc.render(
+  final frames = await renderToMemory(
+    doc,
     pages: const PdfPages.single(0),
     size: const PdfRenderSize.thumbnail(200),
-  )) {
-    frames.add(page);
-  }
+  );
   await doc.dispose();
   return img.decodePng(frames.single.data)!;
 }

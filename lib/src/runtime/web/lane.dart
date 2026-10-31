@@ -423,9 +423,14 @@ class WebLane implements Lane {
       case LaneMsg.result:
         if (entry != null) {
           final bytes = _bytes(obj, 'data');
-          _finish(
-            entry,
-            _buildResult(entry, bytes, _int(obj, LaneMsgFields.peakBytes)),
+          final peak = _int(obj, LaneMsgFields.peakBytes);
+          // The op ends after its last sink write: OPFS mode has no
+          // worker-side back-pressure, so the result can arrive while
+          // chunks it follows are still being written.
+          unawaited(
+            entry.sinkChain.then(
+              (_) => _finish(entry, _buildResult(entry, bytes, peak)),
+            ),
           );
         }
 

@@ -76,15 +76,16 @@ void main() {
     await doc.dispose();
   });
 
-  testWidgets('render streams pages', (t) async {
+  testWidgets('render writes pages to sinks', (t) async {
     final doc = await pdf.open(_src(minimalPdf));
-    var count = 0;
-    await for (final page in doc.render(pages: const PdfPages.single(0))) {
-      expect(page.width, greaterThan(0));
-      expect(page.data, isNotEmpty);
-      count++;
-    }
-    expect(count, 1);
+    final sink = MemorySink();
+    final pages = await doc.render(
+      (page) => sink,
+      pages: const PdfPages.single(0),
+    );
+    expect(pages, hasLength(1));
+    expect(pages.single.width, greaterThan(0));
+    expect(sink.takeBytes(), isNotEmpty);
     await doc.dispose();
   });
 

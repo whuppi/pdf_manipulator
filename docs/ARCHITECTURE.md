@@ -240,7 +240,8 @@ lib/
     │   ├── errors.dart                     ← PdfError sealed hierarchy
     │   ├── pdf_config.dart                 ← PdfConfig (webIoMode, URLs)
     │   ├── pdf_enums.dart                  ← PdfIoMode, PdfEncryptionAlgorithm, ...
-    │   ├── pdf_image.dart                  ← PdfImage, RenderedPage
+    │   ├── pdf_image.dart                  ← PdfImage
+    │   ├── pdf_render.dart                 ← PdfRenderSize, PdfRenderedPage, PdfRenderFormat
     │   ├── pdf_matrix.dart                 ← PdfMatrix: a PDF affine transform
     │   ├── pdf_page_image.dart             ← PdfPageImage: an image XObject as placed on a page
     │   ├── pdf_image_policy.dart           ← PdfImagePolicy: reduceImages knobs + screen/ebook/print/lossless presets
@@ -419,7 +420,7 @@ Future<...> execute(
 |---|---|---|
 | open | reader[0] on demand | — |
 | extract / search / validate / classify | reader[0] on demand | bounded text |
-| render | reader[0] on demand | framed writes, one page at a time |
+| render | reader[0] on demand | per page: header, data frames ≤ 256 KiB, end |
 | extractImages | reader[0] on demand | framed writes, one image at a time |
 | editorSave | pinned reader[0] | PositionedWrite streams objects |
 | builderSave | — | PositionedWrite streams objects |
@@ -725,9 +726,21 @@ cross-origin isolated pages. Without it, web cancel lands at the next
 source read or sink write, and a running OPFS op (no I/O waits at all)
 is stopped only by `Pdf.dispose`.
 
-`render` and `extractImages` stream: each frame reaches the consumer as
-the engine writes it, an error response ends the stream after the frames
-already delivered, and cancelling the subscription cancels the job.
+`extractImages` streams: each frame reaches the consumer as the engine
+writes it, an error response ends the stream after the frames already
+delivered, and cancelling the subscription cancels the job.
+
+`render` writes each page to a sink the caller's factory returns. The
+engine rasters the page in bands, passes each band's rows to a PNG row
+encoder (or, for `rgba`, writes the rows as they are), and cuts the bytes
+into frames: a header (`kind`, `page`, `width`, `height`, `format`), data
+frames of at most 256 KiB, and an end frame, then one zero-length
+terminator after the last page. Dart opens the page's sink at the header,
+awaits each data write before the engine goes on (back-pressure), and
+closes it at the end frame. Neither side holds a page: the engine holds a
+band, three PNG rows and one data frame; Dart holds one chunk in transit.
+An error or a cancel closes the sink of the page in flight; pages already
+delivered stand.
 
 ---
 

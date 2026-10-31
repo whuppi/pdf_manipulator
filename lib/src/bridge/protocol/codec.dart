@@ -16,7 +16,6 @@ import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
 import 'package:pdf_manipulator/src/types/extracted_image.dart';
-import 'package:pdf_manipulator/src/types/pdf_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_matrix.dart';
@@ -26,6 +25,7 @@ import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/types/pdf_redaction_report.dart';
+import 'package:pdf_manipulator/src/types/pdf_render.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
 import 'package:pdf_manipulator/src/types/pdf_wire.dart';
 import 'package:pdf_manipulator/src/types/pdf_xfa_info.dart';
@@ -360,12 +360,57 @@ PdfDocumentClassification decodeClassifyDocument(Map<String, Object?> r) =>
       pageCount: r['pageCount'] as int? ?? 0,
     );
 
-/// Decodes a rendered-page pixel buffer from a response map.
-RenderedPage decodeRenderedPage(Map<String, Object?> data) => RenderedPage(
-  width: data['width'] as int? ?? 0,
-  height: data['height'] as int? ?? 0,
-  data: _extractBytes(data['data']),
-);
+/// One frame of a chunked render: a page opens with a [RenderHeader], carries
+/// its bytes in [RenderData] frames of at most 256 KiB, and closes with a
+/// [RenderEnd].
+sealed class RenderFrame {
+  const RenderFrame();
+}
+
+/// The first frame of a page: its descriptor, before any pixel.
+final class RenderHeader extends RenderFrame {
+  /// Creates a header frame.
+  const RenderHeader(this.page, this.format);
+
+  /// The page the frames that follow belong to.
+  final PdfRenderedPage page;
+
+  /// What the data frames of the page carry.
+  final PdfRenderFormat format;
+}
+
+/// A run of the page's bytes, in order.
+final class RenderData extends RenderFrame {
+  /// Creates a data frame.
+  const RenderData(this.bytes);
+
+  /// The bytes, a view into the frame.
+  final Uint8List bytes;
+}
+
+/// The last frame of a page.
+final class RenderEnd extends RenderFrame {
+  /// Creates an end frame.
+  const RenderEnd();
+}
+
+/// Decodes a chunked-render frame from a response map by its `kind`.
+RenderFrame decodeRenderFrame(Map<String, Object?> data) {
+  final kind = data['kind'] as String? ?? '';
+  return switch (kind) {
+    'header' => RenderHeader(
+      PdfRenderedPage(
+        page: data['page'] as int? ?? 0,
+        width: data['width'] as int? ?? 0,
+        height: data['height'] as int? ?? 0,
+      ),
+      _enumByWireName(PdfRenderFormat.values, data['format'], 'render format'),
+    ),
+    'data' => RenderData(_extractBytes(data['data'])),
+    'end' => const RenderEnd(),
+    _ => throw PdfEngineError('unknown render frame "$kind" on the wire'),
+  };
+}
 
 /// Decodes an extracted image from a response map.
 ExtractedImage decodePdfImage(Map<String, Object?> data) => ExtractedImage(

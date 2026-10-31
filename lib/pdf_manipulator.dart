@@ -44,7 +44,8 @@ export 'src/types/pdf_pages.dart';
 export 'src/types/pdf_params.dart';
 export 'src/types/pdf_rect.dart';
 export 'src/types/pdf_redaction_report.dart';
-export 'src/types/pdf_render.dart' show PdfRenderSize, PdfRenderedPage;
+export 'src/types/pdf_render.dart'
+    show PdfRenderFormat, PdfRenderSize, PdfRenderedPage;
 export 'src/types/pdf_sanitize_options.dart';
 export 'src/types/pdf_signature.dart';
 export 'src/types/pdf_table.dart';

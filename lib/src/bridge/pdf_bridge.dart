@@ -3,6 +3,7 @@
 // No algorithms. No helpers. Just the wire.
 // INTERNAL — not exported from the package.
 
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/types/data_sink.dart';
@@ -14,7 +15,6 @@ import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/extracted_image.dart';
-import 'package:pdf_manipulator/src/types/pdf_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
@@ -115,8 +115,14 @@ abstract class BridgeDocHandle {
     required PdfPages pages,
   });
 
-  /// Renders the specified [pages] as pixel buffers.
-  Stream<RenderedPage> render({required PdfPages pages, PdfRenderSize? size});
+  /// Renders the specified [pages], writing each to the sink [sinkFor]
+  /// returns for its descriptor.
+  PdfTask<List<PdfRenderedPage>> render(
+    FutureOr<DataSink> Function(PdfRenderedPage page) sinkFor, {
+    required PdfPages pages,
+    required PdfRenderSize size,
+    required PdfRenderFormat format,
+  });
 
   /// Extracts embedded images from the specified [pages].
   Stream<ExtractedImage> extractImages({required PdfPages pages});

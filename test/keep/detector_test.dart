@@ -124,8 +124,8 @@ Future<void> use(Pdf pdf, DataSource src, DataSink out) => pdf.sign(src, out,
       'render_flow.dart': '''
 import 'package:fixture_app/deps/deps.dart';
 
-Stream<RenderedPage> use(PdfDoc doc) =>
-    doc.render(pages: const PdfPages.all());
+Future<List<PdfRenderedPage>> use(PdfDoc doc) =>
+    doc.render((page) => MemorySink(), pages: const PdfPages.all());
 ''',
     });
     addTearDown(() => dir.deleteSync(recursive: true));
@@ -225,7 +225,8 @@ Future<void> use(Pdf pdf, DataSource a, DataSource b, DataSink out) =>
       'main.dart': '''
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
-String use(PdfDoc doc) => 'pages: \${doc.render(pages: const PdfPages.all())}';
+String use(PdfDoc doc) =>
+    'pages: \${doc.render((p) => MemorySink(), pages: const PdfPages.all())}';
 ''',
     });
     addTearDown(() => dir.deleteSync(recursive: true));

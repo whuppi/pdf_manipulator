@@ -35,11 +35,12 @@ fn limit(op: &str, input: &str) -> usize {
         // Rulings are quantised as they are painted and dropped; the grid they
         // make is bounded by the page, never by the paths.
         ("extractAll", "paths") => 16 * MIB,
-        // The page's operators are read once per band, but the host still
-        // collects the raster whole to encode its PNG (a 1275 x 1650 page is
-        // 8 MiB, held twice while it is encoded); T5d, the chunked wire,
-        // brings these to 16 MiB.
-        ("render", "content-fl" | "content-a85" | "content-lzw" | "forms") => 32 * MIB,
+        // The page's operators are read once per band and its rows go to the
+        // PNG encoder as they are rastered: a band, three rows and one data
+        // frame are all the host holds.
+        ("render", "content-fl" | "content-a85" | "content-lzw" | "forms") => 16 * MIB,
+        // A 2000 pt square at 300 dpi is 69 million pixels, 278 MiB of raster.
+        ("render", "bigpage-300dpi") => 16 * MIB,
         ("fullRewriteSave", "encrypted") => 16 * MIB,
         // The resource prune reads every content once, as operators.
         ("compress", "content-fl" | "content-a85" | "content-lzw" | "forms" | "encrypted") => {
@@ -330,24 +331,239 @@ fn run() -> Result<(), String> {
         .collect();
     for (name, path) in render_inputs {
         step(&failed, "render", name, limit("render", name), |st| {
-            let resp = call(st, re("open"), vec![source(path)], vec![])?;
-            let hid = resp.i32("handleId").expect("open returns handleId");
-            call(
-                st,
-                re("render").put("handleId", i32v(hid)),
-                vec![],
-                vec![sink(&open_sink(name, "render"))],
-            )?;
-            call(st, re("docDispose").put("handleId", i32v(hid)), vec![], vec![])?;
-            Ok(())
+            render_to_sink(st, path, 150, &open_sink(name, "render"))
         });
+        verify_render_wire(&failed, name, &open_sink(name, "render"));
     }
+
+    // render of one page far bigger than the host may hold, at 300 dpi.
+    let bigpage = dir.join("bigpage.pdf");
+    generate_bigpage(&bigpage)?;
+    step(&failed, "render", "bigpage-300dpi", limit("render", "bigpage-300dpi"), |st| {
+        render_to_sink(st, &bigpage, 300, &open_sink("bigpage", "render"))
+    });
+    verify_render_wire(&failed, "bigpage-300dpi", &open_sink("bigpage", "render"));
 
     let _ = std::fs::remove_dir_all(&dir);
     if failed.get() {
         return Err("one or more steps exceeded their memory limit".to_string());
     }
     Ok(())
+}
+
+/// Opens `path`, renders every page to `sink_path` as PNG at `dpi`, and
+/// disposes the document: the host path a Dart `render` takes.
+fn render_to_sink(
+    state: &mut pdf_oxide::host::lane_state::LaneState,
+    path: &Path,
+    dpi: i32,
+    sink_path: &Path,
+) -> Result<(), String> {
+    let resp = call(state, re("open"), vec![source(path)], vec![])?;
+    let hid = resp.i32("handleId").expect("open returns handleId");
+    call(
+        state,
+        re("render")
+            .put("handleId", i32v(hid))
+            .put("sizeKind", strv("dpi"))
+            .put("dpi", i32v(dpi))
+            .put("format", strv("png"))
+            .put("hasSink", wire::Value::Bool(true)),
+        vec![],
+        vec![sink(sink_path)],
+    )?;
+    call(state, re("docDispose").put("handleId", i32v(hid)), vec![], vec![])?;
+    Ok(())
+}
+
+/// Reads the wire a render left in `sink_path` from its first frame to the
+/// terminator, after the measured step: every page is a header, data frames
+/// of at most 256 KiB and an end frame, its data is one whole PNG (signature,
+/// an IHDR that matches the header, chunks to IEND, nothing after it), and
+/// the terminator is the last four bytes of the file. Frames are read one at
+/// a time and counted, never kept. A failure fails the probe.
+fn verify_render_wire(failed: &std::cell::Cell<bool>, input: &str, sink_path: &Path) {
+    let started = std::time::Instant::now();
+    match check_render_wire(sink_path) {
+        Ok(summary) => eprintln!(
+            "memprobe: render {input}: wire ok, {summary} (read back in {} ms)",
+            started.elapsed().as_millis()
+        ),
+        Err(e) => {
+            eprintln!("memprobe: render {input}: WIRE FAIL: {e}");
+            failed.set(true);
+        },
+    }
+}
+
+fn check_render_wire(sink_path: &Path) -> Result<String, String> {
+    use std::io::Read;
+    let file = File::open(sink_path).map_err(|e| format!("open sink: {e}"))?;
+    let total = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let mut file = std::io::BufReader::new(file);
+    let mut read = 0u64;
+    let mut pages = 0usize;
+    let mut open: Option<(i32, i32, PngWalk)> = None;
+    let (mut data_bytes, mut data_frames, mut largest, mut first) = (0u64, 0usize, 0usize, String::new());
+    loop {
+        let mut len = [0u8; 4];
+        file.read_exact(&mut len).map_err(|e| format!("terminator missing: {e}"))?;
+        read += 4;
+        let len = u32::from_le_bytes(len) as usize;
+        if len == 0 {
+            if open.is_some() {
+                return Err("the terminator came inside a page".into());
+            }
+            if read != total {
+                return Err(format!("{} bytes follow the terminator", total - read));
+            }
+            return Ok(format!(
+                "{pages} page(s), first {first}, {data_frames} data frames (largest {largest} bytes) \
+                 summing {data_bytes} PNG bytes, {total} bytes on the wire"
+            ));
+        }
+        let mut frame = vec![0u8; len];
+        file.read_exact(&mut frame).map_err(|e| format!("truncated frame: {e}"))?;
+        read += len as u64;
+        let frame = wire::parse_response(&frame)?;
+        match frame.str("kind") {
+            Some("header") => {
+                if open.is_some() {
+                    return Err("a header inside a page".into());
+                }
+                let (w, h) = (frame.i32("width").unwrap_or(0), frame.i32("height").unwrap_or(0));
+                if pages == 0 {
+                    first = format!("{w}x{h} px");
+                }
+                open = Some((w, h, PngWalk::new()));
+            },
+            Some("data") => {
+                let (_, _, walk) = open.as_mut().ok_or("data outside a page")?;
+                let bytes = frame.bytes("data").ok_or("a data frame without data")?;
+                if bytes.len() > 256 * 1024 {
+                    return Err(format!("a data frame of {} bytes", bytes.len()));
+                }
+                walk.feed(bytes)?;
+                data_bytes += bytes.len() as u64;
+                data_frames += 1;
+                largest = largest.max(bytes.len());
+            },
+            Some("end") => {
+                let (w, h, walk) = open.take().ok_or("an end outside a page")?;
+                walk.finish(w, h)?;
+                pages += 1;
+            },
+            other => return Err(format!("unknown frame kind {other:?}")),
+        }
+    }
+}
+
+/// Walks the chunks of a PNG as its bytes arrive, keeping only the 13 bytes
+/// of IHDR: signature, chunks, IEND last, nothing after it.
+struct PngWalk {
+    phase: PngPhase,
+    ihdr: Vec<u8>,
+    /// Bytes fed.
+    consumed: u64,
+    /// Bytes the chunk lengths account for: signature plus each chunk's
+    /// length, type, body and checksum.
+    walked: u64,
+    idat: u64,
+}
+
+enum PngPhase {
+    Signature(usize),
+    Head([u8; 8], usize),
+    Body { kind: [u8; 4], left: u64 },
+    Done,
+}
+
+impl PngWalk {
+    fn new() -> Self {
+        Self { phase: PngPhase::Signature(0), ihdr: Vec::new(), consumed: 0, walked: 0, idat: 0 }
+    }
+
+    fn feed(&mut self, mut bytes: &[u8]) -> Result<(), String> {
+        const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        self.consumed += bytes.len() as u64;
+        while !bytes.is_empty() {
+            match &mut self.phase {
+                PngPhase::Signature(n) => {
+                    let take = (8 - *n).min(bytes.len());
+                    if bytes[..take] != SIGNATURE[*n..*n + take] {
+                        return Err("not a PNG signature".into());
+                    }
+                    *n += take;
+                    bytes = &bytes[take..];
+                    if *n == 8 {
+                        self.walked = 8;
+                        self.phase = PngPhase::Head([0; 8], 0);
+                    }
+                },
+                PngPhase::Head(head, n) => {
+                    let take = (8 - *n).min(bytes.len());
+                    head[*n..*n + take].copy_from_slice(&bytes[..take]);
+                    *n += take;
+                    bytes = &bytes[take..];
+                    if *n == 8 {
+                        let len = u32::from_be_bytes(head[..4].try_into().unwrap()) as u64;
+                        let kind: [u8; 4] = head[4..].try_into().unwrap();
+                        self.walked += 12 + len;
+                        self.phase = PngPhase::Body { kind, left: len + 4 };
+                    }
+                },
+                PngPhase::Body { kind, left } => {
+                    let take = (*left).min(bytes.len() as u64) as usize;
+                    if kind == b"IHDR" && self.ihdr.len() < 13 {
+                        let want = (13 - self.ihdr.len()).min(take);
+                        self.ihdr.extend_from_slice(&bytes[..want]);
+                    }
+                    if kind == b"IDAT" {
+                        self.idat += take as u64;
+                    }
+                    *left -= take as u64;
+                    bytes = &bytes[take..];
+                    if *left == 0 {
+                        self.phase = if kind == b"IEND" {
+                            PngPhase::Done
+                        } else {
+                            PngPhase::Head([0; 8], 0)
+                        };
+                    }
+                },
+                PngPhase::Done => return Err("bytes after IEND".into()),
+            }
+        }
+        Ok(())
+    }
+
+    /// The page ended: the PNG must be whole and say the size its header did.
+    fn finish(self, width: i32, height: i32) -> Result<(), String> {
+        if !matches!(self.phase, PngPhase::Done) {
+            return Err("the page ended before IEND".into());
+        }
+        if self.walked != self.consumed {
+            return Err(format!(
+                "the data frames hold {} bytes, the PNG's chunks {}",
+                self.consumed, self.walked
+            ));
+        }
+        let ihdr = self.ihdr;
+        let (w, h) = (
+            u32::from_be_bytes(ihdr[0..4].try_into().unwrap()) as i32,
+            u32::from_be_bytes(ihdr[4..8].try_into().unwrap()) as i32,
+        );
+        if (w, h) != (width, height) {
+            return Err(format!("IHDR says {w}x{h}, the header said {width}x{height}"));
+        }
+        if ihdr[8] != 8 || ihdr[9] != 6 {
+            return Err(format!("IHDR depth {} colour type {}, not 8-bit RGBA", ihdr[8], ihdr[9]));
+        }
+        if self.idat == 0 {
+            return Err("no IDAT".into());
+        }
+        Ok(())
+    }
 }
 
 fn i32v(n: i32) -> wire::Value {
@@ -944,6 +1160,43 @@ fn generate_forms(path: &Path) -> Result<(), String> {
             eprintln!("memprobe: forms: form {form}/{FORMS}");
         }
     }
+    out.finish()
+}
+
+/// A one-page PDF 2000 points square whose ink covers its whole height: 2,000
+/// coloured strokes, one per point of height, each sloped differently across
+/// the page, and a row of text every 40 points. Its content is small (about
+/// 150 KB), its raster is not, and no band of it is blank.
+fn generate_bigpage(path: &Path) -> Result<(), String> {
+    let mut rng = Xorshift::new(0xB16);
+    let mut content = String::new();
+    for y in 0..2000 {
+        let n = rng.next();
+        content.push_str(&format!(
+            "{:.2} {:.2} {:.2} RG {:.1} w 0 {y} m 2000 {} l S\n",
+            (n & 0xFF) as f32 / 255.0,
+            ((n >> 8) & 0xFF) as f32 / 255.0,
+            ((n >> 16) & 0xFF) as f32 / 255.0,
+            0.5 + ((n >> 24) & 0x7) as f32 * 0.4,
+            y as i64 + ((n >> 32) % 200) as i64 - 100,
+        ));
+    }
+    for row in 0..50 {
+        content.push_str(&format!(
+            "BT /F1 18 Tf 0 g 40 {} Td (Row {row}: the quick brown fox jumps over the lazy dog) Tj ET\n",
+            20 + row * 40
+        ));
+    }
+    let mut out = PdfOut::create(path)?;
+    out.object(1, "<< /Type /Catalog /Pages 2 0 R >>")?;
+    out.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")?;
+    out.object(
+        3,
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 2000 2000] \
+         /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+    )?;
+    out.stream(4, "", content.len() as u64, content.as_bytes())?;
+    out.object(5, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")?;
     out.finish()
 }
 

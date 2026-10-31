@@ -121,6 +121,20 @@ impl OkResponse {
             _ => None,
         })
     }
+
+    pub fn str(&self, key: &str) -> Option<&str> {
+        self.fields.iter().find_map(|(k, v)| match v {
+            Value::Str(s) if k == key => Some(s.as_str()),
+            _ => None,
+        })
+    }
+
+    pub fn bytes(&self, key: &str) -> Option<&[u8]> {
+        self.fields.iter().find_map(|(k, v)| match v {
+            Value::Bytes(b) if k == key => Some(b.as_slice()),
+            _ => None,
+        })
+    }
 }
 
 /// Reads one ok response or turns an error/cancelled response into a

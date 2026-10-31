@@ -1189,13 +1189,14 @@ class _DocTabState extends State<_DocTab>
                       title: 'Render page 1 to image',
                       loading: loading,
                       onRun: () => runFlow('Render', () async {
-                            var info = 'No pages rendered';
-                            await for (final page in doc.render(
-                                pages: const PdfPages.single(0))) {
-                              info = 'Rendered ${page.width}×${page.height} '
-                                  '(${fmtSize(page.data.length)})';
-                            }
-                            setState(() => status = info);
+                            final sink = DemoSink();
+                            final pages = await doc.render((page) => sink,
+                                pages: const PdfPages.single(0));
+                            setState(() => status = pages.isEmpty
+                                ? 'No pages rendered'
+                                : 'Rendered ${pages.first.width}×'
+                                    '${pages.first.height} '
+                                    '(${fmtSize(sink.length)})');
                           })),
                   _Op(
                       icon: Icons.photo_library,

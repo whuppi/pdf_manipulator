@@ -21,6 +21,7 @@ import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
 import '../../fixtures/generated/fixtures.dart';
+import '../../harness/render_pages.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
 
@@ -315,13 +316,11 @@ void registerFormTests(Pdf Function() createPdf) {
 /// form styling test that must prove pixels changed after save + reopen.
 Future<img.Image> _renderFirstPage(Pdf pdf, Uint8List bytes) async {
   final doc = await pdf.open(src(bytes));
-  final frames = <RenderedPage>[];
-  await for (final page in doc.render(
+  final frames = await renderToMemory(
+    doc,
     pages: const PdfPages.single(0),
     size: const PdfRenderSize.thumbnail(200),
-  )) {
-    frames.add(page);
-  }
+  );
   await doc.dispose();
   return img.decodePng(frames.single.data)!;
 }

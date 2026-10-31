@@ -348,26 +348,5 @@ void registerOneShotTests(Pdf Function() createPdf) {
         );
       }, timeout: t(1));
     });
-
-    // ── render size ──
-
-    test(
-      'a dpi render size is refused until the render wire carries it',
-      () async {
-        final pdf = createPdf();
-        final doc = await pdf.open(src(minimalPdf));
-        await expectLater(
-          doc
-              .render(
-                pages: const PdfPages.single(0),
-                size: const PdfRenderSize.dpi(150),
-              )
-              .toList(),
-          throwsA(isA<PdfUnsupported>()),
-        );
-        await doc.dispose();
-      },
-      timeout: t(1),
-    );
   });
 }

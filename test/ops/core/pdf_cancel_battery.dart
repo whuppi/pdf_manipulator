@@ -16,9 +16,23 @@ import '../../harness/timeouts.dart';
 
 const _pageCount = 200;
 
-/// Frames the engine may write after the consumer cancelled: one
-/// already in flight when the cancel lands.
-const _framesAfterCancelBound = 1;
+/// Frames the engine may write after the consumer cancelled: the frames of
+/// one page (header, data, end) already in flight when the cancel lands.
+const _framesAfterCancelBound = 3;
+
+/// A sink that counts its closes and the bytes it was given.
+class _ClosesCounted implements DataSink {
+  int closes = 0;
+  int bytes = 0;
+
+  @override
+  void close() => closes++;
+
+  @override
+  FutureOr<void> write(Uint8List chunk) {
+    bytes += chunk.length;
+  }
+}
 
 Future<Uint8List> _buildPages(Pdf pdf) async {
   final builder = await pdf.build();
@@ -89,28 +103,47 @@ void registerCancelTests(
         onEngineFrame = () => written++;
         addTearDown(() => onEngineFrame = null);
 
-        var received = 0;
+        var opened = 0;
         var writtenAtCancel = -1;
-        late final StreamSubscription<RenderedPage> sub;
-        sub = doc.render(pages: const PdfPages.all()).listen((_) {
-          received++;
-          if (received == 1) {
-            writtenAtCancel = written;
-            unawaited(sub.cancel());
-          }
-        });
+        final sinks = <_ClosesCounted>[];
+        late final PdfTask<List<PdfRenderedPage>> task;
+        task = doc.render(
+          (page) {
+            opened++;
+            if (opened == 1) {
+              writtenAtCancel = written;
+              task.cancel();
+            }
+            final sink = _ClosesCounted();
+            sinks.add(sink);
+            return sink;
+          },
+          pages: const PdfPages.all(),
+          size: const PdfRenderSize.thumbnail(120),
+        );
+        await expectLater(task, throwsA(isA<PdfCancelled>()));
 
         // The lane runs one job at a time: once this read returns, the
         // render job is over.
         await doc.extract(pages: const PdfPages.single(0));
 
-        expect(received, lessThanOrEqualTo(2));
+        expect(opened, lessThanOrEqualTo(2));
         expect(
           written - writtenAtCancel,
           lessThanOrEqualTo(_framesAfterCancelBound),
           reason:
               'frames the engine wrote after the cancel: '
               '${written - writtenAtCancel} of $_pageCount pages',
+        );
+        expect(
+          sinks.map((s) => s.closes),
+          everyElement(1),
+          reason: 'the sink of the page in flight is closed, once',
+        );
+        expect(
+          sinks.first.bytes,
+          0,
+          reason: 'a cancel stops the writes: the first page got no data',
         );
         await doc.dispose();
       },

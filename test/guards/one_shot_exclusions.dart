@@ -107,7 +107,6 @@ const oneShotExclusions = <String, Map<String, String>>{
     'encryptionAlgorithm': _docFact,
     'permissions': _docFact,
     'extract': _moves,
-    'render': _moves,
     'extractImages': _moves,
     'signatures': _moves,
     'verifySignatures': _moves,

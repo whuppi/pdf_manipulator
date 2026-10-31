@@ -343,10 +343,14 @@ for (final field in await doc.formFields) {
   print('${field.name}: ${field.type.name} = ${field.value}');
 }
 
-await for (final page in doc.render(
-    pages: PdfPages.all(), size: PdfRenderSize.thumbnail(200))) {
-  // page.width, page.height, page.data — PNG-encoded bytes; decode to read pixels
-}
+// Each page is written to the sink the factory returns for it, row by row; the
+// library closes that sink. `size` defaults to `PdfRenderSize.dpi(150)`.
+final pages = await doc.render(
+  (page) => FileSink.open(File('page-${page.page}.png')),
+  pages: PdfPages.all(),
+  size: PdfRenderSize.thumbnail(200),
+);
+// pages[i].width, pages[i].height — the pixel size of each file written
 
 await doc.dispose();
 ```

@@ -13,6 +13,7 @@ import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
+import 'package:pdf_manipulator/src/types/pdf_render.dart';
 import 'package:pdf_manipulator/src/bridge/protocol/codec.dart';
 import 'package:test/test.dart';
 
@@ -287,16 +288,50 @@ void main() {
     });
   });
 
-  group('decodeRenderedPage', () {
-    test('parses with ByteBuffer', () {
-      final bytes = Uint8List.fromList([1, 2, 3]);
-      final page = decodeRenderedPage({
+  group('decodeRenderFrame', () {
+    test('a header carries the page descriptor and the format', () {
+      final frame = decodeRenderFrame({
+        'kind': 'header',
+        'page': 3,
         'width': 800,
         'height': 600,
-        'data': bytes.buffer,
+        'format': 'rgba',
       });
-      expect(page.width, 800);
-      expect(page.data, hasLength(3));
+      expect(frame, isA<RenderHeader>());
+      final header = frame as RenderHeader;
+      expect(
+        header.page,
+        const PdfRenderedPage(page: 3, width: 800, height: 600),
+      );
+      expect(header.format, PdfRenderFormat.rgba);
+    });
+
+    test('a data frame carries its bytes', () {
+      final bytes = Uint8List.fromList([1, 2, 3]);
+      final frame = decodeRenderFrame({'kind': 'data', 'data': bytes});
+      expect(frame, isA<RenderData>());
+      expect((frame as RenderData).bytes, [1, 2, 3]);
+    });
+
+    test('an end frame has no fields', () {
+      expect(decodeRenderFrame({'kind': 'end'}), isA<RenderEnd>());
+    });
+
+    test('an unknown kind or format is an engine error, never a guess', () {
+      expect(
+        () => decodeRenderFrame({'kind': 'tile'}),
+        throwsA(isA<PdfEngineError>()),
+      );
+      expect(
+        () => decodeRenderFrame({
+          'kind': 'header',
+          'page': 0,
+          'width': 1,
+          'height': 1,
+          'format': 'jpeg',
+        }),
+        throwsA(isA<PdfEngineError>()),
+      );
     });
   });
 

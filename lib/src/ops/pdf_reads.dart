@@ -25,6 +25,42 @@ abstract base class PdfReads {
     KeepRecord.op('extract');
     return _run((handle) => handle.search(query: query, pages: pages));
   }
+
+  /// Renders [pages] and writes each one to the sink [sinkFor] returns for
+  /// it, in page order; resolves with the pages written.
+  ///
+  /// [sinkFor] receives the page's descriptor, with its pixel size, before
+  /// any pixel is written. The sink it returns is the library's: it is
+  /// closed after its page, and on an error or a cancel the sink of the page
+  /// in flight is closed too. Pages already delivered stand. Each write
+  /// is awaited before the engine goes on, so a slow sink slows the render;
+  /// the library holds no page, only the bytes of one chunk in transit.
+  ///
+  /// [size] is the size of each page (`.dpi(150)` by default: 150 pixels per
+  /// inch of the page box); [format] is what the sink receives, a PNG file
+  /// or raw straight-alpha RGBA rows, top to bottom.
+  ///
+  /// ```dart
+  /// final pages = await doc.render(
+  ///   (page) => FileSink.open(File('page-${page.page}.png')),
+  ///   pages: const PdfPages.all(),
+  /// );
+  /// ```
+  ///
+  /// Cancelling the task closes the current page's sink, stops the render
+  /// and resolves the task with [PdfCancelled].
+  PdfTask<List<PdfRenderedPage>> render(
+    FutureOr<DataSink> Function(PdfRenderedPage page) sinkFor, {
+    required PdfPages pages,
+    PdfRenderSize size = const PdfRenderSize.dpi(150),
+    PdfRenderFormat format = PdfRenderFormat.png,
+  }) {
+    KeepRecord.op('render');
+    return _run(
+      (handle) =>
+          handle.render(sinkFor, pages: pages, size: size, format: format),
+    );
+  }
 }
 
 /// A one-shot runs one call: a second call is refused before any I/O.

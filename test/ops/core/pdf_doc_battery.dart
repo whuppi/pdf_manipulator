@@ -19,6 +19,7 @@ import '../../fixtures/generated/fixtures.dart';
 import '../../fixtures/handwritten.dart';
 import '../../fixtures/third_party/tp_encrypted.dart';
 import '../../fixtures/third_party/tp_encrypted_legacy.dart';
+import '../../harness/render_pages.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
 
@@ -361,10 +362,7 @@ void registerDocTests(Pdf Function() createPdf) {
 
     test('render single page yields one image with dimensions', () async {
       final doc = await createPdf().open(src(minimalPdf));
-      final pages = <RenderedPage>[];
-      await for (final page in doc.render(pages: const PdfPages.single(0))) {
-        pages.add(page);
-      }
+      final pages = await renderToMemory(doc, pages: const PdfPages.single(0));
       expect(pages, hasLength(1));
       expect(pages[0].width, greaterThan(0));
       expect(pages[0].height, greaterThan(0));
@@ -376,10 +374,7 @@ void registerDocTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final bytes = fTwoPageMarkers;
       final doc = await pdf.open(src(bytes));
-      final pages = <RenderedPage>[];
-      await for (final page in doc.render(pages: const PdfPages.all())) {
-        pages.add(page);
-      }
+      final pages = await renderToMemory(doc, pages: const PdfPages.all());
       expect(pages, hasLength(2));
       await doc.dispose();
     }, timeout: t(1));
@@ -624,8 +619,8 @@ void registerDocTests(Pdf Function() createPdf) {
       'search': (d) => d.search(query: 'x', pages: const PdfPages.single(1)),
       'classifyPage': (d) => d.classifyPage(1),
       'annotations': (d) => d.annotations(1),
-      'render': (d) => d.render(pages: const PdfPages.single(1)).toList(),
-      'render list': (d) => d.render(pages: const PdfPages.list([1])).toList(),
+      'render': (d) => renderToMemory(d, pages: const PdfPages.single(1)),
+      'render list': (d) => renderToMemory(d, pages: const PdfPages.list([1])),
       'extractImages': (d) =>
           d.extractImages(pages: const PdfPages.single(1)).toList(),
     };

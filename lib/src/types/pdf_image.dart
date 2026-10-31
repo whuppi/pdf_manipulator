@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-
 import 'package:meta/meta.dart';
 
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
@@ -65,27 +63,4 @@ class PdfImage {
   @override
   String toString() =>
       'PdfImage(page $page #$index, ${width}x$height, $encoding, $color)';
-}
-
-/// A rendered page bitmap.
-@immutable
-class RenderedPage {
-  /// Creates a rendered page descriptor.
-  const RenderedPage({
-    required this.width,
-    required this.height,
-    required this.data,
-  });
-
-  /// Bitmap width in pixels.
-  final int width;
-
-  /// Bitmap height in pixels.
-  final int height;
-
-  /// PNG-encoded image of the page; decode it to read pixels.
-  final Uint8List data;
-
-  @override
-  String toString() => 'RenderedPage(${width}x$height, ${data.length} bytes)';
 }

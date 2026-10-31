@@ -125,10 +125,9 @@ PdfRenderSize _sizeFor(PdfPageInfo page, int dpi) {
 }
 
 Future<Uint8List> _render(PdfDoc doc, int page, PdfRenderSize size) async {
-  final rendered = await doc
-      .render(pages: PdfPages.single(page), size: size)
-      .single;
-  return rendered.data;
+  final sink = MemorySink();
+  await doc.render((_) => sink, pages: PdfPages.single(page), size: size);
+  return sink.takeBytes();
 }
 
 img.Image _decode(Uint8List png, int page) {

@@ -1,5 +1,22 @@
 import 'package:meta/meta.dart';
 
+import 'package:pdf_manipulator/src/types/pdf_wire.dart';
+
+/// What the bytes a render writes for a page are.
+enum PdfRenderFormat implements PdfWire {
+  /// A PNG file.
+  png('png'),
+
+  /// Raw rows: straight-alpha RGBA, four bytes a pixel, top to bottom, with
+  /// no header. The page's size is in its [PdfRenderedPage].
+  rgba('rgba');
+
+  const PdfRenderFormat(this.wire);
+
+  @override
+  final String wire;
+}
+
 /// How large a rendered page is. Pixels appear only here, in
 /// [PdfRenderedPage] and in `PdfImage`.
 ///
@@ -57,7 +74,8 @@ final class PdfRenderThumbnail extends PdfRenderSize {
 }
 
 /// One page a render wrote to its sink: which page, and the size in pixels
-/// of the image written.
+/// of the image written. The render hands it to the sink factory before any
+/// pixel is written, and returns it once the page's sink is closed.
 @immutable
 class PdfRenderedPage {
   /// Creates a rendered-page descriptor.

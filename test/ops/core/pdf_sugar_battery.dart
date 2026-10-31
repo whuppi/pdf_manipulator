@@ -16,6 +16,7 @@ import 'package:test/test.dart';
 import '../../fixtures/generated/fixtures.dart';
 import '../../fixtures/handwritten.dart';
 import '../../harness/page_prune_expect.dart';
+import '../../harness/render_pages.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
 
@@ -166,17 +167,17 @@ void registerSugarTests(Pdf Function() createPdf) {
         expect(actual.single.width, expected.single.width);
         expect(actual.single.data, expected.single.data);
       }
-      final renderedBefore = await before
-          .render(pages: const PdfPages.all())
-          .map((p) => p.data)
-          .toList();
-      final renderedAfter = await after
-          .render(pages: const PdfPages.all())
-          .map((p) => p.data)
-          .toList();
+      final renderedBefore = await renderToMemory(
+        before,
+        pages: const PdfPages.all(),
+      );
+      final renderedAfter = await renderToMemory(
+        after,
+        pages: const PdfPages.all(),
+      );
       expect(renderedAfter, hasLength(3));
       for (var page = 0; page < 3; page++) {
-        expect(renderedAfter[page], renderedBefore[page]);
+        expect(renderedAfter[page].data, renderedBefore[page].data);
       }
       await before.dispose();
       await after.dispose();

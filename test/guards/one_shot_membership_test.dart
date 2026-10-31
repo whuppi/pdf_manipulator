@@ -72,6 +72,6 @@ void main() {
       declaredPublic(PdfEdits),
       containsAll(['addWatermark', 'rotatePage']),
     );
-    expect(declaredPublic(PdfReads), contains('search'));
+    expect(declaredPublic(PdfReads), containsAll(['search', 'render']));
   });
 }

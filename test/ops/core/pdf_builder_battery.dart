@@ -12,6 +12,7 @@ import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
 import '../../fixtures/handwritten.dart';
+import '../../harness/render_pages.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
 
@@ -1326,15 +1327,17 @@ void registerBuilderTests(Pdf Function() createPdf) {
               'is an XObject like any placed image',
         );
         final doc = await openOf(pdf, bytes);
-        var frames = 0;
-        await for (final page in doc.render(
+        final frames = await renderToMemory(
+          doc,
           pages: const PdfPages.single(0),
           size: const PdfRenderSize.thumbnail(240),
-        )) {
-          expect(page.data, isNotEmpty);
-          frames++;
-        }
-        expect(frames, 1, reason: 'page 0 must render with the artifact');
+        );
+        expect(frames, hasLength(1), reason: 'page 0 must render');
+        expect(
+          frames.single.data,
+          isNotEmpty,
+          reason: 'page 0 must render with the artifact',
+        );
         await doc.dispose();
       },
       timeout: t(1),

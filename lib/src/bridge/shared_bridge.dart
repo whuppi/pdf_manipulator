@@ -12,7 +12,6 @@ import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/extracted_image.dart';
-import 'package:pdf_manipulator/src/types/pdf_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
@@ -251,20 +250,31 @@ class SharedBridge extends PdfBridge {
   };
 }
 
-/// The `render` request fields a [PdfRenderSize] stands for. No size is the
-/// engine's default; a dpi size has no wire form until the render wire
-/// carries it.
-Map<String, Object?> _renderSizeArgs(PdfRenderSize? size) => switch (size) {
-  null => const {},
-  PdfRenderFit(:final maxWidth, :final maxHeight) => {
-    'maxWidth': maxWidth,
-    'maxHeight': maxHeight,
-  },
-  PdfRenderThumbnail(:final size) => {'maxWidth': size, 'maxHeight': size},
-  PdfRenderDpi() => throw const PdfUnsupported(
-    'PdfRenderSize.dpi is not wired into render yet',
-  ),
-};
+/// The `render` request fields a [PdfRenderSize] stands for: its kind by
+/// name (`dpi`, `fit`, `thumbnail`) and that kind's numbers. The engine
+/// works out the page's pixel size from them.
+Map<String, Object?> _renderSizeArgs(PdfRenderSize size) {
+  int positive(String what, int value) {
+    if (value < 1) throw PdfInvalidArgument('$what must be positive: $value');
+    return value;
+  }
+
+  return switch (size) {
+    PdfRenderDpi(:final dpi) => {
+      'sizeKind': 'dpi',
+      'dpi': positive('dpi', dpi),
+    },
+    PdfRenderFit(:final maxWidth, :final maxHeight) => {
+      'sizeKind': 'fit',
+      'maxWidth': positive('maxWidth', maxWidth),
+      'maxHeight': positive('maxHeight', maxHeight),
+    },
+    PdfRenderThumbnail(:final size) => {
+      'sizeKind': 'thumbnail',
+      'size': positive('size', size),
+    },
+  };
+}
 
 // ── O(1)-memory framed sink for streaming ops ──────────────────────
 

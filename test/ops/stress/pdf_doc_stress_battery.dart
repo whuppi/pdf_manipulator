@@ -6,6 +6,7 @@ import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
 import '../../fixtures/generated/fixtures.dart';
+import '../../harness/render_pages.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/perf.dart';
 
@@ -81,25 +82,20 @@ void registerDocStressTests(Pdf Function() createPdf) {
     // Observed op/calibration: 14.43, 10.03, 8.32, 14.46.
     stressTest('render first page', createPdf, ratio: 44, () async {
       final doc = await createPdf().open(src(largePdf));
-      int count = 0;
-      await for (final page in doc.render(pages: const PdfPages.single(0))) {
-        expect(page.width, greaterThan(0));
-        count++;
-      }
-      expect(count, 1);
+      final pages = await renderToMemory(doc, pages: const PdfPages.single(0));
+      expect(pages, hasLength(1));
+      expect(pages.single.width, greaterThan(0));
       await doc.dispose();
     });
 
     // Observed op/calibration: 11.74, 11.87, 12.13, 13.03.
     stressTest('render pages 100-109', createPdf, ratio: 40, () async {
       final doc = await createPdf().open(src(largePdf));
-      int count = 0;
-      await for (final _ in doc.render(
+      final pages = await renderToMemory(
+        doc,
         pages: PdfPages.list(List.generate(10, (i) => 100 + i)),
-      )) {
-        count++;
-      }
-      expect(count, 10);
+      );
+      expect(pages, hasLength(10));
       await doc.dispose();
     });
 
