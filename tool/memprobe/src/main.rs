@@ -32,6 +32,9 @@ fn limit(op: &str, input: &str) -> usize {
         ("extractAll", "many" | "huge") => 16 * MIB,
         // The text is read as operators, one token at a time.
         ("extractAll", "content-fl" | "content-a85" | "content-lzw" | "forms") => 16 * MIB,
+        // Rulings are quantised as they are painted and dropped; the grid they
+        // make is bounded by the page, never by the paths.
+        ("extractAll", "paths") => 16 * MIB,
         ("fullRewriteSave", "encrypted") => 16 * MIB,
         // The resource prune reads every content once, as operators.
         ("compress", "content-fl" | "content-a85" | "content-lzw" | "forms" | "encrypted") => {
@@ -74,6 +77,8 @@ fn run() -> Result<(), String> {
     }
     let forms = dir.join("forms.pdf");
     generate_forms(&forms)?;
+    let paths = dir.join("paths.pdf");
+    generate_paths(&paths)?;
     eprintln!(
         "memprobe: inputs ready: many={} huge={} encrypted={} forms={} bytes",
         std::fs::metadata(&many).map(|m| m.len()).unwrap_or(0),
@@ -292,7 +297,7 @@ fn run() -> Result<(), String> {
     let extract_inputs: Vec<(&str, &Path)> = contents
         .iter()
         .map(|(name, path)| (*name, path.as_path()))
-        .chain([("forms", forms.as_path())])
+        .chain([("forms", forms.as_path()), ("paths", paths.as_path())])
         .collect();
     for (name, path) in extract_inputs {
         step(&failed, "extractAll", name, limit("extractAll", name), |st| {
@@ -913,6 +918,82 @@ fn generate_forms(path: &Path) -> Result<(), String> {
         }
     }
     out.finish()
+}
+
+/// Decoded bytes of the `paths` input's one content stream.
+const PATHS_BYTES: usize = 64 * MIB;
+
+/// A one-page Letter PDF whose content is [`PATHS_BYTES`] of `x y m x y l S`
+/// rulings: a lattice of 374 small tables (3 x 3 cells, 8 rulings and 9
+/// numbers each) drawn over and over with a jitter of a tenth of a point, so
+/// the page holds about two million ruling primitives and a few thousand
+/// words. The grid they make is bounded by the page; the paths are not.
+fn generate_paths(path: &Path) -> Result<(), String> {
+    use std::io::BufWriter;
+
+    const PITCH: f32 = 36.0;
+    const CELL: f32 = 10.0;
+    let body_path = path.with_extension("body");
+    let io = |e: std::io::Error| format!("paths: {e}");
+    let mut rng = Xorshift::new(0x7AB1E);
+    let produced = std::cell::Cell::new(0usize);
+    {
+        let mut body = BufWriter::new(File::create(&body_path).map_err(io)?);
+        let emit = |body: &mut BufWriter<File>, s: &str| -> std::io::Result<()> {
+            produced.set(produced.get() + s.len());
+            body.write_all(s.as_bytes())
+        };
+        emit(&mut body, "0.5 w\n").map_err(io)?;
+        // The words, once.
+        for row in 0..22 {
+            for col in 0..17 {
+                let (x, y) = (12.0 + col as f32 * PITCH, 12.0 + row as f32 * PITCH);
+                for r in 0..3 {
+                    for c in 0..3 {
+                        let word = format!(
+                            "BT /F1 6 Tf {} {} Td ({}.5) Tj ET\n",
+                            x + c as f32 * CELL + 2.0,
+                            y + r as f32 * CELL + 3.0,
+                            r * 3 + c
+                        );
+                        emit(&mut body, &word).map_err(io)?;
+                    }
+                }
+            }
+        }
+        // The rulings, again and again.
+        while produced.get() < PATHS_BYTES {
+            for row in 0..22 {
+                for col in 0..17 {
+                    let (x, y) = (12.0 + col as f32 * PITCH, 12.0 + row as f32 * PITCH);
+                    let jitter = (rng.next() % 100) as f32 / 1000.0;
+                    let mut lines = String::new();
+                    for i in 0..=3 {
+                        let d = i as f32 * CELL + jitter;
+                        let far = 3.0 * CELL;
+                        lines.push_str(&format!("{x:.2} {:.2} m {:.2} {:.2} l S\n", y + d, x + far, y + d));
+                        lines.push_str(&format!("{:.2} {y:.2} m {:.2} {:.2} l S\n", x + d, x + d, y + far));
+                    }
+                    emit(&mut body, &lines).map_err(io)?;
+                }
+            }
+        }
+        body.flush().map_err(io)?;
+    }
+    let len = std::fs::metadata(&body_path).map_err(io)?.len();
+
+    let mut out = PdfOut::create(path)?;
+    out.object(1, "<< /Type /Catalog /Pages 2 0 R >>")?;
+    out.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")?;
+    out.object(
+        3,
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+         /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+    )?;
+    out.stream(4, "", len, File::open(&body_path).map_err(io)?)?;
+    out.object(5, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")?;
+    out.finish()?;
+    std::fs::remove_file(&body_path).map_err(io)
 }
 
 /// `huge`, AES-256 encrypted under an empty user password: the same 60 MiB
