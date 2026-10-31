@@ -41,6 +41,15 @@ fn limit(op: &str, input: &str) -> usize {
         ("render", "content-fl" | "content-a85" | "content-lzw" | "forms") => 16 * MIB,
         // A 2000 pt square at 300 dpi is 69 million pixels, 278 MiB of raster.
         ("render", "bigpage-300dpi") => 16 * MIB,
+        // A 60 MiB image is read through its filters a strip of rows at a
+        // time and resampled one row at a time to its 1275 x 1650 device size.
+        ("render", "huge") => 16 * MIB,
+        // The ruled exception: a progressive JPEG is decoded whole, by the
+        // inverse DCT at the reduction that covers the footprint, so the host
+        // holds its coefficients and that one raster. The ceiling is the
+        // measured peak (53.3 MiB; the renderer before this held 170 MiB);
+        // the target is a decoder that streams progressive scans.
+        ("render", "hugeJpeg") => 56 * MIB,
         ("fullRewriteSave", "encrypted") => 16 * MIB,
         // The resource prune reads every content once, as operators.
         ("compress", "content-fl" | "content-a85" | "content-lzw" | "forms" | "encrypted") => {
@@ -343,6 +352,21 @@ fn run() -> Result<(), String> {
         render_to_sink(st, &bigpage, 300, &open_sink("bigpage", "render"))
     });
     verify_render_wire(&failed, "bigpage-300dpi", &open_sink("bigpage", "render"));
+
+    // render of one page filled by a 60 MiB image, and of one filled by a
+    // progressive JPEG, at 150 dpi.
+    let huge_drawn = dir.join("huge-drawn.pdf");
+    generate_huge_drawn(&huge_drawn)?;
+    step(&failed, "render", "huge", limit("render", "huge"), |st| {
+        render_to_sink(st, &huge_drawn, 150, &open_sink("huge", "render"))
+    });
+    verify_render_wire(&failed, "huge", &open_sink("huge", "render"));
+    let huge_jpeg = dir.join("huge-jpeg.pdf");
+    generate_huge_jpeg(&huge_jpeg)?;
+    step(&failed, "render", "hugeJpeg", limit("render", "hugeJpeg"), |st| {
+        render_to_sink(st, &huge_jpeg, 150, &open_sink("hugeJpeg", "render"))
+    });
+    verify_render_wire(&failed, "hugeJpeg", &open_sink("hugeJpeg", "render"));
 
     let _ = std::fs::remove_dir_all(&dir);
     if failed.get() {
@@ -786,6 +810,91 @@ fn generate_many(path: &Path) -> Result<(), String> {
         vec![sink(path)],
     )?;
     Ok(())
+}
+
+/// Incompressible bytes, `left` of them, read in whatever pieces are asked for.
+struct Noise {
+    rng: Xorshift,
+    left: usize,
+}
+
+impl std::io::Read for Noise {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let take = buf.len().min(self.left);
+        self.rng.fill_bytes(&mut buf[..take]);
+        self.left -= take;
+        Ok(take)
+    }
+}
+
+/// The page `huge` is, with the content that paints its image: one Letter
+/// page filled by a 60 MiB DeviceGray image (8192 x 7680) of incompressible
+/// bytes. `huge` itself paints nothing, so a render of it is blank; this is
+/// the input a render of a huge image is measured on.
+fn generate_huge_drawn(path: &Path) -> Result<(), String> {
+    const IMAGE_BYTES: usize = 60 * MIB;
+    let content = "q 612 0 0 792 0 0 cm /Im0 Do Q";
+    let mut out = PdfOut::create(path)?;
+    out.object(1, "<< /Type /Catalog /Pages 2 0 R >>")?;
+    out.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")?;
+    out.object(
+        3,
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+         /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>",
+    )?;
+    out.stream(4, "", content.len() as u64, content.as_bytes())?;
+    out.stream(
+        5,
+        "/Type /XObject /Subtype /Image /Width 8192 /Height 7680 /ColorSpace /DeviceGray \
+         /BitsPerComponent 8",
+        IMAGE_BYTES as u64,
+        Noise { rng: Xorshift::new(0xDEADBEEF), left: IMAGE_BYTES },
+    )?;
+    out.finish()
+}
+
+/// A one-page Letter PDF filled by one progressive JPEG of 4096 x 3072 RGB.
+/// A progressive JPEG cannot be decoded a band at a time, and the decoder
+/// holds its coefficients for the whole image; this is the ruled exception to
+/// the image rows being read as they are drawn.
+fn generate_huge_jpeg(path: &Path) -> Result<(), String> {
+    const W: usize = 4096;
+    const H: usize = 3072;
+    let mut rng = Xorshift::new(0x1F6);
+    let mut rgb = vec![0u8; W * H * 3];
+    for y in 0..H {
+        for x in 0..W {
+            let n = rng.next();
+            let at = (y * W + x) * 3;
+            rgb[at] = ((x * 255 / W) as u64 + (n & 0x1F)).min(255) as u8;
+            rgb[at + 1] = ((y * 255 / H) as u64 + ((n >> 8) & 0x1F)).min(255) as u8;
+            rgb[at + 2] = (((x + y) * 255 / (W + H)) as u64 + ((n >> 16) & 0x1F)).min(255) as u8;
+        }
+    }
+    let mut jpeg = Vec::new();
+    let mut encoder = jpeg_encoder::Encoder::new(&mut jpeg, 70);
+    encoder.set_progressive(true);
+    encoder
+        .encode(&rgb, W as u16, H as u16, jpeg_encoder::ColorType::Rgb)
+        .map_err(|e| format!("hugeJpeg: {e}"))?;
+    let content = "q 612 0 0 792 0 0 cm /Im0 Do Q";
+    let mut out = PdfOut::create(path)?;
+    out.object(1, "<< /Type /Catalog /Pages 2 0 R >>")?;
+    out.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")?;
+    out.object(
+        3,
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+         /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>",
+    )?;
+    out.stream(4, "", content.len() as u64, content.as_bytes())?;
+    out.stream(
+        5,
+        "/Type /XObject /Subtype /Image /Width 4096 /Height 3072 /ColorSpace /DeviceRGB \
+         /BitsPerComponent 8 /Filter /DCTDecode",
+        jpeg.len() as u64,
+        std::io::Cursor::new(jpeg),
+    )?;
+    out.finish()
 }
 
 /// A one-page PDF holding one image XObject stream of 60 MiB of

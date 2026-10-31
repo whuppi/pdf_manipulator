@@ -742,6 +742,25 @@ band, three PNG rows and one data frame; Dart holds one chunk in transit.
 An error or a cancel closes the sink of the page in flight; pages already
 delivered stand.
 
+An image on a page is read as the bands reach it, never decoded whole. The
+engine keeps one open decode per image for the page: a raw-sample image is
+read through its filters a strip of rows at a time, and a pure scale-down is
+resampled row by row to its device size. Any other transform (rotated,
+sheared, flipped or enlarged) is drawn from the rectangle of source samples the
+band reaches, under the whole-page transform, so the pixels are those of one
+whole raster. A DCT image decodes at the largest reduction that still covers
+its footprint, a JPEG 2000 image at the resolution level that covers it, and
+fax and JBIG2 images are kept at one bit a pixel; a stencil is kept the same
+way and only the samples a band reaches become pixels. These limits hold: a
+progressive JPEG and a JPEG 2000 image at full size are one raster (the
+`hugeJpeg` row of `make test-memory` states its peak); an image whose band
+footprint in the source is large (a rotation by an eighth turn spans the
+diagonal) holds that footprint's rectangle; and an image drawn flipped, or
+quarter-turned, is read again from its first row for each band, because the
+rows its band needs run against the order the stream gives them. The open
+decodes of a page share a 4 MiB budget; one put out is read again from its
+first row when it is next drawn.
+
 ---
 
 ## CI/CD architecture

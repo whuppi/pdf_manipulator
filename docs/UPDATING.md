@@ -242,6 +242,18 @@ page renderer paints a page as bands, each a pixmap with an origin, so a
 band holds the bytes the whole page holds. The same machinery carries
 `DrawTiler`'s tiles (sub-windows, nothing translated by a float).
 
+A source pixmap with an origin is sampled the same way. `Pixmap::draw_pixmap_in(area, window, ...)` paints `area`, the whole image's rectangle, under
+the transform, and the pixels come from `window`, a part of the image at its
+origin. The sample positions are left as the transform gives them (folding
+the origin into the transform would round them differently for each window)
+and the sampler takes the whole-number origin off just before it looks a
+sample up (`SamplerCtx::origin_x`, `origin_y`), so every window of an image
+gives the pixels the whole image gives, edges included, as long as the window
+holds every sample a pixel needs and the taps of its filter (three beside
+them is enough for bicubic). The page renderer draws an image band by band
+this way (`host::images::stream`). `draw_pixmap` keeps its meaning and sends
+the origin the same way.
+
 The patch also cuts a vertical clip differently: an edge is not chopped at
 the top or bottom of the window, its scan is advanced to the first visible
 row (`Edge::advance_to`). The exactness has these limits, stated so a
