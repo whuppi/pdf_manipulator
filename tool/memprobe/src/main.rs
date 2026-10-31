@@ -35,6 +35,11 @@ fn limit(op: &str, input: &str) -> usize {
         // Rulings are quantised as they are painted and dropped; the grid they
         // make is bounded by the page, never by the paths.
         ("extractAll", "paths") => 16 * MIB,
+        // The page's operators are read once per band, but the host still
+        // collects the raster whole to encode its PNG (a 1275 x 1650 page is
+        // 8 MiB, held twice while it is encoded); T5d, the chunked wire,
+        // brings these to 16 MiB.
+        ("render", "content-fl" | "content-a85" | "content-lzw" | "forms") => 32 * MIB,
         ("fullRewriteSave", "encrypted") => 16 * MIB,
         // The resource prune reads every content once, as operators.
         ("compress", "content-fl" | "content-a85" | "content-lzw" | "forms" | "encrypted") => {
@@ -310,6 +315,28 @@ fn run() -> Result<(), String> {
                     .put("format", strv("plainText")),
                 vec![],
                 vec![sink(&open_sink(name, "extractall"))],
+            )?;
+            call(st, re("docDispose").put("handleId", i32v(hid)), vec![], vec![])?;
+            Ok(())
+        });
+    }
+
+    // render of the same sources: one page of 96 MiB of path content, and
+    // 2,000 forms, painted band by band from the operators.
+    let render_inputs: Vec<(&str, &Path)> = contents
+        .iter()
+        .map(|(name, path)| (*name, path.as_path()))
+        .chain([("forms", forms.as_path())])
+        .collect();
+    for (name, path) in render_inputs {
+        step(&failed, "render", name, limit("render", name), |st| {
+            let resp = call(st, re("open"), vec![source(path)], vec![])?;
+            let hid = resp.i32("handleId").expect("open returns handleId");
+            call(
+                st,
+                re("render").put("handleId", i32v(hid)),
+                vec![],
+                vec![sink(&open_sink(name, "render"))],
             )?;
             call(st, re("docDispose").put("handleId", i32v(hid)), vec![], vec![])?;
             Ok(())
