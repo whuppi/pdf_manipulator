@@ -63,6 +63,10 @@ fn limit(op: &str, input: &str) -> usize {
         // The 50 MiB packed bitmap of the huge fax decodes two transition
         // lines and one row at a time, in render, extract and reduce alike.
         ("render" | "reduceImages", "hugeFax") => 16 * MIB,
+        // The huge stencil is a 50 MiB ImageMask whose samples the row
+        // cursor takes off its Flate reader one row at a time, in render
+        // and reduce alike.
+        ("render" | "reduceImages", "hugeStencil") => 16 * MIB,
         // The ruled exception: JBIG2 composes the page bitmap before its
         // callback runs (d-122), so the host holds the codestream, its
         // globals, the decoder's 1-bit page bitmap and the packed copy its
@@ -515,6 +519,51 @@ fn run() -> Result<(), String> {
             failed.set(true);
         },
     }
+    // The huge stencil: a 50 MiB ImageMask whose packed bitmap the row
+    // cursor never builds. Render and the reduction read back; the
+    // reduction by extracting the file it wrote.
+    let huge_stencil = dir.join("huge-stencil.pdf");
+    generate_huge_stencil(&huge_stencil)?;
+    step(&failed, "render", "hugeStencil", limit("render", "hugeStencil"), |st| {
+        render_to_sink(st, &huge_stencil, 150, &open_sink("hugeStencil", "render"))
+    });
+    verify_render_wire(&failed, "hugeStencil", &open_sink("hugeStencil", "render"));
+    let stencil_reduced = open_sink("hugeStencil", "reduced");
+    step(&failed, "reduceImages", "hugeStencil", limit("reduceImages", "hugeStencil"), |st| {
+        reduce_to_sink(st, &huge_stencil, &stencil_reduced)
+    });
+    let stencil_again = open_sink("hugeStencil", "reduced-extract");
+    let mut state = pdf_oxide::host::lane_state::LaneState::new();
+    let written_stencil = if stencil_reduced.exists() {
+        extract_to_sink(&mut state, &stencil_reduced, &stencil_again)
+    } else {
+        Err("the reduction wrote no file".to_string())
+    };
+    match written_stencil {
+        Ok(()) => {
+            // The reduction re-encodes a bilevel image as Group 4 at the
+            // mono resolutions the step set, the square bitmap the huge
+            // fax's reduction came out at.
+            verify_extract_wire(
+                &failed,
+                "hugeStencil reduced",
+                &stencil_again,
+                &ExpectedImage {
+                    width: 3300,
+                    height: 3300,
+                    encoding: "ccitt",
+                    color: "bilevel",
+                    depth: 1,
+                },
+                None,
+            );
+        },
+        Err(e) => {
+            eprintln!("memprobe: reduceImages hugeStencil: read back: {e}");
+            failed.set(true);
+        },
+    }
+
     // The ruled exception: JBIG2 holds one page bitmap. Render and
     // extraction at the measured peak.
     let huge_jbig2 = dir.join("huge-jbig2.pdf");
@@ -1414,6 +1463,49 @@ fn generate_huge_fax(path: &Path) -> Result<(), String> {
         "/Type /XObject /Subtype /Image /Width 20000 /Height 20000 /ColorSpace /DeviceGray \
          /BitsPerComponent 1 /Filter /CCITTFaxDecode \
          /DecodeParms << /K -1 /Columns 20000 /Rows 20000 >>",
+        code.len() as u64,
+        std::io::Cursor::new(code),
+    )?;
+    out.finish()
+}
+
+/// A one-page Letter PDF painted with one 20000 x 20000 ImageMask stencil,
+/// Flate coded row by row with a PNG predictor. The row cursor reads its
+/// samples a row at a time; the packed bitmap the whole decode would build
+/// never exists.
+fn generate_huge_stencil(path: &Path) -> Result<(), String> {
+    use flate2::write::ZlibEncoder;
+    const W: u32 = 20000;
+    const ROW_BYTES: usize = (W as usize).div_ceil(8);
+    let mut encoder = ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    for y in 0..W {
+        // One predictor row a source row: a filter tag of 0 (none), then
+        // the row's sample bits. Under the default /Decode a clear bit
+        // paints, so the same band of painted pixels the huge fax draws.
+        encoder.write_all(&[0]).map_err(|e| format!("hugeStencil: {e}"))?;
+        let mut row = vec![0xFFu8; ROW_BYTES];
+        let left = ((y as usize * 997) % ((W as usize) - 1000)) as usize;
+        for x in left..left + 1000 {
+            row[x / 8] &= !(0x80 >> (x % 8));
+        }
+        encoder.write_all(&row).map_err(|e| format!("hugeStencil: {e}"))?;
+    }
+    let code = encoder.finish().map_err(|e| format!("hugeStencil: {e}"))?;
+    let content = "0.5 0.3 0.8 rg q 612 0 0 792 0 0 cm /St Do Q";
+    let mut out = PdfOut::create(path)?;
+    out.object(1, "<< /Type /Catalog /Pages 2 0 R >>")?;
+    out.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")?;
+    out.object(
+        3,
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+         /Resources << /XObject << /St 5 0 R >> >> /Contents 4 0 R >>",
+    )?;
+    out.stream(4, "", content.len() as u64, content.as_bytes())?;
+    out.stream(
+        5,
+        "/Type /XObject /Subtype /Image /ImageMask true /Width 20000 /Height 20000 \
+         /BitsPerComponent 1 /Filter /FlateDecode \
+         /DecodeParms << /Predictor 12 /Colors 1 /BitsPerComponent 1 /Columns 20000 >>",
         code.len() as u64,
         std::io::Cursor::new(code),
     )?;
