@@ -1,96 +1,117 @@
 import 'package:meta/meta.dart';
+import 'package:pdf_manipulator/src/types/pdf_wire.dart';
 
 /// How an image's samples are stored.
-enum PdfImageEncoding {
+enum PdfImageEncoding implements PdfWire {
   /// A lossless container (Flate, LZW, RunLength, ASCII, or none).
-  raw,
+  raw('raw'),
 
   /// DCTDecode.
-  jpeg,
+  jpeg('jpeg'),
 
   /// JPXDecode (JPEG 2000).
-  jpx,
+  jpx('jpx'),
 
   /// CCITTFaxDecode.
-  ccitt,
+  ccitt('ccitt'),
 
   /// JBIG2Decode.
-  jbig2,
+  jbig2('jbig2'),
 
   /// A filter the engine does not know.
-  unknown,
+  unknown('unknown');
+
+  const PdfImageEncoding(this.wire);
+
+  @override
+  final String wire;
 }
 
 /// What an image's decoded samples mean.
-enum PdfImageColor {
+enum PdfImageColor implements PdfWire {
   /// A stencil mask or a 1-bit gray image.
-  bilevel,
+  bilevel('bilevel'),
 
   /// One component.
-  gray,
+  gray('gray'),
 
   /// Three components.
-  rgb,
+  rgb('rgb'),
 
   /// Four components.
-  cmyk,
+  cmyk('cmyk'),
 
   /// Lab, Separation, DeviceN, Pattern, or an unparsable base.
-  other,
+  other('other');
+
+  const PdfImageColor(this.wire);
+
+  @override
+  final String wire;
 }
 
 /// What `PdfEditor.reduceImages` did to one image.
-enum PdfImageAction {
+enum PdfImageAction implements PdfWire {
   /// Bytes unchanged.
-  kept,
+  kept('kept'),
 
   /// Same pixel size, new encoding.
-  recompressed,
+  recompressed('recompressed'),
 
   /// Fewer pixels, new encoding.
-  downsampled,
+  downsampled('downsampled');
+
+  const PdfImageAction(this.wire);
+
+  @override
+  final String wire;
 }
 
 /// Why an image was kept as stored.
-enum PdfImageKeepReason {
+enum PdfImageKeepReason implements PdfWire {
   /// JPEG 2000: not decoded in this build, never re-encoded.
-  unsupportedJpx,
+  unsupportedJpx('unsupportedJpx'),
 
   /// JBIG2: no encoder.
-  unsupportedJbig2,
+  unsupportedJbig2('unsupportedJbig2'),
 
   /// A filter the engine cannot undo.
-  unsupportedFilter,
+  unsupportedFilter('unsupportedFilter'),
 
   /// Lab, Separation, DeviceN, Pattern.
-  unsupportedColor,
+  unsupportedColor('unsupportedColor'),
 
   /// A `/Mask` stream (stencil) hangs off the image.
-  unsupportedStencilMask,
+  unsupportedStencilMask('unsupportedStencilMask'),
 
   /// A `/Mask` colour-key array hangs off the image.
-  unsupportedColorKeyMask,
+  unsupportedColorKeyMask('unsupportedColorKeyMask'),
 
   /// A JPX opacity channel.
-  unsupportedSmaskInData,
+  unsupportedSmaskInData('unsupportedSmaskInData'),
 
   /// Narrower or shorter than the policy's `minPixels`.
-  tooSmall,
+  tooSmall('tooSmall'),
 
   /// Drawn with a degenerate transform, or not at all.
-  noPlacement,
+  noPlacement('noPlacement'),
 
   /// At or under its target resolution.
-  withinResolution,
+  withinResolution('withinResolution'),
 
   /// Nothing the policy allows could make it smaller.
-  alreadyOptimal,
+  alreadyOptimal('alreadyOptimal'),
 
   /// Re-encoding did not save the policy's `minSavings` share of the bytes.
-  belowMinSavings,
+  belowMinSavings('belowMinSavings'),
 
   /// The stored samples could not be decoded, so nothing was rewritten.
-  undecodable,
+  undecodable('undecodable');
+
+  const PdfImageKeepReason(this.wire);
+
+  @override
+  final String wire;
 }
 
 /// One image XObject's outcome from `PdfEditor.reduceImages`.

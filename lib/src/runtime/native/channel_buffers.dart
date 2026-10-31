@@ -101,9 +101,18 @@ class ReadChannelBuffer {
   void clearCancelled() =>
       ptr.writeU32At(_readFlags, ptr.readU32At(_readFlags) & ~flagCancelled);
 
+  /// True once [free] ran. A read the source was still serving when its
+  /// channel was freed (an abandoned or cancelled job) must not touch
+  /// the buffer when it finally resolves.
+  bool get freed => _freed;
+  bool _freed = false;
+
   /// Frees the buffer memory. Caller guarantees the engine can no
   /// longer touch it (its job posted, or the channel was released).
-  void free() => calloc.free(ptr);
+  void free() {
+    _freed = true;
+    calloc.free(ptr);
+  }
 }
 
 // ── WriteChannelBuffer ──────────────────────────────────────────────

@@ -4,23 +4,22 @@
 // Construction only — no reading or querying existing PDFs.
 // Use PdfDoc for read queries, PdfEditor for mutations on existing PDFs.
 
-import 'package:pdf_manipulator/src/ops/pdf.dart';
-import 'package:pdf_manipulator/src/types/data_sink.dart';
-import 'package:pdf_manipulator/src/types/data_source.dart';
-import 'package:pdf_manipulator/src/types/pdf_task.dart';
-import 'package:pdf_manipulator/src/bridge/pdf_bridge.dart';
-import 'package:pdf_manipulator/src/types/pdf_rect.dart';
+part of 'pdf.dart';
 
 /// Creates PDFs from scratch — add pages with content, then save.
-class PdfBuilder {
+class PdfBuilder implements _Handle {
   /// Internal constructor — use [Pdf.build] to create instances.
-  PdfBuilder.internal(PdfBridge _, this._handle);
+  PdfBuilder.internal(PdfBridge _, this._handle) {
+    HandleBackstop.attach(this, 'PdfBuilder', _handle.dispose);
+  }
 
   final BridgeBuilderHandle _handle;
   bool _disposed = false;
 
   void _check() {
-    if (_disposed) throw StateError('This PdfBuilder has been disposed');
+    if (_disposed) {
+      throw const PdfDisposed('This PdfBuilder has been disposed');
+    }
   }
 
   // ── Metadata ──
@@ -76,18 +75,22 @@ class PdfBuilder {
 
   // ── Save ──
 
-  /// Writes the constructed PDF to [output].
-  PdfTask<void> save(DataSink output) {
+  /// Writes the document to [output]. Page content and font streams are
+  /// Flate-compressed unless [compress] is false, which keeps them
+  /// readable as plain text for debugging.
+  PdfTask<void> save(DataSink output, {bool compress = true}) {
     _check();
-    return _handle.save(output);
+    return _handle.save(output, compress: compress);
   }
 
   // ── Lifecycle ──
 
   /// Releases builder resources. Idempotent.
+  @override
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    HandleBackstop.detach(this);
     await _handle.dispose();
   }
 }
@@ -168,29 +171,34 @@ class PdfPageBuilder {
   // ── Field scripts ──
 
   /// Sets a JavaScript keystroke action on the most-recently-added
-  /// form field. A page with no field yet ignores the call.
+  /// form field. Throws [PdfInvalidArgument] when this page has no
+  /// form field yet.
   PdfTask<void> fieldKeystroke(String script) => _handle.fieldKeystroke(script);
 
   /// Sets a JavaScript format action on the most-recently-added
-  /// form field. A page with no field yet ignores the call.
+  /// form field. Throws [PdfInvalidArgument] when this page has no
+  /// form field yet.
   PdfTask<void> fieldFormat(String script) => _handle.fieldFormat(script);
 
   /// Sets a JavaScript validate action on the most-recently-added
-  /// form field. A page with no field yet ignores the call.
+  /// form field. Throws [PdfInvalidArgument] when this page has no
+  /// form field yet.
   PdfTask<void> fieldValidate(String script) => _handle.fieldValidate(script);
 
   /// Sets a JavaScript calculate action on the most-recently-added
-  /// form field. A page with no field yet ignores the call.
+  /// form field. Throws [PdfInvalidArgument] when this page has no
+  /// form field yet.
   PdfTask<void> fieldCalculate(String script) => _handle.fieldCalculate(script);
 
   // ── Links ──
 
-  /// Adds a URL hyperlink anchored on the last-written text. A page
-  /// with no text yet ignores the call.
+  /// Adds a URL hyperlink anchored on the last-written text. Throws
+  /// [PdfInvalidArgument] when this page has no text yet.
   PdfTask<void> linkUrl(String url) => _handle.linkUrl(url);
 
   /// Adds an internal link to [targetPage] (0-based), anchored on
-  /// the last-written text. A page with no text yet ignores the call.
+  /// the last-written text. Throws [PdfInvalidArgument] when this
+  /// page has no text yet.
   PdfTask<void> linkPage(int targetPage) => _handle.linkPage(targetPage);
 
   // ── Layout ──
@@ -198,6 +206,160 @@ class PdfPageBuilder {
   /// Adds a footnote with a reference mark and note text.
   PdfTask<void> footnote(String refMark, String noteText) =>
       _handle.footnote(refMark, noteText);
+
+  /// Writes inline [text] at the cursor without moving to a new line.
+  PdfTask<void> inline(String text) => _handle.inline(text);
+
+  /// Writes bold inline [text] at the cursor.
+  PdfTask<void> inlineBold(String text) => _handle.inlineBold(text);
+
+  /// Writes italic inline [text] at the cursor.
+  PdfTask<void> inlineItalic(String text) => _handle.inlineItalic(text);
+
+  /// Writes inline [text] in [color] at the cursor.
+  PdfTask<void> inlineColor(String text, PdfColor color) =>
+      _handle.inlineColor(text, color);
+
+  /// Wraps [text] inside [rect], aligned per [align].
+  PdfTask<void> textInRect(
+    PdfRect rect,
+    String text, {
+    PdfCellAlign align = PdfCellAlign.left,
+  }) => _handle.textInRect(rect, text, align: align);
+
+  /// Draws an unfilled rectangle at [rect].
+  PdfTask<void> rect(PdfRect rect) => _handle.rect(rect);
+
+  /// Draws [rect] filled with [color].
+  PdfTask<void> filledRect(PdfRect rect, PdfColor color) =>
+      _handle.filledRect(rect, color);
+
+  /// Draws a straight line from ([x1], [y1]) to ([x2], [y2]).
+  PdfTask<void> line(double x1, double y1, double x2, double y2) =>
+      _handle.line(x1, y1, x2, y2);
+
+  /// Draws a rectangle outline at [rect]; a non-empty [dash] dashes it.
+  PdfTask<void> strokeRect(
+    PdfRect rect, {
+    double width = 1,
+    PdfColor color = PdfColor.black,
+    List<double>? dash,
+    double dashPhase = 0,
+  }) => _handle.strokeRect(
+    rect,
+    width: width,
+    color: color,
+    dash: dash,
+    dashPhase: dashPhase,
+  );
+
+  /// Draws a line stroke between the two points; a non-empty [dash]
+  /// dashes it.
+  PdfTask<void> strokeLine(
+    double x1,
+    double y1,
+    double x2,
+    double y2, {
+    double width = 1,
+    PdfColor color = PdfColor.black,
+    List<double>? dash,
+    double dashPhase = 0,
+  }) => _handle.strokeLine(
+    x1,
+    y1,
+    x2,
+    y2,
+    width: width,
+    color: color,
+    dash: dash,
+    dashPhase: dashPhase,
+  );
+
+  /// Highlights the last-written text with [color].
+  PdfTask<void> highlight({PdfColor color = PdfColor.yellow}) =>
+      _handle.highlight(color: color);
+
+  /// Underlines the last-written text with [color].
+  PdfTask<void> underline({PdfColor color = PdfColor.black}) =>
+      _handle.underline(color: color);
+
+  /// Strikes out the last-written text with [color].
+  PdfTask<void> strikeout({PdfColor color = PdfColor.black}) =>
+      _handle.strikeout(color: color);
+
+  /// Squiggly-underlines the last-written text with [color].
+  PdfTask<void> squiggly({PdfColor color = PdfColor.black}) =>
+      _handle.squiggly(color: color);
+
+  /// Adds a sticky note with [text] at the cursor, or at ([x], [y]) when
+  /// both are set. Throws [PdfInvalidArgument] when exactly one coordinate
+  /// is set.
+  PdfTask<void> stickyNote(String text, {double? x, double? y}) =>
+      _handle.stickyNote(text, x: x, y: y);
+
+  /// Adds a stamp annotation of [type] at the cursor.
+  PdfTask<void> stamp(PdfStampType type) => _handle.stamp(type);
+
+  /// Adds a FreeText annotation showing [text] inside [rect].
+  PdfTask<void> freeText(PdfRect rect, String text) =>
+      _handle.freeText(rect, text);
+
+  /// Adds the preset CONFIDENTIAL watermark.
+  PdfTask<void> watermarkConfidential() => _handle.watermarkConfidential();
+
+  /// Adds the preset DRAFT watermark.
+  PdfTask<void> watermarkDraft() => _handle.watermarkDraft();
+
+  /// Links the last-written text to the named [destination].
+  PdfTask<void> linkNamed(String destination) => _handle.linkNamed(destination);
+
+  /// Links the last-written text to a JavaScript [script] action.
+  PdfTask<void> linkJavaScript(String script) => _handle.linkJavaScript(script);
+
+  /// Runs [script] when the page opens.
+  PdfTask<void> onOpen(String script) => _handle.onOpen(script);
+
+  /// Runs [script] when the page closes.
+  PdfTask<void> onClose(String script) => _handle.onClose(script);
+
+  /// Places [imageData] inside [rect] as an artifact — assistive
+  /// technology ignores it and it stays out of the reading order.
+  PdfTask<void> imageArtifact(DataSource imageData, PdfRect rect) =>
+      _handle.imageArtifact(imageData, rect);
+
+  /// Lays out [rows] as a table under [columns]; a row shorter or
+  /// longer than [columns] throws [PdfInvalidArgument] before anything is
+  /// sent.
+  PdfTask<void> table(
+    List<PdfTableColumn> columns,
+    List<List<String>> rows, {
+    bool hasHeader = true,
+  }) => _handle.table(columns, rows, hasHeader: hasHeader);
+
+  /// Lays out [rows] as a streaming table under [columns] with
+  /// [sizing]; every column needs an explicit width, every row one cell
+  /// per column, and every [PdfTableCell.rowSpan] must lie within
+  /// [maxRowSpan]: any other table throws [PdfInvalidArgument] before
+  /// anything is sent.
+  PdfTask<void> streamingTable(
+    List<PdfTableColumn> columns,
+    List<List<PdfTableCell>> rows, {
+    bool repeatHeader = true,
+    PdfTableSizing sizing = PdfTableSizing.fixed,
+    int sampleRows = 50,
+    double minColumnWidth = 20,
+    double maxColumnWidth = 400,
+    int maxRowSpan = 1,
+  }) => _handle.streamingTable(
+    columns,
+    rows,
+    repeatHeader: repeatHeader,
+    sizing: sizing,
+    sampleRows: sampleRows,
+    minColumnWidth: minColumnWidth,
+    maxColumnWidth: maxColumnWidth,
+    maxRowSpan: maxRowSpan,
+  );
 
   /// Lays out [text] in [columnCount] columns with [gapPt] gap between them.
   PdfTask<void> columns(int columnCount, double gapPt, String text) =>

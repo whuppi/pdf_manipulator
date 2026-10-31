@@ -28,12 +28,14 @@ Eight load-bearing guarantees. Every architectural decision serves one.
 5. **Bounded-buffer I/O.** Every op streams its input and output through
    fixed-size buffers (64KB read, 256KB write); the transport never scales
    with file size, on either platform. Test guards throw on any over-budget
-   `readAt` / `write`, proving the *transport* is O(1). (Full peak-memory
-   verification of Rust-internal processing is roadmapped, not yet automated.)
+   `readAt` / `write`, proving the *transport* is O(1). Rust-internal peak
+   memory is measured per op by `make test-memory`; see **The rule** below.
 
-6. **Upstream untouched.** `ffi.rs` and `wasm.rs` — upstream's own
-   binding surfaces — are never called and never modified. Upstream
-   merges stay clean.
+6. **Upstream bindings uncalled.** `ffi.rs` and `wasm.rs` — upstream's
+   own binding surfaces — are never called by the host, and are patched
+   only where the engine's own types force it (a type they use changed
+   shape), between markers, so every feature still builds. Upstream merges
+   stay clean.
 
 7. **Lanes, not pools.** Every instance owns isolated lanes — a
    detached Rust thread with its own engine state (native) or a Web
@@ -43,7 +45,7 @@ Eight load-bearing guarantees. Every architectural decision serves one.
 
 8. **Patches are marked.** Every change to a vendored upstream file is
    wrapped in a boundary comment (`── pdf_manipulator patch ──` in
-   pdf_oxide, `── office_kit patch ──` in office_oxide), so upstream
+   pdf_oxide and tiny-skia, `── office_kit patch ──` in office_oxide), so upstream
    merges stay clean.
 
 ---
@@ -76,8 +78,9 @@ the main isolate — zero routing decisions, zero PDF knowledge.
 **Layer 4 — Rust** (`vendor/pdf_oxide/src/host/`, entirely ours) — one entry
 point (`bridge_api.rs`, cfg-gated for native `extern "C"` and WASM
 `#[wasm_bindgen]`) over a binary parser and one typed dispatch function
-per op. Upstream's own `ffi.rs` / `wasm.rs` are never called or modified
-(see **Upstream patches**).
+per op. Upstream's own `ffi.rs` / `wasm.rs` are never called by the host and
+are patched only where the engine's own types force it (see **Upstream
+patches**).
 
 ---
 
@@ -98,7 +101,7 @@ Router.execute(bytes, sources: [source], keepSources: {0})
   └── Web:    postMessage → lane_worker.js → lane_execute via WASM
   ↓
 bridge_api.rs  (SAME code, both targets)
-  │  Request::parse(bytes)  →  match "open"  →  dispatch::open_document
+  │  Request::parse(bytes)  →  registry::find("open")  →  dispatch::open_document
   │  source bytes served on demand via readAt callback
   ↓
 response bytes  →  decodeResponse  →  PdfDoc
@@ -110,17 +113,25 @@ response bytes  →  decodeResponse  →  PdfDoc
 editor.mergeFrom(otherPdf)
   ↓
 SharedBridge._exec(editorMergeFrom, {sourceLength: N},
-    sources: [otherPdf])     ← secondary source at index 0
+    sources: [otherPdf],     ← secondary source at index 0
+    keepSources: {0})        ← kept for the editor's lifetime
   ↓
 Router.execute(bytes,
-    sources: [otherPdf])     ← lane serves readAt by sourceIndex
+    sources: [otherPdf],     ← lane serves readAt by sourceIndex
+    keepSources: {0})        ← on success the channel joins the editor's one resource
   ↓
 bridge_api.rs
   │  source[0] = otherPdf via readAt callback (64KB chunks)
   │  editor.merge_from_reader(BoxedReader for source[0])
+  │    walks the page graphs and records ids only; the reader stays
+  │    inside the editor, and the save streams each object from it
   ↓
 response bytes
 ```
+
+The editor's own source and every merge source share one resource id
+and one release (`editorDispose`, then `releaseSource`). A merge that
+fails registers nothing: the Router frees its kept channel at once.
 
 ### Editor mutations — staged, except the destructive ones
 
@@ -229,7 +240,8 @@ lib/
     │   ├── errors.dart                     ← PdfError sealed hierarchy
     │   ├── pdf_config.dart                 ← PdfConfig (webIoMode, URLs)
     │   ├── pdf_enums.dart                  ← PdfIoMode, PdfEncryptionAlgorithm, ...
-    │   ├── pdf_image.dart                  ← PdfImage, RenderedPage
+    │   ├── pdf_image.dart                  ← PdfImage
+    │   ├── pdf_render.dart                 ← PdfRenderSize, PdfRenderedPage, PdfRenderFormat
     │   ├── pdf_matrix.dart                 ← PdfMatrix: a PDF affine transform
     │   ├── pdf_page_image.dart             ← PdfPageImage: an image XObject as placed on a page
     │   ├── pdf_image_policy.dart           ← PdfImagePolicy: reduceImages knobs + screen/ebook/print/lossless presets
@@ -280,14 +292,22 @@ tool/                                       ← .sh = orchestration wrappers; .d
 
 vendor/
 ├── pdf_oxide/                              ← forked yfedoseev/pdf_oxide (submodule)
-└── office_oxide/                           ← forked yfedoseev/office_oxide (submodule)
+├── office_oxide/                           ← forked yfedoseev/office_oxide (submodule)
+└── tiny_skia/                              ← forked linebender/tiny-skia (submodule; the page rasteriser)
 
 vendor/pdf_oxide/src/
 ├── host/                                   ← OUR CODE
 │   ├── mod.rs
-│   ├── bridge_api.rs                       ← single entry, cfg-gated
+│   ├── bridge_api.rs                       ← the door: parse the request, dispatch through the registry; cfg-gated
+│   ├── ops/                                ← one op unit per bridge op, each carrying its own handler body
+│   │   ├── mod.rs                          ← OpCtx, OpEntry, the op_unit! macro
+│   │   ├── registry.rs                     ← the table of units; the one swappable backend
+│   │   ├── support.rs                      ← helpers shared by several units (page checks, source opening, handle wrappers)
+│   │   └── builder.rs, convert.rs, doc.rs, editor.rs, fonts.rs, pdfa.rs, render.rs, signatures.rs
 │   ├── binary_codec.rs                     ← wire format parser/encoder
 │   ├── dispatch.rs                         ← every op as a typed function
+│   ├── incremental.rs                      ← append-only save: source bytes, then one update section; refusals
+│   ├── page_prune.rs                       ← what a full rewrite drops with dropped pages; page labels renumbered
 │   ├── positioned_write.rs                 ← CountingWriter + SeekWriter
 │   ├── sign.rs                             ← O(1) signing with AcroForm
 │   ├── images/                             ← image reducer behind reduceImages and compress, five stages
@@ -312,8 +332,8 @@ vendor/pdf_oxide/src/
 │       └── js_writer.rs                    ← Write via host_write_chunk
 │
 ├── compliance/fonts/                       ← 12 Liberation TTF files (SIL OFL)
-├── ffi.rs                                  ← UPSTREAM (untouched)
-├── wasm.rs                                 ← UPSTREAM (untouched)
+├── ffi.rs                                  ← UPSTREAM (never called; patched only where the engine's types force it)
+├── wasm.rs                                 ← UPSTREAM (never called; patched only where the engine's types force it)
 └── (engine: document.rs, editor/, renderer/, search/, signatures/, ...)
 ```
 
@@ -327,7 +347,9 @@ through the transport's I/O channels, never through the codec.
 ```
 Request:  [op_len: u8] [op: UTF-8] [field_count: u16 LE] [fields...]
 Response: [status: u8]  [field_count: u16 LE] [fields...]
-            status 0 → [msg_len: u32 LE] [msg: UTF-8]  (error)
+            status 0 → [kind: u8] [field_count: u16 LE] [fields...]
+                       (error; field `message` always present,
+                        pageRange kind also carries `page`, `pageCount`)
             status 1 → fields                           (ok)
             status 2 → (no payload)                     (cancelled)
 
@@ -336,6 +358,22 @@ Field:    [key_len: u8] [key: UTF-8] [type: u8] [value]
 Types:    0=null  1=i32  2=i64  3=f64  4=bool  5=string  6=bytes
           7=int_list  8=float_list  9=string_list  10=map_list
 ```
+
+Error kinds (byte 1 of a status-0 response) and the Dart type each
+throws:
+
+| Kind | Name | Dart type |
+|---|---|---|
+| 0 | engine | `PdfEngineError` |
+| 1 | invalidArgument | `PdfInvalidArgument` |
+| 2 | io | `PdfIoError` |
+| 3 | corrupted | `PdfCorrupted` |
+| 4 | unsupported | `PdfUnsupported` |
+| 5 | passwordRequired | `PdfPasswordRequired` |
+| 6 | wrongPassword | `PdfWrongPassword` |
+| 7 | crypto | `PdfCryptoError` |
+| 8 | pageRange | `PdfPageRangeError` (fields `page`, `pageCount`) |
+| 9 | incrementalRefused | `PdfIncrementalRefused` |
 
 Op names are the EngineOp `.wire` strings (`"open"`, `"extract"`,
 `"editorMutate"`, etc.). No numeric mapping to keep in sync — the
@@ -350,10 +388,20 @@ enum IS the protocol.
 The transport is O(1) on every path: input and output move through
 fixed-size buffers (64KB read, 256KB write), never a full-file buffer
 on the Dart side. Test guards enforce the chunk limits mechanically
-(see **Test architecture**). Full Rust-internal peak-memory
-verification — catching any intermediate accumulation during
-processing — is designed and tracked in the capability roadmap, not
-yet automated.
+(see **Test architecture**). Rust-internal peak memory is a separate
+claim, measured by `make test-memory` (tool/memprobe) on a 10,000-page
+input and on a page holding one 60 MB stream: open, extractPages, the
+full and the incremental save, sign and compress stay under 16 MiB on
+both, and so does the full save of a 60 MB stream encrypted with AES-256.
+The engine reads through an object cache bounded at 8 MiB, copies
+unchanged streams in 64KB pieces (an encrypted stream is decrypted in the
+same pieces), and reads page facts without keeping the page dictionaries.
+A stream of a document is a window onto the document's bytes that reads
+itself; only the listed whole reads (`engine_proofs/whole_reads.txt`) hold a
+stream's data in one buffer. Merge stays under 16 MiB too: it keeps the merged
+document open with its own 1 MiB object cache, records only the ids of the
+objects each page reaches, and the save writes every merged object one at a
+time (streams in 64KB pieces) from that document.
 
 ### Transport contract
 
@@ -372,15 +420,15 @@ Future<...> execute(
 |---|---|---|
 | open | reader[0] on demand | — |
 | extract / search / validate / classify | reader[0] on demand | bounded text |
-| render | reader[0] on demand | framed writes, one page at a time |
-| extractImages | reader[0] on demand | framed writes, one image at a time |
+| render | reader[0] on demand | per page: header, data frames ≤ 256 KiB, end |
+| extractImages | reader[0] on demand | per image: header, data frames ≤ 256 KiB, end |
 | editorSave | pinned reader[0] | PositionedWrite streams objects |
 | builderSave | — | PositionedWrite streams objects |
 | sign | reader[0] 64KB chunks | writer[0] sequential |
-| mergeFrom | reader[0] secondary PDF | — |
+| mergeFrom | reader[0] secondary PDF, kept for the handle's lifetime and read again by the save | — |
 | addImageStamp / embedFile / builder.image | reader[0] secondary data | — |
 | convertTo (PDF → DOCX/PPTX/XLSX) | reader[0] on demand | streaming ZIP via office_oxide |
-| convertToPdf (DOCX/PPTX/XLSX → PDF) | reader[0] on demand | CountingWriter streams objects |
+| convertToPdf (DOCX/PPTX/XLSX → PDF) | whole input buffered (office_oxide reads the ZIP from an in-memory cursor) | CountingWriter streams objects |
 
 ### PositionedWrite — Write without Seek
 
@@ -423,10 +471,14 @@ All three modes produce the same `Read+Seek` trait on the Rust side.
 three. Only OPFS pre-copies to disk.
 
 **Web reader registry:** each lane worker keeps a reader map.
-Held readers (kept sources from handle-creating ops) mount FIRST in
-each exec's reader list; the job's own sources follow. Non-held
+Held readers belong to a group: the id of the job that created the
+handle. A later job on that handle that keeps a source (a merge) files
+its reader in the same group, after the earlier ones. A handle's held
+set (the editor's source at index 0, then each merge in order) mounts
+FIRST in each exec's reader list; the job's own sources follow. Non-held
 readers are dropped in `finally`; held ones survive until the
-handle's dispose releases them. Exactly symmetric with native's
+handle's dispose releases the group. Dart serves held reads in the same
+order (a parity test pins it). Exactly symmetric with native's
 held-channel adoption.
 
 ### Backpressure
@@ -597,6 +649,12 @@ reclaims its directory (see **OPFS mode**, under Streaming I/O). A
 killed-before-use worker is returned to the pristine pool instead of
 terminated (see budget below).
 
+A web worker is retired after a job that grew its WASM memory to 256 MiB
+or more (linear memory never shrinks): the worker reports its memory
+size with every `result` and `error`, and the Router kills the lane once
+it is idle with no pinned handle or held source on it. The next op
+spawns a replacement.
+
 ### Parallel ops + the budgets
 
 - Ops on different handles run on different lanes — truly parallel.
@@ -656,6 +714,91 @@ code (and wakes an OPFS pre-copy parked on the caller's DataSource).
 The lane survives; only that job dies — its result posts as
 cancelled. Fire-and-forget tasks absorb the cancelled outcome
 silently; real failures on unlistened tasks are re-raised loudly.
+
+**Mid-loop cancel.** The engine's CPU loops (all-pages extract, search,
+image reduction, validation, PDF/A conversion, render, image
+extraction, the editor save's page loop) poll a `CancelCheck` once per
+page, image or rule batch, so a cancel stops them within one unit even
+when the loop makes no I/O call. On native the check reads the lane and
+job flags. On the web it reads a per-job cancel word in a
+`SharedArrayBuffer` (`host_cancelled`), which exists only on
+cross-origin isolated pages. Without it, web cancel lands at the next
+source read or sink write, and a running OPFS op (no I/O waits at all)
+is stopped only by `Pdf.dispose`.
+
+`extractImages` writes each image to a sink the caller's factory returns, on
+the same chunked wire as `render` (one shared framer in the engine and one
+shared delivery in Dart): a header (`kind`, `page`, `index`, `width`,
+`height`, `bitsPerComponent`, `encoding`, `color`), data frames of at most
+256 KiB, an end frame, then the terminator. A JPEG or JPEG 2000 stream goes
+through byte for byte (decrypted, never decoded); every other image is a PNG
+written row by row from the image cursor, its `/SMask` or `/Mask` stream
+applied as the alpha channel. The library closes the sink of the image in
+flight on an error or a cancel; images already delivered stand.
+
+`reduceImages` reads an image the same way: the rows come from the image
+cursor (a raw-sample stream a strip at a time, a DCT image at the reduction
+that covers the target, fax and JBIG2 bitmaps at one bit a pixel; a CMYK
+image's samples as stored), go one at a time through the row resampler, and
+into a row encoder: Flate with predictors, CCITT G4 by line, or a baseline
+JPEG whose encoder takes MCU rows. The JPEG uses the standard Huffman tables,
+because optimised ones need every coefficient before the first byte. What is
+held is a strip or the codec's raster, the resampler's rows and the encoded
+output of the one image being rewritten, which is the unit the editor stages;
+a soft mask goes through the same pipe at its parent's new size. A stored JPEG
+that is not downsampled is kept (a JPEG's quality is read from its first
+megabyte), unless the policy recompresses JPEGs. The two exceptions are the
+`hugeJpeg` row's: a progressive JPEG is one raster, and so is a CMYK JPEG.
+
+`render` writes each page to a sink the caller's factory returns. The
+engine rasters the page in bands, passes each band's rows to a PNG row
+encoder (or, for `rgba`, writes the rows as they are), and cuts the bytes
+into frames: a header (`kind`, `page`, `width`, `height`, `format`), data
+frames of at most 256 KiB, and an end frame, then one zero-length
+terminator after the last page. Dart opens the page's sink at the header,
+awaits each data write before the engine goes on (back-pressure), and
+closes it at the end frame. Neither side holds a page: the engine holds a
+band, three PNG rows and one data frame; Dart holds one chunk in transit.
+An error or a cancel closes the sink of the page in flight; pages already
+delivered stand.
+
+An image on a page is read as the bands reach it, never decoded whole. The
+engine keeps one open decode per image for the page: a raw-sample image is
+read through its filters a strip of rows at a time, and a pure scale-down is
+resampled row by row to its device size. Any other transform (rotated,
+sheared, flipped or enlarged) is drawn from the rectangle of source samples the
+band reaches, under the whole-page transform, so the pixels are those of one
+whole raster. A DCT image decodes at the largest reduction that still covers
+its footprint, a JPEG 2000 image at the resolution level that covers it, and
+fax and JBIG2 images are kept at one bit a pixel; a stencil is kept the same
+way and only the samples a band reaches become pixels. These limits hold: a
+progressive JPEG and a JPEG 2000 image at full size are one raster (the
+`hugeJpeg` row of `make test-memory` states its peak); an image whose band
+footprint in the source is large (a rotation by an eighth turn spans the
+diagonal) holds that footprint's rectangle; and an image drawn flipped, or
+quarter-turned, is read again from its first row for each band, because the
+rows its band needs run against the order the stream gives them. The open
+decodes of a page share a 4 MiB budget; one put out is read again from its
+first row when it is next drawn.
+
+Every other buffer a page needs is a window onto the page too: a transparency
+group (isolated or not, with knockout), a soft mask, a blend mode that needs a
+copy of the backdrop, a Type 3 glyph, a text clip and a pattern cell each get a
+pixmap of the band's rows, at their place in the page, and every composite is
+per pixel, so a band holds the bytes the whole page holds. The band's height is
+cut by the depth of that nesting, so memory follows the nesting and not the
+page. A group's content is clipped to its `/BBox` (a knockout group too),
+because the band culling takes the box for the form's extent. Whether a soft
+mask's group paints nothing (a mask that does is dropped, as the other
+renderers drop it) is decided once for the page, by drawing the group over the
+page's own bands, because a band the group does not reach cannot tell. The
+content of a form, a pattern cell, a glyph procedure and a soft-mask group is
+read as operators; a knockout group holds its operators, since it replays them
+before each element. A tiling pattern whose cell raster fits the 2 MiB budget
+is drawn once to a texture, as it always was; one over the budget is drawn
+tile by tile into the band, where the tiles sit on the lattice and not on the
+pixel grid (the one documented difference), and a turned lattice shows its
+content instead of the flat average colour a texture gives it.
 
 ---
 
@@ -895,6 +1038,17 @@ tool pins.
    feature silently did nothing, does this go red?" If not, it is
    not a test.
 
+Every stress test makes two separate checks. The test timeout
+(`t(60)`) is a hang guard only. Speed is a ratio budget:
+`stressTest` in `harness/perf.dart` times a fixed calibration (open and
+extract of a tiny PDF 20 times through the same engine, after one
+untimed warm-up, the fastest of three samples) before and after the
+operation, divides the operation's time by the slower of the two, and
+fails above the test's `ratio`. Machine load slows both sides, so the
+check does not fail on a busy machine and still fails on a real
+slowdown. Each `ratio` is 3x the largest ratio observed over four runs
+(one in reverse test order), recorded in the comment above the test.
+
 ### Structure
 
 ```
@@ -913,6 +1067,7 @@ test/
 │
 ├── harness/                        MACHINERY — not data
 │   ├── asset_server.dart           HTTP server for web test assets
+│   ├── perf.dart                   stressTest() — hang guard + ratio budget
 │   ├── slow_source.dart            Parks the engine on a read (cancel tests)
 │   ├── test_source_sink.dart       TestSource + TestSink (O(1) guards)
 │   ├── timeouts.dart               t() — per-test timeout helper
@@ -993,15 +1148,20 @@ this table summarizes what each patched file carries and why.
 
 | File | What the patches carry |
 |---|---|
-| `Cargo.toml` | `native-bridge` deps + `office_oxide` as path dependency |
+| `Cargo.toml` | `native-bridge` deps + `office_oxide` and `tiny-skia` as path dependencies |
 | `lib.rs` | The shared widget-appearance regeneration helpers, the `pdfa` gate, the two `public-api` gates, `pub mod host;` |
-| `document.rs` | External reader variant + `from_external_reader()` (O(1)-memory open), info/encryption/permissions accessors, `collect_refs_of()` (zero-clone GC), streaming `to_docx/pptx/xlsx_writer_flow()`, scan-all `/Subtype` Form detection |
-| `editor/document_editor.rs` | State accessors, `merge_from_reader()` + shared merge core, zero-clone GC BFS + `stage_trimmed_pages_for_gc()`, `write_full_to_writer(PositionedWrite)` (function-wide streaming offsets), per-save page-ref cache, scoped destructive erase (`erase_regions_destructive`), appearance generation for AP-less annotation types, §12.5.5 appearance placement, `add_page_annotation()`, `all_media_boxes()`, image modifications applied in page space (`rewrite_content_stream_with_image_mods` composes with the enclosing CTM, matching `get_page_images`), `staged_or_source_object()` so the resource walk writes a staged XObject/ExtGState instead of the source copy (the sweep skips ids already written), form field properties reach the saved file (`flush_form_fields_to_modified_objects` writes every dirty wrapper's `/TU`, `/Rect`, `/MaxLen`, `/Q`, `/Ff`, `/MK`, `/BS`, `/DA`, not only `/V`) and `remove_deleted_form_fields_from_acroform` drops removed fields from `/Fields` and `/Annots` |
+| `document.rs` | External reader variant + `from_external_reader()` (reads the source through a 64KB window; parsed objects live in a cache bounded at 8 MiB), info/encryption/permissions accessors, `collect_refs_of()` (zero-clone GC), streaming `to_docx/pptx/xlsx_writer_flow()`, scan-all `/Subtype` Form detection, raw source access for the incremental save (`source_len`, `read_source_at`, `header_offset`, `xref_repaired`, `object_generation`), the loader that reads an object through a growing window (a stream is its dictionary and an extent, `/Length` verified against `endstream` or repaired by a windowed scan, no size limit), `stream_head()` over `load_object()`, `reopen()` and `source_bytes_whole()` in place of the `source_bytes` field |
+| `object.rs` + `objstm.rs` | `StreamBody::{Inline, Extent}`: an `Extent` is a window onto its document's bytes (`Source`) that decrypts itself when read (`raw_reader`, `read_whole_raw`, `decrypted_len`); `decode_stream_data()` is the one named whole read of decoded bytes; `parse_object_stream` and `decode_object_stream` take no decryption closure |
+| `encryption/stream.rs` + `encryption/handler.rs` + `encryption/write_handler.rs` + `encryption/rc4.rs` + `crypto/` | `Decrypt` and `Encrypt` adapters (AES-CBC holding back the last block, RC4 as a keystream through the provider's new `rc4_stream`, which a FIPS provider refuses as it refuses `rc4`), `cipher_for` / `stream_cipher` (an object's key, no data) |
+| `writer/object_serializer.rs` | `write_indirect`, `write_indirect_encrypted` and `write_stream_open`: an extent body is written in 64 KiB pieces, `/Length` counted from the decrypted length |
+| `source.rs` | Fork-only: `Source` (the reader and the encryption handler behind one lock each), `SourceRead`, `SourceCursor`, `Window`, `Counter` |
+
+| `editor/document_editor.rs` | State accessors, `merge_from_reader()` + shared merge core, zero-clone GC BFS that follows the save's page-prune plan (`host/page_prune.rs`: dropped pages, inner `/Pages` nodes and the dropped pages' own annotations are never written, kept pages are re-parented to the root with their inherited attributes, and destinations, outline items, links, `/OpenAction` and form fields that pointed at a dropped page are removed), `write_full_to_writer(PositionedWrite)` (function-wide streaming offsets), per-save page-ref cache, scoped destructive erase (`erase_regions_destructive`), appearance generation for AP-less annotation types, §12.5.5 appearance placement, `add_page_annotation()`, `all_media_boxes()`, image modifications applied in page space (`rewrite_content_stream_with_image_mods` composes with the enclosing CTM, matching `get_page_images`), `staged_or_source_object()` so the resource walk writes a staged XObject/ExtGState instead of the source copy (the sweep skips ids already written), form field properties reach the saved file (`flush_form_fields_to_modified_objects` writes every dirty wrapper's `/TU`, `/Rect`, `/MaxLen`, `/Q`, `/Ff`, `/MK`, `/BS`, `/DA`, not only `/V`) and `remove_deleted_form_fields_from_acroform` drops removed fields from `/Fields` and `/Annots`, `incremental_refusal()` / `incremental_value_only()` / `incremental_objects()` (what an append can carry, and the objects it appends), and the full-rewrite sweep never copies a source object stream or xref stream |
 | `extractors/images.rs` | `PdfImageHandle::object_ref()` and `ctm()` — the identity and composed placement the host image reducer groups and measures by |
 | `encryption/mod.rs` + `encryption/algorithms.rs` | Raw file key exposed to the writer (`file_key`, `build_with_key`) so streams encrypt with the key the dict advertises; PDF 2.0 Algorithm 10 (`/Perms` for R6) |
 | `compliance/converter.rs` | Expose `convert_with_editor`, bundled 12 Liberation fonts (WASM has no system fonts) |
 | `writer/pdf_writer.rs` | `finish_to_writer(PositionedWrite)` — streaming save |
-| `writer/document_builder.rs` | `build_to_writer(PositionedWrite)` + `assemble_writer()` |
+| `writer/document_builder.rs` | `build_to_writer(PositionedWrite)` + `assemble_writer()`; per-page state on the page record, a `PageBuilder` that applies page ops at once through `&mut self` (`FluentPageBuilder` wraps it), and `begin_page` / `end_page` / `page_mut` / `page_has_form_field` / `page_has_text` for the host |
 | `writer/stamp.rs` + `writer/appearance_stream.rs` + `writer/annotation_builder.rs` | Rubber-stamp normal appearance (label + inline font + text escaping) and the appearance-generation dispatch |
 | `converters/office/mod.rs` | Finalize-callback core refactor for streaming, `convert_X_reader_to_writer()`, `ir_to_pdf_writer()`, fallback-font loader visibility |
 | `text/word_boundary.rs` | Geometric-gap threshold contract documentation |
@@ -1017,6 +1177,27 @@ Branch `office_kit/0.1.11-patches`. Marked with `── office_kit patch ──`
 | 10 other files | `Write + Seek` → `Write` bounds throughout |
 
 Everything in `src/host/` is entirely ours — no patch markers needed.
+
+### tiny-skia — a pixmap that is a window
+
+Branch `pdf_manipulator/0.12.0-patches`. Marked with `── pdf_manipulator patch ──`;
+every file of it is upstream code, so every change is between markers.
+
+The page renderer paints a page in bands (2 MiB of raster at a time), and a
+band must hold the bytes the whole page holds. A band is a `Pixmap` with an
+`origin`; drawing is in the page's coordinates and the origin leaves after the
+float mapping, in whole pixels.
+
+| File | Patch |
+|---|---|
+| `pixmap.rs`, `mask.rs` | `origin`, `new_at`, `new_like`; sub-regions keep the plane's coordinates |
+| `edge.rs`, `edge_builder.rs`, `scan/path.rs`, `scan/path_aa.rs` | Edges are built from the plane's floats and shifted in fixed point; a vertical clip advances the edge (`Edge::advance_to`) instead of chopping it; "contained" asks about columns |
+| `scan/hairline.rs`, `scan/hairline_aa.rs`, `scan/mod.rs` | The same for hairlines and rects; rows above the window are dropped, not moved to its edge |
+| `pipeline/{highp,lowp,blitter}.rs` | Shaders seed from the plane's coordinates (gradients, patterns, image sampling) |
+| `painter.rs` | Tiles are windows (no float translation); `draw_pixmap` sits at the source's own origin |
+| `tests/windows.rs` | The proof: windows equal the same rows of a whole canvas |
+
+The limits of the exactness are in `docs/UPDATING.md`.
 
 ---
 
@@ -1126,8 +1307,10 @@ source in the pub tarball compiles locally.
   (`vendor/pdf_oxide/src/host/ops/`): a registry entry + handler on one
   shared calling convention + an exported `pdf_op_<name>_anchor` symbol
   (inert today; the referent a future Dart static-linking toolchain
-  garbage-collects against). The op still travels as data through the
-  single bridge door — the unit layer carries reachability, the door
+  garbage-collects against). Each unit carries its own handler body in
+  its unit file; `bridge_api.rs` is the door only (parse the request,
+  dispatch through the registry). The op still travels as data through
+  the single bridge door — the unit layer carries reachability, the door
   carries bytes. `registry.rs` is the one swappable backend (explicit
   table today, linker-driven collection when the platform arrives).
   Each droppable capability is a cargo feature; excluded handlers answer

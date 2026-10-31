@@ -300,6 +300,7 @@ runs:
         path: |
           vendor/pdf_oxide/target
           vendor/office_oxide/target
+          vendor/tiny_skia/target
           ~/.cargo/registry/index
           ~/.cargo/registry/cache
           ~/.cargo/git/db

@@ -10,6 +10,7 @@ class PdfSignatureInfo {
     this.reason,
     this.location,
     required this.isValid,
+    required this.coversWholeDocument,
     this.certificate,
   });
 
@@ -25,8 +26,15 @@ class PdfSignatureInfo {
   /// Location where the document was signed.
   final String? location;
 
-  /// Whether the signature validates successfully.
+  /// Whether the signature's digest matches the bytes it covers and the
+  /// signer's key verifies it. Certificate trust and revocation are not
+  /// checked.
   final bool isValid;
+
+  /// Whether the signed byte ranges reach the last byte of the file.
+  /// False when the file was changed after signing, by an incremental
+  /// save for example; isValid then still describes the signed revision.
+  final bool coversWholeDocument;
 
   /// Certificate details, if available.
   final PdfCertificateInfo? certificate;
@@ -34,6 +42,7 @@ class PdfSignatureInfo {
   @override
   String toString() =>
       'PdfSignatureInfo(signer: $signerName, valid: $isValid, '
+      'coversWholeDocument: $coversWholeDocument, '
       'time: $signingTime, reason: $reason)';
 }
 

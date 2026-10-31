@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:meta/meta.dart';
 import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
+import 'package:pdf_manipulator/src/types/errors.dart';
+import 'package:pdf_manipulator/src/types/pdf_annotation.dart';
 import 'package:pdf_manipulator/src/types/pdf_attachment.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
@@ -14,14 +17,15 @@ import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/types/pdf_redaction_report.dart';
+import 'package:pdf_manipulator/src/types/pdf_render.dart';
 import 'package:pdf_manipulator/src/types/pdf_sanitize_options.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
+import 'package:pdf_manipulator/src/types/pdf_table.dart';
 import 'package:pdf_manipulator/src/types/pdf_xfa_info.dart';
 import 'package:pdf_manipulator/src/types/search_result.dart';
 import 'package:pdf_manipulator/src/bridge/pdf_bridge.dart';
 import 'package:pdf_manipulator/src/bridge/pdf_transport.dart';
 import 'package:pdf_manipulator/src/types/pdf_task.dart';
-import 'package:pdf_manipulator/src/types/errors.dart';
 
 import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart' as bin;
 import 'package:pdf_manipulator/src/bridge/protocol/codec.dart' as codec;
@@ -57,6 +61,7 @@ class SharedBridge extends PdfBridge {
     Map<String, Object?> args, {
     List<DataSource> sources = const [],
     List<DataSink> sinks = const [],
+    Set<int> keepSources = const {},
   }) {
     final hook = CancelHook();
     final future = () async {
@@ -65,17 +70,10 @@ class SharedBridge extends PdfBridge {
         req,
         sources: sources,
         sinks: sinks,
+        keepSources: keepSources,
         cancel: hook,
       );
-      final map = bin.decodeResponse(res.bytes);
-      if (map.containsKey('error')) {
-        // Typed by contract: every engine failure is a PdfError, so
-        // callers can pattern-match it — and so it can never be
-        // mistaken for a StateError, which is reserved for programmer
-        // errors (use after dispose).
-        throw PdfEngineError(map['error'] as String? ?? 'Engine error');
-      }
-      return map;
+      return bin.decodeResponse(res.bytes);
     }();
     return PdfTask.internal(future, hook);
   }
@@ -95,13 +93,10 @@ class SharedBridge extends PdfBridge {
         keepSources: {0},
         cancel: hook,
       );
-      final map = bin.decodeResponse(res.bytes);
-      if (map.containsKey('error')) {
-        // Engine failures are PdfError, never StateError (reserved
-        // for use-after-dispose) — same contract as [_exec].
-        throw PdfEngineError(map['error'] as String? ?? 'Engine error');
-      }
-      return (map: map, resourceId: res.resourceIds[0]);
+      return (
+        map: bin.decodeResponse(res.bytes),
+        resourceId: res.resourceIds[0],
+      );
     }();
     return PdfTask.internal(future, hook);
   }
@@ -136,6 +131,8 @@ class SharedBridge extends PdfBridge {
       'sourceLength': source.length,
       'reason': reason,
       'location': location,
+      // The engine has no clock on the web; the signing time comes from here.
+      'signedAt': DateTime.now().millisecondsSinceEpoch ~/ 1000,
     };
     switch (credentials) {
       case PdfPkcs12Credentials(:final data, :final password):
@@ -161,11 +158,7 @@ class SharedBridge extends PdfBridge {
         sourceBytes: bytes,
       );
       for (final r in responses) {
-        final map = bin.decodeResponse(r);
-        if (map.containsKey('error')) {
-          // Same contract as [_exec]: engine failures are PdfError.
-          throw PdfEngineError(map['error'] as String? ?? 'Engine error');
-        }
+        bin.decodeResponse(r);
       }
     }();
     return PdfTask.internal(future, hook);
@@ -181,7 +174,7 @@ class SharedBridge extends PdfBridge {
     EngineOp.convertTo,
     {
       'sourceLength': source.length,
-      'format': format.name,
+      'format': codec.putEnum(format),
       'password': password,
     },
     sources: [source],
@@ -207,7 +200,7 @@ class SharedBridge extends PdfBridge {
     required PdfDocumentFormat format,
   }) => _exec(
     EngineOp.convertToPdf,
-    {'sourceLength': document.length, 'format': format.name},
+    {'sourceLength': document.length, 'format': codec.putEnum(format)},
     sources: [document],
     sinks: [output],
   );
@@ -255,30 +248,55 @@ class SharedBridge extends PdfBridge {
       (i) => start + i,
     ),
   };
+}
 
-  String _encodeExtractionFormat(PdfExtractionFormat format) =>
-      switch (format) {
-        PdfExtractionFormat.auto => 'auto',
-        PdfExtractionFormat.text => 'text',
-        PdfExtractionFormat.markdown => 'markdown',
-        PdfExtractionFormat.html => 'html',
-        PdfExtractionFormat.plainText => 'plainText',
-      };
+/// The `render` request fields a [PdfRenderSize] stands for: its kind by
+/// name (`dpi`, `fit`, `thumbnail`) and that kind's numbers. The engine
+/// works out the page's pixel size from them.
+Map<String, Object?> _renderSizeArgs(PdfRenderSize size) {
+  int positive(String what, int value) {
+    if (value < 1) throw PdfInvalidArgument('$what must be positive: $value');
+    return value;
+  }
+
+  return switch (size) {
+    PdfRenderDpi(:final dpi) => {
+      'sizeKind': 'dpi',
+      'dpi': positive('dpi', dpi),
+    },
+    PdfRenderFit(:final maxWidth, :final maxHeight) => {
+      'sizeKind': 'fit',
+      'maxWidth': positive('maxWidth', maxWidth),
+      'maxHeight': positive('maxHeight', maxHeight),
+    },
+    PdfRenderThumbnail(:final size) => {
+      'sizeKind': 'thumbnail',
+      'size': positive('size', size),
+    },
+  };
 }
 
 // ── O(1)-memory framed sink for streaming ops ──────────────────────
 
-class _FrameCollectorSink implements DataSink {
-  final _buffer = BytesBuilder(copy: false);
-  final _frames = <Uint8List>[];
+/// Test hook: called once for every frame the engine writes, including
+/// frames that arrive after the consumer cancelled its stream.
+@visibleForTesting
+void Function()? onEngineFrame;
 
-  List<Uint8List> get frames => _frames;
+class _FrameCollectorSink implements DataSink {
+  _FrameCollectorSink(this._onFrame);
+
+  final _buffer = BytesBuilder(copy: false);
+  final void Function(Uint8List frame) _onFrame;
 
   @override
-  void write(Uint8List chunk) {
+  FutureOr<void> write(Uint8List chunk) {
     _buffer.add(chunk);
     _parseFrames();
   }
+
+  @override
+  void close() {}
 
   void _parseFrames() {
     while (true) {
@@ -293,7 +311,7 @@ class _FrameCollectorSink implements DataSink {
         break;
       }
       if (bytes.length < 4 + len) break;
-      _frames.add(Uint8List.sublistView(bytes, 4, 4 + len));
+      _onFrame(Uint8List.sublistView(bytes, 4, 4 + len));
       _buffer.clear();
       if (bytes.length > 4 + len) {
         _buffer.add(Uint8List.sublistView(bytes, 4 + len));

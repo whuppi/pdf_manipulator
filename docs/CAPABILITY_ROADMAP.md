@@ -33,7 +33,7 @@ same names, when both exist. Exports (source in, sink out) live on
 |---|---|---|---|
 | Page count | `current_page_count` | `pageCount` | DONE |
 | Version | `version` | `version` | DONE |
-| Page list (dimensions, rotation) | `get_page_media_box`, `get_page_rotation` | `pages` (decoded on open) | DONE |
+| Page list (dimensions, rotation, label) | `get_page_media_box`, `get_page_rotation`, `PageLabelExtractor` | `pages` (decoded on open) | DONE — `label` is `null` when the document has no `/PageLabels` |
 | Title / Author / Subject / Keywords | `title`, `author`, `subject`, `keywords` | decoded on open | DONE |
 | Encryption info | via open result | `isEncrypted`, `encryptionAlgorithm`, `permissions` | DONE |
 | Is tagged | via open result | `isTagged` | DONE |
@@ -42,7 +42,7 @@ same names, when both exist. Exports (source in, sink out) live on
 | Render pages | `render_pages_streamed` | `render()` | DONE |
 | Extract images | `extract_images_streamed` | `extractImages()` | DONE |
 | Get signatures | `get_signatures` | `signatures` | DONE |
-| Verify signatures | `verify_signatures` | `verifySignatures()` | DONE |
+| Verify signatures | `verify_signatures` | `verifySignatures()` | DONE — digest over the ByteRange and signer key; no trust chain or revocation |
 | Validate PDF/A | `validate_pdfa` | `validatePdfA()` | DONE |
 | Validate PDF/UA | `validate_pdfua` | `validatePdfUa()` | DONE |
 | Classify page | `classify_page` | `classifyPage()` | DONE |
@@ -106,6 +106,7 @@ same names, when both exist. Exports (source in, sink out) live on
 | Page count | `current_page_count` | `pageCount` | DONE |
 | Version | `version` | `version` | DONE |
 | Save | `write_full_to_writer` | `save()` | DONE |
+| Incremental save (append to the original bytes) | `host/incremental.rs` | `save(options: PdfSaveOptions.incremental())` | DONE — the output starts with the source bytes, byte for byte, then one update section in the source's xref style (table or stream); a signed source keeps every byte its signature covers. Throws `PdfIncrementalRefused`, writing nothing, after a page removal, reorder or merge, redaction or scrub, a content, annotation or flatten edit, an added or removed form field, an embedded file, and on an encrypted, repaired or DocMDP-certified source the change is not allowed on |
 | Set producer | `set_producer` | `setProducer()` | DONE |
 | Set creation date | `set_creation_date` | `setCreationDate()` | DONE |
 | Set page media box | `set_page_media_box` | `setPageMediaBox()` | DONE — round-tripped through save and `pageMediaBox()` |
@@ -182,7 +183,7 @@ same names, when both exist. Exports (source in, sink out) live on
 
 | Capability | Rust | Dart | Status |
 |---|---|---|---|
-| Sign PDF (PKCS12 / PEM) | `handle_sign` | `sign()` | DONE |
+| Sign PDF (PKCS12 / PEM) | `handle_sign` | `sign()` | DONE — keeps the catalog and earlier signatures; update section in the source's xref style |
 | Convert to format (DOCX/PPTX/XLSX) | `handle_convert_to` | `convertTo()` | DONE |
 | Convert to PDF | `handle_convert_to_pdf` | `convertToPdf()` | DONE |
 | Extract pages | `handle_editor_extract_pages` | `extractPages()` | DONE |
@@ -347,10 +348,10 @@ The planned route to expose these without bloating the default is per-feature op
 
 | Capability | Status | Why |
 |---|---|---|
-| Builder output hardening (compress streams by default; richer typesetting) | PLANNED | Builder output is valid but naively shaped vs real-world PDFs; product decision, deliberately separate from the test overhaul. |
+| Builder output hardening (compress streams by default; richer typesetting) | DONE | `PdfBuilder.save` Flate-compresses by default (`compress: false` keeps streams plain); the page builder reaches every page operation the engine's builder has, and a wire-sync test fails when the engine adds one Dart lacks. |
 | Attachment-listing read API | DONE | `PdfDoc.attachments` and `PdfDoc.extractAttachment` — `embedFile` is now proven by listing the saved file and round-tripping its bytes. |
-| Annotation-listing read API | PLANNED | `flattenAnnotations` has no semantic presence proof of its own: `extract` reads an annotation's appearance text whether or not it was flattened, so a test can show page scoping only through side effects. Listing a page's annotations (subtype, rect) would let a battery assert "gone after flatten" directly, as `formFields` now does for forms. |
-| Typed wire error codes (PdfWrongPassword, PdfCorrupted, … from Rust) | PLANNED | Engine failures are typed as `PdfEngineError(message)` today; per-kind types need error codes on the wire protocol. |
+| Annotation-listing read API | DONE | `PdfDoc.annotations(page)` — a battery now asserts "gone after flatten" directly, as `formFields` does for forms. |
+| Typed wire error codes (PdfWrongPassword, PdfCorrupted, … from Rust) | DONE | Every engine failure reaches Dart as its `PdfError` subtype; kinds on the wire. |
 
 ---
 
@@ -358,5 +359,5 @@ The planned route to expose these without bloating the default is per-feature op
 
 | Gap | Detail | Status |
 |---|---|---|
-| Field-action silent no-op | `fieldKeystroke`/`fieldFormat`/`fieldValidate`/`fieldCalculate` attach to the most-recently-added field; on a page with no field the call silently does nothing. A typed error would surface caller bugs. | PLANNED |
-| True O(1) memory verification | The Dart-side chunk guards catch transport violations only; Rust-internal Vec accumulation is invisible to them. Wire a tracking allocator into the Rust test harness: baseline → run op on a 50MB+ input → assert peak allocation stays under a fixed bound (~5MB). | PLANNED |
+| Field-action and link no-op | The four field scripts on a page with no form field, and `linkUrl`/`linkPage` on a page with no text, throw `PdfInvalidArgument` instead of succeeding without effect. | DONE |
+| True O(1) memory verification | `make test-memory` (tool/memprobe) measures the Rust peak of open, extractPages, full-rewrite and incremental save, sign, compress and merge on a 10,000-page input and a 60 MB-stream input, each against a ceiling in `make check`. Every op stays under 16 MiB except merge, whose ceiling is today's peak until it imports object by object. | DONE |

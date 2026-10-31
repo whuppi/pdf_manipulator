@@ -87,6 +87,7 @@ runs:
       run: |
         echo "pdf_oxide=$(git rev-parse HEAD:vendor/pdf_oxide)" >> "$GITHUB_OUTPUT"
         echo "office_oxide=$(git rev-parse HEAD:vendor/office_oxide)" >> "$GITHUB_OUTPUT"
+        echo "tiny_skia=$(git rev-parse HEAD:vendor/tiny_skia)" >> "$GITHUB_OUTPUT"
 
     # Drive the runner's pre-installed rustup directly. Do not swap in
     # dtolnay/rust-toolchain: it ships no version tags, so it can only be
@@ -131,9 +132,10 @@ runs:
     # rust-cache caches ~/.cargo (registry, git deps) and the workspace
     # target dirs as ONE archive per key, cleaned of incremental + unused
     # artifacts before save. Why these settings — each one is load-bearing:
-    #   workspaces             both vendored crates; office_oxide is built
+    #   workspaces             the three vendored crates; office_oxide is built
     #                          into pdf_oxide's target when the `office`
-    #                          feature is on, and on its own for its tests.
+    #                          feature is on, and tiny_skia when `rendering`
+    #                          is; each also builds on its own for its tests.
     #   cache-workspace-crates rust-cache's default DROPS the workspace's
     #                          own crates before saving, keeping only deps.
     #                          Our "workspace crate" IS the vendored engine,
@@ -168,7 +170,8 @@ runs:
         workspaces: |
           vendor/pdf_oxide -> target
           vendor/office_oxide -> target
-        key: ${{ inputs.cache-key }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}
+          vendor/tiny_skia -> target
+        key: ${{ inputs.cache-key }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}-${{ steps.sub.outputs.tiny_skia }}
         cache-workspace-crates: true
         cache-on-failure: true
         save-if: ${{ inputs.save-if }}
@@ -224,7 +227,7 @@ runs:
           vendor/*/target/**/deps/*_oxide.d
           vendor/*/target/**/.fingerprint/*_oxide-*
           vendor/*/target/**/build/*_oxide-*
-        key: v2-rust-engine-${{ inputs.engine-key != '' && inputs.engine-key || inputs.cache-key }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}-${{ hashFiles('vendor/*/Cargo.lock', 'vendor/*/Cargo.toml', 'tool/versions.env') }}
+        key: v2-rust-engine-${{ inputs.engine-key != '' && inputs.engine-key || inputs.cache-key }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}-${{ steps.sub.outputs.tiny_skia }}-${{ hashFiles('vendor/*/Cargo.lock', 'vendor/*/Cargo.toml', 'tool/versions.env') }}
     - name: Restore unhashed engine artifacts (read-only)
       if: inputs.cache == 'true' && inputs.ghcr-target != 'true' && inputs.save-if != 'true'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -245,7 +248,7 @@ runs:
           vendor/*/target/**/deps/*_oxide.d
           vendor/*/target/**/.fingerprint/*_oxide-*
           vendor/*/target/**/build/*_oxide-*
-        key: v2-rust-engine-${{ inputs.engine-key != '' && inputs.engine-key || inputs.cache-key }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}-${{ hashFiles('vendor/*/Cargo.lock', 'vendor/*/Cargo.toml', 'tool/versions.env') }}
+        key: v2-rust-engine-${{ inputs.engine-key != '' && inputs.engine-key || inputs.cache-key }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sub.outputs.pdf_oxide }}-${{ steps.sub.outputs.office_oxide }}-${{ steps.sub.outputs.tiny_skia }}-${{ hashFiles('vendor/*/Cargo.lock', 'vendor/*/Cargo.toml', 'tool/versions.env') }}
 
     # cargo fingerprints a PATH crate (the vendored engine — unlike a
     # registry crate, which is fingerprinted by content) by its sources'
@@ -269,7 +272,9 @@ runs:
     # measured, not assumed: with the pin in place cargo does NOT notice an
     # edited source file (its mtime is older than the cached dep-info), so
     # the revs in the key are the ONLY thing standing between this step and
-    # a stale binary. Remove them and it serves one. Never widen the touch
+    # a stale binary. Remove them and it serves one. The ghcr mode's
+    # fallback key is the one restore that brings another rev's target;
+    # the step that drops its engine units runs before this pin. Never widen the touch
     # to anything outside vendor/, and never run it on a developer machine —
     # local builds rely on real mtimes.
     # ghcr-target mode: the whole tree, restored before the mtime pin below
@@ -291,13 +296,15 @@ runs:
         FAMILY: ${{ inputs.engine-key != '' && inputs.engine-key || inputs.cache-key }}
         PDF: ${{ steps.sub.outputs.pdf_oxide }}
         OFFICE: ${{ steps.sub.outputs.office_oxide }}
+        TINY: ${{ steps.sub.outputs.tiny_skia }}
         HASHES: ${{ hashFiles('vendor/*/Cargo.lock', 'vendor/*/Cargo.toml', 'tool/versions.env') }}
       run: |
         {
-          echo "key=$FAMILY-$RUNNER_OS-$RUNNER_ARCH-$PDF-$OFFICE-$HASHES"
+          echo "key=$FAMILY-$RUNNER_OS-$RUNNER_ARCH-$PDF-$OFFICE-$TINY-$HASHES"
           echo "fallback=$FAMILY-$RUNNER_OS-$RUNNER_ARCH-latest"
         } >> "$GITHUB_OUTPUT"
     - name: Restore Rust target (ghcr)
+      id: ghcr
       if: inputs.cache == 'true' && inputs.ghcr-target == 'true'
       uses: whuppi/ci/actions/capabilities/oci-cache@v2.7.8
       with:
@@ -308,9 +315,24 @@ runs:
         path: |
           vendor/pdf_oxide/target
           vendor/office_oxide/target
+          vendor/tiny_skia/target
           ~/.cargo/registry/index
           ~/.cargo/registry/cache
           ~/.cargo/git/db
+
+    # The fallback key restores the target of ANOTHER vendor rev (the
+    # family's latest). Its dependency crates are still right (registry
+    # crates are fingerprinted by content), but its engine units are not,
+    # and the mtime pin below would make cargo accept them: the row would
+    # link the old engine and test it as the new one. So on anything but
+    # an exact hit, drop the engine units' fingerprints; cargo rebuilds
+    # the two engine crates under the pin and reuses every dependency.
+    - name: Drop engine units a fallback restore brought
+      if: inputs.cache == 'true' && inputs.ghcr-target == 'true' && steps.ghcr.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        find vendor -path '*/target/*' -path '*/.fingerprint/*' -type d \( -name '*_oxide-*' -o -name 'tiny-skia*' \) -prune -exec rm -rf {} +
+        echo "fallback restore: engine fingerprints dropped, the engine rebuilds"
 
     # What the restores actually brought back, per target triple: the
     # engine outputs and their fingerprints. When a warm row still
@@ -340,6 +362,7 @@ runs:
       env:
         STEPS_SUB_OUTPUTS_PDF_OXIDE: ${{ steps.sub.outputs.pdf_oxide }}
         STEPS_SUB_OUTPUTS_OFFICE_OXIDE: ${{ steps.sub.outputs.office_oxide }}
+        STEPS_SUB_OUTPUTS_TINY_SKIA: ${{ steps.sub.outputs.tiny_skia }}
       run: |
         {
           # Incremental artifacts are useless on a fresh runner, bloat the
@@ -364,5 +387,8 @@ runs:
           echo "SUBMODULE_OFFICE_OXIDE<<__SUB_OFFICE__"
           echo "${STEPS_SUB_OUTPUTS_OFFICE_OXIDE}"
           echo "__SUB_OFFICE__"
+          echo "SUBMODULE_TINY_SKIA<<__SUB_TINY__"
+          echo "${STEPS_SUB_OUTPUTS_TINY_SKIA}"
+          echo "__SUB_TINY__"
         } >> "$GITHUB_ENV"
 

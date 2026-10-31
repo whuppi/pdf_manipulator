@@ -76,25 +76,26 @@ void main() {
     await doc.dispose();
   });
 
-  testWidgets('render streams pages', (t) async {
+  testWidgets('render writes pages to sinks', (t) async {
     final doc = await pdf.open(_src(minimalPdf));
-    var count = 0;
-    await for (final page in doc.render(pages: const PdfPages.single(0))) {
-      expect(page.width, greaterThan(0));
-      expect(page.data, isNotEmpty);
-      count++;
-    }
-    expect(count, 1);
+    final sink = MemorySink();
+    final pages = await doc.render(
+      (page) => sink,
+      pages: const PdfPages.single(0),
+    );
+    expect(pages, hasLength(1));
+    expect(pages.single.width, greaterThan(0));
+    expect(sink.takeBytes(), isNotEmpty);
     await doc.dispose();
   });
 
   testWidgets('extractImages streams', (t) async {
     final doc = await pdf.open(_src(minimalPdf));
-    var images = 0;
-    await for (final _ in doc.extractImages(pages: const PdfPages.single(0))) {
-      images++;
-    }
-    expect(images, 0, reason: 'the blank fixture embeds no images');
+    final images = await doc.extractImages(
+      (image) => MemorySink(),
+      pages: const PdfPages.single(0),
+    );
+    expect(images, isEmpty, reason: 'the blank fixture embeds no images');
     await doc.dispose();
   });
 
@@ -133,7 +134,7 @@ void main() {
     final doc = await pdf.open(_src(minimalPdf));
     await expectLater(
       doc.planSplitByBookmarks(),
-      throwsA(isA<PdfEngineError>()
+      throwsA(isA<PdfInvalidArgument>()
           .having((e) => e.message, 'message', contains('no bookmarks'))),
       reason: 'the engine refuses with an actionable message — '
           'inventing chapter splits would be worse',
@@ -277,9 +278,10 @@ void main() {
     final encBytes = encSink.takeBytes();
 
     // The lock is real: no password / wrong password must refuse.
-    await expectLater(pdf.open(_src(encBytes)), throwsA(isA<PdfEngineError>()));
+    await expectLater(
+        pdf.open(_src(encBytes)), throwsA(isA<PdfPasswordRequired>()));
     await expectLater(pdf.open(_src(encBytes), password: 'wrong'),
-        throwsA(isA<PdfEngineError>()));
+        throwsA(isA<PdfWrongPassword>()));
 
     final doc1 = await pdf.open(_src(encBytes), password: 'user-pw');
     expect(doc1.isEncrypted, isTrue);
@@ -757,7 +759,7 @@ void main() {
   testWidgets('dispose prevents further ops', (t) async {
     final p = Pdf();
     await p.dispose();
-    expect(() => p.open(_src(minimalPdf)), throwsStateError);
+    expect(() => p.open(_src(minimalPdf)), throwsA(isA<PdfDisposed>()));
   });
 
   testWidgets('doc dispose + editor dispose + builder dispose', (t) async {
@@ -781,9 +783,10 @@ void main() {
     await b.dispose();
 
     // Disposed means refusing, not just surviving.
-    expect(() => doc.extract(pages: const PdfPages.all()), throwsStateError);
-    expect(() => e.setTitle('x'), throwsStateError);
-    expect(() => b.save(MemorySink()), throwsStateError);
+    expect(() => doc.extract(pages: const PdfPages.all()),
+        throwsA(isA<PdfDisposed>()));
+    expect(() => e.setTitle('x'), throwsA(isA<PdfDisposed>()));
+    expect(() => b.save(MemorySink()), throwsA(isA<PdfDisposed>()));
   });
 
   // ── Runtime — the lane architecture, proven on THIS device ──────
@@ -939,4 +942,7 @@ class _ParkedSource implements DataSource {
     final end = (offset + count).clamp(0, _data.length);
     return Uint8List.sublistView(_data, offset, end);
   }
+
+  @override
+  void close() {}
 }

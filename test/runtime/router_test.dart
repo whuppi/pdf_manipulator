@@ -294,6 +294,78 @@ void main() {
         reason: 'release is idempotent and unknown ids are no-ops',
       );
     });
+
+    test('a later job that keeps a source joins the handle\'s one resource, '
+        'in the creating job\'s group', () async {
+      final open = router.execute(_open(), keepSources: {0});
+      await Future<void>.delayed(Duration.zero);
+      final lane = host.lanes.single;
+      lane.pending[1]!.complete(_ok(handleId: 7, held: {0: 'editor-src'}));
+      final opened = await open;
+      final handle = peekResponseHandleId(opened.bytes)!;
+      final editorResource = opened.resourceIds[0]!;
+      expect(lane.submitted[0].heldGroupId, isNull);
+
+      final merge = router.execute(
+        _opOn('editorMergeFrom', handle),
+        keepSources: {0},
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        lane.submitted[1].heldGroupId,
+        1,
+        reason: 'the merge runs in the group of the job that made the handle',
+      );
+      lane.pending[2]!.complete(_ok(held: {0: 'merge-src'}));
+      final merged = await merge;
+      expect(
+        merged.resourceIds[0],
+        editorResource,
+        reason: 'one resource id per handle',
+      );
+
+      await router.releaseSource(editorResource);
+      expect(lane.releasedTokens, ['editor-src', 'merge-src']);
+    });
+
+    test(
+      'a failed job registers nothing and frees its kept channels',
+      () async {
+        final open = router.execute(_open(), keepSources: {0});
+        await Future<void>.delayed(Duration.zero);
+        final lane = host.lanes.single;
+        lane.pending[1]!.complete(_ok(handleId: 7, held: {0: 'editor-src'}));
+        final opened = await open;
+        final handle = peekResponseHandleId(opened.bytes)!;
+
+        final merge = router.execute(
+          _opOn('editorMergeFrom', handle),
+          keepSources: {0},
+        );
+        await Future<void>.delayed(Duration.zero);
+        lane.pending[2]!.complete(
+          LaneSubmitResult(buildErrorResponse('bad pdf'), const {
+            0: 'merge-src',
+          }),
+        );
+        final failed = await merge;
+
+        expect(failed.resourceIds, isEmpty);
+        expect(lane.releasedTokens, [
+          'merge-src',
+        ], reason: 'the failed merge\'s channel is freed, the editor\'s stays');
+
+        final failedOpen = router.execute(_open(), keepSources: {0});
+        await Future<void>.delayed(Duration.zero);
+        lane.pending[3]!.complete(
+          LaneSubmitResult(buildErrorResponse('bad pdf'), const {
+            0: 'open-src',
+          }),
+        );
+        expect((await failedOpen).resourceIds, isEmpty);
+        expect(lane.releasedTokens, ['merge-src', 'open-src']);
+      },
+    );
   });
 
   group('dispose', () {
@@ -442,6 +514,118 @@ void main() {
         );
       },
     );
+  });
+
+  group('worker recycling', () {
+    const threshold = 100;
+
+    LaneSubmitResult peak(int? bytes, {int? handleId}) {
+      final ok = _ok(handleId: handleId);
+      return LaneSubmitResult(ok.bytes, ok.heldTokens, peakBytes: bytes);
+    }
+
+    setUp(() {
+      router = Router(
+        host: host,
+        maxLanes: 2,
+        mode: PdfIoMode.native,
+        workerRecycleBytes: threshold,
+      );
+    });
+
+    test(
+      'at or above the threshold with nothing on the lane: retired',
+      () async {
+        final lane = FakeLane()..autoResult = peak(threshold);
+        final single = Router(
+          host: _SingleLaneHost(lane),
+          maxLanes: 1,
+          mode: PdfIoMode.native,
+          workerRecycleBytes: threshold,
+        );
+        await single.execute(_open());
+        expect(lane.killed, isTrue);
+      },
+    );
+
+    test('a retired lane is replaced by exactly one new lane', () async {
+      final first = router.execute(_open());
+      await Future<void>.delayed(Duration.zero);
+      host.lanes.single.pending[1]!.complete(peak(threshold));
+      await first;
+      expect(host.lanes.single.killed, isTrue);
+
+      final next = router.execute(_open());
+      await Future<void>.delayed(Duration.zero);
+      expect(host.lanes, hasLength(2));
+      expect(host.lanes.last.killed, isFalse);
+      host.lanes.last.pending[2]!.complete(peak(null));
+      await next;
+      expect(host.lanes, hasLength(2));
+    });
+
+    test('below the threshold: kept', () async {
+      final op = router.execute(_open());
+      await Future<void>.delayed(Duration.zero);
+      host.lanes.single.pending[1]!.complete(peak(threshold - 1));
+      await op;
+      expect(host.lanes.single.killed, isFalse);
+    });
+
+    test('no peak reported (native): never retired', () async {
+      final op = router.execute(_open());
+      await Future<void>.delayed(Duration.zero);
+      host.lanes.single.pending[1]!.complete(peak(null));
+      await op;
+      expect(host.lanes.single.killed, isFalse);
+    });
+
+    test('a pinned handle on the lane keeps it', () async {
+      final op = router.execute(_open());
+      await Future<void>.delayed(Duration.zero);
+      host.lanes.single.pending[1]!.complete(peak(threshold, handleId: 7));
+      await op;
+      expect(host.lanes.single.killed, isFalse);
+    });
+
+    test('a held resource on the lane keeps it', () async {
+      final op = router.execute(_open());
+      await Future<void>.delayed(Duration.zero);
+      host.lanes.single.pending[1]!.complete(
+        LaneSubmitResult(Uint8List.fromList(const [1, 0, 0]), const {
+          0: 'token',
+        }, peakBytes: threshold),
+      );
+      await op;
+      expect(host.lanes.single.killed, isFalse);
+    });
+
+    test('a queued job on the lane keeps it', () async {
+      final first = router.execute(_open());
+      await Future<void>.delayed(Duration.zero);
+      final laneA = host.lanes.single;
+      final second = router.execute(_open());
+      await Future<void>.delayed(Duration.zero);
+      expect(host.lanes, hasLength(2), reason: 'busy lane: spawn under cap');
+      // Third op queues on a least-loaded lane while both are busy.
+      final third = router.execute(_open());
+      await Future<void>.delayed(Duration.zero);
+      final queuedOn = host.lanes.firstWhere((l) => l.submitted.length == 2);
+
+      queuedOn.pending.values.first.complete(peak(threshold));
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        queuedOn.killed,
+        isFalse,
+        reason: 'another job is still running on this lane',
+      );
+
+      for (final lane in host.lanes) {
+        lane.completeAllPending();
+      }
+      await Future.wait([first, second, third]);
+      expect(laneA.submitted, isNotEmpty);
+    });
   });
 }
 

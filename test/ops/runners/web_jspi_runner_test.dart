@@ -16,6 +16,10 @@ import '../core/pdf_form_encoding_battery.dart';
 import '../core/pdf_builder_battery.dart';
 import '../core/pdf_standalone_battery.dart';
 import '../core/pdf_sugar_battery.dart';
+import '../core/pdf_one_shot_battery.dart';
+import '../core/pdf_render_battery.dart';
+import '../core/pdf_determinism_battery.dart';
+import '../core/pdf_cancel_battery.dart';
 import '../core/pdf_lifecycle_battery.dart';
 import '../core/pdf_instance_battery.dart';
 import '../stress/pdf_doc_stress_battery.dart';
@@ -48,7 +52,9 @@ void main() {
       ),
     );
     booted = true;
-  }, timeout: t(2));
+    // Harness setup, not the engine: spawning the hybrid asset server
+    // compiles an isolate, which takes seconds on a loaded machine.
+  }, timeout: t(10));
 
   test('verify I/O mode is jspi', () async {
     final doc = await pdf.open(src(minimalPdf));
@@ -66,6 +72,10 @@ void main() {
   registerBuilderTests(() => pdf);
   registerStandaloneTests(() => pdf);
   registerSugarTests(() => pdf);
+  registerOneShotTests(() => pdf);
+  registerRenderTests(() => pdf);
+  registerDeterminismTests(() => pdf);
+  registerCancelTests(() => pdf);
   registerLifecycleTests(
     () => Pdf(
       config: PdfConfig(

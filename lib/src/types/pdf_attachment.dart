@@ -1,4 +1,5 @@
 import 'package:meta/meta.dart';
+import 'package:pdf_manipulator/src/types/pdf_wire.dart';
 
 /// One file embedded in a document's `/Names /EmbeddedFiles` tree.
 ///
@@ -30,19 +31,24 @@ class PdfAttachment {
 
 /// How an embedded file relates to the document that carries it
 /// (ISO 32000-2 associated files).
-enum PdfAttachmentRelationship {
+enum PdfAttachmentRelationship implements PdfWire {
   /// The original source the document was made from.
-  source,
+  source('source'),
 
   /// Data the document's content references.
-  data,
+  data('data'),
 
   /// An alternative representation of the document.
-  alternative,
+  alternative('alternative'),
 
   /// Supplementary material.
-  supplement,
+  supplement('supplement'),
 
   /// No stated relationship.
-  unspecified,
+  unspecified('unspecified');
+
+  const PdfAttachmentRelationship(this.wire);
+
+  @override
+  final String wire;
 }

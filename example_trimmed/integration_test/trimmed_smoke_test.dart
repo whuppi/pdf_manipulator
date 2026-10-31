@@ -65,12 +65,13 @@ void main() {
 
   testWidgets('kept capability works: render', (t) async {
     final doc = await pdf.open(MemorySource(onePage));
-    var pages = 0;
-    await for (final page in doc.render(pages: const PdfPages.single(0))) {
-      expect(page.data, isNotEmpty);
-      pages++;
-    }
-    expect(pages, 1);
+    final sink = MemorySink();
+    final pages = await doc.render(
+      (page) => sink,
+      pages: const PdfPages.single(0),
+    );
+    expect(pages, hasLength(1));
+    expect(sink.takeBytes(), isNotEmpty);
     await doc.dispose();
   });
 

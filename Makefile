@@ -1,4 +1,4 @@
-.PHONY: check analyze check-keep-sets analyze-floor platforms lint-shell format fixtures test-guards \
+.PHONY: check analyze check-keep-sets analyze-floor platforms lint-shell format fixtures test-guards bench \
        build build-native build-wasm \
        compile-macos compile-ios compile-android compile-linux compile-windows compile-wasm compile-natives \
        test test-pkg-native test-unit test-rust shake-audit verify-readme-sizes \
@@ -105,10 +105,17 @@ format:
 # make fixtures      Generate test fixtures (skips when the stamp matches
 #                    the catalog — existence is never proof, the stamp is).
 # make test-guards   Mechanical guards over the test suite and the changelogs:
+#                      - API walls (test/guards): no handle outside _own, no
+#                        void write on a sink but MemorySink, no enum index
+#                        on the wire, one-shot membership, build pairing,
+#                        README table
 #                      - changelog bullets stay one sentence: at most 60 words
 #                        (80 for a Breaking bullet), tool/check_changelog_shape.sh
 #                      - fork tests: host/ unit tests for pure functions only;
 #                        none in patched upstream files or tests/, tool/check_fork_tests.sh
+#                      - fork patch markers pair: no end without an open, no open
+#                        left open or nested, no typo'd marker line in upstream
+#                        code, tool/check_patch_markers.sh
 #                      - no dart:io in tests (fixtures are imported Dart
 #                        source, so VM and browser consume identical
 #                        bytes; exempt: the hybrid asset server, native
@@ -144,8 +151,10 @@ fixtures:
 # bytegrep-exempt is the per-line opt-out, and pdf_builder_battery is excluded
 # whole rather than marked 15 times.
 test-guards:
+	@$(DART) test $(TIMEOUT) test/guards -p vm --concurrency=1
 	@./tool/check_changelog_shape.sh
 	@./tool/check_fork_tests.sh
+	@./tool/check_patch_markers.sh
 	@bad=$$(for f in $$(grep -rln "dart:io" test/ --include="*.dart"); do \
 	  grep -q "io-exempt:" "$$f" || echo "$$f"; \
 	done); \
@@ -171,6 +180,13 @@ test-guards:
 	if [ -n "$$bad" ]; then \
 	  echo "battery/runner completeness violation:"; \
 	  printf "$$bad"; exit 1; fi
+	@bad=$$(grep -rnE "SystemTime::now|Instant::now|format_pdf_date_utc" vendor/pdf_oxide/src/host \
+	  --include="*.rs" | grep -v "^vendor/pdf_oxide/src/host/native/" \
+	  | grep -v "^vendor/pdf_oxide/src/host/engine_proofs/" || true); \
+	if [ -n "$$bad" ]; then \
+	  echo "clock read in host code that runs on wasm32, where it panics"; \
+	  echo "('unreachable'): take the time from the Dart request instead:"; \
+	  echo "$$bad"; exit 1; fi
 
 # ═══════════════════════════════════════════════════════════════════
 # § 3 — Build (dev iteration)
@@ -197,6 +213,20 @@ build-native:
 	rm -f "$$tmp"
 
 build-wasm:
+	$(DART) tool/compile.dart wasm
+
+# The wasm the web tests load. A file target, so it rebuilds exactly when an
+# engine input is newer: every Rust source and manifest under vendor/ (the
+# build output dirs excluded), the wasm feature list in build.json, and the
+# Dart that drives the compile. `make build-wasm` forces a rebuild; the web
+# test targets depend on this file, never on the phony target.
+WASM_OUT := web_assets/pdf_oxide_bg.wasm
+WASM_INPUTS := $(shell find vendor \( -name target -o -name .git \) -prune -o \
+		-type f \( -name '*.rs' -o -name Cargo.toml -o -name Cargo.lock \) -print) \
+	build.json tool/compile.dart \
+	lib/src/hook/engine_compiler.dart lib/src/hook/build_constants.dart
+
+$(WASM_OUT): $(WASM_INPUTS)
 	$(DART) tool/compile.dart wasm
 
 # ═══════════════════════════════════════════════════════════════════
@@ -237,22 +267,22 @@ compile-natives:
 #
 # make test              Unit + all ops (native + 3 web modes).
 # make test-pkg-native   Unit + native ops only (CI fast gate).
-# make test-unit         Every test/ folder but ops/ and fixtures/ (VM).
+# make test-unit         Every test/ folder but ops/, fixtures/ and guards/ (VM).
 # make test-ops          All 4 ops runners.
 # make test-ops-native   Ops: native FFI.
 # make test-ops-web      Ops: all 3 web modes.
 # make test-ops-opfs     Ops: web OPFS.
 # make test-ops-jspi     Ops: web JSPI.
 # make test-ops-atomics  Ops: web Atomics.
-# make test-rust         cargo tests for both vendored crates.
+# make test-rust         cargo tests for the three vendored crates.
 
-test: fixtures test-unit test-ops
+test: fixtures test-unit test-ops test-memory
 
 test-pkg-native: fixtures test-unit test-ops-native
 
 # The folders are derived, never listed: a new test/ folder runs here the
 # day it lands. ops/ runs through its own runners; fixtures/ is data.
-UNIT_TEST_DIRS := $(filter-out test/ops/ test/fixtures/,$(sort $(wildcard test/*/)))
+UNIT_TEST_DIRS := $(filter-out test/ops/ test/fixtures/ test/guards/,$(sort $(wildcard test/*/)))
 
 test-unit:
 	@echo "=== Unit: $(UNIT_TEST_DIRS) ==="
@@ -261,6 +291,11 @@ test-unit:
 
 test-ops: fixtures test-ops-native test-ops-web
 
+# Memory wall probe (tool/memprobe): release only — debug builds hold
+# far more and would measure the profiler, not the engine.
+test-memory:
+	CARGO_TARGET_DIR="$(CURDIR)/target/memprobe" $(CARGO) run --release --manifest-path tool/memprobe/Cargo.toml
+
 test-ops-native:
 	@echo "=== Ops: Native ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
@@ -268,28 +303,28 @@ test-ops-native:
 
 test-ops-web: fixtures test-ops-opfs test-ops-jspi test-ops-atomics
 
-test-ops-opfs:
+test-ops-opfs: $(WASM_OUT)
 	@echo "=== Ops: Web OPFS ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
 	$(DART) test $(TIMEOUT) test/ops/runners/web_opfs_runner_test.dart -p chrome --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-opfs.json
 
-test-ops-jspi:
+test-ops-jspi: $(WASM_OUT)
 	@echo "=== Ops: Web JSPI ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
 	$(DART) test $(TIMEOUT) test/ops/runners/web_jspi_runner_test.dart -p chrome --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-jspi.json
 
-test-ops-atomics:
+test-ops-atomics: $(WASM_OUT)
 	@echo "=== Ops: Web Atomics ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
 	$(DART) test $(TIMEOUT) test/ops/runners/web_atomics_runner_test.dart -p chrome-coi --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-atomics.json
 
-# Rust unit + integration tests for both vendored crates. Most of the
+# Rust unit + integration tests for the three vendored crates. Most of the
 # engine's tests sit behind features we don't ship (ml / ocr / fips /
 # python / wasm), which need ONNX / pdfium / Python / a wasm target and
 # can't run natively here. pdf_oxide reuses build.json's native feature
 # set — the SAME source the build and analyze read — plus test-support,
 # so a feature added to build.json is tested automatically; office_oxide
-# runs default.
+# and tiny_skia (with its path crate) run default.
 #
 # Debug symbols dominate Rust test-binary size — a stock CI runner can't hold
 # the full-debug build of both crates' test suites even after the free-disk
@@ -315,6 +350,11 @@ verify-readme-sizes:
 # pub's filtering honors vendored .gitignore files even for tracked paths.
 verify-tarball:
 	@$(DART) run tool/verify_tarball.dart
+
+# Compression benchmark against pdf_document; downloads its corpus on first
+# run. Not part of `make check`. Narrow it with BENCH_ARGS="--only id,id".
+bench:
+	@cd tool/bench && $(DART) pub get && $(DART) run bin/bench.dart $(BENCH_ARGS)
 
 test-rust: export CARGO_INCREMENTAL := 0
 test-rust: export CARGO_PROFILE_DEV_DEBUG := 0
@@ -358,6 +398,9 @@ test-rust:
 	@echo "=== Rust: office_oxide ==="
 	$(CARGO) nextest run --no-fail-fast --manifest-path vendor/office_oxide/Cargo.toml
 	$(CARGO) test --doc --manifest-path vendor/office_oxide/Cargo.toml
+	@echo "=== Rust: tiny_skia ==="
+	$(CARGO) nextest run --no-fail-fast --workspace --manifest-path vendor/tiny_skia/Cargo.toml
+	$(CARGO) test --doc --workspace --manifest-path vendor/tiny_skia/Cargo.toml
 
 # ═══════════════════════════════════════════════════════════════════
 # § 6 — Integration tests (example app)
@@ -450,21 +493,21 @@ test-example-device:
 	@mkdir -p $(TEST_RESULTS_DIR)
 	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart -d $(DEVICE) --file-reporter json:../$(TEST_RESULTS_DIR)/int-device.json
 
-test-example-web:
+test-example-web: $(WASM_OUT)
 	$(call setup_example_web)
 	$(call run_example_web,JSPI,jspi)
 	$(call run_example_web,Atomics,atomics)
 	$(call run_example_web,OPFS,opfs)
 
-test-example-web-jspi:
+test-example-web-jspi: $(WASM_OUT)
 	$(call setup_example_web)
 	$(call run_example_web,JSPI,jspi)
 
-test-example-web-atomics:
+test-example-web-atomics: $(WASM_OUT)
 	$(call setup_example_web)
 	$(call run_example_web,Atomics,atomics)
 
-test-example-web-opfs:
+test-example-web-opfs: $(WASM_OUT)
 	$(call setup_example_web)
 	$(call run_example_web,OPFS,opfs)
 
@@ -517,9 +560,9 @@ verify-web:
 # ═══════════════════════════════════════════════════════════════════
 #
 # make clean   Full clean — Dart build-hook artifacts, test results, and
-#              both vendored crates' cargo target/ (the bulk of the disk
+#              the three vendored crates' cargo target/ (the bulk of the disk
 #              use). Run deliberately; the next build recompiles fresh.
 
 clean:
 	rm -rf .dart_tool/hooks_runner/ .dart_tool/lib/ .dart_tool/native_assets/ build_output/ test-results/
-	rm -rf vendor/pdf_oxide/target/ vendor/office_oxide/target/
+	rm -rf vendor/pdf_oxide/target/ vendor/office_oxide/target/ vendor/tiny_skia/target/

@@ -4,14 +4,7 @@
 // Even if the Rust engine implements them on DocumentEditor internally,
 // the Dart API exposes them here as one-shot ops on Pdf.
 
-import 'package:pdf_manipulator/src/ops/pdf.dart';
-import 'package:pdf_manipulator/src/types/data_sink.dart';
-import 'package:pdf_manipulator/src/types/errors.dart';
-import 'package:pdf_manipulator/src/types/data_source.dart';
-import 'package:pdf_manipulator/src/types/pdf_enums.dart';
-import 'package:pdf_manipulator/src/types/pdf_task.dart';
-import 'package:pdf_manipulator/src/types/pdf_params.dart';
-import 'package:pdf_manipulator/src/keep/record_use_shim.dart';
+part of 'pdf.dart';
 
 /// One-shot operations — source in, sink out, no persistent handle.
 extension PdfStandalone on Pdf {
@@ -24,7 +17,7 @@ extension PdfStandalone on Pdf {
     String? location,
   }) {
     KeepRecord.op('signatures');
-    return bridge.sign(
+    return _live.sign(
       source,
       output,
       credentials: credentials,
@@ -41,7 +34,7 @@ extension PdfStandalone on Pdf {
     String? password,
   }) {
     KeepRecord.op('office');
-    return bridge.convertTo(source, output, format: format, password: password);
+    return _live.convertTo(source, output, format: format, password: password);
   }
 
   /// Converts a document of the given [format] into a PDF.
@@ -51,7 +44,7 @@ extension PdfStandalone on Pdf {
     required PdfDocumentFormat format,
   }) {
     KeepRecord.op('office');
-    return bridge.convertToPdf(document, output, format: format);
+    return _live.convertToPdf(document, output, format: format);
   }
 
   /// Converts the XFA form in [source] into a plain AcroForm document
@@ -60,22 +53,22 @@ extension PdfStandalone on Pdf {
     DataSource source,
     DataSink output, {
     String? password,
-  }) => bridge.convertXfaToAcroForm(source, output, password: password);
+  }) => _live.convertXfaToAcroForm(source, output, password: password);
 
-  /// Extracts specific [pages] from [source] into [output].
+  /// Extracts specific [pages] from [source] into [output], in the order
+  /// given. A page listed twice throws [PdfInvalidArgument].
   PdfTask<void> extractPages(
     DataSource source,
     DataSink output, {
     required List<int> pages,
     String? password,
-  }) => PdfTask.group((hook) async {
-    final handle = await hook.guard(
-      bridge.openEditor(source, password: password),
-    );
-    try {
-      await hook.guard(handle.extractPages(pages, output));
-    } finally {
-      await handle.dispose();
+  }) {
+    if (pages.toSet().length != pages.length) {
+      throw PdfInvalidArgument('a page is listed twice: $pages');
     }
-  });
+    return _own(
+      edit(source, password: password),
+      (editor, hook) => hook.guard(editor._handle.extractPages(pages, output)),
+    );
+  }
 }

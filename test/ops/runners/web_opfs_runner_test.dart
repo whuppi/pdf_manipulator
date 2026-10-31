@@ -4,6 +4,9 @@
 @TestOn('browser')
 library;
 
+import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
+
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
@@ -16,6 +19,10 @@ import '../core/pdf_form_encoding_battery.dart';
 import '../core/pdf_builder_battery.dart';
 import '../core/pdf_standalone_battery.dart';
 import '../core/pdf_sugar_battery.dart';
+import '../core/pdf_one_shot_battery.dart';
+import '../core/pdf_render_battery.dart';
+import '../core/pdf_determinism_battery.dart';
+import '../core/pdf_cancel_battery.dart';
 import '../core/pdf_lifecycle_battery.dart';
 import '../core/pdf_instance_battery.dart';
 import '../stress/pdf_doc_stress_battery.dart';
@@ -26,6 +33,13 @@ import '../stress/pdf_builder_stress_battery.dart';
 import '../stress/pdf_instance_stress_battery.dart';
 import '../platform/web/web_runtime_battery.dart';
 import '../../harness/timeouts.dart';
+
+// An OPFS op does no I/O waits, so only the SharedArrayBuffer cancel
+// word can reach it; a page without SharedArrayBuffer stops it by dispose.
+final String? _noMidOpCancel =
+    globalContext.hasProperty('SharedArrayBuffer'.toJS).toDart
+    ? null
+    : 'OPFS without SharedArrayBuffer: a running op is stopped only by dispose';
 
 void main() {
   late Pdf pdf;
@@ -48,7 +62,9 @@ void main() {
       ),
     );
     booted = true;
-  }, timeout: t(2));
+    // Harness setup, not the engine: spawning the hybrid asset server
+    // compiles an isolate, which takes seconds on a loaded machine.
+  }, timeout: t(10));
 
   test('verify I/O mode is opfs', () async {
     final doc = await pdf.open(src(minimalPdf));
@@ -66,6 +82,14 @@ void main() {
   registerBuilderTests(() => pdf);
   registerStandaloneTests(() => pdf);
   registerSugarTests(() => pdf);
+  registerOneShotTests(() => pdf);
+  registerRenderTests(() => pdf);
+  registerDeterminismTests(() => pdf);
+  registerCancelTests(
+    () => pdf,
+    skipMidOp: _noMidOpCancel,
+    skipExtract: 'OPFS pre-copies its sources: no source read marks the start',
+  );
   registerLifecycleTests(
     () => Pdf(
       config: PdfConfig(

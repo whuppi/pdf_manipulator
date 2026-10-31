@@ -4,39 +4,46 @@
 import 'package:meta/meta.dart';
 
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
+import 'package:pdf_manipulator/src/types/pdf_wire.dart';
 
 /// The kind of an AcroForm field, refined from the raw `/FT` and `/Ff`
 /// bits so a caller never reads a flag directly.
-enum PdfFormFieldType {
+enum PdfFormFieldType implements PdfWire {
   /// `/FT /Tx` — single or multi-line text.
-  text,
+  text('text'),
 
   /// `/FT /Btn` without the Radio or Pushbutton flag.
-  checkbox,
+  checkbox('checkbox'),
 
   /// `/FT /Btn` with the Radio flag (`PdfFormFieldFlag.radio`).
-  radioGroup,
+  radioGroup('radioGroup'),
 
   /// `/FT /Ch` with the Combo flag (`PdfFormFieldFlag.combo`).
-  comboBox,
+  comboBox('comboBox'),
 
   /// `/FT /Ch` without the Combo flag.
-  listBox,
+  listBox('listBox'),
 
   /// `/FT /Btn` with the Pushbutton flag (`PdfFormFieldFlag.pushButton`).
-  button,
+  button('button'),
 
   /// `/FT /Sig`.
-  signature,
+  signature('signature'),
 
   /// A field type the engine could not classify.
-  unknown,
+  unknown('unknown');
+
+  const PdfFormFieldType(this.wire);
+
+  @override
+  final String wire;
 }
 
 /// A field's value, typed by the field kind: [PdfTextValue] for text
-/// fields, [PdfCheckedValue] for a checkbox or radio button,
-/// [PdfChoiceValue] for a single-select choice field, [PdfMultiChoiceValue]
-/// for a multi-select list box, [PdfNoValue] when the field has no value.
+/// fields, [PdfCheckedValue] for a checkbox, [PdfChoiceValue] for a
+/// single-select choice field or a radio group (the selected option's export
+/// name), [PdfMultiChoiceValue] for a multi-select list box, [PdfNoValue]
+/// when the field has no value (a radio group with nothing selected).
 sealed class PdfFormFieldValue {
   const PdfFormFieldValue();
 }
@@ -84,15 +91,20 @@ class PdfNoValue extends PdfFormFieldValue {
 }
 
 /// Text alignment of a text field's content (`/Q`).
-enum PdfTextAlignment {
+enum PdfTextAlignment implements PdfWire {
   /// `/Q 0`.
-  left,
+  left('left'),
 
   /// `/Q 1`.
-  center,
+  center('center'),
 
   /// `/Q 2`.
-  right,
+  right('right');
+
+  const PdfTextAlignment(this.wire);
+
+  @override
+  final String wire;
 }
 
 /// An AcroForm field as read from a document by `PdfDoc.formFields`.
@@ -141,65 +153,73 @@ class PdfFormField {
 }
 
 /// Format for `PdfDoc.exportFormData`.
-enum PdfFormDataFormat {
+enum PdfFormDataFormat implements PdfWire {
   /// Binary Forms Data Format (ISO 32000-1 §12.7.7).
-  fdf,
+  fdf('fdf'),
 
   /// XML Forms Data Format.
-  xfdf,
+  xfdf('xfdf');
+
+  const PdfFormDataFormat(this.wire);
+
+  @override
+  final String wire;
 }
 
 /// A form field flag bit (`/Ff`), positioned per ISO 32000-1:2008 Table
 /// 221 (common), 226 (button), 228 (choice) and 230 (text). Pass a set of
 /// these to `PdfEditor.setFormFieldFlags`.
-enum PdfFormFieldFlag {
+enum PdfFormFieldFlag implements PdfWire {
   /// Table 221 bit 1 — the field cannot be edited by the user.
-  readOnly(1),
+  readOnly('readOnly', 1),
 
   /// Table 221 bit 2 — the field must have a value on submit.
-  required(1 << 1),
+  required('required', 1 << 1),
 
   /// Table 221 bit 3 — excluded from form export.
-  noExport(1 << 2),
+  noExport('noExport', 1 << 2),
 
   /// Table 230 bit 13 — a text field accepts multiple lines.
-  multiline(1 << 12),
+  multiline('multiline', 1 << 12),
 
   /// Table 230 bit 14 — a text field masks its input.
-  password(1 << 13),
+  password('password', 1 << 13),
 
   /// Table 226 bit 16 — a button field is a radio group.
-  radio(1 << 15),
+  radio('radio', 1 << 15),
 
   /// Table 226 bit 17 — a button field is a pushbutton.
-  pushButton(1 << 16),
+  pushButton('pushButton', 1 << 16),
 
   /// Table 228 bit 18 — a choice field is a combo box.
-  combo(1 << 17),
+  combo('combo', 1 << 17),
 
   /// Table 228 bit 19 — a combo box allows a custom typed value.
-  edit(1 << 18),
+  edit('edit', 1 << 18),
 
   /// Table 228 bit 20 — a choice field's options are sorted.
-  sort(1 << 19),
+  sort('sort', 1 << 19),
 
   /// Table 228 bit 22 — a list box allows multiple selections.
-  multiSelect(1 << 21),
+  multiSelect('multiSelect', 1 << 21),
 
   /// Table 230 bit 23 — a text field's input is not spell-checked.
-  doNotSpellCheck(1 << 22),
+  doNotSpellCheck('doNotSpellCheck', 1 << 22),
 
   /// Table 230 bit 24 — a text field does not scroll past its width.
-  doNotScroll(1 << 23),
+  doNotScroll('doNotScroll', 1 << 23),
 
   /// Table 230 bit 25 — a text field splits input into equal-width combs.
-  comb(1 << 24),
+  comb('comb', 1 << 24),
 
   /// Table 230 bit 26 — a text field's value is rich text.
-  richText(1 << 25);
+  richText('richText', 1 << 25);
 
-  /// Creates a flag with its ISO field-flag bit value.
-  const PdfFormFieldFlag(this.bit);
+  /// Creates a flag with its wire name and ISO field-flag bit value.
+  const PdfFormFieldFlag(this.wire, this.bit);
+
+  @override
+  final String wire;
 
   /// The raw `/Ff` bit value.
   final int bit;

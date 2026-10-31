@@ -8,7 +8,7 @@
 // Wire format (must match binary_codec.rs):
 //   Request:  [op_len u8][op utf8][field_count u16 LE][fields...]
 //   Response: [status u8][field_count u16 LE][fields...]
-//             status 0 → [msg_len u32 LE][msg utf8]
+//             status 0 → [kind u8][field_count u16 LE][fields...]
 //   Field:    [key_len u8][key utf8][type u8][value]
 //   Types:    0=null 1=i32 2=i64 3=f64 4=bool 5=string 6=bytes
 //             7=int_list 8=float_list 9=string_list 10=map_list
@@ -184,12 +184,17 @@ Uint8List buildCancelledResponse() => Uint8List.fromList(const [2]);
 
 /// Builds an error response carrying [message] — used by lanes for
 /// transport-layer failures (worker init failed, pre-copy failed).
-/// Layout matches `ResponseWriter::error`:
-/// `[0][msg_len u32 LE][msg]`.
+/// Layout matches `ResponseWriter::error_kind` for kind Engine (0):
+/// `[0][kind 0][field_count 1 LE][message field]`.
 Uint8List buildErrorResponse(String message) {
   final msg = utf8.encode(message);
   final out = BytesBuilder(copy: false)
     ..addByte(0)
+    ..addByte(0) // kind = Engine
+    ..add(const [1, 0]) // field_count = 1 LE
+    ..addByte('message'.length)
+    ..add(utf8.encode('message'))
+    ..addByte(5) // string type
     ..add(_u32le(msg.length))
     ..add(msg);
   return out.takeBytes();

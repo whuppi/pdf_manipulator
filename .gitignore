@@ -1,27 +1,7 @@
-# ============================================================================
-# AUTO-GENERATED — DO NOT EDIT
-# ============================================================================
-# This file is rendered by:
-#   /Users/deepanshu/personal1/whuppi/.claude/scripts/stamp-gitignore.sh
-# from:
-#   /Users/deepanshu/personal1/whuppi/.gitignore.template
-#
-# To change patterns:
-#   - Workspace-wide: edit .gitignore.template, then re-run the stamper.
-#   - One repo only:  edit `additions_for` in the stamper, then re-run.
-# Manual edits to this file will be overwritten on the next stamp.
-# ============================================================================
+# Generated file — do not edit by hand; changes here are overwritten.
 
 # ==============================================================================
-# whuppi canonical .gitignore template (workspace-wide patterns)
-# ==============================================================================
-# Source of truth: /Users/deepanshu/personal1/whuppi/.gitignore.template
-# Rendered into every repo's .gitignore by:
-#   /Users/deepanshu/personal1/whuppi/.claude/scripts/stamp-gitignore.sh
-# Per-repo additions (compiled artifacts, vendored binaries, etc.) live in
-# the stamper's `additions_for` data table, NOT in this template and NOT
-# in the rendered .gitignore files.
-# Rules: /Users/deepanshu/personal1/whuppi/.claude/rules/gitignore-template.md
+# Workspace-wide ignore patterns
 # ==============================================================================
 
 # ── Secrets and credentials ───────────────────────────────────────────────────
@@ -219,6 +199,9 @@ unlinked_spec.ds
 # analyze-floor's lock snapshot — only exists if a run was interrupted
 # (the make target restores + deletes it on every exit path it owns).
 pubspec.lock.floorbak
+# Local path overrides for workspace resolution (pub's own convention); never
+# committed — a consumer resolves the published version.
+pubspec_overrides.yaml
 
 # Safety net: Dart/Flutter packages have their source in `lib/` and `bin/`.
 # Re-include them explicitly so no upstream pattern can ever sweep them up
@@ -285,11 +268,9 @@ ehthumbs.db
 Thumbs.db
 Desktop.ini
 
-# ── Claude Code auto-files ────────────────────────────────────────────────────
-# Claude Code auto-creates CLAUDE.md as a copy of ~/CLAUDE.md when starting a
-# session in a directory without one. We don't author CLAUDE.md anymore — the
-# canonical AI config lives in workspace .claude/rules/ and .claude/memory/.
-# See whuppi/_playground/RESUMPTION-BRIEF.md for the elimination history.
+# ── Stray AI files ────────────────────────────────────────────────────────────
+# Some AI tools write a CLAUDE.md into any folder they run in; none belongs
+# in this repository.
 CLAUDE.md
 **/CLAUDE.md
 

@@ -5,117 +5,20 @@
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/types/errors.dart';
+import 'package:pdf_manipulator/src/types/pdf_annotation.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
+import 'package:pdf_manipulator/src/types/pdf_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
+import 'package:pdf_manipulator/src/types/pdf_render.dart';
 import 'package:pdf_manipulator/src/bridge/protocol/codec.dart';
-import 'package:pdf_manipulator/src/bridge/protocol/op.dart';
 import 'package:test/test.dart';
 
 void main() {
-  // ════════════════════════════════════════════════════
-  // REQUEST ENCODING
-  // ════════════════════════════════════════════════════
-
-  group('request encoding', () {
-    test('openOp', () {
-      expect(openOp().op, EngineOp.open);
-      expect(openOp(password: 'pw').args['password'], 'pw');
-    });
-
-    test('editorMergeFromOp carries pages only when given', () {
-      final all = editorMergeFromOp(handleId: 1, otherBytes: Uint8List(0));
-      expect(all.op, EngineOp.editorMergeFrom);
-      expect(all.args.containsKey('pages'), isFalse);
-      final some = editorMergeFromOp(
-        handleId: 1,
-        otherBytes: Uint8List(0),
-        pages: [1, 2],
-      );
-      expect(some.args['pages'], [1, 2]);
-    });
-
-    test('extractOp', () {
-      final req = extractOp(format: PdfExtractionFormat.markdown, page: 0);
-      expect(req.op, EngineOp.extract);
-      expect(req.args['format'], 'markdown');
-      expect(req.args['page'], 0);
-    });
-
-    test('searchOp', () {
-      final req = searchOp(query: 'hello', page: 2);
-      expect(req.op, EngineOp.search);
-      expect(req.args['query'], 'hello');
-    });
-
-    test('signOp with PKCS12', () {
-      final cert = Uint8List.fromList([1, 2, 3]);
-      final req = signOp(
-        credentials: PdfSigningCredentials.pkcs12(cert, 'p'),
-        reason: 'test',
-      );
-      expect(req.op, EngineOp.sign);
-      expect(req.args['certificate'], cert);
-      expect(req.args['certificatePassword'], 'p');
-    });
-
-    test('signOp with PEM', () {
-      final req = signOp(
-        credentials: const PdfSigningCredentials.pem('CERT', 'KEY'),
-      );
-      expect(req.args['certPem'], 'CERT');
-      expect(req.args['keyPem'], 'KEY');
-    });
-
-    test('convertToOp', () {
-      final req = convertToOp(format: PdfDocumentFormat.docx);
-      expect(req.op, EngineOp.convertTo);
-      expect(req.args['format'], 'docx');
-    });
-
-    test('renderOp', () {
-      final req = renderOp(pageIndices: [0, 1], maxWidth: 800);
-      expect(req.op, EngineOp.render);
-      expect(req.args['pageIndices'], [0, 1]);
-      expect(req.args['maxWidth'], 800);
-    });
-
-    test('editorSaveOp encodes encryption', () {
-      final req = editorSaveOp(
-        handleId: 1,
-        options: const PdfSaveOptions.fullRewrite(
-          encryption: PdfEncryption.config(ownerPassword: 'ow'),
-        ),
-      );
-      expect(req.args['encryptMode'], 2);
-      expect(req.args['encryptOwnerPw'], 'ow');
-    });
-
-    test('editorMutateOp', () {
-      final req = editorMutateOp(
-        handleId: 1,
-        editOp: 'setTitle',
-        extra: {'value': 'T'},
-      );
-      expect(req.args['editOp'], 'setTitle');
-      expect(req.args['value'], 'T');
-    });
-
-    test('builderSetMetadataOp partial', () {
-      final req = builderSetMetadataOp(handleId: 1, title: 'Only Title');
-      expect(req.args['title'], 'Only Title');
-      expect(req.args.containsKey('author'), isFalse);
-    });
-  });
-
-  // ════════════════════════════════════════════════════
-  // RESPONSE DECODING
-  // ════════════════════════════════════════════════════
-
   group('decodePageList', () {
     test('parses complete page list', () {
       final pages = decodePageList({
@@ -186,6 +89,7 @@ void main() {
       expect(screen['monoPpi'], 300);
       expect(screen['downsampleThreshold'], 1.5);
       expect(screen['convertCmykToRgb'], isTrue);
+      expect(screen['recompressJpeg'], isTrue);
     });
   });
 
@@ -266,10 +170,45 @@ void main() {
   });
 
   group('decodePermissions', () {
-    test('parses permission bits', () {
-      final perms = decodePermissions(0xFF);
+    test('reads the /P word at its spec bit positions', () {
+      final perms = decodePermissions(-1);
       expect(perms.print, isTrue);
       expect(perms.copy, isTrue);
+      expect(perms.printHq, isTrue);
+      expect(perms.assemble, isTrue);
+    });
+
+    test('decodes what toBits encodes, flag by flag', () {
+      const cases = [
+        PdfPermissions(print: true, copy: false),
+        PdfPermissions(print: false, copy: true, fillForms: true),
+        PdfPermissions(printHq: true, assemble: true, accessibility: false),
+      ];
+      for (final p in cases) {
+        final back = decodePermissions(p.toBits());
+        expect(
+          [
+            back.print,
+            back.printHq,
+            back.modify,
+            back.copy,
+            back.annotate,
+            back.fillForms,
+            back.accessibility,
+            back.assemble,
+          ],
+          [
+            p.print,
+            p.printHq,
+            p.modify,
+            p.copy,
+            p.annotate,
+            p.fillForms,
+            p.accessibility,
+            p.assemble,
+          ],
+        );
+      }
     });
 
     test('zero bits means all false', () {
@@ -307,13 +246,35 @@ void main() {
     test('parses signature list', () {
       final sigs = decodeSignatures({
         'signatures': [
-          {'signerName': 'Alice', 'reason': 'Approval', 'isValid': true},
+          {
+            'signerName': 'Alice',
+            'reason': 'Approval',
+            'isValid': true,
+            'coversWholeDocument': true,
+            'signingTime': 0,
+          },
         ],
       });
       expect(sigs, hasLength(1));
       expect(sigs[0].signerName, 'Alice');
       expect(sigs[0].isValid, isTrue);
+      expect(sigs[0].coversWholeDocument, isTrue);
+      expect(sigs[0].signingTime, DateTime.utc(1970));
     });
+
+    test(
+      'coversWholeDocument defaults false and absence of time stays null',
+      () {
+        final sigs = decodeSignatures({
+          'signatures': [
+            {'signerName': 'Bob', 'isValid': false},
+          ],
+        });
+        expect(sigs, hasLength(1));
+        expect(sigs[0].coversWholeDocument, isFalse);
+        expect(sigs[0].signingTime, isNull);
+      },
+    );
   });
 
   group('decodeValidationResult', () {
@@ -328,30 +289,104 @@ void main() {
     });
   });
 
-  group('decodeRenderedPage', () {
-    test('parses with ByteBuffer', () {
-      final bytes = Uint8List.fromList([1, 2, 3]);
-      final page = decodeRenderedPage({
+  group('decodeRenderFrame', () {
+    test('a header carries the page descriptor and the format', () {
+      final frame = decodeRenderFrame({
+        'kind': 'header',
+        'page': 3,
         'width': 800,
         'height': 600,
-        'data': bytes.buffer,
+        'format': 'rgba',
       });
-      expect(page.width, 800);
-      expect(page.data, hasLength(3));
+      expect(frame, isA<ChunkHeader<PdfRenderedPage>>());
+      expect(
+        (frame as ChunkHeader<PdfRenderedPage>).item,
+        const PdfRenderedPage(page: 3, width: 800, height: 600),
+      );
+    });
+
+    test('a data frame carries its bytes', () {
+      final bytes = Uint8List.fromList([1, 2, 3]);
+      final frame = decodeRenderFrame({'kind': 'data', 'data': bytes});
+      expect(frame, isA<ChunkData<PdfRenderedPage>>());
+      expect((frame as ChunkData<PdfRenderedPage>).bytes, [1, 2, 3]);
+    });
+
+    test('an end frame has no fields', () {
+      expect(
+        decodeRenderFrame({'kind': 'end'}),
+        isA<ChunkEnd<PdfRenderedPage>>(),
+      );
+    });
+
+    test('an unknown kind or format is an engine error, never a guess', () {
+      expect(
+        () => decodeRenderFrame({'kind': 'tile'}),
+        throwsA(isA<PdfEngineError>()),
+      );
+      expect(
+        () => decodeRenderFrame({
+          'kind': 'header',
+          'page': 0,
+          'width': 1,
+          'height': 1,
+          'format': 'jpeg',
+        }),
+        throwsA(isA<PdfEngineError>()),
+      );
     });
   });
 
-  group('decodePdfImage', () {
-    test('parses full image', () {
-      final img = decodePdfImage({
+  group('decodeImageFrame', () {
+    test('a header carries the image descriptor', () {
+      final frame = decodeImageFrame({
+        'kind': 'header',
+        'page': 2,
+        'index': 1,
         'width': 100,
         'height': 200,
-        'format': 'jpeg',
-        'colorSpace': 'RGB',
         'bitsPerComponent': 8,
-        'data': Uint8List(5),
+        'encoding': 'jpeg',
+        'color': 'rgb',
       });
-      expect(img.format, 'jpeg');
+      expect(frame, isA<ChunkHeader<PdfImage>>());
+      expect(
+        (frame as ChunkHeader<PdfImage>).item,
+        const PdfImage(
+          page: 2,
+          index: 1,
+          width: 100,
+          height: 200,
+          bitsPerComponent: 8,
+          encoding: PdfImageEncoding.jpeg,
+          color: PdfImageColor.rgb,
+        ),
+      );
+    });
+
+    test('data and end frames are the same as a render has', () {
+      final bytes = Uint8List.fromList([9, 8]);
+      expect(
+        decodeImageFrame({'kind': 'data', 'data': bytes}),
+        isA<ChunkData<PdfImage>>(),
+      );
+      expect(decodeImageFrame({'kind': 'end'}), isA<ChunkEnd<PdfImage>>());
+    });
+
+    test('an unknown encoding or colour is an engine error', () {
+      expect(
+        () => decodeImageFrame({
+          'kind': 'header',
+          'page': 0,
+          'index': 0,
+          'width': 1,
+          'height': 1,
+          'bitsPerComponent': 8,
+          'encoding': 'tiff',
+          'color': 'rgb',
+        }),
+        throwsA(isA<PdfEngineError>()),
+      );
     });
   });
 
@@ -438,7 +473,7 @@ void main() {
             'width': 3.0,
             'height': 4.0,
             'maxLength': 12,
-            'alignment': 1,
+            'alignment': 'center',
             'readOnly': true,
             'required': false,
           },
@@ -456,7 +491,7 @@ void main() {
             'width': 0.0,
             'height': 0.0,
             'maxLength': -1,
-            'alignment': -1,
+            'alignment': '',
             'readOnly': false,
             'required': false,
           },
@@ -530,6 +565,75 @@ void main() {
     });
   });
 
+  group('decodeAnnotations', () {
+    test('parses a row with a rect and all strings', () {
+      final rows = decodeAnnotations({
+        'annotations': [
+          {
+            'subtype': 'Stamp',
+            'hasRect': true,
+            'x': 50.0,
+            'y': 650.0,
+            'width': 200.0,
+            'height': 60.0,
+            'contents': 'Approved',
+            'author': 'Alice',
+            'fieldName': 'sig1',
+          },
+        ],
+      });
+      expect(rows, hasLength(1));
+      final row = rows.single;
+      expect(row.subtype, PdfAnnotationSubtype.stamp);
+      expect(row.subtypeName, 'Stamp');
+      expect(row.rect, isNotNull);
+      expect(row.rect!.x, 50.0);
+      expect(row.rect!.y, 650.0);
+      expect(row.rect!.width, 200.0);
+      expect(row.rect!.height, 60.0);
+      expect(row.contents, 'Approved');
+      expect(row.author, 'Alice');
+      expect(row.fieldName, 'sig1');
+    });
+
+    test('hasRect false and empty strings decode to null fields', () {
+      final rows = decodeAnnotations({
+        'annotations': [
+          {
+            'subtype': 'Link',
+            'hasRect': false,
+            'x': 0.0,
+            'y': 0.0,
+            'width': 0.0,
+            'height': 0.0,
+            'contents': '',
+            'author': '',
+            'fieldName': '',
+          },
+        ],
+      });
+      final row = rows.single;
+      expect(row.subtype, PdfAnnotationSubtype.link);
+      expect(row.rect, isNull);
+      expect(row.contents, isNull);
+      expect(row.author, isNull);
+      expect(row.fieldName, isNull);
+    });
+
+    test('maps "3D" to threeD, "Foo" and "" to unknown', () {
+      final rows = decodeAnnotations({
+        'annotations': [
+          {'subtype': '3D', 'hasRect': false},
+          {'subtype': 'Foo', 'hasRect': false},
+          {'subtype': '', 'hasRect': false},
+        ],
+      });
+      expect(rows[0].subtype, PdfAnnotationSubtype.threeD);
+      expect(rows[1].subtype, PdfAnnotationSubtype.unknown);
+      expect(rows[2].subtype, PdfAnnotationSubtype.unknown);
+    });
+  });
+
   // ════════════════════════════════════════════════════
   // HELPERS
   // ════════════════════════════════════════════════════
@@ -576,7 +680,7 @@ void main() {
       expect(args['opacity'], 0.3);
       expect(args['fontSize'], 48);
       expect(args['rotation'], 45);
-      expect(args['layer'], 0);
+      expect(args['layer'], 'foreground');
       expect(args['posType'], 0);
     });
 
@@ -592,10 +696,10 @@ void main() {
         PdfWatermarkLayer.background,
       );
       expect(args['posType'], 1);
-      expect(args['corner'], 1); // topRight index
+      expect(args['corner'], 'topRight');
       expect(args['marginX'], 10);
       expect(args['marginY'], 15);
-      expect(args['layer'], 1); // background
+      expect(args['layer'], 'background');
     });
 
     test('encodeWatermarkArgs tiled position includes columns + rows', () {

@@ -77,8 +77,8 @@ The maintainer handles releases.
 - Match existing code in the repo.
 - No `dart:io` in the public API barrel — must stay web-safe.
 - **Shared brain, dumb edges.** Every decision lives in shared code —
-  the Dart `Router` for orchestration, Rust `bridge_api.rs` for
-  dispatch. The four platform adapter files (native + web lane
+  the Dart `Router` for orchestration, Rust `bridge_api.rs` and the op
+  units under `host/ops/` for dispatch. The four platform adapter files (native + web lane
   adapters) and `lane_worker.js` only translate verbs into physics; a
   routing `if` in any of them fails `runtime/dumb_edges_test.dart`.
 - Tests in `test/` mirror the `lib/src/` structure. Read the test
@@ -99,12 +99,13 @@ Step-by-step checklists in [`docs/UPDATING.md`](docs/UPDATING.md).
 
 ## Vendored forks
 
-Two git submodules at `vendor/`. Provenance and recipes in
+Three git submodules at `vendor/`. Provenance and recipes in
 [`docs/UPDATING.md`](docs/UPDATING.md).
 
 **PRs to vendored forks**
 ([`whuppi/pdf_oxide`](https://github.com/whuppi/pdf_oxide),
-[`whuppi/office_oxide`](https://github.com/whuppi/office_oxide)):
+[`whuppi/office_oxide`](https://github.com/whuppi/office_oxide),
+[`whuppi/tiny-skia`](https://github.com/whuppi/tiny-skia)):
 target the patches branch — never `main`, which is a clean mirror of
 upstream. The current patch-branch names are listed in
 [`docs/UPDATING.md`](docs/UPDATING.md).

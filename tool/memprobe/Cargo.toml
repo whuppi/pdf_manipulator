@@ -1,0 +1,26 @@
+[package]
+name = "memprobe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+pdf_oxide = { path = "../../vendor/pdf_oxide", default-features = false, features = [
+    "icc",
+    "legacy-crypto",
+    "rendering",
+    "signatures",
+    "native-bridge",
+    "pdfa",
+    "office",
+    "extract",
+    "test-support",
+] }
+# The content inputs are encoded as they are generated, in the same filters
+# the engine reads.
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
+weezl = "0.2"
+# The progressive JPEG input is encoded as it is generated.
+jpeg-encoder = "0.7.1"
+
+[workspace]

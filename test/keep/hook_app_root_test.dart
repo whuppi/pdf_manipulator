@@ -205,7 +205,7 @@ Future<void> check(PdfDoc doc) async {
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
 Future<void> shrink(PdfDoc doc) async {
-  await doc.render(pages: PdfPages.all());
+  await doc.render((page) => MemorySink(), pages: PdfPages.all());
 }
 ''');
 

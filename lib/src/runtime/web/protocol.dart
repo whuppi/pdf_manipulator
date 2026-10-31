@@ -58,6 +58,11 @@ abstract final class SabLayout {
 
   /// Write-ack SAB is a single i32 status word.
   static const writeSabBytes = 4;
+
+  /// Cancel SAB is a single i32: 0 until the job is cancelled, then 1.
+  /// The worker reads it from inside the engine's CPU loops, so a
+  /// cancel lands within one page without any I/O call.
+  static const cancelSabBytes = 4;
 }
 
 /// Message type tags between WebLane (Dart) and lane_worker.js.
@@ -124,6 +129,10 @@ abstract final class LaneMsg {
 abstract final class LaneMsgFields {
   /// The discriminator field on every message.
   static const type = 'type';
+
+  /// Worker → Dart, on `result` and `error`: the worker's committed
+  /// WASM linear memory in bytes after the job (its lifetime peak).
+  static const peakBytes = 'mem';
 }
 
 /// The protocol object injected into the worker's init message.

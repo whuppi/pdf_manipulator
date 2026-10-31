@@ -4,8 +4,8 @@
 /// import 'package:pdf_manipulator/pdf_manipulator.dart';
 /// import 'package:pdf_manipulator/io.dart';
 ///
-/// final doc = await pdf.open(FileSource(File('in.pdf')));
-/// final out = await FileSink.create(File('out.pdf'));
+/// final source = await FileSource.open(File('in.pdf'));
+/// final out = await FileSink.open(File('out.pdf'));
 /// ```
 ///
 /// This library imports `dart:io`, so it is a separate entry point from the

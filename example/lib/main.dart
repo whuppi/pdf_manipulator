@@ -53,6 +53,9 @@ class DemoSource implements DataSource {
     final end = (offset + count).clamp(0, _data.length);
     return Uint8List.sublistView(_data, offset, end);
   }
+
+  @override
+  void close() {}
 }
 
 /// Collects output chunks; hand the bytes off with [takeBytes].
@@ -60,7 +63,12 @@ class DemoSink implements DataSink {
   final _builder = BytesBuilder(copy: false);
 
   @override
-  void write(Uint8List chunk) => _builder.add(chunk);
+  FutureOr<void> write(Uint8List chunk) {
+    _builder.add(chunk);
+  }
+
+  @override
+  void close() {}
 
   Uint8List takeBytes() => _builder.takeBytes();
   int get length => _builder.length;
@@ -81,7 +89,7 @@ final minimalPdf = Uint8List.fromList(
           '0000000058 00000 n \n'
           '0000000115 00000 n \n'
           'trailer\n<< /Size 4 /Root 1 0 R >>\n'
-          'startxref\n190\n%%EOF\n'
+          'startxref\n186\n%%EOF\n'
       .codeUnits,
 );
 
@@ -1181,26 +1189,25 @@ class _DocTabState extends State<_DocTab>
                       title: 'Render page 1 to image',
                       loading: loading,
                       onRun: () => runFlow('Render', () async {
-                            var info = 'No pages rendered';
-                            await for (final page in doc.render(
-                                pages: const PdfPages.single(0))) {
-                              info = 'Rendered ${page.width}×${page.height} '
-                                  '(${fmtSize(page.data.length)})';
-                            }
-                            setState(() => status = info);
+                            final sink = DemoSink();
+                            final pages = await doc.render((page) => sink,
+                                pages: const PdfPages.single(0));
+                            setState(() => status = pages.isEmpty
+                                ? 'No pages rendered'
+                                : 'Rendered ${pages.first.width}×'
+                                    '${pages.first.height} '
+                                    '(${fmtSize(sink.length)})');
                           })),
                   _Op(
                       icon: Icons.photo_library,
                       title: 'Extract images from page 1',
                       loading: loading,
                       onRun: () => runFlow('Images', () async {
-                            var count = 0;
-                            await for (final _ in doc.extractImages(
-                                pages: const PdfPages.single(0))) {
-                              count++;
-                            }
-                            setState(
-                                () => status = '$count image(s) on page 1');
+                            final images = await doc.extractImages(
+                                (image) => MemorySink(),
+                                pages: const PdfPages.single(0));
+                            setState(() =>
+                                status = '${images.length} image(s) on page 1');
                           })),
                   _Section('Signatures'),
                   _Op(

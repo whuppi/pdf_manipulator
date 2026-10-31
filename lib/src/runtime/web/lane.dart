@@ -22,7 +22,10 @@
 //   running — the job's NEXT I/O is answered with the cancelled
 //             status (and a parked Atomics wait / outstanding JSPI
 //             read is answered immediately); the engine unwinds at
-//             that boundary, mirroring native exactly.
+//             that boundary, mirroring native exactly. Where the page
+//             has SharedArrayBuffer the job also carries a cancel word
+//             the engine's CPU loops poll, so it stops within one page
+//             even when it makes no I/O call.
 //   kill    — worker.terminate(): the browser frees the worker and
 //             its WASM heap; every pending job completes cancelled.
 //             The worker's OPFS directory is reclaimed by the host
@@ -128,6 +131,11 @@ class _WebJob {
   JSObject? sab;
   JSObject? writeSab;
 
+  /// The per-job cancel word, in every mode where the page has
+  /// SharedArrayBuffer (null otherwise: the job then cancels at its
+  /// next I/O boundary only).
+  JSObject? cancelSab;
+
   /// OPFS filenames pre-copied for this job's sources (index-aligned;
   /// null where no pre-copy happened). Pure exec-message data — the
   /// WORKER owns the files themselves and their deletion.
@@ -163,11 +171,12 @@ class WebLane implements Lane {
   /// Outstanding OPFS pre-copy ack.
   Completer<String?>? _opfsAck;
 
-  /// heldToken (creating jobId) → that job's kept DataSources. On
-  /// JSPI/Atomics a held reader's bytes still live here in Dart, so
-  /// ops on the handle (which carry no sources of their own) must
-  /// serve reads from the CREATING job's sources. Mount order
-  /// mirrors the worker's reader map: held first, own sources after.
+  /// Held group (the handle's creating jobId) → the DataSources its
+  /// jobs kept, in the order they were kept. On JSPI/Atomics a held
+  /// reader's bytes still live here in Dart, so ops on the handle
+  /// (which carry no sources of their own) must serve reads from the
+  /// group's sources. Mount order mirrors the worker's reader map:
+  /// held first, own sources after.
   final Map<int, List<DataSource>> _heldSources = {};
 
   // ── Lane verbs ──
@@ -198,6 +207,11 @@ class WebLane implements Lane {
     if (running == null || running.job.jobId != jobId) return;
     running.cancelled = true;
 
+    // The engine's CPU loops poll this word between pages, so the job
+    // stops within one page even while the worker never touches I/O.
+    final cancelSab = running.cancelSab;
+    if (cancelSab != null) _atomicsStore(_I32(cancelSab, 0, 1), 0, 1);
+
     // Wake anything parked RIGHT NOW — same instant-wake contract as
     // the native channel registry.
     running.wake();
@@ -214,11 +228,15 @@ class WebLane implements Lane {
   @override
   void releaseHeld(Object token) {
     if (_killed) return;
-    final heldJobId = token as int;
-    _heldSources.remove(heldJobId);
-    // The worker drops the held readers AND deletes their OPFS files
-    // — it owns them (same agent as the open handles: no race).
-    _post({LaneMsgFields.type: LaneMsg.releaseHeld, 'heldJobId': heldJobId});
+    final heldGroupId = token as int;
+    _heldSources.remove(heldGroupId);
+    // The worker drops the group's held readers AND deletes their OPFS
+    // files — it owns them (same agent as the open handles: no race).
+    // Every token of a handle names the same group, so a repeat is a no-op.
+    _post({
+      LaneMsgFields.type: LaneMsg.releaseHeld,
+      'heldGroupId': heldGroupId,
+    });
   }
 
   @override
@@ -312,11 +330,15 @@ class WebLane implements Lane {
         ..['sourceLengths'] = [for (final s in job.sources) s.length.toJS].toJS
         ..['sinkCount'] = job.sinks.length.toJS
         ..['keepSources'] = [for (final i in job.keepSources) i.toJS].toJS;
-      if (job.heldToken != null) {
-        msg['heldJobId'] = (job.heldToken! as int).toJS;
+      if (job.heldGroupId != null) {
+        msg['heldGroupId'] = job.heldGroupId!.toJS;
       }
       if (entry.opfsFiles.any((f) => f != null)) {
         msg['opfsFiles'] = [for (final f in entry.opfsFiles) f?.toJS].toJS;
+      }
+      if (globalContext.hasProperty('SharedArrayBuffer'.toJS).toDart) {
+        entry.cancelSab = _Sab(SabLayout.cancelSabBytes);
+        msg['cancelSab'] = entry.cancelSab;
       }
       if (_host.mode == PdfIoMode.atomics) {
         entry.sab = _Sab(SabLayout.readSabBytes);
@@ -401,7 +423,15 @@ class WebLane implements Lane {
       case LaneMsg.result:
         if (entry != null) {
           final bytes = _bytes(obj, 'data');
-          _finish(entry, _buildResult(entry, bytes));
+          final peak = _int(obj, LaneMsgFields.peakBytes);
+          // The op ends after its last sink write: OPFS mode has no
+          // worker-side back-pressure, so the result can arrive while
+          // chunks it follows are still being written.
+          unawaited(
+            entry.sinkChain.then(
+              (_) => _finish(entry, _buildResult(entry, bytes, peak)),
+            ),
+          );
         }
 
       case LaneMsg.error:
@@ -410,12 +440,19 @@ class WebLane implements Lane {
           final bytes = entry.cancelled
               ? buildCancelledResponse()
               : buildErrorResponse(message);
-          _finish(entry, LaneSubmitResult(bytes, const {}));
+          _finish(
+            entry,
+            LaneSubmitResult(
+              bytes,
+              const {},
+              peakBytes: _int(obj, LaneMsgFields.peakBytes),
+            ),
+          );
         }
     }
   }
 
-  LaneSubmitResult _buildResult(_WebJob entry, Uint8List bytes) {
+  LaneSubmitResult _buildResult(_WebJob entry, Uint8List bytes, int? peak) {
     // Cancelled mid-op: the caller sees the typed status, identical
     // to native's run_job. (Set-once flag — cannot misfire.)
     if (entry.cancelled) {
@@ -424,21 +461,23 @@ class WebLane implements Lane {
 
     final heldTokens = <int, Object>{};
     if (entry.job.keepSources.isNotEmpty && bytes.isNotEmpty && bytes[0] == 1) {
-      // Token = the creating job's id — the same id the worker used
-      // to mark its promoted readers (heldJobId). Ascending index
-      // order matches the worker's reader-creation order, which is
-      // what held-read serving relies on.
+      // Token = the handle's group id (its creating job) — the same id
+      // the worker used to mark its promoted readers (heldGroupId).
+      // Ascending index order matches the worker's reader-creation
+      // order, and a later job's sources append after the group's
+      // earlier ones: that is what held-read serving relies on.
+      final group = entry.job.heldGroupId ?? entry.job.jobId;
       final kept = entry.job.keepSources.toList()..sort();
       for (final i in kept) {
-        heldTokens[i] = entry.job.jobId;
+        heldTokens[i] = group;
       }
-      _heldSources[entry.job.jobId] = [
+      (_heldSources[group] ??= []).addAll([
         for (final i in kept)
           if (i < entry.job.sources.length) entry.job.sources[i],
-      ];
+      ]);
     }
 
-    return LaneSubmitResult(bytes, heldTokens);
+    return LaneSubmitResult(bytes, heldTokens, peakBytes: peak);
   }
 
   // ── I/O serving ──
@@ -455,10 +494,10 @@ class WebLane implements Lane {
     // then this job's own sources. Mirror that order exactly: a
     // held-reader index resolves to the CREATING job's kept sources;
     // anything past them is this job's own.
-    final heldToken = entry.job.heldToken;
-    final heldSources = heldToken == null
+    final heldGroupId = entry.job.heldGroupId;
+    final heldSources = heldGroupId == null
         ? const <DataSource>[]
-        : _heldSources[heldToken as int] ?? const <DataSource>[];
+        : _heldSources[heldGroupId] ?? const <DataSource>[];
 
     Uint8List? bytes;
     String? error;

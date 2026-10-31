@@ -1,40 +1,67 @@
 #!/usr/bin/env bash
-# Fork test wall (docs/UPDATING.md, S2): our tests live in host/, test pure
-# functions only, and never touch upstream files or the fork's tests/ tree.
+# Fork test wall (docs/UPDATING.md, S2): our tests live in fork-only code
+# (src/host/), never in upstream code or the fork's tests/ tree.
 #
-# Three checks per vendored engine:
-#   1. no `#[test]` inside a `── <name> patch ──` block of an upstream file
-#   2. no PdfDocument / DocumentEditor inside a host/ `#[cfg(test)]` module
-#   3. no file of ours added under tests/ (compared with the base tag the
+# Four checks per vendored engine:
+#   1. no `#[test]` added to upstream code: a file of src/ outside host/, or
+#      of tests/, holds no more `#[test]` than it did at the base tag
+#   2. no PdfDocument / DocumentEditor inside a host/ `#[cfg(test)]` module,
+#      except in src/host/engine_proofs/
+#   3. every `#[test]` in src/host/engine_proofs/ has a doc comment, which
+#      says why no Dart battery can observe what it proves
+#   4. no file of ours added under tests/ (compared with the base tag the
 #      patches branch is named after: pdf_manipulator/<base>-patches)
+#
+# The wall covers pdf_oxide and office_oxide. vendor/tiny_skia is outside it
+# on purpose: that fork has no fork-only code to hold a test, and what it
+# changes (a pixmap that shows a window of a larger plane) can only be proved
+# in its own pixels, so its tests live in its `tests/` and in test modules of
+# its `src/`, between patch markers. `make test-rust` runs them.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 bad=0
 
+# Number of `#[test]` lines in stdin.
+count_tests() {
+  grep -c '#\[test\]' || true
+}
+
 check_engine() {
-  local dir=$1 marker=$2 host=$3
+  local dir=$1 host=$2
   [ -d "$dir/src" ] || return 0
 
-  # 1. tests inside patch blocks of upstream files
-  while IFS= read -r file; do
-    case "$file" in "$dir/src/$host/"*) continue ;; esac
-    if awk -v m="$marker" '
-        index($0, "── " m " patch ──") { inside = 1 }
-        index($0, "── end " m " patch ──") { inside = 0 }
-        inside && /#\[test\]/ { found = 1 }
-        END { exit found ? 0 : 1 }' "$file"; then
-      echo "$file: a test inside a patch block — prove it from test/ops/ instead"
-      bad=1
-    fi
-  done < <(grep -rl -- "$marker patch" "$dir/src" 2>/dev/null || true)
+  local branch base have_base=0
+  branch=$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+  base=${branch#*/}
+  base=v${base%-patches}
+  if git -C "$dir" rev-parse -q --verify "refs/tags/$base" >/dev/null 2>&1; then
+    have_base=1
+  fi
 
-  # 2. document-level types inside host/ test modules. A plain #[cfg(test)]
+  # 1. tests added to upstream code
+  if [ "$have_base" -eq 1 ]; then
+    local file now was
+    while IFS= read -r file; do
+      case "$file" in src/"$host"/*) continue ;; esac
+      [ -f "$dir/$file" ] || continue
+      now=$(count_tests < "$dir/$file")
+      was=$( { git -C "$dir" show "$base:$file" 2>/dev/null || true; } | count_tests)
+      if [ "$now" -gt "$was" ]; then
+        echo "$dir/$file: $((now - was)) #[test] added to upstream code — put it in $dir/src/$host/engine_proofs/ or in a Dart battery in test/ops/"
+        bad=1
+      fi
+    done < <(git -C "$dir" ls-files -- src tests | grep '\.rs$')
+  fi
+
+  # 2. document-level types inside fork-only test modules. A plain #[cfg(test)]
   #    module is pure; a feature-negated test module is a trim probe run by
   #    tool/shake_audit.sh (which selects tests by the substring trim_probe),
-#    allowed a minimal PDF, and must carry trim_probe in its module name.
+  #    allowed a minimal PDF, and must carry trim_probe in its module name.
+  #    src/host/engine_proofs/ is exempt: it exists to open documents.
   while IFS= read -r file; do
+    case "$file" in "$dir/src/$host/engine_proofs/"*) continue ;; esac
     if awk '
         /#\[cfg\(all\(test, *not\(feature/ { probe = 1; next }
         probe == 1 { probe = 0; if ($0 !~ /^(pub(\(crate\))? )?mod [a-z_]*trim_probe/) { misnamed = 1 }; next }
@@ -46,17 +73,24 @@ check_engine() {
           if (opened && depth <= 0) { inside = 0 }
         }
         END { exit (found || misnamed) ? 0 : 1 }' "$file"; then
-      echo "$file: a host/ test opens a document, or a feature-negated test module is not a trim_probe — consumer-visible behaviour belongs in test/ops/"
+      echo "$file: a fork-only test opens a document, or a feature-negated test module is not a trim_probe — put it in $dir/src/$host/engine_proofs/ or in a Dart battery in test/ops/"
       bad=1
     fi
   done < <(grep -rl '#\[cfg(.*test' "$dir/src/$host" 2>/dev/null || true)
 
-  # 3. files of ours under tests/
-  local branch base
-  branch=$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-  base=${branch#*/}
-  base=v${base%-patches}
-  if git -C "$dir" rev-parse -q --verify "refs/tags/$base" >/dev/null 2>&1; then
+  # 3. engine proofs say why a Dart battery cannot see them
+  while IFS= read -r file; do
+    awk -v f="$file" '
+        /^[ \t]*#\[test\]/ && prev !~ /^[ \t]*\/\/\// {
+          print f ":" NR ": a #[test] with no doc comment — say why no Dart battery can observe it"
+          missing = 1
+        }
+        { prev = $0 }
+        END { exit missing ? 1 : 0 }' "$file" || bad=1
+  done < <(find "$dir/src/$host/engine_proofs" -name '*.rs' 2>/dev/null || true)
+
+  # 4. files of ours under tests/
+  if [ "$have_base" -eq 1 ]; then
     local added
     added=$(git -C "$dir" diff --name-only --diff-filter=A "$base" -- tests 2>/dev/null || true)
     if [ -n "$added" ]; then
@@ -67,12 +101,14 @@ check_engine() {
   fi
 }
 
-check_engine vendor/pdf_oxide pdf_manipulator host
-check_engine vendor/office_oxide office_kit host
+check_engine vendor/pdf_oxide host
+check_engine vendor/office_oxide host
 
 if [ "$bad" -ne 0 ]; then
   echo
-  echo "docs/UPDATING.md, S2: host/ may unit-test pure functions; every other"
-  echo "proof is a Dart battery in test/ops/ over a fixture."
+  echo "docs/UPDATING.md, S2: upstream code gets no tests. Fork-only code (src/host/)"
+  echo "unit-tests pure functions; a proof that opens a document goes in"
+  echo "src/host/engine_proofs/ with a doc comment saying why no Dart battery"
+  echo "can observe it; every other proof is a Dart battery in test/ops/."
   exit 1
 fi

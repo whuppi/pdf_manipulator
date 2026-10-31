@@ -3,6 +3,10 @@
 # never affect a consumer app's size either way (not in any import graph).
 test/
 
+# The compression benchmark is a standalone package with its own pubspec;
+# it is a maintainer tool, never part of the published download.
+tool/bench/
+
 # Banner: ship only the optimized .webp files the README embeds. The heavy
 # PNG sources stay tracked in git (org-quality preservation) but out of the
 # published download — nothing references them on pub.dev.

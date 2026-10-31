@@ -1,0 +1,113 @@
+# Public, redistributable PDFs the compression benchmark downloads on demand
+# into .corpus/. Every file is pinned by SHA-256: a changed upstream file
+# fails the hash check and the bench skips it. Each license was read on the
+# page named in license_url.
+#
+# The incremental-history, self-merged and re-compressed cases are not
+# here: bin/bench.dart builds them from these files.
+
+# ── Text-heavy ───────────────────────────────────────────────────────────────
+
+[[file]]
+id = "irs-i1040gi"
+url = "https://www.irs.gov/pub/irs-prior/i1040gi--2024.pdf"
+sha256 = "0ae53ed5020d69e6571d40cd7955b7735f44a28df483626d128628d2810e93d4"
+license = "US federal government work, not subject to copyright"
+license_url = "https://www.irs.gov/about-irs/use-of-content-from-irsgov"
+kind = "text"
+note = "2024 Form 1040 instructions: long text, tables, object streams, linearized"
+
+# ── Text and figures ─────────────────────────────────────────────────────────
+
+[[file]]
+id = "nasa-sehb"
+url = "https://www.nasa.gov/wp-content/uploads/2018/09/nasa_systems_engineering_handbook_0.pdf"
+sha256 = "8eeb4887a4dc57a23049da7dd2ed556833cf98e214b240468d987873164ff688"
+license = "NASA public use permitted (NTRS determination PUBLIC_USE_PERMITTED)"
+license_url = "https://ntrs.nasa.gov/api/citations/20170001761"
+kind = "text-figures"
+note = "NASA/SP-2016-6105 Rev2: text, vector figures and 33 JPEG images"
+
+# ── Forms with many small fonts ──────────────────────────────────────────────
+
+[[file]]
+id = "irs-f1040"
+url = "https://www.irs.gov/pub/irs-prior/f1040--2024.pdf"
+sha256 = "0a7a54354283044cb41373c6faabfa50955d44bdf91b4b76fa1ca2bf13f6d718"
+license = "US federal government work, not subject to copyright"
+license_url = "https://www.irs.gov/about-irs/use-of-content-from-irsgov"
+kind = "form"
+note = "2024 Form 1040: fillable AcroForm with many small subset fonts"
+
+[[file]]
+id = "irs-f1120"
+url = "https://www.irs.gov/pub/irs-prior/f1120--2024.pdf"
+sha256 = "abf0266bdbea750c05e53fc9f771f428d32d18e4508d1c0dd4827486aba2d7fc"
+license = "US federal government work, not subject to copyright"
+license_url = "https://www.irs.gov/about-irs/use-of-content-from-irsgov"
+kind = "form"
+note = "2024 Form 1120: fillable AcroForm, six pages"
+
+[[file]]
+id = "irs-fw4"
+url = "https://www.irs.gov/pub/irs-prior/fw4--2024.pdf"
+sha256 = "e60e3af7512073bffbd7ef3c4f3a2fc9593d2aed2e420718d4ccf17659e2c3ed"
+license = "US federal government work, not subject to copyright"
+license_url = "https://www.irs.gov/about-irs/use-of-content-from-irsgov"
+kind = "form"
+note = "2024 Form W-4: fillable AcroForm with one embedded image"
+
+# ── Already optimised, tiny ──────────────────────────────────────────────────
+
+[[file]]
+id = "irs-fw9"
+url = "https://www.irs.gov/pub/irs-prior/fw9--2024.pdf"
+sha256 = "2d420cbb4123dcf1fb82595b2359cfbb5d81f00b9df9d359fcc7af361d093f53"
+license = "US federal government work, not subject to copyright"
+license_url = "https://www.irs.gov/about-irs/use-of-content-from-irsgov"
+kind = "optimised"
+note = "Form W-9 (141 KB): linearized, object streams, no images; little left to save"
+
+# ── Image-heavy ──────────────────────────────────────────────────────────────
+
+[[file]]
+id = "nasa-apollo17-photo"
+url = "https://ntrs.nasa.gov/api/citations/19750006600/downloads/19750006600.pdf"
+sha256 = "17b7a28cf51f048dfadc9e2b8a3a8b28b9b36135752e64ff133894901cb84635"
+license = "US government work, public use permitted (NTRS determination GOV_PUBLIC_USE_PERMITTED)"
+license_url = "https://ntrs.nasa.gov/api/citations/19750006600"
+kind = "image-heavy"
+note = "NASA TM X-72535, Apollo 17 lunar photography: 71 images, CCITT and JPEG"
+
+# ── Bilevel scan ─────────────────────────────────────────────────────────────
+
+[[file]]
+id = "naca-tn-2141"
+url = "https://ntrs.nasa.gov/api/citations/19930082761/downloads/19930082761.pdf"
+sha256 = "be16f5d5a0f970da813c8c2c7bda8c90c2c3088af8849909f7451ed0438dc3f5"
+license = "US government work, public use permitted (NTRS determination GOV_PUBLIC_USE_PERMITTED)"
+license_url = "https://ntrs.nasa.gov/api/citations/19930082761"
+kind = "scan-bilevel"
+note = "NACA TN-2141 (1950): 70 CCITT-encoded page images"
+
+# ── Colour or gray JPEG scan ─────────────────────────────────────────────────
+
+[[file]]
+id = "nasa-apollo-techniques"
+url = "https://ntrs.nasa.gov/api/citations/20090015331/downloads/20090015331.pdf"
+sha256 = "206c67e51369263275ceb4e6519ec80831ef4792653a127eb07e5c7616d203f0"
+license = "US government work, public use permitted (NTRS determination GOV_PUBLIC_USE_PERMITTED)"
+license_url = "https://ntrs.nasa.gov/api/citations/20090015331"
+kind = "scan-jpeg"
+note = "Apollo Mission Techniques, Lunar Orbit Activities Part 1a: 129 DCT images, slides"
+
+# ── Many embedded fonts ──────────────────────────────────────────────────────
+
+[[file]]
+id = "plos-0000308"
+url = "https://journals.plos.org/plosone/article/file?id=10.1371/journal.pone.0000308&type=printable"
+sha256 = "b52ca44dfd09d240543b80315f0cd43fe9ba7946f2b5650d5580213ed5d9186c"
+license = "Creative Commons Attribution License (CC BY), per the article's copyright statement"
+license_url = "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0000308"
+kind = "fonts"
+note = "Piwowar et al. 2007, PLoS ONE 2(3): e308; nine /FontFile references"

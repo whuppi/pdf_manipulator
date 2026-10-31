@@ -10,6 +10,7 @@
 
 import 'dart:typed_data';
 
+import 'package:pdf_manipulator/src/types/pdf_annotation.dart';
 import 'package:pdf_manipulator/src/types/pdf_attachment.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/errors.dart';
@@ -24,265 +25,11 @@ import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/types/pdf_redaction_report.dart';
+import 'package:pdf_manipulator/src/types/pdf_render.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
+import 'package:pdf_manipulator/src/types/pdf_wire.dart';
 import 'package:pdf_manipulator/src/types/pdf_xfa_info.dart';
 import 'package:pdf_manipulator/src/types/search_result.dart';
-import 'package:pdf_manipulator/src/bridge/protocol/op.dart';
-
-// ════════════════════════════════════════════════════════════════════
-// REQUEST ENCODING — Dart types → Map<String, Object?> for the wire
-// ════════════════════════════════════════════════════════════════════
-
-/// Pairs an [EngineOp] with its serialised argument map.
-class EngineRequest {
-  /// Creates a request with the given [op] and [args].
-  const EngineRequest(this.op, this.args);
-
-  /// The operation to execute.
-  final EngineOp op;
-
-  /// Key-value argument map sent over the wire.
-  final Map<String, Object?> args;
-}
-
-// ── Inspect ──
-
-/// Builds an open-document request.
-EngineRequest openOp({String? password}) =>
-    EngineRequest(EngineOp.open, {'password': password});
-
-// ── Extraction ──
-
-/// Builds a text-extraction request.
-EngineRequest extractOp({
-  required PdfExtractionFormat format,
-  int? page,
-  String? password,
-}) => EngineRequest(EngineOp.extract, {
-  'format': _encodeExtractionFormat(format),
-  'password': password,
-  if (page != null) 'page': page,
-});
-
-/// Builds a full-text search request.
-EngineRequest searchOp({required String query, int? page, String? password}) =>
-    EngineRequest(EngineOp.search, {
-      'query': query,
-      'password': password,
-      if (page != null) 'page': page,
-    });
-
-// ── Standalone write ──
-
-/// Builds a digital-signing request.
-EngineRequest signOp({
-  required PdfSigningCredentials credentials,
-  String? reason,
-  String? location,
-}) {
-  final map = <String, dynamic>{'reason': reason, 'location': location};
-  switch (credentials) {
-    case PdfPkcs12Credentials(:final data, :final password):
-      map['certificate'] = data;
-      map['certificatePassword'] = password;
-    case PdfPemCredentials(:final certPem, :final keyPem):
-      map['certPem'] = certPem;
-      map['keyPem'] = keyPem;
-  }
-  return EngineRequest(EngineOp.sign, map);
-}
-
-/// Builds a format-conversion request (PDF → other).
-EngineRequest convertToOp({
-  required PdfDocumentFormat format,
-  String? password,
-}) => EngineRequest(EngineOp.convertTo, {
-  'format': format.name,
-  'password': password,
-});
-
-/// Builds a format-conversion request (other → PDF).
-EngineRequest convertToPdfOp({required PdfDocumentFormat format}) =>
-    EngineRequest(EngineOp.convertToPdf, {'format': format.name});
-
-// ── Streaming ──
-
-/// Builds a page-rendering request.
-EngineRequest renderOp({
-  required List<int> pageIndices,
-  int? maxWidth,
-  int? maxHeight,
-  String? password,
-}) => EngineRequest(EngineOp.render, {
-  'pageIndices': pageIndices,
-  'password': password,
-  if (maxWidth != null) 'maxWidth': maxWidth,
-  if (maxHeight != null) 'maxHeight': maxHeight,
-});
-
-/// Builds an image-extraction request.
-EngineRequest extractImagesOp({
-  required List<int> pageIndices,
-  String? password,
-}) => EngineRequest(EngineOp.extractImages, {
-  'pageIndices': pageIndices,
-  'password': password,
-});
-
-// ── Read-only queries ──
-
-/// Builds a get-signatures request.
-EngineRequest getSignaturesOp({String? password}) =>
-    EngineRequest(EngineOp.getSignatures, {'password': password});
-
-/// Builds a verify-signatures request.
-EngineRequest verifySignaturesOp({String? password}) =>
-    EngineRequest(EngineOp.verifySignatures, {'password': password});
-
-/// Builds a PDF/A validation request.
-EngineRequest validatePdfAOp({int level = 2, String? password}) =>
-    EngineRequest(EngineOp.validatePdfA, {
-      'level': level,
-      'password': password,
-    });
-
-/// Builds a PDF/UA validation request.
-EngineRequest validatePdfUaOp({int level = 1, String? password}) =>
-    EngineRequest(EngineOp.validatePdfUa, {
-      'level': level,
-      'password': password,
-    });
-
-/// Builds a bookmark-split planning request.
-EngineRequest planSplitByBookmarksOp({String? password}) =>
-    EngineRequest(EngineOp.planSplitByBookmarks, {'password': password});
-
-/// Builds a page-classification request.
-EngineRequest classifyPageOp({required int page, String? password}) =>
-    EngineRequest(EngineOp.classifyPage, {'page': page, 'password': password});
-
-/// Builds a document-classification request.
-EngineRequest classifyDocumentOp({String? password}) =>
-    EngineRequest(EngineOp.classifyDocument, {'password': password});
-
-// ── Editor handle ops ──
-
-/// Builds an editor-open request.
-EngineRequest editorOpenOp({String? password}) =>
-    EngineRequest(EngineOp.editorOpen, {'password': password});
-
-/// Builds an editor-dispose request.
-EngineRequest editorDisposeOp({required int handleId}) =>
-    EngineRequest(EngineOp.editorDispose, {'handleId': handleId});
-
-/// Builds an editor-mutate request.
-EngineRequest editorMutateOp({
-  required int handleId,
-  required String editOp,
-  Map<String, Object?> extra = const {},
-}) => EngineRequest(EngineOp.editorMutate, {
-  'handleId': handleId,
-  'editOp': editOp,
-  ...extra,
-});
-
-/// Builds an editor-save request.
-EngineRequest editorSaveOp({
-  required int handleId,
-  PdfSaveOptions options = const PdfSaveOptions.fullRewrite(),
-}) => EngineRequest(EngineOp.editorSave, {
-  'handleId': handleId,
-  ...encodeSaveArgs(options),
-});
-
-/// Builds an editor get-metadata request.
-EngineRequest editorGetMetadataOp({required int handleId}) =>
-    EngineRequest(EngineOp.editorGetMetadata, {'handleId': handleId});
-
-/// Builds an editor page-media-box request.
-EngineRequest editorPageMediaBoxOp({
-  required int handleId,
-  required int page,
-}) => EngineRequest(EngineOp.editorPageMediaBox, {
-  'handleId': handleId,
-  'page': page,
-});
-
-/// Builds an editor page-images request.
-EngineRequest editorPageImagesOp({required int handleId, required int page}) =>
-    EngineRequest(EngineOp.editorPageImages, {
-      'handleId': handleId,
-      'page': page,
-    });
-
-/// Builds an editor merge-from request. Omitting [pages] merges every
-/// page of the other document.
-EngineRequest editorMergeFromOp({
-  required int handleId,
-  required Uint8List otherBytes,
-  List<int>? pages,
-}) => EngineRequest(EngineOp.editorMergeFrom, {
-  'handleId': handleId,
-  'otherBytes': otherBytes,
-  if (pages != null) 'pages': pages,
-});
-
-// ── Builder handle ops ──
-
-/// Builds a builder-create request.
-EngineRequest builderCreateOp() =>
-    const EngineRequest(EngineOp.builderCreate, {});
-
-/// Builds a builder-dispose request.
-EngineRequest builderDisposeOp({required int handleId}) =>
-    EngineRequest(EngineOp.builderDispose, {'handleId': handleId});
-
-/// Builds a builder set-metadata request.
-EngineRequest builderSetMetadataOp({
-  required int handleId,
-  String? title,
-  String? author,
-  String? subject,
-  String? keywords,
-}) => EngineRequest(EngineOp.builderSetMetadata, {
-  'handleId': handleId,
-  if (title != null) 'title': title,
-  if (author != null) 'author': author,
-  if (subject != null) 'subject': subject,
-  if (keywords != null) 'keywords': keywords,
-});
-
-/// Builds a builder add-page request.
-EngineRequest builderAddPageOp({
-  required int handleId,
-  String? pageType,
-  double? width,
-  double? height,
-}) => EngineRequest(EngineOp.builderAddPage, {
-  'handleId': handleId,
-  if (pageType != null) 'pageType': pageType,
-  if (width != null) 'width': width,
-  if (height != null) 'height': height,
-});
-
-/// Builds a builder page-operation request.
-EngineRequest builderPageOpReq({
-  required int handleId,
-  required String pageOp,
-  Map<String, Object?> extra = const {},
-}) => EngineRequest(EngineOp.builderPageOp, {
-  'handleId': handleId,
-  'pageOp': pageOp,
-  ...extra,
-});
-
-/// Builds a builder page-done request.
-EngineRequest builderPageDoneOp({required int handleId}) =>
-    EngineRequest(EngineOp.builderPageDone, {'handleId': handleId});
-
-/// Builds a builder save request.
-EngineRequest builderSaveOp({required int handleId}) =>
-    EngineRequest(EngineOp.builderSave, {'handleId': handleId});
 
 // ════════════════════════════════════════════════════════════════════
 // RESPONSE DECODING — Map<String, Object?> from the wire → Dart types
@@ -298,6 +45,7 @@ List<PdfPageInfo> decodePageList(Map<String, Object?> r) {
       width: (m['width'] as num).toDouble(),
       height: (m['height'] as num).toDouble(),
       rotation: (m['rotation'] as num?)?.toInt() ?? 0,
+      label: m['label'] as String?,
     );
   }).toList();
 }
@@ -314,7 +62,7 @@ PdfEncryptionAlgorithm? decodeEncryptionAlgorithmFromMap(
 PdfPermissions? decodePermissionsFromMap(Map<String, Object?> r) {
   final isEncrypted = r['isEncrypted'] as bool? ?? false;
   if (!isEncrypted) return null;
-  final bits = r['permissionBits'] as int? ?? 0xFF;
+  final bits = r['permissionBits'] as int? ?? -1;
   return decodePermissions(bits);
 }
 
@@ -379,7 +127,7 @@ List<PdfFormField> decodeFormFields(Map<String, Object?> r) {
     final value = _decodeFormFieldValue(m);
     final tooltip = m['tooltip'] as String? ?? '';
     final maxLength = m['maxLength'] as int? ?? -1;
-    final alignment = m['alignment'] as int? ?? -1;
+    final alignment = m['alignment'] as String? ?? '';
     return PdfFormField(
       name: m['name'] as String? ?? '',
       type: type,
@@ -394,7 +142,9 @@ List<PdfFormField> decodeFormFields(Map<String, Object?> r) {
             )
           : null,
       maxLength: maxLength < 0 ? null : maxLength,
-      alignment: alignment < 0 ? null : PdfTextAlignment.values[alignment],
+      alignment: alignment.isEmpty
+          ? null
+          : _enumByWireName(PdfTextAlignment.values, alignment, 'alignment'),
       readOnly: m['readOnly'] as bool? ?? false,
       required: m['required'] as bool? ?? false,
     );
@@ -430,6 +180,33 @@ List<PdfAttachment> decodeAttachments(Map<String, Object?> r) {
   }).toList();
 }
 
+/// Decodes a page's annotation listing from an `annotations` response.
+List<PdfAnnotationInfo> decodeAnnotations(Map<String, Object?> r) {
+  final items = r['annotations'] as List? ?? [];
+  return items.map((a) {
+    final m = _asMap(a);
+    final subtypeName = m['subtype'] as String? ?? '';
+    final contents = m['contents'] as String? ?? '';
+    final author = m['author'] as String? ?? '';
+    final fieldName = m['fieldName'] as String? ?? '';
+    return PdfAnnotationInfo(
+      subtype: PdfAnnotationSubtype.fromPdfName(subtypeName),
+      subtypeName: subtypeName,
+      rect: (m['hasRect'] as bool? ?? false)
+          ? PdfRect(
+              x: (m['x'] as num?)?.toDouble() ?? 0,
+              y: (m['y'] as num?)?.toDouble() ?? 0,
+              width: (m['width'] as num?)?.toDouble() ?? 0,
+              height: (m['height'] as num?)?.toDouble() ?? 0,
+            )
+          : null,
+      contents: contents.isEmpty ? null : contents,
+      author: author.isEmpty ? null : author,
+      fieldName: fieldName.isEmpty ? null : fieldName,
+    );
+  }).toList();
+}
+
 PdfFormFieldValue _decodeFormFieldValue(Map<String, Object?> m) =>
     switch (m['valueKind'] as String? ?? 'none') {
       'text' => PdfTextValue(m['text'] as String? ?? ''),
@@ -453,14 +230,27 @@ Map<String, Object?> encodeImagePolicy(PdfImagePolicy policy) => {
   'convertCmykToRgb': policy.convertCmykToRgb,
   'minPixels': policy.minPixels,
   'minSavings': policy.minSavings,
-  'chroma': policy.chromaSubsampling.name,
+  'chroma': putEnum(policy.chromaSubsampling),
   'recompressJpeg': policy.recompressJpeg,
 };
 
-T _enumByWireName<T extends Enum>(List<T> values, Object? wire, String what) {
+/// An enum field of a request. Only a [PdfWire] reaches the wire, by its
+/// stable name; the byte codec refuses any other enum.
+String putEnum(PdfWire e) => e.wire;
+
+/// A list of enum fields of a request, one wire name per value.
+List<String> putEnums(Iterable<PdfWire> values) => [
+  for (final v in values) putEnum(v),
+];
+
+T _enumByWireName<T extends PdfWire>(
+  List<T> values,
+  Object? wire,
+  String what,
+) {
   final name = wire as String? ?? '';
   for (final v in values) {
-    if (v.name == name) return v;
+    if (v.wire == name) return v;
   }
   throw PdfEngineError('unknown $what "$name" on the wire');
 }
@@ -512,13 +302,16 @@ List<PdfSignatureInfo> decodeSignatures(Map<String, Object?> r) {
   final sigsRaw = r['signatures'] as List? ?? [];
   return sigsRaw.map((s) {
     final m = _asMap(s);
-    final timeStr = m['signingTime'] as String?;
+    final secs = m['signingTime'] as int?;
     return PdfSignatureInfo(
       signerName: m['signerName'] as String?,
       reason: m['reason'] as String?,
       location: m['location'] as String?,
-      signingTime: timeStr != null ? DateTime.tryParse(timeStr) : null,
+      signingTime: secs != null
+          ? DateTime.fromMillisecondsSinceEpoch(secs * 1000, isUtc: true)
+          : null,
       isValid: m['isValid'] as bool? ?? false,
+      coversWholeDocument: m['coversWholeDocument'] as bool? ?? false,
     );
   }).toList();
 }
@@ -567,22 +360,96 @@ PdfDocumentClassification decodeClassifyDocument(Map<String, Object?> r) =>
       pageCount: r['pageCount'] as int? ?? 0,
     );
 
-/// Decodes a rendered-page pixel buffer from a response map.
-RenderedPage decodeRenderedPage(Map<String, Object?> data) => RenderedPage(
-  width: data['width'] as int? ?? 0,
-  height: data['height'] as int? ?? 0,
-  data: _extractBytes(data['data']),
-);
+/// One frame of a chunked sequence of items (the pages of a render, the
+/// images of an extraction): an item opens with a [ChunkHeader] holding its
+/// descriptor of type [H], carries its bytes in [ChunkData] frames of at most
+/// 256 KiB, and closes with a [ChunkEnd].
+sealed class ChunkFrame<H> {
+  const ChunkFrame();
+}
 
-/// Decodes an extracted image from a response map.
-PdfImage decodePdfImage(Map<String, Object?> data) => PdfImage(
-  width: data['width'] as int? ?? 0,
-  height: data['height'] as int? ?? 0,
-  format: data['format'] as String? ?? '',
-  colorSpace: data['colorSpace'] as String? ?? '',
-  bitsPerComponent: data['bitsPerComponent'] as int? ?? 8,
-  data: _extractBytes(data['data']),
-);
+/// The first frame of an item: its descriptor, before any byte.
+final class ChunkHeader<H> extends ChunkFrame<H> {
+  /// Creates a header frame.
+  const ChunkHeader(this.item);
+
+  /// The item the frames that follow belong to.
+  final H item;
+}
+
+/// A run of the item's bytes, in order.
+final class ChunkData<H> extends ChunkFrame<H> {
+  /// Creates a data frame.
+  const ChunkData(this.bytes);
+
+  /// The bytes, a view into the frame.
+  final Uint8List bytes;
+}
+
+/// The last frame of an item.
+final class ChunkEnd<H> extends ChunkFrame<H> {
+  /// Creates an end frame.
+  const ChunkEnd();
+}
+
+/// Decodes a chunked frame from a response map by its `kind`; [item] builds
+/// the descriptor from a header, and [what] names the sequence in an error.
+ChunkFrame<H> decodeChunkFrame<H>(
+  Map<String, Object?> data,
+  H Function(Map<String, Object?> header) item,
+  String what,
+) {
+  final kind = data['kind'] as String? ?? '';
+  return switch (kind) {
+    'header' => ChunkHeader<H>(item(data)),
+    'data' => ChunkData<H>(_extractBytes(data['data'])),
+    'end' => ChunkEnd<H>(),
+    _ => throw PdfEngineError('unknown $what frame "$kind" on the wire'),
+  };
+}
+
+/// Decodes a chunked-render frame: its pages carry [PdfRenderedPage]
+/// descriptors.
+ChunkFrame<PdfRenderedPage> decodeRenderFrame(Map<String, Object?> data) =>
+    decodeChunkFrame(data, (header) {
+      // The format is the caller's own choice; the engine echoes it, and an
+      // unknown one is a wire fault.
+      _enumByWireName(
+        PdfRenderFormat.values,
+        header['format'],
+        'render format',
+      );
+      return PdfRenderedPage(
+        page: header['page'] as int? ?? 0,
+        width: header['width'] as int? ?? 0,
+        height: header['height'] as int? ?? 0,
+      );
+    }, 'render');
+
+/// Decodes a chunked-extraction frame: its items carry [PdfImage]
+/// descriptors.
+ChunkFrame<PdfImage> decodeImageFrame(Map<String, Object?> data) =>
+    decodeChunkFrame(
+      data,
+      (header) => PdfImage(
+        page: header['page'] as int? ?? 0,
+        index: header['index'] as int? ?? 0,
+        width: header['width'] as int? ?? 0,
+        height: header['height'] as int? ?? 0,
+        bitsPerComponent: header['bitsPerComponent'] as int? ?? 8,
+        encoding: _enumByWireName(
+          PdfImageEncoding.values,
+          header['encoding'],
+          'image encoding',
+        ),
+        color: _enumByWireName(
+          PdfImageColor.values,
+          header['color'],
+          'image color',
+        ),
+      ),
+      'image',
+    );
 
 /// Decodes editor metadata (page count, version, title, etc.).
 ({
@@ -673,7 +540,7 @@ Map<String, Object?> encodeWatermarkArgs(
   'r': style.color.r,
   'g': style.color.g,
   'b': style.color.b,
-  'layer': layer.index,
+  'layer': putEnum(layer),
   ...encodePosition(position),
 };
 
@@ -683,7 +550,7 @@ Map<String, Object?> encodePosition(PdfWatermarkPosition position) =>
       PdfWatermarkCenter() => {'posType': 0},
       PdfWatermarkCorner(:final corner, :final marginX, :final marginY) => {
         'posType': 1,
-        'corner': corner.index,
+        'corner': putEnum(corner),
         'marginX': marginX,
         'marginY': marginY,
       },
@@ -728,21 +595,34 @@ Map<String, Object?> encodeSaveArgs(PdfSaveOptions options) {
     PdfSaveFullRewrite(
       :final compress,
       :final garbageCollect,
+      :final objectStreams,
+      :final deflateLevel,
+      :final mergeDuplicates,
+      :final pruneResources,
       :final encryption,
     ) =>
       {
         'saveMode': 0,
         'compress': compress,
         'garbageCollect': garbageCollect,
+        'objectStreams': objectStreams,
+        'deflateLevel': _checkedDeflateLevel(deflateLevel),
+        'mergeDuplicates': mergeDuplicates,
+        'pruneResources': pruneResources,
         ..._encodeEncryption(encryption),
       },
     PdfSaveIncremental() => {
       'saveMode': 1,
-      'compress': false,
-      'garbageCollect': false,
       ..._encodeEncryption(const PdfEncryption.keep()),
     },
   };
+}
+
+int _checkedDeflateLevel(int level) {
+  if (level < 0 || level > 9) {
+    throw PdfInvalidArgument('deflateLevel must be 0 to 9: $level');
+  }
+  return level;
 }
 
 Map<String, Object?> _encodeEncryption(PdfEncryption encryption) {
@@ -751,32 +631,24 @@ Map<String, Object?> _encodeEncryption(PdfEncryption encryption) {
     PdfEncryptionRemove() => 1,
     PdfEncryptionConfig() => 2,
   };
-  int encAlgo = 0;
+  String? encAlgo;
   String encUserPw = '';
   String encOwnerPw = '';
   int encPerms = -1;
   if (encryption case final PdfEncryptionConfig c) {
-    encAlgo = c.algorithm.index + 1;
+    encAlgo = putEnum(c.algorithm);
     encUserPw = c.userPassword;
     encOwnerPw = c.ownerPassword;
     encPerms = c.permissions.toBits();
   }
   return {
     'encryptMode': encryptMode,
-    'encryptAlgo': encAlgo,
+    if (encAlgo != null) 'encryptAlgo': encAlgo,
     'encryptUserPw': encUserPw,
     'encryptOwnerPw': encOwnerPw,
     'encryptPermissions': encPerms,
   };
 }
-
-String _encodeExtractionFormat(PdfExtractionFormat format) => switch (format) {
-  PdfExtractionFormat.auto => 'auto',
-  PdfExtractionFormat.text => 'text',
-  PdfExtractionFormat.markdown => 'markdown',
-  PdfExtractionFormat.html => 'html',
-  PdfExtractionFormat.plainText => 'plainText',
-};
 
 /// Decodes an encryption algorithm from its integer code.
 PdfEncryptionAlgorithm? decodeEncryptionAlgorithm(int code) => switch (code) {
@@ -789,14 +661,14 @@ PdfEncryptionAlgorithm? decodeEncryptionAlgorithm(int code) => switch (code) {
 
 /// Decodes permission bits into a [PdfPermissions] instance.
 PdfPermissions decodePermissions(int bits) => PdfPermissions(
-  print: bits & 1 != 0,
-  printHq: bits & 2 != 0,
-  modify: bits & 4 != 0,
-  copy: bits & 8 != 0,
-  annotate: bits & 16 != 0,
-  fillForms: bits & 32 != 0,
-  accessibility: bits & 64 != 0,
-  assemble: bits & 128 != 0,
+  print: bits & (1 << 2) != 0,
+  modify: bits & (1 << 3) != 0,
+  copy: bits & (1 << 4) != 0,
+  annotate: bits & (1 << 5) != 0,
+  fillForms: bits & (1 << 8) != 0,
+  accessibility: bits & (1 << 9) != 0,
+  assemble: bits & (1 << 10) != 0,
+  printHq: bits & (1 << 11) != 0,
 );
 
 Map<String, Object?> _asMap(Object? obj) {

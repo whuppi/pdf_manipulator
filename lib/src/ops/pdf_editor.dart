@@ -5,49 +5,30 @@
 // Even if the Rust engine implements a non-mutating op on DocumentEditor,
 // it must NOT be exposed here — wrap it as standalone or doc query instead.
 
-import 'package:pdf_manipulator/src/ops/pdf.dart';
-import 'package:pdf_manipulator/src/ops/pdf_doc.dart';
-import 'package:pdf_manipulator/src/types/data_sink.dart';
-import 'package:pdf_manipulator/src/types/data_source.dart';
-import 'package:pdf_manipulator/src/types/errors.dart';
-import 'package:pdf_manipulator/src/types/pdf_attachment.dart';
-import 'package:pdf_manipulator/src/types/pdf_enums.dart';
-import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
-import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
-import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
-import 'package:pdf_manipulator/src/types/pdf_task.dart';
-import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
-import 'package:pdf_manipulator/src/types/pdf_params.dart';
-import 'package:pdf_manipulator/src/bridge/pdf_bridge.dart';
-import 'package:pdf_manipulator/src/types/pdf_rect.dart';
-import 'package:pdf_manipulator/src/types/pdf_redaction_report.dart';
-import 'package:pdf_manipulator/src/types/pdf_sanitize_options.dart';
-import 'package:pdf_manipulator/src/keep/record_use_shim.dart';
+part of 'pdf.dart';
 
 /// Mutable PDF editor — parse once, mutate many times, save once.
-class PdfEditor {
+base class PdfEditor extends PdfEdits implements _Handle {
   /// Internal constructor — use [Pdf.edit] to create instances.
-  PdfEditor.internal(
-    PdfBridge _,
-    this._handle, {
-    PdfEncryptionAlgorithm? sourceEncryption,
-    PdfPermissions? sourcePermissions,
-    String? password,
-    PdfDoc? sourceDoc,
-  }) : _sourceEncryption = sourceEncryption,
-       _sourcePermissions = sourcePermissions,
-       _password = password,
-       _sourceDoc = sourceDoc;
+  PdfEditor.internal(PdfBridge _, BridgeEditorHandle handle)
+    : _handle = handle,
+      super._() {
+    HandleBackstop.attach(this, 'PdfEditor', handle.dispose);
+  }
 
   final BridgeEditorHandle _handle;
-  final PdfEncryptionAlgorithm? _sourceEncryption;
-  final PdfPermissions? _sourcePermissions;
-  final String? _password;
-  final PdfDoc? _sourceDoc;
   bool _disposed = false;
 
+  @override
+  PdfTask<T> _run<T>(PdfTask<T> Function(BridgeEditorHandle handle) apply) {
+    _check();
+    return apply(_handle);
+  }
+
   void _check() {
-    if (_disposed) throw StateError('This PdfEditor has been disposed');
+    if (_disposed) {
+      throw const PdfDisposed('This PdfEditor has been disposed');
+    }
   }
 
   // ── Properties ──
@@ -148,12 +129,6 @@ class PdfEditor {
 
   // ── Pages ──
 
-  /// Rotates a single [page] by [degrees] (must be a multiple of 90).
-  PdfTask<void> rotatePage(int page, {required int degrees}) {
-    _check();
-    return _handle.rotatePage(page, degrees: degrees);
-  }
-
   /// Rotates all pages by [degrees] (must be a multiple of 90).
   PdfTask<void> rotateAllPages({required int degrees}) {
     _check();
@@ -210,9 +185,13 @@ class PdfEditor {
     return _handle.movePage(from: from, to: to);
   }
 
-  /// Keeps only the specified [pages] (by index), removing all others.
+  /// Keeps only the specified [pages] (by index), in the order given,
+  /// removing all others. A page listed twice throws [PdfInvalidArgument].
   PdfTask<void> selectPages(List<int> pages) {
     _check();
+    if (pages.toSet().length != pages.length) {
+      throw PdfInvalidArgument('a page is listed twice: $pages');
+    }
     return _handle.selectPages(pages);
   }
 
@@ -251,24 +230,6 @@ class PdfEditor {
   }
 
   // ── Watermark + stamps ──
-
-  /// Adds a text watermark to the specified [page].
-  PdfTask<void> addWatermark(
-    int page,
-    String text, {
-    PdfWatermarkStyle style = const PdfWatermarkStyle(),
-    PdfWatermarkPosition position = const PdfWatermarkPosition.center(),
-    PdfWatermarkLayer layer = PdfWatermarkLayer.foreground,
-  }) {
-    _check();
-    return _handle.addWatermark(
-      page,
-      text,
-      style: style,
-      position: position,
-      layer: layer,
-    );
-  }
 
   /// Adds a predefined stamp annotation to the specified [page].
   PdfTask<void> addStamp(
@@ -557,43 +518,17 @@ class PdfEditor {
     PdfSaveOptions options = const PdfSaveOptions.fullRewrite(),
   }) {
     _check();
-    final resolved = _resolveEncryption(options);
-    return _handle.save(output, options: resolved);
-  }
-
-  PdfSaveOptions _resolveEncryption(PdfSaveOptions options) {
-    if (_sourceEncryption == null) return options;
-    return switch (options) {
-      PdfSaveFullRewrite(
-        :final compress,
-        :final garbageCollect,
-        :final encryption,
-      ) =>
-        encryption is PdfEncryptionKeep
-            ? PdfSaveOptions.fullRewrite(
-                compress: compress,
-                garbageCollect: garbageCollect,
-                encryption: PdfEncryption.config(
-                  ownerPassword: _password ?? '',
-                  userPassword: _password ?? '',
-                  algorithm: _sourceEncryption,
-                  permissions: _sourcePermissions ?? const PdfPermissions.all(),
-                ),
-              )
-            : options,
-      PdfSaveIncremental() => options,
-    };
+    return _handle.save(output, options: options);
   }
 
   // ── Lifecycle ──
 
   /// Releases editor resources and the underlying doc handle. Idempotent.
+  @override
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    HandleBackstop.detach(this);
     await _handle.dispose();
-    // Dispose the doc handle that edit() opened for metadata reading.
-    // Without this, the doc handle leaks (pinned worker, held source).
-    await _sourceDoc?.dispose();
   }
 }

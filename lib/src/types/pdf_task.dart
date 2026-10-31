@@ -76,6 +76,13 @@ class PdfTask<T> implements Future<T> {
   /// Requests cancellation of this operation. Idempotent; a no-op
   /// once the task has completed. The task resolves with
   /// [PdfCancelled].
+  ///
+  /// Native stops a running op within one page (one image for image
+  /// reduction, one rule batch for validation). On the web that needs
+  /// SharedArrayBuffer, which a page has only when it is cross-origin
+  /// isolated. Without it a running op stops at its next source read or
+  /// sink write, and a running OPFS op is stopped only by
+  /// `Pdf.dispose`.
   void cancel() => _hook.cancel();
 
   /// Whether [cancel] has been requested (the task may still be

@@ -280,10 +280,12 @@ class NativeLane implements Lane {
         final bytes = await Future<Uint8List>.value(
           source.readAt(buffer.requestOffset, buffer.requestCount),
         );
+        if (buffer.freed) return; // the job ended while the source was busy
         buffer.responseLength = bytes.length;
         buffer.writeResponseData(bytes);
         buffer.setFlags(flagReady);
       } catch (_) {
+        if (buffer.freed) return;
         buffer.setFlags(flagError);
       }
       bindings.channelSignalRead(buffer.ptr);

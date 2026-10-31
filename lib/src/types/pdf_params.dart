@@ -2,7 +2,9 @@
 
 import 'dart:typed_data';
 
+import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
+import 'package:pdf_manipulator/src/types/pdf_wire.dart';
 
 /// RGB color for watermarks and annotations.
 class PdfColor {
@@ -29,6 +31,9 @@ class PdfColor {
 
   /// Red (1, 0, 0).
   static const red = PdfColor(1, 0, 0);
+
+  /// Yellow (1, 1, 0).
+  static const yellow = PdfColor(1, 1, 0);
 }
 
 /// Permission flags for encrypted PDFs.
@@ -161,16 +166,36 @@ sealed class PdfSaveOptions {
   const PdfSaveOptions();
 
   /// Full rewrite — rebuild the entire PDF. Supports compression,
-  /// garbage collection, and encryption changes.
+  /// garbage collection, and encryption changes. Objects are packed into
+  /// object streams with a cross-reference stream (PDF 1.5) unless
+  /// [objectStreams] is false. A stream with no filter or a single
+  /// FlateDecode is deflated again at [deflateLevel] and written so only when
+  /// that is smaller than the bytes the source held. With [mergeDuplicates]
+  /// the save writes one copy of each set of identical images, ICC profiles
+  /// and embedded fonts. With [pruneResources] the save drops the entries of
+  /// each page's resource dictionaries that no content names.
   const factory PdfSaveOptions.fullRewrite({
     bool compress,
     bool garbageCollect,
+    bool objectStreams,
+    int deflateLevel,
+    bool mergeDuplicates,
+    bool pruneResources,
     PdfEncryption encryption,
   }) = PdfSaveFullRewrite;
 
-  /// Incremental — append only changed objects. Fastest for small
-  /// edits on large files. Preserves digital signatures. No GC,
-  /// no compression, no encryption changes possible.
+  /// Incremental — the original bytes, unchanged, then the changed
+  /// objects appended (ISO 32000-1 §7.5.6). A digital signature over the
+  /// original bytes stays valid.
+  ///
+  /// It throws [PdfIncrementalRefused], writing nothing, when an append
+  /// cannot carry the edits: pages were removed, reordered or merged in;
+  /// content was redacted, scrubbed, drawn, erased or flattened; form
+  /// fields or annotations were added, removed or changed beyond a value;
+  /// files were embedded; the source is encrypted, was repaired on open,
+  /// or carries a certifying signature that forbids the change. Removed
+  /// content would survive in the original bytes, so save those with
+  /// [PdfSaveOptions.fullRewrite].
   const factory PdfSaveOptions.incremental() = PdfSaveIncremental;
 }
 
@@ -180,6 +205,10 @@ class PdfSaveFullRewrite extends PdfSaveOptions {
   const PdfSaveFullRewrite({
     this.compress = true,
     this.garbageCollect = true,
+    this.objectStreams = true,
+    this.deflateLevel = 9,
+    this.mergeDuplicates = false,
+    this.pruneResources = false,
     this.encryption = const PdfEncryption.keep(),
   });
 
@@ -189,11 +218,37 @@ class PdfSaveFullRewrite extends PdfSaveOptions {
   /// Whether to remove unreferenced objects.
   final bool garbageCollect;
 
+  /// Whether to pack the non-stream objects into object streams and write
+  /// a cross-reference stream (PDF 1.5) instead of a classic table.
+  final bool objectStreams;
+
+  /// The zlib level, 0 (stored) to 9 (smallest), of every stream the save
+  /// deflates. Saving with a level outside that range throws a
+  /// [PdfInvalidArgument].
+  final int deflateLevel;
+
+  /// Whether to write one copy of each set of identical image XObjects,
+  /// ICC profiles and embedded font programs, across the document and
+  /// every merged source, and point every reference at it. Two streams are
+  /// one when their dictionaries and encoded bytes are equal; a stream with
+  /// `/OC`, `/StructParent` or `/StructParents` is never merged. A stream of
+  /// an encrypted source is merged only when its data is at most 256 KiB.
+  final bool mergeDuplicates;
+
+  /// Whether to drop, from each resource dictionary of a kept or merged
+  /// page, the fonts, images, color spaces, graphics states, patterns,
+  /// shadings and property lists that no content using the dictionary
+  /// names, and with [garbageCollect] the objects only those entries
+  /// reached. A dictionary whose content cannot be read in full, or that
+  /// another object also points at, stays whole, and so do the resources of
+  /// a page the save edits. The form's default resources are never touched.
+  final bool pruneResources;
+
   /// Encryption intent for the output.
   final PdfEncryption encryption;
 }
 
-/// Incremental save — append-only, preserves signatures.
+/// Incremental save — see [PdfSaveOptions.incremental] for what it writes.
 class PdfSaveIncremental extends PdfSaveOptions {
   /// Creates incremental save options.
   const PdfSaveIncremental();
@@ -316,42 +371,37 @@ class PdfWatermarkExact extends PdfWatermarkPosition {
 }
 
 /// Which corner to anchor a watermark.
-enum PdfCorner {
+enum PdfCorner implements PdfWire {
   /// Top-left corner.
-  topLeft,
+  topLeft('topLeft'),
 
   /// Top-right corner.
-  topRight,
+  topRight('topRight'),
 
   /// Bottom-left corner.
-  bottomLeft,
+  bottomLeft('bottomLeft'),
 
   /// Bottom-right corner.
-  bottomRight,
+  bottomRight('bottomRight');
+
+  const PdfCorner(this.wire);
+
+  @override
+  final String wire;
 }
 
 /// Whether the watermark renders above or below page content.
-enum PdfWatermarkLayer {
+enum PdfWatermarkLayer implements PdfWire {
   /// Renders on top of page content (annotation-based). Default.
-  foreground,
+  foreground('foreground'),
 
   /// Renders behind page content (content-stream, prepended in painting order).
-  background,
-}
+  background('background');
 
-/// Output size constraint for rendering.
-class PdfRenderSize {
-  /// Creates a render size constraint.
-  const PdfRenderSize({required this.maxWidth, required this.maxHeight});
+  const PdfWatermarkLayer(this.wire);
 
-  /// Creates a square thumbnail constraint.
-  const PdfRenderSize.thumbnail(int size) : maxWidth = size, maxHeight = size;
-
-  /// Maximum output width in pixels.
-  final int maxWidth;
-
-  /// Maximum output height in pixels.
-  final int maxHeight;
+  @override
+  final String wire;
 }
 
 /// Signing credentials — PKCS#12 bundle or separate PEM cert + key.

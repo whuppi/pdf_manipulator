@@ -101,6 +101,72 @@ CONTENT RULES (never change)
 
 <!-- Add new versions below, newest first. -->
 
+## 6.0.0-dev.0
+
+- **Breaking:** `PdfSaveOptions.incremental()` now appends the edits to the original bytes, so a signature over them stays valid, and throws `PdfIncrementalRefused` when an append cannot carry them (pages removed or reordered, redaction, content edits, an encrypted or repaired source) → catch it and save with `PdfSaveOptions.fullRewrite()`
+- **Breaking:** `PdfError` has a new subtype, `PdfIncrementalRefused` → add a case to every exhaustive `switch` over `PdfError`
+- **Breaking:** `extractPages` and `selectPages` throw `PdfInvalidArgument` for a page listed twice, which used to write a damaged file → list each page once
+- **Breaking:** engine failures throw their own `PdfError` subtype (`PdfCorrupted`, `PdfPasswordRequired`, `PdfWrongPassword`, `PdfPageRangeError`, `PdfUnsupported`, `PdfInvalidArgument`, `PdfIoError`, `PdfCryptoError`) where they threw `PdfEngineError` → catch the subtype, or `PdfError` for all of them
+- **Breaking:** the page builder's `fieldKeystroke`, `fieldFormat`, `fieldValidate` and `fieldCalculate` throw `PdfInvalidArgument` on a page with no form field, and `linkUrl` and `linkPage` on a page with no text, where they did nothing → add the field or text first
+- **Breaking:** a radio group's value reads as `PdfChoiceValue` with the selected option's name, or `PdfNoValue` when none is selected, where it read as `PdfCheckedValue` → match on `PdfChoiceValue` for radio groups
+- **Breaking:** `PdfSignatureInfo` has a required `coversWholeDocument` parameter → pass it where you construct one, in test fakes for example
+- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
+- Added `PdfDoc.annotations(page)`, which lists a page's annotations (subtype, rectangle, contents, author, form field name) as `PdfAnnotationInfo`
+- Added the page builder methods the engine already had: `inline`, `inlineBold`, `inlineItalic`, `inlineColor`, `textInRect`, `rect`, `filledRect`, `line`, `strokeRect`, `strokeLine`, `highlight`, `underline`, `strikeout`, `squiggly`, `stickyNote`, `stamp`, `freeText`, `watermarkConfidential`, `watermarkDraft`, `linkNamed`, `linkJavaScript`, `onOpen`, `onClose`, `imageArtifact`, `table` and `streamingTable`
+- Changed `PdfBuilder.save` to Flate-compress page content and font streams; `save(output, compress: false)` keeps them plain for debugging
+- Changed `open`, `edit`, `extractPages`, a full-rewrite save and `compress` to hold a bounded window of the document instead of all of it: a 38 MB, 10,000-page file now opens and saves in under 16 MB of engine memory, where it took up to 85 MB
+- Changed `mergeFrom` to keep the merged file open until the editor is disposed and copy its objects one at a time at save: merging a 10,000-page file takes under 16 MB of engine memory and about 2 seconds, where it took 163 MB and minutes
+- Added rotation, media box and crop box edits on merged pages; stamps, watermarks, erases and redactions on a merged page throw `PdfUnsupported`
+- Changed page edits to work on merged pages: `deletePage`, `movePage` and `selectPages` take a merged page like any other, where they threw `PdfUnsupported` on a document with merged pages
+- Changed reading a source to fetch it in 64 KB pieces instead of one round trip per read: compressing a 70-page scan takes 18 ms on native, where it took 29 ms, and a third less time on the web
+- Changed `PdfDoc.extract` of all pages to stream one page at a time from the engine: extracting text from a 10,000-page file takes under 16 MB of engine memory, where its first call held 281 MB
+- Changed the web lanes to retire a worker after a job that grew its memory past 256 MB, once nothing still needs it; WebAssembly memory never shrinks, so one large job no longer leaves a large worker behind
+- Changed `PdfDoc.render` and `extractImages` to deliver each page as the engine produces it, where they held every page until the last; cancelling the subscription stops the engine
+- Changed cancellation to stop text extraction, search, validation, `reduceImages`, `convertToPdfA` and saves within one page, where it waited for the next read or write; on the web this needs a cross-origin isolated page
+- Changed `edit` to open the source once; an editor used to hold the document twice
+- Changed a full-rewrite save to copy each unchanged stream from the source in 64 KB pieces, so a page holding a 60 MB image saves in under 1 MB of engine memory
+- Changed a full-rewrite save to pack objects into object streams with a cross-reference stream (PDF 1.5), which makes files smaller; `PdfSaveOptions.fullRewrite(objectStreams: false)` writes the classic layout
+- Added `PdfSaveOptions.fullRewrite(deflateLevel:)`, the zlib level (0 to 9) of the streams a save deflates, default 9
+- Changed a full-rewrite save to re-deflate Flate streams at the save's level, keeping a stream's source bytes when the result is not smaller
+- Changed `compress` to write the source unchanged when its result is not smaller
+- Added `PdfSaveOptions.fullRewrite(mergeDuplicates:)`, which writes one copy of each set of identical images, ICC profiles and embedded fonts across the document and every merged source, default false
+- Changed `compress` to write one copy of identical images, ICC profiles and embedded fonts
+- Added `PdfSaveOptions.fullRewrite(pruneResources:)`
+- Changed `compress` to drop the fonts, images, colour spaces and other resources a page lists but no content of it uses; a resource any content might use, or whose content cannot be fully read, is kept
+- Fixed text extraction of a page with many separate text runs on one line taking minutes to hours — a million characters now extract in about three seconds
+- Changed `PdfImagePolicy.screen` to re-encode a stored JPEG at its quality even when the image is not downsampled (`recompressJpeg: true`); `ebook` and `print` still keep stored JPEGs
+- Changed `PdfDoc.verifySignatures` to check each signature's digest and signer key, where it returned `false` for every document; `PdfSignatureInfo` has `isValid`, `coversWholeDocument` and `signingTime` filled
+- Fixed an empty input to `merge` or any other multi-source op shifting every source after it, so the op read the wrong documents — an empty input now throws `PdfCorrupted`
+- Fixed a full-rewrite save of a file with no `/Size` writing new objects over existing ones, and dropping an object it could not read without a word — it now throws `PdfCorrupted`
+- Fixed a full-rewrite save of a file holding objects above generation 0 writing references other readers resolve to nothing — each reference now names the generation its object is written at
+- Fixed `render` and `extractImages` returning an empty stream when the engine failed, a page past the end included — they throw the engine's error
+- Fixed a full-rewrite save writing an object over 100 MB truncated — it throws instead
+- Fixed a page index past the end reaching the engine as a huge number or a generic error — every operation that takes a page throws `PdfPageRangeError` with the page and the page count
+- Fixed a save that keeps an encrypted document's encryption setting its owner password to the password it was opened with, so anyone who could open the result had owner rights and its permissions were void — the save now reuses the source's own encryption dictionary and key
+- Fixed `PdfDoc.permissions` reporting the wrong flags (a print-allowed file read as `print: false`) — the engine's `/P` word is read at its spec bit positions
+- Fixed a page tree whose inner nodes each hold one page reporting those nodes as pages — every node is read before it counts as a page
+- Fixed `rotateAll` and other per-page edits slowing down with the square of the page count on large documents
+- Fixed a merged page losing the resources, page size and rotation it inherited from its source page tree, which could leave it blank
+- Fixed a merge copying the source's whole page tree into the output when a merged page linked to a page that was not merged — such a link's target is written as null
+- Fixed page edits on a document with merged pages hitting the wrong page, and `movePage` crashing the engine — they apply to the merged page or refuse with a typed error
+- Fixed a failed `open` or `edit` keeping its source channel until the instance was disposed
+- Fixed `PdfPageBuilder.radioGroup` always failing with "unknown pageOp"
+- Fixed a radio option named Yes, No, On or Off reading back as a checked flag instead of its name
+- Fixed `formFields` misreading a field whose type, flags or value live on an ancestor field (a radio group read as a checkbox), and reporting a nameless parent as a field with an empty name
+- Fixed page builder calls on a disposed or unknown builder being queued without an error — each call now applies at once and fails where it is made
+- Fixed `extractPages` and `deletePages` writing the pages they drop into the output, so the output kept its original size and the dropped pages' text, images and form values — a save now writes nothing only a dropped page reaches, and drops the links, bookmark targets and form fields that pointed at one ([#261](https://github.com/whuppi/pdf_manipulator/issues/261) reported by [@crurui](https://github.com/crurui))
+- Fixed page labels shifting onto the wrong pages after `extractPages`, `deletePages` or a reorder — each kept page keeps its label
+- Fixed `PdfPageInfo.label` always being `null` — it now holds the page's label when the document has page labels
+- Fixed `sign` dropping the document's bookmarks, form fields, page labels and every other catalog entry, and replacing an earlier signature — the signature now appends to the existing form and page ([#263](https://github.com/whuppi/pdf_manipulator/issues/263))
+- Fixed `PdfSignatureInfo` showing a non-ASCII signer name, reason or location as garbled text — UTF-16 text strings are decoded
+- Fixed `image()` and `imageArtifact()` with bytes that are not an image succeeding and drawing nothing — they throw `PdfInvalidArgument`
+- Fixed `streamingTable` rows with a `rowSpan` above 1 never drawing, and `PdfTableCell.rowSpan` documented as a column span — it is the rows a cell spans, each row still lists one cell per column, and a row with the wrong cell count throws `ArgumentError`
+- Fixed `sign` writing a cross-reference table that other readers had to repair — each entry is now 20 bytes
+- Fixed a full-rewrite save dropping objects the kept pages use (content streams, colour spaces, fonts, structure) on files with a nested page tree or many objects, leaving pages blank or text missing
+- Fixed `compress` and every other full-rewrite save making a file with object streams up to six times larger — the save keeps its objects packed
+- Fixed `compress` and every other full-rewrite save dropping the document's title, author, dates and file identifier unless the title was edited — the saved file keeps the source's `/Info` and `/ID`, and an edited title replaces the old `/Info` instead of leaving it behind
+- Fixed the same input saving to different bytes on every run, so `compress` and every other rewriting save could not be compared or cached by hash — objects are written in id order, so only the random AES IVs of an encrypted save differ
+
 ## 5.0.1-dev.0
 
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
@@ -142,6 +208,8 @@ CONTENT RULES (never change)
 - Fixed `eraseRegions` and `addRedaction` acting on the wrong rectangle — the width and height were passed where the far corner was expected, so every region past the origin was off by its own size
 - Fixed `addStamp` losing the stamp on save when its rectangle sits high on the page — the same size-for-corner mix-up placed the label above the page edge; the builder's `image` was drawn at the wrong size for the same reason
 - Fixed `mergeFrom` dropping the merged document's form fields — the pages arrived but no `/Fields` entry pointed at them, so they could not be listed or filled; the AcroForm is carried across now
+- Fixed `compress` and full-rewrite saves taking 25 seconds on a 3.8 MB file whose object streams hold large arrays, and 460 ms on a 10-page file of 3,500 objects — each object read more of the file than it needed, and the first now takes half a second, the second 60 ms
+- Fixed an LZW stream decoding to wrong bytes without an error when it sets `/EarlyChange 0` or needs the other code-width switch — `/EarlyChange` is read now (default 1), and LZW files decode about twice as fast
 - Fixed an embedded file's MIME type being written as `text#232Fplain` — the solidus was escaped twice
 - Vendored engines synced upstream: pdf_oxide v0.3.73 → v0.3.78 and office_oxide v0.1.3 → v0.1.11 (extraction, rendering, table-structure and legacy `.doc` fixes)
 

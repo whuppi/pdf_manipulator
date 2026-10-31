@@ -1,19 +1,27 @@
-import 'dart:typed_data';
-
 import 'package:meta/meta.dart';
 
-/// An image extracted from a PDF page.
+import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
+
+/// One image found on a page: where it is and how it is stored, without its
+/// bytes. The bytes go to a sink the extraction names.
 @immutable
 class PdfImage {
-  /// Creates a PDF image descriptor.
+  /// Creates an image descriptor.
   const PdfImage({
+    required this.page,
+    required this.index,
     required this.width,
     required this.height,
-    required this.format,
-    required this.colorSpace,
     required this.bitsPerComponent,
-    required this.data,
+    required this.encoding,
+    required this.color,
   });
+
+  /// Zero-based index of the page the image is drawn on.
+  final int page;
+
+  /// Position of the image among the images of [page], in the order found.
+  final int index;
 
   /// Image width in pixels.
   final int width;
@@ -21,42 +29,38 @@ class PdfImage {
   /// Image height in pixels.
   final int height;
 
-  /// Image encoding format (e.g. "jpeg", "png").
-  final String format;
-
-  /// Color space (e.g. "DeviceRGB", "DeviceGray").
-  final String colorSpace;
-
   /// Bits per color component.
   final int bitsPerComponent;
 
-  /// Raw image bytes.
-  final Uint8List data;
+  /// How the image's samples are stored.
+  final PdfImageEncoding encoding;
+
+  /// What the image's decoded samples mean.
+  final PdfImageColor color;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfImage &&
+      other.page == page &&
+      other.index == index &&
+      other.width == width &&
+      other.height == height &&
+      other.bitsPerComponent == bitsPerComponent &&
+      other.encoding == encoding &&
+      other.color == color;
+
+  @override
+  int get hashCode => Object.hash(
+    page,
+    index,
+    width,
+    height,
+    bitsPerComponent,
+    encoding,
+    color,
+  );
 
   @override
   String toString() =>
-      'PdfImage(${width}x$height, $format, $colorSpace, ${data.length} bytes)';
-}
-
-/// A rendered page bitmap.
-@immutable
-class RenderedPage {
-  /// Creates a rendered page descriptor.
-  const RenderedPage({
-    required this.width,
-    required this.height,
-    required this.data,
-  });
-
-  /// Bitmap width in pixels.
-  final int width;
-
-  /// Bitmap height in pixels.
-  final int height;
-
-  /// PNG-encoded image of the page; decode it to read pixels.
-  final Uint8List data;
-
-  @override
-  String toString() => 'RenderedPage(${width}x$height, ${data.length} bytes)';
+      'PdfImage(page $page #$index, ${width}x$height, $encoding, $color)';
 }

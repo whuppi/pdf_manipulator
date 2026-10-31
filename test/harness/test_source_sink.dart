@@ -15,6 +15,7 @@
 //     allocator check inside the Rust harness would close this gap —
 //     tracked in CAPABILITY_ROADMAP.
 
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/types/data_source.dart';
@@ -27,14 +28,19 @@ const maxReadChunk = 64 * 1024;
 const maxWriteChunk = 256 * 1024;
 
 class TestSource implements DataSource {
-  TestSource(this._data);
+  TestSource(this._data, {this.onRead});
   final Uint8List _data;
+
+  /// Called on every [readAt], before the bytes are returned. Tests
+  /// count reads and mark moments in an op through it.
+  final void Function(int offset, int count)? onRead;
 
   @override
   int get length => _data.length;
 
   @override
   Uint8List readAt(int offset, int count) {
+    onRead?.call(offset, count);
     if (count > maxReadChunk) {
       throw StateError(
         'O(1) SOURCE violation: readAt requested $count bytes '
@@ -48,13 +54,19 @@ class TestSource implements DataSource {
     // before postMessage transfer to avoid detaching the backing buffer.
     return Uint8List.sublistView(_data, offset, end);
   }
+
+  @override
+  void close() {}
 }
 
 class TestSink implements DataSink {
   final _buf = BytesBuilder(copy: false);
 
   @override
-  void write(Uint8List chunk) {
+  FutureOr<void> close() {}
+
+  @override
+  FutureOr<void> write(Uint8List chunk) {
     if (chunk.length > maxWriteChunk) {
       throw StateError(
         'O(1) SINK violation: write received ${chunk.length} bytes '

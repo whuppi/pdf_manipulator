@@ -1,0 +1,17 @@
+name: pdf_manipulator_bench
+description: Compression benchmark for pdf_manipulator. Not published.
+publish_to: none
+
+environment:
+  sdk: ">=3.10.0 <4.0.0"
+
+dependencies:
+  pdf_manipulator:
+    path: ../..
+  pdf_document: 12.0.0
+  crypto: ^3.0.6
+  image: ^4.0.0
+  toml: ^0.16.0
+
+dev_dependencies:
+  lints: ^6.1.0

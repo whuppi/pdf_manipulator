@@ -1,4 +1,5 @@
 import 'package:meta/meta.dart';
+import 'package:pdf_manipulator/src/types/pdf_wire.dart';
 
 /// How far `PdfEditor.reduceImages` may go.
 ///
@@ -26,14 +27,16 @@ class PdfImagePolicy {
     this.recompressJpeg = false,
   });
 
-  /// On-screen reading: 72 ppi colour and gray, 300 ppi bilevel,
-  /// JPEG quality 60, CMYK converted to RGB.
+  /// On-screen reading, smallest file: 72 ppi colour and gray, 300 ppi
+  /// bilevel, JPEG quality 60, CMYK converted to RGB, and a stored JPEG
+  /// re-encoded at quality 60 even when it is not downsampled.
   static const screen = PdfImagePolicy(
     colorPpi: 72,
     grayPpi: 72,
     monoPpi: 300,
     jpegQuality: 60,
     convertCmykToRgb: true,
+    recompressJpeg: true,
   );
 
   /// E-readers and tablets: 150 ppi colour and gray, 300 ppi bilevel,
@@ -120,13 +123,18 @@ class PdfImagePolicy {
 /// [auto] follows quality: 4:2:0 below 90, 4:4:4 from 90. The `print`
 /// preset pins [full], because printed text and hard colour edges show
 /// chroma smearing that a screen hides.
-enum PdfChromaSubsampling {
+enum PdfChromaSubsampling implements PdfWire {
   /// 4:4:4 when `jpegQuality` is 90 or more, 4:2:0 below.
-  auto,
+  auto('auto'),
 
   /// 4:4:4 — every colour sample kept; text and hard colour edges stay crisp.
-  full,
+  full('full'),
 
   /// 4:2:0 — colour at half resolution both ways; smallest, fine for photos.
-  half,
+  half('half');
+
+  const PdfChromaSubsampling(this.wire);
+
+  @override
+  final String wire;
 }

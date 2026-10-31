@@ -89,6 +89,7 @@ void main() {
         PdfWrongPassword() => 'wrong',
         PdfPageRangeError() => 'range',
         PdfInvalidArgument() => 'invalid',
+        PdfDisposed() => 'disposed',
         PdfIoError() => 'io',
         PdfExtractionFailed() => 'extract',
         PdfUnsupported() => 'unsupported',
@@ -96,6 +97,7 @@ void main() {
         PdfCryptoError() => 'crypto',
         PdfEngineError() => 'engine',
         PdfCancelled() => 'cancelled',
+        PdfIncrementalRefused() => 'incremental refused',
       };
       expect(desc, equals('corrupted'));
     });

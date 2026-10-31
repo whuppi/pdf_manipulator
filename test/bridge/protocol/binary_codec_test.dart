@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart';
+import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -156,15 +157,127 @@ void main() {
   });
 
   group('decodeResponse', () {
-    test('error response', () {
-      final buf = BytesBuilder();
-      buf.addByte(0); // status = error
-      final msg = 'something broke';
-      final msgBytes = utf8.encode(msg);
-      _addU32(buf, msgBytes.length);
-      buf.add(msgBytes);
-      final result = decodeResponse(buf.takeBytes());
-      expect(result['error'], 'something broke');
+    test('kind 0 engine', () {
+      expect(
+        () => decodeResponse(_buildErrorResponse(0, 'something broke')),
+        throwsA(
+          isA<PdfEngineError>().having(
+            (e) => e.message,
+            'message',
+            'something broke',
+          ),
+        ),
+      );
+    });
+
+    test('kind 1 invalid argument', () {
+      expect(
+        () => decodeResponse(_buildErrorResponse(1, 'bad argument')),
+        throwsA(
+          isA<PdfInvalidArgument>().having(
+            (e) => e.message,
+            'message',
+            'bad argument',
+          ),
+        ),
+      );
+    });
+
+    test('kind 2 io', () {
+      expect(
+        () => decodeResponse(_buildErrorResponse(2, 'disk full')),
+        throwsA(
+          isA<PdfIoError>().having((e) => e.message, 'message', 'disk full'),
+        ),
+      );
+    });
+
+    test('kind 3 corrupted', () {
+      expect(
+        () => decodeResponse(_buildErrorResponse(3, 'bad xref')),
+        throwsA(
+          isA<PdfCorrupted>().having((e) => e.message, 'message', 'bad xref'),
+        ),
+      );
+    });
+
+    test('kind 4 unsupported', () {
+      expect(
+        () => decodeResponse(_buildErrorResponse(4, 'not enabled')),
+        throwsA(
+          isA<PdfUnsupported>().having(
+            (e) => e.message,
+            'message',
+            'not enabled',
+          ),
+        ),
+      );
+    });
+
+    test('kind 5 password required', () {
+      expect(
+        () => decodeResponse(_buildErrorResponse(5, 'password needed')),
+        throwsA(isA<PdfPasswordRequired>()),
+      );
+    });
+
+    test('kind 6 wrong password', () {
+      expect(
+        () => decodeResponse(_buildErrorResponse(6, 'wrong password')),
+        throwsA(isA<PdfWrongPassword>()),
+      );
+    });
+
+    test('kind 7 crypto', () {
+      expect(
+        () => decodeResponse(_buildErrorResponse(7, 'bad pkcs12')),
+        throwsA(
+          isA<PdfCryptoError>().having(
+            (e) => e.message,
+            'message',
+            'bad pkcs12',
+          ),
+        ),
+      );
+    });
+
+    test('kind 8 page range carries page and pageCount', () {
+      expect(
+        () => decodeResponse(
+          _buildErrorResponse(
+            8,
+            'page 99 out of range (document has 1 pages)',
+            extra: {'page': 99, 'pageCount': 1},
+          ),
+        ),
+        throwsA(
+          isA<PdfPageRangeError>()
+              .having((e) => e.page, 'page', 99)
+              .having((e) => e.pageCount, 'pageCount', 1),
+        ),
+      );
+    });
+
+    test('kind 9 incremental refused', () {
+      expect(
+        () => decodeResponse(_buildErrorResponse(9, 'cannot append')),
+        throwsA(
+          isA<PdfIncrementalRefused>().having(
+            (e) => e.message,
+            'message',
+            'cannot append',
+          ),
+        ),
+      );
+    });
+
+    test('unknown kind falls back to PdfEngineError', () {
+      expect(
+        () => decodeResponse(_buildErrorResponse(200, 'mystery')),
+        throwsA(
+          isA<PdfEngineError>().having((e) => e.message, 'message', 'mystery'),
+        ),
+      );
     });
 
     test('success response with fields', () {
@@ -179,9 +292,11 @@ void main() {
       expect(result['isEncrypted'], false);
     });
 
-    test('empty response bytes', () {
-      final result = decodeResponse(Uint8List(0));
-      expect(result.containsKey('error'), true);
+    test('empty response throws PdfEngineError', () {
+      expect(
+        () => decodeResponse(Uint8List(0)),
+        throwsA(isA<PdfEngineError>()),
+      );
     });
 
     test('response with bytes field', () {
@@ -320,6 +435,24 @@ int _readU16(Uint8List bytes, int pos) =>
 Uint8List _buildResponse(Map<String, Object?> fields) {
   final buf = BytesBuilder();
   buf.addByte(1); // status = ok
+  final entries = fields.entries.where((e) => e.value != null).toList();
+  _addU16(buf, entries.length);
+  for (final e in entries) {
+    _addField(buf, e.key, e.value!);
+  }
+  return buf.takeBytes();
+}
+
+// Build an error response: [0][kind][field_count][message field][extras].
+Uint8List _buildErrorResponse(
+  int kind,
+  String message, {
+  Map<String, Object?> extra = const {},
+}) {
+  final buf = BytesBuilder();
+  buf.addByte(0); // status = error
+  buf.addByte(kind);
+  final fields = {'message': message, ...extra};
   final entries = fields.entries.where((e) => e.value != null).toList();
   _addU16(buf, entries.length);
   for (final e in entries) {

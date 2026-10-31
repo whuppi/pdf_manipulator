@@ -26,7 +26,7 @@ class LaneJob {
     required this.sources,
     required this.sinks,
     required this.keepSources,
-    this.heldToken,
+    this.heldGroupId,
   });
 
   /// Router-assigned identity (single-threaded counter — the one
@@ -47,22 +47,27 @@ class LaneJob {
   /// in [LaneSubmitResult.heldTokens].
   final Set<int> keepSources;
 
-  /// For ops on an existing handle: the held token of the job that
-  /// created it (Router bookkeeping — the Router stores it at pin
-  /// time and passes it back here). Web lanes use it to mount the
-  /// handle's held readers; native lanes ignore it (the engine holds
-  /// its reader inside the document).
-  final Object? heldToken;
+  /// For ops on an existing handle: the id of the job that created it
+  /// (Router bookkeeping — the Router stores it at pin time and passes
+  /// it back here). Every source the handle keeps, from that job or a
+  /// later one, is held under this group. Web lanes use it to mount the
+  /// handle's held readers and to file newly kept ones; native lanes
+  /// ignore it (the engine holds its readers inside the document).
+  final int? heldGroupId;
 }
 
 /// What a completed job hands back to the Router.
 class LaneSubmitResult {
   /// Creates a result. [heldTokens] maps kept source indices to
   /// opaque lane-owned tokens for later [Lane.releaseHeld].
-  LaneSubmitResult(this.bytes, this.heldTokens);
+  LaneSubmitResult(this.bytes, this.heldTokens, {this.peakBytes});
 
   /// Binary response bytes (success or engine-encoded error).
   final Uint8List bytes;
+
+  /// The lane's lifetime peak committed memory after this job, when the
+  /// lane can tell (web workers); null otherwise, always on native.
+  final int? peakBytes;
 
   /// Kept-channel tokens by source index. Opaque to the Router.
   final Map<int, Object> heldTokens;

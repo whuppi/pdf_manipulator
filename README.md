@@ -156,16 +156,18 @@ import 'package:pdf_manipulator/io.dart'; // adds FileSource / FileSink
 final pdf = Pdf();
 
 // read the two PDFs straight from disk
-final firstPdf = FileSource(File('first.pdf'));
-final secondPdf = FileSource(File('second.pdf'));
+final firstPdf = await FileSource.open(File('first.pdf'));
+final secondPdf = await FileSource.open(File('second.pdf'));
 
 // write the result straight to a file
-final output = await FileSink.create(File('merged.pdf'));
+final output = await FileSink.open(File('merged.pdf'));
 
 // the merge call is identical
 await pdf.merge([firstPdf, secondPdf], output);
 
-// flush the file, then dispose it
+// whoever opens a file closes it, then dispose the instance
+await firstPdf.close();
+await secondPdf.close();
 await output.close();
 await pdf.dispose();
 ```
@@ -341,15 +343,19 @@ for (final field in await doc.formFields) {
   print('${field.name}: ${field.type.name} = ${field.value}');
 }
 
-await for (final page in doc.render(
-    pages: PdfPages.all(), size: PdfRenderSize.thumbnail(200))) {
-  // page.width, page.height, page.data — PNG-encoded bytes; decode to read pixels
-}
+// Each page is written to the sink the factory returns for it, row by row; the
+// library closes that sink. `size` defaults to `PdfRenderSize.dpi(150)`.
+final pages = await doc.render(
+  (page) => FileSink.open(File('page-${page.page}.png')),
+  pages: PdfPages.all(),
+  size: PdfRenderSize.thumbnail(200),
+);
+// pages[i].width, pages[i].height — the pixel size of each file written
 
 await doc.dispose();
 ```
 
-Also on the document: `extract` (plain / markdown / html), `extractImages`, `signatures` / `verifySignatures`, `validatePdfA` / `validatePdfUa`, `classifyPage` / `classifyDocument`, `planSplitByBookmarks`, `formFields` / `formField(name)`, `exportFormData` (FDF / XFDF), `xfa`, `attachments` / `extractAttachment`, plus metadata getters (`title`, `author`, `version`, `isTagged`).
+Also on the document: `extract` (plain / markdown / html), `extractImages`, `signatures` / `verifySignatures` (digest and signer key; certificate trust is not checked), `validatePdfA` / `validatePdfUa`, `classifyPage` / `classifyDocument`, `planSplitByBookmarks`, `formFields` / `formField(name)`, `exportFormData` (FDF / XFDF), `xfa`, `attachments` / `extractAttachment`, `annotations(page)`, plus metadata getters (`title`, `author`, `version`, `isTagged`).
 
 ### Edit a document
 
@@ -375,7 +381,7 @@ Save options:
 
 - `PdfSaveOptions.fullRewrite()` — default; recompresses and drops unused objects.
 - `PdfSaveOptions.fullRewrite(encryption: ...)` — encrypt on save (or `PdfEncryption.remove()` to strip it).
-- `PdfSaveOptions.incremental()` — appends changes; faster, larger file.
+- `PdfSaveOptions.incremental()` — keeps the original bytes and appends the changes, so an existing signature stays valid. An edit an append cannot carry (a removed page, a redaction, a content edit) throws `PdfIncrementalRefused` and writes nothing; save it with `fullRewrite()`.
 
 Redaction is a mark-then-apply lifecycle (the content is removed, not just hidden):
 

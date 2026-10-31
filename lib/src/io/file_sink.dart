@@ -13,7 +13,7 @@ import '../types/data_sink.dart';
 /// ```dart
 /// import 'package:pdf_manipulator/io.dart';
 ///
-/// final out = await FileSink.create(File('/path/to/out.pdf'));
+/// final out = await FileSink.open(File('/path/to/out.pdf'));
 /// try {
 ///   await pdf.merge([a, b], out);
 /// } finally {
@@ -30,9 +30,9 @@ final class FileSink implements DataSink {
   final RandomAccessFile _raf;
   bool _closed = false;
 
-  /// Opens [file] for writing, truncating any existing content. Pair every
-  /// `create` with a [close].
-  static Future<FileSink> create(File file) async {
+  /// Opens [file] for writing, truncating any existing content. Holds one
+  /// file handle until [close].
+  static Future<FileSink> open(File file) async {
     final raf = await file.open(mode: FileMode.write);
     return FileSink._(raf);
   }
@@ -43,6 +43,7 @@ final class FileSink implements DataSink {
   /// Flushes pending writes and releases the file handle. Idempotent: safe
   /// to call more than once (e.g. from a `finally` plus an error path); the
   /// second and later calls are no-ops.
+  @override
   Future<void> close() async {
     if (_closed) return;
     _closed = true;

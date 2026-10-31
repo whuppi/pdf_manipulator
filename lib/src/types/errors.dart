@@ -26,6 +26,13 @@ class PdfInvalidArgument extends PdfError {
   const PdfInvalidArgument(super.message);
 }
 
+/// A handle, instance, source or sink was used after it was disposed or
+/// closed.
+class PdfDisposed extends PdfError {
+  /// Creates a use-after-dispose error.
+  const PdfDisposed(super.message);
+}
+
 /// A file-system or network I/O error during a PDF operation.
 class PdfIoError extends PdfError {
   /// Creates an I/O error.
@@ -103,6 +110,17 @@ class PdfCryptoError extends PdfError {
 
   /// The underlying exception, if any.
   final Object? cause;
+}
+
+/// An incremental save cannot carry the staged edits: they remove
+/// content the original bytes would keep, change page content, or the
+/// source is encrypted, repaired or certified against the change. Nothing
+/// was written to the sink; save with `PdfSaveOptions.fullRewrite()`
+/// instead. Carried on the wire as error kind incrementalRefused,
+/// never matched by message text.
+class PdfIncrementalRefused extends PdfError {
+  /// Creates an incremental-refused error.
+  const PdfIncrementalRefused(super.message);
 }
 
 /// The operation was cancelled — its `Pdf` instance was disposed, or
