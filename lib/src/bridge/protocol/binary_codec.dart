@@ -16,39 +16,52 @@ const _tF64List = 8;
 const _tStringList = 9;
 const _tMapList = 10;
 
-/// The error kind in byte 1 of an error response. A value's index is its
+/// The error kind in byte 1 of an error response. A value's [code] is its
 /// wire byte, the same as Rust's `ErrorKind`, and the wire sync test
 /// fails when the two differ. An unknown byte decodes as [engine].
 enum WireErrorKind {
   /// Thrown as [PdfEngineError].
-  engine,
+  engine(0),
 
   /// Thrown as [PdfInvalidArgument].
-  invalidArgument,
+  invalidArgument(1),
 
   /// Thrown as [PdfIoError].
-  io,
+  io(2),
 
   /// Thrown as [PdfCorrupted].
-  corrupted,
+  corrupted(3),
 
   /// Thrown as [PdfUnsupported].
-  unsupported,
+  unsupported(4),
 
   /// Thrown as [PdfPasswordRequired].
-  passwordRequired,
+  passwordRequired(5),
 
   /// Thrown as [PdfWrongPassword].
-  wrongPassword,
+  wrongPassword(6),
 
   /// Thrown as [PdfCryptoError].
-  crypto,
+  crypto(7),
 
   /// Thrown as [PdfPageRangeError], from the `page` and `pageCount` fields.
-  pageRange,
+  pageRange(8),
 
   /// Thrown as [PdfIncrementalRefused].
-  incrementalRefused,
+  incrementalRefused(9);
+
+  const WireErrorKind(this.code);
+
+  /// The byte Rust writes for this kind.
+  final int code;
+
+  /// The kind written as [byte]; an unknown byte is [engine].
+  static WireErrorKind fromByte(int byte) {
+    for (final kind in values) {
+      if (kind.code == byte) return kind;
+    }
+    return engine;
+  }
 }
 
 /// Encodes an operation name and fields into a binary request payload.
@@ -81,9 +94,7 @@ Map<String, Object?> decodeResponse(Uint8List bytes) {
     final byte = r.u8();
     final map = _readFields(r);
     final message = map['message'] as String? ?? '';
-    final kind = byte < WireErrorKind.values.length
-        ? WireErrorKind.values[byte]
-        : WireErrorKind.engine;
+    final kind = WireErrorKind.fromByte(byte);
     throw switch (kind) {
       WireErrorKind.engine => PdfEngineError(message),
       WireErrorKind.invalidArgument => PdfInvalidArgument(message),
@@ -192,6 +203,10 @@ void _writeValue(BytesBuilder buf, Object value) {
       buf.addByte(_tBytes);
       _writeU32(buf, nested.length);
       buf.add(nested);
+    case final Enum v:
+      throw PdfInvalidArgument(
+        'an enum reaches the wire only as a PdfWire name (putEnum): $v',
+      );
     default:
       if (value is List) {
         if (value.every((e) => e is int)) {

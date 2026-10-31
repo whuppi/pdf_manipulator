@@ -15,6 +15,7 @@ import 'package:pdf_manipulator/src/types/pdf_attachment.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
+import 'package:pdf_manipulator/src/types/extracted_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
@@ -26,6 +27,7 @@ import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/types/pdf_redaction_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
+import 'package:pdf_manipulator/src/types/pdf_wire.dart';
 import 'package:pdf_manipulator/src/types/pdf_xfa_info.dart';
 import 'package:pdf_manipulator/src/types/search_result.dart';
 
@@ -125,7 +127,7 @@ List<PdfFormField> decodeFormFields(Map<String, Object?> r) {
     final value = _decodeFormFieldValue(m);
     final tooltip = m['tooltip'] as String? ?? '';
     final maxLength = m['maxLength'] as int? ?? -1;
-    final alignment = m['alignment'] as int? ?? -1;
+    final alignment = m['alignment'] as String? ?? '';
     return PdfFormField(
       name: m['name'] as String? ?? '',
       type: type,
@@ -140,7 +142,9 @@ List<PdfFormField> decodeFormFields(Map<String, Object?> r) {
             )
           : null,
       maxLength: maxLength < 0 ? null : maxLength,
-      alignment: alignment < 0 ? null : PdfTextAlignment.values[alignment],
+      alignment: alignment.isEmpty
+          ? null
+          : _enumByWireName(PdfTextAlignment.values, alignment, 'alignment'),
       readOnly: m['readOnly'] as bool? ?? false,
       required: m['required'] as bool? ?? false,
     );
@@ -226,14 +230,27 @@ Map<String, Object?> encodeImagePolicy(PdfImagePolicy policy) => {
   'convertCmykToRgb': policy.convertCmykToRgb,
   'minPixels': policy.minPixels,
   'minSavings': policy.minSavings,
-  'chroma': policy.chromaSubsampling.name,
+  'chroma': putEnum(policy.chromaSubsampling),
   'recompressJpeg': policy.recompressJpeg,
 };
 
-T _enumByWireName<T extends Enum>(List<T> values, Object? wire, String what) {
+/// An enum field of a request. Only a [PdfWire] reaches the wire, by its
+/// stable name; the byte codec refuses any other enum.
+String putEnum(PdfWire e) => e.wire;
+
+/// A list of enum fields of a request, one wire name per value.
+List<String> putEnums(Iterable<PdfWire> values) => [
+  for (final v in values) putEnum(v),
+];
+
+T _enumByWireName<T extends PdfWire>(
+  List<T> values,
+  Object? wire,
+  String what,
+) {
   final name = wire as String? ?? '';
   for (final v in values) {
-    if (v.name == name) return v;
+    if (v.wire == name) return v;
   }
   throw PdfEngineError('unknown $what "$name" on the wire');
 }
@@ -351,7 +368,7 @@ RenderedPage decodeRenderedPage(Map<String, Object?> data) => RenderedPage(
 );
 
 /// Decodes an extracted image from a response map.
-PdfImage decodePdfImage(Map<String, Object?> data) => PdfImage(
+ExtractedImage decodePdfImage(Map<String, Object?> data) => ExtractedImage(
   width: data['width'] as int? ?? 0,
   height: data['height'] as int? ?? 0,
   format: data['format'] as String? ?? '',
@@ -449,7 +466,7 @@ Map<String, Object?> encodeWatermarkArgs(
   'r': style.color.r,
   'g': style.color.g,
   'b': style.color.b,
-  'layer': layer.index,
+  'layer': putEnum(layer),
   ...encodePosition(position),
 };
 
@@ -459,7 +476,7 @@ Map<String, Object?> encodePosition(PdfWatermarkPosition position) =>
       PdfWatermarkCenter() => {'posType': 0},
       PdfWatermarkCorner(:final corner, :final marginX, :final marginY) => {
         'posType': 1,
-        'corner': corner.index,
+        'corner': putEnum(corner),
         'marginX': marginX,
         'marginY': marginY,
       },
@@ -529,7 +546,7 @@ Map<String, Object?> encodeSaveArgs(PdfSaveOptions options) {
 
 int _checkedDeflateLevel(int level) {
   if (level < 0 || level > 9) {
-    throw ArgumentError.value(level, 'deflateLevel', 'must be 0 to 9');
+    throw PdfInvalidArgument('deflateLevel must be 0 to 9: $level');
   }
   return level;
 }
@@ -540,19 +557,19 @@ Map<String, Object?> _encodeEncryption(PdfEncryption encryption) {
     PdfEncryptionRemove() => 1,
     PdfEncryptionConfig() => 2,
   };
-  int encAlgo = 0;
+  String? encAlgo;
   String encUserPw = '';
   String encOwnerPw = '';
   int encPerms = -1;
   if (encryption case final PdfEncryptionConfig c) {
-    encAlgo = c.algorithm.index + 1;
+    encAlgo = putEnum(c.algorithm);
     encUserPw = c.userPassword;
     encOwnerPw = c.ownerPassword;
     encPerms = c.permissions.toBits();
   }
   return {
     'encryptMode': encryptMode,
-    'encryptAlgo': encAlgo,
+    if (encAlgo != null) 'encryptAlgo': encAlgo,
     'encryptUserPw': encUserPw,
     'encryptOwnerPw': encOwnerPw,
     'encryptPermissions': encPerms,

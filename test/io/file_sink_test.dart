@@ -22,16 +22,16 @@ void main() {
 
   group('FileSink', () {
     test('writes chunks in order and flushes on close', () async {
-      final sink = await FileSink.create(file);
+      final sink = await FileSink.open(file);
       await sink.write(Uint8List.fromList([1, 2, 3]));
       await sink.write(Uint8List.fromList([4, 5]));
       await sink.close();
       expect(file.readAsBytesSync(), equals([1, 2, 3, 4, 5]));
     });
 
-    test('create truncates existing content', () async {
+    test('open truncates existing content', () async {
       file.writeAsBytesSync(Uint8List.fromList([9, 9, 9, 9, 9]));
-      final sink = await FileSink.create(file);
+      final sink = await FileSink.open(file);
       await sink.write(Uint8List.fromList([1, 2]));
       await sink.close();
       expect(file.readAsBytesSync(), equals([1, 2]));
@@ -40,7 +40,7 @@ void main() {
     test(
       'close is idempotent — a second call is a no-op, not a throw',
       () async {
-        final sink = await FileSink.create(file);
+        final sink = await FileSink.open(file);
         await sink.write(Uint8List.fromList([1, 2, 3]));
         await sink.close();
         // Regression: the old close() threw "file closed" on the second call.

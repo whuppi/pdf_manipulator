@@ -200,7 +200,7 @@ class _SharedEditorHandle extends BridgeEditorHandle {
     double opacity = 1.0,
   }) => _mutate('addStamp', {
     'page': page,
-    'stampType': type.index,
+    'stampType': codec.putEnum(type),
     ...codec.encodeRectArgs(rect),
     'opacity': opacity,
   });
@@ -230,7 +230,7 @@ class _SharedEditorHandle extends BridgeEditorHandle {
     'name': name,
     if (description != null) 'description': description,
     if (mimeType != null) 'mimeType': mimeType,
-    if (relationship != null) 'relationship': relationship.name,
+    if (relationship != null) 'relationship': codec.putEnum(relationship),
   });
   @override
   PdfTask<void> eraseRegions(int page, List<PdfRect> regions) => _mutate(
@@ -347,7 +347,7 @@ class _SharedEditorHandle extends BridgeEditorHandle {
     PdfTextAlignment alignment,
   ) => _mutate('setFormFieldAlignment', {
     'name': name,
-    'alignment': alignment.index,
+    'alignment': codec.putEnum(alignment),
   });
 
   @override

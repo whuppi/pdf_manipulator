@@ -41,7 +41,7 @@ class _SharedDocHandle extends BridgeDocHandle {
     required PdfPages pages,
     PdfExtractionFormat format = PdfExtractionFormat.auto,
   }) {
-    final fmt = _bridge._encodeExtractionFormat(format);
+    final fmt = codec.putEnum(format);
     return PdfTask.group((hook) async {
       return switch (pages) {
         PdfPagesAll() => () async {
@@ -150,8 +150,7 @@ class _SharedDocHandle extends BridgeDocHandle {
         final req = bin.encodeRequest(EngineOp.render.wire, {
           'handleId': _handleId,
           'pageIndices': _pages(pages),
-          if (size?.maxWidth != null) 'maxWidth': size!.maxWidth,
-          if (size?.maxHeight != null) 'maxHeight': size!.maxHeight,
+          ..._renderSizeArgs(size),
           'hasSink': true,
         });
         final res = await _bridge._transport.execute(
@@ -165,7 +164,7 @@ class _SharedDocHandle extends BridgeDocHandle {
   /// Same delivery order as [render]: frames as written, the final
   /// response last, a cancelled subscription cancels the job.
   @override
-  Stream<PdfImage> extractImages({required PdfPages pages}) =>
+  Stream<ExtractedImage> extractImages({required PdfPages pages}) =>
       _streamFrames((hook, sink) async {
         for (final page in _pages(pages)) {
           if (hook.isCancelled) return;

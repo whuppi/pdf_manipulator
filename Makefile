@@ -105,6 +105,10 @@ format:
 # make fixtures      Generate test fixtures (skips when the stamp matches
 #                    the catalog — existence is never proof, the stamp is).
 # make test-guards   Mechanical guards over the test suite and the changelogs:
+#                      - API walls (test/guards): no handle outside _own, no
+#                        void write on a sink but MemorySink, no enum index
+#                        on the wire, one-shot membership, build pairing,
+#                        README table
 #                      - changelog bullets stay one sentence: at most 60 words
 #                        (80 for a Breaking bullet), tool/check_changelog_shape.sh
 #                      - fork tests: host/ unit tests for pure functions only;
@@ -147,6 +151,7 @@ fixtures:
 # bytegrep-exempt is the per-line opt-out, and pdf_builder_battery is excluded
 # whole rather than marked 15 times.
 test-guards:
+	@$(DART) test $(TIMEOUT) test/guards -p vm --concurrency=1
 	@./tool/check_changelog_shape.sh
 	@./tool/check_fork_tests.sh
 	@./tool/check_patch_markers.sh
@@ -262,7 +267,7 @@ compile-natives:
 #
 # make test              Unit + all ops (native + 3 web modes).
 # make test-pkg-native   Unit + native ops only (CI fast gate).
-# make test-unit         Every test/ folder but ops/ and fixtures/ (VM).
+# make test-unit         Every test/ folder but ops/, fixtures/ and guards/ (VM).
 # make test-ops          All 4 ops runners.
 # make test-ops-native   Ops: native FFI.
 # make test-ops-web      Ops: all 3 web modes.
@@ -277,7 +282,7 @@ test-pkg-native: fixtures test-unit test-ops-native
 
 # The folders are derived, never listed: a new test/ folder runs here the
 # day it lands. ops/ runs through its own runners; fixtures/ is data.
-UNIT_TEST_DIRS := $(filter-out test/ops/ test/fixtures/,$(sort $(wildcard test/*/)))
+UNIT_TEST_DIRS := $(filter-out test/ops/ test/fixtures/ test/guards/,$(sort $(wildcard test/*/)))
 
 test-unit:
 	@echo "=== Unit: $(UNIT_TEST_DIRS) ==="

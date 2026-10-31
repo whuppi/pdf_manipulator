@@ -89,6 +89,7 @@ void main() {
         PdfWrongPassword() => 'wrong',
         PdfPageRangeError() => 'range',
         PdfInvalidArgument() => 'invalid',
+        PdfDisposed() => 'disposed',
         PdfIoError() => 'io',
         PdfExtractionFailed() => 'extract',
         PdfUnsupported() => 'unsupported',

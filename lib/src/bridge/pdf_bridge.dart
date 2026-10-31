@@ -13,12 +13,14 @@ import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
+import 'package:pdf_manipulator/src/types/extracted_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/types/pdf_redaction_report.dart';
+import 'package:pdf_manipulator/src/types/pdf_render.dart';
 import 'package:pdf_manipulator/src/types/pdf_sanitize_options.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
 import 'package:pdf_manipulator/src/types/pdf_table.dart';
@@ -117,7 +119,7 @@ abstract class BridgeDocHandle {
   Stream<RenderedPage> render({required PdfPages pages, PdfRenderSize? size});
 
   /// Extracts embedded images from the specified [pages].
-  Stream<PdfImage> extractImages({required PdfPages pages});
+  Stream<ExtractedImage> extractImages({required PdfPages pages});
 
   /// Returns signature info for all signatures in the document.
   PdfTask<List<PdfSignatureInfo>> get signatures;

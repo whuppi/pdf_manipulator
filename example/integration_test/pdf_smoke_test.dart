@@ -758,7 +758,7 @@ void main() {
   testWidgets('dispose prevents further ops', (t) async {
     final p = Pdf();
     await p.dispose();
-    expect(() => p.open(_src(minimalPdf)), throwsStateError);
+    expect(() => p.open(_src(minimalPdf)), throwsA(isA<PdfDisposed>()));
   });
 
   testWidgets('doc dispose + editor dispose + builder dispose', (t) async {
@@ -782,9 +782,10 @@ void main() {
     await b.dispose();
 
     // Disposed means refusing, not just surviving.
-    expect(() => doc.extract(pages: const PdfPages.all()), throwsStateError);
-    expect(() => e.setTitle('x'), throwsStateError);
-    expect(() => b.save(MemorySink()), throwsStateError);
+    expect(() => doc.extract(pages: const PdfPages.all()),
+        throwsA(isA<PdfDisposed>()));
+    expect(() => e.setTitle('x'), throwsA(isA<PdfDisposed>()));
+    expect(() => b.save(MemorySink()), throwsA(isA<PdfDisposed>()));
   });
 
   // ── Runtime — the lane architecture, proven on THIS device ──────
@@ -940,4 +941,7 @@ class _ParkedSource implements DataSource {
     final end = (offset + count).clamp(0, _data.length);
     return Uint8List.sublistView(_data, offset, end);
   }
+
+  @override
+  void close() {}
 }

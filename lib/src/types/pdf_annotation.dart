@@ -1,92 +1,98 @@
 import 'package:meta/meta.dart';
 
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
+import 'package:pdf_manipulator/src/types/pdf_wire.dart';
 
 /// Annotation subtype per ISO 32000-1 Table 169.
-enum PdfAnnotationSubtype {
+enum PdfAnnotationSubtype implements PdfWire {
   /// Text annotation (sticky note).
-  text,
+  text('text'),
 
   /// Link annotation.
-  link,
+  link('link'),
 
   /// Free text annotation.
-  freeText,
+  freeText('freeText'),
 
   /// Line annotation.
-  line,
+  line('line'),
 
   /// Square annotation.
-  square,
+  square('square'),
 
   /// Circle annotation.
-  circle,
+  circle('circle'),
 
   /// Polygon annotation.
-  polygon,
+  polygon('polygon'),
 
   /// Polyline annotation.
-  polyLine,
+  polyLine('polyLine'),
 
   /// Highlight annotation.
-  highlight,
+  highlight('highlight'),
 
   /// Underline annotation.
-  underline,
+  underline('underline'),
 
   /// Squiggly underline annotation.
-  squiggly,
+  squiggly('squiggly'),
 
   /// Strikeout annotation.
-  strikeOut,
+  strikeOut('strikeOut'),
 
   /// Rubber stamp annotation.
-  stamp,
+  stamp('stamp'),
 
   /// Caret annotation.
-  caret,
+  caret('caret'),
 
   /// Ink annotation.
-  ink,
+  ink('ink'),
 
   /// Popup annotation.
-  popup,
+  popup('popup'),
 
   /// File attachment annotation.
-  fileAttachment,
+  fileAttachment('fileAttachment'),
 
   /// Sound annotation.
-  sound,
+  sound('sound'),
 
   /// Movie annotation.
-  movie,
+  movie('movie'),
 
   /// Widget annotation (form field).
-  widget,
+  widget('widget'),
 
   /// Screen annotation.
-  screen,
+  screen('screen'),
 
   /// Printer's mark annotation.
-  printerMark,
+  printerMark('printerMark'),
 
   /// Trap network annotation.
-  trapNet,
+  trapNet('trapNet'),
 
   /// Watermark annotation.
-  watermark,
+  watermark('watermark'),
 
   /// 3D annotation.
-  threeD,
+  threeD('threeD'),
 
   /// Redaction annotation.
-  redact,
+  redact('redact'),
 
   /// RichMedia annotation.
-  richMedia,
+  richMedia('richMedia'),
 
   /// A subtype this package does not know.
-  unknown;
+  unknown('unknown');
+
+  const PdfAnnotationSubtype(this.wire);
+
+  @override
+  final String wire;
 
   /// Maps a raw `/Subtype` name (e.g. `Text`, `3D`) to its enum value.
   /// Anything unmapped, `""` included, is [unknown].

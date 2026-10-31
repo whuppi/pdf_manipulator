@@ -1,28 +1,10 @@
-// Sugar — convenience wrappers using only these four surface files:
-//   pdf_editor.dart    (edit → mutate → save)
-//   pdf_builder.dart   (build → pages → save)
-//   pdf_doc.dart       (open → query → dispose)
-//   pdf_standalone.dart (one-shot ops)
+// Sugar — convenience wrappers over the editor and the builder.
 //
-// Do NOT import bridge, transport, protocol, or any internal layer.
-// Sugar composes the public consumer API only.
+// Every handle a wrapper opens goes through `_own`, which closes it after
+// success, error and cancel. A sink a wrapper obtains from a factory is the
+// library's and is closed after its item, on error and on cancel.
 
-import 'dart:async';
-import 'dart:math';
-import 'dart:typed_data';
-
-import 'package:pdf_manipulator/src/io/memory_sink.dart';
-import 'package:pdf_manipulator/src/ops/pdf.dart';
-import 'package:pdf_manipulator/src/ops/pdf_standalone.dart';
-import 'package:pdf_manipulator/src/types/data_sink.dart';
-import 'package:pdf_manipulator/src/types/data_source.dart';
-import 'package:pdf_manipulator/src/types/pdf_enums.dart';
-import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
-import 'package:pdf_manipulator/src/types/pdf_pages.dart';
-import 'package:pdf_manipulator/src/types/pdf_params.dart';
-import 'package:pdf_manipulator/src/types/pdf_rect.dart';
-import 'package:pdf_manipulator/src/types/pdf_task.dart';
-import 'package:pdf_manipulator/src/keep/record_use_shim.dart';
+part of 'pdf.dart';
 
 /// Convenience wrappers — common multi-step PDF operations in one call.
 extension PdfSugar on Pdf {
@@ -30,110 +12,111 @@ extension PdfSugar on Pdf {
 
   /// Merges multiple PDFs into a single document.
   PdfTask<void> merge(List<DataSource> inputs, DataSink output) {
-    if (inputs.isEmpty) throw ArgumentError('inputs must not be empty');
-    return PdfTask.group((hook) async {
-      final editor = await hook.guard(edit(inputs.first));
+    if (inputs.isEmpty) {
+      throw const PdfInvalidArgument('inputs must not be empty');
+    }
+    return _own(edit(inputs.first), (editor, hook) async {
       for (var i = 1; i < inputs.length; i++) {
         await hook.guard(editor.mergeFrom(inputs[i]));
       }
       await hook.guard(editor.save(output));
-      await editor.dispose();
     });
   }
 
-  /// Splits a PDF into chunks of [every] pages each.
+  /// Splits a PDF into chunks of [every] pages each. Each sink [sinkFactory]
+  /// returns is closed after its chunk.
   PdfTask<void> split(
     DataSource source,
     DataSink Function(int index) sinkFactory, {
     required int every,
   }) {
-    if (every < 1) throw ArgumentError('every must be >= 1');
-    return PdfTask.group((hook) async {
-      final doc = await hook.guard(open(source));
-      try {
-        final total = doc.pageCount;
-        var chunkIndex = 0;
-        for (var start = 0; start < total; start += every) {
-          final end = (start + every).clamp(0, total);
+    if (every < 1) throw const PdfInvalidArgument('every must be >= 1');
+    return _own(open(source), (doc, hook) async {
+      final total = doc.pageCount;
+      var chunkIndex = 0;
+      for (var start = 0; start < total; start += every) {
+        final end = (start + every).clamp(0, total);
+        final sink = sinkFactory(chunkIndex);
+        try {
           await hook.guard(
             extractPages(
               source,
-              sinkFactory(chunkIndex),
+              sink,
               pages: List.generate(end - start, (i) => start + i),
             ),
           );
-          chunkIndex++;
+        } finally {
+          await sink.close();
         }
-      } finally {
-        await doc.dispose();
+        chunkIndex++;
       }
     });
   }
 
-  /// Splits a PDF so each chunk stays under [maxBytes].
+  /// Splits a PDF so each chunk stays under [maxBytes]. Each sink
+  /// [sinkFactory] returns is closed after its chunk.
   PdfTask<List<int>> splitBySize(
     DataSource source,
     DataSink Function(int index) sinkFactory, {
     required int maxBytes,
   }) {
-    if (maxBytes < 1) throw ArgumentError('maxBytes must be >= 1');
-    return PdfTask.group((hook) async {
-      final doc = await hook.guard(open(source));
-      try {
-        final total = doc.pageCount;
+    if (maxBytes < 1) throw const PdfInvalidArgument('maxBytes must be >= 1');
+    return _own(open(source), (doc, hook) async {
+      final total = doc.pageCount;
 
-        final chunkSizes = <int>[];
-        var chunkStart = 0;
-        var chunkIndex = 0;
+      final chunkSizes = <int>[];
+      var chunkStart = 0;
+      var chunkIndex = 0;
 
-        while (chunkStart < total) {
-          final remaining = total - chunkStart;
+      while (chunkStart < total) {
+        final remaining = total - chunkStart;
 
-          var probeSize = 1;
-          var lastFit = 1;
-          while (probeSize <= remaining) {
+        var probeSize = 1;
+        var lastFit = 1;
+        while (probeSize <= remaining) {
+          final counter = _ByteCountSink();
+          await hook.guard(
+            extractPages(
+              source,
+              counter,
+              pages: List.generate(probeSize, (j) => chunkStart + j),
+            ),
+          );
+          if (counter.length <= maxBytes) {
+            lastFit = probeSize;
+            probeSize *= 2;
+          } else {
+            break;
+          }
+        }
+
+        var lo = lastFit;
+        var hi = probeSize.clamp(1, remaining);
+        var bestEnd = lastFit;
+
+        if (lo < hi) {
+          while (lo <= hi) {
+            final mid = (lo + hi) ~/ 2;
             final counter = _ByteCountSink();
             await hook.guard(
               extractPages(
                 source,
                 counter,
-                pages: List.generate(probeSize, (j) => chunkStart + j),
+                pages: List.generate(mid, (j) => chunkStart + j),
               ),
             );
             if (counter.length <= maxBytes) {
-              lastFit = probeSize;
-              probeSize *= 2;
+              bestEnd = mid;
+              lo = mid + 1;
             } else {
-              break;
+              hi = mid - 1;
             }
           }
+        }
 
-          var lo = lastFit;
-          var hi = probeSize.clamp(1, remaining);
-          var bestEnd = lastFit;
-
-          if (lo < hi) {
-            while (lo <= hi) {
-              final mid = (lo + hi) ~/ 2;
-              final counter = _ByteCountSink();
-              await hook.guard(
-                extractPages(
-                  source,
-                  counter,
-                  pages: List.generate(mid, (j) => chunkStart + j),
-                ),
-              );
-              if (counter.length <= maxBytes) {
-                bestEnd = mid;
-                lo = mid + 1;
-              } else {
-                hi = mid - 1;
-              }
-            }
-          }
-
-          final sink = sinkFactory(chunkIndex);
-          final counter = _ByteCountSinkWrapper(sink);
+        final sink = sinkFactory(chunkIndex);
+        final counter = _ByteCountSinkWrapper(sink);
+        try {
           await hook.guard(
             extractPages(
               source,
@@ -141,42 +124,51 @@ extension PdfSugar on Pdf {
               pages: List.generate(bestEnd, (j) => chunkStart + j),
             ),
           );
-          chunkSizes.add(counter.length);
-
-          chunkStart += bestEnd;
-          chunkIndex++;
+        } finally {
+          await sink.close();
         }
+        chunkSizes.add(counter.length);
 
-        return chunkSizes;
-      } finally {
-        await doc.dispose();
+        chunkStart += bestEnd;
+        chunkIndex++;
       }
+
+      return chunkSizes;
     });
   }
 
-  /// Splits a PDF at top-level bookmark boundaries.
+  /// Splits a PDF at top-level bookmark boundaries. Each sink
+  /// [sinkFactory] returns is closed after its part.
   PdfTask<void> splitByBookmarks(
     DataSource source,
     DataSink Function(int index) sinkFactory, {
     String? password,
   }) => PdfTask.group((hook) async {
-    final doc = await hook.guard(open(source, password: password));
-    final splits = await hook.guard(doc.planSplitByBookmarks());
-    await doc.dispose();
+    final splits = await hook.guard(
+      _own(
+        open(source, password: password),
+        (doc, planHook) => planHook.guard(doc.planSplitByBookmarks()),
+      ),
+    );
 
     for (var i = 0; i < splits.length; i++) {
       final split = splits[i];
-      await hook.guard(
-        extractPages(
-          source,
-          sinkFactory(i),
-          pages: List.generate(
-            split.endPage - split.startPage,
-            (j) => split.startPage + j,
+      final sink = sinkFactory(i);
+      try {
+        await hook.guard(
+          extractPages(
+            source,
+            sink,
+            pages: List.generate(
+              split.endPage - split.startPage,
+              (j) => split.startPage + j,
+            ),
+            password: password,
           ),
-          password: password,
-        ),
-      );
+        );
+      } finally {
+        await sink.close();
+      }
     }
   });
 
@@ -185,13 +177,11 @@ extension PdfSugar on Pdf {
     DataSource source,
     DataSink output, {
     required List<int> pages,
-  }) => PdfTask.group((hook) async {
-    final editor = await hook.guard(edit(source));
+  }) => _own(edit(source), (editor, hook) async {
     for (final p in pages.toList()..sort((a, b) => b.compareTo(a))) {
       await hook.guard(editor.deletePage(p));
     }
     await hook.guard(editor.save(output));
-    await editor.dispose();
   });
 
   /// Reorders pages according to [order] (list of page indices).
@@ -199,11 +189,9 @@ extension PdfSugar on Pdf {
     DataSource source,
     DataSink output, {
     required List<int> order,
-  }) => PdfTask.group((hook) async {
-    final editor = await hook.guard(edit(source));
+  }) => _own(edit(source), (editor, hook) async {
     await hook.guard(editor.selectPages(order));
     await hook.guard(editor.save(output));
-    await editor.dispose();
   });
 
   /// Moves a single page from index [from] to index [to].
@@ -212,11 +200,9 @@ extension PdfSugar on Pdf {
     DataSink output, {
     required int from,
     required int to,
-  }) => PdfTask.group((hook) async {
-    final editor = await hook.guard(edit(source));
+  }) => _own(edit(source), (editor, hook) async {
     await hook.guard(editor.movePage(from: from, to: to));
     await hook.guard(editor.save(output));
-    await editor.dispose();
   });
 
   /// Rotates specific pages by their mapped degree values.
@@ -224,13 +210,11 @@ extension PdfSugar on Pdf {
     DataSource source,
     DataSink output, {
     required Map<int, int> pages,
-  }) => PdfTask.group((hook) async {
-    final editor = await hook.guard(edit(source));
+  }) => _own(edit(source), (editor, hook) async {
     for (final entry in pages.entries) {
       await hook.guard(editor.rotatePage(entry.key, degrees: entry.value));
     }
     await hook.guard(editor.save(output));
-    await editor.dispose();
   });
 
   /// Rotates all pages by [degrees] (must be a multiple of 90).
@@ -238,33 +222,26 @@ extension PdfSugar on Pdf {
     DataSource source,
     DataSink output, {
     required int degrees,
-  }) => PdfTask.group((hook) async {
-    final editor = await hook.guard(edit(source));
+  }) => _own(edit(source), (editor, hook) async {
     await hook.guard(editor.rotateAllPages(degrees: degrees));
     await hook.guard(editor.save(output));
-    await editor.dispose();
   });
 
   // ── Content ──
 
   /// Flattens all form fields in the document into static content.
   PdfTask<void> flattenForms(DataSource source, DataSink output) =>
-      PdfTask.group((hook) async {
-        final editor = await hook.guard(edit(source));
+      _own(edit(source), (editor, hook) async {
         await hook.guard(editor.flattenForms());
         await hook.guard(editor.save(output));
-        await editor.dispose();
       });
 
   /// Applies all pending redaction marks, permanently removing content.
   PdfTask<void> applyRedactions(DataSource source, DataSink output) =>
-      PdfTask.group((hook) async {
-        final editor = await hook.guard(edit(source));
-        await hook.guard(
-          editor.applyRedactions(),
-        ); // report discarded: one-shot
+      _own(edit(source), (editor, hook) async {
+        // The report is discarded: a one-shot returns nothing.
+        await hook.guard(editor.applyRedactions());
         await hook.guard(editor.save(output));
-        await editor.dispose();
       });
 
   /// Embeds a file attachment into the PDF.
@@ -273,11 +250,9 @@ extension PdfSugar on Pdf {
     DataSink output, {
     required String name,
     required DataSource fileData,
-  }) => PdfTask.group((hook) async {
-    final editor = await hook.guard(edit(source));
+  }) => _own(edit(source), (editor, hook) async {
     await hook.guard(editor.embedFile(name, fileData));
     await hook.guard(editor.save(output));
-    await editor.dispose();
   });
 
   /// Erases content within the specified [regions] on [page].
@@ -286,11 +261,9 @@ extension PdfSugar on Pdf {
     DataSink output, {
     required int page,
     required List<PdfRect> regions,
-  }) => PdfTask.group((hook) async {
-    final editor = await hook.guard(edit(source));
+  }) => _own(edit(source), (editor, hook) async {
     await hook.guard(editor.eraseRegions(page, regions));
     await hook.guard(editor.save(output));
-    await editor.dispose();
   });
 
   /// Compresses the PDF: images through `PdfEditor.reduceImages` under
@@ -307,39 +280,39 @@ extension PdfSugar on Pdf {
     DataSink output, {
     PdfImagePolicy images = PdfImagePolicy.ebook,
     bool garbageCollect = true,
-  }) => PdfTask.group((hook) async {
+  }) {
     KeepRecord.op('render');
-    final editor = await hook.guard(edit(source));
-    await hook.guard(editor.reduceImages(images));
-    final options = PdfSaveOptions.fullRewrite(
-      compress: true,
-      garbageCollect: garbageCollect,
-      mergeDuplicates: true,
-      pruneResources: true,
-    );
-    if (source.length <= _compressInMemoryLimit) {
-      final result = MemorySink();
-      await hook.guard(editor.save(result, options: options));
-      final bytes = result.takeBytes();
-      if (bytes.length < source.length) {
-        for (var at = 0; at < bytes.length; at += _compressChunk) {
-          final end = min(at + _compressChunk, bytes.length);
-          await output.write(Uint8List.sublistView(bytes, at, end));
+    return _own(edit(source), (editor, hook) async {
+      await hook.guard(editor.reduceImages(images));
+      final options = PdfSaveOptions.fullRewrite(
+        compress: true,
+        garbageCollect: garbageCollect,
+        mergeDuplicates: true,
+        pruneResources: true,
+      );
+      if (source.length <= _compressInMemoryLimit) {
+        final result = MemorySink();
+        await hook.guard(editor.save(result, options: options));
+        final bytes = result.takeBytes();
+        if (bytes.length < source.length) {
+          for (var at = 0; at < bytes.length; at += _compressChunk) {
+            final end = min(at + _compressChunk, bytes.length);
+            await output.write(Uint8List.sublistView(bytes, at, end));
+          }
+        } else {
+          await _copyUnchanged(source, output);
         }
       } else {
-        await _copyUnchanged(source, output);
+        final counter = _ByteCountSink();
+        await hook.guard(editor.save(counter, options: options));
+        if (counter.length < source.length) {
+          await hook.guard(editor.save(output, options: options));
+        } else {
+          await _copyUnchanged(source, output);
+        }
       }
-    } else {
-      final counter = _ByteCountSink();
-      await hook.guard(editor.save(counter, options: options));
-      if (counter.length < source.length) {
-        await hook.guard(editor.save(output, options: options));
-      } else {
-        await _copyUnchanged(source, output);
-      }
-    }
-    await editor.dispose();
-  });
+    });
+  }
 
   // ── Security ──
 
@@ -352,8 +325,7 @@ extension PdfSugar on Pdf {
     PdfWatermarkStyle style = const PdfWatermarkStyle(),
     PdfWatermarkPosition position = const PdfWatermarkPosition.center(),
     PdfWatermarkLayer layer = PdfWatermarkLayer.foreground,
-  }) => PdfTask.group((hook) async {
-    final editor = await hook.guard(edit(source));
+  }) => _own(edit(source), (editor, hook) async {
     final indices = switch (pages) {
       PdfPagesAll() => const <int>[-1],
       PdfPagesSingle(:final index) => [index],
@@ -375,7 +347,6 @@ extension PdfSugar on Pdf {
       );
     }
     await hook.guard(editor.save(output));
-    await editor.dispose();
   });
 
   /// Encrypts a PDF with the given [encryption] configuration.
@@ -383,34 +354,32 @@ extension PdfSugar on Pdf {
     DataSource source,
     DataSink output, {
     required PdfEncryptionConfig encryption,
-  }) => PdfTask.group((hook) async {
-    final editor = await hook.guard(edit(source));
-    await hook.guard(
+  }) => _own(
+    edit(source),
+    (editor, hook) => hook.guard(
       editor.save(
         output,
         options: PdfSaveOptions.fullRewrite(encryption: encryption),
       ),
-    );
-    await editor.dispose();
-  });
+    ),
+  );
 
   /// Decrypts a password-protected PDF and saves without encryption.
   PdfTask<void> decrypt(
     DataSource source,
     DataSink output, {
     required String password,
-  }) => PdfTask.group((hook) async {
-    final editor = await hook.guard(edit(source, password: password));
-    await hook.guard(
+  }) => _own(
+    edit(source, password: password),
+    (editor, hook) => hook.guard(
       editor.save(
         output,
         options: const PdfSaveOptions.fullRewrite(
           encryption: PdfEncryption.remove(),
         ),
       ),
-    );
-    await editor.dispose();
-  });
+    ),
+  );
 
   // ── Stamps ──
 
@@ -422,13 +391,11 @@ extension PdfSugar on Pdf {
     required PdfStampType type,
     required PdfRect rect,
     double opacity = 1.0,
-  }) => PdfTask.group((hook) async {
-    final editor = await hook.guard(edit(source));
+  }) => _own(edit(source), (editor, hook) async {
     await hook.guard(
       editor.addStamp(page, type: type, rect: rect, opacity: opacity),
     );
     await hook.guard(editor.save(output));
-    await editor.dispose();
   });
 
   /// Adds a custom image stamp to a single [page].
@@ -439,13 +406,11 @@ extension PdfSugar on Pdf {
     required DataSource imageData,
     required PdfRect rect,
     double opacity = 1.0,
-  }) => PdfTask.group((hook) async {
-    final editor = await hook.guard(edit(source));
+  }) => _own(edit(source), (editor, hook) async {
     await hook.guard(
       editor.addImageStamp(page, imageData, rect: rect, opacity: opacity),
     );
     await hook.guard(editor.save(output));
-    await editor.dispose();
   });
 
   // ── Conversion ──
@@ -456,20 +421,19 @@ extension PdfSugar on Pdf {
     DataSink output, {
     int level = 1,
     String? password,
-  }) => PdfTask.group((hook) async {
+  }) {
     KeepRecord.op('pdfa');
-    final editor = await hook.guard(edit(source, password: password));
-    await hook.guard(editor.convertToPdfA(level: level));
-    await hook.guard(editor.save(output));
-    await editor.dispose();
-  });
+    return _own(edit(source, password: password), (editor, hook) async {
+      await hook.guard(editor.convertToPdfA(level: level));
+      await hook.guard(editor.save(output));
+    });
+  }
 
   // ── Builder sugar ──
 
   /// Creates a PDF from a list of images, one per A4 page.
   PdfTask<void> imagesToPdf(List<DataSource> images, DataSink output) =>
-      PdfTask.group((hook) async {
-        final builder = await hook.guard(build());
+      _own(build(), (builder, hook) async {
         for (final img in images) {
           final page = await hook.guard(builder.addA4Page());
           await hook.guard(
@@ -478,7 +442,6 @@ extension PdfSugar on Pdf {
           await hook.guard(page.done());
         }
         await hook.guard(builder.save(output));
-        await builder.dispose();
       });
 }
 
@@ -495,7 +458,7 @@ Future<void> _copyUnchanged(DataSource source, DataSink output) async {
       min(_compressChunk, source.length - at),
     );
     if (chunk.isEmpty) {
-      throw StateError('source ended at $at of ${source.length} bytes');
+      throw PdfIoError('source ended at $at of ${source.length} bytes');
     }
     await output.write(chunk);
     at += chunk.length;
@@ -505,8 +468,14 @@ Future<void> _copyUnchanged(DataSource source, DataSink output) async {
 class _ByteCountSink implements DataSink {
   int _length = 0;
   int get length => _length;
+
   @override
-  void write(Uint8List chunk) => _length += chunk.length;
+  FutureOr<void> write(Uint8List chunk) {
+    _length += chunk.length;
+  }
+
+  @override
+  void close() {}
 }
 
 class _ByteCountSinkWrapper implements DataSink {
@@ -515,10 +484,15 @@ class _ByteCountSinkWrapper implements DataSink {
   final DataSink _inner;
   int _length = 0;
   int get length => _length;
+
   @override
-  void write(Uint8List chunk) {
+  FutureOr<void> write(Uint8List chunk) {
     _length += chunk.length;
-    final result = _inner.write(chunk);
-    if (result is Future<void>) unawaited(result);
+    return _inner.write(chunk);
   }
+
+  // The inner sink belongs to the factory the caller passed, and the
+  // wrapper's owner closes it.
+  @override
+  void close() {}
 }

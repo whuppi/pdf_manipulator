@@ -20,8 +20,8 @@ void registerLifecycleTests(Pdf Function() createPdf) {
         pdf.open(TestSource(Uint8List.fromList([1, 2, 3, 4]))),
         throwsA(isA<PdfCorrupted>()),
         reason:
-            'engine failures are PdfError — never a bare '
-            'StateError, which is reserved for use-after-dispose',
+            'engine failures are PdfError — never PdfDisposed, which is '
+            'reserved for use-after-dispose',
       );
       await pdf.dispose();
     }, timeout: t(1));
@@ -71,7 +71,7 @@ void registerLifecycleTests(Pdf Function() createPdf) {
       await pdf.dispose();
       expect(
         () => pdf.open(src(minimalPdf)),
-        throwsStateError,
+        throwsA(isA<PdfDisposed>()),
         reason:
             'dispose must leave the instance provably dead, '
             'not just return without error',
@@ -82,13 +82,13 @@ void registerLifecycleTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       await pdf.dispose();
       await pdf.dispose();
-      expect(() => pdf.open(src(minimalPdf)), throwsStateError);
+      expect(() => pdf.open(src(minimalPdf)), throwsA(isA<PdfDisposed>()));
     }, timeout: t(1));
 
     test('operations after instance dispose throw', () async {
       final pdf = createPdf();
       await pdf.dispose();
-      expect(() => pdf.open(src(minimalPdf)), throwsStateError);
+      expect(() => pdf.open(src(minimalPdf)), throwsA(isA<PdfDisposed>()));
     }, timeout: t(1));
 
     test('instance dispose returns quickly', () async {
@@ -109,7 +109,7 @@ void registerLifecycleTests(Pdf Function() createPdf) {
       await doc.dispose();
       expect(
         () => doc.extract(pages: const PdfPages.all()),
-        throwsStateError,
+        throwsA(isA<PdfDisposed>()),
         reason: 'a disposed doc refuses ops',
       );
       final doc2 = await pdf.open(src(minimalPdf));
@@ -123,7 +123,10 @@ void registerLifecycleTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(minimalPdf));
       await doc.dispose();
       await doc.dispose();
-      expect(() => doc.extract(pages: const PdfPages.all()), throwsStateError);
+      expect(
+        () => doc.extract(pages: const PdfPages.all()),
+        throwsA(isA<PdfDisposed>()),
+      );
       await pdf.dispose();
     }, timeout: t(1));
 

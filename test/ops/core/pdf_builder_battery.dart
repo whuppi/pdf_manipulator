@@ -997,7 +997,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
             ['2', '3'],
           ],
         ),
-        throwsArgumentError,
+        throwsA(isA<PdfInvalidArgument>()),
         reason: 'the second row has 2 cells but the table has 1 column',
       );
       await builder.dispose();
@@ -1063,7 +1063,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
             [PdfTableCell('Saw')],
           ],
         ),
-        throwsArgumentError,
+        throwsA(isA<PdfInvalidArgument>()),
       );
       await builder.dispose();
     }, timeout: t(1));
@@ -1078,7 +1078,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
             [PdfTableCell('Saw', rowSpan: 2)],
           ],
         ),
-        throwsArgumentError,
+        throwsA(isA<PdfInvalidArgument>()),
       );
       await builder.dispose();
     }, timeout: t(1));
@@ -1094,7 +1094,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
             [PdfTableCell('Saw')],
           ],
         ),
-        throwsArgumentError,
+        throwsA(isA<PdfInvalidArgument>()),
         reason:
             'auto sizing needs the sample mode, which streaming '
             'tables reach only through explicit widths',
@@ -1189,7 +1189,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final page = await builder.addA4Page();
       expect(
         () => page.stickyNote('half-placed', x: 100),
-        throwsArgumentError,
+        throwsA(isA<PdfInvalidArgument>()),
         reason: 'a note at x-only has no y to land on',
       );
       await builder.dispose();

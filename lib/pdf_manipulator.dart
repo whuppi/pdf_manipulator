@@ -25,11 +25,6 @@ library;
 
 // Public API
 export 'src/ops/pdf.dart';
-export 'src/ops/pdf_doc.dart';
-export 'src/ops/pdf_editor.dart';
-export 'src/ops/pdf_builder.dart';
-export 'src/ops/pdf_standalone.dart';
-export 'src/ops/pdf_sugar.dart';
 
 // Types
 export 'src/types/errors.dart';
@@ -41,6 +36,7 @@ export 'src/types/pdf_form_field.dart';
 export 'src/types/pdf_image.dart';
 export 'src/types/pdf_image_policy.dart';
 export 'src/types/pdf_image_report.dart';
+export 'src/types/pdf_info.dart';
 export 'src/types/pdf_matrix.dart';
 export 'src/types/pdf_page_image.dart';
 export 'src/types/pdf_page_info.dart';
@@ -48,9 +44,11 @@ export 'src/types/pdf_pages.dart';
 export 'src/types/pdf_params.dart';
 export 'src/types/pdf_rect.dart';
 export 'src/types/pdf_redaction_report.dart';
+export 'src/types/pdf_render.dart' show PdfRenderSize, PdfRenderedPage;
 export 'src/types/pdf_sanitize_options.dart';
 export 'src/types/pdf_signature.dart';
 export 'src/types/pdf_table.dart';
+export 'src/types/pdf_wire.dart';
 export 'src/types/pdf_xfa_info.dart';
 export 'src/types/data_sink.dart';
 export 'src/types/data_source.dart';

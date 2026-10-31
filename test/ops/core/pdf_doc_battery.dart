@@ -12,6 +12,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/pdf_manipulator.dart';
+import 'package:pdf_manipulator/src/types/extracted_image.dart';
 import 'package:test/test.dart';
 
 import '../../fixtures/generated/fixtures.dart';
@@ -387,7 +388,7 @@ void registerDocTests(Pdf Function() createPdf) {
 
     test('extractImages from blank PDF returns empty', () async {
       final doc = await createPdf().open(src(minimalPdf));
-      final images = <PdfImage>[];
+      final images = <ExtractedImage>[];
       await for (final img in doc.extractImages(pages: const PdfPages.all())) {
         images.add(img);
       }
@@ -397,7 +398,7 @@ void registerDocTests(Pdf Function() createPdf) {
 
     test('extractImages finds every foreign-embedded XObject image', () async {
       final doc = await createPdf().open(src(fImages));
-      final images = <PdfImage>[];
+      final images = <ExtractedImage>[];
       await for (final img in doc.extractImages(pages: const PdfPages.all())) {
         images.add(img);
       }

@@ -156,16 +156,18 @@ import 'package:pdf_manipulator/io.dart'; // adds FileSource / FileSink
 final pdf = Pdf();
 
 // read the two PDFs straight from disk
-final firstPdf = FileSource(File('first.pdf'));
-final secondPdf = FileSource(File('second.pdf'));
+final firstPdf = await FileSource.open(File('first.pdf'));
+final secondPdf = await FileSource.open(File('second.pdf'));
 
 // write the result straight to a file
-final output = await FileSink.create(File('merged.pdf'));
+final output = await FileSink.open(File('merged.pdf'));
 
 // the merge call is identical
 await pdf.merge([firstPdf, secondPdf], output);
 
-// flush the file, then dispose it
+// whoever opens a file closes it, then dispose the instance
+await firstPdf.close();
+await secondPdf.close();
 await output.close();
 await pdf.dispose();
 ```

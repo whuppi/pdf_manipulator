@@ -39,7 +39,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final editor = await createPdf().edit(src(minimalPdf));
       await editor.dispose();
       await editor.dispose();
-      expect(() => editor.setTitle('x'), throwsStateError);
+      expect(() => editor.setTitle('x'), throwsA(isA<PdfDisposed>()));
     }, timeout: t(1));
 
     test('isModified false before mutation, true after', () async {
@@ -463,7 +463,7 @@ void registerEditorTests(Pdf Function() createPdf) {
         final rendered = await doc
             .render(
               pages: PdfPages.single(i),
-              size: PdfRenderSize(maxWidth: side, maxHeight: side),
+              size: PdfRenderSize.fit(maxWidth: side, maxHeight: side),
             )
             .single;
         final text = await doc.extract(pages: PdfPages.single(i));
@@ -948,7 +948,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       timeout: t(2),
     );
 
-    test('a deflate level outside 0 to 9 is an ArgumentError', () async {
+    test('a deflate level outside 0 to 9 is a PdfInvalidArgument', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
       for (final level in [-1, 10]) {
@@ -957,7 +957,7 @@ void registerEditorTests(Pdf Function() createPdf) {
             TestSink(),
             options: PdfSaveOptions.fullRewrite(deflateLevel: level),
           ),
-          throwsArgumentError,
+          throwsA(isA<PdfInvalidArgument>()),
         );
       }
       await editor.dispose();

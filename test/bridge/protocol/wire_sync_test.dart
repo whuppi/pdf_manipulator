@@ -269,7 +269,7 @@ void main() {
     };
     final dart = {
       for (final k in WireErrorKind.values)
-        k.index: '${k.name[0].toUpperCase()}${k.name.substring(1)}',
+        k.code: '${k.name[0].toUpperCase()}${k.name.substring(1)}',
     };
     expect(rust, isNotEmpty);
     expect(dart, rust);

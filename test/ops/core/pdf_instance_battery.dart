@@ -90,7 +90,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
     test('operations after instance dispose throw', () async {
       final pdf = createPdf();
       await pdf.dispose();
-      expect(() => pdf.open(src(minimalPdf)), throwsStateError);
+      expect(() => pdf.open(src(minimalPdf)), throwsA(isA<PdfDisposed>()));
     }, timeout: t(1));
 
     // ── Dispose returns quickly ──

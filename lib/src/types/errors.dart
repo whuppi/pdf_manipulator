@@ -26,6 +26,13 @@ class PdfInvalidArgument extends PdfError {
   const PdfInvalidArgument(super.message);
 }
 
+/// A handle, instance, source or sink was used after it was disposed or
+/// closed.
+class PdfDisposed extends PdfError {
+  /// Creates a use-after-dispose error.
+  const PdfDisposed(super.message);
+}
+
 /// A file-system or network I/O error during a PDF operation.
 class PdfIoError extends PdfError {
   /// Creates an I/O error.

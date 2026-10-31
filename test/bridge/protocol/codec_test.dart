@@ -397,7 +397,7 @@ void main() {
             'width': 3.0,
             'height': 4.0,
             'maxLength': 12,
-            'alignment': 1,
+            'alignment': 'center',
             'readOnly': true,
             'required': false,
           },
@@ -415,7 +415,7 @@ void main() {
             'width': 0.0,
             'height': 0.0,
             'maxLength': -1,
-            'alignment': -1,
+            'alignment': '',
             'readOnly': false,
             'required': false,
           },
@@ -604,7 +604,7 @@ void main() {
       expect(args['opacity'], 0.3);
       expect(args['fontSize'], 48);
       expect(args['rotation'], 45);
-      expect(args['layer'], 0);
+      expect(args['layer'], 'foreground');
       expect(args['posType'], 0);
     });
 
@@ -620,10 +620,10 @@ void main() {
         PdfWatermarkLayer.background,
       );
       expect(args['posType'], 1);
-      expect(args['corner'], 1); // topRight index
+      expect(args['corner'], 'topRight');
       expect(args['marginX'], 10);
       expect(args['marginY'], 15);
-      expect(args['layer'], 1); // background
+      expect(args['layer'], 'background');
     });
 
     test('encodeWatermarkArgs tiled position includes columns + rows', () {

@@ -33,4 +33,8 @@ final class MemorySource implements DataSource {
     final end = (offset + count).clamp(start, _bytes.length);
     return Uint8List.sublistView(_bytes, start, end);
   }
+
+  /// Holds nothing to release; the bytes stay readable after [close].
+  @override
+  void close() {}
 }

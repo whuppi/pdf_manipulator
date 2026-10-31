@@ -53,6 +53,9 @@ class DemoSource implements DataSource {
     final end = (offset + count).clamp(0, _data.length);
     return Uint8List.sublistView(_data, offset, end);
   }
+
+  @override
+  void close() {}
 }
 
 /// Collects output chunks; hand the bytes off with [takeBytes].
@@ -60,7 +63,12 @@ class DemoSink implements DataSink {
   final _builder = BytesBuilder(copy: false);
 
   @override
-  void write(Uint8List chunk) => _builder.add(chunk);
+  FutureOr<void> write(Uint8List chunk) {
+    _builder.add(chunk);
+  }
+
+  @override
+  void close() {}
 
   Uint8List takeBytes() => _builder.takeBytes();
   int get length => _builder.length;

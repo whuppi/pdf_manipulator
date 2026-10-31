@@ -15,6 +15,7 @@
 //     allocator check inside the Rust harness would close this gap —
 //     tracked in CAPABILITY_ROADMAP.
 
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/types/data_source.dart';
@@ -53,13 +54,19 @@ class TestSource implements DataSource {
     // before postMessage transfer to avoid detaching the backing buffer.
     return Uint8List.sublistView(_data, offset, end);
   }
+
+  @override
+  void close() {}
 }
 
 class TestSink implements DataSink {
   final _buf = BytesBuilder(copy: false);
 
   @override
-  void write(Uint8List chunk) {
+  FutureOr<void> close() {}
+
+  @override
+  FutureOr<void> write(Uint8List chunk) {
     if (chunk.length > maxWriteChunk) {
       throw StateError(
         'O(1) SINK violation: write received ${chunk.length} bytes '

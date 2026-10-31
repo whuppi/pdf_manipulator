@@ -28,6 +28,7 @@ import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
 import 'package:pdf_manipulator/src/bridge/pdf_transport.dart';
 import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
+import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 
 /// Ops that destroy a handle — their success removes the pin.
@@ -113,7 +114,7 @@ class Router implements PdfTransport {
 
   @override
   Future<PdfIoMode> ensureInitialized() async {
-    if (_disposed) throw StateError('Router disposed');
+    if (_disposed) throw const PdfDisposed('Router disposed');
     _initialized = true;
     return _mode;
   }

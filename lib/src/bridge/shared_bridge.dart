@@ -4,18 +4,21 @@ import 'dart:typed_data';
 import 'package:meta/meta.dart';
 import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
+import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_annotation.dart';
 import 'package:pdf_manipulator/src/types/pdf_attachment.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
+import 'package:pdf_manipulator/src/types/extracted_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/types/pdf_redaction_report.dart';
+import 'package:pdf_manipulator/src/types/pdf_render.dart';
 import 'package:pdf_manipulator/src/types/pdf_sanitize_options.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
 import 'package:pdf_manipulator/src/types/pdf_table.dart';
@@ -172,7 +175,7 @@ class SharedBridge extends PdfBridge {
     EngineOp.convertTo,
     {
       'sourceLength': source.length,
-      'format': format.name,
+      'format': codec.putEnum(format),
       'password': password,
     },
     sources: [source],
@@ -198,7 +201,7 @@ class SharedBridge extends PdfBridge {
     required PdfDocumentFormat format,
   }) => _exec(
     EngineOp.convertToPdf,
-    {'sourceLength': document.length, 'format': format.name},
+    {'sourceLength': document.length, 'format': codec.putEnum(format)},
     sources: [document],
     sinks: [output],
   );
@@ -246,16 +249,22 @@ class SharedBridge extends PdfBridge {
       (i) => start + i,
     ),
   };
-
-  String _encodeExtractionFormat(PdfExtractionFormat format) =>
-      switch (format) {
-        PdfExtractionFormat.auto => 'auto',
-        PdfExtractionFormat.text => 'text',
-        PdfExtractionFormat.markdown => 'markdown',
-        PdfExtractionFormat.html => 'html',
-        PdfExtractionFormat.plainText => 'plainText',
-      };
 }
+
+/// The `render` request fields a [PdfRenderSize] stands for. No size is the
+/// engine's default; a dpi size has no wire form until the render wire
+/// carries it.
+Map<String, Object?> _renderSizeArgs(PdfRenderSize? size) => switch (size) {
+  null => const {},
+  PdfRenderFit(:final maxWidth, :final maxHeight) => {
+    'maxWidth': maxWidth,
+    'maxHeight': maxHeight,
+  },
+  PdfRenderThumbnail(:final size) => {'maxWidth': size, 'maxHeight': size},
+  PdfRenderDpi() => throw const PdfUnsupported(
+    'PdfRenderSize.dpi is not wired into render yet',
+  ),
+};
 
 // ── O(1)-memory framed sink for streaming ops ──────────────────────
 
@@ -308,10 +317,13 @@ class _FrameCollectorSink implements DataSink {
   final void Function(Uint8List frame) _onFrame;
 
   @override
-  void write(Uint8List chunk) {
+  FutureOr<void> write(Uint8List chunk) {
     _buffer.add(chunk);
     _parseFrames();
   }
+
+  @override
+  void close() {}
 
   void _parseFrames() {
     while (true) {

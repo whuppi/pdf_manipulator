@@ -5,30 +5,14 @@
 // Read-only — no mutations here. Use PdfEditor for mutations,
 // PdfStandalone for one-shot export ops.
 
-import 'package:pdf_manipulator/src/ops/pdf.dart';
-import 'package:pdf_manipulator/src/types/data_sink.dart';
-import 'package:pdf_manipulator/src/types/errors.dart';
-import 'package:pdf_manipulator/src/types/pdf_annotation.dart';
-import 'package:pdf_manipulator/src/types/pdf_attachment.dart';
-import 'package:pdf_manipulator/src/types/pdf_enums.dart';
-import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
-import 'package:pdf_manipulator/src/types/pdf_task.dart';
-import 'package:pdf_manipulator/src/types/pdf_image.dart';
-import 'package:pdf_manipulator/src/types/pdf_page_info.dart';
-import 'package:pdf_manipulator/src/types/pdf_pages.dart';
-import 'package:pdf_manipulator/src/types/pdf_params.dart';
-import 'package:pdf_manipulator/src/types/pdf_signature.dart';
-import 'package:pdf_manipulator/src/types/pdf_xfa_info.dart';
-import 'package:pdf_manipulator/src/types/search_result.dart';
-import 'package:pdf_manipulator/src/bridge/pdf_bridge.dart';
-import 'package:pdf_manipulator/src/keep/record_use_shim.dart';
+part of 'pdf.dart';
 
 /// A parsed PDF document — live handle to the Rust engine.
 ///
 /// Created by [Pdf.open]. The document is parsed once and stays in
 /// memory until [dispose] is called. All read operations reuse the
 /// already-parsed structure — no re-opening.
-class PdfDoc {
+base class PdfDoc extends PdfReads implements _Handle {
   /// Internal constructor — use [Pdf.open] to create instances.
   PdfDoc.internal(
     this._handle, {
@@ -47,7 +31,9 @@ class PdfDoc {
     this.isTagged = false,
     this.encryptionAlgorithm,
     this.permissions,
-  });
+  }) : super._() {
+    HandleBackstop.attach(this, 'PdfDoc', _handle.dispose);
+  }
 
   final BridgeDocHandle _handle;
   bool _disposed = false;
@@ -100,8 +86,14 @@ class PdfDoc {
   /// Permission flags, if the document is encrypted.
   final PdfPermissions? permissions;
 
+  @override
+  PdfTask<T> _run<T>(PdfTask<T> Function(BridgeDocHandle handle) read) {
+    _check();
+    return read(_handle);
+  }
+
   void _check() {
-    if (_disposed) throw StateError('This PdfDoc has been disposed');
+    if (_disposed) throw const PdfDisposed('This PdfDoc has been disposed');
   }
 
   // ── Read operations (reuse the already-parsed document) ──
@@ -114,16 +106,6 @@ class PdfDoc {
     KeepRecord.op('extract');
     _check();
     return _handle.extract(pages: pages, format: format);
-  }
-
-  /// Searches for [query] text across the specified [pages].
-  PdfTask<List<SearchResult>> search({
-    required String query,
-    required PdfPages pages,
-  }) {
-    KeepRecord.op('extract');
-    _check();
-    return _handle.search(query: query, pages: pages);
   }
 
   /// Renders the specified [pages] as rasterized images.
@@ -140,7 +122,7 @@ class PdfDoc {
   /// Extracts embedded images from the specified [pages].
   ///
   /// Delivery order and cancellation are those of [render].
-  Stream<PdfImage> extractImages({required PdfPages pages}) {
+  Stream<ExtractedImage> extractImages({required PdfPages pages}) {
     _check();
     return _handle.extractImages(pages: pages);
   }
@@ -255,9 +237,11 @@ class PdfDoc {
   // ── Lifecycle ──
 
   /// Releases the parsed document handle. Idempotent.
+  @override
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    HandleBackstop.detach(this);
     await _handle.dispose();
   }
 }

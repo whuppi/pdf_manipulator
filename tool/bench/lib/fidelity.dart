@@ -121,7 +121,7 @@ PdfRenderSize _sizeFor(PdfPageInfo page, int dpi) {
   // The box is square on the longer side, so a rotated page is scaled by
   // the same factor as an upright one.
   final side = (math.max(page.width, page.height) * dpi / 72).ceil();
-  return PdfRenderSize(maxWidth: side, maxHeight: side);
+  return PdfRenderSize.fit(maxWidth: side, maxHeight: side);
 }
 
 Future<Uint8List> _render(PdfDoc doc, int page, PdfRenderSize size) async {

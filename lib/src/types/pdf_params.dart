@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
+import 'package:pdf_manipulator/src/types/pdf_wire.dart';
 
 /// RGB color for watermarks and annotations.
 class PdfColor {
@@ -222,8 +223,8 @@ class PdfSaveFullRewrite extends PdfSaveOptions {
   final bool objectStreams;
 
   /// The zlib level, 0 (stored) to 9 (smallest), of every stream the save
-  /// deflates. Saving with a level outside that range throws an
-  /// [ArgumentError].
+  /// deflates. Saving with a level outside that range throws a
+  /// [PdfInvalidArgument].
   final int deflateLevel;
 
   /// Whether to write one copy of each set of identical image XObjects,
@@ -370,42 +371,37 @@ class PdfWatermarkExact extends PdfWatermarkPosition {
 }
 
 /// Which corner to anchor a watermark.
-enum PdfCorner {
+enum PdfCorner implements PdfWire {
   /// Top-left corner.
-  topLeft,
+  topLeft('topLeft'),
 
   /// Top-right corner.
-  topRight,
+  topRight('topRight'),
 
   /// Bottom-left corner.
-  bottomLeft,
+  bottomLeft('bottomLeft'),
 
   /// Bottom-right corner.
-  bottomRight,
+  bottomRight('bottomRight');
+
+  const PdfCorner(this.wire);
+
+  @override
+  final String wire;
 }
 
 /// Whether the watermark renders above or below page content.
-enum PdfWatermarkLayer {
+enum PdfWatermarkLayer implements PdfWire {
   /// Renders on top of page content (annotation-based). Default.
-  foreground,
+  foreground('foreground'),
 
   /// Renders behind page content (content-stream, prepended in painting order).
-  background,
-}
+  background('background');
 
-/// Output size constraint for rendering.
-class PdfRenderSize {
-  /// Creates a render size constraint.
-  const PdfRenderSize({required this.maxWidth, required this.maxHeight});
+  const PdfWatermarkLayer(this.wire);
 
-  /// Creates a square thumbnail constraint.
-  const PdfRenderSize.thumbnail(int size) : maxWidth = size, maxHeight = size;
-
-  /// Maximum output width in pixels.
-  final int maxWidth;
-
-  /// Maximum output height in pixels.
-  final int maxHeight;
+  @override
+  final String wire;
 }
 
 /// Signing credentials — PKCS#12 bundle or separate PEM cert + key.

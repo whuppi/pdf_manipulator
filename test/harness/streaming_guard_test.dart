@@ -55,16 +55,16 @@ void main() {
   });
 
   group('TestSink guard', () {
-    test('accepts writes up to the 256KB chunk limit', () {
+    test('accepts writes up to the 256KB chunk limit', () async {
       final sink = TestSink();
-      sink.write(Uint8List(maxWriteChunk));
+      await sink.write(Uint8List(maxWriteChunk));
       expect(sink.length, maxWriteChunk);
     });
 
-    test('throws on a write past the chunk limit', () {
+    test('throws on a write past the chunk limit', () async {
       final sink = TestSink();
-      expect(
-        () => sink.write(Uint8List(maxWriteChunk + 1)),
+      await expectLater(
+        () async => sink.write(Uint8List(maxWriteChunk + 1)),
         throwsStateError,
         reason:
             'a full-output dump is exactly the regression this '
@@ -72,10 +72,10 @@ void main() {
       );
     });
 
-    test('takeBytes concatenates chunks in write order', () {
+    test('takeBytes concatenates chunks in write order', () async {
       final sink = TestSink();
-      sink.write(Uint8List.fromList([1, 2]));
-      sink.write(Uint8List.fromList([3]));
+      await sink.write(Uint8List.fromList([1, 2]));
+      await sink.write(Uint8List.fromList([3]));
       expect(sink.takeBytes(), [1, 2, 3]);
     });
   });

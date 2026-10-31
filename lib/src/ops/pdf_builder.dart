@@ -4,27 +4,22 @@
 // Construction only — no reading or querying existing PDFs.
 // Use PdfDoc for read queries, PdfEditor for mutations on existing PDFs.
 
-import 'package:pdf_manipulator/src/ops/pdf.dart';
-import 'package:pdf_manipulator/src/types/data_sink.dart';
-import 'package:pdf_manipulator/src/types/data_source.dart';
-import 'package:pdf_manipulator/src/types/errors.dart';
-import 'package:pdf_manipulator/src/types/pdf_task.dart';
-import 'package:pdf_manipulator/src/bridge/pdf_bridge.dart';
-import 'package:pdf_manipulator/src/types/pdf_enums.dart';
-import 'package:pdf_manipulator/src/types/pdf_params.dart';
-import 'package:pdf_manipulator/src/types/pdf_rect.dart';
-import 'package:pdf_manipulator/src/types/pdf_table.dart';
+part of 'pdf.dart';
 
 /// Creates PDFs from scratch — add pages with content, then save.
-class PdfBuilder {
+class PdfBuilder implements _Handle {
   /// Internal constructor — use [Pdf.build] to create instances.
-  PdfBuilder.internal(PdfBridge _, this._handle);
+  PdfBuilder.internal(PdfBridge _, this._handle) {
+    HandleBackstop.attach(this, 'PdfBuilder', _handle.dispose);
+  }
 
   final BridgeBuilderHandle _handle;
   bool _disposed = false;
 
   void _check() {
-    if (_disposed) throw StateError('This PdfBuilder has been disposed');
+    if (_disposed) {
+      throw const PdfDisposed('This PdfBuilder has been disposed');
+    }
   }
 
   // ── Metadata ──
@@ -91,9 +86,11 @@ class PdfBuilder {
   // ── Lifecycle ──
 
   /// Releases builder resources. Idempotent.
+  @override
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    HandleBackstop.detach(this);
     await _handle.dispose();
   }
 }
@@ -295,7 +292,7 @@ class PdfPageBuilder {
       _handle.squiggly(color: color);
 
   /// Adds a sticky note with [text] at the cursor, or at ([x], [y]) when
-  /// both are set. Throws [ArgumentError] when exactly one coordinate
+  /// both are set. Throws [PdfInvalidArgument] when exactly one coordinate
   /// is set.
   PdfTask<void> stickyNote(String text, {double? x, double? y}) =>
       _handle.stickyNote(text, x: x, y: y);
@@ -331,7 +328,7 @@ class PdfPageBuilder {
       _handle.imageArtifact(imageData, rect);
 
   /// Lays out [rows] as a table under [columns]; a row shorter or
-  /// longer than [columns] throws [ArgumentError] before anything is
+  /// longer than [columns] throws [PdfInvalidArgument] before anything is
   /// sent.
   PdfTask<void> table(
     List<PdfTableColumn> columns,
@@ -342,7 +339,7 @@ class PdfPageBuilder {
   /// Lays out [rows] as a streaming table under [columns] with
   /// [sizing]; every column needs an explicit width, every row one cell
   /// per column, and every [PdfTableCell.rowSpan] must lie within
-  /// [maxRowSpan]: any other table throws [ArgumentError] before
+  /// [maxRowSpan]: any other table throws [PdfInvalidArgument] before
   /// anything is sent.
   PdfTask<void> streamingTable(
     List<PdfTableColumn> columns,

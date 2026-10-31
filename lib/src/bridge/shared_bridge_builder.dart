@@ -65,25 +65,6 @@ class _SharedBuilderHandle extends BridgeBuilderHandle {
 // Page builder handle
 // ══════════════════════════════════════════════════════════════════
 
-/// The stamp-type names the engine's WASM-party `parse_wasm_stamp_type`
-/// accepts, one per `PdfStampType` value.
-String stampWireName(PdfStampType type) => switch (type) {
-  PdfStampType.approved => 'Approved',
-  PdfStampType.experimental => 'Experimental',
-  PdfStampType.notApproved => 'NotApproved',
-  PdfStampType.asIs => 'AsIs',
-  PdfStampType.expired => 'Expired',
-  PdfStampType.notForPublicRelease => 'NotForPublicRelease',
-  PdfStampType.confidential => 'Confidential',
-  PdfStampType.final_ => 'Final',
-  PdfStampType.sold => 'Sold',
-  PdfStampType.departmental => 'Departmental',
-  PdfStampType.forComment => 'ForComment',
-  PdfStampType.topSecret => 'TopSecret',
-  PdfStampType.draft => 'Draft',
-  PdfStampType.forPublicRelease => 'ForPublicRelease',
-};
-
 class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
   _SharedPageBuilderHandle(this._bridge, this._handleId);
   final SharedBridge _bridge;
@@ -220,7 +201,7 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
   }) => _op(PageOp.textInRect, {
     ...codec.encodeRectArgs(rect),
     'text': text,
-    'align': align.index,
+    'align': codec.putEnum(align),
   });
   @override
   PdfTask<void> rect(PdfRect rect) =>
@@ -282,14 +263,14 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
   @override
   PdfTask<void> stickyNote(String text, {double? x, double? y}) {
     if ((x == null) != (y == null)) {
-      throw ArgumentError('stickyNote takes x and y together or neither');
+      throw PdfInvalidArgument('stickyNote takes x and y together or neither');
     }
     return _op(PageOp.stickyNote, {'text': text, 'x': x, 'y': y});
   }
 
   @override
   PdfTask<void> stamp(PdfStampType type) =>
-      _op(PageOp.stamp, {'stampType': stampWireName(type)});
+      _op(PageOp.stamp, {'stampType': codec.putEnum(type)});
   @override
   PdfTask<void> freeText(PdfRect rect, String text) =>
       _op(PageOp.freeText, {...codec.encodeRectArgs(rect), 'text': text});
@@ -328,7 +309,7 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
   }) {
     for (var i = 0; i < rows.length; i++) {
       if (rows[i].length != columns.length) {
-        throw ArgumentError(
+        throw PdfInvalidArgument(
           'table row $i has ${rows[i].length} cells but the table has '
           '${columns.length} columns',
         );
@@ -337,7 +318,7 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
     return _op(PageOp.table, {
       'headers': columns.map((c) => c.header).toList(),
       'widths': columns.map((c) => c.width ?? -1.0).toList(),
-      'aligns': columns.map((c) => c.align.index).toList(),
+      'aligns': codec.putEnums(columns.map((c) => c.align)),
       'cells': [for (final row in rows) ...row],
       'columnCount': columns.length,
       'hasHeader': hasHeader,
@@ -357,7 +338,7 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
   }) {
     for (final column in columns) {
       if (column.width == null) {
-        throw ArgumentError(
+        throw PdfInvalidArgument(
           'streamingTable requires an explicit width on every column; '
           '"${column.header}" has none',
         );
@@ -365,14 +346,14 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
     }
     for (final row in rows) {
       if (row.length != columns.length) {
-        throw ArgumentError(
+        throw PdfInvalidArgument(
           'streamingTable rows need one cell per column: a row has '
           '${row.length} cells for ${columns.length} columns',
         );
       }
       for (final cell in row) {
         if (cell.rowSpan < 1 || cell.rowSpan > maxRowSpan) {
-          throw ArgumentError(
+          throw PdfInvalidArgument(
             'streamingTable cell "${cell.text}" spans ${cell.rowSpan} rows; '
             'rowSpan must be 1 to maxRowSpan ($maxRowSpan)',
           );
@@ -382,7 +363,7 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
     return _op(PageOp.streamingTable, {
       'headers': columns.map((c) => c.header).toList(),
       'widths': columns.map((c) => c.width!).toList(),
-      'aligns': columns.map((c) => c.align.index).toList(),
+      'aligns': codec.putEnums(columns.map((c) => c.align)),
       'cells': [for (final row in rows) ...row.map((c) => c.text)],
       'rowSpans': [for (final row in rows) ...row.map((c) => c.rowSpan)],
       'columnCount': columns.length,

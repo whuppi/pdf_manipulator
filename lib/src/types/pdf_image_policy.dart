@@ -1,4 +1,5 @@
 import 'package:meta/meta.dart';
+import 'package:pdf_manipulator/src/types/pdf_wire.dart';
 
 /// How far `PdfEditor.reduceImages` may go.
 ///
@@ -122,13 +123,18 @@ class PdfImagePolicy {
 /// [auto] follows quality: 4:2:0 below 90, 4:4:4 from 90. The `print`
 /// preset pins [full], because printed text and hard colour edges show
 /// chroma smearing that a screen hides.
-enum PdfChromaSubsampling {
+enum PdfChromaSubsampling implements PdfWire {
   /// 4:4:4 when `jpegQuality` is 90 or more, 4:2:0 below.
-  auto,
+  auto('auto'),
 
   /// 4:4:4 — every colour sample kept; text and hard colour edges stay crisp.
-  full,
+  full('full'),
 
   /// 4:2:0 — colour at half resolution both ways; smallest, fine for photos.
-  half,
+  half('half');
+
+  const PdfChromaSubsampling(this.wire);
+
+  @override
+  final String wire;
 }

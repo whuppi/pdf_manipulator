@@ -1,15 +1,22 @@
 // Table types for the builder's table ops.
 
+import 'package:pdf_manipulator/src/types/pdf_wire.dart';
+
 /// Horizontal alignment of a table column's text.
-enum PdfCellAlign {
+enum PdfCellAlign implements PdfWire {
   /// Align to the left edge.
-  left,
+  left('left'),
 
   /// Center horizontally.
-  center,
+  center('center'),
 
   /// Align to the right edge.
-  right,
+  right('right');
+
+  const PdfCellAlign(this.wire);
+
+  @override
+  final String wire;
 }
 
 /// A table column with a header, optional width and cell alignment.
@@ -49,7 +56,7 @@ class PdfTableCell {
 }
 
 /// How a streaming table sizes its columns.
-enum PdfTableSizing {
+enum PdfTableSizing implements PdfWire {
   /// No measuring — columns use their explicit widths.
   fixed('fixed'),
 
@@ -62,6 +69,6 @@ enum PdfTableSizing {
 
   const PdfTableSizing(this.wire);
 
-  /// The wire-mode string the engine's table config expects.
+  @override
   final String wire;
 }
