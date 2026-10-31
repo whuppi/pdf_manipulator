@@ -269,7 +269,7 @@ compile-natives:
 # make test-ops-opfs     Ops: web OPFS.
 # make test-ops-jspi     Ops: web JSPI.
 # make test-ops-atomics  Ops: web Atomics.
-# make test-rust         cargo tests for both vendored crates.
+# make test-rust         cargo tests for the three vendored crates.
 
 test: fixtures test-unit test-ops test-memory
 
@@ -313,13 +313,13 @@ test-ops-atomics: $(WASM_OUT)
 	@mkdir -p $(TEST_RESULTS_DIR)
 	$(DART) test $(TIMEOUT) test/ops/runners/web_atomics_runner_test.dart -p chrome-coi --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-atomics.json
 
-# Rust unit + integration tests for both vendored crates. Most of the
+# Rust unit + integration tests for the three vendored crates. Most of the
 # engine's tests sit behind features we don't ship (ml / ocr / fips /
 # python / wasm), which need ONNX / pdfium / Python / a wasm target and
 # can't run natively here. pdf_oxide reuses build.json's native feature
 # set — the SAME source the build and analyze read — plus test-support,
 # so a feature added to build.json is tested automatically; office_oxide
-# runs default.
+# and tiny_skia (with its path crate) run default.
 #
 # Debug symbols dominate Rust test-binary size — a stock CI runner can't hold
 # the full-debug build of both crates' test suites even after the free-disk
@@ -393,6 +393,9 @@ test-rust:
 	@echo "=== Rust: office_oxide ==="
 	$(CARGO) nextest run --no-fail-fast --manifest-path vendor/office_oxide/Cargo.toml
 	$(CARGO) test --doc --manifest-path vendor/office_oxide/Cargo.toml
+	@echo "=== Rust: tiny_skia ==="
+	$(CARGO) nextest run --no-fail-fast --workspace --manifest-path vendor/tiny_skia/Cargo.toml
+	$(CARGO) test --doc --workspace --manifest-path vendor/tiny_skia/Cargo.toml
 
 # ═══════════════════════════════════════════════════════════════════
 # § 6 — Integration tests (example app)
@@ -552,9 +555,9 @@ verify-web:
 # ═══════════════════════════════════════════════════════════════════
 #
 # make clean   Full clean — Dart build-hook artifacts, test results, and
-#              both vendored crates' cargo target/ (the bulk of the disk
+#              the three vendored crates' cargo target/ (the bulk of the disk
 #              use). Run deliberately; the next build recompiles fresh.
 
 clean:
 	rm -rf .dart_tool/hooks_runner/ .dart_tool/lib/ .dart_tool/native_assets/ build_output/ test-results/
-	rm -rf vendor/pdf_oxide/target/ vendor/office_oxide/target/
+	rm -rf vendor/pdf_oxide/target/ vendor/office_oxide/target/ vendor/tiny_skia/target/

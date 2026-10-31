@@ -162,5 +162,8 @@ check_rust_warnings "$PKG_ROOT/vendor/pdf_oxide" "$WASM_FEATURES" \
 echo "=== Rust: check office_oxide warnings ==="
 check_rust_warnings "$PKG_ROOT/vendor/office_oxide" "" ""
 
+echo "=== Rust: check tiny_skia warnings ==="
+check_rust_warnings "$PKG_ROOT/vendor/tiny_skia" "" ""
+
 echo ""
 echo "=== All analysis passed ==="

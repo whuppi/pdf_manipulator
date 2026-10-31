@@ -7,28 +7,35 @@ For capability status see [`CAPABILITY_ROADMAP.md`](CAPABILITY_ROADMAP.md).
 
 ## Vendored forks
 
-Two git submodules, each a fork of the upstream repo with a named
+Three git submodules, each a fork of the upstream repo with a named
 patch branch.
 
 | Crate | Upstream | Fork | Branch | Base tag | Submodule |
 |---|---|---|---|---|---|
 | pdf_oxide | [`yfedoseev/pdf_oxide`](https://github.com/yfedoseev/pdf_oxide) | [`whuppi/pdf_oxide`](https://github.com/whuppi/pdf_oxide) | `pdf_manipulator/0.3.78-patches` | `v0.3.78` | `vendor/pdf_oxide/` |
 | office_oxide | [`yfedoseev/office_oxide`](https://github.com/yfedoseev/office_oxide) | [`whuppi/office_oxide`](https://github.com/whuppi/office_oxide) | `office_kit/0.1.11-patches` | `v0.1.11` | `vendor/office_oxide/` |
+| tiny-skia | [`linebender/tiny-skia`](https://github.com/linebender/tiny-skia) | [`whuppi/tiny-skia`](https://github.com/whuppi/tiny-skia) | `pdf_manipulator/0.12.0-patches` | `v0.12.0` | `vendor/tiny_skia/` |
 
 **Terms used in this doc:**
 
 | Term | Means |
 |---|---|
-| upstream | The project our fork tracks: `yfedoseev/pdf_oxide` (and `yfedoseev/office_oxide`). Its git remote in the submodule is `upstream`. We never change it; S1 takes its releases into our fork. |
-| our fork | `whuppi/pdf_oxide` (and `whuppi/office_oxide`), the git remote `origin`. Every change we make to the engine is a commit on our fork's patch branch. |
+| upstream | The project our fork tracks: `yfedoseev/pdf_oxide` (and `yfedoseev/office_oxide`, `linebender/tiny-skia`). Its git remote in the submodule is `upstream`. We never change it; S1 takes its releases into our fork. |
+| our fork | `whuppi/pdf_oxide` (and `whuppi/office_oxide`, `whuppi/tiny-skia`), the git remote `origin`. Every change we make to the engine is a commit on our fork's patch branch. |
 | upstream code | A file in our fork that came from upstream. We change it only between patch markers (S2), so S1 can rebase our patches onto the next upstream release. |
-| fork-only code | `src/host/` in our fork. Upstream has no such folder, so it needs no markers and S1 never rebases it. |
+| fork-only code | `src/host/` in our fork (pdf_oxide only). Upstream has no such folder, so it needs no markers and S1 never rebases it. tiny-skia has no fork-only folder: every file of it is upstream code. |
 
 No recipe here sends a change upstream. Contributing to upstream is a
 separate, optional choice of the maintainer.
 
-pdf_oxide depends on office_oxide as a path dependency
-(`office_oxide = { path = "../office_oxide" }`).
+pdf_oxide depends on office_oxide and tiny-skia as path dependencies
+(`office_oxide = { path = "../office_oxide" }`,
+`tiny-skia = { path = "../tiny_skia" }`, which builds its `path/`
+sub-crate `tiny-skia-path` from the same submodule). Page rendering needs
+the tiny-skia fork because a page is painted in bands of rows and the
+bands must give the bytes of the whole page: a vertical clip advances an
+edge instead of chopping it, and gradients do not depend on the band
+origin.
 wasm-bindgen + wasm-opt run as library calls inside the fork's
 `bindgen_runner` workspace crate, version-pinned by the same
 `vendor/pdf_oxide/Cargo.lock` as the engine's wasm-bindgen dependency
@@ -47,7 +54,9 @@ to a new upstream `vX.Y.Z`:
    CI actually uses; it MUST equal the branch's version
 3. the **Branch** and **Base tag** columns in the table above
 
-office_oxide is the same, under its own branch name and `v0.1.11`.
+office_oxide is the same, under its own branch name and `v0.1.11`. tiny-skia
+is the same, under `pdf_manipulator/X.Y.Z-patches` and its own tag (`v0.12.0`);
+it has no `build.json` entry.
 
 ### The fork contract
 
@@ -222,6 +231,57 @@ git add vendor/pdf_oxide web_assets/
 git commit -m "build: sync upstream vNEW + rebuild WASM"
 ```
 
+### What the tiny-skia fork changes
+
+A `Pixmap` or `Mask` has an `origin`: the position of its top-left pixel in
+a larger device plane. Everything drawn into it is given in the plane's
+coordinates and is mapped by the caller's transform in full; the origin is
+removed afterwards in whole pixels (in fixed point for edges, as an integer
+added to the pixel row for shaders, as a blitter offset for rects). The
+page renderer paints a page as bands, each a pixmap with an origin, so a
+band holds the bytes the whole page holds. The same machinery carries
+`DrawTiler`'s tiles (sub-windows, nothing translated by a float).
+
+The patch also cuts a vertical clip differently: an edge is not chopped at
+the top or bottom of the window, its scan is advanced to the first visible
+row (`Edge::advance_to`). The exactness has these limits, stated so a
+change in a caller is not a surprise:
+
+- A window must span the columns of the raster. The sides of a path are
+  still chopped at the window's columns, so a narrower window can differ
+  from the same columns of the whole.
+- An edge that runs more than `rows_of_reach` rows (at most 4096) past the
+  window is chopped there, because the scan's fixed point holds 8191 rows.
+- A rect fill goes through the rect path only while the plane is within
+  32767 pixels, and through the path fill beyond.
+- Coordinates beyond `i32` fixed point (8.3 million pixels) saturate, as
+  they did.
+- A non-anti-aliased hairline is still chopped at the window's rows.
+
+The conventions of the upstream tests that changed are in the notes above
+them in `tests/integration/`.
+
+### S1 for tiny-skia
+
+The same routine, run in `vendor/tiny_skia`, with these differences:
+
+- the tag is `vNEW` of `linebender/tiny-skia` and the branch is
+  `pdf_manipulator/NEW-patches`;
+- the default-branch step names the fork: `gh api -X PATCH
+  repos/whuppi/tiny-skia -f default_branch=pdf_manipulator/NEW-patches`,
+  run before the old branch is deleted;
+- step 3 runs the fork's own tests as well (`make test-rust` runs
+  `cargo nextest run --workspace` in `vendor/tiny_skia`), because the
+  fork carries tests of its own (S2);
+- the rebase carries the README notice at the top of `README.md`; it is a
+  patch block like any other;
+- `pdf_oxide` needs no change: its path dependency has no version to
+  bump, but check that `tiny-skia`'s own version still satisfies what
+  `pdf_oxide` uses of its API, and let cargo refresh
+  `vendor/pdf_oxide/Cargo.lock`;
+- there is no `build.json` entry; the base tag lives in the table above
+  and in the branch name.
+
 ---
 
 ## S2 — Edit patches
@@ -256,7 +316,16 @@ saved bytes, per ARCHITECTURE.md's testing section). When the engine bug
 needs a PDF that no other writer makes, add a fixture to
 `test/fixtures/handwritten.dart`.
 
-Upstream code and `tests/` never get a test of ours. Every S1 rebase
+tiny-skia is the one exception: it has no fork-only folder, and its
+patch (a pixmap that shows a window of a larger plane) can only be proved
+at the level of its own pixels, so the fork carries tests of its own, in
+its `tests/` and in test modules of its `src/`, each between patch
+markers (`tests/windows.rs` is the proof; the three goldens it changed
+carry a note). `tool/check_fork_tests.sh` leaves tiny-skia outside the
+wall, and `make test-rust` runs its tests. Every rebase carries them, as
+for any patch.
+
+Upstream code and `tests/` never get a test of ours (in pdf_oxide). Every S1 rebase
 has to carry such a test onto the next base tag, and the patch markers
 do not list it, so nobody sees what it costs.
 
@@ -546,7 +615,7 @@ Last match wins (gitignore semantics): the release/config paths override the def
 4. Diffs against the base tag to find lines we changed
 5. Fails if any warning falls inside our changed lines
 
-Checks both `vendor/pdf_oxide` and `vendor/office_oxide`.
+Checks `vendor/pdf_oxide`, `vendor/office_oxide` and `vendor/tiny_skia`.
 
 ```sh
 make analyze

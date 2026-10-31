@@ -3,7 +3,8 @@
 # the fork changed in upstream code, so they must pair.
 #
 # Walks every tracked or new file of vendor/pdf_oxide outside src/host/ (which
-# is fork-only and carries no markers) and fails with file:line on:
+# is fork-only and carries no markers) and of vendor/tiny_skia (all of it is
+# upstream code), and fails with file:line on:
 #   - an end marker with no open marker before it
 #   - an open marker never closed
 #   - an open marker inside an open one (blocks do not nest)
@@ -18,8 +19,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-dir=vendor/pdf_oxide
-[ -d "$dir" ] || exit 0
+status=0
+for dir in vendor/pdf_oxide vendor/tiny_skia; do
+[ -d "$dir" ] || continue
 
 git -C "$dir" ls-files --cached --others --exclude-standard -z \
   | python3 -I -c '
@@ -29,7 +31,7 @@ import sys
 OPEN = re.compile(r"^\s*((//|#)[ \t]*── pdf_manipulator patch(:| ──|$)|<!--[ \t]*── pdf_manipulator patch(:[^>]*)? ──[ \t]*-->\s*$)")
 CLOSE = re.compile(r"^\s*((//|#)[ \t]*── end pdf_manipulator patch ──|<!--[ \t]*── end pdf_manipulator patch ──[ \t]*-->)\s*$")
 PHRASE = "pdf_manipulator patch"
-ROOT = "vendor/pdf_oxide/"
+ROOT = sys.argv[1] + "/"
 
 bad = 0
 
@@ -44,7 +46,7 @@ for path in sys.stdin.buffer.read().split(b"\0"):
     if not path:
         continue
     path = path.decode()
-    if path.startswith("src/host/"):
+    if path.startswith("src/host/") and ROOT == "vendor/pdf_oxide/":
         continue
     try:
         with open(ROOT + path, encoding="utf-8") as f:
@@ -72,4 +74,6 @@ for path in sys.stdin.buffer.read().split(b"\0"):
 if bad:
     print(f"{bad} patch marker violation(s)")
     sys.exit(1)
-'
+' "$dir" || status=1
+done
+exit "$status"

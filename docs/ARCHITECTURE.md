@@ -45,7 +45,7 @@ Eight load-bearing guarantees. Every architectural decision serves one.
 
 8. **Patches are marked.** Every change to a vendored upstream file is
    wrapped in a boundary comment (`── pdf_manipulator patch ──` in
-   pdf_oxide, `── office_kit patch ──` in office_oxide), so upstream
+   pdf_oxide and tiny-skia, `── office_kit patch ──` in office_oxide), so upstream
    merges stay clean.
 
 ---
@@ -291,7 +291,8 @@ tool/                                       ← .sh = orchestration wrappers; .d
 
 vendor/
 ├── pdf_oxide/                              ← forked yfedoseev/pdf_oxide (submodule)
-└── office_oxide/                           ← forked yfedoseev/office_oxide (submodule)
+├── office_oxide/                           ← forked yfedoseev/office_oxide (submodule)
+└── tiny_skia/                              ← forked linebender/tiny-skia (submodule; the page rasteriser)
 
 vendor/pdf_oxide/src/
 ├── host/                                   ← OUR CODE
@@ -1076,7 +1077,7 @@ this table summarizes what each patched file carries and why.
 
 | File | What the patches carry |
 |---|---|
-| `Cargo.toml` | `native-bridge` deps + `office_oxide` as path dependency |
+| `Cargo.toml` | `native-bridge` deps + `office_oxide` and `tiny-skia` as path dependencies |
 | `lib.rs` | The shared widget-appearance regeneration helpers, the `pdfa` gate, the two `public-api` gates, `pub mod host;` |
 | `document.rs` | External reader variant + `from_external_reader()` (reads the source through a 64KB window; parsed objects live in a cache bounded at 8 MiB), info/encryption/permissions accessors, `collect_refs_of()` (zero-clone GC), streaming `to_docx/pptx/xlsx_writer_flow()`, scan-all `/Subtype` Form detection, raw source access for the incremental save (`source_len`, `read_source_at`, `header_offset`, `xref_repaired`, `object_generation`), the loader that reads an object through a growing window (a stream is its dictionary and an extent, `/Length` verified against `endstream` or repaired by a windowed scan, no size limit), `stream_head()` over `load_object()`, `reopen()` and `source_bytes_whole()` in place of the `source_bytes` field |
 | `object.rs` + `objstm.rs` | `StreamBody::{Inline, Extent}`: an `Extent` is a window onto its document's bytes (`Source`) that decrypts itself when read (`raw_reader`, `read_whole_raw`, `decrypted_len`); `decode_stream_data()` is the one named whole read of decoded bytes; `parse_object_stream` and `decode_object_stream` take no decryption closure |
@@ -1105,6 +1106,27 @@ Branch `office_kit/0.1.11-patches`. Marked with `── office_kit patch ──`
 | 10 other files | `Write + Seek` → `Write` bounds throughout |
 
 Everything in `src/host/` is entirely ours — no patch markers needed.
+
+### tiny-skia — a pixmap that is a window
+
+Branch `pdf_manipulator/0.12.0-patches`. Marked with `── pdf_manipulator patch ──`;
+every file of it is upstream code, so every change is between markers.
+
+The page renderer paints a page in bands (2 MiB of raster at a time), and a
+band must hold the bytes the whole page holds. A band is a `Pixmap` with an
+`origin`; drawing is in the page's coordinates and the origin leaves after the
+float mapping, in whole pixels.
+
+| File | Patch |
+|---|---|
+| `pixmap.rs`, `mask.rs` | `origin`, `new_at`, `new_like`; sub-regions keep the plane's coordinates |
+| `edge.rs`, `edge_builder.rs`, `scan/path.rs`, `scan/path_aa.rs` | Edges are built from the plane's floats and shifted in fixed point; a vertical clip advances the edge (`Edge::advance_to`) instead of chopping it; "contained" asks about columns |
+| `scan/hairline.rs`, `scan/hairline_aa.rs`, `scan/mod.rs` | The same for hairlines and rects; rows above the window are dropped, not moved to its edge |
+| `pipeline/{highp,lowp,blitter}.rs` | Shaders seed from the plane's coordinates (gradients, patterns, image sampling) |
+| `painter.rs` | Tiles are windows (no float translation); `draw_pixmap` sits at the source's own origin |
+| `tests/windows.rs` | The proof: windows equal the same rows of a whole canvas |
+
+The limits of the exactness are in `docs/UPDATING.md`.
 
 ---
 

@@ -18,10 +18,14 @@ const requiredFiles = [
   'vendor/pdf_oxide/Cargo.lock',
   'vendor/office_oxide/Cargo.toml',
   'vendor/office_oxide/Cargo.lock',
+  'vendor/tiny_skia/Cargo.toml',
+  'vendor/tiny_skia/path/Cargo.toml',
   // Source sentinels — one per vendored crate tree, plus the wasm
   // post-processing runner the web compile `cargo run`s.
   'vendor/pdf_oxide/src/lib.rs',
   'vendor/office_oxide/src/lib.rs',
+  'vendor/tiny_skia/src/lib.rs',
+  'vendor/tiny_skia/path/src/lib.rs',
   'vendor/pdf_oxide/bindgen_runner/Cargo.toml',
   'vendor/pdf_oxide/bindgen_runner/src/main.rs',
   // Build config the hooks read.

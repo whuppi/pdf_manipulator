@@ -99,12 +99,13 @@ Step-by-step checklists in [`docs/UPDATING.md`](docs/UPDATING.md).
 
 ## Vendored forks
 
-Two git submodules at `vendor/`. Provenance and recipes in
+Three git submodules at `vendor/`. Provenance and recipes in
 [`docs/UPDATING.md`](docs/UPDATING.md).
 
 **PRs to vendored forks**
 ([`whuppi/pdf_oxide`](https://github.com/whuppi/pdf_oxide),
-[`whuppi/office_oxide`](https://github.com/whuppi/office_oxide)):
+[`whuppi/office_oxide`](https://github.com/whuppi/office_oxide),
+[`whuppi/tiny-skia`](https://github.com/whuppi/tiny-skia)):
 target the patches branch — never `main`, which is a clean mirror of
 upstream. The current patch-branch names are listed in
 [`docs/UPDATING.md`](docs/UPDATING.md).

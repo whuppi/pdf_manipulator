@@ -11,6 +11,12 @@
 #      says why no Dart battery can observe what it proves
 #   4. no file of ours added under tests/ (compared with the base tag the
 #      patches branch is named after: pdf_manipulator/<base>-patches)
+#
+# The wall covers pdf_oxide and office_oxide. vendor/tiny_skia is outside it
+# on purpose: that fork has no fork-only code to hold a test, and what it
+# changes (a pixmap that shows a window of a larger plane) can only be proved
+# in its own pixels, so its tests live in its `tests/` and in test modules of
+# its `src/`, between patch markers. `make test-rust` runs them.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

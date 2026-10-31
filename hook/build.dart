@@ -336,7 +336,12 @@ void _registerDependencies(BuildInput input, BuildOutputBuilder output) {
   output.dependencies.add(input.packageRoot.resolve('build.json'));
 
   if (hasVendorSource(input.packageRoot)) {
-    for (final crate in const ['vendor/pdf_oxide', 'vendor/office_oxide']) {
+    for (final crate in const [
+      'vendor/pdf_oxide',
+      'vendor/office_oxide',
+      'vendor/tiny_skia',
+      'vendor/tiny_skia/path',
+    ]) {
       _registerCrateSources(input, output, crate);
     }
   }

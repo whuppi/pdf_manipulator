@@ -54,7 +54,7 @@ make build-wasm                 # rebuild WASM after Rust changes
 
 **5-step build hook.** cached (hash verified) → download from GitHub Releases → compile from vendor source → init submodules + compile → error. SHA-256 hashes in `lib/src/hook/asset_hashes.dart`. Constants in `build.json`.
 
-**Vendor submodules with patches.** `vendor/pdf_oxide/` and `vendor/office_oxide/` are git submodules with named patch branches. Full inventory in `docs/UPDATING.md`.
+**Vendor submodules with patches.** `vendor/pdf_oxide/`, `vendor/office_oxide/` and `vendor/tiny_skia/` are git submodules with named patch branches. Full inventory in `docs/UPDATING.md`.
 
 **Conventional commits required.** PR titles must follow `feat:` / `fix:` / `chore:` etc. Enforced by CI (`pr-checks.yml`) and local hook (`.githooks/commit-msg`).
 
