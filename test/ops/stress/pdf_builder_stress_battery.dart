@@ -7,6 +7,7 @@ import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
 import '../../fixtures/generated/fixtures.dart';
+import '../../harness/extract_images.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/perf.dart';
 
@@ -39,17 +40,14 @@ void registerBuilderStressTests(Pdf Function() createPdf) {
 
         final doc = await pdf.open(src(sink.takeBytes()));
         expect(doc.pageCount, 10);
-        var images = 0;
-        await for (final img in doc.extractImages(
-          pages: const PdfPages.all(),
-        )) {
-          expect(img.width, greaterThan(0));
-          expect(img.data.length, greaterThan(0));
-          images++;
+        final images = await extractToMemory(doc, pages: const PdfPages.all());
+        for (final (:image, :data) in images) {
+          expect(image.width, greaterThan(0));
+          expect(data.length, greaterThan(0));
         }
         expect(
           images,
-          10,
+          hasLength(10),
           reason:
               'one embedded image per page — fewer means pages '
               'were built without their image',

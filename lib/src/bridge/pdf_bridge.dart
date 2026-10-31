@@ -14,7 +14,7 @@ import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
-import 'package:pdf_manipulator/src/types/extracted_image.dart';
+import 'package:pdf_manipulator/src/types/pdf_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
@@ -124,8 +124,12 @@ abstract class BridgeDocHandle {
     required PdfRenderFormat format,
   });
 
-  /// Extracts embedded images from the specified [pages].
-  Stream<ExtractedImage> extractImages({required PdfPages pages});
+  /// Extracts the images of the specified [pages], writing each to the sink
+  /// [sinkFor] returns for its descriptor.
+  PdfTask<List<PdfImage>> extractImages(
+    FutureOr<DataSink> Function(PdfImage image) sinkFor, {
+    required PdfPages pages,
+  });
 
   /// Returns signature info for all signatures in the document.
   PdfTask<List<PdfSignatureInfo>> get signatures;

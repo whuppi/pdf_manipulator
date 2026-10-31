@@ -108,16 +108,6 @@ base class PdfDoc extends PdfReads implements _Handle {
     return _handle.extract(pages: pages, format: format);
   }
 
-  /// Extracts embedded images from the specified [pages].
-  ///
-  /// Each image is delivered as soon as it is read. A failure ends the
-  /// stream with its error after the images already delivered. Cancelling
-  /// the subscription cancels the extraction.
-  Stream<ExtractedImage> extractImages({required PdfPages pages}) {
-    _check();
-    return _handle.extractImages(pages: pages);
-  }
-
   /// Returns metadata for all digital signatures in the document.
   PdfTask<List<PdfSignatureInfo>> get signatures {
     KeepRecord.op('signatures');

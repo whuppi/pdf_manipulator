@@ -12,13 +12,13 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/pdf_manipulator.dart';
-import 'package:pdf_manipulator/src/types/extracted_image.dart';
 import 'package:test/test.dart';
 
 import '../../fixtures/generated/fixtures.dart';
 import '../../fixtures/handwritten.dart';
 import '../../fixtures/third_party/tp_encrypted.dart';
 import '../../fixtures/third_party/tp_encrypted_legacy.dart';
+import '../../harness/extract_images.dart';
 import '../../harness/render_pages.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
@@ -383,37 +383,132 @@ void registerDocTests(Pdf Function() createPdf) {
 
     test('extractImages from blank PDF returns empty', () async {
       final doc = await createPdf().open(src(minimalPdf));
-      final images = <ExtractedImage>[];
-      await for (final img in doc.extractImages(pages: const PdfPages.all())) {
-        images.add(img);
-      }
-      expect(images, isEmpty);
+      expect(await extractToMemory(doc, pages: const PdfPages.all()), isEmpty);
       await doc.dispose();
     }, timeout: t(1));
 
     test('extractImages finds every foreign-embedded XObject image', () async {
       final doc = await createPdf().open(src(fImages));
-      final images = <ExtractedImage>[];
-      await for (final img in doc.extractImages(pages: const PdfPages.all())) {
-        images.add(img);
-      }
+      final images = await extractToMemory(doc, pages: const PdfPages.all());
       expect(
         images,
         hasLength(fImagesTruth.imageCount),
         reason: 'one embedded image per page — declared truth',
       );
-      for (final img in images) {
-        expect(img.width, fImagesTruth.imageWidth);
-        expect(img.height, fImagesTruth.imageHeight);
-        expect(
-          img.data.length,
-          greaterThan(0),
-          reason:
-              'an extracted image with no pixel data is not '
-              'an extraction',
-        );
+      for (final (:image, :data) in images) {
+        expect(image.width, fImagesTruth.imageWidth);
+        expect(image.height, fImagesTruth.imageHeight);
+        expect(image.encoding, PdfImageEncoding.raw);
+        // A stored-losslessly image arrives as a PNG file of its own size.
+        expect(data.sublist(0, 8), _pngSignature);
+        final header = ByteData.sublistView(data, 16, 24);
+        expect(header.getUint32(0), fImagesTruth.imageWidth);
+        expect(header.getUint32(4), fImagesTruth.imageHeight);
       }
+      expect(
+        [for (final i in images) (i.image.page, i.image.index)],
+        [(0, 0), (1, 0), (2, 0)],
+        reason: 'page by page, in the order found',
+      );
       await doc.dispose();
+    }, timeout: t(1));
+
+    test(
+      'extractImages passes a JPEG through byte for byte, never decoded',
+      () async {
+        final doc = await createPdf().open(src(fImagesJpeg));
+        final images = await extractToMemory(doc, pages: const PdfPages.all());
+        expect(images, isNotEmpty);
+        for (final (:image, :data) in images) {
+          expect(image.encoding, PdfImageEncoding.jpeg);
+          expect(data.sublist(0, 2), [0xFF, 0xD8]);
+          expect(
+            _indexOfBytes(fImagesJpeg, data),
+            isNonNegative,
+            reason:
+                'the extracted bytes are a run of the source file: a '
+                'decode and re-encode would not be',
+          );
+        }
+        await doc.dispose();
+      },
+      timeout: t(1),
+    );
+
+    test('extractImages closes every sink it opened, on every path', () async {
+      final doc = await createPdf().open(src(fImages));
+      final sinks = <_ClosesCounted>[];
+      _ClosesCounted open(PdfImage image) {
+        final sink = _ClosesCounted();
+        sinks.add(sink);
+        return sink;
+      }
+
+      await doc.extractImages(open, pages: const PdfPages.all());
+      expect(sinks, hasLength(3));
+      expect(sinks.map((s) => s.closes), everyElement(1));
+      expect(sinks.map((s) => s.bytes), everyElement(greaterThan(0)));
+
+      // A factory that throws on the second image: the first image is
+      // delivered and closed, and the error is the caller's own.
+      sinks.clear();
+      await expectLater(
+        doc.extractImages((image) {
+          if (image.page == 1) throw StateError('no sink for this image');
+          return open(image);
+        }, pages: const PdfPages.all()),
+        throwsA(isA<StateError>()),
+      );
+      expect(sinks, hasLength(1));
+      expect(sinks.single.closes, 1);
+
+      // A sink that throws on its first write closes too.
+      final failing = _FailingOnWrite();
+      await expectLater(
+        doc.extractImages((image) => failing, pages: const PdfPages.all()),
+        throwsA(isA<StateError>()),
+      );
+      expect(failing.closes, greaterThanOrEqualTo(1));
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test(
+      'extractImages cancelled keeps the images already delivered',
+      () async {
+        final doc = await createPdf().open(src(fImages));
+        final sinks = <_ClosesCounted>[];
+        late final PdfTask<List<PdfImage>> task;
+        task = doc.extractImages((image) {
+          final sink = _ClosesCounted();
+          sinks.add(sink);
+          if (sinks.length == 2) task.cancel();
+          return sink;
+        }, pages: const PdfPages.all());
+        await expectLater(task, throwsA(isA<PdfCancelled>()));
+        expect(sinks, hasLength(2), reason: 'the third image is never opened');
+        expect(sinks.first.closes, 1);
+        expect(sinks.first.bytes, greaterThan(0));
+        expect(sinks.last.closes, 1, reason: 'the image in flight is closed');
+        await doc.dispose();
+      },
+      timeout: t(1),
+    );
+
+    test('pdf.reads(source).extractImages works once and only once', () async {
+      final pdf = createPdf();
+      final reads = pdf.reads(src(fImages));
+      final images = await reads.extractImages(
+        (image) => MemorySink(),
+        pages: const PdfPages.all(),
+      );
+      expect(images, hasLength(fImagesTruth.imageCount));
+      expect(
+        () => reads.extractImages(
+          (image) => MemorySink(),
+          pages: const PdfPages.all(),
+        ),
+        throwsA(isA<PdfInvalidArgument>()),
+      );
     }, timeout: t(1));
 
     // ── Validate ──────────────────────────────────────────────────
@@ -622,7 +717,7 @@ void registerDocTests(Pdf Function() createPdf) {
       'render': (d) => renderToMemory(d, pages: const PdfPages.single(1)),
       'render list': (d) => renderToMemory(d, pages: const PdfPages.list([1])),
       'extractImages': (d) =>
-          d.extractImages(pages: const PdfPages.single(1)).toList(),
+          extractToMemory(d, pages: const PdfPages.single(1)),
     };
     for (final entry in docPageOps.entries) {
       test('${entry.key} past the end throws PdfPageRangeError', () async {
@@ -874,6 +969,38 @@ void registerDocTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
   });
+}
+
+/// The eight bytes every PNG file starts with.
+const _pngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+
+/// The first place [needle] occurs in [haystack], or -1.
+int _indexOfBytes(Uint8List haystack, Uint8List needle) {
+  for (var at = 0; at + needle.length <= haystack.length; at++) {
+    if (_matches(haystack, at, needle)) return at;
+  }
+  return -1;
+}
+
+/// A sink that counts what it was given and how often it was closed.
+class _ClosesCounted implements DataSink {
+  int closes = 0;
+  int bytes = 0;
+
+  @override
+  void close() => closes++;
+
+  @override
+  Future<void> write(Uint8List chunk) async {
+    bytes += chunk.length;
+  }
+}
+
+/// A sink whose first write fails.
+class _FailingOnWrite extends _ClosesCounted {
+  @override
+  Future<void> write(Uint8List chunk) async =>
+      throw StateError('the sink refused the bytes');
 }
 
 /// Finds [needle] in [haystack] at `at`.

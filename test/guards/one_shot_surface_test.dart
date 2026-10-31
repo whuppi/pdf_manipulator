@@ -5,7 +5,8 @@
 //    bool deflate})` on Pdf with the same options type.
 // 2. README table: the "I want to..." table names only members that exist,
 //    and lists every member of PdfEdits and PdfReads once there is more
-//    than the few the foundation and the render task declare.
+//    than the few the foundation, the render task and the image extraction
+//    declare.
 //
 // io-exempt: the source-scan wall reads lib and README.md from disk.
 // VM-only: it reflects over the classes with dart:mirrors.
@@ -79,12 +80,13 @@ List<String>? readmeRows(String readme) {
 /// Problems with the table in [readme]: a member in a row that is not in
 /// [known], or a one-shot member that no row mentions. [foundation] is the
 /// member count under which the table may still be missing: the members the
-/// foundation and the render task declare, until the sweep writes the table.
+/// foundation, the render task and the image extraction declare, until the
+/// sweep writes the table.
 List<String> readmeProblems(
   String readme, {
   required Set<String> known,
   required Set<String> oneShot,
-  int foundation = 4,
+  int foundation = 5,
 }) {
   final rows = readmeRows(readme);
   if (rows == null) {
@@ -233,7 +235,11 @@ void main() {
 
     test('no table is fine while the surface is the foundation', () {
       expect(
-        readmeProblems('# R\n', known: known, oneShot: {'a', 'b', 'c', 'd'}),
+        readmeProblems(
+          '# R\n',
+          known: known,
+          oneShot: {'a', 'b', 'c', 'd', 'e'},
+        ),
         isEmpty,
       );
     });
@@ -243,7 +249,7 @@ void main() {
         readmeProblems(
           '# R\n',
           known: known,
-          oneShot: {'a', 'b', 'c', 'd', 'e'},
+          oneShot: {'a', 'b', 'c', 'd', 'e', 'f'},
         ),
         hasLength(1),
       );

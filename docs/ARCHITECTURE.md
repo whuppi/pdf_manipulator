@@ -421,7 +421,7 @@ Future<...> execute(
 | open | reader[0] on demand | — |
 | extract / search / validate / classify | reader[0] on demand | bounded text |
 | render | reader[0] on demand | per page: header, data frames ≤ 256 KiB, end |
-| extractImages | reader[0] on demand | framed writes, one image at a time |
+| extractImages | reader[0] on demand | per image: header, data frames ≤ 256 KiB, end |
 | editorSave | pinned reader[0] | PositionedWrite streams objects |
 | builderSave | — | PositionedWrite streams objects |
 | sign | reader[0] 64KB chunks | writer[0] sequential |
@@ -726,9 +726,29 @@ cross-origin isolated pages. Without it, web cancel lands at the next
 source read or sink write, and a running OPFS op (no I/O waits at all)
 is stopped only by `Pdf.dispose`.
 
-`extractImages` streams: each frame reaches the consumer as the engine
-writes it, an error response ends the stream after the frames already
-delivered, and cancelling the subscription cancels the job.
+`extractImages` writes each image to a sink the caller's factory returns, on
+the same chunked wire as `render` (one shared framer in the engine and one
+shared delivery in Dart): a header (`kind`, `page`, `index`, `width`,
+`height`, `bitsPerComponent`, `encoding`, `color`), data frames of at most
+256 KiB, an end frame, then the terminator. A JPEG or JPEG 2000 stream goes
+through byte for byte (decrypted, never decoded); every other image is a PNG
+written row by row from the image cursor, its `/SMask` or `/Mask` stream
+applied as the alpha channel. The library closes the sink of the image in
+flight on an error or a cancel; images already delivered stand.
+
+`reduceImages` reads an image the same way: the rows come from the image
+cursor (a raw-sample stream a strip at a time, a DCT image at the reduction
+that covers the target, fax and JBIG2 bitmaps at one bit a pixel; a CMYK
+image's samples as stored), go one at a time through the row resampler, and
+into a row encoder: Flate with predictors, CCITT G4 by line, or a baseline
+JPEG whose encoder takes MCU rows. The JPEG uses the standard Huffman tables,
+because optimised ones need every coefficient before the first byte. What is
+held is a strip or the codec's raster, the resampler's rows and the encoded
+output of the one image being rewritten, which is the unit the editor stages;
+a soft mask goes through the same pipe at its parent's new size. A stored JPEG
+that is not downsampled is kept (a JPEG's quality is read from its first
+megabyte), unless the policy recompresses JPEGs. The two exceptions are the
+`hugeJpeg` row's: a progressive JPEG is one raster, and so is a CMYK JPEG.
 
 `render` writes each page to a sink the caller's factory returns. The
 engine rasters the page in bands, passes each band's rows to a PNG row

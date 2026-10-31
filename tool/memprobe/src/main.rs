@@ -50,6 +50,17 @@ fn limit(op: &str, input: &str) -> usize {
         // measured peak (53.3 MiB; the renderer before this held 170 MiB);
         // the target is a decoder that streams progressive scans.
         ("render", "hugeJpeg") => 56 * MIB,
+        // The 60 MiB image is read through its filters a strip of rows at a
+        // time and written as PNG rows; the progressive JPEG goes through
+        // byte for byte in 64 KiB reads and 256 KiB data frames.
+        ("extractImages", "huge" | "hugeJpeg") => 16 * MIB,
+        // The same strips go through the row resampler to the placement's
+        // size and into a JPEG encoder that takes MCU rows, so the host holds
+        // a strip, the resampler's rows and the encoded output (under 1 MiB).
+        ("reduceImages", "huge") => 16 * MIB,
+        // The ruled exception again: the progressive JPEG is decoded whole, by
+        // the inverse DCT at the reduction that covers the placement.
+        ("reduceImages", "hugeJpeg") => 56 * MIB,
         // A 2000 pt square at 300 dpi again, now with eight groups inside one
         // another, a soft mask, blends and patterns: each level holds one band
         // of its own, and the band is cut by the depth, so the host holds the
@@ -373,6 +384,61 @@ fn run() -> Result<(), String> {
     });
     verify_render_wire(&failed, "hugeJpeg", &open_sink("hugeJpeg", "render"));
 
+    // extractImages and reduceImages of the same two pages. Each is read
+    // back after the measured step: the extraction's wire from its first
+    // frame to the terminator, the reduction by extracting the file it wrote.
+    // The reduced sizes are the placement's: 612 x 792 pt at 72 ppi.
+    for (name, path, extracted, reduced) in [
+        (
+            "huge",
+            &huge_drawn,
+            ExpectedImage { width: 8192, height: 7680, encoding: "raw", color: "gray" },
+            ExpectedImage { width: 845, height: 792, encoding: "jpeg", color: "gray" },
+        ),
+        (
+            "hugeJpeg",
+            &huge_jpeg,
+            ExpectedImage { width: 4096, height: 3072, encoding: "jpeg", color: "rgb" },
+            ExpectedImage { width: 1056, height: 792, encoding: "jpeg", color: "rgb" },
+        ),
+    ] {
+        let extract_file = open_sink(name, "extract");
+        step(&failed, "extractImages", name, limit("extractImages", name), |st| {
+            extract_to_sink(st, path, &extract_file)
+        });
+        let stored = (name == "hugeJpeg").then(|| stored_jpeg_length(path)).transpose();
+        match stored {
+            Ok(stored) => verify_extract_wire(&failed, name, &extract_file, &extracted, stored),
+            Err(e) => {
+                eprintln!("memprobe: extractImages {name}: {e}");
+                failed.set(true);
+            },
+        }
+        let reduced_file = open_sink(name, "reduced");
+        step(&failed, "reduceImages", name, limit("reduceImages", name), |st| {
+            reduce_to_sink(st, path, &reduced_file)
+        });
+        let again = open_sink(name, "reduced-extract");
+        let mut state = pdf_oxide::host::lane_state::LaneState::new();
+        let written = if reduced_file.exists() {
+            extract_to_sink(&mut state, &reduced_file, &again)
+        } else {
+            Err("the reduction wrote no file".to_string())
+        };
+        match written {
+            Ok(()) => verify_extract_wire(&failed, &format!("{name} reduced"), &again, &reduced, None),
+            Err(e) => {
+                eprintln!("memprobe: reduceImages {name}: read back: {e}");
+                failed.set(true);
+            },
+        }
+        eprintln!(
+            "memprobe: reduceImages {name}: {} bytes in, {} bytes out",
+            std::fs::metadata(path).map(|m| m.len()).unwrap_or(0),
+            std::fs::metadata(&reduced_file).map(|m| m.len()).unwrap_or(0)
+        );
+    }
+
     // render of one large page of transparency groups nested eight deep, a
     // soft mask, blends and tiling patterns, one of them over the raster
     // budget, at 300 dpi.
@@ -489,8 +555,212 @@ fn check_render_wire(sink_path: &Path) -> Result<String, String> {
             },
             Some("end") => {
                 let (w, h, walk) = open.take().ok_or("an end outside a page")?;
-                walk.finish(w, h)?;
+                let (depth, colour) = walk.finish(w, h)?;
+                if depth != 8 || colour != 6 {
+                    return Err(format!("IHDR depth {depth} colour type {colour}, not 8-bit RGBA"));
+                }
                 pages += 1;
+            },
+            other => return Err(format!("unknown frame kind {other:?}")),
+        }
+    }
+}
+
+/// Opens `path`, writes every image drawn on it to `sink_path` as the chunked
+/// wire, and disposes the document: the host path a Dart `extractImages`
+/// takes.
+fn extract_to_sink(
+    state: &mut pdf_oxide::host::lane_state::LaneState,
+    path: &Path,
+    sink_path: &Path,
+) -> Result<(), String> {
+    let resp = call(state, re("open"), vec![source(path)], vec![])?;
+    let hid = resp.i32("handleId").expect("open returns handleId");
+    call(
+        state,
+        re("extractImages")
+            .put("handleId", i32v(hid))
+            .put("hasSink", wire::Value::Bool(true)),
+        vec![],
+        vec![sink(sink_path)],
+    )?;
+    call(state, re("docDispose").put("handleId", i32v(hid)), vec![], vec![])?;
+    Ok(())
+}
+
+/// Opens `path` as an editor, reduces its images to 72 ppi (the screen
+/// preset's resolutions and quality), saves the document to `sink_path` and
+/// disposes the editor: the host path a Dart `reduceImages` and a save take.
+fn reduce_to_sink(
+    state: &mut pdf_oxide::host::lane_state::LaneState,
+    path: &Path,
+    sink_path: &Path,
+) -> Result<(), String> {
+    let resp = call(state, re("editorOpen"), vec![source(path)], vec![])?;
+    let hid = resp.i32("handleId").expect("editorOpen returns handleId");
+    call(
+        state,
+        re("editorMutate")
+            .put("handleId", i32v(hid))
+            .put("editOp", strv("reduceImages"))
+            .put("colorPpi", wire::Value::F64(72.0))
+            .put("grayPpi", wire::Value::F64(72.0))
+            .put("monoPpi", wire::Value::F64(300.0))
+            .put("jpegQuality", i32v(60))
+            .put("allowLossy", wire::Value::Bool(true))
+            .put("recompressJpeg", wire::Value::Bool(true)),
+        vec![],
+        vec![],
+    )?;
+    save_full(state, hid, sink_path, false)?;
+    dispose(state, hid);
+    Ok(())
+}
+
+/// What the descriptor of an extracted image must say.
+struct ExpectedImage {
+    width: i32,
+    height: i32,
+    encoding: &'static str,
+    color: &'static str,
+}
+
+/// The length of the one DCT stream a probe input holds, from its
+/// dictionary's `/Length`.
+fn stored_jpeg_length(path: &Path) -> Result<u64, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let at = bytes
+        .windows(10)
+        .position(|w| w == b"/DCTDecode")
+        .ok_or("no DCT stream in the input")?;
+    let rest = &bytes[at..(at + 64).min(bytes.len())];
+    let text = String::from_utf8_lossy(rest);
+    text.split("/Length ")
+        .nth(1)
+        .and_then(|t| t.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|n| n.parse().ok())
+        .ok_or_else(|| "no /Length after the DCT stream's filter".to_string())
+}
+
+fn verify_extract_wire(
+    failed: &std::cell::Cell<bool>,
+    input: &str,
+    sink_path: &Path,
+    expect: &ExpectedImage,
+    stored_jpeg: Option<u64>,
+) {
+    let started = std::time::Instant::now();
+    match check_extract_wire(sink_path, expect, stored_jpeg) {
+        Ok(summary) => eprintln!(
+            "memprobe: extractImages {input}: wire ok, {summary} (read back in {} ms)",
+            started.elapsed().as_millis()
+        ),
+        Err(e) => {
+            eprintln!("memprobe: extractImages {input}: WIRE FAIL: {e}");
+            failed.set(true);
+        },
+    }
+}
+
+/// Reads the wire an extraction left in `sink_path` from its first frame to
+/// the terminator: one item, a header that says what `expect` says, data
+/// frames of at most 256 KiB and an end frame. A JPEG's data is one stream
+/// from FFD8 to FFD9 of the stored length, any other image's one whole PNG
+/// of the descriptor's size, 8-bit, gray for `gray` and RGB for `rgb`.
+fn check_extract_wire(
+    sink_path: &Path,
+    expect: &ExpectedImage,
+    stored_jpeg: Option<u64>,
+) -> Result<String, String> {
+    use std::io::Read;
+    let file = File::open(sink_path).map_err(|e| format!("open sink: {e}"))?;
+    let total = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let mut file = std::io::BufReader::new(file);
+    let mut read = 0u64;
+    let mut items = 0usize;
+    let mut open: Option<(i32, i32, bool, PngWalk)> = None;
+    let (mut data_bytes, mut data_frames, mut largest) = (0u64, 0usize, 0usize);
+    let (mut head, mut tail) = ([0u8; 2], [0u8; 2]);
+    loop {
+        let mut len = [0u8; 4];
+        file.read_exact(&mut len).map_err(|e| format!("terminator missing: {e}"))?;
+        read += 4;
+        let len = u32::from_le_bytes(len) as usize;
+        if len == 0 {
+            if open.is_some() {
+                return Err("the terminator came inside an item".into());
+            }
+            if read != total {
+                return Err(format!("{} bytes follow the terminator", total - read));
+            }
+            if items != 1 {
+                return Err(format!("{items} items, expected 1"));
+            }
+            if expect.encoding == "jpeg" {
+                if head != [0xFF, 0xD8] || tail != [0xFF, 0xD9] {
+                    return Err(format!("a JPEG from {head:02x?} to {tail:02x?}"));
+                }
+                if let Some(stored) = stored_jpeg {
+                    if stored != data_bytes {
+                        return Err(format!("{data_bytes} JPEG bytes, the file stores {stored}"));
+                    }
+                }
+            }
+            return Ok(format!(
+                "{} {}x{} {}, {data_frames} data frames (largest {largest} bytes) summing \
+                 {data_bytes} bytes, {total} bytes on the wire",
+                expect.encoding, expect.width, expect.height, expect.color
+            ));
+        }
+        let mut frame = vec![0u8; len];
+        file.read_exact(&mut frame).map_err(|e| format!("truncated frame: {e}"))?;
+        read += len as u64;
+        let frame = wire::parse_response(&frame)?;
+        match frame.str("kind") {
+            Some("header") => {
+                if open.is_some() {
+                    return Err("a header inside an item".into());
+                }
+                let (w, h) = (frame.i32("width").unwrap_or(0), frame.i32("height").unwrap_or(0));
+                let said = (w, h, frame.str("encoding").unwrap_or(""), frame.str("color").unwrap_or(""));
+                if said != (expect.width, expect.height, expect.encoding, expect.color) {
+                    return Err(format!("the header says {said:?}"));
+                }
+                if (frame.i32("page"), frame.i32("index")) != (Some(0), Some(items as i32)) {
+                    return Err("the header's page or index is wrong".into());
+                }
+                open = Some((w, h, expect.encoding == "jpeg", PngWalk::new()));
+            },
+            Some("data") => {
+                let (_, _, jpeg, walk) = open.as_mut().ok_or("data outside an item")?;
+                let bytes = frame.bytes("data").ok_or("a data frame without data")?;
+                if bytes.len() > 256 * 1024 {
+                    return Err(format!("a data frame of {} bytes", bytes.len()));
+                }
+                if *jpeg {
+                    if data_bytes == 0 && bytes.len() >= 2 {
+                        head.copy_from_slice(&bytes[..2]);
+                    }
+                    for &b in &bytes[bytes.len().saturating_sub(2)..] {
+                        tail = [tail[1], b];
+                    }
+                } else {
+                    walk.feed(bytes)?;
+                }
+                data_bytes += bytes.len() as u64;
+                data_frames += 1;
+                largest = largest.max(bytes.len());
+            },
+            Some("end") => {
+                let (w, h, jpeg, walk) = open.take().ok_or("an end outside an item")?;
+                if !jpeg {
+                    let (depth, colour) = walk.finish(w, h)?;
+                    let want = if expect.color == "gray" { 0 } else { 2 };
+                    if depth != 8 || colour != want {
+                        return Err(format!("IHDR depth {depth} colour type {colour}, expected 8-bit type {want}"));
+                    }
+                }
+                items += 1;
             },
             other => return Err(format!("unknown frame kind {other:?}")),
         }
@@ -576,8 +846,9 @@ impl PngWalk {
         Ok(())
     }
 
-    /// The page ended: the PNG must be whole and say the size its header did.
-    fn finish(self, width: i32, height: i32) -> Result<(), String> {
+    /// The item ended: the PNG must be whole and say the size its header did.
+    /// Returns its bit depth and colour type.
+    fn finish(self, width: i32, height: i32) -> Result<(u8, u8), String> {
         if !matches!(self.phase, PngPhase::Done) {
             return Err("the page ended before IEND".into());
         }
@@ -595,13 +866,10 @@ impl PngWalk {
         if (w, h) != (width, height) {
             return Err(format!("IHDR says {w}x{h}, the header said {width}x{height}"));
         }
-        if ihdr[8] != 8 || ihdr[9] != 6 {
-            return Err(format!("IHDR depth {} colour type {}, not 8-bit RGBA", ihdr[8], ihdr[9]));
-        }
         if self.idat == 0 {
             return Err("no IDAT".into());
         }
-        Ok(())
+        Ok((ihdr[8], ihdr[9]))
     }
 }
 

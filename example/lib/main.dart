@@ -1203,13 +1203,11 @@ class _DocTabState extends State<_DocTab>
                       title: 'Extract images from page 1',
                       loading: loading,
                       onRun: () => runFlow('Images', () async {
-                            var count = 0;
-                            await for (final _ in doc.extractImages(
-                                pages: const PdfPages.single(0))) {
-                              count++;
-                            }
-                            setState(
-                                () => status = '$count image(s) on page 1');
+                            final images = await doc.extractImages(
+                                (image) => MemorySink(),
+                                pages: const PdfPages.single(0));
+                            setState(() =>
+                                status = '${images.length} image(s) on page 1');
                           })),
                   _Section('Signatures'),
                   _Op(

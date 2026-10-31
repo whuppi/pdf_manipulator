@@ -8,6 +8,7 @@ import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_annotation.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
+import 'package:pdf_manipulator/src/types/pdf_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
@@ -297,24 +298,25 @@ void main() {
         'height': 600,
         'format': 'rgba',
       });
-      expect(frame, isA<RenderHeader>());
-      final header = frame as RenderHeader;
+      expect(frame, isA<ChunkHeader<PdfRenderedPage>>());
       expect(
-        header.page,
+        (frame as ChunkHeader<PdfRenderedPage>).item,
         const PdfRenderedPage(page: 3, width: 800, height: 600),
       );
-      expect(header.format, PdfRenderFormat.rgba);
     });
 
     test('a data frame carries its bytes', () {
       final bytes = Uint8List.fromList([1, 2, 3]);
       final frame = decodeRenderFrame({'kind': 'data', 'data': bytes});
-      expect(frame, isA<RenderData>());
-      expect((frame as RenderData).bytes, [1, 2, 3]);
+      expect(frame, isA<ChunkData<PdfRenderedPage>>());
+      expect((frame as ChunkData<PdfRenderedPage>).bytes, [1, 2, 3]);
     });
 
     test('an end frame has no fields', () {
-      expect(decodeRenderFrame({'kind': 'end'}), isA<RenderEnd>());
+      expect(
+        decodeRenderFrame({'kind': 'end'}),
+        isA<ChunkEnd<PdfRenderedPage>>(),
+      );
     });
 
     test('an unknown kind or format is an engine error, never a guess', () {
@@ -335,17 +337,56 @@ void main() {
     });
   });
 
-  group('decodePdfImage', () {
-    test('parses full image', () {
-      final img = decodePdfImage({
+  group('decodeImageFrame', () {
+    test('a header carries the image descriptor', () {
+      final frame = decodeImageFrame({
+        'kind': 'header',
+        'page': 2,
+        'index': 1,
         'width': 100,
         'height': 200,
-        'format': 'jpeg',
-        'colorSpace': 'RGB',
         'bitsPerComponent': 8,
-        'data': Uint8List(5),
+        'encoding': 'jpeg',
+        'color': 'rgb',
       });
-      expect(img.format, 'jpeg');
+      expect(frame, isA<ChunkHeader<PdfImage>>());
+      expect(
+        (frame as ChunkHeader<PdfImage>).item,
+        const PdfImage(
+          page: 2,
+          index: 1,
+          width: 100,
+          height: 200,
+          bitsPerComponent: 8,
+          encoding: PdfImageEncoding.jpeg,
+          color: PdfImageColor.rgb,
+        ),
+      );
+    });
+
+    test('data and end frames are the same as a render has', () {
+      final bytes = Uint8List.fromList([9, 8]);
+      expect(
+        decodeImageFrame({'kind': 'data', 'data': bytes}),
+        isA<ChunkData<PdfImage>>(),
+      );
+      expect(decodeImageFrame({'kind': 'end'}), isA<ChunkEnd<PdfImage>>());
+    });
+
+    test('an unknown encoding or colour is an engine error', () {
+      expect(
+        () => decodeImageFrame({
+          'kind': 'header',
+          'page': 0,
+          'index': 0,
+          'width': 1,
+          'height': 1,
+          'bitsPerComponent': 8,
+          'encoding': 'tiff',
+          'color': 'rgb',
+        }),
+        throwsA(isA<PdfEngineError>()),
+      );
     });
   });
 

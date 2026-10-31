@@ -91,11 +91,11 @@ void main() {
 
   testWidgets('extractImages streams', (t) async {
     final doc = await pdf.open(_src(minimalPdf));
-    var images = 0;
-    await for (final _ in doc.extractImages(pages: const PdfPages.single(0))) {
-      images++;
-    }
-    expect(images, 0, reason: 'the blank fixture embeds no images');
+    final images = await doc.extractImages(
+      (image) => MemorySink(),
+      pages: const PdfPages.single(0),
+    );
+    expect(images, isEmpty, reason: 'the blank fixture embeds no images');
     await doc.dispose();
   });
 

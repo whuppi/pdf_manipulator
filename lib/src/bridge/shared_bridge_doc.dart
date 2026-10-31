@@ -142,7 +142,7 @@ class _SharedDocHandle extends BridgeDocHandle {
   }
 
   /// The engine writes each page as a header, data frames and an end frame;
-  /// [_RenderDelivery] opens the page's sink at the header, writes each data
+  /// [_ChunkDelivery] opens the page's sink at the header, writes each data
   /// frame before it takes the next, and closes the sink at the end frame.
   /// Whatever stops the render (an error, a cancel, a sink that throws)
   /// closes the sink of the page in flight; pages already delivered stand.
@@ -152,17 +152,46 @@ class _SharedDocHandle extends BridgeDocHandle {
     required PdfPages pages,
     required PdfRenderSize size,
     required PdfRenderFormat format,
-  }) {
-    final sizeArgs = _renderSizeArgs(size);
+  }) => _deliver(
+    EngineOp.render,
+    {
+      'pageIndices': _pages(pages),
+      ..._renderSizeArgs(size),
+      'format': codec.putEnum(format),
+    },
+    sinkFor,
+    codec.decodeRenderFrame,
+  );
+
+  /// The engine writes each image as a header, data frames and an end frame,
+  /// the same chunked wire as a render; the sink [sinkFor] returns is opened
+  /// at the header and closed at the end frame.
+  @override
+  PdfTask<List<PdfImage>> extractImages(
+    FutureOr<DataSink> Function(PdfImage image) sinkFor, {
+    required PdfPages pages,
+  }) => _deliver(
+    EngineOp.extractImages,
+    {'pageIndices': _pages(pages)},
+    sinkFor,
+    codec.decodeImageFrame,
+  );
+
+  /// Runs [op] with a [_ChunkDelivery] as its sink and resolves with the
+  /// items delivered.
+  PdfTask<List<H>> _deliver<H>(
+    EngineOp op,
+    Map<String, Object?> arguments,
+    FutureOr<DataSink> Function(H item) sinkFor,
+    codec.ChunkFrame<H> Function(Map<String, Object?> frame) decode,
+  ) {
     return PdfTask.group((hook) async {
-      final delivery = _RenderDelivery(sinkFor, hook);
+      final delivery = _ChunkDelivery<H>(sinkFor, hook, decode);
       try {
         final res = await _bridge._transport.execute(
-          bin.encodeRequest(EngineOp.render.wire, {
+          bin.encodeRequest(op.wire, {
             'handleId': _handleId,
-            'pageIndices': _pages(pages),
-            ...sizeArgs,
-            'format': codec.putEnum(format),
+            ...arguments,
             'hasSink': true,
           }),
           sinks: [delivery],
@@ -171,7 +200,7 @@ class _SharedDocHandle extends BridgeDocHandle {
         bin.decodeResponse(res.bytes);
         // The engine's last chunk is flushed as it finishes, so a sink that
         // failed on it did not fail the op: the caller's error ends the
-        // render all the same.
+        // op all the same.
         if (delivery.failure case final failure?) {
           Error.throwWithStackTrace(failure.error, failure.stack);
         }
@@ -185,31 +214,9 @@ class _SharedDocHandle extends BridgeDocHandle {
         }
         rethrow;
       }
-      return delivery.pages;
+      return delivery.items;
     });
   }
-
-  /// Frames reach the stream as the engine writes them. An error
-  /// response ends the stream with its error after the frames already
-  /// delivered; cancelling the subscription cancels the job.
-  @override
-  Stream<ExtractedImage> extractImages({required PdfPages pages}) =>
-      _streamFrames((hook, sink) async {
-        for (final page in _pages(pages)) {
-          if (hook.isCancelled) return;
-          final req = bin.encodeRequest(EngineOp.extractImages.wire, {
-            'handleId': _handleId,
-            'page': page,
-            'hasSink': true,
-          });
-          final res = await _bridge._transport.execute(
-            req,
-            sinks: [sink],
-            cancel: hook,
-          );
-          bin.decodeResponse(res.bytes);
-        }
-      }, codec.decodePdfImage);
 
   @override
   PdfTask<List<PdfSignatureInfo>> get signatures => _exec(
@@ -286,24 +293,28 @@ class _SharedDocHandle extends BridgeDocHandle {
   }
 }
 
-/// The sink the engine writes a render to: it cuts the stream into frames,
-/// hands each page to the caller's sink and keeps nothing of the pixels.
+/// The sink the engine writes a chunked sequence to (the pages of a render,
+/// the images of an extraction): it cuts the stream into frames, hands each
+/// item to the caller's sink and keeps nothing of its bytes. The items are of
+/// type [H], the descriptor the header frame carries.
 ///
 /// The transport awaits each [write] before the engine sends the next chunk,
-/// so a slow caller sink slows the render (back-pressure). A frame is at
+/// so a slow caller sink slows the engine (back-pressure). A frame is at
 /// most one data frame (256 KiB) plus a few bytes, and a chunk is the
 /// transport's 256 KiB buffer, so what waits here is bounded by both.
-class _RenderDelivery implements DataSink {
-  _RenderDelivery(this._sinkFor, this._hook);
+class _ChunkDelivery<H> implements DataSink {
+  _ChunkDelivery(this._sinkFor, this._hook, this._decode);
 
-  final FutureOr<DataSink> Function(PdfRenderedPage page) _sinkFor;
+  final FutureOr<DataSink> Function(H item) _sinkFor;
+
+  final codec.ChunkFrame<H> Function(Map<String, Object?> frame) _decode;
 
   /// Once it is cancelled the frames still in flight are dropped, never
   /// written: a cancel stops the writes to the caller's sinks.
   final CancelHook _hook;
 
-  /// The pages whose end frame arrived: their sinks are closed.
-  final pages = <PdfRenderedPage>[];
+  /// The items whose end frame arrived: their sinks are closed.
+  final items = <H>[];
 
   /// The first error the caller's factory or sink threw, if any.
   ({Object error, StackTrace stack})? failure;
@@ -314,7 +325,7 @@ class _RenderDelivery implements DataSink {
 
   final _pending = BytesBuilder(copy: false);
   DataSink? _open;
-  PdfRenderedPage? _openPage;
+  H? _openItem;
 
   @override
   Future<void> write(Uint8List chunk) async {
@@ -347,7 +358,7 @@ class _RenderDelivery implements DataSink {
           dropped = true;
           break;
         }
-        await _take(codec.decodeRenderFrame(bin.decodeResponse(frame)));
+        await _take(_decode(bin.decodeResponse(frame)));
       }
     } catch (error, stack) {
       failure ??= (error: error, stack: stack);
@@ -355,46 +366,42 @@ class _RenderDelivery implements DataSink {
     }
   }
 
-  Future<void> _take(codec.RenderFrame frame) async {
+  Future<void> _take(codec.ChunkFrame<H> frame) async {
     switch (frame) {
-      case codec.RenderHeader(:final page):
+      case codec.ChunkHeader<H>(:final item):
         await abandon();
-        _openPage = page;
-        _open = await _sinkFor(page);
-      case codec.RenderData(:final bytes):
+        _openItem = item;
+        _open = await _sinkFor(item);
+      case codec.ChunkData<H>(:final bytes):
         final sink = _open;
         if (sink == null) {
-          throw const PdfEngineError(
-            'a render data frame came before its header',
-          );
+          throw const PdfEngineError('a data frame came before its header');
         }
         await sink.write(bytes);
-      case codec.RenderEnd():
+      case codec.ChunkEnd<H>():
         final sink = _open;
-        final page = _openPage;
-        if (sink == null || page == null) {
-          throw const PdfEngineError(
-            'a render end frame came before its header',
-          );
+        if (sink == null) {
+          throw const PdfEngineError('an end frame came before its header');
         }
+        final item = _openItem as H;
         _open = null;
-        _openPage = null;
+        _openItem = null;
         await sink.close();
-        pages.add(page);
+        items.add(item);
     }
   }
 
-  /// Closes the sink of the page in flight, if any. A sink that fails to
-  /// close here is not reported: whatever stopped the render is the error.
+  /// Closes the sink of the item in flight, if any. A sink that fails to
+  /// close here is not reported: whatever stopped the op is the error.
   Future<void> abandon() async {
     final sink = _open;
     _open = null;
-    _openPage = null;
+    _openItem = null;
     if (sink == null) return;
     try {
       await sink.close();
     } catch (_) {
-      // The error that stopped the render is the one reported.
+      // The error that stopped the op is the one reported.
     }
   }
 

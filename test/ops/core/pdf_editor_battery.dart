@@ -21,6 +21,7 @@ import '../../fixtures/third_party/tp_encrypted.dart';
 import '../../fixtures/third_party/tp_encrypted_legacy.dart';
 import '../../fixtures/third_party/tp_image_kinds.dart';
 import '../../fixtures/third_party/tp_page_prune_objstm.dart';
+import '../../harness/extract_images.dart';
 import '../../harness/page_prune_expect.dart';
 import '../../harness/render_pages.dart';
 import '../../harness/test_source_sink.dart';
@@ -1157,9 +1158,10 @@ void registerEditorTests(Pdf Function() createPdf) {
       );
       await reopened.dispose();
       final doc = await pdf.open(src(saved));
-      final images = await doc
-          .extractImages(pages: const PdfPages.single(0))
-          .toList();
+      final images = await extractedImages(
+        doc,
+        pages: const PdfPages.single(0),
+      );
       expect(images.single.width, 32);
       expect(images.single.height, 32);
       await doc.dispose();
@@ -1375,18 +1377,20 @@ void registerEditorTests(Pdf Function() createPdf) {
         await editor.dispose();
         final saved = sink.takeBytes();
         final doc = await pdf.open(src(saved));
-        final page0 = await doc
-            .extractImages(pages: const PdfPages.single(0))
-            .toList();
+        final page0 = await extractedImages(
+          doc,
+          pages: const PdfPages.single(0),
+        );
         expect(page0.single.width, 128);
         expect(page0.single.height, 128);
-        expect(page0.single.format, 'jpeg');
-        final page1 = await doc
-            .extractImages(pages: const PdfPages.single(1))
-            .toList();
+        expect(page0.single.encoding, PdfImageEncoding.jpeg);
+        final page1 = await extractedImages(
+          doc,
+          pages: const PdfPages.single(1),
+        );
         expect(page1.single.width, 32);
         expect(page1.single.height, 32);
-        expect(page1.single.format, 'jpeg');
+        expect(page1.single.encoding, PdfImageEncoding.jpeg);
         await doc.dispose();
 
         final freshEditor = await pdf.edit(src(fImagesJpeg));
@@ -1415,9 +1419,10 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final saved = sink.takeBytes();
       final doc = await pdf.open(src(saved));
-      final images = await doc
-          .extractImages(pages: const PdfPages.single(0))
-          .toList();
+      final images = await extractedImages(
+        doc,
+        pages: const PdfPages.single(0),
+      );
       expect(images.single.width, 8);
       expect(images.single.height, 8);
       await doc.dispose();
@@ -1439,12 +1444,13 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.save(sink);
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      final images = await doc
-          .extractImages(pages: const PdfPages.single(0))
-          .toList();
+      final images = await extractedImages(
+        doc,
+        pages: const PdfPages.single(0),
+      );
       expect(images.single.width, 16);
       expect(images.single.height, 16);
-      expect(images.single.colorSpace, contains('RGB'));
+      expect(images.single.color, PdfImageColor.rgb);
       await doc.dispose();
 
       final printEditor = await pdf.edit(src(tpKindCmykJpeg));
@@ -1468,10 +1474,11 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final saved = sink.takeBytes();
       final doc = await pdf.open(src(saved));
-      final images = await doc
-          .extractImages(pages: const PdfPages.single(0))
-          .toList();
-      expect(images.single.format, 'raw');
+      final images = await extractedImages(
+        doc,
+        pages: const PdfPages.single(0),
+      );
+      expect(images.single.encoding, PdfImageEncoding.ccitt);
       expect(images.single.width, 32);
       expect(images.single.height, 32);
       expect(images.single.bitsPerComponent, 1);
@@ -1516,12 +1523,13 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.save(sink);
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      final image =
-          (await doc.extractImages(pages: const PdfPages.single(0)).toList())
-              .single;
+      final image = (await extractedImages(
+        doc,
+        pages: const PdfPages.single(0),
+      )).single;
       expect(image.width, 16);
-      expect(image.format, 'jpeg');
-      expect(image.colorSpace, contains('Gray'));
+      expect(image.encoding, PdfImageEncoding.jpeg);
+      expect(image.color, PdfImageColor.gray);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -1580,9 +1588,10 @@ void registerEditorTests(Pdf Function() createPdf) {
       await gray16Editor.save(gray16Sink);
       await gray16Editor.dispose();
       final doc = await pdf.open(src(gray16Sink.takeBytes()));
-      final images = await doc
-          .extractImages(pages: const PdfPages.single(0))
-          .toList();
+      final images = await extractedImages(
+        doc,
+        pages: const PdfPages.single(0),
+      );
       expect(images.single.bitsPerComponent, 8);
       await doc.dispose();
     }, timeout: t(1));
@@ -1683,9 +1692,10 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.save(sink);
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      final images = await doc
-          .extractImages(pages: const PdfPages.single(0))
-          .toList();
+      final images = await extractedImages(
+        doc,
+        pages: const PdfPages.single(0),
+      );
       expect(images.single.width, 8);
       expect(images.single.height, 8);
       await doc.dispose();
@@ -1821,9 +1831,10 @@ void registerEditorTests(Pdf Function() createPdf) {
         await editor.save(sink);
         await editor.dispose();
         final doc = await pdf.open(src(sink.takeBytes()));
-        final images = await doc
-            .extractImages(pages: const PdfPages.single(0))
-            .toList();
+        final images = await extractedImages(
+          doc,
+          pages: const PdfPages.single(0),
+        );
         expect(images.single.width, 32);
         expect(images.single.height, 32);
         await doc.dispose();
@@ -3432,7 +3443,10 @@ void registerEditorTests(Pdf Function() createPdf) {
       expect(images, hasLength(1));
       await reopened.dispose();
       final doc = await pdf.open(src(out));
-      expect(await doc.extractImages(pages: const PdfPages.all()).length, 1);
+      expect(
+        await extractedImages(doc, pages: const PdfPages.all()),
+        hasLength(1),
+      );
       await doc.dispose();
     }, timeout: t(2));
 

@@ -61,6 +61,59 @@ abstract base class PdfReads {
           handle.render(sinkFor, pages: pages, size: size, format: format),
     );
   }
+
+  /// Extracts the images drawn on [pages] and writes each one to the sink
+  /// [sinkFor] returns for it, page by page in the order found; resolves with
+  /// the images written.
+  ///
+  /// [sinkFor] receives the image's descriptor before any byte is written.
+  /// The sink it returns is the library's: it is closed after its image, and
+  /// on an error or a cancel the sink of the image in flight is closed too.
+  /// Images already delivered stand. Each write is awaited before the engine
+  /// goes on, and no image is ever held whole: the library holds only the
+  /// bytes of one chunk in transit.
+  ///
+  /// What each [PdfImage.encoding] yields:
+  ///
+  /// - [PdfImageEncoding.jpeg] and [PdfImageEncoding.jpx]: the stored
+  ///   codestream, byte for byte (a JPEG file or a JPEG 2000 codestream, as
+  ///   the file holds it, decrypted and never decoded). The image's masks and
+  ///   `/Decode` are not applied; read them from the file if they matter.
+  /// - every other encoding ([PdfImageEncoding.raw], [PdfImageEncoding.ccitt]
+  ///   and [PdfImageEncoding.jbig2]): a PNG file written row by row. It is
+  ///   1-bit gray for a stencil mask and for a 1-bit gray image
+  ///   ([PdfImageColor.bilevel]), 8-bit gray for [PdfImageColor.gray], and
+  ///   8-bit RGB for [PdfImageColor.rgb], [PdfImageColor.cmyk] and
+  ///   [PdfImageColor.other] (converted as a page render converts them). An
+  ///   image with an `/SMask`, a `/Mask` stream or a `/Mask` colour-key
+  ///   array is written as 8-bit RGBA, the mask as its alpha, because the
+  ///   picture alone would show pixels the page never shows. Samples of 16
+  ///   bits are written at 8.
+  ///
+  /// Images narrower or shorter than 8 pixels, and images stored with a
+  /// filter the engine does not know, are not listed.
+  ///
+  /// ```dart
+  /// final images = await doc.extractImages(
+  ///   (image) => FileSink.open(
+  ///     File(
+  ///       'p${image.page}-${image.index}.'
+  ///       '${image.encoding == PdfImageEncoding.jpeg ? 'jpg' : 'png'}',
+  ///     ),
+  ///   ),
+  ///   pages: const PdfPages.all(),
+  /// );
+  /// ```
+  ///
+  /// Cancelling the task closes the current image's sink, stops the
+  /// extraction and resolves the task with [PdfCancelled].
+  PdfTask<List<PdfImage>> extractImages(
+    FutureOr<DataSink> Function(PdfImage image) sinkFor, {
+    required PdfPages pages,
+  }) {
+    KeepRecord.op('extractImages');
+    return _run((handle) => handle.extractImages(sinkFor, pages: pages));
+  }
 }
 
 /// A one-shot runs one call: a second call is refused before any I/O.

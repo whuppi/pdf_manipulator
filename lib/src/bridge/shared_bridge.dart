@@ -11,7 +11,7 @@ import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
-import 'package:pdf_manipulator/src/types/extracted_image.dart';
+import 'package:pdf_manipulator/src/types/pdf_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
@@ -282,43 +282,6 @@ Map<String, Object?> _renderSizeArgs(PdfRenderSize size) {
 /// frames that arrive after the consumer cancelled its stream.
 @visibleForTesting
 void Function()? onEngineFrame;
-
-/// Streams the frames of one op (or a sequence of ops) as they are
-/// written. The consumer receives each frame while the op still runs;
-/// the op's final response is decoded last, so an error response throws
-/// after the frames already delivered. Cancelling the subscription
-/// cancels the running job. Dart holds only the frames the consumer
-/// has not taken yet.
-Stream<T> _streamFrames<T>(
-  Future<void> Function(CancelHook hook, DataSink sink) run,
-  T Function(Map<String, Object?> frame) decode,
-) {
-  final hook = CancelHook();
-  late final StreamController<T> controller;
-  controller = StreamController<T>(
-    onListen: () {
-      final sink = _FrameCollectorSink((frame) {
-        onEngineFrame?.call();
-        if (!controller.isClosed && !hook.isCancelled) {
-          controller.add(decode(bin.decodeResponse(frame)));
-        }
-      });
-      unawaited(() async {
-        try {
-          await run(hook, sink);
-        } catch (e, st) {
-          if (!controller.isClosed && !hook.isCancelled) {
-            controller.addError(e, st);
-          }
-        } finally {
-          if (!controller.isClosed) await controller.close();
-        }
-      }());
-    },
-    onCancel: hook.cancel,
-  );
-  return controller.stream;
-}
 
 class _FrameCollectorSink implements DataSink {
   _FrameCollectorSink(this._onFrame);

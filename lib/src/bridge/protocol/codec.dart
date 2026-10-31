@@ -15,7 +15,7 @@ import 'package:pdf_manipulator/src/types/pdf_attachment.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
-import 'package:pdf_manipulator/src/types/extracted_image.dart';
+import 'package:pdf_manipulator/src/types/pdf_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_matrix.dart';
@@ -360,67 +360,96 @@ PdfDocumentClassification decodeClassifyDocument(Map<String, Object?> r) =>
       pageCount: r['pageCount'] as int? ?? 0,
     );
 
-/// One frame of a chunked render: a page opens with a [RenderHeader], carries
-/// its bytes in [RenderData] frames of at most 256 KiB, and closes with a
-/// [RenderEnd].
-sealed class RenderFrame {
-  const RenderFrame();
+/// One frame of a chunked sequence of items (the pages of a render, the
+/// images of an extraction): an item opens with a [ChunkHeader] holding its
+/// descriptor of type [H], carries its bytes in [ChunkData] frames of at most
+/// 256 KiB, and closes with a [ChunkEnd].
+sealed class ChunkFrame<H> {
+  const ChunkFrame();
 }
 
-/// The first frame of a page: its descriptor, before any pixel.
-final class RenderHeader extends RenderFrame {
+/// The first frame of an item: its descriptor, before any byte.
+final class ChunkHeader<H> extends ChunkFrame<H> {
   /// Creates a header frame.
-  const RenderHeader(this.page, this.format);
+  const ChunkHeader(this.item);
 
-  /// The page the frames that follow belong to.
-  final PdfRenderedPage page;
-
-  /// What the data frames of the page carry.
-  final PdfRenderFormat format;
+  /// The item the frames that follow belong to.
+  final H item;
 }
 
-/// A run of the page's bytes, in order.
-final class RenderData extends RenderFrame {
+/// A run of the item's bytes, in order.
+final class ChunkData<H> extends ChunkFrame<H> {
   /// Creates a data frame.
-  const RenderData(this.bytes);
+  const ChunkData(this.bytes);
 
   /// The bytes, a view into the frame.
   final Uint8List bytes;
 }
 
-/// The last frame of a page.
-final class RenderEnd extends RenderFrame {
+/// The last frame of an item.
+final class ChunkEnd<H> extends ChunkFrame<H> {
   /// Creates an end frame.
-  const RenderEnd();
+  const ChunkEnd();
 }
 
-/// Decodes a chunked-render frame from a response map by its `kind`.
-RenderFrame decodeRenderFrame(Map<String, Object?> data) {
+/// Decodes a chunked frame from a response map by its `kind`; [item] builds
+/// the descriptor from a header, and [what] names the sequence in an error.
+ChunkFrame<H> decodeChunkFrame<H>(
+  Map<String, Object?> data,
+  H Function(Map<String, Object?> header) item,
+  String what,
+) {
   final kind = data['kind'] as String? ?? '';
   return switch (kind) {
-    'header' => RenderHeader(
-      PdfRenderedPage(
-        page: data['page'] as int? ?? 0,
-        width: data['width'] as int? ?? 0,
-        height: data['height'] as int? ?? 0,
-      ),
-      _enumByWireName(PdfRenderFormat.values, data['format'], 'render format'),
-    ),
-    'data' => RenderData(_extractBytes(data['data'])),
-    'end' => const RenderEnd(),
-    _ => throw PdfEngineError('unknown render frame "$kind" on the wire'),
+    'header' => ChunkHeader<H>(item(data)),
+    'data' => ChunkData<H>(_extractBytes(data['data'])),
+    'end' => ChunkEnd<H>(),
+    _ => throw PdfEngineError('unknown $what frame "$kind" on the wire'),
   };
 }
 
-/// Decodes an extracted image from a response map.
-ExtractedImage decodePdfImage(Map<String, Object?> data) => ExtractedImage(
-  width: data['width'] as int? ?? 0,
-  height: data['height'] as int? ?? 0,
-  format: data['format'] as String? ?? '',
-  colorSpace: data['colorSpace'] as String? ?? '',
-  bitsPerComponent: data['bitsPerComponent'] as int? ?? 8,
-  data: _extractBytes(data['data']),
-);
+/// Decodes a chunked-render frame: its pages carry [PdfRenderedPage]
+/// descriptors.
+ChunkFrame<PdfRenderedPage> decodeRenderFrame(Map<String, Object?> data) =>
+    decodeChunkFrame(data, (header) {
+      // The format is the caller's own choice; the engine echoes it, and an
+      // unknown one is a wire fault.
+      _enumByWireName(
+        PdfRenderFormat.values,
+        header['format'],
+        'render format',
+      );
+      return PdfRenderedPage(
+        page: header['page'] as int? ?? 0,
+        width: header['width'] as int? ?? 0,
+        height: header['height'] as int? ?? 0,
+      );
+    }, 'render');
+
+/// Decodes a chunked-extraction frame: its items carry [PdfImage]
+/// descriptors.
+ChunkFrame<PdfImage> decodeImageFrame(Map<String, Object?> data) =>
+    decodeChunkFrame(
+      data,
+      (header) => PdfImage(
+        page: header['page'] as int? ?? 0,
+        index: header['index'] as int? ?? 0,
+        width: header['width'] as int? ?? 0,
+        height: header['height'] as int? ?? 0,
+        bitsPerComponent: header['bitsPerComponent'] as int? ?? 8,
+        encoding: _enumByWireName(
+          PdfImageEncoding.values,
+          header['encoding'],
+          'image encoding',
+        ),
+        color: _enumByWireName(
+          PdfImageColor.values,
+          header['color'],
+          'image color',
+        ),
+      ),
+      'image',
+    );
 
 /// Decodes editor metadata (page count, version, title, etc.).
 ({

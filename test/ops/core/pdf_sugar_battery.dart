@@ -15,6 +15,7 @@ import 'package:test/test.dart';
 
 import '../../fixtures/generated/fixtures.dart';
 import '../../fixtures/handwritten.dart';
+import '../../harness/extract_images.dart';
 import '../../harness/page_prune_expect.dart';
 import '../../harness/render_pages.dart';
 import '../../harness/test_source_sink.dart';
@@ -157,14 +158,16 @@ void registerSugarTests(Pdf Function() createPdf) {
         reason: 'the text of every page survives',
       );
       for (var page = 0; page < 3; page++) {
-        final expected = await before
-            .extractImages(pages: PdfPages.single(page))
-            .toList();
-        final actual = await after
-            .extractImages(pages: PdfPages.single(page))
-            .toList();
+        final expected = await extractToMemory(
+          before,
+          pages: PdfPages.single(page),
+        );
+        final actual = await extractToMemory(
+          after,
+          pages: PdfPages.single(page),
+        );
         expect(actual, hasLength(1));
-        expect(actual.single.width, expected.single.width);
+        expect(actual.single.image.width, expected.single.image.width);
         expect(actual.single.data, expected.single.data);
       }
       final renderedBefore = await renderToMemory(
@@ -245,14 +248,13 @@ void registerSugarTests(Pdf Function() createPdf) {
       final text = await after.extract(pages: const PdfPages.all());
       expect(text, await before.extract(pages: const PdfPages.all()));
       expect(text, contains(unusedResourcesMarker));
-      final expected = await before
-          .extractImages(pages: const PdfPages.all())
-          .toList();
-      final actual = await after
-          .extractImages(pages: const PdfPages.all())
-          .toList();
+      final expected = await extractToMemory(
+        before,
+        pages: const PdfPages.all(),
+      );
+      final actual = await extractToMemory(after, pages: const PdfPages.all());
       expect(actual, hasLength(expected.length));
-      expect(actual.single.width, expected.single.width);
+      expect(actual.single.image.width, expected.single.image.width);
       expect(actual.single.data, expected.single.data);
       await before.dispose();
       await after.dispose();
@@ -341,9 +343,10 @@ void registerSugarTests(Pdf Function() createPdf) {
       expect(output.length, lessThan(fImagesHires.length ~/ 4));
       final doc = await pdf.open(src(output));
       expect(doc.pageCount, 1);
-      final images = await doc
-          .extractImages(pages: const PdfPages.single(0))
-          .toList();
+      final images = await extractedImages(
+        doc,
+        pages: const PdfPages.single(0),
+      );
       expect(images.single.width, 32);
       expect(images.single.height, 32);
       await doc.dispose();

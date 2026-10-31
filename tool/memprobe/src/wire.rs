@@ -9,7 +9,8 @@
 //!             status 1 = ok, 0 = error (kind u8 first, `message`
 //!             string field always present), 2 = cancelled.
 //!   Type codes: 0 null 1 i32 2 i64 3 f64 4 bool 5 string 6 bytes
-//!               7 int_list 9 string_list (u32le length prefixes).
+//!               7 int_list 9 string_list (u32le length prefixes),
+//!               10 map_list (skipped when read).
 
 /// One typed field value the probe may send or read back.
 #[derive(Clone, Debug, PartialEq)]
@@ -290,6 +291,16 @@ fn read_value(r: &mut Reader<'_>) -> ReadResult<Value> {
                 list.push(r.utf8(slen)?);
             }
             Ok(Value::StrList(list))
+        }
+        // A list of maps (reduceImages' report): skipped whole, the probe reads
+        // its effect from the file the op wrote.
+        10 => {
+            let count = r.u32()? as usize;
+            for _ in 0..count {
+                let map_len = r.u32()? as usize;
+                r.slice(map_len)?;
+            }
+            Ok(Value::Null)
         }
         _ => Ok(Value::Null),
     }
