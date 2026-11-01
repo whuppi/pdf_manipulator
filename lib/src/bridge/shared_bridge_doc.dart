@@ -31,7 +31,12 @@ class _SharedDocHandle extends BridgeDocHandle {
     EngineOp op,
     Map<String, Object?> args, {
     List<DataSink> sinks = const [],
-  }) => _bridge._exec(op, {'handleId': _handleId, ...args}, sinks: sinks);
+  }) => _bridge._exec(
+    op,
+    {'handleId': _handleId, ...args},
+    sinks: sinks,
+    scope: scope,
+  );
 
   @override
   Map<String, Object?> get openResult => _openResult;

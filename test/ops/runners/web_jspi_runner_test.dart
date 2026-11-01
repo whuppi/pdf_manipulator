@@ -20,6 +20,7 @@ import '../core/pdf_one_shot_battery.dart';
 import '../core/pdf_render_battery.dart';
 import '../core/pdf_determinism_battery.dart';
 import '../core/pdf_cancel_battery.dart';
+import '../core/pdf_combinator_cancel_battery.dart';
 import '../core/pdf_lifecycle_battery.dart';
 import '../core/pdf_instance_battery.dart';
 import '../stress/pdf_doc_stress_battery.dart';
@@ -76,6 +77,7 @@ void main() {
   registerRenderTests(() => pdf);
   registerDeterminismTests(() => pdf);
   registerCancelTests(() => pdf);
+  registerCombinatorCancelTests(() => pdf);
   registerLifecycleTests(
     () => Pdf(
       config: PdfConfig(

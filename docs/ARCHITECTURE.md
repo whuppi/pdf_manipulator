@@ -715,6 +715,21 @@ The lane survives; only that job dies — its result posts as
 cancelled. Fire-and-forget tasks absorb the cancelled outcome
 silently; real failures on unlistened tasks are re-raised loudly.
 
+**One cancel for a combinator.** A `CancelHook` holds any number of
+actions: `register` returns the function that unregisters the action,
+`cancel` runs every registered action once, and an action registered
+after the cancel runs at once. `read`, `rewrite`, `buildTo` and the
+`edits` / `reads` one-shots open their handle through `_own`, which
+gives the handle the combinator's hook (`scope`). Each op issued on
+that handle (document, editor, builder and page builder) registers its
+own cancel with the scope while it runs and unregisters when it ends.
+Cancelling the combinator therefore cancels every body op in flight
+(each resolves `PdfCancelled`); an op issued afterwards fails at once
+with `PdfCancelled` without reaching the engine; the save never runs;
+the handle is disposed, and the dispose op carries no scope so it
+always runs. A handle the caller opened (`pdf.open`, `pdf.edit`) has no
+scope and keeps its per-op cancel.
+
 **Mid-loop cancel.** The engine's CPU loops (all-pages extract, search,
 image reduction, validation, PDF/A conversion, render, image
 extraction, the editor save's page loop) poll a `CancelCheck` once per

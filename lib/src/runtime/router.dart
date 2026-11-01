@@ -166,17 +166,17 @@ class Router implements PdfTransport {
 
     slot.activeJobs++;
     // submit() registers the job synchronously before returning its
-    // future — binding AFTER that line means a fired cancel always
+    // future — registering AFTER that line means a fired cancel always
     // finds its job. A finished job's cancel is a lane-level no-op,
-    // but unbinding keeps it exact.
+    // but unregistering keeps it exact.
     final pending = slot.lane.submit(job);
-    cancel?.bind(() => slot.lane.cancelJob(job.jobId));
+    final unregister = cancel?.register(() => slot.lane.cancelJob(job.jobId));
     final LaneSubmitResult result;
     try {
       result = await pending;
     } finally {
       slot.activeJobs--;
-      cancel?.unbind();
+      unregister?.call();
     }
 
     // Pin bookkeeping is response-driven, not op-name-driven: any op

@@ -96,6 +96,12 @@ abstract class PdfBridge {
 
 /// Handle to an open PDF document — read-only queries.
 abstract class BridgeDocHandle {
+  /// The hook of the combinator that owns this handle, or null for a handle
+  /// the caller opened. Every op issued on the handle registers its cancel
+  /// with it while it runs; an op issued after the cancel resolves cancelled
+  /// without reaching the engine.
+  CancelHook? scope;
+
   // ── Metadata (populated at open time, cached) ──
 
   /// Raw key-value pairs returned by the engine at open time.
@@ -178,6 +184,10 @@ abstract class BridgeDocHandle {
 
 /// Handle to an open PDF editor session.
 abstract class BridgeEditorHandle {
+  /// The hook of the combinator that owns this handle (see
+  /// [BridgeDocHandle.scope]).
+  CancelHook? scope;
+
   /// Number of pages in the document.
   PdfTask<int> get pageCount;
 
@@ -443,6 +453,10 @@ abstract class BridgeEditorHandle {
 
 /// Handle to a PDF builder session.
 abstract class BridgeBuilderHandle {
+  /// The hook of the combinator that owns this handle (see
+  /// [BridgeDocHandle.scope]); the page builders it returns inherit it.
+  CancelHook? scope;
+
   /// Sets the document title.
   PdfTask<void> setTitle(String value);
 

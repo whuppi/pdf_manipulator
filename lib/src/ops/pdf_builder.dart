@@ -16,6 +16,9 @@ class PdfBuilder implements _Handle {
   final BridgeBuilderHandle _handle;
   bool _disposed = false;
 
+  @override
+  void _scopeTo(CancelHook hook) => _handle.scope = hook;
+
   void _check() {
     if (_disposed) {
       throw const PdfDisposed('This PdfBuilder has been disposed');

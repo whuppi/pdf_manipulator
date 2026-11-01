@@ -17,7 +17,7 @@ class _SharedBuilderHandle extends BridgeBuilderHandle {
   final int _handleId;
 
   PdfTask<Map<String, Object?>> _exec(EngineOp op, Map<String, Object?> args) =>
-      _bridge._exec(op, {'handleId': _handleId, ...args});
+      _bridge._exec(op, {'handleId': _handleId, ...args}, scope: scope);
 
   @override
   PdfTask<void> setTitle(String value) =>
@@ -36,12 +36,12 @@ class _SharedBuilderHandle extends BridgeBuilderHandle {
   PdfTask<BridgePageBuilderHandle> addA4Page() => _exec(
     EngineOp.builderAddPage,
     {'pageType': 'a4'},
-  ).map((_) => _SharedPageBuilderHandle(_bridge, _handleId));
+  ).map((_) => _SharedPageBuilderHandle(_bridge, _handleId, scope));
   @override
   PdfTask<BridgePageBuilderHandle> addLetterPage() => _exec(
     EngineOp.builderAddPage,
     {'pageType': 'letter'},
-  ).map((_) => _SharedPageBuilderHandle(_bridge, _handleId));
+  ).map((_) => _SharedPageBuilderHandle(_bridge, _handleId, scope));
   @override
   PdfTask<BridgePageBuilderHandle> addPage({
     required double width,
@@ -49,16 +49,18 @@ class _SharedBuilderHandle extends BridgeBuilderHandle {
   }) => _exec(EngineOp.builderAddPage, {
     'width': width,
     'height': height,
-  }).map((_) => _SharedPageBuilderHandle(_bridge, _handleId));
+  }).map((_) => _SharedPageBuilderHandle(_bridge, _handleId, scope));
 
   @override
   PdfTask<void> save(DataSink output, {bool compress = true}) => _bridge._exec(
     EngineOp.builderSave,
     {'handleId': _handleId, 'compress': compress},
     sinks: [output],
+    scope: scope,
   );
   @override
-  Future<void> dispose() => _exec(EngineOp.builderDispose, {});
+  Future<void> dispose() =>
+      _bridge._exec(EngineOp.builderDispose, {'handleId': _handleId});
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -66,16 +68,17 @@ class _SharedBuilderHandle extends BridgeBuilderHandle {
 // ══════════════════════════════════════════════════════════════════
 
 class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
-  _SharedPageBuilderHandle(this._bridge, this._handleId);
+  _SharedPageBuilderHandle(this._bridge, this._handleId, this._scope);
   final SharedBridge _bridge;
   final int _handleId;
+  final CancelHook? _scope;
 
   PdfTask<void> _op(PageOp op, [Map<String, Object?> extra = const {}]) =>
       _bridge._exec(EngineOp.builderPageOp, {
         'handleId': _handleId,
         'pageOp': op.wire,
         ...extra,
-      });
+      }, scope: _scope);
 
   @override
   PdfTask<void> font(String name, double size) =>
@@ -108,6 +111,7 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
       'altText': altText,
     },
     sources: [imageData],
+    scope: _scope,
   );
   @override
   PdfTask<void> watermark(String text) => _op(PageOp.watermark, {'text': text});
@@ -300,6 +304,7 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
           ...codec.encodeRectArgs(rect),
         },
         sources: [imageData],
+        scope: _scope,
       );
   @override
   PdfTask<void> table(
@@ -386,6 +391,7 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
   @override
   PdfTask<void> newPageSameSize() => _op(PageOp.newPageSameSize);
   @override
-  PdfTask<void> done() =>
-      _bridge._exec(EngineOp.builderPageDone, {'handleId': _handleId});
+  PdfTask<void> done() => _bridge._exec(EngineOp.builderPageDone, {
+    'handleId': _handleId,
+  }, scope: _scope);
 }

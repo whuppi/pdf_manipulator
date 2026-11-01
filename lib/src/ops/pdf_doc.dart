@@ -38,6 +38,9 @@ base class PdfDoc extends PdfReads implements _Handle {
   final BridgeDocHandle _handle;
   bool _disposed = false;
 
+  @override
+  void _scopeTo(CancelHook hook) => _handle.scope = hook;
+
   // ── Metadata (populated at open time) ──
 
   /// Total number of pages in the document.

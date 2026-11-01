@@ -29,6 +29,7 @@ class _SharedEditorHandle extends BridgeEditorHandle {
     sources: sources,
     sinks: sinks,
     keepSources: keepSources,
+    scope: scope,
   );
 
   PdfTask<void> _mutate(

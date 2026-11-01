@@ -56,24 +56,35 @@ class SharedBridge extends PdfBridge {
   /// Encode → send → decode. The core pattern for every operation.
   /// Births the op's [PdfTask]: the hook created here is what
   /// task.cancel() drives, and the Router binds it to the lane job.
+  ///
+  /// An op issued on a handle a combinator owns passes that handle's
+  /// [scope]: the op's cancel is registered with it for as long as the op
+  /// runs, and a scope already cancelled cancels the op before it is
+  /// submitted.
   PdfTask<Map<String, Object?>> _exec(
     EngineOp op,
     Map<String, Object?> args, {
     List<DataSource> sources = const [],
     List<DataSink> sinks = const [],
     Set<int> keepSources = const {},
+    CancelHook? scope,
   }) {
     final hook = CancelHook();
+    final unregister = scope?.register(hook.cancel);
     final future = () async {
-      final req = bin.encodeRequest(op.wire, args);
-      final res = await _transport.execute(
-        req,
-        sources: sources,
-        sinks: sinks,
-        keepSources: keepSources,
-        cancel: hook,
-      );
-      return bin.decodeResponse(res.bytes);
+      try {
+        final req = bin.encodeRequest(op.wire, args);
+        final res = await _transport.execute(
+          req,
+          sources: sources,
+          sinks: sinks,
+          keepSources: keepSources,
+          cancel: hook,
+        );
+        return bin.decodeResponse(res.bytes);
+      } finally {
+        unregister?.call();
+      }
     }();
     return PdfTask.internal(future, hook);
   }

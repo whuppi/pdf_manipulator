@@ -29,7 +29,7 @@ export 'package:pdf_manipulator/src/types/cancel_hook.dart' show CancelHook;
 /// with [cancel].
 ///
 /// ```dart
-/// final task = doc.extract(pages: PdfPages.all);
+/// final task = pdf.read(source, (doc) => doc.extractText(sink));
 /// task.cancel();          // soft-cancel — idempotent
 /// await task;             // → throws PdfCancelled
 /// ```
@@ -60,9 +60,9 @@ class PdfTask<T> implements Future<T> {
   /// INTERNAL — wraps a multi-step flow in one cancellable task.
   ///
   /// [body] receives the task's hook; it runs each engine step with
-  /// `hook.guard(step)` so cancel() always lands on the step that is
-  /// currently in flight (re-binding replaces the previous step's
-  /// action; a cancelled hook cancels the next step on sight).
+  /// `hook.guard(step)` so cancel() always lands on every step in
+  /// flight (a finished step unregisters itself; a cancelled hook
+  /// cancels the next step on sight).
   @internal
   static PdfTask<T> group<T>(Future<T> Function(CancelHook hook) body) {
     final hook = CancelHook();
@@ -134,11 +134,11 @@ class PdfTask<T> implements Future<T> {
 /// INTERNAL — step composition for multi-step flows (see
 /// [PdfTask.group]).
 extension CancelHookGuard on CancelHook {
-  /// Runs one step under this hook: cancel() on the group cancels
-  /// whichever step is currently guarded.
+  /// Runs one step under this hook: cancel() on the group cancels every
+  /// step still in flight; a finished step is unregistered.
   @internal
   Future<T> guard<T>(PdfTask<T> task) {
-    bind(task.cancel);
-    return task;
+    final unregister = register(task.cancel);
+    return task.whenComplete(unregister);
   }
 }

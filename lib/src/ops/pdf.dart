@@ -59,6 +59,10 @@ part 'pdf_sugar.dart';
 /// A handle the library can open and must close: the common face of
 /// [PdfDoc], [PdfEditor] and [PdfBuilder] for `_own`.
 abstract interface class _Handle {
+  /// Makes every op issued on the handle from now on register its cancel
+  /// with [hook].
+  void _scopeTo(CancelHook hook);
+
   Future<void> dispose();
 }
 
@@ -68,16 +72,23 @@ abstract interface class _Handle {
 ///
 /// [opening] is the door call (`pdf.open(...)`, `pdf.edit(...)`,
 /// `pdf.build()`); the handle-creator wall allows those calls only here, as
-/// the argument of `_own`, and in the doors themselves. [body] guards each
-/// engine step it starts with `hook.guard`, so cancelling the returned task
-/// cancels the step in flight.
+/// the argument of `_own`, and in the doors themselves. The handle carries
+/// the returned task's hook: cancelling the task cancels every op [body]
+/// has in flight on the handle, and an op issued after the cancel fails at
+/// once with [PdfCancelled]. [body] guards the steps it starts on other
+/// handles with `hook.guard`.
 PdfTask<R> _own<H extends _Handle, R>(
   PdfTask<H> opening,
   Future<R> Function(H handle, CancelHook hook) body,
 ) => PdfTask.group((hook) async {
   final handle = await hook.guard(opening);
   try {
-    return await body(handle, hook);
+    handle._scopeTo(hook);
+    final result = await body(handle, hook);
+    // A body that caught its ops' cancellation still ends cancelled: one
+    // cancel ends the whole job.
+    if (hook.isCancelled) throw const PdfCancelled();
+    return result;
   } finally {
     await handle.dispose();
   }
@@ -213,8 +224,9 @@ class Pdf {
   /// success, after an error and after a cancel. The handle is the
   /// library's: do not keep it past [body].
   ///
-  /// Cancelling the task stops the open; a task [body] started is cancelled
-  /// through its own [PdfTask].
+  /// Cancelling the task stops the open and every op [body] has running on
+  /// `doc`, which resolves with [PdfCancelled]; an op [body] issues on `doc`
+  /// after the cancel fails at once with [PdfCancelled].
   PdfTask<T> read<T>(
     DataSource source,
     Future<T> Function(PdfDoc doc) body, {
@@ -227,8 +239,10 @@ class Pdf {
   /// all or nothing. The handle is the library's: do not keep it past
   /// [edits]. Nothing is written when [edits] throws.
   ///
-  /// Cancelling the task stops the open and the save; a task [edits] started
-  /// is cancelled through its own [PdfTask].
+  /// Cancelling the task stops the open, every op [edits] has running on the
+  /// editor, which resolves with [PdfCancelled], and the save: an op issued
+  /// after the cancel fails at once with [PdfCancelled] and nothing is
+  /// written to [output].
   PdfTask<void> rewrite(
     DataSource source,
     DataSink output,
@@ -246,8 +260,10 @@ class Pdf {
   /// The handle is the library's: do not keep it past [body]. Nothing is
   /// written when [body] throws.
   ///
-  /// Cancelling the task stops the save; a task [body] started is cancelled
-  /// through its own [PdfTask].
+  /// Cancelling the task stops every op [body] has running on the builder
+  /// and its page builders, which resolves with [PdfCancelled], and the
+  /// save: an op issued after the cancel fails at once with [PdfCancelled]
+  /// and nothing is written to [output].
   PdfTask<void> buildTo(
     DataSink output,
     Future<void> Function(PdfBuilder builder) body, {

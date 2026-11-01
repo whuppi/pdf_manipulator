@@ -20,6 +20,9 @@ base class PdfEditor extends PdfEdits implements _Handle {
   bool _disposed = false;
 
   @override
+  void _scopeTo(CancelHook hook) => _handle.scope = hook;
+
+  @override
   PdfTask<T> _run<T>(PdfTask<T> Function(BridgeEditorHandle handle) apply) {
     _check();
     return apply(_handle);
