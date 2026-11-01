@@ -89,6 +89,14 @@ fn limit(op: &str, input: &str) -> usize {
             16 * MIB
         },
         ("redact", "content-fl" | "content-a85" | "content-lzw") => 16 * MIB,
+        // The copy of a raw or fax image streams its rows, the covered ones
+        // filled, into the save's encoder; a box over all of it writes none.
+        ("redact", "huge" | "hugeFull" | "hugeFax") => 16 * MIB,
+        // The ruled exception (d-122): the redacted copy of a progressive JPEG
+        // needs every pixel at full size, so the save holds the decoder's
+        // coefficients and one full-size raster; the target is the measured
+        // peak rounded up. Redacting in the DCT domain (t-473) ends it.
+        ("redact", "hugeJpeg") => 80 * MIB,
         _ => panic!("no memory limit for {op} on {input}: add one to limit()"),
     }
 }
@@ -627,6 +635,113 @@ fn run() -> Result<(), String> {
         },
     }
 
+    // The image redactions of the huge inputs: a box over the lower-left
+    // quarter of each page, then a box over all of it. The measured step is
+    // the redaction and its save; the saved file is read back after it.
+    let quarter = [0.0, 0.0, 306.0, 396.0];
+    let whole = [0.0, 0.0, 612.0, 792.0];
+    for (name, path, rect) in [
+        ("huge", &huge_drawn, quarter),
+        ("hugeFull", &huge_drawn, whole),
+        ("hugeJpeg", &huge_jpeg, quarter),
+        ("hugeFax", &huge_fax, quarter),
+    ] {
+        let saved = open_sink(name, "redacted");
+        step(&failed, "redact", name, limit("redact", name), |st| {
+            redact_box_to_sink(st, path, rect, &saved)
+        });
+        let checked: Result<(), String> = (|| {
+            if !saved.exists() {
+                return Err("the redaction wrote no file".to_string());
+            }
+            match name {
+                "hugeFull" => {
+                    let doc = pdf_oxide::PdfDocument::open(&saved).map_err(|e| e.to_string())?;
+                    let images = doc.extract_images(0).map_err(|e| e.to_string())?;
+                    if !images.is_empty() {
+                        return Err(format!("{} images left under the full box", images.len()));
+                    }
+                    eprintln!("memprobe: redact hugeFull: read back: no image on page 0");
+                    Ok(())
+                },
+                "hugeJpeg" => {
+                    let doc = pdf_oxide::PdfDocument::open(&saved).map_err(|e| e.to_string())?;
+                    let mut images = doc.extract_images(0).map_err(|e| e.to_string())?;
+                    if images.len() != 1 {
+                        return Err(format!("{} images on page 0, expected 1", images.len()));
+                    }
+                    let image = images.remove(0);
+                    let (w, h) = (image.width(), image.height());
+                    match image.data() {
+                        pdf_oxide::extractors::ImageData::Jpeg(bytes) => {
+                            if (w, h) != (4096, 3072) {
+                                return Err(format!("the JPEG is {w}x{h}, expected 4096x3072"));
+                            }
+                            if bytes.get(..2) != Some(&[0xFF, 0xD8]) || bytes.get(bytes.len() - 2..) != Some(&[0xFF, 0xD9]) {
+                                return Err("the extracted JPEG does not run from FFD8 to FFD9".to_string());
+                            }
+                            eprintln!(
+                                "memprobe: redact hugeJpeg: read back: JPEG {w}x{h}, {} bytes",
+                                bytes.len()
+                            );
+                            Ok(())
+                        },
+                        pdf_oxide::extractors::ImageData::Raw { .. } => {
+                            Err("the image extracted as raw pixels, expected JPEG".to_string())
+                        },
+                    }
+                },
+                "hugeFax" => {
+                    // The copy read back through the wire `extractImages`, the
+                    // product's path: its PNG decoded here, 1-bit gray.
+                    let wire_file = open_sink("hugeFax", "redacted-wire");
+                    let mut state = pdf_oxide::host::lane_state::LaneState::new();
+                    extract_to_sink(&mut state, &saved, &wire_file)?;
+                    let (w, h, depth, rows) = decode_gray_png(&wire_png(&wire_file)?)?;
+                    if (w, h, depth) != (20000, 20000, 1) {
+                        return Err(format!("the wire PNG is {w}x{h} at {depth} bits, expected 20000x20000 at 1"));
+                    }
+                    let row = w.div_ceil(8) as usize;
+                    // The source is the band generate_huge_fax draws: black (0)
+                    // from `left` for 1000 columns, white (1) elsewhere.
+                    let band = |x: u32, y: u32| -> u8 {
+                        let left = (y as usize * 997) % (20000 - 1000);
+                        let x = x as usize;
+                        if x >= left && x < left + 1000 { 0 } else { 1 }
+                    };
+                    let copy_bit = |x: u32, y: u32| -> u8 {
+                        (rows[y as usize * row + x as usize / 8] >> (7 - x % 8)) & 1
+                    };
+                    let cover = Cover::new(page_image_ctm(), quarter);
+                    let covered = check_exact((w, h), &cover, 0, band, copy_bit)?;
+                    eprintln!("memprobe: redact hugeFax: wire read back: {covered} covered pixels are the fill, every other pixel is the source's");
+                    Ok(())
+                },
+                _ => {
+                    let (w, h, source) = read_back_raster(path)?;
+                    let (cw, ch, copy) = read_back_raster(&saved)?;
+                    if (cw, ch) != (w, h) {
+                        return Err(format!("the copy is {cw}x{ch}, the source {w}x{h}"));
+                    }
+                    let cover = Cover::new(page_image_ctm(), quarter);
+                    let covered = check_exact(
+                        (w, h),
+                        &cover,
+                        0,
+                        |x, y| source[(y * w + x) as usize],
+                        |x, y| copy[(y * w + x) as usize],
+                    )?;
+                    eprintln!("memprobe: redact {name}: read back: {covered} covered samples are the fill, every other sample is the source's");
+                    Ok(())
+                },
+            }
+        })();
+        if let Err(e) = checked {
+            eprintln!("memprobe: redact {name}: READ-BACK FAIL: {e}");
+            failed.set(true);
+        }
+    }
+
     // The ruled exception: JBIG2 holds one page bitmap. Render and
     // extraction at the measured peak.
     let huge_jbig2 = dir.join("huge-jbig2.pdf");
@@ -829,6 +944,231 @@ fn reduce_to_sink(
     save_full(state, hid, sink_path, false)?;
     dispose(state, hid);
     Ok(())
+}
+
+/// Opens `path` as an editor, adds the redaction box `rect` (page points,
+/// x y width height) on page 0, applies it, saves to `sink_path` and disposes
+/// the editor: the host path a Dart `redact` and its save take.
+fn redact_box_to_sink(
+    state: &mut pdf_oxide::host::lane_state::LaneState,
+    path: &Path,
+    rect: [f64; 4],
+    sink_path: &Path,
+) -> Result<(), String> {
+    let resp = call(state, re("editorOpen"), vec![source(path)], vec![])?;
+    let hid = resp.i32("handleId").expect("editorOpen returns handleId");
+    let mut mark = re("editorMutate")
+        .put("handleId", i32v(hid))
+        .put("editOp", strv("addRedaction"))
+        .put("page", i32v(0));
+    for (key, value) in ["x", "y", "width", "height"].into_iter().zip(rect) {
+        mark = mark.put(key, wire::Value::F64(value));
+    }
+    call(state, mark, vec![], vec![])?;
+    call(
+        state,
+        re("editorMutate")
+            .put("handleId", i32v(hid))
+            .put("editOp", strv("applyRedactions")),
+        vec![],
+        vec![],
+    )?;
+    save_full(state, hid, sink_path, false)?;
+    dispose(state, hid);
+    Ok(())
+}
+
+/// The one image page 0 of `path` paints, decoded by the library reader
+/// outside any measured step. Its raw pixels are one byte a sample.
+fn read_back_raster(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
+    use pdf_oxide::extractors::ImageData;
+    let doc = pdf_oxide::PdfDocument::open(path).map_err(|e| e.to_string())?;
+    let mut images = doc.extract_images(0).map_err(|e| e.to_string())?;
+    if images.len() != 1 {
+        return Err(format!("{} images on page 0, expected 1", images.len()));
+    }
+    let image = images.remove(0);
+    let (w, h) = (image.width(), image.height());
+    match image.data() {
+        ImageData::Raw { pixels, .. } => Ok((w, h, pixels.clone())),
+        ImageData::Jpeg(_) => Err("the image extracted as JPEG, expected raw pixels".to_string()),
+    }
+}
+
+/// The CTM of the page's one image: the unit square drawn over the whole
+/// Letter page, `q 612 0 0 792 0 0 cm /Im Do Q`.
+fn page_image_ctm() -> pdf_oxide::content::graphics_state::Matrix {
+    pdf_oxide::content::graphics_state::Matrix { a: 612.0, b: 0.0, c: 0.0, d: 792.0, e: 0.0, f: 0.0 }
+}
+
+/// The pixels the pass covers in an image placed by `ctm` under the page
+/// rectangle `rect` (x, y, width, height in page points). It is the pass's own
+/// decision: `classify_image_placement` over the region padded by the default
+/// edge padding, and the fill rule the copy takes (a pixel is the fill when its
+/// centre lies in the covered rectangle the decision returns).
+enum Cover {
+    Nothing,
+    Everything,
+    Rect { u0: f32, v0: f32, u1: f32, v1: f32 },
+}
+
+impl Cover {
+    fn new(ctm: pdf_oxide::content::graphics_state::Matrix, rect: [f64; 4]) -> Cover {
+        use pdf_oxide::redaction::image_prune::{classify_image_placement, ImageRedaction};
+        use pdf_oxide::redaction::{RedactionRegion, RegionSet, DEFAULT_EDGE_PADDING};
+        let [x, y, width, height] = rect;
+        let mut regions = RegionSet::new(0);
+        regions.push(RedactionRegion::from_rect(
+            x as f32,
+            y as f32,
+            (x + width) as f32,
+            (y + height) as f32,
+            None,
+        ));
+        match classify_image_placement(&ctm, &regions, DEFAULT_EDGE_PADDING) {
+            ImageRedaction::Keep => Cover::Nothing,
+            ImageRedaction::DeleteFull => Cover::Everything,
+            ImageRedaction::Overwrite { u0, v0, u1, v1 } => Cover::Rect { u0, v0, u1, v1 },
+        }
+    }
+
+    fn contains(&self, x: u32, y: u32, w: u32, h: u32) -> bool {
+        match *self {
+            Cover::Nothing => false,
+            Cover::Everything => true,
+            Cover::Rect { u0, v0, u1, v1 } => {
+                let u = (f64::from(x) + 0.5) / f64::from(w);
+                let v = 1.0 - (f64::from(y) + 0.5) / f64::from(h);
+                f64::from(u0) <= u && u < f64::from(u1) && f64::from(v0) <= v && v < f64::from(v1)
+            },
+        }
+    }
+}
+
+/// Every pixel of a `w x h` copy against its expected value: a covered pixel
+/// is `fill`, an uncovered one is the source's. Returns the covered count.
+fn check_exact(
+    (w, h): (u32, u32),
+    cover: &Cover,
+    fill: u8,
+    source: impl Fn(u32, u32) -> u8,
+    copy: impl Fn(u32, u32) -> u8,
+) -> Result<u64, String> {
+    let mut covered = 0u64;
+    for y in 0..h {
+        for x in 0..w {
+            let got = copy(x, y);
+            if cover.contains(x, y, w, h) {
+                covered += 1;
+                if got != fill {
+                    return Err(format!("covered pixel ({x}, {y}) is {got}, the fill is {fill}"));
+                }
+            } else if got != source(x, y) {
+                return Err(format!("uncovered pixel ({x}, {y}) is {got}, the source's is {}", source(x, y)));
+            }
+        }
+    }
+    if covered == 0 {
+        return Err("no pixel is covered".to_string());
+    }
+    Ok(covered)
+}
+
+/// The PNG one `extractImages` item carries on the wire: its data frames in
+/// order, read the way the frames are laid down, with exactly one item.
+fn wire_png(sink_path: &Path) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let file = File::open(sink_path).map_err(|e| format!("open sink: {e}"))?;
+    let mut file = std::io::BufReader::new(file);
+    let (mut png, mut items) = (Vec::new(), 0usize);
+    loop {
+        let mut len = [0u8; 4];
+        file.read_exact(&mut len).map_err(|e| format!("terminator missing: {e}"))?;
+        let len = u32::from_le_bytes(len) as usize;
+        if len == 0 {
+            break;
+        }
+        let mut frame = vec![0u8; len];
+        file.read_exact(&mut frame).map_err(|e| format!("truncated frame: {e}"))?;
+        let frame = wire::parse_response(&frame)?;
+        match frame.str("kind") {
+            Some("header") => items += 1,
+            Some("data") => png.extend_from_slice(frame.bytes("data").ok_or("a data frame without data")?),
+            Some("end") => {},
+            other => return Err(format!("unknown frame kind {other:?}")),
+        }
+    }
+    if items != 1 {
+        return Err(format!("{items} items, expected 1"));
+    }
+    Ok(png)
+}
+
+/// The width, height, bit depth and packed rows of a gray PNG, unfiltered by
+/// the PNG filter each row names (ISO 15948 §9). A row is `ceil(width * depth
+/// / 8)` bytes; the filter's byte distance is one byte at these depths.
+fn decode_gray_png(png: &[u8]) -> Result<(u32, u32, u8, Vec<u8>), String> {
+    use std::io::Read;
+    if png.get(..8) != Some(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        return Err("the wire item is not a PNG".to_string());
+    }
+    let (mut at, mut ihdr, mut idat) = (8usize, None, Vec::new());
+    while at + 8 <= png.len() {
+        let len = u32::from_be_bytes(png[at..at + 4].try_into().expect("four bytes")) as usize;
+        let kind = &png[at + 4..at + 8];
+        let data = png.get(at + 8..at + 8 + len).ok_or("a PNG chunk runs past the item")?;
+        match kind {
+            b"IHDR" => ihdr = Some(data.to_vec()),
+            b"IDAT" => idat.extend_from_slice(data),
+            b"IEND" => break,
+            _ => {},
+        }
+        at += 12 + len;
+    }
+    let ihdr = ihdr.ok_or("the PNG has no IHDR")?;
+    let w = u32::from_be_bytes(ihdr[0..4].try_into().expect("four bytes"));
+    let h = u32::from_be_bytes(ihdr[4..8].try_into().expect("four bytes"));
+    let (depth, colour) = (ihdr[8], ihdr[9]);
+    if colour != 0 {
+        return Err(format!("the PNG's colour type is {colour}, expected gray (0)"));
+    }
+    let row = (w as usize * depth as usize).div_ceil(8);
+    let mut raw = Vec::with_capacity((row + 1) * h as usize);
+    flate2::read::ZlibDecoder::new(&idat[..])
+        .read_to_end(&mut raw)
+        .map_err(|e| format!("the PNG's IDAT does not inflate: {e}"))?;
+    if raw.len() != (row + 1) * h as usize {
+        return Err(format!("{} filtered bytes, {h} rows of {} expected", raw.len(), row + 1));
+    }
+    let mut out = vec![0u8; row * h as usize];
+    for y in 0..h as usize {
+        let filter = raw[y * (row + 1)];
+        let src = &raw[y * (row + 1) + 1..(y + 1) * (row + 1)];
+        for x in 0..row {
+            let left = if x >= 1 { out[y * row + x - 1] } else { 0 };
+            let (up, up_left) = if y >= 1 {
+                let prev = (y - 1) * row;
+                (out[prev + x], if x >= 1 { out[prev + x - 1] } else { 0 })
+            } else {
+                (0, 0)
+            };
+            let predicted = match filter {
+                0 => 0,
+                1 => left,
+                2 => up,
+                3 => ((u16::from(left) + u16::from(up)) / 2) as u8,
+                4 => {
+                    let (a, b, c) = (i16::from(left), i16::from(up), i16::from(up_left));
+                    let p = a + b - c;
+                    let (pa, pb, pc) = ((p - a).abs(), (p - b).abs(), (p - c).abs());
+                    (if pa <= pb && pa <= pc { a } else if pb <= pc { b } else { c }) as u8
+                },
+                other => return Err(format!("PNG filter type {other}")),
+            };
+            out[y * row + x] = src[x].wrapping_add(predicted);
+        }
+    }
+    Ok((w, h, depth, out))
 }
 
 /// What the descriptor of an extracted image must say.
