@@ -88,6 +88,7 @@ fn limit(op: &str, input: &str) -> usize {
         ("compress", "content-fl" | "content-a85" | "content-lzw" | "forms" | "encrypted") => {
             16 * MIB
         },
+        ("redact", "content-fl" | "content-a85" | "content-lzw") => 16 * MIB,
         _ => panic!("no memory limit for {op} on {input}: add one to limit()"),
     }
 }
@@ -347,6 +348,68 @@ fn run() -> Result<(), String> {
         .map(|(name, path)| (*name, path.as_path()))
         .chain([("forms", forms.as_path()), ("paths", paths.as_path())])
         .collect();
+    // redact the left part of the first text line of each content source,
+    // apply, save, then read the saved file back: the covered start of the
+    // line is gone from the text and the uncovered end of it stays.
+    for (name, path) in contents.iter().map(|(name, path)| (*name, path.as_path())) {
+        // The measured step is the redaction and its save. The read-back below
+        // runs after it, through the reader's whole-file open, so its memory
+        // is not the redaction's.
+        let saved_slot: std::cell::RefCell<Option<std::path::PathBuf>> = std::cell::RefCell::new(None);
+        step(&failed, "redact", name, limit("redact", name), |st| {
+            let resp = call(st, re("editorOpen"), vec![source(path)], vec![])?;
+            let hid = resp.i32("handleId").expect("editorOpen returns handleId");
+            let mut mark = re("editorMutate")
+                .put("handleId", i32v(hid))
+                .put("editOp", strv("addRedaction"))
+                .put("page", i32v(0));
+            for (key, value) in [("x", 0.0), ("y", 8.0), ("width", 300.0), ("height", 16.0)] {
+                mark = mark.put(key, wire::Value::F64(value));
+            }
+            call(st, mark, vec![], vec![])?;
+            call(
+                st,
+                re("editorMutate")
+                    .put("handleId", i32v(hid))
+                    .put("editOp", strv("applyRedactions")),
+                vec![],
+                vec![],
+            )?;
+            let saved = open_sink(name, "redacted");
+            save_full(st, hid, &saved, false)?;
+            dispose(st, hid);
+            *saved_slot.borrow_mut() = Some(saved);
+            Ok(())
+        });
+
+        // The read-back: the covered start of the line is gone from the text,
+        // the uncovered end of it stays.
+        let Some(saved) = saved_slot.into_inner() else {
+            continue;
+        };
+        let text_of = |p: &Path| -> Result<String, String> {
+            pdf_oxide::PdfDocument::open(p)
+                .and_then(|doc| doc.extract_text(0))
+                .map_err(|e| e.to_string())
+        };
+        let checked = (|| -> Result<(), String> {
+            let before = text_of(path)?;
+            let after = text_of(&saved)?;
+            let (Some(covered), Some(kept)) = (before.get(..12), before.get(80..92)) else {
+                return Err(format!("the source line is {} characters, too short", before.len()));
+            };
+            if after.contains(covered) || !after.contains(kept) {
+                return Err(format!("the redacted text is wrong: {after:.120}"));
+            }
+            eprintln!("memprobe: redact {name}: text check ok, the covered start is gone and the end stays");
+            Ok(())
+        })();
+        if let Err(e) = checked {
+            eprintln!("memprobe: redact {name}: TEXT FAIL: {e}");
+            failed.set(true);
+        }
+    }
+
     for (name, path) in extract_inputs {
         step(&failed, "extractAll", name, limit("extractAll", name), |st| {
             let resp = call(st, re("open"), vec![source(path)], vec![])?;

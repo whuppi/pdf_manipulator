@@ -159,6 +159,9 @@ CONTENT RULES (never change)
 - Fixed `PdfPageInfo.label` always being `null` — it now holds the page's label when the document has page labels
 - Fixed `sign` dropping the document's bookmarks, form fields, page labels and every other catalog entry, and replacing an earlier signature — the signature now appends to the existing form and page ([#263](https://github.com/whuppi/pdf_manipulator/issues/263))
 - Fixed `PdfSignatureInfo` showing a non-ASCII signer name, reason or location as garbled text — UTF-16 text strings are decoded
+- Fixed a save after `addRedaction` without `applyRedactions` drawing a black box over text it never removed, so the file looked redacted and the text could still be copied — an unapplied redaction is saved as a redaction mark (a `/Redact` annotation) and the page content is left as it was
+- Fixed `applyRedactions` dropping every annotation on a redacted page — only the annotations under a redacted area go, with their form fields
+- Changed `applyRedactions` to rewrite each page one operator at a time while the document saves: redacting a page with 9 million operators takes under 1 MB of engine memory
 - Fixed `image()` and `imageArtifact()` with bytes that are not an image succeeding and drawing nothing — they throw `PdfInvalidArgument`
 - Fixed `streamingTable` rows with a `rowSpan` above 1 never drawing, and `PdfTableCell.rowSpan` documented as a column span — it is the rows a cell spans, each row still lists one cell per column, and a row with the wrong cell count throws `ArgumentError`
 - Fixed `sign` writing a cross-reference table that other readers had to repair — each entry is now 20 bytes
