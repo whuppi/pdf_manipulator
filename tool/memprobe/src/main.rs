@@ -92,11 +92,9 @@ fn limit(op: &str, input: &str) -> usize {
         // The copy of a raw or fax image streams its rows, the covered ones
         // filled, into the save's encoder; a box over all of it writes none.
         ("redact", "huge" | "hugeFull" | "hugeFax") => 16 * MIB,
-        // The ruled exception (d-122): the redacted copy of a progressive JPEG
-        // needs every pixel at full size, so the save holds the decoder's
-        // coefficients and one full-size raster; the target is the measured
-        // peak rounded up. Redacting in the DCT domain (t-473) ends it.
-        ("redact", "hugeJpeg") => 80 * MIB,
+        // A JPEG is copied in the DCT domain, one MCU row of coefficients at a
+        // time: no pixel is decoded.
+        ("redact", "hugeJpeg") => 16 * MIB,
         _ => panic!("no memory limit for {op} on {input}: add one to limit()"),
     }
 }
