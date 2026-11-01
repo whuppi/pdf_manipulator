@@ -30,6 +30,10 @@ fn limit(op: &str, input: &str) -> usize {
         ("merge", "many" | "huge") => 16 * MIB,
         ("extractAfterMerge", "many") => 16 * MIB,
         ("extractAll", "many" | "huge") => 16 * MIB,
+        // The file-level scans read in windows and an object stream gives up
+        // one member at a time, so a broken xref and 64 MiB of packed
+        // objects open and extract in the same memory as a sound file.
+        ("open" | "extractAll", "damaged" | "objstm") => 16 * MIB,
         // The text is read as operators, one token at a time.
         ("extractAll", "content-fl" | "content-a85" | "content-lzw" | "forms") => 16 * MIB,
         // Rulings are quantised as they are painted and dropped; the grid they
@@ -140,6 +144,10 @@ fn run() -> Result<(), String> {
         generate_content(&path, filter)?;
         contents.push((name, path));
     }
+    let damaged = dir.join("damaged.pdf");
+    generate_damaged(&damaged)?;
+    let objstm = dir.join("objstm.pdf");
+    generate_objstm(&objstm)?;
     let forms = dir.join("forms.pdf");
     generate_forms(&forms)?;
     let paths = dir.join("paths.pdf");
@@ -318,6 +326,49 @@ fn run() -> Result<(), String> {
                 dispose(st, hid);
                 Ok(())
             });
+        }
+    }
+
+    // The damaged file (no xref table, a startxref that points nowhere) and
+    // the packed one (64 MiB of objects in object streams): opened and
+    // extracted, then read back, the page count and every page's text.
+    for (name, path) in [("damaged", &damaged), ("objstm", &objstm)] {
+        step(&failed, "open", name, limit("open", name), |st| {
+            let resp = call(st, re("open"), vec![source(path)], vec![])?;
+            let hid = resp.i32("handleId").expect("open returns handleId");
+            let pages = resp.i32("pageCount").expect("open returns pageCount");
+            call(st, re("docDispose").put("handleId", i32v(hid)), vec![], vec![])?;
+            if pages as usize != PACKED_PAGES {
+                return Err(format!("{pages} pages, expected {PACKED_PAGES}"));
+            }
+            Ok(())
+        });
+        step(&failed, "extractAll", name, limit("extractAll", name), |st| {
+            let resp = call(st, re("open"), vec![source(path)], vec![])?;
+            let hid = resp.i32("handleId").expect("open returns handleId");
+            call(
+                st,
+                re("extract")
+                    .put("handleId", i32v(hid))
+                    .put("format", strv("plainText")),
+                vec![],
+                vec![sink(&open_sink(name, "extractall"))],
+            )?;
+            call(st, re("docDispose").put("handleId", i32v(hid)), vec![], vec![])?;
+            Ok(())
+        });
+        // The read-back runs after the steps, through the reader's whole-file
+        // open, so its memory is not theirs.
+        let checked = check_packed_text(path, &open_sink(name, "extractall"));
+        match checked {
+            Ok(()) => eprintln!(
+                "memprobe: {name}: read back: {PACKED_PAGES} pages, the text of page {} and of every page on the wire",
+                PACKED_PAGES / 2
+            ),
+            Err(e) => {
+                eprintln!("memprobe: {name}: READ-BACK FAIL: {e}");
+                failed.set(true);
+            },
         }
     }
 
@@ -2167,6 +2218,214 @@ fn generate_huge_jbig2(path: &Path) -> Result<(), String> {
         std::io::Cursor::new(bytes),
     )?;
     out.finish()
+}
+
+/// Pages of the `damaged` and `objstm` inputs. Page `n` shows `page_token(n)`.
+const PACKED_PAGES: usize = 10_000;
+
+fn page_token(n: usize) -> String {
+    format!("PG{n:06}")
+}
+
+/// The read-back of `damaged` and `objstm`: the engine's whole-file open reads
+/// the page count and the text of the middle page, and the text an
+/// extraction wrote holds every page's token, once, in page order.
+fn check_packed_text(path: &Path, extracted: &Path) -> Result<(), String> {
+    let doc = pdf_oxide::PdfDocument::open(path).map_err(|e| e.to_string())?;
+    let pages = doc.page_count().map_err(|e| e.to_string())?;
+    if pages != PACKED_PAGES {
+        return Err(format!("{pages} pages, expected {PACKED_PAGES}"));
+    }
+    let middle = PACKED_PAGES / 2;
+    let text = doc.extract_text(middle).map_err(|e| e.to_string())?;
+    if !text.contains(&page_token(middle)) {
+        return Err(format!("page {middle} reads {text:.80}"));
+    }
+    let wire = std::fs::read(extracted).map_err(|e| format!("{}: {e}", extracted.display()))?;
+    let wire = String::from_utf8_lossy(&wire);
+    let mut next = 0usize;
+    for (at, _) in wire.match_indices("PG") {
+        let Some(digits) = wire.get(at + 2..at + 8) else { break };
+        if digits != &page_token(next)[2..] {
+            return Err(format!("page token {digits} where page {next} belongs"));
+        }
+        next += 1;
+    }
+    if next != PACKED_PAGES {
+        return Err(format!("{next} page tokens on the wire, expected {PACKED_PAGES}"));
+    }
+    Ok(())
+}
+
+/// 10,000 pages of about 6 KiB of path content each, about 64 MiB, written
+/// as a file whose cross-reference table was lost: the objects, a trailer,
+/// and a `startxref` that points into the middle of a content stream.
+fn generate_damaged(path: &Path) -> Result<(), String> {
+    use std::io::BufWriter;
+    let mut w = BufWriter::new(File::create(path).map_err(|e| format!("damaged: {e}"))?);
+    let mut put = |s: &str| w.write_all(s.as_bytes()).map_err(|e| format!("damaged: {e}"));
+    put("%PDF-1.4\n")?;
+    put("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n")?;
+    let mut kids = String::new();
+    for n in 0..PACKED_PAGES {
+        kids.push_str(&format!("{} 0 R ", 4 + 2 * n));
+    }
+    put(&format!(
+        "2 0 obj\n<< /Type /Pages /Kids [{kids}] /Count {PACKED_PAGES} >>\nendobj\n"
+    ))?;
+    put("3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n")?;
+    for n in 0..PACKED_PAGES {
+        put(&format!(
+            "{} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Contents {} 0 R \
+             /Resources << /Font << /F1 3 0 R >> >> >>\nendobj\n",
+            4 + 2 * n,
+            5 + 2 * n
+        ))?;
+        let mut content = format!("BT /F1 10 Tf 10 800 Td ({}) Tj ET\n", page_token(n));
+        Xorshift::new(n as u64 * 1_000_003 + 17).fill_paths(&mut content, 6_300);
+        put(&format!(
+            "{} 0 obj\n<< /Length {} >>\nstream\n{content}\nendstream\nendobj\n",
+            5 + 2 * n,
+            content.len() + 1
+        ))?;
+        if n % 2000 == 0 {
+            eprintln!("memprobe: damaged: page {n}/{PACKED_PAGES}");
+        }
+    }
+    put(&format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n12345\n%%EOF\n", 4 + 2 * PACKED_PAGES))?;
+    w.flush().map_err(|e| format!("damaged: {e}"))
+}
+
+/// 10,000 pages whose dictionaries and resources (6.6 KiB of text each, about
+/// 64 MiB in all) sit in object streams of 100 members, behind a
+/// cross-reference stream; the content streams are ordinary objects.
+fn generate_objstm(path: &Path) -> Result<(), String> {
+    use std::io::BufWriter;
+    const PER_STREAM: usize = 50;
+    const PAD: usize = 6_600;
+    enum Entry {
+        Free,
+        At(u64),
+        In(usize, usize),
+    }
+    let groups = PACKED_PAGES.div_ceil(PER_STREAM);
+    let page_id = |n: usize| 4 + 3 * n;
+    let resources_id = |n: usize| 5 + 3 * n;
+    let content_id = |n: usize| 6 + 3 * n;
+    let stream_base = 4 + 3 * PACKED_PAGES;
+    let xref_id = stream_base + groups;
+    let size = xref_id + 1;
+    let mut entries: Vec<Entry> = (0..size).map(|_| Entry::Free).collect();
+
+    let mut w = BufWriter::new(File::create(path).map_err(|e| format!("objstm: {e}"))?);
+    let at = std::cell::Cell::new(0u64);
+    let put = |w: &mut BufWriter<File>, bytes: &[u8]| -> Result<(), String> {
+        at.set(at.get() + bytes.len() as u64);
+        w.write_all(bytes).map_err(|e| format!("objstm: {e}"))
+    };
+    put(&mut w, b"%PDF-1.5\n")?;
+    let deflate = |bytes: &[u8]| -> Result<Vec<u8>, String> {
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        z.write_all(bytes).map_err(|e| format!("objstm: {e}"))?;
+        z.finish().map_err(|e| format!("objstm: {e}"))
+    };
+
+    for group in 0..groups {
+        let mut members: Vec<(usize, String)> = Vec::new();
+        if group == 0 {
+            members.push((1, "<< /Type /Catalog /Pages 2 0 R >>".to_string()));
+            let mut kids = String::new();
+            for n in 0..PACKED_PAGES {
+                kids.push_str(&format!("{} 0 R ", page_id(n)));
+            }
+            members.push((
+                2,
+                format!("<< /Type /Pages /Kids [{kids}] /Count {PACKED_PAGES} >>"),
+            ));
+            members.push((3, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string()));
+        }
+        for n in group * PER_STREAM..((group + 1) * PER_STREAM).min(PACKED_PAGES) {
+            members.push((
+                page_id(n),
+                format!(
+                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Contents {} 0 R \
+                     /Resources {} 0 R >>",
+                    content_id(n),
+                    resources_id(n)
+                ),
+            ));
+            let mut pad = String::with_capacity(PAD);
+            Xorshift::new(n as u64 * 1_000_003 + 31).fill_hex(&mut pad, PAD);
+            members.push((resources_id(n), format!("<< /Font << /F1 3 0 R >> /Pad ({pad}) >>")));
+            let content = format!("BT /F1 10 Tf 10 800 Td ({}) Tj ET\n", page_token(n));
+            entries[content_id(n)] = Entry::At(at.get());
+            put(
+                &mut w,
+                format!(
+                    "{} 0 obj\n<< /Length {} >>\nstream\n{content}endstream\nendobj\n",
+                    content_id(n),
+                    content.len()
+                )
+                .as_bytes(),
+            )?;
+        }
+        let stream_id = stream_base + group;
+        let (mut table, mut body) = (String::new(), String::new());
+        for (index, (id, text)) in members.iter().enumerate() {
+            table.push_str(&format!("{id} {} ", body.len()));
+            body.push_str(text);
+            body.push('\n');
+            entries[*id] = Entry::In(stream_id, index);
+        }
+        let packed = deflate([table.as_bytes(), body.as_bytes()].concat().as_slice())?;
+        entries[stream_id] = Entry::At(at.get());
+        put(
+            &mut w,
+            format!(
+                "{stream_id} 0 obj\n<< /Type /ObjStm /N {} /First {} /Filter /FlateDecode /Length {} >>\nstream\n",
+                members.len(),
+                table.len(),
+                packed.len()
+            )
+            .as_bytes(),
+        )?;
+        put(&mut w, &packed)?;
+        put(&mut w, b"\nendstream\nendobj\n")?;
+        if group % 40 == 0 {
+            eprintln!("memprobe: objstm: stream {group}/{groups}");
+        }
+    }
+
+    let xref_at = at.get();
+    entries[xref_id] = Entry::At(xref_at);
+    let mut rows = Vec::with_capacity(size * 7);
+    for entry in &entries {
+        match entry {
+            Entry::Free => rows.extend_from_slice(&[0, 0, 0, 0, 0, 0xFF, 0xFF]),
+            Entry::At(offset) => {
+                rows.push(1);
+                rows.extend_from_slice(&(*offset as u32).to_be_bytes());
+                rows.extend_from_slice(&[0, 0]);
+            },
+            Entry::In(stream, index) => {
+                rows.push(2);
+                rows.extend_from_slice(&(*stream as u32).to_be_bytes());
+                rows.extend_from_slice(&(*index as u16).to_be_bytes());
+            },
+        }
+    }
+    let packed = deflate(&rows)?;
+    put(
+        &mut w,
+        format!(
+            "{xref_id} 0 obj\n<< /Type /XRef /Size {size} /W [1 4 2] /Root 1 0 R /Filter /FlateDecode /Length {} >>\nstream\n",
+            packed.len()
+        )
+        .as_bytes(),
+    )?;
+    put(&mut w, &packed)?;
+    put(&mut w, format!("\nendstream\nendobj\nstartxref\n{xref_at}\n%%EOF\n").as_bytes())?;
+    w.flush().map_err(|e| format!("objstm: {e}"))
 }
 
 /// A one-page PDF holding one image XObject stream of 60 MiB of

@@ -162,6 +162,8 @@ CONTENT RULES (never change)
 - Fixed a save after `addRedaction` without `applyRedactions` drawing a black box over text it never removed, so the file looked redacted and the text could still be copied — an unapplied redaction is saved as a redaction mark (a `/Redact` annotation) and the page content is left as it was
 - Fixed `applyRedactions` leaving the pixels of images under a redacted area in the file — a covered image is removed, a partly covered one is copied with the covered pixels filled, masks included, and other pages keep the original
 - Fixed `render` ignoring line width, caps, joins, miter limit and dashes set through a graphics state resource (`gs`), which drew such lines 1 pt wide and solid
+- Changed opening a damaged file (no cross-reference table, or a wrong one) and reading objects packed in object streams to scan the file in fixed windows: a 64 MB damaged file opens in under 16 MB of engine memory, and the 1 MB and 32 MB caps are gone
+- Fixed `render` drawing outlined text (text rendering modes 1, 2, 5 and 6) filled in the fill colour — the glyph outline is stroked in the stroke colour and line style
 - Fixed `render` drawing strokes and text painted with a tiling pattern in a flat colour — the pattern now shows inside the stroke or the glyphs
 - Fixed fit and thumbnail sizes of `render` coming out smaller than asked on pages with a crop box
 - Fixed images with fewer than 8 bits a sample and the TIFF predictor decoding to wrong pixels
