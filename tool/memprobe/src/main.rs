@@ -89,6 +89,10 @@ fn limit(op: &str, input: &str) -> usize {
             16 * MIB
         },
         ("redact", "content-fl" | "content-a85" | "content-lzw") => 16 * MIB,
+        // The pass reads 64 MiB of rulings one operator at a time and writes
+        // each cut or kept; 2,000 forms across the box are each redacted as a
+        // copy of their own, streamed from their source into the save.
+        ("redact", "paths" | "forms") => 16 * MIB,
         // The copy of a raw or fax image streams its rows, the covered ones
         // filled, into the save's encoder; a box over all of it writes none.
         ("redact", "huge" | "hugeFull" | "hugeFax") => 16 * MIB,
@@ -413,6 +417,28 @@ fn run() -> Result<(), String> {
         if let Err(e) = checked {
             eprintln!("memprobe: redact {name}: TEXT FAIL: {e}");
             failed.set(true);
+        }
+    }
+
+    // redact a box over the paths input and over the forms input (every form's
+    // box is the whole page, so every form is cut across the box): the saved
+    // file reopens, and the box renders as the fill.
+    for (name, path, rect) in [
+        ("paths", paths.as_path(), [150.0, 300.0, 200.0, 150.0]),
+        ("forms", forms.as_path(), [150.0, 300.0, 200.0, 150.0]),
+    ] {
+        let saved = open_sink(name, "redacted");
+        step(&failed, "redact", name, limit("redact", name), |st| {
+            redact_box_to_sink(st, path, rect, &saved)
+        });
+        match read_back_fill(&saved, rect) {
+            Ok(covered) => eprintln!(
+                "memprobe: redact {name}: read back: the file reopens, {covered} pixels of the box are the fill"
+            ),
+            Err(e) => {
+                eprintln!("memprobe: redact {name}: READ-BACK FAIL: {e}");
+                failed.set(true);
+            },
         }
     }
 
@@ -974,6 +1000,39 @@ fn redact_box_to_sink(
     save_full(state, hid, sink_path, false)?;
     dispose(state, hid);
     Ok(())
+}
+
+/// Reopens the redacted file `path` and renders page 0 at 72 dpi, outside any
+/// measured step: every pixel inside `rect` (x, y, width, height in page
+/// points, y up), inset by two pixels, is one opaque colour that is not the
+/// white page. Returns how many pixels were read.
+fn read_back_fill(path: &Path, rect: [f64; 4]) -> Result<usize, String> {
+    use pdf_oxide::rendering::{render_page, ImageFormat, RenderOptions};
+    let doc = pdf_oxide::PdfDocument::open(path).map_err(|e| e.to_string())?;
+    let mut options = RenderOptions::with_dpi(72);
+    options.format = ImageFormat::RawRgba8;
+    let image = render_page(&doc, 0, &options).map_err(|e| e.to_string())?;
+    let (width, height) = (image.width as usize, image.height as usize);
+    let at = |x: usize, y: usize| -> [u8; 4] {
+        let i = (y * width + x) * 4;
+        [image.data[i], image.data[i + 1], image.data[i + 2], image.data[i + 3]]
+    };
+    let (x0, x1) = (rect[0] as usize + 2, (rect[0] + rect[2]) as usize - 2);
+    let (y0, y1) = (height - (rect[1] + rect[3]) as usize + 2, height - rect[1] as usize - 2);
+    let fill = at(x0, y0);
+    if fill[3] != 255 || fill[..3] == [255, 255, 255] {
+        return Err(format!("the box shows {fill:?}, not a fill"));
+    }
+    let mut covered = 0;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            if at(x, y) != fill {
+                return Err(format!("pixel ({x}, {y}) is {:?}, the fill is {fill:?}", at(x, y)));
+            }
+            covered += 1;
+        }
+    }
+    Ok(covered)
 }
 
 /// The one image page 0 of `path` paints, decoded by the library reader
