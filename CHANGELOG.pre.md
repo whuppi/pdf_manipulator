@@ -161,6 +161,10 @@ CONTENT RULES (never change)
 - Fixed `PdfSignatureInfo` showing a non-ASCII signer name, reason or location as garbled text — UTF-16 text strings are decoded
 - Fixed a save after `addRedaction` without `applyRedactions` drawing a black box over text it never removed, so the file looked redacted and the text could still be copied — an unapplied redaction is saved as a redaction mark (a `/Redact` annotation) and the page content is left as it was
 - Fixed `applyRedactions` leaving the pixels of images under a redacted area in the file — a covered image is removed, a partly covered one is copied with the covered pixels filled, masks included, and other pages keep the original
+- Fixed `render` ignoring line width, caps, joins, miter limit and dashes set through a graphics state resource (`gs`), which drew such lines 1 pt wide and solid
+- Fixed `render` drawing strokes and text painted with a tiling pattern in a flat colour — the pattern now shows inside the stroke or the glyphs
+- Fixed fit and thumbnail sizes of `render` coming out smaller than asked on pages with a crop box
+- Fixed images with fewer than 8 bits a sample and the TIFF predictor decoding to wrong pixels
 - Fixed `applyRedactions` leaving drawings, clip shapes, gradient meshes and form content under a redacted area in the file — they are removed or cut at the area's edge, and a form other pages show is copied for the redacted page only
 - Changed redacting a JPEG to replace only the 8×8 blocks under the area, so the rest of the picture keeps its exact pixels; the copy drops embedded thumbnails
 - Fixed `applyRedactions` dropping every annotation on a redacted page — only the annotations under a redacted area go, with their form fields
