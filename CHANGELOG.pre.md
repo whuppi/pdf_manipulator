@@ -166,6 +166,9 @@ CONTENT RULES (never change)
 - Fixed fit and thumbnail sizes of `render` coming out smaller than asked on pages with a crop box
 - Fixed images with fewer than 8 bits a sample and the TIFF predictor decoding to wrong pixels
 - Fixed 16-bit images and images with several colours below 8 bits a sample decoding to wrong pixels when stored with a PNG or TIFF predictor
+- Fixed `applyRedactions` leaving the removed text's font widths, Unicode mappings, Type 3 glyphs and structure alt text in the file — entries only the removed text used are cleared
+- Fixed a form field flattened and redacted on one page keeping its value under the box — flattening now runs before redaction
+- Fixed image bounds edits saving the page unchanged without an error when its content could not be rewritten — the save now fails
 - Fixed `applyRedactions` leaving drawings, clip shapes, gradient meshes and form content under a redacted area in the file — they are removed or cut at the area's edge, and a form other pages show is copied for the redacted page only
 - Changed redacting a JPEG to replace only the 8×8 blocks under the area, so the rest of the picture keeps its exact pixels; the copy drops embedded thumbnails
 - Fixed `applyRedactions` dropping every annotation on a redacted page — only the annotations under a redacted area go, with their form fields

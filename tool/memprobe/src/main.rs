@@ -99,6 +99,12 @@ fn limit(op: &str, input: &str) -> usize {
         // A JPEG is copied in the DCT domain, one MCU row of coefficients at a
         // time: no pixel is decoded.
         ("redact", "hugeJpeg") => 16 * MIB,
+        // 10,000 widgets with appearance streams are flattened one appearance
+        // at a time, each written as the stream it is stored as.
+        ("flattenForms", "widgets") => 16 * MIB,
+        // The 96 MiB content stream is read as operators and written as
+        // operators; the stage holds one matrix.
+        ("setImageBounds", "content-fl") => 16 * MIB,
         _ => panic!("no memory limit for {op} on {input}: add one to limit()"),
     }
 }
@@ -138,6 +144,8 @@ fn run() -> Result<(), String> {
     generate_forms(&forms)?;
     let paths = dir.join("paths.pdf");
     generate_paths(&paths)?;
+    let widgets = dir.join("widgets.pdf");
+    generate_widgets(&widgets)?;
     eprintln!(
         "memprobe: inputs ready: many={} huge={} encrypted={} forms={} bytes",
         std::fs::metadata(&many).map(|m| m.len()).unwrap_or(0),
@@ -437,6 +445,66 @@ fn run() -> Result<(), String> {
             ),
             Err(e) => {
                 eprintln!("memprobe: redact {name}: READ-BACK FAIL: {e}");
+                failed.set(true);
+            },
+        }
+    }
+
+    // flattenForms on 10,000 widgets: the page renders their appearances and
+    // keeps no widget.
+    {
+        let saved = open_sink("widgets", "flattened");
+        step(&failed, "flattenForms", "widgets", limit("flattenForms", "widgets"), |st| {
+            let resp = call(st, re("editorOpen"), vec![source(&widgets)], vec![])?;
+            let hid = resp.i32("handleId").expect("editorOpen returns handleId");
+            call(
+                st,
+                re("editorMutate")
+                    .put("handleId", i32v(hid))
+                    .put("editOp", strv("flattenForms")),
+                vec![],
+                vec![],
+            )?;
+            save_full(st, hid, &saved, false)?;
+            dispose(st, hid);
+            Ok(())
+        });
+        match read_back_flattened(&saved) {
+            Ok(dark) => eprintln!(
+                "memprobe: flattenForms widgets: read back: no widget is left, {dark} pixels show the appearances"
+            ),
+            Err(e) => {
+                eprintln!("memprobe: flattenForms widgets: READ-BACK FAIL: {e}");
+                failed.set(true);
+            },
+        }
+    }
+
+    // setImageBounds on the content input: the image Im1 its first section
+    // draws moves, in a stream of 96 MiB.
+    {
+        let (name, path) = (contents[0].0, contents[0].1.as_path());
+        let saved = open_sink(name, "moved");
+        step(&failed, "setImageBounds", name, limit("setImageBounds", name), |st| {
+            let resp = call(st, re("editorOpen"), vec![source(path)], vec![])?;
+            let hid = resp.i32("handleId").expect("editorOpen returns handleId");
+            let mut edit = re("editorMutate")
+                .put("handleId", i32v(hid))
+                .put("editOp", strv("setImageBounds"))
+                .put("page", i32v(0))
+                .put("imageName", strv("Im1"));
+            for (key, value) in ["x", "y", "width", "height"].into_iter().zip(MOVED_IMAGE) {
+                edit = edit.put(key, wire::Value::F64(value));
+            }
+            call(st, edit, vec![], vec![])?;
+            save_full(st, hid, &saved, false)?;
+            dispose(st, hid);
+            Ok(())
+        });
+        match read_back_image_bounds(&saved, MOVED_IMAGE) {
+            Ok(()) => eprintln!("memprobe: setImageBounds {name}: read back: Im1 is at its new bounds"),
+            Err(e) => {
+                eprintln!("memprobe: setImageBounds {name}: READ-BACK FAIL: {e}");
                 failed.set(true);
             },
         }
@@ -1033,6 +1101,74 @@ fn read_back_fill(path: &Path, rect: [f64; 4]) -> Result<usize, String> {
         }
     }
     Ok(covered)
+}
+
+/// Where `setImageBounds` puts the content input's image `Im1` (x, y, width,
+/// height in page points).
+const MOVED_IMAGE: [f64; 4] = [30.0, 40.0, 70.0, 80.0];
+
+/// The page 0 of `path` draws `Im1` at `want` (x, y, width, height): the
+/// matrix in force at its first `Do`, read as operators, outside any
+/// measured step.
+fn read_back_image_bounds(path: &Path, want: [f64; 4]) -> Result<(), String> {
+    use pdf_oxide::content::operators::Operator;
+    type M = [f64; 6];
+    let mul = |m: M, n: M| -> M {
+        [
+            m[0] * n[0] + m[1] * n[2],
+            m[0] * n[1] + m[1] * n[3],
+            m[2] * n[0] + m[3] * n[2],
+            m[2] * n[1] + m[3] * n[3],
+            m[4] * n[0] + m[5] * n[2] + n[4],
+            m[4] * n[1] + m[5] * n[3] + n[5],
+        ]
+    };
+    let doc = pdf_oxide::PdfDocument::open(path).map_err(|e| e.to_string())?;
+    let mut ctm: M = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+    let mut saved = Vec::new();
+    for op in doc.page_operators(0).map_err(|e| e.to_string())? {
+        match op.map_err(|e| e.to_string())? {
+            Operator::SaveState => saved.push(ctm),
+            Operator::RestoreState => {
+                if let Some(m) = saved.pop() {
+                    ctm = m;
+                }
+            },
+            Operator::Cm { a, b, c, d, e, f } => {
+                ctm = mul([a.into(), b.into(), c.into(), d.into(), e.into(), f.into()], ctm);
+            },
+            Operator::Do { name } if name == "Im1" => {
+                let got = [ctm[4], ctm[5], ctm[0], ctm[3]];
+                return if got.iter().zip(want).all(|(g, w)| (g - w).abs() < 0.01) {
+                    Ok(())
+                } else {
+                    Err(format!("Im1 is drawn at {got:?}, wanted {want:?}"))
+                };
+            },
+            _ => {},
+        }
+    }
+    Err("the page never draws Im1".to_string())
+}
+
+/// The flattened widgets file: no widget on page 0, and the appearances
+/// render. Returns how many dark pixels the page shows at 72 dpi.
+fn read_back_flattened(path: &Path) -> Result<usize, String> {
+    use pdf_oxide::rendering::{render_page, ImageFormat, RenderOptions};
+    let doc = pdf_oxide::PdfDocument::open(path).map_err(|e| e.to_string())?;
+    let left = doc.get_annotations(0).map_err(|e| e.to_string())?.len();
+    if left != 0 {
+        return Err(format!("{left} annotations are left on page 0"));
+    }
+    let mut options = RenderOptions::with_dpi(72);
+    options.format = ImageFormat::RawRgba8;
+    let image = render_page(&doc, 0, &options).map_err(|e| e.to_string())?;
+    let dark = image.data.chunks_exact(4).filter(|p| p[0] < 64 && p[3] == 255).count();
+    // 10,000 widgets of 5 by 6 points over a page of 612 by 792.
+    if dark < 150_000 {
+        return Err(format!("only {dark} dark pixels: the appearances do not render"));
+    }
+    Ok(dark)
 }
 
 /// The one image page 0 of `path` paints, decoded by the library reader
@@ -2219,6 +2355,7 @@ impl ContentText {
                 text.push_str(") Tj\n");
             }
             text.push_str("ET\n");
+            text.push_str("q 40 0 0 40 500 20 cm /Im1 Do Q\n");
         } else {
             self.rng.fill_paths(&mut text, 4096);
         }
@@ -2349,11 +2486,19 @@ fn generate_content(path: &Path, filter: ContentFilter) -> Result<(), String> {
     out.object(
         3,
         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
-         /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> /Contents 4 0 R >>",
+         /Resources << /Font << /F1 5 0 R /F2 6 0 R >> /XObject << /Im1 7 0 R >> >> \
+         /Contents 4 0 R >>",
     )?;
     out.stream(4, filter.entry(), len, File::open(&body_path).map_err(io)?)?;
     out.object(5, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")?;
     out.object(6, "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>")?;
+    out.stream(
+        7,
+        "/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray \
+         /BitsPerComponent 8",
+        1,
+        &[128u8][..],
+    )?;
     out.finish()?;
     std::fs::remove_file(&body_path).map_err(io)
 }
@@ -2404,6 +2549,48 @@ fn generate_forms(path: &Path) -> Result<(), String> {
         if form % 500 == 0 {
             eprintln!("memprobe: forms: form {form}/{FORMS}");
         }
+    }
+    out.finish()
+}
+
+/// A one-page PDF with 10,000 text widgets in a grid, each with an appearance
+/// stream that fills its 5 by 6 point rectangle.
+fn generate_widgets(path: &Path) -> Result<(), String> {
+    const WIDGETS: usize = 10_000;
+    const FIRST: usize = 5;
+    let mut out = PdfOut::create(path)?;
+    let refs: String = (0..WIDGETS).map(|i| format!("{} 0 R ", FIRST + 2 * i)).collect();
+    out.object(
+        1,
+        &format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [{refs}] >> >>"),
+    )?;
+    out.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")?;
+    out.object(
+        3,
+        &format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Annots [{refs}] >>"
+        ),
+    )?;
+    out.stream(4, "", 4, &b"q Q\n"[..])?;
+    let appearance = b"0 g 0 0 5 6 re f\n";
+    for i in 0..WIDGETS {
+        let (x, y) = ((i % 100) * 6, (i / 100) * 7);
+        out.object(
+            FIRST + 2 * i,
+            &format!(
+                "<< /Type /Annot /Subtype /Widget /FT /Tx /T (w{i}) /V (v) \
+                 /Rect [{x} {y} {} {}] /F 4 /P 3 0 R /AP << /N {} 0 R >> >>",
+                x + 5,
+                y + 6,
+                FIRST + 2 * i + 1
+            ),
+        )?;
+        out.stream(
+            FIRST + 2 * i + 1,
+            "/Type /XObject /Subtype /Form /BBox [0 0 5 6]",
+            appearance.len() as u64,
+            &appearance[..],
+        )?;
     }
     out.finish()
 }
