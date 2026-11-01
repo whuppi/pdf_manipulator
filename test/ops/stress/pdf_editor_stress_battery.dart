@@ -64,7 +64,7 @@ void registerEditorStressTests(Pdf Function() createPdf) {
         await pdf.encrypt(
           src(largePdf),
           encSink,
-          encryption: const PdfEncryptionConfig(
+          encryption: const PdfEncryption.config(
             ownerPassword: 'owner',
             userPassword: 'user',
           ),

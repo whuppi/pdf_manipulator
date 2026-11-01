@@ -23,14 +23,25 @@ void main() {
     test('parses complete page list', () {
       final pages = decodePageList({
         'pages': [
-          {'index': 0, 'width': 612.0, 'height': 792.0, 'rotation': 0},
-          {'index': 1, 'width': 612.0, 'height': 792.0, 'rotation': 90},
-          {'index': 2, 'width': 842.0, 'height': 595.0, 'rotation': 0},
+          {'index': 0, 'width': 612.0, 'height': 792.0, 'rotation': 'r0'},
+          {'index': 1, 'width': 612.0, 'height': 792.0, 'rotation': 'r90'},
+          {'index': 2, 'width': 842.0, 'height': 595.0, 'rotation': 'r0'},
         ],
       });
       expect(pages, hasLength(3));
-      expect(pages[1].rotation, 90);
+      expect(pages[1].rotation, PdfRotation.r90);
       expect(pages[2].width, 842.0);
+    });
+
+    test('refuses a rotation that is not a wire name', () {
+      expect(
+        () => decodePageList({
+          'pages': [
+            {'index': 0, 'width': 612.0, 'height': 792.0, 'rotation': 'r45'},
+          ],
+        }),
+        throwsA(isA<PdfEngineError>()),
+      );
     });
 
     test('handles missing pages key', () {
@@ -218,9 +229,9 @@ void main() {
     });
   });
 
-  group('decodeSearchResults', () {
+  group('decodeSearchHits', () {
     test('parses hits', () {
-      final results = decodeSearchResults({
+      final results = decodeSearchHits({
         'hits': [
           {
             'page': 0,
@@ -238,7 +249,7 @@ void main() {
     });
 
     test('handles empty', () {
-      expect(decodeSearchResults({}), isEmpty);
+      expect(decodeSearchHits({}), isEmpty);
     });
   });
 

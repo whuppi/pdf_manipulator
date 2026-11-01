@@ -211,6 +211,7 @@ lib/
     │   └── protocol/
     │       ├── binary_codec.dart           ← binary request/response encoding
     │       ├── codec.dart                  ← typed request builders + response decoders
+    │       ├── pdf_date.dart               ← PDF date string ⇄ DateTime (UTC)
     │       └── op.dart                     ← EngineOp enum (the wire names)
     │
     ├── runtime/                             ← THE LANE RUNTIME
@@ -250,9 +251,10 @@ lib/
     │   ├── pdf_pages.dart                  ← PdfPages sealed (all, single, range)
     │   ├── pdf_params.dart                 ← PdfSaveOptions, PdfEncryption, ...
     │   ├── pdf_rect.dart                   ← PdfRect
+    │   ├── pdf_search_hit.dart             ← PdfSearchHit
     │   ├── pdf_signature.dart              ← PdfSignatureInfo
     │   ├── pdf_task.dart                   ← PdfTask<T>: Future + cancel()
-    │   └── search_result.dart              ← SearchResult
+    │   └── equality.dart                   ← list equality for the value types (not exported)
     │
     └── hook/                               ← build + setup support (not consumer API)
         ├── asset_hashes.dart               ← SHA-256 hashes for all release assets (native + web)

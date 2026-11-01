@@ -238,7 +238,7 @@ void registerDeterminismTests(Pdf Function() createPdf) {
       'a kept encryption saves the same bytes twice once decrypted',
       () async {
         final pdf = createPdf();
-        const config = PdfEncryptionConfig(
+        const config = PdfEncryption.config(
           ownerPassword: 'owner-pw',
           userPassword: 'user-pw',
         );

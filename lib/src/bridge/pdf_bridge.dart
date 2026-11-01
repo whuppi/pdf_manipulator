@@ -26,7 +26,7 @@ import 'package:pdf_manipulator/src/types/pdf_signature.dart';
 import 'package:pdf_manipulator/src/types/pdf_table.dart';
 import 'package:pdf_manipulator/src/types/pdf_task.dart';
 import 'package:pdf_manipulator/src/types/pdf_xfa_info.dart';
-import 'package:pdf_manipulator/src/types/search_result.dart';
+import 'package:pdf_manipulator/src/types/pdf_search_hit.dart';
 
 /// Abstract bridge. Only FFI-level methods.
 abstract class PdfBridge {
@@ -116,7 +116,7 @@ abstract class BridgeDocHandle {
   });
 
   /// Searches for [query] across the specified [pages].
-  PdfTask<List<SearchResult>> search({
+  PdfTask<List<PdfSearchHit>> search({
     required String query,
     required PdfPages pages,
   });
@@ -144,10 +144,10 @@ abstract class BridgeDocHandle {
   PdfTask<bool> verifySignatures();
 
   /// Validates the document against PDF/A conformance.
-  PdfTask<PdfValidationResult> validatePdfA({int level});
+  PdfTask<PdfValidationResult> validatePdfA({PdfALevel level});
 
   /// Validates the document against PDF/UA accessibility.
-  PdfTask<bool> validatePdfUa({int level});
+  PdfTask<bool> validatePdfUa({PdfUaLevel level});
 
   /// Plans split points based on top-level bookmarks.
   PdfTask<List<PdfBookmarkSplit>> planSplitByBookmarks();
@@ -229,19 +229,20 @@ abstract class BridgeEditorHandle {
   /// Sets the document producer.
   PdfTask<void> setProducer(String value);
 
-  /// Returns the document creation date (raw PDF date string).
-  PdfTask<String> get creationDate;
+  /// Returns the document creation date, or `null` when it has none or it
+  /// does not parse.
+  PdfTask<DateTime?> get creationDate;
 
-  /// Sets the document creation date (raw PDF date string).
-  PdfTask<void> setCreationDate(String value);
+  /// Sets the document creation date.
+  PdfTask<void> setCreationDate(DateTime value);
 
   // ── Pages ──
 
-  /// Rotates a single [page] by [degrees] (90, 180, 270).
-  PdfTask<void> rotatePage(int page, {required int degrees});
+  /// Turns a single [page] by [by] on top of its current rotation.
+  PdfTask<void> rotatePage(int page, {required PdfRotation by});
 
-  /// Rotates all pages by [degrees].
-  PdfTask<void> rotateAllPages({required int degrees});
+  /// Turns all pages by [by] on top of their current rotation.
+  PdfTask<void> rotateAllPages({required PdfRotation by});
 
   /// Returns the media box rectangle for [page].
   PdfTask<PdfRect> pageMediaBox(int page);
@@ -255,8 +256,8 @@ abstract class BridgeEditorHandle {
   /// Sets the crop box rectangle for [page].
   PdfTask<void> setPageCropBox(int page, PdfRect box);
 
-  /// Sets the absolute rotation of [page] in degrees.
-  PdfTask<void> setPageRotation(int page, {required int degrees});
+  /// Sets the absolute rotation of [page].
+  PdfTask<void> setPageRotation(int page, {required PdfRotation rotation});
 
   /// Deletes a single [page].
   PdfTask<void> deletePage(int page);
@@ -347,7 +348,7 @@ abstract class BridgeEditorHandle {
   });
 
   /// Converts the document to PDF/A conformance at [level].
-  PdfTask<void> convertToPdfA({int level = 1});
+  PdfTask<void> convertToPdfA({PdfALevel level = PdfALevel.a2});
 
   /// Lists the image XObjects placed on [page].
   PdfTask<List<PdfPageImage>> pageImages(int page);
@@ -482,8 +483,8 @@ abstract class BridgeBuilderHandle {
   });
 
   /// Saves the built document to [output]. Streams are Flate-compressed
-  /// unless [compress] is false.
-  PdfTask<void> save(DataSink output, {bool compress = true});
+  /// unless [deflate] is false.
+  PdfTask<void> save(DataSink output, {bool deflate = true});
 
   /// Releases the builder handle.
   Future<void> dispose();

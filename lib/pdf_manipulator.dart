@@ -40,8 +40,20 @@ export 'src/types/pdf_info.dart';
 export 'src/types/pdf_matrix.dart';
 export 'src/types/pdf_page_image.dart';
 export 'src/types/pdf_page_info.dart';
-export 'src/types/pdf_pages.dart';
-export 'src/types/pdf_params.dart';
+export 'src/types/pdf_pages.dart' show PdfPages;
+export 'src/types/pdf_params.dart'
+    hide
+        PdfEncryptionConfig,
+        PdfEncryptionKeep,
+        PdfEncryptionRemove,
+        PdfPemCredentials,
+        PdfPkcs12Credentials,
+        PdfSaveFullRewrite,
+        PdfSaveIncremental,
+        PdfWatermarkCenter,
+        PdfWatermarkCorner,
+        PdfWatermarkExact,
+        PdfWatermarkTiled;
 export 'src/types/pdf_rect.dart';
 export 'src/types/pdf_redaction_report.dart';
 export 'src/types/pdf_render.dart'
@@ -53,7 +65,7 @@ export 'src/types/pdf_wire.dart';
 export 'src/types/pdf_xfa_info.dart';
 export 'src/types/data_sink.dart';
 export 'src/types/data_source.dart';
-export 'src/types/search_result.dart';
+export 'src/types/pdf_search_hit.dart';
 export 'src/types/pdf_task.dart' show PdfTask;
 
 // Ready-made sources & sinks. Memory-backed helpers ship here (pure

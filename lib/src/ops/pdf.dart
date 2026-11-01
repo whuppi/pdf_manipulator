@@ -46,7 +46,7 @@ import 'package:pdf_manipulator/src/types/pdf_signature.dart';
 import 'package:pdf_manipulator/src/types/pdf_table.dart';
 import 'package:pdf_manipulator/src/types/pdf_task.dart';
 import 'package:pdf_manipulator/src/types/pdf_xfa_info.dart';
-import 'package:pdf_manipulator/src/types/search_result.dart';
+import 'package:pdf_manipulator/src/types/pdf_search_hit.dart';
 
 part 'pdf_builder.dart';
 part 'pdf_doc.dart';
@@ -172,7 +172,7 @@ class Pdf {
           keywords: map['keywords'] as String?,
           producer: map['producer'] as String?,
           creator: map['creator'] as String?,
-          creationDate: map['creationDate'] as String?,
+          creationDate: codec.decodeDate(map['creationDate']),
           isEncrypted: map['isEncrypted'] as bool? ?? false,
           requiresPassword: map['requiresPassword'] as bool? ?? false,
           isTagged: map['isTagged'] as bool? ?? false,
@@ -270,7 +270,7 @@ class Pdf {
     bool deflate = true,
   }) => _own(build(), (builder, hook) async {
     await body(builder);
-    await hook.guard(builder.save(output, compress: deflate));
+    await hook.guard(builder.save(output, deflate: deflate));
   });
 
   /// Applies one edit of [PdfEdits] to [source] and writes the result to

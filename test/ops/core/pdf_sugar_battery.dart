@@ -72,18 +72,18 @@ void registerSugarTests(Pdf Function() createPdf) {
     test('rotateAllPages 90° sets rotation', () async {
       final pdf = createPdf();
       final sink = TestSink();
-      await pdf.rotateAllPages(src(minimalPdf), sink, degrees: 90);
+      await pdf.rotateAllPages(src(minimalPdf), sink, by: PdfRotation.r90);
       final doc = await pdf.open(src(sink.takeBytes()));
-      expect(doc.pages[0].rotation, 90);
+      expect(doc.pages[0].rotation, PdfRotation.r90);
       await doc.dispose();
     }, timeout: t(1));
 
     test('rotatePages rotates specific pages', () async {
       final pdf = createPdf();
       final sink = TestSink();
-      await pdf.rotatePages(src(minimalPdf), sink, pages: {0: 90});
+      await pdf.rotatePages(src(minimalPdf), sink, pages: {0: PdfRotation.r90});
       final doc = await pdf.open(src(sink.takeBytes()));
-      expect(doc.pages[0].rotation, 90);
+      expect(doc.pages[0].rotation, PdfRotation.r90);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -699,7 +699,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       await pdf.encrypt(
         src(minimalPdf),
         encSink,
-        encryption: const PdfEncryptionConfig(
+        encryption: const PdfEncryption.config(
           ownerPassword: 'owner',
           userPassword: 'user',
         ),
@@ -854,7 +854,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       await pdf.encrypt(
         src(leakProbePdf),
         sink,
-        encryption: const PdfEncryptionConfig(
+        encryption: const PdfEncryption.config(
           ownerPassword: 'owner-pw',
           userPassword: 'user-pw',
         ),

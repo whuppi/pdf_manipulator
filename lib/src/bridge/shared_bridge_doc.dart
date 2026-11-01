@@ -102,25 +102,25 @@ class _SharedDocHandle extends BridgeDocHandle {
   }
 
   @override
-  PdfTask<List<SearchResult>> search({
+  PdfTask<List<PdfSearchHit>> search({
     required String query,
     required PdfPages pages,
   }) {
     return PdfTask.group((hook) async {
       return switch (pages) {
-        PdfPagesAll() => codec.decodeSearchResults(
+        PdfPagesAll() => codec.decodeSearchHits(
           await hook.guard(_exec(EngineOp.search, {'query': query})),
         ),
-        PdfPagesSingle(:final index) => codec.decodeSearchResults(
+        PdfPagesSingle(:final index) => codec.decodeSearchHits(
           await hook.guard(
             _exec(EngineOp.search, {'query': query, 'page': index}),
           ),
         ),
         PdfPagesList(:final indices) => () async {
-          final all = <SearchResult>[];
+          final all = <PdfSearchHit>[];
           for (final i in indices) {
             all.addAll(
-              codec.decodeSearchResults(
+              codec.decodeSearchHits(
                 await hook.guard(
                   _exec(EngineOp.search, {'query': query, 'page': i}),
                 ),
@@ -130,10 +130,10 @@ class _SharedDocHandle extends BridgeDocHandle {
           return all;
         }(),
         PdfPagesRange(:final start, :final end) => () async {
-          final all = <SearchResult>[];
+          final all = <PdfSearchHit>[];
           for (var i = start; i < end; i++) {
             all.addAll(
-              codec.decodeSearchResults(
+              codec.decodeSearchHits(
                 await hook.guard(
                   _exec(EngineOp.search, {'query': query, 'page': i}),
                 ),
@@ -236,15 +236,15 @@ class _SharedDocHandle extends BridgeDocHandle {
   ).map((map) => codec.decodeVerifySignatures(map));
 
   @override
-  PdfTask<PdfValidationResult> validatePdfA({int level = 2}) => _exec(
-    EngineOp.validatePdfA,
-    {'level': level},
-  ).map((map) => codec.decodeValidationResult(map));
+  PdfTask<PdfValidationResult> validatePdfA({PdfALevel level = PdfALevel.a2}) =>
+      _exec(EngineOp.validatePdfA, {
+        'level': codec.putEnum(level),
+      }).map((map) => codec.decodeValidationResult(map));
 
   @override
-  PdfTask<bool> validatePdfUa({int level = 1}) => _exec(
+  PdfTask<bool> validatePdfUa({PdfUaLevel level = PdfUaLevel.ua1}) => _exec(
     EngineOp.validatePdfUa,
-    {'level': level},
+    {'level': codec.putEnum(level)},
   ).map((map) => codec.decodeValidatePdfUa(map));
 
   @override

@@ -6,7 +6,7 @@ import 'package:pdf_manipulator/src/types/pdf_params.dart';
 /// What a document says about itself, read by `Pdf.info` without keeping the
 /// document open.
 @immutable
-class PdfInfo {
+final class PdfInfo {
   /// Creates a document description.
   const PdfInfo({
     required this.pageCount,
@@ -52,9 +52,8 @@ class PdfInfo {
   /// Document creator (the source application), if present.
   final String? creator;
 
-  /// Document creation date as a raw PDF date string
-  /// (e.g. `D:20240101120000Z`), if present.
-  final String? creationDate;
+  /// Document creation date, if present and parseable.
+  final DateTime? creationDate;
 
   /// Whether the document is encrypted.
   final bool isEncrypted;

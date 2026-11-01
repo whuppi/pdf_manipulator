@@ -2,12 +2,13 @@
 
 import 'dart:typed_data';
 
+import 'package:pdf_manipulator/src/types/equality.dart';
 import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_wire.dart';
 
 /// RGB color for watermarks and annotations.
-class PdfColor {
+final class PdfColor {
   /// Creates an RGB color with components in the range 0.0 to 1.0.
   const PdfColor(this.r, this.g, this.b);
 
@@ -34,10 +35,20 @@ class PdfColor {
 
   /// Yellow (1, 1, 0).
   static const yellow = PdfColor(1, 1, 0);
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfColor && other.r == r && other.g == g && other.b == b;
+
+  @override
+  int get hashCode => Object.hash(r, g, b);
+
+  @override
+  String toString() => 'PdfColor($r, $g, $b)';
 }
 
 /// Permission flags for encrypted PDFs.
-class PdfPermissions {
+final class PdfPermissions {
   /// Creates permission flags with individual overrides.
   const PdfPermissions({
     this.print = true,
@@ -104,6 +115,13 @@ class PdfPermissions {
     if (printHq) bits |= 1 << 11;
     return bits.toSigned(32);
   }
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfPermissions && other.toBits() == toBits();
+
+  @override
+  int get hashCode => toBits();
 }
 
 /// Encryption intent on save — sealed, compiler-enforced.
@@ -127,19 +145,31 @@ sealed class PdfEncryption {
 }
 
 /// Keep existing encryption unchanged.
-class PdfEncryptionKeep extends PdfEncryption {
+final class PdfEncryptionKeep extends PdfEncryption {
   /// Creates a keep-encryption intent.
   const PdfEncryptionKeep();
+
+  @override
+  bool operator ==(Object other) => other is PdfEncryptionKeep;
+
+  @override
+  int get hashCode => (PdfEncryptionKeep).hashCode;
 }
 
 /// Remove all encryption.
-class PdfEncryptionRemove extends PdfEncryption {
+final class PdfEncryptionRemove extends PdfEncryption {
   /// Creates a remove-encryption intent.
   const PdfEncryptionRemove();
+
+  @override
+  bool operator ==(Object other) => other is PdfEncryptionRemove;
+
+  @override
+  int get hashCode => (PdfEncryptionRemove).hashCode;
 }
 
 /// Apply new encryption with explicit parameters.
-class PdfEncryptionConfig extends PdfEncryption {
+final class PdfEncryptionConfig extends PdfEncryption {
   /// Creates an encryption configuration.
   const PdfEncryptionConfig({
     required this.ownerPassword,
@@ -159,6 +189,18 @@ class PdfEncryptionConfig extends PdfEncryption {
 
   /// Access permissions for the user password.
   final PdfPermissions permissions;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfEncryptionConfig &&
+      other.ownerPassword == ownerPassword &&
+      other.userPassword == userPassword &&
+      other.algorithm == algorithm &&
+      other.permissions == permissions;
+
+  @override
+  int get hashCode =>
+      Object.hash(ownerPassword, userPassword, algorithm, permissions);
 }
 
 /// Save strategy — sealed so invalid combos are unrepresentable.
@@ -175,7 +217,7 @@ sealed class PdfSaveOptions {
   /// and embedded fonts. With [pruneResources] the save drops the entries of
   /// each page's resource dictionaries that no content names.
   const factory PdfSaveOptions.fullRewrite({
-    bool compress,
+    bool deflate,
     bool garbageCollect,
     bool objectStreams,
     int deflateLevel,
@@ -200,10 +242,10 @@ sealed class PdfSaveOptions {
 }
 
 /// Full-rewrite save with compression, GC, and encryption control.
-class PdfSaveFullRewrite extends PdfSaveOptions {
+final class PdfSaveFullRewrite extends PdfSaveOptions {
   /// Creates full-rewrite save options.
   const PdfSaveFullRewrite({
-    this.compress = true,
+    this.deflate = true,
     this.garbageCollect = true,
     this.objectStreams = true,
     this.deflateLevel = 9,
@@ -212,8 +254,8 @@ class PdfSaveFullRewrite extends PdfSaveOptions {
     this.encryption = const PdfEncryption.keep(),
   });
 
-  /// Whether to compress streams.
-  final bool compress;
+  /// Whether to deflate streams.
+  final bool deflate;
 
   /// Whether to remove unreferenced objects.
   final bool garbageCollect;
@@ -246,16 +288,44 @@ class PdfSaveFullRewrite extends PdfSaveOptions {
 
   /// Encryption intent for the output.
   final PdfEncryption encryption;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfSaveFullRewrite &&
+      other.deflate == deflate &&
+      other.garbageCollect == garbageCollect &&
+      other.objectStreams == objectStreams &&
+      other.deflateLevel == deflateLevel &&
+      other.mergeDuplicates == mergeDuplicates &&
+      other.pruneResources == pruneResources &&
+      other.encryption == encryption;
+
+  @override
+  int get hashCode => Object.hash(
+    deflate,
+    garbageCollect,
+    objectStreams,
+    deflateLevel,
+    mergeDuplicates,
+    pruneResources,
+    encryption,
+  );
 }
 
 /// Incremental save — see [PdfSaveOptions.incremental] for what it writes.
-class PdfSaveIncremental extends PdfSaveOptions {
+final class PdfSaveIncremental extends PdfSaveOptions {
   /// Creates incremental save options.
   const PdfSaveIncremental();
+
+  @override
+  bool operator ==(Object other) => other is PdfSaveIncremental;
+
+  @override
+  int get hashCode => (PdfSaveIncremental).hashCode;
 }
 
 /// Watermark text style.
-class PdfWatermarkStyle {
+final class PdfWatermarkStyle {
   /// Creates a watermark text style.
   const PdfWatermarkStyle({
     this.fontSize = 48,
@@ -274,11 +344,23 @@ class PdfWatermarkStyle {
   /// Opacity from 0.0 (invisible) to 1.0 (opaque).
   final double opacity;
 
-  /// Rotation angle in degrees.
+  /// Text angle in degrees (not a page rotation).
   final double rotation;
 
   /// Text color.
   final PdfColor color;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfWatermarkStyle &&
+      other.fontSize == fontSize &&
+      other.fontName == fontName &&
+      other.opacity == opacity &&
+      other.rotation == rotation &&
+      other.color == color;
+
+  @override
+  int get hashCode => Object.hash(fontSize, fontName, opacity, rotation, color);
 }
 
 /// Where to place the watermark on the page.
@@ -315,13 +397,19 @@ sealed class PdfWatermarkPosition {
 }
 
 /// Centered watermark position.
-class PdfWatermarkCenter extends PdfWatermarkPosition {
+final class PdfWatermarkCenter extends PdfWatermarkPosition {
   /// Creates a center-positioned watermark.
   const PdfWatermarkCenter();
+
+  @override
+  bool operator ==(Object other) => other is PdfWatermarkCenter;
+
+  @override
+  int get hashCode => (PdfWatermarkCenter).hashCode;
 }
 
 /// Corner-anchored watermark position.
-class PdfWatermarkCorner extends PdfWatermarkPosition {
+final class PdfWatermarkCorner extends PdfWatermarkPosition {
   /// Creates a corner-anchored watermark.
   const PdfWatermarkCorner(this.corner, {this.marginX = 20, this.marginY = 20});
 
@@ -333,10 +421,20 @@ class PdfWatermarkCorner extends PdfWatermarkPosition {
 
   /// Vertical margin from the corner in points.
   final double marginY;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfWatermarkCorner &&
+      other.corner == corner &&
+      other.marginX == marginX &&
+      other.marginY == marginY;
+
+  @override
+  int get hashCode => Object.hash(corner, marginX, marginY);
 }
 
 /// Tiled watermark position.
-class PdfWatermarkTiled extends PdfWatermarkPosition {
+final class PdfWatermarkTiled extends PdfWatermarkPosition {
   /// Creates a tiled watermark.
   const PdfWatermarkTiled({this.columns = 3, this.rows = 4});
 
@@ -345,10 +443,19 @@ class PdfWatermarkTiled extends PdfWatermarkPosition {
 
   /// Number of rows in the tile grid.
   final int rows;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfWatermarkTiled &&
+      other.columns == columns &&
+      other.rows == rows;
+
+  @override
+  int get hashCode => Object.hash(columns, rows);
 }
 
 /// Exact-coordinate watermark position.
-class PdfWatermarkExact extends PdfWatermarkPosition {
+final class PdfWatermarkExact extends PdfWatermarkPosition {
   /// Creates an exact-position watermark.
   const PdfWatermarkExact({
     required this.x,
@@ -368,6 +475,17 @@ class PdfWatermarkExact extends PdfWatermarkPosition {
 
   /// Height in points.
   final double height;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfWatermarkExact &&
+      other.x == x &&
+      other.y == y &&
+      other.width == width &&
+      other.height == height;
+
+  @override
+  int get hashCode => Object.hash(x, y, width, height);
 }
 
 /// Which corner to anchor a watermark.
@@ -418,7 +536,7 @@ sealed class PdfSigningCredentials {
 }
 
 /// PKCS#12 signing credentials.
-class PdfPkcs12Credentials extends PdfSigningCredentials {
+final class PdfPkcs12Credentials extends PdfSigningCredentials {
   /// Creates PKCS#12 credentials.
   const PdfPkcs12Credentials(this.data, this.password);
 
@@ -427,10 +545,19 @@ class PdfPkcs12Credentials extends PdfSigningCredentials {
 
   /// Password to unlock the bundle.
   final String password;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfPkcs12Credentials &&
+      other.password == password &&
+      listsEqual(other.data, data);
+
+  @override
+  int get hashCode => Object.hash(password, Object.hashAll(data));
 }
 
 /// PEM-encoded signing credentials.
-class PdfPemCredentials extends PdfSigningCredentials {
+final class PdfPemCredentials extends PdfSigningCredentials {
   /// Creates PEM credentials.
   const PdfPemCredentials(this.certPem, this.keyPem);
 
@@ -439,10 +566,19 @@ class PdfPemCredentials extends PdfSigningCredentials {
 
   /// PEM-encoded private key.
   final String keyPem;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfPemCredentials &&
+      other.certPem == certPem &&
+      other.keyPem == keyPem;
+
+  @override
+  int get hashCode => Object.hash(certPem, keyPem);
 }
 
 /// Validation result.
-class PdfValidationResult {
+final class PdfValidationResult {
   /// Creates a validation result.
   const PdfValidationResult({
     required this.compliant,
@@ -458,10 +594,20 @@ class PdfValidationResult {
 
   /// Number of validation warnings.
   final int warnings;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfValidationResult &&
+      other.compliant == compliant &&
+      other.errors == errors &&
+      other.warnings == warnings;
+
+  @override
+  int get hashCode => Object.hash(compliant, errors, warnings);
 }
 
 /// A bookmark-based split plan entry.
-class PdfBookmarkSplit {
+final class PdfBookmarkSplit {
   /// Creates a bookmark split entry.
   const PdfBookmarkSplit({
     required this.title,
@@ -477,10 +623,20 @@ class PdfBookmarkSplit {
 
   /// End page (exclusive).
   final int endPage;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfBookmarkSplit &&
+      other.title == title &&
+      other.startPage == startPage &&
+      other.endPage == endPage;
+
+  @override
+  int get hashCode => Object.hash(title, startPage, endPage);
 }
 
 /// Page classification result.
-class PdfPageClassification {
+final class PdfPageClassification {
   /// Creates a page classification result.
   const PdfPageClassification({required this.type, required this.confidence});
 
@@ -489,10 +645,19 @@ class PdfPageClassification {
 
   /// Confidence score from 0.0 to 1.0.
   final double confidence;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfPageClassification &&
+      other.type == type &&
+      other.confidence == confidence;
+
+  @override
+  int get hashCode => Object.hash(type, confidence);
 }
 
 /// Document classification result.
-class PdfDocumentClassification {
+final class PdfDocumentClassification {
   /// Creates a document classification result.
   const PdfDocumentClassification({
     required this.type,
@@ -508,4 +673,14 @@ class PdfDocumentClassification {
 
   /// Number of pages analyzed.
   final int pageCount;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfDocumentClassification &&
+      other.type == type &&
+      other.confidence == confidence &&
+      other.pageCount == pageCount;
+
+  @override
+  int get hashCode => Object.hash(type, confidence, pageCount);
 }

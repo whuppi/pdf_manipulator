@@ -17,7 +17,7 @@ Future<Uint8List> plainBytes(Pdf pdf, Uint8List bytes) async {
   await editor.save(
     sink,
     options: const PdfSaveOptions.fullRewrite(
-      compress: false,
+      deflate: false,
       garbageCollect: false,
       objectStreams: false,
     ),

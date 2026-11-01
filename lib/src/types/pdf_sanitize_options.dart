@@ -4,7 +4,7 @@ import 'package:meta/meta.dart';
 /// "sanitizer" means: strip metadata and scripts, keep attachments unless
 /// asked.
 @immutable
-class PdfSanitizeOptions {
+final class PdfSanitizeOptions {
   /// Creates sanitize options.
   const PdfSanitizeOptions({
     this.metadata = true,
@@ -20,4 +20,14 @@ class PdfSanitizeOptions {
 
   /// Remove embedded files and file attachment annotations.
   final bool embeddedFiles;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfSanitizeOptions &&
+      other.metadata == metadata &&
+      other.javascript == javascript &&
+      other.embeddedFiles == embeddedFiles;
+
+  @override
+  int get hashCode => Object.hash(metadata, javascript, embeddedFiles);
 }

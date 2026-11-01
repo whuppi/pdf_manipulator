@@ -3,6 +3,7 @@
 
 import 'package:meta/meta.dart';
 
+import 'package:pdf_manipulator/src/types/equality.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/types/pdf_wire.dart';
 
@@ -49,45 +50,78 @@ sealed class PdfFormFieldValue {
 }
 
 /// The text content of a text or single-select choice field.
-class PdfTextValue extends PdfFormFieldValue {
+final class PdfTextValue extends PdfFormFieldValue {
   /// Creates a text value.
   const PdfTextValue(this.text);
 
   /// The field's text.
   final String text;
+
+  @override
+  bool operator ==(Object other) => other is PdfTextValue && other.text == text;
+
+  @override
+  int get hashCode => text.hashCode;
 }
 
 /// Whether a checkbox or radio button is on.
-class PdfCheckedValue extends PdfFormFieldValue {
+final class PdfCheckedValue extends PdfFormFieldValue {
   /// Creates a checked value.
   const PdfCheckedValue(this.checked);
 
   /// Whether the widget is in its on-state.
   final bool checked;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfCheckedValue && other.checked == checked;
+
+  @override
+  int get hashCode => checked.hashCode;
 }
 
 /// The selected option of a single-select choice field.
-class PdfChoiceValue extends PdfFormFieldValue {
+final class PdfChoiceValue extends PdfFormFieldValue {
   /// Creates a choice value.
   const PdfChoiceValue(this.choice);
 
   /// The selected option name.
   final String choice;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfChoiceValue && other.choice == choice;
+
+  @override
+  int get hashCode => choice.hashCode;
 }
 
 /// The selected options of a multi-select list box.
-class PdfMultiChoiceValue extends PdfFormFieldValue {
+final class PdfMultiChoiceValue extends PdfFormFieldValue {
   /// Creates a multi-choice value.
   const PdfMultiChoiceValue(this.choices);
 
   /// The selected option names.
   final List<String> choices;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfMultiChoiceValue && listsEqual(other.choices, choices);
+
+  @override
+  int get hashCode => Object.hashAll(choices);
 }
 
 /// A field with no value set.
-class PdfNoValue extends PdfFormFieldValue {
+final class PdfNoValue extends PdfFormFieldValue {
   /// Creates a no-value marker.
   const PdfNoValue();
+
+  @override
+  bool operator ==(Object other) => other is PdfNoValue;
+
+  @override
+  int get hashCode => (PdfNoValue).hashCode;
 }
 
 /// Text alignment of a text field's content (`/Q`).
@@ -109,7 +143,7 @@ enum PdfTextAlignment implements PdfWire {
 
 /// An AcroForm field as read from a document by `PdfDoc.formFields`.
 @immutable
-class PdfFormField {
+final class PdfFormField {
   /// Creates a form field snapshot.
   const PdfFormField({
     required this.name,
@@ -150,6 +184,32 @@ class PdfFormField {
 
   /// `/Ff` bit 2 — the field must have a value on submit.
   final bool required;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfFormField &&
+      other.name == name &&
+      other.type == type &&
+      other.value == value &&
+      other.tooltip == tooltip &&
+      other.bounds == bounds &&
+      other.maxLength == maxLength &&
+      other.alignment == alignment &&
+      other.readOnly == readOnly &&
+      other.required == required;
+
+  @override
+  int get hashCode => Object.hash(
+    name,
+    type,
+    value,
+    tooltip,
+    bounds,
+    maxLength,
+    alignment,
+    readOnly,
+    required,
+  );
 }
 
 /// Format for `PdfDoc.exportFormData`.

@@ -70,9 +70,8 @@ base class PdfDoc extends PdfReads implements _Handle {
   /// Document creator (the source application), if present.
   final String? creator;
 
-  /// Document creation date as a raw PDF date string
-  /// (e.g. `D:20240101120000Z`), if present.
-  final String? creationDate;
+  /// Document creation date, if present and parseable.
+  final DateTime? creationDate;
 
   /// Whether the document is encrypted.
   final bool isEncrypted;
@@ -129,15 +128,15 @@ base class PdfDoc extends PdfReads implements _Handle {
     return _handle.verifySignatures();
   }
 
-  /// Validates PDF/A conformance at the given [level] (1, 2, or 3).
-  PdfTask<PdfValidationResult> validatePdfA({int level = 2}) {
+  /// Validates PDF/A conformance at the given [level].
+  PdfTask<PdfValidationResult> validatePdfA({PdfALevel level = PdfALevel.a2}) {
     KeepRecord.op('pdfa');
     _check();
     return _handle.validatePdfA(level: level);
   }
 
   /// Validates PDF/UA (accessibility) conformance at the given [level].
-  PdfTask<bool> validatePdfUa({int level = 1}) {
+  PdfTask<bool> validatePdfUa({PdfUaLevel level = PdfUaLevel.ua1}) {
     KeepRecord.op('pdfa');
     _check();
     return _handle.validatePdfUa(level: level);

@@ -116,26 +116,25 @@ base class PdfEditor extends PdfEdits implements _Handle {
     return _handle.setProducer(value);
   }
 
-  /// Returns the document creation date as a raw PDF date string
-  /// (e.g. `D:20240101120000Z`).
-  PdfTask<String> get creationDate {
+  /// Returns the document creation date, or `null` when it has none or it
+  /// does not parse.
+  PdfTask<DateTime?> get creationDate {
     _check();
     return _handle.creationDate;
   }
 
-  /// Sets the document creation date. Expects a raw PDF date string
-  /// (e.g. `D:20240101120000Z`).
-  PdfTask<void> setCreationDate(String value) {
+  /// Sets the document creation date, stored in UTC.
+  PdfTask<void> setCreationDate(DateTime value) {
     _check();
     return _handle.setCreationDate(value);
   }
 
   // ── Pages ──
 
-  /// Rotates all pages by [degrees] (must be a multiple of 90).
-  PdfTask<void> rotateAllPages({required int degrees}) {
+  /// Turns all pages by [by] on top of their current rotation.
+  PdfTask<void> rotateAllPages({required PdfRotation by}) {
     _check();
-    return _handle.rotateAllPages(degrees: degrees);
+    return _handle.rotateAllPages(by: by);
   }
 
   /// Returns the media box (bounding rectangle) of the given [page].
@@ -165,15 +164,12 @@ base class PdfEditor extends PdfEdits implements _Handle {
     return _handle.setPageCropBox(page, box);
   }
 
-  /// Sets the absolute rotation of [page] to [degrees] (0, 90, 180 or
-  /// 270), replacing any existing rotation. Unlike [rotatePage] this does
-  /// not add to the current rotation.
-  PdfTask<void> setPageRotation(int page, {required int degrees}) {
+  /// Sets the absolute rotation of [page] to [rotation], replacing any
+  /// existing rotation. Unlike [rotatePage] this does not add to the
+  /// current rotation.
+  PdfTask<void> setPageRotation(int page, {required PdfRotation rotation}) {
     _check();
-    if (degrees % 90 != 0) {
-      throw PdfInvalidArgument('degrees must be a multiple of 90: $degrees');
-    }
-    return _handle.setPageRotation(page, degrees: degrees);
+    return _handle.setPageRotation(page, rotation: rotation);
   }
 
   /// Removes the given [page] (0-based index) from the document.
@@ -473,7 +469,7 @@ base class PdfEditor extends PdfEdits implements _Handle {
   }
 
   /// Converts the document to PDF/A at the given conformance [level].
-  PdfTask<void> convertToPdfA({int level = 1}) {
+  PdfTask<void> convertToPdfA({PdfALevel level = PdfALevel.a2}) {
     KeepRecord.op('pdfa');
     _check();
     return _handle.convertToPdfA(level: level);

@@ -163,3 +163,56 @@ enum PdfFallbackFontKind implements PdfWire {
   @override
   final String wire;
 }
+
+/// A page rotation: a quarter turn clockwise, as the page's `/Rotate` stores
+/// it.
+enum PdfRotation implements PdfWire {
+  /// Upright.
+  r0('r0'),
+
+  /// A quarter turn clockwise.
+  r90('r90'),
+
+  /// A half turn.
+  r180('r180'),
+
+  /// Three quarter turns clockwise.
+  r270('r270');
+
+  const PdfRotation(this.wire);
+
+  @override
+  final String wire;
+}
+
+/// A PDF/A conformance level. The engine validates and converts to the
+/// level's basic (`b`) conformance.
+enum PdfALevel implements PdfWire {
+  /// PDF/A-1b (ISO 19005-1).
+  a1('a1'),
+
+  /// PDF/A-2b (ISO 19005-2).
+  a2('a2'),
+
+  /// PDF/A-3b (ISO 19005-3).
+  a3('a3');
+
+  const PdfALevel(this.wire);
+
+  @override
+  final String wire;
+}
+
+/// A PDF/UA accessibility level.
+enum PdfUaLevel implements PdfWire {
+  /// PDF/UA-1 (ISO 14289-1).
+  ua1('ua1'),
+
+  /// PDF/UA-2 (ISO 14289-2).
+  ua2('ua2');
+
+  const PdfUaLevel(this.wire);
+
+  @override
+  final String wire;
+}

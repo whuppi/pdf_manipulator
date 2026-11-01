@@ -154,7 +154,7 @@ void registerCombinatorCancelTests(
         Object? after;
         task = pdf.rewrite(src(minimalPdf), out, (editor) async {
           kept = editor;
-          final op = editor.rotatePage(0, degrees: 90);
+          final op = editor.rotatePage(0, by: PdfRotation.r90);
           task.cancel();
           try {
             await op;
@@ -233,7 +233,7 @@ void registerCombinatorCancelTests(
         final bytes = await pages200(pdf);
         final opened = await _readsAtOpen(pdf, bytes);
         var reads = 0;
-        late final PdfTask<List<SearchResult>> task;
+        late final PdfTask<List<PdfSearchHit>> task;
         task = pdf
             .reads(
               TestSource(
@@ -269,7 +269,7 @@ void registerCombinatorCancelTests(
               ),
               TestSink(),
             )
-            .rotatePage(0, degrees: 90);
+            .rotatePage(0, by: PdfRotation.r90);
         await expectLater(task, throwsA(isA<PdfCancelled>()));
         expect(reads, greaterThan(opened), reason: 'the edit had started');
       },

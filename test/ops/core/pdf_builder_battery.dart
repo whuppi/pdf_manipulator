@@ -58,14 +58,14 @@ void registerBuilderTests(Pdf Function() createPdf) {
       expect(asString, contains('Builder Author'));
     }, timeout: t(1));
 
-    test('save compresses by default; compress: false stays plain', () async {
+    test('save deflates by default; deflate: false stays plain', () async {
       final pdf = createPdf();
       final sentence = 'The quick brown fox jumps over the lazy dog.';
 
       // One save consumes the builder handle, so the two variants are
-      // two builds of the same content. `compress == null` omits the
+      // two builds of the same content. `deflate == null` omits the
       // argument and exercises the default.
-      Future<Uint8List> buildAndSave(bool? compress) async {
+      Future<Uint8List> buildAndSave(bool? deflate) async {
         final builder = await pdf.build();
         final page = await builder.addA4Page();
         for (var i = 0; i < 40; i++) {
@@ -73,10 +73,10 @@ void registerBuilderTests(Pdf Function() createPdf) {
         }
         await page.done();
         final sink = TestSink();
-        if (compress == null) {
+        if (deflate == null) {
           await builder.save(sink);
         } else {
-          await builder.save(sink, compress: compress);
+          await builder.save(sink, deflate: deflate);
         }
         await builder.dispose();
         return sink.takeBytes();
@@ -877,14 +877,14 @@ void registerBuilderTests(Pdf Function() createPdf) {
     Future<Uint8List> savePlain(
       Pdf pdf,
       Future<void> Function(PdfPageBuilder page) content, {
-      bool compress = true,
+      bool deflate = true,
     }) async {
       final builder = await pdf.build();
       final page = await builder.addA4Page();
       await content(page);
       await page.done();
       final sink = TestSink();
-      await builder.save(sink, compress: compress);
+      await builder.save(sink, deflate: deflate);
       await builder.dispose();
       return sink.takeBytes();
     }
@@ -1347,7 +1347,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final bytes = await savePlain(pdf, (page) async {
         await page.rect(const PdfRect(x: 50, y: 300, width: 100, height: 60));
-      }, compress: false);
+      }, deflate: false);
       expect(
         String.fromCharCodes(bytes),
         matches(RegExp(r'\b50(\.0+)? 300(\.0+)? 100(\.0+)? 60(\.0+)? re\b')),
@@ -1361,7 +1361,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
           const PdfRect(x: 50, y: 300, width: 100, height: 60),
           PdfColor.red,
         );
-      }, compress: false);
+      }, deflate: false);
       final asString = String.fromCharCodes(bytes);
       expect(asString, matches(RegExp(r'1(\.0+)? 0(\.0+)? 0(\.0+)? rg')));
       expect(asString, matches(RegExp(r'\bre\b')));
@@ -1371,7 +1371,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final bytes = await savePlain(pdf, (page) async {
         await page.line(50, 300, 150, 360);
-      }, compress: false);
+      }, deflate: false);
       expect(String.fromCharCodes(bytes), matches(RegExp(r'\bl\s')));
     }, timeout: t(1));
 
@@ -1383,7 +1383,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
           await page.strokeRect(
             const PdfRect(x: 50, y: 300, width: 100, height: 60),
           );
-        }, compress: false);
+        }, deflate: false);
         expect(String.fromCharCodes(solid), matches(RegExp(r'\bre\b')));
         expect(String.fromCharCodes(solid), isNot(contains('] 0 d')));
 
@@ -1393,7 +1393,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
             dash: const [3, 2],
             dashPhase: 0,
           );
-        }, compress: false);
+        }, deflate: false);
         final asString = String.fromCharCodes(dashed);
         expect(
           asString,
@@ -1409,13 +1409,13 @@ void registerBuilderTests(Pdf Function() createPdf) {
         final pdf = createPdf();
         final solid = await savePlain(pdf, (page) async {
           await page.strokeLine(50, 300, 150, 360);
-        }, compress: false);
+        }, deflate: false);
         expect(String.fromCharCodes(solid), matches(RegExp(r'\bl\s')));
         expect(String.fromCharCodes(solid), isNot(contains('] 0 d')));
 
         final dashed = await savePlain(pdf, (page) async {
           await page.strokeLine(50, 300, 150, 360, dash: const [3, 2]);
-        }, compress: false);
+        }, deflate: false);
         expect(
           String.fromCharCodes(dashed),
           matches(RegExp(r'\[3(\.0+)? 2(\.0+)?\] 0(\.0+)? d\b')),

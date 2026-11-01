@@ -155,9 +155,9 @@ void registerEditorTests(Pdf Function() createPdf) {
 
     test('setCreationDate + creationDate roundtrips', () async {
       final editor = await createPdf().edit(src(minimalPdf));
-      await editor.setCreationDate('D:20240101120000Z');
+      await editor.setCreationDate(DateTime.utc(2024, 1, 1, 12));
       final date = await editor.creationDate;
-      expect(date, contains('20240101'));
+      expect(date, DateTime.utc(2024, 1, 1, 12));
       await editor.dispose();
     }, timeout: t(1));
 
@@ -165,7 +165,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
       await editor.setProducer('Doc-Read Producer');
-      await editor.setCreationDate('D:20240101120000Z');
+      await editor.setCreationDate(DateTime.utc(2024, 1, 1, 12));
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -178,7 +178,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       );
       expect(
         doc.creationDate,
-        contains('20240101'),
+        DateTime.utc(2024, 1, 1, 12),
         reason: 'creation date must surface on the read-only PdfDoc',
       );
       // Creator has no Dart setter; this exercises the read surface decodes
@@ -276,23 +276,14 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('setPageRotation is absolute, not additive', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
-      await editor.setPageRotation(0, degrees: 90);
-      await editor.setPageRotation(0, degrees: 90);
+      await editor.setPageRotation(0, rotation: PdfRotation.r90);
+      await editor.setPageRotation(0, rotation: PdfRotation.r90);
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      expect(doc.pages[0].rotation, 90);
+      expect(doc.pages[0].rotation, PdfRotation.r90);
       await doc.dispose();
-    }, timeout: t(1));
-
-    test('setPageRotation rejects a non-multiple-of-90', () async {
-      final editor = await createPdf().edit(src(minimalPdf));
-      expect(
-        () => editor.setPageRotation(0, degrees: 45),
-        throwsA(isA<PdfInvalidArgument>()),
-      );
-      await editor.dispose();
     }, timeout: t(1));
 
     test('mergeFrom increases page count', () async {
@@ -446,7 +437,7 @@ void registerEditorTests(Pdf Function() createPdf) {
           // Uncompressed, so a copied object stream shows its contents.
           options: const PdfSaveOptions.fullRewrite(
             garbageCollect: false,
-            compress: false,
+            deflate: false,
           ),
         );
         await editor.dispose();
@@ -558,10 +549,10 @@ void registerEditorTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final editor = await pdf.edit(src(fFormFields));
       await editor.setFormFieldValue('fullname', 'Ada');
-      await editor.setPageRotation(0, degrees: 90);
+      await editor.setPageRotation(0, rotation: PdfRotation.r90);
       final out = await saveIncremental(editor, fFormFields);
       final doc = await pdf.open(src(out));
-      expect(doc.pages.first.rotation, 90);
+      expect(doc.pages.first.rotation, PdfRotation.r90);
       final field = await doc.formField('fullname');
       expect((field?.value as PdfTextValue?)?.text, 'Ada');
       await doc.dispose();
@@ -1941,7 +1932,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       // Background layer draws into content — extraction proves it.
       await e.addWatermark(0, 'TRIPLEWM', layer: PdfWatermarkLayer.background);
       await e.setTitle('Triple Edit');
-      await e.rotatePage(0, degrees: 90);
+      await e.rotatePage(0, by: PdfRotation.r90);
       final sink = TestSink();
       await e.save(sink);
       await e.dispose();
@@ -1953,7 +1944,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       );
       await wmDoc.dispose();
       final doc = await pdf.open(src(out));
-      expect(doc.pages[0].rotation, 90);
+      expect(doc.pages[0].rotation, PdfRotation.r90);
       await doc.dispose();
       final e2 = await pdf.edit(src(out));
       expect(await e2.title, contains('Triple Edit'));
@@ -2501,12 +2492,12 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('rotatePage sets rotation on specific page', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
-      await editor.rotatePage(0, degrees: 90);
+      await editor.rotatePage(0, by: PdfRotation.r90);
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      expect(doc.pages[0].rotation, 90);
+      expect(doc.pages[0].rotation, PdfRotation.r90);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -2515,13 +2506,13 @@ void registerEditorTests(Pdf Function() createPdf) {
       final mergeSink = TestSink();
       await pdf.merge([src(minimalPdf), src(minimalPdf)], mergeSink);
       final editor = await pdf.edit(src(mergeSink.takeBytes()));
-      await editor.rotateAllPages(degrees: 180);
+      await editor.rotateAllPages(by: PdfRotation.r180);
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      expect(doc.pages[0].rotation, 180);
-      expect(doc.pages[1].rotation, 180);
+      expect(doc.pages[0].rotation, PdfRotation.r180);
+      expect(doc.pages[1].rotation, PdfRotation.r180);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -3123,14 +3114,14 @@ void registerEditorTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
       await editor.mergeFrom(src(pagePrunePdf), pages: [2]);
-      await editor.rotatePage(1, degrees: 90);
+      await editor.rotatePage(1, by: PdfRotation.r90);
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
 
       final doc = await pdf.open(src(sink.takeBytes()));
-      expect(doc.pages[0].rotation, 0);
-      expect(doc.pages[1].rotation, 90);
+      expect(doc.pages[0].rotation, PdfRotation.r0);
+      expect(doc.pages[1].rotation, PdfRotation.r90);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -3207,7 +3198,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       expect(doc.pageCount, 2);
       expect(doc.pages[1].width, closeTo(300, 0.5));
       expect(doc.pages[1].height, closeTo(400, 0.5));
-      expect(doc.pages[1].rotation, 90);
+      expect(doc.pages[1].rotation, PdfRotation.r90);
       expect(
         await doc.extract(pages: const PdfPages.single(1)),
         contains(inheritedPageMarker),
@@ -3274,14 +3265,17 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('rotateAllPages reaches every page of a nested page tree', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(nestedPageTreePdf));
-      await editor.rotateAllPages(degrees: 90);
+      await editor.rotateAllPages(by: PdfRotation.r90);
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
 
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 3);
-      expect([for (final p in doc.pages) p.rotation], [90, 90, 90]);
+      expect(
+        [for (final p in doc.pages) p.rotation],
+        [PdfRotation.r90, PdfRotation.r90, PdfRotation.r90],
+      );
       await doc.dispose();
     }, timeout: t(1));
 
@@ -3413,7 +3407,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.save(
         sink,
         options: const PdfSaveOptions.fullRewrite(
-          compress: true,
+          deflate: true,
           garbageCollect: true,
         ),
       );
@@ -3429,7 +3423,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final sink = TestSink();
       await editor.save(
         sink,
-        options: const PdfSaveOptions.fullRewrite(compress: false),
+        options: const PdfSaveOptions.fullRewrite(deflate: false),
       );
       await editor.dispose();
       final out = sink.takeBytes();
@@ -3458,7 +3452,7 @@ void registerEditorTests(Pdf Function() createPdf) {
         final sink = TestSink();
         await editor.save(
           sink,
-          options: const PdfSaveOptions.fullRewrite(compress: true),
+          options: const PdfSaveOptions.fullRewrite(deflate: true),
         );
         await editor.dispose();
         final out = sink.takeBytes();

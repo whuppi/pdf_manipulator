@@ -190,7 +190,7 @@ void registerLifecycleTests(Pdf Function() createPdf) {
         await pdf.encrypt(
           src(minimalPdf),
           sink,
-          encryption: PdfEncryptionConfig(
+          encryption: PdfEncryption.config(
             ownerPassword: 'owner-pw',
             userPassword: 'user-pw',
             algorithm: algorithm,

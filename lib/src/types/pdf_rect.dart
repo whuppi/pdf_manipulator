@@ -2,7 +2,7 @@ import 'package:meta/meta.dart';
 
 /// A rectangle in PDF coordinate space (points, 1pt = 1/72 inch), y up.
 @immutable
-class PdfRect {
+final class PdfRect {
   /// Creates a rectangle from its lower-left corner and its size.
   const PdfRect({
     required this.x,

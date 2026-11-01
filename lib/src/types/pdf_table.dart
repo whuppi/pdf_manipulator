@@ -23,7 +23,7 @@ enum PdfCellAlign implements PdfWire {
 ///
 /// [width] in points; `null` lets the engine size the column to fit its
 /// content. `streamingTable` requires an explicit width on every column.
-class PdfTableColumn {
+final class PdfTableColumn {
   /// Creates a column; [header] is its title text.
   const PdfTableColumn(
     this.header, {
@@ -39,10 +39,20 @@ class PdfTableColumn {
 
   /// Text alignment inside the column.
   final PdfCellAlign align;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfTableColumn &&
+      other.header == header &&
+      other.width == width &&
+      other.align == align;
+
+  @override
+  int get hashCode => Object.hash(header, width, align);
 }
 
 /// One cell of a streaming table row.
-class PdfTableCell {
+final class PdfTableCell {
   /// Creates a cell; [text] is its content.
   const PdfTableCell(this.text, {this.rowSpan = 1});
 
@@ -53,6 +63,13 @@ class PdfTableCell {
   /// lists one cell per column; a cell a span from above covers is a
   /// placeholder and is written empty.
   final int rowSpan;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfTableCell && other.text == text && other.rowSpan == rowSpan;
+
+  @override
+  int get hashCode => Object.hash(text, rowSpan);
 }
 
 /// How a streaming table sizes its columns.

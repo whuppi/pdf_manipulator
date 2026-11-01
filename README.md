@@ -317,7 +317,7 @@ await pdf.compress(source, output); // images to 150 ppi (PdfImagePolicy.ebook),
 await pdf.compress(source, output, images: PdfImagePolicy.screen); // 72 ppi
 
 await pdf.encrypt(source, output,
-    encryption: PdfEncryptionConfig(
+    encryption: PdfEncryption.config(
       ownerPassword: 'secret',
       algorithm: PdfEncryptionAlgorithm.aes256,
     ));

@@ -205,25 +205,25 @@ extension PdfSugar on Pdf {
     await hook.guard(editor.save(output));
   });
 
-  /// Rotates specific pages by their mapped degree values.
+  /// Turns specific pages by their mapped rotations.
   PdfTask<void> rotatePages(
     DataSource source,
     DataSink output, {
-    required Map<int, int> pages,
+    required Map<int, PdfRotation> pages,
   }) => _own(edit(source), (editor, hook) async {
     for (final entry in pages.entries) {
-      await hook.guard(editor.rotatePage(entry.key, degrees: entry.value));
+      await hook.guard(editor.rotatePage(entry.key, by: entry.value));
     }
     await hook.guard(editor.save(output));
   });
 
-  /// Rotates all pages by [degrees] (must be a multiple of 90).
+  /// Turns all pages by [by] on top of their current rotation.
   PdfTask<void> rotateAllPages(
     DataSource source,
     DataSink output, {
-    required int degrees,
+    required PdfRotation by,
   }) => _own(edit(source), (editor, hook) async {
-    await hook.guard(editor.rotateAllPages(degrees: degrees));
+    await hook.guard(editor.rotateAllPages(by: by));
     await hook.guard(editor.save(output));
   });
 
@@ -285,7 +285,7 @@ extension PdfSugar on Pdf {
     return _own(edit(source), (editor, hook) async {
       await hook.guard(editor.reduceImages(images));
       final options = PdfSaveOptions.fullRewrite(
-        compress: true,
+        deflate: true,
         garbageCollect: garbageCollect,
         mergeDuplicates: true,
         pruneResources: true,
@@ -349,20 +349,30 @@ extension PdfSugar on Pdf {
     await hook.guard(editor.save(output));
   });
 
-  /// Encrypts a PDF with the given [encryption] configuration.
+  /// Encrypts a PDF with the given [encryption] configuration, which must
+  /// come from [PdfEncryption.config]; any other value throws
+  /// [PdfInvalidArgument].
   PdfTask<void> encrypt(
     DataSource source,
     DataSink output, {
-    required PdfEncryptionConfig encryption,
-  }) => _own(
-    edit(source),
-    (editor, hook) => hook.guard(
-      editor.save(
-        output,
-        options: PdfSaveOptions.fullRewrite(encryption: encryption),
+    required PdfEncryption encryption,
+  }) {
+    if (encryption is! PdfEncryptionConfig) {
+      throw const PdfInvalidArgument(
+        'encrypt needs PdfEncryption.config(...); use rewrite to keep or '
+        'remove encryption',
+      );
+    }
+    return _own(
+      edit(source),
+      (editor, hook) => hook.guard(
+        editor.save(
+          output,
+          options: PdfSaveOptions.fullRewrite(encryption: encryption),
+        ),
       ),
-    ),
-  );
+    );
+  }
 
   /// Decrypts a password-protected PDF and saves without encryption.
   PdfTask<void> decrypt(
@@ -419,7 +429,7 @@ extension PdfSugar on Pdf {
   PdfTask<void> convertToPdfA(
     DataSource source,
     DataSink output, {
-    int level = 1,
+    PdfALevel level = PdfALevel.a2,
     String? password,
   }) {
     KeepRecord.op('pdfa');

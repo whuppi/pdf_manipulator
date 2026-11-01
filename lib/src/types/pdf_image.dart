@@ -5,7 +5,7 @@ import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
 /// One image found on a page: where it is and how it is stored, without its
 /// bytes. The bytes go to a sink the extraction names.
 @immutable
-class PdfImage {
+final class PdfImage {
   /// Creates an image descriptor.
   const PdfImage({
     required this.page,

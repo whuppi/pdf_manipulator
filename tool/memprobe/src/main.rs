@@ -220,7 +220,7 @@ fn run() -> Result<(), String> {
                 re("editorMutate")
                     .put("handleId", i32v(hid))
                     .put("editOp", strv("rotateAll"))
-                    .put("degrees", i32v(90)),
+                    .put("rotation", strv("r90")),
                 vec![],
                 vec![],
             )?;
@@ -382,7 +382,7 @@ fn run() -> Result<(), String> {
             re("editorMutate")
                 .put("handleId", i32v(hid))
                 .put("editOp", strv("rotateAll"))
-                .put("degrees", i32v(90)),
+                .put("rotation", strv("r90")),
             vec![],
             vec![],
         )?;
@@ -1713,7 +1713,7 @@ fn call(
     wire::parse_response(&resp)
 }
 
-/// Full-rewrite save of an open editor to `sink` (compress + GC), dropping
+/// Full-rewrite save of an open editor to `sink` (deflate + GC), dropping
 /// the unused resource entries when `prune` is set.
 fn save_full(
     state: &mut pdf_oxide::host::lane_state::LaneState,
@@ -1725,7 +1725,7 @@ fn save_full(
         state,
         re("editorSave")
             .put("handleId", i32v(hid))
-            .put("compress", wire::Value::Bool(true))
+            .put("deflate", wire::Value::Bool(true))
             .put("garbageCollect", wire::Value::Bool(true))
             .put("pruneResources", wire::Value::Bool(prune))
             .put("saveMode", i32v(0))

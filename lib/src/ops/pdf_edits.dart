@@ -18,9 +18,9 @@ abstract base class PdfEdits {
   /// one-shot.
   PdfTask<T> _run<T>(PdfTask<T> Function(BridgeEditorHandle handle) apply);
 
-  /// Rotates a single [page] by [degrees] (must be a multiple of 90).
-  PdfTask<void> rotatePage(int page, {required int degrees}) =>
-      _run((handle) => handle.rotatePage(page, degrees: degrees));
+  /// Turns a single [page] by [by] on top of its current rotation.
+  PdfTask<void> rotatePage(int page, {required PdfRotation by}) =>
+      _run((handle) => handle.rotatePage(page, by: by));
 
   /// Adds a text watermark to the specified [page].
   PdfTask<void> addWatermark(

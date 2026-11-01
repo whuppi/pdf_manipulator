@@ -22,7 +22,7 @@ import 'package:pdf_manipulator/src/types/pdf_sanitize_options.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
 import 'package:pdf_manipulator/src/types/pdf_table.dart';
 import 'package:pdf_manipulator/src/types/pdf_xfa_info.dart';
-import 'package:pdf_manipulator/src/types/search_result.dart';
+import 'package:pdf_manipulator/src/types/pdf_search_hit.dart';
 import 'package:pdf_manipulator/src/bridge/pdf_bridge.dart';
 import 'package:pdf_manipulator/src/bridge/pdf_transport.dart';
 import 'package:pdf_manipulator/src/types/pdf_task.dart';

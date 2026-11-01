@@ -10,7 +10,7 @@ import 'package:pdf_manipulator/src/types/pdf_wire.dart';
 /// The presets are the three resolutions print and screen workflows have
 /// settled on: 72, 150 and 300 ppi.
 @immutable
-class PdfImagePolicy {
+final class PdfImagePolicy {
   /// Creates a policy; every `null` resolution means "never downsample
   /// that class of image".
   const PdfImagePolicy({
@@ -109,6 +109,36 @@ class PdfImagePolicy {
   /// [minSavings] still applies, so a JPEG already at or below that
   /// quality is kept and a second run changes nothing.
   final bool recompressJpeg;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfImagePolicy &&
+      other.colorPpi == colorPpi &&
+      other.grayPpi == grayPpi &&
+      other.monoPpi == monoPpi &&
+      other.downsampleThreshold == downsampleThreshold &&
+      other.jpegQuality == jpegQuality &&
+      other.allowLossy == allowLossy &&
+      other.convertCmykToRgb == convertCmykToRgb &&
+      other.minPixels == minPixels &&
+      other.minSavings == minSavings &&
+      other.chromaSubsampling == chromaSubsampling &&
+      other.recompressJpeg == recompressJpeg;
+
+  @override
+  int get hashCode => Object.hash(
+    colorPpi,
+    grayPpi,
+    monoPpi,
+    downsampleThreshold,
+    jpegQuality,
+    allowLossy,
+    convertCmykToRgb,
+    minPixels,
+    minSavings,
+    chromaSubsampling,
+    recompressJpeg,
+  );
 
   @override
   String toString() =>

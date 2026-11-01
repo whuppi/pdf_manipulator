@@ -1109,7 +1109,7 @@ class _DocTabState extends State<_DocTab>
                                 'Page ${i + 1}: '
                                 '${doc.pages[i].effectiveWidth.toStringAsFixed(0)} × '
                                 '${doc.pages[i].effectiveHeight.toStringAsFixed(0)} pt'
-                                '${doc.pages[i].rotation != 0 ? '  (${doc.pages[i].rotation}°)' : ''}',
+                                '${doc.pages[i].rotation != PdfRotation.r0 ? '  (${doc.pages[i].rotation.name})' : ''}',
                                 style: const TextStyle(fontSize: 13)),
                           )),
                   if (doc.pageCount > 20)
@@ -1436,8 +1436,8 @@ class _SugarTabState extends State<_SugarTab>
                       onRun: () => _opToFile(
                           'RotateAll',
                           'rotated_all.pdf',
-                          (sink) =>
-                              _pdf.rotateAllPages(src, sink, degrees: 90))),
+                          (sink) => _pdf.rotateAllPages(src, sink,
+                              by: PdfRotation.r90))),
                   _Op(
                       icon: Icons.rotate_left,
                       title: 'Rotate page 0 → 180°',
@@ -1445,8 +1445,8 @@ class _SugarTabState extends State<_SugarTab>
                       onRun: () => _opToFile(
                           'RotatePage',
                           'rotated_p0.pdf',
-                          (sink) =>
-                              _pdf.rotatePages(src, sink, pages: {0: 180}))),
+                          (sink) => _pdf.rotatePages(src, sink,
+                              pages: {0: PdfRotation.r180}))),
                   _Section('Compression'),
                   _Op(
                       icon: Icons.compress,
@@ -1518,7 +1518,7 @@ class _SugarTabState extends State<_SugarTab>
                           'Encrypt',
                           'encrypted.pdf',
                           (sink) => _pdf.encrypt(src, sink,
-                              encryption: const PdfEncryptionConfig(
+                              encryption: const PdfEncryption.config(
                                   ownerPassword: 'secret')))),
                   _Op(
                       icon: Icons.lock_open,
@@ -1849,7 +1849,7 @@ class _EditorTabState extends State<_EditorTab>
                       title: 'Rotate page 0 → 90°',
                       loading: loading,
                       onRun: () => _edit('Rotate', (e) async {
-                            await e.rotatePage(0, degrees: 90);
+                            await e.rotatePage(0, by: PdfRotation.r90);
                             return _saveEditor(e);
                           })),
                   _Op(
@@ -1857,7 +1857,7 @@ class _EditorTabState extends State<_EditorTab>
                       title: 'Rotate all → 90°',
                       loading: loading,
                       onRun: () => _edit('RotateAll', (e) async {
-                            await e.rotateAllPages(degrees: 90);
+                            await e.rotateAllPages(by: PdfRotation.r90);
                             return _saveEditor(e);
                           })),
                   _Op(
@@ -1922,7 +1922,7 @@ class _EditorTabState extends State<_EditorTab>
                             return _saveEditor(
                                 e,
                                 const PdfSaveOptions.fullRewrite(
-                                    compress: true, garbageCollect: true));
+                                    deflate: true, garbageCollect: true));
                           })),
                   _Op(
                       icon: Icons.font_download_off,
@@ -2105,7 +2105,7 @@ class _EditorTabState extends State<_EditorTab>
                       subtitle: 'Multiple mutations in one parse-save cycle',
                       loading: loading,
                       onRun: () => _edit('Chain', (e) async {
-                            await e.rotateAllPages(degrees: 90);
+                            await e.rotateAllPages(by: PdfRotation.r90);
                             final n = await e.pageCount;
                             for (var i = 0; i < n; i++) {
                               await e.addWatermark(i, 'PROCESSED',
@@ -2117,7 +2117,7 @@ class _EditorTabState extends State<_EditorTab>
                             return _saveEditor(
                                 e,
                                 const PdfSaveOptions.fullRewrite(
-                                    compress: true,
+                                    deflate: true,
                                     garbageCollect: true,
                                     encryption: PdfEncryption.config(
                                         ownerPassword: 'chain')));

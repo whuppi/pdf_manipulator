@@ -36,9 +36,9 @@ void registerOneShotTests(Pdf Function() createPdf) {
     test('edits(...).rotatePage rotates, saves and closes', () async {
       final pdf = createPdf();
       final out = TestSink();
-      await pdf.edits(src(minimalPdf), out).rotatePage(0, degrees: 90);
+      await pdf.edits(src(minimalPdf), out).rotatePage(0, by: PdfRotation.r90);
       final doc = await pdf.open(src(out.takeBytes()));
-      expect(doc.pages[0].rotation, 90);
+      expect(doc.pages[0].rotation, PdfRotation.r90);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -60,9 +60,9 @@ void registerOneShotTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final out = TestSink();
       final oneShot = pdf.edits(src(minimalPdf), out);
-      final first = oneShot.rotatePage(0, degrees: 90);
+      final first = oneShot.rotatePage(0, by: PdfRotation.r90);
       expect(
-        () => oneShot.rotatePage(0, degrees: 180),
+        () => oneShot.rotatePage(0, by: PdfRotation.r180),
         throwsA(
           isA<PdfInvalidArgument>().having(
             (e) => e.message,
@@ -74,7 +74,11 @@ void registerOneShotTests(Pdf Function() createPdf) {
       );
       await first;
       final doc = await pdf.open(src(out.takeBytes()));
-      expect(doc.pages[0].rotation, 90, reason: 'the second edit never ran');
+      expect(
+        doc.pages[0].rotation,
+        PdfRotation.r90,
+        reason: 'the second edit never ran',
+      );
       await doc.dispose();
     }, timeout: t(1));
 
@@ -82,7 +86,7 @@ void registerOneShotTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final out = TestSink();
       await expectLater(
-        pdf.edits(src(minimalPdf), out).rotatePage(5, degrees: 90),
+        pdf.edits(src(minimalPdf), out).rotatePage(5, by: PdfRotation.r90),
         throwsA(isA<PdfError>()),
       );
       expect(out.length, 0);
@@ -173,12 +177,12 @@ void registerOneShotTests(Pdf Function() createPdf) {
       late PdfEditor kept;
       await pdf.rewrite(src(minimalPdf), out, (editor) async {
         kept = editor;
-        await editor.rotatePage(0, degrees: 90);
+        await editor.rotatePage(0, by: PdfRotation.r90);
         await editor.setTitle('Rewritten');
       });
       expect(() => kept.setTitle('x'), throwsA(isA<PdfDisposed>()));
       final doc = await pdf.open(src(out.takeBytes()));
-      expect(doc.pages[0].rotation, 90);
+      expect(doc.pages[0].rotation, PdfRotation.r90);
       expect(doc.title, 'Rewritten');
       await doc.dispose();
     }, timeout: t(1));

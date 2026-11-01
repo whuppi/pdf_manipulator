@@ -98,7 +98,7 @@ class _SharedEditorHandle extends BridgeEditorHandle {
   ).map((map) => codec.decodeEditorMetadata(map).producer);
 
   @override
-  PdfTask<String> get creationDate => _exec(
+  PdfTask<DateTime?> get creationDate => _exec(
     EngineOp.editorGetMetadata,
     {},
   ).map((map) => codec.decodeEditorMetadata(map).creationDate);
@@ -120,17 +120,17 @@ class _SharedEditorHandle extends BridgeEditorHandle {
   PdfTask<void> setProducer(String value) =>
       _mutate('setProducer', {'producer': value});
   @override
-  PdfTask<void> setCreationDate(String value) =>
-      _mutate('setCreationDate', {'creationDate': value});
+  PdfTask<void> setCreationDate(DateTime value) =>
+      _mutate('setCreationDate', {'creationDate': codec.putDate(value)});
 
   // ── Pages ──
 
   @override
-  PdfTask<void> rotatePage(int page, {required int degrees}) =>
-      _mutate('rotatePage', {'page': page, 'degrees': degrees});
+  PdfTask<void> rotatePage(int page, {required PdfRotation by}) =>
+      _mutate('rotatePage', {'page': page, 'rotation': codec.putEnum(by)});
   @override
-  PdfTask<void> rotateAllPages({required int degrees}) =>
-      _mutate('rotateAll', {'degrees': degrees});
+  PdfTask<void> rotateAllPages({required PdfRotation by}) =>
+      _mutate('rotateAll', {'rotation': codec.putEnum(by)});
   @override
   PdfTask<PdfRect> pageMediaBox(int page) => _exec(
     EngineOp.editorPageMediaBox,
@@ -147,8 +147,11 @@ class _SharedEditorHandle extends BridgeEditorHandle {
   PdfTask<void> setPageCropBox(int page, PdfRect box) =>
       _mutate('setPageCropBox', {'page': page, ...codec.encodeRectArgs(box)});
   @override
-  PdfTask<void> setPageRotation(int page, {required int degrees}) =>
-      _mutate('setPageRotation', {'page': page, 'degrees': degrees});
+  PdfTask<void> setPageRotation(int page, {required PdfRotation rotation}) =>
+      _mutate('setPageRotation', {
+        'page': page,
+        'rotation': codec.putEnum(rotation),
+      });
   @override
   PdfTask<void> deletePage(int page) => _mutate('deletePage', {'page': page});
   @override
@@ -269,8 +272,8 @@ class _SharedEditorHandle extends BridgeEditorHandle {
     'bottom': bottom,
   });
   @override
-  PdfTask<void> convertToPdfA({int level = 1}) =>
-      _mutate('convertToPdfA', {'level': level});
+  PdfTask<void> convertToPdfA({PdfALevel level = PdfALevel.a2}) =>
+      _mutate('convertToPdfA', {'level': codec.putEnum(level)});
   @override
   PdfTask<List<PdfPageImage>> pageImages(int page) => _exec(
     EngineOp.editorPageImages,

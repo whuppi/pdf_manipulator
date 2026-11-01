@@ -10,6 +10,7 @@
 
 import 'dart:typed_data';
 
+import 'package:pdf_manipulator/src/bridge/protocol/pdf_date.dart';
 import 'package:pdf_manipulator/src/types/pdf_annotation.dart';
 import 'package:pdf_manipulator/src/types/pdf_attachment.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
@@ -29,7 +30,7 @@ import 'package:pdf_manipulator/src/types/pdf_render.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
 import 'package:pdf_manipulator/src/types/pdf_wire.dart';
 import 'package:pdf_manipulator/src/types/pdf_xfa_info.dart';
-import 'package:pdf_manipulator/src/types/search_result.dart';
+import 'package:pdf_manipulator/src/types/pdf_search_hit.dart';
 
 // ════════════════════════════════════════════════════════════════════
 // RESPONSE DECODING — Map<String, Object?> from the wire → Dart types
@@ -44,7 +45,11 @@ List<PdfPageInfo> decodePageList(Map<String, Object?> r) {
       index: m['index'] as int,
       width: (m['width'] as num).toDouble(),
       height: (m['height'] as num).toDouble(),
-      rotation: (m['rotation'] as num?)?.toInt() ?? 0,
+      rotation: _enumByWireName(
+        PdfRotation.values,
+        m['rotation'] ?? PdfRotation.r0.wire,
+        'rotation',
+      ),
       label: m['label'] as String?,
     );
   }).toList();
@@ -71,11 +76,11 @@ String decodeExtractResult(Map<String, Object?> r) =>
     r['text'] as String? ?? '';
 
 /// Decodes search hits from a response map.
-List<SearchResult> decodeSearchResults(Map<String, Object?> r) {
+List<PdfSearchHit> decodeSearchHits(Map<String, Object?> r) {
   final hits = r['hits'] as List? ?? [];
   return hits.map((h) {
     final m = _asMap(h);
-    return SearchResult(
+    return PdfSearchHit(
       page: m['page'] as int,
       text: m['text'] as String? ?? '',
       rect: PdfRect(
@@ -460,7 +465,7 @@ ChunkFrame<PdfImage> decodeImageFrame(Map<String, Object?> data) =>
   String subject,
   String keywords,
   String producer,
-  String creationDate,
+  DateTime? creationDate,
 })
 decodeEditorMetadata(Map<String, Object?> r) => (
   pageCount: r['pageCount'] as int? ?? 0,
@@ -470,8 +475,15 @@ decodeEditorMetadata(Map<String, Object?> r) => (
   subject: r['subject'] as String? ?? '',
   keywords: r['keywords'] as String? ?? '',
   producer: r['producer'] as String? ?? '',
-  creationDate: r['creationDate'] as String? ?? '',
+  creationDate: decodeDate(r['creationDate']),
 );
+
+/// Decodes a date field. The wire keeps the PDF date string; an absent or
+/// unparseable one is `null`.
+DateTime? decodeDate(Object? wire) => parsePdfDate(wire as String?);
+
+/// Encodes a date field as a PDF date string in UTC.
+String putDate(DateTime value) => formatPdfDate(value);
 
 /// Decodes a media-box rectangle from a response map.
 PdfRect decodeMediaBox(Map<String, Object?> r) => PdfRect(
@@ -593,7 +605,7 @@ int encodeFormFieldFlags(Set<PdfFormFieldFlag> flags) =>
 Map<String, Object?> encodeSaveArgs(PdfSaveOptions options) {
   return switch (options) {
     PdfSaveFullRewrite(
-      :final compress,
+      :final deflate,
       :final garbageCollect,
       :final objectStreams,
       :final deflateLevel,
@@ -603,7 +615,7 @@ Map<String, Object?> encodeSaveArgs(PdfSaveOptions options) {
     ) =>
       {
         'saveMode': 0,
-        'compress': compress,
+        'deflate': deflate,
         'garbageCollect': garbageCollect,
         'objectStreams': objectStreams,
         'deflateLevel': _checkedDeflateLevel(deflateLevel),

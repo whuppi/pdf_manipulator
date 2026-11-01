@@ -1,7 +1,7 @@
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 
 /// Configuration for a PDF engine instance.
-class PdfConfig {
+final class PdfConfig {
   /// Creates a PDF configuration.
   const PdfConfig({this.webLaneWorkerUrl, this.webIoMode, this.maxLanes});
 
@@ -21,4 +21,14 @@ class PdfConfig {
   /// below this cap queues work instead of failing — exceeding any
   /// cap never errors.
   final int? maxLanes;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfConfig &&
+      other.webLaneWorkerUrl == webLaneWorkerUrl &&
+      other.webIoMode == webIoMode &&
+      other.maxLanes == maxLanes;
+
+  @override
+  int get hashCode => Object.hash(webLaneWorkerUrl, webIoMode, maxLanes);
 }

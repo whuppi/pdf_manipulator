@@ -247,7 +247,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       await pdf.encrypt(
         src(minimalPdf),
         encSink,
-        encryption: const PdfEncryptionConfig(
+        encryption: const PdfEncryption.config(
           ownerPassword: 'owner-pw',
           userPassword: 'user-pw',
         ),

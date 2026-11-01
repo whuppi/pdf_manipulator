@@ -51,12 +51,6 @@ class PdfCorrupted extends PdfError {
   final Object? cause;
 }
 
-/// Text or content extraction failed.
-class PdfExtractionFailed extends PdfError {
-  /// Creates an extraction-failure error.
-  const PdfExtractionFailed(super.message);
-}
-
 /// The PDF engine encountered an internal error.
 class PdfEngineError extends PdfError {
   /// Creates an engine error.
@@ -77,12 +71,6 @@ class PdfPageRangeError extends PdfError {
 
   /// Total number of pages in the document.
   final int pageCount;
-}
-
-/// A text search operation failed.
-class PdfSearchError extends PdfError {
-  /// Creates a search error.
-  const PdfSearchError(super.message);
 }
 
 /// The requested operation is not supported by this engine.

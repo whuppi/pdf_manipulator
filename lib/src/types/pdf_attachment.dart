@@ -6,7 +6,7 @@ import 'package:pdf_manipulator/src/types/pdf_wire.dart';
 /// Listing reads the file spec only; the bytes come from
 /// `PdfDoc.extractAttachment`.
 @immutable
-class PdfAttachment {
+final class PdfAttachment {
   /// Creates an attachment record from the engine's listing.
   const PdfAttachment({
     required this.name,
@@ -27,6 +27,17 @@ class PdfAttachment {
 
   /// MIME type of the embedded stream, or `null` when it declares none.
   final String? mimeType;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfAttachment &&
+      other.name == name &&
+      other.size == size &&
+      other.description == description &&
+      other.mimeType == mimeType;
+
+  @override
+  int get hashCode => Object.hash(name, size, description, mimeType);
 }
 
 /// How an embedded file relates to the document that carries it

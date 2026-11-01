@@ -228,15 +228,15 @@ void main() {
 
   testWidgets('rotateAllPages + rotatePages', (t) async {
     final s1 = MemorySink();
-    await pdf.rotateAllPages(_src(minimalPdf), s1, degrees: 90);
+    await pdf.rotateAllPages(_src(minimalPdf), s1, by: PdfRotation.r90);
     final doc1 = await pdf.open(_src(s1.takeBytes()));
-    expect(doc1.pages[0].rotation, 90);
+    expect(doc1.pages[0].rotation, PdfRotation.r90);
     await doc1.dispose();
 
     final s2 = MemorySink();
-    await pdf.rotatePages(_src(minimalPdf), s2, pages: {0: 180});
+    await pdf.rotatePages(_src(minimalPdf), s2, pages: {0: PdfRotation.r180});
     final doc2 = await pdf.open(_src(s2.takeBytes()));
-    expect(doc2.pages[0].rotation, 180);
+    expect(doc2.pages[0].rotation, PdfRotation.r180);
     await doc2.dispose();
   });
 
@@ -273,7 +273,7 @@ void main() {
       (t) async {
     final encSink = MemorySink();
     await pdf.encrypt(_src(minimalPdf), encSink,
-        encryption: const PdfEncryptionConfig(
+        encryption: const PdfEncryption.config(
             ownerPassword: 'owner-pw', userPassword: 'user-pw'));
     final encBytes = encSink.takeBytes();
 
@@ -424,8 +424,8 @@ void main() {
     final twoPage = mergeSink.takeBytes();
 
     final e = await pdf.edit(_src(twoPage));
-    await e.rotatePage(0, degrees: 90);
-    await e.rotateAllPages(degrees: 180);
+    await e.rotatePage(0, by: PdfRotation.r90);
+    await e.rotateAllPages(by: PdfRotation.r180);
     final mb = await e.pageMediaBox(0);
     expect(mb.width, greaterThan(0));
     await e.movePage(from: 0, to: 1);
@@ -435,7 +435,7 @@ void main() {
     await e.save(sink);
     await e.dispose();
     final doc = await pdf.open(_src(sink.takeBytes()));
-    expect(doc.pages[0].rotation, 180,
+    expect(doc.pages[0].rotation, PdfRotation.r180,
         reason: 'rotateAllPages(180) must survive save');
     await doc.dispose();
   });
@@ -616,7 +616,7 @@ void main() {
     final s1 = MemorySink();
     await e.save(s1,
         options: const PdfSaveOptions.fullRewrite(
-            compress: true, garbageCollect: true));
+            deflate: true, garbageCollect: true));
     final full = await pdf.open(_src(s1.takeBytes()));
     expect(full.pageCount, 1);
     await full.dispose();

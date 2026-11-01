@@ -206,7 +206,7 @@ same names, when both exist. Exports (source in, sink out) live on
 | `rotateAllPages` | editor: edit → rotateAllPages → save | DONE |
 | `flattenForms` | editor: edit → flattenForms → save | DONE |
 | `applyRedactions` | editor: edit → applyRedactions → save | DONE |
-| `compress` | editor: edit → reduceImages(policy) → save(compress) | DONE |
+| `compress` | editor: edit → reduceImages(policy) → save(deflate) | DONE |
 | `embedFile` | editor: edit → embedFile → save | DONE |
 | `eraseRegions` | editor: edit → eraseRegions → save | DONE |
 | `addStamp` | editor: edit → addStamp → save | DONE |
@@ -348,7 +348,7 @@ The planned route to expose these without bloating the default is per-feature op
 
 | Capability | Status | Why |
 |---|---|---|
-| Builder output hardening (compress streams by default; richer typesetting) | DONE | `PdfBuilder.save` Flate-compresses by default (`compress: false` keeps streams plain); the page builder reaches every page operation the engine's builder has, and a wire-sync test fails when the engine adds one Dart lacks. |
+| Builder output hardening (compress streams by default; richer typesetting) | DONE | `PdfBuilder.save` Flate-compresses by default (`deflate: false` keeps streams plain); the page builder reaches every page operation the engine's builder has, and a wire-sync test fails when the engine adds one Dart lacks. |
 | Attachment-listing read API | DONE | `PdfDoc.attachments` and `PdfDoc.extractAttachment` — `embedFile` is now proven by listing the saved file and round-tripping its bytes. |
 | Annotation-listing read API | DONE | `PdfDoc.annotations(page)` — a battery now asserts "gone after flatten" directly, as `formFields` does for forms. |
 | Typed wire error codes (PdfWrongPassword, PdfCorrupted, … from Rust) | DONE | Every engine failure reaches Dart as its `PdfError` subtype; kinds on the wire. |

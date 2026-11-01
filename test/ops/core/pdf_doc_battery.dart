@@ -75,7 +75,7 @@ void registerDocTests(Pdf Function() createPdf) {
       await pdf.encrypt(
         src(minimalPdf),
         encSink,
-        encryption: const PdfEncryptionConfig(ownerPassword: 'testpw'),
+        encryption: const PdfEncryption.config(ownerPassword: 'testpw'),
       );
       final encBytes = encSink.takeBytes();
 
@@ -101,7 +101,7 @@ void registerDocTests(Pdf Function() createPdf) {
       await pdf.encrypt(
         src(minimalPdf),
         encSink,
-        encryption: const PdfEncryptionConfig(
+        encryption: const PdfEncryption.config(
           ownerPassword: 'owner-pw',
           userPassword: 'user-pw',
           permissions: written,
@@ -128,7 +128,7 @@ void registerDocTests(Pdf Function() createPdf) {
         await pdf.encrypt(
           src(minimalPdf),
           encSink,
-          encryption: const PdfEncryptionConfig(
+          encryption: const PdfEncryption.config(
             ownerPassword: 'owner-pw',
             userPassword: 'user-pw',
           ),
@@ -152,7 +152,7 @@ void registerDocTests(Pdf Function() createPdf) {
       await pdf.encrypt(
         src(minimalPdf),
         encSink,
-        encryption: const PdfEncryptionConfig(
+        encryption: const PdfEncryption.config(
           ownerPassword: 'owner-pw',
           userPassword: 'user-pw',
         ),
@@ -175,7 +175,7 @@ void registerDocTests(Pdf Function() createPdf) {
       await pdf.encrypt(
         src(minimalPdf),
         encSink,
-        encryption: const PdfEncryptionConfig(ownerPassword: 'testpw'),
+        encryption: const PdfEncryption.config(ownerPassword: 'testpw'),
       );
       final doc = await pdf.open(src(encSink.takeBytes()));
       expect(doc.isEncrypted, isTrue);
@@ -739,12 +739,12 @@ void registerDocTests(Pdf Function() createPdf) {
     // takes a page index.
     const box = PdfRect(x: 0, y: 0, width: 10, height: 10);
     final editorPageOps = <String, Future<Object?> Function(PdfEditor e)>{
-      'rotatePage': (e) => e.rotatePage(1, degrees: 90),
+      'rotatePage': (e) => e.rotatePage(1, by: PdfRotation.r90),
       'pageMediaBox': (e) => e.pageMediaBox(1),
       'pageCropBox': (e) => e.pageCropBox(1),
       'setPageMediaBox': (e) => e.setPageMediaBox(1, box),
       'setPageCropBox': (e) => e.setPageCropBox(1, box),
-      'setPageRotation': (e) => e.setPageRotation(1, degrees: 90),
+      'setPageRotation': (e) => e.setPageRotation(1, rotation: PdfRotation.r90),
       'deletePage': (e) => e.deletePage(1),
       'movePage from': (e) => e.movePage(from: 1, to: 0),
       'movePage to': (e) => e.movePage(from: 0, to: 1),
@@ -852,8 +852,8 @@ void registerDocTests(Pdf Function() createPdf) {
       expect(doc.pageCount, fRotatedTruth.pages);
       for (var i = 0; i < fRotatedTruth.pages; i++) {
         expect(
-          doc.pages[i].rotation,
-          fRotatedTruth.rotations[i],
+          doc.pages[i].rotation.wire,
+          'r${fRotatedTruth.rotations[i]}',
           reason: 'page $i carries /Rotate from the producer',
         );
       }

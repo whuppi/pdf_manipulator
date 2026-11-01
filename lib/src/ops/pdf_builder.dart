@@ -79,11 +79,11 @@ class PdfBuilder implements _Handle {
   // ── Save ──
 
   /// Writes the document to [output]. Page content and font streams are
-  /// Flate-compressed unless [compress] is false, which keeps them
+  /// Flate-compressed unless [deflate] is false, which keeps them
   /// readable as plain text for debugging.
-  PdfTask<void> save(DataSink output, {bool compress = true}) {
+  PdfTask<void> save(DataSink output, {bool deflate = true}) {
     _check();
-    return _handle.save(output, compress: compress);
+    return _handle.save(output, deflate: deflate);
   }
 
   // ── Lifecycle ──

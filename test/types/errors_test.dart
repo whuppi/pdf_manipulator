@@ -48,16 +48,6 @@ void main() {
       expect(e.cause, isNotNull);
     });
 
-    test('PdfExtractionFailed carries exact message', () {
-      const e = PdfExtractionFailed('font missing');
-      expect(e.message, equals('font missing'));
-    });
-
-    test('PdfSearchError carries exact message', () {
-      const e = PdfSearchError('regex invalid');
-      expect(e.message, equals('regex invalid'));
-    });
-
     test('PdfCryptoError carries message and cause', () {
       final e = PdfCryptoError('AES failed', cause: Exception('key'));
       expect(e.message, equals('AES failed'));
@@ -91,9 +81,7 @@ void main() {
         PdfInvalidArgument() => 'invalid',
         PdfDisposed() => 'disposed',
         PdfIoError() => 'io',
-        PdfExtractionFailed() => 'extract',
         PdfUnsupported() => 'unsupported',
-        PdfSearchError() => 'search',
         PdfCryptoError() => 'crypto',
         PdfEngineError() => 'engine',
         PdfCancelled() => 'cancelled',

@@ -2,7 +2,7 @@ import 'package:meta/meta.dart';
 
 /// Information about a digital signature in a PDF.
 @immutable
-class PdfSignatureInfo {
+final class PdfSignatureInfo {
   /// Creates signature info.
   const PdfSignatureInfo({
     this.signerName,
@@ -40,6 +40,28 @@ class PdfSignatureInfo {
   final PdfCertificateInfo? certificate;
 
   @override
+  bool operator ==(Object other) =>
+      other is PdfSignatureInfo &&
+      other.signerName == signerName &&
+      other.signingTime == signingTime &&
+      other.reason == reason &&
+      other.location == location &&
+      other.isValid == isValid &&
+      other.coversWholeDocument == coversWholeDocument &&
+      other.certificate == certificate;
+
+  @override
+  int get hashCode => Object.hash(
+    signerName,
+    signingTime,
+    reason,
+    location,
+    isValid,
+    coversWholeDocument,
+    certificate,
+  );
+
+  @override
   String toString() =>
       'PdfSignatureInfo(signer: $signerName, valid: $isValid, '
       'coversWholeDocument: $coversWholeDocument, '
@@ -48,7 +70,7 @@ class PdfSignatureInfo {
 
 /// X.509 certificate information.
 @immutable
-class PdfCertificateInfo {
+final class PdfCertificateInfo {
   /// Creates certificate info.
   const PdfCertificateInfo({
     this.subject,
@@ -76,6 +98,20 @@ class PdfCertificateInfo {
 
   /// Whether the certificate is currently valid.
   final bool isValid;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfCertificateInfo &&
+      other.subject == subject &&
+      other.issuer == issuer &&
+      other.serial == serial &&
+      other.notBefore == notBefore &&
+      other.notAfter == notAfter &&
+      other.isValid == isValid;
+
+  @override
+  int get hashCode =>
+      Object.hash(subject, issuer, serial, notBefore, notAfter, isValid);
 
   @override
   String toString() =>

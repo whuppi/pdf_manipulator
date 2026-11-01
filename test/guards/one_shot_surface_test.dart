@@ -172,7 +172,7 @@ void main() {
         '## I want to...\n\n'
         '| I want to | Do this |\n|---|---|\n'
         '| watermark | `pdf.rewrite(a, b, (e) => e.addWatermark(0, "x"))` |\n'
-        '| rotate | `pdf.rewrite(a, b, (e) => e.rotatePage(0, degrees: 90))` |\n'
+        '| rotate | `pdf.rewrite(a, b, (e) => e.rotatePage(0, by: .r90))` |\n'
         '| search | `r.search(query: "q")` |\n\nnext\n';
 
     test('the real README names only members that exist', () {

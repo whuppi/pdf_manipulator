@@ -9,7 +9,7 @@ import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 /// page's content stream draws the image by — the name `resizeImage`
 /// takes. It is unique within a page, not across pages.
 @immutable
-class PdfPageImage {
+final class PdfPageImage {
   /// Creates a page-image descriptor.
   const PdfPageImage({
     required this.name,
@@ -28,6 +28,16 @@ class PdfPageImage {
 
   /// The full transform the image is drawn with.
   final PdfMatrix transform;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfPageImage &&
+      other.name == name &&
+      other.bounds == bounds &&
+      other.transform == transform;
+
+  @override
+  int get hashCode => Object.hash(name, bounds, transform);
 
   @override
   String toString() =>

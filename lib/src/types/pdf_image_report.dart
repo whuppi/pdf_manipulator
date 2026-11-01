@@ -1,4 +1,5 @@
 import 'package:meta/meta.dart';
+import 'package:pdf_manipulator/src/types/equality.dart';
 import 'package:pdf_manipulator/src/types/pdf_wire.dart';
 
 /// How an image's samples are stored.
@@ -116,7 +117,7 @@ enum PdfImageKeepReason implements PdfWire {
 
 /// One image XObject's outcome from `PdfEditor.reduceImages`.
 @immutable
-class PdfImageOutcome {
+final class PdfImageOutcome {
   /// Creates an outcome row.
   const PdfImageOutcome({
     required this.objectId,
@@ -188,6 +189,46 @@ class PdfImageOutcome {
   final int heightAfter;
 
   @override
+  bool operator ==(Object other) =>
+      other is PdfImageOutcome &&
+      other.objectId == objectId &&
+      other.encoding == encoding &&
+      other.color == color &&
+      other.indexed == indexed &&
+      other.bits == bits &&
+      other.width == width &&
+      other.height == height &&
+      other.hasSoftMask == hasSoftMask &&
+      other.uses == uses &&
+      other.ppiMin == ppiMin &&
+      other.action == action &&
+      other.keepReason == keepReason &&
+      other.bytesBefore == bytesBefore &&
+      other.bytesAfter == bytesAfter &&
+      other.widthAfter == widthAfter &&
+      other.heightAfter == heightAfter;
+
+  @override
+  int get hashCode => Object.hash(
+    objectId,
+    encoding,
+    color,
+    indexed,
+    bits,
+    width,
+    height,
+    hasSoftMask,
+    uses,
+    ppiMin,
+    action,
+    keepReason,
+    bytesBefore,
+    bytesAfter,
+    widthAfter,
+    heightAfter,
+  );
+
+  @override
   String toString() =>
       'PdfImageOutcome(#$objectId ${width}x$height ${encoding.name}/'
       '${color.name} → ${action.name}'
@@ -198,7 +239,7 @@ class PdfImageOutcome {
 /// The result of `PdfEditor.reduceImages`: one row per image XObject
 /// drawn on the document's pages, in ascending object number.
 @immutable
-class PdfImageReport {
+final class PdfImageReport {
   /// Creates a report.
   const PdfImageReport(this.images);
 
@@ -214,6 +255,13 @@ class PdfImageReport {
 
   /// Stored bytes after, summed over every row.
   int get bytesAfter => images.fold(0, (sum, o) => sum + o.bytesAfter);
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfImageReport && listsEqual(other.images, images);
+
+  @override
+  int get hashCode => Object.hashAll(images);
 
   @override
   String toString() =>

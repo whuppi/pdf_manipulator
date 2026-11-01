@@ -18,7 +18,7 @@ abstract base class PdfReads {
   PdfTask<T> _run<T>(PdfTask<T> Function(BridgeDocHandle handle) read);
 
   /// Searches for [query] text across the specified [pages].
-  PdfTask<List<SearchResult>> search({
+  PdfTask<List<PdfSearchHit>> search({
     required String query,
     required PdfPages pages,
   }) {

@@ -77,7 +77,7 @@ final class PdfRenderThumbnail extends PdfRenderSize {
 /// of the image written. The render hands it to the sink factory before any
 /// pixel is written, and returns it once the page's sink is closed.
 @immutable
-class PdfRenderedPage {
+final class PdfRenderedPage {
   /// Creates a rendered-page descriptor.
   const PdfRenderedPage({
     required this.page,
