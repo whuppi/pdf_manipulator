@@ -185,6 +185,7 @@ CONTENT RULES (never change)
 - Fixed a save that keeps an encrypted document's encryption setting its owner password to the password it was opened with, so anyone who could open the result had owner rights and its permissions were void — the save now reuses the source's own encryption dictionary and key
 - Fixed `PdfDoc.encryption.permissions` reporting the wrong flags (a print-allowed file read as `print: false`) — the engine's `/P` word is read at its spec bit positions
 - Fixed a page tree whose inner nodes each hold one page reporting those nodes as pages — every node is read before it counts as a page
+- Fixed watermarks placed in a corner, tiled or at an exact rectangle all landing at default spots — every position is placed where it says; an unknown corner name is refused
 - Fixed `rotateAll` and other per-page edits slowing down with the square of the page count on large documents
 - Fixed a merged page losing the resources, page size and rotation it inherited from its source page tree, which could leave it blank
 - Fixed a merge copying the source's whole page tree into the output when a merged page linked to a page that was not merged — such a link's target is written as null
