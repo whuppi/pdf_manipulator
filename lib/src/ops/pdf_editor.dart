@@ -10,6 +10,7 @@ part of 'pdf.dart';
 /// Mutable PDF editor — parse once, mutate many times, save once.
 base class PdfEditor extends PdfEdits implements _Handle {
   /// Internal constructor — use [Pdf.edit] to create instances.
+  @internal
   PdfEditor.internal(PdfBridge _, BridgeEditorHandle handle)
     : _handle = handle,
       super._() {

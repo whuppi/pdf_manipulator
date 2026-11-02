@@ -89,9 +89,9 @@ enum PdfCapability {
     'convertTo': PdfCapability.office,
     'Pdf.convertToPdf': PdfCapability.office,
     'convertToPdf': PdfCapability.office,
-    'PdfDoc.extract': PdfCapability.extract,
+    'PdfDoc.extractText': PdfCapability.extract,
     'PdfDoc.search': PdfCapability.extract,
-    'PdfDoc.classifyPage': PdfCapability.extract,
+    'PdfDoc.classifyPages': PdfCapability.extract,
     'PdfDoc.classifyDocument': PdfCapability.extract,
   };
 

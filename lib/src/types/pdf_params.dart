@@ -606,81 +606,52 @@ final class PdfValidationResult {
   int get hashCode => Object.hash(compliant, errors, warnings);
 }
 
-/// A bookmark-based split plan entry.
-final class PdfBookmarkSplit {
-  /// Creates a bookmark split entry.
-  const PdfBookmarkSplit({
+/// A bookmark's page range: the pages under one top-level bookmark.
+final class PdfBookmarkRange {
+  /// Creates a bookmark range.
+  const PdfBookmarkRange({
     required this.title,
-    required this.startPage,
-    required this.endPage,
+    required this.start,
+    required this.end,
   });
 
-  /// Bookmark title.
-  final String title;
+  /// The bookmark's title, or null when it has none.
+  final String? title;
 
-  /// Start page (inclusive).
-  final int startPage;
+  /// First page of the range (inclusive).
+  final int start;
 
-  /// End page (exclusive).
-  final int endPage;
+  /// Last page of the range (exclusive).
+  final int end;
 
   @override
   bool operator ==(Object other) =>
-      other is PdfBookmarkSplit &&
+      other is PdfBookmarkRange &&
       other.title == title &&
-      other.startPage == startPage &&
-      other.endPage == endPage;
+      other.start == start &&
+      other.end == end;
 
   @override
-  int get hashCode => Object.hash(title, startPage, endPage);
+  int get hashCode => Object.hash(title, start, end);
 }
 
-/// Page classification result.
+/// What one page holds, as the engine classified it.
 final class PdfPageClassification {
-  /// Creates a page classification result.
-  const PdfPageClassification({required this.type, required this.confidence});
+  /// Creates a page classification.
+  const PdfPageClassification({required this.page, required this.type});
 
-  /// Detected page type (e.g. "text", "image", "form").
-  final String type;
+  /// Zero-based page index.
+  final int page;
 
-  /// Confidence score from 0.0 to 1.0.
-  final double confidence;
+  /// What the page holds.
+  final PdfPageType type;
 
   @override
   bool operator ==(Object other) =>
       other is PdfPageClassification &&
-      other.type == type &&
-      other.confidence == confidence;
+      other.page == page &&
+      other.type == type;
 
   @override
-  int get hashCode => Object.hash(type, confidence);
-}
-
-/// Document classification result.
-final class PdfDocumentClassification {
-  /// Creates a document classification result.
-  const PdfDocumentClassification({
-    required this.type,
-    required this.confidence,
-    required this.pageCount,
-  });
-
-  /// Detected document type.
-  final String type;
-
-  /// Confidence score from 0.0 to 1.0.
-  final double confidence;
-
-  /// Number of pages analyzed.
-  final int pageCount;
-
-  @override
-  bool operator ==(Object other) =>
-      other is PdfDocumentClassification &&
-      other.type == type &&
-      other.confidence == confidence &&
-      other.pageCount == pageCount;
-
-  @override
-  int get hashCode => Object.hash(type, confidence, pageCount);
+  int get hashCode => Object.hash(page, type);
 }

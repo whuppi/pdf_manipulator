@@ -7,6 +7,7 @@ import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
 import '../../fixtures/handwritten.dart';
+import '../../harness/extract_text.dart';
 import '../../harness/slow_source.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
@@ -311,7 +312,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
       task.cancel(); // idempotent, result already delivered
       task.cancel();
       expect(doc.pageCount, 1); // handle unaffected
-      final text = await doc.extract(pages: const PdfPages.all());
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(
         text.trim(),
         isEmpty,
@@ -334,7 +335,10 @@ void registerInstanceTests(Pdf Function() createPdf) {
       slow.release();
       // The lane survived a per-job cancel; the first doc still works.
       expect(doc.pageCount, 1);
-      final page = await doc.extract(pages: const PdfPages.single(0));
+      final page = await extractTextToString(
+        doc,
+        pages: const PdfPages.single(0),
+      );
       expect(page, isNotNull);
       await pdf.dispose();
     }, timeout: t(1));

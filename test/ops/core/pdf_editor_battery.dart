@@ -22,6 +22,7 @@ import '../../fixtures/third_party/tp_encrypted_legacy.dart';
 import '../../fixtures/third_party/tp_image_kinds.dart';
 import '../../fixtures/third_party/tp_page_prune_objstm.dart';
 import '../../harness/extract_images.dart';
+import '../../harness/extract_text.dart';
 import '../../harness/page_prune_expect.dart';
 import '../../harness/render_pages.dart';
 import '../../harness/test_source_sink.dart';
@@ -172,18 +173,18 @@ void registerEditorTests(Pdf Function() createPdf) {
 
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(
-        doc.producer,
+        doc.metadata.producer,
         contains('Doc-Read Producer'),
         reason: 'producer must surface on the read-only PdfDoc',
       );
       expect(
-        doc.creationDate,
+        doc.metadata.creationDate,
         DateTime.utc(2024, 1, 1, 12),
         reason: 'creation date must surface on the read-only PdfDoc',
       );
       // Creator has no Dart setter; this exercises the read surface decodes
-      // without throwing (String? — empty when the PDF carries no Creator).
-      expect(doc.creator, isA<String?>());
+      // without throwing (null when the PDF carries no Creator).
+      expect(doc.metadata.creator, isA<String?>());
       await doc.dispose();
     }, timeout: t(1));
 
@@ -282,7 +283,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.save(sink);
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      expect(doc.pages[0].rotation, PdfRotation.r90);
+      expect((await doc.pageInfo())[0].rotation, PdfRotation.r90);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -333,7 +334,10 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.save(sink);
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      expect(doc.pages[0].width, isNot(closeTo(boxBefore.width, 1)));
+      expect(
+        (await doc.pageInfo())[0].width,
+        isNot(closeTo(boxBefore.width, 1)),
+      );
       await doc.dispose();
     }, timeout: t(1));
 
@@ -391,7 +395,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.save(sink);
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      final text = await doc.extract(pages: const PdfPages.all());
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(text, isNot(contains('CROP')));
       await doc.dispose();
     }, timeout: t(1));
@@ -445,7 +449,10 @@ void registerEditorTests(Pdf Function() createPdf) {
         await editor.dispose();
         final doc = await pdf.open(src(sink.takeBytes()));
         expect(doc.pageCount, 1);
-        final text = await doc.extract(pages: const PdfPages.all());
+        final text = await extractTextToString(
+          doc,
+          pages: const PdfPages.all(),
+        );
         expect(text, contains('SANITIZE'));
         await doc.dispose();
       },
@@ -482,15 +489,16 @@ void registerEditorTests(Pdf Function() createPdf) {
     // same text as in the source.
     Future<List<(String, Uint8List)>> renderPages(PdfDoc doc) async {
       final out = <(String, Uint8List)>[];
+      final pages = await doc.pageInfo();
       for (var i = 0; i < doc.pageCount; i++) {
-        final page = doc.pages[i];
+        final page = pages[i];
         final side = (math.max(page.width, page.height) * 50 / 72).ceil();
         final rendered = await renderToMemory(
           doc,
           pages: PdfPages.single(i),
           size: PdfRenderSize.fit(maxWidth: side, maxHeight: side),
         );
-        final text = await doc.extract(pages: PdfPages.single(i));
+        final text = await extractTextToString(doc, pages: PdfPages.single(i));
         out.add((text, rendered.single.data));
       }
       return out;
@@ -572,7 +580,7 @@ void registerEditorTests(Pdf Function() createPdf) {
         await editor.setTitle('Appended');
         final out = await saveIncremental(editor, source);
         final doc = await pdf.open(src(out));
-        expect(doc.title, 'Appended');
+        expect(doc.metadata.title, 'Appended');
         await doc.dispose();
       }, timeout: t(1));
     }
@@ -584,9 +592,10 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.setPageRotation(0, rotation: PdfRotation.r90);
       final out = await saveIncremental(editor, fFormFields);
       final doc = await pdf.open(src(out));
-      expect(doc.pages.first.rotation, PdfRotation.r90);
-      final field = await doc.formField('fullname');
-      expect((field?.value as PdfTextValue?)?.text, 'Ada');
+      expect((await doc.pageInfo()).first.rotation, PdfRotation.r90);
+      final fields = await doc.formFields();
+      final field = fields.where((f) => f.name == 'fullname');
+      expect((field.single.value as PdfTextValue?)?.text, 'Ada');
       await doc.dispose();
     }, timeout: t(1));
 
@@ -613,8 +622,8 @@ void registerEditorTests(Pdf Function() createPdf) {
       // so the digest over the signed ranges is unchanged too.
       final out = await saveIncremental(editor, signed);
       final doc = await pdf.open(src(out));
-      expect(doc.title, 'After signing');
-      expect(await doc.signatures, isNotEmpty);
+      expect(doc.metadata.title, 'After signing');
+      expect(await doc.signatures(), isNotEmpty);
       expect(await doc.verifySignatures(), isTrue);
       await doc.dispose();
     }, timeout: t(2));
@@ -670,8 +679,9 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.setFormFieldValue('name', 'Ada');
       final out = await saveIncremental(editor, source);
       final doc = await pdf.open(src(out));
-      final field = await doc.formField('name');
-      expect((field?.value as PdfTextValue?)?.text, 'Ada');
+      final fields = await doc.formFields();
+      final field = fields.where((f) => f.name == 'name');
+      expect((field.single.value as PdfTextValue?)?.text, 'Ada');
       await doc.dispose();
     }, timeout: t(1));
 
@@ -744,7 +754,10 @@ void registerEditorTests(Pdf Function() createPdf) {
         );
         await e2.dispose();
         final doc = await pdf.open(src(out));
-        final text = await doc.extract(pages: const PdfPages.all());
+        final text = await extractTextToString(
+          doc,
+          pages: const PdfPages.all(),
+        );
         expect(text, contains('nosizemark'));
         expect(text, contains('NOSIZEWATERMARK'));
         await doc.dispose();
@@ -766,7 +779,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       expect(String.fromCharCodes(out), isNot(contains(' 1 R')));
       final doc = await pdf.open(src(out));
       expect(
-        await doc.extract(pages: const PdfPages.all()),
+        await extractTextToString(doc, pages: const PdfPages.all()),
         contains('genonemark'),
       );
       await doc.dispose();
@@ -817,7 +830,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       );
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      expect(doc.isEncrypted, isTrue);
+      expect(doc.encryption, isNotNull);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -835,7 +848,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final encrypted = encSink.takeBytes();
 
       final encDoc = await pdf.open(src(encrypted), password: 'pw');
-      expect(encDoc.isEncrypted, isTrue);
+      expect(encDoc.encryption, isNotNull);
       await encDoc.dispose();
 
       final editor2 = await pdf.edit(src(encrypted), password: 'pw');
@@ -848,7 +861,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       );
       await editor2.dispose();
       final doc = await pdf.open(src(decSink.takeBytes()));
-      expect(doc.isEncrypted, isFalse);
+      expect(doc.encryption, isNull);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -883,9 +896,13 @@ void registerEditorTests(Pdf Function() createPdf) {
 
     Future<void> expectSourceInfo(Pdf pdf, Uint8List out, String reason) async {
       final doc = await pdf.open(src(out));
-      expect(doc.title, 'Source Title', reason: '$reason: title');
-      expect(doc.author, 'Source Author', reason: '$reason: author');
-      expect(doc.creator, 'Source Creator', reason: '$reason: creator');
+      expect(doc.metadata.title, 'Source Title', reason: '$reason: title');
+      expect(doc.metadata.author, 'Source Author', reason: '$reason: author');
+      expect(
+        doc.metadata.creator,
+        'Source Creator',
+        reason: '$reason: creator',
+      );
       await doc.dispose();
     }
 
@@ -1004,9 +1021,9 @@ void registerEditorTests(Pdf Function() createPdf) {
         await editor.save(sink, options: const PdfSaveOptions.fullRewrite());
         await editor.dispose();
         final doc = await pdf.open(src(sink.takeBytes()));
-        expect(doc.title, 'New Title');
-        expect(doc.author, 'Source Author');
-        expect(doc.creator, 'Source Creator');
+        expect(doc.metadata.title, 'New Title');
+        expect(doc.metadata.author, 'Source Author');
+        expect(doc.metadata.creator, 'Source Creator');
         await doc.dispose();
       },
       timeout: t(1),
@@ -1038,8 +1055,8 @@ void registerEditorTests(Pdf Function() createPdf) {
         );
 
         final doc = await pdf.open(src(out), password: 'user');
-        expect(doc.isEncrypted, isTrue);
-        expect(doc.title, 'Secret Title');
+        expect(doc.encryption, isNotNull);
+        expect(doc.metadata.title, 'Secret Title');
         expect(doc.pageCount, 1);
         await doc.dispose();
 
@@ -1053,7 +1070,7 @@ void registerEditorTests(Pdf Function() createPdf) {
           src(keptSink.takeBytes()),
           password: 'user',
         );
-        expect(kept.title, 'Secret Title');
+        expect(kept.metadata.title, 'Secret Title');
         expect(kept.pageCount, 1);
         await kept.dispose();
       }, timeout: t(1));
@@ -1924,7 +1941,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await flat.save(flatSink);
       await flat.dispose();
       final doc = await pdf2.open(src(flatSink.takeBytes()));
-      final text = await doc.extract(pages: const PdfPages.all());
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(
         text,
         contains('COMPOWM'),
@@ -1952,7 +1969,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await flat.save(flatSink);
       await flat.dispose();
       final doc = await pdf2.open(src(flatSink.takeBytes()));
-      final text = await doc.extract(pages: const PdfPages.all());
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(text, contains('COMPOWM'));
       expect(text.toUpperCase(), contains('DRAFT'));
       await doc.dispose();
@@ -1971,12 +1988,12 @@ void registerEditorTests(Pdf Function() createPdf) {
       final out = sink.takeBytes();
       final wmDoc = await pdf.open(src(out));
       expect(
-        await wmDoc.extract(pages: const PdfPages.all()),
+        await extractTextToString(wmDoc, pages: const PdfPages.all()),
         contains('TRIPLEWM'),
       );
       await wmDoc.dispose();
       final doc = await pdf.open(src(out));
-      expect(doc.pages[0].rotation, PdfRotation.r90);
+      expect((await doc.pageInfo())[0].rotation, PdfRotation.r90);
       await doc.dispose();
       final e2 = await pdf.edit(src(out));
       expect(await e2.title, contains('Triple Edit'));
@@ -2009,7 +2026,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, fAnnotationsTruth.pages);
-      final text = await doc.extract(pages: const PdfPages.all());
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(
         text,
         contains('Visit the site'),
@@ -2071,7 +2088,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await flat.dispose();
       final doc = await pdf.open(src(flatSink.takeBytes()));
       expect(doc.pageCount, 1);
-      final text = await doc.extract(pages: const PdfPages.all());
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(
         text,
         contains('TILED'),
@@ -2092,7 +2109,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 1);
       expect(
-        await doc.extract(pages: const PdfPages.all()),
+        await extractTextToString(doc, pages: const PdfPages.all()),
         contains('BG'),
         reason:
             'the background layer draws into the content '
@@ -2114,7 +2131,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 1);
-      final text = await doc.extract(pages: const PdfPages.all());
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(
         text,
         contains('Jane Roe'),
@@ -2141,7 +2158,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await e2.save(flatSink);
       await e2.dispose();
       final doc = await pdf.open(src(flatSink.takeBytes()));
-      final text = await doc.extract(pages: const PdfPages.all());
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(
         text,
         contains('Jane Roe'),
@@ -2529,7 +2546,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.save(sink);
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      expect(doc.pages[0].rotation, PdfRotation.r90);
+      expect((await doc.pageInfo())[0].rotation, PdfRotation.r90);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -2543,8 +2560,9 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.save(sink);
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      expect(doc.pages[0].rotation, PdfRotation.r180);
-      expect(doc.pages[1].rotation, PdfRotation.r180);
+      final pages = await doc.pageInfo();
+      expect(pages[0].rotation, PdfRotation.r180);
+      expect(pages[1].rotation, PdfRotation.r180);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -2627,7 +2645,10 @@ void registerEditorTests(Pdf Function() createPdf) {
         await e2.save(flatSink);
         await e2.dispose();
         final doc = await pdf.open(src(flatSink.takeBytes()));
-        final text = await doc.extract(pages: const PdfPages.all());
+        final text = await extractTextToString(
+          doc,
+          pages: const PdfPages.all(),
+        );
         expect(
           text,
           contains('01.01.2030'),
@@ -2781,7 +2802,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
 
       final doc = await pdf.open(src(sink.takeBytes()));
-      final files = await doc.attachments;
+      final files = await doc.attachments();
       expect(files, hasLength(1));
       expect(files.single.name, 'notes.txt');
       expect(files.single.description, 'Meeting notes');
@@ -2821,7 +2842,10 @@ void registerEditorTests(Pdf Function() createPdf) {
         await editor.save(sink);
         await editor.dispose();
         final doc = await pdf.open(src(sink.takeBytes()));
-        final text = await doc.extract(pages: const PdfPages.all());
+        final text = await extractTextToString(
+          doc,
+          pages: const PdfPages.all(),
+        );
         await doc.dispose();
         return text;
       }
@@ -2864,7 +2888,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final merged = mergeSink.takeBytes();
 
       final before = await pdf.open(src(merged));
-      final beforeFields = await before.formFields;
+      final beforeFields = await before.formFields();
       await before.dispose();
       expect(
         beforeFields,
@@ -2881,7 +2905,7 @@ void registerEditorTests(Pdf Function() createPdf) {
 
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 2);
-      final afterFields = await doc.formFields;
+      final afterFields = await doc.formFields();
       await doc.dispose();
       expect(
         afterFields,
@@ -2912,8 +2936,14 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.save(sink);
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      final page0 = await doc.extract(pages: const PdfPages.single(0));
-      final page1 = await doc.extract(pages: const PdfPages.single(1));
+      final page0 = await extractTextToString(
+        doc,
+        pages: const PdfPages.single(0),
+      );
+      final page1 = await extractTextToString(
+        doc,
+        pages: const PdfPages.single(1),
+      );
       expect(
         page0.toUpperCase(),
         contains('APPROVED'),
@@ -2963,10 +2993,12 @@ void registerEditorTests(Pdf Function() createPdf) {
       await flat.dispose();
 
       final doc = await pdf.open(src(sink.takeBytes()));
-      final page0 = (await doc.extract(
+      final page0 = (await extractTextToString(
+        doc,
         pages: const PdfPages.single(0),
       )).toUpperCase();
-      final page1 = (await doc.extract(
+      final page1 = (await extractTextToString(
+        doc,
         pages: const PdfPages.single(1),
       )).toUpperCase();
       expect(
@@ -3001,7 +3033,10 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 2);
-      final page1 = await doc.extract(pages: const PdfPages.single(1));
+      final page1 = await extractTextToString(
+        doc,
+        pages: const PdfPages.single(1),
+      );
       await doc.dispose();
       expect(page1, contains(fThreePageMarkersTruth.markers[1]));
       expect(page1, isNot(contains(fThreePageMarkersTruth.markers[0])));
@@ -3032,7 +3067,7 @@ void registerEditorTests(Pdf Function() createPdf) {
 
       final doc = await pdf.open(src(mergedBytes));
       expect(doc.pageCount, 2);
-      final names = (await doc.formFields).map((f) => f.name).toSet();
+      final names = (await doc.formFields()).map((f) => f.name).toSet();
       await doc.dispose();
       expect(
         names,
@@ -3049,7 +3084,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await filler.save(filled);
       await filler.dispose();
       final out = await pdf.open(src(filled.takeBytes()));
-      final text = await out.extract(pages: const PdfPages.all());
+      final text = await extractTextToString(out, pages: const PdfPages.all());
       await out.dispose();
       expect(text, contains('MERGEDFILL'));
     }, timeout: t(1));
@@ -3066,7 +3101,10 @@ void registerEditorTests(Pdf Function() createPdf) {
 
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 2);
-      final text = await doc.extract(pages: const PdfPages.single(1));
+      final text = await extractTextToString(
+        doc,
+        pages: const PdfPages.single(1),
+      );
       await doc.dispose();
       expect(text, contains(fThreePageMarkersTruth.markers[2]));
     }, timeout: t(1));
@@ -3102,9 +3140,13 @@ void registerEditorTests(Pdf Function() createPdf) {
 
       final doc = await pdf.open(src(sink.takeBytes()));
       final (width, height) = pagePruneTruth.mediaBox;
-      expect(doc.pages[1].width, closeTo(width, 0.5));
-      expect(doc.pages[1].height, closeTo(height, 0.5));
-      final text = await doc.extract(pages: const PdfPages.single(1));
+      final pages = await doc.pageInfo();
+      expect(pages[1].width, closeTo(width, 0.5));
+      expect(pages[1].height, closeTo(height, 0.5));
+      final text = await extractTextToString(
+        doc,
+        pages: const PdfPages.single(1),
+      );
       expect(text, contains(pagePruneTruth.marker(2)));
       final rendered = await renderToMemory(
         doc,
@@ -3152,8 +3194,9 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
 
       final doc = await pdf.open(src(sink.takeBytes()));
-      expect(doc.pages[0].rotation, PdfRotation.r0);
-      expect(doc.pages[1].rotation, PdfRotation.r90);
+      final pages = await doc.pageInfo();
+      expect(pages[0].rotation, PdfRotation.r0);
+      expect(pages[1].rotation, PdfRotation.r90);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -3187,10 +3230,11 @@ void registerEditorTests(Pdf Function() createPdf) {
         await editor.dispose();
 
         final doc = await pdf.open(src(sink.takeBytes()));
-        expect(doc.pages[0].width, closeTo(before.width, 0.5));
-        expect(doc.pages[0].height, closeTo(before.height, 0.5));
-        expect(doc.pages[1].width, closeTo(100, 0.5));
-        expect(doc.pages[1].height, closeTo(200, 0.5));
+        final pages = await doc.pageInfo();
+        expect(pages[0].width, closeTo(before.width, 0.5));
+        expect(pages[0].height, closeTo(before.height, 0.5));
+        expect(pages[1].width, closeTo(100, 0.5));
+        expect(pages[1].height, closeTo(200, 0.5));
         await doc.dispose();
       },
       timeout: t(1),
@@ -3228,11 +3272,12 @@ void registerEditorTests(Pdf Function() createPdf) {
 
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 2);
-      expect(doc.pages[1].width, closeTo(300, 0.5));
-      expect(doc.pages[1].height, closeTo(400, 0.5));
-      expect(doc.pages[1].rotation, PdfRotation.r90);
+      final pages = await doc.pageInfo();
+      expect(pages[1].width, closeTo(300, 0.5));
+      expect(pages[1].height, closeTo(400, 0.5));
+      expect(pages[1].rotation, PdfRotation.r90);
       expect(
-        await doc.extract(pages: const PdfPages.single(1)),
+        await extractTextToString(doc, pages: const PdfPages.single(1)),
         contains(inheritedPageMarker),
         reason: 'the inherited /Resources font is imported with the page',
       );
@@ -3267,7 +3312,7 @@ void registerEditorTests(Pdf Function() createPdf) {
 
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 2);
-      final names = (await doc.formFields).map((f) => f.name).toSet();
+      final names = (await doc.formFields()).map((f) => f.name).toSet();
       await doc.dispose();
       expect(names, fFormFieldsTruth.fieldNames.toSet());
     }, timeout: t(1));
@@ -3285,7 +3330,7 @@ void registerEditorTests(Pdf Function() createPdf) {
 
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 2);
-      final text = await doc.extract(pages: const PdfPages.all());
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       await doc.dispose();
       expect(text, contains(fTwoPageMarkersTruth.page0Marker));
       expect(text, contains(fTwoPageMarkersTruth.page1Marker));
@@ -3305,7 +3350,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 3);
       expect(
-        [for (final p in doc.pages) p.rotation],
+        [for (final p in await doc.pageInfo()) p.rotation],
         [PdfRotation.r90, PdfRotation.r90, PdfRotation.r90],
       );
       await doc.dispose();
@@ -3332,7 +3377,10 @@ void registerEditorTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(bytes));
       final found = <String>[];
       for (var page = 0; page < doc.pageCount; page++) {
-        final text = await doc.extract(pages: PdfPages.single(page));
+        final text = await extractTextToString(
+          doc,
+          pages: PdfPages.single(page),
+        );
         found.add(mergedMarkers.singleWhere(text.contains));
       }
       await doc.dispose();

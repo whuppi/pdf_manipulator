@@ -6,6 +6,7 @@ import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
 import '../../fixtures/generated/fixtures.dart';
+import '../../harness/extract_text.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/perf.dart';
 
@@ -44,7 +45,10 @@ void registerEditorStressTests(Pdf Function() createPdf) {
       expect(out.length, greaterThan(largePdf.length));
       final doc = await pdf.open(src(out));
       expect(doc.pageCount, 1000);
-      final midPage = await doc.extract(pages: const PdfPages.single(500));
+      final midPage = await extractTextToString(
+        doc,
+        pages: const PdfPages.single(500),
+      );
       expect(
         midPage,
         contains('CONFIDENTIAL'),
@@ -100,7 +104,10 @@ void registerEditorStressTests(Pdf Function() createPdf) {
         final out = sink.takeBytes();
         final doc = await pdf.open(src(out));
         expect(doc.pageCount, 1000);
-        final firstTen = await doc.extract(pages: const PdfPages.range(0, 10));
+        final firstTen = await extractTextToString(
+          doc,
+          pages: const PdfPages.range(0, 10),
+        );
         expect(
           firstTen,
           contains('EDITED'),

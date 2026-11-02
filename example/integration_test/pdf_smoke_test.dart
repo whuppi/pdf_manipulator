@@ -16,6 +16,18 @@ import 'package:pdf_manipulator_example_test_support/pdf_manipulator_example_tes
 
 DataSource _src(Uint8List bytes) => MemorySource(bytes);
 
+/// The text of the pages named, as the engine wrote it: the library writes
+/// text to a sink, so the test takes it from a MemorySink.
+Future<String> _text(
+  PdfDoc doc, {
+  PdfPages? pages,
+  PdfExtractionFormat format = PdfExtractionFormat.auto,
+}) async {
+  final sink = MemorySink();
+  await doc.extractText(sink, pages: pages, format: format);
+  return sink.takeString();
+}
+
 // Optional: force a specific web I/O mode via --dart-define=PDF_IO_MODE=jspi|atomics|opfs
 const _modeOverride = String.fromEnvironment('PDF_IO_MODE');
 PdfIoMode? get _forceMode => switch (_modeOverride) {
@@ -41,9 +53,10 @@ void main() {
     final doc = await pdf.open(_src(minimalPdf));
     expect(doc.pageCount, 1);
     expect(doc.version, isNotEmpty);
-    expect(doc.pages, hasLength(1));
-    expect(doc.pages[0].width, closeTo(595, 1));
-    expect(doc.pages[0].height, closeTo(842, 1));
+    final pages = await doc.pageInfo();
+    expect(pages, hasLength(1));
+    expect(pages[0].width, closeTo(595, 1));
+    expect(pages[0].height, closeTo(842, 1));
     await doc.dispose();
   });
 
@@ -51,16 +64,15 @@ void main() {
     final doc = await pdf.open(_src(minimalPdf));
     // The fixture is one BLANK page — the only correct extraction is
     // emptiness. isA<String>() would have accepted mojibake.
-    expect((await doc.extract(pages: const PdfPages.all())).trim(), isEmpty);
+    expect((await _text(doc, pages: const PdfPages.all())).trim(), isEmpty);
+    expect((await _text(doc, pages: const PdfPages.single(0))).trim(), isEmpty);
     expect(
-        (await doc.extract(pages: const PdfPages.single(0))).trim(), isEmpty);
-    expect(
-        (await doc.extract(
+        (await _text(doc,
                 pages: const PdfPages.all(),
                 format: PdfExtractionFormat.markdown))
             .trim(),
         isEmpty);
-    final html = await doc.extract(
+    final html = await _text(doc,
         pages: const PdfPages.single(0), format: PdfExtractionFormat.html);
     expect(html.trim(), isEmpty,
         reason: 'a blank page yields empty output in every format');
@@ -69,7 +81,7 @@ void main() {
 
   testWidgets('search returns results list', (t) async {
     final doc = await pdf.open(_src(minimalPdf));
-    final r = await doc.search(query: 'the', pages: const PdfPages.all());
+    final r = await doc.search('the', pages: const PdfPages.all());
     expect(r, isEmpty,
         reason: 'a blank page cannot contain matches — any hit here '
             'is an engine hallucination');
@@ -101,7 +113,7 @@ void main() {
 
   testWidgets('signatures + verify', (t) async {
     final doc = await pdf.open(_src(minimalPdf));
-    expect(await doc.signatures, isEmpty,
+    expect(await doc.signatures(), isEmpty,
         reason: 'unsigned fixture — a phantom signature is worse '
             'than none');
     expect(await doc.verifySignatures(), isFalse);
@@ -115,25 +127,25 @@ void main() {
         reason: 'the minimal fixture is NOT PDF/A — a pass means the '
             'validator is not validating');
     expect(a.errors, greaterThan(0));
-    expect(await doc.validatePdfUa(), isFalse);
+    expect((await doc.validatePdfUa()).compliant, isFalse);
     await doc.dispose();
   });
 
-  testWidgets('classifyPage + classifyDocument', (t) async {
+  testWidgets('classifyPages + classifyDocument', (t) async {
     final doc = await pdf.open(_src(minimalPdf));
-    final page = await doc.classifyPage(0);
-    expect(page.type, isNotEmpty);
-    expect(page.confidence, inInclusiveRange(0.0, 1.0));
+    final pages = await doc.classifyPages();
+    expect(pages, hasLength(1));
+    expect(pages.single.page, 0);
+    expect(pages.single.type, isA<PdfPageType>());
     final whole = await doc.classifyDocument();
-    expect(whole.type, isNotEmpty);
-    expect(whole.confidence, inInclusiveRange(0.0, 1.0));
+    expect(whole, isA<PdfDocumentType>());
     await doc.dispose();
   });
 
-  testWidgets('planSplitByBookmarks', (t) async {
+  testWidgets('bookmarkRanges', (t) async {
     final doc = await pdf.open(_src(minimalPdf));
     await expectLater(
-      doc.planSplitByBookmarks(),
+      doc.bookmarkRanges(),
       throwsA(isA<PdfInvalidArgument>()
           .having((e) => e.message, 'message', contains('no bookmarks'))),
       reason: 'the engine refuses with an actionable message — '
@@ -230,13 +242,13 @@ void main() {
     final s1 = MemorySink();
     await pdf.rotateAllPages(_src(minimalPdf), s1, by: PdfRotation.r90);
     final doc1 = await pdf.open(_src(s1.takeBytes()));
-    expect(doc1.pages[0].rotation, PdfRotation.r90);
+    expect((await doc1.pageInfo())[0].rotation, PdfRotation.r90);
     await doc1.dispose();
 
     final s2 = MemorySink();
     await pdf.rotatePages(_src(minimalPdf), s2, pages: {0: PdfRotation.r180});
     final doc2 = await pdf.open(_src(s2.takeBytes()));
-    expect(doc2.pages[0].rotation, PdfRotation.r180);
+    expect((await doc2.pageInfo())[0].rotation, PdfRotation.r180);
     await doc2.dispose();
   });
 
@@ -284,14 +296,14 @@ void main() {
         throwsA(isA<PdfWrongPassword>()));
 
     final doc1 = await pdf.open(_src(encBytes), password: 'user-pw');
-    expect(doc1.isEncrypted, isTrue);
+    expect(doc1.encryption, isNotNull);
     expect(doc1.pageCount, 1);
     await doc1.dispose();
 
     final decSink = MemorySink();
     await pdf.decrypt(_src(encBytes), decSink, password: 'owner-pw');
     final doc2 = await pdf.open(_src(decSink.takeBytes()));
-    expect(doc2.isEncrypted, isFalse);
+    expect(doc2.encryption, isNull);
     await doc2.dispose();
   });
 
@@ -356,7 +368,7 @@ void main() {
     await pdf.sign(_src(minimalPdf), sink,
         credentials: const PdfSigningCredentials.pem(testCertPem, testKeyPem));
     final doc = await pdf.open(_src(sink.takeBytes()));
-    expect(await doc.signatures, isNotEmpty,
+    expect(await doc.signatures(), isNotEmpty,
         reason: 'a signed PDF with no retrievable signature is not '
             'signed');
     await doc.dispose();
@@ -435,7 +447,7 @@ void main() {
     await e.save(sink);
     await e.dispose();
     final doc = await pdf.open(_src(sink.takeBytes()));
-    expect(doc.pages[0].rotation, PdfRotation.r180,
+    expect((await doc.pageInfo())[0].rotation, PdfRotation.r180,
         reason: 'rotateAllPages(180) must survive save');
     await doc.dispose();
   });
@@ -633,7 +645,7 @@ void main() {
         options: const PdfSaveOptions.fullRewrite(
             encryption: PdfEncryption.config(ownerPassword: 'pw')));
     final enc = await pdf.open(_src(s3.takeBytes()));
-    expect(enc.isEncrypted, isTrue,
+    expect(enc.encryption, isNotNull,
         reason: 'the encrypted save mode must actually encrypt');
     await enc.dispose();
 
@@ -642,7 +654,7 @@ void main() {
         options: const PdfSaveOptions.fullRewrite(
             encryption: PdfEncryption.remove()));
     final plain = await pdf.open(_src(s4.takeBytes()));
-    expect(plain.isEncrypted, isFalse);
+    expect(plain.encryption, isNull);
     await plain.dispose();
 
     await e.dispose();
@@ -782,8 +794,7 @@ void main() {
     await b.dispose();
 
     // Disposed means refusing, not just surviving.
-    expect(() => doc.extract(pages: const PdfPages.all()),
-        throwsA(isA<PdfDisposed>()));
+    expect(() => doc.extractText(MemorySink()), throwsA(isA<PdfDisposed>()));
     expect(() => e.setTitle('x'), throwsA(isA<PdfDisposed>()));
     expect(() => b.save(MemorySink()), throwsA(isA<PdfDisposed>()));
   });

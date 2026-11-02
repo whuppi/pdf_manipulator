@@ -25,8 +25,6 @@ class _SharedDocHandle extends BridgeDocHandle {
 
   int get _pageCount => _openResult['pageCount'] as int? ?? 0;
 
-  List<int> _pages(PdfPages pages) => _bridge._resolvePages(pages, _pageCount);
-
   PdfTask<Map<String, Object?>> _exec(
     EngineOp op,
     Map<String, Object?> args, {
@@ -41,108 +39,72 @@ class _SharedDocHandle extends BridgeDocHandle {
   @override
   Map<String, Object?> get openResult => _openResult;
 
+  /// The pages a read names; every page when [pages] is null.
+  List<int> _pageList(PdfPages? pages) =>
+      codec.resolvePageIndices(pages, _pageCount);
+
   @override
-  PdfTask<String> extract({
-    required PdfPages pages,
+  PdfTask<List<PdfPageInfo>> pageInfo({PdfPages? pages}) => _exec(
+    EngineOp.pageInfo,
+    {'pageIndices': _pageList(pages)},
+  ).map(codec.decodePageInfos);
+
+  @override
+  PdfTask<void> extractText(
+    DataSink output, {
+    PdfPages? pages,
     PdfExtractionFormat format = PdfExtractionFormat.auto,
   }) {
     final fmt = codec.putEnum(format);
     return PdfTask.group((hook) async {
-      return switch (pages) {
-        PdfPagesAll() => () async {
-          // One frame per page keeps the engine at one page of text; the
-          // final response is decoded first so an engine error wins.
-          final buf = StringBuffer();
-          final sink = _FrameCollectorSink((frame) {
-            onEngineFrame?.call();
-            buf.write(codec.decodeExtractResult(bin.decodeResponse(frame)));
-          });
-          await hook.guard(
-            _exec(
-              EngineOp.extract,
-              {'format': fmt, 'hasSink': true},
-              sinks: [sink],
-            ),
+      if (pages == null || pages is PdfPagesAll) {
+        // One frame per page: the text reaches the sink as each frame
+        // arrives, and the library never holds the document's text.
+        final sink = _FrameSink((frame) async {
+          onEngineFrame?.call();
+          await output.write(
+            utf8.encode(codec.decodeExtractResult(bin.decodeResponse(frame))),
           );
-          return buf.toString();
-        }(),
-        PdfPagesSingle(:final index) => codec.decodeExtractResult(
-          await hook.guard(
-            _exec(EngineOp.extract, {'format': fmt, 'page': index}),
+        });
+        await hook.guard(
+          _exec(
+            EngineOp.extract,
+            {'format': fmt, 'hasSink': true},
+            sinks: [sink],
           ),
-        ),
-        PdfPagesList(:final indices) => () async {
-          final buf = StringBuffer();
-          for (final i in indices) {
-            buf.write(
-              codec.decodeExtractResult(
-                await hook.guard(
-                  _exec(EngineOp.extract, {'format': fmt, 'page': i}),
-                ),
-              ),
-            );
-          }
-          return buf.toString();
-        }(),
-        PdfPagesRange(:final start, :final end) => () async {
-          final buf = StringBuffer();
-          for (var i = start; i < end; i++) {
-            buf.write(
-              codec.decodeExtractResult(
-                await hook.guard(
-                  _exec(EngineOp.extract, {'format': fmt, 'page': i}),
-                ),
-              ),
-            );
-          }
-          return buf.toString();
-        }(),
-      };
+        );
+        return;
+      }
+      for (final page in _pageList(pages)) {
+        final text = codec.decodeExtractResult(
+          await hook.guard(
+            _exec(EngineOp.extract, {'format': fmt, 'page': page}),
+          ),
+        );
+        await output.write(utf8.encode(text));
+      }
     });
   }
 
   @override
-  PdfTask<List<PdfSearchHit>> search({
-    required String query,
-    required PdfPages pages,
-  }) {
+  PdfTask<List<PdfSearchHit>> search({required String query, PdfPages? pages}) {
     return PdfTask.group((hook) async {
-      return switch (pages) {
-        PdfPagesAll() => codec.decodeSearchHits(
+      if (pages == null || pages is PdfPagesAll) {
+        return codec.decodeSearchHits(
           await hook.guard(_exec(EngineOp.search, {'query': query})),
-        ),
-        PdfPagesSingle(:final index) => codec.decodeSearchHits(
-          await hook.guard(
-            _exec(EngineOp.search, {'query': query, 'page': index}),
+        );
+      }
+      final all = <PdfSearchHit>[];
+      for (final page in _pageList(pages)) {
+        all.addAll(
+          codec.decodeSearchHits(
+            await hook.guard(
+              _exec(EngineOp.search, {'query': query, 'page': page}),
+            ),
           ),
-        ),
-        PdfPagesList(:final indices) => () async {
-          final all = <PdfSearchHit>[];
-          for (final i in indices) {
-            all.addAll(
-              codec.decodeSearchHits(
-                await hook.guard(
-                  _exec(EngineOp.search, {'query': query, 'page': i}),
-                ),
-              ),
-            );
-          }
-          return all;
-        }(),
-        PdfPagesRange(:final start, :final end) => () async {
-          final all = <PdfSearchHit>[];
-          for (var i = start; i < end; i++) {
-            all.addAll(
-              codec.decodeSearchHits(
-                await hook.guard(
-                  _exec(EngineOp.search, {'query': query, 'page': i}),
-                ),
-              ),
-            );
-          }
-          return all;
-        }(),
-      };
+        );
+      }
+      return all;
     });
   }
 
@@ -154,13 +116,13 @@ class _SharedDocHandle extends BridgeDocHandle {
   @override
   PdfTask<List<PdfRenderedPage>> render(
     FutureOr<DataSink> Function(PdfRenderedPage page) sinkFor, {
-    required PdfPages pages,
+    PdfPages? pages,
     required PdfRenderSize size,
     required PdfRenderFormat format,
   }) => _deliver(
     EngineOp.render,
     {
-      'pageIndices': _pages(pages),
+      'pageIndices': _pageList(pages),
       ..._renderSizeArgs(size),
       'format': codec.putEnum(format),
     },
@@ -174,10 +136,10 @@ class _SharedDocHandle extends BridgeDocHandle {
   @override
   PdfTask<List<PdfImage>> extractImages(
     FutureOr<DataSink> Function(PdfImage image) sinkFor, {
-    required PdfPages pages,
+    PdfPages? pages,
   }) => _deliver(
     EngineOp.extractImages,
-    {'pageIndices': _pages(pages)},
+    {'pageIndices': _pageList(pages)},
     sinkFor,
     codec.decodeImageFrame,
   );
@@ -224,7 +186,7 @@ class _SharedDocHandle extends BridgeDocHandle {
   }
 
   @override
-  PdfTask<List<PdfSignatureInfo>> get signatures => _exec(
+  PdfTask<List<PdfSignatureInfo>> signatures() => _exec(
     EngineOp.getSignatures,
     {},
   ).map((map) => codec.decodeSignatures(map));
@@ -236,37 +198,47 @@ class _SharedDocHandle extends BridgeDocHandle {
   ).map((map) => codec.decodeVerifySignatures(map));
 
   @override
-  PdfTask<PdfValidationResult> validatePdfA({PdfALevel level = PdfALevel.a2}) =>
+  PdfTask<PdfValidationResult> validatePdfA({required PdfALevel level}) =>
       _exec(EngineOp.validatePdfA, {
         'level': codec.putEnum(level),
       }).map((map) => codec.decodeValidationResult(map));
 
   @override
-  PdfTask<bool> validatePdfUa({PdfUaLevel level = PdfUaLevel.ua1}) => _exec(
-    EngineOp.validatePdfUa,
-    {'level': codec.putEnum(level)},
-  ).map((map) => codec.decodeValidatePdfUa(map));
+  PdfTask<PdfValidationResult> validatePdfUa({required PdfUaLevel level}) =>
+      _exec(EngineOp.validatePdfUa, {
+        'level': codec.putEnum(level),
+      }).map((map) => codec.decodeValidationResult(map));
 
   @override
-  PdfTask<List<PdfBookmarkSplit>> planSplitByBookmarks() => _exec(
+  PdfTask<List<PdfBookmarkRange>> bookmarkRanges() => _exec(
     EngineOp.planSplitByBookmarks,
     {},
-  ).map((map) => codec.decodeBookmarkSplits(map));
+  ).map((map) => codec.decodeBookmarkRanges(map));
 
   @override
-  PdfTask<PdfPageClassification> classifyPage(int page) => _exec(
-    EngineOp.classifyPage,
-    {'page': page},
-  ).map((map) => codec.decodeClassifyPage(map));
+  PdfTask<List<PdfPageClassification>> classifyPages({PdfPages? pages}) {
+    return PdfTask.group((hook) async {
+      final out = <PdfPageClassification>[];
+      for (final page in _pageList(pages)) {
+        out.add(
+          codec.decodeClassifyPage(
+            await hook.guard(_exec(EngineOp.classifyPage, {'page': page})),
+            page: page,
+          ),
+        );
+      }
+      return out;
+    });
+  }
 
   @override
-  PdfTask<PdfDocumentClassification> classifyDocument() => _exec(
+  PdfTask<PdfDocumentType> classifyDocument() => _exec(
     EngineOp.classifyDocument,
     {},
   ).map((map) => codec.decodeClassifyDocument(map));
 
   @override
-  PdfTask<List<PdfFormField>> get formFields =>
+  PdfTask<List<PdfFormField>> formFields() =>
       _exec(EngineOp.formFields, {}).map(codec.decodeFormFields);
 
   @override
@@ -274,11 +246,11 @@ class _SharedDocHandle extends BridgeDocHandle {
       _exec(EngineOp.exportFormData, {'format': format}, sinks: [output]);
 
   @override
-  PdfTask<PdfXfaInfo?> get xfa =>
+  PdfTask<PdfXfaInfo?> xfa() =>
       _exec(EngineOp.xfa, {}).map(codec.decodeXfaInfo);
 
   @override
-  PdfTask<List<PdfAttachment>> get attachments =>
+  PdfTask<List<PdfAttachment>> attachments() =>
       _exec(EngineOp.attachments, {}).map(codec.decodeAttachments);
 
   @override

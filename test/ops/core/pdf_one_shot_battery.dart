@@ -38,7 +38,7 @@ void registerOneShotTests(Pdf Function() createPdf) {
       final out = TestSink();
       await pdf.edits(src(minimalPdf), out).rotatePage(0, by: PdfRotation.r90);
       final doc = await pdf.open(src(out.takeBytes()));
-      expect(doc.pages[0].rotation, PdfRotation.r90);
+      expect((await doc.pageInfo())[0].rotation, PdfRotation.r90);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -49,7 +49,7 @@ void registerOneShotTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(out.takeBytes()));
       expect(doc.pageCount, fTwoPageMarkersTruth.pages);
       final hits = await doc.search(
-        query: fTwoPageMarkersTruth.page0Marker,
+        fTwoPageMarkersTruth.page0Marker,
         pages: const PdfPages.single(0),
       );
       expect(hits, isNotEmpty, reason: 'the page content survives the save');
@@ -75,7 +75,7 @@ void registerOneShotTests(Pdf Function() createPdf) {
       await first;
       final doc = await pdf.open(src(out.takeBytes()));
       expect(
-        doc.pages[0].rotation,
+        (await doc.pageInfo())[0].rotation,
         PdfRotation.r90,
         reason: 'the second edit never ran',
       );
@@ -108,7 +108,7 @@ void registerOneShotTests(Pdf Function() createPdf) {
       final hits = await pdf
           .reads(src(fTwoPageMarkers))
           .search(
-            query: fTwoPageMarkersTruth.page1Marker,
+            fTwoPageMarkersTruth.page1Marker,
             pages: const PdfPages.all(),
           );
       expect(hits, isNotEmpty);
@@ -118,9 +118,9 @@ void registerOneShotTests(Pdf Function() createPdf) {
     test('a second read on one object throws before any I/O', () async {
       final pdf = createPdf();
       final oneShot = pdf.reads(src(fTwoPageMarkers));
-      final first = oneShot.search(query: 'ALPHA', pages: const PdfPages.all());
+      final first = oneShot.search('ALPHA', pages: const PdfPages.all());
       expect(
-        () => oneShot.search(query: 'BRAVO', pages: const PdfPages.all()),
+        () => oneShot.search('BRAVO', pages: const PdfPages.all()),
         throwsA(isA<PdfInvalidArgument>()),
       );
       await first;
@@ -134,10 +134,10 @@ void registerOneShotTests(Pdf Function() createPdf) {
         final doc = await pdf.open(src(fTwoPageMarkers));
         expect(info.pageCount, doc.pageCount);
         expect(info.version, doc.version);
-        expect(info.title, doc.title);
-        expect(info.isEncrypted, doc.isEncrypted);
+        expect(info.metadata.title, doc.metadata.title);
+        expect(info.encryption, doc.encryption);
         expect(info.pageCount, fTwoPageMarkersTruth.pages);
-        expect(info.title, fTwoPageMarkersTruth.title);
+        expect(info.metadata.title, fTwoPageMarkersTruth.title);
         await doc.dispose();
       },
       timeout: t(1),
@@ -153,10 +153,7 @@ void registerOneShotTests(Pdf Function() createPdf) {
         return doc.pageCount;
       });
       expect(pages, fTwoPageMarkersTruth.pages);
-      expect(
-        () => kept.extract(pages: const PdfPages.all()),
-        throwsA(isA<PdfDisposed>()),
-      );
+      expect(() => kept.extractText(MemorySink()), throwsA(isA<PdfDisposed>()));
 
       await expectLater(
         pdf.read<void>(src(fTwoPageMarkers), (doc) async {
@@ -165,10 +162,7 @@ void registerOneShotTests(Pdf Function() createPdf) {
         }),
         throwsA(isA<PdfUnsupported>()),
       );
-      expect(
-        () => kept.extract(pages: const PdfPages.all()),
-        throwsA(isA<PdfDisposed>()),
-      );
+      expect(() => kept.extractText(MemorySink()), throwsA(isA<PdfDisposed>()));
     }, timeout: t(1));
 
     test('rewrite saves after the edits and closes the editor', () async {
@@ -182,8 +176,8 @@ void registerOneShotTests(Pdf Function() createPdf) {
       });
       expect(() => kept.setTitle('x'), throwsA(isA<PdfDisposed>()));
       final doc = await pdf.open(src(out.takeBytes()));
-      expect(doc.pages[0].rotation, PdfRotation.r90);
-      expect(doc.title, 'Rewritten');
+      expect((await doc.pageInfo())[0].rotation, PdfRotation.r90);
+      expect(doc.metadata.title, 'Rewritten');
       await doc.dispose();
     }, timeout: t(1));
 
@@ -315,7 +309,7 @@ void registerOneShotTests(Pdf Function() createPdf) {
         final doc = await pdf.open(src(minimalPdf));
         await HandleBackstop.finalizeNow(doc);
         await expectLater(
-          doc.extract(pages: const PdfPages.all()),
+          doc.extractText(MemorySink()),
           throwsA(isA<PdfError>()),
         );
         if (_assertsOn) {

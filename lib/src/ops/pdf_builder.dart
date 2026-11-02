@@ -9,6 +9,7 @@ part of 'pdf.dart';
 /// Creates PDFs from scratch — add pages with content, then save.
 class PdfBuilder implements _Handle {
   /// Internal constructor — use [Pdf.build] to create instances.
+  @internal
   PdfBuilder.internal(PdfBridge _, this._handle) {
     HandleBackstop.attach(this, 'PdfBuilder', _handle.dispose);
   }
@@ -79,7 +80,8 @@ class PdfBuilder implements _Handle {
 
 /// Page content builder — add text, images, forms, watermarks.
 class PdfPageBuilder {
-  /// Creates a page builder wrapping the given handle.
+  /// Internal constructor — [PdfBuilder.addPage] creates instances.
+  @internal
   PdfPageBuilder(this._handle);
 
   final BridgePageBuilderHandle _handle;

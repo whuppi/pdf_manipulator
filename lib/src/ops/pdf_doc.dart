@@ -12,25 +12,20 @@ part of 'pdf.dart';
 /// Created by [Pdf.open]. The document is parsed once and stays in
 /// memory until [dispose] is called. All read operations reuse the
 /// already-parsed structure — no re-opening.
+///
+/// The facts the open read anyway are sync fields; everything per page is
+/// a read of its own ([pageInfo], [extractText], [search] and the rest,
+/// declared on [PdfReads]).
 base class PdfDoc extends PdfReads implements _Handle {
   /// Internal constructor — use [Pdf.open] to create instances.
+  @internal
   PdfDoc.internal(
     this._handle, {
     required this.pageCount,
     required this.version,
-    required this.pages,
-    this.title,
-    this.author,
-    this.subject,
-    this.keywords,
-    this.producer,
-    this.creator,
-    this.creationDate,
-    this.isEncrypted = false,
-    this.requiresPassword = false,
-    this.isTagged = false,
-    this.encryptionAlgorithm,
-    this.permissions,
+    required this.isTagged,
+    required this.metadata,
+    required this.encryption,
   }) : super._() {
     HandleBackstop.attach(this, 'PdfDoc', _handle.dispose);
   }
@@ -41,7 +36,7 @@ base class PdfDoc extends PdfReads implements _Handle {
   @override
   void _scopeTo(CancelHook hook) => _handle.scope = hook;
 
-  // ── Metadata (populated at open time) ──
+  // ── Metadata (read at open time) ──
 
   /// Total number of pages in the document.
   final int pageCount;
@@ -49,44 +44,14 @@ base class PdfDoc extends PdfReads implements _Handle {
   /// PDF version string (e.g. "1.7", "2.0").
   final String version;
 
-  /// Per-page metadata (dimensions, rotation, label).
-  final List<PdfPageInfo> pages;
-
-  /// Document title from metadata, if present.
-  final String? title;
-
-  /// Document author from metadata, if present.
-  final String? author;
-
-  /// Document subject from metadata, if present.
-  final String? subject;
-
-  /// Document keywords from metadata, if present.
-  final String? keywords;
-
-  /// Document producer (the software that produced the PDF), if present.
-  final String? producer;
-
-  /// Document creator (the source application), if present.
-  final String? creator;
-
-  /// Document creation date, if present and parseable.
-  final DateTime? creationDate;
-
-  /// Whether the document is encrypted.
-  final bool isEncrypted;
-
-  /// Whether a password is required to open the document.
-  final bool requiresPassword;
-
   /// Whether the document contains tagged (accessible) structure.
   final bool isTagged;
 
-  /// Encryption algorithm used, if the document is encrypted.
-  final PdfEncryptionAlgorithm? encryptionAlgorithm;
+  /// What the document's info dictionary carries.
+  final PdfMetadata metadata;
 
-  /// Permission flags, if the document is encrypted.
-  final PdfPermissions? permissions;
+  /// How the document is encrypted, or null when it is not encrypted.
+  final PdfEncryptionInfo? encryption;
 
   @override
   PdfTask<T> _run<T>(PdfTask<T> Function(BridgeDocHandle handle) read) {
@@ -96,125 +61,6 @@ base class PdfDoc extends PdfReads implements _Handle {
 
   void _check() {
     if (_disposed) throw const PdfDisposed('This PdfDoc has been disposed');
-  }
-
-  // ── Read operations (reuse the already-parsed document) ──
-
-  /// Extracts text from the specified [pages] in the given [format].
-  PdfTask<String> extract({
-    required PdfPages pages,
-    PdfExtractionFormat format = PdfExtractionFormat.auto,
-  }) {
-    KeepRecord.op('extract');
-    _check();
-    return _handle.extract(pages: pages, format: format);
-  }
-
-  /// Returns metadata for all digital signatures in the document.
-  PdfTask<List<PdfSignatureInfo>> get signatures {
-    KeepRecord.op('signatures');
-    _check();
-    return _handle.signatures;
-  }
-
-  /// Whether the document has at least one signature and every
-  /// signature verifies: the digest of the bytes each one covers
-  /// matches, and the signer's key verifies it. Certificate trust and
-  /// revocation are not checked. A signature over an earlier revision
-  /// still counts; see [PdfSignatureInfo.coversWholeDocument].
-  PdfTask<bool> verifySignatures() {
-    KeepRecord.op('signatures');
-    _check();
-    return _handle.verifySignatures();
-  }
-
-  /// Validates PDF/A conformance at the given [level].
-  PdfTask<PdfValidationResult> validatePdfA({PdfALevel level = PdfALevel.a2}) {
-    KeepRecord.op('pdfa');
-    _check();
-    return _handle.validatePdfA(level: level);
-  }
-
-  /// Validates PDF/UA (accessibility) conformance at the given [level].
-  PdfTask<bool> validatePdfUa({PdfUaLevel level = PdfUaLevel.ua1}) {
-    KeepRecord.op('pdfa');
-    _check();
-    return _handle.validatePdfUa(level: level);
-  }
-
-  /// Returns bookmark-based split boundaries for the document.
-  PdfTask<List<PdfBookmarkSplit>> planSplitByBookmarks() {
-    _check();
-    return _handle.planSplitByBookmarks();
-  }
-
-  /// Classifies a single [page] by its content type (text, image, mixed).
-  PdfTask<PdfPageClassification> classifyPage(int page) {
-    KeepRecord.op('extract');
-    _check();
-    return _handle.classifyPage(page);
-  }
-
-  /// Classifies the entire document by its overall content type.
-  PdfTask<PdfDocumentClassification> classifyDocument() {
-    KeepRecord.op('extract');
-    _check();
-    return _handle.classifyDocument();
-  }
-
-  /// Reads every AcroForm field of the document.
-  PdfTask<List<PdfFormField>> get formFields {
-    _check();
-    return _handle.formFields;
-  }
-
-  /// Reads the AcroForm field named [name], or `null` when no field has
-  /// that fully qualified name.
-  PdfTask<PdfFormField?> formField(String name) {
-    _check();
-    return formFields.map((fields) {
-      for (final field in fields) {
-        if (field.name == name) return field;
-      }
-      return null;
-    });
-  }
-
-  /// Exports every AcroForm field's current value to [output] in [format].
-  PdfTask<void> exportFormData(
-    DataSink output, {
-    PdfFormDataFormat format = PdfFormDataFormat.xfdf,
-  }) {
-    _check();
-    return _handle.exportFormData(output, format: format.name);
-  }
-
-  /// What the document's XFA packet declares, or `null` when the document
-  /// has no XFA form.
-  PdfTask<PdfXfaInfo?> get xfa {
-    _check();
-    return _handle.xfa;
-  }
-
-  /// Lists the files embedded in the document, metadata only.
-  PdfTask<List<PdfAttachment>> get attachments {
-    _check();
-    return _handle.attachments;
-  }
-
-  /// Lists the annotations on [page] (0-based), in /Annots order: links,
-  /// comments, stamps, form widgets. Throws [PdfPageRangeError] for a
-  /// page past the end.
-  PdfTask<List<PdfAnnotationInfo>> annotations(int page) {
-    _check();
-    return _handle.annotations(page);
-  }
-
-  /// Writes the embedded file named [name] to [output]. An unknown name
-  /// throws [PdfEngineError].
-  PdfTask<void> extractAttachment(String name, DataSink output) {
-    _check();
-    return _handle.extractAttachment(name, output);
   }
 
   // ── Lifecycle ──

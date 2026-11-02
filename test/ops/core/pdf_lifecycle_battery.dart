@@ -108,7 +108,7 @@ void registerLifecycleTests(Pdf Function() createPdf) {
       expect(doc.pageCount, 1);
       await doc.dispose();
       expect(
-        () => doc.extract(pages: const PdfPages.all()),
+        () => doc.extractText(MemorySink()),
         throwsA(isA<PdfDisposed>()),
         reason: 'a disposed doc refuses ops',
       );
@@ -123,10 +123,7 @@ void registerLifecycleTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(minimalPdf));
       await doc.dispose();
       await doc.dispose();
-      expect(
-        () => doc.extract(pages: const PdfPages.all()),
-        throwsA(isA<PdfDisposed>()),
-      );
+      expect(() => doc.extractText(MemorySink()), throwsA(isA<PdfDisposed>()));
       await pdf.dispose();
     }, timeout: t(1));
 
@@ -158,7 +155,7 @@ void registerLifecycleTests(Pdf Function() createPdf) {
       final encrypted = encSink.takeBytes();
 
       final doc = await pdf.open(src(encrypted), password: 'pw');
-      expect(doc.isEncrypted, isTrue);
+      expect(doc.encryption, isNotNull);
       await doc.dispose();
 
       final editor = await pdf.edit(src(encrypted), password: 'pw');
@@ -233,19 +230,19 @@ void registerLifecycleTests(Pdf Function() createPdf) {
             final out = await keepSave(pdf, source);
 
             final asUser = await pdf.open(src(out), password: 'user-pw');
-            expect(asUser.isEncrypted, isTrue);
-            expect(asUser.title, 'kept');
+            expect(asUser.encryption, isNotNull);
+            expect(asUser.metadata.title, 'kept');
             final original = await pdf.open(src(source), password: 'user-pw');
             expect(
-              asUser.permissions?.toBits(),
-              original.permissions?.toBits(),
+              asUser.encryption?.permissions.toBits(),
+              original.encryption?.permissions.toBits(),
               reason: 'the permissions read back are the source\'s',
             );
             await original.dispose();
             await asUser.dispose();
 
             final asOwner = await pdf.open(src(out), password: 'owner-pw');
-            expect(asOwner.title, 'kept');
+            expect(asOwner.metadata.title, 'kept');
             await asOwner.dispose();
 
             expect(
@@ -282,7 +279,7 @@ void registerLifecycleTests(Pdf Function() createPdf) {
         );
         await editor.dispose();
         final doc = await pdf.open(src(sink.takeBytes()));
-        expect(doc.isEncrypted, isFalse);
+        expect(doc.encryption, isNull);
         await doc.dispose();
         await pdf.dispose();
       }, timeout: t(1));
@@ -305,7 +302,7 @@ void registerLifecycleTests(Pdf Function() createPdf) {
         final out = sink.takeBytes();
 
         final doc = await pdf.open(src(out), password: 'new-user');
-        expect(doc.isEncrypted, isTrue);
+        expect(doc.encryption, isNotNull);
         await doc.dispose();
         for (final old in ['user-pw', 'owner-pw']) {
           await expectLater(

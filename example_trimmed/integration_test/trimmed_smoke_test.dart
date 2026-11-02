@@ -78,7 +78,7 @@ void main() {
   testWidgets('excluded: extract answers the typed error', (t) async {
     final doc = await pdf.open(MemorySource(onePage));
     await expectLater(
-      () => doc.extract(pages: const PdfPages.single(0)),
+      () => doc.extractText(MemorySink(), pages: const PdfPages.single(0)),
       throwsNotEnabled,
     );
     await doc.dispose();

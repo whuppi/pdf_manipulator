@@ -21,6 +21,7 @@ import 'package:pdf_manipulator/src/types/pdf_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
+import 'package:pdf_manipulator/src/types/pdf_page_info.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/types/pdf_redaction_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_render.dart';
@@ -114,23 +115,26 @@ abstract class BridgeDocHandle {
 
   // ── Read ops (reuse already-parsed document via handleId) ──
 
-  /// Extracts text content from the specified [pages].
-  PdfTask<String> extract({
-    required PdfPages pages,
-    PdfExtractionFormat format,
+  /// The per-page facts of the pages named; every page when [pages] is null.
+  PdfTask<List<PdfPageInfo>> pageInfo({PdfPages? pages});
+
+  /// Writes the text of the pages named to [output]; every page when
+  /// [pages] is null.
+  PdfTask<void> extractText(
+    DataSink output, {
+    PdfPages? pages,
+    required PdfExtractionFormat format,
   });
 
-  /// Searches for [query] across the specified [pages].
-  PdfTask<List<PdfSearchHit>> search({
-    required String query,
-    required PdfPages pages,
-  });
+  /// Searches for [query] across the pages named; every page when [pages]
+  /// is null.
+  PdfTask<List<PdfSearchHit>> search({required String query, PdfPages? pages});
 
   /// Renders the specified [pages], writing each to the sink [sinkFor]
   /// returns for its descriptor.
   PdfTask<List<PdfRenderedPage>> render(
     FutureOr<DataSink> Function(PdfRenderedPage page) sinkFor, {
-    required PdfPages pages,
+    PdfPages? pages,
     required PdfRenderSize size,
     required PdfRenderFormat format,
   });
@@ -139,41 +143,42 @@ abstract class BridgeDocHandle {
   /// [sinkFor] returns for its descriptor.
   PdfTask<List<PdfImage>> extractImages(
     FutureOr<DataSink> Function(PdfImage image) sinkFor, {
-    required PdfPages pages,
+    PdfPages? pages,
   });
 
   /// Returns signature info for all signatures in the document.
-  PdfTask<List<PdfSignatureInfo>> get signatures;
+  PdfTask<List<PdfSignatureInfo>> signatures();
 
   /// Verifies all digital signatures, returning true if all valid.
   PdfTask<bool> verifySignatures();
 
   /// Validates the document against PDF/A conformance.
-  PdfTask<PdfValidationResult> validatePdfA({PdfALevel level});
+  PdfTask<PdfValidationResult> validatePdfA({required PdfALevel level});
 
   /// Validates the document against PDF/UA accessibility.
-  PdfTask<bool> validatePdfUa({PdfUaLevel level});
+  PdfTask<PdfValidationResult> validatePdfUa({required PdfUaLevel level});
 
-  /// Plans split points based on top-level bookmarks.
-  PdfTask<List<PdfBookmarkSplit>> planSplitByBookmarks();
+  /// The page ranges of the document's top-level bookmarks.
+  PdfTask<List<PdfBookmarkRange>> bookmarkRanges();
 
-  /// Classifies a single page by content type.
-  PdfTask<PdfPageClassification> classifyPage(int page);
+  /// Classifies the pages named by what they hold; every page when [pages]
+  /// is null.
+  PdfTask<List<PdfPageClassification>> classifyPages({PdfPages? pages});
 
   /// Classifies the entire document by content type.
-  PdfTask<PdfDocumentClassification> classifyDocument();
+  PdfTask<PdfDocumentType> classifyDocument();
 
   /// Reads every AcroForm field of the document.
-  PdfTask<List<PdfFormField>> get formFields;
+  PdfTask<List<PdfFormField>> formFields();
 
   /// Exports AcroForm field values as FDF or XFDF to [output].
   PdfTask<void> exportFormData(DataSink output, {required String format});
 
   /// Reads the document's XFA structure, or null when it has none.
-  PdfTask<PdfXfaInfo?> get xfa;
+  PdfTask<PdfXfaInfo?> xfa();
 
   /// Lists the files embedded in the document.
-  PdfTask<List<PdfAttachment>> get attachments;
+  PdfTask<List<PdfAttachment>> attachments();
 
   /// Lists the annotations on one page.
   PdfTask<List<PdfAnnotationInfo>> annotations(int page);

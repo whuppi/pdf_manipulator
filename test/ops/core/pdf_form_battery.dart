@@ -21,6 +21,8 @@ import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
 import '../../fixtures/generated/fixtures.dart';
+import '../../harness/extract_text.dart';
+import '../../harness/form_fields.dart';
 import '../../harness/render_pages.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
@@ -38,7 +40,7 @@ void registerFormTests(Pdf Function() createPdf) {
     test('formFields exposes names and the text field default value', () async {
       final pdf = createPdf();
       final doc = await pdf.open(src(fFormFields));
-      final fields = await doc.formFields;
+      final fields = await doc.formFields();
       expect(
         fields.map((f) => f.name).toSet(),
         fFormFieldsTruth.fieldNames.toSet(),
@@ -56,7 +58,7 @@ void registerFormTests(Pdf Function() createPdf) {
       () async {
         final pdf = createPdf();
         final doc = await pdf.open(src(fFormFieldsProps));
-        final city = await doc.formField('city');
+        final city = await formFieldNamed(doc, 'city');
         expect(city, isNotNull);
         expect(city!.maxLength, fFormFieldsPropsTruth.cityMaxLength);
         expect(city.tooltip, fFormFieldsPropsTruth.cityTooltip);
@@ -68,7 +70,7 @@ void registerFormTests(Pdf Function() createPdf) {
     test('a checkbox field is typed checkbox', () async {
       final pdf = createPdf();
       final doc = await pdf.open(src(fFormFieldsProps));
-      final ok = await doc.formField('ok');
+      final ok = await formFieldNamed(doc, 'ok');
       expect(ok, isNotNull);
       expect(ok!.type, PdfFormFieldType.checkbox);
       await doc.dispose();
@@ -77,7 +79,7 @@ void registerFormTests(Pdf Function() createPdf) {
     test('formField returns null for a name that does not exist', () async {
       final pdf = createPdf();
       final doc = await pdf.open(src(fFormFieldsProps));
-      expect(await doc.formField('nope'), isNull);
+      expect(await formFieldNamed(doc, 'nope'), isNull);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -91,7 +93,7 @@ void registerFormTests(Pdf Function() createPdf) {
       await editor.save(sink);
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      final city = await doc.formField('city');
+      final city = await formFieldNamed(doc, 'city');
       expect(city!.tooltip, 'Updated tooltip');
       await doc.dispose();
     }, timeout: t(1));
@@ -105,7 +107,7 @@ void registerFormTests(Pdf Function() createPdf) {
       await editor.save(sink);
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      final city = await doc.formField('city');
+      final city = await formFieldNamed(doc, 'city');
       expect(city!.bounds!.x, closeTo(bounds.x, 0.01));
       expect(city.bounds!.y, closeTo(bounds.y, 0.01));
       expect(city.bounds!.width, closeTo(bounds.width, 0.01));
@@ -121,7 +123,7 @@ void registerFormTests(Pdf Function() createPdf) {
       await editor.save(sink);
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      final city = await doc.formField('city');
+      final city = await formFieldNamed(doc, 'city');
       expect(
         city!.maxLength,
         5,
@@ -138,7 +140,7 @@ void registerFormTests(Pdf Function() createPdf) {
       await editor.save(sink);
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      final city = await doc.formField('city');
+      final city = await formFieldNamed(doc, 'city');
       expect(city!.alignment, PdfAlignment.center);
       await doc.dispose();
     }, timeout: t(1));
@@ -154,7 +156,7 @@ void registerFormTests(Pdf Function() createPdf) {
         await editor.save(sink);
         await editor.dispose();
         final doc = await pdf.open(src(sink.takeBytes()));
-        final city = await doc.formField('city');
+        final city = await formFieldNamed(doc, 'city');
         expect(city!.readOnly, isTrue);
         expect(city.required, isTrue);
         await doc.dispose();
@@ -173,7 +175,7 @@ void registerFormTests(Pdf Function() createPdf) {
       await editor.save(sink);
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      final city = await doc.formField('city');
+      final city = await formFieldNamed(doc, 'city');
       expect(city!.readOnly, isTrue);
       expect(city.required, isTrue);
       await doc.dispose();
@@ -192,7 +194,7 @@ void registerFormTests(Pdf Function() createPdf) {
 
         final check = await pdf.open(src(saved));
         expect(
-          await check.formField('notes'),
+          await formFieldNamed(check, 'notes'),
           isNotNull,
           reason: 'a raw flag bit must not drop the field from the list',
         );
@@ -219,12 +221,12 @@ void registerFormTests(Pdf Function() createPdf) {
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(
-        await doc.formField('city'),
+        await formFieldNamed(doc, 'city'),
         isNull,
         reason: 'a removed field must not be listed',
       );
-      expect(await doc.formField('ok'), isNotNull);
-      expect(await doc.formField('notes'), isNotNull);
+      expect(await formFieldNamed(doc, 'ok'), isNotNull);
+      expect(await formFieldNamed(doc, 'notes'), isNotNull);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -254,7 +256,7 @@ void registerFormTests(Pdf Function() createPdf) {
       final flattened = sink.takeBytes();
 
       final doc = await pdf.open(src(flattened));
-      final text = await doc.extract(pages: const PdfPages.all());
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(text, contains('Styled'));
       await doc.dispose();
 

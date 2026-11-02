@@ -19,6 +19,7 @@ import '../../fixtures/handwritten.dart';
 import '../../fixtures/third_party/tp_encrypted.dart';
 import '../../fixtures/third_party/tp_encrypted_legacy.dart';
 import '../../harness/extract_images.dart';
+import '../../harness/extract_text.dart';
 import '../../harness/render_pages.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
@@ -41,22 +42,24 @@ void registerDocTests(Pdf Function() createPdf) {
 
     test('A4 dimensions are 595×842', () async {
       final doc = await createPdf().open(src(minimalPdf));
-      expect(doc.pages, hasLength(1));
-      expect(doc.pages[0].width, closeTo(595, 1));
-      expect(doc.pages[0].height, closeTo(842, 1));
+      final pages = await doc.pageInfo();
+      expect(pages, hasLength(1));
+      expect(pages[0].width, closeTo(595, 1));
+      expect(pages[0].height, closeTo(842, 1));
       await doc.dispose();
     }, timeout: t(1));
 
     test('Letter dimensions are 612×792', () async {
       final doc = await createPdf().open(src(letterPdf));
-      expect(doc.pages[0].width, closeTo(612, 1));
-      expect(doc.pages[0].height, closeTo(792, 1));
+      final pages = await doc.pageInfo();
+      expect(pages[0].width, closeTo(612, 1));
+      expect(pages[0].height, closeTo(792, 1));
       await doc.dispose();
     }, timeout: t(1));
 
     test('isEncrypted false for unencrypted PDF', () async {
       final doc = await createPdf().open(src(minimalPdf));
-      expect(doc.isEncrypted, isFalse);
+      expect(doc.encryption, isNull);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -80,7 +83,7 @@ void registerDocTests(Pdf Function() createPdf) {
       final encBytes = encSink.takeBytes();
 
       final doc = await pdf.open(src(encBytes), password: 'testpw');
-      expect(doc.isEncrypted, isTrue);
+      expect(doc.encryption, isNotNull);
       expect(doc.pageCount, 1);
       await doc.dispose();
     }, timeout: t(1));
@@ -108,7 +111,7 @@ void registerDocTests(Pdf Function() createPdf) {
         ),
       );
       final doc = await pdf.open(src(encSink.takeBytes()), password: 'user-pw');
-      final read = doc.permissions!;
+      final read = doc.encryption!.permissions;
       await doc.dispose();
       expect(read.print, isTrue);
       expect(read.printHq, isFalse);
@@ -178,16 +181,39 @@ void registerDocTests(Pdf Function() createPdf) {
         encryption: const PdfEncryption.config(ownerPassword: 'testpw'),
       );
       final doc = await pdf.open(src(encSink.takeBytes()));
-      expect(doc.isEncrypted, isTrue);
+      expect(doc.encryption, isNotNull);
       expect(doc.pageCount, 1);
       await doc.dispose();
     }, timeout: t(1));
 
     // ── Extract text ──────────────────────────────────────────────
 
+    test(
+      'extractText writes to the caller\'s sink and never closes it',
+      () async {
+        // The sink is the caller's: the library writes to it and leaves it
+        // open, so the caller can write more or close it itself.
+        final doc = await createPdf().open(src(fTwoPageMarkers));
+        final sink = _KeepsBytes();
+        await doc.extractText(sink);
+        expect(sink.closes, 0, reason: 'the library never closes the sink');
+        expect(sink.bytes, greaterThan(0));
+        expect(
+          utf8.decode(sink.written),
+          contains(fTwoPageMarkersTruth.page0Marker),
+          reason: 'the text reaches the sink as UTF-8',
+        );
+        await doc.dispose();
+      },
+      timeout: t(1),
+    );
+
     test('extract from blank page returns empty', () async {
       final doc = await createPdf().open(src(minimalPdf));
-      final text = await doc.extract(pages: const PdfPages.single(0));
+      final text = await extractTextToString(
+        doc,
+        pages: const PdfPages.single(0),
+      );
       expect(text.trim(), isEmpty);
       await doc.dispose();
     }, timeout: t(1));
@@ -198,9 +224,10 @@ void registerDocTests(Pdf Function() createPdf) {
       // resources). Emptiness must hold for both producers.
       final doc = await createPdf().open(src(fBlankA4));
       expect(doc.pageCount, fBlankA4Truth.pages);
-      expect(doc.pages[0].width, closeTo(fBlankA4Truth.width, 1));
-      expect(doc.pages[0].height, closeTo(fBlankA4Truth.height, 1));
-      final text = await doc.extract(pages: const PdfPages.all());
+      final pages = await doc.pageInfo();
+      expect(pages[0].width, closeTo(fBlankA4Truth.width, 1));
+      expect(pages[0].height, closeTo(fBlankA4Truth.height, 1));
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(
         text.trim(),
         isEmpty,
@@ -214,7 +241,7 @@ void registerDocTests(Pdf Function() createPdf) {
     test('extract all pages returns text from both pages', () async {
       final bytes = fTwoPageMarkers;
       final doc = await createPdf().open(src(bytes));
-      final text = await doc.extract(pages: const PdfPages.all());
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(text, contains(fTwoPageMarkersTruth.page0Marker));
       expect(text, contains(fTwoPageMarkersTruth.page1Marker));
       await doc.dispose();
@@ -231,13 +258,18 @@ void registerDocTests(Pdf Function() createPdf) {
         'extract all ${format.name} equals the pages joined by the glue',
         () async {
           final doc = await createPdf().open(src(dashTextThreePagePdf));
-          final all = await doc.extract(
+          final all = await extractTextToString(
+            doc,
             pages: const PdfPages.all(),
             format: format,
           );
           final pages = [
             for (var i = 0; i < 3; i++)
-              await doc.extract(pages: PdfPages.single(i), format: format),
+              await extractTextToString(
+                doc,
+                pages: PdfPages.single(i),
+                format: format,
+              ),
           ];
           expect(all, pages.join(glue));
           expect(pages[0], contains('FIRSTPAGE'));
@@ -251,7 +283,8 @@ void registerDocTests(Pdf Function() createPdf) {
 
     test('extract all markdown holds exactly two page separators', () async {
       final doc = await createPdf().open(src(dashTextThreePagePdf));
-      final md = await doc.extract(
+      final md = await extractTextToString(
+        doc,
         pages: const PdfPages.all(),
         format: PdfExtractionFormat.markdown,
       );
@@ -262,8 +295,14 @@ void registerDocTests(Pdf Function() createPdf) {
     test('extract single page returns only that page text', () async {
       final bytes = fTwoPageMarkers;
       final doc = await createPdf().open(src(bytes));
-      final page0 = await doc.extract(pages: const PdfPages.single(0));
-      final page1 = await doc.extract(pages: const PdfPages.single(1));
+      final page0 = await extractTextToString(
+        doc,
+        pages: const PdfPages.single(0),
+      );
+      final page1 = await extractTextToString(
+        doc,
+        pages: const PdfPages.single(1),
+      );
       expect(page0, contains(fTwoPageMarkersTruth.page0Marker));
       expect(page0, isNot(contains(fTwoPageMarkersTruth.page1Marker)));
       expect(page1, contains(fTwoPageMarkersTruth.page1Marker));
@@ -274,7 +313,10 @@ void registerDocTests(Pdf Function() createPdf) {
     test('extract range returns subset', () async {
       final bytes = fTwoPageMarkers;
       final doc = await createPdf().open(src(bytes));
-      final range = await doc.extract(pages: const PdfPages.range(0, 1));
+      final range = await extractTextToString(
+        doc,
+        pages: const PdfPages.range(0, 1),
+      );
       expect(range, contains(fTwoPageMarkersTruth.page0Marker));
       expect(range, isNot(contains(fTwoPageMarkersTruth.page1Marker)));
       await doc.dispose();
@@ -283,7 +325,8 @@ void registerDocTests(Pdf Function() createPdf) {
     test('extract markdown format returns content', () async {
       final bytes = fFormFields;
       final doc = await createPdf().open(src(bytes));
-      final md = await doc.extract(
+      final md = await extractTextToString(
+        doc,
         pages: const PdfPages.all(),
         format: PdfExtractionFormat.markdown,
       );
@@ -294,7 +337,8 @@ void registerDocTests(Pdf Function() createPdf) {
     test('extract HTML format returns content', () async {
       final bytes = fFormFields;
       final doc = await createPdf().open(src(bytes));
-      final html = await doc.extract(
+      final html = await extractTextToString(
+        doc,
         pages: const PdfPages.single(0),
         format: PdfExtractionFormat.html,
       );
@@ -308,7 +352,7 @@ void registerDocTests(Pdf Function() createPdf) {
       final bytes = fFormFields;
       final doc = await createPdf().open(src(bytes));
       final results = await doc.search(
-        query: 'Application',
+        'Application',
         pages: const PdfPages.all(),
       );
       expect(results, isNotEmpty);
@@ -323,7 +367,7 @@ void registerDocTests(Pdf Function() createPdf) {
     test('search for nonexistent term returns empty', () async {
       final doc = await createPdf().open(src(minimalPdf));
       final results = await doc.search(
-        query: 'xyznonexistent',
+        'xyznonexistent',
         pages: const PdfPages.all(),
       );
       expect(results, isEmpty);
@@ -335,16 +379,13 @@ void registerDocTests(Pdf Function() createPdf) {
     test('search respects page scope', () async {
       final bytes = fTwoPageMarkers;
       final doc = await createPdf().open(src(bytes));
-      final allHits = await doc.search(
-        query: 'ALPHA',
-        pages: const PdfPages.all(),
-      );
+      final allHits = await doc.search('ALPHA', pages: const PdfPages.all());
       final page0Hits = await doc.search(
-        query: 'ALPHA',
+        'ALPHA',
         pages: const PdfPages.single(0),
       );
       final page1Hits = await doc.search(
-        query: 'ALPHA',
+        'ALPHA',
         pages: const PdfPages.single(1),
       );
 
@@ -521,9 +562,10 @@ void registerDocTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
-    test('validatePdfUa on minimal returns false', () async {
+    test('validatePdfUa on minimal returns non-compliant', () async {
       final doc = await createPdf().open(src(minimalPdf));
-      expect(await doc.validatePdfUa(), isFalse);
+      final result = await doc.validatePdfUa();
+      expect(result.compliant, isFalse);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -532,27 +574,25 @@ void registerDocTests(Pdf Function() createPdf) {
       final a = await doc.validatePdfA();
       expect(a.compliant, isFalse);
       expect(a.errors, greaterThan(0), reason: 'a real error count, not -1');
-      expect(await doc.validatePdfUa(), isFalse);
+      expect((await doc.validatePdfUa()).compliant, isFalse);
       await doc.dispose();
     }, timeout: t(1));
 
     // ── Classify ──────────────────────────────────────────────────
 
-    test('classifyPage returns type and confidence in range', () async {
+    test('classifyPages names what every page holds', () async {
       final doc = await createPdf().open(src(minimalPdf));
-      final result = await doc.classifyPage(0);
-      expect(result.type, isNotEmpty);
-      expect(result.confidence, greaterThanOrEqualTo(0.0));
-      expect(result.confidence, lessThanOrEqualTo(1.0));
+      final result = await doc.classifyPages();
+      expect(result, hasLength(1));
+      expect(result.first.page, 0);
+      expect(result.first.type, PdfPageType.empty);
       await doc.dispose();
     }, timeout: t(1));
 
-    test('classifyDocument returns type and confidence in range', () async {
+    test('classifyDocument names what the document holds', () async {
       final doc = await createPdf().open(src(minimalPdf));
       final result = await doc.classifyDocument();
-      expect(result.type, isNotEmpty);
-      expect(result.confidence, greaterThanOrEqualTo(0.0));
-      expect(result.confidence, lessThanOrEqualTo(1.0));
+      expect(result, isA<PdfDocumentType>());
       await doc.dispose();
     }, timeout: t(1));
 
@@ -560,7 +600,7 @@ void registerDocTests(Pdf Function() createPdf) {
 
     test('signatures empty for unsigned PDF', () async {
       final doc = await createPdf().open(src(minimalPdf));
-      expect(await doc.signatures, isEmpty);
+      expect(await doc.signatures(), isEmpty);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -572,25 +612,25 @@ void registerDocTests(Pdf Function() createPdf) {
 
     // ── Bookmarks ─────────────────────────────────────────────────
 
-    test('planSplitByBookmarks reads a handwritten outline', () async {
+    test('bookmarkRanges reads a handwritten outline', () async {
       final doc = await createPdf().open(src(bookmarkedPdf));
-      final splits = await doc.planSplitByBookmarks();
+      final splits = await doc.bookmarkRanges();
       expect(splits.length, 2);
       expect(splits[0].title, contains('Chapter 1'));
       expect(splits[1].title, contains('Chapter 2'));
-      expect(splits[0].startPage, greaterThanOrEqualTo(0));
+      expect(splits[0].start, greaterThanOrEqualTo(0));
       await doc.dispose();
     }, timeout: t(1));
 
-    test('planSplitByBookmarks reads a foreign outline tree', () async {
+    test('bookmarkRanges reads a foreign outline tree', () async {
       // Same op, different producer — dart-pdf builds its outline
       // through anchors + a real /Outlines tree.
       final doc = await createPdf().open(src(fOutlineChapters));
-      final splits = await doc.planSplitByBookmarks();
+      final splits = await doc.bookmarkRanges();
       expect(splits, hasLength(fOutlineChaptersTruth.chapters.length));
       for (var i = 0; i < splits.length; i++) {
         expect(splits[i].title, fOutlineChaptersTruth.chapters[i]);
-        expect(splits[i].startPage, fOutlineChaptersTruth.startPages[i]);
+        expect(splits[i].start, fOutlineChaptersTruth.startPages[i]);
       }
       await doc.dispose();
     }, timeout: t(1));
@@ -605,9 +645,12 @@ void registerDocTests(Pdf Function() createPdf) {
           src(tpEncrypted),
           password: tpEncryptedTruth.userPassword,
         );
-        expect(doc.isEncrypted, isTrue);
+        expect(doc.encryption, isNotNull);
         expect(doc.pageCount, tpEncryptedTruth.pages);
-        final text = await doc.extract(pages: const PdfPages.all());
+        final text = await extractTextToString(
+          doc,
+          pages: const PdfPages.all(),
+        );
         expect(text, contains(tpEncryptedTruth.marker));
         await doc.dispose();
 
@@ -627,9 +670,12 @@ void registerDocTests(Pdf Function() createPdf) {
       test('legacy-encrypted fixture (qpdf): ${legacy.name} opens without a '
           'password', () async {
         final doc = await createPdf().open(src(legacy.bytes));
-        expect(doc.isEncrypted, isTrue);
+        expect(doc.encryption, isNotNull);
         expect(doc.pageCount, tpEncryptedLegacyTruth.pages);
-        final text = await doc.extract(pages: const PdfPages.all());
+        final text = await extractTextToString(
+          doc,
+          pages: const PdfPages.all(),
+        );
         expect(text, contains(tpEncryptedLegacyTruth.marker));
         await doc.dispose();
       }, timeout: t(1));
@@ -637,7 +683,7 @@ void registerDocTests(Pdf Function() createPdf) {
 
     test('unicode text survives extraction intact', () async {
       final doc = await createPdf().open(src(fUnicode));
-      final text = await doc.extract(pages: const PdfPages.all());
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(
         text,
         contains(fUnicodeTruth.marker),
@@ -652,7 +698,7 @@ void registerDocTests(Pdf Function() createPdf) {
 
     test('xfa reports the packet\'s field count and types', () async {
       final doc = await createPdf().open(src(xfaFormPdf));
-      final xfa = await doc.xfa;
+      final xfa = await doc.xfa();
       await doc.dispose();
       expect(xfa, isNotNull);
       expect(xfa!.fieldCount, 2);
@@ -662,7 +708,7 @@ void registerDocTests(Pdf Function() createPdf) {
 
     test('xfa is null on a document with no XFA', () async {
       final doc = await createPdf().open(src(minimalPdf));
-      expect(await doc.xfa, isNull);
+      expect(await doc.xfa(), isNull);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -670,7 +716,7 @@ void registerDocTests(Pdf Function() createPdf) {
 
     test('attachments lists the embedded file with its metadata', () async {
       final doc = await createPdf().open(src(attachmentPdf));
-      final files = await doc.attachments;
+      final files = await doc.attachments();
       await doc.dispose();
       expect(files, hasLength(1));
       expect(files.single.name, 'notes.txt');
@@ -681,7 +727,7 @@ void registerDocTests(Pdf Function() createPdf) {
 
     test('attachments is empty on a document with no embedded files', () async {
       final doc = await createPdf().open(src(minimalPdf));
-      expect(await doc.attachments, isEmpty);
+      expect(await doc.attachments(), isEmpty);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -709,10 +755,13 @@ void registerDocTests(Pdf Function() createPdf) {
     // Page 1 of a one-page document: every PdfDoc method that takes a
     // page answers PdfPageRangeError, never the engine's own error.
     final docPageOps = <String, Future<Object?> Function(PdfDoc doc)>{
-      'extract': (d) => d.extract(pages: const PdfPages.single(1)),
-      'extract list': (d) => d.extract(pages: const PdfPages.list([0, 1])),
-      'search': (d) => d.search(query: 'x', pages: const PdfPages.single(1)),
-      'classifyPage': (d) => d.classifyPage(1),
+      'extractText': (d) =>
+          extractTextToString(d, pages: const PdfPages.single(1)),
+      'extractText list': (d) =>
+          extractTextToString(d, pages: const PdfPages.list([0, 1])),
+      'search': (d) => d.search('x', pages: const PdfPages.single(1)),
+      'classifyPages': (d) => d.classifyPages(pages: const PdfPages.single(1)),
+      'pageInfo': (d) => d.pageInfo(pages: const PdfPages.single(1)),
       'annotations': (d) => d.annotations(1),
       'render': (d) => renderToMemory(d, pages: const PdfPages.single(1)),
       'render list': (d) => renderToMemory(d, pages: const PdfPages.list([1])),
@@ -806,7 +855,7 @@ void registerDocTests(Pdf Function() createPdf) {
       'formFields resolve /FT, /Ff and /V inherited from ancestors',
       () async {
         final doc = await createPdf().open(src(inheritedFieldAttrsForm));
-        final fields = {for (final f in await doc.formFields) f.name: f};
+        final fields = {for (final f in await doc.formFields()) f.name: f};
         await doc.dispose();
         // Neither the nameless grandparent (it carries /FT) nor the two
         // widgets without /T is a field of its own.
@@ -825,7 +874,7 @@ void registerDocTests(Pdf Function() createPdf) {
 
     test('formFields ends a /Kids cycle and lists each field once', () async {
       final doc = await createPdf().open(src(kidsCycleForm));
-      final names = [for (final f in await doc.formFields) f.name];
+      final names = [for (final f in await doc.formFields()) f.name];
       await doc.dispose();
       expect(names, unorderedEquals(['a', 'a.b']));
     }, timeout: t(1));
@@ -850,9 +899,10 @@ void registerDocTests(Pdf Function() createPdf) {
     test('pre-rotated pages report their foreign-set rotation', () async {
       final doc = await createPdf().open(src(fRotated));
       expect(doc.pageCount, fRotatedTruth.pages);
+      final pages = await doc.pageInfo();
       for (var i = 0; i < fRotatedTruth.pages; i++) {
         expect(
-          doc.pages[i].rotation.wire,
+          pages[i].rotation.wire,
           'r${fRotatedTruth.rotations[i]}',
           reason: 'page $i carries /Rotate from the producer',
         );
@@ -879,7 +929,7 @@ void registerDocTests(Pdf Function() createPdf) {
       );
       final doc = await pdf.open(src(signed));
       expect(await doc.verifySignatures(), isTrue);
-      final sigs = await doc.signatures;
+      final sigs = await doc.signatures();
       expect(sigs, hasLength(1));
       expect(sigs.single.isValid, isTrue);
       expect(sigs.single.coversWholeDocument, isTrue);
@@ -907,7 +957,7 @@ void registerDocTests(Pdf Function() createPdf) {
       tampered[at + 7] = 0x35; // '4' -> '5'
       final doc = await pdf.open(src(tampered));
       expect(await doc.verifySignatures(), isFalse);
-      expect((await doc.signatures).single.isValid, isFalse);
+      expect((await doc.signatures()).single.isValid, isFalse);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -915,7 +965,7 @@ void registerDocTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final doc = await pdf.open(src(minimalPdf));
       expect(await doc.verifySignatures(), isFalse);
-      expect(await doc.signatures, isEmpty);
+      expect(await doc.signatures(), isEmpty);
       await doc.dispose();
     }, timeout: t(1));
 
@@ -935,7 +985,7 @@ void registerDocTests(Pdf Function() createPdf) {
 
         final doc = await pdf.open(src(sink.takeBytes()));
         expect(await doc.verifySignatures(), isTrue);
-        expect((await doc.signatures).single.coversWholeDocument, isFalse);
+        expect((await doc.signatures()).single.coversWholeDocument, isFalse);
         await doc.dispose();
       },
       timeout: t(1),
@@ -994,6 +1044,20 @@ class _ClosesCounted implements DataSink {
   Future<void> write(Uint8List chunk) async {
     bytes += chunk.length;
   }
+}
+
+/// A sink that keeps what it was given and counts its closes.
+class _KeepsBytes extends _ClosesCounted {
+  final _written = BytesBuilder(copy: false);
+
+  @override
+  Future<void> write(Uint8List chunk) async {
+    await super.write(chunk);
+    _written.add(chunk);
+  }
+
+  /// The bytes written so far.
+  Uint8List get written => _written.toBytes();
 }
 
 /// A sink whose first write fails.

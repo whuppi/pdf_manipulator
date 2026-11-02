@@ -16,6 +16,7 @@ import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:meta/meta.dart';
 import 'package:pdf_manipulator/src/bridge/create_bridge.dart';
 import 'package:pdf_manipulator/src/bridge/pdf_bridge.dart';
 import 'package:pdf_manipulator/src/bridge/protocol/codec.dart' as codec;
@@ -170,19 +171,9 @@ class Pdf {
           handle,
           pageCount: map['pageCount'] as int? ?? 0,
           version: map['version'] as String? ?? '1.0',
-          pages: codec.decodePageList(map),
-          title: map['title'] as String?,
-          author: map['author'] as String?,
-          subject: map['subject'] as String?,
-          keywords: map['keywords'] as String?,
-          producer: map['producer'] as String?,
-          creator: map['creator'] as String?,
-          creationDate: codec.decodeDate(map['creationDate']),
-          isEncrypted: map['isEncrypted'] as bool? ?? false,
-          requiresPassword: map['requiresPassword'] as bool? ?? false,
           isTagged: map['isTagged'] as bool? ?? false,
-          encryptionAlgorithm: codec.decodeEncryptionAlgorithmFromMap(map),
-          permissions: codec.decodePermissionsFromMap(map),
+          metadata: codec.decodeMetadata(map),
+          encryption: codec.decodeEncryptionInfo(map),
         );
       } catch (e) {
         await handle.dispose();
@@ -301,8 +292,7 @@ class Pdf {
   /// [PdfInvalidArgument]; use [read] for several reads.
   ///
   /// ```dart
-  /// final hits = await pdf.reads(source)
-  ///     .search(query: 'invoice', pages: const PdfPages.all());
+  /// final hits = await pdf.reads(source).search('invoice');
   /// ```
   PdfReads reads(DataSource source, {String? password}) {
     _check();
@@ -317,17 +307,8 @@ class Pdf {
       pageCount: doc.pageCount,
       version: doc.version,
       isTagged: doc.isTagged,
-      title: doc.title,
-      author: doc.author,
-      subject: doc.subject,
-      keywords: doc.keywords,
-      producer: doc.producer,
-      creator: doc.creator,
-      creationDate: doc.creationDate,
-      isEncrypted: doc.isEncrypted,
-      requiresPassword: doc.requiresPassword,
-      encryptionAlgorithm: doc.encryptionAlgorithm,
-      permissions: doc.permissions,
+      metadata: doc.metadata,
+      encryption: doc.encryption,
     ),
     password: password,
   );

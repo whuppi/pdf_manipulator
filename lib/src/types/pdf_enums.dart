@@ -185,6 +185,49 @@ enum PdfRotation implements PdfWire {
   final String wire;
 }
 
+/// What a page holds, as the engine classifies it.
+enum PdfPageType implements PdfWire {
+  /// Usable native text dominates.
+  textLayer('TextLayer'),
+
+  /// The page is image-dominated, with no or garbled text.
+  scanned('Scanned'),
+
+  /// Native text and image regions that hold text.
+  imageText('ImageText'),
+
+  /// The page mixes text with an image table or figure.
+  mixed('Mixed'),
+
+  /// The page is blank or near-empty.
+  empty('Empty');
+
+  const PdfPageType(this.wire);
+
+  @override
+  final String wire;
+}
+
+/// What a document holds, as the engine summarises its pages.
+enum PdfDocumentType implements PdfWire {
+  /// The document is predominantly born-digital text.
+  mostlyText('MostlyText'),
+
+  /// The document is predominantly scanned pages.
+  mostlyScanned('MostlyScanned'),
+
+  /// The document mixes text and scanned pages.
+  mixed('Mixed'),
+
+  /// The document has no meaningful content.
+  empty('Empty');
+
+  const PdfDocumentType(this.wire);
+
+  @override
+  final String wire;
+}
+
 /// A PDF/A conformance level. The engine validates and converts to the
 /// level's basic (`b`) conformance.
 enum PdfALevel implements PdfWire {

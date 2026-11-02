@@ -147,7 +147,7 @@ extension PdfSugar on Pdf {
     final splits = await hook.guard(
       _own(
         open(source, password: password),
-        (doc, planHook) => planHook.guard(doc.planSplitByBookmarks()),
+        (doc, planHook) => planHook.guard(doc.bookmarkRanges()),
       ),
     );
 
@@ -160,8 +160,8 @@ extension PdfSugar on Pdf {
             source,
             sink,
             pages: List.generate(
-              split.endPage - split.startPage,
-              (j) => split.startPage + j,
+              split.end - split.start,
+              (j) => split.start + j,
             ),
             password: password,
           ),

@@ -12,6 +12,7 @@ import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
 import '../../fixtures/handwritten.dart';
+import '../../harness/extract_text.dart';
 import '../../harness/render_pages.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
@@ -31,7 +32,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(output));
       expect(doc.pageCount, 1);
       expect(
-        await doc.extract(pages: const PdfPages.all()),
+        await extractTextToString(doc, pages: const PdfPages.all()),
         contains('Hello World'),
         reason: 'built text must survive a real read round trip',
       );
@@ -99,10 +100,16 @@ void registerBuilderTests(Pdf Function() createPdf) {
         reason: 'the default save must Flate-compress its streams',
       );
       final zippedDoc = await pdf.open(src(zipped));
-      final zippedText = await zippedDoc.extract(pages: const PdfPages.all());
+      final zippedText = await extractTextToString(
+        zippedDoc,
+        pages: const PdfPages.all(),
+      );
       await zippedDoc.dispose();
       final plainDoc = await pdf.open(src(plain));
-      final plainText = await plainDoc.extract(pages: const PdfPages.all());
+      final plainText = await extractTextToString(
+        plainDoc,
+        pages: const PdfPages.all(),
+      );
       await plainDoc.dispose();
       expect(
         zippedText,
@@ -139,8 +146,9 @@ void registerBuilderTests(Pdf Function() createPdf) {
       );
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 2);
-      expect(doc.pages[0].width, closeTo(200, 2));
-      expect(doc.pages[0].height, closeTo(300, 2));
+      final pages = await doc.pageInfo();
+      expect(pages[0].width, closeTo(200, 2));
+      expect(pages[0].height, closeTo(300, 2));
       await doc.dispose();
     }, timeout: t(1));
 
@@ -155,12 +163,13 @@ void registerBuilderTests(Pdf Function() createPdf) {
         await builder.dispose();
         final doc = await pdf.open(src(sink.takeBytes()));
         expect(doc.pageCount, 1);
+        final pages = await doc.pageInfo();
         expect(
-          doc.pages[0].width,
+          pages[0].width,
           closeTo(2, 2),
           reason: 'one point per pixel of the 2x2 image',
         );
-        expect(doc.pages[0].height, closeTo(2, 2));
+        expect(pages[0].height, closeTo(2, 2));
         await doc.dispose();
       },
       timeout: t(1),
@@ -181,8 +190,9 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.save(sink);
       await builder.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      expect(doc.pages[0].width, closeTo(200, 2));
-      expect(doc.pages[0].height, closeTo(300, 2));
+      final pages = await doc.pageInfo();
+      expect(pages[0].width, closeTo(200, 2));
+      expect(pages[0].height, closeTo(300, 2));
       await doc.dispose();
     }, timeout: t(1));
 
@@ -213,8 +223,9 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 1);
-      expect(doc.pages[0].width, closeTo(595, 2));
-      expect(doc.pages[0].height, closeTo(842, 2));
+      final pages = await doc.pageInfo();
+      expect(pages[0].width, closeTo(595, 2));
+      expect(pages[0].height, closeTo(842, 2));
       await doc.dispose();
     }, timeout: t(1));
 
@@ -229,8 +240,9 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 1);
-      expect(doc.pages[0].width, closeTo(612, 2));
-      expect(doc.pages[0].height, closeTo(792, 2));
+      final pages = await doc.pageInfo();
+      expect(pages[0].width, closeTo(612, 2));
+      expect(pages[0].height, closeTo(792, 2));
       await doc.dispose();
     }, timeout: t(1));
 
@@ -244,8 +256,9 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.save(sink);
       await builder.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      expect(doc.pages[0].width, closeTo(400, 2));
-      expect(doc.pages[0].height, closeTo(300, 2));
+      final pages = await doc.pageInfo();
+      expect(pages[0].width, closeTo(400, 2));
+      expect(pages[0].height, closeTo(300, 2));
       await doc.dispose();
     }, timeout: t(1));
 
@@ -264,7 +277,10 @@ void registerBuilderTests(Pdf Function() createPdf) {
         await builder.save(sink);
         await builder.dispose();
         final doc = await pdf.open(src(sink.takeBytes()));
-        final text = await doc.extract(pages: const PdfPages.all());
+        final text = await extractTextToString(
+          doc,
+          pages: const PdfPages.all(),
+        );
         expect(text, contains('Test Heading'));
         expect(text, contains('Test paragraph'));
         await doc.dispose();
@@ -305,7 +321,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await e.dispose();
       final doc = await pdf.open(src(flatSink.takeBytes()));
       expect(
-        await doc.extract(pages: const PdfPages.all()),
+        await extractTextToString(doc, pages: const PdfPages.all()),
         contains('BUILDERMARK'),
         reason:
             'a flattened watermark appearance is provably on the '
@@ -353,7 +369,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(
-        await doc.extract(pages: const PdfPages.all()),
+        await extractTextToString(doc, pages: const PdfPages.all()),
         contains('after the failed image'),
       );
       await doc.dispose();
@@ -450,7 +466,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.dispose();
       final built = sink.takeBytes();
       final doc = await pdf.open(src(built));
-      final fields = {for (final f in await doc.formFields) f.name: f};
+      final fields = {for (final f in await doc.formFields()) f.name: f};
       expect(fields.keys, containsAll(['size', 'colour']));
       expect(fields['size']!.type, PdfFormFieldType.radioGroup);
       expect(fields['colour']!.type, PdfFormFieldType.radioGroup);
@@ -469,7 +485,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await editor.save(resaved);
       await editor.dispose();
       final reopened = await pdf.open(src(resaved.takeBytes()));
-      final after = {for (final f in await reopened.formFields) f.name: f};
+      final after = {for (final f in await reopened.formFields()) f.name: f};
       expect(
         after['size']!.value,
         isA<PdfChoiceValue>().having((v) => v.choice, 'choice', 'small'),
@@ -505,7 +521,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
         await builder.save(sink);
         await builder.dispose();
         final doc = await pdf.open(src(sink.takeBytes()));
-        final fields = {for (final f in await doc.formFields) f.name: f};
+        final fields = {for (final f in await doc.formFields()) f.name: f};
         expect(
           fields['picksNo']!.value,
           isA<PdfChoiceValue>().having((v) => v.choice, 'choice', 'No'),
@@ -561,7 +577,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(
-        await doc.extract(pages: const PdfPages.all()),
+        await extractTextToString(doc, pages: const PdfPages.all()),
         contains('Footnote content'),
       );
       await doc.dispose();
@@ -578,7 +594,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(
-        await doc.extract(pages: const PdfPages.all()),
+        await extractTextToString(doc, pages: const PdfPages.all()),
         contains('Column text'),
       );
       await doc.dispose();
@@ -612,8 +628,14 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 2);
-      final first = await doc.extract(pages: const PdfPages.single(0));
-      final second = await doc.extract(pages: const PdfPages.single(1));
+      final first = await extractTextToString(
+        doc,
+        pages: const PdfPages.single(0),
+      );
+      final second = await extractTextToString(
+        doc,
+        pages: const PdfPages.single(1),
+      );
       expect(first, contains('First'));
       expect(first, isNot(contains('Second')));
       expect(second, contains('Second'));
@@ -639,7 +661,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
         await builder.dispose();
         final doc = await pdf.open(src(sink.takeBytes()));
         expect(doc.pageCount, 2);
-        for (final page in doc.pages) {
+        for (final page in await doc.pageInfo()) {
           expect(page.width, closeTo(300, 2));
           expect(page.height, closeTo(400, 2));
         }
@@ -660,7 +682,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await builder.save(sink);
       await builder.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      final text = await doc.extract(pages: const PdfPages.all());
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(text, contains('Before'));
       expect(text, contains('After'));
       await doc.dispose();
@@ -989,7 +1011,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       });
       final doc = await openOf(pdf, bytes);
       expect(
-        await doc.extract(pages: const PdfPages.all()),
+        await extractTextToString(doc, pages: const PdfPages.all()),
         contains('Hello Inline'),
       );
       await doc.dispose();
@@ -1003,7 +1025,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       });
       final doc = await openOf(pdf, bytes);
       expect(
-        await doc.extract(pages: const PdfPages.all()),
+        await extractTextToString(doc, pages: const PdfPages.all()),
         contains('Hello Bold'),
       );
       await doc.dispose();
@@ -1020,7 +1042,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       });
       final doc = await openOf(pdf, bytes);
       expect(
-        await doc.extract(pages: const PdfPages.all()),
+        await extractTextToString(doc, pages: const PdfPages.all()),
         contains('Hello Italic'),
       );
       await doc.dispose();
@@ -1037,7 +1059,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       });
       final doc = await openOf(pdf, bytes);
       expect(
-        await doc.extract(pages: const PdfPages.all()),
+        await extractTextToString(doc, pages: const PdfPages.all()),
         contains('Hello Colour'),
       );
       await doc.dispose();
@@ -1053,7 +1075,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       });
       final doc = await openOf(pdf, bytes);
       expect(
-        await doc.extract(pages: const PdfPages.all()),
+        await extractTextToString(doc, pages: const PdfPages.all()),
         contains('Styled Text'),
       );
       await doc.dispose();
@@ -1074,7 +1096,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       });
       final doc = await openOf(pdf, bytes);
       expect(
-        await doc.extract(pages: const PdfPages.all()),
+        await extractTextToString(doc, pages: const PdfPages.all()),
         contains('Rect caption'),
       );
       await doc.dispose();
@@ -1095,7 +1117,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
         );
       });
       final doc = await openOf(pdf, bytes);
-      final text = await doc.extract(pages: const PdfPages.all());
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(text, contains('SKU'));
       expect(text, contains('A-1'));
       expect(text, contains('B-2'));
@@ -1136,7 +1158,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
         );
       });
       final doc = await openOf(pdf, bytes);
-      final text = await doc.extract(pages: const PdfPages.all());
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(text, contains('Item'));
       expect(text, contains('Saw'));
       expect(text, contains('Hammer'));
@@ -1161,7 +1183,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
         );
       });
       final doc = await openOf(pdf, bytes);
-      final text = await doc.extract(pages: const PdfPages.all());
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       for (final expected in ['Saw', '3', '4', 'Hammer', '7']) {
         expect(text, contains(expected));
       }
@@ -1243,7 +1265,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
         );
       });
       final doc = await openOf(pdf, bytes);
-      final text = await doc.extract(pages: const PdfPages.all());
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(text, contains('Item'));
       expect(text, contains('Saw'));
       expect(text, contains('Hammer'));
@@ -1264,7 +1286,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
         );
       });
       final doc = await openOf(pdf, bytes);
-      final text = await doc.extract(pages: const PdfPages.all());
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(text, contains('Item'));
       expect(text, contains('Saw'));
       expect(text, contains('Hammer'));

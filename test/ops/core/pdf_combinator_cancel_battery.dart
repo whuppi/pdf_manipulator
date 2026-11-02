@@ -61,7 +61,7 @@ void registerCombinatorCancelTests(
         final pdf = createPdf();
         late final PdfTask<String> task;
         task = pdf.read(src(fTwoPageMarkers), (doc) async {
-          final op = doc.search(query: 'x', pages: const PdfPages.all());
+          final op = doc.search('x', pages: const PdfPages.all());
           task.cancel();
           try {
             await op;
@@ -85,7 +85,7 @@ void registerCombinatorCancelTests(
         Object? after;
         task = pdf.read(src(fTwoPageMarkers), (doc) async {
           kept = doc;
-          final op = doc.search(query: 'x', pages: const PdfPages.all());
+          final op = doc.search('x', pages: const PdfPages.all());
           task.cancel();
           try {
             await op;
@@ -93,7 +93,7 @@ void registerCombinatorCancelTests(
             inFlight = e;
           }
           try {
-            await doc.search(query: 'x', pages: const PdfPages.all());
+            await doc.search('x', pages: const PdfPages.all());
           } on Object catch (e) {
             after = e;
             rethrow;
@@ -103,7 +103,7 @@ void registerCombinatorCancelTests(
         expect(inFlight, isA<PdfCancelled>(), reason: 'the op in flight');
         expect(after, isA<PdfCancelled>(), reason: 'the op after the cancel');
         expect(
-          () => kept.search(query: 'x', pages: const PdfPages.all()),
+          () => kept.search('x', pages: const PdfPages.all()),
           throwsA(isA<PdfDisposed>()),
         );
       },
@@ -128,14 +128,14 @@ void registerCombinatorCancelTests(
           (doc) {
             kept = doc;
             armed = true;
-            return doc.extract(pages: const PdfPages.all());
+            return doc.extractText(MemorySink(), pages: const PdfPages.all());
           },
         );
         await started.future; // the engine is genuinely mid-op
         task.cancel();
         await expectLater(task, throwsA(isA<PdfCancelled>()));
         expect(
-          () => kept.extract(pages: const PdfPages.all()),
+          () => kept.extractText(MemorySink(), pages: const PdfPages.all()),
           throwsA(isA<PdfDisposed>()),
         );
       },
@@ -246,7 +246,7 @@ void registerCombinatorCancelTests(
                 },
               ),
             )
-            .search(query: 'combinator', pages: const PdfPages.all());
+            .search('combinator', pages: const PdfPages.all());
         await expectLater(task, throwsA(isA<PdfCancelled>()));
         expect(reads, greaterThan(opened), reason: 'the op had started');
       },

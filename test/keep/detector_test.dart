@@ -26,7 +26,7 @@ Future<void> use(Pdf pdf, DataSource src, DataSink out) async {
       credentials: const PdfSigningCredentials.pem('c', 'k'));   // signatures
   await pdf.convertTo(src, out, format: PdfDocumentFormat.docx); // office
   final doc = await pdf.open(src);
-  await doc.extract(pages: const PdfPages.all());                // extract
+  await doc.extractText(out);                                       // extract
   await doc.dispose();
   final e = await pdf.edit(src);
   await e.convertToPdfA();                                       // pdfa
@@ -40,7 +40,7 @@ const _unrelated = '''
 class Reporter {
   void sign(String name) {}
   void render(Object canvas) {}
-  String extract(String raw) => raw;
+  String extractText(String raw) => raw;
 }
 ''';
 
@@ -79,7 +79,7 @@ void main() {
     );
     expect(
       result.matchedMembers,
-      containsAll(<String>{'compress', 'sign', 'convertTo', 'extract'}),
+      containsAll(<String>{'compress', 'sign', 'convertTo', 'extractText'}),
     );
   });
 
@@ -225,7 +225,7 @@ import 'package:pdf_manipulator/pdf_manipulator.dart';
 
 // Merge the pages, then render them.
 /// Later we could render thumbnails here.
-/* A block note: sign and extract are not used.
+/* A block note: sign and extractText are not used.
    /* nested: convertToPdfA */ still inside: convertTo */
 Future<void> use(Pdf pdf, DataSource a, DataSource b, DataSink out) =>
     pdf.merge([a, b], out);
@@ -273,7 +273,7 @@ String use(PdfDoc doc) =>
       'main.dart': '''
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
-Future<void> use(PdfDoc doc) async { const u = 'http://x'; await doc.extract(pages: const PdfPages.all()); }
+Future<void> use(PdfDoc doc, DataSink out) async { const u = 'http://x'; await doc.extractText(out); }
 ''',
     });
     addTearDown(() => dir.deleteSync(recursive: true));

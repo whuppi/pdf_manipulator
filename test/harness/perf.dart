@@ -110,7 +110,7 @@ Future<_Calibration> _calibrate(Pdf pdf) async {
 Future<void> _engineWorkload(Pdf pdf) async {
   for (var i = 0; i < 20; i++) {
     final doc = await pdf.open(src(minimalPdf));
-    await doc.extract(pages: const PdfPages.all());
+    await doc.extractText(MemorySink());
     await doc.dispose();
   }
 }

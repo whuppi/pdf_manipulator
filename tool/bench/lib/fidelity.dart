@@ -60,8 +60,9 @@ Future<List<Outcome>> compareAll(
   final worstSsimPage = List<int>.filled(n, 0);
   final longest = limits.fold(0, math.max);
 
+  final sourcePages = await source.pageInfo();
   for (var i = 0; i < longest; i++) {
-    final size = _sizeFor(source.pages[i], dpi);
+    final size = _sizeFor(sourcePages[i], dpi);
     final sourcePng = await _render(source, i, size);
     img.Image? decoded;
     for (var k = 0; k < n; k++) {
@@ -90,12 +91,12 @@ Future<List<Outcome>> compareAll(
     }
   }
 
-  final textA = await source.extract(pages: const PdfPages.all());
+  final textA = await _text(source);
   final outcomes = <Outcome>[];
   for (var k = 0; k < n; k++) {
     if (errors[k] == null) {
       try {
-        final textB = await candidates[k].extract(pages: const PdfPages.all());
+        final textB = await _text(candidates[k]);
         outcomes.add((
           fidelity: Fidelity(
             pages: limits[k],
@@ -128,6 +129,13 @@ Future<Uint8List> _render(PdfDoc doc, int page, PdfRenderSize size) async {
   final sink = MemorySink();
   await doc.render((_) => sink, pages: PdfPages.single(page), size: size);
   return sink.takeBytes();
+}
+
+/// The text of the whole document, as the engine wrote it.
+Future<String> _text(PdfDoc doc) async {
+  final sink = MemorySink();
+  await doc.extractText(sink);
+  return sink.takeString();
 }
 
 img.Image _decode(Uint8List png, int page) {

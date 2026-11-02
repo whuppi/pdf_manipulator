@@ -11,8 +11,9 @@
 /// // Open once, query many times, dispose when done
 /// final doc = await pdf.open(source);
 /// print('${doc.pageCount} pages');
-/// final text = await doc.extract(pages: PdfPages.all());
-/// final hits = await doc.search(query: 'hello', pages: PdfPages.all());
+/// final text = MemorySink();
+/// await doc.extractText(text);
+/// final hits = await doc.search('hello');
 /// await doc.dispose();
 ///
 /// // One-shot operations

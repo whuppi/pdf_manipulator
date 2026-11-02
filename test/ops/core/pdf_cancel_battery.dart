@@ -82,7 +82,7 @@ void registerCancelTests(
         expect(doc.pageCount, _pageCount);
 
         armed = true;
-        final task = doc.extract(pages: const PdfPages.all());
+        final task = doc.extractText(MemorySink(), pages: const PdfPages.all());
         await started.future; // the engine is genuinely mid-op
         task.cancel();
         await expectLater(task, throwsA(isA<PdfCancelled>()));
@@ -125,7 +125,7 @@ void registerCancelTests(
 
         // The lane runs one job at a time: once this read returns, the
         // render job is over.
-        await doc.extract(pages: const PdfPages.single(0));
+        await doc.extractText(MemorySink(), pages: const PdfPages.single(0));
 
         expect(opened, lessThanOrEqualTo(2));
         expect(

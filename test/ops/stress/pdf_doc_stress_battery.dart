@@ -6,6 +6,7 @@ import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
 import '../../fixtures/generated/fixtures.dart';
+import '../../harness/extract_text.dart';
 import '../../harness/render_pages.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/perf.dart';
@@ -28,7 +29,10 @@ void registerDocStressTests(Pdf Function() createPdf) {
       ratio: 158,
       () async {
         final doc = await createPdf().open(src(largePdf));
-        final text = await doc.extract(pages: const PdfPages.all());
+        final text = await extractTextToString(
+          doc,
+          pages: const PdfPages.all(),
+        );
         expect(text.length, greaterThan(1000));
         expect(text, contains('Lorem ipsum'));
         await doc.dispose();
@@ -42,7 +46,10 @@ void registerDocStressTests(Pdf Function() createPdf) {
       ratio: 133,
       () async {
         final doc = await createPdf().open(src(largePdf));
-        final text = await doc.extract(pages: const PdfPages.single(100));
+        final text = await extractTextToString(
+          doc,
+          pages: const PdfPages.single(100),
+        );
         expect(
           text,
           contains('${fThousandPageTruth.markerPrefix}100'),
@@ -63,10 +70,7 @@ void registerDocStressTests(Pdf Function() createPdf) {
     // Observed op/calibration: 46.48, 41.39, 44.39, 47.51.
     stressTest('search across 1000-page PDF', createPdf, ratio: 143, () async {
       final doc = await createPdf().open(src(largePdf));
-      final results = await doc.search(
-        query: 'Lorem',
-        pages: const PdfPages.all(),
-      );
+      final results = await doc.search('Lorem', pages: const PdfPages.all());
       expect(results.length, greaterThanOrEqualTo(1000));
       for (final r in results) {
         expect(

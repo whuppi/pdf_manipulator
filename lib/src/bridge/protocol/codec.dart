@@ -19,7 +19,9 @@ import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
 import 'package:pdf_manipulator/src/types/pdf_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
+import 'package:pdf_manipulator/src/types/pdf_info.dart';
 import 'package:pdf_manipulator/src/types/pdf_matrix.dart';
+import 'package:pdf_manipulator/src/types/pdf_metadata.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_info.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
@@ -36,8 +38,8 @@ import 'package:pdf_manipulator/src/types/pdf_search_hit.dart';
 // RESPONSE DECODING — Map<String, Object?> from the wire → Dart types
 // ════════════════════════════════════════════════════════════════════
 
-/// Decodes the page list from an open-document response.
-List<PdfPageInfo> decodePageList(Map<String, Object?> r) {
+/// Decodes the per-page facts of a `pageInfo` response.
+List<PdfPageInfo> decodePageInfos(Map<String, Object?> r) {
   final pagesRaw = r['pages'] as List? ?? [];
   return pagesRaw.map((p) {
     final m = _asMap(p);
@@ -55,20 +57,43 @@ List<PdfPageInfo> decodePageList(Map<String, Object?> r) {
   }).toList();
 }
 
+/// Decodes the metadata of an open document: a field the file does not
+/// carry comes back null, not empty.
+PdfMetadata decodeMetadata(Map<String, Object?> r) => PdfMetadata(
+  title: _text(r['title']),
+  author: _text(r['author']),
+  subject: _text(r['subject']),
+  keywords: _text(r['keywords']),
+  creator: _text(r['creator']),
+  producer: _text(r['producer']),
+  creationDate: decodeDate(r['creationDate']),
+);
+
+/// Decodes how an open document is encrypted, or null when it is not
+/// encrypted.
+PdfEncryptionInfo? decodeEncryptionInfo(Map<String, Object?> r) {
+  if (r['isEncrypted'] != true) return null;
+  final algorithm = decodeEncryptionAlgorithmFromMap(r);
+  if (algorithm == null) return null;
+  return PdfEncryptionInfo(
+    algorithm: algorithm,
+    permissions: decodePermissions(r['permissionBits'] as int? ?? -1),
+    requiresPassword: r['requiresPassword'] as bool? ?? false,
+  );
+}
+
+/// A wire string as text: empty means the field is absent.
+String? _text(Object? value) {
+  final s = value as String?;
+  return (s == null || s.isEmpty) ? null : s;
+}
+
 /// Decodes the encryption algorithm from a response map.
 PdfEncryptionAlgorithm? decodeEncryptionAlgorithmFromMap(
   Map<String, Object?> r,
 ) {
   final code = r['encryptionAlgorithm'] as int? ?? 0;
   return decodeEncryptionAlgorithm(code);
-}
-
-/// Decodes permission flags from a response map.
-PdfPermissions? decodePermissionsFromMap(Map<String, Object?> r) {
-  final isEncrypted = r['isEncrypted'] as bool? ?? false;
-  if (!isEncrypted) return null;
-  final bits = r['permissionBits'] as int? ?? -1;
-  return decodePermissions(bits);
 }
 
 /// Decodes extracted text from a response map.
@@ -333,37 +358,31 @@ PdfValidationResult decodeValidationResult(Map<String, Object?> r) =>
       warnings: r['warnings'] as int? ?? 0,
     );
 
-/// Decodes the PDF/UA validation boolean result.
-bool decodeValidatePdfUa(Map<String, Object?> r) =>
-    r['valid'] as bool? ?? false;
-
 /// Decodes bookmark-based split plan entries.
-List<PdfBookmarkSplit> decodeBookmarkSplits(Map<String, Object?> r) {
+List<PdfBookmarkRange> decodeBookmarkRanges(Map<String, Object?> r) {
   final splits = r['splits'] as List? ?? [];
   return splits.map((s) {
     final m = _asMap(s);
-    return PdfBookmarkSplit(
-      title: m['title'] as String? ?? '',
-      startPage: m['startPage'] as int? ?? 0,
-      endPage: m['endPage'] as int? ?? 0,
+    return PdfBookmarkRange(
+      title: m['title'] as String?,
+      start: m['startPage'] as int? ?? 0,
+      end: m['endPage'] as int? ?? 0,
     );
   }).toList();
 }
 
 /// Decodes a page-classification result.
-PdfPageClassification decodeClassifyPage(Map<String, Object?> r) =>
-    PdfPageClassification(
-      type: r['type'] as String? ?? 'unknown',
-      confidence: (r['confidence'] as num?)?.toDouble() ?? 0,
-    );
+PdfPageClassification decodeClassifyPage(
+  Map<String, Object?> r, {
+  required int page,
+}) => PdfPageClassification(
+  page: page,
+  type: _enumByWireName(PdfPageType.values, r['type'], 'page type'),
+);
 
 /// Decodes a document-classification result.
-PdfDocumentClassification decodeClassifyDocument(Map<String, Object?> r) =>
-    PdfDocumentClassification(
-      type: r['type'] as String? ?? 'unknown',
-      confidence: (r['confidence'] as num?)?.toDouble() ?? 0,
-      pageCount: r['pageCount'] as int? ?? 0,
-    );
+PdfDocumentType decodeClassifyDocument(Map<String, Object?> r) =>
+    _enumByWireName(PdfDocumentType.values, r['type'], 'document type');
 
 /// One frame of a chunked sequence of items (the pages of a render, the
 /// images of an extraction): an item opens with a [ChunkHeader] holding its
@@ -523,8 +542,10 @@ int decodeEditorOpen(Map<String, Object?> r) => r['handleId'] as int;
 // HELPERS — shared encoding utilities
 // ════════════════════════════════════════════════════════════════════
 
-/// Resolves [PdfPages] to a concrete list of 0-based page indices.
-List<int> resolvePageIndices(PdfPages pages, int pageCount) => switch (pages) {
+/// Resolves [pages] to a concrete list of 0-based page indices; every page
+/// when it is null.
+List<int> resolvePageIndices(PdfPages? pages, int pageCount) => switch (pages) {
+  null => List.generate(pageCount, (i) => i),
   PdfPagesAll() => List.generate(pageCount, (i) => i),
   PdfPagesSingle(:final index) => [index],
   PdfPagesList(:final indices) => indices,

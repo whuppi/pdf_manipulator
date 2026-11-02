@@ -17,17 +17,48 @@ abstract base class PdfReads {
   /// [PdfDoc], on one opened and closed for the call for a one-shot.
   PdfTask<T> _run<T>(PdfTask<T> Function(BridgeDocHandle handle) read);
 
-  /// Searches for [query] text across the specified [pages].
-  PdfTask<List<PdfSearchHit>> search({
-    required String query,
-    required PdfPages pages,
+  /// The facts of the pages named: their size, their rotation and their
+  /// label. Every page when [pages] is null.
+  PdfTask<List<PdfPageInfo>> pageInfo({PdfPages? pages}) =>
+      _run((handle) => handle.pageInfo(pages: pages));
+
+  /// Writes the text of the pages named to [output] as the engine produces
+  /// it; every page when [pages] is null. The sink is the caller's: the
+  /// library writes to it and never closes it.
+  ///
+  /// The text reaches [output] as UTF-8, page by page, and the library
+  /// never holds the document's text whole. A caller that wants a string
+  /// writes to a [MemorySink] and takes it:
+  ///
+  /// ```dart
+  /// final sink = MemorySink();
+  /// await doc.extractText(sink);
+  /// final text = sink.takeString();
+  /// ```
+  ///
+  /// [format] is the shape of the text: plain text, structured text,
+  /// Markdown or HTML. [PdfExtractionFormat.auto] lets the engine choose.
+  PdfTask<void> extractText(
+    DataSink output, {
+    PdfPages? pages,
+    PdfExtractionFormat format = PdfExtractionFormat.auto,
   }) {
+    KeepRecord.op('extract');
+    return _run(
+      (handle) => handle.extractText(output, pages: pages, format: format),
+    );
+  }
+
+  /// Searches for [query] in the text of the pages named; every page when
+  /// [pages] is null.
+  PdfTask<List<PdfSearchHit>> search(String query, {PdfPages? pages}) {
     KeepRecord.op('extract');
     return _run((handle) => handle.search(query: query, pages: pages));
   }
 
-  /// Renders [pages] and writes each one to the sink [sinkFor] returns for
-  /// it, in page order; resolves with the pages written.
+  /// Renders the pages named and writes each one to the sink [sinkFor]
+  /// returns for it, in page order; resolves with the pages written.
+  /// Every page when [pages] is null.
   ///
   /// [sinkFor] receives the page's descriptor, with its pixel size, before
   /// any pixel is written. The sink it returns is the library's: it is
@@ -43,7 +74,6 @@ abstract base class PdfReads {
   /// ```dart
   /// final pages = await doc.render(
   ///   (page) => FileSink.open(File('page-${page.page}.png')),
-  ///   pages: const PdfPages.all(),
   /// );
   /// ```
   ///
@@ -51,7 +81,7 @@ abstract base class PdfReads {
   /// and resolves the task with [PdfCancelled].
   PdfTask<List<PdfRenderedPage>> render(
     FutureOr<DataSink> Function(PdfRenderedPage page) sinkFor, {
-    required PdfPages pages,
+    PdfPages? pages,
     PdfRenderSize size = const PdfRenderSize.dpi(150),
     PdfRenderFormat format = PdfRenderFormat.png,
   }) {
@@ -62,9 +92,9 @@ abstract base class PdfReads {
     );
   }
 
-  /// Extracts the images drawn on [pages] and writes each one to the sink
-  /// [sinkFor] returns for it, page by page in the order found; resolves with
-  /// the images written.
+  /// Extracts the images drawn on the pages named and writes each one to the
+  /// sink [sinkFor] returns for it, page by page in the order found;
+  /// resolves with the images written. Every page when [pages] is null.
   ///
   /// [sinkFor] receives the image's descriptor before any byte is written.
   /// The sink it returns is the library's: it is closed after its image, and
@@ -101,7 +131,6 @@ abstract base class PdfReads {
   ///       '${image.encoding == PdfImageEncoding.jpeg ? 'jpg' : 'png'}',
   ///     ),
   ///   ),
-  ///   pages: const PdfPages.all(),
   /// );
   /// ```
   ///
@@ -109,11 +138,87 @@ abstract base class PdfReads {
   /// extraction and resolves the task with [PdfCancelled].
   PdfTask<List<PdfImage>> extractImages(
     FutureOr<DataSink> Function(PdfImage image) sinkFor, {
-    required PdfPages pages,
+    PdfPages? pages,
   }) {
-    KeepRecord.op('extractImages');
+    KeepRecord.op('render');
     return _run((handle) => handle.extractImages(sinkFor, pages: pages));
   }
+
+  /// Returns metadata for all digital signatures in the document.
+  PdfTask<List<PdfSignatureInfo>> signatures() {
+    KeepRecord.op('signatures');
+    return _run((handle) => handle.signatures());
+  }
+
+  /// Whether the document has at least one signature and every
+  /// signature verifies: the digest of the bytes each one covers
+  /// matches, and the signer's key verifies it. Certificate trust and
+  /// revocation are not checked. A signature over an earlier revision
+  /// still counts; see [PdfSignatureInfo.coversWholeDocument].
+  PdfTask<bool> verifySignatures() {
+    KeepRecord.op('signatures');
+    return _run((handle) => handle.verifySignatures());
+  }
+
+  /// Validates PDF/A conformance at the given [level].
+  PdfTask<PdfValidationResult> validatePdfA({PdfALevel level = PdfALevel.a2}) {
+    KeepRecord.op('pdfa');
+    return _run((handle) => handle.validatePdfA(level: level));
+  }
+
+  /// Validates PDF/UA (accessibility) conformance at the given [level].
+  PdfTask<PdfValidationResult> validatePdfUa({
+    PdfUaLevel level = PdfUaLevel.ua1,
+  }) {
+    KeepRecord.op('pdfa');
+    return _run((handle) => handle.validatePdfUa(level: level));
+  }
+
+  /// The page range of each top-level bookmark of the document.
+  PdfTask<List<PdfBookmarkRange>> bookmarkRanges() =>
+      _run((handle) => handle.bookmarkRanges());
+
+  /// Classifies the pages named by what they hold; every page when [pages]
+  /// is null.
+  PdfTask<List<PdfPageClassification>> classifyPages({PdfPages? pages}) {
+    KeepRecord.op('extract');
+    return _run((handle) => handle.classifyPages(pages: pages));
+  }
+
+  /// Classifies the whole document by what it holds.
+  PdfTask<PdfDocumentType> classifyDocument() {
+    KeepRecord.op('extract');
+    return _run((handle) => handle.classifyDocument());
+  }
+
+  /// Reads every AcroForm field of the document.
+  PdfTask<List<PdfFormField>> formFields() =>
+      _run((handle) => handle.formFields());
+
+  /// Exports every AcroForm field's current value to [output] in [format].
+  PdfTask<void> exportFormData(
+    DataSink output, {
+    PdfFormDataFormat format = PdfFormDataFormat.xfdf,
+  }) => _run((handle) => handle.exportFormData(output, format: format.name));
+
+  /// What the document's XFA packet declares, or `null` when the document
+  /// has no XFA form.
+  PdfTask<PdfXfaInfo?> xfa() => _run((handle) => handle.xfa());
+
+  /// Lists the files embedded in the document, metadata only.
+  PdfTask<List<PdfAttachment>> attachments() =>
+      _run((handle) => handle.attachments());
+
+  /// Lists the annotations on [page] (0-based), in /Annots order: links,
+  /// comments, stamps, form widgets. Throws [PdfPageRangeError] for a
+  /// page past the end.
+  PdfTask<List<PdfAnnotationInfo>> annotations(int page) =>
+      _run((handle) => handle.annotations(page));
+
+  /// Writes the embedded file named [name] to [output]. An unknown name
+  /// throws [PdfEngineError].
+  PdfTask<void> extractAttachment(String name, DataSink output) =>
+      _run((handle) => handle.extractAttachment(name, output));
 }
 
 /// A one-shot runs one call: a second call is refused before any I/O.

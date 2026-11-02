@@ -19,8 +19,8 @@ import 'package:test/test.dart';
 
 /// A throwaway app calling exactly ONE capability.
 ///
-/// `extract` is a real detector marker (`PdfDoc.extract`); `extractText` is
-/// not, and an app calling only that yields an EMPTY keep-set — which happens
+/// `extractText` is a real detector marker (`PdfDoc.extractText`); `extract`
+/// is not, and an app calling only that yields an EMPTY keep-set — which happens
 /// to satisfy "is custom" and "has no signatures" too, so a fixture using it
 /// passes this test vacuously.
 ///
@@ -38,8 +38,8 @@ import 'package:pdf_manipulator/pdf_manipulator.dart';
 
 final pdf = Pdf();
 
-Future<void> readIt(PdfDoc doc) async {
-  await doc.extract();
+Future<void> readIt(PdfDoc doc, DataSink out) async {
+  await doc.extractText(out);
 }
 ''');
   return app;
@@ -192,7 +192,7 @@ void main() {
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
 Future<void> check(PdfDoc doc) async {
-  await doc.signatures;
+  await doc.signatures();
 }
 ''');
       // Tool-owned, and `lib/build/` which is the app's own code, not output.
@@ -238,7 +238,7 @@ Future<void> shrink(PdfDoc doc) async {
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
 Future<void> check(PdfDoc doc) async {
-  await doc.signatures;
+  await doc.signatures();
 }
 ''');
 

@@ -16,6 +16,9 @@ use std::path::Path;
 
 const MIB: usize = 1024 * 1024;
 
+/// The page count of the `thousand_page` input.
+const THOUSAND_PAGES: usize = 1_000;
+
 /// Each step's ceiling: today's measured peak rounded up to 16 MiB, so a
 /// change that holds more memory fails `make check`. A step whose target
 /// is lower names the target and the task that brings it there; when that
@@ -34,6 +37,9 @@ fn limit(op: &str, input: &str) -> usize {
         // one member at a time, so a broken xref and 64 MiB of packed
         // objects open and extract in the same memory as a sound file.
         ("open" | "extractAll", "damaged" | "objstm") => 16 * MIB,
+        // Opening reads the document's own facts, never a page's, so a
+        // thousand pages cost what one page costs.
+        ("open", "thousand_page") => 16 * MIB,
         // The text is read as operators, one token at a time.
         ("extractAll", "content-fl" | "content-a85" | "content-lzw" | "forms") => 16 * MIB,
         // Rulings are quantised as they are painted and dropped; the grid they
@@ -150,6 +156,8 @@ fn run() -> Result<(), String> {
     generate_objstm(&objstm)?;
     let forms = dir.join("forms.pdf");
     generate_forms(&forms)?;
+    let thousand = dir.join("thousand_page.pdf");
+    generate_thousand_page(&thousand)?;
     let paths = dir.join("paths.pdf");
     generate_paths(&paths)?;
     let widgets = dir.join("widgets.pdf");
@@ -166,6 +174,25 @@ fn run() -> Result<(), String> {
     // One output file per step (suffixed by input), so no step reuses
     // another step's sink.
     let open_sink = |n: &str, op: &str| dir.join(format!("{n}_{op}.pdf"));
+
+    // open of a thousand pages: the engine reads the document's own facts
+    // and never a page's, so its memory does not grow with the page count.
+    step(
+        &failed,
+        "open",
+        "thousand_page",
+        limit("open", "thousand_page"),
+        |st| {
+            let resp = call(st, re("open"), vec![source(&thousand)], vec![])?;
+            let hid = resp.i32("handleId").expect("open returns handleId");
+            let pages = resp.i32("pageCount").expect("open returns pageCount");
+            call(st, re("docDispose").put("handleId", i32v(hid)), vec![], vec![])?;
+            if pages as usize != THOUSAND_PAGES {
+                return Err(format!("{pages} pages, expected {THOUSAND_PAGES}"));
+            }
+            Ok(())
+        },
+    );
 
     for (name, path) in [("many", &many), ("huge", &huge)] {
 
@@ -1891,6 +1918,39 @@ fn generate_many(path: &Path) -> Result<(), String> {
         if page % 2000 == 0 {
             eprintln!("memprobe: many: page {page}/{PAGES}");
         }
+    }
+
+    call(
+        &mut state,
+        re("builderSave").put("handleId", i32v(hid)),
+        vec![],
+        vec![sink(path)],
+    )?;
+    Ok(())
+}
+
+/// 1,000 empty pages: the open of a document must not read a page's facts,
+/// so the page count must not reach the engine's memory.
+fn generate_thousand_page(path: &Path) -> Result<(), String> {
+    let mut state = pdf_oxide::host::lane_state::LaneState::new();
+    let resp = call(&mut state, re("builderCreate"), vec![], vec![])?;
+    let hid = resp.i32("handleId").expect("builderCreate returns handleId");
+
+    for page in 0..THOUSAND_PAGES {
+        call(
+            &mut state,
+            re("builderAddPage").put("handleId", i32v(hid)),
+            vec![],
+            vec![],
+        )
+        .map_err(|e| format!("builderAddPage page {page}: {e}"))?;
+        call(
+            &mut state,
+            re("builderPageDone").put("handleId", i32v(hid)),
+            vec![],
+            vec![],
+        )
+        .map_err(|e| format!("done page {page}: {e}"))?;
     }
 
     call(

@@ -13,6 +13,7 @@ import '../../fixtures/generated/fixtures.dart';
 import '../../fixtures/handwritten.dart';
 import '../../fixtures/handwritten_docx.dart';
 import '../../fixtures/third_party/tp_page_prune_objstm.dart';
+import '../../harness/extract_text.dart';
 import '../../harness/page_prune_expect.dart';
 import '../../harness/plain_bytes.dart';
 import '../../harness/test_source_sink.dart';
@@ -30,7 +31,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
         await pdf.convertXfaToAcroForm(src(xfaFormPdf), sink);
         final doc = await pdf.open(src(sink.takeBytes()));
         expect(doc.pageCount, greaterThanOrEqualTo(1));
-        final names = (await doc.formFields).map((f) => f.name).toList();
+        final names = (await doc.formFields()).map((f) => f.name).toList();
         await doc.dispose();
         expect(names, containsAll(<String>['given', 'agree']));
       },
@@ -58,7 +59,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(signed));
       expect(doc.pageCount, 1);
       expect(signed.length, greaterThan(minimalPdf.length));
-      final sigs = await doc.signatures;
+      final sigs = await doc.signatures();
       expect(sigs, isNotEmpty);
       expect(sigs.first.signerName, isNotNull);
       expect(sigs.first.signerName, isNotEmpty);
@@ -76,7 +77,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       final signed = sink.takeBytes();
       final doc = await pdf.open(src(signed));
       expect(doc.pageCount, 1);
-      final sigs = await doc.signatures;
+      final sigs = await doc.signatures();
       expect(sigs, isNotEmpty);
       expect(sigs.first.signerName, isNotNull);
       await doc.dispose();
@@ -104,7 +105,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
     test('sign keeps the catalog: bookmarks survive', () async {
       final pdf = createPdf();
       final unsigned = await pdf.open(src(bookmarkedPdf));
-      final titles = (await unsigned.planSplitByBookmarks())
+      final titles = (await unsigned.bookmarkRanges())
           .map((s) => s.title)
           .toList();
       await unsigned.dispose();
@@ -116,7 +117,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       );
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(
-        (await doc.planSplitByBookmarks()).map((s) => s.title),
+        (await doc.bookmarkRanges()).map((s) => s.title),
         titles,
         reason:
             'signing must not replace the catalog — the outline tree '
@@ -130,7 +131,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final unsigned = await pdf.open(src(fFormFields));
       final valuesBefore = {
-        for (final f in await unsigned.formFields) f.name: f.value,
+        for (final f in await unsigned.formFields()) f.name: f.value,
       };
       await unsigned.dispose();
       final sink = TestSink();
@@ -140,7 +141,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
         credentials: PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
       );
       final doc = await pdf.open(src(sink.takeBytes()));
-      final fields = await doc.formFields;
+      final fields = await doc.formFields();
       expect(fields.map((f) => f.name).toSet(), {
         ...fFormFieldsTruth.fieldNames,
         'Sig1',
@@ -208,9 +209,9 @@ void registerStandaloneTests(Pdf Function() createPdf) {
         credentials: PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
       );
       final doc = await pdf.open(src(second.takeBytes()));
-      final sigs = await doc.signatures;
+      final sigs = await doc.signatures();
       expect(sigs, hasLength(2));
-      expect((await doc.formFields).map((f) => f.name).toSet(), {
+      expect((await doc.formFields()).map((f) => f.name).toSet(), {
         'Sig1',
         'Sig2',
       }, reason: 'the second signature must not replace the first field');
@@ -280,7 +281,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
           location: 'Zürich',
         );
         final doc = await pdf.open(src(sink.takeBytes()));
-        final sigs = await doc.signatures;
+        final sigs = await doc.signatures();
         expect(sigs, hasLength(1));
         expect(sigs.single.reason, 'a (b) \\ c');
         expect(sigs.single.location, 'Zürich');
@@ -318,7 +319,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
         credentials: PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
       );
       final doc = await pdf.open(src(sink.takeBytes()));
-      final time = (await doc.signatures).single.signingTime;
+      final time = (await doc.signatures()).single.signingTime;
       await doc.dispose();
       expect(time, isNotNull);
       expect(
@@ -356,7 +357,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       await pdf.extractPages(src(fThreePageMarkers), sink, pages: [0, 2]);
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 2);
-      final text = await doc.extract(pages: const PdfPages.all());
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(text, contains(fThreePageMarkersTruth.markers[0]));
       expect(text, contains(fThreePageMarkersTruth.markers[2]));
       expect(
@@ -423,7 +424,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       final doc = await pdf.open(src(out));
       expect(doc.pageCount, 1);
       expect(
-        await doc.extract(pages: const PdfPages.all()),
+        await extractTextToString(doc, pages: const PdfPages.all()),
         contains('TAGGED-0'),
       );
       await doc.dispose();
@@ -519,10 +520,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
         final lefts = <double>[];
         var lastWidth = 0.0;
         for (final marker in docxWideTableMarkers) {
-          final hits = await doc.search(
-            query: marker,
-            pages: const PdfPages.all(),
-          );
+          final hits = await doc.search(marker, pages: const PdfPages.all());
           expect(hits, hasLength(1), reason: '$marker: one hit expected');
           final hit = hits.single;
           // The buggy layout ran the row out to ~3074 pt on this page.

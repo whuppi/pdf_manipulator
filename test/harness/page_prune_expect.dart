@@ -4,6 +4,7 @@ import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
 import '../fixtures/handwritten.dart';
+import 'extract_text.dart';
 import 'plain_bytes.dart';
 import 'test_source_sink.dart';
 
@@ -48,15 +49,15 @@ Future<void> expectOnlyPrunedPages(
   final doc = await pdf.open(src(out));
   expect(doc.pageCount, kept.length);
   expect(
-    [for (final page in doc.pages) page.label],
+    [for (final page in await doc.pageInfo()) page.label],
     [for (final i in kept) truth.label(i)],
     reason: 'each kept page keeps its label',
   );
   for (var p = 0; p < kept.length; p++) {
-    final text = await doc.extract(pages: PdfPages.single(p));
+    final text = await extractTextToString(doc, pages: PdfPages.single(p));
     expect(text, contains(truth.marker(kept[p])));
   }
-  final fields = (await doc.formFields).map((f) => f.name).toSet();
+  final fields = (await doc.formFields()).map((f) => f.name).toSet();
   expect(fields, {for (final i in kept) 'field_$i'});
   await doc.dispose();
 

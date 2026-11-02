@@ -19,9 +19,9 @@ import 'package:pdf_manipulator/src/bridge/protocol/codec.dart';
 import 'package:test/test.dart';
 
 void main() {
-  group('decodePageList', () {
+  group('decodePageInfos', () {
     test('parses complete page list', () {
-      final pages = decodePageList({
+      final pages = decodePageInfos({
         'pages': [
           {'index': 0, 'width': 612.0, 'height': 792.0, 'rotation': 'r0'},
           {'index': 1, 'width': 612.0, 'height': 792.0, 'rotation': 'r90'},
@@ -35,7 +35,7 @@ void main() {
 
     test('refuses a rotation that is not a wire name', () {
       expect(
-        () => decodePageList({
+        () => decodePageInfos({
           'pages': [
             {'index': 0, 'width': 612.0, 'height': 792.0, 'rotation': 'r45'},
           ],
@@ -45,7 +45,7 @@ void main() {
     });
 
     test('handles missing pages key', () {
-      final pages = decodePageList({});
+      final pages = decodePageInfos(<String, Object?>{});
       expect(pages, isEmpty);
     });
   });

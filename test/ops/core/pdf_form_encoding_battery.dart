@@ -22,6 +22,7 @@ import 'package:test/test.dart';
 import '../../fixtures/generated/fixtures.dart';
 import '../../fixtures/handwritten.dart';
 import '../../fixtures/subset_fallback_font.dart';
+import '../../harness/extract_text.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
 
@@ -78,7 +79,7 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
       await editor.save(sink);
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      final text = await doc.extract(pages: const PdfPages.all());
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(text, contains(value));
       await doc.dispose();
     }, timeout: t(2));
@@ -93,7 +94,7 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
       await editor.save(sink);
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      final text = await doc.extract(pages: const PdfPages.all());
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(
         text,
         contains(value),
@@ -113,7 +114,7 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
       await editor.save(sink);
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      final text = await doc.extract(pages: const PdfPages.all());
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(
         text,
         contains('Königsallee 42, München'),
@@ -132,7 +133,7 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
       await editor.save(sink);
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      final text = await doc.extract(pages: const PdfPages.all());
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(text, contains(fFormFieldsDeTruth.textFieldDefault));
       await doc.dispose();
     }, timeout: t(2));
@@ -151,7 +152,7 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
       await editor.save(sink);
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
-      final text = await doc.extract(pages: const PdfPages.all());
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(
         text,
         isNot(contains('東京都渋谷区')),
@@ -181,7 +182,10 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
         await editor.save(sink);
         await editor.dispose();
         final doc = await pdf.open(src(sink.takeBytes()));
-        final text = await doc.extract(pages: const PdfPages.all());
+        final text = await extractTextToString(
+          doc,
+          pages: const PdfPages.all(),
+        );
         // Asserted as two runs, not one string: the flattener bakes the
         // CJK run (embedded fallback font) and the Latin run ' 123'
         // (/DA font, space glyph included) as separate Tj operators, and
@@ -217,7 +221,10 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
         await editor.save(sink);
         await editor.dispose();
         final doc = await pdf.open(src(sink.takeBytes()));
-        final text = await doc.extract(pages: const PdfPages.all());
+        final text = await extractTextToString(
+          doc,
+          pages: const PdfPages.all(),
+        );
         expect(text, contains(value));
         await doc.dispose();
       },

@@ -129,6 +129,17 @@ CONTENT RULES (never change)
 - **Breaking:** `stickyNote(text, {x, y})` takes one `at` point instead of two coordinates → call `stickyNote('note', at: (400, 500))`
 - **Breaking:** `PdfCellAlign` and `PdfTextAlignment` are one `PdfAlignment` (`left`, `center`, `right`) → rename the type where you name it
 - **Breaking:** `imagesToPdf` gives every page the image's own size, one point per pixel, and takes `PdfImagePageOptions` and `deflate` → name a size to keep A4 pages: `imagesToPdf(images, out, page: const PdfImagePageOptions(size: PdfPageSize.a4()))`
+- **Breaking:** `PdfInfo` and `PdfDoc` carry their metadata in `metadata` (`PdfMetadata`) and their encryption in `encryption` (`PdfEncryptionInfo`, null when the document is not encrypted), where they had flat `title`, `author`, `isEncrypted` and `permissions` fields → read `doc.metadata.title` and `doc.encryption?.permissions`
+- **Breaking:** `PdfDoc.pages` is gone: the per-page facts are a read of their own, `pageInfo({pages})`, and opening a document no longer reads them → call `await doc.pageInfo()`
+- **Breaking:** `PdfDoc.extract` is `extractText(output, {pages, format})` and writes the text to a sink as the engine produces it, where it returned a string → write to a `MemorySink` and take the string with `takeString()`
+- **Breaking:** `search` takes the query as its first argument, `search(query, {pages})`, where it took a named `query:` → drop the label
+- **Breaking:** `render` and `extractImages` take an optional `pages`, where it was required → drop the argument to read every page
+- **Breaking:** `signatures`, `formFields`, `xfa` and `attachments` are methods now, where they were getters → add the parentheses
+- **Breaking:** `PdfDoc.formField(name)` is gone → find the field in `await doc.formFields()`
+- **Breaking:** `validatePdfUa` answers a `PdfValidationResult` like `validatePdfA`, where it answered a bool → read `result.compliant`
+- **Breaking:** `planSplitByBookmarks()` is `bookmarkRanges()`, and its `PdfBookmarkSplit` is `PdfBookmarkRange` with `title`, `start` and `end` → rename the call and the fields
+- **Breaking:** `classifyPage(page)` is `classifyPages({pages})`, and a page's kind is a `PdfPageType` and a document's a `PdfDocumentType`, where both were strings with a confidence → read `result.first.type`
+- **Breaking:** the handle constructors (`PdfDoc.internal`, `PdfEditor.internal`, `PdfBuilder.internal`) are `@internal` → build a handle with `pdf.open`, `pdf.edit` or `pdf.build`
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Added `PdfDoc.annotations(page)`, which lists a page's annotations (subtype, rectangle, contents, author, form field name) as `PdfAnnotationInfo`
 - Added the page builder methods the engine already had: `inline`, `textInRect`, `rect`, `line`, `markup`, `stickyNote`, `stamp`, `freeText`, `linkNamed`, `linkJavaScript`, `onOpen`, `onClose`, `table` and `newPageSameSize`
@@ -139,7 +150,7 @@ CONTENT RULES (never change)
 - Added rotation, media box and crop box edits on merged pages; stamps, watermarks, erases and redactions on a merged page throw `PdfUnsupported`
 - Changed page edits to work on merged pages: `deletePage`, `movePage` and `selectPages` take a merged page like any other, where they threw `PdfUnsupported` on a document with merged pages
 - Changed reading a source to fetch it in 64 KB pieces instead of one round trip per read: compressing a 70-page scan takes 18 ms on native, where it took 29 ms, and a third less time on the web
-- Changed `PdfDoc.extract` of all pages to stream one page at a time from the engine: extracting text from a 10,000-page file takes under 16 MB of engine memory, where its first call held 281 MB
+- Changed `PdfDoc.extractText` of all pages to stream one page at a time from the engine: extracting text from a 10,000-page file takes under 16 MB of engine memory, where its first call held 281 MB
 - Changed the web lanes to retire a worker after a job that grew its memory past 256 MB, once nothing still needs it; WebAssembly memory never shrinks, so one large job no longer leaves a large worker behind
 - Changed `PdfDoc.render` and `extractImages` to deliver each page as the engine produces it, where they held every page until the last; cancelling the subscription stops the engine
 - Changed cancellation to stop text extraction, search, validation, `reduceImages`, `convertToPdfA` and saves within one page, where it waited for the next read or write; on the web this needs a cross-origin isolated page
@@ -163,7 +174,7 @@ CONTENT RULES (never change)
 - Fixed a full-rewrite save writing an object over 100 MB truncated — it throws instead
 - Fixed a page index past the end reaching the engine as a huge number or a generic error — every operation that takes a page throws `PdfPageRangeError` with the page and the page count
 - Fixed a save that keeps an encrypted document's encryption setting its owner password to the password it was opened with, so anyone who could open the result had owner rights and its permissions were void — the save now reuses the source's own encryption dictionary and key
-- Fixed `PdfDoc.permissions` reporting the wrong flags (a print-allowed file read as `print: false`) — the engine's `/P` word is read at its spec bit positions
+- Fixed `PdfDoc.encryption.permissions` reporting the wrong flags (a print-allowed file read as `print: false`) — the engine's `/P` word is read at its spec bit positions
 - Fixed a page tree whose inner nodes each hold one page reporting those nodes as pages — every node is read before it counts as a page
 - Fixed `rotateAll` and other per-page edits slowing down with the square of the page count on large documents
 - Fixed a merged page losing the resources, page size and rotation it inherited from its source page tree, which could leave it blank

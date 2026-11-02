@@ -12,6 +12,7 @@ import 'package:pdf_manipulator/src/bridge/pdf_transport.dart';
 import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart';
 import 'package:pdf_manipulator/src/bridge/protocol/op.dart';
 import 'package:pdf_manipulator/src/bridge/shared_bridge.dart';
+import 'package:pdf_manipulator/src/io/memory_sink.dart';
 import 'package:pdf_manipulator/src/types/cancel_hook.dart';
 import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
@@ -64,7 +65,8 @@ void main() {
 
     test('extract of all pages sends a sink and no page', () async {
       final requests = await requestsOf(
-        (doc) => doc.extract(pages: const PdfPages.all()),
+        (doc) =>
+            doc.extractText(MemorySink(), format: PdfExtractionFormat.auto),
       );
       final extract = _fieldKeys(requests.last);
       expect(extract, containsAll(['handleId', 'format', 'hasSink']));
@@ -73,7 +75,11 @@ void main() {
 
     test('extract of one page sends no sink', () async {
       final requests = await requestsOf(
-        (doc) => doc.extract(pages: const PdfPages.single(0)),
+        (doc) => doc.extractText(
+          MemorySink(),
+          pages: const PdfPages.single(0),
+          format: PdfExtractionFormat.auto,
+        ),
       );
       final extract = _fieldKeys(requests.last);
       expect(extract, containsAll(['page', 'format']));

@@ -911,15 +911,17 @@ class _RuntimeTabState extends State<_RuntimeTab>
                       final sample = await _ensureSample();
                       final doc = await _pdf.open(DemoSource(sample));
                       try {
-                        final task = doc.extract(pages: const PdfPages.all());
+                        final task = doc.extractText(MemorySink());
                         task.cancel();
                         try {
                           await task;
                         } on PdfCancelled {
                           // expected — now prove the doc still works:
                         }
-                        final page0 =
-                            await doc.extract(pages: const PdfPages.single(0));
+                        final sink = MemorySink();
+                        await doc.extractText(sink,
+                            pages: const PdfPages.single(0));
+                        final page0 = sink.takeString();
                         setState(() =>
                             status = '✓ extract cancelled; same doc then read '
                                 '${page0.length} chars from page 1');
@@ -1012,6 +1014,7 @@ class _DocTabState extends State<_DocTab>
     with _OpsRunner, _PdfPicker, AutomaticKeepAliveClientMixin {
   final _pdf = Pdf();
   PdfDoc? _doc;
+  List<PdfPageInfo> _pages = const [];
 
   @override
   bool get wantKeepAlive => true;
@@ -1028,12 +1031,26 @@ class _DocTabState extends State<_DocTab>
           _doc = null;
           if (old != null) await old.dispose();
           final doc = await _pdf.open(DemoSource(picked));
+          final pages = await doc.pageInfo();
           setState(() {
             _doc = doc;
+            _pages = pages;
             status = '${doc.pageCount} pages, v${doc.version}';
           });
         }));
       });
+
+  /// The text of the pages named, as the engine wrote it: the library
+  /// writes text to a sink, so the example takes it from a MemorySink.
+  Future<String> _extract(
+    PdfDoc doc, {
+    PdfPages? pages,
+    PdfExtractionFormat format = PdfExtractionFormat.auto,
+  }) async {
+    final sink = MemorySink();
+    await doc.extractText(sink, pages: pages, format: format);
+    return sink.takeString();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1072,12 +1089,12 @@ class _DocTabState extends State<_DocTab>
                                           '${fmtSize(bytes!.length)}  •  '
                                           'v${doc.version}',
                                           style: const TextStyle(fontSize: 13)),
-                                      if (doc.title != null)
-                                        Text('Title: ${doc.title}',
+                                      if (doc.metadata.title != null)
+                                        Text('Title: ${doc.metadata.title}',
                                             style:
                                                 const TextStyle(fontSize: 12)),
-                                      if (doc.author != null)
-                                        Text('Author: ${doc.author}',
+                                      if (doc.metadata.author != null)
+                                        Text('Author: ${doc.metadata.author}',
                                             style:
                                                 const TextStyle(fontSize: 12)),
                                     ]),
@@ -1088,13 +1105,13 @@ class _DocTabState extends State<_DocTab>
                             ]),
                             const SizedBox(height: 8),
                             Wrap(spacing: 6, runSpacing: 4, children: [
-                              if (doc.isEncrypted)
+                              if (doc.encryption != null)
                                 _chip(context, 'Encrypted', warn: true),
                               if (doc.isTagged) _chip(context, 'Tagged'),
-                              if (doc.subject != null)
-                                _chip(context, doc.subject!),
-                              if (doc.keywords != null)
-                                _chip(context, doc.keywords!),
+                              if (doc.metadata.subject != null)
+                                _chip(context, doc.metadata.subject!),
+                              if (doc.metadata.keywords != null)
+                                _chip(context, doc.metadata.keywords!),
                             ]),
                           ]),
                     ),
@@ -1107,9 +1124,9 @@ class _DocTabState extends State<_DocTab>
                                 vertical: 2, horizontal: 12),
                             child: Text(
                                 'Page ${i + 1}: '
-                                '${doc.pages[i].effectiveWidth.toStringAsFixed(0)} × '
-                                '${doc.pages[i].effectiveHeight.toStringAsFixed(0)} pt'
-                                '${doc.pages[i].rotation != PdfRotation.r0 ? '  (${doc.pages[i].rotation.name})' : ''}',
+                                '${_pages[i].effectiveWidth.toStringAsFixed(0)} × '
+                                '${_pages[i].effectiveHeight.toStringAsFixed(0)} pt'
+                                '${_pages[i].rotation != PdfRotation.r0 ? '  (${_pages[i].rotation.name})' : ''}',
                                 style: const TextStyle(fontSize: 13)),
                           )),
                   if (doc.pageCount > 20)
@@ -1120,49 +1137,48 @@ class _DocTabState extends State<_DocTab>
                       icon: Icons.text_snippet,
                       title: 'Extract all (plain text)',
                       loading: loading,
-                      onRun: () => runTask('Extract',
-                              () => doc.extract(pages: const PdfPages.all()),
-                              done: (t) {
+                      onRun: () => runFlow('Extract', () async {
+                            final t = await _extract(doc);
+                            if (!context.mounted) return;
                             showTextSheet(
                                 context, 'Plain Text (${t.length} chars)', t);
-                            return '${t.length} chars';
+                            setState(() => status = '${t.length} chars');
                           })),
                   _Op(
                       icon: Icons.text_snippet_outlined,
                       title: 'Extract page 1 only',
                       loading: loading,
-                      onRun: () => runTask(
-                              'Extract p1',
-                              () =>
-                                  doc.extract(pages: const PdfPages.single(0)),
-                              done: (t) {
+                      onRun: () => runFlow('Extract p1', () async {
+                            final t = await _extract(doc,
+                                pages: const PdfPages.single(0));
+                            if (!context.mounted) return;
                             showTextSheet(context, 'Page 1', t);
-                            return 'Page 1: ${t.length} chars';
+                            setState(
+                                () => status = 'Page 1: ${t.length} chars');
                           })),
                   _Op(
                       icon: Icons.code,
                       title: 'Extract as Markdown',
                       loading: loading,
-                      onRun: () => runTask(
-                              'Markdown',
-                              () => doc.extract(
-                                  pages: const PdfPages.all(),
-                                  format: PdfExtractionFormat.markdown),
-                              done: (t) {
+                      onRun: () => runFlow('Markdown', () async {
+                            final t = await _extract(doc,
+                                pages: const PdfPages.all(),
+                                format: PdfExtractionFormat.markdown);
+                            if (!context.mounted) return;
                             showTextSheet(context, 'Markdown', t);
-                            return 'MD: ${t.length} chars';
+                            setState(() => status = 'MD: ${t.length} chars');
                           })),
                   _Op(
                       icon: Icons.html,
                       title: 'Extract as HTML (page 1)',
                       loading: loading,
-                      onRun: () => runTask(
-                              'HTML',
-                              () => doc.extract(
-                                  pages: const PdfPages.single(0),
-                                  format: PdfExtractionFormat.html), done: (t) {
+                      onRun: () => runFlow('HTML', () async {
+                            final t = await _extract(doc,
+                                pages: const PdfPages.single(0),
+                                format: PdfExtractionFormat.html);
+                            if (!context.mounted) return;
                             showTextSheet(context, 'HTML', t);
-                            return 'HTML: ${t.length} chars';
+                            setState(() => status = 'HTML: ${t.length} chars');
                           })),
                   _Section('Search'),
                   _Op(
@@ -1171,17 +1187,15 @@ class _DocTabState extends State<_DocTab>
                       loading: loading,
                       onRun: () => runTask(
                           'Search p1',
-                          () => doc.search(
-                              query: 'the', pages: const PdfPages.single(0)),
+                          () => doc.search('the',
+                              pages: const PdfPages.single(0)),
                           done: (r) => '${r.length} hits on page 1')),
                   _Op(
                       icon: Icons.manage_search,
                       title: 'Search "the" all pages',
                       loading: loading,
-                      onRun: () => runTask(
-                          'Search all',
-                          () => doc.search(
-                              query: 'the', pages: const PdfPages.all()),
+                      onRun: () => runTask('Search all',
+                          () => doc.search('the', pages: const PdfPages.all()),
                           done: (r) => '${r.length} hits total')),
                   _Section('Render & Images'),
                   _Op(
@@ -1214,7 +1228,7 @@ class _DocTabState extends State<_DocTab>
                       icon: Icons.draw,
                       title: 'List signatures',
                       loading: loading,
-                      onRun: () => runTask('Signatures', () => doc.signatures,
+                      onRun: () => runTask('Signatures', () => doc.signatures(),
                           done: (sigs) => '${sigs.length} signature(s)')),
                   _Op(
                       icon: Icons.verified_user,
@@ -1237,23 +1251,28 @@ class _DocTabState extends State<_DocTab>
                       title: 'Validate PDF/UA',
                       loading: loading,
                       onRun: () => runTask('PDF/UA', () => doc.validatePdfUa(),
-                          done: (r) =>
-                              r ? 'Accessible ✓' : 'Not accessible ✗')),
+                          done: (r) => r.compliant
+                              ? 'Accessible ✓'
+                              : 'Not accessible ✗')),
                   _Section('Classification'),
                   _Op(
                       icon: Icons.category,
                       title: 'Classify page 1',
                       loading: loading,
                       onRun: () => runTask(
-                          'Classify page', () => doc.classifyPage(0),
-                          done: (r) => 'Page 1: ${r.type}')),
+                          'Classify page',
+                          () => doc.classifyPages(
+                              pages: const PdfPages.single(0)),
+                          done: (r) => r.isEmpty
+                              ? 'No page'
+                              : 'Page 1: ${r.first.type.wire}')),
                   _Op(
                       icon: Icons.analytics,
                       title: 'Classify document',
                       loading: loading,
                       onRun: () => runTask(
                           'Classify doc', () => doc.classifyDocument(),
-                          done: (r) => 'Document: ${r.type}')),
+                          done: (r) => 'Document: ${r.wire}')),
                   _Section('Bookmarks'),
                   _Op(
                       icon: Icons.bookmark,
@@ -1261,9 +1280,9 @@ class _DocTabState extends State<_DocTab>
                       loading: loading,
                       onRun: () => runFlow('Bookmarks', () async {
                             try {
-                              final s = await doc.planSplitByBookmarks();
+                              final s = await doc.bookmarkRanges();
                               setState(() => status = '${s.length} segments: '
-                                  '${s.map((x) => x.title).join(', ')}');
+                                  '${s.map((x) => x.title ?? '?').join(', ')}');
                             } catch (_) {
                               setState(() => status = 'No bookmarks');
                             }

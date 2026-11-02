@@ -14,6 +14,9 @@ enum EngineOp {
   /// Dispose a document handle.
   docDispose('docDispose'),
 
+  /// Read the per-page facts of the pages named.
+  pageInfo('pageInfo'),
+
   /// Extract text content.
   extract('extract'),
 

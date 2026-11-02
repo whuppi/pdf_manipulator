@@ -37,6 +37,7 @@ Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extrac
   - [Add the dependency](#add-the-dependency)
   - [Native](#native)
   - [Web](#web)
+- [I want to...](#i-want-to)
 - [Quick start](#quick-start)
   - [Merge two PDFs](#merge-two-pdfs)
   - [Cancellation](#cancellation)
@@ -117,6 +118,37 @@ build hooks. Tracking: [dart-lang/native#988](https://github.com/dart-lang/nativ
 </details>
 
 That's it — every platform now runs the full engine. **Before you ship: it can be up to 70% smaller.** One pubspec entry keeps only the features your app uses — [The engine binary](#the-engine-binary).
+
+---
+
+## I want to...
+
+`doc` is an open document (`await pdf.open(source)`); `e` is the editor inside `pdf.rewrite(source, output, (e) async { ... })`.
+
+| I want to | Do this |
+|---|---|
+| read a page's size, rotation and label | `await doc.pageInfo()` |
+| extract the text | `await doc.extractText(sink)` |
+| search the text | `await doc.search('invoice')` |
+| render a page to an image | `await doc.render((page) => sink)` |
+| extract the images of a page | `await doc.extractImages((image) => sink)` |
+| list the signatures | `await doc.signatures()` |
+| verify the signatures | `await doc.verifySignatures()` |
+| validate PDF/A | `await doc.validatePdfA()` |
+| validate PDF/UA | `await doc.validatePdfUa()` |
+| read the bookmarks' page ranges | `await doc.bookmarkRanges()` |
+| classify the pages | `await doc.classifyPages()` |
+| classify the whole document | `await doc.classifyDocument()` |
+| read the form fields | `await doc.formFields()` |
+| export the form values | `await doc.exportFormData(sink)` |
+| read the XFA packet | `await doc.xfa()` |
+| list the embedded files | `await doc.attachments()` |
+| list a page's annotations | `await doc.annotations(0)` |
+| extract an embedded file | `await doc.extractAttachment('notes.txt', sink)` |
+| watermark a page | `await pdf.rewrite(a, b, (e) => e.addWatermark(0, 'DRAFT'))` |
+| rotate a page | `await pdf.rewrite(a, b, (e) => e.rotatePage(0, by: .r90))` |
+
+Every read and every edit also has a one-shot: `pdf.reads(source)` opens the document, runs the one call and closes it, and `pdf.edits(source, output)` does the same for one edit.
 
 ---
 
@@ -335,11 +367,16 @@ The full one-shot set, all the same shape: `merge`, `split` / `splitBySize` / `s
 
 ```dart
 final doc = await pdf.open(source);
-print('${doc.pageCount} pages · encrypted: ${doc.isEncrypted}');
+print('${doc.pageCount} pages · encrypted: ${doc.encryption != null}');
 
-final text = await doc.extract(pages: PdfPages.all());
-final hits = await doc.search(query: 'revenue', pages: PdfPages.all());
-for (final field in await doc.formFields) {
+// The text is written to a sink as the engine produces it; the sink is
+// yours, so the library never closes it.
+final text = MemorySink();
+await doc.extractText(text);
+print(text.takeString());
+
+final hits = await doc.search('revenue');
+for (final field in await doc.formFields()) {
   print('${field.name}: ${field.type.name} = ${field.value}');
 }
 
@@ -347,7 +384,6 @@ for (final field in await doc.formFields) {
 // library closes that sink. `size` defaults to `PdfRenderSize.dpi(150)`.
 final pages = await doc.render(
   (page) => FileSink.open(File('page-${page.page}.png')),
-  pages: PdfPages.all(),
   size: PdfRenderSize.thumbnail(200),
 );
 // pages[i].width, pages[i].height — the pixel size of each file written
@@ -355,7 +391,7 @@ final pages = await doc.render(
 await doc.dispose();
 ```
 
-Also on the document: `extract` (plain / markdown / html), `extractImages`, `signatures` / `verifySignatures` (digest and signer key; certificate trust is not checked), `validatePdfA` / `validatePdfUa`, `classifyPage` / `classifyDocument`, `planSplitByBookmarks`, `formFields` / `formField(name)`, `exportFormData` (FDF / XFDF), `xfa`, `attachments` / `extractAttachment`, `annotations(page)`, plus metadata getters (`title`, `author`, `version`, `isTagged`).
+The document's own facts are sync fields: `pageCount`, `version`, `isTagged`, `metadata` (title, author, subject, keywords, creator, producer, creation date) and `encryption` (the algorithm, the permissions and whether a password is needed; null when the document is not encrypted). Everything per page is a read of its own: `pageInfo` (size, rotation, label), `extractText` (plain / markdown / html), `search`, `render`, `extractImages`, `classifyPages` / `classifyDocument`, `bookmarkRanges`, `annotations(page)`, `signatures` / `verifySignatures` (digest and signer key; certificate trust is not checked), `validatePdfA` / `validatePdfUa`, `formFields`, `exportFormData` (FDF / XFDF), `xfa`, `attachments` / `extractAttachment`.
 
 ### Edit a document
 
@@ -565,9 +601,9 @@ How do you know what to keep? Each capability covers a small set of methods. Cor
 |---|---|---|---|
 | `core` | everything else — merge, split, forms, watermark, encrypt, build… | — | always included (~6.7 MB) |
 | `render` | `doc.render()`, `editor.reduceImages()`, the `compress` one-shot, `editor.addRedaction()`, `editor.applyRedactions()`, the `applyRedactions` one-shot | — | +4.8 MB |
-| `signatures` | `sign()`, `doc.signatures`, `doc.verifySignatures()` | — | +1.0 MB |
+| `signatures` | `sign()`, `doc.signatures()`, `doc.verifySignatures()` | — | +1.0 MB |
 | `pdfa` | `doc.validatePdfA()`, `doc.validatePdfUa()`, `convertToPdfA` | — | +0.1 MB |
-| `extract` | `doc.extract()`, `doc.search()`, `doc.classifyPage()`, `doc.classifyDocument()` | — | +3.2 MB |
+| `extract` | `doc.extractText()`, `doc.search()`, `doc.classifyPages()`, `doc.classifyDocument()` | — | +3.2 MB |
 | `office` | `convertTo`, `convertToPdf` (DOCX / PPTX / XLSX) | `extract`, automatically | +2.9 MB on top of `extract` |
 
 Dependencies are handled for you: `keep: [office]` switches on `extract` as well. Costs are measured one capability at a time, and capabilities share some code — so a combination can total a little less than the sum of its rows.

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:meta/meta.dart';
@@ -18,6 +19,7 @@ import 'package:pdf_manipulator/src/types/pdf_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
+import 'package:pdf_manipulator/src/types/pdf_page_info.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/types/pdf_redaction_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_render.dart';
@@ -254,16 +256,6 @@ class SharedBridge extends PdfBridge {
   }
 
   // ── Helpers ──
-
-  List<int> _resolvePages(PdfPages pages, int pageCount) => switch (pages) {
-    PdfPagesAll() => List.generate(pageCount, (i) => i),
-    PdfPagesSingle(:final index) => [index],
-    PdfPagesList(:final indices) => indices,
-    PdfPagesRange(:final start, :final end) => List.generate(
-      end - start,
-      (i) => start + i,
-    ),
-  };
 }
 
 /// The `render` request fields a [PdfRenderSize] stands for: its kind by
@@ -299,22 +291,30 @@ Map<String, Object?> _renderSizeArgs(PdfRenderSize size) {
 @visibleForTesting
 void Function()? onEngineFrame;
 
-class _FrameCollectorSink implements DataSink {
-  _FrameCollectorSink(this._onFrame);
+/// The sink the engine's framed writes arrive through: it cuts the stream
+/// into frames and hands each one to [onFrame], in order. Nothing is kept
+/// between frames.
+class _FrameSink implements DataSink {
+  _FrameSink(this.onFrame);
+
+  final FutureOr<void> Function(Uint8List frame) onFrame;
 
   final _buffer = BytesBuilder(copy: false);
-  final void Function(Uint8List frame) _onFrame;
 
   @override
-  FutureOr<void> write(Uint8List chunk) {
+  Future<void> write(Uint8List chunk) async {
     _buffer.add(chunk);
-    _parseFrames();
+    for (final frame in _takeFrames()) {
+      await onFrame(frame);
+    }
   }
 
   @override
   void close() {}
 
-  void _parseFrames() {
+  /// The frames the buffer holds, in order.
+  List<Uint8List> _takeFrames() {
+    final frames = <Uint8List>[];
     while (true) {
       final bytes = _buffer.toBytes();
       if (bytes.length < 4) break;
@@ -327,11 +327,12 @@ class _FrameCollectorSink implements DataSink {
         break;
       }
       if (bytes.length < 4 + len) break;
-      _onFrame(Uint8List.sublistView(bytes, 4, 4 + len));
+      frames.add(Uint8List.sublistView(bytes, 4, 4 + len));
       _buffer.clear();
       if (bytes.length > 4 + len) {
         _buffer.add(Uint8List.sublistView(bytes, 4 + len));
       }
     }
+    return frames;
   }
 }
