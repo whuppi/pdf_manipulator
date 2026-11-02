@@ -40,6 +40,28 @@ final class PdfMetadata {
   /// When the document was last modified.
   final DateTime? modDate;
 
+  /// A copy with the given fields replaced. A field left out keeps its
+  /// value; to remove one, build a new [PdfMetadata] without it.
+  PdfMetadata copyWith({
+    String? title,
+    String? author,
+    String? subject,
+    String? keywords,
+    String? creator,
+    String? producer,
+    DateTime? creationDate,
+    DateTime? modDate,
+  }) => PdfMetadata(
+    title: title ?? this.title,
+    author: author ?? this.author,
+    subject: subject ?? this.subject,
+    keywords: keywords ?? this.keywords,
+    creator: creator ?? this.creator,
+    producer: producer ?? this.producer,
+    creationDate: creationDate ?? this.creationDate,
+    modDate: modDate ?? this.modDate,
+  );
+
   @override
   bool operator ==(Object other) =>
       other is PdfMetadata &&

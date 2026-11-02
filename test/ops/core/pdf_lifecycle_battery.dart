@@ -132,7 +132,7 @@ void registerLifecycleTests(Pdf Function() createPdf) {
     test('edit then dispose on a plain source', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
-      expect(await editor.pageCount, 1);
+      expect(await editor.pageCount(), 1);
       await editor.dispose();
       await editor.dispose();
       await pdf.dispose();
@@ -159,7 +159,7 @@ void registerLifecycleTests(Pdf Function() createPdf) {
       await doc.dispose();
 
       final editor = await pdf.edit(src(encrypted), password: 'pw');
-      expect(await editor.pageCount, 1);
+      expect(await editor.pageCount(), 1);
       await editor.dispose();
       await editor.dispose();
       await pdf.dispose();
@@ -199,7 +199,9 @@ void registerLifecycleTests(Pdf Function() createPdf) {
 
       Future<Uint8List> keepSave(Pdf pdf, Uint8List source) async {
         final editor = await pdf.edit(src(source), password: 'user-pw');
-        await editor.setTitle('kept');
+        await editor.setMetadata(
+          (await editor.metadata()).copyWith(title: 'kept'),
+        );
         final sink = TestSink();
         await editor.save(sink);
         await editor.dispose();

@@ -178,9 +178,7 @@ extension PdfSugar on Pdf {
     DataSink output, {
     required List<int> pages,
   }) => _own(edit(source), (editor, hook) async {
-    for (final p in pages.toList()..sort((a, b) => b.compareTo(a))) {
-      await hook.guard(editor.deletePage(p));
-    }
+    await hook.guard(editor.deletePages(PdfPages.list(pages)));
     await hook.guard(editor.save(output));
   });
 
@@ -190,7 +188,7 @@ extension PdfSugar on Pdf {
     DataSink output, {
     required List<int> order,
   }) => _own(edit(source), (editor, hook) async {
-    await hook.guard(editor.selectPages(order));
+    await hook.guard(editor.keepPages(order));
     await hook.guard(editor.save(output));
   });
 
@@ -212,7 +210,9 @@ extension PdfSugar on Pdf {
     required Map<int, PdfRotation> pages,
   }) => _own(edit(source), (editor, hook) async {
     for (final entry in pages.entries) {
-      await hook.guard(editor.rotatePage(entry.key, by: entry.value));
+      await hook.guard(
+        editor.rotatePages(PdfPages.single(entry.key), by: entry.value),
+      );
     }
     await hook.guard(editor.save(output));
   });
@@ -223,7 +223,7 @@ extension PdfSugar on Pdf {
     DataSink output, {
     required PdfRotation by,
   }) => _own(edit(source), (editor, hook) async {
-    await hook.guard(editor.rotateAllPages(by: by));
+    await hook.guard(editor.rotatePages(const PdfPages.all(), by: by));
     await hook.guard(editor.save(output));
   });
 
@@ -328,26 +328,15 @@ extension PdfSugar on Pdf {
     PdfWatermarkPosition position = const PdfWatermarkPosition.center(),
     PdfWatermarkLayer layer = PdfWatermarkLayer.foreground,
   }) => _own(edit(source), (editor, hook) async {
-    final indices = switch (pages) {
-      PdfPagesAll() => const <int>[-1],
-      PdfPagesSingle(:final index) => [index],
-      PdfPagesList(:final indices) => indices,
-      PdfPagesRange(:final start, :final end) => List.generate(
-        end - start,
-        (i) => start + i,
+    await hook.guard(
+      editor.addWatermark(
+        text,
+        pages: pages,
+        style: style,
+        position: position,
+        layer: layer,
       ),
-    };
-    for (final i in indices) {
-      await hook.guard(
-        editor.addWatermark(
-          i,
-          text,
-          style: style,
-          position: position,
-          layer: layer,
-        ),
-      );
-    }
+    );
     await hook.guard(editor.save(output));
   });
 

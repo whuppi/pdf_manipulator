@@ -38,7 +38,7 @@ void registerInstanceStressTests(Pdf Function() createPdf) {
         final pdf = createPdf();
         for (var i = 0; i < 100; i++) {
           final ed = await pdf.edit(src(minimalPdf));
-          expect(await ed.pageCount, 1);
+          expect(await ed.pageCount(), 1);
           await ed.dispose();
         }
         await pdf.dispose();
@@ -82,7 +82,9 @@ void registerInstanceStressTests(Pdf Function() createPdf) {
           await doc.dispose();
 
           final ed = await pdf.edit(src(minimalPdf));
-          await ed.setTitle('round $i');
+          await ed.setMetadata(
+            (await ed.metadata()).copyWith(title: 'round $i'),
+          );
           final sink = TestSink();
           await ed.save(sink);
           await ed.dispose();

@@ -46,7 +46,7 @@ Future<Uint8List> _saveIncrementallyTwice(Pdf pdf, Uint8List base) async {
   var current = base;
   for (final title in const ['first edit', 'second edit']) {
     final editor = await pdf.edit(MemorySource(current));
-    await editor.setTitle(title);
+    await editor.setMetadata((await editor.metadata()).copyWith(title: title));
     final sink = MemorySink();
     await editor.save(sink, options: const PdfSaveOptions.incremental());
     await editor.dispose();

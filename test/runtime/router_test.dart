@@ -598,7 +598,7 @@ void main() {
       final edit = router.execute(
         bin.encodeRequest('editorMutate', {
           'handleId': editor,
-          'editOp': 'setTitle',
+          'editOp': 'setMetadata',
           'title': 'x',
         }),
         cancel: hook,

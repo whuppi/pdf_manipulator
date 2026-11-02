@@ -409,17 +409,16 @@ void main() {
 
   testWidgets('editor metadata get/set + isModified', (t) async {
     final e = await pdf.edit(_src(minimalPdf));
-    await e.setTitle('T');
-    await e.setAuthor('A');
-    await e.setSubject('S');
-    await e.setKeywords('K');
-    expect(await e.title, 'T');
-    expect(await e.author, 'A');
-    expect(await e.subject, 'S');
-    expect(await e.keywords, 'K');
-    expect(await e.isModified, isTrue);
-    expect(await e.pageCount, 1);
-    expect(await e.version, isNotEmpty);
+    await e.setMetadata(
+      const PdfMetadata(title: 'T', author: 'A', subject: 'S', keywords: 'K'),
+    );
+    expect((await e.metadata()).title, 'T');
+    expect((await e.metadata()).author, 'A');
+    expect((await e.metadata()).subject, 'S');
+    expect((await e.metadata()).keywords, 'K');
+    expect(await e.isModified(), isTrue);
+    expect(await e.pageCount(), 1);
+    expect(await e.version(), isNotEmpty);
     final sink = MemorySink();
     await e.save(sink);
     await e.dispose();
@@ -436,13 +435,13 @@ void main() {
     final twoPage = mergeSink.takeBytes();
 
     final e = await pdf.edit(_src(twoPage));
-    await e.rotatePage(0, by: PdfRotation.r90);
-    await e.rotateAllPages(by: PdfRotation.r180);
-    final mb = await e.pageMediaBox(0);
+    await e.rotatePages(PdfPages.single(0), by: PdfRotation.r90);
+    await e.rotatePages(const PdfPages.all(), by: PdfRotation.r180);
+    final mb = (await e.pageInfo(pages: PdfPages.single(0))).single.mediaBox;
     expect(mb.width, greaterThan(0));
     await e.movePage(from: 0, to: 1);
-    await e.deletePage(1);
-    expect(await e.pageCount, 1);
+    await e.deletePages(PdfPages.single(1));
+    expect(await e.pageCount(), 1);
     final sink = MemorySink();
     await e.save(sink);
     await e.dispose();
@@ -456,8 +455,8 @@ void main() {
     final mergeSink = MemorySink();
     await pdf.merge([_src(minimalPdf), _src(minimalPdf)], mergeSink);
     final e = await pdf.edit(_src(mergeSink.takeBytes()));
-    await e.selectPages([0]);
-    expect(await e.pageCount, 1);
+    await e.keepPages([0]);
+    expect(await e.pageCount(), 1);
     final sink = MemorySink();
     await e.save(sink);
     await e.dispose();
@@ -470,7 +469,7 @@ void main() {
   testWidgets('editor mergeFrom', (t) async {
     final e = await pdf.edit(_src(minimalPdf));
     await e.mergeFrom(_src(minimalPdf));
-    expect(await e.pageCount, 2);
+    expect(await e.pageCount(), 2);
     final sink = MemorySink();
     await e.save(sink);
     await e.dispose();
@@ -496,7 +495,7 @@ void main() {
 
   testWidgets('editor watermark survives save', (t) async {
     final e = await pdf.edit(_src(minimalPdf));
-    await e.addWatermark(0, 'WMTEXT');
+    await e.addWatermark('WMTEXT', pages: PdfPages.single(0));
     final sink = MemorySink();
     await e.save(sink);
     await e.dispose();
@@ -510,7 +509,7 @@ void main() {
 
   testWidgets('editor stamp after watermark keeps both', (t) async {
     final e = await pdf.edit(_src(minimalPdf));
-    await e.addWatermark(0, 'WMTEXT');
+    await e.addWatermark('WMTEXT', pages: PdfPages.single(0));
     await e.addStamp(0,
         type: PdfStampType.draft,
         rect: const PdfRect(x: 50, y: 50, width: 200, height: 60));
@@ -633,7 +632,8 @@ void main() {
     expect(full.pageCount, 1);
     await full.dispose();
 
-    await e.setTitle('incremental edit');
+    await e
+        .setMetadata((await e.metadata()).copyWith(title: 'incremental edit'));
     final s2 = MemorySink();
     await e.save(s2, options: const PdfSaveOptions.incremental());
     expect(s2.takeBytes().length, greaterThan(minimalPdf.length),
@@ -795,7 +795,10 @@ void main() {
 
     // Disposed means refusing, not just surviving.
     expect(() => doc.extractText(MemorySink()), throwsA(isA<PdfDisposed>()));
-    expect(() => e.setTitle('x'), throwsA(isA<PdfDisposed>()));
+    expect(
+      () => e.setMetadata(const PdfMetadata(title: 'x')),
+      throwsA(isA<PdfDisposed>()),
+    );
     expect(() => b.save(MemorySink()), throwsA(isA<PdfDisposed>()));
   });
 

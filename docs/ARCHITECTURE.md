@@ -140,10 +140,10 @@ copy-on-write overlay: each mutation files its *intent* into a staging
 field, and `save_to_bytes()` materializes the whole set in one pass.
 
 ```
-editor.rotatePage()   → modified_page_props[page]     (params only)
-editor.deletePage()   → page_order                    (index list)
+editor.rotatePages()  → modified_page_props[page]     (params only)
+editor.deletePages()  → page_order                    (index list)
 editor.addWatermark() → overlay_additions[page]       (elements)
-editor.setTitle()     → modified_info
+editor.setMetadata()  → modified_info
                               ↓
                         save_to_bytes()   ← every byte is produced here
 ```

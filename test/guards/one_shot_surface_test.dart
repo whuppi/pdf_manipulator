@@ -61,7 +61,9 @@ final _heading = RegExp(
   multiLine: true,
   caseSensitive: false,
 );
-final _call = RegExp(r'\.(\w+)\(');
+// A call on a value (`e.rotatePages(`), never a factory on a type
+// (`PdfPages.single(`) or a dot shorthand (`.r90`, `.all()`).
+final _call = RegExp(r'\b[a-z]\w*\.(\w+)\(');
 
 /// The rows of the "I want to..." table in [readme], or null without one.
 List<String>? readmeRows(String readme) {

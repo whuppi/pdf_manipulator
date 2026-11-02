@@ -38,169 +38,55 @@ base class PdfEditor extends PdfEdits implements _Handle {
   // ── Properties ──
 
   /// Current number of pages in the document.
-  PdfTask<int> get pageCount {
+  PdfTask<int> pageCount() {
     _check();
-    return _handle.pageCount;
+    return _handle.pageCount();
   }
 
   /// PDF version string of the document.
-  PdfTask<String> get version {
+  PdfTask<String> version() {
     _check();
-    return _handle.version;
+    return _handle.version();
   }
 
   /// Whether unsaved modifications exist.
-  PdfTask<bool> get isModified {
+  PdfTask<bool> isModified() {
     _check();
-    return _handle.isModified;
+    return _handle.isModified();
   }
 
   // ── Metadata ──
 
-  /// Returns the document title metadata.
-  PdfTask<String> get title {
+  /// Returns the document's standard info fields as the edited document
+  /// has them now; a field it does not carry is null.
+  PdfTask<PdfMetadata> metadata() {
     _check();
-    return _handle.title;
-  }
-
-  /// Sets the document title metadata.
-  PdfTask<void> setTitle(String value) {
-    _check();
-    return _handle.setTitle(value);
-  }
-
-  /// Returns the document author metadata.
-  PdfTask<String> get author {
-    _check();
-    return _handle.author;
-  }
-
-  /// Sets the document author metadata.
-  PdfTask<void> setAuthor(String value) {
-    _check();
-    return _handle.setAuthor(value);
-  }
-
-  /// Returns the document subject metadata.
-  PdfTask<String> get subject {
-    _check();
-    return _handle.subject;
-  }
-
-  /// Sets the document subject metadata.
-  PdfTask<void> setSubject(String value) {
-    _check();
-    return _handle.setSubject(value);
-  }
-
-  /// Returns the document keywords metadata.
-  PdfTask<String> get keywords {
-    _check();
-    return _handle.keywords;
-  }
-
-  /// Sets the document keywords metadata.
-  PdfTask<void> setKeywords(String value) {
-    _check();
-    return _handle.setKeywords(value);
-  }
-
-  /// Returns the document producer metadata (the software that produced the PDF).
-  PdfTask<String> get producer {
-    _check();
-    return _handle.producer;
-  }
-
-  /// Sets the document producer metadata.
-  PdfTask<void> setProducer(String value) {
-    _check();
-    return _handle.setProducer(value);
-  }
-
-  /// Returns the document creation date, or `null` when it has none or it
-  /// does not parse.
-  PdfTask<DateTime?> get creationDate {
-    _check();
-    return _handle.creationDate;
-  }
-
-  /// Sets the document creation date, stored in UTC.
-  PdfTask<void> setCreationDate(DateTime value) {
-    _check();
-    return _handle.setCreationDate(value);
+    return _handle.metadata();
   }
 
   // ── Pages ──
 
-  /// Turns all pages by [by] on top of their current rotation.
-  PdfTask<void> rotateAllPages({required PdfRotation by}) {
+  /// Returns the facts of [pages] (every page when null) as the edited
+  /// document has them now: boxes, rotation and label. A label is the
+  /// catalog's page-label entry for the page's position in the edited
+  /// document.
+  PdfTask<List<PdfPageInfo>> pageInfo({PdfPages? pages}) {
     _check();
-    return _handle.rotateAllPages(by: by);
+    return _handle.pageInfo(pages: pages);
   }
 
-  /// Returns the media box (bounding rectangle) of the given [page].
-  PdfTask<PdfRect> pageMediaBox(int page) {
+  /// Appends pages from [source] at the end of this document: every page,
+  /// or only [pages] (0-based, in the order given). [password] opens an
+  /// encrypted [source]; a missing or wrong one throws the typed password
+  /// error. An index past the other document's last page throws
+  /// [PdfEngineError].
+  PdfTask<void> mergeFrom(
+    DataSource source, {
+    PdfPages? pages,
+    String? password,
+  }) {
     _check();
-    return _handle.pageMediaBox(page);
-  }
-
-  /// Returns the crop box (visible/printable rectangle) of the given
-  /// [page], or `null` when the page has no `/CropBox` (it then defaults
-  /// to the media box; absence is reported rather than the inherited
-  /// value).
-  PdfTask<PdfRect?> pageCropBox(int page) {
-    _check();
-    return _handle.pageCropBox(page);
-  }
-
-  /// Sets the media box (bounding rectangle) of the given [page].
-  PdfTask<void> setPageMediaBox(int page, PdfRect box) {
-    _check();
-    return _handle.setPageMediaBox(page, box);
-  }
-
-  /// Sets the crop box (visible/printable rectangle) of the given [page].
-  PdfTask<void> setPageCropBox(int page, PdfRect box) {
-    _check();
-    return _handle.setPageCropBox(page, box);
-  }
-
-  /// Sets the absolute rotation of [page] to [rotation], replacing any
-  /// existing rotation. Unlike [rotatePage] this does not add to the
-  /// current rotation.
-  PdfTask<void> setPageRotation(int page, {required PdfRotation rotation}) {
-    _check();
-    return _handle.setPageRotation(page, rotation: rotation);
-  }
-
-  /// Removes the given [page] (0-based index) from the document.
-  PdfTask<void> deletePage(int page) {
-    _check();
-    return _handle.deletePage(page);
-  }
-
-  /// Moves the page at index [from] to index [to].
-  PdfTask<void> movePage({required int from, required int to}) {
-    _check();
-    return _handle.movePage(from: from, to: to);
-  }
-
-  /// Keeps only the specified [pages] (by index), in the order given,
-  /// removing all others. A page listed twice throws [PdfInvalidArgument].
-  PdfTask<void> selectPages(List<int> pages) {
-    _check();
-    if (pages.toSet().length != pages.length) {
-      throw PdfInvalidArgument('a page is listed twice: $pages');
-    }
-    return _handle.selectPages(pages);
-  }
-
-  /// Appends pages from [otherPdf] at the end of this document: every
-  /// page, or only [pages] (0-based, in the order given). An index past
-  /// the other document's last page throws [PdfEngineError].
-  PdfTask<void> mergeFrom(DataSource otherPdf, {List<int>? pages}) {
-    _check();
-    return _handle.mergeFrom(otherPdf, pages: pages);
+    return _handle.mergeFrom(source, pages: pages, password: password);
   }
 
   // ── Optimization ──
@@ -344,36 +230,12 @@ base class PdfEditor extends PdfEdits implements _Handle {
 
   /// Lists the images placed on [page] (0-based): each one's resource
   /// [PdfPageImage.name], its placement [PdfPageImage.bounds] in points
-  /// and the full [PdfPageImage.transform]. The name is what [resizeImage]
+  /// and the full [PdfPageImage.transform]. The name is what [setImageBounds]
   /// takes. A page with no images returns an empty list; a page index out
   /// of range throws [PdfEngineError].
   PdfTask<List<PdfPageImage>> pageImages(int page) {
     _check();
     return _handle.pageImages(page);
-  }
-
-  /// Resizes the named image on [page] to [width] x [height] points.
-  PdfTask<void> resizeImage(
-    int page,
-    String imageName, {
-    required double width,
-    required double height,
-  }) {
-    _check();
-    return _handle.resizeImage(page, imageName, width: width, height: height);
-  }
-
-  /// Moves the named image on [page] so its lower-left corner sits at
-  /// ([x], [y]) in points; the size is unchanged. Names come from
-  /// [pageImages].
-  PdfTask<void> repositionImage(
-    int page,
-    String imageName, {
-    required double x,
-    required double y,
-  }) {
-    _check();
-    return _handle.repositionImage(page, imageName, x: x, y: y);
   }
 
   /// Moves and resizes the named image on [page] to [bounds] in points in

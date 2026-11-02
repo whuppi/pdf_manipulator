@@ -36,7 +36,9 @@ void registerOneShotTests(Pdf Function() createPdf) {
     test('edits(...).rotatePage rotates, saves and closes', () async {
       final pdf = createPdf();
       final out = TestSink();
-      await pdf.edits(src(minimalPdf), out).rotatePage(0, by: PdfRotation.r90);
+      await pdf
+          .edits(src(minimalPdf), out)
+          .rotatePages(PdfPages.single(0), by: PdfRotation.r90);
       final doc = await pdf.open(src(out.takeBytes()));
       expect((await doc.pageInfo())[0].rotation, PdfRotation.r90);
       await doc.dispose();
@@ -45,7 +47,9 @@ void registerOneShotTests(Pdf Function() createPdf) {
     test('edits(...).addWatermark puts the text on the page', () async {
       final pdf = createPdf();
       final out = TestSink();
-      await pdf.edits(src(fTwoPageMarkers), out).addWatermark(0, 'ONESHOTMARK');
+      await pdf
+          .edits(src(fTwoPageMarkers), out)
+          .addWatermark('ONESHOTMARK', pages: PdfPages.single(0));
       final doc = await pdf.open(src(out.takeBytes()));
       expect(doc.pageCount, fTwoPageMarkersTruth.pages);
       final hits = await doc.search(
@@ -60,9 +64,12 @@ void registerOneShotTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final out = TestSink();
       final oneShot = pdf.edits(src(minimalPdf), out);
-      final first = oneShot.rotatePage(0, by: PdfRotation.r90);
+      final first = oneShot.rotatePages(
+        PdfPages.single(0),
+        by: PdfRotation.r90,
+      );
       expect(
-        () => oneShot.rotatePage(0, by: PdfRotation.r180),
+        () => oneShot.rotatePages(PdfPages.single(0), by: PdfRotation.r180),
         throwsA(
           isA<PdfInvalidArgument>().having(
             (e) => e.message,
@@ -86,7 +93,9 @@ void registerOneShotTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final out = TestSink();
       await expectLater(
-        pdf.edits(src(minimalPdf), out).rotatePage(5, by: PdfRotation.r90),
+        pdf
+            .edits(src(minimalPdf), out)
+            .rotatePages(PdfPages.single(5), by: PdfRotation.r90),
         throwsA(isA<PdfError>()),
       );
       expect(out.length, 0);
@@ -171,10 +180,15 @@ void registerOneShotTests(Pdf Function() createPdf) {
       late PdfEditor kept;
       await pdf.rewrite(src(minimalPdf), out, (editor) async {
         kept = editor;
-        await editor.rotatePage(0, by: PdfRotation.r90);
-        await editor.setTitle('Rewritten');
+        await editor.rotatePages(PdfPages.single(0), by: PdfRotation.r90);
+        await editor.setMetadata(
+          (await editor.metadata()).copyWith(title: 'Rewritten'),
+        );
       });
-      expect(() => kept.setTitle('x'), throwsA(isA<PdfDisposed>()));
+      expect(
+        () => kept.setMetadata(const PdfMetadata(title: 'x')),
+        throwsA(isA<PdfDisposed>()),
+      );
       final doc = await pdf.open(src(out.takeBytes()));
       expect((await doc.pageInfo())[0].rotation, PdfRotation.r90);
       expect(doc.metadata.title, 'Rewritten');
@@ -190,12 +204,17 @@ void registerOneShotTests(Pdf Function() createPdf) {
         await expectLater(
           pdf.rewrite(src(minimalPdf), out, (editor) async {
             kept = editor;
-            await editor.setTitle('never saved');
+            await editor.setMetadata(
+              (await editor.metadata()).copyWith(title: 'never saved'),
+            );
             throw const PdfUnsupported('boom');
           }),
           throwsA(isA<PdfUnsupported>()),
         );
-        expect(() => kept.setTitle('x'), throwsA(isA<PdfDisposed>()));
+        expect(
+          () => kept.setMetadata(const PdfMetadata(title: 'x')),
+          throwsA(isA<PdfDisposed>()),
+        );
         expect(out.length, 0);
       },
       timeout: t(1),
@@ -293,7 +312,7 @@ void registerOneShotTests(Pdf Function() createPdf) {
         final editor = await pdf.edit(src(minimalPdf));
         await HandleBackstop.finalizeNow(editor);
         expect(
-          () => editor.pageCount,
+          () => editor.pageCount(),
           throwsA(isA<PdfEngineError>()),
           reason: 'the engine no longer holds the editor',
         );

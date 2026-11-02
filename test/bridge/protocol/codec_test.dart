@@ -11,6 +11,7 @@ import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
 import 'package:pdf_manipulator/src/types/pdf_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
+import 'package:pdf_manipulator/src/types/pdf_metadata.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
@@ -23,9 +24,30 @@ void main() {
     test('parses complete page list', () {
       final pages = decodePageInfos({
         'pages': [
-          {'index': 0, 'width': 612.0, 'height': 792.0, 'rotation': 'r0'},
-          {'index': 1, 'width': 612.0, 'height': 792.0, 'rotation': 'r90'},
-          {'index': 2, 'width': 842.0, 'height': 595.0, 'rotation': 'r0'},
+          {
+            'index': 0,
+            'x': 0.0,
+            'y': 0.0,
+            'width': 612.0,
+            'height': 792.0,
+            'rotation': 'r0',
+          },
+          {
+            'index': 1,
+            'x': 0.0,
+            'y': 0.0,
+            'width': 612.0,
+            'height': 792.0,
+            'rotation': 'r90',
+          },
+          {
+            'index': 2,
+            'x': 0.0,
+            'y': 0.0,
+            'width': 842.0,
+            'height': 595.0,
+            'rotation': 'r0',
+          },
         ],
       });
       expect(pages, hasLength(3));
@@ -37,7 +59,14 @@ void main() {
       expect(
         () => decodePageInfos({
           'pages': [
-            {'index': 0, 'width': 612.0, 'height': 792.0, 'rotation': 'r45'},
+            {
+              'index': 0,
+              'x': 0.0,
+              'y': 0.0,
+              'width': 612.0,
+              'height': 792.0,
+              'rotation': 'r45',
+            },
           ],
         }),
         throwsA(isA<PdfEngineError>()),
@@ -412,38 +441,71 @@ void main() {
         'keywords': 'kw',
       });
       expect(m.pageCount, 5);
-      expect(m.title, 'My Doc');
+      expect(m.metadata.title, 'My Doc');
+      expect(m.metadata.creator, isNull, reason: 'an absent field is null');
     });
   });
 
-  group('decodeMediaBox', () {
-    test('parses rect', () {
-      final r = decodeMediaBox({
-        'x': 0.0,
-        'y': 0.0,
-        'width': 612.0,
-        'height': 792.0,
+  group('decodePageInfos boxes', () {
+    test('the crop box is null when the page has none', () {
+      final pages = decodePageInfos({
+        'pages': [
+          {
+            'index': 0,
+            'x': 0.0,
+            'y': 0.0,
+            'width': 612.0,
+            'height': 792.0,
+            'hasCrop': false,
+          },
+        ],
       });
-      expect(r.width, 612.0);
+      expect(pages.single.mediaBox.width, 612.0);
+      expect(pages.single.cropBox, isNull);
+    });
+
+    test('parses both boxes when the page has a crop box', () {
+      final pages = decodePageInfos({
+        'pages': [
+          {
+            'index': 0,
+            'x': 0.0,
+            'y': 0.0,
+            'width': 612.0,
+            'height': 792.0,
+            'hasCrop': true,
+            'cropX': 72.0,
+            'cropY': 72.0,
+            'cropWidth': 468.0,
+            'cropHeight': 648.0,
+          },
+        ],
+      });
+      expect(
+        pages.single.cropBox,
+        const PdfRect(x: 72, y: 72, width: 468, height: 648),
+      );
     });
   });
 
-  group('decodeCropBox', () {
-    test('null when has is false', () {
-      expect(decodeCropBox({'has': false}), isNull);
-    });
-
-    test('parses rect when has is true', () {
-      final r = decodeCropBox({
-        'has': true,
-        'x': 72.0,
-        'y': 72.0,
-        'width': 468.0,
-        'height': 648.0,
+  group('encodePages', () {
+    test('every page is a flag, any other scope a list', () {
+      expect(encodePages(const PdfPages.all()), {'pagesAll': true});
+      expect(encodePages(const PdfPages.single(2)), {
+        'pages': [2],
       });
-      expect(r, isNotNull);
-      expect(r!.x, 72.0);
-      expect(r.width, 468.0);
+      expect(encodePages(const PdfPages.list([3, 1])), {
+        'pages': [3, 1],
+      });
+      expect(encodePages(const PdfPages.range(1, 4)), {
+        'pages': [1, 2, 3],
+      });
+    });
+  });
+
+  group('encodeMetadataArgs', () {
+    test('a null field is left out', () {
+      expect(encodeMetadataArgs(const PdfMetadata(title: 'T')), {'title': 'T'});
     });
   });
 

@@ -105,11 +105,8 @@ enum EngineOp {
   /// Check whether the editor has unsaved modifications.
   editorIsModified('editorIsModified'),
 
-  /// Get a page's media box rectangle.
-  editorPageMediaBox('editorPageMediaBox'),
-
-  /// Get a page's crop box rectangle, or absence when unset.
-  editorPageCropBox('editorPageCropBox'),
+  /// Get the facts of pages as the edited document has them now.
+  editorPageInfo('editorPageInfo'),
 
   /// List the image XObjects placed on a page.
   editorPageImages('editorPageImages'),

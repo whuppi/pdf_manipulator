@@ -93,8 +93,8 @@ void registerEditorStressTests(Pdf Function() createPdf) {
         // prove every page took its edit.
         for (var i = 0; i < 10; i++) {
           await editor.addWatermark(
-            i,
             'EDITED',
+            pages: PdfPages.single(i),
             layer: PdfWatermarkLayer.background,
           );
         }

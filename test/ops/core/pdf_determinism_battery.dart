@@ -124,9 +124,11 @@ void registerDeterminismTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       Future<Uint8List> run() => _save(pdf, fixture, (editor) async {
         await editor.reduceImages(PdfImagePolicy.screen);
-        await editor.setTitle('determinism');
+        await editor.setMetadata(
+          (await editor.metadata()).copyWith(title: 'determinism'),
+        );
         for (var page = 0; page < _pages; page += 3) {
-          await editor.addWatermark(page, 'DRAFT');
+          await editor.addWatermark('DRAFT', pages: PdfPages.single(page));
         }
       });
 
@@ -212,7 +214,10 @@ void registerDeterminismTests(Pdf Function() createPdf) {
     test('a merge of selected pages saves the same bytes twice', () async {
       final pdf = createPdf();
       Future<Uint8List> run() => _save(pdf, fixture, (editor) async {
-        await editor.mergeFrom(src(other), pages: [0, 2, 4, 6, 8, 10]);
+        await editor.mergeFrom(
+          src(other),
+          pages: PdfPages.list([0, 2, 4, 6, 8, 10]),
+        );
         await editor.reduceImages(PdfImagePolicy.ebook);
       });
 

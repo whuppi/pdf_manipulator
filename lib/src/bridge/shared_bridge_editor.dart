@@ -47,128 +47,96 @@ class _SharedEditorHandle extends BridgeEditorHandle {
     sources: [data],
   );
 
-  // ── Metadata queries ──
+  // ── Metadata ──
 
   @override
-  PdfTask<int> get pageCount => _exec(
+  PdfTask<int> pageCount() => _exec(
     EngineOp.editorGetMetadata,
     {},
   ).map((map) => codec.decodeEditorMetadata(map).pageCount);
 
   @override
-  PdfTask<String> get version => _exec(
+  PdfTask<String> version() => _exec(
     EngineOp.editorGetMetadata,
     {},
   ).map((map) => codec.decodeEditorMetadata(map).version);
 
   @override
-  PdfTask<bool> get isModified => _exec(
+  PdfTask<bool> isModified() => _exec(
     EngineOp.editorIsModified,
     {},
   ).map((map) => map['modified'] as bool? ?? false);
 
   @override
-  PdfTask<String> get title => _exec(
+  PdfTask<PdfMetadata> metadata() => _exec(
     EngineOp.editorGetMetadata,
     {},
-  ).map((map) => codec.decodeEditorMetadata(map).title);
+  ).map((map) => codec.decodeEditorMetadata(map).metadata);
 
   @override
-  PdfTask<String> get author => _exec(
-    EngineOp.editorGetMetadata,
-    {},
-  ).map((map) => codec.decodeEditorMetadata(map).author);
-
-  @override
-  PdfTask<String> get subject => _exec(
-    EngineOp.editorGetMetadata,
-    {},
-  ).map((map) => codec.decodeEditorMetadata(map).subject);
-
-  @override
-  PdfTask<String> get keywords => _exec(
-    EngineOp.editorGetMetadata,
-    {},
-  ).map((map) => codec.decodeEditorMetadata(map).keywords);
-
-  @override
-  PdfTask<String> get producer => _exec(
-    EngineOp.editorGetMetadata,
-    {},
-  ).map((map) => codec.decodeEditorMetadata(map).producer);
-
-  @override
-  PdfTask<DateTime?> get creationDate => _exec(
-    EngineOp.editorGetMetadata,
-    {},
-  ).map((map) => codec.decodeEditorMetadata(map).creationDate);
-
-  // ── Metadata setters ──
-
-  @override
-  PdfTask<void> setTitle(String value) => _mutate('setTitle', {'title': value});
-  @override
-  PdfTask<void> setAuthor(String value) =>
-      _mutate('setAuthor', {'author': value});
-  @override
-  PdfTask<void> setSubject(String value) =>
-      _mutate('setSubject', {'subject': value});
-  @override
-  PdfTask<void> setKeywords(String value) =>
-      _mutate('setKeywords', {'keywords': value});
-  @override
-  PdfTask<void> setProducer(String value) =>
-      _mutate('setProducer', {'producer': value});
-  @override
-  PdfTask<void> setCreationDate(DateTime value) =>
-      _mutate('setCreationDate', {'creationDate': codec.putDate(value)});
+  PdfTask<void> setMetadata(PdfMetadata metadata) =>
+      _mutate('setMetadata', codec.encodeMetadataArgs(metadata));
 
   // ── Pages ──
 
   @override
-  PdfTask<void> rotatePage(int page, {required PdfRotation by}) =>
-      _mutate('rotatePage', {'page': page, 'rotation': codec.putEnum(by)});
-  @override
-  PdfTask<void> rotateAllPages({required PdfRotation by}) =>
-      _mutate('rotateAll', {'rotation': codec.putEnum(by)});
-  @override
-  PdfTask<PdfRect> pageMediaBox(int page) => _exec(
-    EngineOp.editorPageMediaBox,
-    {'page': page},
-  ).map((map) => codec.decodeMediaBox(map));
-  @override
-  PdfTask<PdfRect?> pageCropBox(int page) => _exec(EngineOp.editorPageCropBox, {
-    'page': page,
-  }).map((map) => codec.decodeCropBox(map));
-  @override
-  PdfTask<void> setPageMediaBox(int page, PdfRect box) =>
-      _mutate('setPageMediaBox', {'page': page, ...codec.encodeRectArgs(box)});
-  @override
-  PdfTask<void> setPageCropBox(int page, PdfRect box) =>
-      _mutate('setPageCropBox', {'page': page, ...codec.encodeRectArgs(box)});
-  @override
-  PdfTask<void> setPageRotation(int page, {required PdfRotation rotation}) =>
-      _mutate('setPageRotation', {
-        'page': page,
-        'rotation': codec.putEnum(rotation),
+  PdfTask<void> rotatePages(PdfPages pages, {required PdfRotation by}) =>
+      _mutate('rotatePages', {
+        ...codec.encodePages(pages),
+        'rotation': codec.putEnum(by),
       });
   @override
-  PdfTask<void> deletePage(int page) => _mutate('deletePage', {'page': page});
+  PdfTask<void> setRotation(PdfPages pages, PdfRotation rotation) => _mutate(
+    'setRotation',
+    {...codec.encodePages(pages), 'rotation': codec.putEnum(rotation)},
+  );
+  @override
+  PdfTask<List<PdfPageInfo>> pageInfo({PdfPages? pages}) => _exec(
+    EngineOp.editorPageInfo,
+    codec.encodePages(pages ?? const PdfPages.all()),
+  ).map(codec.decodePageInfos);
+  @override
+  PdfTask<void> setMediaBox(PdfPages pages, PdfRect box) => _mutate(
+    'setMediaBox',
+    {...codec.encodePages(pages), ...codec.encodeRectArgs(box)},
+  );
+  @override
+  PdfTask<void> setCropBox(PdfPages pages, PdfRect? box) =>
+      _mutate('setCropBox', {
+        ...codec.encodePages(pages),
+        if (box != null) ...codec.encodeRectArgs(box),
+      });
+  @override
+  PdfTask<void> deletePages(PdfPages pages) =>
+      _mutate('deletePages', codec.encodePages(pages));
   @override
   PdfTask<void> movePage({required int from, required int to}) =>
       _mutate('movePage', {'from': from, 'to': to});
   @override
-  PdfTask<void> selectPages(List<int> pages) =>
-      _mutate('selectPages', {'pages': pages});
+  PdfTask<void> keepPages(List<int> order) =>
+      _mutate('keepPages', {'pages': order});
   @override
-  PdfTask<void> mergeFrom(DataSource otherPdf, {List<int>? pages}) => _exec(
+  PdfTask<void> mergeFrom(
+    DataSource source, {
+    PdfPages? pages,
+    String? password,
+  }) => _exec(
     EngineOp.editorMergeFrom,
-    {'sourceLength': otherPdf.length, if (pages != null) 'pages': pages},
-    sources: [otherPdf],
+    {
+      'sourceLength': source.length,
+      if (pages != null) ..._mergePages(pages),
+      if (password != null) 'password': password,
+    },
+    sources: [source],
     // The editor keeps the merged document open to save from it; the
     // channel lives until the editor is disposed.
     keepSources: {0},
   );
+
+  /// The wire pages of a merge: the engine reads every page of the source
+  /// when the key is absent.
+  static Map<String, Object?> _mergePages(PdfPages pages) =>
+      pages is PdfPagesAll ? const {} : codec.encodePages(pages);
 
   // ── Optimization ──
 
@@ -186,13 +154,13 @@ class _SharedEditorHandle extends BridgeEditorHandle {
 
   @override
   PdfTask<void> addWatermark(
-    int page,
+    PdfPages pages,
     String text, {
     PdfWatermarkStyle style = const PdfWatermarkStyle(),
     PdfWatermarkPosition position = const PdfWatermarkPosition.center(),
     PdfWatermarkLayer layer = PdfWatermarkLayer.foreground,
   }) => _mutate('watermark', {
-    'page': page,
+    ...codec.encodePages(pages),
     ...codec.encodeWatermarkArgs(text, style, position, layer),
   });
 
@@ -279,32 +247,6 @@ class _SharedEditorHandle extends BridgeEditorHandle {
     EngineOp.editorPageImages,
     {'page': page},
   ).map(codec.decodePageImages);
-
-  @override
-  PdfTask<void> resizeImage(
-    int page,
-    String imageName, {
-    required double width,
-    required double height,
-  }) => _mutate('resizeImage', {
-    'page': page,
-    'imageName': imageName,
-    'width': width,
-    'height': height,
-  });
-
-  @override
-  PdfTask<void> repositionImage(
-    int page,
-    String imageName, {
-    required double x,
-    required double y,
-  }) => _mutate('repositionImage', {
-    'page': page,
-    'imageName': imageName,
-    'x': x,
-    'y': y,
-  });
 
   @override
   PdfTask<void> setImageBounds(int page, String imageName, PdfRect bounds) =>

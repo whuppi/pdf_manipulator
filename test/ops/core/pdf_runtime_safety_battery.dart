@@ -306,7 +306,7 @@ void registerRuntimeSafetyTests({PdfConfig? Function()? config}) {
       final edit = await router.execute(
         bin.encodeRequest('editorMutate', {
           'handleId': editor,
-          'editOp': 'setTitle',
+          'editOp': 'setMetadata',
           'title': 'kept',
         }),
         cancel: hook,

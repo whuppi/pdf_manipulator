@@ -199,88 +199,58 @@ abstract class BridgeEditorHandle {
   CancelHook? scope;
 
   /// Number of pages in the document.
-  PdfTask<int> get pageCount;
+  PdfTask<int> pageCount();
 
   /// PDF version string.
-  PdfTask<String> get version;
+  PdfTask<String> version();
 
   /// Whether the document has unsaved modifications.
-  PdfTask<bool> get isModified;
+  PdfTask<bool> isModified();
 
   // ── Metadata ──
 
-  /// Returns the document title.
-  PdfTask<String> get title;
+  /// Returns the document's standard info fields as the edited document
+  /// has them now.
+  PdfTask<PdfMetadata> metadata();
 
-  /// Sets the document title.
-  PdfTask<void> setTitle(String value);
-
-  /// Returns the document author.
-  PdfTask<String> get author;
-
-  /// Sets the document author.
-  PdfTask<void> setAuthor(String value);
-
-  /// Returns the document subject.
-  PdfTask<String> get subject;
-
-  /// Sets the document subject.
-  PdfTask<void> setSubject(String value);
-
-  /// Returns the document keywords.
-  PdfTask<String> get keywords;
-
-  /// Sets the document keywords.
-  PdfTask<void> setKeywords(String value);
-
-  /// Returns the document producer.
-  PdfTask<String> get producer;
-
-  /// Sets the document producer.
-  PdfTask<void> setProducer(String value);
-
-  /// Returns the document creation date, or `null` when it has none or it
-  /// does not parse.
-  PdfTask<DateTime?> get creationDate;
-
-  /// Sets the document creation date.
-  PdfTask<void> setCreationDate(DateTime value);
+  /// Replaces the document's standard info fields with [metadata]; a null
+  /// field is removed.
+  PdfTask<void> setMetadata(PdfMetadata metadata);
 
   // ── Pages ──
 
-  /// Turns a single [page] by [by] on top of its current rotation.
-  PdfTask<void> rotatePage(int page, {required PdfRotation by});
+  /// Turns every page in [pages] by [by] on top of its current rotation.
+  PdfTask<void> rotatePages(PdfPages pages, {required PdfRotation by});
 
-  /// Turns all pages by [by] on top of their current rotation.
-  PdfTask<void> rotateAllPages({required PdfRotation by});
+  /// Sets the absolute rotation of every page in [pages].
+  PdfTask<void> setRotation(PdfPages pages, PdfRotation rotation);
 
-  /// Returns the media box rectangle for [page].
-  PdfTask<PdfRect> pageMediaBox(int page);
+  /// Returns the facts of [pages] (every page when null) as the edited
+  /// document has them now.
+  PdfTask<List<PdfPageInfo>> pageInfo({PdfPages? pages});
 
-  /// Returns the crop box rectangle for [page], or `null` when unset.
-  PdfTask<PdfRect?> pageCropBox(int page);
+  /// Sets the media box of every page in [pages].
+  PdfTask<void> setMediaBox(PdfPages pages, PdfRect box);
 
-  /// Sets the media box rectangle for [page].
-  PdfTask<void> setPageMediaBox(int page, PdfRect box);
+  /// Sets the crop box of every page in [pages]; a null [box] removes it.
+  PdfTask<void> setCropBox(PdfPages pages, PdfRect? box);
 
-  /// Sets the crop box rectangle for [page].
-  PdfTask<void> setPageCropBox(int page, PdfRect box);
-
-  /// Sets the absolute rotation of [page].
-  PdfTask<void> setPageRotation(int page, {required PdfRotation rotation});
-
-  /// Deletes a single [page].
-  PdfTask<void> deletePage(int page);
+  /// Deletes every page in [pages].
+  PdfTask<void> deletePages(PdfPages pages);
 
   /// Moves a page from index [from] to index [to].
   PdfTask<void> movePage({required int from, required int to});
 
-  /// Retains only the specified [pages], removing all others.
-  PdfTask<void> selectPages(List<int> pages);
+  /// Retains only the pages in [order], in that order, removing all others.
+  PdfTask<void> keepPages(List<int> order);
 
-  /// Appends pages from [otherPdf] into this document; [pages] selects
-  /// which ones, in the order given.
-  PdfTask<void> mergeFrom(DataSource otherPdf, {List<int>? pages});
+  /// Appends pages from [source] into this document; [pages] selects
+  /// which ones of it (every page when null), [password] opens it.
+  PdfTask<void> mergeFrom(
+    DataSource source, {
+    PdfPages? pages,
+    String? password,
+  });
 
   // ── Optimization ──
 
@@ -292,9 +262,9 @@ abstract class BridgeEditorHandle {
 
   // ── Watermark + stamps ──
 
-  /// Adds a text watermark to [page].
+  /// Adds a text watermark to every page in [pages].
   PdfTask<void> addWatermark(
-    int page,
+    PdfPages pages,
     String text, {
     PdfWatermarkStyle style = const PdfWatermarkStyle(),
     PdfWatermarkPosition position = const PdfWatermarkPosition.center(),
@@ -362,22 +332,6 @@ abstract class BridgeEditorHandle {
 
   /// Lists the image XObjects placed on [page].
   PdfTask<List<PdfPageImage>> pageImages(int page);
-
-  /// Resizes an embedded image on [page] by [imageName].
-  PdfTask<void> resizeImage(
-    int page,
-    String imageName, {
-    required double width,
-    required double height,
-  });
-
-  /// Moves an embedded image on [page] by [imageName] to ([x], [y]).
-  PdfTask<void> repositionImage(
-    int page,
-    String imageName, {
-    required double x,
-    required double y,
-  });
 
   /// Moves and resizes an embedded image on [page] by [imageName].
   PdfTask<void> setImageBounds(int page, String imageName, PdfRect bounds);

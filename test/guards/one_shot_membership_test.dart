@@ -70,7 +70,17 @@ void main() {
   test('the base classes carry the first members', () {
     expect(
       declaredPublic(PdfEdits),
-      containsAll(['addWatermark', 'rotatePage']),
+      containsAll([
+        'addWatermark',
+        'rotatePages',
+        'setRotation',
+        'setMediaBox',
+        'setCropBox',
+        'deletePages',
+        'keepPages',
+        'movePage',
+        'setMetadata',
+      ]),
     );
     expect(declaredPublic(PdfReads), containsAll(['search', 'render']));
   });

@@ -788,27 +788,25 @@ void registerDocTests(Pdf Function() createPdf) {
     // takes a page index.
     const box = PdfRect(x: 0, y: 0, width: 10, height: 10);
     final editorPageOps = <String, Future<Object?> Function(PdfEditor e)>{
-      'rotatePage': (e) => e.rotatePage(1, by: PdfRotation.r90),
-      'pageMediaBox': (e) => e.pageMediaBox(1),
-      'pageCropBox': (e) => e.pageCropBox(1),
-      'setPageMediaBox': (e) => e.setPageMediaBox(1, box),
-      'setPageCropBox': (e) => e.setPageCropBox(1, box),
-      'setPageRotation': (e) => e.setPageRotation(1, rotation: PdfRotation.r90),
-      'deletePage': (e) => e.deletePage(1),
+      'rotatePages': (e) =>
+          e.rotatePages(PdfPages.single(1), by: PdfRotation.r90),
+      'pageInfo': (e) => e.pageInfo(pages: PdfPages.single(1)),
+      'setMediaBox': (e) => e.setMediaBox(PdfPages.single(1), box),
+      'setCropBox': (e) => e.setCropBox(PdfPages.single(1), box),
+      'setRotation': (e) => e.setRotation(PdfPages.single(1), PdfRotation.r90),
+      'deletePages': (e) => e.deletePages(PdfPages.single(1)),
       'movePage from': (e) => e.movePage(from: 1, to: 0),
       'movePage to': (e) => e.movePage(from: 0, to: 1),
-      'selectPages': (e) => e.selectPages([1]),
+      'keepPages': (e) => e.keepPages([1]),
       'eraseRegions': (e) => e.eraseRegions(1, [box]),
       'clearEraseRegions': (e) => e.clearEraseRegions(1),
       'flattenForms': (e) => e.flattenForms(page: 1),
       'flattenAnnotations': (e) => e.flattenAnnotations(page: 1),
       'pageImages': (e) => e.pageImages(1),
-      'resizeImage': (e) => e.resizeImage(1, 'Im0', width: 10, height: 10),
-      'repositionImage': (e) => e.repositionImage(1, 'Im0', x: 0, y: 0),
       'setImageBounds': (e) => e.setImageBounds(1, 'Im0', box),
       'addRedaction': (e) => e.addRedaction(1, box),
       'redactionCount': (e) => e.redactionCount(1),
-      'addWatermark': (e) => e.addWatermark(1, 'W'),
+      'addWatermark': (e) => e.addWatermark('W', pages: PdfPages.single(1)),
       'addStamp': (e) => e.addStamp(1, type: PdfStampType.draft, rect: box),
       'addImageStamp': (e) => e.addImageStamp(1, src(minimalPng), rect: box),
     };
@@ -978,7 +976,9 @@ void registerDocTests(Pdf Function() createPdf) {
           PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
         );
         final editor = await pdf.edit(src(signed));
-        await editor.setTitle('x');
+        await editor.setMetadata(
+          (await editor.metadata()).copyWith(title: 'x'),
+        );
         final sink = TestSink();
         await editor.save(sink, options: const PdfSaveOptions.incremental());
         await editor.dispose();
@@ -998,7 +998,7 @@ void registerDocTests(Pdf Function() createPdf) {
         PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
       );
       final editor = await pdf.edit(src(signed));
-      await editor.setTitle('x');
+      await editor.setMetadata((await editor.metadata()).copyWith(title: 'x'));
       final sink = TestSink();
       await editor.save(sink, options: const PdfSaveOptions.fullRewrite());
       await editor.dispose();

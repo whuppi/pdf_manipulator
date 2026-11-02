@@ -145,8 +145,16 @@ That's it — every platform now runs the full engine. **Before you ship: it can
 | list the embedded files | `await doc.attachments()` |
 | list a page's annotations | `await doc.annotations(0)` |
 | extract an embedded file | `await doc.extractAttachment('notes.txt', sink)` |
-| watermark a page | `await pdf.rewrite(a, b, (e) => e.addWatermark(0, 'DRAFT'))` |
-| rotate a page | `await pdf.rewrite(a, b, (e) => e.rotatePage(0, by: .r90))` |
+| watermark every page | `await pdf.rewrite(a, b, (e) => e.addWatermark('DRAFT'))` |
+| watermark some pages | `await pdf.rewrite(a, b, (e) => e.addWatermark('DRAFT', pages: PdfPages.list([0, 2])))` |
+| rotate pages | `await pdf.rewrite(a, b, (e) => e.rotatePages(PdfPages.single(0), by: .r90))` |
+| set the rotation of pages | `await pdf.rewrite(a, b, (e) => e.setRotation(PdfPages.all(), .r0))` |
+| delete pages | `await pdf.rewrite(a, b, (e) => e.deletePages(PdfPages.list([1, 3])))` |
+| keep pages, in this order | `await pdf.rewrite(a, b, (e) => e.keepPages([2, 0, 1]))` |
+| move a page | `await pdf.rewrite(a, b, (e) => e.movePage(from: 3, to: 0))` |
+| set the title and other metadata | `await pdf.rewrite(a, b, (e) => e.setMetadata(const PdfMetadata(title: 'Q4 Report')))` |
+| resize the pages | `await pdf.rewrite(a, b, (e) => e.setMediaBox(PdfPages.all(), PdfRect(x: 0, y: 0, width: 595, height: 842)))` |
+| crop the pages, or remove the crop | `await pdf.rewrite(a, b, (e) => e.setCropBox(PdfPages.all(), null))` |
 
 Every read and every edit also has a one-shot: `pdf.reads(source)` opens the document, runs the one call and closes it, and `pdf.edits(source, output)` does the same for one edit.
 
@@ -400,10 +408,14 @@ The document's own facts are sync fields: `pageCount`, `version`, `isTagged`, `m
 ```dart
 final editor = await pdf.edit(source);
 
-await editor.setTitle('Q4 Report');
+await editor.setMetadata(const PdfMetadata(title: 'Q4 Report'));
 await editor.mergeFrom(appendix);
-await editor.deletePage(4);
-await editor.addWatermark(0, 'FINAL', style: PdfWatermarkStyle(opacity: 0.15));
+await editor.deletePages(PdfPages.single(4));
+await editor.addWatermark(
+  'FINAL',
+  pages: PdfPages.single(0),
+  style: PdfWatermarkStyle(opacity: 0.15),
+);
 final report = await editor.reduceImages(PdfImagePolicy.ebook); // 150 ppi, JPEG q75
 print('${report.changed} images, ${report.bytesBefore} → ${report.bytesAfter} bytes');
 
@@ -411,7 +423,7 @@ await editor.save(output); // see save options below
 await editor.dispose();
 ```
 
-Also on the editor: `mergeFrom` (all pages, or `pages:`), `selectPages`, `rotatePage` / `rotateAllPages` / `setPageRotation` (absolute), `addStamp` / `addImageStamp`, `embedFile` (with description, mime type and relationship), `eraseRegions` / `clearEraseRegions`, `cropMargins`, `pageImages` / `resizeImage` / `repositionImage` / `setImageBounds`, `pageMediaBox` / `setPageMediaBox`, `pageCropBox` / `setPageCropBox`, `flattenForms` / `flattenAnnotations` (each takes an optional `page`), `setFormFieldValue`, `removeFormField`, `setFormFieldReadOnly` / `setFormFieldRequired` / `setFormFieldFlags`, `setFormFieldTooltip`, `setFormFieldBounds`, `setFormFieldMaxLength`, `setFormFieldAlignment`, `setFormFieldBackgroundColor` / `setFormFieldBorderColor` / `setFormFieldBorderWidth` / `setFormFieldAppearance`, `unembedStandardFonts`, `convertToPdfA`, `scrubMetadata` / `sanitize`, and metadata get/set.
+Also on the editor: `mergeFrom` (all pages, or `pages:`; `password:` opens an encrypted source), `keepPages`, `rotatePages` / `setRotation` (absolute), `deletePages`, `addStamp` / `addImageStamp`, `embedFile` (with description, mime type and relationship), `eraseRegions` / `clearEraseRegions`, `cropMargins`, `pageImages` / `setImageBounds`, `pageInfo` (media box and crop box) / `setMediaBox` / `setCropBox`, `flattenForms` / `flattenAnnotations` (each takes an optional `page`), `setFormFieldValue`, `removeFormField`, `setFormFieldReadOnly` / `setFormFieldRequired` / `setFormFieldFlags`, `setFormFieldTooltip`, `setFormFieldBounds`, `setFormFieldMaxLength`, `setFormFieldAlignment`, `setFormFieldBackgroundColor` / `setFormFieldBorderColor` / `setFormFieldBorderWidth` / `setFormFieldAppearance`, `unembedStandardFonts`, `convertToPdfA`, `scrubMetadata` / `sanitize`, and `metadata` / `setMetadata`.
 
 Save options:
 

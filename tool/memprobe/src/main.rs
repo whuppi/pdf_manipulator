@@ -246,7 +246,8 @@ fn run() -> Result<(), String> {
                 st,
                 re("editorMutate")
                     .put("handleId", i32v(hid))
-                    .put("editOp", strv("rotateAll"))
+                    .put("editOp", strv("rotatePages"))
+                    .put("pagesAll", wire::Value::Bool(true))
                     .put("rotation", strv("r90")),
                 vec![],
                 vec![],
@@ -256,7 +257,7 @@ fn run() -> Result<(), String> {
             Ok(())
         });
 
-        // edit + setTitle + incremental save
+        // edit + setMetadata + incremental save
         step(&failed, "incrementalSave", name, limit("incrementalSave", name), |st| {
             let resp = call(st, re("editorOpen"), vec![source(path)], vec![])?;
             let hid = resp.i32("handleId").expect("editorOpen returns handleId");
@@ -264,7 +265,7 @@ fn run() -> Result<(), String> {
                 st,
                 re("editorMutate")
                     .put("handleId", i32v(hid))
-                    .put("editOp", strv("setTitle"))
+                    .put("editOp", strv("setMetadata"))
                     .put("title", strv("memprobe")),
                 vec![],
                 vec![],
@@ -408,7 +409,8 @@ fn run() -> Result<(), String> {
             st,
             re("editorMutate")
                 .put("handleId", i32v(hid))
-                .put("editOp", strv("rotateAll"))
+                .put("editOp", strv("rotatePages"))
+                .put("pagesAll", wire::Value::Bool(true))
                 .put("rotation", strv("r90")),
             vec![],
             vec![],

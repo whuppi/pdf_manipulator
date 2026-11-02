@@ -63,7 +63,9 @@ Future<void> expectOnlyPrunedPages(
 
   final editor = await pdf.edit(src(out));
   for (var p = 0; p < kept.length; p++) {
-    final box = await editor.pageMediaBox(p);
+    final box = (await editor.pageInfo(
+      pages: PdfPages.single(p),
+    )).single.mediaBox;
     expect(
       (box.width, box.height),
       truth.mediaBox,

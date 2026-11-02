@@ -1,5 +1,6 @@
 import 'package:meta/meta.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
+import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 
 /// Per-page metadata.
 @immutable
@@ -7,8 +8,8 @@ final class PdfPageInfo {
   /// Creates page info.
   const PdfPageInfo({
     required this.index,
-    required this.width,
-    required this.height,
+    required this.mediaBox,
+    this.cropBox,
     this.rotation = PdfRotation.r0,
     this.label,
   });
@@ -16,11 +17,18 @@ final class PdfPageInfo {
   /// Zero-based page index.
   final int index;
 
-  /// Page width in points.
-  final double width;
+  /// The page's media box in points: its physical size.
+  final PdfRect mediaBox;
 
-  /// Page height in points.
-  final double height;
+  /// The page's crop box in points, or `null` when the page has none (it
+  /// then shows its whole media box).
+  final PdfRect? cropBox;
+
+  /// Page width in points: the media box's.
+  double get width => mediaBox.width;
+
+  /// Page height in points: the media box's.
+  double get height => mediaBox.height;
 
   /// Page rotation.
   final PdfRotation rotation;
@@ -41,11 +49,11 @@ final class PdfPageInfo {
   bool operator ==(Object other) =>
       other is PdfPageInfo &&
       other.index == index &&
-      other.width == width &&
-      other.height == height &&
+      other.mediaBox == mediaBox &&
+      other.cropBox == cropBox &&
       other.rotation == rotation &&
       other.label == label;
 
   @override
-  int get hashCode => Object.hash(index, width, height, rotation, label);
+  int get hashCode => Object.hash(index, mediaBox, cropBox, rotation, label);
 }

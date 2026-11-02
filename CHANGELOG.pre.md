@@ -105,12 +105,12 @@ CONTENT RULES (never change)
 
 - **Breaking:** `PdfSaveOptions.incremental()` now appends the edits to the original bytes, so a signature over them stays valid, and throws `PdfIncrementalRefused` when an append cannot carry them (pages removed or reordered, redaction, content edits, an encrypted or repaired source) → catch it and save with `PdfSaveOptions.fullRewrite()`
 - **Breaking:** `PdfError` has a new subtype, `PdfIncrementalRefused` → add a case to every exhaustive `switch` over `PdfError`
-- **Breaking:** `extractPages` and `selectPages` throw `PdfInvalidArgument` for a page listed twice, which used to write a damaged file → list each page once
+- **Breaking:** `extractPages` and `keepPages` throw `PdfInvalidArgument` for a page listed twice, which used to write a damaged file → list each page once
 - **Breaking:** engine failures throw their own `PdfError` subtype (`PdfCorrupted`, `PdfPasswordRequired`, `PdfWrongPassword`, `PdfPageRangeError`, `PdfUnsupported`, `PdfInvalidArgument`, `PdfIoError`, `PdfCryptoError`) where they threw `PdfEngineError` → catch the subtype, or `PdfError` for all of them
 - **Breaking:** the page builder's `fieldKeystroke`, `fieldFormat`, `fieldValidate` and `fieldCalculate` throw `PdfInvalidArgument` on a page with no form field, and `linkUrl` and `linkPage` on a page with no text, where they did nothing → add the field or text first
 - **Breaking:** a radio group's value reads as `PdfChoiceValue` with the selected option's name, or `PdfNoValue` when none is selected, where it read as `PdfCheckedValue` → match on `PdfChoiceValue` for radio groups
 - **Breaking:** `PdfSignatureInfo` has a required `coversWholeDocument` parameter → pass it where you construct one, in test fakes for example
-- **Breaking:** page rotation is a `PdfRotation` (`r0`, `r90`, `r180`, `r270`): `rotatePage`, `rotateAllPages` and `rotatePages` take `by:`, `setPageRotation` takes `rotation:`, and `PdfPageInfo.rotation` is no longer an `int` → replace `degrees: 90` with `by: PdfRotation.r90`
+- **Breaking:** page rotation is a `PdfRotation` (`r0`, `r90`, `r180`, `r270`): `rotatePages` takes `by:`, `setRotation` takes the rotation, and `PdfPageInfo.rotation` is no longer an `int` → replace `degrees: 90` with `by: PdfRotation.r90`
 - **Breaking:** document dates are `DateTime?` in UTC: `PdfInfo.creationDate`, `PdfDoc.creationDate` and `PdfEditor.creationDate` were raw PDF date strings and are `null` when absent or unparseable, and `setCreationDate` takes a `DateTime` → read and pass `DateTime` values
 - **Breaking:** PDF/A and PDF/UA levels are enums: `validatePdfA` and `convertToPdfA` take a `PdfALevel` (`a1`, `a2`, `a3`), `validatePdfUa` a `PdfUaLevel` (`ua1`, `ua2`), and `convertToPdfA` defaults to `a2` where it defaulted to level 1 → pass `level: PdfALevel.a1` for the old default
 - **Breaking:** `PdfColor` and every result and options type (`PdfInfo`, `PdfPageInfo`, `PdfSaveOptions`, `PdfImagePolicy` and the rest) are `final` with value `==` and `hashCode` → replace an `extends` or `implements` of one with a wrapper
@@ -133,6 +133,15 @@ CONTENT RULES (never change)
 - **Breaking:** `PdfDoc.pages` is gone: the per-page facts are a read of their own, `pageInfo({pages})`, and opening a document no longer reads them → call `await doc.pageInfo()`
 - **Breaking:** `PdfDoc.extract` is `extractText(output, {pages, format})` and writes the text to a sink as the engine produces it, where it returned a string → write to a `MemorySink` and take the string with `takeString()`
 - **Breaking:** `search` takes the query as its first argument, `search(query, {pages})`, where it took a named `query:` → drop the label
+- **Breaking:** `PdfEditor.pageCount`, `version` and `isModified` are methods → write `await editor.pageCount()`
+- **Breaking:** the editor's `title`, `author`, `subject`, `keywords`, `producer`, `creationDate` and their setters are `metadata()` and `setMetadata(PdfMetadata)`, which replaces the standard fields, so a null field is removed → change one with `setMetadata((await editor.metadata()).copyWith(title: 'X'))`
+- **Breaking:** `rotatePage`, `rotateAllPages` and `setPageRotation` are `rotatePages(pages, by:)` and `setRotation(pages, rotation)`, over a `PdfPages` → call `rotatePages(const PdfPages.all(), by: PdfRotation.r90)`
+- **Breaking:** `pageMediaBox`, `pageCropBox`, `setPageMediaBox` and `setPageCropBox` are `pageInfo({pages})` with `mediaBox` and `cropBox`, `setMediaBox(pages, box)` and `setCropBox(pages, box)` → read `(await editor.pageInfo(pages: PdfPages.single(0))).single.cropBox`; a null box removes the crop box
+- **Breaking:** `deletePage(int)` is `deletePages(PdfPages)` and `selectPages` is `keepPages`; deleting every page throws `PdfInvalidArgument`, and so does a page list that is empty or names a page twice → call `deletePages(PdfPages.list([1, 3]))`
+- **Breaking:** `mergeFrom(source, {pages, password})` takes `pages` as a `PdfPages` and opens an encrypted source with `password`, a missing or wrong one throws `PdfPasswordRequired` or `PdfWrongPassword` → pass `pages: PdfPages.list([0, 2])`
+- **Breaking:** `resizeImage` and `repositionImage` are removed → call `setImageBounds(page, name, bounds)` with the size and position you want
+- **Breaking:** `addWatermark(page, text)` is `addWatermark(text, {pages})`, with every page as the default, and a page of `-1` no longer means every page → pass `pages: const PdfPages.all()`
+- **Breaking:** `PdfPageInfo` is built from `mediaBox` and `cropBox` rather than `width` and `height`, which stay as getters → pass `mediaBox: PdfRect(...)` where you construct one
 - **Breaking:** `render` and `extractImages` take an optional `pages`, where it was required → drop the argument to read every page
 - **Breaking:** `signatures`, `formFields`, `xfa` and `attachments` are methods now, where they were getters → add the parentheses
 - **Breaking:** `PdfDoc.formField(name)` is gone → find the field in `await doc.formFields()`
@@ -148,7 +157,7 @@ CONTENT RULES (never change)
 - Changed `open`, `edit`, `extractPages`, a full-rewrite save and `compress` to hold a bounded window of the document instead of all of it: a 38 MB, 10,000-page file now opens and saves in under 16 MB of engine memory, where it took up to 85 MB
 - Changed `mergeFrom` to keep the merged file open until the editor is disposed and copy its objects one at a time at save: merging a 10,000-page file takes under 16 MB of engine memory and about 2 seconds, where it took 163 MB and minutes
 - Added rotation, media box and crop box edits on merged pages; stamps, watermarks, erases and redactions on a merged page throw `PdfUnsupported`
-- Changed page edits to work on merged pages: `deletePage`, `movePage` and `selectPages` take a merged page like any other, where they threw `PdfUnsupported` on a document with merged pages
+- Changed page edits to work on merged pages: `deletePages`, `movePage` and `keepPages` take a merged page like any other, where they threw `PdfUnsupported` on a document with merged pages
 - Changed reading a source to fetch it in 64 KB pieces instead of one round trip per read: compressing a 70-page scan takes 18 ms on native, where it took 29 ms, and a third less time on the web
 - Changed `PdfDoc.extractText` of all pages to stream one page at a time from the engine: extracting text from a 10,000-page file takes under 16 MB of engine memory, where its first call held 281 MB
 - Changed the web lanes to retire a worker after a job that grew its memory past 256 MB, once nothing still needs it; WebAssembly memory never shrinks, so one large job no longer leaves a large worker behind
@@ -232,17 +241,18 @@ CONTENT RULES (never change)
 
 - **Breaking:** `PdfEditor.optimizeImages(quality:, minSize:)` is removed → use `reduceImages(PdfImagePolicy(jpegQuality: quality, minPixels: minSize, convertCmykToRgb: true))`; the count it returned is `report.changed`
 - **Breaking:** `compress(imageQuality:)` → `compress(images:)`, a `PdfImagePolicy` defaulting to `PdfImagePolicy.ebook` (150 ppi, JPEG quality 75), so a plain `compress` now downsamples images drawn above 225 ppi; pass `PdfImagePolicy(jpegQuality: q)` for the old behaviour
-- **Breaking:** the editor's argument-less reads are getters (a property reads as a noun, never with a `get` prefix): `getTitle()` → `title`, `getAuthor()` → `author`, `getSubject()` → `subject`, `getKeywords()` → `keywords`, `getProducer()` → `producer`, `getCreationDate()` → `creationDate`, and on `PdfDoc` `getSignatures()` → `signatures`; the one read with an argument is a noun method, `getPageMediaBox(page)` → `pageMediaBox(page)`
+- **Breaking:** the editor's reads are noun methods, never with a `get` prefix: `getTitle()` and the other metadata reads → `metadata()`, `getPageMediaBox(page)` → `pageInfo(pages:)`, and on `PdfDoc` `getSignatures()` → `signatures()`
 - **Breaking:** `flattenAllAnnotations()` is `flattenAnnotations({int? page})`, and `flattenForms()` gains the same optional `page`; without it both flatten every page as before
 - **Breaking:** `applyRedactions()` now returns a `PdfRedactionReport` (regions, glyphs removed, images modified or removed, paths pruned) instead of `void`; awaiting it still applies the redactions
 - **Breaking:** `mergeFrom(other)` gains `pages:` (a 0-based list; `null` merges every page) and `embedFile(name, data)` gains `description:`, `mimeType:` and `relationship:`; positional callers are unchanged
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
-- Added `PdfEditor.pageImages(page)` — every image XObject drawn on a page with its resource name, bounds and transform; the name is what `resizeImage` takes
-- Added `PdfEditor.repositionImage(page, name, x:, y:)` and `setImageBounds(page, name, bounds)` — move, or move and resize, an image by the name `pageImages` lists
+- Added `PdfEditor.pageImages(page)` — every image XObject drawn on a page with its resource name, bounds and transform; the name is what `setImageBounds` takes
+- Added `PdfEditor.setImageBounds(page, name, bounds)` — move, or move and resize, an image by the name `pageImages` lists
 - Added `PdfEditor.reduceImages(PdfImagePolicy)` — downsamples images to the resolution they are drawn at and re-encodes them by kind (JPEG, predicted Flate, CCITT G4), soft masks included, presets `screen`/`ebook`/`print`/`lossless`, one `PdfImageReport` row per image with the reason when it is kept; images reached only through annotation appearances, patterns or inline `BI … EI` stay as stored
 - Added `compress(images: PdfImagePolicy.screen)` — the one-shot takes the same policy
 - Added `PdfImagePolicy.minSavings` (default 10%: a lossy re-encode must earn its bytes or the image is kept), `chromaSubsampling` (`auto` = 4:4:4 from quality 90, `full`, `half`; `print` pins `full`) and `recompressJpeg` (re-encode stored JPEGs at `jpegQuality` even when not downsampled; off by default)
-- Added `PdfEditor.pageCropBox(page)` (`null` when the page has no CropBox), `setPageMediaBox`, `setPageCropBox` and `setPageRotation(page, degrees:)` (absolute, where `rotatePage` is relative)
+- Added `PdfEditor.pageInfo({pages})` with each page's `mediaBox` and `cropBox` (`null` when the page has none), `setMediaBox`, `setCropBox` (`null` removes it) and `setRotation` (absolute, where `rotatePages` is relative), each over a `PdfPages`
+- Added `PdfMetadata.copyWith`, and `modDate` is read from a document's info dictionary, where it stayed null
 - Added `PdfEditor.clearEraseRegions(page)` to drop the regions queued by `eraseRegions` before save
 - Added `PdfEditor.sanitize(PdfSanitizeOptions)` — strip metadata, JavaScript actions and embedded files in one pass; `scrubMetadata()` is its metadata-only form
 - Added `PdfDoc.formFields` and `formField(name)` — every AcroForm field with its type, typed value, tooltip, bounds, max length, alignment and read-only/required flags
@@ -251,14 +261,14 @@ CONTENT RULES (never change)
 - Added `PdfDoc.xfa` (`PdfXfaInfo` with field count, page count and field types, or `null` without an XFA packet) and the one-shot `convertXfaToAcroForm(source, output)` that rewrites an XFA form as a plain AcroForm
 - Added `PdfDoc.attachments` (name, size, description, MIME type, read from the name tree without decoding the files) and `extractAttachment(name, sink)`
 - Fixed images optimized in an edit session being saved unchanged — the full-rewrite writer copied page-referenced XObjects from the source and skipped the staged replacement
-- Fixed `pageImages` listing Form XObjects — only `/Subtype /Image` resources are listed, so every name is a valid `resizeImage` target
+- Fixed `pageImages` listing Form XObjects — only `/Subtype /Image` resources are listed, so every name is a valid `setImageBounds` target
 
 ## 4.2.1-dev.0
 
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Fixed a DOCX table converting to PDF several times wider than declared, columns off the page — the converter now honours the `w:tblGrid` widths, scaled to the printable width ([#243](https://github.com/whuppi/pdf_manipulator/issues/243) reported by [@kampmapa1-design](https://github.com/kampmapa1-design))
 - Fixed a web instance failing with `WASM init failed: Out of memory` during rapid create-and-dispose churn — a worker slot is freed when the browser confirms the worker is gone, not at `terminate()`
-- Fixed `pageMediaBox` returning the box's far corner as its width and height whenever the MediaBox origin is not (0, 0)
+- Fixed a page's media box reporting the far corner as its width and height whenever the MediaBox origin is not (0, 0)
 - Fixed form field property changes being lost on save unless the form was also flattened — the engine wrote only the value; every property and a removed field now reach the saved file
 - Fixed `eraseRegions` and `addRedaction` acting on the wrong rectangle — the width and height were passed where the far corner was expected, so every region past the origin was off by its own size
 - Fixed `addStamp` losing the stamp on save when its rectangle sits high on the page — the same size-for-corner mix-up placed the label above the page edge; the builder's `image` was drawn at the wrong size for the same reason

@@ -29,8 +29,8 @@ void registerInstanceTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final ed1 = await pdf.edit(src(minimalPdf));
       final ed2 = await pdf.edit(src(minimalPdf));
-      expect(await ed1.pageCount, 1);
-      expect(await ed2.pageCount, 1);
+      expect(await ed1.pageCount(), 1);
+      expect(await ed2.pageCount(), 1);
       await pdf.dispose();
     }, timeout: t(1));
 
@@ -50,7 +50,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
       final ed = await pdf.edit(src(minimalPdf));
       final _ = await pdf.build();
       expect(doc.pageCount, 1);
-      expect(await ed.pageCount, 1);
+      expect(await ed.pageCount(), 1);
       await pdf.dispose();
     }, timeout: t(1));
 
@@ -193,7 +193,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
       final ed = results[1] as PdfEditor;
       final _ = results[2] as PdfBuilder;
       expect(doc.pageCount, 1);
-      expect(await ed.pageCount, 1);
+      expect(await ed.pageCount(), 1);
       await pdf.dispose();
     }, timeout: t(1));
 

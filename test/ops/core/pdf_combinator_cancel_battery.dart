@@ -154,7 +154,10 @@ void registerCombinatorCancelTests(
         Object? after;
         task = pdf.rewrite(src(minimalPdf), out, (editor) async {
           kept = editor;
-          final op = editor.rotatePage(0, by: PdfRotation.r90);
+          final op = editor.rotatePages(
+            PdfPages.single(0),
+            by: PdfRotation.r90,
+          );
           task.cancel();
           try {
             await op;
@@ -162,7 +165,9 @@ void registerCombinatorCancelTests(
             inFlight = e;
           }
           try {
-            await editor.setTitle('after the cancel');
+            await editor.setMetadata(
+              (await editor.metadata()).copyWith(title: 'after the cancel'),
+            );
           } on Object catch (e) {
             after = e;
           }
@@ -170,7 +175,10 @@ void registerCombinatorCancelTests(
         await expectLater(task, throwsA(isA<PdfCancelled>()));
         expect(inFlight, isA<PdfCancelled>(), reason: 'the op in flight');
         expect(after, isA<PdfCancelled>(), reason: 'the op after the cancel');
-        expect(() => kept.setTitle('x'), throwsA(isA<PdfDisposed>()));
+        expect(
+          () => kept.setMetadata(const PdfMetadata(title: 'x')),
+          throwsA(isA<PdfDisposed>()),
+        );
         expect(out.length, 0, reason: 'the save never ran');
       },
       timeout: t(2),
@@ -272,7 +280,7 @@ void registerCombinatorCancelTests(
               ),
               TestSink(),
             )
-            .rotatePage(0, by: PdfRotation.r90);
+            .rotatePages(PdfPages.single(0), by: PdfRotation.r90);
         await expectLater(task, throwsA(isA<PdfCancelled>()));
         expect(reads, greaterThan(opened), reason: 'the edit had started');
       },

@@ -34,7 +34,7 @@ void registerEditorTests(Pdf Function() createPdf) {
 
     test('open → pageCount → dispose', () async {
       final editor = await createPdf().edit(src(minimalPdf));
-      expect(await editor.pageCount, 1);
+      expect(await editor.pageCount(), 1);
       await editor.dispose();
     }, timeout: t(1));
 
@@ -42,14 +42,19 @@ void registerEditorTests(Pdf Function() createPdf) {
       final editor = await createPdf().edit(src(minimalPdf));
       await editor.dispose();
       await editor.dispose();
-      expect(() => editor.setTitle('x'), throwsA(isA<PdfDisposed>()));
+      expect(
+        () => editor.setMetadata(const PdfMetadata(title: 'x')),
+        throwsA(isA<PdfDisposed>()),
+      );
     }, timeout: t(1));
 
     test('isModified false before mutation, true after', () async {
       final editor = await createPdf().edit(src(minimalPdf));
-      expect(await editor.isModified, isFalse);
-      await editor.setTitle('Modified');
-      expect(await editor.isModified, isTrue);
+      expect(await editor.isModified(), isFalse);
+      await editor.setMetadata(
+        (await editor.metadata()).copyWith(title: 'Modified'),
+      );
+      expect(await editor.isModified(), isTrue);
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -60,18 +65,20 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('setTitle writes title into output', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
-      await editor.setTitle('Behavioral Test Title');
+      await editor.setMetadata(
+        (await editor.metadata()).copyWith(title: 'Behavioral Test Title'),
+      );
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
       final output = sink.takeBytes();
       final e2 = await pdf.edit(src(output));
       expect(
-        await e2.title,
+        (await e2.metadata()).title,
         contains('Behavioral Test Title'),
         reason: 'the title must survive save and re-open',
       );
-      expect(await e2.pageCount, 1);
+      expect(await e2.pageCount(), 1);
       await e2.dispose();
     }, timeout: t(1));
 
@@ -80,15 +87,19 @@ void registerEditorTests(Pdf Function() createPdf) {
       // Prepare input with verified metadata (set+get is proven above),
       // then prove scrub removes it SEMANTICALLY from the saved bytes.
       final prep = await pdf.edit(src(minimalPdf));
-      await prep.setTitle('ScrubMeTitle');
-      await prep.setAuthor('ScrubMeAuthor');
+      await prep.setMetadata(
+        (await prep.metadata()).copyWith(title: 'ScrubMeTitle'),
+      );
+      await prep.setMetadata(
+        (await prep.metadata()).copyWith(author: 'ScrubMeAuthor'),
+      );
       final prepSink = TestSink();
       await prep.save(prepSink);
       await prep.dispose();
       final metaPdf = prepSink.takeBytes();
 
       final check = await pdf.edit(src(metaPdf));
-      expect(await check.title, contains('ScrubMeTitle'));
+      expect((await check.metadata()).title, contains('ScrubMeTitle'));
       await check.dispose();
 
       final editor = await pdf.edit(src(metaPdf));
@@ -98,42 +109,50 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
       final after = await pdf.edit(src(sink.takeBytes()));
       expect(
-        await after.title,
+        (await after.metadata()).title,
         isNot(contains('ScrubMeTitle')),
         reason: 'scrubbed metadata must be gone from the document',
       );
-      expect(await after.author, isNot(contains('ScrubMeAuthor')));
+      expect((await after.metadata()).author, isNot(contains('ScrubMeAuthor')));
       await after.dispose();
     }, timeout: t(1));
 
     test('setAuthor + author roundtrips', () async {
       final editor = await createPdf().edit(src(minimalPdf));
-      await editor.setAuthor('Test Author');
-      final author = await editor.author;
+      await editor.setMetadata(
+        (await editor.metadata()).copyWith(author: 'Test Author'),
+      );
+      final author = (await editor.metadata()).author;
       expect(author, contains('Test Author'));
       await editor.dispose();
     }, timeout: t(1));
 
     test('setSubject + subject roundtrips', () async {
       final editor = await createPdf().edit(src(minimalPdf));
-      await editor.setSubject('Test Subject');
-      final subject = await editor.subject;
+      await editor.setMetadata(
+        (await editor.metadata()).copyWith(subject: 'Test Subject'),
+      );
+      final subject = (await editor.metadata()).subject;
       expect(subject, contains('Test Subject'));
       await editor.dispose();
     }, timeout: t(1));
 
     test('setKeywords + keywords roundtrips', () async {
       final editor = await createPdf().edit(src(minimalPdf));
-      await editor.setKeywords('dart, pdf, test');
-      final kw = await editor.keywords;
+      await editor.setMetadata(
+        (await editor.metadata()).copyWith(keywords: 'dart, pdf, test'),
+      );
+      final kw = (await editor.metadata()).keywords;
       expect(kw, contains('dart'));
       await editor.dispose();
     }, timeout: t(1));
 
     test('setProducer + producer roundtrips', () async {
       final editor = await createPdf().edit(src(minimalPdf));
-      await editor.setProducer('pdf_manipulator');
-      final producer = await editor.producer;
+      await editor.setMetadata(
+        (await editor.metadata()).copyWith(producer: 'pdf_manipulator'),
+      );
+      final producer = (await editor.metadata()).producer;
       expect(producer, contains('pdf_manipulator'));
       await editor.dispose();
     }, timeout: t(1));
@@ -141,13 +160,15 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('setProducer writes producer into output', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
-      await editor.setProducer('Behavioral Producer');
+      await editor.setMetadata(
+        (await editor.metadata()).copyWith(producer: 'Behavioral Producer'),
+      );
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
       final e2 = await pdf.edit(src(sink.takeBytes()));
       expect(
-        await e2.producer,
+        (await e2.metadata()).producer,
         contains('Behavioral Producer'),
         reason: 'the producer must survive save and re-open',
       );
@@ -156,8 +177,12 @@ void registerEditorTests(Pdf Function() createPdf) {
 
     test('setCreationDate + creationDate roundtrips', () async {
       final editor = await createPdf().edit(src(minimalPdf));
-      await editor.setCreationDate(DateTime.utc(2024, 1, 1, 12));
-      final date = await editor.creationDate;
+      await editor.setMetadata(
+        (await editor.metadata()).copyWith(
+          creationDate: DateTime.utc(2024, 1, 1, 12),
+        ),
+      );
+      final date = (await editor.metadata()).creationDate;
       expect(date, DateTime.utc(2024, 1, 1, 12));
       await editor.dispose();
     }, timeout: t(1));
@@ -165,8 +190,14 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('PdfDoc surfaces producer/creator/creationDate', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
-      await editor.setProducer('Doc-Read Producer');
-      await editor.setCreationDate(DateTime.utc(2024, 1, 1, 12));
+      await editor.setMetadata(
+        (await editor.metadata()).copyWith(producer: 'Doc-Read Producer'),
+      );
+      await editor.setMetadata(
+        (await editor.metadata()).copyWith(
+          creationDate: DateTime.utc(2024, 1, 1, 12),
+        ),
+      );
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -197,7 +228,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final twoPage = mergeSink.takeBytes();
 
       final editor = await pdf.edit(src(twoPage));
-      await editor.deletePage(0);
+      await editor.deletePages(PdfPages.single(0));
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -208,7 +239,9 @@ void registerEditorTests(Pdf Function() createPdf) {
 
     test('pageMediaBox returns correct A4 dimensions', () async {
       final editor = await createPdf().edit(src(minimalPdf));
-      final box = await editor.pageMediaBox(0);
+      final box = (await editor.pageInfo(
+        pages: PdfPages.single(0),
+      )).single.mediaBox;
       expect(box.width, closeTo(595, 1));
       expect(box.height, closeTo(842, 1));
       await editor.dispose();
@@ -216,13 +249,18 @@ void registerEditorTests(Pdf Function() createPdf) {
 
     test('pageCropBox is null when the page has no CropBox', () async {
       final editor = await createPdf().edit(src(minimalPdf));
-      expect(await editor.pageCropBox(0), isNull);
+      expect(
+        (await editor.pageInfo(pages: PdfPages.single(0))).single.cropBox,
+        isNull,
+      );
       await editor.dispose();
     }, timeout: t(1));
 
     test('pageCropBox reports the CropBox truth on croppedPagePdf', () async {
       final editor = await createPdf().edit(src(croppedPagePdf));
-      final box = await editor.pageCropBox(0);
+      final box = (await editor.pageInfo(
+        pages: PdfPages.single(0),
+      )).single.cropBox;
       expect(box, isNotNull);
       expect(box!.x, closeTo(72, 0.01));
       expect(box.y, closeTo(72, 0.01));
@@ -237,8 +275,10 @@ void registerEditorTests(Pdf Function() createPdf) {
         final pdf = createPdf();
         final editor = await pdf.edit(src(minimalPdf));
         const box = PdfRect(x: 10, y: 20, width: 300, height: 400);
-        await editor.setPageCropBox(0, box);
-        final read = await editor.pageCropBox(0);
+        await editor.setCropBox(PdfPages.single(0), box);
+        final read = (await editor.pageInfo(
+          pages: PdfPages.single(0),
+        )).single.cropBox;
         expect(read, isNotNull);
         expect(read!.x, closeTo(10, 0.01));
         expect(read.y, closeTo(20, 0.01));
@@ -248,7 +288,9 @@ void registerEditorTests(Pdf Function() createPdf) {
         await editor.save(sink);
         await editor.dispose();
         final reopened = await pdf.edit(src(sink.takeBytes()));
-        final reread = await reopened.pageCropBox(0);
+        final reread = (await reopened.pageInfo(
+          pages: PdfPages.single(0),
+        )).single.cropBox;
         expect(reread, isNotNull);
         expect(reread!.width, closeTo(300, 0.01));
         expect(reread.height, closeTo(400, 0.01));
@@ -257,16 +299,18 @@ void registerEditorTests(Pdf Function() createPdf) {
       timeout: t(1),
     );
 
-    test('setPageMediaBox then save → pageMediaBox reads it back', () async {
+    test('setMediaBox then save → pageInfo reads it back', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
       const box = PdfRect(x: 5, y: 15, width: 400, height: 500);
-      await editor.setPageMediaBox(0, box);
+      await editor.setMediaBox(PdfPages.single(0), box);
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
       final reopened = await pdf.edit(src(sink.takeBytes()));
-      final read = await reopened.pageMediaBox(0);
+      final read = (await reopened.pageInfo(
+        pages: PdfPages.single(0),
+      )).single.mediaBox;
       expect(read.x, closeTo(5, 0.01));
       expect(read.y, closeTo(15, 0.01));
       expect(read.width, closeTo(400, 0.01));
@@ -274,11 +318,11 @@ void registerEditorTests(Pdf Function() createPdf) {
       await reopened.dispose();
     }, timeout: t(1));
 
-    test('setPageRotation is absolute, not additive', () async {
+    test('setRotation is absolute, not additive', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
-      await editor.setPageRotation(0, rotation: PdfRotation.r90);
-      await editor.setPageRotation(0, rotation: PdfRotation.r90);
+      await editor.setRotation(PdfPages.single(0), PdfRotation.r90);
+      await editor.setRotation(PdfPages.single(0), PdfRotation.r90);
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -290,9 +334,9 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('mergeFrom increases page count', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
-      expect(await editor.pageCount, 1);
+      expect(await editor.pageCount(), 1);
       await editor.mergeFrom(src(letterPdf));
-      expect(await editor.pageCount, 2);
+      expect(await editor.pageCount(), 2);
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -312,7 +356,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final threePage = mergeSink.takeBytes();
 
       final editor = await pdf.edit(src(threePage));
-      await editor.selectPages([0, 2]);
+      await editor.keepPages([0, 2]);
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -328,7 +372,9 @@ void registerEditorTests(Pdf Function() createPdf) {
       final twoPage = mergeSink.takeBytes();
 
       final editor = await pdf.edit(src(twoPage));
-      final boxBefore = await editor.pageMediaBox(0);
+      final boxBefore = (await editor.pageInfo(
+        pages: PdfPages.single(0),
+      )).single.mediaBox;
       await editor.movePage(from: 0, to: 1);
       final sink = TestSink();
       await editor.save(sink);
@@ -468,7 +514,7 @@ void registerEditorTests(Pdf Function() createPdf) {
         final pdf = createPdf();
         final editor = await pdf.edit(src(source));
         for (var i = pagePruneTruth.pageCount - 1; i >= 1; i--) {
-          await editor.deletePage(i);
+          await editor.deletePages(PdfPages.single(i));
         }
         final sink = TestSink();
         await editor.save(
@@ -543,7 +589,7 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('selectPages refuses a page listed twice', () async {
       final editor = await createPdf().edit(src(pagePrunePdf));
       expect(
-        () => editor.selectPages(const [1, 0, 1]),
+        () => editor.keepPages(const [1, 0, 1]),
         throwsA(isA<PdfInvalidArgument>()),
       );
       await editor.dispose();
@@ -577,7 +623,9 @@ void registerEditorTests(Pdf Function() createPdf) {
       test('incremental setTitle appends to $name', () async {
         final pdf = createPdf();
         final editor = await pdf.edit(src(source));
-        await editor.setTitle('Appended');
+        await editor.setMetadata(
+          (await editor.metadata()).copyWith(title: 'Appended'),
+        );
         final out = await saveIncremental(editor, source);
         final doc = await pdf.open(src(out));
         expect(doc.metadata.title, 'Appended');
@@ -589,7 +637,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final editor = await pdf.edit(src(fFormFields));
       await editor.setFormFieldValue('fullname', 'Ada');
-      await editor.setPageRotation(0, rotation: PdfRotation.r90);
+      await editor.setRotation(PdfPages.single(0), PdfRotation.r90);
       final out = await saveIncremental(editor, fFormFields);
       final doc = await pdf.open(src(out));
       expect((await doc.pageInfo()).first.rotation, PdfRotation.r90);
@@ -617,7 +665,9 @@ void registerEditorTests(Pdf Function() createPdf) {
       expect(covered, signed.length, reason: 'the signature covers the file');
 
       final editor = await pdf.edit(src(signed));
-      await editor.setTitle('After signing');
+      await editor.setMetadata(
+        (await editor.metadata()).copyWith(title: 'After signing'),
+      );
       // saveIncremental proves the first signed.length bytes are unchanged,
       // so the digest over the signed ranges is unchanged too.
       final out = await saveIncremental(editor, signed);
@@ -629,7 +679,7 @@ void registerEditorTests(Pdf Function() createPdf) {
     }, timeout: t(2));
 
     for (final (name, edit) in <(String, Future<void> Function(PdfEditor))>[
-      ('deletePage', (e) => e.deletePage(1)),
+      ('deletePage', (e) => e.deletePages(PdfPages.single(1))),
       ('movePage', (e) => e.movePage(from: 0, to: 1)),
       ('mergeFrom', (e) => e.mergeFrom(src(minimalPdf))),
       (
@@ -688,7 +738,9 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('a DocMDP level 2 certification refuses a metadata change', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(certifiedPdf(2)));
-      await editor.setTitle('Nope');
+      await editor.setMetadata(
+        (await editor.metadata()).copyWith(title: 'Nope'),
+      );
       await expectLater(
         editor.save(TestSink(), options: const PdfSaveOptions.incremental()),
         throwsA(isA<PdfIncrementalRefused>()),
@@ -699,7 +751,9 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('incremental save refuses a source it had to repair', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(staleStartxrefPdf));
-      await editor.setTitle('Nope');
+      await editor.setMetadata(
+        (await editor.metadata()).copyWith(title: 'Nope'),
+      );
       await expectLater(
         editor.save(TestSink(), options: const PdfSaveOptions.incremental()),
         throwsA(
@@ -719,7 +773,9 @@ void registerEditorTests(Pdf Function() createPdf) {
         src(tpEncrypted),
         password: tpEncryptedTruth.userPassword,
       );
-      await editor.setTitle('Nope');
+      await editor.setMetadata(
+        (await editor.metadata()).copyWith(title: 'Nope'),
+      );
       await expectLater(
         editor.save(TestSink(), options: const PdfSaveOptions.incremental()),
         throwsA(isA<PdfIncrementalRefused>()),
@@ -734,11 +790,13 @@ void registerEditorTests(Pdf Function() createPdf) {
       () async {
         final pdf = createPdf();
         final editor = await pdf.edit(src(noSizePdf));
-        await editor.setTitle('NoSizeTitle');
+        await editor.setMetadata(
+          (await editor.metadata()).copyWith(title: 'NoSizeTitle'),
+        );
         // Background layer draws into page content, so extraction proves it.
         await editor.addWatermark(
-          0,
           'NOSIZEWATERMARK',
+          pages: PdfPages.single(0),
           layer: PdfWatermarkLayer.background,
         );
         final sink = TestSink();
@@ -746,9 +804,9 @@ void registerEditorTests(Pdf Function() createPdf) {
         await editor.dispose();
         final out = sink.takeBytes();
         final e2 = await pdf.edit(src(out));
-        expect(await e2.pageCount, 1);
+        expect(await e2.pageCount(), 1);
         expect(
-          await e2.title,
+          (await e2.metadata()).title,
           contains('NoSizeTitle'),
           reason: 'the title must survive the rewrite',
         );
@@ -768,7 +826,9 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('a full rewrite writes every reference at generation 0', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(genOnePdf));
-      await editor.setTitle('GenOne');
+      await editor.setMetadata(
+        (await editor.metadata()).copyWith(title: 'GenOne'),
+      );
       final sink = TestSink();
       await editor.save(sink, options: const PdfSaveOptions.fullRewrite());
       await editor.dispose();
@@ -871,7 +931,9 @@ void registerEditorTests(Pdf Function() createPdf) {
         'xref stream', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
-      await editor.setTitle('Packed');
+      await editor.setMetadata(
+        (await editor.metadata()).copyWith(title: 'Packed'),
+      );
       final sink = TestSink();
       await editor.save(sink, options: const PdfSaveOptions.fullRewrite());
       await editor.dispose();
@@ -887,8 +949,8 @@ void registerEditorTests(Pdf Function() createPdf) {
       // The title sits in a packed object, not as a plain string.
       expect(text, isNot(contains('Packed')));
       final reread = await pdf.edit(src(out));
-      expect(await reread.title, 'Packed');
-      expect(await reread.pageCount, 1);
+      expect((await reread.metadata()).title, 'Packed');
+      expect(await reread.pageCount(), 1);
       await reread.dispose();
     }, timeout: t(1));
 
@@ -972,13 +1034,13 @@ void registerEditorTests(Pdf Function() createPdf) {
           // The stream is long enough to be deflated while streaming, and the
           // watermark stages new objects: both allocate ids in the save.
           final editor = await pdf.edit(src(repeatedStreamPdf(20000)));
-          await editor.addWatermark(0, 'DRAFT');
+          await editor.addWatermark('DRAFT', pages: PdfPages.single(0));
           final first = await saveBytes(editor, options);
           final second = await saveBytes(editor, options);
           await editor.dispose();
 
           final fresh = await pdf.edit(src(repeatedStreamPdf(20000)));
-          await fresh.addWatermark(0, 'DRAFT');
+          await fresh.addWatermark('DRAFT', pages: PdfPages.single(0));
           final freshBytes = await saveBytes(fresh, options);
           await fresh.dispose();
 
@@ -1016,7 +1078,9 @@ void registerEditorTests(Pdf Function() createPdf) {
       () async {
         final pdf = createPdf();
         final editor = await pdf.edit(src(infoPdf));
-        await editor.setTitle('New Title');
+        await editor.setMetadata(
+          (await editor.metadata()).copyWith(title: 'New Title'),
+        );
         final sink = TestSink();
         await editor.save(sink, options: const PdfSaveOptions.fullRewrite());
         await editor.dispose();
@@ -1034,7 +1098,9 @@ void registerEditorTests(Pdf Function() createPdf) {
           'object streams', () async {
         final pdf = createPdf();
         final editor = await pdf.edit(src(minimalPdf));
-        await editor.setTitle('Secret Title');
+        await editor.setMetadata(
+          (await editor.metadata()).copyWith(title: 'Secret Title'),
+        );
         final sink = TestSink();
         await editor.save(
           sink,
@@ -1062,7 +1128,7 @@ void registerEditorTests(Pdf Function() createPdf) {
 
         // Keeping the source's encryption writes the same layout.
         final again = await pdf.edit(src(out), password: 'user');
-        expect(await again.title, 'Secret Title');
+        expect((await again.metadata()).title, 'Secret Title');
         final keptSink = TestSink();
         await again.save(keptSink, options: const PdfSaveOptions.fullRewrite());
         await again.dispose();
@@ -1079,7 +1145,7 @@ void registerEditorTests(Pdf Function() createPdf) {
     // ── Page images ──
 
     test(
-      'pageImages lists each page\'s image and its name resizes it',
+      'pageImages lists each page\'s image and its name sets its bounds',
       () async {
         final pdf = createPdf();
         final editor = await pdf.edit(src(fImages));
@@ -1097,14 +1163,19 @@ void registerEditorTests(Pdf Function() createPdf) {
           expect(image.transform.e, image.bounds.x);
           expect(image.transform.f, image.bounds.y);
         }
-        // The listed name is what resizeImage takes: halve the first image,
-        // save, and read the new placement back from the saved bytes.
+        // The listed name is what setImageBounds takes: halve the first
+        // image in place, save, and read the new placement back from the
+        // saved bytes.
         final before = (await editor.pageImages(0)).single;
-        await editor.resizeImage(
+        await editor.setImageBounds(
           0,
           before.name,
-          width: before.bounds.width / 2,
-          height: before.bounds.height / 2,
+          PdfRect(
+            x: before.bounds.x,
+            y: before.bounds.y,
+            width: before.bounds.width / 2,
+            height: before.bounds.height / 2,
+          ),
         );
         final sink = TestSink();
         await editor.save(sink);
@@ -1119,16 +1190,19 @@ void registerEditorTests(Pdf Function() createPdf) {
       timeout: t(1),
     );
 
-    test('repositionImage moves a listed image; setImageBounds moves and '
-        'resizes it', () async {
+    test('setImageBounds moves a listed image and resizes it', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(fImages));
       final first = (await editor.pageImages(0)).single;
-      await editor.repositionImage(
+      await editor.setImageBounds(
         0,
         first.name,
-        x: first.bounds.x + 20,
-        y: first.bounds.y - 30,
+        PdfRect(
+          x: first.bounds.x + 20,
+          y: first.bounds.y - 30,
+          width: first.bounds.width,
+          height: first.bounds.height,
+        ),
       );
       final second = (await editor.pageImages(1)).single;
       const target = PdfRect(x: 10, y: 20, width: 40, height: 50);
@@ -1923,7 +1997,7 @@ void registerEditorTests(Pdf Function() createPdf) {
 
     test('stamp after watermark keeps both', () async {
       final e = await createPdf().edit(src(minimalPdf));
-      await e.addWatermark(0, 'COMPOWM');
+      await e.addWatermark('COMPOWM', pages: PdfPages.single(0));
       await e.addStamp(
         0,
         type: PdfStampType.draft,
@@ -1958,7 +2032,7 @@ void registerEditorTests(Pdf Function() createPdf) {
         type: PdfStampType.draft,
         rect: const PdfRect(x: 50, y: 50, width: 200, height: 60),
       );
-      await e.addWatermark(0, 'COMPOWM');
+      await e.addWatermark('COMPOWM', pages: PdfPages.single(0));
       final sink = TestSink();
       await e.save(sink);
       await e.dispose();
@@ -1979,9 +2053,13 @@ void registerEditorTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final e = await pdf.edit(src(minimalPdf));
       // Background layer draws into content — extraction proves it.
-      await e.addWatermark(0, 'TRIPLEWM', layer: PdfWatermarkLayer.background);
-      await e.setTitle('Triple Edit');
-      await e.rotatePage(0, by: PdfRotation.r90);
+      await e.addWatermark(
+        'TRIPLEWM',
+        pages: PdfPages.single(0),
+        layer: PdfWatermarkLayer.background,
+      );
+      await e.setMetadata((await e.metadata()).copyWith(title: 'Triple Edit'));
+      await e.rotatePages(PdfPages.single(0), by: PdfRotation.r90);
       final sink = TestSink();
       await e.save(sink);
       await e.dispose();
@@ -1996,7 +2074,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       expect((await doc.pageInfo())[0].rotation, PdfRotation.r90);
       await doc.dispose();
       final e2 = await pdf.edit(src(out));
-      expect(await e2.title, contains('Triple Edit'));
+      expect((await e2.metadata()).title, contains('Triple Edit'));
       await e2.dispose();
     }, timeout: t(1));
 
@@ -2042,7 +2120,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final formBytes = fFormFields;
       final editor = await pdf.edit(src(formBytes));
       await editor.cropMargins(left: 50, right: 50, top: 50, bottom: 50);
-      expect(await editor.isModified, isTrue);
+      expect(await editor.isModified(), isTrue);
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -2073,8 +2151,8 @@ void registerEditorTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
       await editor.addWatermark(
-        0,
         'TILED',
+        pages: PdfPages.single(0),
         position: const PdfWatermarkPosition.tiled(columns: 2, rows: 2),
       );
       final sink = TestSink();
@@ -2102,7 +2180,11 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('addWatermark with background layer', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
-      await editor.addWatermark(0, 'BG', layer: PdfWatermarkLayer.background);
+      await editor.addWatermark(
+        'BG',
+        pages: PdfPages.single(0),
+        layer: PdfWatermarkLayer.background,
+      );
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -2541,7 +2623,7 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('rotatePage sets rotation on specific page', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
-      await editor.rotatePage(0, by: PdfRotation.r90);
+      await editor.rotatePages(PdfPages.single(0), by: PdfRotation.r90);
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -2555,7 +2637,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final mergeSink = TestSink();
       await pdf.merge([src(minimalPdf), src(minimalPdf)], mergeSink);
       final editor = await pdf.edit(src(mergeSink.takeBytes()));
-      await editor.rotateAllPages(by: PdfRotation.r180);
+      await editor.rotatePages(const PdfPages.all(), by: PdfRotation.r180);
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -2897,7 +2979,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       );
 
       final editor = await pdf.edit(src(merged));
-      expect(await editor.pageCount, 2);
+      expect(await editor.pageCount(), 2);
       await editor.flattenForms(page: 0);
       final sink = TestSink();
       await editor.save(sink);
@@ -2928,7 +3010,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final mergeSink = TestSink();
       await pdf.merge([src(minimalPdf), src(minimalPdf)], mergeSink);
       final editor = await pdf.edit(src(mergeSink.takeBytes()));
-      expect(await editor.pageCount, 2);
+      expect(await editor.pageCount(), 2);
       const rect = PdfRect(x: 50, y: 650, width: 200, height: 60);
       await editor.addStamp(0, type: PdfStampType.approved, rect: rect);
       await editor.flattenAnnotations(page: 0);
@@ -3027,7 +3109,7 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('mergeFrom(pages:) appends only the pages named', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
-      await editor.mergeFrom(src(fThreePageMarkers), pages: [1]);
+      await editor.mergeFrom(src(fThreePageMarkers), pages: PdfPages.list([1]));
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -3048,7 +3130,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       () async {
         final editor = await createPdf().edit(src(minimalPdf));
         await expectLater(
-          editor.mergeFrom(src(fThreePageMarkers), pages: [3]),
+          editor.mergeFrom(src(fThreePageMarkers), pages: PdfPages.list([3])),
           throwsA(isA<PdfEngineError>()),
         );
         await editor.dispose();
@@ -3094,7 +3176,7 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('a merged page keeps its text', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
-      await editor.mergeFrom(src(fThreePageMarkers), pages: [2]);
+      await editor.mergeFrom(src(fThreePageMarkers), pages: PdfPages.list([2]));
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -3112,7 +3194,7 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('a merged page keeps its link', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
-      await editor.mergeFrom(src(pagePrunePdf), pages: [2]);
+      await editor.mergeFrom(src(pagePrunePdf), pages: PdfPages.list([2]));
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -3133,7 +3215,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       // both come from the /Pages node above them.
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
-      await editor.mergeFrom(src(pagePrunePdf), pages: [2]);
+      await editor.mergeFrom(src(pagePrunePdf), pages: PdfPages.list([2]));
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -3172,7 +3254,7 @@ void registerEditorTests(Pdf Function() createPdf) {
         // The link on page 2 of pagePrunePdf points at page 3.
         final pdf = createPdf();
         final editor = await pdf.edit(src(minimalPdf));
-        await editor.mergeFrom(src(pagePrunePdf), pages: [2]);
+        await editor.mergeFrom(src(pagePrunePdf), pages: PdfPages.list([2]));
         final sink = TestSink();
         await editor.save(sink);
         await editor.dispose();
@@ -3187,8 +3269,8 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('rotatePage on a merged page rotates it and no source page', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
-      await editor.mergeFrom(src(pagePrunePdf), pages: [2]);
-      await editor.rotatePage(1, by: PdfRotation.r90);
+      await editor.mergeFrom(src(pagePrunePdf), pages: PdfPages.list([2]));
+      await editor.rotatePages(PdfPages.single(1), by: PdfRotation.r90);
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -3202,7 +3284,7 @@ void registerEditorTests(Pdf Function() createPdf) {
 
     test('content edits on a merged page throw PdfUnsupported', () async {
       final editor = await createPdf().edit(src(minimalPdf));
-      await editor.mergeFrom(src(pagePrunePdf), pages: [2]);
+      await editor.mergeFrom(src(pagePrunePdf), pages: PdfPages.list([2]));
       await expectLater(
         editor.addStamp(
           1,
@@ -3219,10 +3301,12 @@ void registerEditorTests(Pdf Function() createPdf) {
       () async {
         final pdf = createPdf();
         final editor = await pdf.edit(src(minimalPdf));
-        await editor.mergeFrom(src(pagePrunePdf), pages: [2]);
-        final before = await editor.pageMediaBox(0);
-        await editor.setPageMediaBox(
-          1,
+        await editor.mergeFrom(src(pagePrunePdf), pages: PdfPages.list([2]));
+        final before = (await editor.pageInfo(
+          pages: PdfPages.single(0),
+        )).single.mediaBox;
+        await editor.setMediaBox(
+          PdfPages.single(1),
           const PdfRect(x: 0, y: 0, width: 100, height: 200),
         );
         final sink = TestSink();
@@ -3243,7 +3327,7 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('redaction, erase and form flattening on a merged page throw '
         'PdfUnsupported while the source page stays editable', () async {
       final editor = await createPdf().edit(src(minimalPdf));
-      await editor.mergeFrom(src(pagePrunePdf), pages: [2]);
+      await editor.mergeFrom(src(pagePrunePdf), pages: PdfPages.list([2]));
       const region = PdfRect(x: 0, y: 0, width: 10, height: 10);
       await expectLater(
         editor.addRedaction(1, region),
@@ -3288,10 +3372,10 @@ void registerEditorTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
       await expectLater(
-        editor.mergeFrom(src(fThreePageMarkers), pages: [5]),
+        editor.mergeFrom(src(fThreePageMarkers), pages: PdfPages.list([5])),
         throwsA(isA<PdfEngineError>()),
       );
-      expect(await editor.pageCount, 1);
+      expect(await editor.pageCount(), 1);
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -3305,7 +3389,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final editor = await pdf.edit(src(minimalPdf));
       await editor.mergeFrom(src(fFormFields));
       await editor.mergeFrom(src(fFormFieldsDe));
-      await editor.deletePage(2);
+      await editor.deletePages(PdfPages.single(2));
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -3322,7 +3406,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final editor = await pdf.edit(src(fTwoPageMarkers));
       await editor.mergeFrom(src(fThreePageMarkers));
       for (var i = 0; i < fThreePageMarkersTruth.markers.length; i++) {
-        await editor.deletePage(2);
+        await editor.deletePages(PdfPages.single(2));
       }
       final sink = TestSink();
       await editor.save(sink);
@@ -3342,7 +3426,7 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('rotateAllPages reaches every page of a nested page tree', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(nestedPageTreePdf));
-      await editor.rotateAllPages(by: PdfRotation.r90);
+      await editor.rotatePages(const PdfPages.all(), by: PdfRotation.r90);
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -3396,8 +3480,8 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('deletePage removes a merged page', () async {
       final pdf = createPdf();
       final editor = await editorWithMergedMarkers(pdf);
-      await editor.deletePage(3);
-      expect(await editor.pageCount, 4);
+      await editor.deletePages(PdfPages.single(3));
+      expect(await editor.pageCount(), 4);
       final markers = await markersOf(pdf, await saved(editor));
       await editor.dispose();
       expect(markers, [
@@ -3428,8 +3512,8 @@ void registerEditorTests(Pdf Function() createPdf) {
       () async {
         final pdf = createPdf();
         final editor = await editorWithMergedMarkers(pdf);
-        await editor.selectPages([4, 0]);
-        expect(await editor.pageCount, 2);
+        await editor.keepPages([4, 0]);
+        expect(await editor.pageCount(), 2);
         final markers = await markersOf(pdf, await saved(editor));
         await editor.dispose();
         expect(markers, [mergedMarkers[4], mergedMarkers[0]]);
@@ -3470,7 +3554,9 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('incremental save produces valid output', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
-      await editor.setTitle('Incremental');
+      await editor.setMetadata(
+        (await editor.metadata()).copyWith(title: 'Incremental'),
+      );
       final sink = TestSink();
       await editor.save(sink, options: const PdfSaveOptions.incremental());
       await editor.dispose();
@@ -3549,15 +3635,220 @@ void registerEditorTests(Pdf Function() createPdf) {
 
     test('version returns non-empty string', () async {
       final editor = await createPdf().edit(src(minimalPdf));
-      final v = await editor.version;
+      final v = await editor.version();
       expect(v, contains('.'));
       await editor.dispose();
     }, timeout: t(1));
 
     test('title roundtrips with setTitle', () async {
       final editor = await createPdf().edit(src(minimalPdf));
-      await editor.setTitle('RoundtripTitle');
-      expect(await editor.title, contains('RoundtripTitle'));
+      await editor.setMetadata(
+        (await editor.metadata()).copyWith(title: 'RoundtripTitle'),
+      );
+      expect((await editor.metadata()).title, contains('RoundtripTitle'));
+      await editor.dispose();
+    }, timeout: t(1));
+
+    // ── Edits over a set of pages ──
+
+    Future<List<PdfPageInfo>> savedPageInfo(PdfEditor editor) async {
+      final sink = TestSink();
+      await editor.save(sink);
+      final doc = await createPdf().open(src(sink.takeBytes()));
+      final infos = await doc.pageInfo();
+      await doc.dispose();
+      return infos;
+    }
+
+    test('rotatePages turns the pages named and no others', () async {
+      final editor = await createPdf().edit(src(fThreePageMarkers));
+      await editor.rotatePages(PdfPages.list([0, 2]), by: PdfRotation.r90);
+      await editor.rotatePages(PdfPages.single(0), by: PdfRotation.r90);
+      final infos = await savedPageInfo(editor);
+      expect(infos.map((p) => p.rotation), [
+        PdfRotation.r180,
+        PdfRotation.r0,
+        PdfRotation.r90,
+      ]);
+      await editor.dispose();
+    }, timeout: t(1));
+
+    test('setRotation over every page replaces what each had', () async {
+      final editor = await createPdf().edit(src(fThreePageMarkers));
+      await editor.rotatePages(PdfPages.single(1), by: PdfRotation.r90);
+      await editor.setRotation(const PdfPages.all(), PdfRotation.r270);
+      final infos = await savedPageInfo(editor);
+      expect(infos.map((p) => p.rotation), everyElement(PdfRotation.r270));
+      await editor.dispose();
+    }, timeout: t(1));
+
+    test('a page list with a bad page changes nothing', () async {
+      final editor = await createPdf().edit(src(fThreePageMarkers));
+      await expectLater(
+        editor.rotatePages(PdfPages.list([0, 1, 7]), by: PdfRotation.r90),
+        throwsA(isA<PdfPageRangeError>()),
+      );
+      await expectLater(
+        editor.setMediaBox(
+          PdfPages.list([2, 9]),
+          const PdfRect(x: 0, y: 0, width: 10, height: 10),
+        ),
+        throwsA(isA<PdfPageRangeError>()),
+      );
+      expect(await editor.isModified(), isFalse);
+      await editor.dispose();
+    }, timeout: t(1));
+
+    test('a repeated or empty page list throws PdfInvalidArgument', () async {
+      final editor = await createPdf().edit(src(fThreePageMarkers));
+      for (final pages in [
+        PdfPages.list([1, 1]),
+        PdfPages.list([]),
+      ]) {
+        await expectLater(
+          editor.deletePages(pages),
+          throwsA(isA<PdfInvalidArgument>()),
+        );
+        await expectLater(
+          editor.rotatePages(pages, by: PdfRotation.r90),
+          throwsA(isA<PdfInvalidArgument>()),
+        );
+      }
+      expect(await editor.isModified(), isFalse);
+      await editor.dispose();
+    }, timeout: t(1));
+
+    test('deletePages removes a list at once; every page is refused', () async {
+      final editor = await createPdf().edit(src(fThreePageMarkers));
+      await expectLater(
+        editor.deletePages(const PdfPages.all()),
+        throwsA(isA<PdfInvalidArgument>()),
+      );
+      expect(await editor.pageCount(), 3);
+      await editor.deletePages(PdfPages.list([0, 2]));
+      expect(await editor.pageCount(), 1);
+      await editor.dispose();
+    }, timeout: t(1));
+
+    test('keepPages refuses an empty list', () async {
+      final editor = await createPdf().edit(src(fThreePageMarkers));
+      await expectLater(
+        editor.keepPages([]),
+        throwsA(isA<PdfInvalidArgument>()),
+      );
+      expect(await editor.pageCount(), 3);
+      await editor.dispose();
+    }, timeout: t(1));
+
+    test(
+      'pageInfo reports the media box, the crop box and the edits',
+      () async {
+        final editor = await createPdf().edit(src(croppedPagePdf));
+        final before = (await editor.pageInfo()).single;
+        expect(before.cropBox, isNotNull);
+        expect(before.mediaBox.width, before.width);
+
+        await editor.setMediaBox(
+          const PdfPages.all(),
+          const PdfRect(x: 5, y: 15, width: 400, height: 500),
+        );
+        await editor.setRotation(const PdfPages.all(), PdfRotation.r90);
+        final after = (await editor.pageInfo(pages: PdfPages.single(0))).single;
+        expect(
+          after.mediaBox,
+          const PdfRect(x: 5, y: 15, width: 400, height: 500),
+        );
+        expect(after.cropBox, before.cropBox);
+        expect(after.rotation, PdfRotation.r90);
+        await editor.dispose();
+      },
+      timeout: t(1),
+    );
+
+    test('setCropBox with null removes the crop box through a save', () async {
+      final editor = await createPdf().edit(src(croppedPagePdf));
+      expect((await editor.pageInfo()).single.cropBox, isNotNull);
+      await editor.setCropBox(const PdfPages.all(), null);
+      expect((await editor.pageInfo()).single.cropBox, isNull);
+      final infos = await savedPageInfo(editor);
+      expect(infos.single.cropBox, isNull);
+      await editor.setCropBox(
+        const PdfPages.all(),
+        const PdfRect(x: 10, y: 10, width: 100, height: 100),
+      );
+      expect(
+        (await editor.pageInfo()).single.cropBox,
+        const PdfRect(x: 10, y: 10, width: 100, height: 100),
+      );
+      await editor.dispose();
+    }, timeout: t(1));
+
+    // ── Metadata ──
+
+    test(
+      'setMetadata replaces the standard fields; a null field goes',
+      () async {
+        final editor = await createPdf().edit(src(minimalPdf));
+        await editor.setMetadata(
+          PdfMetadata(
+            title: 'T',
+            author: 'A',
+            creationDate: DateTime.utc(2024, 1, 2, 3, 4, 5),
+          ),
+        );
+        final first = await editor.metadata();
+        expect(first.title, 'T');
+        expect(first.author, 'A');
+        expect(first.creationDate, DateTime.utc(2024, 1, 2, 3, 4, 5));
+
+        // The same value back changes nothing.
+        await editor.setMetadata(first);
+        expect(await editor.metadata(), first);
+
+        await editor.setMetadata(first.copyWith(title: 'T2'));
+        await editor.setMetadata(const PdfMetadata(title: 'Only'));
+        final sink = TestSink();
+        await editor.save(sink);
+        final doc = await createPdf().open(src(sink.takeBytes()));
+        expect(doc.metadata.title, 'Only');
+        expect(doc.metadata.author, isNull);
+        expect(doc.metadata.creationDate, isNull);
+        await doc.dispose();
+        await editor.dispose();
+      },
+      timeout: t(1),
+    );
+
+    // ── mergeFrom: pages and password ──
+
+    test('mergeFrom takes a PdfPages and null means every page', () async {
+      final editor = await createPdf().edit(src(minimalPdf));
+      await editor.mergeFrom(src(fThreePageMarkers));
+      expect(await editor.pageCount(), 4);
+      await editor.mergeFrom(
+        src(fThreePageMarkers),
+        pages: const PdfPages.range(1, 3),
+      );
+      expect(await editor.pageCount(), 6);
+      await editor.dispose();
+    }, timeout: t(1));
+
+    test('mergeFrom opens an encrypted source with the password', () async {
+      final editor = await createPdf().edit(src(minimalPdf));
+      await editor.mergeFrom(
+        src(tpEncrypted),
+        password: tpEncryptedTruth.userPassword,
+      );
+      expect(await editor.pageCount(), 1 + tpEncryptedTruth.pages);
+      await expectLater(
+        editor.mergeFrom(src(tpEncrypted), password: 'wrong'),
+        throwsA(isA<PdfWrongPassword>()),
+      );
+      await expectLater(
+        editor.mergeFrom(src(tpEncrypted)),
+        throwsA(isA<PdfPasswordRequired>()),
+      );
+      expect(await editor.pageCount(), 1 + tpEncryptedTruth.pages);
       await editor.dispose();
     }, timeout: t(1));
   });

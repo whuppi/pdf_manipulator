@@ -1848,10 +1848,14 @@ class _EditorTabState extends State<_EditorTab>
                       title: 'Set title + author + subject + keywords',
                       loading: loading,
                       onRun: () => _edit('Metadata', (e) async {
-                            await e.setTitle('Example');
-                            await e.setAuthor('pdf_manipulator');
-                            await e.setSubject('Demo');
-                            await e.setKeywords('test, dart, pdf');
+                            await e.setMetadata(
+                              const PdfMetadata(
+                                title: 'Example',
+                                author: 'pdf_manipulator',
+                                subject: 'Demo',
+                                keywords: 'test, dart, pdf',
+                              ),
+                            );
                             return _saveEditor(e);
                           })),
                   _Op(
@@ -1868,7 +1872,8 @@ class _EditorTabState extends State<_EditorTab>
                       title: 'Rotate page 0 → 90°',
                       loading: loading,
                       onRun: () => _edit('Rotate', (e) async {
-                            await e.rotatePage(0, by: PdfRotation.r90);
+                            await e.rotatePages(PdfPages.single(0),
+                                by: PdfRotation.r90);
                             return _saveEditor(e);
                           })),
                   _Op(
@@ -1876,7 +1881,8 @@ class _EditorTabState extends State<_EditorTab>
                       title: 'Rotate all → 90°',
                       loading: loading,
                       onRun: () => _edit('RotateAll', (e) async {
-                            await e.rotateAllPages(by: PdfRotation.r90);
+                            await e.rotatePages(const PdfPages.all(),
+                                by: PdfRotation.r90);
                             return _saveEditor(e);
                           })),
                   _Op(
@@ -1884,8 +1890,10 @@ class _EditorTabState extends State<_EditorTab>
                       title: 'Delete last page',
                       loading: loading,
                       onRun: () => _edit('Delete', (e) async {
-                            final n = await e.pageCount;
-                            if (n > 1) await e.deletePage(n - 1);
+                            final n = await e.pageCount();
+                            if (n > 1) {
+                              await e.deletePages(PdfPages.single(n - 1));
+                            }
                             return _saveEditor(e);
                           })),
                   _Op(
@@ -1893,7 +1901,7 @@ class _EditorTabState extends State<_EditorTab>
                       title: 'Move page 0 → 1',
                       loading: loading,
                       onRun: () => _edit('Move', (e) async {
-                            if (await e.pageCount >= 2) {
+                            if (await e.pageCount() >= 2) {
                               await e.movePage(from: 0, to: 1);
                             }
                             return _saveEditor(e);
@@ -1903,7 +1911,7 @@ class _EditorTabState extends State<_EditorTab>
                       title: 'Select pages 0,1 only',
                       loading: loading,
                       onRun: () => _edit('Select', (e) async {
-                            await e.selectPages([0, 1]);
+                            await e.keepPages([0, 1]);
                             return _saveEditor(e);
                           })),
                   _Op(
@@ -1911,7 +1919,10 @@ class _EditorTabState extends State<_EditorTab>
                       title: 'Get page 0 media box',
                       loading: loading,
                       onRun: () => _edit('MediaBox', (e) async {
-                            final r = await e.pageMediaBox(0);
+                            final r =
+                                (await e.pageInfo(pages: PdfPages.single(0)))
+                                    .single
+                                    .mediaBox;
                             setState(() => status =
                                 'Page 0: ${r.width.toStringAsFixed(0)}×'
                                     '${r.height.toStringAsFixed(0)} at '
@@ -1958,12 +1969,8 @@ class _EditorTabState extends State<_EditorTab>
                       title: 'Watermark all pages "SAMPLE"',
                       loading: loading,
                       onRun: () => _edit('Watermark', (e) async {
-                            final n = await e.pageCount;
-                            for (var i = 0; i < n; i++) {
-                              await e.addWatermark(i, 'SAMPLE',
-                                  style:
-                                      const PdfWatermarkStyle(opacity: 0.25));
-                            }
+                            await e.addWatermark('SAMPLE',
+                                style: const PdfWatermarkStyle(opacity: 0.25));
                             return _saveEditor(e);
                           })),
                   _Op(
@@ -2124,15 +2131,14 @@ class _EditorTabState extends State<_EditorTab>
                       subtitle: 'Multiple mutations in one parse-save cycle',
                       loading: loading,
                       onRun: () => _edit('Chain', (e) async {
-                            await e.rotateAllPages(by: PdfRotation.r90);
-                            final n = await e.pageCount;
-                            for (var i = 0; i < n; i++) {
-                              await e.addWatermark(i, 'PROCESSED',
-                                  style: const PdfWatermarkStyle(
-                                      opacity: 0.15, fontSize: 40));
-                            }
+                            await e.rotatePages(const PdfPages.all(),
+                                by: PdfRotation.r90);
+                            await e.addWatermark('PROCESSED',
+                                style: const PdfWatermarkStyle(
+                                    opacity: 0.15, fontSize: 40));
                             await e.reduceImages(PdfImagePolicy.ebook);
-                            await e.setTitle('Processed');
+                            await e.setMetadata((await e.metadata())
+                                .copyWith(title: 'Processed'));
                             return _saveEditor(
                                 e,
                                 const PdfSaveOptions.fullRewrite(

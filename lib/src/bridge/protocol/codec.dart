@@ -45,8 +45,20 @@ List<PdfPageInfo> decodePageInfos(Map<String, Object?> r) {
     final m = _asMap(p);
     return PdfPageInfo(
       index: m['index'] as int,
-      width: (m['width'] as num).toDouble(),
-      height: (m['height'] as num).toDouble(),
+      mediaBox: PdfRect(
+        x: (m['x'] as num).toDouble(),
+        y: (m['y'] as num).toDouble(),
+        width: (m['width'] as num).toDouble(),
+        height: (m['height'] as num).toDouble(),
+      ),
+      cropBox: m['hasCrop'] == true
+          ? PdfRect(
+              x: (m['cropX'] as num).toDouble(),
+              y: (m['cropY'] as num).toDouble(),
+              width: (m['cropWidth'] as num).toDouble(),
+              height: (m['cropHeight'] as num).toDouble(),
+            )
+          : null,
       rotation: _enumByWireName(
         PdfRotation.values,
         m['rotation'] ?? PdfRotation.r0.wire,
@@ -67,6 +79,7 @@ PdfMetadata decodeMetadata(Map<String, Object?> r) => PdfMetadata(
   creator: _text(r['creator']),
   producer: _text(r['producer']),
   creationDate: decodeDate(r['creationDate']),
+  modDate: decodeDate(r['modDate']),
 );
 
 /// Decodes how an open document is encrypted, or null when it is not
@@ -475,26 +488,14 @@ ChunkFrame<PdfImage> decodeImageFrame(Map<String, Object?> data) =>
       'image',
     );
 
-/// Decodes editor metadata (page count, version, title, etc.).
-({
-  int pageCount,
-  String version,
-  String title,
-  String author,
-  String subject,
-  String keywords,
-  String producer,
-  DateTime? creationDate,
-})
-decodeEditorMetadata(Map<String, Object?> r) => (
+/// Decodes editor metadata: the page count, the version and the standard
+/// info fields; a field the document does not carry is null.
+({int pageCount, String version, PdfMetadata metadata}) decodeEditorMetadata(
+  Map<String, Object?> r,
+) => (
   pageCount: r['pageCount'] as int? ?? 0,
   version: r['version'] as String? ?? '2.0',
-  title: r['title'] as String? ?? '',
-  author: r['author'] as String? ?? '',
-  subject: r['subject'] as String? ?? '',
-  keywords: r['keywords'] as String? ?? '',
-  producer: r['producer'] as String? ?? '',
-  creationDate: decodeDate(r['creationDate']),
+  metadata: decodeMetadata(r),
 );
 
 /// Decodes a date field. The wire keeps the PDF date string; an absent or
@@ -504,25 +505,32 @@ DateTime? decodeDate(Object? wire) => parsePdfDate(wire as String?);
 /// Encodes a date field as a PDF date string in UTC.
 String putDate(DateTime value) => formatPdfDate(value);
 
-/// Decodes a media-box rectangle from a response map.
-PdfRect decodeMediaBox(Map<String, Object?> r) => PdfRect(
-  x: (r['x'] as num).toDouble(),
-  y: (r['y'] as num).toDouble(),
-  width: (r['width'] as num).toDouble(),
-  height: (r['height'] as num).toDouble(),
-);
+/// Encodes [metadata] as the wire arguments of `setMetadata`: a field it
+/// leaves null is left out, which removes it from the document.
+Map<String, Object?> encodeMetadataArgs(PdfMetadata metadata) => {
+  if (metadata.title != null) 'title': metadata.title,
+  if (metadata.author != null) 'author': metadata.author,
+  if (metadata.subject != null) 'subject': metadata.subject,
+  if (metadata.keywords != null) 'keywords': metadata.keywords,
+  if (metadata.creator != null) 'creator': metadata.creator,
+  if (metadata.producer != null) 'producer': metadata.producer,
+  if (metadata.creationDate != null)
+    'creationDate': putDate(metadata.creationDate!),
+  if (metadata.modDate != null) 'modDate': putDate(metadata.modDate!),
+};
 
-/// Decodes a crop-box rectangle from a response map; `null` when the page
-/// has no `/CropBox` (`has: false`).
-PdfRect? decodeCropBox(Map<String, Object?> r) {
-  if (r['has'] != true) return null;
-  return PdfRect(
-    x: (r['x'] as num).toDouble(),
-    y: (r['y'] as num).toDouble(),
-    width: (r['width'] as num).toDouble(),
-    height: (r['height'] as num).toDouble(),
-  );
-}
+/// Encodes the pages an edit targets for the engine to resolve against the
+/// document as it is when the edit runs: every page, or the listed ones.
+Map<String, Object?> encodePages(PdfPages pages) => switch (pages) {
+  PdfPagesAll() => {'pagesAll': true},
+  PdfPagesSingle(:final index) => {
+    'pages': [index],
+  },
+  PdfPagesList(:final indices) => {'pages': indices},
+  PdfPagesRange(:final start, :final end) => {
+    'pages': [for (var i = start; i < end; i++) i],
+  },
+};
 
 /// Decodes a redaction report from an `applyRedactions` response map.
 PdfRedactionReport decodeRedactionReport(Map<String, Object?> r) =>
