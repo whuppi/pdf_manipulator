@@ -479,6 +479,7 @@ base class PdfEditor extends PdfEdits implements _Handle {
 
   /// Marks a [region] on [page] for redaction (applied with [applyRedactions]).
   PdfTask<void> addRedaction(int page, PdfRect region, {String? overlayText}) {
+    KeepRecord.op('render');
     _check();
     return _handle.addRedaction(page, region, overlayText: overlayText);
   }
@@ -492,6 +493,7 @@ base class PdfEditor extends PdfEdits implements _Handle {
   /// Permanently applies all pending redaction marks, removing content,
   /// and reports what was removed.
   PdfTask<PdfRedactionReport> applyRedactions() {
+    KeepRecord.op('render');
     _check();
     return _handle.applyRedactions();
   }

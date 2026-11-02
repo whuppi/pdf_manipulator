@@ -107,6 +107,30 @@ void main() {
     expect(result.keep, isEmpty);
   });
 
+  test('redaction alone keeps render', () async {
+    // Redaction rewrites images and meshes, which a build without
+    // rendering refuses, so every redaction member must keep it.
+    const marks = '''
+import 'package:pdf_manipulator/pdf_manipulator.dart';
+
+Future<void> use(PdfEditor editor, PdfRect box) => editor.addRedaction(0, box);
+''';
+    const applies = '''
+import 'package:pdf_manipulator/pdf_manipulator.dart';
+
+Future<void> use(Pdf pdf, DataSource src, DataSink out) =>
+    pdf.applyRedactions(src, out);
+''';
+    for (final source in [marks, applies]) {
+      final dir = _fixture({'main.dart': source});
+      addTearDown(() => dir.deleteSync(recursive: true));
+
+      final result = detectCapabilities(dir.path);
+      expect(result.resolved, isTrue);
+      expect(result.keep, {PdfCapability.render});
+    }
+  });
+
   test('usage through a re-export barrel is detected', () async {
     final dir = _fixture({
       'deps/barrel.dart':

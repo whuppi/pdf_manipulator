@@ -237,12 +237,14 @@ extension PdfSugar on Pdf {
       });
 
   /// Applies all pending redaction marks, permanently removing content.
-  PdfTask<void> applyRedactions(DataSource source, DataSink output) =>
-      _own(edit(source), (editor, hook) async {
-        // The report is discarded: a one-shot returns nothing.
-        await hook.guard(editor.applyRedactions());
-        await hook.guard(editor.save(output));
-      });
+  PdfTask<void> applyRedactions(DataSource source, DataSink output) {
+    KeepRecord.op('render');
+    return _own(edit(source), (editor, hook) async {
+      // The report is discarded: a one-shot returns nothing.
+      await hook.guard(editor.applyRedactions());
+      await hook.guard(editor.save(output));
+    });
+  }
 
   /// Embeds a file attachment into the PDF.
   PdfTask<void> embedFile(

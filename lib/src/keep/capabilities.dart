@@ -11,8 +11,10 @@
 /// One optional heavy module of the engine. Core (parse/write/edit/forms/
 /// builder) is always included and has no capability.
 enum PdfCapability {
-  /// Page rasterization (`PdfDoc.render`) and image re-compression
-  /// (`PdfEditor.reduceImages`, the `compress` one-shot).
+  /// Page rasterization (`PdfDoc.render`), image re-compression
+  /// (`PdfEditor.reduceImages`, the `compress` one-shot) and redaction
+  /// (`PdfEditor.addRedaction`, `PdfEditor.applyRedactions`, the
+  /// `applyRedactions` one-shot), which rewrites images and meshes.
   render('render', 'rendering'),
 
   /// Digital signatures: signing and verification.
@@ -72,6 +74,9 @@ enum PdfCapability {
     'PdfDoc.render': PdfCapability.render,
     'PdfEditor.reduceImages': PdfCapability.render,
     'compress': PdfCapability.render,
+    'PdfEditor.addRedaction': PdfCapability.render,
+    'PdfEditor.applyRedactions': PdfCapability.render,
+    'applyRedactions': PdfCapability.render,
     'Pdf.sign': PdfCapability.signatures,
     'sign': PdfCapability.signatures,
     'PdfDoc.signatures': PdfCapability.signatures,

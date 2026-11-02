@@ -395,6 +395,9 @@ test-rust:
 	  --features "$$($(DART) tool/compile.dart --features native),test-support,public-api,cjk-form-fonts,pdfa"
 	$(CARGO) test --doc --manifest-path vendor/pdf_oxide/Cargo.toml \
 	  --features "$$($(DART) tool/compile.dart --features native),test-support,public-api,cjk-form-fonts,pdfa"
+	@echo "=== Rust: pdf_oxide without rendering (what a trimmed build refuses) ==="
+	$(CARGO) test --lib --manifest-path vendor/pdf_oxide/Cargo.toml \
+	  --no-default-features --features icc,legacy-crypto,native-bridge redact_refusal
 	@echo "=== Rust: office_oxide ==="
 	$(CARGO) nextest run --no-fail-fast --manifest-path vendor/office_oxide/Cargo.toml
 	$(CARGO) test --doc --manifest-path vendor/office_oxide/Cargo.toml

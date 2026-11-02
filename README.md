@@ -542,7 +542,7 @@ How do you know what to keep? Each capability covers a small set of methods. Cor
 | Capability | Keep it if you call | Also brings | Adds (native) |
 |---|---|---|---|
 | `core` | everything else — merge, split, forms, watermark, encrypt, build… | — | always included (~6.7 MB) |
-| `render` | `doc.render()`, `editor.reduceImages()`, the `compress` one-shot | — | +4.8 MB |
+| `render` | `doc.render()`, `editor.reduceImages()`, the `compress` one-shot, `editor.addRedaction()`, `editor.applyRedactions()`, the `applyRedactions` one-shot | — | +4.8 MB |
 | `signatures` | `sign()`, `doc.signatures`, `doc.verifySignatures()` | — | +1.0 MB |
 | `pdfa` | `doc.validatePdfA()`, `doc.validatePdfUa()`, `convertToPdfA` | — | +0.1 MB |
 | `extract` | `doc.extract()`, `doc.search()`, `doc.classifyPage()`, `doc.classifyDocument()` | — | +3.2 MB |
