@@ -9437,6 +9437,57 @@ final Uint8List nestedPageTreePdf = _offsetPdf([
   '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>',
 ]);
 
+const _pagesWithCountedMarks =
+    '<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /Resources << /Font << /Helv 5 0 R >> '
+    '/XObject << /ImA 6 0 R /ImB 9 0 R /Fm 7 0 R >> >> >>';
+
+/// Two pages that draw the same marks through inherited resources, each with
+/// one of every mark a redaction counts under the box `x 20 y 20 w 100 h 100`:
+/// the text `SECRET` (6 glyphs), a filled rectangle inside the box (1 path), a
+/// gray image inside it (`/ImA`, removed), a gray image half under it (`/ImB`,
+/// overwritten), and a form that straddles the box (`/Fm`, specialized) whose
+/// own content fills a rectangle inside the box (1 more path). The wire
+/// reports sum a page's counts and a document's, so a count the engine drops
+/// reads 0 here.
+final Uint8List redactionCountsPdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree holding the resources both pages inherit
+  _pagesWithCountedMarks,
+  // 3, 4: the pages
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 8 0 R >>',
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 8 0 R >>',
+  // 5: font
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  // 6: a 2x2 gray image
+  _streamBody(
+    '/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray '
+        '/BitsPerComponent 8',
+    '\x10\x80\x40\xf0',
+  ),
+  // 7: a form whose box straddles the redaction box and whose content fills
+  // a rectangle inside it once placed at 100,100
+  _streamBody(
+    '/Type /XObject /Subtype /Form /BBox [0 0 100 100]',
+    '0 0 10 10 re f\n',
+  ),
+  // 8: the content of both pages
+  _streamBody(
+    '',
+    'BT /Helv 12 Tf 1 0 0 1 30 100 Tm (SECRET) Tj ET\n'
+        '30 30 20 20 re f\n'
+        'q 20 0 0 20 40 60 cm /ImA Do Q\n'
+        'q 100 0 0 100 90 90 cm /ImB Do Q\n'
+        'q 1 0 0 1 100 100 cm /Fm Do Q\n',
+  ),
+  // 9: the second gray image
+  _streamBody(
+    '/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray '
+        '/BitsPerComponent 8',
+    '\x10\x80\x40\xf0',
+  ),
+]);
+
 /// A field `a` whose kid `b` lists `a` as its own kid: a /Kids cycle a reader
 /// must end.
 final Uint8List kidsCycleForm = _offsetPdf([

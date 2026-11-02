@@ -397,6 +397,38 @@ void registerEditorTests(Pdf Function() createPdf) {
     }, timeout: t(1));
 
     test(
+      'applyRedactions reports every count, summed over the pages',
+      () async {
+        final pdf = createPdf();
+        final editor = await pdf.edit(src(redactionCountsPdf));
+        const box = PdfRect(x: 20, y: 20, width: 100, height: 100);
+        await editor.addRedaction(0, box);
+        await editor.addRedaction(1, box);
+        final report = await editor.applyRedactions();
+        await editor.dispose();
+        expect(report.regions, 2, reason: 'one box on each page');
+        expect(report.glyphsRemoved, 12, reason: 'SECRET, twice');
+        expect(report.imagesRemoved, 2, reason: 'the covered image, twice');
+        expect(
+          report.imagesModified,
+          2,
+          reason: 'the half-covered image, twice',
+        );
+        expect(
+          report.pathsPruned,
+          4,
+          reason: 'the page fill and the form fill, twice',
+        );
+        expect(
+          report.xobjectsSpecialized,
+          2,
+          reason: 'the straddling form, twice',
+        );
+      },
+      timeout: t(1),
+    );
+
+    test(
       'sanitize(javascript: true) strips the OpenAction, keeps content',
       () async {
         final pdf = createPdf();

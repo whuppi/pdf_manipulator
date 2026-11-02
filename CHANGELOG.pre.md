@@ -183,6 +183,7 @@ CONTENT RULES (never change)
 - Changed redacting a JPEG to replace only the 8×8 blocks under the area, so the rest of the picture keeps its exact pixels; the copy drops embedded thumbnails
 - Fixed `applyRedactions` dropping every annotation on a redacted page — only the annotations under a redacted area go, with their form fields
 - Changed `applyRedactions` to rewrite each page one operator at a time while the document saves: redacting a page with 9 million operators takes under 1 MB of engine memory
+- Fixed `applyRedactions` keeping removed text in alt text written inside page content, in CID font widths and in Type 3 glyphs with no `/Differences` name; its report now counts images, paths and forms; an image change on a redacted image is kept; a flattened CJK field redacts and saves
 - Fixed `image()` and `imageArtifact()` with bytes that are not an image succeeding and drawing nothing — they throw `PdfInvalidArgument`
 - Fixed `streamingTable` rows with a `rowSpan` above 1 never drawing, and `PdfTableCell.rowSpan` documented as a column span — it is the rows a cell spans, each row still lists one cell per column, and a row with the wrong cell count throws `ArgumentError`
 - Fixed `sign` writing a cross-reference table that other readers had to repair — each entry is now 20 bytes
