@@ -19,7 +19,8 @@
 //                  sinkCount, keepSources: number[], heldGroupId?,
 //                  opfsFiles: (string|null)[], sab?, writeSab?,
 //                  cancelSab? }
-//                → result { jobId, data } | error { jobId, message }
+//                → result { jobId, data } | error { jobId, message, trap? }
+//                  (trap: the wasm instance trapped; the lane must end)
 //   readAtResult { bytes? , error?, cancelled? }    (JSPI reads)
 //   chunkAck     { error?, cancelled? }             (JSPI writes)
 //   releaseHeld  { heldGroupId }
@@ -534,7 +535,11 @@ self.onmessage = async (e) => {
         // memory never shrinks. The Router retires a worker past its cap.
         self.postMessage({ type: 'result', jobId: msg.jobId, data: owned, mem: wasm.memory.buffer.byteLength }, [owned]);
       } catch (err) {
-        self.postMessage({ type: 'error', jobId: msg.jobId, message: err.message || String(err), mem: wasm ? wasm.memory.buffer.byteLength : null });
+        // A wasm trap (a Rust panic compiles to `unreachable`) leaves the
+        // engine's state unusable. Report it as a trap, apart from every
+        // other failure, so the host ends the lane instead of reusing it.
+        const trap = err instanceof WebAssembly.RuntimeError;
+        self.postMessage({ type: 'error', jobId: msg.jobId, message: err.message || String(err), trap: trap ? true : undefined, mem: wasm ? wasm.memory.buffer.byteLength : null });
       }
       return;
     }

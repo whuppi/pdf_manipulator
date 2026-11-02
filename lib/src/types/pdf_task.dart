@@ -34,8 +34,9 @@ export 'package:pdf_manipulator/src/types/cancel_hook.dart' show CancelHook;
 /// await task;             // → throws PdfCancelled
 /// ```
 ///
-/// Cancelling after completion is a no-op. A cancelled task resolves
-/// with [PdfCancelled] — never with a partial result.
+/// Cancelling after completion is a no-op. A task the cancel stopped
+/// resolves with [PdfCancelled], never with a partial result; a task that
+/// finished before the cancel landed resolves with its result.
 class PdfTask<T> implements Future<T> {
   /// INTERNAL — built by the bridge around a tracked operation
   /// future and its cancel hook. Not for consumer construction.
@@ -74,8 +75,13 @@ class PdfTask<T> implements Future<T> {
   bool _listened = false;
 
   /// Requests cancellation of this operation. Idempotent; a no-op
-  /// once the task has completed. The task resolves with
-  /// [PdfCancelled].
+  /// once the task has completed.
+  ///
+  /// If the engine had not finished when the cancel landed, the task
+  /// resolves with [PdfCancelled]. If it finished first, the task resolves
+  /// with its result, as if cancel had not been called. One exception: an
+  /// operation that opens a document, editor or builder and finished first
+  /// is closed by the library, and the task resolves with [PdfCancelled].
   ///
   /// Native stops a running op within one page (one image for image
   /// reduction, one rule batch for validation). On the web that needs

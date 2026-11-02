@@ -13,6 +13,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart' as bin;
+import 'package:pdf_manipulator/src/bridge/protocol/op.dart';
 import 'package:pdf_manipulator/src/runtime/lane.dart';
 import 'package:pdf_manipulator/src/runtime/router.dart';
 import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
@@ -188,28 +189,13 @@ void main() {
       laneA.autoResult = _ok();
       await router.execute(_opOn('docDispose', handle));
 
-      // The handle is gone: the next op for it is placed, not pinned —
-      // with lane A idle it still lands there, so prove the unpin by
-      // checking the pin map indirectly: a BUSY lane A + unpinned op
-      // must go elsewhere.
-      laneA.autoResult = null;
-      final busy = router.execute(_open()); // occupies lane A
-      await Future<void>.delayed(Duration.zero);
-      final after = router.execute(_opOn('extract', handle));
-      await Future<void>.delayed(Duration.zero);
-
-      expect(
-        host.lanes,
-        hasLength(2),
-        reason: 'unpinned op on a busy instance spawns/uses lane B',
-      );
-      final laneB = host.lanes[1];
-      expect(laneB.submitted, isNotEmpty);
-
-      for (final lane in host.lanes) {
-        lane.completeAllPending();
-      }
-      await Future.wait([busy, after]);
+      // The handle is gone: an op naming it is answered by the Router
+      // itself and never placed on any lane.
+      final submitted = laneA.submitted.length;
+      final after = await router.execute(_opOn('extract', handle));
+      expect(after.bytes, buildErrorResponse('document not found'));
+      expect(laneA.submitted, hasLength(submitted));
+      expect(host.lanes, hasLength(1));
     });
 
     test('handles on different lanes never share an id (cross-lane '
@@ -514,6 +500,219 @@ void main() {
         );
       },
     );
+  });
+
+  group('a handle the Router does not hold', () {
+    test('a stale id is answered not-found and never reaches a lane', () async {
+      final open = router.execute(_open());
+      await Future<void>.delayed(Duration.zero);
+      final lane = host.lanes.single;
+      lane.pending[1]!.complete(_ok(handleId: 1));
+      final stale = peekResponseHandleId((await open).bytes)!;
+
+      lane.autoResult = _ok();
+      await router.execute(_opOn('docDispose', stale));
+      final sent = lane.submitted.length;
+
+      // Another document now lives on the same lane under the engine id
+      // the stale handle had: forwarded raw, the op would name it.
+      lane.autoResult = _ok(handleId: 2);
+      await router.execute(_open());
+
+      final result = await router.execute(_opOn('extract', stale));
+      expect(
+        result.bytes,
+        buildErrorResponse('document not found'),
+        reason: 'the engine-shaped not-found error, built by the Router',
+      );
+      expect(lane.submitted.length, sent + 1, reason: 'only the second open');
+
+      final editor = await router.execute(_opOn('editorSave', stale));
+      expect(editor.bytes, buildErrorResponse('editor not found'));
+      final builder = await router.execute(_opOn('builderSave', 999));
+      expect(builder.bytes, buildErrorResponse('builder not found'));
+    });
+  });
+
+  group('cancel versus completion', () {
+    test('a handle made in the window of a cancel is disposed, not leaked, '
+        'and the caller is told cancelled', () async {
+      final hook = CancelHook();
+      final open = router.execute(_open(), keepSources: {0}, cancel: hook);
+      await Future<void>.delayed(Duration.zero);
+      final lane = host.lanes.single;
+
+      // The cancel lands after the engine finished, before the Router
+      // reads the success.
+      hook.cancel();
+      lane.pending[1]!.complete(_ok(handleId: 7, held: {0: 'src'}));
+      final result = await open;
+      expect(result.bytes, [2]);
+      expect(result.resourceIds, isEmpty);
+
+      expect(lane.submitted, hasLength(2));
+      final dispose = lane.submitted[1];
+      expect(peekRequestOp(dispose.request), 'docDispose');
+      expect(
+        peekRequestHandleId(dispose.request),
+        7,
+        reason: 'the dispose names the engine id, on the same lane',
+      );
+      expect(
+        lane.releasedTokens,
+        isEmpty,
+        reason: 'the channels stay until the document that reads them is gone',
+      );
+
+      lane.pending[dispose.jobId]!.complete(_ok());
+      await Future<void>.delayed(Duration.zero);
+      expect(lane.releasedTokens, ['src']);
+    });
+
+    test('an editor and a builder are disposed by their own ops', () async {
+      for (final (create, disposeOp) in [
+        ('editorOpen', 'editorDispose'),
+        ('builderCreate', 'builderDispose'),
+      ]) {
+        final hook = CancelHook();
+        final op = router.execute(bin.encodeRequest(create, {}), cancel: hook);
+        await Future<void>.delayed(Duration.zero);
+        final lane = host.lanes.last;
+        hook.cancel();
+        lane.pending[lane.submitted.last.jobId]!.complete(_ok(handleId: 3));
+        await op;
+        expect(peekRequestOp(lane.submitted.last.request), disposeOp);
+        lane.completeAllPending();
+      }
+    });
+
+    test('a finished edit on a live editor reports its success, not cancelled, '
+        'even though the cancel fired', () async {
+      final open = router.execute(bin.encodeRequest('editorOpen', {}));
+      await Future<void>.delayed(Duration.zero);
+      final lane = host.lanes.single;
+      lane.pending[1]!.complete(_ok(handleId: 4));
+      final editor = peekResponseHandleId((await open).bytes)!;
+
+      final hook = CancelHook();
+      final edit = router.execute(
+        bin.encodeRequest('editorMutate', {
+          'handleId': editor,
+          'editOp': 'setTitle',
+          'title': 'x',
+        }),
+        cancel: hook,
+      );
+      await Future<void>.delayed(Duration.zero);
+      hook.cancel();
+      lane.pending[2]!.complete(_ok());
+      expect(
+        (await edit).bytes,
+        _ok().bytes,
+        reason: 'the editor holds the edit, so the caller must hear success',
+      );
+      expect(lane.submitted, hasLength(2), reason: 'nothing is disposed');
+    });
+
+    test(
+      'a dispose that finished under a fired cancel still drops the pin',
+      () async {
+        final open = router.execute(_open());
+        await Future<void>.delayed(Duration.zero);
+        final lane = host.lanes.single;
+        lane.pending[1]!.complete(_ok(handleId: 7));
+        final handle = peekResponseHandleId((await open).bytes)!;
+
+        final hook = CancelHook();
+        final dispose = router.execute(
+          _opOn('docDispose', handle),
+          cancel: hook,
+        );
+        await Future<void>.delayed(Duration.zero);
+        hook.cancel();
+        lane.pending[2]!.complete(_ok());
+        expect((await dispose).bytes, _ok().bytes);
+        final after = await router.execute(_opOn('extract', handle));
+        expect(after.bytes, buildErrorResponse('document not found'));
+      },
+    );
+
+    test('a handle from an op that creates none is refused loudly', () async {
+      final hook = CancelHook();
+      final op = router.execute(
+        bin.encodeRequest('extract', {'sourceLength': 1}),
+        cancel: hook,
+      );
+      await Future<void>.delayed(Duration.zero);
+      hook.cancel();
+      host.lanes.single.pending[1]!.complete(_ok(handleId: 9));
+      await expectLater(op, throwsStateError);
+    });
+  });
+
+  group('not-found kinds', () {
+    test('every editor and builder op answers its own kind', () async {
+      for (final op in EngineOp.values) {
+        final wire = op.wire;
+        final isEditor = wire.startsWith('editor') && wire != 'editorOpen';
+        final isBuilder = wire.startsWith('builder') && wire != 'builderCreate';
+        if (!isEditor && !isBuilder) continue;
+        final result = await router.execute(_opOn(wire, 12345));
+        expect(
+          result.bytes,
+          buildErrorResponse(
+            isEditor ? 'editor not found' : 'builder not found',
+          ),
+          reason: '$wire is missing from the Router\'s op sets',
+        );
+      }
+    });
+  });
+
+  group('a lane whose engine died', () {
+    LaneSubmitResult died() => LaneSubmitResult(
+      buildErrorResponse('internal error: engine operation panicked'),
+      const {},
+      laneDied: true,
+    );
+
+    test('its handles fail typed at once, a new lane serves handle-less '
+        'ops, and the dead lane is killed once drained', () async {
+      final open = router.execute(_open());
+      await Future<void>.delayed(Duration.zero);
+      final laneA = host.lanes.single;
+      laneA.pending[1]!.complete(_ok(handleId: 5));
+      final handle = peekResponseHandleId((await open).bytes)!;
+
+      final bad = router.execute(_opOn('extract', handle));
+      final queued = router.execute(_opOn('extract', handle));
+      await Future<void>.delayed(Duration.zero);
+      laneA.pending[2]!.complete(died());
+      expect(
+        (await bad).bytes,
+        buildErrorResponse('internal error: engine operation panicked'),
+      );
+      expect(laneA.killed, isFalse, reason: 'a queued job is still to answer');
+      laneA.pending[3]!.complete(
+        LaneSubmitResult(buildErrorResponse(laneDeadMessage), const {}),
+      );
+      expect((await queued).bytes, buildErrorResponse(laneDeadMessage));
+      expect(laneA.killed, isTrue);
+
+      final before = laneA.submitted.length;
+      final after = await router.execute(_opOn('extract', handle));
+      expect(after.bytes, buildErrorResponse(laneDeadMessage));
+      expect(laneA.submitted, hasLength(before), reason: 'never forwarded');
+
+      final dispose = await router.execute(_opOn('docDispose', handle));
+      expect(dispose.bytes[0], 1, reason: 'freeing a dead handle succeeds');
+
+      final fresh = router.execute(_open());
+      await Future<void>.delayed(Duration.zero);
+      expect(host.lanes, hasLength(2), reason: 'a replacement lane');
+      host.lanes.last.pending.values.single.complete(_ok(handleId: 1));
+      expect((await fresh).bytes[0], 1);
+    });
   });
 
   group('worker recycling', () {

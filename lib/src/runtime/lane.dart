@@ -17,6 +17,11 @@ import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 
+/// The message of the typed error a handle or job gets after its lane's
+/// engine trapped or panicked. Matches `LANE_DEAD_MESSAGE` in the engine.
+const laneDeadMessage =
+    'the engine lane stopped after an engine operation panicked';
+
 /// One operation, fully described. Built by the Router.
 class LaneJob {
   /// Creates a job descriptor. [jobId] is unique per Router lifetime.
@@ -60,7 +65,16 @@ class LaneJob {
 class LaneSubmitResult {
   /// Creates a result. [heldTokens] maps kept source indices to
   /// opaque lane-owned tokens for later [Lane.releaseHeld].
-  LaneSubmitResult(this.bytes, this.heldTokens, {this.peakBytes});
+  LaneSubmitResult(
+    this.bytes,
+    this.heldTokens, {
+    this.peakBytes,
+    this.laneDied = false,
+  });
+
+  /// True when the engine on this lane trapped or panicked: the lane has
+  /// stopped serving, its handles are gone, and the Router must retire it.
+  final bool laneDied;
 
   /// Binary response bytes (success or engine-encoded error).
   final Uint8List bytes;

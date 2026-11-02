@@ -71,7 +71,11 @@ class _PendingJob {
 
   /// Closes the port, closes non-kept callables, destroys + frees
   /// non-kept buffers, frees the FFI argument arrays.
-  final void Function() cleanup;
+  final void Function({required bool freeKept}) cleanup;
+
+  /// True once the lane was told to skip this job before it started: it
+  /// never registered a channel, so the kept ones are freed with the rest.
+  bool skipped = false;
 
   /// Builds the success-path result (collecting held tokens) from
   /// the posted bytes.
@@ -91,13 +95,6 @@ class NativeLane implements Lane {
   Future<LaneSubmitResult> submit(LaneJob job) {
     if (_killed) {
       return Future.value(LaneSubmitResult(buildCancelledResponse(), const {}));
-    }
-
-    // Revive held channels: a previous job's cancel may have left
-    // its sticky CANCELLED flag on them. Between jobs nothing can be
-    // parked in a held channel, so this is the one safe moment.
-    for (final held in _held) {
-      held.buffer.clearCancelled();
     }
 
     // ── Allocate the FFI argument block ──
@@ -148,10 +145,12 @@ class NativeLane implements Lane {
     final completer = Completer<LaneSubmitResult>();
     final port = RawReceivePort();
 
-    void cleanup() {
+    void cleanup({required bool freeKept}) {
       port.close();
       for (var i = 0; i < sourceCount; i++) {
-        if (job.keepSources.contains(i)) continue; // promoted to held
+        if (!freeKept && job.keepSources.contains(i)) {
+          continue; // promoted to held
+        }
         readCallables[i]!.close();
         bindings.channelDestroyRead(readChannels[i]!.ptr);
         readChannels[i]!.free();
@@ -180,7 +179,11 @@ class NativeLane implements Lane {
         _held.add(held);
         heldTokens[i] = held;
       }
-      return LaneSubmitResult(bytes, heldTokens);
+      return LaneSubmitResult(
+        bytes,
+        heldTokens,
+        laneDied: bindings.laneIsDead(_laneKey) != 0,
+      );
     }
 
     final pendingJob = _PendingJob(completer, port, cleanup, buildResult);
@@ -198,7 +201,7 @@ class NativeLane implements Lane {
       }
       // Kill path: the future was completed at kill; this post is
       // the lane's "channels deregistered" signal — free everything.
-      posted.cleanup();
+      posted.cleanup(freeKept: posted.skipped);
       _maybeFreeHeldAfterKill();
     };
 
@@ -224,7 +227,19 @@ class NativeLane implements Lane {
   @override
   void cancelJob(int jobId) {
     if (_killed) return;
-    bindings.laneJobCancel(_laneKey, jobId);
+    final queued = bindings.laneJobCancel(_laneKey, jobId) != 0;
+    // A job the lane has not started never reaches the engine, so its
+    // caller need not wait for the running job ahead of it. The lane
+    // still posts for it, and that post frees its buffers.
+    if (!queued) return;
+    final pending = _pending[jobId];
+    if (pending == null) return;
+    pending.skipped = true;
+    if (!pending.completer.isCompleted) {
+      pending.completer.complete(
+        LaneSubmitResult(buildCancelledResponse(), const {}),
+      );
+    }
   }
 
   @override
@@ -276,17 +291,22 @@ class NativeLane implements Lane {
     DataSource source,
   ) {
     return ffi.NativeCallable<ffi.Void Function()>.listener(() async {
+      final request = buffer.requestSeq;
+      // The job may have ended, or the engine may have moved on to a newer
+      // request, while the source was busy: either way this answer is not
+      // wanted, and the newer request has its own listener.
+      bool stale() => buffer.freed || buffer.requestSeq != request;
       try {
         final bytes = await Future<Uint8List>.value(
           source.readAt(buffer.requestOffset, buffer.requestCount),
         );
-        if (buffer.freed) return; // the job ended while the source was busy
+        if (stale()) return;
         buffer.responseLength = bytes.length;
         buffer.writeResponseData(bytes);
-        buffer.setFlags(flagReady);
+        buffer.respond(request, flagReady);
       } catch (_) {
-        if (buffer.freed) return;
-        buffer.setFlags(flagError);
+        if (stale()) return;
+        buffer.respond(request, flagError);
       }
       bindings.channelSignalRead(buffer.ptr);
     });
@@ -297,12 +317,25 @@ class NativeLane implements Lane {
     DataSink sink,
   ) {
     return ffi.NativeCallable<ffi.Void Function()>.listener(() async {
+      final request = buffer.requestSeq;
+      // As for reads: a freed buffer, or a newer chunk already posted,
+      // makes this acknowledgement unwanted.
+      bool stale() {
+        if (buffer.freed) {
+          WriteChannelBuffer.writesAfterFree++;
+          return true;
+        }
+        return buffer.requestSeq != request;
+      }
+
       try {
         final chunk = buffer.readChunkData(buffer.chunkLength);
         await Future<void>.value(sink.write(chunk));
-        buffer.setFlags(flagAck);
+        if (stale()) return;
+        buffer.respond(request, flagAck);
       } catch (_) {
-        buffer.setFlags(flagError);
+        if (stale()) return;
+        buffer.respond(request, flagError);
       }
       bindings.channelSignalWrite(buffer.ptr);
     });

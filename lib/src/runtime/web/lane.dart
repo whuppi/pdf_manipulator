@@ -18,7 +18,8 @@
 //
 // ## Cancellation
 //
-//   queued  — completed cancelled here; never reaches the worker.
+//   queued  — removed from the queue and completed cancelled at once;
+//             never reaches the worker.
 //   running — the job's NEXT I/O is answered with the cancelled
 //             status (and a parked Atomics wait / outstanding JSPI
 //             read is answered immediately); the engine unwinds at
@@ -158,6 +159,10 @@ class WebLane implements Lane {
   _WebJob? _running;
   bool _killed = false;
 
+  /// True once the worker trapped: the lane serves nothing more. Queued and
+  /// later jobs complete with the lane-dead error; the worker is terminated.
+  bool _dead = false;
+
   /// True once anything was posted to the adopted worker — a used
   /// worker holds engine/OPFS state and must die with the lane; an
   /// unused one is still pristine and returns to the host pool.
@@ -167,6 +172,10 @@ class WebLane implements Lane {
   /// Outstanding JSPI read for the running job (the worker is
   /// suspended awaiting readAtResult).
   bool _awaitingJspiRead = false;
+
+  /// Outstanding JSPI write for the running job (the worker is
+  /// suspended awaiting chunkAck).
+  bool _awaitingJspiWrite = false;
 
   /// Outstanding OPFS pre-copy ack.
   Completer<String?>? _opfsAck;
@@ -186,6 +195,7 @@ class WebLane implements Lane {
     if (_killed) {
       return Future.value(LaneSubmitResult(buildCancelledResponse(), const {}));
     }
+    if (_dead) return Future.value(_deadResult());
     final entry = _WebJob(job);
     _queue.add(entry);
     _pump();
@@ -196,11 +206,14 @@ class WebLane implements Lane {
   void cancelJob(int jobId) {
     if (_killed) return;
 
-    for (final entry in _queue) {
-      if (entry.job.jobId == jobId) {
-        entry.cancelled = true; // completed cancelled when dequeued
-        return;
-      }
+    final queued = _queue.indexWhere((entry) => entry.job.jobId == jobId);
+    if (queued >= 0) {
+      final entry = _queue.removeAt(queued);
+      entry.cancelled = true;
+      entry.completer.complete(
+        LaneSubmitResult(buildCancelledResponse(), const {}),
+      );
+      return;
     }
 
     final running = _running;
@@ -222,6 +235,10 @@ class WebLane implements Lane {
     if (_awaitingJspiRead) {
       _awaitingJspiRead = false;
       _post({LaneMsgFields.type: LaneMsg.readAtResult, 'cancelled': true});
+    }
+    if (_awaitingJspiWrite) {
+      _awaitingJspiWrite = false;
+      _post({LaneMsgFields.type: LaneMsg.chunkAck, 'cancelled': true});
     }
   }
 
@@ -288,22 +305,36 @@ class WebLane implements Lane {
 
   void _pump() {
     if (_killed || _running != null || _queue.isEmpty) return;
-    final entry = _queue.removeAt(0);
-    if (entry.cancelled) {
-      entry.completer.complete(
-        LaneSubmitResult(buildCancelledResponse(), const {}),
-      );
-      // Tail-call the next job on a microtask to keep the stack flat.
-      scheduleMicrotask(_pump);
+    if (_dead) {
+      for (final entry in _queue) {
+        entry.completer.complete(_deadResult());
+      }
+      _queue.clear();
       return;
     }
+    final entry = _queue.removeAt(0);
     _running = entry;
     unawaited(_runJob(entry));
   }
 
   Future<void> _runJob(_WebJob entry) async {
     try {
-      await _ensureReady();
+      try {
+        await _ensureReady();
+      } catch (e) {
+        // The boot failed: every job waiting on this lane fails with it, and
+        // the next job submitted boots again (see [_ensureReady]).
+        final failed = LaneSubmitResult(
+          buildErrorResponse(e.toString()),
+          const {},
+        );
+        for (final waiting in _queue) {
+          waiting.completer.complete(failed);
+        }
+        _queue.clear();
+        _finish(entry, failed);
+        return;
+      }
       if (_killed || entry.cancelled) {
         _finish(entry, LaneSubmitResult(buildCancelledResponse(), const {}));
         return;
@@ -370,6 +401,7 @@ class WebLane implements Lane {
     if (_running == entry) {
       _running = null;
       _awaitingJspiRead = false;
+      _awaitingJspiWrite = false;
     }
     if (!entry.completer.isCompleted) entry.completer.complete(result);
     _pump();
@@ -377,22 +409,51 @@ class WebLane implements Lane {
 
   // ── Worker lifecycle ──
 
-  Future<void> _ensureReady() {
-    return _ready ??= () async {
-      if (_killed) return; // disposed before the first job ran
-      final worker = await _host.takeWorker(() => _killed);
-      if (worker == null) return; // killed while queued for a slot
-      if (_killed) {
-        // Killed while adopting: nothing was posted to the worker, so
-        // it is pristine by construction — back to the pool.
-        _host.returnPristine(worker);
-        return;
-      }
-      _worker = worker;
-      _sub = EventStreamProviders.messageEvent
-          .forTarget(worker.js)
-          .listen(_onMessage);
-    }();
+  /// A failed boot is not cached: it fails the jobs waiting on it, and the
+  /// next job boots a worker again. The lane is kept, not replaced, since
+  /// it holds nothing yet.
+  Future<void> _ensureReady() async {
+    final booting = _ready ??= _adoptWorker();
+    try {
+      await booting;
+    } catch (_) {
+      if (identical(_ready, booting)) _ready = null;
+      rethrow;
+    }
+  }
+
+  Future<void> _adoptWorker() async {
+    if (_killed) return; // disposed before the first job ran
+    final worker = await _host.takeWorker(() => _killed);
+    if (worker == null) return; // killed while queued for a slot
+    if (_killed) {
+      // Killed while adopting: nothing was posted to the worker, so
+      // it is pristine by construction — back to the pool.
+      _host.returnPristine(worker);
+      return;
+    }
+    _worker = worker;
+    _sub = EventStreamProviders.messageEvent
+        .forTarget(worker.js)
+        .listen(_onMessage);
+  }
+
+  LaneSubmitResult _deadResult() => LaneSubmitResult(
+    buildErrorResponse(laneDeadMessage),
+    const {},
+    laneDied: true,
+  );
+
+  /// The worker trapped: it is terminated, never pooled, and everything the
+  /// lane held is gone with it.
+  void _bury() {
+    _dead = true;
+    unawaited(_sub?.cancel());
+    _sub = null;
+    final worker = _worker;
+    _worker = null;
+    if (worker != null) _host.retire(worker);
+    _heldSources.clear();
   }
 
   // ── Inbound messages ──
@@ -408,6 +469,7 @@ class WebLane implements Lane {
         if (entry != null) unawaited(_serveReadAt(obj, entry));
 
       case LaneMsg.chunk:
+        if (_host.mode == PdfIoMode.jspi) _awaitingJspiWrite = true;
         // Chained, never parallel: chunk N+1's sink.write may not
         // start before chunk N's completes (ordering is the sink
         // contract; OPFS mode has no worker-side backpressure).
@@ -424,9 +486,18 @@ class WebLane implements Lane {
         if (entry != null) {
           final bytes = _bytes(obj, 'data');
           final peak = _int(obj, LaneMsgFields.peakBytes);
-          // The op ends after its last sink write: OPFS mode has no
-          // worker-side back-pressure, so the result can arrive while
-          // chunks it follows are still being written.
+          final succeeded = bytes.isNotEmpty && bytes[0] == 1;
+          if (entry.cancelled && !succeeded) {
+            // The op stopped: a sink write still in flight must not hold
+            // the answer back.
+            _finish(entry, _buildResult(entry, bytes, peak));
+            return;
+          }
+          // A success ends after its last sink write, cancelled or not:
+          // the caller must not be told "saved" while a chunk is still
+          // being written. OPFS mode has no worker-side back-pressure, so
+          // the result can arrive while chunks it follows are still being
+          // written.
           unawaited(
             entry.sinkChain.then(
               (_) => _finish(entry, _buildResult(entry, bytes, peak)),
@@ -435,7 +506,20 @@ class WebLane implements Lane {
         }
 
       case LaneMsg.error:
-        if (entry != null) {
+        if (entry != null && obj['trap'] != null) {
+          // A wasm trap is a Rust panic: the engine's state is gone, so
+          // the lane ends here, exactly as a panic ends a native lane.
+          _dead = true;
+          _finish(
+            entry,
+            LaneSubmitResult(
+              buildErrorResponse('internal error: engine operation panicked'),
+              const {},
+              laneDied: true,
+            ),
+          );
+          _bury();
+        } else if (entry != null) {
           final message = _str(obj, 'message') ?? 'web lane error';
           final bytes = entry.cancelled
               ? buildCancelledResponse()
@@ -453,9 +537,12 @@ class WebLane implements Lane {
   }
 
   LaneSubmitResult _buildResult(_WebJob entry, Uint8List bytes, int? peak) {
-    // Cancelled mid-op: the caller sees the typed status, identical
-    // to native's run_job. (Set-once flag — cannot misfire.)
-    if (entry.cancelled) {
+    // Cancelled mid-op: the engine's I/O error reads as the typed
+    // status, identical to native's run_job. A success is never
+    // rewritten: it may have created a handle only the Router can name
+    // and dispose.
+    final succeeded = bytes.isNotEmpty && bytes[0] == 1;
+    if (entry.cancelled && !succeeded) {
       return LaneSubmitResult(buildCancelledResponse(), const {});
     }
 
@@ -583,6 +670,9 @@ class WebLane implements Lane {
             : (error != null ? SabStatus.error : SabStatus.ready),
       );
     } else if (_host.mode == PdfIoMode.jspi) {
+      // A cancel already answered this write.
+      if (!_awaitingJspiWrite) return;
+      _awaitingJspiWrite = false;
       _post({
         LaneMsgFields.type: LaneMsg.chunkAck,
         if (cancelled) 'cancelled': true,

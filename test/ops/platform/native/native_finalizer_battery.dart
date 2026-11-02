@@ -45,4 +45,33 @@ void registerNativeFinalizerTests() {
     // Above the 30 s hang detector, so a slow subprocess start is never
     // reported as a failure the detector would not call a hang.
   }, timeout: t(35));
+
+  test('a write cancelled mid-sink leaves the freed buffer alone', () async {
+    // Same launch as above. Each run frees the write buffer while the sink
+    // is busy and then lets the sink return; the payload itself fails when
+    // the listener's guard did not see that late write.
+    final payload = File(
+      'test/ops/platform/native/slow_sink_cancel_payload.dart',
+    ).absolute.path;
+    for (var run = 0; run < 20; run++) {
+      final process = await Process.start(Platform.resolvedExecutable, [
+        payload,
+      ]);
+      final stderr = process.stderr
+          .transform(const SystemEncoding().decoder)
+          .join();
+      final exitCode = await process.exitCode.timeout(
+        Duration(seconds: 30),
+        onTimeout: () {
+          process.kill();
+          return -1;
+        },
+      );
+      expect(
+        exitCode,
+        0,
+        reason: 'run $run exited $exitCode\nstderr: ${await stderr}',
+      );
+    }
+  }, timeout: t(120));
 }

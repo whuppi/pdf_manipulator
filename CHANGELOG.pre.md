@@ -181,6 +181,13 @@ CONTENT RULES (never change)
 - Fixed a merge copying the source's whole page tree into the output when a merged page linked to a page that was not merged — such a link's target is written as null
 - Fixed page edits on a document with merged pages hitting the wrong page, and `movePage` crashing the engine — they apply to the merged page or refuse with a typed error
 - Fixed a failed `open` or `edit` keeping its source channel until the instance was disposed
+- Fixed a native crash when a job was cancelled while its sink was still writing: the late write touched freed memory
+- Fixed a cancelled read on a document held open sending its late answer to the next job on that document, which then read the wrong bytes
+- Fixed an operation on a disposed document reaching another open document that happened to have the same engine id — it fails with "document not found"
+- Fixed `cancel()` on a job still waiting behind another one waiting for that job to end — it resolves at once; on JSPI a cancel during a sink write no longer waits for the write
+- Changed `cancel()` when the operation finished before the cancel landed: the task resolves with its result, so a finished edit is not reported as cancelled; an `open` or `edit` that finished is closed and reports `PdfCancelled`
+- Fixed one failed web worker start making every later operation of that `Pdf` fail — the next operation starts a worker again
+- Fixed a lane that panicked (native) or trapped (web) going on to serve jobs on broken engine state — the lane ends, operations on its documents fail with a typed error, and new work goes to a new lane
 - Fixed `PdfPageBuilder.radioGroup` always failing with "unknown pageOp"
 - Fixed a radio option named Yes, No, On or Off reading back as a checked flag instead of its name
 - Fixed `formFields` misreading a field whose type, flags or value live on an ancestor field (a radio group read as a checkbox), and reporting a nameless parent as a field with an empty name

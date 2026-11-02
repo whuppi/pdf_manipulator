@@ -21,6 +21,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart' as bin;
 import 'package:pdf_manipulator/src/types/cancel_hook.dart';
 import 'package:pdf_manipulator/src/io/memory_source.dart';
 import 'package:pdf_manipulator/src/runtime/lane.dart';
@@ -33,6 +34,41 @@ import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 
 /// Ops that destroy a handle — their success removes the pin.
 const _disposeOps = {'docDispose', 'editorDispose', 'builderDispose'};
+
+/// The only ops whose success creates a handle, each with the op that
+/// destroys what it made.
+const _handleCreators = {
+  'open': 'docDispose',
+  'editorOpen': 'editorDispose',
+  'builderCreate': 'builderDispose',
+};
+
+/// Ops that name an editor handle. An op in neither this set nor
+/// [_builderOps] names a document.
+const _editorOps = {
+  'editorDispose',
+  'editorMutate',
+  'editorSave',
+  'editorGetMetadata',
+  'editorIsModified',
+  'editorPageMediaBox',
+  'editorPageCropBox',
+  'editorPageImages',
+  'editorRedactionCount',
+  'editorMergeFrom',
+  'editorExtractPages',
+};
+
+/// Ops that name a builder handle.
+const _builderOps = {
+  'builderDispose',
+  'builderSetMetadata',
+  'builderAddPage',
+  'builderAddImagePage',
+  'builderPageOp',
+  'builderPageDone',
+  'builderSave',
+};
 
 /// A web worker whose WASM memory peaked at or above this is retired
 /// once it is idle: linear memory never shrinks, so one huge job would
@@ -47,6 +83,10 @@ class _LaneSlot {
   /// Jobs currently submitted and not yet completed. Drives
   /// least-loaded placement.
   int activeJobs = 0;
+
+  /// True once the lane's engine trapped or panicked: the lane serves
+  /// nothing more, and every handle pinned to it is gone.
+  bool dead = false;
 }
 
 class _Pin {
@@ -151,7 +191,27 @@ class Router implements PdfTransport {
     var req = request;
     final globalHandleId = peekRequestHandleId(req);
     final pin = globalHandleId != null ? _pins[globalHandleId] : null;
-    if (pin != null) {
+    if (globalHandleId != null) {
+      if (pin == null) {
+        // No pin: the handle was disposed (global ids are never reused).
+        // Forwarded, the raw id could name another live document on
+        // whichever lane placement picks, so the Router answers itself.
+        return (
+          bytes: buildErrorResponse(_notFoundMessage(peekRequestOp(req))),
+          resourceIds: const <int, int>{},
+        );
+      }
+      if (pin.slot.dead) {
+        // The handle died with its lane; disposing it has nothing to free.
+        final disposing = _disposeOps.contains(peekRequestOp(req));
+        if (disposing) _pins.remove(globalHandleId);
+        return (
+          bytes: disposing
+              ? Uint8List.fromList(const [1, 0, 0])
+              : buildErrorResponse(laneDeadMessage),
+          resourceIds: const <int, int>{},
+        );
+      }
       req = rewriteRequestHandleId(req, pin.engineHandleId);
     }
     final slot = pin?.slot ?? _placeFor(req);
@@ -178,6 +238,8 @@ class Router implements PdfTransport {
       slot.activeJobs--;
       unregister?.call();
     }
+    if (result.laneDied && !_disposed) _retireDead(slot);
+    _killIfDrained(slot);
 
     // Pin bookkeeping is response-driven, not op-name-driven: any op
     // whose success carries a handleId created a handle on this lane.
@@ -200,8 +262,41 @@ class Router implements PdfTransport {
       return (bytes: bytes, resourceIds: const <int, int>{});
     }
 
-    var owner = pin;
     final engineHandle = peekResponseHandleId(bytes);
+    if (engineHandle != null && (cancel?.isCancelled ?? false)) {
+      // The caller's cancel fired in the window between the engine
+      // finishing and this result arriving. For an op that CREATES a
+      // handle the cancel wins: the caller is told cancelled, so the
+      // handle has no id anyone holds and is disposed on its own lane.
+      // Every other success is returned as it is, so the caller's view
+      // matches the engine's: a finished edit stays on its live editor.
+      final disposeOp = _handleCreators[peekRequestOp(req)];
+      if (disposeOp == null) {
+        // Only a creator's success carries a new handle. Anything else is
+        // a bug in the engine or in this map: loud in debug, and in
+        // release the result is returned and the handle pinned, since
+        // disposing a handle the Router cannot name the owner of is worse.
+        var debug = false;
+        assert(debug = true);
+        if (debug) {
+          throw StateError(
+            'op "${peekRequestOp(req)}" returned a handle but is not a '
+            'handle creator',
+          );
+        }
+      } else {
+        if (!_disposed) {
+          _disposeOrphan(slot, engineHandle, disposeOp, result);
+          _maybeRecycle(slot, result);
+        }
+        return (
+          bytes: buildCancelledResponse(),
+          resourceIds: const <int, int>{},
+        );
+      }
+    }
+
+    var owner = pin;
     if (engineHandle != null) {
       final globalId = _nextHandleId++;
       owner = _Pin(slot, engineHandle, job.jobId);
@@ -236,6 +331,53 @@ class Router implements PdfTransport {
     };
     _maybeRecycle(slot, result);
     return (bytes: bytes, resourceIds: resourceIds);
+  }
+
+  /// Disposes a handle nobody holds. It rides the lane's own queue, so it
+  /// runs after the job that made it, and the job's kept channels are
+  /// released only once the engine has dropped the document that reads them.
+  void _disposeOrphan(
+    _LaneSlot slot,
+    int engineHandle,
+    String disposeOp,
+    LaneSubmitResult created,
+  ) {
+    final job = LaneJob(
+      jobId: _nextJobId++,
+      request: bin.encodeRequest(disposeOp, {'handleId': engineHandle}),
+      sources: const [],
+      sinks: const [],
+      keepSources: const {},
+    );
+    slot.activeJobs++;
+    unawaited(
+      slot.lane.submit(job).whenComplete(() {
+        slot.activeJobs--;
+        if (_disposed) return;
+        for (final token in created.heldTokens.values) {
+          slot.lane.releaseHeld(token);
+        }
+        _killIfDrained(slot);
+      }),
+    );
+  }
+
+  /// A dead lane takes no more placements and fails the handles on it. It
+  /// is killed once the jobs already on it have each had their answer.
+  void _retireDead(_LaneSlot slot) {
+    slot.dead = true;
+    _lanes.remove(slot);
+  }
+
+  void _killIfDrained(_LaneSlot slot) {
+    if (slot.dead && slot.activeJobs == 0) slot.lane.kill();
+  }
+
+  /// The engine's own not-found error for the kind of handle [op] names.
+  String _notFoundMessage(String? op) {
+    if (_editorOps.contains(op)) return 'editor not found';
+    if (_builderOps.contains(op)) return 'builder not found';
+    return 'document not found';
   }
 
   /// Retires an idle lane whose worker grew past the recycle threshold.

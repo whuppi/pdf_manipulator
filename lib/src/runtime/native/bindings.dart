@@ -45,11 +45,16 @@ external int laneSpawn();
 @ffi.Native<ffi.Void Function(ffi.Uint64)>(symbol: 'lane_kill')
 external void laneKill(int laneKey);
 
-/// Cancels one job on a lane. Instant, idempotent.
-@ffi.Native<ffi.Void Function(ffi.Uint64, ffi.Uint64)>(
+/// Cancels one job on a lane. Instant, idempotent. Returns 1 when the
+/// job had not started: the lane skips it, so it can complete at once.
+@ffi.Native<ffi.Uint8 Function(ffi.Uint64, ffi.Uint64)>(
   symbol: 'lane_job_cancel',
 )
-external void laneJobCancel(int laneKey, int jobId);
+external int laneJobCancel(int laneKey, int jobId);
+
+/// 1 once the lane's engine panicked and the lane stopped serving.
+@ffi.Native<ffi.Uint8 Function(ffi.Uint64)>(symbol: 'lane_is_dead')
+external int laneIsDead(int laneKey);
 
 /// Releases one held channel (its handle was disposed). The caller
 /// frees the buffer only AFTER this returns.

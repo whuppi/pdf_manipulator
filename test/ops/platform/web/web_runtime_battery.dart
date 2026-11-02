@@ -13,8 +13,10 @@
 //   3. Clean boot failure — an unreachable worker URL must surface a
 //      typed error on the first op, never an infinite hang.
 
+import 'dart:async';
 import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
+import 'dart:typed_data';
 
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
@@ -25,6 +27,23 @@ import 'package:pdf_manipulator/src/runtime/web/lane.dart' show WebLaneHost;
 import '../../../fixtures/handwritten.dart';
 import '../../../harness/test_source_sink.dart';
 import '../../../harness/timeouts.dart';
+
+/// A sink whose first write blocks until [gate] completes.
+class _BlockedSink implements DataSink {
+  _BlockedSink(this.started, this.gate);
+
+  final Completer<void> started;
+  final Future<void> gate;
+
+  @override
+  Future<void> write(Uint8List chunk) async {
+    if (!started.isCompleted) started.complete();
+    await gate;
+  }
+
+  @override
+  void close() {}
+}
 
 Future<List<String>> _names(web.FileSystemDirectoryHandle dir) async {
   final names = <String>[];
@@ -140,6 +159,84 @@ void registerWebPlatformTests({
       },
       timeout: t(2),
     ); // boot failure reports explicitly — instant, no deadline involved
+
+    test(
+      'a failed boot does not poison the lane — the next op boots again',
+      () async {
+        final channel = spawnHybridUri(
+          '/test/harness/flaky_asset_server.dart',
+          stayAlive: true,
+        );
+        final events = StreamIterator(channel.stream);
+        await events.moveNext();
+        final port = (events.current as double).toInt();
+        channel.sink.add('fail');
+        await events.moveNext(); // the server confirms the switch
+        final url = 'http://localhost:$port/web_assets/lane_worker.js';
+
+        final flaky = Pdf(
+          config: PdfConfig(
+            webLaneWorkerUrl: url,
+            webIoMode: mode,
+            maxLanes: 1,
+          ),
+        );
+        await expectLater(
+          flaky.open(src(minimalPdf)),
+          throwsA(isA<Object>()),
+          reason: 'the worker script is unreachable',
+        );
+
+        channel.sink.add('ok');
+        await events.moveNext();
+        final doc = await flaky.open(src(minimalPdf));
+        expect(doc.pageCount, 1, reason: 'the same Pdf boots again and works');
+        await doc.dispose();
+        await flaky.dispose();
+        await events.cancel();
+
+        // The failed boot left the page-level inheritance pointing at the
+        // flaky server; point it back at the suite's.
+        final restored = Pdf(
+          config: PdfConfig(webLaneWorkerUrl: workerUrl(), webIoMode: mode),
+        );
+        await (await restored.open(src(minimalPdf))).dispose();
+        await restored.dispose();
+      },
+      timeout: t(3),
+    );
+
+    test(
+      'a cancel during a blocked sink write answers within 100 ms (JSPI)',
+      () async {
+        final pdf = Pdf(
+          config: PdfConfig(
+            webLaneWorkerUrl: workerUrl(),
+            webIoMode: mode,
+            maxLanes: 1,
+          ),
+        );
+        final started = Completer<void>();
+        final release = Completer<void>();
+        final sink = _BlockedSink(started, release.future);
+        final task = pdf.merge([src(minimalPdf), src(minimalPdf)], sink);
+        await started.future; // the worker is suspended inside the write
+        final clock = Stopwatch()..start();
+        task.cancel();
+        await expectLater(task, throwsA(isA<PdfCancelled>()));
+        clock.stop();
+        expect(
+          clock.elapsedMilliseconds,
+          lessThan(100),
+          reason:
+              'the cancel waited for the sink instead of answering the write',
+        );
+        release.complete();
+        await pdf.dispose();
+      },
+      timeout: t(10),
+      skip: mode == PdfIoMode.jspi ? false : 'JSPI only',
+    );
 
     test('dead-session OPFS directories are reclaimed at startup', () async {
       // Plant a fake dead session: files on disk, NO liveness lock —

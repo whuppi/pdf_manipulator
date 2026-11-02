@@ -24,6 +24,7 @@ import '../core/pdf_cancel_battery.dart';
 import '../core/pdf_combinator_cancel_battery.dart';
 import '../core/pdf_lifecycle_battery.dart';
 import '../core/pdf_instance_battery.dart';
+import '../core/pdf_runtime_safety_battery.dart';
 import '../stress/pdf_doc_stress_battery.dart';
 import '../stress/pdf_editor_stress_battery.dart';
 import '../stress/pdf_sugar_stress_battery.dart';
@@ -31,6 +32,7 @@ import '../stress/pdf_standalone_stress_battery.dart';
 import '../stress/pdf_builder_stress_battery.dart';
 import '../stress/pdf_instance_stress_battery.dart';
 import '../platform/native/native_finalizer_battery.dart';
+import '../platform/native/native_stale_answer_battery.dart';
 import '../../harness/timeouts.dart';
 
 void main() {
@@ -66,6 +68,7 @@ void main() {
   registerCombinatorCancelTests(() => pdf);
   registerLifecycleTests(() => Pdf());
   registerInstanceTests(() => Pdf());
+  registerRuntimeSafetyTests();
 
   // Stress tests
   registerDocStressTests(() => pdf);
@@ -77,4 +80,5 @@ void main() {
 
   // Native-only platform tests
   registerNativeFinalizerTests();
+  registerNativeStaleAnswerTests();
 }

@@ -3,11 +3,21 @@
 // Both sides (Dart + Rust) agree on byte offsets. Any change here MUST
 // be reflected in the Rust side and vice versa.
 //
-// Cancellation contract: FLAG_CANCELLED is STICKY — Rust clears only
-// the response bits between requests. A held channel collaterally
-// flagged by a previous job's cancel is revived via [clearCancelled]
-// by the lane, strictly between jobs (the only moment nothing can be
-// parked in it).
+// Every channel carries three u32 words, each with ONE writer:
+//
+//   request word  — written only by Rust: a number bumped on every
+//                   request the channel carries.
+//   response word — written only here. Low nibble: the kind of the
+//                   response (ready / error / ack); upper bits: the
+//                   request number being answered, echoed. Rust takes a
+//                   response only when it echoes the request it waits
+//                   on. Before answering, a listener reads the request
+//                   word again after its await and drops its answer
+//                   when the request has moved on or the buffer is freed.
+//   cancel word   — written only by Rust. FLAG_CANCELLED is STICKY; a
+//                   held channel collaterally flagged by a finished
+//                   job's cancel is revived by Rust when the next job
+//                   adopts it. Dart only reads it.
 //
 // INTERNAL — used by the native lane only.
 
@@ -24,7 +34,7 @@ const flagReady = 1 << 0;
 /// Indicates an error occurred.
 const flagError = 1 << 1;
 
-/// Indicates the operation was cancelled. Sticky — see header.
+/// Cancel-word bit: the operation was cancelled. Sticky — see header.
 const flagCancelled = 1 << 2;
 
 /// Indicates the consumer acknowledged the chunk.
@@ -35,9 +45,20 @@ const flagAck = 1 << 3;
 const _readRequestOffset = 0;
 const _readRequestCount = 8;
 const _readResponseLength = 16;
-const _readFlags = 24;
+const _readResponse = 24;
+const _readCancel = 28;
+const _readRequestSeq = 40;
 const _readData = 160;
 const _readDataCapacity = 64 * 1024;
+
+/// Offset of the Rust-written request-number word of a read channel.
+const readRequestSeqOffset = _readRequestSeq;
+
+/// Offset of the Dart-written response word of a read channel.
+const readResponseOffset = _readResponse;
+
+/// Offset of the Rust-written cancel word of a read channel.
+const readCancelOffset = _readCancel;
 
 /// Total allocation size for a read channel buffer.
 const readBufferSize = _readData + _readDataCapacity;
@@ -45,9 +66,20 @@ const readBufferSize = _readData + _readDataCapacity;
 // ── Write channel offsets ───────────────────────────────────────────
 
 const _writeChunkLength = 0;
-const _writeFlags = 8;
+const _writeResponse = 8;
+const _writeCancel = 12;
+const _writeRequestSeq = 24;
 const _writeData = 144;
 const _writeDataCapacity = 256 * 1024;
+
+/// Offset of the Rust-written request-number word of a write channel.
+const writeRequestSeqOffset = _writeRequestSeq;
+
+/// Offset of the Dart-written response word of a write channel.
+const writeResponseOffset = _writeResponse;
+
+/// Offset of the Rust-written cancel word of a write channel.
+const writeCancelOffset = _writeCancel;
 
 /// Total allocation size for a write channel buffer.
 const writeBufferSize = _writeData + _writeDataCapacity;
@@ -66,6 +98,12 @@ extension _PtrOps on ffi.Pointer<ffi.Uint8> {
       (this + offset).cast<ffi.Uint32>().value = value;
 
   ffi.Pointer<ffi.Uint8> dataAt(int offset) => this + offset;
+
+  /// Publishes a response of [kind] to request number [request] in one
+  /// store.
+  void respond(int responseOffset, int request, int kind) {
+    writeU32At(responseOffset, ((request << 4) | kind) & 0xFFFFFFFF);
+  }
 }
 
 // ── ReadChannelBuffer ───────────────────────────────────────────────
@@ -92,14 +130,15 @@ class ReadChannelBuffer {
     ptr.dataAt(_readData).asTypedList(bytes.length).setAll(0, bytes);
   }
 
-  /// Sets the specified flag [bits] on the buffer.
-  void setFlags(int bits) =>
-      ptr.writeU32At(_readFlags, ptr.readU32At(_readFlags) | bits);
+  /// The number of the request the engine posted last.
+  int get requestSeq => ptr.readU32At(_readRequestSeq);
 
-  /// Revives a held channel: clears the sticky cancelled flag. Call
-  /// ONLY between jobs — never while a lane thread can be parked here.
-  void clearCancelled() =>
-      ptr.writeU32At(_readFlags, ptr.readU32At(_readFlags) & ~flagCancelled);
+  /// Answers request number [request] with [kind] (ready or error).
+  void respond(int request, int kind) =>
+      ptr.respond(_readResponse, request, kind);
+
+  /// Whether Rust has flagged this channel cancelled.
+  bool get cancelled => ptr.readU32At(_readCancel) & flagCancelled != 0;
 
   /// True once [free] ran. A read the source was still serving when its
   /// channel was freed (an abandoned or cancelled job) must not touch
@@ -132,11 +171,30 @@ class WriteChannelBuffer {
   Uint8List readChunkData(int length) =>
       Uint8List.fromList(ptr.dataAt(_writeData).asTypedList(length));
 
-  /// Sets the specified flag [bits] on the buffer.
-  void setFlags(int bits) =>
-      ptr.writeU32At(_writeFlags, ptr.readU32At(_writeFlags) | bits);
+  /// The number of the request the engine posted last.
+  int get requestSeq => ptr.readU32At(_writeRequestSeq);
+
+  /// Answers request number [request] with [kind] (ack or error).
+  void respond(int request, int kind) =>
+      ptr.respond(_writeResponse, request, kind);
+
+  /// Whether Rust has flagged this channel cancelled.
+  bool get cancelled => ptr.readU32At(_writeCancel) & flagCancelled != 0;
+
+  /// Sink writes that resolved after the buffer was freed and so touched
+  /// nothing. A guard check for tests; never read in production.
+  static int writesAfterFree = 0;
+
+  /// True once [free] ran. A write the sink was still serving when its
+  /// channel was freed (a cancelled job whose sink had not finished) must
+  /// not touch the buffer when it finally resolves.
+  bool get freed => _freed;
+  bool _freed = false;
 
   /// Frees the buffer memory. Caller guarantees the engine can no
   /// longer touch it (its job posted).
-  void free() => calloc.free(ptr);
+  void free() {
+    _freed = true;
+    calloc.free(ptr);
+  }
 }

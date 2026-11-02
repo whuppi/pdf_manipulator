@@ -49,7 +49,7 @@ _parseRustDispatch() {
   final dir = Directory(_opsDir);
   if (!dir.existsSync()) throw StateError('host/ops/ not found');
   for (final f in dir.listSync().whereType<File>()) {
-    if (!f.path.endsWith('.rs')) continue;
+    if (!f.path.endsWith('.rs') || f.path.endsWith('test_support.rs')) continue;
     final s = f.readAsStringSync();
     topLevel.addAll(unitPattern.allMatches(s).map((m) => m.group(1)!));
   }
@@ -88,8 +88,10 @@ _parseRustDispatch() {
 ({Set<String> units, Set<String> rows}) _parseUnitsAndRows() {
   final unitPattern = RegExp(r'op_unit!\(\s*(\w+),', multiLine: true);
   final units = <String>{};
+  // test_support.rs holds ops that exist only under the test-support
+  // feature, outside the wire contract: neither side of the sync names them.
   for (final f in Directory(_opsDir).listSync().whereType<File>()) {
-    if (!f.path.endsWith('.rs')) continue;
+    if (!f.path.endsWith('.rs') || f.path.endsWith('test_support.rs')) continue;
     final module = f.uri.pathSegments.last.replaceFirst('.rs', '');
     final s = f.readAsStringSync();
     units.addAll(
@@ -103,9 +105,11 @@ _parseRustDispatch() {
     tableStart,
     registry.indexOf('];', tableStart),
   );
-  final rows = RegExp(
-    r'&(\w+::\w+),',
-  ).allMatches(table).map((m) => m.group(1)!).toSet();
+  final rows = RegExp(r'&(\w+::\w+),')
+      .allMatches(table)
+      .map((m) => m.group(1)!)
+      .where((row) => !row.startsWith('test_support::'))
+      .toSet();
   return (units: units, rows: rows);
 }
 

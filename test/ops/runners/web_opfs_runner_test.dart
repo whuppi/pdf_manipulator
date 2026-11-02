@@ -26,6 +26,7 @@ import '../core/pdf_cancel_battery.dart';
 import '../core/pdf_combinator_cancel_battery.dart';
 import '../core/pdf_lifecycle_battery.dart';
 import '../core/pdf_instance_battery.dart';
+import '../core/pdf_runtime_safety_battery.dart';
 import '../stress/pdf_doc_stress_battery.dart';
 import '../stress/pdf_editor_stress_battery.dart';
 import '../stress/pdf_sugar_stress_battery.dart';
@@ -112,6 +113,14 @@ void main() {
             'http://localhost:$serverPort/web_assets/lane_worker.js',
         webIoMode: PdfIoMode.opfs,
       ),
+    ),
+  );
+
+  registerRuntimeSafetyTests(
+    config: () => PdfConfig(
+      webLaneWorkerUrl:
+          'http://localhost:$serverPort/web_assets/lane_worker.js',
+      webIoMode: PdfIoMode.opfs,
     ),
   );
 
