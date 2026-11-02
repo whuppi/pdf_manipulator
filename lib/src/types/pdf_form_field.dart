@@ -4,6 +4,7 @@
 import 'package:meta/meta.dart';
 
 import 'package:pdf_manipulator/src/types/equality.dart';
+import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/types/pdf_wire.dart';
 
@@ -124,23 +125,6 @@ final class PdfNoValue extends PdfFormFieldValue {
   int get hashCode => (PdfNoValue).hashCode;
 }
 
-/// Text alignment of a text field's content (`/Q`).
-enum PdfTextAlignment implements PdfWire {
-  /// `/Q 0`.
-  left('left'),
-
-  /// `/Q 1`.
-  center('center'),
-
-  /// `/Q 2`.
-  right('right');
-
-  const PdfTextAlignment(this.wire);
-
-  @override
-  final String wire;
-}
-
 /// An AcroForm field as read from a document by `PdfDoc.formFields`.
 @immutable
 final class PdfFormField {
@@ -177,7 +161,7 @@ final class PdfFormField {
   final int? maxLength;
 
   /// `/Q`, the text field's content alignment.
-  final PdfTextAlignment? alignment;
+  final PdfAlignment? alignment;
 
   /// `/Ff` bit 1 — the field cannot be edited by the user.
   final bool readOnly;

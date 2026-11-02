@@ -213,11 +213,14 @@ void registerOneShotTests(Pdf Function() createPdf) {
       late PdfBuilder kept;
       await pdf.buildTo(out, (builder) async {
         kept = builder;
-        final page = await builder.addA4Page();
+        final page = await builder.addPage();
         await page.paragraph('BUILTTO');
         await page.done();
       });
-      expect(() => kept.setTitle('x'), throwsA(isA<PdfDisposed>()));
+      expect(
+        () => kept.setMetadata(const PdfMetadata(title: 'x')),
+        throwsA(isA<PdfDisposed>()),
+      );
       final doc = await pdf.open(src(out.takeBytes()));
       expect(doc.pageCount, 1);
       await doc.dispose();
@@ -236,7 +239,10 @@ void registerOneShotTests(Pdf Function() createPdf) {
           }),
           throwsA(isA<PdfUnsupported>()),
         );
-        expect(() => kept.setTitle('x'), throwsA(isA<PdfDisposed>()));
+        expect(
+          () => kept.setMetadata(const PdfMetadata(title: 'x')),
+          throwsA(isA<PdfDisposed>()),
+        );
         expect(out.length, 0);
       },
       timeout: t(1),
@@ -321,7 +327,7 @@ void registerOneShotTests(Pdf Function() createPdf) {
         final pdf = createPdf();
         final builder = await pdf.build();
         await HandleBackstop.finalizeNow(builder);
-        await expectLater(builder.addA4Page(), throwsA(isA<PdfError>()));
+        await expectLater(builder.addPage(), throwsA(isA<PdfError>()));
         if (_assertsOn) {
           expect(warnings.single, contains('a PdfBuilder was never disposed'));
         }

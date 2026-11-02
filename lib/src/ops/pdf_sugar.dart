@@ -443,18 +443,20 @@ extension PdfSugar on Pdf {
 
   // ── Builder sugar ──
 
-  /// Creates a PDF from a list of images, one per A4 page.
-  PdfTask<void> imagesToPdf(List<DataSource> images, DataSink output) =>
-      _own(build(), (builder, hook) async {
-        for (final img in images) {
-          final page = await hook.guard(builder.addA4Page());
-          await hook.guard(
-            page.image(img, const PdfRect(x: 0, y: 0, width: 595, height: 842)),
-          );
-          await hook.guard(page.done());
-        }
-        await hook.guard(builder.save(output));
-      });
+  /// Creates a PDF from a list of images, one per page.
+  ///
+  /// Each page is the image's own size, one point per pixel, unless [page]
+  /// names a size; [PdfImagePageOptions.fit] says how the image fills it.
+  PdfTask<void> imagesToPdf(
+    List<DataSource> images,
+    DataSink output, {
+    PdfImagePageOptions page = const PdfImagePageOptions(),
+    bool deflate = true,
+  }) => buildTo(output, (builder) async {
+    for (final image in images) {
+      await builder.addImagePage(image, page: page);
+    }
+  }, deflate: deflate);
 }
 
 /// A source up to this size is compressed into memory and compared with the

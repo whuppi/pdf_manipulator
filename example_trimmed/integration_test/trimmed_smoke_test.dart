@@ -32,7 +32,7 @@ void main() {
 
   setUpAll(() async {
     final b = await pdf.build();
-    final page = await b.addA4Page();
+    final page = await b.addPage();
     await page.text('trimmed build smoke');
     await page.textField(
       'note',

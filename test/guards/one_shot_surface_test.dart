@@ -38,9 +38,11 @@ List<String> pairingProblems(String builder, String pdf) {
     final x = m.group(1)!;
     final options = m.group(2)!;
     final plural = '${x[0].toLowerCase()}${x.substring(1)}sToPdf';
+    // The options parameter may carry a default value; the pair must
+    // name the same options type and the same deflate flag.
     final partner = RegExp(
       '\\b$plural\\(\\s*List<DataSource> \\w+,\\s*DataSink \\w+,\\s*'
-      '\\{\\s*($options) \\w+,\\s*bool deflate[^}]*\\}',
+      '\\{\\s*($options) \\w+\\s*(?:=[^,}]*)?,\\s*bool deflate[^}]*\\}',
     );
     if (!partner.hasMatch(p)) {
       problems.add(

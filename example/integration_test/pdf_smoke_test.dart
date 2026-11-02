@@ -544,7 +544,7 @@ void main() {
   testWidgets('registerFallbackFont bakes an emoji form value', (t) async {
     // Build a form with one text field.
     final b = await pdf.build();
-    final page = await b.addA4Page();
+    final page = await b.addPage();
     await page.textField(
         'note', const PdfRect(x: 100, y: 680, width: 200, height: 20));
     await page.done();
@@ -652,11 +652,10 @@ void main() {
 
   testWidgets('builder text document (A4)', (t) async {
     final b = await pdf.build();
-    await b.setTitle('T');
-    await b.setAuthor('A');
-    await b.setSubject('S');
-    await b.setKeywords('K');
-    final p = await b.addA4Page();
+    await b.setMetadata(
+      const PdfMetadata(title: 'T', author: 'A', subject: 'S', keywords: 'K'),
+    );
+    final p = await b.addPage();
     await p.font('Helvetica', 14);
     await p.heading(1, 'Title');
     await p.space(10);
@@ -678,10 +677,10 @@ void main() {
 
   testWidgets('builder Letter + custom size', (t) async {
     final b = await pdf.build();
-    final p1 = await b.addLetterPage();
+    final p1 = await b.addPage(PdfPageSize.letter());
     await p1.text('Letter');
     await p1.done();
-    final p2 = await b.addPage(width: 400, height: 300);
+    final p2 = await b.addPage(PdfPageSize.custom(400, 300));
     await p2.text('Custom');
     await p2.done();
     final sink = MemorySink();
@@ -694,7 +693,7 @@ void main() {
 
   testWidgets('builder newPageSameSize', (t) async {
     final b = await pdf.build();
-    final p = await b.addA4Page();
+    final p = await b.addPage();
     await p.text('Page 1');
     await p.newPageSameSize();
     await p.text('Page 2');
@@ -709,7 +708,7 @@ void main() {
 
   testWidgets('builder form fields (all types)', (t) async {
     final b = await pdf.build();
-    final p = await b.addA4Page();
+    final p = await b.addPage();
     await p.textField(
         'name', const PdfRect(x: 72, y: 700, width: 200, height: 20),
         defaultValue: 'John');
@@ -740,7 +739,7 @@ void main() {
 
   testWidgets('builder links', (t) async {
     final b = await pdf.build();
-    final p = await b.addA4Page();
+    final p = await b.addPage();
     // Links anchor to the most recent text run — an empty page has
     // nothing to link.
     await p.text('Visit the site');
@@ -774,7 +773,7 @@ void main() {
     await e.dispose();
 
     final b = await pdf.build();
-    final p = await b.addA4Page();
+    final p = await b.addPage();
     await p.text('x');
     await p.done();
     final sink2 = MemorySink();

@@ -25,7 +25,7 @@ void registerBuilderStressTests(Pdf Function() createPdf) {
         final pdf = createPdf();
         final builder = await pdf.build();
         for (var i = 0; i < 10; i++) {
-          final page = await builder.addA4Page();
+          final page = await builder.addPage();
           await page.font('Helvetica', 12);
           await page.heading(1, 'Image page $i');
           await page.image(

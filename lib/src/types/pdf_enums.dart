@@ -216,3 +216,59 @@ enum PdfUaLevel implements PdfWire {
   @override
   final String wire;
 }
+
+/// A markup annotation drawn over the last-written text.
+enum PdfMarkupKind implements PdfWire {
+  /// A highlight behind the text.
+  highlight('highlight'),
+
+  /// A line under the text.
+  underline('underline'),
+
+  /// A line through the text.
+  strikeout('strikeout'),
+
+  /// A wavy line under the text.
+  squiggly('squiggly');
+
+  const PdfMarkupKind(this.wire);
+
+  @override
+  final String wire;
+}
+
+/// The horizontal alignment of text in a cell, a rectangle or a field.
+enum PdfAlignment implements PdfWire {
+  /// Aligned to the left edge.
+  left('left'),
+
+  /// Centred.
+  center('center'),
+
+  /// Aligned to the right edge.
+  right('right');
+
+  const PdfAlignment(this.wire);
+
+  @override
+  final String wire;
+}
+
+/// How an image fills the page it is placed on.
+enum PdfImageFit implements PdfWire {
+  /// The whole image fits inside the page, centred; the page keeps the
+  /// space around it.
+  contain('contain'),
+
+  /// The page is filled; the image overflows the page's edges, which
+  /// viewers clip.
+  cover('cover'),
+
+  /// The image is stretched to the page's edges, ignoring its own shape.
+  fill('fill');
+
+  const PdfImageFit(this.wire);
+
+  @override
+  final String wire;
+}

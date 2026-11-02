@@ -12,6 +12,9 @@ import 'package:pdf_manipulator/src/types/pdf_annotation.dart';
 import 'package:pdf_manipulator/src/types/pdf_attachment.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_page_options.dart';
+import 'package:pdf_manipulator/src/types/pdf_metadata.dart';
+import 'package:pdf_manipulator/src/types/pdf_page_size.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/pdf_image.dart';
@@ -23,8 +26,10 @@ import 'package:pdf_manipulator/src/types/pdf_redaction_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_render.dart';
 import 'package:pdf_manipulator/src/types/pdf_sanitize_options.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
+import 'package:pdf_manipulator/src/types/pdf_stroke.dart';
 import 'package:pdf_manipulator/src/types/pdf_table.dart';
 import 'package:pdf_manipulator/src/types/pdf_task.dart';
+import 'package:pdf_manipulator/src/types/pdf_text_style.dart';
 import 'package:pdf_manipulator/src/types/pdf_xfa_info.dart';
 import 'package:pdf_manipulator/src/types/pdf_search_hit.dart';
 
@@ -393,7 +398,7 @@ abstract class BridgeEditorHandle {
   PdfTask<void> setFormFieldMaxLength(String name, int maxLength);
 
   /// Sets the form field [name]'s text alignment.
-  PdfTask<void> setFormFieldAlignment(String name, PdfTextAlignment alignment);
+  PdfTask<void> setFormFieldAlignment(String name, PdfAlignment alignment);
 
   /// Sets the form field [name]'s background color.
   PdfTask<void> setFormFieldBackgroundColor(String name, PdfColor color);
@@ -458,28 +463,16 @@ abstract class BridgeBuilderHandle {
   /// [BridgeDocHandle.scope]); the page builders it returns inherit it.
   CancelHook? scope;
 
-  /// Sets the document title.
-  PdfTask<void> setTitle(String value);
+  /// Sets the document metadata.
+  PdfTask<void> setMetadata(PdfMetadata metadata);
 
-  /// Sets the document author.
-  PdfTask<void> setAuthor(String value);
+  /// Adds a page of [size] and returns a page builder.
+  PdfTask<BridgePageBuilderHandle> addPage(PdfPageSize size);
 
-  /// Sets the document subject.
-  PdfTask<void> setSubject(String value);
-
-  /// Sets the document keywords.
-  PdfTask<void> setKeywords(String value);
-
-  /// Adds a new A4-sized page and returns a page builder.
-  PdfTask<BridgePageBuilderHandle> addA4Page();
-
-  /// Adds a new US Letter-sized page and returns a page builder.
-  PdfTask<BridgePageBuilderHandle> addLetterPage();
-
-  /// Adds a page with custom [width] and [height] in points.
-  PdfTask<BridgePageBuilderHandle> addPage({
-    required double width,
-    required double height,
+  /// Adds a page holding [imageData] and returns a page builder.
+  PdfTask<BridgePageBuilderHandle> addImagePage(
+    DataSource imageData, {
+    PdfImagePageOptions page = const PdfImagePageOptions(),
   });
 
   /// Saves the built document to [output]. Streams are Flate-compressed
@@ -498,8 +491,9 @@ abstract class BridgePageBuilderHandle {
   /// Moves the cursor to ([x], [y]).
   PdfTask<void> at(double x, double y);
 
-  /// Writes inline [text] at the current position.
-  PdfTask<void> text(String text);
+  /// Writes [text] at the current position, in [style]'s font, size,
+  /// weight, slant and colour.
+  PdfTask<void> text(String text, {PdfTextStyle? style});
 
   /// Writes a heading of [level] with [text].
   PdfTask<void> heading(int level, String text);
@@ -513,12 +507,9 @@ abstract class BridgePageBuilderHandle {
   /// Draws a horizontal rule across the page.
   PdfTask<void> horizontalRule();
 
-  /// Places an image from [imageData] within [rect].
-  PdfTask<void> image(
-    DataSource imageData,
-    PdfRect rect, {
-    String altText = '',
-  });
+  /// Places an image from [imageData] within [rect]. A null [altText]
+  /// places it as an artifact, which assistive technology ignores.
+  PdfTask<void> image(DataSource imageData, PdfRect rect, {String? altText});
 
   /// Adds a diagonal watermark [text] across the page.
   PdfTask<void> watermark(String text);
@@ -577,84 +568,43 @@ abstract class BridgePageBuilderHandle {
   /// Adds a footnote with [refMark] and [noteText].
   PdfTask<void> footnote(String refMark, String noteText);
 
-  /// Writes inline [text] at the cursor without moving to a new line.
-  PdfTask<void> inline(String text);
-
-  /// Writes inline bold [text] at the cursor.
-  PdfTask<void> inlineBold(String text);
-
-  /// Writes inline italic [text] at the cursor.
-  PdfTask<void> inlineItalic(String text);
-
-  /// Writes inline [text] in [color] at the cursor.
-  PdfTask<void> inlineColor(String text, PdfColor color);
+  /// Writes inline [text] at the cursor without moving to a new line, in
+  /// [style]'s font, size, weight, slant and colour.
+  PdfTask<void> inline(String text, {PdfTextStyle? style});
 
   /// Wraps [text] inside [rect] with the given [align].
   PdfTask<void> textInRect(
     PdfRect rect,
     String text, {
-    PdfCellAlign align = PdfCellAlign.left,
+    PdfAlignment align = PdfAlignment.left,
   });
 
-  /// Draws an unfilled rectangle with the current stroke state.
-  PdfTask<void> rect(PdfRect rect);
+  /// Draws [rect] with [fill] inside it and [stroke] around it. A null
+  /// [fill] leaves the rectangle unfilled, a null [stroke] leaves it
+  /// unstroked — unless both are null, which strokes it with the
+  /// default stroke.
+  PdfTask<void> rect(PdfRect rect, {PdfColor? fill, PdfStroke? stroke});
 
-  /// Draws [rect] filled with [color].
-  PdfTask<void> filledRect(PdfRect rect, PdfColor color);
-
-  /// Draws a straight line from ([x1], [y1]) to ([x2], [y2]).
-  PdfTask<void> line(double x1, double y1, double x2, double y2);
-
-  /// Draws a stroked rectangle around [rect]. A non-empty [dash] makes
-  /// it dashed with the given [dashPhase].
-  PdfTask<void> strokeRect(
-    PdfRect rect, {
-    double width = 1,
-    PdfColor color = PdfColor.black,
-    List<double>? dash,
-    double dashPhase = 0,
+  /// Draws a straight line from [from] to [to].
+  PdfTask<void> line(
+    (double, double) from,
+    (double, double) to, {
+    PdfStroke stroke = const PdfStroke(),
   });
 
-  /// Draws a stroked line between the two points. A non-empty [dash]
-  /// makes it dashed with the given [dashPhase].
-  PdfTask<void> strokeLine(
-    double x1,
-    double y1,
-    double x2,
-    double y2, {
-    double width = 1,
-    PdfColor color = PdfColor.black,
-    List<double>? dash,
-    double dashPhase = 0,
-  });
+  /// Adds a markup annotation of [kind] over the last-written text, in
+  /// [color] or in the kind's own colour when [color] is null.
+  PdfTask<void> markup(PdfMarkupKind kind, {PdfColor? color});
 
-  /// Adds a highlight annotation over the last-written text.
-  PdfTask<void> highlight({PdfColor color = PdfColor.yellow});
-
-  /// Adds an underline annotation over the last-written text.
-  PdfTask<void> underline({PdfColor color = PdfColor.black});
-
-  /// Adds a strikeout annotation over the last-written text.
-  PdfTask<void> strikeout({PdfColor color = PdfColor.black});
-
-  /// Adds a squiggly annotation over the last-written text.
-  PdfTask<void> squiggly({PdfColor color = PdfColor.black});
-
-  /// Adds a sticky note ([text]) at the cursor, or at ([x], [y]) when
-  /// both are set.
-  PdfTask<void> stickyNote(String text, {double? x, double? y});
+  /// Adds a sticky note with [text] at [at], or at the cursor when [at]
+  /// is null.
+  PdfTask<void> stickyNote(String text, {(double, double)? at});
 
   /// Adds a stamp of [type] at the cursor.
   PdfTask<void> stamp(PdfStampType type);
 
   /// Adds a free-text annotation inside [rect].
   PdfTask<void> freeText(PdfRect rect, String text);
-
-  /// Adds the preset CONFIDENTIAL watermark.
-  PdfTask<void> watermarkConfidential();
-
-  /// Adds the preset DRAFT watermark.
-  PdfTask<void> watermarkDraft();
 
   /// Adds a named-destination link to [destination] on the last text.
   PdfTask<void> linkNamed(String destination);
@@ -668,31 +618,14 @@ abstract class BridgePageBuilderHandle {
   /// Runs [script] when the page closes.
   PdfTask<void> onClose(String script);
 
-  /// Places [imageData] inside [rect] as an artifact (excluded from
-  /// reading order).
-  PdfTask<void> imageArtifact(DataSource imageData, PdfRect rect);
-
-  /// Lays out a buffered table from [columns] and [rows]. Rows are
-  /// known up front; each row's length must equal [columns]' length.
+  /// Lays out a table from [columns] and [rows] with [`PdfTableCell`]
+  /// rowspans (within the options' max row span) and column sizing; the
+  /// fixed sizing needs a width on every column, the measuring sizings
+  /// size the columns themselves.
   PdfTask<void> table(
     List<PdfTableColumn> columns,
-    List<List<String>> rows, {
-    bool hasHeader = true,
-  });
-
-  /// Lays out a streaming table from [columns] and [rows] with
-  /// [`PdfTableCell`] rowspans (within [maxRowSpan]) and column
-  /// [sizing]; every column needs an explicit width and every row one
-  /// cell per column.
-  PdfTask<void> streamingTable(
-    List<PdfTableColumn> columns,
     List<List<PdfTableCell>> rows, {
-    bool repeatHeader = true,
-    PdfTableSizing sizing = PdfTableSizing.fixed,
-    int sampleRows = 50,
-    double minColumnWidth = 20,
-    double maxColumnWidth = 400,
-    int maxRowSpan = 1,
+    PdfTableOptions options = const PdfTableOptions(),
   });
 
   /// Lays out [text] across [columnCount] columns with [gapPt] gap.

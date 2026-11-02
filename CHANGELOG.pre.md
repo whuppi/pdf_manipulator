@@ -118,9 +118,21 @@ CONTENT RULES (never change)
 - **Breaking:** `SearchResult` is renamed `PdfSearchHit`, with the same fields → rename the type where you name it
 - **Breaking:** `PdfSearchError` and `PdfExtractionFailed` are removed, since nothing threw them → delete their `catch` clauses and `switch` cases; engine failures arrive as the other `PdfError` subtypes
 - **Breaking:** `compress` is renamed `deflate` in `PdfSaveOptions.fullRewrite` and `PdfBuilder.save` → rename the argument; the `compress` one-shot keeps its name
+- **Breaking:** the builder's `setTitle`, `setAuthor`, `setSubject` and `setKeywords` are one `setMetadata(PdfMetadata)` → call `builder.setMetadata(const PdfMetadata(title: 'x'))` once
+- **Breaking:** a page takes a `PdfPageSize`: `addA4Page`, `addLetterPage` and `addPage(width:, height:)` are gone → call `addPage()`, `addPage(PdfPageSize.letter())` or `addPage(PdfPageSize.custom(400, 300))`
+- **Breaking:** `rect`, `filledRect`, `strokeRect`, `line` and `strokeLine` fold into `rect(rect, {fill, stroke})` and `line(from, to, {stroke})` → move the width, colour and dash into a `PdfStroke`
+- **Breaking:** `inlineBold`, `inlineItalic` and `inlineColor` are one `inline(text, {style})`, and `text` takes the same style → write `inline('x', style: const PdfTextStyle(bold: true))`
+- **Breaking:** the builder's `watermarkConfidential` and `watermarkDraft` are gone → stamp the page instead: `stamp(PdfStampType.confidential)` or `stamp(PdfStampType.draft)`
+- **Breaking:** `highlight`, `underline`, `strikeout` and `squiggly` are one `markup(kind, {color})` → call `markup(PdfMarkupKind.underline)`
+- **Breaking:** `imageArtifact` is gone and `image` takes an optional `altText`; no alt text makes the image an artifact → drop the `imageArtifact` call and pass `altText` to `image` when the picture carries meaning
+- **Breaking:** the builder's `table` and `streamingTable` are one `table(columns, rows, {options})`: the rows hold `PdfTableCell`s and `PdfTableOptions` carries the header, repeat, span and sizing settings → write the cells as `PdfTableCell('text')`, and name `sizing: PdfTableSizing.autoAll` for a table whose columns have no widths (the old `table` sized its columns itself)
+- **Breaking:** `stickyNote(text, {x, y})` takes one `at` point instead of two coordinates → call `stickyNote('note', at: (400, 500))`
+- **Breaking:** `PdfCellAlign` and `PdfTextAlignment` are one `PdfAlignment` (`left`, `center`, `right`) → rename the type where you name it
+- **Breaking:** `imagesToPdf` gives every page the image's own size, one point per pixel, and takes `PdfImagePageOptions` and `deflate` → name a size to keep A4 pages: `imagesToPdf(images, out, page: const PdfImagePageOptions(size: PdfPageSize.a4()))`
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Added `PdfDoc.annotations(page)`, which lists a page's annotations (subtype, rectangle, contents, author, form field name) as `PdfAnnotationInfo`
-- Added the page builder methods the engine already had: `inline`, `inlineBold`, `inlineItalic`, `inlineColor`, `textInRect`, `rect`, `filledRect`, `line`, `strokeRect`, `strokeLine`, `highlight`, `underline`, `strikeout`, `squiggly`, `stickyNote`, `stamp`, `freeText`, `watermarkConfidential`, `watermarkDraft`, `linkNamed`, `linkJavaScript`, `onOpen`, `onClose`, `imageArtifact`, `table` and `streamingTable`
+- Added the page builder methods the engine already had: `inline`, `textInRect`, `rect`, `line`, `markup`, `stickyNote`, `stamp`, `freeText`, `linkNamed`, `linkJavaScript`, `onOpen`, `onClose`, `table` and `newPageSameSize`
+- Added `PdfBuilder.addImagePage`, a page that holds one picture and takes the picture's own size unless you name one
 - Changed `PdfBuilder.save` to Flate-compress page content and font streams; `save(output, deflate: false)` keeps them plain for debugging
 - Changed `open`, `edit`, `extractPages`, a full-rewrite save and `compress` to hold a bounded window of the document instead of all of it: a 38 MB, 10,000-page file now opens and saves in under 16 MB of engine memory, where it took up to 85 MB
 - Changed `mergeFrom` to keep the merged file open until the editor is disposed and copy its objects one at a time at save: merging a 10,000-page file takes under 16 MB of engine memory and about 2 seconds, where it took 163 MB and minutes
@@ -184,8 +196,8 @@ CONTENT RULES (never change)
 - Fixed `applyRedactions` dropping every annotation on a redacted page — only the annotations under a redacted area go, with their form fields
 - Changed `applyRedactions` to rewrite each page one operator at a time while the document saves: redacting a page with 9 million operators takes under 1 MB of engine memory
 - Fixed `applyRedactions` keeping removed text in alt text written inside page content, in CID font widths and in Type 3 glyphs with no `/Differences` name; its report now counts images, paths and forms; an image change on a redacted image is kept; a flattened CJK field redacts and saves
-- Fixed `image()` and `imageArtifact()` with bytes that are not an image succeeding and drawing nothing — they throw `PdfInvalidArgument`
-- Fixed `streamingTable` rows with a `rowSpan` above 1 never drawing, and `PdfTableCell.rowSpan` documented as a column span — it is the rows a cell spans, each row still lists one cell per column, and a row with the wrong cell count throws `ArgumentError`
+- Fixed `image()` with bytes that are not an image succeeding and drawing nothing — it throws `PdfInvalidArgument`
+- Fixed table rows with a `rowSpan` above 1 never drawing, and `PdfTableCell.rowSpan` documented as a column span — it is the rows a cell spans, each row still lists one cell per column, and a row with the wrong cell count throws `PdfInvalidArgument`
 - Fixed `sign` writing a cross-reference table that other readers had to repair — each entry is now 20 bytes
 - Fixed a full-rewrite save dropping objects the kept pages use (content streams, colour spaces, fonts, structure) on files with a nested page tree or many objects, leaving pages blank or text missing
 - Fixed `compress` and every other full-rewrite save making a file with object streams up to six times larger — the save keeps its objects packed

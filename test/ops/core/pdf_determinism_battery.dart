@@ -53,7 +53,7 @@ Future<Uint8List> _fixture(
 }) async {
   final builder = await pdf.build();
   for (var i = 0; i < pages; i++) {
-    final page = await builder.addLetterPage();
+    final page = await builder.addPage(PdfPageSize.letter());
     await page.at(72, 720);
     await page.text('page ${i + offset}');
     await page.image(
@@ -176,7 +176,7 @@ void registerDeterminismTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       Future<Uint8List> run() async {
         final builder = await pdf.build();
-        final page = await builder.addLetterPage();
+        final page = await builder.addPage(PdfPageSize.letter());
         await page.at(72, 720);
         await page.text('determinism');
         await page.done();

@@ -176,9 +176,9 @@ final List<_DemoSample> _demoSamples = [
       'Tiny blank page', Icons.crop_portrait, (pdf) async => minimalPdf),
   _DemoSample('Text report (5 pages)', Icons.article, (pdf) async {
     final b = await pdf.build();
-    await b.setTitle('Demo Report');
+    await b.setMetadata(const PdfMetadata(title: 'Demo Report'));
     for (var i = 1; i <= 5; i++) {
-      final p = await b.addA4Page();
+      final p = await b.addPage();
       await p.heading(2, 'Section $i');
       await p.space(8);
       await p
@@ -195,8 +195,8 @@ final List<_DemoSample> _demoSamples = [
       (pdf) => buildSamplePdf(pdf)),
   _DemoSample('Form sample', Icons.fact_check, (pdf) async {
     final b = await pdf.build();
-    await b.setTitle('Demo Form');
-    final p = await b.addA4Page();
+    await b.setMetadata(const PdfMetadata(title: 'Demo Form'));
+    final p = await b.addPage();
     await p.heading(1, 'Application Form');
     await p.space(10);
     await p.text('Name:');
@@ -387,9 +387,9 @@ Future<String?> saveBytes(Uint8List bytes, String name) async {
 Future<Uint8List> buildSamplePdf(Pdf pdf, {int pages = 40}) async {
   final b = await pdf.build();
   try {
-    await b.setTitle('Sample ($pages pages)');
+    await b.setMetadata(PdfMetadata(title: 'Sample ($pages pages)'));
     for (var i = 0; i < pages; i++) {
-      final p = await b.addA4Page();
+      final p = await b.addPage();
       await p.heading(2, 'Page ${i + 1} of $pages');
       await p.space(10);
       for (var j = 0; j < 6; j++) {
@@ -2206,12 +2206,16 @@ class _BuilderTabState extends State<_BuilderTab>
                 subtitle: 'Headings, paragraphs, columns, horizontal rule',
                 loading: loading,
                 onRun: () => _build('Text', 'built_text.pdf', (b) async {
-                      await b.setTitle('Example');
-                      await b.setAuthor('pdf_manipulator');
-                      await b.setSubject('Demo');
-                      await b.setKeywords('test, dart');
+                      await b.setMetadata(
+                        const PdfMetadata(
+                          title: 'Example',
+                          author: 'pdf_manipulator',
+                          subject: 'Demo',
+                          keywords: 'test, dart',
+                        ),
+                      );
 
-                      final p1 = await b.addA4Page();
+                      final p1 = await b.addPage();
                       await p1.heading(1, 'Hello from PdfBuilder');
                       await p1.space(10);
                       await p1.paragraph(
@@ -2227,7 +2231,7 @@ class _BuilderTabState extends State<_BuilderTab>
                       await p1.text('Page 1 of 2');
                       await p1.done();
 
-                      final p2 = await b.addA4Page();
+                      final p2 = await b.addPage();
                       await p2.heading(1, 'Page Two');
                       await p2
                           .paragraph('Multi-page documents work seamlessly.');
@@ -2246,7 +2250,7 @@ class _BuilderTabState extends State<_BuilderTab>
                 subtitle: 'US Letter (612×792 pt)',
                 loading: loading,
                 onRun: () => _build('Letter', 'letter.pdf', (b) async {
-                      final p = await b.addLetterPage();
+                      final p = await b.addPage(PdfPageSize.letter());
                       await p.heading(1, 'US Letter Page');
                       await p.paragraph('612 × 792 points.');
                       await p.done();
@@ -2257,9 +2261,68 @@ class _BuilderTabState extends State<_BuilderTab>
                 subtitle: '400×300 pt landscape',
                 loading: loading,
                 onRun: () => _build('Custom', 'custom_size.pdf', (b) async {
-                      final p = await b.addPage(width: 400, height: 300);
+                      final p = await b.addPage(PdfPageSize.custom(400, 300));
                       await p.heading(1, 'Custom Size');
                       await p.text('400 × 300 points');
+                      await p.done();
+                    })),
+            _Section('Style & Shapes'),
+            _Op(
+                icon: Icons.format_bold,
+                title: 'Styled text + markup',
+                subtitle: 'Bold, italic, coloured runs, highlight',
+                loading: loading,
+                onRun: () => _build('Style', 'built_style.pdf', (b) async {
+                      final p = await b.addPage();
+                      await p.heading(1, 'Styled text');
+                      await p.space(10);
+                      await p.text('Bold run',
+                          style: const PdfTextStyle(bold: true));
+                      await p.text('Italic run',
+                          style: const PdfTextStyle(italic: true));
+                      await p.text('Coloured run',
+                          style: const PdfTextStyle(color: PdfColor.red));
+                      await p.text('Marked sentence');
+                      await p.markup(PdfMarkupKind.highlight);
+                      await p.done();
+                    })),
+            _Op(
+                icon: Icons.crop_square,
+                title: 'Rectangle + line',
+                subtitle: 'Filled and stroked shapes, dashed line',
+                loading: loading,
+                onRun: () => _build('Shapes', 'built_shapes.pdf', (b) async {
+                      final p = await b.addPage();
+                      await p.rect(
+                        const PdfRect(x: 72, y: 500, width: 200, height: 80),
+                        fill: PdfColor.red,
+                        stroke:
+                            const PdfStroke(color: PdfColor.black, width: 2),
+                      );
+                      await p.line((72, 400), (272, 480),
+                          stroke: const PdfStroke(dash: [3, 2]));
+                      await p.done();
+                    })),
+            _Op(
+                icon: Icons.table_chart,
+                title: 'Table',
+                subtitle: 'Columns, cells, header row',
+                loading: loading,
+                onRun: () => _build('Table', 'built_table.pdf', (b) async {
+                      final p = await b.addPage();
+                      await p.heading(1, 'Invoice');
+                      await p.space(10);
+                      await p.table(
+                        const [
+                          PdfTableColumn('SKU', width: 120),
+                          PdfTableColumn('Qty',
+                              width: 60, align: PdfAlignment.right),
+                        ],
+                        const [
+                          [PdfTableCell('A-1'), PdfTableCell('12')],
+                          [PdfTableCell('B-2'), PdfTableCell('3')],
+                        ],
+                      );
                       await p.done();
                     })),
             _Section('Form Fields'),
@@ -2270,9 +2333,10 @@ class _BuilderTabState extends State<_BuilderTab>
                     'TextField, checkbox, combo, radio, button, signature',
                 loading: loading,
                 onRun: () => _build('Form', 'built_form.pdf', (b) async {
-                      await b.setTitle('Registration Form');
+                      await b.setMetadata(
+                          const PdfMetadata(title: 'Registration Form'));
 
-                      final p = await b.addA4Page();
+                      final p = await b.addPage();
                       await p.heading(1, 'Registration Form');
                       await p.space(20);
                       await p.text('Name:');
@@ -2344,9 +2408,10 @@ class _BuilderTabState extends State<_BuilderTab>
                 title: 'URL link + page link + footnote',
                 loading: loading,
                 onRun: () => _build('Links', 'built_links.pdf', (b) async {
-                      await b.setTitle('Links Demo');
+                      await b
+                          .setMetadata(const PdfMetadata(title: 'Links Demo'));
 
-                      final p1 = await b.addA4Page();
+                      final p1 = await b.addPage();
                       await p1.heading(1, 'Links & References');
                       await p1.space(10);
                       await p1.text('Visit:');
@@ -2360,7 +2425,7 @@ class _BuilderTabState extends State<_BuilderTab>
                       await p1.footnote('1', 'This is the footnote text.');
                       await p1.done();
 
-                      final p2 = await b.addA4Page();
+                      final p2 = await b.addPage();
                       await p2.heading(2, 'Page 2 — Link Target');
                       await p2.paragraph('You arrived here via the page link.');
                       await p2.done();
@@ -2372,7 +2437,7 @@ class _BuilderTabState extends State<_BuilderTab>
                 loading: loading,
                 onRun: () =>
                     _build('Watermark', 'built_watermark.pdf', (b) async {
-                      final p = await b.addA4Page();
+                      final p = await b.addPage();
                       await p.heading(1, 'Confidential Report');
                       await p.paragraph('Sensitive information.');
                       await p.watermark('CONFIDENTIAL');
@@ -2386,11 +2451,25 @@ class _BuilderTabState extends State<_BuilderTab>
                   final imgs = await pickImageBytes();
                   if (imgs == null || imgs.isEmpty) return;
                   await _build('Image', 'built_image.pdf', (b) async {
-                    final p = await b.addA4Page();
+                    final p = await b.addPage();
                     await p.heading(1, 'Image Demo');
                     await p.image(DemoSource(imgs.first.bytes),
                         const PdfRect(x: 72, y: 500, width: 200, height: 200));
                     await p.done();
+                  });
+                }),
+            _Op(
+                icon: Icons.wallpaper,
+                title: 'Picture page (pick)',
+                subtitle: 'One page per picture, sized to it',
+                loading: loading,
+                onRun: () async {
+                  final imgs = await pickImageBytes();
+                  if (imgs == null || imgs.isEmpty) return;
+                  await _build('Picture page', 'built_picture.pdf', (b) async {
+                    for (final img in imgs) {
+                      await b.addImagePage(DemoSource(img.bytes));
+                    }
                   });
                 }),
             _Section('Multi-Page'),
@@ -2399,7 +2478,7 @@ class _BuilderTabState extends State<_BuilderTab>
                 title: 'newline + newPageSameSize',
                 loading: loading,
                 onRun: () => _build('MultiPage', 'built_multi.pdf', (b) async {
-                      final p = await b.addA4Page();
+                      final p = await b.addPage();
                       await p.heading(1, 'Page 1');
                       await p.paragraph('Some content on page 1.');
                       await p.newline();
@@ -2415,7 +2494,7 @@ class _BuilderTabState extends State<_BuilderTab>
                 title: 'Custom font + size',
                 loading: loading,
                 onRun: () => _build('Font', 'built_fonts.pdf', (b) async {
-                      final p = await b.addA4Page();
+                      final p = await b.addPage();
                       await p.font('Helvetica', 24);
                       await p.text('Large Helvetica');
                       await p.font('Courier', 12);

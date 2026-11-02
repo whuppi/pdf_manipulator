@@ -158,5 +158,85 @@ void main() {
       expect(PdfALevel.values.map((l) => l.wire), ['a1', 'a2', 'a3']);
       expect(PdfUaLevel.values.map((l) => l.wire), ['ua1', 'ua2']);
     });
+
+    test('PdfPageSize compares by its dimensions', () {
+      expectValue<PdfPageSize>(
+        const PdfPageSize.a4(),
+        const PdfPageSize.a4(),
+        const PdfPageSize.letter(),
+      );
+      expectValue<PdfPageSize>(
+        const PdfPageSize.custom(200, 300),
+        const PdfPageSize.custom(200, 300),
+        const PdfPageSize.custom(300, 200),
+      );
+    });
+
+    test('PdfTextStyle compares by its fields', () {
+      expectValue<PdfTextStyle>(
+        const PdfTextStyle(bold: true),
+        const PdfTextStyle(bold: true),
+        const PdfTextStyle(italic: true),
+      );
+    });
+
+    test('PdfStroke compares by its dash pattern', () {
+      expectValue<PdfStroke>(
+        const PdfStroke(dash: [3, 2]),
+        const PdfStroke(dash: [3, 2]),
+        const PdfStroke(dash: [2, 3]),
+      );
+      expectValue<PdfStroke>(
+        const PdfStroke(),
+        const PdfStroke(),
+        const PdfStroke(width: 2),
+      );
+    });
+
+    test('PdfMetadata compares by its fields', () {
+      expectValue<PdfMetadata>(
+        const PdfMetadata(title: 'A', creator: 'C'),
+        const PdfMetadata(title: 'A', creator: 'C'),
+        const PdfMetadata(title: 'A', creator: 'D'),
+      );
+    });
+
+    test('PdfTableOptions compares by its fields', () {
+      expectValue<PdfTableOptions>(
+        const PdfTableOptions(maxRowSpan: 2),
+        const PdfTableOptions(maxRowSpan: 2),
+        const PdfTableOptions(),
+      );
+    });
+
+    test('PdfImagePageOptions compares by its fields', () {
+      expectValue<PdfImagePageOptions>(
+        const PdfImagePageOptions(fit: PdfImageFit.cover),
+        const PdfImagePageOptions(fit: PdfImageFit.cover),
+        const PdfImagePageOptions(),
+      );
+    });
+
+    test(
+      'PdfAlignment, PdfMarkupKind and PdfImageFit cross the wire by name',
+      () {
+        expect(PdfAlignment.values.map((a) => a.wire), [
+          'left',
+          'center',
+          'right',
+        ]);
+        expect(PdfMarkupKind.values.map((m) => m.wire), [
+          'highlight',
+          'underline',
+          'strikeout',
+          'squiggly',
+        ]);
+        expect(PdfImageFit.values.map((f) => f.wire), [
+          'contain',
+          'cover',
+          'fill',
+        ]);
+      },
+    );
   });
 }

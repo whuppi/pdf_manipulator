@@ -520,7 +520,7 @@ void main() {
       expect(city.bounds?.width, 3.0);
       expect(city.bounds?.height, 4.0);
       expect(city.maxLength, 12);
-      expect(city.alignment, PdfTextAlignment.center);
+      expect(city.alignment, PdfAlignment.center);
       expect(city.readOnly, isTrue);
 
       final ok = fields[1];

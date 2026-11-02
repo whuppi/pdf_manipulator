@@ -37,7 +37,7 @@ class _ClosesCounted implements DataSink {
 Future<Uint8List> _buildPages(Pdf pdf) async {
   final builder = await pdf.build();
   for (var i = 0; i < _pageCount; i++) {
-    final page = await builder.addPage(width: 612, height: 792);
+    final page = await builder.addPage(PdfPageSize.custom(612, 792));
     await page.text('cancel battery page $i');
     await page.done();
   }

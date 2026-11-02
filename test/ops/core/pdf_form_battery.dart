@@ -133,13 +133,13 @@ void registerFormTests(Pdf Function() createPdf) {
     test('setFormFieldAlignment roundtrips through save', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(fFormFieldsProps));
-      await editor.setFormFieldAlignment('city', PdfTextAlignment.center);
+      await editor.setFormFieldAlignment('city', PdfAlignment.center);
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
       final doc = await pdf.open(src(sink.takeBytes()));
       final city = await doc.formField('city');
-      expect(city!.alignment, PdfTextAlignment.center);
+      expect(city!.alignment, PdfAlignment.center);
       await doc.dispose();
     }, timeout: t(1));
 

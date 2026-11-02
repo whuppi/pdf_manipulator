@@ -740,6 +740,21 @@ void registerSugarTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
+    test('imagesToPdf gives every page the size it is told', () async {
+      final pdf = createPdf();
+      final sink = TestSink();
+      await pdf.imagesToPdf(
+        [src(minimalPng), src(minimalPng)],
+        sink,
+        page: const PdfImagePageOptions(size: PdfPageSize.custom(200, 300)),
+      );
+      final doc = await pdf.open(src(sink.takeBytes()));
+      expect(doc.pageCount, 2);
+      expect(doc.pages[0].width, closeTo(200, 2));
+      expect(doc.pages[0].height, closeTo(300, 2));
+      await doc.dispose();
+    }, timeout: t(1));
+
     // ── Content integrity — the bytes must mean what they meant ──
     //
     // Structural checks (pageCount) cannot see content corruption.

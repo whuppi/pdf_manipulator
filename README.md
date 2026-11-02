@@ -398,11 +398,12 @@ print('${report.glyphsRemoved} glyphs and ${report.imagesRemoved} images removed
 
 ```dart
 final builder = await pdf.build();
-await builder.setTitle('Invoice #1042');
+await builder.setMetadata(const PdfMetadata(title: 'Invoice #1042'));
 
-final page = await builder.addA4Page();
+final page = await builder.addPage();
 await page.heading(1, 'Invoice');
 await page.paragraph('Thank you for your purchase.');
+await page.text('Paid on time.', style: const PdfTextStyle(bold: true));
 await page.textField('notes', PdfRect(x: 50, y: 400, width: 300, height: 100));
 await page.linkUrl('https://example.com');
 
@@ -410,7 +411,28 @@ await builder.save(output);
 await builder.dispose();
 ```
 
-Pages: `addA4Page` / `addLetterPage` / `addPage` (custom size). Content: `text`, `heading`, `paragraph`, `space`, `image`, `columns`, `footnote`, `watermark`; form fields (`textField`, `checkbox`, `radioGroup`, `comboBox`, `pushButton`, `signatureField`) with Acrobat JS actions (`fieldFormat`, `fieldValidate`, `fieldCalculate`, `fieldKeystroke`); links (`linkUrl`, `linkPage`).
+Pages: `addPage()` (A4), `addPage(PdfPageSize.letter())`, `addPage(PdfPageSize.custom(400, 300))`, and `addImagePage` for a page that holds one picture — it takes the picture's own size, one point per pixel, unless you name one. Photos become a PDF with `pdf.imagesToPdf([a, b], output)`.
+
+Content: `text` (with a `PdfTextStyle` for the font, size, weight, slant and colour), `heading`, `paragraph`, `space`, `image`, `rect` (filled and/or stroked), `line`, `markup` (highlight, underline, strikeout, squiggly), `table`, `stickyNote`, `columns`, `footnote`, `watermark`; form fields (`textField`, `checkbox`, `radioGroup`, `comboBox`, `pushButton`, `signatureField`) with Acrobat JS actions (`fieldFormat`, `fieldValidate`, `fieldCalculate`, `fieldKeystroke`); links (`linkUrl`, `linkPage`).
+
+```dart
+await page.rect(
+  const PdfRect(x: 50, y: 300, width: 200, height: 80),
+  fill: PdfColor.red,
+  stroke: const PdfStroke(color: PdfColor.black, width: 2),
+);
+await page.line((50, 300), (250, 380), stroke: const PdfStroke(dash: [3, 2]));
+await page.markup(PdfMarkupKind.highlight);
+await page.table(
+  const [
+    PdfTableColumn('SKU', width: 100),
+    PdfTableColumn('Qty', width: 60, align: PdfAlignment.right),
+  ],
+  const [
+    [PdfTableCell('A-1'), PdfTableCell('12')],
+  ],
+);
+```
 
 ---
 

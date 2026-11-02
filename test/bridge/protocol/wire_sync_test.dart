@@ -66,15 +66,20 @@ _parseRustDispatch() {
     'handle_builder_save',
   );
 
-  final armPattern = RegExp(r'"([a-zA-Z]+)"\s*=>');
+  final armPattern = RegExp(r'((?:"[a-zA-Z]+"\s*(?:\|\s*)?)+)=>');
+
+  // An arm may name several ops ("text" | "inline" =>); every name in
+  // it is an op the handler answers.
+  Set<String> arms(String source) => {
+    for (final m in armPattern.allMatches(source))
+      for (final name in RegExp(r'"([a-zA-Z]+)"').allMatches(m.group(1)!))
+        name.group(1)!,
+  };
 
   return (
     topLevel: topLevel,
-    editMutate: armPattern
-        .allMatches(mutateSource)
-        .map((m) => m.group(1)!)
-        .toSet(),
-    pageOp: armPattern.allMatches(pageSource).map((m) => m.group(1)!).toSet(),
+    editMutate: arms(mutateSource),
+    pageOp: arms(pageSource),
   );
 }
 
@@ -315,7 +320,23 @@ void main() {
       // own PageOp call:
       // * BarcodeImage — same engine call as Image (image_from_bytes).
       // * ImageWithAlt — the existing `image` page op.
-      const explained = {'BarcodeImage', 'ImageWithAlt'};
+      // * InlineBold, InlineItalic, InlineColor, WatermarkConfidential,
+      //   WatermarkDraft, Rect, Line, BufferedTable — the lane dropped
+      //   these page ops (the Dart builder reaches the styled run, the
+      //   stroked shapes and the one table instead), so the host has no
+      //   PageOp for them; the wasm API keeps them for its own callers.
+      const explained = {
+        'BarcodeImage',
+        'ImageWithAlt',
+        'InlineBold',
+        'InlineItalic',
+        'InlineColor',
+        'WatermarkConfidential',
+        'WatermarkDraft',
+        'Rect',
+        'Line',
+        'BufferedTable',
+      };
 
       final missing = variants(
         wasmBody,

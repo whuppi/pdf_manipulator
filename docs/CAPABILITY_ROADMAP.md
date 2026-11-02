@@ -125,7 +125,7 @@ same names, when both exist. Exports (source in, sink out) live on
 | Set form field tooltip | `set_form_field_tooltip` | `setFormFieldTooltip()` | DONE — `formField(name).tooltip` reads back the new `/TU` after save + reopen |
 | Set form field rect | `set_form_field_rect` | `setFormFieldBounds()` | DONE — `formField(name).bounds` reads back the new `/Rect` after save + reopen |
 | Set form field max length | `set_form_field_max_length` | `setFormFieldMaxLength()` | DONE — `formField(name).maxLength` reads back the new `/MaxLen`, not the fixture default, after save + reopen |
-| Set form field alignment | `set_form_field_alignment` | `setFormFieldAlignment()` | DONE — `formField(name).alignment` reads back `PdfTextAlignment.center` after save + reopen |
+| Set form field alignment | `set_form_field_alignment` | `setFormFieldAlignment()` | DONE — `formField(name).alignment` reads back `PdfAlignment.center` after save + reopen |
 | Set form field background color | `set_form_field_background_color` | `setFormFieldBackgroundColor()` | DONE — proven with border color/width and appearance: the field still flattens, `extract()` shows the filled value, and the rendered page differs from the unstyled render |
 | Set form field border color | `set_form_field_border_color` | `setFormFieldBorderColor()` | DONE — same proof as background color |
 | Set form field border width | `set_form_field_border_width` | `setFormFieldBorderWidth()` | DONE — same proof as background color |
@@ -143,13 +143,9 @@ same names, when both exist. Exports (source in, sink out) live on
 | Capability | Rust | Dart | Status |
 |---|---|---|---|
 | Create builder | via bridge | `Pdf.build()` | DONE |
-| Add page (custom size) | via bridge | `addPage()` | DONE |
-| Add A4 page | — (dart convenience) | `addA4Page()` | DONE |
-| Add Letter page | — (dart convenience) | `addLetterPage()` | DONE |
-| Set title | via bridge | `setTitle()` | DONE |
-| Set author | via bridge | `setAuthor()` | DONE |
-| Set subject | via bridge | `setSubject()` | DONE |
-| Set keywords | via bridge | `setKeywords()` | DONE |
+| Add page | via bridge | `addPage(PdfPageSize)` | DONE — A4, Letter, Legal, A3, A5 or a custom size |
+| Add image page | via bridge | `addImagePage()` | DONE — the page takes the image's own size, one point per pixel, unless a size is named |
+| Set metadata | via bridge | `setMetadata()` | DONE — title, author, subject, keywords, creator, producer and the two dates |
 | Text | via bridge | `page.text()` | DONE |
 | Heading | via bridge | `page.heading()` | DONE |
 | Paragraph | via bridge | `page.paragraph()` | DONE |

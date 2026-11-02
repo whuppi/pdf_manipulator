@@ -34,12 +34,15 @@ export 'src/types/pdf_config.dart';
 export 'src/types/pdf_enums.dart';
 export 'src/types/pdf_form_field.dart';
 export 'src/types/pdf_image.dart';
+export 'src/types/pdf_image_page_options.dart';
 export 'src/types/pdf_image_policy.dart';
 export 'src/types/pdf_image_report.dart';
 export 'src/types/pdf_info.dart';
 export 'src/types/pdf_matrix.dart';
+export 'src/types/pdf_metadata.dart';
 export 'src/types/pdf_page_image.dart';
 export 'src/types/pdf_page_info.dart';
+export 'src/types/pdf_page_size.dart' show PdfPageSize;
 export 'src/types/pdf_pages.dart' show PdfPages;
 export 'src/types/pdf_params.dart'
     hide
@@ -60,7 +63,9 @@ export 'src/types/pdf_render.dart'
     show PdfRenderFormat, PdfRenderSize, PdfRenderedPage;
 export 'src/types/pdf_sanitize_options.dart';
 export 'src/types/pdf_signature.dart';
+export 'src/types/pdf_stroke.dart';
 export 'src/types/pdf_table.dart';
+export 'src/types/pdf_text_style.dart';
 export 'src/types/pdf_wire.dart';
 export 'src/types/pdf_xfa_info.dart';
 export 'src/types/data_sink.dart';

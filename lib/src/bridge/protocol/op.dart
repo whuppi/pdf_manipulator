@@ -134,6 +134,9 @@ enum EngineOp {
   /// Add a new page to the builder.
   builderAddPage('builderAddPage'),
 
+  /// Add a page holding one image to the builder.
+  builderAddImagePage('builderAddImagePage'),
+
   /// Execute a page-builder operation.
   builderPageOp('builderPageOp'),
 
@@ -232,26 +235,11 @@ enum PageOp {
   /// Write an inline text run.
   inline('inline'),
 
-  /// Write a bold inline text run.
-  inlineBold('inlineBold'),
-
-  /// Write an italic inline text run.
-  inlineItalic('inlineItalic'),
-
-  /// Write a coloured inline text run.
-  inlineColor('inlineColor'),
-
   /// Write text inside a rectangle.
   textInRect('textInRect'),
 
-  /// Stroke a rectangle outline.
-  rect('rect'),
-
   /// Fill a rectangle.
   filledRect('filledRect'),
-
-  /// Draw a line.
-  line('line'),
 
   /// Stroke a styled rectangle outline.
   strokeRect('strokeRect'),
@@ -280,12 +268,6 @@ enum PageOp {
   /// Add a free-text annotation.
   freeText('freeText'),
 
-  /// Add the CONFIDENTIAL watermark.
-  watermarkConfidential('watermarkConfidential'),
-
-  /// Add the DRAFT watermark.
-  watermarkDraft('watermarkDraft'),
-
   /// Link the last text to a named destination.
   linkNamed('linkNamed'),
 
@@ -300,9 +282,6 @@ enum PageOp {
 
   /// Place an image as a page artifact.
   imageArtifact('imageArtifact'),
-
-  /// Add a buffered table.
-  table('table'),
 
   /// Add a streaming table block.
   streamingTable('streamingTable');

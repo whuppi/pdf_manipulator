@@ -422,7 +422,7 @@ base class PdfEditor extends PdfEdits implements _Handle {
   }
 
   /// Sets the text field [name]'s content alignment.
-  PdfTask<void> setFormFieldAlignment(String name, PdfTextAlignment alignment) {
+  PdfTask<void> setFormFieldAlignment(String name, PdfAlignment alignment) {
     _check();
     return _handle.setFormFieldAlignment(name, alignment);
   }

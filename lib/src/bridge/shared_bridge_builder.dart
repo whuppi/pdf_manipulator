@@ -20,36 +20,43 @@ class _SharedBuilderHandle extends BridgeBuilderHandle {
       _bridge._exec(op, {'handleId': _handleId, ...args}, scope: scope);
 
   @override
-  PdfTask<void> setTitle(String value) =>
-      _exec(EngineOp.builderSetMetadata, {'title': value});
-  @override
-  PdfTask<void> setAuthor(String value) =>
-      _exec(EngineOp.builderSetMetadata, {'author': value});
-  @override
-  PdfTask<void> setSubject(String value) =>
-      _exec(EngineOp.builderSetMetadata, {'subject': value});
-  @override
-  PdfTask<void> setKeywords(String value) =>
-      _exec(EngineOp.builderSetMetadata, {'keywords': value});
+  PdfTask<void> setMetadata(PdfMetadata metadata) =>
+      _exec(EngineOp.builderSetMetadata, {
+        'title': metadata.title,
+        'author': metadata.author,
+        'subject': metadata.subject,
+        'keywords': metadata.keywords,
+        'creator': metadata.creator,
+        'producer': metadata.producer,
+        'creationDate': _dateArg(metadata.creationDate),
+        'modDate': _dateArg(metadata.modDate),
+      });
 
   @override
-  PdfTask<BridgePageBuilderHandle> addA4Page() => _exec(
+  PdfTask<BridgePageBuilderHandle> addPage(PdfPageSize size) => _exec(
     EngineOp.builderAddPage,
-    {'pageType': 'a4'},
+    _pageSizeArgs(size),
   ).map((_) => _SharedPageBuilderHandle(_bridge, _handleId, scope));
+
   @override
-  PdfTask<BridgePageBuilderHandle> addLetterPage() => _exec(
-    EngineOp.builderAddPage,
-    {'pageType': 'letter'},
-  ).map((_) => _SharedPageBuilderHandle(_bridge, _handleId, scope));
-  @override
-  PdfTask<BridgePageBuilderHandle> addPage({
-    required double width,
-    required double height,
-  }) => _exec(EngineOp.builderAddPage, {
-    'width': width,
-    'height': height,
-  }).map((_) => _SharedPageBuilderHandle(_bridge, _handleId, scope));
+  PdfTask<BridgePageBuilderHandle> addImagePage(
+    DataSource imageData, {
+    PdfImagePageOptions page = const PdfImagePageOptions(),
+  }) => _bridge
+      ._exec(
+        EngineOp.builderAddImagePage,
+        {
+          'handleId': _handleId,
+          'sourceLength': imageData.length,
+          if (page.size != null) 'width': page.size!.width,
+          if (page.size != null) 'height': page.size!.height,
+          'fit': page.fit.wire,
+          'margin': page.margin,
+        },
+        sources: [imageData],
+        scope: scope,
+      )
+      .map((_) => _SharedPageBuilderHandle(_bridge, _handleId, scope));
 
   @override
   PdfTask<void> save(DataSink output, {bool deflate = true}) => _bridge._exec(
@@ -62,6 +69,19 @@ class _SharedBuilderHandle extends BridgeBuilderHandle {
   Future<void> dispose() =>
       _bridge._exec(EngineOp.builderDispose, {'handleId': _handleId});
 }
+
+/// The wire arguments of a page size: the engine's own names for the two
+/// it knows, the dimensions for the rest.
+Map<String, Object?> _pageSizeArgs(PdfPageSize size) => switch (size) {
+  PdfPageSizeA4() => {'pageType': 'a4'},
+  PdfPageSizeLetter() => {'pageType': 'letter'},
+  _ => {'width': size.width, 'height': size.height},
+};
+
+/// The wire argument of a date: the PDF date string the editor's dates
+/// travel as.
+String? _dateArg(DateTime? value) =>
+    value == null ? null : codec.putDate(value);
 
 // ══════════════════════════════════════════════════════════════════
 // Page builder handle
@@ -86,7 +106,8 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
   @override
   PdfTask<void> at(double x, double y) => _op(PageOp.at, {'x': x, 'y': y});
   @override
-  PdfTask<void> text(String text) => _op(PageOp.text, {'text': text});
+  PdfTask<void> text(String text, {PdfTextStyle? style}) =>
+      _op(PageOp.text, {'text': text, ..._styleArgs(style)});
   @override
   PdfTask<void> heading(int level, String text) =>
       _op(PageOp.heading, {'level': level, 'text': text});
@@ -97,22 +118,20 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
   @override
   PdfTask<void> horizontalRule() => _op(PageOp.horizontalRule);
   @override
-  PdfTask<void> image(
-    DataSource imageData,
-    PdfRect rect, {
-    String altText = '',
-  }) => _bridge._exec(
-    EngineOp.builderPageOp,
-    {
-      'handleId': _handleId,
-      'pageOp': PageOp.image.wire,
-      'sourceLength': imageData.length,
-      ...codec.encodeRectArgs(rect),
-      'altText': altText,
-    },
-    sources: [imageData],
-    scope: _scope,
-  );
+  PdfTask<void> image(DataSource imageData, PdfRect rect, {String? altText}) =>
+      _bridge._exec(
+        EngineOp.builderPageOp,
+        {
+          'handleId': _handleId,
+          'pageOp':
+              (altText == null ? PageOp.imageArtifact : PageOp.image).wire,
+          'sourceLength': imageData.length,
+          ...codec.encodeRectArgs(rect),
+          if (altText != null) 'altText': altText,
+        },
+        sources: [imageData],
+        scope: _scope,
+      );
   @override
   PdfTask<void> watermark(String text) => _op(PageOp.watermark, {'text': text});
   @override
@@ -187,90 +206,72 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
   PdfTask<void> footnote(String refMark, String noteText) =>
       _op(PageOp.footnote, {'refMark': refMark, 'noteText': noteText});
   @override
-  PdfTask<void> inline(String text) => _op(PageOp.inline, {'text': text});
-  @override
-  PdfTask<void> inlineBold(String text) =>
-      _op(PageOp.inlineBold, {'text': text});
-  @override
-  PdfTask<void> inlineItalic(String text) =>
-      _op(PageOp.inlineItalic, {'text': text});
-  @override
-  PdfTask<void> inlineColor(String text, PdfColor color) =>
-      _op(PageOp.inlineColor, {'text': text, ...codec.encodeColorArgs(color)});
+  PdfTask<void> inline(String text, {PdfTextStyle? style}) =>
+      _op(PageOp.inline, {'text': text, ..._styleArgs(style)});
   @override
   PdfTask<void> textInRect(
     PdfRect rect,
     String text, {
-    PdfCellAlign align = PdfCellAlign.left,
+    PdfAlignment align = PdfAlignment.left,
   }) => _op(PageOp.textInRect, {
     ...codec.encodeRectArgs(rect),
     'text': text,
     'align': codec.putEnum(align),
   });
   @override
-  PdfTask<void> rect(PdfRect rect) =>
-      _op(PageOp.rect, {...codec.encodeRectArgs(rect)});
-  @override
-  PdfTask<void> filledRect(PdfRect rect, PdfColor color) => _op(
-    PageOp.filledRect,
-    {...codec.encodeRectArgs(rect), ...codec.encodeColorArgs(color)},
-  );
-  @override
-  PdfTask<void> line(double x1, double y1, double x2, double y2) =>
-      _op(PageOp.line, {'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2});
-  @override
-  PdfTask<void> strokeRect(
-    PdfRect rect, {
-    double width = 1,
-    PdfColor color = PdfColor.black,
-    List<double>? dash,
-    double dashPhase = 0,
-  }) => _op(PageOp.strokeRect, {
-    ...codec.encodeRectArgs(rect),
-    'lineWidth': width,
-    ...codec.encodeColorArgs(color),
-    'dash': dash,
-    'dashPhase': dashPhase,
-  });
-  @override
-  PdfTask<void> strokeLine(
-    double x1,
-    double y1,
-    double x2,
-    double y2, {
-    double width = 1,
-    PdfColor color = PdfColor.black,
-    List<double>? dash,
-    double dashPhase = 0,
-  }) => _op(PageOp.strokeLine, {
-    'x1': x1,
-    'y1': y1,
-    'x2': x2,
-    'y2': y2,
-    'lineWidth': width,
-    ...codec.encodeColorArgs(color),
-    'dash': dash,
-    'dashPhase': dashPhase,
-  });
-  @override
-  PdfTask<void> highlight({PdfColor color = PdfColor.yellow}) =>
-      _op(PageOp.highlight, codec.encodeColorArgs(color));
-  @override
-  PdfTask<void> underline({PdfColor color = PdfColor.black}) =>
-      _op(PageOp.underline, codec.encodeColorArgs(color));
-  @override
-  PdfTask<void> strikeout({PdfColor color = PdfColor.black}) =>
-      _op(PageOp.strikeout, codec.encodeColorArgs(color));
-  @override
-  PdfTask<void> squiggly({PdfColor color = PdfColor.black}) =>
-      _op(PageOp.squiggly, codec.encodeColorArgs(color));
-  @override
-  PdfTask<void> stickyNote(String text, {double? x, double? y}) {
-    if ((x == null) != (y == null)) {
-      throw PdfInvalidArgument('stickyNote takes x and y together or neither');
-    }
-    return _op(PageOp.stickyNote, {'text': text, 'x': x, 'y': y});
+  PdfTask<void> rect(PdfRect rect, {PdfColor? fill, PdfStroke? stroke}) {
+    // No fill and no stroke means a stroked rectangle with the default
+    // stroke; a fill alone leaves the outline off.
+    final outline = stroke ?? (fill == null ? const PdfStroke() : null);
+    return PdfTask.group((hook) async {
+      if (fill != null) {
+        await hook.guard(
+          _op(PageOp.filledRect, {
+            ...codec.encodeRectArgs(rect),
+            ...codec.encodeColorArgs(fill),
+          }),
+        );
+      }
+      if (outline != null) {
+        await hook.guard(
+          _op(PageOp.strokeRect, {
+            ...codec.encodeRectArgs(rect),
+            ..._strokeArgs(outline),
+          }),
+        );
+      }
+    });
   }
+
+  @override
+  PdfTask<void> line(
+    (double, double) from,
+    (double, double) to, {
+    PdfStroke stroke = const PdfStroke(),
+  }) => _op(PageOp.strokeLine, {
+    'x1': from.$1,
+    'y1': from.$2,
+    'x2': to.$1,
+    'y2': to.$2,
+    ..._strokeArgs(stroke),
+  });
+  @override
+  PdfTask<void> markup(PdfMarkupKind kind, {PdfColor? color}) {
+    final op = switch (kind) {
+      PdfMarkupKind.highlight => PageOp.highlight,
+      PdfMarkupKind.underline => PageOp.underline,
+      PdfMarkupKind.strikeout => PageOp.strikeout,
+      PdfMarkupKind.squiggly => PageOp.squiggly,
+    };
+    final ink =
+        color ??
+        (kind == PdfMarkupKind.highlight ? PdfColor.yellow : PdfColor.black);
+    return _op(op, codec.encodeColorArgs(ink));
+  }
+
+  @override
+  PdfTask<void> stickyNote(String text, {(double, double)? at}) =>
+      _op(PageOp.stickyNote, {'text': text, 'x': at?.$1, 'y': at?.$2});
 
   @override
   PdfTask<void> stamp(PdfStampType type) =>
@@ -278,10 +279,6 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
   @override
   PdfTask<void> freeText(PdfRect rect, String text) =>
       _op(PageOp.freeText, {...codec.encodeRectArgs(rect), 'text': text});
-  @override
-  PdfTask<void> watermarkConfidential() => _op(PageOp.watermarkConfidential);
-  @override
-  PdfTask<void> watermarkDraft() => _op(PageOp.watermarkDraft);
   @override
   PdfTask<void> linkNamed(String destination) =>
       _op(PageOp.linkNamed, {'destination': destination});
@@ -294,90 +291,59 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
   PdfTask<void> onClose(String script) =>
       _op(PageOp.onClose, {'script': script});
   @override
-  PdfTask<void> imageArtifact(DataSource imageData, PdfRect rect) =>
-      _bridge._exec(
-        EngineOp.builderPageOp,
-        {
-          'handleId': _handleId,
-          'pageOp': PageOp.imageArtifact.wire,
-          'sourceLength': imageData.length,
-          ...codec.encodeRectArgs(rect),
-        },
-        sources: [imageData],
-        scope: _scope,
-      );
-  @override
   PdfTask<void> table(
     List<PdfTableColumn> columns,
-    List<List<String>> rows, {
-    bool hasHeader = true,
-  }) {
-    for (var i = 0; i < rows.length; i++) {
-      if (rows[i].length != columns.length) {
-        throw PdfInvalidArgument(
-          'table row $i has ${rows[i].length} cells but the table has '
-          '${columns.length} columns',
-        );
-      }
-    }
-    return _op(PageOp.table, {
-      'headers': columns.map((c) => c.header).toList(),
-      'widths': columns.map((c) => c.width ?? -1.0).toList(),
-      'aligns': codec.putEnums(columns.map((c) => c.align)),
-      'cells': [for (final row in rows) ...row],
-      'columnCount': columns.length,
-      'hasHeader': hasHeader,
-    });
-  }
-
-  @override
-  PdfTask<void> streamingTable(
-    List<PdfTableColumn> columns,
     List<List<PdfTableCell>> rows, {
-    bool repeatHeader = true,
-    PdfTableSizing sizing = PdfTableSizing.fixed,
-    int sampleRows = 50,
-    double minColumnWidth = 20,
-    double maxColumnWidth = 400,
-    int maxRowSpan = 1,
+    PdfTableOptions options = const PdfTableOptions(),
   }) {
-    for (final column in columns) {
-      if (column.width == null) {
-        throw PdfInvalidArgument(
-          'streamingTable requires an explicit width on every column; '
-          '"${column.header}" has none',
-        );
+    if (options.sizing == PdfTableSizing.fixed) {
+      for (final column in columns) {
+        if (column.width == null) {
+          throw PdfInvalidArgument(
+            'table needs an explicit width on every column; '
+            '"${column.header}" has none — give every column a width, or '
+            'use sizing: PdfTableSizing.sample or .autoAll',
+          );
+        }
       }
     }
     for (final row in rows) {
       if (row.length != columns.length) {
         throw PdfInvalidArgument(
-          'streamingTable rows need one cell per column: a row has '
+          'table rows need one cell per column: a row has '
           '${row.length} cells for ${columns.length} columns',
         );
       }
       for (final cell in row) {
-        if (cell.rowSpan < 1 || cell.rowSpan > maxRowSpan) {
+        if (cell.rowSpan < 1 || cell.rowSpan > options.maxRowSpan) {
           throw PdfInvalidArgument(
-            'streamingTable cell "${cell.text}" spans ${cell.rowSpan} rows; '
-            'rowSpan must be 1 to maxRowSpan ($maxRowSpan)',
+            'table cell "${cell.text}" spans ${cell.rowSpan} rows; '
+            'rowSpan must be 1 to maxRowSpan (${options.maxRowSpan})',
           );
         }
       }
     }
+    // The engine measures one sample of rows: `autoAll` sends every row
+    // as the sample, so every row is measured.
+    final autoAll = options.sizing == PdfTableSizing.autoAll;
+    final mode = autoAll ? PdfTableSizing.sample : options.sizing;
     return _op(PageOp.streamingTable, {
       'headers': columns.map((c) => c.header).toList(),
-      'widths': columns.map((c) => c.width!).toList(),
+      // -1: no width; the engine keeps its own default for the column.
+      'widths': columns.map((c) => c.width ?? -1.0).toList(),
       'aligns': codec.putEnums(columns.map((c) => c.align)),
       'cells': [for (final row in rows) ...row.map((c) => c.text)],
       'rowSpans': [for (final row in rows) ...row.map((c) => c.rowSpan)],
       'columnCount': columns.length,
-      'repeatHeader': repeatHeader,
-      'mode': sizing.wire,
-      'sampleRows': sampleRows,
-      'minColWidth': minColumnWidth,
-      'maxColWidth': maxColumnWidth,
-      'maxRowSpan': maxRowSpan,
+      'repeatHeader': options.repeatHeader,
+      'hasHeader': options.header,
+      'mode': mode.wire,
+      'sampleRows': autoAll
+          ? (rows.isEmpty ? 1 : rows.length)
+          : options.sampleRows,
+      'minColWidth': options.minColumnWidth,
+      'maxColWidth': options.maxColumnWidth,
+      'maxRowSpan': options.maxRowSpan,
     });
   }
 
@@ -395,3 +361,26 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
     'handleId': _handleId,
   }, scope: _scope);
 }
+
+/// The wire arguments of a text style: only the fields that override the
+/// page's own font, size and colour travel.
+Map<String, Object?> _styleArgs(PdfTextStyle? style) {
+  if (style == null) return const {};
+  final color = style.color;
+  return {
+    if (style.font != null) 'font': style.font,
+    if (style.size != null) 'size': style.size,
+    if (style.bold) 'bold': true,
+    if (style.italic) 'italic': true,
+    if (color != null) ...codec.encodeColorArgs(color),
+  };
+}
+
+/// The wire arguments of a stroke: the line width, its colour and its
+/// dash pattern.
+Map<String, Object?> _strokeArgs(PdfStroke stroke) => {
+  'lineWidth': stroke.width,
+  ...codec.encodeColorArgs(stroke.color),
+  'dash': stroke.dash,
+  'dashPhase': stroke.dashPhase,
+};

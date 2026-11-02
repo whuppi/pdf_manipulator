@@ -346,13 +346,11 @@ class _SharedEditorHandle extends BridgeEditorHandle {
       _mutate('setFormFieldMaxLength', {'name': name, 'maxLength': maxLength});
 
   @override
-  PdfTask<void> setFormFieldAlignment(
-    String name,
-    PdfTextAlignment alignment,
-  ) => _mutate('setFormFieldAlignment', {
-    'name': name,
-    'alignment': codec.putEnum(alignment),
-  });
+  PdfTask<void> setFormFieldAlignment(String name, PdfAlignment alignment) =>
+      _mutate('setFormFieldAlignment', {
+        'name': name,
+        'alignment': codec.putEnum(alignment),
+      });
 
   @override
   PdfTask<void> setFormFieldBackgroundColor(String name, PdfColor color) =>

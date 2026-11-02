@@ -149,7 +149,7 @@ List<PdfFormField> decodeFormFields(Map<String, Object?> r) {
       maxLength: maxLength < 0 ? null : maxLength,
       alignment: alignment.isEmpty
           ? null
-          : _enumByWireName(PdfTextAlignment.values, alignment, 'alignment'),
+          : _enumByWireName(PdfAlignment.values, alignment, 'alignment'),
       readOnly: m['readOnly'] as bool? ?? false,
       required: m['required'] as bool? ?? false,
     );

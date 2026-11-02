@@ -20,7 +20,7 @@ const _pageCount = 200;
 Future<Uint8List> _buildPages(Pdf pdf) async {
   final builder = await pdf.build();
   for (var i = 0; i < _pageCount; i++) {
-    final page = await builder.addPage(width: 612, height: 792);
+    final page = await builder.addPage(PdfPageSize.custom(612, 792));
     await page.text('combinator cancel page $i');
     await page.done();
   }
@@ -188,9 +188,9 @@ void registerCombinatorCancelTests(
         Object? after;
         task = pdf.buildTo(out, (builder) async {
           kept = builder;
-          final page = await builder.addA4Page();
+          final page = await builder.addPage();
           final pageInFlight = page.text('in flight');
-          final builderInFlight = builder.addA4Page();
+          final builderInFlight = builder.addPage();
           task.cancel();
           try {
             await pageInFlight;
@@ -220,7 +220,10 @@ void registerCombinatorCancelTests(
           isA<PdfCancelled>(),
           reason: 'a page op after the cancel',
         );
-        expect(() => kept.setTitle('x'), throwsA(isA<PdfDisposed>()));
+        expect(
+          () => kept.setMetadata(const PdfMetadata(title: 'x')),
+          throwsA(isA<PdfDisposed>()),
+        );
         expect(out.length, 0, reason: 'the save never ran');
       },
       timeout: t(2),

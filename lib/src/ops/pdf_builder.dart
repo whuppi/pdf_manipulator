@@ -27,52 +27,31 @@ class PdfBuilder implements _Handle {
 
   // ── Metadata ──
 
-  /// Sets the document title metadata.
-  PdfTask<void> setTitle(String value) {
+  /// Sets the document metadata. A null field is left out of the document.
+  PdfTask<void> setMetadata(PdfMetadata metadata) {
     _check();
-    return _handle.setTitle(value);
-  }
-
-  /// Sets the document author metadata.
-  PdfTask<void> setAuthor(String value) {
-    _check();
-    return _handle.setAuthor(value);
-  }
-
-  /// Sets the document subject metadata.
-  PdfTask<void> setSubject(String value) {
-    _check();
-    return _handle.setSubject(value);
-  }
-
-  /// Sets the document keywords metadata.
-  PdfTask<void> setKeywords(String value) {
-    _check();
-    return _handle.setKeywords(value);
+    return _handle.setMetadata(metadata);
   }
 
   // ── Pages ──
 
-  /// Adds a new A4-sized page and returns its content builder.
-  PdfTask<PdfPageBuilder> addA4Page() {
+  /// Adds a page of [size] and returns its content builder.
+  PdfTask<PdfPageBuilder> addPage([PdfPageSize size = const PdfPageSize.a4()]) {
     _check();
-    return _handle.addA4Page().map((handle) => PdfPageBuilder(handle));
+    return _handle.addPage(size).map((handle) => PdfPageBuilder(handle));
   }
 
-  /// Adds a new US Letter-sized page and returns its content builder.
-  PdfTask<PdfPageBuilder> addLetterPage() {
-    _check();
-    return _handle.addLetterPage().map((handle) => PdfPageBuilder(handle));
-  }
-
-  /// Adds a page with custom dimensions (in points) and returns its builder.
-  PdfTask<PdfPageBuilder> addPage({
-    required double width,
-    required double height,
+  /// Adds a page holding [image] and returns its content builder.
+  ///
+  /// The page is the image's own size, one point per pixel, unless [page]
+  /// names a size; [PdfImagePageOptions.fit] says how the image fills it.
+  PdfTask<PdfPageBuilder> addImagePage(
+    DataSource image, {
+    PdfImagePageOptions page = const PdfImagePageOptions(),
   }) {
     _check();
     return _handle
-        .addPage(width: width, height: height)
+        .addImagePage(image, page: page)
         .map((handle) => PdfPageBuilder(handle));
   }
 
@@ -111,8 +90,10 @@ class PdfPageBuilder {
   /// Moves the cursor to absolute position ([x], [y]) in points.
   PdfTask<void> at(double x, double y) => _handle.at(x, y);
 
-  /// Writes inline text at the current cursor position.
-  PdfTask<void> text(String text) => _handle.text(text);
+  /// Writes [text] at the current cursor position, in the page's font
+  /// unless [style] overrides it.
+  PdfTask<void> text(String text, {PdfTextStyle? style}) =>
+      _handle.text(text, style: style);
 
   /// Writes a heading at the given [level] (1-6).
   PdfTask<void> heading(int level, String text) => _handle.heading(level, text);
@@ -126,12 +107,10 @@ class PdfPageBuilder {
   /// Draws a horizontal rule across the page.
   PdfTask<void> horizontalRule() => _handle.horizontalRule();
 
-  /// Places an image within [rect], with optional [altText] for accessibility.
-  PdfTask<void> image(
-    DataSource imageData,
-    PdfRect rect, {
-    String altText = '',
-  }) => _handle.image(imageData, rect, altText: altText);
+  /// Places an image within [rect]. A null [altText] places it as an
+  /// artifact, which assistive technology ignores.
+  PdfTask<void> image(DataSource imageData, PdfRect rect, {String? altText}) =>
+      _handle.image(imageData, rect, altText: altText);
 
   /// Adds a diagonal watermark text overlay on the page.
   PdfTask<void> watermark(String text) => _handle.watermark(text);
@@ -210,95 +189,40 @@ class PdfPageBuilder {
   PdfTask<void> footnote(String refMark, String noteText) =>
       _handle.footnote(refMark, noteText);
 
-  /// Writes inline [text] at the cursor without moving to a new line.
-  PdfTask<void> inline(String text) => _handle.inline(text);
-
-  /// Writes bold inline [text] at the cursor.
-  PdfTask<void> inlineBold(String text) => _handle.inlineBold(text);
-
-  /// Writes italic inline [text] at the cursor.
-  PdfTask<void> inlineItalic(String text) => _handle.inlineItalic(text);
-
-  /// Writes inline [text] in [color] at the cursor.
-  PdfTask<void> inlineColor(String text, PdfColor color) =>
-      _handle.inlineColor(text, color);
+  /// Writes [text] at the cursor without moving to a new line, in the
+  /// page's font unless [style] overrides it.
+  PdfTask<void> inline(String text, {PdfTextStyle? style}) =>
+      _handle.inline(text, style: style);
 
   /// Wraps [text] inside [rect], aligned per [align].
   PdfTask<void> textInRect(
     PdfRect rect,
     String text, {
-    PdfCellAlign align = PdfCellAlign.left,
+    PdfAlignment align = PdfAlignment.left,
   }) => _handle.textInRect(rect, text, align: align);
 
-  /// Draws an unfilled rectangle at [rect].
-  PdfTask<void> rect(PdfRect rect) => _handle.rect(rect);
+  /// Draws [rect]: [fill] inside it, [stroke] around it. A null [fill]
+  /// leaves it unfilled, a null [stroke] leaves it unstroked — unless
+  /// both are null, which strokes it with the default stroke.
+  PdfTask<void> rect(PdfRect rect, {PdfColor? fill, PdfStroke? stroke}) =>
+      _handle.rect(rect, fill: fill, stroke: stroke);
 
-  /// Draws [rect] filled with [color].
-  PdfTask<void> filledRect(PdfRect rect, PdfColor color) =>
-      _handle.filledRect(rect, color);
+  /// Draws a straight line from [from] to [to].
+  PdfTask<void> line(
+    (double, double) from,
+    (double, double) to, {
+    PdfStroke stroke = const PdfStroke(),
+  }) => _handle.line(from, to, stroke: stroke);
 
-  /// Draws a straight line from ([x1], [y1]) to ([x2], [y2]).
-  PdfTask<void> line(double x1, double y1, double x2, double y2) =>
-      _handle.line(x1, y1, x2, y2);
+  /// Adds a markup annotation of [kind] over the last-written text, in
+  /// [color] or in the kind's own colour when [color] is null.
+  PdfTask<void> markup(PdfMarkupKind kind, {PdfColor? color}) =>
+      _handle.markup(kind, color: color);
 
-  /// Draws a rectangle outline at [rect]; a non-empty [dash] dashes it.
-  PdfTask<void> strokeRect(
-    PdfRect rect, {
-    double width = 1,
-    PdfColor color = PdfColor.black,
-    List<double>? dash,
-    double dashPhase = 0,
-  }) => _handle.strokeRect(
-    rect,
-    width: width,
-    color: color,
-    dash: dash,
-    dashPhase: dashPhase,
-  );
-
-  /// Draws a line stroke between the two points; a non-empty [dash]
-  /// dashes it.
-  PdfTask<void> strokeLine(
-    double x1,
-    double y1,
-    double x2,
-    double y2, {
-    double width = 1,
-    PdfColor color = PdfColor.black,
-    List<double>? dash,
-    double dashPhase = 0,
-  }) => _handle.strokeLine(
-    x1,
-    y1,
-    x2,
-    y2,
-    width: width,
-    color: color,
-    dash: dash,
-    dashPhase: dashPhase,
-  );
-
-  /// Highlights the last-written text with [color].
-  PdfTask<void> highlight({PdfColor color = PdfColor.yellow}) =>
-      _handle.highlight(color: color);
-
-  /// Underlines the last-written text with [color].
-  PdfTask<void> underline({PdfColor color = PdfColor.black}) =>
-      _handle.underline(color: color);
-
-  /// Strikes out the last-written text with [color].
-  PdfTask<void> strikeout({PdfColor color = PdfColor.black}) =>
-      _handle.strikeout(color: color);
-
-  /// Squiggly-underlines the last-written text with [color].
-  PdfTask<void> squiggly({PdfColor color = PdfColor.black}) =>
-      _handle.squiggly(color: color);
-
-  /// Adds a sticky note with [text] at the cursor, or at ([x], [y]) when
-  /// both are set. Throws [PdfInvalidArgument] when exactly one coordinate
-  /// is set.
-  PdfTask<void> stickyNote(String text, {double? x, double? y}) =>
-      _handle.stickyNote(text, x: x, y: y);
+  /// Adds a sticky note with [text] at [at], or at the cursor when [at]
+  /// is null.
+  PdfTask<void> stickyNote(String text, {(double, double)? at}) =>
+      _handle.stickyNote(text, at: at);
 
   /// Adds a stamp annotation of [type] at the cursor.
   PdfTask<void> stamp(PdfStampType type) => _handle.stamp(type);
@@ -306,12 +230,6 @@ class PdfPageBuilder {
   /// Adds a FreeText annotation showing [text] inside [rect].
   PdfTask<void> freeText(PdfRect rect, String text) =>
       _handle.freeText(rect, text);
-
-  /// Adds the preset CONFIDENTIAL watermark.
-  PdfTask<void> watermarkConfidential() => _handle.watermarkConfidential();
-
-  /// Adds the preset DRAFT watermark.
-  PdfTask<void> watermarkDraft() => _handle.watermarkDraft();
 
   /// Links the last-written text to the named [destination].
   PdfTask<void> linkNamed(String destination) => _handle.linkNamed(destination);
@@ -325,44 +243,19 @@ class PdfPageBuilder {
   /// Runs [script] when the page closes.
   PdfTask<void> onClose(String script) => _handle.onClose(script);
 
-  /// Places [imageData] inside [rect] as an artifact — assistive
-  /// technology ignores it and it stays out of the reading order.
-  PdfTask<void> imageArtifact(DataSource imageData, PdfRect rect) =>
-      _handle.imageArtifact(imageData, rect);
-
-  /// Lays out [rows] as a table under [columns]; a row shorter or
-  /// longer than [columns] throws [PdfInvalidArgument] before anything is
+  /// Lays out [rows] as a table under [columns]; every row one cell per
+  /// column, and every [PdfTableCell.rowSpan] within the options' max row
+  /// span: any other table throws [PdfInvalidArgument] before anything is
   /// sent.
+  ///
+  /// [PdfTableSizing.fixed] needs a width on every column; the sizing
+  /// modes that measure ([PdfTableSizing.sample] and
+  /// [PdfTableSizing.autoAll]) size the columns from their content.
   PdfTask<void> table(
     List<PdfTableColumn> columns,
-    List<List<String>> rows, {
-    bool hasHeader = true,
-  }) => _handle.table(columns, rows, hasHeader: hasHeader);
-
-  /// Lays out [rows] as a streaming table under [columns] with
-  /// [sizing]; every column needs an explicit width, every row one cell
-  /// per column, and every [PdfTableCell.rowSpan] must lie within
-  /// [maxRowSpan]: any other table throws [PdfInvalidArgument] before
-  /// anything is sent.
-  PdfTask<void> streamingTable(
-    List<PdfTableColumn> columns,
     List<List<PdfTableCell>> rows, {
-    bool repeatHeader = true,
-    PdfTableSizing sizing = PdfTableSizing.fixed,
-    int sampleRows = 50,
-    double minColumnWidth = 20,
-    double maxColumnWidth = 400,
-    int maxRowSpan = 1,
-  }) => _handle.streamingTable(
-    columns,
-    rows,
-    repeatHeader: repeatHeader,
-    sizing: sizing,
-    sampleRows: sampleRows,
-    minColumnWidth: minColumnWidth,
-    maxColumnWidth: maxColumnWidth,
-    maxRowSpan: maxRowSpan,
-  );
+    PdfTableOptions options = const PdfTableOptions(),
+  }) => _handle.table(columns, rows, options: options);
 
   /// Lays out [text] in [columnCount] columns with [gapPt] gap between them.
   PdfTask<void> columns(int columnCount, double gapPt, String text) =>
