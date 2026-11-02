@@ -187,6 +187,7 @@ CONTENT RULES (never change)
 - Fixed a page tree whose inner nodes each hold one page reporting those nodes as pages — every node is read before it counts as a page
 - Fixed watermarks placed in a corner, tiled or at an exact rectangle all landing at default spots — every position is placed where it says; an unknown corner name is refused
 - Fixed a save that sets a form field's value, flattens the forms and redacts elsewhere on the page failing with "object referenced but unwritten" when unused objects are dropped
+- Fixed `applyRedactions` keeping the drawing of a removed glyph when a flattened field's own Type 3 font drew it — the glyph's procedure leaves the file
 - Fixed `rotateAll` and other per-page edits slowing down with the square of the page count on large documents
 - Fixed a merged page losing the resources, page size and rotation it inherited from its source page tree, which could leave it blank
 - Fixed a merge copying the source's whole page tree into the output when a merged page linked to a page that was not merged — such a link's target is written as null
