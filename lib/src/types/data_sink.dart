@@ -16,6 +16,19 @@ abstract interface class DataSink {
   /// Write a chunk. Called sequentially, never concurrently.
   FutureOr<void> write(Uint8List chunk);
 
+  /// Discards what was written: the operation this sink was handed to ended
+  /// cancelled or failed, so [reason] (the `PdfCancelled` or the error)
+  /// says why and the sink holds no partial output.
+  ///
+  /// The library calls it at most once, never writes to the sink after it,
+  /// and a write that began before the cancel may still be finishing when it
+  /// is called. A sink that is a file truncates it; a sink that is a
+  /// buffer clears it; a sink that streams to a destination that cannot take
+  /// bytes back (an upload) cancels the upload. The owner still closes the
+  /// sink: the library closes a sink a factory returned after aborting it,
+  /// as it closes one today.
+  FutureOr<void> abort(Object reason);
+
   /// Flushes pending writes and releases whatever the sink holds (a file
   /// handle, a connection). Idempotent. A sink that holds nothing
   /// implements it as a no-op.

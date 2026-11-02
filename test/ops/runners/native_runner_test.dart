@@ -20,6 +20,7 @@ import '../core/pdf_sugar_battery.dart';
 import '../core/pdf_one_shot_battery.dart';
 import '../core/pdf_render_battery.dart';
 import '../core/pdf_determinism_battery.dart';
+import '../core/pdf_abort_battery.dart';
 import '../core/pdf_cancel_battery.dart';
 import '../core/pdf_combinator_cancel_battery.dart';
 import '../core/pdf_lifecycle_battery.dart';
@@ -66,6 +67,7 @@ void main() {
   registerDeterminismTests(() => pdf);
   registerCancelTests(() => pdf);
   registerCombinatorCancelTests(() => pdf);
+  registerAbortTests(() => pdf);
   registerLifecycleTests(() => Pdf());
   registerInstanceTests(() => Pdf());
   registerRuntimeSafetyTests();

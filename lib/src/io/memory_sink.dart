@@ -22,6 +22,11 @@ final class MemorySink implements DataSink {
   @override
   void write(Uint8List chunk) => _buffer.add(chunk);
 
+  /// Clears the buffer: an operation that ended cancelled or failed leaves
+  /// no partial output to take.
+  @override
+  void abort(Object reason) => _buffer.clear();
+
   /// Holds nothing to release; the buffer stays readable after [close].
   @override
   void close() {}

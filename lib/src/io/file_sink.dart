@@ -30,6 +30,10 @@ final class FileSink implements DataSink {
   final RandomAccessFile _raf;
   bool _closed = false;
 
+  /// The write in flight: an abort waits for it, since a file handle runs
+  /// one async operation at a time.
+  Future<void> _writing = Future.value();
+
   /// Opens [file] for writing, truncating any existing content. Holds one
   /// file handle until [close].
   static Future<FileSink> open(File file) async {
@@ -38,7 +42,24 @@ final class FileSink implements DataSink {
   }
 
   @override
-  Future<void> write(Uint8List chunk) => _raf.writeFrom(chunk);
+  Future<void> write(Uint8List chunk) =>
+      _writing = _raf.writeFrom(chunk).then((_) {});
+
+  /// Truncates the file to zero length: it holds only the output of the
+  /// operation that ended cancelled or failed. Call it before [close]; on a
+  /// closed sink it does nothing.
+  @override
+  Future<void> abort(Object reason) async {
+    if (_closed) return;
+    try {
+      await _writing;
+    } catch (_) {
+      // A failed write may be what ended the operation; the file is
+      // truncated all the same.
+    }
+    await _raf.truncate(0);
+    await _raf.setPosition(0);
+  }
 
   /// Flushes pending writes and releases the file handle. Idempotent: safe
   /// to call more than once (e.g. from a `finally` plus an error path); the

@@ -89,6 +89,11 @@ class SharedBridge extends PdfBridge {
           cancel: hook,
         );
         return bin.decodeResponse(res.bytes);
+      } catch (error) {
+        // An op that ends cancelled or failed leaves no partial output in the
+        // sinks it was handed; one that finished first keeps what it wrote.
+        await (scope ?? hook).abortSinks(sinks, error);
+        rethrow;
       } finally {
         unregister?.call();
       }
@@ -308,6 +313,11 @@ class _FrameSink implements DataSink {
       await onFrame(frame);
     }
   }
+
+  /// Drops the partial frame: the caller's sink is aborted by whoever
+  /// handed it to the op.
+  @override
+  void abort(Object reason) => _buffer.clear();
 
   @override
   void close() {}

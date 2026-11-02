@@ -83,20 +83,30 @@ abstract interface class _Handle {
 /// has in flight on the handle, and an op issued after the cancel fails at
 /// once with [PdfCancelled]. [body] guards the steps it starts on other
 /// handles with `hook.guard`.
+///
+/// [output] is the sink the whole job writes to, if it has one. A job that
+/// ends cancelled or failed aborts it, even when the save into it had
+/// finished: a combinator that reports [PdfCancelled] leaves no output.
 PdfTask<R> _own<H extends _Handle, R>(
   PdfTask<H> opening,
-  Future<R> Function(H handle, CancelHook hook) body,
-) => PdfTask.group((hook) async {
-  final handle = await hook.guard(opening);
+  Future<R> Function(H handle, CancelHook hook) body, {
+  DataSink? output,
+}) => PdfTask.group((hook) async {
   try {
-    handle._scopeTo(hook);
-    final result = await body(handle, hook);
-    // A body that caught its ops' cancellation still ends cancelled: one
-    // cancel ends the whole job.
-    if (hook.isCancelled) throw const PdfCancelled();
-    return result;
-  } finally {
-    await handle.dispose();
+    final handle = await hook.guard(opening);
+    try {
+      handle._scopeTo(hook);
+      final result = await body(handle, hook);
+      // A body that caught its ops' cancellation still ends cancelled: one
+      // cancel ends the whole job.
+      if (hook.isCancelled) throw const PdfCancelled();
+      return result;
+    } finally {
+      await handle.dispose();
+    }
+  } catch (error) {
+    if (output != null) await hook.abortSinks([output], error);
+    rethrow;
   }
 });
 
@@ -233,7 +243,8 @@ class Pdf {
   /// [output] with [options] and closes the editor, after success, after an
   /// error and after a cancel. Several edits make one parse and one save,
   /// all or nothing. The handle is the library's: do not keep it past
-  /// [edits]. Nothing is written when [edits] throws.
+  /// [edits]. Nothing is written when [edits] throws, and [output] is aborted
+  /// (`DataSink.abort`) when the call ends cancelled or failed.
   ///
   /// Cancelling the task stops the open, every op [edits] has running on the
   /// editor, which resolves with [PdfCancelled], and the save: an op issued
@@ -248,13 +259,14 @@ class Pdf {
   }) => _own(edit(source, password: password), (editor, hook) async {
     await edits(editor);
     await hook.guard(editor.save(output, options: options));
-  });
+  }, output: output);
 
   /// Creates a document, runs [body] on its builder, saves it to [output]
   /// and closes the builder, after success, after an error and after a
   /// cancel. Page content is Flate-compressed unless [deflate] is false.
   /// The handle is the library's: do not keep it past [body]. Nothing is
-  /// written when [body] throws.
+  /// written when [body] throws, and [output] is aborted (`DataSink.abort`)
+  /// when the call ends cancelled or failed.
   ///
   /// Cancelling the task stops every op [body] has running on the builder
   /// and its page builders, which resolves with [PdfCancelled], and the
@@ -267,7 +279,7 @@ class Pdf {
   }) => _own(build(), (builder, hook) async {
     await body(builder);
     await hook.guard(builder.save(output, deflate: deflate));
-  });
+  }, output: output);
 
   /// Applies one edit of [PdfEdits] to [source] and writes the result to
   /// [output]: the object returned runs exactly one call, then the document

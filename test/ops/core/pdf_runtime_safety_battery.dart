@@ -100,6 +100,9 @@ class _SlowSink implements DataSink {
   }
 
   @override
+  void abort(Object reason) {}
+
+  @override
   void close() {}
 }
 

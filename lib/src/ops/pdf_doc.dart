@@ -54,7 +54,10 @@ base class PdfDoc extends PdfReads implements _Handle {
   final PdfEncryptionInfo? encryption;
 
   @override
-  PdfTask<T> _run<T>(PdfTask<T> Function(BridgeDocHandle handle) read) {
+  PdfTask<T> _run<T>(
+    PdfTask<T> Function(BridgeDocHandle handle) read, {
+    DataSink? output,
+  }) {
     _check();
     return read(_handle);
   }

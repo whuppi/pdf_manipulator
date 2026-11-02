@@ -13,10 +13,31 @@
 // INTERNAL — constructed by SharedBridge, registered by the Router
 // and by guard/handle scopes, driven by PdfTask.cancel().
 
+import 'dart:collection';
+
+import 'package:pdf_manipulator/src/types/data_sink.dart';
+
 /// One-shot cancellation for one or many engine operations.
 class CancelHook {
   bool _cancelled = false;
   final _actions = <void Function()>[];
+  final _aborted = HashSet<DataSink>.identity();
+
+  /// Aborts each of [sinks] that this hook's operation has not aborted yet,
+  /// with [reason], and resolves once they are. An op and the combinator that
+  /// owns it both end with an error, and both name the same output sink: the
+  /// sink is aborted once however many of them say so. A sink whose abort
+  /// throws is not reported: [reason] is the error that ended the operation.
+  Future<void> abortSinks(Iterable<DataSink> sinks, Object reason) async {
+    for (final sink in sinks) {
+      if (!_aborted.add(sink)) continue;
+      try {
+        await sink.abort(reason);
+      } catch (_) {
+        // The error that ended the operation is the one reported.
+      }
+    }
+  }
 
   /// Whether [cancel] has been called.
   bool get isCancelled => _cancelled;

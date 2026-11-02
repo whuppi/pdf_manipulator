@@ -149,6 +149,7 @@ CONTENT RULES (never change)
 - **Breaking:** `planSplitByBookmarks()` is `bookmarkRanges()`, and its `PdfBookmarkSplit` is `PdfBookmarkRange` with `title`, `start` and `end` → rename the call and the fields
 - **Breaking:** `classifyPage(page)` is `classifyPages({pages})`, and a page's kind is a `PdfPageType` and a document's a `PdfDocumentType`, where both were strings with a confidence → read `result.first.type`
 - **Breaking:** the handle constructors (`PdfDoc.internal`, `PdfEditor.internal`, `PdfBuilder.internal`) are `@internal` → build a handle with `pdf.open`, `pdf.edit` or `pdf.build`
+- **Breaking:** `DataSink` has a new method, `abort(Object reason)`, which the library calls once on the sink of an operation that ends cancelled or failed → implement `abort` to discard what was written (clear a buffer, truncate a file, cancel an upload); `MemorySink` and `FileSink` do
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Added `PdfDoc.annotations(page)`, which lists a page's annotations (subtype, rectangle, contents, author, form field name) as `PdfAnnotationInfo`
 - Added the page builder methods the engine already had: `inline`, `textInRect`, `rect`, `line`, `markup`, `stickyNote`, `stamp`, `freeText`, `linkNamed`, `linkJavaScript`, `onOpen`, `onClose`, `table` and `newPageSameSize`
@@ -198,6 +199,11 @@ CONTENT RULES (never change)
 - Fixed an operation on a disposed document reaching another open document that happened to have the same engine id — it fails with "document not found"
 - Fixed `cancel()` on a job still waiting behind another one waiting for that job to end — it resolves at once; on JSPI a cancel during a sink write no longer waits for the write
 - Changed `cancel()` when the operation finished before the cancel landed: the task resolves with its result, so a finished edit is not reported as cancelled; an `open` or `edit` that finished is closed and reports `PdfCancelled`
+- Fixed a cancelled or failed `reduceImages` leaving the images it had already re-encoded staged, so a later save wrote half the reduction — it stages nothing unless every image is done
+- Fixed a cancelled or failed `convertToPdfA` leaving the editor half converted, or converted while the call reported the error — the editor is as it was before the call
+- Fixed an `applyRedactions` refused on a later page leaving the earlier pages redacted while the call reported the error — it redacts every page or none
+- Fixed `extractText` of all pages reporting success when its sink threw on the last chunk, with the text lost — it throws the sink's error
+- Fixed an operation that ended cancelled or failed leaving its partial output in the sink — the sink is aborted, and a combinator that ends cancelled aborts its output even when the save had finished
 - Fixed one failed web worker start making every later operation of that `Pdf` fail — the next operation starts a worker again
 - Fixed a lane that panicked (native) or trapped (web) going on to serve jobs on broken engine state — the lane ends, operations on its documents fail with a typed error, and new work goes to a new lane
 - Fixed `PdfPageBuilder.radioGroup` always failing with "unknown pageOp"

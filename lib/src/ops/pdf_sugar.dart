@@ -20,11 +20,12 @@ extension PdfSugar on Pdf {
         await hook.guard(editor.mergeFrom(inputs[i]));
       }
       await hook.guard(editor.save(output));
-    });
+    }, output: output);
   }
 
   /// Splits a PDF into chunks of [every] pages each. Each sink [sinkFactory]
-  /// returns is closed after its chunk.
+  /// returns is closed after its chunk, and aborted first when the chunk
+  /// fails or is cancelled.
   PdfTask<void> split(
     DataSource source,
     DataSink Function(int index) sinkFactory, {
@@ -36,7 +37,7 @@ extension PdfSugar on Pdf {
       var chunkIndex = 0;
       for (var start = 0; start < total; start += every) {
         final end = (start + every).clamp(0, total);
-        final sink = sinkFactory(chunkIndex);
+        final sink = _FactorySink(sinkFactory(chunkIndex));
         try {
           await hook.guard(
             extractPages(
@@ -45,6 +46,9 @@ extension PdfSugar on Pdf {
               pages: List.generate(end - start, (i) => start + i),
             ),
           );
+        } catch (error) {
+          await sink.abortQuietly(error);
+          rethrow;
         } finally {
           await sink.close();
         }
@@ -114,7 +118,7 @@ extension PdfSugar on Pdf {
           }
         }
 
-        final sink = sinkFactory(chunkIndex);
+        final sink = _FactorySink(sinkFactory(chunkIndex));
         final counter = _ByteCountSinkWrapper(sink);
         try {
           await hook.guard(
@@ -124,6 +128,9 @@ extension PdfSugar on Pdf {
               pages: List.generate(bestEnd, (j) => chunkStart + j),
             ),
           );
+        } catch (error) {
+          await sink.abortQuietly(error);
+          rethrow;
         } finally {
           await sink.close();
         }
@@ -138,7 +145,8 @@ extension PdfSugar on Pdf {
   }
 
   /// Splits a PDF at top-level bookmark boundaries. Each sink
-  /// [sinkFactory] returns is closed after its part.
+  /// [sinkFactory] returns is closed after its part, and aborted first when
+  /// the part fails or is cancelled.
   PdfTask<void> splitByBookmarks(
     DataSource source,
     DataSink Function(int index) sinkFactory, {
@@ -153,7 +161,7 @@ extension PdfSugar on Pdf {
 
     for (var i = 0; i < splits.length; i++) {
       final split = splits[i];
-      final sink = sinkFactory(i);
+      final sink = _FactorySink(sinkFactory(i));
       try {
         await hook.guard(
           extractPages(
@@ -166,6 +174,9 @@ extension PdfSugar on Pdf {
             password: password,
           ),
         );
+      } catch (error) {
+        await sink.abortQuietly(error);
+        rethrow;
       } finally {
         await sink.close();
       }
@@ -180,7 +191,7 @@ extension PdfSugar on Pdf {
   }) => _own(edit(source), (editor, hook) async {
     await hook.guard(editor.deletePages(PdfPages.list(pages)));
     await hook.guard(editor.save(output));
-  });
+  }, output: output);
 
   /// Reorders pages according to [order] (list of page indices).
   PdfTask<void> reorderPages(
@@ -190,7 +201,7 @@ extension PdfSugar on Pdf {
   }) => _own(edit(source), (editor, hook) async {
     await hook.guard(editor.keepPages(order));
     await hook.guard(editor.save(output));
-  });
+  }, output: output);
 
   /// Moves a single page from index [from] to index [to].
   PdfTask<void> movePage(
@@ -201,7 +212,7 @@ extension PdfSugar on Pdf {
   }) => _own(edit(source), (editor, hook) async {
     await hook.guard(editor.movePage(from: from, to: to));
     await hook.guard(editor.save(output));
-  });
+  }, output: output);
 
   /// Turns specific pages by their mapped rotations.
   PdfTask<void> rotatePages(
@@ -215,7 +226,7 @@ extension PdfSugar on Pdf {
       );
     }
     await hook.guard(editor.save(output));
-  });
+  }, output: output);
 
   /// Turns all pages by [by] on top of their current rotation.
   PdfTask<void> rotateAllPages(
@@ -225,7 +236,7 @@ extension PdfSugar on Pdf {
   }) => _own(edit(source), (editor, hook) async {
     await hook.guard(editor.rotatePages(const PdfPages.all(), by: by));
     await hook.guard(editor.save(output));
-  });
+  }, output: output);
 
   // ── Content ──
 
@@ -234,7 +245,7 @@ extension PdfSugar on Pdf {
       _own(edit(source), (editor, hook) async {
         await hook.guard(editor.flattenForms());
         await hook.guard(editor.save(output));
-      });
+      }, output: output);
 
   /// Applies all pending redaction marks, permanently removing content.
   PdfTask<void> applyRedactions(DataSource source, DataSink output) {
@@ -243,7 +254,7 @@ extension PdfSugar on Pdf {
       // The report is discarded: a one-shot returns nothing.
       await hook.guard(editor.applyRedactions());
       await hook.guard(editor.save(output));
-    });
+    }, output: output);
   }
 
   /// Embeds a file attachment into the PDF.
@@ -255,7 +266,7 @@ extension PdfSugar on Pdf {
   }) => _own(edit(source), (editor, hook) async {
     await hook.guard(editor.embedFile(name, fileData));
     await hook.guard(editor.save(output));
-  });
+  }, output: output);
 
   /// Erases content within the specified [regions] on [page].
   PdfTask<void> eraseRegions(
@@ -266,7 +277,7 @@ extension PdfSugar on Pdf {
   }) => _own(edit(source), (editor, hook) async {
     await hook.guard(editor.eraseRegions(page, regions));
     await hook.guard(editor.save(output));
-  });
+  }, output: output);
 
   /// Compresses the PDF: images through `PdfEditor.reduceImages` under
   /// [images] (`PdfImagePolicy.ebook` unless you pass another preset or
@@ -313,7 +324,7 @@ extension PdfSugar on Pdf {
           await _copyUnchanged(source, output);
         }
       }
-    });
+    }, output: output);
   }
 
   // ── Security ──
@@ -338,7 +349,7 @@ extension PdfSugar on Pdf {
       ),
     );
     await hook.guard(editor.save(output));
-  });
+  }, output: output);
 
   /// Encrypts a PDF with the given [encryption] configuration, which must
   /// come from [PdfEncryption.config]; any other value throws
@@ -362,6 +373,7 @@ extension PdfSugar on Pdf {
           options: PdfSaveOptions.fullRewrite(encryption: encryption),
         ),
       ),
+      output: output,
     );
   }
 
@@ -380,6 +392,7 @@ extension PdfSugar on Pdf {
         ),
       ),
     ),
+    output: output,
   );
 
   // ── Stamps ──
@@ -397,7 +410,7 @@ extension PdfSugar on Pdf {
       editor.addStamp(page, type: type, rect: rect, opacity: opacity),
     );
     await hook.guard(editor.save(output));
-  });
+  }, output: output);
 
   /// Adds a custom image stamp to a single [page].
   PdfTask<void> addImageStamp(
@@ -412,7 +425,7 @@ extension PdfSugar on Pdf {
       editor.addImageStamp(page, imageData, rect: rect, opacity: opacity),
     );
     await hook.guard(editor.save(output));
-  });
+  }, output: output);
 
   // ── Conversion ──
 
@@ -427,7 +440,7 @@ extension PdfSugar on Pdf {
     return _own(edit(source, password: password), (editor, hook) async {
       await hook.guard(editor.convertToPdfA(level: level));
       await hook.guard(editor.save(output));
-    });
+    }, output: output);
   }
 
   // ── Builder sugar ──
@@ -477,6 +490,10 @@ class _ByteCountSink implements DataSink {
     _length += chunk.length;
   }
 
+  /// Holds a count and no output.
+  @override
+  void abort(Object reason) {}
+
   @override
   void close() {}
 }
@@ -494,8 +511,45 @@ class _ByteCountSinkWrapper implements DataSink {
     return _inner.write(chunk);
   }
 
+  @override
+  FutureOr<void> abort(Object reason) => _inner.abort(reason);
+
   // The inner sink belongs to the factory the caller passed, and the
   // wrapper's owner closes it.
   @override
   void close() {}
+}
+
+/// A sink a factory returned, which the library owns for one item. The op
+/// that writes it and the combinator that asked the factory for it both end
+/// with an error when the item fails, and both abort it: it passes the first
+/// abort on and ignores the rest, so the caller's sink sees one.
+class _FactorySink implements DataSink {
+  _FactorySink(this._inner);
+
+  final DataSink _inner;
+  bool _aborted = false;
+
+  @override
+  FutureOr<void> write(Uint8List chunk) => _inner.write(chunk);
+
+  @override
+  FutureOr<void> abort(Object reason) {
+    if (_aborted) return null;
+    _aborted = true;
+    return _inner.abort(reason);
+  }
+
+  @override
+  FutureOr<void> close() => _inner.close();
+
+  /// Aborts the sink after an error that bypassed the op that writes it; an
+  /// abort that throws is not reported, since [reason] is the error.
+  Future<void> abortQuietly(Object reason) async {
+    try {
+      await abort(reason);
+    } catch (_) {
+      // The error that ended the item is the one reported.
+    }
+  }
 }

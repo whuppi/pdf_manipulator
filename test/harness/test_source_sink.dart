@@ -62,8 +62,17 @@ class TestSource implements DataSource {
 class TestSink implements DataSink {
   final _buf = BytesBuilder(copy: false);
 
+  /// How many times the library aborted this sink.
+  int aborts = 0;
+
   @override
   FutureOr<void> close() {}
+
+  @override
+  FutureOr<void> abort(Object reason) {
+    aborts++;
+    _buf.clear();
+  }
 
   @override
   FutureOr<void> write(Uint8List chunk) {
@@ -78,6 +87,46 @@ class TestSink implements DataSink {
 
   Uint8List takeBytes() => _buf.takeBytes();
   int get length => _buf.length;
+}
+
+/// A [TestSink] that keeps the order of what happens to it, for the abort
+/// contract: one abort, one close, no write after the abort. A write that
+/// fails is the injected failure of an op.
+class CountingSink extends TestSink {
+  /// [failOnWrite] is the 1-based write that throws; none when null.
+  /// [onFirstWrite] runs as the first write arrives, for a test that cancels
+  /// its task from inside the op.
+  CountingSink({this.failOnWrite, this.onFirstWrite});
+
+  final int? failOnWrite;
+  final void Function()? onFirstWrite;
+
+  /// `write`, `abort` and `close`, in the order they arrived.
+  final events = <String>[];
+  int writes = 0;
+  int closes = 0;
+  int writesAfterAbort = 0;
+
+  @override
+  FutureOr<void> write(Uint8List chunk) {
+    if (aborts > 0) writesAfterAbort++;
+    events.add('write');
+    if (++writes == 1) onFirstWrite?.call();
+    if (writes == failOnWrite) throw StateError('the sink failed');
+    return super.write(chunk);
+  }
+
+  @override
+  FutureOr<void> abort(Object reason) {
+    events.add('abort');
+    return super.abort(reason);
+  }
+
+  @override
+  FutureOr<void> close() {
+    events.add('close');
+    closes++;
+  }
 }
 
 DataSource src(Uint8List bytes) => TestSource(bytes);

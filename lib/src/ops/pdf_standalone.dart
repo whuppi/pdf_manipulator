@@ -69,6 +69,7 @@ extension PdfStandalone on Pdf {
     return _own(
       edit(source, password: password),
       (editor, hook) => hook.guard(editor._handle.extractPages(pages, output)),
+      output: output,
     );
   }
 }

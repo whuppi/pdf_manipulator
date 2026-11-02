@@ -23,7 +23,14 @@ const _framesAfterCancelBound = 3;
 /// A sink that counts its closes and the bytes it was given.
 class _ClosesCounted implements DataSink {
   int closes = 0;
+  int aborts = 0;
   int bytes = 0;
+
+  @override
+  void abort(Object reason) {
+    aborts++;
+    bytes = 0;
+  }
 
   @override
   void close() => closes++;

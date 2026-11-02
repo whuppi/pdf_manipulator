@@ -68,6 +68,9 @@ class DemoSink implements DataSink {
   }
 
   @override
+  void abort(Object reason) => _builder.clear();
+
+  @override
   void close() {}
 
   Uint8List takeBytes() => _builder.takeBytes();

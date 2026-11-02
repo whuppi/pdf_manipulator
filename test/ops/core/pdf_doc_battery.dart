@@ -1038,6 +1038,9 @@ class _ClosesCounted implements DataSink {
   int bytes = 0;
 
   @override
+  void abort(Object reason) => bytes = 0;
+
+  @override
   void close() => closes++;
 
   @override
@@ -1054,6 +1057,12 @@ class _KeepsBytes extends _ClosesCounted {
   Future<void> write(Uint8List chunk) async {
     await super.write(chunk);
     _written.add(chunk);
+  }
+
+  @override
+  void abort(Object reason) {
+    super.abort(reason);
+    _written.clear();
   }
 
   /// The bytes written so far.

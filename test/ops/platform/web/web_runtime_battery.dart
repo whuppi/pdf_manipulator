@@ -42,6 +42,9 @@ class _BlockedSink implements DataSink {
   }
 
   @override
+  void abort(Object reason) {}
+
+  @override
   void close() {}
 }
 

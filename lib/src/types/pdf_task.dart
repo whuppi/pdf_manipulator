@@ -83,6 +83,14 @@ class PdfTask<T> implements Future<T> {
   /// operation that opens a document, editor or builder and finished first
   /// is closed by the library, and the task resolves with [PdfCancelled].
   ///
+  /// A stopped operation changed nothing: an edit that [PdfCancelled] ends
+  /// leaves its editor exactly as it was, and a sink it was handed is
+  /// aborted (`DataSink.abort`), so it holds no partial output. A combinator
+  /// (`read`, `rewrite`, `buildTo`, `edits`, `reads` and the one-call
+  /// operations such as `merge`) resolves with [PdfCancelled] whenever
+  /// cancel was called before it finished, and aborts its output sink even
+  /// when the save into it had finished.
+  ///
   /// Native stops a running op within one page (one image for image
   /// reduction, one rule batch for validation). On the web that needs
   /// SharedArrayBuffer, which a page has only when it is cross-origin

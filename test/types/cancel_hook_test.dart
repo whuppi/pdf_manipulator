@@ -8,8 +8,13 @@
 @TestOn('vm')
 library;
 
+import 'dart:async';
+
+import 'package:pdf_manipulator/pdf_manipulator.dart' show PdfCancelled;
 import 'package:pdf_manipulator/src/types/cancel_hook.dart';
 import 'package:test/test.dart';
+
+import '../harness/test_source_sink.dart';
 
 void main() {
   group('CancelHook', () {
@@ -118,5 +123,40 @@ void main() {
       hook.cancel();
       expect(fired, 1);
     });
+
+    test(
+      'abortSinks aborts each sink once however often it is named',
+      () async {
+        final hook = CancelHook();
+        final a = CountingSink();
+        final b = CountingSink();
+        await hook.abortSinks([a, b], const PdfCancelled());
+        await hook.abortSinks([a], const PdfCancelled());
+        expect(a.aborts, 1);
+        expect(b.aborts, 1);
+      },
+    );
+
+    test('a sink is aborted once per hook, so once per operation', () async {
+      final sink = CountingSink();
+      await CancelHook().abortSinks([sink], const PdfCancelled());
+      await CancelHook().abortSinks([sink], const PdfCancelled());
+      expect(sink.aborts, 2);
+    });
+
+    test(
+      'an abort that throws is not reported and does not stop the rest',
+      () async {
+        final hook = CancelHook();
+        final after = CountingSink();
+        await hook.abortSinks([_ThrowingAbort(), after], StateError('why'));
+        expect(after.aborts, 1);
+      },
+    );
   });
+}
+
+class _ThrowingAbort extends CountingSink {
+  @override
+  FutureOr<void> abort(Object reason) => throw StateError('abort failed');
 }

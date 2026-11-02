@@ -109,6 +109,6 @@ final class _OneShotEdits extends PdfEdits with _SingleUse {
       final result = await hook.guard(apply(editor._handle));
       await hook.guard(editor.save(_output, options: _options));
       return result;
-    });
+    }, output: _output);
   }
 }

@@ -14,8 +14,13 @@ abstract base class PdfReads {
   PdfReads._();
 
   /// Runs [read] on the engine's document handle: on the open one for
-  /// [PdfDoc], on one opened and closed for the call for a one-shot.
-  PdfTask<T> _run<T>(PdfTask<T> Function(BridgeDocHandle handle) read);
+  /// [PdfDoc], on one opened and closed for the call for a one-shot. [output]
+  /// is the sink the read writes to, if it has one: a one-shot that ends
+  /// cancelled or failed aborts it, even when the read into it had finished.
+  PdfTask<T> _run<T>(
+    PdfTask<T> Function(BridgeDocHandle handle) read, {
+    DataSink? output,
+  });
 
   /// The facts of the pages named: their size, their rotation and their
   /// label. Every page when [pages] is null.
@@ -24,7 +29,8 @@ abstract base class PdfReads {
 
   /// Writes the text of the pages named to [output] as the engine produces
   /// it; every page when [pages] is null. The sink is the caller's: the
-  /// library writes to it and never closes it.
+  /// library writes to it, aborts it when the read ends cancelled or failed,
+  /// and never closes it.
   ///
   /// The text reaches [output] as UTF-8, page by page, and the library
   /// never holds the document's text whole. A caller that wants a string
@@ -46,6 +52,7 @@ abstract base class PdfReads {
     KeepRecord.op('extract');
     return _run(
       (handle) => handle.extractText(output, pages: pages, format: format),
+      output: output,
     );
   }
 
@@ -63,7 +70,7 @@ abstract base class PdfReads {
   /// [sinkFor] receives the page's descriptor, with its pixel size, before
   /// any pixel is written. The sink it returns is the library's: it is
   /// closed after its page, and on an error or a cancel the sink of the page
-  /// in flight is closed too. Pages already delivered stand. Each write
+  /// in flight is aborted, then closed. Pages already delivered stand. Each write
   /// is awaited before the engine goes on, so a slow sink slows the render;
   /// the library holds no page, only the bytes of one chunk in transit.
   ///
@@ -77,8 +84,8 @@ abstract base class PdfReads {
   /// );
   /// ```
   ///
-  /// Cancelling the task closes the current page's sink, stops the render
-  /// and resolves the task with [PdfCancelled].
+  /// Cancelling the task aborts and closes the current page's sink, stops the
+  /// render and resolves the task with [PdfCancelled].
   PdfTask<List<PdfRenderedPage>> render(
     FutureOr<DataSink> Function(PdfRenderedPage page) sinkFor, {
     PdfPages? pages,
@@ -98,7 +105,8 @@ abstract base class PdfReads {
   ///
   /// [sinkFor] receives the image's descriptor before any byte is written.
   /// The sink it returns is the library's: it is closed after its image, and
-  /// on an error or a cancel the sink of the image in flight is closed too.
+  /// on an error or a cancel the sink of the image in flight is aborted, then
+  /// closed.
   /// Images already delivered stand. Each write is awaited before the engine
   /// goes on, and no image is ever held whole: the library holds only the
   /// bytes of one chunk in transit.
@@ -134,8 +142,8 @@ abstract base class PdfReads {
   /// );
   /// ```
   ///
-  /// Cancelling the task closes the current image's sink, stops the
-  /// extraction and resolves the task with [PdfCancelled].
+  /// Cancelling the task aborts and closes the current image's sink, stops
+  /// the extraction and resolves the task with [PdfCancelled].
   PdfTask<List<PdfImage>> extractImages(
     FutureOr<DataSink> Function(PdfImage image) sinkFor, {
     PdfPages? pages,
@@ -199,7 +207,10 @@ abstract base class PdfReads {
   PdfTask<void> exportFormData(
     DataSink output, {
     PdfFormDataFormat format = PdfFormDataFormat.xfdf,
-  }) => _run((handle) => handle.exportFormData(output, format: format.name));
+  }) => _run(
+    (handle) => handle.exportFormData(output, format: format.name),
+    output: output,
+  );
 
   /// What the document's XFA packet declares, or `null` when the document
   /// has no XFA form.
@@ -218,7 +229,7 @@ abstract base class PdfReads {
   /// Writes the embedded file named [name] to [output]. An unknown name
   /// throws [PdfEngineError].
   PdfTask<void> extractAttachment(String name, DataSink output) =>
-      _run((handle) => handle.extractAttachment(name, output));
+      _run((handle) => handle.extractAttachment(name, output), output: output);
 }
 
 /// A one-shot runs one call: a second call is refused before any I/O.
@@ -243,11 +254,15 @@ final class _OneShotReads extends PdfReads with _SingleUse {
   final String? _password;
 
   @override
-  PdfTask<T> _run<T>(PdfTask<T> Function(BridgeDocHandle handle) read) {
+  PdfTask<T> _run<T>(
+    PdfTask<T> Function(BridgeDocHandle handle) read, {
+    DataSink? output,
+  }) {
     _spend('read', 'read for several');
     return _own(
       _pdf.open(_source, password: _password),
       (doc, hook) => hook.guard(read(doc._handle)),
+      output: output,
     );
   }
 }

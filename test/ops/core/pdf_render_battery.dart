@@ -36,6 +36,7 @@ class _JournalSink implements DataSink {
   final _bytes = BytesBuilder(copy: false);
   final writes = <int>[];
   int closes = 0;
+  int aborts = 0;
   int inFlight = 0;
   int overlapped = 0;
 
@@ -54,6 +55,13 @@ class _JournalSink implements DataSink {
     writes.add(chunk.length);
     _bytes.add(chunk);
     inFlight--;
+  }
+
+  @override
+  void abort(Object reason) {
+    aborts++;
+    journal.add('$name abort');
+    _bytes.clear();
   }
 
   @override

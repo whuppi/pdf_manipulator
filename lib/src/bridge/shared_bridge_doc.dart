@@ -57,31 +57,57 @@ class _SharedDocHandle extends BridgeDocHandle {
   }) {
     final fmt = codec.putEnum(format);
     return PdfTask.group((hook) async {
-      if (pages == null || pages is PdfPagesAll) {
-        // One frame per page: the text reaches the sink as each frame
-        // arrives, and the library never holds the document's text.
-        final sink = _FrameSink((frame) async {
-          onEngineFrame?.call();
-          await output.write(
-            utf8.encode(codec.decodeExtractResult(bin.decodeResponse(frame))),
-          );
-        });
-        await hook.guard(
-          _exec(
-            EngineOp.extract,
-            {'format': fmt, 'hasSink': true},
-            sinks: [sink],
-          ),
-        );
-        return;
-      }
-      for (final page in _pageList(pages)) {
-        final text = codec.decodeExtractResult(
+      // The first error [output] threw: the engine's last chunk is flushed as
+      // it finishes, so a sink that failed on it did not fail the op, and the
+      // caller's error ends the op all the same.
+      ({Object error, StackTrace stack})? failure;
+      try {
+        if (pages == null || pages is PdfPagesAll) {
+          // One frame per page: the text reaches the sink as each frame
+          // arrives, and the library never holds the document's text.
+          final sink = _FrameSink((frame) async {
+            onEngineFrame?.call();
+            try {
+              await output.write(
+                utf8.encode(
+                  codec.decodeExtractResult(bin.decodeResponse(frame)),
+                ),
+              );
+            } catch (error, stack) {
+              failure ??= (error: error, stack: stack);
+              rethrow;
+            }
+          });
           await hook.guard(
-            _exec(EngineOp.extract, {'format': fmt, 'page': page}),
-          ),
-        );
-        await output.write(utf8.encode(text));
+            _exec(
+              EngineOp.extract,
+              {'format': fmt, 'hasSink': true},
+              sinks: [sink],
+            ),
+          );
+          if (failure case final failure?) {
+            Error.throwWithStackTrace(failure.error, failure.stack);
+          }
+          return;
+        }
+        for (final page in _pageList(pages)) {
+          final text = codec.decodeExtractResult(
+            await hook.guard(
+              _exec(EngineOp.extract, {'format': fmt, 'page': page}),
+            ),
+          );
+          await output.write(utf8.encode(text));
+        }
+      } catch (error) {
+        // The engine's sink is the library's; the text went to [output]. A
+        // sink that threw made the engine fail its write: the caller's error
+        // is the cause, the engine's is its echo.
+        final cause = failure;
+        await hook.abortSinks([output], cause?.error ?? error);
+        if (cause != null) {
+          Error.throwWithStackTrace(cause.error, cause.stack);
+        }
+        rethrow;
       }
     });
   }
@@ -172,8 +198,8 @@ class _SharedDocHandle extends BridgeDocHandle {
           Error.throwWithStackTrace(failure.error, failure.stack);
         }
         if (delivery.dropped) throw const PdfCancelled();
-      } catch (_) {
-        await delivery.abandon();
+      } catch (error) {
+        await delivery.abandon(error);
         // A sink or factory that threw made the engine fail its write; the
         // caller's error is the cause, the engine's is its echo.
         if (delivery.failure case final failure?) {
@@ -346,7 +372,9 @@ class _ChunkDelivery<H> implements DataSink {
   Future<void> _take(codec.ChunkFrame<H> frame) async {
     switch (frame) {
       case codec.ChunkHeader<H>(:final item):
-        await abandon();
+        await abandon(
+          const PdfEngineError('an item began before the last one ended'),
+        );
         _openItem = item;
         _open = await _sinkFor(item);
       case codec.ChunkData<H>(:final bytes):
@@ -368,19 +396,31 @@ class _ChunkDelivery<H> implements DataSink {
     }
   }
 
-  /// Closes the sink of the item in flight, if any. A sink that fails to
-  /// close here is not reported: whatever stopped the op is the error.
-  Future<void> abandon() async {
+  /// Aborts, then closes, the sink of the item in flight, if any: the item
+  /// never ended, so its sink holds no partial item. A sink that fails to
+  /// abort or close here is not reported: [reason], whatever stopped the op,
+  /// is the error.
+  Future<void> abandon(Object reason) async {
     final sink = _open;
     _open = null;
     _openItem = null;
     if (sink == null) return;
+    try {
+      await sink.abort(reason);
+    } catch (_) {
+      // The error that stopped the op is the one reported.
+    }
     try {
       await sink.close();
     } catch (_) {
       // The error that stopped the op is the one reported.
     }
   }
+
+  /// The item in flight is aborted by [abandon], with the error that ended
+  /// the op; delivered items stand.
+  @override
+  void abort(Object reason) {}
 
   @override
   void close() {}

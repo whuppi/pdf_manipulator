@@ -283,11 +283,13 @@ abstract interface class DataSource {
 
 It only nibbles — *"give me 64KB starting here"*, then the next bit, then the next. So you hand it a **reader**, not your whole file dumped into one giant `Uint8List`. (It hops around to any spot in the file, so a one-way stream like a live socket can't be a source; stash those in memory or a file first.)
 
-A **sink** is the mirror, one method:
+A **sink** is the mirror:
 
 ```dart
 abstract interface class DataSink {
   FutureOr<void> write(Uint8List chunk); // here's a chunk of output
+  FutureOr<void> abort(Object reason); // the operation ended cancelled or failed: discard it all
+  FutureOr<void> close(); // release what you hold
 }
 ```
 
@@ -334,7 +336,7 @@ class BlobSource implements DataSource {
 }
 ```
 
-Same idea for a custom `DataSink`: implement `write(chunk)` for an upload stream, a database column, wherever the bytes should go.
+Same idea for a custom `DataSink`: implement `write(chunk)` for an upload stream, a database column, wherever the bytes should go, and `abort(reason)` to take them back (cancel the upload, delete the row) when the operation is cancelled or fails, so a stopped operation leaves no partial output.
 
 </details>
 
