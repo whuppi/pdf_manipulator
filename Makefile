@@ -134,6 +134,8 @@ format:
 #                      - fork patch markers pair: no end without an open, no open
 #                        left open or nested, no typo'd marker line in upstream
 #                        code, tool/check_patch_markers.sh
+#                      - loops over document-scale collections poll for a cancel,
+#                        tool/check_cancel_polls.sh
 #                      - no dart:io in tests (fixtures are imported Dart
 #                        source, so VM and browser consume identical
 #                        bytes; exempt: the hybrid asset server, native
@@ -173,6 +175,7 @@ test-guards:
 	@./tool/check_changelog_shape.sh
 	@./tool/check_fork_tests.sh
 	@./tool/check_patch_markers.sh
+	@./tool/check_cancel_polls.sh
 	@bad=$$(for f in $$(grep -rln "dart:io" test/ --include="*.dart"); do \
 	  grep -q "io-exempt:" "$$f" || echo "$$f"; \
 	done); \
@@ -315,6 +318,15 @@ test-ops: fixtures test-ops-native test-ops-web
 test-memory:
 	CARGO_TARGET_DIR="$(CURDIR)/target/memprobe" $(CARGO) test --release --manifest-path tool/memprobe/Cargo.toml
 	CARGO_TARGET_DIR="$(CURDIR)/target/memprobe" $(CARGO) run --release --manifest-path tool/memprobe/Cargo.toml
+
+# Cancel fuel wall (tool/fuelprobe): every engine op runs in wasmtime with fuel
+# metering on a fixture of at least 10^9 units of work, and the work between
+# two polls of its cancel check stays under MAX_GAP. wasm32-wasip1 builds the
+# guest; the host binary runs it.
+test-fuel:
+	@bash -c 'source tool/build_lib.sh && ensure_target wasm32-wasip1'
+	CARGO_TARGET_DIR="$(CURDIR)/target/fuelprobe-guest" $(CARGO) build --release --target wasm32-wasip1 --manifest-path tool/fuelprobe/guest/Cargo.toml
+	CARGO_TARGET_DIR="$(CURDIR)/target/fuelprobe-host" $(CARGO) run --release --manifest-path tool/fuelprobe/host/Cargo.toml -- "$(CURDIR)/target/fuelprobe-guest/wasm32-wasip1/release/fuelprobe-guest.wasm"
 
 test-ops-native:
 	@echo "=== Ops: Native ==="

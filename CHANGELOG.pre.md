@@ -181,6 +181,7 @@ CONTENT RULES (never change)
 - Changed the web lanes to retire a worker after a job that grew its memory past 256 MB, once nothing still needs it; WebAssembly memory never shrinks, so one large job no longer leaves a large worker behind
 - Changed `PdfDoc.render` and `extractImages` to deliver each page as the engine produces it, where they held every page until the last; cancelling the subscription stops the engine
 - Changed cancellation to stop text extraction, search, validation, `reduceImages`, `convertToPdfA` and saves within one page, where it waited for the next read or write; on the web this needs a cross-origin isolated page
+- Changed cancellation to reach `merge`, `split`, `compress`, saves, rendering, `bookmarkRanges`, `classifyPages`, PDF/A conversion and the opening of a damaged file inside their loops, where each ran to its end
 - Changed `edit` to open the source once; an editor used to hold the document twice
 - Changed a full-rewrite save to copy each unchanged stream from the source in 64 KB pieces, so a page holding a 60 MB image saves in under 1 MB of engine memory
 - Changed a full-rewrite save to pack objects into object streams with a cross-reference stream (PDF 1.5), which makes files smaller; `PdfSaveOptions.fullRewrite(objectStreams: false)` writes the classic layout
