@@ -334,6 +334,26 @@ runs:
         find vendor -path '*/target/*' -path '*/.fingerprint/*' -type d \( -name '*_oxide-*' -o -name 'tiny-skia*' \) -prune -exec rm -rf {} +
         echo "fallback restore: engine fingerprints dropped, the engine rebuilds"
 
+    # A restored tree can hold a library unit's fingerprint without its
+    # library: an archive saved after a partial prune, or from a run cut
+    # off mid-write. Cargo trusts the fingerprint, and rustc then fails a
+    # dependent with "can't find crate". So drop every library fingerprint
+    # whose `deps/lib<name>-<hash>.*` is gone; cargo rebuilds those units.
+    - name: Drop fingerprints whose library is gone
+      if: inputs.cache == 'true' && inputs.ghcr-target == 'true'
+      shell: bash
+      run: |
+        dropped=0
+        while IFS= read -r fp; do
+          unit_dir=$(dirname "$fp")
+          profile=$(dirname "$(dirname "$unit_dir")")
+          if ! compgen -G "$profile/deps/lib*-${unit_dir##*-}.*" >/dev/null; then
+            rm -rf "${unit_dir:?}"
+            dropped=$((dropped + 1))
+          fi
+        done < <(find vendor -path '*/target/*' -path '*/.fingerprint/*' -type f -name 'lib-*' ! -name '*.json')
+        echo "library fingerprints dropped for a missing library: $dropped"
+
     # What the restores actually brought back, per target triple: the
     # engine outputs and their fingerprints. When a warm row still
     # compiles, this line says whether the cache was missing something or
