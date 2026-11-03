@@ -83,6 +83,10 @@ dev_dependencies:
   # Pure Dart — runs on VM and browser. Dev-only: ships nowhere.
   image: ^4.0.0
 
+  # Barrel guard — resolves the two barrels and reads their export
+  # namespaces. Dev-only: ships nowhere.
+  analyzer: ^14.4.0
+
   # Lint rules
   lints: ^6.1.0
 

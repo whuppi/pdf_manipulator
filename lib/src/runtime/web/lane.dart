@@ -76,6 +76,7 @@ import 'package:pdf_manipulator/src/runtime/lane.dart';
 import 'package:pdf_manipulator/src/runtime/web/protocol.dart';
 import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
+import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_config.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 
@@ -794,7 +795,7 @@ class WebLane implements Lane {
         final ackError = await ack.future;
         _opfsAck = null;
         if (ackError != null && ackError != 'cancelled') {
-          throw StateError('OPFS pre-copy failed: $ackError');
+          throw PdfIoError('OPFS pre-copy failed: $ackError');
         }
         offset += count;
       }

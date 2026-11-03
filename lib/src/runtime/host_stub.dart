@@ -6,10 +6,11 @@
 // make a concrete platform library the default.
 
 import 'package:pdf_manipulator/src/runtime/lane.dart';
+import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_config.dart';
 
 /// Unreachable on a real platform — the conditional import resolves to the
 /// native or web runtime there. Present so the default import is neutral.
-LaneHost createLaneHost({PdfConfig? config}) => throw UnsupportedError(
+LaneHost createLaneHost({PdfConfig? config}) => throw const PdfUnsupported(
   'pdf_manipulator: no lane runtime for this platform',
 );
