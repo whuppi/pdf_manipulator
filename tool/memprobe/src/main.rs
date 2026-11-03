@@ -603,8 +603,17 @@ fn run() -> Result<(), String> {
             let mut mark = re("editorMutate")
                 .put("handleId", i32v(hid))
                 .put("editOp", strv("addRedaction"))
+                .put("overlay", strv("fill"))
                 .put("page", i32v(0));
-            for (key, value) in [("x", 0.0), ("y", 8.0), ("width", 300.0), ("height", 16.0)] {
+            for (key, value) in [
+                ("x", 0.0),
+                ("y", 8.0),
+                ("width", 300.0),
+                ("height", 16.0),
+                ("r", 0.0),
+                ("g", 0.0),
+                ("b", 0.0),
+            ] {
                 mark = mark.put(key, wire::Value::F64(value));
             }
             call(st, mark, vec![], vec![])?;
@@ -684,7 +693,8 @@ fn run() -> Result<(), String> {
                 st,
                 re("editorMutate")
                     .put("handleId", i32v(hid))
-                    .put("editOp", strv("flattenForms")),
+                    .put("editOp", strv("flattenForms"))
+                    .put("pagesAll", wire::Value::Bool(true)),
                 vec![],
                 vec![],
             )?;
@@ -1274,9 +1284,13 @@ fn redact_box_to_sink(
     let mut mark = re("editorMutate")
         .put("handleId", i32v(hid))
         .put("editOp", strv("addRedaction"))
+        .put("overlay", strv("fill"))
         .put("page", i32v(0));
     for (key, value) in ["x", "y", "width", "height"].into_iter().zip(rect) {
         mark = mark.put(key, wire::Value::F64(value));
+    }
+    for key in ["r", "g", "b"] {
+        mark = mark.put(key, wire::Value::F64(0.0));
     }
     call(state, mark, vec![], vec![])?;
     call(

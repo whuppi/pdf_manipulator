@@ -333,10 +333,11 @@ void main() {
     await doc.dispose();
   });
 
-  testWidgets('eraseRegions', (t) async {
+  testWidgets('redact with no overlay', (t) async {
     final sink = MemorySink();
-    await pdf.eraseRegions(_src(minimalPdf), sink,
-        page: 0, regions: [const PdfRect(x: 10, y: 10, width: 50, height: 50)]);
+    await pdf.edits(_src(minimalPdf), sink).redact(
+        0, [const PdfRect(x: 10, y: 10, width: 50, height: 50)],
+        overlay: const PdfRedactionOverlay.none());
     final doc = await pdf.open(_src(sink.takeBytes()));
     expect(doc.pageCount, 1);
     await doc.dispose();
@@ -510,7 +511,7 @@ void main() {
   testWidgets('editor stamp after watermark keeps both', (t) async {
     final e = await pdf.edit(_src(minimalPdf));
     await e.addWatermark('WMTEXT', pages: PdfPages.single(0));
-    await e.addStamp(0,
+    await e.addStamp(PdfPages.single(0),
         type: PdfStampType.draft,
         rect: const PdfRect(x: 50, y: 50, width: 200, height: 60));
     final sink = MemorySink();
@@ -527,8 +528,8 @@ void main() {
   testWidgets('editor embedFile + eraseRegions + cropMargins', (t) async {
     final e = await pdf.edit(_src(minimalPdf));
     await e.embedFile('test.txt', _src(Uint8List.fromList('hi'.codeUnits)));
-    await e
-        .eraseRegions(0, [const PdfRect(x: 10, y: 10, width: 50, height: 50)]);
+    await e.redact(0, [const PdfRect(x: 10, y: 10, width: 50, height: 50)],
+        overlay: const PdfRedactionOverlay.none());
     await e.cropMargins(left: 10, right: 10, top: 10, bottom: 10);
     final sink = MemorySink();
     await e.save(sink);
@@ -570,7 +571,9 @@ void main() {
         PdfFallbackFontKind.emoji, font.buffer.asUint8List());
 
     final e = await pdf.edit(_src(formSink.takeBytes()));
-    await e.setFormFieldValue('note', 'Loved it \u{1F600}\u{1F389}');
+    await e
+        .field('note')
+        .setValue(PdfFormFieldValue.text('Loved it \u{1F600}\u{1F389}'));
     await e.flattenForms();
     final sink = MemorySink();
     await e.save(sink);
@@ -584,7 +587,7 @@ void main() {
 
   testWidgets('editor redaction lifecycle', (t) async {
     final e = await pdf.edit(_src(minimalPdf));
-    await e.addRedaction(
+    await e.markRedaction(
         0, const PdfRect(x: 50, y: 50, width: 100, height: 20));
     expect(await e.redactionCount(0), greaterThan(0));
     await e.applyRedactions();

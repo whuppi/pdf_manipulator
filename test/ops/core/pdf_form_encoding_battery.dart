@@ -35,13 +35,17 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
 
     test('fill finds a PDFDocEncoding (Latin-1) field name', () async {
       final editor = await createPdf().edit(src(formPdfdocNamePdf));
-      await editor.setFormFieldValue(_sharedName, 'Ligusterweg 4');
+      await editor
+          .field(_sharedName)
+          .setValue(PdfFormFieldValue.text('Ligusterweg 4'));
       await editor.dispose();
     }, timeout: t(1));
 
     test('fill finds a UTF-16BE-with-BOM field name', () async {
       final editor = await createPdf().edit(src(formUtf16NamePdf));
-      await editor.setFormFieldValue(_sharedName, 'Ligusterweg 4');
+      await editor
+          .field(_sharedName)
+          .setValue(PdfFormFieldValue.text('Ligusterweg 4'));
       await editor.dispose();
     }, timeout: t(1));
 
@@ -49,7 +53,9 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
       'fill finds a raw-UTF-8 field name (spec-violating, real-world)',
       () async {
         final editor = await createPdf().edit(src(formUtf8NamePdf));
-        await editor.setFormFieldValue(_sharedName, 'Ligusterweg 4');
+        await editor
+            .field(_sharedName)
+            .setValue(PdfFormFieldValue.text('Ligusterweg 4'));
         await editor.dispose();
       },
       timeout: t(1),
@@ -57,10 +63,9 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
 
     test('fill finds the dart-pdf-encoded field name', () async {
       final editor = await createPdf().edit(src(fFormFieldsDe));
-      await editor.setFormFieldValue(
-        fFormFieldsDeTruth.fieldName,
-        'Ligusterweg 4',
-      );
+      await editor
+          .field(fFormFieldsDeTruth.fieldName)
+          .setValue(PdfFormFieldValue.text('Ligusterweg 4'));
       await editor.dispose();
     }, timeout: t(1));
 
@@ -73,7 +78,7 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       const value = 'Ligusterweg 4';
       final editor = await pdf.edit(src(formUtf16NamePdf));
-      await editor.setFormFieldValue(_sharedName, value);
+      await editor.field(_sharedName).setValue(PdfFormFieldValue.text(value));
       await editor.flattenForms();
       final sink = TestSink();
       await editor.save(sink);
@@ -88,7 +93,7 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       const value = 'Königstraße 42, Grüße aus München äöüß';
       final editor = await pdf.edit(src(formUtf16NamePdf));
-      await editor.setFormFieldValue(_sharedName, value);
+      await editor.field(_sharedName).setValue(PdfFormFieldValue.text(value));
       await editor.flattenForms();
       final sink = TestSink();
       await editor.save(sink);
@@ -146,7 +151,7 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       const value = '東京都渋谷区 123';
       final editor = await pdf.edit(src(formUtf16NamePdf));
-      await editor.setFormFieldValue(_sharedName, value);
+      await editor.field(_sharedName).setValue(PdfFormFieldValue.text(value));
       await editor.flattenForms();
       final sink = TestSink();
       await editor.save(sink);
@@ -176,7 +181,7 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
           subsetCjkFallbackFont,
         );
         final editor = await pdf.edit(src(formUtf16NamePdf));
-        await editor.setFormFieldValue(_sharedName, value);
+        await editor.field(_sharedName).setValue(PdfFormFieldValue.text(value));
         await editor.flattenForms();
         final sink = TestSink();
         await editor.save(sink);
@@ -215,7 +220,7 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
         final pdf = createPdf();
         const value = r'(Grüße) \ Straße';
         final editor = await pdf.edit(src(formUtf16NamePdf));
-        await editor.setFormFieldValue(_sharedName, value);
+        await editor.field(_sharedName).setValue(PdfFormFieldValue.text(value));
         await editor.flattenForms();
         final sink = TestSink();
         await editor.save(sink);
@@ -236,13 +241,17 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
     test('PDFDocEncoding field name survives fill → save → refill', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(formPdfdocNamePdf));
-      await editor.setFormFieldValue(_sharedName, 'Erste Füllung');
+      await editor
+          .field(_sharedName)
+          .setValue(PdfFormFieldValue.text('Erste Füllung'));
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
       // If save re-encoded /T wrongly, this second fill cannot find it.
       final editor2 = await pdf.edit(src(sink.takeBytes()));
-      await editor2.setFormFieldValue(_sharedName, 'Zweite Füllung');
+      await editor2
+          .field(_sharedName)
+          .setValue(PdfFormFieldValue.text('Zweite Füllung'));
       await editor2.dispose();
     }, timeout: t(2));
 

@@ -43,6 +43,7 @@ import 'package:pdf_manipulator/src/types/pdf_page_size.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
+import 'package:pdf_manipulator/src/types/pdf_redaction_overlay.dart';
 import 'package:pdf_manipulator/src/types/pdf_redaction_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_render.dart';
 import 'package:pdf_manipulator/src/types/pdf_sanitize_options.dart';

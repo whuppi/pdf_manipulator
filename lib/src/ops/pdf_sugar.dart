@@ -268,18 +268,7 @@ extension PdfSugar on Pdf {
     await hook.guard(editor.save(output));
   }, output: output);
 
-  /// Erases content within the specified [regions] on [page].
-  PdfTask<void> eraseRegions(
-    DataSource source,
-    DataSink output, {
-    required int page,
-    required List<PdfRect> regions,
-  }) => _own(edit(source), (editor, hook) async {
-    await hook.guard(editor.eraseRegions(page, regions));
-    await hook.guard(editor.save(output));
-  }, output: output);
-
-  /// Compresses the PDF: images through `PdfEditor.reduceImages` under
+  /// Compresses the PDF: images through `PdfEdits.reduceImages` under
   /// [images] (`PdfImagePolicy.ebook` unless you pass another preset or
   /// your own numbers), then a full rewrite with stream compression, one
   /// copy of identical images, ICC profiles and embedded fonts, the
@@ -407,7 +396,12 @@ extension PdfSugar on Pdf {
     double opacity = 1.0,
   }) => _own(edit(source), (editor, hook) async {
     await hook.guard(
-      editor.addStamp(page, type: type, rect: rect, opacity: opacity),
+      editor.addStamp(
+        PdfPages.single(page),
+        type: type,
+        rect: rect,
+        opacity: opacity,
+      ),
     );
     await hook.guard(editor.save(output));
   }, output: output);
@@ -422,7 +416,12 @@ extension PdfSugar on Pdf {
     double opacity = 1.0,
   }) => _own(edit(source), (editor, hook) async {
     await hook.guard(
-      editor.addImageStamp(page, imageData, rect: rect, opacity: opacity),
+      editor.addImageStamp(
+        PdfPages.single(page),
+        imageData,
+        rect: rect,
+        opacity: opacity,
+      ),
     );
     await hook.guard(editor.save(output));
   }, output: output);

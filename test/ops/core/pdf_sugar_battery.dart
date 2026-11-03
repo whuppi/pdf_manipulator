@@ -541,15 +541,12 @@ void registerSugarTests(Pdf Function() createPdf) {
 
     // ── Erase ──
 
-    test('eraseRegions produces valid PDF', () async {
+    test('redact with no overlay produces valid PDF', () async {
       final pdf = createPdf();
       final sink = TestSink();
-      await pdf.eraseRegions(
-        src(minimalPdf),
-        sink,
-        page: 0,
-        regions: [const PdfRect(x: 0, y: 0, width: 100, height: 100)],
-      );
+      await pdf.edits(src(minimalPdf), sink).redact(0, [
+        const PdfRect(x: 0, y: 0, width: 100, height: 100),
+      ], overlay: const PdfRedactionOverlay.none());
       final output = sink.takeBytes();
       final doc = await pdf.open(src(output));
       expect(doc.pageCount, 1);
@@ -924,38 +921,39 @@ void registerSugarTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
-    test('eraseRegions over the full page destroys its text', () async {
-      final pdf = createPdf();
-      final twoPage = fTwoPageMarkers;
-      final sink = TestSink();
-      await pdf.eraseRegions(
-        src(twoPage),
-        sink,
-        page: 0,
-        regions: [const PdfRect(x: 0, y: 0, width: 612, height: 792)],
-      );
-      final doc = await pdf.open(src(sink.takeBytes()));
-      final first = await extractTextToString(
-        doc,
-        pages: const PdfPages.single(0),
-      );
-      expect(
-        first,
-        isNot(contains(fTwoPageMarkersTruth.page0Marker)),
-        reason:
-            'erase promises the content is GONE, not painted '
-            'over',
-      );
-      final second = await extractTextToString(
-        doc,
-        pages: const PdfPages.single(1),
-      );
-      expect(
-        second,
-        contains(fTwoPageMarkersTruth.page1Marker),
-        reason: 'the untouched page must keep its content',
-      );
-      await doc.dispose();
-    }, timeout: t(1));
+    test(
+      'redact with no overlay over the full page destroys its text',
+      () async {
+        final pdf = createPdf();
+        final twoPage = fTwoPageMarkers;
+        final sink = TestSink();
+        await pdf.edits(src(twoPage), sink).redact(0, [
+          const PdfRect(x: 0, y: 0, width: 612, height: 792),
+        ], overlay: const PdfRedactionOverlay.none());
+        final doc = await pdf.open(src(sink.takeBytes()));
+        final first = await extractTextToString(
+          doc,
+          pages: const PdfPages.single(0),
+        );
+        expect(
+          first,
+          isNot(contains(fTwoPageMarkersTruth.page0Marker)),
+          reason:
+              'erase promises the content is GONE, not painted '
+              'over',
+        );
+        final second = await extractTextToString(
+          doc,
+          pages: const PdfPages.single(1),
+        );
+        expect(
+          second,
+          contains(fTwoPageMarkersTruth.page1Marker),
+          reason: 'the untouched page must keep its content',
+        );
+        await doc.dispose();
+      },
+      timeout: t(1),
+    );
   });
 }

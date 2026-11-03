@@ -479,8 +479,8 @@ void registerBuilderTests(Pdf Function() createPdf) {
 
       // Setting a radio group's value takes the option name.
       final editor = await pdf.edit(src(built));
-      await editor.setFormFieldValue('size', 'small');
-      await editor.setFormFieldValue('colour', 'blue');
+      await editor.field('size').setValue(PdfFormFieldValue.text('small'));
+      await editor.field('colour').setValue(PdfFormFieldValue.text('blue'));
       final resaved = TestSink();
       await editor.save(resaved);
       await editor.dispose();

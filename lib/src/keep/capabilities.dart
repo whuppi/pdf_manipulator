@@ -12,9 +12,10 @@
 /// builder) is always included and has no capability.
 enum PdfCapability {
   /// Page rasterization (`PdfDoc.render`), image re-compression
-  /// (`PdfEditor.reduceImages`, the `compress` one-shot) and redaction
-  /// (`PdfEditor.addRedaction`, `PdfEditor.applyRedactions`, the
-  /// `applyRedactions` one-shot), which rewrites images and meshes.
+  /// (`PdfEdits.reduceImages`, the `compress` one-shot) and redaction
+  /// (`PdfEdits.redact`, `PdfEditor.markRedaction`,
+  /// `PdfEditor.applyRedactions`, the `applyRedactions` one-shot), which
+  /// rewrites images and meshes.
   render('render', 'rendering'),
 
   /// Digital signatures: signing and verification.
@@ -72,9 +73,10 @@ enum PdfCapability {
   /// readers and for the README drift guard, not for lookup precision.
   static const Map<String, PdfCapability> apiMembers = {
     'PdfDoc.render': PdfCapability.render,
-    'PdfEditor.reduceImages': PdfCapability.render,
+    'PdfEdits.reduceImages': PdfCapability.render,
     'compress': PdfCapability.render,
-    'PdfEditor.addRedaction': PdfCapability.render,
+    'PdfEdits.redact': PdfCapability.render,
+    'PdfEditor.markRedaction': PdfCapability.render,
     'PdfEditor.applyRedactions': PdfCapability.render,
     'applyRedactions': PdfCapability.render,
     'Pdf.sign': PdfCapability.signatures,
@@ -83,7 +85,7 @@ enum PdfCapability {
     'PdfDoc.verifySignatures': PdfCapability.signatures,
     'PdfDoc.validatePdfA': PdfCapability.pdfa,
     'PdfDoc.validatePdfUa': PdfCapability.pdfa,
-    'PdfEditor.convertToPdfA': PdfCapability.pdfa,
+    'PdfEdits.convertToPdfA': PdfCapability.pdfa,
     'convertToPdfA': PdfCapability.pdfa,
     'Pdf.convertTo': PdfCapability.office,
     'convertTo': PdfCapability.office,

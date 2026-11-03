@@ -1,7 +1,7 @@
 import 'package:meta/meta.dart';
 import 'package:pdf_manipulator/src/types/pdf_wire.dart';
 
-/// How far `PdfEditor.reduceImages` may go.
+/// How far `PdfEdits.reduceImages` may go.
 ///
 /// Resolution targets are pixels per inch as the image is drawn on the
 /// page (a 128-pixel image drawn 32 points wide is 288 ppi). An image is

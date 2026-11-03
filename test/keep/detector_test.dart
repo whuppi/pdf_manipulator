@@ -113,7 +113,7 @@ void main() {
     const marks = '''
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
-Future<void> use(PdfEditor editor, PdfRect box) => editor.addRedaction(0, box);
+Future<void> use(PdfEditor editor, PdfRect box) => editor.markRedaction(0, box);
 ''';
     const applies = '''
 import 'package:pdf_manipulator/pdf_manipulator.dart';
@@ -121,7 +121,12 @@ import 'package:pdf_manipulator/pdf_manipulator.dart';
 Future<void> use(Pdf pdf, DataSource src, DataSink out) =>
     pdf.applyRedactions(src, out);
 ''';
-    for (final source in [marks, applies]) {
+    const composite = '''
+import 'package:pdf_manipulator/pdf_manipulator.dart';
+
+Future<void> use(PdfEdits edits, PdfRect box) => edits.redact(0, [box]);
+''';
+    for (final source in [marks, applies, composite]) {
       final dir = _fixture({'main.dart': source});
       addTearDown(() => dir.deleteSync(recursive: true));
 

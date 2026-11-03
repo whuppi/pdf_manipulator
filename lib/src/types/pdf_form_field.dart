@@ -1,5 +1,5 @@
 // Form field types — reads live on PdfDoc (PdfDoc.formFields), mutations
-// on PdfEditor, export on PdfDoc.exportFormData.
+// on PdfEditor.field(name), export on PdfDoc.exportFormData.
 
 import 'package:meta/meta.dart';
 
@@ -48,6 +48,23 @@ enum PdfFormFieldType implements PdfWire {
 /// when the field has no value (a radio group with nothing selected).
 sealed class PdfFormFieldValue {
   const PdfFormFieldValue();
+
+  /// The text of a text field, or a checkbox or radio state name.
+  const factory PdfFormFieldValue.text(String text) = PdfTextValue;
+
+  /// Whether a checkbox is on.
+  const factory PdfFormFieldValue.checked(bool checked) = PdfCheckedValue;
+
+  /// The export value of the selected option of a combo box, list box or
+  /// radio group.
+  const factory PdfFormFieldValue.choice(String choice) = PdfChoiceValue;
+
+  /// The export values of the selected options of a multi-select list box.
+  const factory PdfFormFieldValue.choices(List<String> choices) =
+      PdfMultiChoiceValue;
+
+  /// No value: setting it clears the field.
+  const factory PdfFormFieldValue.none() = PdfNoValue;
 }
 
 /// The text content of a text or single-select choice field.
@@ -141,8 +158,7 @@ final class PdfFormField {
     this.required = false,
   });
 
-  /// Fully qualified (dotted) field name — what every mutator on
-  /// `PdfEditor` takes.
+  /// Fully qualified (dotted) field name — what `PdfEditor.field` takes.
   final String name;
 
   /// The field's kind.
@@ -212,7 +228,7 @@ enum PdfFormDataFormat implements PdfWire {
 
 /// A form field flag bit (`/Ff`), positioned per ISO 32000-1:2008 Table
 /// 221 (common), 226 (button), 228 (choice) and 230 (text). Pass a set of
-/// these to `PdfEditor.setFormFieldFlags`.
+/// these to `editor.field(name).setFlags`.
 enum PdfFormFieldFlag implements PdfWire {
   /// Table 221 bit 1 — the field cannot be edited by the user.
   readOnly('readOnly', 1),

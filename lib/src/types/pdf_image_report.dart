@@ -51,7 +51,7 @@ enum PdfImageColor implements PdfWire {
   final String wire;
 }
 
-/// What `PdfEditor.reduceImages` did to one image.
+/// What `PdfEdits.reduceImages` did to one image.
 enum PdfImageAction implements PdfWire {
   /// Bytes unchanged.
   kept('kept'),
@@ -115,7 +115,7 @@ enum PdfImageKeepReason implements PdfWire {
   final String wire;
 }
 
-/// One image XObject's outcome from `PdfEditor.reduceImages`.
+/// One image XObject's outcome from `PdfEdits.reduceImages`.
 @immutable
 final class PdfImageOutcome {
   /// Creates an outcome row.
@@ -236,7 +236,7 @@ final class PdfImageOutcome {
       '$bytesBefore → $bytesAfter bytes)';
 }
 
-/// The result of `PdfEditor.reduceImages`: one row per image XObject
+/// The result of `PdfEdits.reduceImages`: one row per image XObject
 /// drawn on the document's pages, in ascending object number.
 @immutable
 final class PdfImageReport {

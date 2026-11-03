@@ -471,6 +471,33 @@ final Uint8List indirectAnnotsForm = _offsetPdf([
   _streamBody('', 'q Q\n'),
 ]);
 
+/// One page with four choice fields over the options `red green blue amber`:
+/// the combo box `combo`, the list box `list`, the multi-select list box
+/// `multi` and the editable combo box `free`, each holding `red`. The form
+/// writer's dart-pdf does not emit a list box, so the fixture is authored.
+final Uint8List choiceFormPdf = _offsetPdf([
+  // 1: catalog with the four fields
+  '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R 7 0 R 8 0 R] /DA (/Helv 12 Tf 0 g) /DR << /Font << /Helv 4 0 R >> >> >> >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 9 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >>',
+  // 4: Helvetica
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  // 5..8: the fields, merged with their widgets
+  _choiceWidget('combo', 1 << 17, '20 250 120 270'),
+  _choiceWidget('list', 0, '20 150 120 230'),
+  _choiceWidget('multi', 1 << 21, '150 150 250 230'),
+  _choiceWidget('free', (1 << 17) | (1 << 18), '20 100 120 120'),
+  // 9: page content
+  _streamBody('', 'q Q\n'),
+]);
+
+String _choiceWidget(String name, int flags, String rect) =>
+    '<< /Type /Annot /Subtype /Widget /FT /Ch /T ($name) /Ff $flags /V (red) '
+    '/Opt [(red) (green) (blue) (amber)] /Rect [$rect] /F 4 /P 3 0 R '
+    '/DA (/Helv 12 Tf 0 g) >>';
+
 /// One page that draws an image XObject (`/Im1`, 2×2 DeviceGray) and a
 /// Form XObject (`/Fx1`, a filled square) with `/Resources` inherited from
 /// the `Pages` node. `pageImages` must list `/Im1` alone: a `Do` is not an

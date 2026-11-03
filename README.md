@@ -155,6 +155,21 @@ That's it — every platform now runs the full engine. **Before you ship: it can
 | set the title and other metadata | `await pdf.rewrite(a, b, (e) => e.setMetadata(const PdfMetadata(title: 'Q4 Report')))` |
 | resize the pages | `await pdf.rewrite(a, b, (e) => e.setMediaBox(PdfPages.all(), PdfRect(x: 0, y: 0, width: 595, height: 842)))` |
 | crop the pages, or remove the crop | `await pdf.rewrite(a, b, (e) => e.setCropBox(PdfPages.all(), null))` |
+| trim margins off every page | `await pdf.rewrite(a, b, (e) => e.cropMargins(top: 36, bottom: 36))` |
+| stamp pages | `await pdf.rewrite(a, b, (e) => e.addStamp(PdfPages.all(), type: .draft, rect: PdfRect(x: 50, y: 700, width: 120, height: 40)))` |
+| stamp pages with an image | `await pdf.rewrite(a, b, (e) => e.addImageStamp(PdfPages.single(0), logo, rect: PdfRect(x: 50, y: 700, width: 80, height: 40)))` |
+| flatten the form | `await pdf.rewrite(a, b, (e) => e.flattenForms())` |
+| flatten the form on some pages | `await pdf.rewrite(a, b, (e) => e.flattenForms(pages: PdfPages.single(0)))` |
+| flatten the annotations | `await pdf.rewrite(a, b, (e) => e.flattenAnnotations())` |
+| redact a region for good | `await pdf.rewrite(a, b, (e) => e.redact(0, [PdfRect(x: 72, y: 700, width: 200, height: 20)]))` |
+| erase a region, drawing no box | `await pdf.rewrite(a, b, (e) => e.redact(0, [region], overlay: .none()))` |
+| embed a file | `await pdf.rewrite(a, b, (e) => e.embedFile('notes.txt', notes))` |
+| convert to PDF/A | `await pdf.rewrite(a, b, (e) => e.convertToPdfA())` |
+| shrink the images | `await pdf.rewrite(a, b, (e) => e.reduceImages(PdfImagePolicy.ebook))` |
+| move or resize an image on a page | `await pdf.rewrite(a, b, (e) => e.setImageBounds(0, 'Im0', PdfRect(x: 0, y: 0, width: 200, height: 100)))` |
+| remove embedded copies of the standard fonts | `await pdf.rewrite(a, b, (e) => e.unembedStandardFonts())` |
+| remove the metadata | `await pdf.rewrite(a, b, (e) => e.scrubMetadata())` |
+| remove the metadata, scripts or attachments | `await pdf.rewrite(a, b, (e) => e.sanitize(const PdfSanitizeOptions(embeddedFiles: true)))` |
 
 Every read and every edit also has a one-shot: `pdf.reads(source)` opens the document, runs the one call and closes it, and `pdf.edits(source, output)` does the same for one edit.
 
@@ -367,7 +382,7 @@ await pdf.encrypt(source, output,
 await pdf.split(source, (i) => MemorySink(), every: 5);
 ```
 
-The full one-shot set, all the same shape: `merge`, `split` / `splitBySize` / `splitByBookmarks`, `extractPages`, `deletePages`, `reorderPages`, `movePage`, `rotatePages` / `rotateAllPages`, `addStamp` / `addImageStamp`, `flattenForms`, `applyRedactions`, `embedFile`, `eraseRegions`, `decrypt`, `sign`, `convertTo` (DOCX/PPTX/XLSX), `convertToPdf`, `convertToPdfA`, `convertXfaToAcroForm`, `imagesToPdf`.
+The full one-shot set, all the same shape: `merge`, `split` / `splitBySize` / `splitByBookmarks`, `extractPages`, `deletePages`, `reorderPages`, `movePage`, `rotatePages` / `rotateAllPages`, `addStamp` / `addImageStamp`, `flattenForms`, `applyRedactions`, `embedFile`, `decrypt`, `sign`, `convertTo` (DOCX/PPTX/XLSX), `convertToPdf`, `convertToPdfA`, `convertXfaToAcroForm`, `imagesToPdf`.
 
 > Doing several of these to the *same* PDF? Use the editor (below); it parses once instead of re-parsing per call.
 
@@ -425,7 +440,22 @@ await editor.save(output); // see save options below
 await editor.dispose();
 ```
 
-Also on the editor: `mergeFrom` (all pages, or `pages:`; `password:` opens an encrypted source), `keepPages`, `rotatePages` / `setRotation` (absolute), `deletePages`, `addStamp` / `addImageStamp`, `embedFile` (with description, mime type and relationship), `eraseRegions` / `clearEraseRegions`, `cropMargins`, `pageImages` / `setImageBounds`, `pageInfo` (media box and crop box) / `setMediaBox` / `setCropBox`, `flattenForms` / `flattenAnnotations` (each takes an optional `page`), `setFormFieldValue`, `removeFormField`, `setFormFieldReadOnly` / `setFormFieldRequired` / `setFormFieldFlags`, `setFormFieldTooltip`, `setFormFieldBounds`, `setFormFieldMaxLength`, `setFormFieldAlignment`, `setFormFieldBackgroundColor` / `setFormFieldBorderColor` / `setFormFieldBorderWidth` / `setFormFieldAppearance`, `unembedStandardFonts`, `convertToPdfA`, `scrubMetadata` / `sanitize`, and `metadata` / `setMetadata`.
+Also on the editor: `mergeFrom` (all pages, or `pages:`; `password:` opens an encrypted source), `keepPages`, `rotatePages` / `setRotation` (absolute), `deletePages`, `addStamp` / `addImageStamp` (over a `PdfPages` set), `embedFile` (with description, mime type and relationship), `cropMargins`, `pageImages` / `setImageBounds`, `pageInfo` (media box and crop box) / `setMediaBox` / `setCropBox`, `flattenForms` / `flattenAnnotations` (each takes `pages:`, every page by default), `unembedStandardFonts`, `convertToPdfA`, `scrubMetadata` / `sanitize`, `metadata` / `setMetadata`, and the form fields below.
+
+Every edit that takes pages checks all of them before it changes one: a page the document does not have, a page listed twice or an empty list throws `PdfInvalidArgument` and the document stays as it was.
+
+A form field is edited through `editor.field(name)`:
+
+```dart
+final f = editor.field('country');
+await f.setValue(const PdfFormFieldValue.choice('DE')); // a combo box or list box
+await editor.field('tags').setValue(const PdfFormFieldValue.choices(['a', 'c'])); // a multi-select list box
+await editor.field('name').setValue(const PdfFormFieldValue.text('Ada'));
+await editor.field('agree').setValue(const PdfFormFieldValue.checked(true));
+await editor.field('name').setValue(const PdfFormFieldValue.none()); // clear it
+```
+
+The other edits of a field are `setReadOnly`, `setRequired`, `setFlags`, `setTooltip`, `setBounds`, `setMaxLength`, `setAlignment`, `setBackgroundColor`, `setBorderColor`, `setBorderWidth`, `setAppearance` and `remove`. `setTooltip`, `setMaxLength`, `setBackgroundColor` and `setBorderColor` take null to remove what they set. A choice that is not an option of the field (an editable combo box takes any text) throws `PdfInvalidArgument` and changes nothing.
 
 Save options:
 
@@ -433,14 +463,19 @@ Save options:
 - `PdfSaveOptions.fullRewrite(encryption: ...)` — encrypt on save (or `PdfEncryption.remove()` to strip it).
 - `PdfSaveOptions.incremental()` — keeps the original bytes and appends the changes, so an existing signature stays valid. An edit an append cannot carry (a removed page, a redaction, a content edit) throws `PdfIncrementalRefused` and writes nothing; save it with `fullRewrite()`.
 
-Redaction is a mark-then-apply lifecycle (the content is removed, not just hidden):
+Redaction removes the content, not just hides it. `redact` marks and applies the regions you give it in one step; `markRedaction` queues a mark and `applyRedactions` applies the queued ones:
 
 ```dart
-editor.addRedaction(0, PdfRect(x: 72, y: 700, width: 200, height: 20));
+final once = await editor.redact(0, [PdfRect(x: 72, y: 700, width: 200, height: 20)]);
+
+await editor.markRedaction(0, PdfRect(x: 72, y: 650, width: 200, height: 20));
 print(await editor.redactionCount(0)); // pending marks on this page
 final report = await editor.applyRedactions(); // gone for good
 print('${report.glyphsRemoved} glyphs and ${report.imagesRemoved} images removed');
+await editor.clearRedactions(); // or drop every queued mark instead
 ```
+
+`redact` applies only its own regions: marks queued earlier stay queued, and a later `applyRedactions` keeps what `redact` removed. `overlay:` is what is drawn over a region, a black box by default: `PdfRedactionOverlay.fill(PdfColor.red)` for another colour, `PdfRedactionOverlay.none()` for no box at all. An image under a region keeps a black patch where its pixels were removed whatever the overlay.
 
 ### Build from scratch
 
@@ -614,7 +649,7 @@ How do you know what to keep? Each capability covers a small set of methods. Cor
 | Capability | Keep it if you call | Also brings | Adds (native) |
 |---|---|---|---|
 | `core` | everything else — merge, split, forms, watermark, encrypt, build… | — | always included (~6.7 MB) |
-| `render` | `doc.render()`, `editor.reduceImages()`, the `compress` one-shot, `editor.addRedaction()`, `editor.applyRedactions()`, the `applyRedactions` one-shot | — | +4.8 MB |
+| `render` | `doc.render()`, `editor.reduceImages()`, the `compress` one-shot, `editor.redact()`, `editor.markRedaction()`, `editor.applyRedactions()`, the `applyRedactions` one-shot | — | +4.8 MB |
 | `signatures` | `sign()`, `doc.signatures()`, `doc.verifySignatures()` | — | +1.0 MB |
 | `pdfa` | `doc.validatePdfA()`, `doc.validatePdfUa()`, `convertToPdfA` | — | +0.1 MB |
 | `extract` | `doc.extractText()`, `doc.search()`, `doc.classifyPages()`, `doc.classifyDocument()` | — | +3.2 MB |

@@ -139,6 +139,33 @@ void main() {
       );
     });
 
+    test('the PdfFormFieldValue factories build the subclasses', () {
+      expect(const PdfFormFieldValue.text('a'), const PdfTextValue('a'));
+      expect(
+        const PdfFormFieldValue.checked(true),
+        const PdfCheckedValue(true),
+      );
+      expect(const PdfFormFieldValue.choice('a'), const PdfChoiceValue('a'));
+      expect(
+        const PdfFormFieldValue.choices(['a', 'b']),
+        const PdfMultiChoiceValue(['a', 'b']),
+      );
+      expect(const PdfFormFieldValue.none(), const PdfNoValue());
+    });
+
+    test('PdfRedactionOverlay', () {
+      expectValue<PdfRedactionOverlay>(
+        const PdfRedactionOverlay.fill(PdfColor.black),
+        const PdfRedactionOverlay.fill(PdfColor.black),
+        const PdfRedactionOverlay.none(),
+      );
+      expectValue<PdfRedactionOverlay>(
+        const PdfRedactionOverlay.fill(PdfColor.black),
+        const PdfRedactionOverlay.fill(PdfColor(0, 0, 0)),
+        const PdfRedactionOverlay.fill(PdfColor.red),
+      );
+    });
+
     test('PdfSearchHit', () {
       const rect = PdfRect(x: 1, y: 2, width: 3, height: 4);
       expectValue(

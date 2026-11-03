@@ -59,6 +59,7 @@ export 'src/types/pdf_params.dart'
         PdfWatermarkExact,
         PdfWatermarkTiled;
 export 'src/types/pdf_rect.dart';
+export 'src/types/pdf_redaction_overlay.dart' show PdfRedactionOverlay;
 export 'src/types/pdf_redaction_report.dart';
 export 'src/types/pdf_render.dart'
     show PdfRenderFormat, PdfRenderSize, PdfRenderedPage;

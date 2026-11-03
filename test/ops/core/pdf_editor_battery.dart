@@ -395,12 +395,12 @@ void registerEditorTests(Pdf Function() createPdf) {
       final editor = await pdf.edit(src(formBytes));
 
       expect(await editor.redactionCount(0), 0);
-      await editor.addRedaction(
+      await editor.markRedaction(
         0,
         const PdfRect(x: 50, y: 50, width: 100, height: 20),
       );
       expect(await editor.redactionCount(0), 1);
-      await editor.addRedaction(
+      await editor.markRedaction(
         0,
         const PdfRect(x: 50, y: 100, width: 100, height: 20),
       );
@@ -411,7 +411,7 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('addRedaction + applyRedactions produces valid PDF', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
-      await editor.addRedaction(
+      await editor.markRedaction(
         0,
         const PdfRect(x: 50, y: 650, width: 300, height: 100),
       );
@@ -427,7 +427,7 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('applyRedactions removes glyphs and reports the count', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(croppedPagePdf));
-      await editor.addRedaction(
+      await editor.markRedaction(
         0,
         const PdfRect(x: 90, y: 385, width: 200, height: 40),
       );
@@ -452,8 +452,8 @@ void registerEditorTests(Pdf Function() createPdf) {
         final pdf = createPdf();
         final editor = await pdf.edit(src(redactionCountsPdf));
         const box = PdfRect(x: 20, y: 20, width: 100, height: 100);
-        await editor.addRedaction(0, box);
-        await editor.addRedaction(1, box);
+        await editor.markRedaction(0, box);
+        await editor.markRedaction(1, box);
         final report = await editor.applyRedactions();
         await editor.dispose();
         expect(report.regions, 2, reason: 'one box on each page');
@@ -636,7 +636,7 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('incremental form fill and page rotation read back', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(fFormFields));
-      await editor.setFormFieldValue('fullname', 'Ada');
+      await editor.field('fullname').setValue(PdfFormFieldValue.text('Ada'));
       await editor.setRotation(PdfPages.single(0), PdfRotation.r90);
       final out = await saveIncremental(editor, fFormFields);
       final doc = await pdf.open(src(out));
@@ -685,7 +685,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       (
         'applyRedactions',
         (e) async {
-          await e.addRedaction(
+          await e.markRedaction(
             0,
             const PdfRect(x: 0, y: 0, width: 100, height: 100),
           );
@@ -714,7 +714,7 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('a DocMDP level 1 certification refuses even a field value', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(certifiedPdf(1)));
-      await editor.setFormFieldValue('name', 'Ada');
+      await editor.field('name').setValue(PdfFormFieldValue.text('Ada'));
       await expectLater(
         editor.save(TestSink(), options: const PdfSaveOptions.incremental()),
         throwsA(isA<PdfIncrementalRefused>()),
@@ -726,7 +726,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final source = certifiedPdf(2);
       final editor = await pdf.edit(src(source));
-      await editor.setFormFieldValue('name', 'Ada');
+      await editor.field('name').setValue(PdfFormFieldValue.text('Ada'));
       final out = await saveIncremental(editor, source);
       final doc = await pdf.open(src(out));
       final fields = await doc.formFields();
@@ -1999,7 +1999,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final e = await createPdf().edit(src(minimalPdf));
       await e.addWatermark('COMPOWM', pages: PdfPages.single(0));
       await e.addStamp(
-        0,
+        PdfPages.single(0),
         type: PdfStampType.draft,
         rect: const PdfRect(x: 50, y: 50, width: 200, height: 60),
       );
@@ -2028,7 +2028,7 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('watermark after stamp keeps both', () async {
       final e = await createPdf().edit(src(minimalPdf));
       await e.addStamp(
-        0,
+        PdfPages.single(0),
         type: PdfStampType.draft,
         rect: const PdfRect(x: 50, y: 50, width: 200, height: 60),
       );
@@ -2206,7 +2206,9 @@ void registerEditorTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final formBytes = fFormFields;
       final editor = await pdf.edit(src(formBytes));
-      await editor.setFormFieldValue('fullname', 'Jane Roe');
+      await editor
+          .field('fullname')
+          .setValue(PdfFormFieldValue.text('Jane Roe'));
       await editor.flattenForms();
       final sink = TestSink();
       await editor.save(sink);
@@ -2226,7 +2228,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       // Session 1: fill and save, WITHOUT flattening.
       final e1 = await pdf.edit(src(fFormFields));
-      await e1.setFormFieldValue('fullname', 'Jane Roe');
+      await e1.field('fullname').setValue(PdfFormFieldValue.text('Jane Roe'));
       final filledSink = TestSink();
       await e1.save(filledSink);
       await e1.dispose();
@@ -2323,7 +2325,7 @@ void registerEditorTests(Pdf Function() createPdf) {
         // The literal repro from issue #215: a string value on a /Btn field.
         final pdf = createPdf();
         final editor = await pdf.edit(src(uncheckedButtonForm));
-        await editor.setFormFieldValue('agree', 'Yes');
+        await editor.field('agree').setValue(PdfFormFieldValue.text('Yes'));
         await editor.flattenForms();
         final sink = TestSink();
         await editor.save(sink);
@@ -2344,7 +2346,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       // entry in its /AP /N and leaves the box blank.
       final pdf = createPdf();
       final editor = await pdf.edit(src(uncheckedButtonForm));
-      await editor.setFormFieldValue('optin', 'On');
+      await editor.field('optin').setValue(PdfFormFieldValue.text('On'));
       await editor.flattenForms();
       final sink = TestSink();
       await editor.save(sink);
@@ -2361,7 +2363,7 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('setFormFieldValue selects a radio kid', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(uncheckedButtonForm));
-      await editor.setFormFieldValue('color', 'Red');
+      await editor.field('color').setValue(PdfFormFieldValue.text('Red'));
       await editor.flattenForms();
       final sink = TestSink();
       await editor.save(sink);
@@ -2378,7 +2380,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       // in-session field map and must read the persisted /V + /AS.
       final pdf = createPdf();
       final e1 = await pdf.edit(src(uncheckedButtonForm));
-      await e1.setFormFieldValue('agree', 'Yes');
+      await e1.field('agree').setValue(PdfFormFieldValue.text('Yes'));
       final filled = TestSink();
       await e1.save(filled);
       await e1.dispose();
@@ -2400,7 +2402,7 @@ void registerEditorTests(Pdf Function() createPdf) {
     test('setCheckboxFieldValue checks a box named /Yes', () async {
       final pdf = createPdf();
       final editor = await pdf.edit(src(uncheckedButtonForm));
-      await editor.setCheckboxFieldValue('agree', true);
+      await editor.field('agree').setValue(PdfFormFieldValue.checked(true));
       await editor.flattenForms();
       final sink = TestSink();
       await editor.save(sink);
@@ -2417,7 +2419,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       // supply it. A hardcoded /Yes leaves this box blank.
       final pdf = createPdf();
       final editor = await pdf.edit(src(uncheckedButtonForm));
-      await editor.setCheckboxFieldValue('optin', true);
+      await editor.field('optin').setValue(PdfFormFieldValue.checked(true));
       await editor.flattenForms();
       final sink = TestSink();
       await editor.save(sink);
@@ -2435,13 +2437,13 @@ void registerEditorTests(Pdf Function() createPdf) {
       // Round trip both ways: check, save, reopen, clear, flatten.
       final pdf = createPdf();
       final e1 = await pdf.edit(src(uncheckedButtonForm));
-      await e1.setCheckboxFieldValue('agree', true);
+      await e1.field('agree').setValue(PdfFormFieldValue.checked(true));
       final checked = TestSink();
       await e1.save(checked);
       await e1.dispose();
 
       final e2 = await pdf.edit(src(checked.takeBytes()));
-      await e2.setCheckboxFieldValue('agree', false);
+      await e2.field('agree').setValue(PdfFormFieldValue.checked(false));
       await e2.flattenForms();
       final flat = TestSink();
       await e2.save(flat);
@@ -2462,8 +2464,8 @@ void registerEditorTests(Pdf Function() createPdf) {
       for (final word in const ['Off', 'off', 'No', 'false', '0']) {
         final pdf = createPdf();
         final editor = await pdf.edit(src(uncheckedButtonForm));
-        await editor.setFormFieldValue('agree', 'Yes');
-        await editor.setFormFieldValue('agree', word);
+        await editor.field('agree').setValue(PdfFormFieldValue.text('Yes'));
+        await editor.field('agree').setValue(PdfFormFieldValue.text(word));
         await editor.flattenForms();
         final sink = TestSink();
         await editor.save(sink);
@@ -2481,7 +2483,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       () async {
         final pdf = createPdf();
         final editor = await pdf.edit(src(uncheckedButtonForm));
-        await editor.setFormFieldValue('agree', 'Maybe');
+        await editor.field('agree').setValue(PdfFormFieldValue.text('Maybe'));
         await editor.flattenForms();
         final sink = TestSink();
         await editor.save(sink);
@@ -2503,7 +2505,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       // 200..260 on a 612pt page.
       final pdf = createPdf();
       final editor = await pdf.edit(src(uncheckedButtonForm));
-      await editor.setFormFieldValue('color', 'Red');
+      await editor.field('color').setValue(PdfFormFieldValue.text('Red'));
       await editor.flattenForms();
       final sink = TestSink();
       await editor.save(sink);
@@ -2542,7 +2544,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       // can only mean "off" once the widget has said it offers no such state.
       final pdf = createPdf();
       final editor = await pdf.edit(src(yesNoRadioForm));
-      await editor.setFormFieldValue('answer', 'No');
+      await editor.field('answer').setValue(PdfFormFieldValue.text('No'));
       await editor.flattenForms();
       final sink = TestSink();
       await editor.save(sink);
@@ -2584,7 +2586,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       // answer for an ambiguous word.
       final pdf = createPdf();
       final editor = await pdf.edit(src(uncheckedButtonForm));
-      await editor.setFormFieldValue('color', 'on');
+      await editor.field('color').setValue(PdfFormFieldValue.text('on'));
       await editor.flattenForms();
       final sink = TestSink();
       await editor.save(sink);
@@ -2654,7 +2656,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
       await editor.addStamp(
-        0,
+        PdfPages.single(0),
         type: PdfStampType.approved,
         rect: const PdfRect(x: 50, y: 50, width: 200, height: 60),
       );
@@ -2672,7 +2674,11 @@ void registerEditorTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
       const rect = PdfRect(x: 50, y: 650, width: 200, height: 60);
-      await editor.addStamp(0, type: PdfStampType.approved, rect: rect);
+      await editor.addStamp(
+        PdfPages.single(0),
+        type: PdfStampType.approved,
+        rect: rect,
+      );
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -2693,7 +2699,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final editor = await pdf.edit(src(minimalPdf));
       await editor.addImageStamp(
-        0,
+        PdfPages.single(0),
         src(minimalPng),
         rect: const PdfRect(x: 50, y: 50, width: 100, height: 100),
       );
@@ -2712,7 +2718,7 @@ void registerEditorTests(Pdf Function() createPdf) {
         // holding one filled text widget (Datum = 01.01.2030).
         final e1 = await pdf.edit(src(indirectAnnotsForm));
         await e1.addImageStamp(
-          0,
+          PdfPages.single(0),
           src(minimalPng),
           rect: const PdfRect(x: 210, y: 478, width: 300, height: 45),
         );
@@ -2750,7 +2756,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       // have drawn nothing. Proof is SEMANTIC — rendered pixels.
       final pdf = createPdf();
       final e1 = await pdf.edit(src(emptyApTextForm));
-      await e1.setFormFieldValue('field', 'JANEROE');
+      await e1.field('field').setValue(PdfFormFieldValue.text('JANEROE'));
       final filled = TestSink();
       await e1.save(filled);
       await e1.dispose();
@@ -2798,7 +2804,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final editor = await pdf.edit(src(fBlankA4));
       await editor.addImageStamp(
-        0,
+        PdfPages.single(0),
         src(transparentPng),
         rect: const PdfRect(x: 0, y: 0, width: 600, height: 850),
       );
@@ -2896,13 +2902,13 @@ void registerEditorTests(Pdf Function() createPdf) {
       expect(extracted.takeBytes(), fileData);
     }, timeout: t(1));
 
-    test('eraseRegions produces valid output', () async {
+    test('redact with no overlay produces valid output', () async {
       final pdf = createPdf();
       final formBytes = fFormFields;
       final editor = await pdf.edit(src(formBytes));
-      await editor.eraseRegions(0, [
+      await editor.redact(0, [
         const PdfRect(x: 50, y: 700, width: 200, height: 30),
-      ]);
+      ], overlay: const PdfRedactionOverlay.none());
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -2911,41 +2917,47 @@ void registerEditorTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
-    test('eraseRegions destroys only the region it was given', () async {
-      // The marker sits at (100, 400) on the cropped fixture. A region
-      // over it must destroy it; a region elsewhere on the page must
-      // leave it extractable — the pair pins the rectangle's meaning.
-      final pdf = createPdf();
+    test(
+      'redact with no overlay destroys only the region it was given',
+      () async {
+        // The marker sits at (100, 400) on the cropped fixture. A region
+        // over it must destroy it; a region elsewhere on the page must
+        // leave it extractable — the pair pins the rectangle's meaning.
+        final pdf = createPdf();
 
-      Future<String> eraseThenExtract(PdfRect region) async {
-        final editor = await pdf.edit(src(croppedPagePdf));
-        await editor.eraseRegions(0, [region]);
-        final sink = TestSink();
-        await editor.save(sink);
-        await editor.dispose();
-        final doc = await pdf.open(src(sink.takeBytes()));
-        final text = await extractTextToString(
-          doc,
-          pages: const PdfPages.all(),
+        Future<String> eraseThenExtract(PdfRect region) async {
+          final editor = await pdf.edit(src(croppedPagePdf));
+          await editor.redact(0, [
+            region,
+          ], overlay: const PdfRedactionOverlay.none());
+          final sink = TestSink();
+          await editor.save(sink);
+          await editor.dispose();
+          final doc = await pdf.open(src(sink.takeBytes()));
+          final text = await extractTextToString(
+            doc,
+            pages: const PdfPages.all(),
+          );
+          await doc.dispose();
+          return text;
+        }
+
+        expect(
+          await eraseThenExtract(
+            const PdfRect(x: 90, y: 385, width: 200, height: 40),
+          ),
+          isNot(contains('CROP')),
         );
-        await doc.dispose();
-        return text;
-      }
-
-      expect(
-        await eraseThenExtract(
-          const PdfRect(x: 90, y: 385, width: 200, height: 40),
-        ),
-        isNot(contains('CROP')),
-      );
-      expect(
-        await eraseThenExtract(
-          const PdfRect(x: 90, y: 100, width: 200, height: 40),
-        ),
-        contains('CROP'),
-        reason: 'a region far from the text must leave it alone',
-      );
-    }, timeout: t(1));
+        expect(
+          await eraseThenExtract(
+            const PdfRect(x: 90, y: 100, width: 200, height: 40),
+          ),
+          contains('CROP'),
+          reason: 'a region far from the text must leave it alone',
+        );
+      },
+      timeout: t(1),
+    );
 
     test('flattenForms preserves page count', () async {
       final pdf = createPdf();
@@ -2980,7 +2992,7 @@ void registerEditorTests(Pdf Function() createPdf) {
 
       final editor = await pdf.edit(src(merged));
       expect(await editor.pageCount(), 2);
-      await editor.flattenForms(page: 0);
+      await editor.flattenForms(pages: PdfPages.single(0));
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -3012,8 +3024,12 @@ void registerEditorTests(Pdf Function() createPdf) {
       final editor = await pdf.edit(src(mergeSink.takeBytes()));
       expect(await editor.pageCount(), 2);
       const rect = PdfRect(x: 50, y: 650, width: 200, height: 60);
-      await editor.addStamp(0, type: PdfStampType.approved, rect: rect);
-      await editor.flattenAnnotations(page: 0);
+      await editor.addStamp(
+        PdfPages.single(0),
+        type: PdfStampType.approved,
+        rect: rect,
+      );
+      await editor.flattenAnnotations(pages: PdfPages.single(0));
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
@@ -3048,8 +3064,16 @@ void registerEditorTests(Pdf Function() createPdf) {
       await pdf.merge([src(minimalPdf), src(minimalPdf)], mergeSink);
       final editor = await pdf.edit(src(mergeSink.takeBytes()));
       const rect = PdfRect(x: 50, y: 650, width: 200, height: 60);
-      await editor.addStamp(0, type: PdfStampType.approved, rect: rect);
-      await editor.addStamp(1, type: PdfStampType.draft, rect: rect);
+      await editor.addStamp(
+        PdfPages.single(0),
+        type: PdfStampType.approved,
+        rect: rect,
+      );
+      await editor.addStamp(
+        PdfPages.single(1),
+        type: PdfStampType.draft,
+        rect: rect,
+      );
       final stamped = TestSink();
       await editor.save(stamped);
       await editor.dispose();
@@ -3069,7 +3093,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await before.dispose();
 
       final flat = await pdf.edit(src(stampedBytes));
-      await flat.flattenAnnotations(page: 0);
+      await flat.flattenAnnotations(pages: PdfPages.single(0));
       final sink = TestSink();
       await flat.save(sink);
       await flat.dispose();
@@ -3160,7 +3184,9 @@ void registerEditorTests(Pdf Function() createPdf) {
       // A listed field is a reachable field: fill it, flatten, read it back
       // out of the page content.
       final filler = await pdf.edit(src(mergedBytes));
-      await filler.setFormFieldValue('fullname', 'MERGEDFILL');
+      await filler
+          .field('fullname')
+          .setValue(PdfFormFieldValue.text('MERGEDFILL'));
       await filler.flattenForms();
       final filled = TestSink();
       await filler.save(filled);
@@ -3287,7 +3313,7 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.mergeFrom(src(pagePrunePdf), pages: PdfPages.list([2]));
       await expectLater(
         editor.addStamp(
-          1,
+          PdfPages.single(1),
           type: PdfStampType.draft,
           rect: const PdfRect(x: 50, y: 50, width: 200, height: 60),
         ),
@@ -3330,18 +3356,20 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.mergeFrom(src(pagePrunePdf), pages: PdfPages.list([2]));
       const region = PdfRect(x: 0, y: 0, width: 10, height: 10);
       await expectLater(
-        editor.addRedaction(1, region),
+        editor.markRedaction(1, region),
         throwsA(isA<PdfUnsupported>()),
       );
       await expectLater(
-        editor.eraseRegions(1, [region]),
+        editor.redact(1, [region], overlay: const PdfRedactionOverlay.none()),
         throwsA(isA<PdfUnsupported>()),
       );
       await expectLater(
-        editor.flattenForms(page: 1),
+        editor.flattenForms(pages: PdfPages.single(1)),
         throwsA(isA<PdfUnsupported>()),
       );
-      await editor.eraseRegions(0, [region]);
+      await editor.redact(0, [
+        region,
+      ], overlay: const PdfRedactionOverlay.none());
       await editor.dispose();
     }, timeout: t(1));
 
@@ -3533,12 +3561,229 @@ void registerEditorTests(Pdf Function() createPdf) {
       expect(markers, [mergedMarkers[1], mergedMarkers[3]]);
     }, timeout: t(1));
 
+    test('clearRedactions drops every queued mark and applies none', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(croppedPagePdf));
+      await editor.markRedaction(
+        0,
+        const PdfRect(x: 90, y: 385, width: 200, height: 40),
+      );
+      await editor.markRedaction(
+        0,
+        const PdfRect(x: 90, y: 100, width: 200, height: 40),
+      );
+      expect(await editor.redactionCount(0), 2);
+      await editor.clearRedactions();
+      expect(await editor.redactionCount(0), 0);
+      final report = await editor.applyRedactions();
+      expect(report.regions, 0);
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final doc = await pdf.open(src(sink.takeBytes()));
+      expect(
+        await extractTextToString(doc, pages: const PdfPages.all()),
+        contains('CROP'),
+      );
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('redact removes the text and reports it', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(croppedPagePdf));
+      final report = await editor.redact(0, [
+        const PdfRect(x: 90, y: 385, width: 200, height: 40),
+      ]);
+      expect(report.regions, 1);
+      expect(report.glyphsRemoved, greaterThan(0));
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final doc = await pdf.open(src(sink.takeBytes()));
+      expect(
+        await extractTextToString(doc, pages: const PdfPages.all()),
+        isNot(contains('CROP')),
+      );
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('redact applies only its own regions and leaves the queued marks, '
+        'and a later apply keeps its removal', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(croppedPagePdf));
+      const away = PdfRect(x: 90, y: 100, width: 200, height: 40);
+      await editor.markRedaction(0, away);
+      await editor.redact(0, [
+        const PdfRect(x: 90, y: 385, width: 200, height: 40),
+      ], overlay: const PdfRedactionOverlay.none());
+      expect(
+        await editor.redactionCount(0),
+        1,
+        reason: 'redact does not touch the queued mark',
+      );
+      final applied = await editor.applyRedactions();
+      expect(applied.regions, 1, reason: 'only the queued mark is applied');
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final doc = await pdf.open(src(sink.takeBytes()));
+      expect(
+        await extractTextToString(doc, pages: const PdfPages.all()),
+        isNot(contains('CROP')),
+        reason: 'applying the mark must not bring back what redact removed',
+      );
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('redact with no region throws and queues nothing', () async {
+      final editor = await createPdf().edit(src(croppedPagePdf));
+      await expectLater(
+        editor.redact(0, const []),
+        throwsA(isA<PdfInvalidArgument>()),
+      );
+      expect(await editor.isModified(), isFalse);
+      await editor.dispose();
+    }, timeout: t(1));
+
+    test('an overlay of none draws no box and a fill draws one', () async {
+      final pdf = createPdf();
+      Future<int> inkAfter(PdfRedactionOverlay? overlay) async {
+        final editor = await pdf.edit(src(croppedPagePdf));
+        if (overlay != null) {
+          await editor.redact(0, [
+            const PdfRect(x: 90, y: 385, width: 200, height: 40),
+          ], overlay: overlay);
+        }
+        final sink = TestSink();
+        await editor.save(sink);
+        await editor.dispose();
+        final doc = await pdf.open(src(sink.takeBytes()));
+        final frames = await renderToMemory(
+          doc,
+          pages: const PdfPages.single(0),
+          size: const PdfRenderSize.dpi(72),
+        );
+        await doc.dispose();
+        var ink = 0;
+        for (final p in img.decodePng(frames.single.data)!) {
+          if (p.r < 250 || p.g < 250 || p.b < 250) ink++;
+        }
+        return ink;
+      }
+
+      final before = await inkAfter(null);
+      final erased = await inkAfter(const PdfRedactionOverlay.none());
+      final boxed = await inkAfter(
+        const PdfRedactionOverlay.fill(PdfColor.black),
+      );
+      expect(erased, lessThan(before), reason: 'the erased text leaves no ink');
+      expect(
+        boxed,
+        greaterThan(erased + 4000),
+        reason: 'a 200 x 40 box is 8000 pixels of ink',
+      );
+    }, timeout: t(2));
+
+    test('a stamp over a page set lands on those pages only', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(dashTextThreePagePdf));
+      await editor.addStamp(
+        PdfPages.list([0, 2]),
+        type: PdfStampType.draft,
+        rect: const PdfRect(x: 50, y: 50, width: 100, height: 40),
+      );
+      await editor.addImageStamp(
+        const PdfPages.single(1),
+        src(minimalPng),
+        rect: const PdfRect(x: 50, y: 50, width: 40, height: 40),
+      );
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final doc = await pdf.open(src(sink.takeBytes()));
+      for (var page = 0; page < 3; page++) {
+        final stamps = (await doc.annotations(
+          page,
+        )).where((a) => a.subtype == PdfAnnotationSubtype.stamp);
+        expect(stamps, hasLength(1), reason: 'page $page');
+      }
+      await doc.dispose();
+    }, timeout: t(1));
+
+    test('a stamp or a flatten over a bad page set changes no page', () async {
+      final pdf = createPdf();
+      final editor = await pdf.edit(src(dashTextThreePagePdf));
+      const rect = PdfRect(x: 50, y: 50, width: 100, height: 40);
+      await expectLater(
+        editor.addStamp(
+          PdfPages.list([0, 9]),
+          type: PdfStampType.draft,
+          rect: rect,
+        ),
+        throwsA(isA<PdfPageRangeError>()),
+      );
+      await expectLater(
+        editor.addImageStamp(
+          PdfPages.list([0, 9]),
+          src(minimalPng),
+          rect: rect,
+        ),
+        throwsA(isA<PdfPageRangeError>()),
+      );
+      await expectLater(
+        editor.addStamp(
+          PdfPages.list([1, 1]),
+          type: PdfStampType.draft,
+          rect: rect,
+        ),
+        throwsA(isA<PdfInvalidArgument>()),
+      );
+      await expectLater(
+        editor.flattenForms(pages: PdfPages.list([0, 9])),
+        throwsA(isA<PdfPageRangeError>()),
+      );
+      await expectLater(
+        editor.flattenAnnotations(pages: const PdfPages.list([])),
+        throwsA(isA<PdfInvalidArgument>()),
+      );
+      expect(await editor.isModified(), isFalse);
+      await editor.dispose();
+    }, timeout: t(1));
+
+    test('the one-shot door runs an edit of this unit', () async {
+      final pdf = createPdf();
+      final sink = TestSink();
+      final report = await pdf.edits(src(croppedPagePdf), sink).redact(0, [
+        const PdfRect(x: 90, y: 385, width: 200, height: 40),
+      ]);
+      expect(report.glyphsRemoved, greaterThan(0));
+      final doc = await pdf.open(src(sink.takeBytes()));
+      expect(
+        await extractTextToString(doc, pages: const PdfPages.all()),
+        isNot(contains('CROP')),
+      );
+      await doc.dispose();
+      final stamped = TestSink();
+      await pdf
+          .edits(src(dashTextThreePagePdf), stamped)
+          .addStamp(
+            const PdfPages.all(),
+            type: PdfStampType.approved,
+            rect: const PdfRect(x: 10, y: 10, width: 80, height: 30),
+          );
+      final out = await pdf.open(src(stamped.takeBytes()));
+      for (var page = 0; page < 3; page++) {
+        expect(await out.annotations(page), hasLength(1), reason: 'page $page');
+      }
+      await out.dispose();
+    }, timeout: t(1));
+
     test(
-      'clearEraseRegions does not error on a page with no queued erase',
+      'clearRedactions does not error on a document with no queued mark',
       () async {
         final pdf = createPdf();
         final editor = await pdf.edit(src(minimalPdf));
-        await editor.clearEraseRegions(0);
+        await editor.clearRedactions();
         final sink = TestSink();
         await editor.save(sink);
         await editor.dispose();

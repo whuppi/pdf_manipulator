@@ -27,6 +27,7 @@ import 'package:pdf_manipulator/src/types/pdf_page_info.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
+import 'package:pdf_manipulator/src/types/pdf_redaction_overlay.dart';
 import 'package:pdf_manipulator/src/types/pdf_redaction_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_render.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
@@ -623,6 +624,17 @@ Map<String, Object?> encodeColorArgs(PdfColor color) => {
   'g': color.g,
   'b': color.b,
 };
+
+/// Encodes a redaction overlay: `overlay` `fill` with `r`, `g`, `b`, or
+/// `overlay` `none`.
+Map<String, Object?> encodeRedactionOverlay(PdfRedactionOverlay overlay) =>
+    switch (overlay) {
+      PdfRedactionFill(:final color) => {
+        'overlay': 'fill',
+        ...encodeColorArgs(color),
+      },
+      PdfRedactionNone() => {'overlay': 'none'},
+    };
 
 /// Encodes a set of [PdfFormFieldFlag] as the OR of their `/Ff` bits.
 int encodeFormFieldFlags(Set<PdfFormFieldFlag> flags) =>

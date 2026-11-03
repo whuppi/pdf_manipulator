@@ -203,8 +203,8 @@ void registerDeterminismTests(Pdf Function() createPdf) {
       final form = radioGroupsForm(groups);
       Future<Uint8List> run() => _save(pdf, form, (editor) async {
         for (var i = 0; i < groups; i++) {
-          await editor.setFormFieldValue('g$i', 'On');
-          await editor.setFormFieldTooltip('g$i.k', 'tip $i');
+          await editor.field('g$i').setValue(PdfFormFieldValue.text('On'));
+          await editor.field('g$i.k').setTooltip('tip $i');
         }
       });
 

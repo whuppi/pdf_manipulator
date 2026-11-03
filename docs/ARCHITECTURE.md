@@ -153,13 +153,13 @@ Each Dart call is still a real round-trip to the engine (`_mutate` →
 the call, not at save. Only the *writing* is deferred.
 
 **Destructive ops are the exception: they do their work at call time.**
-`applyRedactions` and `eraseRegions` both run the shared
+`applyRedactions` and `redact` both run the shared
 `destroy_regions_on_page` core immediately — prune glyphs, prune images,
 scrub font subsets — and stage the *result*, not the request:
 
 ```
 editor.applyRedactions()
-  │  RegionSet = /Redact annots + regions queued by addRedaction
+  │  RegionSet = /Redact annots + regions queued by markRedaction
   │  destroy_regions_on_page()          ← the removal happens NOW
   ├─→ redacted_content[page]      = the rewritten content bytes
   └─→ redacted_orphan_ids        += object ids of the ORIGINAL /Contents
@@ -179,9 +179,11 @@ there is no parameter form of "these glyphs are gone." Running it eagerly
 also makes the returned report (regions, glyphs removed, bytes removed)
 and `redactionCount()` truthful before the file is written.
 
-Redaction is therefore a two-phase lifecycle — `addRedaction` marks (lazy,
+Redaction is therefore a two-phase lifecycle — `markRedaction` marks (lazy,
 like every other op), `applyRedactions` destroys (eager) — while
-`eraseRegions` is the same destructive core in a single call.
+`redact` is the same destructive core in a single call over its own
+regions. A page that was destroyed before is destroyed again over its
+earlier regions, so the later record keeps what the earlier one removed.
 
 ---
 

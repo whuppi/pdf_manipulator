@@ -1583,12 +1583,13 @@ class _SugarTabState extends State<_SugarTab>
                       onRun: () => _opToFile(
                           'Erase',
                           'erased.pdf',
-                          (sink) => _pdf.eraseRegions(src, sink,
-                                  page: 0,
-                                  regions: [
-                                    const PdfRect(
-                                        x: 50, y: 700, width: 200, height: 30)
-                                  ]))),
+                          (sink) => _pdf.edits(src, sink).redact(
+                              0,
+                              [
+                                const PdfRect(
+                                    x: 50, y: 700, width: 200, height: 30)
+                              ],
+                              overlay: const PdfRedactionOverlay.none()))),
                   _Section('Stamps'),
                   _Op(
                       icon: Icons.approval,
@@ -1981,7 +1982,7 @@ class _EditorTabState extends State<_EditorTab>
                       title: 'Add stamp on page 0',
                       loading: loading,
                       onRun: () => _edit('Stamp', (e) async {
-                            await e.addStamp(0,
+                            await e.addStamp(PdfPages.single(0),
                                 type: PdfStampType.draft,
                                 rect: const PdfRect(
                                     x: 50, y: 50, width: 200, height: 60));
@@ -1996,8 +1997,8 @@ class _EditorTabState extends State<_EditorTab>
                             if (imgs == null || imgs.isEmpty) {
                               return _saveEditor(e);
                             }
-                            await e.addImageStamp(
-                                0, DemoSource(imgs.first.bytes),
+                            await e.addImageStamp(PdfPages.single(0),
+                                DemoSource(imgs.first.bytes),
                                 rect: const PdfRect(
                                     x: 100, y: 100, width: 150, height: 150));
                             return _saveEditor(e);
@@ -2019,10 +2020,13 @@ class _EditorTabState extends State<_EditorTab>
                       title: 'Erase region on page 0',
                       loading: loading,
                       onRun: () => _edit('Erase', (e) async {
-                            await e.eraseRegions(0, [
-                              const PdfRect(
-                                  x: 50, y: 700, width: 200, height: 30)
-                            ]);
+                            await e.redact(
+                                0,
+                                [
+                                  const PdfRect(
+                                      x: 50, y: 700, width: 200, height: 30)
+                                ],
+                                overlay: const PdfRedactionOverlay.none());
                             return _saveEditor(e);
                           })),
                   _Op(
@@ -2057,7 +2061,9 @@ class _EditorTabState extends State<_EditorTab>
                       subtitle: 'fieldName="name", value="John"',
                       loading: loading,
                       onRun: () => _edit('SetField', (e) async {
-                            await e.setFormFieldValue('name', 'John');
+                            await e
+                                .field('name')
+                                .setValue(PdfFormFieldValue.text('John'));
                             return _saveEditor(e);
                           })),
                   _Op(
@@ -2068,8 +2074,9 @@ class _EditorTabState extends State<_EditorTab>
                       loading: loading,
                       onRun: () => _edit('EmojiFill', (e) async {
                             await _registerEmojiFont();
-                            await e.setFormFieldValue(
-                                'name', 'Loved it \u{1F600}\u{1F389}');
+                            await e.field('name').setValue(
+                                PdfFormFieldValue.text(
+                                    'Loved it \u{1F600}\u{1F389}'));
                             await e.flattenForms();
                             return _saveEditor(e);
                           })),
@@ -2079,7 +2086,7 @@ class _EditorTabState extends State<_EditorTab>
                       title: 'Add redaction + count + apply',
                       loading: loading,
                       onRun: () => _edit('Redact', (e) async {
-                            await e.addRedaction(
+                            await e.markRedaction(
                                 0,
                                 const PdfRect(
                                     x: 50, y: 700, width: 200, height: 30));

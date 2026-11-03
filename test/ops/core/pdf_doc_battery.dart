@@ -798,17 +798,20 @@ void registerDocTests(Pdf Function() createPdf) {
       'movePage from': (e) => e.movePage(from: 1, to: 0),
       'movePage to': (e) => e.movePage(from: 0, to: 1),
       'keepPages': (e) => e.keepPages([1]),
-      'eraseRegions': (e) => e.eraseRegions(1, [box]),
-      'clearEraseRegions': (e) => e.clearEraseRegions(1),
-      'flattenForms': (e) => e.flattenForms(page: 1),
-      'flattenAnnotations': (e) => e.flattenAnnotations(page: 1),
+      'redact': (e) =>
+          e.redact(1, [box], overlay: const PdfRedactionOverlay.none()),
+      'flattenForms': (e) => e.flattenForms(pages: PdfPages.single(1)),
+      'flattenAnnotations': (e) =>
+          e.flattenAnnotations(pages: PdfPages.single(1)),
       'pageImages': (e) => e.pageImages(1),
       'setImageBounds': (e) => e.setImageBounds(1, 'Im0', box),
-      'addRedaction': (e) => e.addRedaction(1, box),
+      'markRedaction': (e) => e.markRedaction(1, box),
       'redactionCount': (e) => e.redactionCount(1),
       'addWatermark': (e) => e.addWatermark('W', pages: PdfPages.single(1)),
-      'addStamp': (e) => e.addStamp(1, type: PdfStampType.draft, rect: box),
-      'addImageStamp': (e) => e.addImageStamp(1, src(minimalPng), rect: box),
+      'addStamp': (e) =>
+          e.addStamp(PdfPages.single(1), type: PdfStampType.draft, rect: box),
+      'addImageStamp': (e) =>
+          e.addImageStamp(PdfPages.single(1), src(minimalPng), rect: box),
     };
     for (final entry in editorPageOps.entries) {
       test(

@@ -23,6 +23,7 @@ import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_info.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
+import 'package:pdf_manipulator/src/types/pdf_redaction_overlay.dart';
 import 'package:pdf_manipulator/src/types/pdf_redaction_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_render.dart';
 import 'package:pdf_manipulator/src/types/pdf_sanitize_options.dart';
@@ -271,20 +272,20 @@ abstract class BridgeEditorHandle {
     PdfWatermarkLayer layer = PdfWatermarkLayer.foreground,
   });
 
-  /// Adds a predefined stamp to [page].
+  /// Adds a predefined stamp to every page in [pages].
   PdfTask<void> addStamp(
-    int page, {
+    PdfPages pages, {
     required PdfStampType type,
     required PdfRect rect,
-    double opacity = 1.0,
+    required double opacity,
   });
 
-  /// Adds an image stamp to [page] from [imageData].
+  /// Adds an image stamp to every page in [pages] from [imageData].
   PdfTask<void> addImageStamp(
-    int page,
+    PdfPages pages,
     DataSource imageData, {
     required PdfRect rect,
-    double opacity = 1.0,
+    required double opacity,
   });
 
   // ── Content ──
@@ -298,26 +299,27 @@ abstract class BridgeEditorHandle {
     PdfAttachmentRelationship? relationship,
   });
 
-  /// Erases content within [regions] on [page].
-  PdfTask<void> eraseRegions(int page, List<PdfRect> regions);
+  /// Flattens the interactive form fields on every page in [pages] into
+  /// static content.
+  PdfTask<void> flattenForms(PdfPages pages);
 
-  /// Flattens interactive form fields into static content. `page == null`
-  /// flattens every page; otherwise only that page's widgets.
-  PdfTask<void> flattenForms({int? page});
-
-  /// Flattens annotations into page content. `page == null` flattens every
-  /// page; otherwise only that page's annotations.
-  PdfTask<void> flattenAnnotations({int? page});
-
-  /// Clears the queued destructive-erase regions on [page] without
-  /// applying them.
-  PdfTask<void> clearEraseRegions(int page);
+  /// Flattens the annotations on every page in [pages] into page content.
+  PdfTask<void> flattenAnnotations(PdfPages pages);
 
   /// Sets a form field's value by [fieldName].
   PdfTask<void> setFormFieldValue(String fieldName, String value);
 
   /// Checks or clears the checkbox field identified by [fieldName].
   PdfTask<void> setCheckboxFieldValue(String fieldName, bool checked);
+
+  /// Selects the option [value] of the choice field [fieldName].
+  PdfTask<void> setFormFieldChoice(String fieldName, String value);
+
+  /// Selects the options [values] of the multi-select list box [fieldName].
+  PdfTask<void> setFormFieldChoices(String fieldName, List<String> values);
+
+  /// Clears the value of the form field [fieldName].
+  PdfTask<void> clearFormFieldValue(String fieldName);
 
   /// Crops margins from all pages.
   PdfTask<void> cropMargins({
@@ -347,23 +349,23 @@ abstract class BridgeEditorHandle {
   /// Sets the form field [name]'s required flag.
   PdfTask<void> setFormFieldRequired(String name, bool required);
 
-  /// Sets the form field [name]'s tooltip.
-  PdfTask<void> setFormFieldTooltip(String name, String tooltip);
+  /// Sets the form field [name]'s tooltip; null removes it.
+  PdfTask<void> setFormFieldTooltip(String name, String? tooltip);
 
   /// Sets the form field [name]'s bounding rectangle.
   PdfTask<void> setFormFieldBounds(String name, PdfRect bounds);
 
-  /// Sets the form field [name]'s maximum text length.
-  PdfTask<void> setFormFieldMaxLength(String name, int maxLength);
+  /// Sets the form field [name]'s maximum text length; null removes it.
+  PdfTask<void> setFormFieldMaxLength(String name, int? maxLength);
 
   /// Sets the form field [name]'s text alignment.
   PdfTask<void> setFormFieldAlignment(String name, PdfAlignment alignment);
 
-  /// Sets the form field [name]'s background color.
-  PdfTask<void> setFormFieldBackgroundColor(String name, PdfColor color);
+  /// Sets the form field [name]'s background color; null removes it.
+  PdfTask<void> setFormFieldBackgroundColor(String name, PdfColor? color);
 
-  /// Sets the form field [name]'s border color.
-  PdfTask<void> setFormFieldBorderColor(String name, PdfColor color);
+  /// Sets the form field [name]'s border color; null removes it.
+  PdfTask<void> setFormFieldBorderColor(String name, PdfColor? color);
 
   /// Sets the form field [name]'s border width.
   PdfTask<void> setFormFieldBorderWidth(String name, double width);
@@ -381,8 +383,24 @@ abstract class BridgeEditorHandle {
 
   // ── Redaction ──
 
-  /// Marks a [region] on [page] for redaction.
-  PdfTask<void> addRedaction(int page, PdfRect region, {String? overlayText});
+  /// Marks a [region] on [page] for redaction, to be drawn over with
+  /// [overlay] when it is applied.
+  PdfTask<void> markRedaction(
+    int page,
+    PdfRect region,
+    PdfRedactionOverlay overlay,
+  );
+
+  /// Drops every queued redaction mark.
+  PdfTask<void> clearRedactions();
+
+  /// Redacts [regions] on [page] at once: marks and applies them, and only
+  /// them, leaving the marks queued before as they were.
+  PdfTask<PdfRedactionReport> redact(
+    int page,
+    List<PdfRect> regions,
+    PdfRedactionOverlay overlay,
+  );
 
   /// Returns the number of pending redaction marks on [page].
   PdfTask<int> redactionCount(int page);

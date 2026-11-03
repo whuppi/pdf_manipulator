@@ -1,7 +1,6 @@
 // Members of PdfEditor and PdfDoc that are not on PdfEdits / PdfReads, each
-// with the reason it has no one-shot. The list shrinks as the render, image
-// and sweep tasks move members onto the base classes; the membership test
-// fails on a stale entry.
+// with the reason it has no one-shot. The membership test fails on a stale
+// entry.
 
 /// Reason: an editor read is not an edit, so the one-shot of edits has no use
 /// for it (`Pdf.read` and `PdfDoc` answer it).
@@ -16,14 +15,16 @@ const _merge = 'Pdf.merge is its one-shot';
 /// Reason: the redaction protocol steps are one pass in `redact`.
 const _redactionStep = 'a redaction protocol step; redact is the composite';
 
-/// Reason: not yet moved onto the base class.
-const _moves = 'moves onto the base class in T5d, T7 or the API sweep';
-
 /// Reason: the doc's sync facts are `Pdf.info`.
 const _docFact = 'a sync fact of the open doc; Pdf.info answers it';
 
 /// Reason: lifecycle of an open handle.
 const _lifecycle = 'closes the handle; a one-shot closes its own';
+
+/// Reason: `field` returns the edits of one field on the open editor, and a
+/// one-shot object runs a single call.
+const _field =
+    'the edits of one field on the open editor; a one-shot runs one call';
 
 /// Excluded members by class, then member name, to the reason.
 const oneShotExclusions = <String, Map<String, String>>{
@@ -33,39 +34,13 @@ const oneShotExclusions = <String, Map<String, String>>{
     'isModified': _editorRead,
     'metadata': _editorRead,
     'pageInfo': _editorRead,
-    'mergeFrom': _merge,
-    'reduceImages': _moves,
-    'unembedStandardFonts': _moves,
-    'addStamp': _moves,
-    'addImageStamp': _moves,
-    'embedFile': _moves,
-    'eraseRegions': _moves,
-    'clearEraseRegions': _moves,
-    'flattenForms': _moves,
-    'flattenAnnotations': _moves,
-    'setFormFieldValue': _moves,
-    'setCheckboxFieldValue': _moves,
-    'cropMargins': _moves,
     'pageImages': _editorRead,
-    'setImageBounds': _moves,
-    'removeFormField': _moves,
-    'setFormFieldReadOnly': _moves,
-    'setFormFieldRequired': _moves,
-    'setFormFieldTooltip': _moves,
-    'setFormFieldBounds': _moves,
-    'setFormFieldMaxLength': _moves,
-    'setFormFieldAlignment': _moves,
-    'setFormFieldBackgroundColor': _moves,
-    'setFormFieldBorderColor': _moves,
-    'setFormFieldBorderWidth': _moves,
-    'setFormFieldAppearance': _moves,
-    'setFormFieldFlags': _moves,
-    'convertToPdfA': _moves,
-    'addRedaction': _redactionStep,
+    'mergeFrom': _merge,
+    'field': _field,
+    'markRedaction': _redactionStep,
+    'clearRedactions': _redactionStep,
     'redactionCount': _editorRead,
     'applyRedactions': _redactionStep,
-    'scrubMetadata': _moves,
-    'sanitize': _moves,
     'save': _save,
     'dispose': _lifecycle,
   },

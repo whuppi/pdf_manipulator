@@ -15,6 +15,7 @@ import 'package:pdf_manipulator/src/types/pdf_metadata.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
+import 'package:pdf_manipulator/src/types/pdf_redaction_overlay.dart';
 import 'package:pdf_manipulator/src/types/pdf_render.dart';
 import 'package:pdf_manipulator/src/bridge/protocol/codec.dart';
 import 'package:test/test.dart';
@@ -499,6 +500,18 @@ void main() {
       });
       expect(encodePages(const PdfPages.range(1, 4)), {
         'pages': [1, 2, 3],
+      });
+    });
+  });
+
+  group('encodeRedactionOverlay', () {
+    test('a fill carries its colour and none carries nothing else', () {
+      expect(
+        encodeRedactionOverlay(const PdfRedactionOverlay.fill(PdfColor.red)),
+        {'overlay': 'fill', 'r': 1.0, 'g': 0.0, 'b': 0.0},
+      );
+      expect(encodeRedactionOverlay(const PdfRedactionOverlay.none()), {
+        'overlay': 'none',
       });
     });
   });

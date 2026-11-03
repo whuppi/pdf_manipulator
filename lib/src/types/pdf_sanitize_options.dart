@@ -1,6 +1,6 @@
 import 'package:meta/meta.dart';
 
-/// What `PdfEditor.sanitize` strips from a document. Defaults are what
+/// What `PdfEdits.sanitize` strips from a document. Defaults are what
 /// "sanitizer" means: strip metadata and scripts, keep attachments unless
 /// asked.
 @immutable

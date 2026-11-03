@@ -83,6 +83,135 @@ abstract base class PdfEdits {
       layer: layer,
     ),
   );
+
+  /// Adds a stamp annotation of [type] in [rect] to every page in [pages]
+  /// at [opacity], from 0 (clear) to 1 (opaque). Refuses the same page lists
+  /// as [rotatePages], and a merged-in page; no page is stamped then.
+  PdfTask<void> addStamp(
+    PdfPages pages, {
+    required PdfStampType type,
+    required PdfRect rect,
+    double opacity = 1.0,
+  }) => _run(
+    (handle) =>
+        handle.addStamp(pages, type: type, rect: rect, opacity: opacity),
+  );
+
+  /// Adds a stamp of the image in [image] (PNG or JPEG) in [rect] to every
+  /// page in [pages] at [opacity]. The pages share one copy of the image.
+  /// Refuses the page lists [addStamp] refuses, and an image the engine
+  /// cannot decode; no page is stamped then.
+  PdfTask<void> addImageStamp(
+    PdfPages pages,
+    DataSource image, {
+    required PdfRect rect,
+    double opacity = 1.0,
+  }) => _run(
+    (handle) =>
+        handle.addImageStamp(pages, image, rect: rect, opacity: opacity),
+  );
+
+  /// Flattens the interactive form fields on every page in [pages] into
+  /// static content. With every page the form is gone; with some, the other
+  /// pages stay fillable. Refuses the page lists [addStamp] refuses.
+  PdfTask<void> flattenForms({PdfPages pages = const PdfPages.all()}) =>
+      _run((handle) => handle.flattenForms(pages));
+
+  /// Flattens the annotations (forms, comments, stamps) on every page in
+  /// [pages] into static content. Refuses the page lists [addStamp] refuses.
+  PdfTask<void> flattenAnnotations({PdfPages pages = const PdfPages.all()}) =>
+      _run((handle) => handle.flattenAnnotations(pages));
+
+  /// Converts the document to PDF/A at conformance [level].
+  PdfTask<void> convertToPdfA({PdfALevel level = PdfALevel.a2}) {
+    KeepRecord.op('pdfa');
+    return _run((handle) => handle.convertToPdfA(level: level));
+  }
+
+  /// Removes the content under every rectangle of [regions] on [page] for
+  /// good, draws [overlay] over each, and reports what was removed. It
+  /// applies only these regions: marks queued earlier with
+  /// `PdfEditor.markRedaction` stay queued and are not applied. A failure
+  /// leaves the page as it was and no mark queued. An empty [regions] throws
+  /// [PdfInvalidArgument].
+  PdfTask<PdfRedactionReport> redact(
+    int page,
+    List<PdfRect> regions, {
+    PdfRedactionOverlay overlay = const PdfRedactionOverlay.fill(
+      PdfColor.black,
+    ),
+  }) {
+    KeepRecord.op('render');
+    return _run((handle) => handle.redact(page, regions, overlay));
+  }
+
+  /// Re-encodes and downsamples every image drawn on the document's pages
+  /// under [policy] — `PdfImagePolicy.screen`, `.ebook`, `.print`,
+  /// `.lossless`, or your own numbers — and reports one row per image.
+  ///
+  /// Placement never changes: `PdfEditor.pageImages` reads the same names,
+  /// bounds and transforms afterwards. A replacement is written only when it
+  /// is smaller than the original; soft masks are resampled with their
+  /// image; JPEG 2000, JBIG2, spot-colour and colour-key-masked images are
+  /// reported as kept. Only images drawn by page content (directly or
+  /// through Form XObjects) are visited: an image referenced solely from an
+  /// annotation appearance stream or a pattern, and inline `BI … EI`
+  /// images, are left as stored and do not appear in the report.
+  PdfTask<PdfImageReport> reduceImages(PdfImagePolicy policy) {
+    KeepRecord.op('render');
+    return _run((handle) => handle.reduceImages(policy));
+  }
+
+  /// Removes embedded copies of standard PDF fonts to reduce file size, and
+  /// returns how many it removed.
+  PdfTask<int> unembedStandardFonts() =>
+      _run((handle) => handle.unembedStandardFonts());
+
+  /// Embeds [data] as an attached file with the given [name].
+  ///
+  /// [description] and [mimeType] go into the file spec, where
+  /// `PdfDoc.attachments` reads them back; [relationship] states how the
+  /// file relates to this document.
+  PdfTask<void> embedFile(
+    String name,
+    DataSource data, {
+    String? description,
+    String? mimeType,
+    PdfAttachmentRelationship? relationship,
+  }) => _run(
+    (handle) => handle.embedFile(
+      name,
+      data,
+      description: description,
+      mimeType: mimeType,
+      relationship: relationship,
+    ),
+  );
+
+  /// Crops every page by the given margins, in points.
+  PdfTask<void> cropMargins({
+    double left = 0,
+    double right = 0,
+    double top = 0,
+    double bottom = 0,
+  }) => _run(
+    (handle) =>
+        handle.cropMargins(left: left, right: right, top: top, bottom: bottom),
+  );
+
+  /// Moves and resizes the named image on [page] to [bounds] in points in
+  /// one edit. Names come from `PdfEditor.pageImages`, whose `bounds` this
+  /// mirrors.
+  PdfTask<void> setImageBounds(int page, String imageName, PdfRect bounds) =>
+      _run((handle) => handle.setImageBounds(page, imageName, bounds));
+
+  /// Removes all document metadata (title, author, timestamps, etc.).
+  /// Equivalent to `sanitize(const PdfSanitizeOptions(javascript: false))`.
+  PdfTask<void> scrubMetadata() => _run((handle) => handle.scrubMetadata());
+
+  /// Strips metadata, JavaScript and/or embedded files per [options].
+  PdfTask<void> sanitize(PdfSanitizeOptions options) =>
+      _run((handle) => handle.sanitize(options));
 }
 
 /// The object [Pdf.edits] returns: opens the document for its one edit,

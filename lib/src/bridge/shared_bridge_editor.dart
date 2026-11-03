@@ -166,12 +166,12 @@ class _SharedEditorHandle extends BridgeEditorHandle {
 
   @override
   PdfTask<void> addStamp(
-    int page, {
+    PdfPages pages, {
     required PdfStampType type,
     required PdfRect rect,
-    double opacity = 1.0,
+    required double opacity,
   }) => _mutate('addStamp', {
-    'page': page,
+    ...codec.encodePages(pages),
     'stampType': codec.putEnum(type),
     ...codec.encodeRectArgs(rect),
     'opacity': opacity,
@@ -179,12 +179,12 @@ class _SharedEditorHandle extends BridgeEditorHandle {
 
   @override
   PdfTask<void> addImageStamp(
-    int page,
+    PdfPages pages,
     DataSource imageData, {
     required PdfRect rect,
-    double opacity = 1.0,
+    required double opacity,
   }) => _mutateWithSource('addImageStamp', imageData, {
-    'page': page,
+    ...codec.encodePages(pages),
     ...codec.encodeRectArgs(rect),
     'opacity': opacity,
   });
@@ -205,22 +205,26 @@ class _SharedEditorHandle extends BridgeEditorHandle {
     if (relationship != null) 'relationship': codec.putEnum(relationship),
   });
   @override
-  PdfTask<void> eraseRegions(int page, List<PdfRect> regions) => _mutate(
-    'eraseRegions',
-    {'page': page, 'regions': codec.encodeRegions(regions)},
-  );
+  PdfTask<void> flattenForms(PdfPages pages) =>
+      _mutate('flattenForms', codec.encodePages(pages));
   @override
-  PdfTask<void> flattenForms({int? page}) =>
-      _mutate('flattenForms', {if (page != null) 'page': page});
-  @override
-  PdfTask<void> flattenAnnotations({int? page}) =>
-      _mutate('flattenAnnotations', {if (page != null) 'page': page});
-  @override
-  PdfTask<void> clearEraseRegions(int page) =>
-      _mutate('clearEraseRegions', {'page': page});
+  PdfTask<void> flattenAnnotations(PdfPages pages) =>
+      _mutate('flattenAnnotations', codec.encodePages(pages));
   @override
   PdfTask<void> setFormFieldValue(String fieldName, String value) =>
       _mutate('setFormFieldValue', {'fieldName': fieldName, 'value': value});
+  @override
+  PdfTask<void> setFormFieldChoice(String fieldName, String value) =>
+      _mutate('setFormFieldChoice', {'fieldName': fieldName, 'value': value});
+  @override
+  PdfTask<void> setFormFieldChoices(String fieldName, List<String> values) =>
+      _mutate('setFormFieldChoices', {
+        'fieldName': fieldName,
+        'values': values,
+      });
+  @override
+  PdfTask<void> clearFormFieldValue(String fieldName) =>
+      _mutate('clearFormFieldValue', {'fieldName': fieldName});
   @override
   PdfTask<void> setCheckboxFieldValue(String fieldName, bool checked) =>
       _mutate('setCheckboxFieldValue', {
@@ -274,8 +278,10 @@ class _SharedEditorHandle extends BridgeEditorHandle {
       _mutate('setFormFieldRequired', {'name': name, 'required': required});
 
   @override
-  PdfTask<void> setFormFieldTooltip(String name, String tooltip) =>
-      _mutate('setFormFieldTooltip', {'name': name, 'tooltip': tooltip});
+  PdfTask<void> setFormFieldTooltip(String name, String? tooltip) => _mutate(
+    'setFormFieldTooltip',
+    {'name': name, if (tooltip != null) 'tooltip': tooltip},
+  );
 
   @override
   PdfTask<void> setFormFieldBounds(String name, PdfRect bounds) => _mutate(
@@ -284,8 +290,10 @@ class _SharedEditorHandle extends BridgeEditorHandle {
   );
 
   @override
-  PdfTask<void> setFormFieldMaxLength(String name, int maxLength) =>
-      _mutate('setFormFieldMaxLength', {'name': name, 'maxLength': maxLength});
+  PdfTask<void> setFormFieldMaxLength(String name, int? maxLength) => _mutate(
+    'setFormFieldMaxLength',
+    {'name': name, if (maxLength != null) 'maxLength': maxLength},
+  );
 
   @override
   PdfTask<void> setFormFieldAlignment(String name, PdfAlignment alignment) =>
@@ -295,17 +303,18 @@ class _SharedEditorHandle extends BridgeEditorHandle {
       });
 
   @override
-  PdfTask<void> setFormFieldBackgroundColor(String name, PdfColor color) =>
+  PdfTask<void> setFormFieldBackgroundColor(String name, PdfColor? color) =>
       _mutate('setFormFieldBackgroundColor', {
         'name': name,
-        ...codec.encodeColorArgs(color),
+        if (color != null) ...codec.encodeColorArgs(color),
       });
 
   @override
-  PdfTask<void> setFormFieldBorderColor(String name, PdfColor color) => _mutate(
-    'setFormFieldBorderColor',
-    {'name': name, ...codec.encodeColorArgs(color)},
-  );
+  PdfTask<void> setFormFieldBorderColor(String name, PdfColor? color) =>
+      _mutate('setFormFieldBorderColor', {
+        'name': name,
+        if (color != null) ...codec.encodeColorArgs(color),
+      });
 
   @override
   PdfTask<void> setFormFieldBorderWidth(String name, double width) =>
@@ -334,12 +343,28 @@ class _SharedEditorHandle extends BridgeEditorHandle {
   // ── Redaction ──
 
   @override
-  PdfTask<void> addRedaction(int page, PdfRect region, {String? overlayText}) =>
-      _mutate('addRedaction', {
-        'page': page,
-        ...codec.encodeRectArgs(region),
-        'overlayText': overlayText,
-      });
+  PdfTask<void> markRedaction(
+    int page,
+    PdfRect region,
+    PdfRedactionOverlay overlay,
+  ) => _mutate('addRedaction', {
+    'page': page,
+    ...codec.encodeRectArgs(region),
+    ...codec.encodeRedactionOverlay(overlay),
+  });
+  @override
+  PdfTask<void> clearRedactions() => _mutate('clearRedactions');
+  @override
+  PdfTask<PdfRedactionReport> redact(
+    int page,
+    List<PdfRect> regions,
+    PdfRedactionOverlay overlay,
+  ) => _exec(EngineOp.editorMutate, {
+    'editOp': 'redact',
+    'page': page,
+    'regions': codec.encodeRegions(regions),
+    ...codec.encodeRedactionOverlay(overlay),
+  }).map(codec.decodeRedactionReport);
   @override
   PdfTask<int> redactionCount(int page) => _exec(
     EngineOp.editorRedactionCount,
