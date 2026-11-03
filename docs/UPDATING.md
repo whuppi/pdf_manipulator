@@ -716,7 +716,7 @@ mechanisms keep it there, so it does not grow with every run:
 | `make prune-target` | Removes every `incremental` folder and every file untouched for `PRUNE_DAYS` days (default 2) from the four target dirs. `make test-rust` and `make check-keep-sets` run it when they end, pass or fail. A reused artifact older than that is rebuilt next time: it costs time, never a wrong result. |
 | keep-sets | `tool/check_keep_sets.sh` builds into `vendor/pdf_oxide/target/keep-sets`, apart from the test build, and removes that dir's incremental caches and every file older than its run when it ends. |
 | `memprobe` | Its temp folder is removed when the run ends, however it ends (error, panic, SIGINT, SIGTERM, SIGHUP); a SIGKILLed run's folder is removed by the next run. |
-| Chrome clones | Each `make test-ops-*` web target removes the code-sign clones that killed launches left in `$(getconf DARWIN_USER_TEMP_DIR)/../X/com.google.Chrome.code_sign_clone/` (macOS only, and only when no Chrome runs: then every clone is a leftover). |
+| Browser leftovers | Each `make test-ops-*` web target runs `tool/clean_browser_leftovers.dart`, which removes what killed Chrome launches left behind, on any OS: the `org.chromium.Chromium.scoped_dir.*` profile folders in the system temp dir and, on macOS, the app-bundle copies in `com.google.Chrome.code_sign_clone/`. It runs only when no Chrome runs, so every one it finds is a leftover. |
 
 ### A worktree that does not cost another 25 GB
 

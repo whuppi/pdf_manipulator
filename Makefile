@@ -315,13 +315,12 @@ test-ops-native:
 	@mkdir -p $(TEST_RESULTS_DIR)
 	$(DART) test $(TIMEOUT) test/ops/runners/native_runner_test.dart --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-native.json
 
-# Each web mode runs its browser tests, then removes the Chrome code-sign
-# clones that killed launches left in the user temp dir (tool/clean_chrome_clones.sh:
-# macOS only, never while a Chrome runs). The command is an argument, so it
-# holds no comma.
+# Each web mode runs its browser tests, then removes what killed browser
+# launches left behind on any OS (tool/clean_browser_leftovers.dart: never
+# while a Chrome runs). The command is an argument, so it holds no comma.
 define run_browser_tests
 	@$(1); rc=$$?; \
-	bash tool/clean_chrome_clones.sh; exit $$rc
+	$(DART) tool/clean_browser_leftovers.dart; exit $$rc
 endef
 
 test-ops-web: fixtures test-ops-opfs test-ops-jspi test-ops-atomics
