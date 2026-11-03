@@ -5,7 +5,10 @@
 //! the allocator's high-water mark over the allocation level the
 //! process already holds when the step starts. One line per step:
 //! `<op> <input> peak_over_baseline=<bytes> limit=<bytes> ok|FAIL wall_ms=<n>`.
-//! Exits 1 on any FAIL, and removes its temp dir at the end.
+//! Exits 1 on any FAIL. The temp dir is removed however the run ends: a
+//! normal end, an error, a panic, SIGINT, SIGTERM or SIGHUP. A run killed by
+//! SIGKILL cannot clean up, so the next run removes the dir of any
+//! `memprobe-<pid>` whose process is gone.
 
 mod alloc;
 mod wire;
@@ -126,11 +129,151 @@ fn main() {
     }
 }
 
+/// The name every probe folder starts with; the rest is the owner's pid.
+const PREFIX: &str = "memprobe-";
+
+/// The probe's temp folder. The folder is removed when the guard drops, so an
+/// early `?`, an error return or a panic that unwinds all remove it; a signal
+/// removes it through `cleanup::remove_on_signal`.
+struct TempDir {
+    path: std::path::PathBuf,
+}
+
+impl TempDir {
+    /// Creates `<base>/memprobe-<pid>` and returns the guard that owns it.
+    fn create_in(base: &Path) -> Result<TempDir, String> {
+        let path = base.join(format!("{PREFIX}{}", std::process::id()));
+        std::fs::create_dir_all(&path).map_err(|e| format!("temp dir: {e}"))?;
+        Ok(TempDir { path })
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+/// Removes the folders of probes that were killed without a chance to clean
+/// up (SIGKILL): every `<base>/memprobe-<pid>` whose pid no longer runs.
+fn sweep_orphans(base: &Path) {
+    let Ok(entries) = std::fs::read_dir(base) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name
+            .to_str()
+            .and_then(|n| n.strip_prefix(PREFIX))
+            .and_then(|n| n.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        if pid != std::process::id() as i32 && !cleanup::pid_runs(pid) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+/// Process-level cleanup that `Drop` cannot give: a signal ends the process
+/// without unwinding. Unix only; elsewhere the guard and the next run's sweep
+/// are the whole cleanup.
+#[cfg(unix)]
+mod cleanup {
+    use std::fs::File;
+    use std::io::Read;
+    use std::os::unix::io::FromRawFd;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicI32, Ordering};
+
+    const SIGHUP: i32 = 1;
+    const SIGINT: i32 = 2;
+    const SIGTERM: i32 = 15;
+    const EPERM: i32 = 1;
+
+    extern "C" {
+        fn pipe(fds: *mut i32) -> i32;
+        fn write(fd: i32, buf: *const u8, n: usize) -> isize;
+        fn signal(sig: i32, handler: extern "C" fn(i32)) -> usize;
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+
+    /// The write end of the pipe the handler pokes; -1 until installed.
+    static WAKE_FD: AtomicI32 = AtomicI32::new(-1);
+
+    /// The handler only calls `write`, which is safe inside a signal handler;
+    /// the thread reading the other end of the pipe does the removal.
+    extern "C" fn on_signal(_sig: i32) {
+        let fd = WAKE_FD.load(Ordering::Relaxed);
+        if fd >= 0 {
+            let byte = 1u8;
+            // SAFETY: `fd` is the open write end made by `remove_on_signal`;
+            // `write` is async-signal-safe and the buffer is one live byte.
+            unsafe { write(fd, &byte, 1) };
+        }
+    }
+
+    /// On SIGINT, SIGTERM or SIGHUP, removes `path` and exits 130, the status
+    /// a shell reports for a signalled run.
+    pub fn remove_on_signal(path: PathBuf) -> Result<(), String> {
+        let mut fds = [0i32; 2];
+        // SAFETY: `fds` holds the two ints `pipe` fills.
+        if unsafe { pipe(fds.as_mut_ptr()) } != 0 {
+            return Err(format!("signal pipe: {}", std::io::Error::last_os_error()));
+        }
+        WAKE_FD.store(fds[1], Ordering::Relaxed);
+        // SAFETY: `fds[0]` is the open read end, owned by this File alone.
+        let mut wake = unsafe { File::from_raw_fd(fds[0]) };
+        std::thread::spawn(move || {
+            let mut byte = [0u8; 1];
+            // A read cut short by another signal is retried: only a byte
+            // from the handler, or a closed pipe, ends the wait.
+            while matches!(wake.read(&mut byte), Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted)
+            {}
+            // The run may still be creating a file as the removal walks the
+            // folder, so repeat until the folder is gone.
+            for _ in 0..5 {
+                let _ = std::fs::remove_dir_all(&path);
+                if !path.exists() {
+                    break;
+                }
+            }
+            std::process::exit(130);
+        });
+        for sig in [SIGHUP, SIGINT, SIGTERM] {
+            // SAFETY: `on_signal` only calls the async-signal-safe `write`.
+            unsafe { signal(sig, on_signal) };
+        }
+        Ok(())
+    }
+
+    /// Whether a process with this id exists; one the caller may not signal
+    /// still exists.
+    pub fn pid_runs(pid: i32) -> bool {
+        // SAFETY: signal 0 only checks that the process exists.
+        unsafe { kill(pid, 0) == 0 || std::io::Error::last_os_error().raw_os_error() == Some(EPERM) }
+    }
+}
+
+#[cfg(not(unix))]
+mod cleanup {
+    pub fn remove_on_signal(_path: std::path::PathBuf) -> Result<(), String> {
+        Ok(())
+    }
+
+    pub fn pid_runs(_pid: i32) -> bool {
+        true
+    }
+}
+
 fn run() -> Result<(), String> {
     let failed = std::cell::Cell::new(false);
 
-    let dir = std::env::temp_dir().join(format!("memprobe-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).map_err(|e| format!("temp dir: {e}"))?;
+    let base = std::env::temp_dir();
+    sweep_orphans(&base);
+    let temp = TempDir::create_in(&base)?;
+    cleanup::remove_on_signal(temp.path.clone())?;
+    let dir = temp.path.clone();
 
     // ── generation phase: not measured ──
     let many = dir.join("many.pdf");
@@ -950,7 +1093,6 @@ fn run() -> Result<(), String> {
     });
     verify_render_wire(&failed, "groups", &open_sink("groups", "render"));
 
-    let _ = std::fs::remove_dir_all(&dir);
     if failed.get() {
         return Err("one or more steps exceeded their memory limit".to_string());
     }
@@ -3064,4 +3206,80 @@ fn between(text: &str, name: &str) -> String {
     let after = &text[start + marker.len()..];
     let end = after.find("'''").expect("PEM closing marker in fixture");
     after[..end].trim().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// A base folder of the test's own, so nothing here touches a real
+    /// `memprobe-*` folder in the system temp dir.
+    fn base(name: &str) -> PathBuf {
+        let base = std::env::temp_dir().join(format!("memprobe-test-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        base
+    }
+
+    fn own_dir(base: &Path) -> PathBuf {
+        base.join(format!("{PREFIX}{}", std::process::id()))
+    }
+
+    /// Fails on its first `?`, with a file already in the folder.
+    fn fails_early(base: &Path) -> Result<(), String> {
+        let temp = TempDir::create_in(base)?;
+        std::fs::write(temp.path.join("input.pdf"), b"%PDF-").unwrap();
+        Err::<(), String>("generation failed".to_string())?;
+        Ok(())
+    }
+
+    #[test]
+    fn an_early_error_return_removes_the_folder() {
+        let base = base("error");
+        assert!(fails_early(&base).is_err());
+        assert!(!own_dir(&base).exists());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_panic_removes_the_folder() {
+        let base = base("panic");
+        let result = std::panic::catch_unwind(|| {
+            let temp = TempDir::create_in(&base).unwrap();
+            std::fs::write(temp.path.join("input.pdf"), b"%PDF-").unwrap();
+            panic!("no memory limit for op on input");
+        });
+        assert!(result.is_err());
+        assert!(!own_dir(&base).exists());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_normal_end_removes_the_folder() {
+        let base = base("normal");
+        drop(TempDir::create_in(&base).unwrap());
+        assert!(!own_dir(&base).exists());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn the_sweep_removes_only_folders_of_dead_probes() {
+        let base = base("sweep");
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let dead = child.id();
+        child.wait().unwrap();
+        let orphan = base.join(format!("{PREFIX}{dead}"));
+        std::fs::create_dir_all(orphan.join("inner")).unwrap();
+        let live = own_dir(&base);
+        std::fs::create_dir_all(&live).unwrap();
+        let other = base.join("memprobe-notes");
+        std::fs::create_dir_all(&other).unwrap();
+
+        sweep_orphans(&base);
+
+        assert!(!orphan.exists());
+        assert!(live.exists());
+        assert!(other.exists());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
 }

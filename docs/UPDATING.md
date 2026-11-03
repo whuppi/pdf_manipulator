@@ -703,6 +703,48 @@ hand-authored in `test/fixtures/handwritten.dart`.
 
 ---
 
+## Disk: the build target and worktrees
+
+One tree's gate fills the vendored crates' cargo `target/` dirs with about
+24 GB: the Rust test build is the bulk (about 21 GB of test binaries), the
+48 keep-set builds add 1.4 GB, and the wasm build, `office_oxide`,
+`tiny_skia` and `target/memprobe` the rest. Budget 25 GB per tree. Four
+mechanisms keep it there, so it does not grow with every run:
+
+| What | How |
+|---|---|
+| `make prune-target` | Removes every `incremental` folder and every file untouched for `PRUNE_DAYS` days (default 2) from the four target dirs. `make test-rust` and `make check-keep-sets` run it when they end, pass or fail. A reused artifact older than that is rebuilt next time: it costs time, never a wrong result. |
+| keep-sets | `tool/check_keep_sets.sh` builds into `vendor/pdf_oxide/target/keep-sets`, apart from the test build, and removes that dir's incremental caches and every file older than its run when it ends. |
+| `memprobe` | Its temp folder is removed when the run ends, however it ends (error, panic, SIGINT, SIGTERM, SIGHUP); a SIGKILLed run's folder is removed by the next run. |
+| Chrome clones | Each `make test-ops-*` web target removes the code-sign clones that killed launches left in `$(getconf DARWIN_USER_TEMP_DIR)/../X/com.google.Chrome.code_sign_clone/` (macOS only, and only when no Chrome runs: then every clone is a leftover). |
+
+### A worktree that does not cost another 25 GB
+
+Do not share one `CARGO_TARGET_DIR` between worktrees. Cargo keys a
+dependency's artifacts without the path, so a second worktree reuses the
+crates.io dependencies (321 crates, about 1 GB). But the three vendored
+crates are path packages: the second worktree rebuilds them and their test
+binaries into the same dir beside the first worktree's, and switching back
+recompiled one crate again. Measured: a second worktree's full test build in
+a shared dir grew it from 24.1 GB to 41.7 GB, 17.7 GB against about 21 GB in its
+own dir, so sharing saves 3.5 GB and no build time; for `pdf_oxide`'s library
+alone, a cold build of the dependencies took 63 to 139 s and the second
+worktree's path crates alone took 103 s.
+
+What the numbers support is bounding each worktree and keeping one at a time:
+
+1. Make the worktree, then give each submodule a worktree of its own at the
+   commit the package pins (a plain `git worktree add` leaves `vendor/*`
+   empty):
+   `git -C <main>/vendor/pdf_oxide worktree add --detach <wt>/vendor/pdf_oxide "$(git -C <main> rev-parse HEAD:vendor/pdf_oxide)"`,
+   the same for `office_oxide` and `tiny_skia`.
+2. Run the gates in the worktree; `make test-rust` and `make check-keep-sets`
+   leave the target pruned.
+3. When the worktree's work is done, run `make clean` in it: that frees its
+   whole target. Removing the worktree's folder frees it too.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Check |

@@ -1,7 +1,7 @@
 .PHONY: check analyze check-keep-sets analyze-floor platforms lint-shell format fixtures test-guards bench \
        build build-native build-wasm \
        compile-macos compile-ios compile-android compile-linux compile-windows compile-wasm compile-natives \
-       test test-pkg-native test-unit test-rust shake-audit verify-readme-sizes \
+       test test-pkg-native test-unit test-rust test-rust-run prune-target shake-audit verify-readme-sizes \
        test-ops test-ops-native test-ops-web test-ops-opfs test-ops-jspi test-ops-atomics \
        test-example test-example-matrix test-example-macos test-example-trimmed test-example-linux test-example-windows \
        test-example-android test-example-ios test-example-device \
@@ -54,9 +54,21 @@ analyze: fixtures
 #                       from capabilities.dart's requires graph) against the
 #                       vendored engine, for both targets. Catches a
 #                       feature-gate break the full-set build in `analyze`
-#                       hides.
+#                       hides. Builds into vendor/pdf_oxide/target/keep-sets,
+#                       which the script prunes itself; prune-target then
+#                       runs, pass or fail.
 check-keep-sets:
-	@DART="$(DART)" bash tool/check_keep_sets.sh
+	@DART="$(DART)" bash tool/check_keep_sets.sh; rc=$$?; \
+	$(MAKE) --no-print-directory prune-target; exit $$rc
+
+# make prune-target  Bounds the cargo target dirs (the three vendored crates'
+#                    target/ and the memory probe's): removes every
+#                    incremental folder and every file untouched for
+#                    PRUNE_DAYS days (default 2), prints the sizes before and
+#                    after. test-rust and check-keep-sets run it when they end.
+#                    A reused artifact older than that is rebuilt next time.
+prune-target:
+	@bash tool/prune_target.sh
 
 # make analyze-floor  Resolve to the OLDEST in-range dependencies and analyze
 #                     the shipped code (lib bin hook). The wide lower bounds
@@ -292,8 +304,10 @@ test-unit:
 test-ops: fixtures test-ops-native test-ops-web
 
 # Memory wall probe (tool/memprobe): release only — debug builds hold
-# far more and would measure the profiler, not the engine.
+# far more and would measure the profiler, not the engine. The probe's own
+# tests run first: they prove its temp folder is removed however a run ends.
 test-memory:
+	CARGO_TARGET_DIR="$(CURDIR)/target/memprobe" $(CARGO) test --release --manifest-path tool/memprobe/Cargo.toml
 	CARGO_TARGET_DIR="$(CURDIR)/target/memprobe" $(CARGO) run --release --manifest-path tool/memprobe/Cargo.toml
 
 test-ops-native:
@@ -301,22 +315,31 @@ test-ops-native:
 	@mkdir -p $(TEST_RESULTS_DIR)
 	$(DART) test $(TIMEOUT) test/ops/runners/native_runner_test.dart --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-native.json
 
+# Each web mode runs its browser tests, then removes the Chrome code-sign
+# clones that killed launches left in the user temp dir (tool/clean_chrome_clones.sh:
+# macOS only, never while a Chrome runs). The command is an argument, so it
+# holds no comma.
+define run_browser_tests
+	@$(1); rc=$$?; \
+	bash tool/clean_chrome_clones.sh; exit $$rc
+endef
+
 test-ops-web: fixtures test-ops-opfs test-ops-jspi test-ops-atomics
 
 test-ops-opfs: $(WASM_OUT)
 	@echo "=== Ops: Web OPFS ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
-	$(DART) test $(TIMEOUT) test/ops/runners/web_opfs_runner_test.dart -p chrome --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-opfs.json
+	$(call run_browser_tests,$(DART) test $(TIMEOUT) test/ops/runners/web_opfs_runner_test.dart -p chrome --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-opfs.json)
 
 test-ops-jspi: $(WASM_OUT)
 	@echo "=== Ops: Web JSPI ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
-	$(DART) test $(TIMEOUT) test/ops/runners/web_jspi_runner_test.dart -p chrome --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-jspi.json
+	$(call run_browser_tests,$(DART) test $(TIMEOUT) test/ops/runners/web_jspi_runner_test.dart -p chrome --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-jspi.json)
 
 test-ops-atomics: $(WASM_OUT)
 	@echo "=== Ops: Web Atomics ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
-	$(DART) test $(TIMEOUT) test/ops/runners/web_atomics_runner_test.dart -p chrome-coi --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-atomics.json
+	$(call run_browser_tests,$(DART) test $(TIMEOUT) test/ops/runners/web_atomics_runner_test.dart -p chrome-coi --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-atomics.json)
 
 # Rust unit + integration tests for the three vendored crates. Most of the
 # engine's tests sit behind features we don't ship (ml / ocr / fips /
@@ -356,9 +379,9 @@ verify-tarball:
 bench:
 	@cd tool/bench && $(DART) pub get && $(DART) run bin/bench.dart $(BENCH_ARGS)
 
-test-rust: export CARGO_INCREMENTAL := 0
-test-rust: export CARGO_PROFILE_DEV_DEBUG := 0
-test-rust: export CARGO_PROFILE_TEST_DEBUG := 0
+test-rust-run: export CARGO_INCREMENTAL := 0
+test-rust-run: export CARGO_PROFILE_DEV_DEBUG := 0
+test-rust-run: export CARGO_PROFILE_TEST_DEBUG := 0
 # public-api + cjk-form-fonts are test-only: shipped builds (build.json
 # feature lists) exclude the crate's own wasm/C API surfaces and the
 # embedded fallback fonts, but the upstream test suites cover both (the
@@ -388,7 +411,13 @@ define ensure_nextest
 		else echo "Error: cargo-nextest not found. Run: cargo install cargo-nextest --locked"; exit 1; fi; }
 endef
 
+# make test-rust  The suites below (test-rust-run), then prune-target, pass or
+#                 fail, so the target dirs stay bounded.
 test-rust:
+	@$(MAKE) --no-print-directory test-rust-run; rc=$$?; \
+	$(MAKE) --no-print-directory prune-target; exit $$rc
+
+test-rust-run:
 	$(ensure_nextest)
 	@echo "=== Rust: pdf_oxide ==="
 	$(CARGO) nextest run --no-fail-fast --manifest-path vendor/pdf_oxide/Cargo.toml \
