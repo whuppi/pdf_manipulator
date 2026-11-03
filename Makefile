@@ -1,4 +1,4 @@
-.PHONY: check analyze check-keep-sets analyze-floor platforms lint-shell format fixtures test-guards bench \
+.PHONY: check analyze check-keep-sets check-bindings analyze-floor platforms lint-shell format fixtures test-guards bench \
        build build-native build-wasm \
        compile-macos compile-ios compile-android compile-linux compile-windows compile-wasm compile-natives \
        test test-pkg-native test-unit test-rust test-rust-run prune-target shake-audit verify-readme-sizes \
@@ -30,7 +30,7 @@ VERBOSE := $(if $(CI),--verbose,)
 #
 # make check    Full local gate before PR.
 
-check: lint-shell analyze check-keep-sets analyze-floor platforms verify-tarball test-guards test test-example
+check: lint-shell analyze check-keep-sets check-bindings analyze-floor platforms verify-tarball test-guards test test-example
 
 # make hooks    Activate the repo's git hooks (commit-msg, pre-commit).
 #               Run once after cloning — they stay dormant otherwise.
@@ -69,6 +69,12 @@ check-keep-sets:
 #                    A reused artifact older than that is rebuilt next time.
 prune-target:
 	@bash tool/prune_target.sh
+
+# make check-bindings  Compiles the carried language bindings (python, ffi,
+#                      wasm) of the vendored engine. Needs Python headers and
+#                      the wasm32 target; see tool/check_bindings.sh.
+check-bindings:
+	@bash tool/check_bindings.sh
 
 # make analyze-floor  Resolve to the OLDEST in-range dependencies and analyze
 #                     the shipped code (lib bin hook). The wide lower bounds
