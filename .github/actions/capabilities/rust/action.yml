@@ -334,12 +334,14 @@ runs:
         find vendor -path '*/target/*' -path '*/.fingerprint/*' -type d \( -name '*_oxide-*' -o -name 'tiny-skia*' \) -prune -exec rm -rf {} +
         echo "fallback restore: engine fingerprints dropped, the engine rebuilds"
 
-    # A restored tree can hold a library unit's fingerprint without its
-    # library: an archive saved after a partial prune, or from a run cut
-    # off mid-write. Cargo trusts the fingerprint, and rustc then fails a
-    # dependent with "can't find crate". So drop every library fingerprint
-    # whose `deps/lib<name>-<hash>.*` is gone; cargo rebuilds those units.
-    - name: Drop fingerprints whose library is gone
+    # A restored tree can hold a library unit's fingerprint whose library
+    # is gone or empty: an archive saved after a partial prune, or by a run
+    # that failed mid-write (failed runs save too, so the fix-up push is
+    # warm). Cargo trusts the fingerprint, and rustc then fails a dependent
+    # with "can't find crate". So drop every library fingerprint whose
+    # `deps/lib<name>-<hash>.*` files are missing or any of them empty;
+    # cargo rebuilds those units.
+    - name: Drop fingerprints whose library is gone or empty
       if: inputs.cache == 'true' && inputs.ghcr-target == 'true'
       shell: bash
       run: |
@@ -347,12 +349,17 @@ runs:
         while IFS= read -r fp; do
           unit_dir=$(dirname "$fp")
           profile=$(dirname "$(dirname "$unit_dir")")
-          if ! compgen -G "$profile/deps/lib*-${unit_dir##*-}.*" >/dev/null; then
+          broken=true
+          for lib in "$profile"/deps/lib*-"${unit_dir##*-}".*; do
+            [ -s "$lib" ] || { broken=true; break; }
+            broken=false
+          done
+          if $broken; then
             rm -rf "${unit_dir:?}"
             dropped=$((dropped + 1))
           fi
         done < <(find vendor -path '*/target/*' -path '*/.fingerprint/*' -type f -name 'lib-*' ! -name '*.json')
-        echo "library fingerprints dropped for a missing library: $dropped"
+        echo "library fingerprints dropped for a missing or empty library: $dropped"
 
     # What the restores actually brought back, per target triple: the
     # engine outputs and their fingerprints. When a warm row still
