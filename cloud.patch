@@ -1,0 +1,2991 @@
+diff --git a/src/document.rs b/src/document.rs
+index ad3415ba..52c0ef81 100644
+--- a/src/document.rs
++++ b/src/document.rs
+@@ -494,11 +494,13 @@ pub struct PdfDocument {
+     /// Cached structure tree (None = not yet checked, Some(None) = untagged, Some(Some) = tagged).
+     /// Uses Arc to avoid expensive deep clones on every page extraction.
+     /// Mutex provides interior mutability for `&self` read-path methods (#398).
+-    structure_tree_cache: Mutex<Option<Option<Arc<crate::structure::StructTreeRoot>>>>,
+-    /// Cached per-page structure tree traversal results.
+-    /// Built once from the structure tree, then O(1) lookup per page.
+-    /// Mutex provides interior mutability for `&self` read-path methods (#398).
+-    structure_content_cache: Mutex<Option<HashMap<u32, Vec<crate::structure::OrderedContent>>>>,
++    structure_tree_cache: Mutex<Option<Option<Arc<crate::structure::StructHeader>>>>,
++    // ── pdf_manipulator patch: the structure of the last page asked for, not of every page ──
++    /// The structure of the page last asked for (marked content in reading
++    /// order, the `Table` elements on it): one walk of the tree produces it,
++    /// and the next page replaces it.
++    structure_page_cache: Mutex<Option<(u32, Arc<crate::structure::PageStructure>)>>,
++    // ── end pdf_manipulator patch ──
+     /// Cached resolved structure-tree `/ActualText` scopes.
+     ///
+     /// `None` = not yet built, `Some(None)` = built and the document has
+@@ -526,11 +528,6 @@ pub struct PdfDocument {
+     /// it covers, so a struct-tree-scope `/ActualText` on an ancestor
+     /// element must NOT override it.
+     pub(crate) mc_actualtext_mcids: Mutex<HashMap<usize, HashSet<u32>>>,
+-    /// `Table` structure elements bucketed by page, built once via
+-    /// `find_table_elements_all_pages` (one tree walk) so the converter table
+-    /// path does an O(1) lookup instead of walking the tree per page.
+-    /// `None` = not yet built.
+-    table_elements_cache: Mutex<Option<HashMap<u32, Vec<crate::structure::StructElem>>>>,
+     /// Page object cache keyed by page index to avoid re-traversing the page tree.
+     /// The page tree structure is static (§7.7.3.2), so pages can be safely cached.
+     /// Mutex provides interior mutability for `&self` read-path methods (#398).
+@@ -1329,10 +1326,9 @@ impl PdfDocument {
+             font_identity_cache: Mutex::new(BoundedEntryCache::new(512)),
+             font_id_hash_cache: Mutex::new(HashMap::new()),
+             structure_tree_cache: Mutex::new(None),
+-            structure_content_cache: Mutex::new(None),
++            structure_page_cache: Mutex::new(None),
+             actualtext_index_cache: Mutex::new(None),
+             mc_actualtext_mcids: Mutex::new(HashMap::new()),
+-            table_elements_cache: Mutex::new(None),
+             page_cache: Mutex::new(BoundedEntryCache::new(PAGE_WINDOW)),
+             page_tree_index: Mutex::new(None),
+             page_walks: AtomicUsize::new(0),
+@@ -4484,6 +4480,43 @@ impl PdfDocument {
+         crate::structure::parse_structure_tree_with_budget(self, budget)
+     }
+ 
++    // ── pdf_manipulator patch: the structure tree is opened and walked per page, never held whole ──
++    /// Reads the head of the structure tree: `None` when the document is not
++    /// tagged.
++    fn open_structure_header(&self) -> Option<Arc<crate::structure::StructHeader>> {
++        crate::structure::open_structure_tree(self).ok().flatten().map(Arc::new)
++    }
++
++    /// The structure of `page_index`: its marked content in reading order and
++    /// its `Table` elements. One walk of the tree produces it; the page last
++    /// asked for stays cached. A tree that cannot be walked yields an empty
++    /// structure.
++    pub(crate) fn page_structure(
++        &self,
++        header: &crate::structure::StructHeader,
++        page_index: u32,
++    ) -> Arc<crate::structure::PageStructure> {
++        if let Some((cached, structure)) = self.structure_page_cache.lock_or_recover().as_ref() {
++            if *cached == page_index {
++                return Arc::clone(structure);
++            }
++        }
++        let structure = Arc::new(
++            crate::structure::traversal::page_structure(self, header, page_index).unwrap_or_else(
++                |e| {
++                    log::warn!("Structure tree of page {} could not be walked: {}", page_index, e);
++                    crate::structure::PageStructure {
++                        content: Vec::new(),
++                        tables: Vec::new(),
++                    }
++                },
++            ),
++        );
++        *self.structure_page_cache.lock_or_recover() = Some((page_index, Arc::clone(&structure)));
++        structure
++    }
++    // ── end pdf_manipulator patch ──
++
+     /// Returns the document's structure tree **only when it is trustworthy for
+     /// reading-order purposes**, per ISO 32000-1:2008 §14.8.2.3.1 and §14.7.1.
+     ///
+@@ -4500,7 +4533,7 @@ impl PdfDocument {
+     /// order, so the tree is rejected and callers fall back to geometric order.
+     ///
+     /// Shares `structure_tree_cache`, so this costs a single cached parse.
+-    pub(crate) fn struct_tree_trustworthy(&self) -> Option<Arc<crate::structure::StructTreeRoot>> {
++    pub(crate) fn struct_tree_trustworthy(&self) -> Option<Arc<crate::structure::StructHeader>> {
+         let mark = self.mark_info().unwrap_or_default();
+         // Suspect documents: geometric reading order is spec-correct
+         // (§14.8.2.3.1). This is the only behavioural change versus the legacy
+@@ -4518,7 +4551,11 @@ impl PdfDocument {
+                     .and_then(|cat| cat.as_dict().map(|d| d.contains_key("StructTreeRoot")))
+                     .unwrap_or(false);
+                 let tree = if mark.marked || has_struct_tree_root {
+-                    self.structure_tree().ok().flatten().map(Arc::new)
++                    {
++                        // ── pdf_manipulator patch: the head of the tree is read; pages walk it ──
++                        self.open_structure_header()
++                        // ── end pdf_manipulator patch ──
++                    }
+                 } else {
+                     None
+                 };
+@@ -4544,7 +4581,7 @@ impl PdfDocument {
+     ///
+     /// Shares `structure_tree_cache` with `struct_tree_trustworthy`, so
+     /// both predicates cost a single cached parse.
+-    pub(crate) fn struct_tree_marked(&self) -> Option<Arc<crate::structure::StructTreeRoot>> {
++    pub(crate) fn struct_tree_marked(&self) -> Option<Arc<crate::structure::StructHeader>> {
+         let cached = self.structure_tree_cache.lock_or_recover().clone();
+         match cached {
+             Some(tree) => tree,
+@@ -4556,7 +4593,11 @@ impl PdfDocument {
+                     .and_then(|cat| cat.as_dict().map(|d| d.contains_key("StructTreeRoot")))
+                     .unwrap_or(false);
+                 let tree = if mark.marked || has_struct_tree_root {
+-                    self.structure_tree().ok().flatten().map(Arc::new)
++                    {
++                        // ── pdf_manipulator patch: the head of the tree is read; pages walk it ──
++                        self.open_structure_header()
++                        // ── end pdf_manipulator patch ──
++                    }
+                 } else {
+                     None
+                 };
+@@ -4579,7 +4620,10 @@ impl PdfDocument {
+         }
+         let tree = self.struct_tree_marked();
+         let built = tree.and_then(|t| {
+-            let idx = crate::structure::traversal::build_actualtext_index(&t);
++            // ── pdf_manipulator patch: the index is built while the tree is walked ──
++            let idx = crate::structure::traversal::streamed_actualtext_index(self, &t)
++                .unwrap_or_else(|_| crate::structure::ActualTextIndex::new());
++            // ── end pdf_manipulator patch ──
+             if idx.is_empty() {
+                 None
+             } else {
+@@ -6649,16 +6693,14 @@ impl PdfDocument {
+         }
+ 
+         let text = if let Some(ref struct_tree) = cached_tree {
+-            // Build per-page traversal cache once, then O(1) lookup per page.
+-            if self.structure_content_cache.lock_or_recover().is_none() {
+-                let all_content = crate::structure::traverse_structure_tree_all_pages(struct_tree);
+-                *self.structure_content_cache.lock_or_recover() = Some(all_content);
+-            }
++            // ── pdf_manipulator patch: the page's structure is walked for, not looked up in a whole-document cache ──
+             self.extract_text_structure_order_cached_with_spans(
+                 page_index,
++                struct_tree,
+                 all_spans,
+                 options.include_artifacts,
+             )?
++            // ── end pdf_manipulator patch ──
+         } else {
+             // Untagged or Suspects=true PDF: use page content
+             // (geometric) order. Apply struct-tree-scope `/ActualText`
+@@ -12731,52 +12773,45 @@ impl PdfDocument {
+         out
+     }
+ 
+-    /// Page's MCID reading order from the all-pages traversal cache
+-    /// (`structure_content_cache`, populated once). `build_context` previously
+-    /// re-walked the whole tree per page (≈ O(pages²) on a tagged document);
+-    /// the cached all-pages walk (#608) yields the same per-page order.
++    /// Page's MCID reading order, from the page's structure
++    /// (`structure_page_cache`).
+     pub(crate) fn cached_mcid_order_for_page(
+         &self,
+-        struct_tree: &crate::structure::StructTreeRoot,
++        struct_tree: &crate::structure::StructHeader,
+         page_index: u32,
+     ) -> Vec<(crate::structure::McidScope, u32)> {
+-        if self.structure_content_cache.lock_or_recover().is_none() {
+-            let all_content = crate::structure::traverse_structure_tree_all_pages(struct_tree);
+-            *self.structure_content_cache.lock_or_recover() = Some(all_content);
+-        }
+-        self.structure_content_cache
+-            .lock_or_recover()
+-            .as_ref()
+-            .and_then(|c| c.get(&page_index))
+-            .map(|content| {
+-                content
+-                    .iter()
+-                    .filter_map(|c| {
+-                        // Word break markers have mcid=None; skip.
+-                        let m = c.mcid?;
+-                        // Page-scoped MCIDs default to Page(c.page) when
+-                        // the parser didn't capture a scope. New parses
+-                        // always populate `mcid_scope`; the unwrap_or
+-                        // is for legacy traversals only.
+-                        let scope = c
+-                            .mcid_scope
+-                            .clone()
+-                            .unwrap_or(crate::structure::McidScope::Page(c.page));
+-                        Some((scope, m))
+-                    })
+-                    .collect()
++        // ── pdf_manipulator patch: the order comes from the page's own walk ──
++        self.page_structure(struct_tree, page_index)
++            .content
++            .iter()
++            .filter_map(|c| {
++                // Word break markers have mcid=None; skip.
++                let m = c.mcid?;
++                // Page-scoped MCIDs default to Page(c.page) when
++                // the parser didn't capture a scope. New parses
++                // always populate `mcid_scope`; the unwrap_or
++                // is for legacy traversals only.
++                let scope = c
++                    .mcid_scope
++                    .clone()
++                    .unwrap_or(crate::structure::McidScope::Page(c.page));
++                Some((scope, m))
+             })
+-            .unwrap_or_default()
++            .collect()
++        // ── end pdf_manipulator patch ──
+     }
+ 
+     /// Extract text from a Tagged PDF page using pre-computed structure traversal cache.
+     ///
+     /// This is the optimized version of `extract_text_structure_order` that uses
+-    /// the pre-built `structure_content_cache` for O(1) page content lookup instead
+-    /// of re-traversing the entire structure tree for each page.
++    /// the page's structure from `structure_page_cache` instead of re-traversing
++    /// the entire structure tree for each use.
+     fn extract_text_structure_order_cached_with_spans(
+         &self,
+         page_index: usize,
++        // ── pdf_manipulator patch: the structure tree's head is passed so the page's structure can be walked ──
++        struct_tree: &crate::structure::StructHeader,
++        // ── end pdf_manipulator patch ──
+         all_spans: Vec<TextSpan>,
+         include_artifacts: bool,
+     ) -> Result<String> {
+@@ -12830,16 +12865,10 @@ impl PdfDocument {
+         }
+ 
+         // Step 3: Get pre-computed ordered content for this page (O(1) lookup)
+-        let ordered_content_owned: Vec<crate::structure::OrderedContent>;
+-        let ordered_content = {
+-            let cache = self.structure_content_cache.lock_or_recover();
+-            ordered_content_owned = cache
+-                .as_ref()
+-                .and_then(|c| c.get(&(page_index as u32)))
+-                .cloned()
+-                .unwrap_or_default();
+-            &ordered_content_owned as &[crate::structure::OrderedContent]
+-        };
++        // ── pdf_manipulator patch: the page's content comes from its own walk ──
++        let page_structure = self.page_structure(struct_tree, page_index as u32);
++        let ordered_content: &[crate::structure::OrderedContent] = &page_structure.content;
++        // ── end pdf_manipulator patch ──
+ 
+         // Resolve struct-tree-scope `/ActualText` via the mcid-driven
+         // action map (see `actualtext_actions_for_page`). The index is
+@@ -18014,16 +18043,12 @@ impl PdfDocument {
+                 // span keeps its geometric position.
+                 let mut ordered = self.order_spans_column_aware(spans, page_index)?;
+                 if let Some(tree) = self.struct_tree_trustworthy() {
+-                    // Populate the structure-content cache, then read it (it carries the
+-                    // per-MCID `in_table` flag the mcid-order list does not).
+-                    let _ = self.cached_mcid_order_for_page(&tree, page_index as u32);
+-                    let content: Vec<crate::structure::OrderedContent> = self
+-                        .structure_content_cache
+-                        .lock_or_recover()
+-                        .as_ref()
+-                        .and_then(|c| c.get(&(page_index as u32)))
+-                        .cloned()
+-                        .unwrap_or_default();
++                    // Read the page's structure (it carries the per-MCID `in_table` flag
++                    // the mcid-order list does not).
++                    // ── pdf_manipulator patch: the page's content comes from its own walk ──
++                    let content: Vec<crate::structure::OrderedContent> =
++                        self.page_structure(&tree, page_index as u32).content.clone();
++                    // ── end pdf_manipulator patch ──
+ 
+                     let page_scope = crate::structure::McidScope::Page(page_index as u32);
+                     // Structure rank for TABLE MCIDs only.
+@@ -18199,23 +18224,19 @@ impl PdfDocument {
+         let Some(ref struct_tree) = self.struct_tree_trustworthy() else {
+             return info;
+         };
+-        if self.structure_content_cache.lock_or_recover().is_none() {
+-            let all = crate::structure::traverse_structure_tree_all_pages(struct_tree);
+-            *self.structure_content_cache.lock_or_recover() = Some(all);
+-        }
+-        let cache = self.structure_content_cache.lock_or_recover();
+-        if let Some(content) = cache.as_ref().and_then(|c| c.get(&(page_index as u32))) {
+-            for item in content {
+-                if let Some(mcid) = item.mcid {
+-                    if matches!(item.list_role, Some(crate::structure::ListRole::Lbl)) {
+-                        info.lbl.insert(mcid);
+-                    }
+-                    if let Some(sid) = item.section_id {
+-                        info.section.insert(mcid, sid as usize);
+-                    }
++        // ── pdf_manipulator patch: the page's content comes from its own walk ──
++        let page_structure = self.page_structure(struct_tree, page_index as u32);
++        for item in &page_structure.content {
++            if let Some(mcid) = item.mcid {
++                if matches!(item.list_role, Some(crate::structure::ListRole::Lbl)) {
++                    info.lbl.insert(mcid);
++                }
++                if let Some(sid) = item.section_id {
++                    info.section.insert(mcid, sid as usize);
+                 }
+             }
+         }
++        // ── end pdf_manipulator patch ──
+         info
+     }
+ 
+@@ -22223,7 +22244,11 @@ impl PdfDocument {
+                             .and_then(|cat| cat.as_dict().map(|d| d.contains_key("StructTreeRoot")))
+                             .unwrap_or(false);
+                     let tree = if is_marked || has_struct_tree_root {
+-                        self.structure_tree().ok().flatten().map(Arc::new)
++                        {
++                        // ── pdf_manipulator patch: the head of the tree is read; pages walk it ──
++                        self.open_structure_header()
++                        // ── end pdf_manipulator patch ──
++                    }
+                     } else {
+                         None
+                     };
+@@ -22233,18 +22258,10 @@ impl PdfDocument {
+             }
+         };
+         if let Some(ref struct_tree) = struct_tree_opt {
+-            // Build the per-page Table-element buckets once, then look up.
+-            if self.table_elements_cache.lock_or_recover().is_none() {
+-                let all = crate::structure::find_table_elements_all_pages(struct_tree);
+-                *self.table_elements_cache.lock_or_recover() = Some(all);
+-            }
+-            let table_elems: Vec<crate::structure::StructElem> = self
+-                .table_elements_cache
+-                .lock_or_recover()
+-                .as_ref()
+-                .and_then(|c| c.get(&(page_index as u32)))
+-                .cloned()
+-                .unwrap_or_default();
++            // ── pdf_manipulator patch: the page's Table elements come from its own walk ──
++            let table_elems: Vec<crate::structure::StructElem> =
++                self.page_structure(struct_tree, page_index as u32).tables.clone();
++            // ── end pdf_manipulator patch ──
+             if !table_elems.is_empty() {
+                 let mut tables = Vec::new();
+                 for table_elem in &table_elems {
+@@ -22823,21 +22840,12 @@ impl PdfDocument {
+             let cached_tree = self.struct_tree_trustworthy();
+ 
+             if let Some(ref struct_tree) = cached_tree {
+-                // Build per-page traversal cache once, then O(1) lookup per page
+-                if self.structure_content_cache.lock_or_recover().is_none() {
+-                    let all_content =
+-                        crate::structure::traverse_structure_tree_all_pages(struct_tree);
+-                    *self.structure_content_cache.lock_or_recover() = Some(all_content);
+-                }
+-
+                 // Extract MCID order AND per-MCID structural role for this page.
+-                let cached_page_owned = self
+-                    .structure_content_cache
+-                    .lock_or_recover()
+-                    .as_ref()
+-                    .and_then(|cache| cache.get(&(page_index as u32)))
+-                    .cloned();
+-                let cached_page = cached_page_owned.as_deref();
++                // ── pdf_manipulator patch: the page's content comes from its own walk ──
++                let page_structure = self.page_structure(struct_tree, page_index as u32);
++                let cached_page: Option<&[crate::structure::OrderedContent]> =
++                    Some(&page_structure.content);
++                // ── end pdf_manipulator patch ──
+ 
+                 // The scope travels with the id — §14.7.4.2 scopes an /MCID
+                 // to its content stream, so a form's 0 and the page's 0 are
+diff --git a/src/host/engine_proofs/alone.rs b/src/host/engine_proofs/alone.rs
+new file mode 100644
+index 00000000..7e7e13ab
+--- /dev/null
++++ b/src/host/engine_proofs/alone.rs
+@@ -0,0 +1,23 @@
++//! A proof that allocates tens of MiB runs in a process of its own.
++//!
++//! The allocator counter of `filter_readers` is the process's, and the proofs
++//! that read it (`mem_fixture`, `page_operators`, `filter_readers`) fail when
++//! another test thread allocates a few MiB beside them. A proof of ours that
++//! builds a large fixture is therefore an `#[ignore]`d test whose parent test
++//! runs this binary again on that one test, single-threaded, and waits.
++
++use std::process::Command;
++
++/// Runs the `#[ignore]`d test `path` of this binary alone in a child process
++/// and fails with its output when it fails.
++pub(super) fn run_alone(path: &str) {
++    let out = Command::new(std::env::current_exe().expect("this test binary"))
++        .args([path, "--exact", "--ignored", "--test-threads=1", "--nocapture"])
++        .output()
++        .expect("the test binary runs again");
++    let stdout = String::from_utf8_lossy(&out.stdout);
++    let stderr = String::from_utf8_lossy(&out.stderr);
++    print!("{stdout}");
++    assert!(out.status.success(), "{path} failed alone:\n{stdout}\n{stderr}");
++    assert!(stdout.contains("1 passed"), "{path} did not run alone:\n{stdout}");
++}
+diff --git a/src/host/engine_proofs/filter_readers.rs b/src/host/engine_proofs/filter_readers.rs
+index c36ba3de..903f5c06 100644
+--- a/src/host/engine_proofs/filter_readers.rs
++++ b/src/host/engine_proofs/filter_readers.rs
+@@ -20,6 +20,34 @@ struct Tracking;
+ pub(super) static HELD: AtomicUsize = AtomicUsize::new(0);
+ pub(super) static PEAK: AtomicUsize = AtomicUsize::new(0);
+ 
++std::thread_local! {
++    /// What the current thread holds, and the most it held since [`thread_growth`] began.
++    /// Plain cells without a destructor, so the allocator may touch them.
++    static MINE: std::cell::Cell<(isize, isize)> = const { std::cell::Cell::new((0, 0)) };
++}
++
++fn mine_add(bytes: isize) {
++    MINE.with(|m| {
++        let (held, peak) = m.get();
++        let held = held + bytes;
++        m.set((held, peak.max(held)));
++    });
++}
++
++/// Runs `f` and returns what it returned with the most bytes this thread held
++/// above where it began. Unlike `HELD` and `PEAK` it is blind to every other test
++/// thread, so a bound on it is tight.
++pub(super) fn thread_growth<T>(f: impl FnOnce() -> T) -> (T, usize) {
++    let base = MINE.with(|m| {
++        let (held, _) = m.get();
++        m.set((held, held));
++        held
++    });
++    let out = f();
++    let peak = MINE.with(|m| m.get().1);
++    (out, (peak - base).max(0) as usize)
++}
++
+ // SAFETY: every call is forwarded to the system allocator unchanged; only counters are added.
+ unsafe impl GlobalAlloc for Tracking {
+     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+@@ -27,6 +55,7 @@ unsafe impl GlobalAlloc for Tracking {
+         if !p.is_null() {
+             let now = HELD.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
+             PEAK.fetch_max(now, Ordering::Relaxed);
++            mine_add(layout.size() as isize);
+         }
+         p
+     }
+@@ -34,6 +63,7 @@ unsafe impl GlobalAlloc for Tracking {
+     unsafe fn dealloc(&self, p: *mut u8, layout: Layout) {
+         System.dealloc(p, layout);
+         HELD.fetch_sub(layout.size(), Ordering::Relaxed);
++        mine_add(-(layout.size() as isize));
+     }
+ 
+     unsafe fn realloc(&self, p: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+@@ -46,6 +76,7 @@ unsafe impl GlobalAlloc for Tracking {
+             } else {
+                 HELD.fetch_sub(layout.size() - new_size, Ordering::Relaxed);
+             }
++            mine_add(new_size as isize - layout.size() as isize);
+         }
+         q
+     }
+diff --git a/src/host/engine_proofs/mem_structure.rs b/src/host/engine_proofs/mem_structure.rs
+new file mode 100644
+index 00000000..803d9ebc
+--- /dev/null
++++ b/src/host/engine_proofs/mem_structure.rs
+@@ -0,0 +1,240 @@
++//! The structure tree is walked, not parsed whole: a page's structure and the
++//! ActualText index come out of one walk that holds the open elements' child
++//! lists, and a tree of any size ends, cycles included.
++
++use super::alone::run_alone;
++use super::filter_readers::thread_growth;
++use super::support::pdf_from_objects;
++use crate::document::PdfDocument;
++use crate::structure::traversal::{build_actualtext_index, page_structure, streamed_actualtext_index};
++use crate::structure::{
++    find_table_elements_all_pages, open_structure_tree, traverse_structure_tree_all_pages,
++    StructChild, StructElem,
++};
++
++/// A tagged document of `pages` empty pages and `elements` paragraphs under
++/// sections of 100: paragraph `e` is on page `e % pages` and names MCID
++/// `e / pages`.
++fn tagged(pages: usize, elements: usize) -> Vec<u8> {
++    const PER_SECTION: usize = 100;
++    let sections = elements / PER_SECTION;
++    let first_page = 4;
++    let document = first_page + pages;
++    let first_section = document + 1;
++    let first_paragraph = first_section + sections;
++    let kids: String = (0..pages).map(|p| format!("{} 0 R ", first_page + p)).collect();
++    let mut objects = vec![
++        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 3 0 R >>\nendobj\n"
++            .to_vec(),
++        format!("2 0 obj\n<< /Type /Pages /Kids [{kids}] /Count {pages} >>\nendobj\n").into_bytes(),
++        format!("3 0 obj\n<< /Type /StructTreeRoot /K {document} 0 R >>\nendobj\n").into_bytes(),
++    ];
++    for p in 0..pages {
++        objects.push(
++            format!(
++                "{} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>\nendobj\n",
++                first_page + p
++            )
++            .into_bytes(),
++        );
++    }
++    let section_refs: String = (0..sections).map(|s| format!("{} 0 R ", first_section + s)).collect();
++    objects.push(
++        format!("{document} 0 obj\n<< /Type /StructElem /S /Document /P 3 0 R /K [{section_refs}] >>\nendobj\n")
++            .into_bytes(),
++    );
++    for s in 0..sections {
++        let refs: String = (0..PER_SECTION)
++            .map(|k| format!("{} 0 R ", first_paragraph + s * PER_SECTION + k))
++            .collect();
++        objects.push(
++            format!(
++                "{} 0 obj\n<< /Type /StructElem /S /Sect /P {document} 0 R /K [{refs}] >>\nendobj\n",
++                first_section + s
++            )
++            .into_bytes(),
++        );
++    }
++    for e in 0..elements {
++        objects.push(
++            format!(
++                "{} 0 obj\n<< /Type /StructElem /S /P /Pg {} 0 R /K {} >>\nendobj\n",
++                first_paragraph + e,
++                first_page + e % pages,
++                e / pages
++            )
++            .into_bytes(),
++        );
++    }
++    pdf_from_objects(&objects)
++}
++
++fn count_elements(elem: &StructElem) -> usize {
++    1 + elem
++        .children
++        .iter()
++        .map(|c| match c {
++            StructChild::StructElem(e) => count_elements(e),
++            _ => 0,
++        })
++        .sum::<usize>()
++}
++
++/// A tree of 200,000 paragraphs, twenty times the old cap, is walked for one
++/// page with the thread holding under 24 MiB over where it began (the document's 8 MiB object
++/// cache is most of it), while the same tree held whole (`structure_tree()`) is more than
++/// three times what the walk held. The page
++/// gets exactly its 1,000 paragraphs, in order. No Dart battery can observe
++/// this: Dart reads the same text either way, and what the walk holds is
++/// only visible to the allocator counter.
++#[test]
++fn a_tree_of_200000_elements_is_walked_for_one_page_in_bounded_memory() {
++    run_alone("host::engine_proofs::mem_structure::alone::a_tree_of_200000_elements_is_walked_for_one_page_in_bounded_memory");
++}
++
++
++/// A tree larger than the old element cap is returned whole, under a budget
++/// too: the cap that dropped it is gone. Replaces
++/// `parse_budget_bounded_caps_element_count`, which pinned that cap. No Dart
++/// battery can observe this: the budgeted parse is reached only by an engine
++/// caller, and Dart extraction does not set one.
++#[test]
++fn a_tree_past_the_old_cap_is_returned_whole_even_under_a_budget() {
++    run_alone("host::engine_proofs::mem_structure::alone::a_tree_past_the_old_cap_is_returned_whole_even_under_a_budget");
++}
++
++/// A structure tree that names its own ancestors ends: the document lists a
++/// section twice, a section lists its parent, one element lists itself, and
++/// an indirect `/K` points back up. Each element is met once. No Dart battery
++/// can observe this: a cycle that did not end would hang the engine lane,
++/// and a Dart test cannot build the cycle with the engine's own writer.
++#[test]
++fn a_cyclic_tree_ends() {
++    let doc = PdfDocument::from_bytes(pdf_from_objects(&[
++        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 4 0 R >>\nendobj\n".to_vec(),
++        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n".to_vec(),
++        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>\nendobj\n".to_vec(),
++        b"4 0 obj\n<< /Type /StructTreeRoot /K [5 0 R 5 0 R] >>\nendobj\n".to_vec(),
++        b"5 0 obj\n<< /Type /StructElem /S /Document /K [6 0 R 6 0 R 5 0 R] >>\nendobj\n".to_vec(),
++        b"6 0 obj\n<< /Type /StructElem /S /Sect /Pg 3 0 R /K [5 0 R 7 0 R 6 0 R 0] >>\nendobj\n".to_vec(),
++        b"7 0 obj\n<< /Type /StructElem /S /P /Pg 3 0 R /K 8 0 R >>\nendobj\n".to_vec(),
++        b"8 0 obj\n<< /Type /StructElem /S /Span /Pg 3 0 R /K 7 0 R >>\nendobj\n".to_vec(),
++    ]))
++    .unwrap();
++    let tree = doc.structure_tree().unwrap().unwrap();
++    assert_eq!(tree.root_elements.len(), 1, "the second listing of the document is a cycle");
++    // Document, one Sect, one P, one Span: the later listings are skipped.
++    assert_eq!(count_elements(&tree.root_elements[0]), 4);
++    let header = open_structure_tree(&doc).unwrap().unwrap();
++    let structure = page_structure(&doc, &header, 0).unwrap();
++    assert_eq!(structure.content.len(), 1, "the Sect names MCID 0 once");
++    assert!(streamed_actualtext_index(&doc, &header).unwrap().covered_mcids.is_empty());
++}
++
++/// One walk of the tree gives, for every page, what the whole-document
++/// traversals give: the marked content in reading order with its roles, block
++/// ids and sections (headings, lists, a table, a word break), the table
++/// elements, and the ActualText index with a scope that nests and one that
++/// spans two pages. No Dart battery can observe this: it compares the engine's
++/// internal results with the ones it replaced, field by field.
++#[test]
++fn a_walk_gives_what_the_whole_tree_traversals_give() {
++    let doc = PdfDocument::from_bytes(pdf_from_objects(&[
++        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>\nendobj\n".to_vec(),
++        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>\nendobj\n".to_vec(),
++        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>\nendobj\n".to_vec(),
++        b"4 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>\nendobj\n".to_vec(),
++        b"5 0 obj\n<< /Type /StructTreeRoot /RoleMap << /Heading1 /H1 >> /K 6 0 R >>\nendobj\n".to_vec(),
++        b"6 0 obj\n<< /Type /StructElem /S /Document /K [7 0 R 9 0 R 12 0 R 17 0 R 19 0 R] >>\nendobj\n".to_vec(),
++        b"7 0 obj\n<< /Type /StructElem /S /Sect /K [8 0 R 10 0 R] >>\nendobj\n".to_vec(),
++        b"8 0 obj\n<< /Type /StructElem /S /Heading1 /Pg 3 0 R /K 0 >>\nendobj\n".to_vec(),
++        b"9 0 obj\n<< /Type /StructElem /S /P /Pg 4 0 R /K [0 1] >>\nendobj\n".to_vec(),
++        b"10 0 obj\n<< /Type /StructElem /S /L /K [11 0 R] >>\nendobj\n".to_vec(),
++        b"11 0 obj\n<< /Type /StructElem /S /LI /Pg 3 0 R /K [<< /Type /MCR /MCID 1 >> << /Type /MCR /Pg 4 0 R /MCID 2 >>] >>\nendobj\n".to_vec(),
++        b"12 0 obj\n<< /Type /StructElem /S /Table /K [13 0 R] >>\nendobj\n".to_vec(),
++        b"13 0 obj\n<< /Type /StructElem /S /TR /K [14 0 R 15 0 R] >>\nendobj\n".to_vec(),
++        b"14 0 obj\n<< /Type /StructElem /S /TD /Pg 3 0 R /K 2 >>\nendobj\n".to_vec(),
++        b"15 0 obj\n<< /Type /StructElem /S /TD /Pg 4 0 R /K 3 >>\nendobj\n".to_vec(),
++        b"16 0 obj\n<< /Type /StructElem /S /P /Pg 3 0 R /K 9 >>\nendobj\n".to_vec(),
++        b"17 0 obj\n<< /Type /StructElem /S /WB /K [16 0 R 18 0 R] >>\nendobj\n".to_vec(),
++        b"18 0 obj\n<< /Type /StructElem /S /Span /Pg 4 0 R /K 4 >>\nendobj\n".to_vec(),
++        b"19 0 obj\n<< /Type /StructElem /S /Sect /ActualText (replaced) /Pg 3 0 R /K [20 0 R 21 0 R 23 0 R] >>\nendobj\n".to_vec(),
++        b"20 0 obj\n<< /Type /StructElem /S /P /Pg 3 0 R /K 5 >>\nendobj\n".to_vec(),
++        b"21 0 obj\n<< /Type /StructElem /S /Div /ActualText (inner) /K [22 0 R] >>\nendobj\n".to_vec(),
++        b"22 0 obj\n<< /Type /StructElem /S /P /Pg 4 0 R /K [6 7] >>\nendobj\n".to_vec(),
++        b"23 0 obj\n<< /Type /StructElem /S /P /Pg 4 0 R /K 8 >>\nendobj\n".to_vec(),
++    ]))
++    .unwrap();
++    let tree = doc.structure_tree().unwrap().unwrap();
++    let all = traverse_structure_tree_all_pages(&tree);
++    let tables = find_table_elements_all_pages(&tree);
++    let header = open_structure_tree(&doc).unwrap().unwrap();
++    let mut seen = 0;
++    for page in 0..2u32 {
++        let walked = page_structure(&doc, &header, page).unwrap();
++        let expected = all.get(&page).cloned().unwrap_or_default();
++        seen += expected.len();
++        assert_eq!(format!("{:?}", walked.content), format!("{:?}", expected), "page {page}");
++        let expected_tables = tables.get(&page).cloned().unwrap_or_default();
++        assert_eq!(format!("{:?}", walked.tables), format!("{:?}", expected_tables), "tables of page {page}");
++    }
++    assert!(seen >= 12, "the fixture reaches headings, lists, a table, a word break: {seen} items");
++    assert!(all.values().flatten().any(|c| c.is_word_break), "the fixture has a word break");
++    assert!(all.values().flatten().any(|c| c.in_table), "the fixture has a table");
++
++    let whole = build_actualtext_index(&tree);
++    let streamed = streamed_actualtext_index(&doc, &header).unwrap();
++    assert_eq!(whole.covered_mcids, streamed.covered_mcids);
++    assert_eq!(whole.suppress_only, streamed.suppress_only);
++    assert_eq!(whole.mcid_to_actual_text, streamed.mcid_to_actual_text);
++    assert!(!whole.covered_mcids.is_empty(), "the fixture has an ActualText scope");
++    assert!(!whole.suppress_only.is_empty(), "the fixture has a scope across two pages");
++}
++
++mod alone {
++    use super::*;
++
++    /// The body of the test of the same name above, run in a process of its
++    /// own by `alone::run_alone` so that its 80 MiB do not reach the
++    /// allocator counter of the proofs beside it. No Dart battery can observe
++    /// this, for the reason the parent gives.
++    #[test]
++    #[ignore = "run in a process of its own by its parent test"]
++    fn a_tree_of_200000_elements_is_walked_for_one_page_in_bounded_memory() {
++    let doc = PdfDocument::from_bytes(tagged(200, 200_000)).unwrap();
++    let (structure, walked) = thread_growth(|| {
++        let header = open_structure_tree(&doc).unwrap().expect("a tagged document");
++        page_structure(&doc, &header, 7).unwrap()
++    });
++    println!("200,000 elements walked for one page: peak growth {walked} bytes");
++    let mcids: Vec<u32> = structure.content.iter().filter_map(|c| c.mcid).collect();
++    assert_eq!(mcids, (0..1000).collect::<Vec<u32>>());
++    assert!(structure.content.iter().all(|c| c.page == 7));
++    // The document's object cache (8 MiB, fixed) fills as the walk loads elements, and the
++    // visited ids are 8 bytes an element: none of it grows with a page's share of the tree.
++    assert!(walked < 24 * 1024 * 1024, "walking 200,000 elements for one page grew the thread by {walked} bytes");
++
++    let whole = PdfDocument::from_bytes(tagged(200, 200_000)).unwrap();
++    let (tree, held) = thread_growth(|| whole.structure_tree().unwrap().expect("a tagged document"));
++    assert_eq!(count_elements(&tree.root_elements[0]), 200_000 + 2000 + 1);
++    println!("200,000 elements held whole: peak growth {held} bytes");
++    assert!(held > 3 * walked, "the whole tree is {held} bytes and the walk {walked}: the tree is too small to prove anything");
++    }
++
++    /// The body of the test of the same name above, run in a process of its
++    /// own by `alone::run_alone`. No Dart battery can observe this, for the
++    /// reason the parent gives.
++    #[test]
++    #[ignore = "run in a process of its own by its parent test"]
++    fn a_tree_past_the_old_cap_is_returned_whole_even_under_a_budget() {
++
++    let doc = PdfDocument::from_bytes(tagged(20, 20_000)).unwrap();
++    let budgeted = doc
++        .structure_tree_with_budget(Some(std::time::Duration::from_secs(3600)))
++        .unwrap()
++        .expect("an hour is not exceeded");
++    assert_eq!(count_elements(&budgeted.root_elements[0]), 20_000 + 200 + 1);
++    let unbounded = doc.structure_tree().unwrap().unwrap();
++    assert_eq!(count_elements(&unbounded.root_elements[0]), 20_000 + 200 + 1);
++    }
++}
+diff --git a/src/host/engine_proofs/mem_xfa.rs b/src/host/engine_proofs/mem_xfa.rs
+new file mode 100644
+index 00000000..3ad11581
+--- /dev/null
++++ b/src/host/engine_proofs/mem_xfa.rs
+@@ -0,0 +1,103 @@
++//! XFA packets are read as XML events over their decoded streams, never as a
++//! whole buffer or a whole string.
++
++use super::filter_readers::thread_growth;
++use super::support::{pdf_from_objects, stream_object};
++use crate::document::PdfDocument;
++use crate::xfa::{analyze_xfa_document, XfaExtractor};
++use std::io::Write;
++
++const PACKET: usize = 64 * 1024 * 1024;
++
++const TEMPLATE: &str = r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.0/">
++<subform name="form1">
++<field name="firstName"><ui><textEdit/></ui></field>
++<field name="lastName"><ui><textEdit/></ui></field>
++</subform>
++</template>"#;
++
++const DATASETS_HEAD: &str =
++    "<xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data><form1>\n";
++const DATASETS_TAIL: &str = "</form1></xfa:data></xfa:datasets>";
++
++/// A datasets packet of `bytes` bytes once decoded, Flate-coded block by block
++/// as it is generated: every value names one key, so the values it yields stay
++/// one.
++fn datasets(bytes: usize) -> Vec<u8> {
++    let line = "<firstName>John</firstName>\n";
++    let block = line.repeat(64 * 1024 / line.len());
++    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
++    encoder.write_all(DATASETS_HEAD.as_bytes()).unwrap();
++    for _ in 0..bytes / block.len() {
++        encoder.write_all(block.as_bytes()).unwrap();
++    }
++    encoder.write_all(DATASETS_TAIL.as_bytes()).unwrap();
++    encoder.finish().unwrap()
++}
++
++fn document(acroform: &str, streams: Vec<Vec<u8>>) -> PdfDocument {
++    let mut objects = vec![
++        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>\nendobj\n".to_vec(),
++        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n".to_vec(),
++        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>\nendobj\n".to_vec(),
++        format!("4 0 obj\n<< /Fields [] /XFA {acroform} >>\nendobj\n").into_bytes(),
++    ];
++    objects.extend(streams);
++    PdfDocument::from_bytes(pdf_from_objects(&objects)).unwrap()
++}
++
++/// A datasets packet of 64 MiB once decoded is analysed and parsed with the
++/// thread holding under 1 MiB over where it began, and the form still carries
++/// the value the packet gives its field. The whole-read wall
++/// (`whole_reads.rs`) fails when an XFA caller goes back to decoding a packet
++/// whole. No Dart battery can observe this: Dart reads the same field count
++/// either way, and what the parse holds is visible only to the allocator
++/// counter.
++#[test]
++fn a_64_mib_datasets_packet_is_analysed_as_events() {
++    let mut doc = document(
++        "[(template) 5 0 R (datasets) 6 0 R]",
++        vec![
++            stream_object(5, "", TEMPLATE.as_bytes()),
++            stream_object(6, "/Filter /FlateDecode", &datasets(PACKET)),
++        ],
++    );
++    let (analysis, analysed) = thread_growth(|| analyze_xfa_document(&mut doc).unwrap());
++    println!("64 MiB XFA datasets packet analysed: peak growth {analysed} bytes");
++    assert!(analysis.has_xfa);
++    assert_eq!(analysis.field_count, Some(2));
++    assert_eq!(analysis.page_count, Some(1));
++    assert!(analysed < 1024 * 1024, "analysing a 64 MiB packet grew the thread by {analysed} bytes");
++
++    let (form, parsed) = thread_growth(|| XfaExtractor::parse_form(&mut doc).unwrap());
++    assert!(parsed < 1024 * 1024, "parsing a 64 MiB packet grew the thread by {parsed} bytes");
++    assert_eq!(form.get_field("firstName").unwrap().value.as_deref(), Some("John"));
++    assert_eq!(form.get_field("lastName").unwrap().value, None);
++    assert_eq!(form.dataset_values.len(), 1);
++}
++
++/// A complete XDP in one stream and the same form as an array of packets give
++/// the same fields and values, the first from the stream read as events with
++/// its sections found by element, the second packet by packet. No Dart battery
++/// can observe this: it compares the engine's parsed form field by field.
++#[test]
++fn one_xdp_stream_and_an_array_of_packets_give_the_same_form() {
++    let datasets = format!("{DATASETS_HEAD}<firstName>Ada</firstName><lastName>Lovelace</lastName>{DATASETS_TAIL}");
++    let xdp = format!(
++        "<?xml version=\"1.0\"?><xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\">{TEMPLATE}{datasets}</xdp:xdp>"
++    );
++    let mut single = document("5 0 R", vec![stream_object(5, "", xdp.as_bytes())]);
++    let mut array = document(
++        "[(template) 5 0 R (datasets) 6 0 R]",
++        vec![stream_object(5, "", TEMPLATE.as_bytes()), stream_object(6, "", datasets.as_bytes())],
++    );
++    let from_stream = XfaExtractor::parse_form(&mut single).unwrap();
++    let from_array = XfaExtractor::parse_form(&mut array).unwrap();
++    for form in [&from_stream, &from_array] {
++        assert_eq!(form.fields.len(), 2);
++        assert_eq!(form.get_field("firstName").unwrap().value.as_deref(), Some("Ada"));
++        assert_eq!(form.get_field("lastName").unwrap().value.as_deref(), Some("Lovelace"));
++        assert_eq!(form.pages.len(), 1);
++    }
++    assert_eq!(from_stream.dataset_values, from_array.dataset_values);
++}
+diff --git a/src/host/engine_proofs/mod.rs b/src/host/engine_proofs/mod.rs
+index b41cef91..a2d59736 100644
+--- a/src/host/engine_proofs/mod.rs
++++ b/src/host/engine_proofs/mod.rs
+@@ -8,6 +8,7 @@
+ mod band_proof;
+ #[cfg(feature = "rendering")]
+ mod cancel_at_every_poll;
++mod alone;
+ mod content_inline;
+ mod content_stream;
+ mod determinism;
+@@ -48,6 +49,8 @@ mod mem_cmap;
+ mod mem_declared;
+ mod mem_fixture;
+ mod mem_incremental;
++mod mem_structure;
++mod mem_xfa;
+ mod mem_xmp;
+ mod page_operators;
+ #[cfg(feature = "rendering")]
+diff --git a/src/host/engine_proofs/whole_reads.txt b/src/host/engine_proofs/whole_reads.txt
+index fc71e6d5..6bc9931a 100644
+--- a/src/host/engine_proofs/whole_reads.txt
++++ b/src/host/engine_proofs/whole_reads.txt
+@@ -39,8 +39,4 @@ rendering::separation_renderer::paint_image_mask_to_plates
+ rendering::separation_renderer::scan_operators_for_inks
+ rendering::sidecar::try_retarget_cmyk_via_embedded_profile
+ signatures::pades::dss_read::stream_array
+-xfa::extractor::extract_xfa
+-xfa::extractor::extract_xfa_array
+-xfa::extractor::extract_xfa_packets
+-xfa::extractor::extract_xfa_packets_from_array
+ xref::parse_xref_stream
+diff --git a/src/structure/mod.rs b/src/structure/mod.rs
+index 80f4d7a5..6ec423c4 100644
+--- a/src/structure/mod.rs
++++ b/src/structure/mod.rs
+@@ -50,6 +50,10 @@ pub mod types;
+ pub use article_threads::{parse_article_threads, ArticleThread, Bead};
+ pub use converter::StructureConverter;
+ pub use parser::{parse_structure_tree, parse_structure_tree_with_budget};
++// ── pdf_manipulator patch: the walk's head and a page's structure are the engine's, not the public API's ──
++pub(crate) use parser::{open_structure_tree, StructHeader};
++pub(crate) use traversal::PageStructure;
++// ── end pdf_manipulator patch ──
+ pub use spatial_table_detector::{
+     detect_tables_from_spans, DetectedTable, SpatialTableDetector, TableDetectionConfig,
+ };
+diff --git a/src/structure/parser.rs b/src/structure/parser.rs
+index 8a9e5de9..c83d3f31 100644
+--- a/src/structure/parser.rs
++++ b/src/structure/parser.rs
+@@ -10,54 +10,50 @@ use std::collections::{HashMap, HashSet};
+ 
+ use std::time::Duration;
+ 
++// ── pdf_manipulator patch: the budget is a wall-clock bound only; the element cap is gone ──
+ /// An optional bound on structure-tree parsing.
+ ///
+ /// A parsing library returns the *complete* tree by default, so the unbounded
+-/// guard (`ParseBudget::unbounded`) applies no time limit and no element cap.
+-/// Callers that deliberately want to bound the work — e.g. the extraction
+-/// reading-order strategy, which can fall back to content-stream order — build a
+-/// bounded guard from a wall-clock `Duration`, which also caps the element count
+-/// at [`MAX_STRUCT_ELEMENTS`]. On `wasm32-unknown-unknown` `std::time::Instant`
+-/// panics, so the time limit is a no-op there and only the element cap applies.
++/// guard (`ParseBudget::unbounded`) applies no limit. Callers that deliberately
++/// want to bound the work — e.g. the extraction reading-order strategy, which
++/// can fall back to content-stream order — build a bounded guard from a
++/// wall-clock `Duration`. On `wasm32-unknown-unknown` `std::time::Instant`
++/// panics, so the limit is a no-op there.
+ #[derive(Clone, Copy, Default)]
+-struct ParseBudget {
++pub(crate) struct ParseBudget {
+     #[cfg(not(target_arch = "wasm32"))]
+     deadline: Option<std::time::Instant>,
+-    max_elements: Option<usize>,
+ }
+ 
+ impl ParseBudget {
+     /// No limit — parse the entire tree (the default for a general-purpose API).
+-    fn unbounded() -> Self {
++    pub(crate) fn unbounded() -> Self {
+         Self::default()
+     }
+ 
+-    /// Bound parsing by `budget` wall-clock time, and cap the element count at
+-    /// [`MAX_STRUCT_ELEMENTS`] as a companion guard against pathological trees.
++    /// Bound parsing by `budget` wall-clock time.
+     fn from_option(budget: Option<Duration>) -> Self {
+         match budget {
+             None => Self::unbounded(),
+             Some(_budget) => Self {
+                 #[cfg(not(target_arch = "wasm32"))]
+                 deadline: Some(std::time::Instant::now() + _budget),
+-                max_elements: Some(MAX_STRUCT_ELEMENTS),
+             },
+         }
+     }
+ 
+-    /// Whether either bound has been exceeded at the current element count.
+-    /// Always `false` for an unbounded guard.
++    /// Whether the deadline has passed. The element count is not a bound; the
++    /// argument stays so callers read the same.
+     #[inline]
+-    fn exceeded(&self, element_count: usize) -> bool {
++    fn exceeded(&self, _element_count: usize) -> bool {
+         #[cfg(not(target_arch = "wasm32"))]
+         if let Some(deadline) = self.deadline {
+-            if std::time::Instant::now() > deadline {
+-                return true;
+-            }
++            return std::time::Instant::now() > deadline;
+         }
+-        self.max_elements.is_some_and(|max| element_count > max)
++        false
+     }
+ }
++// ── end pdf_manipulator patch ──
+ 
+ /// A timer for measuring elapsed time, WASM-safe.
+ #[derive(Clone, Copy)]
+@@ -92,11 +88,8 @@ impl Timer {
+     }
+ }
+ 
+-/// Maximum number of structure elements to parse.
+-/// Trees larger than this cause expensive traversal (seconds for 50K+ elements).
+-/// 10K elements is sufficient for any normal document; larger trees indicate
+-/// deeply structured books where content-stream order works equally well.
+-const MAX_STRUCT_ELEMENTS: usize = 10_000;
++// ── pdf_manipulator patch: MAX_STRUCT_ELEMENTS is removed; the tree is walked, not capped ──
++// ── end pdf_manipulator patch ──
+ 
+ /// Decode a PDF text string (UTF-16BE/LE with BOM, or PDFDocEncoding).
+ fn decode_pdf_text_string(bytes: &[u8]) -> String {
+@@ -226,33 +219,84 @@ pub fn parse_structure_tree_with_budget(
+     parse_structure_tree_inner(document, ParseBudget::from_option(budget))
+ }
+ 
+-fn parse_structure_tree_inner(
+-    document: &PdfDocument,
+-    deadline: ParseBudget,
+-) -> Result<Option<StructTreeRoot>, Error> {
+-    let parse_start = Timer::now();
++// ── pdf_manipulator patch: the structure tree is walked with an explicit stack, not parsed recursively and held whole ──
++/// What the walk needs before it visits the first element: the root's
++/// `/RoleMap`, its `/K` and the page-object → page-index map.
++pub(crate) struct StructHeader {
++    pub(crate) role_map: HashMap<String, String>,
++    k: Option<Object>,
++    page_map: HashMap<u32, u32>,
++}
+ 
+-    // Get catalog
+-    let catalog = document.catalog()?;
++/// An element as the walk meets it, before its children.
++pub(crate) struct ElemHead {
++    pub(crate) struct_type: StructType,
++    pub(crate) source_role: Option<String>,
++    pub(crate) page: Option<u32>,
++    pub(crate) actual_text: Option<String>,
++}
++
++/// What a walk reports: an element opens, marked content it names, the element
++/// closes. Nothing of an element outlives its `leave` unless the visitor keeps it.
++pub(crate) trait StructVisitor {
++    fn enter(&mut self, head: ElemHead);
++    fn marked_content(&mut self, mcid: u32, page: u32, scope: crate::structure::McidScope);
++    fn leave(&mut self);
++}
++
++/// Builds elements from the events of a walk: `leave` returns an element
++/// once the stack is empty again, that is, when it was a top-level one.
++#[derive(Default)]
++pub(crate) struct Builder {
++    stack: Vec<StructElem>,
++}
+ 
+-    // Check for StructTreeRoot in catalog dictionary
++impl Builder {
++    pub(crate) fn enter(&mut self, head: ElemHead) {
++        let mut elem = StructElem::new(head.struct_type);
++        elem.source_role = head.source_role;
++        elem.page = head.page;
++        elem.actual_text = head.actual_text;
++        self.stack.push(elem);
++    }
++
++    pub(crate) fn marked_content(
++        &mut self,
++        mcid: u32,
++        page: u32,
++        scope: crate::structure::McidScope,
++    ) {
++        if let Some(top) = self.stack.last_mut() {
++            top.add_child(StructChild::MarkedContentRef { mcid, page, scope });
++        }
++    }
++
++    /// Closes the open element; returns it when it was a top-level one.
++    pub(crate) fn leave(&mut self) -> Option<StructElem> {
++        let done = self.stack.pop()?;
++        match self.stack.last_mut() {
++            Some(parent) => {
++                parent.add_child(StructChild::StructElem(Box::new(done)));
++                None
++            },
++            None => Some(done),
++        }
++    }
++}
++
++/// Reads the head of the structure tree: `Ok(None)` when the document is not
++/// tagged (no `/StructTreeRoot`, or one that is not a dictionary).
++pub(crate) fn open_structure_tree(document: &PdfDocument) -> Result<Option<StructHeader>, Error> {
++    let catalog = document.catalog()?;
+     let catalog_dict = catalog
+         .as_dict()
+         .ok_or_else(|| Error::InvalidPdf("Catalog is not a dictionary".into()))?;
+-
+     let struct_tree_root_ref = match catalog_dict.get("StructTreeRoot") {
+         Some(obj) => obj,
+-        None => return Ok(None), // Not a tagged PDF
++        None => return Ok(None),
+     };
+-
+-    // Build page map for resolving /Pg references
+     let page_map = build_page_map(document);
+-
+-    // Resolve the StructTreeRoot object
+     let struct_tree_root_obj = resolve_object(document, struct_tree_root_ref)?;
+-
+-    // Parse StructTreeRoot dictionary — treat non-dict (e.g. Null from a
+-    // corrupted parse) as "no structure tree" rather than a hard error.
+     let struct_tree_dict = match struct_tree_root_obj.as_dict() {
+         Some(d) => d,
+         None => {
+@@ -263,148 +307,79 @@ fn parse_structure_tree_inner(
+             return Ok(None);
+         },
+     };
+-
+-    let mut struct_tree = StructTreeRoot::new();
+-
+-    // Parse RoleMap (optional)
++    let mut role_map = HashMap::new();
+     if let Some(role_map_obj) = struct_tree_dict.get("RoleMap") {
+         let role_map_obj = resolve_object(document, role_map_obj)?;
+         if let Some(role_map_dict) = role_map_obj.as_dict() {
+             for (key, value) in role_map_dict.iter() {
+                 if let Some(name) = value.as_name() {
+-                    struct_tree.role_map.insert(key.clone(), name.to_string());
++                    role_map.insert(key.clone(), name.to_string());
+                 }
+             }
+         }
+     }
+-
+-    // Skip ParentTree parsing — it's expensive (recursively loads/parses objects)
+-    // and not needed for text extraction. The forward traversal of /K children
+-    // provides reading order. ParentTree is only needed for reverse lookups
+-    // (MCID → StructElem), which are not used in the extraction pipeline.
+-
+-    // Parse K (children) - can be a single element or array of elements
+-    let mut element_count: usize = 0;
+-    let mut visited: HashSet<u32> = HashSet::new();
+-
+-    if let Some(k_obj) = struct_tree_dict.get("K") {
+-        let k_obj = resolve_object(document, k_obj)?;
+-
+-        match k_obj {
+-            Object::Array(arr) => {
+-                // Multiple root elements
+-                for elem_obj in arr {
+-                    if deadline.exceeded(element_count) {
+-                        log::debug!(
+-                            "Structure tree parse budget exceeded, falling back to content order"
+-                        );
+-                        return Ok(None);
+-                    }
+-                    // Record root element IDs before descending so that a back-reference
+-                    // from any descendant to this root is detectable as a cycle.
+-                    if let Object::Reference(obj_ref) = &elem_obj {
+-                        if !visited.insert(obj_ref.id) {
+-                            log::warn!(
+-                                "Cycle in structure tree: root object {} already visited, skipping",
+-                                obj_ref.id
+-                            );
+-                            continue;
+-                        }
+-                    }
+-                    if let Some(elem) = parse_struct_elem(
+-                        document,
+-                        &elem_obj,
+-                        &struct_tree.role_map,
+-                        &page_map,
+-                        deadline,
+-                        &mut element_count,
+-                        &mut visited,
+-                    )? {
+-                        struct_tree.add_root_element(elem);
+-                    }
+-                }
+-            },
+-            _ => {
+-                // Single root element
+-                if let Some(elem) = parse_struct_elem(
+-                    document,
+-                    &k_obj,
+-                    &struct_tree.role_map,
+-                    &page_map,
+-                    deadline,
+-                    &mut element_count,
+-                    &mut visited,
+-                )? {
+-                    struct_tree.add_root_element(elem);
+-                }
+-            },
+-        }
+-    }
+-
+-    log::debug!(
+-        "Structure tree parsed: {} elements, {} root elements in {}",
+-        element_count,
+-        struct_tree.root_elements.len(),
+-        parse_start.elapsed_debug()
+-    );
+-
+-    Ok(Some(struct_tree))
++    let k = match struct_tree_dict.get("K") {
++        Some(k_obj) => Some(resolve_object(document, k_obj)?),
++        None => None,
++    };
++    Ok(Some(StructHeader {
++        role_map,
++        k,
++        page_map,
++    }))
+ }
+ 
+-/// Parse a structure element (StructElem) from a PDF object.
+-///
+-/// Returns `Ok(None)` if the deadline is exceeded, causing the caller to
+-/// abandon the tree and fall back to content-stream order.
+-fn parse_struct_elem(
+-    document: &PdfDocument,
+-    obj: &Object,
+-    role_map: &HashMap<String, String>,
+-    page_map: &HashMap<u32, u32>,
+-    deadline: ParseBudget,
+-    element_count: &mut usize,
+-    visited: &mut HashSet<u32>,
+-) -> Result<Option<StructElem>, Error> {
+-    // Check the (optional) budget before doing work.
+-    if deadline.exceeded(*element_count) {
+-        return Ok(None);
+-    }
+-    *element_count += 1;
++/// The children of one open element still to visit. `single` is a `/K` that
++/// was not an array; `root` the children of the `/StructTreeRoot`.
++struct Frame {
++    kids: Vec<Object>,
++    next: usize,
++    single: bool,
++    root: bool,
++    page: Option<u32>,
++}
+ 
+-    let obj = resolve_object(document, obj)?;
++struct Opened {
++    head: ElemHead,
++    kids: Option<(Vec<Object>, bool)>,
++}
+ 
+-    let dict = match obj.as_dict() {
+-        Some(d) => d,
+-        None => return Ok(None), // Not a dictionary, skip
+-    };
++struct Walk<'a> {
++    document: &'a PdfDocument,
++    header: &'a StructHeader,
++    /// Object ids already met, so a cycle ends. Two integers per element met.
++    visited: HashSet<(u32, u16)>,
++}
+ 
+-    // Check /Type (should be /StructElem, but optional)
+-    if let Some(type_obj) = dict.get("Type") {
+-        if let Some(type_name) = type_obj.as_name() {
+-            if type_name == "OBJR" {
+-                // Per PDF spec §14.7.4 Table 323, an OBJR (Object Reference) dictionary
+-                // references a StructElem (or other PDF object) via its /Obj entry.
+-                // Transparently dereference it so the caller gets the real StructElem.
+-                if let Some(obj_ref_obj) = dict.get("Obj") {
+-                    if let Some(obj_ref) = obj_ref_obj.as_reference() {
+-                        if !visited.insert(obj_ref.id) {
++impl Walk<'_> {
++    fn first_visit(&mut self, r: &crate::object::ObjectRef) -> bool {
++        self.visited.insert((r.id, r.gen))
++    }
++
++    /// Reads the element `obj` names, or `None` when it is not one (the caller
++    /// may still read it as a marked-content reference).
++    fn open_element(&mut self, obj: &Object) -> Result<Option<Opened>, Error> {
++        let mut obj = resolve_object(self.document, obj)?;
++        loop {
++            // An OBJR dictionary is followed to the object it names (§14.7.4).
++            let followed: Option<Object> = {
++                let Some(dict) = obj.as_dict() else {
++                    return Ok(None);
++                };
++                match dict.get("Type").and_then(|t| t.as_name()) {
++                    Some("OBJR") => {
++                        let Some(obj_ref) = dict.get("Obj").and_then(|o| o.as_reference()) else {
++                            return Ok(None);
++                        };
++                        if !self.first_visit(&obj_ref) {
+                             log::debug!(
+                                 "OBJR: cycle detected — object {} already visited, skipping",
+                                 obj_ref.id
+                             );
+                             return Ok(None);
+                         }
+-                        match document.load_object(obj_ref) {
+-                            Ok(resolved) => {
+-                                return parse_struct_elem(
+-                                    document,
+-                                    &resolved,
+-                                    role_map,
+-                                    page_map,
+-                                    deadline,
+-                                    element_count,
+-                                    visited,
+-                                );
+-                            },
++                        match self.document.load_object(obj_ref) {
++                            Ok(resolved) => Some(resolve_object(self.document, &resolved)?),
+                             Err(e) => {
+                                 log::warn!(
+                                     "OBJR: failed to load /Obj {} {}: {}",
+@@ -415,300 +390,282 @@ fn parse_struct_elem(
+                                 return Ok(None);
+                             },
+                         }
+-                    }
++                    },
++                    Some(name) if name != "StructElem" => return Ok(None),
++                    _ => None,
+                 }
+-                return Ok(None);
+-            }
+-            if type_name != "StructElem" {
+-                return Ok(None); // Not a StructElem
++            };
++            match followed {
++                Some(next) => obj = next,
++                None => break,
+             }
+         }
+-    }
+-
+-    // Get /S (structure type) - REQUIRED
+-    let s_obj = match dict.get("S") {
+-        Some(obj) => obj,
+-        None => return Ok(None), // Missing /S, skip gracefully
+-    };
+-    let s_name = match s_obj.as_name() {
+-        Some(name) => name,
+-        None => return Ok(None), // /S not a name, skip
+-    };
+-
+-    // Map custom types to standard types using RoleMap
+-    // Preserve the original role name when mapping occurs
+-    let mapped = role_map.get(s_name);
+-    let struct_type_str = mapped.map(|s| s.as_str()).unwrap_or(s_name);
+-    let struct_type = StructType::from_str(struct_type_str);
+-
+-    let mut struct_elem = StructElem::new(struct_type);
+-    if mapped.is_some() {
+-        struct_elem.source_role = Some(s_name.to_string());
+-    }
+-
+-    // Get /Pg (page) - optional, resolve to page number
+-    if let Some(Object::Reference(pg_ref)) = dict.get("Pg") {
+-        if let Some(&page_num) = page_map.get(&pg_ref.id) {
+-            struct_elem.page = Some(page_num);
+-        }
+-    }
++        let dict = obj.as_dict().expect("checked above");
+ 
+-    // Skip /A (attributes) during text extraction — not needed for reading order.
+-    // Skip /Alt (alternate description) — not needed for text extraction.
+-
+-    // Get /ActualText (replacement text) - optional, per PDF spec Section 14.9.4
+-    // When present, this text replaces all descendant content for the element.
+-    if let Some(at_obj) = dict.get("ActualText") {
+-        let at_obj = resolve_object(document, at_obj)?;
+-        if let Some(at_bytes) = at_obj.as_string() {
+-            let text = decode_pdf_text_string(at_bytes);
+-            if !text.is_empty() {
+-                struct_elem.actual_text = Some(text);
++        let Some(s_name) = dict.get("S").and_then(|s| s.as_name()) else {
++            return Ok(None);
++        };
++        let mapped = self.header.role_map.get(s_name);
++        let struct_type = StructType::from_str(mapped.map(|s| s.as_str()).unwrap_or(s_name));
++        let source_role = mapped.is_some().then(|| s_name.to_string());
++        let page = match dict.get("Pg") {
++            Some(Object::Reference(pg_ref)) => self.header.page_map.get(&pg_ref.id).copied(),
++            _ => None,
++        };
++        let mut actual_text = None;
++        if let Some(at_obj) = dict.get("ActualText") {
++            let at_obj = resolve_object(self.document, at_obj)?;
++            if let Some(at_bytes) = at_obj.as_string() {
++                let text = decode_pdf_text_string(at_bytes);
++                if !text.is_empty() {
++                    actual_text = Some(text);
++                }
+             }
+         }
+-    }
+ 
+-    // Parse /K (children)
+-    if let Some(k_obj_raw) = dict.get("K") {
+-        // When /K is an indirect reference that resolves to a struct elem dictionary
+-        // (as opposed to an array), we lose the object ID after resolve_object and
+-        // the Dictionary arm of parse_k_children cannot check for cycles.
+-        // Load it here while we still have the reference ID, insert into visited,
+-        // and short-circuit if it has already been visited.
+-        if let Object::Reference(r) = k_obj_raw {
+-            let k_resolved = match document.load_object(*r) {
+-                Ok(obj) => obj,
++        let kids = match dict.get("K") {
++            None => None,
++            // A /K that is an indirect dictionary keeps its id for the cycle check.
++            Some(Object::Reference(r)) => match self.document.load_object(*r) {
+                 Err(e) => {
+                     log::warn!("Failed to load /K reference {}: {}", r.id, e);
+-                    return Ok(Some(struct_elem));
++                    None
+                 },
+-            };
+-            if k_resolved.as_dict().is_some() {
+-                // /K points directly at a struct elem — guard against cycles.
+-                if !visited.insert(r.id) {
+-                    log::warn!(
+-                        "Cycle in structure tree: /K object {} already visited, skipping children",
+-                        r.id
+-                    );
+-                    return Ok(Some(struct_elem));
+-                }
+-            }
+-            parse_k_children(
+-                document,
+-                &k_resolved,
+-                &mut struct_elem,
+-                role_map,
+-                page_map,
+-                deadline,
+-                element_count,
+-                visited,
+-            )?;
+-        } else {
+-            let k_obj = resolve_object(document, k_obj_raw)?;
+-            parse_k_children(
+-                document,
+-                &k_obj,
+-                &mut struct_elem,
+-                role_map,
+-                page_map,
+-                deadline,
+-                element_count,
+-                visited,
+-            )?;
+-        }
++                Ok(k) => {
++                    if k.as_dict().is_some() && !self.first_visit(r) {
++                        log::warn!(
++                            "Cycle in structure tree: /K object {} already visited, skipping children",
++                            r.id
++                        );
++                        None
++                    } else {
++                        kids_of(k)
++                    }
++                },
++            },
++            Some(raw) => kids_of(resolve_object(self.document, raw)?),
++        };
++        Ok(Some(Opened {
++            head: ElemHead {
++                struct_type,
++                source_role,
++                page,
++                actual_text,
++            },
++            kids,
++        }))
+     }
++}
+ 
+-    Ok(Some(struct_elem))
++/// The children a resolved `/K` holds: an array's items, or the one object.
++fn kids_of(k: Object) -> Option<(Vec<Object>, bool)> {
++    match k {
++        Object::Array(arr) => Some((arr, false)),
++        Object::Integer(_) | Object::Dictionary(_) | Object::Reference(_) => Some((vec![k], true)),
++        _ => None,
++    }
+ }
+ 
+-/// Parse the /K entry (children) of a structure element.
+-fn parse_k_children(
++/// Visits the structure tree depth-first, in document order. The stack holds
++/// the children still to visit of each open element, never the elements.
++/// Returns `false` when the budget ran out before the walk finished.
++pub(crate) fn walk_structure_tree(
+     document: &PdfDocument,
+-    k_obj: &Object,
+-    parent: &mut StructElem,
+-    role_map: &HashMap<String, String>,
+-    page_map: &HashMap<u32, u32>,
++    header: &StructHeader,
+     deadline: ParseBudget,
+-    element_count: &mut usize,
+-    visited: &mut HashSet<u32>,
+-) -> Result<(), Error> {
+-    match k_obj {
+-        Object::Integer(mcid) => {
+-            // Single MCID — bare integer child references the page's
+-            // own content stream (ISO 32000-1:2008 §14.7.5.4.2 "MCR"
+-            // form is reserved for cross-stream refs).
+-            let page = parent.page.unwrap_or(0);
+-            parent.add_child(StructChild::MarkedContentRef {
+-                mcid: *mcid as u32,
+-                page,
+-                scope: crate::structure::McidScope::Page(page),
++    visitor: &mut dyn StructVisitor,
++) -> Result<bool, Error> {
++    let mut walk = Walk {
++        document,
++        header,
++        visited: HashSet::new(),
++    };
++    let mut stack: Vec<Frame> = Vec::new();
++    if let Some(k) = &header.k {
++        if let Some((kids, single)) = kids_of(k.clone()) {
++            stack.push(Frame {
++                kids,
++                next: 0,
++                single,
++                root: true,
++                page: None,
+             });
+-        },
+-
+-        Object::Array(arr) => {
+-            // Array of children
+-            for child_obj in arr {
+-                // Check the (optional) budget before descending.
+-                if deadline.exceeded(*element_count) {
+-                    return Ok(());
++        }
++    }
++    while let Some(frame) = stack.last_mut() {
++        if deadline.exceeded(0) {
++            log::debug!("Structure tree parse budget exceeded, falling back to content order");
++            return Ok(false);
++        }
++        if frame.next >= frame.kids.len() {
++            let done = stack.pop().expect("a frame was open");
++            if !done.root {
++                visitor.leave();
++            }
++            continue;
++        }
++        let item = std::mem::replace(&mut frame.kids[frame.next], Object::Null);
++        frame.next += 1;
++        let (single, root, parent_page) = (frame.single, frame.root, frame.page);
++
++        // What the item is, once the cycle guard and the indirection are past.
++        let candidate: Option<Object> = if root {
++            if !single {
++                if let Object::Reference(r) = &item {
++                    if !walk.first_visit(r) {
++                        log::warn!(
++                            "Cycle in structure tree: root object {} already visited, skipping",
++                            r.id
++                        );
++                        continue;
++                    }
+                 }
+-
+-                // Guard against cycles before resolving: an indirect reference that has
+-                // already been visited would resolve to a dictionary and slip through to
+-                // parse_struct_elem without any ID to check. Capture the ID now, while we
+-                // still have the unresolved Reference, so the check happens before loading.
+-                if let Object::Reference(obj_ref) = child_obj {
+-                    if !visited.insert(obj_ref.id) {
++            }
++            Some(item)
++        } else {
++            match item {
++                Object::Integer(mcid) => {
++                    let page = parent_page.unwrap_or(0);
++                    visitor.marked_content(
++                        mcid as u32,
++                        page,
++                        crate::structure::McidScope::Page(page),
++                    );
++                    None
++                },
++                Object::Dictionary(_) => Some(item),
++                Object::Reference(r) => {
++                    if !walk.first_visit(&r) {
+                         log::warn!(
+                             "Cycle in structure tree: object {} already visited, skipping",
+-                            obj_ref.id
++                            r.id
+                         );
+                         continue;
+                     }
+-                }
+-
+-                let child_obj = resolve_object(document, child_obj)?;
+-
+-                match &child_obj {
+-                    Object::Integer(mcid) => {
+-                        // Bare integer MCID — page's own content stream.
+-                        let page = parent.page.unwrap_or(0);
+-                        parent.add_child(StructChild::MarkedContentRef {
+-                            mcid: *mcid as u32,
+-                            page,
+-                            scope: crate::structure::McidScope::Page(page),
+-                        });
+-                    },
+-
+-                    Object::Dictionary(_) => {
+-                        // Could be a StructElem or marked content reference
+-                        if let Some(child_elem) = parse_struct_elem(
+-                            document,
+-                            &child_obj,
+-                            role_map,
+-                            page_map,
+-                            deadline,
+-                            element_count,
+-                            visited,
+-                        )? {
+-                            parent.add_child(StructChild::StructElem(Box::new(child_elem)));
+-                        } else {
+-                            // Try parsing as marked content reference
+-                            if let Some(mcr) =
+-                                parse_marked_content_ref(document, &child_obj, page_map)?
+-                            {
+-                                parent.add_child(mcr);
+-                            }
+-                        }
+-                    },
+-
+-                    Object::Reference(obj_ref) => {
+-                        // Double-indirect reference — guard against cycles here too.
+-                        if !visited.insert(obj_ref.id) {
+-                            log::warn!(
+-                                "Cycle in structure tree: object {} already visited, skipping",
+-                                obj_ref.id
+-                            );
+-                            continue;
+-                        }
+-                        // Resolve indirect reference and try to parse as StructElem
+-                        match document.load_object(*obj_ref) {
+-                            Ok(resolved) => {
+-                                if let Some(child_elem) = parse_struct_elem(
+-                                    document,
+-                                    &resolved,
+-                                    role_map,
+-                                    page_map,
+-                                    deadline,
+-                                    element_count,
+-                                    visited,
+-                                )? {
+-                                    parent.add_child(StructChild::StructElem(Box::new(child_elem)));
+-                                } else if let Some(mcr) =
+-                                    parse_marked_content_ref(document, &resolved, page_map)?
+-                                {
+-                                    parent.add_child(mcr);
+-                                }
+-                            },
++                    if single {
++                        match document.load_object(r) {
++                            Ok(resolved) => Some(resolved),
+                             Err(e) => {
+-                                log::warn!(
+-                                    "Failed to resolve ObjectRef {} {}: {}",
+-                                    obj_ref.id,
+-                                    obj_ref.gen,
+-                                    e
++                                log::warn!("Failed to resolve ObjectRef {} {}: {}", r.id, r.gen, e);
++                                None
++                            },
++                        }
++                    } else {
++                        match resolve_object(document, &Object::Reference(r))? {
++                            Object::Integer(mcid) => {
++                                let page = parent_page.unwrap_or(0);
++                                visitor.marked_content(
++                                    mcid as u32,
++                                    page,
++                                    crate::structure::McidScope::Page(page),
+                                 );
++                                None
++                            },
++                            Object::Dictionary(d) => Some(Object::Dictionary(d)),
++                            Object::Reference(r2) => {
++                                if !walk.first_visit(&r2) {
++                                    log::warn!(
++                                        "Cycle in structure tree: object {} already visited, skipping",
++                                        r2.id
++                                    );
++                                    continue;
++                                }
++                                match document.load_object(r2) {
++                                    Ok(resolved) => Some(resolved),
++                                    Err(e) => {
++                                        log::warn!(
++                                            "Failed to resolve ObjectRef {} {}: {}",
++                                            r2.id,
++                                            r2.gen,
++                                            e
++                                        );
++                                        None
++                                    },
++                                }
+                             },
++                            _ => None,
+                         }
+-                    },
+-
+-                    _ => {
+-                        // Unknown child type, skip
+-                    },
+-                }
+-            }
+-        },
+-
+-        Object::Dictionary(_) => {
+-            // Single dictionary child
+-            if let Some(child_elem) = parse_struct_elem(
+-                document,
+-                k_obj,
+-                role_map,
+-                page_map,
+-                deadline,
+-                element_count,
+-                visited,
+-            )? {
+-                parent.add_child(StructChild::StructElem(Box::new(child_elem)));
+-            } else {
+-                // Try parsing as marked content reference
+-                if let Some(mcr) = parse_marked_content_ref(document, k_obj, page_map)? {
+-                    parent.add_child(mcr);
+-                }
+-            }
+-        },
+-
+-        Object::Reference(obj_ref) => {
+-            // Guard against cycles: skip if this object has already been visited.
+-            if !visited.insert(obj_ref.id) {
+-                log::warn!(
+-                    "Cycle in structure tree: object {} already visited, skipping",
+-                    obj_ref.id
+-                );
+-                return Ok(());
+-            }
+-            // Resolve indirect reference and try to parse as StructElem
+-            match document.load_object(*obj_ref) {
+-                Ok(resolved) => {
+-                    if let Some(child_elem) = parse_struct_elem(
+-                        document,
+-                        &resolved,
+-                        role_map,
+-                        page_map,
+-                        deadline,
+-                        element_count,
+-                        visited,
+-                    )? {
+-                        parent.add_child(StructChild::StructElem(Box::new(child_elem)));
+-                    } else if let Some(mcr) =
+-                        parse_marked_content_ref(document, &resolved, page_map)?
+-                    {
+-                        parent.add_child(mcr);
+                     }
+                 },
+-                Err(e) => {
+-                    log::warn!("Failed to resolve ObjectRef {} {}: {}", obj_ref.id, obj_ref.gen, e);
+-                },
++                _ => None,
+             }
+-        },
++        };
++        let Some(candidate) = candidate else { continue };
++
++        match walk.open_element(&candidate)? {
++            Some(opened) => {
++                let page = opened.head.page;
++                visitor.enter(opened.head);
++                let (kids, single) = opened.kids.unwrap_or_default();
++                stack.push(Frame {
++                    kids,
++                    next: 0,
++                    single,
++                    root: false,
++                    page,
++                });
++            },
++            // A root item that is not an element is dropped; elsewhere it may be an MCR.
++            None if root => {},
++            None => {
++                if let Some(StructChild::MarkedContentRef { mcid, page, scope }) =
++                    parse_marked_content_ref(document, &candidate, &header.page_map)?
++                {
++                    visitor.marked_content(mcid, page, scope);
++                }
++            },
++        }
++    }
++    Ok(true)
++}
+ 
+-        _ => {
+-            // Unknown K type
+-        },
++struct TreeBuilder {
++    builder: Builder,
++    roots: Vec<StructElem>,
++}
++
++impl StructVisitor for TreeBuilder {
++    fn enter(&mut self, head: ElemHead) {
++        self.builder.enter(head);
++    }
++    fn marked_content(&mut self, mcid: u32, page: u32, scope: crate::structure::McidScope) {
++        self.builder.marked_content(mcid, page, scope);
++    }
++    fn leave(&mut self) {
++        if let Some(done) = self.builder.leave() {
++            self.roots.push(done);
++        }
+     }
++}
+ 
+-    Ok(())
++fn parse_structure_tree_inner(
++    document: &PdfDocument,
++    deadline: ParseBudget,
++) -> Result<Option<StructTreeRoot>, Error> {
++    let parse_start = Timer::now();
++    let Some(header) = open_structure_tree(document)? else {
++        return Ok(None);
++    };
++    let mut tree = TreeBuilder {
++        builder: Builder::default(),
++        roots: Vec::new(),
++    };
++    if !walk_structure_tree(document, &header, deadline, &mut tree)? {
++        return Ok(None);
++    }
++    let mut struct_tree = StructTreeRoot::new();
++    struct_tree.role_map = header.role_map;
++    for root in tree.roots {
++        struct_tree.add_root_element(root);
++    }
++    log::debug!(
++        "Structure tree parsed: {} root elements in {}",
++        struct_tree.root_elements.len(),
++        parse_start.elapsed_debug()
++    );
++    Ok(Some(struct_tree))
+ }
++// ── end pdf_manipulator patch ──
+ 
+ /// Parse a marked content reference dictionary.
+ ///
+@@ -870,20 +827,16 @@ mod tests {
+         // count must not trip it, so `parse_structure_tree` returns the whole tree.
+         let guard = ParseBudget::unbounded();
+         assert!(!guard.exceeded(0));
+-        assert!(!guard.exceeded(MAX_STRUCT_ELEMENTS + 1));
++        // ── pdf_manipulator patch: MAX_STRUCT_ELEMENTS is removed; 10_000 was its value ──
++        assert!(!guard.exceeded(10_000 + 1));
++        // ── end pdf_manipulator patch ──
+         assert!(!guard.exceeded(usize::MAX));
+         // `None` budget is the unbounded guard.
+         assert!(!ParseBudget::from_option(None).exceeded(usize::MAX));
+     }
+ 
+-    #[test]
+-    fn parse_budget_bounded_caps_element_count() {
+-        // A bounded guard (Some(duration)) still applies the companion element
+-        // cap, deterministically, independent of wall-clock timing.
+-        let guard = ParseBudget::from_option(Some(Duration::from_secs(3600)));
+-        assert!(!guard.exceeded(MAX_STRUCT_ELEMENTS));
+-        assert!(guard.exceeded(MAX_STRUCT_ELEMENTS + 1));
+-    }
++    // ── pdf_manipulator patch: the element cap is gone, and its test with it; host/engine_proofs/mem_structure.rs parses past the old cap ──
++    // ── end pdf_manipulator patch ──
+ 
+     #[test]
+     fn test_struct_type_mapping() {
+diff --git a/src/structure/table_extractor.rs b/src/structure/table_extractor.rs
+index 5bbff3bc..1280ae72 100644
+--- a/src/structure/table_extractor.rs
++++ b/src/structure/table_extractor.rs
+@@ -425,6 +425,18 @@ fn collect_table_elements_all_pages(
+     }
+ }
+ 
++// ── pdf_manipulator patch: the Table elements of a subtree that have content on one page ──
++/// What [`find_table_elements_all_pages`] puts in `page`'s bucket, for the
++/// subtree `elem` alone.
++pub(crate) fn collect_tables_on_page(elem: &StructElem, page: u32, out: &mut Vec<StructElem>) {
++    let mut by_page = std::collections::HashMap::new();
++    collect_table_elements_all_pages(elem, &mut by_page);
++    if let Some(found) = by_page.remove(&page) {
++        out.extend(found);
++    }
++}
++// ── end pdf_manipulator patch ──
++
+ /// Collect the set of pages on which `elem` (or any descendant) has content.
+ /// Mirrors the truth set of [`element_has_page_content`] across all pages.
+ fn collect_content_pages(elem: &StructElem, pages: &mut std::collections::BTreeSet<u32>) {
+diff --git a/src/structure/traversal.rs b/src/structure/traversal.rs
+index e5f3c62b..97663def 100644
+--- a/src/structure/traversal.rs
++++ b/src/structure/traversal.rs
+@@ -726,6 +726,205 @@ pub fn extract_reading_order(
+         .collect())
+ }
+ 
++// ── pdf_manipulator patch: a page's structure and the ActualText index are produced while the tree is walked ──
++use super::parser::{
++    walk_structure_tree, Builder, ElemHead, ParseBudget, StructHeader, StructVisitor,
++};
++
++/// What extracting one page needs of the structure tree: its marked content
++/// in reading order, and the `Table` elements that have content on it.
++pub(crate) struct PageStructure {
++    pub(crate) content: Vec<OrderedContent>,
++    pub(crate) tables: Vec<StructElem>,
++}
++
++struct PageFrame {
++    /// The context this element's children inherit.
++    ctx: InheritedContext,
++    type_str: String,
++    parsed_type: StructType,
++    is_heading: bool,
++    is_block: bool,
++}
++
++/// An element whose subtree the page walk needs whole: a word break (its
++/// markers name the pages of each child) or a table (it is returned whole).
++struct PageCapture {
++    builder: Builder,
++    depth: usize,
++    /// The context the captured element inherits.
++    ctx: InheritedContext,
++}
++
++struct PageWalk {
++    target: u32,
++    counter: u32,
++    frames: Vec<PageFrame>,
++    capture: Option<PageCapture>,
++    content: Vec<OrderedContent>,
++    tables: Vec<StructElem>,
++}
++
++impl StructVisitor for PageWalk {
++    fn enter(&mut self, head: ElemHead) {
++        if let Some(cap) = &mut self.capture {
++            cap.builder.enter(head);
++            cap.depth += 1;
++            return;
++        }
++        let ctx = self.frames.last().map(|f| f.ctx).unwrap_or_default();
++        if head.struct_type.is_word_break() || head.struct_type == StructType::Table {
++            let mut builder = Builder::default();
++            builder.enter(head);
++            self.capture = Some(PageCapture {
++                builder,
++                depth: 1,
++                ctx,
++            });
++            return;
++        }
++        let descended = ctx.descend(&head.struct_type, &mut self.counter);
++        self.frames.push(PageFrame {
++            ctx: descended,
++            type_str: format!("{:?}", head.struct_type),
++            is_heading: descended.heading_level.is_some(),
++            is_block: head.struct_type.is_block(),
++            parsed_type: head.struct_type,
++        });
++    }
++
++    fn marked_content(&mut self, mcid: u32, page: u32, scope: McidScope) {
++        if let Some(cap) = &mut self.capture {
++            cap.builder.marked_content(mcid, page, scope);
++            return;
++        }
++        if page != self.target {
++            return;
++        }
++        let Some(frame) = self.frames.last() else {
++            return;
++        };
++        self.content.push(OrderedContent {
++            page,
++            mcid: Some(mcid),
++            struct_type: frame.type_str.clone(),
++            parsed_type: frame.parsed_type.clone(),
++            is_heading: frame.is_heading,
++            heading_level: frame.ctx.heading_level,
++            list_role: frame.ctx.list_role,
++            is_block: frame.is_block,
++            is_word_break: false,
++            block_id: frame.ctx.block_id,
++            section_id: frame.ctx.section_id,
++            in_table: frame.ctx.in_table,
++            preformatted: frame.ctx.preformatted,
++            actual_text: None,
++            mcid_scope: Some(scope),
++        });
++    }
++
++    fn leave(&mut self) {
++        let Some(cap) = &mut self.capture else {
++            self.frames.pop();
++            return;
++        };
++        let finished = cap.builder.leave();
++        cap.depth -= 1;
++        if cap.depth > 0 {
++            return;
++        }
++        let ctx = cap.ctx;
++        self.capture = None;
++        let Some(elem) = finished else { return };
++        let mut by_page = std::collections::HashMap::new();
++        traverse_element_all_pages(&elem, ctx, &mut self.counter, &mut by_page);
++        if let Some(found) = by_page.remove(&self.target) {
++            self.content.extend(found);
++        }
++        super::table_extractor::collect_tables_on_page(&elem, self.target, &mut self.tables);
++    }
++}
++
++/// The structure of one page, produced by one walk of the tree. The result
++/// equals `traverse_structure_tree_all_pages(tree)[page]` and the page's
++/// bucket of `find_table_elements_all_pages(tree)`; the tree is never held.
++pub(crate) fn page_structure(
++    document: &crate::document::PdfDocument,
++    header: &StructHeader,
++    page: u32,
++) -> Result<PageStructure, Error> {
++    let mut walk = PageWalk {
++        target: page,
++        counter: 0,
++        frames: Vec::new(),
++        capture: None,
++        content: Vec::new(),
++        tables: Vec::new(),
++    };
++    walk_structure_tree(document, header, ParseBudget::unbounded(), &mut walk)?;
++    Ok(PageStructure {
++        content: walk.content,
++        tables: walk.tables,
++    })
++}
++
++/// Holds an element that bears `/ActualText` whole, since its scope needs to
++/// look ahead into its subtree, and hands it to [`walk_actualtext`].
++struct ActualTextWalk {
++    builder: Builder,
++    /// Open elements of the captured subtree; 0 while none is captured.
++    depth: usize,
++    /// Open elements outside any captured subtree.
++    outside: usize,
++    index: ActualTextIndex,
++}
++
++impl StructVisitor for ActualTextWalk {
++    fn enter(&mut self, head: ElemHead) {
++        if self.depth > 0 || head.actual_text.is_some() {
++            self.builder.enter(head);
++            self.depth += 1;
++        } else {
++            self.outside += 1;
++        }
++    }
++
++    fn marked_content(&mut self, mcid: u32, page: u32, scope: McidScope) {
++        if self.depth > 0 {
++            self.builder.marked_content(mcid, page, scope);
++        }
++    }
++
++    fn leave(&mut self) {
++        if self.depth == 0 {
++            self.outside -= 1;
++            return;
++        }
++        let finished = self.builder.leave();
++        self.depth -= 1;
++        if let Some(elem) = finished {
++            walk_actualtext(&elem, None, &mut self.index);
++        }
++    }
++}
++
++/// [`build_actualtext_index`] over a walk of the tree: only the subtrees that
++/// bear `/ActualText` are held, each until its scope is read.
++pub(crate) fn streamed_actualtext_index(
++    document: &crate::document::PdfDocument,
++    header: &StructHeader,
++) -> Result<ActualTextIndex, Error> {
++    let mut walk = ActualTextWalk {
++        builder: Builder::default(),
++        depth: 0,
++        outside: 0,
++        index: ActualTextIndex::new(),
++    };
++    walk_structure_tree(document, header, ParseBudget::unbounded(), &mut walk)?;
++    Ok(walk.index)
++}
++// ── end pdf_manipulator patch ──
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+diff --git a/src/xfa/extractor.rs b/src/xfa/extractor.rs
+index 5faf7e0c..fcb924b8 100644
+--- a/src/xfa/extractor.rs
++++ b/src/xfa/extractor.rs
+@@ -3,7 +3,10 @@
+ //! This module provides utilities to detect and extract XFA form data
+ //! from PDF documents.
+ 
++// ── pdf_manipulator patch: the whole-slice decoder is test-only now ──
++#[cfg(test)]
+ use crate::decoders::decode_stream;
++// ── end pdf_manipulator patch ──
+ use crate::document::PdfDocument;
+ use crate::error::{Error, Result};
+ use crate::object::Object;
+@@ -50,28 +53,10 @@ impl XfaExtractor {
+         Ok(acroform_dict.contains_key("XFA"))
+     }
+ 
+-    /// Extract XFA data from a PDF document.
+-    ///
+-    /// XFA data in PDFs can be stored as:
+-    /// 1. A single stream containing the complete XDP document
+-    /// 2. An array of alternating name/stream pairs for different XFA packets
+-    ///
+-    /// This method returns the raw XFA data bytes.
+-    ///
+-    /// # Example
+-    ///
+-    /// ```ignore
+-    /// use pdf_oxide::PdfDocument;
+-    /// use pdf_oxide::xfa::{XfaExtractor, XfaParser};
+-    ///
+-    /// let mut doc = PdfDocument::open("form.pdf")?;
+-    /// if let Ok(xfa_data) = XfaExtractor::extract_xfa(&mut doc) {
+-    ///     let mut parser = XfaParser::new();
+-    ///     let form = parser.parse(&xfa_data)?;
+-    ///     println!("Found {} fields", form.field_count());
+-    /// }
+-    /// ```
+-    pub fn extract_xfa(doc: &mut PdfDocument) -> Result<Vec<u8>> {
++    // ── pdf_manipulator patch: XFA packets are handed out as readers over their decoded streams, never as whole buffers ──
++    /// The document's `/XFA` entry: a stream holding the complete XDP, or an
++    /// array of alternating name and stream packets.
++    fn xfa_entry(doc: &mut PdfDocument) -> Result<Object> {
+         let catalog = doc.catalog()?;
+         let catalog_dict = catalog
+             .as_dict()
+@@ -89,62 +74,65 @@ impl XfaExtractor {
+         let xfa_obj = acroform_dict
+             .get("XFA")
+             .ok_or_else(|| Error::InvalidPdf("No XFA entry in AcroForm".to_string()))?;
+-        let xfa_obj = Self::resolve_object(doc, xfa_obj)?;
++        Self::resolve_object(doc, xfa_obj)
++    }
+ 
+-        match &xfa_obj {
+-            // ── pdf_manipulator patch: stream bodies are StreamBody ──
+-            Object::Stream { dict, body } => {
+-                // Single stream containing complete XDP
+-                Self::decode_stream_data(dict, &body.read_whole_raw()?)
+-            },
+-            // ── end pdf_manipulator patch ──
++    /// Hands each XFA packet to `each` as a reader over its decoded stream:
++    /// `("xdp", ..)` for a single stream, the packet's name for an array.
++    /// The decoded data is read through a buffer and never held whole.
++    pub fn read_packets(
++        doc: &mut PdfDocument,
++        mut each: impl FnMut(&str, &mut dyn std::io::BufRead) -> Result<()>,
++    ) -> Result<()> {
++        let mut packet = |name: &str, stream: &Object| -> Result<()> {
++            let Object::Stream { dict, body } = stream else {
++                return Ok(());
++            };
++            let decoded =
++                crate::decoders::stream::reader_in(dict, body.origin(), || body.raw_reader())?;
++            let mut reader = std::io::BufReader::with_capacity(64 * 1024, decoded);
++            each(name, &mut reader)
++        };
++        match Self::xfa_entry(doc)? {
++            stream @ Object::Stream { .. } => packet("xdp", &stream),
+             Object::Array(arr) => {
+-                // Array of name/stream pairs
+-                // Combine all streams into single XFA document
+-                Self::extract_xfa_array(doc, arr)
++                // Array is [name1, stream1, name2, stream2, ...]
++                let mut i = 0;
++                while i + 1 < arr.len() {
++                    let name = match &arr[i] {
++                        Object::Name(n) => n.clone(),
++                        Object::String(s) => String::from_utf8_lossy(s).to_string(),
++                        _ => format!("packet_{}", i / 2),
++                    };
++                    let stream = Self::resolve_object(doc, &arr[i + 1])?;
++                    packet(&name, &stream)?;
++                    i += 2;
++                }
++                Ok(())
+             },
+             _ => Err(Error::InvalidPdf("XFA entry is neither stream nor array".to_string())),
+         }
+     }
+ 
+-    /// Extract XFA packets from an array format.
++    /// The form the document's XFA packets describe, parsed as XML events
++    /// over each packet's decoded stream.
+     ///
+-    /// Returns a vector of (name, data) pairs for each XFA packet.
+-    pub fn extract_xfa_packets(doc: &mut PdfDocument) -> Result<Vec<(String, Vec<u8>)>> {
+-        let catalog = doc.catalog()?;
+-        let catalog_dict = catalog
+-            .as_dict()
+-            .ok_or_else(|| Error::InvalidPdf("Catalog is not a dictionary".to_string()))?;
+-
+-        let acroform_obj = catalog_dict
+-            .get("AcroForm")
+-            .ok_or_else(|| Error::InvalidPdf("No AcroForm in document".to_string()))?;
+-        let acroform_obj = Self::resolve_object(doc, acroform_obj)?;
+-
+-        let acroform_dict = acroform_obj
+-            .as_dict()
+-            .ok_or_else(|| Error::InvalidPdf("AcroForm is not a dictionary".to_string()))?;
+-
+-        let xfa_obj = acroform_dict
+-            .get("XFA")
+-            .ok_or_else(|| Error::InvalidPdf("No XFA entry in AcroForm".to_string()))?;
+-        let xfa_obj = Self::resolve_object(doc, xfa_obj)?;
+-
+-        match &xfa_obj {
+-            // ── pdf_manipulator patch: stream bodies are StreamBody ──
+-            Object::Stream { dict, body } => {
+-                // Single stream - return as single "xdp" packet
+-                let decoded = Self::decode_stream_data(dict, &body.read_whole_raw()?)?;
+-                Ok(vec![("xdp".to_string(), decoded)])
+-            },
+-            // ── end pdf_manipulator patch ──
+-            Object::Array(arr) => {
+-                // Array of name/stream pairs
+-                Self::extract_xfa_packets_from_array(doc, arr)
+-            },
+-            _ => Err(Error::InvalidPdf("XFA entry is neither stream nor array".to_string())),
+-        }
++    /// # Example
++    ///
++    /// ```ignore
++    /// use pdf_oxide::PdfDocument;
++    /// use pdf_oxide::xfa::XfaExtractor;
++    ///
++    /// let mut doc = PdfDocument::open("form.pdf")?;
++    /// let form = XfaExtractor::parse_form(&mut doc)?;
++    /// println!("Found {} fields", form.field_count());
++    /// ```
++    pub fn parse_form(doc: &mut PdfDocument) -> Result<crate::xfa::XfaForm> {
++        let mut parser = crate::xfa::XfaParser::new();
++        Self::read_packets(doc, |_name, reader| parser.feed(reader))?;
++        Ok(parser.finish())
+     }
++    // ── end pdf_manipulator patch ──
+ 
+     /// Resolve an indirect reference to its object.
+     fn resolve_object(doc: &mut PdfDocument, obj: &Object) -> Result<Object> {
+@@ -155,6 +143,9 @@ impl XfaExtractor {
+         }
+     }
+ 
++    // ── pdf_manipulator patch: only the tests decode a stream from a slice now ──
++    #[cfg(test)]
++    // ── end pdf_manipulator patch ──
+     /// Decode a stream's data using its filter chain.
+     fn decode_stream_data(
+         dict: &std::collections::HashMap<String, Object>,
+@@ -170,6 +161,9 @@ impl XfaExtractor {
+         }
+     }
+ 
++    // ── pdf_manipulator patch: only the tests read the filter names from a dictionary now ──
++    #[cfg(test)]
++    // ── end pdf_manipulator patch ──
+     /// Extract filter names from stream dictionary.
+     fn get_filters(dict: &std::collections::HashMap<String, Object>) -> Vec<String> {
+         let filter_obj = dict.get("Filter");
+@@ -188,62 +182,6 @@ impl XfaExtractor {
+             _ => Vec::new(),
+         }
+     }
+-
+-    /// Extract and combine XFA data from an array of packets.
+-    fn extract_xfa_array(doc: &mut PdfDocument, arr: &[Object]) -> Result<Vec<u8>> {
+-        let mut combined = Vec::new();
+-
+-        // Array is [name1, stream1, name2, stream2, ...]
+-        let mut i = 0;
+-        while i < arr.len() {
+-            // Skip the name, get the stream
+-            if i + 1 < arr.len() {
+-                let stream_obj = Self::resolve_object(doc, &arr[i + 1])?;
+-                // ── pdf_manipulator patch: stream bodies are StreamBody ──
+-                if let Object::Stream { dict, body } = &stream_obj {
+-                    let decoded = Self::decode_stream_data(dict, &body.read_whole_raw()?)?;
+-                    // ── end pdf_manipulator patch ──
+-                    combined.extend_from_slice(&decoded);
+-                }
+-            }
+-            i += 2;
+-        }
+-
+-        Ok(combined)
+-    }
+-
+-    /// Extract packets from XFA array with names preserved.
+-    fn extract_xfa_packets_from_array(
+-        doc: &mut PdfDocument,
+-        arr: &[Object],
+-    ) -> Result<Vec<(String, Vec<u8>)>> {
+-        let mut packets = Vec::new();
+-
+-        // Array is [name1, stream1, name2, stream2, ...]
+-        let mut i = 0;
+-        while i < arr.len() {
+-            if i + 1 < arr.len() {
+-                // Get the name
+-                let name = match &arr[i] {
+-                    Object::Name(n) => n.clone(),
+-                    Object::String(s) => String::from_utf8_lossy(s).to_string(),
+-                    _ => format!("packet_{}", i / 2),
+-                };
+-
+-                // Get the stream data
+-                let stream_obj = Self::resolve_object(doc, &arr[i + 1])?;
+-                // ── pdf_manipulator patch: stream bodies are StreamBody ──
+-                if let Object::Stream { dict, body } = &stream_obj {
+-                    let decoded = Self::decode_stream_data(dict, &body.read_whole_raw()?)?;
+-                    // ── end pdf_manipulator patch ──
+-                    packets.push((name, decoded));
+-                }
+-            }
+-            i += 2;
+-        }
+-
+-        Ok(packets)
+-    }
+ }
+ 
+ #[cfg(test)]
+diff --git a/src/xfa/integration.rs b/src/xfa/integration.rs
+index d2c8046a..939f3015 100644
+--- a/src/xfa/integration.rs
++++ b/src/xfa/integration.rs
+@@ -5,7 +5,6 @@
+ 
+ use super::converter::{ConvertedField, ConvertedPage, XfaConversionOptions, XfaConverter};
+ use super::extractor::XfaExtractor;
+-use super::parser::XfaParser;
+ use crate::document::PdfDocument;
+ use crate::error::Result;
+ use crate::writer::{PageBuilder, PdfWriter, PdfWriterConfig};
+@@ -136,12 +135,9 @@ pub fn convert_xfa_document(
+         ));
+     }
+ 
+-    // Extract XFA data
+-    let xfa_data = XfaExtractor::extract_xfa(doc)?;
+-
+-    // Parse XFA
+-    let mut parser = XfaParser::new();
+-    let xfa_form = parser.parse(&xfa_data)?;
++    // ── pdf_manipulator patch: the packets are parsed as events over their streams ──
++    let xfa_form = XfaExtractor::parse_form(doc)?;
++    // ── end pdf_manipulator patch ──
+ 
+     // Convert to AcroForm
+     let converter = if let Some(opts) = options {
+@@ -213,10 +209,9 @@ pub fn analyze_xfa_document(doc: &mut PdfDocument) -> Result<XfaAnalysis> {
+         });
+     }
+ 
+-    // Extract and parse
+-    let xfa_data = XfaExtractor::extract_xfa(doc)?;
+-    let mut parser = XfaParser::new();
+-    let xfa_form = parser.parse(&xfa_data)?;
++    // ── pdf_manipulator patch: the packets are parsed as events over their streams ──
++    let xfa_form = XfaExtractor::parse_form(doc)?;
++    // ── end pdf_manipulator patch ──
+ 
+     // Collect field types
+     let mut field_types: Vec<String> = xfa_form
+diff --git a/src/xfa/mod.rs b/src/xfa/mod.rs
+index b3fd9011..3941b342 100644
+--- a/src/xfa/mod.rs
++++ b/src/xfa/mod.rs
+@@ -25,18 +25,15 @@
+ //! # Example
+ //!
+ //! ```ignore
+-//! use pdf_oxide::xfa::{XfaExtractor, XfaParser, XfaConverter};
++//! use pdf_oxide::xfa::{XfaExtractor, XfaConverter};
+ //! use pdf_oxide::PdfDocument;
+ //!
+ //! let mut doc = PdfDocument::open("form.pdf")?;
+ //!
+ //! // Check if document has XFA form
+ //! if XfaExtractor::has_xfa(&mut doc)? {
+-//!     // Extract and parse XFA data
+-//!     let xfa_data = XfaExtractor::extract_xfa(&mut doc)?;
+-//!
+-//!     let mut parser = XfaParser::new();
+-//!     let form = parser.parse(&xfa_data)?;
++//!     // Parse the XFA packets as XML events
++//!     let form = XfaExtractor::parse_form(&mut doc)?;
+ //!
+ //!     // Convert to AcroForm
+ //!     let converter = XfaConverter::new();
+diff --git a/src/xfa/parser.rs b/src/xfa/parser.rs
+index 0039e5f6..31c3eae7 100644
+--- a/src/xfa/parser.rs
++++ b/src/xfa/parser.rs
+@@ -22,6 +22,9 @@ use crate::error::{Error, Result};
+ use quick_xml::events::Event;
+ use quick_xml::Reader;
+ use std::collections::HashMap;
++// ── pdf_manipulator patch: packets are read from a reader ──
++use std::io::BufRead;
++// ── end pdf_manipulator patch ──
+ 
+ /// US Letter page width in points (8.5 inches × 72 points/inch).
+ const LETTER_WIDTH: f32 = 612.0;
+@@ -177,10 +180,8 @@ pub struct XfaForm {
+     pub fields: Vec<XfaField>,
+     /// Field values from datasets (binding -> value)
+     pub dataset_values: HashMap<String, String>,
+-    /// Raw template XML (for debugging)
+-    pub template_xml: Option<String>,
+-    /// Raw datasets XML (for debugging)
+-    pub datasets_xml: Option<String>,
++    // ── pdf_manipulator patch: the packets are read as events, so the form keeps no raw XML ──
++    // ── end pdf_manipulator patch ──
+ }
+ 
+ impl XfaForm {
+@@ -200,6 +201,32 @@ impl XfaForm {
+     }
+ }
+ 
++// ── pdf_manipulator patch: the state a packet's events carry, and which section they are in ──
++/// The part of an XDP an event belongs to.
++#[derive(Clone, Copy, PartialEq, Eq)]
++enum Section {
++    Template,
++    Datasets,
++}
++
++/// What reading a template carries from one event to the next.
++#[derive(Default)]
++struct TemplateState {
++    current_field: Option<XfaField>,
++    current_page: Option<XfaPage>,
++    in_items: bool,
++    option_text: String,
++    option_value: String,
++}
++
++/// What reading datasets carries from one event to the next.
++#[derive(Default)]
++struct DatasetsState {
++    path_stack: Vec<String>,
++    current_text: String,
++}
++// ── end pdf_manipulator patch ──
++
+ /// XFA parser.
+ pub struct XfaParser {
+     /// Parsed form
+@@ -226,29 +253,32 @@ impl XfaParser {
+         }
+     }
+ 
++    // ── pdf_manipulator patch: XFA packets are read as XML events, from a reader, never held as one string ──
+     /// Parse XFA data from raw bytes.
+     ///
+     /// The XFA data may be a single XML stream or an array of packets.
+     pub fn parse(&mut self, xfa_data: &[u8]) -> Result<XfaForm> {
+-        // Try to parse as XML
+-        let xml_str = String::from_utf8_lossy(xfa_data);
+-        self.form.template_xml = Some(xml_str.to_string());
+-
+-        // Check if this is a complete XDP (XFA Data Package)
+-        if xml_str.contains("<xdp:xdp") || xml_str.contains("<xfa:datasets") {
+-            self.parse_xdp(&xml_str)?;
+-        } else if xml_str.contains("<template") {
+-            // Just a template packet
+-            self.parse_template(&xml_str)?;
+-        } else if xml_str.contains("<xfa:data") || xml_str.contains("<data>") {
+-            // Just a datasets packet
+-            self.parse_datasets(&xml_str)?;
+-        }
++        self.parse_reader(xfa_data)
++    }
+ 
+-        // Apply dataset values to fields
+-        self.apply_dataset_values();
++    /// Parse XFA data read from `reader`, one XML event at a time.
++    pub fn parse_reader<R: BufRead>(&mut self, reader: R) -> Result<XfaForm> {
++        self.feed(reader)?;
++        Ok(self.finish())
++    }
+ 
+-        Ok(std::mem::take(&mut self.form))
++    /// Feed one packet of XFA data (a complete XDP, or a `template` or
++    /// `datasets` packet) to the parser. Call [`Self::finish`] once every
++    /// packet is fed.
++    pub fn feed<R: BufRead>(&mut self, reader: R) -> Result<()> {
++        self.drive(reader, None)
++    }
++
++    /// Take the form the packets fed so far describe, with the dataset values
++    /// applied to its fields.
++    pub fn finish(&mut self) -> XfaForm {
++        self.apply_dataset_values();
++        std::mem::take(&mut self.form)
+     }
+ 
+     /// Parse XFA packets from a PDF XFA array.
+@@ -256,260 +286,269 @@ impl XfaParser {
+     /// XFA in PDFs can be an array: [name1, stream1, name2, stream2, ...]
+     pub fn parse_packets(&mut self, packets: &[(String, Vec<u8>)]) -> Result<XfaForm> {
+         for (name, data) in packets {
+-            let xml_str = String::from_utf8_lossy(data);
+-
+             match name.as_str() {
+-                "template" => {
+-                    self.form.template_xml = Some(xml_str.to_string());
+-                    self.parse_template(&xml_str)?;
+-                },
+-                "datasets" => {
+-                    self.form.datasets_xml = Some(xml_str.to_string());
+-                    self.parse_datasets(&xml_str)?;
+-                },
++                "template" => self.drive(data.as_slice(), Some(Section::Template))?,
++                "datasets" => self.drive(data.as_slice(), Some(Section::Datasets))?,
+                 // Other packets (config, form, etc.) are not needed for static conversion
+                 _ => {},
+             }
+         }
+-
+-        // Apply dataset values to fields
+-        self.apply_dataset_values();
+-
+-        Ok(std::mem::take(&mut self.form))
++        Ok(self.finish())
+     }
+ 
+-    /// Parse a complete XDP document.
+-    fn parse_xdp(&mut self, xml: &str) -> Result<()> {
+-        // Extract template section
+-        if let Some(template_start) = xml.find("<template") {
+-            if let Some(template_end) = xml.find("</template>") {
+-                let template_xml = &xml[template_start..template_end + 11];
+-                self.parse_template(template_xml)?;
+-            }
+-        }
+-
+-        // Extract datasets section
+-        if let Some(data_start) = xml.find("<xfa:datasets") {
+-            if let Some(data_end) = xml.find("</xfa:datasets>") {
+-                let datasets_xml = &xml[data_start..data_end + 15];
+-                self.form.datasets_xml = Some(datasets_xml.to_string());
+-                self.parse_datasets(datasets_xml)?;
+-            }
+-        }
+-
+-        Ok(())
++    /// Parse the datasets packet.
++    fn parse_datasets(&mut self, xml: &str) -> Result<()> {
++        self.drive(xml.as_bytes(), Some(Section::Datasets))
+     }
+ 
+-    /// Parse the template packet.
+-    fn parse_template(&mut self, xml: &str) -> Result<()> {
+-        let mut reader = Reader::from_str(xml);
++    /// Reads `reader` as XML events. With `forced` the whole input is that
++    /// section; without it a `template` element opens the template section and
++    /// a `datasets` or `data` element the datasets section, each until its
++    /// element closes. An XML error inside a section is an error; one outside
++    /// any section ends the packet.
++    fn drive<R: BufRead>(&mut self, reader: R, forced: Option<Section>) -> Result<()> {
++        let mut reader = Reader::from_reader(reader);
+         reader.config_mut().trim_text(true);
+-
+-        let mut current_field: Option<XfaField> = None;
+-        let mut current_page: Option<XfaPage> = None;
+-        let mut in_items = false;
+-        let mut current_option_text = String::new();
+-        let mut current_option_value = String::new();
+-
++        let mut buf = Vec::new();
++        let mut section = forced;
++        let mut depth = 0usize;
++        let mut template = TemplateState::default();
++        let mut datasets = DatasetsState::default();
+         loop {
+-            match reader.read_event() {
+-                Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+-                    let local_name = e.local_name().as_ref().to_string();
+-
+-                    match local_name.as_str() {
+-                        "subform" => {
+-                            // Check if this is a page-level subform
+-                            let name = self.get_attribute(e, "name");
+-                            if let Some(name) = name {
+-                                self.binding_parts.push(format!("{}[0]", name));
+-
+-                                // Check for page-like subforms
+-                                if name.contains("Page") || current_page.is_none() {
+-                                    current_page = Some(XfaPage {
+-                                        name,
+-                                        ..Default::default()
+-                                    });
+-                                }
+-                            }
+-                        },
+-                        "field" => {
+-                            let name = self.get_attribute(e, "name").unwrap_or_default();
+-                            let mut binding = self.binding_parts.join(".");
+-                            if !binding.is_empty() {
+-                                binding.push('.');
+-                            }
+-                            binding.push_str(&format!("{}[0]", name));
+-
+-                            let mut field = XfaField::new(&name, binding);
+-
+-                            // Get dimensions from attributes
+-                            if let Some(w) = self.get_attribute(e, "w") {
+-                                field.width = self.parse_dimension(&w);
+-                            }
+-                            if let Some(h) = self.get_attribute(e, "h") {
+-                                field.height = self.parse_dimension(&h);
+-                            }
+-                            if let Some(x) = self.get_attribute(e, "x") {
+-                                field.x = self.parse_dimension(&x);
+-                            }
+-                            if let Some(y) = self.get_attribute(e, "y") {
+-                                field.y = self.parse_dimension(&y);
+-                            }
+-
+-                            current_field = Some(field);
+-                        },
+-                        "textEdit" | "numericEdit" | "dateTimeEdit" | "checkButton"
+-                        | "choiceList" | "button" | "signature" | "imageEdit" | "barcode" => {
+-                            if let Some(ref mut field) = current_field {
+-                                field.field_type = XfaFieldType::from_xfa_name(&local_name);
+-                            }
+-                        },
+-                        "items" => {
+-                            in_items = true;
+-                        },
+-                        "text" => {
+-                            // Will capture text content
+-                        },
+-                        "caption" => {
+-                            // Caption element
++            buf.clear();
++            let event = match reader.read_event_into(&mut buf) {
++                Ok(Event::Eof) => break,
++                Ok(event) => event,
++                Err(e) => {
++                    return match section {
++                        Some(Section::Template) => {
++                            Err(Error::InvalidPdf(format!("XFA template parse error: {}", e)))
+                         },
+-                        "toolTip" => {
+-                            // Tooltip element
++                        Some(Section::Datasets) => {
++                            Err(Error::InvalidPdf(format!("XFA datasets parse error: {}", e)))
+                         },
+-                        _ => {},
+-                    }
+-
+-                    self.context_stack.push(local_name);
++                        None => Ok(()),
++                    };
+                 },
+-                Ok(Event::Text(e)) => {
+-                    let text = e.xml11_content().to_string();
+-
+-                    if let Some(parent) = self.context_stack.last() {
+-                        if in_items && parent == "text" {
+-                            current_option_text = text.clone();
+-                            current_option_value = text;
+-                        } else if let Some(ref mut field) = current_field {
+-                            match parent.as_str() {
+-                                "caption" | "text" => {
+-                                    if field.caption.is_none()
+-                                        && !in_items
+-                                        && self.context_stack.iter().any(|s| s == "caption")
+-                                    {
+-                                        field.caption = Some(text);
+-                                    }
+-                                },
+-                                "toolTip" => {
+-                                    field.tooltip = Some(text);
+-                                },
+-                                "value" => {
+-                                    if field.default_value.is_none() {
+-                                        field.default_value = Some(text);
+-                                    }
+-                                },
+-                                _ => {},
+-                            }
+-                        }
+-                    }
+-                },
+-                Ok(Event::End(ref e)) => {
+-                    let local_name = e.local_name().as_ref().to_string();
+-
+-                    match local_name.as_str() {
+-                        "subform" => {
+-                            self.binding_parts.pop();
+-                        },
+-                        "field" => {
+-                            if let Some(field) = current_field.take() {
+-                                self.form.fields.push(field.clone());
+-                                if let Some(ref mut page) = current_page {
+-                                    page.fields.push(field);
+-                                }
+-                            }
+-                        },
+-                        "items" => {
+-                            in_items = false;
+-                        },
+-                        "text" => {
+-                            if in_items {
+-                                if let Some(ref mut field) = current_field {
+-                                    field.options.push(XfaOption {
+-                                        text: current_option_text.clone(),
+-                                        value: current_option_value.clone(),
+-                                    });
+-                                }
+-                                current_option_text.clear();
+-                                current_option_value.clear();
+-                            }
+-                        },
+-                        _ => {},
++            };
++            if section.is_none() {
++                if let Event::Start(ref e) | Event::Empty(ref e) = event {
++                    section = match e.local_name().as_ref().to_string().as_str() {
++                        "template" => Some(Section::Template),
++                        "datasets" | "data" => Some(Section::Datasets),
++                        _ => None,
++                    };
++                }
++                if section.is_none() {
++                    continue;
++                }
++                depth = 0;
++            }
++            match section {
++                Some(Section::Template) => self.template_event(&event, &mut template),
++                Some(Section::Datasets) => self.datasets_event(&event, &mut datasets),
++                None => {},
++            }
++            if forced.is_none() {
++                match event {
++                    Event::Start(_) => depth += 1,
++                    Event::End(_) => depth = depth.saturating_sub(1),
++                    _ => {},
++                }
++                let closed = match event {
++                    Event::Empty(_) => depth == 0,
++                    Event::End(_) => depth == 0,
++                    _ => false,
++                };
++                if closed {
++                    if section == Some(Section::Template) {
++                        self.close_template(&mut template);
+                     }
+-
+-                    self.context_stack.pop();
+-                },
+-                Ok(Event::Eof) => break,
+-                Err(e) => {
+-                    return Err(Error::InvalidPdf(format!("XFA template parse error: {}", e)));
+-                },
+-                _ => {},
++                    section = None;
++                    template = TemplateState::default();
++                    datasets = DatasetsState::default();
++                }
+             }
+         }
++        if section == Some(Section::Template) {
++            self.close_template(&mut template);
++        }
++        Ok(())
++    }
+ 
+-        // Add the last page if any
+-        if let Some(page) = current_page {
++    /// The last page of a template, if it has fields.
++    fn close_template(&mut self, state: &mut TemplateState) {
++        if let Some(page) = state.current_page.take() {
+             if !page.fields.is_empty() {
+                 self.form.pages.push(page);
+             }
+         }
+-
+-        Ok(())
+     }
+ 
+-    /// Parse the datasets packet.
+-    fn parse_datasets(&mut self, xml: &str) -> Result<()> {
+-        let mut reader = Reader::from_str(xml);
+-        reader.config_mut().trim_text(true);
++    /// One event of the template packet.
++    fn template_event(&mut self, event: &Event, st: &mut TemplateState) {
++        match event {
++            Event::Start(e) | Event::Empty(e) => {
++                let local_name = e.local_name().as_ref().to_string();
++
++                match local_name.as_str() {
++                    "subform" => {
++                        // Check if this is a page-level subform
++                        let name = self.get_attribute(e, "name");
++                        if let Some(name) = name {
++                            self.binding_parts.push(format!("{}[0]", name));
++
++                            // Check for page-like subforms
++                            if name.contains("Page") || st.current_page.is_none() {
++                                st.current_page = Some(XfaPage {
++                                    name,
++                                    ..Default::default()
++                                });
++                            }
++                        }
++                    },
++                    "field" => {
++                        let name = self.get_attribute(e, "name").unwrap_or_default();
++                        let mut binding = self.binding_parts.join(".");
++                        if !binding.is_empty() {
++                            binding.push('.');
++                        }
++                        binding.push_str(&format!("{}[0]", name));
+ 
+-        let mut path_stack: Vec<String> = Vec::new();
+-        let mut current_text = String::new();
++                        let mut field = XfaField::new(&name, binding);
+ 
+-        loop {
+-            match reader.read_event() {
+-                Ok(Event::Start(ref e)) => {
+-                    let local_name = e.local_name().as_ref().to_string();
++                        // Get dimensions from attributes
++                        if let Some(w) = self.get_attribute(e, "w") {
++                            field.width = self.parse_dimension(&w);
++                        }
++                        if let Some(h) = self.get_attribute(e, "h") {
++                            field.height = self.parse_dimension(&h);
++                        }
++                        if let Some(x) = self.get_attribute(e, "x") {
++                            field.x = self.parse_dimension(&x);
++                        }
++                        if let Some(y) = self.get_attribute(e, "y") {
++                            field.y = self.parse_dimension(&y);
++                        }
+ 
+-                    // Skip XFA namespace elements
+-                    if local_name != "xfa" && local_name != "datasets" && local_name != "data" {
+-                        path_stack.push(format!("{}[0]", local_name));
+-                    }
+-                },
+-                Ok(Event::Text(e)) => {
+-                    current_text = e.xml11_content().to_string();
+-                },
+-                Ok(Event::End(ref e)) => {
+-                    let local_name = e.local_name().as_ref().to_string();
+-
+-                    if local_name != "xfa" && local_name != "datasets" && local_name != "data" {
+-                        // Store value if we have text
+-                        if !current_text.is_empty() && !path_stack.is_empty() {
+-                            let binding = path_stack.join(".");
+-                            self.form
+-                                .dataset_values
+-                                .insert(binding, current_text.clone());
++                        st.current_field = Some(field);
++                    },
++                    "textEdit" | "numericEdit" | "dateTimeEdit" | "checkButton" | "choiceList"
++                    | "button" | "signature" | "imageEdit" | "barcode" => {
++                        if let Some(ref mut field) = st.current_field {
++                            field.field_type = XfaFieldType::from_xfa_name(&local_name);
++                        }
++                    },
++                    "items" => {
++                        st.in_items = true;
++                    },
++                    _ => {},
++                }
++
++                self.context_stack.push(local_name);
++            },
++            Event::Text(e) => {
++                let text = e.xml11_content().to_string();
++
++                if let Some(parent) = self.context_stack.last() {
++                    if st.in_items && parent == "text" {
++                        st.option_text = text.clone();
++                        st.option_value = text;
++                    } else if let Some(ref mut field) = st.current_field {
++                        match parent.as_str() {
++                            "caption" | "text" => {
++                                if field.caption.is_none()
++                                    && !st.in_items
++                                    && self.context_stack.iter().any(|s| s == "caption")
++                                {
++                                    field.caption = Some(text);
++                                }
++                            },
++                            "toolTip" => {
++                                field.tooltip = Some(text);
++                            },
++                            "value" => {
++                                if field.default_value.is_none() {
++                                    field.default_value = Some(text);
++                                }
++                            },
++                            _ => {},
+                         }
+-                        current_text.clear();
+-                        path_stack.pop();
+                     }
+-                },
+-                Ok(Event::Eof) => break,
+-                Err(e) => {
+-                    return Err(Error::InvalidPdf(format!("XFA datasets parse error: {}", e)));
+-                },
+-                _ => {},
+-            }
++                }
++            },
++            Event::End(e) => {
++                let local_name = e.local_name().as_ref().to_string();
++
++                match local_name.as_str() {
++                    "subform" => {
++                        self.binding_parts.pop();
++                    },
++                    "field" => {
++                        if let Some(field) = st.current_field.take() {
++                            self.form.fields.push(field.clone());
++                            if let Some(ref mut page) = st.current_page {
++                                page.fields.push(field);
++                            }
++                        }
++                    },
++                    "items" => {
++                        st.in_items = false;
++                    },
++                    "text" => {
++                        if st.in_items {
++                            if let Some(ref mut field) = st.current_field {
++                                field.options.push(XfaOption {
++                                    text: st.option_text.clone(),
++                                    value: st.option_value.clone(),
++                                });
++                            }
++                            st.option_text.clear();
++                            st.option_value.clear();
++                        }
++                    },
++                    _ => {},
++                }
++
++                self.context_stack.pop();
++            },
++            _ => {},
+         }
++    }
+ 
+-        Ok(())
++    /// One event of the datasets packet.
++    fn datasets_event(&mut self, event: &Event, st: &mut DatasetsState) {
++        match event {
++            Event::Start(e) => {
++                let local_name = e.local_name().as_ref().to_string();
++
++                // Skip XFA namespace elements
++                if local_name != "xfa" && local_name != "datasets" && local_name != "data" {
++                    st.path_stack.push(format!("{}[0]", local_name));
++                }
++            },
++            Event::Text(e) => {
++                st.current_text = e.xml11_content().to_string();
++            },
++            Event::End(e) => {
++                let local_name = e.local_name().as_ref().to_string();
++
++                if local_name != "xfa" && local_name != "datasets" && local_name != "data" {
++                    // Store value if we have text
++                    if !st.current_text.is_empty() && !st.path_stack.is_empty() {
++                        let binding = st.path_stack.join(".");
++                        self.form
++                            .dataset_values
++                            .insert(binding, st.current_text.clone());
++                    }
++                    st.current_text.clear();
++                    st.path_stack.pop();
++                }
++            },
++            _ => {},
++        }
+     }
++    // ── end pdf_manipulator patch ──
+ 
+     /// Apply dataset values to fields.
+     fn apply_dataset_values(&mut self) {
