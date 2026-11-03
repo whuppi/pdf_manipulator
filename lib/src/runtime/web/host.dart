@@ -1,17 +1,13 @@
-// WebLaneHost — worker fleet physics for the web lane runtime.
+// WebLaneHost — worker physics for the web lane runtime.
 //
 // Part of lane.dart (the lane itself lives there). This file owns
-// everything about WORKERS AS A RESOURCE, nothing about jobs:
+// everything about WORKERS AS A RESOURCE, nothing about jobs and nothing
+// about how many exist or who holds them (the pool does):
 //
 //   - the boot handshake (spawn → booted → init → ready): the worker
 //     announces when its message handler is attached, because a
 //     message posted before that is silently dropped
-//   - the page-global worker budget (FIFO waiters past the cap — an
-//     op can wait, it can never fail for capacity)
-//   - the pristine pool: a lane killed before posting any work
-//     returns its worker here instead of terminating it, so rapid
-//     create+dispose churn recycles workers instead of booting
-//     thousands
+//   - terminating a worker and reclaiming its OPFS directory
 //   - WASM module compile-once caching + I/O mode detection
 
 part of 'lane.dart';
@@ -36,9 +32,6 @@ class WebLaneHost implements LaneHost {
     // Claim this page-session's liveness lock and reclaim dead
     // sessions' OPFS files (once per page).
     _startSessionOnce();
-    // Start warming one pristine worker — the first lane of the
-    // first instance adopts an already-booted worker.
-    _prewarm();
   }
 
   static String? _cachedWorkerUrl;
@@ -169,28 +162,17 @@ class WebLaneHost implements LaneHost {
     }
   }
 
-  /// Terminates [worker] and returns its budget slot only once the
-  /// browser confirms the agent is dead. `terminate()` is a request:
-  /// the worker's WASM memory — and the address-space reservation the
-  /// browser holds for it — is released later, asynchronously. A slot
-  /// freed at the call let rapid create+dispose churn boot a new
-  /// worker into that window, and its instantiate failed with "Cannot
-  /// allocate Wasm memory" while dozens of dead workers were still
-  /// being reaped. The budget counts what the browser holds, not what
-  /// we asked for — the web twin of the native lane table, where a
-  /// dying thread's last act is handing its slot to the next waiter.
+  /// Reclaims a terminated worker's OPFS directory once the browser
+  /// confirms the agent is dead. `terminate()` is a request: the worker's
+  /// WASM memory — and the handles it held on its files — are released
+  /// later, asynchronously, so the directory cannot be deleted at the call.
   ///
-  /// The worker's liveness lock is the death certificate (the same
-  /// signal OPFS reclaim keys on); a used OPFS worker's directory is
+  /// The worker's liveness lock is the death certificate (the same signal
+  /// OPFS session reclaim keys on); a used OPFS worker's directory is
   /// deleted under the same grant. Where Web Locks are unavailable
-  /// (non-secure context) no death signal exists, so the slot frees
-  /// at once and the next session sweep remains the OPFS backstop.
-  void _terminateAndReleaseSlot(LaneWorker worker) {
-    worker.js.terminate();
-    unawaited(_releaseSlotWhenDead(worker));
-  }
-
-  static Future<void> _releaseSlotWhenDead(LaneWorker worker) async {
+  /// (non-secure context) no death signal exists, and the next session
+  /// sweep remains the OPFS backstop.
+  static Future<void> _reapDeadWorker(WebExecutor worker) async {
     try {
       await web.window.navigator.locks
           .request(
@@ -205,10 +187,7 @@ class WebLaneHost implements LaneHost {
           )
           .toDart;
     } catch (_) {
-      // No death signal available — fall through to the release.
-    } finally {
-      _liveBudget--;
-      _wakeWaiter();
+      // No death signal available — the session sweep reclaims it.
     }
   }
 
@@ -254,132 +233,25 @@ class WebLaneHost implements LaneHost {
   static JSObject? _cachedModule;
   static Future<void>? _compileInFlight;
 
-  // ── Page-global worker budget + pristine pool ──
-  //
-  // Mirrors the native global lane budget: worker boots are capped
-  // page-wide; takers past the cap queue FIFO and are woken as
-  // workers free — an op can wait, it can never fail for capacity.
-  //
-  // The pool holds PRISTINE workers (booted + inited, never given
-  // work). A lane killed before posting any work returns its worker
-  // here instead of terminating it, so rapid create+dispose churn
-  // recycles one worker instead of booting thousands — without this,
-  // a 5000x instance churn floods the page with concurrent worker
-  // boots and stalls every later boot.
+  @override
+  String get poolKey => '$_laneWorkerUrl#${mode.name}';
 
-  /// Page-wide cap on live workers (adopted + pooled + booting).
-  /// Mirrors the native global lane budget's headroom: instances the
-  /// app never disposes hold their worker, so the cap must dwarf any
-  /// sane leak count or idle instances starve fresh ones. Fixed, not
-  /// device-derived: behavior must not vary by machine.
-  static const _maxWorkers = 64;
-
-  /// Pristine pool ceiling per key — beyond this a returned worker is
-  /// terminated so pooled idle workers can't starve the budget.
-  static const _maxPooled = 4;
-
-  static int _liveBudget = 0;
-  static final Map<String, List<LaneWorker>> _pool = {};
-  static final Set<String> _warming = {};
-  static final List<Completer<void>> _waiters = [];
-
-  String get _spareKey => '$_laneWorkerUrl#${mode.name}';
-
-  /// Adopt a pooled pristine worker, boot one under the budget, or
-  /// queue until a slot frees. Never fails for capacity.
-  ///
-  /// [isKilled] is the requesting lane's kill flag: a lane that dies
-  /// while queued must take nothing — and must pass its wake signal
-  /// on, or one dead waiter strands every live waiter behind it.
-  Future<LaneWorker?> takeWorker(bool Function() isKilled) async {
-    while (true) {
-      if (isKilled()) return null;
-      final pool = _pool[_spareKey];
-      if (pool != null && pool.isNotEmpty) return pool.removeLast();
-      if (_liveBudget < _maxWorkers) {
-        _liveBudget++;
-        // A failed boot returns its own slot (see _bootWorker).
-        return await _bootWorker();
-      }
-      final waiter = Completer<void>();
-      _waiters.add(waiter);
-      await waiter.future;
-      if (isKilled()) {
-        _wakeWaiter();
-        return null;
-      }
-    }
-  }
-
-  /// A killed lane's worker that never received work: still pristine
-  /// (init done, no engine state, no files — work is a precondition
-  /// for writing), safe for any future lane. Pool-overflow terminate
-  /// therefore needs no directory reclaim.
-  void returnPristine(LaneWorker worker) {
-    final pool = _pool[_spareKey] ??= [];
-    if (pool.length >= _maxPooled) {
-      _terminateAndReleaseSlot(worker);
-    } else {
-      pool.add(worker);
-      _wakeWaiter();
-    }
-  }
-
-  /// Terminates a USED worker; its slot and OPFS directory return
-  /// once the liveness lock confirms the agent is gone.
-  void retire(LaneWorker worker) => _terminateAndReleaseSlot(worker);
-
-  static void _wakeWaiter() {
-    if (_waiters.isNotEmpty) _waiters.removeAt(0).complete();
-  }
-
-  /// Boot one pristine worker into the pool if none exists or is on
-  /// the way. Constructor-time only — keeps the first op on a fresh
-  /// page off the cold-boot path.
-  void _prewarm() {
-    if ((_pool[_spareKey]?.isNotEmpty ?? false) ||
-        _warming.contains(_spareKey) ||
-        _liveBudget >= _maxWorkers) {
-      return;
-    }
-    _liveBudget++;
-    _warming.add(_spareKey);
-    unawaited(
-      _bootWorker()
-          .then((worker) {
-            _warming.remove(_spareKey);
-            (_pool[_spareKey] ??= []).add(worker);
-            _wakeWaiter();
-          })
-          .catchError((Object _) {
-            // A failed prewarm is silent by design — the first real take
-            // boots inline and surfaces the error on the op that needs it.
-            // The slot came back through _bootWorker's own failure path.
-            _warming.remove(_spareKey);
-          }),
-    );
-  }
+  @override
+  Future<Executor> boot() => _bootWorker();
 
   /// Spawn a worker and drive its boot handshake to `ready`. The
   /// temporary listener is detached before the worker is handed out;
   /// an idle ready worker sends nothing, so no message can be lost.
-  Future<LaneWorker> _bootWorker() async {
+  Future<WebExecutor> _bootWorker() async {
     // Every worker holds a liveness lock for its lifetime, in every
-    // mode: it is the budget's death signal. Only OPFS mode also gives
-    // the worker a directory under the same name.
+    // mode: it is the death signal that reclaims its files. Only OPFS mode
+    // also gives the worker a directory under the same name.
     final workerId = _newSessionId();
     final lockName = _workerLockName(workerId);
     final opfsDir = mode == PdfIoMode.opfs ? workerId : null;
-    final web.Worker worker;
-    try {
-      worker = _spawnWorker();
-    } catch (_) {
-      _liveBudget--;
-      _wakeWaiter();
-      rethrow;
-    }
-    // Everything after the spawn runs inside the slot-owning try: a throw
-    // anywhere here must still terminate the worker and return the slot.
+    final worker = _spawnWorker();
+    // Everything after the spawn runs inside the try: a throw anywhere here
+    // must still terminate the worker.
     StreamSubscription<web.MessageEvent>? sub;
     StreamSubscription<web.Event>? errSub;
     try {
@@ -451,22 +323,17 @@ class WebLaneHost implements LaneHost {
       // arrive as worker error messages; a 21MB wasm on a slow network
       // takes as long as it takes and is not a failure.
       await ready.future;
-      return LaneWorker(worker, opfsDir, lockName);
+      return WebExecutor._(worker, opfsDir, lockName, mode)..attach();
     } catch (_) {
       // A worker that never readied wrote no files (writing requires
-      // work, work requires ready) — no directory to reclaim, but it
-      // may already hold its lock with a WASM instance behind it, so
-      // its slot returns the same way every other worker's does.
-      _terminateAndReleaseSlot(LaneWorker(worker, null, lockName));
+      // work, work requires ready) — no directory to reclaim.
+      worker.terminate();
       rethrow;
     } finally {
       unawaited(sub?.cancel() ?? Future<void>.value());
       unawaited(errSub?.cancel() ?? Future<void>.value());
     }
   }
-
-  @override
-  Lane spawn() => WebLane._(this);
 
   static PdfIoMode _detectMode(PdfIoMode? force) {
     if (force != null) return force;
@@ -529,15 +396,13 @@ class WebLaneHost implements LaneHost {
   }
 }
 
-// ── A booted worker plus its OPFS identity ─────────────────────────
+// ── A booted worker: the web executor ─────────────────────────────
 
-/// A ready worker as handed out by the host. [opfsDir] is the
-/// worker's own directory name under the session (OPFS mode only) —
-/// the key the host reclaims by after the worker is retired.
-class LaneWorker {
-  /// Wraps a [js] worker with its OPFS directory name (null outside
-  /// OPFS mode) and the name of the liveness lock it holds.
-  LaneWorker(this.js, this.opfsDir, this.lockName);
+/// A ready worker with its OPFS identity, as the pool leases it. [opfsDir]
+/// is the worker's own directory name under the session (OPFS mode only) —
+/// the key the host reclaims by after the worker is terminated.
+class WebExecutor implements Executor {
+  WebExecutor._(this.js, this.opfsDir, this.lockName, this._mode);
 
   /// The underlying Web Worker.
   final web.Worker js;
@@ -550,10 +415,43 @@ class LaneWorker {
   /// browser tears it down — the host's death signal.
   final String lockName;
 
+  final PdfIoMode _mode;
+  WebLane? _lane;
+  StreamSubscription<web.MessageEvent>? _sub;
   int _lastLease = 0;
+  int _heapBytes = 0;
+  bool _dead = false;
+  bool _terminated = false;
 
-  /// Starts a new lease on this worker and returns its id. One counter per
-  /// worker: ids count up from 1 and are never reused, so a smaller id
-  /// always names a tenure that has ended.
-  int beginLease() => ++_lastLease;
+  @override
+  int get heapBytes => _heapBytes;
+
+  /// Routes the worker's messages to the lane that holds the lease now.
+  void attach() {
+    _sub = EventStreamProviders.messageEvent.forTarget(js).listen((event) {
+      _lane?.deliver(event.data as JSObject?);
+    });
+  }
+
+  /// Starts a new lease and returns its lane. One counter per worker: ids
+  /// count up from 1 and are never reused, so a smaller id always names a
+  /// tenure that has ended.
+  @override
+  Lane beginLane() {
+    if (_dead || _terminated) throw const LaneProtocolError(laneDeadMessage);
+    return _lane = WebLane._(this, ++_lastLease);
+  }
+
+  @override
+  void terminate() {
+    if (_terminated) return;
+    _terminated = true;
+    // Browser kill: frees the worker, its WASM heap, and every open
+    // SyncAccessHandle in one stroke. Nothing can call back after.
+    unawaited(_sub?.cancel());
+    _sub = null;
+    js.terminate();
+    _lane?._abandon();
+    unawaited(WebLaneHost._reapDeadWorker(this));
+  }
 }

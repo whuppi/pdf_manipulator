@@ -396,11 +396,28 @@ class _SharedEditorHandle extends BridgeEditorHandle {
     sinks: [output],
   );
 
+  @override
+  PdfTask<int> measureSave({
+    PdfSaveOptions options = const PdfSaveOptions.fullRewrite(),
+  }) => _exec(EngineOp.editorSave, {
+    ...codec.encodeSaveArgs(options),
+    'measure': true,
+  }).map(_written);
+
   // ── Extract pages (select → save → restore, editor unchanged) ──
 
   @override
   PdfTask<void> extractPages(List<int> pages, DataSink output) =>
       _exec(EngineOp.editorExtractPages, {'pages': pages}, sinks: [output]);
+
+  @override
+  PdfTask<int> measurePages(List<int> pages) => _exec(
+    EngineOp.editorExtractPages,
+    {'pages': pages, 'measure': true},
+  ).map(_written);
+
+  /// The bytes a measuring op reports it wrote.
+  static int _written(Map<String, Object?> map) => map['written'] as int;
 
   // ── Lifecycle ──
 

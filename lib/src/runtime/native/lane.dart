@@ -1,27 +1,29 @@
-// NativeLane — the dumb native adapter: four verbs over FFI.
+// NativeExecutor and NativeLane — the dumb native adapter: the verbs of
+// Lane over FFI.
 //
-// One NativeLane = one Rust lane thread (spawned by lane_spawn). The
-// adapter translates Lane verbs into FFI calls and serves the lane's
-// I/O on the MAIN isolate via NativeCallable listeners — no helper
-// isolate exists; the event loop is the only Dart-side thread.
+// One NativeExecutor = one Rust lane thread (spawned by lane_spawn); one
+// NativeLane = one lease on it. The adapter translates Lane verbs into FFI
+// calls and serves the thread's I/O on the MAIN isolate via NativeCallable
+// listeners — no helper isolate exists; the event loop is the only
+// Dart-side thread.
 //
 // ## The post-driven cleanup protocol (memory safety)
 //
 // Rust guarantees EVERY accepted job posts exactly one result to its
 // port — success, engine error, or cancelled — and posts only after
 // the job's channels have left the lane's wake registry. That post
-// is therefore the one safe moment to free the job's buffers. Kill
-// completes pending futures instantly (UX), but resource cleanup
+// is therefore the one safe moment to free the job's buffers. Ending a
+// lane completes pending futures instantly (UX), but resource cleanup
 // always waits for each job's post (safety). The two are decoupled
 // on purpose.
 //
-// ## The kill protocol (callback safety)
+// ## The abandon protocol (callback safety)
 //
-// After lane_kill returns, Rust guarantees no notify callback will
-// ever fire for this lane — so callables can be closed immediately.
-// Buffers still wait for their job's post (see above).
+// After lane_kill (an executor's terminate) returns, Rust guarantees no
+// notify callback will ever fire for this thread — so callables can be
+// closed immediately. Buffers still wait for their job's post (see above).
 //
-// INTERNAL — constructed by NativeLaneHost, driven by the Router.
+// INTERNAL — constructed by NativeLaneHost, driven by the pool.
 
 import 'dart:async';
 import 'dart:ffi' as ffi;
@@ -85,18 +87,56 @@ class _PendingJob {
   final LaneSubmitResult Function(Uint8List bytes) buildResult;
 }
 
-/// One isolated native execution unit. Decision-free.
+/// One Rust lane thread with its engine state. Decision-free.
+class NativeExecutor implements Executor {
+  NativeExecutor._(this.laneKey);
+
+  /// The thread's key in the Rust lane table. Internal: tests replay
+  /// messages against it.
+  final int laneKey;
+
+  NativeLane? _lane;
+  bool _terminated = false;
+
+  @override
+  int get heapBytes => 0;
+
+  @override
+  Lane beginLane() {
+    final lease = bindings.laneLeaseBegin(laneKey);
+    if (lease == 0) {
+      throw const LaneProtocolError(
+        'the lane is gone, busy, holding a channel or dead',
+      );
+    }
+    return _lane = NativeLane._(this, lease);
+  }
+
+  @override
+  void terminate() {
+    if (_terminated) return;
+    _terminated = true;
+    // Rust: flag + wake + close mailbox. After this returns, no notify
+    // callback will ever fire for this thread.
+    bindings.laneKill(laneKey);
+    _lane?._abandon();
+  }
+}
+
+/// One lease on a [NativeExecutor]. Decision-free.
 class NativeLane implements Lane {
-  NativeLane._(this._laneKey) : _lease = bindings.laneLeaseBegin(_laneKey);
+  NativeLane._(this._executor, this._lease);
 
-  final int _laneKey;
+  final NativeExecutor _executor;
 
-  /// This lane's lease on its executor, taken at spawn: every submit,
-  /// cancel, release and reset carries it, and the executor drops one that
-  /// is not the current lease. Read-channel and write-channel answers need
-  /// no lease: each is numbered by its channel's request word and goes to
-  /// a buffer one job owns, freed at that job's post.
+  /// This lane's lease on its executor: every submit, cancel, release and
+  /// reset carries it, and the executor drops one that is not the current
+  /// lease. Read-channel and write-channel answers need no lease: each is
+  /// numbered by its channel's request word and goes to a buffer one job
+  /// owns, freed at that job's post.
   final int _lease;
+
+  int get _laneKey => _executor.laneKey;
 
   /// The executor's key in the Rust lane table. Internal: tests replay
   /// messages against it.
@@ -106,11 +146,18 @@ class NativeLane implements Lane {
   int get lease => _lease;
   final Map<int, _PendingJob> _pending = {};
   final Set<_HeldChannel> _held = {};
-  bool _killed = false;
+
+  /// True once [drain] ran: no job is accepted, and the lane is done when
+  /// the last pending job has posted.
+  bool _draining = false;
+
+  /// True once the executor was terminated: nothing more is served.
+  bool _abandoned = false;
+  final Completer<bool> _drained = Completer<bool>();
 
   @override
   Future<LaneSubmitResult> submit(LaneJob job) {
-    if (_killed) {
+    if (_draining || _abandoned) {
       return Future.value(LaneSubmitResult(buildCancelledResponse(), const {}));
     }
 
@@ -212,14 +259,19 @@ class NativeLane implements Lane {
       final bytes = message is Uint8List
           ? message
           : Uint8List.fromList(const []);
-      if (!posted.completer.isCompleted) {
-        // Normal path: complete with the real result + held tokens.
-        posted.completer.complete(posted.buildResult(bytes));
+      // A job the lane skipped never registered a channel; every other job
+      // may have moved its kept sources into the engine, so they become the
+      // lane's held channels even when the caller was told "cancelled"
+      // already. A reset or the executor's end frees them.
+      final result = posted.skipped ? null : posted.buildResult(bytes);
+      if (result != null && !posted.completer.isCompleted) {
+        posted.completer.complete(result);
       }
-      // Kill path: the future was completed at kill; this post is
-      // the lane's "channels deregistered" signal — free everything.
+      // This post is the lane's "channels deregistered" signal — free
+      // everything the job owns.
       posted.cleanup(freeKept: posted.skipped);
-      _maybeFreeHeldAfterKill();
+      _settle();
+      _freeHeldIfAbandoned();
     };
 
     bindings.laneSubmit(
@@ -244,7 +296,7 @@ class NativeLane implements Lane {
 
   @override
   void cancelJob(int jobId) {
-    if (_killed) return;
+    if (_draining || _abandoned) return;
     final queued = bindings.laneJobCancel(_laneKey, _lease, jobId) != 0;
     // A job the lane has not started never reaches the engine, so its
     // caller need not wait for the running job ahead of it. The lane
@@ -262,7 +314,7 @@ class NativeLane implements Lane {
 
   @override
   void releaseHeld(Object token) {
-    if (_killed) return; // kill owns held cleanup
+    if (_draining || _abandoned) return; // the end owns held cleanup
     final held = token as _HeldChannel;
     if (!_held.remove(held)) return;
     bindings.laneChannelRelease(_laneKey, _lease, held.buffer.ptr);
@@ -271,7 +323,7 @@ class NativeLane implements Lane {
 
   @override
   Future<int?> reset() async {
-    if (_killed) throw const LaneProtocolError('the lane was killed');
+    if (_abandoned) throw const LaneProtocolError('the lane was abandoned');
     final answer = Completer<Uint8List>();
     final port = RawReceivePort((dynamic message) {
       if (answer.isCompleted) return;
@@ -291,7 +343,7 @@ class NativeLane implements Lane {
     } on PdfEngineError catch (refused) {
       throw LaneProtocolError(refused.message);
     } on PdfCancelled {
-      throw const LaneProtocolError('the lane was killed');
+      throw const LaneProtocolError('the lane was abandoned');
     }
     // The engine dropped its readers and forgot the held channels before it
     // answered, so their buffers are ours to free now.
@@ -303,16 +355,43 @@ class NativeLane implements Lane {
   }
 
   @override
-  void kill() {
-    if (_killed) return;
-    _killed = true;
+  bool get drainsPromptly => true;
 
-    // 1. Rust: flag + wake + close mailbox. After this returns, no
-    //    notify callback will ever fire for this lane.
-    bindings.laneKill(_laneKey);
+  @override
+  Future<bool> drain() {
+    if (!_draining && !_abandoned) {
+      _draining = true;
+      // Cancel every job: a queued one is skipped and completes at once,
+      // a running one unwinds at its next I/O or cancel poll. Completing
+      // every future now is the instant-dispose UX; resources are freed by
+      // each job's guaranteed post.
+      for (final jobId in _pending.keys.toList()) {
+        final queued = bindings.laneJobCancel(_laneKey, _lease, jobId) != 0;
+        if (queued) _pending[jobId]?.skipped = true;
+      }
+      for (final pending in _pending.values) {
+        if (!pending.completer.isCompleted) {
+          pending.completer.complete(
+            LaneSubmitResult(buildCancelledResponse(), const {}),
+          );
+        }
+      }
+    }
+    _settle();
+    return _drained.future;
+  }
 
-    // 2. Complete every pending future NOW (instant dispose UX).
-    //    Their resources are freed by each job's guaranteed post.
+  /// Settles [drain] once every job has posted: the thread then holds
+  /// nothing of this lane, and says whether its engine is intact.
+  void _settle() {
+    if (!_draining || _pending.isNotEmpty || _drained.isCompleted) return;
+    _drained.complete(bindings.laneIsDead(_laneKey) == 0);
+  }
+
+  /// The executor was terminated: every pending future completes cancelled
+  /// now, and the lane's resources are freed as its jobs post.
+  void _abandon() {
+    _abandoned = true;
     for (final pending in _pending.values) {
       if (!pending.completer.isCompleted) {
         pending.completer.complete(
@@ -320,15 +399,15 @@ class NativeLane implements Lane {
         );
       }
     }
-
-    _maybeFreeHeldAfterKill();
+    if (!_drained.isCompleted) _drained.complete(false);
+    _freeHeldIfAbandoned();
   }
 
-  /// Held buffers may still be read by the lane thread while its
-  /// current job unwinds — safe to free only once every pending job
-  /// has posted (= the lane is provably done with all channels).
-  void _maybeFreeHeldAfterKill() {
-    if (!_killed || _pending.isNotEmpty) return;
+  /// Held buffers may still be read by the thread while its current job
+  /// unwinds — safe to free only once every pending job has posted (= the
+  /// thread is provably done with all channels).
+  void _freeHeldIfAbandoned() {
+    if (!_abandoned || _pending.isNotEmpty) return;
     for (final held in _held) {
       held.free();
     }

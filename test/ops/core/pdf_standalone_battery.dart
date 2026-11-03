@@ -245,21 +245,21 @@ void registerStandaloneTests(Pdf Function() createPdf) {
     test('sign an encrypted source refuses with no output', () async {
       final pdf = createPdf();
       final encSink = TestSink();
-      await pdf.encrypt(
+      await pdf.resave(
         src(minimalPdf),
         encSink,
-        encryption: const PdfEncryption.config(
-          ownerPassword: 'owner-pw',
-          userPassword: 'user-pw',
+        options: const PdfSaveOptions.fullRewrite(
+          encryption: PdfEncryption.config(
+            ownerPassword: 'owner-pw',
+            userPassword: 'user-pw',
+          ),
         ),
       );
+      final encrypted = encSink.takeBytes();
+      final credentials = PdfSigningCredentials.pkcs12(testPkcs12, 'changeit');
       final sink = TestSink();
       await expectLater(
-        pdf.sign(
-          src(encSink.takeBytes()),
-          sink,
-          credentials: PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
-        ),
+        pdf.sign(src(encrypted), sink, credentials: credentials),
         throwsA(isA<PdfUnsupported>()),
         reason:
             'signing an encrypted source is refused before any byte '
@@ -329,32 +329,28 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       );
     }, timeout: t(1));
 
-    // ── Extract pages ──
+    // ── Keep pages ──
 
-    test(
-      'extractPages with an out-of-range index throws typed error',
-      () async {
-        final pdf = createPdf();
-        final sink = TestSink();
-        await expectLater(
-          pdf.extractPages(src(minimalPdf), sink, pages: const [99]),
-          throwsA(
-            isA<PdfPageRangeError>()
-                .having((e) => e.page, 'page', 99)
-                .having((e) => e.pageCount, 'pageCount', 1),
-          ),
-          reason:
-              'page 99 of a 1-page PDF does not exist — silently '
-              'producing an empty PDF would hide caller bugs',
-        );
-      },
-      timeout: t(1),
-    );
-
-    test('extractPages keeps exactly the selected pages and content', () async {
+    test('keepPages with an out-of-range index throws typed error', () async {
       final pdf = createPdf();
       final sink = TestSink();
-      await pdf.extractPages(src(fThreePageMarkers), sink, pages: [0, 2]);
+      await expectLater(
+        pdf.edits(src(minimalPdf), sink).keepPages(const [99]),
+        throwsA(
+          isA<PdfPageRangeError>()
+              .having((e) => e.page, 'page', 99)
+              .having((e) => e.pageCount, 'pageCount', 1),
+        ),
+        reason:
+            'page 99 of a 1-page PDF does not exist — silently '
+            'producing an empty PDF would hide caller bugs',
+      );
+    }, timeout: t(1));
+
+    test('keepPages keeps exactly the selected pages and content', () async {
+      final pdf = createPdf();
+      final sink = TestSink();
+      await pdf.edits(src(fThreePageMarkers), sink).keepPages([0, 2]);
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 2);
       final text = await extractTextToString(doc, pages: const PdfPages.all());
@@ -371,43 +367,64 @@ void registerStandaloneTests(Pdf Function() createPdf) {
     }, timeout: t(1));
 
     test(
-      'extractPages writes nothing only a dropped page reaches (#261)',
+      'keepPages writes nothing only a dropped page reaches (#261)',
       () async {
         final pdf = createPdf();
         final sink = TestSink();
-        await pdf.extractPages(src(pagePrunePdf), sink, pages: const [0]);
+        await pdf.edits(src(pagePrunePdf), sink).keepPages(const [0]);
         await expectOnlyPrunedPages(pdf, sink.takeBytes(), const [0]);
       },
       timeout: t(2),
     );
 
     test(
-      'extractPages across both inner page nodes keeps the given order',
+      'split writes in each part nothing only a page of another part reaches '
+      '(#261)',
+      () async {
+        final pdf = createPdf();
+        final sinks = <TestSink>[];
+        final parts = await pdf.split(src(pagePrunePdf), (part) {
+          final s = TestSink();
+          sinks.add(s);
+          return s;
+        }, by: const PdfSplitRule.every(3));
+        expect(parts, hasLength(3));
+        for (var i = 0; i < parts.length; i++) {
+          await expectOnlyPrunedPages(pdf, sinks[i].takeBytes(), [
+            for (var p = parts[i].start; p <= parts[i].end; p++) p,
+          ]);
+        }
+      },
+      timeout: t(2),
+    );
+
+    test(
+      'keepPages across both inner page nodes keeps the given order',
       () async {
         final pdf = createPdf();
         final sink = TestSink();
-        await pdf.extractPages(src(pagePrunePdf), sink, pages: const [5, 2]);
+        await pdf.edits(src(pagePrunePdf), sink).keepPages(const [5, 2]);
         await expectOnlyPrunedPages(pdf, sink.takeBytes(), const [5, 2]);
       },
       timeout: t(2),
     );
 
     test(
-      'extractPages of every page flattens the tree and keeps inheritance',
+      'keepPages of every page flattens the tree and keeps inheritance',
       () async {
         final pdf = createPdf();
         final sink = TestSink();
         final all = [for (var i = 0; i < pagePruneTruth.pageCount; i++) i];
-        await pdf.extractPages(src(pagePrunePdf), sink, pages: all);
+        await pdf.edits(src(pagePrunePdf), sink).keepPages(all);
         await expectOnlyPrunedPages(pdf, sink.takeBytes(), all);
       },
       timeout: t(2),
     );
 
-    test('extractPages writes a reference to a dropped page as null', () async {
+    test('keepPages writes a reference to a dropped page as null', () async {
       final pdf = createPdf();
       final sink = TestSink();
-      await pdf.extractPages(src(structTreePdf), sink, pages: const [0]);
+      await pdf.edits(src(structTreePdf), sink).keepPages(const [0]);
       final out = sink.takeBytes();
       // bytegrep-exempt: the claim is about references in the file.
       final plain = await plainBytes(pdf, out);
@@ -430,13 +447,12 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
-    test('extractPages refuses a page listed twice', () {
+    test('keepPages refuses a page listed twice', () {
       expect(
-        () => createPdf().extractPages(
-          src(pagePrunePdf),
-          TestSink(),
-          pages: const [0, 0],
-        ),
+        () => createPdf().edits(src(pagePrunePdf), TestSink()).keepPages(const [
+          0,
+          0,
+        ]),
         throwsA(isA<PdfInvalidArgument>()),
       );
     }, timeout: t(1));

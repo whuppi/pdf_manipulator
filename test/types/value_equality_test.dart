@@ -244,6 +244,32 @@ void main() {
       );
     });
 
+    test('PdfSplitPart compares by every field', () {
+      expectValue(
+        const PdfSplitPart(index: 1, start: 2, end: 4, title: 'B'),
+        const PdfSplitPart(index: 1, start: 2, end: 4, title: 'B'),
+        const PdfSplitPart(index: 1, start: 2, end: 4),
+      );
+    });
+
+    test('PdfSplitRule compares by its rule and its number', () {
+      expectValue<PdfSplitRule>(
+        const PdfSplitRule.every(5),
+        const PdfSplitRule.every(5),
+        const PdfSplitRule.every(6),
+      );
+      expectValue<PdfSplitRule>(
+        const PdfSplitRule.maxBytes(5),
+        const PdfSplitRule.maxBytes(5),
+        const PdfSplitRule.every(5),
+      );
+      expectValue<PdfSplitRule>(
+        const PdfSplitRule.bookmarks(),
+        const PdfSplitRule.bookmarks(),
+        const PdfSplitRule.maxBytes(5),
+      );
+    });
+
     test(
       'PdfAlignment, PdfMarkupKind and PdfImageFit cross the wire by name',
       () {

@@ -223,13 +223,6 @@ void registerAbortTests(Pdf Function() createPdf) {
         );
       }, timeout: t(2));
 
-      test('extractPages', () async {
-        final pdf = createPdf();
-        await cancelledFromTheSink(
-          (out) => pdf.extractPages(src(fTwoPageMarkers), out, pages: [0]),
-        );
-      }, timeout: t(2));
-
       test('reads, one extractText', () async {
         final pdf = createPdf();
         await cancelledFromTheSink(
@@ -257,14 +250,14 @@ void registerAbortTests(Pdf Function() createPdf) {
         () async {
           final pdf = createPdf();
           final sinks = <CountingSink>[];
-          late final PdfTask<void> task;
-          task = pdf.split(src(fTwoPageMarkers), (index) {
+          late final PdfTask<List<PdfSplitPart>> task;
+          task = pdf.split(src(fTwoPageMarkers), (part) {
             final sink = CountingSink(
-              onFirstWrite: index == 1 ? () => task.cancel() : null,
+              onFirstWrite: part.index == 1 ? () => task.cancel() : null,
             );
             sinks.add(sink);
             return sink;
-          }, every: 1);
+          }, by: const PdfSplitRule.every(1));
           await expectLater(task, throwsA(isA<PdfCancelled>()));
           expect(sinks, hasLength(2), reason: 'no chunk after the cancel');
           expect(sinks[0].aborts, 0, reason: 'a delivered chunk stands');

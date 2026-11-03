@@ -108,7 +108,7 @@ Future<List<String>> _names(web.FileSystemDirectoryHandle dir) async {
 /// the worker posts, in order, so a test can also prove a message got no
 /// answer.
 class _RawWorker {
-  _RawWorker._(this._host, this._worker) {
+  _RawWorker._(this._worker) {
     _sub = EventStreamProviders.messageEvent.forTarget(_worker.js).listen((
       event,
     ) {
@@ -120,10 +120,9 @@ class _RawWorker {
   }
 
   static Future<_RawWorker> take(WebLaneHost host) async =>
-      _RawWorker._(host, (await host.takeWorker(() => false))!);
+      _RawWorker._(await host.boot() as WebExecutor);
 
-  final WebLaneHost _host;
-  final LaneWorker _worker;
+  final WebExecutor _worker;
   final history = <JSObject>[];
   final _arrivals = StreamController<JSObject>.broadcast(sync: true);
   late final StreamSubscription<web.MessageEvent> _sub;
@@ -193,7 +192,7 @@ class _RawWorker {
   Future<void> close() async {
     await _sub.cancel();
     await _arrivals.close();
-    _host.retire(_worker);
+    _worker.terminate();
   }
 }
 
@@ -208,9 +207,47 @@ void registerWebLaneProtocolTests({
       host = WebLaneHost(laneWorkerUrl: workerUrl(), forceMode: mode);
     });
 
+    test('a drain answers a parked job at once, settles when the worker has '
+        'posted, and the worker serves the next lease', () async {
+      final executor = await host.boot() as WebExecutor;
+      addTearDown(executor.terminate);
+      final lane = executor.beginLane() as WebLane;
+      final slow = SlowSource(minimalPdf);
+      final running = lane.submit(
+        LaneJob(
+          jobId: 1,
+          request: _open(slow.length),
+          sources: [slow],
+          sinks: const [],
+          keepSources: const {0},
+        ),
+      );
+      await slow.firstRead;
+
+      final drained = lane.drain();
+      expect((await running).bytes, buildCancelledResponse());
+      expect(await drained, isTrue, reason: 'the engine is intact');
+      slow.release();
+
+      await lane.reset();
+      final next = executor.beginLane();
+      final source = src(minimalPdf);
+      final opened = await next.submit(
+        LaneJob(
+          jobId: 1,
+          request: _open(source.length),
+          sources: [source],
+          sinks: const [],
+          keepSources: const {},
+        ),
+      );
+      expect(_ok(opened.bytes), isTrue, reason: 'the next lease serves');
+    }, timeout: t(10));
+
     test('the adapter drops every message of a replaced lease', () async {
-      final lane = host.spawn() as WebLane;
-      addTearDown(lane.kill);
+      final executor = await host.boot() as WebExecutor;
+      addTearDown(executor.terminate);
+      final lane = executor.beginLane() as WebLane;
       final slow = SlowSource(minimalPdf);
       final running = lane.submit(
         LaneJob(
@@ -278,8 +315,9 @@ void registerWebLaneProtocolTests({
     }, timeout: t(10));
 
     test('a reset gives the worker a fresh engine state', () async {
-      final lane = host.spawn() as WebLane;
-      addTearDown(lane.kill);
+      final executor = await host.boot() as WebExecutor;
+      addTearDown(executor.terminate);
+      final lane = executor.beginLane() as WebLane;
       final first = src(minimalPdf);
       final opened = await lane.submit(
         LaneJob(

@@ -198,8 +198,8 @@ lib/
     │   ├── pdf_doc.dart                    ← PdfDoc: extract, search, render, ...
     │   ├── pdf_editor.dart                 ← PdfEditor: mutations only
     │   ├── pdf_builder.dart                ← PdfBuilder: create from scratch
-    │   ├── pdf_standalone.dart             ← sign, convertTo, convertToPdf, extractPages
-    │   └── pdf_sugar.dart                  ← merge, split, watermark, compress, ...
+    │   ├── pdf_standalone.dart             ← sign, convertTo, convertToPdf
+    │   └── pdf_sugar.dart                  ← merge, split, compress, imagesToPdf
     │
     ├── bridge/                              ← BRIDGE (platform-blind)
     │   ├── pdf_bridge.dart                 ← abstract PdfBridge + handle contracts

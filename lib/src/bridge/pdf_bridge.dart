@@ -4,7 +4,6 @@
 // INTERNAL — not exported from the package.
 
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
@@ -82,8 +81,8 @@ abstract class PdfBridge {
   });
 
   /// Register a runtime fallback font for form-value baking.
-  /// [kind] is the engine wire name ('cjk' or 'emoji').
-  PdfTask<void> registerFallbackFont(String kind, Uint8List bytes);
+  /// [kind] is the engine wire name ('cjk' or 'emoji'); [font] is read whole.
+  PdfTask<void> registerFallbackFont(String kind, DataSource font);
 
   // ── Editor handle ──
 
@@ -423,10 +422,20 @@ abstract class BridgeEditorHandle {
     PdfSaveOptions options = const PdfSaveOptions.fullRewrite(),
   });
 
+  /// Runs the save of [save] into no sink and returns the bytes the engine
+  /// wrote: the size the file would have.
+  PdfTask<int> measureSave({
+    PdfSaveOptions options = const PdfSaveOptions.fullRewrite(),
+  });
+
   // ── Extract pages (select → save → restore, editor unchanged) ──
 
   /// Extracts [pages] into [output] without modifying the editor.
   PdfTask<void> extractPages(List<int> pages, DataSink output);
+
+  /// Runs the extract of [extractPages] into no sink and returns the bytes
+  /// the engine wrote: the size the extracted file would have.
+  PdfTask<int> measurePages(List<int> pages);
 
   // ── Lifecycle ──
 

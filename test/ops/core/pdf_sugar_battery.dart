@@ -68,12 +68,95 @@ void registerSugarTests(Pdf Function() createPdf) {
       expect(bytes[3], 0x46);
     }, timeout: t(1));
 
+    test('merge opens a password-protected source with its password', () async {
+      final pdf = createPdf();
+      final encSink = TestSink();
+      await pdf.resave(
+        src(minimalPdf),
+        encSink,
+        options: const PdfSaveOptions.fullRewrite(
+          encryption: PdfEncryption.config(
+            ownerPassword: 'owner-pw',
+            userPassword: 'user-pw',
+          ),
+        ),
+      );
+      final encrypted = src(encSink.takeBytes());
+      final plain = src(minimalPdf);
+
+      final later = TestSink();
+      await pdf.merge(
+        [plain, encrypted],
+        later,
+        passwords: {encrypted: 'user-pw'},
+      );
+      final laterDoc = await pdf.open(src(later.takeBytes()));
+      expect(laterDoc.pageCount, 2);
+      await laterDoc.dispose();
+
+      final first = TestSink();
+      await pdf.merge(
+        [encrypted, plain],
+        first,
+        passwords: {encrypted: 'user-pw'},
+      );
+      final firstDoc = await pdf.open(
+        src(first.takeBytes()),
+        password: 'user-pw',
+      );
+      expect(firstDoc.pageCount, 2);
+      await firstDoc.dispose();
+    }, timeout: t(1));
+
+    test('merge of a protected source without its password throws', () async {
+      final pdf = createPdf();
+      final encSink = TestSink();
+      await pdf.resave(
+        src(minimalPdf),
+        encSink,
+        options: const PdfSaveOptions.fullRewrite(
+          encryption: PdfEncryption.config(
+            ownerPassword: 'owner-pw',
+            userPassword: 'user-pw',
+          ),
+        ),
+      );
+      final encrypted = src(encSink.takeBytes());
+      final plain = src(minimalPdf);
+      await expectLater(
+        pdf.merge([plain, encrypted], TestSink()),
+        throwsA(isA<PdfPasswordRequired>()),
+      );
+      await expectLater(
+        pdf.merge(
+          [plain, encrypted],
+          TestSink(),
+          passwords: {encrypted: 'not-the-password'},
+        ),
+        throwsA(isA<PdfWrongPassword>()),
+      );
+    }, timeout: t(1));
+
+    test('merge refuses a password for a source it was not given', () {
+      final pdf = createPdf();
+      expect(
+        () => pdf.merge(
+          [src(minimalPdf)],
+          TestSink(),
+          passwords: {src(minimalPdf): 'x'},
+        ),
+        throwsA(isA<PdfInvalidArgument>()),
+      );
+    });
+
     // ── Rotate ──
 
-    test('rotateAllPages 90° sets rotation', () async {
+    test('rotating every page 90° sets rotation', () async {
       final pdf = createPdf();
       final sink = TestSink();
-      await pdf.rotateAllPages(src(minimalPdf), sink, by: PdfRotation.r90);
+      await pdf
+          .edits(src(minimalPdf), sink)
+          .rotatePages(const PdfPages.all(), by: PdfRotation.r90);
       final doc = await pdf.open(src(sink.takeBytes()));
       expect((await doc.pageInfo())[0].rotation, PdfRotation.r90);
       await doc.dispose();
@@ -82,7 +165,9 @@ void registerSugarTests(Pdf Function() createPdf) {
     test('rotatePages rotates specific pages', () async {
       final pdf = createPdf();
       final sink = TestSink();
-      await pdf.rotatePages(src(minimalPdf), sink, pages: {0: PdfRotation.r90});
+      await pdf
+          .edits(src(minimalPdf), sink)
+          .rotatePages(const PdfPages.single(0), by: PdfRotation.r90);
       final doc = await pdf.open(src(sink.takeBytes()));
       expect((await doc.pageInfo())[0].rotation, PdfRotation.r90);
       await doc.dispose();
@@ -94,7 +179,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final formBytes = fFormFields;
       final sink = TestSink();
-      await pdf.flattenForms(src(formBytes), sink);
+      await pdf.edits(src(formBytes), sink).flattenForms();
       final output = sink.takeBytes();
       final doc = await pdf.open(src(output));
       expect(doc.pageCount, fFormFieldsTruth.pages);
@@ -122,6 +207,35 @@ void registerSugarTests(Pdf Function() createPdf) {
       expect(output.length, lessThanOrEqualTo(multiPage.length * 2));
       await doc.dispose();
     }, timeout: t(1));
+
+    test(
+      'compress opens a password-protected source with its password',
+      () async {
+        final pdf = createPdf();
+        final encSink = TestSink();
+        await pdf.resave(
+          src(fThreePageMarkers),
+          encSink,
+          options: const PdfSaveOptions.fullRewrite(
+            encryption: PdfEncryption.config(
+              ownerPassword: 'owner-pw',
+              userPassword: 'user-pw',
+            ),
+          ),
+        );
+        final encrypted = encSink.takeBytes();
+        await expectLater(
+          pdf.compress(src(encrypted), TestSink()),
+          throwsA(isA<PdfPasswordRequired>()),
+        );
+        final sink = TestSink();
+        await pdf.compress(src(encrypted), sink, password: 'user-pw');
+        final doc = await pdf.open(src(sink.takeBytes()), password: 'user-pw');
+        expect(doc.pageCount, 3);
+        await doc.dispose();
+      },
+      timeout: t(1),
+    );
 
     test('compress writes one copy of an image and a font merged in three '
         'times', () async {
@@ -373,7 +487,9 @@ void registerSugarTests(Pdf Function() createPdf) {
       await pdf.merge([src(minimalPdf), src(minimalPdf)], mergeSink);
       final twoPage = mergeSink.takeBytes();
       final deleteSink = TestSink();
-      await pdf.deletePages(src(twoPage), deleteSink, pages: [0]);
+      await pdf
+          .edits(src(twoPage), deleteSink)
+          .deletePages(const PdfPages.single(0));
       final doc = await pdf.open(src(deleteSink.takeBytes()));
       expect(doc.pageCount, 1);
       await doc.dispose();
@@ -381,11 +497,11 @@ void registerSugarTests(Pdf Function() createPdf) {
 
     // ── Reorder ──
 
-    test('reorderPages preserves pages', () async {
+    test('keepPages preserves pages', () async {
       final pdf = createPdf();
       final multiPage = fThreePageMarkers;
       final sink = TestSink();
-      await pdf.reorderPages(src(multiPage), sink, order: [2, 1, 0]);
+      await pdf.edits(src(multiPage), sink).keepPages([2, 1, 0]);
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 3);
       await doc.dispose();
@@ -406,7 +522,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       await before.dispose();
 
       final sink = TestSink();
-      await pdf.movePage(src(threePages), sink, from: 1, to: 0);
+      await pdf.edits(src(threePages), sink).movePage(from: 1, to: 0);
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 3);
       expect((await doc.pageInfo())[0].width, closeTo(letterWidth, 1.0));
@@ -421,12 +537,17 @@ void registerSugarTests(Pdf Function() createPdf) {
         final pdf = createPdf();
         final multiPage = fThreePageMarkers;
         final sinks = <TestSink>[];
-        await pdf.split(src(multiPage), (i) {
+        final parts = await pdf.split(src(multiPage), (part) {
           final s = TestSink();
           sinks.add(s);
           return s;
-        }, every: 1);
+        }, by: const PdfSplitRule.every(1));
         expect(sinks.length, 3);
+        expect(parts, [
+          const PdfSplitPart(index: 0, start: 0, end: 0),
+          const PdfSplitPart(index: 1, start: 1, end: 1),
+          const PdfSplitPart(index: 2, start: 2, end: 2),
+        ]);
         for (var i = 0; i < sinks.length; i++) {
           final doc = await pdf.open(src(sinks[i].takeBytes()));
           expect(doc.pageCount, 1);
@@ -447,17 +568,17 @@ void registerSugarTests(Pdf Function() createPdf) {
       timeout: t(1),
     );
 
-    test('splitBySize total pages equals original', () async {
+    test('split by maxBytes: total pages equals original', () async {
       final pdf = createPdf();
       final multiPage = fThreePageMarkers;
       final sinks = <TestSink>[];
-      final chunkSizes = await pdf.splitBySize(src(multiPage), (i) {
+      final parts = await pdf.split(src(multiPage), (part) {
         final s = TestSink();
         sinks.add(s);
         return s;
-      }, maxBytes: 50000);
-      expect(chunkSizes.length, greaterThanOrEqualTo(1));
-      expect(sinks.length, chunkSizes.length);
+      }, by: const PdfSplitRule.maxBytes(50000));
+      expect(parts.length, greaterThanOrEqualTo(1));
+      expect(sinks.length, parts.length);
       var totalPages = 0;
       for (final s in sinks) {
         final doc = await pdf.open(src(s.takeBytes()));
@@ -467,19 +588,112 @@ void registerSugarTests(Pdf Function() createPdf) {
       expect(totalPages, 3);
     }, timeout: t(1));
 
+    test('split by maxBytes cuts a part exactly where the next page would '
+        'not fit', () async {
+      final pdf = createPdf();
+      final multiPage = fThreePageMarkers;
+      // The size of pages 0 and 1 as a file of their own: the limit that
+      // admits those two and not the third.
+      final measured = <TestSink>[];
+      await pdf.split(src(multiPage), (part) {
+        final s = TestSink();
+        measured.add(s);
+        return s;
+      }, by: const PdfSplitRule.every(2));
+      final twoPages = measured.first.takeBytes().length;
+
+      final sinks = <TestSink>[];
+      final parts = await pdf.split(src(multiPage), (part) {
+        final s = TestSink();
+        sinks.add(s);
+        return s;
+      }, by: PdfSplitRule.maxBytes(twoPages));
+      expect(parts, [
+        const PdfSplitPart(index: 0, start: 0, end: 1),
+        const PdfSplitPart(index: 1, start: 2, end: 2),
+      ]);
+      // The engine's count is the file's size: a part is never larger than
+      // the limit.
+      expect(sinks[0].takeBytes().length, lessThanOrEqualTo(twoPages));
+    }, timeout: t(1));
+
+    test('split by maxBytes makes a page that exceeds the limit a part of '
+        'its own', () async {
+      final pdf = createPdf();
+      final sinks = <TestSink>[];
+      final parts = await pdf.split(src(fThreePageMarkers), (part) {
+        final s = TestSink();
+        sinks.add(s);
+        return s;
+      }, by: const PdfSplitRule.maxBytes(1));
+      expect(parts, [
+        const PdfSplitPart(index: 0, start: 0, end: 0),
+        const PdfSplitPart(index: 1, start: 1, end: 1),
+        const PdfSplitPart(index: 2, start: 2, end: 2),
+      ]);
+      for (final s in sinks) {
+        final doc = await pdf.open(src(s.takeBytes()));
+        expect(doc.pageCount, 1);
+        await doc.dispose();
+      }
+    }, timeout: t(1));
+
+    test('split asks for each part\'s sink before it is written, in order, '
+        'and closes it', () async {
+      final pdf = createPdf();
+      final asked = <PdfSplitPart>[];
+      final sinks = <CountingSink>[];
+      await pdf.split(src(fThreePageMarkers), (part) async {
+        asked.add(part);
+        // The part before this one is written and closed by now.
+        if (sinks.isNotEmpty) expect(sinks.last.closes, 1);
+        final s = CountingSink();
+        sinks.add(s);
+        return s;
+      }, by: const PdfSplitRule.every(1));
+      expect(asked.map((p) => p.index), [0, 1, 2]);
+      for (final s in sinks) {
+        expect(s.closes, 1);
+        expect(s.aborts, 0);
+      }
+    }, timeout: t(1));
+
+    test('split rejects a rule with no pages or bytes in it', () {
+      final pdf = createPdf();
+      expect(
+        () => pdf.split(
+          src(minimalPdf),
+          (part) => TestSink(),
+          by: const PdfSplitRule.every(0),
+        ),
+        throwsA(isA<PdfInvalidArgument>()),
+      );
+      expect(
+        () => pdf.split(
+          src(minimalPdf),
+          (part) => TestSink(),
+          by: const PdfSplitRule.maxBytes(0),
+        ),
+        throwsA(isA<PdfInvalidArgument>()),
+      );
+    });
+
     // ── Split by bookmarks ──
 
-    test('splitByBookmarks: one chunk per chapter, right content', () async {
+    test('split by bookmarks: one part per chapter, right content', () async {
       // A REAL outline tree from the foreign producer — each chunk
       // must start at its chapter and carry that chapter's text.
       final pdf = createPdf();
       final sinks = <TestSink>[];
-      await pdf.splitByBookmarks(src(fOutlineChapters), (i) {
+      final parts = await pdf.split(src(fOutlineChapters), (part) {
         final s = TestSink();
         sinks.add(s);
         return s;
-      });
+      }, by: const PdfSplitRule.bookmarks());
       expect(sinks.length, fOutlineChaptersTruth.chapters.length);
+      expect(parts.map((p) => p.title), fOutlineChaptersTruth.chapters);
+      expect(parts.map((p) => p.start), fOutlineChaptersTruth.startPages);
+      expect(parts.map((p) => p.end - p.start), everyElement(1));
       for (var i = 0; i < sinks.length; i++) {
         final doc = await pdf.open(src(sinks[i].takeBytes()));
         expect(
@@ -507,7 +721,9 @@ void registerSugarTests(Pdf Function() createPdf) {
     test('applyRedactions preserves page count', () async {
       final pdf = createPdf();
       final sink = TestSink();
-      await pdf.applyRedactions(src(fTwoPageMarkers), sink);
+      await pdf.rewrite(src(fTwoPageMarkers), sink, (e) async {
+        await e.applyRedactions();
+      });
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, fTwoPageMarkersTruth.pages);
       await doc.dispose();
@@ -519,12 +735,9 @@ void registerSugarTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final fileContent = Uint8List.fromList('hello embedded file'.codeUnits);
       final sink = TestSink();
-      await pdf.embedFile(
-        src(minimalPdf),
-        sink,
-        name: 'test.txt',
-        fileData: src(fileContent),
-      );
+      await pdf
+          .edits(src(minimalPdf), sink)
+          .embedFile('test.txt', src(fileContent));
       final output = sink.takeBytes();
       final doc = await pdf.open(src(output));
       expect(doc.pageCount, 1);
@@ -561,24 +774,21 @@ void registerSugarTests(Pdf Function() createPdf) {
     test('addStamp produces valid PDF', () async {
       final pdf = createPdf();
       final sink = TestSink();
-      await pdf.addStamp(
-        src(minimalPdf),
-        sink,
-        page: 0,
-        type: PdfStampType.approved,
-        rect: const PdfRect(x: 100, y: 100, width: 200, height: 50),
-      );
+      await pdf
+          .edits(src(minimalPdf), sink)
+          .addStamp(
+            const PdfPages.single(0),
+            type: PdfStampType.approved,
+            rect: const PdfRect(x: 100, y: 100, width: 200, height: 50),
+          );
       final output = sink.takeBytes();
       final doc = await pdf.open(src(output));
       expect(doc.pageCount, 1);
       await doc.dispose();
       // Semantic presence: flatten the stamp annotation into page
       // content, then the stamp's appearance text must be extractable.
-      final e = await pdf.edit(src(output));
-      await e.flattenAnnotations();
       final flatSink = TestSink();
-      await e.save(flatSink);
-      await e.dispose();
+      await pdf.edits(src(output), flatSink).flattenAnnotations();
       final flat = await pdf.open(src(flatSink.takeBytes()));
       final text = await extractTextToString(flat, pages: const PdfPages.all());
       expect(
@@ -594,13 +804,13 @@ void registerSugarTests(Pdf Function() createPdf) {
     test('addImageStamp embeds image data', () async {
       final pdf = createPdf();
       final sink = TestSink();
-      await pdf.addImageStamp(
-        src(minimalPdf),
-        sink,
-        page: 0,
-        imageData: src(minimalPng),
-        rect: const PdfRect(x: 100, y: 100, width: 200, height: 200),
-      );
+      await pdf
+          .edits(src(minimalPdf), sink)
+          .addImageStamp(
+            const PdfPages.single(0),
+            src(minimalPng),
+            rect: const PdfRect(x: 100, y: 100, width: 200, height: 200),
+          );
       final output = sink.takeBytes();
       final doc = await pdf.open(src(output));
       expect(doc.pageCount, 1);
@@ -617,12 +827,9 @@ void registerSugarTests(Pdf Function() createPdf) {
       // the stamp test above).
       final pdf = createPdf();
       final sink = TestSink();
-      await pdf.watermark(
-        src(fTwoPageMarkers),
-        sink,
-        text: 'CONFIDENTIAL',
-        layer: PdfWatermarkLayer.background,
-      );
+      await pdf
+          .edits(src(fTwoPageMarkers), sink)
+          .addWatermark('CONFIDENTIAL', layer: PdfWatermarkLayer.background);
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, fTwoPageMarkersTruth.pages);
       for (var p = 0; p < fTwoPageMarkersTruth.pages; p++) {
@@ -652,23 +859,17 @@ void registerSugarTests(Pdf Function() createPdf) {
       };
       for (final entry in positions.entries) {
         final sink = TestSink();
-        await pdf.watermark(
-          src(input),
-          sink,
-          text: 'POS',
-          position: entry.value,
-        );
+        await pdf
+            .edits(src(input), sink)
+            .addWatermark('POS', position: entry.value);
         final output = sink.takeBytes();
         final doc = await pdf.open(src(output));
         expect(doc.pageCount, 2, reason: '${entry.key}: page count preserved');
         await doc.dispose();
         // The foreground layer is an annotation: flatten it into the page
         // content, then its text must extract beside the original text.
-        final flattening = await pdf.edit(src(output));
-        await flattening.flattenAnnotations();
         final flatSink = TestSink();
-        await flattening.save(flatSink);
-        await flattening.dispose();
+        await pdf.edits(src(output), flatSink).flattenAnnotations();
         final flat = await pdf.open(src(flatSink.takeBytes()));
         final text = await extractTextToString(
           flat,
@@ -693,7 +894,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       final input = fTwoPageMarkers;
       for (final layer in PdfWatermarkLayer.values) {
         final sink = TestSink();
-        await pdf.watermark(src(input), sink, text: 'LAYER', layer: layer);
+        await pdf.edits(src(input), sink).addWatermark('LAYER', layer: layer);
         final doc = await pdf.open(src(sink.takeBytes()));
         expect(
           doc.pageCount,
@@ -718,12 +919,14 @@ void registerSugarTests(Pdf Function() createPdf) {
     test('encrypt then decrypt roundtrip', () async {
       final pdf = createPdf();
       final encSink = TestSink();
-      await pdf.encrypt(
+      await pdf.resave(
         src(minimalPdf),
         encSink,
-        encryption: const PdfEncryption.config(
-          ownerPassword: 'owner',
-          userPassword: 'user',
+        options: const PdfSaveOptions.fullRewrite(
+          encryption: PdfEncryption.config(
+            ownerPassword: 'owner',
+            userPassword: 'user',
+          ),
         ),
       );
       final encrypted = encSink.takeBytes();
@@ -732,7 +935,14 @@ void registerSugarTests(Pdf Function() createPdf) {
       expect(encDoc.encryption, isNotNull);
       await encDoc.dispose();
       final decSink = TestSink();
-      await pdf.decrypt(src(encrypted), decSink, password: 'owner');
+      await pdf.resave(
+        src(encrypted),
+        decSink,
+        password: 'owner',
+        options: const PdfSaveOptions.fullRewrite(
+          encryption: PdfEncryption.remove(),
+        ),
+      );
       final decrypted = decSink.takeBytes();
       final decDoc = await pdf.open(src(decrypted));
       expect(decDoc.pageCount, 1);
@@ -745,7 +955,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final formBytes = fFormFields;
       final sink = TestSink();
-      await pdf.convertToPdfA(src(formBytes), sink);
+      await pdf.edits(src(formBytes), sink).convertToPdfA();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 1);
       await doc.dispose();
@@ -785,11 +995,11 @@ void registerSugarTests(Pdf Function() createPdf) {
     // page one, BRAVO on page two) and prove the CONTENT moved,
     // survived, or died exactly as the op promised.
 
-    test('reorderPages actually reorders content', () async {
+    test('keepPages actually reorders content', () async {
       final pdf = createPdf();
       final twoPage = fTwoPageMarkers;
       final sink = TestSink();
-      await pdf.reorderPages(src(twoPage), sink, order: [1, 0]);
+      await pdf.edits(src(twoPage), sink).keepPages([1, 0]);
       final doc = await pdf.open(src(sink.takeBytes()));
       final first = await extractTextToString(
         doc,
@@ -813,7 +1023,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final twoPage = fTwoPageMarkers;
       final sink = TestSink();
-      await pdf.movePage(src(twoPage), sink, from: 0, to: 1);
+      await pdf.edits(src(twoPage), sink).movePage(from: 0, to: 1);
       final doc = await pdf.open(src(sink.takeBytes()));
       final first = await extractTextToString(
         doc,
@@ -828,7 +1038,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final twoPage = fTwoPageMarkers;
       final sink = TestSink();
-      await pdf.deletePages(src(twoPage), sink, pages: [0]);
+      await pdf.edits(src(twoPage), sink).deletePages(const PdfPages.single(0));
       final doc = await pdf.open(src(sink.takeBytes()));
       final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(
@@ -849,11 +1059,9 @@ void registerSugarTests(Pdf Function() createPdf) {
       () async {
         final pdf = createPdf();
         final sink = TestSink();
-        await pdf.deletePages(
-          src(pagePrunePdf),
-          sink,
-          pages: const [0, 1, 2, 4, 5, 7],
-        );
+        await pdf
+            .edits(src(pagePrunePdf), sink)
+            .deletePages(const PdfPages.list([0, 1, 2, 4, 5, 7]));
         await expectOnlyPrunedPages(pdf, sink.takeBytes(), const [3, 6]);
       },
       timeout: t(2),
@@ -863,7 +1071,7 @@ void registerSugarTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final twoPage = fTwoPageMarkers;
       final sink = TestSink();
-      await pdf.watermark(src(twoPage), sink, text: 'OVERLAY');
+      await pdf.edits(src(twoPage), sink).addWatermark('OVERLAY');
       final doc = await pdf.open(src(sink.takeBytes()));
       final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(text, contains(fTwoPageMarkersTruth.page0Marker));
@@ -898,12 +1106,14 @@ void registerSugarTests(Pdf Function() createPdf) {
             'anything',
       );
       final sink = TestSink();
-      await pdf.encrypt(
+      await pdf.resave(
         src(leakProbePdf),
         sink,
-        encryption: const PdfEncryption.config(
-          ownerPassword: 'owner-pw',
-          userPassword: 'user-pw',
+        options: const PdfSaveOptions.fullRewrite(
+          encryption: PdfEncryption.config(
+            ownerPassword: 'owner-pw',
+            userPassword: 'user-pw',
+          ),
         ),
       );
       final enc = sink.takeBytes();

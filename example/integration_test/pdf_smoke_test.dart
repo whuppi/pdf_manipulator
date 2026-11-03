@@ -171,12 +171,13 @@ void main() {
     final twoPage = mergeSink.takeBytes();
 
     final sinks = <MemorySink>[];
-    await pdf.split(_src(twoPage), (i) {
+    final parts = await pdf.split(_src(twoPage), (part) {
       final s = MemorySink();
       sinks.add(s);
       return s;
-    }, every: 1);
+    }, by: const PdfSplitRule.every(1));
     expect(sinks.length, 2);
+    expect(parts.map((p) => p.start), [0, 1]);
     for (final s in sinks) {
       final doc = await pdf.open(_src(s.takeBytes()));
       expect(doc.pageCount, 1);
@@ -184,13 +185,13 @@ void main() {
     }
   });
 
-  testWidgets('splitBySize', (t) async {
+  testWidgets('split by maxBytes', (t) async {
     final sinks = <MemorySink>[];
-    await pdf.splitBySize(_src(minimalPdf), (i) {
+    await pdf.split(_src(minimalPdf), (part) {
       final s = MemorySink();
       sinks.add(s);
       return s;
-    }, maxBytes: 500000);
+    }, by: const PdfSplitRule.maxBytes(500000));
     expect(sinks, hasLength(1),
         reason: 'the whole fixture fits the limit — one chunk');
     final chunk = await pdf.open(_src(sinks.single.takeBytes()));
@@ -198,9 +199,9 @@ void main() {
     await chunk.dispose();
   });
 
-  testWidgets('extractPages', (t) async {
+  testWidgets('keepPages', (t) async {
     final sink = MemorySink();
-    await pdf.extractPages(_src(minimalPdf), sink, pages: [0]);
+    await pdf.edits(_src(minimalPdf), sink).keepPages([0]);
     final doc = await pdf.open(_src(sink.takeBytes()));
     expect(doc.pageCount, 1);
     await doc.dispose();
@@ -210,17 +211,19 @@ void main() {
     final mergeSink = MemorySink();
     await pdf.merge([_src(minimalPdf), _src(minimalPdf)], mergeSink);
     final sink = MemorySink();
-    await pdf.deletePages(_src(mergeSink.takeBytes()), sink, pages: [0]);
+    await pdf
+        .edits(_src(mergeSink.takeBytes()), sink)
+        .deletePages(const PdfPages.single(0));
     final doc = await pdf.open(_src(sink.takeBytes()));
     expect(doc.pageCount, 1);
     await doc.dispose();
   });
 
-  testWidgets('reorderPages', (t) async {
+  testWidgets('keepPages in another order', (t) async {
     final mergeSink = MemorySink();
     await pdf.merge([_src(minimalPdf), _src(minimalPdf)], mergeSink);
     final sink = MemorySink();
-    await pdf.reorderPages(_src(mergeSink.takeBytes()), sink, order: [1, 0]);
+    await pdf.edits(_src(mergeSink.takeBytes()), sink).keepPages([1, 0]);
     final doc = await pdf.open(_src(sink.takeBytes()));
     expect(doc.pageCount, 2,
         reason: 'reorder must keep every page (both pages are '
@@ -232,21 +235,25 @@ void main() {
     final mergeSink = MemorySink();
     await pdf.merge([_src(minimalPdf), _src(minimalPdf)], mergeSink);
     final sink = MemorySink();
-    await pdf.movePage(_src(mergeSink.takeBytes()), sink, from: 0, to: 1);
+    await pdf.edits(_src(mergeSink.takeBytes()), sink).movePage(from: 0, to: 1);
     final doc = await pdf.open(_src(sink.takeBytes()));
     expect(doc.pageCount, 2);
     await doc.dispose();
   });
 
-  testWidgets('rotateAllPages + rotatePages', (t) async {
+  testWidgets('rotatePages: every page, one page', (t) async {
     final s1 = MemorySink();
-    await pdf.rotateAllPages(_src(minimalPdf), s1, by: PdfRotation.r90);
+    await pdf
+        .edits(_src(minimalPdf), s1)
+        .rotatePages(const PdfPages.all(), by: PdfRotation.r90);
     final doc1 = await pdf.open(_src(s1.takeBytes()));
     expect((await doc1.pageInfo())[0].rotation, PdfRotation.r90);
     await doc1.dispose();
 
     final s2 = MemorySink();
-    await pdf.rotatePages(_src(minimalPdf), s2, pages: {0: PdfRotation.r180});
+    await pdf
+        .edits(_src(minimalPdf), s2)
+        .rotatePages(const PdfPages.single(0), by: PdfRotation.r180);
     final doc2 = await pdf.open(_src(s2.takeBytes()));
     expect((await doc2.pageInfo())[0].rotation, PdfRotation.r180);
     await doc2.dispose();
@@ -267,7 +274,9 @@ void main() {
       const PdfWatermarkPosition.tiled(columns: 2, rows: 2),
     ]) {
       final sink = MemorySink();
-      await pdf.watermark(_src(minimalPdf), sink, text: 'TEST', position: pos);
+      await pdf
+          .edits(_src(minimalPdf), sink)
+          .addWatermark('TEST', position: pos);
       final out = sink.takeBytes();
       expect(String.fromCharCodes(out), contains('TEST'),
           reason: 'the watermark text must actually land in the output');
@@ -276,17 +285,19 @@ void main() {
       await doc.dispose();
     }
     final bgSink = MemorySink();
-    await pdf.watermark(_src(minimalPdf), bgSink,
-        text: 'BG', layer: PdfWatermarkLayer.background);
+    await pdf
+        .edits(_src(minimalPdf), bgSink)
+        .addWatermark('BG', layer: PdfWatermarkLayer.background);
     expect(String.fromCharCodes(bgSink.takeBytes()), contains('BG'));
   });
 
   testWidgets('encrypt locks, correct password opens, decrypt unlocks',
       (t) async {
     final encSink = MemorySink();
-    await pdf.encrypt(_src(minimalPdf), encSink,
-        encryption: const PdfEncryption.config(
-            ownerPassword: 'owner-pw', userPassword: 'user-pw'));
+    await pdf.resave(_src(minimalPdf), encSink,
+        options: const PdfSaveOptions.fullRewrite(
+            encryption: PdfEncryption.config(
+                ownerPassword: 'owner-pw', userPassword: 'user-pw')));
     final encBytes = encSink.takeBytes();
 
     // The lock is real: no password / wrong password must refuse.
@@ -301,7 +312,10 @@ void main() {
     await doc1.dispose();
 
     final decSink = MemorySink();
-    await pdf.decrypt(_src(encBytes), decSink, password: 'owner-pw');
+    await pdf.resave(_src(encBytes), decSink,
+        password: 'owner-pw',
+        options: const PdfSaveOptions.fullRewrite(
+            encryption: PdfEncryption.remove()));
     final doc2 = await pdf.open(_src(decSink.takeBytes()));
     expect(doc2.encryption, isNull);
     await doc2.dispose();
@@ -309,7 +323,7 @@ void main() {
 
   testWidgets('flattenForms', (t) async {
     final sink = MemorySink();
-    await pdf.flattenForms(_src(minimalPdf), sink);
+    await pdf.edits(_src(minimalPdf), sink).flattenForms();
     final doc = await pdf.open(_src(sink.takeBytes()));
     expect(doc.pageCount, 1);
     await doc.dispose();
@@ -317,7 +331,9 @@ void main() {
 
   testWidgets('applyRedactions', (t) async {
     final sink = MemorySink();
-    await pdf.applyRedactions(_src(minimalPdf), sink);
+    await pdf.rewrite(_src(minimalPdf), sink, (e) async {
+      await e.applyRedactions();
+    });
     final doc = await pdf.open(_src(sink.takeBytes()));
     expect(doc.pageCount, 1);
     await doc.dispose();
@@ -325,9 +341,9 @@ void main() {
 
   testWidgets('embedFile', (t) async {
     final sink = MemorySink();
-    await pdf.embedFile(_src(minimalPdf), sink,
-        name: 'test.txt',
-        fileData: _src(Uint8List.fromList('hello'.codeUnits)));
+    await pdf
+        .edits(_src(minimalPdf), sink)
+        .embedFile('test.txt', _src(Uint8List.fromList('hello'.codeUnits)));
     final doc = await pdf.open(_src(sink.takeBytes()));
     expect(doc.pageCount, 1);
     await doc.dispose();
@@ -345,8 +361,7 @@ void main() {
 
   testWidgets('addStamp', (t) async {
     final sink = MemorySink();
-    await pdf.addStamp(_src(minimalPdf), sink,
-        page: 0,
+    await pdf.edits(_src(minimalPdf), sink).addStamp(const PdfPages.single(0),
         type: PdfStampType.approved,
         rect: const PdfRect(x: 50, y: 50, width: 200, height: 60));
     final doc = await pdf.open(_src(sink.takeBytes()));
@@ -356,7 +371,7 @@ void main() {
 
   testWidgets('convertToPdfA', (t) async {
     final sink = MemorySink();
-    await pdf.convertToPdfA(_src(minimalPdf), sink);
+    await pdf.edits(_src(minimalPdf), sink).convertToPdfA();
     final doc = await pdf.open(_src(sink.takeBytes()));
     expect(doc.pageCount, 1);
     await doc.dispose();
@@ -395,14 +410,6 @@ void main() {
     expect(String.fromCharCodes(out.sublist(0, 5)), '%PDF-');
     final doc = await pdf.open(_src(out));
     expect(doc.pageCount, greaterThanOrEqualTo(1));
-    await doc.dispose();
-  });
-
-  testWidgets('extractPages (standalone)', (t) async {
-    final sink = MemorySink();
-    await pdf.extractPages(_src(minimalPdf), sink, pages: [0]);
-    final doc = await pdf.open(_src(sink.takeBytes()));
-    expect(doc.pageCount, 1);
     await doc.dispose();
   });
 
@@ -568,7 +575,7 @@ void main() {
     // side), fill with a value the field font cannot draw, flatten.
     final font = await rootBundle.load('assets/fonts/NotoEmoji-Regular.ttf');
     await pdf.registerFallbackFont(
-        PdfFallbackFontKind.emoji, font.buffer.asUint8List());
+        PdfFallbackFontKind.emoji, _src(font.buffer.asUint8List()));
 
     final e = await pdf.edit(_src(formSink.takeBytes()));
     await e

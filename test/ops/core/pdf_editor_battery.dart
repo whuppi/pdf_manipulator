@@ -3549,14 +3549,14 @@ void registerEditorTests(Pdf Function() createPdf) {
       timeout: t(1),
     );
 
-    test('extractPages after a merge keeps source and merged pages', () async {
+    test('keepPages after a merge keeps source and merged pages', () async {
       final pdf = createPdf();
       final editor = await editorWithMergedMarkers(pdf);
       final merged = await saved(editor);
       await editor.dispose();
 
       final sink = TestSink();
-      await pdf.extractPages(src(merged), sink, pages: const [1, 3]);
+      await pdf.edits(src(merged), sink).keepPages(const [1, 3]);
       final markers = await markersOf(pdf, sink.takeBytes());
       expect(markers, [mergedMarkers[1], mergedMarkers[3]]);
     }, timeout: t(1));

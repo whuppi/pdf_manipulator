@@ -184,14 +184,16 @@ void registerLifecycleTests(Pdf Function() createPdf) {
         PdfEncryptionAlgorithm algorithm,
       ) async {
         final sink = TestSink();
-        await pdf.encrypt(
+        await pdf.resave(
           src(minimalPdf),
           sink,
-          encryption: PdfEncryption.config(
-            ownerPassword: 'owner-pw',
-            userPassword: 'user-pw',
-            algorithm: algorithm,
-            permissions: printOnly,
+          options: PdfSaveOptions.fullRewrite(
+            encryption: PdfEncryption.config(
+              ownerPassword: 'owner-pw',
+              userPassword: 'user-pw',
+              algorithm: algorithm,
+              permissions: printOnly,
+            ),
           ),
         );
         return sink.takeBytes();

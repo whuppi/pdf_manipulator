@@ -1,9 +1,11 @@
-// WebLane — the dumb web adapter: four verbs over postMessage.
+// WebExecutor and WebLane — the dumb web adapter: the verbs of Lane over
+// postMessage.
 //
-// One WebLane = one Web Worker running lane_worker.js (the lane body)
-// with one WASM LaneState inside. The adapter translates Lane verbs
-// into messages and serves the lane's I/O from the main isolate —
-// every worker is a lane; no other worker kind exists.
+// One WebExecutor = one Web Worker running lane_worker.js (the lane body)
+// with one WASM LaneState inside; one WebLane = one lease on it. The
+// adapter translates Lane verbs into messages and serves the lane's I/O
+// from the main isolate — every worker is an executor; no other worker
+// kind exists.
 //
 // ## Mode physics (selected once by WebLaneHost, injected at init)
 //
@@ -27,18 +29,27 @@
 //             has SharedArrayBuffer the job also carries a cancel word
 //             the engine's CPU loops poll, so it stops within one page
 //             even when it makes no I/O call.
-//   kill    — worker.terminate(): the browser frees the worker and
-//             its WASM heap; every pending job completes cancelled.
-//             The worker's OPFS directory is reclaimed by the host
-//             once the worker's liveness lock confirms it is gone.
+//   drain   — the lane ends: queued jobs complete cancelled at once, the
+//             running one is cancelled as above and its caller is
+//             answered at once, but the worker stays busy until the job
+//             posts. Only then is the lane drained, and the pool resets
+//             the worker for its next lease. A job nothing can cancel
+//             (OPFS mode without SharedArrayBuffer, once posted) runs to
+//             its end first; [drainsPromptly] tells the pool so.
+//   terminate — only for a dead worker or a pool that is going away:
+//             worker.terminate() frees the worker and its WASM heap;
+//             every pending job completes cancelled. The worker's OPFS
+//             directory is reclaimed by the host once the worker's
+//             liveness lock confirms it is gone.
 //
 // ## Lease
 //
-// The lane holds one lease on its worker, taken when it adopts the worker:
-// a number from the worker's own counter. Every message the lane posts
-// carries it, and the lane drops any message from the worker that does not
-// echo it, so an answer meant for an earlier tenure never resolves a job of
-// this one. A `result` or `error` also has to name the job that is running.
+// The lane holds one lease on its worker: a number from the worker's own
+// counter, taken when the pool hands the worker over. Every message the
+// lane posts carries it, and the lane drops any message from the worker
+// that does not echo it, so an answer meant for an earlier tenure never
+// resolves a job of this one. A `result` or `error` also has to name the
+// job that is running.
 //
 // ## Sequencing
 //
@@ -46,11 +57,11 @@
 // queue lives here because a Worker cannot peek its own message
 // queue. Queue order is submission order.
 //
-// INTERNAL — constructed by WebLaneHost, driven by the Router.
+// INTERNAL — constructed by WebLaneHost, driven by the pool.
 //
 // Split: this library spans two files. The lane (job lifecycle,
-// 3 I/O modes) lives here; WebLaneHost (worker boot handshake,
-// page-global budget, pristine pool) lives in host.dart.
+// 3 I/O modes) lives here; WebLaneHost (worker boot handshake, OPFS
+// session reclaim) and the executor live in host.dart.
 
 import 'dart:async';
 import 'dart:js_interop';
@@ -123,6 +134,10 @@ class _WebJob {
   final completer = Completer<LaneSubmitResult>();
   bool cancelled = false;
 
+  /// True once the exec message is on its way to the worker: from then on
+  /// only the worker can end the job.
+  bool posted = false;
+
   /// Wakes a job parked on host I/O outside the worker — the OPFS
   /// pre-copy awaits the caller's DataSource, which a cancel cannot
   /// reach any other way (same instant-wake contract as the native
@@ -153,28 +168,38 @@ class _WebJob {
 
 // ── Lane ────────────────────────────────────────────────────────────
 
-/// One isolated web execution unit. Decision-free.
+/// One lease on a [WebExecutor]. Decision-free.
 class WebLane implements Lane {
-  WebLane._(this._host);
+  WebLane._(this._exec, this._lease);
 
-  final WebLaneHost _host;
+  final WebExecutor _exec;
 
-  LaneWorker? _worker;
-  Future<void>? _ready;
-  StreamSubscription<web.MessageEvent>? _sub;
+  /// This lane's lease on its worker; every message it posts carries it.
+  final int _lease;
+
+  PdfIoMode get _mode => _exec._mode;
 
   final List<_WebJob> _queue = [];
   _WebJob? _running;
-  bool _killed = false;
+
+  /// True once [drain] ran: nothing more is accepted, and the lane is done
+  /// when the running job has posted.
+  bool _ending = false;
+
+  /// True once the executor was terminated: nothing more is served.
+  bool _abandoned = false;
+
+  /// True when [drain] found a job no cancel can reach.
+  bool _unreachable = false;
+
+  @override
+  bool get drainsPromptly => !_unreachable;
+  final Completer<bool> _drained = Completer<bool>();
 
   /// True once the worker trapped: the lane serves nothing more. Queued and
-  /// later jobs complete with the lane-dead error; the worker is terminated.
+  /// later jobs complete with the lane-dead error; the pool terminates the
+  /// worker.
   bool _dead = false;
-
-  /// True once anything was posted to the adopted worker — a used
-  /// worker holds engine/OPFS state and must die with the lane; an
-  /// unused one is still pristine and returns to the host pool.
-  bool _workerUsed = false;
   static int _opfsCounter = 0;
 
   /// Outstanding JSPI read for the running job (the worker is
@@ -192,9 +217,6 @@ class WebLane implements Lane {
   /// names no job.
   Completer<int?>? _reset;
 
-  /// This lane's lease on its worker; 0 until the worker is adopted.
-  int _lease = 0;
-
   /// The lease every message of this lane carries. Internal: tests replay
   /// messages under it.
   int get lease => _lease;
@@ -211,7 +233,7 @@ class WebLane implements Lane {
 
   @override
   Future<LaneSubmitResult> submit(LaneJob job) {
-    if (_killed) {
+    if (_ending || _abandoned) {
       return Future.value(LaneSubmitResult(buildCancelledResponse(), const {}));
     }
     if (_dead) return Future.value(_deadResult());
@@ -223,7 +245,7 @@ class WebLane implements Lane {
 
   @override
   void cancelJob(int jobId) {
-    if (_killed) return;
+    if (_abandoned) return;
 
     final queued = _queue.indexWhere((entry) => entry.job.jobId == jobId);
     if (queued >= 0) {
@@ -237,6 +259,10 @@ class WebLane implements Lane {
 
     final running = _running;
     if (running == null || running.job.jobId != jobId) return;
+    _cancelRunning(running);
+  }
+
+  void _cancelRunning(_WebJob running) {
     running.cancelled = true;
 
     // The engine's CPU loops poll this word between pages, so the job
@@ -263,7 +289,7 @@ class WebLane implements Lane {
 
   @override
   void releaseHeld(Object token) {
-    if (_killed) return;
+    if (_ending || _abandoned) return;
     final heldGroupId = token as int;
     _heldSources.remove(heldGroupId);
     // The worker drops the group's held readers AND deletes their OPFS
@@ -277,7 +303,7 @@ class WebLane implements Lane {
 
   @override
   Future<int?> reset() async {
-    if (_killed) throw const LaneProtocolError('the lane was killed');
+    if (_abandoned) throw const LaneProtocolError('the lane was abandoned');
     if (_dead) throw const LaneProtocolError(laneDeadMessage);
     // Refused here, not in the worker: a queued job or an OPFS pre-copy
     // has not reached the worker yet, and a reset would pull the files
@@ -285,8 +311,6 @@ class WebLane implements Lane {
     if (_running != null || _queue.isNotEmpty || _reset != null) {
       throw const LaneProtocolError(laneBusyMessage);
     }
-    // A lane that never ran holds no worker, so there is nothing to reset.
-    if (_worker == null) return null;
     final answer = _reset = Completer<int?>();
     try {
       _post({LaneMsgFields.type: LaneMsg.reset});
@@ -299,59 +323,78 @@ class WebLane implements Lane {
   }
 
   @override
-  void kill() {
-    if (_killed) return;
-    _killed = true;
-
-    // Browser kill: frees the worker, its WASM heap, and every open
-    // SyncAccessHandle in one stroke. Nothing can call back after.
-    // A never-used worker carries no state — recycle it instead. A
-    // used one is retired: the host reclaims its OPFS directory once
-    // the liveness lock confirms the agent is gone.
-    unawaited(_sub?.cancel());
-    _sub = null;
-    final worker = _worker;
-    _worker = null;
-    if (worker != null) {
-      if (_workerUsed) {
-        _host.retire(worker);
-      } else {
-        _host.returnPristine(worker);
+  Future<bool> drain() {
+    if (!_ending && !_abandoned) {
+      _ending = true;
+      final running = _running;
+      if (running != null) {
+        // The same cancel as the caller's: the engine unwinds at its next
+        // I/O or cancel poll, and the worker is busy until it posts.
+        _cancelRunning(running);
+        if (!running.completer.isCompleted) {
+          running.completer.complete(
+            LaneSubmitResult(buildCancelledResponse(), const {}),
+          );
+        }
+        // OPFS mode without a cancel word has no way to reach a job the
+        // worker runs: the worker stays busy until the job ends by itself.
+        if (running.posted &&
+            _mode == PdfIoMode.opfs &&
+            running.cancelSab == null) {
+          _unreachable = true;
+        }
       }
+      final cancelled = LaneSubmitResult(buildCancelledResponse(), const {});
+      for (final entry in _queue) {
+        entry.cancelled = true;
+        if (!entry.completer.isCompleted) entry.completer.complete(cancelled);
+      }
+      _queue.clear();
     }
+    _settle();
+    return _drained.future;
+  }
 
-    final cancelledResult = LaneSubmitResult(
-      buildCancelledResponse(),
-      const {},
-    );
+  /// Settles [drain] once no job is running: the worker then holds nothing
+  /// of this lane, and says whether its engine is intact.
+  void _settle() {
+    if (!_ending || _running != null || _drained.isCompleted) return;
+    _drained.complete(!_dead);
+  }
+
+  /// The executor was terminated: every pending job completes cancelled
+  /// now and nothing more is served.
+  void _abandon() {
+    if (_abandoned) return;
+    _abandoned = true;
+    final cancelled = LaneSubmitResult(buildCancelledResponse(), const {});
     final running = _running;
     _running = null;
     if (running != null) {
       running.wake();
-      if (!running.completer.isCompleted) {
-        running.completer.complete(cancelledResult);
-      }
+      if (!running.completer.isCompleted) running.completer.complete(cancelled);
     }
     for (final entry in _queue) {
-      if (!entry.completer.isCompleted) {
-        entry.completer.complete(cancelledResult);
-      }
+      if (!entry.completer.isCompleted) entry.completer.complete(cancelled);
     }
-    _opfsAck?.complete(null); // loop head re-checks _killed and exits
+    _opfsAck?.complete(null); // loop head re-checks _abandoned and exits
     _opfsAck = null;
     final resetting = _reset;
     _reset = null;
     if (resetting != null && !resetting.isCompleted) {
-      resetting.completeError(const LaneProtocolError('the lane was killed'));
+      resetting.completeError(
+        const LaneProtocolError('the lane was abandoned'),
+      );
     }
     _queue.clear();
     _heldSources.clear();
+    if (!_drained.isCompleted) _drained.complete(false);
   }
 
   // ── Dispatch loop: one job at a time, queue order ──
 
   void _pump() {
-    if (_killed || _running != null || _queue.isEmpty) return;
+    if (_ending || _abandoned || _running != null || _queue.isEmpty) return;
     if (_dead) {
       for (final entry in _queue) {
         entry.completer.complete(_deadResult());
@@ -366,34 +409,16 @@ class WebLane implements Lane {
 
   Future<void> _runJob(_WebJob entry) async {
     try {
-      try {
-        await _ensureReady();
-      } catch (e) {
-        // The boot failed: every job waiting on this lane fails with it, and
-        // the next job submitted boots again (see [_ensureReady]).
-        final failed = LaneSubmitResult(
-          buildErrorResponse(e.toString()),
-          const {},
-        );
-        for (final waiting in _queue) {
-          waiting.completer.complete(failed);
-        }
-        _queue.clear();
-        _finish(entry, failed);
-        return;
-      }
-      if (_killed || entry.cancelled) {
+      if (_abandoned || entry.cancelled) {
         _finish(entry, LaneSubmitResult(buildCancelledResponse(), const {}));
         return;
       }
-      // Everything below posts to the worker (OPFS pre-copy or exec).
-      _workerUsed = true;
 
       // OPFS mode: sources must exist on disk before exec (workers
       // read them via SyncAccessHandle).
-      if (_host.mode == PdfIoMode.opfs) {
+      if (_mode == PdfIoMode.opfs) {
         entry.opfsFiles = await _preCopySources(entry);
-        if (_killed || entry.cancelled) {
+        if (_abandoned || entry.cancelled) {
           _finish(entry, LaneSubmitResult(buildCancelledResponse(), const {}));
           return;
         }
@@ -419,14 +444,15 @@ class WebLane implements Lane {
         entry.cancelSab = _Sab(SabLayout.cancelSabBytes);
         msg['cancelSab'] = entry.cancelSab;
       }
-      if (_host.mode == PdfIoMode.atomics) {
+      if (_mode == PdfIoMode.atomics) {
         entry.sab = _Sab(SabLayout.readSabBytes);
         entry.writeSab = _Sab(SabLayout.writeSabBytes);
         msg['sab'] = entry.sab;
         msg['writeSab'] = entry.writeSab;
       }
 
-      _worker!.js.postMessage(msg, [requestJs].toJS);
+      entry.posted = true;
+      _exec.js.postMessage(msg, [requestJs].toJS);
       // Completion arrives via _onMessage (result | error).
     } catch (e) {
       _finish(
@@ -443,7 +469,7 @@ class WebLane implements Lane {
     // agent as the open handles — no race exists). Files promoted to
     // held readers survive until releaseHeld; a dead worker's whole
     // directory is reclaimed by the host via its liveness lock.
-    if (_host.mode == PdfIoMode.opfs && _workerUsed) {
+    if (_mode == PdfIoMode.opfs && !_abandoned) {
       _post({LaneMsgFields.type: LaneMsg.opfsDrop, 'jobId': entry.job.jobId});
     }
     if (_running == entry) {
@@ -452,39 +478,8 @@ class WebLane implements Lane {
       _awaitingJspiWrite = false;
     }
     if (!entry.completer.isCompleted) entry.completer.complete(result);
+    _settle();
     _pump();
-  }
-
-  // ── Worker lifecycle ──
-
-  /// A failed boot is not cached: it fails the jobs waiting on it, and the
-  /// next job boots a worker again. The lane is kept, not replaced, since
-  /// it holds nothing yet.
-  Future<void> _ensureReady() async {
-    final booting = _ready ??= _adoptWorker();
-    try {
-      await booting;
-    } catch (_) {
-      if (identical(_ready, booting)) _ready = null;
-      rethrow;
-    }
-  }
-
-  Future<void> _adoptWorker() async {
-    if (_killed) return; // disposed before the first job ran
-    final worker = await _host.takeWorker(() => _killed);
-    if (worker == null) return; // killed while queued for a slot
-    if (_killed) {
-      // Killed while adopting: nothing was posted to the worker, so
-      // it is pristine by construction — back to the pool.
-      _host.returnPristine(worker);
-      return;
-    }
-    _worker = worker;
-    _lease = worker.beginLease();
-    _sub = EventStreamProviders.messageEvent
-        .forTarget(worker.js)
-        .listen((event) => deliver(event.data as JSObject?));
   }
 
   LaneSubmitResult _deadResult() => LaneSubmitResult(
@@ -493,15 +488,11 @@ class WebLane implements Lane {
     laneDied: true,
   );
 
-  /// The worker trapped: it is terminated, never pooled, and everything the
-  /// lane held is gone with it.
+  /// The worker trapped: the pool terminates it, never reuses it, and
+  /// everything the lane held is gone with it.
   void _bury() {
     _dead = true;
-    unawaited(_sub?.cancel());
-    _sub = null;
-    final worker = _worker;
-    _worker = null;
-    if (worker != null) _host.retire(worker);
+    _exec._dead = true;
     _heldSources.clear();
   }
 
@@ -519,13 +510,17 @@ class WebLane implements Lane {
     // job (the refusal of a second exec) never ends the running one.
     final answered =
         entry != null && _int(obj, LaneMsgFields.jobId) == entry.job.jobId;
+    // The worker's committed memory ranks it for reuse and retires it past
+    // the keep line.
+    final mem = _int(obj, LaneMsgFields.peakBytes);
+    if (mem != null) _exec._heapBytes = mem;
 
     switch (type) {
       case LaneMsg.readAt:
         if (entry != null) unawaited(_serveReadAt(obj, entry));
 
       case LaneMsg.chunk:
-        if (_host.mode == PdfIoMode.jspi) _awaitingJspiWrite = true;
+        if (_mode == PdfIoMode.jspi) _awaitingJspiWrite = true;
         // Chained, never parallel: chunk N+1's sink.write may not
         // start before chunk N's completes (ordering is the sink
         // contract; OPFS mode has no worker-side backpressure).
@@ -544,12 +539,11 @@ class WebLane implements Lane {
       case LaneMsg.result:
         if (entry != null && answered) {
           final bytes = _bytes(obj, 'data');
-          final peak = _int(obj, LaneMsgFields.peakBytes);
           final succeeded = bytes.isNotEmpty && bytes[0] == 1;
           if (entry.cancelled && !succeeded) {
             // The op stopped: a sink write still in flight must not hold
             // the answer back.
-            _finish(entry, _buildResult(entry, bytes, peak));
+            _finish(entry, _buildResult(entry, bytes));
             return;
           }
           // A success ends after its last sink write, cancelled or not:
@@ -559,7 +553,7 @@ class WebLane implements Lane {
           // written.
           unawaited(
             entry.sinkChain.then(
-              (_) => _finish(entry, _buildResult(entry, bytes, peak)),
+              (_) => _finish(entry, _buildResult(entry, bytes)),
             ),
           );
         }
@@ -593,19 +587,12 @@ class WebLane implements Lane {
           final bytes = entry.cancelled
               ? buildCancelledResponse()
               : buildErrorResponse(message);
-          _finish(
-            entry,
-            LaneSubmitResult(
-              bytes,
-              const {},
-              peakBytes: _int(obj, LaneMsgFields.peakBytes),
-            ),
-          );
+          _finish(entry, LaneSubmitResult(bytes, const {}));
         }
     }
   }
 
-  LaneSubmitResult _buildResult(_WebJob entry, Uint8List bytes, int? peak) {
+  LaneSubmitResult _buildResult(_WebJob entry, Uint8List bytes) {
     // Cancelled mid-op: the engine's I/O error reads as the typed
     // status, identical to native's run_job. A success is never
     // rewritten: it may have created a handle only the Router can name
@@ -633,7 +620,7 @@ class WebLane implements Lane {
       ]);
     }
 
-    return LaneSubmitResult(bytes, heldTokens, peakBytes: peak);
+    return LaneSubmitResult(bytes, heldTokens);
   }
 
   // ── I/O serving ──
@@ -642,7 +629,7 @@ class WebLane implements Lane {
     final sourceIndex = _int(obj, 'sourceIndex') ?? 0;
     final offset = _int(obj, 'offset') ?? 0;
     final count = _int(obj, 'count') ?? 0;
-    final isAtomics = _host.mode == PdfIoMode.atomics;
+    final isAtomics = _mode == PdfIoMode.atomics;
     if (!isAtomics) _awaitingJspiRead = true;
 
     // The worker mounts a handle's held readers FIRST (they sit
@@ -668,15 +655,20 @@ class WebLane implements Lane {
       if (source == null) {
         error = 'no source[$sourceIndex]';
       } else {
-        bytes = await Future<Uint8List>.value(source.readAt(offset, count));
+        // A cancelled job asks nothing of the caller's source: the answer
+        // below is "cancelled" either way, and a draining worker may still
+        // ask after its Pdf was disposed.
+        if (!entry.cancelled) {
+          bytes = await Future<Uint8List>.value(source.readAt(offset, count));
+        }
       }
     } catch (e) {
       error = e.toString();
     }
 
     // Answer-time check: a cancel that landed during the read wins.
-    // (The kill path never reaches here — the worker is dead.)
-    if (_killed || _running != entry) return;
+    // (A terminated worker never reaches here.)
+    if (_abandoned || _running != entry) return;
     final cancelled = entry.cancelled;
 
     if (isAtomics) {
@@ -717,7 +709,12 @@ class WebLane implements Lane {
 
     String? error;
     try {
-      if (sinkIndex < entry.job.sinks.length) {
+      if (entry.cancelled && _mode != PdfIoMode.opfs) {
+        // The answer below is "cancelled", so the engine cannot finish
+        // this job: a draining worker's chunk is never written to a sink
+        // whose Pdf was disposed. OPFS has no answer channel, so its writes
+        // always land.
+      } else if (sinkIndex < entry.job.sinks.length) {
         await Future<void>.value(entry.job.sinks[sinkIndex].write(data));
       } else {
         error = 'no sink[$sinkIndex]';
@@ -726,10 +723,10 @@ class WebLane implements Lane {
       error = e.toString();
     }
 
-    if (_killed || _running != entry) return;
+    if (_abandoned || _running != entry) return;
     final cancelled = entry.cancelled;
 
-    if (_host.mode == PdfIoMode.atomics) {
+    if (_mode == PdfIoMode.atomics) {
       final sab = entry.writeSab;
       if (sab == null) return;
       _sabSignal(
@@ -738,7 +735,7 @@ class WebLane implements Lane {
             ? SabStatus.cancelled
             : (error != null ? SabStatus.error : SabStatus.ready),
       );
-    } else if (_host.mode == PdfIoMode.jspi) {
+    } else if (_mode == PdfIoMode.jspi) {
       // A cancel already answered this write.
       if (!_awaitingJspiWrite) return;
       _awaitingJspiWrite = false;
@@ -767,7 +764,7 @@ class WebLane implements Lane {
 
       var offset = 0;
       while (offset < source.length) {
-        if (_killed || entry.cancelled) return names;
+        if (_abandoned || entry.cancelled) return names;
         final count = (offset + SabLayout.maxChunk > source.length)
             ? source.length - offset
             : SabLayout.maxChunk;
@@ -777,7 +774,7 @@ class WebLane implements Lane {
           Future<Uint8List>.value(source.readAt(offset, count)),
           entry.cancelWake.future.then((_) => Uint8List(0)),
         ]);
-        if (_killed || entry.cancelled) return names;
+        if (_abandoned || entry.cancelled) return names;
 
         final ack = Completer<String?>();
         _opfsAck = ack;
@@ -813,17 +810,18 @@ class WebLane implements Lane {
     // Already-JS values (buffers, ports) go through _postRaw, not here.
     fields.forEach((k, v) => obj[k] = v.jsify());
     obj[LaneMsgFields.lease] = _lease.toJS;
-    _worker?.js.postMessage(obj);
+    if (!_abandoned) _exec.js.postMessage(obj);
   }
 
   void _postRaw(Map<String, JSAny?> fields, [List<JSObject>? transfer]) {
     final obj = JSObject();
     fields.forEach((k, v) => obj[k] = v);
     obj[LaneMsgFields.lease] = _lease.toJS;
+    if (_abandoned) return;
     if (transfer != null) {
-      _worker?.js.postMessage(obj, transfer.toJS);
+      _exec.js.postMessage(obj, transfer.toJS);
     } else {
-      _worker?.js.postMessage(obj);
+      _exec.js.postMessage(obj);
     }
   }
 

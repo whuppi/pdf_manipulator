@@ -65,6 +65,7 @@ export 'src/types/pdf_render.dart'
     show PdfRenderFormat, PdfRenderSize, PdfRenderedPage;
 export 'src/types/pdf_sanitize_options.dart';
 export 'src/types/pdf_signature.dart';
+export 'src/types/pdf_split.dart' show PdfSplitPart, PdfSplitRule;
 export 'src/types/pdf_stroke.dart';
 export 'src/types/pdf_table.dart';
 export 'src/types/pdf_text_style.dart';

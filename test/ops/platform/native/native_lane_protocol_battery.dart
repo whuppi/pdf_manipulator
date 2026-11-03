@@ -19,7 +19,8 @@ import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart' as bin;
 import 'package:pdf_manipulator/src/runtime/host.dart';
 import 'package:pdf_manipulator/src/runtime/lane.dart';
 import 'package:pdf_manipulator/src/runtime/native/bindings.dart' as bindings;
-import 'package:pdf_manipulator/src/runtime/native/lane.dart' show NativeLane;
+import 'package:pdf_manipulator/src/runtime/native/lane.dart'
+    show NativeExecutor, NativeLane;
 import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:test/test.dart';
@@ -63,10 +64,35 @@ LaneJob _job(
 
 void registerNativeLaneProtocolTests() {
   group('native lane protocol', () {
+    late NativeExecutor executor;
     late NativeLane lane;
 
-    setUp(() => lane = createLaneHost().spawn() as NativeLane);
-    tearDown(() => lane.kill());
+    setUp(() async {
+      executor = await createLaneHost().boot() as NativeExecutor;
+      lane = executor.beginLane() as NativeLane;
+    });
+    tearDown(() => executor.terminate());
+
+    test('a drain answers a parked job at once, settles when the thread has '
+        'posted, and the executor serves the next lease', () async {
+      final slow = SlowSource(minimalPdf);
+      final running = lane.submit(_job(1, _open(slow), sources: [slow]));
+      await slow.firstRead;
+
+      final drained = lane.drain();
+      expect((await running).bytes, buildCancelledResponse());
+      expect(await drained, isTrue, reason: 'the engine is intact');
+      expect(lane.drainsPromptly, isTrue);
+      slow.release();
+
+      await lane.reset();
+      final next = executor.beginLane();
+      final source = src(minimalPdf);
+      final opened = await next.submit(
+        _job(1, _open(source), sources: [source]),
+      );
+      expect(_ok(opened.bytes), isTrue, reason: 'the next lease serves');
+    }, timeout: t(10));
 
     test('a stale cancel never reaches the running job', () async {
       final slow = SlowSource(minimalPdf);

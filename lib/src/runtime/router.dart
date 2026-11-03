@@ -6,11 +6,14 @@
 //   - pinning: a handle's ops always run on the lane that owns it
 //   - placement: handle-less ops go to the least-loaded lane,
 //     spawning lanes up to [maxLanes]
-//   - job identity + completion ownership (after a lane kill, the
+//   - job identity + completion ownership (after a lane ends, the
 //     LANE completes its pending submits as cancelled — the Router
 //     never awaits a dead lane)
 //   - held-resource lifecycle (keepSources → resourceIds → release)
-//   - dispose: instant — kill every lane, clear every map, return
+//   - dispose: instant — end every lane (its executor goes back to the
+//     pool), clear every map, return
+//   - the lease: a lane takes an executor from the pool at its first job
+//     and gives it back once it is idle and holds no pin and no kept source
 //
 // The Router runs entirely on the main isolate's event loop: its
 // state has exactly one owner thread, so there is nothing to lock
@@ -25,6 +28,7 @@ import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart' as bin;
 import 'package:pdf_manipulator/src/types/cancel_hook.dart';
 import 'package:pdf_manipulator/src/io/memory_source.dart';
 import 'package:pdf_manipulator/src/runtime/lane.dart';
+import 'package:pdf_manipulator/src/runtime/pool.dart';
 import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
 import 'package:pdf_manipulator/src/bridge/pdf_transport.dart';
 import 'package:pdf_manipulator/src/types/data_sink.dart';
@@ -69,19 +73,19 @@ const _builderOps = {
   'builderSave',
 };
 
-/// A web worker whose WASM memory peaked at or above this is retired
-/// once it is idle: linear memory never shrinks, so one huge job would
-/// otherwise leave the worker large forever.
-const kDefaultWorkerRecycleBytes = 256 * 1024 * 1024;
-
 class _LaneSlot {
   _LaneSlot(this.lane);
 
-  final Lane lane;
+  final PooledLane lane;
 
   /// Jobs currently submitted and not yet completed. Drives
   /// least-loaded placement.
   int activeJobs = 0;
+
+  /// Handles pinned to this lane, and held resources it keeps: either one
+  /// keeps the lane's executor.
+  int pins = 0;
+  int heldResources = 0;
 
   /// True once the lane's engine trapped or panicked: the lane serves
   /// nothing more, and every handle pinned to it is gone.
@@ -119,26 +123,26 @@ class _HeldResource {
 
 /// The shared routing brain. One per Pdf() instance.
 class Router implements PdfTransport {
-  /// Creates a router over [host], capping concurrent lanes at
-  /// [maxLanes] per instance (a process-wide budget lives below the
-  /// host — hitting either cap queues, never errors).
+  /// Creates a router over [pool], capping concurrent lanes at
+  /// [maxLanes] per instance (the pool's budget lives below — hitting
+  /// either cap queues, never errors).
   Router({
-    required LaneHost host,
+    required ExecutorPool pool,
     required int maxLanes,
     required PdfIoMode mode,
-    int workerRecycleBytes = kDefaultWorkerRecycleBytes,
   }) : assert(maxLanes >= 1, 'maxLanes must be at least 1'),
-       _host = host,
+       _pool = pool,
        _maxLanes = maxLanes,
-       _mode = mode,
-       _workerRecycleBytes = workerRecycleBytes;
+       _mode = mode;
 
-  final LaneHost _host;
+  final ExecutorPool _pool;
   final int _maxLanes;
-  final int _workerRecycleBytes;
   final PdfIoMode _mode;
 
   final List<_LaneSlot> _lanes = [];
+
+  /// Dead lanes that still hold their executor until their jobs answer.
+  final Set<_LaneSlot> _dying = {};
   final List<({Uint8List request, Uint8List bytes})> _preludes = [];
   final Map<int, _Pin> _pins = {};
   final Map<int, _HeldResource> _held = {};
@@ -168,7 +172,7 @@ class Router implements PdfTransport {
   }) async {
     if (_disposed || (cancel?.isCancelled ?? false)) {
       // Any op reaching a disposed instance resolves with the typed
-      // cancelled error — same outcome as a job killed mid-flight.
+      // cancelled error — same outcome as a job cancelled mid-flight.
       return (bytes: buildCancelledResponse(), resourceIds: const <int, int>{});
     }
     await ensureInitialized();
@@ -176,7 +180,7 @@ class Router implements PdfTransport {
     // Same-tick cancels AND disposes land during the await above —
     // before the job exists anywhere. Without the disposed re-check,
     // execution resumes on a disposed Router and spawns a ZOMBIE
-    // lane: never killed (dispose already ran), holding its sources
+    // lane: never ended (dispose already ran), holding its sources
     // forever. From here to submit is synchronous (single owner, one
     // event loop), so these checks are exact, not races.
     if (_disposed || (cancel?.isCancelled ?? false)) {
@@ -203,7 +207,7 @@ class Router implements PdfTransport {
       if (pin.slot.dead) {
         // The handle died with its lane; disposing it has nothing to free.
         final disposing = _disposeOps.contains(peekRequestOp(req));
-        if (disposing) _pins.remove(globalHandleId);
+        if (disposing) _unpin(globalHandleId);
         return (
           bytes: disposing
               ? Uint8List.fromList(const [1, 0, 0])
@@ -237,9 +241,26 @@ class Router implements PdfTransport {
       slot.activeJobs--;
       unregister?.call();
     }
-    if (result.laneDied && !_disposed) _retireDead(slot);
-    _killIfDrained(slot);
+    try {
+      if (result.laneDied && !_disposed) _retireDead(slot);
+      return _complete(slot, job, req, pin, globalHandleId, result, cancel);
+    } finally {
+      // After the bookkeeping: a pin or kept source it adds keeps the lease.
+      _releaseIfIdle(slot);
+    }
+  }
 
+  /// Turns one finished job into the caller's answer: pins a handle the
+  /// job created, files the sources it kept, and applies the cancel rule.
+  ({Uint8List bytes, Map<int, int> resourceIds}) _complete(
+    _LaneSlot slot,
+    LaneJob job,
+    Uint8List req,
+    _Pin? pin,
+    int? globalHandleId,
+    LaneSubmitResult result,
+    CancelHook? cancel,
+  ) {
     // Pin bookkeeping is response-driven, not op-name-driven: any op
     // whose success carries a handleId created a handle on this lane.
     // Mint a Router-global id for it (engine ids collide across lanes),
@@ -249,14 +270,13 @@ class Router implements PdfTransport {
     // Only a success promotes kept channels. A failed (or cancelled)
     // job leaves its channels with the lane, which holds them until
     // released: free them now, nothing will ever name them again.
-    // A router disposed meanwhile already killed every lane.
+    // A router disposed meanwhile already ended every lane.
     final succeeded = bytes.isNotEmpty && bytes[0] == 1;
     if (!succeeded) {
       if (!_disposed) {
         for (final token in result.heldTokens.values) {
           slot.lane.releaseHeld(token);
         }
-        _maybeRecycle(slot, result);
       }
       return (bytes: bytes, resourceIds: const <int, int>{});
     }
@@ -286,7 +306,6 @@ class Router implements PdfTransport {
       } else {
         if (!_disposed) {
           _disposeOrphan(slot, engineHandle, disposeOp, result);
-          _maybeRecycle(slot, result);
         }
         return (
           bytes: buildCancelledResponse(),
@@ -300,6 +319,7 @@ class Router implements PdfTransport {
       final globalId = _nextHandleId++;
       owner = _Pin(slot, engineHandle, job.jobId);
       _pins[globalId] = owner;
+      slot.pins++;
       bytes = rewriteResponseHandleId(bytes, globalId);
     }
     if (owner != null && result.heldTokens.isNotEmpty) {
@@ -315,7 +335,7 @@ class Router implements PdfTransport {
       }
     }
     if (globalHandleId != null && _disposeOps.contains(peekRequestOp(req))) {
-      _pins.remove(globalHandleId);
+      _unpin(globalHandleId);
     }
 
     final resourceId =
@@ -328,7 +348,6 @@ class Router implements PdfTransport {
         for (final sourceIndex in result.heldTokens.keys)
           sourceIndex: resourceId,
     };
-    _maybeRecycle(slot, result);
     return (bytes: bytes, resourceIds: resourceIds);
   }
 
@@ -356,20 +375,33 @@ class Router implements PdfTransport {
         for (final token in created.heldTokens.values) {
           slot.lane.releaseHeld(token);
         }
-        _killIfDrained(slot);
+        _releaseIfIdle(slot);
       }),
     );
   }
 
-  /// A dead lane takes no more placements and fails the handles on it. It
-  /// is killed once the jobs already on it have each had their answer.
+  /// A dead lane takes no more placements and fails the handles on it. Its
+  /// executor is given up once the jobs already on it have each had their
+  /// answer.
   void _retireDead(_LaneSlot slot) {
     slot.dead = true;
     _lanes.remove(slot);
+    _dying.add(slot);
   }
 
-  void _killIfDrained(_LaneSlot slot) {
-    if (slot.dead && slot.activeJobs == 0) slot.lane.kill();
+  /// Gives the lane's executor back to the pool when the lane is idle and
+  /// holds nothing: no job, no pinned handle, no kept source. A dead lane
+  /// gives it up whatever it holds, since its handles are gone.
+  void _releaseIfIdle(_LaneSlot slot) {
+    if (_disposed || slot.activeJobs > 0) return;
+    if (!slot.dead && (slot.pins > 0 || slot.heldResources > 0)) return;
+    _dying.remove(slot);
+    slot.lane.release();
+  }
+
+  void _unpin(int globalHandleId) {
+    final pin = _pins.remove(globalHandleId);
+    if (pin != null) pin.slot.pins--;
   }
 
   /// The engine's own not-found error for the kind of handle [op] names.
@@ -379,23 +411,10 @@ class Router implements PdfTransport {
     return 'document not found';
   }
 
-  /// Retires an idle lane whose worker grew past the recycle threshold.
-  /// Native lanes never recycle: their results carry no [LaneSubmitResult.peakBytes].
-  /// A pin or held resource on the slot keeps it alive; the next op
-  /// spawns a replacement lane through [_placeFor].
-  void _maybeRecycle(_LaneSlot slot, LaneSubmitResult result) {
-    final peak = result.peakBytes;
-    if (_disposed || peak == null || peak < _workerRecycleBytes) return;
-    if (slot.activeJobs > 0) return;
-    if (_pins.values.any((p) => p.slot == slot)) return;
-    if (_held.values.any((r) => r.slot == slot)) return;
-    if (!_lanes.remove(slot)) return;
-    slot.lane.kill();
-  }
-
   int _newResource(_LaneSlot slot, Iterable<Object> tokens) {
     final id = _nextResourceId++;
     _held[id] = _HeldResource(slot, List.of(tokens));
+    slot.heldResources++;
     return id;
   }
 
@@ -406,6 +425,8 @@ class Router implements PdfTransport {
     for (final token in resource.tokens) {
       resource.slot.lane.releaseHeld(token);
     }
+    resource.slot.heldResources--;
+    _releaseIfIdle(resource.slot);
   }
 
   @override
@@ -413,13 +434,15 @@ class Router implements PdfTransport {
     if (_disposed) return;
     _disposed = true;
 
-    // Instant: each kill flips the lane's flag, wakes its parked
-    // I/O, completes its pending submits as cancelled, and frees its
-    // platform resources. No joins, no awaits, no timeouts.
-    for (final slot in _lanes) {
-      slot.lane.kill();
+    // Instant: each lane completes its pending submits as cancelled,
+    // cancels its running job and wakes its parked I/O; the pool takes the
+    // executor back once the job has posted. No joins, no awaits, no
+    // timeouts.
+    for (final slot in [..._lanes, ..._dying]) {
+      slot.lane.end();
     }
     _lanes.clear();
+    _dying.clear();
     _pins.clear();
     _held.clear();
   }
@@ -432,27 +455,24 @@ class Router implements PdfTransport {
     if (_disposed) return const [];
     await ensureInitialized();
     _preludes.add((request: request, bytes: sourceBytes));
+    // A lane without an executor replays every prelude when it leases one.
     final results = <Uint8List>[];
     for (final slot in List.of(_lanes)) {
-      results.add(await _runPrelude(slot, request, sourceBytes));
+      if (slot.lane.leased) {
+        results.add(await _runPrelude(slot, request, sourceBytes));
+      }
     }
     return results;
   }
 
-  /// Preludes ride the same per-lane FIFO as user jobs, so one queued at
-  /// spawn time always executes before any job routed to that lane later.
+  /// Preludes ride the same per-lane FIFO as user jobs, so the ones replayed
+  /// at lease time always execute before any job routed to that lane later.
   Future<Uint8List> _runPrelude(
     _LaneSlot slot,
     Uint8List request,
     Uint8List bytes,
   ) async {
-    final job = LaneJob(
-      jobId: _nextJobId++,
-      request: request,
-      sources: [MemorySource(bytes)],
-      sinks: const [],
-      keepSources: const {},
-    );
+    final job = _preludeJob(request, bytes);
     slot.activeJobs++;
     try {
       return (await slot.lane.submit(job)).bytes;
@@ -461,18 +481,30 @@ class Router implements PdfTransport {
     }
   }
 
+  LaneJob _preludeJob(Uint8List request, Uint8List bytes) => LaneJob(
+    jobId: _nextJobId++,
+    request: request,
+    sources: [MemorySource(bytes)],
+    sinks: const [],
+    keepSources: const {},
+  );
+
   /// Least-loaded lane, spawning under the cap. (Pinned routing is
   /// resolved by the caller; an unknown handle falls through here —
   /// any lane can host the engine's "not found" error.)
   _LaneSlot _placeFor(Uint8List request) {
     if (_lanes.isEmpty || (_lanes.length < _maxLanes && _allBusy())) {
-      final slot = _LaneSlot(_host.spawn());
+      // Fire-and-forget replay at every lease: a failed one degrades that
+      // lease to the engine's no-fallback warning path, never fails jobs.
+      final slot = _LaneSlot(
+        PooledLane(
+          _pool,
+          prelude: () => [
+            for (final p in _preludes) _preludeJob(p.request, p.bytes),
+          ],
+        ),
+      );
       _lanes.add(slot);
-      for (final p in _preludes) {
-        // Fire-and-forget on fresh lanes: a failed replay degrades that
-        // lane to the engine's no-fallback warning path, never fails jobs.
-        unawaited(_runPrelude(slot, p.request, p.bytes));
-      }
       return slot;
     }
 

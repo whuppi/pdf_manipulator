@@ -66,10 +66,14 @@ Future<Uint8List> _run(
 
 void registerLaneProtocolTests({PdfConfig? Function()? config}) {
   group('lane protocol: reset', () {
+    late Executor executor;
     late Lane lane;
 
-    setUp(() => lane = createLaneHost(config: config?.call()).spawn());
-    tearDown(() => lane.kill());
+    setUp(() async {
+      executor = await createLaneHost(config: config?.call()).boot();
+      lane = executor.beginLane();
+    });
+    tearDown(() => executor.terminate());
 
     test('a reset gives a fresh engine state in the same executor', () async {
       final first = src(minimalPdf);
@@ -105,7 +109,7 @@ void registerLaneProtocolTests({PdfConfig? Function()? config}) {
     }, timeout: t(10));
 
     test('an idle executor resets again and again', () async {
-      await lane.reset(); // a lane that never ran has nothing to reset
+      await lane.reset(); // a fresh executor resets too
       final source = src(minimalPdf);
       await _run(lane, 1, _open(source), sources: [source], keep: {0});
       await lane.reset();

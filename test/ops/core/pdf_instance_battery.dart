@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/pdf_manipulator.dart';
+import 'package:pdf_manipulator/src/runtime/pool.dart';
 import 'package:test/test.dart';
 
 import '../../fixtures/handwritten.dart';
@@ -392,7 +393,13 @@ void registerInstanceTests(Pdf Function() createPdf) {
       await pdf2.dispose();
     }, timeout: t(1));
 
-    test('5000x dispose mid-flight — instant, no leaks, ops resolve', () async {
+    test('5000x dispose mid-flight — instant, no leaks, ops resolve, and the '
+        'executors are reused', () async {
+      // A disposed instance hands its executor back, so churn boots at
+      // most a couple per block of cycles: a worker or thread per cycle
+      // would be 500.
+      const block = 500;
+      var blockStart = ExecutorPool.totalBoots;
       for (var i = 0; i < 5000; i++) {
         final pdf = createPdf();
         // Attach the outcome handler BEFORE dispose — the contract is
@@ -413,8 +420,17 @@ void registerInstanceTests(Pdf Function() createPdf) {
         await Future<void>.delayed(Duration.zero);
         await pdf.dispose();
         await settled;
+        if ((i + 1) % block == 0) {
+          final boots = ExecutorPool.totalBoots - blockStart;
+          expect(
+            boots,
+            lessThanOrEqualTo(2),
+            reason: 'cycles ${i + 1 - block + 1}..${i + 1} booted $boots',
+          );
+          blockStart = ExecutorPool.totalBoots;
+        }
       }
-    }, timeout: t(26));
+    }, timeout: t(60));
 
     test(
       'dispose mid-heavy-merge (5000 inputs) — instant, op resolves',

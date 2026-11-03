@@ -266,24 +266,24 @@ void registerOneShotTests(Pdf Function() createPdf) {
     test('split closes each sink its factory returned', () async {
       final pdf = createPdf();
       final sinks = <_CloseCountingSink>[];
-      await pdf.split(src(fThreePageMarkers), (i) {
+      await pdf.split(src(fThreePageMarkers), (part) {
         final s = _CloseCountingSink();
         sinks.add(s);
         return s;
-      }, every: 1);
+      }, by: const PdfSplitRule.every(1));
       expect(sinks, hasLength(3));
       expect(sinks.map((s) => s.closes), everyElement(1));
     }, timeout: t(1));
 
-    test('splitBySize closes each sink its factory returned', () async {
+    test('split by maxBytes closes each sink its factory returned', () async {
       final pdf = createPdf();
       final sinks = <_CloseCountingSink>[];
-      final sizes = await pdf.splitBySize(src(fThreePageMarkers), (i) {
+      final parts = await pdf.split(src(fThreePageMarkers), (part) {
         final s = _CloseCountingSink();
         sinks.add(s);
         return s;
-      }, maxBytes: 1 << 20);
-      expect(sinks, hasLength(sizes.length));
+      }, by: const PdfSplitRule.maxBytes(1 << 20));
+      expect(sinks, hasLength(parts.length));
       expect(sinks.map((s) => s.closes), everyElement(1));
     }, timeout: t(1));
 

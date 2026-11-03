@@ -14,6 +14,7 @@ import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/runtime/host.dart';
 import 'package:pdf_manipulator/src/runtime/lane.dart';
+import 'package:pdf_manipulator/src/runtime/pool.dart';
 import 'package:pdf_manipulator/src/runtime/router.dart';
 import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
 import 'package:pdf_manipulator/src/types/cancel_hook.dart';
@@ -27,13 +28,13 @@ import '../../harness/slow_source.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
 
-/// A lane host that hands every lane it spawns to the test, and lets the
+/// A lane host that hands every executor it boots to the test, and lets the
 /// test act on each result the moment its lane delivers it.
 class _ObservedHost implements LaneHost {
   _ObservedHost(this._inner);
 
   final LaneHost _inner;
-  final lanes = <_ObservedLane>[];
+  final executors = <_ObservedExecutor>[];
 
   /// Called with the job id each time a lane delivers a job's result,
   /// before the Router sees it.
@@ -46,11 +47,35 @@ class _ObservedHost implements LaneHost {
   int get defaultLaneCount => _inner.defaultLaneCount;
 
   @override
-  Lane spawn() {
-    final lane = _ObservedLane(_inner.spawn(), this);
+  String get poolKey => _inner.poolKey;
+
+  @override
+  Future<Executor> boot() async {
+    final executor = _ObservedExecutor(await _inner.boot(), this);
+    executors.add(executor);
+    return executor;
+  }
+}
+
+class _ObservedExecutor implements Executor {
+  _ObservedExecutor(this.real, this._host);
+
+  final Executor real;
+  final _ObservedHost _host;
+  final lanes = <_ObservedLane>[];
+
+  @override
+  int get heapBytes => real.heapBytes;
+
+  @override
+  Lane beginLane() {
+    final lane = _ObservedLane(real.beginLane(), _host);
     lanes.add(lane);
     return lane;
   }
+
+  @override
+  void terminate() => real.terminate();
 }
 
 class _ObservedLane implements Lane {
@@ -76,7 +101,10 @@ class _ObservedLane implements Lane {
   Future<int?> reset() => real.reset();
 
   @override
-  void kill() => real.kill();
+  Future<bool> drain() => real.drain();
+
+  @override
+  bool get drainsPromptly => real.drainsPromptly;
 }
 
 /// A sink whose writes take [delay], and which fires [onFirstWrite] as the
@@ -137,18 +165,27 @@ bool _ok(Uint8List bytes) => bytes.isNotEmpty && bytes[0] == 1;
 void registerRuntimeSafetyTests({PdfConfig? Function()? config}) {
   group('runtime safety', () {
     late _ObservedHost host;
+    late ExecutorPool pool;
     late Router router;
 
     Router make(int maxLanes) {
       host = _ObservedHost(createLaneHost(config: config?.call()));
-      return router = Router(host: host, maxLanes: maxLanes, mode: host.mode);
+      pool = ExecutorPool(host: host);
+      return router = Router(pool: pool, maxLanes: maxLanes, mode: host.mode);
     }
 
-    tearDown(() => router.dispose());
+    tearDown(() async {
+      await router.dispose();
+      pool.dispose();
+    });
 
     test('a cancel landing as the open succeeds leaves no document in the '
         'engine', () async {
       make(1);
+      // A document of its own keeps the lane's executor leased, so the
+      // probe below finds the engine as the cancelled open left it.
+      final keeper = src(minimalPdf);
+      await router.execute(_open(keeper), sources: [keeper], keepSources: {0});
       final hook = CancelHook();
       final source = src(minimalPdf);
       host.onResult = (_) {
@@ -163,16 +200,17 @@ void registerRuntimeSafetyTests({PdfConfig? Function()? config}) {
       );
       expect(result.bytes, [2], reason: 'the caller is told cancelled');
 
-      // The lane's first document has engine id 1. Disposing it straight on
-      // the lane (past the Router) finds nothing when the Router disposed it.
+      // The lane's second document has engine id 2 (the keeper has 1).
+      // Asking for it straight on the lane (past the Router) finds nothing
+      // when the Router disposed it.
       final probe = LaneJob(
         jobId: 1 << 20,
-        request: _info(1),
+        request: _info(2),
         sources: const [],
         sinks: const [],
         keepSources: const {},
       );
-      final answer = await host.lanes.single.real.submit(probe);
+      final answer = await host.executors.single.lanes.last.real.submit(probe);
       expect(
         _ok(answer.bytes),
         isFalse,
@@ -283,7 +321,7 @@ void registerRuntimeSafetyTests({PdfConfig? Function()? config}) {
         keepSources: {0},
       );
       expect(_ok(next.bytes), isTrue, reason: 'a new lane serves');
-      expect(host.lanes, hasLength(2));
+      expect(host.executors, hasLength(2));
     }, timeout: t(10));
 
     Future<int> openEditor(Router router) async {

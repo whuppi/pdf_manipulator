@@ -61,9 +61,8 @@ Future<List<String>> _names(web.FileSystemDirectoryHandle dir) async {
 
 /// Everything under the package's OPFS directory, as full paths:
 /// pre-copy files inside worker dirs ('session/worker/file'), plus
-/// any stray entry at session level. A surviving worker DIRECTORY is
-/// reported too (as 'session/worker/') — a retired worker's dir must
-/// be reclaimed whole, not just emptied.
+/// any stray entry at session level. An empty worker directory is the home
+/// of a pooled worker that is alive and idle, so it is not residue.
 Future<List<String>> _laneResidue() async {
   final root = await web.window.navigator.storage.getDirectory().toDart;
   final web.FileSystemDirectoryHandle ours;
@@ -79,11 +78,7 @@ Future<List<String>> _laneResidue() async {
       try {
         final wdir = await dir.getDirectoryHandle(worker).toDart;
         final files = await _names(wdir);
-        if (files.isEmpty) {
-          residue.add('$session/$worker/');
-        } else {
-          residue.addAll(files.map((f) => '$session/$worker/$f'));
-        }
+        residue.addAll(files.map((f) => '$session/$worker/$f'));
       } catch (_) {
         residue.add('$session/$worker'); // a file at session level
       }

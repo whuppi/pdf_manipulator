@@ -224,15 +224,13 @@ void registerDeterminismTests(Pdf Function() createPdf) {
       _expectSame(await run(), await run());
     }, timeout: t(30));
 
-    test('extracting pages saves the same bytes twice', () async {
+    test('splitting by page count saves the same bytes twice', () async {
       final pdf = createPdf();
       Future<Uint8List> run() async {
         final sink = TestSink();
-        await pdf.extractPages(
-          src(fixture),
-          sink,
-          pages: [for (var i = 0; i < _pages; i += 2) i],
-        );
+        await pdf.split(src(fixture), (part) {
+          return part.index == 0 ? sink : TestSink();
+        }, by: const PdfSplitRule.every(_pages ~/ 2));
         return sink.takeBytes();
       }
 
@@ -248,7 +246,11 @@ void registerDeterminismTests(Pdf Function() createPdf) {
           userPassword: 'user-pw',
         );
         final encrypted = TestSink();
-        await pdf.encrypt(src(fixture), encrypted, encryption: config);
+        await pdf.resave(
+          src(fixture),
+          encrypted,
+          options: const PdfSaveOptions.fullRewrite(encryption: config),
+        );
         final source = encrypted.takeBytes();
 
         Future<Uint8List> run() async {
@@ -259,7 +261,14 @@ void registerDeterminismTests(Pdf Function() createPdf) {
             password: 'user-pw',
           );
           final plain = TestSink();
-          await pdf.decrypt(src(kept), plain, password: 'user-pw');
+          await pdf.resave(
+            src(kept),
+            plain,
+            password: 'user-pw',
+            options: const PdfSaveOptions.fullRewrite(
+              encryption: PdfEncryption.remove(),
+            ),
+          );
           return plain.takeBytes();
         }
 

@@ -15,17 +15,15 @@ void registerStandaloneStressTests(Pdf Function() createPdf) {
 
     // Observed op/calibration: 5.48, 5.17, 5.17, 4.9.
     stressTest(
-      'extractPages first 10 from 1000-page',
+      'keepPages first 10 from 1000-page',
       createPdf,
       ratio: 17,
       () async {
         final pdf = createPdf();
         final sink = TestSink();
-        await pdf.extractPages(
-          src(largePdf),
-          sink,
-          pages: List.generate(10, (i) => i),
-        );
+        await pdf
+            .edits(src(largePdf), sink)
+            .keepPages(List.generate(10, (i) => i));
         final doc = await pdf.open(src(sink.takeBytes()));
         expect(doc.pageCount, 10);
         await doc.dispose();

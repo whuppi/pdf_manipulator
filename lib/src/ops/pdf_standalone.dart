@@ -8,7 +8,9 @@ part of 'pdf.dart';
 
 /// One-shot operations — source in, sink out, no persistent handle.
 extension PdfStandalone on Pdf {
-  /// Digitally signs a PDF with the given [credentials].
+  /// Digitally signs a PDF with the given [credentials]. An encrypted
+  /// [source] throws [PdfUnsupported]: the appended signature would have to
+  /// be encrypted with the source's keys.
   PdfTask<void> sign(
     DataSource source,
     DataSink output, {
@@ -54,22 +56,4 @@ extension PdfStandalone on Pdf {
     DataSink output, {
     String? password,
   }) => _live.convertXfaToAcroForm(source, output, password: password);
-
-  /// Extracts specific [pages] from [source] into [output], in the order
-  /// given. A page listed twice throws [PdfInvalidArgument].
-  PdfTask<void> extractPages(
-    DataSource source,
-    DataSink output, {
-    required List<int> pages,
-    String? password,
-  }) {
-    if (pages.toSet().length != pages.length) {
-      throw PdfInvalidArgument('a page is listed twice: $pages');
-    }
-    return _own(
-      edit(source, password: password),
-      (editor, hook) => hook.guard(editor._handle.extractPages(pages, output)),
-      output: output,
-    );
-  }
 }

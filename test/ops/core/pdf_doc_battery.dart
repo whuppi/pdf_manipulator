@@ -75,10 +75,12 @@ void registerDocTests(Pdf Function() createPdf) {
     test('open encrypted PDF with correct password succeeds', () async {
       final pdf = createPdf();
       final encSink = TestSink();
-      await pdf.encrypt(
+      await pdf.resave(
         src(minimalPdf),
         encSink,
-        encryption: const PdfEncryption.config(ownerPassword: 'testpw'),
+        options: const PdfSaveOptions.fullRewrite(
+          encryption: PdfEncryption.config(ownerPassword: 'testpw'),
+        ),
       );
       final encBytes = encSink.takeBytes();
 
@@ -101,13 +103,15 @@ void registerDocTests(Pdf Function() createPdf) {
         assemble: false,
       );
       final encSink = TestSink();
-      await pdf.encrypt(
+      await pdf.resave(
         src(minimalPdf),
         encSink,
-        encryption: const PdfEncryption.config(
-          ownerPassword: 'owner-pw',
-          userPassword: 'user-pw',
-          permissions: written,
+        options: const PdfSaveOptions.fullRewrite(
+          encryption: PdfEncryption.config(
+            ownerPassword: 'owner-pw',
+            userPassword: 'user-pw',
+            permissions: written,
+          ),
         ),
       );
       final doc = await pdf.open(src(encSink.takeBytes()), password: 'user-pw');
@@ -128,12 +132,14 @@ void registerDocTests(Pdf Function() createPdf) {
       () async {
         final pdf = createPdf();
         final encSink = TestSink();
-        await pdf.encrypt(
+        await pdf.resave(
           src(minimalPdf),
           encSink,
-          encryption: const PdfEncryption.config(
-            ownerPassword: 'owner-pw',
-            userPassword: 'user-pw',
+          options: const PdfSaveOptions.fullRewrite(
+            encryption: PdfEncryption.config(
+              ownerPassword: 'owner-pw',
+              userPassword: 'user-pw',
+            ),
           ),
         );
         final encBytes = encSink.takeBytes();
@@ -152,12 +158,14 @@ void registerDocTests(Pdf Function() createPdf) {
     test('user-password PDF refuses opening with no password', () async {
       final pdf = createPdf();
       final encSink = TestSink();
-      await pdf.encrypt(
+      await pdf.resave(
         src(minimalPdf),
         encSink,
-        encryption: const PdfEncryption.config(
-          ownerPassword: 'owner-pw',
-          userPassword: 'user-pw',
+        options: const PdfSaveOptions.fullRewrite(
+          encryption: PdfEncryption.config(
+            ownerPassword: 'owner-pw',
+            userPassword: 'user-pw',
+          ),
         ),
       );
       final encBytes = encSink.takeBytes();
@@ -175,10 +183,12 @@ void registerDocTests(Pdf Function() createPdf) {
       // pin exists so nobody "fixes" that into a lockout.
       final pdf = createPdf();
       final encSink = TestSink();
-      await pdf.encrypt(
+      await pdf.resave(
         src(minimalPdf),
         encSink,
-        encryption: const PdfEncryption.config(ownerPassword: 'testpw'),
+        options: const PdfSaveOptions.fullRewrite(
+          encryption: PdfEncryption.config(ownerPassword: 'testpw'),
+        ),
       );
       final doc = await pdf.open(src(encSink.takeBytes()));
       expect(doc.encryption, isNotNull);

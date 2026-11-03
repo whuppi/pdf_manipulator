@@ -170,9 +170,10 @@ class SharedBridge extends PdfBridge {
   }
 
   @override
-  PdfTask<void> registerFallbackFont(String kind, Uint8List bytes) {
+  PdfTask<void> registerFallbackFont(String kind, DataSource font) {
     final hook = CancelHook();
     final future = () async {
+      final bytes = await readAllBytes(font);
       final req = bin.encodeRequest(EngineOp.registerFallbackFont.wire, {
         'kind': kind,
         'sourceLength': bytes.length,

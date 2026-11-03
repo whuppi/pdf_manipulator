@@ -48,6 +48,7 @@ import 'package:pdf_manipulator/src/types/pdf_redaction_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_render.dart';
 import 'package:pdf_manipulator/src/types/pdf_sanitize_options.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
+import 'package:pdf_manipulator/src/types/pdf_split.dart';
 import 'package:pdf_manipulator/src/types/pdf_stroke.dart';
 import 'package:pdf_manipulator/src/types/pdf_table.dart';
 import 'package:pdf_manipulator/src/types/pdf_task.dart';
@@ -140,16 +141,16 @@ class Pdf {
   /// cannot render (CJK or emoji) — used by `flattenForms` and the
   /// `/NeedAppearances` regeneration paths.
   ///
-  /// [bytes] is a complete TTF/OTF face. It reaches every current and
-  /// future worker of this instance; register once, before the operations
-  /// that need it. Without a registered font (and without the engine's
-  /// optional compiled-in fallback) such values keep the plain `/DA`
+  /// [font] holds a complete TTF/OTF face, which is read whole. It reaches
+  /// every current and future worker of this instance; register once, before
+  /// the operations that need it. Without a registered font (and without the
+  /// engine's optional compiled-in fallback) such values keep the plain `/DA`
   /// appearance and the flatten records a warning.
   PdfTask<void> registerFallbackFont(
     PdfFallbackFontKind kind,
-    Uint8List bytes,
+    DataSource font,
   ) {
-    return _bridge.registerFallbackFont(kind.wire, bytes);
+    return _bridge.registerFallbackFont(kind.wire, font);
   }
 
   void _check() {

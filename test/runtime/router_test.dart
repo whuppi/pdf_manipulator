@@ -15,71 +15,14 @@ import 'dart:typed_data';
 import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart' as bin;
 import 'package:pdf_manipulator/src/bridge/protocol/op.dart';
 import 'package:pdf_manipulator/src/runtime/lane.dart';
+import 'package:pdf_manipulator/src/runtime/pool.dart';
 import 'package:pdf_manipulator/src/runtime/router.dart';
 import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
 import 'package:pdf_manipulator/src/types/cancel_hook.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:test/test.dart';
 
-/// A lane that records every verb and completes jobs on command.
-class FakeLane implements Lane {
-  final submitted = <LaneJob>[];
-  final cancelledJobs = <int>[];
-  final releasedTokens = <Object>[];
-  bool killed = false;
-
-  /// Pending completers by jobId — tests complete them explicitly.
-  final pending = <int, Completer<LaneSubmitResult>>{};
-
-  /// When set, submit completes immediately with this result.
-  LaneSubmitResult? autoResult;
-
-  @override
-  Future<LaneSubmitResult> submit(LaneJob job) {
-    submitted.add(job);
-    final auto = autoResult;
-    if (auto != null) return Future.value(auto);
-    final completer = Completer<LaneSubmitResult>();
-    pending[job.jobId] = completer;
-    return completer.future;
-  }
-
-  /// Completes every still-pending job successfully.
-  void completeAllPending() {
-    for (final completer in pending.values) {
-      if (!completer.isCompleted) completer.complete(_ok());
-    }
-  }
-
-  @override
-  void cancelJob(int jobId) => cancelledJobs.add(jobId);
-
-  @override
-  void releaseHeld(Object token) => releasedTokens.add(token);
-
-  @override
-  Future<int?> reset() async => null;
-
-  @override
-  void kill() => killed = true;
-}
-
-class FakeLaneHost implements LaneHost {
-  final lanes = <FakeLane>[];
-
-  @override
-  PdfIoMode get mode => PdfIoMode.native;
-
-  @override
-  int get defaultLaneCount => 2;
-
-  @override
-  Lane spawn() {
-    final lane = FakeLane();
-    lanes.add(lane);
-    return lane;
-  }
-}
+import '../harness/fake_executors.dart';
 
 LaneSubmitResult _ok({int? handleId, Map<int, Object> held = const {}}) {
   final bytes = handleId == null
@@ -104,12 +47,16 @@ Uint8List _opOn(String op, int handleId) =>
 
 void main() {
   late FakeLaneHost host;
+  late ExecutorPool pool;
   late Router router;
 
   setUp(() {
     host = FakeLaneHost();
-    router = Router(host: host, maxLanes: 2, mode: PdfIoMode.native);
+    pool = ExecutorPool(host: host, maxExecutors: 8);
+    router = Router(pool: pool, maxLanes: 2, mode: PdfIoMode.native);
   });
+
+  tearDown(() => pool.dispose());
 
   group('placement', () {
     test('first op spawns one lane; an idle lane is reused', () async {
@@ -358,19 +305,16 @@ void main() {
   });
 
   group('dispose', () {
-    test('kills every lane and resolves later ops as cancelled', () async {
+    test('ends every lane and resolves later ops as cancelled', () async {
       final inflight = router.execute(_open());
       await Future<void>.delayed(Duration.zero);
       final lane = host.lanes.single;
 
       await router.dispose();
-      expect(lane.killed, isTrue);
+      expect(lane.ended, isTrue, reason: 'the lane was ended at once');
 
-      // A real lane completes its pending submits on kill; the fake
-      // mimics that contract here.
-      lane.pending[1]!.complete(
-        LaneSubmitResult(buildCancelledResponse(), const {}),
-      );
+      // A real lane completes its pending submits when it ends; the fake
+      // mimics that contract in drain.
       final r = await inflight;
       expect(r.bytes, [2]);
 
@@ -393,7 +337,7 @@ void main() {
     });
 
     test('placement preserves submission order onto a lane', () async {
-      final solo = Router(host: host, maxLanes: 1, mode: PdfIoMode.native);
+      final solo = Router(pool: pool, maxLanes: 1, mode: PdfIoMode.native);
       final ops = [
         solo.execute(_open()),
         solo.execute(_open()),
@@ -486,15 +430,18 @@ void main() {
       'cancel after completion is unbound — the lane never hears it',
       () async {
         final hook = CancelHook();
-        final lane = FakeLane()..autoResult = _ok();
-        final soloHost = _SingleLaneHost(lane);
+        final soloHost = FakeLaneHost()
+          ..onBoot = (executor) => executor.lane.autoResult = _ok();
+        final soloPool = ExecutorPool(host: soloHost);
+        addTearDown(soloPool.dispose);
         final soloRouter = Router(
-          host: soloHost,
+          pool: soloPool,
           maxLanes: 1,
           mode: PdfIoMode.native,
         );
 
         await soloRouter.execute(_open(), cancel: hook);
+        final lane = soloHost.lanes.single;
         hook.cancel();
         expect(
           lane.cancelledJobs,
@@ -680,7 +627,7 @@ void main() {
     );
 
     test('its handles fail typed at once, a new lane serves handle-less '
-        'ops, and the dead lane is killed once drained', () async {
+        'ops, and the dead lane gives up its executor once drained', () async {
       final open = router.execute(_open());
       await Future<void>.delayed(Duration.zero);
       final laneA = host.lanes.single;
@@ -695,12 +642,19 @@ void main() {
         (await bad).bytes,
         buildErrorResponse('internal error: engine operation panicked'),
       );
-      expect(laneA.killed, isFalse, reason: 'a queued job is still to answer');
+      expect(laneA.ended, isFalse, reason: 'a queued job is still to answer');
+      laneA.engineDead = true;
       laneA.pending[3]!.complete(
         LaneSubmitResult(buildErrorResponse(laneDeadMessage), const {}),
       );
       expect((await queued).bytes, buildErrorResponse(laneDeadMessage));
-      expect(laneA.killed, isTrue);
+      expect(laneA.ended, isTrue);
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        host.executors[0].terminated,
+        isTrue,
+        reason: 'the pool drops a dead executor and never leases it again',
+      );
 
       final before = laneA.submitted.length;
       final after = await router.execute(_opOn('extract', handle));
@@ -718,126 +672,199 @@ void main() {
     });
   });
 
-  group('worker recycling', () {
-    const threshold = 100;
+  group('the lease', () {
+    /// Lets the pool and the lane settle: a release and a lease are a few
+    /// microtasks.
+    Future<void> settle() => Future<void>.delayed(Duration.zero);
 
-    LaneSubmitResult peak(int? bytes, {int? handleId}) {
-      final ok = _ok(handleId: handleId);
-      return LaneSubmitResult(ok.bytes, ok.heldTokens, peakBytes: bytes);
-    }
+    test('a lane leases at its first job, not before', () async {
+      await settle();
+      expect(host.executors, isEmpty);
 
-    setUp(() {
-      router = Router(
-        host: host,
-        maxLanes: 2,
-        mode: PdfIoMode.native,
-        workerRecycleBytes: threshold,
+      final op = router.execute(_open());
+      await settle();
+      expect(host.executors.single.events, ['lease']);
+      host.lanes.single.pending[1]!.complete(_ok());
+      await op;
+    });
+
+    test('idle with no pin and no kept source: the executor is reset and '
+        'returned', () async {
+      final op = router.execute(_open());
+      await settle();
+      host.lanes.single.pending[1]!.complete(_ok());
+      await op;
+      await settle();
+
+      expect(host.executors.single.events, ['lease', 'drain', 'reset']);
+      expect(pool.idleCount, 1);
+      expect(host.executors.single.terminated, isFalse);
+    });
+
+    test('the next job leases again, on the same executor', () async {
+      final first = router.execute(_open());
+      await settle();
+      host.lanes.single.pending[1]!.complete(_ok());
+      await first;
+      await settle();
+
+      final second = router.execute(_open());
+      await settle();
+      expect(host.executors, hasLength(1));
+      expect(host.executors.single.events, [
+        'lease',
+        'drain',
+        'reset',
+        'lease',
+      ]);
+      host.lanes.single.pending[2]!.complete(_ok());
+      await second;
+    });
+
+    test('a pinned handle keeps the lease until its dispose', () async {
+      final open = router.execute(_open());
+      await settle();
+      host.lanes.single.pending[1]!.complete(_ok(handleId: 7));
+      final handle = peekResponseHandleId((await open).bytes)!;
+      await settle();
+      expect(host.executors.single.events, [
+        'lease',
+      ], reason: 'the engine holds the document: no reset');
+
+      host.lanes.single.autoResult = _ok();
+      await router.execute(_opOn('docDispose', handle));
+      await settle();
+      expect(host.executors.single.events, ['lease', 'drain', 'reset']);
+    });
+
+    test('a kept source keeps the lease until it is released', () async {
+      final open = router.execute(_open(), keepSources: {0});
+      await settle();
+      host.lanes.single.pending[1]!.complete(
+        _ok(handleId: 7, held: {0: 'token'}),
       );
+      final opened = await open;
+      final handle = peekResponseHandleId(opened.bytes)!;
+
+      host.lanes.single.autoResult = _ok();
+      await router.execute(_opOn('docDispose', handle));
+      await settle();
+      expect(host.executors.single.events, [
+        'lease',
+      ], reason: 'the engine let go of the document, the source is still held');
+
+      await router.releaseSource(opened.resourceIds[0]!);
+      await settle();
+      expect(host.executors.single.events, ['lease', 'drain', 'reset']);
+    });
+
+    test('a queued job on the lane keeps the lease', () async {
+      final solo = Router(pool: pool, maxLanes: 1, mode: PdfIoMode.native);
+      final first = solo.execute(_open());
+      final second = solo.execute(_open());
+      await settle();
+      final lane = host.lanes.single;
+
+      lane.pending[1]!.complete(_ok());
+      await first;
+      await settle();
+      expect(host.executors.single.events, ['lease']);
+
+      lane.pending[2]!.complete(_ok());
+      await second;
+      await settle();
+      expect(host.executors.single.events, ['lease', 'drain', 'reset']);
+    });
+
+    test('a failed job with a kept source gives its channel back, then the '
+        'executor', () async {
+      final op = router.execute(_open(), keepSources: {0});
+      await settle();
+      host.lanes.single.pending[1]!.complete(
+        LaneSubmitResult(buildErrorResponse('bad pdf'), const {0: 'src'}),
+      );
+      await op;
+      await settle();
+      expect(host.lanes.single.releasedTokens, ['src']);
+      expect(host.executors.single.events, ['lease', 'drain', 'reset']);
     });
 
     test(
-      'at or above the threshold with nothing on the lane: retired',
+      'dispose mid-job drains the executor and returns it to the pool',
       () async {
-        final lane = FakeLane()..autoResult = peak(threshold);
-        final single = Router(
-          host: _SingleLaneHost(lane),
-          maxLanes: 1,
-          mode: PdfIoMode.native,
-          workerRecycleBytes: threshold,
+        final inflight = router.execute(_open());
+        await settle();
+        final lane = host.lanes.single;
+
+        await router.dispose();
+        expect(
+          (await inflight).bytes,
+          buildCancelledResponse(),
+          reason: 'the caller is answered at once',
         );
-        await single.execute(_open());
-        expect(lane.killed, isTrue);
+        await settle();
+        expect(host.executors.single.events, ['lease', 'drain', 'reset']);
+        expect(host.executors.single.terminated, isFalse);
+        expect(pool.idleCount, 1);
+        expect(lane.ended, isTrue);
       },
     );
 
-    test('a retired lane is replaced by exactly one new lane', () async {
-      final first = router.execute(_open());
-      await Future<void>.delayed(Duration.zero);
-      host.lanes.single.pending[1]!.complete(peak(threshold));
-      await first;
-      expect(host.lanes.single.killed, isTrue);
+    test('dispose waits for a running job to post before the reset', () async {
+      final inflight = router.execute(_open());
+      await settle();
+      final lane = host.lanes.single;
+      lane.drainGate = Completer<bool>();
+
+      await router.dispose();
+      await inflight;
+      await settle();
+      expect(host.executors.single.events, ['lease', 'drain']);
+      expect(pool.idleCount, 0, reason: 'the engine is still unwinding');
+
+      lane.drainGate!.complete(true);
+      await settle();
+      expect(host.executors.single.events, ['lease', 'drain', 'reset']);
+      expect(pool.idleCount, 1);
+    });
+
+    test('dispose while a job waits for its executor cancels it and keeps '
+        'nothing', () async {
+      host.bootGate = Completer<void>();
+      final waiting = router.execute(_open());
+      await settle();
+
+      await router.dispose();
+      expect((await waiting).bytes, buildCancelledResponse());
+
+      host.bootGate!.complete();
+      await settle();
+      expect(host.lanes.single.submitted, isEmpty, reason: 'no zombie job');
+      expect(pool.idleCount, 1, reason: 'the executor that arrived is idle');
+    });
+
+    test('the prelude replays under every lease and runs first', () async {
+      final op = router.execute(_open());
+      await settle();
+      host.lanes.single.pending[1]!.complete(_ok());
+      await op;
+      await settle();
+
+      final installed = await router.installPrelude(
+        bin.encodeRequest('registerFallbackFont', {'kind': 'cjk'}),
+        sourceBytes: Uint8List.fromList(const [1, 2, 3]),
+      );
+      expect(installed, isEmpty, reason: 'no lane holds an executor now');
 
       final next = router.execute(_open());
-      await Future<void>.delayed(Duration.zero);
-      expect(host.lanes, hasLength(2));
-      expect(host.lanes.last.killed, isFalse);
-      host.lanes.last.pending[2]!.complete(peak(null));
-      await next;
-      expect(host.lanes, hasLength(2));
-    });
-
-    test('below the threshold: kept', () async {
-      final op = router.execute(_open());
-      await Future<void>.delayed(Duration.zero);
-      host.lanes.single.pending[1]!.complete(peak(threshold - 1));
-      await op;
-      expect(host.lanes.single.killed, isFalse);
-    });
-
-    test('no peak reported (native): never retired', () async {
-      final op = router.execute(_open());
-      await Future<void>.delayed(Duration.zero);
-      host.lanes.single.pending[1]!.complete(peak(null));
-      await op;
-      expect(host.lanes.single.killed, isFalse);
-    });
-
-    test('a pinned handle on the lane keeps it', () async {
-      final op = router.execute(_open());
-      await Future<void>.delayed(Duration.zero);
-      host.lanes.single.pending[1]!.complete(peak(threshold, handleId: 7));
-      await op;
-      expect(host.lanes.single.killed, isFalse);
-    });
-
-    test('a held resource on the lane keeps it', () async {
-      final op = router.execute(_open());
-      await Future<void>.delayed(Duration.zero);
-      host.lanes.single.pending[1]!.complete(
-        LaneSubmitResult(Uint8List.fromList(const [1, 0, 0]), const {
-          0: 'token',
-        }, peakBytes: threshold),
-      );
-      await op;
-      expect(host.lanes.single.killed, isFalse);
-    });
-
-    test('a queued job on the lane keeps it', () async {
-      final first = router.execute(_open());
-      await Future<void>.delayed(Duration.zero);
-      final laneA = host.lanes.single;
-      final second = router.execute(_open());
-      await Future<void>.delayed(Duration.zero);
-      expect(host.lanes, hasLength(2), reason: 'busy lane: spawn under cap');
-      // Third op queues on a least-loaded lane while both are busy.
-      final third = router.execute(_open());
-      await Future<void>.delayed(Duration.zero);
-      final queuedOn = host.lanes.firstWhere((l) => l.submitted.length == 2);
-
-      queuedOn.pending.values.first.complete(peak(threshold));
-      await Future<void>.delayed(Duration.zero);
+      await settle();
+      final lane = host.lanes.single;
       expect(
-        queuedOn.killed,
-        isFalse,
-        reason: 'another job is still running on this lane',
+        [for (final j in lane.submitted) peekRequestOp(j.request)],
+        ['open', 'registerFallbackFont', 'open'],
       );
-
-      for (final lane in host.lanes) {
-        lane.completeAllPending();
-      }
-      await Future.wait([first, second, third]);
-      expect(laneA.submitted, isNotEmpty);
+      lane.pending[lane.submitted.last.jobId]!.complete(_ok());
+      await next;
     });
   });
-}
-
-class _SingleLaneHost implements LaneHost {
-  _SingleLaneHost(this.lane);
-  final FakeLane lane;
-  @override
-  PdfIoMode get mode => PdfIoMode.native;
-  @override
-  int get defaultLaneCount => 1;
-  @override
-  Lane spawn() => lane;
 }

@@ -35,12 +35,9 @@ void registerEditorStressTests(Pdf Function() createPdf) {
       final sink = TestSink();
       // Background layer draws into page content, so extraction can
       // prove the text landed — output size alone proves nothing.
-      await pdf.watermark(
-        src(largePdf),
-        sink,
-        text: 'CONFIDENTIAL',
-        layer: PdfWatermarkLayer.background,
-      );
+      await pdf
+          .edits(src(largePdf), sink)
+          .addWatermark('CONFIDENTIAL', layer: PdfWatermarkLayer.background);
       final out = sink.takeBytes();
       expect(out.length, greaterThan(largePdf.length));
       final doc = await pdf.open(src(out));
@@ -65,16 +62,25 @@ void registerEditorStressTests(Pdf Function() createPdf) {
       () async {
         final pdf = createPdf();
         final encSink = TestSink();
-        await pdf.encrypt(
+        await pdf.resave(
           src(largePdf),
           encSink,
-          encryption: const PdfEncryption.config(
-            ownerPassword: 'owner',
-            userPassword: 'user',
+          options: const PdfSaveOptions.fullRewrite(
+            encryption: PdfEncryption.config(
+              ownerPassword: 'owner',
+              userPassword: 'user',
+            ),
           ),
         );
         final decSink = TestSink();
-        await pdf.decrypt(src(encSink.takeBytes()), decSink, password: 'owner');
+        await pdf.resave(
+          src(encSink.takeBytes()),
+          decSink,
+          password: 'owner',
+          options: const PdfSaveOptions.fullRewrite(
+            encryption: PdfEncryption.remove(),
+          ),
+        );
         final doc = await pdf.open(src(decSink.takeBytes()));
         expect(doc.pageCount, 1000);
         await doc.dispose();
@@ -148,7 +154,7 @@ void registerEditorStressTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final formPdf = fFormFields;
       final sink = TestSink();
-      await pdf.flattenForms(src(formPdf), sink);
+      await pdf.edits(src(formPdf), sink).flattenForms();
       final doc = await pdf.open(src(sink.takeBytes()));
       expect(doc.pageCount, 1);
       await doc.dispose();

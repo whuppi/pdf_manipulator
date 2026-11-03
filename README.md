@@ -366,23 +366,27 @@ Everything goes through one of four doors. Pick the one that fits what you're do
 A single change: call it straight on `pdf`, source in, sink out:
 
 ```dart
-await pdf.watermark(source, output,
-    text: 'CONFIDENTIAL',
+await pdf.edits(source, output).addWatermark('CONFIDENTIAL',
     style: PdfWatermarkStyle(opacity: 0.2, fontSize: 60));
 
 await pdf.compress(source, output); // images to 150 ppi (PdfImagePolicy.ebook), streams deflated, unused objects dropped
 await pdf.compress(source, output, images: PdfImagePolicy.screen); // 72 ppi
 
-await pdf.encrypt(source, output,
-    encryption: PdfEncryption.config(
-      ownerPassword: 'secret',
-      algorithm: PdfEncryptionAlgorithm.aes256,
+await pdf.resave(source, output,
+    options: PdfSaveOptions.fullRewrite(
+      encryption: PdfEncryption.config(
+        ownerPassword: 'secret',
+        algorithm: PdfEncryptionAlgorithm.aes256,
+      ),
     ));
 
-await pdf.split(source, (i) => MemorySink(), every: 5);
+final parts = await pdf.split(source, (part) => MemorySink(),
+    by: PdfSplitRule.every(5)); // or .maxBytes(5000000), or .bookmarks()
 ```
 
-The full one-shot set, all the same shape: `merge`, `split` / `splitBySize` / `splitByBookmarks`, `extractPages`, `deletePages`, `reorderPages`, `movePage`, `rotatePages` / `rotateAllPages`, `addStamp` / `addImageStamp`, `flattenForms`, `applyRedactions`, `embedFile`, `decrypt`, `sign`, `convertTo` (DOCX/PPTX/XLSX), `convertToPdf`, `convertToPdfA`, `convertXfaToAcroForm`, `imagesToPdf`.
+`split` asks `sinkFor` for each part's sink before the part is written and closes it after, and returns what each part holds (`index`, `start` and `end` page, the bookmark's `title`). `merge` opens a password-protected source with its entry of `passwords: {source: 'secret'}`.
+
+The one-shots that are not an edit or a read: `merge`, `split`, `compress`, `sign`, `convertTo` (DOCX/PPTX/XLSX), `convertToPdf`, `convertXfaToAcroForm`, `imagesToPdf`. Every edit is a call on `pdf.edits(source, output)` and every read a call on `pdf.reads(source)`; the table at the top of this page lists them.
 
 > Doing several of these to the *same* PDF? Use the editor (below); it parses once instead of re-parsing per call.
 
@@ -543,7 +547,7 @@ flutter:
 ```dart
 final fontBytes = await rootBundle.load('assets/fonts/NotoSansSC-Regular.ttf');
 await pdf.registerFallbackFont(
-    PdfFallbackFontKind.cjk, fontBytes.buffer.asUint8List());
+    PdfFallbackFontKind.cjk, MemorySource(fontBytes.buffer.asUint8List()));
 ```
 
 `PdfFallbackFontKind.emoji` works the same way, with the emoji font. One registration covers the whole `Pdf` instance, on every platform.
@@ -649,7 +653,7 @@ How do you know what to keep? Each capability covers a small set of methods. Cor
 | Capability | Keep it if you call | Also brings | Adds (native) |
 |---|---|---|---|
 | `core` | everything else — merge, split, forms, watermark, encrypt, build… | — | always included (~6.7 MB) |
-| `render` | `doc.render()`, `editor.reduceImages()`, the `compress` one-shot, `editor.redact()`, `editor.markRedaction()`, `editor.applyRedactions()`, the `applyRedactions` one-shot | — | +4.8 MB |
+| `render` | `doc.render()`, `editor.reduceImages()`, the `compress` one-shot, `editor.redact()`, `editor.markRedaction()`, `editor.applyRedactions()` | — | +4.8 MB |
 | `signatures` | `sign()`, `doc.signatures()`, `doc.verifySignatures()` | — | +1.0 MB |
 | `pdfa` | `doc.validatePdfA()`, `doc.validatePdfUa()`, `convertToPdfA` | — | +0.1 MB |
 | `extract` | `doc.extractText()`, `doc.search()`, `doc.classifyPages()`, `doc.classifyDocument()` | — | +3.2 MB |

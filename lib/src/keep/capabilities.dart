@@ -14,8 +14,7 @@ enum PdfCapability {
   /// Page rasterization (`PdfDoc.render`), image re-compression
   /// (`PdfEdits.reduceImages`, the `compress` one-shot) and redaction
   /// (`PdfEdits.redact`, `PdfEditor.markRedaction`,
-  /// `PdfEditor.applyRedactions`, the `applyRedactions` one-shot), which
-  /// rewrites images and meshes.
+  /// `PdfEditor.applyRedactions`), which rewrites images and meshes.
   render('render', 'rendering'),
 
   /// Digital signatures: signing and verification.
@@ -78,7 +77,6 @@ enum PdfCapability {
     'PdfEdits.redact': PdfCapability.render,
     'PdfEditor.markRedaction': PdfCapability.render,
     'PdfEditor.applyRedactions': PdfCapability.render,
-    'applyRedactions': PdfCapability.render,
     'Pdf.sign': PdfCapability.signatures,
     'sign': PdfCapability.signatures,
     'PdfDoc.signatures': PdfCapability.signatures,
@@ -86,7 +84,6 @@ enum PdfCapability {
     'PdfDoc.validatePdfA': PdfCapability.pdfa,
     'PdfDoc.validatePdfUa': PdfCapability.pdfa,
     'PdfEdits.convertToPdfA': PdfCapability.pdfa,
-    'convertToPdfA': PdfCapability.pdfa,
     'Pdf.convertTo': PdfCapability.office,
     'convertTo': PdfCapability.office,
     'Pdf.convertToPdf': PdfCapability.office,

@@ -105,7 +105,7 @@ CONTENT RULES (never change)
 
 - **Breaking:** `PdfSaveOptions.incremental()` now appends the edits to the original bytes, so a signature over them stays valid, and throws `PdfIncrementalRefused` when an append cannot carry them (pages removed or reordered, redaction, content edits, an encrypted or repaired source) → catch it and save with `PdfSaveOptions.fullRewrite()`
 - **Breaking:** `PdfError` has a new subtype, `PdfIncrementalRefused` → add a case to every exhaustive `switch` over `PdfError`
-- **Breaking:** `extractPages` and `keepPages` throw `PdfInvalidArgument` for a page listed twice, which used to write a damaged file → list each page once
+- **Breaking:** `keepPages` throws `PdfInvalidArgument` for a page listed twice, which used to write a damaged file → list each page once
 - **Breaking:** engine failures throw their own `PdfError` subtype (`PdfCorrupted`, `PdfPasswordRequired`, `PdfWrongPassword`, `PdfPageRangeError`, `PdfUnsupported`, `PdfInvalidArgument`, `PdfIoError`, `PdfCryptoError`) where they threw `PdfEngineError` → catch the subtype, or `PdfError` for all of them
 - **Breaking:** the page builder's `fieldKeystroke`, `fieldFormat`, `fieldValidate` and `fieldCalculate` throw `PdfInvalidArgument` on a page with no form field, and `linkUrl` and `linkPage` on a page with no text, where they did nothing → add the field or text first
 - **Breaking:** a radio group's value reads as `PdfChoiceValue` with the selected option's name, or `PdfNoValue` when none is selected, where it read as `PdfCheckedValue` → match on `PdfChoiceValue` for radio groups
@@ -156,6 +156,13 @@ CONTENT RULES (never change)
 - **Breaking:** `addRedaction(page, rect, {overlayText})` is `markRedaction(page, rect, {overlay})`; the engine never drew the overlay text → pass `PdfRedactionOverlay.fill(color)` for a box of that colour, or `PdfRedactionOverlay.none()` to draw none
 - **Breaking:** `eraseRegions`, `clearEraseRegions` and the `eraseRegions` one-shot are removed → call `redact(page, regions, overlay: const PdfRedactionOverlay.none())`, or `clearRedactions()` to drop queued marks
 - **Breaking:** `convertToPdfA`, `cropMargins`, `embedFile`, `reduceImages`, `sanitize`, `scrubMetadata`, `setImageBounds` and `unembedStandardFonts` are members of the new `PdfEdits` base class, which `PdfEditor` extends → a subclass or fake of `PdfEditor` needs no change; a `PdfEditor` method reference becomes `PdfEdits`
+- **Breaking:** the one-shots `deletePages`, `reorderPages`, `movePage`, `rotatePages`, `rotateAllPages`, `flattenForms`, `applyRedactions`, `embedFile`, `watermark`, `addStamp`, `addImageStamp` and `convertToPdfA` are removed → call the edit on `pdf.edits(source, output)`, for example `pdf.edits(a, b).addWatermark('DRAFT')`, or several edits in one `pdf.rewrite`
+- **Breaking:** the `encrypt` and `decrypt` one-shots are removed → call `pdf.resave(a, b, options: PdfSaveOptions.fullRewrite(encryption: PdfEncryption.config(ownerPassword: 'x')))`, or `encryption: PdfEncryption.remove()` with `password:` to decrypt
+- **Breaking:** `extractPages` is removed → call `pdf.edits(a, b).keepPages([0, 2])` for a page list in any order, or `split` for parts of consecutive pages
+- **Breaking:** `split`, `splitBySize` and `splitByBookmarks` are one `split(source, sinkFor, {by, password})`, with `by: PdfSplitRule.every(n)`, `.maxBytes(n)` or `.bookmarks()`, and `sinkFor` takes the `PdfSplitPart` it is for → rename the call; it returns the parts (index, first and last page, bookmark title) and no byte sizes
+- **Breaking:** `merge(sources, output, {passwords})` names its first parameter `sources` and opens a password-protected source with its entry of `passwords`, a `Map<DataSource, String>` → pass `passwords: {protected: 'secret'}`
+- **Breaking:** `compress` has no `garbageCollect` parameter, since it always collects garbage, and takes `password` for an encrypted source → drop the argument
+- **Breaking:** `registerFallbackFont(kind, font)` takes the font as a `DataSource`, which it reads whole, where it took `Uint8List` bytes → wrap the bytes: `MemorySource(bytes)`
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Added `redact(page, regions, {overlay})`, which marks and applies its own regions in one step and returns the report — marks queued before stay queued, and an error leaves nothing marked or applied
 - Added `PdfFormFieldValue.choice`, `.choices` and `.none`: `field(name).setValue` selects an option of a combo box or list box, the options of a multi-select list box, or clears the value, and refuses an option the field does not list
@@ -165,7 +172,7 @@ CONTENT RULES (never change)
 - Added the page builder methods the engine already had: `inline`, `textInRect`, `rect`, `line`, `markup`, `stickyNote`, `stamp`, `freeText`, `linkNamed`, `linkJavaScript`, `onOpen`, `onClose`, `table` and `newPageSameSize`
 - Added `PdfBuilder.addImagePage`, a page that holds one picture and takes the picture's own size unless you name one
 - Changed `PdfBuilder.save` to Flate-compress page content and font streams; `save(output, deflate: false)` keeps them plain for debugging
-- Changed `open`, `edit`, `extractPages`, a full-rewrite save and `compress` to hold a bounded window of the document instead of all of it: a 38 MB, 10,000-page file now opens and saves in under 16 MB of engine memory, where it took up to 85 MB
+- Changed `open`, `edit`, `split`, a full-rewrite save and `compress` to hold a bounded window of the document instead of all of it: a 38 MB, 10,000-page file now opens and saves in under 16 MB of engine memory, where it took up to 85 MB
 - Changed `mergeFrom` to keep the merged file open until the editor is disposed and copy its objects one at a time at save: merging a 10,000-page file takes under 16 MB of engine memory and about 2 seconds, where it took 163 MB and minutes
 - Added rotation, media box and crop box edits on merged pages; stamps, watermarks, erases and redactions on a merged page throw `PdfUnsupported`
 - Changed page edits to work on merged pages: `deletePages`, `movePage` and `keepPages` take a merged page like any other, where they threw `PdfUnsupported` on a document with merged pages
@@ -226,8 +233,8 @@ CONTENT RULES (never change)
 - Fixed a radio option named Yes, No, On or Off reading back as a checked flag instead of its name
 - Fixed `formFields` misreading a field whose type, flags or value live on an ancestor field (a radio group read as a checkbox), and reporting a nameless parent as a field with an empty name
 - Fixed page builder calls on a disposed or unknown builder being queued without an error — each call now applies at once and fails where it is made
-- Fixed `extractPages` and `deletePages` writing the pages they drop into the output, so the output kept its original size and the dropped pages' text, images and form values — a save now writes nothing only a dropped page reaches, and drops the links, bookmark targets and form fields that pointed at one ([#261](https://github.com/whuppi/pdf_manipulator/issues/261) reported by [@crurui](https://github.com/crurui))
-- Fixed page labels shifting onto the wrong pages after `extractPages`, `deletePages` or a reorder — each kept page keeps its label
+- Fixed `keepPages`, `split` and `deletePages` writing the pages they drop into the output, so the output kept its original size and the dropped pages' text, images and form values — a save now writes nothing only a dropped page reaches, and drops the links, bookmark targets and form fields that pointed at one ([#261](https://github.com/whuppi/pdf_manipulator/issues/261) reported by [@crurui](https://github.com/crurui))
+- Fixed page labels shifting onto the wrong pages after `keepPages`, `split`, `deletePages` or a reorder — each kept page keeps its label
 - Fixed `PdfPageInfo.label` always being `null` — it now holds the page's label when the document has page labels
 - Fixed `sign` dropping the document's bookmarks, form fields, page labels and every other catalog entry, and replacing an earlier signature — the signature now appends to the existing form and page ([#263](https://github.com/whuppi/pdf_manipulator/issues/263))
 - Fixed `PdfSignatureInfo` showing a non-ASCII signer name, reason or location as garbled text — UTF-16 text strings are decoded
@@ -257,6 +264,7 @@ CONTENT RULES (never change)
 - Fixed `compress` and every other full-rewrite save making a file with object streams up to six times larger — the save keeps its objects packed
 - Fixed `compress` and every other full-rewrite save dropping the document's title, author, dates and file identifier unless the title was edited — the saved file keeps the source's `/Info` and `/ID`, and an edited title replaces the old `/Info` instead of leaving it behind
 - Fixed the same input saving to different bytes on every run, so `compress` and every other rewriting save could not be compared or cached by hash — objects are written in id order, so only the random AES IVs of an encrypted save differ
+- Fixed creating and disposing `Pdf` instances in a loop starting a new web worker or native thread for most of them — a disposed instance hands its worker or thread back for the next instance to reuse
 
 ## 5.0.1-dev.0
 

@@ -178,7 +178,7 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
         // reaches every lane of this instance before the ops below.
         await pdf.registerFallbackFont(
           PdfFallbackFontKind.cjk,
-          subsetCjkFallbackFont,
+          src(subsetCjkFallbackFont),
         );
         final editor = await pdf.edit(src(formUtf16NamePdf));
         await editor.field(_sharedName).setValue(PdfFormFieldValue.text(value));

@@ -1371,11 +1371,11 @@ class _SugarTabState extends State<_SugarTab>
                       loading: loading,
                       onRun: () => runFlow('Split', () async {
                             final sinks = <DemoSink>[];
-                            await _pdf.split(src, (i) {
+                            await _pdf.split(src, (part) {
                               final s = DemoSink();
                               sinks.add(s);
                               return s;
-                            }, every: 2);
+                            }, by: const PdfSplitRule.every(2));
                             setState(() => status = '${sinks.length} chunks: '
                                 '${sinks.map((s) => fmtSize(s.length)).join(', ')}');
                           })),
@@ -1385,11 +1385,11 @@ class _SugarTabState extends State<_SugarTab>
                       loading: loading,
                       onRun: () => runFlow('SplitBySize', () async {
                             final sinks = <DemoSink>[];
-                            await _pdf.splitBySize(src, (i) {
+                            await _pdf.split(src, (part) {
                               final s = DemoSink();
                               sinks.add(s);
                               return s;
-                            }, maxBytes: 500000);
+                            }, by: const PdfSplitRule.maxBytes(500000));
                             setState(() => status = '${sinks.length} chunks: '
                                 '${sinks.map((s) => fmtSize(s.length)).join(', ')}');
                           })),
@@ -1400,11 +1400,11 @@ class _SugarTabState extends State<_SugarTab>
                       onRun: () => runFlow('SplitBookmarks', () async {
                             try {
                               final sinks = <DemoSink>[];
-                              await _pdf.splitByBookmarks(src, (i) {
+                              await _pdf.split(src, (part) {
                                 final s = DemoSink();
                                 sinks.add(s);
                                 return s;
-                              });
+                              }, by: const PdfSplitRule.bookmarks());
                               setState(() => status = '${sinks.length} parts');
                             } catch (_) {
                               setState(() => status = 'No bookmarks');
@@ -1412,19 +1412,20 @@ class _SugarTabState extends State<_SugarTab>
                           })),
                   _Op(
                       icon: Icons.file_copy_outlined,
-                      title: 'Extract pages 0–1',
+                      title: 'Keep pages 0–1',
                       loading: loading,
-                      onRun: () => _opToFile(
-                          'Extract',
-                          'extracted.pdf',
-                          (sink) =>
-                              _pdf.extractPages(src, sink, pages: [0, 1]))),
+                      onRun: () => _opToFile('Keep', 'extracted.pdf',
+                          (sink) => _pdf.edits(src, sink).keepPages([0, 1]))),
                   _Op(
                       icon: Icons.delete_outline,
                       title: 'Delete page 0',
                       loading: loading,
-                      onRun: () => _opToFile('Delete', 'deleted.pdf',
-                          (sink) => _pdf.deletePages(src, sink, pages: [0]))),
+                      onRun: () => _opToFile(
+                          'Delete',
+                          'deleted.pdf',
+                          (sink) => _pdf
+                              .edits(src, sink)
+                              .deletePages(const PdfPages.single(0)))),
                   _Op(
                       icon: Icons.swap_vert,
                       title: 'Reverse page order',
@@ -1434,8 +1435,9 @@ class _SugarTabState extends State<_SugarTab>
                             final n = doc.pageCount;
                             await doc.dispose();
                             final sink = DemoSink();
-                            await _pdf.reorderPages(src, sink,
-                                order: List.generate(n, (i) => n - 1 - i));
+                            await _pdf
+                                .edits(src, sink)
+                                .keepPages(List.generate(n, (i) => n - 1 - i));
                             await saveResult(sink.takeBytes(), 'reversed.pdf');
                           })),
                   _Op(
@@ -1447,7 +1449,9 @@ class _SugarTabState extends State<_SugarTab>
                             final n = doc.pageCount;
                             await doc.dispose();
                             final sink = DemoSink();
-                            await _pdf.movePage(src, sink, from: 0, to: n - 1);
+                            await _pdf
+                                .edits(src, sink)
+                                .movePage(from: 0, to: n - 1);
                             await saveResult(sink.takeBytes(), 'moved.pdf');
                           })),
                   _Section('Rotation'),
@@ -1458,7 +1462,8 @@ class _SugarTabState extends State<_SugarTab>
                       onRun: () => _opToFile(
                           'RotateAll',
                           'rotated_all.pdf',
-                          (sink) => _pdf.rotateAllPages(src, sink,
+                          (sink) => _pdf.edits(src, sink).rotatePages(
+                              const PdfPages.all(),
                               by: PdfRotation.r90))),
                   _Op(
                       icon: Icons.rotate_left,
@@ -1467,8 +1472,9 @@ class _SugarTabState extends State<_SugarTab>
                       onRun: () => _opToFile(
                           'RotatePage',
                           'rotated_p0.pdf',
-                          (sink) => _pdf.rotatePages(src, sink,
-                              pages: {0: PdfRotation.r180}))),
+                          (sink) => _pdf.edits(src, sink).rotatePages(
+                              const PdfPages.single(0),
+                              by: PdfRotation.r180))),
                   _Section('Compression'),
                   _Op(
                       icon: Icons.compress,
@@ -1491,8 +1497,7 @@ class _SugarTabState extends State<_SugarTab>
                       onRun: () => _opToFile(
                           'Watermark',
                           'watermarked.pdf',
-                          (sink) => _pdf.watermark(src, sink,
-                              text: 'DRAFT',
+                          (sink) => _pdf.edits(src, sink).addWatermark('DRAFT',
                               style: const PdfWatermarkStyle(opacity: 0.3)))),
                   _Op(
                       icon: Icons.grid_4x4,
@@ -1501,8 +1506,7 @@ class _SugarTabState extends State<_SugarTab>
                       onRun: () => _opToFile(
                           'Tiled',
                           'tiled.pdf',
-                          (sink) => _pdf.watermark(src, sink,
-                              text: 'COPY',
+                          (sink) => _pdf.edits(src, sink).addWatermark('COPY',
                               style: const PdfWatermarkStyle(
                                   opacity: 0.15, fontSize: 24, rotation: 30),
                               position: const PdfWatermarkPosition.tiled(
@@ -1514,8 +1518,7 @@ class _SugarTabState extends State<_SugarTab>
                       onRun: () => _opToFile(
                           'Corner',
                           'corner.pdf',
-                          (sink) => _pdf.watermark(src, sink,
-                              text: 'SAMPLE',
+                          (sink) => _pdf.edits(src, sink).addWatermark('SAMPLE',
                               style: const PdfWatermarkStyle(
                                   opacity: 0.4, fontSize: 18, rotation: 0),
                               position: const PdfWatermarkPosition.corner(
@@ -1527,8 +1530,8 @@ class _SugarTabState extends State<_SugarTab>
                       onRun: () => _opToFile(
                           'Background',
                           'bg_watermark.pdf',
-                          (sink) => _pdf.watermark(src, sink,
-                              text: 'BACKGROUND',
+                          (sink) => _pdf.edits(src, sink).addWatermark(
+                              'BACKGROUND',
                               style: const PdfWatermarkStyle(opacity: 0.2),
                               layer: PdfWatermarkLayer.background))),
                   _Section('Security'),
@@ -1539,9 +1542,10 @@ class _SugarTabState extends State<_SugarTab>
                       onRun: () => _opToFile(
                           'Encrypt',
                           'encrypted.pdf',
-                          (sink) => _pdf.encrypt(src, sink,
-                              encryption: const PdfEncryption.config(
-                                  ownerPassword: 'secret')))),
+                          (sink) => _pdf.resave(src, sink,
+                              options: const PdfSaveOptions.fullRewrite(
+                                  encryption: PdfEncryption.config(
+                                      ownerPassword: 'secret'))))),
                   _Op(
                       icon: Icons.lock_open,
                       title: 'Decrypt (pw: secret)',
@@ -1549,21 +1553,27 @@ class _SugarTabState extends State<_SugarTab>
                       onRun: () => _opToFile(
                           'Decrypt',
                           'decrypted.pdf',
-                          (sink) =>
-                              _pdf.decrypt(src, sink, password: 'secret'))),
+                          (sink) => _pdf.resave(src, sink,
+                              password: 'secret',
+                              options: const PdfSaveOptions.fullRewrite(
+                                  encryption: PdfEncryption.remove())))),
                   _Section('Forms & Annotations'),
                   _Op(
                       icon: Icons.layers_clear,
                       title: 'Flatten forms',
                       loading: loading,
                       onRun: () => _opToFile('Flatten', 'flattened.pdf',
-                          (sink) => _pdf.flattenForms(src, sink))),
+                          (sink) => _pdf.edits(src, sink).flattenForms())),
                   _Op(
                       icon: Icons.rule,
                       title: 'Apply redactions',
                       loading: loading,
-                      onRun: () => _opToFile('Redact', 'redacted.pdf',
-                          (sink) => _pdf.applyRedactions(src, sink))),
+                      onRun: () => _opToFile(
+                          'Redact',
+                          'redacted.pdf',
+                          (sink) => _pdf.rewrite(src, sink, (editor) async {
+                                await editor.applyRedactions();
+                              }))),
                   _Section('Content'),
                   _Op(
                       icon: Icons.attach_file,
@@ -1572,9 +1582,9 @@ class _SugarTabState extends State<_SugarTab>
                       onRun: () => _opToFile(
                           'Embed',
                           'embedded.pdf',
-                          (sink) => _pdf.embedFile(src, sink,
-                              name: 'readme.txt',
-                              fileData: DemoSource(Uint8List.fromList(
+                          (sink) => _pdf.edits(src, sink).embedFile(
+                              'readme.txt',
+                              DemoSource(Uint8List.fromList(
                                   'Hello from pdf_manipulator!'.codeUnits))))),
                   _Op(
                       icon: Icons.format_paint,
@@ -1598,8 +1608,8 @@ class _SugarTabState extends State<_SugarTab>
                       onRun: () => _opToFile(
                           'Stamp',
                           'stamped.pdf',
-                          (sink) => _pdf.addStamp(src, sink,
-                              page: 0,
+                          (sink) => _pdf.edits(src, sink).addStamp(
+                              const PdfPages.single(0),
                               type: PdfStampType.approved,
                               rect: const PdfRect(
                                   x: 50, y: 50, width: 200, height: 60)))),
@@ -1611,9 +1621,9 @@ class _SugarTabState extends State<_SugarTab>
                             final imgs = await pickImageBytes();
                             if (imgs == null || imgs.isEmpty) return;
                             final sink = DemoSink();
-                            await _pdf.addImageStamp(src, sink,
-                                page: 0,
-                                imageData: DemoSource(imgs.first.bytes),
+                            await _pdf.edits(src, sink).addImageStamp(
+                                const PdfPages.single(0),
+                                DemoSource(imgs.first.bytes),
                                 rect: const PdfRect(
                                     x: 100, y: 100, width: 150, height: 150));
                             await saveResult(
@@ -1625,7 +1635,7 @@ class _SugarTabState extends State<_SugarTab>
                       title: 'Convert to PDF/A',
                       loading: loading,
                       onRun: () => _opToFile('PDF/A', 'pdfa.pdf',
-                          (sink) => _pdf.convertToPdfA(src, sink))),
+                          (sink) => _pdf.edits(src, sink).convertToPdfA())),
                   _Section('Images → PDF'),
                   _Op(
                       icon: Icons.photo_library,
@@ -1755,16 +1765,6 @@ class _StandaloneTabState extends State<_StandaloneTab>
                             await saveResult(
                                 pdfSink.takeBytes(), 'roundtrip.pdf');
                           })),
-                  _Section('Extract Pages'),
-                  _Op(
-                      icon: Icons.file_copy_outlined,
-                      title: 'Extract pages 0–1',
-                      loading: loading,
-                      onRun: () => _opToFile(
-                          'Extract',
-                          'extracted_standalone.pdf',
-                          (sink) =>
-                              _pdf.extractPages(src, sink, pages: [0, 1]))),
                   const SizedBox(height: 40),
                 ],
               ),
@@ -1804,7 +1804,7 @@ class _EditorTabState extends State<_EditorTab>
     if (_emojiFontLoaded) return;
     final font = await loadEmojiFont();
     await _pdf.registerFallbackFont(
-        PdfFallbackFontKind.emoji, font.buffer.asUint8List());
+        PdfFallbackFontKind.emoji, DemoSource(font.buffer.asUint8List()));
     _emojiFontLoaded = true;
   }
 
