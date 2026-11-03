@@ -186,6 +186,7 @@ CONTENT RULES (never change)
 - Fixed a save that keeps an encrypted document's encryption setting its owner password to the password it was opened with, so anyone who could open the result had owner rights and its permissions were void — the save now reuses the source's own encryption dictionary and key
 - Fixed `PdfDoc.encryption.permissions` reporting the wrong flags (a print-allowed file read as `print: false`) — the engine's `/P` word is read at its spec bit positions
 - Fixed a page tree whose inner nodes each hold one page reporting those nodes as pages — every node is read before it counts as a page
+- Fixed article threads longer than 4,096 beads being cut short and tables wider than 128 columns being missed, and a hostile CMap or xref stream size aborting the engine — XMP metadata is now read as a stream of events
 - Changed `compress` to subset embedded TrueType and CID CFF fonts: outlines no content shows are emptied, glyph ids and tables kept, fonts of form fields left whole; a subset that is not smaller is not written
 - Fixed watermarks placed in a corner, tiled or at an exact rectangle all landing at default spots — every position is placed where it says; an unknown corner name is refused
 - Fixed a save that sets a form field's value, flattens the forms and redacts elsewhere on the page failing with "object referenced but unwritten" when unused objects are dropped
