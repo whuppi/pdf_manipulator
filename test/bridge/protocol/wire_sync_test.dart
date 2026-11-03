@@ -18,6 +18,7 @@ import 'dart:io';
 
 import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart';
 import 'package:pdf_manipulator/src/bridge/protocol/op.dart';
+import 'package:pdf_manipulator/src/runtime/lane.dart';
 import 'package:test/test.dart';
 
 // ── Source extractors ──
@@ -282,6 +283,68 @@ void main() {
     };
     expect(rust, isNotEmpty);
     expect(dart, rust);
+  });
+
+  group('native lane protocol ↔ Rust lane table', () {
+    final rustLane = File(
+      'vendor/pdf_oxide/src/host/native/lane.rs',
+    ).readAsStringSync();
+    final rustTable = File(
+      'vendor/pdf_oxide/src/host/native/lane_table.rs',
+    ).readAsStringSync();
+    final dartBindings = File(
+      'lib/src/runtime/native/bindings.dart',
+    ).readAsStringSync();
+
+    String rustConst(String name) {
+      final m = RegExp(
+        'pub const $name: &str =\\s*"([^"]*)";',
+      ).firstMatch(rustLane);
+      if (m == null) fail('pub const $name not found in lane.rs');
+      return m.group(1)!;
+    }
+
+    test('the lane error messages match their Rust constants', () {
+      expect(laneDeadMessage, rustConst('LANE_DEAD_MESSAGE'));
+      expect(laneStaleLeaseMessage, rustConst('STALE_LEASE_MESSAGE'));
+      expect(laneBusyMessage, rustConst('LANE_BUSY_MESSAGE'));
+    });
+
+    test('every FFI binding names a Rust export with the same arity', () {
+      final dart = {
+        for (final m in RegExp(
+          r"symbol: '(\w+)'[^;]*?external \w+ \w+\((.*?)\);",
+          dotAll: true,
+        ).allMatches(dartBindings))
+          m.group(1)!: m
+              .group(2)!
+              .split(',')
+              .where((p) => p.trim().isNotEmpty)
+              .length,
+      };
+      expect(
+        dart.keys,
+        containsAll(['lane_submit', 'lane_reset', 'lane_lease_begin']),
+      );
+      for (final entry in dart.entries) {
+        if (entry.key == 'store_dart_post_cobject') continue;
+        final rust = RegExp(
+          'extern "C" fn ${entry.key}\\((.*?)\\)\\s*(->\\s*\\w+\\s*)?\\{',
+          dotAll: true,
+        ).firstMatch(rustTable);
+        if (rust == null) {
+          fail('${entry.key} is not an extern "C" fn in lane_table.rs');
+        }
+        final rustParams = RegExp(
+          r'\b[a-z_]+:\s',
+        ).allMatches(rust.group(1)!).length;
+        expect(
+          entry.value,
+          rustParams,
+          reason: '${entry.key}: Dart takes ${entry.value}, Rust $rustParams',
+        );
+      }
+    });
   });
 
   group('WasmPageOp ↔ host PageOp parity', () {

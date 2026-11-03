@@ -62,6 +62,7 @@ void main() {
         LaneMsg.readAtResult,
         LaneMsg.chunkAck,
         LaneMsg.releaseHeld,
+        LaneMsg.reset,
         LaneMsg.opfsWrite,
         LaneMsg.opfsDrop,
       };
@@ -79,6 +80,7 @@ void main() {
         LaneMsg.chunk,
         LaneMsg.result,
         LaneMsg.error,
+        LaneMsg.resetDone,
         LaneMsg.opfsWriteAck,
       };
       final posted = RegExp(
@@ -142,15 +144,120 @@ void main() {
       );
     });
 
-    test('result and error posts each carry the peak-memory field', () {
+    test('result, error and resetDone posts each carry the memory field', () {
       final field = LaneMsgFields.peakBytes;
-      for (final tag in [LaneMsg.result, LaneMsg.error]) {
+      for (final tag in [LaneMsg.result, LaneMsg.error, LaneMsg.resetDone]) {
         final post = RegExp("postMessage\\(\\{ type: '$tag'[^\\n]*\\b$field:");
         expect(
           post.hasMatch(workerSource),
           isTrue,
           reason: 'the $tag post must carry $field',
         );
+      }
+    });
+
+    test('every message after the boot handshake carries the lease', () {
+      final lease = LaneMsgFields.lease;
+      // Everything the worker posts, bar the boot handshake: `booted`,
+      // `ready` and the init failure (the one `error` that names no lease).
+      final posts = RegExp(
+        r"postMessage\(\{\s*type: '(\w+)',([^\n]*)",
+      ).allMatches(workerSource);
+      expect(posts, isNotEmpty);
+      for (final post in posts) {
+        final tag = post.group(1)!;
+        final rest = post.group(2)!;
+        if (tag == LaneMsg.error && rest.contains('WASM init failed')) continue;
+        expect(
+          rest,
+          contains(' $lease'),
+          reason: 'the worker posts $tag without the lease: $rest',
+        );
+      }
+
+      final laneSource = File(
+        'lib/src/runtime/web/lane.dart',
+      ).readAsStringSync();
+      expect(
+        RegExp(
+          'obj\\[LaneMsgFields\\.lease\\] = _lease\\.toJS',
+        ).allMatches(laneSource),
+        hasLength(2),
+        reason: '_post and _postRaw both stamp the lease',
+      );
+      expect(laneSource, contains('..[LaneMsgFields.lease] = _lease.toJS'));
+      expect(
+        laneSource,
+        contains('if (_int(obj, LaneMsgFields.lease) != _lease) return;'),
+        reason: 'the adapter drops a message of another lease',
+      );
+    });
+
+    test('worker admits only the lease it serves or a newer one when idle', () {
+      final handler = workerSource.substring(
+        workerSource.indexOf('self.onmessage'),
+      );
+      final blocks = handler.split(RegExp(r"\n    case '"));
+      const guarded = {
+        LaneMsg.readAtResult,
+        LaneMsg.chunkAck,
+        LaneMsg.releaseHeld,
+        LaneMsg.opfsDrop,
+        LaneMsg.opfsWrite,
+        LaneMsg.reset,
+        LaneMsg.exec,
+      };
+      final seen = <String>{};
+      for (final block in blocks.skip(1)) {
+        final tag = block.substring(0, block.indexOf("'"));
+        if (!guarded.contains(tag)) continue;
+        seen.add(tag);
+        expect(
+          block,
+          contains('admit(msg)'),
+          reason: 'the $tag handler acts without checking the lease',
+        );
+      }
+      expect(seen, guarded);
+      expect(workerSource, contains('msg.${LaneMsgFields.lease}'));
+    });
+
+    test('exec and reset are refused while the worker is busy', () {
+      final handler = workerSource.substring(
+        workerSource.indexOf('self.onmessage'),
+      );
+      for (final tag in [LaneMsg.exec, LaneMsg.reset]) {
+        final start = handler.indexOf("case '$tag'");
+        final block = handler.substring(start, handler.indexOf('try {', start));
+        expect(
+          block,
+          contains('busy !== null'),
+          reason: 'the $tag handler may be re-entered',
+        );
+        expect(block, contains("busy = '"));
+      }
+      expect(
+        workerSource,
+        contains('${LaneMsgFields.protocolError}: true'),
+        reason: 'a refusal is a typed protocol error',
+      );
+    });
+
+    test('reset empties the readers, the job files and the OPFS directory', () {
+      final reset = workerSource.substring(
+        workerSource.indexOf('async function resetLane()'),
+        workerSource.indexOf('// Exec — register readers'),
+      );
+      for (final step in [
+        'housekeeping',
+        'dropReader',
+        'opfsWriteHandles.clear()',
+        'jobFiles.clear()',
+        'emptyLaneDir()',
+        'lane_destroy(lanePtr)',
+        'lane_init()',
+      ]) {
+        expect(reset, contains(step), reason: 'reset skips $step');
       }
     });
 

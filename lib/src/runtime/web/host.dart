@@ -549,4 +549,11 @@ class LaneWorker {
   /// The Web Lock the worker holds from before `ready` until the
   /// browser tears it down — the host's death signal.
   final String lockName;
+
+  int _lastLease = 0;
+
+  /// Starts a new lease on this worker and returns its id. One counter per
+  /// worker: ids count up from 1 and are never reused, so a smaller id
+  /// always names a tenure that has ended.
+  int beginLease() => ++_lastLease;
 }

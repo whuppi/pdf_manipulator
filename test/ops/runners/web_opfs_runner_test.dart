@@ -27,6 +27,7 @@ import '../core/pdf_cancel_battery.dart';
 import '../core/pdf_combinator_cancel_battery.dart';
 import '../core/pdf_lifecycle_battery.dart';
 import '../core/pdf_instance_battery.dart';
+import '../core/pdf_lane_protocol_battery.dart';
 import '../core/pdf_runtime_safety_battery.dart';
 import '../stress/pdf_doc_stress_battery.dart';
 import '../stress/pdf_editor_stress_battery.dart';
@@ -34,6 +35,7 @@ import '../stress/pdf_sugar_stress_battery.dart';
 import '../stress/pdf_standalone_stress_battery.dart';
 import '../stress/pdf_builder_stress_battery.dart';
 import '../stress/pdf_instance_stress_battery.dart';
+import '../platform/web/web_lane_protocol_battery.dart';
 import '../platform/web/web_runtime_battery.dart';
 import '../../harness/timeouts.dart';
 
@@ -124,6 +126,19 @@ void main() {
           'http://localhost:$serverPort/web_assets/lane_worker.js',
       webIoMode: PdfIoMode.opfs,
     ),
+  );
+
+  registerLaneProtocolTests(
+    config: () => PdfConfig(
+      webLaneWorkerUrl:
+          'http://localhost:$serverPort/web_assets/lane_worker.js',
+      webIoMode: PdfIoMode.opfs,
+    ),
+  );
+
+  registerWebLaneProtocolTests(
+    workerUrl: () => 'http://localhost:$serverPort/web_assets/lane_worker.js',
+    mode: PdfIoMode.opfs,
   );
 
   registerDocStressTests(() => pdf);

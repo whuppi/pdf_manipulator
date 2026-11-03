@@ -7,6 +7,12 @@
 // Message type strings appear literally in lane_worker.js for
 // readability; the wire_sync parity test asserts they match this file.
 //
+// Every message after the boot handshake (init, booted, ready, bootfailed)
+// carries the lease id in `LaneMsgFields.lease`: one lane's tenure on one
+// worker, numbered by a counter per worker and never reused. The adapter
+// drops an inbound message whose lease is not its own; the worker drops one
+// that is neither the lease it serves nor a newer one while idle.
+//
 // Rust mirrors:
 //   hostIo* ↔ host/constants.rs HOST_IO_*
 //   (SAB codes are JS↔JS only — produced by WebLane, consumed by the
@@ -83,6 +89,12 @@ abstract final class LaneMsg {
   /// Dart → worker: drop a handle's held readers.
   static const releaseHeld = 'releaseHeld';
 
+  /// Dart → worker: replace the engine state with a fresh one (same wasm
+  /// instance), clear the reader and job-file maps and delete the worker's
+  /// own OPFS files. Refused with a typed protocol error while an exec or
+  /// another reset runs.
+  static const reset = 'reset';
+
   /// Dart → worker: OPFS pre-copy chunk.
   static const opfsWrite = 'opfsWrite';
 
@@ -121,6 +133,10 @@ abstract final class LaneMsg {
   /// Worker → Dart: job (or init) failed at the transport layer.
   static const error = 'error';
 
+  /// Worker → Dart: the reset finished; carries the worker's wasm memory
+  /// size in [LaneMsgFields.peakBytes].
+  static const resetDone = 'resetDone';
+
   /// Worker → Dart: OPFS pre-copy chunk written.
   static const opfsWriteAck = 'opfsWriteAck';
 }
@@ -130,8 +146,19 @@ abstract final class LaneMsgFields {
   /// The discriminator field on every message.
   static const type = 'type';
 
-  /// Worker → Dart, on `result` and `error`: the worker's committed
-  /// WASM linear memory in bytes after the job (its lifetime peak).
+  /// The lease id on every message after the boot handshake.
+  static const lease = 'lease';
+
+  /// The job a `result` or `error` answers.
+  static const jobId = 'jobId';
+
+  /// Worker → Dart, on an `error` the worker raised against the protocol
+  /// itself: an exec or reset refused because the worker was busy. The
+  /// refused message never started.
+  static const protocolError = 'protocol';
+
+  /// Worker → Dart, on `result`, `error` and `resetDone`: the worker's
+  /// committed WASM linear memory in bytes (its lifetime peak).
   static const peakBytes = 'mem';
 }
 

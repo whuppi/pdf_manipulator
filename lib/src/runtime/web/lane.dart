@@ -32,6 +32,14 @@
 //             The worker's OPFS directory is reclaimed by the host
 //             once the worker's liveness lock confirms it is gone.
 //
+// ## Lease
+//
+// The lane holds one lease on its worker, taken when it adopts the worker:
+// a number from the worker's own counter. Every message the lane posts
+// carries it, and the lane drops any message from the worker that does not
+// echo it, so an answer meant for an earlier tenure never resolves a job of
+// this one. A `result` or `error` also has to name the job that is running.
+//
 // ## Sequencing
 //
 // A lane runs ONE job at a time (same as the native mailbox); the
@@ -180,6 +188,17 @@ class WebLane implements Lane {
   /// Outstanding OPFS pre-copy ack.
   Completer<String?>? _opfsAck;
 
+  /// The reset in flight; its answer is `resetDone` or an `error` that
+  /// names no job.
+  Completer<int?>? _reset;
+
+  /// This lane's lease on its worker; 0 until the worker is adopted.
+  int _lease = 0;
+
+  /// The lease every message of this lane carries. Internal: tests replay
+  /// messages under it.
+  int get lease => _lease;
+
   /// Held group (the handle's creating jobId) → the DataSources its
   /// jobs kept, in the order they were kept. On JSPI/Atomics a held
   /// reader's bytes still live here in Dart, so ops on the handle
@@ -257,6 +276,29 @@ class WebLane implements Lane {
   }
 
   @override
+  Future<int?> reset() async {
+    if (_killed) throw const LaneProtocolError('the lane was killed');
+    if (_dead) throw const LaneProtocolError(laneDeadMessage);
+    // Refused here, not in the worker: a queued job or an OPFS pre-copy
+    // has not reached the worker yet, and a reset would pull the files
+    // from under it.
+    if (_running != null || _queue.isNotEmpty || _reset != null) {
+      throw const LaneProtocolError(laneBusyMessage);
+    }
+    // A lane that never ran holds no worker, so there is nothing to reset.
+    if (_worker == null) return null;
+    final answer = _reset = Completer<int?>();
+    try {
+      _post({LaneMsgFields.type: LaneMsg.reset});
+      final mem = await answer.future;
+      _heldSources.clear();
+      return mem;
+    } finally {
+      _reset = null;
+    }
+  }
+
+  @override
   void kill() {
     if (_killed) return;
     _killed = true;
@@ -297,6 +339,11 @@ class WebLane implements Lane {
     }
     _opfsAck?.complete(null); // loop head re-checks _killed and exits
     _opfsAck = null;
+    final resetting = _reset;
+    _reset = null;
+    if (resetting != null && !resetting.isCompleted) {
+      resetting.completeError(const LaneProtocolError('the lane was killed'));
+    }
     _queue.clear();
     _heldSources.clear();
   }
@@ -356,7 +403,8 @@ class WebLane implements Lane {
       final requestJs = Uint8List.fromList(job.request).buffer.toJS;
       final msg = JSObject()
         ..[LaneMsgFields.type] = LaneMsg.exec.toJS
-        ..['jobId'] = job.jobId.toJS
+        ..[LaneMsgFields.lease] = _lease.toJS
+        ..[LaneMsgFields.jobId] = job.jobId.toJS
         ..['requestBytes'] = requestJs
         ..['sourceLengths'] = [for (final s in job.sources) s.length.toJS].toJS
         ..['sinkCount'] = job.sinks.length.toJS
@@ -433,9 +481,10 @@ class WebLane implements Lane {
       return;
     }
     _worker = worker;
+    _lease = worker.beginLease();
     _sub = EventStreamProviders.messageEvent
         .forTarget(worker.js)
-        .listen(_onMessage);
+        .listen((event) => deliver(event.data as JSObject?));
   }
 
   LaneSubmitResult _deadResult() => LaneSubmitResult(
@@ -458,11 +507,18 @@ class WebLane implements Lane {
 
   // ── Inbound messages ──
 
-  void _onMessage(web.MessageEvent event) {
-    final obj = event.data as JSObject?;
+  /// Handles one message from the worker. Internal: the listener calls it,
+  /// and tests call it to replay a captured message.
+  void deliver(JSObject? obj) {
     if (obj == null) return;
+    // A message of another tenure never acts here, whatever it says.
+    if (_int(obj, LaneMsgFields.lease) != _lease) return;
     final type = _str(obj, LaneMsgFields.type);
     final entry = _running;
+    // A `result` or `error` belongs to the job it names: one about any other
+    // job (the refusal of a second exec) never ends the running one.
+    final answered =
+        entry != null && _int(obj, LaneMsgFields.jobId) == entry.job.jobId;
 
     switch (type) {
       case LaneMsg.readAt:
@@ -482,8 +538,11 @@ class WebLane implements Lane {
       case LaneMsg.opfsWriteAck:
         _opfsAck?.complete(_str(obj, 'error'));
 
+      case LaneMsg.resetDone:
+        _reset?.complete(_int(obj, LaneMsgFields.peakBytes));
+
       case LaneMsg.result:
-        if (entry != null) {
+        if (entry != null && answered) {
           final bytes = _bytes(obj, 'data');
           final peak = _int(obj, LaneMsgFields.peakBytes);
           final succeeded = bytes.isNotEmpty && bytes[0] == 1;
@@ -506,7 +565,17 @@ class WebLane implements Lane {
         }
 
       case LaneMsg.error:
-        if (entry != null && obj['trap'] != null) {
+        final resetting = _reset;
+        if (_int(obj, LaneMsgFields.jobId) == null) {
+          // No job named: the failure of a reset.
+          if (resetting != null && !resetting.isCompleted) {
+            resetting.completeError(
+              LaneProtocolError(
+                _str(obj, 'message') ?? 'web lane reset failed',
+              ),
+            );
+          }
+        } else if (entry != null && answered && obj['trap'] != null) {
           // A wasm trap is a Rust panic: the engine's state is gone, so
           // the lane ends here, exactly as a panic ends a native lane.
           _dead = true;
@@ -519,7 +588,7 @@ class WebLane implements Lane {
             ),
           );
           _bury();
-        } else if (entry != null) {
+        } else if (entry != null && answered) {
           final message = _str(obj, 'message') ?? 'web lane error';
           final bytes = entry.cancelled
               ? buildCancelledResponse()
@@ -743,12 +812,14 @@ class WebLane implements Lane {
     // jsify: canonical Dart->JS conversion, identical on dart2js and dart2wasm.
     // Already-JS values (buffers, ports) go through _postRaw, not here.
     fields.forEach((k, v) => obj[k] = v.jsify());
+    obj[LaneMsgFields.lease] = _lease.toJS;
     _worker?.js.postMessage(obj);
   }
 
   void _postRaw(Map<String, JSAny?> fields, [List<JSObject>? transfer]) {
     final obj = JSObject();
     fields.forEach((k, v) => obj[k] = v);
+    obj[LaneMsgFields.lease] = _lease.toJS;
     if (transfer != null) {
       _worker?.js.postMessage(obj, transfer.toJS);
     } else {

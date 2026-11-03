@@ -22,6 +22,30 @@ import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 const laneDeadMessage =
     'the engine lane stopped after an engine operation panicked';
 
+/// The error message of a job or reset that carried a lease which was not
+/// the executor's current one. Matches `STALE_LEASE_MESSAGE` in the engine.
+const laneStaleLeaseMessage =
+    "the lane's lease was replaced; this message is stale";
+
+/// The error message of a reset refused because a job was outstanding.
+/// Matches `LANE_BUSY_MESSAGE` in the engine.
+const laneBusyMessage = 'the lane cannot reset while a job is outstanding';
+
+/// A lane refused a message because it broke the protocol: a reset while a
+/// job is outstanding, a lease that is not current, a lane that stopped.
+/// The adapters never send such a message, so this reports a bug in the
+/// caller, never a failure of the document.
+class LaneProtocolError implements Exception {
+  /// Creates the error with the executor's [message].
+  const LaneProtocolError(this.message);
+
+  /// What the executor refused, in its own words.
+  final String message;
+
+  @override
+  String toString() => 'LaneProtocolError: $message';
+}
+
 /// One operation, fully described. Built by the Router.
 class LaneJob {
   /// Creates a job descriptor. [jobId] is unique per Router lifetime.
@@ -87,7 +111,7 @@ class LaneSubmitResult {
   final Map<int, Object> heldTokens;
 }
 
-/// One isolated execution unit. Four verbs, no decisions.
+/// One isolated execution unit. Five verbs, no decisions.
 abstract interface class Lane {
   /// Run one job. Always completes — with result bytes, an
   /// engine-encoded error, or (after [kill]) a cancelled error built
@@ -99,6 +123,14 @@ abstract interface class Lane {
 
   /// Release one held channel (its handle was disposed).
   void releaseHeld(Object token);
+
+  /// Give the executor a fresh engine state: every document, held reader
+  /// and job file it owned is gone, the thread or worker stays. Completes
+  /// with the wasm memory size on web, null on native. Throws
+  /// [LaneProtocolError] while a job is outstanding (the caller drains the
+  /// lane first) and after the engine died; resetting an idle executor
+  /// again is fine.
+  Future<int?> reset();
 
   /// Kill this lane and everything on it. Instant: pending [submit]
   /// futures complete with a cancelled error, all platform resources

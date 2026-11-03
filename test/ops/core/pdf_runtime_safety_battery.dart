@@ -73,6 +73,9 @@ class _ObservedLane implements Lane {
   void releaseHeld(Object token) => real.releaseHeld(token);
 
   @override
+  Future<int?> reset() => real.reset();
+
+  @override
   void kill() => real.kill();
 }
 

@@ -30,12 +30,15 @@ import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
+import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart'
+    show decodeResponse;
 import 'package:pdf_manipulator/src/runtime/lane.dart';
 import 'package:pdf_manipulator/src/runtime/native/channel_buffers.dart';
 import 'package:pdf_manipulator/src/runtime/native/bindings.dart' as bindings;
 import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
 import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
+import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_config.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 
@@ -84,9 +87,23 @@ class _PendingJob {
 
 /// One isolated native execution unit. Decision-free.
 class NativeLane implements Lane {
-  NativeLane._(this._laneKey);
+  NativeLane._(this._laneKey) : _lease = bindings.laneLeaseBegin(_laneKey);
 
   final int _laneKey;
+
+  /// This lane's lease on its executor, taken at spawn: every submit,
+  /// cancel, release and reset carries it, and the executor drops one that
+  /// is not the current lease. Read-channel and write-channel answers need
+  /// no lease: each is numbered by its channel's request word and goes to
+  /// a buffer one job owns, freed at that job's post.
+  final int _lease;
+
+  /// The executor's key in the Rust lane table. Internal: tests replay
+  /// messages against it.
+  int get laneKey => _laneKey;
+
+  /// The lease this lane holds. Internal: tests replay messages under it.
+  int get lease => _lease;
   final Map<int, _PendingJob> _pending = {};
   final Set<_HeldChannel> _held = {};
   bool _killed = false;
@@ -207,6 +224,7 @@ class NativeLane implements Lane {
 
     bindings.laneSubmit(
       _laneKey,
+      _lease,
       job.jobId,
       requestPtr,
       job.request.length,
@@ -227,7 +245,7 @@ class NativeLane implements Lane {
   @override
   void cancelJob(int jobId) {
     if (_killed) return;
-    final queued = bindings.laneJobCancel(_laneKey, jobId) != 0;
+    final queued = bindings.laneJobCancel(_laneKey, _lease, jobId) != 0;
     // A job the lane has not started never reaches the engine, so its
     // caller need not wait for the running job ahead of it. The lane
     // still posts for it, and that post frees its buffers.
@@ -247,8 +265,41 @@ class NativeLane implements Lane {
     if (_killed) return; // kill owns held cleanup
     final held = token as _HeldChannel;
     if (!_held.remove(held)) return;
-    bindings.laneChannelRelease(_laneKey, held.buffer.ptr);
+    bindings.laneChannelRelease(_laneKey, _lease, held.buffer.ptr);
     held.free();
+  }
+
+  @override
+  Future<int?> reset() async {
+    if (_killed) throw const LaneProtocolError('the lane was killed');
+    final answer = Completer<Uint8List>();
+    final port = RawReceivePort((dynamic message) {
+      if (answer.isCompleted) return;
+      answer.complete(
+        message is Uint8List ? message : Uint8List.fromList(const []),
+      );
+    });
+    final Uint8List bytes;
+    try {
+      bindings.laneReset(_laneKey, _lease, port.sendPort.nativePort);
+      bytes = await answer.future;
+    } finally {
+      port.close();
+    }
+    try {
+      decodeResponse(bytes);
+    } on PdfEngineError catch (refused) {
+      throw LaneProtocolError(refused.message);
+    } on PdfCancelled {
+      throw const LaneProtocolError('the lane was killed');
+    }
+    // The engine dropped its readers and forgot the held channels before it
+    // answered, so their buffers are ours to free now.
+    for (final held in _held) {
+      held.free();
+    }
+    _held.clear();
+    return null;
   }
 
   @override

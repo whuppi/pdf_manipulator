@@ -58,6 +58,9 @@ class FakeLane implements Lane {
   void releaseHeld(Object token) => releasedTokens.add(token);
 
   @override
+  Future<int?> reset() async => null;
+
+  @override
   void kill() => killed = true;
 }
 

@@ -13,23 +13,36 @@
 //
 // ── Message protocol (tags pinned by protocol.dart + parity test)
 //
+// Every message after the boot handshake (init, booted, ready, bootfailed)
+// carries `lease`: one lane's tenure on this worker, a number from one
+// counter per worker, never reused. The worker serves the current lease; a
+// larger one opens a new tenure when the worker is idle; anything else is
+// dropped unread. Every message the worker posts echoes the lease it serves.
+//
 // Dart → worker:
 //   init         { protocol, ioMode, baseUrl?, wasmModule? } → ready|error
-//   exec         { jobId, requestBytes, sourceLengths: number[],
+//   exec         { lease, jobId, requestBytes, sourceLengths: number[],
 //                  sinkCount, keepSources: number[], heldGroupId?,
 //                  opfsFiles: (string|null)[], sab?, writeSab?,
 //                  cancelSab? }
-//                → result { jobId, data } | error { jobId, message, trap? }
-//                  (trap: the wasm instance trapped; the lane must end)
-//   readAtResult { bytes? , error?, cancelled? }    (JSPI reads)
-//   chunkAck     { error?, cancelled? }             (JSPI writes)
-//   releaseHeld  { heldGroupId }
-//   opfsWrite    { jobId, filename, chunk, offset, last } → opfsWriteAck
-//   opfsDrop     { jobId }
+//                → result { lease, jobId, data, mem }
+//                | error { lease, jobId, message, trap?, protocol?, mem }
+//                  (trap: the wasm instance trapped; the lane must end;
+//                   protocol: the exec was refused because the worker was
+//                   busy with another exec or a reset, and never started)
+//   reset        { lease } → resetDone { lease, mem } | error { lease,
+//                  message, protocol? }: a fresh engine state in this
+//                  worker, same wasm instance. Refused while busy.
+//   readAtResult { lease, bytes? , error?, cancelled? }    (JSPI reads)
+//   chunkAck     { lease, error?, cancelled? }             (JSPI writes)
+//   releaseHeld  { lease, heldGroupId }
+//   opfsWrite    { lease, jobId, filename, chunk, offset, last }
+//                → opfsWriteAck
+//   opfsDrop     { lease, jobId }
 //
 // worker → Dart:
-//   ready | readAt { sourceIndex, offset, count } | chunk { sinkIndex,
-//   data } | result | error | opfsWriteAck
+//   ready | readAt { lease, sourceIndex, offset, count } | chunk { lease,
+//   sinkIndex, data } | result | error | resetDone | opfsWriteAck
 //
 // ── Three I/O modes (selected by Dart, passed in init) ─────────────
 //   jspi    — JSPI Promise suspension (host_read_at returns Promise)
@@ -45,6 +58,8 @@
 let P = null;               // injected protocol codes
 let wasm = null;            // raw WASM exports
 let lanePtr = 0;            // LaneState pointer (lane_init)
+let lease = 0;              // the lease being served; 0 before the first
+let busy = null;            // 'exec' | 'reset' while one runs, else null
 let ioMode = 'opfs';
 let initialized = false;
 let precompiledModule = null;
@@ -61,6 +76,41 @@ let wasmBaseUrl = (() => {
 
 const readers = new Map();   // readerId → {length, opfsHandle, opfsFile, heldGroupId|null}
 let nextReaderId = 1;
+
+// ═══════════════════════════════════════════════════════════════════
+// Lease and single-exec wall
+// ═══════════════════════════════════════════════════════════════════
+
+// A message belongs to the lease being served, or opens a newer tenure on
+// an idle worker. Ids only count up, so a smaller one is a message from a
+// tenure that has ended.
+function admit(msg) {
+  if (msg.lease === lease) return true;
+  if (typeof msg.lease === 'number' && msg.lease > lease && busy === null) {
+    lease = msg.lease;
+    return true;
+  }
+  return false;
+}
+
+// A handler is not re-entrant: under JSPI a second exec arrives while the
+// first is suspended, and a reset would pull the engine state from under
+// it. The adapter never sends one, so this answers a bug, not a case.
+function refuseBusy(msg, what) {
+  self.postMessage({
+    type: 'error', lease: msg.lease, jobId: msg.jobId, protocol: true,
+    message: what + ' refused: the worker is busy with an ' + busy,
+  });
+}
+
+// Housekeeping handlers that await OPFS; a reset waits for them to settle.
+const housekeeping = new Set();
+
+function track(promise) {
+  housekeeping.add(promise);
+  promise.finally(() => housekeeping.delete(promise));
+  return promise;
+}
 
 let activeReaderMap = null;  // sourceIndex → readerId, per exec
 let activeSab = null;        // per-exec read SAB (atomics)
@@ -119,7 +169,7 @@ function readViaAtomics(sourceIndex, offset, count, bufPtr) {
   const status = new Int32Array(activeSab);
 
   Atomics.store(status, 0, P.sabPending);
-  self.postMessage({ type: 'readAt', sourceIndex, offset, count });
+  self.postMessage({ type: 'readAt', lease, sourceIndex, offset, count });
   Atomics.wait(status, 0, P.sabPending);
 
   const s = Atomics.load(status, 0);
@@ -141,7 +191,7 @@ function readViaJspi(sourceIndex, offset, count, bufPtr) {
       new Uint8Array(wasm.memory.buffer).set(bytes, bufPtr);
       resolve(bytes.length);
     };
-    self.postMessage({ type: 'readAt', sourceIndex, offset, count });
+    self.postMessage({ type: 'readAt', lease, sourceIndex, offset, count });
   });
 }
 
@@ -168,19 +218,19 @@ function hostWriteChunk(sinkIndex, bufPtr, len) {
     default:
       // OPFS: no blocking primitive — fire-and-forget (the producer
       // is disk-read bound, never outruns the main-thread consumer).
-      self.postMessage({ type: 'chunk', sinkIndex, data: chunk.buffer }, [chunk.buffer]);
+      self.postMessage({ type: 'chunk', lease, sinkIndex, data: chunk.buffer }, [chunk.buffer]);
       return 0;
   }
 }
 
 function writeViaAtomics(sinkIndex, chunk) {
   if (!activeWriteSab) {
-    self.postMessage({ type: 'chunk', sinkIndex, data: chunk.buffer }, [chunk.buffer]);
+    self.postMessage({ type: 'chunk', lease, sinkIndex, data: chunk.buffer }, [chunk.buffer]);
     return 0;
   }
   const status = new Int32Array(activeWriteSab);
   Atomics.store(status, 0, P.sabPending);
-  self.postMessage({ type: 'chunk', sinkIndex, data: chunk.buffer }, [chunk.buffer]);
+  self.postMessage({ type: 'chunk', lease, sinkIndex, data: chunk.buffer }, [chunk.buffer]);
   Atomics.wait(status, 0, P.sabPending);
 
   const s = Atomics.load(status, 0);
@@ -195,7 +245,7 @@ function writeViaJspi(sinkIndex, chunk) {
       if (msg && msg.cancelled) { resolve(P.hostIoCancelled); return; }
       resolve(msg && msg.error ? P.hostIoError : 0);
     };
-    self.postMessage({ type: 'chunk', sinkIndex, data: chunk.buffer }, [chunk.buffer]);
+    self.postMessage({ type: 'chunk', lease, sinkIndex, data: chunk.buffer }, [chunk.buffer]);
   });
 }
 
@@ -373,6 +423,36 @@ async function opfsDrop(jobId) {
   }
 }
 
+// Deletes every file in this worker's own directory. Every handle on one
+// is closed first, so no reaping is pending and nothing needs retrying.
+async function emptyLaneDir() {
+  const dir = await laneDir();
+  const names = [];
+  for await (const name of dir.keys()) names.push(name);
+  for (const name of names) await dir.removeEntry(name);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Reset — a fresh engine state in the same worker
+// ═══════════════════════════════════════════════════════════════════
+
+// Drops every document, held reader and job file, and builds a new
+// LaneState. The wasm instance stays: its heap does not shrink here.
+async function resetLane() {
+  await Promise.allSettled([...housekeeping]);
+  for (const [id, r] of [...readers]) await dropReader(id, r);
+  for (const sh of opfsWriteHandles.values()) { try { sh.close(); } catch (_) {} }
+  opfsWriteHandles.clear();
+  jobFiles.clear();
+  if (opfsDirParts) await emptyLaneDir();
+  jspiReadResolve = null;
+  jspiWriteResolve = null;
+  const { lane_init, lane_destroy } = await import(wasmBaseUrl + 'pdf_oxide.js');
+  lane_destroy(lanePtr);
+  lanePtr = lane_init();
+  return wasm.memory.buffer.byteLength;
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // Exec — register readers, run lane_execute, promote kept readers
 // ═══════════════════════════════════════════════════════════════════
@@ -492,38 +572,63 @@ self.onmessage = async (e) => {
     }
 
     case 'readAtResult': {
+      if (!admit(msg)) return;
       if (jspiReadResolve) { const r = jspiReadResolve; jspiReadResolve = null; r(msg); }
       return;
     }
 
     case 'chunkAck': {
+      if (!admit(msg)) return;
       if (jspiWriteResolve) { const r = jspiWriteResolve; jspiWriteResolve = null; r(msg); }
       return;
     }
 
     case 'releaseHeld': {
-      for (const [id, r] of readers) {
-        if (r.heldGroupId === msg.heldGroupId) await dropReader(id, r);
-      }
+      if (!admit(msg)) return;
+      await track((async () => {
+        for (const [id, r] of readers) {
+          if (r.heldGroupId === msg.heldGroupId) await dropReader(id, r);
+        }
+      })());
       return;
     }
 
     case 'opfsDrop': {
-      await opfsDrop(msg.jobId);
+      if (!admit(msg)) return;
+      await track(opfsDrop(msg.jobId));
       return;
     }
 
     case 'opfsWrite': {
+      if (!admit(msg)) return;
       try {
-        await opfsWrite(msg.jobId, msg.filename, msg.chunk, msg.offset, msg.last);
-        self.postMessage({ type: 'opfsWriteAck' });
+        await track(opfsWrite(msg.jobId, msg.filename, msg.chunk, msg.offset, msg.last));
+        self.postMessage({ type: 'opfsWriteAck', lease });
       } catch (err) {
-        self.postMessage({ type: 'opfsWriteAck', error: err.message || String(err) });
+        self.postMessage({ type: 'opfsWriteAck', lease, error: err.message || String(err) });
+      }
+      return;
+    }
+
+    case 'reset': {
+      if (busy !== null) { refuseBusy(msg, 'reset'); return; }
+      if (!admit(msg)) return;
+      busy = 'reset';
+      try {
+        const bytes = await resetLane();
+        self.postMessage({ type: 'resetDone', lease, mem: bytes });
+      } catch (err) {
+        self.postMessage({ type: 'error', lease, message: 'reset failed: ' + (err.message || String(err)) });
+      } finally {
+        busy = null;
       }
       return;
     }
 
     case 'exec': {
+      if (busy !== null) { refuseBusy(msg, 'exec'); return; }
+      if (!admit(msg)) return;
+      busy = 'exec';
       try {
         const responseBytes = await exec(msg);
         // Transfer only the result bytes, never the whole WASM heap
@@ -533,13 +638,15 @@ self.onmessage = async (e) => {
             : responseBytes.buffer.slice(responseBytes.byteOffset, responseBytes.byteOffset + responseBytes.byteLength);
         // After a job, byteLength is the worker's lifetime peak: linear
         // memory never shrinks. The Router retires a worker past its cap.
-        self.postMessage({ type: 'result', jobId: msg.jobId, data: owned, mem: wasm.memory.buffer.byteLength }, [owned]);
+        self.postMessage({ type: 'result', lease, jobId: msg.jobId, data: owned, mem: wasm.memory.buffer.byteLength }, [owned]);
       } catch (err) {
         // A wasm trap (a Rust panic compiles to `unreachable`) leaves the
         // engine's state unusable. Report it as a trap, apart from every
         // other failure, so the host ends the lane instead of reusing it.
         const trap = err instanceof WebAssembly.RuntimeError;
-        self.postMessage({ type: 'error', jobId: msg.jobId, message: err.message || String(err), trap: trap ? true : undefined, mem: wasm ? wasm.memory.buffer.byteLength : null });
+        self.postMessage({ type: 'error', lease, jobId: msg.jobId, message: err.message || String(err), trap: trap ? true : undefined, mem: wasm ? wasm.memory.buffer.byteLength : null });
+      } finally {
+        busy = null;
       }
       return;
     }
