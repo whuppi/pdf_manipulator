@@ -274,7 +274,7 @@ final class PdfSaveFullRewrite extends PdfSaveOptions {
   /// every merged source, and point every reference at it. Two streams are
   /// one when their dictionaries and encoded bytes are equal; a stream with
   /// `/OC`, `/StructParent` or `/StructParents` is never merged. A stream of
-  /// an encrypted source is merged only when its data is at most 256 KiB.
+  /// an encrypted source is compared decrypted, read in small pieces.
   final bool mergeDuplicates;
 
   /// Whether to drop, from each resource dictionary of a kept or merged

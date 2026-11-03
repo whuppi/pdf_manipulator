@@ -197,6 +197,8 @@ CONTENT RULES (never change)
 - Fixed `PdfDoc.encryption.permissions` reporting the wrong flags (a print-allowed file read as `print: false`) — the engine's `/P` word is read at its spec bit positions
 - Fixed a page tree whose inner nodes each hold one page reporting those nodes as pages — every node is read before it counts as a page
 - Fixed article threads longer than 4,096 beads being cut short and tables wider than 128 columns being missed, and a hostile CMap or xref stream size aborting the engine — XMP metadata is now read as a stream of events
+- Fixed text extraction of a page that names thousands of fonts holding every font at once (472 MB for 20,000 fonts, now 46 MB): font caches are bounded by bytes and a page reads the fonts it shows as it shows them
+- Fixed `compress` with `mergeDuplicates` never merging identical images, fonts or ICC profiles over 256 KiB in an encrypted source: they are compared decrypted, read in small pieces
 - Fixed TrueType text rendering letters the PDF never named: "fi" shown as two glyphs drew the "fi" ligature, and other font substitutions changed what was drawn — the renderer draws exactly the glyphs the content names
 - Changed `compress` to subset embedded TrueType and CID CFF fonts: outlines no content shows are emptied, glyph ids and tables kept, fonts of form fields left whole; a subset that is not smaller is not written
 - Fixed watermarks placed in a corner, tiled or at an exact rectangle all landing at default spots — every position is placed where it says; an unknown corner name is refused
