@@ -103,6 +103,12 @@ CONTENT RULES (never change)
 
 ## 6.0.0-dev.0
 
+- **Breaking:** `DataSource` and `DataSink` now require `close()`, and `FileSource.open` and `FileSink.open` are asynchronous factories → await the factories and close every source and sink you open
+- **Breaking:** `RenderedPage` is renamed `PdfRenderedPage`, and `render` and `extractImages` write each page or image to the `DataSink` returned by `sinkFor` → rename the result type and provide a sink callback
+- **Breaking:** `PdfRect` exposes `left`, `bottom`, `right` and `top` edges and value equality, where callers had to use `x`, `y`, `width` and `height` → use the edge getters or `PdfRect.fromEdges`
+- **Breaking:** `PdfDisposed` is the typed error for using a disposed PDF, document, editor, builder or closed file source → catch `PdfDisposed` instead of a generic state error
+- **Breaking:** the handle doors `read`, `rewrite`, `buildTo`, `edits`, `reads`, `info` and `resave` replace the removed direct wrappers → call the matching door on `Pdf` and dispose the returned handle
+
 - **Breaking:** `PdfSaveOptions.incremental()` now appends the edits to the original bytes, so a signature over them stays valid, and throws `PdfIncrementalRefused` when an append cannot carry them (pages removed or reordered, redaction, content edits, an encrypted or repaired source) → catch it and save with `PdfSaveOptions.fullRewrite()`
 - **Breaking:** `PdfError` has a new subtype, `PdfIncrementalRefused` → add a case to every exhaustive `switch` over `PdfError`
 - **Breaking:** `keepPages` throws `PdfInvalidArgument` for a page listed twice, which used to write a damaged file → list each page once
@@ -120,13 +126,6 @@ CONTENT RULES (never change)
 - **Breaking:** `compress` is renamed `deflate` in `PdfSaveOptions.fullRewrite` and `PdfBuilder.save` → rename the argument; the `compress` one-shot keeps its name
 - **Breaking:** the builder's `setTitle`, `setAuthor`, `setSubject` and `setKeywords` are one `setMetadata(PdfMetadata)` → call `builder.setMetadata(const PdfMetadata(title: 'x'))` once
 - **Breaking:** a page takes a `PdfPageSize`: `addA4Page`, `addLetterPage` and `addPage(width:, height:)` are gone → call `addPage()`, `addPage(PdfPageSize.letter())` or `addPage(PdfPageSize.custom(400, 300))`
-- **Breaking:** `rect`, `filledRect`, `strokeRect`, `line` and `strokeLine` fold into `rect(rect, {fill, stroke})` and `line(from, to, {stroke})` → move the width, colour and dash into a `PdfStroke`
-- **Breaking:** `inlineBold`, `inlineItalic` and `inlineColor` are one `inline(text, {style})`, and `text` takes the same style → write `inline('x', style: const PdfTextStyle(bold: true))`
-- **Breaking:** the builder's `watermarkConfidential` and `watermarkDraft` are gone → stamp the page instead: `stamp(PdfStampType.confidential)` or `stamp(PdfStampType.draft)`
-- **Breaking:** `highlight`, `underline`, `strikeout` and `squiggly` are one `markup(kind, {color})` → call `markup(PdfMarkupKind.underline)`
-- **Breaking:** `imageArtifact` is gone and `image` takes an optional `altText`; no alt text makes the image an artifact → drop the `imageArtifact` call and pass `altText` to `image` when the picture carries meaning
-- **Breaking:** the builder's `table` and `streamingTable` are one `table(columns, rows, {options})`: the rows hold `PdfTableCell`s and `PdfTableOptions` carries the header, repeat, span and sizing settings → write the cells as `PdfTableCell('text')`, and name `sizing: PdfTableSizing.autoAll` for a table whose columns have no widths (the old `table` sized its columns itself)
-- **Breaking:** `stickyNote(text, {x, y})` takes one `at` point instead of two coordinates → call `stickyNote('note', at: (400, 500))`
 - **Breaking:** `PdfCellAlign` and `PdfTextAlignment` are one `PdfAlignment` (`left`, `center`, `right`) → rename the type where you name it
 - **Breaking:** `imagesToPdf` gives every page the image's own size, one point per pixel, and takes `PdfImagePageOptions` and `deflate` → name a size to keep A4 pages: `imagesToPdf(images, out, page: const PdfImagePageOptions(size: PdfPageSize.a4()))`
 - **Breaking:** `PdfInfo` and `PdfDoc` carry their metadata in `metadata` (`PdfMetadata`) and their encryption in `encryption` (`PdfEncryptionInfo`, null when the document is not encrypted), where they had flat `title`, `author`, `isEncrypted` and `permissions` fields → read `doc.metadata.title` and `doc.encryption?.permissions`
@@ -170,6 +169,7 @@ CONTENT RULES (never change)
 - Added `PdfRedactionOverlay`, `fill(color)` or `none()`: a redaction with no overlay removes the content and draws no box
 - Added `PdfDoc.annotations(page)`, which lists a page's annotations (subtype, rectangle, contents, author, form field name) as `PdfAnnotationInfo`
 - Added the page builder methods the engine already had: `inline`, `textInRect`, `rect`, `line`, `markup`, `stickyNote`, `stamp`, `freeText`, `linkNamed`, `linkJavaScript`, `onOpen`, `onClose`, `table` and `newPageSameSize`
+- Added `inline(text, {style})`, styled `text`, `stamp(PdfStampType...)`, `markup(kind, {color})`, image `altText`, `table(columns, rows, {options})` with `PdfTableCell` and `PdfTableOptions`, and `stickyNote(..., at:)` to the page builder.
 - Added `PdfBuilder.addImagePage`, a page that holds one picture and takes the picture's own size unless you name one
 - Changed `PdfBuilder.save` to Flate-compress page content and font streams; `save(output, deflate: false)` keeps them plain for debugging
 - Changed `open`, `edit`, `split`, a full-rewrite save and `compress` to hold a bounded window of the document instead of all of it: a 38 MB, 10,000-page file now opens and saves in under 16 MB of engine memory, where it took up to 85 MB

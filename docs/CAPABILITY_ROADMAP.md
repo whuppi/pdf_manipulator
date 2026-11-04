@@ -78,7 +78,7 @@ same names, when both exist. Exports (source in, sink out) live on
 | Get creation date | `creation_date` | `creationDate` | DONE |
 | Scrub metadata | via bridge | `scrubMetadata()` | DONE |
 | Rotate page | `rotate_page_by` | `rotatePage()` | DONE |
-| Rotate all pages | `rotate_all_pages` | `rotateAllPages()` | DONE |
+| Rotate all pages | `rotate_all_pages` | `rotatePages(const PdfPages.all(), by: PdfRotation.r180)` | DONE |
 | Delete page | via bridge | `deletePage()` | DONE |
 | Move page | via bridge | `movePage()` | DONE |
 | Select pages | `select_pages` | `selectPages()` | DONE |
@@ -182,7 +182,7 @@ same names, when both exist. Exports (source in, sink out) live on
 | Sign PDF (PKCS12 / PEM) | `handle_sign` | `sign()` | DONE — keeps the catalog and earlier signatures; update section in the source's xref style |
 | Convert to format (DOCX/PPTX/XLSX) | `handle_convert_to` | `convertTo()` | DONE |
 | Convert to PDF | `handle_convert_to_pdf` | `convertToPdf()` | DONE |
-| Extract pages | `handle_editor_extract_pages` | `extractPages()` | DONE |
+| Extract pages | `handle_editor_extract_pages` | `edits(...).keepPages([...])` | DONE |
 
 ---
 
@@ -192,14 +192,14 @@ same names, when both exist. Exports (source in, sink out) live on
 |---|---|---|
 | `merge` | editor: edit → mergeFrom × N → save | DONE |
 | `split` | editor: extractPages × N chunks | DONE |
-| `splitBySize` | editor: extractPages with binary search | DONE |
-| `splitByBookmarks` | doc: planSplitByBookmarks → extractPages | DONE |
-| `extractPages` | editor: edit → selectPages → save | DONE |
+| `splitBySize` | `split(..., by: PdfSplitRule.maxBytes(...))` | DONE |
+| `splitByBookmarks` | `split(..., by: PdfSplitRule.bookmarks())` | DONE |
+| `extractPages` | editor: edit → keepPages → save | DONE |
 | `deletePages` | editor: edit → deletePage × N → save | DONE |
 | `reorderPages` | editor: edit → selectPages → save | DONE |
 | `movePage` | editor: edit → movePage → save | DONE |
 | `rotatePages` | editor: edit → rotatePage × N → save | DONE |
-| `rotateAllPages` | editor: edit → rotateAllPages → save | DONE |
+| `rotateAllPages` | editor: edit → rotatePages → save | DONE |
 | `flattenForms` | editor: edit → flattenForms → save | DONE |
 | `applyRedactions` | editor: edit → applyRedactions → save | DONE |
 | `compress` | editor: edit → reduceImages(policy) → save(deflate) | DONE |

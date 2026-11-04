@@ -1,375 +1,776 @@
-# Migrating from v0 to v1
+# Migrating pdf_manipulator
 
-The v1 rewrite changes every API surface. This guide maps old calls to new equivalents.
+This guide covers the breaking changes from 5.0.1 to 6.0.0. Each entry shows the 5.0.1 code and the 6.0.0 code for the same job. The snippets assume a `pdf`, `source`, `output`, `doc`, `editor`, `builder`, `page`, `rect`, `bytes`, `sources`, `images` and `kind` of the types in the Pdf API.
 
----
+## From 5.0.1 to 6.0.0
 
-## The big picture
+### Sources and sinks
 
-| v0 | v1 |
-|---|---|
-| Android only | iOS, Android, macOS, Windows, Linux, Web |
-| File paths in, file paths out | `DataSource` in, `DataSink` out |
-| `PdfManipulator()` + params objects | `Pdf()` instance with named args |
-| No cleanup needed | Call `pdf.dispose()` when done |
-| `PlatformException` on error | Typed `PdfError` sealed class |
-| Method channel (Kotlin ↔ Dart) | FFI (native) / WASM (web), off main thread |
-| 1-based page numbers | 0-based indices |
-
-### The I/O change
-
-v0 worked with file paths. v1 works with `DataSource` (you read bytes) and `DataSink` (you receive bytes). No file paths anywhere.
-
+**`DataSource`** — Every source and sink you open must be closed, `FileSource` opens through an asynchronous factory, and `FileSink.create` is now `FileSink.open`.
+Before:
 ```dart
-// v0
-final resultPath = await PdfManipulator().mergePDFs(
-  params: PDFMergerParams(pdfsPaths: ['/path/a.pdf', '/path/b.pdf']),
-);
+final input = FileSource(File('in.pdf'));
+final result = await FileSink.create(File('out.pdf'));
+await pdf.compress(input, result);
+await result.close();
+```
+After:
+```dart
+final input = await FileSource.open(File('in.pdf'));
+final result = await FileSink.open(File('out.pdf'));
+await pdf.compress(input, result);
+await result.close();
+await input.close();
+```
 
-// v1
-final pdf = Pdf();
+**`DataSink`** — The library now calls `abort(Object reason)` on the sink of an operation that ends cancelled or failed, so you no longer clean up the half-written output yourself; a sink of your own must implement `abort`.
+Before:
+```dart
+final result = await FileSink.create(File('out.pdf'));
+try {
+  await pdf.compress(source, result);
+} catch (_) {
+  await result.close();
+  await File('out.pdf').delete();
+  rethrow;
+}
+await result.close();
+```
+After:
+```dart
+final result = await FileSink.open(File('out.pdf'));
+try {
+  await pdf.compress(source, result);
+} finally {
+  await result.close();
+}
+```
+
+**`RenderedPage`** — The type is now `PdfRenderedPage`, and `render` writes each page to the sink that `sinkFor` returns instead of yielding the bytes.
+Before:
+```dart
+await for (final RenderedPage shot in doc.render(pages: const PdfPages.all())) {
+  final png = shot.data;
+}
+```
+After:
+```dart
+final sinks = <int, MemorySink>{};
+final shots = await doc.render(
+  (PdfRenderedPage shot) => sinks[shot.page] = MemorySink(),
+  pages: const PdfPages.all(),
+);
+final png = sinks[shots.first.page]!.takeBytes();
+```
+
+**`PdfRect`** — A rectangle has `left`, `bottom`, `right` and `top` edges and value equality, so you no longer add the width to `x`.
+Before:
+```dart
+final right = rect.x + rect.width;
+final top = rect.y + rect.height;
+```
+After:
+```dart
+final right = rect.right;
+final top = rect.top;
+```
+
+### Opening, reading and the one-shots
+
+**`PdfDisposed`** — Using a disposed document throws `PdfDisposed`, where it threw a `StateError`.
+Before:
+```dart
+await doc.dispose();
+try {
+  await doc.verifySignatures();
+} on StateError catch (_) {
+  final disposed = true;
+}
+```
+After:
+```dart
+await doc.dispose();
+try {
+  await doc.verifySignatures();
+} on PdfDisposed catch (_) {
+  final disposed = true;
+}
+```
+
+**`read`** — The `read` door opens the document, runs your function and disposes the document, where you opened and disposed it yourself.
+Before:
+```dart
+final opened = await pdf.open(source);
+try {
+  final count = opened.pageCount;
+} finally {
+  await opened.dispose();
+}
+```
+After:
+```dart
+final count = await pdf.read(source, (opened) async => opened.pageCount);
+```
+
+**`PdfSaveOptions.incremental()`** — An incremental save now appends to the original bytes and throws `PdfIncrementalRefused` when the edits cannot be appended, so save again with a full rewrite.
+Before:
+```dart
+await editor.save(output, options: const PdfSaveOptions.incremental());
+```
+After:
+```dart
+try {
+  await editor.save(output, options: const PdfSaveOptions.incremental());
+} on PdfIncrementalRefused {
+  await editor.save(MemorySink(), options: const PdfSaveOptions.fullRewrite());
+}
+```
+
+**`PdfError` (new subtype)** — `PdfIncrementalRefused` is a new `PdfError` subtype, so a `switch` over every subtype needs a case for it.
+Before:
+```dart
+try {
+  await editor.save(output);
+} on PdfError catch (error) {
+  final retryable = switch (error) {
+    PdfIoError() || PdfCancelled() => true,
+    PdfInvalidArgument() ||
+    PdfCorrupted() ||
+    PdfEngineError() ||
+    PdfPageRangeError() ||
+    PdfUnsupported() ||
+    PdfPasswordRequired() ||
+    PdfWrongPassword() ||
+    PdfCryptoError() ||
+    PdfSearchError() ||
+    PdfExtractionFailed() => false,
+  };
+}
+```
+After:
+```dart
+try {
+  await editor.save(output);
+} on PdfError catch (error) {
+  final retryable = switch (error) {
+    PdfIoError() || PdfCancelled() => true,
+    PdfInvalidArgument() ||
+    PdfCorrupted() ||
+    PdfEngineError() ||
+    PdfPageRangeError() ||
+    PdfUnsupported() ||
+    PdfPasswordRequired() ||
+    PdfWrongPassword() ||
+    PdfCryptoError() ||
+    PdfDisposed() ||
+    PdfIncrementalRefused() => false,
+  };
+}
+```
+
+**`keepPages`** — `keepPages` (5.0.1: `selectPages`) throws `PdfInvalidArgument` for a page listed twice, where it wrote a damaged file.
+Before:
+```dart
+await editor.selectPages([0, 2, 0]);
+```
+After:
+```dart
+try {
+  await editor.keepPages([0, 2, 0]);
+} on PdfInvalidArgument {
+  await editor.keepPages([0, 2]);
+}
+```
+
+**`PdfError` (engine subtypes)** — Engine failures throw their own subtype, such as `PdfCorrupted`, where they threw `PdfEngineError`.
+Before:
+```dart
+try {
+  await pdf.open(source);
+} on PdfEngineError catch (error) {
+  final reported = error;
+}
+```
+After:
+```dart
+try {
+  await pdf.open(source);
+} on PdfCorrupted catch (error) {
+  final reported = error;
+} on PdfError catch (error) {
+  final reported = error;
+}
+```
+
+**`fieldKeystroke`** — The field-script calls throw `PdfInvalidArgument` on a page with no form field, where they did nothing, so add the field first.
+Before:
+```dart
+await page.fieldKeystroke('AFNumber_Keystroke(2, 0, 0, 0, "", true);');
+```
+After:
+```dart
+await page.textField('price', rect);
+await page.fieldKeystroke('AFNumber_Keystroke(2, 0, 0, 0, "", true);');
+```
+
+**`PdfChoiceValue` (radio groups)** — A radio group's value reads as `PdfChoiceValue` with the selected option's name, or `PdfNoValue`, where it read as `PdfCheckedValue`.
+Before:
+```dart
+final fields = await doc.formFields;
+final group = fields.firstWhere((field) => field.name == 'size');
+final value = group.value;
+final selected = value is PdfCheckedValue && value.checked;
+```
+After:
+```dart
+final fields = await doc.formFields();
+final group = fields.firstWhere((field) => field.name == 'size');
+final value = group.value;
+final selected = value is PdfChoiceValue ? value.choice : null;
+```
+
+**`PdfSignatureInfo`** — The constructor requires `coversWholeDocument`.
+Before:
+```dart
+const signature = PdfSignatureInfo(signerName: 'Ada', isValid: true);
+```
+After:
+```dart
+const signature = PdfSignatureInfo(
+  signerName: 'Ada',
+  isValid: true,
+  coversWholeDocument: true,
+);
+```
+
+**`PdfRotation`** — A page's rotation is a `PdfRotation`, no longer an `int` of degrees.
+Before:
+```dart
+final turned = doc.pages.first.rotation == 90;
+```
+After:
+```dart
+final turned = (await doc.pageInfo()).first.rotation == PdfRotation.r90;
+```
+
+**`DateTime?`** — A document date is a UTC `DateTime?`, where it was a raw PDF date string.
+Before:
+```dart
+final String? raw = doc.creationDate;
+final year = raw == null ? null : int.tryParse(raw.substring(2, 6));
+```
+After:
+```dart
+final DateTime? created = doc.metadata.creationDate;
+final year = created?.year;
+```
+
+**`validatePdfA`** — PDF/A validation takes a `PdfALevel`, no longer an `int`.
+Before:
+```dart
+final result = await doc.validatePdfA(level: 2);
+```
+After:
+```dart
+final result = await doc.validatePdfA(level: PdfALevel.a2);
+```
+
+**`PdfColor`** — A `PdfColor` is a final class with value equality, so wrap it instead of extending it and compare with `==`.
+Before:
+```dart
+const first = PdfColor(0.1, 0.2, 0.3);
+const second = PdfColor(0.1, 0.2, 0.3);
+final same = first.r == second.r && first.g == second.g && first.b == second.b;
+```
+After:
+```dart
+const first = PdfColor(0.1, 0.2, 0.3);
+const second = PdfColor(0.1, 0.2, 0.3);
+final same = first == second;
+```
+
+**`PdfPagesAll`** — The subclasses of `PdfPages` are not exported, so create a page set with its factory.
+Before:
+```dart
+const everything = PdfPagesAll();
+```
+After:
+```dart
+const everything = PdfPages.all();
+```
+
+**`SearchResult`** — The type is now `PdfSearchHit`, with the same fields.
+Before:
+```dart
+final hits = <SearchResult>[];
+hits.sort((a, b) => a.page.compareTo(b.page));
+```
+After:
+```dart
+final hits = <PdfSearchHit>[];
+hits.sort((a, b) => a.page.compareTo(b.page));
+```
+
+**`PdfSearchError`** — `PdfSearchError` and `PdfExtractionFailed` are removed because nothing threw them, so delete their `catch` clauses; failures arrive as other `PdfError` subtypes.
+Before:
+```dart
+try {
+  await doc.verifySignatures();
+} on PdfSearchError catch (_) {
+  final failed = true;
+} on PdfExtractionFailed catch (_) {
+  final failed = true;
+}
+```
+After:
+```dart
+try {
+  await doc.verifySignatures();
+} on PdfError catch (_) {
+  final failed = true;
+}
+```
+
+### Editing
+
+**`compress`** — In `PdfSaveOptions.fullRewrite` the argument `compress` is now `deflate`.
+Before:
+```dart
+await editor.save(output, options: const PdfSaveOptions.fullRewrite(compress: false));
+```
+After:
+```dart
+await editor.save(output, options: const PdfSaveOptions.fullRewrite(deflate: false));
+```
+
+**`setTitle`** — The builder's four metadata setters are one `setMetadata`.
+Before:
+```dart
+await builder.setTitle('Report');
+await builder.setAuthor('Ada');
+```
+After:
+```dart
+await builder.setMetadata(const PdfMetadata(title: 'Report', author: 'Ada'));
+```
+
+**`PdfPageSize`** — A page takes a `PdfPageSize`; `addA4Page`, `addLetterPage` and `addPage(width:, height:)` are gone.
+Before:
+```dart
+await builder.addA4Page();
+await builder.addLetterPage();
+await builder.addPage(width: 400, height: 300);
+```
+After:
+```dart
+await builder.addPage();
+await builder.addPage(const PdfPageSize.letter());
+await builder.addPage(const PdfPageSize.custom(400, 300));
+```
+
+**`PdfCellAlign`** — `PdfTextAlignment` (and `PdfCellAlign`, which 5.0.1 did not have) are one `PdfAlignment`.
+Before:
+```dart
+const align = PdfTextAlignment.center;
+```
+After:
+```dart
+const align = PdfAlignment.center;
+```
+
+**`imagesToPdf`** — Each page now has the image's own size, one point per pixel, so name a size to keep the A4 pages of 5.0.1.
+Before:
+```dart
+await pdf.imagesToPdf(images, output);
+```
+After:
+```dart
+await pdf.imagesToPdf(images, output, page: const PdfImagePageOptions(size: PdfPageSize.a4()));
+```
+
+**`PdfInfo`** — A document keeps its metadata in `metadata` and its encryption in `encryption`, which is null when the document is not encrypted.
+Before:
+```dart
+final title = doc.title;
+final encrypted = doc.isEncrypted;
+final permissions = doc.permissions;
+```
+After:
+```dart
+final title = doc.metadata.title;
+final encrypted = doc.encryption != null;
+final permissions = doc.encryption?.permissions;
+```
+
+**`PdfDoc.pages`** — The per-page facts are a read of their own, `pageInfo`, and opening a document no longer reads them.
+Before:
+```dart
+final first = doc.pages.first;
+```
+After:
+```dart
+final first = (await doc.pageInfo()).first;
+```
+
+**`PdfDoc.extract`** — `extractText` writes the text to a sink as the engine produces it, where `extract` returned a string.
+Before:
+```dart
+final text = await doc.extract(pages: const PdfPages.all());
+```
+After:
+```dart
 final sink = MemorySink();
-await pdf.merge([FileSource(File('a.pdf')), FileSource(File('b.pdf'))], sink);
-await pdf.dispose();
+await doc.extractText(sink, pages: const PdfPages.all());
+final text = sink.takeString();
 ```
 
-You implement `DataSource` and `DataSink` for whatever backing store you have — file, memory, HTTP, web blob. See the [README](../README.md) for examples.
-
-### Indexing change
-
-v0 used **1-based** page numbers; v1 uses **0-based** indices everywhere — subtract 1 from every page number when migrating. The examples below show the shift inline.
-
----
-
-## Method-by-method
-
-### Merge
-
+**`search`** — The query is the first positional argument.
+Before:
 ```dart
-// v0
-final path = await plugin.mergePDFs(
-  params: PDFMergerParams(pdfsPaths: [pathA, pathB]),
-);
-
-// v1
-final pdf = Pdf();
-await pdf.merge([sourceA, sourceB], outputSink);
-await pdf.dispose();
+await doc.search(query: 'Ada', pages: const PdfPages.all());
+```
+After:
+```dart
+await doc.search('Ada', pages: const PdfPages.all());
 ```
 
-### Split
-
+**`PdfEditor.pageCount`** — `pageCount`, `version` and `isModified` are methods.
+Before:
 ```dart
-// v0 — by page count
-final paths = await plugin.splitPDF(
-  params: PDFSplitterParams(pdfPath: path, pageCount: 2),
-);
-
-// v1
-await pdf.split(source, (i) => MemorySink(), every: 2);
-
-// v0 — by byte size
-final paths = await plugin.splitPDF(
-  params: PDFSplitterParams(pdfPath: path, byteSize: 500000),
-);
-
-// v1
-await pdf.splitBySize(source, (i) => MemorySink(), maxBytes: 500000);
-
-// v0 — specific pages
-final paths = await plugin.splitPDF(
-  params: PDFSplitterParams(pdfPath: path, pageNumbers: [3, 7]),
-);
-
-// v1 — 0-based
-await pdf.extractPages(source, sink, pages: [2, 6]);
+final count = await editor.pageCount;
+```
+After:
+```dart
+final count = await editor.pageCount();
 ```
 
-### Delete pages
-
+**`title`** — The editor's metadata is read with `metadata()` and replaced with `setMetadata`, so copy the current value to change one field.
+Before:
 ```dart
-// v0 — 1-based
-final path = await plugin.pdfPageDeleter(
-  params: PDFPageDeleterParams(pdfPath: path, pageNumbers: [2, 4]),
-);
-
-// v1 — 0-based
-await pdf.deletePages(source, sink, pages: [1, 3]);
+final title = await editor.title;
+await editor.setTitle('X');
+```
+After:
+```dart
+final current = await editor.metadata();
+final title = current.title;
+await editor.setMetadata(current.copyWith(title: 'X'));
 ```
 
-### Reorder pages
-
+**`rotatePage`** — Rotation is set for a page set with a `PdfRotation`.
+Before:
 ```dart
-// v0 — 1-based
-final path = await plugin.pdfPageReorder(
-  params: PDFPageReorderParams(pdfPath: path, pageNumbers: [3, 1, 2]),
-);
-
-// v1 — 0-based
-await pdf.reorderPages(source, sink, order: [2, 0, 1]);
-```
-
-### Rotate pages
-
-```dart
-// v0
-final path = await plugin.pdfPageRotator(
-  params: PDFPageRotatorParams(
-    pdfPath: path,
-    pagesRotationInfo: [
-      PageRotationInfo(pageNumber: 1, rotationAngle: 90),
-      PageRotationInfo(pageNumber: 3, rotationAngle: 180),
-    ],
-  ),
-);
-
-// v1 — 0-based, map of index → degrees
-await pdf.rotatePages(source, sink, pages: {0: 90, 2: 180});
-
-// v1 — all at once
-await pdf.rotateAllPages(source, sink, degrees: 90);
-```
-
-### Combined rotate + delete + reorder
-
-```dart
-// v0 — one call
-final path = await plugin.pdfPageRotatorDeleterReorder(
-  params: PDFPageRotatorDeleterReorderParams(
-    pdfPath: path,
-    pagesRotationInfo: [...],
-    pageNumbersForDeleter: [2, 4],
-    pageNumbersForReorder: [3, 1, 2],
-  ),
-);
-
-// v1 — use PdfEditor for multiple mutations
-final editor = await pdf.edit(source);
 await editor.rotatePage(0, degrees: 90);
-await editor.deletePage(3);
-await editor.deletePage(1);
-await editor.save(sink);
-await editor.dispose();
+await editor.rotateAllPages(degrees: 90);
+```
+After:
+```dart
+await editor.rotatePages(const PdfPages.single(0), by: PdfRotation.r90);
+await editor.rotatePages(const PdfPages.all(), by: PdfRotation.r90);
 ```
 
-### Compress
-
+**`pageMediaBox`** — The page boxes are read with `pageInfo`.
+Before:
 ```dart
-// v0
-final path = await plugin.pdfCompressor(
-  params: PDFCompressorParams(
-    pdfPath: path,
-    imageQuality: 70,
-    imageScale: 0.5,
-    unEmbedFonts: true,
+final media = await editor.pageMediaBox(0);
+final crop = await editor.pageCropBox(0);
+```
+After:
+```dart
+final info = (await editor.pageInfo(pages: const PdfPages.single(0))).single;
+final media = info.mediaBox;
+final crop = info.cropBox;
+```
+
+**`deletePage(int)`** — Deletion takes a `PdfPages`.
+Before:
+```dart
+await editor.deletePage(0);
+```
+After:
+```dart
+await editor.deletePages(const PdfPages.single(0));
+```
+
+**`mergeFrom(source, {pages, password})`** — `pages` is a `PdfPages`, no longer a list of indexes.
+Before:
+```dart
+await editor.mergeFrom(source, pages: [0, 2]);
+```
+After:
+```dart
+await editor.mergeFrom(source, pages: const PdfPages.list([0, 2]));
+```
+
+**`resizeImage`** — `resizeImage` and `repositionImage` are replaced by `setImageBounds`, which takes the size and the position together.
+Before:
+```dart
+await editor.resizeImage(0, 'hero', width: 100, height: 80);
+```
+After:
+```dart
+final hero = (await editor.pageImages(0)).firstWhere((image) => image.name == 'hero');
+await editor.setImageBounds(
+  0,
+  'hero',
+  PdfRect(x: hero.bounds.x, y: hero.bounds.y, width: 100, height: 80),
+);
+```
+
+**`addWatermark(page, text)`** — The text comes first, the pages are a `PdfPages` that defaults to every page, and a page of `-1` no longer means every page.
+Before:
+```dart
+await editor.addWatermark(0, 'DRAFT');
+await editor.addWatermark(-1, 'DRAFT');
+```
+After:
+```dart
+await editor.addWatermark('DRAFT', pages: const PdfPages.single(0));
+await editor.addWatermark('DRAFT', pages: const PdfPages.all());
+```
+
+**`PdfPageInfo`** — A `PdfPageInfo` is built from `mediaBox` and `cropBox`; `width` and `height` stay as getters.
+Before:
+```dart
+const info = PdfPageInfo(index: 0, width: 595, height: 842);
+```
+After:
+```dart
+const info = PdfPageInfo(
+  index: 0,
+  mediaBox: PdfRect(x: 0, y: 0, width: 595, height: 842),
+);
+```
+
+**`render`** — `pages` is optional, so leave it out to read every page.
+Before:
+```dart
+await doc.render(pages: const PdfPages.all()).drain<void>();
+```
+After:
+```dart
+await doc.render((shot) => MemorySink());
+```
+
+**`signatures`** — `signatures`, `formFields`, `xfa` and `attachments` are methods.
+Before:
+```dart
+final signatures = await doc.signatures;
+final fields = await doc.formFields;
+final xfa = await doc.xfa;
+final attachments = await doc.attachments;
+```
+After:
+```dart
+final signatures = await doc.signatures();
+final fields = await doc.formFields();
+final xfa = await doc.xfa();
+final attachments = await doc.attachments();
+```
+
+**`PdfDoc.formField(name)`** — `formField` is gone, so find the field by its name in `formFields()`.
+Before:
+```dart
+final field = await doc.formField('name');
+```
+After:
+```dart
+final fields = await doc.formFields();
+final field = fields.where((candidate) => candidate.name == 'name').firstOrNull;
+```
+
+**`validatePdfUa`** — PDF/UA validation answers a `PdfValidationResult`, where it answered a bool, and takes a `PdfUaLevel`.
+Before:
+```dart
+final valid = await doc.validatePdfUa(level: 1);
+```
+After:
+```dart
+final result = await doc.validatePdfUa(level: PdfUaLevel.ua1);
+final valid = result.compliant;
+```
+
+**`planSplitByBookmarks()`** — The call is `bookmarkRanges()`, and each result has `start` and `end` where it had `startPage` and `endPage`.
+Before:
+```dart
+final plan = await doc.planSplitByBookmarks();
+final first = plan.first.startPage;
+```
+After:
+```dart
+final ranges = await doc.bookmarkRanges();
+final first = ranges.first.start;
+```
+
+**`classifyPage(page)`** — `classifyPages` takes a page set, and a page's kind is a `PdfPageType`, where it was a string.
+Before:
+```dart
+final kind = (await doc.classifyPage(0)).type;
+```
+After:
+```dart
+final kind = (await doc.classifyPages(pages: const PdfPages.single(0))).first.type;
+```
+
+**`PdfDoc.internal`** — The handle constructors are `@internal`; no code changes, since `pdf.open`, `pdf.edit` and `pdf.build` build the handles.
+Before:
+```dart
+final opened = await pdf.open(source);
+final editing = await pdf.edit(source);
+final building = await pdf.build();
+```
+After:
+```dart
+final opened = await pdf.open(source);
+final editing = await pdf.edit(source);
+final building = await pdf.build();
+```
+
+**`addStamp(page, …)`** — Stamps and flattening take a `PdfPages` where they took an `int` page.
+Before:
+```dart
+await editor.addStamp(0, type: PdfStampType.draft, rect: rect);
+await editor.flattenForms(page: 0);
+```
+After:
+```dart
+await editor.addStamp(const PdfPages.single(0), type: PdfStampType.draft, rect: rect);
+await editor.flattenForms(pages: const PdfPages.single(0));
+```
+
+**`setFormFieldValue`** — The form-field edits are on `editor.field(name)`.
+Before:
+```dart
+await editor.setFormFieldValue('name', 'Ada');
+```
+After:
+```dart
+await editor.field('name').setValue(const PdfFormFieldValue.text('Ada'));
+```
+
+**`PdfChoiceValue` (choice fields)** — A combo box or list box reads as `PdfChoiceValue`, where it read as `PdfTextValue`.
+Before:
+```dart
+final fields = await doc.formFields;
+final country = fields.firstWhere((field) => field.name == 'country');
+final value = country.value;
+final chosen = value is PdfTextValue ? value.text : null;
+```
+After:
+```dart
+final fields = await doc.formFields();
+final country = fields.firstWhere((field) => field.name == 'country');
+final value = country.value;
+final chosen = value is PdfChoiceValue ? value.choice : null;
+```
+
+**`addRedaction(page, rect, {overlayText})`** — The call is `markRedaction` with an overlay; the engine never drew the overlay text, so pass a fill colour for a box.
+Before:
+```dart
+await editor.addRedaction(0, rect, overlayText: 'REDACTED');
+```
+After:
+```dart
+await editor.markRedaction(0, rect, overlay: const PdfRedactionOverlay.fill(PdfColor.black));
+```
+
+**`eraseRegions`** — `eraseRegions` and `clearEraseRegions` are replaced by `redact` with no overlay and `clearRedactions`.
+Before:
+```dart
+await editor.eraseRegions(0, [rect]);
+await editor.clearEraseRegions(0);
+```
+After:
+```dart
+await editor.redact(0, [rect], overlay: const PdfRedactionOverlay.none());
+await editor.clearRedactions();
+```
+
+**`convertToPdfA`** — `convertToPdfA` is a member of the new `PdfEdits` base class that `PdfEditor` extends, and its level is a `PdfALevel`.
+Before:
+```dart
+await editor.convertToPdfA(level: 1);
+```
+After:
+```dart
+final PdfEdits edits = editor;
+await edits.convertToPdfA(level: PdfALevel.a1);
+```
+
+**`deletePages`** — The one-shot is removed; call the edit on `pdf.edits`.
+Before:
+```dart
+await pdf.deletePages(source, output, pages: [0, 2]);
+```
+After:
+```dart
+await pdf.edits(source, output).deletePages(const PdfPages.list([0, 2]));
+```
+
+**`encrypt`** — The one-shot is removed; `resave` writes the document again with encryption in its save options.
+Before:
+```dart
+await pdf.encrypt(source, output, encryption: const PdfEncryptionConfig(ownerPassword: 'secret'));
+```
+After:
+```dart
+await pdf.resave(
+  source,
+  output,
+  options: const PdfSaveOptions.fullRewrite(
+    encryption: PdfEncryption.config(ownerPassword: 'secret'),
   ),
 );
-
-// v1
-await pdf.compress(source, sink); // PdfImagePolicy.ebook: 150 ppi, JPEG q75
-await pdf.compress(source, sink, images: PdfImagePolicy(colorPpi: 150, jpegQuality: 70));
 ```
 
-`imageQuality` and `imageScale` (a blind factor) are replaced by one `PdfImagePolicy`: a resolution target per image class, so each image is downsampled to the pixels per inch it is actually drawn at (`screen` 72, `ebook` 150, `print` 300, or your own numbers), plus the JPEG quality. `PdfEditor.reduceImages(policy)` runs the same reducer inside an edit session and returns a per-image report. `unEmbedFonts` is now a separate editor method:
-
+**`extractPages`** — The one-shot is removed; call `keepPages` on `pdf.edits`.
+Before:
 ```dart
-final editor = await pdf.edit(source);
-await editor.unembedStandardFonts();
-await editor.save(sink);
-await editor.dispose();
+await pdf.extractPages(source, output, pages: [0, 2]);
 ```
-
-### Watermark
-
+After:
 ```dart
-// v0
-final path = await plugin.pdfWatermark(
-  params: PDFWatermarkParams(
-    pdfPath: path,
-    text: 'DRAFT',
-    fontSize: 80,
-    opacity: 0.3,
-    watermarkLayer: WatermarkLayer.overContent,
-    positionType: PositionType.center,
-  ),
-);
-
-// v1
-await pdf.watermark(source, sink,
-    text: 'DRAFT',
-    style: PdfWatermarkStyle(fontSize: 80, opacity: 0.3, rotation: 45),
-    position: PdfWatermarkPosition.center(),  // or .corner(), .tiled(), .exact()
-    layer: PdfWatermarkLayer.foreground);      // or .background for behind content
+await pdf.edits(source, output).keepPages([0, 2]);
 ```
 
-`positionType` is replaced by sealed `PdfWatermarkPosition`:
-- `PdfWatermarkPosition.center()` — centered on page (default, same as v0's `PositionType.center`)
-- `PdfWatermarkPosition.corner(PdfCorner.topRight)` — anchored to a corner with margin
-- `PdfWatermarkPosition.tiled(columns: 3, rows: 4)` — repeated grid across the page
-- `PdfWatermarkPosition.exact(x:, y:, width:, height:)` — caller-specified coordinates
+### Building
 
-The engine resolves named positions per-page using each page's media box — no pixel math needed for mixed-size PDFs.
-
-`watermarkLayer` is replaced by `PdfWatermarkLayer`:
-- `PdfWatermarkLayer.foreground` — annotation-based, renders on top of page content (default)
-- `PdfWatermarkLayer.background` — content-stream watermark rendered behind page content
-
-### Encrypt
-
+**`split`** — `split`, `splitBySize` and `splitByBookmarks` are one `split` with a `PdfSplitRule`, and `sinkFor` takes the part it is for.
+Before:
 ```dart
-// v0
-final path = await plugin.pdfEncryption(
-  params: PDFEncryptionParams(
-    pdfPath: path,
-    userPassword: 'user',
-    ownerPassword: 'owner',
-    allowPrinting: true,
-    allowCopy: true,
-    standardEncryptionAES128: true,
-  ),
-);
-
-// v1
-await pdf.encrypt(source, sink,
-    encryption: PdfEncryptionConfig(
-      ownerPassword: 'owner',
-      userPassword: 'user',
-      algorithm: PdfEncryptionAlgorithm.aes128,
-      permissions: PdfPermissions(print: true, copy: true),
-    ));
+await pdf.split(source, (index) => MemorySink(), every: 2);
 ```
-
-v1 adds four permission flags not in v0: `printHq`, `fillForms`, `accessibility`, `assemble`.
-
-### Decrypt
-
+After:
 ```dart
-// v0
-final path = await plugin.pdfDecryption(
-  params: PDFDecryptionParams(pdfPath: path, password: 'pw'),
-);
-
-// v1
-await pdf.decrypt(source, sink, password: 'pw');
+await pdf.split(source, (part) => MemorySink(), by: PdfSplitRule.every(2));
 ```
 
-### Images to PDF
-
+**`merge(sources, output, {passwords})`** — A password-protected source is opened with its entry of `passwords`.
+Before:
 ```dart
-// v0
-final paths = await plugin.imagesToPdfs(
-  params: ImagesToPDFsParams(
-    imagesPaths: ['/img1.jpg', '/img2.png'],
-    createSinglePdf: true,
-  ),
-);
-
-// v1
-await pdf.imagesToPdf([imageSource1, imageSource2], sink);
+await pdf.merge(sources, output);
 ```
-
-`createSinglePdf` is gone — v1 always creates one PDF. For separate PDFs per image, call once per image.
-
-### Page size info
-
+After:
 ```dart
-// v0
-final sizes = await plugin.pdfPagesSize(
-  params: PDFPagesSizeParams(pdfPath: path),
-);
-for (final s in sizes!) {
-  print('Page ${s.pageNumber}: ${s.widthOfPage} x ${s.heightOfPage}');
-}
-
-// v1
-final doc = await pdf.open(source);
-for (final page in doc.pages) {
-  print('Page ${page.index}: ${page.width} x ${page.height}');
-}
+await pdf.merge(sources, output, passwords: {sources.first: 'secret'});
 ```
 
-### Cancel
-
+**`compress` (garbage collection)** — `compress` always collects garbage, so it has no `garbageCollect` parameter.
+Before:
 ```dart
-// v0 — cancel everything
-await plugin.cancelManipulations();
-
-// v1 — every method returns a PdfTask: cancel just that operation
-final task = pdf.merge(sources, sink);
-task.cancel();                 // idempotent, instant
-
-// v1 — or cancel everything on the instance
-await pdf.dispose();
+await pdf.compress(source, output, garbageCollect: true);
 ```
-
----
-
-## Error handling
-
+After:
 ```dart
-// v0
-try {
-  await plugin.mergePDFs(params: params);
-} on PlatformException catch (e) {
-  print(e.message);
-}
-
-// v1
-try {
-  await pdf.merge([sourceA, sourceB], sink);
-} on PdfPasswordRequired {
-  // prompt user
-} on PdfCorrupted catch (e) {
-  print(e.message);
-} on PdfError catch (e) {
-  print(e);
-}
+await pdf.compress(source, output);
 ```
 
----
-
-## Types removed
-
-| v0 type | v1 replacement |
-|---|---|
-| `PdfManipulator` | `Pdf()` |
-| `PDFMergerParams` | `pdf.merge(sources, sink)` |
-| `PDFSplitterParams` | `pdf.split(...)` / `pdf.splitBySize(...)` / `pdf.extractPages(...)` |
-| `PDFPageDeleterParams` | `pdf.deletePages(source, sink, pages:)` |
-| `PDFPageReorderParams` | `pdf.reorderPages(source, sink, order:)` |
-| `PDFPageRotatorParams` | `pdf.rotatePages(source, sink, pages:)` |
-| `PageRotationInfo` | `Map<int, int>` (index → degrees) |
-| `PDFPageRotatorDeleterReorderParams` | `PdfEditor` chained calls |
-| `PDFCompressorParams` | `pdf.compress(source, sink)` |
-| `PDFWatermarkParams` | `pdf.watermark(source, sink, text:, style:)` |
-| `WatermarkLayer` | `PdfWatermarkLayer.foreground` / `.background` |
-| `PositionType` | Sealed `PdfWatermarkPosition.center()` / `.corner()` / `.tiled()` / `.exact()` — engine resolves per-page |
-| `PDFEncryptionParams` | `pdf.encrypt(source, sink, encryption:)` |
-| `PDFDecryptionParams` | `pdf.decrypt(source, sink, password:)` |
-| `ImagesToPDFsParams` | `pdf.imagesToPdf(sources, sink)` |
-| `PDFPagesSizeParams` | `pdf.open(source)` → `doc.pages` |
-| `PageSizeInfo` | `PdfPageInfo` |
-| `PDFValidityAndProtectionParams` | `pdf.open(source)` → `doc.isEncrypted` etc. |
-| `PlatformException` | `PdfError` sealed class |
-
----
-
-## New in v1
-
-No migration needed — just start using:
-
-- Extract text, Markdown, HTML
-- Search with bounding rectangles
-- Render pages to images (streaming)
-- Extract embedded images (streaming)
-- Digital signatures (inspect, verify, sign)
-- PDF/A and PDF/UA validation
-- PDF/A conversion (one-shot or via editor)
-- Convert to/from DOCX, PPTX, XLSX
-- PdfEditor — batch mutations, incremental save, encrypted save
-- PdfBuilder — create from scratch with form fields, links, columns, footnotes
-- Stamp annotations (14 types + image stamps)
-- Redaction, metadata scrub, crop margins
-- Resource pruning (image optimization, font unembedding)
-- Form field value setting
-- Per-op cancellation (`PdfTask.cancel()`) and instant dispose
+**`registerFallbackFont(kind, font)`** — The font is a `DataSource`, where it was `Uint8List` bytes.
+Before:
+```dart
+await pdf.registerFallbackFont(kind, bytes);
+```
+After:
+```dart
+await pdf.registerFallbackFont(kind, MemorySource(bytes));
+```

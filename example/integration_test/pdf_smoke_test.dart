@@ -455,11 +455,11 @@ void main() {
     await e.dispose();
     final doc = await pdf.open(_src(sink.takeBytes()));
     expect((await doc.pageInfo())[0].rotation, PdfRotation.r180,
-        reason: 'rotateAllPages(180) must survive save');
+        reason: 'rotatePages(all, r180) must survive save');
     await doc.dispose();
   });
 
-  testWidgets('editor selectPages', (t) async {
+  testWidgets('editor keepPages', (t) async {
     final mergeSink = MemorySink();
     await pdf.merge([_src(minimalPdf), _src(minimalPdf)], mergeSink);
     final e = await pdf.edit(_src(mergeSink.takeBytes()));

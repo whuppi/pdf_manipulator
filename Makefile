@@ -128,7 +128,9 @@ format:
 #                        on the wire, one-shot membership, build pairing,
 #                        README table
 #                      - changelog bullets stay one sentence: at most 60 words
-#                        (80 for a Breaking bullet), tool/check_changelog_shape.sh
+#                        (80 for a Breaking bullet), tool/check_changelog_shape.sh;
+#                        migration coverage, tool/check_migration.sh and
+#                        tool/check_migration_snippets.sh
 #                      - fork tests: host/ unit tests for pure functions only;
 #                        none in patched upstream files or tests/, tool/check_fork_tests.sh
 #                      - fork patch markers pair: no end without an open, no open
@@ -173,6 +175,8 @@ fixtures:
 test-guards:
 	@$(DART) test $(TIMEOUT) test/guards -p vm --concurrency=1
 	@./tool/check_changelog_shape.sh
+	@./tool/check_migration.sh
+	@./tool/check_migration_snippets.sh
 	@./tool/check_fork_tests.sh
 	@./tool/check_patch_markers.sh
 	@./tool/check_cancel_polls.sh
