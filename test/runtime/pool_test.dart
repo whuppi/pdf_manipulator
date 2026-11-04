@@ -248,21 +248,6 @@ void main() {
       expect(host.bootAttempts, 1);
     });
 
-    test('an executor whose job nothing can cancel covers nobody', () async {
-      final p = pool();
-      final a = await take(p);
-      final fake = a.lane as FakeLane;
-      fake
-        ..prompt = false
-        ..drainGate = Completer<bool>();
-      unawaited(p.release(a));
-      final request = p.acquire();
-      await flush();
-      expect(host.bootAttempts, 2, reason: 'nothing bounds the wait');
-      await request.lease;
-      expect(identical(host.executors[1].lane, fake), isFalse);
-    });
-
     test(
       'a request boots after all, when the executor it waited for dies',
       () async {

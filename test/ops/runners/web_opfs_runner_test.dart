@@ -4,9 +4,6 @@
 @TestOn('browser')
 library;
 
-import 'dart:js_interop';
-import 'dart:js_interop_unsafe';
-
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
@@ -35,16 +32,10 @@ import '../stress/pdf_sugar_stress_battery.dart';
 import '../stress/pdf_standalone_stress_battery.dart';
 import '../stress/pdf_builder_stress_battery.dart';
 import '../stress/pdf_instance_stress_battery.dart';
+import '../platform/web/web_cancel_channel_battery.dart';
 import '../platform/web/web_lane_protocol_battery.dart';
 import '../platform/web/web_runtime_battery.dart';
 import '../../harness/timeouts.dart';
-
-// An OPFS op does no I/O waits, so only the SharedArrayBuffer cancel
-// word can reach it; a page without SharedArrayBuffer stops it by dispose.
-final String? _noMidOpCancel =
-    globalContext.hasProperty('SharedArrayBuffer'.toJS).toDart
-    ? null
-    : 'OPFS without SharedArrayBuffer: a running op is stopped only by dispose';
 
 void main() {
   late Pdf pdf;
@@ -92,14 +83,13 @@ void main() {
   registerDeterminismTests(() => pdf);
   registerCancelTests(
     () => pdf,
-    skipMidOp: _noMidOpCancel,
     skipExtract: 'OPFS pre-copies its sources: no source read marks the start',
   );
   registerCombinatorCancelTests(
     () => pdf,
-    skipMidOp: _noMidOpCancel,
     skipExtract: 'OPFS pre-copies its sources: no source read marks the start',
   );
+  registerWebCancelChannelTests(() => pdf);
   registerAbortTests(() => pdf);
   registerLifecycleTests(
     () => Pdf(

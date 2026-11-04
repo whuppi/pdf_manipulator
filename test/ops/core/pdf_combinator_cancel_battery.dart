@@ -39,14 +39,10 @@ Future<int> _readsAtOpen(Pdf pdf, Uint8List bytes) async {
   return reads;
 }
 
-/// [skipMidOp] is a reason when this runner cannot land a cancel on a
-/// running op (a web page without SharedArrayBuffer in OPFS mode), null
-/// everywhere else. [skipExtract] is a reason when the runner's engine makes
-/// no source read after open to mark that an op started (OPFS pre-copies its
-/// sources).
+/// [skipExtract] is a reason when the runner's engine makes no source read
+/// after open to mark that an op started (OPFS pre-copies its sources).
 void registerCombinatorCancelTests(
   Pdf Function() createPdf, {
-  String? skipMidOp,
   String? skipExtract,
 }) {
   group('combinator cancel', () {
@@ -140,7 +136,7 @@ void registerCombinatorCancelTests(
         );
       },
       timeout: t(5),
-      skip: skipMidOp ?? skipExtract,
+      skip: skipExtract,
     );
 
     test(
@@ -259,7 +255,7 @@ void registerCombinatorCancelTests(
         expect(reads, greaterThan(opened), reason: 'the op had started');
       },
       timeout: t(5),
-      skip: skipMidOp ?? skipExtract,
+      skip: skipExtract,
     );
 
     test(
@@ -285,7 +281,7 @@ void registerCombinatorCancelTests(
         expect(reads, greaterThan(opened), reason: 'the edit had started');
       },
       timeout: t(5),
-      skip: skipMidOp ?? skipExtract,
+      skip: skipExtract,
     );
   });
 }

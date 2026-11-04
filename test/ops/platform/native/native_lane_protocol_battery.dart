@@ -82,7 +82,6 @@ void registerNativeLaneProtocolTests() {
       final drained = lane.drain();
       expect((await running).bytes, buildCancelledResponse());
       expect(await drained, isTrue, reason: 'the engine is intact');
-      expect(lane.drainsPromptly, isTrue);
       slow.release();
 
       await lane.reset();

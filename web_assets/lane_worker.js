@@ -24,7 +24,10 @@
 //   exec         { lease, jobId, requestBytes, sourceLengths: number[],
 //                  sinkCount, keepSources: number[], heldGroupId?,
 //                  opfsFiles: (string|null)[], sab?, writeSab?,
-//                  cancelSab? }
+//                  cancelSab?, cancelUrl? }
+//                  (cancelSab: the job's cancel word, where the page has
+//                   SharedArrayBuffer; cancelUrl: otherwise, a blob URL the
+//                   main thread revokes to cancel, polled by sync XHR)
 //                → result { lease, jobId, data, mem }
 //                | error { lease, jobId, message, trap?, protocol?, mem }
 //                  (trap: the wasm instance trapped; the lane must end;
@@ -116,6 +119,13 @@ let activeReaderMap = null;  // sourceIndex → readerId, per exec
 let activeSab = null;        // per-exec read SAB (atomics)
 let activeWriteSab = null;   // per-exec write-ack SAB (atomics)
 let activeCancelSab = null;  // per-exec cancel word, any mode with SharedArrayBuffer
+let activeCancelUrl = null;  // per-exec blob URL, revoked by the main thread to cancel
+let cancelSeen = 0;          // latched once the URL stopped answering
+let lastPollAt = 0;          // performance.now() of the last URL poll
+
+// One sync XHR costs about 0.1 ms in Chrome, so polling at most every 10 ms
+// takes about 1% of a CPU-bound job and keeps the cancel latency near 10 ms.
+const CANCEL_POLL_MS = 10;
 let jspiReadResolve = null;
 let jspiWriteResolve = null;
 
@@ -200,9 +210,24 @@ function readViaJspi(sourceIndex, offset, count, bufPtr) {
 // ═══════════════════════════════════════════════════════════════════
 
 // Synchronous in every mode (never in JSPI_ASYNC_IMPORTS): it reads
-// the job's cancel word and never suspends. 0 when the job has none.
+// the job's cancel word, or polls its cancel URL, and never suspends.
 function hostCancelled() {
-  return activeCancelSab ? Atomics.load(new Int32Array(activeCancelSab), 0) : 0;
+  if (activeCancelSab) return Atomics.load(new Int32Array(activeCancelSab), 0);
+  if (!activeCancelUrl) return 0;
+  if (cancelSeen) return 1;
+  const now = performance.now();
+  if (now - lastPollAt >= CANCEL_POLL_MS) {
+    try {
+      const xhr = new XMLHttpRequest();
+      xhr.open('GET', activeCancelUrl, false);
+      xhr.send();
+      if (xhr.status !== 200) cancelSeen = 1;
+    } catch (_) {
+      cancelSeen = 1;
+    }
+    lastPollAt = now;
+  }
+  return cancelSeen;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -465,6 +490,9 @@ async function exec(msg) {
   activeSab = msg.sab || null;
   activeWriteSab = msg.writeSab || null;
   activeCancelSab = msg.cancelSab || null;
+  activeCancelUrl = msg.cancelUrl || null;
+  cancelSeen = 0;
+  lastPollAt = performance.now();
 
   const readerIds = [];
   const finalLengths = [];
@@ -535,6 +563,7 @@ async function exec(msg) {
     activeSab = null;
     activeWriteSab = null;
     activeCancelSab = null;
+    activeCancelUrl = null;
     jspiWriteResolve = null;
   }
 

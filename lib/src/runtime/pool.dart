@@ -33,8 +33,7 @@
 // under the budget, else waits. An executor that is booting or draining
 // counts as on its way to idle, so a request waits for it rather than
 // booting another: a Pdf disposed and replaced in a loop reuses one
-// executor. A draining executor whose job cannot be cancelled does not
-// count, since nothing bounds how long it stays busy. Waiters are served
+// executor. Waiters are served
 // strictly in arrival order: an executor that frees goes to the head of the
 // queue, never to a request that arrived later.
 //
@@ -88,10 +87,6 @@ class _Entry {
 
   /// The heap size after the last reset; ranks idle executors.
   int heap = 0;
-
-  /// True while its lane's running job cannot be cancelled, so the
-  /// executor is not on its way back to idle in bounded time.
-  bool slowDrain = false;
 }
 
 class _Waiter {
@@ -229,7 +224,6 @@ class ExecutorPool {
     var intact = false;
     try {
       final draining = lease.lane.drain();
-      entry.slowDrain = !lease.lane.drainsPromptly;
       intact = await draining;
       if (intact && !untouched) await lease.lane.reset();
     } catch (_) {
@@ -270,14 +264,11 @@ class ExecutorPool {
     }
     // A booting or draining executor will be idle soon, so it covers a
     // waiter: churn waits for the executor its predecessor is returning
-    // instead of booting a second one. One whose job nothing can cancel
-    // covers nobody, since nothing bounds the wait.
+    // instead of booting a second one.
     var uncovered =
         _waiters.length -
         _count(ExecutorState.booting) -
-        _entries
-            .where((e) => e.state == ExecutorState.draining && !e.slowDrain)
-            .length;
+        _count(ExecutorState.draining);
     while (uncovered > 0 && _entries.length < maxExecutors) {
       _boot();
       uncovered--;

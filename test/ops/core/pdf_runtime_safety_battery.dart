@@ -102,9 +102,6 @@ class _ObservedLane implements Lane {
 
   @override
   Future<bool> drain() => real.drain();
-
-  @override
-  bool get drainsPromptly => real.drainsPromptly;
 }
 
 /// A sink whose writes take [delay], and which fires [onFirstWrite] as the

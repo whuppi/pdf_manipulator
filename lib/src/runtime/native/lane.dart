@@ -355,9 +355,6 @@ class NativeLane implements Lane {
   }
 
   @override
-  bool get drainsPromptly => true;
-
-  @override
   Future<bool> drain() {
     if (!_draining && !_abandoned) {
       _draining = true;

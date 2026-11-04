@@ -25,18 +25,17 @@
 //   running — the job's NEXT I/O is answered with the cancelled
 //             status (and a parked Atomics wait / outstanding JSPI
 //             read is answered immediately); the engine unwinds at
-//             that boundary, mirroring native exactly. Where the page
-//             has SharedArrayBuffer the job also carries a cancel word
-//             the engine's CPU loops poll, so it stops within one page
-//             even when it makes no I/O call.
+//             that boundary, mirroring native exactly. The job also carries
+//             a cancel channel the engine's CPU loops poll, so it stops
+//             within one page even when it makes no I/O call: a cancel
+//             word where the page has SharedArrayBuffer, otherwise a blob
+//             URL the worker polls with a throttled sync XHR and this side
+//             revokes.
 //   drain   — the lane ends: queued jobs complete cancelled at once, the
 //             running one is cancelled as above and its caller is
 //             answered at once, but the worker stays busy until the job
 //             posts. Only then is the lane drained, and the pool resets
-//             the worker for its next lease. A job nothing can cancel
-//             (OPFS mode without SharedArrayBuffer, once posted) runs to
-//             its end first; [drainsPromptly] tells the pool so.
-//   terminate — only for a dead worker or a pool that is going away:
+//             the worker for its next lease. //   terminate — only for a dead worker or a pool that is going away:
 //             worker.terminate() frees the worker and its WASM heap;
 //             every pending job completes cancelled. The worker's OPFS
 //             directory is reclaimed by the host once the worker's
@@ -156,10 +155,12 @@ class _WebJob {
   JSObject? sab;
   JSObject? writeSab;
 
-  /// The per-job cancel word, in every mode where the page has
-  /// SharedArrayBuffer (null otherwise: the job then cancels at its
-  /// next I/O boundary only).
+  /// The per-job cancel word, where the page has SharedArrayBuffer.
   JSObject? cancelSab;
+
+  /// Where the page has none: the per-job blob URL the worker polls.
+  /// Revoking it is the cancel; null once revoked.
+  String? cancelUrl;
 
   /// OPFS filenames pre-copied for this job's sources (index-aligned;
   /// null where no pre-copy happened). Pure exec-message data — the
@@ -190,11 +191,6 @@ class WebLane implements Lane {
   /// True once the executor was terminated: nothing more is served.
   bool _abandoned = false;
 
-  /// True when [drain] found a job no cancel can reach.
-  bool _unreachable = false;
-
-  @override
-  bool get drainsPromptly => !_unreachable;
   final Completer<bool> _drained = Completer<bool>();
 
   /// True once the worker trapped: the lane serves nothing more. Queued and
@@ -270,6 +266,7 @@ class WebLane implements Lane {
     // stops within one page even while the worker never touches I/O.
     final cancelSab = running.cancelSab;
     if (cancelSab != null) _atomicsStore(_I32(cancelSab, 0, 1), 0, 1);
+    _revokeCancelUrl(running);
 
     // Wake anything parked RIGHT NOW — same instant-wake contract as
     // the native channel registry.
@@ -337,13 +334,6 @@ class WebLane implements Lane {
             LaneSubmitResult(buildCancelledResponse(), const {}),
           );
         }
-        // OPFS mode without a cancel word has no way to reach a job the
-        // worker runs: the worker stays busy until the job ends by itself.
-        if (running.posted &&
-            _mode == PdfIoMode.opfs &&
-            running.cancelSab == null) {
-          _unreachable = true;
-        }
       }
       final cancelled = LaneSubmitResult(buildCancelledResponse(), const {});
       for (final entry in _queue) {
@@ -372,6 +362,7 @@ class WebLane implements Lane {
     final running = _running;
     _running = null;
     if (running != null) {
+      _revokeCancelUrl(running);
       running.wake();
       if (!running.completer.isCompleted) running.completer.complete(cancelled);
     }
@@ -444,6 +435,9 @@ class WebLane implements Lane {
       if (globalContext.hasProperty('SharedArrayBuffer'.toJS).toDart) {
         entry.cancelSab = _Sab(SabLayout.cancelSabBytes);
         msg['cancelSab'] = entry.cancelSab;
+      } else {
+        entry.cancelUrl = web.URL.createObjectURL(web.Blob(<JSAny>[].toJS));
+        msg['cancelUrl'] = entry.cancelUrl!.toJS;
       }
       if (_mode == PdfIoMode.atomics) {
         entry.sab = _Sab(SabLayout.readSabBytes);
@@ -464,6 +458,7 @@ class WebLane implements Lane {
   }
 
   void _finish(_WebJob entry, LaneSubmitResult result) {
+    _revokeCancelUrl(entry);
     // Every completion path lands here — success, engine error,
     // transport error, cancel. One verb closes the job's disk story:
     // the WORKER deletes any pre-copy files the job still owns (same
@@ -481,6 +476,14 @@ class WebLane implements Lane {
     if (!entry.completer.isCompleted) entry.completer.complete(result);
     _settle();
     _pump();
+  }
+
+  /// Revoking the URL is the cancel; once, and never reused.
+  void _revokeCancelUrl(_WebJob entry) {
+    final url = entry.cancelUrl;
+    if (url == null) return;
+    entry.cancelUrl = null;
+    web.URL.revokeObjectURL(url);
   }
 
   LaneSubmitResult _deadResult() => LaneSubmitResult(

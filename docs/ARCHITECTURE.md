@@ -739,11 +739,12 @@ image reduction, validation, PDF/A conversion, render, image
 extraction, the editor save's page loop) poll a `CancelCheck` once per
 page, image or rule batch, so a cancel stops them within one unit even
 when the loop makes no I/O call. On native the check reads the lane and
-job flags. On the web it reads a per-job cancel word in a
-`SharedArrayBuffer` (`host_cancelled`), which exists only on
-cross-origin isolated pages. Without it, web cancel lands at the next
-source read or sink write, and a running OPFS op (no I/O waits at all)
-is stopped only by `Pdf.dispose`.
+job flags. On the web `host_cancelled` reads a per-job cancel word in a
+`SharedArrayBuffer`, which exists only on cross-origin isolated pages.
+Without it, each job carries a blob URL instead: the worker polls it with a
+synchronous XHR at most every 10 ms (about 0.1 ms a poll in Chrome), and
+the main thread cancels by revoking it, so the poll fails and the job stops
+within about one poll interval plus one unit of work.
 
 `extractImages` writes each image to a sink the caller's factory returns, on
 the same chunked wire as `render` (one shared framer in the engine and one

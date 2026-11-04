@@ -138,12 +138,6 @@ abstract interface class Lane {
   /// executor may be reset and leased again), or with false when the engine
   /// died. Idempotent.
   Future<bool> drain();
-
-  /// After [drain]: whether the running job, if any, can be reached by the
-  /// cancel, so the drain settles promptly. False for a job only the engine
-  /// can end (web OPFS without SharedArrayBuffer): the executor stays busy
-  /// until the job finishes by itself.
-  bool get drainsPromptly;
 }
 
 /// One platform executor: a thread with its engine state, or a worker with

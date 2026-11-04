@@ -54,16 +54,9 @@ Future<Uint8List> _buildPages(Pdf pdf) async {
   return sink.takeBytes();
 }
 
-/// [skipMidOp] is a reason when this runner cannot land a cancel on a
-/// running op (a web page without SharedArrayBuffer in OPFS mode),
-/// null everywhere else. [skipExtract] is a reason when the runner's
-/// engine makes no source read after open to mark that an op started
-/// (OPFS pre-copies its sources).
-void registerCancelTests(
-  Pdf Function() createPdf, {
-  String? skipMidOp,
-  String? skipExtract,
-}) {
+/// [skipExtract] is a reason when the runner's engine makes no source read
+/// after open to mark that an op started (OPFS pre-copies its sources).
+void registerCancelTests(Pdf Function() createPdf, {String? skipExtract}) {
   group('cancel mid-loop', () {
     Uint8List? built;
 
@@ -96,66 +89,61 @@ void registerCancelTests(
         await doc.dispose();
       },
       timeout: t(5),
-      skip: skipMidOp ?? skipExtract,
+      skip: skipExtract,
     );
 
-    test(
-      'render cancelled on the first frame stops the engine',
-      () async {
-        final pdf = createPdf();
-        final bytes = await pages200(pdf);
-        final doc = await pdf.open(src(bytes));
+    test('render cancelled on the first frame stops the engine', () async {
+      final pdf = createPdf();
+      final bytes = await pages200(pdf);
+      final doc = await pdf.open(src(bytes));
 
-        var written = 0;
-        onEngineFrame = () => written++;
-        addTearDown(() => onEngineFrame = null);
+      var written = 0;
+      onEngineFrame = () => written++;
+      addTearDown(() => onEngineFrame = null);
 
-        var opened = 0;
-        var writtenAtCancel = -1;
-        final sinks = <_ClosesCounted>[];
-        late final PdfTask<List<PdfRenderedPage>> task;
-        task = doc.render(
-          (page) {
-            opened++;
-            if (opened == 1) {
-              writtenAtCancel = written;
-              task.cancel();
-            }
-            final sink = _ClosesCounted();
-            sinks.add(sink);
-            return sink;
-          },
-          pages: const PdfPages.all(),
-          size: const PdfRenderSize.thumbnail(120),
-        );
-        await expectLater(task, throwsA(isA<PdfCancelled>()));
+      var opened = 0;
+      var writtenAtCancel = -1;
+      final sinks = <_ClosesCounted>[];
+      late final PdfTask<List<PdfRenderedPage>> task;
+      task = doc.render(
+        (page) {
+          opened++;
+          if (opened == 1) {
+            writtenAtCancel = written;
+            task.cancel();
+          }
+          final sink = _ClosesCounted();
+          sinks.add(sink);
+          return sink;
+        },
+        pages: const PdfPages.all(),
+        size: const PdfRenderSize.thumbnail(120),
+      );
+      await expectLater(task, throwsA(isA<PdfCancelled>()));
 
-        // The lane runs one job at a time: once this read returns, the
-        // render job is over.
-        await doc.extractText(MemorySink(), pages: const PdfPages.single(0));
+      // The lane runs one job at a time: once this read returns, the
+      // render job is over.
+      await doc.extractText(MemorySink(), pages: const PdfPages.single(0));
 
-        expect(opened, lessThanOrEqualTo(2));
-        expect(
-          written - writtenAtCancel,
-          lessThanOrEqualTo(_framesAfterCancelBound),
-          reason:
-              'frames the engine wrote after the cancel: '
-              '${written - writtenAtCancel} of $_pageCount pages',
-        );
-        expect(
-          sinks.map((s) => s.closes),
-          everyElement(1),
-          reason: 'the sink of the page in flight is closed, once',
-        );
-        expect(
-          sinks.first.bytes,
-          0,
-          reason: 'a cancel stops the writes: the first page got no data',
-        );
-        await doc.dispose();
-      },
-      timeout: t(5),
-      skip: skipMidOp,
-    );
+      expect(opened, lessThanOrEqualTo(2));
+      expect(
+        written - writtenAtCancel,
+        lessThanOrEqualTo(_framesAfterCancelBound),
+        reason:
+            'frames the engine wrote after the cancel: '
+            '${written - writtenAtCancel} of $_pageCount pages',
+      );
+      expect(
+        sinks.map((s) => s.closes),
+        everyElement(1),
+        reason: 'the sink of the page in flight is closed, once',
+      );
+      expect(
+        sinks.first.bytes,
+        0,
+        reason: 'a cancel stops the writes: the first page got no data',
+      );
+      await doc.dispose();
+    }, timeout: t(5));
   });
 }

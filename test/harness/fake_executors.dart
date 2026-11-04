@@ -43,12 +43,6 @@ class FakeLane implements Lane {
   /// True between [drain] and the next lease.
   bool ended = false;
 
-  /// Whether a cancel reaches the running job.
-  bool prompt = true;
-
-  @override
-  bool get drainsPromptly => prompt;
-
   int drains = 0;
   int resets = 0;
 
