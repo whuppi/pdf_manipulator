@@ -52,6 +52,7 @@ const CASES: &[(&str, &str)] = &[
     ("saveIncremental", "pages"),
     ("classifyPages", "pages"),
     ("bookmarkRanges", "outline"),
+    ("addStamp", "pages"),
 ];
 
 /// The fixtures' sizes, each chosen so the op does well over 10^9 units of
@@ -87,6 +88,8 @@ mod size {
     pub const FORM: usize = 4_000;
     pub const ANNOTATIONS: usize = 10_000;
     pub const OUTLINE: usize = 500;
+    /// A stamp costs a page parse and a staged annotation each.
+    pub const STAMP_PAGES: usize = 1_000;
 }
 
 fn main() {
@@ -130,6 +133,7 @@ fn sink() -> CountingWriter<std::io::Sink> {
 
 fn run(op: &str, fixture: &str) -> Result<(), Failure> {
     let cancel = CancelCheck::probe();
+    let _job = pdf_oxide::cancel::enter(&cancel);
     match (op, fixture) {
         ("open", "damaged") => {
             let mut shell = Shell::new();
@@ -297,6 +301,14 @@ fn run(op: &str, fixture: &str) -> Result<(), Failure> {
             let mut document = doc(gen::outline(size::OUTLINE).finish())?;
             mark();
             dispatch::plan_split_by_bookmarks(&mut document, &cancel).map_err(fail("bookmarks"))?;
+            mark();
+        },
+        ("addStamp", "pages") => {
+            let mut editor = editor(gen::pages(size::STAMP_PAGES, size::PAGE_LINES).finish())?;
+            let pages: Vec<usize> = (0..size::STAMP_PAGES).collect();
+            mark();
+            dispatch::edit_add_stamp(&mut editor, &pages, "Approved", 10.0, 10.0, 60.0, 20.0, 1.0)
+                .map_err(fail("addStamp"))?;
             mark();
         },
         _ => return Err("no such case".into()),

@@ -1,102 +1,41 @@
 # Loops tool/check_cancel_polls.sh finds without a poll, one per line:
-#   <path under vendor/pdf_oxide>::<fn>#<n>  # bounded: <why> | open: <why>
-# `bounded` loops cannot take long on any input. `open` loops scale with the
-# document and are not polled today; REPORT.md names them as the work left.
+#   <path under vendor/pdf_oxide>::<fn>#<n>  # bounded: <why>
+# `bounded` is the only class: a loop that cannot take long on any input, or
+# that a poll would leave half done, or that no host op reaches. A loop that
+# scales with the document polls instead, and the script refuses any other
+# word after the `#`.
 src/compliance/pdf_x/validator.rs::validate_annotations#1  # bounded: only PdfXValidator reaches it, and no file of src/host names pdf_x
 src/compliance/pdf_x/validator.rs::validate_annotations#2  # bounded: only PdfXValidator reaches it, and no file of src/host names pdf_x
 src/compliance/pdf_x/validator.rs::validate_colors#1  # bounded: only PdfXValidator reaches it, and no file of src/host names pdf_x
 src/compliance/pdf_x/validator.rs::validate_fonts#1  # bounded: only PdfXValidator reaches it, and no file of src/host names pdf_x
 src/compliance/pdf_x/validator.rs::validate_page_boxes#1  # bounded: only PdfXValidator reaches it, and no file of src/host names pdf_x
 src/compliance/pdf_x/validator.rs::validate_transparency#1  # bounded: only PdfXValidator reaches it, and no file of src/host names pdf_x
-src/document.rs::apply_link_annotations_to_ordered_spans#1  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
 src/document.rs::check_for_circular_references#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
-src/document.rs::collect_image_handles_from_form_xobject#1  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
-src/document.rs::embed_pdf_fonts_into#1  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
-src/document.rs::embed_pdf_fonts_into#2  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
 src/document.rs::extract_all_text#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
-src/document.rs::extract_images_filtered#1  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
-src/document.rs::extract_images_from_form_xobject#1  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
 src/document.rs::extract_images_to_files#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
-src/document.rs::gather_page_signals#1  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
-src/document.rs::gather_page_signals#2  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
-src/document.rs::generate_image_html#1  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
-src/document.rs::generate_image_markdown#1  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
-src/document.rs::get_page_by_scanning#1  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
-src/document.rs::get_page_by_scanning#2  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
 src/document.rs::identify_multi_row_labels#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
 src/document.rs::merge_sub_superscript_spans#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
-src/document.rs::page_image_handles#1  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
-src/document.rs::page_may_contain_text#1  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
 src/document.rs::parse_font_size_from_da#1  # bounded: the fonts, entries or samples of one resource dictionary or one function, not of the document
 src/document.rs::prepare_search#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
 src/document.rs::remove_repeated_text#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
 src/document.rs::remove_repeated_text#2  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
-src/document.rs::reorder_rowspan_labels#1  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
-src/document.rs::repeated_running_head_foot#1  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
 src/document.rs::to_html_all#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
 src/document.rs::to_plain_text_all#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
-src/document.rs::walk_form_xobject_tree_for_inks#1  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
 src/editor/document_editor.rs::collect_copy_work#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
 src/editor/document_editor.rs::embed_fallback_text_appearance#1  # bounded: the fonts, entries or samples of one resource dictionary or one function, not of the document
-src/editor/document_editor.rs::extract_pages_to_bytes#1  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/editor/document_editor.rs::flatten_all_annotations#1  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/editor/document_editor.rs::flatten_forms#1  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/editor/document_editor.rs::get_page_images#1  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
-src/editor/document_editor.rs::get_redaction_data#1  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/editor/document_editor.rs::merge_pages_from_document_cancellable#1  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
-src/editor/document_editor.rs::merge_pages_from_document_cancellable#2  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
-src/editor/document_editor.rs::merged_prune#1  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/editor/document_editor.rs::merged_prune#2  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/editor/document_editor.rs::merged_prune#3  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/editor/document_editor.rs::merged_resource_prune#1  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/editor/document_editor.rs::redacted_page_resources#1  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/editor/document_editor.rs::rewritten_resources#1  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/editor/document_editor.rs::rewritten_resources#2  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/editor/document_editor.rs::select_pages#1  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/editor/document_editor.rs::with_flat_xobjects#1  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/editor/document_editor.rs::with_pages_selected#1  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/editor/document_editor.rs::write_full_to_writer_allocating#1  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
-src/editor/document_editor.rs::write_full_to_writer_allocating#2  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
 src/editor/document_editor.rs::write_image_mods_content#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
 src/editor/dom.rs::to_svg#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api
 src/editor/resource_manager.rs::register_font#1  # bounded: the fonts, entries or samples of one resource dictionary or one function, not of the document
-src/host/dispatch.rs::check_editable_pages#1  # open: one check per page of the caller's own list, no parse and no I/O; scales with that list, left unpolled (REPORT.md)
-src/host/dispatch.rs::edit_add_stamp#1  # open: one check per page of the caller's own list, no parse and no I/O; scales with that list, left unpolled (REPORT.md)
-src/host/dispatch.rs::edit_rotate_pages#1  # open: one setter step per page of the caller's own list, no parse and no I/O; scales with that list, left unpolled (REPORT.md)
-src/host/dispatch.rs::edit_set_crop_box#1  # open: one setter step per page of the caller's own list, no parse and no I/O; scales with that list, left unpolled (REPORT.md)
-src/host/dispatch.rs::edit_set_media_box#1  # open: one setter step per page of the caller's own list, no parse and no I/O; scales with that list, left unpolled (REPORT.md)
-src/host/dispatch.rs::edit_set_rotation#1  # open: one setter step per page of the caller's own list, no parse and no I/O; scales with that list, left unpolled (REPORT.md)
-src/host/dispatch.rs::edit_watermark#1  # open: one setter step per page of the caller's own list, no parse and no I/O; scales with that list, left unpolled (REPORT.md)
-src/host/dispatch.rs::plan_page_font#1  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
+src/host/dispatch.rs::edit_rotate_pages#1  # bounded: all or nothing: a field store per page of a list check_pages already walked under a poll, and a cancel between two stores would leave the editor half edited
+src/host/dispatch.rs::edit_set_crop_box#1  # bounded: all or nothing: a field store per page of a list check_pages already walked under a poll, and a cancel between two stores would leave the editor half edited
+src/host/dispatch.rs::edit_set_media_box#1  # bounded: all or nothing: a field store per page of a list check_pages already walked under a poll, and a cancel between two stores would leave the editor half edited
+src/host/dispatch.rs::edit_set_rotation#1  # bounded: all or nothing: a field store per page of a list check_pages already walked under a poll, and a cancel between two stores would leave the editor half edited
 src/host/dispatch.rs::rects#1  # bounded: the fonts, entries or samples of one resource dictionary or one function, not of the document
-src/host/dispatch.rs::refuse_repeated_pages#1  # open: one setter step per page of the caller's own list, no parse and no I/O; scales with that list, left unpolled (REPORT.md)
-src/host/dispatch.rs::stage_image_stamps#1  # open: one check per page of the caller's own list, no parse and no I/O; scales with that list, left unpolled (REPORT.md)
-src/host/extract_stream.rs::write_png#1  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/host/image_mods.rs::push_chunk#1  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
-src/host/images/execute.rs::ccitt#1  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/host/images/execute.rs::flate#1  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/host/images/inventory.rs::page_image_xobject_names#1  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/host/images/stream.rs::fill#1  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/host/images/stream.rs::skip#1  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/host/images/stream.rs::skip#2  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/host/page_prune.rs::exclude_dropped_annotations#1  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/host/page_prune.rs::prune_links#1  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/host/page_prune.rs::renumber_page_labels#1  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/host/redact_scrub.rs::collect_font_use#1  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
-src/host/redact_scrub.rs::count_annotations#1  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
-src/host/redact_scrub.rs::count_stream#1  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
-src/host/redact_scrub.rs::count_stream#2  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
-src/host/redact_scrub.rs::count_users#1  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
 src/host/redact_scrub.rs::font_entries#1  # bounded: the fonts, entries or samples of one resource dictionary or one function, not of the document
-src/host/redact_scrub.rs::prepare_flat_redactions#1  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/host/redact_scrub.rs::structure_overrides#1  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
 src/host/redact_scrub.rs::xobject_refs#1  # bounded: the fonts, entries or samples of one resource dictionary or one function, not of the document
-src/host/resource_prune.rs::appearance_forms#1  # open: scales with the document but measured under MAX_GAP by tools/fuelprobe (saves, flattens, redaction plans, image rows); left unpolled (REPORT.md)
-src/host/resource_prune.rs::process#1  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
-src/rendering/mod.rs::flatten_to_images#1  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
+src/host/resource_prune.rs::process#1  # bounded: its operator stream is built by open with a cancel every 4096 operators (with_cancel) and the op? below returns the error
 src/rendering/page_renderer.rs::execute_operator_stream#1  # bounded: its operator stream is built by render_bands_open with a cancel every 16 operators (with_cancel_every)
 src/rendering/page_renderer.rs::parse_type0_transfer_function#1  # bounded: the fonts, entries or samples of one resource dictionary or one function, not of the document
-src/rendering/page_renderer.rs::render_annotations#1  # open: scales with a page's content or the document's pages or images and no fuel case reaches it past MAX_GAP; left unpolled (REPORT.md)
 src/rendering/page_renderer.rs::share_truetype_cmaps#1  # bounded: the fonts, entries or samples of one resource dictionary or one function, not of the document
 src/rendering/page_renderer.rs::share_truetype_cmaps#2  # bounded: the fonts, entries or samples of one resource dictionary or one function, not of the document
 src/rendering/separation_renderer.rs::execute_separation_operators#1  # bounded: no host op reaches it; no call chain by function name from src/host/ops, dispatch or bridge_api

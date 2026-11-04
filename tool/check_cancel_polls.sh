@@ -17,13 +17,15 @@
 #   - `is_cancelled`
 #   - `.check(`
 #   - a call to a polling helper: `.tick(` (Stride), `.each(` (CancelCheck),
-#     or a function named in HELPERS below
+#     or a function named in HELPERS below (`poll`, the running job's check)
 # unless
 #   - a loop around it, in the same function, holds one (the outer loop polls
 #     once per item, so the inner loop is one item's work), or
 #   - its place is a line of tool/cancel_poll_allow.txt:
-#       <path under vendor/pdf_oxide>::<fn>#<n>  # why the loop is bounded
+#       <path under vendor/pdf_oxide>::<fn>#<n>  # bounded: why
 #     where <n> counts the loops of that function the patterns match, from 1.
+#     `bounded:` is the only class an allow line may name; any other word,
+#     `open:` included, fails.
 #
 # An allow line that matches no flagged loop fails too, so the file cannot
 # outlive the code it excuses. `--headers` prints every loop header it sees,
@@ -44,7 +46,7 @@ PATTERNS_FILE = "tool/cancel_poll_patterns.txt"
 ALLOW_FILE = "tool/cancel_poll_allow.txt"
 # Functions that poll on the caller behalf, beside is_cancelled, .check(,
 # .tick( and .each(.
-HELPERS = []
+HELPERS = ["poll", "poll_io"]
 # Code outside the reach of the lanes: the language bindings, the command-line
 # tools, OCR and the document builder, which no host op runs on an input.
 SKIP = (
@@ -256,6 +258,9 @@ else:
     for number, text, comment in read_lines(ALLOW_FILE):
         if not comment:
             print(f"{ALLOW_FILE}:{number}: allowed loop with no reason")
+            sys.exit(1)
+        if not comment.startswith("bounded: "):
+            print(f"{ALLOW_FILE}:{number}: an allowed loop is `# bounded: <why>`; one that scales with the document polls")
             sys.exit(1)
         allow[text] = [number, False]
 
