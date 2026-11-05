@@ -43,6 +43,7 @@ Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extrac
   - [Cancellation](#cancellation)
 - [Sources & sinks](#sources--sinks)
 - [Usage](#usage)
+  - [Open a PDF](#open-a-pdf)
   - [One-shot operations](#one-shot-operations)
   - [Read a document](#read-a-document)
   - [Edit a document](#edit-a-document)
@@ -123,55 +124,74 @@ That's it — every platform now runs the full engine. **Before you ship: it can
 
 ## I want to...
 
-`doc` is an open document (`await pdf.open(source)`); `e` is the editor inside `pdf.rewrite(source, output, (e) async { ... })`.
+`input` is a `PdfInput` (`PdfInput(source)`), `output` is a `DataSink`, `doc` is an open document and `e` is the editor of `pdf.rewrite(input, output, (e) async { ... })`.
 
 | I want to | Do this |
 |---|---|
-| read a page's size, rotation and label | `await doc.pageInfo()` |
-| extract the text | `await doc.extractText(sink)` |
+| keep a document open for many reads | `final doc = await pdf.open(input)`, then `await doc.dispose()` |
+| read a document and let the library close it | `await pdf.read(input, (doc) => doc.text())` |
+| run one read | `await pdf.readOnce(input).search('invoice')` |
+| get the page count, version, metadata and encryption | `await pdf.info(input)` |
+| keep an editor open | `final editor = await pdf.edit(input)`, then `await editor.dispose()` |
+| make several edits and save once | `await pdf.rewrite(input, output, (e) async { ... })` |
+| make one edit | `await pdf.editOnce(input, output).addWatermark('DRAFT')` |
+| encrypt, decrypt or recompress with no edit | `await pdf.resave(input, output, save: PdfSave.full(encryption: PdfEncryption.remove()))` |
+| keep a builder open | `final builder = await pdf.build()`, then `await builder.dispose()` |
+| build a document and let the library save it | `await pdf.buildTo(output, (b) async { ... })` |
+| merge PDFs | `await pdf.merge([PdfInput(a), PdfInput(b)], output)` |
+| split a PDF | `await pdf.split(input, (part) => sink, by: PdfSplitRule.every(5))` |
+| make a PDF smaller | `await pdf.compress(input, output)` |
+| make a PDF from images | `await pdf.imagesToPdf([a, b], output)` |
+| sign a PDF | `await pdf.sign(input, output, credentials: credentials)` |
+| convert a PDF to DOCX, PPTX or XLSX | `await pdf.convertToOffice(input, output, format: .docx)` |
+| convert a DOCX, PPTX or XLSX to PDF | `await pdf.convertFromOffice(docx, output, format: .docx)` |
+| convert an XFA form to an AcroForm | `await pdf.convertXfaToAcroForm(input, output)` |
+| read the size, rotation and label of the pages | `await doc.pageInfo()` |
+| get the text as a string | `await doc.text()` |
+| write the text to a sink | `await doc.extractText(sink)` |
 | search the text | `await doc.search('invoice')` |
-| render a page to an image | `await doc.render((page) => sink)` |
-| extract the images of a page | `await doc.extractImages((image) => sink)` |
+| render pages to files | `await doc.render((page) => sinkFor(page))` |
+| render one page to bytes | `await doc.bitmap(0)` |
+| extract the images | `await doc.extractImages((image) => sinkFor(image))` |
 | list the signatures | `await doc.signatures()` |
 | verify the signatures | `await doc.verifySignatures()` |
 | validate PDF/A | `await doc.validatePdfA()` |
 | validate PDF/UA | `await doc.validatePdfUa()` |
-| read the bookmarks' page ranges | `await doc.bookmarkRanges()` |
+| read the page range of each bookmark | `await doc.bookmarkRanges()` |
 | classify the pages | `await doc.classifyPages()` |
 | classify the whole document | `await doc.classifyDocument()` |
 | read the form fields | `await doc.formFields()` |
 | export the form values | `await doc.exportFormData(sink)` |
 | read the XFA packet | `await doc.xfa()` |
-| list the embedded files | `await doc.attachments()` |
-| list a page's annotations | `await doc.annotations(0)` |
-| extract an embedded file | `await doc.extractAttachment('notes.txt', sink)` |
-| watermark every page | `await pdf.rewrite(a, b, (e) => e.addWatermark('DRAFT'))` |
-| watermark some pages | `await pdf.rewrite(a, b, (e) => e.addWatermark('DRAFT', pages: PdfPages.list([0, 2])))` |
-| rotate pages | `await pdf.rewrite(a, b, (e) => e.rotatePages(PdfPages.single(0), by: .r90))` |
-| set the rotation of pages | `await pdf.rewrite(a, b, (e) => e.setRotation(PdfPages.all(), .r0))` |
-| delete pages | `await pdf.rewrite(a, b, (e) => e.deletePages(PdfPages.list([1, 3])))` |
-| keep pages, in this order | `await pdf.rewrite(a, b, (e) => e.keepPages([2, 0, 1]))` |
-| move a page | `await pdf.rewrite(a, b, (e) => e.movePage(from: 3, to: 0))` |
-| set the title and other metadata | `await pdf.rewrite(a, b, (e) => e.setMetadata(const PdfMetadata(title: 'Q4 Report')))` |
-| resize the pages | `await pdf.rewrite(a, b, (e) => e.setMediaBox(PdfPages.all(), PdfRect(x: 0, y: 0, width: 595, height: 842)))` |
-| crop the pages, or remove the crop | `await pdf.rewrite(a, b, (e) => e.setCropBox(PdfPages.all(), null))` |
-| trim margins off every page | `await pdf.rewrite(a, b, (e) => e.cropMargins(top: 36, bottom: 36))` |
-| stamp pages | `await pdf.rewrite(a, b, (e) => e.addStamp(PdfPages.all(), type: .draft, rect: PdfRect(x: 50, y: 700, width: 120, height: 40)))` |
-| stamp pages with an image | `await pdf.rewrite(a, b, (e) => e.addImageStamp(PdfPages.single(0), logo, rect: PdfRect(x: 50, y: 700, width: 80, height: 40)))` |
-| flatten the form | `await pdf.rewrite(a, b, (e) => e.flattenForms())` |
-| flatten the form on some pages | `await pdf.rewrite(a, b, (e) => e.flattenForms(pages: PdfPages.single(0)))` |
-| flatten the annotations | `await pdf.rewrite(a, b, (e) => e.flattenAnnotations())` |
-| redact a region for good | `await pdf.rewrite(a, b, (e) => e.redact(0, [PdfRect(x: 72, y: 700, width: 200, height: 20)]))` |
-| erase a region, drawing no box | `await pdf.rewrite(a, b, (e) => e.redact(0, [region], overlay: .none()))` |
-| embed a file | `await pdf.rewrite(a, b, (e) => e.embedFile('notes.txt', notes))` |
-| convert to PDF/A | `await pdf.rewrite(a, b, (e) => e.convertToPdfA())` |
-| shrink the images | `await pdf.rewrite(a, b, (e) => e.reduceImages(PdfImagePolicy.ebook))` |
-| move or resize an image on a page | `await pdf.rewrite(a, b, (e) => e.setImageBounds(0, 'Im0', PdfRect(x: 0, y: 0, width: 200, height: 100)))` |
-| remove embedded copies of the standard fonts | `await pdf.rewrite(a, b, (e) => e.unembedStandardFonts())` |
-| remove the metadata | `await pdf.rewrite(a, b, (e) => e.scrubMetadata())` |
-| remove the metadata, scripts or attachments | `await pdf.rewrite(a, b, (e) => e.sanitize(const PdfSanitizeOptions(embeddedFiles: true)))` |
-
-Every read and every edit also has a one-shot: `pdf.reads(source)` opens the document, runs the one call and closes it, and `pdf.edits(source, output)` does the same for one edit.
+| list the attached files | `await doc.attachments()` |
+| write an attached file to a sink | `await doc.extractAttachment('notes.txt', sink)` |
+| list the annotations of a page | `await doc.annotations(0)` |
+| set the title and other metadata | `await pdf.rewrite(input, output, (e) => e.setMetadata(const PdfMetadata(title: 'Q4 Report')))` |
+| append pages of another PDF | `await pdf.rewrite(input, output, (e) => e.appendPages(PdfInput(other), pages: PdfPages.range(0, 2)))` |
+| remove pages | `await pdf.rewrite(input, output, (e) => e.removePages(PdfPages.list([1, 3])))` |
+| keep some pages, in document order | `await pdf.rewrite(input, output, (e) => e.keepPages(PdfPages.from(2)))` |
+| put the pages in a new order | `await pdf.rewrite(input, output, (e) => e.reorderPages(PdfPageOrder([2, 0, 1])))` |
+| move a page | `await pdf.rewrite(input, output, (e) => e.movePage(from: 3, to: 0))` |
+| rotate pages | `await pdf.rewrite(input, output, (e) => e.rotatePages(by: .r90, pages: PdfPages.single(0)))` |
+| set the rotation of pages | `await pdf.rewrite(input, output, (e) => e.setRotation(.r0))` |
+| resize the pages | `await pdf.rewrite(input, output, (e) => e.setMediaBox(PdfRect(x: 0, y: 0, width: 595, height: 842)))` |
+| crop the pages, or remove the crop | `await pdf.rewrite(input, output, (e) => e.setCropBox(null))` |
+| trim the margins off every page | `await pdf.rewrite(input, output, (e) => e.cropMargins(top: 36, bottom: 36))` |
+| watermark the pages | `await pdf.rewrite(input, output, (e) => e.addWatermark('DRAFT', pages: PdfPages.range(0, 3)))` |
+| stamp the pages | `await pdf.rewrite(input, output, (e) => e.addStamp(.draft, bounds: PdfRect(x: 50, y: 700, width: 120, height: 40)))` |
+| stamp a page with an image | `await pdf.rewrite(input, output, (e) => e.addImageStamp(logo, bounds: PdfRect(x: 50, y: 700, width: 80, height: 40), pages: PdfPages.single(0)))` |
+| flatten the form | `await pdf.rewrite(input, output, (e) => e.flattenForms())` |
+| flatten the annotations | `await pdf.rewrite(input, output, (e) => e.flattenAnnotations(pages: PdfPages.single(0)))` |
+| fill a form field | `await pdf.rewrite(input, output, (e) => e.field('name').setValue(const PdfFormFieldValue.text('Ada')))` |
+| redact a region for good | `await pdf.rewrite(input, output, (e) => e.redact(0, [region]))` |
+| erase a region and draw no box | `await pdf.rewrite(input, output, (e) => e.redact(0, [region], overlay: .none()))` |
+| attach a file | `await pdf.rewrite(input, output, (e) => e.addAttachment('notes.txt', notes))` |
+| convert to PDF/A | `await pdf.rewrite(input, output, (e) => e.convertToPdfA())` |
+| shrink the images | `await pdf.rewrite(input, output, (e) => e.reduceImages(PdfImagePolicy.ebook))` |
+| move or resize an image on a page | `await pdf.rewrite(input, output, (e) => e.setImageBounds(0, 'Im0', PdfRect(x: 0, y: 0, width: 200, height: 100)))` |
+| remove embedded copies of the standard fonts | `await pdf.rewrite(input, output, (e) => e.unembedStandardFonts())` |
+| remove the metadata, scripts or attached files | `await pdf.rewrite(input, output, (e) => e.sanitize(stripAttachments: true))` |
+| add a page and write on it | `final page = await b.addPage()`, then `await page.paragraph('Thank you.')` |
 
 ---
 
@@ -195,83 +215,84 @@ final secondPdf = MemorySource(secondPdfBytes);
 final output = MemorySink();
 
 // combine the two into the output
-await pdf.merge([firstPdf, secondPdf], output);
+await pdf.merge([PdfInput(firstPdf), PdfInput(secondPdf)], output);
 
-// take the merged bytes, then dispose it
+// take the merged bytes, then dispose the instance
 final merged = output.takeBytes();
 await pdf.dispose();
 ```
 
-On mobile or desktop, point the same program at files; only the sources, sink, and import change:
+On mobile or desktop, point the same program at files. `PdfFile` opens a file when the job needs it and closes it when the job ends, so you close only the sink:
 
 ```dart
+import 'dart:io';
+
 import 'package:pdf_manipulator/pdf_manipulator.dart';
-import 'package:pdf_manipulator/io.dart'; // adds FileSource / FileSink
+import 'package:pdf_manipulator/io.dart'; // adds PdfFile / FileSource / FileSink
 
 final pdf = Pdf();
-
-// read the two PDFs straight from disk
-final firstPdf = await FileSource.open(File('first.pdf'));
-final secondPdf = await FileSource.open(File('second.pdf'));
 
 // write the result straight to a file
 final output = await FileSink.open(File('merged.pdf'));
 
-// the merge call is identical
-await pdf.merge([firstPdf, secondPdf], output);
-
-// whoever opens a file closes it, then dispose the instance
-await firstPdf.close();
-await secondPdf.close();
-await output.close();
+// the merge call is the same; the inputs are files
+try {
+  await pdf.merge([
+    PdfFile(File('first.pdf')),
+    PdfFile(File('second.pdf')),
+  ], output);
+} finally {
+  // whoever opens a file closes it
+  await output.close();
+}
 await pdf.dispose();
 ```
 
-That's the shape of every **edit**: source in, sink out. Watermark, compress, split, sign are the same shape, a different verb. Reading is the other shape: `open` a document and query it, no sink needed. See [Usage](#usage) for the full menu of both.
+That is the shape of every **edit**: an input in, a sink out. Watermark, compress, split and sign have the same shape with another verb. Reading has the other shape: open a document and query it, with no sink needed. See [Usage](#usage) for both.
 
 ### Cancellation
 
-Long job the user no longer needs? You can stop it. Every operation is a **`PdfTask`**: an ordinary `Future` you `await`, plus a `cancel()` button.
+Is there a long job that the user no longer needs? You can stop it. Every operation is a **`PdfTask`**: an ordinary `Future` that you `await`, with a `cancel()` method added.
 
-Keep the task in a variable: `await` it as usual, and `cancel()` it to stop early, from a Cancel button or your widget's `dispose()`.
+Keep the task in a variable. `await` it as usual, and call `cancel()` to stop it early, from a Cancel button or from your widget's `dispose()`.
 
 ```dart
-// run it and await it — your normal code
-final task = pdf.merge([firstPdf, secondPdf], output); // starts running
+// run it and await it, as in your normal code
+final task = pdf.merge([PdfInput(firstPdf), PdfInput(secondPdf)], output);
 try {
   await task;
   final merged = output.takeBytes(); // success
 } on PdfCancelled {
-  // cancelled — the Pdf and everything else keep working
+  // cancelled: the Pdf and everything else keep working
 }
 ```
 
 ```dart
-// stop it — from a Cancel button, or your widget's dispose()
+// stop it, from a Cancel button or your widget's dispose()
 task.cancel(); // the await above now throws PdfCancelled
 ```
 
-Three rules and you're safe:
+Three rules keep you safe:
 
-- **The `cancel()` call never throws** — it sends a stop request and returns. No `try/catch` needed; it's safe to call twice, and a no-op after the task is done.
-- **`PdfCancelled` only appears when you `await` the task** — never a half-finished result. That's the spot to wrap in `try/catch`.
-- **Never await the task? Nothing to handle** — cancel it and move on, no error, no crash.
+- **The `cancel()` call never throws.** It sends a stop request and returns. You need no `try/catch`. It is safe to call twice, and it does nothing after the task is done.
+- **`PdfCancelled` appears only when you `await` the task.** You never get a half-finished result. That is the place for a `try/catch`.
+- **If you never await the task, there is nothing to handle.** Cancel it and move on. There is no error and no crash.
 
-To stop *everything*, **`pdf.dispose()`** cancels every operation and returns immediately; it never waits for in-flight work to drain.
+To stop *everything*, call **`pdf.dispose()`**. It cancels every operation and returns at once. It does not wait for work in progress to end.
 
 <details>
-<summary><b>🧩 Advanced: when do i want more than one <code>Pdf</code>?</b></summary>
+<summary><b>🧩 Advanced: when do I want more than one <code>Pdf</code>?</b></summary>
 
 <br>
 
-**Most apps need just one `Pdf` instance**: create it once, reuse it everywhere.
+**Most apps need one `Pdf` instance.** Create it once and reuse it everywhere.
 
-You'd want a second one when **two parts of your app should stop independently.** Say each screen runs its own PDF work: give each screen its own `Pdf`, then `dispose()` it when the user leaves, which cancels only *that* screen's jobs and leaves the rest running. (With one shared `Pdf`, `dispose()` would stop everything, everywhere.)
+You want a second one when **two parts of your app must stop independently.** Say each screen runs its own PDF work. Give each screen its own `Pdf` and call `dispose()` on it when the user leaves. That cancels only the jobs of that screen and leaves the others running. (With one shared `Pdf`, `dispose()` stops everything, everywhere.)
 
-Each `Pdf` instance runs its own pool of background workers, so operations go in parallel. Want more or fewer at a time?
+A `Pdf` runs operations in parallel on executors that it leases from a shared pool. To change how many operations one instance runs at once, set `concurrency`:
 
 ```dart
-final pdf = Pdf(config: PdfConfig(maxLanes: 8)); // default: max(2, cores ÷ 2)
+final pdf = Pdf(config: PdfConfig(concurrency: 8)); // default: max(2, cores ÷ 2)
 ```
 
 </details>
@@ -280,35 +301,38 @@ final pdf = Pdf(config: PdfConfig(maxLanes: 8)); // default: max(2, cores ÷ 2)
 
 ## Sources & sinks
 
-Every operation reads from a **source** and writes to a **sink**. You've already used the built-ins: `MemorySource`/`MemorySink` for bytes, `FileSource`/`FileSink` for files. Write your own for anything else (a server, a database, a `Blob`).
+Every operation reads from a **source** and writes to a **sink**. You have used the built-ins already: `MemorySource` and `MemorySink` for bytes, `FileSource` and `FileSink` for files. Write your own for anything else (a server, a database, a `Blob`).
+
+The rule for closing is the same for both: **whoever obtained it closes it.** A source or sink that you pass to an operation stays yours, and the library never closes it. A sink that a factory of yours returns (the `sinkFor` of `split`, `render` or `extractImages`) belongs to the library, and it closes that sink after its item, on success, error and cancel. A source that a `PdfInput.owning` opens, `PdfFile` for one, belongs to the job in the same way.
 
 <details>
-<summary><b>🧩 what are sources & sinks, really? (+ rolling your own)</b></summary>
+<summary><b>🧩 What are sources and sinks, really? (and writing your own)</b></summary>
 
 <br>
 
-A **source** is how `pdf_manipulator` reads your PDF, never all at once, just small bites:
+A **source** is how `pdf_manipulator` reads your PDF. It never reads all of it at once, only small pieces:
 
 ```dart
 abstract interface class DataSource {
   int get length; // how big are you?
   FutureOr<Uint8List> readAt(int offset, int count); // count bytes from offset
-}
-```
-
-It only nibbles — *"give me 64KB starting here"*, then the next bit, then the next. So you hand it a **reader**, not your whole file dumped into one giant `Uint8List`. (It hops around to any spot in the file, so a one-way stream like a live socket can't be a source; stash those in memory or a file first.)
-
-A **sink** is the mirror:
-
-```dart
-abstract interface class DataSink {
-  FutureOr<void> write(Uint8List chunk); // here's a chunk of output
-  FutureOr<void> abort(Object reason); // the operation ended cancelled or failed: discard it all
   FutureOr<void> close(); // release what you hold
 }
 ```
 
-**Build your own** for any backing store. Here's a PDF on a server, streamed over HTTP, pulling only the byte ranges asked for, never the whole download:
+The engine asks for *64 KB from here*, then the next piece, then the next. So you hand it a **reader**, not your whole file in one giant `Uint8List`. It jumps to any place in the file, so a one-way stream such as a live socket cannot be a source. Keep that data in memory or in a file first.
+
+A **sink** is the other side:
+
+```dart
+abstract interface class DataSink {
+  FutureOr<void> write(Uint8List chunk); // a chunk of output
+  FutureOr<void> abort(Object reason); // the operation was cancelled or failed: discard it all
+  FutureOr<void> close(); // release what you hold
+}
+```
+
+**Write your own** for any backing store. This is a PDF on a server, read over HTTP. It asks only for the byte ranges that the engine needs and never downloads the whole file:
 
 ```dart
 import 'package:http/http.dart' as http;
@@ -325,13 +349,16 @@ class UrlSource implements DataSource {
         headers: {'range': 'bytes=$offset-${offset + count - 1}'});
     return res.bodyBytes;
   }
+
+  @override
+  void close() {} // holds nothing to release
 }
 
-// then use it exactly like any other source
-final doc = await pdf.open(UrlSource(uri, contentLength));
+// then use it like any other source
+final doc = await pdf.open(PdfInput(UrlSource(uri, contentLength)));
 ```
 
-Or a browser `Blob` from a file picker / drag-and-drop:
+Or a browser `Blob` from a file picker or a drag and drop:
 
 ```dart
 import 'package:web/web.dart' as web;
@@ -345,13 +372,16 @@ class BlobSource implements DataSource {
   @override
   Future<Uint8List> readAt(int offset, int count) async {
     final slice = _blob.slice(offset, offset + count);
-    final bytes = await slice.arrayBuffer().toDart;
-    return bytes.asUint8List();
+    final buffer = await slice.arrayBuffer().toDart;
+    return buffer.toDart.asUint8List();
   }
+
+  @override
+  void close() {} // a Blob holds nothing to release
 }
 ```
 
-Same idea for a custom `DataSink`: implement `write(chunk)` for an upload stream, a database column, wherever the bytes should go, and `abort(reason)` to take them back (cancel the upload, delete the row) when the operation is cancelled or fails, so a stopped operation leaves no partial output.
+A custom `DataSink` works the same way. Implement `write(chunk)` for an upload stream, a database column or any other place for the bytes. Implement `abort(reason)` to take the bytes back (cancel the upload, delete the row) when the operation is cancelled or fails. Then a stopped operation leaves no partial output.
 
 </details>
 
@@ -359,94 +389,151 @@ Same idea for a custom `DataSink`: implement `write(chunk)` for an upload stream
 
 ## Usage
 
-Everything goes through one of four doors. Pick the one that fits what you're doing. Highlights below; every method and full signature lives in the [API reference](https://pub.dev/documentation/pdf_manipulator/latest/).
+Every call is a member of `Pdf`, and every call that opens a PDF takes a `PdfInput`. The calls come in four kinds. Pick the one that fits. This page shows the main ones. The [API reference](https://pub.dev/documentation/pdf_manipulator/latest/) has every member and signature.
+
+| Kind | Calls | Who closes the document |
+|---|---|---|
+| A handle that you own | `open`, `edit`, `build` | You, with `dispose()` |
+| A scope | `read`, `rewrite`, `buildTo` | The library, when your function returns |
+| A one-shot: one call on one document | `readOnce`, `editOnce`, `info`, `resave` | The library, after the call |
+| Several documents, or a policy | `merge`, `split`, `compress`, `imagesToPdf`, `sign`, `convertToOffice`, `convertFromOffice`, `convertXfaToAcroForm` | The library, after the call |
+
+### Open a PDF
+
+A `PdfInput` says where the bytes are and, when the file is encrypted, the password that opens it. The password goes with its source, and no other call names a password.
+
+```dart
+final plain = PdfInput(source); // you opened source, so you close it
+final locked = PdfInput(source, password: 'secret');
+final file = PdfFile(File('in.pdf')); // io.dart: the job opens and closes the file
+final owned = PdfInput.owning(() => FileSource.open(File('in.pdf')));
+```
+
+A missing or wrong password is a `PdfPasswordRequired` or a `PdfWrongPassword` that reaches you through the task.
 
 ### One-shot operations
 
-A single change: call it straight on `pdf`, source in, sink out:
+For a single change, call it on `pdf`, with an input in and a sink out:
 
 ```dart
-await pdf.edits(source, output).addWatermark('CONFIDENTIAL',
-    style: PdfWatermarkStyle(opacity: 0.2, fontSize: 60));
+await pdf.editOnce(input, output).addWatermark(
+  'CONFIDENTIAL',
+  style: PdfWatermarkStyle(opacity: 0.2, fontSize: 60),
+);
 
-await pdf.compress(source, output); // images to 150 ppi (PdfImagePolicy.ebook), streams deflated, unused objects dropped
-await pdf.compress(source, output, images: PdfImagePolicy.screen); // 72 ppi
+await pdf.compress(input, output); // images stay lossless; unused objects are dropped
+await pdf.compress(input, output, images: PdfImagePolicy.ebook); // images to 150 ppi
 
-await pdf.resave(source, output,
-    options: PdfSaveOptions.fullRewrite(
-      encryption: PdfEncryption.config(
-        ownerPassword: 'secret',
-        algorithm: PdfEncryptionAlgorithm.aes256,
-      ),
-    ));
+await pdf.resave(
+  input,
+  output,
+  save: PdfSave.full(
+    encryption: PdfEncryption.password(
+      ownerPassword: 'secret',
+      algorithm: PdfEncryptionAlgorithm.aesKey256,
+    ),
+  ),
+);
 
-final parts = await pdf.split(source, (part) => MemorySink(),
-    by: PdfSplitRule.every(5)); // or .maxBytes(5000000), or .bookmarks()
+final sinks = <MemorySink>[];
+final parts = await pdf.split(input, (part) {
+  final sink = MemorySink();
+  sinks.add(sink);
+  return sink;
+}, by: PdfSplitRule.every(5)); // or .maxBytes(5000000), or .bookmarks()
 ```
 
-`split` asks `sinkFor` for each part's sink before the part is written and closes it after, and returns what each part holds (`index`, `start` and `end` page, the bookmark's `title`). `merge` opens a password-protected source with its entry of `passwords: {source: 'secret'}`.
+`split` asks `sinkFor` for the sink of each part before it writes the part, and closes the sink after the part. It returns what each part holds: `index`, `start` and `end` page, and the `title` of the bookmark. `compress` never makes a file larger: if the result is not smaller, the output gets the bytes of the input as they are.
 
-The one-shots that are not an edit or a read: `merge`, `split`, `compress`, `sign`, `convertTo` (DOCX/PPTX/XLSX), `convertToPdf`, `convertXfaToAcroForm`, `imagesToPdf`. Every edit is a call on `pdf.edits(source, output)` and every read a call on `pdf.reads(source)`; the table at the top of this page lists them.
+`pdf.merge` appends the whole of each input to the first one. To append only some pages, use `appendPages` in `rewrite`.
 
-> Doing several of these to the *same* PDF? Use the editor (below); it parses once instead of re-parsing per call.
+`editOnce` and `readOnce` return an object that runs one call. A second call on it throws a `StateError`. Use `rewrite` or `read` for several calls.
+
+> Do you have several edits for the *same* PDF? Use `rewrite` (below). It parses the file once and saves once.
 
 ### Read a document
 
-`pdf.open` gives you a document to query as much as you like, then dispose:
+`pdf.read` opens the document, runs your function on it and closes it, also after an error or a cancel:
 
 ```dart
-final doc = await pdf.open(source);
-print('${doc.pageCount} pages · encrypted: ${doc.encryption != null}');
+final hits = await pdf.read(input, (doc) async {
+  print('${doc.pageCount} pages · encrypted: ${doc.encryption != null}');
 
-// The text is written to a sink as the engine produces it; the sink is
-// yours, so the library never closes it.
-final text = MemorySink();
-await doc.extractText(text);
-print(text.takeString());
+  final text = await doc.text(); // the whole text as a string
+  for (final field in await doc.formFields()) {
+    print('${field.name}: ${field.kind.name} = ${field.value}');
+  }
 
-final hits = await doc.search('revenue');
-for (final field in await doc.formFields()) {
-  print('${field.name}: ${field.type.name} = ${field.value}');
-}
-
-// Each page is written to the sink the factory returns for it, row by row; the
-// library closes that sink. `size` defaults to `PdfRenderSize.dpi(150)`.
-final pages = await doc.render(
-  (page) => FileSink.open(File('page-${page.page}.png')),
-  size: PdfRenderSize.thumbnail(200),
-);
-// pages[i].width, pages[i].height — the pixel size of each file written
-
-await doc.dispose();
+  return doc.search('revenue');
+});
 ```
 
-The document's own facts are sync fields: `pageCount`, `version`, `isTagged`, `metadata` (title, author, subject, keywords, creator, producer, creation date) and `encryption` (the algorithm, the permissions and whether a password is needed; null when the document is not encrypted). Everything per page is a read of its own: `pageInfo` (size, rotation, label), `extractText` (plain / markdown / html), `search`, `render`, `extractImages`, `classifyPages` / `classifyDocument`, `bookmarkRanges`, `annotations(page)`, `signatures` / `verifySignatures` (digest and signer key; certificate trust is not checked), `validatePdfA` / `validatePdfUa`, `formFields`, `exportFormData` (FDF / XFDF), `xfa`, `attachments` / `extractAttachment`.
+`pdf.open` gives you the document itself for as long as you want. You must dispose it, so use `try` and `finally`:
+
+```dart
+final doc = await pdf.open(input);
+try {
+  // The sink is yours, so the library never closes it.
+  final text = MemorySink();
+  await doc.extractText(text, pages: PdfPages.range(0, 10));
+
+  // Each page goes to the sink that the function returns for it, row by row.
+  // The library closes that sink. `size` is PdfRenderSize.dpi(150) by default.
+  final pages = await doc.render(
+    (page) => FileSink.open(File('page-${page.page}.png')),
+    size: PdfRenderSize.fit(maxWidth: 200, maxHeight: 200),
+  );
+  // pages[i].width and pages[i].height: the pixel size of each file written
+} finally {
+  await doc.dispose();
+}
+```
+
+The facts that the open already read are fields of the document: `pageCount`, `version`, `isTagged`, `metadata` (title, author, subject, keywords, creator, producer and the dates) and `encryption` (the algorithm, the permissions and whether a password is needed; null when the document is not encrypted). Everything per page is a read of its own: `pageInfo`, `text` and `extractText`, `search`, `render` and `bitmap`, `extractImages`, `classifyPages` and `classifyDocument`, `bookmarkRanges`, `annotations`, `signatures` and `verifySignatures` (the digest and the signer key; the trust of the certificate is not checked), `validatePdfA` and `validatePdfUa`, `formFields`, `exportFormData`, `xfa`, and `attachments` with `extractAttachment`.
+
+A page selection is a `PdfPages`. A page range ends exclusive: `PdfPages.range(0, 10)` is pages 0 to 9, as in `List.sublist` and in Effective Dart's rule that a range has an inclusive start and an exclusive end. Other tools differ: PyMuPDF's `insert_pdf`, for one, includes both ends.
 
 ### Edit a document
 
-`pdf.edit` is for *many* changes to one PDF. It parses once, applies everything in memory, and writes once on save:
+`pdf.rewrite` is for *many* changes to one PDF. It parses once, applies each edit in memory and writes once when your function returns. If your function throws, nothing is written:
 
 ```dart
-final editor = await pdf.edit(source);
-
-await editor.setMetadata(const PdfMetadata(title: 'Q4 Report'));
-await editor.mergeFrom(appendix);
-await editor.deletePages(PdfPages.single(4));
-await editor.addWatermark(
-  'FINAL',
-  pages: PdfPages.single(0),
-  style: PdfWatermarkStyle(opacity: 0.15),
-);
-final report = await editor.reduceImages(PdfImagePolicy.ebook); // 150 ppi, JPEG q75
-print('${report.changed} images, ${report.bytesBefore} → ${report.bytesAfter} bytes');
-
-await editor.save(output); // see save options below
-await editor.dispose();
+await pdf.rewrite(input, output, (editor) async {
+  await editor.setMetadata(const PdfMetadata(title: 'Q4 Report'));
+  await editor.appendPages(PdfInput(appendix));
+  await editor.removePages(PdfPages.single(4));
+  await editor.addWatermark(
+    'FINAL',
+    pages: PdfPages.single(0),
+    style: PdfWatermarkStyle(opacity: 0.15),
+  );
+  final report = await editor.reduceImages(PdfImagePolicy.ebook);
+  print('${report.changed} images, ${report.bytesBefore} → ${report.bytesAfter} bytes');
+});
 ```
 
-Also on the editor: `mergeFrom` (all pages, or `pages:`; `password:` opens an encrypted source), `keepPages`, `rotatePages` / `setRotation` (absolute), `deletePages`, `addStamp` / `addImageStamp` (over a `PdfPages` set), `embedFile` (with description, mime type and relationship), `cropMargins`, `pageImages` / `setImageBounds`, `pageInfo` (media box and crop box) / `setMediaBox` / `setCropBox`, `flattenForms` / `flattenAnnotations` (each takes `pages:`, every page by default), `unembedStandardFonts`, `convertToPdfA`, `scrubMetadata` / `sanitize`, `metadata` / `setMetadata`, and the form fields below.
+Use `pdf.edit` when you must keep the editor open. It returns a handle that you save and dispose yourself:
 
-Every edit that takes pages checks all of them before it changes one: a page the document does not have, a page listed twice or an empty list throws `PdfInvalidArgument` and the document stays as it was.
+```dart
+final editor = await pdf.edit(input);
+try {
+  await editor.rotatePages(by: PdfRotation.r90);
+  await editor.save(output); // see the save options below
+} finally {
+  await editor.dispose();
+}
+```
+
+The edits are the members of `PdfEdits`: `setMetadata`, `rotatePages` and `setRotation`, `removePages`, `keepPages`, `reorderPages`, `movePage`, `addWatermark`, `addStamp` and `addImageStamp`, `addAttachment`, `cropMargins`, `setMediaBox` and `setCropBox`, `setImageBounds`, `flattenForms` and `flattenAnnotations`, `redact`, `reduceImages`, `unembedStandardFonts`, `convertToPdfA` and `sanitize`. An editor adds `appendPages`, `pageImages`, `pageInfo`, `metadata`, `pageCount`, the form fields below and the queued redactions further down.
+
+An edit that takes pages checks all of them before it changes one. A page that the document does not have is refused through the task, with a `PdfPageOutOfRange` for most edits, and the document stays as it was. A bad page set, such as an empty list or a page listed twice, never gets that far: `PdfPages.list` throws an `ArgumentError` when you build it.
+
+`keepPages` keeps the pages you name in the order of the document. To put pages in an order of your own, use `reorderPages` with a `PdfPageOrder`:
+
+```dart
+await editor.keepPages(PdfPages.range(0, 3));
+await editor.reorderPages(PdfPageOrder([2, 0, 1]));
+```
 
 A form field is edited through `editor.field(name)`:
 
@@ -459,50 +546,58 @@ await editor.field('agree').setValue(const PdfFormFieldValue.checked(true));
 await editor.field('name').setValue(const PdfFormFieldValue.none()); // clear it
 ```
 
-The other edits of a field are `setReadOnly`, `setRequired`, `setFlags`, `setTooltip`, `setBounds`, `setMaxLength`, `setAlignment`, `setBackgroundColor`, `setBorderColor`, `setBorderWidth`, `setAppearance` and `remove`. `setTooltip`, `setMaxLength`, `setBackgroundColor` and `setBorderColor` take null to remove what they set. A choice that is not an option of the field (an editable combo box takes any text) throws `PdfInvalidArgument` and changes nothing.
+The other edits of a field are `setReadOnly`, `setRequired`, `setFlags`, `setTooltip`, `setBounds`, `setMaxLength`, `setAlignment`, `setBackgroundColor`, `setBorderColor`, `setBorderWidth`, `setAppearance` and `remove`. `setTooltip`, `setMaxLength`, `setBackgroundColor` and `setBorderColor` take null to remove what they set. A choice that is not an option of the field (an editable combo box takes any text) throws `PdfEngineFailed` and changes nothing.
 
-Save options:
+Save options, a `PdfSave`:
 
-- `PdfSaveOptions.fullRewrite()` — default; recompresses and drops unused objects.
-- `PdfSaveOptions.fullRewrite(encryption: ...)` — encrypt on save (or `PdfEncryption.remove()` to strip it).
-- `PdfSaveOptions.incremental()` — keeps the original bytes and appends the changes, so an existing signature stays valid. An edit an append cannot carry (a removed page, a redaction, a content edit) throws `PdfIncrementalRefused` and writes nothing; save it with `fullRewrite()`.
+- `PdfSave.full()` is the default. It writes the file again, deflates the streams and drops unused objects. Its fields are `deflate`, `garbageCollect`, `useObjectStreams`, `mergeDuplicates`, `pruneResources` and `encryption`.
+- `PdfSave.full(encryption: ...)` encrypts on save. `PdfEncryption.remove()` strips the encryption, and `PdfEncryption.keep()` is the default.
+- `PdfSave.incremental()` keeps the original bytes and appends the changes, so an existing signature stays valid. An edit that an append cannot carry (a removed page, a redaction, a content edit) throws `PdfIncrementalRefused` and writes nothing.
+- `PdfSave.incrementalOrRewrite()` appends when it can and writes the file again when it cannot. The rewrite breaks a signature, as any full save does.
 
-Redaction removes the content, not just hides it. `redact` marks and applies the regions you give it in one step; `markRedaction` queues a mark and `applyRedactions` applies the queued ones:
+Pass it to `editor.save(output, save: ...)`, `pdf.rewrite(..., save: ...)`, `pdf.editOnce(..., save: ...)`, `pdf.resave` or `pdf.merge`.
+
+Redaction removes the content. It does not only hide it. `redact` marks and applies the regions you give it in one step. `markRedaction` queues marks, and `applyRedactions` applies the queued ones:
 
 ```dart
-final once = await editor.redact(0, [PdfRect(x: 72, y: 700, width: 200, height: 20)]);
+await pdf.rewrite(input, output, (editor) async {
+  final once = await editor.redact(0, [PdfRect(x: 72, y: 700, width: 200, height: 20)]);
 
-await editor.markRedaction(0, PdfRect(x: 72, y: 650, width: 200, height: 20));
-print(await editor.redactionCount(0)); // pending marks on this page
-final report = await editor.applyRedactions(); // gone for good
-print('${report.glyphsRemoved} glyphs and ${report.imagesRemoved} images removed');
-await editor.clearRedactions(); // or drop every queued mark instead
+  await editor.markRedaction(0, [PdfRect(x: 72, y: 650, width: 200, height: 20)]);
+  print(await editor.redactionCount(0)); // pending marks on this page
+  final report = await editor.applyRedactions(); // gone for good
+  print('${report.glyphsRemoved} glyphs and ${report.imagesRemoved} images removed');
+  await editor.clearRedactions(); // or drop every queued mark instead
+});
 ```
 
-`redact` applies only its own regions: marks queued earlier stay queued, and a later `applyRedactions` keeps what `redact` removed. `overlay:` is what is drawn over a region, a black box by default: `PdfRedactionOverlay.fill(PdfColor.red)` for another colour, `PdfRedactionOverlay.none()` for no box at all. An image under a region keeps a black patch where its pixels were removed whatever the overlay.
+`redact` applies only its own regions. Marks queued earlier stay queued, and a later `applyRedactions` keeps what `redact` removed. `overlay:` is what is drawn over a region, a black box by default: `PdfRedactionOverlay.fill(PdfColor.red)` for another colour, or `PdfRedactionOverlay.none()` for no box. An image under a region keeps a black patch where its pixels were removed, whatever the overlay.
 
 ### Build from scratch
 
-`pdf.build` hands you an empty PDF; add pages, then content:
+`pdf.buildTo` gives your function an empty document. Add pages, then content. The library saves the document when your function returns:
 
 ```dart
-final builder = await pdf.build();
-await builder.setMetadata(const PdfMetadata(title: 'Invoice #1042'));
+await pdf.buildTo(output, (builder) async {
+  await builder.setMetadata(const PdfMetadata(title: 'Invoice #1042'));
 
-final page = await builder.addPage();
-await page.heading(1, 'Invoice');
-await page.paragraph('Thank you for your purchase.');
-await page.text('Paid on time.', style: const PdfTextStyle(bold: true));
-await page.textField('notes', PdfRect(x: 50, y: 400, width: 300, height: 100));
-await page.linkUrl('https://example.com');
-
-await builder.save(output);
-await builder.dispose();
+  final page = await builder.addPage();
+  await page.heading(1, 'Invoice');
+  await page.paragraph('Thank you for your purchase.');
+  await page.text('Paid on time.', style: const PdfTextStyle(bold: true));
+  await page.text(
+    'example.com',
+    link: const PdfLink.url('https://example.com'),
+  );
+  await page.textField('notes', PdfRect(x: 50, y: 400, width: 300, height: 100));
+});
 ```
 
-Pages: `addPage()` (A4), `addPage(PdfPageSize.letter())`, `addPage(PdfPageSize.custom(400, 300))`, and `addImagePage` for a page that holds one picture — it takes the picture's own size, one point per pixel, unless you name one. Photos become a PDF with `pdf.imagesToPdf([a, b], output)`.
+Use `pdf.build` when you must keep the builder open. It returns a handle with `save(output)` and `dispose()`.
 
-Content: `text` (with a `PdfTextStyle` for the font, size, weight, slant and colour), `heading`, `paragraph`, `space`, `image`, `rect` (filled and/or stroked), `line`, `markup` (highlight, underline, strikeout, squiggly), `table`, `stickyNote`, `columns`, `footnote`, `watermark`; form fields (`textField`, `checkbox`, `radioGroup`, `comboBox`, `pushButton`, `signatureField`) with Acrobat JS actions (`fieldFormat`, `fieldValidate`, `fieldCalculate`, `fieldKeystroke`); links (`linkUrl`, `linkPage`).
+Pages: `addPage()` (A4), `addPage(PdfPageSize.letter())`, `addPage(PdfPageSize.points(400, 300))`, and `addImagePage` for a page that holds one picture. That page has the size of the picture, one point per pixel, unless you name one. Photos become a PDF with `pdf.imagesToPdf([a, b], output)`.
+
+Content: `text` and `appendText` (with a `PdfTextStyle` for the font, size, weight, slant and colour, and a `PdfLink` or `PdfMarkup` for the text), `heading`, `paragraph`, `space`, `newline`, `horizontalRule`, `textIn`, `image`, `rect` (filled, stroked or both), `line`, `table`, `stickyNote`, `freeText`, `stamp`, `columns`, `footnote` and `watermark`. Form fields: `textField`, `checkbox`, `radioGroup`, `comboBox`, `pushButton` and `signatureField`, each with `PdfFieldScripts` for Acrobat JavaScript actions. Page actions: `onOpen` and `onClose`. A position is a `PdfPoint`.
 
 ```dart
 await page.rect(
@@ -510,8 +605,12 @@ await page.rect(
   fill: PdfColor.red,
   stroke: const PdfStroke(color: PdfColor.black, width: 2),
 );
-await page.line((50, 300), (250, 380), stroke: const PdfStroke(dash: [3, 2]));
-await page.markup(PdfMarkupKind.highlight);
+await page.line(const PdfPoint(50, 300), const PdfPoint(250, 380),
+    stroke: const PdfStroke(dash: [3, 2]));
+await page.text(
+  'Important',
+  markup: const PdfMarkup(PdfMarkupKind.highlight),
+);
 await page.table(
   const [
     PdfTableColumn('SKU', width: 100),
@@ -527,12 +626,12 @@ await page.table(
 
 ### CJK & emoji in form fields
 
-Filling a form with text the field's own font cannot draw (Japanese, Korean, Chinese, emoji) needs a fallback font. The binary doesn't bundle one (that's multiple MB most apps never use) — you register your own once, and every later fill uses it.
+Filling a form with text that the font of the field cannot draw (Japanese, Korean, Chinese, emoji) needs a fallback font. The binary does not include one, because that is many MB that most apps never use. You register your own once, and every later fill uses it.
 
 **1. Download a font.** Any complete `.ttf` or `.otf` file works:
 
-- For Chinese, Japanese, or Korean: pick the Noto Sans font for your language — [Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC) (Simplified Chinese), [Noto Sans TC](https://fonts.google.com/noto/specimen/Noto+Sans+TC) (Traditional Chinese), [Noto Sans JP](https://fonts.google.com/noto/specimen/Noto+Sans+JP) (Japanese), or [Noto Sans KR](https://fonts.google.com/noto/specimen/Noto+Sans+KR) (Korean). If your forms mix several of these languages, [notofonts/noto-cjk](https://github.com/notofonts/noto-cjk) has combined files that cover all of them at once — a bigger file, but one registration.
-- For emoji: [Noto Emoji](https://fonts.google.com/noto/specimen/Noto+Emoji). Use this black-and-white font: baked emoji come out as black-and-white shapes, like printed text. Color is not possible here — PDF text is drawn from character shapes in one color, and no PDF tool can bake a color emoji font into text. (The stored value keeps the real emoji character either way.)
+- For Chinese, Japanese or Korean, pick the Noto Sans font for your language: [Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC) (Simplified Chinese), [Noto Sans TC](https://fonts.google.com/noto/specimen/Noto+Sans+TC) (Traditional Chinese), [Noto Sans JP](https://fonts.google.com/noto/specimen/Noto+Sans+JP) (Japanese) or [Noto Sans KR](https://fonts.google.com/noto/specimen/Noto+Sans+KR) (Korean). If your forms mix several of these languages, [notofonts/noto-cjk](https://github.com/notofonts/noto-cjk) has combined files that cover all of them. The file is bigger, but you register it once.
+- For emoji, use [Noto Emoji](https://fonts.google.com/noto/specimen/Noto+Emoji). Use this black-and-white font: baked emoji come out as black-and-white shapes, like printed text. Colour is not possible here. PDF text is drawn from character shapes in one colour, and no PDF tool can bake a colour emoji font into text. (The stored value keeps the real emoji character either way.)
 
 **2. Put the file in your app's assets** and declare it in `pubspec.yaml`:
 
@@ -552,33 +651,36 @@ await pdf.registerFallbackFont(
 
 `PdfFallbackFontKind.emoji` works the same way, with the emoji font. One registration covers the whole `Pdf` instance, on every platform.
 
-The font stays in memory after you register it — that is what makes every later fill fast. On native the engine holds one shared copy; on web each engine worker holds its own copy (workers start only when needed). So when one language is enough, prefer the single-language file over the combined one.
+The font stays in memory after you register it. That is why every later fill is fast. Each executor holds its own copy of the font, and the font is registered again whenever a `Pdf` leases an executor. So when one language is enough, use the single-language file and not the combined one.
 
-Without a registered font the fill still succeeds — the value is stored correctly and readers with their own fonts display it; only the baked-in (flattened) appearance falls back to the field's font.
+Without a registered font, the fill still succeeds. The value is stored correctly, and readers with their own fonts show it. Only the flattened appearance falls back to the font of the field.
 
 ---
 
 ## Error handling
 
-Every failure is a typed subclass of `PdfError`: no string matching, no `PlatformException`. Catch the cases you handle specially; let the rest fall to a catch-all. Each error carries a human-readable `message`.
+Every runtime failure is a typed subclass of `PdfError`, and it reaches you through the task: no string matching and no `PlatformException`. Catch the cases that you handle in a special way, and let the rest fall to a catch-all. Each error has a `message` that a person can read.
 
 ```dart
 try {
-  final doc = await pdf.open(source);
-  // ... use the document, then doc.dispose()
+  await pdf.read(PdfInput(source), (doc) async {
+    // ... use the document
+  });
 } on PdfPasswordRequired {
-  // encrypted — retry with pdf.open(source, password: '...')
+  // encrypted: open it again with PdfInput(source, password: '...')
 } on PdfWrongPassword {
-  // wrong password — ask the user again
+  // wrong password: ask the user again
 } on PdfCorrupted catch (e) {
   print('Not a valid PDF: ${e.message}');
 } on PdfError catch (e) {
-  // anything else — I/O failure, unsupported feature, page out of range...
+  // anything else: I/O failure, unsupported feature, page out of range...
   print(e.message);
 }
 ```
 
-`PdfError` is sealed, so you can also `catch (e)` once and `switch` over it, and the compiler flags any case you haven't handled. `PdfCancelled` is part of the same hierarchy (the one [Cancellation](#cancellation) throws).
+`PdfError` is sealed, so you can also `catch (e)` once and `switch` over it. The compiler then flags each case that you did not handle. `PdfCancelled` is part of the same hierarchy (the one that [Cancellation](#cancellation) throws).
+
+A mistake in your own code is not a `PdfError`. An empty page list, a negative page, an empty `merge` list or a second call on a one-shot throws an `ArgumentError` or a `StateError` at the call, before any work starts. Fix the code. Do not catch it.
 
 ---
 
@@ -653,11 +755,11 @@ How do you know what to keep? Each capability covers a small set of methods. Cor
 | Capability | Keep it if you call | Also brings | Adds (native) |
 |---|---|---|---|
 | `core` | everything else — merge, split, forms, watermark, encrypt, build… | — | always included (~6.7 MB) |
-| `render` | `doc.render()`, `editor.reduceImages()`, the `compress` one-shot, `editor.redact()`, `editor.markRedaction()`, `editor.applyRedactions()` | — | +4.8 MB |
-| `signatures` | `sign()`, `doc.signatures()`, `doc.verifySignatures()` | — | +1.0 MB |
-| `pdfa` | `doc.validatePdfA()`, `doc.validatePdfUa()`, `convertToPdfA` | — | +0.1 MB |
-| `extract` | `doc.extractText()`, `doc.search()`, `doc.classifyPages()`, `doc.classifyDocument()` | — | +3.2 MB |
-| `office` | `convertTo`, `convertToPdf` (DOCX / PPTX / XLSX) | `extract`, automatically | +2.9 MB on top of `extract` |
+| `render` | `doc.render()`, `doc.bitmap()`, `doc.extractImages()`, `editor.reduceImages()`, `pdf.compress()`, `editor.redact()`, `editor.markRedaction()`, `editor.applyRedactions()` | — | +4.8 MB |
+| `signatures` | `pdf.sign()`, `doc.signatures()`, `doc.verifySignatures()` | — | +1.0 MB |
+| `pdfa` | `doc.validatePdfA()`, `doc.validatePdfUa()`, `editor.convertToPdfA()` | — | +0.1 MB |
+| `extract` | `doc.extractText()`, `doc.text()`, `doc.search()`, `doc.classifyPages()`, `doc.classifyDocument()` | — | +3.2 MB |
+| `office` | `pdf.convertToOffice()`, `pdf.convertFromOffice()` (DOCX / PPTX / XLSX) | `extract`, automatically | +2.9 MB on top of `extract` |
 
 Dependencies are handled for you: `keep: [office]` switches on `extract` as well. Costs are measured one capability at a time, and capabilities share some code — so a combination can total a little less than the sum of its rows.
 
@@ -750,7 +852,7 @@ Internally the modes differ in *how* the WASM engine gets your bytes: the top tw
 All three solve the same puzzle (synchronous WASM code needs bytes that arrive asynchronously from Dart), just in different ways:
 
 - **JSPI** (JavaScript Promise Integration) — the browser lets the WASM call pause and resume while it waits for the next chunk. Cleanest path, no setup; needs a recent browser. Used automatically where available.
-- **Atomics** — the WASM side blocks on a `SharedArrayBuffer` while a worker fills it. Works on older browsers, but `SharedArrayBuffer` only switches on when your site sends two security headers (see below).
+- **Atomics** — the WASM side blocks on a `SharedArrayBuffer` while the main thread fills it. Works on older browsers, but `SharedArrayBuffer` only switches on when your site sends two security headers (see below).
 - **OPFS** (Origin Private File System) — when neither of the above is available, the package copies your file into the browser's private on-disk storage and reads from there. Works everywhere; the copy means a slower first byte and a little disk use.
 
 You never choose; the package tries JSPI, then Atomics, then OPFS, and uses the first that works.
@@ -800,14 +902,14 @@ flutter run -d chrome --cross-origin-isolation
 
 A tiny wishlist — what the shipped package doesn't do *yet*, and what to grab in the meantime. For the full engine-vs-shipped picture, see the [capability roadmap](docs/CAPABILITY_ROADMAP.md).
 
-- **A viewer to display PDFs.** This is a manipulation library, not a UI widget. To put a PDF on screen, use [`pdfx`](https://pub.dev/packages/pdfx) or [`flutter_pdfview`](https://pub.dev/packages/flutter_pdfview). It pairs well: pre-process here (merge, decrypt, watermark), display there. (It does render pages to image bytes via `doc.render(...)` if you'd rather draw your own surface.)
+- **A viewer to display PDFs.** This is a manipulation library, not a UI widget. To put a PDF on screen, use [`pdfx`](https://pub.dev/packages/pdfx) or [`flutter_pdfview`](https://pub.dev/packages/flutter_pdfview). It pairs well: pre-process here (merge, decrypt, watermark), display there. (It does render pages to image bytes with `doc.bitmap(...)` or `doc.render(...)`, if you would rather draw your own surface.)
 - **OCR and table extraction.** `extract` and `search` read the text already in a PDF, so a scanned page (just an image) comes back empty, and clean rows-and-columns is a separate problem. The engine *has* both (a PaddleOCR pipeline and ML table detection); the default build leaves them out so it doesn't pull the ONNX runtime and ~12 MB of models into every install. An opt-in build is on the [roadmap](docs/CAPABILITY_ROADMAP.md); until then, run them externally ([Tesseract](https://github.com/tesseract-ocr/tesseract), [Camelot](https://github.com/camelot-dev/camelot), or a cloud API) and feed the result back. Want them first-party? [Open an issue](https://github.com/whuppi/pdf_manipulator/issues); it's how we gauge demand.
 
 ---
 
 ## Docs
 
-The README covers the everyday stuff. wanna go deeper?
+The README covers the everyday tasks. These pages go deeper:
 
 | Doc | What's inside |
 |---|---|

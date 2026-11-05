@@ -20,7 +20,7 @@ released=5.0.1
 
 # The free names a snippet may use, with the types the version gives them.
 # Change a row only when an entry needs a new free name.
-before_params='Pdf pdf, DataSource source, DataSink output, PdfDocument doc, PdfEditor editor, PdfBuilder builder, PdfPageBuilder page, PdfRect rect, Uint8List bytes, List<DataSource> sources, List<DataSource> images, PdfFallbackFontKind kind'
+before_params='Pdf pdf, DataSource source, DataSink output, PdfDoc doc, PdfEditor editor, PdfBuilder builder, PdfPageBuilder page, PdfRect rect, Uint8List bytes, List<DataSource> sources, List<DataSource> images, PdfFallbackFontKind kind'
 after_params='Pdf pdf, DataSource source, DataSink output, PdfDocument doc, PdfEditor editor, PdfBuilder builder, PdfPageBuilder page, PdfRect rect, Uint8List bytes, List<DataSource> sources, List<DataSource> images, PdfFallbackFontKind kind'
 
 tmp=$(mktemp -d)
