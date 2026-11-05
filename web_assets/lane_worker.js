@@ -17,7 +17,10 @@
 // carries `lease`: one lane's tenure on this worker, a number from one
 // counter per worker, never reused. The worker serves the current lease; a
 // larger one opens a new tenure when the worker is idle; anything else is
-// dropped unread. Every message the worker posts echoes the lease it serves.
+// not served. An exec, reset or opfsWrite of a larger lease that the busy
+// worker cannot admit is answered with an `error` (protocol: true) under its
+// own lease; every other message of another tenure is dropped unread. Every
+// message the worker posts echoes the lease of the message it answers.
 //
 // Dart → worker:
 //   init         { protocol, ioMode, baseUrl?, wasmModule? } → ready|error
@@ -32,7 +35,8 @@
 //                | error { lease, jobId, message, trap?, protocol?, mem }
 //                  (trap: the wasm instance trapped; the lane must end;
 //                   protocol: the exec was refused because the worker was
-//                   busy with another exec or a reset, and never started)
+//                   busy with another exec or a reset, or not serving its
+//                   lease, and never started)
 //   reset        { lease } → resetDone { lease, mem } | error { lease,
 //                  message, protocol? }: a fresh engine state in this
 //                  worker, same wasm instance. Refused while busy.
@@ -40,7 +44,7 @@
 //   chunkAck     { lease, error?, cancelled? }             (JSPI writes)
 //   releaseHeld  { lease, heldGroupId }
 //   opfsWrite    { lease, jobId, filename, chunk, offset, last }
-//                → opfsWriteAck
+//                → opfsWriteAck | error { lease, jobId, protocol: true, message }
 //   opfsDrop     { lease, jobId }
 //
 // worker → Dart:
@@ -96,6 +100,17 @@ function admit(msg) {
   return false;
 }
 
+// A message of a tenure that has ended gets no answer: its adapter is gone.
+// A newer one that is not admitted (the worker is busy) is a live adapter
+// waiting for an answer, so it gets one under its own lease.
+function refuseLease(msg, what) {
+  if (typeof msg.lease !== 'number' || msg.lease < lease) return;
+  self.postMessage({
+    type: 'error', lease: msg.lease, jobId: msg.jobId, protocol: true,
+    message: what + ' refused: lease ' + msg.lease + ' is not admitted while the worker serves ' + lease,
+  });
+}
+
 // A handler is not re-entrant: under JSPI a second exec arrives while the
 // first is suspended, and a reset would pull the engine state from under
 // it. The adapter never sends one, so this answers a bug, not a case.
@@ -126,6 +141,9 @@ let lastPollAt = 0;          // performance.now() of the last URL poll
 // One sync XHR costs about 0.1 ms in Chrome, so polling at most every 10 ms
 // takes about 1% of a CPU-bound job and keeps the cancel latency near 10 ms.
 const CANCEL_POLL_MS = 10;
+// A poll that has not answered by now is a browser too busy to serve it, not
+// a revoked URL (that fails at once): the job is not cancelled by it.
+const CANCEL_POLL_TIMEOUT_MS = 500;
 let jspiReadResolve = null;
 let jspiWriteResolve = null;
 
@@ -138,7 +156,9 @@ async function dropReader(id, r) {
   if (r.opfsHandle) { try { r.opfsHandle.close(); } catch (_) {} }
   readers.delete(id);
   if (r.opfsFile) {
-    try { (await laneDir()).removeEntry(r.opfsFile); } catch (_) {}
+    // Awaited: whoever drops a reader (exec's finally, releaseHeld, reset)
+    // must not return while its file is still being deleted.
+    try { await (await laneDir()).removeEntry(r.opfsFile); } catch (_) {}
   }
 }
 
@@ -220,10 +240,11 @@ function hostCancelled() {
     try {
       const xhr = new XMLHttpRequest();
       xhr.open('GET', activeCancelUrl, false);
+      xhr.timeout = CANCEL_POLL_TIMEOUT_MS;
       xhr.send();
       if (xhr.status !== 200) cancelSeen = 1;
-    } catch (_) {
-      cancelSeen = 1;
+    } catch (err) {
+      if (!(err && err.name === 'TimeoutError')) cancelSeen = 1;
     }
     lastPollAt = now;
   }
@@ -629,7 +650,7 @@ self.onmessage = async (e) => {
     }
 
     case 'opfsWrite': {
-      if (!admit(msg)) return;
+      if (!admit(msg)) { refuseLease(msg, 'opfsWrite'); return; }
       try {
         await track(opfsWrite(msg.jobId, msg.filename, msg.chunk, msg.offset, msg.last));
         self.postMessage({ type: 'opfsWriteAck', lease });
@@ -641,7 +662,7 @@ self.onmessage = async (e) => {
 
     case 'reset': {
       if (busy !== null) { refuseBusy(msg, 'reset'); return; }
-      if (!admit(msg)) return;
+      if (!admit(msg)) { refuseLease(msg, 'reset'); return; }
       busy = 'reset';
       try {
         const bytes = await resetLane();
@@ -656,7 +677,7 @@ self.onmessage = async (e) => {
 
     case 'exec': {
       if (busy !== null) { refuseBusy(msg, 'exec'); return; }
-      if (!admit(msg)) return;
+      if (!admit(msg)) { refuseLease(msg, 'exec'); return; }
       busy = 'exec';
       try {
         const responseBytes = await exec(msg);

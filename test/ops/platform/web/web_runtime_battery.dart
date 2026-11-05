@@ -22,11 +22,18 @@ import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 import 'package:web/web.dart' as web;
 
-import 'package:pdf_manipulator/src/runtime/web/lane.dart' show WebLaneHost;
+import 'package:pdf_manipulator/src/runtime/pool.dart' show ExecutorPool;
+import 'package:pdf_manipulator/src/runtime/web/lane.dart'
+    show WebLane, WebLaneHost;
 
 import '../../../fixtures/handwritten.dart';
 import '../../../harness/test_source_sink.dart';
 import '../../../harness/timeouts.dart';
+
+/// How long a terminated worker's directory may take to be deleted: the
+/// host retries its delete with a doubling delay, 12.8 s in all before it
+/// gives up.
+const _reapBudget = Duration(seconds: 15);
 
 /// A sink whose first write blocks until [gate] completes.
 class _BlockedSink implements DataSink {
@@ -321,12 +328,36 @@ void registerWebPlatformTests({
         }
         await pdf.dispose();
 
-        // Sweeps are fire-and-forget AND convergent-with-backoff (the
-        // browser reaps a dead worker's file handles on its own clock,
-        // worst-case retry ≈ 6.4s) — the verifier must out-wait the
-        // converger.
+        // Two kinds of worker can hold files, and only one of them needs
+        // the browser. A live worker is idle in the pool once its lane's
+        // reset has answered, so its directory is empty at once. A
+        // terminated worker's directory is deleted when the browser has
+        // reaped its handles, on the browser's clock: the only wait here.
+        // Leasing every pooled executor waits, event by event, for each
+        // lane still draining and resetting, and names the live workers.
+        final pool = ExecutorPool.of(
+          WebLaneHost(laneWorkerUrl: workerUrl(), forceMode: mode),
+        );
+        final leases = [
+          for (var i = pool.liveCount; i > 0; i--) await pool.acquire().lease,
+        ];
+        final live = {
+          for (final lease in leases) (lease.lane as WebLane).executor.opfsDir,
+        };
+        for (final lease in leases) {
+          await pool.release(lease, untouched: true);
+        }
+        final unclean = (await _laneResidue()).where(
+          (path) => live.contains(path.split('/')[1]),
+        );
+        expect(
+          unclean,
+          isEmpty,
+          reason: 'a live worker kept a pre-copy file after its reset',
+        );
+
         var residue = await _laneResidue();
-        final deadline = DateTime.now().add(const Duration(seconds: 12));
+        final deadline = DateTime.now().add(_reapBudget);
         while (residue.isNotEmpty && DateTime.now().isBefore(deadline)) {
           await Future<void>.delayed(const Duration(milliseconds: 100));
           residue = await _laneResidue();
@@ -339,7 +370,17 @@ void registerWebPlatformTests({
               '(jspi/atomics modes must never create any at all)',
         );
       },
-      timeout: t(1),
+      timeout: t(30),
     );
+
+    test('no worker was lost to a failed reset', () {
+      // A failed reset retires its worker and the next lease boots a new
+      // one, so it never shows in a result: only in this count.
+      expect(
+        ExecutorPool.totalResetFailures,
+        0,
+        reason: 'a reset failed and cost a cold boot',
+      );
+    }, timeout: t(1));
   });
 }

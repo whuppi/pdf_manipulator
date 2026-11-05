@@ -138,6 +138,7 @@ class ExecutorPool {
 
   static final Map<String, ExecutorPool> _shared = {};
   static int _totalBoots = 0;
+  static int _totalResetFailures = 0;
 
   /// The pool every instance of [host]'s configuration shares, page- or
   /// process-wide. The first use of the package creates it and boots one
@@ -151,6 +152,11 @@ class ExecutorPool {
   /// Executors booted by every pool since the process started. Tests count
   /// churn with it; nothing decides on it.
   static int get totalBoots => _totalBoots;
+
+  /// Resets that failed in every live pool since the process started: each
+  /// one cost an executor, which a cold boot replaced. Tests assert it is zero;
+  /// nothing decides on it.
+  static int get totalResetFailures => _totalResetFailures;
 
   final LaneHost _host;
 
@@ -225,9 +231,17 @@ class ExecutorPool {
     try {
       final draining = lease.lane.drain();
       intact = await draining;
-      if (intact && !untouched) await lease.lane.reset();
     } catch (_) {
       intact = false;
+    }
+    if (intact && !untouched) {
+      try {
+        await lease.lane.reset();
+      } catch (_) {
+        // A reset cut short by the pool's own disposal failed nothing.
+        if (!_disposed) _totalResetFailures++;
+        intact = false;
+      }
     }
     if (_disposed || !intact || executor.heapBytes >= keepBytes) {
       _retire(entry);

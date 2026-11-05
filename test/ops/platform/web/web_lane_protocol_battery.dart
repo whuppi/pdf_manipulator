@@ -28,6 +28,7 @@ import '../../../fixtures/handwritten.dart';
 import '../../../harness/slow_source.dart';
 import '../../../harness/test_source_sink.dart';
 import '../../../harness/timeouts.dart';
+import '../../../harness/worker_prelude.dart';
 
 Uint8List _open(int sourceLength) =>
     bin.encodeRequest('open', {'sourceLength': sourceLength, 'password': null});
@@ -58,6 +59,8 @@ String? _type(JSObject m) => (m['type'] as JSString?)?.toDart;
 
 int? _num(JSObject m, String key) => (m[key] as JSNumber?)?.toDartInt;
 
+String? _str(JSObject m, String key) => (m[key] as JSString?)?.toDart;
+
 bool _flag(JSObject m, String key) => (m[key] as JSBoolean?)?.toDart ?? false;
 
 Uint8List _bytesOf(JSObject m, String key) =>
@@ -66,31 +69,20 @@ Uint8List _bytesOf(JSObject m, String key) =>
 bool Function(JSObject) _is(String type, {int? jobId}) =>
     (m) => _type(m) == type && (jobId == null || _num(m, 'jobId') == jobId);
 
-/// The files in every worker directory of this page session.
-Future<int> _opfsFileCount() async {
-  final root = await web.window.navigator.storage.getDirectory().toDart;
-  final web.FileSystemDirectoryHandle ours;
+/// The files in one worker's own directory: another worker's files, live or
+/// left by one the browser has not reaped yet, say nothing about this one.
+Future<int> _opfsFileCount(String workerDir) async {
   try {
-    ours = await root.getDirectoryHandle(WebLaneHost.opfsRootDir).toDart;
+    final root = await web.window.navigator.storage.getDirectory().toDart;
+    final ours = await root.getDirectoryHandle(WebLaneHost.opfsRootDir).toDart;
+    final session = await ours
+        .getDirectoryHandle(WebLaneHost.opfsSessionId)
+        .toDart;
+    final dir = await session.getDirectoryHandle(workerDir).toDart;
+    return (await _names(dir)).length;
   } catch (_) {
-    return 0;
+    return 0; // the worker never made its directory
   }
-  final web.FileSystemDirectoryHandle session;
-  try {
-    session = await ours.getDirectoryHandle(WebLaneHost.opfsSessionId).toDart;
-  } catch (_) {
-    return 0;
-  }
-  var count = 0;
-  for (final worker in await _names(session)) {
-    try {
-      final dir = await session.getDirectoryHandle(worker).toDart;
-      count += (await _names(dir)).length;
-    } catch (_) {
-      count++; // a file at session level
-    }
-  }
-  return count;
 }
 
 Future<List<String>> _names(web.FileSystemDirectoryHandle dir) async {
@@ -103,6 +95,89 @@ Future<List<String>> _names(web.FileSystemDirectoryHandle dir) async {
   }
   return names;
 }
+
+/// Worker prelude: the worker stops at the OPFS call a test names until the
+/// test says go. `removeEntry` holds every delete, `open` holds the open of a
+/// pre-copied file; each gate opens once and stays open. A held call posts
+/// `gated`, a finished delete posts `removed`.
+const _gates = r'''
+const dir = FileSystemDirectoryHandle.prototype;
+const gates = {};
+for (const what of ['open', 'removeEntry']) {
+  gates[what] = new Promise((go) => { gates[what + 'Go'] = go; });
+}
+self.addEventListener('message', (e) => {
+  const m = e.data;
+  if (m && m.type === 'gateOpen') {
+    gates[m.what + 'Go']();
+    e.stopImmediatePropagation();
+  }
+});
+function held(what, name) {
+  postMessage({ type: 'gated', what, name });
+  return gates[what];
+}
+const removeEntry = dir.removeEntry;
+dir.removeEntry = async function (name, options) {
+  await held('removeEntry', name);
+  const result = await removeEntry.call(this, name, options);
+  postMessage({ type: 'removed', name });
+  return result;
+};
+const getFileHandle = dir.getFileHandle;
+dir.getFileHandle = async function (name, options) {
+  if (!options) await held('open', name);
+  return getFileHandle.call(this, name, options);
+};
+''';
+
+/// Worker prelude: drops every `opfsWrite` unanswered, as a worker that has
+/// died or hung would, and says so with `dropped`.
+const _dropsOpfsWrite = r'''
+self.addEventListener('message', (e) => {
+  if (e.data && e.data.type === 'opfsWrite') {
+    e.stopImmediatePropagation();
+    postMessage({ type: 'dropped' });
+  }
+});
+''';
+
+/// Worker prelude: once armed by `xhrArm`, the first synchronous XHR send
+/// throws the TimeoutError a browser too busy to answer produces, and every
+/// send reports the timeout it was given.
+const _timesOutOnePoll = r'''
+let armed = false;
+let thrown = false;
+self.addEventListener('message', (e) => {
+  if (e.data && e.data.type === 'xhrArm') {
+    armed = true;
+    e.stopImmediatePropagation();
+  }
+});
+const send = XMLHttpRequest.prototype.send;
+XMLHttpRequest.prototype.send = function (...args) {
+  if (!armed) return send.apply(this, args);
+  postMessage({ type: 'xhrSend', timeout: this.timeout });
+  if (!thrown) {
+    thrown = true;
+    postMessage({ type: 'xhrTimeout' });
+    throw new DOMException('the poll timed out', 'TimeoutError');
+  }
+  return send.apply(this, args);
+};
+''';
+
+/// Every answer is a protocol refusal, for these jobs in this order.
+void _expectRefused(List<JSObject> answers, List<int?> jobIds) {
+  expect([
+    for (final a in answers) _type(a),
+  ], List.filled(jobIds.length, 'error'));
+  expect([for (final a in answers) _num(a, 'jobId')], jobIds);
+  expect(answers.every((a) => _flag(a, 'protocol')), isTrue);
+}
+
+bool Function(JSObject) _gated(String what) =>
+    (m) => _type(m) == 'gated' && (m['what'] as JSString?)?.toDart == what;
 
 /// A bare worker the test talks to in raw messages. It records everything
 /// the worker posts, in order, so a test can also prove a message got no
@@ -119,8 +194,13 @@ class _RawWorker {
     });
   }
 
-  static Future<_RawWorker> take(WebLaneHost host) async =>
-      _RawWorker._(await host.boot() as WebExecutor);
+  static Future<_RawWorker> take(WebLaneHost host, {String? prelude}) async =>
+      _RawWorker._(
+        await (prelude == null
+                ? host.boot()
+                : withWorkerPrelude(prelude, host.boot))
+            as WebExecutor,
+      );
 
   final WebExecutor _worker;
   final history = <JSObject>[];
@@ -142,6 +222,10 @@ class _RawWorker {
     Uint8List request, {
     List<int> sourceLengths = const [],
     List<String>? opfsFiles,
+    List<int> keepSources = const [],
+    int sinkCount = 0,
+    int? heldGroupId,
+    String? cancelUrl,
   }) {
     final buffer = Uint8List.fromList(request).buffer.toJS;
     post(
@@ -151,14 +235,49 @@ class _RawWorker {
         'jobId': jobId.toJS,
         'requestBytes': buffer,
         'sourceLengths': [for (final n in sourceLengths) n.toJS].toJS,
-        'sinkCount': 0.toJS,
-        'keepSources': <JSAny?>[].toJS,
+        'sinkCount': sinkCount.toJS,
+        'keepSources': [for (final i in keepSources) i.toJS].toJS,
+        if (heldGroupId != null) 'heldGroupId': heldGroupId.toJS,
         if (opfsFiles != null)
           'opfsFiles': [for (final f in opfsFiles) f.toJS].toJS,
+        if (cancelUrl != null) 'cancelUrl': cancelUrl.toJS,
       },
       [buffer],
     );
   }
+
+  /// Pre-copies [bytes] into the worker's directory as [filename], whole.
+  void precopy(int lease, int jobId, String filename, Uint8List bytes) {
+    final chunk = Uint8List.fromList(bytes).buffer.toJS;
+    post(
+      'opfsWrite',
+      {
+        'lease': lease.toJS,
+        'jobId': jobId.toJS,
+        'filename': filename.toJS,
+        'chunk': chunk,
+        'offset': 0.toJS,
+        'last': true.toJS,
+      },
+      [chunk],
+    );
+  }
+
+  /// Lets the worker pass the [what] gate of [_gates].
+  void openGate(String what) => post('gateOpen', {'what': what.toJS});
+
+  /// The answers the worker gave under [lease], in arrival order.
+  List<JSObject> answers(int lease) => [
+    for (final m in history)
+      if (_num(m, 'lease') == lease &&
+          const {
+            'result',
+            'error',
+            'resetDone',
+            'opfsWriteAck',
+          }.contains(_type(m)))
+        m,
+  ];
 
   /// The first message that matches, already posted or yet to come.
   Future<JSObject> waitFor(bool Function(JSObject) test) {
@@ -314,9 +433,7 @@ void registerWebLaneProtocolTests({
       );
     }, timeout: t(10));
 
-    test('a reset gives the worker a fresh engine state', () async {
-      final executor = await host.boot() as WebExecutor;
-      addTearDown(executor.terminate);
+    Future<void> expectResetGivesFreshState(WebExecutor executor) async {
       final lane = executor.beginLane() as WebLane;
       final first = src(minimalPdf);
       final opened = await lane.submit(
@@ -331,14 +448,18 @@ void registerWebLaneProtocolTests({
       final old = peekResponseHandleId(opened.bytes)!;
       expect(opened.heldTokens, hasLength(1));
       if (mode == PdfIoMode.opfs) {
-        expect(await _opfsFileCount(), greaterThan(0));
+        expect(await _opfsFileCount(executor.opfsDir!), greaterThan(0));
       }
 
       final mem = await lane.reset();
       expect(mem, isNotNull);
       expect(mem, greaterThan(0), reason: 'resetDone carries the wasm memory');
       if (mode == PdfIoMode.opfs) {
-        expect(await _opfsFileCount(), 0, reason: 'the reset left a file');
+        expect(
+          await _opfsFileCount(executor.opfsDir!),
+          0,
+          reason: 'the reset left a file',
+        );
       }
 
       final gone = await lane.submit(
@@ -384,6 +505,12 @@ void registerWebLaneProtocolTests({
         ),
       );
       expect(_failure(text.bytes), isEmpty);
+    }
+
+    test('a reset gives the worker a fresh engine state', () async {
+      final executor = await host.boot() as WebExecutor;
+      addTearDown(executor.terminate);
+      await expectResetGivesFreshState(executor);
     }, timeout: t(15));
 
     test('the worker serves the current lease, adopts a newer one and '
@@ -501,5 +628,252 @@ void registerWebLaneProtocolTests({
           expect(ran != refused, isTrue, reason: 'the second exec: $second');
       }
     }, timeout: t(10));
+
+    if (mode == PdfIoMode.opfs) {
+      test('a reset is judged by its own directory, not by the files of '
+          'workers that are gone', () async {
+        final dead = await host.boot() as WebExecutor;
+        final held = src(minimalPdf);
+        await (dead.beginLane() as WebLane).submit(
+          LaneJob(
+            jobId: 1,
+            request: _open(held.length),
+            sources: [held],
+            sinks: const [],
+            keepSources: const {0},
+          ),
+        );
+        expect(await _opfsFileCount(dead.opfsDir!), greaterThan(0));
+        dead.terminate();
+        // The browser reaps the dead worker's directory on its own clock;
+        // a file the page plants in a directory of its own stays until the
+        // test removes it, whatever the reaper does.
+        final session = await WebLaneHost.sessionDir();
+        const strayDir = 'pdf_lane_stray_worker';
+        final stray = await session
+            .getDirectoryHandle(
+              strayDir,
+              web.FileSystemGetDirectoryOptions(create: true),
+            )
+            .toDart;
+        addTearDown(() async {
+          try {
+            await session
+                .removeEntry(
+                  strayDir,
+                  web.FileSystemRemoveOptions(recursive: true),
+                )
+                .toDart;
+          } catch (_) {}
+        });
+        await stray
+            .getFileHandle(
+              'pdf_lane_stray',
+              web.FileSystemGetFileOptions(create: true),
+            )
+            .toDart;
+
+        final executor = await host.boot() as WebExecutor;
+        addTearDown(executor.terminate);
+        await expectResetGivesFreshState(executor);
+      }, timeout: t(15));
+
+      test(
+        'exec and reset return only after the pre-copy file is deleted',
+        () async {
+          final raw = await _RawWorker.take(host, prelude: _gates);
+          addTearDown(raw.close);
+          const file = 'pdf_lane_awaited_drop';
+          raw.precopy(1, 1, file, minimalPdf);
+          await raw.waitFor(_is('opfsWriteAck'));
+          raw.exec(
+            1,
+            1,
+            _open(minimalPdf.length),
+            sourceLengths: [minimalPdf.length],
+            opfsFiles: [file],
+          );
+          await raw.waitFor(_gated('open'));
+          raw.openGate('open');
+          await raw.waitFor(_gated('removeEntry'));
+          raw.openGate('removeEntry');
+          final result = await raw.waitFor(_is('result', jobId: 1));
+          expect(_ok(_bytesOf(result, 'data')), isTrue);
+
+          final removedAt = raw.history.indexWhere(_is('removed'));
+          expect(
+            removedAt >= 0 && removedAt < raw.history.indexOf(result),
+            isTrue,
+            reason: 'the result was posted while the delete was in flight',
+          );
+          raw.post('reset', {'lease': 1.toJS});
+          final end = await raw.waitFor(
+            (m) => _type(m) == 'resetDone' || _type(m) == 'error',
+          );
+          expect(
+            _type(end),
+            'resetDone',
+            reason: 'reset: ${_str(end, 'message')}',
+          );
+        },
+        timeout: t(10),
+      );
+
+      test(
+        'a drain settles a job whose pre-copy write is never answered',
+        () async {
+          final executor =
+              await withWorkerPrelude(_dropsOpfsWrite, host.boot)
+                  as WebExecutor;
+          addTearDown(executor.terminate);
+          final dropped = EventStreamProviders.messageEvent
+              .forTarget(executor.js)
+              .firstWhere((e) => _type(e.data as JSObject) == 'dropped');
+          final lane = executor.beginLane() as WebLane;
+          final source = src(minimalPdf);
+          final running = lane.submit(
+            LaneJob(
+              jobId: 1,
+              request: _open(source.length),
+              sources: [source],
+              sinks: const [],
+              keepSources: const {},
+            ),
+          );
+          await dropped; // the lane is waiting for the acknowledgement
+
+          final drained = lane.drain();
+          expect((await running).bytes, buildCancelledResponse());
+          expect(
+            await drained.timeout(
+              const Duration(seconds: 5),
+              onTimeout: () => throw TestFailure(
+                'the drain never settled: the job stayed running',
+              ),
+            ),
+            isTrue,
+          );
+        },
+        timeout: t(10),
+      );
+
+      test('a message the worker cannot admit is answered once, under its '
+          'own lease', () async {
+        final create = bin.encodeRequest('builderCreate', {});
+        final bytes = minimalPdf;
+        const file = 'pdf_lane_busy';
+
+        // Busy with an exec, held where it opens its pre-copied file.
+        final execing = await _RawWorker.take(host, prelude: _gates);
+        addTearDown(execing.close);
+        execing.precopy(1, 1, file, bytes);
+        await execing.waitFor(_is('opfsWriteAck'));
+        execing.exec(
+          1,
+          1,
+          _open(bytes.length),
+          sourceLengths: [bytes.length],
+          opfsFiles: [file],
+        );
+        await execing.waitFor(_gated('open'));
+        // A newer lease cannot be adopted while busy: the verbs that wait
+        // for an answer get one, the notifications that do not get none.
+        execing.exec(2, 2, create);
+        execing.post('reset', {'lease': 2.toJS});
+        execing.precopy(2, 3, 'pdf_lane_refused', bytes);
+        execing.post('readAtResult', {'lease': 2.toJS});
+        execing.post('chunkAck', {'lease': 2.toJS});
+        execing.post('releaseHeld', {'lease': 2.toJS, 'heldGroupId': 1.toJS});
+        execing.post('opfsDrop', {'lease': 2.toJS, 'jobId': 3.toJS});
+        execing.openGate('open');
+        execing.openGate('removeEntry'); // the exec's own cleanup
+        await execing.waitFor(_is('result', jobId: 1));
+        _expectRefused(execing.answers(2), [2, null, 3]);
+        expect(
+          [for (final a in execing.answers(1)) _type(a)],
+          ['opfsWriteAck', 'result'],
+        );
+
+        // Busy with a reset, held at its first delete.
+        final resetting = await _RawWorker.take(host, prelude: _gates);
+        addTearDown(resetting.close);
+        resetting.precopy(1, 1, file, bytes);
+        await resetting.waitFor(_is('opfsWriteAck'));
+        resetting.post('reset', {'lease': 1.toJS});
+        await resetting.waitFor(_gated('removeEntry'));
+        resetting.exec(1, 2, create);
+        resetting.exec(2, 3, create);
+        resetting.post('reset', {'lease': 2.toJS});
+        resetting.precopy(2, 4, 'pdf_lane_refused', bytes);
+        resetting.openGate('removeEntry');
+        await resetting.waitFor(_is('resetDone'));
+        expect(
+          [for (final a in resetting.answers(1)) _type(a)],
+          ['opfsWriteAck', 'error', 'resetDone'],
+        );
+        _expectRefused(resetting.answers(2), [3, null, 4]);
+
+        // Idle: a tenure that has ended gets no answer, a newer one is
+        // adopted and served.
+        resetting.exec(0, 5, create);
+        resetting.post('reset', {'lease': 0.toJS});
+        resetting.precopy(0, 6, file, bytes);
+        resetting.exec(3, 7, create);
+        await resetting.waitFor(_is('result', jobId: 7));
+        expect(resetting.answers(0), isEmpty);
+        expect(resetting.answers(3), hasLength(1));
+      }, timeout: t(15));
+
+      test('a cancel poll that times out does not cancel the job', () async {
+        final raw = await _RawWorker.take(host, prelude: _timesOutOnePoll);
+        addTearDown(raw.close);
+        final url = web.URL.createObjectURL(web.Blob(<JSAny>[].toJS));
+        addTearDown(() => web.URL.revokeObjectURL(url));
+        const file = 'pdf_lane_poll';
+        raw.precopy(1, 1, file, fThousandPage);
+        await raw.waitFor(_is('opfsWriteAck'));
+        raw.exec(
+          1,
+          1,
+          _open(fThousandPage.length),
+          sourceLengths: [fThousandPage.length],
+          opfsFiles: [file],
+          keepSources: const [0],
+        );
+        final opened = await raw.waitFor(_is('result', jobId: 1));
+        final handle = peekResponseHandleId(_bytesOf(opened, 'data'))!;
+
+        raw.post('xhrArm', {});
+        raw.exec(
+          1,
+          2,
+          bin.encodeRequest('extract', {
+            'handleId': handle,
+            'format': 'plainText',
+            'hasSink': true,
+          }),
+          heldGroupId: 1,
+          sinkCount: 1,
+          cancelUrl: url,
+        );
+        final done = await raw.waitFor(_is('result', jobId: 2));
+        expect(
+          raw.saw(_is('xhrTimeout')),
+          isTrue,
+          reason: 'no cancel poll ran: the job was too short to reach one',
+        );
+        final poll = raw.history.firstWhere(_is('xhrSend'));
+        expect(
+          _num(poll, 'timeout'),
+          greaterThan(0),
+          reason: 'the poll is a synchronous XHR without a timeout',
+        );
+        expect(
+          _ok(_bytesOf(done, 'data')),
+          isTrue,
+          reason: 'the poll that timed out cancelled the job',
+        );
+      }, timeout: t(15));
+    }
   });
 }

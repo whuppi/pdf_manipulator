@@ -218,6 +218,9 @@ class WebLane implements Lane {
   /// messages under it.
   int get lease => _lease;
 
+  /// The worker this lane leases. Internal: tests read its directory.
+  WebExecutor get executor => _exec;
+
   /// Held group (the handle's creating jobId) → the DataSources its
   /// jobs kept, in the order they were kept. On JSPI/Atomics a held
   /// reader's bytes still live here in Dart, so ops on the handle
@@ -795,8 +798,17 @@ class WebLane implements Lane {
           },
           [js],
         );
-        final ackError = await ack.future;
-        _opfsAck = null;
+        // Raced like the read above: a worker that never answers (or a
+        // drain that cancels mid-write) must not leave the job running.
+        final String? ackError;
+        try {
+          ackError = await Future.any([
+            ack.future,
+            entry.cancelWake.future.then((_) => 'cancelled'),
+          ]);
+        } finally {
+          _opfsAck = null;
+        }
         if (ackError != null && ackError != 'cancelled') {
           throw PdfIoError('OPFS pre-copy failed: $ackError');
         }
