@@ -1,7 +1,7 @@
-// Hybrid isolate asset server whose lane_worker.js can be switched off.
+// Hybrid isolate asset server whose executor_worker.js can be switched off.
 //
 // Same job as asset_server.dart, plus a control channel: the test sends
-// 'fail' and the server answers every request for lane_worker.js with 404;
+// 'fail' and the server answers every request for executor_worker.js with 404;
 // it sends 'ok' and the server serves it again. Lets a test fail a worker
 // boot, then let the next one succeed.
 //
@@ -30,7 +30,7 @@ Future<void> hybridMain(StreamChannel<Object?> channel) async {
     if (request.method == 'OPTIONS') {
       return Response.ok(null, headers: _headers);
     }
-    if (failing && request.url.path.endsWith('lane_worker.js')) {
+    if (failing && request.url.path.endsWith('executor_worker.js')) {
       return Response.notFound('switched off', headers: _headers);
     }
     return (await files(request)).change(headers: _headers);

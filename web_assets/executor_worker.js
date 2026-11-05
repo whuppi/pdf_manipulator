@@ -1,11 +1,11 @@
-// lane_worker.js — the web lane BODY. One Worker = one lane = one
-// LaneState (created via lane_init in WASM linear memory).
+// executor_worker.js — the web executor BODY. One Worker = one executor =
+// one EngineState (created via engine_state_new in WASM linear memory).
 //
 // The web twin of host/native/lane.rs. DECISION-FREE by design:
 // routing, pinning decisions, queuing, cancellation bookkeeping all
-// live in the shared Dart Router/WebLane. This file only translates
-// messages into physics — load WASM, serve host_read_at /
-// host_write_chunk per I/O mode, run lane_execute, post the result.
+// live in the Dart Router/WebLease. This file only translates
+// messages into platform calls — load WASM, serve host_read_at /
+// host_write_chunk per I/O mode, run execute, post the result.
 //
 // Numeric protocol codes are INJECTED via the init message (see
 // protocol.dart — the single source of truth). This file
@@ -14,18 +14,18 @@
 // ── Message protocol (tags pinned by protocol.dart + parity test)
 //
 // Every message after the boot handshake (init, booted, ready, bootfailed)
-// carries `lease`: one lane's tenure on this worker, a number from one
+// carries `lease`, a number from one
 // counter per worker, never reused. The worker serves the current lease; a
-// larger one opens a new tenure when the worker is idle; anything else is
+// larger one replaces it when the worker is idle; anything else is
 // not served. An exec, reset or opfsWrite of a larger lease that the busy
 // worker cannot admit is answered with an `error` (protocol: true) under its
-// own lease; every other message of another tenure is dropped unread. Every
+// own lease; every other message of another lease is dropped unread. Every
 // message the worker posts echoes the lease of the message it answers.
 //
 // Dart → worker:
 //   init         { protocol, ioMode, baseUrl?, wasmModule? } → ready|error
 //   exec         { lease, jobId, requestBytes, sourceLengths: number[],
-//                  sinkCount, keepSources: number[], heldGroupId?,
+//                  sinkCount, keepSources: number[], holdGroupId?,
 //                  opfsFiles: (string|null)[], sab?, writeSab?,
 //                  cancelSab?, cancelUrl? }
 //                  (cancelSab: the job's cancel word, where the page has
@@ -47,7 +47,7 @@
 //                   handle creation never answered, not removed yet)
 //   readAtResult { lease, bytes? , error?, cancelled? }    (JSPI reads)
 //   chunkAck     { lease, error?, cancelled? }             (JSPI writes)
-//   releaseHeld  { lease, heldGroupId }
+//   releaseHold  { lease, holdGroupId }
 //   opfsWrite    { lease, jobId, filename, chunk, offset, last }
 //                → opfsWriteAck | error { lease, jobId, protocol: true, message }
 //   opfsDrop     { lease, jobId }
@@ -64,7 +64,7 @@
 //   atomics — per-job SAB + Atomics.wait; Dart fills + notifies
 //   opfs    — sources pre-copied to OPFS; reads via SyncAccessHandle
 //
-// Hard kill is worker.terminate() from Dart — this file never sees it.
+// Terminating the worker is worker.terminate() from Dart — this file never sees it.
 
 // ═══════════════════════════════════════════════════════════════════
 // State
@@ -72,7 +72,7 @@
 
 let P = null;               // injected protocol codes
 let wasm = null;            // raw WASM exports
-let lanePtr = 0;            // LaneState pointer (lane_init)
+let statePtr = 0;            // EngineState pointer (engine_state_new)
 let lease = 0;              // the lease being served; 0 before the first
 let busy = null;            // 'exec' | 'reset' while one runs, else null
 let ioMode = 'opfs';
@@ -84,21 +84,21 @@ let wasmBaseUrl = (() => {
 })();
 
 // ═══════════════════════════════════════════════════════════════════
-// Reader registry — physics only. The Dart side decides WHICH
+// Reader registry — no decisions. The Dart side decides WHICH
 // sources are kept (keepSources) and WHICH held set an op reuses
-// (heldGroupId); this registry just stores and looks up.
+// (holdGroupId); this registry just stores and looks up.
 // ═══════════════════════════════════════════════════════════════════
 
-const readers = new Map();   // readerId → {length, opfsHandle, opfsFile, heldGroupId|null}
+const readers = new Map();   // readerId → {length, opfsHandle, opfsFile, holdGroupId|null}
 let nextReaderId = 1;
 
 // ═══════════════════════════════════════════════════════════════════
 // Lease and single-exec wall
 // ═══════════════════════════════════════════════════════════════════
 
-// A message belongs to the lease being served, or opens a newer tenure on
+// A message belongs to the lease being served, or replaces it on
 // an idle worker. Ids only count up, so a smaller one is a message from a
-// tenure that has ended.
+// lease that has ended.
 function admit(msg) {
   if (msg.lease === lease) return true;
   if (typeof msg.lease === 'number' && msg.lease > lease && busy === null) {
@@ -108,7 +108,7 @@ function admit(msg) {
   return false;
 }
 
-// A message of a tenure that has ended gets no answer: its adapter is gone.
+// A message of a lease that has ended gets no answer: its adapter is gone.
 // A newer one that is not admitted (the worker is busy) is a live adapter
 // waiting for an answer, so it gets one under its own lease.
 function refuseLease(msg, what) {
@@ -166,7 +166,7 @@ async function dropReader(id, r) {
   if (r.opfsHandle) { try { r.opfsHandle.close(); } catch (_) {} }
   readers.delete(id);
   if (r.opfsFile) {
-    // Awaited: whoever drops a reader (exec's finally, releaseHeld, reset)
+    // Awaited: whoever drops a reader (exec's finally, releaseHold, reset)
     // must not return while its file is still being deleted.
     try { await (await laneDir()).removeEntry(r.opfsFile); } catch (_) {}
   }
@@ -347,7 +347,7 @@ async function ensureInit() {
   }
 
   if (ioMode === 'jspi') {
-    jspiLaneExecute = WebAssembly.promising(wasm.lane_execute);
+    jspiLaneExecute = WebAssembly.promising(wasm.execute);
   }
   initialized = true;
 }
@@ -367,7 +367,7 @@ function wrapJspiImports(imports) {
 
 // JSPI path drives the wasm-bindgen ABI manually (the generated glue
 // is synchronous; promising() needs the raw export). Mirrors the
-// glue's own calling convention for lane_execute.
+// glue's own calling convention for execute.
 //
 // Buffers go through lane_alloc/lane_dealloc — never the glue's numbered
 // __wbindgen_export_N aliases: those are renumbered whenever the module's
@@ -382,7 +382,7 @@ async function callLaneJspi(requestBytes, sourceLengthsPacked, sinkCount) {
   if (sourceLengthsPacked.length && !ptr1) throw new Error('lane_alloc failed');
   new Uint8Array(wasm.memory.buffer).set(sourceLengthsPacked, ptr1);
   try {
-    await jspiLaneExecute(retptr, lanePtr, ptr0, requestBytes.length, ptr1, sourceLengthsPacked.length, sinkCount);
+    await jspiLaneExecute(retptr, statePtr, ptr0, requestBytes.length, ptr1, sourceLengthsPacked.length, sinkCount);
     const mem = new DataView(wasm.memory.buffer);
     const r0 = mem.getInt32(retptr, true);
     const r1 = mem.getInt32(retptr + 4, true);
@@ -404,7 +404,7 @@ async function callLaneJspi(requestBytes, sourceLengthsPacked, sinkCount) {
 // from before the first file exists until the browser kills the
 // agent) is what lets the host prove death before reclaiming the
 // directory: the lock release on agent termination is a spec
-// guarantee, the web's equivalent of the native lane's
+// guarantee, the web's equivalent of the native executor's
 // every-job-posts-exactly-once contract.
 let opfsDirParts = null;
 let livenessLockName = null;
@@ -581,7 +581,7 @@ async function emptyLaneDir() {
 // ═══════════════════════════════════════════════════════════════════
 
 // Drops every document, held reader and job file, and builds a new
-// LaneState. The wasm instance stays: its heap does not shrink here.
+// EngineState. The wasm instance stays: its heap does not shrink here.
 async function resetLane() {
   for (const name of [...opening.keys()]) setAside(name);
   await Promise.allSettled([...housekeeping]);
@@ -593,28 +593,28 @@ async function resetLane() {
   if (opfsDirParts) await emptyLaneDir();
   jspiReadResolve = null;
   jspiWriteResolve = null;
-  const { lane_init, lane_destroy } = await import(wasmBaseUrl + 'pdf_oxide.js');
-  lane_destroy(lanePtr);
-  lanePtr = lane_init();
+  const { engine_state_new, engine_state_drop } = await import(wasmBaseUrl + 'pdf_oxide.js');
+  engine_state_drop(statePtr);
+  statePtr = engine_state_new();
 }
 
 // The engine's peak heap since the last reset. After a trap the instance
 // cannot be called: the peak is then null.
 function heapPeak() {
   try {
-    return wasm.lane_heap_peak() >>> 0;
+    return wasm.heap_peak() >>> 0;
   } catch (_) {
     return null;
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Exec — register readers, run lane_execute, promote kept readers
+// Exec — register readers, run execute, promote kept readers
 // ═══════════════════════════════════════════════════════════════════
 
 async function exec(msg) {
   const { jobId, requestBytes, sourceLengths, sinkCount, keepSources,
-          heldGroupId, opfsFiles } = msg;
+          holdGroupId, opfsFiles } = msg;
 
   await ensureInit();
   activeSab = msg.sab || null;
@@ -629,9 +629,9 @@ async function exec(msg) {
 
   // Held readers of the handle this op targets come first (index 0),
   // exactly as the engine moved them into the document.
-  if (heldGroupId != null) {
+  if (holdGroupId != null) {
     for (const [id, r] of readers) {
-      if (r.heldGroupId === heldGroupId) {
+      if (r.holdGroupId === holdGroupId) {
         readerIds.push(id);
         finalLengths.push(r.length);
       }
@@ -658,7 +658,7 @@ async function exec(msg) {
       jobFiles.get(jobId)?.delete(file);
     }
     const id = nextReaderId++;
-    readers.set(id, { length, opfsHandle: handle, opfsFile: onDisk, heldGroupId: null });
+    readers.set(id, { length, opfsHandle: handle, opfsFile: onDisk, holdGroupId: null });
     readerIds.push(id);
     finalLengths.push(length);
   }
@@ -673,8 +673,8 @@ async function exec(msg) {
     if (ioMode === 'jspi') {
       responseBytes = await callLaneJspi(new Uint8Array(requestBytes), packed, sinkCount);
     } else {
-      const { lane_execute } = await import(wasmBaseUrl + 'pdf_oxide.js');
-      responseBytes = lane_execute(lanePtr, new Uint8Array(requestBytes), packed, sinkCount);
+      const { execute } = await import(wasmBaseUrl + 'pdf_oxide.js');
+      responseBytes = execute(statePtr, new Uint8Array(requestBytes), packed, sinkCount);
     }
 
     // Promote kept readers to held (success responses only — status 1).
@@ -686,14 +686,14 @@ async function exec(msg) {
       for (const idx of keep) {
         const rid = readerIds[heldCount + idx];
         const r = readers.get(rid);
-        if (r) r.heldGroupId = heldGroupId ?? jobId;
+        if (r) r.holdGroupId = holdGroupId ?? jobId;
       }
     }
   } finally {
     // Drop this op's non-promoted readers; held ones stay. Dropping
     // deletes each reader's OPFS file — same agent, no race possible.
     for (const [id, r] of readers) {
-      if (r.heldGroupId === null) await dropReader(id, r);
+      if (r.holdGroupId === null) await dropReader(id, r);
     }
     activeReaderMap = null;
     activeSab = null;
@@ -727,8 +727,8 @@ self.onmessage = async (e) => {
         // never outlive the death signal that releases them.
         await acquireLivenessLock();
         await ensureInit();
-        const { lane_init } = await import(wasmBaseUrl + 'pdf_oxide.js');
-        lanePtr = lane_init();
+        const { engine_state_new } = await import(wasmBaseUrl + 'pdf_oxide.js');
+        statePtr = engine_state_new();
         self.postMessage({ type: 'ready' });
       } catch (err) {
         self.postMessage({ type: 'error', error: 'WASM init failed: ' + err.message });
@@ -748,11 +748,11 @@ self.onmessage = async (e) => {
       return;
     }
 
-    case 'releaseHeld': {
+    case 'releaseHold': {
       if (!admit(msg)) return;
       await track((async () => {
         for (const [id, r] of readers) {
-          if (r.heldGroupId === msg.heldGroupId) await dropReader(id, r);
+          if (r.holdGroupId === msg.holdGroupId) await dropReader(id, r);
         }
       })());
       return;
@@ -767,7 +767,7 @@ self.onmessage = async (e) => {
     case 'opfsWrite': {
       if (!admit(msg)) { refuseLease(msg, 'opfsWrite'); return; }
       // The ack carries the lease of its write: one set aside answers late,
-      // when another tenure may be waiting for a write of the same job and offset.
+      // when another lease may be waiting for a write of the same job and offset.
       try {
         const retried = await opfsWrite(msg.jobId, msg.filename, msg.chunk, msg.offset, msg.last);
         self.postMessage({ type: 'opfsWriteAck', lease: msg.lease, jobId: msg.jobId, offset: msg.offset, retried: retried || undefined });

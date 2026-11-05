@@ -1,6 +1,6 @@
 // Web-only: the lease id, the reset message and the worker's single-exec wall.
 //
-// The adapter side drives a real WebLane and replays messages of a replaced
+// The adapter side drives a real WebLease and replays messages of a replaced
 // lease into it. The worker side posts raw messages to a bare worker taken
 // from the host, so it sees exactly what a misbehaving adapter would send:
 // a stale lease, a second exec while one runs, a reset under a running exec.
@@ -16,7 +16,7 @@ import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart' as bin;
 import 'package:pdf_manipulator/src/runtime/lane.dart';
-import 'package:pdf_manipulator/src/runtime/web/lane.dart';
+import 'package:pdf_manipulator/src/runtime/web/lease.dart';
 import 'package:pdf_manipulator/src/runtime/web/protocol.dart';
 import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
 import 'package:pdf_manipulator/src/types/errors.dart';
@@ -81,9 +81,11 @@ bool Function(JSObject) _is(String type, {int? jobId}) =>
 Future<int> _opfsFileCount(String workerDir) async {
   try {
     final root = await web.window.navigator.storage.getDirectory().toDart;
-    final ours = await root.getDirectoryHandle(WebLaneHost.opfsRootDir).toDart;
+    final ours = await root
+        .getDirectoryHandle(WebExecutorBooter.opfsRootDir)
+        .toDart;
     final session = await ours
-        .getDirectoryHandle(WebLaneHost.opfsSessionId)
+        .getDirectoryHandle(WebExecutorBooter.opfsSessionId)
         .toDart;
     final dir = await session.getDirectoryHandle(workerDir).toDart;
     return (await _names(dir)).length;
@@ -367,13 +369,15 @@ class _RawWorker {
     });
   }
 
-  static Future<_RawWorker> take(WebLaneHost host, {String? prelude}) async =>
-      _RawWorker._(
-        await (prelude == null
-                ? host.boot()
-                : withWorkerPrelude(prelude, host.boot))
-            as WebExecutor,
-      );
+  static Future<_RawWorker> take(
+    WebExecutorBooter host, {
+    String? prelude,
+  }) async => _RawWorker._(
+    await (prelude == null
+            ? host.boot()
+            : withWorkerPrelude(prelude, host.boot))
+        as WebExecutor,
+  );
 
   final WebExecutor _worker;
 
@@ -400,7 +404,7 @@ class _RawWorker {
     List<String>? opfsFiles,
     List<int> keepSources = const [],
     int sinkCount = 0,
-    int? heldGroupId,
+    int? holdGroupId,
     String? cancelUrl,
   }) {
     final buffer = Uint8List.fromList(request).buffer.toJS;
@@ -413,7 +417,7 @@ class _RawWorker {
         'sourceLengths': [for (final n in sourceLengths) n.toJS].toJS,
         'sinkCount': sinkCount.toJS,
         'keepSources': [for (final i in keepSources) i.toJS].toJS,
-        if (heldGroupId != null) 'heldGroupId': heldGroupId.toJS,
+        if (holdGroupId != null) 'holdGroupId': holdGroupId.toJS,
         if (opfsFiles != null)
           'opfsFiles': [for (final f in opfsFiles) f.toJS].toJS,
         if (cancelUrl != null) 'cancelUrl': cancelUrl.toJS,
@@ -496,20 +500,20 @@ void registerWebLaneProtocolTests({
   required PdfIoMode mode,
 }) {
   group('web lane protocol (${mode.name})', () {
-    late WebLaneHost host;
+    late WebExecutorBooter host;
 
     setUp(() {
-      host = WebLaneHost(laneWorkerUrl: workerUrl(), forceMode: mode);
+      host = WebExecutorBooter(laneWorkerUrl: workerUrl(), forceMode: mode);
     });
 
     test('a drain answers a parked job at once, settles when the worker has '
         'posted, and the worker serves the next lease', () async {
       final executor = await host.boot() as WebExecutor;
       addTearDown(executor.terminate);
-      final lane = executor.beginLane() as WebLane;
+      final lane = executor.beginLane() as WebLease;
       final slow = SlowSource(minimalPdf);
       final running = lane.submit(
-        LaneJob(
+        Job(
           jobId: 1,
           request: _open(slow.length),
           sources: [slow],
@@ -528,7 +532,7 @@ void registerWebLaneProtocolTests({
       final next = executor.beginLane();
       final source = src(minimalPdf);
       final opened = await next.submit(
-        LaneJob(
+        Job(
           jobId: 1,
           request: _open(source.length),
           sources: [source],
@@ -542,10 +546,10 @@ void registerWebLaneProtocolTests({
     test('the adapter drops every message of a replaced lease', () async {
       final executor = await host.boot() as WebExecutor;
       addTearDown(executor.terminate);
-      final lane = executor.beginLane() as WebLane;
+      final lane = executor.beginLane() as WebLease;
       final slow = SlowSource(minimalPdf);
       final running = lane.submit(
-        LaneJob(
+        Job(
           jobId: 1,
           request: _open(slow.length),
           sources: [slow],
@@ -559,7 +563,7 @@ void registerWebLaneProtocolTests({
 
       final stale = lane.lease - 1;
       final success = Uint8List.fromList(const [1, 0, 0]).buffer.toJS;
-      // Messages the worker of an earlier tenure could still be sending:
+      // Messages the worker of an earlier lease could still be sending:
       // the result, a failure, a read, a reset answer.
       lane.deliver(
         _msg('result', {
@@ -610,10 +614,10 @@ void registerWebLaneProtocolTests({
     }, timeout: t(10));
 
     Future<void> expectResetGivesFreshState(WebExecutor executor) async {
-      final lane = executor.beginLane() as WebLane;
+      final lane = executor.beginLane() as WebLease;
       final first = src(minimalPdf);
       final opened = await lane.submit(
-        LaneJob(
+        Job(
           jobId: 1,
           request: _open(first.length),
           sources: [first],
@@ -622,7 +626,7 @@ void registerWebLaneProtocolTests({
         ),
       );
       final old = peekResponseHandleId(opened.bytes)!;
-      expect(opened.heldTokens, hasLength(1));
+      expect(opened.holds, hasLength(1));
       if (mode == PdfIoMode.opfs) {
         expect(await _opfsFileCount(executor.opfsDir!), greaterThan(0));
       }
@@ -639,13 +643,13 @@ void registerWebLaneProtocolTests({
       }
 
       final gone = await lane.submit(
-        LaneJob(
+        Job(
           jobId: 2,
           request: _info(old, const []),
           sources: const [],
           sinks: const [],
           keepSources: const {},
-          heldGroupId: 1,
+          holdGroupId: 1,
         ),
       );
       expect(_failure(gone.bytes), contains('document not found'));
@@ -656,7 +660,7 @@ void registerWebLaneProtocolTests({
       // clip every read to its own, much shorter, length.
       final big = src(fThousandPage);
       final reopened = await lane.submit(
-        LaneJob(
+        Job(
           jobId: 1,
           request: _open(big.length),
           sources: [big],
@@ -667,7 +671,7 @@ void registerWebLaneProtocolTests({
       expect(_ok(reopened.bytes), isTrue);
       final handle = peekResponseHandleId(reopened.bytes)!;
       final text = await lane.submit(
-        LaneJob(
+        Job(
           jobId: 3,
           request: bin.encodeRequest('extract', {
             'handleId': handle,
@@ -677,7 +681,7 @@ void registerWebLaneProtocolTests({
           sources: const [],
           sinks: const [],
           keepSources: const {},
-          heldGroupId: 1,
+          holdGroupId: 1,
         ),
       );
       expect(_failure(text.bytes), isEmpty);
@@ -709,7 +713,7 @@ void registerWebLaneProtocolTests({
       expect(raw.saw(_is('error', jobId: 2)), isFalse);
       expect(raw.saw(_is('resetDone')), isFalse);
 
-      // A newer lease opens a new tenure; the old one is stale at once.
+      // A newer lease replaces the old one, which is stale at once.
       raw.exec(6, 4, create);
       final fourth = await raw.waitFor(_is('result', jobId: 4));
       expect(_num(fourth, 'lease'), 6);
@@ -810,8 +814,8 @@ void registerWebLaneProtocolTests({
           'workers that are gone', () async {
         final dead = await host.boot() as WebExecutor;
         final held = src(minimalPdf);
-        await (dead.beginLane() as WebLane).submit(
-          LaneJob(
+        await (dead.beginLane() as WebLease).submit(
+          Job(
             jobId: 1,
             request: _open(held.length),
             sources: [held],
@@ -824,7 +828,7 @@ void registerWebLaneProtocolTests({
         // The browser reaps the dead worker's directory on its own clock;
         // a file the page plants in a directory of its own stays until the
         // test removes it, whatever the reaper does.
-        final session = await WebLaneHost.sessionDir();
+        final session = await WebExecutorBooter.sessionDir();
         const strayDir = 'pdf_lane_stray_worker';
         final stray = await session
             .getDirectoryHandle(
@@ -903,10 +907,10 @@ void registerWebLaneProtocolTests({
           final dropped = EventStreamProviders.messageEvent
               .forTarget(executor.js)
               .firstWhere((e) => _type(e.data as JSObject) == 'dropped');
-          final lane = executor.beginLane() as WebLane;
+          final lane = executor.beginLane() as WebLease;
           final source = src(minimalPdf);
           final running = lane.submit(
-            LaneJob(
+            Job(
               jobId: 1,
               request: _open(source.length),
               sources: [source],
@@ -957,7 +961,7 @@ void registerWebLaneProtocolTests({
         execing.precopy(2, 3, 'pdf_lane_refused', bytes);
         execing.post('readAtResult', {'lease': 2.toJS});
         execing.post('chunkAck', {'lease': 2.toJS});
-        execing.post('releaseHeld', {'lease': 2.toJS, 'heldGroupId': 1.toJS});
+        execing.post('releaseHold', {'lease': 2.toJS, 'holdGroupId': 1.toJS});
         execing.post('opfsDrop', {'lease': 2.toJS, 'jobId': 3.toJS});
         execing.openGate('removeEntry');
         await execing.waitFor(_is('result', jobId: 1));
@@ -986,7 +990,7 @@ void registerWebLaneProtocolTests({
         );
         _expectRefused(resetting.answers(2), [3, null, 4]);
 
-        // Idle: a tenure that has ended gets no answer, a newer one is
+        // Idle: a lease that has ended gets no answer, a newer one is
         // adopted and served.
         resetting.exec(0, 5, create);
         resetting.post('reset', {'lease': 0.toJS});
@@ -1099,10 +1103,10 @@ void registerWebLaneProtocolTests({
         final watched = _Watched(executor);
         addTearDown(watched.close);
 
-        final lane = executor.beginLane() as WebLane;
+        final lane = executor.beginLane() as WebLease;
         final source = src(minimalPdf);
         final opened = await lane.submit(
-          LaneJob(
+          Job(
             jobId: 1,
             request: _open(source.length),
             sources: [source],
@@ -1117,7 +1121,11 @@ void registerWebLaneProtocolTests({
         );
         expect(watched.seen.where(_is('hung')), hasLength(1));
         expect(executor.retriedCreates, 1);
-        expect(WebLaneHost.retriedCreates, 0, reason: 'a provoked worker');
+        expect(
+          WebExecutorBooter.retriedCreates,
+          0,
+          reason: 'a provoked worker',
+        );
 
         executor.js.postMessage(_msg('release', {}));
         await _until(
@@ -1139,11 +1147,11 @@ void registerWebLaneProtocolTests({
         final watched = _Watched(executor);
         addTearDown(watched.close);
 
-        final lane = executor.beginLane() as WebLane;
+        final lane = executor.beginLane() as WebLease;
         final source = src(minimalPdf);
         final clock = Stopwatch()..start();
         final failed = await lane.submit(
-          LaneJob(
+          Job(
             jobId: 1,
             request: _open(source.length),
             sources: [source],
@@ -1191,10 +1199,10 @@ void registerWebLaneProtocolTests({
         final watched = _Watched(executor);
         addTearDown(watched.close);
 
-        final lane = executor.beginLane() as WebLane;
+        final lane = executor.beginLane() as WebLease;
         final source = src(minimalPdf);
         final running = lane.submit(
-          LaneJob(
+          Job(
             jobId: 1,
             request: _open(source.length),
             sources: [source],
@@ -1265,10 +1273,10 @@ void registerWebLaneProtocolTests({
           return arrivals.stream.firstWhere(test);
         }
 
-        final lane = executor.beginLane() as WebLane;
-        LaneJob open(int id) {
+        final lane = executor.beginLane() as WebLease;
+        Job open(int id) {
           final source = src(minimalPdf);
-          return LaneJob(
+          return Job(
             jobId: id,
             request: _open(source.length),
             sources: [source],
@@ -1327,7 +1335,7 @@ void registerWebLaneProtocolTests({
             'format': 'plainText',
             'hasSink': true,
           }),
-          heldGroupId: 1,
+          holdGroupId: 1,
           sinkCount: 1,
           cancelUrl: url,
         );

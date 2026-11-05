@@ -30,10 +30,10 @@ import '../../harness/timeouts.dart';
 
 /// A lane host that hands every executor it boots to the test, and lets the
 /// test act on each result the moment its lane delivers it.
-class _ObservedHost implements LaneHost {
+class _ObservedHost implements ExecutorBooter {
   _ObservedHost(this._inner);
 
-  final LaneHost _inner;
+  final ExecutorBooter _inner;
   final executors = <_ObservedExecutor>[];
 
   /// Called with the job id each time a lane delivers a job's result,
@@ -44,7 +44,7 @@ class _ObservedHost implements LaneHost {
   PdfIoMode get mode => _inner.mode;
 
   @override
-  int get defaultLaneCount => _inner.defaultLaneCount;
+  int get defaultConcurrency => _inner.defaultConcurrency;
 
   @override
   String get poolKey => _inner.poolKey;
@@ -68,7 +68,7 @@ class _ObservedExecutor implements Executor {
   int get heapBytes => real.heapBytes;
 
   @override
-  Lane beginLane() {
+  Lease beginLane() {
     final lane = _ObservedLane(real.beginLane(), _host);
     lanes.add(lane);
     return lane;
@@ -78,24 +78,23 @@ class _ObservedExecutor implements Executor {
   void terminate() => real.terminate();
 }
 
-class _ObservedLane implements Lane {
+class _ObservedLane implements Lease {
   _ObservedLane(this.real, this._host);
 
-  final Lane real;
+  final Lease real;
   final _ObservedHost _host;
 
   @override
-  Future<LaneSubmitResult> submit(LaneJob job) =>
-      real.submit(job).then((result) {
-        _host.onResult?.call(job.jobId);
-        return result;
-      });
+  Future<JobResult> submit(Job job) => real.submit(job).then((result) {
+    _host.onResult?.call(job.jobId);
+    return result;
+  });
 
   @override
   void cancelJob(int jobId) => real.cancelJob(jobId);
 
   @override
-  void releaseHeld(Object token) => real.releaseHeld(token);
+  void releaseHold(Object token) => real.releaseHold(token);
 
   @override
   Future<int?> reset() => real.reset();
@@ -166,7 +165,7 @@ void registerRuntimeSafetyTests({PdfConfig? Function()? config}) {
     late Router router;
 
     Router make(int maxLanes) {
-      host = _ObservedHost(createLaneHost(config: config?.call()));
+      host = _ObservedHost(createBooter(config: config?.call()));
       pool = ExecutorPool(host: host);
       return router = Router(pool: pool, maxLanes: maxLanes, mode: host.mode);
     }
@@ -200,7 +199,7 @@ void registerRuntimeSafetyTests({PdfConfig? Function()? config}) {
       // The lane's second document has engine id 2 (the keeper has 1).
       // Asking for it straight on the lane (past the Router) finds nothing
       // when the Router disposed it.
-      final probe = LaneJob(
+      final probe = Job(
         jobId: 1 << 20,
         request: _info(2),
         sources: const [],

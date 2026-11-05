@@ -14,8 +14,8 @@ import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 Uint8List okBytes() => Uint8List.fromList(const [1, 0, 0]);
 
 /// The lane of a fake executor: one object for the executor's whole life,
-/// whose [lease] changes with each tenure.
-class FakeLane implements Lane {
+/// whose [lease] changes with each new lease.
+class FakeLane implements Lease {
   FakeLane(this.executor);
 
   final FakeExecutor executor;
@@ -23,15 +23,15 @@ class FakeLane implements Lane {
   /// The lease the lane holds now.
   int lease = 0;
 
-  final submitted = <LaneJob>[];
+  final submitted = <Job>[];
   final cancelledJobs = <int>[];
   final releasedTokens = <Object>[];
 
   /// Pending completers by jobId — tests complete them explicitly.
-  final pending = <int, Completer<LaneSubmitResult>>{};
+  final pending = <int, Completer<JobResult>>{};
 
   /// When set, submit completes immediately with this result.
-  LaneSubmitResult? autoResult;
+  JobResult? autoResult;
 
   /// When set, [drain] completes only when this does, as a worker whose job
   /// is still unwinding.
@@ -51,12 +51,12 @@ class FakeLane implements Lane {
   int resets = 0;
 
   @override
-  Future<LaneSubmitResult> submit(LaneJob job) {
+  Future<JobResult> submit(Job job) {
     submitted.add(job);
     if (ended) return Future.value(_cancelled());
     final auto = autoResult;
     if (auto != null) return Future.value(auto);
-    final completer = Completer<LaneSubmitResult>();
+    final completer = Completer<JobResult>();
     pending[job.jobId] = completer;
     return completer.future;
   }
@@ -65,7 +65,7 @@ class FakeLane implements Lane {
   void completeAllPending() {
     for (final completer in pending.values) {
       if (!completer.isCompleted) {
-        completer.complete(LaneSubmitResult(okBytes(), const {}));
+        completer.complete(JobResult(okBytes(), const {}));
       }
     }
   }
@@ -74,13 +74,13 @@ class FakeLane implements Lane {
   void cancelJob(int jobId) => cancelledJobs.add(jobId);
 
   @override
-  void releaseHeld(Object token) => releasedTokens.add(token);
+  void releaseHold(Object token) => releasedTokens.add(token);
 
   @override
   Future<int?> reset() async {
     resets++;
     executor.events.add('reset');
-    if (executor.failReset) throw const LaneProtocolError('reset failed');
+    if (executor.failReset) throw const LeaseProtocolError('reset failed');
     final gate = resetGate;
     if (gate != null) return gate.future;
     return executor.heap;
@@ -97,8 +97,7 @@ class FakeLane implements Lane {
     return drainGate?.future ?? Future.value(!engineDead);
   }
 
-  LaneSubmitResult _cancelled() =>
-      LaneSubmitResult(buildCancelledResponse(), const {});
+  JobResult _cancelled() => JobResult(buildCancelledResponse(), const {});
 }
 
 class FakeExecutor implements Executor {
@@ -132,8 +131,8 @@ class FakeExecutor implements Executor {
   int get heapBytes => heap;
 
   @override
-  Lane beginLane() {
-    if (failLease) throw const LaneProtocolError('the engine died');
+  Lease beginLane() {
+    if (failLease) throw const LeaseProtocolError('the engine died');
     lane
       ..lease = ++lastLease
       ..ended = false;
@@ -145,7 +144,7 @@ class FakeExecutor implements Executor {
   void terminate() => terminated = true;
 }
 
-class FakeLaneHost implements LaneHost {
+class FakeLaneHost implements ExecutorBooter {
   FakeLaneHost({this.key = 'fake'});
 
   final String key;
@@ -172,7 +171,7 @@ class FakeLaneHost implements LaneHost {
   PdfIoMode get mode => PdfIoMode.native;
 
   @override
-  int get defaultLaneCount => 2;
+  int get defaultConcurrency => 2;
 
   @override
   String get poolKey => key;

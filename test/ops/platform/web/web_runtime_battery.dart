@@ -23,8 +23,8 @@ import 'package:test/test.dart';
 import 'package:web/web.dart' as web;
 
 import 'package:pdf_manipulator/src/runtime/pool.dart' show ExecutorPool;
-import 'package:pdf_manipulator/src/runtime/web/lane.dart'
-    show WebLane, WebLaneHost;
+import 'package:pdf_manipulator/src/runtime/web/lease.dart'
+    show WebLease, WebExecutorBooter;
 
 import '../../../fixtures/handwritten.dart';
 import '../../../harness/test_source_sink.dart';
@@ -74,7 +74,7 @@ Future<List<String>> _laneResidue() async {
   final root = await web.window.navigator.storage.getDirectory().toDart;
   final web.FileSystemDirectoryHandle ours;
   try {
-    ours = await root.getDirectoryHandle(WebLaneHost.opfsRootDir).toDart;
+    ours = await root.getDirectoryHandle(WebExecutorBooter.opfsRootDir).toDart;
   } catch (_) {
     return const []; // directory never created — perfectly clean
   }
@@ -102,7 +102,7 @@ Future<void> purgeOpfsLaneFiles() async {
   try {
     await root
         .removeEntry(
-          WebLaneHost.opfsRootDir,
+          WebExecutorBooter.opfsRootDir,
           web.FileSystemRemoveOptions(recursive: true),
         )
         .toDart;
@@ -177,7 +177,7 @@ void registerWebPlatformTests({
         final port = (events.current as double).toInt();
         channel.sink.add('fail');
         await events.moveNext(); // the server confirms the switch
-        final url = 'http://localhost:$port/web_assets/lane_worker.js';
+        final url = 'http://localhost:$port/web_assets/executor_worker.js';
 
         final flaky = Pdf(
           config: PdfConfig(webWorkerUrl: url, webIoMode: mode, concurrency: 1),
@@ -286,7 +286,7 @@ void registerWebPlatformTests({
       final root = await web.window.navigator.storage.getDirectory().toDart;
       final ours = await root
           .getDirectoryHandle(
-            WebLaneHost.opfsRootDir,
+            WebExecutorBooter.opfsRootDir,
             web.FileSystemGetDirectoryOptions(create: true),
           )
           .toDart;
@@ -305,7 +305,7 @@ void registerWebPlatformTests({
 
       // The harness's own LIVE session must survive the sweep (its
       // lock is held); the dead one must vanish.
-      final live = await WebLaneHost.sessionDir();
+      final live = await WebExecutorBooter.sessionDir();
       await live
           .getFileHandle(
             'pdf_lane_canary',
@@ -313,7 +313,7 @@ void registerWebPlatformTests({
           )
           .toDart;
 
-      await WebLaneHost.reclaimDeadSessions();
+      await WebExecutorBooter.reclaimDeadSessions();
 
       final after = await _laneResidue();
       expect(
@@ -325,7 +325,7 @@ void registerWebPlatformTests({
       );
       expect(
         after,
-        contains('${WebLaneHost.opfsSessionId}/pdf_lane_canary'),
+        contains('${WebExecutorBooter.opfsSessionId}/pdf_lane_canary'),
         reason: 'the sweep must NEVER touch a live session',
       );
       await live.removeEntry('pdf_lane_canary').toDart;
@@ -372,13 +372,13 @@ void registerWebPlatformTests({
         // Leasing every pooled executor waits, event by event, for each
         // lane still draining and resetting, and names the live workers.
         final pool = ExecutorPool.of(
-          WebLaneHost(laneWorkerUrl: workerUrl(), forceMode: mode),
+          WebExecutorBooter(laneWorkerUrl: workerUrl(), forceMode: mode),
         );
         final leases = [
           for (var i = pool.liveCount; i > 0; i--) await pool.acquire().lease,
         ];
         final live = {
-          for (final lease in leases) (lease.lane as WebLane).executor.opfsDir,
+          for (final lease in leases) (lease.lane as WebLease).executor.opfsDir,
         };
         for (final lease in leases) {
           await pool.release(lease, untouched: true);
@@ -437,27 +437,27 @@ void registerWebPlatformTests({
       // The browser sometimes leaves createSyncAccessHandle on a fresh file
       // unanswered; the worker then sets the file aside or retries on a new
       // one, and the suite still passes. Only these counts show it.
-      for (final file in WebLaneHost.abandonedFiles) {
+      for (final file in WebExecutorBooter.abandonedFiles) {
         printOnFailure('set-aside pre-copy file: $file');
       }
       expect(
-        WebLaneHost.abandonedFiles,
+        WebExecutorBooter.abandonedFiles,
         isEmpty,
         reason: 'a worker still waits for the browser to create a handle',
       );
       expect(
-        WebLaneHost.retriedCreates,
+        WebExecutorBooter.retriedCreates,
         0,
         reason: 'createSyncAccessHandle passed kCreateHandleWait unanswered',
       );
     }, timeout: t(1));
 
     test('no dead worker directory was given up on', () {
-      for (final dir in WebLaneHost.abandonedWorkerDirs) {
+      for (final dir in WebExecutorBooter.abandonedWorkerDirs) {
         printOnFailure('abandoned worker directory: $dir');
       }
       expect(
-        WebLaneHost.abandonedWorkerDirs,
+        WebExecutorBooter.abandonedWorkerDirs,
         isEmpty,
         reason: 'the host stopped retrying the delete of a dead worker dir',
       );

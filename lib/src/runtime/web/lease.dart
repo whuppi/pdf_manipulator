@@ -1,13 +1,13 @@
-// WebExecutor and WebLane — the dumb web adapter: the verbs of Lane over
+// WebExecutor and WebLease — the web lease adapter: the verbs of Lease over
 // postMessage.
 //
-// One WebExecutor = one Web Worker running lane_worker.js (the lane body)
-// with one WASM LaneState inside; one WebLane = one lease on it. The
-// adapter translates Lane verbs into messages and serves the lane's I/O
+// One WebExecutor = one Web Worker running executor_worker.js (the executor
+// body) with one WASM EngineState inside; one WebLease = one lease on it. The
+// adapter translates Lease verbs into messages and serves the lane's I/O
 // from the main isolate — every worker is an executor; no other worker
 // kind exists.
 //
-// ## Mode physics (selected once by WebLaneHost, injected at init)
+// ## I/O modes (selected once by WebExecutorBooter, injected at init)
 //
 //   jspi    — worker's host_read_at returns a Promise; this side
 //             answers with a readAtResult message.
@@ -46,7 +46,7 @@
 // The lane holds one lease on its worker: a number from the worker's own
 // counter, taken when the pool hands the worker over. Every message the
 // lane posts carries it, and the lane drops any message from the worker
-// that does not echo it, so an answer meant for an earlier tenure never
+// that does not echo it, so an answer meant for an earlier lease never
 // resolves a job of this one. A `result` or `error` also has to name the
 // job that is running.
 //
@@ -56,10 +56,10 @@
 // queue lives here because a Worker cannot peek its own message
 // queue. Queue order is submission order.
 //
-// INTERNAL — constructed by WebLaneHost, driven by the pool.
+// INTERNAL — constructed by WebExecutorBooter, driven by the pool.
 //
 // Split: this library spans two files. The lane (job lifecycle,
-// 3 I/O modes) lives here; WebLaneHost (worker boot handshake, OPFS
+// 3 I/O modes) lives here; WebExecutorBooter (worker boot handshake, OPFS
 // session reclaim) and the executor live in host.dart.
 
 import 'dart:async';
@@ -83,10 +83,10 @@ import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 
 part 'host.dart';
 
-/// Creates the web [LaneHost]. The platform conditional import selects this
+/// Creates the web [ExecutorBooter]. The platform conditional import selects this
 /// where dart:js_interop exists. [config] supplies the lane-worker URL and an
 /// optional I/O-mode override.
-LaneHost createLaneHost({PdfConfig? config}) => WebLaneHost(
+ExecutorBooter createBooter({PdfConfig? config}) => WebExecutorBooter(
   laneWorkerUrl: config?.webWorkerUrl,
   forceMode: config?.webIoMode,
 );
@@ -132,8 +132,8 @@ void _sabSignal(JSObject sab, int status) {
 class _WebJob {
   _WebJob(this.job);
 
-  final LaneJob job;
-  final completer = Completer<LaneSubmitResult>();
+  final Job job;
+  final completer = Completer<JobResult>();
   bool cancelled = false;
 
   /// True once the exec message is on its way to the worker: from then on
@@ -170,11 +170,11 @@ class _WebJob {
   List<String?> opfsFiles = const [];
 }
 
-// ── Lane ────────────────────────────────────────────────────────────
+// ── Lease ────────────────────────────────────────────────────────────
 
 /// One lease on a [WebExecutor]. Decision-free.
-class WebLane implements Lane, LanePhase {
-  WebLane._(this._exec, this._lease);
+class WebLease implements Lease, LanePhase {
+  WebLease._(this._exec, this._lease);
 
   final WebExecutor _exec;
 
@@ -258,12 +258,12 @@ class WebLane implements Lane, LanePhase {
     return 'lease $_lease awaiting nothing';
   }
 
-  // ── Lane verbs ──
+  // ── Lease verbs ──
 
   @override
-  Future<LaneSubmitResult> submit(LaneJob job) {
+  Future<JobResult> submit(Job job) {
     if (_ending || _abandoned) {
-      return Future.value(LaneSubmitResult(buildCancelledResponse(), const {}));
+      return Future.value(JobResult(buildCancelledResponse(), const {}));
     }
     if (_dead) return Future.value(_deadResult());
     final entry = _WebJob(job);
@@ -280,9 +280,7 @@ class WebLane implements Lane, LanePhase {
     if (queued >= 0) {
       final entry = _queue.removeAt(queued);
       entry.cancelled = true;
-      entry.completer.complete(
-        LaneSubmitResult(buildCancelledResponse(), const {}),
-      );
+      entry.completer.complete(JobResult(buildCancelledResponse(), const {}));
       return;
     }
 
@@ -318,28 +316,28 @@ class WebLane implements Lane, LanePhase {
   }
 
   @override
-  void releaseHeld(Object token) {
+  void releaseHold(Object token) {
     if (_ending || _abandoned) return;
-    final heldGroupId = token as int;
-    _heldSources.remove(heldGroupId);
+    final holdGroupId = token as int;
+    _heldSources.remove(holdGroupId);
     // The worker drops the group's held readers AND deletes their OPFS
     // files — it owns them (same agent as the open handles: no race).
     // Every token of a handle names the same group, so a repeat is a no-op.
     _post({
-      LaneMsgFields.type: LaneMsg.releaseHeld,
-      'heldGroupId': heldGroupId,
+      LaneMsgFields.type: LaneMsg.releaseHold,
+      'holdGroupId': holdGroupId,
     });
   }
 
   @override
   Future<int?> reset() async {
-    if (_abandoned) throw const LaneProtocolError('the lane was abandoned');
-    if (_dead) throw const LaneProtocolError(laneDeadMessage);
+    if (_abandoned) throw const LeaseProtocolError('the lane was abandoned');
+    if (_dead) throw const LeaseProtocolError(engineDeadMessage);
     // Refused here, not in the worker: a queued job or an OPFS pre-copy
     // has not reached the worker yet, and a reset would pull the files
     // from under it.
     if (_running != null || _queue.isNotEmpty || _reset != null) {
-      throw const LaneProtocolError(laneBusyMessage);
+      throw const LeaseProtocolError(laneBusyMessage);
     }
     final answer = _reset = Completer<int?>();
     try {
@@ -364,11 +362,11 @@ class WebLane implements Lane, LanePhase {
         _cancelRunning(running);
         if (!running.completer.isCompleted) {
           running.completer.complete(
-            LaneSubmitResult(buildCancelledResponse(), const {}),
+            JobResult(buildCancelledResponse(), const {}),
           );
         }
       }
-      final cancelled = LaneSubmitResult(buildCancelledResponse(), const {});
+      final cancelled = JobResult(buildCancelledResponse(), const {});
       for (final entry in _queue) {
         entry.cancelled = true;
         if (!entry.completer.isCompleted) entry.completer.complete(cancelled);
@@ -392,7 +390,7 @@ class WebLane implements Lane, LanePhase {
     if (_abandoned) return;
     _abandoned = true;
     if (!_ended.isCompleted) _ended.complete();
-    final cancelled = LaneSubmitResult(buildCancelledResponse(), const {});
+    final cancelled = JobResult(buildCancelledResponse(), const {});
     final running = _running;
     _running = null;
     if (running != null) {
@@ -411,7 +409,7 @@ class WebLane implements Lane, LanePhase {
     _reset = null;
     if (resetting != null && !resetting.isCompleted) {
       resetting.completeError(
-        const LaneProtocolError('the lane was abandoned'),
+        const LeaseProtocolError('the lane was abandoned'),
       );
     }
     _queue.clear();
@@ -438,7 +436,7 @@ class WebLane implements Lane, LanePhase {
   Future<void> _runJob(_WebJob entry) async {
     try {
       if (_abandoned || entry.cancelled) {
-        _finish(entry, LaneSubmitResult(buildCancelledResponse(), const {}));
+        _finish(entry, JobResult(buildCancelledResponse(), const {}));
         return;
       }
 
@@ -447,7 +445,7 @@ class WebLane implements Lane, LanePhase {
       if (_mode == PdfIoMode.opfs) {
         entry.opfsFiles = await _preCopySources(entry);
         if (_abandoned || entry.cancelled) {
-          _finish(entry, LaneSubmitResult(buildCancelledResponse(), const {}));
+          _finish(entry, JobResult(buildCancelledResponse(), const {}));
           return;
         }
       }
@@ -462,8 +460,8 @@ class WebLane implements Lane, LanePhase {
         ..['sourceLengths'] = [for (final s in job.sources) s.length.toJS].toJS
         ..['sinkCount'] = job.sinks.length.toJS
         ..['keepSources'] = [for (final i in job.keepSources) i.toJS].toJS;
-      if (job.heldGroupId != null) {
-        msg['heldGroupId'] = job.heldGroupId!.toJS;
+      if (job.holdGroupId != null) {
+        msg['holdGroupId'] = job.holdGroupId!.toJS;
       }
       if (entry.opfsFiles.any((f) => f != null)) {
         msg['opfsFiles'] = [for (final f in entry.opfsFiles) f?.toJS].toJS;
@@ -488,26 +486,23 @@ class WebLane implements Lane, LanePhase {
     } on PdfIoFailed catch (e) {
       _finish(
         entry,
-        LaneSubmitResult(
+        JobResult(
           buildErrorResponse(e.message, kind: WireErrorKind.io),
           const {},
         ),
       );
     } catch (e) {
-      _finish(
-        entry,
-        LaneSubmitResult(buildErrorResponse(e.toString()), const {}),
-      );
+      _finish(entry, JobResult(buildErrorResponse(e.toString()), const {}));
     }
   }
 
-  void _finish(_WebJob entry, LaneSubmitResult result) {
+  void _finish(_WebJob entry, JobResult result) {
     _revokeCancelUrl(entry);
     // Every completion path lands here — success, engine error,
     // transport error, cancel. One verb closes the job's disk story:
     // the WORKER deletes any pre-copy files the job still owns (same
     // agent as the open handles — no race exists). Files promoted to
-    // held readers survive until releaseHeld; a dead worker's whole
+    // held readers survive until releaseHold; a dead worker's whole
     // directory is reclaimed by the host via its liveness lock.
     if (_mode == PdfIoMode.opfs && !_abandoned) {
       _post({LaneMsgFields.type: LaneMsg.opfsDrop, 'jobId': entry.job.jobId});
@@ -530,8 +525,8 @@ class WebLane implements Lane, LanePhase {
     web.URL.revokeObjectURL(url);
   }
 
-  LaneSubmitResult _deadResult() => LaneSubmitResult(
-    buildErrorResponse(laneDeadMessage),
+  JobResult _deadResult() => JobResult(
+    buildErrorResponse(engineDeadMessage),
     const {},
     laneDied: true,
   );
@@ -550,7 +545,7 @@ class WebLane implements Lane, LanePhase {
   /// and tests call it to replay a captured message.
   void deliver(JSObject? obj) {
     if (obj == null) return;
-    // A message of another tenure never acts here, whatever it says.
+    // A message of another lease never acts here, whatever it says.
     if (_int(obj, LaneMsgFields.lease) != _lease) return;
     final type = _str(obj, LaneMsgFields.type);
     final entry = _running;
@@ -624,7 +619,7 @@ class WebLane implements Lane, LanePhase {
           // No job named: the failure of a reset.
           if (resetting != null && !resetting.isCompleted) {
             resetting.completeError(
-              LaneProtocolError(
+              LeaseProtocolError(
                 _str(obj, 'message') ?? 'web lane reset failed',
               ),
             );
@@ -635,7 +630,7 @@ class WebLane implements Lane, LanePhase {
           _dead = true;
           _finish(
             entry,
-            LaneSubmitResult(
+            JobResult(
               buildErrorResponse('internal error: engine operation panicked'),
               const {},
               laneDied: true,
@@ -647,7 +642,7 @@ class WebLane implements Lane, LanePhase {
           final bytes = entry.cancelled
               ? buildCancelledResponse()
               : buildErrorResponse(message);
-          _finish(entry, LaneSubmitResult(bytes, const {}));
+          _finish(entry, JobResult(bytes, const {}));
         }
     }
   }
@@ -667,31 +662,31 @@ class WebLane implements Lane, LanePhase {
       entry,
       written
           ? _buildResult(entry, bytes)
-          : LaneSubmitResult(buildCancelledResponse(), const {}),
+          : JobResult(buildCancelledResponse(), const {}),
     );
   }
 
-  LaneSubmitResult _buildResult(_WebJob entry, Uint8List bytes) {
+  JobResult _buildResult(_WebJob entry, Uint8List bytes) {
     // Cancelled mid-op: the engine's I/O error reads as the typed
     // status, identical to native's run_job. A success is never
     // rewritten: it may have created a handle only the Router can name
     // and dispose.
     final succeeded = bytes.isNotEmpty && bytes[0] == 1;
     if (entry.cancelled && !succeeded) {
-      return LaneSubmitResult(buildCancelledResponse(), const {});
+      return JobResult(buildCancelledResponse(), const {});
     }
 
-    final heldTokens = <int, Object>{};
+    final holds = <int, Object>{};
     if (entry.job.keepSources.isNotEmpty && bytes.isNotEmpty && bytes[0] == 1) {
       // Token = the handle's group id (its creating job) — the same id
-      // the worker used to mark its promoted readers (heldGroupId).
+      // the worker used to mark its promoted readers (holdGroupId).
       // Ascending index order matches the worker's reader-creation
       // order, and a later job's sources append after the group's
       // earlier ones: that is what held-read serving relies on.
-      final group = entry.job.heldGroupId ?? entry.job.jobId;
+      final group = entry.job.holdGroupId ?? entry.job.jobId;
       final kept = entry.job.keepSources.toList()..sort();
       for (final i in kept) {
-        heldTokens[i] = group;
+        holds[i] = group;
       }
       (_heldSources[group] ??= []).addAll([
         for (final i in kept)
@@ -699,7 +694,7 @@ class WebLane implements Lane, LanePhase {
       ]);
     }
 
-    return LaneSubmitResult(bytes, heldTokens);
+    return JobResult(bytes, holds);
   }
 
   // ── I/O serving ──
@@ -716,10 +711,10 @@ class WebLane implements Lane, LanePhase {
     // then this job's own sources. Mirror that order exactly: a
     // held-reader index resolves to the CREATING job's kept sources;
     // anything past them is this job's own.
-    final heldGroupId = entry.job.heldGroupId;
-    final heldSources = heldGroupId == null
+    final holdGroupId = entry.job.holdGroupId;
+    final heldSources = holdGroupId == null
         ? const <DataSource>[]
-        : _heldSources[heldGroupId] ?? const <DataSource>[];
+        : _heldSources[holdGroupId] ?? const <DataSource>[];
 
     Uint8List? bytes;
     String? error;

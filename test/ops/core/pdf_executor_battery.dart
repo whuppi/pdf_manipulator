@@ -25,17 +25,17 @@ import '../../harness/timeouts.dart';
 
 /// A host that keeps the real executors it boots, so the test reads their
 /// heap.
-class _TrackingHost implements LaneHost {
+class _TrackingHost implements ExecutorBooter {
   _TrackingHost(this._inner);
 
-  final LaneHost _inner;
+  final ExecutorBooter _inner;
   final executors = <Executor>[];
 
   @override
   PdfIoMode get mode => _inner.mode;
 
   @override
-  int get defaultLaneCount => _inner.defaultLaneCount;
+  int get defaultConcurrency => _inner.defaultConcurrency;
 
   @override
   String get poolKey => _inner.poolKey;
@@ -76,7 +76,7 @@ void registerExecutorTests(
     late Router router;
 
     void make({int? keepBytes}) {
-      host = _TrackingHost(createLaneHost(config: config?.call()));
+      host = _TrackingHost(createBooter(config: config?.call()));
       pool = keepBytes == null
           ? ExecutorPool(host: host)
           : ExecutorPool(host: host, keepBytes: keepBytes);
@@ -173,7 +173,7 @@ void registerExecutorTests(
           final lease = await pool.acquire().lease;
           final source = src(minimalPdf);
           final job = lease.lane.submit(
-            LaneJob(
+            Job(
               jobId: 1,
               request: _open(source.length),
               sources: [source],

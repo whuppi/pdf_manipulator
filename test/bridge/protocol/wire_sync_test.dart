@@ -7,7 +7,7 @@
 // both edit and page dispatch (editor watermark + builder page
 // watermark).
 //
-// The web twin (lane_worker.js ↔ lane protocol) lives in
+// The web twin (executor_worker.js ↔ lane protocol) lives in
 // test/runtime/web/lane_worker_sync_test.dart.
 
 @TestOn('vm')
@@ -290,7 +290,7 @@ void main() {
       'vendor/pdf_oxide/src/host/native/lane.rs',
     ).readAsStringSync();
     final rustTable = File(
-      'vendor/pdf_oxide/src/host/native/lane_table.rs',
+      'vendor/pdf_oxide/src/host/native/executor_table.rs',
     ).readAsStringSync();
     final dartBindings = File(
       'lib/src/runtime/native/bindings.dart',
@@ -305,7 +305,7 @@ void main() {
     }
 
     test('the lane error messages match their Rust constants', () {
-      expect(laneDeadMessage, rustConst('LANE_DEAD_MESSAGE'));
+      expect(engineDeadMessage, rustConst('ENGINE_DEAD_MESSAGE'));
       expect(laneStaleLeaseMessage, rustConst('STALE_LEASE_MESSAGE'));
       expect(laneBusyMessage, rustConst('LANE_BUSY_MESSAGE'));
     });
@@ -324,7 +324,11 @@ void main() {
       };
       expect(
         dart.keys,
-        containsAll(['lane_submit', 'lane_reset', 'lane_lease_begin']),
+        containsAll([
+          'executor_submit',
+          'executor_reset',
+          'executor_lease_begin',
+        ]),
       );
       for (final entry in dart.entries) {
         if (entry.key == 'store_dart_post_cobject') continue;
@@ -333,7 +337,7 @@ void main() {
           dotAll: true,
         ).firstMatch(rustTable);
         if (rust == null) {
-          fail('${entry.key} is not an extern "C" fn in lane_table.rs');
+          fail('${entry.key} is not an extern "C" fn in executor_table.rs');
         }
         final rustParams = RegExp(
           r'\b[a-z_]+:\s',

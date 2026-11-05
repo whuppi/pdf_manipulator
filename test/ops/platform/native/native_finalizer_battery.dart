@@ -1,7 +1,7 @@
 // Native-only: verify dispose() + process exit never fires a dead
 // NativeCallable.
 //
-// The invariant under test: lane kill flags every channel under its
+// The invariant under test: executor terminate flags every channel under its
 // pair mutex BEFORE any Rust thread can notify, so no lane thread
 // ever posts to a closed NativeCallable ("Callback invoked after it
 // has been deleted" is a FATAL abort on Windows).

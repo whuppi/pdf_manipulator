@@ -1,7 +1,72 @@
 /**
+ * Drop this executor's engine state, freeing every handle it owns.
+ * Graceful-path only — `worker.terminate()` makes this moot.
+ * @param {number} state_ptr
+ */
+export function engine_state_drop(state_ptr) {
+    wasm.engine_state_drop(state_ptr);
+}
+
+/**
+ * Create this worker's engine state. Returns a WASM pointer.
+ * Called exactly once per worker, from executor_worker.js bootstrap.
+ * @returns {number}
+ */
+export function engine_state_new() {
+    const ret = wasm.engine_state_new();
+    return ret >>> 0;
+}
+
+/**
+ * Execute one job against this executor's state.
+ *
+ * source_lengths: packed f64 array — each 8 bytes is one source
+ * length (f64 because JS numbers cross the boundary as doubles).
+ * Sources get indexed readers (0, 1, 2, ...).
+ * sink_count: how many output sinks exist.
+ * Sinks get indexed writers (0, 1, 2, ...).
+ *
+ * The worker is single-threaded, so the &mut reconstruction from
+ * the raw pointer is sound: no other code can hold a reference
+ * while this runs.
+ * @param {number} state_ptr
+ * @param {Uint8Array} request_bytes
+ * @param {Uint8Array} source_lengths
+ * @param {number} sink_count
+ * @returns {Uint8Array}
+ */
+export function execute(state_ptr, request_bytes, source_lengths, sink_count) {
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passArray8ToWasm0(request_bytes, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray8ToWasm0(source_lengths, wasm.__wbindgen_export2);
+        const len1 = WASM_VECTOR_LEN;
+        wasm.execute(retptr, state_ptr, ptr0, len0, ptr1, len1, sink_count);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var v3 = getArrayU8FromWasm0(r0, r1).slice();
+        wasm.__wbindgen_export3(r0, r1 * 1, 1);
+        return v3;
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+    }
+}
+
+/**
+ * The most bytes this worker's heap has held since its last
+ * `engine_state_new`, which a reset calls again.
+ * @returns {number}
+ */
+export function heap_peak() {
+    const ret = wasm.heap_peak();
+    return ret >>> 0;
+}
+
+/**
  * Allocate `size` bytes (align 1) from the module's global allocator.
  *
- * Stable twin of the glue's internal malloc, for lane_worker.js's JSPI
+ * Stable twin of the glue's internal malloc, for executor_worker.js's JSPI
  * driver: wasm-bindgen's `__wbindgen_export_N` aliases are renumbered
  * whenever the module's export set changes, so the worker must never
  * call those by name. Same allocator and layout as the glue's malloc,
@@ -16,77 +81,12 @@ export function lane_alloc(size) {
 
 /**
  * Free a buffer from `lane_alloc` or a response buffer handed out by
- * `lane_execute` (both come from the same global allocator, align 1).
+ * `execute` (both come from the same global allocator, align 1).
  * @param {number} ptr
  * @param {number} size
  */
 export function lane_dealloc(ptr, size) {
     wasm.lane_dealloc(ptr, size);
-}
-
-/**
- * Drop this lane's state, freeing every handle it owns.
- * Graceful-path only — `worker.terminate()` makes this moot.
- * @param {number} lane_ptr
- */
-export function lane_destroy(lane_ptr) {
-    wasm.lane_destroy(lane_ptr);
-}
-
-/**
- * Execute one job against this lane's state.
- *
- * source_lengths: packed f64 array — each 8 bytes is one source
- * length (f64 because JS numbers cross the boundary as doubles).
- * Sources get indexed readers (0, 1, 2, ...).
- * sink_count: how many output sinks exist.
- * Sinks get indexed writers (0, 1, 2, ...).
- *
- * The worker is single-threaded, so the &mut reconstruction from
- * the raw pointer is sound: no other code can hold a reference
- * while this runs.
- * @param {number} lane_ptr
- * @param {Uint8Array} request_bytes
- * @param {Uint8Array} source_lengths
- * @param {number} sink_count
- * @returns {Uint8Array}
- */
-export function lane_execute(lane_ptr, request_bytes, source_lengths, sink_count) {
-    try {
-        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-        const ptr0 = passArray8ToWasm0(request_bytes, wasm.__wbindgen_export2);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passArray8ToWasm0(source_lengths, wasm.__wbindgen_export2);
-        const len1 = WASM_VECTOR_LEN;
-        wasm.lane_execute(retptr, lane_ptr, ptr0, len0, ptr1, len1, sink_count);
-        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
-        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
-        var v3 = getArrayU8FromWasm0(r0, r1).slice();
-        wasm.__wbindgen_export3(r0, r1 * 1, 1);
-        return v3;
-    } finally {
-        wasm.__wbindgen_add_to_stack_pointer(16);
-    }
-}
-
-/**
- * The most bytes this worker's heap has held since its last
- * `lane_init`, which a reset calls again.
- * @returns {number}
- */
-export function lane_heap_peak() {
-    const ret = wasm.lane_heap_peak();
-    return ret >>> 0;
-}
-
-/**
- * Create this worker's lane state. Returns a WASM pointer.
- * Called exactly once per worker, from lane_worker.js bootstrap.
- * @returns {number}
- */
-export function lane_init() {
-    const ret = wasm.lane_init();
-    return ret >>> 0;
 }
 function __wbg_get_imports() {
     const import0 = {

@@ -1,24 +1,24 @@
-// Lane protocol — the single source of truth for every constant the
+// Lease protocol — the single source of truth for every constant the
 // web lane body and the Dart side must agree on.
 //
-// The numeric codes are INJECTED into lane_worker.js at init (the
+// The numeric codes are INJECTED into executor_worker.js at init (the
 // worker declares no constants of its own — it echoes what it was
 // handed, so a change here reaches the worker with no second edit).
-// Message type strings appear literally in lane_worker.js for
+// Message type strings appear literally in executor_worker.js for
 // readability; the wire_sync parity test asserts they match this file.
 //
 // Every message after the boot handshake (init, booted, ready, bootfailed)
-// carries the lease id in `LaneMsgFields.lease`: one lane's tenure on one
-// worker, numbered by a counter per worker and never reused. The adapter
+// carries the lease id in `LaneMsgFields.lease`, a number from a counter per
+// worker, never reused. The adapter
 // drops an inbound message whose lease is not its own; the worker drops one
 // that is neither the lease it serves nor a newer one while idle.
 //
 // Rust mirrors:
 //   hostIo* ↔ host/constants.rs HOST_IO_*
-//   (SAB codes are JS↔JS only — produced by WebLane, consumed by the
+//   (SAB codes are JS↔JS only — produced by WebLease, consumed by the
 //    worker's Atomics waits.)
 //
-// INTERNAL — used by the Router, WebLane, and the parity test.
+// INTERNAL — used by the Router, WebLease, and the parity test.
 
 /// Host I/O return codes (host_read_at / host_write_chunk → WASM).
 /// Must match `HOST_IO_ERROR` / `HOST_IO_CANCELLED` in constants.rs.
@@ -32,7 +32,7 @@ abstract final class HostIo {
 }
 
 /// Status words for the per-job SharedArrayBuffers (Atomics mode).
-/// WebLane stores these + notifies; the worker's Atomics.wait reads.
+/// WebLease stores these + notifies; the worker's Atomics.wait reads.
 abstract final class SabStatus {
   /// Request posted, host has not answered yet (the wait value).
   static const pending = 0;
@@ -71,7 +71,7 @@ abstract final class SabLayout {
   static const cancelSabBytes = 4;
 }
 
-/// Message type tags between WebLane (Dart) and lane_worker.js.
+/// Message type tags between WebLease (Dart) and executor_worker.js.
 /// The worker uses these literally; the parity test pins them here.
 abstract final class LaneMsg {
   /// Dart → worker: bootstrap (protocol, mode, wasm module).
@@ -87,7 +87,7 @@ abstract final class LaneMsg {
   static const chunkAck = 'chunkAck';
 
   /// Dart → worker: drop a handle's held readers.
-  static const releaseHeld = 'releaseHeld';
+  static const releaseHold = 'releaseHold';
 
   /// Dart → worker: replace the engine state with a fresh one (same wasm
   /// instance), clear the reader and job-file maps and delete the worker's
@@ -102,7 +102,7 @@ abstract final class LaneMsg {
   /// owned by it. The worker owns its OPFS files (it creates them,
   /// holds their handles, and is their only consumer), so deletion is
   /// same-agent and race-free. Files promoted to held readers survive
-  /// until [releaseHeld]; a dead worker's directory is reclaimed by
+  /// until [releaseHold]; a dead worker's directory is reclaimed by
   /// the host via its liveness lock.
   static const opfsDrop = 'opfsDrop';
 
@@ -112,8 +112,8 @@ abstract final class LaneMsg {
   static const booted = 'booted';
 
   /// Bootstrap → Dart: the blob bootstrap's dynamic import of
-  /// lane_worker.js failed (unreachable URL, bad script). Posted by
-  /// the BOOTSTRAP, not lane_worker.js — a rejected import is an
+  /// executor_worker.js failed (unreachable URL, bad script). Posted by
+  /// the BOOTSTRAP, not executor_worker.js — a rejected import is an
   /// unhandled rejection in the worker, invisible to the Worker
   /// error event, so the bootstrap must report it itself.
   static const bootFailed = 'bootfailed';
@@ -195,7 +195,7 @@ abstract final class LaneMsgFields {
 const kCreateHandleWait = Duration(seconds: 5);
 
 /// The protocol object injected into the worker's init message.
-/// Keys are stable API for lane_worker.js.
+/// Keys are stable API for executor_worker.js.
 Map<String, int> laneProtocolCodes() => {
   'hostIoError': HostIo.error,
   'hostIoCancelled': HostIo.cancelled,

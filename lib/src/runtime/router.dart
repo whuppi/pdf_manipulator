@@ -1,11 +1,11 @@
-// Router — the ONE shared brain for both platforms.
+// Router — the one place that decides, for both platforms.
 //
-// Implements PdfTransport on top of the Lane interface. Everything
+// Implements PdfTransport on top of the Lease interface. Everything
 // that decides lives here, exactly once:
 //
 //   - pinning: a handle's ops always run on the lane that owns it
 //   - placement: handle-less ops go to the least-loaded lane,
-//     spawning lanes up to [maxLanes]
+//     starting lanes up to [maxLanes]
 //   - job identity + completion ownership (after a lane ends, the
 //     LANE completes its pending submits as cancelled — the Router
 //     never awaits a dead lane)
@@ -72,10 +72,10 @@ const _builderOps = {
   'builderSave',
 };
 
-class _LaneSlot {
-  _LaneSlot(this.lane);
+class _LaneRecord {
+  _LaneRecord(this.lane);
 
-  final PooledLane lane;
+  final Lane lane;
 
   /// Jobs currently submitted and not yet completed. Drives
   /// least-loaded placement.
@@ -94,7 +94,7 @@ class _LaneSlot {
 class _Pin {
   _Pin(this.slot, this.engineHandleId, this.groupId);
 
-  final _LaneSlot slot;
+  final _LaneRecord slot;
 
   /// The id the engine on [slot] knows this handle by. Per-lane engine
   /// ids collide across lanes (each lane counts from 1), so the Router
@@ -116,7 +116,7 @@ class _Pin {
 class _HeldResource {
   _HeldResource(this.slot, this.tokens);
 
-  final _LaneSlot slot;
+  final _LaneRecord slot;
   final List<Object> tokens;
 }
 
@@ -138,10 +138,10 @@ class Router implements PdfTransport {
   final int _maxLanes;
   final PdfIoMode _mode;
 
-  final List<_LaneSlot> _lanes = [];
+  final List<_LaneRecord> _lanes = [];
 
   /// Dead lanes that still hold their executor until their jobs answer.
-  final Set<_LaneSlot> _dying = {};
+  final Set<_LaneRecord> _dying = {};
   final List<({Uint8List request, Uint8List bytes})> _preludes = [];
   final Map<int, _Pin> _pins = {};
   final Map<int, _HeldResource> _held = {};
@@ -178,8 +178,8 @@ class Router implements PdfTransport {
 
     // Same-tick cancels AND disposes land during the await above —
     // before the job exists anywhere. Without the disposed re-check,
-    // execution resumes on a disposed Router and spawns a ZOMBIE
-    // lane: never ended (dispose already ran), holding its sources
+    // execution resumes on a disposed Router and starts a lane that
+    // nothing will end (dispose already ran), holding its sources
     // forever. From here to submit is synchronous (single owner, one
     // event loop), so these checks are exact, not races.
     if (_disposed || (cancel?.isCancelled ?? false)) {
@@ -210,20 +210,20 @@ class Router implements PdfTransport {
         return (
           bytes: disposing
               ? Uint8List.fromList(const [1, 0, 0])
-              : buildErrorResponse(laneDeadMessage),
+              : buildErrorResponse(engineDeadMessage),
           resourceIds: const <int, int>{},
         );
       }
       req = rewriteRequestHandleId(req, pin.engineHandleId);
     }
     final slot = pin?.slot ?? _placeFor(req);
-    final job = LaneJob(
+    final job = Job(
       jobId: _nextJobId++,
       request: req,
       sources: sources,
       sinks: sinks,
       keepSources: keepSources,
-      heldGroupId: pin?.groupId,
+      holdGroupId: pin?.groupId,
     );
 
     slot.activeJobs++;
@@ -233,7 +233,7 @@ class Router implements PdfTransport {
     // but unregistering keeps it exact.
     final pending = slot.lane.submit(job);
     final unregister = cancel?.register(() => slot.lane.cancelJob(job.jobId));
-    final LaneSubmitResult result;
+    final JobResult result;
     try {
       result = await pending;
     } finally {
@@ -252,12 +252,12 @@ class Router implements PdfTransport {
   /// Turns one finished job into the caller's answer: pins a handle the
   /// job created, files the sources it kept, and applies the cancel rule.
   ({Uint8List bytes, Map<int, int> resourceIds}) _complete(
-    _LaneSlot slot,
-    LaneJob job,
+    _LaneRecord slot,
+    Job job,
     Uint8List req,
     _Pin? pin,
     int? globalHandleId,
-    LaneSubmitResult result,
+    JobResult result,
     CancelHook? cancel,
   ) {
     // Pin bookkeeping is response-driven, not op-name-driven: any op
@@ -273,8 +273,8 @@ class Router implements PdfTransport {
     final succeeded = bytes.isNotEmpty && bytes[0] == 1;
     if (!succeeded) {
       if (!_disposed) {
-        for (final token in result.heldTokens.values) {
-          slot.lane.releaseHeld(token);
+        for (final token in result.holds.values) {
+          slot.lane.releaseHold(token);
         }
       }
       return (bytes: bytes, resourceIds: const <int, int>{});
@@ -321,16 +321,16 @@ class Router implements PdfTransport {
       slot.pins++;
       bytes = rewriteResponseHandleId(bytes, globalId);
     }
-    if (owner != null && result.heldTokens.isNotEmpty) {
+    if (owner != null && result.holds.isNotEmpty) {
       // A later job on a live handle that keeps sources (a merge) adds
       // them to the handle's one resource, released with it.
       final resource = owner.resourceId == null
           ? null
           : _held[owner.resourceId];
       if (resource == null) {
-        owner.resourceId = _newResource(slot, result.heldTokens.values);
+        owner.resourceId = _newResource(slot, result.holds.values);
       } else {
-        resource.tokens.addAll(result.heldTokens.values);
+        resource.tokens.addAll(result.holds.values);
       }
     }
     if (globalHandleId != null && _disposeOps.contains(peekRequestOp(req))) {
@@ -339,13 +339,10 @@ class Router implements PdfTransport {
 
     final resourceId =
         owner?.resourceId ??
-        (result.heldTokens.isEmpty
-            ? null
-            : _newResource(slot, result.heldTokens.values));
+        (result.holds.isEmpty ? null : _newResource(slot, result.holds.values));
     final resourceIds = <int, int>{
       if (resourceId != null)
-        for (final sourceIndex in result.heldTokens.keys)
-          sourceIndex: resourceId,
+        for (final sourceIndex in result.holds.keys) sourceIndex: resourceId,
     };
     return (bytes: bytes, resourceIds: resourceIds);
   }
@@ -354,12 +351,12 @@ class Router implements PdfTransport {
   /// runs after the job that made it, and the job's kept channels are
   /// released only once the engine has dropped the document that reads them.
   void _disposeOrphan(
-    _LaneSlot slot,
+    _LaneRecord slot,
     int engineHandle,
     String disposeOp,
-    LaneSubmitResult created,
+    JobResult created,
   ) {
-    final job = LaneJob(
+    final job = Job(
       jobId: _nextJobId++,
       request: bin.encodeRequest(disposeOp, {'handleId': engineHandle}),
       sources: const [],
@@ -371,8 +368,8 @@ class Router implements PdfTransport {
       slot.lane.submit(job).whenComplete(() {
         slot.activeJobs--;
         if (_disposed) return;
-        for (final token in created.heldTokens.values) {
-          slot.lane.releaseHeld(token);
+        for (final token in created.holds.values) {
+          slot.lane.releaseHold(token);
         }
         _releaseIfIdle(slot);
       }),
@@ -382,7 +379,7 @@ class Router implements PdfTransport {
   /// A dead lane takes no more placements and fails the handles on it. Its
   /// executor is given up once the jobs already on it have each had their
   /// answer.
-  void _retireDead(_LaneSlot slot) {
+  void _retireDead(_LaneRecord slot) {
     slot.dead = true;
     _lanes.remove(slot);
     _dying.add(slot);
@@ -391,7 +388,7 @@ class Router implements PdfTransport {
   /// Gives the lane's executor back to the pool when the lane is idle and
   /// holds nothing: no job, no pinned handle, no kept source. A dead lane
   /// gives it up whatever it holds, since its handles are gone.
-  void _releaseIfIdle(_LaneSlot slot) {
+  void _releaseIfIdle(_LaneRecord slot) {
     if (_disposed || slot.activeJobs > 0) return;
     if (!slot.dead && (slot.pins > 0 || slot.heldResources > 0)) return;
     _dying.remove(slot);
@@ -410,7 +407,7 @@ class Router implements PdfTransport {
     return 'document not found';
   }
 
-  int _newResource(_LaneSlot slot, Iterable<Object> tokens) {
+  int _newResource(_LaneRecord slot, Iterable<Object> tokens) {
     final id = _nextResourceId++;
     _held[id] = _HeldResource(slot, List.of(tokens));
     slot.heldResources++;
@@ -422,7 +419,7 @@ class Router implements PdfTransport {
     final resource = _held.remove(resourceId);
     if (resource == null) return; // already gone (dispose covered it)
     for (final token in resource.tokens) {
-      resource.slot.lane.releaseHeld(token);
+      resource.slot.lane.releaseHold(token);
     }
     resource.slot.heldResources--;
     _releaseIfIdle(resource.slot);
@@ -467,7 +464,7 @@ class Router implements PdfTransport {
   /// Preludes ride the same per-lane FIFO as user jobs, so the ones replayed
   /// at lease time always execute before any job routed to that lane later.
   Future<Uint8List> _runPrelude(
-    _LaneSlot slot,
+    _LaneRecord slot,
     Uint8List request,
     Uint8List bytes,
   ) async {
@@ -480,7 +477,7 @@ class Router implements PdfTransport {
     }
   }
 
-  LaneJob _preludeJob(Uint8List request, Uint8List bytes) => LaneJob(
+  Job _preludeJob(Uint8List request, Uint8List bytes) => Job(
     jobId: _nextJobId++,
     request: request,
     sources: [MemorySource(bytes)],
@@ -488,15 +485,15 @@ class Router implements PdfTransport {
     keepSources: const {},
   );
 
-  /// Least-loaded lane, spawning under the cap. (Pinned routing is
+  /// Least-loaded lane, starting a new one under the cap. (Pinned routing is
   /// resolved by the caller; an unknown handle falls through here —
   /// any lane can host the engine's "not found" error.)
-  _LaneSlot _placeFor(Uint8List request) {
+  _LaneRecord _placeFor(Uint8List request) {
     if (_lanes.isEmpty || (_lanes.length < _maxLanes && _allBusy())) {
       // Fire-and-forget replay at every lease: a failed one degrades that
       // lease to the engine's no-fallback warning path, never fails jobs.
-      final slot = _LaneSlot(
-        PooledLane(
+      final slot = _LaneRecord(
+        Lane(
           _pool,
           prelude: () => [
             for (final p in _preludes) _preludeJob(p.request, p.bytes),

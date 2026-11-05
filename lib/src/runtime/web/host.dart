@@ -1,27 +1,29 @@
-// WebLaneHost — worker physics for the web lane runtime.
+// WebExecutorBooter — executor booting for the web runtime.
 //
-// Part of lane.dart (the lane itself lives there). This file owns
+// Part of lease.dart (the lease adapter lives there). This file owns
 // everything about WORKERS AS A RESOURCE, nothing about jobs and nothing
 // about how many exist or who holds them (the pool does):
 //
-//   - the boot handshake (spawn → booted → init → ready): the worker
+//   - the boot handshake (start → booted → init → ready): the worker
 //     announces when its message handler is attached, because a
 //     message posted before that is silently dropped
 //   - terminating a worker and reclaiming its OPFS directory
 //   - WASM module compile-once caching + I/O mode detection
 
-part of 'lane.dart';
+part of 'lease.dart';
 
 // ── Host ────────────────────────────────────────────────────────────
 
-/// Spawns web lanes. Detects the I/O mode once and pre-compiles the
+/// Boots web executors. Detects the I/O mode once and pre-compiles the
 /// WASM module once per page (workers receive the compiled module).
-class WebLaneHost implements LaneHost {
-  /// Creates a host. [laneWorkerUrl] locates lane_worker.js;
+class WebExecutorBooter implements ExecutorBooter {
+  /// Creates a host. [laneWorkerUrl] locates executor_worker.js;
   /// [forceMode] overrides auto-detection (test runners use this).
-  WebLaneHost({String? laneWorkerUrl, PdfIoMode? forceMode})
+  WebExecutorBooter({String? laneWorkerUrl, PdfIoMode? forceMode})
     : _laneWorkerUrl =
-          laneWorkerUrl ?? _cachedWorkerUrl ?? 'pdf_manipulator/lane_worker.js',
+          laneWorkerUrl ??
+          _cachedWorkerUrl ??
+          'pdf_manipulator/executor_worker.js',
       mode = _detectMode(forceMode ?? _cachedForceMode) {
     // Page-level config inheritance: assets live in ONE place per
     // page, so explicitly-configured URLs/mode become the default
@@ -52,7 +54,7 @@ class WebLaneHost implements LaneHost {
   //            browser releases it on agent death (a spec guarantee
   //            — the web's analogue of the native lane's every-job-
   //            posts-exactly-once contract). An acquirable lock IS
-  //            the death certificate; only then is the directory
+  //            proof the agent is dead; only then is the directory
   //            reclaimed.
   //
   // Two reclaim layers, same key: a retired worker's dir (its lock,
@@ -167,7 +169,7 @@ class WebLaneHost implements LaneHost {
   /// WASM memory — and the handles it held on its files — are released
   /// later, asynchronously, so the directory cannot be deleted at the call.
   ///
-  /// The worker's liveness lock is the death certificate (the same signal
+  /// The worker's liveness lock is the proof of death (the same signal
   /// OPFS session reclaim keys on); a used OPFS worker's directory is
   /// deleted under the same grant. Where Web Locks are unavailable
   /// (non-secure context) no death signal exists, and the next session
@@ -255,7 +257,7 @@ class WebLaneHost implements LaneHost {
   final PdfIoMode mode;
 
   @override
-  int get defaultLaneCount =>
+  int get defaultConcurrency =>
       suggestedLaneCount(web.window.navigator.hardwareConcurrency);
 
   static JSObject? _cachedModule;
@@ -267,7 +269,7 @@ class WebLaneHost implements LaneHost {
   @override
   Future<Executor> boot() => _bootWorker();
 
-  /// Spawn a worker and drive its boot handshake to `ready`. The
+  /// Start a worker and drive its boot handshake to `ready`. The
   /// temporary listener is detached before the worker is handed out;
   /// an idle ready worker sends nothing, so no message can be lost.
   Future<WebExecutor> _bootWorker() async {
@@ -278,7 +280,7 @@ class WebLaneHost implements LaneHost {
     final lockName = _workerLockName(workerId);
     final opfsDir = mode == PdfIoMode.opfs ? workerId : null;
     final worker = _spawnWorker();
-    // Everything after the spawn runs inside the try: a throw anywhere here
+    // Everything after the start runs inside the try: a throw anywhere here
     // must still terminate the worker.
     StreamSubscription<web.MessageEvent>? sub;
     StreamSubscription<web.Event>? errSub;
@@ -444,7 +446,7 @@ class WebExecutor implements Executor {
   final String lockName;
 
   final PdfIoMode _mode;
-  WebLane? _lane;
+  WebLease? _lane;
   StreamSubscription<web.MessageEvent>? _sub;
   int _lastLease = 0;
   int _heapBytes = 0;
@@ -454,8 +456,8 @@ class WebExecutor implements Executor {
 
   /// Set by a test that makes the browser's handle creation hang on purpose:
   /// this worker's set-aside files and retried creates are kept here and
-  /// stay out of [WebLaneHost.abandonedFiles] and
-  /// [WebLaneHost.retriedCreates], which judge the runs that did not.
+  /// stay out of [WebExecutorBooter.abandonedFiles] and
+  /// [WebExecutorBooter.retriedCreates], which judge the runs that did not.
   bool provoked = false;
 
   /// The files this worker reported set aside at its last reset.
@@ -468,16 +470,16 @@ class WebExecutor implements Executor {
 
   void _retriedCreate() {
     _retriedCreates++;
-    if (!provoked) WebLaneHost._retriedCreates++;
+    if (!provoked) WebExecutorBooter._retriedCreates++;
   }
 
   void _setAsideNow(List<String> names) {
     _setAside = names;
     if (_terminated || provoked) return;
     if (names.isEmpty) {
-      WebLaneHost._setAsideFiles.remove(opfsDir ?? lockName);
+      WebExecutorBooter._setAsideFiles.remove(opfsDir ?? lockName);
     } else {
-      WebLaneHost._setAsideFiles[opfsDir ?? lockName] = names;
+      WebExecutorBooter._setAsideFiles[opfsDir ?? lockName] = names;
     }
   }
 
@@ -497,24 +499,24 @@ class WebExecutor implements Executor {
 
   /// Starts a new lease and returns its lane. One counter per worker: ids
   /// count up from 1 and are never reused, so a smaller id always names a
-  /// tenure that has ended.
+  /// lease that has ended.
   @override
-  Lane beginLane() {
-    if (_dead || _terminated) throw const LaneProtocolError(laneDeadMessage);
-    return _lane = WebLane._(this, ++_lastLease);
+  Lease beginLane() {
+    if (_dead || _terminated) throw const LeaseProtocolError(engineDeadMessage);
+    return _lane = WebLease._(this, ++_lastLease);
   }
 
   @override
   void terminate() {
     if (_terminated) return;
     _terminated = true;
-    WebLaneHost._setAsideFiles.remove(opfsDir ?? lockName);
-    // Browser kill: frees the worker, its WASM heap, and every open
+    WebExecutorBooter._setAsideFiles.remove(opfsDir ?? lockName);
+    // Browser terminate: frees the worker, its WASM heap, and every open
     // SyncAccessHandle in one stroke. Nothing can call back after.
     unawaited(_sub?.cancel());
     _sub = null;
     js.terminate();
     _lane?._abandon();
-    unawaited(WebLaneHost._reapDeadWorker(this));
+    unawaited(WebExecutorBooter._reapDeadWorker(this));
   }
 }

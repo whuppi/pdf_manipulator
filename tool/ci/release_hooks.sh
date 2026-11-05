@@ -2,7 +2,7 @@
 # Consumer extension for the shared whuppi/ci release.sh (sourced by its
 # stamp_asset_hashes — see the shared script's header). Source, don't execute.
 #
-# pdf_manipulator ships hand-written web assets (e.g. lane_worker.js) that the
+# pdf_manipulator ships hand-written web assets (e.g. executor_worker.js) that the
 # GitHub Release API carries no digest for — the release only uploads the
 # COMPILED binaries + wasm outputs, which get API digests. This hook hashes the
 # hand-written files from the tag's web_assets/ tree so they land in

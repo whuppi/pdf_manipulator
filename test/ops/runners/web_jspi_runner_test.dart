@@ -5,7 +5,7 @@
 library;
 
 import 'package:pdf_manipulator/pdf_manipulator.dart';
-import 'package:pdf_manipulator/src/runtime/web/lane.dart' show WebExecutor;
+import 'package:pdf_manipulator/src/runtime/web/lease.dart' show WebExecutor;
 import 'package:test/test.dart';
 
 import '../../fixtures/handwritten.dart';
@@ -57,7 +57,8 @@ void main() {
 
     pdf = Pdf(
       config: PdfConfig(
-        webWorkerUrl: 'http://localhost:$serverPort/web_assets/lane_worker.js',
+        webWorkerUrl:
+            'http://localhost:$serverPort/web_assets/executor_worker.js',
         webIoMode: PdfIoMode.jspi,
       ),
     );
@@ -95,7 +96,8 @@ void main() {
   registerLifecycleTests(
     () => Pdf(
       config: PdfConfig(
-        webWorkerUrl: 'http://localhost:$serverPort/web_assets/lane_worker.js',
+        webWorkerUrl:
+            'http://localhost:$serverPort/web_assets/executor_worker.js',
         webIoMode: PdfIoMode.jspi,
       ),
     ),
@@ -103,7 +105,8 @@ void main() {
   registerInstanceTests(
     () => Pdf(
       config: PdfConfig(
-        webWorkerUrl: 'http://localhost:$serverPort/web_assets/lane_worker.js',
+        webWorkerUrl:
+            'http://localhost:$serverPort/web_assets/executor_worker.js',
         webIoMode: PdfIoMode.jspi,
       ),
     ),
@@ -111,13 +114,14 @@ void main() {
 
   registerRuntimeSafetyTests(
     config: () => PdfConfig(
-      webWorkerUrl: 'http://localhost:$serverPort/web_assets/lane_worker.js',
+      webWorkerUrl:
+          'http://localhost:$serverPort/web_assets/executor_worker.js',
       webIoMode: PdfIoMode.jspi,
     ),
   );
 
   PdfConfig executorConfig() => PdfConfig(
-    webWorkerUrl: 'http://localhost:$serverPort/web_assets/lane_worker.js',
+    webWorkerUrl: 'http://localhost:$serverPort/web_assets/executor_worker.js',
     webIoMode: PdfIoMode.jspi,
   );
   registerExecutorTests(
@@ -128,13 +132,15 @@ void main() {
 
   registerLaneProtocolTests(
     config: () => PdfConfig(
-      webWorkerUrl: 'http://localhost:$serverPort/web_assets/lane_worker.js',
+      webWorkerUrl:
+          'http://localhost:$serverPort/web_assets/executor_worker.js',
       webIoMode: PdfIoMode.jspi,
     ),
   );
 
   registerWebLaneProtocolTests(
-    workerUrl: () => 'http://localhost:$serverPort/web_assets/lane_worker.js',
+    workerUrl: () =>
+        'http://localhost:$serverPort/web_assets/executor_worker.js',
     mode: PdfIoMode.jspi,
   );
 
@@ -146,7 +152,8 @@ void main() {
   registerInstanceStressTests(
     () => Pdf(
       config: PdfConfig(
-        webWorkerUrl: 'http://localhost:$serverPort/web_assets/lane_worker.js',
+        webWorkerUrl:
+            'http://localhost:$serverPort/web_assets/executor_worker.js',
         webIoMode: PdfIoMode.jspi,
       ),
     ),
@@ -154,7 +161,8 @@ void main() {
 
   // LAST on purpose: its residue check sweeps the whole suite.
   registerWebPlatformTests(
-    workerUrl: () => 'http://localhost:$serverPort/web_assets/lane_worker.js',
+    workerUrl: () =>
+        'http://localhost:$serverPort/web_assets/executor_worker.js',
     mode: PdfIoMode.jspi,
     disposeSharedInstance: () => pdf.dispose(),
   );

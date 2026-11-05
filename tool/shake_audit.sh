@@ -119,7 +119,7 @@ for banned in pdf_document_builder_create pdf_document_load pdf_render_page; do
   echo "$SYMS" | grep -Eq "_?$banned\$" && fail "banned symbol survived: $banned"
 done
 # The lane bridge must be alive (its C surface is lane_* + channel_*).
-for required in lane_job_cancel channel_init_read; do
+for required in executor_job_cancel channel_init_read; do
   echo "$SYMS" | grep -Eq "_?$required\$" || fail "lane bridge export missing: $required"
 done
 # Trim must actually delete code: core-only materially smaller than full.

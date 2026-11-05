@@ -1,8 +1,8 @@
-// NativeExecutor and NativeLane — the dumb native adapter: the verbs of
-// Lane over FFI.
+// NativeExecutor and NativeLease — the native lease adapter: the verbs of
+// Lease over FFI.
 //
-// One NativeExecutor = one Rust lane thread (spawned by lane_spawn); one
-// NativeLane = one lease on it. The adapter translates Lane verbs into FFI
+// One NativeExecutor = one Rust executor thread (booted by executor_boot); one
+// NativeLease = one lease on it. The adapter translates Lease verbs into FFI
 // calls and serves the thread's I/O on the MAIN isolate via NativeCallable
 // listeners — no helper isolate exists; the event loop is the only
 // Dart-side thread.
@@ -19,11 +19,11 @@
 //
 // ## The abandon protocol (callback safety)
 //
-// After lane_kill (an executor's terminate) returns, Rust guarantees no
+// After executor_terminate returns, Rust guarantees no
 // notify callback will ever fire for this thread — so callables can be
 // closed immediately. Buffers still wait for their job's post (see above).
 //
-// INTERNAL — constructed by NativeLaneHost, driven by the pool.
+// INTERNAL — constructed by NativeExecutorBooter, driven by the pool.
 
 import 'dart:async';
 import 'dart:ffi' as ffi;
@@ -46,10 +46,10 @@ import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 
 part 'host.dart';
 
-/// Creates the native [LaneHost]. The platform conditional import selects this
+/// Creates the native [ExecutorBooter]. The platform conditional import selects this
 /// where dart:io exists. [config] is unused natively — lane sizing comes from
 /// the host.
-LaneHost createLaneHost({PdfConfig? config}) => NativeLaneHost();
+ExecutorBooter createBooter({PdfConfig? config}) => NativeExecutorBooter();
 
 /// A read channel kept alive for a handle's lifetime (the engine
 /// moved its source into the document). Opaque to the Router.
@@ -71,7 +71,7 @@ class _HeldChannel {
 class _PendingJob {
   _PendingJob(this.completer, this.port, this.cleanup, this.buildResult);
 
-  final Completer<LaneSubmitResult> completer;
+  final Completer<JobResult> completer;
   final RawReceivePort port;
 
   /// Closes the port, closes non-kept callables, destroys + frees
@@ -84,32 +84,32 @@ class _PendingJob {
 
   /// Builds the success-path result (collecting held tokens) from
   /// the posted bytes.
-  final LaneSubmitResult Function(Uint8List bytes) buildResult;
+  final JobResult Function(Uint8List bytes) buildResult;
 }
 
 /// One Rust lane thread with its engine state. Decision-free.
 class NativeExecutor implements Executor {
-  NativeExecutor._(this.laneKey);
+  NativeExecutor._(this.executorKey);
 
   /// The thread's key in the Rust lane table. Internal: tests replay
   /// messages against it.
-  final int laneKey;
+  final int executorKey;
 
-  NativeLane? _lane;
+  NativeLease? _lane;
   bool _terminated = false;
 
   @override
-  int get heapBytes => bindings.laneHeapPeak(laneKey);
+  int get heapBytes => bindings.executorHeapPeak(executorKey);
 
   @override
-  Lane beginLane() {
-    final lease = bindings.laneLeaseBegin(laneKey);
+  Lease beginLane() {
+    final lease = bindings.executorLeaseBegin(executorKey);
     if (lease == 0) {
-      throw const LaneProtocolError(
+      throw const LeaseProtocolError(
         'the lane is gone, busy, holding a channel or dead',
       );
     }
-    return _lane = NativeLane._(this, lease);
+    return _lane = NativeLease._(this, lease);
   }
 
   @override
@@ -118,14 +118,14 @@ class NativeExecutor implements Executor {
     _terminated = true;
     // Rust: flag + wake + close mailbox. After this returns, no notify
     // callback will ever fire for this thread.
-    bindings.laneKill(laneKey);
+    bindings.executorTerminate(executorKey);
     _lane?._abandon();
   }
 }
 
 /// One lease on a [NativeExecutor]. Decision-free.
-class NativeLane implements Lane {
-  NativeLane._(this._executor, this._lease);
+class NativeLease implements Lease {
+  NativeLease._(this._executor, this._lease);
 
   final NativeExecutor _executor;
 
@@ -136,11 +136,11 @@ class NativeLane implements Lane {
   /// owns, freed at that job's post.
   final int _lease;
 
-  int get _laneKey => _executor.laneKey;
+  int get _executorKey => _executor.executorKey;
 
   /// The executor's key in the Rust lane table. Internal: tests replay
   /// messages against it.
-  int get laneKey => _laneKey;
+  int get executorKey => _executorKey;
 
   /// The lease this lane holds. Internal: tests replay messages under it.
   int get lease => _lease;
@@ -156,9 +156,9 @@ class NativeLane implements Lane {
   final Completer<bool> _drained = Completer<bool>();
 
   @override
-  Future<LaneSubmitResult> submit(LaneJob job) {
+  Future<JobResult> submit(Job job) {
     if (_draining || _abandoned) {
-      return Future.value(LaneSubmitResult(buildCancelledResponse(), const {}));
+      return Future.value(JobResult(buildCancelledResponse(), const {}));
     }
 
     // ── Allocate the FFI argument block ──
@@ -206,7 +206,7 @@ class NativeLane implements Lane {
     }
 
     // ── Result port + lifecycle ──
-    final completer = Completer<LaneSubmitResult>();
+    final completer = Completer<JobResult>();
     final port = RawReceivePort();
 
     void cleanup({required bool freeKept}) {
@@ -233,20 +233,20 @@ class NativeLane implements Lane {
       calloc.free(snkNotify);
     }
 
-    LaneSubmitResult buildResult(Uint8List bytes) {
-      final heldTokens = <int, Object>{};
+    JobResult buildResult(Uint8List bytes) {
+      final holds = <int, Object>{};
       for (final i in job.keepSources) {
         final buffer = readChannels[i];
         final callable = readCallables[i];
         if (buffer == null || callable == null) continue;
         final held = _HeldChannel(buffer, callable);
         _held.add(held);
-        heldTokens[i] = held;
+        holds[i] = held;
       }
-      return LaneSubmitResult(
+      return JobResult(
         bytes,
-        heldTokens,
-        laneDied: bindings.laneIsDead(_laneKey) != 0,
+        holds,
+        laneDied: bindings.executorIsDead(_executorKey) != 0,
       );
     }
 
@@ -274,8 +274,8 @@ class NativeLane implements Lane {
       _freeHeldIfAbandoned();
     };
 
-    bindings.laneSubmit(
-      _laneKey,
+    bindings.executorSubmit(
+      _executorKey,
       _lease,
       job.jobId,
       requestPtr,
@@ -297,7 +297,7 @@ class NativeLane implements Lane {
   @override
   void cancelJob(int jobId) {
     if (_draining || _abandoned) return;
-    final queued = bindings.laneJobCancel(_laneKey, _lease, jobId) != 0;
+    final queued = bindings.executorJobCancel(_executorKey, _lease, jobId) != 0;
     // A job the lane has not started never reaches the engine, so its
     // caller need not wait for the running job ahead of it. The lane
     // still posts for it, and that post frees its buffers.
@@ -306,24 +306,22 @@ class NativeLane implements Lane {
     if (pending == null) return;
     pending.skipped = true;
     if (!pending.completer.isCompleted) {
-      pending.completer.complete(
-        LaneSubmitResult(buildCancelledResponse(), const {}),
-      );
+      pending.completer.complete(JobResult(buildCancelledResponse(), const {}));
     }
   }
 
   @override
-  void releaseHeld(Object token) {
+  void releaseHold(Object token) {
     if (_draining || _abandoned) return; // the end owns held cleanup
     final held = token as _HeldChannel;
     if (!_held.remove(held)) return;
-    bindings.laneChannelRelease(_laneKey, _lease, held.buffer.ptr);
+    bindings.executorHoldRelease(_executorKey, _lease, held.buffer.ptr);
     held.free();
   }
 
   @override
   Future<int?> reset() async {
-    if (_abandoned) throw const LaneProtocolError('the lane was abandoned');
+    if (_abandoned) throw const LeaseProtocolError('the lane was abandoned');
     final answer = Completer<Uint8List>();
     final port = RawReceivePort((dynamic message) {
       if (answer.isCompleted) return;
@@ -333,7 +331,7 @@ class NativeLane implements Lane {
     });
     final Uint8List bytes;
     try {
-      bindings.laneReset(_laneKey, _lease, port.sendPort.nativePort);
+      bindings.executorReset(_executorKey, _lease, port.sendPort.nativePort);
       bytes = await answer.future;
     } finally {
       port.close();
@@ -341,9 +339,9 @@ class NativeLane implements Lane {
     try {
       decodeResponse(bytes);
     } on PdfEngineFailed catch (refused) {
-      throw LaneProtocolError(refused.message);
+      throw LeaseProtocolError(refused.message);
     } on PdfCancelled {
-      throw const LaneProtocolError('the lane was abandoned');
+      throw const LeaseProtocolError('the lane was abandoned');
     }
     // The engine dropped its readers and forgot the held channels before it
     // answered, so their buffers are ours to free now.
@@ -363,13 +361,14 @@ class NativeLane implements Lane {
       // every future now is the instant-dispose UX; resources are freed by
       // each job's guaranteed post.
       for (final jobId in _pending.keys.toList()) {
-        final queued = bindings.laneJobCancel(_laneKey, _lease, jobId) != 0;
+        final queued =
+            bindings.executorJobCancel(_executorKey, _lease, jobId) != 0;
         if (queued) _pending[jobId]?.skipped = true;
       }
       for (final pending in _pending.values) {
         if (!pending.completer.isCompleted) {
           pending.completer.complete(
-            LaneSubmitResult(buildCancelledResponse(), const {}),
+            JobResult(buildCancelledResponse(), const {}),
           );
         }
       }
@@ -382,7 +381,7 @@ class NativeLane implements Lane {
   /// nothing of this lane, and says whether its engine is intact.
   void _settle() {
     if (!_draining || _pending.isNotEmpty || _drained.isCompleted) return;
-    _drained.complete(bindings.laneIsDead(_laneKey) == 0);
+    _drained.complete(bindings.executorIsDead(_executorKey) == 0);
   }
 
   /// The executor was terminated: every pending future completes cancelled
@@ -392,7 +391,7 @@ class NativeLane implements Lane {
     for (final pending in _pending.values) {
       if (!pending.completer.isCompleted) {
         pending.completer.complete(
-          LaneSubmitResult(buildCancelledResponse(), const {}),
+          JobResult(buildCancelledResponse(), const {}),
         );
       }
     }

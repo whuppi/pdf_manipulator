@@ -1,4 +1,4 @@
-// ExecutorPool and PooledLane — unit-tested against fake executors.
+// ExecutorPool and Lane — unit-tested against fake executors.
 //
 // Lease exclusivity, the drop of a stale lease, drain-then-reset, dead
 // executors never reused, smallest heap first, prewarm once, waiters served
@@ -21,7 +21,7 @@ import '../harness/fake_executors.dart';
 
 Future<void> flush() => Future<void>.delayed(Duration.zero);
 
-LaneJob job(int id) => LaneJob(
+Job job(int id) => Job(
   jobId: id,
   request: Uint8List(0),
   sources: const [],
@@ -46,7 +46,7 @@ void main() {
   );
 
   /// A lease for the next request, with the pool given time to boot.
-  Future<ExecutorLease> take(ExecutorPool pool) async {
+  Future<PoolLease> take(ExecutorPool pool) async {
     final request = pool.acquire();
     await flush();
     return request.lease;
@@ -453,8 +453,8 @@ void main() {
   });
 
   group('a lane over the pool', () {
-    PooledLane laneOver(ExecutorPool p, {List<LaneJob> Function()? prelude}) =>
-        PooledLane(p, prelude: prelude ?? () => const []);
+    Lane laneOver(ExecutorPool p, {List<Job> Function()? prelude}) =>
+        Lane(p, prelude: prelude ?? () => const []);
 
     test('leases at its first job, not before', () async {
       final p = pool();
@@ -657,8 +657,8 @@ void main() {
           );
         });
 
-    ExecutorLease lease(FakeAsync async, ExecutorRequest request) {
-      ExecutorLease? taken;
+    PoolLease lease(FakeAsync async, ExecutorRequest request) {
+      PoolLease? taken;
       unawaited(request.lease.then((l) => taken = l));
       async.flushMicrotasks();
       return taken!;
@@ -671,7 +671,7 @@ void main() {
         (a.lane as FakeLane).drainGate = Completer<bool>();
         unawaited(p.release(a));
 
-        ExecutorLease? second;
+        PoolLease? second;
         unawaited(p.acquire().lease.then((l) => second = l));
         async.elapse(coverFor - const Duration(milliseconds: 1));
         expect(host.executors, hasLength(1), reason: 'the drain still covers');
@@ -691,7 +691,7 @@ void main() {
       covered((async, p) {
         final slow = ExecutorPool.totalSlowTransitions;
         host.bootGate = Completer<void>();
-        ExecutorLease? taken;
+        PoolLease? taken;
         unawaited(p.acquire().lease.then((l) => taken = l));
         async.flushMicrotasks();
         expect(host.bootAttempts, 1);
@@ -717,7 +717,7 @@ void main() {
         final gate = (a.lane as FakeLane).drainGate = Completer<bool>();
         unawaited(p.release(a));
 
-        ExecutorLease? second;
+        PoolLease? second;
         unawaited(p.acquire().lease.then((l) => second = l));
         async.elapse(coverFor ~/ 2);
         gate.complete(true);
@@ -734,7 +734,7 @@ void main() {
     test('a lane waits for the executor it gave back only while it is '
         'young', () {
       covered((async, p) {
-        final lane = PooledLane(p, prelude: () => const []);
+        final lane = Lane(p, prelude: () => const []);
         unawaited(lane.submit(job(1)));
         async.flushMicrotasks();
         final first = host.executors.single.lane;

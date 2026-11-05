@@ -44,7 +44,7 @@ String _failure(Uint8List bytes) {
 /// of the job that created the handle the request names, as the Router
 /// passes it.
 Future<Uint8List> _run(
-  Lane lane,
+  Lease lane,
   int jobId,
   Uint8List request, {
   List<DataSource> sources = const [],
@@ -52,13 +52,13 @@ Future<Uint8List> _run(
   int? group,
 }) async {
   final result = await lane.submit(
-    LaneJob(
+    Job(
       jobId: jobId,
       request: request,
       sources: sources,
       sinks: const [],
       keepSources: keep,
-      heldGroupId: group,
+      holdGroupId: group,
     ),
   );
   return result.bytes;
@@ -67,10 +67,10 @@ Future<Uint8List> _run(
 void registerLaneProtocolTests({PdfConfig? Function()? config}) {
   group('lane protocol: reset', () {
     late Executor executor;
-    late Lane lane;
+    late Lease lane;
 
     setUp(() async {
-      executor = await createLaneHost(config: config?.call()).boot();
+      executor = await createBooter(config: config?.call()).boot();
       lane = executor.beginLane();
     });
     tearDown(() => executor.terminate());
@@ -130,7 +130,7 @@ void registerLaneProtocolTests({PdfConfig? Function()? config}) {
         await expectLater(
           lane.reset(),
           throwsA(
-            isA<LaneProtocolError>().having(
+            isA<LeaseProtocolError>().having(
               (e) => e.message,
               'message',
               laneBusyMessage,
@@ -140,7 +140,7 @@ void registerLaneProtocolTests({PdfConfig? Function()? config}) {
 
         // A job queued behind the running one counts as outstanding too.
         final queued = _run(lane, 2, bin.encodeRequest('builderCreate', {}));
-        await expectLater(lane.reset(), throwsA(isA<LaneProtocolError>()));
+        await expectLater(lane.reset(), throwsA(isA<LeaseProtocolError>()));
 
         slow.release();
         final opened = await running;

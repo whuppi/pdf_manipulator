@@ -36,7 +36,7 @@
 // executor. It counts so only while it is young, for [ExecutorPool.coverFor]:
 // a transition that outlasts that is slow, is recorded as such, and no longer
 // hides a waiter, which then boots its own executor. The slow one is never
-// killed; when its transition ends it joins the idle shelf or is retired by
+// terminated; when its transition ends it joins the idle shelf or is retired by
 // the idle cap like any other. Waiters are served
 // strictly in arrival order: an executor that frees goes to the head of the
 // queue, never to a request that arrived later.
@@ -115,7 +115,7 @@ class _Entry {
 }
 
 class _Waiter {
-  final completer = Completer<ExecutorLease>();
+  final completer = Completer<PoolLease>();
 }
 
 /// A booting or draining executor that outlasted [ExecutorPool.coverFor].
@@ -135,13 +135,13 @@ class SlowTransition {
 
 /// One lane's hold on one executor: the lane that owns it and nobody else
 /// until the pool takes it back through [ExecutorPool.release].
-class ExecutorLease {
-  ExecutorLease._(this._entry, this.lane);
+class PoolLease {
+  PoolLease._(this._entry, this.lane);
 
   final _Entry _entry;
 
   /// The lane adapter bound to this lease's id.
-  final Lane lane;
+  final Lease lane;
 
   /// Where the leased executor is. Tests read it.
   ExecutorState get state => _entry.state;
@@ -156,7 +156,7 @@ class ExecutorRequest {
 
   /// Completes with the lease once an executor is handed over, or with the
   /// error of the boot that was started for it.
-  Future<ExecutorLease> get lease => _waiter.completer.future;
+  Future<PoolLease> get lease => _waiter.completer.future;
 
   /// Leaves the queue when the request has not been served yet; does
   /// nothing once an executor was handed over (the new owner returns it).
@@ -171,7 +171,7 @@ class ExecutorPool {
   /// [coverFor] how long a booting or draining executor covers a waiter.
   /// [clock] is the monotonic time the cover is measured on; tests drive it.
   ExecutorPool({
-    required LaneHost host,
+    required ExecutorBooter host,
     this.maxExecutors = kMaxExecutors,
     this.maxIdle = kMaxIdleExecutors,
     this.keepBytes = kKeepBytes,
@@ -196,7 +196,7 @@ class ExecutorPool {
   /// The pool every instance of [host]'s configuration shares, page- or
   /// process-wide. The first use of the package creates it and boots one
   /// executor ahead of the first job, once.
-  static ExecutorPool of(LaneHost host) {
+  static ExecutorPool of(ExecutorBooter host) {
     final existing = _shared[host.poolKey];
     if (existing != null) return existing;
     return _shared[host.poolKey] = ExecutorPool(host: host)..prewarm();
@@ -219,7 +219,7 @@ class ExecutorPool {
   static List<SlowTransition> get recentSlowTransitions =>
       List.unmodifiable(_recentSlow);
 
-  final LaneHost _host;
+  final ExecutorBooter _host;
   final Duration Function() _clock;
 
   /// The budget: live executors at most.
@@ -287,7 +287,7 @@ class ExecutorPool {
   /// engine holds nothing and the reset is skipped. A dead engine, a failed
   /// reset, a heap at the keep line or a full idle shelf ends the executor.
   /// Idempotent.
-  Future<void> release(ExecutorLease lease, {bool untouched = false}) async {
+  Future<void> release(PoolLease lease, {bool untouched = false}) async {
     final entry = lease._entry;
     if (entry.state != ExecutorState.leased) return;
     _begin(entry, ExecutorState.draining, 'draining', lease.lane);
@@ -371,7 +371,7 @@ class ExecutorPool {
 
   /// Starts [entry]'s transition into [state]: stamps it and arms the timer
   /// that ends its cover.
-  void _begin(_Entry entry, ExecutorState state, String phase, [Lane? lane]) {
+  void _begin(_Entry entry, ExecutorState state, String phase, [Lease? lane]) {
     entry.state = state;
     entry.phase = phase;
     entry.lane = switch (lane) {
@@ -413,7 +413,7 @@ class ExecutorPool {
 
   /// The idle executor with the smallest heap, leased; an executor that
   /// refuses its lease is dead and the next one is tried.
-  ExecutorLease? _leaseIdle() {
+  PoolLease? _leaseIdle() {
     while (true) {
       _Entry? best;
       for (final entry in _entries) {
@@ -424,8 +424,8 @@ class ExecutorPool {
       try {
         final lane = best.executor!.beginLane();
         best.state = ExecutorState.leased;
-        return ExecutorLease._(best, lane);
-      } on LaneProtocolError {
+        return PoolLease._(best, lane);
+      } on LeaseProtocolError {
         _retire(best);
       }
     }
@@ -475,30 +475,30 @@ class ExecutorPool {
   }
 }
 
-/// A waiting job of a [PooledLane].
+/// A waiting job of a [Lane].
 class _Waiting {
   _Waiting(this.job);
 
-  final LaneJob job;
-  final completer = Completer<LaneSubmitResult>();
+  final Job job;
+  final completer = Completer<JobResult>();
 }
 
 /// One Pdf's queue of work on the pool: it leases an executor at its first
 /// job and gives it back when the Router says it holds nothing more or the
-/// Pdf ends. Implements [Lane] over whatever lease it holds now, so the
+/// Pdf ends. Implements [Lease] over whatever lease it holds now, so the
 /// Router treats it as one lane for the Pdf's whole life. It offers the
-/// verbs of [Lane] that make sense across leases.
-class PooledLane {
+/// verbs of [Lease] that make sense across leases.
+class Lane {
   /// Creates a lane over a pool. [prelude] builds the jobs that run first
   /// under every new lease (fonts registered by the app): the engine state
   /// of a leased executor starts empty.
-  PooledLane(this._pool, {required List<LaneJob> Function() prelude})
+  Lane(this._pool, {required List<Job> Function() prelude})
     : _prelude = prelude;
 
   final ExecutorPool _pool;
-  final List<LaneJob> Function() _prelude;
+  final List<Job> Function() _prelude;
 
-  ExecutorLease? _lease;
+  PoolLease? _lease;
   ExecutorRequest? _request;
   Future<void>? _returning;
 
@@ -520,8 +520,8 @@ class PooledLane {
   ExecutorState? get executorState => _lease?.state;
 
   /// Runs [job] on the leased executor, leasing one first when the lane
-  /// holds none. Always completes, as [Lane.submit].
-  Future<LaneSubmitResult> submit(LaneJob job) {
+  /// holds none. Always completes, as [Lease.submit].
+  Future<JobResult> submit(Job job) {
     if (_ended) return Future.value(_cancelled());
     final inner = _lease?.lane;
     if (inner != null) {
@@ -546,7 +546,7 @@ class PooledLane {
   }
 
   /// Releases one held channel of the leased lane.
-  void releaseHeld(Object token) => _lease?.lane.releaseHeld(token);
+  void releaseHold(Object token) => _lease?.lane.releaseHold(token);
 
   /// Gives the leased executor back: its jobs are cancelled and the pool
   /// resets it. The lane stays usable; its next job leases again, once the
@@ -610,7 +610,7 @@ class PooledLane {
     );
   }
 
-  void _leased(ExecutorRequest request, ExecutorLease lease) {
+  void _leased(ExecutorRequest request, PoolLease lease) {
     if (identical(_request, request)) _request = null;
     if (_ended || _lease != null || _waiting.isEmpty) {
       // Nobody wants it any more: the lane ended or every job left the queue.
@@ -643,16 +643,12 @@ class PooledLane {
     _request = null;
     // The boot failed: every job waiting on it fails with it, and the next
     // job submitted asks the pool again.
-    final failed = LaneSubmitResult(
-      buildErrorResponse(error.toString()),
-      const {},
-    );
+    final failed = JobResult(buildErrorResponse(error.toString()), const {});
     for (final waiting in _waiting) {
       waiting.completer.complete(failed);
     }
     _waiting.clear();
   }
 
-  LaneSubmitResult _cancelled() =>
-      LaneSubmitResult(buildCancelledResponse(), const {});
+  JobResult _cancelled() => JobResult(buildCancelledResponse(), const {});
 }

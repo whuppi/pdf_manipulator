@@ -1,5 +1,5 @@
 // Platform-neutral bridge factory: builds a SharedBridge over the shared
-// Router, backed by the shared ExecutorPool over the platform's LaneHost
+// Router, backed by the shared ExecutorPool over the platform's ExecutorBooter
 // (the platform conditional import picks it). No dart:io, no package:web here — the platform split is the
 // host's job.
 //
@@ -16,11 +16,11 @@ import 'package:pdf_manipulator/src/types/pdf_config.dart';
 /// platform conditional import and its executors from the pool every
 /// instance shares; the Router + SharedBridge wrapping is shared.
 PdfBridge createBridge({PdfConfig? config}) {
-  final host = createLaneHost(config: config);
+  final host = createBooter(config: config);
   return SharedBridge(
     Router(
       pool: ExecutorPool.of(host),
-      maxLanes: config?.concurrency ?? host.defaultLaneCount,
+      maxLanes: config?.concurrency ?? host.defaultConcurrency,
       mode: host.mode,
     ),
   );

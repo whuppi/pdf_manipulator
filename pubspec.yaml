@@ -90,7 +90,7 @@ dev_dependencies:
   # Lint rules
   lints: ^6.1.0
 
-  # Web test asset server (serves lane_worker.js + wasm to browser tests)
+  # Web test asset server (serves executor_worker.js + wasm to browser tests)
   shelf: ^1.4.2
   shelf_static: ^1.1.3
 

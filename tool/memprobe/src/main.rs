@@ -832,7 +832,7 @@ fn run() -> Result<(), String> {
             reduce_to_sink(st, path, &reduced_file)
         });
         let again = open_sink(name, "reduced-extract");
-        let mut state = pdf_oxide::host::lane_state::LaneState::new();
+        let mut state = pdf_oxide::host::engine_state::EngineState::new();
         let written = if reduced_file.exists() {
             extract_to_sink(&mut state, &reduced_file, &again)
         } else {
@@ -883,7 +883,7 @@ fn run() -> Result<(), String> {
         reduce_to_sink(st, &huge_fax, &fax_reduced)
     });
     let fax_again = open_sink("hugeFax", "reduced-extract");
-    let mut state = pdf_oxide::host::lane_state::LaneState::new();
+    let mut state = pdf_oxide::host::engine_state::EngineState::new();
     let written_fax = if fax_reduced.exists() {
         extract_to_sink(&mut state, &fax_reduced, &fax_again)
     } else {
@@ -929,7 +929,7 @@ fn run() -> Result<(), String> {
         reduce_to_sink(st, &huge_stencil, &stencil_reduced)
     });
     let stencil_again = open_sink("hugeStencil", "reduced-extract");
-    let mut state = pdf_oxide::host::lane_state::LaneState::new();
+    let mut state = pdf_oxide::host::engine_state::EngineState::new();
     let written_stencil = if stencil_reduced.exists() {
         extract_to_sink(&mut state, &stencil_reduced, &stencil_again)
     } else {
@@ -1020,7 +1020,7 @@ fn run() -> Result<(), String> {
                     // The copy read back through the wire `extractImages`, the
                     // product's path: its PNG decoded here, 1-bit gray.
                     let wire_file = open_sink("hugeFax", "redacted-wire");
-                    let mut state = pdf_oxide::host::lane_state::LaneState::new();
+                    let mut state = pdf_oxide::host::engine_state::EngineState::new();
                     extract_to_sink(&mut state, &saved, &wire_file)?;
                     let (w, h, depth, rows) = decode_gray_png(&wire_png(&wire_file)?)?;
                     if (w, h, depth) != (20000, 20000, 1) {
@@ -1112,7 +1112,7 @@ fn run() -> Result<(), String> {
 /// Opens `path`, renders every page to `sink_path` as PNG at `dpi`, and
 /// disposes the document: the host path a Dart `render` takes.
 fn render_to_sink(
-    state: &mut pdf_oxide::host::lane_state::LaneState,
+    state: &mut pdf_oxide::host::engine_state::EngineState,
     path: &Path,
     dpi: i32,
     sink_path: &Path,
@@ -1223,7 +1223,7 @@ fn check_render_wire(sink_path: &Path) -> Result<String, String> {
 /// wire, and disposes the document: the host path a Dart `extractImages`
 /// takes.
 fn extract_to_sink(
-    state: &mut pdf_oxide::host::lane_state::LaneState,
+    state: &mut pdf_oxide::host::engine_state::EngineState,
     path: &Path,
     sink_path: &Path,
 ) -> Result<(), String> {
@@ -1245,7 +1245,7 @@ fn extract_to_sink(
 /// preset's resolutions and quality), saves the document to `sink_path` and
 /// disposes the editor: the host path a Dart `reduceImages` and a save take.
 fn reduce_to_sink(
-    state: &mut pdf_oxide::host::lane_state::LaneState,
+    state: &mut pdf_oxide::host::engine_state::EngineState,
     path: &Path,
     sink_path: &Path,
 ) -> Result<(), String> {
@@ -1274,7 +1274,7 @@ fn reduce_to_sink(
 /// x y width height) on page 0, applies it, saves to `sink_path` and disposes
 /// the editor: the host path a Dart `redact` and its save take.
 fn redact_box_to_sink(
-    state: &mut pdf_oxide::host::lane_state::LaneState,
+    state: &mut pdf_oxide::host::engine_state::EngineState,
     path: &Path,
     rect: [f64; 4],
     sink_path: &Path,
@@ -1888,7 +1888,7 @@ fn sink(path: &Path) -> File {
 /// One wire request through the probe door, response decoded or its
 /// error message text returned.
 fn call(
-    state: &mut pdf_oxide::host::lane_state::LaneState,
+    state: &mut pdf_oxide::host::engine_state::EngineState,
     req: wire::Request,
     sources: Vec<File>,
     sinks: Vec<File>,
@@ -1901,7 +1901,7 @@ fn call(
 /// Full-rewrite save of an open editor to `sink` (deflate + GC), dropping
 /// the unused resource entries when `prune` is set.
 fn save_full(
-    state: &mut pdf_oxide::host::lane_state::LaneState,
+    state: &mut pdf_oxide::host::engine_state::EngineState,
     hid: i32,
     sink_path: &Path,
     prune: bool,
@@ -1921,11 +1921,11 @@ fn save_full(
     Ok(())
 }
 
-fn dispose(state: &mut pdf_oxide::host::lane_state::LaneState, hid: i32) {
+fn dispose(state: &mut pdf_oxide::host::engine_state::EngineState, hid: i32) {
     let _ = call(state, re("editorDispose").put("handleId", i32v(hid)), vec![], vec![]);
 }
 
-/// One measured step: fresh LaneState, peak tracking from the starting
+/// One measured step: fresh EngineState, peak tracking from the starting
 /// level, peak measured once the step's last request returns. The
 /// closure errors make the step FAIL before the limit check matters.
 fn step(
@@ -1933,11 +1933,11 @@ fn step(
     op: &str,
     input: &str,
     limit: usize,
-    body: impl FnOnce(&mut pdf_oxide::host::lane_state::LaneState) -> Result<(), String>,
+    body: impl FnOnce(&mut pdf_oxide::host::engine_state::EngineState) -> Result<(), String>,
 ) {
     alloc::reset_peak();
     let base = alloc::current();
-    let mut state = pdf_oxide::host::lane_state::LaneState::new();
+    let mut state = pdf_oxide::host::engine_state::EngineState::new();
     let started = std::time::Instant::now();
     let result = body(&mut state);
     let wall_ms = started.elapsed().as_millis();
@@ -2025,7 +2025,7 @@ impl Xorshift {
 fn generate_many(path: &Path) -> Result<(), String> {
     const PAGES: usize = 10_000;
 
-    let mut state = pdf_oxide::host::lane_state::LaneState::new();
+    let mut state = pdf_oxide::host::engine_state::EngineState::new();
     let resp = call(&mut state, re("builderCreate"), vec![], vec![])?;
     let hid = resp.i32("handleId").expect("builderCreate returns handleId");
 
@@ -2090,7 +2090,7 @@ fn generate_many(path: &Path) -> Result<(), String> {
 /// 1,000 empty pages: the open of a document must not read a page's facts,
 /// so the page count must not reach the engine's memory.
 fn generate_thousand_page(path: &Path) -> Result<(), String> {
-    let mut state = pdf_oxide::host::lane_state::LaneState::new();
+    let mut state = pdf_oxide::host::engine_state::EngineState::new();
     let resp = call(&mut state, re("builderCreate"), vec![], vec![])?;
     let hid = resp.i32("handleId").expect("builderCreate returns handleId");
 

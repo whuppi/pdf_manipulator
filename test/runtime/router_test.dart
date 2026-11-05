@@ -1,7 +1,7 @@
-// Router — the shared brain, unit-tested against fake lanes.
+// Router — the one place that decides, unit-tested against fake lanes.
 //
 // Everything here runs in milliseconds with no engine, no platform:
-// placement (spawn-under-cap, least-loaded), response-driven pinning,
+// placement (start-under-cap, least-loaded), response-driven pinning,
 // held-resource lifecycle, instant dispose, and the per-op cancel
 // binding (including the cancel-before-submit race the integration
 // suites can only hit by luck).
@@ -24,7 +24,7 @@ import 'package:test/test.dart';
 
 import '../harness/fake_executors.dart';
 
-LaneSubmitResult _ok({int? handleId, Map<int, Object> held = const {}}) {
+JobResult _ok({int? handleId, Map<int, Object> held = const {}}) {
   final bytes = handleId == null
       ? Uint8List.fromList(const [1, 0, 0]) // success, zero fields
       : (BytesBuilder()
@@ -38,7 +38,7 @@ LaneSubmitResult _ok({int? handleId, Map<int, Object> held = const {}}) {
                   ..buffer.asByteData().setInt32(0, handleId, Endian.little),
               ))
             .takeBytes();
-  return LaneSubmitResult(bytes, held);
+  return JobResult(bytes, held);
 }
 
 Uint8List _open() => bin.encodeRequest('open', {'sourceLength': 1});
@@ -151,8 +151,8 @@ void main() {
     test('handles on different lanes never share an id (cross-lane '
         'collision)', () async {
       // Two creates fire while the first is in-flight, so the second
-      // spawns a second lane (placement spreads them). Each lane's
-      // engine mints handle id 1 — LaneState.next_handle restarts at 1
+      // starts a second lane (placement spreads them). Each lane's
+      // engine mints handle id 1 — EngineState.next_handle restarts at 1
       // per lane, so this is the exact id collision the native runtime
       // produces under parallel doc+editor+builder load.
       final createA = router.execute(_open());
@@ -240,7 +240,7 @@ void main() {
       final opened = await open;
       final handle = peekResponseHandleId(opened.bytes)!;
       final editorResource = opened.resourceIds[0]!;
-      expect(lane.submitted[0].heldGroupId, isNull);
+      expect(lane.submitted[0].holdGroupId, isNull);
 
       final merge = router.execute(
         _opOn('editorMergeFrom', handle),
@@ -248,7 +248,7 @@ void main() {
       );
       await Future<void>.delayed(Duration.zero);
       expect(
-        lane.submitted[1].heldGroupId,
+        lane.submitted[1].holdGroupId,
         1,
         reason: 'the merge runs in the group of the job that made the handle',
       );
@@ -280,9 +280,7 @@ void main() {
         );
         await Future<void>.delayed(Duration.zero);
         lane.pending[2]!.complete(
-          LaneSubmitResult(buildErrorResponse('bad pdf'), const {
-            0: 'merge-src',
-          }),
+          JobResult(buildErrorResponse('bad pdf'), const {0: 'merge-src'}),
         );
         final failed = await merge;
 
@@ -294,9 +292,7 @@ void main() {
         final failedOpen = router.execute(_open(), keepSources: {0});
         await Future<void>.delayed(Duration.zero);
         lane.pending[3]!.complete(
-          LaneSubmitResult(buildErrorResponse('bad pdf'), const {
-            0: 'open-src',
-          }),
+          JobResult(buildErrorResponse('bad pdf'), const {0: 'open-src'}),
         );
         expect((await failedOpen).resourceIds, isEmpty);
         expect(lane.releasedTokens, ['merge-src', 'open-src']);
@@ -361,8 +357,8 @@ void main() {
     test('dispose during the pre-submit await spawns no zombie lane', () async {
       // The twin of the cancel-before-submit race: dispose lands while
       // execute is parked on its internal await. Without the disposed
-      // re-check, execute resumes on a dead router and spawns a lane
-      // that no kill will ever reach — it runs the job to completion
+      // re-check, execute resumes on a dead router and starts a lane
+      // that nothing will ever end — it runs the job to completion
       // and holds its sources forever.
       final pending = router.execute(_open(), keepSources: {0});
       await router.dispose(); // same tick — no lane exists yet
@@ -420,7 +416,7 @@ void main() {
       expect(lane.cancelledJobs, [lane.submitted.single.jobId]);
 
       lane.pending[lane.submitted.single.jobId]!.complete(
-        LaneSubmitResult(buildCancelledResponse(), const {}),
+        JobResult(buildCancelledResponse(), const {}),
       );
       final result = await pending;
       expect(result.bytes, [2]);
@@ -620,7 +616,7 @@ void main() {
   });
 
   group('a lane whose engine died', () {
-    LaneSubmitResult died() => LaneSubmitResult(
+    JobResult died() => JobResult(
       buildErrorResponse('internal error: engine operation panicked'),
       const {},
       laneDied: true,
@@ -645,9 +641,9 @@ void main() {
       expect(laneA.ended, isFalse, reason: 'a queued job is still to answer');
       laneA.engineDead = true;
       laneA.pending[3]!.complete(
-        LaneSubmitResult(buildErrorResponse(laneDeadMessage), const {}),
+        JobResult(buildErrorResponse(engineDeadMessage), const {}),
       );
-      expect((await queued).bytes, buildErrorResponse(laneDeadMessage));
+      expect((await queued).bytes, buildErrorResponse(engineDeadMessage));
       expect(laneA.ended, isTrue);
       await Future<void>.delayed(Duration.zero);
       expect(
@@ -658,7 +654,7 @@ void main() {
 
       final before = laneA.submitted.length;
       final after = await router.execute(_opOn('extract', handle));
-      expect(after.bytes, buildErrorResponse(laneDeadMessage));
+      expect(after.bytes, buildErrorResponse(engineDeadMessage));
       expect(laneA.submitted, hasLength(before), reason: 'never forwarded');
 
       final dispose = await router.execute(_opOn('docDispose', handle));
@@ -781,7 +777,7 @@ void main() {
       final op = router.execute(_open(), keepSources: {0});
       await settle();
       host.lanes.single.pending[1]!.complete(
-        LaneSubmitResult(buildErrorResponse('bad pdf'), const {0: 'src'}),
+        JobResult(buildErrorResponse('bad pdf'), const {0: 'src'}),
       );
       await op;
       await settle();

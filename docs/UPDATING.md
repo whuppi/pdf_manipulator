@@ -345,7 +345,7 @@ A Rust test of ours lives in fork-only code (`host/`), which is never rebased. T
 three kinds:
 
 - **Pure unit tests**, in a `#[cfg(test)]` module beside the code: the
-  lane budget, the shared-buffer byte layout, a CCITT polarity, a PNG
+  executor thread budget, the shared-buffer byte layout, a CCITT polarity, a PNG
   predictor round trip. They use no PDF bytes, no `PdfDocument` and no
   `DocumentEditor`.
 - **Engine proofs**, in `host/engine_proofs/`: a test that opens a

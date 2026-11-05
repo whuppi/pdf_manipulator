@@ -1,6 +1,6 @@
 // Native-only: the lease id and the single-job rule of the lane protocol.
 //
-// A lease is one lane's tenure on one executor. Native job ids come from a
+// A lease is one lane's use of one executor, numbered by the executor. Native job ids come from a
 // Router, so two leases on one executor count them separately and a cancel
 // keyed by job id alone could hit the wrong job; the executor therefore
 // drops every submit, cancel, release and reset that carries a lease which
@@ -19,8 +19,8 @@ import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart' as bin;
 import 'package:pdf_manipulator/src/runtime/host.dart';
 import 'package:pdf_manipulator/src/runtime/lane.dart';
 import 'package:pdf_manipulator/src/runtime/native/bindings.dart' as bindings;
-import 'package:pdf_manipulator/src/runtime/native/lane.dart'
-    show NativeExecutor, NativeLane;
+import 'package:pdf_manipulator/src/runtime/native/lease.dart'
+    show NativeExecutor, NativeLease;
 import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:test/test.dart';
@@ -49,12 +49,12 @@ String _failure(Uint8List bytes) {
   }
 }
 
-LaneJob _job(
+Job _job(
   int jobId,
   Uint8List request, {
   List<DataSource> sources = const [],
   Set<int> keep = const {},
-}) => LaneJob(
+}) => Job(
   jobId: jobId,
   request: request,
   sources: sources,
@@ -65,11 +65,11 @@ LaneJob _job(
 void registerNativeLaneProtocolTests() {
   group('native lane protocol', () {
     late NativeExecutor executor;
-    late NativeLane lane;
+    late NativeLease lane;
 
     setUp(() async {
-      executor = await createLaneHost().boot() as NativeExecutor;
-      lane = executor.beginLane() as NativeLane;
+      executor = await createBooter().boot() as NativeExecutor;
+      lane = executor.beginLane() as NativeLease;
     });
     tearDown(() => executor.terminate());
 
@@ -101,9 +101,12 @@ void registerNativeLaneProtocolTests() {
       // The stale lease names the running job's id, as a second lease's
       // counter would. The job is parked on its read, where a cancel that
       // reached it would end it.
-      expect(bindings.laneJobCancel(lane.laneKey, lane.lease + 7, 1), 0);
       expect(
-        bindings.laneLeaseBegin(lane.laneKey),
+        bindings.executorJobCancel(lane.executorKey, lane.lease + 7, 1),
+        0,
+      );
+      expect(
+        bindings.executorLeaseBegin(lane.executorKey),
         0,
         reason: 'a lease does not change hands under a running job',
       );
@@ -126,7 +129,7 @@ void registerNativeLaneProtocolTests() {
         );
         expect(_ok(opened.bytes), isTrue);
         await lane.reset();
-        final next = bindings.laneLeaseBegin(lane.laneKey);
+        final next = bindings.executorLeaseBegin(lane.executorKey);
         expect(
           next,
           greaterThan(lane.lease),
@@ -142,15 +145,15 @@ void registerNativeLaneProtocolTests() {
         expect(_ok(stale.bytes), isFalse);
         expect(_failure(stale.bytes), contains(laneStaleLeaseMessage));
         expect(reads, 0, reason: 'a stale submit reached its source');
-        for (final token in stale.heldTokens.values) {
-          lane.releaseHeld(token); // the Router's cleanup of a failed job
+        for (final token in stale.holds.values) {
+          lane.releaseHold(token); // the Router's cleanup of a failed job
         }
 
         // Reset: refused, typed.
         await expectLater(
           lane.reset(),
           throwsA(
-            isA<LaneProtocolError>().having(
+            isA<LeaseProtocolError>().having(
               (e) => e.message,
               'message',
               laneStaleLeaseMessage,
@@ -159,7 +162,7 @@ void registerNativeLaneProtocolTests() {
         );
 
         // Cancel: ignored.
-        expect(bindings.laneJobCancel(lane.laneKey, lane.lease, 2), 0);
+        expect(bindings.executorJobCancel(lane.executorKey, lane.lease, 2), 0);
       },
       timeout: t(10),
     );
@@ -170,9 +173,9 @@ void registerNativeLaneProtocolTests() {
         _job(1, _open(first), sources: [first], keep: {0}),
       );
       final old = peekResponseHandleId(opened.bytes)!;
-      expect(opened.heldTokens, hasLength(1));
+      expect(opened.holds, hasLength(1));
       expect(
-        bindings.laneLeaseBegin(lane.laneKey),
+        bindings.executorLeaseBegin(lane.executorKey),
         0,
         reason: 'the held reader is registered with the executor',
       );
@@ -181,9 +184,7 @@ void registerNativeLaneProtocolTests() {
 
       final gone = await lane.submit(_job(2, _info(old)));
       expect(_failure(gone.bytes), contains('document not found'));
-      lane.releaseHeld(
-        opened.heldTokens.values.single,
-      ); // already freed: a no-op
+      lane.releaseHold(opened.holds.values.single); // already freed: a no-op
 
       final second = src(minimalPdf);
       final reopened = await lane.submit(
@@ -199,7 +200,10 @@ void registerNativeLaneProtocolTests() {
       // Reset again: the registry is empty, so the lease may change hands.
       await lane.reset();
       await lane.reset();
-      expect(bindings.laneLeaseBegin(lane.laneKey), greaterThan(lane.lease));
+      expect(
+        bindings.executorLeaseBegin(lane.executorKey),
+        greaterThan(lane.lease),
+      );
     }, timeout: t(10));
 
     test(

@@ -1,4 +1,4 @@
-// PdfTask — the unhandled-error physics, unit-tested directly.
+// PdfTask — the unhandled-error behaviour, unit-tested directly.
 //
 // These are the load-bearing guarantees the integration suites can
 // only observe as side effects:

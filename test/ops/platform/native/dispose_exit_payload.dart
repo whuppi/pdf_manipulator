@@ -2,7 +2,7 @@
 //
 // Opens a doc (which pins a held source channel on a lane), disposes,
 // and lets the process exit while the detached lane thread winds down
-// on its own. If kill's no-notify-after-kill guarantee ever breaks, a
+// on its own. If terminate's no-notify-after-terminate guarantee ever breaks, a
 // lane thread invokes a dead NativeCallable here and the process
 // FATAL-aborts ("Callback invoked after it has been deleted") instead
 // of exiting 0.

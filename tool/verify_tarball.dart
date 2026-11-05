@@ -33,7 +33,7 @@ const requiredFiles = [
   // Hooks + the hand-written web assets.
   'hook/build.dart',
   'hook/link.dart',
-  'web_assets/lane_worker.js',
+  'web_assets/executor_worker.js',
 ];
 
 void main() {

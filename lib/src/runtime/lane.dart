@@ -1,19 +1,19 @@
-// Lane and Executor — the platform-blind interfaces to one isolated
-// execution unit and to one tenure on it.
+// Lease and Executor — the platform-blind interfaces to one executor and to
+// one lease on it.
 //
 // An Executor is the platform resource: a Rust thread with its engine state,
 // or a Web Worker with a WASM instance. The ExecutorPool (pool.dart) owns
-// every executor and leases each to one lane at a time. A Lane is one
-// lease's adapter: it carries the lease id on every message.
+// every executor and leases each to one lane at a time. A Lease is the
+// lease adapter: it carries the lease id on every message.
 //
-// Shared brain, dumb edges: implementations of these interfaces
-// translate verbs into platform physics and decide NOTHING. Routing,
+// A lease adapter decides NOTHING: implementations of these interfaces
+// translate verbs into platform calls. Routing,
 // pinning, queuing, cancellation bookkeeping, and completion ownership
 // all live in the Router and the pool. If an `if` that makes a decision
 // appears in an implementation, the design has failed — move it there.
 //
-//   Native: one Rust thread + mailbox        (native/lane.dart)
-//   Web:    one Web Worker                   (web/lane.dart)
+//   Native: one Rust thread + mailbox        (native/lease.dart)
+//   Web:    one Web Worker                   (web/lease.dart)
 //
 // INTERNAL — used by the Router and the pool only.
 
@@ -24,9 +24,8 @@ import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 
 /// The message of the typed error a handle or job gets after its lane's
-/// engine trapped or panicked. Matches `LANE_DEAD_MESSAGE` in the engine.
-const laneDeadMessage =
-    'the engine lane stopped after an engine operation panicked';
+/// engine trapped or panicked. Matches `ENGINE_DEAD_MESSAGE` in the engine.
+const engineDeadMessage = 'the engine stopped after an operation panicked';
 
 /// The error message of a job or reset that carried a lease which was not
 /// the executor's current one. Matches `STALE_LEASE_MESSAGE` in the engine.
@@ -41,27 +40,27 @@ const laneBusyMessage = 'the lane cannot reset while a job is outstanding';
 /// job is outstanding, a lease that is not current, a lane that stopped.
 /// The adapters never send such a message, so this reports a bug in the
 /// caller, never a failure of the document.
-class LaneProtocolError implements Exception {
+class LeaseProtocolError implements Exception {
   /// Creates the error with the executor's [message].
-  const LaneProtocolError(this.message);
+  const LeaseProtocolError(this.message);
 
   /// What the executor refused, in its own words.
   final String message;
 
   @override
-  String toString() => 'LaneProtocolError: $message';
+  String toString() => 'LeaseProtocolError: $message';
 }
 
 /// One operation, fully described. Built by the Router.
-class LaneJob {
+class Job {
   /// Creates a job descriptor. [jobId] is unique per Router lifetime.
-  LaneJob({
+  Job({
     required this.jobId,
     required this.request,
     required this.sources,
     required this.sinks,
     required this.keepSources,
-    this.heldGroupId,
+    this.holdGroupId,
   });
 
   /// Router-assigned identity (single-threaded counter — the one
@@ -79,7 +78,7 @@ class LaneJob {
 
   /// Source indices whose I/O channel outlives the job (the engine
   /// moves these sources into a handle). Their held tokens come back
-  /// in [LaneSubmitResult.heldTokens].
+  /// in [JobResult.holds].
   final Set<int> keepSources;
 
   /// For ops on an existing handle: the id of the job that created it
@@ -88,14 +87,14 @@ class LaneJob {
   /// later one, is held under this group. Web lanes use it to mount the
   /// handle's held readers and to file newly kept ones; native lanes
   /// ignore it (the engine holds its readers inside the document).
-  final int? heldGroupId;
+  final int? holdGroupId;
 }
 
 /// What a completed job hands back to the Router.
-class LaneSubmitResult {
-  /// Creates a result. [heldTokens] maps kept source indices to
-  /// opaque lane-owned tokens for later [Lane.releaseHeld].
-  LaneSubmitResult(this.bytes, this.heldTokens, {this.laneDied = false});
+class JobResult {
+  /// Creates a result. [holds] maps kept source indices to
+  /// opaque lane-owned tokens for later [Lease.releaseHold].
+  JobResult(this.bytes, this.holds, {this.laneDied = false});
 
   /// True when the engine on this lane trapped or panicked: the lane has
   /// stopped serving, its handles are gone, and the Router must retire it.
@@ -105,27 +104,27 @@ class LaneSubmitResult {
   final Uint8List bytes;
 
   /// Kept-channel tokens by source index. Opaque to the Router.
-  final Map<int, Object> heldTokens;
+  final Map<int, Object> holds;
 }
 
-/// One executor's tenure by one lane: its adapter for the lease it holds.
+/// One lane's lease on one executor: its adapter for the lease it holds.
 /// Six verbs, no decisions.
-abstract interface class Lane {
+abstract interface class Lease {
   /// Run one job. Always completes — with result bytes, an
   /// engine-encoded error, or (after [drain]) a cancelled error built
   /// by the lane itself. Never throws for expected failures.
-  Future<LaneSubmitResult> submit(LaneJob job);
+  Future<JobResult> submit(Job job);
 
   /// Cancel one job on this lane. Instant, idempotent, fire-and-forget.
   void cancelJob(int jobId);
 
   /// Release one held channel (its handle was disposed).
-  void releaseHeld(Object token);
+  void releaseHold(Object token);
 
   /// Give the executor a fresh engine state: every document, held reader
   /// and job file it owned is gone, the thread or worker stays. Completes
   /// with the wasm memory size on web, null on native. Throws
-  /// [LaneProtocolError] while a job is outstanding (the caller drains the
+  /// [LeaseProtocolError] while a job is outstanding (the caller drains the
   /// lane first) and after the engine died; resetting an idle executor
   /// again is fine.
   Future<int?> reset();
@@ -140,7 +139,7 @@ abstract interface class Lane {
   Future<bool> drain();
 }
 
-/// A [Lane] that can say what it waits for, for the record of a transition
+/// A [Lease] that can say what it waits for, for the record of a transition
 /// that outlasted its cover (see ExecutorPool).
 abstract interface class LanePhase {
   /// The lease and what the lane awaits now: a running job's post, a reset's
@@ -153,9 +152,9 @@ abstract interface class LanePhase {
 abstract interface class Executor {
   /// Start a new lease on this executor and return the lane that holds it.
   /// Every message of the lane carries the lease id, and the executor drops
-  /// one of an earlier lease. Throws [LaneProtocolError] when the executor
+  /// one of an earlier lease. Throws [LeaseProtocolError] when the executor
   /// refuses a lease: its engine died, or a job is still outstanding.
-  Lane beginLane();
+  Lease beginLane();
 
   /// The most bytes the executor's engine has held since its last reset, as of
   /// its last answer: peak live bytes, on both platforms.
@@ -170,20 +169,20 @@ abstract interface class Executor {
 
 /// Boots executors for one platform. The ExecutorPool owns how many and
 /// when.
-abstract interface class LaneHost {
+abstract interface class ExecutorBooter {
   /// Start one executor and complete once it is ready for a lease. Throws
   /// when the boot fails; a failed boot leaves nothing behind.
   Future<Executor> boot();
 
-  /// This host's I/O mode — the Router reports it as the instance's
+  /// This booter's I/O mode — the Router reports it as the instance's
   /// [PdfIoMode].
   PdfIoMode get mode;
 
-  /// Lane count when the caller doesn't override it, sized from the
-  /// platform's CPU count.
-  int get defaultLaneCount;
+  /// How many lanes run at once when the caller doesn't override it, sized
+  /// from the platform's CPU count.
+  int get defaultConcurrency;
 
-  /// What the executors of this host are: hosts with the same key boot
+  /// What the executors of this booter are: booters with the same key boot
   /// interchangeable executors and share one pool.
   String get poolKey;
 }

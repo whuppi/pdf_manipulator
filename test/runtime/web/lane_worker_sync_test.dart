@@ -1,15 +1,15 @@
-// lane_worker.js ↔ lane protocol — the web wire-contract guard.
+// executor_worker.js ↔ lane protocol — the web wire-contract guard.
 //
 // The web twin of test/runtime/native/channel_buffers_test.dart:
 // native pins the shared-memory layout both sides hardcode; this
 // pins the message tags and injected codes both sides speak. Parses
-// lane_worker.js from disk — zero hardcoded allowlists beyond the
+// executor_worker.js from disk — zero hardcoded allowlists beyond the
 // protocol file itself.
 
 @TestOn('vm')
 library;
 
-// io-exempt: reads lane_worker.js from disk to pin the web wire contract.
+// io-exempt: reads executor_worker.js from disk to pin the web wire contract.
 import 'dart:io';
 
 import 'package:pdf_manipulator/src/runtime/web/protocol.dart';
@@ -21,25 +21,25 @@ Set<String> _extractJsCases(String source) {
 }
 
 void main() {
-  group('lane_worker.js ↔ lane protocol', () {
+  group('executor_worker.js ↔ lane protocol', () {
     late String workerSource;
 
     setUpAll(() {
-      final file = File('web_assets/lane_worker.js');
-      if (!file.existsSync()) fail('lane_worker.js not found');
+      final file = File('web_assets/executor_worker.js');
+      if (!file.existsSync()) fail('executor_worker.js not found');
       workerSource = file.readAsStringSync();
     });
 
     test('worker calls the lane WASM surface', () {
       expect(
         workerSource,
-        contains('lane_execute'),
-        reason: 'lane_worker.js must call lane_execute from pdf_oxide.js',
+        contains('execute'),
+        reason: 'executor_worker.js must call execute from pdf_oxide.js',
       );
       expect(
         workerSource,
-        contains('lane_init'),
-        reason: 'lane_worker.js must call lane_init at bootstrap',
+        contains('engine_state_new'),
+        reason: 'executor_worker.js must call engine_state_new at bootstrap',
       );
     });
 
@@ -51,7 +51,7 @@ void main() {
         perOpPattern.hasMatch(workerSource),
         isFalse,
         reason:
-            'lane_worker.js must not dispatch per op — all ops go through lane_execute',
+            'executor_worker.js must not dispatch per op — all ops go through execute',
       );
     });
 
@@ -61,7 +61,7 @@ void main() {
         LaneMsg.exec,
         LaneMsg.readAtResult,
         LaneMsg.chunkAck,
-        LaneMsg.releaseHeld,
+        LaneMsg.releaseHold,
         LaneMsg.reset,
         LaneMsg.opfsWrite,
         LaneMsg.opfsDrop,
@@ -97,7 +97,7 @@ void main() {
 
     test('every P.* the worker reads is a real injected protocol key', () {
       // Drift direction that matters: a P.key the injection doesn't
-      // provide is undefined in JS — silent NaN/undefined physics.
+      // provide is undefined in JS — silent NaN/undefined behaviour.
       final injected = laneProtocolCodes().keys.toSet();
       final used = RegExp(
         r'P\.([a-zA-Z0-9_]+)',
@@ -131,12 +131,12 @@ void main() {
       // the group's readers in creation order and files a later job's kept
       // readers under that group; the lane serves reads in the same order.
       final laneSource = File(
-        'lib/src/runtime/web/lane.dart',
+        'lib/src/runtime/web/lease.dart',
       ).readAsStringSync();
-      expect(laneSource, contains("msg['heldGroupId']"));
-      expect(laneSource, contains("'heldGroupId': heldGroupId"));
-      expect(workerSource, contains('r.heldGroupId === heldGroupId'));
-      expect(workerSource, contains('heldGroupId ?? jobId'));
+      expect(laneSource, contains("msg['holdGroupId']"));
+      expect(laneSource, contains("'holdGroupId': holdGroupId"));
+      expect(workerSource, contains('r.holdGroupId === holdGroupId'));
+      expect(workerSource, contains('holdGroupId ?? jobId'));
       expect(
         laneSource,
         contains('(_heldSources[group] ??= []).addAll'),
@@ -172,7 +172,7 @@ void main() {
         );
       }
       final laneSource = File(
-        'lib/src/runtime/web/lane.dart',
+        'lib/src/runtime/web/lease.dart',
       ).readAsStringSync();
       expect(laneSource, contains('_int(obj, LaneMsgFields.jobId) =='));
       expect(laneSource, contains('_int(obj, LaneMsgFields.writeOffset) =='));
@@ -198,7 +198,7 @@ void main() {
       }
 
       final laneSource = File(
-        'lib/src/runtime/web/lane.dart',
+        'lib/src/runtime/web/lease.dart',
       ).readAsStringSync();
       expect(
         RegExp(
@@ -223,7 +223,7 @@ void main() {
       const guarded = {
         LaneMsg.readAtResult,
         LaneMsg.chunkAck,
-        LaneMsg.releaseHeld,
+        LaneMsg.releaseHold,
         LaneMsg.opfsDrop,
         LaneMsg.opfsWrite,
         LaneMsg.reset,
@@ -276,8 +276,8 @@ void main() {
         'opfsWriteHandles.clear()',
         'jobFiles.clear()',
         'emptyLaneDir()',
-        'lane_destroy(lanePtr)',
-        'lane_init()',
+        'engine_state_drop(statePtr)',
+        'engine_state_new()',
       ]) {
         expect(reset, contains(step), reason: 'reset skips $step');
       }

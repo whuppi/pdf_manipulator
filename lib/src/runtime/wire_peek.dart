@@ -180,7 +180,7 @@ int? _valueLength(Uint8List bytes, int pos, int type) {
 }
 
 /// Builds a cancelled response (status 2) — used by lanes to
-/// complete jobs they own after a kill, matching
+/// complete jobs they own once the lane has ended, matching
 /// `ResponseWriter::cancelled` on the Rust side.
 Uint8List buildCancelledResponse() => Uint8List.fromList(const [2]);
 
