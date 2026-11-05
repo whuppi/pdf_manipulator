@@ -37,6 +37,10 @@ class FakeLane implements Lane {
   /// is still unwinding.
   Completer<bool>? drainGate;
 
+  /// When set, [reset] completes only when this does, as a worker that never
+  /// answers `resetDone`.
+  Completer<int?>? resetGate;
+
   /// The engine died: drain answers false.
   bool engineDead = false;
 
@@ -77,6 +81,8 @@ class FakeLane implements Lane {
     resets++;
     executor.events.add('reset');
     if (executor.failReset) throw const LaneProtocolError('reset failed');
+    final gate = resetGate;
+    if (gate != null) return gate.future;
     return executor.heap;
   }
 

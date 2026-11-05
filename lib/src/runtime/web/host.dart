@@ -191,6 +191,14 @@ class WebLaneHost implements LaneHost {
     }
   }
 
+  static final List<String> _abandonedDirs = [];
+
+  /// Directories of dead workers that [_deleteDeadWorkerDir] gave up on,
+  /// by name: each one stays on disk until the next session's sweep. Tests
+  /// assert it is empty; nothing decides on it.
+  static List<String> get abandonedWorkerDirs =>
+      List.unmodifiable(_abandonedDirs);
+
   /// Deletes a PROVABLY-DEAD worker's directory. The only convergent
   /// loop in the runtime, and the only one that is sound: the owner
   /// is gone, so the browser's asynchronous reaping of its handles is
@@ -217,6 +225,7 @@ class WebLaneHost implements LaneHost {
       await Future<void>.delayed(delay);
       delay *= 2;
     }
+    _abandonedDirs.add(workerId);
   }
 
   final String _laneWorkerUrl;

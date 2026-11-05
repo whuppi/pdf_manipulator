@@ -171,7 +171,7 @@ class _WebJob {
 // ── Lane ────────────────────────────────────────────────────────────
 
 /// One lease on a [WebExecutor]. Decision-free.
-class WebLane implements Lane {
+class WebLane implements Lane, LanePhase {
   WebLane._(this._exec, this._lease);
 
   final WebExecutor _exec;
@@ -193,6 +193,10 @@ class WebLane implements Lane {
 
   final Completer<bool> _drained = Completer<bool>();
 
+  /// Completes when the lane ends ([drain] or termination): a success
+  /// waiting on its sink writes stops waiting, since nobody wants the output.
+  final Completer<void> _ended = Completer<void>();
+
   /// True once the worker trapped: the lane serves nothing more. Queued and
   /// later jobs complete with the lane-dead error; the pool terminates the
   /// worker.
@@ -207,8 +211,9 @@ class WebLane implements Lane {
   /// suspended awaiting chunkAck).
   bool _awaitingJspiWrite = false;
 
-  /// Outstanding OPFS pre-copy ack.
+  /// Outstanding OPFS pre-copy ack, and the write it answers.
   Completer<String?>? _opfsAck;
+  ({int jobId, int offset})? _opfsAwaiting;
 
   /// The reset in flight; its answer is `resetDone` or an `error` that
   /// names no job.
@@ -228,6 +233,16 @@ class WebLane implements Lane {
   /// group's sources. Mount order mirrors the worker's reader map:
   /// held first, own sources after.
   final Map<int, List<DataSource>> _heldSources = {};
+
+  @override
+  String get phase {
+    final running = _running;
+    if (running != null) {
+      return 'lease $_lease awaiting the post of job ${running.job.jobId}';
+    }
+    if (_reset != null) return 'lease $_lease awaiting resetDone';
+    return 'lease $_lease awaiting nothing';
+  }
 
   // ── Lane verbs ──
 
@@ -327,6 +342,7 @@ class WebLane implements Lane {
   Future<bool> drain() {
     if (!_ending && !_abandoned) {
       _ending = true;
+      if (!_ended.isCompleted) _ended.complete();
       final running = _running;
       if (running != null) {
         // The same cancel as the caller's: the engine unwinds at its next
@@ -361,6 +377,7 @@ class WebLane implements Lane {
   void _abandon() {
     if (_abandoned) return;
     _abandoned = true;
+    if (!_ended.isCompleted) _ended.complete();
     final cancelled = LaneSubmitResult(buildCancelledResponse(), const {});
     final running = _running;
     _running = null;
@@ -374,6 +391,7 @@ class WebLane implements Lane {
     }
     _opfsAck?.complete(null); // loop head re-checks _abandoned and exits
     _opfsAck = null;
+    _opfsAwaiting = null;
     final resetting = _reset;
     _reset = null;
     if (resetting != null && !resetting.isCompleted) {
@@ -540,7 +558,14 @@ class WebLane implements Lane {
         }
 
       case LaneMsg.opfsWriteAck:
-        _opfsAck?.complete(_str(obj, 'error'));
+        // Only the ack of the write being waited for completes it; a late
+        // one of a cancelled job's write names another job or offset.
+        final waiting = _opfsAwaiting;
+        if (waiting != null &&
+            _int(obj, LaneMsgFields.jobId) == waiting.jobId &&
+            _int(obj, LaneMsgFields.writeOffset) == waiting.offset) {
+          _opfsAck?.complete(_str(obj, 'error'));
+        }
 
       case LaneMsg.resetDone:
         _reset?.complete(mem);
@@ -555,16 +580,7 @@ class WebLane implements Lane {
             _finish(entry, _buildResult(entry, bytes));
             return;
           }
-          // A success ends after its last sink write, cancelled or not:
-          // the caller must not be told "saved" while a chunk is still
-          // being written. OPFS mode has no worker-side back-pressure, so
-          // the result can arrive while chunks it follows are still being
-          // written.
-          unawaited(
-            entry.sinkChain.then(
-              (_) => _finish(entry, _buildResult(entry, bytes)),
-            ),
-          );
+          unawaited(_finishAfterWrites(entry, bytes));
         }
 
       case LaneMsg.error:
@@ -599,6 +615,25 @@ class WebLane implements Lane {
           _finish(entry, LaneSubmitResult(bytes, const {}));
         }
     }
+  }
+
+  /// A success ends after its last sink write, cancelled or not: the caller
+  /// must not be told "saved" while a chunk is still being written. OPFS mode
+  /// has no worker-side back-pressure, so the result can arrive while chunks
+  /// it follows are still being written. Only the end of the lane ends the
+  /// wait: its caller was answered cancelled, and a sink that never returns
+  /// would otherwise keep the worker busy for good.
+  Future<void> _finishAfterWrites(_WebJob entry, Uint8List bytes) async {
+    final written = await Future.any([
+      entry.sinkChain.then((_) => true),
+      _ended.future.then((_) => false),
+    ]);
+    _finish(
+      entry,
+      written
+          ? _buildResult(entry, bytes)
+          : LaneSubmitResult(buildCancelledResponse(), const {}),
+    );
   }
 
   LaneSubmitResult _buildResult(_WebJob entry, Uint8List bytes) {
@@ -718,11 +753,12 @@ class WebLane implements Lane {
 
     String? error;
     try {
-      if (entry.cancelled && _mode != PdfIoMode.opfs) {
-        // The answer below is "cancelled", so the engine cannot finish
-        // this job: a draining worker's chunk is never written to a sink
-        // whose Pdf was disposed. OPFS has no answer channel, so its writes
-        // always land.
+      if (_ending || (entry.cancelled && _mode != PdfIoMode.opfs)) {
+        // The lane ended, or the answer below is "cancelled" so the engine
+        // cannot finish this job: such a chunk is never written to a sink
+        // whose Pdf was disposed, and a sink that never returns holds no
+        // chain behind it. A cancelled OPFS job has no answer channel and
+        // its engine may still finish, so its writes land.
       } else if (sinkIndex < entry.job.sinks.length) {
         await Future<void>.value(entry.job.sinks[sinkIndex].write(data));
       } else {
@@ -787,6 +823,7 @@ class WebLane implements Lane {
 
         final ack = Completer<String?>();
         _opfsAck = ack;
+        _opfsAwaiting = (jobId: entry.job.jobId, offset: offset);
         final owned = Uint8List.fromList(chunk);
         final js = owned.buffer.toJS;
         _postRaw(
@@ -810,6 +847,7 @@ class WebLane implements Lane {
           ]);
         } finally {
           _opfsAck = null;
+          _opfsAwaiting = null;
         }
         if (ackError != null && ackError != 'cancelled') {
           throw PdfIoFailed('OPFS pre-copy failed: $ackError');

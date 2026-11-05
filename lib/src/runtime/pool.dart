@@ -33,7 +33,11 @@
 // under the budget, else waits. An executor that is booting or draining
 // counts as on its way to idle, so a request waits for it rather than
 // booting another: a Pdf disposed and replaced in a loop reuses one
-// executor. Waiters are served
+// executor. It counts so only while it is young, for [ExecutorPool.coverFor]:
+// a transition that outlasts that is slow, is recorded as such, and no longer
+// hides a waiter, which then boots its own executor. The slow one is never
+// killed; when its transition ends it joins the idle shelf or is retired by
+// the idle cap like any other. Waiters are served
 // strictly in arrival order: an executor that frees goes to the head of the
 // queue, never to a request that arrived later.
 //
@@ -53,6 +57,15 @@ const kMaxExecutors = 64;
 /// Most idle executors the pool keeps; a returned one beyond this is
 /// terminated so parked executors cannot starve the budget.
 const kMaxIdleExecutors = 4;
+
+/// How long a booting or draining executor hides a waiting request from the
+/// pool, which then boots another. A drain plus reset of a small job
+/// measured at most 3 ms idle on the native and the OPFS runner, and 12 ms
+/// native and 6 ms OPFS with all four cores busy (30 cycles each, the job
+/// finished or still in flight; the executor battery prints them on
+/// failure). This is some 800 times the slowest, so only an executor that
+/// is stuck is passed over.
+const kCoverFor = Duration(seconds: 10);
 
 /// An executor whose engine held this many bytes at its peak is terminated
 /// when it is returned instead of reset. Mirrors `KEEP_BYTES` in
@@ -78,9 +91,21 @@ enum ExecutorState {
 }
 
 class _Entry {
-  _Entry();
+  _Entry(this.since);
 
   ExecutorState state = ExecutorState.booting;
+
+  /// The clock reading at which it entered booting or draining.
+  Duration since;
+
+  /// What the transition waits for, for the record of a slow one.
+  String phase = 'booting';
+
+  /// Fires when the transition stops covering a waiter.
+  Timer? slowTimer;
+
+  /// The lane of the lease it was draining, for the same record.
+  LanePhase? lane;
 
   /// Null until the boot completes.
   Executor? executor;
@@ -91,6 +116,21 @@ class _Entry {
 
 class _Waiter {
   final completer = Completer<ExecutorLease>();
+}
+
+/// A booting or draining executor that outlasted [ExecutorPool.coverFor].
+class SlowTransition {
+  SlowTransition._(this.phase, this.age);
+
+  /// What it waited for: `booting`, or the lane's own account of the drain
+  /// (the job whose post it awaited) or the reset (the `resetDone`).
+  final String phase;
+
+  /// How long it had been in the transition when it was recorded.
+  final Duration age;
+
+  @override
+  String toString() => '$phase after ${age.inMilliseconds} ms';
 }
 
 /// One lane's hold on one executor: the lane that owns it and nobody else
@@ -127,18 +167,31 @@ class ExecutorRequest {
 class ExecutorPool {
   /// Creates a pool over [host]'s executors. [maxExecutors] is the budget,
   /// [maxIdle] how many idle executors are kept, [keepBytes] the engine heap
-  /// peak at which a returned executor is terminated instead of reset.
+  /// peak at which a returned executor is terminated instead of reset,
+  /// [coverFor] how long a booting or draining executor covers a waiter.
+  /// [clock] is the monotonic time the cover is measured on; tests drive it.
   ExecutorPool({
     required LaneHost host,
     this.maxExecutors = kMaxExecutors,
     this.maxIdle = kMaxIdleExecutors,
     this.keepBytes = kKeepBytes,
+    this.coverFor = kCoverFor,
+    Duration Function()? clock,
   }) : assert(maxExecutors >= 1, 'maxExecutors must be at least 1'),
-       _host = host;
+       _host = host,
+       _clock = clock ?? _monotonic;
+
+  static final Stopwatch _stopwatch = Stopwatch()..start();
+  static Duration _monotonic() => _stopwatch.elapsed;
 
   static final Map<String, ExecutorPool> _shared = {};
   static int _totalBoots = 0;
   static int _totalResetFailures = 0;
+  static int _totalSlowTransitions = 0;
+  static final List<SlowTransition> _recentSlow = [];
+
+  /// How many slow transitions [recentSlowTransitions] keeps.
+  static const _slowKept = 8;
 
   /// The pool every instance of [host]'s configuration shares, page- or
   /// process-wide. The first use of the package creates it and boots one
@@ -158,7 +211,16 @@ class ExecutorPool {
   /// nothing decides on it.
   static int get totalResetFailures => _totalResetFailures;
 
+  /// Transitions that outlasted [coverFor] in every live pool since the
+  /// process started. Tests assert it is zero; nothing decides on it.
+  static int get totalSlowTransitions => _totalSlowTransitions;
+
+  /// The last few slow transitions, oldest first.
+  static List<SlowTransition> get recentSlowTransitions =>
+      List.unmodifiable(_recentSlow);
+
   final LaneHost _host;
+  final Duration Function() _clock;
 
   /// The budget: live executors at most.
   final int maxExecutors;
@@ -168,6 +230,9 @@ class ExecutorPool {
 
   /// The heap peak in bytes at which a returned executor is terminated.
   final int keepBytes;
+
+  /// How long a booting or draining executor hides a waiter from the pool.
+  final Duration coverFor;
 
   final List<_Entry> _entries = [];
   final List<_Waiter> _waiters = [];
@@ -225,7 +290,7 @@ class ExecutorPool {
   Future<void> release(ExecutorLease lease, {bool untouched = false}) async {
     final entry = lease._entry;
     if (entry.state != ExecutorState.leased) return;
-    entry.state = ExecutorState.draining;
+    _begin(entry, ExecutorState.draining, 'draining', lease.lane);
     final executor = entry.executor!;
     var intact = false;
     var over = false;
@@ -238,6 +303,7 @@ class ExecutorPool {
     // The peak is read before the reset, which starts it over.
     over = executor.heapBytes >= keepBytes;
     if (intact && !over && !untouched) {
+      entry.phase = 'resetting';
       try {
         await lease.lane.reset();
       } catch (_) {
@@ -251,7 +317,7 @@ class ExecutorPool {
       return;
     }
     entry.heap = executor.heapBytes;
-    entry.state = ExecutorState.idle;
+    _settle(entry);
     _serve();
     if (entry.state == ExecutorState.idle && idleCount > maxIdle) {
       _retire(entry);
@@ -264,6 +330,7 @@ class ExecutorPool {
     if (_disposed) return;
     _disposed = true;
     for (final entry in List.of(_entries)) {
+      entry.slowTimer?.cancel();
       if (entry.state != ExecutorState.booting) _retire(entry);
     }
     for (final waiter in List.of(_waiters)) {
@@ -281,15 +348,67 @@ class ExecutorPool {
     }
     // A booting or draining executor will be idle soon, so it covers a
     // waiter: churn waits for the executor its predecessor is returning
-    // instead of booting a second one.
-    var uncovered =
-        _waiters.length -
-        _count(ExecutorState.booting) -
-        _count(ExecutorState.draining);
+    // instead of booting a second one. Only while it is young: one that
+    // outlasted [coverFor] is stuck as far as the waiter can tell.
+    var uncovered = _waiters.length - _young();
     while (uncovered > 0 && _entries.length < maxExecutors) {
       _boot();
       uncovered--;
     }
+  }
+
+  int _young() {
+    final now = _clock();
+    return _entries
+        .where(
+          (e) =>
+              (e.state == ExecutorState.booting ||
+                  e.state == ExecutorState.draining) &&
+              now - e.since < coverFor,
+        )
+        .length;
+  }
+
+  /// Starts [entry]'s transition into [state]: stamps it and arms the timer
+  /// that ends its cover.
+  void _begin(_Entry entry, ExecutorState state, String phase, [Lane? lane]) {
+    entry.state = state;
+    entry.phase = phase;
+    entry.lane = switch (lane) {
+      final LanePhase reporter => reporter,
+      _ => null,
+    };
+    entry.since = _clock();
+    _arm(entry, coverFor);
+  }
+
+  void _arm(_Entry entry, Duration after) {
+    entry.slowTimer?.cancel();
+    entry.slowTimer = Timer(after, () {
+      final age = _clock() - entry.since;
+      if (age < coverFor) {
+        _arm(entry, coverFor - age);
+        return;
+      }
+      _totalSlowTransitions++;
+      final lane = entry.lane;
+      _recentSlow.add(
+        SlowTransition._(
+          lane == null ? entry.phase : '${entry.phase}: ${lane.phase}',
+          age,
+        ),
+      );
+      if (_recentSlow.length > _slowKept) _recentSlow.removeAt(0);
+      _serve();
+    });
+  }
+
+  /// Ends [entry]'s transition: it is idle.
+  void _settle(_Entry entry) {
+    entry.slowTimer?.cancel();
+    entry.slowTimer = null;
+    entry.lane = null;
+    entry.state = ExecutorState.idle;
   }
 
   /// The idle executor with the smallest heap, leased; an executor that
@@ -313,7 +432,8 @@ class ExecutorPool {
   }
 
   void _boot() {
-    final entry = _Entry();
+    final entry = _Entry(_clock());
+    _arm(entry, coverFor);
     _entries.add(entry);
     _boots++;
     _totalBoots++;
@@ -326,10 +446,11 @@ class ExecutorPool {
             return;
           }
           entry.heap = executor.heapBytes;
-          entry.state = ExecutorState.idle;
+          _settle(entry);
           _serve();
         },
         onError: (Object error, StackTrace stack) {
+          entry.slowTimer?.cancel();
           _entries.remove(entry);
           entry.state = ExecutorState.dead;
           // The oldest waiter learns of the failure; the others boot again.
@@ -346,6 +467,7 @@ class ExecutorPool {
 
   void _retire(_Entry entry) {
     if (entry.state == ExecutorState.dead) return;
+    entry.slowTimer?.cancel();
     entry.state = ExecutorState.dead;
     _entries.remove(entry);
     entry.executor?.terminate();
@@ -379,6 +501,11 @@ class PooledLane {
   ExecutorLease? _lease;
   ExecutorRequest? _request;
   Future<void>? _returning;
+
+  /// True once the executor the lane gave back has taken [ExecutorPool.coverFor]
+  /// to return: the lane then leases another instead of waiting for it.
+  bool _returnSlow = false;
+  Timer? _returnTimer;
   final List<_Waiting> _waiting = [];
   bool _ended = false;
 
@@ -422,16 +549,29 @@ class PooledLane {
   void releaseHeld(Object token) => _lease?.lane.releaseHeld(token);
 
   /// Gives the leased executor back: its jobs are cancelled and the pool
-  /// resets it. The lane stays usable; its next job leases again. Does
-  /// nothing without a lease.
+  /// resets it. The lane stays usable; its next job leases again, once the
+  /// executor is back or has taken [ExecutorPool.coverFor] to come back.
+  /// Does nothing without a lease.
   void release() {
     final lease = _lease;
     if (lease == null) return;
     _lease = null;
     final untouched = !_touched;
     _touched = false;
-    _returning = _pool.release(lease, untouched: untouched).whenComplete(() {
-      _returning = null;
+    _returnTimer?.cancel();
+    _returnSlow = false;
+    late final Future<void> returning;
+    returning = _returning = _pool
+        .release(lease, untouched: untouched)
+        .whenComplete(() {
+          if (!identical(_returning, returning)) return;
+          _returnTimer?.cancel();
+          _returning = null;
+          _returnSlow = false;
+          _acquire();
+        });
+    _returnTimer = Timer(_pool.coverFor, () {
+      _returnSlow = true;
       _acquire();
     });
   }
@@ -457,7 +597,7 @@ class PooledLane {
     if (_ended ||
         _lease != null ||
         _request != null ||
-        _returning != null ||
+        (_returning != null && !_returnSlow) ||
         _waiting.isEmpty) {
       return;
     }

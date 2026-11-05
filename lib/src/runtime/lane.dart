@@ -140,6 +140,14 @@ abstract interface class Lane {
   Future<bool> drain();
 }
 
+/// A [Lane] that can say what it waits for, for the record of a transition
+/// that outlasted its cover (see ExecutorPool).
+abstract interface class LanePhase {
+  /// The lease and what the lane awaits now: a running job's post, a reset's
+  /// answer, or nothing.
+  String get phase;
+}
+
 /// One platform executor: a thread with its engine state, or a worker with
 /// its WASM instance. Owned by the ExecutorPool.
 abstract interface class Executor {

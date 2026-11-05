@@ -161,6 +161,48 @@ void registerExecutorTests(
       expect(pool.liveCount, 1);
     }, timeout: t(10));
 
+    test('a drain plus reset takes a tenth of the cover at most', () async {
+      // kCoverFor is set from this measurement: its doc comment carries the
+      // slowest figure seen on each runner.
+      make();
+      await booted();
+      final finished = <int>[];
+      final inFlight = <int>[];
+      for (var i = 0; i < 30; i++) {
+        for (final midFlight in [false, true]) {
+          final lease = await pool.acquire().lease;
+          final source = src(minimalPdf);
+          final job = lease.lane.submit(
+            LaneJob(
+              jobId: 1,
+              request: _open(source.length),
+              sources: [source],
+              sinks: const [],
+              keepSources: const {},
+            ),
+          );
+          if (!midFlight) await job;
+          final clock = Stopwatch()..start();
+          await pool.release(lease);
+          (midFlight ? inFlight : finished).add(clock.elapsedMilliseconds);
+          await job;
+        }
+      }
+      final slowest = [
+        ...finished,
+        ...inFlight,
+      ].reduce((a, b) => a > b ? a : b);
+      printOnFailure('drain+reset ms, job finished: $finished');
+      printOnFailure('drain+reset ms, job in flight: $inFlight');
+      printOnFailure('slowest: $slowest ms');
+      expect(
+        slowest,
+        lessThan(kCoverFor.inMilliseconds ~/ 10),
+        reason: 'a drain plus reset came within a tenth of the cover',
+      );
+      expect(ExecutorPool.totalSlowTransitions, 0);
+    }, timeout: t(60));
+
     test('the heap an idle executor reports does not grow over fifty cycles '
         'with a dispose every ten', () async {
       make();

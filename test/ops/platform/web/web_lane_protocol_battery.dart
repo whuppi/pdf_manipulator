@@ -97,13 +97,12 @@ Future<List<String>> _names(web.FileSystemDirectoryHandle dir) async {
 }
 
 /// Worker prelude: the worker stops at the OPFS call a test names until the
-/// test says go. `removeEntry` holds every delete, `open` holds the open of a
-/// pre-copied file; each gate opens once and stays open. A held call posts
-/// `gated`, a finished delete posts `removed`.
+/// test says go. `removeEntry` holds every delete; a gate opens once and stays
+/// open. A held call posts `gated`, a finished delete posts `removed`.
 const _gates = r'''
 const dir = FileSystemDirectoryHandle.prototype;
 const gates = {};
-for (const what of ['open', 'removeEntry']) {
+for (const what of ['removeEntry']) {
   gates[what] = new Promise((go) => { gates[what + 'Go'] = go; });
 }
 self.addEventListener('message', (e) => {
@@ -124,11 +123,6 @@ dir.removeEntry = async function (name, options) {
   postMessage({ type: 'removed', name });
   return result;
 };
-const getFileHandle = dir.getFileHandle;
-dir.getFileHandle = async function (name, options) {
-  if (!options) await held('open', name);
-  return getFileHandle.call(this, name, options);
-};
 ''';
 
 /// Worker prelude: drops every `opfsWrite` unanswered, as a worker that has
@@ -138,6 +132,112 @@ self.addEventListener('message', (e) => {
   if (e.data && e.data.type === 'opfsWrite') {
     e.stopImmediatePropagation();
     postMessage({ type: 'dropped' });
+  }
+});
+''';
+
+/// Worker prelude: a sync access handle cannot be created on a file whose
+/// handle was closed less than two seconds ago, as in a browser that
+/// releases the lock after `close()` returns; each refusal posts `refused`.
+const _refusesReopen = r'''
+const closedAt = new Map();
+const fileHandle = FileSystemFileHandle.prototype;
+const create = fileHandle.createSyncAccessHandle;
+fileHandle.createSyncAccessHandle = async function (...args) {
+  const name = this.name;
+  const closed = closedAt.get(name);
+  if (closed !== undefined && performance.now() - closed < 2000) {
+    postMessage({ type: 'refused', name });
+    throw new DOMException('the previous handle is still being released', 'NoModificationAllowedError');
+  }
+  const handle = await create.apply(this, args);
+  const close = handle.close.bind(handle);
+  handle.close = () => {
+    closedAt.set(name, performance.now());
+    return close();
+  };
+  return handle;
+};
+''';
+
+/// Worker prelude: the creation of a sync access handle is held until
+/// `goCreate` (`held` says it is), and is then refused with the
+/// NoModificationAllowedError of a browser that has been asked to delete the
+/// file meanwhile (`refused`). `ping` is answered with `pong`.
+const _holdsCreate = r'''
+const removed = new Set();
+const dirProto = FileSystemDirectoryHandle.prototype;
+const removeEntry = dirProto.removeEntry;
+dirProto.removeEntry = function (name, options) {
+  removed.add(name);
+  return removeEntry.call(this, name, options);
+};
+let go;
+const gate = new Promise((resolve) => { go = resolve; });
+const fileProto = FileSystemFileHandle.prototype;
+const create = fileProto.createSyncAccessHandle;
+fileProto.createSyncAccessHandle = async function (...args) {
+  const name = this.name;
+  postMessage({ type: 'held', name });
+  await gate;
+  if (removed.has(name)) {
+    postMessage({ type: 'refused', name });
+    throw new DOMException('the file is being deleted', 'NoModificationAllowedError');
+  }
+  return create.apply(this, args);
+};
+self.addEventListener('message', (e) => {
+  const m = e.data;
+  if (m && m.type === 'goCreate') { go(); e.stopImmediatePropagation(); }
+  else if (m && m.type === 'ping') { postMessage({ type: 'pong' }); e.stopImmediatePropagation(); }
+});
+''';
+
+/// Worker prelude: the first `getDirectoryHandle` that creates a directory
+/// rejects, as a browser whose storage is briefly unavailable does, and
+/// `rejected` says so.
+const _rejectsDirOnce = r'''
+const proto = FileSystemDirectoryHandle.prototype;
+const getDirectoryHandle = proto.getDirectoryHandle;
+let rejected = false;
+proto.getDirectoryHandle = function (name, options) {
+  if (!rejected && options && options.create) {
+    rejected = true;
+    postMessage({ type: 'rejected' });
+    return Promise.reject(new DOMException('storage is unavailable', 'UnknownError'));
+  }
+  return getDirectoryHandle.call(this, name, options);
+};
+''';
+
+/// Worker prelude: every `opfsWriteAck` is held until `ackRelease` names its
+/// job (`ackHeld` says one is held). `ping` is answered with `pong` and
+/// every `exec` that reaches the worker is reported as `execSeen`, in the
+/// order the worker received them.
+const _holdsAcks = r'''
+const post = self.postMessage.bind(self);
+const held = {};
+self.postMessage = (m, t) => {
+  if (m && m.type === 'opfsWriteAck') {
+    (held[m.jobId] ??= []).push(m);
+    post({ type: 'ackHeld', jobId: m.jobId });
+    return;
+  }
+  return post(m, t);
+};
+self.addEventListener('message', (e) => {
+  const m = e.data;
+  if (!m) return;
+  if (m.type === 'ackRelease') {
+    for (const ack of held[m.jobId] ?? []) post(ack);
+    held[m.jobId] = [];
+    post({ type: 'ackReleased', jobId: m.jobId });
+    e.stopImmediatePropagation();
+  } else if (m.type === 'ping') {
+    post({ type: 'pong' });
+    e.stopImmediatePropagation();
+  } else if (m.type === 'exec') {
+    post({ type: 'execSeen', jobId: m.jobId });
   }
 });
 ''';
@@ -203,6 +303,9 @@ class _RawWorker {
       );
 
   final WebExecutor _worker;
+
+  /// The worker's own OPFS directory.
+  String get directory => _worker.opfsDir!;
   final history = <JSObject>[];
   final _arrivals = StreamController<JSObject>.broadcast(sync: true);
   late final StreamSubscription<web.MessageEvent> _sub;
@@ -693,8 +796,6 @@ void registerWebLaneProtocolTests({
             sourceLengths: [minimalPdf.length],
             opfsFiles: [file],
           );
-          await raw.waitFor(_gated('open'));
-          raw.openGate('open');
           await raw.waitFor(_gated('removeEntry'));
           raw.openGate('removeEntry');
           final result = await raw.waitFor(_is('result', jobId: 1));
@@ -763,7 +864,7 @@ void registerWebLaneProtocolTests({
         final bytes = minimalPdf;
         const file = 'pdf_lane_busy';
 
-        // Busy with an exec, held where it opens its pre-copied file.
+        // Busy with an exec, held at the delete that ends its reader.
         final execing = await _RawWorker.take(host, prelude: _gates);
         addTearDown(execing.close);
         execing.precopy(1, 1, file, bytes);
@@ -775,7 +876,7 @@ void registerWebLaneProtocolTests({
           sourceLengths: [bytes.length],
           opfsFiles: [file],
         );
-        await execing.waitFor(_gated('open'));
+        await execing.waitFor(_gated('removeEntry'));
         // A newer lease cannot be adopted while busy: the verbs that wait
         // for an answer get one, the notifications that do not get none.
         execing.exec(2, 2, create);
@@ -785,8 +886,7 @@ void registerWebLaneProtocolTests({
         execing.post('chunkAck', {'lease': 2.toJS});
         execing.post('releaseHeld', {'lease': 2.toJS, 'heldGroupId': 1.toJS});
         execing.post('opfsDrop', {'lease': 2.toJS, 'jobId': 3.toJS});
-        execing.openGate('open');
-        execing.openGate('removeEntry'); // the exec's own cleanup
+        execing.openGate('removeEntry');
         await execing.waitFor(_is('result', jobId: 1));
         _expectRefused(execing.answers(2), [2, null, 3]);
         expect(
@@ -823,6 +923,134 @@ void registerWebLaneProtocolTests({
         expect(resetting.answers(0), isEmpty);
         expect(resetting.answers(3), hasLength(1));
       }, timeout: t(15));
+
+      test('a pre-copied file is read through the handle that wrote it, '
+          'never closed and reopened', () async {
+        final raw = await _RawWorker.take(host, prelude: _refusesReopen);
+        addTearDown(raw.close);
+        const file = 'pdf_lane_reopen';
+        raw.precopy(1, 1, file, minimalPdf);
+        await raw.waitFor(_is('opfsWriteAck'));
+        raw.exec(
+          1,
+          1,
+          _open(minimalPdf.length),
+          sourceLengths: [minimalPdf.length],
+          opfsFiles: [file],
+        );
+        final done = await raw.waitFor(
+          (m) => _is('result', jobId: 1)(m) || _is('error', jobId: 1)(m),
+        );
+        expect(
+          raw.saw(_is('refused')),
+          isFalse,
+          reason: 'the file was opened again after its handle was closed',
+        );
+        expect(_type(done), 'result', reason: 'exec: ${_str(done, 'message')}');
+        expect(_ok(_bytesOf(done, 'data')), isTrue);
+      }, timeout: t(10));
+
+      test('a job\'s drop waits for its pre-copy write in flight', () async {
+        final raw = await _RawWorker.take(host, prelude: _holdsCreate);
+        addTearDown(raw.close);
+        const file = 'pdf_lane_dropped';
+        raw.precopy(1, 1, file, minimalPdf);
+        await raw.waitFor(_is('held'));
+        // The job was cancelled: its drop reaches the worker while the
+        // write is still creating the file's handle.
+        raw.post('opfsDrop', {'lease': 1.toJS, 'jobId': 1.toJS});
+        raw.post('ping', {});
+        await raw.waitFor(_is('pong'));
+        raw.post('goCreate', {});
+
+        final ack = await raw.waitFor(_is('opfsWriteAck'));
+        expect(
+          raw.saw(_is('refused')),
+          isFalse,
+          reason: 'the drop deleted the file under the write that creates it',
+        );
+        expect(_str(ack, 'error'), isNull);
+        raw.post('reset', {'lease': 1.toJS});
+        final end = await raw.waitFor(
+          (m) => _type(m) == 'resetDone' || _type(m) == 'error',
+        );
+        expect(_type(end), 'resetDone', reason: _str(end, 'message'));
+        expect(await _opfsFileCount(raw.directory), 0);
+      }, timeout: t(10));
+
+      test('a rejected lane directory is asked for again', () async {
+        final raw = await _RawWorker.take(host, prelude: _rejectsDirOnce);
+        addTearDown(raw.close);
+        raw.precopy(1, 1, 'pdf_lane_first', minimalPdf);
+        final first = await raw.waitFor(_is('opfsWriteAck'));
+        expect(raw.saw(_is('rejected')), isTrue);
+        expect(_str(first, 'error'), isNotNull, reason: 'the directory failed');
+
+        raw.precopy(1, 2, 'pdf_lane_second', minimalPdf);
+        final second = await raw.waitFor(_is('opfsWriteAck', jobId: 2));
+        expect(
+          _str(second, 'error'),
+          isNull,
+          reason: 'the worker kept the rejection of its directory',
+        );
+      }, timeout: t(10));
+
+      test('a late pre-copy ack of one job does not complete the write of '
+          'another', () async {
+        final executor =
+            await withWorkerPrelude(_holdsAcks, host.boot) as WebExecutor;
+        addTearDown(executor.terminate);
+        final seen = <JSObject>[];
+        final arrivals = StreamController<JSObject>.broadcast(sync: true);
+        addTearDown(arrivals.close);
+        final sub = EventStreamProviders.messageEvent
+            .forTarget(executor.js)
+            .listen((e) {
+              final m = e.data as JSObject;
+              seen.add(m);
+              arrivals.add(m);
+            });
+        addTearDown(sub.cancel);
+        Future<JSObject> next(bool Function(JSObject) test) {
+          for (final m in seen) {
+            if (test(m)) return Future.value(m);
+          }
+          return arrivals.stream.firstWhere(test);
+        }
+
+        final lane = executor.beginLane() as WebLane;
+        LaneJob open(int id) {
+          final source = src(minimalPdf);
+          return LaneJob(
+            jobId: id,
+            request: _open(source.length),
+            sources: [source],
+            sinks: const [],
+            keepSources: const {},
+          );
+        }
+
+        final first = lane.submit(open(1));
+        final second = lane.submit(open(2));
+        await next(_is('ackHeld', jobId: 1));
+        lane.cancelJob(1);
+        expect((await first).bytes, buildCancelledResponse());
+        await next(_is('ackHeld', jobId: 2));
+
+        // Job 1's ack arrives while job 2's write is the one pending.
+        executor.js.postMessage(_msg('ackRelease', {'jobId': 1.toJS}));
+        await next(_is('ackReleased', jobId: 1));
+        executor.js.postMessage(_msg('ping', {}));
+        await next(_is('pong'));
+        expect(
+          seen.any(_is('execSeen', jobId: 2)),
+          isFalse,
+          reason: 'job 2 left its pre-copy on the ack of job 1',
+        );
+
+        executor.js.postMessage(_msg('ackRelease', {'jobId': 2.toJS}));
+        expect(_ok((await second).bytes), isTrue);
+      }, timeout: t(10));
 
       test('a cancel poll that times out does not cancel the job', () async {
         final raw = await _RawWorker.take(host, prelude: _timesOutOnePoll);

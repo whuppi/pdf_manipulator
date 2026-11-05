@@ -242,6 +242,43 @@ void registerWebPlatformTests({
       skip: mode == PdfIoMode.jspi ? false : 'JSPI only',
     );
 
+    test(
+      'a sink that never returns does not make a lane undrainable',
+      () async {
+        // Its own pool, so the Pdf below can only be served by the worker
+        // the first one left: any other idle worker would hide the hang.
+        final config = PdfConfig(
+          webWorkerUrl: '${workerUrl()}?hungSink',
+          webIoMode: mode,
+        );
+        final victim = Pdf(config: config);
+        final started = Completer<void>();
+        final task = victim.merge([
+          PdfInput(src(minimalPdf)),
+          PdfInput(src(minimalPdf)),
+        ], _BlockedSink(started, Completer<void>().future));
+        await started.future; // a write is in flight and never returns
+        await victim.dispose();
+        await expectLater(task, throwsA(isA<PdfCancelled>()));
+
+        final fresh = Pdf(config: config);
+        addTearDown(fresh.dispose);
+        final pages =
+            await () async {
+              final doc = await fresh.open(PdfInput(src(minimalPdf)));
+              return doc.pageInfo();
+            }().timeout(
+              const Duration(seconds: 10),
+              onTimeout: () => throw TestFailure(
+                'the worker never left draining: a sink write that never '
+                'returned kept the lane busy',
+              ),
+            );
+        expect(pages, isNotEmpty);
+      },
+      timeout: t(20),
+    );
+
     test('dead-session OPFS directories are reclaimed at startup', () async {
       // Plant a fake dead session: files on disk, NO liveness lock —
       // exactly what a crashed tab (or a forgotten dispose + closed
@@ -379,6 +416,31 @@ void registerWebPlatformTests({
         ExecutorPool.totalResetFailures,
         0,
         reason: 'a reset failed and cost a cold boot',
+      );
+    }, timeout: t(1));
+
+    test('no boot or drain outlasted its cover', () {
+      // A transition that outlasts the cover stops hiding the requests
+      // behind it, which then boot their own executor: the suite passes
+      // and a worker is stuck. Only this count shows it.
+      for (final slow in ExecutorPool.recentSlowTransitions) {
+        printOnFailure('slow transition: $slow');
+      }
+      expect(
+        ExecutorPool.totalSlowTransitions,
+        0,
+        reason: 'an executor stayed booting or draining past coverFor',
+      );
+    }, timeout: t(1));
+
+    test('no dead worker directory was given up on', () {
+      for (final dir in WebLaneHost.abandonedWorkerDirs) {
+        printOnFailure('abandoned worker directory: $dir');
+      }
+      expect(
+        WebLaneHost.abandonedWorkerDirs,
+        isEmpty,
+        reason: 'the host stopped retrying the delete of a dead worker dir',
       );
     }, timeout: t(1));
   });

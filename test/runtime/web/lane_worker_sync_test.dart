@@ -159,6 +159,25 @@ void main() {
         }
       }
     });
+    test('every opfsWriteAck names the write it answers, and the lane only '
+        'accepts the one it waits for', () {
+      for (final field in [LaneMsgFields.jobId, LaneMsgFields.writeOffset]) {
+        final posts = RegExp(
+          "postMessage\\(\\{ type: '${LaneMsg.opfsWriteAck}'[^\\n]*\\b$field:",
+        ).allMatches(workerSource);
+        expect(
+          posts,
+          hasLength(2),
+          reason: 'the ack and the failed ack must both carry $field',
+        );
+      }
+      final laneSource = File(
+        'lib/src/runtime/web/lane.dart',
+      ).readAsStringSync();
+      expect(laneSource, contains('_int(obj, LaneMsgFields.jobId) =='));
+      expect(laneSource, contains('_int(obj, LaneMsgFields.writeOffset) =='));
+    });
+
     test('every message after the boot handshake carries the lease', () {
       final lease = LaneMsgFields.lease;
       // Everything the worker posts, bar the boot handshake: `booted`,

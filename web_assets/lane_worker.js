@@ -52,7 +52,9 @@
 //
 // worker → Dart:
 //   ready | readAt { lease, sourceIndex, offset, count } | chunk { lease,
-//   sinkIndex, data } | result | error | resetDone | opfsWriteAck
+//   sinkIndex, data } | result | error | resetDone | opfsWriteAck { lease,
+//   jobId, offset, error? } (jobId and offset echo the opfsWrite it answers,
+//   so a late ack cannot complete the write of another job)
 //
 // ── Three I/O modes (selected by Dart, passed in init) ─────────────
 //   jspi    — JSPI Promise suspension (host_read_at returns Promise)
@@ -417,25 +419,28 @@ function acquireLivenessLock() {
   });
 }
 
+// A rejection is not kept: the next call asks the browser again.
 function laneDir() {
-  laneDirPromise ??= (async () => {
-    let dir = await navigator.storage.getDirectory();
-    for (const part of (opfsDirParts || [])) {
-      dir = await dir.getDirectoryHandle(part, { create: true });
-    }
-    return dir;
-  })();
+  if (!laneDirPromise) {
+    const attempt = (async () => {
+      let dir = await navigator.storage.getDirectory();
+      for (const part of (opfsDirParts || [])) {
+        dir = await dir.getDirectoryHandle(part, { create: true });
+      }
+      return dir;
+    })();
+    attempt.catch(() => { if (laneDirPromise === attempt) laneDirPromise = null; });
+    laneDirPromise = attempt;
+  }
   return laneDirPromise;
 }
 
-async function openOpfsHandle(filename) {
-  const dir = await laneDir();
-  const fh = await dir.getFileHandle(filename);
-  return await fh.createSyncAccessHandle();
-}
-
-const opfsWriteHandles = new Map();  // filename → SyncAccessHandle
+// filename → SyncAccessHandle: opened by the pre-copy, kept open after its last
+// chunk, and handed to the reader of that file by exec. A handle that is closed
+// and opened again is refused while the browser still releases the first.
+const opfsWriteHandles = new Map();
 const jobFiles = new Map();          // jobId → Set(filename), pre-exec owner
+const jobWrites = new Map();         // jobId → Set(promise), opfsWrites in flight
 
 async function opfsWrite(jobId, filename, chunk, offset, last) {
   let files = jobFiles.get(jobId);
@@ -450,17 +455,27 @@ async function opfsWrite(jobId, filename, chunk, offset, last) {
     opfsWriteHandles.set(filename, sh);
   }
   sh.write(new Uint8Array(chunk), { at: offset });
-  if (last) {
-    sh.flush();
-    sh.close();
-    opfsWriteHandles.delete(filename);
-  }
+  if (last) sh.flush();
+}
+
+function inFlight(jobId, write) {
+  let writes = jobWrites.get(jobId);
+  if (!writes) { writes = new Set(); jobWrites.set(jobId, writes); }
+  writes.add(write);
+  write.finally(() => {
+    writes.delete(write);
+    if (writes.size === 0 && jobWrites.get(jobId) === writes) jobWrites.delete(jobId);
+  }).catch(() => {});
+  return write;
 }
 
 // A job is over: delete every file it still owns. Files that exec
 // transferred to readers are no longer here — they die with their
 // reader (dropReader). Idempotent; an empty set is a no-op.
 async function opfsDrop(jobId) {
+  // A write still creating its handle would lose the race with the delete
+  // below, and the browser refuses it (NoModificationAllowedError).
+  await Promise.allSettled([...(jobWrites.get(jobId) ?? [])]);
   const files = jobFiles.get(jobId);
   jobFiles.delete(jobId);
   if (!files) return;
@@ -543,14 +558,17 @@ async function exec(msg) {
   const heldCount = readerIds.length;
 
   // New readers for this op's own sources. An OPFS-backed reader
-  // takes OWNERSHIP of its file from the job (the file now dies with
-  // the reader, in dropReader — not with the job, in opfsDrop).
+  // takes OWNERSHIP of its file, and of the handle that wrote it, from the
+  // job (both end with the reader, in dropReader — not with the job, in
+  // opfsDrop).
   for (let i = 0; i < sourceLengths.length; i++) {
     let handle = null;
     let length = sourceLengths[i];
     const file = (opfsFiles && opfsFiles[i]) || null;
     if (file) {
-      handle = await openOpfsHandle(file);
+      handle = opfsWriteHandles.get(file);
+      if (!handle) throw new Error('pre-copy file ' + file + ' was not written');
+      opfsWriteHandles.delete(file);
       length = handle.getSize();
       jobFiles.get(jobId)?.delete(file);
     }
@@ -664,10 +682,10 @@ self.onmessage = async (e) => {
     case 'opfsWrite': {
       if (!admit(msg)) { refuseLease(msg, 'opfsWrite'); return; }
       try {
-        await track(opfsWrite(msg.jobId, msg.filename, msg.chunk, msg.offset, msg.last));
-        self.postMessage({ type: 'opfsWriteAck', lease });
+        await track(inFlight(msg.jobId, opfsWrite(msg.jobId, msg.filename, msg.chunk, msg.offset, msg.last)));
+        self.postMessage({ type: 'opfsWriteAck', lease, jobId: msg.jobId, offset: msg.offset });
       } catch (err) {
-        self.postMessage({ type: 'opfsWriteAck', lease, error: err.message || String(err) });
+        self.postMessage({ type: 'opfsWriteAck', lease, jobId: msg.jobId, offset: msg.offset, error: err.message || String(err) });
       }
       return;
     }

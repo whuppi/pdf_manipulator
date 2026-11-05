@@ -14,6 +14,7 @@ import 'dart:typed_data';
 import 'package:pdf_manipulator/src/runtime/lane.dart';
 import 'package:pdf_manipulator/src/runtime/pool.dart';
 import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
+import 'package:fake_async/fake_async.dart';
 import 'package:test/test.dart';
 
 import '../harness/fake_executors.dart';
@@ -638,5 +639,137 @@ void main() {
         expect((await next).bytes[0], 1);
       },
     );
+  });
+  group('cover', () {
+    const coverFor = Duration(seconds: 5);
+
+    /// Runs [body] over a pool whose clock and timers are the fake ones.
+    void covered(void Function(FakeAsync async, ExecutorPool pool) body) =>
+        fakeAsync((async) {
+          body(
+            async,
+            ExecutorPool(
+              host: host,
+              maxExecutors: 4,
+              coverFor: coverFor,
+              clock: () => async.elapsed,
+            ),
+          );
+        });
+
+    ExecutorLease lease(FakeAsync async, ExecutorRequest request) {
+      ExecutorLease? taken;
+      unawaited(request.lease.then((l) => taken = l));
+      async.flushMicrotasks();
+      return taken!;
+    }
+
+    test('a drain that never ends stops hiding a waiter at coverFor', () {
+      covered((async, p) {
+        final slow = ExecutorPool.totalSlowTransitions;
+        final a = lease(async, p.acquire());
+        (a.lane as FakeLane).drainGate = Completer<bool>();
+        unawaited(p.release(a));
+
+        ExecutorLease? second;
+        unawaited(p.acquire().lease.then((l) => second = l));
+        async.elapse(coverFor - const Duration(milliseconds: 1));
+        expect(host.executors, hasLength(1), reason: 'the drain still covers');
+        expect(second, isNull);
+
+        async.elapse(const Duration(milliseconds: 1));
+        expect(host.executors, hasLength(2), reason: 'no longer young');
+        expect(second, isNotNull);
+        expect(ExecutorPool.totalSlowTransitions - slow, 1);
+        expect(ExecutorPool.recentSlowTransitions.last.phase, 'draining');
+        expect(a.state, ExecutorState.draining, reason: 'never killed');
+        expect(host.executors.first.terminated, isFalse);
+      });
+    });
+
+    test('a boot that never ends stops hiding a waiter at coverFor', () {
+      covered((async, p) {
+        final slow = ExecutorPool.totalSlowTransitions;
+        host.bootGate = Completer<void>();
+        ExecutorLease? taken;
+        unawaited(p.acquire().lease.then((l) => taken = l));
+        async.flushMicrotasks();
+        expect(host.bootAttempts, 1);
+        host.bootGate = null;
+
+        async.elapse(coverFor - const Duration(milliseconds: 1));
+        expect(host.bootAttempts, 1, reason: 'the boot still covers');
+        expect(taken, isNull);
+
+        async.elapse(const Duration(milliseconds: 1));
+        expect(host.bootAttempts, 2, reason: 'no longer young');
+        expect(taken, isNotNull);
+        expect(ExecutorPool.totalSlowTransitions - slow, 1);
+        expect(ExecutorPool.recentSlowTransitions.last.phase, 'booting');
+        expect(p.liveCount, 2, reason: 'the stuck boot keeps its slot');
+      });
+    });
+
+    test('a drain that ends before coverFor still covers: one executor', () {
+      covered((async, p) {
+        final slow = ExecutorPool.totalSlowTransitions;
+        final a = lease(async, p.acquire());
+        final gate = (a.lane as FakeLane).drainGate = Completer<bool>();
+        unawaited(p.release(a));
+
+        ExecutorLease? second;
+        unawaited(p.acquire().lease.then((l) => second = l));
+        async.elapse(coverFor ~/ 2);
+        gate.complete(true);
+        async.flushMicrotasks();
+
+        expect(second, isNotNull, reason: 'handed the returned executor');
+        expect(host.executors, hasLength(1));
+        async.elapse(coverFor * 2);
+        expect(host.executors, hasLength(1));
+        expect(ExecutorPool.totalSlowTransitions - slow, 0);
+      });
+    });
+
+    test('a lane waits for the executor it gave back only while it is '
+        'young', () {
+      covered((async, p) {
+        final lane = PooledLane(p, prelude: () => const []);
+        unawaited(lane.submit(job(1)));
+        async.flushMicrotasks();
+        final first = host.executors.single.lane;
+        first.drainGate = Completer<bool>();
+        lane.release();
+
+        final second = lane.submit(job(2));
+        async.elapse(coverFor - const Duration(milliseconds: 1));
+        expect(host.executors, hasLength(1), reason: 'the return is young');
+        expect(lane.leased, isFalse);
+
+        async.elapse(const Duration(milliseconds: 1));
+        expect(host.executors, hasLength(2), reason: 'the return is stuck');
+        expect(host.executors.last.lane.submitted.single.jobId, 2);
+        host.executors.last.lane.completeAllPending();
+        async.flushMicrotasks();
+        var done = false;
+        unawaited(second.then((_) => done = true));
+        async.flushMicrotasks();
+        expect(done, isTrue);
+
+        first.drainGate!.complete(true);
+        async.flushMicrotasks();
+        expect(lane.leased, isTrue, reason: 'the late return changes nothing');
+      });
+    });
+
+    test('a stuck reset is recorded as resetting, with its lane', () {
+      covered((async, p) {
+        final a = lease(async, p.acquire());
+        (a.lane as FakeLane).resetGate = Completer<int?>();
+        unawaited(p.release(a));
+        async.elapse(coverFor);
+        expect(ExecutorPool.recentSlowTransitions.last.phase, 'resetting');
+      });
+    });
   });
 }

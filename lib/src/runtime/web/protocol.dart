@@ -158,6 +158,11 @@ abstract final class LaneMsgFields {
   /// refused message never started.
   static const protocolError = 'protocol';
 
+  /// Worker → Dart, on `opfsWriteAck`: the `offset` of the `opfsWrite` it
+  /// answers, beside the [jobId] it echoes. The lane completes a write only
+  /// with the ack that names it.
+  static const writeOffset = 'offset';
+
   /// Worker → Dart, on `result`, `error` and `resetDone`: the worker's
   /// committed WASM linear memory in bytes. Linear memory never shrinks, so
   /// it is the worker's lifetime peak, a diagnostic and no keep decision.
