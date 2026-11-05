@@ -1,0 +1,675 @@
+diff --git a/lib/src/bridge/shared_bridge.dart b/lib/src/bridge/shared_bridge.dart
+index 628552f..f35823f 100644
+--- a/lib/src/bridge/shared_bridge.dart
++++ b/lib/src/bridge/shared_bridge.dart
+@@ -105,25 +105,32 @@ class SharedBridge extends PdfBridge {
+     return PdfTask.internal(future, hook);
+   }
+ 
+-  /// Execute keeping sources[0] alive for handle lifetime.
++  /// Execute holding sources[0] for handle lifetime. An op issued on a
++  /// handle a combinator owns passes that handle's [scope], as [_exec] does.
+   PdfTask<({Map<String, Object?> map, int? resourceId})> _execKeepSource(
+     EngineOp op,
+     Map<String, Object?> args, {
+     required DataSource source,
++    CancelHook? scope,
+   }) {
+     final hook = CancelHook();
++    final unregister = scope?.register(hook.cancel);
+     final future = () async {
+-      final req = bin.encodeRequest(op.wire, args);
+-      final res = await _transport.execute(
+-        req,
+-        sources: [source],
+-        keepSources: {0},
+-        cancel: hook,
+-      );
+-      return (
+-        map: bin.decodeResponse(res.bytes),
+-        resourceId: res.resourceIds[0],
+-      );
++      try {
++        final req = bin.encodeRequest(op.wire, args);
++        final res = await _transport.execute(
++          req,
++          sources: [source],
++          keepSources: {0},
++          cancel: hook,
++        );
++        return (
++          map: bin.decodeResponse(res.bytes),
++          resourceId: res.resourceIds[0],
++        );
++      } finally {
++        unregister?.call();
++      }
+     }();
+     return PdfTask.internal(future, hook);
+   }
+diff --git a/lib/src/bridge/shared_bridge_builder.dart b/lib/src/bridge/shared_bridge_builder.dart
+index 20c433b..7150c85 100644
+--- a/lib/src/bridge/shared_bridge_builder.dart
++++ b/lib/src/bridge/shared_bridge_builder.dart
+@@ -16,6 +16,28 @@ class _SharedBuilderHandle extends BridgeBuilderHandle {
+   final SharedBridge _bridge;
+   final int _handleId;
+ 
++  /// The one resource that covers every image source the builder holds; null
++  /// until the first image is added.
++  int? _heldResourceId;
++
++  /// Runs [op] with [source] held until the builder is disposed: the engine
++  /// reads an image from it when the builder is saved, not when it is added.
++  PdfTask<Map<String, Object?>> _holdingSource(
++    EngineOp op,
++    Map<String, Object?> args,
++    DataSource source,
++  ) => _bridge
++      ._execKeepSource(
++        op,
++        {'handleId': _handleId, ...args},
++        source: source,
++        scope: scope,
++      )
++      .map((res) {
++        _heldResourceId ??= res.resourceId;
++        return res.map;
++      });
++
+   PdfTask<Map<String, Object?>> _exec(EngineOp op, Map<String, Object?> args) =>
+       _bridge._exec(op, {'handleId': _handleId, ...args}, scope: scope);
+ 
+@@ -36,29 +58,25 @@ class _SharedBuilderHandle extends BridgeBuilderHandle {
+   PdfTask<BridgePageBuilderHandle> addPage(PdfPageSize size) => _exec(
+     EngineOp.builderAddPage,
+     _pageSizeArgs(size),
+-  ).map((_) => _SharedPageBuilderHandle(_bridge, _handleId, scope));
++  ).map((_) => _SharedPageBuilderHandle(this, _bridge, _handleId, scope));
+ 
+   @override
+   PdfTask<BridgePageBuilderHandle> addImagePage(
+     DataSource imageData, {
+     PdfImagePage page = const PdfImagePage(),
+-  }) => _bridge
+-      ._exec(
+-        EngineOp.builderAddImagePage,
+-        {
+-          'handleId': _handleId,
+-          'sourceLength': imageData.length,
+-          if (page.size case PdfImagePageSizeFixed(:final size)) ...{
+-            'width': size.width,
+-            'height': size.height,
+-          },
+-          'fit': page.fit.wire,
+-          'margin': page.margin,
+-        },
+-        sources: [imageData],
+-        scope: scope,
+-      )
+-      .map((_) => _SharedPageBuilderHandle(_bridge, _handleId, scope));
++  }) => _holdingSource(
++    EngineOp.builderAddImagePage,
++    {
++      'sourceLength': imageData.length,
++      if (page.size case PdfImagePageSizeFixed(:final size)) ...{
++        'width': size.width,
++        'height': size.height,
++      },
++      'fit': page.fit.wire,
++      'margin': page.margin,
++    },
++    imageData,
++  ).map((_) => _SharedPageBuilderHandle(this, _bridge, _handleId, scope));
+ 
+   @override
+   PdfTask<void> save(DataSink output, {bool deflate = true}) => _bridge._exec(
+@@ -68,8 +86,13 @@ class _SharedBuilderHandle extends BridgeBuilderHandle {
+     scope: scope,
+   );
+   @override
+-  Future<void> dispose() =>
+-      _bridge._exec(EngineOp.builderDispose, {'handleId': _handleId});
++  Future<void> dispose() async {
++    await _bridge._exec(EngineOp.builderDispose, {'handleId': _handleId});
++    final resourceId = _heldResourceId;
++    if (resourceId != null) {
++      await _bridge._transport.releaseSource(resourceId);
++    }
++  }
+ }
+ 
+ /// The wire arguments of a page size: the engine's own names for the two
+@@ -90,7 +113,13 @@ String? _dateArg(DateTime? value) =>
+ // ══════════════════════════════════════════════════════════════════
+ 
+ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
+-  _SharedPageBuilderHandle(this._bridge, this._handleId, this._scope);
++  _SharedPageBuilderHandle(
++    this._builder,
++    this._bridge,
++    this._handleId,
++    this._scope,
++  );
++  final _SharedBuilderHandle _builder;
+   final SharedBridge _bridge;
+   final int _handleId;
+   final CancelHook? _scope;
+@@ -189,18 +218,12 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
+     DataSource imageData,
+     PdfRect bounds, {
+     String? altText,
+-  }) => _bridge._exec(
+-    EngineOp.builderPageOp,
+-    {
+-      'handleId': _handleId,
+-      'pageOp': (altText == null ? PageOp.imageArtifact : PageOp.image).wire,
+-      'sourceLength': imageData.length,
+-      ...codec.encodeRectArgs(bounds),
+-      if (altText != null) 'altText': altText,
+-    },
+-    sources: [imageData],
+-    scope: _scope,
+-  );
++  }) => _builder._holdingSource(EngineOp.builderPageOp, {
++    'pageOp': (altText == null ? PageOp.imageArtifact : PageOp.image).wire,
++    'sourceLength': imageData.length,
++    ...codec.encodeRectArgs(bounds),
++    if (altText != null) 'altText': altText,
++  }, imageData);
+   @override
+   PdfTask<void> watermark(String text) => _op(PageOp.watermark, {'text': text});
+   @override
+diff --git a/test/bridge/shared_bridge_test.dart b/test/bridge/shared_bridge_test.dart
+index b4d81cc..241f028 100644
+--- a/test/bridge/shared_bridge_test.dart
++++ b/test/bridge/shared_bridge_test.dart
+@@ -18,7 +18,9 @@ import 'package:pdf_manipulator/src/types/data_sink.dart';
+ import 'package:pdf_manipulator/src/types/data_source.dart';
+ import 'package:pdf_manipulator/src/types/errors.dart';
+ import 'package:pdf_manipulator/src/types/pdf_enums.dart';
++import 'package:pdf_manipulator/src/types/pdf_page_size.dart';
+ import 'package:pdf_manipulator/src/types/pdf_pages.dart';
++import 'package:pdf_manipulator/src/types/pdf_rect.dart';
+ import 'package:test/test.dart';
+ 
+ import '../fixtures/handwritten.dart';
+@@ -89,6 +91,42 @@ void main() {
+       expect(extract, isNot(contains('hasSink')));
+     });
+   });
++
++  group('shared bridge builder image sources', () {
++    const bounds = PdfRect(x: 0, y: 0, width: 10, height: 10);
++
++    test('an image source is held until its builder is disposed', () async {
++      final transport = _BuilderTransport();
++      final builder = await SharedBridge(transport).createBuilder();
++      final imagePage = await builder.addImagePage(src(minimalPdf));
++      final page = await builder.addPage(const PdfPageSize.a4());
++      await page.image(src(minimalPdf), bounds, altText: 'a picture');
++      await imagePage.image(src(minimalPdf), bounds);
++
++      expect(transport.held('builderAddImagePage'), [
++        {0},
++      ]);
++      expect(transport.held('builderPageOp'), [
++        {0},
++        {0},
++      ]);
++      expect(transport.released, isEmpty, reason: 'nothing is released early');
++
++      await builder.dispose();
++      expect(transport.released, [
++        _BuilderTransport.resource,
++      ], reason: 'one resource covers every held source');
++    });
++
++    test('a builder that held no source releases none', () async {
++      final transport = _BuilderTransport();
++      final builder = await SharedBridge(transport).createBuilder();
++      final page = await builder.addPage(const PdfPageSize.a4());
++      await page.text('hello');
++      await builder.dispose();
++      expect(transport.released, isEmpty);
++    });
++  });
+ }
+ 
+ /// The field keys of an encoded request: `op_len`, `op`, a u16 count, then
+@@ -167,3 +205,59 @@ class _RecordingTransport implements PdfTransport {
+   @override
+   Future<void> dispose() async {}
+ }
++
++/// Answers `builderCreate` with a handle and every op that holds a source
++/// with the one resource a router would file them under; records which ops
++/// held which sources and which resources were released.
++class _BuilderTransport implements PdfTransport {
++  static const resource = 42;
++
++  final _ops = <(String, Set<int>)>[];
++  final released = <int>[];
++
++  /// The `keepSources` of each request of [op].
++  List<Set<int>> held(String op) => [
++    for (final (name, keep) in _ops)
++      if (name == op) keep,
++  ];
++
++  @override
++  Future<({Uint8List bytes, Map<int, int> resourceIds})> execute(
++    Uint8List request, {
++    List<DataSource> sources = const [],
++    List<DataSink> sinks = const [],
++    Set<int> keepSources = const {},
++    CancelHook? cancel,
++  }) async {
++    final op = String.fromCharCodes(request.sublist(1, 1 + request[0]));
++    _ops.add((op, keepSources));
++    final bytes = op == 'builderCreate'
++        ? Uint8List.fromList([
++            1, 1, 0, // ok, one field
++            8, ...'handleId'.codeUnits, 1, 7, 0, 0, 0, // i32 7
++          ])
++        : Uint8List.fromList([1, 0, 0]);
++    return (
++      bytes: bytes,
++      resourceIds: {for (final i in keepSources) i: resource},
++    );
++  }
++
++  @override
++  Future<void> releaseSource(int resourceId) async => released.add(resourceId);
++
++  @override
++  Future<List<Uint8List>> installPrelude(
++    Uint8List request, {
++    required Uint8List sourceBytes,
++  }) async => const [];
++
++  @override
++  PdfIoMode? get ioMode => null;
++
++  @override
++  Future<PdfIoMode> ensureInitialized() async => PdfIoMode.values.first;
++
++  @override
++  Future<void> dispose() async {}
++}
+diff --git a/tool/fuelprobe/guest/src/gen.rs b/tool/fuelprobe/guest/src/gen.rs
+index abbd3fd..e76cf77 100644
+--- a/tool/fuelprobe/guest/src/gen.rs
++++ b/tool/fuelprobe/guest/src/gen.rs
+@@ -102,6 +102,39 @@ impl Lcg {
+     }
+ }
+ 
++/// An RGBA PNG of `width` x `rows` pixels of noise, its rows stored in one
++/// `IDAT` without compression: every row is work for the reader, none shrinks.
++pub fn png_image(width: u32, rows: u32) -> Vec<u8> {
++    fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
++        let mut crc = flate2::Crc::new();
++        crc.update(kind);
++        crc.update(data);
++        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
++        out.extend_from_slice(kind);
++        out.extend_from_slice(data);
++        out.extend_from_slice(&crc.sum().to_be_bytes());
++    }
++    let mut lcg = Lcg(0x1D47);
++    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::none());
++    let mut row = vec![0u8; 1 + width as usize * 4];
++    for _ in 0..rows {
++        for byte in &mut row[1..] {
++            *byte = lcg.next() as u8;
++        }
++        z.write_all(&row).expect("deflates");
++    }
++    let idat = z.finish().expect("finishes");
++    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
++    let mut ihdr = Vec::new();
++    ihdr.extend_from_slice(&width.to_be_bytes());
++    ihdr.extend_from_slice(&rows.to_be_bytes());
++    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
++    chunk(&mut out, b"IHDR", &ihdr);
++    chunk(&mut out, b"IDAT", &idat);
++    chunk(&mut out, b"IEND", &[]);
++    out
++}
++
+ /// A document with one shared Helvetica (`/F1`), pages added one at a time.
+ pub struct Shell {
+     pub pdf: Pdf,
+diff --git a/tool/fuelprobe/guest/src/main.rs b/tool/fuelprobe/guest/src/main.rs
+index 2e2e98f..fbcc422 100644
+--- a/tool/fuelprobe/guest/src/main.rs
++++ b/tool/fuelprobe/guest/src/main.rs
+@@ -58,6 +58,7 @@ const CASES: &[(&str, &str)] = &[
+     ("render", "type3"),
+     ("render", "inlineImage"),
+     ("render", "knockoutPaints"),
++    ("buildImage", "png"),
+ ];
+ 
+ /// The fixtures' sizes, each chosen so the op does well over 10^9 units of
+@@ -103,6 +104,10 @@ mod size {
+     pub const INLINE_IMAGE_SIDE: u32 = 5_000;
+     /// Paint operators of a knockout group the render replays one by one.
+     pub const KNOCKOUT_PAINTS: usize = 8_000;
++    /// Width and rows of the PNG a builder takes from its source: each row is
++    /// inflated, narrowed and deflated, and each takes a pass for its alpha.
++    pub const BUILD_PNG_WIDTH: u32 = 1_024;
++    pub const BUILD_PNG_ROWS: u32 = 1_000;
+ }
+ 
+ fn main() {
+@@ -336,11 +341,22 @@ fn run(op: &str, fixture: &str) -> Result<(), Failure> {
+         ("render", "type3") => render(gen::type3_glyph(size::WHOLE_FORM_TRIPLES).finish(), &[0], 72, &cancel)?,
+         ("render", "inlineImage") => render(gen::inline_image(size::INLINE_IMAGE_SIDE).finish(), &[0], 72, &cancel)?,
+         ("render", "knockoutPaints") => render(gen::knockout_paints(size::KNOCKOUT_PAINTS).finish(), &[0], 72, &cancel)?,
++        ("buildImage", "png") => {
++            build_image(gen::png_image(size::BUILD_PNG_WIDTH, size::BUILD_PNG_ROWS), &cancel)?
++        },
+         _ => return Err("no such case".into()),
+     }
+     Ok(())
+ }
+ 
++/// `builderAddImagePage` and `builderSave` of the one PNG in `bytes`.
++fn build_image(bytes: Vec<u8>, cancel: &CancelCheck) -> Result<(), Failure> {
++    mark();
++    probe::build_image_page(bytes, &mut sink(), cancel).map_err(fail("buildImage"))?;
++    mark();
++    Ok(())
++}
++
+ fn text_or_pages(fixture: &str) -> Result<Vec<u8>, Failure> {
+     match fixture {
+         "pages" => Ok(gen::pages(size::TEXT_PAGES, size::PAGE_LINES).finish()),
+diff --git a/tool/memprobe/src/main.rs b/tool/memprobe/src/main.rs
+index 49d2864..1151138 100644
+--- a/tool/memprobe/src/main.rs
++++ b/tool/memprobe/src/main.rs
+@@ -118,6 +118,11 @@ fn limit(op: &str, input: &str) -> usize {
+         // The 96 MiB content stream is read as operators and written as
+         // operators; the stage holds one matrix.
+         ("setImageBounds", "content-fl") => 16 * MIB,
++        // A PNG is read a row at a time from its source and deflated as it
++        // goes, its alpha in a second pass; a JPEG is copied from its source
++        // in 64 KiB pieces. The row at twice the size shows the slope: the
++        // peak does not move.
++        ("imagesToPdf", "png64" | "png128" | "jpeg64" | "jpeg128") => 16 * MIB,
+         _ => panic!("no memory limit for {op} on {input}: add one to limit()"),
+     }
+ }
+@@ -1103,12 +1108,70 @@ fn run() -> Result<(), String> {
+     });
+     verify_render_wire(&failed, "groups", &open_sink("groups", "render"));
+ 
++    // imagesToPdf of one image of 64 MiB and of 128 MiB: the builder holds the
++    // image's source from the add to the save, and the save reads it from there.
++    for (name, kind, rows) in [
++        ("png64", ImageKind::Png, IMAGE_ROWS),
++        ("png128", ImageKind::Png, 2 * IMAGE_ROWS),
++        ("jpeg64", ImageKind::Jpeg, JPEG_ROWS),
++        ("jpeg128", ImageKind::Jpeg, 2 * JPEG_ROWS),
++    ] {
++        let image = dir.join(format!("image-{name}.{}", kind.extension()));
++        generate_image(&image, kind, rows)?;
++        let size = std::fs::metadata(&image).map(|m| m.len()).unwrap_or(0);
++        let floor = if name.ends_with("128") { 128 } else { 64 } * 1024 * 1024;
++        if size < floor {
++            return Err(format!("image {name} is {size} bytes, under its {floor}"));
++        }
++        eprintln!("memprobe: image {name}: {size} bytes");
++        let pdf = open_sink(name, "imagesToPdf");
++        step(&failed, "imagesToPdf", name, limit("imagesToPdf", name), |st| {
++            images_to_pdf(st, &image, &pdf)
++        });
++        if let Err(e) = check_images_pdf(&image, &pdf, kind) {
++            eprintln!("memprobe: imagesToPdf {name}: READ-BACK FAIL: {e}");
++            failed.set(true);
++        }
++        let _ = std::fs::remove_file(&image);
++        let _ = std::fs::remove_file(&pdf);
++    }
++
+     if failed.get() {
+         return Err("one or more steps exceeded their memory limit".to_string());
+     }
+     Ok(())
+ }
+ 
++/// The Dart `imagesToPdf` of one image: a builder, the image as a source,
++/// the save to a sink, the dispose.
++fn images_to_pdf(
++    state: &mut pdf_oxide::host::engine_state::EngineState,
++    image: &Path,
++    pdf: &Path,
++) -> Result<(), String> {
++    let length = std::fs::metadata(image).map_err(|e| format!("{}: {e}", image.display()))?.len();
++    let resp = call(state, re("builderCreate"), vec![], vec![])?;
++    let hid = resp.i32("handleId").expect("builderCreate returns handleId");
++    call(
++        state,
++        re("builderAddImagePage")
++            .put("handleId", i32v(hid))
++            .put("sourceLength", i32v(length as i32))
++            .put("fit", strv("contain"))
++            .put("margin", wire::Value::F64(0.0)),
++        vec![source(image)],
++        vec![],
++    )?;
++    call(
++        state,
++        re("builderSave").put("handleId", i32v(hid)).put("deflate", wire::Value::Bool(true)),
++        vec![],
++        vec![sink(pdf)],
++    )?;
++    call(state, re("builderDispose").put("handleId", i32v(hid)), vec![], vec![])?;
++    Ok(())
++}
++
+ /// Opens `path`, renders every page to `sink_path` as PNG at `dpi`, and
+ /// disposes the document: the host path a Dart `render` takes.
+ fn render_to_sink(
+@@ -2296,6 +2359,198 @@ fn generate_huge_jpeg(path: &Path) -> Result<(), String> {
+     out.finish()
+ }
+ 
++/// Width of the generated images, in pixels.
++const IMAGE_WIDTH: u32 = 4096;
++/// Rows of the 64 MiB PNG: 4096 RGBA pixels of noise are 16 KiB a row.
++const IMAGE_ROWS: u32 = 4096;
++/// Rows of the 64 MiB JPEG: noise at quality 100 takes about 4.6 bytes a
++/// pixel, so these rows are over 64 MiB, and twice as many are over 128.
++const JPEG_ROWS: u32 = 3620;
++
++#[derive(Clone, Copy, PartialEq, Eq)]
++enum ImageKind {
++    Png,
++    Jpeg,
++}
++
++impl ImageKind {
++    fn extension(self) -> &'static str {
++        match self {
++            ImageKind::Png => "png",
++            ImageKind::Jpeg => "jpg",
++        }
++    }
++}
++
++/// An image file of noise, written as it is generated.
++fn generate_image(path: &Path, kind: ImageKind, rows: u32) -> Result<(), String> {
++    match kind {
++        ImageKind::Png => generate_image_png(path, IMAGE_WIDTH, rows),
++        ImageKind::Jpeg => generate_image_jpeg(path, IMAGE_WIDTH, rows),
++    }
++}
++
++/// An RGBA PNG of noise, its rows stored in deflate blocks without
++/// compression (noise does not shrink) and framed in 64 KiB `IDAT` chunks as
++/// they are made.
++fn generate_image_png(path: &Path, width: u32, height: u32) -> Result<(), String> {
++    use std::io::BufWriter;
++
++    fn chunk(out: &mut impl Write, kind: &[u8; 4], data: &[u8]) -> std::io::Result<()> {
++        let mut crc = flate2::Crc::new();
++        crc.update(kind);
++        crc.update(data);
++        out.write_all(&(data.len() as u32).to_be_bytes())?;
++        out.write_all(kind)?;
++        out.write_all(data)?;
++        out.write_all(&crc.sum().to_be_bytes())
++    }
++
++    struct Idat {
++        out: BufWriter<File>,
++        pending: Vec<u8>,
++    }
++
++    impl Idat {
++        fn emit(&mut self) -> std::io::Result<()> {
++            if self.pending.is_empty() {
++                return Ok(());
++            }
++            chunk(&mut self.out, b"IDAT", &self.pending)?;
++            self.pending.clear();
++            Ok(())
++        }
++    }
++
++    impl Write for Idat {
++        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
++            self.pending.extend_from_slice(buf);
++            if self.pending.len() >= 64 * 1024 {
++                self.emit()?;
++            }
++            Ok(buf.len())
++        }
++        fn flush(&mut self) -> std::io::Result<()> {
++            Ok(())
++        }
++    }
++
++    let fail = |e: std::io::Error| format!("png {}: {e}", path.display());
++    let mut out = BufWriter::new(File::create(path).map_err(fail)?);
++    out.write_all(b"\x89PNG\r\n\x1a\n").map_err(fail)?;
++    let mut ihdr = Vec::new();
++    ihdr.extend_from_slice(&width.to_be_bytes());
++    ihdr.extend_from_slice(&height.to_be_bytes());
++    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
++    chunk(&mut out, b"IHDR", &ihdr).map_err(fail)?;
++    let mut zlib = flate2::write::ZlibEncoder::new(
++        Idat { out, pending: Vec::with_capacity(64 * 1024 + 1) },
++        flate2::Compression::none(),
++    );
++    let mut rng = Xorshift::new(0x1D47);
++    let mut row = vec![0u8; 1 + width as usize * 4];
++    for _ in 0..height {
++        rng.fill_bytes(&mut row[1..]);
++        zlib.write_all(&row).map_err(fail)?;
++    }
++    let mut idat = zlib.finish().map_err(fail)?;
++    idat.emit().map_err(fail)?;
++    chunk(&mut idat.out, b"IEND", &[]).map_err(fail)?;
++    idat.out.flush().map_err(fail)
++}
++
++/// A baseline JPEG of noise, its rows handed to the encoder one at a time.
++fn generate_image_jpeg(path: &Path, width: u32, height: u32) -> Result<(), String> {
++    struct Noise {
++        width: u16,
++        height: u16,
++    }
++
++    impl jpeg_encoder::ImageBuffer for Noise {
++        fn get_jpeg_color_type(&self) -> jpeg_encoder::JpegColorType {
++            jpeg_encoder::JpegColorType::Ycbcr
++        }
++        fn width(&self) -> u16 {
++            self.width
++        }
++        fn height(&self) -> u16 {
++            self.height
++        }
++        fn fill_buffers(&self, y: u16, buffers: &mut [Vec<u8>; 4]) {
++            let mut rng = Xorshift::new(0x1F6 ^ (u64::from(y) << 20));
++            let mut row = vec![0u8; self.width as usize * 3];
++            rng.fill_bytes(&mut row);
++            for pixel in row.chunks_exact(3) {
++                buffers[0].push(pixel[0]);
++                buffers[1].push(pixel[1]);
++                buffers[2].push(pixel[2]);
++            }
++        }
++    }
++
++    let fail = |e: std::io::Error| format!("jpeg {}: {e}", path.display());
++    let out = std::io::BufWriter::new(File::create(path).map_err(fail)?);
++    let mut encoder = jpeg_encoder::Encoder::new(out, 100);
++    encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::R_4_4_4);
++    encoder
++        .encode_image(Noise { width: width as u16, height: height as u16 })
++        .map_err(|e| format!("jpeg {}: {e}", path.display()))
++}
++
++/// Reads back the PDF `imagesToPdf` wrote for `image`: a JPEG's bytes are in
++/// it, whole and in order, behind `DCTDecode`; a PNG's two Flate streams are
++/// there, the colour stream and the alpha mask, each ended by `endstream`, and
++/// the file is closed by its trailer.
++fn check_images_pdf(image: &Path, pdf: &Path, kind: ImageKind) -> Result<(), String> {
++    use std::io::{Read, Seek, SeekFrom};
++
++    let mut out = File::open(pdf).map_err(|e| format!("{}: {e}", pdf.display()))?;
++    let out_len = out.metadata().map_err(|e| e.to_string())?.len();
++    let mut head = vec![0u8; 4096.min(out_len as usize)];
++    out.read_exact(&mut head).map_err(|e| e.to_string())?;
++    let mut tail = vec![0u8; 64.min(out_len as usize)];
++    out.seek(SeekFrom::End(-(tail.len() as i64))).map_err(|e| e.to_string())?;
++    out.read_exact(&mut tail).map_err(|e| e.to_string())?;
++    if !tail.trim_ascii_end().ends_with(b"%%EOF") {
++        return Err("the file does not end in %%EOF".into());
++    }
++    let find = |haystack: &[u8], needle: &[u8]| haystack.windows(needle.len()).position(|w| w == needle);
++    let image_len = std::fs::metadata(image).map_err(|e| e.to_string())?.len();
++    match kind {
++        ImageKind::Jpeg => {
++            let at = find(&head, b"/DCTDecode").ok_or("no DCTDecode image")?;
++            let start = at + find(&head[at..], b"stream\n").ok_or("no stream")? + b"stream\n".len();
++            out.seek(SeekFrom::Start(start as u64)).map_err(|e| e.to_string())?;
++            let mut want = File::open(image).map_err(|e| e.to_string())?;
++            let (mut a, mut b) = (vec![0u8; 64 * 1024], vec![0u8; 64 * 1024]);
++            let mut left = image_len;
++            while left > 0 {
++                let n = a.len().min(left as usize);
++                out.read_exact(&mut a[..n]).map_err(|e| e.to_string())?;
++                want.read_exact(&mut b[..n]).map_err(|e| e.to_string())?;
++                if a[..n] != b[..n] {
++                    return Err(format!("the stream differs from the JPEG {left} bytes before its end"));
++                }
++                left -= n as u64;
++            }
++            let mut end = [0u8; 10];
++            out.read_exact(&mut end).map_err(|e| e.to_string())?;
++            if &end != b"\nendstream" {
++                return Err("the JPEG's stream does not end where the file does".into());
++            }
++        },
++        ImageKind::Png => {
++            if out_len < image_len / 2 {
++                return Err(format!("{out_len} bytes written for a {image_len} byte PNG"));
++            }
++            find(&head, b"/FlateDecode").ok_or("no FlateDecode image")?;
++            find(&head, b"/SMask").ok_or("no soft mask on the image")?;
++            find(&head, b"/Predictor 15").ok_or("no PNG predictor")?;
++        },
++    }
++    Ok(())
++}
++
+ /// A one-page Letter PDF filled by one 20000 x 20000 Group 4 fax image. An
+ /// inked band of 1000 px drifts across the page as the rows go, and the
+ /// codestream is written row by row as each row is made: the packed bitmap it

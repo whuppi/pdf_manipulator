@@ -1,0 +1,1864 @@
+diff --git a/src/api/pdf_builder.rs b/src/api/pdf_builder.rs
+index f6ef3dd..b292e3e 100644
+--- a/src/api/pdf_builder.rs
++++ b/src/api/pdf_builder.rs
+@@ -3153,6 +3153,9 @@ impl PdfBuilder {
+                 soft_mask: image.soft_mask.clone(),
+                 matrix: None,
+                 is_artifact: false,
++                // ── pdf_manipulator patch: the image streams from its source ──
++                streamed: None,
++                // ── end pdf_manipulator patch ──
+             };
+             image_content.calculate_dpi();
+ 
+diff --git a/src/editor/document_editor.rs b/src/editor/document_editor.rs
+index 18ed28d..b55d307 100644
+--- a/src/editor/document_editor.rs
++++ b/src/editor/document_editor.rs
+@@ -14077,6 +14077,9 @@ mod tests {
+             soft_mask: None,
+             matrix: None,
+             is_artifact: false,
++            // ── pdf_manipulator patch: the image streams from its source ──
++            streamed: None,
++            // ── end pdf_manipulator patch ──
+         };
+ 
+         let obj = DocumentEditor::build_image_xobject(&image);
+@@ -14107,6 +14110,9 @@ mod tests {
+             soft_mask: None,
+             matrix: None,
+             is_artifact: false,
++            // ── pdf_manipulator patch: the image streams from its source ──
++            streamed: None,
++            // ── end pdf_manipulator patch ──
+         };
+ 
+         let obj = DocumentEditor::build_image_xobject(&image);
+@@ -14137,6 +14143,9 @@ mod tests {
+             soft_mask: None,
+             matrix: None,
+             is_artifact: false,
++            // ── pdf_manipulator patch: the image streams from its source ──
++            streamed: None,
++            // ── end pdf_manipulator patch ──
+         };
+ 
+         let obj = DocumentEditor::build_image_xobject(&image);
+@@ -14167,6 +14176,9 @@ mod tests {
+             soft_mask: None,
+             matrix: None,
+             is_artifact: false,
++            // ── pdf_manipulator patch: the image streams from its source ──
++            streamed: None,
++            // ── end pdf_manipulator patch ──
+         };
+ 
+         let obj = DocumentEditor::build_image_xobject(&image);
+@@ -14197,6 +14209,9 @@ mod tests {
+             soft_mask: None,
+             matrix: None,
+             is_artifact: false,
++            // ── pdf_manipulator patch: the image streams from its source ──
++            streamed: None,
++            // ── end pdf_manipulator patch ──
+         };
+ 
+         let obj = DocumentEditor::build_image_xobject(&image);
+@@ -14227,6 +14242,9 @@ mod tests {
+             soft_mask: None,
+             matrix: None,
+             is_artifact: false,
++            // ── pdf_manipulator patch: the image streams from its source ──
++            streamed: None,
++            // ── end pdf_manipulator patch ──
+         };
+ 
+         let obj = DocumentEditor::build_image_xobject(&image);
+diff --git a/src/elements/image.rs b/src/elements/image.rs
+index 9567304..19ae374 100644
+--- a/src/elements/image.rs
++++ b/src/elements/image.rs
+@@ -53,6 +53,12 @@ pub struct ImageContent {
+     /// `/Artifact` in the content stream so assistive technology ignores it.
+     /// PDF/UA-1 §7.1 (F-3). Mutually exclusive with `alt_text`.
+     pub is_artifact: bool,
++    // ── pdf_manipulator patch: the image streams from its source ──
++    /// An image the save reads from its source, a row or a piece at a time:
++    /// `data` and `soft_mask` are then empty and the writer takes the pixels
++    /// from here. Set by a host builder op, never by a parsed document.
++    pub(crate) streamed: Option<std::sync::Arc<crate::host::image_embed::StreamedImage>>,
++    // ── end pdf_manipulator patch ──
+ }
+ 
+ impl ImageContent {
+@@ -73,6 +79,9 @@ impl ImageContent {
+             soft_mask: None,
+             matrix: None,
+             is_artifact: false,
++            // ── pdf_manipulator patch: the image streams from its source ──
++            streamed: None,
++            // ── end pdf_manipulator patch ──
+         };
+         image.calculate_dpi();
+         image
+@@ -228,6 +237,9 @@ impl ImageContent {
+             soft_mask,
+             matrix: None,
+             is_artifact: false,
++            // ── pdf_manipulator patch: the image streams from its source ──
++            streamed: None,
++            // ── end pdf_manipulator patch ──
+         };
+         image.calculate_dpi();
+         Ok(image)
+@@ -251,6 +263,9 @@ impl Default for ImageContent {
+             soft_mask: None,
+             matrix: None,
+             is_artifact: false,
++            // ── pdf_manipulator patch: the image streams from its source ──
++            streamed: None,
++            // ── end pdf_manipulator patch ──
+         }
+     }
+ }
+diff --git a/src/host/dispatch.rs b/src/host/dispatch.rs
+index 119b918..f4eae8a 100644
+--- a/src/host/dispatch.rs
++++ b/src/host/dispatch.rs
+@@ -2503,6 +2503,7 @@ fn stamp_type_from_name(name: &str) -> Option<crate::writer::StampType> {
+ // Uses upstream DocumentBuilder + FluentPageBuilder APIs.
+ // ═══════════════════════════════════════════════════════════════════
+ 
++use crate::host::image_embed::ImageBytes;
+ use crate::writer::{DocumentBuilder, FluentPageBuilder, PageSize};
+ 
+ /// A parsed page-building operation, applied by [`apply_page_op`].
+@@ -2524,8 +2525,8 @@ pub enum PageOp {
+     HorizontalRule,
+     /// Place an image at the given rect with alt text.
+     Image {
+-        /// Raw image bytes (JPEG or PNG).
+-        data: Vec<u8>,
++        /// The image, whole or left in its source.
++        data: ImageBytes,
+         /// X origin in points.
+         x: f32,
+         /// Y origin in points.
+@@ -2822,8 +2823,8 @@ pub enum PageOp {
+     /// Place an image as an artifact (marked, excluded from reading
+     /// order), at the given rect.
+     ImageArtifact {
+-        /// Raw image bytes (JPEG or PNG).
+-        data: Vec<u8>,
++        /// The image, whole or left in its source.
++        data: ImageBytes,
+         /// X origin.
+         x: f32,
+         /// Y origin.
+@@ -2879,10 +2880,13 @@ pub fn apply_page_op(builder: &mut DocumentBuilder, op: PageOp) -> Result<()> {
+         PageOp::Space(pts) => page.space(pts),
+         PageOp::HorizontalRule => page.horizontal_rule(),
+         PageOp::Image { data, x, y, w, h, alt } => {
+-            let img = page_image(&data)?;
+             // `Rect::new` takes (x, y, width, height): the far
+             // corner here scaled every image by its own origin.
+-            page.image_with_alt(img, crate::geometry::Rect::new(x, y, w, h), &alt)
++            let rect = crate::geometry::Rect::new(x, y, w, h);
++            match data {
++                ImageBytes::Whole(bytes) => page.image_with_alt(page_image(&bytes)?, rect, &alt),
++                ImageBytes::Streamed(image) => page.image_streamed(image, rect, Some(alt), false),
++            }
+         }
+         PageOp::Watermark(text) => page.watermark(&text),
+         PageOp::TextField { name, x, y, w, h, default_value } => page.text_field(name, x, y, w, h, default_value),
+@@ -2969,8 +2973,11 @@ pub fn apply_page_op(builder: &mut DocumentBuilder, op: PageOp) -> Result<()> {
+         PageOp::OnOpen(ref script) => page.on_open(script),
+         PageOp::OnClose(ref script) => page.on_close(script),
+         PageOp::ImageArtifact { data, x, y, w, h } => {
+-            let img = page_image(&data)?;
+-            page.image_with_artifact(img, crate::geometry::Rect::new(x, y, w, h))
++            let rect = crate::geometry::Rect::new(x, y, w, h);
++            match data {
++                ImageBytes::Whole(bytes) => page.image_with_artifact(page_image(&bytes)?, rect),
++                ImageBytes::Streamed(image) => page.image_streamed(image, rect, None, true),
++            }
+         }
+         PageOp::StreamingTableBlock {
+             ref config_columns,
+diff --git a/src/host/engine_proofs/builder_image_stream.rs b/src/host/engine_proofs/builder_image_stream.rs
+new file mode 100644
+index 0000000..9d6d4bd
+--- /dev/null
++++ b/src/host/engine_proofs/builder_image_stream.rs
+@@ -0,0 +1,798 @@
++//! A builder image streams from its source: `builderAddImagePage` and the
++//! `image` page op hold the source, and `builderSave` copies a JPEG from it
++//! in pieces and inflates a PNG row by row, so the engine holds a row and a
++//! chunk of the image whatever its size.
++//!
++//! Each proof drives the ops through the request door (`handle_request`) with
++//! the source a lane hands it, and measures with the counting allocator
++//! (`host::heap`). The pixels are compared with today's whole-image embedding
++//! (`PageOp::Image`, which the Rust builder API keeps), read back from the
++//! saved bytes.
++//!
++//! No Dart battery can observe this: a battery sees the saved bytes, and the
++//! same bytes came out of the whole-image path; only the allocator's peak, the
++//! drop of the source and the polls of the cancel check tell the two apart.
++
++use std::collections::HashMap;
++use std::fs::File;
++use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
++use std::path::PathBuf;
++use std::sync::atomic::{AtomicBool, Ordering};
++use std::sync::{Arc, Mutex};
++
++use crate::cancel::CancelCheck;
++use crate::host::binary_codec::Request;
++use crate::host::bridge_api::{handle_request, BoxedReader, BoxedWriter};
++use crate::host::dispatch::{self, PageOp};
++use crate::host::engine_state::EngineState;
++use crate::host::heap;
++use crate::host::image_embed::ImageBytes;
++use crate::object::{Object, ObjectRef};
++use crate::writer::PageSize;
++use crate::PdfDocument;
++
++const KIB: usize = 1024;
++const MIB: usize = 1024 * KIB;
++
++enum Field<'a> {
++    Int(i32),
++    Real(f64),
++    Bool(bool),
++    Text(&'a str),
++}
++
++/// A request frame as the Dart codec lays it out.
++fn frame(op: &str, fields: &[(&str, Field)]) -> Vec<u8> {
++    let mut out = vec![op.len() as u8];
++    out.extend_from_slice(op.as_bytes());
++    out.extend_from_slice(&(fields.len() as u16).to_le_bytes());
++    for (key, value) in fields {
++        out.push(key.len() as u8);
++        out.extend_from_slice(key.as_bytes());
++        match value {
++            Field::Bool(b) => {
++                out.push(4);
++                out.push(*b as u8);
++            },
++            Field::Int(n) => {
++                out.push(1);
++                out.extend_from_slice(&n.to_le_bytes());
++            },
++            Field::Real(x) => {
++                out.push(3);
++                out.extend_from_slice(&x.to_le_bytes());
++            },
++            Field::Text(s) => {
++                out.push(5);
++                out.extend_from_slice(&(s.len() as u32).to_le_bytes());
++                out.extend_from_slice(s.as_bytes());
++            },
++        }
++    }
++    out
++}
++
++/// The text of an error answer.
++fn message_of(answer: &[u8]) -> String {
++    let mut as_request = vec![0u8];
++    as_request.extend_from_slice(&answer[2..]);
++    Request::parse(&as_request)
++        .ok()
++        .and_then(|r| r.get_str("message").map(str::to_owned))
++        .unwrap_or_default()
++}
++
++fn run(
++    state: &mut EngineState,
++    request: Vec<u8>,
++    sources: Vec<BoxedReader>,
++    sinks: Vec<BoxedWriter>,
++    cancel: &CancelCheck,
++) -> Vec<u8> {
++    handle_request(state, &request, None, sources, sinks, cancel)
++}
++
++fn create(state: &mut EngineState) -> i32 {
++    let answer = run(state, frame("builderCreate", &[]), Vec::new(), Vec::new(), &CancelCheck::none());
++    assert_eq!(answer[0], 1, "the builder is created");
++    let mut as_request = vec![0u8];
++    as_request.extend_from_slice(&answer[1..]);
++    Request::parse(&as_request).unwrap().get_i32("handleId").unwrap()
++}
++
++/// `builderAddImagePage` over `source`.
++fn add_image_page(
++    state: &mut EngineState,
++    handle: i32,
++    source: impl Read + Seek + Send + 'static,
++    length: usize,
++) -> Vec<u8> {
++    let request = frame(
++        "builderAddImagePage",
++        &[
++            ("handleId", Field::Int(handle)),
++            ("sourceLength", Field::Int(length as i32)),
++            ("fit", Field::Text("contain")),
++            ("margin", Field::Real(0.0)),
++        ],
++    );
++    run(state, request, vec![BoxedReader(Box::new(source))], Vec::new(), &CancelCheck::none())
++}
++
++/// A page of 200 x 100 points and `builderPageOp` `image` over `source` on it.
++fn place_image(
++    state: &mut EngineState,
++    handle: i32,
++    source: impl Read + Seek + Send + 'static,
++    length: usize,
++) -> Vec<u8> {
++    let page = frame(
++        "builderAddPage",
++        &[("handleId", Field::Int(handle)), ("width", Field::Real(200.0)), ("height", Field::Real(100.0))],
++    );
++    assert_eq!(run(state, page, Vec::new(), Vec::new(), &CancelCheck::none())[0], 1);
++    let request = frame(
++        "builderPageOp",
++        &[
++            ("handleId", Field::Int(handle)),
++            ("pageOp", Field::Text("image")),
++            ("sourceLength", Field::Int(length as i32)),
++            ("x", Field::Real(10.0)),
++            ("y", Field::Real(10.0)),
++            ("width", Field::Real(180.0)),
++            ("height", Field::Real(80.0)),
++            ("altText", Field::Text("a picture")),
++        ],
++    );
++    run(state, request, vec![BoxedReader(Box::new(source))], Vec::new(), &CancelCheck::none())
++}
++
++/// `builderSave` into `sink` under `cancel`.
++fn save(state: &mut EngineState, handle: i32, sink: BoxedWriter, cancel: &CancelCheck) -> Vec<u8> {
++    let request = frame("builderSave", &[("handleId", Field::Int(handle)), ("deflate", Field::Bool(true))]);
++    run(state, request, Vec::new(), vec![sink], cancel)
++}
++
++/// A sink that collects what it is given.
++#[derive(Clone, Default)]
++struct Collect(Arc<Mutex<Vec<u8>>>);
++
++impl Write for Collect {
++    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
++        self.0.lock().unwrap().extend_from_slice(buf);
++        Ok(buf.len())
++    }
++    fn flush(&mut self) -> std::io::Result<()> {
++        Ok(())
++    }
++}
++
++/// A sink that counts and forgets.
++#[derive(Clone, Default)]
++struct Count(Arc<Mutex<usize>>);
++
++impl Write for Count {
++    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
++        *self.0.lock().unwrap() += buf.len();
++        Ok(buf.len())
++    }
++    fn flush(&mut self) -> std::io::Result<()> {
++        Ok(())
++    }
++}
++
++/// A source that says when it is dropped: the lane frees a source's channel
++/// when the engine lets go of the reader.
++struct Watched<R> {
++    inner: R,
++    dropped: Arc<AtomicBool>,
++}
++
++impl<R> Drop for Watched<R> {
++    fn drop(&mut self) {
++        self.dropped.store(true, Ordering::SeqCst);
++    }
++}
++
++impl<R: Read> Read for Watched<R> {
++    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
++        self.inner.read(buf)
++    }
++}
++
++impl<R: Seek> Seek for Watched<R> {
++    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
++        self.inner.seek(pos)
++    }
++}
++
++fn watched(bytes: Vec<u8>) -> (Watched<std::io::Cursor<Vec<u8>>>, Arc<AtomicBool>) {
++    let dropped = Arc::new(AtomicBool::new(false));
++    (Watched { inner: std::io::Cursor::new(bytes), dropped: dropped.clone() }, dropped)
++}
++
++/// A scratch file removed when it goes out of scope.
++struct Scratch(PathBuf);
++
++impl Scratch {
++    fn new(name: &str) -> Self {
++        Scratch(std::env::temp_dir().join(format!("builder_image_stream-{}-{name}", std::process::id())))
++    }
++    fn open(&self) -> File {
++        File::open(&self.0).unwrap()
++    }
++    fn len(&self) -> usize {
++        std::fs::metadata(&self.0).unwrap().len() as usize
++    }
++}
++
++impl Drop for Scratch {
++    fn drop(&mut self) {
++        let _ = std::fs::remove_file(&self.0);
++    }
++}
++
++/// The next word of an xorshift stream: the noise no codec shrinks.
++fn noise(state: &mut u64) -> u64 {
++    *state ^= *state << 13;
++    *state ^= *state >> 7;
++    *state ^= *state << 17;
++    *state
++}
++
++fn noise_row(seed: u64, y: u32, bytes: usize) -> Vec<u8> {
++    let mut state = seed ^ (u64::from(y) + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15);
++    (0..bytes).map(|_| (noise(&mut state) >> 24) as u8).collect()
++}
++
++// ── Images ───────────────────────────────────────────────────────────────
++
++struct PngSpec {
++    width: u32,
++    height: u32,
++    color: png::ColorType,
++    depth: png::BitDepth,
++    palette: Option<Vec<u8>>,
++    trns: Option<Vec<u8>>,
++}
++
++impl PngSpec {
++    fn new(width: u32, height: u32, color: png::ColorType, depth: png::BitDepth) -> Self {
++        PngSpec { width, height, color, depth, palette: None, trns: None }
++    }
++
++    fn row_bytes(&self) -> usize {
++        let samples = match self.color {
++            png::ColorType::Grayscale | png::ColorType::Indexed => 1,
++            png::ColorType::GrayscaleAlpha => 2,
++            png::ColorType::Rgb => 3,
++            png::ColorType::Rgba => 4,
++        };
++        (self.width as usize * samples * self.depth as usize).div_ceil(8)
++    }
++}
++
++/// The PNG of `spec` filled with noise, written row by row to `out`.
++fn write_png(spec: &PngSpec, out: impl Write + 'static) {
++    let mut encoder = png::Encoder::new(out, spec.width, spec.height);
++    encoder.set_color(spec.color);
++    encoder.set_depth(spec.depth);
++    encoder.set_compression(png::Compression::Fast);
++    if let Some(palette) = &spec.palette {
++        encoder.set_palette(palette.clone());
++    }
++    if let Some(trns) = &spec.trns {
++        encoder.set_trns(trns.clone());
++    }
++    let mut writer = encoder.write_header().unwrap().into_stream_writer().unwrap();
++    for y in 0..spec.height {
++        writer.write_all(&noise_row(7, y, spec.row_bytes())).unwrap();
++    }
++    writer.finish().unwrap();
++}
++
++fn png_bytes(spec: &PngSpec) -> Vec<u8> {
++    let out = Collect::default();
++    write_png(spec, out.clone());
++    let bytes = out.0.lock().unwrap().clone();
++    bytes
++}
++
++/// `image` rows of a JPEG of noise, handed to the encoder one row at a time.
++struct NoiseJpeg {
++    width: u16,
++    height: u16,
++}
++
++impl jpeg_encoder::ImageBuffer for NoiseJpeg {
++    fn get_jpeg_color_type(&self) -> jpeg_encoder::JpegColorType {
++        jpeg_encoder::JpegColorType::Ycbcr
++    }
++    fn width(&self) -> u16 {
++        self.width
++    }
++    fn height(&self) -> u16 {
++        self.height
++    }
++    fn fill_buffers(&self, y: u16, buffers: &mut [Vec<u8>; 4]) {
++        let row = noise_row(11, u32::from(y), self.width as usize * 3);
++        for pixel in row.chunks_exact(3) {
++            buffers[0].push(pixel[0]);
++            buffers[1].push(pixel[1]);
++            buffers[2].push(pixel[2]);
++        }
++    }
++}
++
++fn write_noise_jpeg(width: u16, height: u16, out: impl Write) {
++    let mut encoder = jpeg_encoder::Encoder::new(out, 100);
++    encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::R_4_4_4);
++    encoder.encode_image(NoiseJpeg { width, height }).unwrap();
++}
++
++fn jpeg_of(color: jpeg_encoder::ColorType, width: u16, height: u16, progressive: bool) -> Vec<u8> {
++    let bytes_per_pixel = match color {
++        jpeg_encoder::ColorType::Luma => 1,
++        jpeg_encoder::ColorType::Rgb => 3,
++        jpeg_encoder::ColorType::Cmyk => 4,
++        other => panic!("no fixture for {other:?}"),
++    };
++    let mut pixels = Vec::new();
++    for y in 0..u32::from(height) {
++        pixels.extend_from_slice(&noise_row(5, y, width as usize * bytes_per_pixel));
++    }
++    let mut out = Vec::new();
++    let mut encoder = jpeg_encoder::Encoder::new(&mut out, 90);
++    encoder.set_progressive(progressive);
++    encoder.encode(&pixels, width, height, color).unwrap();
++    out
++}
++
++// ── Reading a saved file back ────────────────────────────────────────────
++
++struct Embedded {
++    /// The keys that describe the pixels, as text, in key order.
++    description: Vec<String>,
++    /// The stream before its filters run.
++    raw: Vec<u8>,
++    /// The stream after its filters (and predictor) ran.
++    decoded: Vec<u8>,
++    /// The `/SMask` image's `description`, `raw` and `decoded`.
++    mask: Option<Box<Embedded>>,
++}
++
++/// An object as text with the keys of every dictionary in order.
++fn show(object: &Object) -> String {
++    match object {
++        Object::Dictionary(dict) => {
++            let mut keys: Vec<&String> = dict.keys().collect();
++            keys.sort();
++            let entries: Vec<String> = keys.into_iter().map(|k| format!("{k}: {}", show(&dict[k]))).collect();
++            format!("<<{}>>", entries.join(", "))
++        },
++        other => format!("{other:?}"),
++    }
++}
++
++fn describe(dict: &HashMap<String, Object>) -> Vec<String> {
++    let mut keys: Vec<&String> = dict
++        .keys()
++        .filter(|k| {
++            ["Type", "Subtype", "Width", "Height", "ColorSpace", "BitsPerComponent", "Filter", "DecodeParms"]
++                .contains(&k.as_str())
++        })
++        .collect();
++    keys.sort();
++    keys.into_iter().map(|k| format!("{k}={}", show(&dict[k]))).collect()
++}
++
++fn embedded(doc: &PdfDocument, object: &Object) -> Embedded {
++    let Object::Stream { dict, body } = object else { panic!("an image is a stream: {object:?}") };
++    let mask = dict.get("SMask").and_then(Object::as_reference).map(|r: ObjectRef| {
++        let loaded = doc.load_object(r).unwrap();
++        Box::new(embedded(doc, &loaded))
++    });
++    Embedded {
++        description: describe(dict),
++        raw: body.read_whole_raw().unwrap(),
++        decoded: object.decode_stream_data().unwrap(),
++        mask,
++    }
++}
++
++/// Every image XObject of `pdf`, by object number.
++fn images_of(pdf: &[u8]) -> Vec<Embedded> {
++    let doc = PdfDocument::from_bytes(pdf.to_vec()).unwrap();
++    let mut found = Vec::new();
++    for id in doc.all_object_ids() {
++        let Ok(object) = doc.load_object(ObjectRef::new(id, 0)) else { continue };
++        let is_image = matches!(&object, Object::Stream { dict, .. }
++            if dict.get("Subtype").and_then(Object::as_name) == Some("Image")
++                && dict.get("Type").and_then(Object::as_name) == Some("XObject"));
++        // The soft mask is an image too; it is read through its owner.
++        let is_mask = doc.all_object_ids().iter().any(|other| {
++            matches!(doc.load_object(ObjectRef::new(*other, 0)),
++                Ok(Object::Stream { dict, .. }) if dict.get("SMask").and_then(Object::as_reference).map(|r| r.id) == Some(id))
++        });
++        if is_image && !is_mask {
++            found.push(embedded(&doc, &object));
++        }
++    }
++    found
++}
++
++/// What today's path saves for `image` on a page of its own size: the whole
++/// bytes through `ImageData`.
++fn today(image: &[u8], width: u32, height: u32) -> Vec<u8> {
++    let mut builder = dispatch::builder_new();
++    builder.begin_page(PageSize::Custom(width as f32, height as f32));
++    dispatch::apply_page_op(
++        &mut builder,
++        PageOp::Image { data: ImageBytes::Whole(image.to_vec()), x: 0.0, y: 0.0, w: width as f32, h: height as f32, alt: String::new() },
++    )
++    .unwrap();
++    builder.end_page();
++    dispatch::builder_save(builder.compress_streams(true)).unwrap()
++}
++
++/// What the ops save for `image`: one image page. Also whether the source was
++/// still held when the add returned, and whether it was let go of once the
++/// save was over.
++fn through_ops(image: &[u8]) -> (Vec<u8>, bool, bool) {
++    let mut state = EngineState::new();
++    let handle = create(&mut state);
++    let (source, dropped) = watched(image.to_vec());
++    let answer = add_image_page(&mut state, handle, source, image.len());
++    assert_eq!(answer[0], 1, "the page is added: {}", message_of(&answer));
++    let held_after_add = !dropped.load(Ordering::SeqCst);
++    let collected = Collect::default();
++    let answer = save(&mut state, handle, BoxedWriter::new(collected.clone()), &CancelCheck::none());
++    assert_eq!(answer[0], 1, "the builder saves: {}", message_of(&answer));
++    let bytes = collected.0.lock().unwrap().clone();
++    (bytes, held_after_add, dropped.load(Ordering::SeqCst))
++}
++
++// ── Proofs ───────────────────────────────────────────────────────────────
++
++/// A JPEG is embedded as its own bytes under `DCTDecode`, whatever its colour
++/// model and scan order, and the engine holds its source from the add to the
++/// save. No Dart battery sees it: a battery reads the saved file, which the
++/// whole-image path wrote byte for byte too, and the drop of a source is not
++/// on the wire.
++#[test]
++fn a_jpeg_is_embedded_byte_for_byte_from_its_source() {
++    let fixtures = [
++        ("rgb", jpeg_of(jpeg_encoder::ColorType::Rgb, 97, 61, false), 97, 61),
++        ("gray", jpeg_of(jpeg_encoder::ColorType::Luma, 33, 70, false), 33, 70),
++        ("cmyk", jpeg_of(jpeg_encoder::ColorType::Cmyk, 40, 24, false), 40, 24),
++        ("progressive", jpeg_of(jpeg_encoder::ColorType::Rgb, 64, 48, true), 64, 48),
++    ];
++    for (name, jpeg, w, h) in fixtures {
++        let reference = images_of(&today(&jpeg, w, h));
++        let (saved, held_after_add, dropped) = through_ops(&jpeg);
++        let streamed = images_of(&saved);
++        assert_eq!(streamed.len(), 1, "{name}: one image");
++        assert_eq!(streamed[0].description, reference[0].description, "{name}: the same description");
++        assert_eq!(streamed[0].raw, jpeg, "{name}: the stream is the source's bytes");
++        assert_eq!(streamed[0].raw, reference[0].raw, "{name}: today's bytes");
++        assert!(streamed[0].mask.is_none(), "{name}: a JPEG has no mask");
++        assert!(held_after_add, "{name}: the add let go of its source");
++        assert!(dropped, "{name}: the source is released once the save is over");
++    }
++}
++
++/// The source outlives the add: the lane holds its channel until the engine
++/// lets go of the reader, so a builder that read the image at the add would
++/// have dropped it by now. No Dart battery sees it: the channel's release is
++/// the lane's, and only the engine's own drop of the reader says when it let go.
++#[test]
++fn the_source_is_held_from_the_add_to_the_save() {
++    let jpeg = jpeg_of(jpeg_encoder::ColorType::Rgb, 32, 32, false);
++    let png = png_bytes(&PngSpec::new(16, 16, png::ColorType::Rgba, png::BitDepth::Eight));
++    for (name, image) in [("jpeg", jpeg), ("png", png)] {
++        for page_op in [false, true] {
++            let mut state = EngineState::new();
++            let handle = create(&mut state);
++            let (source, dropped) = watched(image.clone());
++            let answer = if page_op {
++                place_image(&mut state, handle, source, image.len())
++            } else {
++                add_image_page(&mut state, handle, source, image.len())
++            };
++            assert_eq!(answer[0], 1, "{name}: added: {}", message_of(&answer));
++            assert!(!dropped.load(Ordering::SeqCst), "{name} (page op {page_op}): the add let go of its source");
++            let sink = Collect::default();
++            let answer = save(&mut state, handle, BoxedWriter::new(sink), &CancelCheck::none());
++            assert_eq!(answer[0], 1, "{name}: saved: {}", message_of(&answer));
++            assert!(dropped.load(Ordering::SeqCst), "{name} (page op {page_op}): the save held its source");
++        }
++    }
++}
++
++/// A builder disposed before its save lets go of every source it held. No Dart
++/// battery sees it: the reader is the engine's, and a lane that never frees its
++/// channel looks the same from Dart as one that does until the lane is full.
++#[test]
++fn a_disposed_builder_releases_its_sources() {
++    let png = png_bytes(&PngSpec::new(16, 16, png::ColorType::Rgb, png::BitDepth::Eight));
++    let mut state = EngineState::new();
++    let handle = create(&mut state);
++    let (source, dropped) = watched(png.clone());
++    assert_eq!(add_image_page(&mut state, handle, source, png.len())[0], 1);
++    assert!(!dropped.load(Ordering::SeqCst), "held after the add");
++    let answer = run(&mut state, frame("builderDispose", &[("handleId", Field::Int(handle))]), Vec::new(), Vec::new(), &CancelCheck::none());
++    assert_eq!(answer[0], 1);
++    assert!(dropped.load(Ordering::SeqCst), "released with the builder");
++}
++
++fn spec_set() -> Vec<(&'static str, PngSpec)> {
++    use png::{BitDepth::*, ColorType::*};
++    let palette: Vec<u8> = (0..16 * 3).map(|i| (i * 37 % 251) as u8).collect();
++    let mut cases = vec![
++        ("gray8", PngSpec::new(37, 29, Grayscale, Eight)),
++        ("gray16", PngSpec::new(37, 29, Grayscale, Sixteen)),
++        ("gray1", PngSpec::new(37, 29, Grayscale, One)),
++        ("gray2", PngSpec::new(37, 29, Grayscale, Two)),
++        ("gray4", PngSpec::new(37, 29, Grayscale, Four)),
++        ("graya8", PngSpec::new(37, 29, GrayscaleAlpha, Eight)),
++        ("graya16", PngSpec::new(37, 29, GrayscaleAlpha, Sixteen)),
++        ("rgb8", PngSpec::new(37, 29, Rgb, Eight)),
++        ("rgb16", PngSpec::new(37, 29, Rgb, Sixteen)),
++        ("rgba8", PngSpec::new(37, 29, Rgba, Eight)),
++        ("rgba16", PngSpec::new(37, 29, Rgba, Sixteen)),
++    ];
++    for depth in [One, Two, Four, Eight] {
++        let entries = match depth {
++            One => 2,
++            Two => 4,
++            Four => 16,
++            _ => 16,
++        };
++        let mut plain = PngSpec::new(37, 29, Indexed, depth);
++        plain.palette = Some(palette[..entries * 3].to_vec());
++        cases.push((
++            match depth {
++                One => "indexed1",
++                Two => "indexed2",
++                Four => "indexed4",
++                _ => "indexed8",
++            },
++            plain,
++        ));
++        let mut keyed = PngSpec::new(37, 29, Indexed, depth);
++        keyed.palette = Some(palette[..entries * 3].to_vec());
++        keyed.trns = Some((0..entries.min(5)).map(|i| (i * 60) as u8).collect());
++        cases.push((
++            match depth {
++                One => "indexed1+trns",
++                Two => "indexed2+trns",
++                Four => "indexed4+trns",
++                _ => "indexed8+trns",
++            },
++            keyed,
++        ));
++    }
++    let mut gray_key = PngSpec::new(37, 29, Grayscale, Eight);
++    gray_key.trns = Some(vec![0, 90]);
++    cases.push(("gray8+trns", gray_key));
++    let mut rgb_key = PngSpec::new(37, 29, Rgb, Eight);
++    rgb_key.trns = Some(vec![0, 10, 0, 20, 0, 30]);
++    cases.push(("rgb8+trns", rgb_key));
++    cases
++}
++
++/// A PNG decodes to the pixels and the alpha today's embedding gives it, in
++/// every colour type and depth, and its description (size, colour space,
++/// predictor) is the same; the source is held to the save. No Dart battery
++/// sees it: it compares two engine paths, the streamed one and the whole-image
++/// one that only the Rust builder API still takes.
++#[test]
++fn a_png_embeds_the_pixels_and_the_alpha_of_todays_path() {
++    for (name, spec) in spec_set() {
++        let png = png_bytes(&spec);
++        let reference = images_of(&today(&png, spec.width, spec.height));
++        let (saved, held_after_add, dropped) = through_ops(&png);
++        let streamed = images_of(&saved);
++        assert_eq!(streamed.len(), 1, "{name}: one image");
++        let (got, want) = (&streamed[0], &reference[0]);
++        assert_eq!(got.description, want.description, "{name}: the same description");
++        assert_eq!(got.decoded, want.decoded, "{name}: the same pixels");
++        match (&got.mask, &want.mask) {
++            (None, None) => {},
++            (Some(got), Some(want)) => {
++                assert_eq!(got.description, want.description, "{name}: the same mask description");
++                assert_eq!(got.decoded, want.decoded, "{name}: the same alpha");
++            },
++            _ => panic!("{name}: the soft mask differs from today's"),
++        }
++        assert!(held_after_add, "{name}: the add let go of its source");
++        assert!(dropped, "{name}: the source is released after the save");
++    }
++}
++
++/// An interlaced PNG, which the decoder can only produce whole, embeds as it
++/// does today. No Dart battery sees it: the fallback is chosen from the IHDR
++/// inside the engine, and only a comparison with the whole-image path tells it
++/// from a streamed embedding.
++#[test]
++fn an_interlaced_png_embeds_as_it_does_today() {
++    let png = interlaced_rgba(41, 33);
++    let reference = images_of(&today(&png, 41, 33));
++    let (saved, _, _) = through_ops(&png);
++    let streamed = images_of(&saved);
++    assert_eq!(streamed[0].description, reference[0].description);
++    assert_eq!(streamed[0].decoded, reference[0].decoded, "the same pixels");
++    assert_eq!(
++        streamed[0].mask.as_ref().unwrap().decoded,
++        reference[0].mask.as_ref().unwrap().decoded,
++        "the same alpha"
++    );
++}
++
++/// An Adam7 RGBA PNG of noise, written chunk by chunk here because the
++/// encoder in use writes no interlaced images.
++fn interlaced_rgba(width: u32, height: u32) -> Vec<u8> {
++    const PASSES: [(u32, u32, u32, u32); 7] =
++        [(0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)];
++    let mut scanlines = Vec::new();
++    for (x0, y0, dx, dy) in PASSES {
++        let (pass_w, pass_h) = ((width + dx - 1 - x0) / dx, (height + dy - 1 - y0) / dy);
++        if x0 >= width || y0 >= height {
++            continue;
++        }
++        for row in 0..pass_h {
++            scanlines.push(0u8);
++            scanlines.extend_from_slice(&noise_row(3, y0 + row * dy, pass_w as usize * 4));
++        }
++    }
++    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
++    encoder.write_all(&scanlines).unwrap();
++    let compressed = encoder.finish().unwrap();
++
++    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
++    let mut chunk = |kind: &[u8; 4], data: &[u8]| {
++        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
++        out.extend_from_slice(kind);
++        out.extend_from_slice(data);
++        let mut crc = crc32fast::Hasher::new();
++        crc.update(kind);
++        crc.update(data);
++        out.extend_from_slice(&crc.finalize().to_be_bytes());
++    };
++    let mut header = Vec::new();
++    header.extend_from_slice(&width.to_be_bytes());
++    header.extend_from_slice(&height.to_be_bytes());
++    header.extend_from_slice(&[8, 6, 0, 0, 1]);
++    chunk(b"IHDR", &header);
++    chunk(b"IDAT", &compressed);
++    chunk(b"IEND", &[]);
++    out
++}
++
++/// Bytes that are not an image are refused at the add, as they are today, and
++/// a truncated PNG fails the add or the save with a typed error, never a
++/// panic and never a file with a broken image in it. No Dart battery sees it:
++/// a battery gets the error either way, and not which op raised it.
++#[test]
++fn bytes_that_are_not_an_image_are_refused() {
++    let mut state = EngineState::new();
++    let handle = create(&mut state);
++    let junk = vec![7u8; 100];
++    let answer = add_image_page(&mut state, handle, std::io::Cursor::new(junk.clone()), junk.len());
++    assert_eq!(answer[0], 0);
++    assert!(message_of(&answer).contains("not a readable PNG or JPEG"), "{}", message_of(&answer));
++
++    let png = png_bytes(&PngSpec::new(64, 64, png::ColorType::Rgb, png::BitDepth::Eight));
++    let cut = png[..png.len() / 2].to_vec();
++    let handle = create(&mut state);
++    let added = add_image_page(&mut state, handle, std::io::Cursor::new(cut.clone()), cut.len());
++    let saved = save(&mut state, handle, BoxedWriter::new(Collect::default()), &CancelCheck::none());
++    assert!(added[0] == 0 || saved[0] == 0, "a truncated PNG was embedded");
++}
++
++/// What the engine's thread holds over its baseline while it adds the image
++/// at `path` and saves it to a sink that forgets.
++fn peak_of_embedding(path: &Scratch, jpeg_or_png: &str) -> usize {
++    let mut state = EngineState::new();
++    let handle = create(&mut state);
++    let length = path.len();
++    let sink = Count::default();
++    let (answer, grew) = heap::growth(|| {
++        let added = add_image_page(&mut state, handle, path.open(), length);
++        assert_eq!(added[0], 1, "{jpeg_or_png}: added: {}", message_of(&added));
++        save(&mut state, handle, BoxedWriter::new(sink.clone()), &CancelCheck::none())
++    });
++    assert_eq!(answer[0], 1, "{jpeg_or_png}: saved: {}", message_of(&answer));
++    assert!(*sink.0.lock().unwrap() >= length / 2, "{jpeg_or_png}: the file was written");
++    grew
++}
++
++/// A PNG of noise sixteen times the height embeds in the same few hundred KiB:
++/// a row at a time, whatever the height. No Dart battery sees it: the
++/// engine's heap is not on the wire, and tool/memprobe measures the process,
++/// not one op on one thread.
++#[test]
++fn a_png_embeds_in_memory_that_does_not_grow_with_its_height() {
++    let write = |name: &str, height: u32| {
++        let scratch = Scratch::new(name);
++        let spec = PngSpec::new(1024, height, png::ColorType::Rgba, png::BitDepth::Eight);
++        write_png(&spec, BufWriter::new(File::create(&scratch.0).unwrap()));
++        scratch
++    };
++    let (short, tall) = (write("short.png", 128), write("tall.png", 2048));
++    let (a, b) = (peak_of_embedding(&short, "png"), peak_of_embedding(&tall, "png"));
++    assert!(tall.len() > 7 * MIB, "the tall image is {} bytes", tall.len());
++    assert!(b < 2 * MIB, "a {} byte PNG took {b} bytes to embed", tall.len());
++    assert!(b <= a + 256 * KIB, "{b} bytes for 2048 rows against {a} for 128");
++}
++
++/// The same for a JPEG: its bytes pass from the source to the sink in pieces.
++/// No Dart battery sees it, for the reason the PNG proof gives.
++#[test]
++fn a_jpeg_embeds_in_memory_that_does_not_grow_with_its_height() {
++    let write = |name: &str, height: u16| {
++        let scratch = Scratch::new(name);
++        write_noise_jpeg(1024, height, BufWriter::new(File::create(&scratch.0).unwrap()));
++        scratch
++    };
++    let (short, tall) = (write("short.jpg", 128), write("tall.jpg", 2048));
++    let (a, b) = (peak_of_embedding(&short, "jpeg"), peak_of_embedding(&tall, "jpeg"));
++    assert!(tall.len() > 4 * MIB, "the tall image is {} bytes", tall.len());
++    assert!(b < MIB, "a {} byte JPEG took {b} bytes to embed", tall.len());
++    assert!(b <= a + 128 * KIB, "{b} bytes for 2048 rows against {a} for 128");
++}
++
++/// The save polls for a cancel once per row of a PNG's colour pass and again
++/// per row of its alpha pass, and a cancel stops it within a row. No Dart
++/// battery sees it: a cancel timed from Dart lands where the timer says, and
++/// only the count of polls tells a loop that polls from one that does not.
++#[test]
++fn the_save_of_a_png_polls_for_a_cancel_at_every_row() {
++    let rows = 3000;
++    let spec = PngSpec::new(8, rows, png::ColorType::Rgba, png::BitDepth::Eight);
++    let png = png_bytes(&spec);
++
++    let embed = |check: &CancelCheck| {
++        let mut state = EngineState::new();
++        let handle = create(&mut state);
++        let added = add_image_page(&mut state, handle, std::io::Cursor::new(png.clone()), png.len());
++        assert_eq!(added[0], 1, "{}", message_of(&added));
++        save(&mut state, handle, BoxedWriter::new(Collect::default()), check)
++    };
++
++    let counting = CancelCheck::tripping_at(usize::MAX);
++    assert_eq!(embed(&counting)[0], 1);
++    assert!(counting.polls() >= 2 * rows as usize, "{} polls for {rows} rows in two passes", counting.polls());
++
++    let tripping = CancelCheck::tripping_at(rows as usize / 2);
++    let answer = embed(&tripping);
++    assert_eq!(answer[0], 0, "the save was cancelled");
++    assert!(message_of(&answer).contains("cancelled"), "{}", message_of(&answer));
++    assert!(tripping.polls() <= rows as usize / 2 + 8, "{} polls after the cancel", tripping.polls());
++}
++
++/// The save of a JPEG polls once per piece it copies. No Dart battery sees it,
++/// for the reason the PNG proof gives.
++#[test]
++fn the_save_of_a_jpeg_polls_for_a_cancel_at_every_piece() {
++    let scratch = Scratch::new("polls.jpg");
++    write_noise_jpeg(512, 1024, BufWriter::new(File::create(&scratch.0).unwrap()));
++    let pieces = scratch.len() / (64 * KIB);
++    assert!(pieces >= 8, "the fixture is {} bytes", scratch.len());
++
++    let embed = |check: &CancelCheck| {
++        let mut state = EngineState::new();
++        let handle = create(&mut state);
++        let added = add_image_page(&mut state, handle, scratch.open(), scratch.len());
++        assert_eq!(added[0], 1, "{}", message_of(&added));
++        save(&mut state, handle, BoxedWriter::new(Count::default()), check)
++    };
++    let counting = CancelCheck::tripping_at(usize::MAX);
++    assert_eq!(embed(&counting)[0], 1);
++    assert!(counting.polls() >= pieces, "{} polls for {pieces} pieces", counting.polls());
++
++    let tripping = CancelCheck::tripping_at(4);
++    let answer = embed(&tripping);
++    assert_eq!(answer[0], 0, "the save was cancelled");
++    assert!(tripping.polls() <= 4 + 2, "{} polls after the cancel", tripping.polls());
++}
+diff --git a/src/host/engine_proofs/mod.rs b/src/host/engine_proofs/mod.rs
+index 08c6001..38da116 100644
+--- a/src/host/engine_proofs/mod.rs
++++ b/src/host/engine_proofs/mod.rs
+@@ -55,6 +55,7 @@ mod reduce_proof;
+ mod render_named_glyphs;
+ mod editor_pages;
+ mod editor_resource_prune;
++mod builder_image_stream;
+ mod editor_save;
+ mod kept_encryption;
+ mod legacy_decoders;
+diff --git a/src/host/engine_proofs/whole_reads.txt b/src/host/engine_proofs/whole_reads.txt
+index 6bc9931..c5c8652 100644
+--- a/src/host/engine_proofs/whole_reads.txt
++++ b/src/host/engine_proofs/whole_reads.txt
+@@ -19,6 +19,7 @@ fonts::font_dict::from_dict
+ fonts::font_dict::parse_descendant_fonts
+ fonts::font_dict::resolve_encoding_writing_mode
+ host::attachments::attachment_bytes
++host::image_embed::take # an interlaced (Adam7) PNG cannot be produced a row at a time, so its file is read whole; a JPEG and every other PNG stay in their source
+ object::decode_stream_data
+ object::read_whole_raw
+ rendering::mesh_shading::eval_pdf_function
+diff --git a/src/host/image_embed.rs b/src/host/image_embed.rs
+new file mode 100644
+index 0000000..e5c69a2
+--- /dev/null
++++ b/src/host/image_embed.rs
+@@ -0,0 +1,521 @@
++//! Builder images that stream from their source.
++//!
++//! This file is part of the pdf_manipulator host layer (NOT upstream).
++//!
++//! `builderAddImagePage` and the `image` page op hold the image's source
++//! until the builder is saved or disposed, and read from it only when the
++//! save reaches the image:
++//!
++//!   JPEG — the header is scanned for the frame (size, components); the
++//!          stream is the source's bytes, copied in 64 KiB pieces under
++//!          `DCTDecode`, never decoded.
++//!   PNG  — the colour samples are decoded one row at a time from the
++//!          source and written as a Flate stream with a PNG `None` filter
++//!          byte per row (`Predictor` 15); the alpha channel is a second
++//!          pass over the source, written as the `/SMask` stream. The
++//!          stream's `/Length` is the object after it, since the deflated
++//!          size is known only once the rows are written.
++//!
++//! The pixels are the ones `ImageData::from_png` gives: palette, `tRNS`
++//! and low bit depths expand as the PNG decoder expands them, and a 16 bit
++//! sample is rounded to 8 bits as `image` rounds it, `(v + 128) / 257`.
++//! An interlaced (Adam7) PNG cannot be produced a row at a time, so it is
++//! read whole and embedded as `ImageData::from_png` does.
++
++use std::io::{BufReader, Read, Seek, SeekFrom, Write};
++use std::sync::{Arc, Mutex};
++
++use crate::error::{Error, Result};
++use crate::host::bridge_api::BoxedReader;
++use crate::host::positioned_write::PositionedWrite;
++use crate::object::{Object, ObjectRef};
++use crate::writer::{ColorSpace, ImageData, ImageFormat};
++use crate::writer::ObjectSerializer;
++
++/// Bytes moved per read and per write when a JPEG is copied.
++const PIECE: usize = 64 * 1024;
++
++/// What a frame header says of a JPEG.
++#[derive(Debug, Clone, Copy)]
++struct JpegShape {
++    width: u32,
++    height: u32,
++    components: u8,
++    /// The size `image_pixel_dimensions` reads from the head of the file,
++    /// which sizes the page the image is placed on.
++    placement: (u32, u32),
++}
++
++/// What the PNG decoder will produce, rows of 8 or 16 bit samples.
++#[derive(Debug, Clone, Copy)]
++struct PngShape {
++    width: u32,
++    height: u32,
++    color: png::ColorType,
++    depth: png::BitDepth,
++}
++
++impl PngShape {
++    fn has_alpha(&self) -> bool {
++        matches!(self.color, png::ColorType::GrayscaleAlpha | png::ColorType::Rgba)
++    }
++
++    fn color_space(&self) -> ColorSpace {
++        match self.color {
++            png::ColorType::Grayscale | png::ColorType::GrayscaleAlpha => ColorSpace::DeviceGray,
++            _ => ColorSpace::DeviceRGB,
++        }
++    }
++
++    /// Samples a pixel of the decoder's rows holds.
++    fn samples(&self) -> usize {
++        match self.color {
++            png::ColorType::Grayscale => 1,
++            png::ColorType::GrayscaleAlpha => 2,
++            png::ColorType::Rgb => 3,
++            _ => 4,
++        }
++    }
++}
++
++#[derive(Debug, Clone, Copy)]
++enum Shape {
++    Jpeg(JpegShape),
++    Png(PngShape),
++}
++
++/// An image the save reads from its source: the source, its length and what
++/// its header said.
++pub struct StreamedImage {
++    source: Mutex<BoxedReader>,
++    length: u64,
++    shape: Shape,
++}
++
++impl std::fmt::Debug for StreamedImage {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.debug_struct("StreamedImage").field("length", &self.length).field("shape", &self.shape).finish()
++    }
++}
++
++/// An image as the page op holds it until the save.
++#[derive(Debug, Clone)]
++pub enum ImageBytes {
++    /// The whole encoded file, as `ImageData::from_bytes` takes it.
++    Whole(Vec<u8>),
++    /// The file stays in its source.
++    Streamed(Arc<StreamedImage>),
++}
++
++/// What reading the head of a source found.
++pub(crate) enum Taken {
++    Image(ImageBytes),
++    /// Not a PNG or JPEG the embedding can read.
++    Unreadable,
++}
++
++impl ImageBytes {
++    /// The image's size in pixels, read from its header.
++    pub(crate) fn pixel_dimensions(&self) -> Option<(u32, u32)> {
++        match self {
++            ImageBytes::Whole(bytes) => crate::host::ops::builder::image_pixel_dimensions(bytes),
++            ImageBytes::Streamed(image) => Some(image.pixel_dimensions()),
++        }
++    }
++}
++
++/// Reads as much of `buf` as the source has.
++fn read_head(reader: &mut impl Read, buf: &mut [u8]) -> std::io::Result<usize> {
++    let mut filled = 0;
++    while filled < buf.len() {
++        let n = reader.read(&mut buf[filled..])?;
++        if n == 0 {
++            break;
++        }
++        filled += n;
++    }
++    Ok(filled)
++}
++
++/// Takes the image in `reader`: a JPEG or a PNG that rows can be read from
++/// stays in its source; an interlaced PNG is read whole.
++pub(crate) fn take(mut reader: BoxedReader) -> Result<Taken> {
++    let length = reader.seek(SeekFrom::End(0))?;
++    reader.seek(SeekFrom::Start(0))?;
++    let mut magic = [0u8; 8];
++    let got = read_head(&mut reader, &mut magic)?;
++    reader.seek(SeekFrom::Start(0))?;
++
++    let shape = if got >= 2 && magic[0] == 0xFF && magic[1] == 0xD8 {
++        match jpeg_shape(&mut reader, length)? {
++            Some(shape) => Shape::Jpeg(shape),
++            None => return Ok(Taken::Unreadable),
++        }
++    } else if got >= 8 && magic == *b"\x89PNG\r\n\x1a\n" {
++        match png_shape(&mut reader) {
++            PngHead::Rows(shape) => Shape::Png(shape),
++            PngHead::Interlaced => return read_whole(reader, length),
++            PngHead::Unreadable => return Ok(Taken::Unreadable),
++        }
++    } else {
++        return Ok(Taken::Unreadable);
++    };
++    Ok(Taken::Image(ImageBytes::Streamed(Arc::new(StreamedImage {
++        source: Mutex::new(reader),
++        length,
++        shape,
++    }))))
++}
++
++fn read_whole(mut reader: BoxedReader, length: u64) -> Result<Taken> {
++    reader.seek(SeekFrom::Start(0))?;
++    let mut bytes = Vec::with_capacity(length.min(usize::MAX as u64) as usize);
++    let mut piece = vec![0u8; PIECE];
++    loop {
++        crate::cancel::poll()?;
++        let n = reader.read(&mut piece)?;
++        if n == 0 {
++            break;
++        }
++        bytes.extend_from_slice(&piece[..n]);
++    }
++    Ok(Taken::Image(ImageBytes::Whole(bytes)))
++}
++
++/// The frame of the JPEG at the start of `reader`, found by walking its
++/// marker segments up to the first scan: the header, never the entropy-coded
++/// data. `None` when no frame comes before the scan.
++fn jpeg_shape(reader: &mut BoxedReader, length: u64) -> Result<Option<JpegShape>> {
++    let Some((mut shape, frame_end)) = jpeg_frame(reader)? else {
++        return Ok(None);
++    };
++    // The page is sized by the same reading of the head as ever; the head it
++    // needs ends two bytes past the frame's fixed part.
++    reader.seek(SeekFrom::Start(0))?;
++    let mut head = vec![0u8; length.min(frame_end + 2) as usize];
++    let got = read_head(reader, &mut head)?;
++    head.truncate(got);
++    match crate::host::ops::builder::image_pixel_dimensions(&head) {
++        Some(placement) => {
++            shape.placement = placement;
++            Ok(Some(shape))
++        },
++        None => Ok(None),
++    }
++}
++
++/// The frame header and the offset just past its fixed part.
++fn jpeg_frame(reader: &mut BoxedReader) -> Result<Option<(JpegShape, u64)>> {
++    let mut head = BufReader::with_capacity(PIECE, &mut *reader);
++    let mut byte = [0u8; 1];
++    let mut two = [0u8; 2];
++    head.read_exact(&mut two)?;
++    loop {
++        crate::cancel::poll()?;
++        // Skip to the next 0xFF, then past its fill bytes to the marker.
++        loop {
++            if head.read(&mut byte)? == 0 {
++                return Ok(None);
++            }
++            if byte[0] == 0xFF {
++                break;
++            }
++        }
++        let marker = loop {
++            if head.read(&mut byte)? == 0 {
++                return Ok(None);
++            }
++            if byte[0] != 0xFF {
++                break byte[0];
++            }
++        };
++        match marker {
++            // A stuffed zero, a standalone marker: no segment follows.
++            0x00 | 0x01 | 0xD0..=0xD8 => continue,
++            // End of image, start of scan: no frame came first.
++            0xD9 | 0xDA => return Ok(None),
++            // The frame headers: C0 to CF but the tables and the extension.
++            0xC0..=0xCF if !matches!(marker, 0xC4 | 0xC8 | 0xCC) => {
++                let mut frame = [0u8; 8];
++                if read_head(&mut head, &mut frame)? < frame.len() {
++                    return Ok(None);
++                }
++                let height = u32::from(u16::from_be_bytes([frame[3], frame[4]]));
++                let width = u32::from(u16::from_be_bytes([frame[5], frame[6]]));
++                if width == 0 || height == 0 {
++                    return Ok(None);
++                }
++                let end = head.stream_position()?;
++                let shape = JpegShape { width, height, components: frame[7], placement: (0, 0) };
++                return Ok(Some((shape, end)));
++            },
++            _ => {
++                if read_head(&mut head, &mut two)? < 2 {
++                    return Ok(None);
++                }
++                let length = u64::from(u16::from_be_bytes(two));
++                if length < 2 {
++                    return Ok(None);
++                }
++                head.seek_relative(length as i64 - 2)?;
++            },
++        }
++    }
++}
++
++enum PngHead {
++    Rows(PngShape),
++    Interlaced,
++    Unreadable,
++}
++
++fn png_decoder(reader: &mut BoxedReader) -> png::Decoder<BufReader<&mut BoxedReader>> {
++    let mut decoder = png::Decoder::new(BufReader::with_capacity(PIECE, reader));
++    // Palette, `tRNS` and low bit depths expand as the `image` crate expands
++    // them, which is how `ImageData::from_png` read the file.
++    decoder.set_transformations(png::Transformations::EXPAND);
++    decoder
++}
++
++/// What the PNG at the start of `reader` decodes to, from the chunks up to
++/// its first `IDAT`.
++fn png_shape(reader: &mut BoxedReader) -> PngHead {
++    if reader.seek(SeekFrom::Start(0)).is_err() {
++        return PngHead::Unreadable;
++    }
++    let Ok(rows) = png_decoder(reader).read_info() else {
++        return PngHead::Unreadable;
++    };
++    if rows.info().interlaced {
++        return PngHead::Interlaced;
++    }
++    let (width, height) = rows.info().size();
++    let (color, depth) = rows.output_color_type();
++    if width == 0 || height == 0 {
++        return PngHead::Unreadable;
++    }
++    PngHead::Rows(PngShape { width, height, color, depth })
++}
++
++fn image_error(what: &str, e: impl std::fmt::Display) -> Error {
++    Error::Image(format!("{what}: {e}"))
++}
++
++/// The objects a streamed image is written as, numbered by the writer.
++pub(crate) struct StreamedIds {
++    /// The image XObject.
++    pub image: u32,
++    /// The `/SMask` XObject, when [`StreamedImage::object_count`] has one.
++    pub mask: Option<u32>,
++    /// The objects that hold the image's and the mask's `/Length`.
++    pub lengths: [Option<u32>; 2],
++}
++
++impl StreamedImage {
++    /// The size `image_pixel_dimensions` reads from the head of the file,
++    /// which sizes the page the image is placed on.
++    pub(crate) fn pixel_dimensions(&self) -> (u32, u32) {
++        match self.shape {
++            Shape::Jpeg(s) => s.placement,
++            Shape::Png(s) => (s.width, s.height),
++        }
++    }
++
++    /// The image's own size in pixels, as its XObject says.
++    pub(crate) fn size(&self) -> (u32, u32) {
++        match self.shape {
++            Shape::Jpeg(s) => (s.width, s.height),
++            Shape::Png(s) => (s.width, s.height),
++        }
++    }
++
++    /// Whether the save writes an `/SMask` object.
++    pub(crate) fn has_mask(&self) -> bool {
++        matches!(self.shape, Shape::Png(s) if s.has_alpha())
++    }
++
++    /// Whether the stream's `/Length` is an object of its own.
++    pub(crate) fn has_length_objects(&self) -> bool {
++        matches!(self.shape, Shape::Png(_))
++    }
++
++    /// The `ImageData` that stands for the image when it is written: the
++    /// description only, no pixels.
++    fn description(&self) -> ImageData {
++        let (width, height) = self.size();
++        let (color_space, format) = match self.shape {
++            Shape::Jpeg(s) => (
++                match s.components {
++                    1 => ColorSpace::DeviceGray,
++                    4 => ColorSpace::DeviceCMYK,
++                    _ => ColorSpace::DeviceRGB,
++                },
++                ImageFormat::Jpeg,
++            ),
++            Shape::Png(s) => (s.color_space(), ImageFormat::Png),
++        };
++        ImageData {
++            width,
++            height,
++            bits_per_component: 8,
++            color_space,
++            format,
++            data: Vec::new(),
++            soft_mask: self.has_mask().then(Vec::new),
++        }
++    }
++
++    /// Writes the image's objects to `out`, noting each one's offset in
++    /// `offsets`: the image, then its length object and its mask.
++    pub(crate) fn write<W: PositionedWrite>(
++        &self,
++        out: &mut W,
++        serializer: &ObjectSerializer,
++        ids: &StreamedIds,
++        offsets: &mut Vec<(u32, usize)>,
++    ) -> Result<()> {
++        let description = self.description();
++        let mut dict = description.build_xobject_dict();
++        match self.shape {
++            Shape::Jpeg(_) => {
++                dict.insert("Length".to_string(), Object::Integer(self.length as i64));
++                let offset = out.position() as usize;
++                serializer.write_stream_open(&mut *out, ids.image, 0, &dict)?;
++                self.copy_jpeg(&mut *out)?;
++                out.write_all(b"\nendstream\nendobj\n")?;
++                offsets.push((ids.image, offset));
++            },
++            Shape::Png(shape) => {
++                if let Some(mask) = ids.mask {
++                    dict.insert("SMask".to_string(), Object::Reference(ObjectRef::new(mask, 0)));
++                }
++                let length_id = ids.lengths[0].expect("a PNG's length object is numbered");
++                self.write_png_stream(out, serializer, ids.image, length_id, dict, shape, Pass::Colour, offsets)?;
++                if let (Some(mask), Some(mask_length)) = (ids.mask, ids.lengths[1]) {
++                    let mask_dict = description.build_soft_mask_dict().expect("a mask has a description");
++                    self.write_png_stream(out, serializer, mask, mask_length, mask_dict, shape, Pass::Alpha, offsets)?;
++                }
++            },
++        }
++        Ok(())
++    }
++
++    fn source(&self) -> std::sync::MutexGuard<'_, BoxedReader> {
++        self.source.lock().unwrap_or_else(|e| e.into_inner())
++    }
++
++    /// The JPEG's bytes, source to `out`, a piece at a time.
++    fn copy_jpeg(&self, out: &mut dyn Write) -> Result<()> {
++        let mut source = self.source();
++        source.seek(SeekFrom::Start(0))?;
++        let mut piece = vec![0u8; PIECE];
++        let mut copied = 0u64;
++        while copied < self.length {
++            crate::cancel::poll()?;
++            let want = piece.len().min((self.length - copied) as usize);
++            let n = source.read(&mut piece[..want])?;
++            if n == 0 {
++                return Err(Error::UnexpectedEof);
++            }
++            out.write_all(&piece[..n])?;
++            copied += n as u64;
++        }
++        Ok(())
++    }
++
++    /// One stream of the PNG: `pass` of its rows, deflated, with `dict` as
++    /// the head and `length_id` holding the deflated size.
++    #[allow(clippy::too_many_arguments)]
++    fn write_png_stream<W: PositionedWrite>(
++        &self,
++        out: &mut W,
++        serializer: &ObjectSerializer,
++        id: u32,
++        length_id: u32,
++        mut dict: std::collections::HashMap<String, Object>,
++        shape: PngShape,
++        pass: Pass,
++        offsets: &mut Vec<(u32, usize)>,
++    ) -> Result<()> {
++        dict.insert("Length".to_string(), Object::Reference(ObjectRef::new(length_id, 0)));
++        let offset = out.position() as usize;
++        serializer.write_stream_open(&mut *out, id, 0, &dict)?;
++        let start = out.position();
++        self.deflate_rows(&mut *out, shape, pass)?;
++        let length = out.position() - start;
++        out.write_all(b"\nendstream\nendobj\n")?;
++        offsets.push((id, offset));
++
++        let offset = out.position() as usize;
++        out.write_all(&serializer.serialize_indirect(length_id, 0, &Object::Integer(length as i64)))?;
++        offsets.push((length_id, offset));
++        Ok(())
++    }
++
++    /// The rows of `pass`, each behind a `None` filter byte, to `out` as one
++    /// zlib stream. Only the previous row of the decoder and the row being
++    /// converted are held.
++    fn deflate_rows(&self, out: &mut dyn Write, shape: PngShape, pass: Pass) -> Result<()> {
++        let mut source = self.source();
++        source.seek(SeekFrom::Start(0))?;
++        let mut rows = png_decoder(&mut source).read_info().map_err(|e| image_error("PNG", e))?;
++        if rows.info().size() != (shape.width, shape.height) || rows.output_color_type() != (shape.color, shape.depth)
++        {
++            return Err(Error::Image("PNG: the image changed under the save".into()));
++        }
++        let colours = match pass {
++            Pass::Colour => shape.samples() - usize::from(shape.has_alpha()),
++            Pass::Alpha => 1,
++        };
++        let mut zlib =
++            flate2::write::ZlibEncoder::new(out, flate2::Compression::best());
++        let mut line = Vec::with_capacity(1 + shape.width as usize * colours);
++        for _ in 0..shape.height {
++            crate::cancel::poll()?;
++            let row = rows
++                .next_row()
++                .map_err(|e| image_error("PNG", e))?
++                .ok_or(Error::UnexpectedEof)?;
++            line.clear();
++            line.push(0);
++            narrow_row(row.data(), shape, pass, &mut line);
++            zlib.write_all(&line)?;
++        }
++        zlib.finish()?;
++        Ok(())
++    }
++}
++
++#[derive(Clone, Copy, PartialEq, Eq)]
++enum Pass {
++    /// The colour samples of each pixel.
++    Colour,
++    /// The alpha sample of each pixel.
++    Alpha,
++}
++
++/// A 16 bit sample as `image` rounds it to 8 bits.
++fn narrow(high: u8, low: u8) -> u8 {
++    ((u32::from(u16::from_be_bytes([high, low])) + 128) / 257) as u8
++}
++
++/// The 8 bit samples of `pass` out of one decoded row, appended to `line`.
++fn narrow_row(row: &[u8], shape: PngShape, pass: Pass, line: &mut Vec<u8>) {
++    let samples = shape.samples();
++    let bytes = if shape.depth == png::BitDepth::Sixteen { 2 } else { 1 };
++    let (first, count) = match (pass, shape.has_alpha()) {
++        (Pass::Colour, false) => (0, samples),
++        (Pass::Colour, true) => (0, samples - 1),
++        (Pass::Alpha, _) => (samples - 1, 1),
++    };
++    if bytes == 1 && count == samples {
++        line.extend_from_slice(&row[..shape.width as usize * samples]);
++        return;
++    }
++    for pixel in row.chunks_exact(samples * bytes).take(shape.width as usize) {
++        for sample in first..first + count {
++            let at = sample * bytes;
++            line.push(if bytes == 1 { pixel[at] } else { narrow(pixel[at], pixel[at + 1]) });
++        }
++    }
++}
+diff --git a/src/host/mod.rs b/src/host/mod.rs
+index 7ffe398..2043176 100644
+--- a/src/host/mod.rs
++++ b/src/host/mod.rs
+@@ -45,6 +45,7 @@ pub mod font_optimizer;
+ pub(crate) mod font_budget;
+ pub(crate) mod font_subset;
+ pub mod images;
++pub mod image_embed;
+ pub(crate) mod incremental;
+ #[cfg(feature = "rendering")]
+ pub(crate) mod named_glyphs;
+diff --git a/src/host/ops/builder.rs b/src/host/ops/builder.rs
+index aa799bc..c7d66e4 100644
+--- a/src/host/ops/builder.rs
++++ b/src/host/ops/builder.rs
+@@ -4,8 +4,9 @@ use crate::host::binary_codec::{ErrorKind, FieldValue, Request, ResponseWriter};
+ use crate::host::bridge_api::{BoxedReader, BoxedWriter};
+ use crate::host::dispatch;
+ use crate::host::engine_state::EngineState;
++use crate::host::image_embed::{self, ImageBytes, Taken};
+ use crate::host::ops::op_unit;
+-use crate::host::ops::support::{ok_flag, read_all_from_reader, req_handle};
++use crate::host::ops::support::{ok_flag, req_handle};
+ 
+ use crate::writer::{DocumentBuilder, PageSize};
+ 
+@@ -129,7 +130,7 @@ fn handle_builder_add_page(state: &mut EngineState, req: &Request<'_>) -> Vec<u8
+ /// Image pixel dimensions read straight from the file header — no decode.
+ /// A PNG's IHDR carries width/height at bytes 16/20; a JPEG's first SOFn
+ /// frame (C0–CF but DHT C4 / JPG C8 / DAC CC) does after its payload length.
+-fn image_pixel_dimensions(data: &[u8]) -> Option<(u32, u32)> {
++pub(crate) fn image_pixel_dimensions(data: &[u8]) -> Option<(u32, u32)> {
+     const PNG_MAGIC: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+     if data.len() >= 24 && data[..8] == PNG_MAGIC && data[12..16] == *b"IHDR" {
+         let w = u32::from_be_bytes(data[16..20].try_into().ok()?);
+@@ -175,6 +176,28 @@ fn image_pixel_dimensions(data: &[u8]) -> Option<(u32, u32)> {
+     None
+ }
+ 
++/// What a page op that places an image says of bytes that are no image.
++const PAGE_IMAGE_UNUSABLE: &str = "image data is not a usable image";
++
++/// The image of an op: left in its source when the source holds a JPEG or a
++/// PNG that can be read in pieces, else read whole; with no source, the
++/// request's own `data`. `Err` is the response to send: the source could not
++/// be read, the op was cancelled, or the bytes are no image (`unreadable`).
++fn take_image(
++    reader: Option<BoxedReader>,
++    req: &Request<'_>,
++    unreadable: &str,
++) -> Result<ImageBytes, Vec<u8>> {
++    let Some(reader) = reader else {
++        return Ok(ImageBytes::Whole(req.get_bytes("data").unwrap_or(&[]).to_vec()));
++    };
++    match image_embed::take(reader) {
++        Ok(Taken::Image(image)) => Ok(image),
++        Ok(Taken::Unreadable) => Err(ResponseWriter::error_kind(ErrorKind::InvalidArgument, unreadable)),
++        Err(e) => Err(ResponseWriter::error_of(&e)),
++    }
++}
++
+ /// One page holding one image, sized from the image's pixel dimensions unless
+ /// the request names a page size. The image is placed by [fit] inside the
+ /// content rect the margin leaves; `cover` may overflow the media box, which
+@@ -182,18 +205,15 @@ fn image_pixel_dimensions(data: &[u8]) -> Option<(u32, u32)> {
+ fn handle_builder_add_image_page(
+     state: &mut EngineState,
+     req: &Request<'_>,
+-    mut data_reader: Option<BoxedReader>,
++    data_reader: Option<BoxedReader>,
+ ) -> Vec<u8> {
+-    let image_data = if let Some(ref mut reader) = data_reader {
+-        read_all_from_reader(reader).unwrap_or_default()
+-    } else {
+-        req.get_bytes("data").unwrap_or(&[]).to_vec()
++    const UNREADABLE: &str = "addImagePage: the bytes are not a readable PNG or JPEG image";
++    let image = match take_image(data_reader, req, UNREADABLE) {
++        Ok(image) => image,
++        Err(response) => return response,
+     };
+-    let Some((px_width, px_height)) = image_pixel_dimensions(&image_data) else {
+-        return ResponseWriter::error_kind(
+-            ErrorKind::InvalidArgument,
+-            "addImagePage: the bytes are not a readable PNG or JPEG image",
+-        );
++    let Some((px_width, px_height)) = image.pixel_dimensions() else {
++        return ResponseWriter::error_kind(ErrorKind::InvalidArgument, UNREADABLE);
+     };
+     // No explicit page size → one point per pixel, so the page is the image
+     // at its native size.
+@@ -233,7 +253,7 @@ fn handle_builder_add_image_page(
+         return ResponseWriter::error("builder not found");
+     };
+     builder.begin_page(size);
+-    let op = dispatch::PageOp::Image { data: image_data, x, y, w, h, alt: String::new() };
++    let op = dispatch::PageOp::Image { data: image, x, y, w, h, alt: String::new() };
+     match dispatch::apply_page_op(builder, op) {
+         Ok(()) => ok_flag("added"),
+         Err(e) => ResponseWriter::error_of(&e),
+@@ -297,13 +317,12 @@ fn handle_builder_page_op(
+         "horizontalRule" => dispatch::PageOp::HorizontalRule,
+         "watermark" => dispatch::PageOp::Watermark(req.get_str("text").unwrap_or("").to_string()),
+         "image" => {
+-            let image_data = if let Some(ref mut reader) = data_reader {
+-                read_all_from_reader(reader).unwrap_or_default()
+-            } else {
+-                req.get_bytes("data").unwrap_or(&[]).to_vec()
++            let image = match take_image(data_reader.take(), req, PAGE_IMAGE_UNUSABLE) {
++                Ok(image) => image,
++                Err(response) => return response,
+             };
+             dispatch::PageOp::Image {
+-                data: image_data,
++                data: image,
+                 x: req.get_f64("x").unwrap_or(0.0) as f32,
+                 y: req.get_f64("y").unwrap_or(0.0) as f32,
+                 w: req.get_f64("width").unwrap_or(0.0) as f32,
+@@ -520,13 +539,12 @@ fn handle_builder_page_op(
+         "onOpen" => dispatch::PageOp::OnOpen(req.get_str("script").unwrap_or("").to_string()),
+         "onClose" => dispatch::PageOp::OnClose(req.get_str("script").unwrap_or("").to_string()),
+         "imageArtifact" => {
+-            let image_data = if let Some(ref mut reader) = data_reader {
+-                read_all_from_reader(reader).unwrap_or_default()
+-            } else {
+-                req.get_bytes("data").unwrap_or(&[]).to_vec()
++            let image = match take_image(data_reader.take(), req, PAGE_IMAGE_UNUSABLE) {
++                Ok(image) => image,
++                Err(response) => return response,
+             };
+             dispatch::PageOp::ImageArtifact {
+-                data: image_data,
++                data: image,
+                 x: req.get_f64("x").unwrap_or(0.0) as f32,
+                 y: req.get_f64("y").unwrap_or(0.0) as f32,
+                 w: req.get_f64("width").unwrap_or(0.0) as f32,
+@@ -788,6 +806,7 @@ fn refuse_unattached(builder: &DocumentBuilder, op: &dispatch::PageOp) -> Option
+ #[cfg(test)]
+ mod tests {
+     use crate::host::dispatch::{apply_page_op, PageOp};
++    use crate::host::image_embed::ImageBytes;
+     use crate::writer::DocumentBuilder;
+ 
+     /// `op`'s refusal on a real builder after `queued` was applied to it.
+@@ -960,8 +979,8 @@ mod tests {
+     fn unusable_image_bytes_are_an_invalid_argument() {
+         let mut builder = DocumentBuilder::new();
+         for op in [
+-            PageOp::Image { data: vec![1, 2, 3], x: 0.0, y: 0.0, w: 10.0, h: 10.0, alt: String::new() },
+-            PageOp::ImageArtifact { data: vec![1, 2, 3], x: 0.0, y: 0.0, w: 10.0, h: 10.0 },
++            PageOp::Image { data: ImageBytes::Whole(vec![1, 2, 3]), x: 0.0, y: 0.0, w: 10.0, h: 10.0, alt: String::new() },
++            PageOp::ImageArtifact { data: ImageBytes::Whole(vec![1, 2, 3]), x: 0.0, y: 0.0, w: 10.0, h: 10.0 },
+         ] {
+             let err = apply_page_op(&mut builder, op).unwrap_err();
+             assert_eq!(
+diff --git a/src/host/probe.rs b/src/host/probe.rs
+index 93e5ca8..c59bb17 100644
+--- a/src/host/probe.rs
++++ b/src/host/probe.rs
+@@ -107,3 +107,30 @@ pub fn open_source(bytes: Vec<u8>, cancel: &CancelCheck) -> Result<PdfDocument>
+     let _job = crate::cancel::enter(cancel);
+     PdfDocument::from_external_reader_cancellable(Box::new(std::io::Cursor::new(bytes)), cancel)
+ }
++
++/// `builderAddImagePage` then `builderSave`: the PNG or JPEG in `image` is
++/// taken from a source as the op takes it, placed on a page of its own size,
++/// and the builder saved to `writer`, which is where the save reads it.
++pub fn build_image_page(
++    image: Vec<u8>,
++    writer: &mut impl crate::host::positioned_write::PositionedWrite,
++    cancel: &CancelCheck,
++) -> Result<()> {
++    use crate::host::dispatch::{self, PageOp};
++    use crate::host::image_embed::{take, Taken};
++    use crate::writer::PageSize;
++    let _job = crate::cancel::enter(cancel);
++    let source = BoxedReader(Box::new(std::io::Cursor::new(image)));
++    let Taken::Image(image) = take(source)? else {
++        return Err(crate::error::Error::InvalidOperation("the bytes are no PNG or JPEG image".into()));
++    };
++    let Some((width, height)) = image.pixel_dimensions() else {
++        return Err(crate::error::Error::InvalidOperation("the image has no size".into()));
++    };
++    let mut builder = dispatch::builder_new();
++    builder.begin_page(PageSize::Custom(width as f32, height as f32));
++    let op = PageOp::Image { data: image, x: 0.0, y: 0.0, w: width as f32, h: height as f32, alt: String::new() };
++    dispatch::apply_page_op(&mut builder, op)?;
++    builder.end_page();
++    dispatch::builder_save_to_writer(builder.compress_streams(true), writer)
++}
+diff --git a/src/html_css/paint.rs b/src/html_css/paint.rs
+index e6aa06f..c03fbe3 100644
+--- a/src/html_css/paint.rs
++++ b/src/html_css/paint.rs
+@@ -469,6 +469,9 @@ fn paint_page<'sty>(
+                     soft_mask: img.data.soft_mask.clone(),
+                     matrix: None,
+                     is_artifact: false,
++                    // ── pdf_manipulator patch: the image streams from its source ──
++                    streamed: None,
++                    // ── end pdf_manipulator patch ──
+                 };
+                 page_builder.add_element(&ContentElement::Image(content));
+             }
+diff --git a/src/writer/content_stream.rs b/src/writer/content_stream.rs
+index c417fd7..96f950e 100644
+--- a/src/writer/content_stream.rs
++++ b/src/writer/content_stream.rs
+@@ -2000,6 +2000,9 @@ mod tests {
+             soft_mask: None,
+             matrix: None,
+             is_artifact: false,
++            // ── pdf_manipulator patch: the image streams from its source ──
++            streamed: None,
++            // ── end pdf_manipulator patch ──
+         };
+ 
+         let mut builder = ContentStreamBuilder::new();
+@@ -2068,6 +2071,9 @@ mod tests {
+             soft_mask: None,
+             matrix: None,
+             is_artifact: false,
++            // ── pdf_manipulator patch: the image streams from its source ──
++            streamed: None,
++            // ── end pdf_manipulator patch ──
+         };
+         builder.add_element(&ContentElement::Image(image));
+ 
+@@ -2102,6 +2108,9 @@ mod tests {
+             soft_mask: None,
+             matrix: None,
+             is_artifact: false,
++            // ── pdf_manipulator patch: the image streams from its source ──
++            streamed: None,
++            // ── end pdf_manipulator patch ──
+         };
+ 
+         let mut builder = ContentStreamBuilder::new();
+diff --git a/src/writer/document_builder.rs b/src/writer/document_builder.rs
+index 03108a2..a0f6e54 100644
+--- a/src/writer/document_builder.rs
++++ b/src/writer/document_builder.rs
+@@ -2094,6 +2094,34 @@ impl<'a> PageBuilder<'a> {
+         if let Some(mask) = data.soft_mask {
+             content = content.with_soft_mask(mask);
+         }
++        // ── pdf_manipulator patch: a streamed image is placed the way a whole one is ──
++        self.place_image(content, alt_text, is_artifact)
++    }
++
++    /// Places an image that stays in its source until the save at `rect`,
++    /// with the alt text and artifact mark `image_with_options` gives.
++    pub(crate) fn image_streamed(
++        &mut self,
++        image: std::sync::Arc<crate::host::image_embed::StreamedImage>,
++        rect: Rect,
++        alt_text: Option<String>,
++        is_artifact: bool,
++    ) -> &mut Self {
++        use crate::elements::{ColorSpace as EColorSpace, ImageContent, ImageFormat as EImageFormat};
++        let (width, height) = image.size();
++        let mut content = ImageContent::new(rect, EImageFormat::Raw, Vec::new(), width, height);
++        content.color_space = EColorSpace::RGB;
++        content.streamed = Some(image);
++        self.place_image(content, alt_text, is_artifact)
++    }
++
++    fn place_image(
++        &mut self,
++        mut content: crate::elements::ImageContent,
++        alt_text: Option<String>,
++        is_artifact: bool,
++    ) -> &mut Self {
++        // ── end pdf_manipulator patch ──
+         if let Some(alt) = alt_text {
+             content = content.with_alt_text(alt);
+         }
+diff --git a/src/writer/pdf_writer.rs b/src/writer/pdf_writer.rs
+index f92c806..b8ee6f9 100644
+--- a/src/writer/pdf_writer.rs
++++ b/src/writer/pdf_writer.rs
+@@ -1463,9 +1463,28 @@ impl PdfWriter {
+         // the bytes so both image APIs (image_from_bytes / ImageContent::new)
+         // produce the same hash for the same logical image — fixes #443.
+         let mut image_dedup: HashMap<(u64, usize), (u32, Option<u32>)> = HashMap::new();
++        let mut streamed_images: Vec<(
++            std::sync::Arc<crate::host::image_embed::StreamedImage>,
++            crate::host::image_embed::StreamedIds,
++        )> = Vec::new();
+         for pending in &pending_per_page {
+             let mut per_page_ids: Vec<(u32, Option<u32>)> = Vec::with_capacity(pending.len());
+             for p in pending {
++                if let Some(streamed) = &p.image.streamed {
++                    let image = self.alloc_obj_id();
++                    let mask = streamed.has_mask().then(|| self.alloc_obj_id());
++                    let lengths = if streamed.has_length_objects() {
++                        [Some(self.alloc_obj_id()), mask.map(|_| self.alloc_obj_id())]
++                    } else {
++                        [None, None]
++                    };
++                    streamed_images.push((
++                        streamed.clone(),
++                        crate::host::image_embed::StreamedIds { image, mask, lengths },
++                    ));
++                    per_page_ids.push((image, mask));
++                    continue;
++                }
+                 // Normalize first — both APIs converge to the same stream bytes
+                 // here regardless of how the caller originally stored the pixels.
+                 let (data, soft_mask) = image_content_to_xobject_stream(&p.image);
+@@ -2025,6 +2044,9 @@ impl PdfWriter {
+             xref_offsets.push((*obj_id, output.position() as usize));
+             output.write_all(&serializer.serialize_indirect(*obj_id, 0, obj))?;
+         }
++        for (image, ids) in &streamed_images {
++            image.write(&mut *output, &serializer, ids, &mut xref_offsets)?;
++        }
+ 
+         // Hoist any inline appearance streams (e.g. a watermark's `/AP /N`)
+         // into their own indirect objects — a stream may not be a direct
