@@ -70,6 +70,16 @@ export function lane_execute(lane_ptr, request_bytes, source_lengths, sink_count
 }
 
 /**
+ * The most bytes this worker's heap has held since its last
+ * `lane_init`, which a reset calls again.
+ * @returns {number}
+ */
+export function lane_heap_peak() {
+    const ret = wasm.lane_heap_peak();
+    return ret >>> 0;
+}
+
+/**
  * Create this worker's lane state. Returns a WASM pointer.
  * Called exactly once per worker, from lane_worker.js bootstrap.
  * @returns {number}

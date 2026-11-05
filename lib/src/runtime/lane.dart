@@ -149,9 +149,8 @@ abstract interface class Executor {
   /// refuses a lease: its engine died, or a job is still outstanding.
   Lane beginLane();
 
-  /// The executor's committed heap in bytes as of its last answer (a worker's
-  /// lifetime peak, since linear memory never shrinks); 0 when the platform
-  /// cannot tell.
+  /// The most bytes the executor's engine has held since its last reset, as of
+  /// its last answer: peak live bytes, on both platforms.
   int get heapBytes;
 
   /// End the executor for good. Web: terminates the worker. Native:

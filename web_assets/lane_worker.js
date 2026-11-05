@@ -31,15 +31,18 @@
 //                  (cancelSab: the job's cancel word, where the page has
 //                   SharedArrayBuffer; cancelUrl: otherwise, a blob URL the
 //                   main thread revokes to cancel, polled by sync XHR)
-//                → result { lease, jobId, data, mem }
-//                | error { lease, jobId, message, trap?, protocol?, mem }
+//                → result { lease, jobId, data, mem, peak }
+//                | error { lease, jobId, message, trap?, protocol?, mem, peak }
 //                  (trap: the wasm instance trapped; the lane must end;
 //                   protocol: the exec was refused because the worker was
 //                   busy with another exec or a reset, or not serving its
 //                   lease, and never started)
-//   reset        { lease } → resetDone { lease, mem } | error { lease,
+//   reset        { lease } → resetDone { lease, mem, peak } | error { lease,
 //                  message, protocol? }: a fresh engine state in this
 //                  worker, same wasm instance. Refused while busy.
+//                  (peak: the most bytes the engine's heap held since the
+//                   last reset, which the host keeps an executor by; mem:
+//                   the linear memory's size, a diagnostic that never falls)
 //   readAtResult { lease, bytes? , error?, cancelled? }    (JSPI reads)
 //   chunkAck     { lease, error?, cancelled? }             (JSPI writes)
 //   releaseHeld  { lease, heldGroupId }
@@ -496,7 +499,16 @@ async function resetLane() {
   const { lane_init, lane_destroy } = await import(wasmBaseUrl + 'pdf_oxide.js');
   lane_destroy(lanePtr);
   lanePtr = lane_init();
-  return wasm.memory.buffer.byteLength;
+}
+
+// The engine's peak heap since the last reset. After a trap the instance
+// cannot be called: the peak is then null.
+function heapPeak() {
+  try {
+    return wasm.lane_heap_peak() >>> 0;
+  } catch (_) {
+    return null;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -665,8 +677,8 @@ self.onmessage = async (e) => {
       if (!admit(msg)) { refuseLease(msg, 'reset'); return; }
       busy = 'reset';
       try {
-        const bytes = await resetLane();
-        self.postMessage({ type: 'resetDone', lease, mem: bytes });
+        await resetLane();
+        self.postMessage({ type: 'resetDone', lease, mem: wasm.memory.buffer.byteLength, peak: heapPeak() });
       } catch (err) {
         self.postMessage({ type: 'error', lease, message: 'reset failed: ' + (err.message || String(err)) });
       } finally {
@@ -686,15 +698,15 @@ self.onmessage = async (e) => {
         const owned = responseBytes.buffer.byteLength === responseBytes.byteLength
             ? responseBytes.buffer
             : responseBytes.buffer.slice(responseBytes.byteOffset, responseBytes.byteOffset + responseBytes.byteLength);
-        // After a job, byteLength is the worker's lifetime peak: linear
-        // memory never shrinks. The Router retires a worker past its cap.
-        self.postMessage({ type: 'result', lease, jobId: msg.jobId, data: owned, mem: wasm.memory.buffer.byteLength }, [owned]);
+        // mem is the worker's lifetime peak: linear memory never shrinks.
+        // The host keeps or retires the worker by peak.
+        self.postMessage({ type: 'result', lease, jobId: msg.jobId, data: owned, mem: wasm.memory.buffer.byteLength, peak: heapPeak() }, [owned]);
       } catch (err) {
         // A wasm trap (a Rust panic compiles to `unreachable`) leaves the
         // engine's state unusable. Report it as a trap, apart from every
         // other failure, so the host ends the lane instead of reusing it.
         const trap = err instanceof WebAssembly.RuntimeError;
-        self.postMessage({ type: 'error', lease, jobId: msg.jobId, message: err.message || String(err), trap: trap ? true : undefined, mem: wasm ? wasm.memory.buffer.byteLength : null });
+        self.postMessage({ type: 'error', lease, jobId: msg.jobId, message: err.message || String(err), trap: trap ? true : undefined, mem: wasm ? wasm.memory.buffer.byteLength : null, peak: wasm ? heapPeak() : null });
       } finally {
         busy = null;
       }

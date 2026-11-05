@@ -72,6 +72,11 @@ external int laneJobCancel(int laneKey, int lease, int jobId);
 @ffi.Native<ffi.Uint8 Function(ffi.Uint64)>(symbol: 'lane_is_dead')
 external int laneIsDead(int laneKey);
 
+/// The most bytes the lane's thread has held since its last reset, as of the
+/// last job or reset it answered; 0 once the lane is gone.
+@ffi.Native<ffi.Uint64 Function(ffi.Uint64)>(symbol: 'lane_heap_peak')
+external int laneHeapPeak(int laneKey);
+
 /// Releases one held channel (its handle was disposed). The caller
 /// frees the buffer only AFTER this returns.
 @ffi.Native<ffi.Void Function(ffi.Uint64, ffi.Uint64, ffi.Pointer<ffi.Uint8>)>(

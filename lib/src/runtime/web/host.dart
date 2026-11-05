@@ -420,11 +420,16 @@ class WebExecutor implements Executor {
   StreamSubscription<web.MessageEvent>? _sub;
   int _lastLease = 0;
   int _heapBytes = 0;
+  int _memBytes = 0;
   bool _dead = false;
   bool _terminated = false;
 
   @override
   int get heapBytes => _heapBytes;
+
+  /// The worker's WASM linear memory as of its last answer; it never falls.
+  /// A diagnostic: no decision reads it.
+  int get memBytes => _memBytes;
 
   /// Routes the worker's messages to the lane that holds the lease now.
   void attach() {

@@ -399,7 +399,8 @@ String _streamBody(String dict, String data) =>
 /// [trailerSize] omits the trailer's /Size (which readers must then take
 /// from the xref table itself). [freeIds] marks an in-use object number
 /// as a free xref entry — its body still sits in the file unaddressed.
-/// [info] points the trailer's /Info at that object number.
+/// [info] points the trailer's /Info at that object number. [trailerExtra]
+/// is written into the trailer dictionary after the other entries.
 Uint8List _offsetPdf(
   List<String> objects, {
   int root = 1,
@@ -407,6 +408,7 @@ Uint8List _offsetPdf(
   Set<int> freeIds = const {},
   Map<int, int> generations = const {},
   int? info,
+  String trailerExtra = '',
 }) {
   final b = StringBuffer('%PDF-1.7\n');
   final offsets = <int>[];
@@ -429,6 +431,7 @@ Uint8List _offsetPdf(
   if (trailerSize) trailer.write('/Size $size ');
   trailer.write('/Root $root 0 R');
   if (info != null) trailer.write(' /Info $info 0 R');
+  if (trailerExtra.isNotEmpty) trailer.write(' $trailerExtra');
   trailer.write(' >>\n');
   b.write(
     '$trailer'
@@ -9543,4 +9546,248 @@ Uint8List radioGroupsForm(int groups) {
       kid(4 + 2 * i),
     ],
   ]);
+}
+
+/// The content stream of [mergeSourcePdf]'s page: one line of text.
+const mergeSourceContent =
+    'BT\n/F1 12 Tf\n1 0 0 1 72 700 Tm\n(MERGEDTEXT) Tj\nET\n';
+
+/// The 48 bytes of the unfiltered 4×4 RGB image of [mergeSourcePdf], none of
+/// them a run a deflate or a re-encode would keep as is.
+final Uint8List mergeSourceImage = Uint8List.fromList(const [
+  7, 200, 13, 91, 42, 250, 3, 118, 66, 29, 180, 5, 99, 141, 77, 230, 18, 61, //
+  154, 9, 205, 88, 37, 172, 24, 111, 246, 53, 130, 2, 195, 70, 16, 223, 84,
+  149, 31, 167, 58, 240, 12, 104, 191, 45, 126, 8, 215, 93,
+]);
+
+/// One 300×400 page with [mergeSourceContent], the unfiltered image
+/// [mergeSourceImage], a link whose /P and /Dest name the page, a text field
+/// `mergedfield`, an /Outlines entry and an AcroForm with /DR. Object 7 is
+/// reached by nothing.
+final Uint8List mergeSourcePdf = _offsetPdf([
+  ('<< /Type /Catalog /Pages 2 0 R /Outlines 9 0 R /AcroForm << /Fields [10 0 R] '
+      '/DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 8 0 R >> >> >> >>'),
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  ('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] /Contents 4 0 R '
+      '/Resources << /Font << /F1 8 0 R >> /XObject << /Im1 5 0 R >> >> '
+      '/Annots [6 0 R 10 0 R] >>'),
+  _streamBody('', mergeSourceContent),
+  _streamBody(
+    '/Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceRGB '
+    '/BitsPerComponent 8',
+    String.fromCharCodes(mergeSourceImage),
+  ),
+  ('<< /Type /Annot /Subtype /Link /Rect [10 10 90 40] /P 3 0 R '
+      '/Dest [3 0 R /Fit] /Border [0 0 0] >>'),
+  '<< /Unused true >>',
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  '<< /Type /Outlines /Count 0 >>',
+  ('<< /Type /Annot /Subtype /Widget /FT /Tx /T (mergedfield) '
+      '/Rect [10 100 90 120] /P 3 0 R /DA (/Helv 0 Tf 0 g) >>'),
+]);
+
+/// One 300×400 page per entry of [markers], all sharing one Helvetica font.
+/// The page's text is its marker in parentheses.
+Uint8List markerPagesPdf(List<String> markers) {
+  final fontId = 3 + 2 * markers.length;
+  return _offsetPdf([
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    ('<< /Type /Pages /Kids [${[for (var i = 0; i < markers.length; i++) '${3 + 2 * i} 0 R'].join(' ')}] '
+        '/Count ${markers.length} >>'),
+    for (var i = 0; i < markers.length; i++) ...[
+      ('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] '
+          '/Contents ${4 + 2 * i} 0 R /Resources << /Font << /F1 $fontId 0 R >> >> >>'),
+      _streamBody(
+        '',
+        'BT\n/F1 18 Tf\n1 0 0 1 20 200 Tm\n(${markers[i]}) Tj\nET\n',
+      ),
+    ],
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ]);
+}
+
+/// Two pages, the first with a link whose /Dest names the second.
+final Uint8List linkedPairPdf = _offsetPdf([
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  '<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 /MediaBox [0 0 200 200] >>',
+  '<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>',
+  ('<< /Type /Annot /Subtype /Link /Rect [10 10 50 50] /P 3 0 R '
+      '/Dest [5 0 R /Fit] >>'),
+  '<< /Type /Page /Parent 2 0 R >>',
+]);
+
+/// [data] LZW-compressed the way a PDF's LZWDecode reads it: MSB-first codes
+/// of 9 to 12 bits, a clear code first and whenever the 4096-entry table
+/// fills, an end code last. [earlyChange] is the width switch the filter's
+/// /EarlyChange entry names: true widens a code one table entry early (the
+/// default), false at the entry itself.
+///
+/// `clears` counts the clear codes written, `widths` the code widths used.
+({Uint8List bytes, int clears, Set<int> widths}) lzwEncode(
+  List<int> data, {
+  required bool earlyChange,
+}) {
+  const clear = 256, end = 257, tableFull = 4094;
+  final early = earlyChange ? 1 : 0;
+  final out = <int>[];
+  var acc = 0, accBits = 0;
+  var width = 9, next = 258, clears = 0;
+  final widths = {9};
+  var table = <int, int>{};
+
+  void emit(int code) {
+    acc = (acc << width) | code;
+    accBits += width;
+    while (accBits >= 8) {
+      out.add((acc >> (accBits - 8)) & 0xFF);
+      accBits -= 8;
+    }
+    acc &= (1 << accBits) - 1;
+  }
+
+  // A decoder trails the encoder by one table entry, so a code of the next
+  // width is due once the encoder's next entry passes this point.
+  void widen() {
+    if (width < 12 && next == (1 << width) + 1 - early) {
+      width++;
+      widths.add(width);
+    }
+  }
+
+  emit(clear);
+  clears++;
+  var prefix = -1;
+  for (final byte in data) {
+    if (prefix < 0) {
+      prefix = byte;
+      continue;
+    }
+    final key = (prefix << 8) | byte;
+    final known = table[key];
+    if (known != null) {
+      prefix = known;
+      continue;
+    }
+    emit(prefix);
+    table[key] = next++;
+    widen();
+    if (next >= tableFull) {
+      emit(clear);
+      clears++;
+      table = <int, int>{};
+      next = 258;
+      width = 9;
+    }
+    prefix = byte;
+  }
+  if (prefix >= 0) {
+    emit(prefix);
+    next++;
+    widen();
+  }
+  emit(end);
+  if (accBits > 0) out.add((acc << (8 - accBits)) & 0xFF);
+  return (bytes: Uint8List.fromList(out), clears: clears, widths: widths);
+}
+
+/// The eight-letter tokens [lzwPageTokens] shows, one per line of the page.
+final List<String> lzwPageTokens = () {
+  var state = 20240229;
+  return [
+    for (var i = 0; i < 1500; i++)
+      () {
+        final letters = StringBuffer();
+        for (var c = 0; c < 8; c++) {
+          state = (state * 1664525 + 1013904223) & 0xFFFFFFFF;
+          letters.write('ABCDEFGHIJKLMNOPQRSTUVWXYZ'[(state >> 24) % 26]);
+        }
+        return letters.toString();
+      }(),
+  ];
+}();
+
+/// The content stream of [lzwPagePdf]: a line of text per token of
+/// [lzwPageTokens], long and varied enough that its LZW stream fills the
+/// 4096-entry table several times over and so crosses every code width and
+/// holds clear codes.
+final Uint8List lzwPageContent = Uint8List.fromList(
+  [
+    for (var i = 0; i < lzwPageTokens.length; i++)
+      ('BT /F1 8 Tf 1 0 0 1 ${10 + (i * 37) % 400} ${15800 - 10 * i} Tm '
+          '(${lzwPageTokens[i]}) Tj ET\n'),
+  ].join().codeUnits,
+);
+
+/// One page whose content stream is [stream] under /LZWDecode.
+/// [decodeParms] is the text of the filter's /DecodeParms dictionary, none
+/// when null.
+Uint8List lzwPagePdf(Uint8List stream, {String? decodeParms}) => _offsetPdf([
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  ('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 16000] /Contents 4 0 R '
+      '/Resources << /Font << /F1 5 0 R >> >> >>'),
+  _streamBody(
+    '/Filter /LZWDecode${decodeParms == null ? '' : ' /DecodeParms $decodeParms'}',
+    String.fromCharCodes(stream),
+  ),
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+]);
+
+/// The trailer /ID of [keptEncryptionPdf]: two 16-byte strings.
+const keptEncryptionId =
+    '/ID [<11111111111111111111111111111111> <22222222222222222222222222222222>]';
+
+/// A one-page AES-256 (V 5, R 6) source whose empty user password opens it.
+/// Its /Encrypt dictionary is the engine writer's own, written once and
+/// committed (the key wrapping behind /OE, /UE and /Perms is the part no
+/// Dart code computes): O, U, OE, UE and Perms below belong to the empty user
+/// password, the owner password `owner`, permissions -3900 and a file ID
+/// whose first string is sixteen 0x11 bytes. Neither the page nor the
+/// trailer holds an encrypted string or stream, so the file is valid
+/// encrypted or not.
+///
+/// [encrypt] replaces or adds entries of the /Encrypt dictionary, each as the
+/// text of its value; a null value removes the entry. [cfm] is the method of
+/// the /StdCF crypt filter. [userPassword] swaps in the dictionary made for
+/// the user password `secret`. [id] is the trailer's /ID entry, none when
+/// empty.
+Uint8List keptEncryptionPdf({
+  Map<String, String?> encrypt = const {},
+  String cfm = 'AESV3',
+  bool userPassword = false,
+  String id = keptEncryptionId,
+}) {
+  final entries = <String, String?>{
+    'Filter': '/Standard',
+    'V': '5',
+    'R': '6',
+    'Length': '256',
+    'O': userPassword
+        ? '<e1172bc62acb8c0d0ba33c9a13f4e1fb7cc147dee272d2beb0aa016fecc6e1509bd0688f788cce9e96f93b0f875d42d8>'
+        : '<d7f965012db134a81ef430ac0c5398c835dfab9cde4432662d5a850c1332c0cdfa5f662345e7fbd630917df85f4e9284>',
+    'U': userPassword
+        ? '<e8f07e6f09e596661141685d2462cdfea305def6644f008cb71838cba5b71d49b340cde93350b5dfd7f16014d2ab0457>'
+        : '<68e07762b8fe2531970e8064f96df6c012f641209af3ae044678a467d25bdeca587875ffef6e01b9d1a33370b849c1fc>',
+    'OE': userPassword
+        ? '<e20dd38d80cd96a77e4d38f8c50412376cf93bfb399cd4d469be7e553ea77f5c>'
+        : '<d171584cfa0eb97511af8ca381c72b6b4e25751e47bb36d7f85f8ddb0ffc98b6>',
+    'UE': userPassword
+        ? '<f3ff7911b23123f3f948c4bb64b54eb83d4402e172a48197e77df0f7ee3d6921>'
+        : '<53c94f1aba439a67eda1618d2df9b308af4578c296ac650e2ce6b5ff3cf50fa3>',
+    'P': '-3900',
+    'Perms': userPassword
+        ? '<457c9dad6e5459db95961c79e25c7b2d>'
+        : '<ea01b8c9fd2eea1be81c5e6dd445adfa>',
+    'CF': '<< /StdCF << /AuthEvent /DocOpen /CFM /$cfm /Length 32 >> >>',
+    'StmF': '/StdCF',
+    'StrF': '/StdCF',
+    ...encrypt,
+  };
+  return _offsetPdf([
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>',
+    '<< ${[for (final e in entries.entries)
+      if (e.value != null) '/${e.key} ${e.value}'].join(' ')} >>',
+  ], trailerExtra: '/Encrypt 4 0 R $id');
 }

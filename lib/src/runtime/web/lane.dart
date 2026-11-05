@@ -517,10 +517,12 @@ class WebLane implements Lane {
     // job (the refusal of a second exec) never ends the running one.
     final answered =
         entry != null && _int(obj, LaneMsgFields.jobId) == entry.job.jobId;
-    // The worker's committed memory ranks it for reuse and retires it past
+    // The engine's heap peak ranks the worker for reuse and retires it past
     // the keep line.
-    final mem = _int(obj, LaneMsgFields.peakBytes);
-    if (mem != null) _exec._heapBytes = mem;
+    final peak = _int(obj, LaneMsgFields.peakBytes);
+    if (peak != null) _exec._heapBytes = peak;
+    final mem = _int(obj, LaneMsgFields.memBytes);
+    if (mem != null) _exec._memBytes = mem;
 
     switch (type) {
       case LaneMsg.readAt:
@@ -541,7 +543,7 @@ class WebLane implements Lane {
         _opfsAck?.complete(_str(obj, 'error'));
 
       case LaneMsg.resetDone:
-        _reset?.complete(_int(obj, LaneMsgFields.peakBytes));
+        _reset?.complete(mem);
 
       case LaneMsg.result:
         if (entry != null && answered) {

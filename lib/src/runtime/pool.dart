@@ -54,10 +54,10 @@ const kMaxExecutors = 64;
 /// terminated so parked executors cannot starve the budget.
 const kMaxIdleExecutors = 4;
 
-/// An executor whose heap reached this many bytes is terminated when it is
-/// returned instead of reset: linear memory never shrinks, so one huge job
-/// would otherwise leave the executor large forever.
-const kDefaultWorkerRecycleBytes = 256 * 1024 * 1024;
+/// An executor whose engine held this many bytes at its peak is terminated
+/// when it is returned instead of reset. Mirrors `KEEP_BYTES` in
+/// vendor/pdf_oxide/src/host/heap.rs, where the line's reasoning lives.
+const kKeepBytes = 32 * 1024 * 1024;
 
 /// Where an executor is in its life. See the library comment.
 enum ExecutorState {
@@ -85,7 +85,7 @@ class _Entry {
   /// Null until the boot completes.
   Executor? executor;
 
-  /// The heap size after the last reset; ranks idle executors.
+  /// The engine heap peak at the last answer; ranks idle executors.
   int heap = 0;
 }
 
@@ -126,13 +126,13 @@ class ExecutorRequest {
 /// Owns every executor of one platform configuration.
 class ExecutorPool {
   /// Creates a pool over [host]'s executors. [maxExecutors] is the budget,
-  /// [maxIdle] how many idle executors are kept, [keepBytes] the heap size
-  /// at which a returned executor is terminated instead of reset.
+  /// [maxIdle] how many idle executors are kept, [keepBytes] the engine heap
+  /// peak at which a returned executor is terminated instead of reset.
   ExecutorPool({
     required LaneHost host,
     this.maxExecutors = kMaxExecutors,
     this.maxIdle = kMaxIdleExecutors,
-    this.keepBytes = kDefaultWorkerRecycleBytes,
+    this.keepBytes = kKeepBytes,
   }) : assert(maxExecutors >= 1, 'maxExecutors must be at least 1'),
        _host = host;
 
@@ -166,7 +166,7 @@ class ExecutorPool {
   /// Idle executors kept at most.
   final int maxIdle;
 
-  /// The heap size at which a returned executor is terminated.
+  /// The heap peak in bytes at which a returned executor is terminated.
   final int keepBytes;
 
   final List<_Entry> _entries = [];
@@ -228,13 +228,16 @@ class ExecutorPool {
     entry.state = ExecutorState.draining;
     final executor = entry.executor!;
     var intact = false;
+    var over = false;
     try {
       final draining = lease.lane.drain();
       intact = await draining;
     } catch (_) {
       intact = false;
     }
-    if (intact && !untouched) {
+    // The peak is read before the reset, which starts it over.
+    over = executor.heapBytes >= keepBytes;
+    if (intact && !over && !untouched) {
       try {
         await lease.lane.reset();
       } catch (_) {
@@ -243,7 +246,7 @@ class ExecutorPool {
         intact = false;
       }
     }
-    if (_disposed || !intact || executor.heapBytes >= keepBytes) {
+    if (_disposed || !intact || over) {
       _retire(entry);
       return;
     }

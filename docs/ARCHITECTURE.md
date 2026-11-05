@@ -653,11 +653,14 @@ reclaims its directory (see **OPFS mode**, under Streaming I/O). A
 killed-before-use worker is returned to the pristine pool instead of
 terminated (see budget below).
 
-A web worker is retired after a job that grew its WASM memory to 256 MiB
-or more (linear memory never shrinks): the worker reports its memory
-size with every `result` and `error`, and the Router kills the lane once
-it is idle with no pinned handle or held source on it. The next op
-spawns a replacement.
+An executor, a web worker or a native lane thread, is retired when the
+most bytes its engine held since its last reset reached the keep line
+(`KEEP_BYTES`, 32 MiB, in `heap.rs`; `kKeepBytes` in Dart): the worker
+reports that peak as `peak` with every `result`, `error` and `resetDone`
+(its `mem`, the linear memory's size, never falls and is a diagnostic),
+the native lane exposes it as `lane_heap_peak`, and the pool terminates
+the executor instead of resetting it when it is released. The next op
+boots a replacement.
 
 ### Parallel ops + the budgets
 

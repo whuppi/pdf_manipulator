@@ -144,18 +144,21 @@ void main() {
       );
     });
 
-    test('result, error and resetDone posts each carry the memory field', () {
-      final field = LaneMsgFields.peakBytes;
-      for (final tag in [LaneMsg.result, LaneMsg.error, LaneMsg.resetDone]) {
-        final post = RegExp("postMessage\\(\\{ type: '$tag'[^\\n]*\\b$field:");
-        expect(
-          post.hasMatch(workerSource),
-          isTrue,
-          reason: 'the $tag post must carry $field',
-        );
+    test('result, error and resetDone posts each carry the memory and the '
+        'peak fields', () {
+      for (final field in [LaneMsgFields.memBytes, LaneMsgFields.peakBytes]) {
+        for (final tag in [LaneMsg.result, LaneMsg.error, LaneMsg.resetDone]) {
+          final post = RegExp(
+            "postMessage\\(\\{ type: '$tag'[^\\n]*\\b$field:",
+          );
+          expect(
+            post.hasMatch(workerSource),
+            isTrue,
+            reason: 'the $tag post must carry $field',
+          );
+        }
       }
     });
-
     test('every message after the boot handshake carries the lease', () {
       final lease = LaneMsgFields.lease;
       // Everything the worker posts, bar the boot handshake: `booted`,

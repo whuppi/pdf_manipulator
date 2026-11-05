@@ -134,7 +134,8 @@ abstract final class LaneMsg {
   static const error = 'error';
 
   /// Worker → Dart: the reset finished; carries the worker's wasm memory
-  /// size in [LaneMsgFields.peakBytes].
+  /// size in [LaneMsgFields.memBytes] and its heap peak in
+  /// [LaneMsgFields.peakBytes].
   static const resetDone = 'resetDone';
 
   /// Worker → Dart: OPFS pre-copy chunk written.
@@ -158,8 +159,14 @@ abstract final class LaneMsgFields {
   static const protocolError = 'protocol';
 
   /// Worker → Dart, on `result`, `error` and `resetDone`: the worker's
-  /// committed WASM linear memory in bytes (its lifetime peak).
-  static const peakBytes = 'mem';
+  /// committed WASM linear memory in bytes. Linear memory never shrinks, so
+  /// it is the worker's lifetime peak, a diagnostic and no keep decision.
+  static const memBytes = 'mem';
+
+  /// Worker → Dart, on `result`, `error` and `resetDone`: the most bytes the
+  /// engine's heap held since the last reset, the figure an executor is kept
+  /// or retired by.
+  static const peakBytes = 'peak';
 }
 
 /// The protocol object injected into the worker's init message.

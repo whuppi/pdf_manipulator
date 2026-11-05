@@ -5,6 +5,7 @@
 library;
 
 import 'package:pdf_manipulator/pdf_manipulator.dart';
+import 'package:pdf_manipulator/src/runtime/web/lane.dart' show WebExecutor;
 import 'package:test/test.dart';
 
 import '../../fixtures/handwritten.dart';
@@ -13,6 +14,9 @@ import '../core/pdf_doc_battery.dart';
 import '../core/pdf_editor_battery.dart';
 import '../core/pdf_form_battery.dart';
 import '../core/pdf_form_encoding_battery.dart';
+import '../core/pdf_kept_encryption_battery.dart';
+import '../core/pdf_lzw_battery.dart';
+import '../core/pdf_merge_battery.dart';
 import '../core/pdf_builder_battery.dart';
 import '../core/pdf_standalone_battery.dart';
 import '../core/pdf_sugar_battery.dart';
@@ -26,6 +30,7 @@ import '../core/pdf_lifecycle_battery.dart';
 import '../core/pdf_instance_battery.dart';
 import '../core/pdf_lane_protocol_battery.dart';
 import '../core/pdf_runtime_safety_battery.dart';
+import '../core/pdf_executor_battery.dart';
 import '../stress/pdf_doc_stress_battery.dart';
 import '../stress/pdf_editor_stress_battery.dart';
 import '../stress/pdf_sugar_stress_battery.dart';
@@ -73,6 +78,9 @@ void main() {
   registerDocTests(() => pdf);
   registerEditorTests(() => pdf);
   registerFormEncodingTests(() => pdf);
+  registerKeptEncryptionTests(() => pdf);
+  registerLzwTests(() => pdf);
+  registerMergeTests(() => pdf);
   registerFormTests(() => pdf);
   registerBuilderTests(() => pdf);
   registerStandaloneTests(() => pdf);
@@ -108,6 +116,16 @@ void main() {
           'http://localhost:$serverPort/web_assets/lane_worker.js',
       webIoMode: PdfIoMode.atomics,
     ),
+  );
+
+  PdfConfig executorConfig() => PdfConfig(
+    webLaneWorkerUrl: 'http://localhost:$serverPort/web_assets/lane_worker.js',
+    webIoMode: PdfIoMode.atomics,
+  );
+  registerExecutorTests(
+    () => Pdf(config: executorConfig()),
+    config: executorConfig,
+    memBytes: (executor) => (executor as WebExecutor).memBytes,
   );
 
   registerLaneProtocolTests(

@@ -178,7 +178,8 @@ CONTENT RULES (never change)
 - Changed page edits to work on merged pages: `deletePages`, `movePage` and `keepPages` take a merged page like any other, where they threw `PdfUnsupported` on a document with merged pages
 - Changed reading a source to fetch it in 64 KB pieces instead of one round trip per read: compressing a 70-page scan takes 18 ms on native, where it took 29 ms, and a third less time on the web
 - Changed `PdfDoc.extractText` of all pages to stream one page at a time from the engine: extracting text from a 10,000-page file takes under 16 MB of engine memory, where its first call held 281 MB
-- Changed the web lanes to retire a worker after a job that grew its memory past 256 MB, once nothing still needs it; WebAssembly memory never shrinks, so one large job no longer leaves a large worker behind
+- Changed every engine worker, native and web, to be retired once an operation's heap peaked past 32 MB, where only a web worker past 256 MB of WebAssembly memory was, and the machine's font caches no longer count against a worker
+- Changed `registerFallbackFont` so a second registration of a kind replaces the first and reaches only the `Pdf` that made it, where the font was shared by every instance of the process
 - Changed `PdfDoc.render` and `extractImages` to deliver each page as the engine produces it, where they held every page until the last; cancelling the subscription stops the engine
 - Changed cancellation to stop text extraction, search, validation, `reduceImages`, `convertToPdfA` and saves within one page, where it waited for the next read or write; on the web this needs a cross-origin isolated page
 - Changed cancellation to reach `merge`, `split`, `compress`, saves, rendering, `bookmarkRanges`, `classifyPages`, PDF/A conversion and the opening of a damaged file inside their loops, where each ran to its end

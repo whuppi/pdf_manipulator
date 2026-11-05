@@ -99,7 +99,7 @@ class NativeExecutor implements Executor {
   bool _terminated = false;
 
   @override
-  int get heapBytes => 0;
+  int get heapBytes => bindings.laneHeapPeak(laneKey);
 
   @override
   Lane beginLane() {

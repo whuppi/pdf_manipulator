@@ -143,10 +143,11 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(2));
 
-    // MUST run before any registerFallbackFont test: on native the font
-    // registry is process-global, so a font registered by an earlier test
-    // would leak into this one and fake a pass. Declaration order is the
-    // guard (the suites run with --concurrency=1).
+    // MUST run before any registerFallbackFont test: a fallback font belongs
+    // to the Pdf that registered it and replays on every lease of that Pdf,
+    // and the runners share one Pdf, so a font registered by an earlier test
+    // would reach this one and fake a pass. Declaration order is the guard
+    // (the suites run with --concurrency=1).
     test('CJK value without a fallback font degrades, never crashes', () async {
       final pdf = createPdf();
       const value = '東京都渋谷区 123';
