@@ -273,6 +273,30 @@ pub fn knockout_form(n: usize) -> Shell {
     shell
 }
 
+/// One page that draws a knockout transparency group of `n` paint operators,
+/// each a bare fill: every paint is an element the group replays.
+pub fn knockout_paints(n: usize) -> Shell {
+    let mut shell = Shell::new();
+    let form = shell.pdf.add_stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Group << /S /Transparency /K true >>",
+        &"f\n".repeat(n).into_bytes(),
+    );
+    shell.page((100, 100), b"/Fm1 Do\n", &format!("/XObject << /Fm1 {form} 0 R >>"), "");
+    shell
+}
+
+/// One page that draws one uncompressed 8-bit gray inline image of
+/// `side` x `side` samples across the page.
+pub fn inline_image(side: u32) -> Shell {
+    let mut lcg = Lcg(11);
+    let mut content = format!("q 200 0 0 200 0 0 cm BI /W {side} /H {side} /BPC 8 /CS /G ID ").into_bytes();
+    content.extend((0..side * side).map(|_| lcg.next() as u8));
+    content.extend_from_slice(b"\nEI Q\n");
+    let mut shell = Shell::new();
+    shell.page((200, 200), &content, "", "");
+    shell
+}
+
 /// One page that shows a Type 3 glyph whose procedure is `n` triples and
 /// names no `d0` or `d1`.
 pub fn type3_glyph(n: usize) -> Shell {

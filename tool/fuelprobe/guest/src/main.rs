@@ -56,6 +56,8 @@ const CASES: &[(&str, &str)] = &[
     ("pageImages", "long"),
     ("render", "knockout"),
     ("render", "type3"),
+    ("render", "inlineImage"),
+    ("render", "knockoutPaints"),
 ];
 
 /// The fixtures' sizes, each chosen so the op does well over 10^9 units of
@@ -97,6 +99,10 @@ mod size {
     pub const LONG_PAGE_TRIPLES: usize = 300_000;
     /// Triples of the form or glyph a render reads whole.
     pub const WHOLE_FORM_TRIPLES: usize = 300_000;
+    /// Side of the one inline image of a render: several megabytes of data.
+    pub const INLINE_IMAGE_SIDE: u32 = 5_000;
+    /// Paint operators of a knockout group the render replays one by one.
+    pub const KNOCKOUT_PAINTS: usize = 8_000;
 }
 
 fn main() {
@@ -328,6 +334,8 @@ fn run(op: &str, fixture: &str) -> Result<(), Failure> {
         },
         ("render", "knockout") => render(gen::knockout_form(size::WHOLE_FORM_TRIPLES).finish(), &[0], 72, &cancel)?,
         ("render", "type3") => render(gen::type3_glyph(size::WHOLE_FORM_TRIPLES).finish(), &[0], 72, &cancel)?,
+        ("render", "inlineImage") => render(gen::inline_image(size::INLINE_IMAGE_SIDE).finish(), &[0], 72, &cancel)?,
+        ("render", "knockoutPaints") => render(gen::knockout_paints(size::KNOCKOUT_PAINTS).finish(), &[0], 72, &cancel)?,
         _ => return Err("no such case".into()),
     }
     Ok(())
