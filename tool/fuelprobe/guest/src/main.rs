@@ -53,6 +53,9 @@ const CASES: &[(&str, &str)] = &[
     ("classifyPages", "pages"),
     ("bookmarkRanges", "outline"),
     ("addStamp", "pages"),
+    ("pageImages", "long"),
+    ("render", "knockout"),
+    ("render", "type3"),
 ];
 
 /// The fixtures' sizes, each chosen so the op does well over 10^9 units of
@@ -90,6 +93,10 @@ mod size {
     pub const OUTLINE: usize = 500;
     /// A stamp costs a page parse and a staged annotation each.
     pub const STAMP_PAGES: usize = 1_000;
+    /// Save, transform and restore triples on the one page of an image listing.
+    pub const LONG_PAGE_TRIPLES: usize = 300_000;
+    /// Triples of the form or glyph a render reads whole.
+    pub const WHOLE_FORM_TRIPLES: usize = 300_000;
 }
 
 fn main() {
@@ -311,6 +318,16 @@ fn run(op: &str, fixture: &str) -> Result<(), Failure> {
                 .map_err(fail("addStamp"))?;
             mark();
         },
+        ("pageImages", "long") => {
+            let mut shell = Shell::new();
+            shell.page((612, 792), &gen::graphics(size::LONG_PAGE_TRIPLES), "", "");
+            let mut editor = editor(shell.finish())?;
+            mark();
+            dispatch::edit_page_images(&mut editor, 0).map_err(fail("pageImages"))?;
+            mark();
+        },
+        ("render", "knockout") => render(gen::knockout_form(size::WHOLE_FORM_TRIPLES).finish(), &[0], 72, &cancel)?,
+        ("render", "type3") => render(gen::type3_glyph(size::WHOLE_FORM_TRIPLES).finish(), &[0], 72, &cancel)?,
         _ => return Err("no such case".into()),
     }
     Ok(())

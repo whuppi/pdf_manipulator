@@ -257,6 +257,37 @@ pub fn paths(n: usize, size: u32) -> Vec<u8> {
     out.into_bytes()
 }
 
+/// `n` save, identity transform and restore triples.
+pub fn graphics(n: usize) -> Vec<u8> {
+    "q 1 0 0 1 0 0 cm Q\n".repeat(n).into_bytes()
+}
+
+/// One page that draws a knockout transparency group of `n` triples.
+pub fn knockout_form(n: usize) -> Shell {
+    let mut shell = Shell::new();
+    let form = shell.pdf.add_stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Group << /S /Transparency /K true >>",
+        &graphics(n),
+    );
+    shell.page((100, 100), b"/Fm1 Do\n", &format!("/XObject << /Fm1 {form} 0 R >>"), "");
+    shell
+}
+
+/// One page that shows a Type 3 glyph whose procedure is `n` triples and
+/// names no `d0` or `d1`.
+pub fn type3_glyph(n: usize) -> Shell {
+    let mut shell = Shell::new();
+    let procedure = shell.pdf.add_stream("", &graphics(n));
+    shell.font = shell.pdf.add(format!(
+        "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 100 100] /FontMatrix [0.01 0 0 0.01 0 0] \
+         /CharProcs << /a {procedure} 0 R >> \
+         /Encoding << /Type /Encoding /Differences [97 /a] >> \
+         /FirstChar 97 /LastChar 97 /Widths [100] >>"
+    ));
+    shell.page((100, 100), b"BT /F1 12 Tf 10 10 Td (a) Tj ET\n", "", "");
+    shell
+}
+
 /// A `w` x `w` raw RGB image whose samples depend on `seed`.
 pub fn rgb_image(w: u32, seed: u32) -> Vec<u8> {
     let mut lcg = Lcg(seed);
