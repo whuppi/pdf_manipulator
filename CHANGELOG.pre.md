@@ -200,6 +200,7 @@ CONTENT RULES (never change)
 - Added `PdfSave.full(deflate:)`, how hard a full save deflates its streams (`PdfDeflate.none`, `fast`, `balanced` or `best`), default `best`
 - Changed a full-rewrite save to re-deflate Flate streams at the save's level, keeping a stream's source bytes when the result is not smaller
 - Changed `compress` to write the source unchanged when its result is not smaller
+- Changed `compress` and every full save to recompress copied page content, pack object streams fuller, drop orphan `/Length` objects, rewrite LZW as Flate and deflate like native zlib level 9: on 13 public test files a lossless `compress` is now smaller than pdf_document 12.0.0's on 12 and equal on 1, where it was up to 6 times larger
 - Added `PdfSave.full(mergeDuplicates:)`, which writes one copy of each set of identical images, ICC profiles and embedded fonts across the document and every merged source, default false
 - Changed `compress` to write one copy of identical images, ICC profiles and embedded fonts
 - Added `PdfSave.full(pruneResources:)`, which drops the resource entries that no content names, default false
