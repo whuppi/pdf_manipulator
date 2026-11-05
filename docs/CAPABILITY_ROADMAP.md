@@ -215,17 +215,17 @@ same names, when both exist. Exports (source in, sink out) live on
 
 ---
 
-## Runtime — the lane architecture
+## Runtime — the executor pool
 
 | Capability | Status |
 |---|---|
 | Per-op cancellation (`PdfTask.cancel()` on every engine method) | DONE |
-| Instant dispose (kill every lane, no joins, same event-loop turn) | DONE |
-| Lane budgets — queue, never fail (128 native threads / 64 web workers, FIFO waiters) | DONE |
-| Pristine worker recycling under create+dispose churn (web) | DONE |
+| Instant dispose (end every lane, return every executor, no joins) | DONE |
+| Budgets — queue, never fail (`kMaxExecutors` executors per pool; `MAX_LANES_GLOBAL` threads process-wide on native; first-in-first-out waiters) | DONE |
+| Executors reset and leased again under churn (both platforms) | DONE |
 | Fire-and-forget error physics (cancelled silent, real failures loud) | DONE |
 | Three web I/O modes (JSPI / Atomics / OPFS), identical suite | DONE |
-| Item streaming over the job port (multi-result ops without buffering) | PLANNED — the job's result port is already a message channel: promote it to N interim messages + 1 terminal message. Inherits per-job cancel, instant kill, and the post-driven cleanup protocol unchanged; symmetric on web (worker postMessage). Never add a second transport method for this. |
+| Item streaming over the job port (multi-result ops without buffering) | PLANNED — the job's result port is already a message channel: promote it to N interim messages + 1 terminal message. Inherits per-job cancel, ending the lane, and the post-driven cleanup protocol unchanged; symmetric on web (`postMessage` to the executor). Never add a second transport method for this. |
 
 ---
 
@@ -256,7 +256,7 @@ capabilities are tracked in their own sections.
 | `setup --force web` | DONE | Re-download web assets (debugging) |
 | SHA-256 hash verification (all assets) | DONE | Native + web, stale detection on setup |
 | `build.json` | DONE | Single source of truth for crate, repo, features, web assets |
-| Link hook (`hook/link.dart`) | DONE | Forwards assets; on release drives the RecordUse trim lane (see **Binary size — trim**) |
+| Link hook (`hook/link.dart`) | DONE | Forwards assets; on release drives the RecordUse trim path (see **Binary size — trim**) |
 | Automatic web setup via build hook | BLOCKED | See details below |
 
 ### Automatic web setup — what's blocking, what to track
@@ -304,17 +304,17 @@ size-measuring recipe in [`UPDATING.md`](UPDATING.md) §S5b.
 | Trimmed example shell (`example_trimmed/`) | DONE | Config-shell over example/ with `keep: [render]`; `make test-example-trimmed` asserts the contract on a real trimmed binary (core + kept work, excluded ops answer the typed error). Not in CI yet — needs a Rust-provisioned macOS row in full-test.yml. |
 | Op-unit dispatch layer (entry + handler + linker anchor per op) | DONE | `vendor/pdf_oxide/src/host/ops/`; registry backend swappable |
 | RecordUse drive path (build full → link hook trims on release) | DONE, dormant | Activates itself when the SDK experiment records; fixture-tested today |
-| `panic=abort` size lever | WONT_DO | Native lane isolation IS `catch_unwind` (one bad PDF → typed error, engine survives); abort would crash the whole app. Wasm already ships abort via `release-small` — the JS worker boundary isolates there. Nothing left to win. |
+| `panic=abort` size lever | WONT_DO | Native executor isolation is `catch_unwind` (one bad PDF → typed error, engine survives); abort would crash the whole app. Wasm already ships abort via `release-small` — the Web Worker boundary isolates there. Nothing left to win. |
 | Writer monomorphization dedup | WONT_DO | Measured honestly: the dedupable Boxed-vs-Seek writer pairs are ~150-200 KB (2% of core) for dyn dispatch in the hottest safety-critical loop plus invasive upstream surgery. Bad trade. |
 | `opt-level=z` size option | DONE | Asked for → shipped as `build: size` (opt-level z on the release profile). Never the default (it costs CPU on every op); opt-in per app via the pubspec `build:` key. |
 | `extract` capability | DONE | Extraction + search + classification (+ CJK CID tables). Cut via root gates — three dispatch fns gated, LTO deleted the 2.1 MB web with zero document.rs surgery. Core promise is now parse/write/edit/forms/builder. `office` requires `extract` engine-side. All remaining per-op cuts measured at 10-60 KB each: not worth their surface. |
-| Lazy fallback-font loading (runtime memory, not binary size) | PLANNED, deprioritized | `registerFallbackFont(bytes)` keeps the font resident: one shared copy on native, one per web worker. Bytes-in is the primitive, so a lazy `DataSource` registration (load on first CJK/emoji bake, per worker) and an optional release call can layer on later without breaking the API. Pick up only on real memory-pressure reports from web apps — and design the API surface carefully at that point, not before. |
+| Lazy fallback-font loading (runtime memory, not binary size) | PLANNED, deprioritized | `registerFallbackFont(bytes)` keeps the font resident: one per executor. Bytes-in is the primitive, so a lazy `DataSource` registration (load on first CJK/emoji bake, per executor) and an optional release call can layer on later without breaking the API. Pick up only on real memory-pressure reports from web apps — and design the API surface carefully at that point, not before. |
 
 ### When the futures arrive — tracked triggers + exact approach
 
 | Trigger to watch | Signal | Approach when it lands |
 |---|---|---|
-| RecordUse experiment stabilizes (dart-lang/native#2902 for instance methods; the SDK record-use experiment flag) | recordings appear in release link hooks | Nothing to build — the lane self-activates. Validate with `trim-detector: compare` on example/ (diff recorded vs scan keep-sets). When instance methods land: delete the `record_use_shim*.dart` files, annotate the ops directly. Separately: `record_use` is pinned `^0.6.0` because ≥1.0.0 needs `meta ^1.19` and Flutter stable pins meta 1.18 — bump the pin when a Flutter stable ships meta ≥1.19 (same API for our use). When trust is earned: consider promoting the default detector. |
+| RecordUse experiment stabilizes (dart-lang/native#2902 for instance methods; the SDK record-use experiment flag) | recordings appear in release link hooks | Nothing to build — the detector self-activates. Validate with `trim-detector: compare` on example/ (diff recorded vs scan keep-sets). When instance methods land: delete the `record_use_shim*.dart` files, annotate the ops directly. Separately: `record_use` is pinned `^0.6.0` because ≥1.0.0 needs `meta ^1.19` and Flutter stable pins meta 1.18 — bump the pin when a Flutter stable ships meta ≥1.19 (same API for our use). When trust is earned: consider promoting the default detector. |
 | Dart static linking (dart-lang/sdk#49418; `StaticLinking` in code_assets implemented) | hooks accept static libs; SDK defines symbol/asset-tag references | 1) Wire Dart-side references to the `pdf_op_<name>_anchor` symbols (one per public op, using whatever asset-tag syntax ships). 2) Swap `ops/registry.rs` from the explicit table to link-section collection. 3) Add a gc-sections assertion to shake-audit. The detector becomes a cross-check; the linker becomes the mechanism. Units don't change. |
 | Web build hooks (dart-lang/native#988) | hooks run for web targets | Web already reads the same `keep:`/`build:` pubspec block native does (via `setup` → `user_defines.dart` → `resolveKeepPlan`). Remaining win: fold that into an automatic web build hook so the manual `setup` step disappears entirely — wasm gains the same no-command auto flow as native. |
 | Wasm component model in dart2wasm (dart-lang/sdk#56366) | dart2wasm emits/links components | Express op units as WIT interface functions (one-to-one mapping already); component-level linking replaces export-root trimming on web. Furthest future — the scan covers web until then. |

@@ -468,7 +468,7 @@ while an audit is running: bash re-reads the file by offset.
 
 ### Branch model
 
-The two-lane branch model (`dev` prereleases, `prod` stable) and the
+The two-branch model (`dev` prereleases, `prod` stable) and the
 squash-vs-merge-commit rule are the shared model. See
 whuppi/ci/docs/ARCHITECTURE.md "The versioned-release model + the stamping
 rule". The pdf-specific promotion steps are in `### Prerelease` / `### Stable
@@ -673,7 +673,7 @@ point at a checkout of that repo (a sibling of this one). Run from this
 package's root, and set `GITHUB_REPOSITORY` — the script requires it while
 loading, whichever mode you ask for, and exits without it. Some modes want
 more: `--check-versions` also needs `BRANCH` (`dev` or `prod`, picking the
-lane it checks). `--help` lists every mode.
+mode it checks). `--help` lists every mode.
 
 ```sh
 GITHUB_REPOSITORY=whuppi/pdf_manipulator \
