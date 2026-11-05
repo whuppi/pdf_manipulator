@@ -538,6 +538,19 @@ is same-agent and race-free by construction. One verb per job end
 (`opfsDrop`), one per held-source release (`releaseHeld`). No
 retries exist on the live path because no race exists.
 
+The one browser call that can leave a live worker waiting is
+`createSyncAccessHandle` on a fresh file, which Chrome sometimes never
+answers while the thread runs on. Nothing waits for such a call but the
+write that made it. A job's drop and a reset set the file aside on the
+worker's abandoned list instead; the call's own continuation closes the
+handle, removes the file and takes it off the list if it ever settles, and
+the lane directory cleanup skips a file still on it. A live write gives the
+call `kCreateHandleWait`, then sets its file aside and creates the handle
+once more on a fresh file, and fails the job with `PdfIoFailed` if that
+call is not answered either. The worker reports its abandoned files on
+`resetDone` and a retried create on the write's ack; the suites assert
+`WebLaneHost.abandonedFiles` and `WebLaneHost.retriedCreates` are zero.
+
 Death is handled by liveness, not by guesswork: every owner holds a
 [Web Lock](https://developer.mozilla.org/docs/Web/API/Web_Locks_API)
 for its lifetime — the page holds its session's lock, each worker

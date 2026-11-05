@@ -433,6 +433,25 @@ void registerWebPlatformTests({
       );
     }, timeout: t(1));
 
+    test('no pre-copy file was set aside and no create retried', () {
+      // The browser sometimes leaves createSyncAccessHandle on a fresh file
+      // unanswered; the worker then sets the file aside or retries on a new
+      // one, and the suite still passes. Only these counts show it.
+      for (final file in WebLaneHost.abandonedFiles) {
+        printOnFailure('set-aside pre-copy file: $file');
+      }
+      expect(
+        WebLaneHost.abandonedFiles,
+        isEmpty,
+        reason: 'a worker still waits for the browser to create a handle',
+      );
+      expect(
+        WebLaneHost.retriedCreates,
+        0,
+        reason: 'createSyncAccessHandle passed kCreateHandleWait unanswered',
+      );
+    }, timeout: t(1));
+
     test('no dead worker directory was given up on', () {
       for (final dir in WebLaneHost.abandonedWorkerDirs) {
         printOnFailure('abandoned worker directory: $dir');

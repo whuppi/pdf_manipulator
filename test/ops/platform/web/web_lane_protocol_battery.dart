@@ -17,7 +17,9 @@ import 'dart:typed_data';
 import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart' as bin;
 import 'package:pdf_manipulator/src/runtime/lane.dart';
 import 'package:pdf_manipulator/src/runtime/web/lane.dart';
+import 'package:pdf_manipulator/src/runtime/web/protocol.dart';
 import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
+import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:test/test.dart';
 import 'package:web/web.dart' as web;
@@ -60,6 +62,11 @@ String? _type(JSObject m) => (m['type'] as JSString?)?.toDart;
 int? _num(JSObject m, String key) => (m[key] as JSNumber?)?.toDartInt;
 
 String? _str(JSObject m, String key) => (m[key] as JSString?)?.toDart;
+
+List<String> _strings(JSObject m, String key) => [
+  for (final v in (m[key] as JSArray<JSString>?)?.toDart ?? const <JSString>[])
+    v.toDart,
+];
 
 bool _flag(JSObject m, String key) => (m[key] as JSBoolean?)?.toDart ?? false;
 
@@ -266,6 +273,72 @@ XMLHttpRequest.prototype.send = function (...args) {
   return send.apply(this, args);
 };
 ''';
+
+/// Worker prelude: `createSyncAccessHandle` returns a promise that does not
+/// settle, as Chrome's sometimes does on a fresh file while the thread keeps
+/// running: the first call only, or every call. `hung` names the file of each
+/// such call. `release` settles them all with the real create. `holdReset`
+/// makes the worker drop every `reset` it is sent from then on.
+String _hangsCreate({required bool every}) =>
+    '''
+const every = $every;
+let seen = 0;
+let release;
+const gate = new Promise((resolve) => { release = resolve; });
+const proto = FileSystemFileHandle.prototype;
+const create = proto.createSyncAccessHandle;
+proto.createSyncAccessHandle = function (...args) {
+  if (!every && seen++ > 0) return create.apply(this, args);
+  postMessage({ type: 'hung', name: this.name });
+  return gate.then(() => create.apply(this, args));
+};
+let holdReset = false;
+self.addEventListener('message', (e) => {
+  const m = e.data;
+  if (!m) return;
+  if (m.type === 'release') { release(); e.stopImmediatePropagation(); }
+  else if (m.type === 'holdReset') { holdReset = true; e.stopImmediatePropagation(); }
+  else if (m.type === 'reset' && holdReset) e.stopImmediatePropagation();
+});
+''';
+
+/// Every message a booted worker posts, in order, for a test that drives a
+/// real lane over it.
+class _Watched {
+  _Watched(WebExecutor executor) {
+    _sub = EventStreamProviders.messageEvent.forTarget(executor.js).listen((e) {
+      final m = e.data as JSObject?;
+      if (m == null) return;
+      seen.add(m);
+      _arrivals.add(m);
+    });
+  }
+
+  final seen = <JSObject>[];
+  final _arrivals = StreamController<JSObject>.broadcast(sync: true);
+  late final StreamSubscription<web.MessageEvent> _sub;
+
+  Future<JSObject> next(bool Function(JSObject) test) {
+    for (final m in seen) {
+      if (test(m)) return Future.value(m);
+    }
+    return _arrivals.stream.firstWhere(test);
+  }
+
+  Future<void> close() async {
+    await _sub.cancel();
+    await _arrivals.close();
+  }
+}
+
+/// Waits until [done] holds, polling.
+Future<void> _until(Future<bool> Function() done, String what) async {
+  final deadline = DateTime.now().add(const Duration(seconds: 10));
+  while (!await done()) {
+    if (DateTime.now().isAfter(deadline)) throw TestFailure(what);
+    await Future<void>.delayed(const Duration(milliseconds: 25));
+  }
+}
 
 /// Every answer is a protocol refusal, for these jobs in this order.
 void _expectRefused(List<JSObject> answers, List<int?> jobIds) {
@@ -977,6 +1050,180 @@ void registerWebLaneProtocolTests({
         expect(_type(end), 'resetDone', reason: _str(end, 'message'));
         expect(await _opfsFileCount(raw.directory), 0);
       }, timeout: t(10));
+
+      test('a reset does not wait for a pre-copy write whose handle creation '
+          'never answers, and the file goes once it does', () async {
+        final raw = await _RawWorker.take(
+          host,
+          prelude: _hangsCreate(every: false),
+        );
+        addTearDown(raw.close);
+        const file = 'pdf_lane_hung';
+        raw.precopy(1, 1, file, minimalPdf);
+        await raw.waitFor(_is('hung'));
+
+        // The job was cancelled: its drop and the lane's reset follow.
+        raw.post('opfsDrop', {'lease': 1.toJS, 'jobId': 1.toJS});
+        raw.post('reset', {'lease': 1.toJS});
+        final done = await raw
+            .waitFor(_is('resetDone'))
+            .timeout(
+              const Duration(seconds: 5),
+              onTimeout: () => throw TestFailure(
+                'the reset waited for the write behind a '
+                'createSyncAccessHandle that never answered',
+              ),
+            );
+        expect(_strings(done, 'abandoned'), [file]);
+
+        raw.post('release', {});
+        await _until(
+          () async => await _opfsFileCount(raw.directory) == 0,
+          'the set-aside file stayed after its create answered',
+        );
+        final before = raw.history.where(_is('resetDone')).toList();
+        raw.post('reset', {'lease': 1.toJS});
+        final again = await raw.waitFor(
+          (m) => _is('resetDone')(m) && !before.any((b) => identical(b, m)),
+        );
+        expect(_strings(again, 'abandoned'), isEmpty);
+      }, timeout: t(15));
+
+      test('a create that does not answer is retried once on a fresh file, '
+          'and the job succeeds', () async {
+        final executor =
+            await withWorkerPrelude(_hangsCreate(every: false), host.boot)
+                as WebExecutor;
+        addTearDown(executor.terminate);
+        executor.provoked = true;
+        final watched = _Watched(executor);
+        addTearDown(watched.close);
+
+        final lane = executor.beginLane() as WebLane;
+        final source = src(minimalPdf);
+        final opened = await lane.submit(
+          LaneJob(
+            jobId: 1,
+            request: _open(source.length),
+            sources: [source],
+            sinks: const [],
+            keepSources: const {},
+          ),
+        );
+        expect(
+          _ok(opened.bytes),
+          isTrue,
+          reason: 'the job: ${_failure(opened.bytes)}',
+        );
+        expect(watched.seen.where(_is('hung')), hasLength(1));
+        expect(executor.retriedCreates, 1);
+        expect(WebLaneHost.retriedCreates, 0, reason: 'a provoked worker');
+
+        executor.js.postMessage(_msg('release', {}));
+        await _until(
+          () async => await _opfsFileCount(executor.opfsDir!) == 0,
+          'the abandoned file stayed after its create answered',
+        );
+        await lane.drain();
+        await lane.reset();
+        expect(executor.setAsideFiles, isEmpty);
+      }, timeout: t(20));
+
+      test('a create that never answers fails the job with an I/O error '
+          'within twice the bound', () async {
+        final executor =
+            await withWorkerPrelude(_hangsCreate(every: true), host.boot)
+                as WebExecutor;
+        addTearDown(executor.terminate);
+        executor.provoked = true;
+        final watched = _Watched(executor);
+        addTearDown(watched.close);
+
+        final lane = executor.beginLane() as WebLane;
+        final source = src(minimalPdf);
+        final clock = Stopwatch()..start();
+        final failed = await lane.submit(
+          LaneJob(
+            jobId: 1,
+            request: _open(source.length),
+            sources: [source],
+            sinks: const [],
+            keepSources: const {},
+          ),
+        );
+        clock.stop();
+        expect(
+          () => bin.decodeResponse(failed.bytes),
+          throwsA(
+            isA<PdfIoFailed>().having(
+              (e) => e.message,
+              'message',
+              allOf(
+                contains('createSyncAccessHandle'),
+                contains('did not answer'),
+              ),
+            ),
+          ),
+        );
+        printOnFailure('the job failed after ${clock.elapsedMilliseconds} ms');
+        // Two waits of the bound, one per file, and the job's own work.
+        expect(
+          clock.elapsed,
+          lessThan(kCreateHandleWait * 2 + const Duration(seconds: 1)),
+        );
+        expect(watched.seen.where(_is('hung')), hasLength(2));
+        expect(executor.retriedCreates, 1);
+
+        executor.js.postMessage(_msg('release', {}));
+        await _until(
+          () async => await _opfsFileCount(executor.opfsDir!) == 0,
+          'the abandoned files stayed after their creates answered',
+        );
+      }, timeout: t(20));
+
+      test('a reset stuck behind a pre-copy write names the call it waits '
+          'for', () async {
+        final executor =
+            await withWorkerPrelude(_hangsCreate(every: true), host.boot)
+                as WebExecutor;
+        addTearDown(executor.terminate);
+        executor.provoked = true;
+        final watched = _Watched(executor);
+        addTearDown(watched.close);
+
+        final lane = executor.beginLane() as WebLane;
+        final source = src(minimalPdf);
+        final running = lane.submit(
+          LaneJob(
+            jobId: 1,
+            request: _open(source.length),
+            sources: [source],
+            sinks: const [],
+            keepSources: const {},
+          ),
+        );
+        final hung = await watched.next(_is('hung'));
+        executor.js.postMessage(_msg('holdReset', {}));
+        lane.cancelJob(1);
+        expect((await running).bytes, buildCancelledResponse());
+        expect(await lane.drain(), isTrue);
+
+        unawaited(lane.reset().then((_) => 0, onError: (_) => 0));
+        expect(
+          lane.phase,
+          allOf(
+            contains('awaiting resetDone'),
+            contains(_str(hung, 'name')!),
+            contains('createSyncAccessHandle'),
+          ),
+        );
+
+        executor.js.postMessage(_msg('release', {}));
+        await _until(
+          () async => await _opfsFileCount(executor.opfsDir!) == 0,
+          'the abandoned files stayed after their creates answered',
+        );
+      }, timeout: t(20));
 
       test('a rejected lane directory is asked for again', () async {
         final raw = await _RawWorker.take(host, prelude: _rejectsDirOnce);

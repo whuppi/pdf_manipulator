@@ -71,6 +71,8 @@ import 'dart:typed_data';
 import 'package:web/web.dart' as web;
 import 'package:web/web.dart' show EventStreamProviders;
 
+import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart'
+    show WireErrorKind;
 import 'package:pdf_manipulator/src/runtime/lane.dart';
 import 'package:pdf_manipulator/src/runtime/web/protocol.dart';
 import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
@@ -215,6 +217,11 @@ class WebLane implements Lane, LanePhase {
   Completer<String?>? _opfsAck;
   ({int jobId, int offset})? _opfsAwaiting;
 
+  /// Every pre-copy write posted and not yet answered, by the write, with
+  /// its file: a cancelled job stops waiting for its write, the worker's
+  /// call behind it may still be out.
+  final Map<({int jobId, int offset}), String> _unanswered = {};
+
   /// The reset in flight; its answer is `resetDone` or an `error` that
   /// names no job.
   Completer<int?>? _reset;
@@ -240,7 +247,14 @@ class WebLane implements Lane, LanePhase {
     if (running != null) {
       return 'lease $_lease awaiting the post of job ${running.job.jobId}';
     }
-    if (_reset != null) return 'lease $_lease awaiting resetDone';
+    if (_reset != null) {
+      for (final MapEntry(key: write, value: file) in _unanswered.entries) {
+        final call = write.offset == 0 ? 'createSyncAccessHandle' : 'write';
+        return 'lease $_lease awaiting resetDone, behind the unanswered '
+            'opfsWrite of $file ($call)';
+      }
+      return 'lease $_lease awaiting resetDone';
+    }
     return 'lease $_lease awaiting nothing';
   }
 
@@ -392,6 +406,7 @@ class WebLane implements Lane, LanePhase {
     _opfsAck?.complete(null); // loop head re-checks _abandoned and exits
     _opfsAck = null;
     _opfsAwaiting = null;
+    _unanswered.clear();
     final resetting = _reset;
     _reset = null;
     if (resetting != null && !resetting.isCompleted) {
@@ -470,6 +485,14 @@ class WebLane implements Lane, LanePhase {
       entry.posted = true;
       _exec.js.postMessage(msg, [requestJs].toJS);
       // Completion arrives via _onMessage (result | error).
+    } on PdfIoFailed catch (e) {
+      _finish(
+        entry,
+        LaneSubmitResult(
+          buildErrorResponse(e.message, kind: WireErrorKind.io),
+          const {},
+        ),
+      );
     } catch (e) {
       _finish(
         entry,
@@ -558,6 +581,11 @@ class WebLane implements Lane, LanePhase {
         }
 
       case LaneMsg.opfsWriteAck:
+        _unanswered.remove((
+          jobId: _int(obj, LaneMsgFields.jobId) ?? -1,
+          offset: _int(obj, LaneMsgFields.writeOffset) ?? -1,
+        ));
+        if (obj[LaneMsgFields.retriedCreate] != null) _exec._retriedCreate();
         // Only the ack of the write being waited for completes it; a late
         // one of a cancelled job's write names another job or offset.
         final waiting = _opfsAwaiting;
@@ -568,6 +596,13 @@ class WebLane implements Lane, LanePhase {
         }
 
       case LaneMsg.resetDone:
+        _exec._setAsideNow([
+          for (final name
+              in (obj[LaneMsgFields.abandonedFiles] as JSArray<JSString>?)
+                      ?.toDart ??
+                  const <JSString>[])
+            name.toDart,
+        ]);
         _reset?.complete(mem);
 
       case LaneMsg.result:
@@ -824,6 +859,7 @@ class WebLane implements Lane, LanePhase {
         final ack = Completer<String?>();
         _opfsAck = ack;
         _opfsAwaiting = (jobId: entry.job.jobId, offset: offset);
+        _unanswered[_opfsAwaiting!] = name;
         final owned = Uint8List.fromList(chunk);
         final js = owned.buffer.toJS;
         _postRaw(

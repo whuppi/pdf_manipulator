@@ -172,7 +172,27 @@ abstract final class LaneMsgFields {
   /// engine's heap held since the last reset, the figure an executor is kept
   /// or retired by.
   static const peakBytes = 'peak';
+
+  /// Worker → Dart, on `resetDone`: the names of the pre-copy files the
+  /// worker set aside because the browser never answered their handle
+  /// creation, and has not removed yet. A file leaves the list when its
+  /// pending call settles.
+  static const abandonedFiles = 'abandoned';
+
+  /// Worker → Dart, on `opfsWriteAck`: present when the write had to create
+  /// its handle a second time because the first call passed
+  /// [kCreateHandleWait] unanswered.
+  static const retriedCreate = 'retried';
 }
+
+/// How long `createSyncAccessHandle` may stay unanswered before the worker
+/// sets its file aside and creates the handle on a fresh file once more.
+/// The slowest create in the OPFS runner, with `stress-ng --cpu 2` running,
+/// measured 40.8 ms over 12330 creates on a desktop CPU. The bound only has
+/// to tell "never answers" (a Chrome fault) from slow, and a slow phone with
+/// busy storage must never fail a healthy job, so it is about a hundred times
+/// that: a job the fault hits fails after twice this, never hangs.
+const kCreateHandleWait = Duration(seconds: 5);
 
 /// The protocol object injected into the worker's init message.
 /// Keys are stable API for lane_worker.js.
@@ -186,4 +206,5 @@ Map<String, int> laneProtocolCodes() => {
   'sabHeaderBytes': SabLayout.headerBytes,
   'sabLengthOffset': SabLayout.lengthOffset,
   'sabMaxChunk': SabLayout.maxChunk,
+  'createHandleWaitMs': kCreateHandleWait.inMilliseconds,
 };

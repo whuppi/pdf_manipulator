@@ -18,6 +18,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart';
+
 /// Reads the op name from request bytes. Returns null on malformed
 /// input — the engine owns parse errors, peeks never throw.
 String? peekRequestOp(Uint8List request) {
@@ -183,14 +185,18 @@ int? _valueLength(Uint8List bytes, int pos, int type) {
 Uint8List buildCancelledResponse() => Uint8List.fromList(const [2]);
 
 /// Builds an error response carrying [message] — used by lanes for
-/// transport-layer failures (worker init failed, pre-copy failed).
-/// Layout matches `ResponseWriter::error_kind` for kind Engine (0):
-/// `[0][kind 0][field_count 1 LE][message field]`.
-Uint8List buildErrorResponse(String message) {
+/// transport-layer failures (worker init failed, pre-copy failed). [kind]
+/// is the error the caller decodes it as.
+/// Layout matches `ResponseWriter::error_kind`:
+/// `[0][kind][field_count 1 LE][message field]`.
+Uint8List buildErrorResponse(
+  String message, {
+  WireErrorKind kind = WireErrorKind.engine,
+}) {
   final msg = utf8.encode(message);
   final out = BytesBuilder(copy: false)
     ..addByte(0)
-    ..addByte(0) // kind = Engine
+    ..addByte(kind.code)
     ..add(const [1, 0]) // field_count = 1 LE
     ..addByte('message'.length)
     ..add(utf8.encode('message'))

@@ -192,6 +192,25 @@ class WebLaneHost implements LaneHost {
   }
 
   static final List<String> _abandonedDirs = [];
+  static final Map<String, List<String>> _setAsideFiles = {};
+  static int _retriedCreates = 0;
+
+  /// Pre-copy files that live workers set aside because the browser never
+  /// answered the creation of their handle, and have not removed yet, as the
+  /// last reset of each worker reported them (`worker directory/file`). A
+  /// file leaves with its pending call. Tests assert it is empty; nothing
+  /// decides on it. Workers a test marked [WebExecutor.provoked] are not in
+  /// it.
+  static List<String> get abandonedFiles => List.unmodifiable([
+    for (final MapEntry(:key, :value) in _setAsideFiles.entries)
+      for (final name in value) '$key/$name',
+  ]);
+
+  /// Pre-copy writes since the process started that created their handle a
+  /// second time because the first call passed [kCreateHandleWait]
+  /// unanswered. Tests assert it is zero; nothing decides on it. Workers a
+  /// test marked [WebExecutor.provoked] are not counted.
+  static int get retriedCreates => _retriedCreates;
 
   /// Directories of dead workers that [_deleteDeadWorkerDir] gave up on,
   /// by name: each one stays on disk until the next session's sweep. Tests
@@ -433,6 +452,35 @@ class WebExecutor implements Executor {
   bool _dead = false;
   bool _terminated = false;
 
+  /// Set by a test that makes the browser's handle creation hang on purpose:
+  /// this worker's set-aside files and retried creates are kept here and
+  /// stay out of [WebLaneHost.abandonedFiles] and
+  /// [WebLaneHost.retriedCreates], which judge the runs that did not.
+  bool provoked = false;
+
+  /// The files this worker reported set aside at its last reset.
+  List<String> get setAsideFiles => List.unmodifiable(_setAside);
+  List<String> _setAside = const [];
+
+  /// How many creates of this worker were retried.
+  int get retriedCreates => _retriedCreates;
+  int _retriedCreates = 0;
+
+  void _retriedCreate() {
+    _retriedCreates++;
+    if (!provoked) WebLaneHost._retriedCreates++;
+  }
+
+  void _setAsideNow(List<String> names) {
+    _setAside = names;
+    if (_terminated || provoked) return;
+    if (names.isEmpty) {
+      WebLaneHost._setAsideFiles.remove(opfsDir ?? lockName);
+    } else {
+      WebLaneHost._setAsideFiles[opfsDir ?? lockName] = names;
+    }
+  }
+
   @override
   int get heapBytes => _heapBytes;
 
@@ -460,6 +508,7 @@ class WebExecutor implements Executor {
   void terminate() {
     if (_terminated) return;
     _terminated = true;
+    WebLaneHost._setAsideFiles.remove(opfsDir ?? lockName);
     // Browser kill: frees the worker, its WASM heap, and every open
     // SyncAccessHandle in one stroke. Nothing can call back after.
     unawaited(_sub?.cancel());

@@ -42,7 +42,9 @@
 //                  worker, same wasm instance. Refused while busy.
 //                  (peak: the most bytes the engine's heap held since the
 //                   last reset, which the host keeps an executor by; mem:
-//                   the linear memory's size, a diagnostic that never falls)
+//                   the linear memory's size, a diagnostic that never falls;
+//                   abandoned: the pre-copy files set aside because their
+//                   handle creation never answered, not removed yet)
 //   readAtResult { lease, bytes? , error?, cancelled? }    (JSPI reads)
 //   chunkAck     { lease, error?, cancelled? }             (JSPI writes)
 //   releaseHeld  { lease, heldGroupId }
@@ -53,8 +55,9 @@
 // worker → Dart:
 //   ready | readAt { lease, sourceIndex, offset, count } | chunk { lease,
 //   sinkIndex, data } | result | error | resetDone | opfsWriteAck { lease,
-//   jobId, offset, error? } (jobId and offset echo the opfsWrite it answers,
-//   so a late ack cannot complete the write of another job)
+//   jobId, offset, error?, retried? } (jobId and offset echo the opfsWrite it
+//   answers, so a late ack cannot complete the write of another job; retried:
+//   the handle had to be created a second time)
 //
 // ── Three I/O modes (selected by Dart, passed in init) ─────────────
 //   jspi    — JSPI Promise suspension (host_read_at returns Promise)
@@ -127,6 +130,8 @@ function refuseBusy(msg, what) {
 }
 
 // Housekeeping handlers that await OPFS; a reset waits for them to settle.
+// A pre-copy write is none of them: it can wait on a browser call that never
+// answers, and a reset must not wait for that.
 const housekeeping = new Set();
 
 function track(promise) {
@@ -440,42 +445,111 @@ function laneDir() {
 // and opened again is refused while the browser still releases the first.
 const opfsWriteHandles = new Map();
 const jobFiles = new Map();          // jobId → Set(filename), pre-exec owner
-const jobWrites = new Map();         // jobId → Set(promise), opfsWrites in flight
 
+// createSyncAccessHandle on a fresh file sometimes returns a promise that never
+// settles while the thread runs on. Nothing may wait for such a call but the
+// write that made it: the file is set aside, and the call's own continuation
+// closes the handle and removes the file if it ever settles.
+const opening = new Map();           // file name → { jobId, call, created, began }, no handle yet
+const abandonedFiles = new Map();    // file name → jobId, set aside until its call settles
+const physicalNames = new Map();     // pre-copy name → file name, once a retry renamed it
+const TIMED_OUT = Symbol('timed out');
+
+function startOpen(jobId, name) {
+  const open = { jobId, call: 'getFileHandle', created: null, began: null, cleanup: null };
+  let begin;
+  open.began = new Promise((resolve) => { begin = resolve; });
+  open.created = (async () => {
+    const dir = await laneDir();
+    const fh = await dir.getFileHandle(name, { create: true });
+    open.call = 'createSyncAccessHandle';
+    begin();
+    return fh.createSyncAccessHandle();
+  })();
+  opening.set(name, open);
+  return open;
+}
+
+function setAside(name) {
+  const open = opening.get(name);
+  opening.delete(name);
+  abandonedFiles.set(name, open.jobId);
+  open.cleanup = finishAbandoned(name, open.created);
+}
+
+async function finishAbandoned(name, created) {
+  try { (await created).close(); } catch (_) {}
+  try { await (await laneDir()).removeEntry(name); } catch (_) {}
+  abandonedFiles.delete(name);
+}
+
+// The handle of a fresh pre-copy file. The create is given kCreateHandleWait
+// to answer; past it the file is set aside and the write tries once more on a
+// fresh file. Null when the job was dropped meanwhile.
+async function openHandle(jobId, filename) {
+  let retried = false;
+  for (let attempt = 0; ; attempt++) {
+    const name = attempt === 0 ? filename : filename + '_retry';
+    physicalNames.set(filename, name);
+    const open = startOpen(jobId, name);
+    let timer;
+    const late = open.began.then(() => new Promise((resolve) => {
+      timer = setTimeout(resolve, P.createHandleWaitMs, TIMED_OUT);
+    }));
+    let sh;
+    try {
+      sh = await Promise.race([open.created, late]);
+    } catch (err) {
+      if (opening.get(name) === open) opening.delete(name); else await open.cleanup;
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+    if (sh === TIMED_OUT) {
+      if (opening.get(name) !== open) return { sh: null, retried };
+      setAside(name);
+      if (attempt > 0) {
+        const err = new Error(
+          'createSyncAccessHandle did not answer for ' + P.createHandleWaitMs + ' ms, twice, on ' +
+          filename + ' and ' + name);
+        err.retried = true;
+        throw err;
+      }
+      retried = true;
+      continue;
+    }
+    if (opening.get(name) !== open) { await open.cleanup; return { sh: null, retried }; }
+    opening.delete(name);
+    opfsWriteHandles.set(filename, sh);
+    return { sh, retried };
+  }
+}
+
+// Resolves with whether the handle was created twice.
 async function opfsWrite(jobId, filename, chunk, offset, last) {
   let files = jobFiles.get(jobId);
   if (!files) { files = new Set(); jobFiles.set(jobId, files); }
   files.add(filename); // registered before the first byte hits disk
 
   let sh = opfsWriteHandles.get(filename);
+  let retried = false;
   if (!sh) {
-    const dir = await laneDir();
-    const fh = await dir.getFileHandle(filename, { create: true });
-    sh = await fh.createSyncAccessHandle();
-    opfsWriteHandles.set(filename, sh);
+    ({ sh, retried } = await openHandle(jobId, filename));
+    if (!sh) return retried;
   }
   sh.write(new Uint8Array(chunk), { at: offset });
   if (last) sh.flush();
-}
-
-function inFlight(jobId, write) {
-  let writes = jobWrites.get(jobId);
-  if (!writes) { writes = new Set(); jobWrites.set(jobId, writes); }
-  writes.add(write);
-  write.finally(() => {
-    writes.delete(write);
-    if (writes.size === 0 && jobWrites.get(jobId) === writes) jobWrites.delete(jobId);
-  }).catch(() => {});
-  return write;
+  return retried;
 }
 
 // A job is over: delete every file it still owns. Files that exec
 // transferred to readers are no longer here — they die with their
-// reader (dropReader). Idempotent; an empty set is a no-op.
+// reader (dropReader). Idempotent; an empty set is a no-op. A file whose
+// handle is still being created is set aside, never waited for.
 async function opfsDrop(jobId) {
-  // A write still creating its handle would lose the race with the delete
-  // below, and the browser refuses it (NoModificationAllowedError).
-  await Promise.allSettled([...(jobWrites.get(jobId) ?? [])]);
+  for (const [name, open] of opening) {
+    if (open.jobId === jobId) setAside(name);
+  }
   const files = jobFiles.get(jobId);
   jobFiles.delete(jobId);
   if (!files) return;
@@ -483,17 +557,23 @@ async function opfsDrop(jobId) {
   for (const f of files) {
     const sh = opfsWriteHandles.get(f);
     if (sh) { try { sh.close(); } catch (_) {} opfsWriteHandles.delete(f); }
-    try { await dir.removeEntry(f); } catch (_) {}
+    const name = physicalNames.get(f) ?? f;
+    physicalNames.delete(f);
+    if (abandonedFiles.has(name)) continue;
+    try { await dir.removeEntry(name); } catch (_) {}
   }
 }
 
-// Deletes every file in this worker's own directory. Every handle on one
-// is closed first, so no reaping is pending and nothing needs retrying.
+// Deletes every file in this worker's own directory but those set aside,
+// which their pending call removes. Every other handle is closed first, so no
+// reaping is pending and nothing needs retrying.
 async function emptyLaneDir() {
   const dir = await laneDir();
   const names = [];
   for await (const name of dir.keys()) names.push(name);
-  for (const name of names) await dir.removeEntry(name);
+  for (const name of names) {
+    if (!abandonedFiles.has(name)) await dir.removeEntry(name);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -503,10 +583,12 @@ async function emptyLaneDir() {
 // Drops every document, held reader and job file, and builds a new
 // LaneState. The wasm instance stays: its heap does not shrink here.
 async function resetLane() {
+  for (const name of [...opening.keys()]) setAside(name);
   await Promise.allSettled([...housekeeping]);
   for (const [id, r] of [...readers]) await dropReader(id, r);
   for (const sh of opfsWriteHandles.values()) { try { sh.close(); } catch (_) {} }
   opfsWriteHandles.clear();
+  physicalNames.clear();
   jobFiles.clear();
   if (opfsDirParts) await emptyLaneDir();
   jspiReadResolve = null;
@@ -565,15 +647,18 @@ async function exec(msg) {
     let handle = null;
     let length = sourceLengths[i];
     const file = (opfsFiles && opfsFiles[i]) || null;
+    let onDisk = file;
     if (file) {
       handle = opfsWriteHandles.get(file);
       if (!handle) throw new Error('pre-copy file ' + file + ' was not written');
       opfsWriteHandles.delete(file);
+      onDisk = physicalNames.get(file) ?? file;
+      physicalNames.delete(file);
       length = handle.getSize();
       jobFiles.get(jobId)?.delete(file);
     }
     const id = nextReaderId++;
-    readers.set(id, { length, opfsHandle: handle, opfsFile: file, heldGroupId: null });
+    readers.set(id, { length, opfsHandle: handle, opfsFile: onDisk, heldGroupId: null });
     readerIds.push(id);
     finalLengths.push(length);
   }
@@ -681,11 +766,13 @@ self.onmessage = async (e) => {
 
     case 'opfsWrite': {
       if (!admit(msg)) { refuseLease(msg, 'opfsWrite'); return; }
+      // The ack carries the lease of its write: one set aside answers late,
+      // when another tenure may be waiting for a write of the same job and offset.
       try {
-        await track(inFlight(msg.jobId, opfsWrite(msg.jobId, msg.filename, msg.chunk, msg.offset, msg.last)));
-        self.postMessage({ type: 'opfsWriteAck', lease, jobId: msg.jobId, offset: msg.offset });
+        const retried = await opfsWrite(msg.jobId, msg.filename, msg.chunk, msg.offset, msg.last);
+        self.postMessage({ type: 'opfsWriteAck', lease: msg.lease, jobId: msg.jobId, offset: msg.offset, retried: retried || undefined });
       } catch (err) {
-        self.postMessage({ type: 'opfsWriteAck', lease, jobId: msg.jobId, offset: msg.offset, error: err.message || String(err) });
+        self.postMessage({ type: 'opfsWriteAck', lease: msg.lease, jobId: msg.jobId, offset: msg.offset, error: err.message || String(err), retried: err.retried || undefined });
       }
       return;
     }
@@ -696,7 +783,7 @@ self.onmessage = async (e) => {
       busy = 'reset';
       try {
         await resetLane();
-        self.postMessage({ type: 'resetDone', lease, mem: wasm.memory.buffer.byteLength, peak: heapPeak() });
+        self.postMessage({ type: 'resetDone', lease, mem: wasm.memory.buffer.byteLength, peak: heapPeak(), abandoned: [...abandonedFiles.keys()] });
       } catch (err) {
         self.postMessage({ type: 'error', lease, message: 'reset failed: ' + (err.message || String(err)) });
       } finally {
