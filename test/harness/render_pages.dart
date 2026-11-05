@@ -9,7 +9,7 @@ import 'package:pdf_manipulator/pdf_manipulator.dart';
 /// A page rendered to memory: its pixel size and the bytes its sink got.
 typedef RenderedBytes = ({int width, int height, Uint8List data});
 
-/// Renders [pages] of [reads] (a `PdfDoc` or a one-shot) into MemorySinks and
+/// Renders [pages] of [reads] (a `PdfDocument` or a one-shot) into MemorySinks and
 /// returns one [RenderedBytes] per page, in page order.
 Future<List<RenderedBytes>> renderToMemory(
   PdfReads reads, {

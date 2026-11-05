@@ -17,10 +17,10 @@ void registerLifecycleTests(Pdf Function() createPdf) {
     test('open garbage bytes throws the typed engine error', () async {
       final pdf = createPdf();
       await expectLater(
-        pdf.open(TestSource(Uint8List.fromList([1, 2, 3, 4]))),
+        pdf.open(PdfInput(TestSource(Uint8List.fromList([1, 2, 3, 4])))),
         throwsA(isA<PdfCorrupted>()),
         reason:
-            'engine failures are PdfError — never PdfDisposed, which is '
+            'engine failures are PdfError — never StateError, which is '
             'reserved for use-after-dispose',
       );
       await pdf.dispose();
@@ -29,7 +29,7 @@ void registerLifecycleTests(Pdf Function() createPdf) {
     test('open empty bytes throws PdfCorrupted', () async {
       final pdf = createPdf();
       await expectLater(
-        pdf.open(TestSource(Uint8List(0))),
+        pdf.open(PdfInput(TestSource(Uint8List(0)))),
         throwsA(isA<PdfCorrupted>()),
         reason: 'an empty file reaches the parser and fails its header check',
       );
@@ -42,8 +42,8 @@ void registerLifecycleTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       await expectLater(
         pdf.merge([
-          TestSource(Uint8List(0)),
-          TestSource(minimalPdf),
+          PdfInput(TestSource(Uint8List(0))),
+          PdfInput(TestSource(minimalPdf)),
         ], TestSink()),
         throwsA(isA<PdfCorrupted>()),
       );
@@ -53,10 +53,10 @@ void registerLifecycleTests(Pdf Function() createPdf) {
     test('recover after error — next op works', () async {
       final pdf = createPdf();
       try {
-        await pdf.open(TestSource(Uint8List.fromList([0xFF, 0xFE])));
+        await pdf.open(PdfInput(TestSource(Uint8List.fromList([0xFF, 0xFE]))));
       } catch (_) {}
 
-      final doc = await pdf.open(TestSource(recoverProbePdf));
+      final doc = await pdf.open(PdfInput(TestSource(recoverProbePdf)));
       expect(doc.pageCount, 1);
       await doc.dispose();
       await pdf.dispose();
@@ -66,12 +66,12 @@ void registerLifecycleTests(Pdf Function() createPdf) {
 
     test('instance dispose actually disposes — later ops refuse', () async {
       final pdf = createPdf();
-      final doc = await pdf.open(src(minimalPdf));
+      final doc = await pdf.open(PdfInput(src(minimalPdf)));
       expect(doc.pageCount, 1);
       await pdf.dispose();
       expect(
-        () => pdf.open(src(minimalPdf)),
-        throwsA(isA<PdfDisposed>()),
+        () => pdf.open(PdfInput(src(minimalPdf))),
+        throwsA(isA<StateError>()),
         reason:
             'dispose must leave the instance provably dead, '
             'not just return without error',
@@ -82,18 +82,24 @@ void registerLifecycleTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       await pdf.dispose();
       await pdf.dispose();
-      expect(() => pdf.open(src(minimalPdf)), throwsA(isA<PdfDisposed>()));
+      expect(
+        () => pdf.open(PdfInput(src(minimalPdf))),
+        throwsA(isA<StateError>()),
+      );
     }, timeout: t(1));
 
     test('operations after instance dispose throw', () async {
       final pdf = createPdf();
       await pdf.dispose();
-      expect(() => pdf.open(src(minimalPdf)), throwsA(isA<PdfDisposed>()));
+      expect(
+        () => pdf.open(PdfInput(src(minimalPdf))),
+        throwsA(isA<StateError>()),
+      );
     }, timeout: t(1));
 
     test('instance dispose returns quickly', () async {
       final pdf = createPdf();
-      await pdf.open(src(minimalPdf));
+      await pdf.open(PdfInput(src(minimalPdf)));
       final sw = Stopwatch()..start();
       await pdf.dispose();
       sw.stop();
@@ -104,15 +110,15 @@ void registerLifecycleTests(Pdf Function() createPdf) {
 
     test('doc dispose kills the doc, not the instance', () async {
       final pdf = createPdf();
-      final doc = await pdf.open(src(minimalPdf));
+      final doc = await pdf.open(PdfInput(src(minimalPdf)));
       expect(doc.pageCount, 1);
       await doc.dispose();
       expect(
         () => doc.extractText(MemorySink()),
-        throwsA(isA<PdfDisposed>()),
+        throwsA(isA<StateError>()),
         reason: 'a disposed doc refuses ops',
       );
-      final doc2 = await pdf.open(src(minimalPdf));
+      final doc2 = await pdf.open(PdfInput(src(minimalPdf)));
       expect(doc2.pageCount, 1, reason: 'the instance survives a doc dispose');
       await doc2.dispose();
       await pdf.dispose();
@@ -120,10 +126,10 @@ void registerLifecycleTests(Pdf Function() createPdf) {
 
     test('doc double dispose is safe and stays disposed', () async {
       final pdf = createPdf();
-      final doc = await pdf.open(src(minimalPdf));
+      final doc = await pdf.open(PdfInput(src(minimalPdf)));
       await doc.dispose();
       await doc.dispose();
-      expect(() => doc.extractText(MemorySink()), throwsA(isA<PdfDisposed>()));
+      expect(() => doc.extractText(MemorySink()), throwsA(isA<StateError>()));
       await pdf.dispose();
     }, timeout: t(1));
 
@@ -131,7 +137,7 @@ void registerLifecycleTests(Pdf Function() createPdf) {
 
     test('edit then dispose on a plain source', () async {
       final pdf = createPdf();
-      final editor = await pdf.edit(src(minimalPdf));
+      final editor = await pdf.edit(PdfInput(src(minimalPdf)));
       expect(await editor.pageCount(), 1);
       await editor.dispose();
       await editor.dispose();
@@ -140,12 +146,12 @@ void registerLifecycleTests(Pdf Function() createPdf) {
 
     test('edit then dispose on an encrypted source', () async {
       final pdf = createPdf();
-      final encryptor = await pdf.edit(src(minimalPdf));
+      final encryptor = await pdf.edit(PdfInput(src(minimalPdf)));
       final encSink = TestSink();
       await encryptor.save(
         encSink,
-        options: const PdfSaveOptions.fullRewrite(
-          encryption: PdfEncryption.config(
+        save: const PdfSave.full(
+          encryption: PdfEncryption.password(
             ownerPassword: 'pw',
             userPassword: 'pw',
           ),
@@ -154,11 +160,11 @@ void registerLifecycleTests(Pdf Function() createPdf) {
       await encryptor.dispose();
       final encrypted = encSink.takeBytes();
 
-      final doc = await pdf.open(src(encrypted), password: 'pw');
+      final doc = await pdf.open(PdfInput(src(encrypted), password: 'pw'));
       expect(doc.encryption, isNotNull);
       await doc.dispose();
 
-      final editor = await pdf.edit(src(encrypted), password: 'pw');
+      final editor = await pdf.edit(PdfInput(src(encrypted), password: 'pw'));
       expect(await editor.pageCount(), 1);
       await editor.dispose();
       await editor.dispose();
@@ -169,14 +175,14 @@ void registerLifecycleTests(Pdf Function() createPdf) {
 
     group('save keeps the source encryption', () {
       const printOnly = PdfPermissions(
-        print: true,
-        printHq: false,
-        modify: false,
-        copy: false,
-        annotate: false,
-        fillForms: false,
-        accessibility: false,
-        assemble: false,
+        canPrint: true,
+        canPrintHighQuality: false,
+        canModify: false,
+        canCopy: false,
+        canAnnotate: false,
+        canFillForms: false,
+        canExtractForAccessibility: false,
+        canAssemble: false,
       );
 
       Future<Uint8List> encrypted(
@@ -185,10 +191,10 @@ void registerLifecycleTests(Pdf Function() createPdf) {
       ) async {
         final sink = TestSink();
         await pdf.resave(
-          src(minimalPdf),
+          PdfInput(src(minimalPdf)),
           sink,
-          options: PdfSaveOptions.fullRewrite(
-            encryption: PdfEncryption.config(
+          save: PdfSave.full(
+            encryption: PdfEncryption.password(
               ownerPassword: 'owner-pw',
               userPassword: 'user-pw',
               algorithm: algorithm,
@@ -200,7 +206,9 @@ void registerLifecycleTests(Pdf Function() createPdf) {
       }
 
       Future<Uint8List> keepSave(Pdf pdf, Uint8List source) async {
-        final editor = await pdf.edit(src(source), password: 'user-pw');
+        final editor = await pdf.edit(
+          PdfInput(src(source), password: 'user-pw'),
+        );
         await editor.setMetadata(
           (await editor.metadata()).copyWith(title: 'kept'),
         );
@@ -222,9 +230,9 @@ void registerLifecycleTests(Pdf Function() createPdf) {
       }
 
       for (final algorithm in [
-        PdfEncryptionAlgorithm.aes256,
-        PdfEncryptionAlgorithm.aes128,
-        PdfEncryptionAlgorithm.rc4_128,
+        PdfEncryptionAlgorithm.aesKey256,
+        PdfEncryptionAlgorithm.aesKey128,
+        PdfEncryptionAlgorithm.rc4Key128,
       ]) {
         test(
           '${algorithm.name}: owner, user and permissions survive',
@@ -233,25 +241,31 @@ void registerLifecycleTests(Pdf Function() createPdf) {
             final source = await encrypted(pdf, algorithm);
             final out = await keepSave(pdf, source);
 
-            final asUser = await pdf.open(src(out), password: 'user-pw');
+            final asUser = await pdf.open(
+              PdfInput(src(out), password: 'user-pw'),
+            );
             expect(asUser.encryption, isNotNull);
             expect(asUser.metadata.title, 'kept');
-            final original = await pdf.open(src(source), password: 'user-pw');
+            final original = await pdf.open(
+              PdfInput(src(source), password: 'user-pw'),
+            );
             expect(
-              asUser.encryption?.permissions.toBits(),
-              original.encryption?.permissions.toBits(),
+              asUser.encryption?.permissions.bits,
+              original.encryption?.permissions.bits,
               reason: 'the permissions read back are the source\'s',
             );
             await original.dispose();
             await asUser.dispose();
 
-            final asOwner = await pdf.open(src(out), password: 'owner-pw');
+            final asOwner = await pdf.open(
+              PdfInput(src(out), password: 'owner-pw'),
+            );
             expect(asOwner.metadata.title, 'kept');
             await asOwner.dispose();
 
             expect(
               entry(out, r'/P\s*(-?\d+)'),
-              printOnly.toBits().toString(),
+              printOnly.bits.toString(),
               reason: '/P is the print-only permission word',
             );
             for (final key in ['O', 'U']) {
@@ -272,17 +286,17 @@ void registerLifecycleTests(Pdf Function() createPdf) {
 
       test('remove opens with no password', () async {
         final pdf = createPdf();
-        final source = await encrypted(pdf, PdfEncryptionAlgorithm.aes256);
-        final editor = await pdf.edit(src(source), password: 'user-pw');
+        final source = await encrypted(pdf, PdfEncryptionAlgorithm.aesKey256);
+        final editor = await pdf.edit(
+          PdfInput(src(source), password: 'user-pw'),
+        );
         final sink = TestSink();
         await editor.save(
           sink,
-          options: const PdfSaveOptions.fullRewrite(
-            encryption: PdfEncryption.remove(),
-          ),
+          save: const PdfSave.full(encryption: PdfEncryption.remove()),
         );
         await editor.dispose();
-        final doc = await pdf.open(src(sink.takeBytes()));
+        final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
         expect(doc.encryption, isNull);
         await doc.dispose();
         await pdf.dispose();
@@ -290,13 +304,15 @@ void registerLifecycleTests(Pdf Function() createPdf) {
 
       test('an explicit config replaces the passwords', () async {
         final pdf = createPdf();
-        final source = await encrypted(pdf, PdfEncryptionAlgorithm.aes256);
-        final editor = await pdf.edit(src(source), password: 'user-pw');
+        final source = await encrypted(pdf, PdfEncryptionAlgorithm.aesKey256);
+        final editor = await pdf.edit(
+          PdfInput(src(source), password: 'user-pw'),
+        );
         final sink = TestSink();
         await editor.save(
           sink,
-          options: const PdfSaveOptions.fullRewrite(
-            encryption: PdfEncryption.config(
+          save: const PdfSave.full(
+            encryption: PdfEncryption.password(
               ownerPassword: 'new-owner',
               userPassword: 'new-user',
             ),
@@ -305,12 +321,12 @@ void registerLifecycleTests(Pdf Function() createPdf) {
         await editor.dispose();
         final out = sink.takeBytes();
 
-        final doc = await pdf.open(src(out), password: 'new-user');
+        final doc = await pdf.open(PdfInput(src(out), password: 'new-user'));
         expect(doc.encryption, isNotNull);
         await doc.dispose();
         for (final old in ['user-pw', 'owner-pw']) {
           await expectLater(
-            pdf.open(src(out), password: old),
+            pdf.open(PdfInput(src(out), password: old)),
             throwsA(isA<PdfWrongPassword>()),
             reason: 'the old $old must not open the new file',
           );

@@ -123,7 +123,7 @@ void registerWebPlatformTests({
       // for assets at the default path, which this test server does
       // not serve — boot would fail.
       final bare = Pdf();
-      final doc = await bare.open(src(minimalPdf));
+      final doc = await bare.open(PdfInput(src(minimalPdf)));
       expect(doc.pageCount, 1);
       expect(
         bare.ioMode,
@@ -139,12 +139,12 @@ void registerWebPlatformTests({
       () async {
         final broken = Pdf(
           config: PdfConfig(
-            webLaneWorkerUrl: '${workerUrl()}.does-not-exist.js',
+            webWorkerUrl: '${workerUrl()}.does-not-exist.js',
             webIoMode: mode,
           ),
         );
         await expectLater(
-          broken.open(src(minimalPdf)),
+          broken.open(PdfInput(src(minimalPdf))),
           throwsA(isA<Object>()),
           reason:
               'a misconfigured deployment must produce an error, '
@@ -155,9 +155,9 @@ void registerWebPlatformTests({
         // The broken URL also poisoned the page-level inheritance
         // cache — a configured instance must restore it, and work.
         final restored = Pdf(
-          config: PdfConfig(webLaneWorkerUrl: workerUrl(), webIoMode: mode),
+          config: PdfConfig(webWorkerUrl: workerUrl(), webIoMode: mode),
         );
-        final doc = await restored.open(src(minimalPdf));
+        final doc = await restored.open(PdfInput(src(minimalPdf)));
         expect(doc.pageCount, 1);
         await doc.dispose();
         await restored.dispose();
@@ -180,21 +180,17 @@ void registerWebPlatformTests({
         final url = 'http://localhost:$port/web_assets/lane_worker.js';
 
         final flaky = Pdf(
-          config: PdfConfig(
-            webLaneWorkerUrl: url,
-            webIoMode: mode,
-            maxLanes: 1,
-          ),
+          config: PdfConfig(webWorkerUrl: url, webIoMode: mode, concurrency: 1),
         );
         await expectLater(
-          flaky.open(src(minimalPdf)),
+          flaky.open(PdfInput(src(minimalPdf))),
           throwsA(isA<Object>()),
           reason: 'the worker script is unreachable',
         );
 
         channel.sink.add('ok');
         await events.moveNext();
-        final doc = await flaky.open(src(minimalPdf));
+        final doc = await flaky.open(PdfInput(src(minimalPdf)));
         expect(doc.pageCount, 1, reason: 'the same Pdf boots again and works');
         await doc.dispose();
         await flaky.dispose();
@@ -203,9 +199,9 @@ void registerWebPlatformTests({
         // The failed boot left the page-level inheritance pointing at the
         // flaky server; point it back at the suite's.
         final restored = Pdf(
-          config: PdfConfig(webLaneWorkerUrl: workerUrl(), webIoMode: mode),
+          config: PdfConfig(webWorkerUrl: workerUrl(), webIoMode: mode),
         );
-        await (await restored.open(src(minimalPdf))).dispose();
+        await (await restored.open(PdfInput(src(minimalPdf)))).dispose();
         await restored.dispose();
       },
       timeout: t(3),
@@ -216,15 +212,18 @@ void registerWebPlatformTests({
       () async {
         final pdf = Pdf(
           config: PdfConfig(
-            webLaneWorkerUrl: workerUrl(),
+            webWorkerUrl: workerUrl(),
             webIoMode: mode,
-            maxLanes: 1,
+            concurrency: 1,
           ),
         );
         final started = Completer<void>();
         final release = Completer<void>();
         final sink = _BlockedSink(started, release.future);
-        final task = pdf.merge([src(minimalPdf), src(minimalPdf)], sink);
+        final task = pdf.merge([
+          PdfInput(src(minimalPdf)),
+          PdfInput(src(minimalPdf)),
+        ], sink);
         await started.future; // the worker is suspended inside the write
         final clock = Stopwatch()..start();
         task.cancel();
@@ -306,19 +305,19 @@ void registerWebPlatformTests({
         await disposeSharedInstance();
 
         final pdf = Pdf(
-          config: PdfConfig(webLaneWorkerUrl: workerUrl(), webIoMode: mode),
+          config: PdfConfig(webWorkerUrl: workerUrl(), webIoMode: mode),
         );
 
         // Exercise the leak-prone paths once more, deliberately:
         // a held source (open + dispose) and a mid-flight kill.
-        final doc = await pdf.open(src(minimalPdf));
+        final doc = await pdf.open(PdfInput(src(minimalPdf)));
         await doc.dispose();
         final victim = Pdf(
-          config: PdfConfig(webLaneWorkerUrl: workerUrl(), webIoMode: mode),
+          config: PdfConfig(webWorkerUrl: workerUrl(), webIoMode: mode),
         );
         final inflight = victim.merge([
-          src(minimalPdf),
-          src(minimalPdf),
+          PdfInput(src(minimalPdf)),
+          PdfInput(src(minimalPdf)),
         ], TestSink());
         await victim.dispose();
         try {

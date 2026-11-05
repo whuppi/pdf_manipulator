@@ -12,14 +12,14 @@ import 'test_source_sink.dart';
 /// rewrite. Garbage collection is off so an object [pdf] holds but nothing
 /// reaches still shows.
 Future<Uint8List> plainBytes(Pdf pdf, Uint8List bytes) async {
-  final editor = await pdf.edit(src(bytes));
+  final editor = await pdf.edit(PdfInput(src(bytes)));
   final sink = TestSink();
   await editor.save(
     sink,
-    options: const PdfSaveOptions.fullRewrite(
-      deflate: false,
+    save: const PdfSave.full(
+      deflate: PdfDeflate.none,
       garbageCollect: false,
-      objectStreams: false,
+      useObjectStreams: false,
     ),
   );
   await editor.dispose();

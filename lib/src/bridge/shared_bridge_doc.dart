@@ -39,12 +39,12 @@ class _SharedDocHandle extends BridgeDocHandle {
   @override
   Map<String, Object?> get openResult => _openResult;
 
-  /// The pages a read names; every page when [pages] is null.
-  List<int> _pageList(PdfPages? pages) =>
+  /// The pages a read names.
+  List<int> _pageList(PdfPages pages) =>
       codec.resolvePageIndices(pages, _pageCount);
 
   @override
-  PdfTask<List<PdfPageInfo>> pageInfo({PdfPages? pages}) => _exec(
+  PdfTask<List<PdfPageInfo>> pageInfo({required PdfPages pages}) => _exec(
     EngineOp.pageInfo,
     {'pageIndices': _pageList(pages)},
   ).map(codec.decodePageInfos);
@@ -52,7 +52,7 @@ class _SharedDocHandle extends BridgeDocHandle {
   @override
   PdfTask<void> extractText(
     DataSink output, {
-    PdfPages? pages,
+    required PdfPages pages,
     PdfExtractionFormat format = PdfExtractionFormat.auto,
   }) {
     final fmt = codec.putEnum(format);
@@ -62,7 +62,7 @@ class _SharedDocHandle extends BridgeDocHandle {
       // caller's error ends the op all the same.
       ({Object error, StackTrace stack})? failure;
       try {
-        if (pages == null || pages is PdfPagesAll) {
+        if (pages is PdfPagesAll) {
           // One frame per page: the text reaches the sink as each frame
           // arrives, and the library never holds the document's text.
           final sink = _FrameSink((frame) async {
@@ -113,9 +113,12 @@ class _SharedDocHandle extends BridgeDocHandle {
   }
 
   @override
-  PdfTask<List<PdfSearchHit>> search({required String query, PdfPages? pages}) {
+  PdfTask<List<PdfSearchHit>> search({
+    required String query,
+    required PdfPages pages,
+  }) {
     return PdfTask.group((hook) async {
-      if (pages == null || pages is PdfPagesAll) {
+      if (pages is PdfPagesAll) {
         return codec.decodeSearchHits(
           await hook.guard(_exec(EngineOp.search, {'query': query})),
         );
@@ -142,7 +145,7 @@ class _SharedDocHandle extends BridgeDocHandle {
   @override
   PdfTask<List<PdfRenderedPage>> render(
     FutureOr<DataSink> Function(PdfRenderedPage page) sinkFor, {
-    PdfPages? pages,
+    required PdfPages pages,
     required PdfRenderSize size,
     required PdfRenderFormat format,
   }) => _deliver(
@@ -160,9 +163,9 @@ class _SharedDocHandle extends BridgeDocHandle {
   /// the same chunked wire as a render; the sink [sinkFor] returns is opened
   /// at the header and closed at the end frame.
   @override
-  PdfTask<List<PdfImage>> extractImages(
-    FutureOr<DataSink> Function(PdfImage image) sinkFor, {
-    PdfPages? pages,
+  PdfTask<List<PdfImageInfo>> extractImages(
+    FutureOr<DataSink> Function(PdfImageInfo image) sinkFor, {
+    required PdfPages pages,
   }) => _deliver(
     EngineOp.extractImages,
     {'pageIndices': _pageList(pages)},
@@ -224,13 +227,13 @@ class _SharedDocHandle extends BridgeDocHandle {
   ).map((map) => codec.decodeVerifySignatures(map));
 
   @override
-  PdfTask<PdfValidationResult> validatePdfA({required PdfALevel level}) =>
+  PdfTask<PdfValidationReport> validatePdfA({required PdfALevel level}) =>
       _exec(EngineOp.validatePdfA, {
         'level': codec.putEnum(level),
       }).map((map) => codec.decodeValidationResult(map));
 
   @override
-  PdfTask<PdfValidationResult> validatePdfUa({required PdfUaLevel level}) =>
+  PdfTask<PdfValidationReport> validatePdfUa({required PdfUaLevel level}) =>
       _exec(EngineOp.validatePdfUa, {
         'level': codec.putEnum(level),
       }).map((map) => codec.decodeValidationResult(map));
@@ -242,7 +245,9 @@ class _SharedDocHandle extends BridgeDocHandle {
   ).map((map) => codec.decodeBookmarkRanges(map));
 
   @override
-  PdfTask<List<PdfPageClassification>> classifyPages({PdfPages? pages}) {
+  PdfTask<List<PdfPageClassification>> classifyPages({
+    required PdfPages pages,
+  }) {
     return PdfTask.group((hook) async {
       final out = <PdfPageClassification>[];
       for (final page in _pageList(pages)) {
@@ -258,7 +263,7 @@ class _SharedDocHandle extends BridgeDocHandle {
   }
 
   @override
-  PdfTask<PdfDocumentType> classifyDocument() => _exec(
+  PdfTask<PdfDocumentKind> classifyDocument() => _exec(
     EngineOp.classifyDocument,
     {},
   ).map((map) => codec.decodeClassifyDocument(map));
@@ -373,20 +378,20 @@ class _ChunkDelivery<H> implements DataSink {
     switch (frame) {
       case codec.ChunkHeader<H>(:final item):
         await abandon(
-          const PdfEngineError('an item began before the last one ended'),
+          const PdfEngineFailed('an item began before the last one ended'),
         );
         _openItem = item;
         _open = await _sinkFor(item);
       case codec.ChunkData<H>(:final bytes):
         final sink = _open;
         if (sink == null) {
-          throw const PdfEngineError('a data frame came before its header');
+          throw const PdfEngineFailed('a data frame came before its header');
         }
         await sink.write(bytes);
       case codec.ChunkEnd<H>():
         final sink = _open;
         if (sink == null) {
-          throw const PdfEngineError('an end frame came before its header');
+          throw const PdfEngineFailed('an end frame came before its header');
         }
         final item = _openItem as H;
         _open = null;

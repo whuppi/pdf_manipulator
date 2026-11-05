@@ -25,7 +25,7 @@ void registerLzwTests(Pdf Function() createPdf) {
 
     /// The tokens the page of [pdfBytes] shows, in text order.
     Future<List<String>> tokensOf(Uint8List pdfBytes) async {
-      final doc = await createPdf().open(src(pdfBytes));
+      final doc = await createPdf().open(PdfInput(src(pdfBytes)));
       try {
         final text = await extractTextToString(doc);
         return [for (final m in RegExp('[A-Z]{8}').allMatches(text)) m[0]!];

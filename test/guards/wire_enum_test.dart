@@ -1,7 +1,7 @@
 // Enums cross the engine boundary by name, never by index. A reordered or
 // inserted enum value would silently change what the engine receives.
 //
-// 1. Nothing under lib/src/bridge reads `.index` or `.values[`.
+// 1. Nothing under lib/src/bridge reads `.index`, `.name` or `.values[`.
 // 2. Every public enum under lib/src/types implements PdfWire.
 //
 // io-exempt: the source-scan wall reads lib from disk.
@@ -18,7 +18,7 @@ import 'package:test/test.dart';
 
 import 'source_scan.dart';
 
-final _byIndex = RegExp(r'\.index\b|\.values\[');
+final _byIndex = RegExp(r'\.index\b|\.values\[|\.name\b');
 
 /// `file:line: text` for each `.index` or `.values[` in [files].
 List<String> indexUses(Map<String, String> files) => [
@@ -41,7 +41,7 @@ Map<String, String> _dir(String dir) => {
 };
 
 void main() {
-  test('no .index or .values[ in lib/src/bridge', () {
+  test('no .index, .name or .values[ in lib/src/bridge', () {
     expect(indexUses(_dir('lib/src/bridge')), isEmpty);
   });
 
@@ -62,6 +62,9 @@ void main() {
       'x.dart:1',
     ]);
     expect(indexUses({'x.dart': 'final v = Kind.values[3];\n'}), ['x.dart:1']);
+    expect(indexUses({'x.dart': "final m = {'f': format.name};\n"}), [
+      'x.dart:1',
+    ]);
     expect(indexUses({'x.dart': '// layer.index is gone\n'}), isEmpty);
   });
 
@@ -73,7 +76,7 @@ void main() {
   test('the byte codec refuses a bare enum', () {
     expect(
       () => encodeRequest('op', {'mode': PdfIoMode.native}),
-      throwsA(isA<PdfInvalidArgument>()),
+      throwsA(isA<PdfEngineFailed>()),
     );
   });
 

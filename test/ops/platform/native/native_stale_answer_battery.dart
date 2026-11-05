@@ -22,9 +22,8 @@ const _pageCount = 300;
 Future<Uint8List> _build(Pdf pdf) async {
   final builder = await pdf.build();
   for (var i = 0; i < _pageCount; i++) {
-    final page = await builder.addPage(PdfPageSize.custom(612, 792));
+    final page = await builder.addPage(PdfPageSize.points(612, 792));
     await page.text('stale answer page $i');
-    await page.done();
   }
   final sink = TestSink();
   await builder.save(sink);
@@ -95,7 +94,7 @@ void registerNativeStaleAnswerTests() {
     final pdf = Pdf();
     final bytes = await _build(pdf);
 
-    final expectedDoc = await pdf.open(src(bytes));
+    final expectedDoc = await pdf.open(PdfInput(src(bytes)));
     final expectedSink = MemorySink();
     await expectedDoc.extractText(
       expectedSink,
@@ -109,7 +108,7 @@ void registerNativeStaleAnswerTests() {
       bytes,
       lateDelay: const Duration(seconds: 2),
     );
-    final doc = await pdf.open(source);
+    final doc = await pdf.open(PdfInput(source));
 
     source.armed = true;
     final first = doc.extractText(MemorySink(), pages: const PdfPages.all());

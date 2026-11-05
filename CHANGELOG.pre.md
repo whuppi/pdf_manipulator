@@ -163,6 +163,12 @@ CONTENT RULES (never change)
 - **Breaking:** `compress` has no `garbageCollect` parameter, since it always collects garbage, and takes `password` for an encrypted source → drop the argument
 - **Breaking:** `registerFallbackFont(kind, font)` takes the font as a `DataSource`, which it reads whole, where it took `Uint8List` bytes → wrap the bytes: `MemorySource(bytes)`
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
+- Changed opening a PDF to one value, `PdfInput(source, password:)`, which every door takes, with `PdfInput.owning` and `PdfFile` for a source the job opens and closes itself
+- Changed page selection to `PdfPages` (`all`, `single`, `range`, `from`, `list`) for a set and `PdfPageOrder` for a sequence, both refused at construction when invalid, and every `end` is exclusive
+- Changed saving to `PdfSave.full`, `.incremental` and `.incrementalOrRewrite` with a `PdfDeflate` level and `PdfEncryption.password`, and `compress` defaults to lossless images
+- Changed errors so a programmer mistake is an `ArgumentError` or `StateError` thrown before any I/O, `PdfInvalidArgument` and `PdfDisposed` are gone, and `PdfNotFound` names a missing attachment or image
+- Changed the page builder to take links, markup and field scripts as arguments of the call that writes them (`PdfLink`, `PdfMarkup`, `PdfFieldScripts`), with `PdfPoint` for positions and no `done`
+- Changed names across the surface: `PdfDocument`, `PdfDocumentInfo`, `PdfValidationReport`, `PdfImageInfo`, `PdfStamp`, `PdfOfficeFormat`, `removePages`, `addAttachment`, `appendPages`, `readOnce` and `editOnce`, `bounds` and predicate booleans
 - Added `redact(page, regions, {overlay})`, which marks and applies its own regions in one step and returns the report — marks queued before stay queued, and an error leaves nothing marked or applied
 - Added `PdfFormFieldValue.choice`, `.choices` and `.none`: `field(name).setValue` selects an option of a combo box or list box, the options of a multi-select list box, or clears the value, and refuses an option the field does not list
 - Added `PdfEditor.clearRedactions()`, and `field(name).setTooltip`, `setMaxLength`, `setBackgroundColor` and `setBorderColor` take null to remove the tooltip, the limit or the colour

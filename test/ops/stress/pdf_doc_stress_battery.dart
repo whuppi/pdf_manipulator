@@ -17,7 +17,7 @@ void registerDocStressTests(Pdf Function() createPdf) {
 
     // Observed op/calibration: 3.13, 3.8, 6.14, 5.38.
     stressTest('open 1000-page PDF', createPdf, ratio: 19, () async {
-      final doc = await createPdf().open(src(largePdf));
+      final doc = await createPdf().open(PdfInput(src(largePdf)));
       expect(doc.pageCount, fThousandPageTruth.pages);
       await doc.dispose();
     });
@@ -28,7 +28,7 @@ void registerDocStressTests(Pdf Function() createPdf) {
       createPdf,
       ratio: 158,
       () async {
-        final doc = await createPdf().open(src(largePdf));
+        final doc = await createPdf().open(PdfInput(src(largePdf)));
         final text = await extractTextToString(
           doc,
           pages: const PdfPages.all(),
@@ -45,7 +45,7 @@ void registerDocStressTests(Pdf Function() createPdf) {
       createPdf,
       ratio: 133,
       () async {
-        final doc = await createPdf().open(src(largePdf));
+        final doc = await createPdf().open(PdfInput(src(largePdf)));
         final text = await extractTextToString(
           doc,
           pages: const PdfPages.single(100),
@@ -69,7 +69,7 @@ void registerDocStressTests(Pdf Function() createPdf) {
 
     // Observed op/calibration: 46.48, 41.39, 44.39, 47.51.
     stressTest('search across 1000-page PDF', createPdf, ratio: 143, () async {
-      final doc = await createPdf().open(src(largePdf));
+      final doc = await createPdf().open(PdfInput(src(largePdf)));
       final results = await doc.search('Lorem', pages: const PdfPages.all());
       expect(results.length, greaterThanOrEqualTo(1000));
       for (final r in results) {
@@ -85,7 +85,7 @@ void registerDocStressTests(Pdf Function() createPdf) {
 
     // Observed op/calibration: 14.43, 10.03, 8.32, 14.46.
     stressTest('render first page', createPdf, ratio: 44, () async {
-      final doc = await createPdf().open(src(largePdf));
+      final doc = await createPdf().open(PdfInput(src(largePdf)));
       final pages = await renderToMemory(doc, pages: const PdfPages.single(0));
       expect(pages, hasLength(1));
       expect(pages.single.width, greaterThan(0));
@@ -94,7 +94,7 @@ void registerDocStressTests(Pdf Function() createPdf) {
 
     // Observed op/calibration: 11.74, 11.87, 12.13, 13.03.
     stressTest('render pages 100-109', createPdf, ratio: 40, () async {
-      final doc = await createPdf().open(src(largePdf));
+      final doc = await createPdf().open(PdfInput(src(largePdf)));
       final pages = await renderToMemory(
         doc,
         pages: PdfPages.list(List.generate(10, (i) => 100 + i)),
@@ -104,10 +104,14 @@ void registerDocStressTests(Pdf Function() createPdf) {
     });
 
     // Observed op/calibration: 59.82, 61.87, 60.14, 64.18.
-    stressTest('convertTo DOCX', createPdf, ratio: 193, () async {
+    stressTest('convertToOffice DOCX', createPdf, ratio: 193, () async {
       final pdf = createPdf();
       final sink = TestSink();
-      await pdf.convertTo(src(largePdf), sink, format: PdfDocumentFormat.docx);
+      await pdf.convertToOffice(
+        PdfInput(src(largePdf)),
+        sink,
+        format: PdfOfficeFormat.docx,
+      );
       final docx = sink.takeBytes();
       expect(
         docx.sublist(0, 2),

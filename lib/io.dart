@@ -4,7 +4,7 @@
 /// import 'package:pdf_manipulator/pdf_manipulator.dart';
 /// import 'package:pdf_manipulator/io.dart';
 ///
-/// final source = await FileSource.open(File('in.pdf'));
+/// final input = PdfFile(File('in.pdf'));
 /// final out = await FileSink.open(File('out.pdf'));
 /// ```
 ///
@@ -16,3 +16,4 @@ library;
 
 export 'src/io/file_sink.dart';
 export 'src/io/file_source.dart';
+export 'src/io/pdf_file.dart';

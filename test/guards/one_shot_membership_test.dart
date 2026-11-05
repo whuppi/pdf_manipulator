@@ -1,5 +1,5 @@
 // One-shot membership. Every public member of PdfEditor is declared on
-// PdfEdits and every public member of PdfDoc on PdfReads, so a one-shot
+// PdfEdits and every public member of PdfDocument on PdfReads, so a one-shot
 // exists for it by construction, or it is listed in one_shot_exclusions.dart
 // with its reason. A subclass that declares a public member of its own is
 // one-shot-less by accident; this wall turns that into a failing test.
@@ -32,7 +32,9 @@ Set<String> unaccounted(Type type, Map<String, String> excluded) =>
 void main() {
   for (final (type, base, name) in [
     (PdfEditor, PdfEdits, 'PdfEditor'),
-    (PdfDoc, PdfReads, 'PdfDoc'),
+    (PdfDocument, PdfReads, 'PdfDocument'),
+    (PdfEditorHandle, PdfEditor, 'PdfEditorHandle'),
+    (PdfDocumentHandle, PdfDocument, 'PdfDocumentHandle'),
   ]) {
     group(name, () {
       final excluded = oneShotExclusions[name]!;
@@ -64,7 +66,7 @@ void main() {
 
   test('the wall sees a member that is on neither list', () {
     expect(unaccounted(PdfEditor, const {}), isNotEmpty);
-    expect(unaccounted(PdfDoc, const {}), isNotEmpty);
+    expect(unaccounted(PdfDocument, const {}), isNotEmpty);
   });
 
   test('the base classes carry the first members', () {
@@ -76,7 +78,8 @@ void main() {
         'setRotation',
         'setMediaBox',
         'setCropBox',
-        'deletePages',
+        'removePages',
+        'reorderPages',
         'keepPages',
         'movePage',
         'setMetadata',
@@ -88,13 +91,15 @@ void main() {
         'redact',
         'reduceImages',
         'unembedStandardFonts',
-        'embedFile',
+        'addAttachment',
         'cropMargins',
         'setImageBounds',
-        'scrubMetadata',
         'sanitize',
       ]),
     );
-    expect(declaredPublic(PdfReads), containsAll(['search', 'render']));
+    expect(
+      declaredPublic(PdfReads),
+      containsAll(['search', 'render', 'text', 'bitmap']),
+    );
   });
 }

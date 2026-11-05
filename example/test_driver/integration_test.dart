@@ -19,26 +19,29 @@ Future<void> main() async {
 
   // Poll browser console logs in background.
   var done = false;
-  unawaited(Future(() async {
-    while (!done) {
-      try {
-        final entries =
-            await rawDriver.logs.get(async_io.LogType.browser).toList();
-        for (final entry in entries) {
-          final raw = entry.message;
-          if (raw == null) continue;
-          // Chrome log format: 'http://...dart_sdk.js N:N "actual message"'
-          // Extract the quoted message.
-          final qStart = raw.indexOf('"');
-          final qEnd = raw.lastIndexOf('"');
-          if (qStart != -1 && qEnd > qStart) {
-            stdout.writeln(raw.substring(qStart + 1, qEnd));
+  unawaited(
+    Future(() async {
+      while (!done) {
+        try {
+          final entries = await rawDriver.logs
+              .get(async_io.LogType.browser)
+              .toList();
+          for (final entry in entries) {
+            final raw = entry.message;
+            if (raw == null) continue;
+            // Chrome log format: 'http://...dart_sdk.js N:N "actual message"'
+            // Extract the quoted message.
+            final qStart = raw.indexOf('"');
+            final qEnd = raw.lastIndexOf('"');
+            if (qStart != -1 && qEnd > qStart) {
+              stdout.writeln(raw.substring(qStart + 1, qEnd));
+            }
           }
-        }
-      } catch (_) {}
-      await Future.delayed(const Duration(milliseconds: 10));
-    }
-  }));
+        } catch (_) {}
+        await Future.delayed(const Duration(milliseconds: 10));
+      }
+    }),
+  );
 
   final jsonResult = await driver.requestData(
     null,

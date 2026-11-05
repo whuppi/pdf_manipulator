@@ -44,9 +44,8 @@ class _ClosesCounted implements DataSink {
 Future<Uint8List> _buildPages(Pdf pdf) async {
   final builder = await pdf.build();
   for (var i = 0; i < _pageCount; i++) {
-    final page = await builder.addPage(PdfPageSize.custom(612, 792));
+    final page = await builder.addPage(PdfPageSize.points(612, 792));
     await page.text('cancel battery page $i');
-    await page.done();
   }
   final sink = TestSink();
   await builder.save(sink);
@@ -72,11 +71,13 @@ void registerCancelTests(Pdf Function() createPdf, {String? skipExtract}) {
         var armed = false;
         final started = Completer<void>();
         final doc = await pdf.open(
-          TestSource(
-            bytes,
-            onRead: (_, _) {
-              if (armed && !started.isCompleted) started.complete();
-            },
+          PdfInput(
+            TestSource(
+              bytes,
+              onRead: (_, _) {
+                if (armed && !started.isCompleted) started.complete();
+              },
+            ),
           ),
         );
         expect(doc.pageCount, _pageCount);
@@ -95,7 +96,7 @@ void registerCancelTests(Pdf Function() createPdf, {String? skipExtract}) {
     test('render cancelled on the first frame stops the engine', () async {
       final pdf = createPdf();
       final bytes = await pages200(pdf);
-      final doc = await pdf.open(src(bytes));
+      final doc = await pdf.open(PdfInput(src(bytes)));
 
       var written = 0;
       onEngineFrame = () => written++;
@@ -117,7 +118,7 @@ void registerCancelTests(Pdf Function() createPdf, {String? skipExtract}) {
           return sink;
         },
         pages: const PdfPages.all(),
-        size: const PdfRenderSize.thumbnail(120),
+        size: const PdfRenderSize.fit(maxWidth: 120, maxHeight: 120),
       );
       await expectLater(task, throwsA(isA<PdfCancelled>()));
 

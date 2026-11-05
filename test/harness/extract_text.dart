@@ -6,10 +6,10 @@
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
 /// The text of the pages named, as the engine wrote it; every page when
-/// [pages] is null.
+/// [pages] is all.
 Future<String> extractTextToString(
   PdfReads reads, {
-  PdfPages? pages,
+  PdfPages pages = const PdfPages.all(),
   PdfExtractionFormat format = PdfExtractionFormat.auto,
 }) async {
   final sink = MemorySink();

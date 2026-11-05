@@ -39,7 +39,7 @@ Future<Uint8List> _saved(
   Uint8List source,
   Future<void> Function(PdfEditor editor) prepare,
 ) async {
-  final editor = await pdf.edit(src(source));
+  final editor = await pdf.edit(PdfInput(src(source)));
   await prepare(editor);
   final sink = TestSink();
   await editor.save(sink);
@@ -51,7 +51,7 @@ void registerAbortTests(Pdf Function() createPdf) {
   group('abort', () {
     test('a save that succeeds never aborts its sink', () async {
       final pdf = createPdf();
-      final editor = await pdf.edit(src(fTwoPageMarkers));
+      final editor = await pdf.edit(PdfInput(src(fTwoPageMarkers)));
       final sink = CountingSink();
       await editor.save(sink);
       await sink.close();
@@ -65,7 +65,7 @@ void registerAbortTests(Pdf Function() createPdf) {
       'a cancelled save aborts its sink once, then the owner closes it',
       () async {
         final pdf = createPdf();
-        final editor = await pdf.edit(src(fTwoPageMarkers));
+        final editor = await pdf.edit(PdfInput(src(fTwoPageMarkers)));
         final sink = CountingSink();
         final task = editor.save(sink);
         task.cancel();
@@ -81,13 +81,13 @@ void registerAbortTests(Pdf Function() createPdf) {
       'a failed save aborts its sink once, then the owner closes it',
       () async {
         final pdf = createPdf();
-        final editor = await pdf.edit(src(fTwoPageMarkers));
+        final editor = await pdf.edit(PdfInput(src(fTwoPageMarkers)));
         final sink = CountingSink();
         // The engine refuses an incremental save of a document with a page
         // removed, before it writes a byte.
-        await editor.deletePages(const PdfPages.single(0));
+        await editor.removePages(const PdfPages.single(0));
         await expectLater(
-          editor.save(sink, options: const PdfSaveOptions.incremental()),
+          editor.save(sink, save: const PdfSave.incremental()),
           throwsA(
             isA<PdfError>().having(
               (e) => e is PdfCancelled,
@@ -106,7 +106,7 @@ void registerAbortTests(Pdf Function() createPdf) {
 
     test('a cancelled extractText aborts its sink once', () async {
       final pdf = createPdf();
-      final doc = await pdf.open(src(fTwoPageMarkers));
+      final doc = await pdf.open(PdfInput(src(fTwoPageMarkers)));
       final sink = CountingSink();
       final task = doc.extractText(sink);
       task.cancel();
@@ -118,7 +118,7 @@ void registerAbortTests(Pdf Function() createPdf) {
 
     test('a failed extractText aborts its sink once', () async {
       final pdf = createPdf();
-      final doc = await pdf.open(src(fTwoPageMarkers));
+      final doc = await pdf.open(PdfInput(src(fTwoPageMarkers)));
       final sink = CountingSink(failOnWrite: 1);
       await expectLater(
         doc.extractText(sink),
@@ -131,11 +131,13 @@ void registerAbortTests(Pdf Function() createPdf) {
 
     test('a cancelled save leaves the editor as it was', () async {
       final pdf = createPdf();
-      Future<void> stage(PdfEditor editor) =>
-          editor.rotatePages(const PdfPages.single(0), by: PdfRotation.r90);
+      Future<void> stage(PdfEditor editor) => editor.rotatePages(
+        by: PdfRotation.r90,
+        pages: const PdfPages.single(0),
+      );
       final expected = await _saved(pdf, fTwoPageMarkers, stage);
 
-      final editor = await pdf.edit(src(fTwoPageMarkers));
+      final editor = await pdf.edit(PdfInput(src(fTwoPageMarkers)));
       await stage(editor);
       final cancelled = editor.save(CountingSink());
       cancelled.cancel();
@@ -157,7 +159,7 @@ void registerAbortTests(Pdf Function() createPdf) {
         final pdf = createPdf();
         final expected = await _saved(pdf, fImagesHires, (_) async {});
 
-        final editor = await pdf.edit(src(fImagesHires));
+        final editor = await pdf.edit(PdfInput(src(fImagesHires)));
         final task = start(editor);
         task.cancel();
         await expectLater(task, throwsA(isA<PdfCancelled>()));
@@ -192,7 +194,11 @@ void registerAbortTests(Pdf Function() createPdf) {
       test('rewrite', () async {
         final pdf = createPdf();
         await cancelledFromTheSink(
-          (out) => pdf.rewrite(src(fTwoPageMarkers), out, (editor) async {}),
+          (out) => pdf.rewrite(
+            PdfInput(src(fTwoPageMarkers)),
+            out,
+            (editor) async {},
+          ),
         );
       }, timeout: t(2));
 
@@ -202,7 +208,6 @@ void registerAbortTests(Pdf Function() createPdf) {
           (out) => pdf.buildTo(out, (builder) async {
             final page = await builder.addPage();
             await page.text('abort');
-            await page.done();
           }),
         );
       }, timeout: t(2));
@@ -211,22 +216,29 @@ void registerAbortTests(Pdf Function() createPdf) {
         final pdf = createPdf();
         await cancelledFromTheSink(
           (out) => pdf
-              .edits(src(fTwoPageMarkers), out)
-              .rotatePages(const PdfPages.single(0), by: PdfRotation.r90),
+              .editOnce(PdfInput(src(fTwoPageMarkers)), out)
+              .rotatePages(
+                by: PdfRotation.r90,
+                pages: const PdfPages.single(0),
+              ),
         );
       }, timeout: t(2));
 
       test('a sugar operation (merge)', () async {
         final pdf = createPdf();
         await cancelledFromTheSink(
-          (out) => pdf.merge([src(fTwoPageMarkers), src(minimalPdf)], out),
+          (out) => pdf.merge([
+            PdfInput(src(fTwoPageMarkers)),
+            PdfInput(src(minimalPdf)),
+          ], out),
         );
       }, timeout: t(2));
 
       test('reads, one extractText', () async {
         final pdf = createPdf();
         await cancelledFromTheSink(
-          (out) => pdf.reads(src(fTwoPageMarkers)).extractText(out),
+          (out) =>
+              pdf.readOnce(PdfInput(src(fTwoPageMarkers))).extractText(out),
         );
       }, timeout: t(2));
 
@@ -234,7 +246,7 @@ void registerAbortTests(Pdf Function() createPdf) {
         final pdf = createPdf();
         final out = CountingSink();
         await expectLater(
-          pdf.rewrite(src(fTwoPageMarkers), out, (editor) async {
+          pdf.rewrite(PdfInput(src(fTwoPageMarkers)), out, (editor) async {
             throw StateError('the edits failed');
           }),
           throwsStateError,
@@ -251,7 +263,7 @@ void registerAbortTests(Pdf Function() createPdf) {
           final pdf = createPdf();
           final sinks = <CountingSink>[];
           late final PdfTask<List<PdfSplitPart>> task;
-          task = pdf.split(src(fTwoPageMarkers), (part) {
+          task = pdf.split(PdfInput(src(fTwoPageMarkers)), (part) {
             final sink = CountingSink(
               onFirstWrite: part.index == 1 ? () => task.cancel() : null,
             );
@@ -278,7 +290,7 @@ void registerAbortTests(Pdf Function() createPdf) {
       'render aborts the page in flight and keeps the delivered ones',
       () async {
         final pdf = createPdf();
-        final doc = await pdf.open(src(fTwoPageMarkers));
+        final doc = await pdf.open(PdfInput(src(fTwoPageMarkers)));
         final sinks = <CountingSink>[];
         late final PdfTask<List<PdfRenderedPage>> task;
         task = doc.render((page) {
@@ -286,7 +298,7 @@ void registerAbortTests(Pdf Function() createPdf) {
           sinks.add(sink);
           if (sinks.length == 2) task.cancel();
           return sink;
-        }, size: const PdfRenderSize.thumbnail(120));
+        }, size: const PdfRenderSize.fit(maxWidth: 120, maxHeight: 120));
         await expectLater(task, throwsA(isA<PdfCancelled>()));
         await doc.dispose();
         expect(sinks, hasLength(2));

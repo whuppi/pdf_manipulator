@@ -47,6 +47,24 @@ class _SharedEditorHandle extends BridgeEditorHandle {
     sources: [data],
   );
 
+  /// Runs [run] with the wire arguments of [pages]. A selection from a page
+  /// to the last needs the page count as it is when the edit runs, so the
+  /// handle asks the engine for it first. A start past the last page names
+  /// that page alone, which the engine refuses with the page and the count.
+  PdfTask<T> _paged<T>(
+    PdfPages pages,
+    PdfTask<T> Function(Map<String, Object?> pagesArgs) run,
+  ) {
+    if (pages is! PdfPagesFrom) return run(codec.encodePages(pages));
+    return PdfTask.group((hook) async {
+      final count = await hook.guard(pageCount());
+      final resolved = pages.start < count
+          ? PdfPagesRange(pages.start, count)
+          : PdfPagesSingle(pages.start);
+      return hook.guard(run(codec.encodePages(resolved)));
+    });
+  }
+
   // ── Metadata ──
 
   @override
@@ -81,34 +99,38 @@ class _SharedEditorHandle extends BridgeEditorHandle {
 
   @override
   PdfTask<void> rotatePages(PdfPages pages, {required PdfRotation by}) =>
-      _mutate('rotatePages', {
-        ...codec.encodePages(pages),
-        'rotation': codec.putEnum(by),
-      });
+      _paged(
+        pages,
+        (args) =>
+            _mutate('rotatePages', {...args, 'rotation': codec.putEnum(by)}),
+      );
   @override
-  PdfTask<void> setRotation(PdfPages pages, PdfRotation rotation) => _mutate(
-    'setRotation',
-    {...codec.encodePages(pages), 'rotation': codec.putEnum(rotation)},
+  PdfTask<void> setRotation(PdfPages pages, PdfRotation rotation) => _paged(
+    pages,
+    (args) =>
+        _mutate('setRotation', {...args, 'rotation': codec.putEnum(rotation)}),
   );
   @override
-  PdfTask<List<PdfPageInfo>> pageInfo({PdfPages? pages}) => _exec(
-    EngineOp.editorPageInfo,
-    codec.encodePages(pages ?? const PdfPages.all()),
-  ).map(codec.decodePageInfos);
-  @override
-  PdfTask<void> setMediaBox(PdfPages pages, PdfRect box) => _mutate(
-    'setMediaBox',
-    {...codec.encodePages(pages), ...codec.encodeRectArgs(box)},
+  PdfTask<List<PdfPageInfo>> pageInfo({required PdfPages pages}) => _paged(
+    pages,
+    (args) => _exec(EngineOp.editorPageInfo, args).map(codec.decodePageInfos),
   );
   @override
-  PdfTask<void> setCropBox(PdfPages pages, PdfRect? box) =>
-      _mutate('setCropBox', {
-        ...codec.encodePages(pages),
-        if (box != null) ...codec.encodeRectArgs(box),
-      });
+  PdfTask<void> setMediaBox(PdfPages pages, PdfRect box) => _paged(
+    pages,
+    (args) => _mutate('setMediaBox', {...args, ...codec.encodeRectArgs(box)}),
+  );
   @override
-  PdfTask<void> deletePages(PdfPages pages) =>
-      _mutate('deletePages', codec.encodePages(pages));
+  PdfTask<void> setCropBox(PdfPages pages, PdfRect? box) => _paged(
+    pages,
+    (args) => _mutate('setCropBox', {
+      ...args,
+      if (box != null) ...codec.encodeRectArgs(box),
+    }),
+  );
+  @override
+  PdfTask<void> removePages(PdfPages pages) =>
+      _paged(pages, (args) => _mutate('deletePages', args));
   @override
   PdfTask<void> movePage({required int from, required int to}) =>
       _mutate('movePage', {'from': from, 'to': to});
@@ -116,15 +138,15 @@ class _SharedEditorHandle extends BridgeEditorHandle {
   PdfTask<void> keepPages(List<int> order) =>
       _mutate('keepPages', {'pages': order});
   @override
-  PdfTask<void> mergeFrom(
+  PdfTask<void> appendPages(
     DataSource source, {
-    PdfPages? pages,
+    required PdfPages pages,
     String? password,
   }) => _exec(
     EngineOp.editorMergeFrom,
     {
       'sourceLength': source.length,
-      if (pages != null) ..._mergePages(pages),
+      ..._mergePages(pages),
       if (password != null) 'password': password,
     },
     sources: [source],
@@ -134,7 +156,8 @@ class _SharedEditorHandle extends BridgeEditorHandle {
   );
 
   /// The wire pages of a merge: the engine reads every page of the source
-  /// when the key is absent.
+  /// when the key is absent. A selection from a page needs the page count of
+  /// the source, which only the caller can read: it resolves it first.
   static Map<String, Object?> _mergePages(PdfPages pages) =>
       pages is PdfPagesAll ? const {} : codec.encodePages(pages);
 
@@ -159,40 +182,49 @@ class _SharedEditorHandle extends BridgeEditorHandle {
     PdfWatermarkStyle style = const PdfWatermarkStyle(),
     PdfWatermarkPosition position = const PdfWatermarkPosition.center(),
     PdfWatermarkLayer layer = PdfWatermarkLayer.foreground,
-  }) => _mutate('watermark', {
-    ...codec.encodePages(pages),
-    ...codec.encodeWatermarkArgs(text, style, position, layer),
-  });
+  }) => _paged(
+    pages,
+    (args) => _mutate('watermark', {
+      ...args,
+      ...codec.encodeWatermarkArgs(text, style, position, layer),
+    }),
+  );
 
   @override
   PdfTask<void> addStamp(
     PdfPages pages, {
-    required PdfStampType type,
-    required PdfRect rect,
+    required PdfStamp stamp,
+    required PdfRect bounds,
     required double opacity,
-  }) => _mutate('addStamp', {
-    ...codec.encodePages(pages),
-    'stampType': codec.putEnum(type),
-    ...codec.encodeRectArgs(rect),
-    'opacity': opacity,
-  });
+  }) => _paged(
+    pages,
+    (args) => _mutate('addStamp', {
+      ...args,
+      'stampType': codec.putEnum(stamp),
+      ...codec.encodeRectArgs(bounds),
+      'opacity': opacity,
+    }),
+  );
 
   @override
   PdfTask<void> addImageStamp(
     PdfPages pages,
     DataSource imageData, {
-    required PdfRect rect,
+    required PdfRect bounds,
     required double opacity,
-  }) => _mutateWithSource('addImageStamp', imageData, {
-    ...codec.encodePages(pages),
-    ...codec.encodeRectArgs(rect),
-    'opacity': opacity,
-  });
+  }) => _paged(
+    pages,
+    (args) => _mutateWithSource('addImageStamp', imageData, {
+      ...args,
+      ...codec.encodeRectArgs(bounds),
+      'opacity': opacity,
+    }),
+  );
 
   // ── Content ──
 
   @override
-  PdfTask<void> embedFile(
+  PdfTask<void> addAttachment(
     String name,
     DataSource data, {
     String? description,
@@ -206,10 +238,10 @@ class _SharedEditorHandle extends BridgeEditorHandle {
   });
   @override
   PdfTask<void> flattenForms(PdfPages pages) =>
-      _mutate('flattenForms', codec.encodePages(pages));
+      _paged(pages, (args) => _mutate('flattenForms', args));
   @override
   PdfTask<void> flattenAnnotations(PdfPages pages) =>
-      _mutate('flattenAnnotations', codec.encodePages(pages));
+      _paged(pages, (args) => _mutate('flattenAnnotations', args));
   @override
   PdfTask<void> setFormFieldValue(String fieldName, String value) =>
       _mutate('setFormFieldValue', {'fieldName': fieldName, 'value': value});
@@ -247,7 +279,7 @@ class _SharedEditorHandle extends BridgeEditorHandle {
   PdfTask<void> convertToPdfA({PdfALevel level = PdfALevel.a2}) =>
       _mutate('convertToPdfA', {'level': codec.putEnum(level)});
   @override
-  PdfTask<List<PdfPageImage>> pageImages(int page) => _exec(
+  PdfTask<List<PdfImagePlacement>> pageImages(int page) => _exec(
     EngineOp.editorPageImages,
     {'page': page},
   ).map(codec.decodePageImages);
@@ -376,33 +408,45 @@ class _SharedEditorHandle extends BridgeEditorHandle {
     {'editOp': 'applyRedactions'},
   ).map(codec.decodeRedactionReport);
   @override
-  PdfTask<void> scrubMetadata() => _mutate('scrubMetadata');
-  @override
-  PdfTask<void> sanitize(PdfSanitizeOptions options) => _mutate('sanitize', {
-    'metadata': options.metadata,
-    'javascript': options.javascript,
-    'embeddedFiles': options.embeddedFiles,
+  PdfTask<void> sanitize({
+    required bool stripMetadata,
+    required bool stripJavaScript,
+    required bool stripAttachments,
+  }) => _mutate('sanitize', {
+    'metadata': stripMetadata,
+    'javascript': stripJavaScript,
+    'embeddedFiles': stripAttachments,
   });
 
   // ── Save ──
 
   @override
-  PdfTask<void> save(
-    DataSink output, {
-    PdfSaveOptions options = const PdfSaveOptions.fullRewrite(),
-  }) => _exec(
-    EngineOp.editorSave,
-    codec.encodeSaveArgs(options),
-    sinks: [output],
-  );
+  PdfTask<void> save(DataSink output, {PdfSave save = const PdfSave.full()}) {
+    if (save is! PdfSaveIncrementalOrFull) {
+      return _exec(
+        EngineOp.editorSave,
+        codec.encodeSaveArgs(save),
+        sinks: [output],
+      );
+    }
+    // A refused incremental save writes nothing, but a failed op aborts its
+    // sink: the attempt is measured into no sink, and only the save that
+    // will stand reaches [output].
+    return PdfTask.group((hook) async {
+      try {
+        await hook.guard(measureSave(save: const PdfSave.incremental()));
+      } on PdfIncrementalRefused {
+        return hook.guard(this.save(output, save: save.fallback));
+      }
+      return hook.guard(this.save(output, save: const PdfSave.incremental()));
+    });
+  }
 
   @override
-  PdfTask<int> measureSave({
-    PdfSaveOptions options = const PdfSaveOptions.fullRewrite(),
-  }) => _exec(EngineOp.editorSave, {
-    ...codec.encodeSaveArgs(options),
-    'measure': true,
-  }).map(_written);
+  PdfTask<int> measureSave({PdfSave save = const PdfSave.full()}) => _exec(
+    EngineOp.editorSave,
+    {...codec.encodeSaveArgs(save), 'measure': true},
+  ).map(_written);
 
   // ── Extract pages (select → save → restore, editor unchanged) ──
 

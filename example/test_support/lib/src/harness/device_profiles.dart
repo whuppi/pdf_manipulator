@@ -40,11 +40,7 @@ class DeviceProfile {
 /// The curated matrix. Ordered smallest-viewport first so the tightest
 /// layout is exercised earliest.
 const kDeviceMatrix = <DeviceProfile>[
-  DeviceProfile(
-    name: 'iPhoneSE',
-    size: Size(320, 568),
-    devicePixelRatio: 2.0,
-  ),
+  DeviceProfile(name: 'iPhoneSE', size: Size(320, 568), devicePixelRatio: 2.0),
   DeviceProfile(
     name: 'pixelSmall',
     size: Size(360, 640),
@@ -55,19 +51,7 @@ const kDeviceMatrix = <DeviceProfile>[
     size: Size(393, 852),
     devicePixelRatio: 3.0,
   ),
-  DeviceProfile(
-    name: 'foldOpen',
-    size: Size(768, 1080),
-    devicePixelRatio: 2.0,
-  ),
-  DeviceProfile(
-    name: 'iPadPro',
-    size: Size(1024, 1366),
-    devicePixelRatio: 2.0,
-  ),
-  DeviceProfile(
-    name: 'desktop',
-    size: Size(1440, 900),
-    devicePixelRatio: 1.0,
-  ),
+  DeviceProfile(name: 'foldOpen', size: Size(768, 1080), devicePixelRatio: 2.0),
+  DeviceProfile(name: 'iPadPro', size: Size(1024, 1366), devicePixelRatio: 2.0),
+  DeviceProfile(name: 'desktop', size: Size(1440, 900), devicePixelRatio: 1.0),
 ];

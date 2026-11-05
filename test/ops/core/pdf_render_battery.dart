@@ -85,7 +85,7 @@ img.Image _decode(Uint8List png) {
 void registerRenderTests(Pdf Function() createPdf) {
   group('render', () {
     test('the default size is 150 dpi: a letter page is 1275 x 1650', () async {
-      final doc = await createPdf().open(src(letterPdf));
+      final doc = await createPdf().open(PdfInput(src(letterPdf)));
       final pages = await renderToMemory(doc, pages: const PdfPages.single(0));
       expect(pages.single.width, 1275);
       expect(pages.single.height, 1650);
@@ -94,8 +94,8 @@ void registerRenderTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(2));
 
-    test('dpi, fit and thumbnail size the page from the page box', () async {
-      final doc = await createPdf().open(src(letterPdf));
+    test('dpi and fit size the page from the page box', () async {
+      final doc = await createPdf().open(PdfInput(src(letterPdf)));
       Future<RenderedBytes> one(PdfRenderSize size) async =>
           (await renderToMemory(
             doc,
@@ -110,7 +110,9 @@ void registerRenderTests(Pdf Function() createPdf) {
       );
       expect(fit.height, 100, reason: 'the taller side fills the box');
       expect(fit.width, closeTo(77, 1));
-      final thumb = await one(const PdfRenderSize.thumbnail(200));
+      final thumb = await one(
+        const PdfRenderSize.fit(maxWidth: 200, maxHeight: 200),
+      );
       expect(thumb.height, 200);
       expect(thumb.width, closeTo(155, 1));
       for (final page in [dpi72, fit, thumb]) {
@@ -120,33 +122,41 @@ void registerRenderTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(2));
 
-    test('a non-positive size is a PdfInvalidArgument', () async {
-      final doc = await createPdf().open(src(letterPdf));
-      expect(
-        () => doc.render(
-          (page) => MemorySink(),
-          pages: const PdfPages.single(0),
-          size: const PdfRenderSize.dpi(0),
-        ),
-        throwsA(isA<PdfInvalidArgument>()),
-        reason: 'synchronous: the call throws, it does not return a task',
-      );
-      expect(
-        () => doc.render(
-          (page) => MemorySink(),
-          pages: const PdfPages.single(0),
-          size: const PdfRenderSize.thumbnail(-5),
-        ),
-        throwsA(isA<PdfInvalidArgument>()),
-      );
+    test('bitmap returns the page as a PNG of the stated size', () async {
+      final doc = await createPdf().open(PdfInput(src(letterPdf)));
+      final bitmap = await doc.bitmap(0, size: const PdfRenderSize.dpi(72));
+      expect(bitmap.page, 0);
+      expect((bitmap.width, bitmap.height), (612, 792));
+      final decoded = _decode(bitmap.bytes);
+      expect((decoded.width, decoded.height), (bitmap.width, bitmap.height));
       await doc.dispose();
     }, timeout: t(2));
+
+    test('a non-positive size is refused when it is built', () {
+      for (final bad in [0, -5]) {
+        expect(
+          () => PdfRenderSize.dpi(bad),
+          throwsA(isA<AssertionError>()),
+          reason: 'dpi $bad',
+        );
+        expect(
+          () => PdfRenderSize.fit(maxWidth: bad, maxHeight: 100),
+          throwsA(isA<AssertionError>()),
+          reason: 'maxWidth $bad',
+        );
+        expect(
+          () => PdfRenderSize.fit(maxWidth: 100, maxHeight: bad),
+          throwsA(isA<AssertionError>()),
+          reason: 'maxHeight $bad',
+        );
+      }
+    }, timeout: t(1));
 
     test(
       'rgba rows are the PNG decoded: straight alpha, top to bottom',
       () async {
-        final doc = await createPdf().open(src(fTwoPageMarkers));
-        const size = PdfRenderSize.thumbnail(220);
+        final doc = await createPdf().open(PdfInput(src(fTwoPageMarkers)));
+        const size = PdfRenderSize.fit(maxWidth: 220, maxHeight: 220);
         final png = await renderToMemory(
           doc,
           pages: const PdfPages.single(0),
@@ -177,7 +187,7 @@ void registerRenderTests(Pdf Function() createPdf) {
     );
 
     test('a blank page is white in every pixel, alpha opaque', () async {
-      final doc = await createPdf().open(src(minimalPdf));
+      final doc = await createPdf().open(PdfInput(src(minimalPdf)));
       final rgba = await renderToMemory(
         doc,
         pages: const PdfPages.single(0),
@@ -189,7 +199,7 @@ void registerRenderTests(Pdf Function() createPdf) {
     }, timeout: t(2));
 
     test('the factory sees the size before any byte is written', () async {
-      final doc = await createPdf().open(src(fThreePageMarkers));
+      final doc = await createPdf().open(PdfInput(src(fThreePageMarkers)));
       final journal = <String>[];
       final sinks = <_JournalSink>[];
       final seen = <PdfRenderedPage>[];
@@ -202,7 +212,7 @@ void registerRenderTests(Pdf Function() createPdf) {
           return sink;
         },
         pages: const PdfPages.all(),
-        size: const PdfRenderSize.thumbnail(160),
+        size: const PdfRenderSize.fit(maxWidth: 160, maxHeight: 160),
       );
       expect(pages, seen);
       expect(pages.map((p) => p.page), [0, 1, 2]);
@@ -225,7 +235,7 @@ void registerRenderTests(Pdf Function() createPdf) {
     test(
       'every sink is closed once, after its page and in page order',
       () async {
-        final doc = await createPdf().open(src(fThreePageMarkers));
+        final doc = await createPdf().open(PdfInput(src(fThreePageMarkers)));
         final journal = <String>[];
         final sinks = <_JournalSink>[];
         await doc.render(
@@ -235,7 +245,7 @@ void registerRenderTests(Pdf Function() createPdf) {
             return sink;
           },
           pages: const PdfPages.all(),
-          size: const PdfRenderSize.thumbnail(160),
+          size: const PdfRenderSize.fit(maxWidth: 160, maxHeight: 160),
         );
         expect(sinks.map((s) => s.closes), everyElement(1));
         final closes = journal.where((e) => e.endsWith('close')).toList();
@@ -253,7 +263,7 @@ void registerRenderTests(Pdf Function() createPdf) {
     );
 
     test('writes are at most 256 KiB, in order, one at a time', () async {
-      final doc = await createPdf().open(src(letterPdf));
+      final doc = await createPdf().open(PdfInput(src(letterPdf)));
       final sinks = <_JournalSink>[];
       final pages = await doc.render(
         (page) {
@@ -278,7 +288,7 @@ void registerRenderTests(Pdf Function() createPdf) {
     test(
       'a sink that throws ends the render with its error, sinks closed',
       () async {
-        final doc = await createPdf().open(src(fThreePageMarkers));
+        final doc = await createPdf().open(PdfInput(src(fThreePageMarkers)));
         final sinks = <_JournalSink>[];
         await expectLater(
           doc.render(
@@ -292,7 +302,7 @@ void registerRenderTests(Pdf Function() createPdf) {
               return sink;
             },
             pages: const PdfPages.all(),
-            size: const PdfRenderSize.thumbnail(160),
+            size: const PdfRenderSize.fit(maxWidth: 160, maxHeight: 160),
           ),
           throwsA(isA<_SinkBoom>()),
           reason: 'the caller error, not the engine echo of it',
@@ -306,7 +316,7 @@ void registerRenderTests(Pdf Function() createPdf) {
     );
 
     test('a factory that throws ends the render with its error', () async {
-      final doc = await createPdf().open(src(fTwoPageMarkers));
+      final doc = await createPdf().open(PdfInput(src(fTwoPageMarkers)));
       var calls = 0;
       await expectLater(
         doc.render(
@@ -315,7 +325,7 @@ void registerRenderTests(Pdf Function() createPdf) {
             throw const _SinkBoom();
           },
           pages: const PdfPages.all(),
-          size: const PdfRenderSize.thumbnail(160),
+          size: const PdfRenderSize.fit(maxWidth: 160, maxHeight: 160),
         ),
         throwsA(isA<_SinkBoom>()),
       );
@@ -324,16 +334,16 @@ void registerRenderTests(Pdf Function() createPdf) {
     }, timeout: t(2));
 
     test(
-      'a page past the end is PdfPageRangeError and opens no sink',
+      'a page past the end is PdfPageOutOfRange and opens no sink',
       () async {
-        final doc = await createPdf().open(src(minimalPdf));
+        final doc = await createPdf().open(PdfInput(src(minimalPdf)));
         var opened = 0;
         await expectLater(
           doc.render((page) {
             opened++;
             return MemorySink();
           }, pages: const PdfPages.single(4)),
-          throwsA(isA<PdfPageRangeError>()),
+          throwsA(isA<PdfPageOutOfRange>()),
         );
         expect(opened, 0);
         await doc.dispose();
@@ -344,7 +354,7 @@ void registerRenderTests(Pdf Function() createPdf) {
     test(
       'a cancel keeps the pages delivered and closes the page in flight',
       () async {
-        final doc = await createPdf().open(src(fThreePageMarkers));
+        final doc = await createPdf().open(PdfInput(src(fThreePageMarkers)));
         final sinks = <_JournalSink>[];
         late final PdfTask<List<PdfRenderedPage>> task;
         task = doc.render(
@@ -360,7 +370,7 @@ void registerRenderTests(Pdf Function() createPdf) {
             return sink;
           },
           pages: const PdfPages.all(),
-          size: const PdfRenderSize.thumbnail(160),
+          size: const PdfRenderSize.fit(maxWidth: 160, maxHeight: 160),
         );
         await expectLater(task, throwsA(isA<PdfCancelled>()));
         expect(sinks, hasLength(1), reason: 'no page opens after the cancel');
@@ -377,32 +387,36 @@ void registerRenderTests(Pdf Function() createPdf) {
 
     // ── the one-shot ──
 
-    test('pdf.reads(src).render writes the pages and is single-use', () async {
-      final pdf = createPdf();
-      final reads = pdf.reads(src(fTwoPageMarkers));
-      final sinks = <MemorySink>[];
-      final first = reads.render(
-        (page) {
-          final sink = MemorySink();
-          sinks.add(sink);
-          return sink;
-        },
-        pages: const PdfPages.all(),
-        size: const PdfRenderSize.thumbnail(120),
-      );
-      expect(
-        () => reads.render((p) => MemorySink(), pages: const PdfPages.all()),
-        throwsA(isA<PdfInvalidArgument>()),
-      );
-      final pages = await first;
-      expect(pages, hasLength(2));
-      for (final sink in sinks) {
-        expect(_decode(sink.takeBytes()).height, 120);
-      }
-    }, timeout: t(2));
+    test(
+      'pdf.readOnce(src).render writes the pages and is single-use',
+      () async {
+        final pdf = createPdf();
+        final reads = pdf.readOnce(PdfInput(src(fTwoPageMarkers)));
+        final sinks = <MemorySink>[];
+        final first = reads.render(
+          (page) {
+            final sink = MemorySink();
+            sinks.add(sink);
+            return sink;
+          },
+          pages: const PdfPages.all(),
+          size: const PdfRenderSize.fit(maxWidth: 120, maxHeight: 120),
+        );
+        expect(
+          () => reads.render((p) => MemorySink(), pages: const PdfPages.all()),
+          throwsA(isA<StateError>()),
+        );
+        final pages = await first;
+        expect(pages, hasLength(2));
+        for (final sink in sinks) {
+          expect(_decode(sink.takeBytes()).height, 120);
+        }
+      },
+      timeout: t(2),
+    );
 
     test('the factory may be async', () async {
-      final doc = await createPdf().open(src(minimalPdf));
+      final doc = await createPdf().open(PdfInput(src(minimalPdf)));
       final sink = MemorySink();
       await doc.render(
         (page) async {
@@ -410,7 +424,7 @@ void registerRenderTests(Pdf Function() createPdf) {
           return sink;
         },
         pages: const PdfPages.single(0),
-        size: const PdfRenderSize.thumbnail(100),
+        size: const PdfRenderSize.fit(maxWidth: 100, maxHeight: 100),
       );
       expect(_decode(sink.takeBytes()).height, 100);
       await doc.dispose();

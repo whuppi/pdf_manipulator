@@ -57,8 +57,7 @@ void main() {
 
     pdf = Pdf(
       config: PdfConfig(
-        webLaneWorkerUrl:
-            'http://localhost:$serverPort/web_assets/lane_worker.js',
+        webWorkerUrl: 'http://localhost:$serverPort/web_assets/lane_worker.js',
         webIoMode: PdfIoMode.jspi,
       ),
     );
@@ -68,7 +67,7 @@ void main() {
   }, timeout: t(10));
 
   test('verify I/O mode is jspi', () async {
-    final doc = await pdf.open(src(minimalPdf));
+    final doc = await pdf.open(PdfInput(src(minimalPdf)));
     await doc.dispose();
     expect(pdf.ioMode, PdfIoMode.jspi);
   }, timeout: t(1));
@@ -96,8 +95,7 @@ void main() {
   registerLifecycleTests(
     () => Pdf(
       config: PdfConfig(
-        webLaneWorkerUrl:
-            'http://localhost:$serverPort/web_assets/lane_worker.js',
+        webWorkerUrl: 'http://localhost:$serverPort/web_assets/lane_worker.js',
         webIoMode: PdfIoMode.jspi,
       ),
     ),
@@ -105,8 +103,7 @@ void main() {
   registerInstanceTests(
     () => Pdf(
       config: PdfConfig(
-        webLaneWorkerUrl:
-            'http://localhost:$serverPort/web_assets/lane_worker.js',
+        webWorkerUrl: 'http://localhost:$serverPort/web_assets/lane_worker.js',
         webIoMode: PdfIoMode.jspi,
       ),
     ),
@@ -114,14 +111,13 @@ void main() {
 
   registerRuntimeSafetyTests(
     config: () => PdfConfig(
-      webLaneWorkerUrl:
-          'http://localhost:$serverPort/web_assets/lane_worker.js',
+      webWorkerUrl: 'http://localhost:$serverPort/web_assets/lane_worker.js',
       webIoMode: PdfIoMode.jspi,
     ),
   );
 
   PdfConfig executorConfig() => PdfConfig(
-    webLaneWorkerUrl: 'http://localhost:$serverPort/web_assets/lane_worker.js',
+    webWorkerUrl: 'http://localhost:$serverPort/web_assets/lane_worker.js',
     webIoMode: PdfIoMode.jspi,
   );
   registerExecutorTests(
@@ -132,8 +128,7 @@ void main() {
 
   registerLaneProtocolTests(
     config: () => PdfConfig(
-      webLaneWorkerUrl:
-          'http://localhost:$serverPort/web_assets/lane_worker.js',
+      webWorkerUrl: 'http://localhost:$serverPort/web_assets/lane_worker.js',
       webIoMode: PdfIoMode.jspi,
     ),
   );
@@ -151,8 +146,7 @@ void main() {
   registerInstanceStressTests(
     () => Pdf(
       config: PdfConfig(
-        webLaneWorkerUrl:
-            'http://localhost:$serverPort/web_assets/lane_worker.js',
+        webWorkerUrl: 'http://localhost:$serverPort/web_assets/lane_worker.js',
         webIoMode: PdfIoMode.jspi,
       ),
     ),

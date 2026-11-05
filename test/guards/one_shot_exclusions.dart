@@ -1,9 +1,9 @@
-// Members of PdfEditor and PdfDoc that are not on PdfEdits / PdfReads, each
+// Members of PdfEditor and PdfDocument that are not on PdfEdits / PdfReads, each
 // with the reason it has no one-shot. The membership test fails on a stale
 // entry.
 
 /// Reason: an editor read is not an edit, so the one-shot of edits has no use
-/// for it (`Pdf.read` and `PdfDoc` answer it).
+/// for it (`Pdf.read` and `PdfDocument` answer it).
 const _editorRead = 'a read on the editor, not an edit';
 
 /// Reason: the door saves.
@@ -35,21 +35,20 @@ const oneShotExclusions = <String, Map<String, String>>{
     'metadata': _editorRead,
     'pageInfo': _editorRead,
     'pageImages': _editorRead,
-    'mergeFrom': _merge,
+    'appendPages': _merge,
     'field': _field,
     'markRedaction': _redactionStep,
     'clearRedactions': _redactionStep,
     'redactionCount': _editorRead,
     'applyRedactions': _redactionStep,
-    'save': _save,
-    'dispose': _lifecycle,
   },
-  'PdfDoc': {
+  'PdfDocument': {
     'pageCount': _docFact,
     'version': _docFact,
     'isTagged': _docFact,
     'metadata': _docFact,
     'encryption': _docFact,
-    'dispose': _lifecycle,
   },
+  'PdfEditorHandle': {'save': _save, 'dispose': _lifecycle},
+  'PdfDocumentHandle': {'dispose': _lifecycle},
 };

@@ -45,10 +45,10 @@ void main() {
       expect(String.fromCharCodes(bytes.sublist(1, 5)), 'open');
     });
 
-    test('decodeResponse throws PdfEngineError on empty response', () {
+    test('decodeResponse throws PdfEngineFailed on empty response', () {
       expect(
         () => decodeResponse(Uint8List(0)),
-        throwsA(isA<PdfEngineError>()),
+        throwsA(isA<PdfEngineFailed>()),
       );
     });
   });
@@ -65,8 +65,11 @@ void main() {
 
     test('extract of all pages sends a sink and no page', () async {
       final requests = await requestsOf(
-        (doc) =>
-            doc.extractText(MemorySink(), format: PdfExtractionFormat.auto),
+        (doc) => doc.extractText(
+          MemorySink(),
+          pages: const PdfPages.all(),
+          format: PdfExtractionFormat.auto,
+        ),
       );
       final extract = _fieldKeys(requests.last);
       expect(extract, containsAll(['handleId', 'format', 'hasSink']));

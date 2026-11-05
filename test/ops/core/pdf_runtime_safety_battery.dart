@@ -370,7 +370,7 @@ void registerRuntimeSafetyTests({PdfConfig? Function()? config}) {
       final save = await router.execute(
         bin.encodeRequest('editorSave', {
           'handleId': editor,
-          ...codec.encodeSaveArgs(const PdfSaveOptions.fullRewrite()),
+          ...codec.encodeSaveArgs(const PdfSave.full()),
         }),
         sinks: [sink],
         cancel: hook,

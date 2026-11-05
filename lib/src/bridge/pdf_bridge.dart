@@ -10,22 +10,25 @@ import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:pdf_manipulator/src/types/pdf_annotation.dart';
 import 'package:pdf_manipulator/src/types/pdf_attachment.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
+import 'package:pdf_manipulator/src/types/pdf_field_scripts.dart';
+import 'package:pdf_manipulator/src/types/pdf_link.dart';
+import 'package:pdf_manipulator/src/types/pdf_point.dart';
+import 'package:pdf_manipulator/src/types/pdf_radio_option.dart';
 import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
-import 'package:pdf_manipulator/src/types/pdf_image_page_options.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_page.dart';
 import 'package:pdf_manipulator/src/types/pdf_metadata.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_size.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
-import 'package:pdf_manipulator/src/types/pdf_image.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_info.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
-import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_placement.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_info.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/types/pdf_redaction_overlay.dart';
 import 'package:pdf_manipulator/src/types/pdf_redaction_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_render.dart';
-import 'package:pdf_manipulator/src/types/pdf_sanitize_options.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
 import 'package:pdf_manipulator/src/types/pdf_stroke.dart';
 import 'package:pdf_manipulator/src/types/pdf_table.dart';
@@ -59,10 +62,10 @@ abstract class PdfBridge {
   });
 
   /// Converts a PDF to another document format.
-  PdfTask<void> convertTo(
+  PdfTask<void> convertToOffice(
     DataSource source,
     DataSink output, {
-    required PdfDocumentFormat format,
+    required PdfOfficeFormat format,
     String? password,
   });
 
@@ -74,10 +77,10 @@ abstract class PdfBridge {
   });
 
   /// Converts a document to PDF format.
-  PdfTask<void> convertToPdf(
+  PdfTask<void> convertFromOffice(
     DataSource document,
     DataSink output, {
-    required PdfDocumentFormat format,
+    required PdfOfficeFormat format,
   });
 
   /// Register a runtime fallback font for form-value baking.
@@ -115,35 +118,38 @@ abstract class BridgeDocHandle {
 
   // ── Read ops (reuse already-parsed document via handleId) ──
 
-  /// The per-page facts of the pages named; every page when [pages] is null.
-  PdfTask<List<PdfPageInfo>> pageInfo({PdfPages? pages});
+  /// The per-page facts of the pages named; every page when [pages] is all.
+  PdfTask<List<PdfPageInfo>> pageInfo({required PdfPages pages});
 
   /// Writes the text of the pages named to [output]; every page when
   /// [pages] is null.
   PdfTask<void> extractText(
     DataSink output, {
-    PdfPages? pages,
+    required PdfPages pages,
     required PdfExtractionFormat format,
   });
 
   /// Searches for [query] across the pages named; every page when [pages]
   /// is null.
-  PdfTask<List<PdfSearchHit>> search({required String query, PdfPages? pages});
+  PdfTask<List<PdfSearchHit>> search({
+    required String query,
+    required PdfPages pages,
+  });
 
   /// Renders the specified [pages], writing each to the sink [sinkFor]
   /// returns for its descriptor.
   PdfTask<List<PdfRenderedPage>> render(
     FutureOr<DataSink> Function(PdfRenderedPage page) sinkFor, {
-    PdfPages? pages,
+    required PdfPages pages,
     required PdfRenderSize size,
     required PdfRenderFormat format,
   });
 
   /// Extracts the images of the specified [pages], writing each to the sink
   /// [sinkFor] returns for its descriptor.
-  PdfTask<List<PdfImage>> extractImages(
-    FutureOr<DataSink> Function(PdfImage image) sinkFor, {
-    PdfPages? pages,
+  PdfTask<List<PdfImageInfo>> extractImages(
+    FutureOr<DataSink> Function(PdfImageInfo image) sinkFor, {
+    required PdfPages pages,
   });
 
   /// Returns signature info for all signatures in the document.
@@ -153,20 +159,20 @@ abstract class BridgeDocHandle {
   PdfTask<bool> verifySignatures();
 
   /// Validates the document against PDF/A conformance.
-  PdfTask<PdfValidationResult> validatePdfA({required PdfALevel level});
+  PdfTask<PdfValidationReport> validatePdfA({required PdfALevel level});
 
   /// Validates the document against PDF/UA accessibility.
-  PdfTask<PdfValidationResult> validatePdfUa({required PdfUaLevel level});
+  PdfTask<PdfValidationReport> validatePdfUa({required PdfUaLevel level});
 
   /// The page ranges of the document's top-level bookmarks.
   PdfTask<List<PdfBookmarkRange>> bookmarkRanges();
 
   /// Classifies the pages named by what they hold; every page when [pages]
   /// is null.
-  PdfTask<List<PdfPageClassification>> classifyPages({PdfPages? pages});
+  PdfTask<List<PdfPageClassification>> classifyPages({required PdfPages pages});
 
   /// Classifies the entire document by content type.
-  PdfTask<PdfDocumentType> classifyDocument();
+  PdfTask<PdfDocumentKind> classifyDocument();
 
   /// Reads every AcroForm field of the document.
   PdfTask<List<PdfFormField>> formFields();
@@ -225,9 +231,9 @@ abstract class BridgeEditorHandle {
   /// Sets the absolute rotation of every page in [pages].
   PdfTask<void> setRotation(PdfPages pages, PdfRotation rotation);
 
-  /// Returns the facts of [pages] (every page when null) as the edited
+  /// Returns the facts of [pages] (every page when all) as the edited
   /// document has them now.
-  PdfTask<List<PdfPageInfo>> pageInfo({PdfPages? pages});
+  PdfTask<List<PdfPageInfo>> pageInfo({required PdfPages pages});
 
   /// Sets the media box of every page in [pages].
   PdfTask<void> setMediaBox(PdfPages pages, PdfRect box);
@@ -236,7 +242,7 @@ abstract class BridgeEditorHandle {
   PdfTask<void> setCropBox(PdfPages pages, PdfRect? box);
 
   /// Deletes every page in [pages].
-  PdfTask<void> deletePages(PdfPages pages);
+  PdfTask<void> removePages(PdfPages pages);
 
   /// Moves a page from index [from] to index [to].
   PdfTask<void> movePage({required int from, required int to});
@@ -245,10 +251,10 @@ abstract class BridgeEditorHandle {
   PdfTask<void> keepPages(List<int> order);
 
   /// Appends pages from [source] into this document; [pages] selects
-  /// which ones of it (every page when null), [password] opens it.
-  PdfTask<void> mergeFrom(
+  /// which ones of it, [password] opens it.
+  PdfTask<void> appendPages(
     DataSource source, {
-    PdfPages? pages,
+    required PdfPages pages,
     String? password,
   });
 
@@ -274,8 +280,8 @@ abstract class BridgeEditorHandle {
   /// Adds a predefined stamp to every page in [pages].
   PdfTask<void> addStamp(
     PdfPages pages, {
-    required PdfStampType type,
-    required PdfRect rect,
+    required PdfStamp stamp,
+    required PdfRect bounds,
     required double opacity,
   });
 
@@ -283,14 +289,14 @@ abstract class BridgeEditorHandle {
   PdfTask<void> addImageStamp(
     PdfPages pages,
     DataSource imageData, {
-    required PdfRect rect,
+    required PdfRect bounds,
     required double opacity,
   });
 
   // ── Content ──
 
   /// Embeds a file attachment with the given [name].
-  PdfTask<void> embedFile(
+  PdfTask<void> addAttachment(
     String name,
     DataSource data, {
     String? description,
@@ -332,7 +338,7 @@ abstract class BridgeEditorHandle {
   PdfTask<void> convertToPdfA({PdfALevel level = PdfALevel.a2});
 
   /// Lists the image XObjects placed on [page].
-  PdfTask<List<PdfPageImage>> pageImages(int page);
+  PdfTask<List<PdfImagePlacement>> pageImages(int page);
 
   /// Moves and resizes an embedded image on [page] by [imageName].
   PdfTask<void> setImageBounds(int page, String imageName, PdfRect bounds);
@@ -408,25 +414,21 @@ abstract class BridgeEditorHandle {
   /// reports what was removed.
   PdfTask<PdfRedactionReport> applyRedactions();
 
-  /// Removes all metadata from the document.
-  PdfTask<void> scrubMetadata();
-
-  /// Strips metadata, JavaScript and/or embedded files per [options].
-  PdfTask<void> sanitize(PdfSanitizeOptions options);
+  /// Strips metadata, JavaScript and/or attachments as asked.
+  PdfTask<void> sanitize({
+    required bool stripMetadata,
+    required bool stripJavaScript,
+    required bool stripAttachments,
+  });
 
   // ── Save ──
 
   /// Saves the edited document to [output].
-  PdfTask<void> save(
-    DataSink output, {
-    PdfSaveOptions options = const PdfSaveOptions.fullRewrite(),
-  });
+  PdfTask<void> save(DataSink output, {PdfSave save = const PdfSave.full()});
 
   /// Runs the save of [save] into no sink and returns the bytes the engine
   /// wrote: the size the file would have.
-  PdfTask<int> measureSave({
-    PdfSaveOptions options = const PdfSaveOptions.fullRewrite(),
-  });
+  PdfTask<int> measureSave({PdfSave save = const PdfSave.full()});
 
   // ── Extract pages (select → save → restore, editor unchanged) ──
 
@@ -458,7 +460,7 @@ abstract class BridgeBuilderHandle {
   /// Adds a page holding [imageData] and returns a page builder.
   PdfTask<BridgePageBuilderHandle> addImagePage(
     DataSource imageData, {
-    PdfImagePageOptions page = const PdfImagePageOptions(),
+    PdfImagePage page = const PdfImagePage(),
   });
 
   /// Saves the built document to [output]. Streams are Flate-compressed
@@ -472,14 +474,19 @@ abstract class BridgeBuilderHandle {
 /// Handle to a single page being built.
 abstract class BridgePageBuilderHandle {
   /// Sets the current font by [name] and [size].
-  PdfTask<void> font(String name, double size);
+  PdfTask<void> setFont(String name, double size);
 
-  /// Moves the cursor to ([x], [y]).
-  PdfTask<void> at(double x, double y);
+  /// Moves the cursor to [point].
+  PdfTask<void> moveTo(PdfPoint point);
 
   /// Writes [text] at the current position, in [style]'s font, size,
-  /// weight, slant and colour.
-  PdfTask<void> text(String text, {PdfTextStyle? style});
+  /// weight, slant and colour, then anchors [link] and [markup] on it.
+  PdfTask<void> text(
+    String text, {
+    PdfTextStyle? style,
+    PdfLink? link,
+    PdfMarkup? markup,
+  });
 
   /// Writes a heading of [level] with [text].
   PdfTask<void> heading(int level, String text);
@@ -493,136 +500,113 @@ abstract class BridgePageBuilderHandle {
   /// Draws a horizontal rule across the page.
   PdfTask<void> horizontalRule();
 
-  /// Places an image from [imageData] within [rect]. A null [altText]
+  /// Places an image from [imageData] within [bounds]. A null [altText]
   /// places it as an artifact, which assistive technology ignores.
-  PdfTask<void> image(DataSource imageData, PdfRect rect, {String? altText});
+  PdfTask<void> image(DataSource imageData, PdfRect bounds, {String? altText});
 
   /// Adds a diagonal watermark [text] across the page.
   PdfTask<void> watermark(String text);
 
-  /// Creates a text input field with [name] at [rect].
-  PdfTask<void> textField(String name, PdfRect rect, {String? defaultValue});
+  /// Creates a text input field with [name] in [bounds], then its [scripts].
+  PdfTask<void> textField(
+    String name,
+    PdfRect bounds, {
+    String? value,
+    required PdfFieldScripts scripts,
+  });
 
-  /// Creates a checkbox with [name] at [rect].
-  PdfTask<void> checkbox(String name, PdfRect rect, {bool checked = false});
+  /// Creates a checkbox with [name] in [bounds], then its [scripts].
+  PdfTask<void> checkbox(
+    String name,
+    PdfRect bounds, {
+    required bool isChecked,
+    required PdfFieldScripts scripts,
+  });
 
-  /// Creates a combo box with [name] at [rect].
+  /// Creates a combo box with [name] in [bounds], then its [scripts].
   PdfTask<void> comboBox(
     String name,
-    PdfRect rect,
+    PdfRect bounds,
     List<String> options, {
     String? selected,
+    required PdfFieldScripts scripts,
   });
 
-  /// Creates a push button with [name] at [rect].
-  PdfTask<void> pushButton(String name, PdfRect rect, String caption);
-
-  /// Creates a digital signature field with [name] at [rect].
-  PdfTask<void> signatureField(String name, PdfRect rect);
-
-  /// Creates a radio button group with [name].
+  /// Creates a radio button group with [name], then its [scripts].
   PdfTask<void> radioGroup(
     String name,
-    List<({String value, PdfRect rect})> options, {
+    List<PdfRadioOption> options, {
     String? selected,
+    required PdfFieldScripts scripts,
   });
 
-  /// Attaches a keystroke JavaScript action to the most-recently-
-  /// added field. A page with no field yet ignores the call.
-  PdfTask<void> fieldKeystroke(String script);
+  /// Creates a push button with [name] in [bounds].
+  PdfTask<void> pushButton(String name, PdfRect bounds, String caption);
 
-  /// Attaches a format JavaScript action to the most-recently-
-  /// added field. A page with no field yet ignores the call.
-  PdfTask<void> fieldFormat(String script);
+  /// Creates a digital signature field with [name] in [bounds].
+  PdfTask<void> signatureField(String name, PdfRect bounds);
 
-  /// Attaches a validate JavaScript action to the most-recently-
-  /// added field. A page with no field yet ignores the call.
-  PdfTask<void> fieldValidate(String script);
-
-  /// Attaches a calculate JavaScript action to the most-recently-
-  /// added field. A page with no field yet ignores the call.
-  PdfTask<void> fieldCalculate(String script);
-
-  /// Creates a hyperlink to an external [url], anchored on the
-  /// last-written text. A page with no text yet ignores the call.
-  PdfTask<void> linkUrl(String url);
-
-  /// Creates a link to [targetPage], anchored on the last-written
-  /// text. A page with no text yet ignores the call.
-  PdfTask<void> linkPage(int targetPage);
-
-  /// Adds a footnote with [refMark] and [noteText].
-  PdfTask<void> footnote(String refMark, String noteText);
+  /// Adds a footnote with [mark] and [note].
+  PdfTask<void> footnote(String mark, String note);
 
   /// Writes inline [text] at the cursor without moving to a new line, in
-  /// [style]'s font, size, weight, slant and colour.
-  PdfTask<void> inline(String text, {PdfTextStyle? style});
+  /// [style]'s font, size, weight, slant and colour, then anchors [link] and
+  /// [markup] on it.
+  PdfTask<void> appendText(
+    String text, {
+    PdfTextStyle? style,
+    PdfLink? link,
+    PdfMarkup? markup,
+  });
 
-  /// Wraps [text] inside [rect] with the given [align].
-  PdfTask<void> textInRect(
-    PdfRect rect,
+  /// Wraps [text] inside [bounds] with the given [align].
+  PdfTask<void> textIn(
+    PdfRect bounds,
     String text, {
     PdfAlignment align = PdfAlignment.left,
   });
 
   /// Draws [rect] with [fill] inside it and [stroke] around it. A null
   /// [fill] leaves the rectangle unfilled, a null [stroke] leaves it
-  /// unstroked — unless both are null, which strokes it with the
-  /// default stroke.
+  /// unstroked.
   PdfTask<void> rect(PdfRect rect, {PdfColor? fill, PdfStroke? stroke});
 
   /// Draws a straight line from [from] to [to].
   PdfTask<void> line(
-    (double, double) from,
-    (double, double) to, {
+    PdfPoint from,
+    PdfPoint to, {
     PdfStroke stroke = const PdfStroke(),
   });
 
-  /// Adds a markup annotation of [kind] over the last-written text, in
-  /// [color] or in the kind's own colour when [color] is null.
-  PdfTask<void> markup(PdfMarkupKind kind, {PdfColor? color});
-
   /// Adds a sticky note with [text] at [at], or at the cursor when [at]
   /// is null.
-  PdfTask<void> stickyNote(String text, {(double, double)? at});
+  PdfTask<void> stickyNote(String text, {PdfPoint? at});
 
-  /// Adds a stamp of [type] at the cursor.
-  PdfTask<void> stamp(PdfStampType type);
+  /// Adds a stamp of [stamp] at the cursor.
+  PdfTask<void> stamp(PdfStamp stamp);
 
-  /// Adds a free-text annotation inside [rect].
-  PdfTask<void> freeText(PdfRect rect, String text);
+  /// Adds a free-text annotation inside [bounds].
+  PdfTask<void> freeText(PdfRect bounds, String text);
 
-  /// Adds a named-destination link to [destination] on the last text.
-  PdfTask<void> linkNamed(String destination);
-
-  /// Adds a JavaScript link running [script] on the last text.
-  PdfTask<void> linkJavaScript(String script);
-
-  /// Runs [script] when the page opens.
-  PdfTask<void> onOpen(String script);
-
-  /// Runs [script] when the page closes.
-  PdfTask<void> onClose(String script);
-
-  /// Lays out a table from [columns] and [rows] with [`PdfTableCell`]
-  /// rowspans (within the options' max row span) and column sizing; the
-  /// fixed sizing needs a width on every column, the measuring sizings
-  /// size the columns themselves.
+  /// Lays out a table from [columns] and [rows] with row spans (within the
+  /// options' max row span) and column sizing; the fixed sizing needs a
+  /// width on every column, the measuring sizings size the columns
+  /// themselves.
   PdfTask<void> table(
     List<PdfTableColumn> columns,
     List<List<PdfTableCell>> rows, {
     PdfTableOptions options = const PdfTableOptions(),
   });
 
-  /// Lays out [text] across [columnCount] columns with [gapPt] gap.
-  PdfTask<void> columns(int columnCount, double gapPt, String text);
+  /// Lays out [text] across [count] columns with [gap] between them.
+  PdfTask<void> columns(int count, double gap, String text);
 
   /// Inserts a line break.
   PdfTask<void> newline();
 
-  /// Starts a new page with the same dimensions.
-  PdfTask<void> newPageSameSize();
+  /// Runs [script] when the page opens.
+  PdfTask<void> onOpen(String script);
 
-  /// Finalises the page — no further operations allowed.
-  PdfTask<void> done();
+  /// Runs [script] when the page closes.
+  PdfTask<void> onClose(String script);
 }

@@ -70,21 +70,21 @@ void registerWebCancelChannelTests(Pdf Function() createPdf) {
     // after the open (OPFS pre-copies) and the cancel is the only way out.
     Uint8List? big;
 
-    Future<PdfDoc> openBig(Pdf pdf) async {
+    Future<PdfDocumentHandle> openBig(Pdf pdf) async {
       if (big == null) {
         final merged = MemorySink();
         await pdf.merge([
-          for (var i = 0; i < 5; i++) src(fThousandPage),
+          for (var i = 0; i < 5; i++) PdfInput(src(fThousandPage)),
         ], merged);
         big = merged.takeBytes();
       }
-      return pdf.open(src(big!));
+      return pdf.open(PdfInput(src(big!)));
     }
 
-    PdfTask<void> startExtract(PdfDoc doc) =>
+    PdfTask<void> startExtract(PdfDocument doc) =>
         doc.extractText(MemorySink(), pages: const PdfPages.all());
 
-    Future<void> smallOp(PdfDoc doc) =>
+    Future<void> smallOp(PdfDocument doc) =>
         doc.extractText(MemorySink(), pages: const PdfPages.single(0));
 
     test(

@@ -21,7 +21,8 @@ final _creator = RegExp(
 );
 final _own = RegExp(r'\b_own\s*(?:<[^(]*>)?\(');
 final _door = RegExp(
-  r'PdfTask<(?:PdfDoc|PdfEditor|PdfBuilder)> (?:open|edit|build)\(',
+  r'PdfTask<(?:PdfDocumentHandle|PdfEditorHandle|PdfBuilderHandle)> '
+  r'(?:open|edit|build)\(',
 );
 
 /// `file:line: text` for each handle creator in [files] (name to source)
@@ -102,7 +103,7 @@ void main() {
     test('a creator as the opening argument of _own is fine', () {
       expect(
         handleCreatorViolations({
-          'x.dart': 'x() => _own(open(a, password: p), (d, h) => d);\n',
+          'x.dart': 'x() => _own(open(a), (d, h) => d);\n',
         }),
         isEmpty,
       );

@@ -16,13 +16,13 @@ import 'package:pdf_manipulator/src/types/pdf_attachment.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
-import 'package:pdf_manipulator/src/types/pdf_image.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_info.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
-import 'package:pdf_manipulator/src/types/pdf_info.dart';
+import 'package:pdf_manipulator/src/types/pdf_document_info.dart';
 import 'package:pdf_manipulator/src/types/pdf_matrix.dart';
 import 'package:pdf_manipulator/src/types/pdf_metadata.dart';
-import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_placement.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_info.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
@@ -45,7 +45,7 @@ List<PdfPageInfo> decodePageInfos(Map<String, Object?> r) {
   return pagesRaw.map((p) {
     final m = _asMap(p);
     return PdfPageInfo(
-      index: m['index'] as int,
+      page: m['index'] as int,
       mediaBox: PdfRect(
         x: (m['x'] as num).toDouble(),
         y: (m['y'] as num).toDouble(),
@@ -80,7 +80,7 @@ PdfMetadata decodeMetadata(Map<String, Object?> r) => PdfMetadata(
   creator: _text(r['creator']),
   producer: _text(r['producer']),
   creationDate: decodeDate(r['creationDate']),
-  modDate: decodeDate(r['modDate']),
+  modificationDate: decodeDate(r['modDate']),
 );
 
 /// Decodes how an open document is encrypted, or null when it is not
@@ -122,7 +122,7 @@ List<PdfSearchHit> decodeSearchHits(Map<String, Object?> r) {
     return PdfSearchHit(
       page: m['page'] as int,
       text: m['text'] as String? ?? '',
-      rect: PdfRect(
+      bounds: PdfRect(
         x: (m['x'] as num).toDouble(),
         y: (m['y'] as num).toDouble(),
         width: (m['width'] as num).toDouble(),
@@ -133,12 +133,12 @@ List<PdfSearchHit> decodeSearchHits(Map<String, Object?> r) {
 }
 
 /// Decodes the image placements of a page from a response map.
-List<PdfPageImage> decodePageImages(Map<String, Object?> r) {
+List<PdfImagePlacement> decodePageImages(Map<String, Object?> r) {
   final images = r['images'] as List? ?? [];
   return images.map((i) {
     final m = _asMap(i);
     double n(String k) => (m[k] as num).toDouble();
-    return PdfPageImage(
+    return PdfImagePlacement(
       name: m['name'] as String? ?? '',
       bounds: PdfRect(
         x: n('x'),
@@ -164,7 +164,7 @@ List<PdfFormField> decodeFormFields(Map<String, Object?> r) {
   return fields.map((f) {
     final m = _asMap(f);
     final type = _enumByWireName(
-      PdfFormFieldType.values,
+      PdfFormFieldKind.values,
       m['type'],
       'field type',
     );
@@ -174,7 +174,7 @@ List<PdfFormField> decodeFormFields(Map<String, Object?> r) {
     final alignment = m['alignment'] as String? ?? '';
     return PdfFormField(
       name: m['name'] as String? ?? '',
-      type: type,
+      kind: type,
       value: value,
       tooltip: tooltip.isEmpty ? null : tooltip,
       bounds: m['hasBounds'] == true
@@ -189,8 +189,8 @@ List<PdfFormField> decodeFormFields(Map<String, Object?> r) {
       alignment: alignment.isEmpty
           ? null
           : _enumByWireName(PdfAlignment.values, alignment, 'alignment'),
-      readOnly: m['readOnly'] as bool? ?? false,
-      required: m['required'] as bool? ?? false,
+      isReadOnly: m['readOnly'] as bool? ?? false,
+      isRequired: m['required'] as bool? ?? false,
     );
   }).toList();
 }
@@ -217,7 +217,7 @@ List<PdfAttachment> decodeAttachments(Map<String, Object?> r) {
     final mimeType = m['mimeType'] as String? ?? '';
     return PdfAttachment(
       name: m['name'] as String? ?? '',
-      size: size < 0 ? null : size,
+      sizeBytes: size < 0 ? null : size,
       description: description.isEmpty ? null : description,
       mimeType: mimeType.isEmpty ? null : mimeType,
     );
@@ -236,7 +236,7 @@ List<PdfAnnotationInfo> decodeAnnotations(Map<String, Object?> r) {
     return PdfAnnotationInfo(
       subtype: PdfAnnotationSubtype.fromPdfName(subtypeName),
       subtypeName: subtypeName,
-      rect: (m['hasRect'] as bool? ?? false)
+      bounds: (m['hasRect'] as bool? ?? false)
           ? PdfRect(
               x: (m['x'] as num?)?.toDouble() ?? 0,
               y: (m['y'] as num?)?.toDouble() ?? 0,
@@ -267,13 +267,13 @@ PdfFormFieldValue _decodeFormFieldValue(Map<String, Object?> m) =>
 Map<String, Object?> encodeImagePolicy(PdfImagePolicy policy) => {
   if (policy.colorPpi != null) 'colorPpi': policy.colorPpi,
   if (policy.grayPpi != null) 'grayPpi': policy.grayPpi,
-  if (policy.monoPpi != null) 'monoPpi': policy.monoPpi,
+  if (policy.bilevelPpi != null) 'monoPpi': policy.bilevelPpi,
   'downsampleThreshold': policy.downsampleThreshold,
   'jpegQuality': policy.jpegQuality,
   'allowLossy': policy.allowLossy,
   'convertCmykToRgb': policy.convertCmykToRgb,
   'minPixels': policy.minPixels,
-  'minSavings': policy.minSavings,
+  'minSavings': policy.minSavingsRatio,
   'chroma': putEnum(policy.chromaSubsampling),
   'recompressJpeg': policy.recompressJpeg,
 };
@@ -296,7 +296,7 @@ T _enumByWireName<T extends PdfWire>(
   for (final v in values) {
     if (v.wire == name) return v;
   }
-  throw PdfEngineError('unknown $what "$name" on the wire');
+  throw PdfEngineFailed('unknown $what "$name" on the wire');
 }
 
 /// Decodes a `reduceImages` report from a response map.
@@ -321,13 +321,13 @@ PdfImageReport decodeImageReport(Map<String, Object?> r) {
           'encoding',
         ),
         color: _enumByWireName(PdfImageColor.values, m['color'], 'color'),
-        indexed: m['indexed'] as bool? ?? false,
-        bits: n('bits'),
+        isIndexed: m['indexed'] as bool? ?? false,
+        bitsPerComponent: n('bits'),
         width: n('width'),
         height: n('height'),
         hasSoftMask: m['softMask'] as bool? ?? false,
-        uses: n('uses'),
-        ppiMin: ppi < 0 ? null : ppi,
+        placementCount: n('uses'),
+        minPpi: ppi < 0 ? null : ppi,
         action: action,
         keepReason: reason.isEmpty
             ? null
@@ -365,11 +365,11 @@ bool decodeVerifySignatures(Map<String, Object?> r) =>
     r['valid'] as bool? ?? false;
 
 /// Decodes a PDF/A validation result.
-PdfValidationResult decodeValidationResult(Map<String, Object?> r) =>
-    PdfValidationResult(
-      compliant: r['compliant'] as bool? ?? false,
-      errors: r['errors'] as int? ?? 0,
-      warnings: r['warnings'] as int? ?? 0,
+PdfValidationReport decodeValidationResult(Map<String, Object?> r) =>
+    PdfValidationReport(
+      isCompliant: r['compliant'] as bool? ?? false,
+      errorCount: r['errors'] as int? ?? 0,
+      warningCount: r['warnings'] as int? ?? 0,
     );
 
 /// Decodes bookmark-based split plan entries.
@@ -391,12 +391,12 @@ PdfPageClassification decodeClassifyPage(
   required int page,
 }) => PdfPageClassification(
   page: page,
-  type: _enumByWireName(PdfPageType.values, r['type'], 'page type'),
+  kind: _enumByWireName(PdfPageKind.values, r['type'], 'page type'),
 );
 
 /// Decodes a document-classification result.
-PdfDocumentType decodeClassifyDocument(Map<String, Object?> r) =>
-    _enumByWireName(PdfDocumentType.values, r['type'], 'document type');
+PdfDocumentKind decodeClassifyDocument(Map<String, Object?> r) =>
+    _enumByWireName(PdfDocumentKind.values, r['type'], 'document type');
 
 /// One frame of a chunked sequence of items (the pages of a render, the
 /// images of an extraction): an item opens with a [ChunkHeader] holding its
@@ -442,7 +442,7 @@ ChunkFrame<H> decodeChunkFrame<H>(
     'header' => ChunkHeader<H>(item(data)),
     'data' => ChunkData<H>(_extractBytes(data['data'])),
     'end' => ChunkEnd<H>(),
-    _ => throw PdfEngineError('unknown $what frame "$kind" on the wire'),
+    _ => throw PdfEngineFailed('unknown $what frame "$kind" on the wire'),
   };
 }
 
@@ -464,12 +464,12 @@ ChunkFrame<PdfRenderedPage> decodeRenderFrame(Map<String, Object?> data) =>
       );
     }, 'render');
 
-/// Decodes a chunked-extraction frame: its items carry [PdfImage]
+/// Decodes a chunked-extraction frame: its items carry [PdfImageInfo]
 /// descriptors.
-ChunkFrame<PdfImage> decodeImageFrame(Map<String, Object?> data) =>
+ChunkFrame<PdfImageInfo> decodeImageFrame(Map<String, Object?> data) =>
     decodeChunkFrame(
       data,
-      (header) => PdfImage(
+      (header) => PdfImageInfo(
         page: header['page'] as int? ?? 0,
         index: header['index'] as int? ?? 0,
         width: header['width'] as int? ?? 0,
@@ -517,7 +517,8 @@ Map<String, Object?> encodeMetadataArgs(PdfMetadata metadata) => {
   if (metadata.producer != null) 'producer': metadata.producer,
   if (metadata.creationDate != null)
     'creationDate': putDate(metadata.creationDate!),
-  if (metadata.modDate != null) 'modDate': putDate(metadata.modDate!),
+  if (metadata.modificationDate != null)
+    'modDate': putDate(metadata.modificationDate!),
 };
 
 /// Encodes the pages an edit targets for the engine to resolve against the
@@ -531,12 +532,18 @@ Map<String, Object?> encodePages(PdfPages pages) => switch (pages) {
   PdfPagesRange(:final start, :final end) => {
     'pages': [for (var i = start; i < end; i++) i],
   },
+  // The page count is the document's as it is when the edit runs, which
+  // only the editor handle can ask for: it resolves a `from` selection into
+  // a range before it encodes.
+  PdfPagesFrom() => throw const PdfEngineFailed(
+    'a page selection from a page is resolved before it is encoded',
+  ),
 };
 
 /// Decodes a redaction report from an `applyRedactions` response map.
 PdfRedactionReport decodeRedactionReport(Map<String, Object?> r) =>
     PdfRedactionReport(
-      regions: r['regions'] as int? ?? 0,
+      regionCount: r['regions'] as int? ?? 0,
       glyphsRemoved: r['glyphsRemoved'] as int? ?? 0,
       imagesModified: r['imagesModified'] as int? ?? 0,
       imagesRemoved: r['imagesRemoved'] as int? ?? 0,
@@ -551,11 +558,15 @@ int decodeEditorOpen(Map<String, Object?> r) => r['handleId'] as int;
 // HELPERS — shared encoding utilities
 // ════════════════════════════════════════════════════════════════════
 
-/// Resolves [pages] to a concrete list of 0-based page indices; every page
-/// when it is null.
-List<int> resolvePageIndices(PdfPages? pages, int pageCount) => switch (pages) {
-  null => List.generate(pageCount, (i) => i),
+/// Resolves [pages] to a concrete list of 0-based page indices.
+List<int> resolvePageIndices(PdfPages pages, int pageCount) => switch (pages) {
   PdfPagesAll() => List.generate(pageCount, (i) => i),
+  // A start past the last page names that page alone: the engine refuses it
+  // with the page and the page count.
+  PdfPagesFrom(:final start) =>
+    start < pageCount
+        ? List.generate(pageCount - start, (i) => start + i)
+        : [start],
   PdfPagesSingle(:final index) => [index],
   PdfPagesList(:final indices) => indices,
   PdfPagesRange(:final start, :final end) => List.generate(
@@ -578,7 +589,7 @@ Map<String, Object?> encodeWatermarkArgs(
   'text': text,
   'opacity': style.opacity,
   'fontSize': style.fontSize,
-  'rotation': style.rotation,
+  'rotation': style.angleDegrees,
   'r': style.color.r,
   'g': style.color.g,
   'b': style.color.b,
@@ -601,12 +612,12 @@ Map<String, Object?> encodePosition(PdfWatermarkPosition position) =>
         'columns': columns,
         'rows': rows,
       },
-      PdfWatermarkExact(:final x, :final y, :final width, :final height) => {
+      PdfWatermarkExact(:final rect) => {
         'posType': 3,
-        'posX': x,
-        'posY': y,
-        'posW': width,
-        'posH': height,
+        'posX': rect.x,
+        'posY': rect.y,
+        'posW': rect.width,
+        'posH': rect.height,
       },
     };
 
@@ -643,23 +654,22 @@ int encodeFormFieldFlags(Set<PdfFormFieldFlag> flags) =>
 // ── Private helpers ──
 
 /// Encodes save options into a wire-ready map.
-Map<String, Object?> encodeSaveArgs(PdfSaveOptions options) {
-  return switch (options) {
-    PdfSaveFullRewrite(
+Map<String, Object?> encodeSaveArgs(PdfSave save) {
+  return switch (save) {
+    PdfSaveFull(
       :final deflate,
       :final garbageCollect,
-      :final objectStreams,
-      :final deflateLevel,
+      :final useObjectStreams,
       :final mergeDuplicates,
       :final pruneResources,
       :final encryption,
     ) =>
       {
         'saveMode': 0,
-        'deflate': deflate,
+        'deflate': deflate != PdfDeflate.none,
         'garbageCollect': garbageCollect,
-        'objectStreams': objectStreams,
-        'deflateLevel': _checkedDeflateLevel(deflateLevel),
+        'objectStreams': useObjectStreams,
+        'deflateLevel': _deflateLevel(deflate),
         'mergeDuplicates': mergeDuplicates,
         'pruneResources': pruneResources,
         ..._encodeEncryption(encryption),
@@ -668,31 +678,37 @@ Map<String, Object?> encodeSaveArgs(PdfSaveOptions options) {
       'saveMode': 1,
       ..._encodeEncryption(const PdfEncryption.keep()),
     },
+    // The editor handle tries the incremental save and, when it is refused,
+    // writes the fallback: no single save is encoded for it.
+    PdfSaveIncrementalOrFull() => throw const PdfEngineFailed(
+      'an incremental-or-full save is resolved before it is encoded',
+    ),
   };
 }
 
-int _checkedDeflateLevel(int level) {
-  if (level < 0 || level > 9) {
-    throw PdfInvalidArgument('deflateLevel must be 0 to 9: $level');
-  }
-  return level;
-}
+/// The zlib level the engine deflates at for [deflate].
+int _deflateLevel(PdfDeflate deflate) => switch (deflate) {
+  PdfDeflate.none => 0,
+  PdfDeflate.fast => 1,
+  PdfDeflate.balanced => 6,
+  PdfDeflate.best => 9,
+};
 
 Map<String, Object?> _encodeEncryption(PdfEncryption encryption) {
   final encryptMode = switch (encryption) {
     PdfEncryptionKeep() => 0,
     PdfEncryptionRemove() => 1,
-    PdfEncryptionConfig() => 2,
+    PdfEncryptionPassword() => 2,
   };
   String? encAlgo;
   String encUserPw = '';
   String encOwnerPw = '';
   int encPerms = -1;
-  if (encryption case final PdfEncryptionConfig c) {
+  if (encryption case final PdfEncryptionPassword c) {
     encAlgo = putEnum(c.algorithm);
-    encUserPw = c.userPassword;
+    encUserPw = c.userPassword ?? '';
     encOwnerPw = c.ownerPassword;
-    encPerms = c.permissions.toBits();
+    encPerms = c.permissions.bits;
   }
   return {
     'encryptMode': encryptMode,
@@ -705,23 +721,23 @@ Map<String, Object?> _encodeEncryption(PdfEncryption encryption) {
 
 /// Decodes an encryption algorithm from its integer code.
 PdfEncryptionAlgorithm? decodeEncryptionAlgorithm(int code) => switch (code) {
-  1 => PdfEncryptionAlgorithm.rc4_40,
-  2 => PdfEncryptionAlgorithm.rc4_128,
-  3 => PdfEncryptionAlgorithm.aes128,
-  4 => PdfEncryptionAlgorithm.aes256,
+  1 => PdfEncryptionAlgorithm.rc4Key40,
+  2 => PdfEncryptionAlgorithm.rc4Key128,
+  3 => PdfEncryptionAlgorithm.aesKey128,
+  4 => PdfEncryptionAlgorithm.aesKey256,
   _ => null,
 };
 
 /// Decodes permission bits into a [PdfPermissions] instance.
 PdfPermissions decodePermissions(int bits) => PdfPermissions(
-  print: bits & (1 << 2) != 0,
-  modify: bits & (1 << 3) != 0,
-  copy: bits & (1 << 4) != 0,
-  annotate: bits & (1 << 5) != 0,
-  fillForms: bits & (1 << 8) != 0,
-  accessibility: bits & (1 << 9) != 0,
-  assemble: bits & (1 << 10) != 0,
-  printHq: bits & (1 << 11) != 0,
+  canPrint: bits & (1 << 2) != 0,
+  canModify: bits & (1 << 3) != 0,
+  canCopy: bits & (1 << 4) != 0,
+  canAnnotate: bits & (1 << 5) != 0,
+  canFillForms: bits & (1 << 8) != 0,
+  canExtractForAccessibility: bits & (1 << 9) != 0,
+  canAssemble: bits & (1 << 10) != 0,
+  canPrintHighQuality: bits & (1 << 11) != 0,
 );
 
 Map<String, Object?> _asMap(Object? obj) {

@@ -33,24 +33,24 @@ void registerOneShotTests(Pdf Function() createPdf) {
   group('one-shot', () {
     // ── edits ──
 
-    test('edits(...).rotatePage rotates, saves and closes', () async {
+    test('editOnce(...).rotatePages rotates, saves and closes', () async {
       final pdf = createPdf();
       final out = TestSink();
       await pdf
-          .edits(src(minimalPdf), out)
-          .rotatePages(PdfPages.single(0), by: PdfRotation.r90);
-      final doc = await pdf.open(src(out.takeBytes()));
+          .editOnce(PdfInput(src(minimalPdf)), out)
+          .rotatePages(by: PdfRotation.r90, pages: PdfPages.single(0));
+      final doc = await pdf.open(PdfInput(src(out.takeBytes())));
       expect((await doc.pageInfo())[0].rotation, PdfRotation.r90);
       await doc.dispose();
     }, timeout: t(1));
 
-    test('edits(...).addWatermark puts the text on the page', () async {
+    test('editOnce(...).addWatermark puts the text on the page', () async {
       final pdf = createPdf();
       final out = TestSink();
       await pdf
-          .edits(src(fTwoPageMarkers), out)
+          .editOnce(PdfInput(src(fTwoPageMarkers)), out)
           .addWatermark('ONESHOTMARK', pages: PdfPages.single(0));
-      final doc = await pdf.open(src(out.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(out.takeBytes())));
       expect(doc.pageCount, fTwoPageMarkersTruth.pages);
       final hits = await doc.search(
         fTwoPageMarkersTruth.page0Marker,
@@ -63,15 +63,18 @@ void registerOneShotTests(Pdf Function() createPdf) {
     test('a second edit on one object throws before any I/O', () async {
       final pdf = createPdf();
       final out = TestSink();
-      final oneShot = pdf.edits(src(minimalPdf), out);
+      final oneShot = pdf.editOnce(PdfInput(src(minimalPdf)), out);
       final first = oneShot.rotatePages(
-        PdfPages.single(0),
         by: PdfRotation.r90,
+        pages: PdfPages.single(0),
       );
       expect(
-        () => oneShot.rotatePages(PdfPages.single(0), by: PdfRotation.r180),
+        () => oneShot.rotatePages(
+          by: PdfRotation.r180,
+          pages: PdfPages.single(0),
+        ),
         throwsA(
-          isA<PdfInvalidArgument>().having(
+          isA<StateError>().having(
             (e) => e.message,
             'message',
             'a one-shot runs one edit; use rewrite for several',
@@ -80,7 +83,7 @@ void registerOneShotTests(Pdf Function() createPdf) {
         reason: 'synchronous: the call throws, it does not return a task',
       );
       await first;
-      final doc = await pdf.open(src(out.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(out.takeBytes())));
       expect(
         (await doc.pageInfo())[0].rotation,
         PdfRotation.r90,
@@ -94,8 +97,8 @@ void registerOneShotTests(Pdf Function() createPdf) {
       final out = TestSink();
       await expectLater(
         pdf
-            .edits(src(minimalPdf), out)
-            .rotatePages(PdfPages.single(5), by: PdfRotation.r90),
+            .editOnce(PdfInput(src(minimalPdf)), out)
+            .rotatePages(by: PdfRotation.r90, pages: PdfPages.single(5)),
         throwsA(isA<PdfError>()),
       );
       expect(out.length, 0);
@@ -104,18 +107,18 @@ void registerOneShotTests(Pdf Function() createPdf) {
     test('resave writes a document that reads the same', () async {
       final pdf = createPdf();
       final out = TestSink();
-      await pdf.resave(src(fTwoPageMarkers), out);
-      final doc = await pdf.open(src(out.takeBytes()));
+      await pdf.resave(PdfInput(src(fTwoPageMarkers)), out);
+      final doc = await pdf.open(PdfInput(src(out.takeBytes())));
       expect(doc.pageCount, fTwoPageMarkersTruth.pages);
       await doc.dispose();
     }, timeout: t(1));
 
     // ── reads and info ──
 
-    test('reads(...).search finds a marker and closes', () async {
+    test('readOnce(...).search finds a marker and closes', () async {
       final pdf = createPdf();
       final hits = await pdf
-          .reads(src(fTwoPageMarkers))
+          .readOnce(PdfInput(src(fTwoPageMarkers)))
           .search(
             fTwoPageMarkersTruth.page1Marker,
             pages: const PdfPages.all(),
@@ -126,11 +129,11 @@ void registerOneShotTests(Pdf Function() createPdf) {
 
     test('a second read on one object throws before any I/O', () async {
       final pdf = createPdf();
-      final oneShot = pdf.reads(src(fTwoPageMarkers));
+      final oneShot = pdf.readOnce(PdfInput(src(fTwoPageMarkers)));
       final first = oneShot.search('ALPHA', pages: const PdfPages.all());
       expect(
         () => oneShot.search('BRAVO', pages: const PdfPages.all()),
-        throwsA(isA<PdfInvalidArgument>()),
+        throwsA(isA<StateError>()),
       );
       await first;
     }, timeout: t(1));
@@ -139,8 +142,8 @@ void registerOneShotTests(Pdf Function() createPdf) {
       'info answers what open would, without keeping the file open',
       () async {
         final pdf = createPdf();
-        final info = await pdf.info(src(fTwoPageMarkers));
-        final doc = await pdf.open(src(fTwoPageMarkers));
+        final info = await pdf.info(PdfInput(src(fTwoPageMarkers)));
+        final doc = await pdf.open(PdfInput(src(fTwoPageMarkers)));
         expect(info.pageCount, doc.pageCount);
         expect(info.version, doc.version);
         expect(info.metadata.title, doc.metadata.title);
@@ -156,40 +159,43 @@ void registerOneShotTests(Pdf Function() createPdf) {
 
     test('read closes the doc after success and after an error', () async {
       final pdf = createPdf();
-      late PdfDoc kept;
-      final pages = await pdf.read(src(fTwoPageMarkers), (doc) async {
+      late PdfDocument kept;
+      final pages = await pdf.read(PdfInput(src(fTwoPageMarkers)), (doc) async {
         kept = doc;
         return doc.pageCount;
       });
       expect(pages, fTwoPageMarkersTruth.pages);
-      expect(() => kept.extractText(MemorySink()), throwsA(isA<PdfDisposed>()));
+      expect(() => kept.extractText(MemorySink()), throwsA(isA<StateError>()));
 
       await expectLater(
-        pdf.read<void>(src(fTwoPageMarkers), (doc) async {
+        pdf.read<void>(PdfInput(src(fTwoPageMarkers)), (doc) async {
           kept = doc;
           throw const PdfUnsupported('boom');
         }),
         throwsA(isA<PdfUnsupported>()),
       );
-      expect(() => kept.extractText(MemorySink()), throwsA(isA<PdfDisposed>()));
+      expect(() => kept.extractText(MemorySink()), throwsA(isA<StateError>()));
     }, timeout: t(1));
 
     test('rewrite saves after the edits and closes the editor', () async {
       final pdf = createPdf();
       final out = TestSink();
       late PdfEditor kept;
-      await pdf.rewrite(src(minimalPdf), out, (editor) async {
+      await pdf.rewrite(PdfInput(src(minimalPdf)), out, (editor) async {
         kept = editor;
-        await editor.rotatePages(PdfPages.single(0), by: PdfRotation.r90);
+        await editor.rotatePages(
+          by: PdfRotation.r90,
+          pages: PdfPages.single(0),
+        );
         await editor.setMetadata(
           (await editor.metadata()).copyWith(title: 'Rewritten'),
         );
       });
       expect(
         () => kept.setMetadata(const PdfMetadata(title: 'x')),
-        throwsA(isA<PdfDisposed>()),
+        throwsA(isA<StateError>()),
       );
-      final doc = await pdf.open(src(out.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(out.takeBytes())));
       expect((await doc.pageInfo())[0].rotation, PdfRotation.r90);
       expect(doc.metadata.title, 'Rewritten');
       await doc.dispose();
@@ -202,7 +208,7 @@ void registerOneShotTests(Pdf Function() createPdf) {
         final out = TestSink();
         late PdfEditor kept;
         await expectLater(
-          pdf.rewrite(src(minimalPdf), out, (editor) async {
+          pdf.rewrite(PdfInput(src(minimalPdf)), out, (editor) async {
             kept = editor;
             await editor.setMetadata(
               (await editor.metadata()).copyWith(title: 'never saved'),
@@ -213,7 +219,7 @@ void registerOneShotTests(Pdf Function() createPdf) {
         );
         expect(
           () => kept.setMetadata(const PdfMetadata(title: 'x')),
-          throwsA(isA<PdfDisposed>()),
+          throwsA(isA<StateError>()),
         );
         expect(out.length, 0);
       },
@@ -228,13 +234,12 @@ void registerOneShotTests(Pdf Function() createPdf) {
         kept = builder;
         final page = await builder.addPage();
         await page.paragraph('BUILTTO');
-        await page.done();
       });
       expect(
         () => kept.setMetadata(const PdfMetadata(title: 'x')),
-        throwsA(isA<PdfDisposed>()),
+        throwsA(isA<StateError>()),
       );
-      final doc = await pdf.open(src(out.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(out.takeBytes())));
       expect(doc.pageCount, 1);
       await doc.dispose();
     }, timeout: t(1));
@@ -254,7 +259,7 @@ void registerOneShotTests(Pdf Function() createPdf) {
         );
         expect(
           () => kept.setMetadata(const PdfMetadata(title: 'x')),
-          throwsA(isA<PdfDisposed>()),
+          throwsA(isA<StateError>()),
         );
         expect(out.length, 0);
       },
@@ -266,7 +271,7 @@ void registerOneShotTests(Pdf Function() createPdf) {
     test('split closes each sink its factory returned', () async {
       final pdf = createPdf();
       final sinks = <_CloseCountingSink>[];
-      await pdf.split(src(fThreePageMarkers), (part) {
+      await pdf.split(PdfInput(src(fThreePageMarkers)), (part) {
         final s = _CloseCountingSink();
         sinks.add(s);
         return s;
@@ -278,7 +283,7 @@ void registerOneShotTests(Pdf Function() createPdf) {
     test('split by maxBytes closes each sink its factory returned', () async {
       final pdf = createPdf();
       final sinks = <_CloseCountingSink>[];
-      final parts = await pdf.split(src(fThreePageMarkers), (part) {
+      final parts = await pdf.split(PdfInput(src(fThreePageMarkers)), (part) {
         final s = _CloseCountingSink();
         sinks.add(s);
         return s;
@@ -290,7 +295,10 @@ void registerOneShotTests(Pdf Function() createPdf) {
     test('a sink the caller passes is not closed by the library', () async {
       final pdf = createPdf();
       final out = _CloseCountingSink();
-      await pdf.merge([src(minimalPdf), src(minimalPdf)], out);
+      await pdf.merge([
+        PdfInput(src(minimalPdf)),
+        PdfInput(src(minimalPdf)),
+      ], out);
       expect(out.closes, 0);
     }, timeout: t(1));
 
@@ -309,30 +317,36 @@ void registerOneShotTests(Pdf Function() createPdf) {
 
       test('an undisposed editor is released and logged', () async {
         final pdf = createPdf();
-        final editor = await pdf.edit(src(minimalPdf));
+        final editor = await pdf.edit(PdfInput(src(minimalPdf)));
         await HandleBackstop.finalizeNow(editor);
         expect(
           () => editor.pageCount(),
-          throwsA(isA<PdfEngineError>()),
+          throwsA(isA<PdfEngineFailed>()),
           reason: 'the engine no longer holds the editor',
         );
         if (_assertsOn) {
           expect(warnings, hasLength(1));
-          expect(warnings.single, contains('a PdfEditor was never disposed'));
+          expect(
+            warnings.single,
+            contains('a PdfEditorHandle was never disposed'),
+          );
           expect(warnings.single, contains('Opened at'));
         }
       }, timeout: t(1));
 
       test('an undisposed doc is released and logged', () async {
         final pdf = createPdf();
-        final doc = await pdf.open(src(minimalPdf));
+        final doc = await pdf.open(PdfInput(src(minimalPdf)));
         await HandleBackstop.finalizeNow(doc);
         await expectLater(
           doc.extractText(MemorySink()),
           throwsA(isA<PdfError>()),
         );
         if (_assertsOn) {
-          expect(warnings.single, contains('a PdfDoc was never disposed'));
+          expect(
+            warnings.single,
+            contains('a PdfDocumentHandle was never disposed'),
+          );
         }
       }, timeout: t(1));
 
@@ -342,7 +356,10 @@ void registerOneShotTests(Pdf Function() createPdf) {
         await HandleBackstop.finalizeNow(builder);
         await expectLater(builder.addPage(), throwsA(isA<PdfError>()));
         if (_assertsOn) {
-          expect(warnings.single, contains('a PdfBuilder was never disposed'));
+          expect(
+            warnings.single,
+            contains('a PdfBuilderHandle was never disposed'),
+          );
         }
       }, timeout: t(1));
 
@@ -350,11 +367,11 @@ void registerOneShotTests(Pdf Function() createPdf) {
         'dispose detaches the backstop: nothing is released twice',
         () async {
           final pdf = createPdf();
-          final editor = await pdf.edit(src(minimalPdf));
+          final editor = await pdf.edit(PdfInput(src(minimalPdf)));
           await editor.dispose();
           await expectLater(
             HandleBackstop.finalizeNow(editor),
-            throwsA(isA<PdfInvalidArgument>()),
+            throwsA(isA<ArgumentError>()),
           );
           expect(warnings, isEmpty);
         },
@@ -364,10 +381,14 @@ void registerOneShotTests(Pdf Function() createPdf) {
       test('a handle the library opens never reaches the backstop', () async {
         final pdf = createPdf();
         late PdfEditor kept;
-        await pdf.rewrite(src(minimalPdf), TestSink(), (e) async => kept = e);
+        await pdf.rewrite(
+          PdfInput(src(minimalPdf)),
+          TestSink(),
+          (e) async => kept = e,
+        );
         await expectLater(
           HandleBackstop.finalizeNow(kept),
-          throwsA(isA<PdfInvalidArgument>()),
+          throwsA(isA<ArgumentError>()),
         );
       }, timeout: t(1));
     });

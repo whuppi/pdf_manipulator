@@ -26,7 +26,7 @@ sealed class PdfSplitRule {
 /// [PdfSplitRule.every].
 final class PdfSplitEvery extends PdfSplitRule {
   /// Creates the every-n-pages rule.
-  const PdfSplitEvery(this.pages);
+  const PdfSplitEvery(this.pages) : assert(pages >= 1, 'pages must be >= 1');
 
   /// Pages in each part.
   final int pages;
@@ -45,7 +45,7 @@ final class PdfSplitEvery extends PdfSplitRule {
 /// [PdfSplitRule.maxBytes].
 final class PdfSplitMaxBytes extends PdfSplitRule {
   /// Creates the size-bounded rule.
-  const PdfSplitMaxBytes(this.bytes);
+  const PdfSplitMaxBytes(this.bytes) : assert(bytes >= 1, 'bytes must be >= 1');
 
   /// The most bytes a part may hold.
   final int bytes;
@@ -81,7 +81,8 @@ final class PdfSplitBookmarks extends PdfSplitRule {
 /// once the part's sink is closed. It holds no bytes: they went to the sink.
 @immutable
 final class PdfSplitPart {
-  /// Creates a part that holds the pages [start] to [end].
+  /// Creates a part that holds the pages from [start] up to, not including,
+  /// [end].
   const PdfSplitPart({
     required this.index,
     required this.start,
@@ -95,8 +96,12 @@ final class PdfSplitPart {
   /// Zero-based index of the part's first page in the source.
   final int start;
 
-  /// Zero-based index of the part's last page in the source (inclusive).
+  /// Zero-based index of the page after the part's last page in the source
+  /// (exclusive).
   final int end;
+
+  /// How many pages the part holds.
+  int get pageCount => end - start;
 
   /// The bookmark's title for a part cut by [PdfSplitRule.bookmarks]; null
   /// when the bookmark has none and for every other rule.
@@ -114,5 +119,5 @@ final class PdfSplitPart {
   int get hashCode => Object.hash(index, start, end, title);
 
   @override
-  String toString() => 'PdfSplitPart($index, pages $start-$end)';
+  String toString() => 'PdfSplitPart($index, pages $start..$end)';
 }

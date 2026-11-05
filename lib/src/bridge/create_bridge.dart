@@ -20,7 +20,7 @@ PdfBridge createBridge({PdfConfig? config}) {
   return SharedBridge(
     Router(
       pool: ExecutorPool.of(host),
-      maxLanes: config?.maxLanes ?? host.defaultLaneCount,
+      maxLanes: config?.concurrency ?? host.defaultLaneCount,
       mode: host.mode,
     ),
   );

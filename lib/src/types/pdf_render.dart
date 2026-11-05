@@ -18,12 +18,11 @@ enum PdfRenderFormat implements PdfWire {
 }
 
 /// How large a rendered page is. Pixels appear only here, in
-/// [PdfRenderedPage] and in `PdfImage`.
+/// [PdfRenderedPage] and in `PdfImageInfo`.
 ///
 /// ```dart
 /// const PdfRenderSize.dpi(150);                       // the default
 /// const PdfRenderSize.fit(maxWidth: 800, maxHeight: 600);
-/// const PdfRenderSize.thumbnail(200);
 /// ```
 sealed class PdfRenderSize {
   const PdfRenderSize();
@@ -38,39 +37,43 @@ sealed class PdfRenderSize {
     required int maxWidth,
     required int maxHeight,
   }) = PdfRenderFit;
-
-  /// Renders as large as fits inside a square of [size] pixels.
-  const factory PdfRenderSize.thumbnail(int size) = PdfRenderThumbnail;
 }
 
 /// [PdfRenderSize.dpi].
 final class PdfRenderDpi extends PdfRenderSize {
   /// Creates a dots-per-inch size.
-  const PdfRenderDpi(this.dpi);
+  const PdfRenderDpi(this.dpi) : assert(dpi >= 1, 'dpi must be >= 1');
 
   /// Dots per inch.
   final int dpi;
+
+  @override
+  bool operator ==(Object other) => other is PdfRenderDpi && other.dpi == dpi;
+
+  @override
+  int get hashCode => Object.hash(PdfRenderDpi, dpi);
 }
 
 /// [PdfRenderSize.fit].
 final class PdfRenderFit extends PdfRenderSize {
   /// Creates a bounding-box size.
-  const PdfRenderFit({required this.maxWidth, required this.maxHeight});
+  const PdfRenderFit({required this.maxWidth, required this.maxHeight})
+    : assert(maxWidth >= 1 && maxHeight >= 1, 'a size must be >= 1 pixel');
 
   /// Maximum output width in pixels.
   final int maxWidth;
 
   /// Maximum output height in pixels.
   final int maxHeight;
-}
 
-/// [PdfRenderSize.thumbnail].
-final class PdfRenderThumbnail extends PdfRenderSize {
-  /// Creates a square bounding-box size.
-  const PdfRenderThumbnail(this.size);
+  @override
+  bool operator ==(Object other) =>
+      other is PdfRenderFit &&
+      other.maxWidth == maxWidth &&
+      other.maxHeight == maxHeight;
 
-  /// Side of the square, in pixels.
-  final int size;
+  @override
+  int get hashCode => Object.hash(PdfRenderFit, maxWidth, maxHeight);
 }
 
 /// One page a render wrote to its sink: which page, and the size in pixels

@@ -3,10 +3,10 @@ import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 /// Configuration for a PDF engine instance.
 final class PdfConfig {
   /// Creates a PDF configuration.
-  const PdfConfig({this.webLaneWorkerUrl, this.webIoMode, this.maxLanes});
+  const PdfConfig({this.webWorkerUrl, this.webIoMode, this.concurrency});
 
-  /// Custom lane worker JS URL for web. Ignored on native.
-  final String? webLaneWorkerUrl;
+  /// Custom worker JS URL for web. Ignored on native.
+  final String? webWorkerUrl;
 
   /// Force a specific web I/O mode. Ignored on native. Null = auto-detect.
   ///
@@ -16,19 +16,19 @@ final class PdfConfig {
   ///   3. [PdfIoMode.opfs] — universal fallback
   final PdfIoMode? webIoMode;
 
-  /// Maximum concurrent lanes (isolated execution units) for this
+  /// How many operations run at once for this
   /// instance. Null = `max(2, cores / 2)`. A process-wide budget
   /// below this cap queues work instead of failing — exceeding any
   /// cap never errors.
-  final int? maxLanes;
+  final int? concurrency;
 
   @override
   bool operator ==(Object other) =>
       other is PdfConfig &&
-      other.webLaneWorkerUrl == webLaneWorkerUrl &&
+      other.webWorkerUrl == webWorkerUrl &&
       other.webIoMode == webIoMode &&
-      other.maxLanes == maxLanes;
+      other.concurrency == concurrency;
 
   @override
-  int get hashCode => Object.hash(webLaneWorkerUrl, webIoMode, maxLanes);
+  int get hashCode => Object.hash(webWorkerUrl, webIoMode, concurrency);
 }

@@ -26,19 +26,18 @@ void registerBuilderStressTests(Pdf Function() createPdf) {
         final builder = await pdf.build();
         for (var i = 0; i < 10; i++) {
           final page = await builder.addPage();
-          await page.font('Helvetica', 12);
+          await page.setFont('Helvetica', 12);
           await page.heading(1, 'Image page $i');
           await page.image(
             src(photoPng),
             const PdfRect(x: 72, y: 500, width: 128, height: 128),
           );
-          await page.done();
         }
         final sink = TestSink();
         await builder.save(sink);
         await builder.dispose();
 
-        final doc = await pdf.open(src(sink.takeBytes()));
+        final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
         expect(doc.pageCount, 10);
         final images = await extractToMemory(doc, pages: const PdfPages.all());
         for (final (:image, :data) in images) {

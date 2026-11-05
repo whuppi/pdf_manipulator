@@ -20,13 +20,14 @@ const _tMapList = 10;
 /// wire byte, the same as Rust's `ErrorKind`, and the wire sync test
 /// fails when the two differ. An unknown byte decodes as [engine].
 enum WireErrorKind {
-  /// Thrown as [PdfEngineError].
+  /// Thrown as [PdfEngineFailed].
   engine(0),
 
-  /// Thrown as [PdfInvalidArgument].
+  /// Thrown as [PdfEngineFailed]: the engine refused an argument the caller
+  /// could not have checked, and the wire carries no finer kind.
   invalidArgument(1),
 
-  /// Thrown as [PdfIoError].
+  /// Thrown as [PdfIoFailed].
   io(2),
 
   /// Thrown as [PdfCorrupted].
@@ -41,10 +42,10 @@ enum WireErrorKind {
   /// Thrown as [PdfWrongPassword].
   wrongPassword(6),
 
-  /// Thrown as [PdfCryptoError].
+  /// Thrown as [PdfCryptoFailed].
   crypto(7),
 
-  /// Thrown as [PdfPageRangeError], from the `page` and `pageCount` fields.
+  /// Thrown as [PdfPageOutOfRange], from the `page` and `pageCount` fields.
   pageRange(8),
 
   /// Thrown as [PdfIncrementalRefused].
@@ -82,12 +83,12 @@ Uint8List encodeRequest(String op, Map<String, Object?> fields) {
 ///
 /// Every engine failure is a [PdfError], thrown here so callers can
 /// pattern-match it — and so it can never be mistaken for a
-/// [StateError], which is reserved for programmer errors (use after
-/// dispose). Status 0 carries an error kind that maps to a [PdfError]
+/// [StateError] or an [ArgumentError], which are reserved for programmer
+/// errors. Status 0 carries an error kind that maps to a [PdfError]
 /// subtype; status 2 throws [PdfCancelled]. Every other status returns
 /// the field map.
 Map<String, Object?> decodeResponse(Uint8List bytes) {
-  if (bytes.isEmpty) throw const PdfEngineError('empty response');
+  if (bytes.isEmpty) throw const PdfEngineFailed('empty response');
   final r = _Reader(bytes);
   final status = r.u8();
   if (status == 0) {
@@ -96,15 +97,15 @@ Map<String, Object?> decodeResponse(Uint8List bytes) {
     final message = map['message'] as String? ?? '';
     final kind = WireErrorKind.fromByte(byte);
     throw switch (kind) {
-      WireErrorKind.engine => PdfEngineError(message),
-      WireErrorKind.invalidArgument => PdfInvalidArgument(message),
-      WireErrorKind.io => PdfIoError(message),
+      WireErrorKind.engine => PdfEngineFailed(message),
+      WireErrorKind.invalidArgument => PdfEngineFailed(message),
+      WireErrorKind.io => PdfIoFailed(message),
       WireErrorKind.corrupted => PdfCorrupted(message),
       WireErrorKind.unsupported => PdfUnsupported(message),
       WireErrorKind.passwordRequired => const PdfPasswordRequired(),
       WireErrorKind.wrongPassword => const PdfWrongPassword(),
-      WireErrorKind.crypto => PdfCryptoError(message),
-      WireErrorKind.pageRange => PdfPageRangeError(
+      WireErrorKind.crypto => PdfCryptoFailed(message),
+      WireErrorKind.pageRange => PdfPageOutOfRange(
         page: map['page'] as int? ?? 0,
         pageCount: map['pageCount'] as int? ?? 0,
       ),
@@ -204,7 +205,7 @@ void _writeValue(BytesBuilder buf, Object value) {
       _writeU32(buf, nested.length);
       buf.add(nested);
     case final Enum v:
-      throw PdfInvalidArgument(
+      throw PdfEngineFailed(
         'an enum reaches the wire only as a PdfWire name (putEnum): $v',
       );
     default:

@@ -8,7 +8,6 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/io.dart';
-import 'package:pdf_manipulator/pdf_manipulator.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -67,11 +66,11 @@ void main() {
       await source.close();
     });
 
-    test('close is idempotent and a read after it is PdfDisposed', () async {
+    test('close is idempotent and a read after it is a StateError', () async {
       final source = await open();
       await source.close();
       await source.close();
-      expect(() => source.readAt(0, 1), throwsA(isA<PdfDisposed>()));
+      expect(() => source.readAt(0, 1), throwsA(isA<StateError>()));
     });
 
     test('close waits for the reads in flight', () async {

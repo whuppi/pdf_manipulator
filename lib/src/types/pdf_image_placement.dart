@@ -9,9 +9,9 @@ import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 /// page's content stream draws the image by — the name `setImageBounds`
 /// takes. It is unique within a page, not across pages.
 @immutable
-final class PdfPageImage {
+final class PdfImagePlacement {
   /// Creates a page-image descriptor.
-  const PdfPageImage({
+  const PdfImagePlacement({
     required this.name,
     required this.bounds,
     required this.transform,
@@ -31,7 +31,7 @@ final class PdfPageImage {
 
   @override
   bool operator ==(Object other) =>
-      other is PdfPageImage &&
+      other is PdfImagePlacement &&
       other.name == name &&
       other.bounds == bounds &&
       other.transform == transform;
@@ -41,6 +41,6 @@ final class PdfPageImage {
 
   @override
   String toString() =>
-      'PdfPageImage($name, ${bounds.width}x${bounds.height} at '
+      'PdfImagePlacement($name, ${bounds.width}x${bounds.height} at '
       '(${bounds.x}, ${bounds.y}))';
 }

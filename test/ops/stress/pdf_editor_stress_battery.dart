@@ -21,7 +21,7 @@ void registerEditorStressTests(Pdf Function() createPdf) {
       ratio: 12,
       () async {
         final pdf = createPdf();
-        final editor = await pdf.edit(src(largePdf));
+        final editor = await pdf.edit(PdfInput(src(largePdf)));
         for (var page = 0; page < 100; page++) {
           expect(await editor.pageImages(page), isEmpty, reason: 'page $page');
         }
@@ -36,11 +36,11 @@ void registerEditorStressTests(Pdf Function() createPdf) {
       // Background layer draws into page content, so extraction can
       // prove the text landed — output size alone proves nothing.
       await pdf
-          .edits(src(largePdf), sink)
+          .editOnce(PdfInput(src(largePdf)), sink)
           .addWatermark('CONFIDENTIAL', layer: PdfWatermarkLayer.background);
       final out = sink.takeBytes();
       expect(out.length, greaterThan(largePdf.length));
-      final doc = await pdf.open(src(out));
+      final doc = await pdf.open(PdfInput(src(out)));
       expect(doc.pageCount, 1000);
       final midPage = await extractTextToString(
         doc,
@@ -63,10 +63,10 @@ void registerEditorStressTests(Pdf Function() createPdf) {
         final pdf = createPdf();
         final encSink = TestSink();
         await pdf.resave(
-          src(largePdf),
+          PdfInput(src(largePdf)),
           encSink,
-          options: const PdfSaveOptions.fullRewrite(
-            encryption: PdfEncryption.config(
+          save: const PdfSave.full(
+            encryption: PdfEncryption.password(
               ownerPassword: 'owner',
               userPassword: 'user',
             ),
@@ -74,14 +74,11 @@ void registerEditorStressTests(Pdf Function() createPdf) {
         );
         final decSink = TestSink();
         await pdf.resave(
-          src(encSink.takeBytes()),
+          PdfInput(src(encSink.takeBytes()), password: 'owner'),
           decSink,
-          password: 'owner',
-          options: const PdfSaveOptions.fullRewrite(
-            encryption: PdfEncryption.remove(),
-          ),
+          save: const PdfSave.full(encryption: PdfEncryption.remove()),
         );
-        final doc = await pdf.open(src(decSink.takeBytes()));
+        final doc = await pdf.open(PdfInput(src(decSink.takeBytes())));
         expect(doc.pageCount, 1000);
         await doc.dispose();
       },
@@ -94,7 +91,7 @@ void registerEditorStressTests(Pdf Function() createPdf) {
       ratio: 200,
       () async {
         final pdf = createPdf();
-        final editor = await pdf.edit(src(largePdf));
+        final editor = await pdf.edit(PdfInput(src(largePdf)));
         // Background layer draws into page content, so extraction can
         // prove every page took its edit.
         for (var i = 0; i < 10; i++) {
@@ -108,7 +105,7 @@ void registerEditorStressTests(Pdf Function() createPdf) {
         await editor.save(sink);
         await editor.dispose();
         final out = sink.takeBytes();
-        final doc = await pdf.open(src(out));
+        final doc = await pdf.open(PdfInput(src(out)));
         expect(doc.pageCount, 1000);
         final firstTen = await extractTextToString(
           doc,
@@ -130,7 +127,7 @@ void registerEditorStressTests(Pdf Function() createPdf) {
       ratio: 48,
       () async {
         final pdf = createPdf();
-        final editor = await pdf.edit(src(largePdf));
+        final editor = await pdf.edit(PdfInput(src(largePdf)));
         final before = await editor.pageImages(0);
         await editor.reduceImages(PdfImagePolicy.screen);
         final after = await editor.pageImages(0);
@@ -143,8 +140,8 @@ void registerEditorStressTests(Pdf Function() createPdf) {
     stressTest('compress 1000-page PDF', createPdf, ratio: 123, () async {
       final pdf = createPdf();
       final sink = TestSink();
-      await pdf.compress(src(largePdf), sink);
-      final doc = await pdf.open(src(sink.takeBytes()));
+      await pdf.compress(PdfInput(src(largePdf)), sink);
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       expect(doc.pageCount, 1000, reason: 'compression must never cost a page');
       await doc.dispose();
     });
@@ -154,8 +151,8 @@ void registerEditorStressTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final formPdf = fFormFields;
       final sink = TestSink();
-      await pdf.edits(src(formPdf), sink).flattenForms();
-      final doc = await pdf.open(src(sink.takeBytes()));
+      await pdf.editOnce(PdfInput(src(formPdf)), sink).flattenForms();
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       expect(doc.pageCount, 1);
       await doc.dispose();
     });

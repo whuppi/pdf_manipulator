@@ -1,5 +1,5 @@
 // CHARTER — this battery alone proves: what a save writes for pages merged
-// in by `mergeFrom` — their content and image bytes, one object per id with
+// in by `appendPages` — their content and image bytes, one object per id with
 // every id in the xref, a link that still names the page it sits on, the
 // merged form fields and /DR without the merged outline, no source page
 // tree behind a link to an unmerged page, and an object a dropped merged
@@ -23,7 +23,7 @@ import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
 
 /// A save with nothing packed or compressed.
-const _plain = PdfSaveOptions.fullRewrite(deflate: false, objectStreams: false);
+const _plain = PdfSave.full(deflate: PdfDeflate.none, useObjectStreams: false);
 
 String _latin1(Uint8List bytes) =>
     String.fromCharCodes(bytes); // bytegrep-exempt: raw file text
@@ -101,17 +101,20 @@ void registerMergeTests(Pdf Function() createPdf) {
       PdfPages? pages,
       Future<void> Function(PdfEditor editor)? edit,
     }) async {
-      final editor = await createPdf().edit(src(base));
-      await editor.mergeFrom(src(source), pages: pages);
+      final editor = await createPdf().edit(PdfInput(src(base)));
+      await editor.appendPages(
+        PdfInput(src(source)),
+        pages: pages ?? const PdfPages.all(),
+      );
       await edit?.call(editor);
       final sink = TestSink();
-      await editor.save(sink, options: _plain);
+      await editor.save(sink, save: _plain);
       await editor.dispose();
       return sink.takeBytes();
     }
 
     Future<List<String>> pageTexts(Uint8List bytes) async {
-      final doc = await createPdf().open(src(bytes));
+      final doc = await createPdf().open(PdfInput(src(bytes)));
       try {
         return [
           for (var i = 0; i < doc.pageCount; i++)
@@ -170,7 +173,7 @@ void registerMergeTests(Pdf Function() createPdf) {
 
     test('a merge imports no outline and lists the merged fields', () async {
       final bytes = await mergedSave(minimalPdf, mergeSourcePdf);
-      final doc = await createPdf().open(src(bytes));
+      final doc = await createPdf().open(PdfInput(src(bytes)));
       final names = [for (final f in await doc.formFields()) f.name];
       await doc.dispose();
       expect(names, ['mergedfield']);
@@ -200,7 +203,7 @@ void registerMergeTests(Pdf Function() createPdf) {
         final bytes = await mergedSave(
           base,
           merged,
-          edit: (editor) => editor.keepPages([3]),
+          edit: (editor) => editor.keepPages(PdfPages.single(3)),
         );
         expect(await pageTexts(bytes), ['M1']);
         final raw = _Raw(bytes);
@@ -223,7 +226,7 @@ void registerMergeTests(Pdf Function() createPdf) {
         final bytes = await mergedSave(
           base,
           merged,
-          edit: (editor) => editor.deletePages(const PdfPages.single(2)),
+          edit: (editor) => editor.removePages(const PdfPages.single(2)),
         );
         expect(await pageTexts(bytes), ['S0', 'S1', 'M1', 'M2']);
         final raw = _Raw(bytes);

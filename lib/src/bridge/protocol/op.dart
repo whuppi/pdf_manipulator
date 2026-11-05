@@ -236,7 +236,7 @@ enum PageOp {
   inline('inline'),
 
   /// Write text inside a rectangle.
-  textInRect('textInRect'),
+  textIn('textInRect'),
 
   /// Fill a rectangle.
   filledRect('filledRect'),

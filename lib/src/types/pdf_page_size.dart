@@ -23,8 +23,8 @@ sealed class PdfPageSize {
   const factory PdfPageSize.a5() = PdfPageSizeA5;
 
   /// A page of [width] × [height] points.
-  const factory PdfPageSize.custom(double width, double height) =
-      PdfPageSizeCustom;
+  const factory PdfPageSize.points(double width, double height) =
+      PdfPageSizePoints;
 
   /// The page's width in points.
   double get width;
@@ -33,7 +33,7 @@ sealed class PdfPageSize {
   double get height;
 
   /// The same size turned on its side: the width and the height swap.
-  PdfPageSize get landscape => PdfPageSize.custom(height, width);
+  PdfPageSize get landscape => PdfPageSize.points(height, width);
 
   @override
   bool operator ==(Object other) =>
@@ -107,9 +107,9 @@ final class PdfPageSizeA5 extends PdfPageSize {
 }
 
 /// A page of a given width and height, in points.
-final class PdfPageSizeCustom extends PdfPageSize {
-  /// Creates a custom page size.
-  const PdfPageSizeCustom(this.width, this.height);
+final class PdfPageSizePoints extends PdfPageSize {
+  /// Creates a page size of [width] by [height] points.
+  const PdfPageSizePoints(this.width, this.height);
 
   @override
   final double width;

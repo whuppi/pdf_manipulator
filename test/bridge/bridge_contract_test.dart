@@ -68,7 +68,7 @@ void main() {
       expect(
         () => decodeResponse(response),
         throwsA(
-          isA<PdfEngineError>().having(
+          isA<PdfEngineFailed>().having(
             (e) => e.message,
             'message',
             'test error',

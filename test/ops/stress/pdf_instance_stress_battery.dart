@@ -20,7 +20,7 @@ void registerInstanceStressTests(Pdf Function() createPdf) {
       () async {
         final pdf = createPdf();
         for (var i = 0; i < 100; i++) {
-          final doc = await pdf.open(src(minimalPdf));
+          final doc = await pdf.open(PdfInput(src(minimalPdf)));
           expect(doc.pageCount, 1);
           await doc.dispose();
         }
@@ -37,7 +37,7 @@ void registerInstanceStressTests(Pdf Function() createPdf) {
       () async {
         final pdf = createPdf();
         for (var i = 0; i < 100; i++) {
-          final ed = await pdf.edit(src(minimalPdf));
+          final ed = await pdf.edit(PdfInput(src(minimalPdf)));
           expect(await ed.pageCount(), 1);
           await ed.dispose();
         }
@@ -55,7 +55,7 @@ void registerInstanceStressTests(Pdf Function() createPdf) {
         final instances = List.generate(5, (_) => createPdf());
         for (var round = 0; round < 10; round++) {
           final docs = await Future.wait(
-            instances.map((pdf) => pdf.open(src(minimalPdf))),
+            instances.map((pdf) => pdf.open(PdfInput(src(minimalPdf)))),
           );
           for (final doc in docs) {
             expect(doc.pageCount, 1);
@@ -77,11 +77,11 @@ void registerInstanceStressTests(Pdf Function() createPdf) {
       () async {
         final pdf = createPdf();
         for (var i = 0; i < 20; i++) {
-          final doc = await pdf.open(src(minimalPdf));
+          final doc = await pdf.open(PdfInput(src(minimalPdf)));
           expect(doc.pageCount, 1);
           await doc.dispose();
 
-          final ed = await pdf.edit(src(minimalPdf));
+          final ed = await pdf.edit(PdfInput(src(minimalPdf)));
           await ed.setMetadata(
             (await ed.metadata()).copyWith(title: 'round $i'),
           );
@@ -90,7 +90,10 @@ void registerInstanceStressTests(Pdf Function() createPdf) {
           await ed.dispose();
 
           final sink2 = TestSink();
-          await pdf.merge([src(minimalPdf), src(minimalPdf)], sink2);
+          await pdf.merge([
+            PdfInput(src(minimalPdf)),
+            PdfInput(src(minimalPdf)),
+          ], sink2);
         }
         await pdf.dispose();
       },
@@ -104,9 +107,9 @@ void registerInstanceStressTests(Pdf Function() createPdf) {
       ownsPdf: true,
       () async {
         final pdf = createPdf();
-        final docs = <PdfDoc>[];
+        final docs = <PdfDocument>[];
         for (var i = 0; i < 10; i++) {
-          docs.add(await pdf.open(src(minimalPdf)));
+          docs.add(await pdf.open(PdfInput(src(minimalPdf))));
         }
         await pdf.dispose();
       },

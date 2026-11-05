@@ -103,7 +103,7 @@ enum PdfImageKeepReason implements PdfWire {
   /// Nothing the policy allows could make it smaller.
   alreadyOptimal('alreadyOptimal'),
 
-  /// Re-encoding did not save the policy's `minSavings` share of the bytes.
+  /// Re-encoding did not save the policy's `minSavingsRatio` share of the bytes.
   belowMinSavings('belowMinSavings'),
 
   /// The stored samples could not be decoded, so nothing was rewritten.
@@ -123,13 +123,13 @@ final class PdfImageOutcome {
     required this.objectId,
     required this.encoding,
     required this.color,
-    required this.indexed,
-    required this.bits,
+    required this.isIndexed,
+    required this.bitsPerComponent,
     required this.width,
     required this.height,
     required this.hasSoftMask,
-    required this.uses,
-    required this.ppiMin,
+    required this.placementCount,
+    required this.minPpi,
     required this.action,
     required this.keepReason,
     required this.bytesBefore,
@@ -148,10 +148,10 @@ final class PdfImageOutcome {
   final PdfImageColor color;
 
   /// Whether the stored samples were palette indices.
-  final bool indexed;
+  final bool isIndexed;
 
   /// Bits per component before the operation.
-  final int bits;
+  final int bitsPerComponent;
 
   /// Pixel width before.
   final int width;
@@ -163,11 +163,11 @@ final class PdfImageOutcome {
   final bool hasSoftMask;
 
   /// Placements across the document's pages, forms included.
-  final int uses;
+  final int placementCount;
 
   /// Effective resolution of the most demanding placement; `null` when
   /// no placement had a usable transform.
-  final double? ppiMin;
+  final double? minPpi;
 
   /// What happened.
   final PdfImageAction action;
@@ -194,13 +194,13 @@ final class PdfImageOutcome {
       other.objectId == objectId &&
       other.encoding == encoding &&
       other.color == color &&
-      other.indexed == indexed &&
-      other.bits == bits &&
+      other.isIndexed == isIndexed &&
+      other.bitsPerComponent == bitsPerComponent &&
       other.width == width &&
       other.height == height &&
       other.hasSoftMask == hasSoftMask &&
-      other.uses == uses &&
-      other.ppiMin == ppiMin &&
+      other.placementCount == placementCount &&
+      other.minPpi == minPpi &&
       other.action == action &&
       other.keepReason == keepReason &&
       other.bytesBefore == bytesBefore &&
@@ -213,13 +213,13 @@ final class PdfImageOutcome {
     objectId,
     encoding,
     color,
-    indexed,
-    bits,
+    isIndexed,
+    bitsPerComponent,
     width,
     height,
     hasSoftMask,
-    uses,
-    ppiMin,
+    placementCount,
+    minPpi,
     action,
     keepReason,
     bytesBefore,

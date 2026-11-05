@@ -54,13 +54,12 @@ Future<Uint8List> _fixture(
   final builder = await pdf.build();
   for (var i = 0; i < pages; i++) {
     final page = await builder.addPage(PdfPageSize.letter());
-    await page.at(72, 720);
+    await page.moveTo(const PdfPoint(72, 720));
     await page.text('page ${i + offset}');
     await page.image(
       src(_image(i + offset)),
       const PdfRect(x: 72, y: 600, width: 40, height: 40),
     );
-    await page.done();
   }
   final sink = TestSink();
   await builder.save(sink);
@@ -72,13 +71,13 @@ Future<Uint8List> _save(
   Pdf pdf,
   Uint8List input,
   Future<void> Function(PdfEditor editor) edit, {
-  PdfSaveOptions options = const PdfSaveOptions.fullRewrite(),
+  PdfSave save = const PdfSave.full(),
   String? password,
 }) async {
-  final editor = await pdf.edit(src(input), password: password);
+  final editor = await pdf.edit(PdfInput(src(input), password: password));
   await edit(editor);
   final sink = TestSink();
-  await editor.save(sink, options: options);
+  await editor.save(sink, save: save);
   await editor.dispose();
   return sink.takeBytes();
 }
@@ -109,7 +108,11 @@ void registerDeterminismTests(Pdf Function() createPdf) {
         final pdf = createPdf();
         Future<Uint8List> run() async {
           final sink = TestSink();
-          await pdf.compress(src(fixture), sink, images: preset.value);
+          await pdf.compress(
+            PdfInput(src(fixture)),
+            sink,
+            images: preset.value,
+          );
           return sink.takeBytes();
         }
 
@@ -142,7 +145,7 @@ void registerDeterminismTests(Pdf Function() createPdf) {
         pdf,
         fixture,
         (editor) => editor.reduceImages(PdfImagePolicy.ebook),
-        options: const PdfSaveOptions.fullRewrite(garbageCollect: false),
+        save: const PdfSave.full(garbageCollect: false),
       );
 
       _expectSame(await run(), await run());
@@ -154,7 +157,7 @@ void registerDeterminismTests(Pdf Function() createPdf) {
         pdf,
         fixture,
         (editor) => editor.reduceImages(PdfImagePolicy.screen),
-        options: const PdfSaveOptions.incremental(),
+        save: const PdfSave.incremental(),
       );
 
       _expectSame(await run(), await run());
@@ -164,7 +167,11 @@ void registerDeterminismTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       Future<Uint8List> run() async {
         final sink = TestSink();
-        await pdf.merge([src(fixture), src(other), src(fixture)], sink);
+        await pdf.merge([
+          PdfInput(src(fixture)),
+          PdfInput(src(other)),
+          PdfInput(src(fixture)),
+        ], sink);
         return sink.takeBytes();
       }
 
@@ -179,9 +186,8 @@ void registerDeterminismTests(Pdf Function() createPdf) {
       Future<Uint8List> run() async {
         final builder = await pdf.build();
         final page = await builder.addPage(PdfPageSize.letter());
-        await page.at(72, 720);
+        await page.moveTo(const PdfPoint(72, 720));
         await page.text('determinism');
-        await page.done();
         final sink = TestSink();
         await builder.save(sink);
         await builder.dispose();
@@ -214,8 +220,8 @@ void registerDeterminismTests(Pdf Function() createPdf) {
     test('a merge of selected pages saves the same bytes twice', () async {
       final pdf = createPdf();
       Future<Uint8List> run() => _save(pdf, fixture, (editor) async {
-        await editor.mergeFrom(
-          src(other),
+        await editor.appendPages(
+          PdfInput(src(other)),
           pages: PdfPages.list([0, 2, 4, 6, 8, 10]),
         );
         await editor.reduceImages(PdfImagePolicy.ebook);
@@ -228,7 +234,7 @@ void registerDeterminismTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       Future<Uint8List> run() async {
         final sink = TestSink();
-        await pdf.split(src(fixture), (part) {
+        await pdf.split(PdfInput(src(fixture)), (part) {
           return part.index == 0 ? sink : TestSink();
         }, by: const PdfSplitRule.every(_pages ~/ 2));
         return sink.takeBytes();
@@ -241,15 +247,15 @@ void registerDeterminismTests(Pdf Function() createPdf) {
       'a kept encryption saves the same bytes twice once decrypted',
       () async {
         final pdf = createPdf();
-        const config = PdfEncryption.config(
+        const config = PdfEncryption.password(
           ownerPassword: 'owner-pw',
           userPassword: 'user-pw',
         );
         final encrypted = TestSink();
         await pdf.resave(
-          src(fixture),
+          PdfInput(src(fixture)),
           encrypted,
-          options: const PdfSaveOptions.fullRewrite(encryption: config),
+          save: const PdfSave.full(encryption: config),
         );
         final source = encrypted.takeBytes();
 
@@ -262,12 +268,9 @@ void registerDeterminismTests(Pdf Function() createPdf) {
           );
           final plain = TestSink();
           await pdf.resave(
-            src(kept),
+            PdfInput(src(kept), password: 'user-pw'),
             plain,
-            password: 'user-pw',
-            options: const PdfSaveOptions.fullRewrite(
-              encryption: PdfEncryption.remove(),
-            ),
+            save: const PdfSave.full(encryption: PdfEncryption.remove()),
           );
           return plain.takeBytes();
         }
@@ -283,9 +286,12 @@ void registerDeterminismTests(Pdf Function() createPdf) {
         final sink = TestSink();
         final second = DateTime.now().millisecondsSinceEpoch ~/ 1000;
         await pdf.sign(
-          src(fixture),
+          PdfInput(src(fixture)),
           sink,
-          credentials: PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
+          credentials: PdfSigningCredentials.pkcs12(
+            src(testPkcs12),
+            'changeit',
+          ),
         );
         return (sink.takeBytes(), second);
       }

@@ -24,17 +24,29 @@ void main() {
       expect(e.message, contains('Incorrect'));
     });
 
-    test('PdfPageRangeError carries page and count in message', () {
-      const e = PdfPageRangeError(page: 5, pageCount: 3);
+    test('PdfPageOutOfRange carries page and count in message', () {
+      const e = PdfPageOutOfRange(page: 5, pageCount: 3);
       expect(e.page, equals(5));
       expect(e.pageCount, equals(3));
       expect(e.message, contains('5'));
       expect(e.message, contains('3'));
     });
 
-    test('PdfInvalidArgument carries exact message', () {
-      const e = PdfInvalidArgument('empty list');
-      expect(e.message, equals('empty list'));
+    test('PdfNotFound carries kind and name in message', () {
+      const e = PdfNotFound(kind: 'attachment', name: 'a.txt');
+      expect(e.kind, equals('attachment'));
+      expect(e.name, equals('a.txt'));
+      expect(e.message, equals('No attachment named "a.txt"'));
+    });
+
+    test('PdfIncrementalRefused carries exact message', () {
+      const e = PdfIncrementalRefused('signed');
+      expect(e.message, equals('signed'));
+    });
+
+    test('PdfCancelled has descriptive message', () {
+      const e = PdfCancelled();
+      expect(e.message, contains('cancelled'));
     });
 
     test('PdfUnsupported carries exact message', () {
@@ -42,20 +54,20 @@ void main() {
       expect(e.message, equals('JBIG2'));
     });
 
-    test('PdfIoError carries message and cause', () {
-      final e = PdfIoError('disk full', cause: Exception('no space'));
+    test('PdfIoFailed carries message and cause', () {
+      final e = PdfIoFailed('disk full', cause: Exception('no space'));
       expect(e.message, equals('disk full'));
       expect(e.cause, isNotNull);
     });
 
-    test('PdfCryptoError carries message and cause', () {
-      final e = PdfCryptoError('AES failed', cause: Exception('key'));
+    test('PdfCryptoFailed carries message and cause', () {
+      final e = PdfCryptoFailed('AES failed', cause: Exception('key'));
       expect(e.message, equals('AES failed'));
       expect(e.cause, isNotNull);
     });
 
-    test('PdfEngineError carries message and cause', () {
-      final e = PdfEngineError('panic', cause: Exception('rust'));
+    test('PdfEngineFailed carries message and cause', () {
+      final e = PdfEngineFailed('panic', cause: Exception('rust'));
       expect(e.message, equals('panic'));
       expect(e.cause, isNotNull);
     });
@@ -73,21 +85,38 @@ void main() {
 
     test('pattern-match exhaustive on sealed class', () {
       const PdfError e = PdfCorrupted('x');
-      final desc = switch (e) {
-        PdfCorrupted() => 'corrupted',
-        PdfPasswordRequired() => 'password',
-        PdfWrongPassword() => 'wrong',
-        PdfPageRangeError() => 'range',
-        PdfInvalidArgument() => 'invalid',
-        PdfDisposed() => 'disposed',
-        PdfIoError() => 'io',
-        PdfUnsupported() => 'unsupported',
-        PdfCryptoError() => 'crypto',
-        PdfEngineError() => 'engine',
-        PdfCancelled() => 'cancelled',
-        PdfIncrementalRefused() => 'incremental refused',
-      };
-      expect(desc, equals('corrupted'));
+      expect(describe(e), equals('corrupted'));
+    });
+
+    test('every subtype is matched by the exhaustive switch', () {
+      final all = <PdfError>[
+        const PdfIoFailed('a'),
+        const PdfCorrupted('a'),
+        const PdfEngineFailed('a'),
+        const PdfPageOutOfRange(page: 1, pageCount: 1),
+        const PdfNotFound(kind: 'k', name: 'n'),
+        const PdfUnsupported('a'),
+        const PdfPasswordRequired(),
+        const PdfWrongPassword(),
+        const PdfCryptoFailed('a'),
+        const PdfIncrementalRefused('a'),
+        const PdfCancelled(),
+      ];
+      expect(all.map(describe).toSet(), hasLength(11));
     });
   });
 }
+
+String describe(PdfError e) => switch (e) {
+  PdfCorrupted() => 'corrupted',
+  PdfPasswordRequired() => 'password',
+  PdfWrongPassword() => 'wrong',
+  PdfPageOutOfRange() => 'range',
+  PdfNotFound() => 'not found',
+  PdfIoFailed() => 'io',
+  PdfUnsupported() => 'unsupported',
+  PdfCryptoFailed() => 'crypto',
+  PdfEngineFailed() => 'engine',
+  PdfCancelled() => 'cancelled',
+  PdfIncrementalRefused() => 'incremental refused',
+};

@@ -9,7 +9,7 @@ final class PdfRect {
     required this.y,
     required this.width,
     required this.height,
-  });
+  }) : assert(width >= 0 && height >= 0, 'a rectangle has no negative size');
 
   /// Creates a rectangle from its four edges. [left] and [bottom] are the
   /// lower-left corner, [right] and [top] the upper-right one.
@@ -21,7 +21,8 @@ final class PdfRect {
   }) : x = left,
        y = bottom,
        width = right - left,
-       height = top - bottom;
+       height = top - bottom,
+       assert(right >= left && top >= bottom, 'an edge is behind its opposite');
 
   /// Left edge x-coordinate.
   final double x;

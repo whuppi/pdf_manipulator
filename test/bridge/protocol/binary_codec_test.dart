@@ -161,7 +161,7 @@ void main() {
       expect(
         () => decodeResponse(_buildErrorResponse(0, 'something broke')),
         throwsA(
-          isA<PdfEngineError>().having(
+          isA<PdfEngineFailed>().having(
             (e) => e.message,
             'message',
             'something broke',
@@ -170,11 +170,11 @@ void main() {
       );
     });
 
-    test('kind 1 invalid argument', () {
+    test('kind 1 invalid argument surfaces as an engine failure', () {
       expect(
         () => decodeResponse(_buildErrorResponse(1, 'bad argument')),
         throwsA(
-          isA<PdfInvalidArgument>().having(
+          isA<PdfEngineFailed>().having(
             (e) => e.message,
             'message',
             'bad argument',
@@ -187,7 +187,7 @@ void main() {
       expect(
         () => decodeResponse(_buildErrorResponse(2, 'disk full')),
         throwsA(
-          isA<PdfIoError>().having((e) => e.message, 'message', 'disk full'),
+          isA<PdfIoFailed>().having((e) => e.message, 'message', 'disk full'),
         ),
       );
     });
@@ -232,7 +232,7 @@ void main() {
       expect(
         () => decodeResponse(_buildErrorResponse(7, 'bad pkcs12')),
         throwsA(
-          isA<PdfCryptoError>().having(
+          isA<PdfCryptoFailed>().having(
             (e) => e.message,
             'message',
             'bad pkcs12',
@@ -251,7 +251,7 @@ void main() {
           ),
         ),
         throwsA(
-          isA<PdfPageRangeError>()
+          isA<PdfPageOutOfRange>()
               .having((e) => e.page, 'page', 99)
               .having((e) => e.pageCount, 'pageCount', 1),
         ),
@@ -271,11 +271,11 @@ void main() {
       );
     });
 
-    test('unknown kind falls back to PdfEngineError', () {
+    test('unknown kind falls back to PdfEngineFailed', () {
       expect(
         () => decodeResponse(_buildErrorResponse(200, 'mystery')),
         throwsA(
-          isA<PdfEngineError>().having((e) => e.message, 'message', 'mystery'),
+          isA<PdfEngineFailed>().having((e) => e.message, 'message', 'mystery'),
         ),
       );
     });
@@ -292,10 +292,10 @@ void main() {
       expect(result['isEncrypted'], false);
     });
 
-    test('empty response throws PdfEngineError', () {
+    test('empty response throws PdfEngineFailed', () {
       expect(
         () => decodeResponse(Uint8List(0)),
-        throwsA(isA<PdfEngineError>()),
+        throwsA(isA<PdfEngineFailed>()),
       );
     });
 

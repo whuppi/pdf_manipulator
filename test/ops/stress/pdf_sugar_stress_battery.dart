@@ -17,7 +17,7 @@ void registerSugarStressTests(Pdf Function() createPdf) {
     stressTest('split every 100 pages', createPdf, ratio: 240, () async {
       final pdf = createPdf();
       final sinks = <TestSink>[];
-      await pdf.split(src(largePdf), (part) {
+      await pdf.split(PdfInput(src(largePdf)), (part) {
         final s = TestSink();
         sinks.add(s);
         return s;
@@ -26,7 +26,7 @@ void registerSugarStressTests(Pdf Function() createPdf) {
       for (final s in sinks) {
         final bytes = s.takeBytes();
         expect(bytes.length, greaterThan(0));
-        final doc = await pdf.open(src(bytes));
+        final doc = await pdf.open(PdfInput(src(bytes)));
         expect(doc.pageCount, 100);
         await doc.dispose();
       }
@@ -41,7 +41,7 @@ void registerSugarStressTests(Pdf Function() createPdf) {
         final pdf = createPdf();
         final smallPdf = fHundredPage;
         final sinks = <TestSink>[];
-        final parts = await pdf.split(src(smallPdf), (part) {
+        final parts = await pdf.split(PdfInput(src(smallPdf)), (part) {
           final s = TestSink();
           sinks.add(s);
           return s;
@@ -49,7 +49,7 @@ void registerSugarStressTests(Pdf Function() createPdf) {
         expect(parts.length, greaterThanOrEqualTo(2));
         var totalPages = 0;
         for (final s in sinks) {
-          final doc = await pdf.open(src(s.takeBytes()));
+          final doc = await pdf.open(PdfInput(src(s.takeBytes())));
           totalPages += doc.pageCount;
           await doc.dispose();
         }
@@ -66,7 +66,7 @@ void registerSugarStressTests(Pdf Function() createPdf) {
         final pdf = createPdf();
         final smallPdf = fHundredPage;
         final sinks = <TestSink>[];
-        final parts = await pdf.split(src(smallPdf), (part) {
+        final parts = await pdf.split(PdfInput(src(smallPdf)), (part) {
           final s = TestSink();
           sinks.add(s);
           return s;
@@ -74,7 +74,7 @@ void registerSugarStressTests(Pdf Function() createPdf) {
         expect(parts.length, greaterThanOrEqualTo(5));
         var totalPages = 0;
         for (final s in sinks) {
-          final doc = await pdf.open(src(s.takeBytes()));
+          final doc = await pdf.open(PdfInput(src(s.takeBytes())));
           totalPages += doc.pageCount;
           await doc.dispose();
         }
@@ -97,7 +97,7 @@ void registerSugarStressTests(Pdf Function() createPdf) {
         final pdf = createPdf();
         final smallPdf = fHundredPage;
         final sinks = <TestSink>[];
-        final parts = await pdf.split(src(smallPdf), (part) {
+        final parts = await pdf.split(PdfInput(src(smallPdf)), (part) {
           final s = TestSink();
           sinks.add(s);
           return s;
@@ -107,7 +107,7 @@ void registerSugarStressTests(Pdf Function() createPdf) {
         for (final s in sinks) {
           final bytes = s.takeBytes();
           expect(bytes.length, greaterThan(0));
-          final doc = await pdf.open(src(bytes));
+          final doc = await pdf.open(PdfInput(src(bytes)));
           totalPages += doc.pageCount;
           expect(doc.pageCount, greaterThanOrEqualTo(1));
           await doc.dispose();
@@ -125,13 +125,13 @@ void registerSugarStressTests(Pdf Function() createPdf) {
         final pdf = createPdf();
         final smallPdf = fHundredPage;
         final sinks = <TestSink>[];
-        await pdf.split(src(smallPdf), (part) {
+        await pdf.split(PdfInput(src(smallPdf)), (part) {
           final s = TestSink();
           sinks.add(s);
           return s;
         }, by: PdfSplitRule.maxBytes(smallPdf.length * 2));
         expect(sinks.length, 1);
-        final doc = await pdf.open(src(sinks.first.takeBytes()));
+        final doc = await pdf.open(PdfInput(src(sinks.first.takeBytes())));
         expect(doc.pageCount, 100);
         await doc.dispose();
       },
@@ -147,7 +147,7 @@ void registerSugarStressTests(Pdf Function() createPdf) {
         final smallPdf = fHundredPage;
         final limit = smallPdf.length ~/ 3;
         final sinks = <TestSink>[];
-        final parts = await pdf.split(src(smallPdf), (part) {
+        final parts = await pdf.split(PdfInput(src(smallPdf)), (part) {
           final s = TestSink();
           sinks.add(s);
           return s;
@@ -158,7 +158,7 @@ void registerSugarStressTests(Pdf Function() createPdf) {
           // wrote: a part that holds more than one page fits the limit.
           final bytes = sinks[i].takeBytes().length;
           expect(bytes, greaterThan(0));
-          if (parts[i].end > parts[i].start) {
+          if (parts[i].pageCount > 1) {
             expect(bytes, lessThanOrEqualTo(limit));
           }
         }
@@ -170,9 +170,9 @@ void registerSugarStressTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final sink = TestSink();
       await pdf
-          .edits(src(largePdf), sink)
-          .deletePages(PdfPages.list(List.generate(990, (i) => i)));
-      final doc = await pdf.open(src(sink.takeBytes()));
+          .editOnce(PdfInput(src(largePdf)), sink)
+          .removePages(PdfPages.list(List.generate(990, (i) => i)));
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       expect(doc.pageCount, 10);
       await doc.dispose();
     });
@@ -185,8 +185,11 @@ void registerSugarStressTests(Pdf Function() createPdf) {
       () async {
         final pdf = createPdf();
         final sink = TestSink();
-        await pdf.merge([src(largePdf), src(largePdf)], sink);
-        final doc = await pdf.open(src(sink.takeBytes()));
+        await pdf.merge([
+          PdfInput(src(largePdf)),
+          PdfInput(src(largePdf)),
+        ], sink);
+        final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
         expect(doc.pageCount, 2000);
         await doc.dispose();
       },
@@ -201,14 +204,14 @@ void registerSugarStressTests(Pdf Function() createPdf) {
         final pdf = createPdf();
         final variedPdf = fMultisize;
         final sinks = <TestSink>[];
-        await pdf.split(src(variedPdf), (part) {
+        await pdf.split(PdfInput(src(variedPdf)), (part) {
           final s = TestSink();
           sinks.add(s);
           return s;
         }, by: PdfSplitRule.maxBytes(variedPdf.length ~/ 5));
         var totalPages = 0;
         for (final s in sinks) {
-          final doc = await pdf.open(src(s.takeBytes()));
+          final doc = await pdf.open(PdfInput(src(s.takeBytes())));
           totalPages += doc.pageCount;
           await doc.dispose();
         }

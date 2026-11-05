@@ -24,7 +24,7 @@ Future<void> use(Pdf pdf, DataSource src, DataSink out) async {
   await pdf.compress(src, out);                                  // render
   await pdf.sign(src, out,
       credentials: const PdfSigningCredentials.pem('c', 'k'));   // signatures
-  await pdf.convertTo(src, out, format: PdfDocumentFormat.docx); // office
+  await pdf.convertTo(src, out, format: PdfOfficeFormat.docx); // office
   final doc = await pdf.open(src);
   await doc.extractText(out);                                       // extract
   await doc.dispose();
@@ -153,7 +153,7 @@ Future<void> use(Pdf pdf, DataSource src, DataSink out) => pdf.sign(src, out,
       'render_flow.dart': '''
 import 'package:fixture_app/deps/deps.dart';
 
-Future<List<PdfRenderedPage>> use(PdfDoc doc) =>
+Future<List<PdfRenderedPage>> use(PdfDocument doc) =>
     doc.render((page) => MemorySink(), pages: const PdfPages.all());
 ''',
     });
@@ -254,7 +254,7 @@ Future<void> use(Pdf pdf, DataSource a, DataSource b, DataSink out) =>
       'main.dart': '''
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
-String use(PdfDoc doc) =>
+String use(PdfDocument doc) =>
     'pages: \${doc.render((p) => MemorySink(), pages: const PdfPages.all())}';
 ''',
     });
@@ -278,7 +278,7 @@ String use(PdfDoc doc) =>
       'main.dart': '''
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
-Future<void> use(PdfDoc doc, DataSink out) async { const u = 'http://x'; await doc.extractText(out); }
+Future<void> use(PdfDocument doc, DataSink out) async { const u = 'http://x'; await doc.extractText(out); }
 ''',
     });
     addTearDown(() => dir.deleteSync(recursive: true));

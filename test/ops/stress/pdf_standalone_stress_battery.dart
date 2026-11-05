@@ -22,9 +22,9 @@ void registerStandaloneStressTests(Pdf Function() createPdf) {
         final pdf = createPdf();
         final sink = TestSink();
         await pdf
-            .edits(src(largePdf), sink)
-            .keepPages(List.generate(10, (i) => i));
-        final doc = await pdf.open(src(sink.takeBytes()));
+            .editOnce(PdfInput(src(largePdf)), sink)
+            .keepPages(PdfPages.range(0, 10));
+        final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
         expect(doc.pageCount, 10);
         await doc.dispose();
       },

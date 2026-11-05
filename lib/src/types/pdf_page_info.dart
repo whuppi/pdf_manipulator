@@ -7,15 +7,15 @@ import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 final class PdfPageInfo {
   /// Creates page info.
   const PdfPageInfo({
-    required this.index,
+    required this.page,
     required this.mediaBox,
     this.cropBox,
     this.rotation = PdfRotation.r0,
     this.label,
   });
 
-  /// Zero-based page index.
-  final int index;
+  /// Zero-based index of the page.
+  final int page;
 
   /// The page's media box in points: its physical size.
   final PdfRect mediaBox;
@@ -48,12 +48,12 @@ final class PdfPageInfo {
   @override
   bool operator ==(Object other) =>
       other is PdfPageInfo &&
-      other.index == index &&
+      other.page == page &&
       other.mediaBox == mediaBox &&
       other.cropBox == cropBox &&
       other.rotation == rotation &&
       other.label == label;
 
   @override
-  int get hashCode => Object.hash(index, mediaBox, cropBox, rotation, label);
+  int get hashCode => Object.hash(page, mediaBox, cropBox, rotation, label);
 }

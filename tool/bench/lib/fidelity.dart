@@ -40,8 +40,8 @@ typedef Outcome = ({Fidelity? fidelity, String? error});
 /// of 0 compares every page. A candidate that fails gets an error outcome
 /// and does not stop the others.
 Future<List<Outcome>> compareAll(
-  PdfDoc source,
-  List<PdfDoc> candidates, {
+  PdfDocument source,
+  List<PdfDocument> candidates, {
   int dpi = 100,
   int maxPages = 0,
 }) async {
@@ -125,14 +125,14 @@ PdfRenderSize _sizeFor(PdfPageInfo page, int dpi) {
   return PdfRenderSize.fit(maxWidth: side, maxHeight: side);
 }
 
-Future<Uint8List> _render(PdfDoc doc, int page, PdfRenderSize size) async {
+Future<Uint8List> _render(PdfDocument doc, int page, PdfRenderSize size) async {
   final sink = MemorySink();
   await doc.render((_) => sink, pages: PdfPages.single(page), size: size);
   return sink.takeBytes();
 }
 
 /// The text of the whole document, as the engine wrote it.
-Future<String> _text(PdfDoc doc) async {
+Future<String> _text(PdfDocument doc) async {
   final sink = MemorySink();
   await doc.extractText(sink);
   return sink.takeString();

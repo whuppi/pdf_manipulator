@@ -17,7 +17,7 @@ import '../../../harness/test_source_sink.dart';
 
 void main() async {
   final pdf = Pdf();
-  final doc = await pdf.open(src(minimalPdf));
+  final doc = await pdf.open(PdfInput(src(minimalPdf)));
   if (doc.pageCount != 1) {
     // Explicit check, not assert — asserts may be disabled in this
     // launch mode, and a payload that can't fail proves nothing.

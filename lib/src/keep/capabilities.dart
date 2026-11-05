@@ -11,7 +11,7 @@
 /// One optional heavy module of the engine. Core (parse/write/edit/forms/
 /// builder) is always included and has no capability.
 enum PdfCapability {
-  /// Page rasterization (`PdfDoc.render`), image re-compression
+  /// Page rasterization (`PdfDocument.render`), image re-compression
   /// (`PdfEdits.reduceImages`, the `compress` one-shot) and redaction
   /// (`PdfEdits.redact`, `PdfEditor.markRedaction`,
   /// `PdfEditor.applyRedactions`), which rewrites images and meshes.
@@ -71,7 +71,7 @@ enum PdfCapability {
   /// shapes behave identically to it — the qualified forms exist for
   /// readers and for the README drift guard, not for lookup precision.
   static const Map<String, PdfCapability> apiMembers = {
-    'PdfDoc.render': PdfCapability.render,
+    'PdfDocument.render': PdfCapability.render,
     'PdfEdits.reduceImages': PdfCapability.render,
     'compress': PdfCapability.render,
     'PdfEdits.redact': PdfCapability.render,
@@ -79,19 +79,19 @@ enum PdfCapability {
     'PdfEditor.applyRedactions': PdfCapability.render,
     'Pdf.sign': PdfCapability.signatures,
     'sign': PdfCapability.signatures,
-    'PdfDoc.signatures': PdfCapability.signatures,
-    'PdfDoc.verifySignatures': PdfCapability.signatures,
-    'PdfDoc.validatePdfA': PdfCapability.pdfa,
-    'PdfDoc.validatePdfUa': PdfCapability.pdfa,
+    'PdfDocument.signatures': PdfCapability.signatures,
+    'PdfDocument.verifySignatures': PdfCapability.signatures,
+    'PdfDocument.validatePdfA': PdfCapability.pdfa,
+    'PdfDocument.validatePdfUa': PdfCapability.pdfa,
     'PdfEdits.convertToPdfA': PdfCapability.pdfa,
     'Pdf.convertTo': PdfCapability.office,
     'convertTo': PdfCapability.office,
     'Pdf.convertToPdf': PdfCapability.office,
     'convertToPdf': PdfCapability.office,
-    'PdfDoc.extractText': PdfCapability.extract,
-    'PdfDoc.search': PdfCapability.extract,
-    'PdfDoc.classifyPages': PdfCapability.extract,
-    'PdfDoc.classifyDocument': PdfCapability.extract,
+    'PdfDocument.extractText': PdfCapability.extract,
+    'PdfDocument.search': PdfCapability.extract,
+    'PdfDocument.classifyPages': PdfCapability.extract,
+    'PdfDocument.classifyDocument': PdfCapability.extract,
   };
 
   /// The capability whose [wire] name is [name], or null.

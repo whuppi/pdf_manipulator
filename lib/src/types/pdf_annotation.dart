@@ -107,14 +107,14 @@ enum PdfAnnotationSubtype implements PdfWire {
   }
 }
 
-/// One annotation listed by `PdfDoc.annotations(page)`.
+/// One annotation listed by `PdfDocument.annotations(page)`.
 @immutable
 final class PdfAnnotationInfo {
   /// Creates an annotation record from the engine's listing.
   const PdfAnnotationInfo({
     required this.subtype,
     required this.subtypeName,
-    required this.rect,
+    required this.bounds,
     required this.contents,
     required this.author,
     required this.fieldName,
@@ -127,7 +127,7 @@ final class PdfAnnotationInfo {
   final String subtypeName;
 
   /// The annotation's rectangle, or `null` when it has no `/Rect`.
-  final PdfRect? rect;
+  final PdfRect? bounds;
 
   /// The annotation's text contents, or `null` when it has none.
   final String? contents;
@@ -145,12 +145,12 @@ final class PdfAnnotationInfo {
       other is PdfAnnotationInfo &&
       other.subtype == subtype &&
       other.subtypeName == subtypeName &&
-      other.rect == rect &&
+      other.bounds == bounds &&
       other.contents == contents &&
       other.author == author &&
       other.fieldName == fieldName;
 
   @override
   int get hashCode =>
-      Object.hash(subtype, subtypeName, rect, contents, author, fieldName);
+      Object.hash(subtype, subtypeName, bounds, contents, author, fieldName);
 }

@@ -9,22 +9,25 @@ import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_annotation.dart';
 import 'package:pdf_manipulator/src/types/pdf_attachment.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
+import 'package:pdf_manipulator/src/types/pdf_field_scripts.dart';
+import 'package:pdf_manipulator/src/types/pdf_link.dart';
+import 'package:pdf_manipulator/src/types/pdf_point.dart';
+import 'package:pdf_manipulator/src/types/pdf_radio_option.dart';
 import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
-import 'package:pdf_manipulator/src/types/pdf_image_page_options.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_page.dart';
 import 'package:pdf_manipulator/src/types/pdf_metadata.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_size.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
-import 'package:pdf_manipulator/src/types/pdf_image.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_info.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
-import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_placement.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_info.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/types/pdf_redaction_overlay.dart';
 import 'package:pdf_manipulator/src/types/pdf_redaction_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_render.dart';
-import 'package:pdf_manipulator/src/types/pdf_sanitize_options.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
 import 'package:pdf_manipulator/src/types/pdf_stroke.dart';
 import 'package:pdf_manipulator/src/types/pdf_table.dart';
@@ -150,7 +153,7 @@ class SharedBridge extends PdfBridge {
     required PdfSigningCredentials credentials,
     String? reason,
     String? location,
-  }) {
+  }) => PdfTask.group((hook) async {
     final args = <String, Object?>{
       'sourceLength': source.length,
       'reason': reason,
@@ -159,15 +162,17 @@ class SharedBridge extends PdfBridge {
       'signedAt': DateTime.now().millisecondsSinceEpoch ~/ 1000,
     };
     switch (credentials) {
-      case PdfPkcs12Credentials(:final data, :final password):
-        args['certificate'] = data;
+      case PdfPkcs12Credentials(:final bundle, :final password):
+        args['certificate'] = await readAllBytes(bundle);
         args['certificatePassword'] = password;
       case PdfPemCredentials(:final certPem, :final keyPem):
         args['certPem'] = certPem;
         args['keyPem'] = keyPem;
     }
-    return _exec(EngineOp.sign, args, sources: [source], sinks: [output]);
-  }
+    await hook.guard(
+      _exec(EngineOp.sign, args, sources: [source], sinks: [output]),
+    );
+  });
 
   @override
   PdfTask<void> registerFallbackFont(String kind, DataSource font) {
@@ -190,10 +195,10 @@ class SharedBridge extends PdfBridge {
   }
 
   @override
-  PdfTask<void> convertTo(
+  PdfTask<void> convertToOffice(
     DataSource source,
     DataSink output, {
-    required PdfDocumentFormat format,
+    required PdfOfficeFormat format,
     String? password,
   }) => _exec(
     EngineOp.convertTo,
@@ -219,10 +224,10 @@ class SharedBridge extends PdfBridge {
   );
 
   @override
-  PdfTask<void> convertToPdf(
+  PdfTask<void> convertFromOffice(
     DataSource document,
     DataSink output, {
-    required PdfDocumentFormat format,
+    required PdfOfficeFormat format,
   }) => _exec(
     EngineOp.convertToPdf,
     {'sourceLength': document.length, 'format': codec.putEnum(format)},
@@ -266,30 +271,16 @@ class SharedBridge extends PdfBridge {
 }
 
 /// The `render` request fields a [PdfRenderSize] stands for: its kind by
-/// name (`dpi`, `fit`, `thumbnail`) and that kind's numbers. The engine
-/// works out the page's pixel size from them.
-Map<String, Object?> _renderSizeArgs(PdfRenderSize size) {
-  int positive(String what, int value) {
-    if (value < 1) throw PdfInvalidArgument('$what must be positive: $value');
-    return value;
-  }
-
-  return switch (size) {
-    PdfRenderDpi(:final dpi) => {
-      'sizeKind': 'dpi',
-      'dpi': positive('dpi', dpi),
-    },
-    PdfRenderFit(:final maxWidth, :final maxHeight) => {
-      'sizeKind': 'fit',
-      'maxWidth': positive('maxWidth', maxWidth),
-      'maxHeight': positive('maxHeight', maxHeight),
-    },
-    PdfRenderThumbnail(:final size) => {
-      'sizeKind': 'thumbnail',
-      'size': positive('size', size),
-    },
-  };
-}
+/// name (`dpi`, `fit`) and that kind's numbers. The engine works out the
+/// page's pixel size from them.
+Map<String, Object?> _renderSizeArgs(PdfRenderSize size) => switch (size) {
+  PdfRenderDpi(:final dpi) => {'sizeKind': 'dpi', 'dpi': dpi},
+  PdfRenderFit(:final maxWidth, :final maxHeight) => {
+    'sizeKind': 'fit',
+    'maxWidth': maxWidth,
+    'maxHeight': maxHeight,
+  },
+};
 
 // ── O(1)-memory framed sink for streaming ops ──────────────────────
 

@@ -1,7 +1,7 @@
 import 'package:meta/meta.dart';
 import 'package:pdf_manipulator/src/types/equality.dart';
 
-/// What a document's XFA packet declares. `PdfDoc.xfa` is `null` when the
+/// What a document's XFA packet declares. `PdfDocument.xfa` is `null` when the
 /// document has no XFA at all, so this type never describes absence.
 @immutable
 final class PdfXfaInfo {

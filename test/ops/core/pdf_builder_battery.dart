@@ -22,14 +22,13 @@ void registerBuilderTests(Pdf Function() createPdf) {
     test('create → text → save → verify text in output', () async {
       final pdf = createPdf();
       final builder = await pdf.build();
-      final page = await builder.addPage(PdfPageSize.custom(612, 792));
+      final page = await builder.addPage(PdfPageSize.points(612, 792));
       await page.text('Hello World');
-      await page.done();
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
       final output = sink.takeBytes();
-      final doc = await pdf.open(src(output));
+      final doc = await pdf.open(PdfInput(src(output)));
       expect(doc.pageCount, 1);
       expect(
         await extractTextToString(doc, pages: const PdfPages.all()),
@@ -48,14 +47,13 @@ void registerBuilderTests(Pdf Function() createPdf) {
           author: 'Builder Author',
         ),
       );
-      final page = await builder.addPage(PdfPageSize.custom(612, 792));
+      final page = await builder.addPage(PdfPageSize.points(612, 792));
       await page.text('content');
-      await page.done();
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
       final output = sink.takeBytes();
-      final doc = await pdf.open(src(output));
+      final doc = await pdf.open(PdfInput(src(output)));
       expect(doc.pageCount, 1);
       await doc.dispose();
       final asString = String.fromCharCodes(output);
@@ -76,7 +74,6 @@ void registerBuilderTests(Pdf Function() createPdf) {
         for (var i = 0; i < 40; i++) {
           await page.paragraph(sentence);
         }
-        await page.done();
         final sink = TestSink();
         if (deflate == null) {
           await builder.save(sink);
@@ -99,13 +96,13 @@ void registerBuilderTests(Pdf Function() createPdf) {
         contains('/FlateDecode'),
         reason: 'the default save must Flate-compress its streams',
       );
-      final zippedDoc = await pdf.open(src(zipped));
+      final zippedDoc = await pdf.open(PdfInput(src(zipped)));
       final zippedText = await extractTextToString(
         zippedDoc,
         pages: const PdfPages.all(),
       );
       await zippedDoc.dispose();
-      final plainDoc = await pdf.open(src(plain));
+      final plainDoc = await pdf.open(PdfInput(src(plain)));
       final plainText = await extractTextToString(
         plainDoc,
         pages: const PdfPages.all(),
@@ -130,7 +127,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final sink = TestSink();
       await pdf.imagesToPdf([src(minimalPng)], sink);
       final output = sink.takeBytes();
-      final doc = await pdf.open(src(output));
+      final doc = await pdf.open(PdfInput(src(output)));
       expect(doc.pageCount, 1);
       await doc.dispose();
       expect(output.length, greaterThan(minimalPdf.length));
@@ -142,9 +139,11 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await pdf.imagesToPdf(
         [src(minimalPng), src(minimalPng)],
         sink,
-        page: const PdfImagePageOptions(size: PdfPageSize.custom(200, 300)),
+        page: const PdfImagePage(
+          size: PdfImagePageSize.fixed(PdfPageSize.points(200, 300)),
+        ),
       );
-      final doc = await pdf.open(src(sink.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       expect(doc.pageCount, 2);
       final pages = await doc.pageInfo();
       expect(pages[0].width, closeTo(200, 2));
@@ -161,7 +160,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
         final sink = TestSink();
         await builder.save(sink);
         await builder.dispose();
-        final doc = await pdf.open(src(sink.takeBytes()));
+        final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
         expect(doc.pageCount, 1);
         final pages = await doc.pageInfo();
         expect(
@@ -180,8 +179,8 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final builder = await pdf.build();
       await builder.addImagePage(
         src(minimalPng),
-        page: const PdfImagePageOptions(
-          size: PdfPageSize.custom(200, 300),
+        page: const PdfImagePage(
+          size: PdfImagePageSize.fixed(PdfPageSize.points(200, 300)),
           fit: PdfImageFit.fill,
           margin: 10,
         ),
@@ -189,7 +188,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
-      final doc = await pdf.open(src(sink.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       final pages = await doc.pageInfo();
       expect(pages[0].width, closeTo(200, 2));
       expect(pages[0].height, closeTo(300, 2));
@@ -200,14 +199,13 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final builder = await pdf.build();
       for (var i = 0; i < 3; i++) {
-        final page = await builder.addPage(PdfPageSize.custom(612, 792));
+        final page = await builder.addPage(PdfPageSize.points(612, 792));
         await page.text('Page ${i + 1}');
-        await page.done();
       }
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
-      final doc = await pdf.open(src(sink.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       expect(doc.pageCount, 3);
       await doc.dispose();
     }, timeout: t(1));
@@ -217,11 +215,10 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final builder = await pdf.build();
       final page = await builder.addPage();
       await page.text('A4');
-      await page.done();
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
-      final doc = await pdf.open(src(sink.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       expect(doc.pageCount, 1);
       final pages = await doc.pageInfo();
       expect(pages[0].width, closeTo(595, 2));
@@ -234,11 +231,10 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final builder = await pdf.build();
       final page = await builder.addPage(PdfPageSize.letter());
       await page.text('Letter');
-      await page.done();
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
-      final doc = await pdf.open(src(sink.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       expect(doc.pageCount, 1);
       final pages = await doc.pageInfo();
       expect(pages[0].width, closeTo(612, 2));
@@ -249,13 +245,12 @@ void registerBuilderTests(Pdf Function() createPdf) {
     test('addPage custom dimensions', () async {
       final pdf = createPdf();
       final builder = await pdf.build();
-      final page = await builder.addPage(PdfPageSize.custom(400, 300));
+      final page = await builder.addPage(PdfPageSize.points(400, 300));
       await page.text('Custom');
-      await page.done();
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
-      final doc = await pdf.open(src(sink.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       final pages = await doc.pageInfo();
       expect(pages[0].width, closeTo(400, 2));
       expect(pages[0].height, closeTo(300, 2));
@@ -272,11 +267,10 @@ void registerBuilderTests(Pdf Function() createPdf) {
         await page.space(10);
         await page.paragraph('Test paragraph content here.');
         await page.horizontalRule();
-        await page.done();
         final sink = TestSink();
         await builder.save(sink);
         await builder.dispose();
-        final doc = await pdf.open(src(sink.takeBytes()));
+        final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
         final text = await extractTextToString(
           doc,
           pages: const PdfPages.all(),
@@ -292,9 +286,8 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final builder = await pdf.build();
       final page = await builder.addPage();
-      await page.font('Courier', 24);
+      await page.setFont('Courier', 24);
       await page.text('Courier text');
-      await page.done();
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
@@ -308,18 +301,17 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final page = await builder.addPage();
       await page.text('Content');
       await page.watermark('BUILDERMARK');
-      await page.done();
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
       // The builder watermark is an ANNOTATION — invisible to plain
       // extraction. Flatten it into content; then it must extract.
-      final e = await pdf.edit(src(sink.takeBytes()));
+      final e = await pdf.edit(PdfInput(src(sink.takeBytes())));
       await e.flattenAnnotations();
       final flatSink = TestSink();
       await e.save(flatSink);
       await e.dispose();
-      final doc = await pdf.open(src(flatSink.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(flatSink.takeBytes())));
       expect(
         await extractTextToString(doc, pages: const PdfPages.all()),
         contains('BUILDERMARK'),
@@ -339,7 +331,6 @@ void registerBuilderTests(Pdf Function() createPdf) {
         src(minimalPng),
         const PdfRect(x: 50, y: 500, width: 100, height: 100),
       );
-      await page.done();
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
@@ -355,19 +346,18 @@ void registerBuilderTests(Pdf Function() createPdf) {
       const rect = PdfRect(x: 50, y: 500, width: 100, height: 100);
       await expectLater(
         page.image(src(garbage), rect),
-        throwsA(isA<PdfInvalidArgument>()),
+        throwsA(isA<PdfEngineFailed>()),
         reason: 'the caller passed bytes that decode to no image',
       );
       await expectLater(
         page.image(src(garbage), rect, altText: 'a broken picture'),
-        throwsA(isA<PdfInvalidArgument>()),
+        throwsA(isA<PdfEngineFailed>()),
       );
       await page.text('after the failed image');
-      await page.done();
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
-      final doc = await pdf.open(src(sink.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       expect(
         await extractTextToString(doc, pages: const PdfPages.all()),
         contains('after the failed image'),
@@ -386,12 +376,11 @@ void registerBuilderTests(Pdf Function() createPdf) {
         src(minimalPng),
         const PdfRect(x: 50, y: 500, width: 100, height: 120),
       );
-      await page.done();
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
 
-      final editor = await pdf.edit(src(sink.takeBytes()));
+      final editor = await pdf.edit(PdfInput(src(sink.takeBytes())));
       final images = await editor.pageImages(0);
       await editor.dispose();
       expect(images, hasLength(1));
@@ -409,7 +398,6 @@ void registerBuilderTests(Pdf Function() createPdf) {
         'myfield',
         const PdfRect(x: 50, y: 700, width: 200, height: 20),
       );
-      await page.done();
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
@@ -424,7 +412,6 @@ void registerBuilderTests(Pdf Function() createPdf) {
         'mycheckbox',
         const PdfRect(x: 50, y: 700, width: 14, height: 14),
       );
-      await page.done();
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
@@ -441,7 +428,6 @@ void registerBuilderTests(Pdf Function() createPdf) {
         ['Option A', 'Option B'],
         selected: 'Option A',
       );
-      await page.done();
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
@@ -453,23 +439,22 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final builder = await pdf.build();
       final page = await builder.addPage();
       await page.radioGroup('size', const [
-        (value: 'small', rect: PdfRect(x: 50, y: 700, width: 14, height: 14)),
-        (value: 'large', rect: PdfRect(x: 50, y: 670, width: 14, height: 14)),
+        PdfRadioOption('small', PdfRect(x: 50, y: 700, width: 14, height: 14)),
+        PdfRadioOption('large', PdfRect(x: 50, y: 670, width: 14, height: 14)),
       ], selected: 'large');
       await page.radioGroup('colour', const [
-        (value: 'red', rect: PdfRect(x: 150, y: 700, width: 14, height: 14)),
-        (value: 'blue', rect: PdfRect(x: 150, y: 670, width: 14, height: 14)),
+        PdfRadioOption('red', PdfRect(x: 150, y: 700, width: 14, height: 14)),
+        PdfRadioOption('blue', PdfRect(x: 150, y: 670, width: 14, height: 14)),
       ]);
-      await page.done();
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
       final built = sink.takeBytes();
-      final doc = await pdf.open(src(built));
+      final doc = await pdf.open(PdfInput(src(built)));
       final fields = {for (final f in await doc.formFields()) f.name: f};
       expect(fields.keys, containsAll(['size', 'colour']));
-      expect(fields['size']!.type, PdfFormFieldType.radioGroup);
-      expect(fields['colour']!.type, PdfFormFieldType.radioGroup);
+      expect(fields['size']!.kind, PdfFormFieldKind.radioGroup);
+      expect(fields['colour']!.kind, PdfFormFieldKind.radioGroup);
       expect(
         fields['size']!.value,
         isA<PdfChoiceValue>().having((v) => v.choice, 'choice', 'large'),
@@ -478,13 +463,13 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await doc.dispose();
 
       // Setting a radio group's value takes the option name.
-      final editor = await pdf.edit(src(built));
+      final editor = await pdf.edit(PdfInput(src(built)));
       await editor.field('size').setValue(PdfFormFieldValue.text('small'));
       await editor.field('colour').setValue(PdfFormFieldValue.text('blue'));
       final resaved = TestSink();
       await editor.save(resaved);
       await editor.dispose();
-      final reopened = await pdf.open(src(resaved.takeBytes()));
+      final reopened = await pdf.open(PdfInput(src(resaved.takeBytes())));
       final after = {for (final f in await reopened.formFields()) f.name: f};
       expect(
         after['size']!.value,
@@ -504,23 +489,22 @@ void registerBuilderTests(Pdf Function() createPdf) {
         final builder = await pdf.build();
         final page = await builder.addPage();
         await page.radioGroup('picksNo', const [
-          (value: 'Yes', rect: PdfRect(x: 50, y: 700, width: 14, height: 14)),
-          (value: 'No', rect: PdfRect(x: 50, y: 670, width: 14, height: 14)),
+          PdfRadioOption('Yes', PdfRect(x: 50, y: 700, width: 14, height: 14)),
+          PdfRadioOption('No', PdfRect(x: 50, y: 670, width: 14, height: 14)),
         ], selected: 'No');
         await page.radioGroup('picksYes', const [
-          (value: 'Yes', rect: PdfRect(x: 150, y: 700, width: 14, height: 14)),
-          (value: 'No', rect: PdfRect(x: 150, y: 670, width: 14, height: 14)),
+          PdfRadioOption('Yes', PdfRect(x: 150, y: 700, width: 14, height: 14)),
+          PdfRadioOption('No', PdfRect(x: 150, y: 670, width: 14, height: 14)),
         ], selected: 'Yes');
         await page.checkbox(
           'agree',
           const PdfRect(x: 250, y: 700, width: 14, height: 14),
-          checked: true,
+          isChecked: true,
         );
-        await page.done();
         final sink = TestSink();
         await builder.save(sink);
         await builder.dispose();
-        final doc = await pdf.open(src(sink.takeBytes()));
+        final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
         final fields = {for (final f in await doc.formFields()) f.name: f};
         expect(
           fields['picksNo']!.value,
@@ -532,25 +516,30 @@ void registerBuilderTests(Pdf Function() createPdf) {
         );
         expect(
           fields['agree']!.value,
-          isA<PdfCheckedValue>().having((v) => v.checked, 'checked', isTrue),
+          isA<PdfCheckedValue>().having(
+            (v) => v.isChecked,
+            'isChecked',
+            isTrue,
+          ),
         );
         await doc.dispose();
       },
       timeout: t(1),
     );
 
-    test('linkUrl produces valid PDF with annotation', () async {
+    test('a url link produces valid PDF with annotation', () async {
       final pdf = createPdf();
       final builder = await pdf.build();
       final page = await builder.addPage();
-      await page.text('Click here');
-      await page.linkUrl('https://example.com/test');
-      await page.done();
+      await page.text(
+        'Click here',
+        link: const PdfLink.url('https://example.com/test'),
+      );
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
       final output = sink.takeBytes();
-      final doc = await pdf.open(src(output));
+      final doc = await pdf.open(PdfInput(src(output)));
       expect(doc.pageCount, 1);
       final annotations = await doc.annotations(0);
       expect(
@@ -571,11 +560,10 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final page = await builder.addPage();
       await page.text('Main text');
       await page.footnote('1', 'Footnote content here');
-      await page.done();
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
-      final doc = await pdf.open(src(sink.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       expect(
         await extractTextToString(doc, pages: const PdfPages.all()),
         contains('Footnote content'),
@@ -588,11 +576,10 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final builder = await pdf.build();
       final page = await builder.addPage();
       await page.columns(2, 10, 'Column text for testing');
-      await page.done();
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
-      final doc = await pdf.open(src(sink.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       expect(
         await extractTextToString(doc, pages: const PdfPages.all()),
         contains('Column text'),
@@ -600,66 +587,34 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
-    test('newPageSameSize creates two pages', () async {
+    test('adding a second page creates two pages', () async {
       final pdf = createPdf();
       final builder = await pdf.build();
-      final page = await builder.addPage();
-      await page.text('Page 1');
-      await page.newPageSameSize();
-      await page.text('Page 2');
-      await page.done();
+      final first = await builder.addPage();
+      await first.text('Page 1');
+      final second = await builder.addPage();
+      await second.text('Page 2');
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
-      final doc = await pdf.open(src(sink.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       expect(doc.pageCount, 2);
-      await doc.dispose();
-    }, timeout: t(1));
-
-    test('content after done() without addPage lands on a new page', () async {
-      final pdf = createPdf();
-      final builder = await pdf.build();
-      final page = await builder.addPage();
-      await page.text('First');
-      await page.done();
-      await page.text('Second');
-      final sink = TestSink();
-      await builder.save(sink);
-      await builder.dispose();
-      final doc = await pdf.open(src(sink.takeBytes()));
-      expect(doc.pageCount, 2);
-      final first = await extractTextToString(
-        doc,
-        pages: const PdfPages.single(0),
-      );
-      final second = await extractTextToString(
-        doc,
-        pages: const PdfPages.single(1),
-      );
-      expect(first, contains('First'));
-      expect(first, isNot(contains('Second')));
-      expect(second, contains('Second'));
       await doc.dispose();
     }, timeout: t(1));
 
     test(
-      'newPageSameSize keeps the size and clears text and field state',
+      'two pages added with the same explicit size keep that size',
       () async {
         final pdf = createPdf();
         final builder = await pdf.build();
-        final page = await builder.addPage(PdfPageSize.custom(300, 400));
-        await page.text('one');
-        await page.newPageSameSize();
-        await expectLater(
-          page.linkUrl('https://example.com'),
-          throwsA(isA<PdfInvalidArgument>()),
-          reason: 'the text was left on the previous page',
-        );
-        await page.text('two');
+        final first = await builder.addPage(PdfPageSize.points(300, 400));
+        await first.text('one');
+        final second = await builder.addPage(PdfPageSize.points(300, 400));
+        await second.text('two');
         final sink = TestSink();
         await builder.save(sink);
         await builder.dispose();
-        final doc = await pdf.open(src(sink.takeBytes()));
+        final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
         expect(doc.pageCount, 2);
         for (final page in await doc.pageInfo()) {
           expect(page.width, closeTo(300, 2));
@@ -677,11 +632,10 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await page.text('Before');
       await page.newline();
       await page.text('After');
-      await page.done();
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
-      final doc = await pdf.open(src(sink.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(text, contains('Before'));
       expect(text, contains('After'));
@@ -696,7 +650,6 @@ void registerBuilderTests(Pdf Function() createPdf) {
       );
       final page = await builder.addPage();
       await page.text('x');
-      await page.done();
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
@@ -714,12 +667,11 @@ void registerBuilderTests(Pdf Function() createPdf) {
             creator: 'pdf_manipulator',
             producer: 'pdf_manipulator',
             creationDate: DateTime.utc(2024, 1, 15, 12, 30, 45),
-            modDate: DateTime.utc(2024, 2, 1),
+            modificationDate: DateTime.utc(2024, 2, 1),
           ),
         );
         final page = await builder.addPage();
         await page.text('x');
-        await page.done();
         final sink = TestSink();
         await builder.save(sink);
         await builder.dispose();
@@ -741,7 +693,6 @@ void registerBuilderTests(Pdf Function() createPdf) {
         const PdfRect(x: 50, y: 700, width: 80, height: 30),
         'Click',
       );
-      await page.done();
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
@@ -756,23 +707,23 @@ void registerBuilderTests(Pdf Function() createPdf) {
         'mysig',
         const PdfRect(x: 50, y: 700, width: 200, height: 60),
       );
-      await page.done();
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
       expect(String.fromCharCodes(sink.takeBytes()), contains('mysig'));
     }, timeout: t(1));
 
-    test('fieldKeystroke embeds the action script', () async {
+    test('a keystroke script embeds the action script', () async {
       final pdf = createPdf();
       final builder = await pdf.build();
       final page = await builder.addPage();
       await page.textField(
         'actionfield',
         const PdfRect(x: 50, y: 700, width: 200, height: 20),
+        scripts: PdfFieldScripts(
+          keystroke: 'AFNumber_Keystroke(2, 0, 0, 0, "", true)',
+        ),
       );
-      await page.fieldKeystroke('AFNumber_Keystroke(2, 0, 0, 0, "", true)');
-      await page.done();
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
@@ -782,21 +733,22 @@ void registerBuilderTests(Pdf Function() createPdf) {
         contains('AFNumber_Keystroke'),
         reason: 'the action script must land on the field',
       );
-      final doc = await pdf.open(src(output));
+      final doc = await pdf.open(PdfInput(src(output)));
       expect(doc.pageCount, 1);
       await doc.dispose();
     }, timeout: t(1));
 
-    test('fieldFormat embeds the action script', () async {
+    test('a format script embeds the action script', () async {
       final pdf = createPdf();
       final builder = await pdf.build();
       final page = await builder.addPage();
       await page.textField(
         'actionfield',
         const PdfRect(x: 50, y: 700, width: 200, height: 20),
+        scripts: PdfFieldScripts(
+          format: 'AFNumber_Format(2, 0, 0, 0, "", true)',
+        ),
       );
-      await page.fieldFormat('AFNumber_Format(2, 0, 0, 0, "", true)');
-      await page.done();
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
@@ -806,21 +758,22 @@ void registerBuilderTests(Pdf Function() createPdf) {
         contains('AFNumber_Format'),
         reason: 'the action script must land on the field',
       );
-      final doc = await pdf.open(src(output));
+      final doc = await pdf.open(PdfInput(src(output)));
       expect(doc.pageCount, 1);
       await doc.dispose();
     }, timeout: t(1));
 
-    test('fieldValidate embeds the action script', () async {
+    test('a validate script embeds the action script', () async {
       final pdf = createPdf();
       final builder = await pdf.build();
       final page = await builder.addPage();
       await page.textField(
         'actionfield',
         const PdfRect(x: 50, y: 700, width: 200, height: 20),
+        scripts: PdfFieldScripts(
+          validate: 'AFRange_Validate(true, 0, true, 100)',
+        ),
       );
-      await page.fieldValidate('AFRange_Validate(true, 0, true, 100)');
-      await page.done();
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
@@ -830,23 +783,22 @@ void registerBuilderTests(Pdf Function() createPdf) {
         contains('AFRange_Validate'),
         reason: 'the action script must land on the field',
       );
-      final doc = await pdf.open(src(output));
+      final doc = await pdf.open(PdfInput(src(output)));
       expect(doc.pageCount, 1);
       await doc.dispose();
     }, timeout: t(1));
 
-    test('fieldCalculate embeds the action script', () async {
+    test('a calculate script embeds the action script', () async {
       final pdf = createPdf();
       final builder = await pdf.build();
       final page = await builder.addPage();
       await page.textField(
         'actionfield',
         const PdfRect(x: 50, y: 700, width: 200, height: 20),
+        scripts: PdfFieldScripts(
+          calculate: 'AFSimple_Calculate("SUM", new Array("f1", "f2"))',
+        ),
       );
-      await page.fieldCalculate(
-        'AFSimple_Calculate("SUM", new Array("f1", "f2"))',
-      );
-      await page.done();
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
@@ -856,21 +808,18 @@ void registerBuilderTests(Pdf Function() createPdf) {
         contains('AFSimple_Calculate'),
         reason: 'the action script must land on the field',
       );
-      final doc = await pdf.open(src(output));
+      final doc = await pdf.open(PdfInput(src(output)));
       expect(doc.pageCount, 1);
       await doc.dispose();
     }, timeout: t(1));
 
-    test('linkPage produces valid output', () async {
+    test('a page link produces valid output', () async {
       final pdf = createPdf();
       final builder = await pdf.build();
       final p1 = await builder.addPage();
-      await p1.text('Page 1');
-      await p1.linkPage(1);
-      await p1.done();
+      await p1.text('Page 1', link: const PdfLink.page(1));
       final p2 = await builder.addPage();
       await p2.text('Page 2');
-      await p2.done();
       final sink = TestSink();
       await builder.save(sink);
       await builder.dispose();
@@ -883,7 +832,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
         reason: 'an internal link must carry a destination',
       );
       expect(String.fromCharCodes(output), contains('/Fit'));
-      final doc = await pdf.open(src(output));
+      final doc = await pdf.open(PdfInput(src(output)));
       expect(doc.pageCount, 2);
       final annotations = await doc.annotations(0);
       expect(
@@ -894,92 +843,6 @@ void registerBuilderTests(Pdf Function() createPdf) {
       expect(annotations.single.subtype, PdfAnnotationSubtype.link);
       await doc.dispose();
     }, timeout: t(1));
-
-    test('fieldKeystroke on a bare page throws PdfInvalidArgument', () async {
-      final builder = await createPdf().build();
-      final page = await builder.addPage();
-      await expectLater(
-        page.fieldKeystroke('AFNumber_Keystroke(2, 0, 0, 0, "", true)'),
-        throwsA(isA<PdfInvalidArgument>()),
-        reason: 'a field script with no field must be refused',
-      );
-      await builder.dispose();
-    }, timeout: t(1));
-
-    test('fieldFormat on a bare page throws PdfInvalidArgument', () async {
-      final builder = await createPdf().build();
-      final page = await builder.addPage();
-      await expectLater(
-        page.fieldFormat('AFNumber_Format(2, 0, 0, 0, "", true)'),
-        throwsA(isA<PdfInvalidArgument>()),
-        reason: 'a field script with no field must be refused',
-      );
-      await builder.dispose();
-    }, timeout: t(1));
-
-    test('fieldValidate on a bare page throws PdfInvalidArgument', () async {
-      final builder = await createPdf().build();
-      final page = await builder.addPage();
-      await expectLater(
-        page.fieldValidate('AFRange_Validate(true, 0, true, 100)'),
-        throwsA(isA<PdfInvalidArgument>()),
-        reason: 'a field script with no field must be refused',
-      );
-      await builder.dispose();
-    }, timeout: t(1));
-
-    test('fieldCalculate on a bare page throws PdfInvalidArgument', () async {
-      final builder = await createPdf().build();
-      final page = await builder.addPage();
-      await expectLater(
-        page.fieldCalculate('AFSimple_Calculate("SUM", new Array("f1"))'),
-        throwsA(isA<PdfInvalidArgument>()),
-        reason: 'a field script with no field must be refused',
-      );
-      await builder.dispose();
-    }, timeout: t(1));
-
-    test('linkUrl on a bare page throws PdfInvalidArgument', () async {
-      final builder = await createPdf().build();
-      final page = await builder.addPage();
-      await expectLater(
-        page.linkUrl('https://example.com'),
-        throwsA(isA<PdfInvalidArgument>()),
-        reason: 'a link with no text must be refused',
-      );
-      await builder.dispose();
-    }, timeout: t(1));
-
-    test('linkPage on a bare page throws PdfInvalidArgument', () async {
-      final builder = await createPdf().build();
-      final page = await builder.addPage();
-      await expectLater(
-        page.linkPage(0),
-        throwsA(isA<PdfInvalidArgument>()),
-        reason: 'a link with no text must be refused',
-      );
-      await builder.dispose();
-    }, timeout: t(1));
-
-    test(
-      'fieldKeystroke after newPageSameSize throws PdfInvalidArgument',
-      () async {
-        final builder = await createPdf().build();
-        final page = await builder.addPage();
-        await page.textField(
-          'actionfield',
-          const PdfRect(x: 50, y: 700, width: 200, height: 20),
-        );
-        await page.newPageSameSize();
-        await expectLater(
-          page.fieldKeystroke('AFNumber_Keystroke(2, 0, 0, 0, "", true)'),
-          throwsA(isA<PdfInvalidArgument>()),
-          reason: 'the field was left on the previous page',
-        );
-        await builder.dispose();
-      },
-      timeout: t(1),
-    );
   });
 
   // One test per page-op method: the effect is proven in the saved
@@ -994,20 +857,20 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final builder = await pdf.build();
       final page = await builder.addPage();
       await content(page);
-      await page.done();
       final sink = TestSink();
       await builder.save(sink, deflate: deflate);
       await builder.dispose();
       return sink.takeBytes();
     }
 
-    Future<PdfDoc> openOf(Pdf pdf, Uint8List bytes) => pdf.open(src(bytes));
+    Future<PdfDocumentHandle> openOf(Pdf pdf, Uint8List bytes) =>
+        pdf.open(PdfInput(src(bytes)));
 
-    test('inline writes text', () async {
+    test('appendText writes text', () async {
       final pdf = createPdf();
       final bytes = await savePlain(pdf, (page) async {
-        await page.at(72, 720);
-        await page.inline('Hello Inline');
+        await page.moveTo(const PdfPoint(72, 720));
+        await page.appendText('Hello Inline');
       });
       final doc = await openOf(pdf, bytes);
       expect(
@@ -1017,11 +880,14 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
-    test('inline writes bold text in a styled run', () async {
+    test('appendText writes bold text in a styled run', () async {
       final pdf = createPdf();
       final bytes = await savePlain(pdf, (page) async {
-        await page.at(72, 720);
-        await page.inline('Hello Bold', style: const PdfTextStyle(bold: true));
+        await page.moveTo(const PdfPoint(72, 720));
+        await page.appendText(
+          'Hello Bold',
+          style: const PdfTextStyle(bold: true),
+        );
       });
       final doc = await openOf(pdf, bytes);
       expect(
@@ -1031,11 +897,11 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
-    test('inline writes italic text in a styled run', () async {
+    test('appendText writes italic text in a styled run', () async {
       final pdf = createPdf();
       final bytes = await savePlain(pdf, (page) async {
-        await page.at(72, 720);
-        await page.inline(
+        await page.moveTo(const PdfPoint(72, 720));
+        await page.appendText(
           'Hello Italic',
           style: const PdfTextStyle(italic: true),
         );
@@ -1048,11 +914,11 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
-    test('inline writes coloured text in a styled run', () async {
+    test('appendText writes coloured text in a styled run', () async {
       final pdf = createPdf();
       final bytes = await savePlain(pdf, (page) async {
-        await page.at(72, 720);
-        await page.inline(
+        await page.moveTo(const PdfPoint(72, 720));
+        await page.appendText(
           'Hello Colour',
           style: const PdfTextStyle(color: PdfColor.red),
         );
@@ -1086,10 +952,10 @@ void registerBuilderTests(Pdf Function() createPdf) {
       );
     }, timeout: t(1));
 
-    test('textInRect writes text', () async {
+    test('textIn writes text', () async {
       final pdf = createPdf();
       final bytes = await savePlain(pdf, (page) async {
-        await page.textInRect(
+        await page.textIn(
           const PdfRect(x: 50, y: 600, width: 300, height: 100),
           'Rect caption',
         );
@@ -1137,7 +1003,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
             [PdfTableCell('2'), PdfTableCell('3')],
           ],
         ),
-        throwsA(isA<PdfInvalidArgument>()),
+        throwsA(isA<ArgumentError>()),
         reason: 'the second row has 2 cells but the table has 1 column',
       );
       await builder.dispose();
@@ -1203,7 +1069,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
             [PdfTableCell('Saw')],
           ],
         ),
-        throwsA(isA<PdfInvalidArgument>()),
+        throwsA(isA<ArgumentError>()),
       );
       await builder.dispose();
     }, timeout: t(1));
@@ -1218,7 +1084,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
             [PdfTableCell('Saw', rowSpan: 2)],
           ],
         ),
-        throwsA(isA<PdfInvalidArgument>()),
+        throwsA(isA<ArgumentError>()),
       );
       await builder.dispose();
     }, timeout: t(1));
@@ -1237,7 +1103,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
             ],
           ),
           throwsA(
-            isA<PdfInvalidArgument>().having(
+            isA<ArgumentError>().having(
               (e) => e.message,
               'message',
               contains('PdfTableSizing.sample'),
@@ -1297,8 +1163,10 @@ void registerBuilderTests(Pdf Function() createPdf) {
     test('markup highlights the text', () async {
       final pdf = createPdf();
       final bytes = await savePlain(pdf, (page) async {
-        await page.text('Marked sentence');
-        await page.markup(PdfMarkupKind.highlight);
+        await page.text(
+          'Marked sentence',
+          markup: const PdfMarkup(PdfMarkupKind.highlight),
+        );
       });
       final doc = await openOf(pdf, bytes);
       final annotations = await doc.annotations(0);
@@ -1310,8 +1178,10 @@ void registerBuilderTests(Pdf Function() createPdf) {
     test('markup underlines the text', () async {
       final pdf = createPdf();
       final bytes = await savePlain(pdf, (page) async {
-        await page.text('Underlined sentence');
-        await page.markup(PdfMarkupKind.underline);
+        await page.text(
+          'Underlined sentence',
+          markup: const PdfMarkup(PdfMarkupKind.underline),
+        );
       });
       final doc = await openOf(pdf, bytes);
       expect(
@@ -1324,8 +1194,10 @@ void registerBuilderTests(Pdf Function() createPdf) {
     test('markup strikes the text out', () async {
       final pdf = createPdf();
       final bytes = await savePlain(pdf, (page) async {
-        await page.text('Struck sentence');
-        await page.markup(PdfMarkupKind.strikeout);
+        await page.text(
+          'Struck sentence',
+          markup: const PdfMarkup(PdfMarkupKind.strikeout),
+        );
       });
       final doc = await openOf(pdf, bytes);
       expect(
@@ -1338,8 +1210,10 @@ void registerBuilderTests(Pdf Function() createPdf) {
     test('markup squiggles under the text', () async {
       final pdf = createPdf();
       final bytes = await savePlain(pdf, (page) async {
-        await page.text('Misspelled word');
-        await page.markup(PdfMarkupKind.squiggly);
+        await page.text(
+          'Misspelled word',
+          markup: const PdfMarkup(PdfMarkupKind.squiggly),
+        );
       });
       final doc = await openOf(pdf, bytes);
       expect(
@@ -1352,10 +1226,12 @@ void registerBuilderTests(Pdf Function() createPdf) {
     test('markup takes the colour it is given', () async {
       final pdf = createPdf();
       final bytes = await savePlain(pdf, (page) async {
-        await page.text('Coloured sentence');
-        await page.markup(
-          PdfMarkupKind.highlight,
-          color: const PdfColor(0, 1, 0),
+        await page.text(
+          'Coloured sentence',
+          markup: const PdfMarkup(
+            PdfMarkupKind.highlight,
+            color: PdfColor(0, 1, 0),
+          ),
         );
       });
       final doc = await openOf(pdf, bytes);
@@ -1383,7 +1259,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final bytes = await savePlain(pdf, (page) async {
         await page.text('Body text');
-        await page.stickyNote('Corner note', at: (400, 500));
+        await page.stickyNote('Corner note', at: const PdfPoint(400, 500));
       });
       final doc = await openOf(pdf, bytes);
       final annotations = await doc.annotations(0);
@@ -1395,8 +1271,8 @@ void registerBuilderTests(Pdf Function() createPdf) {
     test('stamp lands a stamp annotation', () async {
       final pdf = createPdf();
       final bytes = await savePlain(pdf, (page) async {
-        await page.at(72, 600);
-        await page.stamp(PdfStampType.approved);
+        await page.moveTo(const PdfPoint(72, 600));
+        await page.stamp(PdfStamp.approved);
       });
       final doc = await openOf(pdf, bytes);
       expect(
@@ -1421,11 +1297,10 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
-    test('linkNamed lands a link annotation', () async {
+    test('a named link lands a link annotation', () async {
       final pdf = createPdf();
       final bytes = await savePlain(pdf, (page) async {
-        await page.text('Jump to section');
-        await page.linkNamed('sec-2');
+        await page.text('Jump to section', link: const PdfLink.named('sec-2'));
       });
       final doc = await openOf(pdf, bytes);
       expect(
@@ -1435,11 +1310,13 @@ void registerBuilderTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
-    test('linkJavaScript lands a JavaScript link', () async {
+    test('a JavaScript link lands a JavaScript link', () async {
       final pdf = createPdf();
       final bytes = await savePlain(pdf, (page) async {
-        await page.text('Run script');
-        await page.linkJavaScript('app.alert("hello")');
+        await page.text(
+          'Run script',
+          link: const PdfLink.javaScript('app.alert("hello")'),
+        );
       });
       final doc = await openOf(pdf, bytes);
       expect(
@@ -1454,7 +1331,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final bytes = await savePlain(pdf, (page) async {
         await page.text('Body');
-        await page.stamp(PdfStampType.confidential);
+        await page.stamp(PdfStamp.confidential);
       });
       final doc = await openOf(pdf, bytes);
       final annotations = await doc.annotations(0);
@@ -1502,7 +1379,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
         final frames = await renderToMemory(
           doc,
           pages: const PdfPages.single(0),
-          size: const PdfRenderSize.thumbnail(240),
+          size: const PdfRenderSize.fit(maxWidth: 240, maxHeight: 240),
         );
         expect(frames, hasLength(1), reason: 'page 0 must render');
         expect(
@@ -1539,6 +1416,50 @@ void registerBuilderTests(Pdf Function() createPdf) {
       expect(asString, matches(RegExp(r'\bre\b')));
     }, timeout: t(1));
 
+    test('a rect with the default stroke draws an outline', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.rect(const PdfRect(x: 50, y: 300, width: 100, height: 60));
+      }, deflate: false);
+      expect(
+        String.fromCharCodes(bytes),
+        matches(RegExp(r'\bRG\b')),
+        reason: 'the default stroke sets a stroke colour for the outline',
+      );
+    }, timeout: t(1));
+
+    test('a rect with stroke: null and a fill draws the fill only', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.rect(
+          const PdfRect(x: 50, y: 300, width: 100, height: 60),
+          fill: PdfColor.red,
+          stroke: null,
+        );
+      }, deflate: false);
+      final asString = String.fromCharCodes(bytes);
+      expect(asString, matches(RegExp(r'1(\.0+)? 0(\.0+)? 0(\.0+)? rg')));
+      expect(asString, matches(RegExp(r'\bre\b')));
+      expect(
+        asString,
+        isNot(matches(RegExp(r'\bRG\b'))),
+        reason: 'no stroke means no stroke colour is set',
+      );
+    }, timeout: t(1));
+
+    test('a rect with no fill and stroke: null is accepted', () async {
+      final pdf = createPdf();
+      final bytes = await savePlain(pdf, (page) async {
+        await page.rect(
+          const PdfRect(x: 50, y: 300, width: 100, height: 60),
+          stroke: null,
+        );
+      }, deflate: false);
+      final doc = await openOf(pdf, bytes);
+      expect(doc.pageCount, 1);
+      await doc.dispose();
+    }, timeout: t(1));
+
     test('a rect with a fill and a stroke draws both', () async {
       final pdf = createPdf();
       final bytes = await savePlain(pdf, (page) async {
@@ -1557,7 +1478,7 @@ void registerBuilderTests(Pdf Function() createPdf) {
     test('line emits the l operator', () async {
       final pdf = createPdf();
       final bytes = await savePlain(pdf, (page) async {
-        await page.line((50, 300), (150, 360));
+        await page.line(const PdfPoint(50, 300), const PdfPoint(150, 360));
       }, deflate: false);
       expect(String.fromCharCodes(bytes), matches(RegExp(r'\bl\s')));
     }, timeout: t(1));
@@ -1593,15 +1514,15 @@ void registerBuilderTests(Pdf Function() createPdf) {
     test('a plain line dashes nothing; a dashed line sets the dash', () async {
       final pdf = createPdf();
       final solid = await savePlain(pdf, (page) async {
-        await page.line((50, 300), (150, 360));
+        await page.line(const PdfPoint(50, 300), const PdfPoint(150, 360));
       }, deflate: false);
       expect(String.fromCharCodes(solid), matches(RegExp(r'\bl\s')));
       expect(String.fromCharCodes(solid), isNot(contains('] 0 d')));
 
       final dashed = await savePlain(pdf, (page) async {
         await page.line(
-          (50, 300),
-          (150, 360),
+          const PdfPoint(50, 300),
+          const PdfPoint(150, 360),
           stroke: const PdfStroke(dash: [3, 2]),
         );
       }, deflate: false);
@@ -1609,39 +1530,6 @@ void registerBuilderTests(Pdf Function() createPdf) {
         String.fromCharCodes(dashed),
         matches(RegExp(r'\[3(\.0+)? 2(\.0+)?\] 0(\.0+)? d\b')),
       );
-    }, timeout: t(1));
-
-    test('the ops that need text are refused on a bare page', () async {
-      final builder = await createPdf().build();
-      final page = await builder.addPage();
-      await expectLater(
-        page.linkNamed('sec-2'),
-        throwsA(isA<PdfInvalidArgument>()),
-        reason: 'a named destination needs text to anchor on',
-      );
-      await expectLater(
-        page.linkJavaScript('app.alert(1)'),
-        throwsA(isA<PdfInvalidArgument>()),
-        reason: 'a script link needs text to anchor on',
-      );
-      await expectLater(
-        page.markup(PdfMarkupKind.highlight),
-        throwsA(isA<PdfInvalidArgument>()),
-        reason: 'a highlight needs text to cover',
-      );
-      await expectLater(
-        page.markup(PdfMarkupKind.underline),
-        throwsA(isA<PdfInvalidArgument>()),
-      );
-      await expectLater(
-        page.markup(PdfMarkupKind.strikeout),
-        throwsA(isA<PdfInvalidArgument>()),
-      );
-      await expectLater(
-        page.markup(PdfMarkupKind.squiggly),
-        throwsA(isA<PdfInvalidArgument>()),
-      );
-      await builder.dispose();
     }, timeout: t(1));
   });
 }

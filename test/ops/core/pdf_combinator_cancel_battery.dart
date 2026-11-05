@@ -20,9 +20,8 @@ const _pageCount = 200;
 Future<Uint8List> _buildPages(Pdf pdf) async {
   final builder = await pdf.build();
   for (var i = 0; i < _pageCount; i++) {
-    final page = await builder.addPage(PdfPageSize.custom(612, 792));
+    final page = await builder.addPage(PdfPageSize.points(612, 792));
     await page.text('combinator cancel page $i');
-    await page.done();
   }
   final sink = TestSink();
   await builder.save(sink);
@@ -34,7 +33,9 @@ Future<Uint8List> _buildPages(Pdf pdf) async {
 /// the op that follows the open.
 Future<int> _readsAtOpen(Pdf pdf, Uint8List bytes) async {
   var reads = 0;
-  final doc = await pdf.open(TestSource(bytes, onRead: (_, _) => reads++));
+  final doc = await pdf.open(
+    PdfInput(TestSource(bytes, onRead: (_, _) => reads++)),
+  );
   await doc.dispose();
   return reads;
 }
@@ -56,7 +57,7 @@ void registerCombinatorCancelTests(
       () async {
         final pdf = createPdf();
         late final PdfTask<String> task;
-        task = pdf.read(src(fTwoPageMarkers), (doc) async {
+        task = pdf.read(PdfInput(src(fTwoPageMarkers)), (doc) async {
           final op = doc.search('x', pages: const PdfPages.all());
           task.cancel();
           try {
@@ -76,10 +77,10 @@ void registerCombinatorCancelTests(
       () async {
         final pdf = createPdf();
         late final PdfTask<void> task;
-        late PdfDoc kept;
+        late PdfDocument kept;
         Object? inFlight;
         Object? after;
-        task = pdf.read(src(fTwoPageMarkers), (doc) async {
+        task = pdf.read(PdfInput(src(fTwoPageMarkers)), (doc) async {
           kept = doc;
           final op = doc.search('x', pages: const PdfPages.all());
           task.cancel();
@@ -100,7 +101,7 @@ void registerCombinatorCancelTests(
         expect(after, isA<PdfCancelled>(), reason: 'the op after the cancel');
         expect(
           () => kept.search('x', pages: const PdfPages.all()),
-          throwsA(isA<PdfDisposed>()),
+          throwsA(isA<StateError>()),
         );
       },
       timeout: t(2),
@@ -113,13 +114,15 @@ void registerCombinatorCancelTests(
         final bytes = await pages200(pdf);
         var armed = false;
         final started = Completer<void>();
-        late PdfDoc kept;
+        late PdfDocument kept;
         final task = pdf.read(
-          TestSource(
-            bytes,
-            onRead: (_, _) {
-              if (armed && !started.isCompleted) started.complete();
-            },
+          PdfInput(
+            TestSource(
+              bytes,
+              onRead: (_, _) {
+                if (armed && !started.isCompleted) started.complete();
+              },
+            ),
           ),
           (doc) {
             kept = doc;
@@ -132,7 +135,7 @@ void registerCombinatorCancelTests(
         await expectLater(task, throwsA(isA<PdfCancelled>()));
         expect(
           () => kept.extractText(MemorySink(), pages: const PdfPages.all()),
-          throwsA(isA<PdfDisposed>()),
+          throwsA(isA<StateError>()),
         );
       },
       timeout: t(5),
@@ -148,11 +151,11 @@ void registerCombinatorCancelTests(
         late PdfEditor kept;
         Object? inFlight;
         Object? after;
-        task = pdf.rewrite(src(minimalPdf), out, (editor) async {
+        task = pdf.rewrite(PdfInput(src(minimalPdf)), out, (editor) async {
           kept = editor;
           final op = editor.rotatePages(
-            PdfPages.single(0),
             by: PdfRotation.r90,
+            pages: PdfPages.single(0),
           );
           task.cancel();
           try {
@@ -173,7 +176,7 @@ void registerCombinatorCancelTests(
         expect(after, isA<PdfCancelled>(), reason: 'the op after the cancel');
         expect(
           () => kept.setMetadata(const PdfMetadata(title: 'x')),
-          throwsA(isA<PdfDisposed>()),
+          throwsA(isA<StateError>()),
         );
         expect(out.length, 0, reason: 'the save never ran');
       },
@@ -226,7 +229,7 @@ void registerCombinatorCancelTests(
         );
         expect(
           () => kept.setMetadata(const PdfMetadata(title: 'x')),
-          throwsA(isA<PdfDisposed>()),
+          throwsA(isA<StateError>()),
         );
         expect(out.length, 0, reason: 'the save never ran');
       },
@@ -242,12 +245,14 @@ void registerCombinatorCancelTests(
         var reads = 0;
         late final PdfTask<List<PdfSearchHit>> task;
         task = pdf
-            .reads(
-              TestSource(
-                bytes,
-                onRead: (_, _) {
-                  if (++reads == opened + 1) task.cancel();
-                },
+            .readOnce(
+              PdfInput(
+                TestSource(
+                  bytes,
+                  onRead: (_, _) {
+                    if (++reads == opened + 1) task.cancel();
+                  },
+                ),
               ),
             )
             .search('combinator', pages: const PdfPages.all());
@@ -267,16 +272,18 @@ void registerCombinatorCancelTests(
         var reads = 0;
         late final PdfTask<void> task;
         task = pdf
-            .edits(
-              TestSource(
-                bytes,
-                onRead: (_, _) {
-                  if (++reads == opened + 1) task.cancel();
-                },
+            .editOnce(
+              PdfInput(
+                TestSource(
+                  bytes,
+                  onRead: (_, _) {
+                    if (++reads == opened + 1) task.cancel();
+                  },
+                ),
               ),
               TestSink(),
             )
-            .rotatePages(PdfPages.single(0), by: PdfRotation.r90);
+            .rotatePages(by: PdfRotation.r90, pages: PdfPages.single(0));
         await expectLater(task, throwsA(isA<PdfCancelled>()));
         expect(reads, greaterThan(opened), reason: 'the edit had started');
       },

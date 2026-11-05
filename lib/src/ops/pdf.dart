@@ -1,16 +1,16 @@
-// Pdf — entry point: lifecycle, handle creation and the batch combinators.
+// Pdf — entry point: lifecycle, the handle doors, the scope doors and every
+// one-call door.
 //
 // One library, so the pieces that must stay private can: the handle
 // creators sit behind `_own`, and the base classes of the one-shots hide
 // `_run`.
 //
-//   pdf_doc.dart        — read-only doc queries (open handle)
-//   pdf_reads.dart      — every read, declared once, for PdfDoc and pdf.reads
-//   pdf_editor.dart     — the editor handle (edit handle)
-//   pdf_edits.dart      — every edit, declared once, for PdfEditor and pdf.edits
-//   pdf_builder.dart    — create from scratch (build handle)
-//   pdf_standalone.dart — source in, sink out, no handle (sign, convert)
-//   pdf_sugar.dart      — convenience wrappers over editor/builder
+//   pdf_doc.dart      — PdfDocument and its handle
+//   pdf_reads.dart    — every read, declared once, for PdfDocument and pdf.readOnce
+//   pdf_editor.dart   — PdfEditor and its handle
+//   pdf_edits.dart    — every edit, declared once, for PdfEditor and pdf.editOnce
+//   pdf_builder.dart  — create from scratch (PdfBuilder and its handle)
+//   pdf_jobs.dart     — the bodies of the doors that open several handles
 
 import 'dart:async';
 import 'dart:math';
@@ -31,13 +31,13 @@ import 'package:pdf_manipulator/src/types/pdf_attachment.dart';
 import 'package:pdf_manipulator/src/types/pdf_config.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
-import 'package:pdf_manipulator/src/types/pdf_image.dart';
-import 'package:pdf_manipulator/src/types/pdf_image_page_options.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_info.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_page.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
-import 'package:pdf_manipulator/src/types/pdf_info.dart';
+import 'package:pdf_manipulator/src/types/pdf_document_info.dart';
 import 'package:pdf_manipulator/src/types/pdf_metadata.dart';
-import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_placement.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_info.dart';
 import 'package:pdf_manipulator/src/types/pdf_page_size.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
@@ -46,11 +46,16 @@ import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:pdf_manipulator/src/types/pdf_redaction_overlay.dart';
 import 'package:pdf_manipulator/src/types/pdf_redaction_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_render.dart';
-import 'package:pdf_manipulator/src/types/pdf_sanitize_options.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
 import 'package:pdf_manipulator/src/types/pdf_split.dart';
 import 'package:pdf_manipulator/src/types/pdf_stroke.dart';
 import 'package:pdf_manipulator/src/types/pdf_table.dart';
+import 'package:pdf_manipulator/src/types/pdf_bitmap.dart';
+import 'package:pdf_manipulator/src/types/pdf_input.dart';
+import 'package:pdf_manipulator/src/types/pdf_link.dart';
+import 'package:pdf_manipulator/src/types/pdf_point.dart';
+import 'package:pdf_manipulator/src/types/pdf_radio_option.dart';
+import 'package:pdf_manipulator/src/types/pdf_field_scripts.dart';
 import 'package:pdf_manipulator/src/types/pdf_task.dart';
 import 'package:pdf_manipulator/src/types/pdf_text_style.dart';
 import 'package:pdf_manipulator/src/types/pdf_xfa_info.dart';
@@ -60,12 +65,11 @@ part 'pdf_builder.dart';
 part 'pdf_doc.dart';
 part 'pdf_edits.dart';
 part 'pdf_editor.dart';
+part 'pdf_jobs.dart';
 part 'pdf_reads.dart';
-part 'pdf_standalone.dart';
-part 'pdf_sugar.dart';
 
 /// A handle the library can open and must close: the common face of
-/// [PdfDoc], [PdfEditor] and [PdfBuilder] for `_own`.
+/// [PdfDocumentHandle], [PdfEditorHandle] and [PdfBuilderHandle] for `_own`.
 abstract interface class _Handle {
   /// Makes every op issued on the handle from now on register its cancel
   /// with [hook].
@@ -112,7 +116,20 @@ PdfTask<R> _own<H extends _Handle, R>(
   }
 });
 
-/// Entry point for all PDF operations — open, edit, build, and standalone ops.
+/// Entry point for all PDF operations — open, edit, build, and the ops that
+/// need no handle.
+///
+/// Every door that opens a PDF takes a [PdfInput]: the source and, when the
+/// file is encrypted, its password. The doors come in four kinds:
+///
+/// - handles you own and dispose: [open], [edit], [build];
+/// - scopes where the library opens, runs your body, saves and closes:
+///   [read], [rewrite], [buildTo];
+/// - one-shots, one call on one document: [readOnce], [editOnce], [info],
+///   [resave];
+/// - doors over several documents or a policy: [merge], [split], [compress],
+///   [imagesToPdf], and the ones that need no handle: [sign],
+///   [convertToOffice], [convertFromOffice], [convertXfaToAcroForm].
 class Pdf {
   /// Creates a new [Pdf] instance with an optional engine configuration.
   Pdf({PdfConfig? config}) : _bridge = createBridge(config: config);
@@ -155,40 +172,48 @@ class Pdf {
 
   void _check() {
     if (_disposed) {
-      throw const PdfDisposed('This Pdf instance has been disposed');
+      throw StateError('This Pdf instance has been disposed');
     }
-  }
-
-  PdfBridge get _live {
-    _check();
-    return _bridge;
   }
 
   // ── Handles — whoever opens one closes it ──
 
   /// Opens a PDF document for read-only queries.
   ///
-  /// The handle is yours: call [PdfDoc.dispose] when you are done, on every
-  /// path including errors. For one read, use [read], which opens the
-  /// document, runs your code and always closes it. A handle you forget is
-  /// released when the garbage collector frees it, and in debug mode the
+  /// The handle is yours: call [PdfDocumentHandle.dispose] when you are done,
+  /// on every path including errors. For one read, use [read], which opens
+  /// the document, runs your code and always closes it. A handle you forget
+  /// is released when the garbage collector frees it, and in debug mode the
   /// leak is logged with where it was opened; that is a backstop, not a
   /// plan.
-  PdfTask<PdfDoc> open(DataSource source, {String? password}) {
+  ///
+  /// A source [input] borrows stays the caller's; one it owns is closed with
+  /// the handle.
+  PdfTask<PdfDocumentHandle> open(PdfInput input) {
     _check();
-    return _bridge.open(source, password: password).map((handle) async {
+    return PdfTask.group((hook) async {
+      final lease = await input.opened;
       try {
-        final map = handle.openResult;
-        return PdfDoc.internal(
-          handle,
-          pageCount: map['pageCount'] as int? ?? 0,
-          version: map['version'] as String? ?? '1.0',
-          isTagged: map['isTagged'] as bool? ?? false,
-          metadata: codec.decodeMetadata(map),
-          encryption: codec.decodeEncryptionInfo(map),
+        final handle = await hook.guard(
+          _bridge.open(lease.source, password: input.password),
         );
-      } catch (e) {
-        await handle.dispose();
+        try {
+          final map = handle.openResult;
+          return PdfDocumentHandle.internal(
+            handle,
+            pageCount: map['pageCount'] as int? ?? 0,
+            version: map['version'] as String? ?? '1.0',
+            isTagged: map['isTagged'] as bool? ?? false,
+            metadata: codec.decodeMetadata(map),
+            encryption: codec.decodeEncryptionInfo(map),
+            release: lease.release,
+          );
+        } catch (_) {
+          await handle.dispose();
+          rethrow;
+        }
+      } catch (_) {
+        await lease.release();
         rethrow;
       }
     });
@@ -196,77 +221,79 @@ class Pdf {
 
   /// Opens a PDF document for editing (mutate, then save).
   ///
-  /// The handle is yours: call [PdfEditor.dispose] when you are done, on
-  /// every path including errors. For one edit pass, use [rewrite] (several
-  /// edits, one save) or [edits] (one edit), which open, save and always
-  /// close. A handle you forget is released when the garbage collector
-  /// frees it, and in debug mode the leak is logged with where it was
-  /// opened; that is a backstop, not a plan.
-  PdfTask<PdfEditor> edit(DataSource source, {String? password}) {
+  /// The handle is yours: call [PdfEditorHandle.dispose] when you are done,
+  /// on every path including errors. For one edit pass, use [rewrite]
+  /// (several edits, one save) or [editOnce] (one edit), which open, save and
+  /// always close. A handle you forget is released when the garbage
+  /// collector frees it, and in debug mode the leak is logged with where it
+  /// was opened; that is a backstop, not a plan.
+  PdfTask<PdfEditorHandle> edit(PdfInput input) {
     _check();
     return PdfTask.group((hook) async {
-      final handle = await hook.guard(
-        _bridge.openEditor(source, password: password),
-      );
-      return PdfEditor.internal(_bridge, handle);
+      final lease = await input.opened;
+      try {
+        final handle = await hook.guard(
+          _bridge.openEditor(lease.source, password: input.password),
+        );
+        return PdfEditorHandle.internal(this, handle, release: lease.release);
+      } catch (_) {
+        await lease.release();
+        rethrow;
+      }
     });
   }
 
   /// Creates a new PDF document from scratch.
   ///
-  /// The handle is yours: call [PdfBuilder.dispose] when you are done, on
-  /// every path including errors. For one document, use [buildTo], which
+  /// The handle is yours: call [PdfBuilderHandle.dispose] when you are done,
+  /// on every path including errors. For one document, use [buildTo], which
   /// builds, saves and always closes. A handle you forget is released when
   /// the garbage collector frees it, and in debug mode the leak is logged
   /// with where it was opened; that is a backstop, not a plan.
-  PdfTask<PdfBuilder> build() {
+  PdfTask<PdfBuilderHandle> build() {
     _check();
-    return _bridge.createBuilder().map(
-      (handle) => PdfBuilder.internal(_bridge, handle),
-    );
+    return _bridge.createBuilder().map(PdfBuilderHandle.internal);
   }
 
-  // ── Batch combinators — the library opens the handle and closes it ──
+  // ── Scopes — the library opens the handle and closes it ──
 
-  /// Opens [source], runs [body] on the document and closes it, after
-  /// success, after an error and after a cancel. The handle is the
+  /// Opens [input], runs [body] on the document and closes it, after
+  /// success, after an error and after a cancel. The document is the
   /// library's: do not keep it past [body].
   ///
   /// Cancelling the task stops the open and every op [body] has running on
   /// `doc`, which resolves with [PdfCancelled]; an op [body] issues on `doc`
   /// after the cancel fails at once with [PdfCancelled].
   PdfTask<T> read<T>(
-    DataSource source,
-    Future<T> Function(PdfDoc doc) body, {
-    String? password,
-  }) => _own(open(source, password: password), (doc, hook) => body(doc));
+    PdfInput input,
+    Future<T> Function(PdfDocument doc) body,
+  ) => _own(open(input), (doc, hook) => body(doc));
 
-  /// Opens [source], runs [edits] on the editor, saves the result to
-  /// [output] with [options] and closes the editor, after success, after an
-  /// error and after a cancel. Several edits make one parse and one save,
-  /// all or nothing. The handle is the library's: do not keep it past
-  /// [edits]. Nothing is written when [edits] throws, and [output] is aborted
+  /// Opens [input], runs [body] on the editor, saves the result to [output]
+  /// with [save] and closes the editor, after success, after an error and
+  /// after a cancel. Several edits make one parse and one save, all or
+  /// nothing. The editor is the library's: do not keep it past [body].
+  /// Nothing is written when [body] throws, and [output] is aborted
   /// (`DataSink.abort`) when the call ends cancelled or failed.
   ///
-  /// Cancelling the task stops the open, every op [edits] has running on the
+  /// Cancelling the task stops the open, every op [body] has running on the
   /// editor, which resolves with [PdfCancelled], and the save: an op issued
   /// after the cancel fails at once with [PdfCancelled] and nothing is
   /// written to [output].
   PdfTask<void> rewrite(
-    DataSource source,
+    PdfInput input,
     DataSink output,
-    Future<void> Function(PdfEditor editor) edits, {
-    String? password,
-    PdfSaveOptions options = const PdfSaveOptions.fullRewrite(),
-  }) => _own(edit(source, password: password), (editor, hook) async {
-    await edits(editor);
-    await hook.guard(editor.save(output, options: options));
+    Future<void> Function(PdfEditor editor) body, {
+    PdfSave save = const PdfSave.full(),
+  }) => _own(edit(input), (editor, hook) async {
+    await body(editor);
+    await hook.guard(editor.save(output, save: save));
   }, output: output);
 
   /// Creates a document, runs [body] on its builder, saves it to [output]
   /// and closes the builder, after success, after an error and after a
   /// cancel. Page content is Flate-compressed unless [deflate] is false.
-  /// The handle is the library's: do not keep it past [body]. Nothing is
+  /// The builder is the library's: do not keep it past [body]. Nothing is
   /// written when [body] throws, and [output] is aborted (`DataSink.abort`)
   /// when the call ends cancelled or failed.
   ///
@@ -283,64 +310,196 @@ class Pdf {
     await hook.guard(builder.save(output, deflate: deflate));
   }, output: output);
 
-  /// Applies one edit of [PdfEdits] to [source] and writes the result to
+  // ── One-shots — one call, generated from PdfReads and PdfEdits ──
+
+  /// Applies one read of [PdfReads] to [input]: the object returned runs
+  /// exactly one call, then the document is closed. A second call throws
+  /// [StateError]; use [read] for several reads.
+  ///
+  /// ```dart
+  /// final hits = await pdf.readOnce(input).search('invoice');
+  /// ```
+  PdfReads readOnce(PdfInput input) {
+    _check();
+    return _OneShotReads(this, input);
+  }
+
+  /// Applies one edit of [PdfEdits] to [input] and writes the result to
   /// [output]: the object returned runs exactly one call, then the document
-  /// is saved and closed. A second call throws [PdfInvalidArgument]; use
+  /// is saved with [save] and closed. A second call throws [StateError]; use
   /// [rewrite] for several edits.
   ///
   /// ```dart
-  /// await pdf.edits(source, output).addWatermark(0, 'DRAFT');
+  /// await pdf.editOnce(input, output).addWatermark('DRAFT');
   /// ```
-  PdfEdits edits(
-    DataSource source,
+  PdfEdits editOnce(
+    PdfInput input,
     DataSink output, {
-    String? password,
-    PdfSaveOptions options = const PdfSaveOptions.fullRewrite(),
+    PdfSave save = const PdfSave.full(),
   }) {
     _check();
-    return _OneShotEdits(this, source, output, password, options);
-  }
-
-  /// Applies one read of [PdfReads] to [source]: the object returned runs
-  /// exactly one call, then the document is closed. A second call throws
-  /// [PdfInvalidArgument]; use [read] for several reads.
-  ///
-  /// ```dart
-  /// final hits = await pdf.reads(source).search('invoice');
-  /// ```
-  PdfReads reads(DataSource source, {String? password}) {
-    _check();
-    return _OneShotReads(this, source, password);
+    return _OneShotEdits(this, input, output, save);
   }
 
   /// What the file says about itself without keeping it open: page count,
   /// version, metadata and encryption.
-  PdfTask<PdfInfo> info(DataSource source, {String? password}) => read(
-    source,
-    (doc) async => PdfInfo(
+  PdfTask<PdfDocumentInfo> info(PdfInput input) => read(
+    input,
+    (doc) async => PdfDocumentInfo(
       pageCount: doc.pageCount,
       version: doc.version,
       isTagged: doc.isTagged,
       metadata: doc.metadata,
       encryption: doc.encryption,
     ),
-    password: password,
   );
 
-  /// Rewrites [source] to [output] with [options] and no edit: encrypt,
+  /// Rewrites [input] to [output] with [save] and no edit: encrypt,
   /// decrypt, re-deflate. The document is closed afterwards.
   PdfTask<void> resave(
-    DataSource source,
+    PdfInput input,
     DataSink output, {
-    String? password,
-    PdfSaveOptions options = const PdfSaveOptions.fullRewrite(),
-  }) => rewrite(
-    source,
-    output,
-    (editor) async {},
-    password: password,
-    options: options,
-  );
+    PdfSave save = const PdfSave.full(),
+  }) => rewrite(input, output, (editor) async {}, save: save);
+
+  // ── Several documents, or a policy ──
+
+  /// Merges [inputs] into one document written to [output] with [save], in
+  /// the order given: the first is the base and the others are appended
+  /// whole. An empty [inputs] throws [ArgumentError]. To append only some
+  /// pages of a document, use [rewrite] and `PdfEditor.appendPages`.
+  PdfTask<void> merge(
+    List<PdfInput> inputs,
+    DataSink output, {
+    PdfSave save = const PdfSave.full(),
+  }) {
+    _check();
+    return _merge(this, inputs, output, save);
+  }
+
+  /// Splits [input] into the parts [by] says. [sinkFor] is asked for each
+  /// part's sink before the part is written; the library closes it after the
+  /// part, and aborts it first when the part fails or is cancelled. The parts
+  /// delivered before a failure or a cancel stand. The task resolves with
+  /// what each part holds, in order; the bytes went to the sinks.
+  ///
+  /// [PdfSplitRule.maxBytes] cuts a part at the most pages whose file stays
+  /// within the limit, as the engine measures it; a page that alone exceeds
+  /// the limit is a part of its own.
+  PdfTask<List<PdfSplitPart>> split(
+    PdfInput input,
+    FutureOr<DataSink> Function(PdfSplitPart part) sinkFor, {
+    required PdfSplitRule by,
+  }) {
+    _check();
+    return _split(this, input, sinkFor, by);
+  }
+
+  /// Compresses the PDF: images through `PdfEdits.reduceImages` under
+  /// [images] (`PdfImagePolicy.lossless` unless you pass another preset or
+  /// your own numbers, so the picture never gets worse), then a full save
+  /// with stream compression, one copy of identical images, ICC profiles and
+  /// embedded fonts, the resource entries no content names dropped and
+  /// garbage collection.
+  ///
+  /// It never makes a file larger: when the result is not smaller than
+  /// [input], [output] receives the bytes of [input] unchanged.
+  PdfTask<void> compress(
+    PdfInput input,
+    DataSink output, {
+    PdfImagePolicy images = PdfImagePolicy.lossless,
+  }) {
+    _check();
+    return _compress(this, input, output, images);
+  }
+
+  /// Creates a PDF from a list of images, one per page.
+  ///
+  /// Each page is the image's own size, one point per pixel, unless [page]
+  /// names a size; [PdfImagePage.fit] says how the image fills it.
+  PdfTask<void> imagesToPdf(
+    List<DataSource> images,
+    DataSink output, {
+    PdfImagePage page = const PdfImagePage(),
+    bool deflate = true,
+  }) => buildTo(output, (builder) async {
+    for (final image in images) {
+      await builder.addImagePage(image, page: page);
+    }
+  }, deflate: deflate);
+
+  // ── No handle — input in, output out ──
+
+  /// Digitally signs a PDF with the given [credentials]. An encrypted
+  /// [input] throws [PdfUnsupported]: the appended signature would have to
+  /// be encrypted with the input's keys.
+  PdfTask<void> sign(
+    PdfInput input,
+    DataSink output, {
+    required PdfSigningCredentials credentials,
+    String? reason,
+    String? location,
+  }) {
+    _check();
+    KeepRecord.op('signatures');
+    return _withInput(
+      input,
+      output,
+      (source) => _bridge.sign(
+        source,
+        output,
+        credentials: credentials,
+        reason: reason,
+        location: location,
+      ),
+    );
+  }
+
+  /// Converts a PDF to an Office document of [format].
+  PdfTask<void> convertToOffice(
+    PdfInput input,
+    DataSink output, {
+    required PdfOfficeFormat format,
+  }) {
+    _check();
+    KeepRecord.op('office');
+    return _withInput(
+      input,
+      output,
+      (source) => _bridge.convertToOffice(
+        source,
+        output,
+        format: format,
+        password: input.password,
+      ),
+    );
+  }
+
+  /// Converts the Office [document] of the given [format] into a PDF.
+  PdfTask<void> convertFromOffice(
+    DataSource document,
+    DataSink output, {
+    required PdfOfficeFormat format,
+  }) {
+    _check();
+    KeepRecord.op('office');
+    return _bridge.convertFromOffice(document, output, format: format);
+  }
+
+  /// Converts the XFA form in [input] into a plain AcroForm document written
+  /// to [output]. A document without XFA throws [PdfEngineFailed].
+  PdfTask<void> convertXfaToAcroForm(PdfInput input, DataSink output) {
+    _check();
+    return _withInput(
+      input,
+      output,
+      (source) => _bridge.convertXfaToAcroForm(
+        source,
+        output,
+        password: input.password,
+      ),
+    );
+  }
 
   // ── Lifecycle ──
 

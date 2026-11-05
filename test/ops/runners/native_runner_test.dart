@@ -52,7 +52,7 @@ void main() {
   }, timeout: t(2));
 
   test('verify I/O mode is native', () async {
-    final doc = await pdf.open(src(minimalPdf));
+    final doc = await pdf.open(PdfInput(src(minimalPdf)));
     await doc.dispose();
     expect(pdf.ioMode, PdfIoMode.native);
   }, timeout: t(1));

@@ -197,7 +197,7 @@ void registerExecutorTests(
   group('executors across instances', () {
     /// Fills the form with a CJK value, flattens it and reads the result.
     Future<String> flattened(Pdf pdf) async {
-      final editor = await pdf.edit(src(formUtf16NamePdf));
+      final editor = await pdf.edit(PdfInput(src(formUtf16NamePdf)));
       await editor
           .field(_fieldName)
           .setValue(PdfFormFieldValue.text('東京都渋谷区 123'));
@@ -205,7 +205,7 @@ void registerExecutorTests(
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
-      final doc = await pdf.open(src(sink.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       final text = await extractTextToString(doc, pages: const PdfPages.all());
       await doc.dispose();
       return text;

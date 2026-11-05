@@ -46,7 +46,7 @@ Future<void> expectOnlyPrunedPages(
     );
   }
 
-  final doc = await pdf.open(src(out));
+  final doc = await pdf.open(PdfInput(src(out)));
   expect(doc.pageCount, kept.length);
   expect(
     [for (final page in await doc.pageInfo()) page.label],
@@ -61,7 +61,7 @@ Future<void> expectOnlyPrunedPages(
   expect(fields, {for (final i in kept) 'field_$i'});
   await doc.dispose();
 
-  final editor = await pdf.edit(src(out));
+  final editor = await pdf.edit(PdfInput(src(out)));
   for (var p = 0; p < kept.length; p++) {
     final box = (await editor.pageInfo(
       pages: PdfPages.single(p),

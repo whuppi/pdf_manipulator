@@ -85,7 +85,7 @@ part 'host.dart';
 /// where dart:js_interop exists. [config] supplies the lane-worker URL and an
 /// optional I/O-mode override.
 LaneHost createLaneHost({PdfConfig? config}) => WebLaneHost(
-  laneWorkerUrl: config?.webLaneWorkerUrl,
+  laneWorkerUrl: config?.webWorkerUrl,
   forceMode: config?.webIoMode,
 );
 
@@ -812,7 +812,7 @@ class WebLane implements Lane {
           _opfsAck = null;
         }
         if (ackError != null && ackError != 'cancelled') {
-          throw PdfIoError('OPFS pre-copy failed: $ackError');
+          throw PdfIoFailed('OPFS pre-copy failed: $ackError');
         }
         offset += count;
       }

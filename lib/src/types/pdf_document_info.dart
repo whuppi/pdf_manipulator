@@ -7,9 +7,9 @@ import 'package:pdf_manipulator/src/types/pdf_params.dart';
 /// What a document says about itself, read by `Pdf.info` without keeping the
 /// document open.
 @immutable
-final class PdfInfo {
+final class PdfDocumentInfo {
   /// Creates a document description.
-  const PdfInfo({
+  const PdfDocumentInfo({
     required this.pageCount,
     required this.version,
     required this.isTagged,
@@ -34,7 +34,7 @@ final class PdfInfo {
 
   @override
   bool operator ==(Object other) =>
-      other is PdfInfo &&
+      other is PdfDocumentInfo &&
       other.pageCount == pageCount &&
       other.version == version &&
       other.isTagged == isTagged &&
@@ -46,7 +46,7 @@ final class PdfInfo {
       Object.hash(pageCount, version, isTagged, metadata, encryption);
 
   @override
-  String toString() => 'PdfInfo($pageCount pages, PDF $version)';
+  String toString() => 'PdfDocumentInfo($pageCount pages, PDF $version)';
 }
 
 /// How a document is encrypted: the algorithm that protects it, what a

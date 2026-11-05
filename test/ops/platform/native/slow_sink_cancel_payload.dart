@@ -44,7 +44,10 @@ class _SlowSink implements DataSink {
 void main() async {
   final pdf = Pdf();
   final sink = _SlowSink(const Duration(milliseconds: 400));
-  final task = pdf.merge([src(minimalPdf), src(minimalPdf)], sink);
+  final task = pdf.merge([
+    PdfInput(src(minimalPdf)),
+    PdfInput(src(minimalPdf)),
+  ], sink);
   await sink.started.future;
   task.cancel();
   try {

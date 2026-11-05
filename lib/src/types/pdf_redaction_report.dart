@@ -6,7 +6,7 @@ import 'package:meta/meta.dart';
 final class PdfRedactionReport {
   /// Creates a report from the engine's counts.
   const PdfRedactionReport({
-    required this.regions,
+    required this.regionCount,
     required this.glyphsRemoved,
     required this.imagesModified,
     required this.imagesRemoved,
@@ -15,7 +15,7 @@ final class PdfRedactionReport {
   });
 
   /// Number of redaction regions applied.
-  final int regions;
+  final int regionCount;
 
   /// Glyphs physically removed from content streams.
   final int glyphsRemoved;
@@ -36,7 +36,7 @@ final class PdfRedactionReport {
   @override
   bool operator ==(Object other) =>
       other is PdfRedactionReport &&
-      other.regions == regions &&
+      other.regionCount == regionCount &&
       other.glyphsRemoved == glyphsRemoved &&
       other.imagesModified == imagesModified &&
       other.imagesRemoved == imagesRemoved &&
@@ -45,7 +45,7 @@ final class PdfRedactionReport {
 
   @override
   int get hashCode => Object.hash(
-    regions,
+    regionCount,
     glyphsRemoved,
     imagesModified,
     imagesRemoved,

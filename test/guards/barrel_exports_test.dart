@@ -24,30 +24,29 @@ const _pdfManipulator = <String>[
   // src/ops/pdf.dart
   'Pdf',
   'PdfBuilder',
-  'PdfDoc',
+  'PdfBuilderHandle',
+  'PdfDocument',
+  'PdfDocumentHandle',
   'PdfEditor',
+  'PdfEditorHandle',
   'PdfEdits',
-  'PdfFieldEditor',
+  'PdfFormFieldEditor',
   'PdfPageBuilder',
   'PdfReads',
-  'PdfStandalone',
-  'PdfSugar',
   // src/types/data_sink.dart
   'DataSink',
   // src/types/data_source.dart
   'DataSource',
-  'readAllBytes',
   // src/types/errors.dart
   'PdfCancelled',
   'PdfCorrupted',
-  'PdfCryptoError',
-  'PdfDisposed',
-  'PdfEngineError',
+  'PdfCryptoFailed',
+  'PdfEngineFailed',
   'PdfError',
   'PdfIncrementalRefused',
-  'PdfInvalidArgument',
-  'PdfIoError',
-  'PdfPageRangeError',
+  'PdfIoFailed',
+  'PdfNotFound',
+  'PdfPageOutOfRange',
   'PdfPasswordRequired',
   'PdfUnsupported',
   'PdfWrongPassword',
@@ -62,33 +61,38 @@ const _pdfManipulator = <String>[
   // src/types/pdf_enums.dart
   'PdfALevel',
   'PdfAlignment',
-  'PdfDocumentFormat',
-  'PdfDocumentType',
+  'PdfOfficeFormat',
+  'PdfDocumentKind',
   'PdfEncryptionAlgorithm',
   'PdfExtractionFormat',
   'PdfFallbackFontKind',
   'PdfImageFit',
   'PdfIoMode',
   'PdfMarkupKind',
-  'PdfPageType',
+  'PdfPageKind',
   'PdfRotation',
-  'PdfStampType',
+  'PdfStamp',
   'PdfUaLevel',
+  // src/types/pdf_bitmap.dart
+  'PdfBitmap',
+  // src/types/pdf_field_scripts.dart
+  'PdfFieldScripts',
   // src/types/pdf_form_field.dart
   'PdfCheckedValue',
   'PdfChoiceValue',
   'PdfFormDataFormat',
   'PdfFormField',
   'PdfFormFieldFlag',
-  'PdfFormFieldType',
+  'PdfFormFieldKind',
   'PdfFormFieldValue',
   'PdfMultiChoiceValue',
   'PdfNoValue',
   'PdfTextValue',
-  // src/types/pdf_image.dart
-  'PdfImage',
-  // src/types/pdf_image_page_options.dart
-  'PdfImagePageOptions',
+  // src/types/pdf_image_info.dart
+  'PdfImageInfo',
+  // src/types/pdf_image_page.dart
+  'PdfImagePage',
+  'PdfImagePageSize',
   // src/types/pdf_image_policy.dart
   'PdfChromaSubsampling',
   'PdfImagePolicy',
@@ -99,34 +103,45 @@ const _pdfManipulator = <String>[
   'PdfImageKeepReason',
   'PdfImageOutcome',
   'PdfImageReport',
-  // src/types/pdf_info.dart
+  // src/types/pdf_document_info.dart
   'PdfEncryptionInfo',
-  'PdfInfo',
+  'PdfDocumentInfo',
+  // src/types/pdf_input.dart
+  'PdfInput',
+  // src/types/pdf_link.dart
+  'PdfLink',
+  'PdfMarkup',
   // src/types/pdf_matrix.dart
   'PdfMatrix',
   // src/types/pdf_metadata.dart
   'PdfMetadata',
-  // src/types/pdf_page_image.dart
-  'PdfPageImage',
+  // src/types/pdf_image_placement.dart
+  'PdfImagePlacement',
   // src/types/pdf_page_info.dart
   'PdfPageInfo',
   // src/types/pdf_page_size.dart
   'PdfPageSize',
   // src/types/pdf_pages.dart
+  'PdfPageOrder',
   'PdfPages',
   // src/types/pdf_params.dart
   'PdfBookmarkRange',
   'PdfColor',
   'PdfCorner',
+  'PdfDeflate',
   'PdfEncryption',
   'PdfPageClassification',
   'PdfPermissions',
-  'PdfSaveOptions',
+  'PdfSave',
   'PdfSigningCredentials',
-  'PdfValidationResult',
+  'PdfValidationReport',
   'PdfWatermarkLayer',
   'PdfWatermarkPosition',
   'PdfWatermarkStyle',
+  // src/types/pdf_point.dart
+  'PdfPoint',
+  // src/types/pdf_radio_option.dart
+  'PdfRadioOption',
   // src/types/pdf_rect.dart
   'PdfRect',
   // src/types/pdf_redaction_overlay.dart
@@ -137,8 +152,6 @@ const _pdfManipulator = <String>[
   'PdfRenderFormat',
   'PdfRenderSize',
   'PdfRenderedPage',
-  // src/types/pdf_sanitize_options.dart
-  'PdfSanitizeOptions',
   // src/types/pdf_search_hit.dart
   'PdfSearchHit',
   // src/types/pdf_signature.dart
@@ -158,8 +171,6 @@ const _pdfManipulator = <String>[
   'PdfTask',
   // src/types/pdf_text_style.dart
   'PdfTextStyle',
-  // src/types/pdf_wire.dart
-  'PdfWire',
   // src/types/pdf_xfa_info.dart
   'PdfXfaInfo',
 ];
@@ -170,6 +181,8 @@ const _io = <String>[
   'FileSink',
   // src/io/file_source.dart
   'FileSource',
+  // src/io/pdf_file.dart
+  'PdfFile',
 ];
 
 /// The public names [barrel] (a path under lib) exports, sorted.

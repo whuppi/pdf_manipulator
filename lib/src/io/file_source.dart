@@ -2,7 +2,6 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import '../types/data_source.dart';
-import '../types/errors.dart';
 
 /// A [DataSource] backed by a file on disk. Native platforms only.
 ///
@@ -55,7 +54,7 @@ final class FileSource implements DataSource {
   @override
   Future<Uint8List> readAt(int offset, int count) {
     if (_closed) {
-      throw const PdfDisposed('This FileSource has been closed');
+      throw StateError('This FileSource has been closed');
     }
     final read = _tail.then((_) async {
       await _raf.setPosition(offset);

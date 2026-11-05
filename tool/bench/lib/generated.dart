@@ -34,7 +34,7 @@ final generatedCases = <GeneratedCase>[
 
 Future<Uint8List> _mergeFiveTimes(Pdf pdf, Uint8List base) async {
   final sink = MemorySink();
-  await pdf.merge(List.filled(5, MemorySource(base)), sink);
+  await pdf.merge(List.filled(5, PdfInput(MemorySource(base))), sink);
   return sink.takeBytes();
 }
 
@@ -45,10 +45,10 @@ Future<Uint8List> _recompress(Pdf pdf, Uint8List base) =>
 Future<Uint8List> _saveIncrementallyTwice(Pdf pdf, Uint8List base) async {
   var current = base;
   for (final title in const ['first edit', 'second edit']) {
-    final editor = await pdf.edit(MemorySource(current));
+    final editor = await pdf.edit(PdfInput(MemorySource(current)));
     await editor.setMetadata((await editor.metadata()).copyWith(title: title));
     final sink = MemorySink();
-    await editor.save(sink, options: const PdfSaveOptions.incremental());
+    await editor.save(sink, save: const PdfSave.incremental());
     await editor.dispose();
     current = sink.takeBytes();
   }

@@ -42,16 +42,16 @@ enum PdfIoMode implements PdfWire {
 /// PDF encryption algorithm.
 enum PdfEncryptionAlgorithm implements PdfWire {
   /// RC4, 40-bit key. Legacy, weak. PDF 1.1+.
-  rc4_40('rc4_40'),
+  rc4Key40('rc4_40'),
 
   /// RC4, 128-bit key. PDF 1.4+.
-  rc4_128('rc4_128'),
+  rc4Key128('rc4_128'),
 
   /// AES, 128-bit key. PDF 1.5+.
-  aes128('aes128'),
+  aesKey128('aes128'),
 
   /// AES, 256-bit key. Recommended. PDF 1.7+.
-  aes256('aes256');
+  aesKey256('aes256');
 
   const PdfEncryptionAlgorithm(this.wire);
 
@@ -65,7 +65,7 @@ enum PdfExtractionFormat implements PdfWire {
   auto('auto'),
 
   /// Structured text preserving reading order and layout.
-  text('text'),
+  layout('text'),
 
   /// Markdown with headings, lists, tables, images.
   markdown('markdown'),
@@ -74,7 +74,7 @@ enum PdfExtractionFormat implements PdfWire {
   html('html'),
 
   /// Flat plain text, no structure.
-  plainText('plainText');
+  plain('plainText');
 
   const PdfExtractionFormat(this.wire);
 
@@ -83,7 +83,7 @@ enum PdfExtractionFormat implements PdfWire {
 }
 
 /// Office document format for conversion.
-enum PdfDocumentFormat implements PdfWire {
+enum PdfOfficeFormat implements PdfWire {
   /// Microsoft Word (.docx).
   docx('docx'),
 
@@ -93,14 +93,14 @@ enum PdfDocumentFormat implements PdfWire {
   /// Microsoft Excel (.xlsx).
   xlsx('xlsx');
 
-  const PdfDocumentFormat(this.wire);
+  const PdfOfficeFormat(this.wire);
 
   @override
   final String wire;
 }
 
 /// Standard stamp annotation type.
-enum PdfStampType implements PdfWire {
+enum PdfStamp implements PdfWire {
   /// Approved.
   approved('Approved'),
 
@@ -123,7 +123,7 @@ enum PdfStampType implements PdfWire {
   confidential('Confidential'),
 
   /// Final.
-  final_('Final'),
+  finalVersion('Final'),
 
   /// Sold.
   sold('Sold'),
@@ -143,7 +143,7 @@ enum PdfStampType implements PdfWire {
   /// For public release.
   forPublicRelease('ForPublicRelease');
 
-  const PdfStampType(this.wire);
+  const PdfStamp(this.wire);
 
   @override
   final String wire;
@@ -186,7 +186,7 @@ enum PdfRotation implements PdfWire {
 }
 
 /// What a page holds, as the engine classifies it.
-enum PdfPageType implements PdfWire {
+enum PdfPageKind implements PdfWire {
   /// Usable native text dominates.
   textLayer('TextLayer'),
 
@@ -202,14 +202,14 @@ enum PdfPageType implements PdfWire {
   /// The page is blank or near-empty.
   empty('Empty');
 
-  const PdfPageType(this.wire);
+  const PdfPageKind(this.wire);
 
   @override
   final String wire;
 }
 
 /// What a document holds, as the engine summarises its pages.
-enum PdfDocumentType implements PdfWire {
+enum PdfDocumentKind implements PdfWire {
   /// The document is predominantly born-digital text.
   mostlyText('MostlyText'),
 
@@ -222,7 +222,7 @@ enum PdfDocumentType implements PdfWire {
   /// The document has no meaningful content.
   empty('Empty');
 
-  const PdfDocumentType(this.wire);
+  const PdfDocumentKind(this.wire);
 
   @override
   final String wire;

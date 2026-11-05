@@ -14,8 +14,6 @@ import 'dart:developer' as developer;
 
 import 'package:meta/meta.dart';
 
-import 'package:pdf_manipulator/src/types/errors.dart';
-
 /// Releases the engine side of a handle that was garbage collected without
 /// `dispose()`, and in debug mode logs where it was opened.
 final class HandleBackstop {
@@ -58,7 +56,11 @@ final class HandleBackstop {
   static Future<void> finalizeNow(Object owner) async {
     final leak = _leaks[owner];
     if (leak == null) {
-      throw PdfInvalidArgument('$owner is not registered with the backstop');
+      throw ArgumentError.value(
+        owner,
+        'owner',
+        'is not registered with the backstop',
+      );
     }
     detach(owner);
     await _release(leak);

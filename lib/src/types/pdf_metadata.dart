@@ -13,7 +13,7 @@ final class PdfMetadata {
     this.creator,
     this.producer,
     this.creationDate,
-    this.modDate,
+    this.modificationDate,
   });
 
   /// The document's title.
@@ -38,7 +38,7 @@ final class PdfMetadata {
   final DateTime? creationDate;
 
   /// When the document was last modified.
-  final DateTime? modDate;
+  final DateTime? modificationDate;
 
   /// A copy with the given fields replaced. A field left out keeps its
   /// value; to remove one, build a new [PdfMetadata] without it.
@@ -50,7 +50,7 @@ final class PdfMetadata {
     String? creator,
     String? producer,
     DateTime? creationDate,
-    DateTime? modDate,
+    DateTime? modificationDate,
   }) => PdfMetadata(
     title: title ?? this.title,
     author: author ?? this.author,
@@ -59,7 +59,7 @@ final class PdfMetadata {
     creator: creator ?? this.creator,
     producer: producer ?? this.producer,
     creationDate: creationDate ?? this.creationDate,
-    modDate: modDate ?? this.modDate,
+    modificationDate: modificationDate ?? this.modificationDate,
   );
 
   @override
@@ -72,7 +72,7 @@ final class PdfMetadata {
       other.creator == creator &&
       other.producer == producer &&
       other.creationDate == creationDate &&
-      other.modDate == modDate;
+      other.modificationDate == modificationDate;
 
   @override
   int get hashCode => Object.hash(
@@ -83,12 +83,12 @@ final class PdfMetadata {
     creator,
     producer,
     creationDate,
-    modDate,
+    modificationDate,
   );
 
   @override
   String toString() =>
       'PdfMetadata(title: $title, author: $author, subject: $subject, '
       'keywords: $keywords, creator: $creator, producer: $producer, '
-      'creationDate: $creationDate, modDate: $modDate)';
+      'creationDate: $creationDate, modificationDate: $modificationDate)';
 }

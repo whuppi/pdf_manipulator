@@ -24,34 +24,34 @@ void main() {
 
     test('PdfPermissions compares by flags', () {
       expectValue(
-        const PdfPermissions(print: false),
-        const PdfPermissions(print: false),
+        const PdfPermissions(canPrint: false),
+        const PdfPermissions(canPrint: false),
         const PdfPermissions.all(),
       );
       expect(
         const PdfPermissions.all(),
-        equals(const PdfPermissions(copy: true)),
+        equals(const PdfPermissions(canCopy: true)),
       );
     });
 
-    test('PdfSaveOptions', () {
-      expectValue<PdfSaveOptions>(
-        const PdfSaveOptions.fullRewrite(deflate: false),
-        const PdfSaveOptions.fullRewrite(deflate: false),
-        const PdfSaveOptions.fullRewrite(),
+    test('PdfSave', () {
+      expectValue<PdfSave>(
+        const PdfSave.full(deflate: PdfDeflate.none),
+        const PdfSave.full(deflate: PdfDeflate.none),
+        const PdfSave.full(),
       );
-      expectValue<PdfSaveOptions>(
-        const PdfSaveOptions.incremental(),
-        const PdfSaveOptions.incremental(),
-        const PdfSaveOptions.fullRewrite(),
+      expectValue<PdfSave>(
+        const PdfSave.incremental(),
+        const PdfSave.incremental(),
+        const PdfSave.full(),
       );
     });
 
     test('PdfEncryption', () {
       expectValue<PdfEncryption>(
-        const PdfEncryption.config(ownerPassword: 'a'),
-        const PdfEncryption.config(ownerPassword: 'a'),
-        const PdfEncryption.config(ownerPassword: 'b'),
+        const PdfEncryption.password(ownerPassword: 'a'),
+        const PdfEncryption.password(ownerPassword: 'a'),
+        const PdfEncryption.password(ownerPassword: 'b'),
       );
       expectValue<PdfEncryption>(
         const PdfEncryption.keep(),
@@ -62,9 +62,9 @@ void main() {
 
     test('PdfPages', () {
       expectValue<PdfPages>(
-        const PdfPages.list([1, 2]),
-        const PdfPages.list([1, 2]),
-        const PdfPages.list([2, 1]),
+        PdfPages.list([1, 2]),
+        PdfPages.list([2, 1]),
+        PdfPages.list([1, 3]),
       );
       expectValue<PdfPages>(
         const PdfPages.range(0, 3),
@@ -85,17 +85,23 @@ void main() {
         const PdfWatermarkPosition.corner(PdfCorner.topRight),
       );
       expectValue(
-        const PdfWatermarkStyle(rotation: 30),
-        const PdfWatermarkStyle(rotation: 30),
+        const PdfWatermarkStyle(angleDegrees: 30),
+        const PdfWatermarkStyle(angleDegrees: 30),
         const PdfWatermarkStyle(),
       );
     });
 
-    test('PdfSigningCredentials compares bytes, not identity', () {
+    test('PdfSigningCredentials compares its bundle source and password', () {
+      final bundle = MemorySource(Uint8List.fromList([1, 2, 3]));
       expectValue<PdfSigningCredentials>(
-        PdfSigningCredentials.pkcs12(Uint8List.fromList([1, 2, 3]), 'pw'),
-        PdfSigningCredentials.pkcs12(Uint8List.fromList([1, 2, 3]), 'pw'),
-        PdfSigningCredentials.pkcs12(Uint8List.fromList([1, 2, 4]), 'pw'),
+        PdfSigningCredentials.pkcs12(bundle, 'pw'),
+        PdfSigningCredentials.pkcs12(bundle, 'pw'),
+        PdfSigningCredentials.pkcs12(bundle, 'other'),
+      );
+      expectValue<PdfSigningCredentials>(
+        const PdfSigningCredentials.pem('cert', 'key'),
+        const PdfSigningCredentials.pem('cert', 'key'),
+        const PdfSigningCredentials.pem('cert', 'other'),
       );
     });
 
@@ -108,13 +114,13 @@ void main() {
             objectId: 1,
             encoding: PdfImageEncoding.raw,
             color: PdfImageColor.rgb,
-            indexed: false,
-            bits: 8,
+            isIndexed: false,
+            bitsPerComponent: 8,
             width: 2,
             height: 2,
             hasSoftMask: false,
-            uses: 1,
-            ppiMin: null,
+            placementCount: 1,
+            minPpi: null,
             action: PdfImageAction.kept,
             keepReason: null,
             bytesBefore: 12,
@@ -169,10 +175,137 @@ void main() {
     test('PdfSearchHit', () {
       const rect = PdfRect(x: 1, y: 2, width: 3, height: 4);
       expectValue(
-        const PdfSearchHit(text: 'a', page: 0, rect: rect),
-        const PdfSearchHit(text: 'a', page: 0, rect: rect),
-        const PdfSearchHit(text: 'a', page: 1, rect: rect),
+        const PdfSearchHit(text: 'a', page: 0, bounds: rect),
+        const PdfSearchHit(text: 'a', page: 0, bounds: rect),
+        const PdfSearchHit(text: 'a', page: 1, bounds: rect),
       );
+    });
+
+    test('PdfPoint', () {
+      expectValue(
+        const PdfPoint(1, 2),
+        const PdfPoint(1, 2),
+        const PdfPoint(2, 1),
+      );
+    });
+
+    test('PdfLink variants', () {
+      expectValue<PdfLink>(
+        const PdfLink.url('https://a'),
+        const PdfLink.url('https://a'),
+        const PdfLink.url('https://b'),
+      );
+      expectValue<PdfLink>(
+        const PdfLink.page(1),
+        const PdfLink.page(1),
+        const PdfLink.page(2),
+      );
+      expectValue<PdfLink>(
+        const PdfLink.named('top'),
+        const PdfLink.named('top'),
+        const PdfLink.named('end'),
+      );
+      expectValue<PdfLink>(
+        const PdfLink.javaScript('a()'),
+        const PdfLink.javaScript('a()'),
+        const PdfLink.javaScript('b()'),
+      );
+      expect(const PdfLink.page(1), isNot(equals(const PdfLink.named('1'))));
+    });
+
+    test('PdfMarkup', () {
+      expectValue(
+        const PdfMarkup(PdfMarkupKind.highlight, color: PdfColor.red),
+        const PdfMarkup(PdfMarkupKind.highlight, color: PdfColor.red),
+        const PdfMarkup(PdfMarkupKind.underline, color: PdfColor.red),
+      );
+      expect(
+        const PdfMarkup(PdfMarkupKind.highlight),
+        isNot(
+          equals(const PdfMarkup(PdfMarkupKind.highlight, color: PdfColor.red)),
+        ),
+      );
+    });
+
+    test('PdfFieldScripts', () {
+      expectValue(
+        const PdfFieldScripts(keystroke: 'k', calculate: 'c'),
+        const PdfFieldScripts(keystroke: 'k', calculate: 'c'),
+        const PdfFieldScripts(keystroke: 'k', validate: 'c'),
+      );
+    });
+
+    test('PdfRadioOption', () {
+      const bounds = PdfRect(x: 1, y: 2, width: 3, height: 4);
+      expectValue(
+        const PdfRadioOption('a', bounds),
+        const PdfRadioOption('a', bounds),
+        const PdfRadioOption('b', bounds),
+      );
+    });
+
+    test('PdfBitmap compares its pixels, not identity', () {
+      expectValue(
+        PdfBitmap(page: 0, width: 1, height: 1, bytes: Uint8List.fromList([1])),
+        PdfBitmap(page: 0, width: 1, height: 1, bytes: Uint8List.fromList([1])),
+        PdfBitmap(page: 0, width: 1, height: 1, bytes: Uint8List.fromList([2])),
+      );
+    });
+
+    test('PdfInput', () {
+      final source = MemorySource(Uint8List.fromList([1]));
+      expectValue(
+        PdfInput(source, password: 'a'),
+        PdfInput(source, password: 'a'),
+        PdfInput(source, password: 'b'),
+      );
+      expect(
+        PdfInput(source),
+        isNot(equals(PdfInput(MemorySource(Uint8List(1))))),
+      );
+    });
+
+    test('PdfPages.from and the other selections differ by kind', () {
+      expectValue<PdfPages>(
+        const PdfPages.from(2),
+        const PdfPages.from(2),
+        const PdfPages.from(3),
+      );
+      expect(const PdfPages.from(0), isNot(equals(const PdfPages.all())));
+    });
+
+    test('PdfPageOrder compares its order', () {
+      expectValue(
+        PdfPageOrder([2, 0]),
+        PdfPageOrder([2, 0]),
+        PdfPageOrder([0, 2]),
+      );
+    });
+
+    test('the PdfSave variants differ from each other', () {
+      expectValue<PdfSave>(
+        const PdfSave.incrementalOrRewrite(deflate: PdfDeflate.fast),
+        const PdfSave.incrementalOrRewrite(deflate: PdfDeflate.fast),
+        const PdfSave.incrementalOrRewrite(),
+      );
+      expect(
+        const PdfSave.incrementalOrRewrite(),
+        isNot(equals(const PdfSave.full())),
+      );
+      expectValue<PdfSave>(
+        const PdfSave.full(useObjectStreams: false, mergeDuplicates: true),
+        const PdfSave.full(useObjectStreams: false, mergeDuplicates: true),
+        const PdfSave.full(useObjectStreams: false),
+      );
+    });
+
+    test('PdfDeflate crosses the wire by name', () {
+      expect(PdfDeflate.values.map((d) => d.wire), [
+        'none',
+        'fast',
+        'balanced',
+        'best',
+      ]);
     });
 
     test('PdfRotation, PdfALevel and PdfUaLevel cross the wire by name', () {
@@ -193,9 +326,9 @@ void main() {
         const PdfPageSize.letter(),
       );
       expectValue<PdfPageSize>(
-        const PdfPageSize.custom(200, 300),
-        const PdfPageSize.custom(200, 300),
-        const PdfPageSize.custom(300, 200),
+        const PdfPageSize.points(200, 300),
+        const PdfPageSize.points(200, 300),
+        const PdfPageSize.points(300, 200),
       );
     });
 
@@ -236,11 +369,11 @@ void main() {
       );
     });
 
-    test('PdfImagePageOptions compares by its fields', () {
-      expectValue<PdfImagePageOptions>(
-        const PdfImagePageOptions(fit: PdfImageFit.cover),
-        const PdfImagePageOptions(fit: PdfImageFit.cover),
-        const PdfImagePageOptions(),
+    test('PdfImagePage compares by its fields', () {
+      expectValue<PdfImagePage>(
+        const PdfImagePage(fit: PdfImageFit.cover),
+        const PdfImagePage(fit: PdfImageFit.cover),
+        const PdfImagePage(),
       );
     });
 

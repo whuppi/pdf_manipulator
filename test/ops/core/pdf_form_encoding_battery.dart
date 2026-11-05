@@ -34,7 +34,7 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
     // ── Fill-by-name across /T encoding flavors ──
 
     test('fill finds a PDFDocEncoding (Latin-1) field name', () async {
-      final editor = await createPdf().edit(src(formPdfdocNamePdf));
+      final editor = await createPdf().edit(PdfInput(src(formPdfdocNamePdf)));
       await editor
           .field(_sharedName)
           .setValue(PdfFormFieldValue.text('Ligusterweg 4'));
@@ -42,7 +42,7 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
     }, timeout: t(1));
 
     test('fill finds a UTF-16BE-with-BOM field name', () async {
-      final editor = await createPdf().edit(src(formUtf16NamePdf));
+      final editor = await createPdf().edit(PdfInput(src(formUtf16NamePdf)));
       await editor
           .field(_sharedName)
           .setValue(PdfFormFieldValue.text('Ligusterweg 4'));
@@ -52,7 +52,7 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
     test(
       'fill finds a raw-UTF-8 field name (spec-violating, real-world)',
       () async {
-        final editor = await createPdf().edit(src(formUtf8NamePdf));
+        final editor = await createPdf().edit(PdfInput(src(formUtf8NamePdf)));
         await editor
             .field(_sharedName)
             .setValue(PdfFormFieldValue.text('Ligusterweg 4'));
@@ -62,7 +62,7 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
     );
 
     test('fill finds the dart-pdf-encoded field name', () async {
-      final editor = await createPdf().edit(src(fFormFieldsDe));
+      final editor = await createPdf().edit(PdfInput(src(fFormFieldsDe)));
       await editor
           .field(fFormFieldsDeTruth.fieldName)
           .setValue(PdfFormFieldValue.text('Ligusterweg 4'));
@@ -77,13 +77,13 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
     test('ASCII value survives fill → flatten on an AP-less field', () async {
       final pdf = createPdf();
       const value = 'Ligusterweg 4';
-      final editor = await pdf.edit(src(formUtf16NamePdf));
+      final editor = await pdf.edit(PdfInput(src(formUtf16NamePdf)));
       await editor.field(_sharedName).setValue(PdfFormFieldValue.text(value));
       await editor.flattenForms();
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
-      final doc = await pdf.open(src(sink.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(text, contains(value));
       await doc.dispose();
@@ -92,13 +92,13 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
     test('Latin-1-range value survives fill → flatten → extract', () async {
       final pdf = createPdf();
       const value = 'Königstraße 42, Grüße aus München äöüß';
-      final editor = await pdf.edit(src(formUtf16NamePdf));
+      final editor = await pdf.edit(PdfInput(src(formUtf16NamePdf)));
       await editor.field(_sharedName).setValue(PdfFormFieldValue.text(value));
       await editor.flattenForms();
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
-      final doc = await pdf.open(src(sink.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(
         text,
@@ -113,12 +113,12 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
 
     test('foreign pre-filled PDFDocEncoding value survives flatten', () async {
       final pdf = createPdf();
-      final editor = await pdf.edit(src(formPdfdocNamePdf));
+      final editor = await pdf.edit(PdfInput(src(formPdfdocNamePdf)));
       await editor.flattenForms();
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
-      final doc = await pdf.open(src(sink.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(
         text,
@@ -132,12 +132,12 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
 
     test('dart-pdf default value survives flatten', () async {
       final pdf = createPdf();
-      final editor = await pdf.edit(src(fFormFieldsDe));
+      final editor = await pdf.edit(PdfInput(src(fFormFieldsDe)));
       await editor.flattenForms();
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
-      final doc = await pdf.open(src(sink.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(text, contains(fFormFieldsDeTruth.textFieldDefault));
       await doc.dispose();
@@ -151,13 +151,13 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
     test('CJK value without a fallback font degrades, never crashes', () async {
       final pdf = createPdf();
       const value = '東京都渋谷区 123';
-      final editor = await pdf.edit(src(formUtf16NamePdf));
+      final editor = await pdf.edit(PdfInput(src(formUtf16NamePdf)));
       await editor.field(_sharedName).setValue(PdfFormFieldValue.text(value));
       await editor.flattenForms();
       final sink = TestSink();
       await editor.save(sink);
       await editor.dispose();
-      final doc = await pdf.open(src(sink.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(
         text,
@@ -181,13 +181,13 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
           PdfFallbackFontKind.cjk,
           src(subsetCjkFallbackFont),
         );
-        final editor = await pdf.edit(src(formUtf16NamePdf));
+        final editor = await pdf.edit(PdfInput(src(formUtf16NamePdf)));
         await editor.field(_sharedName).setValue(PdfFormFieldValue.text(value));
         await editor.flattenForms();
         final sink = TestSink();
         await editor.save(sink);
         await editor.dispose();
-        final doc = await pdf.open(src(sink.takeBytes()));
+        final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
         final text = await extractTextToString(
           doc,
           pages: const PdfPages.all(),
@@ -220,13 +220,13 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
       () async {
         final pdf = createPdf();
         const value = r'(Grüße) \ Straße';
-        final editor = await pdf.edit(src(formUtf16NamePdf));
+        final editor = await pdf.edit(PdfInput(src(formUtf16NamePdf)));
         await editor.field(_sharedName).setValue(PdfFormFieldValue.text(value));
         await editor.flattenForms();
         final sink = TestSink();
         await editor.save(sink);
         await editor.dispose();
-        final doc = await pdf.open(src(sink.takeBytes()));
+        final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
         final text = await extractTextToString(
           doc,
           pages: const PdfPages.all(),
@@ -241,7 +241,7 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
 
     test('PDFDocEncoding field name survives fill → save → refill', () async {
       final pdf = createPdf();
-      final editor = await pdf.edit(src(formPdfdocNamePdf));
+      final editor = await pdf.edit(PdfInput(src(formPdfdocNamePdf)));
       await editor
           .field(_sharedName)
           .setValue(PdfFormFieldValue.text('Erste Füllung'));
@@ -249,7 +249,7 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
       await editor.save(sink);
       await editor.dispose();
       // If save re-encoded /T wrongly, this second fill cannot find it.
-      final editor2 = await pdf.edit(src(sink.takeBytes()));
+      final editor2 = await pdf.edit(PdfInput(src(sink.takeBytes())));
       await editor2
           .field(_sharedName)
           .setValue(PdfFormFieldValue.text('Zweite Füllung'));
@@ -257,7 +257,7 @@ void registerFormEncodingTests(Pdf Function() createPdf) {
     }, timeout: t(2));
 
     test('PDFDocEncoding document title decodes on read', () async {
-      final editor = await createPdf().edit(src(formPdfdocNamePdf));
+      final editor = await createPdf().edit(PdfInput(src(formPdfdocNamePdf)));
       expect(
         (await editor.metadata()).title,
         'Straßen-Formular für Prüfung',

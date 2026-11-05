@@ -1,5 +1,5 @@
-// Form field types — reads live on PdfDoc (PdfDoc.formFields), mutations
-// on PdfEditor.field(name), export on PdfDoc.exportFormData.
+// Form field types — reads live on PdfDocument (PdfDocument.formFields), mutations
+// on PdfEditor.field(name), export on PdfDocument.exportFormData.
 
 import 'package:meta/meta.dart';
 
@@ -10,9 +10,9 @@ import 'package:pdf_manipulator/src/types/pdf_wire.dart';
 
 /// The kind of an AcroForm field, refined from the raw `/FT` and `/Ff`
 /// bits so a caller never reads a flag directly.
-enum PdfFormFieldType implements PdfWire {
+enum PdfFormFieldKind implements PdfWire {
   /// `/FT /Tx` — single or multi-line text.
-  text('text'),
+  textField('text'),
 
   /// `/FT /Btn` without the Radio or Pushbutton flag.
   checkbox('checkbox'),
@@ -27,15 +27,15 @@ enum PdfFormFieldType implements PdfWire {
   listBox('listBox'),
 
   /// `/FT /Btn` with the Pushbutton flag (`PdfFormFieldFlag.pushButton`).
-  button('button'),
+  pushButton('button'),
 
   /// `/FT /Sig`.
-  signature('signature'),
+  signatureField('signature'),
 
   /// A field type the engine could not classify.
   unknown('unknown');
 
-  const PdfFormFieldType(this.wire);
+  const PdfFormFieldKind(this.wire);
 
   @override
   final String wire;
@@ -53,7 +53,7 @@ sealed class PdfFormFieldValue {
   const factory PdfFormFieldValue.text(String text) = PdfTextValue;
 
   /// Whether a checkbox is on.
-  const factory PdfFormFieldValue.checked(bool checked) = PdfCheckedValue;
+  const factory PdfFormFieldValue.checked(bool isChecked) = PdfCheckedValue;
 
   /// The export value of the selected option of a combo box, list box or
   /// radio group.
@@ -85,17 +85,17 @@ final class PdfTextValue extends PdfFormFieldValue {
 /// Whether a checkbox or radio button is on.
 final class PdfCheckedValue extends PdfFormFieldValue {
   /// Creates a checked value.
-  const PdfCheckedValue(this.checked);
+  const PdfCheckedValue(this.isChecked);
 
   /// Whether the widget is in its on-state.
-  final bool checked;
+  final bool isChecked;
 
   @override
   bool operator ==(Object other) =>
-      other is PdfCheckedValue && other.checked == checked;
+      other is PdfCheckedValue && other.isChecked == isChecked;
 
   @override
-  int get hashCode => checked.hashCode;
+  int get hashCode => isChecked.hashCode;
 }
 
 /// The selected option of a single-select choice field.
@@ -142,27 +142,27 @@ final class PdfNoValue extends PdfFormFieldValue {
   int get hashCode => (PdfNoValue).hashCode;
 }
 
-/// An AcroForm field as read from a document by `PdfDoc.formFields`.
+/// An AcroForm field as read from a document by `PdfDocument.formFields`.
 @immutable
 final class PdfFormField {
   /// Creates a form field snapshot.
   const PdfFormField({
     required this.name,
-    required this.type,
+    required this.kind,
     required this.value,
     this.tooltip,
     this.bounds,
     this.maxLength,
     this.alignment,
-    this.readOnly = false,
-    this.required = false,
+    this.isReadOnly = false,
+    this.isRequired = false,
   });
 
   /// Fully qualified (dotted) field name — what `PdfEditor.field` takes.
   final String name;
 
   /// The field's kind.
-  final PdfFormFieldType type;
+  final PdfFormFieldKind kind;
 
   /// The field's current value.
   final PdfFormFieldValue value;
@@ -180,39 +180,39 @@ final class PdfFormField {
   final PdfAlignment? alignment;
 
   /// `/Ff` bit 1 — the field cannot be edited by the user.
-  final bool readOnly;
+  final bool isReadOnly;
 
   /// `/Ff` bit 2 — the field must have a value on submit.
-  final bool required;
+  final bool isRequired;
 
   @override
   bool operator ==(Object other) =>
       other is PdfFormField &&
       other.name == name &&
-      other.type == type &&
+      other.kind == kind &&
       other.value == value &&
       other.tooltip == tooltip &&
       other.bounds == bounds &&
       other.maxLength == maxLength &&
       other.alignment == alignment &&
-      other.readOnly == readOnly &&
-      other.required == required;
+      other.isReadOnly == isReadOnly &&
+      other.isRequired == isRequired;
 
   @override
   int get hashCode => Object.hash(
     name,
-    type,
+    kind,
     value,
     tooltip,
     bounds,
     maxLength,
     alignment,
-    readOnly,
-    required,
+    isReadOnly,
+    isRequired,
   );
 }
 
-/// Format for `PdfDoc.exportFormData`.
+/// Format for `PdfDocument.exportFormData`.
 enum PdfFormDataFormat implements PdfWire {
   /// Binary Forms Data Format (ISO 32000-1 §12.7.7).
   fdf('fdf'),

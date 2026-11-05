@@ -75,7 +75,7 @@ final class PdfCertificateInfo {
   const PdfCertificateInfo({
     this.subject,
     this.issuer,
-    this.serial,
+    this.serialNumber,
     this.notBefore,
     this.notAfter,
     required this.isValid,
@@ -88,7 +88,7 @@ final class PdfCertificateInfo {
   final String? issuer;
 
   /// Serial number.
-  final String? serial;
+  final String? serialNumber;
 
   /// Validity start date.
   final DateTime? notBefore;
@@ -104,14 +104,14 @@ final class PdfCertificateInfo {
       other is PdfCertificateInfo &&
       other.subject == subject &&
       other.issuer == issuer &&
-      other.serial == serial &&
+      other.serialNumber == serialNumber &&
       other.notBefore == notBefore &&
       other.notAfter == notAfter &&
       other.isValid == isValid;
 
   @override
   int get hashCode =>
-      Object.hash(subject, issuer, serial, notBefore, notAfter, isValid);
+      Object.hash(subject, issuer, serialNumber, notBefore, notAfter, isValid);
 
   @override
   String toString() =>

@@ -1,20 +1,20 @@
 // PdfReads — every read of a document, declared once.
 //
-// [PdfDoc] and the object `Pdf.reads` returns both extend it and add only
+// [PdfDocument] and the object `Pdf.readOnce` returns both extend it and add only
 // `_run`, so a read exists on both doors the moment it compiles. A new read
-// is a new member here. Members of PdfDoc that are not declared here are
+// is a new member here. Members of PdfDocument that are not declared here are
 // listed with their reason in test/guards/one_shot_exclusions.dart.
 
 part of 'pdf.dart';
 
-/// The reads of a document. Extended by [PdfDoc], which answers from an
-/// open handle, and by the object [Pdf.reads] returns, which opens the
+/// The reads of a document. Extended by [PdfDocument], which answers from an
+/// open handle, and by the object [Pdf.readOnce] returns, which opens the
 /// document, answers one call and closes it.
 abstract base class PdfReads {
   PdfReads._();
 
   /// Runs [read] on the engine's document handle: on the open one for
-  /// [PdfDoc], on one opened and closed for the call for a one-shot. [output]
+  /// [PdfDocument], on one opened and closed for the call for a one-shot. [output]
   /// is the sink the read writes to, if it has one: a one-shot that ends
   /// cancelled or failed aborts it, even when the read into it had finished.
   PdfTask<T> _run<T>(
@@ -23,12 +23,13 @@ abstract base class PdfReads {
   });
 
   /// The facts of the pages named: their size, their rotation and their
-  /// label. Every page when [pages] is null.
-  PdfTask<List<PdfPageInfo>> pageInfo({PdfPages? pages}) =>
-      _run((handle) => handle.pageInfo(pages: pages));
+  /// label. Every page by default.
+  PdfTask<List<PdfPageInfo>> pageInfo({
+    PdfPages pages = const PdfPages.all(),
+  }) => _run((handle) => handle.pageInfo(pages: pages));
 
   /// Writes the text of the pages named to [output] as the engine produces
-  /// it; every page when [pages] is null. The sink is the caller's: the
+  /// it; every page when [pages] is all. The sink is the caller's: the
   /// library writes to it, aborts it when the read ends cancelled or failed,
   /// and never closes it.
   ///
@@ -46,7 +47,7 @@ abstract base class PdfReads {
   /// Markdown or HTML. [PdfExtractionFormat.auto] lets the engine choose.
   PdfTask<void> extractText(
     DataSink output, {
-    PdfPages? pages,
+    PdfPages pages = const PdfPages.all(),
     PdfExtractionFormat format = PdfExtractionFormat.auto,
   }) {
     KeepRecord.op('extract');
@@ -56,16 +57,41 @@ abstract base class PdfReads {
     );
   }
 
-  /// Searches for [query] in the text of the pages named; every page when
-  /// [pages] is null.
-  PdfTask<List<PdfSearchHit>> search(String query, {PdfPages? pages}) {
+  /// The text of the pages named as a string, in the same shape
+  /// [extractText] writes: every page by default, [format] as there.
+  ///
+  /// The string holds the text whole, so it suits a page or a short
+  /// document; for a long one write to a sink with [extractText], which
+  /// never holds it.
+  PdfTask<String> text({
+    PdfPages pages = const PdfPages.all(),
+    PdfExtractionFormat format = PdfExtractionFormat.auto,
+  }) {
+    KeepRecord.op('extract');
+    return _run(
+      (handle) => PdfTask.group((hook) async {
+        final sink = MemorySink();
+        await hook.guard(
+          handle.extractText(sink, pages: pages, format: format),
+        );
+        return sink.takeString();
+      }),
+    );
+  }
+
+  /// Searches for [query] in the text of the pages named; every page by
+  /// default.
+  PdfTask<List<PdfSearchHit>> search(
+    String query, {
+    PdfPages pages = const PdfPages.all(),
+  }) {
     KeepRecord.op('extract');
     return _run((handle) => handle.search(query: query, pages: pages));
   }
 
   /// Renders the pages named and writes each one to the sink [sinkFor]
   /// returns for it, in page order; resolves with the pages written.
-  /// Every page when [pages] is null.
+  /// Every page by default.
   ///
   /// [sinkFor] receives the page's descriptor, with its pixel size, before
   /// any pixel is written. The sink it returns is the library's: it is
@@ -88,7 +114,7 @@ abstract base class PdfReads {
   /// render and resolves the task with [PdfCancelled].
   PdfTask<List<PdfRenderedPage>> render(
     FutureOr<DataSink> Function(PdfRenderedPage page) sinkFor, {
-    PdfPages? pages,
+    PdfPages pages = const PdfPages.all(),
     PdfRenderSize size = const PdfRenderSize.dpi(150),
     PdfRenderFormat format = PdfRenderFormat.png,
   }) {
@@ -99,9 +125,40 @@ abstract base class PdfReads {
     );
   }
 
+  /// Renders the one page [page] (0-based) and returns it whole: its size in
+  /// pixels and the bytes in [format]. A page is bounded, so the bytes are
+  /// held; to write many pages, or a page straight to a file, use [render].
+  PdfTask<PdfBitmap> bitmap(
+    int page, {
+    PdfRenderSize size = const PdfRenderSize.dpi(150),
+    PdfRenderFormat format = PdfRenderFormat.png,
+  }) {
+    KeepRecord.op('render');
+    return _run(
+      (handle) => PdfTask.group((hook) async {
+        final sink = MemorySink();
+        final rendered = await hook.guard(
+          handle.render(
+            (_) => sink,
+            pages: PdfPages.single(page),
+            size: size,
+            format: format,
+          ),
+        );
+        final only = rendered.single;
+        return PdfBitmap(
+          page: only.page,
+          width: only.width,
+          height: only.height,
+          bytes: sink.takeBytes(),
+        );
+      }),
+    );
+  }
+
   /// Extracts the images drawn on the pages named and writes each one to the
   /// sink [sinkFor] returns for it, page by page in the order found;
-  /// resolves with the images written. Every page when [pages] is null.
+  /// resolves with the images written. Every page by default.
   ///
   /// [sinkFor] receives the image's descriptor before any byte is written.
   /// The sink it returns is the library's: it is closed after its image, and
@@ -111,7 +168,7 @@ abstract base class PdfReads {
   /// goes on, and no image is ever held whole: the library holds only the
   /// bytes of one chunk in transit.
   ///
-  /// What each [PdfImage.encoding] yields:
+  /// What each [PdfImageInfo.encoding] yields:
   ///
   /// - [PdfImageEncoding.jpeg] and [PdfImageEncoding.jpx]: the stored
   ///   codestream, byte for byte (a JPEG file or a JPEG 2000 codestream, as
@@ -144,9 +201,9 @@ abstract base class PdfReads {
   ///
   /// Cancelling the task aborts and closes the current image's sink, stops
   /// the extraction and resolves the task with [PdfCancelled].
-  PdfTask<List<PdfImage>> extractImages(
-    FutureOr<DataSink> Function(PdfImage image) sinkFor, {
-    PdfPages? pages,
+  PdfTask<List<PdfImageInfo>> extractImages(
+    FutureOr<DataSink> Function(PdfImageInfo image) sinkFor, {
+    PdfPages pages = const PdfPages.all(),
   }) {
     KeepRecord.op('render');
     return _run((handle) => handle.extractImages(sinkFor, pages: pages));
@@ -169,13 +226,13 @@ abstract base class PdfReads {
   }
 
   /// Validates PDF/A conformance at the given [level].
-  PdfTask<PdfValidationResult> validatePdfA({PdfALevel level = PdfALevel.a2}) {
+  PdfTask<PdfValidationReport> validatePdfA({PdfALevel level = PdfALevel.a2}) {
     KeepRecord.op('pdfa');
     return _run((handle) => handle.validatePdfA(level: level));
   }
 
   /// Validates PDF/UA (accessibility) conformance at the given [level].
-  PdfTask<PdfValidationResult> validatePdfUa({
+  PdfTask<PdfValidationReport> validatePdfUa({
     PdfUaLevel level = PdfUaLevel.ua1,
   }) {
     KeepRecord.op('pdfa');
@@ -186,15 +243,16 @@ abstract base class PdfReads {
   PdfTask<List<PdfBookmarkRange>> bookmarkRanges() =>
       _run((handle) => handle.bookmarkRanges());
 
-  /// Classifies the pages named by what they hold; every page when [pages]
-  /// is null.
-  PdfTask<List<PdfPageClassification>> classifyPages({PdfPages? pages}) {
+  /// Classifies the pages named by what they hold; every page by default.
+  PdfTask<List<PdfPageClassification>> classifyPages({
+    PdfPages pages = const PdfPages.all(),
+  }) {
     KeepRecord.op('extract');
     return _run((handle) => handle.classifyPages(pages: pages));
   }
 
   /// Classifies the whole document by what it holds.
-  PdfTask<PdfDocumentType> classifyDocument() {
+  PdfTask<PdfDocumentKind> classifyDocument() {
     KeepRecord.op('extract');
     return _run((handle) => handle.classifyDocument());
   }
@@ -208,7 +266,7 @@ abstract base class PdfReads {
     DataSink output, {
     PdfFormDataFormat format = PdfFormDataFormat.xfdf,
   }) => _run(
-    (handle) => handle.exportFormData(output, format: format.name),
+    (handle) => handle.exportFormData(output, format: format.wire),
     output: output,
   );
 
@@ -221,15 +279,23 @@ abstract base class PdfReads {
       _run((handle) => handle.attachments());
 
   /// Lists the annotations on [page] (0-based), in /Annots order: links,
-  /// comments, stamps, form widgets. Throws [PdfPageRangeError] for a
+  /// comments, stamps, form widgets. Throws [PdfPageOutOfRange] for a
   /// page past the end.
   PdfTask<List<PdfAnnotationInfo>> annotations(int page) =>
       _run((handle) => handle.annotations(page));
 
-  /// Writes the embedded file named [name] to [output]. An unknown name
-  /// throws [PdfEngineError].
-  PdfTask<void> extractAttachment(String name, DataSink output) =>
-      _run((handle) => handle.extractAttachment(name, output), output: output);
+  /// Writes the embedded file named [name] to [output]. A name the document
+  /// has no attachment for fails with [PdfNotFound] and writes nothing.
+  PdfTask<void> extractAttachment(String name, DataSink output) => _run(
+    (handle) => PdfTask.group((hook) async {
+      final attachments = await hook.guard(handle.attachments());
+      if (!attachments.any((attachment) => attachment.name == name)) {
+        throw PdfNotFound(kind: 'attachment', name: name);
+      }
+      await hook.guard(handle.extractAttachment(name, output));
+    }),
+    output: output,
+  );
 }
 
 /// A one-shot runs one call: a second call is refused before any I/O.
@@ -238,20 +304,19 @@ mixin _SingleUse {
 
   void _spend(String kind, String several) {
     if (_spent) {
-      throw PdfInvalidArgument('a one-shot runs one $kind; use $several');
+      throw StateError('a one-shot runs one $kind; use $several');
     }
     _spent = true;
   }
 }
 
-/// The object [Pdf.reads] returns: opens the document for its one call and
+/// The object [Pdf.readOnce] returns: opens the document for its one call and
 /// closes it afterwards, on success, error and cancel.
 final class _OneShotReads extends PdfReads with _SingleUse {
-  _OneShotReads(this._pdf, this._source, this._password) : super._();
+  _OneShotReads(this._pdf, this._input) : super._();
 
   final Pdf _pdf;
-  final DataSource _source;
-  final String? _password;
+  final PdfInput _input;
 
   @override
   PdfTask<T> _run<T>(
@@ -260,7 +325,7 @@ final class _OneShotReads extends PdfReads with _SingleUse {
   }) {
     _spend('read', 'read for several');
     return _own(
-      _pdf.open(_source, password: _password),
+      _pdf.open(_input),
       (doc, hook) => hook.guard(read(doc._handle)),
       output: output,
     );

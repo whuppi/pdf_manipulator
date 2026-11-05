@@ -68,7 +68,7 @@ Future<void> main(List<String> args) async {
 
     for (final input in inputs) {
       final caseWatch = Stopwatch()..start();
-      final source = await pdf.open(MemorySource(input.bytes));
+      final source = await pdf.open(PdfInput(MemorySource(input.bytes)));
       try {
         rows.addAll(await _measureCase(pdf, source, input, maxPages: maxPages));
         stdout.writeln(
@@ -115,7 +115,7 @@ typedef _Timed = ({
 /// one fidelity result.
 Future<List<Row>> _measureCase(
   Pdf pdf,
-  PdfDoc source,
+  PdfDocument source,
   ({String id, String kind, Uint8List bytes}) input, {
   required int maxPages,
 }) async {
@@ -181,12 +181,12 @@ Future<List<Row>> _measureCase(
     group.add(t);
   }
 
-  final candidates = <PdfDoc>[];
+  final candidates = <PdfDocumentHandle>[];
   final opened = <List<_Timed>>[];
   try {
     for (final group in groups) {
       try {
-        candidates.add(await pdf.open(MemorySource(group.first.out)));
+        candidates.add(await pdf.open(PdfInput(MemorySource(group.first.out))));
         opened.add(group);
       } on Object catch (e) {
         for (final t in group) {

@@ -45,6 +45,6 @@ Future<Uint8List> compressWith(
   PdfImagePolicy policy,
 ) async {
   final sink = MemorySink();
-  await pdf.compress(MemorySource(source), sink, images: policy);
+  await pdf.compress(PdfInput(MemorySource(source)), sink, images: policy);
   return sink.takeBytes();
 }

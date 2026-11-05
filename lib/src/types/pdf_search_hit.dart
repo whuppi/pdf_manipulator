@@ -9,7 +9,7 @@ final class PdfSearchHit {
   const PdfSearchHit({
     required this.text,
     required this.page,
-    required this.rect,
+    required this.bounds,
   });
 
   /// The matched text.
@@ -19,17 +19,17 @@ final class PdfSearchHit {
   final int page;
 
   /// Bounding rectangle of the match on the page.
-  final PdfRect rect;
+  final PdfRect bounds;
 
   @override
   bool operator ==(Object other) =>
       other is PdfSearchHit &&
       other.text == text &&
       other.page == page &&
-      other.rect == rect;
+      other.bounds == bounds;
 
   @override
-  int get hashCode => Object.hash(text, page, rect);
+  int get hashCode => Object.hash(text, page, bounds);
 
   @override
   String toString() => 'PdfSearchHit(page $page, "$text")';

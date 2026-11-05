@@ -4,13 +4,13 @@ import 'package:pdf_manipulator/src/types/pdf_wire.dart';
 /// One file embedded in a document's `/Names /EmbeddedFiles` tree.
 ///
 /// Listing reads the file spec only; the bytes come from
-/// `PdfDoc.extractAttachment`.
+/// `PdfDocument.extractAttachment`.
 @immutable
 final class PdfAttachment {
   /// Creates an attachment record from the engine's listing.
   const PdfAttachment({
     required this.name,
-    required this.size,
+    required this.sizeBytes,
     required this.description,
     required this.mimeType,
   });
@@ -20,7 +20,7 @@ final class PdfAttachment {
 
   /// Byte size as the file spec declares it, or `null` when it declares
   /// none. A declared size is the producer's claim, not a measurement.
-  final int? size;
+  final int? sizeBytes;
 
   /// The file spec's description, or `null` when it has none.
   final String? description;
@@ -32,12 +32,12 @@ final class PdfAttachment {
   bool operator ==(Object other) =>
       other is PdfAttachment &&
       other.name == name &&
-      other.size == size &&
+      other.sizeBytes == sizeBytes &&
       other.description == description &&
       other.mimeType == mimeType;
 
   @override
-  int get hashCode => Object.hash(name, size, description, mimeType);
+  int get hashCode => Object.hash(name, sizeBytes, description, mimeType);
 }
 
 /// How an embedded file relates to the document that carries it

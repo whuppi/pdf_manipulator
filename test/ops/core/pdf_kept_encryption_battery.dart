@@ -25,7 +25,7 @@ void registerKeptEncryptionTests(Pdf Function() createPdf) {
   group('kept encryption', () {
     /// [source] saved by a full rewrite with the default encryption.
     Future<Uint8List> keepSave(Uint8List source) async {
-      final editor = await createPdf().edit(src(source));
+      final editor = await createPdf().edit(PdfInput(src(source)));
       try {
         final sink = TestSink();
         await editor.save(sink);
@@ -64,8 +64,8 @@ void registerKeptEncryptionTests(Pdf Function() createPdf) {
     test('a standard AES-256 source keeps its parameters', () async {
       final out = await keepSave(keptEncryptionPdf());
 
-      final doc = await createPdf().open(src(out));
-      expect(doc.encryption?.algorithm, PdfEncryptionAlgorithm.aes256);
+      final doc = await createPdf().open(PdfInput(src(out)));
+      expect(doc.encryption?.algorithm, PdfEncryptionAlgorithm.aesKey256);
       expect(doc.pageCount, 1);
       await doc.dispose();
 
@@ -91,7 +91,9 @@ void registerKeptEncryptionTests(Pdf Function() createPdf) {
     }, timeout: t(1));
 
     test('an unencrypted source has nothing to keep', () async {
-      final doc = await createPdf().open(src(await keepSave(minimalPdf)));
+      final doc = await createPdf().open(
+        PdfInput(src(await keepSave(minimalPdf))),
+      );
       expect(doc.encryption, isNull);
       expect(doc.pageCount, 1);
       await doc.dispose();

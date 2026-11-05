@@ -28,8 +28,8 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       () async {
         final pdf = createPdf();
         final sink = TestSink();
-        await pdf.convertXfaToAcroForm(src(xfaFormPdf), sink);
-        final doc = await pdf.open(src(sink.takeBytes()));
+        await pdf.convertXfaToAcroForm(PdfInput(src(xfaFormPdf)), sink);
+        final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
         expect(doc.pageCount, greaterThanOrEqualTo(1));
         final names = (await doc.formFields()).map((f) => f.name).toList();
         await doc.dispose();
@@ -40,8 +40,8 @@ void registerStandaloneTests(Pdf Function() createPdf) {
 
     test('convertXfaToAcroForm refuses a document with no XFA', () async {
       await expectLater(
-        createPdf().convertXfaToAcroForm(src(minimalPdf), TestSink()),
-        throwsA(isA<PdfEngineError>()),
+        createPdf().convertXfaToAcroForm(PdfInput(src(minimalPdf)), TestSink()),
+        throwsA(isA<PdfEngineFailed>()),
       );
     }, timeout: t(1));
 
@@ -51,12 +51,12 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final sink = TestSink();
       await pdf.sign(
-        src(minimalPdf),
+        PdfInput(src(minimalPdf)),
         sink,
-        credentials: PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
+        credentials: PdfSigningCredentials.pkcs12(src(testPkcs12), 'changeit'),
       );
       final signed = sink.takeBytes();
-      final doc = await pdf.open(src(signed));
+      final doc = await pdf.open(PdfInput(src(signed)));
       expect(doc.pageCount, 1);
       expect(signed.length, greaterThan(minimalPdf.length));
       final sigs = await doc.signatures();
@@ -70,12 +70,12 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final sink = TestSink();
       await pdf.sign(
-        src(minimalPdf),
+        PdfInput(src(minimalPdf)),
         sink,
         credentials: const PdfSigningCredentials.pem(testCertPem, testKeyPem),
       );
       final signed = sink.takeBytes();
-      final doc = await pdf.open(src(signed));
+      final doc = await pdf.open(PdfInput(src(signed)));
       expect(doc.pageCount, 1);
       final sigs = await doc.signatures();
       expect(sigs, isNotEmpty);
@@ -88,14 +88,14 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       final sink = TestSink();
       await expectLater(
         pdf.sign(
-          src(minimalPdf),
+          PdfInput(src(minimalPdf)),
           sink,
           credentials: PdfSigningCredentials.pkcs12(
-            Uint8List.fromList([1, 2, 3, 4]),
+            src(Uint8List.fromList([1, 2, 3, 4])),
             'wrong',
           ),
         ),
-        throwsA(isA<PdfCryptoError>()),
+        throwsA(isA<PdfCryptoFailed>()),
         reason:
             'a broken certificate is an engine failure with a '
             'message — never an untyped throw',
@@ -104,18 +104,18 @@ void registerStandaloneTests(Pdf Function() createPdf) {
 
     test('sign keeps the catalog: bookmarks survive', () async {
       final pdf = createPdf();
-      final unsigned = await pdf.open(src(bookmarkedPdf));
+      final unsigned = await pdf.open(PdfInput(src(bookmarkedPdf)));
       final titles = (await unsigned.bookmarkRanges())
           .map((s) => s.title)
           .toList();
       await unsigned.dispose();
       final sink = TestSink();
       await pdf.sign(
-        src(bookmarkedPdf),
+        PdfInput(src(bookmarkedPdf)),
         sink,
-        credentials: PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
+        credentials: PdfSigningCredentials.pkcs12(src(testPkcs12), 'changeit'),
       );
-      final doc = await pdf.open(src(sink.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       expect(
         (await doc.bookmarkRanges()).map((s) => s.title),
         titles,
@@ -129,18 +129,18 @@ void registerStandaloneTests(Pdf Function() createPdf) {
 
     test('sign keeps the form: fields and their values survive', () async {
       final pdf = createPdf();
-      final unsigned = await pdf.open(src(fFormFields));
+      final unsigned = await pdf.open(PdfInput(src(fFormFields)));
       final valuesBefore = {
         for (final f in await unsigned.formFields()) f.name: f.value,
       };
       await unsigned.dispose();
       final sink = TestSink();
       await pdf.sign(
-        src(fFormFields),
+        PdfInput(src(fFormFields)),
         sink,
-        credentials: PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
+        credentials: PdfSigningCredentials.pkcs12(src(testPkcs12), 'changeit'),
       );
-      final doc = await pdf.open(src(sink.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       final fields = await doc.formFields();
       expect(fields.map((f) => f.name).toSet(), {
         ...fFormFieldsTruth.fieldNames,
@@ -156,13 +156,13 @@ void registerStandaloneTests(Pdf Function() createPdf) {
               isA<PdfTextValue>().having((v) => v.text, 'text', text),
               reason: 'field ${f.name}',
             );
-          case PdfCheckedValue(:final checked):
+          case PdfCheckedValue(:final isChecked):
             expect(
               f.value,
               isA<PdfCheckedValue>().having(
-                (v) => v.checked,
+                (v) => v.isChecked,
                 'checked',
-                checked,
+                isChecked,
               ),
               reason: 'field ${f.name}',
             );
@@ -198,17 +198,17 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final first = TestSink();
       await pdf.sign(
-        src(minimalPdf),
+        PdfInput(src(minimalPdf)),
         first,
-        credentials: PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
+        credentials: PdfSigningCredentials.pkcs12(src(testPkcs12), 'changeit'),
       );
       final second = TestSink();
       await pdf.sign(
-        src(first.takeBytes()),
+        PdfInput(src(first.takeBytes())),
         second,
-        credentials: PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
+        credentials: PdfSigningCredentials.pkcs12(src(testPkcs12), 'changeit'),
       );
-      final doc = await pdf.open(src(second.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(second.takeBytes())));
       final sigs = await doc.signatures();
       expect(sigs, hasLength(2));
       expect((await doc.formFields()).map((f) => f.name).toSet(), {
@@ -225,9 +225,9 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final sink = TestSink();
       await pdf.sign(
-        src(tpPagePruneObjStm),
+        PdfInput(src(tpPagePruneObjStm)),
         sink,
-        credentials: PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
+        credentials: PdfSigningCredentials.pkcs12(src(testPkcs12), 'changeit'),
       );
       final signed = sink.takeBytes();
       final appended = latin1.decode(signed.sublist(tpPagePruneObjStm.length));
@@ -237,7 +237,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
         isFalse,
         reason: 'a stream-style source never gets a classic table back',
       );
-      final doc = await pdf.open(src(signed));
+      final doc = await pdf.open(PdfInput(src(signed)));
       expect(await doc.verifySignatures(), isTrue);
       await doc.dispose();
     }, timeout: t(1));
@@ -246,20 +246,23 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final encSink = TestSink();
       await pdf.resave(
-        src(minimalPdf),
+        PdfInput(src(minimalPdf)),
         encSink,
-        options: const PdfSaveOptions.fullRewrite(
-          encryption: PdfEncryption.config(
+        save: const PdfSave.full(
+          encryption: PdfEncryption.password(
             ownerPassword: 'owner-pw',
             userPassword: 'user-pw',
           ),
         ),
       );
       final encrypted = encSink.takeBytes();
-      final credentials = PdfSigningCredentials.pkcs12(testPkcs12, 'changeit');
+      final credentials = PdfSigningCredentials.pkcs12(
+        src(testPkcs12),
+        'changeit',
+      );
       final sink = TestSink();
       await expectLater(
-        pdf.sign(src(encrypted), sink, credentials: credentials),
+        pdf.sign(PdfInput(src(encrypted)), sink, credentials: credentials),
         throwsA(isA<PdfUnsupported>()),
         reason:
             'signing an encrypted source is refused before any byte '
@@ -274,13 +277,16 @@ void registerStandaloneTests(Pdf Function() createPdf) {
         final pdf = createPdf();
         final sink = TestSink();
         await pdf.sign(
-          src(minimalPdf),
+          PdfInput(src(minimalPdf)),
           sink,
-          credentials: PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
+          credentials: PdfSigningCredentials.pkcs12(
+            src(testPkcs12),
+            'changeit',
+          ),
           reason: 'a (b) \\ c',
           location: 'Zürich',
         );
-        final doc = await pdf.open(src(sink.takeBytes()));
+        final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
         final sigs = await doc.signatures();
         expect(sigs, hasLength(1));
         expect(sigs.single.reason, 'a (b) \\ c');
@@ -295,11 +301,11 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final sink = TestSink();
       await pdf.sign(
-        src(minimalPdf),
+        PdfInput(src(minimalPdf)),
         sink,
-        credentials: PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
+        credentials: PdfSigningCredentials.pkcs12(src(testPkcs12), 'changeit'),
       );
-      final doc = await pdf.open(src(sink.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       final annots = await doc.annotations(0);
       expect(annots, hasLength(1));
       expect(annots.single.subtype, PdfAnnotationSubtype.widget);
@@ -314,11 +320,11 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final sink = TestSink();
       await pdf.sign(
-        src(minimalPdf),
+        PdfInput(src(minimalPdf)),
         sink,
-        credentials: PdfSigningCredentials.pkcs12(testPkcs12, 'changeit'),
+        credentials: PdfSigningCredentials.pkcs12(src(testPkcs12), 'changeit'),
       );
-      final doc = await pdf.open(src(sink.takeBytes()));
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       final time = (await doc.signatures()).single.signingTime;
       await doc.dispose();
       expect(time, isNotNull);
@@ -335,9 +341,11 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       final pdf = createPdf();
       final sink = TestSink();
       await expectLater(
-        pdf.edits(src(minimalPdf), sink).keepPages(const [99]),
+        pdf
+            .editOnce(PdfInput(src(minimalPdf)), sink)
+            .keepPages(PdfPages.single(99)),
         throwsA(
-          isA<PdfPageRangeError>()
+          isA<PdfPageOutOfRange>()
               .having((e) => e.page, 'page', 99)
               .having((e) => e.pageCount, 'pageCount', 1),
         ),
@@ -350,8 +358,10 @@ void registerStandaloneTests(Pdf Function() createPdf) {
     test('keepPages keeps exactly the selected pages and content', () async {
       final pdf = createPdf();
       final sink = TestSink();
-      await pdf.edits(src(fThreePageMarkers), sink).keepPages([0, 2]);
-      final doc = await pdf.open(src(sink.takeBytes()));
+      await pdf
+          .editOnce(PdfInput(src(fThreePageMarkers)), sink)
+          .keepPages(PdfPages.list([0, 2]));
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
       expect(doc.pageCount, 2);
       final text = await extractTextToString(doc, pages: const PdfPages.all());
       expect(text, contains(fThreePageMarkersTruth.markers[0]));
@@ -371,7 +381,9 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       () async {
         final pdf = createPdf();
         final sink = TestSink();
-        await pdf.edits(src(pagePrunePdf), sink).keepPages(const [0]);
+        await pdf
+            .editOnce(PdfInput(src(pagePrunePdf)), sink)
+            .keepPages(PdfPages.single(0));
         await expectOnlyPrunedPages(pdf, sink.takeBytes(), const [0]);
       },
       timeout: t(2),
@@ -383,7 +395,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       () async {
         final pdf = createPdf();
         final sinks = <TestSink>[];
-        final parts = await pdf.split(src(pagePrunePdf), (part) {
+        final parts = await pdf.split(PdfInput(src(pagePrunePdf)), (part) {
           final s = TestSink();
           sinks.add(s);
           return s;
@@ -391,7 +403,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
         expect(parts, hasLength(3));
         for (var i = 0; i < parts.length; i++) {
           await expectOnlyPrunedPages(pdf, sinks[i].takeBytes(), [
-            for (var p = parts[i].start; p <= parts[i].end; p++) p,
+            for (var p = parts[i].start; p < parts[i].end; p++) p,
           ]);
         }
       },
@@ -399,11 +411,13 @@ void registerStandaloneTests(Pdf Function() createPdf) {
     );
 
     test(
-      'keepPages across both inner page nodes keeps the given order',
+      'reorderPages across both inner page nodes keeps the given order',
       () async {
         final pdf = createPdf();
         final sink = TestSink();
-        await pdf.edits(src(pagePrunePdf), sink).keepPages(const [5, 2]);
+        await pdf
+            .editOnce(PdfInput(src(pagePrunePdf)), sink)
+            .reorderPages(PdfPageOrder([5, 2]));
         await expectOnlyPrunedPages(pdf, sink.takeBytes(), const [5, 2]);
       },
       timeout: t(2),
@@ -415,7 +429,9 @@ void registerStandaloneTests(Pdf Function() createPdf) {
         final pdf = createPdf();
         final sink = TestSink();
         final all = [for (var i = 0; i < pagePruneTruth.pageCount; i++) i];
-        await pdf.edits(src(pagePrunePdf), sink).keepPages(all);
+        await pdf
+            .editOnce(PdfInput(src(pagePrunePdf)), sink)
+            .keepPages(PdfPages.list(all));
         await expectOnlyPrunedPages(pdf, sink.takeBytes(), all);
       },
       timeout: t(2),
@@ -424,7 +440,9 @@ void registerStandaloneTests(Pdf Function() createPdf) {
     test('keepPages writes a reference to a dropped page as null', () async {
       final pdf = createPdf();
       final sink = TestSink();
-      await pdf.edits(src(structTreePdf), sink).keepPages(const [0]);
+      await pdf
+          .editOnce(PdfInput(src(structTreePdf)), sink)
+          .keepPages(PdfPages.single(0));
       final out = sink.takeBytes();
       // bytegrep-exempt: the claim is about references in the file.
       final plain = await plainBytes(pdf, out);
@@ -438,7 +456,7 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       }
       expect(raw, contains('/Pg null'));
       expect(raw, contains('/IRT null'));
-      final doc = await pdf.open(src(out));
+      final doc = await pdf.open(PdfInput(src(out)));
       expect(doc.pageCount, 1);
       expect(
         await extractTextToString(doc, pages: const PdfPages.all()),
@@ -447,77 +465,71 @@ void registerStandaloneTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
-    test('keepPages refuses a page listed twice', () {
-      expect(
-        () => createPdf().edits(src(pagePrunePdf), TestSink()).keepPages(const [
-          0,
-          0,
-        ]),
-        throwsA(isA<PdfInvalidArgument>()),
-      );
+    test('a page selection refuses a page listed twice', () {
+      expect(() => PdfPages.list([0, 0]), throwsA(isA<ArgumentError>()));
     }, timeout: t(1));
 
     // ── Convert ──
 
-    test('convertTo DOCX produces valid ZIP', () async {
+    test('convertToOffice DOCX produces valid ZIP', () async {
       final pdf = createPdf();
       final sink = TestSink();
-      await pdf.convertTo(
-        src(minimalPdf),
+      await pdf.convertToOffice(
+        PdfInput(src(minimalPdf)),
         sink,
-        format: PdfDocumentFormat.docx,
+        format: PdfOfficeFormat.docx,
       );
       final bytes = sink.takeBytes();
       expect(bytes[0], 0x50); // PK header
       expect(bytes[1], 0x4B);
     }, timeout: t(1));
 
-    test('convertTo PPTX produces valid ZIP', () async {
+    test('convertToOffice PPTX produces valid ZIP', () async {
       final pdf = createPdf();
       final sink = TestSink();
-      await pdf.convertTo(
-        src(minimalPdf),
+      await pdf.convertToOffice(
+        PdfInput(src(minimalPdf)),
         sink,
-        format: PdfDocumentFormat.pptx,
+        format: PdfOfficeFormat.pptx,
       );
       final bytes = sink.takeBytes();
       expect(bytes[0], 0x50);
       expect(bytes[1], 0x4B);
     }, timeout: t(1));
 
-    test('convertTo XLSX produces valid ZIP', () async {
+    test('convertToOffice XLSX produces valid ZIP', () async {
       final pdf = createPdf();
       final sink = TestSink();
-      await pdf.convertTo(
-        src(minimalPdf),
+      await pdf.convertToOffice(
+        PdfInput(src(minimalPdf)),
         sink,
-        format: PdfDocumentFormat.xlsx,
+        format: PdfOfficeFormat.xlsx,
       );
       final bytes = sink.takeBytes();
       expect(bytes[0], 0x50);
       expect(bytes[1], 0x4B);
     }, timeout: t(1));
 
-    test('convertToPdf from DOCX produces valid PDF', () async {
+    test('convertFromOffice from DOCX produces valid PDF', () async {
       final pdf = createPdf();
       final docxSink = TestSink();
-      await pdf.convertTo(
-        src(minimalPdf),
+      await pdf.convertToOffice(
+        PdfInput(src(minimalPdf)),
         docxSink,
-        format: PdfDocumentFormat.docx,
+        format: PdfOfficeFormat.docx,
       );
       final pdfSink = TestSink();
-      await pdf.convertToPdf(
+      await pdf.convertFromOffice(
         src(docxSink.takeBytes()),
         pdfSink,
-        format: PdfDocumentFormat.docx,
+        format: PdfOfficeFormat.docx,
       );
       final pdfBytes = pdfSink.takeBytes();
       expect(String.fromCharCodes(pdfBytes.sublist(0, 5)), startsWith('%PDF'));
     }, timeout: t(1));
 
     test(
-      'convertToPdf DOCX fixed-layout table honors declared column widths',
+      'convertFromOffice DOCX fixed-layout table honors declared column widths',
       () async {
         // Issue #243: the fixture's 11 gridCol widths sum to 10.275 in on a
         // 10 in usable landscape page, yet the engine laid the table out at
@@ -525,12 +537,12 @@ void registerStandaloneTests(Pdf Function() createPdf) {
         // Every column marker must land inside the page.
         final pdf = createPdf();
         final sink = TestSink();
-        await pdf.convertToPdf(
+        await pdf.convertFromOffice(
           src(buildWideTableDocx()),
           sink,
-          format: PdfDocumentFormat.docx,
+          format: PdfOfficeFormat.docx,
         );
-        final doc = await pdf.open(src(sink.takeBytes()));
+        final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
         const pageWidthPt =
             792.0; // 15840 twips landscape, as the DOCX declares
         final lefts = <double>[];
@@ -541,14 +553,14 @@ void registerStandaloneTests(Pdf Function() createPdf) {
           final hit = hits.single;
           // The buggy layout ran the row out to ~3074 pt on this page.
           expect(
-            hit.rect.x + hit.rect.width,
+            hit.bounds.x + hit.bounds.width,
             lessThanOrEqualTo(pageWidthPt + 1),
             reason:
-                '$marker spans to x=${hit.rect.x + hit.rect.width} — off the '
+                '$marker spans to x=${hit.bounds.x + hit.bounds.width} — off the '
                 '$pageWidthPt pt page (declared widths ignored, issue #243)',
           );
-          lefts.add(hit.rect.x);
-          lastWidth = hit.rect.width;
+          lefts.add(hit.bounds.x);
+          lastWidth = hit.bounds.width;
         }
         // "On the page" alone would also pass a content-sampled layout, so
         // check the geometry: each column's left edge advances by its

@@ -19,8 +19,8 @@ void registerInstanceTests(Pdf Function() createPdf) {
 
     test('dispose cascades to open docs', () async {
       final pdf = createPdf();
-      final doc1 = await pdf.open(src(minimalPdf));
-      final doc2 = await pdf.open(src(minimalPdf));
+      final doc1 = await pdf.open(PdfInput(src(minimalPdf)));
+      final doc2 = await pdf.open(PdfInput(src(minimalPdf)));
       expect(doc1.pageCount, 1);
       expect(doc2.pageCount, 1);
       await pdf.dispose();
@@ -28,8 +28,8 @@ void registerInstanceTests(Pdf Function() createPdf) {
 
     test('dispose cascades to open editors', () async {
       final pdf = createPdf();
-      final ed1 = await pdf.edit(src(minimalPdf));
-      final ed2 = await pdf.edit(src(minimalPdf));
+      final ed1 = await pdf.edit(PdfInput(src(minimalPdf)));
+      final ed2 = await pdf.edit(PdfInput(src(minimalPdf)));
       expect(await ed1.pageCount(), 1);
       expect(await ed2.pageCount(), 1);
       await pdf.dispose();
@@ -47,8 +47,8 @@ void registerInstanceTests(Pdf Function() createPdf) {
 
     test('dispose cascades to mix of doc+editor+builder', () async {
       final pdf = createPdf();
-      final doc = await pdf.open(src(minimalPdf));
-      final ed = await pdf.edit(src(minimalPdf));
+      final doc = await pdf.open(PdfInput(src(minimalPdf)));
+      final ed = await pdf.edit(PdfInput(src(minimalPdf)));
       final _ = await pdf.build();
       expect(doc.pageCount, 1);
       expect(await ed.pageCount(), 1);
@@ -65,7 +65,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
 
     test('doc double dispose is safe', () async {
       final pdf = createPdf();
-      final doc = await pdf.open(src(minimalPdf));
+      final doc = await pdf.open(PdfInput(src(minimalPdf)));
       await doc.dispose();
       await doc.dispose();
       await pdf.dispose();
@@ -73,7 +73,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
 
     test('editor double dispose is safe', () async {
       final pdf = createPdf();
-      final ed = await pdf.edit(src(minimalPdf));
+      final ed = await pdf.edit(PdfInput(src(minimalPdf)));
       await ed.dispose();
       await ed.dispose();
       await pdf.dispose();
@@ -92,15 +92,18 @@ void registerInstanceTests(Pdf Function() createPdf) {
     test('operations after instance dispose throw', () async {
       final pdf = createPdf();
       await pdf.dispose();
-      expect(() => pdf.open(src(minimalPdf)), throwsA(isA<PdfDisposed>()));
+      expect(
+        () => pdf.open(PdfInput(src(minimalPdf))),
+        throwsA(isA<StateError>()),
+      );
     }, timeout: t(1));
 
     // ── Dispose returns quickly ──
 
     test('instance dispose returns quickly', () async {
       final pdf = createPdf();
-      await pdf.open(src(minimalPdf));
-      await pdf.edit(src(minimalPdf));
+      await pdf.open(PdfInput(src(minimalPdf)));
+      await pdf.edit(PdfInput(src(minimalPdf)));
       await pdf.build();
       final sw = Stopwatch()..start();
       await pdf.dispose();
@@ -113,14 +116,17 @@ void registerInstanceTests(Pdf Function() createPdf) {
     test('sequential ops on same instance', () async {
       final pdf = createPdf();
 
-      final doc1 = await pdf.open(src(minimalPdf));
+      final doc1 = await pdf.open(PdfInput(src(minimalPdf)));
       expect(doc1.pageCount, 1);
       await doc1.dispose();
 
       final sink = TestSink();
-      await pdf.merge([src(minimalPdf), src(minimalPdf)], sink);
+      await pdf.merge([
+        PdfInput(src(minimalPdf)),
+        PdfInput(src(minimalPdf)),
+      ], sink);
 
-      final doc2 = await pdf.open(src(sink.takeBytes()));
+      final doc2 = await pdf.open(PdfInput(src(sink.takeBytes())));
       expect(doc2.pageCount, 2);
       await doc2.dispose();
 
@@ -129,8 +135,8 @@ void registerInstanceTests(Pdf Function() createPdf) {
 
     test('doc dispose frees one doc, others survive', () async {
       final pdf = createPdf();
-      final doc1 = await pdf.open(src(minimalPdf));
-      final doc2 = await pdf.open(src(minimalPdf));
+      final doc1 = await pdf.open(PdfInput(src(minimalPdf)));
+      final doc2 = await pdf.open(PdfInput(src(minimalPdf)));
       await doc1.dispose();
       expect(doc2.pageCount, 1);
       await doc2.dispose();
@@ -143,8 +149,8 @@ void registerInstanceTests(Pdf Function() createPdf) {
       final pdfA = createPdf();
       final pdfB = createPdf();
 
-      final docA = await pdfA.open(src(minimalPdf));
-      final docB = await pdfB.open(src(minimalPdf));
+      final docA = await pdfA.open(PdfInput(src(minimalPdf)));
+      final docB = await pdfB.open(PdfInput(src(minimalPdf)));
 
       expect(docA.pageCount, 1);
       expect(docB.pageCount, 1);
@@ -159,10 +165,10 @@ void registerInstanceTests(Pdf Function() createPdf) {
       final pdfA = createPdf();
       final pdfB = createPdf();
 
-      await pdfA.open(src(minimalPdf));
+      await pdfA.open(PdfInput(src(minimalPdf)));
       await pdfA.dispose();
 
-      final doc = await pdfB.open(src(minimalPdf));
+      final doc = await pdfB.open(PdfInput(src(minimalPdf)));
       expect(doc.pageCount, 1);
       await doc.dispose();
       await pdfB.dispose();
@@ -173,9 +179,9 @@ void registerInstanceTests(Pdf Function() createPdf) {
     test('parallel opens via Future.wait', () async {
       final pdf = createPdf();
       final docs = await Future.wait([
-        pdf.open(src(minimalPdf)),
-        pdf.open(src(minimalPdf)),
-        pdf.open(src(minimalPdf)),
+        pdf.open(PdfInput(src(minimalPdf))),
+        pdf.open(PdfInput(src(minimalPdf))),
+        pdf.open(PdfInput(src(minimalPdf))),
       ]);
       for (final doc in docs) {
         expect(doc.pageCount, 1);
@@ -186,11 +192,11 @@ void registerInstanceTests(Pdf Function() createPdf) {
     test('parallel mix of doc+editor+builder', () async {
       final pdf = createPdf();
       final results = await Future.wait([
-        pdf.open(src(minimalPdf)),
-        pdf.edit(src(minimalPdf)),
+        pdf.open(PdfInput(src(minimalPdf))),
+        pdf.edit(PdfInput(src(minimalPdf))),
         pdf.build(),
       ]);
-      final doc = results[0] as PdfDoc;
+      final doc = results[0] as PdfDocument;
       final ed = results[1] as PdfEditor;
       final _ = results[2] as PdfBuilder;
       expect(doc.pageCount, 1);
@@ -208,9 +214,9 @@ void registerInstanceTests(Pdf Function() createPdf) {
           final sink = TestSink();
           unawaited(
             pdf.merge([
-              src(minimalPdf),
-              src(minimalPdf),
-              src(minimalPdf),
+              PdfInput(src(minimalPdf)),
+              PdfInput(src(minimalPdf)),
+              PdfInput(src(minimalPdf)),
             ], sink),
           );
           await Future<void>.delayed(const Duration(milliseconds: 10));
@@ -233,7 +239,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
       await runZonedGuarded(
         () async {
           final pdf = createPdf();
-          unawaited(pdf.open(src(minimalPdf)));
+          unawaited(pdf.open(PdfInput(src(minimalPdf))));
           await Future<void>.delayed(const Duration(milliseconds: 10));
           await pdf.dispose();
           await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -254,7 +260,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
       await runZonedGuarded(
         () async {
           final pdf = createPdf();
-          unawaited(pdf.edit(src(minimalPdf)));
+          unawaited(pdf.edit(PdfInput(src(minimalPdf))));
           await Future<void>.delayed(const Duration(milliseconds: 10));
           await pdf.dispose();
           await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -282,13 +288,13 @@ void registerInstanceTests(Pdf Function() createPdf) {
       () async {
         final pdf = createPdf();
         final slow = SlowSource(minimalPdf); // first readAt never resolves
-        final task = pdf.open(slow);
+        final task = pdf.open(PdfInput(slow));
         await slow.firstRead; // op is genuinely parked on the source
         task.cancel();
         await expectLater(task, throwsA(isA<PdfCancelled>()));
         slow.release(); // unblock the abandoned read (no-op for the op)
         // Only that job died — the instance keeps working.
-        final doc = await pdf.open(src(minimalPdf));
+        final doc = await pdf.open(PdfInput(src(minimalPdf)));
         expect(doc.pageCount, 1);
         await doc.dispose();
         await pdf.dispose();
@@ -298,17 +304,17 @@ void registerInstanceTests(Pdf Function() createPdf) {
 
     test('cancel before the job starts resolves PdfCancelled', () async {
       final pdf = createPdf();
-      final task = pdf.open(src(minimalPdf));
+      final task = pdf.open(PdfInput(src(minimalPdf)));
       task.cancel(); // same tick — job may not have been submitted yet
       await expectLater(task, throwsA(isA<PdfCancelled>()));
-      final doc = await pdf.open(src(minimalPdf));
+      final doc = await pdf.open(PdfInput(src(minimalPdf)));
       expect(doc.pageCount, 1);
       await pdf.dispose();
     }, timeout: t(1));
 
     test('cancel after completion is a no-op', () async {
       final pdf = createPdf();
-      final task = pdf.open(src(minimalPdf));
+      final task = pdf.open(PdfInput(src(minimalPdf)));
       final doc = await task;
       task.cancel(); // idempotent, result already delivered
       task.cancel();
@@ -326,10 +332,10 @@ void registerInstanceTests(Pdf Function() createPdf) {
 
     test('cancelled op leaves sibling handles on the lane usable', () async {
       final pdf = createPdf();
-      final doc = await pdf.open(src(minimalPdf));
+      final doc = await pdf.open(PdfInput(src(minimalPdf)));
       // A second op on a slow source, pinned to the same lane.
       final slow = SlowSource(minimalPdf);
-      final task = pdf.open(slow);
+      final task = pdf.open(PdfInput(slow));
       await slow.firstRead;
       task.cancel();
       await expectLater(task, throwsA(isA<PdfCancelled>()));
@@ -348,7 +354,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
       final errors = <Object>[];
       await runZonedGuarded(() async {
         final pdf = createPdf();
-        final task = pdf.open(src(minimalPdf));
+        final task = pdf.open(PdfInput(src(minimalPdf)));
         task.cancel();
         // Never awaited — the cancelled outcome must not leak.
         await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -368,7 +374,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
         // Garbage bytes — a genuine engine error, not a cancellation.
         // Deliberately unawaited and unlistened: the stay-loud branch
         // of PdfTask is what re-raises this into the zone.
-        unawaited(pdf.open(src(Uint8List.fromList([1, 2, 3]))));
+        unawaited(pdf.open(PdfInput(src(Uint8List.fromList([1, 2, 3])))));
         await Future<void>.delayed(const Duration(milliseconds: 200));
         await pdf.dispose();
       }, (e, _) => errors.add(e));
@@ -381,13 +387,18 @@ void registerInstanceTests(Pdf Function() createPdf) {
 
     test('fresh instance works after abrupt dispose of another', () async {
       final pdf1 = createPdf();
-      unawaited(pdf1.merge([src(minimalPdf), src(minimalPdf)], TestSink()));
+      unawaited(
+        pdf1.merge([
+          PdfInput(src(minimalPdf)),
+          PdfInput(src(minimalPdf)),
+        ], TestSink()),
+      );
       await Future<void>.delayed(const Duration(milliseconds: 10));
       await pdf1.dispose();
 
       // A completely new instance should work fine
       final pdf2 = createPdf();
-      final doc = await pdf2.open(src(minimalPdf));
+      final doc = await pdf2.open(PdfInput(src(minimalPdf)));
       expect(doc.pageCount, 1);
       await doc.dispose();
       await pdf2.dispose();
@@ -405,7 +416,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
         // Attach the outcome handler BEFORE dispose — the contract is
         // that the op RESOLVES (won the race, or cancelled), promptly.
         final settled = pdf
-            .open(src(minimalPdf))
+            .open(PdfInput(src(minimalPdf)))
             .then<void>(
               (doc) => doc.dispose().then<void>(
                 (_) {},
@@ -437,7 +448,7 @@ void registerInstanceTests(Pdf Function() createPdf) {
       () async {
         final pdf = createPdf();
         final sink = TestSink();
-        final sources = List.generate(5000, (_) => src(minimalPdf));
+        final sources = List.generate(5000, (_) => PdfInput(src(minimalPdf)));
         final merging = pdf.merge(sources, sink);
         final expectation = expectLater(merging, throwsA(isA<PdfCancelled>()));
         await Future<void>.delayed(const Duration(milliseconds: 50));

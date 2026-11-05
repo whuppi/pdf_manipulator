@@ -19,7 +19,7 @@ void main() {
     });
 
     test('a custom size keeps the dimensions it was given', () {
-      const size = PdfPageSize.custom(200, 300);
+      const size = PdfPageSize.points(200, 300);
       expect(size.width, 200);
       expect(size.height, 300);
     });

@@ -7,9 +7,9 @@
 // Seven tabs, one per API surface:
 //   Runtime    — the lane architecture: I/O mode, parallel ops,
 //                per-op cancellation, instant dispose
-//   Doc        — PdfDoc read-only queries
-//   Sugar      — one-shot convenience ops (PdfSugar)
-//   Standalone — source in → sink out, no handle (PdfStandalone)
+//   Doc        — PdfDocument read-only queries
+//   Sugar      — one-shot convenience ops (Pdf.merge, split, compress)
+//   Standalone — source in → sink out, no handle (Pdf.sign, convertToOffice)
 //   Editor     — parse once, mutate N times, save once (PdfEditor)
 //   Builder    — create PDFs from scratch (PdfBuilder)
 //   Merge      — reorderable multi-file merge
@@ -176,7 +176,10 @@ class _DemoSample {
 
 final List<_DemoSample> _demoSamples = [
   _DemoSample(
-      'Tiny blank page', Icons.crop_portrait, (pdf) async => minimalPdf),
+    'Tiny blank page',
+    Icons.crop_portrait,
+    (pdf) async => minimalPdf,
+  ),
   _DemoSample('Text report (5 pages)', Icons.article, (pdf) async {
     final b = await pdf.build();
     await b.setMetadata(const PdfMetadata(title: 'Demo Report'));
@@ -184,18 +187,21 @@ final List<_DemoSample> _demoSamples = [
       final p = await b.addPage();
       await p.heading(2, 'Section $i');
       await p.space(8);
-      await p
-          .paragraph('Demo paragraph for section $i. The quick brown fox jumps '
-              'over the lazy dog while the engine streams every byte.');
-      await p.done();
+      await p.paragraph(
+        'Demo paragraph for section $i. The quick brown fox jumps '
+        'over the lazy dog while the engine streams every byte.',
+      );
     }
     final sink = DemoSink();
     await b.save(sink);
     await b.dispose();
     return sink.takeBytes();
   }),
-  _DemoSample('Long document (40 pages)', Icons.menu_book,
-      (pdf) => buildSamplePdf(pdf)),
+  _DemoSample(
+    'Long document (40 pages)',
+    Icons.menu_book,
+    (pdf) => buildSamplePdf(pdf),
+  ),
   _DemoSample('Form sample', Icons.fact_check, (pdf) async {
     final b = await pdf.build();
     await b.setMetadata(const PdfMetadata(title: 'Demo Form'));
@@ -204,11 +210,14 @@ final List<_DemoSample> _demoSamples = [
     await p.space(10);
     await p.text('Name:');
     await p.textField(
-        'name', const PdfRect(x: 100, y: 680, width: 200, height: 20));
+      'name',
+      const PdfRect(x: 100, y: 680, width: 200, height: 20),
+    );
     await p.text('Agree:');
     await p.checkbox(
-        'agree', const PdfRect(x: 100, y: 640, width: 14, height: 14));
-    await p.done();
+      'agree',
+      const PdfRect(x: 100, y: 640, width: 14, height: 14),
+    );
     final sink = DemoSink();
     await b.save(sink);
     await b.dispose();
@@ -249,48 +258,58 @@ class _DemoSampleSheetState extends State<_DemoSampleSheet> {
   @override
   Widget build(BuildContext context) {
     return SafeArea(
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-          child: Row(children: [
-            Icon(Icons.auto_awesome,
-                color: Theme.of(context).colorScheme.primary),
-            const SizedBox(width: 8),
-            Text(
-                widget.multiple
-                    ? 'Pick demo PDFs (built in memory)'
-                    : 'Pick a demo PDF (built in memory)',
-                style: Theme.of(context).textTheme.titleMedium),
-          ]),
-        ),
-        for (final sample in _demoSamples)
-          widget.multiple
-              ? CheckboxListTile(
-                  secondary: Icon(sample.icon),
-                  title: Text(sample.name),
-                  value: _selected.contains(sample),
-                  onChanged: (v) => setState(() => v == true
-                      ? _selected.add(sample)
-                      : _selected.remove(sample)),
-                )
-              : ListTile(
-                  leading: Icon(sample.icon),
-                  title: Text(sample.name),
-                  onTap: () => Navigator.pop(context, [sample]),
-                ),
-        if (widget.multiple)
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
           Padding(
-            padding: const EdgeInsets.all(12),
-            child: FilledButton.icon(
-              key: const ValueKey('demo-picker-use'),
-              onPressed: _selected.isEmpty
-                  ? null
-                  : () => Navigator.pop(context, _selected.toList()),
-              icon: const Icon(Icons.check),
-              label: Text('Use ${_selected.length} files'),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.auto_awesome,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  widget.multiple
+                      ? 'Pick demo PDFs (built in memory)'
+                      : 'Pick a demo PDF (built in memory)',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ],
             ),
           ),
-      ]),
+          for (final sample in _demoSamples)
+            widget.multiple
+                ? CheckboxListTile(
+                    secondary: Icon(sample.icon),
+                    title: Text(sample.name),
+                    value: _selected.contains(sample),
+                    onChanged: (v) => setState(
+                      () => v == true
+                          ? _selected.add(sample)
+                          : _selected.remove(sample),
+                    ),
+                  )
+                : ListTile(
+                    leading: Icon(sample.icon),
+                    title: Text(sample.name),
+                    onTap: () => Navigator.pop(context, [sample]),
+                  ),
+          if (widget.multiple)
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: FilledButton.icon(
+                key: const ValueKey('demo-picker-use'),
+                onPressed: _selected.isEmpty
+                    ? null
+                    : () => Navigator.pop(context, _selected.toList()),
+                icon: const Icon(Icons.check),
+                label: Text('Use ${_selected.length} files'),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
@@ -370,17 +389,22 @@ final Uint8List demoPng = Uint8List.fromList(const [
 
 /// Demo replacement for image picking — returns the bundled sample.
 Future<List<({String name, Uint8List bytes, int size})>?>
-    pickImageBytes() async =>
-        [(name: 'demo.png', bytes: demoPng, size: demoPng.length)];
+    pickImageBytes() async => [
+          (name: 'demo.png', bytes: demoPng, size: demoPng.length),
+        ];
 
 /// Demo replacement for save dialogs: outputs stay in memory; report
 /// the size instead of touching the file system.
 Future<String?> saveBytes(Uint8List bytes, String name) async {
   final context = demoNavigatorKey.currentContext;
   if (context != null) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content:
-            Text('$name ready — ${fmtSize(bytes.length)} (kept in memory)')));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '$name ready — ${fmtSize(bytes.length)} (kept in memory)',
+        ),
+      ),
+    );
   }
   return name;
 }
@@ -397,12 +421,12 @@ Future<Uint8List> buildSamplePdf(Pdf pdf, {int pages = 40}) async {
       await p.space(10);
       for (var j = 0; j < 6; j++) {
         await p.paragraph(
-            'Lorem ipsum dolor sit amet, consectetur adipiscing elit. '
-            'Sed do eiusmod tempor incididunt ut labore et dolore magna '
-            'aliqua. Ut enim ad minim veniam, quis nostrud exercitation.');
+          'Lorem ipsum dolor sit amet, consectetur adipiscing elit. '
+          'Sed do eiusmod tempor incididunt ut labore et dolore magna '
+          'aliqua. Ut enim ad minim veniam, quis nostrud exercitation.',
+        );
         await p.space(6);
       }
-      await p.done();
     }
     final sink = DemoSink();
     await b.save(sink);
@@ -422,7 +446,8 @@ Future<ByteData> loadEmojiFont() async {
     return await rootBundle.load('assets/fonts/NotoEmoji-Regular.ttf');
   } on FlutterError {
     return rootBundle.load(
-        'packages/pdf_manipulator_example/assets/fonts/NotoEmoji-Regular.ttf');
+      'packages/pdf_manipulator_example/assets/fonts/NotoEmoji-Regular.ttf',
+    );
   }
 }
 
@@ -439,9 +464,10 @@ class ExampleApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.deepPurple),
       darkTheme: ThemeData(
-          useMaterial3: true,
-          brightness: Brightness.dark,
-          colorSchemeSeed: Colors.deepPurple),
+        useMaterial3: true,
+        brightness: Brightness.dark,
+        colorSchemeSeed: Colors.deepPurple,
+      ),
       themeMode: ThemeMode.system,
       home: const HomePage(),
     );
@@ -473,15 +499,17 @@ class HomePage extends StatelessWidget {
             ],
           ),
         ),
-        body: const TabBarView(children: [
-          _RuntimeTab(),
-          _DocTab(),
-          _SugarTab(),
-          _StandaloneTab(),
-          _EditorTab(),
-          _BuilderTab(),
-          _MergeTab(),
-        ]),
+        body: const TabBarView(
+          children: [
+            _RuntimeTab(),
+            _DocTab(),
+            _SugarTab(),
+            _StandaloneTab(),
+            _EditorTab(),
+            _BuilderTab(),
+            _MergeTab(),
+          ],
+        ),
       ),
     );
   }
@@ -527,10 +555,11 @@ class _IoModeChipState extends State<_IoModeChip> {
         child: Text(
           _mode?.name.toUpperCase() ?? '…',
           style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.5,
-              color: cs.onPrimaryContainer),
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.5,
+            color: cs.onPrimaryContainer,
+          ),
         ),
       ),
     );
@@ -544,8 +573,12 @@ class _Status extends StatelessWidget {
   final String? message;
   final VoidCallback? onDismiss;
   final VoidCallback? onCancel;
-  const _Status(
-      {this.loading = false, this.message, this.onDismiss, this.onCancel});
+  const _Status({
+    this.loading = false,
+    this.message,
+    this.onDismiss,
+    this.onCancel,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -562,29 +595,37 @@ class _Status extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       color: bg,
-      child: Row(children: [
-        if (loading) ...[
-          SizedBox(
+      child: Row(
+        children: [
+          if (loading) ...[
+            SizedBox(
               width: 14,
               height: 14,
-              child: CircularProgressIndicator(strokeWidth: 2, color: fg)),
-          const SizedBox(width: 12),
-        ],
-        Expanded(
-            child: Text(message ?? '',
-                key: const ValueKey('status-text'),
-                style: TextStyle(color: fg, fontSize: 13),
-                maxLines: 4)),
-        if (loading && onCancel != null)
-          TextButton.icon(
-            onPressed: onCancel,
-            icon: Icon(Icons.cancel, size: 16, color: fg),
-            label: Text('Cancel', style: TextStyle(color: fg, fontSize: 12)),
+              child: CircularProgressIndicator(strokeWidth: 2, color: fg),
+            ),
+            const SizedBox(width: 12),
+          ],
+          Expanded(
+            child: Text(
+              message ?? '',
+              key: const ValueKey('status-text'),
+              style: TextStyle(color: fg, fontSize: 13),
+              maxLines: 4,
+            ),
           ),
-        if (!loading && onDismiss != null)
-          GestureDetector(
-              onTap: onDismiss, child: Icon(Icons.close, size: 16, color: fg)),
-      ]),
+          if (loading && onCancel != null)
+            TextButton.icon(
+              onPressed: onCancel,
+              icon: Icon(Icons.cancel, size: 16, color: fg),
+              label: Text('Cancel', style: TextStyle(color: fg, fontSize: 12)),
+            ),
+          if (!loading && onDismiss != null)
+            GestureDetector(
+              onTap: onDismiss,
+              child: Icon(Icons.close, size: 16, color: fg),
+            ),
+        ],
+      ),
     );
   }
 }
@@ -595,12 +636,15 @@ class _Section extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.only(top: 14, bottom: 4, left: 4),
-        child: Text(text.toUpperCase(),
-            style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 1.2,
-                color: Theme.of(context).colorScheme.primary)),
+        child: Text(
+          text.toUpperCase(),
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 1.2,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+        ),
       );
 }
 
@@ -610,36 +654,40 @@ class _Op extends StatelessWidget {
   final String? subtitle;
   final VoidCallback onRun;
   final bool loading;
-  const _Op(
-      {required this.icon,
-      required this.title,
-      this.subtitle,
-      required this.onRun,
-      this.loading = false});
+  const _Op({
+    required this.icon,
+    required this.title,
+    this.subtitle,
+    required this.onRun,
+    this.loading = false,
+  });
 
   @override
   Widget build(BuildContext context) => Card(
         margin: const EdgeInsets.symmetric(vertical: 2),
         child: ListTile(
           leading: Icon(icon, size: 22),
-          title: Text(title,
-              style:
-                  const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+          title: Text(
+            title,
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+          ),
           subtitle: subtitle != null
               ? Text(subtitle!, style: const TextStyle(fontSize: 12))
               : null,
           trailing: SizedBox(
-              width: 64,
-              height: 34,
-              child: FilledButton.tonal(
-                // Stable handle for integration tests ("run:<title>").
-                key: ValueKey('run:$title'),
-                onPressed: loading ? null : onRun,
-                style: FilledButton.styleFrom(
-                    padding: EdgeInsets.zero,
-                    textStyle: const TextStyle(fontSize: 13)),
-                child: const Text('Run'),
-              )),
+            width: 64,
+            height: 34,
+            child: FilledButton.tonal(
+              // Stable handle for integration tests ("run:<title>").
+              key: ValueKey('run:$title'),
+              onPressed: loading ? null : onRun,
+              style: FilledButton.styleFrom(
+                padding: EdgeInsets.zero,
+                textStyle: const TextStyle(fontSize: 13),
+              ),
+              child: const Text('Run'),
+            ),
+          ),
           dense: true,
           visualDensity: VisualDensity.compact,
         ),
@@ -651,29 +699,36 @@ class _EmptyState extends StatelessWidget {
   final String text;
   final VoidCallback? onPick;
   final String pickLabel;
-  const _EmptyState(
-      {required this.icon,
-      required this.text,
-      this.onPick,
-      this.pickLabel = 'Open PDF'});
+  const _EmptyState({
+    required this.icon,
+    required this.text,
+    this.onPick,
+    this.pickLabel = 'Open PDF',
+  });
 
   @override
   Widget build(BuildContext context) => Center(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
               size: 56,
               color:
-                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.5)),
-          const SizedBox(height: 16),
-          Text(text),
-          if (onPick != null) ...[
+                  Theme.of(context).colorScheme.primary.withValues(alpha: 0.5),
+            ),
             const SizedBox(height: 16),
-            FilledButton.icon(
+            Text(text),
+            if (onPick != null) ...[
+              const SizedBox(height: 16),
+              FilledButton.icon(
                 onPressed: onPick,
                 icon: const Icon(Icons.file_open),
-                label: Text(pickLabel)),
+                label: Text(pickLabel),
+              ),
+            ],
           ],
-        ]),
+        ),
       );
 }
 
@@ -686,30 +741,45 @@ void showTextSheet(BuildContext context, String title, String text) {
       expand: false,
       initialChildSize: 0.7,
       maxChildSize: 0.95,
-      builder: (ctx, sc) => Column(children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 8, 8),
-          child: Row(children: [
-            Expanded(
-                child: Text(title,
+      builder: (ctx, sc) => Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 8, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    title,
                     style: const TextStyle(
-                        fontWeight: FontWeight.w600, fontSize: 16))),
-            IconButton(
-                icon: const Icon(Icons.close),
-                onPressed: () => Navigator.pop(ctx)),
-          ]),
-        ),
-        const Divider(height: 1),
-        Expanded(
-          child: SingleChildScrollView(
-            controller: sc,
-            padding: const EdgeInsets.all(16),
-            child: SelectableText(text.isEmpty ? '(empty)' : text,
-                style: const TextStyle(
-                    fontSize: 13, fontFamily: 'monospace', height: 1.5)),
+                      fontWeight: FontWeight.w600,
+                      fontSize: 16,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(ctx),
+                ),
+              ],
+            ),
           ),
-        ),
-      ]),
+          const Divider(height: 1),
+          Expanded(
+            child: SingleChildScrollView(
+              controller: sc,
+              padding: const EdgeInsets.all(16),
+              child: SelectableText(
+                text.isEmpty ? '(empty)' : text,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontFamily: 'monospace',
+                  height: 1.5,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
     ),
   );
 }
@@ -725,8 +795,11 @@ mixin _OpsRunner<T extends StatefulWidget> on State<T> {
 
   /// Runs one cancellable engine task. Returns true on success,
   /// false on cancellation or error (already reported in [status]).
-  Future<bool> runTask<R>(String label, PdfTask<R> Function() start,
-      {String Function(R result)? done}) async {
+  Future<bool> runTask<R>(
+    String label,
+    PdfTask<R> Function() start, {
+    String Function(R result)? done,
+  }) async {
     final task = start();
     setState(() {
       loading = true;
@@ -738,8 +811,10 @@ mixin _OpsRunner<T extends StatefulWidget> on State<T> {
       setState(() => status = done?.call(result) ?? '$label done');
       return true;
     } on PdfCancelled {
-      setState(() => status =
-          'Cancelled — the instance and every other handle keep working');
+      setState(
+        () => status =
+            'Cancelled — the instance and every other handle keep working',
+      );
       return false;
     } catch (e) {
       setState(() => status = 'Error: $e');
@@ -777,9 +852,11 @@ mixin _OpsRunner<T extends StatefulWidget> on State<T> {
 
   Future<void> saveResult(Uint8List bytes, String name) async {
     final p = await saveBytes(bytes, name);
-    setState(() => status = p != null
-        ? 'Saved $name (${fmtSize(bytes.length)})'
-        : 'Save cancelled');
+    setState(
+      () => status = p != null
+          ? 'Saved $name (${fmtSize(bytes.length)})'
+          : 'Save cancelled',
+    );
   }
 
   Widget statusBar() => _Status(
@@ -805,11 +882,15 @@ mixin _PdfPicker<T extends StatefulWidget> on State<T> {
 
   Widget fileCard(BuildContext context, VoidCallback onSwap) => Card(
         child: ListTile(
-          leading: Icon(Icons.picture_as_pdf,
-              color: Theme.of(context).colorScheme.primary),
+          leading: Icon(
+            Icons.picture_as_pdf,
+            color: Theme.of(context).colorScheme.primary,
+          ),
           title: Text(fmtSize(bytes!.length)),
           trailing: IconButton.filledTonal(
-              onPressed: onSwap, icon: const Icon(Icons.swap_horiz, size: 20)),
+            onPressed: onSwap,
+            icon: const Icon(Icons.swap_horiz, size: 20),
+          ),
         ),
       );
 }
@@ -843,38 +924,50 @@ class _RuntimeTabState extends State<_RuntimeTab>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return Column(children: [
-      statusBar(),
-      Expanded(
-        child: ListView(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          children: [
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Row(children: [
-                  Icon(Icons.bolt,
-                      color: Theme.of(context).colorScheme.primary, size: 28),
-                  const SizedBox(width: 12),
-                  const Expanded(
-                    child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('The lane architecture',
+    return Column(
+      children: [
+        statusBar(),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            children: [
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.bolt,
+                        color: Theme.of(context).colorScheme.primary,
+                        size: 28,
+                      ),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'The lane architecture',
                               style: TextStyle(
-                                  fontWeight: FontWeight.w600, fontSize: 15)),
-                          Text(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 15,
+                              ),
+                            ),
+                            Text(
                               'Every op runs on an isolated lane. Cancel one '
                               'op, or kill the whole instance instantly — '
                               'no demo here needs a file.',
-                              style: TextStyle(fontSize: 12)),
-                        ]),
+                              style: TextStyle(fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
-                ]),
+                ),
               ),
-            ),
-            _Section('Per-op cancellation (PdfTask)'),
-            _Op(
+              _Section('Per-op cancellation (PdfTask)'),
+              _Op(
                 icon: Icons.cancel_schedule_send,
                 title: 'Heavy merge — hit Cancel while it runs',
                 subtitle: 'merge of 6 × 40-page docs; Cancel appears above',
@@ -882,130 +975,158 @@ class _RuntimeTabState extends State<_RuntimeTab>
                 onRun: () async {
                   final sample = await _ensureSample();
                   await runTask(
-                      'Heavy merge (tap Cancel!)',
-                      () => _pdf.merge(
-                          List.filled(6, DemoSource(sample)), DemoSink()),
-                      done: (_) => 'Merge finished before you cancelled');
-                }),
-            _Op(
+                    'Heavy merge (tap Cancel!)',
+                    () => _pdf.merge(
+                      List.filled(6, PdfInput(DemoSource(sample))),
+                      DemoSink(),
+                    ),
+                    done: (_) => 'Merge finished before you cancelled',
+                  );
+                },
+              ),
+              _Op(
                 icon: Icons.timer_off,
                 title: 'Cancel before the job even starts',
                 subtitle: 'task.cancel() on the same tick → PdfCancelled',
                 loading: loading,
                 onRun: () => runFlow('Cancel-before-start', () async {
-                      final task = _pdf.open(DemoSource(minimalPdf));
-                      task.cancel();
-                      try {
-                        final doc = await task;
-                        await doc.dispose();
-                        setState(() =>
-                            status = 'Completed before the cancel landed');
-                      } on PdfCancelled {
-                        setState(() => status =
-                            '✓ PdfCancelled — the job never reached a lane');
-                      }
-                    })),
-            _Op(
+                  final task = _pdf.open(PdfInput(DemoSource(minimalPdf)));
+                  task.cancel();
+                  try {
+                    final doc = await task;
+                    await doc.dispose();
+                    setState(
+                      () => status = 'Completed before the cancel landed',
+                    );
+                  } on PdfCancelled {
+                    setState(
+                      () => status =
+                          '✓ PdfCancelled — the job never reached a lane',
+                    );
+                  }
+                }),
+              ),
+              _Op(
                 icon: Icons.healing,
                 title: 'Cancelled op leaves siblings untouched',
                 subtitle: 'cancel an extract; the open doc keeps working',
                 loading: loading,
                 onRun: () => runFlow('Sibling survival', () async {
-                      final sample = await _ensureSample();
-                      final doc = await _pdf.open(DemoSource(sample));
-                      try {
-                        final task = doc.extractText(MemorySink());
-                        task.cancel();
-                        try {
-                          await task;
-                        } on PdfCancelled {
-                          // expected — now prove the doc still works:
-                        }
-                        final sink = MemorySink();
-                        await doc.extractText(sink,
-                            pages: const PdfPages.single(0));
-                        final page0 = sink.takeString();
-                        setState(() =>
-                            status = '✓ extract cancelled; same doc then read '
-                                '${page0.length} chars from page 1');
-                      } finally {
-                        await doc.dispose();
-                      }
-                    })),
-            _Section('Parallel ops'),
-            _Op(
+                  final sample = await _ensureSample();
+                  final doc = await _pdf.open(PdfInput(DemoSource(sample)));
+                  try {
+                    final task = doc.extractText(MemorySink());
+                    task.cancel();
+                    try {
+                      await task;
+                    } on PdfCancelled {
+                      // expected — now prove the doc still works:
+                    }
+                    final sink = MemorySink();
+                    await doc.extractText(
+                      sink,
+                      pages: const PdfPages.single(0),
+                    );
+                    final page0 = sink.takeString();
+                    setState(
+                      () => status = '✓ extract cancelled; same doc then read '
+                          '${page0.length} chars from page 1',
+                    );
+                  } finally {
+                    await doc.dispose();
+                  }
+                }),
+              ),
+              _Section('Parallel ops'),
+              _Op(
                 icon: Icons.call_split,
                 title: 'Open 4 documents in parallel',
                 subtitle: 'Future.wait — each lands on its own lane',
                 loading: loading,
                 onRun: () => runFlow('Parallel opens', () async {
-                      final sw = Stopwatch()..start();
-                      final docs = await Future.wait(List.generate(
-                          4, (_) => _pdf.open(DemoSource(minimalPdf))));
-                      sw.stop();
-                      final pages = docs.map((d) => d.pageCount).join(', ');
-                      for (final d in docs) {
-                        await d.dispose();
-                      }
-                      setState(() =>
-                          status = '4 docs open in ${sw.elapsedMilliseconds}ms '
-                              '(pages: $pages)');
-                    })),
-            _Section('Instant dispose'),
-            _Op(
+                  final sw = Stopwatch()..start();
+                  final docs = await Future.wait(
+                    List.generate(
+                      4,
+                      (_) => _pdf.open(PdfInput(DemoSource(minimalPdf))),
+                    ),
+                  );
+                  sw.stop();
+                  final pages = docs.map((d) => d.pageCount).join(', ');
+                  for (final d in docs) {
+                    await d.dispose();
+                  }
+                  setState(
+                    () => status = '4 docs open in ${sw.elapsedMilliseconds}ms '
+                        '(pages: $pages)',
+                  );
+                }),
+              ),
+              _Section('Instant dispose'),
+              _Op(
                 icon: Icons.power_settings_new,
                 title: 'Dispose mid-flight — measure it',
                 subtitle:
                     'starts a heavy merge on a scratch instance, then kills it',
                 loading: loading,
                 onRun: () => runFlow('Instant dispose', () async {
-                      final sample = await _ensureSample();
-                      final lab = Pdf();
-                      final inflight = lab.merge(
-                          List.filled(6, DemoSource(sample)), DemoSink());
-                      await Future<void>.delayed(
-                          const Duration(milliseconds: 30));
-                      final sw = Stopwatch()..start();
-                      await lab.dispose();
-                      sw.stop();
-                      var outcome = 'op finished first';
-                      try {
-                        await inflight;
-                      } on PdfCancelled {
-                        outcome = 'in-flight op resolved as PdfCancelled';
-                      }
-                      setState(() => status =
-                          '✓ dispose() returned in ${sw.elapsedMicroseconds / 1000}ms; '
-                              '$outcome');
-                    })),
-            _Op(
+                  final sample = await _ensureSample();
+                  final lab = Pdf();
+                  final inflight = lab.merge(
+                    List.filled(6, PdfInput(DemoSource(sample))),
+                    DemoSink(),
+                  );
+                  await Future<void>.delayed(const Duration(milliseconds: 30));
+                  final sw = Stopwatch()..start();
+                  await lab.dispose();
+                  sw.stop();
+                  var outcome = 'op finished first';
+                  try {
+                    await inflight;
+                  } on PdfCancelled {
+                    outcome = 'in-flight op resolved as PdfCancelled';
+                  }
+                  setState(
+                    () => status =
+                        '✓ dispose() returned in ${sw.elapsedMicroseconds / 1000}ms; '
+                            '$outcome',
+                  );
+                }),
+              ),
+              _Op(
                 icon: Icons.fiber_new,
                 title: 'Fresh instance works after an abrupt kill',
                 loading: loading,
                 onRun: () => runFlow('Fresh after kill', () async {
-                      final lab = Pdf();
-                      unawaited(lab.open(DemoSource(minimalPdf)));
-                      await lab.dispose(); // killed mid-open — fine
-                      final lab2 = Pdf();
-                      try {
-                        final doc = await lab2.open(DemoSource(minimalPdf));
-                        setState(() => status =
-                            '✓ new instance opened ${doc.pageCount} page(s) '
-                                'right after the kill');
-                        await doc.dispose();
-                      } finally {
-                        await lab2.dispose();
-                      }
-                    })),
-            const SizedBox(height: 40),
-          ],
+                  final lab = Pdf();
+                  unawaited(lab.open(PdfInput(DemoSource(minimalPdf))));
+                  await lab.dispose(); // killed mid-open — fine
+                  final lab2 = Pdf();
+                  try {
+                    final doc = await lab2.open(
+                      PdfInput(DemoSource(minimalPdf)),
+                    );
+                    setState(
+                      () => status =
+                          '✓ new instance opened ${doc.pageCount} page(s) '
+                              'right after the kill',
+                    );
+                    await doc.dispose();
+                  } finally {
+                    await lab2.dispose();
+                  }
+                }),
+              ),
+              const SizedBox(height: 40),
+            ],
+          ),
         ),
-      ),
-    ]);
+      ],
+    );
   }
 }
 
-// ─── Tab 2: PdfDoc — read-only queries ────────────────────────────
+// ─── Tab 2: PdfDocument — read-only queries ────────────────────────────
 
 class _DocTab extends StatefulWidget {
   const _DocTab();
@@ -1016,7 +1137,7 @@ class _DocTab extends StatefulWidget {
 class _DocTabState extends State<_DocTab>
     with _OpsRunner, _PdfPicker, AutomaticKeepAliveClientMixin {
   final _pdf = Pdf();
-  PdfDoc? _doc;
+  PdfDocumentHandle? _doc;
   List<PdfPageInfo> _pages = const [];
 
   @override
@@ -1029,272 +1150,343 @@ class _DocTabState extends State<_DocTab>
   }
 
   Future<void> _open() => pick((picked) {
-        unawaited(runFlow('Opening', () async {
-          final old = _doc;
-          _doc = null;
-          if (old != null) await old.dispose();
-          final doc = await _pdf.open(DemoSource(picked));
-          final pages = await doc.pageInfo();
-          setState(() {
-            _doc = doc;
-            _pages = pages;
-            status = '${doc.pageCount} pages, v${doc.version}';
-          });
-        }));
+        unawaited(
+          runFlow('Opening', () async {
+            final old = _doc;
+            _doc = null;
+            if (old != null) await old.dispose();
+            final doc = await _pdf.open(PdfInput(DemoSource(picked)));
+            final pages = await doc.pageInfo();
+            setState(() {
+              _doc = doc;
+              _pages = pages;
+              status = '${doc.pageCount} pages, v${doc.version}';
+            });
+          }),
+        );
       });
 
   /// The text of the pages named, as the engine wrote it: the library
   /// writes text to a sink, so the example takes it from a MemorySink.
   Future<String> _extract(
-    PdfDoc doc, {
-    PdfPages? pages,
+    PdfDocument doc, {
+    PdfPages pages = const PdfPages.all(),
     PdfExtractionFormat format = PdfExtractionFormat.auto,
-  }) async {
-    final sink = MemorySink();
-    await doc.extractText(sink, pages: pages, format: format);
-    return sink.takeString();
-  }
+  }) =>
+      doc.text(pages: pages, format: format);
 
   @override
   Widget build(BuildContext context) {
     super.build(context);
     final doc = _doc;
-    return Column(children: [
-      statusBar(),
-      Expanded(
-        child: doc == null
-            ? _EmptyState(
-                icon: Icons.description,
-                text: 'Open a PDF to query it',
-                onPick: loading ? null : _open)
-            : ListView(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                children: [
-                  Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
+    return Column(
+      children: [
+        statusBar(),
+        Expanded(
+          child: doc == null
+              ? _EmptyState(
+                  icon: Icons.description,
+                  text: 'Open a PDF to query it',
+                  onPick: loading ? null : _open,
+                )
+              : ListView(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                  children: [
+                    Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Row(children: [
-                              Icon(Icons.picture_as_pdf,
+                            Row(
+                              children: [
+                                Icon(
+                                  Icons.picture_as_pdf,
                                   color: Theme.of(context).colorScheme.primary,
-                                  size: 28),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
+                                  size: 28,
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
                                       Text(
-                                          '${doc.pageCount} pages  •  '
-                                          '${fmtSize(bytes!.length)}  •  '
-                                          'v${doc.version}',
-                                          style: const TextStyle(fontSize: 13)),
+                                        '${doc.pageCount} pages  •  '
+                                        '${fmtSize(bytes!.length)}  •  '
+                                        'v${doc.version}',
+                                        style: const TextStyle(fontSize: 13),
+                                      ),
                                       if (doc.metadata.title != null)
-                                        Text('Title: ${doc.metadata.title}',
-                                            style:
-                                                const TextStyle(fontSize: 12)),
+                                        Text(
+                                          'Title: ${doc.metadata.title}',
+                                          style: const TextStyle(fontSize: 12),
+                                        ),
                                       if (doc.metadata.author != null)
-                                        Text('Author: ${doc.metadata.author}',
-                                            style:
-                                                const TextStyle(fontSize: 12)),
-                                    ]),
-                              ),
-                              IconButton.filledTonal(
+                                        Text(
+                                          'Author: ${doc.metadata.author}',
+                                          style: const TextStyle(fontSize: 12),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                                IconButton.filledTonal(
                                   onPressed: _open,
-                                  icon: const Icon(Icons.swap_horiz, size: 20)),
-                            ]),
+                                  icon: const Icon(Icons.swap_horiz, size: 20),
+                                ),
+                              ],
+                            ),
                             const SizedBox(height: 8),
-                            Wrap(spacing: 6, runSpacing: 4, children: [
-                              if (doc.encryption != null)
-                                _chip(context, 'Encrypted', warn: true),
-                              if (doc.isTagged) _chip(context, 'Tagged'),
-                              if (doc.metadata.subject != null)
-                                _chip(context, doc.metadata.subject!),
-                              if (doc.metadata.keywords != null)
-                                _chip(context, doc.metadata.keywords!),
-                            ]),
-                          ]),
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 4,
+                              children: [
+                                if (doc.encryption != null)
+                                  _chip(context, 'Encrypted', warn: true),
+                                if (doc.isTagged) _chip(context, 'Tagged'),
+                                if (doc.metadata.subject != null)
+                                  _chip(context, doc.metadata.subject!),
+                                if (doc.metadata.keywords != null)
+                                  _chip(context, doc.metadata.keywords!),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
-                  ),
-                  _Section('Page Dimensions'),
-                  ...List.generate(
+                    _Section('Page Dimensions'),
+                    ...List.generate(
                       doc.pageCount.clamp(0, 20),
                       (i) => Padding(
-                            padding: const EdgeInsets.symmetric(
-                                vertical: 2, horizontal: 12),
-                            child: Text(
-                                'Page ${i + 1}: '
-                                '${_pages[i].effectiveWidth.toStringAsFixed(0)} × '
-                                '${_pages[i].effectiveHeight.toStringAsFixed(0)} pt'
-                                '${_pages[i].rotation != PdfRotation.r0 ? '  (${_pages[i].rotation.name})' : ''}',
-                                style: const TextStyle(fontSize: 13)),
-                          )),
-                  if (doc.pageCount > 20)
-                    Text('+ ${doc.pageCount - 20} more',
-                        style: const TextStyle(fontSize: 12)),
-                  _Section('Text Extraction'),
-                  _Op(
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 2,
+                          horizontal: 12,
+                        ),
+                        child: Text(
+                          'Page ${i + 1}: '
+                          '${_pages[i].effectiveWidth.toStringAsFixed(0)} × '
+                          '${_pages[i].effectiveHeight.toStringAsFixed(0)} pt'
+                          '${_pages[i].rotation != PdfRotation.r0 ? '  (${_pages[i].rotation.name})' : ''}',
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                      ),
+                    ),
+                    if (doc.pageCount > 20)
+                      Text(
+                        '+ ${doc.pageCount - 20} more',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    _Section('Text Extraction'),
+                    _Op(
                       icon: Icons.text_snippet,
                       title: 'Extract all (plain text)',
                       loading: loading,
                       onRun: () => runFlow('Extract', () async {
-                            final t = await _extract(doc);
-                            if (!context.mounted) return;
-                            showTextSheet(
-                                context, 'Plain Text (${t.length} chars)', t);
-                            setState(() => status = '${t.length} chars');
-                          })),
-                  _Op(
+                        final t = await _extract(doc);
+                        if (!context.mounted) return;
+                        showTextSheet(
+                          context,
+                          'Plain Text (${t.length} chars)',
+                          t,
+                        );
+                        setState(() => status = '${t.length} chars');
+                      }),
+                    ),
+                    _Op(
                       icon: Icons.text_snippet_outlined,
                       title: 'Extract page 1 only',
                       loading: loading,
                       onRun: () => runFlow('Extract p1', () async {
-                            final t = await _extract(doc,
-                                pages: const PdfPages.single(0));
-                            if (!context.mounted) return;
-                            showTextSheet(context, 'Page 1', t);
-                            setState(
-                                () => status = 'Page 1: ${t.length} chars');
-                          })),
-                  _Op(
+                        final t = await _extract(
+                          doc,
+                          pages: const PdfPages.single(0),
+                        );
+                        if (!context.mounted) return;
+                        showTextSheet(context, 'Page 1', t);
+                        setState(() => status = 'Page 1: ${t.length} chars');
+                      }),
+                    ),
+                    _Op(
                       icon: Icons.code,
                       title: 'Extract as Markdown',
                       loading: loading,
                       onRun: () => runFlow('Markdown', () async {
-                            final t = await _extract(doc,
-                                pages: const PdfPages.all(),
-                                format: PdfExtractionFormat.markdown);
-                            if (!context.mounted) return;
-                            showTextSheet(context, 'Markdown', t);
-                            setState(() => status = 'MD: ${t.length} chars');
-                          })),
-                  _Op(
+                        final t = await _extract(
+                          doc,
+                          pages: const PdfPages.all(),
+                          format: PdfExtractionFormat.markdown,
+                        );
+                        if (!context.mounted) return;
+                        showTextSheet(context, 'Markdown', t);
+                        setState(() => status = 'MD: ${t.length} chars');
+                      }),
+                    ),
+                    _Op(
                       icon: Icons.html,
                       title: 'Extract as HTML (page 1)',
                       loading: loading,
                       onRun: () => runFlow('HTML', () async {
-                            final t = await _extract(doc,
-                                pages: const PdfPages.single(0),
-                                format: PdfExtractionFormat.html);
-                            if (!context.mounted) return;
-                            showTextSheet(context, 'HTML', t);
-                            setState(() => status = 'HTML: ${t.length} chars');
-                          })),
-                  _Section('Search'),
-                  _Op(
+                        final t = await _extract(
+                          doc,
+                          pages: const PdfPages.single(0),
+                          format: PdfExtractionFormat.html,
+                        );
+                        if (!context.mounted) return;
+                        showTextSheet(context, 'HTML', t);
+                        setState(() => status = 'HTML: ${t.length} chars');
+                      }),
+                    ),
+                    _Section('Search'),
+                    _Op(
                       icon: Icons.search,
                       title: 'Search "the" on page 1',
                       loading: loading,
                       onRun: () => runTask(
-                          'Search p1',
-                          () => doc.search('the',
-                              pages: const PdfPages.single(0)),
-                          done: (r) => '${r.length} hits on page 1')),
-                  _Op(
+                        'Search p1',
+                        () =>
+                            doc.search('the', pages: const PdfPages.single(0)),
+                        done: (r) => '${r.length} hits on page 1',
+                      ),
+                    ),
+                    _Op(
                       icon: Icons.manage_search,
                       title: 'Search "the" all pages',
                       loading: loading,
-                      onRun: () => runTask('Search all',
-                          () => doc.search('the', pages: const PdfPages.all()),
-                          done: (r) => '${r.length} hits total')),
-                  _Section('Render & Images'),
-                  _Op(
+                      onRun: () => runTask(
+                        'Search all',
+                        () => doc.search('the', pages: const PdfPages.all()),
+                        done: (r) => '${r.length} hits total',
+                      ),
+                    ),
+                    _Section('Render & Images'),
+                    _Op(
                       icon: Icons.image,
                       title: 'Render page 1 to image',
                       loading: loading,
                       onRun: () => runFlow('Render', () async {
-                            final sink = DemoSink();
-                            final pages = await doc.render((page) => sink,
-                                pages: const PdfPages.single(0));
-                            setState(() => status = pages.isEmpty
-                                ? 'No pages rendered'
-                                : 'Rendered ${pages.first.width}×'
-                                    '${pages.first.height} '
-                                    '(${fmtSize(sink.length)})');
-                          })),
-                  _Op(
+                        final sink = DemoSink();
+                        final pages = await doc.render(
+                          (page) => sink,
+                          pages: const PdfPages.single(0),
+                        );
+                        setState(
+                          () => status = pages.isEmpty
+                              ? 'No pages rendered'
+                              : 'Rendered ${pages.first.width}×'
+                                  '${pages.first.height} '
+                                  '(${fmtSize(sink.length)})',
+                        );
+                      }),
+                    ),
+                    _Op(
                       icon: Icons.photo_library,
                       title: 'Extract images from page 1',
                       loading: loading,
                       onRun: () => runFlow('Images', () async {
-                            final images = await doc.extractImages(
-                                (image) => MemorySink(),
-                                pages: const PdfPages.single(0));
-                            setState(() =>
-                                status = '${images.length} image(s) on page 1');
-                          })),
-                  _Section('Signatures'),
-                  _Op(
+                        final images = await doc.extractImages(
+                          (image) => MemorySink(),
+                          pages: const PdfPages.single(0),
+                        );
+                        setState(
+                          () => status = '${images.length} image(s) on page 1',
+                        );
+                      }),
+                    ),
+                    _Section('Signatures'),
+                    _Op(
                       icon: Icons.draw,
                       title: 'List signatures',
                       loading: loading,
-                      onRun: () => runTask('Signatures', () => doc.signatures(),
-                          done: (sigs) => '${sigs.length} signature(s)')),
-                  _Op(
+                      onRun: () => runTask(
+                        'Signatures',
+                        () => doc.signatures(),
+                        done: (sigs) => '${sigs.length} signature(s)',
+                      ),
+                    ),
+                    _Op(
                       icon: Icons.verified_user,
                       title: 'Verify signatures',
                       loading: loading,
                       onRun: () => runTask(
-                          'Verify', () => doc.verifySignatures(),
-                          done: (ok) => ok ? 'Valid ✓' : 'Invalid or none ✗')),
-                  _Section('Validation'),
-                  _Op(
+                        'Verify',
+                        () => doc.verifySignatures(),
+                        done: (ok) => ok ? 'Valid ✓' : 'Invalid or none ✗',
+                      ),
+                    ),
+                    _Section('Validation'),
+                    _Op(
                       icon: Icons.verified,
                       title: 'Validate PDF/A',
                       loading: loading,
-                      onRun: () => runTask('PDF/A', () => doc.validatePdfA(),
-                          done: (r) =>
-                              '${r.compliant ? "Compliant ✓" : "Not compliant"} '
-                              '(${r.errors}e ${r.warnings}w)')),
-                  _Op(
+                      onRun: () => runTask(
+                        'PDF/A',
+                        () => doc.validatePdfA(),
+                        done: (r) =>
+                            '${r.isCompliant ? "Compliant ✓" : "Not compliant"} '
+                            '(${r.errorCount}e ${r.warningCount}w)',
+                      ),
+                    ),
+                    _Op(
                       icon: Icons.accessibility,
                       title: 'Validate PDF/UA',
                       loading: loading,
-                      onRun: () => runTask('PDF/UA', () => doc.validatePdfUa(),
-                          done: (r) => r.compliant
-                              ? 'Accessible ✓'
-                              : 'Not accessible ✗')),
-                  _Section('Classification'),
-                  _Op(
+                      onRun: () => runTask(
+                        'PDF/UA',
+                        () => doc.validatePdfUa(),
+                        done: (r) =>
+                            r.isCompliant ? 'Accessible ✓' : 'Not accessible ✗',
+                      ),
+                    ),
+                    _Section('Classification'),
+                    _Op(
                       icon: Icons.category,
                       title: 'Classify page 1',
                       loading: loading,
                       onRun: () => runTask(
-                          'Classify page',
-                          () => doc.classifyPages(
-                              pages: const PdfPages.single(0)),
-                          done: (r) => r.isEmpty
-                              ? 'No page'
-                              : 'Page 1: ${r.first.type.wire}')),
-                  _Op(
+                        'Classify page',
+                        () =>
+                            doc.classifyPages(pages: const PdfPages.single(0)),
+                        done: (r) => r.isEmpty
+                            ? 'No page'
+                            : 'Page 1: ${r.first.kind.wire}',
+                      ),
+                    ),
+                    _Op(
                       icon: Icons.analytics,
                       title: 'Classify document',
                       loading: loading,
                       onRun: () => runTask(
-                          'Classify doc', () => doc.classifyDocument(),
-                          done: (r) => 'Document: ${r.wire}')),
-                  _Section('Bookmarks'),
-                  _Op(
+                        'Classify doc',
+                        () => doc.classifyDocument(),
+                        done: (r) => 'Document: ${r.wire}',
+                      ),
+                    ),
+                    _Section('Bookmarks'),
+                    _Op(
                       icon: Icons.bookmark,
                       title: 'Plan split by bookmarks',
                       loading: loading,
                       onRun: () => runFlow('Bookmarks', () async {
-                            try {
-                              final s = await doc.bookmarkRanges();
-                              setState(() => status = '${s.length} segments: '
-                                  '${s.map((x) => x.title ?? '?').join(', ')}');
-                            } catch (_) {
-                              setState(() => status = 'No bookmarks');
-                            }
-                          })),
-                  const SizedBox(height: 40),
-                ],
-              ),
-      ),
-    ]);
+                        try {
+                          final s = await doc.bookmarkRanges();
+                          setState(
+                            () => status = '${s.length} segments: '
+                                '${s.map((x) => x.title ?? '?').join(', ')}',
+                          );
+                        } catch (_) {
+                          setState(() => status = 'No bookmarks');
+                        }
+                      }),
+                    ),
+                    const SizedBox(height: 40),
+                  ],
+                ),
+        ),
+      ],
+    );
   }
 
   Widget _chip(BuildContext context, String text, {bool warn = false}) {
@@ -1302,17 +1494,21 @@ class _DocTabState extends State<_DocTab>
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-          color: warn ? cs.errorContainer : cs.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(12)),
-      child: Text(text,
-          style: TextStyle(
-              fontSize: 11,
-              color: warn ? cs.onErrorContainer : cs.onSurfaceVariant)),
+        color: warn ? cs.errorContainer : cs.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 11,
+          color: warn ? cs.onErrorContainer : cs.onSurfaceVariant,
+        ),
+      ),
     );
   }
 }
 
-// ─── Tab 3: PdfSugar — one-shot convenience ops ───────────────────
+// ─── Tab 3: one-shot doors over several documents ───────────────────
 
 class _SugarTab extends StatefulWidget {
   const _SugarTab();
@@ -1334,14 +1530,18 @@ class _SugarTabState extends State<_SugarTab>
   }
 
   void _pickFile() => unawaited(
-      pick((p) => setState(() => status = 'Loaded (${fmtSize(p.length)})')));
+        pick((p) => setState(() => status = 'Loaded (${fmtSize(p.length)})')),
+      );
 
   /// One-shot op into a sink, then offer to save the result.
   ///
   /// This tab uses the shipped MemorySink (from the package) rather than
   /// the example's own DemoSink — the quick path, no plumbing to write.
-  Future<void> _opToFile(String label, String filename,
-      PdfTask<void> Function(MemorySink sink) start) async {
+  Future<void> _opToFile(
+    String label,
+    String filename,
+    PdfTask<void> Function(MemorySink sink) start,
+  ) async {
     final sink = MemorySink();
     if (await runTask(label, () => start(sink))) {
       await saveResult(sink.takeBytes(), filename);
@@ -1351,318 +1551,425 @@ class _SugarTabState extends State<_SugarTab>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return Column(children: [
-      statusBar(),
-      Expanded(
-        child: bytes == null
-            ? _EmptyState(
-                icon: Icons.auto_fix_high,
-                text: 'Pick a PDF for one-shot ops',
-                onPick: _pickFile)
-            : ListView(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                children: [
-                  fileCard(context, _pickFile),
-                  _Section('Structural'),
-                  _Op(
+    return Column(
+      children: [
+        statusBar(),
+        Expanded(
+          child: bytes == null
+              ? _EmptyState(
+                  icon: Icons.auto_fix_high,
+                  text: 'Pick a PDF for one-shot ops',
+                  onPick: _pickFile,
+                )
+              : ListView(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                  children: [
+                    fileCard(context, _pickFile),
+                    _Section('Structural'),
+                    _Op(
                       icon: Icons.content_cut,
                       title: 'Split every 2 pages',
                       loading: loading,
                       onRun: () => runFlow('Split', () async {
-                            final sinks = <DemoSink>[];
-                            await _pdf.split(src, (part) {
-                              final s = DemoSink();
-                              sinks.add(s);
-                              return s;
-                            }, by: const PdfSplitRule.every(2));
-                            setState(() => status = '${sinks.length} chunks: '
-                                '${sinks.map((s) => fmtSize(s.length)).join(', ')}');
-                          })),
-                  _Op(
+                        final sinks = <DemoSink>[];
+                        await _pdf.split(PdfInput(src), (part) {
+                          final s = DemoSink();
+                          sinks.add(s);
+                          return s;
+                        }, by: const PdfSplitRule.every(2));
+                        setState(
+                          () => status = '${sinks.length} chunks: '
+                              '${sinks.map((s) => fmtSize(s.length)).join(', ')}',
+                        );
+                      }),
+                    ),
+                    _Op(
                       icon: Icons.straighten,
                       title: 'Split by size (500 KB)',
                       loading: loading,
                       onRun: () => runFlow('SplitBySize', () async {
-                            final sinks = <DemoSink>[];
-                            await _pdf.split(src, (part) {
-                              final s = DemoSink();
-                              sinks.add(s);
-                              return s;
-                            }, by: const PdfSplitRule.maxBytes(500000));
-                            setState(() => status = '${sinks.length} chunks: '
-                                '${sinks.map((s) => fmtSize(s.length)).join(', ')}');
-                          })),
-                  _Op(
+                        final sinks = <DemoSink>[];
+                        await _pdf.split(PdfInput(src), (part) {
+                          final s = DemoSink();
+                          sinks.add(s);
+                          return s;
+                        }, by: const PdfSplitRule.maxBytes(500000));
+                        setState(
+                          () => status = '${sinks.length} chunks: '
+                              '${sinks.map((s) => fmtSize(s.length)).join(', ')}',
+                        );
+                      }),
+                    ),
+                    _Op(
                       icon: Icons.call_split,
                       title: 'Split by bookmarks',
                       loading: loading,
                       onRun: () => runFlow('SplitBookmarks', () async {
-                            try {
-                              final sinks = <DemoSink>[];
-                              await _pdf.split(src, (part) {
-                                final s = DemoSink();
-                                sinks.add(s);
-                                return s;
-                              }, by: const PdfSplitRule.bookmarks());
-                              setState(() => status = '${sinks.length} parts');
-                            } catch (_) {
-                              setState(() => status = 'No bookmarks');
-                            }
-                          })),
-                  _Op(
+                        try {
+                          final sinks = <DemoSink>[];
+                          await _pdf.split(PdfInput(src), (part) {
+                            final s = DemoSink();
+                            sinks.add(s);
+                            return s;
+                          }, by: const PdfSplitRule.bookmarks());
+                          setState(() => status = '${sinks.length} parts');
+                        } catch (_) {
+                          setState(() => status = 'No bookmarks');
+                        }
+                      }),
+                    ),
+                    _Op(
                       icon: Icons.file_copy_outlined,
                       title: 'Keep pages 0–1',
                       loading: loading,
-                      onRun: () => _opToFile('Keep', 'extracted.pdf',
-                          (sink) => _pdf.edits(src, sink).keepPages([0, 1]))),
-                  _Op(
+                      onRun: () => _opToFile(
+                        'Keep',
+                        'extracted.pdf',
+                        (sink) => _pdf
+                            .editOnce(PdfInput(src), sink)
+                            .keepPages(PdfPages.list([0, 1])),
+                      ),
+                    ),
+                    _Op(
                       icon: Icons.delete_outline,
                       title: 'Delete page 0',
                       loading: loading,
                       onRun: () => _opToFile(
-                          'Delete',
-                          'deleted.pdf',
-                          (sink) => _pdf
-                              .edits(src, sink)
-                              .deletePages(const PdfPages.single(0)))),
-                  _Op(
+                        'Delete',
+                        'deleted.pdf',
+                        (sink) => _pdf
+                            .editOnce(PdfInput(src), sink)
+                            .removePages(const PdfPages.single(0)),
+                      ),
+                    ),
+                    _Op(
                       icon: Icons.swap_vert,
                       title: 'Reverse page order',
                       loading: loading,
                       onRun: () => runFlow('Reverse', () async {
-                            final doc = await _pdf.open(src);
-                            final n = doc.pageCount;
-                            await doc.dispose();
-                            final sink = DemoSink();
-                            await _pdf
-                                .edits(src, sink)
-                                .keepPages(List.generate(n, (i) => n - 1 - i));
-                            await saveResult(sink.takeBytes(), 'reversed.pdf');
-                          })),
-                  _Op(
+                        final doc = await _pdf.open(PdfInput(src));
+                        final n = doc.pageCount;
+                        await doc.dispose();
+                        final sink = DemoSink();
+                        await _pdf.editOnce(PdfInput(src), sink).reorderPages(
+                              PdfPageOrder(List.generate(n, (i) => n - 1 - i)),
+                            );
+                        await saveResult(sink.takeBytes(), 'reversed.pdf');
+                      }),
+                    ),
+                    _Op(
                       icon: Icons.move_down,
                       title: 'Move page 0 → last',
                       loading: loading,
                       onRun: () => runFlow('Move', () async {
-                            final doc = await _pdf.open(src);
-                            final n = doc.pageCount;
-                            await doc.dispose();
-                            final sink = DemoSink();
-                            await _pdf
-                                .edits(src, sink)
-                                .movePage(from: 0, to: n - 1);
-                            await saveResult(sink.takeBytes(), 'moved.pdf');
-                          })),
-                  _Section('Rotation'),
-                  _Op(
+                        final doc = await _pdf.open(PdfInput(src));
+                        final n = doc.pageCount;
+                        await doc.dispose();
+                        final sink = DemoSink();
+                        await _pdf
+                            .editOnce(PdfInput(src), sink)
+                            .movePage(from: 0, to: n - 1);
+                        await saveResult(sink.takeBytes(), 'moved.pdf');
+                      }),
+                    ),
+                    _Section('Rotation'),
+                    _Op(
                       icon: Icons.rotate_right,
                       title: 'Rotate all 90°',
                       loading: loading,
                       onRun: () => _opToFile(
-                          'RotateAll',
-                          'rotated_all.pdf',
-                          (sink) => _pdf.edits(src, sink).rotatePages(
-                              const PdfPages.all(),
-                              by: PdfRotation.r90))),
-                  _Op(
+                        'RotateAll',
+                        'rotated_all.pdf',
+                        (sink) =>
+                            _pdf.editOnce(PdfInput(src), sink).rotatePages(
+                                  by: PdfRotation.r90,
+                                  pages: const PdfPages.all(),
+                                ),
+                      ),
+                    ),
+                    _Op(
                       icon: Icons.rotate_left,
                       title: 'Rotate page 0 → 180°',
                       loading: loading,
                       onRun: () => _opToFile(
-                          'RotatePage',
-                          'rotated_p0.pdf',
-                          (sink) => _pdf.edits(src, sink).rotatePages(
-                              const PdfPages.single(0),
-                              by: PdfRotation.r180))),
-                  _Section('Compression'),
-                  _Op(
+                        'RotatePage',
+                        'rotated_p0.pdf',
+                        (sink) =>
+                            _pdf.editOnce(PdfInput(src), sink).rotatePages(
+                                  by: PdfRotation.r180,
+                                  pages: const PdfPages.single(0),
+                                ),
+                      ),
+                    ),
+                    _Section('Compression'),
+                    _Op(
                       icon: Icons.compress,
                       title: 'Compress (quality 75)',
                       loading: loading,
                       onRun: () => runFlow('Compress', () async {
-                            final sink = DemoSink();
-                            await _pdf.compress(src, sink);
-                            final r = sink.takeBytes();
-                            final pct = ((1 - r.length / bytes!.length) * 100)
-                                .toStringAsFixed(1);
-                            setState(() => status =
-                                '${fmtSize(bytes!.length)} → ${fmtSize(r.length)} ($pct%)');
-                          })),
-                  _Section('Watermark'),
-                  _Op(
+                        final sink = DemoSink();
+                        await _pdf.compress(PdfInput(src), sink);
+                        final r = sink.takeBytes();
+                        final pct = ((1 - r.length / bytes!.length) * 100)
+                            .toStringAsFixed(1);
+                        setState(
+                          () => status =
+                              '${fmtSize(bytes!.length)} → ${fmtSize(r.length)} ($pct%)',
+                        );
+                      }),
+                    ),
+                    _Section('Watermark'),
+                    _Op(
                       icon: Icons.water_drop,
                       title: 'Center "DRAFT"',
                       loading: loading,
                       onRun: () => _opToFile(
-                          'Watermark',
-                          'watermarked.pdf',
-                          (sink) => _pdf.edits(src, sink).addWatermark('DRAFT',
-                              style: const PdfWatermarkStyle(opacity: 0.3)))),
-                  _Op(
+                        'Watermark',
+                        'watermarked.pdf',
+                        (sink) =>
+                            _pdf.editOnce(PdfInput(src), sink).addWatermark(
+                                  'DRAFT',
+                                  style: const PdfWatermarkStyle(opacity: 0.3),
+                                ),
+                      ),
+                    ),
+                    _Op(
                       icon: Icons.grid_4x4,
                       title: 'Tiled 3×4 "COPY"',
                       loading: loading,
                       onRun: () => _opToFile(
-                          'Tiled',
-                          'tiled.pdf',
-                          (sink) => _pdf.edits(src, sink).addWatermark('COPY',
-                              style: const PdfWatermarkStyle(
-                                  opacity: 0.15, fontSize: 24, rotation: 30),
-                              position: const PdfWatermarkPosition.tiled(
-                                  columns: 3, rows: 4)))),
-                  _Op(
+                        'Tiled',
+                        'tiled.pdf',
+                        (sink) =>
+                            _pdf.editOnce(PdfInput(src), sink).addWatermark(
+                                  'COPY',
+                                  style: const PdfWatermarkStyle(
+                                    opacity: 0.15,
+                                    fontSize: 24,
+                                    angleDegrees: 30,
+                                  ),
+                                  position: const PdfWatermarkPosition.tiled(
+                                    columns: 3,
+                                    rows: 4,
+                                  ),
+                                ),
+                      ),
+                    ),
+                    _Op(
                       icon: Icons.arrow_outward,
                       title: 'Corner top-right "SAMPLE"',
                       loading: loading,
                       onRun: () => _opToFile(
-                          'Corner',
-                          'corner.pdf',
-                          (sink) => _pdf.edits(src, sink).addWatermark('SAMPLE',
-                              style: const PdfWatermarkStyle(
-                                  opacity: 0.4, fontSize: 18, rotation: 0),
-                              position: const PdfWatermarkPosition.corner(
-                                  PdfCorner.topRight)))),
-                  _Op(
+                        'Corner',
+                        'corner.pdf',
+                        (sink) =>
+                            _pdf.editOnce(PdfInput(src), sink).addWatermark(
+                                  'SAMPLE',
+                                  style: const PdfWatermarkStyle(
+                                    opacity: 0.4,
+                                    fontSize: 18,
+                                    angleDegrees: 0,
+                                  ),
+                                  position: const PdfWatermarkPosition.corner(
+                                    PdfCorner.topRight,
+                                  ),
+                                ),
+                      ),
+                    ),
+                    _Op(
                       icon: Icons.layers,
                       title: 'Background layer',
                       loading: loading,
                       onRun: () => _opToFile(
-                          'Background',
-                          'bg_watermark.pdf',
-                          (sink) => _pdf.edits(src, sink).addWatermark(
-                              'BACKGROUND',
-                              style: const PdfWatermarkStyle(opacity: 0.2),
-                              layer: PdfWatermarkLayer.background))),
-                  _Section('Security'),
-                  _Op(
+                        'Background',
+                        'bg_watermark.pdf',
+                        (sink) =>
+                            _pdf.editOnce(PdfInput(src), sink).addWatermark(
+                                  'BACKGROUND',
+                                  style: const PdfWatermarkStyle(opacity: 0.2),
+                                  layer: PdfWatermarkLayer.background,
+                                ),
+                      ),
+                    ),
+                    _Section('Security'),
+                    _Op(
                       icon: Icons.lock,
                       title: 'Encrypt (pw: secret)',
                       loading: loading,
                       onRun: () => _opToFile(
-                          'Encrypt',
-                          'encrypted.pdf',
-                          (sink) => _pdf.resave(src, sink,
-                              options: const PdfSaveOptions.fullRewrite(
-                                  encryption: PdfEncryption.config(
-                                      ownerPassword: 'secret'))))),
-                  _Op(
+                        'Encrypt',
+                        'encrypted.pdf',
+                        (sink) => _pdf.resave(
+                          PdfInput(src),
+                          sink,
+                          save: const PdfSave.full(
+                            encryption: PdfEncryption.password(
+                              ownerPassword: 'secret',
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    _Op(
                       icon: Icons.lock_open,
                       title: 'Decrypt (pw: secret)',
                       loading: loading,
                       onRun: () => _opToFile(
-                          'Decrypt',
-                          'decrypted.pdf',
-                          (sink) => _pdf.resave(src, sink,
-                              password: 'secret',
-                              options: const PdfSaveOptions.fullRewrite(
-                                  encryption: PdfEncryption.remove())))),
-                  _Section('Forms & Annotations'),
-                  _Op(
+                        'Decrypt',
+                        'decrypted.pdf',
+                        (sink) => _pdf.resave(
+                          PdfInput(src, password: 'secret'),
+                          sink,
+                          save: const PdfSave.full(
+                            encryption: PdfEncryption.remove(),
+                          ),
+                        ),
+                      ),
+                    ),
+                    _Section('Forms & Annotations'),
+                    _Op(
                       icon: Icons.layers_clear,
                       title: 'Flatten forms',
                       loading: loading,
-                      onRun: () => _opToFile('Flatten', 'flattened.pdf',
-                          (sink) => _pdf.edits(src, sink).flattenForms())),
-                  _Op(
+                      onRun: () => _opToFile(
+                        'Flatten',
+                        'flattened.pdf',
+                        (sink) =>
+                            _pdf.editOnce(PdfInput(src), sink).flattenForms(),
+                      ),
+                    ),
+                    _Op(
                       icon: Icons.rule,
                       title: 'Apply redactions',
                       loading: loading,
                       onRun: () => _opToFile(
-                          'Redact',
-                          'redacted.pdf',
-                          (sink) => _pdf.rewrite(src, sink, (editor) async {
-                                await editor.applyRedactions();
-                              }))),
-                  _Section('Content'),
-                  _Op(
+                        'Redact',
+                        'redacted.pdf',
+                        (sink) =>
+                            _pdf.rewrite(PdfInput(src), sink, (editor) async {
+                          await editor.applyRedactions();
+                        }),
+                      ),
+                    ),
+                    _Section('Content'),
+                    _Op(
                       icon: Icons.attach_file,
                       title: 'Embed text file',
                       loading: loading,
                       onRun: () => _opToFile(
-                          'Embed',
-                          'embedded.pdf',
-                          (sink) => _pdf.edits(src, sink).embedFile(
-                              'readme.txt',
-                              DemoSource(Uint8List.fromList(
-                                  'Hello from pdf_manipulator!'.codeUnits))))),
-                  _Op(
+                        'Embed',
+                        'embedded.pdf',
+                        (sink) =>
+                            _pdf.editOnce(PdfInput(src), sink).addAttachment(
+                                  'readme.txt',
+                                  DemoSource(
+                                    Uint8List.fromList(
+                                      'Hello from pdf_manipulator!'.codeUnits,
+                                    ),
+                                  ),
+                                ),
+                      ),
+                    ),
+                    _Op(
                       icon: Icons.format_paint,
                       title: 'Erase region on page 0',
                       loading: loading,
                       onRun: () => _opToFile(
-                          'Erase',
-                          'erased.pdf',
-                          (sink) => _pdf.edits(src, sink).redact(
-                              0,
-                              [
-                                const PdfRect(
-                                    x: 50, y: 700, width: 200, height: 30)
-                              ],
-                              overlay: const PdfRedactionOverlay.none()))),
-                  _Section('Stamps'),
-                  _Op(
+                        'Erase',
+                        'erased.pdf',
+                        (sink) => _pdf.editOnce(PdfInput(src), sink).redact(
+                            0,
+                            [
+                              const PdfRect(
+                                  x: 50, y: 700, width: 200, height: 30),
+                            ],
+                            overlay: const PdfRedactionOverlay.none()),
+                      ),
+                    ),
+                    _Section('Stamps'),
+                    _Op(
                       icon: Icons.approval,
                       title: 'Approved stamp on page 0',
                       loading: loading,
                       onRun: () => _opToFile(
-                          'Stamp',
-                          'stamped.pdf',
-                          (sink) => _pdf.edits(src, sink).addStamp(
-                              const PdfPages.single(0),
-                              type: PdfStampType.approved,
-                              rect: const PdfRect(
-                                  x: 50, y: 50, width: 200, height: 60)))),
-                  _Op(
+                        'Stamp',
+                        'stamped.pdf',
+                        (sink) => _pdf.editOnce(PdfInput(src), sink).addStamp(
+                              PdfStamp.approved,
+                              bounds: const PdfRect(
+                                x: 50,
+                                y: 50,
+                                width: 200,
+                                height: 60,
+                              ),
+                              pages: const PdfPages.single(0),
+                            ),
+                      ),
+                    ),
+                    _Op(
                       icon: Icons.add_photo_alternate,
                       title: 'Image stamp (pick image)',
                       loading: loading,
                       onRun: () => runFlow('ImageStamp', () async {
-                            final imgs = await pickImageBytes();
-                            if (imgs == null || imgs.isEmpty) return;
-                            final sink = DemoSink();
-                            await _pdf.edits(src, sink).addImageStamp(
-                                const PdfPages.single(0),
-                                DemoSource(imgs.first.bytes),
-                                rect: const PdfRect(
-                                    x: 100, y: 100, width: 150, height: 150));
-                            await saveResult(
-                                sink.takeBytes(), 'image_stamped.pdf');
-                          })),
-                  _Section('Compliance'),
-                  _Op(
+                        final imgs = await pickImageBytes();
+                        if (imgs == null || imgs.isEmpty) return;
+                        final sink = DemoSink();
+                        await _pdf.editOnce(PdfInput(src), sink).addImageStamp(
+                              DemoSource(imgs.first.bytes),
+                              bounds: const PdfRect(
+                                x: 100,
+                                y: 100,
+                                width: 150,
+                                height: 150,
+                              ),
+                              pages: const PdfPages.single(0),
+                            );
+                        await saveResult(sink.takeBytes(), 'image_stamped.pdf');
+                      }),
+                    ),
+                    _Section('Compliance'),
+                    _Op(
                       icon: Icons.verified,
                       title: 'Convert to PDF/A',
                       loading: loading,
-                      onRun: () => _opToFile('PDF/A', 'pdfa.pdf',
-                          (sink) => _pdf.edits(src, sink).convertToPdfA())),
-                  _Section('Images → PDF'),
-                  _Op(
+                      onRun: () => _opToFile(
+                        'PDF/A',
+                        'pdfa.pdf',
+                        (sink) =>
+                            _pdf.editOnce(PdfInput(src), sink).convertToPdfA(),
+                      ),
+                    ),
+                    _Section('Images → PDF'),
+                    _Op(
                       icon: Icons.photo_library,
                       title: 'Images to PDF (pick images)',
                       loading: loading,
                       onRun: () => runFlow('ImgToPdf', () async {
-                            final imgs = await pickImageBytes();
-                            if (imgs == null || imgs.isEmpty) return;
-                            final sink = DemoSink();
-                            await _pdf.imagesToPdf(
-                                imgs
-                                    .map((i) =>
-                                        DemoSource(i.bytes) as DataSource)
-                                    .toList(),
-                                sink);
-                            await saveResult(
-                                sink.takeBytes(), 'from_images.pdf');
-                          })),
-                  const SizedBox(height: 40),
-                ],
-              ),
-      ),
-    ]);
+                        final imgs = await pickImageBytes();
+                        if (imgs == null || imgs.isEmpty) return;
+                        final sink = DemoSink();
+                        await _pdf.imagesToPdf(
+                          imgs
+                              .map((i) => DemoSource(i.bytes) as DataSource)
+                              .toList(),
+                          sink,
+                        );
+                        await saveResult(sink.takeBytes(), 'from_images.pdf');
+                      }),
+                    ),
+                    const SizedBox(height: 40),
+                  ],
+                ),
+        ),
+      ],
+    );
   }
 }
 
-// ─── Tab 4: PdfStandalone — source in, sink out, no handle ────────
+// ─── Tab 4: doors with no handle ────────
 
 class _StandaloneTab extends StatefulWidget {
   const _StandaloneTab();
@@ -1684,10 +1991,14 @@ class _StandaloneTabState extends State<_StandaloneTab>
   }
 
   void _pickFile() => unawaited(
-      pick((p) => setState(() => status = 'Loaded (${fmtSize(p.length)})')));
+        pick((p) => setState(() => status = 'Loaded (${fmtSize(p.length)})')),
+      );
 
-  Future<void> _opToFile(String label, String filename,
-      PdfTask<void> Function(DemoSink sink) start) async {
+  Future<void> _opToFile(
+    String label,
+    String filename,
+    PdfTask<void> Function(DemoSink sink) start,
+  ) async {
     final sink = DemoSink();
     if (await runTask(label, () => start(sink))) {
       await saveResult(sink.takeBytes(), filename);
@@ -1697,79 +2008,111 @@ class _StandaloneTabState extends State<_StandaloneTab>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return Column(children: [
-      statusBar(),
-      Expanded(
-        child: bytes == null
-            ? _EmptyState(
-                icon: Icons.output,
-                text: 'Source in → sink out, no handle',
-                onPick: _pickFile)
-            : ListView(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                children: [
-                  fileCard(context, _pickFile),
-                  _Section('Sign'),
-                  _Op(
+    return Column(
+      children: [
+        statusBar(),
+        Expanded(
+          child: bytes == null
+              ? _EmptyState(
+                  icon: Icons.output,
+                  text: 'Source in → sink out, no handle',
+                  onPick: _pickFile,
+                )
+              : ListView(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                  children: [
+                    fileCard(context, _pickFile),
+                    _Section('Sign'),
+                    _Op(
                       icon: Icons.verified_user_outlined,
                       title: 'Sign PDF (PEM cert)',
                       loading: loading,
                       onRun: () => _opToFile(
-                          'Sign',
-                          'signed.pdf',
-                          (sink) => _pdf.sign(src, sink,
-                              credentials: const PdfSigningCredentials.pem(
-                                  testCertPem, testKeyPem)))),
-                  _Section('Convert'),
-                  _Op(
+                        'Sign',
+                        'signed.pdf',
+                        (sink) => _pdf.sign(
+                          PdfInput(src),
+                          sink,
+                          credentials: const PdfSigningCredentials.pem(
+                            testCertPem,
+                            testKeyPem,
+                          ),
+                        ),
+                      ),
+                    ),
+                    _Section('Convert'),
+                    _Op(
                       icon: Icons.description,
                       title: 'PDF → DOCX',
                       loading: loading,
                       onRun: () => _opToFile(
-                          'DOCX',
-                          'converted.docx',
-                          (sink) => _pdf.convertTo(src, sink,
-                              format: PdfDocumentFormat.docx))),
-                  _Op(
+                        'DOCX',
+                        'converted.docx',
+                        (sink) => _pdf.convertToOffice(
+                          PdfInput(src),
+                          sink,
+                          format: PdfOfficeFormat.docx,
+                        ),
+                      ),
+                    ),
+                    _Op(
                       icon: Icons.slideshow,
                       title: 'PDF → PPTX',
                       loading: loading,
                       onRun: () => _opToFile(
-                          'PPTX',
-                          'converted.pptx',
-                          (sink) => _pdf.convertTo(src, sink,
-                              format: PdfDocumentFormat.pptx))),
-                  _Op(
+                        'PPTX',
+                        'converted.pptx',
+                        (sink) => _pdf.convertToOffice(
+                          PdfInput(src),
+                          sink,
+                          format: PdfOfficeFormat.pptx,
+                        ),
+                      ),
+                    ),
+                    _Op(
                       icon: Icons.table_chart,
                       title: 'PDF → XLSX',
                       loading: loading,
                       onRun: () => _opToFile(
-                          'XLSX',
-                          'converted.xlsx',
-                          (sink) => _pdf.convertTo(src, sink,
-                              format: PdfDocumentFormat.xlsx))),
-                  _Op(
+                        'XLSX',
+                        'converted.xlsx',
+                        (sink) => _pdf.convertToOffice(
+                          PdfInput(src),
+                          sink,
+                          format: PdfOfficeFormat.xlsx,
+                        ),
+                      ),
+                    ),
+                    _Op(
                       icon: Icons.picture_as_pdf,
                       title: 'DOCX → PDF (round-trip)',
                       subtitle: 'Converts to DOCX first, then back to PDF',
                       loading: loading,
                       onRun: () => runFlow('DOCX→PDF', () async {
-                            final docxSink = DemoSink();
-                            await _pdf.convertTo(src, docxSink,
-                                format: PdfDocumentFormat.docx);
-                            final pdfSink = DemoSink();
-                            await _pdf.convertToPdf(
-                                DemoSource(docxSink.takeBytes()), pdfSink,
-                                format: PdfDocumentFormat.docx);
-                            await saveResult(
-                                pdfSink.takeBytes(), 'roundtrip.pdf');
-                          })),
-                  const SizedBox(height: 40),
-                ],
-              ),
-      ),
-    ]);
+                        final docxSink = DemoSink();
+                        await _pdf.convertToOffice(
+                          PdfInput(src),
+                          docxSink,
+                          format: PdfOfficeFormat.docx,
+                        );
+                        final pdfSink = DemoSink();
+                        await _pdf.convertFromOffice(
+                          DemoSource(docxSink.takeBytes()),
+                          pdfSink,
+                          format: PdfOfficeFormat.docx,
+                        );
+                        await saveResult(pdfSink.takeBytes(), 'roundtrip.pdf');
+                      }),
+                    ),
+                    const SizedBox(height: 40),
+                  ],
+                ),
+        ),
+      ],
+    );
   }
 }
 
@@ -1796,7 +2139,8 @@ class _EditorTabState extends State<_EditorTab>
   }
 
   void _pickFile() => unawaited(
-      pick((p) => setState(() => status = 'Loaded (${fmtSize(p.length)})')));
+        pick((p) => setState(() => status = 'Loaded (${fmtSize(p.length)})')),
+      );
 
   /// Registers the bundled Noto Emoji face once — the instance keeps it,
   /// so repeat taps must not stack duplicate registrations.
@@ -1804,364 +2148,452 @@ class _EditorTabState extends State<_EditorTab>
     if (_emojiFontLoaded) return;
     final font = await loadEmojiFont();
     await _pdf.registerFallbackFont(
-        PdfFallbackFontKind.emoji, DemoSource(font.buffer.asUint8List()));
+      PdfFallbackFontKind.emoji,
+      DemoSource(font.buffer.asUint8List()),
+    );
     _emojiFontLoaded = true;
   }
 
   /// Opens an editor, runs [work], saves the produced bytes.
   Future<void> _edit(
-      String label, Future<Uint8List> Function(PdfEditor e) work) async {
+    String label,
+    Future<Uint8List> Function(PdfEditorHandle e) work,
+  ) async {
     await runFlow(label, () async {
-      final editor = await _pdf.edit(src);
+      final editor = await _pdf.edit(PdfInput(src));
       try {
         final result = await work(editor);
         await saveResult(
-            result, '${label.toLowerCase().replaceAll(' ', '_')}.pdf');
+          result,
+          '${label.toLowerCase().replaceAll(' ', '_')}.pdf',
+        );
       } finally {
         await editor.dispose();
       }
     });
   }
 
-  Future<Uint8List> _saveEditor(PdfEditor e,
-      [PdfSaveOptions options = const PdfSaveOptions.fullRewrite()]) async {
+  Future<Uint8List> _saveEditor(
+    PdfEditorHandle e, [
+    PdfSave save = const PdfSave.full(),
+  ]) async {
     final sink = DemoSink();
-    await e.save(sink, options: options);
+    await e.save(sink, save: save);
     return sink.takeBytes();
   }
 
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return Column(children: [
-      statusBar(),
-      Expanded(
-        child: bytes == null
-            ? _EmptyState(
-                icon: Icons.edit_document,
-                text: 'Parse once, mutate N times, save once',
-                onPick: _pickFile)
-            : ListView(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                children: [
-                  fileCard(context, _pickFile),
-                  _Section('Metadata'),
-                  _Op(
+    return Column(
+      children: [
+        statusBar(),
+        Expanded(
+          child: bytes == null
+              ? _EmptyState(
+                  icon: Icons.edit_document,
+                  text: 'Parse once, mutate N times, save once',
+                  onPick: _pickFile,
+                )
+              : ListView(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                  children: [
+                    fileCard(context, _pickFile),
+                    _Section('Metadata'),
+                    _Op(
                       icon: Icons.title,
                       title: 'Set title + author + subject + keywords',
                       loading: loading,
                       onRun: () => _edit('Metadata', (e) async {
-                            await e.setMetadata(
-                              const PdfMetadata(
-                                title: 'Example',
-                                author: 'pdf_manipulator',
-                                subject: 'Demo',
-                                keywords: 'test, dart, pdf',
-                              ),
-                            );
-                            return _saveEditor(e);
-                          })),
-                  _Op(
+                        await e.setMetadata(
+                          const PdfMetadata(
+                            title: 'Example',
+                            author: 'pdf_manipulator',
+                            subject: 'Demo',
+                            keywords: 'test, dart, pdf',
+                          ),
+                        );
+                        return _saveEditor(e);
+                      }),
+                    ),
+                    _Op(
                       icon: Icons.cleaning_services,
                       title: 'Scrub metadata',
                       loading: loading,
                       onRun: () => _edit('Scrub', (e) async {
-                            await e.scrubMetadata();
-                            return _saveEditor(e);
-                          })),
-                  _Section('Page Operations'),
-                  _Op(
+                        await e.sanitize(
+                          stripMetadata: true,
+                          stripJavaScript: false,
+                        );
+                        return _saveEditor(e);
+                      }),
+                    ),
+                    _Section('Page Operations'),
+                    _Op(
                       icon: Icons.rotate_right,
                       title: 'Rotate page 0 → 90°',
                       loading: loading,
                       onRun: () => _edit('Rotate', (e) async {
-                            await e.rotatePages(PdfPages.single(0),
-                                by: PdfRotation.r90);
-                            return _saveEditor(e);
-                          })),
-                  _Op(
+                        await e.rotatePages(
+                          by: PdfRotation.r90,
+                          pages: PdfPages.single(0),
+                        );
+                        return _saveEditor(e);
+                      }),
+                    ),
+                    _Op(
                       icon: Icons.rotate_right,
                       title: 'Rotate all → 90°',
                       loading: loading,
                       onRun: () => _edit('RotateAll', (e) async {
-                            await e.rotatePages(const PdfPages.all(),
-                                by: PdfRotation.r90);
-                            return _saveEditor(e);
-                          })),
-                  _Op(
+                        await e.rotatePages(
+                          by: PdfRotation.r90,
+                          pages: const PdfPages.all(),
+                        );
+                        return _saveEditor(e);
+                      }),
+                    ),
+                    _Op(
                       icon: Icons.delete_outline,
                       title: 'Delete last page',
                       loading: loading,
                       onRun: () => _edit('Delete', (e) async {
-                            final n = await e.pageCount();
-                            if (n > 1) {
-                              await e.deletePages(PdfPages.single(n - 1));
-                            }
-                            return _saveEditor(e);
-                          })),
-                  _Op(
+                        final n = await e.pageCount();
+                        if (n > 1) {
+                          await e.removePages(PdfPages.single(n - 1));
+                        }
+                        return _saveEditor(e);
+                      }),
+                    ),
+                    _Op(
                       icon: Icons.move_down,
                       title: 'Move page 0 → 1',
                       loading: loading,
                       onRun: () => _edit('Move', (e) async {
-                            if (await e.pageCount() >= 2) {
-                              await e.movePage(from: 0, to: 1);
-                            }
-                            return _saveEditor(e);
-                          })),
-                  _Op(
+                        if (await e.pageCount() >= 2) {
+                          await e.movePage(from: 0, to: 1);
+                        }
+                        return _saveEditor(e);
+                      }),
+                    ),
+                    _Op(
                       icon: Icons.filter_list,
                       title: 'Select pages 0,1 only',
                       loading: loading,
                       onRun: () => _edit('Select', (e) async {
-                            await e.keepPages([0, 1]);
-                            return _saveEditor(e);
-                          })),
-                  _Op(
+                        await e.keepPages(PdfPages.list([0, 1]));
+                        return _saveEditor(e);
+                      }),
+                    ),
+                    _Op(
                       icon: Icons.straighten,
                       title: 'Get page 0 media box',
                       loading: loading,
                       onRun: () => _edit('MediaBox', (e) async {
-                            final r =
-                                (await e.pageInfo(pages: PdfPages.single(0)))
-                                    .single
-                                    .mediaBox;
-                            setState(() => status =
-                                'Page 0: ${r.width.toStringAsFixed(0)}×'
-                                    '${r.height.toStringAsFixed(0)} at '
-                                    '(${r.x.toStringAsFixed(0)},${r.y.toStringAsFixed(0)})');
-                            return _saveEditor(e);
-                          })),
-                  _Section('Merge'),
-                  _Op(
+                        final r = (await e.pageInfo(
+                          pages: PdfPages.single(0),
+                        ))
+                            .single
+                            .mediaBox;
+                        setState(
+                          () => status = 'Page 0: ${r.width.toStringAsFixed(0)}×'
+                              '${r.height.toStringAsFixed(0)} at '
+                              '(${r.x.toStringAsFixed(0)},${r.y.toStringAsFixed(0)})',
+                        );
+                        return _saveEditor(e);
+                      }),
+                    ),
+                    _Section('Merge'),
+                    _Op(
                       icon: Icons.merge,
                       title: 'Merge with self',
                       loading: loading,
                       onRun: () => _edit('Merge', (e) async {
-                            await e.mergeFrom(DemoSource(bytes!));
-                            return _saveEditor(e);
-                          })),
-                  _Section('Optimization'),
-                  _Op(
+                        await e.appendPages(PdfInput(DemoSource(bytes!)));
+                        return _saveEditor(e);
+                      }),
+                    ),
+                    _Section('Optimization'),
+                    _Op(
                       icon: Icons.photo_size_select_small,
                       title: 'Reduce images (screen preset)',
                       loading: loading,
                       onRun: () => _edit('ReduceImg', (e) async {
-                            final report =
-                                await e.reduceImages(PdfImagePolicy.screen);
-                            setState(() => status = 'Reduced ${report.changed} of '
-                                '${report.images.length} images: '
-                                '${report.bytesBefore} → ${report.bytesAfter} bytes');
-                            return _saveEditor(
-                                e,
-                                const PdfSaveOptions.fullRewrite(
-                                    deflate: true, garbageCollect: true));
-                          })),
-                  _Op(
+                        final report = await e.reduceImages(
+                          PdfImagePolicy.screen,
+                        );
+                        setState(
+                          () => status = 'Reduced ${report.changed} of '
+                              '${report.images.length} images: '
+                              '${report.bytesBefore} → ${report.bytesAfter} bytes',
+                        );
+                        return _saveEditor(
+                          e,
+                          const PdfSave.full(
+                            deflate: PdfDeflate.balanced,
+                            garbageCollect: true,
+                          ),
+                        );
+                      }),
+                    ),
+                    _Op(
                       icon: Icons.font_download_off,
                       title: 'Unembed standard fonts',
                       loading: loading,
                       onRun: () => _edit('UnembedFonts', (e) async {
-                            final n = await e.unembedStandardFonts();
-                            setState(() => status = 'Unembedded $n fonts');
-                            return _saveEditor(e);
-                          })),
-                  _Section('Watermark & Stamps'),
-                  _Op(
+                        final n = await e.unembedStandardFonts();
+                        setState(() => status = 'Unembedded $n fonts');
+                        return _saveEditor(e);
+                      }),
+                    ),
+                    _Section('Watermark & Stamps'),
+                    _Op(
                       icon: Icons.water_drop,
                       title: 'Watermark all pages "SAMPLE"',
                       loading: loading,
                       onRun: () => _edit('Watermark', (e) async {
-                            await e.addWatermark('SAMPLE',
-                                style: const PdfWatermarkStyle(opacity: 0.25));
-                            return _saveEditor(e);
-                          })),
-                  _Op(
+                        await e.addWatermark(
+                          'SAMPLE',
+                          style: const PdfWatermarkStyle(opacity: 0.25),
+                        );
+                        return _saveEditor(e);
+                      }),
+                    ),
+                    _Op(
                       icon: Icons.approval,
                       title: 'Add stamp on page 0',
                       loading: loading,
                       onRun: () => _edit('Stamp', (e) async {
-                            await e.addStamp(PdfPages.single(0),
-                                type: PdfStampType.draft,
-                                rect: const PdfRect(
-                                    x: 50, y: 50, width: 200, height: 60));
-                            return _saveEditor(e);
-                          })),
-                  _Op(
+                        await e.addStamp(
+                          PdfStamp.draft,
+                          bounds: const PdfRect(
+                            x: 50,
+                            y: 50,
+                            width: 200,
+                            height: 60,
+                          ),
+                          pages: PdfPages.single(0),
+                        );
+                        return _saveEditor(e);
+                      }),
+                    ),
+                    _Op(
                       icon: Icons.add_photo_alternate,
                       title: 'Add image stamp (pick)',
                       loading: loading,
                       onRun: () => _edit('ImgStamp', (e) async {
-                            final imgs = await pickImageBytes();
-                            if (imgs == null || imgs.isEmpty) {
-                              return _saveEditor(e);
-                            }
-                            await e.addImageStamp(PdfPages.single(0),
-                                DemoSource(imgs.first.bytes),
-                                rect: const PdfRect(
-                                    x: 100, y: 100, width: 150, height: 150));
-                            return _saveEditor(e);
-                          })),
-                  _Section('Content'),
-                  _Op(
+                        final imgs = await pickImageBytes();
+                        if (imgs == null || imgs.isEmpty) {
+                          return _saveEditor(e);
+                        }
+                        await e.addImageStamp(
+                          DemoSource(imgs.first.bytes),
+                          bounds: const PdfRect(
+                            x: 100,
+                            y: 100,
+                            width: 150,
+                            height: 150,
+                          ),
+                          pages: PdfPages.single(0),
+                        );
+                        return _saveEditor(e);
+                      }),
+                    ),
+                    _Section('Content'),
+                    _Op(
                       icon: Icons.attach_file,
                       title: 'Embed file',
                       loading: loading,
                       onRun: () => _edit('Embed', (e) async {
-                            await e.embedFile(
-                                'note.txt',
-                                DemoSource(
-                                    Uint8List.fromList('Hello!'.codeUnits)));
-                            return _saveEditor(e);
-                          })),
-                  _Op(
+                        await e.addAttachment(
+                          'note.txt',
+                          DemoSource(Uint8List.fromList('Hello!'.codeUnits)),
+                        );
+                        return _saveEditor(e);
+                      }),
+                    ),
+                    _Op(
                       icon: Icons.format_paint,
                       title: 'Erase region on page 0',
                       loading: loading,
                       onRun: () => _edit('Erase', (e) async {
-                            await e.redact(
-                                0,
-                                [
-                                  const PdfRect(
-                                      x: 50, y: 700, width: 200, height: 30)
-                                ],
-                                overlay: const PdfRedactionOverlay.none());
-                            return _saveEditor(e);
-                          })),
-                  _Op(
+                        await e.redact(
+                            0,
+                            [
+                              const PdfRect(
+                                  x: 50, y: 700, width: 200, height: 30),
+                            ],
+                            overlay: const PdfRedactionOverlay.none());
+                        return _saveEditor(e);
+                      }),
+                    ),
+                    _Op(
                       icon: Icons.crop,
                       title: 'Crop margins',
                       loading: loading,
                       onRun: () => _edit('Crop', (e) async {
-                            await e.cropMargins(
-                                left: 20, right: 20, top: 20, bottom: 20);
-                            return _saveEditor(e);
-                          })),
-                  _Section('Forms'),
-                  _Op(
+                        await e.cropMargins(
+                          left: 20,
+                          right: 20,
+                          top: 20,
+                          bottom: 20,
+                        );
+                        return _saveEditor(e);
+                      }),
+                    ),
+                    _Section('Forms'),
+                    _Op(
                       icon: Icons.layers_clear,
                       title: 'Flatten forms',
                       loading: loading,
                       onRun: () => _edit('Flatten', (e) async {
-                            await e.flattenForms();
-                            return _saveEditor(e);
-                          })),
-                  _Op(
+                        await e.flattenForms();
+                        return _saveEditor(e);
+                      }),
+                    ),
+                    _Op(
                       icon: Icons.layers_clear_outlined,
                       title: 'Flatten all annotations',
                       loading: loading,
                       onRun: () => _edit('FlattenAnnot', (e) async {
-                            await e.flattenAnnotations();
-                            return _saveEditor(e);
-                          })),
-                  _Op(
+                        await e.flattenAnnotations();
+                        return _saveEditor(e);
+                      }),
+                    ),
+                    _Op(
                       icon: Icons.edit_note,
                       title: 'Set form field value',
                       subtitle: 'fieldName="name", value="John"',
                       loading: loading,
                       onRun: () => _edit('SetField', (e) async {
-                            await e
-                                .field('name')
-                                .setValue(PdfFormFieldValue.text('John'));
-                            return _saveEditor(e);
-                          })),
-                  _Op(
+                        await e
+                            .field('name')
+                            .setValue(PdfFormFieldValue.text('John'));
+                        return _saveEditor(e);
+                      }),
+                    ),
+                    _Op(
                       icon: Icons.emoji_emotions_outlined,
                       title: 'Fill with emoji + flatten',
                       subtitle: 'registerFallbackFont bakes what the '
                           'field font cannot draw',
                       loading: loading,
                       onRun: () => _edit('EmojiFill', (e) async {
-                            await _registerEmojiFont();
-                            await e.field('name').setValue(
-                                PdfFormFieldValue.text(
-                                    'Loved it \u{1F600}\u{1F389}'));
-                            await e.flattenForms();
-                            return _saveEditor(e);
-                          })),
-                  _Section('Redaction'),
-                  _Op(
+                        await _registerEmojiFont();
+                        await e.field('name').setValue(
+                              PdfFormFieldValue.text(
+                                'Loved it \u{1F600}\u{1F389}',
+                              ),
+                            );
+                        await e.flattenForms();
+                        return _saveEditor(e);
+                      }),
+                    ),
+                    _Section('Redaction'),
+                    _Op(
                       icon: Icons.remove_red_eye_outlined,
                       title: 'Add redaction + count + apply',
                       loading: loading,
                       onRun: () => _edit('Redact', (e) async {
-                            await e.markRedaction(
-                                0,
-                                const PdfRect(
-                                    x: 50, y: 700, width: 200, height: 30));
-                            final n = await e.redactionCount(0);
-                            setState(() => status = 'Redactions on page 0: $n');
-                            await e.applyRedactions();
-                            return _saveEditor(e);
-                          })),
-                  _Section('Compliance'),
-                  _Op(
+                        await e.markRedaction(0, const [
+                          PdfRect(x: 50, y: 700, width: 200, height: 30),
+                        ]);
+                        final n = await e.redactionCount(0);
+                        setState(() => status = 'Redactions on page 0: $n');
+                        await e.applyRedactions();
+                        return _saveEditor(e);
+                      }),
+                    ),
+                    _Section('Compliance'),
+                    _Op(
                       icon: Icons.verified,
                       title: 'Convert to PDF/A',
                       loading: loading,
                       onRun: () => _edit('PDF-A', (e) async {
-                            await e.convertToPdfA();
-                            return _saveEditor(e);
-                          })),
-                  _Section('Security'),
-                  _Op(
+                        await e.convertToPdfA();
+                        return _saveEditor(e);
+                      }),
+                    ),
+                    _Section('Security'),
+                    _Op(
                       icon: Icons.lock,
                       title: 'Save encrypted (pw: test)',
                       loading: loading,
                       onRun: () => _edit('Encrypt', (e) async {
-                            return _saveEditor(
-                                e,
-                                const PdfSaveOptions.fullRewrite(
-                                    encryption: PdfEncryption.config(
-                                        ownerPassword: 'test')));
-                          })),
-                  _Op(
+                        return _saveEditor(
+                          e,
+                          const PdfSave.full(
+                            encryption: PdfEncryption.password(
+                              ownerPassword: 'test',
+                            ),
+                          ),
+                        );
+                      }),
+                    ),
+                    _Op(
                       icon: Icons.lock_open,
                       title: 'Save with encryption removed',
                       loading: loading,
                       onRun: () => _edit('RemoveEncrypt', (e) async {
-                            return _saveEditor(
-                                e,
-                                const PdfSaveOptions.fullRewrite(
-                                    encryption: PdfEncryption.remove()));
-                          })),
-                  _Op(
+                        return _saveEditor(
+                          e,
+                          const PdfSave.full(
+                            encryption: PdfEncryption.remove(),
+                          ),
+                        );
+                      }),
+                    ),
+                    _Op(
                       icon: Icons.save_alt,
                       title: 'Incremental save',
                       loading: loading,
                       onRun: () => _edit('Incremental', (e) async {
-                            return _saveEditor(
-                                e, const PdfSaveOptions.incremental());
-                          })),
-                  _Section('Chained'),
-                  _Op(
+                        return _saveEditor(e, const PdfSave.incremental());
+                      }),
+                    ),
+                    _Section('Chained'),
+                    _Op(
                       icon: Icons.auto_fix_high,
                       title: 'Rotate + watermark + compress + encrypt',
                       subtitle: 'Multiple mutations in one parse-save cycle',
                       loading: loading,
                       onRun: () => _edit('Chain', (e) async {
-                            await e.rotatePages(const PdfPages.all(),
-                                by: PdfRotation.r90);
-                            await e.addWatermark('PROCESSED',
-                                style: const PdfWatermarkStyle(
-                                    opacity: 0.15, fontSize: 40));
-                            await e.reduceImages(PdfImagePolicy.ebook);
-                            await e.setMetadata((await e.metadata())
-                                .copyWith(title: 'Processed'));
-                            return _saveEditor(
-                                e,
-                                const PdfSaveOptions.fullRewrite(
-                                    deflate: true,
-                                    garbageCollect: true,
-                                    encryption: PdfEncryption.config(
-                                        ownerPassword: 'chain')));
-                          })),
-                  const SizedBox(height: 40),
-                ],
-              ),
-      ),
-    ]);
+                        await e.rotatePages(
+                          by: PdfRotation.r90,
+                          pages: const PdfPages.all(),
+                        );
+                        await e.addWatermark(
+                          'PROCESSED',
+                          style: const PdfWatermarkStyle(
+                            opacity: 0.15,
+                            fontSize: 40,
+                          ),
+                        );
+                        await e.reduceImages(PdfImagePolicy.ebook);
+                        await e.setMetadata(
+                          (await e.metadata()).copyWith(title: 'Processed'),
+                        );
+                        return _saveEditor(
+                          e,
+                          const PdfSave.full(
+                            deflate: PdfDeflate.balanced,
+                            garbageCollect: true,
+                            encryption: PdfEncryption.password(
+                              ownerPassword: 'chain',
+                            ),
+                          ),
+                        );
+                      }),
+                    ),
+                    const SizedBox(height: 40),
+                  ],
+                ),
+        ),
+      ],
+    );
   }
 }
 
@@ -2188,8 +2620,11 @@ class _BuilderTabState extends State<_BuilderTab>
 
   /// Builds with a fresh PdfBuilder, saves the result, always
   /// disposes the builder — even when the body throws.
-  Future<void> _build(String label, String filename,
-      Future<void> Function(PdfBuilder b) body) async {
+  Future<void> _build(
+    String label,
+    String filename,
+    Future<void> Function(PdfBuilder b) body,
+  ) async {
     await runFlow(label, () async {
       final b = await _pdf.build();
       try {
@@ -2206,279 +2641,316 @@ class _BuilderTabState extends State<_BuilderTab>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return Column(children: [
-      statusBar(),
-      Expanded(
-        child: ListView(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          children: [
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Row(children: [
-                  Icon(Icons.note_add,
-                      color: Theme.of(context).colorScheme.primary, size: 28),
-                  const SizedBox(width: 12),
-                  const Expanded(
-                    child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Create PDFs from scratch',
+    return Column(
+      children: [
+        statusBar(),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            children: [
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.note_add,
+                        color: Theme.of(context).colorScheme.primary,
+                        size: 28,
+                      ),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Create PDFs from scratch',
                               style: TextStyle(
-                                  fontWeight: FontWeight.w600, fontSize: 15)),
-                          Text('Text, images, forms, links, watermarks',
-                              style: TextStyle(fontSize: 12)),
-                        ]),
+                                fontWeight: FontWeight.w600,
+                                fontSize: 15,
+                              ),
+                            ),
+                            Text(
+                              'Text, images, forms, links, watermarks',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
-                ]),
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            _Section('Documents'),
-            _Op(
+              const SizedBox(height: 8),
+              _Section('Documents'),
+              _Op(
                 icon: Icons.text_fields,
                 title: 'Text document (A4, 2 pages)',
                 subtitle: 'Headings, paragraphs, columns, horizontal rule',
                 loading: loading,
                 onRun: () => _build('Text', 'built_text.pdf', (b) async {
-                      await b.setMetadata(
-                        const PdfMetadata(
-                          title: 'Example',
-                          author: 'pdf_manipulator',
-                          subject: 'Demo',
-                          keywords: 'test, dart',
-                        ),
-                      );
+                  await b.setMetadata(
+                    const PdfMetadata(
+                      title: 'Example',
+                      author: 'pdf_manipulator',
+                      subject: 'Demo',
+                      keywords: 'test, dart',
+                    ),
+                  );
 
-                      final p1 = await b.addPage();
-                      await p1.heading(1, 'Hello from PdfBuilder');
-                      await p1.space(10);
-                      await p1.paragraph(
-                          'This PDF was created from Dart code. No source PDF needed.');
-                      await p1.space(20);
-                      await p1.heading(2, 'Features');
-                      await p1.paragraph(
-                          '• Text, headings, paragraphs\n• Images, watermarks\n'
-                          '• Form fields, links, footnotes\n• Multi-column layout');
-                      await p1.space(20);
-                      await p1.horizontalRule();
-                      await p1.space(10);
-                      await p1.text('Page 1 of 2');
-                      await p1.done();
+                  final p1 = await b.addPage();
+                  await p1.heading(1, 'Hello from PdfBuilder');
+                  await p1.space(10);
+                  await p1.paragraph(
+                    'This PDF was created from Dart code. No source PDF needed.',
+                  );
+                  await p1.space(20);
+                  await p1.heading(2, 'Features');
+                  await p1.paragraph(
+                    '• Text, headings, paragraphs\n• Images, watermarks\n'
+                    '• Form fields, links, footnotes\n• Multi-column layout',
+                  );
+                  await p1.space(20);
+                  await p1.horizontalRule();
+                  await p1.space(10);
+                  await p1.text('Page 1 of 2');
 
-                      final p2 = await b.addPage();
-                      await p2.heading(1, 'Page Two');
-                      await p2
-                          .paragraph('Multi-page documents work seamlessly.');
-                      await p2.space(20);
-                      await p2.heading(3, 'Columns');
-                      await p2.columns(
-                          2,
-                          20,
-                          'This text flows across two columns. The PdfBuilder '
-                          'API supports multi-column layout.');
-                      await p2.done();
-                    })),
-            _Op(
+                  final p2 = await b.addPage();
+                  await p2.heading(1, 'Page Two');
+                  await p2.paragraph('Multi-page documents work seamlessly.');
+                  await p2.space(20);
+                  await p2.heading(3, 'Columns');
+                  await p2.columns(
+                    2,
+                    20,
+                    'This text flows across two columns. The PdfBuilder '
+                    'API supports multi-column layout.',
+                  );
+                }),
+              ),
+              _Op(
                 icon: Icons.crop_16_9,
                 title: 'Letter page',
                 subtitle: 'US Letter (612×792 pt)',
                 loading: loading,
                 onRun: () => _build('Letter', 'letter.pdf', (b) async {
-                      final p = await b.addPage(PdfPageSize.letter());
-                      await p.heading(1, 'US Letter Page');
-                      await p.paragraph('612 × 792 points.');
-                      await p.done();
-                    })),
-            _Op(
+                  final p = await b.addPage(PdfPageSize.letter());
+                  await p.heading(1, 'US Letter Page');
+                  await p.paragraph('612 × 792 points.');
+                }),
+              ),
+              _Op(
                 icon: Icons.aspect_ratio,
                 title: 'Custom size page',
                 subtitle: '400×300 pt landscape',
                 loading: loading,
                 onRun: () => _build('Custom', 'custom_size.pdf', (b) async {
-                      final p = await b.addPage(PdfPageSize.custom(400, 300));
-                      await p.heading(1, 'Custom Size');
-                      await p.text('400 × 300 points');
-                      await p.done();
-                    })),
-            _Section('Style & Shapes'),
-            _Op(
+                  final p = await b.addPage(PdfPageSize.points(400, 300));
+                  await p.heading(1, 'Custom Size');
+                  await p.text('400 × 300 points');
+                }),
+              ),
+              _Section('Style & Shapes'),
+              _Op(
                 icon: Icons.format_bold,
                 title: 'Styled text + markup',
                 subtitle: 'Bold, italic, coloured runs, highlight',
                 loading: loading,
                 onRun: () => _build('Style', 'built_style.pdf', (b) async {
-                      final p = await b.addPage();
-                      await p.heading(1, 'Styled text');
-                      await p.space(10);
-                      await p.text('Bold run',
-                          style: const PdfTextStyle(bold: true));
-                      await p.text('Italic run',
-                          style: const PdfTextStyle(italic: true));
-                      await p.text('Coloured run',
-                          style: const PdfTextStyle(color: PdfColor.red));
-                      await p.text('Marked sentence');
-                      await p.markup(PdfMarkupKind.highlight);
-                      await p.done();
-                    })),
-            _Op(
+                  final p = await b.addPage();
+                  await p.heading(1, 'Styled text');
+                  await p.space(10);
+                  await p.text(
+                    'Bold run',
+                    style: const PdfTextStyle(bold: true),
+                  );
+                  await p.text(
+                    'Italic run',
+                    style: const PdfTextStyle(italic: true),
+                  );
+                  await p.text(
+                    'Coloured run',
+                    style: const PdfTextStyle(color: PdfColor.red),
+                  );
+                  await p.text(
+                    'Marked sentence',
+                    markup: const PdfMarkup(PdfMarkupKind.highlight),
+                  );
+                }),
+              ),
+              _Op(
                 icon: Icons.crop_square,
                 title: 'Rectangle + line',
                 subtitle: 'Filled and stroked shapes, dashed line',
                 loading: loading,
                 onRun: () => _build('Shapes', 'built_shapes.pdf', (b) async {
-                      final p = await b.addPage();
-                      await p.rect(
-                        const PdfRect(x: 72, y: 500, width: 200, height: 80),
-                        fill: PdfColor.red,
-                        stroke:
-                            const PdfStroke(color: PdfColor.black, width: 2),
-                      );
-                      await p.line((72, 400), (272, 480),
-                          stroke: const PdfStroke(dash: [3, 2]));
-                      await p.done();
-                    })),
-            _Op(
+                  final p = await b.addPage();
+                  await p.rect(
+                    const PdfRect(x: 72, y: 500, width: 200, height: 80),
+                    fill: PdfColor.red,
+                    stroke: const PdfStroke(color: PdfColor.black, width: 2),
+                  );
+                  await p.line(
+                    const PdfPoint(72, 400),
+                    const PdfPoint(272, 480),
+                    stroke: const PdfStroke(dash: [3, 2]),
+                  );
+                }),
+              ),
+              _Op(
                 icon: Icons.table_chart,
                 title: 'Table',
                 subtitle: 'Columns, cells, header row',
                 loading: loading,
                 onRun: () => _build('Table', 'built_table.pdf', (b) async {
-                      final p = await b.addPage();
-                      await p.heading(1, 'Invoice');
-                      await p.space(10);
-                      await p.table(
-                        const [
-                          PdfTableColumn('SKU', width: 120),
-                          PdfTableColumn('Qty',
-                              width: 60, align: PdfAlignment.right),
-                        ],
-                        const [
-                          [PdfTableCell('A-1'), PdfTableCell('12')],
-                          [PdfTableCell('B-2'), PdfTableCell('3')],
-                        ],
-                      );
-                      await p.done();
-                    })),
-            _Section('Form Fields'),
-            _Op(
+                  final p = await b.addPage();
+                  await p.heading(1, 'Invoice');
+                  await p.space(10);
+                  await p.table(
+                    const [
+                      PdfTableColumn('SKU', width: 120),
+                      PdfTableColumn(
+                        'Qty',
+                        width: 60,
+                        align: PdfAlignment.right,
+                      ),
+                    ],
+                    const [
+                      [PdfTableCell('A-1'), PdfTableCell('12')],
+                      [PdfTableCell('B-2'), PdfTableCell('3')],
+                    ],
+                  );
+                }),
+              ),
+              _Section('Form Fields'),
+              _Op(
                 icon: Icons.edit_note,
                 title: 'Full form (all field types)',
                 subtitle:
                     'TextField, checkbox, combo, radio, button, signature',
                 loading: loading,
                 onRun: () => _build('Form', 'built_form.pdf', (b) async {
-                      await b.setMetadata(
-                          const PdfMetadata(title: 'Registration Form'));
+                  await b.setMetadata(
+                    const PdfMetadata(title: 'Registration Form'),
+                  );
 
-                      final p = await b.addPage();
-                      await p.heading(1, 'Registration Form');
-                      await p.space(20);
-                      await p.text('Name:');
-                      await p.textField('name',
-                          const PdfRect(x: 72, y: 680, width: 250, height: 20),
-                          defaultValue: 'John Doe');
-                      await p.space(40);
-                      await p.text('Email:');
-                      await p.textField('email',
-                          const PdfRect(x: 72, y: 630, width: 250, height: 20));
-                      await p.space(40);
-                      await p.text('Country:');
-                      await p.comboBox(
-                          'country',
-                          const PdfRect(x: 72, y: 580, width: 150, height: 20),
-                          ['USA', 'UK', 'India', 'Germany', 'Japan'],
-                          selected: 'India');
-                      await p.space(40);
-                      await p.text('Terms:');
-                      await p.checkbox('agree',
-                          const PdfRect(x: 72, y: 530, width: 14, height: 14));
-                      await p.space(40);
-                      await p.text('Plan:');
-                      await p.radioGroup(
-                          'plan',
-                          [
-                            (
-                              value: 'free',
-                              rect: const PdfRect(
-                                  x: 72, y: 480, width: 14, height: 14)
-                            ),
-                            (
-                              value: 'pro',
-                              rect: const PdfRect(
-                                  x: 72, y: 460, width: 14, height: 14)
-                            ),
-                            (
-                              value: 'enterprise',
-                              rect: const PdfRect(
-                                  x: 72, y: 440, width: 14, height: 14)
-                            ),
-                          ],
-                          selected: 'pro');
-                      await p.space(40);
-                      await p.pushButton(
-                          'submit',
-                          const PdfRect(x: 72, y: 390, width: 80, height: 30),
-                          'Submit');
-                      await p.space(50);
-                      await p.signatureField('sig',
-                          const PdfRect(x: 72, y: 320, width: 200, height: 60));
-                      await p.space(40);
+                  final p = await b.addPage();
+                  await p.heading(1, 'Registration Form');
+                  await p.space(20);
+                  await p.text('Name:');
+                  await p.textField(
+                    'name',
+                    const PdfRect(x: 72, y: 680, width: 250, height: 20),
+                    value: 'John Doe',
+                  );
+                  await p.space(40);
+                  await p.text('Email:');
+                  await p.textField(
+                    'email',
+                    const PdfRect(x: 72, y: 630, width: 250, height: 20),
+                  );
+                  await p.space(40);
+                  await p.text('Country:');
+                  await p.comboBox(
+                    'country',
+                    const PdfRect(x: 72, y: 580, width: 150, height: 20),
+                    ['USA', 'UK', 'India', 'Germany', 'Japan'],
+                    selected: 'India',
+                  );
+                  await p.space(40);
+                  await p.text('Terms:');
+                  await p.checkbox(
+                    'agree',
+                    const PdfRect(x: 72, y: 530, width: 14, height: 14),
+                  );
+                  await p.space(40);
+                  await p.text('Plan:');
+                  await p.radioGroup(
+                      'plan',
+                      [
+                        const PdfRadioOption(
+                          'free',
+                          PdfRect(x: 72, y: 480, width: 14, height: 14),
+                        ),
+                        const PdfRadioOption(
+                          'pro',
+                          PdfRect(x: 72, y: 460, width: 14, height: 14),
+                        ),
+                        const PdfRadioOption(
+                          'enterprise',
+                          PdfRect(x: 72, y: 440, width: 14, height: 14),
+                        ),
+                      ],
+                      selected: 'pro');
+                  await p.space(40);
+                  await p.pushButton(
+                    'submit',
+                    const PdfRect(x: 72, y: 390, width: 80, height: 30),
+                    'Submit',
+                  );
+                  await p.space(50);
+                  await p.signatureField(
+                    'sig',
+                    const PdfRect(x: 72, y: 320, width: 200, height: 60),
+                  );
+                  await p.space(40);
 
-                      // JavaScript actions on fields
-                      await p.fieldKeystroke(
-                          'AFNumber_Keystroke(2, 0, 0, 0, "", true)');
-                      await p
-                          .fieldFormat('AFNumber_Format(2, 0, 0, 0, "", true)');
-                      await p.fieldValidate(
-                          'AFRange_Validate(true, 0, true, 100)');
-                      await p.fieldCalculate(
-                          'AFSimple_Calculate("SUM", new Array("field1", "field2"))');
-
-                      await p.done();
-                    })),
-            _Section('Links & References'),
-            _Op(
+                  // JavaScript actions on a field
+                  await p.textField(
+                    'amount',
+                    const PdfRect(x: 72, y: 250, width: 100, height: 20),
+                    scripts: const PdfFieldScripts(
+                      keystroke: 'AFNumber_Keystroke(2, 0, 0, 0, "", true)',
+                      format: 'AFNumber_Format(2, 0, 0, 0, "", true)',
+                      validate: 'AFRange_Validate(true, 0, true, 100)',
+                      calculate:
+                          'AFSimple_Calculate("SUM", new Array("field1", "field2"))',
+                    ),
+                  );
+                }),
+              ),
+              _Section('Links & References'),
+              _Op(
                 icon: Icons.link,
                 title: 'URL link + page link + footnote',
                 loading: loading,
                 onRun: () => _build('Links', 'built_links.pdf', (b) async {
-                      await b
-                          .setMetadata(const PdfMetadata(title: 'Links Demo'));
+                  await b.setMetadata(const PdfMetadata(title: 'Links Demo'));
 
-                      final p1 = await b.addPage();
-                      await p1.heading(1, 'Links & References');
-                      await p1.space(10);
-                      await p1.text('Visit:');
-                      await p1
-                          .linkUrl('https://pub.dev/packages/pdf_manipulator');
-                      await p1.space(20);
-                      await p1.text('Jump to page 2:');
-                      await p1.linkPage(1);
-                      await p1.space(20);
-                      await p1.text('With a footnote.');
-                      await p1.footnote('1', 'This is the footnote text.');
-                      await p1.done();
+                  final p1 = await b.addPage();
+                  await p1.heading(1, 'Links & References');
+                  await p1.space(10);
+                  await p1.text(
+                    'Visit:',
+                    link: const PdfLink.url(
+                      'https://pub.dev/packages/pdf_manipulator',
+                    ),
+                  );
+                  await p1.space(20);
+                  await p1.text('Jump to page 2:', link: const PdfLink.page(1));
+                  await p1.space(20);
+                  await p1.text('With a footnote.');
+                  await p1.footnote('1', 'This is the footnote text.');
 
-                      final p2 = await b.addPage();
-                      await p2.heading(2, 'Page 2 — Link Target');
-                      await p2.paragraph('You arrived here via the page link.');
-                      await p2.done();
-                    })),
-            _Section('Watermark & Image'),
-            _Op(
+                  final p2 = await b.addPage();
+                  await p2.heading(2, 'Page 2 — Link Target');
+                  await p2.paragraph('You arrived here via the page link.');
+                }),
+              ),
+              _Section('Watermark & Image'),
+              _Op(
                 icon: Icons.water_drop,
                 title: 'Page with watermark',
                 loading: loading,
                 onRun: () =>
                     _build('Watermark', 'built_watermark.pdf', (b) async {
-                      final p = await b.addPage();
-                      await p.heading(1, 'Confidential Report');
-                      await p.paragraph('Sensitive information.');
-                      await p.watermark('CONFIDENTIAL');
-                      await p.done();
-                    })),
-            _Op(
+                  final p = await b.addPage();
+                  await p.heading(1, 'Confidential Report');
+                  await p.paragraph('Sensitive information.');
+                  await p.watermark('CONFIDENTIAL');
+                }),
+              ),
+              _Op(
                 icon: Icons.image,
                 title: 'Page with image (pick)',
                 loading: loading,
@@ -2488,12 +2960,14 @@ class _BuilderTabState extends State<_BuilderTab>
                   await _build('Image', 'built_image.pdf', (b) async {
                     final p = await b.addPage();
                     await p.heading(1, 'Image Demo');
-                    await p.image(DemoSource(imgs.first.bytes),
-                        const PdfRect(x: 72, y: 500, width: 200, height: 200));
-                    await p.done();
+                    await p.image(
+                      DemoSource(imgs.first.bytes),
+                      const PdfRect(x: 72, y: 500, width: 200, height: 200),
+                    );
                   });
-                }),
-            _Op(
+                },
+              ),
+              _Op(
                 icon: Icons.wallpaper,
                 title: 'Picture page (pick)',
                 subtitle: 'One page per picture, sized to it',
@@ -2506,43 +2980,45 @@ class _BuilderTabState extends State<_BuilderTab>
                       await b.addImagePage(DemoSource(img.bytes));
                     }
                   });
-                }),
-            _Section('Multi-Page'),
-            _Op(
+                },
+              ),
+              _Section('Multi-Page'),
+              _Op(
                 icon: Icons.library_books,
-                title: 'newline + newPageSameSize',
+                title: 'newline + second page',
                 loading: loading,
                 onRun: () => _build('MultiPage', 'built_multi.pdf', (b) async {
-                      final p = await b.addPage();
-                      await p.heading(1, 'Page 1');
-                      await p.paragraph('Some content on page 1.');
-                      await p.newline();
-                      await p.text('After a newline.');
-                      await p.newPageSameSize();
-                      await p.heading(1, 'Page 2 (same size)');
-                      await p.paragraph('Created via newPageSameSize().');
-                      await p.done();
-                    })),
-            _Section('Font'),
-            _Op(
+                  final p = await b.addPage();
+                  await p.heading(1, 'Page 1');
+                  await p.paragraph('Some content on page 1.');
+                  await p.newline();
+                  await p.text('After a newline.');
+                  final p2 = await b.addPage();
+                  await p2.heading(1, 'Page 2 (same size)');
+                  await p2.paragraph('Created by a second addPage().');
+                }),
+              ),
+              _Section('Font'),
+              _Op(
                 icon: Icons.font_download,
                 title: 'Custom font + size',
                 loading: loading,
                 onRun: () => _build('Font', 'built_fonts.pdf', (b) async {
-                      final p = await b.addPage();
-                      await p.font('Helvetica', 24);
-                      await p.text('Large Helvetica');
-                      await p.font('Courier', 12);
-                      await p.text('Small Courier');
-                      await p.font('Times-Roman', 18);
-                      await p.text('Medium Times');
-                      await p.done();
-                    })),
-            const SizedBox(height: 40),
-          ],
+                  final p = await b.addPage();
+                  await p.setFont('Helvetica', 24);
+                  await p.text('Large Helvetica');
+                  await p.setFont('Courier', 12);
+                  await p.text('Small Courier');
+                  await p.setFont('Times-Roman', 18);
+                  await p.text('Medium Times');
+                }),
+              ),
+              const SizedBox(height: 40),
+            ],
+          ),
         ),
-      ),
-    ]);
+      ],
+    );
   }
 }
 
@@ -2589,10 +3065,11 @@ class _MergeTabState extends State<_MergeTab>
     if (_files.length < 2) return;
     final sink = DemoSink();
     final ok = await runTask(
-        'Merging ${_files.length} files',
-        () => _pdf.merge(
-            _files.map((f) => DemoSource(f.bytes) as DataSource).toList(),
-            sink));
+      'Merging ${_files.length} files',
+      () => _pdf.merge([
+        for (final f in _files) PdfInput(DemoSource(f.bytes)),
+      ], sink),
+    );
     if (ok) {
       final r = sink.takeBytes();
       setState(() {
@@ -2605,77 +3082,95 @@ class _MergeTabState extends State<_MergeTab>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return Column(children: [
-      statusBar(),
-      Expanded(
-        child: _files.isEmpty
-            ? _EmptyState(
-                icon: Icons.merge,
-                text: 'Pick 2+ PDFs to merge — drag to reorder',
-                onPick: _add,
-                pickLabel: 'Pick PDFs')
-            : ReorderableListView.builder(
-                padding: const EdgeInsets.all(16),
-                itemCount: _files.length,
-                // onReorderItem pre-adjusts newIndex for the removed
-                // slot — no manual decrement needed.
-                onReorderItem: (oldIndex, newIndex) => setState(() {
-                  final item = _files.removeAt(oldIndex);
-                  _files.insert(newIndex, item);
-                  _merged = null;
-                }),
-                itemBuilder: (_, i) => Card(
-                  key: ValueKey('${_files[i].name}_$i'),
-                  margin: const EdgeInsets.symmetric(vertical: 3),
-                  child: ListTile(
-                    leading: CircleAvatar(
+    return Column(
+      children: [
+        statusBar(),
+        Expanded(
+          child: _files.isEmpty
+              ? _EmptyState(
+                  icon: Icons.merge,
+                  text: 'Pick 2+ PDFs to merge — drag to reorder',
+                  onPick: _add,
+                  pickLabel: 'Pick PDFs',
+                )
+              : ReorderableListView.builder(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: _files.length,
+                  // onReorderItem pre-adjusts newIndex for the removed
+                  // slot — no manual decrement needed.
+                  onReorderItem: (oldIndex, newIndex) => setState(() {
+                    final item = _files.removeAt(oldIndex);
+                    _files.insert(newIndex, item);
+                    _merged = null;
+                  }),
+                  itemBuilder: (_, i) => Card(
+                    key: ValueKey('${_files[i].name}_$i'),
+                    margin: const EdgeInsets.symmetric(vertical: 3),
+                    child: ListTile(
+                      leading: CircleAvatar(
                         radius: 16,
-                        child: Text('${i + 1}',
-                            style: const TextStyle(fontSize: 13))),
-                    title: Text(_files[i].name,
-                        style: const TextStyle(fontSize: 14)),
-                    subtitle: Text(fmtSize(_files[i].size)),
-                    trailing: IconButton(
+                        child: Text(
+                          '${i + 1}',
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                      ),
+                      title: Text(
+                        _files[i].name,
+                        style: const TextStyle(fontSize: 14),
+                      ),
+                      subtitle: Text(fmtSize(_files[i].size)),
+                      trailing: IconButton(
                         icon: const Icon(Icons.close, size: 18),
                         onPressed: () => setState(() {
-                              _files.removeAt(i);
-                              _merged = null;
-                            })),
-                    dense: true,
+                          _files.removeAt(i);
+                          _merged = null;
+                        }),
+                      ),
+                      dense: true,
+                    ),
                   ),
                 ),
-              ),
-      ),
-      if (_files.isNotEmpty)
-        Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(children: [
-            OutlinedButton.icon(
-                onPressed: loading ? null : _add,
-                icon: const Icon(Icons.add, size: 18),
-                label: const Text('Add')),
-            const SizedBox(width: 8),
-            Expanded(
-              child: _merged != null
-                  ? FilledButton.icon(
-                      onPressed: () async {
-                        final p = await saveBytes(_merged!, 'merged.pdf');
-                        if (p != null) setState(() => status = 'Saved');
-                      },
-                      icon: const Icon(Icons.save, size: 18),
-                      label: const Text('Save'))
-                  : FilledButton.icon(
-                      onPressed: _files.length >= 2 && !loading ? _merge : null,
-                      icon: loading
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2))
-                          : const Icon(Icons.merge, size: 18),
-                      label: Text('Merge ${_files.length}')),
-            ),
-          ]),
         ),
-    ]);
+        if (_files.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                OutlinedButton.icon(
+                  onPressed: loading ? null : _add,
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('Add'),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _merged != null
+                      ? FilledButton.icon(
+                          onPressed: () async {
+                            final p = await saveBytes(_merged!, 'merged.pdf');
+                            if (p != null) setState(() => status = 'Saved');
+                          },
+                          icon: const Icon(Icons.save, size: 18),
+                          label: const Text('Save'),
+                        )
+                      : FilledButton.icon(
+                          onPressed:
+                              _files.length >= 2 && !loading ? _merge : null,
+                          icon: loading
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.merge, size: 18),
+                          label: Text('Merge ${_files.length}'),
+                        ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
   }
 }

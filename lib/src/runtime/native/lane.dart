@@ -340,7 +340,7 @@ class NativeLane implements Lane {
     }
     try {
       decodeResponse(bytes);
-    } on PdfEngineError catch (refused) {
+    } on PdfEngineFailed catch (refused) {
       throw LaneProtocolError(refused.message);
     } on PdfCancelled {
       throw const LaneProtocolError('the lane was abandoned');

@@ -7,9 +7,9 @@ import 'dart:typed_data';
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
 /// An image extracted to memory: its descriptor and the bytes its sink got.
-typedef ExtractedBytes = ({PdfImage image, Uint8List data});
+typedef ExtractedBytes = ({PdfImageInfo image, Uint8List data});
 
-/// Extracts the images of [pages] of [reads] (a `PdfDoc` or a one-shot) into
+/// Extracts the images of [pages] of [reads] (a `PdfDocument` or a one-shot) into
 /// MemorySinks and returns one [ExtractedBytes] per image, in the order found.
 Future<List<ExtractedBytes>> extractToMemory(
   PdfReads reads, {
@@ -28,7 +28,7 @@ Future<List<ExtractedBytes>> extractToMemory(
 }
 
 /// The descriptors of the images of [pages] of [reads], their bytes dropped.
-Future<List<PdfImage>> extractedImages(
+Future<List<PdfImageInfo>> extractedImages(
   PdfReads reads, {
   required PdfPages pages,
 }) => reads.extractImages((image) => MemorySink(), pages: pages);

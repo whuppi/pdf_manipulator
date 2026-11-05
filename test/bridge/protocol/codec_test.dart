@@ -8,7 +8,7 @@ import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_annotation.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
-import 'package:pdf_manipulator/src/types/pdf_image.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_info.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
 import 'package:pdf_manipulator/src/types/pdf_metadata.dart';
@@ -70,7 +70,7 @@ void main() {
             },
           ],
         }),
-        throwsA(isA<PdfEngineError>()),
+        throwsA(isA<PdfEngineFailed>()),
       );
     });
 
@@ -164,7 +164,7 @@ void main() {
       expect(first.encoding, PdfImageEncoding.jpeg);
       expect(first.color, PdfImageColor.cmyk);
       expect(first.hasSoftMask, isTrue);
-      expect(first.ppiMin, 288.0);
+      expect(first.minPpi, 288.0);
       expect(first.action, PdfImageAction.downsampled);
       expect(first.keepReason, isNull);
       expect(first.widthAfter, 16);
@@ -182,7 +182,7 @@ void main() {
       expect(
         decodeImageReport({
           'images': [r],
-        }).images.single.ppiMin,
+        }).images.single.minPpi,
         isNull,
       );
     });
@@ -192,7 +192,7 @@ void main() {
         () => decodeImageReport({
           'images': [row(action: 'vanished')],
         }),
-        throwsA(isA<PdfEngineError>()),
+        throwsA(isA<PdfEngineFailed>()),
       );
     });
 
@@ -203,8 +203,8 @@ void main() {
 
   group('decodeEncryptionAlgorithm', () {
     test('parses known algorithms', () {
-      expect(decodeEncryptionAlgorithm(1), PdfEncryptionAlgorithm.rc4_40);
-      expect(decodeEncryptionAlgorithm(4), PdfEncryptionAlgorithm.aes256);
+      expect(decodeEncryptionAlgorithm(1), PdfEncryptionAlgorithm.rc4Key40);
+      expect(decodeEncryptionAlgorithm(4), PdfEncryptionAlgorithm.aesKey256);
       expect(decodeEncryptionAlgorithm(0), isNull);
       expect(decodeEncryptionAlgorithm(99), isNull);
     });
@@ -213,40 +213,44 @@ void main() {
   group('decodePermissions', () {
     test('reads the /P word at its spec bit positions', () {
       final perms = decodePermissions(-1);
-      expect(perms.print, isTrue);
-      expect(perms.copy, isTrue);
-      expect(perms.printHq, isTrue);
-      expect(perms.assemble, isTrue);
+      expect(perms.canPrint, isTrue);
+      expect(perms.canCopy, isTrue);
+      expect(perms.canPrintHighQuality, isTrue);
+      expect(perms.canAssemble, isTrue);
     });
 
-    test('decodes what toBits encodes, flag by flag', () {
+    test('decodes what bits encodes, flag by flag', () {
       const cases = [
-        PdfPermissions(print: true, copy: false),
-        PdfPermissions(print: false, copy: true, fillForms: true),
-        PdfPermissions(printHq: true, assemble: true, accessibility: false),
+        PdfPermissions(canPrint: true, canCopy: false),
+        PdfPermissions(canPrint: false, canCopy: true, canFillForms: true),
+        PdfPermissions(
+          canPrintHighQuality: true,
+          canAssemble: true,
+          canExtractForAccessibility: false,
+        ),
       ];
       for (final p in cases) {
-        final back = decodePermissions(p.toBits());
+        final back = decodePermissions(p.bits);
         expect(
           [
-            back.print,
-            back.printHq,
-            back.modify,
-            back.copy,
-            back.annotate,
-            back.fillForms,
-            back.accessibility,
-            back.assemble,
+            back.canPrint,
+            back.canPrintHighQuality,
+            back.canModify,
+            back.canCopy,
+            back.canAnnotate,
+            back.canFillForms,
+            back.canExtractForAccessibility,
+            back.canAssemble,
           ],
           [
-            p.print,
-            p.printHq,
-            p.modify,
-            p.copy,
-            p.annotate,
-            p.fillForms,
-            p.accessibility,
-            p.assemble,
+            p.canPrint,
+            p.canPrintHighQuality,
+            p.canModify,
+            p.canCopy,
+            p.canAnnotate,
+            p.canFillForms,
+            p.canExtractForAccessibility,
+            p.canAssemble,
           ],
         );
       }
@@ -254,8 +258,8 @@ void main() {
 
     test('zero bits means all false', () {
       final perms = decodePermissions(0);
-      expect(perms.print, isFalse);
-      expect(perms.copy, isFalse);
+      expect(perms.canPrint, isFalse);
+      expect(perms.canCopy, isFalse);
     });
   });
 
@@ -275,7 +279,7 @@ void main() {
       });
       expect(results, hasLength(1));
       expect(results[0].text, 'hello');
-      expect(results[0].rect.x, 72.0);
+      expect(results[0].bounds.x, 72.0);
     });
 
     test('handles empty', () {
@@ -325,8 +329,8 @@ void main() {
         'errors': 0,
         'warnings': 2,
       });
-      expect(r.compliant, isTrue);
-      expect(r.warnings, 2);
+      expect(r.isCompliant, isTrue);
+      expect(r.warningCount, 2);
     });
   });
 
@@ -363,7 +367,7 @@ void main() {
     test('an unknown kind or format is an engine error, never a guess', () {
       expect(
         () => decodeRenderFrame({'kind': 'tile'}),
-        throwsA(isA<PdfEngineError>()),
+        throwsA(isA<PdfEngineFailed>()),
       );
       expect(
         () => decodeRenderFrame({
@@ -373,7 +377,7 @@ void main() {
           'height': 1,
           'format': 'jpeg',
         }),
-        throwsA(isA<PdfEngineError>()),
+        throwsA(isA<PdfEngineFailed>()),
       );
     });
   });
@@ -390,10 +394,10 @@ void main() {
         'encoding': 'jpeg',
         'color': 'rgb',
       });
-      expect(frame, isA<ChunkHeader<PdfImage>>());
+      expect(frame, isA<ChunkHeader<PdfImageInfo>>());
       expect(
-        (frame as ChunkHeader<PdfImage>).item,
-        const PdfImage(
+        (frame as ChunkHeader<PdfImageInfo>).item,
+        const PdfImageInfo(
           page: 2,
           index: 1,
           width: 100,
@@ -409,9 +413,9 @@ void main() {
       final bytes = Uint8List.fromList([9, 8]);
       expect(
         decodeImageFrame({'kind': 'data', 'data': bytes}),
-        isA<ChunkData<PdfImage>>(),
+        isA<ChunkData<PdfImageInfo>>(),
       );
-      expect(decodeImageFrame({'kind': 'end'}), isA<ChunkEnd<PdfImage>>());
+      expect(decodeImageFrame({'kind': 'end'}), isA<ChunkEnd<PdfImageInfo>>());
     });
 
     test('an unknown encoding or colour is an engine error', () {
@@ -426,7 +430,7 @@ void main() {
           'encoding': 'tiff',
           'color': 'rgb',
         }),
-        throwsA(isA<PdfEngineError>()),
+        throwsA(isA<PdfEngineFailed>()),
       );
     });
   });
@@ -495,8 +499,8 @@ void main() {
       expect(encodePages(const PdfPages.single(2)), {
         'pages': [2],
       });
-      expect(encodePages(const PdfPages.list([3, 1])), {
-        'pages': [3, 1],
+      expect(encodePages(PdfPages.list([3, 1])), {
+        'pages': [1, 3],
       });
       expect(encodePages(const PdfPages.range(1, 4)), {
         'pages': [1, 2, 3],
@@ -532,7 +536,7 @@ void main() {
         'pathsPruned': 5,
         'xobjectsSpecialized': 6,
       });
-      expect(r.regions, 1);
+      expect(r.regionCount, 1);
       expect(r.glyphsRemoved, 2);
       expect(r.imagesModified, 3);
       expect(r.imagesRemoved, 4);
@@ -587,7 +591,7 @@ void main() {
 
       final city = fields[0];
       expect(city.name, 'city');
-      expect(city.type, PdfFormFieldType.text);
+      expect(city.kind, PdfFormFieldKind.textField);
       expect((city.value as PdfTextValue).text, 'Berlin');
       expect(city.tooltip, 'Your city');
       expect(city.bounds?.x, 1.0);
@@ -596,11 +600,11 @@ void main() {
       expect(city.bounds?.height, 4.0);
       expect(city.maxLength, 12);
       expect(city.alignment, PdfAlignment.center);
-      expect(city.readOnly, isTrue);
+      expect(city.isReadOnly, isTrue);
 
       final ok = fields[1];
-      expect(ok.type, PdfFormFieldType.checkbox);
-      expect((ok.value as PdfCheckedValue).checked, isTrue);
+      expect(ok.kind, PdfFormFieldKind.checkbox);
+      expect((ok.value as PdfCheckedValue).isChecked, isTrue);
       expect(ok.tooltip, isNull, reason: 'an empty tooltip decodes to null');
       expect(ok.bounds, isNull);
       expect(ok.maxLength, isNull, reason: '-1 on the wire decodes to null');
@@ -642,10 +646,14 @@ void main() {
       });
       expect(files, hasLength(2));
       expect(files[0].name, 'notes.txt');
-      expect(files[0].size, 11);
+      expect(files[0].sizeBytes, 11);
       expect(files[0].description, 'Meeting notes');
       expect(files[0].mimeType, 'text/plain');
-      expect(files[1].size, isNull, reason: '-1 on the wire decodes to null');
+      expect(
+        files[1].sizeBytes,
+        isNull,
+        reason: '-1 on the wire decodes to null',
+      );
       expect(files[1].description, isNull);
       expect(files[1].mimeType, isNull);
     });
@@ -672,11 +680,11 @@ void main() {
       final row = rows.single;
       expect(row.subtype, PdfAnnotationSubtype.stamp);
       expect(row.subtypeName, 'Stamp');
-      expect(row.rect, isNotNull);
-      expect(row.rect!.x, 50.0);
-      expect(row.rect!.y, 650.0);
-      expect(row.rect!.width, 200.0);
-      expect(row.rect!.height, 60.0);
+      expect(row.bounds, isNotNull);
+      expect(row.bounds!.x, 50.0);
+      expect(row.bounds!.y, 650.0);
+      expect(row.bounds!.width, 200.0);
+      expect(row.bounds!.height, 60.0);
       expect(row.contents, 'Approved');
       expect(row.author, 'Alice');
       expect(row.fieldName, 'sig1');
@@ -700,7 +708,7 @@ void main() {
       });
       final row = rows.single;
       expect(row.subtype, PdfAnnotationSubtype.link);
-      expect(row.rect, isNull);
+      expect(row.bounds, isNull);
       expect(row.contents, isNull);
       expect(row.author, isNull);
       expect(row.fieldName, isNull);
@@ -804,7 +812,9 @@ void main() {
       final args = encodeWatermarkArgs(
         'E',
         const PdfWatermarkStyle(),
-        const PdfWatermarkPosition.exact(x: 10, y: 20, width: 300, height: 50),
+        const PdfWatermarkPosition.exact(
+          PdfRect(x: 10, y: 20, width: 300, height: 50),
+        ),
         PdfWatermarkLayer.foreground,
       );
       expect(args['posType'], 3);
