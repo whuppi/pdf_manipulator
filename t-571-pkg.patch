@@ -1,5 +1,5 @@
 diff --git a/CHANGELOG.pre.md b/CHANGELOG.pre.md
-index edf48a1..cb11699 100644
+index edf48a1..baac2ce 100644
 --- a/CHANGELOG.pre.md
 +++ b/CHANGELOG.pre.md
 @@ -285,6 +285,8 @@ CONTENT RULES (never change)
@@ -7,7 +7,7 @@ index edf48a1..cb11699 100644
  - Fixed a web source read past 4 GiB returning the bytes at the offset modulo 4 GiB, with no error — the read offset crosses to the engine as a JS number, not a 32-bit integer
  - Fixed a cancel not reaching a redaction, a text extraction of a form or a change of an image's bounds until the page or form it was reading ended, so a page of millions of operators could not be stopped — each now stops within one operator
 +- Fixed text extraction holding a form field's whole appearance stream in memory — the stream is now read as its operators, in bounded pieces
-+- Fixed a cancel waiting out the reading-order partition and the span passes of a page of tens of thousands of text lines — both now poll for it as they run
++- Fixed a cancel waiting out the reading-order partition, the glyph sort and the span and text passes of a page of tens of thousands of text lines — each now polls for it as it runs
  
  ## 5.0.1-dev.0
  

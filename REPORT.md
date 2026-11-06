@@ -1,115 +1,116 @@
 # t-571 report
 
 Share: `vendor/pdf_oxide/src/document.rs`, `vendor/pdf_oxide/src/pipeline/reading_order/xycut.rs`,
-`tool/fuelprobe/guest/src/main.rs`. Items 1, 3 (partly) and 4 are done. Item 2 is **not done**,
-and the `extractAll form` fuel row is **still red** (see "Open"). The patches are
-`t-571-fork.patch` (vendor/pdf_oxide) and `t-571-pkg.patch` (package files).
+`tool/fuelprobe/guest/src/main.rs`, and, by the second ruling, `src/extractors/text.rs` for the glyph
+sort only. All four items are done and every gate line is green. The patches are `t-571-fork.patch`
+(vendor/pdf_oxide, against the submodule commit the repository records) and `t-571-pkg.patch`
+(package files), both against the plan commit 555b79d. This replaces the earlier report.
 
-## Open — read these first
+## Per item
 
-1. **Item 2 stopped, as the plan says to.** `extract_embedded_files` has a caller:
-   `vendor/pdf_oxide/tests/test_embedded_files.rs:159`
-   (`saved.extract_embedded_files().expect("embedded files").len()`), inside a
-   `pdf_manipulator patch` block that reads the attachments back after a save. The plan says to
-   stop and report when a caller exists, and not to edit an existing test that pins the old
-   behaviour. The function is left in place, and its site (`document.rs::extract_embedded_files#1`)
-   is still in the lint's list. The function is also named in
-   `src/host/engine_proofs/whole_reads.txt`, which would have to change with it. To delete it, the
-   maintainer decides what happens to that test (for example, read the attachments back through
-   `host::attachments`).
-2. **`extractAll form` still fails the fuel wall: max_gap 1,579,413,849 against `MAX_GAP`
-   1,100,000,000.** The XY-cut and `postprocess_spans` polls are in and cut the gap from
-   4,076,532,208 to 1,579,413,849, but the longest remaining gap is one `sort_by` over every glyph of
-   the page in `TextExtractor::extract_into_self` → `sort_glyphs` (`src/extractors/text.rs`, called from
-   `stamp_char_x_offsets`). The host's stack sampler (`FUELPROBE_SAMPLE=120`) put 58 of 65 samples there.
-   One stdlib sort cannot take a poll, and `text.rs` is not in my share. Fixing it needs either a
-   smaller `FORM_TEXT_LINES` (the plan says 20,000) or a sort the engine can poll in; that is the
-   maintainer's call.
-3. `make test-fuel` therefore exits non-zero on that one row. Every other row passes.
-
-## Per site
-
-### 1. `extract_text_from_ap_stream` (document.rs:11235) — done
-- Read whole: the widget/annotation's `/AP /N` stream, through `decode_stream_data()`, then
-  `may_contain_text(&bytes)` and `extract_text_spans(&bytes)`.
-- Change (document.rs, from about :11250): the stream is opened with `self.form_operators(n_ref)` in
-  `Mode::Text`. The quick "does it show text" check walks those operators for a `BT` or `Do`
-  (same test as `page_may_contain_text`), and the spans come from
-  `TextExtractor::extract_spans_from(source)` over the same operator source. No whole buffer is built.
-- Also: `engine_proofs/whole_reads.txt` loses the line `document::extract_text_from_ap_stream`,
-  as that file's header says the list "only shrinks as the callers move to readers".
-- Row/test before the fix: the wall `host::engine_proofs::whole_reads::only_the_listed_functions_read_a_stream_whole`.
-  With the line removed from the list and the old code, it failed:
+### 1. `extract_text_from_ap_stream` (document.rs) — done
+- Read whole: the annotation's `/AP /N` stream, decoded in one buffer, then `may_contain_text` and
+  `extract_text_spans` over it.
+- Change: the stream is opened with `form_operators(n_ref)` in `Mode::Text`. The "does it show text"
+  check walks those operators for a `BT` or `Do` (the test `page_may_contain_text` uses), and the spans
+  come from `TextExtractor::extract_text_spans_from(source)`.
+- Test and failure before: the wall `host::engine_proofs::whole_reads::only_the_listed_functions_read_a_stream_whole`.
+  With the caller's line removed from `whole_reads.txt` and the old code it failed with
   `callers not on the list: ["document::extract_text_from_ap_stream"]; listed callers that no longer read whole: []`.
-  After the fix it passes.
-- Behaviour check: a throwaway proof (a `/Stamp` annotation, no `/Contents`, `/AP /N` form
-  with `(STAMPED) Tj`) extracted `"STAMPED"` through the new path. I removed it afterwards because Dart
-  batteries see the same text, so `tool/check_fork_tests.sh` would have no honest "no Dart battery can
-  observe this" for it.
-- No memprobe row: `tool/memprobe` is outside my share, so the wall is the only red-first test.
-- Lint: `tool/check_whole_buffers.sh` 59 sites → 58; the diff of the two `--sites` lists is exactly
-  `src/document.rs::extract_text_from_ap_stream#1`.
+- A scratch proof (a `/Stamp` annotation with `(STAMPED) Tj` in its `/AP /N`) extracted `"STAMPED"`
+  through the new path; I removed it because Dart sees the same text.
+- No memprobe row: `tool/memprobe` is outside the share.
 
-### 2. `extract_embedded_files` — not done (see Open 1)
+### 2. `extract_embedded_files` — done (ruling 1)
+- Deleted `PdfDocument::extract_embedded_files` and, as it had no other caller, its helper
+  `collect_embedded_filespecs` (document.rs, both removed; about 100 lines).
+- The one caller, `tests/test_embedded_files.rs`, inside its patch markers, reads the attachments back
+  with `pdf_oxide::host::attachments::list_attachments(&saved)` and the same assertion (`len() == 3`).
+  `list_attachments` never decodes a stream, so it is the bounded path; `attachment_bytes` decodes whole and
+  is not used. This is the one existing test edited, as authorised.
+- `whole_reads.txt` loses `document::extract_embedded_files`.
+- Test and failure before: the same wall. With the line removed and the function still there:
+  `callers not on the list: ["document::extract_embedded_files"]; listed callers that no longer read whole: []`.
+- Lint: the site `src/document.rs::extract_embedded_files#1` is gone from `--sites`.
 
-### 3. Cancel polls in the reading-order XY-cut and the span post-pass — partly done
-- Fixture first: `extractAll form` now builds `gen::text_form(size::FORM_TEXT_LINES)` with
-  `FORM_TEXT_LINES = 20_000` (main.rs:114, :182). I deleted `gen::graphics_text_form`, which then had no
-  caller. **Choice:** the old fixture kept 300,000 graphics triples as well; with 20,000 lines that
-  fixture burns more than the host's 20e9 `MAX_TOTAL` (the run is cut off with "fixture too big"). Without
-  the triples the total is about 10.3e9. `WHOLE_FORM_TRIPLES` stays for the render rows.
-- Failure before: with 20,000 lines and the old XY-cut,
-  `extractAll form  max_gap 4985926179  total 20000000000  polls 7424  FAIL: cut off at 20000000000, fixture too big`.
-  With the triples removed and the polls disabled (below):
-  `max_gap 4076532208  total 10329508282  polls 323  FAIL: gap above 1100000000`.
-- Change, xycut.rs:
-  - `partition_indexed_depth` polls once per region (:515). **Choice:** it cannot `?`.
-    `partition_region` has 13 existing test callers and `order_by_xy_cut` has one engine proof, all
-    infallible, and I may not edit them; so on a cancelled job the region ends in the flat sort
-    that the depth cap already uses. The cancel itself is reported by the `poll()?` that follows in
-    `postprocess_spans`.
-  - `find_horizontal_split_indexed`: the `full_width_left_rows` filter scanned both sides
-    for each left run (quadratic: about 3.6e9 fuel in one call at 20,000 lines). It is now a loop that
-    polls per run (`poll().ok()?`; the function returns `Option`, so a cancel is "no cut"). The
-    arithmetic is unchanged.
-- Change, document.rs `postprocess_spans`: `crate::cancel::poll()?` before each of the passes
-  (off-page, drop caps, vertical-writing/ordering, the rotation firewall, running headers, space
-  normalising, char-width splits, super/subscripts, combining marks).
-- Injected failure: I disabled both XY-cut polls (`if false {` and the loop poll deleted). Result:
-  `extractAll form  max_gap 4076532208  total 10329508282  polls 323  FAIL: gap above 1100000000`
-  (polls 323 against 13,667 with them). Restored from a copy; `git diff` shows no `if false`.
-  I did not inject separately on the `postprocess_spans` polls: they sit between passes whose gaps
-  are far below the sort's, so this row cannot tell their presence.
-- Result now: `extractAll  form  1579413849  10275460504  13667  FAIL: gap above 1100000000` (Open 2).
+### 3. Cancel polls in the reading-order partition and the span passes — done
+- Fixture first: `extractAll form` is `gen::text_form(size::FORM_TEXT_LINES)`, `FORM_TEXT_LINES = 20_000`
+  (main.rs:114, :182). `gen::graphics_text_form` had no caller left and is deleted. **Choice:** the old fixture
+  also had 300,000 graphics triples; with 20,000 lines it passes the host's 20e9 `MAX_TOTAL` and is cut off
+  ("fixture too big"), so the row has the lines only. `WHOLE_FORM_TRIPLES` stays for the render rows.
+- Failure before (old XY-cut, 20,000 lines, triples kept):
+  `extractAll form  4985926179  20000000000  7424  FAIL: cut off at 20000000000, fixture too big`.
+- xycut.rs:
+  - `partition_indexed_depth` polls once per region. **Choice:** it cannot `?`: `partition_region` has 13
+    existing test callers and `order_by_xy_cut` one engine proof, all infallible, so a cancelled job ends the
+    region in the flat sort the depth cap already uses; the `poll()?` that follows in `postprocess_spans`
+    reports it.
+  - `find_horizontal_split_indexed`: the `full_width_left_rows` scan (every left run scanned both sides:
+    about 3.6e9 fuel in one call) is a loop that polls per run (`poll().ok()?`; the function returns `Option`).
+- document.rs `postprocess_spans`: `crate::cancel::poll()?` before each pass over the page's spans, and one
+  after `stamp_char_x_offsets` (see "A failure the suite found").
+- document.rs `assemble_text_from_spans`: `crate::cancel::poll()?` before each of its whole-text passes
+  (metadata filter, Kangxi, Arabic forms, whitespace cleanup, mojibake repair, ligatures, CJK digit spaces,
+  prime decimal spaces). With the sort polled, this was the next longest gap (1,214,761,275).
+- text.rs (ruling 2), `sort_glyphs`: the comparator counts comparisons and calls `crate::cancel::poll()`
+  every 4,096; once it reports a cancel a flag makes every later comparison return `Equal` at once.
+  The comparator and the stable `sort_by` are unchanged, so without a cancel the order is today's.
+  `extract_into_self` calls `crate::cancel::poll()?` right after the sort to return the cancel error.
+  `sort_glyphs` is `pub(crate)` so the proof can call it; `sort_by_reading_order` keeps its signature, as three
+  existing tests call it.
+  **Risk:** a comparator that returns `Equal` after having ordered other pairs is not a total order, and the
+  standard sort may panic on that. It did not in the proof (20,000 glyphs, cancel at the second poll) or the suite,
+  but the standard library does not promise it.
+- Proofs (`src/host/engine_proofs/sort_cancel.rs`, new): (a) a run with no cancel gives the order of an
+  independent stable sort by line then x, and polls more than twice; (b) under `tripping_at(2)` the sort polls
+  exactly twice, then stops, and `poll()` reports `operation cancelled`.
+- Failures shown:
+  - Proofs on the old sort: `assertion left == right failed ... left: 0, right: 2` (the sort polled 0 times) and
+    the `polls() > 2` assertion of (a).
+  - Comparator poll disabled (`false && poll().is_err()`), everything else in place:
+    `extractAll form  1545129127  10428539724  13675  FAIL: gap above 1100000000`; the two proofs fail the same
+    way (`the sort polled 0 times`). Restored; `grep "false && crate"` finds nothing.
+  - XY-cut polls disabled (earlier, with the 20,000-line fixture): `max_gap 4076532208  polls 323  FAIL`, against
+    13,667 polls with them.
+  - I did not inject separately on the `postprocess_spans` and `assemble_text_from_spans` polls: each sits between
+    passes and the row sees them only as the sum.
+- After: `extractAll  form  898924743  10481121160  15266`, under `MAX_GAP` 1,100,000,000.
 
 ### 4. `TAGGED_SAVE` — done
-- main.rs:95: 5,000 → 8,000.
-- Before (5,000, this toolchain): `saveFull tagged 61741467 969659970 16890  FAIL: total below 1000000000`.
-- After (8,000): `saveFull tagged 68674179 1560580772 27016`, above the floor.
+- main.rs:95: 5,000 → 8,000. Before (5,000 on this toolchain):
+  `saveFull tagged 61741467 969659970 16890  FAIL: total below 1000000000`. After:
+  `saveFull tagged 68427131 1553183612 27016`.
+
+## A failure the suite found
+After the post-sort poll went in, `host::engine_proofs::cancel_polls::page_list_edits_cancelled_at_any_poll_change_nothing`
+failed: `a cancel at poll 72 of 72 did not stop the op`. `edit_add_stamp` builds each page with `get_page`, whose
+spans reach `stamp_char_x_offsets`; that function returns `()` and swallows the error of its aligned extraction,
+so the new poll was the op's last and its cancel was lost. Fixed in `postprocess_spans`: a `poll()?` right after
+`stamp_char_x_offsets` (the thread-local cancel is sticky). No existing test was changed for it. The 20
+`cancel_polls` proofs pass.
 
 ## Choices where the plan left one open
-- Item 2 stopped rather than deleting (the plan's own rule).
-- Fixture of item 3: lines instead of triples + lines (above).
-- XY-cut cancel: flat-sort fallback instead of `Result` plumbing (above), to leave the existing tests
-  untouched.
-- `whole_reads.txt` edited (one line removed): the wall's own header says it only shrinks.
-- The plan's "59 sites" matches the lint's own count; the 86 vs 87 in raw `--sites` lines also
-  counts the "not a site" notes.
-- The unused scaffolding in item 1: the old marker block in `extract_text_from_ap_stream` had its end
-  marker inside a `match`; I closed it where the block ends.
-- Changelog: two Fixed bullets in `CHANGELOG.pre.md`'s 6.0.0-dev.0 entry (the appearance stream read in
-  pieces; a cancel reaching the reading-order partition and the span passes).
+- XY-cut cancel as a flat-sort fallback instead of `Result` plumbing (tests stay untouched).
+- Fixture of item 3: lines only, no triples (total cap).
+- `collect_embedded_filespecs` deleted with `extract_embedded_files` (it would be dead code).
+- `whole_reads.txt`: two lines removed (the wall's header says the list only shrinks).
+- The old marker block in `extract_text_from_ap_stream` had its end marker inside a `match`; I closed it where the
+  block ends.
+- Changelog: two Fixed bullets in `CHANGELOG.pre.md`'s 6.0.0-dev.0 entry (the appearance stream read in pieces; a
+  cancel reaching the partition, the glyph sort and the span and text passes of a huge page).
+- Not done: `make test-memory` (not in the gate; no memprobe row covers appearance streams).
+- A note on method: my first measurements of this round ran on the base tree because I had undone the earlier
+  working changes after making the patches; I reapplied `t-571-fork.patch` and `t-571-pkg.patch` before every number
+  quoted above.
 
 ## Summary lines
-- Rust suite (`cargo nextest run --lib`, the plan's features): `Summary [ 591.818s] 6752 tests run: 6752 passed (7 slow), 5 skipped`
-- `bash tool/check_whole_buffers.sh`: before `59 site(s) read a whole buffer that is not a table`;
-  after `58 site(s) read a whole buffer that is not a table`.
-- `bash tool/check_patch_markers.sh`: exit 0, no output. `bash tool/check_fork_tests.sh`: exit 0, no output.
-  `bash tool/check_cancel_polls.sh`: `every loop over a document-scale collection polls for a cancel`.
-  `bash tool/check_changelog_shape.sh`: exit 0, no output.
+- Rust suite (`cargo nextest run --no-fail-fast --lib`, the plan's features):
+  `Summary [ 593.981s] 6754 tests run: 6754 passed (7 slow), 5 skipped`
+- `bash tool/check_whole_buffers.sh`: before `59 site(s) read a whole buffer that is not a table`; after
+  `57 site(s) read a whole buffer that is not a table`. The `--sites` diff is exactly
+  `src/document.rs::extract_text_from_ap_stream#1` and `src/document.rs::extract_embedded_files#1`.
+- `bash tool/check_patch_markers.sh`, `check_fork_tests.sh`, `check_cancel_polls.sh`, `check_changelog_shape.sh`: all exit 0.
 - `dart analyze --fatal-infos lib hook test bin`: `No issues found!`
-- `make test-fuel DART=dart`: every row passes except
-  `extractAll form  1579413849  10275460504  13667  FAIL: gap above 1100000000`;
-  `saveFull tagged  68674179  1560580772  27016`.
-- `make test-ops-native DART=dart`: `01:13 +666 ~1: All tests passed!`
-- `make test-memory`: not run; it is not in the plan's gate and no memprobe row covers appearance streams.
+- `make test-fuel DART=dart`: exit 0, no FAIL, 39 rows. Rows of this task:
+  `extractAll form  898924743  10481121160  15266`; `saveFull tagged  68427131  1553183612  27016`.
+- `make test-ops-native DART=dart`: `01:17 +666 ~1: All tests passed!`

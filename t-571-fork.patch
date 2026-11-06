@@ -1,8 +1,63 @@
 diff --git a/src/document.rs b/src/document.rs
-index c96b31b..64866e6 100644
+index c96b31b..8468f7d 100644
 --- a/src/document.rs
 +++ b/src/document.rs
-@@ -11250,25 +11250,38 @@ impl PdfDocument {
+@@ -7915,15 +7915,27 @@ impl PdfDocument {
+         // as that would emit every annotation a second time.
+ 
+         // Filter leaked PDF metadata
++        // ── pdf_manipulator patch: a poll between the passes over the page's text ──
++        crate::cancel::poll()?;
++        // ── end pdf_manipulator patch ──
+         let final_text = Self::filter_leaked_metadata(&text);
+ 
+         // Normalize Kangxi Radicals
++        // ── pdf_manipulator patch: a poll between the passes over the page's text ──
++        crate::cancel::poll()?;
++        // ── end pdf_manipulator patch ──
+         let final_text = Self::normalize_kangxi_radicals(&final_text);
+ 
+         // Normalize Arabic Presentation Forms
++        // ── pdf_manipulator patch: a poll between the passes over the page's text ──
++        crate::cancel::poll()?;
++        // ── end pdf_manipulator patch ──
+         let final_text = Self::normalize_arabic_presentation_forms(&final_text);
+ 
+         // Apply whitespace cleanup
++        // ── pdf_manipulator patch: a poll between the passes over the page's text ──
++        crate::cancel::poll()?;
++        // ── end pdf_manipulator patch ──
+         let cleaned_text = crate::converters::whitespace::cleanup_plain_text(&final_text);
+ 
+         // For tagged PDFs, the structure-tree traversal at line 4306 already
+@@ -7940,6 +7952,9 @@ impl PdfDocument {
+         // because the producing font had no ToUnicode CMap and the
+         // /Differences / AGL lookup returned the UTF-8 byte sequence
+         // re-interpreted as Latin-1. Re-decode those runs in place.
++        // ── pdf_manipulator patch: a poll between the passes over the page's text ──
++        crate::cancel::poll()?;
++        // ── end pdf_manipulator patch ──
+         let cleaned_text = Self::repair_utf8_mojibake(&cleaned_text);
+ 
+         // Optionally expand Latin ligature characters to their component letters.
+@@ -7957,10 +7972,16 @@ impl PdfDocument {
+ 
+         // Drop stray spaces a producer inserted between a CJK ideograph and an
+         // embedded ASCII number (e.g. "公元前 1000 年" → "公元前1000年").
++        // ── pdf_manipulator patch: a poll between the passes over the page's text ──
++        crate::cancel::poll()?;
++        // ── end pdf_manipulator patch ──
+         let cleaned_text = crate::extractors::text::strip_cjk_digit_boundary_spaces(&cleaned_text);
+ 
+         // Drop a space the word-break heuristic injected inside a prime-notation
+         // number (e.g. "0′′ .28" / "0′′. 28" → "0′′.28").
++        // ── pdf_manipulator patch: a poll between the passes over the page's text ──
++        crate::cancel::poll()?;
++        // ── end pdf_manipulator patch ──
+         let cleaned_text =
+             crate::extractors::text::strip_prime_decimal_boundary_spaces(&cleaned_text);
+ 
+@@ -11250,25 +11271,38 @@ impl PdfDocument {
          // Get /N (Normal appearance) — can be a stream ref or a dictionary of states
          let n_obj = ap_dict.get("N")?;
          // ── pdf_manipulator patch: a stream is its dictionary and an extent that reads itself ──
@@ -51,7 +106,7 @@ index c96b31b..64866e6 100644
  
          // Create a temporary text extractor for this AP stream
          let mut extractor = TextExtractor::new();
-@@ -11291,7 +11304,9 @@ impl PdfDocument {
+@@ -11291,7 +11325,9 @@ impl PdfDocument {
          }
  
          // Extract text spans from the AP stream
@@ -62,7 +117,7 @@ index c96b31b..64866e6 100644
          if spans.is_empty() {
              return None;
          }
-@@ -13810,6 +13825,9 @@ impl PdfDocument {
+@@ -13810,6 +13846,9 @@ impl PdfDocument {
      ) -> Result<Vec<crate::layout::TextSpan>> {
          let mut spans = raw_spans;
  
@@ -72,7 +127,7 @@ index c96b31b..64866e6 100644
          self.drop_offpage_spans(page_index, &mut spans);
  
          // Recover decimal points mis-decoded as `¬` (U+00AC) in Computer-Modern
-@@ -13825,6 +13843,9 @@ impl PdfDocument {
+@@ -13825,6 +13864,9 @@ impl PdfDocument {
  
          // Re-attach oversized lone leading capitals to their word before the
          // reading-order sort can strand them (drop-cap / table-title initials).
@@ -82,7 +137,7 @@ index c96b31b..64866e6 100644
          Self::merge_drop_cap_initials(&mut spans);
  
          // Apply page /Rotate to span geometry BEFORE reading-order sorting.
-@@ -13890,6 +13911,9 @@ impl PdfDocument {
+@@ -13890,6 +13932,9 @@ impl PdfDocument {
          // scramble vertical text; per-span wmode lets us route just those
          // pages through a tategaki comparator while leaving every existing
          // horizontal corpus untouched.
@@ -92,7 +147,7 @@ index c96b31b..64866e6 100644
          let vertical_count = spans.iter().filter(|s| s.wmode == 1).count();
          if !spans.is_empty() && vertical_count * 2 >= spans.len() {
              // See `crate::utils::sort_vertical_tategaki` for the
-@@ -13923,6 +13947,10 @@ impl PdfDocument {
+@@ -13923,6 +13968,10 @@ impl PdfDocument {
              // ── end pdf_manipulator patch ──
          }
  
@@ -103,7 +158,7 @@ index c96b31b..64866e6 100644
          // Per-span rotation firewall. Runs drawn with a rotated text matrix
          // (the vertical `arXiv:…` margin stamp, figure/axis labels, rotated
          // table headers, transit-poster route names) break the axis-aligned
-@@ -13977,6 +14005,7 @@ impl PdfDocument {
+@@ -13977,6 +14026,7 @@ impl PdfDocument {
          // bottom of the page are flagged as artifacts so downstream filters
          // drop them.
          // ── pdf_manipulator patch: the cancel check rides to the pre-pass ──
@@ -111,7 +166,7 @@ index c96b31b..64866e6 100644
          self.mark_running_artifact_spans(page_index, &mut spans, cancel)?;
          // ── end pdf_manipulator patch ──
  
-@@ -13985,6 +14014,9 @@ impl PdfDocument {
+@@ -13985,6 +14035,9 @@ impl PdfDocument {
          // or thin-space variants in ToUnicode CMaps (e.g. justified text layouts);
          // normalising here gives consistent word boundaries to every downstream
          // consumer (extract_text, word-F1 scoring, etc.).
@@ -121,7 +176,7 @@ index c96b31b..64866e6 100644
          for span in &mut spans {
              if span
                  .text
-@@ -14021,6 +14053,9 @@ impl PdfDocument {
+@@ -14021,6 +14074,9 @@ impl PdfDocument {
          // ground truth keeps in ASCII; gating on token-internal
          // context keeps the desired cases without regressing the
          // affiliation-block pages.
@@ -131,7 +186,7 @@ index c96b31b..64866e6 100644
          Self::apply_super_sub_script_substitutions(&mut spans);
  
          // Fold spacing-diacritic spans (´, `, ^, ~, ¨, …) into the
-@@ -14030,6 +14065,9 @@ impl PdfDocument {
+@@ -14030,6 +14086,9 @@ impl PdfDocument {
          // the marks as separate `Tj` ops at the base glyph's X
          // coordinate. Without this pass extract_text returns the
          // raw two-glyph order "´Ecole" instead of "École".
@@ -141,14 +196,271 @@ index c96b31b..64866e6 100644
          Self::apply_combining_mark_composition(&mut spans);
  
          // Stamp accurate per-glyph x-origins onto the finalized spans so that
+@@ -14040,6 +14099,8 @@ impl PdfDocument {
+         // consumers do.
+         // ── pdf_manipulator patch: the cancel check rides to the char extraction ──
+         self.stamp_char_x_offsets(page_index, &mut spans, cancel);
++        // A cancel the stamping swallowed is reported here.
++        crate::cancel::poll()?;
+         // ── end pdf_manipulator patch ──
+ 
+         Ok(spans)
+@@ -24967,107 +25028,6 @@ impl PdfDocument {
+             .collect()
+     }
+ 
+-    /// Extract embedded files / attachments (WS1.8a, ISO 32000-1 §7.11.4).
+-    ///
+-    /// Walks the catalog's `/Names /EmbeddedFiles` name tree and returns
+-    /// `(filename, decoded bytes)` for each `/Filespec`'s `/EF /F` (or `/UF`)
+-    /// embedded-file stream. Complements the existing embedded-file writer.
+-    /// Returns an empty vector when the document has no attachments.
+-    pub fn extract_embedded_files(&self) -> Result<Vec<(String, Vec<u8>)>> {
+-        self.require_authenticated()?;
+-        let catalog = self.catalog()?;
+-        let Some(cat_dict) = catalog.as_dict() else {
+-            return Ok(Vec::new());
+-        };
+-        // catalog → /Names → /EmbeddedFiles (name-tree root).
+-        let names = cat_dict
+-            .get("Names")
+-            .and_then(|n| self.resolve_object(n).ok());
+-        let Some(ef_root) = names
+-            .as_ref()
+-            .and_then(|n| n.as_dict())
+-            .and_then(|d| d.get("EmbeddedFiles"))
+-            .and_then(|e| self.resolve_object(e).ok())
+-        else {
+-            return Ok(Vec::new());
+-        };
+-
+-        let mut filespecs: Vec<Object> = Vec::new();
+-        self.collect_embedded_filespecs(&ef_root, &mut filespecs, 0);
+-
+-        let mut out = Vec::new();
+-        for fs in &filespecs {
+-            let Some(fs_dict) = fs.as_dict() else {
+-                continue;
+-            };
+-            // Prefer the Unicode filename /UF, fall back to /F.
+-            let filename = fs_dict
+-                .get("UF")
+-                .or_else(|| fs_dict.get("F"))
+-                .and_then(|n| self.resolve_object(n).ok())
+-                .and_then(|n| {
+-                    n.as_string()
+-                        .map(|s| String::from_utf8_lossy(s).into_owned())
+-                })
+-                .unwrap_or_else(|| "attachment".to_string());
+-            // /EF → { /F <stream ref> } (or /UF).
+-            let Some(ef) = fs_dict.get("EF").and_then(|e| self.resolve_object(e).ok()) else {
+-                continue;
+-            };
+-            let Some(ef_dict) = ef.as_dict() else {
+-                continue;
+-            };
+-            let Some(stream_ref) = ef_dict
+-                .get("F")
+-                .or_else(|| ef_dict.get("UF"))
+-                .and_then(|r| r.as_reference())
+-            else {
+-                continue;
+-            };
+-            if let Ok(stream_obj) = self.load_object(stream_ref) {
+-                // ── pdf_manipulator patch: a stream is its dictionary and an extent that reads itself ──
+-                if let Ok(bytes) = stream_obj.decode_stream_data() {
+-                // ── end pdf_manipulator patch ──
+-                    out.push((filename, bytes));
+-                }
+-            }
+-        }
+-        Ok(out)
+-    }
+-
+-    /// Recursively collect `/Filespec` objects from an `/EmbeddedFiles`
+-    /// name-tree node: leaf `/Names [key filespec …]` pairs plus `/Kids`.
+-    fn collect_embedded_filespecs(&self, node: &Object, out: &mut Vec<Object>, depth: u8) {
+-        if depth > 32 {
+-            return;
+-        }
+-        let Ok(node) = self.resolve_object(node) else {
+-            return;
+-        };
+-        let Some(dict) = node.as_dict() else {
+-            return;
+-        };
+-        if let Some(names) = dict.get("Names").and_then(|n| self.resolve_object(n).ok()) {
+-            if let Some(arr) = names.as_array() {
+-                // Flat [key1 filespec1 key2 filespec2 …]: the odd indices.
+-                let mut i = 1;
+-                while i < arr.len() {
+-                    if let Ok(fs) = self.resolve_object(&arr[i]) {
+-                        out.push(fs);
+-                    }
+-                    i += 2;
+-                }
+-            }
+-        }
+-        if let Some(kids) = dict.get("Kids").and_then(|k| self.resolve_object(k).ok()) {
+-            if let Some(arr) = kids.as_array() {
+-                for kid in arr {
+-                    self.collect_embedded_filespecs(kid, out, depth + 1);
+-                }
+-            }
+-        }
+-    }
+-
+     /// Build the resource-name → colour-space-object map from a resolved
+     /// `/Resources` dictionary's `/ColorSpace` subdictionary (§8.6.3 / §7.8.3),
+     /// resolving one indirect-ref hop per entry so the stored value is a colour
+diff --git a/src/extractors/text.rs b/src/extractors/text.rs
+index 5c25577..4fc4ccb 100644
+--- a/src/extractors/text.rs
++++ b/src/extractors/text.rs
+@@ -3921,6 +3921,9 @@ impl<'doc> TextExtractor<'doc> {
+         // PDF Y coordinates increase upward, so higher Y = top of page.
+         // We need to sort by Y descending (top first), then X ascending (left to right).
+         self.sort_by_reading_order();
++        // ── pdf_manipulator patch: a cancel the glyph sort ended on is reported here ──
++        crate::cancel::poll()?;
++        // ── end pdf_manipulator patch ──
+ 
+         // BUG FIX #3: Deduplicate overlapping characters
+         // Some PDFs render text multiple times (for effects like boldness, shadowing).
+@@ -5660,8 +5663,22 @@ impl<'doc> TextExtractor<'doc> {
+     }
+ 
+     // ── pdf_manipulator patch: one order for both kinds of glyph ──
+-    fn sort_glyphs<T: GlyphRow>(glyphs: &mut [T]) {
++    pub(crate) fn sort_glyphs<T: GlyphRow>(glyphs: &mut [T]) {
++        // The standard sort takes no `?`: it polls from its comparator, and a
++        // cancel makes every later comparison equal so the sort ends at once.
++        // Its caller reports the cancel.
++        const COMPARISONS_PER_POLL: u32 = 4096;
++        let mut compared = 0u32;
++        let mut cancelled = false;
+         glyphs.sort_by(|a, b| {
++            if cancelled {
++                return std::cmp::Ordering::Equal;
++            }
++            compared += 1;
++            if compared % COMPARISONS_PER_POLL == 0 && crate::cancel::poll().is_err() {
++                cancelled = true;
++                return std::cmp::Ordering::Equal;
++            }
+             // Handle NaN/Inf values - treat them as at the end
+             if !a.y().is_finite() {
+                 return if b.y().is_finite() {
+diff --git a/src/host/engine_proofs/mod.rs b/src/host/engine_proofs/mod.rs
+index b739975..d051e76 100644
+--- a/src/host/engine_proofs/mod.rs
++++ b/src/host/engine_proofs/mod.rs
+@@ -132,6 +132,7 @@ mod text_render_modes;
+ mod text_tj_chunks;
+ #[cfg(feature = "rendering")]
+ mod watermark_positions;
++mod sort_cancel;
+ mod whole_reads;
+ #[cfg(feature = "rendering")]
+ mod redact_extra_type3;
+diff --git a/src/host/engine_proofs/sort_cancel.rs b/src/host/engine_proofs/sort_cancel.rs
+new file mode 100644
+index 0000000..c925c00
+--- /dev/null
++++ b/src/host/engine_proofs/sort_cancel.rs
+@@ -0,0 +1,83 @@
++//! The sort over every glyph of a page polls for a cancel and ends at once
++//! when one lands, and a run with no cancel puts the glyphs in the order a
++//! plain sort by line and then by x would.
++//!
++//! The sort is one call of the standard library's, so the only place it can
++//! poll is its comparator, once every 4,096 comparisons.
++//!
++//! No Dart battery can observe this: a cancel from Dart lands at whatever poll
++//! the timing reaches, so a battery sees "cancelled or finished", never that
++//! the glyph sort of a page of tens of thousands of lines holds a poll.
++
++use crate::cancel::{enter, poll, CancelCheck};
++use crate::extractors::text::{AlignedChar, TextExtractor};
++
++const GLYPHS: usize = 20_000;
++
++/// `GLYPHS` glyphs in a scrambled order, many on each line and some at the
++/// same x, so the order the sort settles is the stable one.
++fn glyphs() -> Vec<AlignedChar> {
++    let mut state = 0x2545_F491u32;
++    (0..GLYPHS)
++        .map(|i| {
++            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
++            AlignedChar {
++                char: char::from(b'a' + (i % 26) as u8),
++                origin_x: ((state >> 8) % 50) as f32,
++                origin_y: ((state >> 16) % 200) as f32 + 0.25,
++                width: 1.0,
++                height: 1.0,
++                advance_width: i as f32,
++            }
++        })
++        .collect()
++}
++
++/// Line by line from the top, left to right, equal glyphs in the order they came.
++fn reference(glyphs: &[AlignedChar]) -> Vec<f32> {
++    let mut keyed: Vec<&AlignedChar> = glyphs.iter().collect();
++    keyed.sort_by(|a, b| {
++        (b.origin_y.round() as i32)
++            .cmp(&(a.origin_y.round() as i32))
++            .then(a.origin_x.partial_cmp(&b.origin_x).unwrap())
++    });
++    keyed.iter().map(|g| g.advance_width).collect()
++}
++
++/// No Dart battery can observe this: the sorted order is the same with or
++/// without the comparator's polls, and a poll count is not visible from Dart.
++#[test]
++fn a_run_with_no_cancel_keeps_the_order_and_polls() {
++    let input = glyphs();
++    let expected = reference(&input);
++
++    let mut alone = input.clone();
++    TextExtractor::sort_glyphs(&mut alone);
++    assert_eq!(alone.iter().map(|g| g.advance_width).collect::<Vec<_>>(), expected);
++
++    let check = CancelCheck::tripping_at(usize::MAX);
++    let mut polled = input;
++    {
++        let _job = enter(&check);
++        TextExtractor::sort_glyphs(&mut polled);
++        poll().expect("a check that never trips");
++    }
++    assert_eq!(polled.iter().map(|g| g.advance_width).collect::<Vec<_>>(), expected);
++    assert!(check.polls() > 2, "the comparator polled {} times", check.polls() - 1);
++}
++
++/// No Dart battery can observe this: a cancel from Dart lands where the timing
++/// puts it, never inside one standard-library sort of a page's glyphs.
++#[test]
++fn a_cancel_during_the_sort_ends_it_with_the_cancelled_error() {
++    let check = CancelCheck::tripping_at(2);
++    let mut input = glyphs();
++    let _job = enter(&check);
++    TextExtractor::sort_glyphs(&mut input);
++    assert_eq!(check.polls(), 2, "the sort polled {} times: twice is the poll, then the cancel", check.polls());
++    let error = poll().expect_err("the cancel is reported right after the sort");
++    assert!(
++        matches!(&error, crate::error::Error::Io(e) if e.to_string() == "operation cancelled"),
++        "{error:?}"
++    );
++}
 diff --git a/src/host/engine_proofs/whole_reads.txt b/src/host/engine_proofs/whole_reads.txt
-index c5c8652..236157b 100644
+index c5c8652..f473da9 100644
 --- a/src/host/engine_proofs/whole_reads.txt
 +++ b/src/host/engine_proofs/whole_reads.txt
-@@ -3,7 +3,6 @@ decoders::stream::decode_slice
+@@ -2,8 +2,6 @@ compliance::converter::add_pdfa_identification
+ decoders::stream::decode_slice
  document::cached_page_content
  document::compute_output_intent_cmyk_profile
- document::extract_embedded_files
+-document::extract_embedded_files
 -document::extract_text_from_ap_stream
  editor::document_editor::deflate_stream
  editor::document_editor::get_page_images
@@ -224,3 +536,19 @@ index 5da0ead..7cca4f9 100644
          // The count has to be read against the side it came from, not on its
          // own: three rows out of a hundred is a heading, a footnote and a
          // caption over two columns of prose, and vetoing there costs those
+diff --git a/tests/test_embedded_files.rs b/tests/test_embedded_files.rs
+index c39a925..b1bb088 100644
+--- a/tests/test_embedded_files.rs
++++ b/tests/test_embedded_files.rs
+@@ -156,7 +156,10 @@ mod embed_file_api {
+         let output_bytes = std::fs::read(&output_path).expect("Failed to read output");
+         // ── pdf_manipulator patch: packed objects can make the output smaller, so read the attachments back ──
+         let saved = pdf_oxide::PdfDocument::from_bytes(output_bytes).expect("Failed to parse output");
+-        assert_eq!(saved.extract_embedded_files().expect("embedded files").len(), 3);
++        assert_eq!(
++            pdf_oxide::host::attachments::list_attachments(&saved).expect("embedded files").len(),
++            3
++        );
+         // ── end pdf_manipulator patch ──
+ 
+         // Cleanup
