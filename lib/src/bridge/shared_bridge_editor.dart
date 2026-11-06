@@ -45,6 +45,9 @@ class _SharedEditorHandle extends BridgeEditorHandle {
     EngineOp.editorMutate,
     {'editOp': editOp, 'sourceLength': data.length, ...extra},
     sources: [data],
+    // The editor reads the source when it saves; the channel lives until the
+    // editor is disposed.
+    keepSources: {0},
   );
 
   /// Runs [run] with the wire arguments of [pages]. A selection from a page

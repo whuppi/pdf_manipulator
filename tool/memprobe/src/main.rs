@@ -146,6 +146,14 @@ fn limit(op: &str, input: &str) -> usize {
         // in 64 KiB pieces. The row at twice the size shows the slope: the
         // peak does not move.
         ("imagesToPdf", "png64" | "png128" | "jpeg64" | "jpeg128") => 16 * MIB,
+        // A 64 MiB attachment is read through its filters and handed to the
+        // sink 64 KiB at a time; a 64 MiB file to embed stays in its source
+        // until the save copies it from there.
+        ("attach", "attach64") => 16 * MIB,
+        ("embedFile", "file64") => 16 * MIB,
+        // The stamp's image stays in its source like a builder's: a JPEG is
+        // copied in 64 KiB pieces, a PNG is deflated a row at a time.
+        ("addImageStamp", "png64" | "jpeg64") => 16 * MIB,
         _ => panic!("no memory limit for {op} on {input}: add one to limit()"),
     }
 }
@@ -1146,6 +1154,9 @@ fn run() -> Result<(), String> {
     });
     verify_render_wire(&failed, "groups", &open_sink("groups", "render"));
 
+    let small = dir.join("small.pdf");
+    generate_small(&small)?;
+
     // imagesToPdf of one image of 64 MiB and of 128 MiB: the builder holds the
     // image's source from the add to the save, and the save reads it from there.
     for (name, kind, rows) in [
@@ -1170,12 +1181,225 @@ fn run() -> Result<(), String> {
             eprintln!("memprobe: imagesToPdf {name}: READ-BACK FAIL: {e}");
             failed.set(true);
         }
-        let _ = std::fs::remove_file(&image);
         let _ = std::fs::remove_file(&pdf);
+
+        if !name.ends_with("128") {
+            let stamped = open_sink(name, "addImageStamp");
+            step(&failed, "addImageStamp", name, limit("addImageStamp", name), |st| {
+                add_image_stamp(st, &small, &image, &stamped)
+            });
+            if let Err(e) = check_grown(&stamped, size) {
+                eprintln!("memprobe: addImageStamp {name}: READ-BACK FAIL: {e}");
+                failed.set(true);
+            }
+            let _ = std::fs::remove_file(&stamped);
+        }
+        let _ = std::fs::remove_file(&image);
     }
+
+    // The attachment of a document and the file embedded into one: 64 MiB of
+    // noise each, over a ceiling of 16.
+    let attachment = dir.join("attachment.pdf");
+    generate_attachment(&attachment, ATTACHMENT_BYTES)?;
+    let extracted = open_sink("attach64", "attach");
+    step(&failed, "attach", "attach64", limit("attach", "attach64"), |st| {
+        extract_attachment(st, &attachment, &extracted)
+    });
+    if let Err(e) = check_noise(&extracted, ATTACHMENT_BYTES) {
+        eprintln!("memprobe: attach attach64: READ-BACK FAIL: {e}");
+        failed.set(true);
+    }
+    let _ = std::fs::remove_file(&extracted);
+    let _ = std::fs::remove_file(&attachment);
+
+    let file = dir.join("file64.bin");
+    generate_noise(&file, ATTACHMENT_BYTES)?;
+    let embedded = open_sink("file64", "embedFile");
+    step(&failed, "embedFile", "file64", limit("embedFile", "file64"), |st| {
+        embed_file(st, &small, &file, &embedded)
+    });
+    if let Err(e) = check_grown(&embedded, ATTACHMENT_BYTES as u64) {
+        eprintln!("memprobe: embedFile file64: READ-BACK FAIL: {e}");
+        failed.set(true);
+    }
+    let _ = std::fs::remove_file(&embedded);
+    let _ = std::fs::remove_file(&file);
 
     if failed.get() {
         return Err("one or more steps exceeded their memory limit".to_string());
+    }
+    Ok(())
+}
+
+// ── attachments, embedded files and image stamps ────────────────────
+
+const ATTACHMENT_BYTES: usize = 64 * MIB;
+const ATTACHMENT_NAME: &str = "noise.bin";
+const NOISE_SEED: u64 = 0xA77;
+
+/// One empty page.
+fn generate_small(path: &Path) -> Result<(), String> {
+    let mut pdf = PdfOut::create(path)?;
+    pdf.object(1, "<< /Type /Catalog /Pages 2 0 R >>")?;
+    pdf.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")?;
+    pdf.object(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>")?;
+    pdf.finish()
+}
+
+/// `len` bytes of noise, written in pieces.
+fn generate_noise(path: &Path, len: usize) -> Result<(), String> {
+    let fail = |e: std::io::Error| format!("noise {}: {e}", path.display());
+    let mut out = std::io::BufWriter::new(File::create(path).map_err(fail)?);
+    let mut rng = Xorshift::new(NOISE_SEED);
+    let mut piece = vec![0u8; 64 * 1024];
+    let mut left = len;
+    while left > 0 {
+        let n = left.min(piece.len());
+        rng.fill_bytes(&mut piece[..n]);
+        out.write_all(&piece[..n]).map_err(fail)?;
+        left -= n;
+    }
+    out.flush().map_err(fail)
+}
+
+/// A document whose one attachment is `len` bytes of noise under
+/// `FlateDecode` (stored blocks: noise does not shrink).
+fn generate_attachment(path: &Path, len: usize) -> Result<(), String> {
+    let noise = path.with_extension("noise");
+    let packed = path.with_extension("z");
+    generate_noise(&noise, len)?;
+    let fail = |e: std::io::Error| format!("attachment {}: {e}", path.display());
+    let mut zlib = flate2::write::ZlibEncoder::new(
+        std::io::BufWriter::new(File::create(&packed).map_err(fail)?),
+        flate2::Compression::none(),
+    );
+    std::io::copy(&mut File::open(&noise).map_err(fail)?, &mut zlib).map_err(fail)?;
+    zlib.finish().map_err(fail)?.flush().map_err(fail)?;
+    let packed_len = std::fs::metadata(&packed).map_err(fail)?.len();
+    let mut pdf = PdfOut::create(path)?;
+    pdf.object(1, "<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles 4 0 R >> >>")?;
+    pdf.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")?;
+    pdf.object(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>")?;
+    pdf.object(4, &format!("<< /Names [({ATTACHMENT_NAME}) 5 0 R] >>"))?;
+    pdf.object(
+        5,
+        &format!("<< /Type /Filespec /F ({ATTACHMENT_NAME}) /UF ({ATTACHMENT_NAME}) /EF << /F 6 0 R >> >>"),
+    )?;
+    pdf.stream(
+        6,
+        &format!("/Type /EmbeddedFile /Filter /FlateDecode /Params << /Size {len} >>"),
+        packed_len,
+        File::open(&packed).map_err(fail)?,
+    )?;
+    pdf.finish()?;
+    let _ = std::fs::remove_file(&noise);
+    let _ = std::fs::remove_file(&packed);
+    Ok(())
+}
+
+/// The Dart `extractAttachment`: open, the attachment to a sink, dispose.
+fn extract_attachment(
+    state: &mut pdf_oxide::host::engine_state::EngineState,
+    pdf: &Path,
+    out: &Path,
+) -> Result<(), String> {
+    let resp = call(state, re("open"), vec![source(pdf)], vec![])?;
+    let hid = resp.i32("handleId").expect("open returns handleId");
+    call(
+        state,
+        re("extractAttachment").put("handleId", i32v(hid)).put("name", strv(ATTACHMENT_NAME)),
+        vec![],
+        vec![sink(out)],
+    )?;
+    call(state, re("docDispose").put("handleId", i32v(hid)), vec![], vec![])?;
+    Ok(())
+}
+
+/// The Dart `addAttachment` and the save: an editor over `pdf`, `file` as the
+/// source of the embedded file, the full save to `out`, the dispose.
+fn embed_file(
+    state: &mut pdf_oxide::host::engine_state::EngineState,
+    pdf: &Path,
+    file: &Path,
+    out: &Path,
+) -> Result<(), String> {
+    let length = std::fs::metadata(file).map_err(|e| format!("{}: {e}", file.display()))?.len();
+    let resp = call(state, re("editorOpen"), vec![source(pdf)], vec![])?;
+    let hid = resp.i32("handleId").expect("editorOpen returns handleId");
+    call(
+        state,
+        re("editorMutate")
+            .put("handleId", i32v(hid))
+            .put("editOp", strv("embedFile"))
+            .put("sourceLength", i32v(length as i32))
+            .put("name", strv(ATTACHMENT_NAME)),
+        vec![source(file)],
+        vec![],
+    )?;
+    save_full(state, hid, out, false)?;
+    dispose(state, hid);
+    Ok(())
+}
+
+/// The Dart `addImageStamp` on every page and the save.
+fn add_image_stamp(
+    state: &mut pdf_oxide::host::engine_state::EngineState,
+    pdf: &Path,
+    image: &Path,
+    out: &Path,
+) -> Result<(), String> {
+    let length = std::fs::metadata(image).map_err(|e| format!("{}: {e}", image.display()))?.len();
+    let resp = call(state, re("editorOpen"), vec![source(pdf)], vec![])?;
+    let hid = resp.i32("handleId").expect("editorOpen returns handleId");
+    call(
+        state,
+        re("editorMutate")
+            .put("handleId", i32v(hid))
+            .put("editOp", strv("addImageStamp"))
+            .put("sourceLength", i32v(length as i32))
+            .put("pagesAll", wire::Value::Bool(true))
+            .put("x", wire::Value::F64(10.0))
+            .put("y", wire::Value::F64(10.0))
+            .put("width", wire::Value::F64(100.0))
+            .put("height", wire::Value::F64(100.0))
+            .put("opacity", wire::Value::F64(1.0)),
+        vec![source(image)],
+        vec![],
+    )?;
+    save_full(state, hid, out, false)?;
+    dispose(state, hid);
+    Ok(())
+}
+
+/// The saved file holds at least the `payload` it was given.
+fn check_grown(path: &Path, payload: u64) -> Result<(), String> {
+    let len = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?.len();
+    if len < payload {
+        return Err(format!("{len} bytes saved, under the {payload} given"));
+    }
+    Ok(())
+}
+
+/// The extracted file is the noise `generate_noise` wrote.
+fn check_noise(path: &Path, len: usize) -> Result<(), String> {
+    let fail = |e: std::io::Error| format!("{}: {e}", path.display());
+    let mut file = std::io::BufReader::new(File::open(path).map_err(fail)?);
+    let mut rng = Xorshift::new(NOISE_SEED);
+    let mut want = vec![0u8; 64 * 1024];
+    let mut got = vec![0u8; 64 * 1024];
+    let mut left = len;
+    while left > 0 {
+        let n = left.min(want.len());
+        rng.fill_bytes(&mut want[..n]);
+        std::io::Read::read_exact(&mut file, &mut got[..n]).map_err(fail)?;
+        if want[..n] != got[..n] {
+            return Err(format!("the bytes differ {} from the end", left));
+        }
+        left -= n;
+    }
+    let mut extra = [0u8; 1];
+    if std::io::Read::read(&mut file, &mut extra).map_err(fail)? != 0 {
+        return Err("the file is longer than the attachment".to_string());
     }
     Ok(())
 }

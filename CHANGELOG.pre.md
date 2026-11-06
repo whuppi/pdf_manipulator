@@ -295,6 +295,9 @@ CONTENT RULES (never change)
 - Fixed the blob URL of a cross-origin worker bootstrap never being revoked — it goes once the worker has started or failed to
 - Fixed text extraction holding a form field's whole appearance stream in memory — the stream is now read as its operators, in bounded pieces
 - Fixed a cancel waiting out the reading-order partition, the glyph sort and the span and text passes of a page of tens of thousands of text lines — each now polls for it as it runs
+- Fixed `extractAttachment` holding the whole decoded attachment in memory before writing it — it now runs the stream's filters as a reader and writes the sink 64 KiB at a time, so a 64 MiB attachment extracts in under 16 MB of engine memory
+- Fixed `addAttachment` reading the whole file into memory — the file stays in its source until the save copies it into the document in 64 KiB pieces, so a 64 MiB file embeds in under 16 MB of engine memory
+- Fixed `addImageStamp` reading the whole image into memory — a JPEG is copied from its source in 64 KiB pieces and a PNG is deflated a row at a time at the save, so a 64 MiB image stamps in under 16 MB of engine memory
 
 ## 5.0.1-dev.0
 
