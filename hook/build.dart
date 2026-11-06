@@ -241,6 +241,9 @@ Future<void> _resolveNative({
 //   WASM build outputs (pdf_oxide_bg.wasm, pdf_oxide.js) → cargo + bindgen_runner
 //   Hand-written JS (executor_worker.js) → copy from package
 //
+// The Asyncify wasm is resolved only with `asyncify: true`; otherwise nothing
+// of it is downloaded, built or written.
+//
 // Returns the number of files freshly resolved (0 = all cached).
 Future<int> resolveWeb({
   required Uri packageRoot,
@@ -249,6 +252,7 @@ Future<int> resolveWeb({
   bool force = false,
   String? wasmFeaturesOverride,
   EngineBuild engineBuild = EngineBuild.speed,
+  bool asyncify = false,
 }) async {
   final constants = BuildConstants.load(packageRoot);
   // A kept subset OR a non-default build has no prebuilt asset, no pinned
@@ -267,6 +271,7 @@ Future<int> resolveWeb({
   for (final entry in constants.webAssets.entries) {
     final localName = entry.key;
     final assetName = entry.value;
+    if (localName == asyncifyWebAsset && !asyncify) continue;
     final dest = File('${destDir.path}/$localName');
 
     final isWasmBuildOutput = constants.wasmBuildOutputs.contains(localName);
@@ -438,8 +443,27 @@ Future<void> _compileWasm(
   // non-default build is a per-app artifact that must never land there.
   final isDefaultBuild = featuresOverride == null && engineBuild.isDefault;
 
-  // Contributor has locally built WASM — copy directly.
-  if (isDefaultBuild && existing.existsSync()) {
+  final isAsyncify = targetFile == asyncifyWebAsset;
+  final normal = File(p.join(webAssets.path, 'pdf_oxide_bg.wasm'));
+
+  // Contributor has locally built WASM — copy directly. The Asyncify wasm is
+  // a function of the normal one, so it is copied only while it is newer.
+  if (isDefaultBuild &&
+      existing.existsSync() &&
+      (!isAsyncify ||
+          !normal.existsSync() ||
+          existing.lastModifiedSync().isAfter(normal.lastModifiedSync()))) {
+    dest.parent.createSync(recursive: true);
+    existing.copySync(dest.path);
+    return;
+  }
+
+  if (isDefaultBuild && isAsyncify && normal.existsSync()) {
+    await buildAsyncifyWasm(
+      packageRoot: packageRoot,
+      wasm: normal,
+      out: existing,
+    );
     dest.parent.createSync(recursive: true);
     existing.copySync(dest.path);
     return;
@@ -456,7 +480,8 @@ Future<void> _compileWasm(
       packageRoot: packageRoot,
       features: features,
       outDir: outDir,
-      cargoEnv: engineBuild.cargoEnv,
+      build: engineBuild,
+      asyncify: isAsyncify,
     );
 
     final built = File(p.join(outDir.path, targetFile));

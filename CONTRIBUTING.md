@@ -43,7 +43,7 @@ make check
 ```
 
 Runs `analyze` (format + Dart + Rust warnings) + `test-guards`
-(mechanical test-suite rules) + `test` (unit + native + 3 web modes)
+(mechanical test-suite rules) + `test` (unit + native + 4 web modes)
 + `test-example` (macOS + 3 web modes). Must pass. Don't suppress
 with `// ignore:` — fix the underlying issue (`make analyze` fails
 on any ignore comment).

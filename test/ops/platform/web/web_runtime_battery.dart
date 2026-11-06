@@ -208,7 +208,7 @@ void registerWebPlatformTests({
     );
 
     test(
-      'a cancel during a blocked sink write answers within 100 ms (JSPI)',
+      'a cancel during a blocked sink write answers within 100 ms (JSPI, Asyncify)',
       () async {
         final pdf = Pdf(
           config: PdfConfig(
@@ -239,7 +239,9 @@ void registerWebPlatformTests({
         await pdf.dispose();
       },
       timeout: t(10),
-      skip: mode == PdfIoMode.jspi ? false : 'JSPI only',
+      skip: mode == PdfIoMode.jspi || mode == PdfIoMode.asyncify
+          ? false
+          : 'JSPI and Asyncify only',
     );
 
     test(

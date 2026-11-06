@@ -6,6 +6,14 @@
 import 'dart:convert';
 import 'dart:io';
 
+/// The web asset file of the Asyncify engine: shipped only to apps that set
+/// `asyncify: true`, and fetched by a browser only in Asyncify mode.
+const asyncifyWebAsset = 'pdf_oxide_asyncify_bg.wasm';
+
+/// The largest file Cloudflare Pages and Workers static assets serve: 25 MiB.
+/// Every wasm the release ships stays under it.
+const maxWebAssetBytes = 25 * 1024 * 1024;
+
 /// The parsed contents of the package's `build.json`.
 class BuildConstants {
   BuildConstants._({

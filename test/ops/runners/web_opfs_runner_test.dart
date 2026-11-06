@@ -37,6 +37,7 @@ import '../stress/pdf_sugar_stress_battery.dart';
 import '../stress/pdf_standalone_stress_battery.dart';
 import '../stress/pdf_builder_stress_battery.dart';
 import '../stress/pdf_instance_stress_battery.dart';
+import '../platform/web/web_asyncify_assets_battery.dart';
 import '../platform/web/web_cancel_channel_battery.dart';
 import '../platform/web/web_lane_protocol_battery.dart';
 import '../platform/web/web_runtime_battery.dart';
@@ -145,6 +146,12 @@ void main() {
   );
 
   registerWebLaneProtocolTests(
+    workerUrl: () =>
+        'http://localhost:$serverPort/web_assets/executor_worker.js',
+    mode: PdfIoMode.opfs,
+  );
+
+  registerWebAsyncifyAssetTests(
     workerUrl: () =>
         'http://localhost:$serverPort/web_assets/executor_worker.js',
     mode: PdfIoMode.opfs,

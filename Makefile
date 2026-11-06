@@ -1,8 +1,8 @@
 .PHONY: check analyze check-keep-sets check-bindings analyze-floor platforms lint-shell format fixtures test-guards bench \
-       build build-native build-wasm \
+       build build-native build-wasm build-wasm-asyncify \
        compile-macos compile-ios compile-android compile-linux compile-windows compile-wasm compile-natives \
        test test-pkg-native test-unit test-rust test-rust-run prune-target shake-audit verify-readme-sizes \
-       test-ops test-ops-native test-ops-web test-ops-opfs test-ops-jspi test-ops-atomics \
+       test-ops test-ops-native test-ops-web test-ops-opfs test-ops-jspi test-ops-atomics test-ops-asyncify \
        test-example test-example-matrix test-example-macos test-example-trimmed test-example-linux test-example-windows \
        test-example-android test-example-ios test-example-device \
        test-example-web test-example-web-jspi test-example-web-atomics test-example-web-opfs \
@@ -240,6 +240,11 @@ build-native:
 build-wasm:
 	$(DART) tool/compile.dart wasm
 
+# make build-wasm-asyncify   The Asyncify twin of the wasm (web_assets/
+#                            pdf_oxide_asyncify_bg.wasm), from the normal one.
+build-wasm-asyncify:
+	$(DART) tool/compile.dart wasm-asyncify
+
 # The wasm the web tests load. A file target, so it rebuilds exactly when an
 # engine input is newer: every Rust source and manifest under vendor/ (the
 # build output dirs excluded), the wasm feature list in build.json, and the
@@ -253,6 +258,18 @@ WASM_INPUTS := $(shell find vendor \( -name target -o -name .git \) -prune -o \
 
 $(WASM_OUT): $(WASM_INPUTS)
 	$(DART) tool/compile.dart wasm
+
+# The Asyncify wasm is a function of the normal one and of the instrumentation
+# code, so it rebuilds when either is newer.
+ASYNCIFY_OUT := web_assets/pdf_oxide_asyncify_bg.wasm
+
+# Every read of the Asyncify mode unwinds and rewinds the engine's stack, so
+# its tests need more of the local one-second budget than the other modes;
+# CI's 30x already absorbs it.
+ASYNCIFY_TIMEOUT := $(if $(CI),--timeout=30x,--timeout=5x)
+
+$(ASYNCIFY_OUT): $(WASM_OUT) lib/src/hook/asyncify_list.dart vendor/pdf_oxide/bindgen_runner/src/main.rs
+	$(DART) tool/compile.dart wasm-asyncify
 
 # ═══════════════════════════════════════════════════════════════════
 # § 4 — Compile (release pipeline — one target per CI job)
@@ -295,10 +312,11 @@ compile-natives:
 # make test-unit         Every test/ folder but ops/, fixtures/ and guards/ (VM).
 # make test-ops          All 4 ops runners.
 # make test-ops-native   Ops: native FFI.
-# make test-ops-web      Ops: all 3 web modes.
+# make test-ops-web      Ops: all 4 web modes.
 # make test-ops-opfs     Ops: web OPFS.
 # make test-ops-jspi     Ops: web JSPI.
 # make test-ops-atomics  Ops: web Atomics.
+# make test-ops-asyncify Ops: web Asyncify (builds the Asyncify wasm first).
 # make test-rust         cargo tests for the three vendored crates.
 
 test: fixtures test-unit test-ops test-memory
@@ -345,7 +363,7 @@ define run_browser_tests
 	$(DART) tool/clean_browser_leftovers.dart; exit $$rc
 endef
 
-test-ops-web: fixtures test-ops-opfs test-ops-jspi test-ops-atomics
+test-ops-web: fixtures test-ops-opfs test-ops-jspi test-ops-atomics test-ops-asyncify
 
 test-ops-opfs: $(WASM_OUT)
 	@echo "=== Ops: Web OPFS ==="
@@ -361,6 +379,12 @@ test-ops-atomics: $(WASM_OUT)
 	@echo "=== Ops: Web Atomics ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
 	$(call run_browser_tests,$(DART) test $(TIMEOUT) test/ops/runners/web_atomics_runner_test.dart -p chrome-coi --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-atomics.json)
+
+test-ops-asyncify: $(ASYNCIFY_OUT)
+	@echo "=== Ops: Web Asyncify ==="
+	@mkdir -p $(TEST_RESULTS_DIR)
+	$(call run_browser_tests,$(DART) test $(ASYNCIFY_TIMEOUT) test/ops/runners/web_asyncify_runner_test.dart -p chrome --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-asyncify.json)
+	$(call run_browser_tests,$(DART) test $(TIMEOUT) test/ops/runners/web_auto_mode_test.dart -p chrome --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-auto-mode.json)
 
 # Rust unit + integration tests for the three vendored crates. Most of the
 # engine's tests sit behind features we don't ship (ml / ocr / fips /

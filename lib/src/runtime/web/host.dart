@@ -20,11 +20,11 @@ class WebExecutorBooter implements ExecutorBooter {
   /// Creates a host. [laneWorkerUrl] locates executor_worker.js;
   /// [forceMode] overrides auto-detection (test runners use this).
   WebExecutorBooter({String? laneWorkerUrl, PdfIoMode? forceMode})
-    : _laneWorkerUrl =
-          laneWorkerUrl ??
-          _cachedWorkerUrl ??
-          'pdf_manipulator/executor_worker.js',
-      mode = _detectMode(forceMode ?? _cachedForceMode) {
+    : _laneWorkerUrl = _workerUrl(laneWorkerUrl),
+      mode = _detectMode(
+        forceMode ?? _cachedForceMode,
+        _baseUrlOf(_workerUrl(laneWorkerUrl)),
+      ) {
     // Page-level config inheritance: assets live in ONE place per
     // page, so explicitly-configured URLs/mode become the default
     // for later bare Pdf() instances (test generators, secondary
@@ -38,6 +38,9 @@ class WebExecutorBooter implements ExecutorBooter {
 
   static String? _cachedWorkerUrl;
   static PdfIoMode? _cachedForceMode;
+
+  static String _workerUrl(String? configured) =>
+      configured ?? _cachedWorkerUrl ?? 'pdf_manipulator/executor_worker.js';
 
   // ── OPFS namespace + liveness-keyed reclamation ──
   //
@@ -288,8 +291,17 @@ class WebExecutorBooter implements ExecutorBooter {
   int get defaultConcurrency =>
       suggestedLaneCount(web.window.navigator.hardwareConcurrency);
 
-  static JSObject? _cachedModule;
-  static Future<void>? _compileInFlight;
+  /// The wasm file a mode loads: the Asyncify engine only in Asyncify mode,
+  /// so a browser fetches the one file it runs.
+  static String wasmFileOf(PdfIoMode mode) =>
+      mode == PdfIoMode.asyncify ? asyncifyWasmFile : 'pdf_oxide_bg.wasm';
+
+  /// The Asyncify engine's file beside `executor_worker.js`, present only in
+  /// an app that set `asyncify: true`.
+  static const asyncifyWasmFile = 'pdf_oxide_asyncify_bg.wasm';
+
+  static final Map<String, JSObject?> _cachedModules = {};
+  static final Map<String, Future<void>> _compilesInFlight = {};
 
   @override
   String get poolKey => '$_laneWorkerUrl#${mode.name}';
@@ -393,41 +405,98 @@ class WebExecutorBooter implements ExecutorBooter {
     }
   }
 
-  static PdfIoMode _detectMode(PdfIoMode? force) {
-    if (force != null) return force;
-    final wasm = globalContext['WebAssembly'];
-    if (wasm != null &&
-        (wasm as JSObject).hasProperty('Suspending'.toJS).toDart) {
-      return PdfIoMode.jspi;
+  /// The mode this page runs. Forced, it must be one the browser can run and
+  /// the app shipped, or [PdfUnsupported] stops the instance at creation.
+  /// Auto-detected, best first: JSPI, Atomics, Asyncify when the app shipped
+  /// its wasm, OPFS.
+  static PdfIoMode _detectMode(PdfIoMode? force, String baseUrl) {
+    if (force != null) {
+      _requireRunnable(force, baseUrl);
+      return force;
     }
-    if (globalContext.hasProperty('SharedArrayBuffer'.toJS).toDart) {
-      return PdfIoMode.atomics;
-    }
+    if (_hasJspi) return PdfIoMode.jspi;
+    if (_hasSharedArrayBuffer) return PdfIoMode.atomics;
+    if (_asyncifyShipped(baseUrl)) return PdfIoMode.asyncify;
     return PdfIoMode.opfs;
   }
 
-  String get _baseUrl {
-    final url = web.URL(_laneWorkerUrl, web.window.location.href);
-    final s = url.href;
+  static bool get _hasJspi {
+    final wasm = globalContext['WebAssembly'];
+    return wasm != null &&
+        (wasm as JSObject).hasProperty('Suspending'.toJS).toDart;
+  }
+
+  static bool get _hasSharedArrayBuffer =>
+      globalContext.hasProperty('SharedArrayBuffer'.toJS).toDart;
+
+  static void _requireRunnable(PdfIoMode mode, String baseUrl) {
+    final String? lacks = switch (mode) {
+      PdfIoMode.native => 'the native mode runs only outside a browser',
+      PdfIoMode.jspi =>
+        _hasJspi ? null : 'this browser has no JSPI (WebAssembly.Suspending)',
+      PdfIoMode.atomics =>
+        _hasSharedArrayBuffer
+            ? null
+            : 'this page has no SharedArrayBuffer (it needs the COOP and '
+                  'COEP headers)',
+      PdfIoMode.asyncify =>
+        _asyncifyShipped(baseUrl)
+            ? null
+            : 'the app did not ship $asyncifyWasmFile beside '
+                  'executor_worker.js (set asyncify: true under '
+                  'hooks: user_defines: pdf_manipulator: and run the web '
+                  'setup)',
+      PdfIoMode.opfs =>
+        globalContext
+                .getProperty<JSObject>('navigator'.toJS)
+                .hasProperty('storage'.toJS)
+                .toDart
+            ? null
+            : 'this browser has no origin private file system',
+    };
+    if (lacks != null) {
+      throw PdfUnsupported('webIoMode ${mode.name} cannot run here: $lacks.');
+    }
+  }
+
+  static final Map<String, bool> _asyncifyProbes = {};
+
+  /// Whether the Asyncify wasm sits beside the worker script. A HEAD request,
+  /// so the file itself is never fetched; only a page that could run the mode
+  /// asks, once per location.
+  static bool _asyncifyShipped(String baseUrl) =>
+      _asyncifyProbes.putIfAbsent(baseUrl, () {
+        try {
+          final request = web.XMLHttpRequest()
+            ..open('HEAD', '$baseUrl$asyncifyWasmFile', false)
+            ..send();
+          return request.status == 200;
+        } catch (_) {
+          return false;
+        }
+      });
+
+  static String _baseUrlOf(String workerUrl) {
+    final s = web.URL(workerUrl, web.window.location.href).href;
     return s.substring(0, s.lastIndexOf('/') + 1);
   }
 
-  /// Compile the WASM once per page; failures fall back to letting
-  /// each worker stream-compile its own copy.
+  String get _baseUrl => _baseUrlOf(_laneWorkerUrl);
+
+  /// Compile the WASM once per page, one module per file: the assets live in
+  /// one place per page. Failures fall back to letting each worker
+  /// stream-compile its own copy.
   Future<JSObject?> _wasmModule() async {
-    if (_cachedModule != null) return _cachedModule;
-    _compileInFlight ??= () async {
+    final file = wasmFileOf(mode);
+    await (_compilesInFlight[file] ??= () async {
       try {
-        final response = await _fetch(
-          '${_baseUrl}pdf_oxide_bg.wasm'.toJS,
-        ).toDart;
-        _cachedModule = await _wasmCompileStreaming(response).toDart;
+        final response = await _fetch('$_baseUrl$file'.toJS).toDart;
+        _cachedModules[file] = await _wasmCompileStreaming(response).toDart;
       } catch (_) {
-        _cachedModule = null;
+        _cachedModules[file] = null;
       }
-    }();
-    await _compileInFlight;
-    return _cachedModule;
+    }());
+    return _cachedModules[file];
   }
 
   web.Worker _spawnWorker() {

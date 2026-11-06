@@ -732,7 +732,7 @@ void registerWebLaneProtocolTests({
       final bytes = minimalPdf;
 
       switch (mode) {
-        case PdfIoMode.jspi:
+        case PdfIoMode.jspi || PdfIoMode.asyncify:
           // The first exec suspends on its first read, so the handler is
           // re-entered by whatever arrives next.
           final go = Completer<void>();

@@ -11,6 +11,8 @@
 //
 //   jspi    — worker's host_read_at returns a Promise; this side
 //             answers with a readAtResult message.
+//   asyncify — the same messages: the worker unwinds its wasm at
+//             host_read_at and rewinds it after the answer.
 //   atomics — per-job SharedArrayBuffers; this side fills data and
 //             Atomics.store + notify (allowed on main — only wait
 //             is forbidden here).
@@ -183,6 +185,10 @@ class WebLease implements Lease, LanePhase {
 
   PdfIoMode get _mode => _exec._mode;
 
+  /// Whether the worker waits for each read and write in the middle of a
+  /// call: JSPI suspends the wasm, Asyncify unwinds it.
+  bool get _suspends => _mode == PdfIoMode.jspi || _mode == PdfIoMode.asyncify;
+
   final List<_WebJob> _queue = [];
   _WebJob? _running;
 
@@ -205,13 +211,13 @@ class WebLease implements Lease, LanePhase {
   bool _dead = false;
   static int _opfsCounter = 0;
 
-  /// Outstanding JSPI read for the running job (the worker is
-  /// suspended awaiting readAtResult).
-  bool _awaitingJspiRead = false;
+  /// Outstanding read for the running job in a mode that suspends (JSPI,
+  /// Asyncify): the worker is waiting for readAtResult.
+  bool _awaitingRead = false;
 
-  /// Outstanding JSPI write for the running job (the worker is
-  /// suspended awaiting chunkAck).
-  bool _awaitingJspiWrite = false;
+  /// Outstanding write for the running job in a mode that suspends: the
+  /// worker is waiting for chunkAck.
+  bool _awaitingWrite = false;
 
   /// Outstanding OPFS pre-copy ack, and the write it answers.
   Completer<String?>? _opfsAck;
@@ -305,12 +311,12 @@ class WebLease implements Lease, LanePhase {
     if (running.writeSab != null) {
       _sabSignal(running.writeSab!, SabStatus.cancelled);
     }
-    if (_awaitingJspiRead) {
-      _awaitingJspiRead = false;
+    if (_awaitingRead) {
+      _awaitingRead = false;
       _post({LaneMsgFields.type: LaneMsg.readAtResult, 'cancelled': true});
     }
-    if (_awaitingJspiWrite) {
-      _awaitingJspiWrite = false;
+    if (_awaitingWrite) {
+      _awaitingWrite = false;
       _post({LaneMsgFields.type: LaneMsg.chunkAck, 'cancelled': true});
     }
   }
@@ -509,8 +515,8 @@ class WebLease implements Lease, LanePhase {
     }
     if (_running == entry) {
       _running = null;
-      _awaitingJspiRead = false;
-      _awaitingJspiWrite = false;
+      _awaitingRead = false;
+      _awaitingWrite = false;
     }
     if (!entry.completer.isCompleted) entry.completer.complete(result);
     _settle();
@@ -565,7 +571,7 @@ class WebLease implements Lease, LanePhase {
         if (entry != null) unawaited(_serveReadAt(obj, entry));
 
       case LaneMsg.chunk:
-        if (_mode == PdfIoMode.jspi) _awaitingJspiWrite = true;
+        if (_suspends) _awaitingWrite = true;
         // Chained, never parallel: chunk N+1's sink.write may not
         // start before chunk N's completes (ordering is the sink
         // contract; OPFS mode has no worker-side backpressure).
@@ -704,7 +710,7 @@ class WebLease implements Lease, LanePhase {
     final offset = _int(obj, 'offset') ?? 0;
     final count = _int(obj, 'count') ?? 0;
     final isAtomics = _mode == PdfIoMode.atomics;
-    if (!isAtomics) _awaitingJspiRead = true;
+    if (!isAtomics) _awaitingRead = true;
 
     // The worker mounts a handle's held readers FIRST (they sit
     // inside the document at the indices the engine knew them by),
@@ -758,8 +764,8 @@ class WebLease implements Lease, LanePhase {
         _sabSignal(sab, SabStatus.ready);
       }
     } else {
-      if (!_awaitingJspiRead) return;
-      _awaitingJspiRead = false;
+      if (!_awaitingRead) return;
+      _awaitingRead = false;
       if (cancelled) {
         _post({LaneMsgFields.type: LaneMsg.readAtResult, 'cancelled': true});
       } else if (error != null || bytes == null) {
@@ -810,10 +816,10 @@ class WebLease implements Lease, LanePhase {
             ? SabStatus.cancelled
             : (error != null ? SabStatus.error : SabStatus.ready),
       );
-    } else if (_mode == PdfIoMode.jspi) {
+    } else if (_suspends) {
       // A cancel already answered this write.
-      if (!_awaitingJspiWrite) return;
-      _awaitingJspiWrite = false;
+      if (!_awaitingWrite) return;
+      _awaitingWrite = false;
       _post({
         LaneMsgFields.type: LaneMsg.chunkAck,
         if (cancelled) 'cancelled': true,

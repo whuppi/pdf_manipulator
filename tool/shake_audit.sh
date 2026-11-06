@@ -83,13 +83,13 @@ PY
 # Build one wasm variant to a TEMP DIR (never touching web_assets/, the
 # committed default artifact) and echo "<raw> <gz>" bytes — the same temp-dir
 # staging a trimmed / non-default consumer build uses, so no backup-restore.
-# $1 = features, $2 = opt-level ("" = default speed build).
+# $1 = features, $2 = the build mode ("" = speed, "size").
 measure_wasm() {
   : "${DART:?shake_audit: DART must be set by the caller (the Makefile passes it)}"
   local line
   line=$(cd "$ROOT" && $DART run tool/measure_wasm.dart "$1" "${2:-}" \
     | grep -oE 'raw=[0-9]+ gz=[0-9]+' | tail -1)
-  [ -n "$line" ] || fail "measure_wasm produced no size for features='$1' opt='${2:-}'"
+  [ -n "$line" ] || fail "measure_wasm produced no size for features='$1' build='${2:-}'"
   line=${line#raw=}
   echo "${line/ gz=/ }"
 }
@@ -162,8 +162,8 @@ if [ "${SHAKE_AUDIT_WASM:-0}" = "1" ]; then
   DEFAULT_RAW=$(fsize "$ROOT/web_assets/pdf_oxide_bg.wasm")
   [ "$WASM_CORE_RAW" -lt "$DEFAULT_RAW" ] \
     || fail "core-only wasm not smaller than the full default"
-  read -r WASM_FULL_SIZE_RAW WASM_FULL_SIZE_GZ <<< "$(measure_wasm "$WASM_FULL_FEATURES" z)"
-  read -r WASM_CORE_SIZE_RAW WASM_CORE_SIZE_GZ <<< "$(measure_wasm "$WASM_CORE_FEATURES" z)"
+  read -r WASM_FULL_SIZE_RAW WASM_FULL_SIZE_GZ <<< "$(measure_wasm "$WASM_FULL_FEATURES" size)"
+  read -r WASM_CORE_SIZE_RAW WASM_CORE_SIZE_GZ <<< "$(measure_wasm "$WASM_CORE_FEATURES" size)"
   echo "wasm core=$WASM_CORE_RAW/$WASM_CORE_GZ full-size=$WASM_FULL_SIZE_RAW/$WASM_FULL_SIZE_GZ core-size=$WASM_CORE_SIZE_RAW/$WASM_CORE_SIZE_GZ"
   merge_sizes \
     wasmCoreRaw "$WASM_CORE_RAW" wasmCoreGz "$WASM_CORE_GZ" \

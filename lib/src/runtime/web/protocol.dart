@@ -194,6 +194,12 @@ abstract final class LaneMsgFields {
 /// that: a job the fault hits fails after twice this, never hangs.
 const kCreateHandleWait = Duration(seconds: 5);
 
+/// Bytes the Asyncify mode saves an unwound wasm stack in: whole wasm pages,
+/// taken from fresh linear memory outside the engine's heap. The pass writes
+/// the stack without a bound, so the worker compares the fill with this after
+/// each unwind and fails the job on an overflow.
+const kAsyncifyStackBytes = 4 * 1024 * 1024;
+
 /// The protocol object injected into the worker's init message.
 /// Keys are stable API for executor_worker.js.
 Map<String, int> laneProtocolCodes() => {
@@ -207,4 +213,5 @@ Map<String, int> laneProtocolCodes() => {
   'sabLengthOffset': SabLayout.lengthOffset,
   'sabMaxChunk': SabLayout.maxChunk,
   'createHandleWaitMs': kCreateHandleWait.inMilliseconds,
+  'asyncifyStackBytes': kAsyncifyStackBytes,
 };

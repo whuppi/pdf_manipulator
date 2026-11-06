@@ -45,8 +45,8 @@
 //                   the linear memory's size, a diagnostic that never falls;
 //                   abandoned: the pre-copy files set aside because their
 //                   handle creation never answered, not removed yet)
-//   readAtResult { lease, bytes? , error?, cancelled? }    (JSPI reads)
-//   chunkAck     { lease, error?, cancelled? }             (JSPI writes)
+//   readAtResult { lease, bytes? , error?, cancelled? }    (JSPI and Asyncify reads)
+//   chunkAck     { lease, error?, cancelled? }             (JSPI and Asyncify writes)
 //   releaseHold  { lease, holdGroupId }
 //   opfsWrite    { lease, jobId, filename, chunk, offset, last }
 //                → opfsWriteAck | error { lease, jobId, protocol: true, message }
@@ -59,10 +59,13 @@
 //   answers, so a late ack cannot complete the write of another job; retried:
 //   the handle had to be created a second time)
 //
-// ── Three I/O modes (selected by Dart, passed in init) ─────────────
-//   jspi    — JSPI Promise suspension (host_read_at returns Promise)
-//   atomics — per-job SAB + Atomics.wait; Dart fills + notifies
-//   opfs    — sources pre-copied to OPFS; reads via SyncAccessHandle
+// ── Four I/O modes (selected by Dart, passed in init) ──────────────
+//   jspi     — JSPI Promise suspension (host_read_at returns Promise)
+//   atomics  — per-job SAB + Atomics.wait; Dart fills + notifies
+//   asyncify — the instrumented wasm (pdf_oxide_asyncify_bg.wasm) unwinds
+//              at host_read_at / host_write_chunk, the worker awaits the
+//              answer and rewinds; the messages are JSPI's
+//   opfs     — sources pre-copied to OPFS; reads via SyncAccessHandle
 //
 // Terminating the worker is worker.terminate() from Dart — this file never sees it.
 
@@ -156,6 +159,12 @@ const CANCEL_POLL_MS = 10;
 const CANCEL_POLL_TIMEOUT_MS = 500;
 let jspiReadResolve = null;
 let jspiWriteResolve = null;
+// Asyncify: where the unwound stack is saved, the host call the worker is
+// waiting for while the wasm is unwound, and the answer the rewound import
+// returns.
+let asyncifyData = 0;
+let asyncifyPending = null;
+let asyncifyAnswer = 0;
 
 async function dropReader(id, r) {
   // This worker OWNS its pre-copy files: it created them, holds their
@@ -177,6 +186,7 @@ async function dropReader(id, r) {
 // ═══════════════════════════════════════════════════════════════════
 
 function hostReadAt(sourceIndex, offset, count, bufPtr) {
+  if (resumingAsyncify()) return asyncifyAnswer;
   let readerId = sourceIndex;
   if (activeReaderMap) {
     for (const [si, rid] of activeReaderMap) {
@@ -192,9 +202,27 @@ function hostReadAt(sourceIndex, offset, count, bufPtr) {
   if (reader.opfsHandle) return readFromOpfs(reader.opfsHandle, offset, toRead, bufPtr);
 
   switch (ioMode) {
-    case 'atomics': return readViaAtomics(sourceIndex, offset, toRead, bufPtr);
-    default:        return readViaJspi(sourceIndex, offset, toRead, bufPtr);
+    case 'atomics':  return readViaAtomics(sourceIndex, offset, toRead, bufPtr);
+    case 'asyncify': return suspendAsyncify(readViaJspi(sourceIndex, offset, toRead, bufPtr));
+    default:         return readViaJspi(sourceIndex, offset, toRead, bufPtr);
   }
+}
+
+// Asyncify. The import is called in one of two states. Running, it starts the
+// unwind and returns at once with a dummy; the wasm unwinds to `execute`,
+// which returns to callLaneAsyncify with the host call still pending. After
+// the answer the driver rewinds: `execute` is called again, the wasm replays
+// down to this same call, and the import, now rewinding, returns the answer.
+function resumingAsyncify() {
+  if (ioMode !== 'asyncify' || wasm.asyncify_get_state() !== 2) return false;
+  wasm.asyncify_stop_rewind();
+  return true;
+}
+
+function suspendAsyncify(pending) {
+  asyncifyPending = pending;
+  wasm.asyncify_start_unwind(asyncifyData);
+  return 0;
 }
 
 function readFromOpfs(handle, offset, count, bufPtr) {
@@ -266,11 +294,13 @@ function hostCancelled() {
 // ═══════════════════════════════════════════════════════════════════
 
 function hostWriteChunk(sinkIndex, bufPtr, len) {
+  if (resumingAsyncify()) return asyncifyAnswer;
   if (hostCancelled() !== 0) return P.hostIoCancelled;
   const chunk = new Uint8Array(wasm.memory.buffer).slice(bufPtr, bufPtr + len);
   switch (ioMode) {
     case 'atomics': return writeViaAtomics(sinkIndex, chunk);
     case 'jspi':    return writeViaJspi(sinkIndex, chunk);
+    case 'asyncify': return suspendAsyncify(writeViaJspi(sinkIndex, chunk));
     default:
       // OPFS: no blocking primitive — fire-and-forget (the producer
       // is disk-read bound, never outruns the main-thread consumer).
@@ -340,7 +370,7 @@ async function ensureInit() {
   }
 
   try {
-    await jsModule.default(precompiledModule || (wasmBaseUrl + 'pdf_oxide_bg.wasm'));
+    await jsModule.default(precompiledModule || (wasmBaseUrl + wasmFile()));
   } finally {
     WebAssembly.instantiate = origInstantiate;
     if (origStreaming) WebAssembly.instantiateStreaming = origStreaming;
@@ -349,7 +379,25 @@ async function ensureInit() {
   if (ioMode === 'jspi') {
     jspiLaneExecute = WebAssembly.promising(wasm.execute);
   }
+  if (ioMode === 'asyncify') {
+    if (typeof wasm.asyncify_start_unwind !== 'function') {
+      throw new Error(wasmFile() + ' is not an Asyncify build');
+    }
+    // The unwound stack is saved outside the engine's heap: fresh pages, which
+    // its allocator neither owns nor counts.
+    const bytes = P.asyncifyStackBytes;
+    asyncifyData = wasm.memory.grow(bytes / 65536) * 65536;
+    const header = new Int32Array(wasm.memory.buffer, asyncifyData, 2);
+    header[0] = asyncifyData + 8;
+    header[1] = asyncifyData + bytes;
+  }
   initialized = true;
+}
+
+// The wasm a mode loads: the Asyncify engine only in Asyncify mode, so a
+// browser fetches the one file it runs.
+function wasmFile() {
+  return ioMode === 'asyncify' ? 'pdf_oxide_asyncify_bg.wasm' : 'pdf_oxide_bg.wasm';
 }
 
 function wrapJspiImports(imports) {
@@ -365,7 +413,7 @@ function wrapJspiImports(imports) {
   return patched;
 }
 
-// JSPI path drives the wasm-bindgen ABI manually (the generated glue
+// The JSPI and Asyncify paths drive the wasm-bindgen ABI manually (the generated glue
 // is synchronous; promising() needs the raw export). Mirrors the
 // glue's own calling convention for execute.
 //
@@ -373,7 +421,7 @@ function wrapJspiImports(imports) {
 // __wbindgen_export_N aliases: those are renumbered whenever the module's
 // export set changes, which turns into memory corruption here.
 // (__wbindgen_add_to_stack_pointer is a fixed name and safe.)
-async function callLaneJspi(requestBytes, sourceLengthsPacked, sinkCount) {
+async function callLane(requestBytes, sourceLengthsPacked, sinkCount, run) {
   const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
   const ptr0 = wasm.executor_alloc(requestBytes.length) >>> 0;
   if (requestBytes.length && !ptr0) throw new Error('executor_alloc failed');
@@ -382,7 +430,7 @@ async function callLaneJspi(requestBytes, sourceLengthsPacked, sinkCount) {
   if (sourceLengthsPacked.length && !ptr1) throw new Error('executor_alloc failed');
   new Uint8Array(wasm.memory.buffer).set(sourceLengthsPacked, ptr1);
   try {
-    await jspiLaneExecute(retptr, statePtr, ptr0, requestBytes.length, ptr1, sourceLengthsPacked.length, sinkCount);
+    await run(retptr, statePtr, ptr0, requestBytes.length, ptr1, sourceLengthsPacked.length, sinkCount);
     const mem = new DataView(wasm.memory.buffer);
     const r0 = mem.getInt32(retptr, true);
     const r1 = mem.getInt32(retptr + 4, true);
@@ -391,6 +439,29 @@ async function callLaneJspi(requestBytes, sourceLengthsPacked, sinkCount) {
     return result;
   } finally {
     wasm.__wbindgen_add_to_stack_pointer(16);
+  }
+}
+
+// Runs `execute` to its end across the pauses of an Asyncify wasm. Every call
+// repeats the first one's arguments: a rewound `execute` replays its frames
+// from the saved stack and ignores them, but the shadow stack and the request
+// buffers must be the ones the paused frames hold.
+async function runAsyncify(...args) {
+  new Int32Array(wasm.memory.buffer, asyncifyData, 1)[0] = asyncifyData + 8;
+  for (;;) {
+    wasm.execute(...args);
+    if (wasm.asyncify_get_state() !== 1) return;
+    wasm.asyncify_stop_unwind();
+    // The pass writes the frames without a bound, so an overflow is found
+    // here, after the fact: the engine is not trusted again.
+    const [used, end] = new Int32Array(wasm.memory.buffer, asyncifyData, 2);
+    if (used > end) {
+      throw new WebAssembly.RuntimeError(
+        'the Asyncify stack of ' + P.asyncifyStackBytes + ' bytes overflowed');
+    }
+    asyncifyAnswer = await asyncifyPending;
+    asyncifyPending = null;
+    wasm.asyncify_start_rewind(asyncifyData);
   }
 }
 
@@ -671,7 +742,9 @@ async function exec(msg) {
   let responseBytes;
   try {
     if (ioMode === 'jspi') {
-      responseBytes = await callLaneJspi(new Uint8Array(requestBytes), packed, sinkCount);
+      responseBytes = await callLane(new Uint8Array(requestBytes), packed, sinkCount, jspiLaneExecute);
+    } else if (ioMode === 'asyncify') {
+      responseBytes = await callLane(new Uint8Array(requestBytes), packed, sinkCount, runAsyncify);
     } else {
       const { execute } = await import(wasmBaseUrl + 'pdf_oxide.js');
       responseBytes = execute(statePtr, new Uint8Array(requestBytes), packed, sinkCount);
@@ -701,6 +774,7 @@ async function exec(msg) {
     activeCancelSab = null;
     activeCancelUrl = null;
     jspiWriteResolve = null;
+    asyncifyPending = null;
   }
 
   return responseBytes;

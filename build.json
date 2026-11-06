@@ -8,11 +8,13 @@
   },
   "web": {
     "pdf_oxide_bg.wasm": "wasm-pdf_oxide_bg.wasm",
+    "pdf_oxide_asyncify_bg.wasm": "wasm-pdf_oxide_asyncify_bg.wasm",
     "pdf_oxide.js": "wasm-pdf_oxide.js",
     "executor_worker.js": "wasm-executor_worker.js"
   },
   "wasmBuildOutputs": [
     "pdf_oxide_bg.wasm",
+    "pdf_oxide_asyncify_bg.wasm",
     "pdf_oxide.js"
   ]
 }

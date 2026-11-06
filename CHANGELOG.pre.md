@@ -182,6 +182,7 @@ CONTENT RULES (never change)
 - Added the page builder methods the engine already had: `appendText`, `textIn`, `rect`, `line`, `stickyNote`, `stamp`, `freeText`, `onOpen`, `onClose` and `table`, and a `PdfMarkup` or `PdfLink` argument on `text`
 - Added a `PdfTextStyle` to `text`, `stamp(PdfStamp...)`, `table(columns, rows, {options})` with `PdfTableCell` and `PdfTableOptions`, and `stickyNote(..., at:)` to the page builder
 - Added `PdfBuilder.addImagePage`, a page that holds one picture and takes the picture's own size unless you name one
+- Added the web Asyncify mode, `asyncify: true` under `hooks: user_defines: pdf_manipulator:`, which also ships `pdf_oxide_asyncify_bg.wasm` so a browser with neither JSPI nor `SharedArrayBuffer` streams instead of copying to storage first — the file is 32 MB for the full engine and is fetched only in this mode
 - Changed `PdfBuilder.save` to Flate-compress page content and font streams; `save(output, deflate: false)` keeps them plain for debugging
 - Changed `open`, `edit`, `split`, a full-rewrite save and `compress` to hold a bounded window of the document instead of all of it: a 38 MB, 10,000-page file now opens and saves in under 16 MB of engine memory, where it took up to 85 MB
 - Changed `appendPages` to keep the merged file open until the editor is disposed and copy its objects one at a time at save: merging a 10,000-page file takes under 16 MB of engine memory and about 2 seconds, where it took 163 MB and minutes

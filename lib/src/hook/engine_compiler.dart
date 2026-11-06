@@ -10,6 +10,9 @@ import 'package:code_assets/code_assets.dart';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
 
+import 'package:pdf_manipulator/src/hook/asyncify_list.dart';
+import 'package:pdf_manipulator/src/hook/engine_build.dart';
+
 final _log = Logger('pdf_manipulator:engine_compiler');
 
 /// Rust target triple for [code]'s OS + architecture.
@@ -319,14 +322,17 @@ String? _latestVersionSubdir(String base) {
 
 /// Compiles the engine to wasm32 and post-processes it (wasm-bindgen +
 /// wasm-opt) via the workspace's `bindgen_runner` crate, writing
-/// `pdf_oxide.js` + `pdf_oxide_bg.wasm` into [outDir]. Shared by the
+/// `pdf_oxide.js` + `pdf_oxide_bg.wasm` into [outDir], and with [asyncify]
+/// also `pdf_oxide_asyncify_bg.wasm` ([buildAsyncifyWasm]). [build] sets
+/// cargo's release profile and wasm-opt's level for both. Shared by the
 /// consumer web setup (`hook/build.dart`) and the CI compile driver
 /// (`tool/compile.dart`) — one wasm compile path, two callers.
 Future<void> compileWasmEngine({
   required Uri packageRoot,
   required String features,
   required Directory outDir,
-  Map<String, String> cargoEnv = const {},
+  EngineBuild build = EngineBuild.speed,
+  bool asyncify = false,
 }) async {
   ensureCargoVersion(packageRoot);
   final manifest = p.fromUri(
@@ -346,11 +352,11 @@ Future<void> compileWasmEngine({
   ensureRustTarget('wasm32-unknown-unknown');
   outDir.createSync(recursive: true);
 
-  final env = <String, String>{...Platform.environment, ...cargoEnv};
+  final env = <String, String>{...Platform.environment, ...build.cargoEnv};
   stripXcodeFromPath(env);
 
   _log.info('compiling WASM from source (features: $features)');
-  final build = await Process.run('cargo', [
+  final compile = await Process.run('cargo', [
     'build',
     '--manifest-path',
     manifest,
@@ -362,10 +368,10 @@ Future<void> compileWasmEngine({
     '--features',
     features,
   ], environment: env);
-  if (build.exitCode != 0) {
+  if (compile.exitCode != 0) {
     throw StateError(
-      'WASM engine compile failed (exit ${build.exitCode}).\n'
-      'stderr: ${build.stderr}',
+      'WASM engine compile failed (exit ${compile.exitCode}).\n'
+      'stderr: ${compile.stderr}',
     );
   }
 
@@ -384,6 +390,7 @@ Future<void> compileWasmEngine({
     '-p',
     'bindgen_runner',
     '--',
+    ...build.binaryenArgs,
     rawWasm,
     outDir.path,
   ], environment: env);
@@ -393,6 +400,63 @@ Future<void> compileWasmEngine({
       '(exit ${bindgen.exitCode}).\n'
       'stderr: ${bindgen.stderr}',
     );
+  }
+
+  if (asyncify) {
+    await buildAsyncifyWasm(
+      packageRoot: packageRoot,
+      wasm: File(p.join(outDir.path, 'pdf_oxide_bg.wasm')),
+      out: File(p.join(outDir.path, 'pdf_oxide_asyncify_bg.wasm')),
+      build: build,
+    );
+  }
+}
+
+/// Writes to [out] the Asyncify twin of [wasm], the engine wasm
+/// `compileWasmEngine` produced: the same module, instrumented to pause at
+/// the source read and the sink write and resume later.
+///
+/// Only the functions that can be on the stack at a pause are instrumented.
+/// The list is recomputed from [wasm] here, written to a file beside [out] and
+/// checked back against [wasm] before binaryen reads it, so a list that does not
+/// belong to this wasm, or that misses a function, stops the build.
+Future<void> buildAsyncifyWasm({
+  required Uri packageRoot,
+  required File wasm,
+  required File out,
+  EngineBuild build = EngineBuild.speed,
+}) async {
+  final bytes = wasm.readAsBytesSync();
+  final listFile = File('${out.path}.list')
+    ..writeAsStringSync(asyncifyList(bytes));
+  try {
+    verifyAsyncifyList(bytes, listFile.readAsStringSync());
+    final env = <String, String>{...Platform.environment, ...build.cargoEnv};
+    stripXcodeFromPath(env);
+    _log.info('instrumenting the pausing call stack (binaryen asyncify)');
+    final run = await Process.run('cargo', [
+      'run',
+      '--manifest-path',
+      p.fromUri(packageRoot.resolve('vendor/pdf_oxide/Cargo.toml')),
+      '--release',
+      '-p',
+      'bindgen_runner',
+      '--',
+      ...build.binaryenArgs,
+      '--asyncify',
+      wasm.path,
+      out.path,
+      listFile.path,
+      asyncifyImports(bytes),
+    ], environment: env);
+    if (run.exitCode != 0) {
+      throw StateError(
+        'WASM asyncify pass failed (exit ${run.exitCode}).\n'
+        'stderr: ${run.stderr}',
+      );
+    }
+  } finally {
+    if (listFile.existsSync()) listFile.deleteSync();
   }
 }
 

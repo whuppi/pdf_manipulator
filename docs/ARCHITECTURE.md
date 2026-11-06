@@ -461,7 +461,7 @@ just before the submit, so a same-tick dispose cannot start a lane nothing ends.
 |---|---|---|
 | native | The job's `AtomicBool`, filed in `cancel_flags` before the job is queued, and the executor's (terminate). `CancelFlags` holds both. | `CancelCheck::from_flags` loads both. |
 | web with `SharedArrayBuffer` | A word of a per-job `SharedArrayBuffer` (`cancelSabBytes`). The main thread stores 1. | The wasm import `host_cancelled` loads it. |
-| web without | A per-job blob URL (`cancelUrl`). The main thread revokes it. | `host_cancelled` polls it with a synchronous XHR, at most once per `CANCEL_POLL_MS`. A poll that times out (`CANCEL_POLL_TIMEOUT_MS`) is not a cancel; a failed poll is. |
+| web without (OPFS, and JSPI or Asyncify on such a page) | A per-job blob URL (`cancelUrl`). The main thread revokes it. | `host_cancelled` polls it with a synchronous XHR, at most once per `CANCEL_POLL_MS`. A poll that times out (`CANCEL_POLL_TIMEOUT_MS`) is not a cancel; a failed poll is. Asyncify keeps this path: it reads the flag where it already does, and unwinding at the poll would add nothing. |
 
 Parked I/O is woken separately. Native: a job cancel takes each channel's pair mutex, sets
 `FLAG_CANCELLED` and notifies. Web: a pending read or write is answered with the cancelled
@@ -698,12 +698,13 @@ Each source gets its own `CallbackReader` and channel. Each sink gets its own
 with condvar synchronization, and checks `CancelFlags` at every wait. Dart serves the bytes
 on the main isolate through `NativeCallable.listener`. No helper isolate exists.
 
-### Web I/O — three modes, auto-detected
+### Web I/O — four modes, auto-detected
 
 | Mode | Mechanism | Requires |
 |---|---|---|
 | **JSPI** | `WebAssembly.Suspending` suspends wasm, JS fetches async, wasm resumes | Chrome 137+ / Firefox 139+ |
 | **Atomics** | `Atomics.wait` blocks wasm, JS fills a SAB, `Atomics.notify` wakes it | `SharedArrayBuffer` (COOP/COEP headers) |
+| **Asyncify** | The instrumented wasm unwinds at the read or write, the worker awaits the answer and rewinds | The app shipped `pdf_oxide_asyncify_bg.wasm` (`asyncify: true`) |
 | **OPFS** | Sources are pre-copied to OPFS disk, wasm reads through `SyncAccessHandle` | All modern browsers |
 
 Detection (`WebExecutorBooter._detectMode`), best first:
@@ -711,14 +712,62 @@ Detection (`WebExecutorBooter._detectMode`), best first:
 ```
 if ("Suspending" in WebAssembly) → JSPI     (streaming, no headers)
 else if (SharedArrayBuffer)      → Atomics  (streaming, needs COOP/COEP)
+else if (the app shipped the     → Asyncify (streaming, no headers, larger wasm)
+         Asyncify wasm)
 else                             → OPFS     (pre-copy fallback)
 ```
 
-Force a mode with `Pdf(config: PdfConfig(webIoMode: PdfIoMode.jspi))`. All three modes give
-the Rust side the same `Read+Seek` trait, `bridge_api.rs` is the same, and one wasm binary
-serves all three. Only OPFS pre-copies to disk. Call `await pdf.ensureInitialized()` at
-startup to read the mode. If it is `PdfIoMode.opfs`, consider telling the user, or serving
-the COOP/COEP headers.
+Force a mode with `Pdf(config: PdfConfig(webIoMode: PdfIoMode.jspi))`. A forced mode the
+browser cannot run, or Asyncify when the app did not ship its wasm, throws `PdfUnsupported`
+when the instance is created; there is never a silent fallback. All four modes give the Rust
+side the same `Read+Seek` trait and `bridge_api.rs` is the same. JSPI, Atomics and OPFS run
+the one wasm binary; Asyncify runs its own twin, and a browser fetches only the wasm its mode
+runs. Only OPFS pre-copies to disk. Call `await pdf.ensureInitialized()` at startup to read
+the mode. If it is `PdfIoMode.opfs`, consider telling the user, shipping the Asyncify wasm, or
+serving the COOP/COEP headers.
+
+**Whether the app shipped the Asyncify wasm** is one `HEAD` request for the file beside
+`executor_worker.js`, sent once per location, and only by a page that could run the mode
+(neither JSPI nor `SharedArrayBuffer`) or that forced it. The file itself is not fetched.
+
+#### The Asyncify wasm
+
+`wasm-opt --asyncify` turns the engine into a module that can stop in the middle of a call
+and continue later. `lib/src/hook/asyncify_list.dart` computes which functions to
+instrument; the rest are left as they are, and the pass is run by `bindgen_runner
+--asyncify` (the workspace's own binaryen) followed by the same `-O2` as the normal wasm.
+
+- **The list.** The functions that can be on the stack while the module waits in
+  `host_read_at` or `host_write_chunk`: those imports' callers, transitively, where a
+  `call_indirect` reaches every address-taken function of its signature (the trait objects
+  `dyn Read + Seek` and `dyn Write` are such calls). The parser refuses a module whose
+  tables can change at run time. The list names each function by its index among the defined
+  functions, which is how binaryen names an unnamed function.
+- **The wall.** The build recomputes the list from the wasm it is about to instrument, writes it
+  and checks the written file against the wasm before binaryen reads it
+  (`verifyAsyncifyList`): a list that is stale or misses a function the wasm can have on the
+  stack stops the build. `test/hook/asyncify_list_test.dart` pins it.
+- **The driver** (`runAsyncify`, `executor_worker.js`). The two imports are plain functions.
+  Called while the module runs, an import starts the unwind and returns; the wasm unwinds to
+  `execute`, which returns with the stack saved. The worker posts the same `readAt` or `chunk`
+  message JSPI posts, awaits the `readAtResult` or `chunkAck`, starts the rewind and calls
+  `execute` again with the same arguments; the wasm replays down to the import, which
+  returns the answer. The saved stack lives in pages the worker adds to linear memory
+  (`kAsyncifyStackBytes`), outside the engine's heap; the pass writes it without a bound, so
+  the worker checks the fill after every unwind and fails the job when it overflowed.
+- **Size.** The list is most of the module, so the twin is about half again as large as the
+  normal wasm (31.97 MB against 20.87 MB raw, 12.4 MB against 8.1 MB gzip, for the full
+  engine), which is more than the 25 MiB per file that Cloudflare Pages and Workers static
+  assets serve. `test/guards/wasm_size_test.dart` and the release compile refuse a shipped
+  wasm that reaches that size. The obstacle is in the call graph: a signature such as
+  `(i32,i32)->()` is shared by thousands of functions, and the graph cannot tell which of
+  them an indirect call reaches.
+- **Cost.** A read or write costs a round trip through the main thread like JSPI's, plus the
+  unwind and rewind of the stack in between, and the instrumented functions run slower. On
+  a 300 MB text PDF on a 4-core machine, open + extract of 50 pages took 93 s in Asyncify against
+  41 s in OPFS (pre-copy included), and a merge of two such files 16–19 s against 9–10 s: the
+  source is read in many small pieces, and each costs a round trip. The automatic order puts
+  Asyncify before OPFS all the same, until that is decided.
 
 **Web hold registry.** Each web executor keeps a reader map. A kept reader belongs to a group: the
 id of the job that created the handle. A later job on that handle that keeps a source (an
@@ -741,6 +790,9 @@ blocks until the Dart side returns bytes, so it never reads faster than the host
 - **JSPI:** `host_write_chunk` returns a Promise and JSPI suspends the wasm stack. The executor
   forwards the chunk to Dart, Dart's sink consumes it, Dart acknowledges, the executor resolves
   the Promise and wasm resumes. One chunk is in flight at a time.
+- **Asyncify:** the same as JSPI: `host_write_chunk` unwinds the wasm, the worker posts the
+  chunk and awaits the acknowledgement, and the rewound import returns. One chunk is in
+  flight at a time.
 - **Atomics:** `host_write_chunk` posts the chunk, then `Atomics.wait`s on a dedicated write
   SAB. Dart consumes the chunk and acknowledges with `Atomics.store` and `notify`. One chunk
   is in flight at a time.
@@ -898,7 +950,7 @@ lib/
     │   │   ├── channel_buffers.dart        ← condvar memory layout
     │   │   └── bindings.dart               ← @Native FFI bindings
     │   └── web/
-    │       ├── lease.dart                  ← WebLease: job lifecycle, the 3 I/O modes
+    │       ├── lease.dart                  ← WebLease: job lifecycle, the 4 I/O modes
     │       ├── host.dart                   ← WebExecutorBooter, WebExecutor: boot handshake,
     │       │                                  OPFS session and directory reclaim (part of lease.dart)
     │       └── protocol.dart               ← message tags and codes injected into executor_worker.js
@@ -910,14 +962,18 @@ lib/
     └── hook/                               ← build and setup support (not consumer API)
         ├── asset_hashes.dart               ← SHA-256 hashes for all release assets
         ├── resolver.dart                   ← ResolveRequest + 5-step waterfall
+        ├── asyncify_list.dart              ← the wasm call graph, the Asyncify instrumentation
+        │                                      list and its wall
         └── (build_constants, engine_compiler, engine_build, keep_plan, pdf_config,
              user_defines, app_root)
 
 web_assets/                                 ← committed in git (except .wasm, which is too large)
-├── executor_worker.js                      ← the executor body: reader registry, 3 I/O modes,
+├── executor_worker.js                      ← the executor body: reader registry, 4 I/O modes,
 │                                              reset, execute (no routing logic)
 ├── pdf_oxide.js                            ← wasm-bindgen glue (committed, paired with .wasm)
-└── pdf_oxide_bg.wasm                       ← wasm binary (gitignored; downloaded from releases)
+├── pdf_oxide_bg.wasm                       ← wasm binary (gitignored; downloaded from releases)
+└── pdf_oxide_asyncify_bg.wasm              ← its Asyncify twin, for apps with `asyncify: true`
+                                               (gitignored; downloaded from releases)
 
 build.json                                  ← single source of truth: crate name, repo,
                                                cargo features, web asset map
@@ -936,6 +992,7 @@ tool/                                       ← .sh = orchestration wrappers; .d
 ├── analyze.sh                              ← format + Dart + Rust static analysis
 ├── check_cancel_polls.sh                   ← the loop poll lint (in make test-guards)
 ├── compile.dart                            ← Rust → native / wasm / per-target / both
+├── asyncify_list.dart                      ← the Asyncify list of a built wasm, with its counts
 ├── generate_fixtures.dart                  ← test fixture generator (make fixtures; stamp-protected)
 ├── memprobe/                               ← the memory wall (make test-memory)
 ├── fuelprobe/                              ← the cancel fuel wall (make test-fuel)
@@ -1284,7 +1341,9 @@ test/
 │       ├── native_runner_test.dart
 │       ├── web_opfs_runner_test.dart
 │       ├── web_jspi_runner_test.dart
-│       └── web_atomics_runner_test.dart
+│       ├── web_atomics_runner_test.dart
+│       ├── web_asyncify_runner_test.dart
+│       └── web_io_measure_test.dart        ← timing of Asyncify against OPFS (skipped unless sized)
 │
 ├── bridge/                         Unit tests (no engine)
 │   ├── bridge_contract_test.dart
@@ -1510,8 +1569,9 @@ source in the pub tarball compiles locally.
 - `lib/src/hook/` — ONE compile path, two callers: `build_constants.dart`
   (build.json), `engine_compiler.dart` (CodeConfig → target mappings, NDK
   env, the cargo invocation), `pdf_config.dart` (the one config parser —
-  keep/detector/build, mismatch-proof), `keep_plan.dart` (config → plan,
-  recordings → keep-set), `engine_build.dart` (the `build:` axis).
+  keep/detector/build/scan-dirs/asyncify, mismatch-proof), `keep_plan.dart` (config → plan,
+  recordings → keep-set), `engine_build.dart` (the `build:` axis),
+  `asyncify_list.dart` (which functions the Asyncify wasm instruments).
   `hook/build.dart` and `hook/link.dart` are thin callers.
 - The cutting doctrine: cut ROOTS and let LTO shake. Because the shipped
   artifact is a cdylib, only exported symbols are roots — gating a few

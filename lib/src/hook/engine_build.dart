@@ -48,6 +48,15 @@ enum EngineBuild {
     },
   };
 
+  /// The flags `bindgen_runner` gives wasm-opt for this build, on the
+  /// normal wasm and its Asyncify twin alike: speed and debug at `-O2`, size
+  /// at `-Oz`, and debug keeps the name section so a trap names its function.
+  List<String> get binaryenArgs => switch (this) {
+    EngineBuild.speed => const ['--opt=2'],
+    EngineBuild.size => const ['--opt=z'],
+    EngineBuild.debug => const ['--opt=2', '--keep-names'],
+  };
+
   /// Parses the `build:` user-define value. Absent → [speed]. An unknown
   /// value throws — a config typo must fail the build loudly, never silently
   /// ship the wrong build.

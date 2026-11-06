@@ -224,6 +224,7 @@ jobs:
             windows-x64-pdf_oxide.dll
             wasm-pdf_oxide.js
             wasm-pdf_oxide_bg.wasm
+            wasm-pdf_oxide_asyncify_bg.wasm
           )
           MISSING=()
           for f in "${EXPECTED[@]}"; do

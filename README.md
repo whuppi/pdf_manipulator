@@ -838,26 +838,28 @@ The engine compiles to WASM and runs in isolated Web Workers, so your UI thread 
 
 On web you don't configure anything; the package auto-detects the best mode the browser supports and uses it. Everything works regardless of mode; the only thing that varies is how fast it reads large files.
 
-Internally the modes differ in *how* the WASM engine gets your bytes: the top two stream them on demand, while the fallback copies the whole file into private browser storage first (works everywhere, just a slower first byte).
+Internally the modes differ in *how* the WASM engine gets your bytes: the first three stream them on demand, while the fallback copies the whole file into private browser storage first (works everywhere, just a slower first byte).
 
 | Mode | What it means for you | Streams large files | Picked when |
 |---|---|:---:|---|
 | **JSPI** | Best: streams, zero setup | ✅ | Chrome 137+ · Firefox 139+ |
 | **Atomics** | Streams, but needs two server headers | ✅ | COOP/COEP headers are set |
+| **Asyncify** | Streams without headers on older browsers, with a second, larger WASM file | ✅ | you turned on `asyncify: true` ([below](#asyncify-the-second-wasm)) |
 | **OPFS** | Always works; copies the file to disk first, then reads | ❌ | any modern browser (the fallback) |
 
 <details>
-<summary><b>🧩 ok but what do JSPI, Atomics, and OPFS actually mean?</b></summary>
+<summary><b>🧩 ok but what do JSPI, Atomics, Asyncify and OPFS actually mean?</b></summary>
 
 <br>
 
-All three solve the same puzzle (synchronous WASM code needs bytes that arrive asynchronously from Dart), just in different ways:
+All four solve the same puzzle (synchronous WASM code needs bytes that arrive asynchronously from Dart), just in different ways:
 
 - **JSPI** (JavaScript Promise Integration) — the browser lets the WASM call pause and resume while it waits for the next chunk. Cleanest path, no setup; needs a recent browser. Used automatically where available.
 - **Atomics** — the WASM side blocks on a `SharedArrayBuffer` while the main thread fills it. Works on older browsers, but `SharedArrayBuffer` only switches on when your site sends two security headers (see below).
-- **OPFS** (Origin Private File System) — when neither of the above is available, the package copies your file into the browser's private on-disk storage and reads from there. Works everywhere; the copy means a slower first byte and a little disk use.
+- **Asyncify** — a second build of the engine that can stop in the middle of a call and continue later (binaryen's `--asyncify`), so it waits for the next chunk the way JSPI does without needing the browser's help or any header. You opt in; see below.
+- **OPFS** (Origin Private File System) — when none of the above is available, the package copies your file into the browser's private on-disk storage and reads from there. Works everywhere; the copy means a slower first byte and a little disk use.
 
-You never choose; the package tries JSPI, then Atomics, then OPFS, and uses the first that works.
+You never choose; the package tries JSPI, then Atomics, then Asyncify (only if your app ships it), then OPFS, and uses the first that works.
 
 </details>
 
@@ -872,6 +874,8 @@ Pin a mode, or just check which one was chosen (native ignores this):
 final pdf = Pdf(config: PdfConfig(webIoMode: PdfIoMode.atomics)); // pin a mode
 final mode = await pdf.ensureInitialized(); // or just check
 ```
+
+Forcing a mode the browser cannot run, or Asyncify when your app did not ship its WASM file, throws `PdfUnsupported` as soon as the `Pdf` is created; it never falls back silently.
 
 **Enable streaming on older browsers.** Chrome 137+ / Firefox 139+ already stream via JSPI with no setup. For older browsers that have `SharedArrayBuffer`, two server headers switch the fallback from disk-copy (OPFS) to streaming (Atomics):
 
@@ -895,6 +899,21 @@ For local dev, Flutter adds the headers for you:
 ```sh
 flutter run -d chrome --cross-origin-isolation
 ```
+
+#### Asyncify, the second WASM
+
+If you cannot send those headers and still want streaming on browsers without JSPI, switch on the Asyncify engine in your pubspec and run setup again (web only; native ignores the key):
+
+```yaml
+hooks:
+  user_defines:
+    pdf_manipulator:
+      asyncify: true   # false (default) ships nothing new
+```
+
+Setup then also provides `pdf_oxide_asyncify_bg.wasm` next to the normal one: downloaded for the full engine, built from source for a `keep:` subset. A browser fetches only the file its mode runs, so JSPI and Atomics visitors never download the larger one.
+
+The trade-off, plainly: the Asyncify file is about half again as large as the normal one (the full engine: 32.0 MB against 20.9 MB, 12.4 MB against 8.1 MB gzipped), because most of the engine can be in the middle of a read when it stops. That is over the 25 MiB per-file limit of Cloudflare Pages and Workers static assets, so a site hosted there cannot serve it. The instrumented engine also runs slower, and every read is a round trip to the page: on a 300 MB text PDF, opening and extracting 50 pages took 93 s with Asyncify against 41 s with OPFS (the copy included), and merging two such files 16–19 s against 9–10 s. Turn it on when streaming matters more than those costs, and measure your own files.
 
 </details>
 

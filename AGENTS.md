@@ -24,7 +24,7 @@ git clone --recursive https://github.com/whuppi/pdf_manipulator
 cd pdf_manipulator
 make hooks                      # activate git hooks (once after cloning)
 fvm install                     # downloads SDK pinned in .fvmrc
-make check                      # analyze + test-guards + tests (native + 3 web modes) + example
+make check                      # analyze + test-guards + tests (native + 4 web modes) + example
 
 # Without FVM (override SDK commands)
 make check DART=dart FLUTTER=flutter

@@ -18,10 +18,18 @@ enum PdfIoMode implements PdfWire {
   /// Requires COOP/COEP headers.
   atomics('atomics'),
 
+  /// Asyncify — the engine wasm is instrumented to pause at a source read or
+  /// a sink write and resume when the answer arrives, so it streams like
+  /// [jspi] on a browser with neither JSPI nor `SharedArrayBuffer`. Needs
+  /// the Asyncify wasm (`asyncify: true` in the app's
+  /// `hooks: user_defines: pdf_manipulator:`); the larger file is fetched
+  /// only in this mode.
+  asyncify('asyncify'),
+
   /// OPFS — pre-copy entire source to Origin Private File System disk
   /// before processing. Universal web fallback, all modern browsers.
   ///
-  /// **Trade-offs vs streaming modes (JSPI/Atomics):**
+  /// **Trade-offs vs streaming modes (JSPI/Atomics/Asyncify):**
   /// - O(N) disk space (full copy of each source file)
   /// - O(N) latency before first output byte (copy must complete first)
   /// - Subject to browser storage quota
@@ -29,8 +37,9 @@ enum PdfIoMode implements PdfWire {
   ///
   /// If you tested locally with COOP/COEP headers (getting Atomics) or
   /// on Chrome 137+ (getting JSPI) and deploy without headers on an
-  /// older browser, users silently fall back to OPFS. Use
-  /// `ensureInitialized` to detect the mode and warn if needed.
+  /// older browser, users silently fall back to OPFS, unless the app ships
+  /// the Asyncify wasm. Use `ensureInitialized` to detect the mode and warn
+  /// if needed.
   opfs('opfs');
 
   const PdfIoMode(this.wire);

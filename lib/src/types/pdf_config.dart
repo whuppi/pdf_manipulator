@@ -1,3 +1,4 @@
+import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 
 /// Configuration for a PDF engine instance.
@@ -9,11 +10,15 @@ final class PdfConfig {
   final String? webWorkerUrl;
 
   /// Force a specific web I/O mode. Ignored on native. Null = auto-detect.
+  /// A mode the browser cannot run, or the Asyncify mode when the app did not
+  /// ship the Asyncify wasm, throws [PdfUnsupported] when the instance is
+  /// created; there is no silent fallback.
   ///
   /// Auto-detection priority (best first):
   ///   1. [PdfIoMode.jspi] — if `WebAssembly.Suspending` is available
   ///   2. [PdfIoMode.atomics] — if `SharedArrayBuffer` is available
-  ///   3. [PdfIoMode.opfs] — universal fallback
+  ///   3. [PdfIoMode.asyncify] — if the app shipped the Asyncify wasm
+  ///   4. [PdfIoMode.opfs] — universal fallback
   final PdfIoMode? webIoMode;
 
   /// How many operations run at once for this

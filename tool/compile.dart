@@ -5,7 +5,9 @@
 //   dart tool/compile.dart linux        Linux x64 + arm64 (cross-compile)
 //   dart tool/compile.dart android      Android arm64 + arm + x64 + x86
 //   dart tool/compile.dart windows      Windows x64 (+ arm64 on MSVC)
-//   dart tool/compile.dart wasm         WASM + bindgen_runner
+//   dart tool/compile.dart wasm         WASM + bindgen_runner (with
+//                                       COMPILE_OUTPUT_DIR, the Asyncify wasm too)
+//   dart tool/compile.dart wasm-asyncify  the Asyncify twin of web_assets/'s wasm
 //   dart tool/compile.dart native       Auto-detect what this host builds
 //   dart tool/compile.dart all          native + wasm
 //   dart tool/compile.dart --features [native|wasm]   print feature flags
@@ -93,6 +95,8 @@ Future<void> main(List<String> args) async {
       await _doWindows();
     case 'wasm':
       await _doWasm();
+    case 'wasm-asyncify':
+      await _doWasmAsyncify();
     case 'native':
       await _doNative();
     case 'all':
@@ -101,7 +105,7 @@ Future<void> main(List<String> args) async {
     default:
       stderr.writeln(
         'usage: dart tool/compile.dart '
-        '{macos|ios|linux|android|windows|wasm|native|all|'
+        '{macos|ios|linux|android|windows|wasm|wasm-asyncify|native|all|'
         '--features [native|wasm]}',
       );
       exit(1);
@@ -266,16 +270,58 @@ Future<void> _doWasm() async {
   final bg = File(p.join(webAssets.path, 'pdf_oxide_bg.wasm'));
   stderr.writeln('Binary: ${bg.lengthSync()} bytes');
 
-  // Release pipeline mirrors the outputs into COMPILE_OUTPUT_DIR/wasm.
+  // Release pipeline mirrors the outputs into COMPILE_OUTPUT_DIR/wasm, the
+  // Asyncify wasm among them.
   final rel = Platform.environment['COMPILE_OUTPUT_DIR'];
   if (rel != null && rel.isNotEmpty) {
+    await _doWasmAsyncify();
     final base = p.isAbsolute(rel) ? rel : p.join(p.fromUri(_pkgRoot), rel);
     final wasmOut = Directory(p.join(base, 'wasm'))
       ..createSync(recursive: true);
-    for (final f in const ['pdf_oxide.js', 'pdf_oxide_bg.wasm']) {
+    final shipped = const [
+      'pdf_oxide.js',
+      'pdf_oxide_bg.wasm',
+      'pdf_oxide_asyncify_bg.wasm',
+    ];
+    for (final f in shipped) {
       File(p.join(webAssets.path, f)).copySync(p.join(wasmOut.path, f));
     }
+    _checkWasmSizes([for (final f in shipped) File(p.join(wasmOut.path, f))]);
     stderr.writeln('Copied to ${wasmOut.path}');
+  }
+}
+
+/// Builds `web_assets/pdf_oxide_asyncify_bg.wasm` from `web_assets/`'s wasm
+/// and reports its size against the normal one.
+Future<void> _doWasmAsyncify() async {
+  final webAssets = Directory.fromUri(_pkgRoot.resolve('web_assets'));
+  final normal = File(p.join(webAssets.path, 'pdf_oxide_bg.wasm'));
+  if (!normal.existsSync()) await _doWasm();
+  stderr.writeln('=== WASM: asyncify ===');
+  final out = File(p.join(webAssets.path, asyncifyWebAsset));
+  await buildAsyncifyWasm(packageRoot: _pkgRoot, wasm: normal, out: out);
+  final raw = out.lengthSync();
+  final base = normal.lengthSync();
+  stderr.writeln(
+    'Asyncify binary: $raw bytes (${(100 * (raw - base) / base).toStringAsFixed(1)}% '
+    'over the $base of the normal one; gzip ${gzip.encode(out.readAsBytesSync()).length} '
+    'against ${gzip.encode(normal.readAsBytesSync()).length})',
+  );
+}
+
+/// The release wall: no wasm the release ships reaches [maxWebAssetBytes], the
+/// largest file Cloudflare Pages and Workers static assets serve.
+void _checkWasmSizes(List<File> files) {
+  final over = [
+    for (final f in files)
+      if (f.path.endsWith('.wasm') && f.lengthSync() >= maxWebAssetBytes)
+        '${p.basename(f.path)}: ${f.lengthSync()} bytes',
+  ];
+  if (over.isNotEmpty) {
+    throw StateError(
+      'a shipped wasm reaches the $maxWebAssetBytes-byte limit of '
+      'Cloudflare static assets: ${over.join('; ')}',
+    );
   }
 }
 
