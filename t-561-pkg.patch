@@ -1,0 +1,112 @@
+diff --git a/CHANGELOG.pre.md b/CHANGELOG.pre.md
+index 16a30a8..0db6de4 100644
+--- a/CHANGELOG.pre.md
++++ b/CHANGELOG.pre.md
+@@ -280,6 +280,7 @@ CONTENT RULES (never change)
+ - Fixed `compress` and every other full-rewrite save dropping the document's title, author, dates and file identifier unless the title was edited — the saved file keeps the source's `/Info` and `/ID`, and an edited title replaces the old `/Info` instead of leaving it behind
+ - Fixed the same input saving to different bytes on every run, so `compress` and every other rewriting save could not be compared or cached by hash — objects are written in id order, so only the random AES IVs of an encrypted save differ
+ - Fixed creating and disposing `Pdf` instances in a loop starting a new web worker or native thread for most of them — a disposed instance hands its worker or thread back for the next instance to reuse
++- Fixed an operation whose last write failed or was cancelled still reporting success with its output cut short — the engine now flushes the final bytes before it answers, and a refusal fails or cancels the operation
+ 
+ ## 5.0.1-dev.0
+ 
+diff --git a/lib/src/bridge/shared_bridge_doc.dart b/lib/src/bridge/shared_bridge_doc.dart
+index c057afa..d49505a 100644
+--- a/lib/src/bridge/shared_bridge_doc.dart
++++ b/lib/src/bridge/shared_bridge_doc.dart
+@@ -57,9 +57,8 @@ class _SharedDocHandle extends BridgeDocHandle {
+   }) {
+     final fmt = codec.putEnum(format);
+     return PdfTask.group((hook) async {
+-      // The first error [output] threw: the engine's last chunk is flushed as
+-      // it finishes, so a sink that failed on it did not fail the op, and the
+-      // caller's error ends the op all the same.
++      // The first error [output] threw: the engine fails its write with an
++      // echo of it, and the caller's error is the one that ends the op.
+       ({Object error, StackTrace stack})? failure;
+       try {
+         if (pages is PdfPagesAll) {
+@@ -103,7 +102,7 @@ class _SharedDocHandle extends BridgeDocHandle {
+         // sink that threw made the engine fail its write: the caller's error
+         // is the cause, the engine's is its echo.
+         final cause = failure;
+-        await hook.abortSinks([output], cause?.error ?? error);
++        await (scope ?? hook).abortSinks([output], cause?.error ?? error);
+         if (cause != null) {
+           Error.throwWithStackTrace(cause.error, cause.stack);
+         }
+@@ -194,9 +193,8 @@ class _SharedDocHandle extends BridgeDocHandle {
+           cancel: hook,
+         );
+         bin.decodeResponse(res.bytes);
+-        // The engine's last chunk is flushed as it finishes, so a sink that
+-        // failed on it did not fail the op: the caller's error ends the
+-        // op all the same.
++        // A sink that failed made the engine fail its write: the caller's
++        // error ends the op, not the engine's echo.
+         if (delivery.failure case final failure?) {
+           Error.throwWithStackTrace(failure.error, failure.stack);
+         }
+diff --git a/test/ops/core/pdf_abort_battery.dart b/test/ops/core/pdf_abort_battery.dart
+index 3aed05d..03c7189 100644
+--- a/test/ops/core/pdf_abort_battery.dart
++++ b/test/ops/core/pdf_abort_battery.dart
+@@ -104,6 +104,58 @@ void registerAbortTests(Pdf Function() createPdf) {
+       timeout: t(2),
+     );
+ 
++    group('an op whose last write fails fails and aborts its sink once', () {
++      // Each output is smaller than the engine's write buffer, so the one
++      // write the sink sees is the final flush.
++      final ops = <String, Future<void> Function(Pdf pdf, DataSink sink)>{
++        'builder save': (pdf, sink) async {
++          final builder = await pdf.build();
++          final page = await builder.addPage(PdfPageSize.points(612, 792));
++          await page.text('Hello');
++          try {
++            await builder.save(sink);
++          } finally {
++            await builder.dispose();
++          }
++        },
++        'editor save': (pdf, sink) async {
++          final editor = await pdf.edit(PdfInput(src(fTwoPageMarkers)));
++          try {
++            await editor.save(sink);
++          } finally {
++            await editor.dispose();
++          }
++        },
++        'extractAttachment': (pdf, sink) async {
++          final doc = await pdf.open(PdfInput(src(attachmentPdf)));
++          try {
++            await doc.extractAttachment('notes.txt', sink);
++          } finally {
++            await doc.dispose();
++          }
++        },
++      };
++      for (final MapEntry(key: name, value: run) in ops.entries) {
++        test(name, () async {
++          final pdf = createPdf();
++          if (await pdf.ensureInitialized() == PdfIoMode.opfs) {
++            // OPFS mode writes a sink fire-and-forget: the engine is never
++            // told that the sink refused a chunk.
++            markTestSkipped('OPFS mode does not report a failed sink write');
++            return;
++          }
++          final sink = CountingSink(failOnWrite: 1);
++          await expectLater(
++            run(pdf, sink),
++            throwsA(isNot(isA<PdfCancelled>())),
++          );
++          await sink.close();
++          expect(sink.writes, 1, reason: 'the final flush is the only write');
++          _expectAbortedOnce(sink);
++        }, timeout: t(2));
++      }
++    });
++
+     test('a cancelled extractText aborts its sink once', () async {
+       final pdf = createPdf();
+       final doc = await pdf.open(PdfInput(src(fTwoPageMarkers)));
