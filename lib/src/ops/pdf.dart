@@ -132,7 +132,9 @@ PdfTask<R> _own<H extends _Handle, R>(
 ///   [convertToOffice], [convertFromOffice], [convertXfaToAcroForm].
 class Pdf {
   /// Creates a new [Pdf] instance with an optional engine configuration.
-  Pdf({PdfConfig? config}) : _bridge = createBridge(config: config);
+  Pdf({PdfConfig? config}) : _bridge = createBridge(config: config) {
+    HandleBackstop.recordOwner(this, _bridge);
+  }
 
   final PdfBridge _bridge;
   bool _disposed = false;
@@ -507,6 +509,7 @@ class Pdf {
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    HandleBackstop.detach(_bridge);
     await _bridge.dispose();
   }
 }

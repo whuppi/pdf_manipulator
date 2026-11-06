@@ -106,6 +106,10 @@ abstract final class LaneMsg {
   /// the host via its liveness lock.
   static const opfsDrop = 'opfsDrop';
 
+  /// Dart → worker: read a span of a sink's spool file (OPFS mode). The
+  /// worker answers with [spoolChunk].
+  static const spoolRead = 'spoolRead';
+
   /// Worker → Dart: script evaluated and message handler attached.
   /// Dart must not post `init` before this — a message posted to a
   /// worker with no handler yet is silently dropped.
@@ -137,6 +141,9 @@ abstract final class LaneMsg {
   /// size in [LaneMsgFields.memBytes] and its heap peak in
   /// [LaneMsgFields.peakBytes].
   static const resetDone = 'resetDone';
+
+  /// Worker → Dart: the bytes of a [spoolRead], or its `error`.
+  static const spoolChunk = 'spoolChunk';
 
   /// Worker → Dart: OPFS pre-copy chunk written.
   static const opfsWriteAck = 'opfsWriteAck';
@@ -183,6 +190,10 @@ abstract final class LaneMsgFields {
   /// creation, and has not removed yet. A file leaves the list when its
   /// pending call settles.
   static const abandonedFiles = 'abandoned';
+
+  /// Worker → Dart, on an OPFS `result`: the byte size of each sink's spool
+  /// file, in sink order. Absent when the job had no sink.
+  static const spooled = 'spool';
 
   /// Worker → Dart, on `opfsWriteAck`: present when the write had to create
   /// its handle a second time because the first call passed

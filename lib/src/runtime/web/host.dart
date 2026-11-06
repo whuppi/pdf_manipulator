@@ -366,7 +366,13 @@ class WebExecutorBooter implements ExecutorBooter {
     final workerId = _newSessionId();
     final lockName = _workerLockName(workerId);
     final opfsDir = mode == PdfIoMode.opfs ? workerId : null;
-    final worker = _spawnWorker();
+    final (worker, bootstrapUrl) = _spawnWorker();
+    // The bootstrap blob is read once, when the worker starts: it goes once
+    // the worker has announced itself, or failed to.
+    void revokeBootstrap() {
+      if (bootstrapUrl != null) web.URL.revokeObjectURL(bootstrapUrl);
+    }
+
     // Everything after the start runs inside the try: a throw anywhere here
     // must still terminate the worker.
     StreamSubscription<web.MessageEvent>? sub;
@@ -387,6 +393,7 @@ class WebExecutorBooter implements ExecutorBooter {
         if (obj == null) return;
         final type = (obj[LaneMsgFields.type] as JSString?)?.toDart;
         if (type == LaneMsg.booted && !booted.isCompleted) {
+          revokeBootstrap();
           booted.complete();
         } else if (type == LaneMsg.ready && !ready.isCompleted) {
           ready.complete();
@@ -448,6 +455,7 @@ class WebExecutorBooter implements ExecutorBooter {
     } catch (_) {
       // A worker that never readied wrote no files (writing requires
       // work, work requires ready) — no directory to reclaim.
+      revokeBootstrap();
       worker.terminate();
       rethrow;
     } finally {
@@ -600,7 +608,9 @@ class WebExecutorBooter implements ExecutorBooter {
     _compilesInFlight.clear();
   }
 
-  web.Worker _spawnWorker() {
+  /// The worker, and the blob URL its cross-origin bootstrap runs from (null
+  /// for a same-origin script): the caller revokes it.
+  (web.Worker, String?) _spawnWorker() {
     final url = _laneWorkerUrl;
     if (url.startsWith('http://') || url.startsWith('https://')) {
       // Cross-origin: bootstrap through a same-origin blob. The import
@@ -615,12 +625,13 @@ class WebExecutorBooter implements ExecutorBooter {
         [script.toJS].toJS,
         web.BlobPropertyBag(type: 'application/javascript'),
       );
-      return web.Worker(
-        web.URL.createObjectURL(blob).toJS,
-        web.WorkerOptions(type: 'module'),
+      final bootstrapUrl = web.URL.createObjectURL(blob);
+      return (
+        web.Worker(bootstrapUrl.toJS, web.WorkerOptions(type: 'module')),
+        bootstrapUrl,
       );
     }
-    return web.Worker(url.toJS, web.WorkerOptions(type: 'module'));
+    return (web.Worker(url.toJS, web.WorkerOptions(type: 'module')), null);
   }
 }
 

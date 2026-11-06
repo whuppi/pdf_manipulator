@@ -5,7 +5,7 @@
 // the finalizer registered here releases them. Its timing is not
 // guaranteed, so it never replaces `dispose()`.
 //
-// The release closure captures the bridge handle only, never the owning
+// The release closure captures what it releases only, never the owning
 // object: a closure over the owner would keep it alive and the finalizer
 // would never run.
 
@@ -22,6 +22,16 @@ final class HandleBackstop {
   static final _finalizer = Finalizer<_Leak>(_release);
   static final _leaks = Expando<_Leak>('HandleBackstop');
 
+  static final _owners = Expando<Object>('HandleBackstop.owners');
+
+  /// Notes that [pdf]'s backstop is registered on [owner]; read by
+  /// [ownerOf].
+  static void recordOwner(Object pdf, Object owner) => _owners[pdf] = owner;
+
+  /// What the backstop of [pdf] is registered on. Tests only.
+  @visibleForTesting
+  static Object ownerOf(Object pdf) => _owners[pdf]!;
+
   /// Receives the debug warning; replaced by tests to read it.
   @visibleForTesting
   static void Function(String message) warn = _log;
@@ -32,14 +42,16 @@ final class HandleBackstop {
   static void attach(
     Object owner,
     String kind,
-    Future<void> Function() release,
-  ) {
+    Future<void> Function() release, {
+    String remedy =
+        'call dispose(), or open it through read, rewrite or buildTo',
+  }) {
     StackTrace? openedAt;
     assert(() {
       openedAt = StackTrace.current;
       return true;
     }());
-    final leak = _Leak(kind, release, openedAt);
+    final leak = _Leak(kind, remedy, release, openedAt);
     _leaks[owner] = leak;
     _finalizer.attach(owner, leak, detach: owner);
   }
@@ -74,8 +86,8 @@ final class HandleBackstop {
     }());
     if (debug) {
       warn(
-        'a ${leak.kind} was never disposed; call dispose(), or open it '
-        'through read, rewrite or buildTo.\nOpened at:\n${leak.openedAt}',
+        'a ${leak.kind} was never disposed; ${leak.remedy}.\n'
+        'Opened at:\n${leak.openedAt}',
       );
     }
     try {
@@ -91,9 +103,10 @@ final class HandleBackstop {
 }
 
 final class _Leak {
-  const _Leak(this.kind, this.release, this.openedAt);
+  const _Leak(this.kind, this.remedy, this.release, this.openedAt);
 
   final String kind;
+  final String remedy;
   final Future<void> Function() release;
   final StackTrace? openedAt;
 }

@@ -92,7 +92,7 @@ mod size {
     pub const DUPS: usize = 6_000;
     pub const FONTS: usize = 600;
     pub const TAGGED: usize = 60_000;
-    pub const TAGGED_SAVE: usize = 5_000;
+    pub const TAGGED_SAVE: usize = 8_000;
     pub const REGIONS: usize = 600;
     pub const REGION_PAGES: usize = 300;
     pub const FORM: usize = 4_000;
@@ -110,6 +110,8 @@ mod size {
     pub const CONVERT_TRIPLES: usize = 100_000;
     /// Triples of the form or glyph a render reads whole.
     pub const WHOLE_FORM_TRIPLES: usize = 300_000;
+    /// Lines of text in the form `extractAll form` reads: its reading order is one partition of them all.
+    pub const FORM_TEXT_LINES: usize = 20_000;
     /// Side of the one inline image of a render: several megabytes of data.
     pub const INLINE_IMAGE_SIDE: u32 = 5_000;
     /// Paint operators of a knockout group the render replays one by one.
@@ -177,7 +179,7 @@ fn run(op: &str, fixture: &str) -> Result<(), Failure> {
             mark();
         },
         ("extractAll", "form") => {
-            let mut document = doc(gen::graphics_text_form(size::WHOLE_FORM_TRIPLES).finish())?;
+            let mut document = doc(gen::text_form(size::FORM_TEXT_LINES).finish())?;
             mark();
             dispatch::extract_text(&mut document, None, "plainText", &cancel).map_err(fail("extract"))?;
             mark();

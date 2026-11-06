@@ -291,23 +291,6 @@ pub fn long_page_image(n: usize) -> Shell {
     shell
 }
 
-/// One page that draws a form of `n` save, identity transform and restore
-/// triples and one line of text: the form's operators are many, its text is not.
-pub fn graphics_text_form(n: usize) -> Shell {
-    let mut shell = Shell::new();
-    let mut content = graphics(n);
-    content.extend_from_slice(&text_lines(1, 0));
-    let form = shell.pdf.add_stream(
-        &format!(
-            "/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 {} 0 R >> >>",
-            shell.font
-        ),
-        &content,
-    );
-    shell.page((612, 792), b"q /Fm1 Do Q\n", &format!("/XObject << /Fm1 {form} 0 R >>"), "");
-    shell
-}
-
 /// `n` pages of text and one rectangle each.
 pub fn pages(n: usize, lines: usize) -> Shell {
     let mut shell = Shell::new();

@@ -865,9 +865,18 @@ blocks until the Dart side returns bytes, so it never reads faster than the host
 - **Atomics:** `host_write_chunk` posts the chunk, then `Atomics.wait`s on a dedicated write
   SAB. Dart consumes the chunk and acknowledges with `Atomics.store` and `notify`. One chunk
   is in flight at a time.
-- **OPFS:** `postMessage`, with no wait. No blocking primitive is available (no SAB, no
-  JSPI). The wasm producer is slower than the main-thread consumer, because OPFS source
-  reads are the bottleneck and not the output writes.
+- **OPFS:** no blocking primitive is available (no SAB, no JSPI), so the worker cannot wait
+  for the sink. It writes each sink's output to a spool file of its own in the executor's
+  directory, through a sync access handle, so memory stays bounded. The job's `result` carries
+  the size of each spool file and is held until the main thread has delivered them: it sends
+  `spoolRead` for one span of at most 256 KB, the worker answers with `spoolChunk`, and the
+  sink's `write` is awaited before the next span is asked for. One chunk is in flight at a
+  time. A sink that throws fails the op with `PdfIoFailed`. The engine has finished when the
+  result is held, so a task's cancel during the delivery does not stop it (the cancel outcome
+  contract: the result stands) and the save succeeds. Only the end of the lane (dispose) stops
+  it: the op ends cancelled. In both failure cases the ops layer aborts the sink once.
+  The spool files belong to the job: `opfsDrop` removes them after delivery, failure and
+  cancel, and the reclaim rules below cover a worker that dies first.
 
 ### Sources are random-access, not forward-only
 

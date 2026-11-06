@@ -65,6 +65,7 @@ void main() {
         LaneMsg.reset,
         LaneMsg.opfsWrite,
         LaneMsg.opfsDrop,
+        LaneMsg.spoolRead,
       };
       final cases = _extractJsCases(workerSource);
       for (final tag in dartToWorker) {
@@ -82,6 +83,7 @@ void main() {
         LaneMsg.error,
         LaneMsg.resetDone,
         LaneMsg.opfsWriteAck,
+        LaneMsg.spoolChunk,
       };
       final posted = RegExp(
         "postMessage\\(\\{ type: '([a-zA-Z.]+)'",

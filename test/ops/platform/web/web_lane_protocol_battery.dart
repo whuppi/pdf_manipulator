@@ -14,13 +14,18 @@ import 'dart:js_interop_unsafe';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:pdf_manipulator/pdf_manipulator.dart'
+    show Pdf, PdfConfig, PdfInput;
 import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart' as bin;
+import 'package:pdf_manipulator/src/bridge/protocol/codec.dart' as codec;
 import 'package:pdf_manipulator/src/runtime/lane.dart';
+import 'package:pdf_manipulator/src/runtime/pool.dart';
 import 'package:pdf_manipulator/src/runtime/web/lease.dart';
 import 'package:pdf_manipulator/src/runtime/web/protocol.dart';
 import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
 import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
+import 'package:pdf_manipulator/src/types/pdf_params.dart' show PdfSave;
 import 'package:test/test.dart';
 import 'package:web/web.dart' as web;
 import 'package:web/web.dart' show EventStreamProviders;
@@ -91,6 +96,29 @@ Future<int> _opfsFileCount(String workerDir) async {
     return (await _names(dir)).length;
   } catch (_) {
     return 0; // the worker never made its directory
+  }
+}
+
+/// The spool files in every worker directory of this page's session.
+Future<List<String>> _spoolFiles() async {
+  try {
+    final root = await web.window.navigator.storage.getDirectory().toDart;
+    final ours = await root
+        .getDirectoryHandle(WebExecutorBooter.opfsRootDir)
+        .toDart;
+    final session = await ours
+        .getDirectoryHandle(WebExecutorBooter.opfsSessionId)
+        .toDart;
+    final found = <String>[];
+    for (final worker in await _names(session)) {
+      final dir = await session.getDirectoryHandle(worker).toDart;
+      found.addAll(
+        (await _names(dir)).where((n) => n.startsWith('pdf_spool_')),
+      );
+    }
+    return found;
+  } catch (_) {
+    return const [];
   }
 }
 
@@ -304,6 +332,25 @@ self.addEventListener('message', (e) => {
 });
 ''';
 
+/// Worker prelude: every `opfsWriteAck` reaches the page 150 ms late and every
+/// `removeEntry` takes 400 ms longer, as a worker on a loaded machine does.
+const _slowDisk = r'''
+const post = self.postMessage.bind(self);
+self.postMessage = (m, t) => {
+  if (m && m.type === 'opfsWriteAck') {
+    setTimeout(() => post(m, t), 150);
+    return;
+  }
+  return post(m, t);
+};
+const dirProto = FileSystemDirectoryHandle.prototype;
+const removeEntry = dirProto.removeEntry;
+dirProto.removeEntry = async function (name, options) {
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  return removeEntry.call(this, name, options);
+};
+''';
+
 /// Every message a booted worker posts, in order, for a test that drives a
 /// real lane over it.
 class _Watched {
@@ -495,6 +542,75 @@ class _RawWorker {
   }
 }
 
+/// A sink that takes [stall] to accept each chunk, and counts them.
+class _StallSink extends TestSink {
+  _StallSink({this.stall = const Duration(seconds: 1), this.failOnWrite});
+
+  final Duration stall;
+
+  /// The 1-based write that throws; none when null.
+  final int? failOnWrite;
+
+  /// Writes that started, and writes that returned.
+  int started = 0;
+  int finished = 0;
+
+  /// Runs as each write starts.
+  void Function()? onStart;
+
+  @override
+  Future<void> write(Uint8List chunk) async {
+    started++;
+    onStart?.call();
+    await Future<void>.delayed(stall);
+    if (started == failOnWrite) throw StateError('the sink failed');
+    super.write(chunk);
+    finished++;
+  }
+}
+
+/// Counts the blob URLs the page makes and revokes while it is on, patching
+/// both browser calls. Only a script blob is a worker bootstrap.
+class _BlobUrls {
+  _BlobUrls() {
+    _probe = globalContext.callMethod<JSObject>('eval'.toJS, _patch.toJS);
+  }
+
+  static const _patch = r'''
+(() => {
+  const made = [];
+  const revoked = new Set();
+  const create = URL.createObjectURL;
+  const revoke = URL.revokeObjectURL;
+  URL.createObjectURL = function (blob) {
+    const url = create.call(this, blob);
+    if (blob.type === 'application/javascript') made.push(url);
+    return url;
+  };
+  URL.revokeObjectURL = function (url) {
+    revoked.add(url);
+    return revoke.call(this, url);
+  };
+  return {
+    made: () => made.length,
+    unrevoked: () => made.filter((url) => !revoked.has(url)).length,
+    restore: () => { URL.createObjectURL = create; URL.revokeObjectURL = revoke; },
+  };
+})()
+''';
+
+  late final JSObject _probe;
+
+  /// Script blobs made since the patch.
+  int get made => (_probe.callMethod<JSNumber>('made'.toJS)).toDartInt;
+
+  /// Script blobs made since the patch and not revoked.
+  int get unrevoked =>
+      (_probe.callMethod<JSNumber>('unrevoked'.toJS)).toDartInt;
+
+  void restore() => _probe.callMethod<JSAny?>('restore'.toJS);
+}
+
 void registerWebLaneProtocolTests({
   required String Function() workerUrl,
   required PdfIoMode mode,
@@ -510,6 +626,318 @@ void registerWebLaneProtocolTests({
     });
 
     tearDown(() => WebExecutorBooter.transferBudget = kTransferBytes);
+
+    group('a save to a slow or failing sink', () {
+      /// An editor on the thousand-page fixture, whose save is a few chunks.
+      Future<(WebExecutor, WebLease, int)> openLargeEditor() async {
+        final executor = await host.boot() as WebExecutor;
+        addTearDown(executor.terminate);
+        final lane = executor.beginLane() as WebLease;
+        final source = src(fThousandPage);
+        final opened = await lane.submit(
+          Job(
+            jobId: 1,
+            request: bin.encodeRequest('editorOpen', {
+              'sourceLength': source.length,
+              'password': null,
+            }),
+            sources: [source],
+            sinks: const [],
+            keepSources: const {0},
+          ),
+        );
+        expect(_ok(opened.bytes), isTrue, reason: _failure(opened.bytes));
+        final handle = codec.decodeEditorOpen(bin.decodeResponse(opened.bytes));
+        return (executor, lane, handle);
+      }
+
+      Future<JobResult> save(WebLease lane, int handle, _StallSink sink) =>
+          lane.submit(
+            Job(
+              jobId: 2,
+              request: bin.encodeRequest('editorSave', {
+                'handleId': handle,
+                ...codec.encodeSaveArgs(const PdfSave.full()),
+              }),
+              sources: const [],
+              sinks: [sink],
+              keepSources: const {},
+              holdGroupId: 1,
+            ),
+          );
+
+      test('the main thread holds at most one chunk at a time', () async {
+        final (executor, lane, handle) = await openLargeEditor();
+        final sink = _StallSink();
+        // A chunk is a message that carries bytes to the main thread: one
+        // that arrived and has not been written yet is held there.
+        var arrived = 0;
+        var mostHeld = 0;
+        final sub = EventStreamProviders.messageEvent
+            .forTarget(executor.js)
+            .listen((event) {
+              final m = event.data as JSObject?;
+              if (m == null) return;
+              final type = _type(m);
+              if (type != 'chunk' && type != 'spoolChunk') return;
+              arrived++;
+              mostHeld = math.max(mostHeld, arrived - sink.finished);
+            });
+        addTearDown(sub.cancel);
+
+        final saved = await save(lane, handle, sink);
+        expect(_ok(saved.bytes), isTrue, reason: _failure(saved.bytes));
+        expect(
+          sink.finished,
+          greaterThan(1),
+          reason: 'the save is more than one chunk',
+        );
+        expect(
+          mostHeld,
+          lessThanOrEqualTo(1),
+          reason: 'chunks piled up on the main thread behind a slow sink',
+        );
+      }, timeout: t(30));
+
+      test('a sink that fails fails the job, and the output is not kept '
+          'on disk', () async {
+        final (executor, lane, handle) = await openLargeEditor();
+        final before = await _opfsFileCount(executor.opfsDir ?? '');
+        final sink = _StallSink(stall: Duration.zero, failOnWrite: 1);
+
+        final saved = await save(lane, handle, sink);
+        expect(_ok(saved.bytes), isFalse, reason: 'the sink refused a chunk');
+        expect(_failure(saved.bytes), isNot(contains('cancelled')));
+        expect(sink.started, 1, reason: 'no chunk follows a refused one');
+        if (mode == PdfIoMode.opfs) {
+          await _until(
+            () async => await _opfsFileCount(executor.opfsDir!) == before,
+            'the output of a failed save stayed on disk',
+          );
+        }
+      }, timeout: t(30));
+
+      test(
+        'the output of a save is removed from disk once delivered',
+        () async {
+          if (mode != PdfIoMode.opfs) {
+            markTestSkipped('only OPFS mode spools its output');
+            return;
+          }
+          final (executor, lane, handle) = await openLargeEditor();
+          final before = await _opfsFileCount(executor.opfsDir!);
+          final sink = _StallSink(stall: Duration.zero);
+
+          final saved = await save(lane, handle, sink);
+          expect(_ok(saved.bytes), isTrue, reason: _failure(saved.bytes));
+          expect(sink.length, greaterThan(300 * 1024));
+          await _until(
+            () async => await _opfsFileCount(executor.opfsDir!) == before,
+            'the spool file stayed after its delivery',
+          );
+        },
+        timeout: t(30),
+      );
+
+      test('a cancel while the output is delivered lets it finish, and the '
+          'save succeeds', () async {
+        if (mode != PdfIoMode.opfs) {
+          markTestSkipped('only OPFS mode has finished the engine by then');
+          return;
+        }
+        final (executor, lane, handle) = await openLargeEditor();
+        final before = await _opfsFileCount(executor.opfsDir!);
+        final sink = _StallSink(stall: const Duration(milliseconds: 300));
+        sink.onStart = () {
+          if (sink.started == 1) lane.cancelJob(2);
+        };
+
+        final saved = await save(lane, handle, sink);
+        expect(_ok(saved.bytes), isTrue, reason: _failure(saved.bytes));
+        expect(sink.finished, 2, reason: 'delivery stopped at the cancel');
+        expect(sink.length, greaterThan(300 * 1024));
+        await _until(
+          () async => await _opfsFileCount(executor.opfsDir!) == before,
+          'the output of a delivered save stayed on disk',
+        );
+      }, timeout: t(30));
+
+      test('a dispose while the output is delivered cancels the job, aborts '
+          'the sink once and removes the output', () async {
+        final pdf = Pdf(
+          config: PdfConfig(webWorkerUrl: workerUrl(), webIoMode: mode),
+        );
+        addTearDown(pdf.dispose);
+        final editor = await pdf.edit(PdfInput(src(fThousandPage)));
+        final sink = _StallSink(stall: const Duration(milliseconds: 300));
+        sink.onStart = () {
+          if (sink.started == 1) unawaited(pdf.dispose());
+        };
+
+        await expectLater(editor.save(sink), throwsA(isA<PdfCancelled>()));
+        await Future<void>.delayed(const Duration(seconds: 1));
+        expect(sink.started, 1, reason: 'a chunk was written after the end');
+        expect(sink.aborts, 1);
+        await _until(
+          () async => (await _spoolFiles()).isEmpty,
+          'the output of a disposed save stayed on disk',
+        );
+      }, timeout: t(30));
+    });
+
+    test('a terminated worker leaves the budget at once, whatever its '
+        'liveness lock does', () async {
+      // The browser would release the lock of a terminated worker in its own
+      // time; here the page never grants it, so the reap waits forever.
+      final workerLocks =
+          '${WebExecutorBooter.opfsRootDir}/'
+          '${WebExecutorBooter.opfsSessionId}/';
+      final restore =
+          globalContext
+                  .callMethod<JSFunction>(
+                    'eval'.toJS,
+                    """
+(prefix) => {
+  const locks = navigator.locks;
+  const request = locks.request;
+  locks.request = function (name, ...rest) {
+    if (String(name).startsWith(prefix)) return new Promise(() => {});
+    return request.call(this, name, ...rest);
+  };
+  return () => { locks.request = request; };
+}
+"""
+                        .toJS,
+                  )
+                  .callAsFunction(null, workerLocks.toJS)!
+              as JSFunction;
+      addTearDown(() => restore.callAsFunction());
+
+      // keepBytes of 0 retires every executor the moment it is returned.
+      final pool = ExecutorPool(host: host, maxExecutors: 1, keepBytes: 0);
+      addTearDown(pool.dispose);
+      final first = await pool.acquire().lease;
+      final job = Job(
+        jobId: 1,
+        request: _open(minimalPdf.length),
+        sources: [src(minimalPdf)],
+        sinks: const [],
+        keepSources: const {},
+      );
+      await first.lane.submit(job);
+      await pool.release(first);
+      expect(pool.liveCount, 0, reason: 'the retired worker still counts');
+
+      final second = await pool.acquire().lease.timeout(
+        const Duration(seconds: 20),
+        onTimeout: () =>
+            throw TestFailure('the budget waited for the dead worker\'s lock'),
+      );
+      expect(second.state, ExecutorState.leased);
+    }, timeout: t(40));
+
+    test('t-493: a render of the first page of a large document, behind a '
+        'slow disk and a create that does not answer once, finishes', () async {
+      if (mode != PdfIoMode.opfs) {
+        markTestSkipped('only OPFS mode pre-copies its sources');
+        return;
+      }
+      final executor =
+          await withWorkerPrelude(
+                '${_hangsCreate(every: false)}\n$_slowDisk',
+                host.boot,
+              )
+              as WebExecutor;
+      addTearDown(executor.terminate);
+      executor.provoked = true;
+      final lane = executor.beginLane() as WebLease;
+      final source = src(fThousandPage);
+      final started = DateTime.now();
+      final opened = await lane.submit(
+        Job(
+          jobId: 1,
+          request: bin.encodeRequest('open', {
+            'sourceLength': source.length,
+            'password': null,
+          }),
+          sources: [source],
+          sinks: const [],
+          keepSources: const {0},
+        ),
+      );
+      expect(_ok(opened.bytes), isTrue, reason: _failure(opened.bytes));
+      final handle = bin.decodeResponse(opened.bytes)['handleId'] as int;
+
+      final sink = TestSink();
+      final rendered = await lane.submit(
+        Job(
+          jobId: 2,
+          request: bin.encodeRequest('render', {
+            'handleId': handle,
+            'pageIndices': [0],
+            'sizeKind': 'dpi',
+            'dpi': 72.0,
+            'format': 'png',
+          }),
+          sources: const [],
+          sinks: [sink],
+          keepSources: const {},
+          holdGroupId: 1,
+        ),
+      );
+      expect(_ok(rendered.bytes), isTrue, reason: _failure(rendered.bytes));
+      expect(sink.length, greaterThan(0));
+      expect(
+        DateTime.now().difference(started),
+        lessThan(const Duration(seconds: 40)),
+      );
+
+      executor.js.postMessage(_msg('release', {}));
+      await lane.drain();
+      await lane.reset();
+      expect(await _opfsFileCount(executor.opfsDir!), 0);
+    }, timeout: t(60));
+
+    test('the blob URL of a cross-origin boot is revoked once the worker '
+        'has started', () async {
+      if (!workerUrl().startsWith('http')) {
+        markTestSkipped('the worker boots from a same-origin script');
+        return;
+      }
+      final blobs = _BlobUrls();
+      addTearDown(blobs.restore);
+      final executor = await host.boot() as WebExecutor;
+      addTearDown(executor.terminate);
+      expect(blobs.made, 1, reason: 'a cross-origin boot makes one bootstrap');
+      expect(
+        blobs.unrevoked,
+        0,
+        reason: 'the bootstrap blob URL is never revoked',
+      );
+    }, timeout: t(10));
+
+    test('the blob URL of a cross-origin boot that fails is revoked', () async {
+      if (!workerUrl().startsWith('http')) {
+        markTestSkipped('the worker boots from a same-origin script');
+        return;
+      }
+      // The page remembers the last URL it was given for bare instances.
+      addTearDown(
+        () => WebExecutorBooter(laneWorkerUrl: workerUrl(), forceMode: mode),
+      );
+      final missing = WebExecutorBooter(
+        laneWorkerUrl: workerUrl().replaceFirst(
+          'executor_worker.js',
+          'no_such_worker.js',
+        ),
+        forceMode: mode,
+      );
+      final blobs = _BlobUrls();
+      addTearDown(blobs.restore);
+      await expectLater(missing.boot(), throwsA(isA<StateError>()));
+      expect(blobs.made, 1);
+      expect(blobs.unrevoked, 0, reason: 'a failed boot leaves its blob URL');
+    }, timeout: t(10));
 
     test('a drain answers a parked job at once, settles when the worker has '
         'posted, and the worker serves the next lease', () async {

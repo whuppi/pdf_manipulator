@@ -60,6 +60,8 @@
 //   opfsWrite    { lease, jobId, filename, chunk, offset, last }
 //                → opfsWriteAck | error { lease, jobId, protocol: true, message }
 //   opfsDrop     { lease, jobId }
+//   spoolRead    { lease, jobId, sinkIndex, offset, count }
+//                → spoolChunk { lease, jobId, sinkIndex, offset, data | error }
 //
 // worker → Dart:
 //   ready | readAt { lease, sourceIndex, offset, count } | chunk { lease,
@@ -166,6 +168,7 @@ let activeWriteSab = null;   // per-exec write-ack SAB (atomics)
 let activeCancelSab = null;  // per-exec cancel word, any mode with SharedArrayBuffer
 let activeCancelUrl = null;  // per-exec blob URL, revoked by the main thread to cancel
 let cancelSeen = 0;          // latched once the URL stopped answering
+let spoolOut = null;                 // sizes of the sink spools of the job that just ran
 let lastPollAt = 0;          // performance.now() of the last URL poll
 
 // One sync XHR costs about 0.1 ms in Chrome, so polling at most every 10 ms
@@ -339,11 +342,7 @@ function hostWriteChunk(sinkIndex, bufPtr, len) {
     case 'atomics': return writeViaAtomics(sinkIndex, chunk);
     case 'jspi':    return writeViaJspi(sinkIndex, chunk);
     case 'asyncify': return suspendAsyncify(writeViaJspi(sinkIndex, chunk));
-    default:
-      // OPFS: no blocking primitive — fire-and-forget (the producer
-      // is disk-read bound, never outruns the main-thread consumer).
-      self.postMessage({ type: 'chunk', lease, sinkIndex, data: chunk.buffer }, [chunk.buffer]);
-      return 0;
+    default:        return writeToSpool(sinkIndex, chunk);
   }
 }
 
@@ -669,10 +668,10 @@ let opfsDirParts = null;
 let livenessLockName = null;
 let laneDirPromise = null;
 
-// Held from before `ready` until this agent dies, in every I/O mode.
-// The host's worker budget frees this worker's slot only when it can
-// acquire the lock — the browser's own word that the worker, and the
-// WASM memory behind it, is gone. OPFS reclaim keys on the same grant.
+// Held from before `ready` until this agent dies, in every I/O mode. The
+// host reclaims this worker's OPFS directory once it can acquire the lock —
+// the browser's own word that the worker, and the WASM memory behind it, is
+// gone. The pool's budget does not wait for it.
 function acquireLivenessLock() {
   if (!livenessLockName || !('locks' in navigator)) return Promise.resolve();
   return new Promise((granted) => {
@@ -823,6 +822,61 @@ async function opfsDrop(jobId) {
   }
 }
 
+// OPFS output: no blocking primitive exists to wait for the host, so each sink
+// of a job writes to a spool file of its own, through a sync access handle, and
+// the host reads it back chunk by chunk once the job has answered. Memory stays
+// bounded and the host's sink is awaited at every write. The files belong to
+// the job like its pre-copies: opfsDrop removes them.
+const spools = [];                   // sinkIndex → { sh, size } while a job runs
+
+async function openSpools(jobId, sinkCount) {
+  spools.length = 0;
+  for (let i = 0; i < sinkCount; i++) {
+    const name = 'pdf_spool_' + jobId + '_' + i;
+    let files = jobFiles.get(jobId);
+    if (!files) { files = new Set(); jobFiles.set(jobId, files); }
+    files.add(name); // registered before the first byte hits disk
+    const { sh } = await openHandle(jobId, name);
+    if (!sh) throw new Error('the spool file of sink ' + i + ' was dropped');
+    spools.push({ sh, size: 0 });
+  }
+}
+
+function writeToSpool(sinkIndex, chunk) {
+  const spool = spools[sinkIndex];
+  if (!spool) return P.hostIoError;
+  try {
+    spool.sh.write(chunk, { at: spool.size });
+  } catch (_) {
+    return P.hostIoError;
+  }
+  spool.size += chunk.length;
+  return 0;
+}
+
+// The bytes of one sink's spool, flushed; called once the engine returned.
+function flushSpools() {
+  return spools.map((spool) => { spool.sh.flush(); return spool.size; });
+}
+
+function spoolRead(msg) {
+  try {
+    const spool = spoolHandle(msg.jobId, msg.sinkIndex);
+    const data = new Uint8Array(msg.count);
+    const n = spool.read(data, { at: msg.offset });
+    const out = n === data.length ? data : data.slice(0, n);
+    self.postMessage({ type: 'spoolChunk', lease: msg.lease, jobId: msg.jobId, sinkIndex: msg.sinkIndex, offset: msg.offset, data: out.buffer }, [out.buffer]);
+  } catch (err) {
+    self.postMessage({ type: 'spoolChunk', lease: msg.lease, jobId: msg.jobId, sinkIndex: msg.sinkIndex, offset: msg.offset, error: err.message || String(err) });
+  }
+}
+
+function spoolHandle(jobId, sinkIndex) {
+  const sh = opfsWriteHandles.get('pdf_spool_' + jobId + '_' + sinkIndex);
+  if (!sh) throw new Error('no spool file for sink ' + sinkIndex + ' of job ' + jobId);
+  return sh;
+}
+
 // Deletes every file in this worker's own directory but those set aside,
 // which their pending call removes. Every other handle is closed first, so no
 // reaping is pending and nothing needs retrying.
@@ -964,7 +1018,9 @@ async function exec(msg) {
 
   activeReaderMap = readerIds.map((rid, i) => [i, rid]);
   let responseBytes;
+  spoolOut = null;
   try {
+    if (ioMode === 'opfs') await openSpools(jobId, sinkCount);
     if (ioMode === 'jspi') {
       responseBytes = await callLane(new Uint8Array(requestBytes), packed, sinkCount, jspiLaneExecute);
     } else if (ioMode === 'asyncify') {
@@ -973,6 +1029,8 @@ async function exec(msg) {
       const { execute } = await import(wasmBaseUrl + 'pdf_oxide.js');
       responseBytes = execute(statePtr, new Uint8Array(requestBytes), packed, sinkCount);
     }
+
+    if (ioMode === 'opfs' && sinkCount > 0) spoolOut = flushSpools();
 
     // Promote kept readers to held (success responses only — status 1).
     // keepSources indexes the op's OWN sources, which sit after the
@@ -1022,8 +1080,8 @@ self.onmessage = async (e) => {
       if (msg.wasmEntry) wasmEntry = msg.wasmEntry;
       try {
         // The liveness lock must be held BEFORE the WASM instance
-        // exists: the host's budget slot, and any OPFS file, must
-        // never outlive the death signal that releases them.
+        // exists: no OPFS file may outlive the death signal that
+        // lets the host reclaim it.
         await acquireLivenessLock();
         await ensureInit();
         const { engine_state_new } = await import(wasmBaseUrl + 'pdf_oxide.js');
@@ -1060,6 +1118,12 @@ self.onmessage = async (e) => {
     case 'opfsDrop': {
       if (!admit(msg)) return;
       await track(opfsDrop(msg.jobId));
+      return;
+    }
+
+    case 'spoolRead': {
+      if (!admit(msg)) return;
+      spoolRead(msg);
       return;
     }
 
@@ -1104,7 +1168,7 @@ self.onmessage = async (e) => {
             : responseBytes.buffer.slice(responseBytes.byteOffset, responseBytes.byteOffset + responseBytes.byteLength);
         // mem is the worker's lifetime peak: linear memory never shrinks.
         // The host keeps or retires the worker by peak.
-        self.postMessage({ type: 'result', lease, jobId: msg.jobId, data: owned, mem: wasm.memory.buffer.byteLength, peak: heapPeak(), held: heldBytes() }, [owned]);
+        self.postMessage({ type: 'result', lease, jobId: msg.jobId, data: owned, spool: spoolOut || undefined, mem: wasm.memory.buffer.byteLength, peak: heapPeak(), held: heldBytes() }, [owned]);
       } catch (err) {
         // A wasm trap (a Rust panic compiles to `unreachable`) leaves the
         // engine's state unusable. Report it as a trap, apart from every

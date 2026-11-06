@@ -138,12 +138,6 @@ void registerAbortTests(Pdf Function() createPdf) {
       for (final MapEntry(key: name, value: run) in ops.entries) {
         test(name, () async {
           final pdf = createPdf();
-          if (await pdf.ensureInitialized() == PdfIoMode.opfs) {
-            // OPFS mode writes a sink fire-and-forget: the engine is never
-            // told that the sink refused a chunk.
-            markTestSkipped('OPFS mode does not report a failed sink write');
-            return;
-          }
           final sink = CountingSink(failOnWrite: 1);
           await expectLater(
             run(pdf, sink),

@@ -289,6 +289,12 @@ CONTENT RULES (never change)
 - Fixed a cancel not reaching a redaction, a text extraction of a form or a change of an image's bounds until the page or form it was reading ended, so a page of millions of operators could not be stopped — each now stops within one operator
 - Fixed a compressing full-rewrite save of a document with a very large rewritten stream holding the whole stream and its compressed copy in memory — the stream is counted, then recompressed in pieces (an encrypted save writes such a stream as it is)
 - Fixed listing the images of a page with a very large content stream holding the whole decoded content and every parsed operator in memory — the content is read one operator at a time
+- Fixed `builder.save`, `editor.save` and `extractAttachment` succeeding in web OPFS mode when the sink threw, and a slow sink piling chunks up in memory — the worker now spools output to disk and the sink is awaited chunk by chunk, so its error fails the op
+- Fixed a native lane killed while it waited for a thread slot answering its jobs only when another executor exited — they now complete cancelled at once
+- Fixed a `Pdf` that was never disposed keeping its executors, lanes and registered fonts for good — they are released when it is garbage collected, with a debug warning
+- Fixed the blob URL of a cross-origin worker bootstrap never being revoked — it goes once the worker has started or failed to
+- Fixed text extraction holding a form field's whole appearance stream in memory — the stream is now read as its operators, in bounded pieces
+- Fixed a cancel waiting out the reading-order partition, the glyph sort and the span and text passes of a page of tens of thousands of text lines — each now polls for it as it runs
 
 ## 5.0.1-dev.0
 

@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/pdf_manipulator.dart';
+import 'package:pdf_manipulator/src/ops/handle_backstop.dart';
 import 'package:pdf_manipulator/src/runtime/pool.dart';
 import 'package:test/test.dart';
 
@@ -13,8 +14,57 @@ import '../../harness/slow_source.dart';
 import '../../harness/test_source_sink.dart';
 import '../../harness/timeouts.dart';
 
+/// Whether `assert` runs: the debug warning exists only then.
+bool get _assertsOn {
+  var on = false;
+  assert(on = true);
+  return on;
+}
+
 void registerInstanceTests(Pdf Function() createPdf) {
   group('instance', () {
+    // ── The backstop for a Pdf nobody disposed ──
+
+    group('backstop', () {
+      late List<String> warnings;
+      late void Function(String) saved;
+
+      setUp(() {
+        warnings = [];
+        saved = HandleBackstop.warn;
+        HandleBackstop.warn = warnings.add;
+      });
+      tearDown(() => HandleBackstop.warn = saved);
+
+      test('an undisposed Pdf is released and logged', () async {
+        final pdf = createPdf();
+        final doc = await pdf.open(PdfInput(src(minimalPdf)));
+        await doc.dispose();
+        await HandleBackstop.finalizeNow(HandleBackstop.ownerOf(pdf));
+        await expectLater(
+          pdf.open(PdfInput(src(minimalPdf))),
+          throwsA(isA<PdfCancelled>()),
+          reason: 'the instance no longer holds its lanes',
+        );
+        if (_assertsOn) {
+          expect(warnings, hasLength(1));
+          expect(warnings.single, contains('a Pdf was never disposed'));
+          expect(warnings.single, isNot(contains('buildTo')));
+          expect(warnings.single, contains('Opened at'));
+        }
+      }, timeout: t(1));
+
+      test('a disposed Pdf is not released twice', () async {
+        final pdf = createPdf();
+        await pdf.dispose();
+        await expectLater(
+          HandleBackstop.finalizeNow(HandleBackstop.ownerOf(pdf)),
+          throwsA(isA<ArgumentError>()),
+        );
+        expect(warnings, isEmpty);
+      }, timeout: t(1));
+    });
+
     // ── Dispose cascade ──
 
     test('dispose cascades to open docs', () async {

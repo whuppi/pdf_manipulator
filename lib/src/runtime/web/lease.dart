@@ -244,6 +244,10 @@ class WebLease implements Lease, LanePhase {
   /// call behind it may still be out.
   final Map<({int jobId, int offset}), String> _unanswered = {};
 
+  /// The spool read in flight, and the read it answers.
+  Completer<JSObject>? _spoolAck;
+  ({int jobId, int sinkIndex, int offset})? _spoolAwaiting;
+
   /// The reset in flight; its answer is `resetDone` or an `error` that
   /// names no job.
   Completer<int?>? _reset;
@@ -434,6 +438,8 @@ class WebLease implements Lease, LanePhase {
     _opfsAck?.complete(null); // loop head re-checks _abandoned and exits
     _opfsAck = null;
     _opfsAwaiting = null;
+    _spoolAck = null;
+    _spoolAwaiting = null;
     _unanswered.clear();
     final resetting = _reset;
     _reset = null;
@@ -619,7 +625,7 @@ class WebLease implements Lease, LanePhase {
         if (_suspends) _awaitingWrite = true;
         // Chained, never parallel: chunk N+1's sink.write may not
         // start before chunk N's completes (ordering is the sink
-        // contract; OPFS mode has no worker-side backpressure).
+        // contract).
         if (entry != null) {
           entry.sinkChain = entry.sinkChain.then(
             (_) => _serveChunk(obj, entry),
@@ -639,6 +645,15 @@ class WebLease implements Lease, LanePhase {
             _int(obj, LaneMsgFields.jobId) == waiting.jobId &&
             _int(obj, LaneMsgFields.writeOffset) == waiting.offset) {
           _opfsAck?.complete(_str(obj, 'error'));
+        }
+
+      case LaneMsg.spoolChunk:
+        final waiting = _spoolAwaiting;
+        if (waiting != null &&
+            _int(obj, LaneMsgFields.jobId) == waiting.jobId &&
+            _int(obj, 'sinkIndex') == waiting.sinkIndex &&
+            _int(obj, LaneMsgFields.writeOffset) == waiting.offset) {
+          _spoolAck?.complete(obj);
         }
 
       case LaneMsg.resetDone:
@@ -661,7 +676,16 @@ class WebLease implements Lease, LanePhase {
             _finish(entry, _buildResult(entry, bytes));
             return;
           }
-          unawaited(_finishAfterWrites(entry, bytes));
+          final spooled = obj[LaneMsgFields.spooled] as JSArray<JSNumber>?;
+          if (spooled != null && succeeded) {
+            unawaited(
+              _finishAfterSpool(entry, bytes, [
+                for (final n in spooled.toDart) n.toDartInt,
+              ]),
+            );
+          } else {
+            unawaited(_finishAfterWrites(entry, bytes));
+          }
         }
 
       case LaneMsg.error:
@@ -704,9 +728,7 @@ class WebLease implements Lease, LanePhase {
   }
 
   /// A success ends after its last sink write, cancelled or not: the caller
-  /// must not be told "saved" while a chunk is still being written. OPFS mode
-  /// has no worker-side back-pressure, so the result can arrive while chunks
-  /// it follows are still being written. Only the end of the lane ends the
+  /// must not be told "saved" while a chunk is still being written. Only the end of the lane ends the
   /// wait: its caller was answered cancelled, and a sink that never returns
   /// would otherwise keep the worker busy for good.
   Future<void> _finishAfterWrites(_WebJob entry, Uint8List bytes) async {
@@ -721,6 +743,101 @@ class WebLease implements Lease, LanePhase {
           : JobResult(buildCancelledResponse(), const {}),
     );
   }
+
+  /// An OPFS success ends after its output reached the sinks. The worker
+  /// wrote each sink's output to a spool file; this reads it back one chunk at
+  /// a time and awaits the sink at each, so a slow sink holds one chunk here
+  /// and a failing one fails the job. The engine has finished, so a task's
+  /// cancel does not stop the delivery (the cancel outcome contract: the
+  /// result stands). Only the end of the lane does; the job is then cancelled.
+  /// (An op that has a sink never creates a handle, so no success is lost.)
+  Future<void> _finishAfterSpool(
+    _WebJob entry,
+    Uint8List bytes,
+    List<int> sizes,
+  ) async {
+    JobResult result;
+    try {
+      final delivered = await _deliverSpool(entry, sizes);
+      result = delivered ? _buildResult(entry, bytes) : _cancelledResult();
+    } on PdfIoFailed catch (e) {
+      result = JobResult(
+        buildErrorResponse(e.message, kind: WireErrorKind.io),
+        const {},
+      );
+    } catch (e) {
+      result = JobResult(
+        buildErrorResponse(e.toString(), kind: WireErrorKind.io),
+        const {},
+      );
+    }
+    _finish(entry, result);
+  }
+
+  JobResult _cancelledResult() => JobResult(buildCancelledResponse(), const {});
+
+  /// Whether every byte was delivered; false when the end of the lane stopped
+  /// it. A sink's error, or a failed read, is thrown.
+  Future<bool> _deliverSpool(_WebJob entry, List<int> sizes) async {
+    for (var sink = 0; sink < sizes.length; sink++) {
+      for (var offset = 0; offset < sizes[sink];) {
+        if (_abandoned || _ending) return false;
+        final count = math.min(_spoolChunkBytes, sizes[sink] - offset);
+        final chunk = await _readSpool(entry, sink, offset, count);
+        if (chunk == null || _abandoned || _ending) return false;
+        // The end of the lane stops the wait: a sink that never returns
+        // must not keep the worker busy for good.
+        final write = Future<void>.sync(
+          () => entry.job.sinks[sink].write(chunk),
+        );
+        final wrote = await Future.any([
+          write.then((_) => true),
+          _ended.future.then((_) => false),
+        ]);
+        if (!wrote) return false;
+        offset += count;
+      }
+    }
+    return !(_abandoned || _ending);
+  }
+
+  /// One span of a spool file, or null when the lane ended while it was
+  /// awaited.
+  Future<Uint8List?> _readSpool(
+    _WebJob entry,
+    int sinkIndex,
+    int offset,
+    int count,
+  ) async {
+    final ack = _spoolAck = Completer<JSObject>();
+    _spoolAwaiting = (
+      jobId: entry.job.jobId,
+      sinkIndex: sinkIndex,
+      offset: offset,
+    );
+    _post({
+      LaneMsgFields.type: LaneMsg.spoolRead,
+      'jobId': entry.job.jobId,
+      'sinkIndex': sinkIndex,
+      'offset': offset,
+      'count': count,
+    });
+    try {
+      final answer = await Future.any<JSObject?>([
+        ack.future,
+        _ended.future.then((_) => null),
+      ]);
+      if (answer == null) return null;
+      final error = _str(answer, 'error');
+      if (error != null) throw PdfIoFailed('OPFS output read failed: $error');
+      return _bytes(answer, 'data');
+    } finally {
+      _spoolAck = null;
+      _spoolAwaiting = null;
+    }
+  }
+
+  static const _spoolChunkBytes = 256 * 1024;
 
   JobResult _buildResult(_WebJob entry, Uint8List bytes) {
     // Cancelled mid-op: the engine's I/O error reads as the typed
@@ -847,12 +964,11 @@ class WebLease implements Lease, LanePhase {
 
     String? error;
     try {
-      if (_ending || (entry.cancelled && _mode != PdfIoMode.opfs)) {
+      if (_ending || entry.cancelled) {
         // The lane ended, or the answer below is "cancelled" so the engine
         // cannot finish this job: such a chunk is never written to a sink
         // whose Pdf was disposed, and a sink that never returns holds no
-        // chain behind it. A cancelled OPFS job has no answer channel and
-        // its engine may still finish, so its writes land.
+        // chain behind it.
       } else if (sinkIndex < entry.job.sinks.length) {
         await Future<void>.value(entry.job.sinks[sinkIndex].write(data));
       } else {
@@ -884,7 +1000,6 @@ class WebLease implements Lease, LanePhase {
         if (error != null) 'error': error,
       });
     }
-    // OPFS mode: fire-and-forget writes, no ack channel.
   }
 
   // ── Backings: what the worker reads without asking the page ──
