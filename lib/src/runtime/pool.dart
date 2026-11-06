@@ -36,7 +36,7 @@
 // executor. It counts so only while it is young, for [ExecutorPool.coverFor]:
 // a transition that outlasts that is slow, is recorded as such, and no longer
 // hides a waiter, which then boots its own executor. The slow one is never
-// terminated; when its transition ends it joins the idle shelf or is retired by
+// terminated; when its transition ends it joins the idle set or is retired by
 // the idle cap like any other. Waiters are served
 // strictly in arrival order: an executor that frees goes to the head of the
 // queue, never to a request that arrived later.
@@ -285,7 +285,7 @@ class ExecutorPool {
   /// pool waits for a running job to post, then resets the executor and
   /// makes it idle. [untouched] says the lane never ran a job, so the
   /// engine holds nothing and the reset is skipped. A dead engine, a failed
-  /// reset, a heap at the keep line or a full idle shelf ends the executor.
+  /// reset, a heap at the keep line or a full idle set ends the executor.
   /// Idempotent.
   Future<void> release(PoolLease lease, {bool untouched = false}) async {
     final entry = lease._entry;

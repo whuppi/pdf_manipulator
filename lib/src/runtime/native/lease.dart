@@ -246,7 +246,7 @@ class NativeLease implements Lease {
       return JobResult(
         bytes,
         holds,
-        laneDied: bindings.executorIsDead(_executorKey) != 0,
+        executorDied: bindings.executorIsDead(_executorKey) != 0,
       );
     }
 

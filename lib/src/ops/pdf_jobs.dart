@@ -17,11 +17,11 @@ PdfTask<void> _withInput(
   PdfTask<void> Function(DataSource source) run,
 ) => PdfTask.group((hook) async {
   try {
-    final lease = await input.opened;
+    final opened = await input.opened;
     try {
-      await hook.guard(run(lease.source));
+      await hook.guard(run(opened.source));
     } finally {
-      await lease.release();
+      await opened.close();
     }
   } catch (error) {
     await hook.abortSinks([output], error);
@@ -136,9 +136,9 @@ PdfTask<void> _compress(
   KeepRecord.op('render');
   return PdfTask.group((hook) async {
     try {
-      final lease = await input.opened;
+      final opened = await input.opened;
       try {
-        final source = lease.source;
+        final source = opened.source;
         await hook.guard(
           _own(pdf.edit(PdfInput(source, password: input.password)), (
             editor,
@@ -174,7 +174,7 @@ PdfTask<void> _compress(
           }, output: output),
         );
       } finally {
-        await lease.release();
+        await opened.close();
       }
     } catch (error) {
       await hook.abortSinks([output], error);

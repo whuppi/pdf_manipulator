@@ -59,7 +59,7 @@ void main() {
   tearDown(() => pool.dispose());
 
   group('placement', () {
-    test('first op spawns one lane; an idle lane is reused', () async {
+    test('first op starts one lane; an idle lane is reused', () async {
       final first = router.execute(_open());
       await Future<void>.delayed(Duration.zero);
       expect(host.lanes, hasLength(1));
@@ -78,7 +78,7 @@ void main() {
     });
 
     test(
-      'all-busy spawns under the cap; beyond it queues least-loaded',
+      'all-busy starts a lane under the cap; beyond it queues least-loaded',
       () async {
         final first = router.execute(_open());
         final second = router.execute(_open());
@@ -88,7 +88,7 @@ void main() {
         expect(
           host.lanes,
           hasLength(2),
-          reason: 'spawn while busy, but never past maxLanes',
+          reason: 'a new lane while busy, but never past maxLanes',
         );
         final jobs = host.lanes.fold(0, (n, lane) => n + lane.submitted.length);
         expect(jobs, 3, reason: 'the overflow op rides an existing lane');
@@ -321,7 +321,7 @@ void main() {
       expect(
         host.lanes,
         hasLength(1),
-        reason: 'a disposed router never spawns again',
+        reason: 'a disposed router never starts a lane again',
       );
 
       await router.dispose(); // double dispose is a no-op
@@ -354,7 +354,7 @@ void main() {
       await solo.dispose();
     });
 
-    test('dispose during the pre-submit await spawns no zombie lane', () async {
+    test('dispose during the pre-submit await starts no lane', () async {
       // The twin of the cancel-before-submit race: dispose lands while
       // execute is parked on its internal await. Without the disposed
       // re-check, execute resumes on a dead router and starts a lane
@@ -369,8 +369,8 @@ void main() {
         host.lanes,
         isEmpty,
         reason:
-            'a lane spawned after dispose is a zombie: never '
-            'killed, leaking its held resources for the page life',
+            'a lane started after dispose is never ended, '
+            'leaking its held resources for the page life',
       );
     });
   });
@@ -619,7 +619,7 @@ void main() {
     JobResult died() => JobResult(
       buildErrorResponse('internal error: engine operation panicked'),
       const {},
-      laneDied: true,
+      executorDied: true,
     );
 
     test('its handles fail typed at once, a new lane serves handle-less '
@@ -835,7 +835,11 @@ void main() {
 
       host.bootGate!.complete();
       await settle();
-      expect(host.lanes.single.submitted, isEmpty, reason: 'no zombie job');
+      expect(
+        host.lanes.single.submitted,
+        isEmpty,
+        reason: 'no job after dispose',
+      );
       expect(pool.idleCount, 1, reason: 'the executor that arrived is idle');
     });
 

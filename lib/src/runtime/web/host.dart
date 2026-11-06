@@ -44,7 +44,7 @@ class WebExecutorBooter implements ExecutorBooter {
   // Pre-copied source files live under ONE package-owned directory,
   // namespaced per page session, then per worker:
   //
-  //     pdf_manipulator_lanes/{sessionId}/{workerId}/pdf_lane_…
+  //     pdf_manipulator_executors/{sessionId}/{workerId}/pdf_executor_…
   //
   // The cleanup rule: NEVER race the living, ONLY sweep the dead.
   //
@@ -65,7 +65,12 @@ class WebExecutorBooter implements ExecutorBooter {
 
   /// The package-owned OPFS directory. Everything inside it is
   /// reconciled by this host; nothing outside is ever touched.
-  static const opfsRootDir = 'pdf_manipulator_lanes';
+  static const opfsRootDir = 'pdf_manipulator_executors';
+
+  /// The name 5.x apps gave [opfsRootDir]. A user's device can still hold a
+  /// directory of this name, which no executor of this version touches; the
+  /// start-up reclaim removes it once no live session holds a lock in it.
+  static const legacyOpfsRootDir = 'pdf_manipulator_lanes';
 
   /// This page session's namespace (random per page load).
   static final String opfsSessionId = _newSessionId();
@@ -75,7 +80,10 @@ class WebExecutorBooter implements ExecutorBooter {
     return List.generate(16, (_) => r.nextInt(16).toRadixString(16)).join();
   }
 
-  static String _sessionLockName(String sessionId) => '$opfsRootDir/$sessionId';
+  static String _sessionLockName(
+    String sessionId, [
+    String root = opfsRootDir,
+  ]) => '$root/$sessionId';
 
   static String _workerLockName(String workerId) =>
       '$opfsRootDir/$opfsSessionId/$workerId';
@@ -121,12 +129,23 @@ class WebExecutorBooter implements ExecutorBooter {
   /// Deletes every session directory whose liveness lock is free —
   /// its page is gone, so its files are garbage. Never touches a
   /// directory whose lock is held (including the current session's).
-  /// Safe to call any time; visible for tests.
+  /// The same sweep runs over [legacyOpfsRootDir], and the old root itself
+  /// goes once nothing is left in it. Safe to call any time; visible for
+  /// tests.
   static Future<void> reclaimDeadSessions() async {
+    await _reclaimDeadSessionsIn(opfsRootDir);
+    await _reclaimDeadSessionsIn(legacyOpfsRootDir, removeRoot: true);
+  }
+
+  static Future<void> _reclaimDeadSessionsIn(
+    String rootDir, {
+    bool removeRoot = false,
+  }) async {
+    final web.FileSystemDirectoryHandle top;
     final web.FileSystemDirectoryHandle ours;
     try {
-      final root = await web.window.navigator.storage.getDirectory().toDart;
-      ours = await root.getDirectoryHandle(opfsRootDir).toDart;
+      top = await web.window.navigator.storage.getDirectory().toDart;
+      ours = await top.getDirectoryHandle(rootDir).toDart;
     } catch (_) {
       return; // no directory yet — nothing to reclaim
     }
@@ -145,7 +164,7 @@ class WebExecutorBooter implements ExecutorBooter {
       if (session == opfsSessionId) continue;
       await web.window.navigator.locks
           .request(
-            _sessionLockName(session),
+            _sessionLockName(session, rootDir),
             web.LockOptions(ifAvailable: true),
             ((web.Lock? lock) {
               if (lock == null) return null; // owner alive — skip
@@ -161,6 +180,15 @@ class WebExecutorBooter implements ExecutorBooter {
           )
           .toDart
           .catchError((Object _) => null);
+    }
+
+    if (removeRoot) {
+      try {
+        // Not recursive: a directory a live session still holds keeps its root.
+        await top.removeEntry(rootDir).toDart;
+      } catch (_) {
+        // A live session is inside, or the browser refused — next start-up.
+      }
     }
   }
 
@@ -326,7 +354,7 @@ class WebExecutorBooter implements ExecutorBooter {
       // evaluation, so the port enables before the handler exists).
       // No deadline: every boot-failure class completes this future
       // with a typed error (bootfailed post / worker error event), so
-      // a wall clock here would only kill healthy boots on slow
+      // a wall clock here would only fail healthy boots on slow
       // networks. Timeouts are never load-bearing.
       await booted.future;
       final init = JSObject()

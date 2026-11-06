@@ -133,7 +133,7 @@ void registerLaneProtocolTests({PdfConfig? Function()? config}) {
             isA<LeaseProtocolError>().having(
               (e) => e.message,
               'message',
-              laneBusyMessage,
+              executorBusyMessage,
             ),
           ),
         );

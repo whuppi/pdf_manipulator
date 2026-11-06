@@ -1,7 +1,7 @@
 // executor_worker.js — the web executor BODY. One Worker = one executor =
 // one EngineState (created via engine_state_new in WASM linear memory).
 //
-// The web twin of host/native/lane.rs. DECISION-FREE by design:
+// The web twin of host/native/executor.rs. DECISION-FREE by design:
 // routing, pinning decisions, queuing, cancellation bookkeeping all
 // live in the Dart Router/WebLease. This file only translates
 // messages into platform calls — load WASM, serve host_read_at /
@@ -369,17 +369,17 @@ function wrapJspiImports(imports) {
 // is synchronous; promising() needs the raw export). Mirrors the
 // glue's own calling convention for execute.
 //
-// Buffers go through lane_alloc/lane_dealloc — never the glue's numbered
+// Buffers go through executor_alloc/executor_dealloc — never the glue's numbered
 // __wbindgen_export_N aliases: those are renumbered whenever the module's
 // export set changes, which turns into memory corruption here.
 // (__wbindgen_add_to_stack_pointer is a fixed name and safe.)
 async function callLaneJspi(requestBytes, sourceLengthsPacked, sinkCount) {
   const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-  const ptr0 = wasm.lane_alloc(requestBytes.length) >>> 0;
-  if (requestBytes.length && !ptr0) throw new Error('lane_alloc failed');
+  const ptr0 = wasm.executor_alloc(requestBytes.length) >>> 0;
+  if (requestBytes.length && !ptr0) throw new Error('executor_alloc failed');
   new Uint8Array(wasm.memory.buffer).set(requestBytes, ptr0);
-  const ptr1 = wasm.lane_alloc(sourceLengthsPacked.length) >>> 0;
-  if (sourceLengthsPacked.length && !ptr1) throw new Error('lane_alloc failed');
+  const ptr1 = wasm.executor_alloc(sourceLengthsPacked.length) >>> 0;
+  if (sourceLengthsPacked.length && !ptr1) throw new Error('executor_alloc failed');
   new Uint8Array(wasm.memory.buffer).set(sourceLengthsPacked, ptr1);
   try {
     await jspiLaneExecute(retptr, statePtr, ptr0, requestBytes.length, ptr1, sourceLengthsPacked.length, sinkCount);
@@ -387,7 +387,7 @@ async function callLaneJspi(requestBytes, sourceLengthsPacked, sinkCount) {
     const r0 = mem.getInt32(retptr, true);
     const r1 = mem.getInt32(retptr + 4, true);
     const result = new Uint8Array(wasm.memory.buffer, r0, r1).slice();
-    wasm.lane_dealloc(r0, r1);
+    wasm.executor_dealloc(r0, r1);
     return result;
   } finally {
     wasm.__wbindgen_add_to_stack_pointer(16);
@@ -401,7 +401,7 @@ async function callLaneJspi(requestBytes, sourceLengthsPacked, sinkCount) {
 // Pre-copies live in this worker's OWN directory, named by the host
 // at init: {root}/{sessionId}/{workerId}. This worker owns every file
 // inside — creation, handles, and deletion. Its liveness lock (held
-// from before the first file exists until the browser kills the
+// from before the first file exists until the browser terminates the
 // agent) is what lets the host prove death before reclaiming the
 // directory: the lock release on agent termination is a spec
 // guarantee, the web's equivalent of the native executor's

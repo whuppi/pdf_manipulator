@@ -81,18 +81,18 @@ base class PdfEditor extends PdfEdits {
   }) {
     _check();
     return PdfTask.group((hook) async {
-      final lease = await from.opened;
+      final opened = await from.opened;
       try {
-        final selection = await _resolveFrom(hook, lease.source, from, pages);
+        final selection = await _resolveFrom(hook, opened.source, from, pages);
         await hook.guard(
           _handle.appendPages(
-            lease.source,
+            opened.source,
             pages: selection,
             password: from.password,
           ),
         );
       } finally {
-        await lease.release();
+        await opened.close();
       }
     });
   }

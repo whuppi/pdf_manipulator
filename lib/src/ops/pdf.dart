@@ -192,10 +192,10 @@ class Pdf {
   PdfTask<PdfDocumentHandle> open(PdfInput input) {
     _check();
     return PdfTask.group((hook) async {
-      final lease = await input.opened;
+      final opened = await input.opened;
       try {
         final handle = await hook.guard(
-          _bridge.open(lease.source, password: input.password),
+          _bridge.open(opened.source, password: input.password),
         );
         try {
           final map = handle.openResult;
@@ -206,14 +206,14 @@ class Pdf {
             isTagged: map['isTagged'] as bool? ?? false,
             metadata: codec.decodeMetadata(map),
             encryption: codec.decodeEncryptionInfo(map),
-            release: lease.release,
+            release: opened.close,
           );
         } catch (_) {
           await handle.dispose();
           rethrow;
         }
       } catch (_) {
-        await lease.release();
+        await opened.close();
         rethrow;
       }
     });
@@ -230,14 +230,14 @@ class Pdf {
   PdfTask<PdfEditorHandle> edit(PdfInput input) {
     _check();
     return PdfTask.group((hook) async {
-      final lease = await input.opened;
+      final opened = await input.opened;
       try {
         final handle = await hook.guard(
-          _bridge.openEditor(lease.source, password: input.password),
+          _bridge.openEditor(opened.source, password: input.password),
         );
-        return PdfEditorHandle.internal(this, handle, release: lease.release);
+        return PdfEditorHandle.internal(this, handle, release: opened.close);
       } catch (_) {
-        await lease.release();
+        await opened.close();
         rethrow;
       }
     });

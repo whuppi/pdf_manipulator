@@ -97,7 +97,7 @@ void main() {
       final current = (second.lane as FakeLane).lease;
 
       expect(current, greaterThan(stale));
-      expect(executor.accepts(stale), isFalse, reason: 'its tenure ended');
+      expect(executor.accepts(stale), isFalse, reason: 'its lease ended');
       expect(executor.accepts(current), isTrue);
     });
 
@@ -682,7 +682,7 @@ void main() {
         expect(second, isNotNull);
         expect(ExecutorPool.totalSlowTransitions - slow, 1);
         expect(ExecutorPool.recentSlowTransitions.last.phase, 'draining');
-        expect(a.state, ExecutorState.draining, reason: 'never killed');
+        expect(a.state, ExecutorState.draining, reason: 'never terminated');
         expect(host.executors.first.terminated, isFalse);
       });
     });

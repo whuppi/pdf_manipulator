@@ -38,11 +38,11 @@ base class PdfInput {
   /// Opens the source if this input owns it, and returns it with the way to
   /// release it.
   @internal
-  Future<PdfInputLease> get opened async {
+  Future<OpenedPdfInput> get opened async {
     final open = _open;
-    if (open == null) return PdfInputLease._(_source!, null);
+    if (open == null) return OpenedPdfInput._(_source!, null);
     final source = await open();
-    return PdfInputLease._(source, source.close);
+    return OpenedPdfInput._(source, source.close);
   }
 
   @override
@@ -59,8 +59,8 @@ base class PdfInput {
 
 /// A source taken from a [PdfInput] for the length of one job.
 @internal
-final class PdfInputLease {
-  PdfInputLease._(this.source, FutureOr<void> Function()? close)
+final class OpenedPdfInput {
+  OpenedPdfInput._(this.source, FutureOr<void> Function()? close)
     : _close = close;
 
   /// The source to read.
@@ -70,7 +70,7 @@ final class PdfInputLease {
 
   /// Closes the source when the input owns it; a borrowed source is left to
   /// its caller. Idempotent.
-  Future<void> release() async {
+  Future<void> close() async {
     final close = _close;
     _close = null;
     if (close != null) await close();

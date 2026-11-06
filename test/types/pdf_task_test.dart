@@ -34,7 +34,7 @@ Future<List<Object>> _zoneErrors(Future<void> Function() body) async {
 }
 
 void main() {
-  group('PdfTask zone physics', () {
+  group('PdfTask zone rules', () {
     test('awaited success delivers the value, zone stays clean', () async {
       final errors = await _zoneErrors(() async {
         final completer = Completer<int>();

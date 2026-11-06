@@ -221,9 +221,9 @@ same names, when both exist. Exports (source in, sink out) live on
 |---|---|
 | Per-op cancellation (`PdfTask.cancel()` on every engine method) | DONE |
 | Instant dispose (end every lane, return every executor, no joins) | DONE |
-| Budgets — queue, never fail (`kMaxExecutors` executors per pool; `MAX_LANES_GLOBAL` threads process-wide on native; first-in-first-out waiters) | DONE |
+| Budgets — queue, never fail (`kMaxExecutors` executors per pool; `MAX_EXECUTORS_GLOBAL` threads process-wide on native; first-in-first-out waiters) | DONE |
 | Executors reset and leased again under churn (both platforms) | DONE |
-| Fire-and-forget error physics (cancelled silent, real failures loud) | DONE |
+| Fire-and-forget error rules (cancelled silent, real failures loud) | DONE |
 | Three web I/O modes (JSPI / Atomics / OPFS), identical suite | DONE |
 | Item streaming over the job port (multi-result ops without buffering) | PLANNED — the job's result port is already a message channel: promote it to N interim messages + 1 terminal message. Inherits per-job cancel, ending the lane, and the post-driven cleanup protocol unchanged; symmetric on web (`postMessage` to the executor). Never add a second transport method for this. |
 

@@ -758,7 +758,7 @@ void registerWebLaneProtocolTests({
 
         case PdfIoMode.opfs:
           // The first exec awaits the opening of its pre-copied file.
-          const file = 'pdf_lane_raw_wall';
+          const file = 'pdf_executor_raw_wall';
           final chunk = Uint8List.fromList(bytes).buffer.toJS;
           raw.post(
             'opfsWrite',
@@ -829,7 +829,7 @@ void registerWebLaneProtocolTests({
         // a file the page plants in a directory of its own stays until the
         // test removes it, whatever the reaper does.
         final session = await WebExecutorBooter.sessionDir();
-        const strayDir = 'pdf_lane_stray_worker';
+        const strayDir = 'pdf_executor_stray_worker';
         final stray = await session
             .getDirectoryHandle(
               strayDir,
@@ -848,7 +848,7 @@ void registerWebLaneProtocolTests({
         });
         await stray
             .getFileHandle(
-              'pdf_lane_stray',
+              'pdf_executor_stray',
               web.FileSystemGetFileOptions(create: true),
             )
             .toDart;
@@ -863,7 +863,7 @@ void registerWebLaneProtocolTests({
         () async {
           final raw = await _RawWorker.take(host, prelude: _gates);
           addTearDown(raw.close);
-          const file = 'pdf_lane_awaited_drop';
+          const file = 'pdf_executor_awaited_drop';
           raw.precopy(1, 1, file, minimalPdf);
           await raw.waitFor(_is('opfsWriteAck'));
           raw.exec(
@@ -939,7 +939,7 @@ void registerWebLaneProtocolTests({
           'own lease', () async {
         final create = bin.encodeRequest('builderCreate', {});
         final bytes = minimalPdf;
-        const file = 'pdf_lane_busy';
+        const file = 'pdf_executor_busy';
 
         // Busy with an exec, held at the delete that ends its reader.
         final execing = await _RawWorker.take(host, prelude: _gates);
@@ -958,7 +958,7 @@ void registerWebLaneProtocolTests({
         // for an answer get one, the notifications that do not get none.
         execing.exec(2, 2, create);
         execing.post('reset', {'lease': 2.toJS});
-        execing.precopy(2, 3, 'pdf_lane_refused', bytes);
+        execing.precopy(2, 3, 'pdf_executor_refused', bytes);
         execing.post('readAtResult', {'lease': 2.toJS});
         execing.post('chunkAck', {'lease': 2.toJS});
         execing.post('releaseHold', {'lease': 2.toJS, 'holdGroupId': 1.toJS});
@@ -981,7 +981,7 @@ void registerWebLaneProtocolTests({
         resetting.exec(1, 2, create);
         resetting.exec(2, 3, create);
         resetting.post('reset', {'lease': 2.toJS});
-        resetting.precopy(2, 4, 'pdf_lane_refused', bytes);
+        resetting.precopy(2, 4, 'pdf_executor_refused', bytes);
         resetting.openGate('removeEntry');
         await resetting.waitFor(_is('resetDone'));
         expect(
@@ -1005,7 +1005,7 @@ void registerWebLaneProtocolTests({
           'never closed and reopened', () async {
         final raw = await _RawWorker.take(host, prelude: _refusesReopen);
         addTearDown(raw.close);
-        const file = 'pdf_lane_reopen';
+        const file = 'pdf_executor_reopen';
         raw.precopy(1, 1, file, minimalPdf);
         await raw.waitFor(_is('opfsWriteAck'));
         raw.exec(
@@ -1030,7 +1030,7 @@ void registerWebLaneProtocolTests({
       test('a job\'s drop waits for its pre-copy write in flight', () async {
         final raw = await _RawWorker.take(host, prelude: _holdsCreate);
         addTearDown(raw.close);
-        const file = 'pdf_lane_dropped';
+        const file = 'pdf_executor_dropped';
         raw.precopy(1, 1, file, minimalPdf);
         await raw.waitFor(_is('held'));
         // The job was cancelled: its drop reaches the worker while the
@@ -1062,7 +1062,7 @@ void registerWebLaneProtocolTests({
           prelude: _hangsCreate(every: false),
         );
         addTearDown(raw.close);
-        const file = 'pdf_lane_hung';
+        const file = 'pdf_executor_hung';
         raw.precopy(1, 1, file, minimalPdf);
         await raw.waitFor(_is('hung'));
 
@@ -1236,12 +1236,12 @@ void registerWebLaneProtocolTests({
       test('a rejected lane directory is asked for again', () async {
         final raw = await _RawWorker.take(host, prelude: _rejectsDirOnce);
         addTearDown(raw.close);
-        raw.precopy(1, 1, 'pdf_lane_first', minimalPdf);
+        raw.precopy(1, 1, 'pdf_executor_first', minimalPdf);
         final first = await raw.waitFor(_is('opfsWriteAck'));
         expect(raw.saw(_is('rejected')), isTrue);
         expect(_str(first, 'error'), isNotNull, reason: 'the directory failed');
 
-        raw.precopy(1, 2, 'pdf_lane_second', minimalPdf);
+        raw.precopy(1, 2, 'pdf_executor_second', minimalPdf);
         final second = await raw.waitFor(_is('opfsWriteAck', jobId: 2));
         expect(
           _str(second, 'error'),
@@ -1312,7 +1312,7 @@ void registerWebLaneProtocolTests({
         addTearDown(raw.close);
         final url = web.URL.createObjectURL(web.Blob(<JSAny>[].toJS));
         addTearDown(() => web.URL.revokeObjectURL(url));
-        const file = 'pdf_lane_poll';
+        const file = 'pdf_executor_poll';
         raw.precopy(1, 1, file, fThousandPage);
         await raw.waitFor(_is('opfsWriteAck'));
         raw.exec(

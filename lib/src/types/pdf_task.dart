@@ -4,7 +4,7 @@
 // It IS a Future (awaitable, then-able, zero migration pain) plus
 // one verb: cancel().
 //
-// Unhandled-error physics (load-bearing):
+// Unhandled-error rules (load-bearing):
 //   - A cancelled outcome (PdfCancelled) is a normal lifecycle event
 //     — task.cancel(), pdf.dispose() mid-flight. It must NEVER
 //     surface as an unhandled zone error when the caller
@@ -86,17 +86,20 @@ class PdfTask<T> implements Future<T> {
   /// A stopped operation changed nothing: an edit that [PdfCancelled] ends
   /// leaves its editor exactly as it was, and a sink it was handed is
   /// aborted (`DataSink.abort`), so it holds no partial output. A combinator
-  /// (`read`, `rewrite`, `buildTo`, `edits`, `reads` and the one-call
+  /// (`read`, `rewrite`, `buildTo`, `readOnce`, `editOnce` and the one-call
   /// operations such as `merge`) resolves with [PdfCancelled] whenever
   /// cancel was called before it finished, and aborts its output sink even
   /// when the save into it had finished.
   ///
-  /// Native stops a running op within one page (one image for image
-  /// reduction, one rule batch for validation). On the web that needs
-  /// SharedArrayBuffer, which a page has only when it is cross-origin
-  /// isolated. Without it a running op stops at its next source read or
-  /// sink write, and a running OPFS op is stopped only by
-  /// `Pdf.dispose`.
+  /// A running op stops within one page (one image for image reduction, one
+  /// rule batch for validation), on native and on the web, in every I/O mode.
+  /// On the web every running op carries a cancel flag the engine reads: a
+  /// word of a `SharedArrayBuffer` where the page has one (a page has it only
+  /// when it is cross-origin isolated), and otherwise a blob URL that cancel
+  /// revokes and the worker polls about every 10 ms. A source read or sink
+  /// write the op is waiting on is answered as cancelled at once, and so is
+  /// an OPFS pre-copy waiting on the source. `Pdf.dispose` is not needed to
+  /// stop an op.
   void cancel() => _hook.cancel();
 
   /// Whether [cancel] has been requested (the task may still be

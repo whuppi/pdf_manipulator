@@ -4,7 +4,7 @@
 // adapter that peeks at ops or handles has stolen a decision — the
 // platforms WILL drift apart from there. Parses the adapter sources
 // from disk; the worker-side twin of this guard lives in
-// test/runtime/web/lane_worker_sync_test.dart.
+// test/runtime/web/executor_worker_sync_test.dart.
 
 @TestOn('vm')
 library;

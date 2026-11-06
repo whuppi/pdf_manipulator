@@ -337,7 +337,7 @@ class WebLease implements Lease, LanePhase {
     // has not reached the worker yet, and a reset would pull the files
     // from under it.
     if (_running != null || _queue.isNotEmpty || _reset != null) {
-      throw const LeaseProtocolError(laneBusyMessage);
+      throw const LeaseProtocolError(executorBusyMessage);
     }
     final answer = _reset = Completer<int?>();
     try {
@@ -528,7 +528,7 @@ class WebLease implements Lease, LanePhase {
   JobResult _deadResult() => JobResult(
     buildErrorResponse(engineDeadMessage),
     const {},
-    laneDied: true,
+    executorDied: true,
   );
 
   /// The worker trapped: the pool terminates it, never reuses it, and
@@ -633,7 +633,7 @@ class WebLease implements Lease, LanePhase {
             JobResult(
               buildErrorResponse('internal error: engine operation panicked'),
               const {},
-              laneDied: true,
+              executorDied: true,
             ),
           );
           _bury();
@@ -834,7 +834,7 @@ class WebLease implements Lease, LanePhase {
     for (var i = 0; i < entry.job.sources.length; i++) {
       final source = entry.job.sources[i];
       if (source.length <= 0) continue;
-      final name = 'pdf_lane_${entry.job.jobId}_${i}_${_opfsCounter++}';
+      final name = 'pdf_executor_${entry.job.jobId}_${i}_${_opfsCounter++}';
       names[i] = name;
 
       var offset = 0;

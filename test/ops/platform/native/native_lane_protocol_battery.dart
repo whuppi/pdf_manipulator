@@ -143,7 +143,7 @@ void registerNativeLaneProtocolTests() {
           _job(2, _open(probe), sources: [probe], keep: {0}),
         );
         expect(_ok(stale.bytes), isFalse);
-        expect(_failure(stale.bytes), contains(laneStaleLeaseMessage));
+        expect(_failure(stale.bytes), contains(staleLeaseMessage));
         expect(reads, 0, reason: 'a stale submit reached its source');
         for (final token in stale.holds.values) {
           lane.releaseHold(token); // the Router's cleanup of a failed job
@@ -156,7 +156,7 @@ void registerNativeLaneProtocolTests() {
             isA<LeaseProtocolError>().having(
               (e) => e.message,
               'message',
-              laneStaleLeaseMessage,
+              staleLeaseMessage,
             ),
           ),
         );

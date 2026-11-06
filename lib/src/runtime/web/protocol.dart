@@ -1,5 +1,5 @@
 // Lease protocol — the single source of truth for every constant the
-// web lane body and the Dart side must agree on.
+// web executor script and the Dart side must agree on.
 //
 // The numeric codes are INJECTED into executor_worker.js at init (the
 // worker declares no constants of its own — it echoes what it was

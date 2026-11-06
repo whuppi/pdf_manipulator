@@ -23,21 +23,22 @@ import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 
-/// The message of the typed error a handle or job gets after its lane's
+/// The message of the typed error a handle or job gets after its executor's
 /// engine trapped or panicked. Matches `ENGINE_DEAD_MESSAGE` in the engine.
 const engineDeadMessage = 'the engine stopped after an operation panicked';
 
 /// The error message of a job or reset that carried a lease which was not
 /// the executor's current one. Matches `STALE_LEASE_MESSAGE` in the engine.
-const laneStaleLeaseMessage =
-    "the lane's lease was replaced; this message is stale";
+const staleLeaseMessage =
+    "the executor's lease was replaced; this message is stale";
 
 /// The error message of a reset refused because a job was outstanding.
-/// Matches `LANE_BUSY_MESSAGE` in the engine.
-const laneBusyMessage = 'the lane cannot reset while a job is outstanding';
+/// Matches `EXECUTOR_BUSY_MESSAGE` in the engine.
+const executorBusyMessage =
+    'the executor cannot reset while a job is outstanding';
 
-/// A lane refused a message because it broke the protocol: a reset while a
-/// job is outstanding, a lease that is not current, a lane that stopped.
+/// An executor refused a message because it broke the protocol: a reset while
+/// a job is outstanding, a lease that is not current, an executor that stopped.
 /// The adapters never send such a message, so this reports a bug in the
 /// caller, never a failure of the document.
 class LeaseProtocolError implements Exception {
@@ -94,11 +95,11 @@ class Job {
 class JobResult {
   /// Creates a result. [holds] maps kept source indices to
   /// opaque lane-owned tokens for later [Lease.releaseHold].
-  JobResult(this.bytes, this.holds, {this.laneDied = false});
+  JobResult(this.bytes, this.holds, {this.executorDied = false});
 
-  /// True when the engine on this lane trapped or panicked: the lane has
-  /// stopped serving, its handles are gone, and the Router must retire it.
-  final bool laneDied;
+  /// True when the engine on this executor trapped or panicked: the executor
+  /// is dead and its handles are gone, and the Router must retire it.
+  final bool executorDied;
 
   /// Binary response bytes (success or engine-encoded error).
   final Uint8List bytes;

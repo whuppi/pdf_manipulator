@@ -8,7 +8,7 @@
 // watermark).
 //
 // The web twin (executor_worker.js ↔ lane protocol) lives in
-// test/runtime/web/lane_worker_sync_test.dart.
+// test/runtime/web/executor_worker_sync_test.dart.
 
 @TestOn('vm')
 library;
@@ -287,7 +287,7 @@ void main() {
 
   group('native lane protocol ↔ Rust lane table', () {
     final rustLane = File(
-      'vendor/pdf_oxide/src/host/native/lane.rs',
+      'vendor/pdf_oxide/src/host/native/executor.rs',
     ).readAsStringSync();
     final rustTable = File(
       'vendor/pdf_oxide/src/host/native/executor_table.rs',
@@ -300,14 +300,14 @@ void main() {
       final m = RegExp(
         'pub const $name: &str =\\s*"([^"]*)";',
       ).firstMatch(rustLane);
-      if (m == null) fail('pub const $name not found in lane.rs');
+      if (m == null) fail('pub const $name not found in executor.rs');
       return m.group(1)!;
     }
 
     test('the lane error messages match their Rust constants', () {
       expect(engineDeadMessage, rustConst('ENGINE_DEAD_MESSAGE'));
-      expect(laneStaleLeaseMessage, rustConst('STALE_LEASE_MESSAGE'));
-      expect(laneBusyMessage, rustConst('LANE_BUSY_MESSAGE'));
+      expect(staleLeaseMessage, rustConst('STALE_LEASE_MESSAGE'));
+      expect(executorBusyMessage, rustConst('EXECUTOR_BUSY_MESSAGE'));
     });
 
     test('every FFI binding names a Rust export with the same arity', () {

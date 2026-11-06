@@ -241,7 +241,7 @@ class Router implements PdfTransport {
       unregister?.call();
     }
     try {
-      if (result.laneDied && !_disposed) _retireDead(slot);
+      if (result.executorDied && !_disposed) _retireDead(slot);
       return _complete(slot, job, req, pin, globalHandleId, result, cancel);
     } finally {
       // After the bookkeeping: a pin or kept source it adds keeps the lease.

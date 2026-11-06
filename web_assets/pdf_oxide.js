@@ -54,16 +54,6 @@ export function execute(state_ptr, request_bytes, source_lengths, sink_count) {
 }
 
 /**
- * The most bytes this worker's heap has held since its last
- * `engine_state_new`, which a reset calls again.
- * @returns {number}
- */
-export function heap_peak() {
-    const ret = wasm.heap_peak();
-    return ret >>> 0;
-}
-
-/**
  * Allocate `size` bytes (align 1) from the module's global allocator.
  *
  * Stable twin of the glue's internal malloc, for executor_worker.js's JSPI
@@ -74,19 +64,29 @@ export function heap_peak() {
  * @param {number} size
  * @returns {number}
  */
-export function lane_alloc(size) {
-    const ret = wasm.lane_alloc(size);
+export function executor_alloc(size) {
+    const ret = wasm.executor_alloc(size);
     return ret >>> 0;
 }
 
 /**
- * Free a buffer from `lane_alloc` or a response buffer handed out by
+ * Free a buffer from `executor_alloc` or a response buffer handed out by
  * `execute` (both come from the same global allocator, align 1).
  * @param {number} ptr
  * @param {number} size
  */
-export function lane_dealloc(ptr, size) {
-    wasm.lane_dealloc(ptr, size);
+export function executor_dealloc(ptr, size) {
+    wasm.executor_dealloc(ptr, size);
+}
+
+/**
+ * The most bytes this worker's heap has held since its last
+ * `engine_state_new`, which a reset calls again.
+ * @returns {number}
+ */
+export function heap_peak() {
+    const ret = wasm.heap_peak();
+    return ret >>> 0;
 }
 function __wbg_get_imports() {
     const import0 = {

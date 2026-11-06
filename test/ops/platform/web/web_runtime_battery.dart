@@ -8,7 +8,7 @@
 //      configured one must find the worker assets (real apps create
 //      secondary instances without re-passing config).
 //   2. Zero OPFS residue — pre-copied source files must not leak,
-//      including after mid-op kills. Registered LAST so it also
+//      including after a dispose mid-op. Registered LAST so it also
 //      sweeps everything the whole suite left behind.
 //   3. Clean boot failure — an unreachable worker URL must surface a
 //      typed error on the first op, never an infinite hang.
@@ -298,7 +298,7 @@ void registerWebPlatformTests({
           .toDart;
       await dead
           .getFileHandle(
-            'pdf_lane_orphan',
+            'pdf_executor_orphan',
             web.FileSystemGetFileOptions(create: true),
           )
           .toDart;
@@ -308,7 +308,7 @@ void registerWebPlatformTests({
       final live = await WebExecutorBooter.sessionDir();
       await live
           .getFileHandle(
-            'pdf_lane_canary',
+            'pdf_executor_canary',
             web.FileSystemGetFileOptions(create: true),
           )
           .toDart;
@@ -325,14 +325,86 @@ void registerWebPlatformTests({
       );
       expect(
         after,
-        contains('${WebExecutorBooter.opfsSessionId}/pdf_lane_canary'),
+        contains('${WebExecutorBooter.opfsSessionId}/pdf_executor_canary'),
         reason: 'the sweep must NEVER touch a live session',
       );
-      await live.removeEntry('pdf_lane_canary').toDart;
+      await live.removeEntry('pdf_executor_canary').toDart;
     }, timeout: t(1));
 
+    test('the directory a 5.x app left under the old root name is removed at '
+        'startup, unless a live session still holds it', () async {
+      // The name and layout 5.x used: root/{session}/{file}, with the
+      // session's liveness lock named root/{session}. The literal is the
+      // historic name on purpose; renaming the constant must not move it.
+      const oldRoot = 'pdf_manipulator_lanes';
+      const dead = 'deadsession00000002';
+      const alive = 'livesession00000003';
+      final top = await web.window.navigator.storage.getDirectory().toDart;
+      Future<bool> exists() async {
+        try {
+          await top.getDirectoryHandle(oldRoot).toDart;
+          return true;
+        } catch (_) {
+          return false;
+        }
+      }
+
+      final create = web.FileSystemGetDirectoryOptions(create: true);
+      final old = await top.getDirectoryHandle(oldRoot, create).toDart;
+      for (final session in [dead, alive]) {
+        final dir = await old.getDirectoryHandle(session, create).toDart;
+        await dir
+            .getFileHandle(
+              'leftover',
+              web.FileSystemGetFileOptions(create: true),
+            )
+            .toDart;
+      }
+
+      // A 5.x page that is still open holds its session's lock.
+      final release = Completer<void>();
+      final granted = Completer<void>();
+      unawaited(
+        web.window.navigator.locks
+            .request(
+              '$oldRoot/$alive',
+              ((web.Lock? lock) {
+                granted.complete();
+                return release.future.toJS;
+              }).toJS,
+            )
+            .toDart,
+      );
+      await granted.future;
+
+      try {
+        await WebExecutorBooter.reclaimDeadSessions();
+        expect(
+          await _names(old),
+          [alive],
+          reason:
+              'the session with no lock is dead and goes; the one whose '
+              'lock is held is live and stays, and keeps its root',
+        );
+      } finally {
+        release.complete();
+      }
+
+      // The browser frees the lock a moment after the holder returns.
+      final deadline = DateTime.now().add(const Duration(seconds: 5));
+      while (await exists() && DateTime.now().isBefore(deadline)) {
+        await WebExecutorBooter.reclaimDeadSessions();
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(
+        await exists(),
+        isFalse,
+        reason: 'with no live session left the old root itself is removed',
+      );
+    }, timeout: t(10));
+
     test(
-      'zero OPFS residue after kills, cancels, and the whole suite',
+      'zero OPFS residue after disposes, cancels, and the whole suite',
       () async {
         // The runner's shared instance still holds sources for any
         // handle a test left open (dispose-cascade covers those at
@@ -346,7 +418,7 @@ void registerWebPlatformTests({
         );
 
         // Exercise the leak-prone paths once more, deliberately:
-        // a held source (open + dispose) and a mid-flight kill.
+        // a held source (open + dispose) and a mid-flight dispose.
         final doc = await pdf.open(PdfInput(src(minimalPdf)));
         await doc.dispose();
         final victim = Pdf(
@@ -360,7 +432,7 @@ void registerWebPlatformTests({
         try {
           await inflight;
         } on PdfCancelled {
-          // expected when the kill won the race
+          // expected when the dispose won the race
         }
         await pdf.dispose();
 

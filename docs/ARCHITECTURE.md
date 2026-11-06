@@ -68,7 +68,7 @@ runtime, the Rust host layer, the web executor script and every document.
 | **boot** | Start an executor until it is ready for a lease. On web the handshake is booted → init → ready. |
 | **prewarm** | Boot one executor ahead of the first job, once per pool. |
 | **lane** | One instance's queue of work: its pins, its holds, and a lease on one executor from its first job until it is idle with nothing pinned or held. `Lane`, in `pool.dart`. |
-| **lease** | One lane's use of one executor, named by a number from the executor's own counter. The number is never reused. Every message carries it. The executor drops a message that carries an older one. (`PdfInputLease`, an opened `PdfInput`, is not a lease in this sense.) |
+| **lease** | One lane's use of one executor, named by a number from the executor's own counter. The number is never reused. Every message carries it. The executor drops a message that carries an older one. |
 | **lease adapter** | The platform-blind driver of one lease. It has five verbs (`submit`, `cancelJob`, `releaseHold`, `reset`, `drain`) and decides nothing. Dart `Lease`: `NativeLease`, `WebLease`. |
 | **router** | One per instance. It translates handle ids, pins handles to lanes, places other jobs on the least loaded lane, owns resources, replays preludes and ends lanes on dispose. `Router`. |
 | **op** | The engine operation named on the wire: an `EngineOp.wire` string. |
@@ -100,7 +100,7 @@ runtime, the Rust host layer, the web executor script and every document.
 | **source**, **sink** | The public `DataSource` and `DataSink`. In an op, `source 0` is the first one. |
 | **reader**, **writer** | The Rust `Read + Seek` and `Write` adapters over a source or a sink (`CallbackReader`, `JsCallbackReader`, `BoxedWriter`). Rust only. |
 | **registry** | Rust's table of executor keys to controllers (`TABLE` in `executor_table.rs`). |
-| **thread budget** | Rust's cap on started executor threads, `MAX_LANES_GLOBAL`, with a first-in-first-out queue of pending starts. |
+| **thread budget** | Rust's cap on started executor threads, `MAX_EXECUTORS_GLOBAL`, with a first-in-first-out queue of pending starts. |
 | **slot** | One started-thread allowance in the thread budget. |
 | **host layer** | `vendor/pdf_oxide/src/host/`: everything of ours inside the engine. |
 | **mode** | The I/O mode, `PdfIoMode`: native, jspi, atomics or opfs. |
@@ -353,7 +353,7 @@ A **reset** drops the engine state and makes a new one. Documents, editors, buil
 and registered fonts go; the thread or Web Worker and the wasm instance stay. `install` also
 empties the thread-locals the engine keeps (warning sink, resolving stack, office context,
 rasteriser fill count) and starts the heap peak over. A reset is refused while a job is
-outstanding (`laneBusyMessage`).
+outstanding (`executorBusyMessage`).
 
 Registered fonts are per executor, so the router keeps each registration as a **prelude**
 and replays it at every lease. `engine_proofs/shared_state.txt` lists every
@@ -366,7 +366,7 @@ database) stay process-wide and are counted to the process (`heap::process_owned
 
 Dart holds executor keys, never pointers. `TABLE` in `executor_table.rs` maps a key to its
 controller; keys come from a counter and are never reused, so a call that races a terminate
-finds nothing and gets a defined answer. The thread budget (`MAX_LANES_GLOBAL`) caps started
+finds nothing and gets a defined answer. The thread budget (`MAX_EXECUTORS_GLOBAL`) caps started
 executor threads in the process. At the cap, `executor_boot` still returns a key, and the
 thread starts later, first in first out, when an exiting thread hands over its slot
 (`SlotGuard`, also on unwind). A boot queues; it never fails. A caller meets the pool's
@@ -381,7 +381,7 @@ callback fires for that executor.
 Native: `handle_request` runs under `catch_unwind`. A panic sets `dead` before the job's
 post, drops the engine state and closes the mailbox; later jobs post `ENGINE_DEAD_MESSAGE`.
 Web: a wasm trap (`WebAssembly.RuntimeError`) is posted with `trap`, and the lease adapter
-marks the lane dead. The result carries `laneDied`. The router takes the lane out of
+marks the lane dead. The result carries `executorDied`. The router takes the lane out of
 placement, fails the handles pinned to it with `engineDeadMessage` (disposing one succeeds),
 and gives the executor up once its jobs have answered. The pool finds the engine dead and
 terminates it. The next job boots another.
@@ -525,7 +525,7 @@ of live and peak bytes, and in a process-wide pair.
 - Memory that crosses a thread would skew the figure, so the boundary moves it by hand:
   `heap::adopt` for the request and channel lists that Dart allocates and the executor
   frees, `heap::release` for the response the executor allocates and Dart frees.
-  `engine_proofs/heap_counts.rs` and `lane_boundary.rs` assert it.
+  `engine_proofs/heap_counts.rs` and `executor_boundary.rs` assert it.
 - The machine's font caches (`MACHINE_FONT_BYTES`, `MACHINE_FACE_BYTES`) serve every
   executor. Their inserts and evictions run inside `heap::process_owned`, which counts
   them to the process. An evicted value that another executor still holds can lower that
@@ -772,8 +772,10 @@ effort by specification, is not used. An acquirable lock is the proof of death. 
 executor awaits its lock and then reclaims its directory (`_deleteDeadWorkerDir`, which retries
 while the browser reaps the dead executor's handles; a directory it gives up on is listed in
 `abandonedWorkerDirs` and left to the next session's sweep). A new session reclaims dead
-sessions' directories at boot. A crashed tab cannot leak disk for good. The only retry loop
-in the runtime runs against the provably dead, where the obstacle ends on its own.
+sessions' directories at boot, under the same lock rule in `legacyOpfsRootDir` too, the root
+that 5.x apps used; that root goes once no live session is left in it. A crashed tab cannot
+leak disk for good. The only retry loop in the runtime runs against the provably dead, where
+the obstacle ends on its own.
 
 ---
 
@@ -834,7 +836,7 @@ The codec bytes travel in an envelope that the executor reads first. The envelop
   wasm trap.
 
 The message tags and field names are in `lib/src/runtime/web/protocol.dart`.
-`lane_worker_sync_test.dart` pins them against `executor_worker.js`.
+`executor_worker_sync_test.dart` pins them against `executor_worker.js`.
 
 ---
 
@@ -962,7 +964,7 @@ vendor/pdf_oxide/src/
 │   ├── probe.rs                            ← the out-of-crate door that tool/memprobe runs requests through
 │   ├── engine_proofs/                      ← tests that open documents; shared_state.txt, whole_reads.txt
 │   ├── native/                             ← executors and condvar I/O
-│   │   ├── lane.rs                         ← the executor body: thread loop, jobs, leases, reset
+│   │   ├── executor.rs                     ← the executor body: thread loop, jobs, leases, reset
 │   │   ├── executor_table.rs               ← registry, thread budget, FFI surface
 │   │   ├── cancel.rs                       ← CancelFlags (executor flag + job flag)
 │   │   ├── callback_reader.rs, callback_writer.rs
@@ -1295,7 +1297,7 @@ test/
 │   ├── wire_peek_test.dart         ← peeks + response builders
 │   ├── adapter_decides_nothing_test.dart ← the four adapter files
 │   ├── native/channel_buffers_test.dart  ← Dart↔Rust layout parity
-│   └── web/lane_worker_sync_test.dart    ← Dart↔worker protocol parity
+│   └── web/executor_worker_sync_test.dart ← Dart↔worker protocol parity
 │
 ├── io/                            MemorySource/MemorySink (pure, any
 │                                   platform) + FileSource/FileSink
@@ -1304,7 +1306,7 @@ test/
 ├── hook/, keep/                    build-hook and trim unit tests
 │
 └── types/                          errors, page_info, pdf_rect +
-                                    pdf_task (zone physics) + cancel_hook
+                                    pdf_task (zone rules) + cancel_hook
 ```
 
 ### The parity guards
@@ -1318,7 +1320,7 @@ state.
 - **`bridge/protocol/wire_sync_test.dart`** — every `EngineOp` has a Rust match
   arm; every Rust case maps back; sub-dispatches stay disjoint and never leak
   into top-level.
-- **`runtime/web/lane_worker_sync_test.dart`** — `executor_worker.js` handles
+- **`runtime/web/executor_worker_sync_test.dart`** — `executor_worker.js` handles
   every Dart→worker tag, posts only known worker→Dart tags, uses only injected
   protocol codes, calls the wasm surface, and contains no routing logic.
 - **`runtime/native/channel_buffers_test.dart`** — Dart's channel layout
