@@ -18,7 +18,9 @@ import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
 import 'package:pdf_manipulator/src/types/errors.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
+import 'package:pdf_manipulator/src/types/pdf_page_size.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
+import 'package:pdf_manipulator/src/types/pdf_rect.dart';
 import 'package:test/test.dart';
 
 import '../fixtures/handwritten.dart';
@@ -89,6 +91,42 @@ void main() {
       expect(extract, isNot(contains('hasSink')));
     });
   });
+
+  group('shared bridge builder image sources', () {
+    const bounds = PdfRect(x: 0, y: 0, width: 10, height: 10);
+
+    test('an image source is held until its builder is disposed', () async {
+      final transport = _BuilderTransport();
+      final builder = await SharedBridge(transport).createBuilder();
+      final imagePage = await builder.addImagePage(src(minimalPdf));
+      final page = await builder.addPage(const PdfPageSize.a4());
+      await page.image(src(minimalPdf), bounds, altText: 'a picture');
+      await imagePage.image(src(minimalPdf), bounds);
+
+      expect(transport.held('builderAddImagePage'), [
+        {0},
+      ]);
+      expect(transport.held('builderPageOp'), [
+        {0},
+        {0},
+      ]);
+      expect(transport.released, isEmpty, reason: 'nothing is released early');
+
+      await builder.dispose();
+      expect(transport.released, [
+        _BuilderTransport.resource,
+      ], reason: 'one resource covers every held source');
+    });
+
+    test('a builder that held no source releases none', () async {
+      final transport = _BuilderTransport();
+      final builder = await SharedBridge(transport).createBuilder();
+      final page = await builder.addPage(const PdfPageSize.a4());
+      await page.text('hello');
+      await builder.dispose();
+      expect(transport.released, isEmpty);
+    });
+  });
 }
 
 /// The field keys of an encoded request: `op_len`, `op`, a u16 count, then
@@ -151,6 +189,62 @@ class _RecordingTransport implements PdfTransport {
 
   @override
   Future<void> releaseSource(int resourceId) async {}
+
+  @override
+  Future<List<Uint8List>> installPrelude(
+    Uint8List request, {
+    required Uint8List sourceBytes,
+  }) async => const [];
+
+  @override
+  PdfIoMode? get ioMode => null;
+
+  @override
+  Future<PdfIoMode> ensureInitialized() async => PdfIoMode.values.first;
+
+  @override
+  Future<void> dispose() async {}
+}
+
+/// Answers `builderCreate` with a handle and every op that holds a source
+/// with the one resource a router would file them under; records which ops
+/// held which sources and which resources were released.
+class _BuilderTransport implements PdfTransport {
+  static const resource = 42;
+
+  final _ops = <(String, Set<int>)>[];
+  final released = <int>[];
+
+  /// The `keepSources` of each request of [op].
+  List<Set<int>> held(String op) => [
+    for (final (name, keep) in _ops)
+      if (name == op) keep,
+  ];
+
+  @override
+  Future<({Uint8List bytes, Map<int, int> resourceIds})> execute(
+    Uint8List request, {
+    List<DataSource> sources = const [],
+    List<DataSink> sinks = const [],
+    Set<int> keepSources = const {},
+    CancelHook? cancel,
+  }) async {
+    final op = String.fromCharCodes(request.sublist(1, 1 + request[0]));
+    _ops.add((op, keepSources));
+    final bytes = op == 'builderCreate'
+        ? Uint8List.fromList([
+            1, 1, 0, // ok, one field
+            8, ...'handleId'.codeUnits, 1, 7, 0, 0, 0, // i32 7
+          ])
+        : Uint8List.fromList([1, 0, 0]);
+    return (
+      bytes: bytes,
+      resourceIds: {for (final i in keepSources) i: resource},
+    );
+  }
+
+  @override
+  Future<void> releaseSource(int resourceId) async => released.add(resourceId);
 
   @override
   Future<List<Uint8List>> installPrelude(

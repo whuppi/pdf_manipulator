@@ -118,6 +118,11 @@ fn limit(op: &str, input: &str) -> usize {
         // The 96 MiB content stream is read as operators and written as
         // operators; the stage holds one matrix.
         ("setImageBounds", "content-fl") => 16 * MIB,
+        // A PNG is read a row at a time from its source and deflated as it
+        // goes, its alpha in a second pass; a JPEG is copied from its source
+        // in 64 KiB pieces. The row at twice the size shows the slope: the
+        // peak does not move.
+        ("imagesToPdf", "png64" | "png128" | "jpeg64" | "jpeg128") => 16 * MIB,
         _ => panic!("no memory limit for {op} on {input}: add one to limit()"),
     }
 }
@@ -1103,9 +1108,67 @@ fn run() -> Result<(), String> {
     });
     verify_render_wire(&failed, "groups", &open_sink("groups", "render"));
 
+    // imagesToPdf of one image of 64 MiB and of 128 MiB: the builder holds the
+    // image's source from the add to the save, and the save reads it from there.
+    for (name, kind, rows) in [
+        ("png64", ImageKind::Png, IMAGE_ROWS),
+        ("png128", ImageKind::Png, 2 * IMAGE_ROWS),
+        ("jpeg64", ImageKind::Jpeg, JPEG_ROWS),
+        ("jpeg128", ImageKind::Jpeg, 2 * JPEG_ROWS),
+    ] {
+        let image = dir.join(format!("image-{name}.{}", kind.extension()));
+        generate_image(&image, kind, rows)?;
+        let size = std::fs::metadata(&image).map(|m| m.len()).unwrap_or(0);
+        let floor = if name.ends_with("128") { 128 } else { 64 } * 1024 * 1024;
+        if size < floor {
+            return Err(format!("image {name} is {size} bytes, under its {floor}"));
+        }
+        eprintln!("memprobe: image {name}: {size} bytes");
+        let pdf = open_sink(name, "imagesToPdf");
+        step(&failed, "imagesToPdf", name, limit("imagesToPdf", name), |st| {
+            images_to_pdf(st, &image, &pdf)
+        });
+        if let Err(e) = check_images_pdf(&image, &pdf, kind) {
+            eprintln!("memprobe: imagesToPdf {name}: READ-BACK FAIL: {e}");
+            failed.set(true);
+        }
+        let _ = std::fs::remove_file(&image);
+        let _ = std::fs::remove_file(&pdf);
+    }
+
     if failed.get() {
         return Err("one or more steps exceeded their memory limit".to_string());
     }
+    Ok(())
+}
+
+/// The Dart `imagesToPdf` of one image: a builder, the image as a source,
+/// the save to a sink, the dispose.
+fn images_to_pdf(
+    state: &mut pdf_oxide::host::engine_state::EngineState,
+    image: &Path,
+    pdf: &Path,
+) -> Result<(), String> {
+    let length = std::fs::metadata(image).map_err(|e| format!("{}: {e}", image.display()))?.len();
+    let resp = call(state, re("builderCreate"), vec![], vec![])?;
+    let hid = resp.i32("handleId").expect("builderCreate returns handleId");
+    call(
+        state,
+        re("builderAddImagePage")
+            .put("handleId", i32v(hid))
+            .put("sourceLength", i32v(length as i32))
+            .put("fit", strv("contain"))
+            .put("margin", wire::Value::F64(0.0)),
+        vec![source(image)],
+        vec![],
+    )?;
+    call(
+        state,
+        re("builderSave").put("handleId", i32v(hid)).put("deflate", wire::Value::Bool(true)),
+        vec![],
+        vec![sink(pdf)],
+    )?;
+    call(state, re("builderDispose").put("handleId", i32v(hid)), vec![], vec![])?;
     Ok(())
 }
 
@@ -2294,6 +2357,198 @@ fn generate_huge_jpeg(path: &Path) -> Result<(), String> {
         std::io::Cursor::new(jpeg),
     )?;
     out.finish()
+}
+
+/// Width of the generated images, in pixels.
+const IMAGE_WIDTH: u32 = 4096;
+/// Rows of the 64 MiB PNG: 4096 RGBA pixels of noise are 16 KiB a row.
+const IMAGE_ROWS: u32 = 4096;
+/// Rows of the 64 MiB JPEG: noise at quality 100 takes about 4.6 bytes a
+/// pixel, so these rows are over 64 MiB, and twice as many are over 128.
+const JPEG_ROWS: u32 = 3620;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ImageKind {
+    Png,
+    Jpeg,
+}
+
+impl ImageKind {
+    fn extension(self) -> &'static str {
+        match self {
+            ImageKind::Png => "png",
+            ImageKind::Jpeg => "jpg",
+        }
+    }
+}
+
+/// An image file of noise, written as it is generated.
+fn generate_image(path: &Path, kind: ImageKind, rows: u32) -> Result<(), String> {
+    match kind {
+        ImageKind::Png => generate_image_png(path, IMAGE_WIDTH, rows),
+        ImageKind::Jpeg => generate_image_jpeg(path, IMAGE_WIDTH, rows),
+    }
+}
+
+/// An RGBA PNG of noise, its rows stored in deflate blocks without
+/// compression (noise does not shrink) and framed in 64 KiB `IDAT` chunks as
+/// they are made.
+fn generate_image_png(path: &Path, width: u32, height: u32) -> Result<(), String> {
+    use std::io::BufWriter;
+
+    fn chunk(out: &mut impl Write, kind: &[u8; 4], data: &[u8]) -> std::io::Result<()> {
+        let mut crc = flate2::Crc::new();
+        crc.update(kind);
+        crc.update(data);
+        out.write_all(&(data.len() as u32).to_be_bytes())?;
+        out.write_all(kind)?;
+        out.write_all(data)?;
+        out.write_all(&crc.sum().to_be_bytes())
+    }
+
+    struct Idat {
+        out: BufWriter<File>,
+        pending: Vec<u8>,
+    }
+
+    impl Idat {
+        fn emit(&mut self) -> std::io::Result<()> {
+            if self.pending.is_empty() {
+                return Ok(());
+            }
+            chunk(&mut self.out, b"IDAT", &self.pending)?;
+            self.pending.clear();
+            Ok(())
+        }
+    }
+
+    impl Write for Idat {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.pending.extend_from_slice(buf);
+            if self.pending.len() >= 64 * 1024 {
+                self.emit()?;
+            }
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let fail = |e: std::io::Error| format!("png {}: {e}", path.display());
+    let mut out = BufWriter::new(File::create(path).map_err(fail)?);
+    out.write_all(b"\x89PNG\r\n\x1a\n").map_err(fail)?;
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&width.to_be_bytes());
+    ihdr.extend_from_slice(&height.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+    chunk(&mut out, b"IHDR", &ihdr).map_err(fail)?;
+    let mut zlib = flate2::write::ZlibEncoder::new(
+        Idat { out, pending: Vec::with_capacity(64 * 1024 + 1) },
+        flate2::Compression::none(),
+    );
+    let mut rng = Xorshift::new(0x1D47);
+    let mut row = vec![0u8; 1 + width as usize * 4];
+    for _ in 0..height {
+        rng.fill_bytes(&mut row[1..]);
+        zlib.write_all(&row).map_err(fail)?;
+    }
+    let mut idat = zlib.finish().map_err(fail)?;
+    idat.emit().map_err(fail)?;
+    chunk(&mut idat.out, b"IEND", &[]).map_err(fail)?;
+    idat.out.flush().map_err(fail)
+}
+
+/// A baseline JPEG of noise, its rows handed to the encoder one at a time.
+fn generate_image_jpeg(path: &Path, width: u32, height: u32) -> Result<(), String> {
+    struct Noise {
+        width: u16,
+        height: u16,
+    }
+
+    impl jpeg_encoder::ImageBuffer for Noise {
+        fn get_jpeg_color_type(&self) -> jpeg_encoder::JpegColorType {
+            jpeg_encoder::JpegColorType::Ycbcr
+        }
+        fn width(&self) -> u16 {
+            self.width
+        }
+        fn height(&self) -> u16 {
+            self.height
+        }
+        fn fill_buffers(&self, y: u16, buffers: &mut [Vec<u8>; 4]) {
+            let mut rng = Xorshift::new(0x1F6 ^ (u64::from(y) << 20));
+            let mut row = vec![0u8; self.width as usize * 3];
+            rng.fill_bytes(&mut row);
+            for pixel in row.chunks_exact(3) {
+                buffers[0].push(pixel[0]);
+                buffers[1].push(pixel[1]);
+                buffers[2].push(pixel[2]);
+            }
+        }
+    }
+
+    let fail = |e: std::io::Error| format!("jpeg {}: {e}", path.display());
+    let out = std::io::BufWriter::new(File::create(path).map_err(fail)?);
+    let mut encoder = jpeg_encoder::Encoder::new(out, 100);
+    encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::R_4_4_4);
+    encoder
+        .encode_image(Noise { width: width as u16, height: height as u16 })
+        .map_err(|e| format!("jpeg {}: {e}", path.display()))
+}
+
+/// Reads back the PDF `imagesToPdf` wrote for `image`: a JPEG's bytes are in
+/// it, whole and in order, behind `DCTDecode`; a PNG's two Flate streams are
+/// there, the colour stream and the alpha mask, each ended by `endstream`, and
+/// the file is closed by its trailer.
+fn check_images_pdf(image: &Path, pdf: &Path, kind: ImageKind) -> Result<(), String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut out = File::open(pdf).map_err(|e| format!("{}: {e}", pdf.display()))?;
+    let out_len = out.metadata().map_err(|e| e.to_string())?.len();
+    let mut head = vec![0u8; 4096.min(out_len as usize)];
+    out.read_exact(&mut head).map_err(|e| e.to_string())?;
+    let mut tail = vec![0u8; 64.min(out_len as usize)];
+    out.seek(SeekFrom::End(-(tail.len() as i64))).map_err(|e| e.to_string())?;
+    out.read_exact(&mut tail).map_err(|e| e.to_string())?;
+    if !tail.trim_ascii_end().ends_with(b"%%EOF") {
+        return Err("the file does not end in %%EOF".into());
+    }
+    let find = |haystack: &[u8], needle: &[u8]| haystack.windows(needle.len()).position(|w| w == needle);
+    let image_len = std::fs::metadata(image).map_err(|e| e.to_string())?.len();
+    match kind {
+        ImageKind::Jpeg => {
+            let at = find(&head, b"/DCTDecode").ok_or("no DCTDecode image")?;
+            let start = at + find(&head[at..], b"stream\n").ok_or("no stream")? + b"stream\n".len();
+            out.seek(SeekFrom::Start(start as u64)).map_err(|e| e.to_string())?;
+            let mut want = File::open(image).map_err(|e| e.to_string())?;
+            let (mut a, mut b) = (vec![0u8; 64 * 1024], vec![0u8; 64 * 1024]);
+            let mut left = image_len;
+            while left > 0 {
+                let n = a.len().min(left as usize);
+                out.read_exact(&mut a[..n]).map_err(|e| e.to_string())?;
+                want.read_exact(&mut b[..n]).map_err(|e| e.to_string())?;
+                if a[..n] != b[..n] {
+                    return Err(format!("the stream differs from the JPEG {left} bytes before its end"));
+                }
+                left -= n as u64;
+            }
+            let mut end = [0u8; 10];
+            out.read_exact(&mut end).map_err(|e| e.to_string())?;
+            if &end != b"\nendstream" {
+                return Err("the JPEG's stream does not end where the file does".into());
+            }
+        },
+        ImageKind::Png => {
+            if out_len < image_len / 2 {
+                return Err(format!("{out_len} bytes written for a {image_len} byte PNG"));
+            }
+            find(&head, b"/FlateDecode").ok_or("no FlateDecode image")?;
+            find(&head, b"/SMask").ok_or("no soft mask on the image")?;
+            find(&head, b"/Predictor 15").ok_or("no PNG predictor")?;
+        },
+    }
+    Ok(())
 }
 
 /// A one-page Letter PDF filled by one 20000 x 20000 Group 4 fax image. An

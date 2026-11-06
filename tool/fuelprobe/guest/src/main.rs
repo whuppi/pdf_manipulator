@@ -58,6 +58,7 @@ const CASES: &[(&str, &str)] = &[
     ("render", "type3"),
     ("render", "inlineImage"),
     ("render", "knockoutPaints"),
+    ("buildImage", "png"),
 ];
 
 /// The fixtures' sizes, each chosen so the op does well over 10^9 units of
@@ -103,6 +104,10 @@ mod size {
     pub const INLINE_IMAGE_SIDE: u32 = 5_000;
     /// Paint operators of a knockout group the render replays one by one.
     pub const KNOCKOUT_PAINTS: usize = 8_000;
+    /// Width and rows of the PNG a builder takes from its source: each row is
+    /// inflated, narrowed and deflated, and each takes a pass for its alpha.
+    pub const BUILD_PNG_WIDTH: u32 = 1_024;
+    pub const BUILD_PNG_ROWS: u32 = 1_000;
 }
 
 fn main() {
@@ -336,8 +341,19 @@ fn run(op: &str, fixture: &str) -> Result<(), Failure> {
         ("render", "type3") => render(gen::type3_glyph(size::WHOLE_FORM_TRIPLES).finish(), &[0], 72, &cancel)?,
         ("render", "inlineImage") => render(gen::inline_image(size::INLINE_IMAGE_SIDE).finish(), &[0], 72, &cancel)?,
         ("render", "knockoutPaints") => render(gen::knockout_paints(size::KNOCKOUT_PAINTS).finish(), &[0], 72, &cancel)?,
+        ("buildImage", "png") => {
+            build_image(gen::png_image(size::BUILD_PNG_WIDTH, size::BUILD_PNG_ROWS), &cancel)?
+        },
         _ => return Err("no such case".into()),
     }
+    Ok(())
+}
+
+/// `builderAddImagePage` and `builderSave` of the one PNG in `bytes`.
+fn build_image(bytes: Vec<u8>, cancel: &CancelCheck) -> Result<(), Failure> {
+    mark();
+    probe::build_image_page(bytes, &mut sink(), cancel).map_err(fail("buildImage"))?;
+    mark();
     Ok(())
 }
 

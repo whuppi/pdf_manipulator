@@ -105,25 +105,32 @@ class SharedBridge extends PdfBridge {
     return PdfTask.internal(future, hook);
   }
 
-  /// Execute keeping sources[0] alive for handle lifetime.
+  /// Execute holding sources[0] for handle lifetime. An op issued on a
+  /// handle a combinator owns passes that handle's [scope], as [_exec] does.
   PdfTask<({Map<String, Object?> map, int? resourceId})> _execKeepSource(
     EngineOp op,
     Map<String, Object?> args, {
     required DataSource source,
+    CancelHook? scope,
   }) {
     final hook = CancelHook();
+    final unregister = scope?.register(hook.cancel);
     final future = () async {
-      final req = bin.encodeRequest(op.wire, args);
-      final res = await _transport.execute(
-        req,
-        sources: [source],
-        keepSources: {0},
-        cancel: hook,
-      );
-      return (
-        map: bin.decodeResponse(res.bytes),
-        resourceId: res.resourceIds[0],
-      );
+      try {
+        final req = bin.encodeRequest(op.wire, args);
+        final res = await _transport.execute(
+          req,
+          sources: [source],
+          keepSources: {0},
+          cancel: hook,
+        );
+        return (
+          map: bin.decodeResponse(res.bytes),
+          resourceId: res.resourceIds[0],
+        );
+      } finally {
+        unregister?.call();
+      }
     }();
     return PdfTask.internal(future, hook);
   }

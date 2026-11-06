@@ -16,6 +16,28 @@ class _SharedBuilderHandle extends BridgeBuilderHandle {
   final SharedBridge _bridge;
   final int _handleId;
 
+  /// The one resource that covers every image source the builder holds; null
+  /// until the first image is added.
+  int? _heldResourceId;
+
+  /// Runs [op] with [source] held until the builder is disposed: the engine
+  /// reads an image from it when the builder is saved, not when it is added.
+  PdfTask<Map<String, Object?>> _holdingSource(
+    EngineOp op,
+    Map<String, Object?> args,
+    DataSource source,
+  ) => _bridge
+      ._execKeepSource(
+        op,
+        {'handleId': _handleId, ...args},
+        source: source,
+        scope: scope,
+      )
+      .map((res) {
+        _heldResourceId ??= res.resourceId;
+        return res.map;
+      });
+
   PdfTask<Map<String, Object?>> _exec(EngineOp op, Map<String, Object?> args) =>
       _bridge._exec(op, {'handleId': _handleId, ...args}, scope: scope);
 
@@ -36,29 +58,25 @@ class _SharedBuilderHandle extends BridgeBuilderHandle {
   PdfTask<BridgePageBuilderHandle> addPage(PdfPageSize size) => _exec(
     EngineOp.builderAddPage,
     _pageSizeArgs(size),
-  ).map((_) => _SharedPageBuilderHandle(_bridge, _handleId, scope));
+  ).map((_) => _SharedPageBuilderHandle(this, _bridge, _handleId, scope));
 
   @override
   PdfTask<BridgePageBuilderHandle> addImagePage(
     DataSource imageData, {
     PdfImagePage page = const PdfImagePage(),
-  }) => _bridge
-      ._exec(
-        EngineOp.builderAddImagePage,
-        {
-          'handleId': _handleId,
-          'sourceLength': imageData.length,
-          if (page.size case PdfImagePageSizeFixed(:final size)) ...{
-            'width': size.width,
-            'height': size.height,
-          },
-          'fit': page.fit.wire,
-          'margin': page.margin,
-        },
-        sources: [imageData],
-        scope: scope,
-      )
-      .map((_) => _SharedPageBuilderHandle(_bridge, _handleId, scope));
+  }) => _holdingSource(
+    EngineOp.builderAddImagePage,
+    {
+      'sourceLength': imageData.length,
+      if (page.size case PdfImagePageSizeFixed(:final size)) ...{
+        'width': size.width,
+        'height': size.height,
+      },
+      'fit': page.fit.wire,
+      'margin': page.margin,
+    },
+    imageData,
+  ).map((_) => _SharedPageBuilderHandle(this, _bridge, _handleId, scope));
 
   @override
   PdfTask<void> save(DataSink output, {bool deflate = true}) => _bridge._exec(
@@ -68,8 +86,13 @@ class _SharedBuilderHandle extends BridgeBuilderHandle {
     scope: scope,
   );
   @override
-  Future<void> dispose() =>
-      _bridge._exec(EngineOp.builderDispose, {'handleId': _handleId});
+  Future<void> dispose() async {
+    await _bridge._exec(EngineOp.builderDispose, {'handleId': _handleId});
+    final resourceId = _heldResourceId;
+    if (resourceId != null) {
+      await _bridge._transport.releaseSource(resourceId);
+    }
+  }
 }
 
 /// The wire arguments of a page size: the engine's own names for the two
@@ -90,7 +113,13 @@ String? _dateArg(DateTime? value) =>
 // ══════════════════════════════════════════════════════════════════
 
 class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
-  _SharedPageBuilderHandle(this._bridge, this._handleId, this._scope);
+  _SharedPageBuilderHandle(
+    this._builder,
+    this._bridge,
+    this._handleId,
+    this._scope,
+  );
+  final _SharedBuilderHandle _builder;
   final SharedBridge _bridge;
   final int _handleId;
   final CancelHook? _scope;
@@ -189,18 +218,12 @@ class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
     DataSource imageData,
     PdfRect bounds, {
     String? altText,
-  }) => _bridge._exec(
-    EngineOp.builderPageOp,
-    {
-      'handleId': _handleId,
-      'pageOp': (altText == null ? PageOp.imageArtifact : PageOp.image).wire,
-      'sourceLength': imageData.length,
-      ...codec.encodeRectArgs(bounds),
-      if (altText != null) 'altText': altText,
-    },
-    sources: [imageData],
-    scope: _scope,
-  );
+  }) => _builder._holdingSource(EngineOp.builderPageOp, {
+    'pageOp': (altText == null ? PageOp.imageArtifact : PageOp.image).wire,
+    'sourceLength': imageData.length,
+    ...codec.encodeRectArgs(bounds),
+    if (altText != null) 'altText': altText,
+  }, imageData);
   @override
   PdfTask<void> watermark(String text) => _op(PageOp.watermark, {'text': text});
   @override

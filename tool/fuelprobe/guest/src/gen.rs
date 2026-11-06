@@ -102,6 +102,39 @@ impl Lcg {
     }
 }
 
+/// An RGBA PNG of `width` x `rows` pixels of noise, its rows stored in one
+/// `IDAT` without compression: every row is work for the reader, none shrinks.
+pub fn png_image(width: u32, rows: u32) -> Vec<u8> {
+    fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+        let mut crc = flate2::Crc::new();
+        crc.update(kind);
+        crc.update(data);
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        out.extend_from_slice(kind);
+        out.extend_from_slice(data);
+        out.extend_from_slice(&crc.sum().to_be_bytes());
+    }
+    let mut lcg = Lcg(0x1D47);
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::none());
+    let mut row = vec![0u8; 1 + width as usize * 4];
+    for _ in 0..rows {
+        for byte in &mut row[1..] {
+            *byte = lcg.next() as u8;
+        }
+        z.write_all(&row).expect("deflates");
+    }
+    let idat = z.finish().expect("finishes");
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&width.to_be_bytes());
+    ihdr.extend_from_slice(&rows.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+    chunk(&mut out, b"IHDR", &ihdr);
+    chunk(&mut out, b"IDAT", &idat);
+    chunk(&mut out, b"IEND", &[]);
+    out
+}
+
 /// A document with one shared Helvetica (`/F1`), pages added one at a time.
 pub struct Shell {
     pub pdf: Pdf,
