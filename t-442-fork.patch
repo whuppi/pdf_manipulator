@@ -1,0 +1,264 @@
+diff --git a/src/converters/form_xobject_finder.rs b/src/converters/form_xobject_finder.rs
+index fdb3bee..b66eb58 100644
+--- a/src/converters/form_xobject_finder.rs
++++ b/src/converters/form_xobject_finder.rs
+@@ -60,7 +60,13 @@ pub fn find_inline_image_invocations(
+     let mut stack: Vec<[f32; 6]> = Vec::new();
+     let mut out = Vec::new();
+     let mut inline_idx = 0usize;
++    // ── pdf_manipulator patch: a cancel ends the walk; the caller's next poll ends the job ──
++    let mut stride = crate::cancel::Stride::job();
+     for op in ops {
++        if stride.tick().is_err() {
++            return Vec::new();
++        }
++        // ── end pdf_manipulator patch ──
+         match op {
+             Operator::SaveState => {
+                 stack.push(ctm);
+@@ -137,7 +143,13 @@ pub fn find_form_xobject_invocations(
+     let mut ctm: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+     let mut stack: Vec<[f32; 6]> = Vec::new();
+     let mut out = Vec::new();
++    // ── pdf_manipulator patch: a cancel ends the walk; the caller's next poll ends the job ──
++    let mut stride = crate::cancel::Stride::job();
+     for op in ops {
++        if stride.tick().is_err() {
++            return Vec::new();
++        }
++        // ── end pdf_manipulator patch ──
+         match op {
+             Operator::SaveState => {
+                 stack.push(ctm);
+diff --git a/src/document.rs b/src/document.rs
+index d020986..c96b31b 100644
+--- a/src/document.rs
++++ b/src/document.rs
+@@ -18110,6 +18110,9 @@ impl PdfDocument {
+         // ── end pdf_manipulator patch ──
+ 
+         let mut extractor = TextExtractor::with_config(config);
++        // ── pdf_manipulator patch: the forms of the page are read under the job's cancel ──
++        extractor.set_cancel(cancel);
++        // ── end pdf_manipulator patch ──
+         // Stamp the page index so spans carry McidScope::Page(page_index)
+         // by default; Form XObject Do invocations push their own scope
+         // on top of the stack inside the extractor.
+@@ -19257,6 +19260,7 @@ impl PdfDocument {
+         };
+ 
+         let mut extractor = TextExtractor::new();
++        extractor.set_cancel(cancel);
+         // Stamp the page index the span path already stamps. The form /BBox
+         // clip below resolves the enclosing page through
+         // `mcid_scope_stack.first()`, which defaults to `Page(0)`; without this
+diff --git a/src/editor/document_editor.rs b/src/editor/document_editor.rs
+index b55d307..f21201a 100644
+--- a/src/editor/document_editor.rs
++++ b/src/editor/document_editor.rs
+@@ -12351,7 +12351,9 @@ impl DocumentEditor {
+             .page_operators(page_index)?
+             .with_inline_images(crate::host::content::InlineImages::Collect);
+         let mut stage = image_mods::ImageModStage::new(mods, out);
++        let mut stride = crate::cancel::Stride::job();
+         for item in ops.by_ref() {
++            stride.tick()?;
+             stage.push(&item?)?;
+         }
+         if !ops.damage().is_clean() {
+diff --git a/src/extractors/text.rs b/src/extractors/text.rs
+index 77c2469..5c25577 100644
+--- a/src/extractors/text.rs
++++ b/src/extractors/text.rs
+@@ -2467,6 +2467,8 @@ pub struct TextExtractor<'doc> {
+     page_source: Option<PageSource<'doc>>,
+     /// `placed_pdf_keep` has been decided for this page.
+     placed_pdf_decided: bool,
++    /// The running job's check, polled as the operators of a form are read.
++    cancel: crate::cancel::CancelCheck,
+     // ── end pdf_manipulator patch ──
+     /// Configuration for text extraction heuristics
+     config: TextExtractionConfig,
+@@ -2677,6 +2679,7 @@ impl<'doc> TextExtractor<'doc> {
+             // ── pdf_manipulator patch: the page's operator source, for the placed-PDF count ──
+             page_source: None,
+             placed_pdf_decided: false,
++            cancel: crate::cancel::CancelCheck::none(),
+             // ── end pdf_manipulator patch ──
+             config,
+             merging_config: SpanMergingConfig::default(),
+@@ -2765,6 +2768,13 @@ impl<'doc> TextExtractor<'doc> {
+         self.resources = Some(resources);
+     }
+ 
++    // ── pdf_manipulator patch: the forms of a page are read under the job's cancel ──
++    /// Polls `cancel` as the operators of every form the page draws are read.
++    pub fn set_cancel(&mut self, cancel: &crate::cancel::CancelCheck) {
++        self.cancel = cancel.clone();
++    }
++    // ── end pdf_manipulator patch ──
++
+     /// Set the document reference for loading XObjects.
+     pub fn set_document(&mut self, document: &'doc crate::document::PdfDocument) {
+         self.document = Some(document);
+@@ -7449,10 +7459,12 @@ impl<'doc> TextExtractor<'doc> {
+                 }
+ 
+                 // ── pdf_manipulator patch: the form's operators are read as its content is decoded ──
++                let cancel = self.cancel.clone();
+                 let form_source = move || -> Result<Box<dyn crate::host::content::OperatorStream>> {
+                     Ok(Box::new(
+                         doc.form_operators(xobject_ref)?
+-                            .with_mode(crate::host::content::Mode::Text),
++                            .with_mode(crate::host::content::Mode::Text)
++                            .with_cancel_every(cancel.clone(), 256),
+                     ))
+                 };
+                 // ── end pdf_manipulator patch ──
+diff --git a/src/host/engine_proofs/cancel_polls.rs b/src/host/engine_proofs/cancel_polls.rs
+index 0689081..f03933a 100644
+--- a/src/host/engine_proofs/cancel_polls.rs
++++ b/src/host/engine_proofs/cancel_polls.rs
+@@ -727,3 +727,128 @@ fn render_of_a_knockout_group_cancelled_at_any_poll_leaves_nothing_behind() {
+     let polls = read_at_every_poll(|| open(&bytes), |doc, cancel| render_png(doc, cancel), PAINTS);
+     assert!(polls >= PAINTS, "{polls}");
+ }
++
++/// One page that shows `ops` text operators, in its own content or, with
++/// `in_form`, in the form it draws; either way a mark over the lower half of
++/// the page reaches them.
++fn redaction_pdf(ops: usize, in_form: bool) -> Vec<u8> {
++    let mut text = String::from("BT /F1 8 Tf\n");
++    for k in 0..ops {
++        text.push_str(&format!("1 0 0 1 {} {} Tm (w{k}) Tj\n", 20 + k % 200, 20 + k % 120));
++    }
++    text.push_str("ET\n");
++    let (page, form) = if in_form {
++        (b"q /Fm1 Do Q\n".to_vec(), Some(stream_object(
++            6,
++            "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 3 0 R >> >>",
++            text.as_bytes(),
++        )))
++    } else {
++        (text.into_bytes(), None)
++    };
++    let xobjects = if in_form { "/XObject << /Fm1 6 0 R >> " } else { "" };
++    let mut objects = vec![
++        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n".to_vec(),
++        b"2 0 obj\n<< /Type /Pages /Kids [4 0 R] /Count 1 >>\nendobj\n".to_vec(),
++        b"3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n".to_vec(),
++        format!(
++            "4 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 5 0 R \
++             /Resources << /Font << /F1 3 0 R >> {xobjects}>> >>\nendobj\n"
++        )
++        .into_bytes(),
++        stream_object(5, "", &page),
++    ];
++    objects.extend(form);
++    pdf_from_objects(&objects)
++}
++
++fn apply(editor: &mut DocumentEditor, cancel: &CancelCheck) -> Result<()> {
++    let _job = crate::cancel::enter(cancel);
++    crate::host::dispatch::edit_apply_redactions(editor, cancel).map(|_| ())
++}
++
++/// An editor over [`redaction_pdf`] with its mark queued.
++fn marked_editor(ops: usize, in_form: bool) -> DocumentEditor {
++    let mut editor = editor_of(&redaction_pdf(ops, in_form));
++    editor.add_redaction(0, [0.0, 0.0, 300.0, 100.0], Some([0.0, 0.0, 0.0])).expect("the mark queues");
++    editor
++}
++
++fn full_save(editor: &mut DocumentEditor, cancel: &CancelCheck) -> Result<Vec<u8>> {
++    let _job = crate::cancel::enter(cancel);
++    let mut out = crate::host::positioned_write::CountingWriter::new(Vec::new());
++    crate::host::dispatch::edit_save_with_options(editor, &mut out, &SaveOptions::full_rewrite(), cancel)
++        .map(|()| out.into_inner())
++}
++
++/// No Dart battery sees it: a battery's page holds a few dozen operators and
++/// the redaction pass would finish before it polled twice, so a cancel that
++/// lands inside the pass only shows as a poll count that grows with the
++/// operators of the page and of each form it draws, in the apply that plans
++/// the pass and in the save that writes it again.
++#[test]
++fn redaction_polls_while_it_reads_the_operators_of_a_page_and_of_a_form() {
++    const OPS: usize = 20_000;
++    // one poll for every 256 operators of the stream read; half of that is the margin
++    const GROWTH: usize = OPS / 512;
++    for in_form in [false, true] {
++        let polls_of_apply = |ops: usize| {
++            let counting = CancelCheck::tripping_at(usize::MAX);
++            apply(&mut marked_editor(ops, in_form), &counting).expect("the redaction applies");
++            counting.polls()
++        };
++        let polls_of_save = |ops: usize| {
++            let mut editor = marked_editor(ops, in_form);
++            crate::host::dispatch::edit_apply_redactions(&mut editor, &CancelCheck::none())
++                .expect("the redaction applies");
++            let counting = CancelCheck::tripping_at(usize::MAX);
++            full_save(&mut editor, &counting).expect("the redacted editor saves");
++            counting.polls()
++        };
++        let (small, big) = (polls_of_apply(10), polls_of_apply(OPS));
++        assert!(big >= small + GROWTH, "apply, in_form {in_form}: {big} polls for {OPS} operators, {small} for 10");
++        let (small, big) = (polls_of_save(10), polls_of_save(OPS));
++        assert!(big >= small + GROWTH, "save, in_form {in_form}: {big} polls for {OPS} operators, {small} for 10");
++    }
++}
++
++/// No Dart battery sees it: a cancel from Dart lands wherever the timing
++/// reaches, so a battery never shows that each poll the redaction makes while
++/// it reads a page or a form is a safe place to stop. A cancel at any of
++/// them, in the apply or in the save, ends cancelled and leaves the editor
++/// applying and saving the same redaction again.
++#[test]
++fn redaction_cancelled_at_any_poll_of_its_stream_reads_changes_nothing() {
++    const OPS: usize = 40;
++    for in_form in [false, true] {
++        editor_at_every_poll(
++            || marked_editor(OPS, in_form),
++            apply,
++            true,
++            // the form's dry run adds its own two strides to the page's
++            3,
++        );
++        let baseline = {
++            let mut editor = marked_editor(OPS, in_form);
++            crate::host::dispatch::edit_apply_redactions(&mut editor, &CancelCheck::none()).unwrap();
++            full_save(&mut editor, &CancelCheck::none()).unwrap()
++        };
++        let counting = CancelCheck::tripping_at(usize::MAX);
++        let mut editor = marked_editor(OPS, in_form);
++        crate::host::dispatch::edit_apply_redactions(&mut editor, &CancelCheck::none()).unwrap();
++        full_save(&mut editor, &counting).unwrap();
++        let polls = counting.polls();
++        for n in 1..=polls {
++            let mut editor = marked_editor(OPS, in_form);
++            crate::host::dispatch::edit_apply_redactions(&mut editor, &CancelCheck::none()).unwrap();
++            match full_save(&mut editor, &CancelCheck::tripping_at(n)) {
++                Ok(_) => panic!("a cancel at poll {n} of {polls} did not stop the save, in_form {in_form}"),
++                Err(error) => assert!(is_cancelled(&error), "poll {n} of {polls} ended with {error:?}"),
++            }
++            assert!(
++                full_save(&mut editor, &CancelCheck::none()).unwrap() == baseline,
++                "after a cancel at poll {n} of {polls} the editor saves another file, in_form {in_form}"
++            );
++        }
++    }
++}
+diff --git a/src/redaction/transform.rs b/src/redaction/transform.rs
+index a29e782..e19ce0b 100644
+--- a/src/redaction/transform.rs
++++ b/src/redaction/transform.rs
+@@ -580,6 +580,9 @@ impl<'a> RedactPass<'a> {
+     ) -> Result<()> {
+         let mut content = content.with_inline_images(InlineImages::Collect);
+         for item in content.by_ref() {
++            // ── pdf_manipulator patch: a cancel stops the pass within one operator ──
++            crate::cancel::poll()?;
++            // ── end pdf_manipulator patch ──
+             let op = item?;
+             if is_path_op(&op) {
+                 self.path.push(op);
