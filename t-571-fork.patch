@@ -1,0 +1,226 @@
+diff --git a/src/document.rs b/src/document.rs
+index c96b31b..64866e6 100644
+--- a/src/document.rs
++++ b/src/document.rs
+@@ -11250,25 +11250,38 @@ impl PdfDocument {
+         // Get /N (Normal appearance) — can be a stream ref or a dictionary of states
+         let n_obj = ap_dict.get("N")?;
+         // ── pdf_manipulator patch: a stream is its dictionary and an extent that reads itself ──
+-        let n_stream = match n_obj {
+-            Object::Reference(r) => self.load_object(*r).ok()?,
++        let (n_ref, n_stream) = match n_obj {
++            Object::Reference(r) => (*r, self.load_object(*r).ok()?),
+             _ => return None, // N must be a reference to a stream
+         };
+ 
+         // Verify it's a stream (has a dict with stream data)
+         let n_dict = n_stream.as_dict()?;
+-
+-        // Decode the AP/N stream
+-        let stream_data = match n_stream.decode_stream_data() {
+         // ── end pdf_manipulator patch ──
+-            Ok(data) => data,
+-            Err(_) => return None,
+-        };
+ 
+-        // Quick check: does the stream contain text operators?
+-        if !Self::may_contain_text(&stream_data) {
++        // ── pdf_manipulator patch: the appearance stream is read as its operators, not decoded whole ──
++        let source: Arc<crate::extractors::text::OperatorSource<'_>> = Arc::new(move || {
++            Ok(Box::new(self.form_operators(n_ref)?.with_mode(crate::host::content::Mode::Text))
++                as Box<dyn crate::host::content::OperatorStream>)
++        });
++
++        // Quick check: does the stream show text, or invoke a form that may?
++        let mut stride = crate::cancel::Stride::job();
++        let mut may_show_text = false;
++        for op in source().ok()? {
++            stride.tick().ok()?;
++            match op {
++                Ok(crate::content::Operator::BeginText | crate::content::Operator::Do { .. }) | Err(_) => {
++                    may_show_text = true;
++                    break;
++                },
++                Ok(_) => {},
++            }
++        }
++        if !may_show_text {
+             return None;
+         }
++        // ── end pdf_manipulator patch ──
+ 
+         // Create a temporary text extractor for this AP stream
+         let mut extractor = TextExtractor::new();
+@@ -11291,7 +11304,9 @@ impl PdfDocument {
+         }
+ 
+         // Extract text spans from the AP stream
+-        let spans = extractor.extract_text_spans(&stream_data).ok()?;
++        // ── pdf_manipulator patch: spans are read from the stream's operator source ──
++        let spans = extractor.extract_text_spans_from(source).ok()?;
++        // ── end pdf_manipulator patch ──
+         if spans.is_empty() {
+             return None;
+         }
+@@ -13810,6 +13825,9 @@ impl PdfDocument {
+     ) -> Result<Vec<crate::layout::TextSpan>> {
+         let mut spans = raw_spans;
+ 
++        // ── pdf_manipulator patch: a poll between the passes over the page's spans ──
++        crate::cancel::poll()?;
++        // ── end pdf_manipulator patch ──
+         self.drop_offpage_spans(page_index, &mut spans);
+ 
+         // Recover decimal points mis-decoded as `¬` (U+00AC) in Computer-Modern
+@@ -13825,6 +13843,9 @@ impl PdfDocument {
+ 
+         // Re-attach oversized lone leading capitals to their word before the
+         // reading-order sort can strand them (drop-cap / table-title initials).
++        // ── pdf_manipulator patch: a poll between the passes over the page's spans ──
++        crate::cancel::poll()?;
++        // ── end pdf_manipulator patch ──
+         Self::merge_drop_cap_initials(&mut spans);
+ 
+         // Apply page /Rotate to span geometry BEFORE reading-order sorting.
+@@ -13890,6 +13911,9 @@ impl PdfDocument {
+         // scramble vertical text; per-span wmode lets us route just those
+         // pages through a tategaki comparator while leaving every existing
+         // horizontal corpus untouched.
++        // ── pdf_manipulator patch: a poll between the passes over the page's spans ──
++        crate::cancel::poll()?;
++        // ── end pdf_manipulator patch ──
+         let vertical_count = spans.iter().filter(|s| s.wmode == 1).count();
+         if !spans.is_empty() && vertical_count * 2 >= spans.len() {
+             // See `crate::utils::sort_vertical_tategaki` for the
+@@ -13923,6 +13947,10 @@ impl PdfDocument {
+             // ── end pdf_manipulator patch ──
+         }
+ 
++        // ── pdf_manipulator patch: the cancel the partition ended on is reported here ──
++        crate::cancel::poll()?;
++        // ── end pdf_manipulator patch ──
++
+         // Per-span rotation firewall. Runs drawn with a rotated text matrix
+         // (the vertical `arXiv:…` margin stamp, figure/axis labels, rotated
+         // table headers, transit-poster route names) break the axis-aligned
+@@ -13977,6 +14005,7 @@ impl PdfDocument {
+         // bottom of the page are flagged as artifacts so downstream filters
+         // drop them.
+         // ── pdf_manipulator patch: the cancel check rides to the pre-pass ──
++        crate::cancel::poll()?;
+         self.mark_running_artifact_spans(page_index, &mut spans, cancel)?;
+         // ── end pdf_manipulator patch ──
+ 
+@@ -13985,6 +14014,9 @@ impl PdfDocument {
+         // or thin-space variants in ToUnicode CMaps (e.g. justified text layouts);
+         // normalising here gives consistent word boundaries to every downstream
+         // consumer (extract_text, word-F1 scoring, etc.).
++        // ── pdf_manipulator patch: a poll between the passes over the page's spans ──
++        crate::cancel::poll()?;
++        // ── end pdf_manipulator patch ──
+         for span in &mut spans {
+             if span
+                 .text
+@@ -14021,6 +14053,9 @@ impl PdfDocument {
+         // ground truth keeps in ASCII; gating on token-internal
+         // context keeps the desired cases without regressing the
+         // affiliation-block pages.
++        // ── pdf_manipulator patch: a poll between the passes over the page's spans ──
++        crate::cancel::poll()?;
++        // ── end pdf_manipulator patch ──
+         Self::apply_super_sub_script_substitutions(&mut spans);
+ 
+         // Fold spacing-diacritic spans (´, `, ^, ~, ¨, …) into the
+@@ -14030,6 +14065,9 @@ impl PdfDocument {
+         // the marks as separate `Tj` ops at the base glyph's X
+         // coordinate. Without this pass extract_text returns the
+         // raw two-glyph order "´Ecole" instead of "École".
++        // ── pdf_manipulator patch: a poll between the passes over the page's spans ──
++        crate::cancel::poll()?;
++        // ── end pdf_manipulator patch ──
+         Self::apply_combining_mark_composition(&mut spans);
+ 
+         // Stamp accurate per-glyph x-origins onto the finalized spans so that
+diff --git a/src/host/engine_proofs/whole_reads.txt b/src/host/engine_proofs/whole_reads.txt
+index c5c8652..236157b 100644
+--- a/src/host/engine_proofs/whole_reads.txt
++++ b/src/host/engine_proofs/whole_reads.txt
+@@ -3,7 +3,6 @@ decoders::stream::decode_slice
+ document::cached_page_content
+ document::compute_output_intent_cmyk_profile
+ document::extract_embedded_files
+-document::extract_text_from_ap_stream
+ editor::document_editor::deflate_stream
+ editor::document_editor::get_page_images
+ editor::document_editor::write_stream_copy
+diff --git a/src/pipeline/reading_order/xycut.rs b/src/pipeline/reading_order/xycut.rs
+index 5da0ead..7cca4f9 100644
+--- a/src/pipeline/reading_order/xycut.rs
++++ b/src/pipeline/reading_order/xycut.rs
+@@ -512,6 +512,12 @@ impl XYCutStrategy {
+             return Vec::new();
+         }
+ 
++        // ── pdf_manipulator patch: a cancelled job ends the recursion; the caller's next poll reports it ──
++        if crate::cancel::poll().is_err() {
++            return vec![self.sort_indices(all_spans, indices)];
++        }
++        // ── end pdf_manipulator patch ──
++
+         // Base case: small region, don't split further via the recursive
+         // partitioner. Below `min_spans_for_split`, the statistical
+         // prose/table classifiers (`classify_region_kind`,
+@@ -1946,28 +1952,31 @@ impl XYCutStrategy {
+             left.iter()
+                 .any(|&j| j != i && band_of(j) == a && all_spans[j].bbox.left() < x)
+         };
+-        let full_width_left_rows = left
+-            .iter()
+-            .filter(|&&i| {
+-                if !shares_a_row_with_right(i) && !is_labelled_from_the_left(i) {
+-                    return false;
+-                }
+-                let s = &all_spans[i];
+-                // Count EVERY character, not just the non-whitespace ones. An
+-                // inter-word space consumes an advance exactly as a glyph does,
+-                // so excluding spaces under-measures justified prose by about a
+-                // ninth of its width — enough that a full-measure body line
+-                // reaching the right margin scored short of it and was not
+-                // counted. Clamping to `bbox.right()` keeps the estimate from
+-                // over-reaching instead: the result is never wider than the ink
+-                // actually is, which is what the trailing-whitespace concern
+-                // above is really about.
+-                let chars = s.text.chars().count().max(1) as f32;
+-                let approx_char_width = (s.font_size * 0.45).max(2.5);
+-                let core_right = (s.bbox.left() + chars * approx_char_width).min(s.bbox.right());
+-                core_right >= right_x_max - overlap_tol
+-            })
+-            .count();
++        // ── pdf_manipulator patch: each left run scans both sides, so the scan polls per run ──
++        let mut full_width_left_rows = 0usize;
++        for &i in left.iter() {
++            crate::cancel::poll().ok()?;
++            if !shares_a_row_with_right(i) && !is_labelled_from_the_left(i) {
++                continue;
++            }
++            let s = &all_spans[i];
++            // Count EVERY character, not just the non-whitespace ones. An
++            // inter-word space consumes an advance exactly as a glyph does,
++            // so excluding spaces under-measures justified prose by about a
++            // ninth of its width — enough that a full-measure body line
++            // reaching the right margin scored short of it and was not
++            // counted. Clamping to `bbox.right()` keeps the estimate from
++            // over-reaching instead: the result is never wider than the ink
++            // actually is, which is what the trailing-whitespace concern
++            // above is really about.
++            let chars = s.text.chars().count().max(1) as f32;
++            let approx_char_width = (s.font_size * 0.45).max(2.5);
++            let core_right = (s.bbox.left() + chars * approx_char_width).min(s.bbox.right());
++            if core_right >= right_x_max - overlap_tol {
++                full_width_left_rows += 1;
++            }
++        }
++        // ── end pdf_manipulator patch ──
+         // The count has to be read against the side it came from, not on its
+         // own: three rows out of a hundred is a heading, a footnote and a
+         // caption over two columns of prose, and vetoing there costs those
