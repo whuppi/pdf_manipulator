@@ -1,0 +1,191 @@
+diff --git a/test/ops/runners/web_io_measure_test.dart b/test/ops/runners/web_io_measure_test.dart
+index 4b9f743..0ed270e 100644
+--- a/test/ops/runners/web_io_measure_test.dart
++++ b/test/ops/runners/web_io_measure_test.dart
+@@ -1,28 +1,71 @@
+ // Measurement, not a test of behaviour: times open + extract and merge of one
+-// large generated PDF in the Asyncify and OPFS modes (OPFS includes its
+-// pre-copy of every input). Skipped unless a size is given:
++// large generated PDF in the web I/O modes (OPFS includes its pre-copy of
++// every input). Skipped unless a size is given:
+ //
+ //   dart test test/ops/runners/web_io_measure_test.dart -p chrome \
+-//       --dart2js-args=-DMEASURE_MB=300
++//       --dart2js-args=-DMEASURE_MB=300 \
++//       --dart2js-args=-DMEASURE_MODES=asyncify+opfs \
++//       --dart2js-args=-DMEASURE_SOURCE=blob
+ //
+-// Each line is `MEASURE mode op ms`. The PDF is built once in memory, as
+-// uncompressed text pages, so extraction does real work on every page.
++// MEASURE_MODES lists jspi, atomics, opfs, asyncify joined by `+` (default all
++// four; `dart test` splits --dart2js-args at a comma, so only `+` gets
++// through); each runs twice, alternating. A mode the platform cannot run is
++// skipped. MEASURE_SOURCE is `memory` (default: an in-memory source) or `blob`
++// (a browser Blob built from the same bytes, read with Blob.slice).
++//
++// Each line is `MEASURE mode source bytes open+extract merge reads ...`. The
++// PDF is built once in memory, as uncompressed text pages, so extraction does
++// real work on every page.
+ 
+ @TestOn('browser')
+ library;
+ 
+ import 'dart:async';
+ import 'dart:convert';
++import 'dart:js_interop';
+ import 'dart:typed_data';
+ 
+ import 'package:pdf_manipulator/pdf_manipulator.dart';
+ import 'package:test/test.dart';
++import 'package:web/web.dart' as web;
+ 
+ import '../../harness/test_source_sink.dart';
+ 
+ const _megabytes = int.fromEnvironment('MEASURE_MB');
++const _modeList = String.fromEnvironment(
++  'MEASURE_MODES',
++  defaultValue: 'jspi,atomics,opfs,asyncify',
++);
++const _sourceKind = String.fromEnvironment(
++  'MEASURE_SOURCE',
++  defaultValue: 'memory',
++);
+ const _extractPages = 50;
+ 
++/// A [DataSource] over a browser `Blob`: each read is `Blob.slice` then
++/// `arrayBuffer`. The package has no Blob source of its own.
++class _BlobSource implements DataSource {
++  _BlobSource(this._blob, {required this.onRead});
++
++  final web.Blob _blob;
++  final void Function() onRead;
++
++  @override
++  int get length => _blob.size;
++
++  @override
++  Future<Uint8List> readAt(int offset, int count) async {
++    onRead();
++    if (offset >= length) return Uint8List(0);
++    final end = (offset + count).clamp(0, length);
++    final buffer = await _blob.slice(offset, end).arrayBuffer().toDart;
++    return buffer.toDart.asUint8List();
++  }
++
++  @override
++  void close() {}
++}
++
+ /// A text PDF of about [megabytes] MB: pages of 48 KiB of content each.
+ Uint8List _bigPdf(int megabytes) {
+   const pageBytes = 48 * 1024;
+@@ -99,6 +142,7 @@ class _CountingSink implements DataSink {
+ 
+ void main() {
+   late Uint8List big;
++  late web.Blob blob;
+   late String workerUrl;
+ 
+   setUpAll(() async {
+@@ -110,51 +154,65 @@ void main() {
+     final port = (await channel.stream.first as double).toInt();
+     workerUrl = 'http://localhost:$port/web_assets/executor_worker.js';
+     big = _bigPdf(_megabytes);
++    blob = web.Blob([big.toJS].toJS);
+   });
+ 
++  final modes = [
++    for (final name in _modeList.split(RegExp('[,+]')))
++      PdfIoMode.values.singleWhere((m) => m.name == name.trim()),
++  ];
++  assert(_sourceKind == 'memory' || _sourceKind == 'blob');
++
+   // Each mode twice, alternating, so a warm-up shows as the first pair.
+-  for (final mode in [
+-    PdfIoMode.asyncify,
+-    PdfIoMode.opfs,
+-    PdfIoMode.asyncify,
+-    PdfIoMode.opfs,
+-  ]) {
++  for (final mode in [...modes, ...modes]) {
+     test(
+-      '${mode.name}: open + extract, then merge, of a $_megabytes MB PDF',
++      '${mode.name} (source=$_sourceKind): open + extract, then merge, of a '
++      '$_megabytes MB PDF',
+       () async {
++        var reads = 0;
++        DataSource source() => _sourceKind == 'blob'
++            ? _BlobSource(blob, onRead: () => reads++)
++            : TestSource(big, onRead: (_, _) => reads++);
++
+         final pdf = Pdf(
+           config: PdfConfig(webWorkerUrl: workerUrl, webIoMode: mode),
+         );
+-        final clock = Stopwatch()..start();
+-        var reads = 0;
+-        final doc = await pdf.open(
+-          PdfInput(TestSource(big, onRead: (_, _) => reads++)),
+-        );
+-        final extracted = _CountingSink();
+-        await doc.extractText(
+-          extracted,
+-          pages: PdfPages.range(0, _extractPages),
+-        );
+-        final openExtract = clock.elapsedMilliseconds;
+-        await doc.dispose();
+-
+-        clock
+-          ..reset()
+-          ..start();
+-        final merged = _CountingSink();
+-        await pdf.merge([
+-          PdfInput(TestSource(big)),
+-          PdfInput(TestSource(big)),
+-        ], merged);
+-        final merge = clock.elapsedMilliseconds;
+-        print(
+-          'MEASURE ${mode.name} bytes=${big.length} '
+-          'open+extract=${openExtract}ms (reads=$reads) merge=${merge}ms '
+-          'extracted=${extracted.bytes} merged=${merged.bytes}',
+-        );
+-        await pdf.dispose();
++        try {
++          final clock = Stopwatch()..start();
++          final PdfDocumentHandle doc;
++          try {
++            doc = await pdf.open(PdfInput(source()));
++          } on PdfUnsupported catch (e) {
++            markTestSkipped('${mode.name}: ${e.message}');
++            return;
++          }
++          final extracted = _CountingSink();
++          await doc.extractText(
++            extracted,
++            pages: PdfPages.range(0, _extractPages),
++          );
++          final openExtract = clock.elapsedMilliseconds;
++          final openReads = reads;
++          await doc.dispose();
++
++          reads = 0;
++          clock
++            ..reset()
++            ..start();
++          final merged = _CountingSink();
++          await pdf.merge([PdfInput(source()), PdfInput(source())], merged);
++          final merge = clock.elapsedMilliseconds;
++          print(
++            'MEASURE mode=${mode.name} source=$_sourceKind bytes=${big.length} '
++            'open+extract=${openExtract}ms reads=$openReads '
++            'merge=${merge}ms reads=$reads '
++            'extracted=${extracted.bytes} merged=${merged.bytes}',
++          );
++        } finally {
++          await pdf.dispose();
++        }
+       },
+-      timeout: Timeout(const Duration(minutes: 30)),
++      timeout: Timeout(const Duration(minutes: 60)),
+       skip: _megabytes == 0 ? 'pass --dart2js-args=-DMEASURE_MB=<size>' : false,
+     );
+   }
