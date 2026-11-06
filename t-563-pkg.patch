@@ -1,0 +1,1499 @@
+diff --git a/CHANGELOG.pre.md b/CHANGELOG.pre.md
+index aef6fcf..8912826 100644
+--- a/CHANGELOG.pre.md
++++ b/CHANGELOG.pre.md
+@@ -174,6 +174,8 @@ CONTENT RULES (never change)
+ - **Breaking:** the page builder's `textField` takes `value` where it took `defaultValue`, `checkbox` takes `isChecked` where it took `checked`, and `radioGroup` takes `PdfRadioOption(value, bounds)` where options were records → rename the arguments
+ - **Breaking:** `PdfTextAlignment` is `PdfAlignment`, and the page builder's `image(data, rect, {altText})` is `image(data, bounds, {altText})` where a null `altText` places an artifact → rename the type; pass `altText: 'x'` for a described image
+ - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
++- Added `BlobSource` (`package:pdf_manipulator/web.dart`), which the worker reads in place with `FileReaderSync` in every I/O mode: a `File` from a picker opens with no main-thread read, no pre-copy and O(1) memory at any size
++- Changed web sources of any other kind that fit in 16 MiB per lane to be copied into the worker once as a snapshot at job start instead of pre-copied to disk or read through the page, and a source past that budget takes the I/O mode's own path
+ - Added `redact(page, regions, {overlay})`, which marks and applies its own regions in one step and returns the report — marks queued before stay queued, and an error leaves nothing marked or applied
+ - Added `PdfFormFieldValue.choice`, `.choices` and `.none`: `field(name).setValue` selects an option of a combo box or list box, the options of a multi-select list box, or clears the value, and refuses an option the field does not list
+ - Added `PdfEditor.clearRedactions()`, and `field(name).setTooltip`, `setMaxLength`, `setBackgroundColor` and `setBorderColor` take null to remove the tooltip, the limit or the colour
+diff --git a/README.md b/README.md
+index fd85a13..ceb2bfa 100644
+--- a/README.md
++++ b/README.md
+@@ -82,6 +82,8 @@ Web can't auto-download native assets, so run setup once. It fetches the prebuil
+ flutter pub run pdf_manipulator:setup
+ ```
+ 
++For a `File` from a picker or a drop, import `package:pdf_manipulator/web.dart` and wrap it in a `BlobSource`: the worker reads it in place, with no copy (see **Sources & sinks**).
++
+ Pin the version, too, so a `pub upgrade` can't bump it behind your back and leave that fetched asset stale:
+ 
+ ```yaml
+@@ -301,7 +303,13 @@ final pdf = Pdf(config: PdfConfig(concurrency: 8)); // default: max(2, cores ÷
+ 
+ ## Sources & sinks
+ 
+-Every operation reads from a **source** and writes to a **sink**. You have used the built-ins already: `MemorySource` and `MemorySink` for bytes, `FileSource` and `FileSink` for files. Write your own for anything else (a server, a database, a `Blob`).
++Every operation reads from a **source** and writes to a **sink**. You have used the built-ins already: `MemorySource` and `MemorySink` for bytes, `FileSource` and `FileSink` for files. Write your own for anything else (a server, a database).
++
++| Source | Where | Import |
++|---|---|---|
++| `MemorySource(bytes)` | every platform | `pdf_manipulator.dart` |
++| `FileSource.open(file)`, `PdfFile(file)` | native | `io.dart` |
++| `BlobSource(blob)` (a `File` from a picker is a `Blob`) | web | `web.dart` |
+ 
+ The rule for closing is the same for both: **whoever obtained it closes it.** A source or sink that you pass to an operation stays yours, and the library never closes it. A sink that a factory of yours returns (the `sinkFor` of `split`, `render` or `extractImages`) belongs to the library, and it closes that sink after its item, on success, error and cancel. A source that a `PdfInput.owning` opens, `PdfFile` for one, belongs to the job in the same way.
+ 
+@@ -360,28 +368,21 @@ class UrlSource implements DataSource {
+ final doc = await pdf.open(PdfInput(UrlSource(uri, contentLength)));
+ ```
+ 
+-Or a browser `Blob` from a file picker or a drag and drop:
++For a browser `Blob` from a file picker or a drag and drop, do not write one: `BlobSource` ships in `package:pdf_manipulator/web.dart` (web only, as `io.dart` is for native):
+ 
+ ```dart
+-import 'package:web/web.dart' as web;
++import 'package:pdf_manipulator/web.dart';
+ 
+-class BlobSource implements DataSource {
+-  BlobSource(this._blob) : length = _blob.size;
+-  final web.Blob _blob;
+-  @override
+-  final int length;
++final doc = await pdf.open(PdfInput(BlobSource(file))); // file is a web.File
++```
+ 
+-  @override
+-  Future<Uint8List> readAt(int offset, int count) async {
+-    final slice = _blob.slice(offset, offset + count);
+-    final buffer = await slice.arrayBuffer().toDart;
+-    return buffer.toDart.asUint8List();
+-  }
++On web a source reaches the worker one of three ways, and the I/O mode's own read path serves only a source with none of them:
+ 
+-  @override
+-  void close() {} // a Blob holds nothing to release
+-}
+-```
++- **A `BlobSource`** goes to the worker by reference, with no copy, and the worker reads slices of it in place with `FileReaderSync`. Memory is O(1) for a file of any size, and no read crosses to the main thread, in every I/O mode.
++- **Any other source** that fits in what is left of the lane's 16 MiB transfer budget is read whole once on the main thread and copied into the worker, as a snapshot at job start. A merge of 100 small inputs transfers until the budget fills, and the rest take the mode's path.
++- **A source past the budget** takes the mode's path: streamed through the page in JSPI, Atomics and Asyncify, and pre-copied to OPFS disk in OPFS mode.
++
++A file that changes on disk while an operation reads it fails that operation with an I/O error. It never reads wrong bytes.
+ 
+ A custom `DataSink` works the same way. Implement `write(chunk)` for an upload stream, a database column or any other place for the bytes. Implement `abort(reason)` to take the bytes back (cancel the upload, delete the row) when the operation is cancelled or fails. Then a stopped operation leaves no partial output.
+ 
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+index 7ad1ad7..b2f34b7 100644
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -543,6 +543,9 @@ of live and peak bytes, and in a process-wide pair.
+   executor's figure by its size. That can only keep an executor that should be kept,
+   never retire one wrongly.
+ - The web `mem` field is the wasm linear memory. It never falls and no decision reads it.
++- On web, a non-Blob source under the transfer budget is copied once into the worker, as the
++  pre-copy copies it to disk. The worker's `held` field is the sum of those copies; it is a
++  diagnostic, and `Blob`-backed readers hold nothing.
+ 
+ ### The keep line
+ 
+@@ -705,7 +708,7 @@ on the main isolate through `NativeCallable.listener`. No helper isolate exists.
+ | **JSPI** | `WebAssembly.Suspending` suspends wasm, JS fetches async, wasm resumes | Chrome 137+ / Firefox 139+ |
+ | **Atomics** | `Atomics.wait` blocks wasm, JS fills a SAB, `Atomics.notify` wakes it | `SharedArrayBuffer` (COOP/COEP headers) |
+ | **Asyncify** | The instrumented wasm unwinds at the read or write, the worker awaits the answer and rewinds | The app shipped the Asyncify module (an entry in `pdf_oxide_manifest.json`, `asyncify: true`) |
+-| **OPFS** | Sources are pre-copied to OPFS disk, wasm reads through `SyncAccessHandle` | All modern browsers |
++| **OPFS** | Sources past the transfer budget (see **Web reader backings**) are pre-copied to OPFS disk, wasm reads through `SyncAccessHandle` | All modern browsers |
+ 
+ Detection (`WebExecutorBooter.resolveMode`, asynchronous: it first fetches the manifest, once per page and location), best first:
+ 
+@@ -718,6 +721,30 @@ else if (the manifest lists the  → Asyncify (streaming, no headers, larger was
+ else                             → PdfUnsupported naming both
+ ```
+ 
++### Web reader backings
++
++A reader in the worker carries one of three backings, and the mode's read path above is the
++fallback for a reader with none. The lane picks them per source when a job starts
++(`_backSources`), and the worker reads by the first that is set (`hostReadAt`):
++
++| Backing | Source | Moved how | Cost |
++|---|---|---|---|
++| **Blob** | a `BlobSource` | the `Blob` goes in the exec message (`blobs`), by reference | none; the worker reads slices with `FileReaderSync`, any size, in every mode |
++| **Bytes** | any other source whose `length` fits in what is left of the transfer budget | read whole in 64 KB bites on the main thread, then transferred as an `ArrayBuffer` (`buffers`); the caller's bytes are never the transferred buffer | its size, held in the worker |
++| **OPFS handle** | a source past the budget, in OPFS mode only | the pre-copy | disk, as before |
++
++The budget is `kTransferBytes` (16 MiB, at most half of `KEEP_BYTES`): the most source bytes
++one lane may hold as copies in its worker, its own sources and its held ones together. A
++source joins when it fits in what is left; one that does not takes the mode's path, and
++nothing is an error. The lane counts the bytes of the copies its held groups keep
++(`_heldCopies`), and the worker reports the same sum as `held` on `result`, `error` and
++`resetDone`. A copied source is a snapshot at job start. A held group may mix backings: its
++readers keep their order in the worker's reader map, and the lane's `_heldSources` holds a
++`DataSource` only for a reader with no backing. A cancel during the whole read of a source
++completes the job cancelled before its exec is posted, and a read that returns fewer bytes
++than asked fails the job. A `File` changed on disk makes `FileReaderSync` throw, which the
++host reports as an I/O error to the engine.
++
+ ### Web assets — the manifest and the parts
+ 
+ Static hosts cap each uploaded file (Cloudflare Pages and Workers: 25 MiB), not the size of
+@@ -990,7 +1017,8 @@ lib/
+     │       │                                  OPFS session and directory reclaim (part of lease.dart)
+     │       └── protocol.dart               ← message tags and codes injected into executor_worker.js
+     │
+-    ├── io/                                 ← MemorySource/MemorySink; FileSource/FileSink/PdfFile
++    ├── io/                                 ← MemorySource/MemorySink; FileSource/FileSink/PdfFile;
++    │                                          BlobSource (web)
+     ├── types/                              ← public and shared types (CancelHook, DataSource,
+     │                                          DataSink, PdfTask, PdfError, PdfConfig, ...)
+     ├── keep/                               ← trim: capabilities and the detectors (tooling only)
+diff --git a/lib/io.dart b/lib/io.dart
+index 5926190..6628677 100644
+--- a/lib/io.dart
++++ b/lib/io.dart
+@@ -11,7 +11,7 @@
+ /// This library imports `dart:io`, so it is a separate entry point from the
+ /// main `package:pdf_manipulator/pdf_manipulator.dart` library. Web builds
+ /// simply don't import it and never pull in `dart:io`. On web, back sources
+-/// and sinks with a `Blob` or in-memory bytes instead.
++/// and sinks with `BlobSource` (`package:pdf_manipulator/web.dart`) or in-memory bytes instead.
+ library;
+ 
+ export 'src/io/file_sink.dart';
+diff --git a/lib/src/io/blob_source.dart b/lib/src/io/blob_source.dart
+new file mode 100644
+index 0000000..fb73ac6
+--- /dev/null
++++ b/lib/src/io/blob_source.dart
+@@ -0,0 +1,46 @@
++import 'dart:js_interop';
++import 'dart:typed_data';
++
++import 'package:web/web.dart' as web;
++
++import '../types/data_source.dart';
++
++/// A [DataSource] backed by a browser `Blob`. Web only.
++///
++/// A `File` from a file picker or a drop is a `Blob`. The Blob goes to the
++/// lane's worker with the job, by reference and without a copy, and the
++/// worker reads the slices the engine asks for synchronously: memory stays
++/// O(1) for a file of any size, and no read crosses to the main thread.
++///
++/// ```dart
++/// import 'package:pdf_manipulator/web.dart';
++///
++/// final doc = await pdf.open(PdfInput(BlobSource(file)));
++/// ```
++///
++/// A file that changes on disk while an operation reads it fails that
++/// operation with `PdfIoFailed`; it never reads wrong bytes.
++final class BlobSource implements DataSource {
++  /// Wraps [blob] without reading it.
++  BlobSource(this.blob);
++
++  /// The wrapped Blob.
++  final web.Blob blob;
++
++  @override
++  int get length => blob.size;
++
++  /// Reads on the main thread through `Blob.slice().arrayBuffer()`. A lane
++  /// does not call it for this source; it is for reading the source yourself.
++  @override
++  Future<Uint8List> readAt(int offset, int count) async {
++    final start = offset.clamp(0, length);
++    final end = (offset + count).clamp(start, length);
++    final buffer = await blob.slice(start, end).arrayBuffer().toDart;
++    return buffer.toDart.asUint8List();
++  }
++
++  /// Holds nothing to release.
++  @override
++  void close() {}
++}
+diff --git a/lib/src/io/file_source.dart b/lib/src/io/file_source.dart
+index 05142c9..aff9c59 100644
+--- a/lib/src/io/file_source.dart
++++ b/lib/src/io/file_source.dart
+@@ -24,7 +24,7 @@ import '../types/data_source.dart';
+ ///
+ /// Web has no filesystem; this class is exported from
+ /// `package:pdf_manipulator/io.dart` (not the main library) so web builds
+-/// never pull in `dart:io`. On web, back the source with a `Blob` instead.
++/// never pull in `dart:io`. On web, use `BlobSource` from `package:pdf_manipulator/web.dart`.
+ final class FileSource implements DataSource {
+   FileSource._(this._raf, this.length);
+ 
+diff --git a/lib/src/runtime/web/host.dart b/lib/src/runtime/web/host.dart
+index 4cd917a..41f7f21 100644
+--- a/lib/src/runtime/web/host.dart
++++ b/lib/src/runtime/web/host.dart
+@@ -65,6 +65,10 @@ class WebExecutorBooter implements ExecutorBooter {
+   // FinalizationRegistry is best-effort by spec and never fires on
+   // tab close.
+ 
++  /// The source bytes a lane may hold as copies in its worker. Internal:
++  /// tests lower it to send every source down the mode's own path.
++  static int transferBudget = kTransferBytes;
++
+   /// The package-owned OPFS directory. Everything inside it is
+   /// reconciled by this host; nothing outside is ever touched.
+   static const opfsRootDir = 'pdf_manipulator_executors';
+@@ -618,6 +622,7 @@ class WebExecutor implements Executor {
+   int _lastLease = 0;
+   int _heapBytes = 0;
+   int _memBytes = 0;
++  int _heldBytes = 0;
+   bool _dead = false;
+   bool _terminated = false;
+ 
+@@ -657,6 +662,10 @@ class WebExecutor implements Executor {
+   /// A diagnostic: no decision reads it.
+   int get memBytes => _memBytes;
+ 
++  /// The bytes of source copies the worker held as of its last `result` or
++  /// `resetDone`. A diagnostic: no decision reads it.
++  int get heldBytes => _heldBytes;
++
+   /// Routes the worker's messages to the lane that holds the lease now.
+   void attach() {
+     _sub = EventStreamProviders.messageEvent.forTarget(js).listen((event) {
+diff --git a/lib/src/runtime/web/lease.dart b/lib/src/runtime/web/lease.dart
+index 66386c5..1c41b29 100644
+--- a/lib/src/runtime/web/lease.dart
++++ b/lib/src/runtime/web/lease.dart
+@@ -77,6 +77,7 @@ import 'package:web/web.dart' show EventStreamProviders;
+ 
+ import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart'
+     show WireErrorKind;
++import 'package:pdf_manipulator/src/io/blob_source.dart';
+ import 'package:pdf_manipulator/src/runtime/lane.dart';
+ import 'package:pdf_manipulator/src/runtime/web/protocol.dart';
+ import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
+@@ -169,6 +170,18 @@ class _WebJob {
+   /// Revoking it is the cancel; null once revoked.
+   String? cancelUrl;
+ 
++  /// Index-aligned with the job's sources: the Blob the worker reads in
++  /// place, or null.
++  List<web.Blob?> blobs = const [];
++
++  /// Index-aligned with the job's sources: the whole bytes of a source copied
++  /// to travel with the job, or null. A fresh buffer, never the caller's.
++  List<Uint8List?> copies = const [];
++
++  /// The sizes of [copies], read before the buffers are transferred, which
++  /// leaves them empty here.
++  List<int> copySizes = const [];
++
+   /// OPFS filenames pre-copied for this job's sources (index-aligned;
+   /// null where no pre-copy happened). Pure exec-message data — the
+   /// WORKER owns the files themselves and their deletion.
+@@ -248,7 +261,13 @@ class WebLease implements Lease, LanePhase {
+   /// (which carry no sources of their own) must serve reads from the
+   /// group's sources. Mount order mirrors the worker's reader map:
+   /// held first, own sources after.
+-  final Map<int, List<DataSource>> _heldSources = {};
++  /// A reader the worker backs itself (a Blob or a copy) holds a null: the
++  /// list stays aligned with the worker's reader map.
++  final Map<int, List<DataSource?>> _heldSources = {};
++
++  /// Held group → the bytes of the source copies it holds in the worker. Their
++  /// sum is what the transfer budget has used.
++  final Map<int, int> _heldCopies = {};
+ 
+   @override
+   String get phase {
+@@ -329,6 +348,7 @@ class WebLease implements Lease, LanePhase {
+     if (_ending || _abandoned) return;
+     final holdGroupId = token as int;
+     _heldSources.remove(holdGroupId);
++    _heldCopies.remove(holdGroupId);
+     // The worker drops the group's held readers AND deletes their OPFS
+     // files — it owns them (same agent as the open handles: no race).
+     // Every token of a handle names the same group, so a repeat is a no-op.
+@@ -353,6 +373,7 @@ class WebLease implements Lease, LanePhase {
+       _post({LaneMsgFields.type: LaneMsg.reset});
+       final mem = await answer.future;
+       _heldSources.clear();
++      _heldCopies.clear();
+       return mem;
+     } finally {
+       _reset = null;
+@@ -423,6 +444,7 @@ class WebLease implements Lease, LanePhase {
+     }
+     _queue.clear();
+     _heldSources.clear();
++    _heldCopies.clear();
+     if (!_drained.isCompleted) _drained.complete(false);
+   }
+ 
+@@ -449,7 +471,15 @@ class WebLease implements Lease, LanePhase {
+         return;
+       }
+ 
+-      // OPFS mode: sources must exist on disk before exec (workers
++      // A source the worker can back itself travels with the job; the rest
++      // take the mode's path.
++      await _backSources(entry);
++      if (_abandoned || entry.cancelled) {
++        _finish(entry, JobResult(buildCancelledResponse(), const {}));
++        return;
++      }
++
++      // OPFS mode: the other sources must exist on disk before exec (workers
+       // read them via SyncAccessHandle).
+       if (_mode == PdfIoMode.opfs) {
+         entry.opfsFiles = await _preCopySources(entry);
+@@ -472,6 +502,15 @@ class WebLease implements Lease, LanePhase {
+       if (job.holdGroupId != null) {
+         msg['holdGroupId'] = job.holdGroupId!.toJS;
+       }
++      final transfer = <JSObject>[requestJs];
++      if (entry.blobs.any((b) => b != null)) {
++        msg['blobs'] = <JSAny?>[for (final b in entry.blobs) b].toJS;
++      }
++      if (entry.copies.any((c) => c != null)) {
++        final buffers = [for (final c in entry.copies) c?.buffer.toJS];
++        msg['buffers'] = buffers.toJS;
++        transfer.addAll(buffers.nonNulls);
++      }
+       if (entry.opfsFiles.any((f) => f != null)) {
+         msg['opfsFiles'] = [for (final f in entry.opfsFiles) f?.toJS].toJS;
+       }
+@@ -490,7 +529,7 @@ class WebLease implements Lease, LanePhase {
+       }
+ 
+       entry.posted = true;
+-      _exec.js.postMessage(msg, [requestJs].toJS);
++      _exec.js.postMessage(msg, transfer.toJS);
+       // Completion arrives via _onMessage (result | error).
+     } on PdfIoFailed catch (e) {
+       _finish(
+@@ -546,6 +585,7 @@ class WebLease implements Lease, LanePhase {
+     _dead = true;
+     _exec._dead = true;
+     _heldSources.clear();
++    _heldCopies.clear();
+   }
+ 
+   // ── Inbound messages ──
+@@ -564,6 +604,8 @@ class WebLease implements Lease, LanePhase {
+         entry != null && _int(obj, LaneMsgFields.jobId) == entry.job.jobId;
+     // The engine's heap peak ranks the worker for reuse and retires it past
+     // the keep line.
++    final held = _int(obj, LaneMsgFields.heldBytes);
++    if (held != null) _exec._heldBytes = held;
+     final peak = _int(obj, LaneMsgFields.peakBytes);
+     if (peak != null) _exec._heapBytes = peak;
+     final mem = _int(obj, LaneMsgFields.memBytes);
+@@ -699,8 +741,16 @@ class WebLease implements Lease, LanePhase {
+       }
+       (_heldSources[group] ??= []).addAll([
+         for (final i in kept)
+-          if (i < entry.job.sources.length) entry.job.sources[i],
++          if (i < entry.job.sources.length)
++            entry.blobs[i] != null || entry.copies[i] != null
++                ? null
++                : entry.job.sources[i],
+       ]);
++      final copied = [
++        for (final i in kept)
++          if (i < entry.copySizes.length) entry.copySizes[i],
++      ].fold(0, (a, b) => a + b);
++      if (copied > 0) _heldCopies[group] = (_heldCopies[group] ?? 0) + copied;
+     }
+ 
+     return JobResult(bytes, holds);
+@@ -722,8 +772,8 @@ class WebLease implements Lease, LanePhase {
+     // anything past them is this job's own.
+     final holdGroupId = entry.job.holdGroupId;
+     final heldSources = holdGroupId == null
+-        ? const <DataSource>[]
+-        : _heldSources[holdGroupId] ?? const <DataSource>[];
++        ? const <DataSource?>[]
++        : _heldSources[holdGroupId] ?? const <DataSource?>[];
+ 
+     Uint8List? bytes;
+     String? error;
+@@ -832,6 +882,63 @@ class WebLease implements Lease, LanePhase {
+     // OPFS mode: fire-and-forget writes, no ack channel.
+   }
+ 
++  // ── Backings: what the worker reads without asking the page ──
++
++  /// Gives each source of the job the backing the worker reads it by: its Blob,
++  /// or a copy of its bytes while they fit in what is left of the lane's
++  /// transfer budget. A source with neither is read by the mode's own path.
++  /// The sources are read in the engine's own bites, so no read is larger than
++  /// a [DataSource] promises to serve.
++  Future<void> _backSources(_WebJob entry) async {
++    final sources = entry.job.sources;
++    entry.blobs = List<web.Blob?>.filled(sources.length, null);
++    entry.copies = List<Uint8List?>.filled(sources.length, null);
++    entry.copySizes = List<int>.filled(sources.length, 0);
++    var left =
++        math.min(WebExecutorBooter.transferBudget, kTransferBytes) -
++        _heldCopies.values.fold(0, (a, b) => a + b);
++    for (var i = 0; i < sources.length; i++) {
++      final source = sources[i];
++      if (source is BlobSource) {
++        entry.blobs[i] = source.blob;
++        continue;
++      }
++      final length = source.length;
++      if (length <= 0 || length > left) continue;
++      final copy = await _readWhole(source, entry);
++      if (copy == null) return;
++      entry.copies[i] = copy;
++      entry.copySizes[i] = length;
++      left -= length;
++    }
++  }
++
++  /// The whole of [source] in a fresh buffer, or null when the job was
++  /// cancelled meanwhile. A read that comes back short fails the job.
++  Future<Uint8List?> _readWhole(DataSource source, _WebJob entry) async {
++    final length = source.length;
++    final whole = Uint8List(length);
++    for (var offset = 0; offset < length; offset += SabLayout.maxChunk) {
++      if (_abandoned || entry.cancelled) return null;
++      final count = math.min(SabLayout.maxChunk, length - offset);
++      // Raced against the cancel wake: a parked DataSource must never make a
++      // cancelled job unkillable.
++      final chunk = await Future.any([
++        Future<Uint8List?>.value(source.readAt(offset, count)),
++        entry.cancelWake.future.then<Uint8List?>((_) => null),
++      ]);
++      if (_abandoned || entry.cancelled) return null;
++      if (chunk == null || chunk.length != count) {
++        throw PdfIoFailed(
++          'source returned ${chunk?.length ?? 0} bytes for $count at '
++          'offset $offset of $length',
++        );
++      }
++      whole.setRange(offset, offset + count, chunk);
++    }
++    return whole;
++  }
++
+   // ── OPFS pre-copy (through the worker — SyncAccessHandle is
+   //    worker-only) ──
+ 
+@@ -843,6 +950,7 @@ class WebLease implements Lease, LanePhase {
+     for (var i = 0; i < entry.job.sources.length; i++) {
+       final source = entry.job.sources[i];
+       if (source.length <= 0) continue;
++      if (entry.blobs[i] != null || entry.copies[i] != null) continue;
+       final name = 'pdf_executor_${entry.job.jobId}_${i}_${_opfsCounter++}';
+       names[i] = name;
+ 
+diff --git a/lib/src/runtime/web/protocol.dart b/lib/src/runtime/web/protocol.dart
+index 8c0ca49..3e48a5f 100644
+--- a/lib/src/runtime/web/protocol.dart
++++ b/lib/src/runtime/web/protocol.dart
+@@ -173,6 +173,11 @@ abstract final class LaneMsgFields {
+   /// or retired by.
+   static const peakBytes = 'peak';
+ 
++  /// Worker → Dart, on `result` and `resetDone`: the bytes of the readers that
++  /// are backed by a copy of their source in the worker. A diagnostic: the
++  /// lane counts the budget itself.
++  static const heldBytes = 'held';
++
+   /// Worker → Dart, on `resetDone`: the names of the pre-copy files the
+   /// worker set aside because the browser never answered their handle
+   /// creation, and has not removed yet. A file leaves the list when its
+@@ -200,6 +205,12 @@ const kCreateHandleWait = Duration(seconds: 5);
+ /// each unwind and fails the job on an overflow.
+ const kAsyncifyStackBytes = 4 * 1024 * 1024;
+ 
++/// The most source bytes one lane may hold as copies in its worker, its own
++/// sources and its held ones together: a source whose bytes fit in what is
++/// left is read whole on the main thread and transferred with its job. Half of
++/// the pool's keep line, so the copies never decide that a worker is retired.
++const kTransferBytes = 16 * 1024 * 1024;
++
+ /// The protocol object injected into the worker's init message.
+ /// Keys are stable API for executor_worker.js.
+ Map<String, int> laneProtocolCodes() => {
+diff --git a/lib/src/types/data_source.dart b/lib/src/types/data_source.dart
+index a7bd1e6..ed6b443 100644
+--- a/lib/src/types/data_source.dart
++++ b/lib/src/types/data_source.dart
+@@ -15,6 +15,11 @@ import 'dart:typed_data';
+ /// Implement with your backing store: file (pread), memory
+ /// (sublistView), HTTP (Range header), IndexedDB, web Blob.slice.
+ ///
++/// A source must stay readable while a handle opened from it is live: a
++/// document or an editor reads it again for as long as it is open. On web a
++/// source of up to 16 MiB per lane is copied once into the worker when the job
++/// starts, and that copy is what the job reads.
++///
+ /// Whoever obtained a source closes it. The library never closes a source
+ /// it was passed.
+ abstract interface class DataSource {
+diff --git a/lib/web.dart b/lib/web.dart
+new file mode 100644
+index 0000000..9482326
+--- /dev/null
++++ b/lib/web.dart
+@@ -0,0 +1,15 @@
++/// Browser-backed `DataSource` helpers for web.
++///
++/// ```dart
++/// import 'package:pdf_manipulator/pdf_manipulator.dart';
++/// import 'package:pdf_manipulator/web.dart';
++///
++/// final input = PdfInput(BlobSource(file));
++/// ```
++///
++/// This library imports `dart:js_interop`, so it is a separate entry point
++/// from the main `package:pdf_manipulator/pdf_manipulator.dart` library, as
++/// `io.dart` is for `dart:io`. Native builds simply don't import it.
++library;
++
++export 'src/io/blob_source.dart';
+diff --git a/test/guards/barrel_exports_test.dart b/test/guards/barrel_exports_test.dart
+index 35540fc..edec6f3 100644
+--- a/test/guards/barrel_exports_test.dart
++++ b/test/guards/barrel_exports_test.dart
+@@ -185,6 +185,12 @@ const _io = <String>[
+   'PdfFile',
+ ];
+ 
++/// Names `package:pdf_manipulator/web.dart` exports.
++const _web = <String>[
++  // src/io/blob_source.dart
++  'BlobSource',
++];
++
+ /// The public names [barrel] (a path under lib) exports, sorted.
+ Future<List<String>> exportedNames(
+   AnalysisContextCollection analysis,
+@@ -227,6 +233,7 @@ void main() {
+   for (final (barrel, approved) in [
+     ('pdf_manipulator.dart', _pdfManipulator),
+     ('io.dart', _io),
++    ('web.dart', _web),
+   ]) {
+     test('$barrel exports exactly the approved names', () async {
+       final actual = await exportedNames(analysis, barrel);
+@@ -243,6 +250,7 @@ void main() {
+   test('the lists hold no duplicate', () {
+     expect(_pdfManipulator.toSet(), hasLength(_pdfManipulator.length));
+     expect(_io.toSet(), hasLength(_io.length));
++    expect(_web.toSet(), hasLength(_web.length));
+   });
+ 
+   group('difference', () {
+diff --git a/test/ops/platform/web/web_backing_battery.dart b/test/ops/platform/web/web_backing_battery.dart
+new file mode 100644
+index 0000000..8df0a7d
+--- /dev/null
++++ b/test/ops/platform/web/web_backing_battery.dart
+@@ -0,0 +1,532 @@
++// Web-only: the backing of a reader in the worker. A BlobSource is read in
++// the worker with no main-thread read; a small source of any other kind is
++// copied into the worker once; a source past the lane's transfer budget takes
++// the mode's own path.
++//
++// Every main-thread move is observed from outside: a spy on
++// Worker.postMessage records each message sent to a worker (and the shape of
++// each exec), Blob.prototype.arrayBuffer counts the main-thread reads of a
++// Blob, and a listener on the worker counts the reads it asked for.
++
++import 'dart:async';
++import 'dart:convert';
++import 'dart:js_interop';
++import 'dart:js_interop_unsafe';
++import 'dart:typed_data';
++
++import 'package:pdf_manipulator/pdf_manipulator.dart';
++import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart' as bin;
++import 'package:pdf_manipulator/src/bridge/protocol/codec.dart' as codec;
++import 'package:pdf_manipulator/src/runtime/lane.dart';
++import 'package:pdf_manipulator/src/runtime/web/lease.dart';
++import 'package:pdf_manipulator/src/runtime/web/protocol.dart';
++import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
++import 'package:pdf_manipulator/web.dart';
++import 'package:test/test.dart';
++import 'package:web/web.dart' as web;
++import 'package:web/web.dart' show EventStreamProviders;
++
++import '../../../fixtures/generated/fixtures.dart';
++import '../../../fixtures/handwritten.dart';
++import '../../../harness/slow_source.dart';
++import '../../../harness/test_source_sink.dart';
++import '../../../harness/timeouts.dart';
++import '../../../harness/worker_prelude.dart';
++
++Uint8List _open(int sourceLength) =>
++    bin.encodeRequest('open', {'sourceLength': sourceLength, 'password': null});
++
++Uint8List _info(int handle) => bin.encodeRequest('pageInfo', {
++  'handleId': handle,
++  'pageIndices': [0],
++});
++
++bool _ok(Uint8List bytes) => bytes.isNotEmpty && bytes[0] == 1;
++
++/// The error a failed response carries.
++Object? _failure(Uint8List bytes) {
++  try {
++    bin.decodeResponse(bytes);
++    return null;
++  } catch (e) {
++    return e;
++  }
++}
++
++/// Spy on the page: every message posted to a worker by type, the shape of
++/// every exec (one character per source: 1 when that source has a copy, a
++/// Blob, or a pre-copy file), and the main-thread reads of a Blob.
++const _spySource = r'''
++(function () {
++  const spy = { sent: {}, execs: [], blobReads: 0, onExec: null };
++  const flags = (list) => (list ? Array.from(list, (x) => (x != null ? '1' : '0')).join('') : '');
++  const post = Worker.prototype.postMessage;
++  Worker.prototype.postMessage = function (m, ...rest) {
++    if (m && m.type) {
++      spy.sent[m.type] = (spy.sent[m.type] || 0) + 1;
++      if (m.type === 'exec') {
++        const n = m.sourceLengths.length;
++        const pad = (s) => (s.length ? s : '0'.repeat(n));
++        spy.execs.push({
++          buffers: pad(flags(m.buffers)),
++          blobs: pad(flags(m.blobs)),
++          opfsFiles: pad(flags(m.opfsFiles)),
++        });
++        if (spy.onExec) spy.onExec();
++      }
++    }
++    return post.call(this, m, ...rest);
++  };
++  const arrayBuffer = Blob.prototype.arrayBuffer;
++  Blob.prototype.arrayBuffer = function () {
++    spy.blobReads++;
++    return arrayBuffer.call(this);
++  };
++  spy.field = (name) => JSON.stringify(spy.execs.map((e) => e[name]));
++  globalThis.__backingSpy = spy;
++  return () => {
++    Worker.prototype.postMessage = post;
++    Blob.prototype.arrayBuffer = arrayBuffer;
++    delete globalThis.__backingSpy;
++  };
++})()
++''';
++
++class _Spy {
++  _Spy._(this._restore);
++
++  final JSFunction _restore;
++
++  static _Spy install() => _Spy._(
++    globalContext.callMethod<JSFunction>('eval'.toJS, _spySource.toJS),
++  );
++
++  JSObject get _spy => globalContext['__backingSpy']! as JSObject;
++
++  int sent(String type) {
++    final counts = _spy['sent']! as JSObject;
++    return (counts[type] as JSNumber?)?.toDartInt ?? 0;
++  }
++
++  int get blobReads => (_spy['blobReads']! as JSNumber).toDartInt;
++
++  /// The `buffers`, `blobs` or `opfsFiles` shape of each exec posted so far.
++  List<String> shapes(String field) => [
++    for (final s
++        in jsonDecode(
++              (_spy.callMethod<JSString>('field'.toJS, field.toJS)).toDart,
++            )
++            as List<dynamic>)
++      s as String,
++  ];
++
++  set onExec(void Function() callback) => _spy['onExec'] = callback.toJS;
++
++  void restore() => _restore.callAsFunction();
++}
++
++/// Counts the reads a worker asks the page for.
++class _Reads {
++  _Reads(WebExecutor executor) {
++    _sub = EventStreamProviders.messageEvent.forTarget(executor.js).listen((e) {
++      final m = e.data as JSObject?;
++      if (m != null && (m['type'] as JSString?)?.toDart == 'readAt') count++;
++    });
++  }
++
++  int count = 0;
++  late final StreamSubscription<web.MessageEvent> _sub;
++
++  Future<void> close() => _sub.cancel();
++}
++
++Future<int> _opfsFileCount(String workerDir) async {
++  try {
++    final root = await web.window.navigator.storage.getDirectory().toDart;
++    final ours = await root
++        .getDirectoryHandle(WebExecutorBooter.opfsRootDir)
++        .toDart;
++    final session = await ours
++        .getDirectoryHandle(WebExecutorBooter.opfsSessionId)
++        .toDart;
++    final dir = await session.getDirectoryHandle(workerDir).toDart;
++    final iter = (dir as JSObject).callMethod<JSObject>('keys'.toJS);
++    var count = 0;
++    while (true) {
++      final next = await iter
++          .callMethod<JSPromise<JSObject>>('next'.toJS)
++          .toDart;
++      if ((next['done']! as JSBoolean).toDart) break;
++      count++;
++    }
++    return count;
++  } catch (_) {
++    return 0; // the worker never made its directory
++  }
++}
++
++BlobSource _blobOf(Uint8List bytes) => BlobSource(
++  web.Blob(
++    [Uint8List.fromList(bytes).toJS].toJS,
++    web.BlobPropertyBag(type: 'application/pdf'),
++  ),
++);
++
++/// A worker whose synchronous Blob reads throw between `armBlob` and
++/// `disarmBlob`, as those of a File that changed on disk do. The engine
++/// retries a failed read, so the fault lasts.
++const _failsBlobRead = r"""
++const read = FileReaderSync.prototype.readAsArrayBuffer;
++let armed = false;
++self.addEventListener('message', (e) => {
++  const type = e.data && e.data.type;
++  if (type === 'armBlob' || type === 'disarmBlob') {
++    armed = type === 'armBlob';
++    e.stopImmediatePropagation();
++  }
++});
++FileReaderSync.prototype.readAsArrayBuffer = function (...args) {
++  if (armed) {
++    throw new DOMException('The requested file could not be read', 'NotReadableError');
++  }
++  return read.apply(this, args);
++};
++""";
++
++void registerWebBackingTests({
++  required String Function() workerUrl,
++  required PdfIoMode mode,
++}) {
++  group('web reader backings (${mode.name})', () {
++    late WebExecutorBooter host;
++    late _Spy spy;
++
++    setUp(() {
++      host = WebExecutorBooter(laneWorkerUrl: workerUrl(), forceMode: mode);
++      spy = _Spy.install();
++    });
++
++    tearDown(() {
++      spy.restore();
++      WebExecutorBooter.transferBudget = kTransferBytes;
++    });
++
++    test('a BlobSource opens and reads with no main-thread read and no '
++        'pre-copy file', () async {
++      final executor = await host.boot() as WebExecutor;
++      addTearDown(executor.terminate);
++      final reads = _Reads(executor);
++      addTearDown(reads.close);
++      final lane = executor.beginLane() as WebLease;
++
++      final source = _blobOf(randomStreamPdf(300 * 1024));
++      final opened = await lane.submit(
++        Job(
++          jobId: 1,
++          request: _open(source.length),
++          sources: [source],
++          sinks: const [],
++          keepSources: const {0},
++        ),
++      );
++      expect(_ok(opened.bytes), isTrue, reason: '${_failure(opened.bytes)}');
++      final handle = peekResponseHandleId(opened.bytes)!;
++      final info = await lane.submit(
++        Job(
++          jobId: 2,
++          request: _info(handle),
++          sources: const [],
++          sinks: const [],
++          keepSources: const {},
++          holdGroupId: 1,
++        ),
++      );
++      expect(_ok(info.bytes), isTrue, reason: '${_failure(info.bytes)}');
++
++      expect(spy.shapes('blobs').first, '1');
++      expect(spy.shapes('buffers').first, '0');
++      expect(spy.shapes('opfsFiles').first, '0');
++      expect(reads.count, 0, reason: 'the worker asked the page for a read');
++      expect(spy.blobReads, 0, reason: 'a Blob was read on the main thread');
++      expect(spy.sent('opfsWrite'), 0, reason: 'a pre-copy was written');
++      expect(spy.sent('readAtResult'), 0);
++      if (mode == PdfIoMode.opfs) {
++        expect(await _opfsFileCount(executor.opfsDir!), 0);
++      }
++      expect(executor.heldBytes, 0, reason: 'a Blob backing holds nothing');
++    }, timeout: t(20));
++
++    test('a MemorySource under the budget is copied once: no pre-copy, no '
++        'read during the op, the caller\'s bytes intact', () async {
++      final executor = await host.boot() as WebExecutor;
++      addTearDown(executor.terminate);
++      final reads = _Reads(executor);
++      addTearDown(reads.close);
++      final lane = executor.beginLane() as WebLease;
++
++      var execPosted = false;
++      var readsBefore = 0;
++      var readsDuring = 0;
++      spy.onExec = () => execPosted = true;
++      final counted = TestSource(
++        randomStreamPdf(200 * 1024),
++        onRead: (_, _) => execPosted ? readsDuring++ : readsBefore++,
++      );
++      final first = await lane.submit(
++        Job(
++          jobId: 1,
++          request: _open(counted.length),
++          sources: [counted],
++          sinks: const [],
++          keepSources: const {0},
++        ),
++      );
++      expect(_ok(first.bytes), isTrue, reason: '${_failure(first.bytes)}');
++      final handle = peekResponseHandleId(first.bytes)!;
++      final info = await lane.submit(
++        Job(
++          jobId: 2,
++          request: _info(handle),
++          sources: const [],
++          sinks: const [],
++          keepSources: const {},
++          holdGroupId: 1,
++        ),
++      );
++      expect(_ok(info.bytes), isTrue, reason: '${_failure(info.bytes)}');
++      expect(readsBefore, greaterThan(0), reason: 'the source was read whole');
++      expect(readsDuring, 0, reason: 'the op read the source on the page');
++      expect(reads.count, 0);
++      expect(spy.shapes('buffers').first, '1');
++      expect(spy.sent('opfsWrite'), 0);
++      if (mode == PdfIoMode.opfs) {
++        expect(await _opfsFileCount(executor.opfsDir!), 0);
++      }
++      expect(executor.heldBytes, counted.length);
++
++      final bytes = randomStreamPdf(100 * 1024);
++      final size = bytes.length;
++      final first0 = bytes[0];
++      final second = await lane.submit(
++        Job(
++          jobId: 3,
++          request: _open(size),
++          sources: [MemorySource(bytes)],
++          sinks: const [],
++          keepSources: const {},
++        ),
++      );
++      expect(_ok(second.bytes), isTrue, reason: '${_failure(second.bytes)}');
++      expect(bytes.length, size, reason: 'the caller\'s buffer was detached');
++      expect(bytes[0], first0);
++    }, timeout: t(20));
++
++    test('held equals the sizes transferred while a document lives, and is '
++        'zero after its release and after a reset', () async {
++      final executor = await host.boot() as WebExecutor;
++      addTearDown(executor.terminate);
++      final lane = executor.beginLane() as WebLease;
++
++      final a = src(randomStreamPdf(70 * 1024));
++      final b = src(randomStreamPdf(90 * 1024));
++      final openedA = await lane.submit(
++        Job(
++          jobId: 1,
++          request: _open(a.length),
++          sources: [a],
++          sinks: const [],
++          keepSources: const {0},
++        ),
++      );
++      expect(_ok(openedA.bytes), isTrue);
++      expect(executor.heldBytes, a.length);
++      final openedB = await lane.submit(
++        Job(
++          jobId: 2,
++          request: _open(b.length),
++          sources: [b],
++          sinks: const [],
++          keepSources: const {0},
++        ),
++      );
++      expect(_ok(openedB.bytes), isTrue);
++      expect(executor.heldBytes, a.length + b.length);
++
++      // A source that is not kept joins a job and leaves with it.
++      final scratch = src(minimalPdf);
++      final third = await lane.submit(
++        Job(
++          jobId: 3,
++          request: _open(scratch.length),
++          sources: [scratch],
++          sinks: const [],
++          keepSources: const {},
++        ),
++      );
++      expect(_ok(third.bytes), isTrue);
++      expect(executor.heldBytes, a.length + b.length);
++
++      lane.releaseHold(openedA.holds.values.first);
++      final fourth = await lane.submit(
++        Job(
++          jobId: 4,
++          request: _open(scratch.length),
++          sources: [scratch],
++          sinks: const [],
++          keepSources: const {},
++        ),
++      );
++      expect(_ok(fourth.bytes), isTrue);
++      expect(executor.heldBytes, b.length, reason: 'after A\'s release');
++
++      await lane.reset();
++      expect(executor.heldBytes, 0, reason: 'after a reset');
++    }, timeout: t(20));
++
++    test('a cancel during the whole read of a slow source completes the job '
++        'cancelled without posting it', () async {
++      final executor = await host.boot() as WebExecutor;
++      addTearDown(executor.terminate);
++      final lane = executor.beginLane() as WebLease;
++
++      final slow = SlowSource(minimalPdf);
++      final running = lane.submit(
++        Job(
++          jobId: 1,
++          request: _open(slow.length),
++          sources: [slow],
++          sinks: const [],
++          keepSources: const {},
++        ),
++      );
++      await slow.firstRead;
++      lane.cancelJob(1);
++      expect((await running).bytes, buildCancelledResponse());
++      slow.release();
++      await Future<void>.delayed(const Duration(milliseconds: 100));
++      expect(spy.sent('exec'), 0, reason: 'the cancelled job was posted');
++      expect(spy.sent('opfsWrite'), 0);
++
++      // The lane serves the next job.
++      final next = src(minimalPdf);
++      final opened = await lane.submit(
++        Job(
++          jobId: 2,
++          request: _open(next.length),
++          sources: [next],
++          sinks: const [],
++          keepSources: const {},
++        ),
++      );
++      expect(_ok(opened.bytes), isTrue);
++    }, timeout: t(20));
++
++    test('a BlobSource whose Blob fails to read fails the op with the I/O '
++        'error', () async {
++      final executor =
++          await withWorkerPrelude(_failsBlobRead, host.boot) as WebExecutor;
++      addTearDown(executor.terminate);
++      final lane = executor.beginLane() as WebLease;
++
++      final source = _blobOf(fThousandPage);
++      final opened = await lane.submit(
++        Job(
++          jobId: 1,
++          request: bin.encodeRequest('editorOpen', {
++            'sourceLength': source.length,
++            'password': null,
++          }),
++          sources: [source],
++          sinks: const [],
++          keepSources: const {0},
++        ),
++      );
++      expect(_ok(opened.bytes), isTrue, reason: '${_failure(opened.bytes)}');
++      final handle = peekResponseHandleId(opened.bytes)!;
++      Job save(int jobId) => Job(
++        jobId: jobId,
++        request: bin.encodeRequest('editorSave', {
++          'handleId': handle,
++          ...codec.encodeSaveArgs(const PdfSave.full()),
++        }),
++        sources: const [],
++        sinks: [TestSink()],
++        keepSources: const {},
++        holdGroupId: 1,
++      );
++
++      executor.js.postMessage(
++        JSObject()
++          ..['type'] = 'armBlob'.toJS
++          ..['lease'] = lane.lease.toJS,
++      );
++      final failed = await lane.submit(save(2));
++      expect(_ok(failed.bytes), isFalse);
++      expect(_failure(failed.bytes), isA<PdfIoFailed>());
++
++      // The File is readable again: the document saves on the next job.
++      executor.js.postMessage(
++        JSObject()
++          ..['type'] = 'disarmBlob'.toJS
++          ..['lease'] = lane.lease.toJS,
++      );
++      final again = await lane.submit(save(3));
++      expect(_ok(again.bytes), isTrue, reason: '${_failure(again.bytes)}');
++    }, timeout: t(20));
++
++    test(
++      'a merge of more inputs than the budget holds transfers the first '
++      'and sends the rest down the mode\'s path, to the same output',
++      () async {
++        final pdf = Pdf(
++          config: PdfConfig(webWorkerUrl: workerUrl(), webIoMode: mode),
++        );
++        addTearDown(pdf.dispose);
++        final bytes = randomStreamPdf(1024 * 1024);
++        final fit = kTransferBytes ~/ bytes.length;
++        const inputs = 20;
++        expect(fit, lessThan(inputs), reason: 'the fixture must overfill');
++
++        Future<Uint8List> merged() async {
++          final out = MemorySink();
++          await pdf.merge([
++            for (var i = 0; i < inputs; i++) PdfInput(MemorySource(bytes)),
++          ], out);
++          return out.takeBytes();
++        }
++
++        List<String> shape(String field) => [
++          for (final s in spy.shapes(field))
++            if (s.isNotEmpty) s,
++        ];
++
++        final today = await merged();
++        final copied = shape('buffers').join();
++        expect(copied.length, inputs);
++        expect(
++          copied,
++          '1' * fit + '0' * (inputs - fit),
++          reason: 'the sources that fit in what was left were transferred',
++        );
++        if (mode == PdfIoMode.opfs) {
++          expect(
++            shape('opfsFiles').join(),
++            '0' * fit + '1' * (inputs - fit),
++            reason: 'only the sources past the budget were pre-copied',
++          );
++        }
++
++        WebExecutorBooter.transferBudget = 0;
++        final before = shape('buffers').join().length;
++        final fallback = await merged();
++        expect(
++          shape('buffers').join().substring(before),
++          '0' * inputs,
++          reason: 'a budget of zero sends every source down the mode\'s path',
++        );
++        expect(today, fallback);
++      },
++      timeout: t(120),
++    );
++  });
++}
+diff --git a/test/ops/runners/web_asyncify_runner_test.dart b/test/ops/runners/web_asyncify_runner_test.dart
+index 888ab5b..64dcf0d 100644
+--- a/test/ops/runners/web_asyncify_runner_test.dart
++++ b/test/ops/runners/web_asyncify_runner_test.dart
+@@ -40,6 +40,7 @@ import '../stress/pdf_instance_stress_battery.dart';
+ import '../platform/web/web_asyncify_assets_battery.dart';
+ import '../platform/web/web_wasm_parts_battery.dart';
+ import '../platform/web/web_cancel_channel_battery.dart';
++import '../platform/web/web_backing_battery.dart';
+ import '../platform/web/web_lane_protocol_battery.dart';
+ import '../platform/web/web_runtime_battery.dart';
+ import '../../harness/timeouts.dart';
+@@ -146,6 +147,12 @@ void main() {
+     mode: PdfIoMode.asyncify,
+   );
+ 
++  registerWebBackingTests(
++    workerUrl: () =>
++        'http://localhost:$serverPort/web_assets/executor_worker.js',
++    mode: PdfIoMode.asyncify,
++  );
++
+   registerWebAsyncifyAssetTests(
+     workerUrl: () =>
+         'http://localhost:$serverPort/web_assets/executor_worker.js',
+diff --git a/test/ops/runners/web_atomics_runner_test.dart b/test/ops/runners/web_atomics_runner_test.dart
+index 68bf971..d6b7ff3 100644
+--- a/test/ops/runners/web_atomics_runner_test.dart
++++ b/test/ops/runners/web_atomics_runner_test.dart
+@@ -39,6 +39,7 @@ import '../stress/pdf_builder_stress_battery.dart';
+ import '../stress/pdf_instance_stress_battery.dart';
+ import '../platform/web/web_asyncify_assets_battery.dart';
+ import '../platform/web/web_wasm_parts_battery.dart';
++import '../platform/web/web_backing_battery.dart';
+ import '../platform/web/web_lane_protocol_battery.dart';
+ import '../platform/web/web_runtime_battery.dart';
+ import '../../harness/timeouts.dart';
+@@ -144,6 +145,12 @@ void main() {
+     mode: PdfIoMode.atomics,
+   );
+ 
++  registerWebBackingTests(
++    workerUrl: () =>
++        'http://localhost:$serverPort/web_assets/executor_worker.js',
++    mode: PdfIoMode.atomics,
++  );
++
+   registerWebAsyncifyAssetTests(
+     workerUrl: () =>
+         'http://localhost:$serverPort/web_assets/executor_worker.js',
+diff --git a/test/ops/runners/web_io_measure_test.dart b/test/ops/runners/web_io_measure_test.dart
+index 0ed270e..b824c19 100644
+--- a/test/ops/runners/web_io_measure_test.dart
++++ b/test/ops/runners/web_io_measure_test.dart
+@@ -10,8 +10,13 @@
+ // MEASURE_MODES lists jspi, atomics, opfs, asyncify joined by `+` (default all
+ // four; `dart test` splits --dart2js-args at a comma, so only `+` gets
+ // through); each runs twice, alternating. A mode the platform cannot run is
+-// skipped. MEASURE_SOURCE is `memory` (default: an in-memory source) or `blob`
+-// (a browser Blob built from the same bytes, read with Blob.slice).
++// skipped. MEASURE_SOURCE is `memory` (default: an in-memory source), `blob`
++// (a browser Blob built from the same bytes, read on the main thread with
++// Blob.slice) or `blobsource` (the same Blob as a BlobSource, which the worker
++// reads in place).
++//
++// -DMEASURE_COPY=true times the main-thread copy of a MemorySource into the
++// buffer a job transfers, at 1, 4 and 16 MiB.
+ //
+ // Each line is `MEASURE mode source bytes open+extract merge reads ...`. The
+ // PDF is built once in memory, as uncompressed text pages, so extraction does
+@@ -26,6 +31,7 @@ import 'dart:js_interop';
+ import 'dart:typed_data';
+ 
+ import 'package:pdf_manipulator/pdf_manipulator.dart';
++import 'package:pdf_manipulator/web.dart';
+ import 'package:test/test.dart';
+ import 'package:web/web.dart' as web;
+ 
+@@ -40,10 +46,11 @@ const _sourceKind = String.fromEnvironment(
+   'MEASURE_SOURCE',
+   defaultValue: 'memory',
+ );
++const _measureCopy = bool.fromEnvironment('MEASURE_COPY');
+ const _extractPages = 50;
+ 
+ /// A [DataSource] over a browser `Blob`: each read is `Blob.slice` then
+-/// `arrayBuffer`. The package has no Blob source of its own.
++/// `arrayBuffer`, on the main thread, as a Blob source read before BlobSource.
+ class _BlobSource implements DataSource {
+   _BlobSource(this._blob, {required this.onRead});
+ 
+@@ -161,7 +168,7 @@ void main() {
+     for (final name in _modeList.split(RegExp('[,+]')))
+       PdfIoMode.values.singleWhere((m) => m.name == name.trim()),
+   ];
+-  assert(_sourceKind == 'memory' || _sourceKind == 'blob');
++  assert(const {'memory', 'blob', 'blobsource'}.contains(_sourceKind));
+ 
+   // Each mode twice, alternating, so a warm-up shows as the first pair.
+   for (final mode in [...modes, ...modes]) {
+@@ -170,9 +177,11 @@ void main() {
+       '$_megabytes MB PDF',
+       () async {
+         var reads = 0;
+-        DataSource source() => _sourceKind == 'blob'
+-            ? _BlobSource(blob, onRead: () => reads++)
+-            : TestSource(big, onRead: (_, _) => reads++);
++        DataSource source() => switch (_sourceKind) {
++          'blob' => _BlobSource(blob, onRead: () => reads++),
++          'blobsource' => BlobSource(blob),
++          _ => TestSource(big, onRead: (_, _) => reads++),
++        };
+ 
+         final pdf = Pdf(
+           config: PdfConfig(webWorkerUrl: workerUrl, webIoMode: mode),
+@@ -216,4 +225,29 @@ void main() {
+       skip: _megabytes == 0 ? 'pass --dart2js-args=-DMEASURE_MB=<size>' : false,
+     );
+   }
++
++  // The lane's whole read of a MemorySource (_readWhole): 64 KB bites into
++  // one fresh buffer. The transfer that follows moves no bytes.
++  for (final mib in [1, 4, 16]) {
++    test('copy of a MemorySource of $mib MiB', () {
++      final source = MemorySource(Uint8List(mib * 1024 * 1024));
++      const bite = 65536;
++      double once() {
++        final clock = Stopwatch()..start();
++        final whole = Uint8List(source.length);
++        for (var at = 0; at < source.length; at += bite) {
++          whole.setRange(at, at + bite, source.readAt(at, bite));
++        }
++        return clock.elapsedMicroseconds / 1000;
++      }
++
++      once();
++      final runs = [for (var i = 0; i < 20; i++) once()]..sort();
++      final median = runs[runs.length ~/ 2];
++      print(
++        'MEASURE copy mib=$mib median=${median.toStringAsFixed(2)}ms '
++        'per-mib=${(median / mib).toStringAsFixed(2)}ms',
++      );
++    }, skip: _measureCopy ? false : 'pass --dart2js-args=-DMEASURE_COPY=true');
++  }
+ }
+diff --git a/test/ops/runners/web_jspi_runner_test.dart b/test/ops/runners/web_jspi_runner_test.dart
+index 669b4b2..2ac5580 100644
+--- a/test/ops/runners/web_jspi_runner_test.dart
++++ b/test/ops/runners/web_jspi_runner_test.dart
+@@ -40,6 +40,7 @@ import '../stress/pdf_instance_stress_battery.dart';
+ import '../platform/web/web_asyncify_assets_battery.dart';
+ import '../platform/web/web_wasm_parts_battery.dart';
+ import '../platform/web/web_cancel_channel_battery.dart';
++import '../platform/web/web_backing_battery.dart';
+ import '../platform/web/web_lane_protocol_battery.dart';
+ import '../platform/web/web_runtime_battery.dart';
+ import '../../harness/timeouts.dart';
+@@ -146,6 +147,12 @@ void main() {
+     mode: PdfIoMode.jspi,
+   );
+ 
++  registerWebBackingTests(
++    workerUrl: () =>
++        'http://localhost:$serverPort/web_assets/executor_worker.js',
++    mode: PdfIoMode.jspi,
++  );
++
+   registerWebAsyncifyAssetTests(
+     workerUrl: () =>
+         'http://localhost:$serverPort/web_assets/executor_worker.js',
+diff --git a/test/ops/runners/web_opfs_runner_test.dart b/test/ops/runners/web_opfs_runner_test.dart
+index b4b6a3a..99801b1 100644
+--- a/test/ops/runners/web_opfs_runner_test.dart
++++ b/test/ops/runners/web_opfs_runner_test.dart
+@@ -40,6 +40,7 @@ import '../stress/pdf_instance_stress_battery.dart';
+ import '../platform/web/web_asyncify_assets_battery.dart';
+ import '../platform/web/web_wasm_parts_battery.dart';
+ import '../platform/web/web_cancel_channel_battery.dart';
++import '../platform/web/web_backing_battery.dart';
+ import '../platform/web/web_lane_protocol_battery.dart';
+ import '../platform/web/web_runtime_battery.dart';
+ import '../../harness/timeouts.dart';
+@@ -152,6 +153,12 @@ void main() {
+     mode: PdfIoMode.opfs,
+   );
+ 
++  registerWebBackingTests(
++    workerUrl: () =>
++        'http://localhost:$serverPort/web_assets/executor_worker.js',
++    mode: PdfIoMode.opfs,
++  );
++
+   registerWebAsyncifyAssetTests(
+     workerUrl: () =>
+         'http://localhost:$serverPort/web_assets/executor_worker.js',
+diff --git a/test/runtime/transfer_budget_test.dart b/test/runtime/transfer_budget_test.dart
+new file mode 100644
+index 0000000..42060ad
+--- /dev/null
++++ b/test/runtime/transfer_budget_test.dart
+@@ -0,0 +1,14 @@
++// The transfer budget is a share of the keep line: copies of source bytes
++// in a worker must never be what retires it.
++
++import 'package:pdf_manipulator/src/runtime/pool.dart' show kKeepBytes;
++import 'package:pdf_manipulator/src/runtime/web/protocol.dart'
++    show kTransferBytes;
++import 'package:test/test.dart';
++
++void main() {
++  test('the transfer budget is at most half the keep line', () {
++    expect(kTransferBytes, lessThanOrEqualTo(kKeepBytes ~/ 2));
++    expect(kTransferBytes, greaterThan(0));
++  });
++}
+diff --git a/web_assets/executor_worker.js b/web_assets/executor_worker.js
+index 8daf30c..e76cbdc 100644
+--- a/web_assets/executor_worker.js
++++ b/web_assets/executor_worker.js
+@@ -28,22 +28,27 @@
+ //                   worker compiles from it when the host sent no wasmModule)
+ //   exec         { lease, jobId, requestBytes, sourceLengths: number[],
+ //                  sinkCount, keepSources: number[], holdGroupId?,
+-//                  opfsFiles: (string|null)[], sab?, writeSab?,
++//                  opfsFiles: (string|null)[], blobs?: (Blob|null)[],
++//                  buffers?: (ArrayBuffer|null)[], sab?, writeSab?,
+ //                  cancelSab?, cancelUrl? }
++//                  (blobs: a source read in place with FileReaderSync; buffers:
++//                   a source copied whole and transferred with the job; a
++//                   source in neither is read by the mode, or from opfsFiles)
+ //                  (cancelSab: the job's cancel word, where the page has
+ //                   SharedArrayBuffer; cancelUrl: otherwise, a blob URL the
+ //                   main thread revokes to cancel, polled by sync XHR)
+-//                → result { lease, jobId, data, mem, peak }
+-//                | error { lease, jobId, message, trap?, protocol?, mem, peak }
++//                → result { lease, jobId, data, mem, peak, held }
++//                | error { lease, jobId, message, trap?, protocol?, mem, peak, held }
+ //                  (trap: the wasm instance trapped; the lane must end;
+ //                   protocol: the exec was refused because the worker was
+ //                   busy with another exec or a reset, or not serving its
+ //                   lease, and never started)
+-//   reset        { lease } → resetDone { lease, mem, peak } | error { lease,
++//   reset        { lease } → resetDone { lease, mem, peak, held } | error { lease,
+ //                  message, protocol? }: a fresh engine state in this
+ //                  worker, same wasm instance. Refused while busy.
+ //                  (peak: the most bytes the engine's heap held since the
+-//                   last reset, which the host keeps an executor by; mem:
++//                   last reset, which the host keeps an executor by; held: the
++//                   bytes of the readers backed by a copy of their source; mem:
+ //                   the linear memory's size, a diagnostic that never falls;
+ //                   abandoned: the pre-copy files set aside because their
+ //                   handle creation never answered, not removed yet)
+@@ -68,6 +73,8 @@
+ //              at host_read_at / host_write_chunk, the worker awaits the
+ //              answer and rewinds; the messages are JSPI's
+ //   opfs     — sources pre-copied to OPFS; reads via SyncAccessHandle
++// In every mode a reader backed by a Blob or a transferred copy reads in the
++// worker and never reaches the mode's path.
+ //
+ // Terminating the worker is worker.terminate() from Dart — this file never sees it.
+ 
+@@ -95,7 +102,10 @@ let wasmBaseUrl = (() => {
+ // (holdGroupId); this registry just stores and looks up.
+ // ═══════════════════════════════════════════════════════════════════
+ 
+-const readers = new Map();   // readerId → {length, opfsHandle, opfsFile, holdGroupId|null}
++// A reader has at most one backing, and the mode's read path serves a reader
++// with none: `blob` (read in place with FileReaderSync), `bytes` (a copy of the
++// source, transferred with the job) or `opfsHandle` (the pre-copy).
++const readers = new Map();   // readerId → {length, blob, bytes, opfsHandle, opfsFile, holdGroupId|null}
+ let nextReaderId = 1;
+ 
+ // ═══════════════════════════════════════════════════════════════════
+@@ -202,6 +212,8 @@ function hostReadAt(sourceIndex, offset, count, bufPtr) {
+   const toRead = Math.min(count, reader.length - offset, P.sabMaxChunk);
+   if (toRead <= 0) return 0;
+ 
++  if (reader.bytes) return readFromBytes(reader.bytes, offset, toRead, bufPtr);
++  if (reader.blob) return readFromBlob(reader.blob, offset, toRead, bufPtr);
+   if (reader.opfsHandle) return readFromOpfs(reader.opfsHandle, offset, toRead, bufPtr);
+ 
+   switch (ioMode) {
+@@ -228,6 +240,25 @@ function suspendAsyncify(pending) {
+   return 0;
+ }
+ 
++function readFromBytes(bytes, offset, count, bufPtr) {
++  new Uint8Array(wasm.memory.buffer).set(new Uint8Array(bytes, offset, count), bufPtr);
++  return count;
++}
++
++// A Blob that cannot be read (a File changed on disk) throws; the engine gets
++// the host's I/O error, never wrong bytes.
++function readFromBlob(blob, offset, count, bufPtr) {
++  let data;
++  try {
++    data = new Uint8Array(new FileReaderSync().readAsArrayBuffer(blob.slice(offset, offset + count)));
++  } catch (_) {
++    return P.hostIoError;
++  }
++  if (data.length !== count) return P.hostIoError;
++  new Uint8Array(wasm.memory.buffer).set(data, bufPtr);
++  return count;
++}
++
+ function readFromOpfs(handle, offset, count, bufPtr) {
+   const buf = new Uint8Array(count);
+   const n = handle.read(buf, { at: offset });
+@@ -822,6 +853,13 @@ async function resetLane() {
+   statePtr = engine_state_new();
+ }
+ 
++// The bytes of the readers backed by a copy of their source.
++function heldBytes() {
++  let sum = 0;
++  for (const r of readers.values()) if (r.bytes) sum += r.length;
++  return sum;
++}
++
+ // The engine's peak heap since the last reset. After a trap the instance
+ // cannot be called: the peak is then null.
+ function heapPeak() {
+@@ -838,7 +876,7 @@ function heapPeak() {
+ 
+ async function exec(msg) {
+   const { jobId, requestBytes, sourceLengths, sinkCount, keepSources,
+-          holdGroupId, opfsFiles } = msg;
++          holdGroupId, opfsFiles, blobs, buffers } = msg;
+ 
+   await ensureInit();
+   activeSab = msg.sab || null;
+@@ -870,6 +908,10 @@ async function exec(msg) {
+   for (let i = 0; i < sourceLengths.length; i++) {
+     let handle = null;
+     let length = sourceLengths[i];
++    const blob = (blobs && blobs[i]) || null;
++    const bytes = (buffers && buffers[i]) || null;
++    if (blob) length = blob.size;
++    if (bytes) length = bytes.byteLength;
+     const file = (opfsFiles && opfsFiles[i]) || null;
+     let onDisk = file;
+     if (file) {
+@@ -882,7 +924,7 @@ async function exec(msg) {
+       jobFiles.get(jobId)?.delete(file);
+     }
+     const id = nextReaderId++;
+-    readers.set(id, { length, opfsHandle: handle, opfsFile: onDisk, holdGroupId: null });
++    readers.set(id, { length, blob, bytes, opfsHandle: handle, opfsFile: onDisk, holdGroupId: null });
+     readerIds.push(id);
+     finalLengths.push(length);
+   }
+@@ -1011,7 +1053,7 @@ self.onmessage = async (e) => {
+       busy = 'reset';
+       try {
+         await resetLane();
+-        self.postMessage({ type: 'resetDone', lease, mem: wasm.memory.buffer.byteLength, peak: heapPeak(), abandoned: [...abandonedFiles.keys()] });
++        self.postMessage({ type: 'resetDone', lease, mem: wasm.memory.buffer.byteLength, peak: heapPeak(), held: heldBytes(), abandoned: [...abandonedFiles.keys()] });
+       } catch (err) {
+         self.postMessage({ type: 'error', lease, message: 'reset failed: ' + (err.message || String(err)) });
+       } finally {
+@@ -1033,13 +1075,13 @@ self.onmessage = async (e) => {
+             : responseBytes.buffer.slice(responseBytes.byteOffset, responseBytes.byteOffset + responseBytes.byteLength);
+         // mem is the worker's lifetime peak: linear memory never shrinks.
+         // The host keeps or retires the worker by peak.
+-        self.postMessage({ type: 'result', lease, jobId: msg.jobId, data: owned, mem: wasm.memory.buffer.byteLength, peak: heapPeak() }, [owned]);
++        self.postMessage({ type: 'result', lease, jobId: msg.jobId, data: owned, mem: wasm.memory.buffer.byteLength, peak: heapPeak(), held: heldBytes() }, [owned]);
+       } catch (err) {
+         // A wasm trap (a Rust panic compiles to `unreachable`) leaves the
+         // engine's state unusable. Report it as a trap, apart from every
+         // other failure, so the host ends the lane instead of reusing it.
+         const trap = err instanceof WebAssembly.RuntimeError;
+-        self.postMessage({ type: 'error', lease, jobId: msg.jobId, message: err.message || String(err), trap: trap ? true : undefined, mem: wasm ? wasm.memory.buffer.byteLength : null, peak: wasm ? heapPeak() : null });
++        self.postMessage({ type: 'error', lease, jobId: msg.jobId, message: err.message || String(err), trap: trap ? true : undefined, mem: wasm ? wasm.memory.buffer.byteLength : null, peak: wasm ? heapPeak() : null, held: heldBytes() });
+       } finally {
+         busy = null;
+       }
