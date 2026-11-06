@@ -26,14 +26,14 @@ fvm flutter run -d chrome
 cd example
 fvm flutter test integration_test/pdf_smoke_test.dart -d macos
 
-# web — all 3 I/O modes (JSPI, Atomics, OPFS), from the package root:
+# web — all 4 I/O modes (JSPI, Atomics, OPFS, Asyncify), from the package root:
 cd ..
 make test-example-web
 ```
 
 The smoke test drives every part of the API through the same demo
 samples. Force a specific web I/O mode with
-`--dart-define=PDF_IO_MODE=jspi|atomics|opfs`.
+`--dart-define=PDF_IO_MODE=jspi|atomics|opfs|asyncify`.
 
 ## What's inside
 

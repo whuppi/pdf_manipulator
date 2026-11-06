@@ -25,12 +25,13 @@ Future<String> _text(
 }) =>
     doc.text(pages: pages, format: format);
 
-// Optional: force a specific web I/O mode via --dart-define=PDF_IO_MODE=jspi|atomics|opfs
+// Optional: force a specific web I/O mode via --dart-define=PDF_IO_MODE=jspi|atomics|opfs|asyncify
 const _modeOverride = String.fromEnvironment('PDF_IO_MODE');
 PdfIoMode? get _forceMode => switch (_modeOverride) {
       'jspi' => PdfIoMode.jspi,
       'atomics' => PdfIoMode.atomics,
       'opfs' => PdfIoMode.opfs,
+      'asyncify' => PdfIoMode.asyncify,
       _ => null,
     };
 
@@ -1072,7 +1073,7 @@ void main() {
     await pumpUntil(
       t,
       () =>
-          ['NATIVE', 'JSPI', 'ATOMICS', 'OPFS'].any((m) => t.any(find.text(m))),
+          ['NATIVE', 'JSPI', 'ATOMICS', 'OPFS', 'ASYNCIFY'].any((m) => t.any(find.text(m))),
       describe: 'I/O mode chip resolved',
     );
   });

@@ -5,7 +5,7 @@
        test-ops test-ops-native test-ops-web test-ops-opfs test-ops-jspi test-ops-atomics test-ops-asyncify \
        test-example test-example-matrix test-example-macos test-example-trimmed test-example-linux test-example-windows \
        test-example-android test-example-ios test-example-device \
-       test-example-web test-example-web-jspi test-example-web-atomics test-example-web-opfs \
+       test-example-web test-example-web-jspi test-example-web-atomics test-example-web-opfs test-example-web-asyncify \
        verify verify-android verify-ios verify-macos \
        verify-linux verify-windows verify-web \
        clean hooks
@@ -487,7 +487,7 @@ test-rust-run:
 # § 6 — Integration tests (example app)
 # ═══════════════════════════════════════════════════════════════════
 #
-# make test-example              matrix + macOS + all 3 web modes.
+# make test-example              matrix + macOS + all 4 web modes.
 # make test-example-matrix       host VM: every journey × every device.
 # make test-example-macos        macOS desktop.
 # make test-example-linux        Linux desktop (needs GTK + display).
@@ -495,10 +495,11 @@ test-rust-run:
 # make test-example-android      Android (needs booted emulator).
 # make test-example-ios          iOS (needs booted simulator).
 # make test-example-device       Custom device (DEVICE=emulator-5554).
-# make test-example-web          Chrome: all 3 web modes.
+# make test-example-web          Chrome: all 4 web modes.
 # make test-example-web-jspi     Chrome: JSPI mode.
 # make test-example-web-atomics  Chrome: Atomics mode.
 # make test-example-web-opfs     Chrome: OPFS mode.
+# make test-example-web-asyncify Chrome: Asyncify mode.
 
 # GTK check — CI auto-installs, dev gets error with instructions.
 define ensure_gtk
@@ -574,11 +575,12 @@ test-example-device:
 	@mkdir -p $(TEST_RESULTS_DIR)
 	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart -d $(DEVICE) --file-reporter json:../$(TEST_RESULTS_DIR)/int-device.json
 
-test-example-web: $(WASM_OUT)
+test-example-web: $(WASM_OUT) $(ASYNCIFY_OUT)
 	$(call setup_example_web)
 	$(call run_example_web,JSPI,jspi)
 	$(call run_example_web,Atomics,atomics)
 	$(call run_example_web,OPFS,opfs)
+	$(call run_example_web,Asyncify,asyncify)
 
 test-example-web-jspi: $(WASM_OUT)
 	$(call setup_example_web)
@@ -591,6 +593,10 @@ test-example-web-atomics: $(WASM_OUT)
 test-example-web-opfs: $(WASM_OUT)
 	$(call setup_example_web)
 	$(call run_example_web,OPFS,opfs)
+
+test-example-web-asyncify: $(ASYNCIFY_OUT)
+	$(call setup_example_web)
+	$(call run_example_web,Asyncify,asyncify)
 
 # ═══════════════════════════════════════════════════════════════════
 # § 7 — Verify (prove release builds work, output thrown away)
