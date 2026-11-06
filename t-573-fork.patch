@@ -1,0 +1,1477 @@
+diff --git a/src/editor/document_editor.rs b/src/editor/document_editor.rs
+index db23d31..af9b4e0 100644
+--- a/src/editor/document_editor.rs
++++ b/src/editor/document_editor.rs
+@@ -5628,7 +5628,10 @@ impl DocumentEditor {
+                 // Build and write embedded file stream
+                 let stream_dict = file.build_stream_dict();
+                 // ── pdf_manipulator patch: stream bodies are StreamBody ──
+-                let stream_obj = Object::stream(stream_dict, file.data.clone());
++                let stream_obj = match &file.staged {
++                    Some(staged) => Object::Stream { dict: stream_dict, body: staged.body.clone() },
++                    None => Object::stream(stream_dict, file.data.clone()),
++                };
+                 // ── end pdf_manipulator patch ──
+                 let offset = writer.position();
+                 // ── pdf_manipulator patch: a stream is its dictionary and an extent that reads itself ──
+diff --git a/src/host/attachments.rs b/src/host/attachments.rs
+index cc87f3b..fdc16b5 100644
+--- a/src/host/attachments.rs
++++ b/src/host/attachments.rs
+@@ -6,11 +6,16 @@
+ //! document-level attachment lives (ISO 32000-1 §7.11.4). Listing walks
+ //! the tree and reads each file spec's declared metadata; it never
+ //! decodes a stream, so a listing costs nothing on a document with a
+-//! 50 MB attachment. Extraction decodes exactly the one stream asked for.
++//! 50 MB attachment. Extraction runs the filters of exactly the one stream
++//! asked for, as a reader, and copies it out in pieces.
+ 
+ use crate::document::PdfDocument;
+ use crate::error::{Error, Result};
+ use crate::object::Object;
++use std::io::{Read, Write};
++
++/// Bytes moved per read and per write when an attachment is copied.
++const PIECE: usize = 64 * 1024;
+ 
+ /// One attachment in wire vocabulary.
+ pub struct AttachmentRow {
+@@ -45,8 +50,9 @@ pub fn list_attachments(doc: &PdfDocument) -> Result<Vec<AttachmentRow>> {
+     Ok(rows)
+ }
+ 
+-/// The decoded bytes of the attachment named `name` (`/UF` or `/F`).
+-pub fn attachment_bytes(doc: &PdfDocument, name: &str) -> Result<Vec<u8>> {
++/// Copies the decoded bytes of the attachment named `name` (`/UF` or `/F`) to
++/// `out`, a piece at a time.
++pub fn copy_attachment(doc: &PdfDocument, name: &str, out: &mut dyn Write) -> Result<()> {
+     for spec in file_specs(doc)? {
+         let Some(dict) = spec.as_dict() else { continue };
+         if spec_name(doc, dict).as_deref() != Some(name) {
+@@ -54,7 +60,20 @@ pub fn attachment_bytes(doc: &PdfDocument, name: &str) -> Result<Vec<u8>> {
+         }
+         let stream = embedded_stream(doc, dict)
+             .ok_or_else(|| Error::InvalidPdf(format!("attachment {name} has no embedded stream")))?;
+-        return stream.decode_stream_data();
++        let Object::Stream { dict, body } = &stream else {
++            return Err(Error::InvalidPdf(format!("attachment {name} has no embedded stream")));
++        };
++        let mut reader =
++            crate::decoders::stream::reader_in(dict, body.origin(), || body.raw_reader())?;
++        let mut piece = vec![0u8; PIECE];
++        loop {
++            crate::cancel::poll()?;
++            let n = reader.read(&mut piece).map_err(crate::encryption::stream::from_io)?;
++            if n == 0 {
++                return Ok(());
++            }
++            out.write_all(&piece[..n]).map_err(|e| Error::InvalidPdf(e.to_string()))?;
++        }
+     }
+     Err(Error::InvalidPdf(format!("no attachment named {name}")))
+ }
+diff --git a/src/host/dispatch.rs b/src/host/dispatch.rs
+index f4eae8a..1eda41d 100644
+--- a/src/host/dispatch.rs
++++ b/src/host/dispatch.rs
+@@ -1168,19 +1168,32 @@ pub fn edit_unembed_standard_fonts(editor: &mut DocumentEditor) -> Result<usize>
+     Ok(count)
+ }
+ 
++/// The data of a file to embed.
++pub(crate) enum FileData {
++    /// Held in memory.
++    Whole(Vec<u8>),
++    /// Left in the caller's source: the save reads it from there in pieces.
++    Source(crate::host::bridge_api::BoxedReader),
++}
++
+ /// Embed a file attachment into the document. `description`, `mime_type`
+ /// and `relationship` are omitted from the file spec when empty.
+-pub fn edit_embed_file(
++pub(crate) fn edit_embed_file(
+     editor: &mut DocumentEditor,
+     name: &str,
+-    data: Vec<u8>,
++    data: FileData,
+     description: &str,
+     mime_type: &str,
+     relationship: &str,
+ ) -> Result<()> {
+     use crate::writer::{AFRelationship, EmbeddedFile};
+ 
+-    let mut file = EmbeddedFile::new(name, data);
++    let mut file = match data {
++        FileData::Whole(bytes) => EmbeddedFile::new(name, bytes),
++        FileData::Source(reader) => {
++            EmbeddedFile::staged(name, crate::host::staged::body_over(reader.0)?)?
++        },
++    };
+     if !description.is_empty() {
+         file.description = Some(description.to_string());
+     }
+@@ -1258,17 +1271,13 @@ pub fn doc_annotations(doc: &mut PdfDocument, page: usize) -> Result<Vec<Annotat
+         .collect())
+ }
+ 
+-/// Write the attachment named `name` to the sink in bounded chunks.
++/// Write the attachment named `name` to the sink in pieces of 64 KiB.
+ pub fn doc_extract_attachment<W: std::io::Write>(
+     doc: &mut PdfDocument,
+     name: &str,
+     writer: &mut W,
+ ) -> Result<()> {
+-    let bytes = crate::host::attachments::attachment_bytes(doc, name)?;
+-    for chunk in bytes.chunks(256 * 1024) {
+-        writer.write_all(chunk).map_err(|e| Error::InvalidPdf(e.to_string()))?;
+-    }
+-    Ok(())
++    crate::host::attachments::copy_attachment(doc, name, writer)
+ }
+ 
+ 
+@@ -2331,45 +2340,49 @@ pub fn edit_add_stamp(
+ }
+ 
+ /// Add an image stamp to every page of `pages` — builds the appearance stream
+-/// directly from image bytes, once: the pages share one image and one
++/// directly from the image, once: the pages share one image and one
+ /// appearance, each with an annotation of its own. All or nothing: the image is
+-/// decoded and every page checked before anything is staged, and an error
+-/// after that puts the editor back as it was.
++/// read and every page checked before anything is staged, and an error
++/// after that puts the editor back as it was. An image left in its source
++/// stays there until the save.
+ pub fn edit_add_image_stamp(
+-    editor: &mut DocumentEditor, pages: &[usize], image_bytes: Vec<u8>,
++    editor: &mut DocumentEditor, pages: &[usize], image: impl Into<ImageBytes>,
+     x: f32, y: f32, w: f32, h: f32, opacity: f32,
+ ) -> Result<()> {
+     use crate::writer::ImageData;
+ 
+-    let img = ImageData::from_bytes(&image_bytes)
+-        .map_err(|e| Error::InvalidPdf(format!("invalid image: {e}")))?;
++    let staged = match image.into() {
++        ImageBytes::Whole(bytes) => {
++            let img = ImageData::from_bytes(&bytes)
++                .map_err(|e| Error::InvalidPdf(format!("invalid image: {e}")))?;
++            crate::host::image_embed::Staged {
++                image: (img.build_xobject_dict(), img.data.clone().into()),
++                mask: img.build_soft_mask_dict().zip(img.soft_mask.clone()).map(|(dict, data)| (dict, data.into())),
++            }
++        },
++        ImageBytes::Streamed(image) => image.stage()?,
++    };
+     check_editable_pages(editor, pages)?;
+-    editor.undoable(|editor| stage_image_stamps(editor, pages, img, x, y, w, h, opacity))
++    editor.undoable(|editor| stage_image_stamps(editor, pages, staged, x, y, w, h, opacity))
+ }
+ 
+ /// The staging of [`edit_add_image_stamp`].
+ fn stage_image_stamps(
+-    editor: &mut DocumentEditor, pages: &[usize], img: crate::writer::ImageData,
++    editor: &mut DocumentEditor, pages: &[usize], staged: crate::host::image_embed::Staged,
+     x: f32, y: f32, w: f32, h: f32, opacity: f32,
+ ) -> Result<()> {
+     use crate::object::Object;
+ 
+-    // build_xobject_dict() carries the PNG DecodeParms/Predictor=15 that
+-    // from_png()'s per-row filter bytes require; a hand-rolled FlateDecode
+-    // dict without it misreads every scanline.
+-    let mut img_dict = img.build_xobject_dict();
++    // The dictionary carries the PNG DecodeParms/Predictor=15 that the
++    // per-row filter bytes require; a hand-rolled FlateDecode dict without
++    // it misreads every scanline.
++    let (mut img_dict, img_body) = staged.image;
+ 
+     // A PNG alpha channel must travel as a separate grayscale /SMask, or
+-    // transparent pixels paint solid black over the page. from_png() has
+-    // already split the alpha into img.soft_mask.
+-    if let (Some(smask_dict), Some(smask_data)) =
+-        (img.build_soft_mask_dict(), img.soft_mask.clone())
+-    {
++    // transparent pixels paint solid black over the page.
++    if let Some((smask_dict, smask_body)) = staged.mask {
+         let smask_id = editor.alloc_id();
+-        editor.insert_modified(smask_id, Object::stream(
+-            smask_dict,
+-            bytes::Bytes::from(smask_data),
+-        ));
++        editor.insert_modified(smask_id, Object::Stream { dict: smask_dict, body: smask_body });
+         img_dict.insert(
+             "SMask".into(),
+             Object::Reference(crate::object::ObjectRef::new(smask_id, 0)),
+@@ -2377,7 +2390,7 @@ fn stage_image_stamps(
+     }
+ 
+     let img_id = editor.alloc_id();
+-    editor.insert_modified(img_id, Object::stream(img_dict, bytes::Bytes::from(img.data)));
++    editor.insert_modified(img_id, Object::Stream { dict: img_dict, body: img_body });
+ 
+     // Form XObject (appearance stream) — draws the image scaled to rect
+     let content = format!("q\n{} 0 0 {} 0 0 cm\n/Im0 Do\nQ\n", w, h);
+diff --git a/src/host/engine_proofs/attachment_stream.rs b/src/host/engine_proofs/attachment_stream.rs
+new file mode 100644
+index 0000000..ab3f790
+--- /dev/null
++++ b/src/host/engine_proofs/attachment_stream.rs
+@@ -0,0 +1,126 @@
++//! An attachment leaves the document in pieces: `extractAttachment` runs the
++//! stream's filters as a reader and hands the sink at most 64 KiB at a time,
++//! and `convertToPdf` has no answer without a sink.
++//!
++//! No Dart battery can observe this: a battery reads the sink's bytes, which
++//! were the same whether they arrived in one write or many, and Dart always
++//! hands `convertToPdf` a sink.
++
++use std::io::Write;
++use std::sync::{Arc, Mutex};
++
++use crate::cancel::CancelCheck;
++use crate::host::bridge_api::{handle_request, BoxedReader};
++use crate::host::dispatch;
++use crate::host::engine_state::EngineState;
++use crate::PdfDocument;
++
++use super::support::{pdf_from_objects, stream_object};
++
++const KIB: usize = 1024;
++
++/// A sink that keeps what it is given and the size of its largest write.
++#[derive(Clone, Default)]
++struct Recorder(Arc<Mutex<(Vec<u8>, usize)>>);
++
++impl Write for Recorder {
++    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
++        let mut inner = self.0.lock().unwrap();
++        inner.0.extend_from_slice(buf);
++        inner.1 = inner.1.max(buf.len());
++        Ok(buf.len())
++    }
++    fn flush(&mut self) -> std::io::Result<()> {
++        Ok(())
++    }
++}
++
++fn noise(len: usize) -> Vec<u8> {
++    let mut state = 0x2545_F491_4F6C_DD1Du64;
++    (0..len)
++        .map(|_| {
++            state ^= state << 13;
++            state ^= state >> 7;
++            state ^= state << 17;
++            (state >> 24) as u8
++        })
++        .collect()
++}
++
++fn deflated(data: &[u8]) -> Vec<u8> {
++    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
++    z.write_all(data).unwrap();
++    z.finish().unwrap()
++}
++
++/// A document whose one attachment, `name`, is `stored` under `filter`.
++fn with_attachment(name: &str, filter: &str, stored: &[u8]) -> Vec<u8> {
++    pdf_from_objects(&[
++        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles 4 0 R >> >>\nendobj\n".to_vec(),
++        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n".to_vec(),
++        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>\nendobj\n".to_vec(),
++        format!("4 0 obj\n<< /Names [({name}) 5 0 R] >>\nendobj\n").into_bytes(),
++        format!("5 0 obj\n<< /Type /Filespec /F ({name}) /UF ({name}) /EF << /F 6 0 R >> >>\nendobj\n").into_bytes(),
++        stream_object(6, &format!("/Type /EmbeddedFile {filter}"), stored),
++    ])
++}
++
++fn extract(doc_bytes: Vec<u8>, name: &str) -> (crate::error::Result<()>, Vec<u8>, usize) {
++    let mut doc = PdfDocument::from_bytes(doc_bytes).unwrap();
++    let sink = Recorder::default();
++    let result = dispatch::doc_extract_attachment(&mut doc, name, &mut sink.clone());
++    let inner = sink.0.lock().unwrap();
++    (result, inner.0.clone(), inner.1)
++}
++
++/// A stored attachment and a Flate one arrive whole, in writes of at most
++/// 64 KiB.
++#[test]
++fn an_attachment_reaches_the_sink_in_pieces_of_at_most_64_kib() {
++    let data = noise(700 * KIB);
++    let cases = [
++        ("plain", with_attachment("a.bin", "", &data)),
++        ("flate", with_attachment("a.bin", "/Filter /FlateDecode", &deflated(&data))),
++    ];
++    for (label, pdf) in cases {
++        let (result, got, widest) = extract(pdf, "a.bin");
++        result.unwrap_or_else(|e| panic!("{label}: {e}"));
++        assert!(got == data, "{label}: the attachment's bytes");
++        assert!(widest <= 64 * KIB, "{label}: a write of {widest} bytes");
++    }
++}
++
++/// A name no file spec carries is refused before the sink is touched.
++#[test]
++fn an_unknown_attachment_writes_nothing() {
++    let (result, got, _) = extract(with_attachment("a.bin", "", b"abc"), "missing.bin");
++    assert!(result.unwrap_err().to_string().contains("no attachment named missing.bin"));
++    assert!(got.is_empty());
++}
++
++/// A cancel stops the copy between pieces.
++#[test]
++fn an_attachment_copy_polls_for_a_cancel() {
++    let data = noise(700 * KIB);
++    let mut doc = PdfDocument::from_bytes(with_attachment("a.bin", "", &data)).unwrap();
++    let sink = Recorder::default();
++    let _job = crate::cancel::enter(&CancelCheck::tripping_at(3));
++    let result = dispatch::doc_extract_attachment(&mut doc, "a.bin", &mut sink.clone());
++    assert!(result.unwrap_err().to_string().contains("operation cancelled"));
++    assert!(sink.0.lock().unwrap().0.len() < data.len());
++}
++
++/// `convertToPdf` without a sink answers that it needs one; it does not read
++/// the source whole to answer in the response.
++#[test]
++fn convert_to_pdf_without_a_sink_asks_for_one() {
++    let mut frame = vec!["convertToPdf".len() as u8];
++    frame.extend_from_slice(b"convertToPdf");
++    frame.extend_from_slice(&0u16.to_le_bytes());
++    let source = BoxedReader(Box::new(std::io::Cursor::new(b"PK\x03\x04".to_vec())));
++    let mut state = EngineState::new();
++    let answer = handle_request(&mut state, &frame, None, vec![source], Vec::new(), &CancelCheck::none());
++    assert_eq!(answer[0], 0, "an error answer");
++    let text = String::from_utf8_lossy(&answer);
++    assert!(text.contains("convertToPdf requires a sink"), "{text}");
++}
+diff --git a/src/host/engine_proofs/editor_streamed_inputs.rs b/src/host/engine_proofs/editor_streamed_inputs.rs
+new file mode 100644
+index 0000000..4841018
+--- /dev/null
++++ b/src/host/engine_proofs/editor_streamed_inputs.rs
+@@ -0,0 +1,508 @@
++//! A file to embed and an image to stamp stay in their source until the save:
++//! `editorMutate` `embedFile` and `addImageStamp` keep the reader they are
++//! handed, stage the data as a stream over it, and the save copies a file or a
++//! JPEG from the source in pieces and deflates a PNG a row at a time.
++//!
++//! Each proof drives the ops through the request door (`handle_request`) with
++//! the source a lane hands it, and compares the saved file with the one the
++//! whole-bytes path (`FileData::Whole`, `ImageBytes::Whole`) saves.
++//!
++//! No Dart battery can observe this: a battery sees the saved bytes, and the
++//! whole-bytes path saves the same pixels and the same file; only the drop of
++//! the source, the polls of the cancel check and the refusals' effect on the
++//! editor tell the two apart.
++
++use std::io::{Read, Seek, SeekFrom, Write};
++use std::sync::atomic::{AtomicBool, Ordering};
++use std::sync::{Arc, Mutex};
++
++use crate::cancel::CancelCheck;
++use crate::host::binary_codec::Request;
++use crate::host::bridge_api::{handle_request, BoxedReader, BoxedWriter};
++use crate::host::dispatch::{self, FileData};
++use crate::host::engine_state::EngineState;
++use crate::object::{Object, ObjectRef};
++use crate::PdfDocument;
++
++use super::support::{open_editor_from_bytes, pdf_from_objects};
++
++enum Field<'a> {
++    Int(i32),
++    Real(f64),
++    Bool(bool),
++    Text(&'a str),
++}
++
++fn frame(op: &str, fields: &[(&str, Field)]) -> Vec<u8> {
++    let mut out = vec![op.len() as u8];
++    out.extend_from_slice(op.as_bytes());
++    out.extend_from_slice(&(fields.len() as u16).to_le_bytes());
++    for (key, value) in fields {
++        out.push(key.len() as u8);
++        out.extend_from_slice(key.as_bytes());
++        match value {
++            Field::Bool(b) => {
++                out.push(4);
++                out.push(*b as u8);
++            },
++            Field::Int(n) => {
++                out.push(1);
++                out.extend_from_slice(&n.to_le_bytes());
++            },
++            Field::Real(x) => {
++                out.push(3);
++                out.extend_from_slice(&x.to_le_bytes());
++            },
++            Field::Text(s) => {
++                out.push(5);
++                out.extend_from_slice(&(s.len() as u32).to_le_bytes());
++                out.extend_from_slice(s.as_bytes());
++            },
++        }
++    }
++    out
++}
++
++fn message_of(answer: &[u8]) -> String {
++    let mut as_request = vec![0u8];
++    as_request.extend_from_slice(&answer[2..]);
++    Request::parse(&as_request).ok().and_then(|r| r.get_str("message").map(str::to_owned)).unwrap_or_default()
++}
++
++fn run(state: &mut EngineState, request: Vec<u8>, sources: Vec<BoxedReader>, sinks: Vec<BoxedWriter>, cancel: &CancelCheck) -> Vec<u8> {
++    handle_request(state, &request, None, sources, sinks, cancel)
++}
++
++#[derive(Clone, Default)]
++struct Collect(Arc<Mutex<Vec<u8>>>);
++
++impl Write for Collect {
++    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
++        self.0.lock().unwrap().extend_from_slice(buf);
++        Ok(buf.len())
++    }
++    fn flush(&mut self) -> std::io::Result<()> {
++        Ok(())
++    }
++}
++
++/// A source that says when it is dropped.
++struct Watched {
++    inner: std::io::Cursor<Vec<u8>>,
++    dropped: Arc<AtomicBool>,
++}
++
++impl Drop for Watched {
++    fn drop(&mut self) {
++        self.dropped.store(true, Ordering::SeqCst);
++    }
++}
++
++impl Read for Watched {
++    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
++        self.inner.read(buf)
++    }
++}
++
++impl Seek for Watched {
++    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
++        self.inner.seek(pos)
++    }
++}
++
++fn watched(bytes: &[u8]) -> (BoxedReader, Arc<AtomicBool>) {
++    let dropped = Arc::new(AtomicBool::new(false));
++    (BoxedReader(Box::new(Watched { inner: std::io::Cursor::new(bytes.to_vec()), dropped: dropped.clone() })), dropped)
++}
++
++fn one_page() -> Vec<u8> {
++    pdf_from_objects(&[
++        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n".to_vec(),
++        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n".to_vec(),
++        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>\nendobj\n".to_vec(),
++    ])
++}
++
++fn noise(len: usize, seed: u64) -> Vec<u8> {
++    let mut state = seed ^ 0x2545_F491_4F6C_DD1D;
++    (0..len)
++        .map(|_| {
++            state ^= state << 13;
++            state ^= state >> 7;
++            state ^= state << 17;
++            (state >> 24) as u8
++        })
++        .collect()
++}
++
++/// An editor over `one_page` in the state, and its handle.
++fn open(state: &mut EngineState) -> i32 {
++    let bytes = one_page();
++    let source = BoxedReader(Box::new(std::io::Cursor::new(bytes.clone())));
++    let request = frame("editorOpen", &[("sourceLength", Field::Int(bytes.len() as i32))]);
++    let answer = run(state, request, vec![source], Vec::new(), &CancelCheck::none());
++    assert_eq!(answer[0], 1, "the editor opens: {}", message_of(&answer));
++    let mut as_request = vec![0u8];
++    as_request.extend_from_slice(&answer[1..]);
++    Request::parse(&as_request).unwrap().get_i32("handleId").unwrap()
++}
++
++fn save(state: &mut EngineState, handle: i32, cancel: &CancelCheck) -> (Vec<u8>, Vec<u8>) {
++    let out = Collect::default();
++    let request = frame(
++        "editorSave",
++        &[("handleId", Field::Int(handle)), ("saveMode", Field::Int(0)), ("deflate", Field::Bool(false)), ("garbageCollect", Field::Bool(false))],
++    );
++    let answer = run(state, request, Vec::new(), vec![BoxedWriter::new(out.clone())], cancel);
++    let bytes = out.0.lock().unwrap().clone();
++    (answer, bytes)
++}
++
++fn dispose(state: &mut EngineState, handle: i32) {
++    let answer = run(state, frame("editorDispose", &[("handleId", Field::Int(handle))]), Vec::new(), Vec::new(), &CancelCheck::none());
++    assert_eq!(answer[0], 1);
++}
++
++fn embed(state: &mut EngineState, handle: i32, data: &[u8], source: BoxedReader) -> Vec<u8> {
++    let request = frame(
++        "editorMutate",
++        &[
++            ("handleId", Field::Int(handle)),
++            ("editOp", Field::Text("embedFile")),
++            ("sourceLength", Field::Int(data.len() as i32)),
++            ("name", Field::Text("data.bin")),
++            ("description", Field::Text("noise")),
++            ("mimeType", Field::Text("application/octet-stream")),
++        ],
++    );
++    run(state, request, vec![source], Vec::new(), &CancelCheck::none())
++}
++
++fn stamp(state: &mut EngineState, handle: i32, image: &[u8], source: BoxedReader, cancel: &CancelCheck) -> Vec<u8> {
++    let request = frame(
++        "editorMutate",
++        &[
++            ("handleId", Field::Int(handle)),
++            ("editOp", Field::Text("addImageStamp")),
++            ("sourceLength", Field::Int(image.len() as i32)),
++            ("pagesAll", Field::Bool(true)),
++            ("x", Field::Real(10.0)),
++            ("y", Field::Real(10.0)),
++            ("width", Field::Real(80.0)),
++            ("height", Field::Real(60.0)),
++            ("opacity", Field::Real(1.0)),
++        ],
++    );
++    run(state, request, vec![source], Vec::new(), cancel)
++}
++
++fn attachment_of(pdf: &[u8]) -> Vec<u8> {
++    let mut doc = PdfDocument::from_bytes(pdf.to_vec()).unwrap();
++    let out = Collect::default();
++    dispatch::doc_extract_attachment(&mut doc, "data.bin", &mut out.clone()).unwrap();
++    let bytes = out.0.lock().unwrap().clone();
++    bytes
++}
++
++/// The `/Params` of the attachment's stream, as text.
++fn params_of(pdf: &[u8]) -> String {
++    let doc = PdfDocument::from_bytes(pdf.to_vec()).unwrap();
++    for id in doc.all_object_ids() {
++        if let Ok(Object::Stream { dict, .. }) = doc.load_object(ObjectRef::new(id, 0)) {
++            if dict.get("Type").and_then(Object::as_name) == Some("EmbeddedFile") {
++                let params = dict.get("Params").and_then(Object::as_dict).expect("the stream has /Params");
++                return format!("{:?} {:?} {:?}", params.get("Size"), params.get("CheckSum"), dict.get("Subtype"));
++            }
++        }
++    }
++    panic!("no embedded file stream");
++}
++
++/// A file embedded from its source saves the file spec, the stream and the
++/// checksum the whole-bytes path saves, and the source is held from the op to
++/// the dispose.
++#[test]
++fn an_embedded_file_is_copied_from_its_source_at_the_save() {
++    for len in [0usize, 1, 64 * 1024, 300_000] {
++        let data = noise(len, 3);
++        let mut state = EngineState::new();
++        let handle = open(&mut state);
++        let (source, dropped) = watched(&data);
++        let answer = embed(&mut state, handle, &data, source);
++        assert_eq!(answer[0], 1, "{len}: the file is embedded: {}", message_of(&answer));
++        assert!(!dropped.load(Ordering::SeqCst), "{len}: the source is held after the op");
++        let (answer, streamed) = save(&mut state, handle, &CancelCheck::none());
++        assert_eq!(answer[0], 1, "{len}: the editor saves: {}", message_of(&answer));
++        dispose(&mut state, handle);
++        assert!(dropped.load(Ordering::SeqCst), "{len}: the dispose lets go of the source");
++
++        let mut editor = open_editor_from_bytes(&one_page(), "embed_whole");
++        dispatch::edit_embed_file(&mut editor, "data.bin", FileData::Whole(data.clone()), "noise", "application/octet-stream", "").unwrap();
++        let whole = editor.save_to_bytes().unwrap();
++
++        assert!(attachment_of(&streamed) == data, "{len}: the attachment's bytes");
++        assert_eq!(params_of(&streamed), params_of(&whole), "{len}: size, checksum and type");
++    }
++}
++
++/// A cancel during the checksum pass at the embed leaves the editor as it was.
++#[test]
++fn a_cancelled_embed_changes_nothing() {
++    let data = noise(300_000, 4);
++    let mut state = EngineState::new();
++    let handle = open(&mut state);
++    let (before, _) = (save(&mut state, handle, &CancelCheck::none()).1, ());
++    let (source, _) = watched(&data);
++    let request = frame(
++        "editorMutate",
++        &[("handleId", Field::Int(handle)), ("editOp", Field::Text("embedFile")), ("sourceLength", Field::Int(data.len() as i32)), ("name", Field::Text("data.bin"))],
++    );
++    let check = CancelCheck::tripping_at(2);
++    let answer = run(&mut state, request, vec![source], Vec::new(), &check);
++    assert_eq!(answer[0], 0, "the embed is refused");
++    assert!(check.polls() >= 2, "the checksum polls for a cancel");
++    assert!(save(&mut state, handle, &CancelCheck::none()).1 == before, "the editor is as it was");
++}
++
++// ── Images ───────────────────────────────────────────────────────────────
++
++struct PngSpec {
++    width: u32,
++    height: u32,
++    color: png::ColorType,
++    depth: png::BitDepth,
++    palette: Option<Vec<u8>>,
++    trns: Option<Vec<u8>>,
++}
++
++fn png_bytes(spec: &PngSpec) -> Vec<u8> {
++    let samples = match spec.color {
++        png::ColorType::Grayscale | png::ColorType::Indexed => 1,
++        png::ColorType::GrayscaleAlpha => 2,
++        png::ColorType::Rgb => 3,
++        png::ColorType::Rgba => 4,
++    };
++    let row_bytes = (spec.width as usize * samples * spec.depth as usize).div_ceil(8);
++    let out = Collect::default();
++    let mut encoder = png::Encoder::new(out.clone(), spec.width, spec.height);
++    encoder.set_color(spec.color);
++    encoder.set_depth(spec.depth);
++    if let Some(palette) = &spec.palette {
++        encoder.set_palette(palette.clone());
++    }
++    if let Some(trns) = &spec.trns {
++        encoder.set_trns(trns.clone());
++    }
++    let mut writer = encoder.write_header().unwrap().into_stream_writer().unwrap();
++    for y in 0..spec.height {
++        let mut row = noise(row_bytes, 7 + u64::from(y));
++        // Indexed rows must name palette entries that exist.
++        if spec.color == png::ColorType::Indexed {
++            let entries = spec.palette.as_ref().unwrap().len() / 3;
++            if spec.depth == png::BitDepth::Eight {
++                row.iter_mut().for_each(|b| *b %= entries as u8);
++            } else {
++                row.iter_mut().for_each(|b| *b = 0);
++            }
++        }
++        writer.write_all(&row).unwrap();
++    }
++    writer.finish().unwrap();
++    let bytes = out.0.lock().unwrap().clone();
++    bytes
++}
++
++fn jpeg_bytes(color: jpeg_encoder::ColorType, progressive: bool) -> Vec<u8> {
++    let per = match color {
++        jpeg_encoder::ColorType::Luma => 1,
++        jpeg_encoder::ColorType::Rgb => 3,
++        _ => 4,
++    };
++    let (w, h) = (45u16, 33u16);
++    let pixels = noise(w as usize * h as usize * per, 5);
++    let mut out = Vec::new();
++    let mut encoder = jpeg_encoder::Encoder::new(&mut out, 90);
++    encoder.set_progressive(progressive);
++    encoder.encode(&pixels, w, h, color).unwrap();
++    out
++}
++
++/// Every image XObject of `pdf` as (size, colour space, depth, decoded
++/// samples), sorted.
++fn images_of(pdf: &[u8]) -> Vec<(String, Vec<u8>)> {
++    let doc = PdfDocument::from_bytes(pdf.to_vec()).unwrap();
++    let mut found = Vec::new();
++    for id in doc.all_object_ids() {
++        let Ok(object) = doc.load_object(ObjectRef::new(id, 0)) else { continue };
++        let Object::Stream { dict, .. } = &object else { continue };
++        if dict.get("Subtype").and_then(Object::as_name) != Some("Image") {
++            continue;
++        }
++        let key = |name: &str| format!("{:?}", dict.get(name));
++        let description = format!("{} {} {} {} {}", key("Width"), key("Height"), key("ColorSpace"), key("BitsPerComponent"), key("Filter"));
++        found.push((description, object.decode_stream_data().unwrap()));
++    }
++    found.sort();
++    found
++}
++
++fn stamped_whole(image: &[u8]) -> Vec<u8> {
++    let mut editor = open_editor_from_bytes(&one_page(), "stamp_whole");
++    dispatch::edit_add_image_stamp(&mut editor, &[0], image.to_vec(), 10.0, 10.0, 80.0, 60.0, 1.0).unwrap();
++    editor.save_to_bytes().unwrap()
++}
++
++fn stamped_through_ops(image: &[u8]) -> (Vec<u8>, bool, bool) {
++    let mut state = EngineState::new();
++    let handle = open(&mut state);
++    let (source, dropped) = watched(image);
++    let answer = stamp(&mut state, handle, image, source, &CancelCheck::none());
++    assert_eq!(answer[0], 1, "the stamp is added: {}", message_of(&answer));
++    let held_after_op = !dropped.load(Ordering::SeqCst);
++    let (answer, bytes) = save(&mut state, handle, &CancelCheck::none());
++    assert_eq!(answer[0], 1, "the editor saves: {}", message_of(&answer));
++    dispose(&mut state, handle);
++    (bytes, held_after_op, dropped.load(Ordering::SeqCst))
++}
++
++fn png_cases() -> Vec<(&'static str, PngSpec)> {
++    use png::{BitDepth::*, ColorType::*};
++    let palette: Vec<u8> = (0..16 * 3).map(|i| (i * 37 % 251) as u8).collect();
++    let spec = |color, depth| PngSpec { width: 37, height: 29, color, depth, palette: None, trns: None };
++    let mut cases = vec![
++        ("gray8", spec(Grayscale, Eight)),
++        ("gray16", spec(Grayscale, Sixteen)),
++        ("gray1", spec(Grayscale, One)),
++        ("graya8", spec(GrayscaleAlpha, Eight)),
++        ("graya16", spec(GrayscaleAlpha, Sixteen)),
++        ("rgb8", spec(Rgb, Eight)),
++        ("rgb16", spec(Rgb, Sixteen)),
++        ("rgba8", spec(Rgba, Eight)),
++        ("rgba16", spec(Rgba, Sixteen)),
++    ];
++    let mut indexed = spec(Indexed, Eight);
++    indexed.palette = Some(palette.clone());
++    cases.push(("indexed8", indexed));
++    let mut keyed = spec(Indexed, Eight);
++    keyed.palette = Some(palette);
++    keyed.trns = Some(vec![0, 90, 200]);
++    cases.push(("indexed8+trns", keyed));
++    cases
++}
++
++/// A PNG stamped from its source saves the pixels and the alpha the
++/// whole-bytes path saves, in every colour type and depth, and the source is
++/// held from the op to the dispose.
++#[test]
++fn a_png_stamp_saves_the_pixels_of_the_whole_bytes_path() {
++    for (label, spec) in png_cases() {
++        let image = png_bytes(&spec);
++        let (streamed, held, released) = stamped_through_ops(&image);
++        assert!(held, "{label}: the source is held after the op");
++        assert!(released, "{label}: the dispose lets go of the source");
++        let whole = stamped_whole(&image);
++        let (got, want) = (images_of(&streamed), images_of(&whole));
++        assert_eq!(got.len(), want.len(), "{label}: the images");
++        for ((got_key, got_data), (want_key, want_data)) in got.iter().zip(&want) {
++            assert_eq!(got_key.split(' ').take(4).collect::<Vec<_>>(), want_key.split(' ').take(4).collect::<Vec<_>>(), "{label}: the description");
++            assert!(got_data == want_data, "{label}: the samples of {got_key}");
++        }
++    }
++}
++
++/// A JPEG stamped from its source is saved as its own bytes.
++#[test]
++fn a_jpeg_stamp_saves_its_own_bytes() {
++    for (label, image) in [
++        ("rgb", jpeg_bytes(jpeg_encoder::ColorType::Rgb, false)),
++        ("gray", jpeg_bytes(jpeg_encoder::ColorType::Luma, false)),
++        ("cmyk", jpeg_bytes(jpeg_encoder::ColorType::Cmyk, false)),
++        ("progressive", jpeg_bytes(jpeg_encoder::ColorType::Rgb, true)),
++    ] {
++        let (streamed, held, released) = stamped_through_ops(&image);
++        assert!(held && released, "{label}: the source is held from the op to the dispose");
++        let got = images_of(&streamed);
++        assert_eq!(got.len(), 1, "{label}");
++        assert!(got[0].1 == image, "{label}: the stream is the file");
++        assert!(images_of(&stamped_whole(&image))[0].1 == image, "{label}: today's path agrees");
++    }
++}
++
++/// An Adam7 RGBA PNG of noise, written chunk by chunk here because the
++/// encoder in use writes no interlaced images.
++fn interlaced_rgba(width: u32, height: u32) -> Vec<u8> {
++    const PASSES: [(u32, u32, u32, u32); 7] =
++        [(0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)];
++    let mut scanlines = Vec::new();
++    for (x0, y0, dx, dy) in PASSES {
++        if x0 >= width || y0 >= height {
++            continue;
++        }
++        let (pass_w, pass_h) = ((width + dx - 1 - x0) / dx, (height + dy - 1 - y0) / dy);
++        for row in 0..pass_h {
++            scanlines.push(0u8);
++            scanlines.extend_from_slice(&noise(pass_w as usize * 4, 3 + u64::from(y0 + row * dy)));
++        }
++    }
++    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
++    encoder.write_all(&scanlines).unwrap();
++    let compressed = encoder.finish().unwrap();
++
++    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
++    let mut chunk = |kind: &[u8; 4], data: &[u8]| {
++        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
++        out.extend_from_slice(kind);
++        out.extend_from_slice(data);
++        let mut crc = crc32fast::Hasher::new();
++        crc.update(kind);
++        crc.update(data);
++        out.extend_from_slice(&crc.finalize().to_be_bytes());
++    };
++    let mut header = Vec::new();
++    header.extend_from_slice(&width.to_be_bytes());
++    header.extend_from_slice(&height.to_be_bytes());
++    header.extend_from_slice(&[8, 6, 0, 0, 1]);
++    chunk(b"IHDR", &header);
++    chunk(b"IDAT", &compressed);
++    chunk(b"IEND", &[]);
++    out
++}
++
++/// An interlaced PNG is read whole and stamped as the whole-bytes path does.
++#[test]
++fn an_interlaced_png_stamps_as_it_does_today() {
++    let image = interlaced_rgba(20, 20);
++    let (streamed, _, _) = stamped_through_ops(&image);
++    assert!(images_of(&streamed) == images_of(&stamped_whole(&image)));
++}
++
++/// Bytes that are no image are refused and the editor is as it was.
++#[test]
++fn a_stamp_of_bytes_that_are_no_image_changes_nothing() {
++    let mut state = EngineState::new();
++    let handle = open(&mut state);
++    let before = save(&mut state, handle, &CancelCheck::none()).1;
++    let junk = b"not an image at all".to_vec();
++    let (source, _) = watched(&junk);
++    let answer = stamp(&mut state, handle, &junk, source, &CancelCheck::none());
++    assert_eq!(answer[0], 0);
++    assert!(message_of(&answer).contains("invalid image"), "{}", message_of(&answer));
++    assert!(save(&mut state, handle, &CancelCheck::none()).1 == before);
++}
++
++/// The save of a PNG stamp polls for a cancel at every row, and a cancelled
++/// save fails.
++#[test]
++fn the_save_of_a_png_stamp_polls_for_a_cancel() {
++    let image = png_bytes(&PngSpec { width: 64, height: 200, color: png::ColorType::Rgba, depth: png::BitDepth::Eight, palette: None, trns: None });
++    let mut state = EngineState::new();
++    let handle = open(&mut state);
++    let (source, _) = watched(&image);
++    assert_eq!(stamp(&mut state, handle, &image, source, &CancelCheck::none())[0], 1);
++    let counting = CancelCheck::tripping_at(usize::MAX);
++    assert_eq!(save(&mut state, handle, &counting).0[0], 1);
++    assert!(counting.polls() >= 200 * 2, "{} polls for 200 rows and a mask", counting.polls());
++    let (answer, _) = save(&mut state, handle, &CancelCheck::tripping_at(100));
++    assert_eq!(answer[0], 0, "a cancelled save fails");
++    assert_eq!(save(&mut state, handle, &CancelCheck::none()).0[0], 1, "the editor still saves");
++}
+diff --git a/src/host/engine_proofs/mod.rs b/src/host/engine_proofs/mod.rs
+index b739975..f27ee6e 100644
+--- a/src/host/engine_proofs/mod.rs
++++ b/src/host/engine_proofs/mod.rs
+@@ -132,6 +132,8 @@ mod text_render_modes;
+ mod text_tj_chunks;
+ #[cfg(feature = "rendering")]
+ mod watermark_positions;
++mod attachment_stream;
++mod editor_streamed_inputs;
+ mod whole_reads;
+ #[cfg(feature = "rendering")]
+ mod redact_extra_type3;
+diff --git a/src/host/engine_proofs/whole_reads.txt b/src/host/engine_proofs/whole_reads.txt
+index c5c8652..9dd84db 100644
+--- a/src/host/engine_proofs/whole_reads.txt
++++ b/src/host/engine_proofs/whole_reads.txt
+@@ -18,7 +18,6 @@ fonts::font_dict::extract_truetype_cmap_from_descriptor
+ fonts::font_dict::from_dict
+ fonts::font_dict::parse_descendant_fonts
+ fonts::font_dict::resolve_encoding_writing_mode
+-host::attachments::attachment_bytes
+ host::image_embed::take # an interlaced (Adam7) PNG cannot be produced a row at a time, so its file is read whole; a JPEG and every other PNG stay in their source
+ object::decode_stream_data
+ object::read_whole_raw
+diff --git a/src/host/image_embed.rs b/src/host/image_embed.rs
+index e5c69a2..b3989e3 100644
+--- a/src/host/image_embed.rs
++++ b/src/host/image_embed.rs
+@@ -21,6 +21,11 @@
+ //! sample is rounded to 8 bits as `image` rounds it, `(v + 128) / 257`.
+ //! An interlaced (Adam7) PNG cannot be produced a row at a time, so it is
+ //! read whole and embedded as `ImageData::from_png` does.
++//!
++//! An editor's image stamp stages the same streams as objects whose data is
++//! an extent ([`StreamedImage::stage`]): the save reads a JPEG from its source
++//! in pieces, and a PNG through a reader that deflates its rows as they are
++//! asked for.
+ 
+ use std::io::{BufReader, Read, Seek, SeekFrom, Write};
+ use std::sync::{Arc, Mutex};
+@@ -28,7 +33,8 @@ use std::sync::{Arc, Mutex};
+ use crate::error::{Error, Result};
+ use crate::host::bridge_api::BoxedReader;
+ use crate::host::positioned_write::PositionedWrite;
+-use crate::object::{Object, ObjectRef};
++use crate::object::{Extent, Object, ObjectRef, StreamBody};
++use crate::source::Source;
+ use crate::writer::{ColorSpace, ImageData, ImageFormat};
+ use crate::writer::ObjectSerializer;
+ 
+@@ -269,7 +275,7 @@ enum PngHead {
+     Unreadable,
+ }
+ 
+-fn png_decoder(reader: &mut BoxedReader) -> png::Decoder<BufReader<&mut BoxedReader>> {
++fn png_decoder<R: Read + Seek>(reader: R) -> png::Decoder<BufReader<R>> {
+     let mut decoder = png::Decoder::new(BufReader::with_capacity(PIECE, reader));
+     // Palette, `tRNS` and low bit depths expand as the `image` crate expands
+     // them, which is how `ImageData::from_png` read the file.
+@@ -458,7 +464,7 @@ impl StreamedImage {
+     fn deflate_rows(&self, out: &mut dyn Write, shape: PngShape, pass: Pass) -> Result<()> {
+         let mut source = self.source();
+         source.seek(SeekFrom::Start(0))?;
+-        let mut rows = png_decoder(&mut source).read_info().map_err(|e| image_error("PNG", e))?;
++        let mut rows = png_decoder(&mut *source).read_info().map_err(|e| image_error("PNG", e))?;
+         if rows.info().size() != (shape.width, shape.height) || rows.output_color_type() != (shape.color, shape.depth)
+         {
+             return Err(Error::Image("PNG: the image changed under the save".into()));
+@@ -519,3 +525,212 @@ fn narrow_row(row: &[u8], shape: PngShape, pass: Pass, line: &mut Vec<u8>) {
+         }
+     }
+ }
++
++/// The streams of an image as an editor stages them: the image XObject's
++/// dictionary and data, and its `/SMask`'s when it has one. The dictionaries
++/// carry no `/Length` and no `/SMask`: the save states the one, the caller
++/// the other.
++pub(crate) struct Staged {
++    pub image: (std::collections::HashMap<String, Object>, StreamBody),
++    pub mask: Option<(std::collections::HashMap<String, Object>, StreamBody)>,
++}
++
++/// A reader over the source of a [`StreamedImage`] that keeps its own
++/// position, so the streams of one image read it without disturbing each
++/// other.
++struct Shared {
++    image: Arc<StreamedImage>,
++    at: u64,
++}
++
++impl Read for Shared {
++    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
++        let mut source = self.image.source();
++        source.seek(SeekFrom::Start(self.at))?;
++        let n = source.read(buf)?;
++        self.at += n as u64;
++        Ok(n)
++    }
++}
++
++impl Seek for Shared {
++    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
++        self.at = match pos {
++            SeekFrom::Start(n) => n,
++            SeekFrom::Current(d) => self.at.saturating_add_signed(d),
++            SeekFrom::End(d) => self.image.length.saturating_add_signed(d),
++        };
++        Ok(self.at)
++    }
++}
++
++/// The rows of one pass of a PNG as the zlib stream `deflate_rows` writes, a
++/// reader that decodes and deflates as it is read. Only the decoder's row
++/// and the deflater's output so far are held. Seeking back starts the
++/// stream over; seeking forward reads and drops.
++struct Deflated {
++    image: Arc<StreamedImage>,
++    shape: PngShape,
++    pass: Pass,
++    run: Option<Run>,
++    /// What the deflater has produced and not yet handed out.
++    out: Vec<u8>,
++    taken: usize,
++    /// Bytes handed out since the start of the stream.
++    emitted: u64,
++    /// The stream's length, once a pass has measured it.
++    total: Option<u64>,
++}
++
++struct Run {
++    rows: png::Reader<BufReader<Shared>>,
++    zlib: Option<flate2::write::ZlibEncoder<Vec<u8>>>,
++    line: Vec<u8>,
++    row: u32,
++}
++
++impl Deflated {
++    fn new(image: &Arc<StreamedImage>, shape: PngShape, pass: Pass, total: Option<u64>) -> Self {
++        Deflated { image: Arc::clone(image), shape, pass, run: None, out: Vec::new(), taken: 0, emitted: 0, total }
++    }
++
++    /// The length of the stream, found by deflating it once.
++    fn measure(image: &Arc<StreamedImage>, shape: PngShape, pass: Pass) -> Result<u64> {
++        let mut counter = crate::source::Counter::default();
++        std::io::copy(&mut Deflated::new(image, shape, pass, None), &mut counter)?;
++        Ok(counter.0)
++    }
++
++    fn open(&self) -> std::io::Result<Run> {
++        let shared = Shared { image: Arc::clone(&self.image), at: 0 };
++        let rows = png_decoder(shared).read_info().map_err(std::io::Error::other)?;
++        if rows.info().size() != (self.shape.width, self.shape.height)
++            || rows.output_color_type() != (self.shape.color, self.shape.depth)
++        {
++            return Err(std::io::Error::other("PNG: the image changed under the save"));
++        }
++        Ok(Run {
++            rows,
++            zlib: Some(flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best())),
++            line: Vec::new(),
++            row: 0,
++        })
++    }
++
++    /// Moves the deflater forward by one row, or finishes it.
++    fn advance(&mut self) -> std::io::Result<()> {
++        crate::cancel::poll_io()?;
++        if self.run.is_none() {
++            self.run = Some(self.open()?);
++        }
++        let (shape, pass) = (self.shape, self.pass);
++        let run = self.run.as_mut().expect("opened above");
++        let Some(zlib) = run.zlib.as_mut() else { return Ok(()) };
++        if run.row < shape.height {
++            let row = run.rows.next_row().map_err(std::io::Error::other)?.ok_or(std::io::ErrorKind::UnexpectedEof)?;
++            run.line.clear();
++            run.line.push(0);
++            narrow_row(row.data(), shape, pass, &mut run.line);
++            zlib.write_all(&run.line)?;
++            run.row += 1;
++            self.out = std::mem::take(zlib.get_mut());
++        } else {
++            self.out = run.zlib.take().expect("checked above").finish()?;
++            if let Some(total) = self.total {
++                if self.emitted + self.out.len() as u64 != total {
++                    return Err(std::io::Error::other("PNG: the image changed under the save"));
++                }
++            }
++        }
++        self.taken = 0;
++        Ok(())
++    }
++
++    fn finished(&self) -> bool {
++        self.run.as_ref().is_some_and(|run| run.zlib.is_none())
++    }
++}
++
++impl Read for Deflated {
++    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
++        while self.taken == self.out.len() {
++            if self.finished() {
++                return Ok(0);
++            }
++            self.advance()?;
++        }
++        let n = buf.len().min(self.out.len() - self.taken);
++        buf[..n].copy_from_slice(&self.out[self.taken..self.taken + n]);
++        self.taken += n;
++        self.emitted += n as u64;
++        Ok(n)
++    }
++}
++
++impl Seek for Deflated {
++    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
++        let target = match pos {
++            SeekFrom::Start(n) => n,
++            SeekFrom::Current(d) => self.emitted.saturating_add_signed(d),
++            SeekFrom::End(d) => self
++                .total
++                .ok_or_else(|| std::io::Error::other("the length of the stream is not known"))?
++                .saturating_add_signed(d),
++        };
++        if target < self.emitted {
++            self.run = None;
++            self.out = Vec::new();
++            self.taken = 0;
++            self.emitted = 0;
++        }
++        let mut dropped = vec![0u8; PIECE];
++        while self.emitted < target {
++            let want = dropped.len().min((target - self.emitted) as usize);
++            if self.read(&mut dropped[..want])? == 0 {
++                break;
++            }
++        }
++        Ok(self.emitted)
++    }
++}
++
++impl StreamedImage {
++    /// The image as the streams an editor stages. A PNG is deflated once here
++    /// to learn the lengths its streams state, and again, a row at a time,
++    /// when the save reads them.
++    pub(crate) fn stage(self: &Arc<Self>) -> Result<Staged> {
++        let description = self.description();
++        let dict = description.build_xobject_dict();
++        match self.shape {
++            Shape::Jpeg(_) => {
++                let reader = Shared { image: Arc::clone(self), at: 0 };
++                let body = extent_over(Box::new(reader), self.length);
++                Ok(Staged { image: (dict, body), mask: None })
++            },
++            Shape::Png(shape) => {
++                let stream = |pass| -> Result<StreamBody> {
++                    let total = Deflated::measure(self, shape, pass)?;
++                    let reader = Deflated::new(self, shape, pass, Some(total));
++                    Ok(extent_over(Box::new(reader), total))
++                };
++                let image = (dict, stream(Pass::Colour)?);
++                let mask = match description.build_soft_mask_dict() {
++                    Some(mask_dict) => Some((mask_dict, stream(Pass::Alpha)?)),
++                    None => None,
++                };
++                Ok(Staged { image, mask })
++            },
++        }
++    }
++}
++
++fn extent_over(reader: Box<dyn crate::source::ReadSeek>, len: u64) -> StreamBody {
++    let source = Source::over(reader);
++    StreamBody::Extent(Extent::new(source, 0, len, ObjectRef::new(0, 0), &std::collections::HashMap::new()))
++}
++
++impl From<Vec<u8>> for ImageBytes {
++    fn from(bytes: Vec<u8>) -> Self {
++        ImageBytes::Whole(bytes)
++    }
++}
+diff --git a/src/host/mod.rs b/src/host/mod.rs
+index b636b07..14f0c98 100644
+--- a/src/host/mod.rs
++++ b/src/host/mod.rs
+@@ -48,6 +48,7 @@ pub(crate) mod font_budget;
+ pub(crate) mod font_subset;
+ pub mod images;
+ pub mod image_embed;
++pub(crate) mod staged;
+ pub(crate) mod incremental;
+ #[cfg(feature = "rendering")]
+ pub(crate) mod named_glyphs;
+diff --git a/src/host/ops/convert.rs b/src/host/ops/convert.rs
+index febdd37..1d194d9 100644
+--- a/src/host/ops/convert.rs
++++ b/src/host/ops/convert.rs
+@@ -4,13 +4,13 @@
+ // not-enabled error when the office feature is off. XFA → AcroForm is
+ // core and always built.
+ 
+-use crate::host::binary_codec::{ErrorKind, Request, ResponseWriter};
++use crate::host::binary_codec::{Request, ResponseWriter};
+ use crate::host::bridge_api::{BoxedReader, BoxedWriter};
+ use crate::host::dispatch;
+ use crate::host::engine_state::EngineState;
+ use crate::host::ops::op_unit;
+ use crate::host::ops::support::{
+-    authenticate_or_refuse, ok_flag, open_source, read_all_from_reader, req_handle,
++    authenticate_or_refuse, ok_flag, open_source, req_handle,
+ };
+ 
+ use crate::document::PdfDocument;
+@@ -131,46 +131,20 @@ fn handle_convert_to_pdf(
+ ) -> Vec<u8> {
+     let format = req.get_str("format").unwrap_or("docx");
+ 
+-    if let Some(mut writer) = sink_writer {
+-        // Streaming path: reader → converter → writer. O(1) memory.
+-        if let Some(reader) = source_reader {
+-            match dispatch::convert_from_format_writer(reader, format, &mut writer) {
+-                Ok(()) => {
+-                    ok_flag("streamed")
+-                }
+-                Err(e) => ResponseWriter::error_of(&e),
+-            }
+-        } else if let Some(bytes) = source_bytes {
+-            match dispatch::convert_from_format_writer(std::io::Cursor::new(bytes.to_vec()), format, &mut writer) {
+-                Ok(()) => {
+-                    ok_flag("streamed")
+-                }
+-                Err(e) => ResponseWriter::error_of(&e),
+-            }
+-        } else {
+-            ResponseWriter::error("no source for convertToPdf")
++    let Some(mut writer) = sink_writer else {
++        return ResponseWriter::error("convertToPdf requires a sink");
++    };
++    if let Some(reader) = source_reader {
++        match dispatch::convert_from_format_writer(reader, format, &mut writer) {
++            Ok(()) => ok_flag("streamed"),
++            Err(e) => ResponseWriter::error_of(&e),
+         }
+-    } else {
+-        // Fallback: no sink, return bytes in response.
+-        let data = if let Some(mut reader) = source_reader {
+-            match read_all_from_reader(&mut reader) {
+-                Ok(d) => d,
+-                Err(e) => {
+-                    return ResponseWriter::error_kind(ErrorKind::Io, &e.to_string())
+-                }
+-            }
+-        } else if let Some(b) = source_bytes {
+-            b.to_vec()
+-        } else {
+-            return ResponseWriter::error("no source for convertToPdf");
+-        };
+-        match dispatch::convert_from_format_to_bytes(&data, format) {
+-            Ok(bytes) => {
+-                let mut w = ResponseWriter::ok();
+-                w.put_bytes("data", &bytes);
+-                w.finish()
+-            }
++    } else if let Some(bytes) = source_bytes {
++        match dispatch::convert_from_format_writer(std::io::Cursor::new(bytes.to_vec()), format, &mut writer) {
++            Ok(()) => ok_flag("streamed"),
+             Err(e) => ResponseWriter::error_of(&e),
+         }
++    } else {
++        ResponseWriter::error("no source for convertToPdf")
+     }
+ }
+diff --git a/src/host/ops/editor.rs b/src/host/ops/editor.rs
+index f6ae031..27cdcf0 100644
+--- a/src/host/ops/editor.rs
++++ b/src/host/ops/editor.rs
+@@ -5,11 +5,12 @@ use crate::host::binary_codec::{ErrorKind, Request, ResponseWriter};
+ use crate::host::bridge_api::{BoxedReader, BoxedWriter};
+ use crate::host::dispatch;
+ use crate::host::engine_state::EngineState;
++use crate::host::image_embed::{self, ImageBytes, Taken};
+ use crate::host::positioned_write::{CountingWriter, PositionedWrite};
+ use crate::host::ops::op_unit;
+ use crate::host::ops::support::{
+     authenticate_or_refuse, handle_with_editor, ok_flag, ok_response, open_source_cancellable, page_of,
+-    page_set_of, pages_of, put_page_infos, read_all_from_reader, req_handle,
++    page_set_of, pages_of, put_page_infos, req_handle,
+ };
+ 
+ use crate::editor::DocumentEditor;
+@@ -370,7 +371,7 @@ fn do_editor_mutate(
+     editor: &mut DocumentEditor,
+     edit_op: &str,
+     req: &Request<'_>,
+-    mut data_reader: Option<BoxedReader>,
++    data_reader: Option<BoxedReader>,
+     cancel: &crate::cancel::CancelCheck,
+ ) -> crate::error::Result<Vec<u8>> {
+     use crate::error::Error;
+@@ -566,11 +567,9 @@ fn do_editor_mutate(
+         }
+         "embedFile" => {
+             let name = req.get_str("name").unwrap_or("file");
+-            let data = if let Some(ref mut reader) = data_reader {
+-                read_all_from_reader(reader)
+-                    .map_err(|e| Error::InvalidPdf(e.to_string()))?
+-            } else {
+-                req.get_bytes("data").unwrap_or(&[]).to_vec()
++            let data = match data_reader {
++                Some(reader) => dispatch::FileData::Source(reader),
++                None => dispatch::FileData::Whole(req.get_bytes("data").unwrap_or(&[]).to_vec()),
+             };
+             dispatch::edit_embed_file(
+                 editor,
+@@ -625,11 +624,16 @@ fn do_editor_mutate(
+             ok_response()
+         }
+         "addImageStamp" => {
+-            let image_bytes = if let Some(ref mut reader) = data_reader {
+-                read_all_from_reader(reader)
+-                    .map_err(|e| Error::InvalidPdf(e.to_string()))?
+-            } else {
+-                req.get_bytes("imageData").unwrap_or(&[]).to_vec()
++            let image = match data_reader {
++                Some(reader) => match image_embed::take(reader)? {
++                    Taken::Image(image) => image,
++                    Taken::Unreadable => {
++                        return Err(Error::InvalidPdf(
++                            "invalid image: the bytes are not a readable PNG or JPEG image".to_string(),
++                        ))
++                    },
++                },
++                None => ImageBytes::Whole(req.get_bytes("imageData").unwrap_or(&[]).to_vec()),
+             };
+             let pages = match page_set_of(req, count) {
+                 Ok(p) => p,
+@@ -638,7 +642,7 @@ fn do_editor_mutate(
+             dispatch::edit_add_image_stamp(
+                 editor,
+                 &pages,
+-                image_bytes,
++                image,
+                 req.get_f64("x").unwrap_or(0.0) as f32,
+                 req.get_f64("y").unwrap_or(0.0) as f32,
+                 req.get_f64("width").unwrap_or(100.0) as f32,
+diff --git a/src/host/staged.rs b/src/host/staged.rs
+new file mode 100644
+index 0000000..d4f0f8d
+--- /dev/null
++++ b/src/host/staged.rs
+@@ -0,0 +1,44 @@
++//! Bytes that stay in the caller's source until the save.
++//!
++//! This file is part of the pdf_manipulator host layer (NOT upstream).
++//!
++//! An op that is handed a file to embed keeps the reader it was handed and
++//! stages the file as a stream whose data is an extent over a [`Source`]
++//! built from that reader. The save writes the stream through
++//! `write_indirect`, which reads the extent in pieces, so the file passes
++//! from its source to the output without being held.
++
++use std::collections::HashMap;
++use std::io::Read;
++
++use crate::error::Result;
++use crate::object::{Extent, ObjectRef, StreamBody};
++use crate::source::{ReadSeek, Source};
++
++/// Bytes moved per read when a staged file is summed.
++const PIECE: usize = 64 * 1024;
++
++/// The whole of `reader` as the data of a stream.
++pub(crate) fn body_over(reader: Box<dyn ReadSeek>) -> Result<StreamBody> {
++    let source = Source::over(reader);
++    let len = source.len()?;
++    Ok(StreamBody::Extent(Extent::new(source, 0, len, ObjectRef::new(0, 0), &HashMap::new())))
++}
++
++/// The MD5 sum of a staged body, read in pieces.
++#[cfg(feature = "legacy-crypto")]
++pub(crate) fn md5_of(body: &StreamBody) -> Result<Vec<u8>> {
++    use md5::{Digest, Md5};
++
++    let mut hasher = Md5::new();
++    let mut reader = body.raw_reader()?;
++    let mut piece = vec![0u8; PIECE];
++    loop {
++        crate::cancel::poll()?;
++        let n = reader.read(&mut piece)?;
++        if n == 0 {
++            return Ok(hasher.finalize().to_vec());
++        }
++        hasher.update(&piece[..n]);
++    }
++}
+diff --git a/src/source.rs b/src/source.rs
+index 37f53ea..00aa648 100644
+--- a/src/source.rs
++++ b/src/source.rs
+@@ -108,6 +108,15 @@ impl Source {
+         }
+     }
+ 
++    /// A source over a caller's reader, read where the reader stands and
++    /// never decrypted: the bytes of a file that is not a document.
++    pub(crate) fn over(reader: Box<dyn ReadSeek>) -> Arc<Self> {
++        Arc::new(Self::new(
++            PdfReader::External(BufReader::new(reader)),
++            Arc::new(WarningSink::new()),
++        ))
++    }
++
+     pub(crate) fn warnings(&self) -> &Arc<WarningSink> {
+         &self.warnings
+     }
+diff --git a/src/writer/embedded_files.rs b/src/writer/embedded_files.rs
+index 85983c9..838b0ac 100644
+--- a/src/writer/embedded_files.rs
++++ b/src/writer/embedded_files.rs
+@@ -42,8 +42,25 @@ pub struct EmbeddedFile {
+     /// Associated File Relationship (AFRelationship)
+     /// Per PDF 2.0 spec: Source, Data, Alternative, Supplement, etc.
+     pub af_relationship: Option<AFRelationship>,
++    // ── pdf_manipulator patch: an embedded file can stay in its source until the save ──
++    /// The data when it is not held in `data`, which is then empty: the save
++    /// reads it from its source in pieces.
++    pub(crate) staged: Option<Staged>,
++    // ── end pdf_manipulator patch ──
+ }
+ 
++// ── pdf_manipulator patch: an embedded file can stay in its source until the save ──
++/// The data of an embedded file that stays in its source.
++#[derive(Debug, Clone)]
++pub(crate) struct Staged {
++    /// An extent over the source.
++    pub(crate) body: crate::object::StreamBody,
++    /// The MD5 sum of the data, summed in pieces when the file was staged;
++    /// `None` without `legacy-crypto`.
++    pub(crate) checksum: Option<Vec<u8>>,
++}
++// ── end pdf_manipulator patch ──
++
+ /// Associated File Relationship per PDF 2.0 spec.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub enum AFRelationship {
+@@ -97,9 +114,28 @@ impl EmbeddedFile {
+             creation_date: None,
+             modification_date: None,
+             af_relationship: None,
++            // ── pdf_manipulator patch: an embedded file can stay in its source until the save ──
++            staged: None,
++            // ── end pdf_manipulator patch ──
+         }
+     }
+ 
++    // ── pdf_manipulator patch: an embedded file can stay in its source until the save ──
++    /// A new embedded file whose data stays in its source until the save.
++    pub(crate) fn staged(
++        name: impl Into<String>,
++        body: crate::object::StreamBody,
++    ) -> crate::error::Result<Self> {
++        #[cfg(feature = "legacy-crypto")]
++        let checksum = Some(crate::host::staged::md5_of(&body)?);
++        #[cfg(not(feature = "legacy-crypto"))]
++        let checksum = None;
++        let mut file = Self::new(name, Vec::new());
++        file.staged = Some(Staged { body, checksum });
++        Ok(file)
++    }
++    // ── end pdf_manipulator patch ──
++
+     /// Set the description.
+     pub fn with_description(mut self, description: impl Into<String>) -> Self {
+         self.description = Some(description.into());
+@@ -132,7 +168,12 @@ impl EmbeddedFile {
+ 
+     /// Get the size of the embedded file data.
+     pub fn size(&self) -> usize {
+-        self.data.len()
++        // ── pdf_manipulator patch: an embedded file can stay in its source until the save ──
++        match &self.staged {
++            Some(staged) => staged.body.len() as usize,
++            None => self.data.len(),
++        }
++        // ── end pdf_manipulator patch ──
+     }
+ 
+     /// Build the embedded file stream dictionary.
+@@ -157,7 +198,9 @@ impl EmbeddedFile {
+ 
+         // Build Params dictionary
+         let mut params = HashMap::new();
+-        params.insert("Size".to_string(), Object::Integer(self.data.len() as i64));
++        // ── pdf_manipulator patch: an embedded file can stay in its source until the save ──
++        params.insert("Size".to_string(), Object::Integer(self.size() as i64));
++        // ── end pdf_manipulator patch ──
+ 
+         if let Some(ref creation) = self.creation_date {
+             params.insert(
+@@ -179,8 +222,16 @@ impl EmbeddedFile {
+ 
+         // CheckSum: MD5 per PDF spec (ISO 32000-1 §7.11.4). When legacy-crypto
+         // is disabled we omit the optional field rather than fail.
+-        #[cfg(feature = "legacy-crypto")]
+-        params.insert("CheckSum".to_string(), Object::String(md5_hash(&self.data)));
++        // ── pdf_manipulator patch: an embedded file can stay in its source until the save ──
++        if let Some(staged) = &self.staged {
++            if let Some(checksum) = &staged.checksum {
++                params.insert("CheckSum".to_string(), Object::String(checksum.clone()));
++            }
++        } else {
++            #[cfg(feature = "legacy-crypto")]
++            params.insert("CheckSum".to_string(), Object::String(md5_hash(&self.data)));
++        }
++        // ── end pdf_manipulator patch ──
+ 
+         dict.insert("Params".to_string(), Object::Dictionary(params));
+ 
