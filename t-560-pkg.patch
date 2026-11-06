@@ -1,0 +1,3542 @@
+diff --git a/.github/actions/capabilities/wasm-build/action.yml b/.github/actions/capabilities/wasm-build/action.yml
+index ee366ce..47bf9f4 100644
+--- a/.github/actions/capabilities/wasm-build/action.yml
++++ b/.github/actions/capabilities/wasm-build/action.yml
+@@ -12,7 +12,7 @@ runs:
+     # artifact, and a borrowed file makes that row pass without testing it.
+     - shell: bash
+       run: |
+-        if [ -f web_assets/pdf_oxide_bg.wasm ]; then
++        if [ -f web_assets/pdf_oxide_bg.0.wasm ] && [ -f web_assets/pdf_oxide_manifest.json ]; then
+           echo "WASM cached — skipping build"
+         else
+           make build-wasm
+diff --git a/.github/actions/capabilities/wasm-cache/action.yml b/.github/actions/capabilities/wasm-cache/action.yml
+index da60491..f25c0a3 100644
+--- a/.github/actions/capabilities/wasm-cache/action.yml
++++ b/.github/actions/capabilities/wasm-cache/action.yml
+@@ -41,11 +41,15 @@ runs:
+       if: inputs.save == 'true'
+       id: wasm-cache
+       with:
+-        path: web_assets/pdf_oxide_bg.wasm
++        path: |
++          web_assets/pdf_oxide*_bg.*.wasm
++          web_assets/pdf_oxide_manifest.json
+         key: wasm-${{ runner.os }}-${{ runner.arch }}-${{ env.SUBMODULE_PDF_OXIDE }}-${{ env.SUBMODULE_OFFICE_OXIDE }}-${{ env.SUBMODULE_TINY_SKIA }}-${{ hashFiles('build.json', 'tool/versions.env') }}
+     - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+       if: inputs.save != 'true'
+       id: wasm-cache-ro
+       with:
+-        path: web_assets/pdf_oxide_bg.wasm
++        path: |
++          web_assets/pdf_oxide*_bg.*.wasm
++          web_assets/pdf_oxide_manifest.json
+         key: wasm-${{ runner.os }}-${{ runner.arch }}-${{ env.SUBMODULE_PDF_OXIDE }}-${{ env.SUBMODULE_OFFICE_OXIDE }}-${{ env.SUBMODULE_TINY_SKIA }}-${{ hashFiles('build.json', 'tool/versions.env') }}
+diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+index 9f04988..9197927 100644
+--- a/.github/workflows/release.yml
++++ b/.github/workflows/release.yml
+@@ -223,8 +223,11 @@ jobs:
+             windows-arm64-pdf_oxide.dll
+             windows-x64-pdf_oxide.dll
+             wasm-pdf_oxide.js
+-            wasm-pdf_oxide_bg.wasm
+-            wasm-pdf_oxide_asyncify_bg.wasm
++            wasm-pdf_oxide_manifest.json
++            wasm-pdf_oxide_bg.0.wasm
++            wasm-pdf_oxide_bg.1.wasm
++            wasm-pdf_oxide_asyncify_bg.0.wasm
++            wasm-pdf_oxide_asyncify_bg.1.wasm
+           )
+           MISSING=()
+           for f in "${EXPECTED[@]}"; do
+diff --git a/.gitignore b/.gitignore
+index c74403c..62578da 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -318,6 +318,7 @@ vendor/pdf_oxide/target/
+ # .d.ts files are wasm-bindgen build artifacts (TypeScript types) — not consumed.
+ # Rebuilt locally via tool/build_wasm.sh for development.
+ web_assets/*.wasm
++web_assets/pdf_oxide_manifest.json
+ web_assets/*.d.ts
+ 
+ # Example app's copy of WASM assets (installed via dart run pdf_manipulator:setup)
+diff --git a/CHANGELOG.pre.md b/CHANGELOG.pre.md
+index 16a30a8..b7c021c 100644
+--- a/CHANGELOG.pre.md
++++ b/CHANGELOG.pre.md
+@@ -182,7 +182,8 @@ CONTENT RULES (never change)
+ - Added the page builder methods the engine already had: `appendText`, `textIn`, `rect`, `line`, `stickyNote`, `stamp`, `freeText`, `onOpen`, `onClose` and `table`, and a `PdfMarkup` or `PdfLink` argument on `text`
+ - Added a `PdfTextStyle` to `text`, `stamp(PdfStamp...)`, `table(columns, rows, {options})` with `PdfTableCell` and `PdfTableOptions`, and `stickyNote(..., at:)` to the page builder
+ - Added `PdfBuilder.addImagePage`, a page that holds one picture and takes the picture's own size unless you name one
+-- Added the web Asyncify mode, `asyncify: true` under `hooks: user_defines: pdf_manipulator:`, which also ships `pdf_oxide_asyncify_bg.wasm` so a browser with neither JSPI nor `SharedArrayBuffer` streams instead of copying to storage first — the file is 32 MB for the full engine and is fetched only in this mode
++- Added the web Asyncify mode, `asyncify: true` under `hooks: user_defines: pdf_manipulator:`, which also ships the Asyncify wasm so a browser with neither JSPI nor `SharedArrayBuffer` streams instead of copying to storage first — it is 28 MB for the full engine and is fetched only in this mode, and only where OPFS cannot run
++- Changed the web wasm to ship as parts of 16 MiB listed in `pdf_oxide_manifest.json`, which the browser joins into one stream as it compiles, so no file reaches the 25 MiB limit of static hosts; apps that list `pdf_oxide_bg.wasm` re-run setup and list the parts
+ - Changed `PdfBuilder.save` to Flate-compress page content and font streams; `save(output, deflate: false)` keeps them plain for debugging
+ - Changed `open`, `edit`, `split`, a full-rewrite save and `compress` to hold a bounded window of the document instead of all of it: a 38 MB, 10,000-page file now opens and saves in under 16 MB of engine memory, where it took up to 85 MB
+ - Changed `appendPages` to keep the merged file open until the editor is disposed and copy its objects one at a time at save: merging a 10,000-page file takes under 16 MB of engine memory and about 2 seconds, where it took 163 MB and minutes
+diff --git a/Makefile b/Makefile
+index 6a035d4..2a146bc 100644
+--- a/Makefile
++++ b/Makefile
+@@ -241,27 +241,30 @@ build-wasm:
+ 	$(DART) tool/compile.dart wasm
+ 
+ # make build-wasm-asyncify   The Asyncify twin of the wasm (web_assets/
+-#                            pdf_oxide_asyncify_bg.wasm), from the normal one.
++#                            pdf_oxide_asyncify_bg.<n>.wasm and its entry in
++#                            pdf_oxide_manifest.json), from the normal one.
+ build-wasm-asyncify:
+ 	$(DART) tool/compile.dart wasm-asyncify
+ 
+-# The wasm the web tests load. A file target, so it rebuilds exactly when an
+-# engine input is newer: every Rust source and manifest under vendor/ (the
+-# build output dirs excluded), the wasm feature list in build.json, and the
+-# Dart that drives the compile. `make build-wasm` forces a rebuild; the web
++# The wasm the web tests load: the normal module's first part stands for its
++# parts and the manifest, which one cut writes together. A file target, so it
++# rebuilds exactly when an engine input is newer: every Rust source and
++# manifest under vendor/ (the build output dirs excluded), the wasm feature
++# list in build.json, and the Dart that drives the compile and the cut. `make build-wasm` forces a rebuild; the web
+ # test targets depend on this file, never on the phony target.
+-WASM_OUT := web_assets/pdf_oxide_bg.wasm
++WASM_OUT := web_assets/pdf_oxide_bg.0.wasm
+ WASM_INPUTS := $(shell find vendor \( -name target -o -name .git \) -prune -o \
+ 		-type f \( -name '*.rs' -o -name Cargo.toml -o -name Cargo.lock \) -print) \
+ 	build.json tool/compile.dart \
+-	lib/src/hook/engine_compiler.dart lib/src/hook/build_constants.dart
++	lib/src/hook/engine_compiler.dart lib/src/hook/build_constants.dart \
++	lib/src/hook/wasm_parts.dart
+ 
+ $(WASM_OUT): $(WASM_INPUTS)
+ 	$(DART) tool/compile.dart wasm
+ 
+ # The Asyncify wasm is a function of the normal one and of the instrumentation
+ # code, so it rebuilds when either is newer.
+-ASYNCIFY_OUT := web_assets/pdf_oxide_asyncify_bg.wasm
++ASYNCIFY_OUT := web_assets/pdf_oxide_asyncify_bg.0.wasm
+ 
+ # Every read of the Asyncify mode unwinds and rewinds the engine's stack, so
+ # its tests need more of the local one-second budget than the other modes;
+diff --git a/README.md b/README.md
+index f76bb42..f583523 100644
+--- a/README.md
++++ b/README.md
+@@ -76,7 +76,7 @@ Nothing to do. On iOS, Android, macOS, Windows, and Linux, the build hook downlo
+ 
+ ### Web
+ 
+-Web can't auto-download native assets, so run setup once. It fetches the prebuilt WASM engine. Run it again after any `pub upgrade`, because the asset is tied to the package version:
++Web can't auto-download native assets, so run setup once. It fetches the prebuilt WASM engine into `web/pdf_manipulator/`: `executor_worker.js`, `pdf_oxide.js`, `pdf_oxide_manifest.json` and the wasm in parts of 16 MiB (`pdf_oxide_bg.0.wasm`, `pdf_oxide_bg.1.wasm`, and with `asyncify: true` the `pdf_oxide_asyncify_bg.<n>.wasm` ones). Run it again after any `pub upgrade`, because the assets are tied to the package version:
+ 
+ ```sh
+ flutter pub run pdf_manipulator:setup
+@@ -844,8 +844,8 @@ Internally the modes differ in *how* the WASM engine gets your bytes: the first
+ |---|---|:---:|---|
+ | **JSPI** | Best: streams, zero setup | ✅ | Chrome 137+ · Firefox 139+ |
+ | **Atomics** | Streams, but needs two server headers | ✅ | COOP/COEP headers are set |
+-| **Asyncify** | Streams without headers on older browsers, with a second, larger WASM file | ✅ | you turned on `asyncify: true` ([below](#asyncify-the-second-wasm)) |
+-| **OPFS** | Always works; copies the file to disk first, then reads | ❌ | any modern browser (the fallback) |
++| **OPFS** | Copies the file to disk first, then reads | ❌ | the browser opens its private file system |
++| **Asyncify** | Streams without headers on older browsers, with a second, larger WASM | ✅ | OPFS is refused and you turned on `asyncify: true` ([below](#asyncify-the-second-wasm)) |
+ 
+ <details>
+ <summary><b>🧩 ok but what do JSPI, Atomics, Asyncify and OPFS actually mean?</b></summary>
+@@ -859,7 +859,7 @@ All four solve the same puzzle (synchronous WASM code needs bytes that arrive as
+ - **Asyncify** — a second build of the engine that can stop in the middle of a call and continue later (binaryen's `--asyncify`), so it waits for the next chunk the way JSPI does without needing the browser's help or any header. You opt in; see below.
+ - **OPFS** (Origin Private File System) — when none of the above is available, the package copies your file into the browser's private on-disk storage and reads from there. Works everywhere; the copy means a slower first byte and a little disk use.
+ 
+-You never choose; the package tries JSPI, then Atomics, then Asyncify (only if your app ships it), then OPFS, and uses the first that works.
++You never choose; the package tries JSPI, then Atomics, then OPFS (it must open the browser's private file system, which some private-browsing modes refuse), then Asyncify (only if your app ships it), and uses the first that works. OPFS comes before Asyncify because it measured about 2.2 times faster, the copy included. With none of them, `ensureInitialized` throws `PdfUnsupported`.
+ 
+ </details>
+ 
+@@ -875,7 +875,9 @@ final pdf = Pdf(config: PdfConfig(webIoMode: PdfIoMode.atomics)); // pin a mode
+ final mode = await pdf.ensureInitialized(); // or just check
+ ```
+ 
+-Forcing a mode the browser cannot run, or Asyncify when your app did not ship its WASM file, throws `PdfUnsupported` as soon as the `Pdf` is created; it never falls back silently.
++Forcing a mode the browser cannot run, or Asyncify when your app did not ship its WASM (no entry in `pdf_oxide_manifest.json`), throws `PdfUnsupported` when the `Pdf` initializes (`ensureInitialized`, or its first operation); it never falls back silently. A missing or unreadable `pdf_oxide_manifest.json` is the same error, naming the file and the setup command.
++
++**Self-hosting the assets.** Serve `.wasm` files as `application/wasm` with compression on: a static host picks the compression from the extension, and the parts total 8.1 MB gzipped (10.2 MB with Asyncify). Keep every file beside `executor_worker.js`. A service worker that precaches assets reads `pdf_oxide_manifest.json` and caches the parts it lists. The page checks each part's size and SHA-256 against the manifest (the hash only on a secure context, which `crypto.subtle` needs).
+ 
+ **Enable streaming on older browsers.** Chrome 137+ / Firefox 139+ already stream via JSPI with no setup. For older browsers that have `SharedArrayBuffer`, two server headers switch the fallback from disk-copy (OPFS) to streaming (Atomics):
+ 
+@@ -911,9 +913,9 @@ hooks:
+       asyncify: true   # false (default) ships nothing new
+ ```
+ 
+-Setup then also provides `pdf_oxide_asyncify_bg.wasm` next to the normal one: downloaded for the full engine, built from source for a `keep:` subset. A browser fetches only the file its mode runs, so JSPI and Atomics visitors never download the larger one.
++Setup then also provides the Asyncify wasm's parts, `pdf_oxide_asyncify_bg.0.wasm` and onward, next to the normal one and listed in `pdf_oxide_manifest.json`: downloaded for the full engine, built from source for a `keep:` subset. A browser fetches only the parts of the module its mode runs, so JSPI, Atomics and OPFS visitors never download the larger one; auto-detection picks Asyncify only where OPFS cannot run.
+ 
+-The trade-off, plainly: the Asyncify file is about half again as large as the normal one (the full engine: 32.0 MB against 20.9 MB, 12.4 MB against 8.1 MB gzipped), because most of the engine can be in the middle of a read when it stops. That is over the 25 MiB per-file limit of Cloudflare Pages and Workers static assets, so a site hosted there cannot serve it. The instrumented engine also runs slower, and every read is a round trip to the page: on a 300 MB text PDF, opening and extracting 50 pages took 93 s with Asyncify against 41 s with OPFS (the copy included), and merging two such files 16–19 s against 9–10 s. Turn it on when streaming matters more than those costs, and measure your own files.
++The trade-off, plainly: the Asyncify module is about a third larger than the normal one (the full engine: 28.2 MB against 20.9 MB, 10.2 MB against 8.1 MB gzipped), because most of the engine can be in the middle of a read when it stops. Every module ships as parts of 16 MiB, so neither reaches the 25 MiB per-file limit of Cloudflare Pages and Workers static assets. The instrumented engine also runs slower, and every read is a round trip to the page: on a 300 MB text PDF, opening and extracting 50 pages took 93 s with Asyncify against 41 s with OPFS (the copy included), and merging two such files 16–19 s against 9–10 s. Turn it on when streaming matters more than those costs, and measure your own files.
+ 
+ </details>
+ 
+diff --git a/build.json b/build.json
+index 5f5f84f..2db215a 100644
+--- a/build.json
++++ b/build.json
+@@ -7,14 +7,20 @@
+     "wasm": "wasm,icc,legacy-crypto,rendering,signatures,pdfa,office,extract"
+   },
+   "web": {
+-    "pdf_oxide_bg.wasm": "wasm-pdf_oxide_bg.wasm",
+-    "pdf_oxide_asyncify_bg.wasm": "wasm-pdf_oxide_asyncify_bg.wasm",
++    "pdf_oxide_bg.0.wasm": "wasm-pdf_oxide_bg.0.wasm",
++    "pdf_oxide_bg.1.wasm": "wasm-pdf_oxide_bg.1.wasm",
++    "pdf_oxide_asyncify_bg.0.wasm": "wasm-pdf_oxide_asyncify_bg.0.wasm",
++    "pdf_oxide_asyncify_bg.1.wasm": "wasm-pdf_oxide_asyncify_bg.1.wasm",
++    "pdf_oxide_manifest.json": "wasm-pdf_oxide_manifest.json",
+     "pdf_oxide.js": "wasm-pdf_oxide.js",
+     "executor_worker.js": "wasm-executor_worker.js"
+   },
+   "wasmBuildOutputs": [
+-    "pdf_oxide_bg.wasm",
+-    "pdf_oxide_asyncify_bg.wasm",
++    "pdf_oxide_bg.0.wasm",
++    "pdf_oxide_bg.1.wasm",
++    "pdf_oxide_asyncify_bg.0.wasm",
++    "pdf_oxide_asyncify_bg.1.wasm",
++    "pdf_oxide_manifest.json",
+     "pdf_oxide.js"
+   ]
+ }
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+index b982778..34e125d 100644
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -704,22 +704,57 @@ on the main isolate through `NativeCallable.listener`. No helper isolate exists.
+ |---|---|---|
+ | **JSPI** | `WebAssembly.Suspending` suspends wasm, JS fetches async, wasm resumes | Chrome 137+ / Firefox 139+ |
+ | **Atomics** | `Atomics.wait` blocks wasm, JS fills a SAB, `Atomics.notify` wakes it | `SharedArrayBuffer` (COOP/COEP headers) |
+-| **Asyncify** | The instrumented wasm unwinds at the read or write, the worker awaits the answer and rewinds | The app shipped `pdf_oxide_asyncify_bg.wasm` (`asyncify: true`) |
++| **Asyncify** | The instrumented wasm unwinds at the read or write, the worker awaits the answer and rewinds | The app shipped the Asyncify module (an entry in `pdf_oxide_manifest.json`, `asyncify: true`) |
+ | **OPFS** | Sources are pre-copied to OPFS disk, wasm reads through `SyncAccessHandle` | All modern browsers |
+ 
+-Detection (`WebExecutorBooter._detectMode`), best first:
++Detection (`WebExecutorBooter.resolveMode`, asynchronous: it first fetches the manifest, once per page and location), best first:
+ 
+ ```
+ if ("Suspending" in WebAssembly) → JSPI     (streaming, no headers)
+ else if (SharedArrayBuffer)      → Atomics  (streaming, needs COOP/COEP)
+-else if (the app shipped the     → Asyncify (streaming, no headers, larger wasm)
+-         Asyncify wasm)
+-else                             → OPFS     (pre-copy fallback)
++else if (getDirectory() resolves)→ OPFS     (pre-copy; Asyncify measured ~2.2x slower)
++else if (the manifest lists the  → Asyncify (streaming, no headers, larger wasm)
++         Asyncify module)
++else                             → PdfUnsupported naming both
+ ```
+ 
++### Web assets — the manifest and the parts
++
++Static hosts cap each uploaded file (Cloudflare Pages and Workers: 25 MiB), not the size of
++a module a browser compiles, so every wasm the package ships is cut into parts: consecutive
++pieces of exactly `wasmPartBytes` (16 MiB, `build_constants.dart`), the last one shorter,
++named `<module>.<n>.wasm` (the extension makes hosts pick `application/wasm` and compression).
++The modules are `pdf_oxide_bg` and, with `asyncify: true`, `pdf_oxide_asyncify_bg`. Every module
++is cut, even one that would fit in a file, so every mode runs the same join path.
++
++`pdf_oxide_manifest.json` sits beside `executor_worker.js` and lists each module: its bytes,
++the SHA-256 of the whole, and its parts (file, bytes, SHA-256). It is the only way the runtime
++learns which modules exist: there is no probe, so a host that answers any path with an HTML
++page cannot pass for one that shipped Asyncify. One function, `writeWasmParts`
++(`lib/src/hook/wasm_parts.dart`), cuts and merges a module's entry into the manifest; the make
++targets, the release and the hook's from-source build all call it. The whole modules exist only
++as build intermediates in a temp folder (the Asyncify build joins the normal module's parts
++back for its input).
++
++One loader joins the parts: `compileParts` in `executor_worker.js` and its main-thread twin
++`_compileParts` in `lib/src/runtime/web/wasm_loader.dart` start every part's fetch at once,
++enqueue them in order into one `ReadableStream`, and hand `new Response(stream)` with
++`content-type: application/wasm` to `WebAssembly.compileStreaming`. Each part is counted and its
++SHA-256 checked against the manifest before the stream goes on; a short or corrupt part errors
++the stream and the compile rejects with a message naming the part. The host compiles once per
++page and posts the module to its workers; when that compile fails, each worker compiles from
++the manifest entry the host sends in `init`. The web battery pins both loaders against the same
++manifest.
++
++The walls (`test/guards/wasm_size_test.dart`, and the release in `tool/compile.dart`): every
++file in `web_assets/` and the release output is under 26,214,400 bytes; each module's parts
++concatenated are byte for byte the module the manifest lists; and each module's gzip size,
++which is what a visitor downloads, is within `normalWasmGzipBudget` /
++`asyncifyWasmGzipBudget` (8.5 and 10.5 MiB) — raising one is a decision, not a fix.
++
+ Force a mode with `Pdf(config: PdfConfig(webIoMode: PdfIoMode.jspi))`. A forced mode the
+-browser cannot run, or Asyncify when the app did not ship its wasm, throws `PdfUnsupported`
+-when the instance is created; there is never a silent fallback. All four modes give the Rust
++browser cannot run, or Asyncify when the manifest has no entry for it, throws `PdfUnsupported`
++when the instance initializes; there is never a silent fallback. All four modes give the Rust
+ side the same `Read+Seek` trait and `bridge_api.rs` is the same. JSPI, Atomics and OPFS run
+ the one wasm binary; Asyncify runs its own twin, and a browser fetches only the wasm its mode
+ runs. Only OPFS pre-copies to disk. Call `await pdf.ensureInitialized()` at startup to read
+@@ -962,6 +997,7 @@ lib/
+     └── hook/                               ← build and setup support (not consumer API)
+         ├── asset_hashes.dart               ← SHA-256 hashes for all release assets
+         ├── resolver.dart                   ← ResolveRequest + 5-step waterfall
++        ├── wasm_parts.dart                 ← the cut: writeWasmParts, the manifest, the walls
+         ├── asyncify_list.dart              ← the wasm call graph, the Asyncify instrumentation
+         │                                      list and its wall
+         └── (build_constants, engine_compiler, engine_build, keep_plan, pdf_config,
+@@ -971,9 +1007,11 @@ web_assets/                                 ← committed in git (except .wasm,
+ ├── executor_worker.js                      ← the executor body: reader registry, 4 I/O modes,
+ │                                              reset, execute (no routing logic)
+ ├── pdf_oxide.js                            ← wasm-bindgen glue (committed, paired with .wasm)
+-├── pdf_oxide_bg.wasm                       ← wasm binary (gitignored; downloaded from releases)
+-└── pdf_oxide_asyncify_bg.wasm              ← its Asyncify twin, for apps with `asyncify: true`
+-                                               (gitignored; downloaded from releases)
++├── pdf_oxide_bg.<n>.wasm                   ← the wasm binary in 16 MiB parts (gitignored; built or
++│                                              downloaded from releases)
++├── pdf_oxide_asyncify_bg.<n>.wasm          ← its Asyncify twin's parts, for apps with `asyncify: true`
++│                                              (gitignored)
++└── pdf_oxide_manifest.json                 ← the modules, parts and hashes (gitignored)
+ 
+ build.json                                  ← single source of truth: crate name, repo,
+                                                cargo features, web asset map
+diff --git a/docs/MIGRATION.md b/docs/MIGRATION.md
+index a95d681..b1aec0a 100644
+--- a/docs/MIGRATION.md
++++ b/docs/MIGRATION.md
+@@ -158,6 +158,7 @@ try {
+ 
+ ### Removed
+ 
++- `pdf_oxide_bg.wasm` and `pdf_oxide_asyncify_bg.wasm` in a precache list, a hosting rule or a deploy script: the web assets are `pdf_oxide_bg.<n>.wasm` (and, with `asyncify: true`, `pdf_oxide_asyncify_bg.<n>.wasm`) listed in `pdf_oxide_manifest.json`. Run setup again, delete the old whole files from `web/pdf_manipulator/`, and list the parts the manifest names where the whole file was listed; serve `.wasm` as `application/wasm`.
+ - `compress(garbageCollect:)`: it always collects garbage. Its `images` default is `PdfImagePolicy.lossless`; pass `PdfImagePolicy.ebook` for the old result.
+ - `imagesToPdf` on A4 pages: each page has its image's size; pass `page: PdfImagePage(size: PdfImagePageSize.fixed(PdfPageSize.a4()))` for A4.
+ - `split`, `splitBySize` and `splitByBookmarks`: one `split(input, sinkFor, by: PdfSplitRule.every(n))`, or `.maxBytes(n)`, or `.bookmarks()`.
+diff --git a/hook/build.dart b/hook/build.dart
+index 94a5149..760878a 100644
+--- a/hook/build.dart
++++ b/hook/build.dart
+@@ -95,6 +95,7 @@ import 'package:pdf_manipulator/src/hook/engine_compiler.dart';
+ import 'package:pdf_manipulator/src/hook/resolver.dart';
+ import 'package:pdf_manipulator/src/hook/keep_plan.dart';
+ import 'package:pdf_manipulator/src/hook/pdf_config.dart';
++import 'package:pdf_manipulator/src/hook/wasm_parts.dart';
+ 
+ final _log = Logger('pdf_manipulator:build');
+ 
+@@ -238,11 +239,13 @@ Future<void> _resolveNative({
+ // Flutter serves destDir as static files — no registration needed.
+ //
+ // Two asset types with different compile fallbacks:
+-//   WASM build outputs (pdf_oxide_bg.wasm, pdf_oxide.js) → cargo + bindgen_runner
++//   WASM build outputs (the wasm parts, pdf_oxide_manifest.json, pdf_oxide.js)
++//     → cargo + bindgen_runner, cut by writeWasmParts
+ //   Hand-written JS (executor_worker.js) → copy from package
+ //
+-// The Asyncify wasm is resolved only with `asyncify: true`; otherwise nothing
+-// of it is downloaded, built or written.
++// The Asyncify parts are resolved only with `asyncify: true`; otherwise
++// nothing of them is downloaded, built or written, and the manifest written
++// beside the worker has no Asyncify entry.
+ //
+ // Returns the number of files freshly resolved (0 = all cached).
+ Future<int> resolveWeb({
+@@ -256,53 +259,163 @@ Future<int> resolveWeb({
+ }) async {
+   final constants = BuildConstants.load(packageRoot);
+   // A kept subset OR a non-default build has no prebuilt asset, no pinned
+-  // hash, and must not reuse a default-set artifact: force + version 0.0.0
+-  // route the resolver straight to a fresh compile.
++  // hash, and must not reuse a default-set artifact: it compiles afresh.
+   final custom = wasmFeaturesOverride != null || !engineBuild.isDefault;
+-  final effectiveVersion = custom ? '0.0.0' : version;
+-  final effectiveForce = force || custom;
+ 
+   if (!destDir.existsSync()) {
+     destDir.createSync(recursive: true);
+   }
+ 
++  if (custom) {
++    return _installCustomWeb(
++      packageRoot: packageRoot,
++      destDir: destDir,
++      constants: constants,
++      features: wasmFeaturesOverride ?? constants.wasmFeatures,
++      engineBuild: engineBuild,
++      asyncify: asyncify,
++    );
++  }
++
+   var installed = 0;
++  Future<Directory>? outputs;
+ 
+   for (final entry in constants.webAssets.entries) {
+     final localName = entry.key;
+     final assetName = entry.value;
+-    if (localName == asyncifyWebAsset && !asyncify) continue;
+-    final dest = File('${destDir.path}/$localName');
+-
++    if (!asyncify && localName.startsWith('$asyncifyWasmModule.')) continue;
+     final isWasmBuildOutput = constants.wasmBuildOutputs.contains(localName);
+-
+-    final fresh = await resolveAsset(
+-      ResolveRequest(
+-        assetName: assetName,
+-        downloadUrl: constants.downloadUrl(effectiveVersion, assetName),
+-        dest: dest,
+-        expectedHash: custom ? null : assetHashes[assetName],
+-        version: effectiveVersion,
+-        packageRoot: packageRoot,
+-        force: effectiveForce,
+-        compile: isWasmBuildOutput
+-            ? (File d) => _compileWasm(
+-                packageRoot,
+-                d,
+-                localName,
+-                wasmFeaturesOverride,
+-                engineBuild,
+-              )
+-            : (File d) => _copyWebAsset(packageRoot, d, localName),
++    Future<void> compile(File d) => _copyBuilt(
++      packageRoot: packageRoot,
++      localName: localName,
++      dest: d,
++      isWasmBuildOutput: isWasmBuildOutput,
++      outputs: () => outputs ??= _defaultWebOutputs(
++        packageRoot,
++        constants,
++        engineBuild,
++        asyncify,
+       ),
+     );
+ 
++    final request = ResolveRequest(
++      assetName: assetName,
++      downloadUrl: constants.downloadUrl(version, assetName),
++      dest: File('${destDir.path}/$localName'),
++      expectedHash: assetHashes[assetName],
++      version: version,
++      packageRoot: packageRoot,
++      force: force,
++      compile: compile,
++    );
++
++    final fresh = localName == wasmManifestFile && !asyncify
++        ? await _resolveManifestWithoutAsyncify(request, destDir)
++        : await resolveAsset(request);
+     if (fresh) installed++;
+   }
+ 
++  _pruneUnlistedParts(destDir);
+   return installed;
+ }
+ 
++/// Resolves the release's manifest, which lists both modules, into [destDir]
++/// without the Asyncify entry. The file on disk is no longer the file the
++/// release hashes, so it stands on the parts instead: it is current when it
++/// has no Asyncify entry and every part it lists is on disk as listed, the
++/// parts having been verified against their pinned hashes.
++Future<bool> _resolveManifestWithoutAsyncify(
++  ResolveRequest request,
++  Directory destDir,
++) async {
++  if (!request.force && request.dest.existsSync()) {
++    try {
++      final onDisk = WasmManifest.load(destDir);
++      if (!onDisk.modules.containsKey(asyncifyWasmModule) &&
++          onDisk.modules.containsKey(normalWasmModule) &&
++          verifyWasmParts(destDir, onDisk).isEmpty) {
++        return false;
++      }
++    } on Object {
++      // Not a manifest: resolved again below.
++    }
++  }
++  final staging = Directory.systemTemp.createTempSync(
++    'pdf_manipulator_manifest_',
++  );
++  try {
++    final full = File('${staging.path}/$wasmManifestFile');
++    await resolveAsset(
++      ResolveRequest(
++        assetName: request.assetName,
++        downloadUrl: request.downloadUrl,
++        dest: full,
++        expectedHash: request.expectedHash,
++        version: request.version,
++        packageRoot: request.packageRoot,
++        force: true,
++        compile: request.compile,
++      ),
++    );
++    WasmManifest.load(staging).without(asyncifyWasmModule).storeIn(destDir);
++    return true;
++  } finally {
++    staging.deleteSync(recursive: true);
++  }
++}
++
++/// A kept subset or a non-default build has no prebuilt asset: one compile in
++/// a temp folder, then every output into [destDir].
++Future<int> _installCustomWeb({
++  required Uri packageRoot,
++  required Directory destDir,
++  required BuildConstants constants,
++  required String features,
++  required EngineBuild engineBuild,
++  required bool asyncify,
++}) async {
++  final built = Directory.systemTemp.createTempSync('pdf_manipulator_wasm_');
++  try {
++    await buildWasmParts(
++      packageRoot: packageRoot,
++      features: features,
++      outDir: built,
++      build: engineBuild,
++      asyncify: asyncify,
++    );
++    final files = [
++      ...WasmManifest.load(built).files,
++      wasmManifestFile,
++      for (final name in constants.wasmBuildOutputs)
++        if (!name.endsWith('.wasm') && name != wasmManifestFile) name,
++    ];
++    for (final name in files) {
++      File('${built.path}/$name').copySync('${destDir.path}/$name');
++    }
++    for (final name in constants.webAssets.keys) {
++      if (constants.wasmBuildOutputs.contains(name)) continue;
++      await _copyWebAsset(packageRoot, File('${destDir.path}/$name'), name);
++      files.add(name);
++    }
++    _pruneUnlistedParts(destDir);
++    return files.length;
++  } finally {
++    built.deleteSync(recursive: true);
++  }
++}
++
++/// Deletes the parts in [destDir] the manifest there does not list: a module
++/// that has fewer parts than it had, or an Asyncify module the app no longer
++/// asks for.
++void _pruneUnlistedParts(Directory destDir) {
++  final listed = WasmManifest.load(destDir).files.toSet();
++  final partName = RegExp(r'^pdf_oxide(_asyncify)?_bg\.\d+\.wasm$');
++  for (final file in destDir.listSync().whereType<File>()) {
++    final name = p.basename(file.path);
++    if (partName.hasMatch(name) && !listed.contains(name)) file.deleteSync();
++  }
++}
++
+ // ══════════════════════════════════════════════════════════════════
+ // § 3 — Flutter registration (native only)
+ // ══════════════════════════════════════════════════════════════════
+@@ -419,84 +532,82 @@ Future<void> _compileNativeFromHook(
+   );
+ }
+ 
+-// ── Web: WASM build outputs (pdf_oxide.js + pdf_oxide_bg.wasm) ───
++// ── Web: WASM build outputs (pdf_oxide.js, the wasm parts, the manifest) ───
+ //
+ // Pure Dart + cargo, like the native hook path: compile the engine to
+ // wasm32, then run the workspace's own bindgen_runner crate, which
+ // executes wasm-bindgen and wasm-opt as library calls resolved from the
+ // engine's Cargo.lock. No wasm-bindgen-cli, binaryen, or jq installs —
+ // Rust is the only requirement — and the CLI-vs-crate version drift of
+-// issue #177 is structurally impossible.
+-
+-Future<void> _compileWasm(
++// issue #177 is structurally impossible. The built modules are cut by
++// writeWasmParts, the cut every producer shares.
++
++/// The folder holding the default build's outputs: `web_assets/`, where a
++/// contributor's `make build-wasm` already put them, or built there now. Only
++/// the default build (full features, speed build) may read from or write to
++/// it; a kept subset or a non-default build is a per-app artifact that must
++/// never land there. Built once per setup run.
++Future<Directory> _defaultWebOutputs(
+   Uri packageRoot,
+-  File dest,
+-  String targetFile,
+-  String? featuresOverride,
++  BuildConstants constants,
+   EngineBuild engineBuild,
++  bool asyncify,
+ ) async {
+   final webAssets = Directory.fromUri(packageRoot.resolve('web_assets'));
+-  final existing = File(p.join(webAssets.path, targetFile));
+-
+-  // web_assets/ holds the DEFAULT build (full features, speed build).
+-  // Only that combination may read from / write to it; a kept subset or a
+-  // non-default build is a per-app artifact that must never land there.
+-  final isDefaultBuild = featuresOverride == null && engineBuild.isDefault;
+-
+-  final isAsyncify = targetFile == asyncifyWebAsset;
+-  final normal = File(p.join(webAssets.path, 'pdf_oxide_bg.wasm'));
+-
+-  // Contributor has locally built WASM — copy directly. The Asyncify wasm is
+-  // a function of the normal one, so it is copied only while it is newer.
+-  if (isDefaultBuild &&
+-      existing.existsSync() &&
+-      (!isAsyncify ||
+-          !normal.existsSync() ||
+-          existing.lastModifiedSync().isAfter(normal.lastModifiedSync()))) {
+-    dest.parent.createSync(recursive: true);
+-    existing.copySync(dest.path);
+-    return;
+-  }
+-
+-  if (isDefaultBuild && isAsyncify && normal.existsSync()) {
+-    await buildAsyncifyWasm(
++  final WasmManifest built;
++  try {
++    built = WasmManifest.load(webAssets);
++  } on Object {
++    await buildWasmParts(
+       packageRoot: packageRoot,
+-      wasm: normal,
+-      out: existing,
++      features: constants.wasmFeatures,
++      outDir: webAssets,
++      build: engineBuild,
++      asyncify: asyncify,
+     );
+-    dest.parent.createSync(recursive: true);
+-    existing.copySync(dest.path);
+-    return;
++    return webAssets;
+   }
+-
+-  final features =
+-      featuresOverride ?? BuildConstants.load(packageRoot).wasmFeatures;
+-
+-  final outDir = isDefaultBuild
+-      ? webAssets
+-      : Directory.systemTemp.createTempSync('pdf_manipulator_wasm_');
+-  try {
+-    await compileWasmEngine(
++  final intact =
++      built.modules.containsKey(normalWasmModule) &&
++      verifyWasmParts(webAssets, built).isEmpty &&
++      File('${webAssets.path}/pdf_oxide.js').existsSync();
++  if (!intact) {
++    await buildWasmParts(
+       packageRoot: packageRoot,
+-      features: features,
+-      outDir: outDir,
++      features: constants.wasmFeatures,
++      outDir: webAssets,
+       build: engineBuild,
+-      asyncify: isAsyncify,
++      asyncify: asyncify,
+     );
++  } else if (asyncify && !built.modules.containsKey(asyncifyWasmModule)) {
++    await buildAsyncifyParts(
++      packageRoot: packageRoot,
++      dir: webAssets,
++      build: engineBuild,
++    );
++  }
++  return webAssets;
++}
+ 
+-    final built = File(p.join(outDir.path, targetFile));
+-    if (!built.existsSync()) {
+-      throw StateError(
+-        'WASM compiled but $targetFile not found at ${built.path}',
+-      );
+-    }
+-    dest.parent.createSync(recursive: true);
+-    built.copySync(dest.path);
+-  } finally {
+-    if (!isDefaultBuild) {
+-      outDir.deleteSync(recursive: true);
+-    }
++/// The compile step of one web asset: the hand-written files are copied from
++/// the package, a build output from [outputs].
++Future<void> _copyBuilt({
++  required Uri packageRoot,
++  required String localName,
++  required File dest,
++  required bool isWasmBuildOutput,
++  required Future<Directory> Function() outputs,
++}) async {
++  if (!isWasmBuildOutput) return _copyWebAsset(packageRoot, dest, localName);
++  final built = File('${(await outputs()).path}/$localName');
++  if (!built.existsSync()) {
++    throw StateError(
++      'WASM compiled but $localName not found at ${built.path}: build.json '
++      'lists a part this build did not cut',
++    );
+   }
++  dest.parent.createSync(recursive: true);
++  built.copySync(dest.path);
+ }
+ 
+ // ── Web: hand-written JS (executor_worker.js) ────────────────────────
+diff --git a/lib/src/bridge/create_bridge.dart b/lib/src/bridge/create_bridge.dart
+index ef89fc0..7d05c55 100644
+--- a/lib/src/bridge/create_bridge.dart
++++ b/lib/src/bridge/create_bridge.dart
+@@ -21,7 +21,6 @@ PdfBridge createBridge({PdfConfig? config}) {
+     Router(
+       pool: ExecutorPool.of(host),
+       maxLanes: config?.concurrency ?? host.defaultConcurrency,
+-      mode: host.mode,
+     ),
+   );
+ }
+diff --git a/lib/src/hook/build_constants.dart b/lib/src/hook/build_constants.dart
+index ace5ca6..20f1170 100644
+--- a/lib/src/hook/build_constants.dart
++++ b/lib/src/hook/build_constants.dart
+@@ -6,14 +6,21 @@
+ import 'dart:convert';
+ import 'dart:io';
+ 
+-/// The web asset file of the Asyncify engine: shipped only to apps that set
+-/// `asyncify: true`, and fetched by a browser only in Asyncify mode.
+-const asyncifyWebAsset = 'pdf_oxide_asyncify_bg.wasm';
+-
+ /// The largest file Cloudflare Pages and Workers static assets serve: 25 MiB.
+-/// Every wasm the release ships stays under it.
++/// Every file the web assets and the release hold stays under it.
+ const maxWebAssetBytes = 25 * 1024 * 1024;
+ 
++/// The size of every part but the last of a cut wasm module. Static hosts cap
++/// the file, not the module a browser compiles, so a module ships as parts
++/// the browser joins into one stream.
++const wasmPartBytes = 16 * 1024 * 1024;
++
++/// Gzip bytes of the whole normal wasm at most: raising it is a decision, not a fix.
++const normalWasmGzipBudget = 8912896; // 8.5 MiB
++
++/// Gzip bytes of the whole Asyncify wasm at most: raising it is a decision, not a fix.
++const asyncifyWasmGzipBudget = 11010048; // 10.5 MiB
++
+ /// The parsed contents of the package's `build.json`.
+ class BuildConstants {
+   BuildConstants._({
+diff --git a/lib/src/hook/engine_compiler.dart b/lib/src/hook/engine_compiler.dart
+index 4788e82..9a4b300 100644
+--- a/lib/src/hook/engine_compiler.dart
++++ b/lib/src/hook/engine_compiler.dart
+@@ -12,6 +12,7 @@ import 'package:path/path.dart' as p;
+ 
+ import 'package:pdf_manipulator/src/hook/asyncify_list.dart';
+ import 'package:pdf_manipulator/src/hook/engine_build.dart';
++import 'package:pdf_manipulator/src/hook/wasm_parts.dart';
+ 
+ final _log = Logger('pdf_manipulator:engine_compiler');
+ 
+@@ -320,13 +321,87 @@ String? _latestVersionSubdir(String base) {
+   return p.join(base, names.last);
+ }
+ 
++/// Builds the web assets of the engine into [outDir]: `pdf_oxide.js`, and the
++/// parts and manifest of the normal wasm, with [asyncify] those of the
++/// Asyncify wasm too. The whole modules exist only in a temp folder for the
++/// time of the build. Any Asyncify module [outDir] held is gone unless
++/// [asyncify] builds it again, because it is a function of the normal one.
++Future<void> buildWasmParts({
++  required Uri packageRoot,
++  required String features,
++  required Directory outDir,
++  EngineBuild build = EngineBuild.speed,
++  bool asyncify = false,
++}) async {
++  final whole = Directory.systemTemp.createTempSync('pdf_manipulator_wasm_');
++  try {
++    await compileWasmEngine(
++      packageRoot: packageRoot,
++      features: features,
++      outDir: whole,
++      build: build,
++      asyncify: asyncify,
++    );
++    outDir.createSync(recursive: true);
++    File(
++      p.join(whole.path, 'pdf_oxide.js'),
++    ).copySync(p.join(outDir.path, 'pdf_oxide.js'));
++    removeWasmModule(outDir, asyncifyWasmModule);
++    writeWasmParts(
++      wasm: File(p.join(whole.path, '$normalWasmModule.wasm')),
++      module: normalWasmModule,
++      outDir: outDir,
++    );
++    if (asyncify) {
++      writeWasmParts(
++        wasm: File(p.join(whole.path, '$asyncifyWasmModule.wasm')),
++        module: asyncifyWasmModule,
++        outDir: outDir,
++      );
++    }
++  } finally {
++    whole.deleteSync(recursive: true);
++  }
++}
++
++/// Builds the Asyncify module from the normal one the parts in [dir] hold and
++/// cuts it into [dir] beside them. Returns the Asyncify module's entry.
++Future<WasmModule> buildAsyncifyParts({
++  required Uri packageRoot,
++  required Directory dir,
++  EngineBuild build = EngineBuild.speed,
++}) async {
++  final normal = WasmManifest.load(dir).modules[normalWasmModule];
++  if (normal == null) {
++    throw StateError('${dir.path} holds no $normalWasmModule to instrument');
++  }
++  final whole = Directory.systemTemp.createTempSync('pdf_manipulator_wasm_');
++  try {
++    final input = File(p.join(whole.path, '$normalWasmModule.wasm'))
++      ..writeAsBytesSync(joinWasmParts(dir, normal));
++    final out = File(p.join(whole.path, '$asyncifyWasmModule.wasm'));
++    await buildAsyncifyWasm(
++      packageRoot: packageRoot,
++      wasm: input,
++      out: out,
++      build: build,
++    );
++    return writeWasmParts(
++      wasm: out,
++      module: asyncifyWasmModule,
++      outDir: dir,
++    ).modules[asyncifyWasmModule]!;
++  } finally {
++    whole.deleteSync(recursive: true);
++  }
++}
++
+ /// Compiles the engine to wasm32 and post-processes it (wasm-bindgen +
+ /// wasm-opt) via the workspace's `bindgen_runner` crate, writing
+ /// `pdf_oxide.js` + `pdf_oxide_bg.wasm` into [outDir], and with [asyncify]
+ /// also `pdf_oxide_asyncify_bg.wasm` ([buildAsyncifyWasm]). [build] sets
+-/// cargo's release profile and wasm-opt's level for both. Shared by the
+-/// consumer web setup (`hook/build.dart`) and the CI compile driver
+-/// (`tool/compile.dart`) — one wasm compile path, two callers.
++/// cargo's release profile and wasm-opt's level for both. These are whole
++/// modules, the input of the cut ([buildWasmParts]); never a web asset.
+ Future<void> compileWasmEngine({
+   required Uri packageRoot,
+   required String features,
+diff --git a/lib/src/hook/resolver.dart b/lib/src/hook/resolver.dart
+index f9438ac..871ba13 100644
+--- a/lib/src/hook/resolver.dart
++++ b/lib/src/hook/resolver.dart
+@@ -48,7 +48,7 @@ class ResolveRequest {
+   });
+ 
+   /// GitHub Release asset name (e.g. `macos-arm64-libpdf_oxide.dylib`
+-  /// or `wasm-pdf_oxide_bg.wasm`). Used as the hash lookup key.
++  /// or `wasm-pdf_oxide_bg.0.wasm`). Used as the hash lookup key.
+   final String assetName;
+ 
+   /// Full download URL for this asset on GitHub Releases.
+diff --git a/lib/src/hook/wasm_parts.dart b/lib/src/hook/wasm_parts.dart
+new file mode 100644
+index 0000000..425cd16
+--- /dev/null
++++ b/lib/src/hook/wasm_parts.dart
+@@ -0,0 +1,321 @@
++// The web wasm as parts: every module the package ships is cut into parts of
++// wasmPartBytes, listed with their hashes in pdf_oxide_manifest.json. Every
++// producer (`make build-wasm`, the release, the hook's from-source build) cuts
++// through writeWasmParts, so there is one cut and one manifest shape. The
++// browser side, executor_worker.js and host.dart, joins the parts it reads from
++// the manifest into one stream while it compiles.
++
++import 'dart:convert';
++import 'dart:io';
++import 'dart:typed_data';
++
++import 'package:crypto/crypto.dart';
++import 'package:path/path.dart' as p;
++
++import 'build_constants.dart';
++
++/// The manifest file beside `executor_worker.js`.
++const wasmManifestFile = 'pdf_oxide_manifest.json';
++
++/// The module every mode but Asyncify runs.
++const normalWasmModule = 'pdf_oxide_bg';
++
++/// The Asyncify engine's module: shipped only to apps that set
++/// `asyncify: true`, and fetched by a browser only in Asyncify mode.
++const asyncifyWasmModule = 'pdf_oxide_asyncify_bg';
++
++const _moduleOrder = [normalWasmModule, asyncifyWasmModule];
++
++/// One file of a cut module.
++class WasmPart {
++  /// A part as the manifest lists it.
++  const WasmPart({
++    required this.file,
++    required this.bytes,
++    required this.sha256,
++  });
++
++  /// Reads a part from its manifest JSON.
++  factory WasmPart.fromJson(Map<String, dynamic> json) => WasmPart(
++    file: json['file'] as String,
++    bytes: json['bytes'] as int,
++    sha256: json['sha256'] as String,
++  );
++
++  /// The part's file name beside the manifest.
++  final String file;
++
++  /// The part's size.
++  final int bytes;
++
++  /// The part's SHA-256, in hex.
++  final String sha256;
++
++  /// The part as manifest JSON.
++  Map<String, Object> toJson() => {
++    'file': file,
++    'bytes': bytes,
++    'sha256': sha256,
++  };
++}
++
++/// One cut module: its size and hash as a whole, and its parts in order.
++class WasmModule {
++  /// A module as the manifest lists it.
++  const WasmModule({
++    required this.bytes,
++    required this.sha256,
++    required this.parts,
++  });
++
++  /// Reads a module from its manifest JSON.
++  factory WasmModule.fromJson(Map<String, dynamic> json) => WasmModule(
++    bytes: json['bytes'] as int,
++    sha256: json['sha256'] as String,
++    parts: [
++      for (final part in json['parts'] as List)
++        WasmPart.fromJson(part as Map<String, dynamic>),
++    ],
++  );
++
++  /// The module's size as a whole.
++  final int bytes;
++
++  /// The SHA-256 of the whole module, in hex.
++  final String sha256;
++
++  /// The parts, in the order they join.
++  final List<WasmPart> parts;
++
++  /// The module as manifest JSON.
++  Map<String, Object> toJson() => {
++    'bytes': bytes,
++    'sha256': sha256,
++    'parts': [for (final part in parts) part.toJson()],
++  };
++}
++
++/// `pdf_oxide_manifest.json`: the modules a web build shipped, by name.
++class WasmManifest {
++  /// A manifest of [modules].
++  const WasmManifest(this.modules);
++
++  /// The manifest in [dir]; throws when it is missing or not a manifest.
++  factory WasmManifest.load(Directory dir) {
++    final file = File(p.join(dir.path, wasmManifestFile));
++    final json = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
++    return WasmManifest({
++      for (final MapEntry(:key, :value) in json.entries)
++        key: WasmModule.fromJson(value as Map<String, dynamic>),
++    });
++  }
++
++  /// The manifest in [dir], or an empty one when none is there yet.
++  factory WasmManifest.loadOrEmpty(Directory dir) =>
++      File(p.join(dir.path, wasmManifestFile)).existsSync()
++      ? WasmManifest.load(dir)
++      : const WasmManifest({});
++
++  /// The modules by name, in the order the file lists them.
++  final Map<String, WasmModule> modules;
++
++  /// Every file the manifest lists, in manifest order.
++  List<String> get files => [
++    for (final module in modules.values)
++      for (final part in module.parts) part.file,
++  ];
++
++  /// The same manifest with [module] set to [entry], in the fixed module order.
++  WasmManifest withModule(String module, WasmModule entry) {
++    final merged = {...modules, module: entry};
++    return WasmManifest({
++      for (final name in _moduleOrder)
++        if (merged.containsKey(name)) name: merged[name]!,
++      for (final MapEntry(:key, :value) in merged.entries)
++        if (!_moduleOrder.contains(key)) key: value,
++    });
++  }
++
++  /// The same manifest without [module].
++  WasmManifest without(String module) =>
++      WasmManifest({...modules}..remove(module));
++
++  /// Stores the manifest in [dir].
++  void storeIn(Directory dir) {
++    File(p.join(dir.path, wasmManifestFile)).writeAsStringSync(
++      '${const JsonEncoder.withIndent('  ').convert({for (final MapEntry(:key, :value) in modules.entries) key: value.toJson()})}\n',
++    );
++  }
++}
++
++String _hex(List<int> bytes) => sha256.convert(bytes).toString();
++
++RegExp _partName(String module) =>
++    RegExp('^${RegExp.escape(module)}\\.\\d+\\.wasm\$');
++
++void _deleteParts(Directory dir, String module) {
++  final name = _partName(module);
++  for (final entity in dir.listSync().whereType<File>()) {
++    if (name.hasMatch(p.basename(entity.path))) entity.deleteSync();
++  }
++}
++
++/// Cuts [wasm] into parts of exactly [wasmPartBytes] (the last one shorter)
++/// named `<module>.<n>.wasm` in [outDir], and merges the module's entry into
++/// the manifest there, keeping the other modules'. The parts the module had
++/// before, however many, are replaced. Returns the merged manifest.
++WasmManifest writeWasmParts({
++  required File wasm,
++  required String module,
++  required Directory outDir,
++}) {
++  final bytes = wasm.readAsBytesSync();
++  outDir.createSync(recursive: true);
++  _deleteParts(outDir, module);
++  final parts = <WasmPart>[];
++  for (
++    var start = 0, n = 0;
++    start < bytes.length;
++    start += wasmPartBytes, n++
++  ) {
++    final end = start + wasmPartBytes < bytes.length
++        ? start + wasmPartBytes
++        : bytes.length;
++    final slice = Uint8List.sublistView(bytes, start, end);
++    final file = '$module.$n.wasm';
++    File(p.join(outDir.path, file)).writeAsBytesSync(slice);
++    parts.add(WasmPart(file: file, bytes: slice.length, sha256: _hex(slice)));
++  }
++  final manifest = WasmManifest.loadOrEmpty(outDir).withModule(
++    module,
++    WasmModule(bytes: bytes.length, sha256: _hex(bytes), parts: parts),
++  );
++  manifest.storeIn(outDir);
++  return manifest;
++}
++
++/// Deletes [module]'s parts from [dir] and its entry from the manifest there.
++void removeWasmModule(Directory dir, String module) {
++  _deleteParts(dir, module);
++  final manifest = WasmManifest.loadOrEmpty(dir).without(module);
++  if (manifest.modules.isEmpty) {
++    final file = File(p.join(dir.path, wasmManifestFile));
++    if (file.existsSync()) file.deleteSync();
++  } else {
++    manifest.storeIn(dir);
++  }
++}
++
++/// The module [entry] lists, joined from its parts in [dir].
++Uint8List joinWasmParts(Directory dir, WasmModule entry) {
++  final out = BytesBuilder(copy: false);
++  for (final part in entry.parts) {
++    out.add(File(p.join(dir.path, part.file)).readAsBytesSync());
++  }
++  return out.takeBytes();
++}
++
++/// What is wrong with the parts in [dir] against [manifest], one line each;
++/// empty when every part is as listed and every module joins to its listed
++/// size and hash.
++List<String> verifyWasmParts(Directory dir, WasmManifest manifest) {
++  final problems = <String>[];
++  for (final MapEntry(key: name, value: module) in manifest.modules.entries) {
++    final joined = BytesBuilder(copy: false);
++    var intact = true;
++    for (final part in module.parts) {
++      final file = File(p.join(dir.path, part.file));
++      if (!file.existsSync()) {
++        problems.add('${part.file}: the manifest lists it and it is missing');
++        intact = false;
++        continue;
++      }
++      final bytes = file.readAsBytesSync();
++      if (bytes.length != part.bytes) {
++        problems.add(
++          '${part.file}: ${bytes.length} bytes, the manifest lists ${part.bytes}',
++        );
++        intact = false;
++      } else if (_hex(bytes) != part.sha256) {
++        problems.add('${part.file}: its sha256 differs from the manifest');
++        intact = false;
++      }
++      joined.add(bytes);
++    }
++    if (!intact) continue;
++    final whole = joined.takeBytes();
++    if (whole.length != module.bytes) {
++      problems.add(
++        '$name: the parts join to ${whole.length} bytes, the manifest lists ${module.bytes}',
++      );
++    } else if (_hex(whole) != module.sha256) {
++      problems.add('$name: the parts join to a different sha256');
++    }
++  }
++  return problems;
++}
++
++/// The gzip size of [module] as a whole, which is what a visitor downloads.
++int gzipBytesOf(Uint8List module) => gzip.encode(module).length;
++
++/// What breaks the wall around the web wasm in [dir], one line each; empty
++/// when none does. The wall: every file is under [maxFileBytes], every part
++/// and module is as the manifest lists it, and each module's gzip size is
++/// within its budget (a module with no budget has none to break).
++List<String> wasmWallProblems(
++  Directory dir, {
++  int maxFileBytes = maxWebAssetBytes,
++  Map<String, int> gzipBudgets = const {
++    normalWasmModule: normalWasmGzipBudget,
++    asyncifyWasmModule: asyncifyWasmGzipBudget,
++  },
++}) {
++  final problems = <String>[];
++  for (final file in dir.listSync().whereType<File>()) {
++    if (file.lengthSync() >= maxFileBytes) {
++      problems.add(
++        '${p.basename(file.path)}: ${file.lengthSync()} bytes reaches the '
++        '$maxFileBytes-byte limit of a file',
++      );
++    }
++  }
++  final manifest = WasmManifest.load(dir);
++  problems.addAll(verifyWasmParts(dir, manifest));
++  if (problems.isNotEmpty) return problems;
++  for (final MapEntry(key: name, value: module) in manifest.modules.entries) {
++    final budget = gzipBudgets[name];
++    if (budget == null) continue;
++    final gzipped = gzipBytesOf(joinWasmParts(dir, module));
++    if (gzipped > budget) {
++      problems.add(
++        '$name: $gzipped gzip bytes exceed the budget of $budget; raising a '
++        'budget is a decision, not a fix',
++      );
++    }
++  }
++  return problems;
++}
++
++/// Where the manifest in [dir] and build.json's web list disagree: a part the
++/// manifest lists that build.json does not name (the release would not ship
++/// it) and, when [complete], a listed part the manifest does not have.
++List<String> buildJsonPartProblems(
++  Directory dir,
++  BuildConstants constants, {
++  bool complete = false,
++}) {
++  final manifest = WasmManifest.load(dir);
++  final listed = {
++    for (final name in constants.webAssets.keys)
++      if (name.endsWith('.wasm')) name,
++  };
++  return [
++    for (final file in manifest.files)
++      if (!listed.contains(file))
++        '$file: the manifest lists it and build.json\'s web list does not',
++    if (complete)
++      for (final name in listed)
++        if (!manifest.files.contains(name))
++          '$name: build.json lists it and the manifest does not',
++  ];
++}
+diff --git a/lib/src/runtime/lane.dart b/lib/src/runtime/lane.dart
+index 418623d..3d30db1 100644
+--- a/lib/src/runtime/lane.dart
++++ b/lib/src/runtime/lane.dart
+@@ -175,9 +175,12 @@ abstract interface class ExecutorBooter {
+   /// when the boot fails; a failed boot leaves nothing behind.
+   Future<Executor> boot();
+ 
+-  /// This booter's I/O mode — the Router reports it as the instance's
+-  /// [PdfIoMode].
+-  PdfIoMode get mode;
++  /// Decides this booter's I/O mode, once, and completes with it — the Router
++  /// reports it as the instance's [PdfIoMode]. A web booter learns what the
++  /// app shipped from the network, so the decision is asynchronous; it throws
++  /// `PdfUnsupported` when no mode can run. A failure is not kept: the next
++  /// call decides again.
++  Future<PdfIoMode> resolveMode();
+ 
+   /// How many lanes run at once when the caller doesn't override it, sized
+   /// from the platform's CPU count.
+diff --git a/lib/src/runtime/native/host.dart b/lib/src/runtime/native/host.dart
+index 239753b..3dbb2c8 100644
+--- a/lib/src/runtime/native/host.dart
++++ b/lib/src/runtime/native/host.dart
+@@ -13,7 +13,7 @@ class NativeExecutorBooter implements ExecutorBooter {
+   static bool _bootstrapped = false;
+ 
+   @override
+-  PdfIoMode get mode => PdfIoMode.native;
++  Future<PdfIoMode> resolveMode() async => PdfIoMode.native;
+ 
+   @override
+   int get defaultConcurrency => suggestedLaneCount(Platform.numberOfProcessors);
+diff --git a/lib/src/runtime/pool.dart b/lib/src/runtime/pool.dart
+index 1916d49..6cc34bc 100644
+--- a/lib/src/runtime/pool.dart
++++ b/lib/src/runtime/pool.dart
+@@ -47,6 +47,7 @@ import 'dart:async';
+ 
+ import 'package:pdf_manipulator/src/runtime/lane.dart';
+ import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
++import 'package:pdf_manipulator/src/types/pdf_enums.dart';
+ 
+ /// Most executors alive at once in one pool. Instances the app never
+ /// disposes hold their executor, so the cap must dwarf any sane leak count
+@@ -240,6 +241,10 @@ class ExecutorPool {
+   bool _disposed = false;
+   int _boots = 0;
+ 
++  /// The I/O mode of the platform configuration this pool serves, decided by
++  /// its booter; see [ExecutorBooter.resolveMode].
++  Future<PdfIoMode> resolveMode() => _host.resolveMode();
++
+   /// Executors this pool booted. Tests only.
+   int get bootCount => _boots;
+ 
+diff --git a/lib/src/runtime/router.dart b/lib/src/runtime/router.dart
+index 9d0e5c8..61964e9 100644
+--- a/lib/src/runtime/router.dart
++++ b/lib/src/runtime/router.dart
+@@ -125,18 +125,14 @@ class Router implements PdfTransport {
+   /// Creates a router over [pool], capping concurrent lanes at
+   /// [maxLanes] per instance (the pool's budget lives below — hitting
+   /// either cap queues, never errors).
+-  Router({
+-    required ExecutorPool pool,
+-    required int maxLanes,
+-    required PdfIoMode mode,
+-  }) : assert(maxLanes >= 1, 'maxLanes must be at least 1'),
+-       _pool = pool,
+-       _maxLanes = maxLanes,
+-       _mode = mode;
++  Router({required ExecutorPool pool, required int maxLanes})
++    : assert(maxLanes >= 1, 'maxLanes must be at least 1'),
++      _pool = pool,
++      _maxLanes = maxLanes;
+ 
+   final ExecutorPool _pool;
+   final int _maxLanes;
+-  final PdfIoMode _mode;
++  PdfIoMode? _mode;
+ 
+   final List<_LaneRecord> _lanes = [];
+ 
+@@ -149,16 +145,14 @@ class Router implements PdfTransport {
+   int _nextHandleId = 1;
+   int _nextResourceId = 1;
+   bool _disposed = false;
+-  bool _initialized = false;
+ 
+   @override
+-  PdfIoMode? get ioMode => _initialized ? _mode : null;
++  PdfIoMode? get ioMode => _mode;
+ 
+   @override
+   Future<PdfIoMode> ensureInitialized() async {
+     if (_disposed) throw StateError('Router disposed');
+-    _initialized = true;
+-    return _mode;
++    return _mode ??= await _pool.resolveMode();
+   }
+ 
+   @override
+diff --git a/lib/src/runtime/web/host.dart b/lib/src/runtime/web/host.dart
+index a4da81c..211f4a7 100644
+--- a/lib/src/runtime/web/host.dart
++++ b/lib/src/runtime/web/host.dart
+@@ -8,23 +8,22 @@
+ //     announces when its message handler is attached, because a
+ //     message posted before that is silently dropped
+ //   - terminating a worker and reclaiming its OPFS directory
+-//   - WASM module compile-once caching + I/O mode detection
++//   - the wasm manifest, WASM module compile-once caching, and the I/O mode
++//     decision, which waits for what the app shipped
+ 
+ part of 'lease.dart';
+ 
+ // ── Host ────────────────────────────────────────────────────────────
+ 
+-/// Boots web executors. Detects the I/O mode once and pre-compiles the
+-/// WASM module once per page (workers receive the compiled module).
++/// Boots web executors. Decides the I/O mode once, from the manifest the app
++/// shipped, and pre-compiles the WASM module once per page (workers receive
++/// the compiled module).
+ class WebExecutorBooter implements ExecutorBooter {
+   /// Creates a host. [laneWorkerUrl] locates executor_worker.js;
+   /// [forceMode] overrides auto-detection (test runners use this).
+   WebExecutorBooter({String? laneWorkerUrl, PdfIoMode? forceMode})
+     : _laneWorkerUrl = _workerUrl(laneWorkerUrl),
+-      mode = _detectMode(
+-        forceMode ?? _cachedForceMode,
+-        _baseUrlOf(_workerUrl(laneWorkerUrl)),
+-      ) {
++      _forceMode = forceMode ?? _cachedForceMode {
+     // Page-level config inheritance: assets live in ONE place per
+     // page, so explicitly-configured URLs/mode become the default
+     // for later bare Pdf() instances (test generators, secondary
+@@ -281,30 +280,69 @@ class WebExecutorBooter implements ExecutorBooter {
+   }
+ 
+   final String _laneWorkerUrl;
+-
+-  /// The detected (or forced) I/O mode — the Router reports this as
+-  /// the instance's [PdfIoMode].
++  final PdfIoMode? _forceMode;
++  Future<PdfIoMode>? _resolved;
++
++  /// Decides the I/O mode: forced, it must be one the browser can run and the
++  /// app shipped, or [PdfUnsupported]. Auto-detected, best first: JSPI,
++  /// Atomics, OPFS when the origin private file system opens, Asyncify when
++  /// the manifest lists its module. The manifest is fetched once per page; a
++  /// missing one is [PdfUnsupported] too.
+   @override
+-  final PdfIoMode mode;
++  Future<PdfIoMode> resolveMode() async {
++    final deciding = _resolved ??= _decideMode();
++    try {
++      return await deciding;
++    } catch (_) {
++      if (identical(_resolved, deciding)) _resolved = null;
++      rethrow;
++    }
++  }
++
++  Future<PdfIoMode> _decideMode() async {
++    final manifest = await _manifestOf(_baseUrl);
++    final force = _forceMode;
++    if (force != null) {
++      await _requireRunnable(force, manifest);
++      return force;
++    }
++    if (_hasJspi) return PdfIoMode.jspi;
++    if (_hasSharedArrayBuffer) return PdfIoMode.atomics;
++    if (await _opfsRuns()) return PdfIoMode.opfs;
++    if (manifest.modules.containsKey(asyncifyWasmModule)) {
++      return PdfIoMode.asyncify;
++    }
++    throw PdfUnsupported(
++      'no web I/O mode can run here: opfs needs the origin private file '
++      'system, which this browser does not open, and asyncify needs the '
++      'Asyncify wasm, which the app did not ship (set asyncify: true under '
++      'hooks: user_defines: pdf_manipulator: and run $_setupCommand).',
++    );
++  }
++
++  static const _setupCommand = 'flutter pub run pdf_manipulator:setup';
+ 
+   @override
+   int get defaultConcurrency =>
+       suggestedLaneCount(web.window.navigator.hardwareConcurrency);
+ 
+-  /// The wasm file a mode loads: the Asyncify engine only in Asyncify mode,
+-  /// so a browser fetches the one file it runs.
+-  static String wasmFileOf(PdfIoMode mode) =>
+-      mode == PdfIoMode.asyncify ? asyncifyWasmFile : 'pdf_oxide_bg.wasm';
++  /// The wasm module a mode runs: the Asyncify engine only in Asyncify mode,
++  /// so a browser fetches the parts of the one module it runs.
++  static String wasmModuleOf(PdfIoMode mode) =>
++      mode == PdfIoMode.asyncify ? asyncifyWasmModule : normalWasmModule;
+ 
+-  /// The Asyncify engine's file beside `executor_worker.js`, present only in
++  /// The module of the instrumented engine in the manifest, present only in
+   /// an app that set `asyncify: true`.
+-  static const asyncifyWasmFile = 'pdf_oxide_asyncify_bg.wasm';
++  static const asyncifyWasmModule = 'pdf_oxide_asyncify_bg';
++
++  /// The module every other mode runs.
++  static const normalWasmModule = 'pdf_oxide_bg';
+ 
+   static final Map<String, JSObject?> _cachedModules = {};
+   static final Map<String, Future<void>> _compilesInFlight = {};
+ 
+   @override
+-  String get poolKey => '$_laneWorkerUrl#${mode.name}';
++  String get poolKey => '$_laneWorkerUrl#${_forceMode?.name ?? 'auto'}';
+ 
+   @override
+   Future<Executor> boot() => _bootWorker();
+@@ -313,6 +351,8 @@ class WebExecutorBooter implements ExecutorBooter {
+   /// temporary listener is detached before the worker is handed out;
+   /// an idle ready worker sends nothing, so no message can be lost.
+   Future<WebExecutor> _bootWorker() async {
++    final mode = await resolveMode();
++    final entry = (await _manifestOf(_baseUrl)).modules[wasmModuleOf(mode)]!;
+     // Every worker holds a liveness lock for its lifetime, in every
+     // mode: it is the death signal that reclaims its files. Only OPFS mode
+     // also gives the worker a directory under the same name.
+@@ -330,7 +370,10 @@ class WebExecutorBooter implements ExecutorBooter {
+       // On boot failure both completers carry the error but only `booted`
+       // is awaited (its throw aborts before the `ready` await exists) —
+       // mark `ready` observed so the abandoned error can't surface as an
+-      // unhandled async error in the caller's zone.
++      // unhandled async error in the caller's zone. `booted` is awaited only
++      // after the module compile, which a slow network outlasts: a worker
++      // that fails meanwhile must not surface its error unobserved either.
++      booted.future.ignore();
+       ready.future.ignore();
+       sub = EventStreamProviders.messageEvent.forTarget(worker).listen((event) {
+         final obj = event.data as JSObject?;
+@@ -359,7 +402,7 @@ class WebExecutorBooter implements ExecutorBooter {
+         }
+       });
+ 
+-      final wasmModule = await _wasmModule();
++      final wasmModule = await _wasmModule(wasmModuleOf(mode), entry);
+       // The worker announces `booted` once its message handler is
+       // attached; posting before that drops the message silently
+       // (the blob bootstrap's dynamic import is not part of module
+@@ -373,6 +416,7 @@ class WebExecutorBooter implements ExecutorBooter {
+         ..[LaneMsgFields.type] = LaneMsg.init.toJS
+         ..['ioMode'] = mode.name.toJS
+         ..['baseUrl'] = _baseUrl.toJS
++        ..['wasmEntry'] = entry.json.jsify()
+         ..['protocol'] = () {
+           final p = JSObject();
+           laneProtocolCodes().forEach((k, v) => p[k] = v.toJS);
+@@ -405,21 +449,6 @@ class WebExecutorBooter implements ExecutorBooter {
+     }
+   }
+ 
+-  /// The mode this page runs. Forced, it must be one the browser can run and
+-  /// the app shipped, or [PdfUnsupported] stops the instance at creation.
+-  /// Auto-detected, best first: JSPI, Atomics, Asyncify when the app shipped
+-  /// its wasm, OPFS.
+-  static PdfIoMode _detectMode(PdfIoMode? force, String baseUrl) {
+-    if (force != null) {
+-      _requireRunnable(force, baseUrl);
+-      return force;
+-    }
+-    if (_hasJspi) return PdfIoMode.jspi;
+-    if (_hasSharedArrayBuffer) return PdfIoMode.atomics;
+-    if (_asyncifyShipped(baseUrl)) return PdfIoMode.asyncify;
+-    return PdfIoMode.opfs;
+-  }
+-
+   static bool get _hasJspi {
+     final wasm = globalContext['WebAssembly'];
+     return wasm != null &&
+@@ -429,7 +458,22 @@ class WebExecutorBooter implements ExecutorBooter {
+   static bool get _hasSharedArrayBuffer =>
+       globalContext.hasProperty('SharedArrayBuffer'.toJS).toDart;
+ 
+-  static void _requireRunnable(PdfIoMode mode, String baseUrl) {
++  /// Whether the origin private file system opens: `getDirectory()` resolves.
++  /// Some private-browsing modes reject it, so the property merely existing
++  /// proves nothing.
++  static Future<bool> _opfsRuns() async {
++    try {
++      await web.window.navigator.storage.getDirectory().toDart;
++      return true;
++    } catch (_) {
++      return false;
++    }
++  }
++
++  static Future<void> _requireRunnable(
++    PdfIoMode mode,
++    _WasmManifest manifest,
++  ) async {
+     final String? lacks = switch (mode) {
+       PdfIoMode.native => 'the native mode runs only outside a browser',
+       PdfIoMode.jspi =>
+@@ -440,41 +484,67 @@ class WebExecutorBooter implements ExecutorBooter {
+             : 'this page has no SharedArrayBuffer (it needs the COOP and '
+                   'COEP headers)',
+       PdfIoMode.asyncify =>
+-        _asyncifyShipped(baseUrl)
++        manifest.modules.containsKey(asyncifyWasmModule)
+             ? null
+-            : 'the app did not ship $asyncifyWasmFile beside '
+-                  'executor_worker.js (set asyncify: true under '
+-                  'hooks: user_defines: pdf_manipulator: and run the web '
+-                  'setup)',
++            : 'the app did not ship the Asyncify wasm: '
++                  '$_manifestFile has no $asyncifyWasmModule entry (set '
++                  'asyncify: true under hooks: user_defines: '
++                  'pdf_manipulator: and run $_setupCommand)',
+       PdfIoMode.opfs =>
+-        globalContext
+-                .getProperty<JSObject>('navigator'.toJS)
+-                .hasProperty('storage'.toJS)
+-                .toDart
++        await _opfsRuns()
+             ? null
+-            : 'this browser has no origin private file system',
++            : 'this browser does not open its origin private file system',
+     };
+     if (lacks != null) {
+       throw PdfUnsupported('webIoMode ${mode.name} cannot run here: $lacks.');
+     }
+   }
+ 
+-  static final Map<String, bool> _asyncifyProbes = {};
++  static const _manifestFile = 'pdf_oxide_manifest.json';
++
++  static final Map<String, Future<_WasmManifest>> _manifests = {};
++
++  /// The manifest beside the worker script, fetched once per page and
++  /// location. The manifest is the only way the runtime learns which modules
++  /// exist: no probe, no guessing, so a host that answers any path with an
++  /// HTML page cannot pass for one that shipped a module.
++  static Future<_WasmManifest> _manifestOf(String baseUrl) async {
++    final loading = _manifests[baseUrl] ?? _fetchManifest(baseUrl);
++    _manifests[baseUrl] = loading;
++    try {
++      return await loading;
++    } catch (_) {
++      _manifests.removeWhere((_, kept) => identical(kept, loading));
++      rethrow;
++    }
++  }
+ 
+-  /// Whether the Asyncify wasm sits beside the worker script. A HEAD request,
+-  /// so the file itself is never fetched; only a page that could run the mode
+-  /// asks, once per location.
+-  static bool _asyncifyShipped(String baseUrl) =>
+-      _asyncifyProbes.putIfAbsent(baseUrl, () {
++  static Future<_WasmManifest> _fetchManifest(String baseUrl) async {
++    final url = '$baseUrl$_manifestFile';
++    String why;
++    try {
++      final response = await _fetch(url.toJS).toDart;
++      if (response.getProperty<JSBoolean>('ok'.toJS).toDart) {
++        final text = await response
++            .callMethod<JSPromise<JSString>>('text'.toJS)
++            .toDart;
+         try {
+-          final request = web.XMLHttpRequest()
+-            ..open('HEAD', '$baseUrl$asyncifyWasmFile', false)
+-            ..send();
+-          return request.status == 200;
+-        } catch (_) {
+-          return false;
++          return _WasmManifest.parse(text.toDart);
++        } on PdfUnsupported catch (e) {
++          why = 'it is not a manifest (${e.message})';
+         }
+-      });
++      } else {
++        why = 'HTTP ${response.getProperty<JSNumber>('status'.toJS).toDartInt}';
++      }
++    } catch (e) {
++      why = 'it could not be fetched ($e)';
++    }
++    throw PdfUnsupported(
++      'the web assets are incomplete: $url — $why. Run $_setupCommand to '
++      'provide the wasm parts, $_manifestFile and executor_worker.js '
++      'beside each other.',
++    );
++  }
+ 
+   static String _baseUrlOf(String workerUrl) {
+     final s = web.URL(workerUrl, web.window.location.href).href;
+@@ -483,20 +553,20 @@ class WebExecutorBooter implements ExecutorBooter {
+ 
+   String get _baseUrl => _baseUrlOf(_laneWorkerUrl);
+ 
+-  /// Compile the WASM once per page, one module per file: the assets live in
+-  /// one place per page. Failures fall back to letting each worker
+-  /// stream-compile its own copy.
+-  Future<JSObject?> _wasmModule() async {
+-    final file = wasmFileOf(mode);
+-    await (_compilesInFlight[file] ??= () async {
++  /// Compile the WASM once per page, one module per location: the assets live
++  /// in one place per page. Failures fall back to letting each worker compile
++  /// its own copy from the same manifest entry, which fails with the same
++  /// message when the part is at fault.
++  Future<JSObject?> _wasmModule(String module, _WasmModuleEntry entry) async {
++    final key = '$_baseUrl$module';
++    await (_compilesInFlight[key] ??= () async {
+       try {
+-        final response = await _fetch('$_baseUrl$file'.toJS).toDart;
+-        _cachedModules[file] = await _wasmCompileStreaming(response).toDart;
++        _cachedModules[key] = await _compileParts(_baseUrl, entry);
+       } catch (_) {
+-        _cachedModules[file] = null;
++        _cachedModules[key] = null;
+       }
+     }());
+-    return _cachedModules[file];
++    return _cachedModules[key];
+   }
+ 
+   web.Worker _spawnWorker() {
+diff --git a/lib/src/runtime/web/lease.dart b/lib/src/runtime/web/lease.dart
+index b257a9e..0307562 100644
+--- a/lib/src/runtime/web/lease.dart
++++ b/lib/src/runtime/web/lease.dart
+@@ -65,6 +65,7 @@
+ // session reclaim) and the executor live in host.dart.
+ 
+ import 'dart:async';
++import 'dart:convert';
+ import 'dart:js_interop';
+ import 'dart:math' as math;
+ import 'dart:js_interop_unsafe';
+@@ -84,6 +85,7 @@ import 'package:pdf_manipulator/src/types/pdf_config.dart';
+ import 'package:pdf_manipulator/src/types/pdf_enums.dart';
+ 
+ part 'host.dart';
++part 'wasm_loader.dart';
+ 
+ /// Creates the web [ExecutorBooter]. The platform conditional import selects this
+ /// where dart:js_interop exists. [config] supplies the lane-worker URL and an
+diff --git a/lib/src/runtime/web/wasm_loader.dart b/lib/src/runtime/web/wasm_loader.dart
+new file mode 100644
+index 0000000..6ac224f
+--- /dev/null
++++ b/lib/src/runtime/web/wasm_loader.dart
+@@ -0,0 +1,175 @@
++// The wasm manifest and the main thread's loader of a wasm module.
++//
++// Part of lease.dart. Every module the package ships is cut into parts listed
++// in pdf_oxide_manifest.json (see lib/src/hook/wasm_parts.dart); nothing
++// fetches a whole `.wasm`. [_compileParts] is the main-thread twin of
++// compileParts in executor_worker.js, which the worker runs when the host's
++// compile failed: both fetch every part at once, join them in order into one
++// stream the browser compiles while it arrives, and refuse a part that is not
++// the size and SHA-256 the manifest lists, with a message naming the part.
++// The web battery pins both against the same manifest.
++
++part of 'lease.dart';
++
++/// `pdf_oxide_manifest.json`: the modules the app shipped, by name.
++class _WasmManifest {
++  _WasmManifest._(this.modules);
++
++  /// Reads a manifest; a [PdfUnsupported] says what is wrong with [text].
++  factory _WasmManifest.parse(String text) {
++    final Object? json;
++    try {
++      json = jsonDecode(text);
++    } on FormatException {
++      throw const PdfUnsupported('not JSON');
++    }
++    if (json is! Map<String, dynamic>) {
++      throw const PdfUnsupported('not an object of modules');
++    }
++    return _WasmManifest._({
++      for (final MapEntry(:key, :value) in json.entries)
++        key: _WasmModuleEntry.parse(key, value),
++    });
++  }
++
++  final Map<String, _WasmModuleEntry> modules;
++}
++
++/// One module of the manifest: its parts, in the order they join.
++class _WasmModuleEntry {
++  _WasmModuleEntry._(this.json, this.parts);
++
++  factory _WasmModuleEntry.parse(String name, Object? value) {
++    if (value is! Map<String, dynamic> || value['parts'] is! List) {
++      throw PdfUnsupported('$name has no parts');
++    }
++    final parts = <_WasmPart>[];
++    for (final part in value['parts'] as List) {
++      if (part is! Map<String, dynamic> ||
++          part['file'] is! String ||
++          part['bytes'] is! int ||
++          part['sha256'] is! String) {
++        throw PdfUnsupported('$name lists a part without file, bytes, sha256');
++      }
++      parts.add(
++        _WasmPart(
++          part['file'] as String,
++          part['bytes'] as int,
++          part['sha256'] as String,
++        ),
++      );
++    }
++    if (parts.isEmpty) throw PdfUnsupported('$name has no parts');
++    return _WasmModuleEntry._(value, parts);
++  }
++
++  /// The entry as the manifest has it: what the worker gets in `init`.
++  final Map<String, dynamic> json;
++  final List<_WasmPart> parts;
++}
++
++class _WasmPart {
++  _WasmPart(this.file, this.bytes, this.sha256);
++
++  final String file;
++  final int bytes;
++  final String sha256;
++}
++
++@JS('Response')
++extension type _WasmResponse._(JSObject _) implements JSObject {
++  external factory _WasmResponse(JSObject body, JSObject init);
++}
++
++/// Compiles [module] from its parts at [baseUrl], as the stream described at
++/// the top of this file. Rejects with a [PdfIoFailed] naming the part at fault.
++Future<JSObject> _compileParts(String baseUrl, _WasmModuleEntry module) async {
++  final abort = web.AbortController();
++  final fetches = [
++    for (final part in module.parts)
++      web.window
++          .fetch(
++            '$baseUrl${part.file}'.toJS,
++            web.RequestInit(signal: abort.signal),
++          )
++          .toDart
++        ..ignore(),
++  ];
++  Object? failure;
++  final source = JSObject()
++    ..['start'] = ((web.ReadableStreamDefaultController controller) {
++      return (() async {
++        try {
++          for (final (i, part) in module.parts.indexed) {
++            await _pumpPart(await fetches[i], part, controller);
++          }
++          controller.close();
++        } catch (error) {
++          failure = error;
++          abort.abort();
++          controller.error('$error'.toJS);
++        }
++      })().toJS;
++    }).toJS;
++  final response = _WasmResponse(
++    web.ReadableStream(source),
++    {
++          'headers': {'content-type': 'application/wasm'},
++        }.jsify()!
++        as JSObject,
++  );
++  try {
++    return await _wasmCompileStreaming(response).toDart;
++  } catch (error) {
++    throw failure ?? error;
++  }
++}
++
++/// Enqueues the bytes of [response] as they arrive, and refuses them at the
++/// end unless they are [part]: its size, then its SHA-256 (not checked on a
++/// page without `crypto.subtle`, which only a secure context has).
++Future<void> _pumpPart(
++  web.Response response,
++  _WasmPart part,
++  web.ReadableStreamDefaultController controller,
++) async {
++  if (!response.ok || response.body == null) {
++    throw PdfIoFailed('${part.file}: HTTP ${response.status}');
++  }
++  final reader = response.body!.getReader() as web.ReadableStreamDefaultReader;
++  final bytes = BytesBuilder(copy: false);
++  var count = 0;
++  while (true) {
++    final next = await reader.read().toDart;
++    if (next.done) break;
++    final chunk = next.value! as JSUint8Array;
++    final data = chunk.toDart;
++    count += data.length;
++    if (count > part.bytes) {
++      throw PdfIoFailed(
++        '${part.file}: more than the ${part.bytes} bytes the manifest lists',
++      );
++    }
++    bytes.add(data);
++    controller.enqueue(chunk);
++  }
++  if (count != part.bytes) {
++    throw PdfIoFailed(
++      '${part.file}: $count bytes, the manifest lists ${part.bytes}',
++    );
++  }
++  if ((web.window.crypto as JSObject)['subtle'] == null) return;
++  final digest = await web.window.crypto.subtle
++      .digest('SHA-256'.toJS, bytes.takeBytes().toJS)
++      .toDart;
++  final hex = [
++    for (final byte in (digest! as JSArrayBuffer).toDart.asUint8List())
++      byte.toRadixString(16).padLeft(2, '0'),
++  ].join();
++  if (hex != part.sha256) {
++    throw PdfIoFailed(
++      '${part.file}: sha256 $hex is not the ${part.sha256} the manifest '
++      'lists',
++    );
++  }
++}
+diff --git a/lib/src/types/pdf_config.dart b/lib/src/types/pdf_config.dart
+index 409f234..8adfc0c 100644
+--- a/lib/src/types/pdf_config.dart
++++ b/lib/src/types/pdf_config.dart
+@@ -11,14 +11,15 @@ final class PdfConfig {
+ 
+   /// Force a specific web I/O mode. Ignored on native. Null = auto-detect.
+   /// A mode the browser cannot run, or the Asyncify mode when the app did not
+-  /// ship the Asyncify wasm, throws [PdfUnsupported] when the instance is
+-  /// created; there is no silent fallback.
++  /// ship the Asyncify wasm (no entry for it in `pdf_oxide_manifest.json`),
++  /// throws [PdfUnsupported] when the instance initializes; there is no silent
++  /// fallback.
+   ///
+   /// Auto-detection priority (best first):
+   ///   1. [PdfIoMode.jspi] — if `WebAssembly.Suspending` is available
+   ///   2. [PdfIoMode.atomics] — if `SharedArrayBuffer` is available
+-  ///   3. [PdfIoMode.asyncify] — if the app shipped the Asyncify wasm
+-  ///   4. [PdfIoMode.opfs] — universal fallback
++  ///   3. [PdfIoMode.opfs] — if the origin private file system opens
++  ///   4. [PdfIoMode.asyncify] — if the app shipped the Asyncify wasm
+   final PdfIoMode? webIoMode;
+ 
+   /// How many operations run at once for this
+diff --git a/lib/src/types/pdf_enums.dart b/lib/src/types/pdf_enums.dart
+index 8a7d1cf..14fd053 100644
+--- a/lib/src/types/pdf_enums.dart
++++ b/lib/src/types/pdf_enums.dart
+@@ -22,8 +22,9 @@ enum PdfIoMode implements PdfWire {
+   /// a sink write and resume when the answer arrives, so it streams like
+   /// [jspi] on a browser with neither JSPI nor `SharedArrayBuffer`. Needs
+   /// the Asyncify wasm (`asyncify: true` in the app's
+-  /// `hooks: user_defines: pdf_manipulator:`); the larger file is fetched
+-  /// only in this mode.
++  /// `hooks: user_defines: pdf_manipulator:`); its larger parts are fetched
++  /// only in this mode, and auto-detection picks it only where [opfs] cannot
++  /// run.
+   asyncify('asyncify'),
+ 
+   /// OPFS — pre-copy entire source to Origin Private File System disk
+diff --git a/test/guards/wasm_size_test.dart b/test/guards/wasm_size_test.dart
+index d7a699d..ae740b7 100644
+--- a/test/guards/wasm_size_test.dart
++++ b/test/guards/wasm_size_test.dart
+@@ -1,11 +1,17 @@
+-// The release wall: every wasm the package ships stays under the 25 MiB that
+-// Cloudflare Pages and Workers static assets serve per file. A wasm over it
+-// would deploy as a broken site, so the wall fails here and in the release
+-// compile (tool/compile.dart), not at a customer's deploy.
++// The walls around the web wasm. Every module the package ships is cut into
++// parts listed in pdf_oxide_manifest.json, because static hosts cap each
++// uploaded file (Cloudflare Pages and Workers static assets: 25 MiB), not the
++// module a browser compiles. A file over the cap would deploy as a broken
++// site, so the walls fail here and in the release compile (tool/compile.dart),
++// not at a customer's deploy:
+ //
+-// It judges the wasm files built into web_assets/ (the normal one, the
+-// Asyncify one) and checks that build.json and the release workflow agree on
+-// which wasm files exist.
++//   - every file in web_assets/ is under the cap;
++//   - each manifest module is, byte for byte, its parts joined, and each part
++//     is its file;
++//   - a visitor's download, the gzip of the whole module, is inside its budget.
++//
++// The walls themselves are tested on small synthetic folders: each is shown to
++// fail on the break it guards. The built web_assets/ then has to pass them.
+ //
+ // io-exempt: reads web_assets/, build.json and the release workflow from disk.
+ 
+@@ -13,40 +19,115 @@
+ library;
+ 
+ import 'dart:io';
++import 'dart:typed_data';
+ 
+ import 'package:pdf_manipulator/src/hook/build_constants.dart';
++import 'package:pdf_manipulator/src/hook/wasm_parts.dart';
+ import 'package:test/test.dart';
+ 
++final _built = File('web_assets/$wasmManifestFile').existsSync()
++    ? false
++    : 'web_assets/ holds no wasm build (make build-wasm)';
++
+ void main() {
+-  test('no wasm in web_assets/ reaches the 25 MiB static-asset limit', () {
+-    final wasm = [
+-      for (final f in Directory('web_assets').listSync().whereType<File>())
+-        if (f.path.endsWith('.wasm')) f,
+-    ];
+-    final over = {
+-      for (final f in wasm)
+-        if (f.lengthSync() >= maxWebAssetBytes)
+-          f.path: '${f.lengthSync()} bytes',
+-    };
+-    expect(
+-      over,
+-      isEmpty,
+-      reason:
+-          'limit is $maxWebAssetBytes bytes; built: '
+-          '${{for (final f in wasm) f.path: f.lengthSync()}}',
+-    );
++  group('the walls fail on what they guard', () {
++    late Directory dir;
++    setUp(() {
++      dir = Directory.systemTemp.createTempSync('wasm_wall_test_');
++      final wasm = File('${dir.path}/whole.wasm')
++        ..writeAsBytesSync(
++          Uint8List.fromList([for (var i = 0; i < 3000; i++) i * 7 & 0xff]),
++        );
++      writeWasmParts(wasm: wasm, module: normalWasmModule, outDir: dir);
++      wasm.deleteSync();
++    });
++    tearDown(() => dir.deleteSync(recursive: true));
++
++    test('a clean folder passes', () {
++      expect(wasmWallProblems(dir), isEmpty);
++    });
++
++    test('a file at the cap fails, naming it', () {
++      expect(
++        wasmWallProblems(dir, maxFileBytes: 3000),
++        contains(contains('$normalWasmModule.0.wasm')),
++      );
++    });
++
++    test('a file under the cap passes', () {
++      expect(wasmWallProblems(dir, maxFileBytes: 3001), isEmpty);
++    });
++
++    test('a changed part byte fails, naming the part', () {
++      final part = File('${dir.path}/$normalWasmModule.0.wasm');
++      final bytes = part.readAsBytesSync();
++      bytes[10] ^= 1;
++      part.writeAsBytesSync(bytes);
++      expect(
++        wasmWallProblems(dir),
++        contains(contains('$normalWasmModule.0.wasm')),
++      );
++    });
++
++    test('a missing part fails, naming it', () {
++      File('${dir.path}/$normalWasmModule.0.wasm').deleteSync();
++      expect(
++        wasmWallProblems(dir),
++        contains(contains('$normalWasmModule.0.wasm')),
++      );
++    });
++
++    test('a budget below the module fails, naming the module', () {
++      expect(
++        wasmWallProblems(dir, gzipBudgets: {normalWasmModule: 10}),
++        contains(allOf(contains(normalWasmModule), contains('budget'))),
++      );
++    });
++
++    test('a budget above the module passes', () {
++      expect(
++        wasmWallProblems(dir, gzipBudgets: {normalWasmModule: 1 << 20}),
++        isEmpty,
++      );
++    });
++  });
++
++  group('the built web_assets/', () {
++    test('every file is under the cap and every module is its parts', () {
++      expect(wasmWallProblems(Directory('web_assets')), isEmpty);
++    }, skip: _built);
++
++    test('every part of the manifest is a part build.json ships', () {
++      expect(
++        buildJsonPartProblems(
++          Directory('web_assets'),
++          BuildConstants.load(Directory.current.uri),
++        ),
++        isEmpty,
++      );
++    }, skip: _built);
++
++    test('the budgets are the ones the plan sets', () {
++      expect(normalWasmGzipBudget, 8912896);
++      expect(asyncifyWasmGzipBudget, 11010048);
++      expect(maxWebAssetBytes, 26214400);
++    });
+   });
+ 
+   test('build.json, the build outputs and the release workflow agree', () {
+     final constants = BuildConstants.load(Directory.current.uri);
+     final release = File('.github/workflows/release.yml').readAsStringSync();
+-    for (final MapEntry(key: local, value: asset)
+-        in constants.webAssets.entries) {
+-      if (!local.endsWith('.wasm')) continue;
++    final shipped = [
++      ...constants.webAssets.keys.where((n) => n.endsWith('.wasm')),
++      wasmManifestFile,
++    ];
++    for (final local in shipped) {
++      final asset = constants.webAssets[local];
++      expect(asset, isNotNull, reason: 'build.json lists $local');
+       expect(
+         constants.wasmBuildOutputs,
+         contains(local),
+-        reason: '$local is a wasm the build produces',
++        reason: '$local is a file the build produces',
+       );
+       expect(
+         release,
+@@ -54,6 +135,25 @@ void main() {
+         reason: 'the release verifies $asset is present',
+       );
+     }
+-    expect(constants.webAssets, contains(asyncifyWebAsset));
++    expect(
++      constants.webAssets.keys,
++      isNot(
++        anyOf(
++          contains('pdf_oxide_bg.wasm'),
++          contains('pdf_oxide_asyncify_bg.wasm'),
++        ),
++      ),
++      reason: 'no whole wasm is a web asset: every module ships as parts',
++    );
++    expect(
++      constants.webAssets.keys.where((n) => n.startsWith('$normalWasmModule.')),
++      isNotEmpty,
++    );
++    expect(
++      constants.webAssets.keys.where(
++        (n) => n.startsWith('$asyncifyWasmModule.'),
++      ),
++      isNotEmpty,
++    );
+   });
+ }
+diff --git a/test/harness/audited_asset_server.dart b/test/harness/audited_asset_server.dart
+index 4fcb11f..62b0ca3 100644
+--- a/test/harness/audited_asset_server.dart
++++ b/test/harness/audited_asset_server.dart
+@@ -1,18 +1,30 @@
+-// Hybrid isolate asset server that reports what the browser asks for and can
+-// hide files.
++// Hybrid isolate asset server that reports what the browser asks for, can hide
++// files, and can serve a web host's faults.
+ //
+-// Same job as asset_server.dart. The spawn message is a list of paths (as
+-// requested, e.g. `web_assets/pdf_oxide_asyncify_bg.wasm`) the server answers
+-// with 404. The channel carries the port first, then one string per request,
++// Same job as asset_server.dart. The spawn message is a map:
++//
++//   hide             paths (as requested, e.g.
++//                    `web_assets/pdf_oxide_asyncify_bg.0.wasm`) the server
++//                    answers with 404;
++//   spa              true: a single-page-app host, which answers every path
++//                    that is hidden or has no file with 200 and an HTML page;
++//   manifestWithout  module names the served pdf_oxide_manifest.json leaves
++//                    out, as the manifest of an app that did not ship them;
++//   corrupt          paths whose served body has one byte changed;
++//   truncate         paths whose served body lacks its last bytes.
++//
++// The channel carries the port first, then one string per request,
+ // `METHOD path`, in the order the server saw them.
+ //
+ //   final channel = spawnHybridUri('/test/harness/audited_asset_server.dart',
+-//       message: ['web_assets/pdf_oxide_asyncify_bg.wasm'], stayAlive: true);
++//       message: {'hide': ['web_assets/pdf_oxide_asyncify_bg.0.wasm']},
++//       stayAlive: true);
+ //   final events = StreamQueue(channel.stream);
+ //   final port = (await events.next as double).toInt();
+ 
+ // io-exempt: hybrid-isolate harness; runs an HttpServer so chrome tests can
+ // fetch web_assets/.
++import 'dart:convert';
+ import 'dart:io';
+ 
+ import 'package:shelf/shelf.dart';
+@@ -21,20 +33,54 @@ import 'package:shelf_static/shelf_static.dart';
+ import 'package:stream_channel/stream_channel.dart';
+ 
+ const _headers = {'Access-Control-Allow-Origin': '*'};
++const _manifest = 'web_assets/pdf_oxide_manifest.json';
+ 
+ Future<void> hybridMain(StreamChannel<Object?> channel, Object? message) async {
+-  final hidden = {for (final path in (message as List?) ?? const []) '$path'};
++  final options = (message as Map?) ?? const {};
++  Set<String> paths(String key) => {
++    for (final path in (options[key] as List?) ?? const []) '$path',
++  };
++  final hidden = paths('hide');
++  final corrupt = paths('corrupt');
++  final truncate = paths('truncate');
++  final without = paths('manifestWithout');
++  final spa = options['spa'] == true;
+   final server = await HttpServer.bind('localhost', 0);
+   final files = createStaticHandler('.');
++  Response page() => Response.ok(
++    '<!doctype html><title>app</title>',
++    headers: {..._headers, 'content-type': 'text/html'},
++  );
+   io.serveRequests(server, (Request request) async {
+     if (request.method == 'OPTIONS') {
+       return Response.ok(null, headers: _headers);
+     }
+-    channel.sink.add('${request.method} ${request.url.path}');
+-    if (hidden.contains(request.url.path)) {
+-      return Response.notFound('hidden', headers: _headers);
++    final path = request.url.path;
++    channel.sink.add('${request.method} $path');
++    if (hidden.contains(path)) {
++      return spa ? page() : Response.notFound('hidden', headers: _headers);
++    }
++    final response = (await files(request)).change(headers: _headers);
++    if (response.statusCode == 404 && spa) return page();
++    if (response.statusCode != 200 || request.method != 'GET') return response;
++    if (path == _manifest && without.isNotEmpty) {
++      final json = jsonDecode(await response.readAsString()) as Map;
++      json.removeWhere((module, _) => without.contains(module));
++      return Response.ok(
++        jsonEncode(json),
++        headers: {..._headers, 'content-type': 'application/json'},
++      );
++    }
++    if (corrupt.contains(path) || truncate.contains(path)) {
++      final bytes = await response.read().expand((c) => c).toList();
++      if (corrupt.contains(path)) bytes[bytes.length ~/ 2] ^= 0xff;
++      if (truncate.contains(path)) bytes.length -= 16;
++      return Response.ok(
++        bytes,
++        headers: {..._headers, 'content-type': 'application/wasm'},
++      );
+     }
+-    return (await files(request)).change(headers: _headers);
++    return response;
+   });
+   channel.sink.add(server.port);
+   await channel.stream
+diff --git a/test/harness/audited_server.dart b/test/harness/audited_server.dart
+index 0b84145..284c439 100644
+--- a/test/harness/audited_server.dart
++++ b/test/harness/audited_server.dart
+@@ -14,10 +14,24 @@ class AuditedServer {
+   final StreamIterator<Object?> _events;
+   final List<String> requests;
+ 
+-  static Future<AuditedServer> start(List<String> hide) async {
++  /// Starts the server. [hide] paths answer 404; [spa], [manifestWithout],
++  /// [corrupt] and [truncate] are the faults audited_asset_server.dart lists.
++  static Future<AuditedServer> start(
++    List<String> hide, {
++    bool spa = false,
++    List<String> manifestWithout = const [],
++    List<String> corrupt = const [],
++    List<String> truncate = const [],
++  }) async {
+     final StreamChannel<Object?> channel = spawnHybridUri(
+       '/test/harness/audited_asset_server.dart',
+-      message: hide,
++      message: {
++        'hide': hide,
++        'spa': spa,
++        'manifestWithout': manifestWithout,
++        'corrupt': corrupt,
++        'truncate': truncate,
++      },
+       stayAlive: true,
+     );
+     final events = StreamIterator(channel.stream);
+diff --git a/test/harness/fake_executors.dart b/test/harness/fake_executors.dart
+index 0106007..75996b7 100644
+--- a/test/harness/fake_executors.dart
++++ b/test/harness/fake_executors.dart
+@@ -168,7 +168,7 @@ class FakeLaneHost implements ExecutorBooter {
+   int bootAttempts = 0;
+ 
+   @override
+-  PdfIoMode get mode => PdfIoMode.native;
++  Future<PdfIoMode> resolveMode() async => PdfIoMode.native;
+ 
+   @override
+   int get defaultConcurrency => 2;
+diff --git a/test/hook/wasm_parts_test.dart b/test/hook/wasm_parts_test.dart
+new file mode 100644
+index 0000000..96c22ee
+--- /dev/null
++++ b/test/hook/wasm_parts_test.dart
+@@ -0,0 +1,192 @@
++// The cutter every producer of web wasm calls: it cuts a built module into
++// parts of exactly wasmPartBytes and merges the module's entry into the
++// manifest beside them.
++//
++// io-exempt: writes parts and a manifest into a temp folder.
++
++@TestOn('vm')
++library;
++
++import 'dart:convert';
++import 'dart:io';
++import 'dart:typed_data';
++
++import 'package:crypto/crypto.dart';
++import 'package:pdf_manipulator/src/hook/build_constants.dart';
++import 'package:pdf_manipulator/src/hook/wasm_parts.dart';
++import 'package:test/test.dart';
++
++const _mib = 1024 * 1024;
++
++Uint8List _bytes(int length) =>
++    Uint8List.fromList([for (var i = 0; i < length; i++) (i * 31 + 7) & 0xff]);
++
++String _hex(List<int> bytes) => sha256.convert(bytes).toString();
++
++void main() {
++  late Directory dir;
++  late Directory out;
++
++  setUp(() {
++    dir = Directory.systemTemp.createTempSync('wasm_parts_test_');
++    out = Directory('${dir.path}/out')..createSync();
++  });
++  tearDown(() => dir.deleteSync(recursive: true));
++
++  File wasmOf(Uint8List bytes, [String name = 'whole.wasm']) =>
++      File('${dir.path}/$name')..writeAsBytesSync(bytes);
++
++  test('a part is 16 MiB', () => expect(wasmPartBytes, 16 * _mib));
++
++  test('40 MiB and one byte is parts of 16, 16 and 8 MiB and one byte', () {
++    final whole = _bytes(40 * _mib + 1);
++    writeWasmParts(wasm: wasmOf(whole), module: 'pdf_oxide_bg', outDir: out);
++
++    final names = out.listSync().map((e) => e.uri.pathSegments.last).toList()
++      ..sort();
++    expect(names, [
++      'pdf_oxide_bg.0.wasm',
++      'pdf_oxide_bg.1.wasm',
++      'pdf_oxide_bg.2.wasm',
++      'pdf_oxide_manifest.json',
++    ]);
++
++    final sizes = [
++      for (var i = 0; i < 3; i++)
++        File('${out.path}/pdf_oxide_bg.$i.wasm').lengthSync(),
++    ];
++    expect(sizes, [16 * _mib, 16 * _mib, 8 * _mib + 1]);
++
++    final manifest =
++        jsonDecode(
++              File('${out.path}/pdf_oxide_manifest.json').readAsStringSync(),
++            )
++            as Map<String, dynamic>;
++    final entry = manifest['pdf_oxide_bg'] as Map<String, dynamic>;
++    expect(entry['bytes'], whole.length);
++    expect(entry['sha256'], _hex(whole));
++    final parts = (entry['parts'] as List).cast<Map<String, dynamic>>();
++    expect(
++      [for (final p in parts) p['file']],
++      ['pdf_oxide_bg.0.wasm', 'pdf_oxide_bg.1.wasm', 'pdf_oxide_bg.2.wasm'],
++    );
++    expect([for (final p in parts) p['bytes']], sizes);
++    var offset = 0;
++    for (final (i, p) in parts.indexed) {
++      expect(p['sha256'], _hex(whole.sublist(offset, offset + sizes[i])));
++      offset += sizes[i];
++    }
++  });
++
++  test('exactly 16 MiB is one part', () {
++    final whole = _bytes(16 * _mib);
++    final manifest = writeWasmParts(
++      wasm: wasmOf(whole),
++      module: 'pdf_oxide_bg',
++      outDir: out,
++    );
++    expect(manifest.modules['pdf_oxide_bg']!.parts, hasLength(1));
++    expect(
++      File('${out.path}/pdf_oxide_bg.0.wasm').readAsBytesSync(),
++      orderedEquals(whole),
++    );
++    expect(File('${out.path}/pdf_oxide_bg.1.wasm').existsSync(), isFalse);
++  });
++
++  test('a module of one byte more than a part is two parts', () {
++    final manifest = writeWasmParts(
++      wasm: wasmOf(_bytes(16 * _mib + 1)),
++      module: 'pdf_oxide_bg',
++      outDir: out,
++    );
++    expect(
++      [for (final p in manifest.modules['pdf_oxide_bg']!.parts) p.bytes],
++      [16 * _mib, 1],
++    );
++  });
++
++  test("merging a module keeps the other module's entry", () {
++    final normal = _bytes(3 * _mib);
++    final asyncify = _bytes(17 * _mib);
++    writeWasmParts(wasm: wasmOf(normal), module: 'pdf_oxide_bg', outDir: out);
++    writeWasmParts(
++      wasm: wasmOf(asyncify, 'asyncify.wasm'),
++      module: asyncifyWasmModule,
++      outDir: out,
++    );
++
++    final manifest = WasmManifest.load(out);
++    expect(manifest.modules.keys, ['pdf_oxide_bg', asyncifyWasmModule]);
++    expect(manifest.modules['pdf_oxide_bg']!.sha256, _hex(normal));
++    expect(manifest.modules[asyncifyWasmModule]!.sha256, _hex(asyncify));
++    expect(manifest.modules[asyncifyWasmModule]!.parts, hasLength(2));
++  });
++
++  test('cutting a module again replaces its entry and its stale parts', () {
++    writeWasmParts(
++      wasm: wasmOf(_bytes(33 * _mib)),
++      module: 'pdf_oxide_bg',
++      outDir: out,
++    );
++    expect(File('${out.path}/pdf_oxide_bg.2.wasm').existsSync(), isTrue);
++
++    final smaller = _bytes(2 * _mib);
++    writeWasmParts(wasm: wasmOf(smaller), module: 'pdf_oxide_bg', outDir: out);
++    expect(File('${out.path}/pdf_oxide_bg.1.wasm').existsSync(), isFalse);
++    expect(File('${out.path}/pdf_oxide_bg.2.wasm').existsSync(), isFalse);
++    expect(
++      WasmManifest.load(out).modules['pdf_oxide_bg']!.sha256,
++      _hex(smaller),
++    );
++  });
++
++  test('joining the parts gives back the module', () {
++    final whole = _bytes(20 * _mib + 5);
++    final manifest = writeWasmParts(
++      wasm: wasmOf(whole),
++      module: 'pdf_oxide_bg',
++      outDir: out,
++    );
++    expect(
++      joinWasmParts(out, manifest.modules['pdf_oxide_bg']!),
++      orderedEquals(whole),
++    );
++  });
++
++  test('removing a module takes its entry and its parts', () {
++    writeWasmParts(
++      wasm: wasmOf(_bytes(1 * _mib)),
++      module: 'pdf_oxide_bg',
++      outDir: out,
++    );
++    writeWasmParts(
++      wasm: wasmOf(_bytes(17 * _mib), 'a.wasm'),
++      module: asyncifyWasmModule,
++      outDir: out,
++    );
++    removeWasmModule(out, asyncifyWasmModule);
++    expect(WasmManifest.load(out).modules.keys, ['pdf_oxide_bg']);
++    expect(
++      out.listSync().map((e) => e.uri.pathSegments.last).toList()..sort(),
++      ['pdf_oxide_bg.0.wasm', 'pdf_oxide_manifest.json'],
++    );
++  });
++
++  test('verification names a part whose byte changed', () {
++    final manifest = writeWasmParts(
++      wasm: wasmOf(_bytes(20 * _mib)),
++      module: 'pdf_oxide_bg',
++      outDir: out,
++    );
++    expect(verifyWasmParts(out, manifest), isEmpty);
++
++    final part = File('${out.path}/pdf_oxide_bg.1.wasm');
++    final bytes = part.readAsBytesSync();
++    bytes[100] ^= 0xff;
++    part.writeAsBytesSync(bytes);
++    expect(
++      verifyWasmParts(out, manifest),
++      contains(contains('pdf_oxide_bg.1.wasm')),
++    );
++  });
++}
+diff --git a/test/ops/core/pdf_executor_battery.dart b/test/ops/core/pdf_executor_battery.dart
+index c9b02eb..8385cc3 100644
+--- a/test/ops/core/pdf_executor_battery.dart
++++ b/test/ops/core/pdf_executor_battery.dart
+@@ -32,7 +32,7 @@ class _TrackingHost implements ExecutorBooter {
+   final executors = <Executor>[];
+ 
+   @override
+-  PdfIoMode get mode => _inner.mode;
++  Future<PdfIoMode> resolveMode() => _inner.resolveMode();
+ 
+   @override
+   int get defaultConcurrency => _inner.defaultConcurrency;
+@@ -80,7 +80,7 @@ void registerExecutorTests(
+       pool = keepBytes == null
+           ? ExecutorPool(host: host)
+           : ExecutorPool(host: host, keepBytes: keepBytes);
+-      router = Router(pool: pool, maxLanes: 1, mode: host.mode);
++      router = Router(pool: pool, maxLanes: 1);
+     }
+ 
+     /// Every executor the pool holds is idle: the lane that used the last
+@@ -216,7 +216,7 @@ void registerExecutorTests(
+         mem.add(memBytes?.call(executor));
+         if (i % 10 == 0 && i < 50) {
+           await router.dispose();
+-          router = Router(pool: pool, maxLanes: 1, mode: host.mode);
++          router = Router(pool: pool, maxLanes: 1);
+         }
+       }
+       printOnFailure('idle heap by cycle: $idle');
+diff --git a/test/ops/core/pdf_runtime_safety_battery.dart b/test/ops/core/pdf_runtime_safety_battery.dart
+index 1b62740..0565652 100644
+--- a/test/ops/core/pdf_runtime_safety_battery.dart
++++ b/test/ops/core/pdf_runtime_safety_battery.dart
+@@ -41,7 +41,7 @@ class _ObservedHost implements ExecutorBooter {
+   void Function(int jobId)? onResult;
+ 
+   @override
+-  PdfIoMode get mode => _inner.mode;
++  Future<PdfIoMode> resolveMode() => _inner.resolveMode();
+ 
+   @override
+   int get defaultConcurrency => _inner.defaultConcurrency;
+@@ -167,7 +167,7 @@ void registerRuntimeSafetyTests({PdfConfig? Function()? config}) {
+     Router make(int maxLanes) {
+       host = _ObservedHost(createBooter(config: config?.call()));
+       pool = ExecutorPool(host: host);
+-      return router = Router(pool: pool, maxLanes: maxLanes, mode: host.mode);
++      return router = Router(pool: pool, maxLanes: maxLanes);
+     }
+ 
+     tearDown(() async {
+diff --git a/test/ops/platform/web/web_asyncify_assets_battery.dart b/test/ops/platform/web/web_asyncify_assets_battery.dart
+index 808f3c6..d1663de 100644
+--- a/test/ops/platform/web/web_asyncify_assets_battery.dart
++++ b/test/ops/platform/web/web_asyncify_assets_battery.dart
+@@ -1,7 +1,8 @@
+ // CHARTER — this battery alone proves what a page asks the server for and
+ // when the Asyncify mode is refused: a browser fetches only the wasm its mode
+-// runs, a page whose app did not ship the Asyncify wasm never requests it, and
+-// forcing Asyncify without it is a typed error when the instance is created.
++// runs, a page whose app did not ship the Asyncify wasm (its manifest has no
++// entry for it) never requests it, and forcing Asyncify without it is a typed
++// error when the instance is initialized.
+ 
+ import 'dart:async';
+ 
+@@ -13,8 +14,10 @@ import '../../../harness/audited_server.dart';
+ import '../../../harness/test_source_sink.dart';
+ import '../../../harness/timeouts.dart';
+ 
+-const _asyncifyWasm = 'web_assets/pdf_oxide_asyncify_bg.wasm';
+-const _normalWasm = 'web_assets/pdf_oxide_bg.wasm';
++const _asyncifyParts = [
++  'web_assets/pdf_oxide_asyncify_bg.0.wasm',
++  'web_assets/pdf_oxide_asyncify_bg.1.wasm',
++];
+ 
+ void registerWebAsyncifyAssetTests({
+   required String Function() workerUrl,
+@@ -34,7 +37,10 @@ void registerWebAsyncifyAssetTests({
+ 
+     if (mode != PdfIoMode.asyncify) {
+       test('a page without the Asyncify wasm never asks for it', () async {
+-        final server = await AuditedServer.start([_asyncifyWasm]);
++        final server = await AuditedServer.start(
++          _asyncifyParts,
++          manifestWithout: const ['pdf_oxide_asyncify_bg'],
++        );
+         final pdf = Pdf(
+           config: PdfConfig(webWorkerUrl: server.workerUrl, webIoMode: mode),
+         );
+@@ -45,40 +51,43 @@ void registerWebAsyncifyAssetTests({
+         await pdf.dispose();
+         await server.settle();
+ 
+-        expect(server.asked('pdf_oxide_asyncify_bg.wasm'), isEmpty);
++        expect(server.asked('pdf_oxide_asyncify_bg.0.wasm'), isEmpty);
++        expect(server.asked('pdf_oxide_asyncify_bg.1.wasm'), isEmpty);
+         await restoreSuiteConfig();
+       }, timeout: t(4));
+     }
+ 
+     test(
+-      'forcing Asyncify without its wasm is a typed error at creation',
++      'forcing Asyncify without its wasm is a typed error at initialization',
+       () async {
+-        final server = await AuditedServer.start([_asyncifyWasm]);
+-        expect(
+-          () => Pdf(
+-            config: PdfConfig(
+-              webWorkerUrl: server.workerUrl,
+-              webIoMode: PdfIoMode.asyncify,
+-            ),
++        final server = await AuditedServer.start(
++          _asyncifyParts,
++          manifestWithout: const ['pdf_oxide_asyncify_bg'],
++        );
++        final pdf = Pdf(
++          config: PdfConfig(
++            webWorkerUrl: server.workerUrl,
++            webIoMode: PdfIoMode.asyncify,
+           ),
++        );
++        await expectLater(
++          pdf.ensureInitialized(),
+           throwsA(
+             isA<PdfUnsupported>().having(
+               (e) => e.message,
+               'message',
+-              allOf(
+-                contains('asyncify'),
+-                contains('pdf_oxide_asyncify_bg.wasm'),
+-              ),
++              allOf(contains('asyncify'), contains('pdf_oxide_manifest.json')),
+             ),
+           ),
+         );
+         await server.settle();
+         expect(
+-          server.asked('pdf_oxide_asyncify_bg.wasm'),
+-          everyElement(startsWith('HEAD ')),
+-          reason: 'the page asks whether the file exists and never fetches it',
++          server.asked('.wasm'),
++          isEmpty,
++          reason: 'the manifest is the only thing the page asks',
+         );
+-        expect(server.asked(_normalWasm), isEmpty);
++        await pdf.dispose();
++        if (mode != PdfIoMode.asyncify) await restoreSuiteConfig();
+       },
+       timeout: t(4),
+     );
+@@ -104,7 +113,8 @@ void registerWebAsyncifyAssetTests({
+           // this file may have served it; what this instance must never do
+           // is ask for the normal one. The engine only starts on the
+           // Asyncify build: the worker refuses a module without its exports.
+-          expect(server.asked(_normalWasm), isEmpty);
++          expect(server.asked('pdf_oxide_bg.0.wasm'), isEmpty);
++          expect(server.asked('pdf_oxide_bg.1.wasm'), isEmpty);
+ 
+           await restoreSuiteConfig();
+         },
+diff --git a/test/ops/platform/web/web_wasm_parts_battery.dart b/test/ops/platform/web/web_wasm_parts_battery.dart
+new file mode 100644
+index 0000000..f4350c0
+--- /dev/null
++++ b/test/ops/platform/web/web_wasm_parts_battery.dart
+@@ -0,0 +1,311 @@
++// CHARTER — this battery alone proves how a page gets its wasm: the manifest
++// is fetched once and says which modules exist, a browser fetches the parts of
++// exactly the module its mode runs and never a whole `.wasm`, a part that is
++// corrupt or short fails initialization with an error that names it, on the
++// host's compile and on the worker's own, and a host that answers every
++// unknown path with an HTML page, or has no manifest, never gets a guess.
++
++import 'dart:async';
++import 'dart:convert';
++import 'dart:js_interop';
++import 'dart:js_interop_unsafe';
++
++import 'package:pdf_manipulator/pdf_manipulator.dart';
++import 'package:pdf_manipulator/src/runtime/web/protocol.dart';
++import 'package:test/test.dart';
++import 'package:web/web.dart' as web;
++
++import '../../../fixtures/handwritten.dart';
++import '../../../harness/audited_server.dart';
++import '../../../harness/test_source_sink.dart';
++import '../../../harness/timeouts.dart';
++
++const _manifestPath = 'web_assets/pdf_oxide_manifest.json';
++
++/// The module [mode] runs, and the file names of its parts that
++/// `web_assets/` holds.
++String _moduleOf(PdfIoMode mode) =>
++    mode == PdfIoMode.asyncify ? 'pdf_oxide_asyncify_bg' : 'pdf_oxide_bg';
++
++String _partPath(String module, int n) => 'web_assets/$module.$n.wasm';
++
++void registerWebWasmPartsTests({
++  required String Function() workerUrl,
++  required PdfIoMode mode,
++}) {
++  final module = _moduleOf(mode);
++  final other = mode == PdfIoMode.asyncify
++      ? 'pdf_oxide_bg'
++      : 'pdf_oxide_asyncify_bg';
++
++  group('web wasm parts (${mode.name})', () {
++    // Instances here carry their own server's URL, which becomes the page's
++    // inherited default; point it back at the suite's.
++    Future<void> restoreSuiteConfig() async {
++      final restored = Pdf(
++        config: PdfConfig(webWorkerUrl: workerUrl(), webIoMode: mode),
++      );
++      final doc = await restored.open(PdfInput(src(minimalPdf)));
++      await doc.dispose();
++      await restored.dispose();
++    }
++
++    Pdf pdfOn(AuditedServer server) => Pdf(
++      config: PdfConfig(webWorkerUrl: server.workerUrl, webIoMode: mode),
++    );
++
++    test('the manifest is fetched once, the parts of one module once each, and '
++        'no whole wasm', () async {
++      final server = await AuditedServer.start(const []);
++      final pdf = pdfOn(server);
++      final doc = await pdf.open(PdfInput(src(minimalPdf)));
++      expect(doc.pageCount, 1);
++      expect(pdf.ioMode, mode);
++      await doc.dispose();
++      await pdf.dispose();
++      await server.settle();
++
++      expect(server.asked('pdf_oxide_manifest.json'), ['GET $_manifestPath']);
++      final wasm = server.asked('.wasm');
++      final pattern = RegExp('^GET web_assets/$module\\.(\\d+)\\.wasm\$');
++      final numbers = [
++        for (final r in wasm)
++          int.parse(
++            pattern.firstMatch(r)?.group(1) ??
++                fail('a request outside the parts of $module: $r'),
++          ),
++      ]..sort();
++      expect(numbers, isNotEmpty);
++      expect(numbers, [
++        for (var i = 0; i < numbers.length; i++) i,
++      ], reason: 'every part once, from 0, and nothing else');
++      expect(server.asked('$other.0.wasm'), isEmpty);
++      expect(
++        server.requests.where(
++          (r) => r.endsWith('/pdf_oxide_bg.wasm') || r.endsWith('_bg.wasm'),
++        ),
++        isEmpty,
++        reason: 'a whole wasm is never fetched',
++      );
++      await restoreSuiteConfig();
++    }, timeout: t(4));
++
++    for (final (fault, label) in [
++      ('corrupt', 'a corrupt part'),
++      ('truncate', 'a short part'),
++    ]) {
++      test('$label fails initialization with an error naming it', () async {
++        final part = _partPath(module, 0);
++        final server = await AuditedServer.start(
++          const [],
++          corrupt: fault == 'corrupt' ? [part] : const [],
++          truncate: fault == 'truncate' ? [part] : const [],
++        );
++        final pdf = pdfOn(server);
++        await expectLater(
++          pdf.open(PdfInput(src(minimalPdf))),
++          throwsA(
++            predicate(
++              (e) => e.toString().contains('$module.0.wasm'),
++              'an error naming $module.0.wasm',
++            ),
++          ),
++        );
++        await pdf.dispose();
++        await restoreSuiteConfig();
++      }, timeout: t(12));
++
++      test(
++        '$label fails the worker\'s own compile with an error naming it',
++        () async {
++          final part = _partPath(module, 0);
++          final server = await AuditedServer.start(
++            const [],
++            corrupt: fault == 'corrupt' ? [part] : const [],
++            truncate: fault == 'truncate' ? [part] : const [],
++          );
++          final outcome = await _bootWorker(server.workerUrl, module, mode);
++          expect(outcome.type, 'error');
++          expect(outcome.message, contains('$module.0.wasm'));
++        },
++        timeout: t(4),
++      );
++    }
++
++    test(
++      'the worker compiles its own module from the manifest entry',
++      () async {
++        final server = await AuditedServer.start(const []);
++        final outcome = await _bootWorker(server.workerUrl, module, mode);
++        expect(outcome.type, 'ready', reason: outcome.message);
++        await server.settle();
++        expect(server.asked('$other.0.wasm'), isEmpty);
++        expect(
++          server.requests.where((r) => r.endsWith('_bg.wasm')),
++          isEmpty,
++          reason: 'a whole wasm is never fetched',
++        );
++      },
++      timeout: t(4),
++    );
++
++    test('a host with no manifest is a typed error naming the file and '
++        'the web setup', () async {
++      final server = await AuditedServer.start([_manifestPath]);
++      final pdf = pdfOn(server);
++      await expectLater(
++        pdf.ensureInitialized(),
++        throwsA(
++          isA<PdfUnsupported>().having(
++            (e) => e.message,
++            'message',
++            allOf(
++              contains('pdf_oxide_manifest.json'),
++              contains('pdf_manipulator:setup'),
++            ),
++          ),
++        ),
++      );
++      await server.settle();
++      expect(server.asked('.wasm'), isEmpty);
++      await pdf.dispose();
++    }, timeout: t(4));
++
++    test('a single-page-app host that answers the manifest with its HTML page '
++        'is the same typed error', () async {
++      final server = await AuditedServer.start([_manifestPath], spa: true);
++      final pdf = pdfOn(server);
++      await expectLater(
++        pdf.ensureInitialized(),
++        throwsA(
++          isA<PdfUnsupported>().having(
++            (e) => e.message,
++            'message',
++            contains('pdf_oxide_manifest.json'),
++          ),
++        ),
++      );
++      await server.settle();
++      expect(server.asked('.wasm'), isEmpty);
++      await pdf.dispose();
++    }, timeout: t(4));
++
++    if (mode == PdfIoMode.asyncify) {
++      test(
++        'a manifest without the Asyncify entry, on a host that answers every '
++        'unknown path with HTML, is a typed error and no part is requested',
++        () async {
++          final server = await AuditedServer.start(
++            [
++              _partPath('pdf_oxide_asyncify_bg', 0),
++              _partPath('pdf_oxide_asyncify_bg', 1),
++            ],
++            spa: true,
++            manifestWithout: const ['pdf_oxide_asyncify_bg'],
++          );
++          final pdf = pdfOn(server);
++          await expectLater(
++            pdf.ensureInitialized(),
++            throwsA(
++              isA<PdfUnsupported>().having(
++                (e) => e.message,
++                'message',
++                allOf(
++                  contains('asyncify'),
++                  contains('pdf_oxide_manifest.json'),
++                ),
++              ),
++            ),
++          );
++          await server.settle();
++          expect(server.asked('.wasm'), isEmpty);
++          await pdf.dispose();
++        },
++        timeout: t(4),
++      );
++    } else {
++      test(
++        'a manifest without the Asyncify entry, on a host that answers every '
++        'unknown path with HTML, never requests an Asyncify part',
++        () async {
++          final server = await AuditedServer.start(
++            const [],
++            spa: true,
++            manifestWithout: const ['pdf_oxide_asyncify_bg'],
++          );
++          final pdf = pdfOn(server);
++          final doc = await pdf.open(PdfInput(src(minimalPdf)));
++          expect(doc.pageCount, 1);
++          expect(pdf.ioMode, mode);
++          await doc.dispose();
++          await pdf.dispose();
++          await server.settle();
++          expect(server.asked('pdf_oxide_asyncify_bg.0.wasm'), isEmpty);
++          expect(server.asked('pdf_oxide_asyncify_bg.1.wasm'), isEmpty);
++          await restoreSuiteConfig();
++        },
++        timeout: t(4),
++      );
++    }
++  });
++}
++
++/// How a raw worker's boot ended: `ready`, or `error` with its message.
++typedef _BootOutcome = ({String type, String message});
++
++/// Boots the executor script at [workerUrl] by itself, without a module the
++/// host compiled, so the worker compiles from the manifest entry of [module]
++/// the way it does when the host's compile failed.
++Future<_BootOutcome> _bootWorker(
++  String workerUrl,
++  String module,
++  PdfIoMode mode,
++) async {
++  final base = workerUrl.substring(0, workerUrl.lastIndexOf('/') + 1);
++  final response = await web.window
++      .fetch('${base}pdf_oxide_manifest.json'.toJS)
++      .toDart;
++  final manifest =
++      jsonDecode((await response.text().toDart).toDart) as Map<String, dynamic>;
++  final blob = web.Blob(
++    [
++      "import('$workerUrl').catch((e) => postMessage({type: 'bootfailed', error: String(e)}));"
++          .toJS,
++    ].toJS,
++    web.BlobPropertyBag(type: 'application/javascript'),
++  );
++  final worker = web.Worker(
++    web.URL.createObjectURL(blob).toJS,
++    web.WorkerOptions(type: 'module'),
++  );
++  final outcome = Completer<_BootOutcome>();
++  worker.onmessage = ((web.MessageEvent event) {
++    final data = event.data as JSObject?;
++    final type = (data?['type'] as JSString?)?.toDart;
++    if (type == 'booted') {
++      final init = JSObject()
++        ..['type'] = 'init'.toJS
++        ..['ioMode'] = mode.name.toJS
++        ..['baseUrl'] = base.toJS
++        ..['wasmEntry'] = (manifest[module] as Object?).jsify()
++        ..['protocol'] = () {
++          final p = JSObject();
++          laneProtocolCodes().forEach((k, v) => p[k] = v.toJS);
++          return p;
++        }();
++      worker.postMessage(init);
++    } else if (type == 'ready') {
++      outcome.complete((type: 'ready', message: ''));
++    } else if (type == 'error' || type == 'bootfailed') {
++      outcome.complete((
++        type: 'error',
++        message: (data!['error'] as JSString?)?.toDart ?? '',
++      ));
++    }
++  }).toJS;
++  try {
++    return await outcome.future;
++  } finally {
++    worker.terminate();
++  }
++}
+diff --git a/test/ops/runners/web_asyncify_runner_test.dart b/test/ops/runners/web_asyncify_runner_test.dart
+index 4d1419c..888ab5b 100644
+--- a/test/ops/runners/web_asyncify_runner_test.dart
++++ b/test/ops/runners/web_asyncify_runner_test.dart
+@@ -38,6 +38,7 @@ import '../stress/pdf_standalone_stress_battery.dart';
+ import '../stress/pdf_builder_stress_battery.dart';
+ import '../stress/pdf_instance_stress_battery.dart';
+ import '../platform/web/web_asyncify_assets_battery.dart';
++import '../platform/web/web_wasm_parts_battery.dart';
+ import '../platform/web/web_cancel_channel_battery.dart';
+ import '../platform/web/web_lane_protocol_battery.dart';
+ import '../platform/web/web_runtime_battery.dart';
+@@ -151,6 +152,12 @@ void main() {
+     mode: PdfIoMode.asyncify,
+   );
+ 
++  registerWebWasmPartsTests(
++    workerUrl: () =>
++        'http://localhost:$serverPort/web_assets/executor_worker.js',
++    mode: PdfIoMode.asyncify,
++  );
++
+   registerDocStressTests(() => pdf);
+   registerEditorStressTests(() => pdf);
+   registerSugarStressTests(() => pdf);
+diff --git a/test/ops/runners/web_atomics_runner_test.dart b/test/ops/runners/web_atomics_runner_test.dart
+index fed234b..68bf971 100644
+--- a/test/ops/runners/web_atomics_runner_test.dart
++++ b/test/ops/runners/web_atomics_runner_test.dart
+@@ -38,6 +38,7 @@ import '../stress/pdf_standalone_stress_battery.dart';
+ import '../stress/pdf_builder_stress_battery.dart';
+ import '../stress/pdf_instance_stress_battery.dart';
+ import '../platform/web/web_asyncify_assets_battery.dart';
++import '../platform/web/web_wasm_parts_battery.dart';
+ import '../platform/web/web_lane_protocol_battery.dart';
+ import '../platform/web/web_runtime_battery.dart';
+ import '../../harness/timeouts.dart';
+@@ -149,6 +150,12 @@ void main() {
+     mode: PdfIoMode.atomics,
+   );
+ 
++  registerWebWasmPartsTests(
++    workerUrl: () =>
++        'http://localhost:$serverPort/web_assets/executor_worker.js',
++    mode: PdfIoMode.atomics,
++  );
++
+   registerDocStressTests(() => pdf);
+   registerEditorStressTests(() => pdf);
+   registerSugarStressTests(() => pdf);
+diff --git a/test/ops/runners/web_auto_mode_test.dart b/test/ops/runners/web_auto_mode_test.dart
+index 2166f36..1a19f4c 100644
+--- a/test/ops/runners/web_auto_mode_test.dart
++++ b/test/ops/runners/web_auto_mode_test.dart
+@@ -2,10 +2,14 @@
+ // forced mode is inherited by every later instance of the page, so this has a
+ // file of its own). Run: dart test test/ops/runners/web_auto_mode_test.dart -p chrome
+ //
+-// The order is JSPI, Atomics, Asyncify when the app shipped its wasm, OPFS.
+-// Chrome has no switch for JSPI, so the tests take `WebAssembly.Suspending`
+-// away from the page, as it is away in a browser older than Chrome 137; a
+-// plain `-p chrome` page has no SharedArrayBuffer.
++// The order is JSPI, Atomics, OPFS, Asyncify: Asyncify measured about 2.2 times
++// slower than OPFS, so it is chosen only where OPFS cannot run and the app
++// shipped the Asyncify wasm (its entry in pdf_oxide_manifest.json). OPFS can
++// run when `navigator.storage.getDirectory()` resolves. Chrome has no switch
++// for JSPI, so the tests take `WebAssembly.Suspending` away from the page, as
++// it is away in a browser older than Chrome 137, and make getDirectory reject,
++// as it does in some private-browsing modes; a plain `-p chrome` page has no
++// SharedArrayBuffer.
+ 
+ @TestOn('browser')
+ library;
+@@ -15,14 +19,13 @@ import 'dart:js_interop_unsafe';
+ 
+ import 'package:pdf_manipulator/pdf_manipulator.dart';
+ import 'package:test/test.dart';
++import 'package:web/web.dart' as web;
+ 
+ import '../../fixtures/handwritten.dart';
+ import '../../harness/audited_server.dart';
+ import '../../harness/test_source_sink.dart';
+ import '../../harness/timeouts.dart';
+ 
+-const _asyncifyWasm = 'web_assets/pdf_oxide_asyncify_bg.wasm';
+-
+ final bool _hasSharedArrayBuffer = globalContext
+     .hasProperty('SharedArrayBuffer'.toJS)
+     .toDart;
+@@ -45,6 +48,21 @@ Future<void> _withoutJspi(Future<void> Function() body) async {
+   }
+ }
+ 
++/// Runs [body] on a page whose origin private file system rejects, as it does
++/// in some private-browsing modes: `navigator.storage.getDirectory` is
++/// replaced on this realm's storage manager. Workers keep theirs.
++Future<void> _withoutOpfs(Future<void> Function() body) async {
++  final storage = web.window.navigator.storage as JSObject;
++  storage['getDirectory'] = (() => Future<JSAny?>.error(
++    StateError('no origin private file system'),
++  ).toJS).toJS;
++  try {
++    await body();
++  } finally {
++    storage.delete('getDirectory'.toJS);
++  }
++}
++
+ Future<PdfIoMode> _modeOf(String workerUrl) async {
+   final pdf = Pdf(config: PdfConfig(webWorkerUrl: workerUrl));
+   final doc = await pdf.open(PdfInput(src(minimalPdf)));
+@@ -55,25 +73,47 @@ Future<PdfIoMode> _modeOf(String workerUrl) async {
+   return mode;
+ }
+ 
++const _asyncifyModule = 'pdf_oxide_asyncify_bg';
++
+ void main() {
+   test(
+-    'JSPI where the browser has it, without asking for the Asyncify wasm',
++    'JSPI where the browser has it, without asking for an Asyncify part',
+     () async {
+-      final server = await AuditedServer.start([_asyncifyWasm]);
++      final server = await AuditedServer.start(const []);
+       expect(await _modeOf(server.workerUrl), PdfIoMode.jspi);
+       await server.settle();
+-      expect(server.asked('pdf_oxide_asyncify_bg.wasm'), isEmpty);
++      expect(server.asked('$_asyncifyModule.0.wasm'), isEmpty);
++      expect(server.asked('$_asyncifyModule.1.wasm'), isEmpty);
+     },
+     timeout: t(4),
+     skip: _hasJspi ? false : 'this browser has no JSPI',
+   );
+ 
+   test(
+-    'without JSPI and without SharedArrayBuffer, Asyncify when the app shipped it',
++    'without JSPI and without SharedArrayBuffer, OPFS even when the app '
++    'shipped Asyncify, never asking for an Asyncify part',
+     () async {
+       final server = await AuditedServer.start(const []);
+       late PdfIoMode mode;
+       await _withoutJspi(() async => mode = await _modeOf(server.workerUrl));
++      expect(mode, PdfIoMode.opfs);
++      await server.settle();
++      expect(server.asked('$_asyncifyModule.0.wasm'), isEmpty);
++      expect(server.asked('$_asyncifyModule.1.wasm'), isEmpty);
++    },
++    timeout: t(4),
++    skip: _hasSharedArrayBuffer ? 'the page has SharedArrayBuffer' : false,
++  );
++
++  test(
++    'where the origin private file system rejects, Asyncify when the app '
++    'shipped it',
++    () async {
++      final server = await AuditedServer.start(const []);
++      late PdfIoMode mode;
++      await _withoutJspi(
++        () => _withoutOpfs(() async => mode = await _modeOf(server.workerUrl)),
++      );
+       expect(mode, PdfIoMode.asyncify);
+     },
+     timeout: t(4),
+@@ -81,17 +121,51 @@ void main() {
+   );
+ 
+   test(
+-    'without JSPI and without SharedArrayBuffer, OPFS when the app did not '
+-    'ship Asyncify, having only asked whether the file exists',
++    'where the origin private file system rejects and the manifest has no '
++    'Asyncify entry, a typed error naming both modes',
++    () async {
++      final server = await AuditedServer.start(
++        const [],
++        manifestWithout: const [_asyncifyModule],
++      );
++      final pdf = Pdf(config: PdfConfig(webWorkerUrl: server.workerUrl));
++      await _withoutJspi(
++        () => _withoutOpfs(
++          () => expectLater(
++            pdf.ensureInitialized(),
++            throwsA(
++              isA<PdfUnsupported>().having(
++                (e) => e.message,
++                'message',
++                allOf(contains('opfs'), contains('asyncify')),
++              ),
++            ),
++          ),
++        ),
++      );
++      await pdf.dispose();
++      await server.settle();
++      expect(server.asked('.wasm'), isEmpty);
++    },
++    timeout: t(4),
++    skip: _hasSharedArrayBuffer ? 'the page has SharedArrayBuffer' : false,
++  );
++
++  test(
++    'a host that answers every unknown path with HTML and a manifest without '
++    'the Asyncify entry never selects Asyncify or asks for one of its parts',
+     () async {
+-      final server = await AuditedServer.start([_asyncifyWasm]);
++      final server = await AuditedServer.start(
++        const [],
++        spa: true,
++        manifestWithout: const [_asyncifyModule],
++      );
+       late PdfIoMode mode;
+       await _withoutJspi(() async => mode = await _modeOf(server.workerUrl));
+       expect(mode, PdfIoMode.opfs);
+       await server.settle();
+-      expect(server.asked('pdf_oxide_asyncify_bg.wasm'), [
+-        'HEAD $_asyncifyWasm',
+-      ]);
++      expect(server.asked('$_asyncifyModule.0.wasm'), isEmpty);
++      expect(server.asked('$_asyncifyModule.1.wasm'), isEmpty);
+     },
+     timeout: t(4),
+     skip: _hasSharedArrayBuffer ? 'the page has SharedArrayBuffer' : false,
+diff --git a/test/ops/runners/web_jspi_runner_test.dart b/test/ops/runners/web_jspi_runner_test.dart
+index bf40ec9..669b4b2 100644
+--- a/test/ops/runners/web_jspi_runner_test.dart
++++ b/test/ops/runners/web_jspi_runner_test.dart
+@@ -38,6 +38,7 @@ import '../stress/pdf_standalone_stress_battery.dart';
+ import '../stress/pdf_builder_stress_battery.dart';
+ import '../stress/pdf_instance_stress_battery.dart';
+ import '../platform/web/web_asyncify_assets_battery.dart';
++import '../platform/web/web_wasm_parts_battery.dart';
+ import '../platform/web/web_cancel_channel_battery.dart';
+ import '../platform/web/web_lane_protocol_battery.dart';
+ import '../platform/web/web_runtime_battery.dart';
+@@ -151,6 +152,12 @@ void main() {
+     mode: PdfIoMode.jspi,
+   );
+ 
++  registerWebWasmPartsTests(
++    workerUrl: () =>
++        'http://localhost:$serverPort/web_assets/executor_worker.js',
++    mode: PdfIoMode.jspi,
++  );
++
+   registerDocStressTests(() => pdf);
+   registerEditorStressTests(() => pdf);
+   registerSugarStressTests(() => pdf);
+diff --git a/test/ops/runners/web_opfs_runner_test.dart b/test/ops/runners/web_opfs_runner_test.dart
+index 8929a58..b4b6a3a 100644
+--- a/test/ops/runners/web_opfs_runner_test.dart
++++ b/test/ops/runners/web_opfs_runner_test.dart
+@@ -38,6 +38,7 @@ import '../stress/pdf_standalone_stress_battery.dart';
+ import '../stress/pdf_builder_stress_battery.dart';
+ import '../stress/pdf_instance_stress_battery.dart';
+ import '../platform/web/web_asyncify_assets_battery.dart';
++import '../platform/web/web_wasm_parts_battery.dart';
+ import '../platform/web/web_cancel_channel_battery.dart';
+ import '../platform/web/web_lane_protocol_battery.dart';
+ import '../platform/web/web_runtime_battery.dart';
+@@ -157,6 +158,12 @@ void main() {
+     mode: PdfIoMode.opfs,
+   );
+ 
++  registerWebWasmPartsTests(
++    workerUrl: () =>
++        'http://localhost:$serverPort/web_assets/executor_worker.js',
++    mode: PdfIoMode.opfs,
++  );
++
+   registerDocStressTests(() => pdf);
+   registerEditorStressTests(() => pdf);
+   registerSugarStressTests(() => pdf);
+diff --git a/test/runtime/router_test.dart b/test/runtime/router_test.dart
+index 9b73d83..47df1b8 100644
+--- a/test/runtime/router_test.dart
++++ b/test/runtime/router_test.dart
+@@ -19,7 +19,6 @@ import 'package:pdf_manipulator/src/runtime/pool.dart';
+ import 'package:pdf_manipulator/src/runtime/router.dart';
+ import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
+ import 'package:pdf_manipulator/src/types/cancel_hook.dart';
+-import 'package:pdf_manipulator/src/types/pdf_enums.dart';
+ import 'package:test/test.dart';
+ 
+ import '../harness/fake_executors.dart';
+@@ -53,7 +52,7 @@ void main() {
+   setUp(() {
+     host = FakeLaneHost();
+     pool = ExecutorPool(host: host, maxExecutors: 8);
+-    router = Router(pool: pool, maxLanes: 2, mode: PdfIoMode.native);
++    router = Router(pool: pool, maxLanes: 2);
+   });
+ 
+   tearDown(() => pool.dispose());
+@@ -333,7 +332,7 @@ void main() {
+     });
+ 
+     test('placement preserves submission order onto a lane', () async {
+-      final solo = Router(pool: pool, maxLanes: 1, mode: PdfIoMode.native);
++      final solo = Router(pool: pool, maxLanes: 1);
+       final ops = [
+         solo.execute(_open()),
+         solo.execute(_open()),
+@@ -430,11 +429,7 @@ void main() {
+           ..onBoot = (executor) => executor.lane.autoResult = _ok();
+         final soloPool = ExecutorPool(host: soloHost);
+         addTearDown(soloPool.dispose);
+-        final soloRouter = Router(
+-          pool: soloPool,
+-          maxLanes: 1,
+-          mode: PdfIoMode.native,
+-        );
++        final soloRouter = Router(pool: soloPool, maxLanes: 1);
+ 
+         await soloRouter.execute(_open(), cancel: hook);
+         final lane = soloHost.lanes.single;
+@@ -755,7 +750,7 @@ void main() {
+     });
+ 
+     test('a queued job on the lane keeps the lease', () async {
+-      final solo = Router(pool: pool, maxLanes: 1, mode: PdfIoMode.native);
++      final solo = Router(pool: pool, maxLanes: 1);
+       final first = solo.execute(_open());
+       final second = solo.execute(_open());
+       await settle();
+diff --git a/tool/asyncify_list.dart b/tool/asyncify_list.dart
+index 3fce64e..c64af83 100644
+--- a/tool/asyncify_list.dart
++++ b/tool/asyncify_list.dart
+@@ -3,7 +3,7 @@
+ // own call graph.
+ //
+ //   dart --packages=.dart_tool/package_config.json tool/asyncify_list.dart \
+-//        [--out <file>] [--pause <import-substring>]... <pdf_oxide_bg.wasm>
++//        [--out <file>] [--pause <import-substring>]... <whole wasm>
+ //
+ // binaryen's `--asyncify` instruments exactly the functions it is told to
+ // (`--pass-arg=asyncify-onlylist@@<file>`); a function left out of that list
+diff --git a/tool/compile.dart b/tool/compile.dart
+index fd1f375..a70e06b 100644
+--- a/tool/compile.dart
++++ b/tool/compile.dart
+@@ -5,9 +5,11 @@
+ //   dart tool/compile.dart linux        Linux x64 + arm64 (cross-compile)
+ //   dart tool/compile.dart android      Android arm64 + arm + x64 + x86
+ //   dart tool/compile.dart windows      Windows x64 (+ arm64 on MSVC)
+-//   dart tool/compile.dart wasm         WASM + bindgen_runner (with
++//   dart tool/compile.dart wasm         WASM + bindgen_runner, cut into the parts
++//                                       and manifest of web_assets/ (with
+ //                                       COMPILE_OUTPUT_DIR, the Asyncify wasm too)
+-//   dart tool/compile.dart wasm-asyncify  the Asyncify twin of web_assets/'s wasm
++//   dart tool/compile.dart wasm-asyncify  the Asyncify twin of web_assets/'s wasm,
++//                                       cut the same way
+ //   dart tool/compile.dart native       Auto-detect what this host builds
+ //   dart tool/compile.dart all          native + wasm
+ //   dart tool/compile.dart --features [native|wasm]   print feature flags
+@@ -28,6 +30,7 @@ import 'package:path/path.dart' as p;
+ 
+ import 'package:pdf_manipulator/src/hook/build_constants.dart';
+ import 'package:pdf_manipulator/src/hook/engine_compiler.dart';
++import 'package:pdf_manipulator/src/hook/wasm_parts.dart';
+ 
+ final Uri _pkgRoot = Directory.current.uri;
+ 
+@@ -261,66 +264,68 @@ Future<void> _doNative() async {
+ Future<void> _doWasm() async {
+   final c = BuildConstants.load(_pkgRoot);
+   final webAssets = Directory.fromUri(_pkgRoot.resolve('web_assets'));
+-  stderr.writeln('=== WASM: compile + bindgen ===');
+-  await compileWasmEngine(
++  stderr.writeln('=== WASM: compile + bindgen + cut ===');
++  await buildWasmParts(
+     packageRoot: _pkgRoot,
+     features: _wasmFeatures(c),
+     outDir: webAssets,
+   );
+-  final bg = File(p.join(webAssets.path, 'pdf_oxide_bg.wasm'));
+-  stderr.writeln('Binary: ${bg.lengthSync()} bytes');
++  _reportWasm(webAssets);
+ 
+   // Release pipeline mirrors the outputs into COMPILE_OUTPUT_DIR/wasm, the
+-  // Asyncify wasm among them.
++  // Asyncify module among them.
+   final rel = Platform.environment['COMPILE_OUTPUT_DIR'];
+   if (rel != null && rel.isNotEmpty) {
+     await _doWasmAsyncify();
+     final base = p.isAbsolute(rel) ? rel : p.join(p.fromUri(_pkgRoot), rel);
+     final wasmOut = Directory(p.join(base, 'wasm'))
+       ..createSync(recursive: true);
+-    final shipped = const [
+-      'pdf_oxide.js',
+-      'pdf_oxide_bg.wasm',
+-      'pdf_oxide_asyncify_bg.wasm',
+-    ];
+-    for (final f in shipped) {
++    final manifest = WasmManifest.load(webAssets);
++    for (final f in ['pdf_oxide.js', wasmManifestFile, ...manifest.files]) {
+       File(p.join(webAssets.path, f)).copySync(p.join(wasmOut.path, f));
+     }
+-    _checkWasmSizes([for (final f in shipped) File(p.join(wasmOut.path, f))]);
++    _checkWasm(wasmOut, c);
+     stderr.writeln('Copied to ${wasmOut.path}');
+   }
+ }
+ 
+-/// Builds `web_assets/pdf_oxide_asyncify_bg.wasm` from `web_assets/`'s wasm
+-/// and reports its size against the normal one.
++/// Builds the Asyncify module from the normal one in `web_assets/` and cuts it
++/// beside it.
+ Future<void> _doWasmAsyncify() async {
+   final webAssets = Directory.fromUri(_pkgRoot.resolve('web_assets'));
+-  final normal = File(p.join(webAssets.path, 'pdf_oxide_bg.wasm'));
+-  if (!normal.existsSync()) await _doWasm();
++  if (!WasmManifest.loadOrEmpty(
++    webAssets,
++  ).modules.containsKey(normalWasmModule)) {
++    await _doWasm();
++  }
+   stderr.writeln('=== WASM: asyncify ===');
+-  final out = File(p.join(webAssets.path, asyncifyWebAsset));
+-  await buildAsyncifyWasm(packageRoot: _pkgRoot, wasm: normal, out: out);
+-  final raw = out.lengthSync();
+-  final base = normal.lengthSync();
+-  stderr.writeln(
+-    'Asyncify binary: $raw bytes (${(100 * (raw - base) / base).toStringAsFixed(1)}% '
+-    'over the $base of the normal one; gzip ${gzip.encode(out.readAsBytesSync()).length} '
+-    'against ${gzip.encode(normal.readAsBytesSync()).length})',
+-  );
++  await buildAsyncifyParts(packageRoot: _pkgRoot, dir: webAssets);
++  _reportWasm(webAssets);
++}
++
++/// Prints each module's parts, raw and gzip.
++void _reportWasm(Directory dir) {
++  final manifest = WasmManifest.load(dir);
++  for (final MapEntry(:key, :value) in manifest.modules.entries) {
++    stderr.writeln(
++      '$key: ${value.bytes} bytes (gzip '
++      '${gzipBytesOf(joinWasmParts(dir, value))}) in ${value.parts.length} '
++      'parts: ${[for (final part in value.parts) part.bytes].join(', ')}',
++    );
++  }
+ }
+ 
+-/// The release wall: no wasm the release ships reaches [maxWebAssetBytes], the
+-/// largest file Cloudflare Pages and Workers static assets serve.
+-void _checkWasmSizes(List<File> files) {
+-  final over = [
+-    for (final f in files)
+-      if (f.path.endsWith('.wasm') && f.lengthSync() >= maxWebAssetBytes)
+-        '${p.basename(f.path)}: ${f.lengthSync()} bytes',
++/// The release wall: [dir], the wasm a release ships, passes every check of
++/// [wasmWallProblems], and the parts it holds are the ones build.json lists
++/// for the release.
++void _checkWasm(Directory dir, BuildConstants c) {
++  final problems = [
++    ...wasmWallProblems(dir),
++    ...buildJsonPartProblems(dir, c, complete: true),
+   ];
+-  if (over.isNotEmpty) {
++  if (problems.isNotEmpty) {
+     throw StateError(
+-      'a shipped wasm reaches the $maxWebAssetBytes-byte limit of '
+-      'Cloudflare static assets: ${over.join('; ')}',
++      'the wasm of the release fails its wall:\n  ${problems.join('\n  ')}',
+     );
+   }
+ }
+diff --git a/tool/shake_audit.sh b/tool/shake_audit.sh
+index 428b0d5..cc0390c 100755
+--- a/tool/shake_audit.sh
++++ b/tool/shake_audit.sh
+@@ -159,7 +159,7 @@ if [ "${SHAKE_AUDIT_WASM:-0}" = "1" ]; then
+   [ -n "$WASM_CORE_FEATURES" ] \
+     || fail "tool/keep_sets.dart wasm produced no [] features line"
+   read -r WASM_CORE_RAW WASM_CORE_GZ <<< "$(measure_wasm "$WASM_CORE_FEATURES")"
+-  DEFAULT_RAW=$(fsize "$ROOT/web_assets/pdf_oxide_bg.wasm")
++  DEFAULT_RAW=$(json_get '.pdf_oxide_bg.bytes' "$ROOT/web_assets/pdf_oxide_manifest.json")
+   [ "$WASM_CORE_RAW" -lt "$DEFAULT_RAW" ] \
+     || fail "core-only wasm not smaller than the full default"
+   read -r WASM_FULL_SIZE_RAW WASM_FULL_SIZE_GZ <<< "$(measure_wasm "$WASM_FULL_FEATURES" size)"
+diff --git a/tool/verify_readme_sizes.dart b/tool/verify_readme_sizes.dart
+index 6a6a325..62cadcd 100644
+--- a/tool/verify_readme_sizes.dart
++++ b/tool/verify_readme_sizes.dart
+@@ -12,8 +12,9 @@
+ //   * full + core-only native library and the trim percentage — read from
+ //     tool/.shake_sizes.json, which `make shake-audit` (the single
+ //     builder/measurer) writes. Missing/stale file → run the audit first.
+-//   * default wasm engine, raw and gzipped (web_assets/pdf_oxide_bg.wasm —
+-//     the contributor-built artifact; CI rebuilds it at release).
++//   * default wasm engine, raw and gzipped, of the whole module its parts
++//     join to (web_assets/pdf_oxide_manifest.json — the contributor-built
++//     artifact; CI rebuilds it at release).
+ //
+ // Exit 1 on any mismatch (always) or any SKIP (--strict). Run after an
+ // engine bump and before a release, right after `make shake-audit`.
+@@ -21,9 +22,12 @@
+ import 'dart:convert';
+ import 'dart:io';
+ 
++import 'package:pdf_manipulator/src/hook/wasm_parts.dart';
++
+ const _readmePath = 'README.md';
+ const _sizesPath = 'tool/.shake_sizes.json';
+-const _wasmPath = 'web_assets/pdf_oxide_bg.wasm';
++const _wasmDir = 'web_assets';
++const _wasmPath = '$_wasmDir/pdf_oxide_manifest.json';
+ 
+ void main(List<String> args) {
+   final strict = args.contains('--strict');
+@@ -110,9 +114,13 @@ void main(List<String> args) {
+   if (!wasm.existsSync()) {
+     skips.add('wasm sizes ($_wasmPath missing — dart tool/compile.dart wasm)');
+   } else {
+-    check('wasm raw', [_mb(wasm.lengthSync())]);
+-    final gz = gzip.encode(wasm.readAsBytesSync()).length;
+-    check('wasm gzipped', [_mb(gz)]);
++    final module = WasmManifest.load(
++      Directory(_wasmDir),
++    ).modules[normalWasmModule]!;
++    check('wasm raw', [_mb(module.bytes)]);
++    check('wasm gzipped', [
++      _mb(gzipBytesOf(joinWasmParts(Directory(_wasmDir), module))),
++    ]);
+   }
+ 
+   for (final p in passes) {
+diff --git a/web_assets/executor_worker.js b/web_assets/executor_worker.js
+index d4c2c2f..495ce4c 100644
+--- a/web_assets/executor_worker.js
++++ b/web_assets/executor_worker.js
+@@ -23,7 +23,9 @@
+ // message the worker posts echoes the lease of the message it answers.
+ //
+ // Dart → worker:
+-//   init         { protocol, ioMode, baseUrl?, wasmModule? } → ready|error
++//   init         { protocol, ioMode, baseUrl?, wasmModule?, wasmEntry } → ready|error
++//                  (wasmEntry: the manifest entry of the module this mode runs; the
++//                   worker compiles from it when the host sent no wasmModule)
+ //   exec         { lease, jobId, requestBytes, sourceLengths: number[],
+ //                  sinkCount, keepSources: number[], holdGroupId?,
+ //                  opfsFiles: (string|null)[], sab?, writeSab?,
+@@ -62,7 +64,7 @@
+ // ── Four I/O modes (selected by Dart, passed in init) ──────────────
+ //   jspi     — JSPI Promise suspension (host_read_at returns Promise)
+ //   atomics  — per-job SAB + Atomics.wait; Dart fills + notifies
+-//   asyncify — the instrumented wasm (pdf_oxide_asyncify_bg.wasm) unwinds
++//   asyncify — the instrumented wasm (pdf_oxide_asyncify_bg) unwinds
+ //              at host_read_at / host_write_chunk, the worker awaits the
+ //              answer and rewinds; the messages are JSPI's
+ //   opfs     — sources pre-copied to OPFS; reads via SyncAccessHandle
+@@ -81,6 +83,7 @@ let busy = null;            // 'exec' | 'reset' while one runs, else null
+ let ioMode = 'opfs';
+ let initialized = false;
+ let precompiledModule = null;
++let wasmEntry = null;        // the manifest entry of the module this mode runs
+ let wasmBaseUrl = (() => {
+   try { return new URL(self.location.href).href.replace(/\/[^/]*$/, '/'); }
+   catch (_) { return './'; }
+@@ -351,10 +354,9 @@ async function ensureInit() {
+ 
+   const jsModule = await import(wasmBaseUrl + 'pdf_oxide.js');
+ 
+-  // Intercept instantiation to (a) capture raw exports, (b) wrap the
+-  // host imports in WebAssembly.Suspending for JSPI. Restored after.
++  // Intercept instantiation to capture the raw exports and, for JSPI, wrap the
++  // host imports in WebAssembly.Suspending. Restored after.
+   const origInstantiate = WebAssembly.instantiate;
+-  const origStreaming = WebAssembly.instantiateStreaming;
+ 
+   WebAssembly.instantiate = async (source, imports) => {
+     if (ioMode === 'jspi' && imports) imports = wrapJspiImports(imports);
+@@ -362,18 +364,11 @@ async function ensureInit() {
+     wasm = (result instanceof WebAssembly.Instance ? result : result.instance).exports;
+     return result;
+   };
+-  if (origStreaming) {
+-    WebAssembly.instantiateStreaming = async (response, imports) => {
+-      const bytes = await (await response).arrayBuffer();
+-      return WebAssembly.instantiate(bytes, imports);
+-    };
+-  }
+ 
+   try {
+-    await jsModule.default(precompiledModule || (wasmBaseUrl + wasmFile()));
++    await jsModule.default(precompiledModule || await compileParts(wasmBaseUrl, wasmEntry));
+   } finally {
+     WebAssembly.instantiate = origInstantiate;
+-    if (origStreaming) WebAssembly.instantiateStreaming = origStreaming;
+   }
+ 
+   if (ioMode === 'jspi') {
+@@ -381,7 +376,7 @@ async function ensureInit() {
+   }
+   if (ioMode === 'asyncify') {
+     if (typeof wasm.asyncify_start_unwind !== 'function') {
+-      throw new Error(wasmFile() + ' is not an Asyncify build');
++      throw new Error('the wasm of the manifest entry is not an Asyncify build');
+     }
+     // The unwound stack is saved outside the engine's heap: fresh pages, which
+     // its allocator neither owns nor counts.
+@@ -394,10 +389,88 @@ async function ensureInit() {
+   initialized = true;
+ }
+ 
+-// The wasm a mode loads: the Asyncify engine only in Asyncify mode, so a
+-// browser fetches the one file it runs.
+-function wasmFile() {
+-  return ioMode === 'asyncify' ? 'pdf_oxide_asyncify_bg.wasm' : 'pdf_oxide_bg.wasm';
++// The one loader of a wasm module. [entry] is a module of
++// pdf_oxide_manifest.json: the module is cut into parts, and nothing fetches a
++// whole `.wasm`. Every part is fetched at once and the parts are joined, in
++// order, into one stream the browser compiles while it arrives. Each part
++// passes through a transform that counts its bytes and checks its SHA-256
++// against the manifest before the stream goes on, so a short or corrupt part
++// errors the stream and the compile rejects with a message naming the part.
++// wasm_loader.dart's _compileParts is the same loader for the main thread; the web
++// battery pins both against the same manifest.
++async function compileParts(baseUrl, entry) {
++  if (!entry || !Array.isArray(entry.parts)) {
++    throw new Error('no manifest entry to compile from');
++  }
++  const abort = new AbortController();
++  const fetches = entry.parts.map((part) => {
++    const response = fetch(baseUrl + part.file, { signal: abort.signal });
++    response.catch(() => {});
++    return response;
++  });
++  let failure = null;
++  const stream = new ReadableStream({
++    async start(controller) {
++      try {
++        for (let i = 0; i < entry.parts.length; i++) {
++          const part = entry.parts[i];
++          const response = await fetches[i];
++          if (!response.ok || !response.body) {
++            throw new Error(part.file + ': HTTP ' + response.status);
++          }
++          const reader = response.body.pipeThrough(verifyPart(part)).getReader();
++          for (;;) {
++            const { done, value } = await reader.read();
++            if (done) break;
++            controller.enqueue(value);
++          }
++        }
++        controller.close();
++      } catch (error) {
++        failure = error;
++        abort.abort();
++        controller.error(error);
++      }
++    },
++  });
++  try {
++    return await WebAssembly.compileStreaming(
++      new Response(stream, { headers: { 'content-type': 'application/wasm' } }));
++  } catch (error) {
++    throw failure || error;
++  }
++}
++
++// Passes a part's bytes through, and at its end refuses it unless it is the
++// size and the SHA-256 the manifest lists. Without crypto.subtle (a page that
++// is not a secure context) the size is the whole check.
++function verifyPart(part) {
++  const chunks = [];
++  let count = 0;
++  return new TransformStream({
++    transform(chunk, controller) {
++      count += chunk.byteLength;
++      if (count > part.bytes) {
++        throw new Error(part.file + ': more than the ' + part.bytes + ' bytes the manifest lists');
++      }
++      chunks.push(chunk);
++      controller.enqueue(chunk);
++    },
++    async flush() {
++      if (count !== part.bytes) {
++        throw new Error(part.file + ': ' + count + ' bytes, the manifest lists ' + part.bytes);
++      }
++      if (!self.crypto || !self.crypto.subtle) return;
++      const whole = new Uint8Array(count);
++      let at = 0;
++      for (const chunk of chunks) { whole.set(chunk, at); at += chunk.byteLength; }
++      const digest = new Uint8Array(await self.crypto.subtle.digest('SHA-256', whole));
++      const hex = Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('');
++      if (hex !== part.sha256) {
++        throw new Error(part.file + ': sha256 ' + hex + ' is not the ' + part.sha256 + ' the manifest lists');
++      }
++    },
++  });
+ }
+ 
+ function wrapJspiImports(imports) {
+@@ -795,6 +868,7 @@ self.onmessage = async (e) => {
+       ioMode = msg.ioMode;
+       if (msg.baseUrl) wasmBaseUrl = msg.baseUrl;
+       if (msg.wasmModule) precompiledModule = msg.wasmModule;
++      if (msg.wasmEntry) wasmEntry = msg.wasmEntry;
+       try {
+         // The liveness lock must be held BEFORE the WASM instance
+         // exists: the host's budget slot, and any OPFS file, must
