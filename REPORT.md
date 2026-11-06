@@ -1,10 +1,8 @@
 # t-542 report
 
-## Stop: an existing test pins the old OPFS behaviour
+## Ruling on the cancel rule
 
-`test/ops/core/pdf_runtime_safety_battery.dart`, "a save whose cancel fired after the engine finished resolves only after the sink took its last chunk", ends with an OPFS clause: `expect(_ok(save.bytes), isTrue)` with the comment "OPFS writes are fire-and-forget: the engine is long done when the cancel lands, so the save succeeded and must have waited".
-
-With the spool (item 1) a cancel that lands while the output is being delivered cancels the job, as the plan says ("a cancel during that delivery makes the op ... cancel") and as t-561 does on every other mode: the other branch of the same test already accepts `[2]` for those. I did not edit the test. It fails in the OPFS runner and is the only failure there. To make it pass the OPFS clause has to go, or a cancel after the engine finished has to let delivery complete; that is a maintainer decision.
+The existing test in `pdf_runtime_safety_battery.dart` (OPFS clause: the save succeeds although the cancel fired after the engine finished) was right and stays unedited. My first spool cancelled the op on a cancel during delivery; per the ruling, the engine has finished once its result is held, so a task cancel no longer stops delivery. Only the end of the lane (dispose) does. See item 1.
 
 I also added `LaneMsg.spoolRead` and `LaneMsg.spoolChunk` to the two tag sets in `test/runtime/web/executor_worker_sync_test.dart`. That guard fails on any tag the worker posts that is not listed, so it had to learn the new messages; no behaviour it pinned changed.
 
@@ -13,10 +11,11 @@ I also added `LaneMsg.spoolRead` and `LaneMsg.spoolChunk` to the two tag sets in
 ### 1. OPFS output spool
 
 - Cause: `lib/src/runtime/web/lease.dart` `_serveChunk` ("OPFS mode: fire-and-forget writes, no ack channel"), `web_assets/executor_worker.js` `hostWriteChunk` default branch (`postMessage`, return 0).
-- Fix: the worker opens one spool file per sink before `execute` (`openSpools`, `pdf_spool_<job>_<sink>`, registered in `jobFiles`, so `opfsDrop` and reset remove it), `hostWriteChunk` writes to it through the sync access handle (`writeToSpool`), and `result` carries the sizes (`spool`). The lane holds the result: `_finishAfterSpool` / `_deliverSpool` ask `spoolRead` for at most 256 KB, await the sink's `write`, then ask for the next. A sink error fails the job (`PdfIoFailed`), a cancel or the end of the lane makes it cancelled; the ops layer aborts the sink once. The fire-and-forget branch is deleted. `docs/ARCHITECTURE.md` (Sinks, OPFS) describes it.
-- Tests: the abort battery group "an op whose last write fails ..." now runs in OPFS (skip removed). In `web_lane_protocol_battery.dart`: "the main thread holds at most one chunk at a time" (1 s stall per write; counts chunk-bearing messages arrived minus writes finished), "a sink that fails fails the job, and the output is not kept on disk", "the output of a save is removed from disk once delivered", "a cancel while the output is delivered cancels the job and removes the output".
+- Fix: the worker opens one spool file per sink before `execute` (`openSpools`, `pdf_spool_<job>_<sink>`, registered in `jobFiles`, so `opfsDrop` and reset remove it), `hostWriteChunk` writes to it through the sync access handle (`writeToSpool`), and `result` carries the sizes (`spool`). The lane holds the result: `_finishAfterSpool` / `_deliverSpool` ask `spoolRead` for at most 256 KB, await the sink's `write`, then ask for the next. A sink error fails the job (`PdfIoFailed`). A task cancel during delivery does not stop it and the save succeeds; the end of the lane makes the job cancelled. The ops layer aborts the sink once on either failure. The fire-and-forget branch is deleted. `docs/ARCHITECTURE.md` (Sinks, OPFS) describes it.
+- Tests: the abort battery group "an op whose last write fails ..." now runs in OPFS (skip removed). In `web_lane_protocol_battery.dart`: "the main thread holds at most one chunk at a time" (1 s stall per write; counts chunk-bearing messages arrived minus writes finished), "a sink that fails fails the job, and the output is not kept on disk", "the output of a save is removed from disk once delivered", "a cancel while the output is delivered lets it finish, and the save succeeds" (OPFS) and "a dispose while the output is delivered cancels the job, aborts the sink once and removes the output" (through `Pdf`; counts `pdf_spool_*` files in the session).
 - Failure on the old code (stashed lease, worker, protocol): `Expected: a value less than or equal to <1> Actual: <2> chunks piled up on the main thread behind a slow sink`; the failing-sink test `Expected: false Actual: <true> the sink refused a chunk`; the three abort-battery tests failed before the fix. The two disk-removal tests and the cancel test cannot fail on the old code (no spool file existed, and the old path ignored the cancel only by accident); they guard the new files.
-- Choice: a sink write in flight is not interrupted by a cancel, only by the end of the lane (as before); delivery stops before the next chunk.
+- Old rule, then new: with cancel-stops-delivery the finish test failed (`Expected: true Actual: <false>`, and the existing safety test failed the same way). Dispose test, delivery made to ignore the end of the lane: `Expected: <1> Actual: <2> a chunk was written after the end`. Restored, `cmp` identical.
+- Choice: a sink write in flight is not interrupted, only the wait for it by the end of the lane.
 
 ### 2. Budget and the liveness lock
 
@@ -54,19 +53,20 @@ Test "t-493: a render of the first page of a large document, behind a slow disk 
 
 - `dart analyze --fatal-infos lib hook test bin`: No issues found!
 - `dart format --set-exit-if-changed lib hook tool test bin`: Formatted 277 files (0 changed)
-- `dart test test/guards test/runtime test/bridge test/keep test/hook`: `01:15 +466: All tests passed!`
+- `dart test test/guards test/runtime test/bridge test/keep test/hook`: `01:09 +466: All tests passed!`
 - `bash tool/check_patch_markers.sh`, `check_fork_tests.sh`, `check_cancel_polls.sh`, `check_changelog_shape.sh`: exit 0
-- native runner: `01:19 +668 ~1: All tests passed!`
-- OPFS runner: `04:24 +707 ~6 -1: Some tests failed.` (the one test above)
-- JSPI: `02:58 +698 ~3: All tests passed!`
-- Atomics (`-p chrome-coi`): `02:15 +695 ~4: All tests passed!`
-- Asyncify: `03:24 +698 ~3: All tests passed!`
-- Rust (`cargo nextest run --lib`, fork features as in PLAN.md): `Summary [ 617.088s] 6726 tests run: 6726 passed (8 slow), 5 skipped`
+- native runner: `01:20 +668 ~1: All tests passed!`
+- OPFS runner: `04:39 +709 ~6: All tests passed!` (the safety battery test passes unedited)
+- JSPI: `02:58 +698 ~4: All tests passed!`
+- Atomics (`-p chrome-coi`): `02:10 +695 ~5: All tests passed!`
+- Asyncify: `03:04 +698 ~4: All tests passed!`
+- `web_auto_mode_test.dart` on chrome: `00:09 +5 ~1: All tests passed!`; on chrome-coi: `00:02 +1 ~5: All tests passed!`
+- Rust (`cargo nextest run --lib`, fork features as in PLAN.md): `Summary [ 632.439s] 6726 tests run: 6726 passed (7 slow), 5 skipped`
 
-The runners were run as `dart test <runner> -p chrome[-coi] --concurrency=1`, not through `make`, which would have rebuilt the wasm. `web_auto_mode_test.dart`, which `make test-ops-asyncify` also runs, was not run. The Rust run is `--lib` only: the integration targets filled the disk.
+The runners were run as `dart test <runner> -p chrome[-coi] --concurrency=1`, not through `make`, which would have rebuilt the wasm. The Rust run is `--lib` only: the integration targets filled the disk.
 
 ## Other choices
 
-- A cancel during spool delivery returns the cancelled status even though the engine finished; no op that has a sink creates a handle (`_handleCreators`), so no success is lost.
+- A task cancel during spool delivery does not stop it: the engine has finished, the result stands (ruling). The end of the lane stops it and the job is cancelled; no op that has a sink creates a handle (`_handleCreators`), so no success is lost that way.
 - Output of an op that fails in the engine is not delivered at all on OPFS (earlier chunks used to reach the sink before the failure); the ops layer aborts the sink either way.
 - CHANGELOG.pre.md: four Fixed bullets (items 1, 3, 4, 5); items 2 and 6 fixed nothing user-visible.
