@@ -577,6 +577,11 @@ window onto the document's bytes that reads itself; only the whole reads listed 
 `engine_proofs/whole_reads.txt` hold a stream's data in one buffer. Merge keeps the merged
 document open with its own small object cache, records only the ids of the objects each
 page reaches, and writes every merged object one at a time from that document.
+`tool/check_whole_buffers.sh` fails the build on any engine call that reads a whole stream,
+file or page into one buffer unless it is a line of `tool/whole_buffer_allow.txt`, which
+admits only the kinds that are tables by nature (a font program, a sampled function, an ICC
+profile, the CMap table, a DER certificate or the DSS, the xref stream, one object-stream
+member, a progressive JPEG raster, a JPX recompressed at full size).
 
 `extractImages` writes each image to a sink the caller's factory returns, on the same
 chunked wire as `render` (one shared framer in the engine, one shared delivery in Dart).

@@ -26,6 +26,7 @@ const CASES: &[(&str, &str)] = &[
     ("open", "damaged"),
         ("extractAll", "pages"),
     ("extractAll", "text"),
+    ("extractAll", "form"),
     ("search", "pages"),
     ("search", "text"),
     ("render", "paths"),
@@ -42,6 +43,9 @@ const CASES: &[(&str, &str)] = &[
     ("convertToPdfA", "pages"),
     ("applyRedactions", "regions"),
     ("redact", "text"),
+    ("redact", "form"),
+    ("setImageBounds", "long"),
+    ("convert", "long"),
     ("flattenForms", "form"),
     ("flattenAnnotations", "annotations"),
     ("merge", "pages"),
@@ -98,6 +102,12 @@ mod size {
     pub const STAMP_PAGES: usize = 1_000;
     /// Save, transform and restore triples on the one page of an image listing.
     pub const LONG_PAGE_TRIPLES: usize = 300_000;
+    /// Triples of the page whose image a bounds change moves: its save deflates the page again
+    /// at level 9, about five times the work of reading it (t-576), so the case is sized to fail
+    /// without its poll and to stay well under `MAX_TOTAL` with it.
+    pub const SET_IMAGE_TRIPLES: usize = 100_000;
+    /// Triples of the one page a conversion to DOCX reads: its layout passes cost far more than a listing does.
+    pub const CONVERT_TRIPLES: usize = 100_000;
     /// Triples of the form or glyph a render reads whole.
     pub const WHOLE_FORM_TRIPLES: usize = 300_000;
     /// Side of the one inline image of a render: several megabytes of data.
@@ -166,12 +176,34 @@ fn run(op: &str, fixture: &str) -> Result<(), Failure> {
             dispatch::open_document(&mut document).map_err(fail("openDocument"))?;
             mark();
         },
+        ("extractAll", "form") => {
+            let mut document = doc(gen::graphics_text_form(size::WHOLE_FORM_TRIPLES).finish())?;
+            mark();
+            dispatch::extract_text(&mut document, None, "plainText", &cancel).map_err(fail("extract"))?;
+            mark();
+        },
         ("extractAll", fixture) => {
             let bytes = text_or_pages(fixture)?;
             let mut document = doc(bytes)?;
             mark();
             dispatch::extract_text(&mut document, None, "plainText", &cancel)
                 .map_err(fail("extract"))?;
+            mark();
+        },
+        ("setImageBounds", "long") => {
+            let mut editor = editor(gen::long_page_image(size::SET_IMAGE_TRIPLES).finish())?;
+            dispatch::edit_set_image_bounds(&mut editor, 0, "Im0", 30.0, 30.0, 40.0, 40.0)
+                .map_err(fail("setImageBounds"))?;
+            mark();
+            save(&mut editor, &cancel)?;
+            mark();
+        },
+        ("convert", "long") => {
+            let mut shell = Shell::new();
+            shell.page((612, 792), &gen::graphics(size::CONVERT_TRIPLES), "", "");
+            let document = doc(shell.finish())?;
+            mark();
+            dispatch::convert_to_format(&document, "docx").map_err(fail("convert"))?;
             mark();
         },
         ("search", fixture) => {
@@ -250,6 +282,16 @@ fn run(op: &str, fixture: &str) -> Result<(), Failure> {
                 .map_err(fail("addRedaction"))?;
             mark();
             dispatch::edit_apply_redactions(&mut editor, &cancel).map_err(fail("applyRedactions"))?;
+            save(&mut editor, &cancel)?;
+            mark();
+        },
+        ("redact", "form") => {
+            let mut editor = editor(gen::text_form(size::REDACT_LINES).finish())?;
+            dispatch::edit_add_redaction(&mut editor, 0, [60.0, 300.0, 400.0, 200.0], Some([0.0, 0.0, 0.0]))
+                .map_err(fail("addRedaction"))?;
+            mark();
+            dispatch::edit_apply_redactions(&mut editor, &cancel).map_err(fail("applyRedactions"))?;
+            save(&mut editor, &cancel)?;
             mark();
         },
         ("flattenForms", "form") => {

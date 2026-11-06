@@ -1,0 +1,21 @@
+# One regex per line, matched against engine code with its comments and strings
+# blanked. A `#` after two spaces names what the line matches. A call that
+# several lines match is one site. tool/check_whole_buffers.sh reads this.
+
+# std readers that hand back every byte
+\bread_to_end\(  # Read::read_to_end: the rest of a reader in one Vec
+\bread_to_string\(  # Read::read_to_string and fs::read_to_string: the rest of a reader or a file in one String
+\bstd::fs::read\(  # a file read whole by its full path
+\bfs::read\(  # a file read whole
+
+# the engine's own whole-read helpers (every function returning Vec<u8> that reads a stream body, a page or a source whole)
+\bread_whole_raw\(  # StreamBody::read_whole_raw: a stream's stored bytes, undecoded
+\bdecode_stream_data\(  # Object::decode_stream_data: a stream's decoded bytes
+\bdecoded_data\(  # a call of a function named decoded_data: a stream's decoded bytes
+\bread_whole\(  # decoders::stream::read_whole (and host::image_embed::read_whole): a reader or a source's bytes
+\bread_whole_loose\(  # decoders::stream::read_whole_loose: the tolerant form of read_whole
+\bread_all_from_reader\(  # host::ops::support::read_all_from_reader: a boxed reader's bytes
+\bsource_bytes_whole\(  # PdfDocument::source_bytes_whole: the whole file
+\bget_page_content_data\(  # PdfDocument::get_page_content_data: the decoded content of a page, copied out
+\bcached_page_content\(  # PdfDocument::cached_page_content: the decoded content of a page, cached
+\braw_compressed_bytes\(  # PdfImage::raw_compressed_bytes: an image stream's stored bytes

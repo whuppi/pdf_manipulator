@@ -284,6 +284,7 @@ CONTENT RULES (never change)
 - Fixed creating and disposing `Pdf` instances in a loop starting a new web worker or native thread for most of them — a disposed instance hands its worker or thread back for the next instance to reuse
 - Fixed an operation whose last write failed or was cancelled still reporting success with its output cut short — the engine now flushes the final bytes before it answers, and a refusal fails or cancels the operation
 - Fixed a web source read past 4 GiB returning the bytes at the offset modulo 4 GiB, with no error — the read offset crosses to the engine as a JS number, not a 32-bit integer
+- Fixed a cancel not reaching a redaction, a text extraction of a form or a change of an image's bounds until the page or form it was reading ended, so a page of millions of operators could not be stopped — each now stops within one operator
 
 ## 5.0.1-dev.0
 

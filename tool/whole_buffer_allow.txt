@@ -1,0 +1,36 @@
+# Whole-buffer reads tool/check_whole_buffers.sh finds, one per line:
+#   <path under vendor/pdf_oxide>::<fn>#<n>  # table: <why>
+# `table` is the only class: a read of something whole by nature, and the why
+# names its kind (a font program, a sampled function, an ICC profile, the CMap
+# table, a DER certificate or the DSS, the xref stream, one object-stream
+# member, a progressive JPEG raster, a JPX recompressed at full size). A read of
+# anything else is bounded instead, and the script refuses any other word after
+# the `#`.
+src/document.rs::compute_output_intent_cmyk_profile#1  # table: the ICC profile of an output intent
+src/extractors/images.rs::resolve_icc_profile_from_obj#1  # table: an ICC profile
+src/fonts/font_dict.rs::from_dict#1  # table: a font program (FontFile2)
+src/fonts/font_dict.rs::from_dict#2  # table: a font program (FontFile3)
+src/fonts/font_dict.rs::from_dict#3  # table: a font program (FontFile)
+src/fonts/font_dict.rs::from_dict#4  # table: the CMap table (ToUnicode)
+src/fonts/font_dict.rs::extract_truetype_cmap_from_descriptor#1  # table: a font program, read for its cmap table
+src/fonts/font_dict.rs::extract_embedded_font_from_descriptor#1  # table: a font program
+src/fonts/font_dict.rs::resolve_encoding_writing_mode#1  # table: the CMap table of an embedded encoding
+src/fonts/unicode_fallback.rs::load_unicode_fallback_bytes#1  # table: a font program, a system fallback font
+src/fonts/unicode_fallback.rs::load_cjk_fallback_bytes#1  # table: a font program, a system fallback font
+src/host/font_subset/mod.rs::subset#1  # table: a font program, read to cut it down to the glyphs shown
+src/host/ops/fonts.rs::handle_register_fallback_font#1  # table: a font program, the caller's fallback font
+src/host/redact_scrub.rs::rewrite_font#1  # table: the CMap table (ToUnicode)
+src/rendering/mesh_shading.rs::eval_pdf_function#1  # table: a sampled function (type 0)
+src/rendering/mesh_shading.rs::render_mesh_shading#1  # table: a sampled function (type 0)
+src/rendering/page_renderer.rs::evaluate_type0_multi#1  # table: a sampled function (type 0)
+src/rendering/page_renderer.rs::parse_type0_transfer_function#1  # table: a sampled function (type 0)
+src/rendering/page_renderer.rs::project_iccbased_to_rgb#1  # table: an ICC profile
+src/rendering/resolution/color.rs::evaluate_type0_sampled#1  # table: a sampled function (type 0)
+src/rendering/resolution/color.rs::resolve_iccbased#1  # table: an ICC profile (CMYK)
+src/rendering/resolution/color.rs::resolve_iccbased#2  # table: an ICC profile (RGB)
+src/rendering/resolution/color.rs::resolve_iccbased#3  # table: an ICC profile (gray)
+src/rendering/sidecar.rs::try_retarget_cmyk_via_embedded_profile#1  # table: an ICC profile
+src/signatures/pades/dss_read.rs::stream_array#1  # table: the DSS (its certificate, OCSP and CRL streams)
+src/writer/font_discovery.rs::resolve#1  # table: a font program, a system font file
+src/writer/font_manager.rs::from_file#1  # table: a font program, a font file
+src/xref.rs::parse_xref_stream#1  # table: the xref stream
