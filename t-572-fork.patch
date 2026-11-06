@@ -1,0 +1,358 @@
+diff --git a/src/editor/document_editor.rs b/src/editor/document_editor.rs
+index db23d31..fa2c734 100644
+--- a/src/editor/document_editor.rs
++++ b/src/editor/document_editor.rs
+@@ -3926,19 +3926,6 @@ impl DocumentEditor {
+         deflate: Option<u32>,
+         xref_entries: &mut XrefEntries,
+     ) -> Result<bool> {
+-        use crate::host::deflate::{self, Encoding, MEMORY_STREAM};
+-        use crate::source::Counter;
+-
+-        const CHUNK: usize = 64 * 1024;
+-
+-        /// How the data is written: as the source holds it, as an in-memory
+-        /// re-encoding, or deflated while streaming (the level).
+-        enum Body {
+-            Copy,
+-            Memory(Vec<u8>),
+-            Streamed(u32),
+-        }
+-
+         if encrypting_output {
+             return Ok(false);
+         }
+@@ -3954,15 +3941,72 @@ impl DocumentEditor {
+         // The data as the output holds it is the decrypted data: a source
+         // that is encrypted is read through its extent's decrypting reader.
+         let stored = StreamBody::Extent(head.extent.clone());
++        let mut dict = head.dict;
++        if let Some(cuts) = cuts {
++            crate::host::resource_prune::apply_to_dict(&mut dict, cuts);
++        }
++        if let Some((id_map, page_id)) = remap {
++            Self::remap_dict_refs(&mut dict, id_map, page_id);
++        }
++        Self::write_stream_body(
++            out_id,
++            dict,
++            &stored,
++            deflate,
++            next_object_id,
++            writer,
++            serializer,
++            xref_entries,
++        )?;
++        Ok(true)
++    }
++
++    /// Writes stream object `out_id`: `dict` as given but for /Filter and
++    /// /Length, and the data of `stored` as the output holds it. Unencrypted
++    /// output only. Without `deflate` the data is copied. With it, a stream
++    /// with no /Filter, a single FlateDecode or a single LZWDecode is
++    /// re-encoded at that level and written so only when strictly smaller
++    /// than the source data. Data over `MEMORY_STREAM` is first re-encoded
++    /// into a byte counter, and a smaller one is then deflated while
++    /// streaming, /Length a reference to a fresh object holding the compressed
++    /// size, written right after.
++    fn write_stream_body(
++        out_id: u32,
++        mut dict: HashMap<String, Object>,
++        stored: &StreamBody,
++        deflate: Option<u32>,
++        next_object_id: &mut u32,
++        writer: &mut impl crate::host::positioned_write::PositionedWrite,
++        serializer: &ObjectSerializer,
++        xref_entries: &mut XrefEntries,
++    ) -> Result<()> {
++        use crate::host::deflate::{self, Encoding, MEMORY_STREAM};
++        use crate::source::Counter;
++
++        const CHUNK: usize = 64 * 1024;
++
++        /// How the data is written: as the source holds it, as an in-memory
++        /// re-encoding, or deflated while streaming (the level).
++        enum Body {
++            Copy,
++            Memory(Vec<u8>),
++            Streamed(u32),
++        }
++
+         let data_len = stored.decrypted_len()?;
+ 
+         // A re-encoding is kept only when strictly smaller than the source
+         // data; a stream that does not inflate keeps its source bytes.
+-        let encoding = deflate::encoding(&head.dict);
++        let encoding = deflate::encoding(&dict);
+         let body = match deflate.filter(|_| encoding != Encoding::Other) {
+             None => Body::Copy,
+             Some(level) if data_len <= MEMORY_STREAM => {
+-                let raw = stored.read_whole_raw()?;
++                let mut raw = Vec::with_capacity(data_len as usize);
++                stored
++                    .raw_reader()?
++                    .take(MEMORY_STREAM)
++                    .read_to_end(&mut raw)
++                    .map_err(crate::encryption::stream::from_io)?;
+                 match deflate::smaller(&raw, encoding, level) {
+                     Some(encoded) => Body::Memory(encoded),
+                     None => Body::Copy,
+@@ -3984,13 +4028,6 @@ impl DocumentEditor {
+             },
+         };
+ 
+-        let mut dict = head.dict;
+-        if let Some(cuts) = cuts {
+-            crate::host::resource_prune::apply_to_dict(&mut dict, cuts);
+-        }
+-        if let Some((id_map, page_id)) = remap {
+-            Self::remap_dict_refs(&mut dict, id_map, page_id);
+-        }
+         if !matches!(body, Body::Copy) {
+             match encoding {
+                 Encoding::Raw => {
+@@ -4058,7 +4095,7 @@ impl DocumentEditor {
+             writer.write_all(&serializer.serialize_indirect(id, 0, &Object::Integer(len as i64)))?;
+             xref_entries.push((id, offset, 0, true));
+         }
+-        Ok(true)
++        Ok(())
+     }
+ 
+     // queued objects become object streams
+@@ -5135,15 +5172,27 @@ impl DocumentEditor {
+         /// layer is redone), at `level`. The stream keeps its data when the
+         /// result is not strictly smaller.
+         fn deflate_stream(obj: Object, level: u32) -> Object {
+-            use crate::host::deflate::{encoding, smaller, Encoding};
++            use crate::host::deflate::{encoding, smaller, Encoding, MEMORY_STREAM};
+             match obj {
+                 Object::Stream { mut dict, body } => {
+                     let kind = encoding(&dict);
+-                    // A stream the streaming copy declined is read whole. A
+-                    // read that fails keeps the stream; the write reports it.
+-                    let Ok(raw) = body.read_whole_raw() else {
++                    // A stream over MEMORY_STREAM is written by `write_stream_body`
++                    // when the output is not encrypted; here (an encrypted
++                    // output has no streamed recode) it keeps its data. A read
++                    // that fails keeps the stream; the write reports it.
++                    if !matches!(body.decrypted_len(), Ok(len) if len <= MEMORY_STREAM) {
+                         return Object::Stream { dict, body };
+-                    };
++                    }
++                    let mut raw = Vec::with_capacity(body.len() as usize);
++                    let read = body.raw_reader().and_then(|reader| {
++                        reader
++                            .take(MEMORY_STREAM)
++                            .read_to_end(&mut raw)
++                            .map_err(crate::encryption::stream::from_io)
++                    });
++                    if read.is_err() {
++                        return Object::Stream { dict, body };
++                    }
+                     let Some(compressed) = smaller(&raw, kind, level) else {
+                         return Object::Stream { dict, body };
+                     };
+@@ -8107,6 +8156,25 @@ impl DocumentEditor {
+                     ) => {},
+                 // ── end pdf_manipulator patch ──
+                 Ok(obj) => {
++                    // ── pdf_manipulator patch: a staged stream over MEMORY_STREAM is counted, then recoded while streaming ──
++                    if let (Some(level), None, Object::Stream { dict, body }) =
++                        (deflate, &encryption_handler, &obj)
++                    {
++                        if body.decrypted_len()? > crate::host::deflate::MEMORY_STREAM {
++                            Self::write_stream_body(
++                                obj_id,
++                                dict.clone(),
++                                body,
++                                Some(level),
++                                &mut self.next_object_id,
++                                writer,
++                                &serializer,
++                                &mut xref_entries,
++                            )?;
++                            continue;
++                        }
++                    }
++                    // ── end pdf_manipulator patch ──
+                     let obj = match deflate {
+                         Some(level) => deflate_stream(obj, level),
+                         None => obj,
+@@ -12209,8 +12277,6 @@ impl DocumentEditor {
+     /// }
+     /// ```
+     pub fn get_page_images(&mut self, page: usize) -> Result<Vec<ImageInfo>> {
+-        use crate::content::parser::parse_content_stream;
+-
+         if page >= self.current_page_count() {
+             return Err(Error::InvalidPdf(format!("Page index {} out of range", page)));
+         }
+@@ -12232,31 +12298,13 @@ impl DocumentEditor {
+             None => return Ok(Vec::new()),
+         };
+ 
+-        // Load content stream data
+-        let content_data = match contents {
+-            Object::Reference(ref_obj) => {
+-                let obj = self.source.load_object(ref_obj)?;
+-                obj.decode_stream_data()?
+-            },
+-            Object::Array(arr) => {
+-                // Concatenate multiple content streams
+-                let mut data = Vec::new();
+-                for item in arr {
+-                    if let Object::Reference(ref_obj) = item {
+-                        let obj = self.source.load_object(ref_obj)?;
+-                        if let Ok(stream_data) = obj.decode_stream_data() {
+-                            data.extend_from_slice(&stream_data);
+-                            data.push(b'\n');
+-                        }
+-                    }
+-                }
+-                data
+-            },
+-            _ => return Ok(Vec::new()),
+-        };
+-
+-        // Parse the content stream
+-        let operators = parse_content_stream(&content_data)?;
++        // ── pdf_manipulator patch: the page's content is read as operators, never whole ──
++        // The page has contents: its parts are walked in turn, as every page walk does.
++        if !matches!(contents, Object::Reference(_) | Object::Array(_)) {
++            return Ok(Vec::new());
++        }
++        let operators = self.source.page_operators(original_page_idx)?;
++        // ── end pdf_manipulator patch ──
+ 
+         // Track CTM through the operators to find images
+         let mut images = Vec::new();
+@@ -12269,6 +12317,7 @@ impl DocumentEditor {
+         for op in operators {
+             // ── pdf_manipulator patch: a cancel stops the page's operators within a stride ──
+             stride.tick()?;
++            let op = op?;
+             // ── end pdf_manipulator patch ──
+             match op {
+                 crate::content::operators::Operator::SaveState => {
+diff --git a/src/host/engine_proofs/editor_deflate.rs b/src/host/engine_proofs/editor_deflate.rs
+index 1ee2b87..f624317 100644
+--- a/src/host/engine_proofs/editor_deflate.rs
++++ b/src/host/engine_proofs/editor_deflate.rs
+@@ -402,3 +402,50 @@ fn an_lzw_stream_over_the_memory_limit_is_counted_then_written_as_flate() {
+     assert_eq!(dict.get("Filter"), Some(&Object::Name("FlateDecode".to_string())));
+     assert_eq!(object.decode_stream_data().unwrap(), data);
+ }
++
++/// A document whose catalog reaches object 4, which the editor then stages as the stream `dict` and `data`.
++fn editor_staging(dict: &str, data: Vec<u8>) -> DocumentEditor {
++    let mut editor = DocumentEditor::from_bytes(source_with_stream("", b"x")).unwrap();
++    let parsed = PdfDocument::from_bytes(source_with_stream(dict, b"x")).unwrap();
++    let Object::Stream { mut dict, .. } = stream_of(&parsed) else { panic!("not a stream") };
++    dict.insert("Length".to_string(), Object::Integer(data.len() as i64));
++    editor.insert_modified(4, Object::stream(dict, bytes::Bytes::from(data)));
++    editor
++}
++
++/// No Dart battery sees it: Dart cannot stage a stream of a given size, and the proof is the heap one save raises, which no wire op reports.
++#[test]
++fn a_staged_stream_over_the_memory_limit_is_deflated_without_a_copy_of_it() {
++    let len = 16 * 1024 * 1024;
++    let data = text(len);
++    let mut editor = editor_staging("", data.clone());
++    let (bytes, grew) =
++        crate::host::heap::growth(|| editor.save_to_bytes_with_options(SaveOptions::full_rewrite()).unwrap());
++    assert!(grew < len / 4, "the save held {grew} bytes more for a staged stream of {len}");
++
++    let after = PdfDocument::from_bytes(bytes).unwrap();
++    let object = stream_of(&after);
++    let (dict, stored) = parts(&object);
++    assert_eq!(dict.get("Filter"), Some(&Object::Name("FlateDecode".to_string())));
++    assert!(stored.len() < len / 4, "{} bytes stored", stored.len());
++    assert_eq!(object.decode_stream_data().unwrap(), data);
++}
++
++/// No Dart battery sees it: Dart cannot stage a stream of a given size, and a decoded read cannot tell a copy from a re-encode.
++#[test]
++fn a_staged_stream_over_the_memory_limit_that_does_not_shrink_is_written_as_it_is() {
++    let data = noise(MEMORY_STREAM as usize * 3);
++    let mut editor = editor_staging("", data.clone());
++    let bytes = editor.save_to_bytes_with_options(SaveOptions::full_rewrite()).unwrap();
++    let after = PdfDocument::from_bytes(bytes).unwrap();
++    let object = stream_of(&after);
++    let (dict, stored) = parts(&object);
++    assert!(!dict.contains_key("Filter"));
++    assert_eq!(stored, data.as_slice());
++
++    let flate = deflate(&noise(MEMORY_STREAM as usize * 3), 9);
++    let mut editor = editor_staging("/Filter /FlateDecode", flate.clone());
++    let bytes = editor.save_to_bytes_with_options(SaveOptions::full_rewrite()).unwrap();
++    let after = PdfDocument::from_bytes(bytes).unwrap();
++    assert_eq!(parts(&stream_of(&after)).1, flate.as_slice());
++}
+diff --git a/src/host/engine_proofs/editor_pages.rs b/src/host/engine_proofs/editor_pages.rs
+index ea0f06a..3e10370 100644
+--- a/src/host/engine_proofs/editor_pages.rs
++++ b/src/host/engine_proofs/editor_pages.rs
+@@ -50,3 +50,61 @@ fn output_index_follows_removes_and_moves() {
+ }
+ 
+ // ── a merge records ids and streams the merged document at save ──
++
++/// One page whose /Contents is `contents`, with the content streams `parts` as objects 4, 5, ….
++fn page_with_contents(contents: &str, parts: &[(&str, Vec<u8>)]) -> Vec<u8> {
++    use super::support::{pdf_from_objects, stream_object};
++    let mut objects = vec![
++        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n".to_vec(),
++        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n".to_vec(),
++        format!("3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents {contents} >>\nendobj\n")
++            .into_bytes(),
++    ];
++    for (i, (dict, data)) in parts.iter().enumerate() {
++        objects.push(stream_object(4 + i as u32, dict, data));
++    }
++    pdf_from_objects(&objects)
++}
++
++fn flate(data: &[u8]) -> Vec<u8> {
++    use std::io::Write;
++    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::new(1));
++    encoder.write_all(data).unwrap();
++    encoder.finish().unwrap()
++}
++
++/// No Dart battery sees it: the page's images come back the same whether its content was held whole or read as operators, and the heap one call raises is reported by no wire op.
++#[test]
++fn the_images_of_a_page_with_a_huge_content_are_found_without_holding_the_content() {
++    let image = b"q 10 0 0 20 5 6 cm /Im1 Do Q\n";
++    let filler = b"q Q\n".repeat(4 * 1024 * 1024);
++    let mut content = image.to_vec();
++    content.extend_from_slice(&filler);
++    let mut editor =
++        open_editor_from_bytes(&page_with_contents("4 0 R", &[("/Filter /FlateDecode", flate(&content))]), "huge_content");
++    let (images, grew) = crate::host::heap::growth(|| editor.get_page_images(0).unwrap());
++    assert!(grew < content.len() / 4, "the read held {grew} bytes for a content of {}", content.len());
++    assert_eq!(images.len(), 1);
++    assert_eq!(images[0].name, "Im1");
++    assert_eq!(images[0].bounds, [5.0, 6.0, 10.0, 20.0]);
++}
++
++/// No Dart battery sees it: the parts of a page's /Contents array join the same whether they were concatenated or read in turn; a part that cannot be decoded is skipped, as it always was.
++#[test]
++fn the_images_of_a_page_with_a_contents_array_are_found_and_a_broken_part_is_skipped() {
++    let mut editor = open_editor_from_bytes(
++        &page_with_contents(
++            "[4 0 R 5 0 R 6 0 R]",
++            &[
++                ("", b"q 10 0 0 20 5 6 cm /Im1 Do".to_vec()),
++                ("/Filter /FlateDecode", b"not a zlib stream".to_vec()),
++                ("", b"Q q 3 0 0 4 1 2 cm /Im2 Do Q".to_vec()),
++            ],
++        ),
++        "contents_array",
++    );
++    let images = editor.get_page_images(0).unwrap();
++    let names: Vec<_> = images.iter().map(|i| i.name.as_str()).collect();
++    assert_eq!(names, ["Im1", "Im2"]);
++    assert_eq!(images[1].bounds, [1.0, 2.0, 3.0, 4.0]);
++}
