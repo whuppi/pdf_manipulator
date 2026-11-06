@@ -1,0 +1,12 @@
+diff --git a/CHANGELOG.pre.md b/CHANGELOG.pre.md
+index 90db1c3..af259ab 100644
+--- a/CHANGELOG.pre.md
++++ b/CHANGELOG.pre.md
+@@ -289,6 +289,7 @@ CONTENT RULES (never change)
+ - Fixed a cancel not reaching a redaction, a text extraction of a form or a change of an image's bounds until the page or form it was reading ended, so a page of millions of operators could not be stopped — each now stops within one operator
+ - Fixed a compressing full-rewrite save of a document with a very large rewritten stream holding the whole stream and its compressed copy in memory — the stream is counted, then recompressed in pieces (an encrypted save writes such a stream as it is)
+ - Fixed listing the images of a page with a very large content stream holding the whole decoded content and every parsed operator in memory — the content is read one operator at a time
++- Fixed `compress` and every full save of an encrypted document copying each stream over 256 KiB as it was, so the file stayed as large as the source — such a stream is now recompressed in pieces and encrypted as it is written
+ 
+ ## 5.0.1-dev.0
+ 

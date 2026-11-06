@@ -1,0 +1,474 @@
+diff --git a/src/editor/document_editor.rs b/src/editor/document_editor.rs
+index fa2c734..0f5f828 100644
+--- a/src/editor/document_editor.rs
++++ b/src/editor/document_editor.rs
+@@ -3814,9 +3814,8 @@ impl DocumentEditor {
+     // an unchanged source stream is copied, not loaded
+     /// Writes unstaged source object `r` as a chunked copy of its stream
+     /// data and returns `true`, or returns `false` having written nothing
+-    /// when the object cannot be copied raw (not a plain stream, an
+-    /// encrypted source or output, a container, a /Length that does not
+-    /// hold); the caller then loads and serializes it. The caller checks
++    /// when the object cannot be copied raw (not a plain stream, a
++    /// container, a /Length that does not hold); the caller then loads and serializes it. The caller checks
+     /// that no staged version of `r` exists; the prune plan's `cuts` of a
+     /// stream apply to its dictionary and the data is still copied from the
+     /// source. The dictionary goes through
+@@ -3835,7 +3834,7 @@ impl DocumentEditor {
+         cuts: Option<&[crate::host::resource_prune::Cut]>,
+         writer: &mut impl crate::host::positioned_write::PositionedWrite,
+         serializer: &ObjectSerializer,
+-        encrypting_output: bool,
++        handler: &Option<crate::encryption::EncryptionWriteHandler>,
+         deflate: Option<u32>,
+         xref_entries: &mut XrefEntries,
+     ) -> Result<bool> {
+@@ -3848,7 +3847,7 @@ impl DocumentEditor {
+             cuts,
+             writer,
+             serializer,
+-            encrypting_output,
++            handler,
+             deflate,
+             xref_entries,
+         )
+@@ -3865,7 +3864,7 @@ impl DocumentEditor {
+         cuts: Option<&[crate::host::resource_prune::Cut]>,
+         writer: &mut impl crate::host::positioned_write::PositionedWrite,
+         serializer: &ObjectSerializer,
+-        encrypting_output: bool,
++        handler: &Option<crate::encryption::EncryptionWriteHandler>,
+         deflate: Option<u32>,
+         xref_entries: &mut XrefEntries,
+     ) -> Result<bool> {
+@@ -3878,7 +3877,7 @@ impl DocumentEditor {
+             cuts,
+             writer,
+             serializer,
+-            encrypting_output,
++            handler,
+             deflate,
+             xref_entries,
+         )
+@@ -3922,13 +3921,10 @@ impl DocumentEditor {
+         cuts: Option<&[crate::host::resource_prune::Cut]>,
+         writer: &mut impl crate::host::positioned_write::PositionedWrite,
+         serializer: &ObjectSerializer,
+-        encrypting_output: bool,
++        handler: &Option<crate::encryption::EncryptionWriteHandler>,
+         deflate: Option<u32>,
+         xref_entries: &mut XrefEntries,
+     ) -> Result<bool> {
+-        if encrypting_output {
+-            return Ok(false);
+-        }
+         let Some(head) = source.stream_head(r)? else {
+             return Ok(false);
+         };
+@@ -3956,20 +3952,23 @@ impl DocumentEditor {
+             next_object_id,
+             writer,
+             serializer,
++            handler,
+             xref_entries,
+         )?;
+         Ok(true)
+     }
+ 
+     /// Writes stream object `out_id`: `dict` as given but for /Filter and
+-    /// /Length, and the data of `stored` as the output holds it. Unencrypted
+-    /// output only. Without `deflate` the data is copied. With it, a stream
++    /// /Length, and the data of `stored` as the output holds it. With a
++    /// `handler` the strings of `dict` and the data are enciphered as the
++    /// serializer enciphers any stream, /Length the enciphered length.
++    /// Without `deflate` the data is copied. With it, a stream
+     /// with no /Filter, a single FlateDecode or a single LZWDecode is
+     /// re-encoded at that level and written so only when strictly smaller
+     /// than the source data. Data over `MEMORY_STREAM` is first re-encoded
+     /// into a byte counter, and a smaller one is then deflated while
+     /// streaming, /Length a reference to a fresh object holding the compressed
+-    /// size, written right after.
++    /// (and enciphered) size, written right after.
+     fn write_stream_body(
+         out_id: u32,
+         mut dict: HashMap<String, Object>,
+@@ -3978,8 +3977,10 @@ impl DocumentEditor {
+         next_object_id: &mut u32,
+         writer: &mut impl crate::host::positioned_write::PositionedWrite,
+         serializer: &ObjectSerializer,
++        handler: &Option<crate::encryption::EncryptionWriteHandler>,
+         xref_entries: &mut XrefEntries,
+     ) -> Result<()> {
++        use crate::encryption::stream::Cipher;
+         use crate::host::deflate::{self, Encoding, MEMORY_STREAM};
+         use crate::source::Counter;
+ 
+@@ -4037,13 +4038,19 @@ impl DocumentEditor {
+                 _ => {},
+             }
+         }
++        let cipher = match handler {
++            Some(h) => h.stream_cipher(out_id, 0),
++            None => Cipher::Identity,
++        };
+         let length_id = match &body {
+             Body::Copy => {
+-                dict.insert("Length".to_string(), Object::Integer(data_len as i64));
++                let len = cipher.encrypted_len(data_len);
++                dict.insert("Length".to_string(), Object::Integer(len as i64));
+                 None
+             },
+             Body::Memory(encoded) => {
+-                dict.insert("Length".to_string(), Object::Integer(encoded.len() as i64));
++                let len = cipher.encrypted_len(encoded.len() as u64);
++                dict.insert("Length".to_string(), Object::Integer(len as i64));
+                 None
+             },
+             Body::Streamed(_) => {
+@@ -4054,10 +4061,28 @@ impl DocumentEditor {
+             },
+         };
+ 
++        if let Some(h) = handler {
++            fn encipher(object: &mut Object, h: &crate::encryption::EncryptionWriteHandler, id: u32) {
++                match object {
++                    Object::String(s) => *s = h.encrypt_string(s, id, 0),
++                    Object::Array(items) => items.iter_mut().for_each(|o| encipher(o, h, id)),
++                    Object::Dictionary(d) => d.values_mut().for_each(|o| encipher(o, h, id)),
++                    _ => {},
++                }
++            }
++            dict.values_mut().for_each(|o| encipher(o, h, out_id));
++        }
++
+         let offset = writer.position();
+         serializer.write_stream_open(&mut *writer, out_id, 0, &dict)?;
+ 
+-        let compressed_len = match body {
++        let iv = match handler {
++            Some(_) => crate::encryption::EncryptionWriteHandler::generate_iv()?,
++            None => [0u8; 16],
++        };
++        let body_start = writer.position();
++        let mut sink = cipher.encrypting(&mut *writer, iv)?;
++        match body {
+             Body::Copy => {
+                 let mut data = stored.raw_reader()?;
+                 let mut buf = vec![0u8; CHUNK];
+@@ -4068,25 +4093,16 @@ impl DocumentEditor {
+                     if n == 0 {
+                         break;
+                     }
+-                    writer.write_all(&buf[..n])?;
++                    sink.write_all(&buf[..n])?;
+                 }
+-                None
+-            },
+-            Body::Memory(encoded) => {
+-                writer.write_all(&encoded)?;
+-                None
+             },
++            Body::Memory(encoded) => sink.write_all(&encoded)?,
+             Body::Streamed(level) => {
+-                let start = writer.position();
+-                deflate::recode(
+-                    stored.raw_reader()?,
+-                    encoding,
+-                    level,
+-                    &mut *writer,
+-                )?;
+-                Some(writer.position() - start)
++                deflate::recode(stored.raw_reader()?, encoding, level, &mut sink)?;
+             },
+-        };
++        }
++        sink.finish()?;
++        let compressed_len = length_id.map(|_| writer.position() - body_start);
+         writer.write_all(b"\nendstream\nendobj\n")?;
+         xref_entries.push((out_id, offset, 0, true));
+ 
+@@ -5176,10 +5192,9 @@ impl DocumentEditor {
+             match obj {
+                 Object::Stream { mut dict, body } => {
+                     let kind = encoding(&dict);
+-                    // A stream over MEMORY_STREAM is written by `write_stream_body`
+-                    // when the output is not encrypted; here (an encrypted
+-                    // output has no streamed recode) it keeps its data. A read
+-                    // that fails keeps the stream; the write reports it.
++                    // A stream over MEMORY_STREAM is written by `write_stream_body`;
++                    // here it keeps its data. A read that fails keeps the stream;
++                    // the write reports it.
+                     if !matches!(body.decrypted_len(), Ok(len) if len <= MEMORY_STREAM) {
+                         return Object::Stream { dict, body };
+                     }
+@@ -6914,7 +6929,7 @@ impl DocumentEditor {
+                                                         None,
+                                                         writer,
+                                                         &serializer,
+-                                                        encryption_handler.is_some(),
++                                                        &encryption_handler,
+                                                         deflate,
+                                                         &mut xref_entries,
+                                                     )?
+@@ -7120,7 +7135,7 @@ impl DocumentEditor {
+                                                                         prune.cuts.get(&ref_obj.id).map(|cuts| cuts.as_slice()),
+                                                                         writer,
+                                                                         &serializer,
+-                                                                        encryption_handler.is_some(),
++                                                                        &encryption_handler,
+                                                                         deflate,
+                                                                         &mut xref_entries,
+                                                                     )?
+@@ -7191,7 +7206,7 @@ impl DocumentEditor {
+                                                                         prune.cuts.get(&ref_obj.id).map(|cuts| cuts.as_slice()),
+                                                                         writer,
+                                                                         &serializer,
+-                                                                        encryption_handler.is_some(),
++                                                                        &encryption_handler,
+                                                                         deflate,
+                                                                         &mut xref_entries,
+                                                                     )?
+@@ -7892,7 +7907,7 @@ impl DocumentEditor {
+                         cuts,
+                         writer,
+                         &serializer,
+-                        encryption_handler.is_some(),
++                        &encryption_handler,
+                         deflate,
+                         &mut xref_entries,
+                     )? {
+@@ -8123,7 +8138,7 @@ impl DocumentEditor {
+                     prune.cuts.get(&obj_id).map(|cuts| cuts.as_slice()),
+                     writer,
+                     &serializer,
+-                    encryption_handler.is_some(),
++                    &encryption_handler,
+                     deflate,
+                     &mut xref_entries,
+                 )?
+@@ -8157,9 +8172,7 @@ impl DocumentEditor {
+                 // ── end pdf_manipulator patch ──
+                 Ok(obj) => {
+                     // ── pdf_manipulator patch: a staged stream over MEMORY_STREAM is counted, then recoded while streaming ──
+-                    if let (Some(level), None, Object::Stream { dict, body }) =
+-                        (deflate, &encryption_handler, &obj)
+-                    {
++                    if let (Some(level), Object::Stream { dict, body }) = (deflate, &obj) {
+                         if body.decrypted_len()? > crate::host::deflate::MEMORY_STREAM {
+                             Self::write_stream_body(
+                                 obj_id,
+@@ -8169,6 +8182,7 @@ impl DocumentEditor {
+                                 &mut self.next_object_id,
+                                 writer,
+                                 &serializer,
++                                &encryption_handler,
+                                 &mut xref_entries,
+                             )?;
+                             continue;
+diff --git a/src/host/engine_proofs/editor_encrypted_compress.rs b/src/host/engine_proofs/editor_encrypted_compress.rs
+new file mode 100644
+index 0000000..37c88d7
+--- /dev/null
++++ b/src/host/engine_proofs/editor_encrypted_compress.rs
+@@ -0,0 +1,189 @@
++//! A full save with encryption deflates every stream the way an unencrypted
++//! one does, whatever its size: a large compressible stream of an encrypted
++//! document comes out smaller, opens with the password and decodes to the
++//! bytes it held.
++
++use super::support::{contains, pdf_from_objects, stream_object};
++use crate::document::PdfDocument;
++use crate::editor::{DocumentEditor, EncryptionAlgorithm, EncryptionConfig, SaveOptions};
++use crate::host::deflate::MEMORY_STREAM;
++use crate::object::{Object, ObjectRef};
++use std::collections::HashMap;
++
++const PASSWORD: &str = "secret";
++const NOTE: &[u8] = b"a string in the stream's dictionary";
++
++/// Bytes that compress well but not to nothing.
++fn text(len: usize, salt: usize) -> Vec<u8> {
++    let words = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf"];
++    let mut out = Vec::with_capacity(len + 8);
++    let mut i = salt;
++    while out.len() < len {
++        out.extend_from_slice(words[(i * 7 + i / 3) % words.len()].as_bytes());
++        out.push(b' ');
++        i += 1;
++    }
++    out.truncate(len);
++    out
++}
++
++/// Bytes that do not compress.
++fn noise(len: usize) -> Vec<u8> {
++    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
++    (0..len)
++        .map(|_| {
++            state ^= state << 13;
++            state ^= state >> 7;
++            state ^= state << 17;
++            (state >> 24) as u8
++        })
++        .collect()
++}
++
++/// The streams the catalog reaches, by object number: a large one over
++/// `MEMORY_STREAM` (4), a small one under it (5), a large one that does not
++/// compress (6), and a large one the save finds staged (7).
++fn streams() -> [(u32, Vec<u8>); 4] {
++    let large = MEMORY_STREAM as usize * 4;
++    [
++        (4, text(large, 0)),
++        (5, text(MEMORY_STREAM as usize / 4, 1)),
++        (6, noise(large)),
++        (7, text(large, 2)),
++    ]
++}
++
++fn note_dict() -> String {
++    format!("/Note ({})", String::from_utf8_lossy(NOTE))
++}
++
++fn plain() -> Vec<u8> {
++    let mut objects = vec![
++        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R /A 4 0 R /B 5 0 R /C 6 0 R /D 7 0 R >>\nendobj\n"
++            .to_vec(),
++        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n".to_vec(),
++        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>\nendobj\n".to_vec(),
++    ];
++    for (id, data) in streams() {
++        objects.push(stream_object(id, &note_dict(), &data));
++    }
++    pdf_from_objects(&objects)
++}
++
++fn config(user: &str, algorithm: EncryptionAlgorithm) -> EncryptionConfig {
++    EncryptionConfig::new(user, "owner").with_algorithm(algorithm)
++}
++
++/// The file `plain` makes with its streams as written, encrypted under an
++/// empty user password.
++fn encrypted(algorithm: EncryptionAlgorithm) -> Vec<u8> {
++    let options = SaveOptions { compress: false, ..SaveOptions::with_encryption(config("", algorithm)) };
++    DocumentEditor::from_bytes(plain())
++        .unwrap()
++        .save_to_bytes_with_options(options)
++        .unwrap()
++}
++
++/// `source` saved with `options`, object 7 staged as the same data, the way an
++/// edit stages a stream.
++fn compressed(source: &[u8], options: SaveOptions) -> Vec<u8> {
++    let mut editor = DocumentEditor::from_bytes(source.to_vec()).unwrap();
++    let staged = streams()[3].1.clone();
++    let mut dict = HashMap::new();
++    dict.insert("Note".to_string(), Object::String(NOTE.to_vec()));
++    editor.insert_modified(7, Object::stream(dict, staged));
++    editor.save_to_bytes_with_options(options).unwrap()
++}
++
++/// Whether the /Length of stream `id` in `output` ends its data where
++/// `endstream` begins; a reader that scans for the keyword never shows it.
++fn length_holds(output: &[u8], doc: &PdfDocument, id: u32) -> bool {
++    let head = format!("{id} 0 obj\n").into_bytes();
++    let Some(at) = output.windows(head.len()).position(|w| w == head.as_slice()) else { return false };
++    let rest = &output[at..];
++    let Some(data_at) = rest.windows(7).position(|w| w == b"stream\n").map(|at| at + 7) else {
++        return false;
++    };
++    let dict = String::from_utf8_lossy(&rest[..data_at]).into_owned();
++    let Some(value) = dict.split("/Length ").nth(1) else { return false };
++    let digits: String = value.chars().take_while(char::is_ascii_digit).collect();
++    let Ok(number) = digits.parse::<usize>() else { return false };
++    let length = if value[digits.len()..].starts_with(" 0 R") {
++        let Ok(Object::Integer(n)) = doc.load_object(ObjectRef::new(number as u32, 0)) else {
++            return false;
++        };
++        n as usize
++    } else {
++        number
++    };
++    rest.get(data_at + length..).is_some_and(|tail| tail.starts_with(b"\nendstream"))
++}
++
++fn check(output: &[u8], source_len: usize, label: &str) {
++    assert!(
++        output.len() < source_len / 2,
++        "{label}: {} bytes from a source of {source_len}",
++        output.len()
++    );
++    assert!(!contains(output, NOTE), "{label}: a dictionary string is in the file as it was");
++    let doc = PdfDocument::from_bytes(output.to_vec()).unwrap();
++    assert!(doc.is_encrypted(), "{label}: the output is not encrypted");
++    assert!(doc.authenticate(PASSWORD.as_bytes()).unwrap(), "{label}: the password does not open it");
++    for (id, data) in streams() {
++        let object = doc.load_object(ObjectRef::new(id, 0)).unwrap();
++        let Object::Stream { dict, .. } = &object else { panic!("{label}: object {id} is not a stream") };
++        assert_eq!(
++            dict.get("Note"),
++            Some(&Object::String(NOTE.to_vec())),
++            "{label}: object {id}'s dictionary string"
++        );
++        assert_eq!(object.decode_stream_data().unwrap(), data, "{label}: object {id}'s data");
++        assert!(length_holds(output, &doc, id), "{label}: object {id}'s /Length");
++        if id != 6 {
++            assert_eq!(
++                dict.get("Filter"),
++                Some(&Object::Name("FlateDecode".to_string())),
++                "{label}: object {id} is not deflated"
++            );
++        }
++    }
++}
++
++/// No Dart battery sees it: Dart reads a stream decoded, and a decoded read cannot tell a deflated stream of an encrypted file from one copied as it was; only the size of the file shows it.
++#[test]
++fn compress_deflates_large_streams_under_aes_256() {
++    let source = encrypted(EncryptionAlgorithm::Aes256);
++    let output = compressed(
++        &source,
++        SaveOptions::with_encryption(config(PASSWORD, EncryptionAlgorithm::Aes256)),
++    );
++    check(&output, source.len(), "AES-256");
++}
++
++/// No Dart battery sees it: Dart reads a stream decoded, and a decoded read cannot tell a deflated stream of an encrypted file from one copied as it was; only the size of the file shows it.
++#[test]
++fn compress_deflates_large_streams_under_rc4() {
++    let source = encrypted(EncryptionAlgorithm::Rc4_128);
++    let output = compressed(
++        &source,
++        SaveOptions::with_encryption(config(PASSWORD, EncryptionAlgorithm::Rc4_128)),
++    );
++    check(&output, source.len(), "RC4-128");
++}
++
++/// No Dart battery sees it: Dart reads a stream decoded, and a decoded read cannot tell a deflated stream of an encrypted file from one copied as it was; only the size of the file shows it.
++#[test]
++fn compress_deflates_large_streams_when_the_source_encryption_is_kept() {
++    let source = encrypted(EncryptionAlgorithm::Aes256);
++    let output = compressed(
++        &source,
++        SaveOptions { keep_source_encryption: true, ..SaveOptions::full_rewrite() },
++    );
++    let doc = PdfDocument::from_bytes(output.clone()).unwrap();
++    assert!(doc.is_encrypted());
++    assert!(output.len() < source.len() / 2, "{} bytes from a source of {}", output.len(), source.len());
++    for (id, data) in streams() {
++        let object = doc.load_object(ObjectRef::new(id, 0)).unwrap();
++        assert_eq!(object.decode_stream_data().unwrap(), data, "object {id}");
++    }
++}
+diff --git a/src/host/engine_proofs/mod.rs b/src/host/engine_proofs/mod.rs
+index b739975..28b6777 100644
+--- a/src/host/engine_proofs/mod.rs
++++ b/src/host/engine_proofs/mod.rs
+@@ -26,6 +26,7 @@ mod machine_font_caches;
+ mod executor_boundary;
+ mod document_pages;
+ mod editor_deflate;
++mod editor_encrypted_compress;
+ mod editor_duplicates;
+ mod editor_merge;
+ mod editor_nested;
