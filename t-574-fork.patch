@@ -1,0 +1,1668 @@
+diff --git a/src/compliance/converter.rs b/src/compliance/converter.rs
+index 0def2cf..24844a9 100644
+--- a/src/compliance/converter.rs
++++ b/src/compliance/converter.rs
+@@ -509,7 +509,9 @@ impl PdfAConverter {
+     /// If the catalog already has a `/Metadata` stream, the `pdfaid:part` and
+     /// `pdfaid:conformance` nodes are spliced in before `</rdf:RDF>`.  If the
+     /// stream is absent or unreadable, falls back to [`add_xmp_metadata`].
+-    fn add_pdfa_identification(
++    // ── pdf_manipulator patch: the engine proof stages the identification on its own ──
++    pub(crate) fn add_pdfa_identification(
++    // ── end pdf_manipulator patch ──
+         &self,
+         editor: &mut DocumentEditor,
+         result: &mut ConversionResult,
+@@ -527,35 +529,16 @@ impl PdfAConverter {
+             .cloned()
+             .or_else(|| editor.source().load_object(metadata_ref).ok());
+ 
+-        // Decode the stream (may be FlateDecode-compressed) before parsing as XML.
+-        let current_xml = match &current {
+-            Some(obj @ Object::Stream { .. }) => {
+-                let decoded = obj.decode_stream_data().unwrap_or_else(|_| {
+-                    // ── pdf_manipulator patch: stream bodies are StreamBody ──
+-                    if let Object::Stream { body, .. } = obj {
+-                        body.read_whole_raw().unwrap_or_default()
+-                        // ── end pdf_manipulator patch ──
+-                    } else {
+-                        vec![]
+-                    }
+-                });
+-                String::from_utf8_lossy(&decoded).into_owned()
+-            },
+-            Some(_) | None => return self.add_xmp_metadata(editor, result),
+-        };
+-        let mut stream_dict = match current {
+-            Some(Object::Stream { dict, .. }) => dict,
+-            _ => unreachable!(),
++        // ── pdf_manipulator patch: the packet is read as XML events and copied in pieces, never held as text ──
++        let Some(Object::Stream { dict: mut stream_dict, body }) = current else {
++            return self.add_xmp_metadata(editor, result);
+         };
+-
+-        let patched =
+-            inject_pdfaid(&current_xml, self.level.xmp_part(), self.level.xmp_conformance());
+-        // inject_pdfaid returns the input unchanged when </rdf:RDF> is absent.
+-        // In that case, fall back to rebuilding XMP from scratch.
+-        if patched == current_xml {
++        let block = pdfaid_block(self.level.xmp_part(), self.level.xmp_conformance());
++        // No RDF root to splice into: rebuild the packet from scratch.
++        let Some(patched_bytes) = splice_before_rdf_close(&stream_dict, &body, block.as_bytes())? else {
+             return self.add_xmp_metadata(editor, result);
+-        }
+-        let patched_bytes = patched.into_bytes();
++        };
++        // ── end pdf_manipulator patch ──
+         stream_dict.insert("Length".to_string(), Object::Integer(patched_bytes.len() as i64));
+         // Remove any compression filter — PDF/A requires plaintext XMP.
+         stream_dict.remove("Filter");
+@@ -564,7 +547,7 @@ impl PdfAConverter {
+         editor.insert_modified(
+             metadata_ref.id,
+             // ── pdf_manipulator patch: stream bodies are StreamBody ──
+-            Object::stream(stream_dict, bytes::Bytes::from(patched_bytes)),
++            Object::stream(stream_dict, patched_bytes),
+             // ── end pdf_manipulator patch ──
+         );
+ 
+@@ -1645,33 +1628,85 @@ fn build_font_descriptor(
+     id
+ }
+ 
+-/// Splice `pdfaid:part` and `pdfaid:conformance` into an existing XMP packet.
+-///
+-/// Inserts a fresh `<rdf:Description>` carrying the PDF/A identification
+-/// immediately before the closing `</rdf:RDF>` tag.  Multiple `rdf:Description`
+-/// elements in a single RDF block are legal per the RDF spec and used by all
+-/// major PDF/A toolkits.  String-level splicing avoids a heavyweight XML
+-/// dependency (KISS).
+-fn inject_pdfaid(xml: &str, part: &str, conformance: &str) -> String {
+-    let block = format!(
++// ── pdf_manipulator patch: the packet is read as XML events and copied in pieces, never held as text ──
++/// The `rdf:Description` that carries the PDF/A identification.
++fn pdfaid_block(part: &str, conformance: &str) -> String {
++    format!(
+         "    <rdf:Description rdf:about=\"\" \
+ xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\">\n\
+       <pdfaid:part>{part}</pdfaid:part>\n\
+       <pdfaid:conformance>{conformance}</pdfaid:conformance>\n\
+     </rdf:Description>\n"
+-    );
+-    if let Some(idx) = xml.rfind("</rdf:RDF>") {
+-        let mut out = String::with_capacity(xml.len() + block.len());
+-        out.push_str(&xml[..idx]);
+-        out.push_str(&block);
+-        out.push_str(&xml[idx..]);
+-        out
+-    } else {
+-        // XMP has no RDF block — caller should have routed to add_xmp_metadata.
+-        xml.to_string()
++    )
++}
++
++/// Counts the bytes read through it.
++struct Counted<R> {
++    inner: R,
++    bytes: u64,
++}
++
++impl<R: std::io::Read> std::io::Read for Counted<R> {
++    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
++        let n = self.inner.read(buf)?;
++        self.bytes += n as u64;
++        Ok(n)
+     }
+ }
+ 
++/// The decoded packet of the metadata stream `dict`/`body` with `block` ahead
++/// of its last `</rdf:RDF>` end tag, and nothing else changed. The packet is
++/// read twice as the stream decodes: once as XML events, as
++/// `extractors::xmp` reads it, for where that end tag begins and how long the
++/// packet is; once to copy it around the block into a buffer of exactly the
++/// patched size. `None` when the packet has no such end tag or cannot be read.
++fn splice_before_rdf_close(
++    dict: &std::collections::HashMap<String, Object>,
++    body: &crate::object::StreamBody,
++    block: &[u8],
++) -> Result<Option<bytes::Bytes>> {
++    use crate::error::Error;
++    use quick_xml::events::Event;
++    use std::io::Read;
++
++    let open = || crate::decoders::stream::reader_in(dict, body.origin(), || body.raw_reader());
++    let Ok(decoded) = open() else { return Ok(None) };
++    let counted = Counted { inner: decoded, bytes: 0 };
++    let mut reader = quick_xml::Reader::from_reader(std::io::BufReader::with_capacity(64 * 1024, counted));
++    let mut event = Vec::new();
++    let mut close = None;
++    loop {
++        event.clear();
++        let at = reader.buffer_position();
++        match reader.read_event_into(&mut event) {
++            Ok(Event::End(end)) if end.name().as_ref() == "rdf:RDF" => close = Some(at),
++            Ok(Event::Eof) | Err(_) => break,
++            Ok(_) => {},
++        }
++    }
++    let Some(close) = close else { return Ok(None) };
++    drop(event);
++    let mut rest = reader.into_inner();
++    if std::io::copy(&mut rest, &mut std::io::sink()).is_err() {
++        return Ok(None);
++    }
++    let size = usize::try_from(rest.get_ref().bytes)
++        .ok()
++        .and_then(|n| n.checked_add(block.len()))
++        .ok_or_else(|| Error::Decode("The XMP packet is too long to patch".to_string()))?;
++    let mut patched = Vec::new();
++    patched
++        .try_reserve_exact(size)
++        .map_err(|_| Error::Decode(format!("Unable to allocate {size} bytes for the XMP packet")))?;
++    let Ok(mut decoded) = open() else { return Ok(None) };
++    let copied = std::io::copy(&mut decoded.by_ref().take(close), &mut patched).and_then(|_| {
++        patched.extend_from_slice(block);
++        std::io::copy(&mut decoded, &mut patched)
++    });
++    Ok(copied.is_ok().then(|| bytes::Bytes::from(patched)))
++}
++// ── end pdf_manipulator patch ──
++
+ /// Quick conversion function for common use cases.
+ ///
+ /// # Example
+diff --git a/src/decoders/stream.rs b/src/decoders/stream.rs
+index f195fd7..f41b380 100644
+--- a/src/decoders/stream.rs
++++ b/src/decoders/stream.rs
+@@ -152,6 +152,35 @@ fn build<'a>(spec: &Rc<Spec<'a>>, upto: usize) -> Result<Box<dyn Read + 'a>> {
+     })
+ }
+ 
++/// The decoded data of the stream `object`, read as the stream decodes. A
++/// dictionary or a null where a stream is expected is an empty stream, as for
++/// `Object::decode_stream_data`.
++pub(crate) fn decoded_reader(object: &Object) -> Result<Box<dyn Read + '_>> {
++    match object {
++        Object::Stream { dict, body } => {
++            let filtered = dict.get("Filter").map(crate::object::extract_filter_names).unwrap_or_default();
++            if filtered.is_empty() {
++                body.raw_reader()
++            } else {
++                reader_in(dict, body.origin(), || body.raw_reader())
++            }
++        },
++        Object::Dictionary(_) | Object::Null => Ok(Box::new(io::empty())),
++        other => Err(Error::InvalidObjectType {
++            expected: "Stream".to_string(),
++            found: other.type_name().to_string(),
++        }),
++    }
++}
++
++/// The first `cap` bytes of the decoded data of the stream `object`, read as
++/// the stream decodes: the rest of the stream is never read.
++pub(crate) fn read_decoded_window(object: &Object, cap: u64) -> Result<Vec<u8>> {
++    let mut out = Vec::new();
++    decoded_reader(object)?.take(cap).read_to_end(&mut out).map_err(crate::encryption::stream::from_io)?;
++    Ok(out)
++}
++
+ /// Reads `r` to its end into one buffer, growing it in 64 KiB steps. A
+ /// refused allocation is a typed decode error, not an abort. `hint` is the
+ /// size to expect (0 when unknown) and is reserved first.
+diff --git a/src/extractors/images.rs b/src/extractors/images.rs
+index 92bafd1..d4948e6 100644
+--- a/src/extractors/images.rs
++++ b/src/extractors/images.rs
+@@ -1231,8 +1231,11 @@ pub fn extract_image_from_xobject_at(
+     // applies it itself (plate routing) must still do so for those.
+     let mut decode_folded_in = false;
+     let data = if is_jbig2 {
+-        // ── pdf_manipulator patch: a stream is its dictionary and an extent that reads itself ──
+-        let decoded = decode_jbig2_image(xobject, dict, doc, width, height)?;
++        // ── pdf_manipulator patch: one JBIG2 decode, kept one bit a pixel and expanded to gray here ──
++        let decoded = ImageData::Raw {
++            pixels: bilevel_to_gray(&decode_jbig2_bits(xobject, dict, doc, width, height, false)?, width, height)?,
++            format: PixelFormat::Grayscale,
++        };
+         // ── end pdf_manipulator patch ──
+         // The JBIG2 decoder expands straight to 8-bit gray, bypassing the
+         // packed-sample block below that is the only place /Decode is
+@@ -1277,10 +1280,29 @@ pub fn extract_image_from_xobject_at(
+         jpx_decoded_dims = Some((dec_w, dec_h));
+         data
+     } else if is_jpeg_only || is_jpeg_chain {
+-        let decoded = xobject.decode_stream_data()?;
+-        ImageData::Jpeg(decoded)
++        match target.and_then(|painted| decode_dct_covering(xobject, painted, &color_space).transpose()) {
++            Some(reduced) => {
++                // The samples are the reduced raster, so their size is theirs, as
++                // for a reduced JPX decode.
++                let (pixels, format, reduced_w, reduced_h) = reduced?;
++                jpx_decoded_dims = Some((reduced_w, reduced_h));
++                ImageData::Raw { pixels, format }
++            },
++            None => ImageData::Jpeg(xobject.decode_stream_data()?),
++        }
+     } else {
+-        let decoded_data = xobject.decode_stream_data()?;
++        // A raw-sample image is the rows it declares (`row_geometry` states the
++        // same size); what the stream holds past them is stray. A fax stream is
++        // the codec's input, not samples, and is read as it is.
++        let decoded_data = if is_ccitt {
++            xobject.decode_stream_data()?
++        } else {
++            let ink_count =
++                devicen_ink_count(&resolved_color_space).unwrap_or_else(|| color_space.components());
++            let row_bits = u64::from(width) * ink_count as u64 * u64::from(bits_per_component);
++            let declared = row_bits.div_ceil(8).saturating_mul(u64::from(height));
++            crate::decoders::stream::read_decoded_window(xobject, declared)?
++        };
+             // ── end pdf_manipulator patch ──
+         if let Some(ir) = indexed_resolution.as_ref() {
+             // Build a Transform if the Indexed base has a profile so
+@@ -1807,24 +1829,24 @@ fn resolve_indexed_palette(
+     } else {
+         arr[3].clone()
+     };
++    // Per PDF 32000-1:2008 §8.6.6.3 the lookup is exactly (hival + 1) * N bytes;
++    // anything beyond that is stray data that must not be mapped to pixels, so
++    // it is not read. Indices greater than hival fall into the out-of-range
++    // branch of the expander. An unusable hival leaves the 256 entries an
++    // 8-bit index can name.
++    // ── pdf_manipulator patch: the palette is read to the length hival declares ──
++    let expected = (hival.unwrap_or(255) + 1).saturating_mul(n);
+     let mut palette_bytes = match &lookup_obj {
+         Object::String(s) => s.clone(),
+-        Object::Stream { .. } => lookup_obj.decode_stream_data()?,
++        Object::Stream { .. } => crate::decoders::stream::read_decoded_window(&lookup_obj, expected as u64)?,
+         _ => return Ok(None),
+     };
++    // ── end pdf_manipulator patch ──
+     if palette_bytes.is_empty() {
+         return Ok(None);
+     }
+-
+-    // Truncate palette to the logical length implied by hival so that indices
+-    // greater than hival fall into the out-of-range branch of the expander.
+-    // Per PDF 32000-1:2008 §8.6.6.3 the lookup is exactly (hival + 1) * N bytes;
+-    // anything beyond that is stray data that must not be mapped to pixels.
+-    if let Some(h) = hival {
+-        let expected = (h + 1).saturating_mul(n);
+-        if expected > 0 && palette_bytes.len() > expected {
+-            palette_bytes.truncate(expected);
+-        }
++    if hival.is_some() && expected > 0 && palette_bytes.len() > expected {
++        palette_bytes.truncate(expected);
+     }
+ 
+     // Device-independent colour-space palettes must be converted to
+@@ -2579,7 +2601,7 @@ pub(crate) fn decode_jbig2_stencil(
+ ///
+ /// The decoder pushes its pixels, so the raster cannot be produced a row at a
+ /// time on demand; kept at one bit a pixel it is an eighth of the 8-bit gray
+-/// raster [`decode_jbig2_image`] builds. A row the decoder did not reach stays
++/// raster the whole-image extraction expands it to. A row the decoder did not reach stays
+ /// 0xFF, white.
+ #[cfg(feature = "rendering")]
+ pub(crate) fn decode_jbig2_bits(
+@@ -2671,87 +2693,78 @@ pub(crate) fn decode_jbig2_bits(
+ }
+ // ── end pdf_manipulator patch ──
+ 
+-#[cfg(feature = "rendering")]
+-fn decode_jbig2_image(
+-    xobject: &crate::object::Object,
+-    dict: &std::collections::HashMap<String, crate::object::Object>,
+-    doc: Option<&crate::document::PdfDocument>,
+-    width: u32,
+-    height: u32,
+-) -> Result<ImageData> {
+-    // The Jbig2Decoder in src/decoders/jbig2.rs is a pass-through: it returns
+-    // the raw compressed bitstream unchanged, which is exactly what hayro-jbig2
+-    // needs as input.
+-    // ── pdf_manipulator patch: a stream is its dictionary and an extent that reads itself ──
+-    let jbig2_bytes: Vec<u8> = xobject.decode_stream_data()?;
+-    // ── end pdf_manipulator patch ──
+-
+-    // Load optional JBIG2Globals (shared symbol dictionaries referenced by multiple
+-    // embedded JBIG2 streams in the same PDF).
+-    let globals: Option<Vec<u8>> = (|| -> Option<Vec<u8>> {
+-        let dp = dict.get("DecodeParms")?.as_dict()?;
+-        let globals_ref = dp.get("JBIG2Globals")?.as_reference()?;
+-        let d = doc.as_ref()?;
+-        let globals_obj = d.load_object(globals_ref).ok()?;
+-        // ── pdf_manipulator patch: a stream is its dictionary and an extent that reads itself ──
+-        globals_obj.decode_stream_data()
+-        // ── end pdf_manipulator patch ──
+-            .ok()
+-    })();
+-
+-    let image = hayro_jbig2::Image::new_embedded(&jbig2_bytes, globals.as_deref())
+-        .map_err(|e| Error::Image(format!("JBIG2 decode error: {e}")))?;
+-
+-    struct PixelCollector {
+-        pixels: Vec<u8>,
+-        row_buf: Vec<u8>,
+-    }
+-
+-    impl hayro_jbig2::Decoder for PixelCollector {
+-        fn push_pixel(&mut self, black: bool) {
+-            self.row_buf.push(if black { 0 } else { 255 });
+-        }
+-
+-        // chunk_count is the number of 8-pixel groups, not individual pixels.
+-        fn push_pixel_chunk(&mut self, black: bool, chunk_count: u32) {
+-            let v = if black { 0u8 } else { 255u8 };
+-            let n = chunk_count as usize * 8;
+-            self.row_buf.extend(std::iter::repeat_n(v, n));
+-        }
+-
+-        fn next_line(&mut self) {
+-            self.pixels.append(&mut self.row_buf);
+-        }
+-    }
+-
+-    let mut collector = PixelCollector {
+-        pixels: Vec::with_capacity((width * height) as usize),
+-        row_buf: Vec::with_capacity(width as usize),
+-    };
+-
+-    image
+-        .decode(&mut collector)
+-        .map_err(|e| Error::Image(format!("JBIG2 pixel decode error: {e}")))?;
+-
+-    Ok(ImageData::Raw {
+-        pixels: collector.pixels,
+-        format: PixelFormat::Grayscale,
+-    })
+-}
+-
++// ── pdf_manipulator patch: one JBIG2 decode, kept one bit a pixel and expanded to gray here ──
+ #[cfg(not(feature = "rendering"))]
+-fn decode_jbig2_image(
++pub(crate) fn decode_jbig2_bits(
+     _xobject: &crate::object::Object,
+     _dict: &std::collections::HashMap<String, crate::object::Object>,
+     _doc: Option<&crate::document::PdfDocument>,
+     _width: u32,
+     _height: u32,
+-) -> Result<ImageData> {
++    _apply_decode: bool,
++) -> Result<Vec<u8>> {
+     Err(Error::UnsupportedFilter(
+         "JBIG2Decode — rebuild with the `rendering` feature to decode".to_string(),
+     ))
+ }
+ 
++/// [`decode_jbig2_bits`]' packed rows as one gray byte a pixel, a black pixel
++/// 0 and a white one 255, the form the whole-image extraction stores.
++fn bilevel_to_gray(packed: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
++    let (w, row_bytes) = (width as usize, (width as usize).div_ceil(8));
++    let total = w
++        .checked_mul(height as usize)
++        .ok_or_else(|| Error::Image("JBIG2 raster size overflows".to_string()))?;
++    let mut gray = Vec::new();
++    gray.try_reserve_exact(total)
++        .map_err(|_| Error::Image(format!("Unable to allocate {total} JBIG2 bytes")))?;
++    for row in packed.chunks_exact(row_bytes).take(height as usize) {
++        gray.extend((0..w).map(|x| if (row[x / 8] >> (7 - x % 8)) & 1 == 0 { 0 } else { 255 }));
++    }
++    Ok(gray)
++}
++// ── end pdf_manipulator patch ──
++
++// ── pdf_manipulator patch: a JPEG painted smaller than itself is decoded from its stream ──
++/// A gray or RGB JPEG decoded from its stream through the inverse DCT at the
++/// largest reduction that still holds `painted` samples each way, with the
++/// file never held: its dimensions, samples and the reduced raster.
++/// `PdfImage::to_dynamic_image_covering` makes the same decode from the
++/// file's bytes. `None` when the JPEG needs no reduction, is not gray or RGB,
++/// or cannot be read, so that the caller keeps the file and decodes as it
++/// always has.
++fn decode_dct_covering(
++    xobject: &crate::object::Object,
++    painted: (u32, u32),
++    color_space: &ColorSpace,
++) -> Result<Option<(Vec<u8>, PixelFormat, u32, u32)>> {
++    if color_space.components() == 4 {
++        return Ok(None);
++    }
++    let clamp = |v: u32| u16::try_from(v).unwrap_or(u16::MAX).max(1);
++    let source = std::io::BufReader::with_capacity(64 * 1024, crate::decoders::stream::decoded_reader(xobject)?);
++    let mut decoder = jpeg_decoder::Decoder::new(source);
++    if decoder.read_info().is_err() {
++        return Ok(None);
++    }
++    let Some(info) = decoder.info() else { return Ok(None) };
++    let format = match info.pixel_format {
++        jpeg_decoder::PixelFormat::L8 => PixelFormat::Grayscale,
++        jpeg_decoder::PixelFormat::RGB24 => PixelFormat::RGB,
++        _ => return Ok(None),
++    };
++    let full = (info.width, info.height);
++    let (w, h) = decoder
++        .scale(clamp(painted.0), clamp(painted.1))
++        .map_err(|e| Error::Decode(format!("Failed to scale JPEG: {e}")))?;
++    if (w, h) == full {
++        return Ok(None);
++    }
++    let pixels = decoder.decode().map_err(|e| Error::Decode(format!("Failed to decode JPEG: {e}")))?;
++    Ok(Some((pixels, format, u32::from(w), u32::from(h))))
++}
++// ── end pdf_manipulator patch ──
++
+ /// Decode a JPEG 2000 (`/JPXDecode`) image stream into raw interleaved samples.
+ ///
+ /// `JpxDecoder` is a pass-through, so `decode_stream_*` yields the raw JPEG 2000
+diff --git a/src/fonts/font_dict.rs b/src/fonts/font_dict.rs
+index a302439..2a5ea4b 100644
+--- a/src/fonts/font_dict.rs
++++ b/src/fonts/font_dict.rs
+@@ -1769,8 +1769,8 @@ impl FontInfo {
+                         // Handle Stream object (binary uint16 array)
+                         match doc.load_object(stream_ref) {
+                             Ok(stream_obj) => {
+-                                // ── pdf_manipulator patch: a stream is its dictionary and an extent that reads itself ──
+-                                match stream_obj.decode_stream_data() {
++                                // ── pdf_manipulator patch: the map is read to its 65,536 entries, 2 bytes each ──
++                                match crate::decoders::stream::read_decoded_window(&stream_obj, 131_072) {
+                                 // ── end pdf_manipulator patch ──
+                                     Ok(stream_data) => {
+                                         // Validate stream length (must be even)
+diff --git a/src/host/engine_proofs/builder_image_stream.rs b/src/host/engine_proofs/builder_image_stream.rs
+index 9d6d4bd..8795200 100644
+--- a/src/host/engine_proofs/builder_image_stream.rs
++++ b/src/host/engine_proofs/builder_image_stream.rs
+@@ -796,3 +796,154 @@ fn the_save_of_a_jpeg_polls_for_a_cancel_at_every_piece() {
+     assert_eq!(answer[0], 0, "the save was cancelled");
+     assert!(tripping.polls() <= 4 + 2, "{} polls after the cancel", tripping.polls());
+ }
++
++// ── Interlaced PNG ───────────────────────────────────────────────────────
++
++/// The Adam7 passes: x offset, y offset, x step, y step.
++const ADAM7: [(u32, u32, u32, u32); 7] =
++    [(0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)];
++
++/// The interlaced PNG of `spec`: noise in every pass, written chunk by chunk
++/// because the encoder in use writes no interlaced images. A pass that no
++/// pixel of a small image falls in has no rows. Each row carries the filter
++/// `y % 5`, so the unfiltering of a pass is exercised too: the filtered bytes
++/// are what the decoder would unfilter, and noise is its own reconstruction,
++/// so the row written is the raw row filtered by `filter`.
++fn interlaced_png(spec: &PngSpec) -> Vec<u8> {
++    let samples = match spec.color {
++        png::ColorType::Grayscale | png::ColorType::Indexed => 1,
++        png::ColorType::GrayscaleAlpha => 2,
++        png::ColorType::Rgb => 3,
++        png::ColorType::Rgba => 4,
++    };
++    let bits_per_pixel = samples * spec.depth as usize;
++    let bpp = bits_per_pixel.div_ceil(8);
++    let mut scanlines = Vec::new();
++    for (pass, (x0, y0, dx, dy)) in ADAM7.into_iter().enumerate() {
++        if x0 >= spec.width || y0 >= spec.height {
++            continue;
++        }
++        let pass_w = (spec.width + dx - 1 - x0) / dx;
++        let pass_h = (spec.height + dy - 1 - y0) / dy;
++        let row_bytes = (pass_w as usize * bits_per_pixel).div_ceil(8);
++        let mut above = vec![0u8; row_bytes];
++        for line in 0..pass_h {
++            let raw = noise_row(3 + pass as u64, line, row_bytes);
++            let filter = (line % 5) as u8;
++            scanlines.push(filter);
++            for (i, &x) in raw.iter().enumerate() {
++                let left = if i >= bpp { raw[i - bpp] } else { 0 };
++                let up = above[i];
++                let up_left = if i >= bpp { above[i - bpp] } else { 0 };
++                scanlines.push(match filter {
++                    0 => x,
++                    1 => x.wrapping_sub(left),
++                    2 => x.wrapping_sub(up),
++                    3 => x.wrapping_sub(((u16::from(left) + u16::from(up)) / 2) as u8),
++                    _ => {
++                        let p = i16::from(left) + i16::from(up) - i16::from(up_left);
++                        let (pa, pb, pc) =
++                            ((p - i16::from(left)).abs(), (p - i16::from(up)).abs(), (p - i16::from(up_left)).abs());
++                        let paeth = if pa <= pb && pa <= pc { left } else if pb <= pc { up } else { up_left };
++                        x.wrapping_sub(paeth)
++                    },
++                });
++            }
++            above = raw;
++        }
++    }
++    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
++    encoder.write_all(&scanlines).unwrap();
++    let compressed = encoder.finish().unwrap();
++
++    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
++    let mut chunk = |kind: &[u8; 4], data: &[u8]| {
++        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
++        out.extend_from_slice(kind);
++        out.extend_from_slice(data);
++        let mut crc = crc32fast::Hasher::new();
++        crc.update(kind);
++        crc.update(data);
++        out.extend_from_slice(&crc.finalize().to_be_bytes());
++    };
++    let colour_type = match spec.color {
++        png::ColorType::Grayscale => 0,
++        png::ColorType::Rgb => 2,
++        png::ColorType::Indexed => 3,
++        png::ColorType::GrayscaleAlpha => 4,
++        png::ColorType::Rgba => 6,
++    };
++    let mut header = Vec::new();
++    header.extend_from_slice(&spec.width.to_be_bytes());
++    header.extend_from_slice(&spec.height.to_be_bytes());
++    header.extend_from_slice(&[spec.depth as u8, colour_type, 0, 0, 1]);
++    chunk(b"IHDR", &header);
++    if let Some(palette) = &spec.palette {
++        chunk(b"PLTE", palette);
++    }
++    if let Some(trns) = &spec.trns {
++        chunk(b"tRNS", trns);
++    }
++    // Two IDATs, so a pass can begin and end inside a chunk and across one.
++    let (first, second) = compressed.split_at(compressed.len() / 3);
++    chunk(b"IDAT", first);
++    chunk(b"IDAT", second);
++    chunk(b"IEND", &[]);
++    out
++}
++
++/// An interlaced PNG embeds the pixels and the alpha that today's whole read
++/// of it gives, in every colour type and depth, in sizes that leave a pass
++/// without a pixel, a pass of one pixel and a row narrower than a byte. No
++/// Dart battery sees it: it compares two engine paths, the one that decodes
++/// the passes in step and the whole-image one that only the Rust builder API
++/// still takes.
++#[test]
++fn an_interlaced_png_of_each_colour_type_embeds_the_pixels_and_the_alpha_of_todays_path() {
++    for (name, mut spec) in spec_set() {
++        for (width, height) in [(37, 29), (1, 1), (3, 2), (8, 8), (9, 17), (1, 40)] {
++            spec.width = width;
++            spec.height = height;
++            let png = interlaced_png(&spec);
++            let reference = images_of(&today(&png, width, height));
++            let (saved, _, dropped) = through_ops(&png);
++            let streamed = images_of(&saved);
++            let what = format!("{name} {width}x{height}");
++            assert_eq!(streamed.len(), 1, "{what}: one image");
++            let (got, want) = (&streamed[0], &reference[0]);
++            assert_eq!(got.description, want.description, "{what}: the same description");
++            assert!(got.decoded == want.decoded, "{what}: the same pixels");
++            match (&got.mask, &want.mask) {
++                (None, None) => {},
++                (Some(got), Some(want)) => {
++                    assert_eq!(got.description, want.description, "{what}: the same mask description");
++                    assert!(got.decoded == want.decoded, "{what}: the same alpha");
++                },
++                _ => panic!("{what}: the soft mask differs from today's"),
++            }
++            assert!(dropped, "{what}: the source is released after the save");
++        }
++    }
++}
++
++/// An interlaced PNG of noise of 16 MiB embeds in the memory one of 8 MiB
++/// does: the passes are read in step a row at a time, whatever the height,
++/// and the image is not read whole. The seven decoders cost a few hundred KiB
++/// each, a floor that the first rows of a short image do not yet reach, so
++/// both heights are above it. No Dart battery sees it: the engine's heap is
++/// not on the wire, and tool/memprobe measures the process, not one op on one
++/// thread.
++#[test]
++fn an_interlaced_png_embeds_in_memory_that_does_not_grow_with_its_height() {
++    let write = |name: &str, height: u32| {
++        let scratch = Scratch::new(name);
++        let spec = PngSpec::new(1024, height, png::ColorType::Rgba, png::BitDepth::Eight);
++        std::fs::write(&scratch.0, interlaced_png(&spec)).unwrap();
++        scratch
++    };
++    let (short, tall) = (write("short-adam7.png", 2048), write("tall-adam7.png", 4096));
++    let (a, b) = (peak_of_embedding(&short, "interlaced png"), peak_of_embedding(&tall, "interlaced png"));
++    assert!(tall.len() > 16 * MIB, "the tall image is {} bytes", tall.len());
++    assert!(b < 3 * MIB, "a {} byte interlaced PNG took {b} bytes to embed", tall.len());
++    assert!(b <= a + 256 * KIB, "{b} bytes for 4096 rows against {a} for 2048");
++}
+diff --git a/src/host/engine_proofs/extract_jbig2_gray.rs b/src/host/engine_proofs/extract_jbig2_gray.rs
+new file mode 100644
+index 0000000..3532987
+--- /dev/null
++++ b/src/host/engine_proofs/extract_jbig2_gray.rs
+@@ -0,0 +1,49 @@
++//! A JBIG2 image extracted whole is the 8-bit gray raster of its bitmap.
++
++use super::band_proof::{bilevel, jbig2};
++use super::support::{pdf_from_objects, stream_object};
++use crate::document::PdfDocument;
++use crate::extractors::{extract_image_from_xobject, ImageData, PixelFormat};
++use crate::object::ObjectRef;
++
++fn extracted(extra: &str, picture: &[Vec<bool>]) -> (Vec<u8>, bool, u8) {
++    let doc = PdfDocument::from_bytes(pdf_from_objects(&[
++        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n".to_vec(),
++        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n".to_vec(),
++        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>\nendobj\n".to_vec(),
++        stream_object(
++            4,
++            &format!(
++                "/Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceGray \
++                 /BitsPerComponent 1 /Filter /JBIG2Decode {extra}",
++                picture[0].len(),
++                picture.len()
++            ),
++            &jbig2(picture),
++        ),
++    ]))
++    .unwrap();
++    let object = doc.load_object(ObjectRef::new(4, 0)).unwrap();
++    let image = extract_image_from_xobject(Some(&doc), &object, None, None).unwrap();
++    let ImageData::Raw { pixels, format } = image.data() else { panic!("JBIG2 decodes to raw samples") };
++    assert_eq!(*format, PixelFormat::Grayscale);
++    (pixels.clone(), image.samples_are_raw(), image.bits_per_component())
++}
++
++/// The whole-image path gives one byte a pixel, black 0 and white 255, the
++/// other way about under `/Decode [1 0]`, and says its samples are not the
++/// stream's own bits. No Dart battery can observe this: Dart extracts the
++/// image through the row cursor, and only the library's whole-image call
++/// hands out this raster.
++#[test]
++fn a_jbig2_image_extracted_whole_is_its_bitmap_as_8_bit_gray() {
++    let picture = bilevel(64, 48);
++    let expected: Vec<u8> = picture.iter().flatten().map(|&black| if black { 0 } else { 255 }).collect();
++    let (plain, raw, bits) = extracted("", &picture);
++    assert!(plain == expected, "the bitmap as gray bytes");
++    assert!(!raw);
++    assert_eq!(bits, 8);
++    let (inverted, _, _) = extracted("/Decode [1 0]", &picture);
++    let negative: Vec<u8> = expected.iter().map(|b| !b).collect();
++    assert!(inverted == negative, "the bitmap as gray bytes under /Decode [1 0]");
++}
+diff --git a/src/host/engine_proofs/extract_jpeg_window.rs b/src/host/engine_proofs/extract_jpeg_window.rs
+new file mode 100644
+index 0000000..55a56c8
+--- /dev/null
++++ b/src/host/engine_proofs/extract_jpeg_window.rs
+@@ -0,0 +1,98 @@
++//! A JPEG painted smaller than itself is decoded from its stream, not from a copy of its file.
++
++use super::filter_readers::thread_growth;
++use super::support::{pdf_from_objects, stream_object};
++use crate::document::PdfDocument;
++use crate::extractors::images::extract_image_from_xobject_at;
++use crate::extractors::{ColorSpace, ImageData, PdfImage};
++use crate::object::ObjectRef;
++
++fn noise_jpeg(color: jpeg_encoder::ColorType, width: u16, height: u16, quality: u8) -> Vec<u8> {
++    let bytes = match color {
++        jpeg_encoder::ColorType::Luma => 1,
++        _ => 3,
++    };
++    let mut state = 0x9E37_79B9_7F4A_7C15u64;
++    let pixels: Vec<u8> = (0..width as usize * height as usize * bytes)
++        .map(|_| {
++            state ^= state << 13;
++            state ^= state >> 7;
++            state ^= state << 17;
++            (state >> 24) as u8
++        })
++        .collect();
++    let mut out = Vec::new();
++    jpeg_encoder::Encoder::new(&mut out, quality).encode(&pixels, width, height, color).unwrap();
++    out
++}
++
++fn document(space: &str, width: u16, height: u16, jpeg: &[u8]) -> PdfDocument {
++    PdfDocument::from_bytes(pdf_from_objects(&[
++        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n".to_vec(),
++        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n".to_vec(),
++        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>\nendobj\n".to_vec(),
++        stream_object(
++            4,
++            &format!(
++                "/Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace {space} \
++                 /BitsPerComponent 8 /Filter /DCTDecode"
++            ),
++            jpeg,
++        ),
++    ]))
++    .unwrap()
++}
++
++/// What the whole bytes of the file give at `target`: the decode this change
++/// moved onto the stream.
++fn from_bytes(space: ColorSpace, width: u16, height: u16, jpeg: &[u8], target: (u32, u32)) -> image::DynamicImage {
++    PdfImage::new(u32::from(width), u32::from(height), space, 8, ImageData::Jpeg(jpeg.to_vec()))
++        .to_dynamic_image_covering(Some(target))
++        .unwrap()
++}
++
++fn from_stream(doc: &PdfDocument, target: Option<(u32, u32)>) -> (image::DynamicImage, bool) {
++    let object = doc.load_object(ObjectRef::new(4, 0)).unwrap();
++    let image = extract_image_from_xobject_at(Some(doc), &object, None, None, target).unwrap();
++    let held = matches!(image.data(), ImageData::Jpeg(_));
++    (image.to_dynamic_image_covering(target).unwrap(), held)
++}
++
++/// A gray and an RGB JPEG painted at an eighth, a quarter, and one size that
++/// asks for no reduction decode to the pixels the file's bytes give, and
++/// the extraction keeps the file only where the decode needs it whole. No
++/// Dart battery can observe this: the picture is the same either way.
++#[test]
++fn a_jpeg_decodes_at_its_target_to_the_pixels_of_its_bytes() {
++    for (name, color, space, doc_space) in [
++        ("gray", jpeg_encoder::ColorType::Luma, ColorSpace::DeviceGray, "/DeviceGray"),
++        ("rgb", jpeg_encoder::ColorType::Rgb, ColorSpace::DeviceRGB, "/DeviceRGB"),
++    ] {
++        let jpeg = noise_jpeg(color, 192, 128, 90);
++        let doc = document(doc_space, 192, 128, &jpeg);
++        for target in [(24, 16), (48, 32), (96, 64), (192, 128), (400, 300)] {
++            let (got, held) = from_stream(&doc, Some(target));
++            let want = from_bytes(space, 192, 128, &jpeg, target);
++            assert!(got.as_bytes() == want.as_bytes(), "{name} at {target:?}: the pixels");
++            assert_eq!((got.width(), got.height()), (want.width(), want.height()), "{name} at {target:?}");
++            assert_eq!(held, target.0 >= 192, "{name} at {target:?}: whether the file is kept");
++        }
++        let (whole, held) = from_stream(&doc, None);
++        assert!(held, "{name}: without a target the file is the image");
++        assert!(whole.as_bytes() == from_bytes(space, 192, 128, &jpeg, (192, 128)).as_bytes());
++    }
++}
++
++/// A JPEG of 14 MiB painted at an eighth of its size is decoded with the
++/// thread growing by the raster and the decoder's rows, not by the file. No
++/// Dart battery can observe this: the picture is the same either way, and
++/// what differs is a copy of the file held for the length of the call.
++#[test]
++fn a_jpeg_painted_smaller_is_not_held_as_a_file() {
++    let jpeg = noise_jpeg(jpeg_encoder::ColorType::Rgb, 2048, 1536, 100);
++    assert!(jpeg.len() > 12 * 1024 * 1024, "the fixture is {} bytes", jpeg.len());
++    let doc = document("/DeviceRGB", 2048, 1536, &jpeg);
++    let ((_, held), growth) = thread_growth(|| from_stream(&doc, Some((256, 192))));
++    assert!(!held);
++    assert!(growth < 4 * 1024 * 1024, "decoding a {} byte JPEG at an eighth grew the thread by {growth} bytes", jpeg.len());
++}
+diff --git a/src/host/engine_proofs/mem_bounded_tables.rs b/src/host/engine_proofs/mem_bounded_tables.rs
+new file mode 100644
+index 0000000..47cd8b4
+--- /dev/null
++++ b/src/host/engine_proofs/mem_bounded_tables.rs
+@@ -0,0 +1,180 @@
++//! Tables the spec sizes are read to that size, whatever the stream holds past it.
++
++use super::filter_readers::thread_growth;
++use super::support::{pdf_from_objects, stream_object};
++use crate::document::PdfDocument;
++use crate::extractors::{extract_image_from_xobject, ImageData};
++use crate::fonts::font_dict::{CIDToGIDMap, FontInfo};
++use crate::object::{Object, ObjectRef};
++use std::collections::HashMap;
++use std::io::Write;
++
++/// Bytes past the declared end of each table.
++const STRAY: usize = 48 * 1024 * 1024;
++/// What reading a table to its declared end may grow a thread by; a whole read
++/// of the stream is `STRAY` and more.
++const BOUND: usize = 8 * 1024 * 1024;
++
++/// `head`, then `STRAY` zero bytes, Flate-coded block by block as generated.
++fn flate_with_stray_tail(head: &[u8]) -> Vec<u8> {
++    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
++    encoder.write_all(head).unwrap();
++    let block = vec![0u8; 64 * 1024];
++    for _ in 0..STRAY / block.len() {
++        encoder.write_all(&block).unwrap();
++    }
++    encoder.finish().unwrap()
++}
++
++/// A catalog, one page and `extra` as objects 4 and up.
++fn document(extra: Vec<Vec<u8>>) -> PdfDocument {
++    let mut objects = vec![
++        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n".to_vec(),
++        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n".to_vec(),
++        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>\nendobj\n".to_vec(),
++    ];
++    objects.extend(extra);
++    PdfDocument::from_bytes(pdf_from_objects(&objects)).unwrap()
++}
++
++const PALETTE: [u8; 12] = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120];
++
++/// Four index samples over a four-entry RGB palette; the lookup is object 5.
++fn indexed_image_document(lookup: &[u8], filter: &str) -> PdfDocument {
++    document(vec![
++        stream_object(
++            4,
++            "/Type /XObject /Subtype /Image /Width 2 /Height 2 /BitsPerComponent 8 \
++             /ColorSpace [/Indexed /DeviceRGB 3 5 0 R]",
++            &[0, 1, 2, 3],
++        ),
++        stream_object(5, filter, lookup),
++    ])
++}
++
++fn pixels_of(doc: &PdfDocument) -> Vec<u8> {
++    let image = doc.load_object(ObjectRef::new(4, 0)).unwrap();
++    let image = extract_image_from_xobject(Some(doc), &image, None, None).unwrap();
++    match image.data() {
++        ImageData::Raw { pixels, .. } => pixels.clone(),
++        ImageData::Jpeg(_) => panic!("an Indexed image of raw samples is raw"),
++    }
++}
++
++/// An image whose lookup stream holds 48 MiB past its `(hival + 1) * N` bytes
++/// gets the pixels the exact lookup gives, and the palette is not read past
++/// its end. No Dart battery can observe this: the picture is the same either
++/// way, and what differs is a buffer held for the length of the call.
++#[test]
++fn an_indexed_image_palette_is_read_to_its_declared_length() {
++    let exact = pixels_of(&indexed_image_document(&PALETTE, ""));
++    assert_eq!(exact, PALETTE);
++    let doc = indexed_image_document(&flate_with_stray_tail(&PALETTE), "/Filter /FlateDecode");
++    let (pixels, growth) = thread_growth(|| pixels_of(&doc));
++    assert_eq!(pixels, exact);
++    assert!(growth < BOUND, "reading a palette of 12 bytes grew the thread by {growth} bytes");
++}
++
++#[cfg(feature = "rendering")]
++/// A colour painted in an Indexed space whose lookup stream holds 48 MiB past
++/// its declared end is the entry the exact lookup gives, with the thread
++/// growing by a table's length, not the stream's. No Dart battery can observe
++/// this: the colour is the same either way, and what differs is a buffer held
++/// for the length of the call.
++#[test]
++fn an_indexed_paint_palette_is_read_to_its_declared_length() {
++    use crate::rendering::resolution::color::ColorResolver;
++    use crate::rendering::resolution::{LogicalColor, ResolutionContext, ResolvedColor};
++    let space = Object::Array(vec![
++        Object::Name("Indexed".into()),
++        Object::Name("DeviceRGB".into()),
++        Object::Integer(3),
++        Object::Reference(ObjectRef::new(4, 0)),
++    ]);
++    let paint = |doc: &PdfDocument| {
++        let color_spaces = HashMap::new();
++        let ctx = ResolutionContext::new(doc, &color_spaces);
++        let color = LogicalColor::Spaced { space: &space, components: smallvec::smallvec![2.0] };
++        match ColorResolver.resolve(&color, &ctx, 1.0).unwrap() {
++            ResolvedColor::Rgba { r, g, b, .. } => [r, g, b],
++            other => panic!("an RGB palette entry paints as RGB, got {other:?}"),
++        }
++    };
++    let exact = paint(&document(vec![stream_object(4, "", &PALETTE)]));
++    assert_eq!(exact, [70.0 / 255.0, 80.0 / 255.0, 90.0 / 255.0]);
++    let doc = document(vec![stream_object(4, "/Filter /FlateDecode", &flate_with_stray_tail(&PALETTE))]);
++    let (color, growth) = thread_growth(|| paint(&doc));
++    assert_eq!(color, exact);
++    assert!(growth < BOUND, "reading a palette of 12 bytes grew the thread by {growth} bytes");
++}
++
++/// A `CIDToGIDMap` stream that holds 48 MiB past its 65,536 entries maps every
++/// CID as the exact stream does, and the font is read with the thread growing
++/// by the map, not the stream. No Dart battery can observe this: text shows
++/// the same glyphs either way, and what differs is a buffer held for the
++/// length of the call.
++#[test]
++fn a_cid_to_gid_map_is_read_to_65536_entries() {
++    let map: Vec<u8> = (0..=u16::MAX).flat_map(|cid| cid.wrapping_mul(7).to_be_bytes()).collect();
++    assert_eq!(map.len(), 131_072);
++    let font = |filter: &str, data: &[u8]| {
++        let doc = document(vec![
++            b"4 0 obj\n<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Probe \
++              /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> \
++              /CIDToGIDMap 5 0 R >>\nendobj\n"
++                .to_vec(),
++            stream_object(5, filter, data),
++        ]);
++        let type0 = Object::Dictionary(HashMap::from([
++            ("Type".to_string(), Object::Name("Font".into())),
++            ("Subtype".to_string(), Object::Name("Type0".into())),
++            ("BaseFont".to_string(), Object::Name("Probe".into())),
++            ("Encoding".to_string(), Object::Name("Identity-H".into())),
++            ("DescendantFonts".to_string(), Object::Array(vec![Object::Reference(ObjectRef::new(4, 0))])),
++        ]));
++        thread_growth(|| FontInfo::from_dict(&type0, &doc).unwrap().cid_to_gid_map)
++    };
++    let (exact, _) = font("", &map);
++    let Some(CIDToGIDMap::Explicit(exact)) = exact else { panic!("an explicit map, got {exact:?}") };
++    assert_eq!(exact.len(), 65_536);
++    let (stray, growth) = font("/Filter /FlateDecode", &flate_with_stray_tail(&map));
++    let Some(CIDToGIDMap::Explicit(stray)) = stray else { panic!("an explicit map, got {stray:?}") };
++    assert!(growth < BOUND, "reading a map of 65,536 entries grew the thread by {growth} bytes");
++    assert_eq!(stray.len(), exact.len(), "entries past CID 65535");
++    assert!(stray == exact, "the entries of the exact stream");
++}
++
++/// A raw-sample image whose stream holds 48 MiB past the `/Height` rows it
++/// declares gives the pixels the exact stream gives, 8 and 16 bits a sample,
++/// with the thread growing by the image, not by the stream. No Dart battery
++/// can observe this: the picture is the same either way, and what differs is
++/// a buffer held for the length of the call.
++#[test]
++fn a_raw_image_is_read_to_its_declared_rows() {
++    for (depth, row) in [(8, 4usize * 3), (16, 4 * 3 * 2), (1, 1)] {
++        let samples: Vec<u8> = (0..row * 4).map(|i| (i * 37 % 251) as u8).collect();
++        let space = if depth == 1 { "/DeviceGray" } else { "/DeviceRGB" };
++        let image = |filter: &str, data: &[u8]| {
++            document(vec![stream_object(
++                4,
++                &format!(
++                    "/Type /XObject /Subtype /Image /Width 4 /Height 4 /BitsPerComponent {depth} \
++                     /ColorSpace {space} {filter}"
++                ),
++                data,
++            )])
++        };
++        let picture = |doc: &PdfDocument| {
++            let object = doc.load_object(ObjectRef::new(4, 0)).unwrap();
++            let image = extract_image_from_xobject(Some(doc), &object, None, None).unwrap();
++            (image.to_dynamic_image().unwrap().to_rgba8().into_raw(), pixels_of(doc))
++        };
++        let (exact_picture, exact) = picture(&image("", &samples));
++        let doc = image("/Filter /FlateDecode", &flate_with_stray_tail(&samples));
++        let ((stray_picture, pixels), growth) = thread_growth(|| picture(&doc));
++        assert!(stray_picture == exact_picture, "{depth} bits: the picture");
++        assert!(growth < BOUND, "{depth} bits: reading a {} byte image grew the thread by {growth} bytes", samples.len());
++        assert_eq!(pixels.len(), exact.len(), "{depth} bits: the samples held");
++        assert!(pixels == exact, "{depth} bits: the samples held");
++    }
++}
+diff --git a/src/host/engine_proofs/mem_pdfa_xmp.rs b/src/host/engine_proofs/mem_pdfa_xmp.rs
+new file mode 100644
+index 0000000..737c424
+--- /dev/null
++++ b/src/host/engine_proofs/mem_pdfa_xmp.rs
+@@ -0,0 +1,112 @@
++//! The PDF/A identification is spliced into the XMP packet as it is read.
++
++use super::filter_readers::thread_growth;
++use super::support::{open_editor_from_bytes, pdf_from_objects, stream_object};
++use crate::compliance::{ConversionResult, PdfAConverter, PdfALevel};
++use crate::compliance::types::ValidationResult;
++use crate::object::Object;
++use std::io::Write;
++
++const HEAD: &str = "<?xpacket begin='x' id='W5M0MpCehiHzreSzNTczkc9d'?>\n<x:xmpmeta xmlns:x='adobe:ns:meta/'>\n\
++                    <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>\n\
++                    <rdf:Description xmlns:pdf='http://ns.adobe.com/pdf/1.3/'>\n";
++const TAIL: &str = "</rdf:Description>\n</rdf:RDF>\n</x:xmpmeta>\n<?xpacket end='w'?>";
++const LINE: &str = "<pdf:Producer>probe</pdf:Producer>\n";
++/// What the identification adds before the closing `</rdf:RDF>`.
++const BLOCK: &str = "    <rdf:Description rdf:about=\"\" xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\">\n\
++      <pdfaid:part>2</pdfaid:part>\n\
++      <pdfaid:conformance>B</pdfaid:conformance>\n\
++    </rdf:Description>\n";
++
++fn packet(lines: usize) -> Vec<u8> {
++    format!("{HEAD}{}{TAIL}", LINE.repeat(lines)).into_bytes()
++}
++
++/// The document with `body` as its metadata stream under `dict`.
++fn document(dict: &str, body: &[u8]) -> Vec<u8> {
++    pdf_from_objects(&[
++        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R /Metadata 4 0 R >>\nendobj\n".to_vec(),
++        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n".to_vec(),
++        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>\nendobj\n".to_vec(),
++        stream_object(4, &format!("/Type /Metadata /Subtype /XML {dict}"), body),
++    ])
++}
++
++fn flate(bytes: &[u8]) -> Vec<u8> {
++    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
++    encoder.write_all(bytes).unwrap();
++    encoder.finish().unwrap()
++}
++
++/// The packet the staged metadata stream holds, and what it grew the thread by.
++fn identified(file: &[u8]) -> (Vec<u8>, usize) {
++    let mut editor = open_editor_from_bytes(file, "pdfa_xmp");
++    let converter = PdfAConverter::new(PdfALevel::A2b);
++    let mut result = ConversionResult {
++        success: false,
++        level: PdfALevel::A2b,
++        validation: ValidationResult::new(PdfALevel::A2b),
++        actions: Vec::new(),
++        errors: Vec::new(),
++    };
++    let (done, growth) = thread_growth(|| converter.add_pdfa_identification(&mut editor, &mut result));
++    done.unwrap();
++    // A rebuilt packet is a new object the staged catalog points at.
++    let id = match editor.get_modified(1) {
++        Some(Object::Dictionary(catalog)) => catalog.get("Metadata").and_then(Object::as_reference).map_or(4, |r| r.id),
++        _ => 4,
++    };
++    let Some(Object::Stream { dict, body }) = editor.get_modified(id) else { panic!("a staged stream") };
++    assert!(dict.get("Filter").is_none(), "PDF/A wants a plain packet");
++    (body.inline().expect("the staged packet is held in memory").to_vec(), growth)
++}
++
++/// The packet gains the identification block before its last `</rdf:RDF>`
++/// and nothing else, Flate-coded or plain, and a packet with no RDF root is
++/// rebuilt instead. No Dart battery can observe this: the validator reads the
++/// identification the same however the packet was rewritten, and the bytes
++/// around the block are not read back by anything but this proof.
++#[test]
++fn the_identification_is_spliced_before_the_last_rdf_close() {
++    let plain = packet(3);
++    let expected = format!(
++        "{HEAD}{}</rdf:Description>\n{BLOCK}</rdf:RDF>\n</x:xmpmeta>\n<?xpacket end='w'?>",
++        LINE.repeat(3)
++    );
++    for (what, file) in [
++        ("plain", document("", &plain)),
++        ("flate", document("/Filter /FlateDecode", &flate(&plain))),
++    ] {
++        let (got, _) = identified(&file);
++        assert_eq!(String::from_utf8(got).unwrap(), expected, "{what}");
++    }
++    let (rebuilt, _) = identified(&document("", b"<html>not xmp</html>"));
++    assert!(String::from_utf8(rebuilt).unwrap().contains("<pdfaid:part>2</pdfaid:part>"));
++}
++
++/// A packet of 64 MiB is identified with the thread growing by the patched
++/// packet (the stream the editor stages), not by the decoded text, a lossy
++/// copy of it and the patched text beside it. No Dart battery can observe
++/// this: the conversion's own commit holds the saved file, which dominates
++/// its peak, so only the staging step measured alone shows these copies.
++#[test]
++fn a_64_mib_packet_is_identified_without_holding_it_as_text() {
++    let lines = 64 * 1024 * 1024 / LINE.len();
++    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
++    encoder.write_all(HEAD.as_bytes()).unwrap();
++    let block = LINE.repeat(64 * 1024 / LINE.len());
++    for _ in 0..lines / (64 * 1024 / LINE.len()) {
++        encoder.write_all(block.as_bytes()).unwrap();
++    }
++    encoder.write_all(TAIL.as_bytes()).unwrap();
++    let file = document("/Filter /FlateDecode", &encoder.finish().unwrap());
++    let (got, growth) = identified(&file);
++    let size = got.len();
++    assert!(size > 60 * 1024 * 1024, "the whole packet is kept: {size}");
++    assert!(got.ends_with(b"</rdf:RDF>\n</x:xmpmeta>\n<?xpacket end='w'?>"));
++    // The patched packet itself is held once; a copy of it is not.
++    assert!(
++        growth < size + 16 * 1024 * 1024,
++        "identifying a {size} byte packet grew the thread by {growth} bytes"
++    );
++}
+diff --git a/src/host/engine_proofs/mod.rs b/src/host/engine_proofs/mod.rs
+index b739975..a13cfff 100644
+--- a/src/host/engine_proofs/mod.rs
++++ b/src/host/engine_proofs/mod.rs
+@@ -41,6 +41,10 @@ mod filter_readers;
+ #[cfg(feature = "rendering")]
+ mod extract_1bit;
+ #[cfg(feature = "rendering")]
++mod extract_jbig2_gray;
++#[cfg(feature = "rendering")]
++mod extract_jpeg_window;
++#[cfg(feature = "rendering")]
+ mod extract_proof;
+ #[cfg(feature = "rendering")]
+ mod fax_proof;
+@@ -61,6 +65,7 @@ mod editor_save;
+ mod kept_encryption;
+ mod legacy_decoders;
+ mod lzw;
++mod mem_bounded_tables;
+ mod mem_caps;
+ mod mem_cmap;
+ mod mem_declared;
+@@ -69,6 +74,8 @@ mod mem_fixture;
+ mod mem_fonts;
+ mod mem_incremental;
+ mod mem_page_text;
++#[cfg(feature = "pdfa")]
++mod mem_pdfa_xmp;
+ mod mem_structure;
+ mod mem_xfa;
+ mod mem_xmp;
+@@ -133,6 +140,8 @@ mod text_tj_chunks;
+ #[cfg(feature = "rendering")]
+ mod watermark_positions;
+ mod whole_reads;
++#[cfg(all(feature = "signatures", feature = "tsa-client"))]
++mod tsa_reply_cap;
+ #[cfg(feature = "rendering")]
+ mod redact_extra_type3;
+ #[cfg(feature = "rendering")]
+diff --git a/src/host/engine_proofs/tsa_reply_cap.rs b/src/host/engine_proofs/tsa_reply_cap.rs
+new file mode 100644
+index 0000000..1247afc
+--- /dev/null
++++ b/src/host/engine_proofs/tsa_reply_cap.rs
+@@ -0,0 +1,71 @@
++//! A timestamp server's reply is read up to a fixed window.
++
++use crate::signatures::HashAlgorithm;
++use crate::signatures::{TsaClient, TsaClientConfig};
++use std::io::{Read, Write};
++use std::net::TcpListener;
++
++/// Serves one HTTP reply of `len` zero bytes and returns the client's error.
++fn error_for_reply_of(len: usize) -> String {
++    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
++    let url = format!("http://{}/tsr", listener.local_addr().unwrap());
++    let server = std::thread::spawn(move || {
++        let (mut conn, _) = listener.accept().unwrap();
++        // The whole request is read before the reply: a server that closes on
++        // unread bytes resets the connection under the reply it just sent.
++        let mut request = Vec::new();
++        let mut piece = [0u8; 4096];
++        let body_at = loop {
++            let n = conn.read(&mut piece).unwrap();
++            request.extend_from_slice(&piece[..n]);
++            if let Some(at) = request.windows(4).position(|w| w == b"\r\n\r\n") {
++                break at + 4;
++            }
++            assert!(n > 0, "the request ended inside its head");
++        };
++        let head = String::from_utf8_lossy(&request[..body_at]).to_ascii_lowercase();
++        let wanted: usize = head
++            .lines()
++            .find_map(|l| l.strip_prefix("content-length:"))
++            .map(|v| v.trim().parse().unwrap())
++            .unwrap_or(0);
++        while request.len() < body_at + wanted {
++            let n = conn.read(&mut piece).unwrap();
++            assert!(n > 0, "the request ended inside its body");
++            request.extend_from_slice(&piece[..n]);
++        }
++        let header = format!(
++            "HTTP/1.1 200 OK\r\nContent-Type: application/timestamp-reply\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n"
++        );
++        conn.write_all(header.as_bytes()).unwrap();
++        let chunk = vec![0u8; 64 * 1024];
++        let mut left = len;
++        while left > 0 {
++            let n = left.min(chunk.len());
++            if conn.write_all(&chunk[..n]).is_err() {
++                break;
++            }
++            left -= n;
++        }
++    });
++    let client = TsaClient::new(TsaClientConfig::new(url));
++    let err = client
++        .request_timestamp_hash(&[0xAB; 32], HashAlgorithm::Sha256)
++        .expect_err("a reply of zeroes is no timestamp");
++    server.join().unwrap();
++    err.to_string()
++}
++
++/// A reply of exactly the window is read whole and fails as the bytes it is
++/// (not a `TimeStampResp`); one byte more is refused before it is parsed. No
++/// Dart battery can observe this: signing reaches a timestamp server only
++/// over the network, and the cap is a limit on what the engine reads of a
++/// reply, not on what a signature holds.
++#[test]
++fn a_timestamp_reply_past_the_window_is_an_error() {
++    let cap = 1024 * 1024;
++    let at_cap = error_for_reply_of(cap);
++    assert!(at_cap.contains("not a valid TimeStampResp"), "at the window: {at_cap}");
++    let past = error_for_reply_of(cap + 1);
++    assert!(past.contains("exceeds"), "one byte past the window: {past}");
++}
+diff --git a/src/host/engine_proofs/whole_reads.txt b/src/host/engine_proofs/whole_reads.txt
+index c5c8652..f683095 100644
+--- a/src/host/engine_proofs/whole_reads.txt
++++ b/src/host/engine_proofs/whole_reads.txt
+@@ -1,4 +1,3 @@
+-compliance::converter::add_pdfa_identification
+ decoders::stream::decode_slice
+ document::cached_page_content
+ document::compute_output_intent_cmyk_profile
+@@ -8,18 +7,14 @@ editor::document_editor::deflate_stream
+ editor::document_editor::get_page_images
+ editor::document_editor::write_stream_copy
+ extractors::images::decode_jbig2_bits # the JBIG2 bitstream is the decoder's input; the bitmap is kept at one bit a pixel
+-extractors::images::decode_jbig2_image # the off-render image extraction (reducer, PNG export) wants one 8-bit raster; the render path reads decode_jbig2_bits
+ extractors::images::decode_jpx_image # the codestream is the codec's input, and its decoder returns the raster at the reduction the footprint covers
+ extractors::images::extract_image_from_xobject_at # a codec image's compressed bytes are the decoder's input (DCT, JPX, CCITT); a raw-sample image is read by the row cursor, not here
+ extractors::images::resolve_icc_profile_from_obj
+-extractors::images::resolve_indexed_palette
+ fonts::font_dict::extract_embedded_font_from_descriptor
+ fonts::font_dict::extract_truetype_cmap_from_descriptor
+ fonts::font_dict::from_dict
+-fonts::font_dict::parse_descendant_fonts
+ fonts::font_dict::resolve_encoding_writing_mode
+ host::attachments::attachment_bytes
+-host::image_embed::take # an interlaced (Adam7) PNG cannot be produced a row at a time, so its file is read whole; a JPEG and every other PNG stay in their source
+ object::decode_stream_data
+ object::read_whole_raw
+ rendering::mesh_shading::eval_pdf_function
+@@ -33,7 +28,6 @@ rendering::page_renderer::project_iccbased_to_rgb
+ rendering::resolution::color::evaluate_type0_sampled
+ rendering::resolution::color::evaluate_type4
+ rendering::resolution::color::resolve_iccbased
+-rendering::resolution::color::resolve_indexed
+ rendering::resolution::pipeline::eval_separation_alt_cmyk
+ rendering::separation_renderer::execute_separation_operators
+ rendering::separation_renderer::paint_image_mask_to_plates
+diff --git a/src/host/image_embed.rs b/src/host/image_embed.rs
+index e5c69a2..7026189 100644
+--- a/src/host/image_embed.rs
++++ b/src/host/image_embed.rs
+@@ -19,8 +19,11 @@
+ //! The pixels are the ones `ImageData::from_png` gives: palette, `tRNS`
+ //! and low bit depths expand as the PNG decoder expands them, and a 16 bit
+ //! sample is rounded to 8 bits as `image` rounds it, `(v + 128) / 257`.
+-//! An interlaced (Adam7) PNG cannot be produced a row at a time, so it is
+-//! read whole and embedded as `ImageData::from_png` does.
++//! An interlaced (Adam7) PNG stores its seven passes one after the other, so
++//! no row of the image is complete until the last pass has been read. It is
++//! decoded by seven readers over the one source, each positioned on its own
++//! pass and pulled in step, one output row at a time: a reader holds the
++//! window and the rows of the decoder, and the seven hold no image.
+ 
+ use std::io::{BufReader, Read, Seek, SeekFrom, Write};
+ use std::sync::{Arc, Mutex};
+@@ -53,6 +56,8 @@ struct PngShape {
+     height: u32,
+     color: png::ColorType,
+     depth: png::BitDepth,
++    /// Adam7: the rows come in seven passes.
++    interlaced: bool,
+ }
+ 
+ impl PngShape {
+@@ -67,6 +72,11 @@ impl PngShape {
+         }
+     }
+ 
++    /// Bytes a pixel of the decoder's rows holds.
++    fn pixel_bytes(&self) -> usize {
++        self.samples() * if self.depth == png::BitDepth::Sixteen { 2 } else { 1 }
++    }
++
+     /// Samples a pixel of the decoder's rows holds.
+     fn samples(&self) -> usize {
+         match self.color {
+@@ -137,8 +147,7 @@ fn read_head(reader: &mut impl Read, buf: &mut [u8]) -> std::io::Result<usize> {
+     Ok(filled)
+ }
+ 
+-/// Takes the image in `reader`: a JPEG or a PNG that rows can be read from
+-/// stays in its source; an interlaced PNG is read whole.
++/// Takes the image in `reader`: a JPEG or a PNG stays in its source.
+ pub(crate) fn take(mut reader: BoxedReader) -> Result<Taken> {
+     let length = reader.seek(SeekFrom::End(0))?;
+     reader.seek(SeekFrom::Start(0))?;
+@@ -153,9 +162,8 @@ pub(crate) fn take(mut reader: BoxedReader) -> Result<Taken> {
+         }
+     } else if got >= 8 && magic == *b"\x89PNG\r\n\x1a\n" {
+         match png_shape(&mut reader) {
+-            PngHead::Rows(shape) => Shape::Png(shape),
+-            PngHead::Interlaced => return read_whole(reader, length),
+-            PngHead::Unreadable => return Ok(Taken::Unreadable),
++            Some(shape) => Shape::Png(shape),
++            None => return Ok(Taken::Unreadable),
+         }
+     } else {
+         return Ok(Taken::Unreadable);
+@@ -167,21 +175,6 @@ pub(crate) fn take(mut reader: BoxedReader) -> Result<Taken> {
+     }))))
+ }
+ 
+-fn read_whole(mut reader: BoxedReader, length: u64) -> Result<Taken> {
+-    reader.seek(SeekFrom::Start(0))?;
+-    let mut bytes = Vec::with_capacity(length.min(usize::MAX as u64) as usize);
+-    let mut piece = vec![0u8; PIECE];
+-    loop {
+-        crate::cancel::poll()?;
+-        let n = reader.read(&mut piece)?;
+-        if n == 0 {
+-            break;
+-        }
+-        bytes.extend_from_slice(&piece[..n]);
+-    }
+-    Ok(Taken::Image(ImageBytes::Whole(bytes)))
+-}
+-
+ /// The frame of the JPEG at the start of `reader`, found by walking its
+ /// marker segments up to the first scan: the header, never the entropy-coded
+ /// data. `None` when no frame comes before the scan.
+@@ -263,12 +256,6 @@ fn jpeg_frame(reader: &mut BoxedReader) -> Result<Option<(JpegShape, u64)>> {
+     }
+ }
+ 
+-enum PngHead {
+-    Rows(PngShape),
+-    Interlaced,
+-    Unreadable,
+-}
+-
+ fn png_decoder(reader: &mut BoxedReader) -> png::Decoder<BufReader<&mut BoxedReader>> {
+     let mut decoder = png::Decoder::new(BufReader::with_capacity(PIECE, reader));
+     // Palette, `tRNS` and low bit depths expand as the `image` crate expands
+@@ -279,22 +266,16 @@ fn png_decoder(reader: &mut BoxedReader) -> png::Decoder<BufReader<&mut BoxedRea
+ 
+ /// What the PNG at the start of `reader` decodes to, from the chunks up to
+ /// its first `IDAT`.
+-fn png_shape(reader: &mut BoxedReader) -> PngHead {
+-    if reader.seek(SeekFrom::Start(0)).is_err() {
+-        return PngHead::Unreadable;
+-    }
+-    let Ok(rows) = png_decoder(reader).read_info() else {
+-        return PngHead::Unreadable;
+-    };
+-    if rows.info().interlaced {
+-        return PngHead::Interlaced;
+-    }
++fn png_shape(reader: &mut BoxedReader) -> Option<PngShape> {
++    reader.seek(SeekFrom::Start(0)).ok()?;
++    let rows = png_decoder(reader).read_info().ok()?;
++    let interlaced = rows.info().interlaced;
+     let (width, height) = rows.info().size();
+     let (color, depth) = rows.output_color_type();
+     if width == 0 || height == 0 {
+-        return PngHead::Unreadable;
++        return None;
+     }
+-    PngHead::Rows(PngShape { width, height, color, depth })
++    Some(PngShape { width, height, color, depth, interlaced })
+ }
+ 
+ fn image_error(what: &str, e: impl std::fmt::Display) -> Error {
+@@ -454,15 +435,18 @@ impl StreamedImage {
+ 
+     /// The rows of `pass`, each behind a `None` filter byte, to `out` as one
+     /// zlib stream. Only the previous row of the decoder and the row being
+-    /// converted are held.
++    /// converted are held; an interlaced image holds those of seven decoders.
+     fn deflate_rows(&self, out: &mut dyn Write, shape: PngShape, pass: Pass) -> Result<()> {
+-        let mut source = self.source();
+-        source.seek(SeekFrom::Start(0))?;
+-        let mut rows = png_decoder(&mut source).read_info().map_err(|e| image_error("PNG", e))?;
+-        if rows.info().size() != (shape.width, shape.height) || rows.output_color_type() != (shape.color, shape.depth)
+-        {
+-            return Err(Error::Image("PNG: the image changed under the save".into()));
+-        }
++        let mut plain_source;
++        let mut rows = if shape.interlaced {
++            Rows::Adam7(Adam7::open(&self.source, self.length, shape)?)
++        } else {
++            plain_source = self.source();
++            plain_source.seek(SeekFrom::Start(0))?;
++            let rows = png_decoder(&mut plain_source).read_info().map_err(|e| image_error("PNG", e))?;
++            check_unchanged(&rows, shape)?;
++            Rows::Plain(rows)
++        };
+         let colours = match pass {
+             Pass::Colour => shape.samples() - usize::from(shape.has_alpha()),
+             Pass::Alpha => 1,
+@@ -472,13 +456,10 @@ impl StreamedImage {
+         let mut line = Vec::with_capacity(1 + shape.width as usize * colours);
+         for _ in 0..shape.height {
+             crate::cancel::poll()?;
+-            let row = rows
+-                .next_row()
+-                .map_err(|e| image_error("PNG", e))?
+-                .ok_or(Error::UnexpectedEof)?;
++            let row = rows.next()?;
+             line.clear();
+             line.push(0);
+-            narrow_row(row.data(), shape, pass, &mut line);
++            narrow_row(row, shape, pass, &mut line);
+             zlib.write_all(&line)?;
+         }
+         zlib.finish()?;
+@@ -486,6 +467,175 @@ impl StreamedImage {
+     }
+ }
+ 
++fn check_unchanged<R: std::io::BufRead + Seek>(rows: &png::Reader<R>, shape: PngShape) -> Result<()> {
++    if rows.info().size() != (shape.width, shape.height)
++        || rows.output_color_type() != (shape.color, shape.depth)
++        || rows.info().interlaced != shape.interlaced
++    {
++        return Err(Error::Image("PNG: the image changed under the save".into()));
++    }
++    Ok(())
++}
++
++/// The rows of the image, top to bottom, as the decoder gives them.
++enum Rows<'a> {
++    Plain(png::Reader<BufReader<&'a mut BoxedReader>>),
++    Adam7(Adam7<'a>),
++}
++
++impl Rows<'_> {
++    fn next(&mut self) -> Result<&[u8]> {
++        match self {
++            Rows::Plain(rows) => {
++                Ok(rows.next_row().map_err(|e| image_error("PNG", e))?.ok_or(Error::UnexpectedEof)?.data())
++            },
++            Rows::Adam7(passes) => passes.next(),
++        }
++    }
++}
++
++/// One Adam7 pass: its pixels sit `dx` apart from column `x0` and its rows
++/// `dy` apart from row `y0`.
++#[derive(Clone, Copy)]
++struct PassGrid {
++    x0: u32,
++    y0: u32,
++    dx: u32,
++    dy: u32,
++    /// Pixels in a row of the pass and rows in it.
++    width: u32,
++    height: u32,
++}
++
++/// The passes of a `width` x `height` image that have a pixel, in order.
++fn passes_of(width: u32, height: u32) -> Vec<PassGrid> {
++    const GRIDS: [(u32, u32, u32, u32); 7] =
++        [(0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)];
++    GRIDS
++        .into_iter()
++        .filter(|&(x0, y0, _, _)| x0 < width && y0 < height)
++        .map(|(x0, y0, dx, dy)| PassGrid {
++            x0,
++            y0,
++            dx,
++            dy,
++            width: (width - x0).div_ceil(dx),
++            height: (height - y0).div_ceil(dy),
++        })
++        .collect()
++}
++
++/// A read position of its own in a source that several decoders share: each
++/// read seeks to where this decoder left off.
++struct Position<'a> {
++    source: &'a Mutex<BoxedReader>,
++    at: u64,
++    length: u64,
++}
++
++impl Read for Position<'_> {
++    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
++        let mut source = self.source.lock().unwrap_or_else(|e| e.into_inner());
++        source.seek(SeekFrom::Start(self.at))?;
++        let n = source.read(buf)?;
++        self.at += n as u64;
++        Ok(n)
++    }
++}
++
++impl Seek for Position<'_> {
++    fn seek(&mut self, to: SeekFrom) -> std::io::Result<u64> {
++        let at = match to {
++            SeekFrom::Start(n) => i128::from(n),
++            SeekFrom::Current(d) => i128::from(self.at) + i128::from(d),
++            SeekFrom::End(d) => i128::from(self.length) + i128::from(d),
++        };
++        self.at = u64::try_from(at)
++            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "seek before the start"))?;
++        Ok(self.at)
++    }
++}
++
++/// A decoder over the whole image, taking only the rows of one pass: the
++/// rows of the passes before it are read and dropped, the rows of the passes
++/// after it are never read.
++struct PassRows<'a> {
++    rows: png::Reader<BufReader<Position<'a>>>,
++    grid: PassGrid,
++    /// Rows of the earlier passes still to drop.
++    skip: u32,
++}
++
++impl PassRows<'_> {
++    /// Puts the pass's next row into `out`, each pixel at its place.
++    fn place_next(&mut self, out: &mut [u8], pixel: usize) -> Result<()> {
++        while self.skip > 0 {
++            crate::cancel::poll()?;
++            self.rows.next_interlaced_row().map_err(|e| image_error("PNG", e))?.ok_or(Error::UnexpectedEof)?;
++            self.skip -= 1;
++        }
++        let row = self.rows.next_interlaced_row().map_err(|e| image_error("PNG", e))?.ok_or(Error::UnexpectedEof)?;
++        let data = row.data();
++        let grid = self.grid;
++        if data.len() < grid.width as usize * pixel {
++            return Err(Error::Image("PNG: a pass row is shorter than its pixels".into()));
++        }
++        for (k, from) in data.chunks_exact(pixel).take(grid.width as usize).enumerate() {
++            let x = (grid.x0 + k as u32 * grid.dx) as usize;
++            out[x * pixel..(x + 1) * pixel].copy_from_slice(from);
++        }
++        Ok(())
++    }
++}
++
++/// The rows of an Adam7 image, each put together from the passes that have a
++/// pixel in it.
++struct Adam7<'a> {
++    passes: Vec<PassRows<'a>>,
++    pixel: usize,
++    /// The row being put together.
++    row: Vec<u8>,
++    /// The next row of the image.
++    next: u32,
++    height: u32,
++}
++
++impl<'a> Adam7<'a> {
++    fn open(source: &'a Mutex<BoxedReader>, length: u64, shape: PngShape) -> Result<Self> {
++        let mut passes = Vec::new();
++        let mut earlier = 0u32;
++        for grid in passes_of(shape.width, shape.height) {
++            let position = Position { source, at: 0, length };
++            let mut decoder = png::Decoder::new(BufReader::with_capacity(PASS_WINDOW, position));
++            decoder.set_transformations(png::Transformations::EXPAND);
++            let rows = decoder.read_info().map_err(|e| image_error("PNG", e))?;
++            check_unchanged(&rows, shape)?;
++            passes.push(PassRows { rows, grid, skip: earlier });
++            earlier += grid.height;
++        }
++        let pixel = shape.pixel_bytes();
++        Ok(Self { passes, pixel, row: vec![0; shape.width as usize * pixel], next: 0, height: shape.height })
++    }
++
++    fn next(&mut self) -> Result<&[u8]> {
++        let y = self.next;
++        if y >= self.height {
++            return Err(Error::UnexpectedEof);
++        }
++        for pass in &mut self.passes {
++            let grid = pass.grid;
++            if y >= grid.y0 && (y - grid.y0) % grid.dy == 0 {
++                pass.place_next(&mut self.row, self.pixel)?;
++            }
++        }
++        self.next += 1;
++        Ok(&self.row)
++    }
++}
++
++/// Bytes each pass of an interlaced PNG reads ahead of its decoder.
++const PASS_WINDOW: usize = 16 * 1024;
++
+ #[derive(Clone, Copy, PartialEq, Eq)]
+ enum Pass {
+     /// The colour samples of each pixel.
+diff --git a/src/rendering/resolution/color.rs b/src/rendering/resolution/color.rs
+index 8dd124e..06713bc 100644
+--- a/src/rendering/resolution/color.rs
++++ b/src/rendering/resolution/color.rs
+@@ -604,19 +604,24 @@ impl ColorResolver {
+             .doc
+             .resolve_object(&arr[3])
+             .unwrap_or_else(|_| arr[3].clone());
++        let n = base_component_count(&base, ctx);
++        if n == 0 {
++            return Ok(first_as_gray(components, alpha));
++        }
++        // ── pdf_manipulator patch: the palette is read to the length hival declares ──
++        // The lookup is (hival + 1) * N bytes (§8.6.6.3); hival is at most 255.
++        let declared = (hival.min(255) + 1).saturating_mul(n) as u64;
+         let palette: Vec<u8> = match &lookup {
+             Object::String(bytes) => bytes.clone(),
+-            Object::Stream { .. } => match lookup.decode_stream_data() {
+-                Ok(b) => b,
+-                Err(_) => return Ok(first_as_gray(components, alpha)),
++            Object::Stream { .. } => {
++                match crate::decoders::stream::read_decoded_window(&lookup, declared) {
++                    Ok(b) => b,
++                    Err(_) => return Ok(first_as_gray(components, alpha)),
++                }
+             },
+             _ => return Ok(first_as_gray(components, alpha)),
+         };
+-
+-        let n = base_component_count(&base, ctx);
+-        if n == 0 {
+-            return Ok(first_as_gray(components, alpha));
+-        }
++        // ── end pdf_manipulator patch ──
+         let off = idx * n;
+         if off + n > palette.len() {
+             return Ok(first_as_gray(components, alpha));
+diff --git a/src/signatures/tsa_client.rs b/src/signatures/tsa_client.rs
+index ec6b910..9690cee 100644
+--- a/src/signatures/tsa_client.rs
++++ b/src/signatures/tsa_client.rs
+@@ -21,6 +21,12 @@ use der::asn1::OctetString;
+ use der::{Any, Decode, Encode};
+ use std::time::Duration;
+ 
++// ── pdf_manipulator patch: a timestamp reply is read up to a fixed window ──
++/// The most bytes of a timestamp server's reply that are read: a token is
++/// kilobytes.
++const MAX_TSA_REPLY: u64 = 1024 * 1024;
++// ── end pdf_manipulator patch ──
++
+ /// Configuration for a [`TsaClient`].
+ #[derive(Debug, Clone)]
+ pub struct TsaClientConfig {
+@@ -138,12 +144,20 @@ impl TsaClient {
+         let mut resp = req
+             .send(body)
+             .map_err(|e| Error::Io(std::io::Error::other(format!("TSA HTTP error: {e}"))))?;
++        // ── pdf_manipulator patch: a timestamp reply is read up to a fixed window ──
+         let mut out = Vec::new();
+         resp.body_mut()
+             .as_reader()
++            .take(MAX_TSA_REPLY + 1)
+             .read_to_end(&mut out)
+             .map_err(|e| Error::Io(std::io::Error::other(format!("TSA read error: {e}"))))?;
++        if out.len() as u64 > MAX_TSA_REPLY {
++            return Err(Error::InvalidPdf(format!(
++                "TSA reply exceeds {MAX_TSA_REPLY} bytes"
++            )));
++        }
+         Ok(out)
++        // ── end pdf_manipulator patch ──
+     }
+ }
+ 
