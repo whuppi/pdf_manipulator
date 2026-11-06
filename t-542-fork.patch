@@ -1,0 +1,199 @@
+diff --git a/src/host/native/executor_table.rs b/src/host/native/executor_table.rs
+index 96c6096..4eb0a69 100644
+--- a/src/host/native/executor_table.rs
++++ b/src/host/native/executor_table.rs
+@@ -62,6 +62,8 @@ struct PendingStart {
+ }
+ 
+ struct Budget {
++    /// Most executor threads started at once.
++    limit: usize,
+     /// Lane threads currently started (running or draining).
+     live: usize,
+     /// Lanes waiting for a thread slot, strict FIFO.
+@@ -70,37 +72,49 @@ struct Budget {
+ 
+ fn budget() -> &'static Mutex<Budget> {
+     static BUDGET: OnceLock<Mutex<Budget>> = OnceLock::new();
+-    BUDGET.get_or_init(|| Mutex::new(Budget { live: 0, waiters: VecDeque::new() }))
++    BUDGET.get_or_init(|| Mutex::new(Budget::new(MAX_EXECUTORS_GLOBAL)))
++}
++
++impl Budget {
++    fn new(limit: usize) -> Self {
++        Budget { limit, live: 0, waiters: VecDeque::new() }
++    }
++}
++
++/// Answers every job queued for an executor that never started with a
++/// cancelled post — EVERY accepted job posts exactly once, started executor
++/// or not. That post is the host's memory-safe signal to free the job's
++/// buffers.
++fn cancel_pending(p: PendingStart) {
++    while let Ok(mail) = p.mailbox.try_recv() {
++        let port = match mail {
++            Mail::Job(job) => job.result_port,
++            Mail::Reset { result_port } => result_port,
++        };
++        post_result(port, ResponseWriter::cancelled());
++    }
++    p.controller.cancel_flags.lock().unwrap().clear();
+ }
+ 
+ /// Returns the budget slot on thread exit — even on unwind, so a
+ /// panicking executor can never leak its slot.
+-struct SlotGuard;
++struct SlotGuard(&'static Mutex<Budget>);
+ 
+ impl Drop for SlotGuard {
+     fn drop(&mut self) {
+-        let mut b = budget().lock().unwrap();
++        let mut b = self.0.lock().unwrap();
+         loop {
+             match b.waiters.pop_front() {
+-                // Terminated while waiting: answer its queued jobs with a
+-                // cancelled post each — EVERY accepted job posts
+-                // exactly once, started executor or not. That post is the
+-                // host's memory-safe signal to free the job's buffers.
+-                // Then hand the slot to the next waiter.
++                // Terminated while waiting and not yet taken off the queue
++                // by `terminate_in`: answer its jobs, then hand the slot to
++                // the next waiter.
+                 Some(p) if p.controller.cancel.load(Ordering::SeqCst) => {
+-                    while let Ok(mail) = p.mailbox.try_recv() {
+-                        let port = match mail {
+-                            Mail::Job(job) => job.result_port,
+-                            Mail::Reset { result_port } => result_port,
+-                        };
+-                        post_result(port, ResponseWriter::cancelled());
+-                    }
+-                    p.controller.cancel_flags.lock().unwrap().clear();
++                    cancel_pending(p);
+                     continue;
+                 }
+                 // Transfer the slot: `live` stays unchanged.
+                 Some(p) => {
+-                    start_thread(p.key, p.mailbox, p.controller);
++                    start_thread(self.0, p.key, p.mailbox, p.controller);
+                     return;
+                 }
+                 None => {
+@@ -112,11 +126,16 @@ impl Drop for SlotGuard {
+     }
+ }
+ 
+-fn start_thread(key: u64, mailbox: Receiver<Mail>, controller: Arc<ExecutorController>) {
++fn start_thread(
++    budget: &'static Mutex<Budget>,
++    key: u64,
++    mailbox: Receiver<Mail>,
++    controller: Arc<ExecutorController>,
++) {
+     thread::Builder::new()
+         .name(format!("pdf-executor-{key}"))
+         .spawn(move || {
+-            let _slot = SlotGuard;
++            let _slot = SlotGuard(budget);
+             executor_main(mailbox, controller);
+         })
+         .expect("failed to start executor thread (under MAX_EXECUTORS_GLOBAL — OS misconfigured?)");
+@@ -128,16 +147,20 @@ fn start_thread(key: u64, mailbox: Receiver<Mail>, controller: Arc<ExecutorContr
+ /// (budget permitting) or when a slot frees (FIFO). Never blocks,
+ /// never errors.
+ pub fn boot() -> u64 {
++    boot_in(budget())
++}
++
++fn boot_in(budget: &'static Mutex<Budget>) -> u64 {
+     let (sender, receiver) = unbounded::<Mail>();
+     let controller = Arc::new(ExecutorController::new(sender));
+ 
+     let key = NEXT_EXECUTOR_KEY.fetch_add(1, Ordering::Relaxed);
+     table().lock().unwrap().insert(key, controller.clone());
+ 
+-    let mut b = budget().lock().unwrap();
+-    if b.live < MAX_EXECUTORS_GLOBAL {
++    let mut b = budget.lock().unwrap();
++    if b.live < b.limit {
+         b.live += 1;
+-        start_thread(key, receiver, controller);
++        start_thread(budget, key, receiver, controller);
+     } else {
+         b.waiters.push_back(PendingStart { key, controller, mailbox: receiver });
+     }
+@@ -248,6 +271,10 @@ pub fn heap_peak(executor_key: u64) -> usize {
+ /// protocol in `executor.rs`); the thread drains and frees its state in
+ /// the background; the budget slot is handed on when it exits.
+ pub fn terminate(executor_key: u64) {
++    terminate_in(budget(), executor_key);
++}
++
++fn terminate_in(budget: &Mutex<Budget>, executor_key: u64) {
+     let Some(controller) = table().lock().unwrap().remove(&executor_key) else {
+         return;
+     };
+@@ -260,6 +287,16 @@ pub fn terminate(executor_key: u64) {
+     controller.channels.cancel_all();
+     // 3. Close the mailbox — the thread drains and exits.
+     *controller.mailbox.lock().unwrap() = None;
++    // 4. A lane still waiting for a slot has no thread to drain it: take it
++    //    off the queue and answer its jobs now, not when some other executor
++    //    exits.
++    let waiting = {
++        let mut b = budget.lock().unwrap();
++        b.waiters.iter().position(|p| p.key == executor_key).and_then(|at| b.waiters.remove(at))
++    };
++    if let Some(p) = waiting {
++        cancel_pending(p);
++    }
+ }
+ 
+ /// Number of started executor threads (running or draining). Diagnostics
+@@ -936,6 +973,47 @@ mod tests {
+         );
+     }
+ 
++    /// A budget of its own, so a test holds the slot and nothing else can
++    /// free it.
++    fn budget_of(limit: usize) -> &'static Mutex<Budget> {
++        Box::leak(Box::new(Mutex::new(Budget::new(limit))))
++    }
++
++    #[test]
++    fn a_lane_killed_while_waiting_for_a_slot_completes_its_jobs_at_once() {
++        let slots = budget_of(1);
++        let holder = boot_in(slots);
++        assert!(
++            wait_until(Duration::from_secs(5), || slots.lock().unwrap().live == 1),
++            "the holder never took the slot"
++        );
++
++        let waiter = boot_in(slots);
++        let controller = controller_for(waiter).unwrap();
++        assert_eq!(slots.lock().unwrap().waiters.len(), 1, "the second lane waits");
++        let lease = begin_lease(waiter);
++        assert_ne!(lease, 0);
++        submit(waiter, lease, quiet_job(1));
++        assert!(!tickets_empty(&controller), "the job is queued behind the slot");
++
++        terminate_in(slots, waiter);
++
++        // The holder still owns the only slot: nothing but the terminate
++        // can have answered the job.
++        assert!(
++            wait_until(Duration::from_secs(5), || tickets_empty(&controller)),
++            "the job of a lane killed in the queue waited for a slot to free"
++        );
++        assert!(
++            slots.lock().unwrap().waiters.is_empty(),
++            "the killed lane stayed in the queue"
++        );
++        assert_eq!(slots.lock().unwrap().live, 1, "the holder kept its slot");
++
++        terminate_in(slots, holder);
++        assert!(wait_until(Duration::from_secs(5), || slots.lock().unwrap().live == 0));
++    }
++
+     /// The test-support op that panics the engine.
+     #[cfg(feature = "test-support")]
+     fn panic_request() -> Vec<u8> {

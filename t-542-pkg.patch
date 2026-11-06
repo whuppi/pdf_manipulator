@@ -1,0 +1,1165 @@
+diff --git a/CHANGELOG.pre.md b/CHANGELOG.pre.md
+index aef6fcf..add9356 100644
+--- a/CHANGELOG.pre.md
++++ b/CHANGELOG.pre.md
+@@ -283,6 +283,10 @@ CONTENT RULES (never change)
+ - Fixed the same input saving to different bytes on every run, so `compress` and every other rewriting save could not be compared or cached by hash — objects are written in id order, so only the random AES IVs of an encrypted save differ
+ - Fixed creating and disposing `Pdf` instances in a loop starting a new web worker or native thread for most of them — a disposed instance hands its worker or thread back for the next instance to reuse
+ - Fixed an operation whose last write failed or was cancelled still reporting success with its output cut short — the engine now flushes the final bytes before it answers, and a refusal fails or cancels the operation
++- Fixed `builder.save`, `editor.save` and `extractAttachment` succeeding in web OPFS mode when the sink threw, and a slow sink piling chunks up in memory — the worker now spools output to disk and the sink is awaited chunk by chunk, so its error fails the op
++- Fixed a native lane killed while it waited for a thread slot answering its jobs only when another executor exited — they now complete cancelled at once
++- Fixed a `Pdf` that was never disposed keeping its executors, lanes and registered fonts for good — they are released when it is garbage collected, with a debug warning
++- Fixed the blob URL of a cross-origin worker bootstrap never being revoked — it goes once the worker has started or failed to
+ 
+ ## 5.0.1-dev.0
+ 
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+index 7ad1ad7..bb8dee3 100644
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -831,9 +831,16 @@ blocks until the Dart side returns bytes, so it never reads faster than the host
+ - **Atomics:** `host_write_chunk` posts the chunk, then `Atomics.wait`s on a dedicated write
+   SAB. Dart consumes the chunk and acknowledges with `Atomics.store` and `notify`. One chunk
+   is in flight at a time.
+-- **OPFS:** `postMessage`, with no wait. No blocking primitive is available (no SAB, no
+-  JSPI). The wasm producer is slower than the main-thread consumer, because OPFS source
+-  reads are the bottleneck and not the output writes.
++- **OPFS:** no blocking primitive is available (no SAB, no JSPI), so the worker cannot wait
++  for the sink. It writes each sink's output to a spool file of its own in the executor's
++  directory, through a sync access handle, so memory stays bounded. The job's `result` carries
++  the size of each spool file and is held until the main thread has delivered them: it sends
++  `spoolRead` for one span of at most 256 KB, the worker answers with `spoolChunk`, and the
++  sink's `write` is awaited before the next span is asked for. One chunk is in flight at a
++  time. A sink that throws fails the op with `PdfIoFailed`; a cancel, or the end of the lane,
++  during the delivery ends the op cancelled. In both cases the ops layer aborts the sink once.
++  The spool files belong to the job: `opfsDrop` removes them after delivery, failure and
++  cancel, and the reclaim rules below cover a worker that dies first.
+ 
+ ### Sources are random-access, not forward-only
+ 
+diff --git a/lib/src/bridge/create_bridge.dart b/lib/src/bridge/create_bridge.dart
+index 7d05c55..e157f00 100644
+--- a/lib/src/bridge/create_bridge.dart
++++ b/lib/src/bridge/create_bridge.dart
+@@ -7,6 +7,7 @@
+ 
+ import 'package:pdf_manipulator/src/bridge/pdf_bridge.dart';
+ import 'package:pdf_manipulator/src/bridge/shared_bridge.dart';
++import 'package:pdf_manipulator/src/ops/handle_backstop.dart';
+ import 'package:pdf_manipulator/src/runtime/host.dart';
+ import 'package:pdf_manipulator/src/runtime/pool.dart';
+ import 'package:pdf_manipulator/src/runtime/router.dart';
+@@ -17,10 +18,20 @@ import 'package:pdf_manipulator/src/types/pdf_config.dart';
+ /// instance shares; the Router + SharedBridge wrapping is shared.
+ PdfBridge createBridge({PdfConfig? config}) {
+   final host = createBooter(config: config);
+-  return SharedBridge(
+-    Router(
+-      pool: ExecutorPool.of(host),
+-      maxLanes: config?.concurrency ?? host.defaultConcurrency,
+-    ),
++  final router = Router(
++    pool: ExecutorPool.of(host),
++    maxLanes: config?.concurrency ?? host.defaultConcurrency,
+   );
++  final bridge = SharedBridge(router);
++  // The bridge is held by the Pdf and by every handle and op in flight, so
++  // it is collected only when nothing can use the router any more. The
++  // router holds the lanes, and with them the pool's executors and the
++  // registered fonts, which nothing else would give back.
++  HandleBackstop.attach(
++    bridge,
++    'Pdf',
++    router.dispose,
++    remedy: 'call dispose()',
++  );
++  return bridge;
+ }
+diff --git a/lib/src/ops/handle_backstop.dart b/lib/src/ops/handle_backstop.dart
+index 92ba890..60e2fbc 100644
+--- a/lib/src/ops/handle_backstop.dart
++++ b/lib/src/ops/handle_backstop.dart
+@@ -5,7 +5,7 @@
+ // the finalizer registered here releases them. Its timing is not
+ // guaranteed, so it never replaces `dispose()`.
+ //
+-// The release closure captures the bridge handle only, never the owning
++// The release closure captures what it releases only, never the owning
+ // object: a closure over the owner would keep it alive and the finalizer
+ // would never run.
+ 
+@@ -22,6 +22,16 @@ final class HandleBackstop {
+   static final _finalizer = Finalizer<_Leak>(_release);
+   static final _leaks = Expando<_Leak>('HandleBackstop');
+ 
++  static final _owners = Expando<Object>('HandleBackstop.owners');
++
++  /// Notes that [pdf]'s backstop is registered on [owner]; read by
++  /// [ownerOf].
++  static void recordOwner(Object pdf, Object owner) => _owners[pdf] = owner;
++
++  /// What the backstop of [pdf] is registered on. Tests only.
++  @visibleForTesting
++  static Object ownerOf(Object pdf) => _owners[pdf]!;
++
+   /// Receives the debug warning; replaced by tests to read it.
+   @visibleForTesting
+   static void Function(String message) warn = _log;
+@@ -32,14 +42,16 @@ final class HandleBackstop {
+   static void attach(
+     Object owner,
+     String kind,
+-    Future<void> Function() release,
+-  ) {
++    Future<void> Function() release, {
++    String remedy =
++        'call dispose(), or open it through read, rewrite or buildTo',
++  }) {
+     StackTrace? openedAt;
+     assert(() {
+       openedAt = StackTrace.current;
+       return true;
+     }());
+-    final leak = _Leak(kind, release, openedAt);
++    final leak = _Leak(kind, remedy, release, openedAt);
+     _leaks[owner] = leak;
+     _finalizer.attach(owner, leak, detach: owner);
+   }
+@@ -74,8 +86,8 @@ final class HandleBackstop {
+     }());
+     if (debug) {
+       warn(
+-        'a ${leak.kind} was never disposed; call dispose(), or open it '
+-        'through read, rewrite or buildTo.\nOpened at:\n${leak.openedAt}',
++        'a ${leak.kind} was never disposed; ${leak.remedy}.\n'
++        'Opened at:\n${leak.openedAt}',
+       );
+     }
+     try {
+@@ -91,9 +103,10 @@ final class HandleBackstop {
+ }
+ 
+ final class _Leak {
+-  const _Leak(this.kind, this.release, this.openedAt);
++  const _Leak(this.kind, this.remedy, this.release, this.openedAt);
+ 
+   final String kind;
++  final String remedy;
+   final Future<void> Function() release;
+   final StackTrace? openedAt;
+ }
+diff --git a/lib/src/ops/pdf.dart b/lib/src/ops/pdf.dart
+index d103333..b5e978e 100644
+--- a/lib/src/ops/pdf.dart
++++ b/lib/src/ops/pdf.dart
+@@ -132,7 +132,9 @@ PdfTask<R> _own<H extends _Handle, R>(
+ ///   [convertToOffice], [convertFromOffice], [convertXfaToAcroForm].
+ class Pdf {
+   /// Creates a new [Pdf] instance with an optional engine configuration.
+-  Pdf({PdfConfig? config}) : _bridge = createBridge(config: config);
++  Pdf({PdfConfig? config}) : _bridge = createBridge(config: config) {
++    HandleBackstop.recordOwner(this, _bridge);
++  }
+ 
+   final PdfBridge _bridge;
+   bool _disposed = false;
+@@ -507,6 +509,7 @@ class Pdf {
+   Future<void> dispose() async {
+     if (_disposed) return;
+     _disposed = true;
++    HandleBackstop.detach(_bridge);
+     await _bridge.dispose();
+   }
+ }
+diff --git a/lib/src/runtime/web/host.dart b/lib/src/runtime/web/host.dart
+index 4cd917a..c53e24a 100644
+--- a/lib/src/runtime/web/host.dart
++++ b/lib/src/runtime/web/host.dart
+@@ -359,7 +359,13 @@ class WebExecutorBooter implements ExecutorBooter {
+     final workerId = _newSessionId();
+     final lockName = _workerLockName(workerId);
+     final opfsDir = mode == PdfIoMode.opfs ? workerId : null;
+-    final worker = _spawnWorker();
++    final (worker, bootstrapUrl) = _spawnWorker();
++    // The bootstrap blob is read once, when the worker starts: it goes once
++    // the worker has announced itself, or failed to.
++    void revokeBootstrap() {
++      if (bootstrapUrl != null) web.URL.revokeObjectURL(bootstrapUrl);
++    }
++
+     // Everything after the start runs inside the try: a throw anywhere here
+     // must still terminate the worker.
+     StreamSubscription<web.MessageEvent>? sub;
+@@ -380,6 +386,7 @@ class WebExecutorBooter implements ExecutorBooter {
+         if (obj == null) return;
+         final type = (obj[LaneMsgFields.type] as JSString?)?.toDart;
+         if (type == LaneMsg.booted && !booted.isCompleted) {
++          revokeBootstrap();
+           booted.complete();
+         } else if (type == LaneMsg.ready && !ready.isCompleted) {
+           ready.complete();
+@@ -441,6 +448,7 @@ class WebExecutorBooter implements ExecutorBooter {
+     } catch (_) {
+       // A worker that never readied wrote no files (writing requires
+       // work, work requires ready) — no directory to reclaim.
++      revokeBootstrap();
+       worker.terminate();
+       rethrow;
+     } finally {
+@@ -569,7 +577,9 @@ class WebExecutorBooter implements ExecutorBooter {
+     return _cachedModules[key];
+   }
+ 
+-  web.Worker _spawnWorker() {
++  /// The worker, and the blob URL its cross-origin bootstrap runs from (null
++  /// for a same-origin script): the caller revokes it.
++  (web.Worker, String?) _spawnWorker() {
+     final url = _laneWorkerUrl;
+     if (url.startsWith('http://') || url.startsWith('https://')) {
+       // Cross-origin: bootstrap through a same-origin blob. The import
+@@ -584,12 +594,13 @@ class WebExecutorBooter implements ExecutorBooter {
+         [script.toJS].toJS,
+         web.BlobPropertyBag(type: 'application/javascript'),
+       );
+-      return web.Worker(
+-        web.URL.createObjectURL(blob).toJS,
+-        web.WorkerOptions(type: 'module'),
++      final bootstrapUrl = web.URL.createObjectURL(blob);
++      return (
++        web.Worker(bootstrapUrl.toJS, web.WorkerOptions(type: 'module')),
++        bootstrapUrl,
+       );
+     }
+-    return web.Worker(url.toJS, web.WorkerOptions(type: 'module'));
++    return (web.Worker(url.toJS, web.WorkerOptions(type: 'module')), null);
+   }
+ }
+ 
+diff --git a/lib/src/runtime/web/lease.dart b/lib/src/runtime/web/lease.dart
+index 66386c5..8f0a3db 100644
+--- a/lib/src/runtime/web/lease.dart
++++ b/lib/src/runtime/web/lease.dart
+@@ -231,6 +231,10 @@ class WebLease implements Lease, LanePhase {
+   /// call behind it may still be out.
+   final Map<({int jobId, int offset}), String> _unanswered = {};
+ 
++  /// The spool read in flight, and the read it answers.
++  Completer<JSObject>? _spoolAck;
++  ({int jobId, int sinkIndex, int offset})? _spoolAwaiting;
++
+   /// The reset in flight; its answer is `resetDone` or an `error` that
+   /// names no job.
+   Completer<int?>? _reset;
+@@ -413,6 +417,8 @@ class WebLease implements Lease, LanePhase {
+     _opfsAck?.complete(null); // loop head re-checks _abandoned and exits
+     _opfsAck = null;
+     _opfsAwaiting = null;
++    _spoolAck = null;
++    _spoolAwaiting = null;
+     _unanswered.clear();
+     final resetting = _reset;
+     _reset = null;
+@@ -577,7 +583,7 @@ class WebLease implements Lease, LanePhase {
+         if (_suspends) _awaitingWrite = true;
+         // Chained, never parallel: chunk N+1's sink.write may not
+         // start before chunk N's completes (ordering is the sink
+-        // contract; OPFS mode has no worker-side backpressure).
++        // contract).
+         if (entry != null) {
+           entry.sinkChain = entry.sinkChain.then(
+             (_) => _serveChunk(obj, entry),
+@@ -599,6 +605,15 @@ class WebLease implements Lease, LanePhase {
+           _opfsAck?.complete(_str(obj, 'error'));
+         }
+ 
++      case LaneMsg.spoolChunk:
++        final waiting = _spoolAwaiting;
++        if (waiting != null &&
++            _int(obj, LaneMsgFields.jobId) == waiting.jobId &&
++            _int(obj, 'sinkIndex') == waiting.sinkIndex &&
++            _int(obj, LaneMsgFields.writeOffset) == waiting.offset) {
++          _spoolAck?.complete(obj);
++        }
++
+       case LaneMsg.resetDone:
+         _exec._setAsideNow([
+           for (final name
+@@ -619,7 +634,16 @@ class WebLease implements Lease, LanePhase {
+             _finish(entry, _buildResult(entry, bytes));
+             return;
+           }
+-          unawaited(_finishAfterWrites(entry, bytes));
++          final spooled = obj[LaneMsgFields.spooled] as JSArray<JSNumber>?;
++          if (spooled != null && succeeded) {
++            unawaited(
++              _finishAfterSpool(entry, bytes, [
++                for (final n in spooled.toDart) n.toDartInt,
++              ]),
++            );
++          } else {
++            unawaited(_finishAfterWrites(entry, bytes));
++          }
+         }
+ 
+       case LaneMsg.error:
+@@ -657,9 +681,7 @@ class WebLease implements Lease, LanePhase {
+   }
+ 
+   /// A success ends after its last sink write, cancelled or not: the caller
+-  /// must not be told "saved" while a chunk is still being written. OPFS mode
+-  /// has no worker-side back-pressure, so the result can arrive while chunks
+-  /// it follows are still being written. Only the end of the lane ends the
++  /// must not be told "saved" while a chunk is still being written. Only the end of the lane ends the
+   /// wait: its caller was answered cancelled, and a sink that never returns
+   /// would otherwise keep the worker busy for good.
+   Future<void> _finishAfterWrites(_WebJob entry, Uint8List bytes) async {
+@@ -675,6 +697,103 @@ class WebLease implements Lease, LanePhase {
+     );
+   }
+ 
++  /// An OPFS success ends after its output reached the sinks. The worker
++  /// wrote each sink's output to a spool file; this reads it back one chunk at
++  /// a time and awaits the sink at each, so a slow sink holds one chunk here
++  /// and a failing one fails the job. A cancel, or the end of the lane, stops
++  /// the delivery: the job is cancelled, as a save the engine did not finish.
++  /// (An op that has a sink never creates a handle, so no success is lost.)
++  Future<void> _finishAfterSpool(
++    _WebJob entry,
++    Uint8List bytes,
++    List<int> sizes,
++  ) async {
++    JobResult result;
++    try {
++      final delivered = await _deliverSpool(entry, sizes);
++      result = delivered ? _buildResult(entry, bytes) : _cancelledResult();
++    } on PdfIoFailed catch (e) {
++      result = JobResult(
++        buildErrorResponse(e.message, kind: WireErrorKind.io),
++        const {},
++      );
++    } catch (e) {
++      result = JobResult(
++        buildErrorResponse(e.toString(), kind: WireErrorKind.io),
++        const {},
++      );
++    }
++    _finish(entry, result);
++  }
++
++  JobResult _cancelledResult() => JobResult(buildCancelledResponse(), const {});
++
++  /// Whether every byte was delivered; false when a cancel or the end of the
++  /// lane stopped it. A sink's error, or a failed read, is thrown.
++  Future<bool> _deliverSpool(_WebJob entry, List<int> sizes) async {
++    for (var sink = 0; sink < sizes.length; sink++) {
++      for (var offset = 0; offset < sizes[sink];) {
++        if (_abandoned || _ending || entry.cancelled) return false;
++        final count = math.min(_spoolChunkBytes, sizes[sink] - offset);
++        final chunk = await _readSpool(entry, sink, offset, count);
++        if (chunk == null || _abandoned || _ending || entry.cancelled) {
++          return false;
++        }
++        // The end of the lane stops the wait: a sink that never returns
++        // must not keep the worker busy for good.
++        final write = Future<void>.sync(
++          () => entry.job.sinks[sink].write(chunk),
++        );
++        final wrote = await Future.any([
++          write.then((_) => true),
++          _ended.future.then((_) => false),
++        ]);
++        if (!wrote) return false;
++        offset += count;
++      }
++    }
++    return !(_abandoned || _ending || entry.cancelled);
++  }
++
++  /// One span of a spool file, or null when the job was cancelled or the lane
++  /// ended while it was awaited.
++  Future<Uint8List?> _readSpool(
++    _WebJob entry,
++    int sinkIndex,
++    int offset,
++    int count,
++  ) async {
++    final ack = _spoolAck = Completer<JSObject>();
++    _spoolAwaiting = (
++      jobId: entry.job.jobId,
++      sinkIndex: sinkIndex,
++      offset: offset,
++    );
++    _post({
++      LaneMsgFields.type: LaneMsg.spoolRead,
++      'jobId': entry.job.jobId,
++      'sinkIndex': sinkIndex,
++      'offset': offset,
++      'count': count,
++    });
++    try {
++      final answer = await Future.any<JSObject?>([
++        ack.future,
++        entry.cancelWake.future.then((_) => null),
++        _ended.future.then((_) => null),
++      ]);
++      if (answer == null) return null;
++      final error = _str(answer, 'error');
++      if (error != null) throw PdfIoFailed('OPFS output read failed: $error');
++      return _bytes(answer, 'data');
++    } finally {
++      _spoolAck = null;
++      _spoolAwaiting = null;
++    }
++  }
++
++  static const _spoolChunkBytes = 256 * 1024;
++
+   JobResult _buildResult(_WebJob entry, Uint8List bytes) {
+     // Cancelled mid-op: the engine's I/O error reads as the typed
+     // status, identical to native's run_job. A success is never
+@@ -792,12 +911,11 @@ class WebLease implements Lease, LanePhase {
+ 
+     String? error;
+     try {
+-      if (_ending || (entry.cancelled && _mode != PdfIoMode.opfs)) {
++      if (_ending || entry.cancelled) {
+         // The lane ended, or the answer below is "cancelled" so the engine
+         // cannot finish this job: such a chunk is never written to a sink
+         // whose Pdf was disposed, and a sink that never returns holds no
+-        // chain behind it. A cancelled OPFS job has no answer channel and
+-        // its engine may still finish, so its writes land.
++        // chain behind it.
+       } else if (sinkIndex < entry.job.sinks.length) {
+         await Future<void>.value(entry.job.sinks[sinkIndex].write(data));
+       } else {
+@@ -829,7 +947,6 @@ class WebLease implements Lease, LanePhase {
+         if (error != null) 'error': error,
+       });
+     }
+-    // OPFS mode: fire-and-forget writes, no ack channel.
+   }
+ 
+   // ── OPFS pre-copy (through the worker — SyncAccessHandle is
+diff --git a/lib/src/runtime/web/protocol.dart b/lib/src/runtime/web/protocol.dart
+index 8c0ca49..2699df2 100644
+--- a/lib/src/runtime/web/protocol.dart
++++ b/lib/src/runtime/web/protocol.dart
+@@ -106,6 +106,10 @@ abstract final class LaneMsg {
+   /// the host via its liveness lock.
+   static const opfsDrop = 'opfsDrop';
+ 
++  /// Dart → worker: read a span of a sink's spool file (OPFS mode). The
++  /// worker answers with [spoolChunk].
++  static const spoolRead = 'spoolRead';
++
+   /// Worker → Dart: script evaluated and message handler attached.
+   /// Dart must not post `init` before this — a message posted to a
+   /// worker with no handler yet is silently dropped.
+@@ -138,6 +142,9 @@ abstract final class LaneMsg {
+   /// [LaneMsgFields.peakBytes].
+   static const resetDone = 'resetDone';
+ 
++  /// Worker → Dart: the bytes of a [spoolRead], or its `error`.
++  static const spoolChunk = 'spoolChunk';
++
+   /// Worker → Dart: OPFS pre-copy chunk written.
+   static const opfsWriteAck = 'opfsWriteAck';
+ }
+@@ -179,6 +186,10 @@ abstract final class LaneMsgFields {
+   /// pending call settles.
+   static const abandonedFiles = 'abandoned';
+ 
++  /// Worker → Dart, on an OPFS `result`: the byte size of each sink's spool
++  /// file, in sink order. Absent when the job had no sink.
++  static const spooled = 'spool';
++
+   /// Worker → Dart, on `opfsWriteAck`: present when the write had to create
+   /// its handle a second time because the first call passed
+   /// [kCreateHandleWait] unanswered.
+diff --git a/test/ops/core/pdf_abort_battery.dart b/test/ops/core/pdf_abort_battery.dart
+index 03c7189..ecf6e0f 100644
+--- a/test/ops/core/pdf_abort_battery.dart
++++ b/test/ops/core/pdf_abort_battery.dart
+@@ -138,12 +138,6 @@ void registerAbortTests(Pdf Function() createPdf) {
+       for (final MapEntry(key: name, value: run) in ops.entries) {
+         test(name, () async {
+           final pdf = createPdf();
+-          if (await pdf.ensureInitialized() == PdfIoMode.opfs) {
+-            // OPFS mode writes a sink fire-and-forget: the engine is never
+-            // told that the sink refused a chunk.
+-            markTestSkipped('OPFS mode does not report a failed sink write');
+-            return;
+-          }
+           final sink = CountingSink(failOnWrite: 1);
+           await expectLater(
+             run(pdf, sink),
+diff --git a/test/ops/core/pdf_instance_battery.dart b/test/ops/core/pdf_instance_battery.dart
+index 1159b9c..6170579 100644
+--- a/test/ops/core/pdf_instance_battery.dart
++++ b/test/ops/core/pdf_instance_battery.dart
+@@ -4,6 +4,7 @@ import 'dart:async';
+ import 'dart:typed_data';
+ 
+ import 'package:pdf_manipulator/pdf_manipulator.dart';
++import 'package:pdf_manipulator/src/ops/handle_backstop.dart';
+ import 'package:pdf_manipulator/src/runtime/pool.dart';
+ import 'package:test/test.dart';
+ 
+@@ -13,8 +14,57 @@ import '../../harness/slow_source.dart';
+ import '../../harness/test_source_sink.dart';
+ import '../../harness/timeouts.dart';
+ 
++/// Whether `assert` runs: the debug warning exists only then.
++bool get _assertsOn {
++  var on = false;
++  assert(on = true);
++  return on;
++}
++
+ void registerInstanceTests(Pdf Function() createPdf) {
+   group('instance', () {
++    // ── The backstop for a Pdf nobody disposed ──
++
++    group('backstop', () {
++      late List<String> warnings;
++      late void Function(String) saved;
++
++      setUp(() {
++        warnings = [];
++        saved = HandleBackstop.warn;
++        HandleBackstop.warn = warnings.add;
++      });
++      tearDown(() => HandleBackstop.warn = saved);
++
++      test('an undisposed Pdf is released and logged', () async {
++        final pdf = createPdf();
++        final doc = await pdf.open(PdfInput(src(minimalPdf)));
++        await doc.dispose();
++        await HandleBackstop.finalizeNow(HandleBackstop.ownerOf(pdf));
++        await expectLater(
++          pdf.open(PdfInput(src(minimalPdf))),
++          throwsA(isA<PdfCancelled>()),
++          reason: 'the instance no longer holds its lanes',
++        );
++        if (_assertsOn) {
++          expect(warnings, hasLength(1));
++          expect(warnings.single, contains('a Pdf was never disposed'));
++          expect(warnings.single, isNot(contains('buildTo')));
++          expect(warnings.single, contains('Opened at'));
++        }
++      }, timeout: t(1));
++
++      test('a disposed Pdf is not released twice', () async {
++        final pdf = createPdf();
++        await pdf.dispose();
++        await expectLater(
++          HandleBackstop.finalizeNow(HandleBackstop.ownerOf(pdf)),
++          throwsA(isA<ArgumentError>()),
++        );
++        expect(warnings, isEmpty);
++      }, timeout: t(1));
++    });
++
+     // ── Dispose cascade ──
+ 
+     test('dispose cascades to open docs', () async {
+diff --git a/test/ops/platform/web/web_lane_protocol_battery.dart b/test/ops/platform/web/web_lane_protocol_battery.dart
+index de27ee4..8d33e6a 100644
+--- a/test/ops/platform/web/web_lane_protocol_battery.dart
++++ b/test/ops/platform/web/web_lane_protocol_battery.dart
+@@ -15,12 +15,15 @@ import 'dart:math' as math;
+ import 'dart:typed_data';
+ 
+ import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart' as bin;
++import 'package:pdf_manipulator/src/bridge/protocol/codec.dart' as codec;
+ import 'package:pdf_manipulator/src/runtime/lane.dart';
++import 'package:pdf_manipulator/src/runtime/pool.dart';
+ import 'package:pdf_manipulator/src/runtime/web/lease.dart';
+ import 'package:pdf_manipulator/src/runtime/web/protocol.dart';
+ import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
+ import 'package:pdf_manipulator/src/types/errors.dart';
+ import 'package:pdf_manipulator/src/types/pdf_enums.dart';
++import 'package:pdf_manipulator/src/types/pdf_params.dart' show PdfSave;
+ import 'package:test/test.dart';
+ import 'package:web/web.dart' as web;
+ import 'package:web/web.dart' show EventStreamProviders;
+@@ -304,6 +307,25 @@ self.addEventListener('message', (e) => {
+ });
+ ''';
+ 
++/// Worker prelude: every `opfsWriteAck` reaches the page 150 ms late and every
++/// `removeEntry` takes 400 ms longer, as a worker on a loaded machine does.
++const _slowDisk = r'''
++const post = self.postMessage.bind(self);
++self.postMessage = (m, t) => {
++  if (m && m.type === 'opfsWriteAck') {
++    setTimeout(() => post(m, t), 150);
++    return;
++  }
++  return post(m, t);
++};
++const dirProto = FileSystemDirectoryHandle.prototype;
++const removeEntry = dirProto.removeEntry;
++dirProto.removeEntry = async function (name, options) {
++  await new Promise((resolve) => setTimeout(resolve, 400));
++  return removeEntry.call(this, name, options);
++};
++''';
++
+ /// Every message a booted worker posts, in order, for a test that drives a
+ /// real lane over it.
+ class _Watched {
+@@ -495,6 +517,75 @@ class _RawWorker {
+   }
+ }
+ 
++/// A sink that takes [stall] to accept each chunk, and counts them.
++class _StallSink extends TestSink {
++  _StallSink({this.stall = const Duration(seconds: 1), this.failOnWrite});
++
++  final Duration stall;
++
++  /// The 1-based write that throws; none when null.
++  final int? failOnWrite;
++
++  /// Writes that started, and writes that returned.
++  int started = 0;
++  int finished = 0;
++
++  /// Runs as each write starts.
++  void Function()? onStart;
++
++  @override
++  Future<void> write(Uint8List chunk) async {
++    started++;
++    onStart?.call();
++    await Future<void>.delayed(stall);
++    if (started == failOnWrite) throw StateError('the sink failed');
++    super.write(chunk);
++    finished++;
++  }
++}
++
++/// Counts the blob URLs the page makes and revokes while it is on, patching
++/// both browser calls. Only a script blob is a worker bootstrap.
++class _BlobUrls {
++  _BlobUrls() {
++    _probe = globalContext.callMethod<JSObject>('eval'.toJS, _patch.toJS);
++  }
++
++  static const _patch = r'''
++(() => {
++  const made = [];
++  const revoked = new Set();
++  const create = URL.createObjectURL;
++  const revoke = URL.revokeObjectURL;
++  URL.createObjectURL = function (blob) {
++    const url = create.call(this, blob);
++    if (blob.type === 'application/javascript') made.push(url);
++    return url;
++  };
++  URL.revokeObjectURL = function (url) {
++    revoked.add(url);
++    return revoke.call(this, url);
++  };
++  return {
++    made: () => made.length,
++    unrevoked: () => made.filter((url) => !revoked.has(url)).length,
++    restore: () => { URL.createObjectURL = create; URL.revokeObjectURL = revoke; },
++  };
++})()
++''';
++
++  late final JSObject _probe;
++
++  /// Script blobs made since the patch.
++  int get made => (_probe.callMethod<JSNumber>('made'.toJS)).toDartInt;
++
++  /// Script blobs made since the patch and not revoked.
++  int get unrevoked =>
++      (_probe.callMethod<JSNumber>('unrevoked'.toJS)).toDartInt;
++
++  void restore() => _probe.callMethod<JSAny?>('restore'.toJS);
++}
++
+ void registerWebLaneProtocolTests({
+   required String Function() workerUrl,
+   required PdfIoMode mode,
+@@ -506,6 +597,294 @@ void registerWebLaneProtocolTests({
+       host = WebExecutorBooter(laneWorkerUrl: workerUrl(), forceMode: mode);
+     });
+ 
++    group('a save to a slow or failing sink', () {
++      /// An editor on the thousand-page fixture, whose save is a few chunks.
++      Future<(WebExecutor, WebLease, int)> openLargeEditor() async {
++        final executor = await host.boot() as WebExecutor;
++        addTearDown(executor.terminate);
++        final lane = executor.beginLane() as WebLease;
++        final source = src(fThousandPage);
++        final opened = await lane.submit(
++          Job(
++            jobId: 1,
++            request: bin.encodeRequest('editorOpen', {
++              'sourceLength': source.length,
++              'password': null,
++            }),
++            sources: [source],
++            sinks: const [],
++            keepSources: const {0},
++          ),
++        );
++        expect(_ok(opened.bytes), isTrue, reason: _failure(opened.bytes));
++        final handle = codec.decodeEditorOpen(bin.decodeResponse(opened.bytes));
++        return (executor, lane, handle);
++      }
++
++      Future<JobResult> save(WebLease lane, int handle, _StallSink sink) =>
++          lane.submit(
++            Job(
++              jobId: 2,
++              request: bin.encodeRequest('editorSave', {
++                'handleId': handle,
++                ...codec.encodeSaveArgs(const PdfSave.full()),
++              }),
++              sources: const [],
++              sinks: [sink],
++              keepSources: const {},
++              holdGroupId: 1,
++            ),
++          );
++
++      test('the main thread holds at most one chunk at a time', () async {
++        final (executor, lane, handle) = await openLargeEditor();
++        final sink = _StallSink();
++        // A chunk is a message that carries bytes to the main thread: one
++        // that arrived and has not been written yet is held there.
++        var arrived = 0;
++        var mostHeld = 0;
++        final sub = EventStreamProviders.messageEvent
++            .forTarget(executor.js)
++            .listen((event) {
++              final m = event.data as JSObject?;
++              if (m == null) return;
++              final type = _type(m);
++              if (type != 'chunk' && type != 'spoolChunk') return;
++              arrived++;
++              mostHeld = math.max(mostHeld, arrived - sink.finished);
++            });
++        addTearDown(sub.cancel);
++
++        final saved = await save(lane, handle, sink);
++        expect(_ok(saved.bytes), isTrue, reason: _failure(saved.bytes));
++        expect(
++          sink.finished,
++          greaterThan(1),
++          reason: 'the save is more than one chunk',
++        );
++        expect(
++          mostHeld,
++          lessThanOrEqualTo(1),
++          reason: 'chunks piled up on the main thread behind a slow sink',
++        );
++      }, timeout: t(30));
++
++      test('a sink that fails fails the job, and the output is not kept '
++          'on disk', () async {
++        final (executor, lane, handle) = await openLargeEditor();
++        final before = await _opfsFileCount(executor.opfsDir ?? '');
++        final sink = _StallSink(stall: Duration.zero, failOnWrite: 1);
++
++        final saved = await save(lane, handle, sink);
++        expect(_ok(saved.bytes), isFalse, reason: 'the sink refused a chunk');
++        expect(_failure(saved.bytes), isNot(contains('cancelled')));
++        expect(sink.started, 1, reason: 'no chunk follows a refused one');
++        if (mode == PdfIoMode.opfs) {
++          await _until(
++            () async => await _opfsFileCount(executor.opfsDir!) == before,
++            'the output of a failed save stayed on disk',
++          );
++        }
++      }, timeout: t(30));
++
++      test(
++        'the output of a save is removed from disk once delivered',
++        () async {
++          if (mode != PdfIoMode.opfs) {
++            markTestSkipped('only OPFS mode spools its output');
++            return;
++          }
++          final (executor, lane, handle) = await openLargeEditor();
++          final before = await _opfsFileCount(executor.opfsDir!);
++          final sink = _StallSink(stall: Duration.zero);
++
++          final saved = await save(lane, handle, sink);
++          expect(_ok(saved.bytes), isTrue, reason: _failure(saved.bytes));
++          expect(sink.length, greaterThan(300 * 1024));
++          await _until(
++            () async => await _opfsFileCount(executor.opfsDir!) == before,
++            'the spool file stayed after its delivery',
++          );
++        },
++        timeout: t(30),
++      );
++
++      test('a cancel while the output is delivered cancels the job and '
++          'removes the output', () async {
++        final (executor, lane, handle) = await openLargeEditor();
++        final before = await _opfsFileCount(executor.opfsDir ?? '');
++        final sink = _StallSink(stall: const Duration(milliseconds: 300));
++        sink.onStart = () {
++          if (sink.started == 1) lane.cancelJob(2);
++        };
++
++        final saved = await save(lane, handle, sink);
++        expect(saved.bytes, buildCancelledResponse());
++        await Future<void>.delayed(const Duration(seconds: 1));
++        expect(sink.started, 1, reason: 'a chunk was written after the cancel');
++        if (mode == PdfIoMode.opfs) {
++          await _until(
++            () async => await _opfsFileCount(executor.opfsDir!) == before,
++            'the output of a cancelled save stayed on disk',
++          );
++        }
++      }, timeout: t(30));
++    });
++
++    test('a terminated worker leaves the budget at once, whatever its '
++        'liveness lock does', () async {
++      // The browser would release the lock of a terminated worker in its own
++      // time; here the page never grants it, so the reap waits forever.
++      final workerLocks =
++          '${WebExecutorBooter.opfsRootDir}/'
++          '${WebExecutorBooter.opfsSessionId}/';
++      final restore =
++          globalContext
++                  .callMethod<JSFunction>(
++                    'eval'.toJS,
++                    """
++(prefix) => {
++  const locks = navigator.locks;
++  const request = locks.request;
++  locks.request = function (name, ...rest) {
++    if (String(name).startsWith(prefix)) return new Promise(() => {});
++    return request.call(this, name, ...rest);
++  };
++  return () => { locks.request = request; };
++}
++"""
++                        .toJS,
++                  )
++                  .callAsFunction(null, workerLocks.toJS)!
++              as JSFunction;
++      addTearDown(() => restore.callAsFunction());
++
++      // keepBytes of 0 retires every executor the moment it is returned.
++      final pool = ExecutorPool(host: host, maxExecutors: 1, keepBytes: 0);
++      addTearDown(pool.dispose);
++      final first = await pool.acquire().lease;
++      final job = Job(
++        jobId: 1,
++        request: _open(minimalPdf.length),
++        sources: [src(minimalPdf)],
++        sinks: const [],
++        keepSources: const {},
++      );
++      await first.lane.submit(job);
++      await pool.release(first);
++      expect(pool.liveCount, 0, reason: 'the retired worker still counts');
++
++      final second = await pool.acquire().lease.timeout(
++        const Duration(seconds: 20),
++        onTimeout: () =>
++            throw TestFailure('the budget waited for the dead worker\'s lock'),
++      );
++      expect(second.state, ExecutorState.leased);
++    }, timeout: t(40));
++
++    test('t-493: a render of the first page of a large document, behind a '
++        'slow disk and a create that does not answer once, finishes', () async {
++      if (mode != PdfIoMode.opfs) {
++        markTestSkipped('only OPFS mode pre-copies its sources');
++        return;
++      }
++      final executor =
++          await withWorkerPrelude(
++                '${_hangsCreate(every: false)}\n$_slowDisk',
++                host.boot,
++              )
++              as WebExecutor;
++      addTearDown(executor.terminate);
++      executor.provoked = true;
++      final lane = executor.beginLane() as WebLease;
++      final source = src(fThousandPage);
++      final started = DateTime.now();
++      final opened = await lane.submit(
++        Job(
++          jobId: 1,
++          request: bin.encodeRequest('open', {
++            'sourceLength': source.length,
++            'password': null,
++          }),
++          sources: [source],
++          sinks: const [],
++          keepSources: const {0},
++        ),
++      );
++      expect(_ok(opened.bytes), isTrue, reason: _failure(opened.bytes));
++      final handle = bin.decodeResponse(opened.bytes)['handleId'] as int;
++
++      final sink = TestSink();
++      final rendered = await lane.submit(
++        Job(
++          jobId: 2,
++          request: bin.encodeRequest('render', {
++            'handleId': handle,
++            'pageIndices': [0],
++            'sizeKind': 'dpi',
++            'dpi': 72.0,
++            'format': 'png',
++          }),
++          sources: const [],
++          sinks: [sink],
++          keepSources: const {},
++          holdGroupId: 1,
++        ),
++      );
++      expect(_ok(rendered.bytes), isTrue, reason: _failure(rendered.bytes));
++      expect(sink.length, greaterThan(0));
++      expect(
++        DateTime.now().difference(started),
++        lessThan(const Duration(seconds: 40)),
++      );
++
++      executor.js.postMessage(_msg('release', {}));
++      await lane.drain();
++      await lane.reset();
++      expect(await _opfsFileCount(executor.opfsDir!), 0);
++    }, timeout: t(60));
++
++    test('the blob URL of a cross-origin boot is revoked once the worker '
++        'has started', () async {
++      if (!workerUrl().startsWith('http')) {
++        markTestSkipped('the worker boots from a same-origin script');
++        return;
++      }
++      final blobs = _BlobUrls();
++      addTearDown(blobs.restore);
++      final executor = await host.boot() as WebExecutor;
++      addTearDown(executor.terminate);
++      expect(blobs.made, 1, reason: 'a cross-origin boot makes one bootstrap');
++      expect(
++        blobs.unrevoked,
++        0,
++        reason: 'the bootstrap blob URL is never revoked',
++      );
++    }, timeout: t(10));
++
++    test('the blob URL of a cross-origin boot that fails is revoked', () async {
++      if (!workerUrl().startsWith('http')) {
++        markTestSkipped('the worker boots from a same-origin script');
++        return;
++      }
++      // The page remembers the last URL it was given for bare instances.
++      addTearDown(
++        () => WebExecutorBooter(laneWorkerUrl: workerUrl(), forceMode: mode),
++      );
++      final missing = WebExecutorBooter(
++        laneWorkerUrl: workerUrl().replaceFirst(
++          'executor_worker.js',
++          'no_such_worker.js',
++        ),
++        forceMode: mode,
++      );
++      final blobs = _BlobUrls();
++      addTearDown(blobs.restore);
++      await expectLater(missing.boot(), throwsA(isA<StateError>()));
++      expect(blobs.made, 1);
++      expect(blobs.unrevoked, 0, reason: 'a failed boot leaves its blob URL');
++    }, timeout: t(10));
++
+     test('a drain answers a parked job at once, settles when the worker has '
+         'posted, and the worker serves the next lease', () async {
+       final executor = await host.boot() as WebExecutor;
+diff --git a/test/runtime/web/executor_worker_sync_test.dart b/test/runtime/web/executor_worker_sync_test.dart
+index 96e01e5..1e225e3 100644
+--- a/test/runtime/web/executor_worker_sync_test.dart
++++ b/test/runtime/web/executor_worker_sync_test.dart
+@@ -65,6 +65,7 @@ void main() {
+         LaneMsg.reset,
+         LaneMsg.opfsWrite,
+         LaneMsg.opfsDrop,
++        LaneMsg.spoolRead,
+       };
+       final cases = _extractJsCases(workerSource);
+       for (final tag in dartToWorker) {
+@@ -82,6 +83,7 @@ void main() {
+         LaneMsg.error,
+         LaneMsg.resetDone,
+         LaneMsg.opfsWriteAck,
++        LaneMsg.spoolChunk,
+       };
+       final posted = RegExp(
+         "postMessage\\(\\{ type: '([a-zA-Z.]+)'",
+diff --git a/web_assets/executor_worker.js b/web_assets/executor_worker.js
+index 8daf30c..5dd2eac 100644
+--- a/web_assets/executor_worker.js
++++ b/web_assets/executor_worker.js
+@@ -53,6 +53,8 @@
+ //   opfsWrite    { lease, jobId, filename, chunk, offset, last }
+ //                → opfsWriteAck | error { lease, jobId, protocol: true, message }
+ //   opfsDrop     { lease, jobId }
++//   spoolRead    { lease, jobId, sinkIndex, offset, count }
++//                → spoolChunk { lease, jobId, sinkIndex, offset, data | error }
+ //
+ // worker → Dart:
+ //   ready | readAt { lease, sourceIndex, offset, count } | chunk { lease,
+@@ -152,6 +154,7 @@ let activeWriteSab = null;   // per-exec write-ack SAB (atomics)
+ let activeCancelSab = null;  // per-exec cancel word, any mode with SharedArrayBuffer
+ let activeCancelUrl = null;  // per-exec blob URL, revoked by the main thread to cancel
+ let cancelSeen = 0;          // latched once the URL stopped answering
++let spoolOut = null;                 // sizes of the sink spools of the job that just ran
+ let lastPollAt = 0;          // performance.now() of the last URL poll
+ 
+ // One sync XHR costs about 0.1 ms in Chrome, so polling at most every 10 ms
+@@ -304,11 +307,7 @@ function hostWriteChunk(sinkIndex, bufPtr, len) {
+     case 'atomics': return writeViaAtomics(sinkIndex, chunk);
+     case 'jspi':    return writeViaJspi(sinkIndex, chunk);
+     case 'asyncify': return suspendAsyncify(writeViaJspi(sinkIndex, chunk));
+-    default:
+-      // OPFS: no blocking primitive — fire-and-forget (the producer
+-      // is disk-read bound, never outruns the main-thread consumer).
+-      self.postMessage({ type: 'chunk', lease, sinkIndex, data: chunk.buffer }, [chunk.buffer]);
+-      return 0;
++    default:        return writeToSpool(sinkIndex, chunk);
+   }
+ }
+ 
+@@ -634,10 +633,10 @@ let opfsDirParts = null;
+ let livenessLockName = null;
+ let laneDirPromise = null;
+ 
+-// Held from before `ready` until this agent dies, in every I/O mode.
+-// The host's worker budget frees this worker's slot only when it can
+-// acquire the lock — the browser's own word that the worker, and the
+-// WASM memory behind it, is gone. OPFS reclaim keys on the same grant.
++// Held from before `ready` until this agent dies, in every I/O mode. The
++// host reclaims this worker's OPFS directory once it can acquire the lock —
++// the browser's own word that the worker, and the WASM memory behind it, is
++// gone. The pool's budget does not wait for it.
+ function acquireLivenessLock() {
+   if (!livenessLockName || !('locks' in navigator)) return Promise.resolve();
+   return new Promise((granted) => {
+@@ -788,6 +787,61 @@ async function opfsDrop(jobId) {
+   }
+ }
+ 
++// OPFS output: no blocking primitive exists to wait for the host, so each sink
++// of a job writes to a spool file of its own, through a sync access handle, and
++// the host reads it back chunk by chunk once the job has answered. Memory stays
++// bounded and the host's sink is awaited at every write. The files belong to
++// the job like its pre-copies: opfsDrop removes them.
++const spools = [];                   // sinkIndex → { sh, size } while a job runs
++
++async function openSpools(jobId, sinkCount) {
++  spools.length = 0;
++  for (let i = 0; i < sinkCount; i++) {
++    const name = 'pdf_spool_' + jobId + '_' + i;
++    let files = jobFiles.get(jobId);
++    if (!files) { files = new Set(); jobFiles.set(jobId, files); }
++    files.add(name); // registered before the first byte hits disk
++    const { sh } = await openHandle(jobId, name);
++    if (!sh) throw new Error('the spool file of sink ' + i + ' was dropped');
++    spools.push({ sh, size: 0 });
++  }
++}
++
++function writeToSpool(sinkIndex, chunk) {
++  const spool = spools[sinkIndex];
++  if (!spool) return P.hostIoError;
++  try {
++    spool.sh.write(chunk, { at: spool.size });
++  } catch (_) {
++    return P.hostIoError;
++  }
++  spool.size += chunk.length;
++  return 0;
++}
++
++// The bytes of one sink's spool, flushed; called once the engine returned.
++function flushSpools() {
++  return spools.map((spool) => { spool.sh.flush(); return spool.size; });
++}
++
++function spoolRead(msg) {
++  try {
++    const spool = spoolHandle(msg.jobId, msg.sinkIndex);
++    const data = new Uint8Array(msg.count);
++    const n = spool.read(data, { at: msg.offset });
++    const out = n === data.length ? data : data.slice(0, n);
++    self.postMessage({ type: 'spoolChunk', lease: msg.lease, jobId: msg.jobId, sinkIndex: msg.sinkIndex, offset: msg.offset, data: out.buffer }, [out.buffer]);
++  } catch (err) {
++    self.postMessage({ type: 'spoolChunk', lease: msg.lease, jobId: msg.jobId, sinkIndex: msg.sinkIndex, offset: msg.offset, error: err.message || String(err) });
++  }
++}
++
++function spoolHandle(jobId, sinkIndex) {
++  const sh = opfsWriteHandles.get('pdf_spool_' + jobId + '_' + sinkIndex);
++  if (!sh) throw new Error('no spool file for sink ' + sinkIndex + ' of job ' + jobId);
++  return sh;
++}
++
+ // Deletes every file in this worker's own directory but those set aside,
+ // which their pending call removes. Every other handle is closed first, so no
+ // reaping is pending and nothing needs retrying.
+@@ -893,7 +947,9 @@ async function exec(msg) {
+ 
+   activeReaderMap = readerIds.map((rid, i) => [i, rid]);
+   let responseBytes;
++  spoolOut = null;
+   try {
++    if (ioMode === 'opfs') await openSpools(jobId, sinkCount);
+     if (ioMode === 'jspi') {
+       responseBytes = await callLane(new Uint8Array(requestBytes), packed, sinkCount, jspiLaneExecute);
+     } else if (ioMode === 'asyncify') {
+@@ -903,6 +959,8 @@ async function exec(msg) {
+       responseBytes = execute(statePtr, new Uint8Array(requestBytes), packed, sinkCount);
+     }
+ 
++    if (ioMode === 'opfs' && sinkCount > 0) spoolOut = flushSpools();
++
+     // Promote kept readers to held (success responses only — status 1).
+     // keepSources indexes the op's OWN sources, which sit after the
+     // held block in readerIds. They join the handle's group when the
+@@ -951,8 +1009,8 @@ self.onmessage = async (e) => {
+       if (msg.wasmEntry) wasmEntry = msg.wasmEntry;
+       try {
+         // The liveness lock must be held BEFORE the WASM instance
+-        // exists: the host's budget slot, and any OPFS file, must
+-        // never outlive the death signal that releases them.
++        // exists: no OPFS file may outlive the death signal that
++        // lets the host reclaim it.
+         await acquireLivenessLock();
+         await ensureInit();
+         const { engine_state_new } = await import(wasmBaseUrl + 'pdf_oxide.js');
+@@ -992,6 +1050,12 @@ self.onmessage = async (e) => {
+       return;
+     }
+ 
++    case 'spoolRead': {
++      if (!admit(msg)) return;
++      spoolRead(msg);
++      return;
++    }
++
+     case 'opfsWrite': {
+       if (!admit(msg)) { refuseLease(msg, 'opfsWrite'); return; }
+       // The ack carries the lease of its write: one set aside answers late,
+@@ -1033,7 +1097,7 @@ self.onmessage = async (e) => {
+             : responseBytes.buffer.slice(responseBytes.byteOffset, responseBytes.byteOffset + responseBytes.byteLength);
+         // mem is the worker's lifetime peak: linear memory never shrinks.
+         // The host keeps or retires the worker by peak.
+-        self.postMessage({ type: 'result', lease, jobId: msg.jobId, data: owned, mem: wasm.memory.buffer.byteLength, peak: heapPeak() }, [owned]);
++        self.postMessage({ type: 'result', lease, jobId: msg.jobId, data: owned, spool: spoolOut || undefined, mem: wasm.memory.buffer.byteLength, peak: heapPeak() }, [owned]);
+       } catch (err) {
+         // A wasm trap (a Rust panic compiles to `unreachable`) leaves the
+         // engine's state unusable. Report it as a trap, apart from every
