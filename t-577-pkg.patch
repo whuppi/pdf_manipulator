@@ -1,0 +1,257 @@
+diff --git a/CHANGELOG.pre.md b/CHANGELOG.pre.md
+index 90db1c3..6ed5fe7 100644
+--- a/CHANGELOG.pre.md
++++ b/CHANGELOG.pre.md
+@@ -215,6 +215,8 @@ CONTENT RULES (never change)
+ - Changed `verifySignatures` to check each signature's digest and signer key, where it returned `false` for every document; `PdfSignatureInfo` has `isValid`, `coversWholeDocument` and `signingTime` filled
+ - Fixed an empty input to `merge` or any other multi-source op shifting every source after it, so the op read the wrong documents — an empty input now throws `PdfCorrupted`
+ - Fixed a full-rewrite save of a file with no `/Size` writing new objects over existing ones, and dropping an object it could not read without a word — it now throws `PdfCorrupted`
++- Fixed a source that fails to read while a document opens throwing `PdfCorrupted` — it now throws `PdfIoFailed`, so a broken source is told from a broken file
++- Fixed a source whose read fails once being absorbed, so an open or an op went on and succeeded without the bytes — the op now ends with `PdfIoFailed`
+ - Fixed a full-rewrite save of a file holding objects above generation 0 writing references other readers resolve to nothing — each reference now names the generation its object is written at
+ - Fixed `render` and `extractImages` returning an empty stream when the engine failed, a page past the end included — they throw the engine's error
+ - Fixed a full-rewrite save writing an object over 100 MB truncated — it throws instead
+diff --git a/test/ops/core/pdf_source_failure_battery.dart b/test/ops/core/pdf_source_failure_battery.dart
+new file mode 100644
+index 0000000..0cde7c7
+--- /dev/null
++++ b/test/ops/core/pdf_source_failure_battery.dart
+@@ -0,0 +1,117 @@
++// CHARTER — this battery alone proves what a failing DataSource looks like to
++// the caller: a read the source throws on ends the operation with
++// PdfIoFailed, at open and in the middle of an op, however few reads fail and
++// however the engine could have gone on without it; and a file that is
++// corrupt, with a source that reads fine, still ends in PdfCorrupted.
++
++import 'dart:typed_data';
++
++import 'package:pdf_manipulator/pdf_manipulator.dart';
++import 'package:test/test.dart';
++
++import '../../fixtures/generated/fixtures.dart';
++import '../../fixtures/handwritten.dart';
++import '../../harness/test_source_sink.dart';
++import '../../harness/timeouts.dart';
++
++/// A source whose [failing] reads (1-based, counted from the first) throw.
++class _FlakySource extends TestSource {
++  _FlakySource(super.data, {this.failing = const {}});
++
++  final Set<int> failing;
++  int reads = 0;
++
++  @override
++  Uint8List readAt(int offset, int count) {
++    if (failing.contains(++reads)) {
++      throw StateError('the source failed at read $reads');
++    }
++    return super.readAt(offset, count);
++  }
++}
++
++void registerSourceFailureTests(Pdf Function() createPdf, {String? skipMidOp}) {
++  group('source failure', () {
++    test(
++      'a source whose first read fails makes open fail with PdfIoFailed',
++      () async {
++        final pdf = createPdf();
++        final source = _FlakySource(minimalPdf, failing: {1});
++        await expectLater(
++          pdf.open(PdfInput(source)),
++          throwsA(isA<PdfIoFailed>()),
++          reason: 'a broken source is not a broken file',
++        );
++      },
++      timeout: t(2),
++    );
++
++    test(
++      'a source that fails once after the first read fails open too',
++      () async {
++        // The engine reads the file again to rebuild its xref after a parse
++        // error; a source error is not a parse error and ends the open.
++        final pdf = createPdf();
++        final probe = _FlakySource(fThousandPage);
++        await (await pdf.open(PdfInput(probe))).dispose();
++        expect(probe.reads, greaterThan(1));
++
++        for (var read = 2; read <= probe.reads; read++) {
++          final source = _FlakySource(fThousandPage, failing: {read});
++          await expectLater(
++            pdf.open(PdfInput(source)),
++            throwsA(isA<PdfIoFailed>()),
++            reason: 'the source threw on read $read of ${probe.reads}',
++          );
++        }
++      },
++      timeout: t(20),
++    );
++
++    test(
++      'a source whose read fails once mid-op fails that op with PdfIoFailed',
++      skip: skipMidOp,
++      () async {
++        final pdf = createPdf();
++        final source = _FlakySource(fThousandPage);
++        final doc = await pdf.open(PdfInput(source));
++        final afterOpen = source.reads;
++        await doc.text(pages: const PdfPages.single(900));
++        final lastRead = source.reads;
++        expect(
++          lastRead,
++          greaterThan(afterOpen),
++          reason: 'the op must read the source for the failure to land in it',
++        );
++
++        for (var read = afterOpen + 1; read <= lastRead; read++) {
++          final flaky = _FlakySource(fThousandPage, failing: {read});
++          final failing = await pdf.open(PdfInput(flaky));
++          await expectLater(
++            failing.text(pages: const PdfPages.single(900)),
++            throwsA(isA<PdfIoFailed>()),
++            reason: 'the source threw on read $read',
++          );
++          await failing.dispose();
++        }
++        await doc.dispose();
++      },
++      timeout: t(20),
++    );
++
++    test(
++      'a corrupt file read by a sound source is still PdfCorrupted',
++      () async {
++        final pdf = createPdf();
++        for (final bytes in [garbageBytes, emptyBytes, brokenPdf]) {
++          final source = _FlakySource(bytes);
++          await expectLater(
++            pdf.open(PdfInput(source)),
++            throwsA(isA<PdfCorrupted>()),
++          );
++        }
++      },
++      timeout: t(5),
++    );
++  });
++}
+diff --git a/test/ops/runners/native_runner_test.dart b/test/ops/runners/native_runner_test.dart
+index 323c0d6..f0ea9bf 100644
+--- a/test/ops/runners/native_runner_test.dart
++++ b/test/ops/runners/native_runner_test.dart
+@@ -27,6 +27,7 @@ import '../core/pdf_abort_battery.dart';
+ import '../core/pdf_cancel_battery.dart';
+ import '../core/pdf_combinator_cancel_battery.dart';
+ import '../core/pdf_lifecycle_battery.dart';
++import '../core/pdf_source_failure_battery.dart';
+ import '../core/pdf_instance_battery.dart';
+ import '../core/pdf_lane_protocol_battery.dart';
+ import '../core/pdf_runtime_safety_battery.dart';
+@@ -78,6 +79,7 @@ void main() {
+   registerCombinatorCancelTests(() => pdf);
+   registerAbortTests(() => pdf);
+   registerLifecycleTests(() => Pdf());
++  registerSourceFailureTests(() => pdf);
+   registerInstanceTests(() => Pdf());
+   registerRuntimeSafetyTests();
+   registerExecutorTests(() => Pdf());
+diff --git a/test/ops/runners/web_asyncify_runner_test.dart b/test/ops/runners/web_asyncify_runner_test.dart
+index f9ecc08..36efe40 100644
+--- a/test/ops/runners/web_asyncify_runner_test.dart
++++ b/test/ops/runners/web_asyncify_runner_test.dart
+@@ -30,6 +30,7 @@ import '../core/pdf_abort_battery.dart';
+ import '../core/pdf_cancel_battery.dart';
+ import '../core/pdf_combinator_cancel_battery.dart';
+ import '../core/pdf_lifecycle_battery.dart';
++import '../core/pdf_source_failure_battery.dart';
+ import '../core/pdf_instance_battery.dart';
+ import '../core/pdf_lane_protocol_battery.dart';
+ import '../core/pdf_runtime_safety_battery.dart';
+@@ -110,6 +111,13 @@ void main() {
+     registerCombinatorCancelTests(() => pdf);
+   });
+   registerAbortTests(() => pdf);
++  group('sources read through the mode', () {
++    // A failing read reaches the engine only when the source is not copied
++    // into the worker first.
++    setUp(() => WebExecutorBooter.transferBudget = 0);
++    tearDown(() => WebExecutorBooter.transferBudget = kTransferBytes);
++    registerSourceFailureTests(() => pdf);
++  });
+   registerLifecycleTests(
+     () => Pdf(
+       config: PdfConfig(
+diff --git a/test/ops/runners/web_atomics_runner_test.dart b/test/ops/runners/web_atomics_runner_test.dart
+index 1518a99..6ffff50 100644
+--- a/test/ops/runners/web_atomics_runner_test.dart
++++ b/test/ops/runners/web_atomics_runner_test.dart
+@@ -30,6 +30,7 @@ import '../core/pdf_abort_battery.dart';
+ import '../core/pdf_cancel_battery.dart';
+ import '../core/pdf_combinator_cancel_battery.dart';
+ import '../core/pdf_lifecycle_battery.dart';
++import '../core/pdf_source_failure_battery.dart';
+ import '../core/pdf_instance_battery.dart';
+ import '../core/pdf_lane_protocol_battery.dart';
+ import '../core/pdf_runtime_safety_battery.dart';
+@@ -108,6 +109,13 @@ void main() {
+     registerCombinatorCancelTests(() => pdf);
+   });
+   registerAbortTests(() => pdf);
++  group('sources read through the mode', () {
++    // A failing read reaches the engine only when the source is not copied
++    // into the worker first.
++    setUp(() => WebExecutorBooter.transferBudget = 0);
++    tearDown(() => WebExecutorBooter.transferBudget = kTransferBytes);
++    registerSourceFailureTests(() => pdf);
++  });
+   registerLifecycleTests(
+     () => Pdf(
+       config: PdfConfig(
+diff --git a/test/ops/runners/web_jspi_runner_test.dart b/test/ops/runners/web_jspi_runner_test.dart
+index a3361de..4d92fd1 100644
+--- a/test/ops/runners/web_jspi_runner_test.dart
++++ b/test/ops/runners/web_jspi_runner_test.dart
+@@ -30,6 +30,7 @@ import '../core/pdf_abort_battery.dart';
+ import '../core/pdf_cancel_battery.dart';
+ import '../core/pdf_combinator_cancel_battery.dart';
+ import '../core/pdf_lifecycle_battery.dart';
++import '../core/pdf_source_failure_battery.dart';
+ import '../core/pdf_instance_battery.dart';
+ import '../core/pdf_lane_protocol_battery.dart';
+ import '../core/pdf_runtime_safety_battery.dart';
+@@ -110,6 +111,13 @@ void main() {
+     registerCombinatorCancelTests(() => pdf);
+   });
+   registerAbortTests(() => pdf);
++  group('sources read through the mode', () {
++    // A failing read reaches the engine only when the source is not copied
++    // into the worker first.
++    setUp(() => WebExecutorBooter.transferBudget = 0);
++    tearDown(() => WebExecutorBooter.transferBudget = kTransferBytes);
++    registerSourceFailureTests(() => pdf);
++  });
+   registerLifecycleTests(
+     () => Pdf(
+       config: PdfConfig(
+diff --git a/test/ops/runners/web_opfs_runner_test.dart b/test/ops/runners/web_opfs_runner_test.dart
+index 7d222c4..fd8a8a4 100644
+--- a/test/ops/runners/web_opfs_runner_test.dart
++++ b/test/ops/runners/web_opfs_runner_test.dart
+@@ -27,6 +27,7 @@ import '../core/pdf_abort_battery.dart';
+ import '../core/pdf_cancel_battery.dart';
+ import '../core/pdf_combinator_cancel_battery.dart';
+ import '../core/pdf_lifecycle_battery.dart';
++import '../core/pdf_source_failure_battery.dart';
+ import '../core/pdf_instance_battery.dart';
+ import '../core/pdf_lane_protocol_battery.dart';
+ import '../core/pdf_runtime_safety_battery.dart';
+@@ -103,6 +104,10 @@ void main() {
+   );
+   registerWebCancelChannelTests(() => pdf);
+   registerAbortTests(() => pdf);
++  registerSourceFailureTests(
++    () => pdf,
++    skipMidOp: 'OPFS pre-copies its sources: no source read lands in an op',
++  );
+   registerLifecycleTests(
+     () => Pdf(
+       config: PdfConfig(

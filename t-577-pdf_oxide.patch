@@ -1,0 +1,354 @@
+diff --git a/src/document.rs b/src/document.rs
+index c96b31b..bd2d834 100644
+--- a/src/document.rs
++++ b/src/document.rs
+@@ -1251,6 +1251,11 @@ impl PdfDocument {
+                 }
+             },
+             Err(e) => {
++                // ── pdf_manipulator patch: a source that fails is not a damaged xref; the rebuild would read it again ──
++                if matches!(e, Error::Io(_)) {
++                    return Err(e);
++                }
++                // ── end pdf_manipulator patch ──
+                 log::warn!("Regular xref parsing failed: {}, attempting reconstruction", e);
+ 
+                 // Fall back to xref reconstruction
+@@ -26834,7 +26839,9 @@ pub fn parse_header<R: Read + Seek>(reader: &mut R, lenient: bool) -> Result<(u8
+                 }
+                 false
+             } else {
+-                return Err(Error::InvalidHeader(format!("Failed to read file: {}", e)));
++                // ── pdf_manipulator patch: a source that fails is an I/O error, not a bad header ──
++                return Err(Error::Io(e));
++                // ── end pdf_manipulator patch ──
+             }
+         },
+     };
+diff --git a/src/host/bridge_api.rs b/src/host/bridge_api.rs
+index 8c802ee..f6e33c2 100644
+--- a/src/host/bridge_api.rs
++++ b/src/host/bridge_api.rs
+@@ -39,6 +39,32 @@ impl std::io::Seek for BoxedReader {
+     fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> { self.0.seek(pos) }
+ }
+ 
++thread_local! {
++    /// The message of the first read the host's source failed in the op
++    /// running on this thread. An executor runs one op at a time, on one
++    /// thread, and every read of a source happens on it.
++    static SOURCE_FAILURE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
++}
++
++/// Records that the host's source failed a read, and returns the error the
++/// reader answers with. The first failure of an op is the one that is kept.
++pub(crate) fn fail_source(message: &str) -> std::io::Error {
++    SOURCE_FAILURE.with(|failure| {
++        failure.borrow_mut().get_or_insert_with(|| message.to_string());
++    });
++    std::io::Error::other(message)
++}
++
++/// The error of the op's first failed source read, if one failed: a reader
++/// answers every read after it with this, and never asks the host again.
++pub(crate) fn source_failure() -> Option<std::io::Error> {
++    SOURCE_FAILURE.with(|failure| failure.borrow().as_deref().map(std::io::Error::other))
++}
++
++fn take_source_failure() -> Option<String> {
++    SOURCE_FAILURE.with(|failure| failure.borrow_mut().take())
++}
++
+ /// A sink writer that buffers: it holds bytes back until `flush`, and
+ /// `discard` drops what it holds. Neither writes on drop.
+ pub(crate) trait BufferedSink: std::io::Write + Send {
+@@ -163,6 +189,7 @@ pub(crate) fn handle_request(
+         "a lane's state is used on the thread that made it"
+     );
+     let _job = crate::cancel::enter(cancel);
++    take_source_failure();
+     let req = match Request::parse(bytes) {
+         Ok(r) => r,
+         Err(e) => return ResponseWriter::error(&format!("parse error: {e}")),
+@@ -172,6 +199,10 @@ pub(crate) fn handle_request(
+     // writer alive to the end, where its last bytes are written or dropped.
+     let mut doors: Vec<BoxedWriter> = sinks.iter().map(BoxedWriter::share).collect();
+ 
++    let documents_before = state.documents.keys().max().copied();
++    let editors_before = state.editors.keys().max().copied();
++    let builders_before = state.builders.keys().max().copied();
++
+     let mut ctx = crate::host::ops::OpCtx {
+         state,
+         req: &req,
+@@ -184,6 +215,18 @@ pub(crate) fn handle_request(
+         Some(entry) => (entry.handle)(&mut ctx),
+         None => ResponseWriter::error(&format!("unknown op: {}", req.op())),
+     };
++    // A source that failed a read ends the op, whatever the engine made of
++    // the error on its way up: a parser that took it for damage, a loop that
++    // skipped the object it was reading, a rebuild that read on. A cancel
++    // stays a cancel, and a handle the op made is dropped with the op.
++    if let Some(message) = take_source_failure() {
++        if response != ResponseWriter::cancelled() {
++            response = ResponseWriter::error_of(&crate::Error::Io(std::io::Error::other(message)));
++            ctx.state.documents.retain(|id, _| Some(*id) <= documents_before);
++            ctx.state.editors.retain(|id, _| Some(*id) <= editors_before);
++            ctx.state.builders.retain(|id, _| Some(*id) <= builders_before);
++        }
++    }
+     // The op's last bytes are written here, by an explicit flush, never by a
+     // writer's drop: a drop cannot report that the write failed. An op that
+     // ended cancelled or failed holds no partial output, so its sinks write
+diff --git a/src/host/engine_proofs/mod.rs b/src/host/engine_proofs/mod.rs
+index b739975..ea0c47c 100644
+--- a/src/host/engine_proofs/mod.rs
++++ b/src/host/engine_proofs/mod.rs
+@@ -72,6 +72,7 @@ mod mem_page_text;
+ mod mem_structure;
+ mod mem_xfa;
+ mod mem_xmp;
++mod source_failure;
+ mod span_dedupe_same;
+ mod own_process;
+ mod page_operators;
+diff --git a/src/host/engine_proofs/shared_state.txt b/src/host/engine_proofs/shared_state.txt
+index 9a8544d..a7081e9 100644
+--- a/src/host/engine_proofs/shared_state.txt
++++ b/src/host/engine_proofs/shared_state.txt
+@@ -14,6 +14,7 @@ src/extractors/warnings.rs::DROPPED  thread  the count of warnings one thread's
+ src/extractors/warnings.rs::WARNING_SINK  thread  the warnings one thread raised; a lane's own, emptied when it starts and on reset
+ src/fonts/unicode_fallback.rs::CACHED_BYTES  machine  the bytes of a system Unicode font, read once from the host's font files
+ src/fonts/unicode_fallback.rs::CACHED_CJK_BYTES  machine  the bytes of a system CJK font, read once from the host's font files
++src/host/bridge_api.rs::SOURCE_FAILURE  thread  the message of the first read the host's source failed in the running op; handle_request empties it when an op starts and takes it when the op ends
+ src/host/caches.rs::DEFAULT  upstream-binding  the EngineCaches used when none is installed: the python, ffi and wasm.rs bindings and upstream tests; an executor always installs its own
+ src/host/caches.rs::INSTALLED  executor  the pointer to the EngineCaches the current executor thread installed
+ src/host/heap.rs::MINE  executor  what the current thread holds and its peak
+diff --git a/src/host/engine_proofs/source_failure.rs b/src/host/engine_proofs/source_failure.rs
+new file mode 100644
+index 0000000..df31e12
+--- /dev/null
++++ b/src/host/engine_proofs/source_failure.rs
+@@ -0,0 +1,167 @@
++//! A source that fails is an I/O error, whatever the engine was doing.
++//!
++//! No Dart battery sees these: they need a read that fails at an exact point
++//! of the open, and a count of the reads the engine makes after it, which the
++//! host's source never reports back.
++
++use super::support::{pdf_from_objects, stream_object};
++use crate::document::PdfDocument;
++use crate::error::Error;
++use std::io::{self, Cursor, Read, Seek, SeekFrom};
++use std::sync::atomic::{AtomicUsize, Ordering};
++use std::sync::Arc;
++
++/// A document larger than one read buffer, so its xref sits in a read of its own.
++fn padded_pdf() -> Vec<u8> {
++    pdf_from_objects(&[
++        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n".to_vec(),
++        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n".to_vec(),
++        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>\nendobj\n".to_vec(),
++        stream_object(4, "", &vec![b'x'; 200_000]),
++    ])
++}
++
++/// Reads a document's bytes and fails once, on the first read that starts at
++/// or past `from`; `after_failure` counts the reads the engine makes after it.
++struct FailsOnce {
++    inner: Cursor<Vec<u8>>,
++    from: u64,
++    failed: bool,
++    after_failure: Arc<AtomicUsize>,
++}
++
++impl FailsOnce {
++    fn new(bytes: Vec<u8>, from: u64) -> (Self, Arc<AtomicUsize>) {
++        let after_failure = Arc::new(AtomicUsize::new(0));
++        let reader = Self { inner: Cursor::new(bytes), from, failed: false, after_failure: after_failure.clone() };
++        (reader, after_failure)
++    }
++}
++
++impl Read for FailsOnce {
++    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
++        if self.failed {
++            self.after_failure.fetch_add(1, Ordering::SeqCst);
++        } else if self.inner.position() >= self.from {
++            self.failed = true;
++            return Err(io::Error::other("host read failed"));
++        }
++        self.inner.read(buf)
++    }
++}
++
++impl Seek for FailsOnce {
++    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
++        self.inner.seek(pos)
++    }
++}
++
++/// No Dart battery sees it: it fails the one read at byte 0 and the host's source answers every later read.
++#[test]
++fn a_failed_read_of_the_header_is_an_io_error_not_a_bad_header() {
++    let (reader, _) = FailsOnce::new(padded_pdf(), 0);
++    let error = PdfDocument::from_external_reader(Box::new(reader)).err().expect("the open fails");
++    assert!(matches!(error, Error::Io(_)), "a source error is an I/O error, got {error:?}");
++}
++
++/// No Dart battery sees it: it counts the reads the engine makes after the failed one, which the host's source never reports.
++#[test]
++fn a_failed_read_of_the_xref_ends_the_open_without_a_rebuild() {
++    let bytes = padded_pdf();
++    let xref_at = bytes.windows(4).rposition(|w| w == b"xref").unwrap() as u64;
++    let (reader, after_failure) = FailsOnce::new(bytes, xref_at);
++    let error = PdfDocument::from_external_reader(Box::new(reader)).err().expect("the open fails");
++    assert!(matches!(error, Error::Io(_)), "a source error is an I/O error, got {error:?}");
++    assert_eq!(
++        after_failure.load(Ordering::SeqCst),
++        0,
++        "the engine asked the source again after it failed"
++    );
++}
++
++#[cfg(feature = "native-bridge")]
++mod bridge {
++    use super::*;
++    use crate::cancel::CancelCheck;
++    use crate::host::binary_codec::ErrorKind;
++    use crate::host::bridge_api::{handle_request, BoxedReader};
++    use crate::host::engine_state::EngineState;
++    use crate::host::native::callback_reader::CallbackReader;
++    use crate::host::native::cancel::CancelFlags;
++    use crate::host::native::shared_buffer::{self as sb, read_channel as rc};
++    use std::sync::atomic::AtomicPtr;
++    use std::sync::OnceLock;
++
++    static TRIPS: AtomicUsize = AtomicUsize::new(0);
++    static FAIL_TRIP: AtomicUsize = AtomicUsize::new(usize::MAX);
++    static CHANNEL: AtomicPtr<u8> = AtomicPtr::new(std::ptr::null_mut());
++    static SOURCE: OnceLock<Vec<u8>> = OnceLock::new();
++
++    /// The host side of a read: the trip numbered `FAIL_TRIP` answers with an
++    /// error, every other one with the bytes.
++    unsafe extern "C" fn answer_read() {
++        let trip = TRIPS.fetch_add(1, Ordering::SeqCst) + 1;
++        let channel = CHANNEL.load(Ordering::SeqCst);
++        if trip == FAIL_TRIP.load(Ordering::SeqCst) {
++            sb::host_respond(channel, rc::OFFSET_REQUEST_SEQ, rc::OFFSET_RESPONSE, sb::FLAG_ERROR);
++            return;
++        }
++        let source = SOURCE.get().unwrap();
++        let offset = sb::read_i64(channel, rc::OFFSET_REQUEST_OFFSET) as usize;
++        let count = sb::read_i64(channel, rc::OFFSET_REQUEST_COUNT) as usize;
++        let n = count.min(source.len() - offset);
++        std::ptr::copy_nonoverlapping(source[offset..].as_ptr(), sb::data_ptr(channel, rc::OFFSET_DATA), n);
++        sb::write_i64(channel, rc::OFFSET_RESPONSE_LENGTH, n as i64);
++        sb::host_respond(channel, rc::OFFSET_REQUEST_SEQ, rc::OFFSET_RESPONSE, sb::FLAG_READY);
++    }
++
++    /// `open` of the source, its reads answered by [`answer_read`]; the
++    /// response and the number of documents the state holds after it.
++    fn open(state: &mut EngineState, fail_trip: usize) -> (Vec<u8>, usize) {
++        let source = SOURCE.get_or_init(padded_pdf);
++        let mut channel = vec![0u8; rc::TOTAL_SIZE];
++        unsafe { sb::init_sync(channel.as_mut_ptr(), rc::OFFSET_SYNC_PTR) };
++        CHANNEL.store(channel.as_mut_ptr(), Ordering::SeqCst);
++        TRIPS.store(0, Ordering::SeqCst);
++        FAIL_TRIP.store(fail_trip, Ordering::SeqCst);
++        let reader = unsafe {
++            CallbackReader::new(channel.as_mut_ptr(), answer_read, source.len() as u64, CancelFlags::unconnected())
++        };
++        let mut request = vec![4u8];
++        request.extend_from_slice(b"open");
++        request.extend_from_slice(&0u16.to_le_bytes());
++        let response = handle_request(
++            state,
++            &request,
++            None,
++            vec![BoxedReader(Box::new(reader))],
++            Vec::new(),
++            &CancelCheck::none(),
++        );
++        unsafe { sb::destroy_sync(channel.as_mut_ptr(), rc::OFFSET_SYNC_PTR) };
++        (response, state.documents.len())
++    }
++
++    /// No Dart battery sees it: it needs the one trip to the host that fails
++    /// to be every trip of the open in turn, and a count of the documents the lane keeps.
++    #[test]
++    fn a_trip_that_fails_once_ends_the_open_with_an_io_error_and_keeps_no_document() {
++        let mut state = EngineState::new();
++        let (clean, held) = open(&mut state, usize::MAX);
++        assert_eq!(clean[0], 1, "the open succeeds on a sound source");
++        assert_eq!(held, 1);
++        let trips = TRIPS.load(Ordering::SeqCst);
++        assert!(trips >= 2, "the file must take more than one trip, took {trips}");
++
++        for trip in 1..=trips {
++            let mut state = EngineState::new();
++            let (response, held) = open(&mut state, trip);
++            assert_eq!(response[0], 0, "trip {trip} of {trips} failed and the open succeeded");
++            assert_eq!(response[1], ErrorKind::Io as u8, "trip {trip} of {trips}: a failed source is not {}", response[1]);
++            assert_eq!(held, 0, "trip {trip} of {trips}: a failed open keeps no document");
++        }
++
++        let (again, _) = open(&mut state, usize::MAX);
++        assert_eq!(again[0], 1, "the next op on the lane starts clean");
++    }
++}
+diff --git a/src/host/native/callback_reader.rs b/src/host/native/callback_reader.rs
+index 7f80bea..25320d5 100644
+--- a/src/host/native/callback_reader.rs
++++ b/src/host/native/callback_reader.rs
+@@ -80,6 +80,13 @@ impl Read for CallbackReader {
+             return Err(crate::host::native::cancel::cancelled());
+         }
+ 
++        // A read the host failed ends the op: the engine reads on only to be
++        // told the same thing, and never to be given bytes it would take for
++        // a source that recovered.
++        if let Some(error) = crate::host::bridge_api::source_failure() {
++            return Err(error);
++        }
++
+         if out.is_empty() {
+             return Ok(0);
+         }
+@@ -147,7 +154,8 @@ impl Read for CallbackReader {
+         }
+ 
+         if flags & sb::FLAG_ERROR != 0 {
+-            return Err(io::Error::new(io::ErrorKind::Other, "host read failed"));
++            self.window = (0, 0);
++            return Err(crate::host::bridge_api::fail_source("host read failed"));
+         }
+ 
+         Err(crate::host::native::cancel::cancelled())
+diff --git a/src/host/wasm/js_reader.rs b/src/host/wasm/js_reader.rs
+index ed4ed72..52d0317 100644
+--- a/src/host/wasm/js_reader.rs
++++ b/src/host/wasm/js_reader.rs
+@@ -68,6 +68,13 @@ impl Read for JsCallbackReader {
+             return Ok(0);
+         }
+ 
++        // A read the host failed ends the op: the engine reads on only to be
++        // told the same thing, and never to be given bytes it would take for
++        // a source that recovered.
++        if let Some(error) = crate::host::bridge_api::source_failure() {
++            return Err(error);
++        }
++
+         let in_window = self.position >= self.window_start
+             && self.position < self.window_start + self.window_len as u64;
+         if !in_window {
+@@ -91,7 +98,7 @@ impl Read for JsCallbackReader {
+                 return Err(io::Error::other("operation cancelled"));
+             }
+             if n < 0 {
+-                return Err(io::Error::new(io::ErrorKind::Other, "host_read_at failed"));
++                return Err(crate::host::bridge_api::fail_source("host_read_at failed"));
+             }
+             self.window_start = self.position;
+             self.window_len = n as usize;
