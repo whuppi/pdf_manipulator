@@ -287,6 +287,8 @@ CONTENT RULES (never change)
 - Fixed an operation whose last write failed or was cancelled still reporting success with its output cut short — the engine now flushes the final bytes before it answers, and a refusal fails or cancels the operation
 - Fixed a web source read past 4 GiB returning the bytes at the offset modulo 4 GiB, with no error — the read offset crosses to the engine as a JS number, not a 32-bit integer
 - Fixed a cancel not reaching a redaction, a text extraction of a form or a change of an image's bounds until the page or form it was reading ended, so a page of millions of operators could not be stopped — each now stops within one operator
+- Fixed a compressing full-rewrite save of a document with a very large rewritten stream holding the whole stream and its compressed copy in memory — the stream is counted, then recompressed in pieces (an encrypted save writes such a stream as it is)
+- Fixed listing the images of a page with a very large content stream holding the whole decoded content and every parsed operator in memory — the content is read one operator at a time
 
 ## 5.0.1-dev.0
 
