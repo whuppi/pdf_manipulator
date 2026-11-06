@@ -22,6 +22,18 @@ const MIB: usize = 1024 * 1024;
 /// The page count of the `thousand_page` input.
 const THOUSAND_PAGES: usize = 1_000;
 
+/// The runs of the `fonts` page (one per font) and of the `tagged` page.
+const FONTS_PAGE: usize = 20_000;
+const TAGGED_PAGE: usize = 600_000;
+
+/// The ceiling of an `extractAll` of one extreme page: the per-op 16 MiB plus
+/// the declared bytes for each of its `runs` pieces and each of its `fonts`
+/// (`pdf_oxide::host::piece_budget`: EXTRACT_BYTES_PER_PIECE for a run,
+/// EXTRACT_BYTES_PER_FONT for a font the page names).
+fn page_limit(runs: usize, fonts: usize) -> usize {
+    16 * MIB + pdf_oxide::host::piece_budget::page_extra(runs, fonts)
+}
+
 /// Each step's ceiling: today's measured peak rounded up to 16 MiB, so a
 /// change that holds more memory fails `make check`. A step whose target
 /// is lower names the target and the task that brings it there; when that
@@ -45,6 +57,17 @@ fn limit(op: &str, input: &str) -> usize {
         ("open", "thousand_page") => 16 * MIB,
         // The text is read as operators, one token at a time.
         ("extractAll", "content-fl" | "content-a85" | "content-lzw" | "forms") => 16 * MIB,
+        // One page's text is a table whole by nature (d-130): the ceiling is
+        // the per-op 16 MiB plus the declared bytes for each piece of the one
+        // page being read (pdf_oxide::host::piece_budget). 20,000 fonts, each
+        // with a ToUnicode CMap of its own, each shown once: a run and a font
+        // each. 600,000 structure elements, each marking one run of text. The
+        // 2x rows are the same pages at twice the size: the slope, not one
+        // point.
+        ("extractAll", "fonts") => page_limit(FONTS_PAGE, FONTS_PAGE),
+        ("extractAll", "fonts-2x") => page_limit(2 * FONTS_PAGE, 2 * FONTS_PAGE),
+        ("extractAll", "tagged") => page_limit(TAGGED_PAGE, 0),
+        ("extractAll", "tagged-2x") => page_limit(2 * TAGGED_PAGE, 0),
         // Rulings are quantised as they are painted and dropped; the grid they
         // make is bounded by the page, never by the paths.
         ("extractAll", "paths") => 16 * MIB,
@@ -310,6 +333,14 @@ fn run() -> Result<(), String> {
     generate_paths(&paths)?;
     let widgets = dir.join("widgets.pdf");
     generate_widgets(&widgets)?;
+    let fonts = dir.join("fonts.pdf");
+    generate_fonts(&fonts, FONTS_PAGE)?;
+    let tagged = dir.join("tagged.pdf");
+    generate_tagged(&tagged, TAGGED_PAGE)?;
+    let fonts_2x = dir.join("fonts-2x.pdf");
+    generate_fonts(&fonts_2x, 2 * FONTS_PAGE)?;
+    let tagged_2x = dir.join("tagged-2x.pdf");
+    generate_tagged(&tagged_2x, 2 * TAGGED_PAGE)?;
     eprintln!(
         "memprobe: inputs ready: many={} huge={} encrypted={} forms={} bytes",
         std::fs::metadata(&many).map(|m| m.len()).unwrap_or(0),
@@ -592,7 +623,14 @@ fn run() -> Result<(), String> {
     let extract_inputs: Vec<(&str, &Path)> = contents
         .iter()
         .map(|(name, path)| (*name, path.as_path()))
-        .chain([("forms", forms.as_path()), ("paths", paths.as_path())])
+        .chain([
+            ("forms", forms.as_path()),
+            ("paths", paths.as_path()),
+            ("fonts", fonts.as_path()),
+            ("tagged", tagged.as_path()),
+            ("fonts-2x", fonts_2x.as_path()),
+            ("tagged-2x", tagged_2x.as_path()),
+        ])
         .collect();
     // redact the left part of the first text line of each content source,
     // apply, save, then read the saved file back: the covered start of the
@@ -3281,6 +3319,135 @@ fn generate_forms(path: &Path) -> Result<(), String> {
         if form % 500 == 0 {
             eprintln!("memprobe: forms: form {form}/{FORMS}");
         }
+    }
+    out.finish()
+}
+
+/// A one-page PDF of `fonts` simple fonts (20,000, and 40,000 for the double-size row), each with a ToUnicode CMap of its
+/// own (64 mappings that differ per font), each shown once: about 64 MiB of
+/// font dictionaries and CMaps.
+#[allow(non_snake_case)]
+fn generate_fonts(path: &Path, fonts: usize) -> Result<(), String> {
+    let FONTS = fonts;
+    const FIRST: usize = 5;
+    let mut out = PdfOut::create(path)?;
+    out.object(1, "<< /Type /Catalog /Pages 2 0 R >>")?;
+    out.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")?;
+    let names: String = (0..FONTS).map(|i| format!("/F{i} {} 0 R ", FIRST + 2 * i)).collect();
+    out.object(
+        3,
+        &format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+             /Resources << /Font << {names}>> >> /Contents 4 0 R >>"
+        ),
+    )?;
+    let page: String =
+        (0..FONTS).map(|i| format!("BT /F{i} 10 Tf 10 {} Td (AB) Tj ET\n", 780 - i % 700)).collect();
+    out.stream(4, "", page.len() as u64, page.as_bytes())?;
+    let padding = "x".repeat(2000);
+    for i in 0..FONTS {
+        let font = FIRST + 2 * i;
+        out.object(
+            font,
+            &format!(
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Probe{i} /FirstChar 65 /LastChar 66 \
+                 /Widths [600 600] /ToUnicode {} 0 R /Note ({padding}) >>",
+                font + 1
+            ),
+        )?;
+        let mut cmap = String::from(
+            "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n\
+             1 begincodespacerange\n<00> <FF>\nendcodespacerange\n64 beginbfchar\n",
+        );
+        for code in 0..64u32 {
+            cmap.push_str(&format!("<{:02X}> <{:04X}>\n", code + 0x20, 0x4E00 + ((i as u32 * 64 + code) % 20_000)));
+        }
+        cmap.push_str("endbfchar\nendcmap end end\n");
+        out.stream(font + 1, "", cmap.len() as u64, cmap.as_bytes())?;
+        if i % 5000 == 0 {
+            eprintln!("memprobe: fonts: font {i}/{FONTS}");
+        }
+    }
+    out.finish()
+}
+
+/// A tagged one-page PDF: `elements` (600,000, and 1,200,000 for the double-size row) paragraph structure elements under sections
+/// sections of 100, each marking one run of text, and an article thread of
+/// 5,000 beads over the page: about 64 MiB.
+#[allow(non_snake_case)]
+fn generate_tagged(path: &Path, elements: usize) -> Result<(), String> {
+    let ELEMENTS = elements;
+    const PER_SECTION: usize = 100;
+    let SECTIONS = ELEMENTS / PER_SECTION;
+    const BEADS: usize = 5_000;
+    // 1 catalog, 2 pages, 3 page, 4 contents, 5 font, 6 struct root,
+    // 7 document, then the sections, the paragraphs, the thread and its beads.
+    const DOCUMENT: usize = 7;
+    const FIRST_SECTION: usize = 8;
+    let FIRST_PARAGRAPH = FIRST_SECTION + SECTIONS;
+    let THREAD = FIRST_PARAGRAPH + ELEMENTS;
+    let FIRST_BEAD = THREAD + 1;
+    let mut out = PdfOut::create(path)?;
+    out.object(
+        1,
+        &format!(
+            "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 6 0 R \
+             /Threads [{THREAD} 0 R] >>"
+        ),
+    )?;
+    out.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")?;
+    out.object(
+        3,
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /StructParents 0 \
+         /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+    )?;
+    let mut content = String::new();
+    for mcid in 0..ELEMENTS {
+        content.push_str(&format!(
+            "/P <</MCID {mcid}>> BDC BT /F1 6 Tf 10 {} Td (t{mcid}) Tj ET EMC\n",
+            780 - mcid % 760
+        ));
+    }
+    out.stream(4, "", content.len() as u64, content.as_bytes())?;
+    drop(content);
+    out.object(5, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")?;
+    out.object(6, &format!("<< /Type /StructTreeRoot /K {DOCUMENT} 0 R >>"))?;
+    let sections: String = (0..SECTIONS).map(|s| format!("{} 0 R ", FIRST_SECTION + s)).collect();
+    out.object(
+        DOCUMENT,
+        &format!("<< /Type /StructElem /S /Document /P 6 0 R /K [{sections}] >>"),
+    )?;
+    for s in 0..SECTIONS {
+        let kids: String = (0..PER_SECTION)
+            .map(|k| format!("{} 0 R ", FIRST_PARAGRAPH + s * PER_SECTION + k))
+            .collect();
+        out.object(
+            FIRST_SECTION + s,
+            &format!("<< /Type /StructElem /S /Sect /P {DOCUMENT} 0 R /K [{kids}] >>"),
+        )?;
+    }
+    for e in 0..ELEMENTS {
+        out.object(
+            FIRST_PARAGRAPH + e,
+            &format!(
+                "<< /Type /StructElem /S /P /P {} 0 R /Pg 3 0 R /K {e} >>",
+                FIRST_SECTION + e / PER_SECTION
+            ),
+        )?;
+        if e % 100_000 == 0 {
+            eprintln!("memprobe: tagged: element {e}/{ELEMENTS}");
+        }
+    }
+    out.object(THREAD, &format!("<< /Type /Thread /F {FIRST_BEAD} 0 R >>"))?;
+    for b in 0..BEADS {
+        let next = FIRST_BEAD + (b + 1) % BEADS;
+        let prev = FIRST_BEAD + (b + BEADS - 1) % BEADS;
+        out.object(
+            FIRST_BEAD + b,
+            &format!(
+                "<< /Type /Bead /T {THREAD} 0 R /N {next} 0 R /V {prev} 0 R /P 3 0 R /R [0 0 100 100] >>"
+            ),
+        )?;
     }
     out.finish()
 }

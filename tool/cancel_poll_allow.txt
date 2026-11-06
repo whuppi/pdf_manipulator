@@ -43,3 +43,4 @@ src/rendering/separation_renderer.rs::scan_operators_for_inks#1  # bounded: no h
 src/xref_reconstruction.rs::reconstruct_minimal_trailer#1  # bounded: at most 4096 objects (MAX_SCAN)
 src/xref_reconstruction.rs::recover_from_objstms#1  # bounded: at most 4096 objects (MAX_SCAN)
 src/xref_reconstruction.rs::synthesize_catalog_from_pages#1  # bounded: at most 4096 objects (MAX_SCAN)
+src/host/font_budget.rs::set_fits#1  # bounded: it stops at the first font past the cache budget (1 MiB), so it visits at most that many bytes of fonts, never the document

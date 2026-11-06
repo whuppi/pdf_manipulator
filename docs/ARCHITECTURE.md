@@ -510,6 +510,17 @@ be the last piece in the file, so no text leaves until every piece of the page i
 page's text table is whole by nature, like the xref. So one page's text costs a declared
 amount per text piece of the one page being read, on top of the ceiling.
 
+The amounts are in `host/piece_budget.rs`: `EXTRACT_BYTES_PER_PIECE` and
+`EXTRACT_BYTES_PER_FONT` for a whole extraction (per text run and per font the page
+names), and the stage budgets `STAMP_BYTES_PER_PIECE`, `DEDUPE_BYTES_PER_PIECE`,
+`ASSEMBLY_BYTES_PER_PIECE` and `LOAD_FONTS_BYTES_PER_FONT`. Engine proofs
+(`engine_proofs/mem_page_text.rs`) assert each, and the `extractAll fonts` and `tagged`
+rows of `make test-memory`, at one and two times the page, hold the engine to them: their
+limit is the ceiling plus those amounts, so the slope is tested, not one point. An external
+sort that spills sorted runs to storage would keep one page under the plain ceiling; it is
+not built, and the trigger to reconsider it is a user with single pages too large for the
+per-piece cost and real storage to spill to.
+
 ### The counting allocator and the heap
 
 One `#[global_allocator]` (`Counting` in `host/heap.rs`) forwards every allocation to the
