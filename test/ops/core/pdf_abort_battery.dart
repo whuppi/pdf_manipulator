@@ -104,6 +104,58 @@ void registerAbortTests(Pdf Function() createPdf) {
       timeout: t(2),
     );
 
+    group('an op whose last write fails fails and aborts its sink once', () {
+      // Each output is smaller than the engine's write buffer, so the one
+      // write the sink sees is the final flush.
+      final ops = <String, Future<void> Function(Pdf pdf, DataSink sink)>{
+        'builder save': (pdf, sink) async {
+          final builder = await pdf.build();
+          final page = await builder.addPage(PdfPageSize.points(612, 792));
+          await page.text('Hello');
+          try {
+            await builder.save(sink);
+          } finally {
+            await builder.dispose();
+          }
+        },
+        'editor save': (pdf, sink) async {
+          final editor = await pdf.edit(PdfInput(src(fTwoPageMarkers)));
+          try {
+            await editor.save(sink);
+          } finally {
+            await editor.dispose();
+          }
+        },
+        'extractAttachment': (pdf, sink) async {
+          final doc = await pdf.open(PdfInput(src(attachmentPdf)));
+          try {
+            await doc.extractAttachment('notes.txt', sink);
+          } finally {
+            await doc.dispose();
+          }
+        },
+      };
+      for (final MapEntry(key: name, value: run) in ops.entries) {
+        test(name, () async {
+          final pdf = createPdf();
+          if (await pdf.ensureInitialized() == PdfIoMode.opfs) {
+            // OPFS mode writes a sink fire-and-forget: the engine is never
+            // told that the sink refused a chunk.
+            markTestSkipped('OPFS mode does not report a failed sink write');
+            return;
+          }
+          final sink = CountingSink(failOnWrite: 1);
+          await expectLater(
+            run(pdf, sink),
+            throwsA(isNot(isA<PdfCancelled>())),
+          );
+          await sink.close();
+          expect(sink.writes, 1, reason: 'the final flush is the only write');
+          _expectAbortedOnce(sink);
+        }, timeout: t(2));
+      }
+    });
+
     test('a cancelled extractText aborts its sink once', () async {
       final pdf = createPdf();
       final doc = await pdf.open(PdfInput(src(fTwoPageMarkers)));

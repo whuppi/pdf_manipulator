@@ -282,6 +282,7 @@ CONTENT RULES (never change)
 - Fixed `compress` and every other full-rewrite save dropping the document's title, author, dates and file identifier unless the title was edited — the saved file keeps the source's `/Info` and `/ID`, and an edited title replaces the old `/Info` instead of leaving it behind
 - Fixed the same input saving to different bytes on every run, so `compress` and every other rewriting save could not be compared or cached by hash — objects are written in id order, so only the random AES IVs of an encrypted save differ
 - Fixed creating and disposing `Pdf` instances in a loop starting a new web worker or native thread for most of them — a disposed instance hands its worker or thread back for the next instance to reuse
+- Fixed an operation whose last write failed or was cancelled still reporting success with its output cut short — the engine now flushes the final bytes before it answers, and a refusal fails or cancels the operation
 
 ## 5.0.1-dev.0
 

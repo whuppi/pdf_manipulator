@@ -1072,8 +1072,8 @@ void main() {
     // The chip resolves from "…" to a real mode name.
     await pumpUntil(
       t,
-      () =>
-          ['NATIVE', 'JSPI', 'ATOMICS', 'OPFS', 'ASYNCIFY'].any((m) => t.any(find.text(m))),
+      () => ['NATIVE', 'JSPI', 'ATOMICS', 'OPFS', 'ASYNCIFY']
+          .any((m) => t.any(find.text(m))),
       describe: 'I/O mode chip resolved',
     );
   });

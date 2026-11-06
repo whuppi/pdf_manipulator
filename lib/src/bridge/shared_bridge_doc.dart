@@ -57,9 +57,8 @@ class _SharedDocHandle extends BridgeDocHandle {
   }) {
     final fmt = codec.putEnum(format);
     return PdfTask.group((hook) async {
-      // The first error [output] threw: the engine's last chunk is flushed as
-      // it finishes, so a sink that failed on it did not fail the op, and the
-      // caller's error ends the op all the same.
+      // The first error [output] threw: the engine fails its write with an
+      // echo of it, and the caller's error is the one that ends the op.
       ({Object error, StackTrace stack})? failure;
       try {
         if (pages is PdfPagesAll) {
@@ -103,7 +102,7 @@ class _SharedDocHandle extends BridgeDocHandle {
         // sink that threw made the engine fail its write: the caller's error
         // is the cause, the engine's is its echo.
         final cause = failure;
-        await hook.abortSinks([output], cause?.error ?? error);
+        await (scope ?? hook).abortSinks([output], cause?.error ?? error);
         if (cause != null) {
           Error.throwWithStackTrace(cause.error, cause.stack);
         }
@@ -194,9 +193,8 @@ class _SharedDocHandle extends BridgeDocHandle {
           cancel: hook,
         );
         bin.decodeResponse(res.bytes);
-        // The engine's last chunk is flushed as it finishes, so a sink that
-        // failed on it did not fail the op: the caller's error ends the
-        // op all the same.
+        // A sink that failed made the engine fail its write: the caller's
+        // error ends the op, not the engine's echo.
         if (delivery.failure case final failure?) {
           Error.throwWithStackTrace(failure.error, failure.stack);
         }
