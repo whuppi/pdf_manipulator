@@ -1,0 +1,92 @@
+diff --git a/bindgen_runner/src/main.rs b/bindgen_runner/src/main.rs
+index 79486da..f25d5fb 100644
+--- a/bindgen_runner/src/main.rs
++++ b/bindgen_runner/src/main.rs
+@@ -9,18 +9,67 @@
+ // Produces <out-dir>/pdf_oxide.js + <out-dir>/pdf_oxide_bg.wasm, the
+ // same outputs `wasm-bindgen --target web --out-name pdf_oxide` plus
+ // `wasm-opt -O2` produced.
++//
++//   bindgen_runner --asyncify <in.wasm> <out.wasm> <onlylist-file> <imports>
++//
++// Rewrites an optimized module so it can pause at the imports named in
++// <imports> (a comma list of `module.name`) and resume later. Only the
++// functions named in <onlylist-file> (comma-separated function indices, from
++// lib/src/hook/asyncify_list.dart) are instrumented.
+ 
+ use std::env;
+ use std::fs;
+ use std::path::PathBuf;
+ use std::process::exit;
+ 
+-use wasm_opt::{Feature, OptimizationOptions};
++use wasm_opt::{Feature, OptimizationOptions, Pass};
++
++fn enable_features(opts: &mut OptimizationOptions) {
++    for feature in [
++        Feature::BulkMemory,
++        Feature::Multivalue,
++        Feature::MutableGlobals,
++        Feature::TruncSat,
++        Feature::ReferenceTypes,
++        Feature::SignExt,
++        Feature::Simd,
++    ] {
++        opts.enable_feature(feature);
++    }
++}
++
++// Asyncify first, on its own, and the optimizer after it: the pass emits
++// code the default pipeline is meant to clean up, and binaryen's default
++// pipeline runs before any pass added beside it.
++fn asyncify(args: &[String]) -> anyhow::Result<()> {
++    let (input, output, onlylist, imports) = (&args[0], &args[1], &args[2], &args[3]);
++    let stage = PathBuf::from(format!("{output}.stage"));
++    let mut pass = OptimizationOptions::new_opt_level_0();
++    pass.add_default_passes(false)
++        .add_pass(Pass::Asyncify)
++        .set_pass_arg("asyncify-imports", imports)
++        .set_pass_arg("asyncify-onlylist", &format!("@{onlylist}"));
++    enable_features(&mut pass);
++    pass.run(input, &stage)?;
++    let mut opts = OptimizationOptions::new_opt_level_2();
++    enable_features(&mut opts);
++    let tmp = PathBuf::from(format!("{output}.opt"));
++    opts.run(&stage, &tmp)?;
++    fs::remove_file(&stage)?;
++    fs::rename(&tmp, output)?;
++    Ok(())
++}
+ 
+ fn main() -> anyhow::Result<()> {
+     let args: Vec<String> = env::args().collect();
++    if args.len() == 6 && args[1] == "--asyncify" {
++        return asyncify(&args[2..]);
++    }
+     if args.len() != 3 {
+         eprintln!("usage: bindgen_runner <input.wasm> <out-dir>");
++        eprintln!(
++            "       bindgen_runner --asyncify <in.wasm> <out.wasm> <onlylist-file> <imports>"
++        );
+         exit(2);
+     }
+     let input = PathBuf::from(&args[1]);
+@@ -44,17 +93,7 @@ fn main() -> anyhow::Result<()> {
+     let bg = out_dir.join("pdf_oxide_bg.wasm");
+     let tmp = out_dir.join("pdf_oxide_bg.wasm.opt");
+     let mut opts = OptimizationOptions::new_opt_level_2();
+-    for feature in [
+-        Feature::BulkMemory,
+-        Feature::Multivalue,
+-        Feature::MutableGlobals,
+-        Feature::TruncSat,
+-        Feature::ReferenceTypes,
+-        Feature::SignExt,
+-        Feature::Simd,
+-    ] {
+-        opts.enable_feature(feature);
+-    }
++    enable_features(&mut opts);
+     opts.run(&bg, &tmp)?;
+     fs::rename(&tmp, &bg)?;
+     Ok(())

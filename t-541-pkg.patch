@@ -1,109 +1,567 @@
-diff --git a/tool/asyncify_list.dart b/tool/asyncify_list.dart
-new file mode 100644
-index 0000000..9547dad
---- /dev/null
-+++ b/tool/asyncify_list.dart
-@@ -0,0 +1,532 @@
-+// asyncify_list.dart — which functions of a built engine wasm can be on the
-+// call stack while the module is paused at a host import, from the module's
-+// own call graph.
+diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+index 5f2ccca..9f04988 100644
+--- a/.github/workflows/release.yml
++++ b/.github/workflows/release.yml
+@@ -224,6 +224,7 @@ jobs:
+             windows-x64-pdf_oxide.dll
+             wasm-pdf_oxide.js
+             wasm-pdf_oxide_bg.wasm
++            wasm-pdf_oxide_asyncify_bg.wasm
+           )
+           MISSING=()
+           for f in "${EXPECTED[@]}"; do
+diff --git a/AGENTS.md b/AGENTS.md
+index 36e4341..3d81cb0 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -24,7 +24,7 @@ git clone --recursive https://github.com/whuppi/pdf_manipulator
+ cd pdf_manipulator
+ make hooks                      # activate git hooks (once after cloning)
+ fvm install                     # downloads SDK pinned in .fvmrc
+-make check                      # analyze + test-guards + tests (native + 3 web modes) + example
++make check                      # analyze + test-guards + tests (native + 4 web modes) + example
+ 
+ # Without FVM (override SDK commands)
+ make check DART=dart FLUTTER=flutter
+diff --git a/CHANGELOG.pre.md b/CHANGELOG.pre.md
+index 1b2d175..16a30a8 100644
+--- a/CHANGELOG.pre.md
++++ b/CHANGELOG.pre.md
+@@ -182,6 +182,7 @@ CONTENT RULES (never change)
+ - Added the page builder methods the engine already had: `appendText`, `textIn`, `rect`, `line`, `stickyNote`, `stamp`, `freeText`, `onOpen`, `onClose` and `table`, and a `PdfMarkup` or `PdfLink` argument on `text`
+ - Added a `PdfTextStyle` to `text`, `stamp(PdfStamp...)`, `table(columns, rows, {options})` with `PdfTableCell` and `PdfTableOptions`, and `stickyNote(..., at:)` to the page builder
+ - Added `PdfBuilder.addImagePage`, a page that holds one picture and takes the picture's own size unless you name one
++- Added the web Asyncify mode, `asyncify: true` under `hooks: user_defines: pdf_manipulator:`, which also ships `pdf_oxide_asyncify_bg.wasm` so a browser with neither JSPI nor `SharedArrayBuffer` streams instead of copying to storage first — the file is 32 MB for the full engine and is fetched only in this mode
+ - Changed `PdfBuilder.save` to Flate-compress page content and font streams; `save(output, deflate: false)` keeps them plain for debugging
+ - Changed `open`, `edit`, `split`, a full-rewrite save and `compress` to hold a bounded window of the document instead of all of it: a 38 MB, 10,000-page file now opens and saves in under 16 MB of engine memory, where it took up to 85 MB
+ - Changed `appendPages` to keep the merged file open until the editor is disposed and copy its objects one at a time at save: merging a 10,000-page file takes under 16 MB of engine memory and about 2 seconds, where it took 163 MB and minutes
+diff --git a/CONTRIBUTING.md b/CONTRIBUTING.md
+index 92b9dcb..bf50641 100644
+--- a/CONTRIBUTING.md
++++ b/CONTRIBUTING.md
+@@ -43,7 +43,7 @@ make check
+ ```
+ 
+ Runs `analyze` (format + Dart + Rust warnings) + `test-guards`
+-(mechanical test-suite rules) + `test` (unit + native + 3 web modes)
++(mechanical test-suite rules) + `test` (unit + native + 4 web modes)
+ + `test-example` (macOS + 3 web modes). Must pass. Don't suppress
+ with `// ignore:` — fix the underlying issue (`make analyze` fails
+ on any ignore comment).
+diff --git a/Makefile b/Makefile
+index 115da8e..6a035d4 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,8 +1,8 @@
+ .PHONY: check analyze check-keep-sets check-bindings analyze-floor platforms lint-shell format fixtures test-guards bench \
+-       build build-native build-wasm \
++       build build-native build-wasm build-wasm-asyncify \
+        compile-macos compile-ios compile-android compile-linux compile-windows compile-wasm compile-natives \
+        test test-pkg-native test-unit test-rust test-rust-run prune-target shake-audit verify-readme-sizes \
+-       test-ops test-ops-native test-ops-web test-ops-opfs test-ops-jspi test-ops-atomics \
++       test-ops test-ops-native test-ops-web test-ops-opfs test-ops-jspi test-ops-atomics test-ops-asyncify \
+        test-example test-example-matrix test-example-macos test-example-trimmed test-example-linux test-example-windows \
+        test-example-android test-example-ios test-example-device \
+        test-example-web test-example-web-jspi test-example-web-atomics test-example-web-opfs \
+@@ -240,6 +240,11 @@ build-native:
+ build-wasm:
+ 	$(DART) tool/compile.dart wasm
+ 
++# make build-wasm-asyncify   The Asyncify twin of the wasm (web_assets/
++#                            pdf_oxide_asyncify_bg.wasm), from the normal one.
++build-wasm-asyncify:
++	$(DART) tool/compile.dart wasm-asyncify
++
+ # The wasm the web tests load. A file target, so it rebuilds exactly when an
+ # engine input is newer: every Rust source and manifest under vendor/ (the
+ # build output dirs excluded), the wasm feature list in build.json, and the
+@@ -254,6 +259,18 @@ WASM_INPUTS := $(shell find vendor \( -name target -o -name .git \) -prune -o \
+ $(WASM_OUT): $(WASM_INPUTS)
+ 	$(DART) tool/compile.dart wasm
+ 
++# The Asyncify wasm is a function of the normal one and of the instrumentation
++# code, so it rebuilds when either is newer.
++ASYNCIFY_OUT := web_assets/pdf_oxide_asyncify_bg.wasm
++
++# Every read of the Asyncify mode unwinds and rewinds the engine's stack, so
++# its tests need more of the local one-second budget than the other modes;
++# CI's 30x already absorbs it.
++ASYNCIFY_TIMEOUT := $(if $(CI),--timeout=30x,--timeout=5x)
++
++$(ASYNCIFY_OUT): $(WASM_OUT) lib/src/hook/asyncify_list.dart vendor/pdf_oxide/bindgen_runner/src/main.rs
++	$(DART) tool/compile.dart wasm-asyncify
++
+ # ═══════════════════════════════════════════════════════════════════
+ # § 4 — Compile (release pipeline — one target per CI job)
+ # ═══════════════════════════════════════════════════════════════════
+@@ -295,10 +312,11 @@ compile-natives:
+ # make test-unit         Every test/ folder but ops/, fixtures/ and guards/ (VM).
+ # make test-ops          All 4 ops runners.
+ # make test-ops-native   Ops: native FFI.
+-# make test-ops-web      Ops: all 3 web modes.
++# make test-ops-web      Ops: all 4 web modes.
+ # make test-ops-opfs     Ops: web OPFS.
+ # make test-ops-jspi     Ops: web JSPI.
+ # make test-ops-atomics  Ops: web Atomics.
++# make test-ops-asyncify Ops: web Asyncify (builds the Asyncify wasm first).
+ # make test-rust         cargo tests for the three vendored crates.
+ 
+ test: fixtures test-unit test-ops test-memory
+@@ -345,7 +363,7 @@ define run_browser_tests
+ 	$(DART) tool/clean_browser_leftovers.dart; exit $$rc
+ endef
+ 
+-test-ops-web: fixtures test-ops-opfs test-ops-jspi test-ops-atomics
++test-ops-web: fixtures test-ops-opfs test-ops-jspi test-ops-atomics test-ops-asyncify
+ 
+ test-ops-opfs: $(WASM_OUT)
+ 	@echo "=== Ops: Web OPFS ==="
+@@ -362,6 +380,12 @@ test-ops-atomics: $(WASM_OUT)
+ 	@mkdir -p $(TEST_RESULTS_DIR)
+ 	$(call run_browser_tests,$(DART) test $(TIMEOUT) test/ops/runners/web_atomics_runner_test.dart -p chrome-coi --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-atomics.json)
+ 
++test-ops-asyncify: $(ASYNCIFY_OUT)
++	@echo "=== Ops: Web Asyncify ==="
++	@mkdir -p $(TEST_RESULTS_DIR)
++	$(call run_browser_tests,$(DART) test $(ASYNCIFY_TIMEOUT) test/ops/runners/web_asyncify_runner_test.dart -p chrome --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-asyncify.json)
++	$(call run_browser_tests,$(DART) test $(TIMEOUT) test/ops/runners/web_auto_mode_test.dart -p chrome --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-auto-mode.json)
++
+ # Rust unit + integration tests for the three vendored crates. Most of the
+ # engine's tests sit behind features we don't ship (ml / ocr / fips /
+ # python / wasm), which need ONNX / pdfium / Python / a wasm target and
+diff --git a/README.md b/README.md
+index 7d71525..c18005d 100644
+--- a/README.md
++++ b/README.md
+@@ -836,26 +836,28 @@ The engine compiles to WASM and runs in isolated Web Workers, so your UI thread
+ 
+ On web you don't configure anything; the package auto-detects the best mode the browser supports and uses it. Everything works regardless of mode; the only thing that varies is how fast it reads large files.
+ 
+-Internally the modes differ in *how* the WASM engine gets your bytes: the top two stream them on demand, while the fallback copies the whole file into private browser storage first (works everywhere, just a slower first byte).
++Internally the modes differ in *how* the WASM engine gets your bytes: the first three stream them on demand, while the fallback copies the whole file into private browser storage first (works everywhere, just a slower first byte).
+ 
+ | Mode | What it means for you | Streams large files | Picked when |
+ |---|---|:---:|---|
+ | **JSPI** | Best: streams, zero setup | ✅ | Chrome 137+ · Firefox 139+ |
+ | **Atomics** | Streams, but needs two server headers | ✅ | COOP/COEP headers are set |
++| **Asyncify** | Streams without headers on older browsers, with a second, larger WASM file | ✅ | you turned on `asyncify: true` ([below](#asyncify-the-second-wasm)) |
+ | **OPFS** | Always works; copies the file to disk first, then reads | ❌ | any modern browser (the fallback) |
+ 
+ <details>
+-<summary><b>🧩 ok but what do JSPI, Atomics, and OPFS actually mean?</b></summary>
++<summary><b>🧩 ok but what do JSPI, Atomics, Asyncify and OPFS actually mean?</b></summary>
+ 
+ <br>
+ 
+-All three solve the same puzzle (synchronous WASM code needs bytes that arrive asynchronously from Dart), just in different ways:
++All four solve the same puzzle (synchronous WASM code needs bytes that arrive asynchronously from Dart), just in different ways:
+ 
+ - **JSPI** (JavaScript Promise Integration) — the browser lets the WASM call pause and resume while it waits for the next chunk. Cleanest path, no setup; needs a recent browser. Used automatically where available.
+ - **Atomics** — the WASM side blocks on a `SharedArrayBuffer` while the main thread fills it. Works on older browsers, but `SharedArrayBuffer` only switches on when your site sends two security headers (see below).
+-- **OPFS** (Origin Private File System) — when neither of the above is available, the package copies your file into the browser's private on-disk storage and reads from there. Works everywhere; the copy means a slower first byte and a little disk use.
++- **Asyncify** — a second build of the engine that can stop in the middle of a call and continue later (binaryen's `--asyncify`), so it waits for the next chunk the way JSPI does without needing the browser's help or any header. You opt in; see below.
++- **OPFS** (Origin Private File System) — when none of the above is available, the package copies your file into the browser's private on-disk storage and reads from there. Works everywhere; the copy means a slower first byte and a little disk use.
+ 
+-You never choose; the package tries JSPI, then Atomics, then OPFS, and uses the first that works.
++You never choose; the package tries JSPI, then Atomics, then Asyncify (only if your app ships it), then OPFS, and uses the first that works.
+ 
+ </details>
+ 
+@@ -871,6 +873,8 @@ final pdf = Pdf(config: PdfConfig(webIoMode: PdfIoMode.atomics)); // pin a mode
+ final mode = await pdf.ensureInitialized(); // or just check
+ ```
+ 
++Forcing a mode the browser cannot run, or Asyncify when your app did not ship its WASM file, throws `PdfUnsupported` as soon as the `Pdf` is created; it never falls back silently.
++
+ **Enable streaming on older browsers.** Chrome 137+ / Firefox 139+ already stream via JSPI with no setup. For older browsers that have `SharedArrayBuffer`, two server headers switch the fallback from disk-copy (OPFS) to streaming (Atomics):
+ 
+ ```
+@@ -894,6 +898,21 @@ For local dev, Flutter adds the headers for you:
+ flutter run -d chrome --cross-origin-isolation
+ ```
+ 
++#### Asyncify, the second WASM
++
++If you cannot send those headers and still want streaming on browsers without JSPI, switch on the Asyncify engine in your pubspec and run setup again (web only; native ignores the key):
++
++```yaml
++hooks:
++  user_defines:
++    pdf_manipulator:
++      asyncify: true   # false (default) ships nothing new
++```
++
++Setup then also provides `pdf_oxide_asyncify_bg.wasm` next to the normal one: downloaded for the full engine, built from source for a `keep:` subset. A browser fetches only the file its mode runs, so JSPI and Atomics visitors never download the larger one.
++
++The trade-off, plainly: the Asyncify file is about half again as large as the normal one (the full engine: 32.0 MB against 20.9 MB, 12.4 MB against 8.1 MB gzipped), because most of the engine can be in the middle of a read when it stops. That is over the 25 MiB per-file limit of Cloudflare Pages and Workers static assets, so a site hosted there cannot serve it. The instrumented engine also runs slower, and every read is a round trip to the page: on a 300 MB text PDF, opening and extracting 50 pages took 93 s with Asyncify against 41 s with OPFS (the copy included), and merging two such files 16–19 s against 9–10 s. Turn it on when streaming matters more than those costs, and measure your own files.
++
+ </details>
+ 
+ ---
+diff --git a/bin/setup.dart b/bin/setup.dart
+index 429caca..3e86e65 100644
+--- a/bin/setup.dart
++++ b/bin/setup.dart
+@@ -58,6 +58,7 @@ native, so this command never needs flags:
+         keep: [render]   # or `keep: auto` to scan your app's source;
+                          # absent = every capability
+         build: speed     # speed (default) | size | debug
++        asyncify: false  # true also provides the Asyncify engine (web only)
+ 
+ Native targets pick this block up automatically during `flutter build`.
+ ''';
+@@ -174,6 +175,9 @@ Future<void> _setupWeb(bool force) async {
+   if (plan.isCustom) {
+     stdout.writeln('keep: features [${plan.features}]');
+   }
++  if (cfg.asyncify) {
++    stdout.writeln('asyncify: also providing the Asyncify engine');
++  }
+   final destDir = Directory('web/pdf_manipulator');
+   final count = await build.resolveWeb(
+     wasmFeaturesOverride: plan.isCustom ? plan.features : null,
+@@ -182,6 +186,7 @@ Future<void> _setupWeb(bool force) async {
+     destDir: destDir,
+     force: force,
+     engineBuild: cfg.build,
++    asyncify: cfg.asyncify,
+   );
+   stdout.writeln(
+     count > 0
+diff --git a/build.json b/build.json
+index 3940884..5f5f84f 100644
+--- a/build.json
++++ b/build.json
+@@ -8,11 +8,13 @@
+   },
+   "web": {
+     "pdf_oxide_bg.wasm": "wasm-pdf_oxide_bg.wasm",
++    "pdf_oxide_asyncify_bg.wasm": "wasm-pdf_oxide_asyncify_bg.wasm",
+     "pdf_oxide.js": "wasm-pdf_oxide.js",
+     "executor_worker.js": "wasm-executor_worker.js"
+   },
+   "wasmBuildOutputs": [
+     "pdf_oxide_bg.wasm",
++    "pdf_oxide_asyncify_bg.wasm",
+     "pdf_oxide.js"
+   ]
+ }
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+index 9b8ab6d..01fdd9e 100644
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -461,7 +461,7 @@ just before the submit, so a same-tick dispose cannot start a lane nothing ends.
+ |---|---|---|
+ | native | The job's `AtomicBool`, filed in `cancel_flags` before the job is queued, and the executor's (terminate). `CancelFlags` holds both. | `CancelCheck::from_flags` loads both. |
+ | web with `SharedArrayBuffer` | A word of a per-job `SharedArrayBuffer` (`cancelSabBytes`). The main thread stores 1. | The wasm import `host_cancelled` loads it. |
+-| web without | A per-job blob URL (`cancelUrl`). The main thread revokes it. | `host_cancelled` polls it with a synchronous XHR, at most once per `CANCEL_POLL_MS`. A poll that times out (`CANCEL_POLL_TIMEOUT_MS`) is not a cancel; a failed poll is. |
++| web without (OPFS, and JSPI or Asyncify on such a page) | A per-job blob URL (`cancelUrl`). The main thread revokes it. | `host_cancelled` polls it with a synchronous XHR, at most once per `CANCEL_POLL_MS`. A poll that times out (`CANCEL_POLL_TIMEOUT_MS`) is not a cancel; a failed poll is. Asyncify keeps this path: it reads the flag where it already does, and unwinding at the poll would add nothing. |
+ 
+ Parked I/O is woken separately. Native: a job cancel takes each channel's pair mutex, sets
+ `FLAG_CANCELLED` and notifies. Web: a pending read or write is answered with the cancelled
+@@ -687,12 +687,13 @@ Each source gets its own `CallbackReader` and channel. Each sink gets its own
+ with condvar synchronization, and checks `CancelFlags` at every wait. Dart serves the bytes
+ on the main isolate through `NativeCallable.listener`. No helper isolate exists.
+ 
+-### Web I/O — three modes, auto-detected
++### Web I/O — four modes, auto-detected
+ 
+ | Mode | Mechanism | Requires |
+ |---|---|---|
+ | **JSPI** | `WebAssembly.Suspending` suspends wasm, JS fetches async, wasm resumes | Chrome 137+ / Firefox 139+ |
+ | **Atomics** | `Atomics.wait` blocks wasm, JS fills a SAB, `Atomics.notify` wakes it | `SharedArrayBuffer` (COOP/COEP headers) |
++| **Asyncify** | The instrumented wasm unwinds at the read or write, the worker awaits the answer and rewinds | The app shipped `pdf_oxide_asyncify_bg.wasm` (`asyncify: true`) |
+ | **OPFS** | Sources are pre-copied to OPFS disk, wasm reads through `SyncAccessHandle` | All modern browsers |
+ 
+ Detection (`WebExecutorBooter._detectMode`), best first:
+@@ -700,14 +701,62 @@ Detection (`WebExecutorBooter._detectMode`), best first:
+ ```
+ if ("Suspending" in WebAssembly) → JSPI     (streaming, no headers)
+ else if (SharedArrayBuffer)      → Atomics  (streaming, needs COOP/COEP)
++else if (the app shipped the     → Asyncify (streaming, no headers, larger wasm)
++         Asyncify wasm)
+ else                             → OPFS     (pre-copy fallback)
+ ```
+ 
+-Force a mode with `Pdf(config: PdfConfig(webIoMode: PdfIoMode.jspi))`. All three modes give
+-the Rust side the same `Read+Seek` trait, `bridge_api.rs` is the same, and one wasm binary
+-serves all three. Only OPFS pre-copies to disk. Call `await pdf.ensureInitialized()` at
+-startup to read the mode. If it is `PdfIoMode.opfs`, consider telling the user, or serving
+-the COOP/COEP headers.
++Force a mode with `Pdf(config: PdfConfig(webIoMode: PdfIoMode.jspi))`. A forced mode the
++browser cannot run, or Asyncify when the app did not ship its wasm, throws `PdfUnsupported`
++when the instance is created; there is never a silent fallback. All four modes give the Rust
++side the same `Read+Seek` trait and `bridge_api.rs` is the same. JSPI, Atomics and OPFS run
++the one wasm binary; Asyncify runs its own twin, and a browser fetches only the wasm its mode
++runs. Only OPFS pre-copies to disk. Call `await pdf.ensureInitialized()` at startup to read
++the mode. If it is `PdfIoMode.opfs`, consider telling the user, shipping the Asyncify wasm, or
++serving the COOP/COEP headers.
++
++**Whether the app shipped the Asyncify wasm** is one `HEAD` request for the file beside
++`executor_worker.js`, sent once per location, and only by a page that could run the mode
++(neither JSPI nor `SharedArrayBuffer`) or that forced it. The file itself is not fetched.
++
++#### The Asyncify wasm
++
++`wasm-opt --asyncify` turns the engine into a module that can stop in the middle of a call
++and continue later. `lib/src/hook/asyncify_list.dart` computes which functions to
++instrument; the rest are left as they are, and the pass is run by `bindgen_runner
++--asyncify` (the workspace's own binaryen) followed by the same `-O2` as the normal wasm.
++
++- **The list.** The functions that can be on the stack while the module waits in
++  `host_read_at` or `host_write_chunk`: those imports' callers, transitively, where a
++  `call_indirect` reaches every address-taken function of its signature (the trait objects
++  `dyn Read + Seek` and `dyn Write` are such calls). The parser refuses a module whose
++  tables can change at run time. The list names each function by its index among the defined
++  functions, which is how binaryen names an unnamed function.
++- **The wall.** The build recomputes the list from the wasm it is about to instrument, writes it
++  and checks the written file against the wasm before binaryen reads it
++  (`verifyAsyncifyList`): a list that is stale or misses a function the wasm can have on the
++  stack stops the build. `test/hook/asyncify_list_test.dart` pins it.
++- **The driver** (`runAsyncify`, `executor_worker.js`). The two imports are plain functions.
++  Called while the module runs, an import starts the unwind and returns; the wasm unwinds to
++  `execute`, which returns with the stack saved. The worker posts the same `readAt` or `chunk`
++  message JSPI posts, awaits the `readAtResult` or `chunkAck`, starts the rewind and calls
++  `execute` again with the same arguments; the wasm replays down to the import, which
++  returns the answer. The saved stack lives in pages the worker adds to linear memory
++  (`kAsyncifyStackBytes`), outside the engine's heap; the pass writes it without a bound, so
++  the worker checks the fill after every unwind and fails the job when it overflowed.
++- **Size.** The list is most of the module, so the twin is about half again as large as the
++  normal wasm (31.97 MB against 20.87 MB raw, 12.4 MB against 8.1 MB gzip, for the full
++  engine), which is more than the 25 MiB per file that Cloudflare Pages and Workers static
++  assets serve. `test/guards/wasm_size_test.dart` and the release compile refuse a shipped
++  wasm that reaches that size. The obstacle is in the call graph: a signature such as
++  `(i32,i32)->()` is shared by thousands of functions, and the graph cannot tell which of
++  them an indirect call reaches.
++- **Cost.** A read or write costs a round trip through the main thread like JSPI's, plus the
++  unwind and rewind of the stack in between, and the instrumented functions run slower. On
++  a 300 MB text PDF on a 4-core machine, open + extract of 50 pages took 93 s in Asyncify against
++  41 s in OPFS (pre-copy included), and a merge of two such files 16–19 s against 9–10 s: the
++  source is read in many small pieces, and each costs a round trip. The automatic order puts
++  Asyncify before OPFS all the same, until that is decided.
+ 
+ **Web hold registry.** Each web executor keeps a reader map. A kept reader belongs to a group: the
+ id of the job that created the handle. A later job on that handle that keeps a source (an
+@@ -730,6 +779,9 @@ blocks until the Dart side returns bytes, so it never reads faster than the host
+ - **JSPI:** `host_write_chunk` returns a Promise and JSPI suspends the wasm stack. The executor
+   forwards the chunk to Dart, Dart's sink consumes it, Dart acknowledges, the executor resolves
+   the Promise and wasm resumes. One chunk is in flight at a time.
++- **Asyncify:** the same as JSPI: `host_write_chunk` unwinds the wasm, the worker posts the
++  chunk and awaits the acknowledgement, and the rewound import returns. One chunk is in
++  flight at a time.
+ - **Atomics:** `host_write_chunk` posts the chunk, then `Atomics.wait`s on a dedicated write
+   SAB. Dart consumes the chunk and acknowledges with `Atomics.store` and `notify`. One chunk
+   is in flight at a time.
+@@ -887,7 +939,7 @@ lib/
+     │   │   ├── channel_buffers.dart        ← condvar memory layout
+     │   │   └── bindings.dart               ← @Native FFI bindings
+     │   └── web/
+-    │       ├── lease.dart                  ← WebLease: job lifecycle, the 3 I/O modes
++    │       ├── lease.dart                  ← WebLease: job lifecycle, the 4 I/O modes
+     │       ├── host.dart                   ← WebExecutorBooter, WebExecutor: boot handshake,
+     │       │                                  OPFS session and directory reclaim (part of lease.dart)
+     │       └── protocol.dart               ← message tags and codes injected into executor_worker.js
+@@ -899,14 +951,18 @@ lib/
+     └── hook/                               ← build and setup support (not consumer API)
+         ├── asset_hashes.dart               ← SHA-256 hashes for all release assets
+         ├── resolver.dart                   ← ResolveRequest + 5-step waterfall
++        ├── asyncify_list.dart              ← the wasm call graph, the Asyncify instrumentation
++        │                                      list and its wall
+         └── (build_constants, engine_compiler, engine_build, keep_plan, pdf_config,
+              user_defines, app_root)
+ 
+ web_assets/                                 ← committed in git (except .wasm, which is too large)
+-├── executor_worker.js                      ← the executor body: reader registry, 3 I/O modes,
++├── executor_worker.js                      ← the executor body: reader registry, 4 I/O modes,
+ │                                              reset, execute (no routing logic)
+ ├── pdf_oxide.js                            ← wasm-bindgen glue (committed, paired with .wasm)
+-└── pdf_oxide_bg.wasm                       ← wasm binary (gitignored; downloaded from releases)
++├── pdf_oxide_bg.wasm                       ← wasm binary (gitignored; downloaded from releases)
++└── pdf_oxide_asyncify_bg.wasm              ← its Asyncify twin, for apps with `asyncify: true`
++                                               (gitignored; downloaded from releases)
+ 
+ build.json                                  ← single source of truth: crate name, repo,
+                                                cargo features, web asset map
+@@ -925,6 +981,7 @@ tool/                                       ← .sh = orchestration wrappers; .d
+ ├── analyze.sh                              ← format + Dart + Rust static analysis
+ ├── check_cancel_polls.sh                   ← the loop poll lint (in make test-guards)
+ ├── compile.dart                            ← Rust → native / wasm / per-target / both
++├── asyncify_list.dart                      ← the Asyncify list of a built wasm, with its counts
+ ├── generate_fixtures.dart                  ← test fixture generator (make fixtures; stamp-protected)
+ ├── memprobe/                               ← the memory wall (make test-memory)
+ ├── fuelprobe/                              ← the cancel fuel wall (make test-fuel)
+@@ -1273,7 +1330,9 @@ test/
+ │       ├── native_runner_test.dart
+ │       ├── web_opfs_runner_test.dart
+ │       ├── web_jspi_runner_test.dart
+-│       └── web_atomics_runner_test.dart
++│       ├── web_atomics_runner_test.dart
++│       ├── web_asyncify_runner_test.dart
++│       └── web_io_measure_test.dart        ← timing of Asyncify against OPFS (skipped unless sized)
+ │
+ ├── bridge/                         Unit tests (no engine)
+ │   ├── bridge_contract_test.dart
+@@ -1499,8 +1558,9 @@ source in the pub tarball compiles locally.
+ - `lib/src/hook/` — ONE compile path, two callers: `build_constants.dart`
+   (build.json), `engine_compiler.dart` (CodeConfig → target mappings, NDK
+   env, the cargo invocation), `pdf_config.dart` (the one config parser —
+-  keep/detector/build, mismatch-proof), `keep_plan.dart` (config → plan,
+-  recordings → keep-set), `engine_build.dart` (the `build:` axis).
++  keep/detector/build/scan-dirs/asyncify, mismatch-proof), `keep_plan.dart` (config → plan,
++  recordings → keep-set), `engine_build.dart` (the `build:` axis),
++  `asyncify_list.dart` (which functions the Asyncify wasm instruments).
+   `hook/build.dart` and `hook/link.dart` are thin callers.
+ - The cutting doctrine: cut ROOTS and let LTO shake. Because the shipped
+   artifact is a cdylib, only exported symbols are roots — gating a few
+diff --git a/hook/build.dart b/hook/build.dart
+index 744827c..03d4714 100644
+--- a/hook/build.dart
++++ b/hook/build.dart
+@@ -241,6 +241,9 @@ Future<void> _resolveNative({
+ //   WASM build outputs (pdf_oxide_bg.wasm, pdf_oxide.js) → cargo + bindgen_runner
+ //   Hand-written JS (executor_worker.js) → copy from package
+ //
++// The Asyncify wasm is resolved only with `asyncify: true`; otherwise nothing
++// of it is downloaded, built or written.
 +//
-+//   dart --packages=.dart_tool/package_config.json tool/asyncify_list.dart \
-+//        [--out <file>] [--pause <import-substring>]... <pdf_oxide_bg.wasm>
+ // Returns the number of files freshly resolved (0 = all cached).
+ Future<int> resolveWeb({
+   required Uri packageRoot,
+@@ -249,6 +252,7 @@ Future<int> resolveWeb({
+   bool force = false,
+   String? wasmFeaturesOverride,
+   EngineBuild engineBuild = EngineBuild.speed,
++  bool asyncify = false,
+ }) async {
+   final constants = BuildConstants.load(packageRoot);
+   // A kept subset OR a non-default build has no prebuilt asset, no pinned
+@@ -267,6 +271,7 @@ Future<int> resolveWeb({
+   for (final entry in constants.webAssets.entries) {
+     final localName = entry.key;
+     final assetName = entry.value;
++    if (localName == asyncifyWebAsset && !asyncify) continue;
+     final dest = File('${destDir.path}/$localName');
+ 
+     final isWasmBuildOutput = constants.wasmBuildOutputs.contains(localName);
+@@ -438,8 +443,27 @@ Future<void> _compileWasm(
+   // non-default build is a per-app artifact that must never land there.
+   final isDefaultBuild = featuresOverride == null && engineBuild.isDefault;
+ 
+-  // Contributor has locally built WASM — copy directly.
+-  if (isDefaultBuild && existing.existsSync()) {
++  final isAsyncify = targetFile == asyncifyWebAsset;
++  final normal = File(p.join(webAssets.path, 'pdf_oxide_bg.wasm'));
++
++  // Contributor has locally built WASM — copy directly. The Asyncify wasm is
++  // a function of the normal one, so it is copied only while it is newer.
++  if (isDefaultBuild &&
++      existing.existsSync() &&
++      (!isAsyncify ||
++          !normal.existsSync() ||
++          existing.lastModifiedSync().isAfter(normal.lastModifiedSync()))) {
++    dest.parent.createSync(recursive: true);
++    existing.copySync(dest.path);
++    return;
++  }
++
++  if (isDefaultBuild && isAsyncify && normal.existsSync()) {
++    await buildAsyncifyWasm(
++      packageRoot: packageRoot,
++      wasm: normal,
++      out: existing,
++    );
+     dest.parent.createSync(recursive: true);
+     existing.copySync(dest.path);
+     return;
+@@ -457,6 +481,7 @@ Future<void> _compileWasm(
+       features: features,
+       outDir: outDir,
+       cargoEnv: engineBuild.cargoEnv,
++      asyncify: isAsyncify,
+     );
+ 
+     final built = File(p.join(outDir.path, targetFile));
+diff --git a/lib/src/hook/asyncify_list.dart b/lib/src/hook/asyncify_list.dart
+new file mode 100644
+index 0000000..e6f36ea
+--- /dev/null
++++ b/lib/src/hook/asyncify_list.dart
+@@ -0,0 +1,560 @@
++// The wasm call graph behind the Asyncify instrumentation list.
 +//
 +// binaryen's `--asyncify` instruments exactly the functions it is told to
-+// (`--pass-arg=asyncify-onlylist@@<file>`); a function left out of that list
-+// must never be on the stack at a pause. This tool computes the list that is
-+// safe to give: the callers of the pausing imports, transitively, where a
-+// `call_indirect` reaches every function of its signature that an element
-+// segment or a `ref.func` names. It refuses a module whose tables could change
-+// at run time (`table.set`, `table.init`, `table.copy`, `table.fill`, an
++// (`asyncify-onlylist`); a function left out of that list must never be on the
++// stack at a pause. [asyncifyList] computes the list that is safe to give: the
++// callers of the pausing imports, transitively, where a `call_indirect`
++// reaches every function of its signature that an element segment or a
++// `ref.func` names. [WasmCallGraph.parse] refuses a module whose tables could
++// change at run time (`table.get/set`, `table.init/copy/grow/fill`, an
 +// imported table), because the list would then be unsound.
 +//
-+// Prints the counts that decide whether the list is worth having: the direct
-+// callers alone, the signature-resolved set, and for each signature the
-+// functions it adds. `--out` writes the list in the form the pass reads: one
-+// comma-separated line of function indices (the module has no name section,
-+// and binaryen names an unnamed function by its index).
-+//
-+// `--pause` defaults to the two imports the executor worker suspends,
-+// `host_read_at` and `host_write_chunk`. Run from the package root; `dart run`
-+// would first run the package's native build hook, hence `dart --packages=`.
++// [verifyAsyncifyList] is the wall: the build recomputes the list from the
++// wasm it is about to instrument and refuses a list that is missing a
++// function the wasm can have on the stack. The module has no name section, and
++// binaryen names an unnamed defined function by its index among the defined
++// functions, imports not counted, so the list is those indices.
 +
-+import 'dart:io';
 +import 'dart:typed_data';
 +
-+void main(List<String> args) {
-+  final pause = <String>[];
-+  String? out;
-+  String? path;
-+  for (var i = 0; i < args.length; i++) {
-+    switch (args[i]) {
-+      case '--out':
-+        out = args[++i];
-+      case '--pause':
-+        pause.add(args[++i]);
-+      default:
-+        path = args[i];
-+    }
-+  }
-+  if (path == null) {
-+    stderr.writeln(
-+      'usage: dart --packages=.dart_tool/package_config.json '
-+      'tool/asyncify_list.dart [--out file] [--pause import]... <wasm>',
-+    );
-+    exit(2);
-+  }
-+  if (pause.isEmpty) pause.addAll(['host_read_at', 'host_write_chunk']);
++/// The imports the executor worker suspends: the source read and the sink
++/// write. `host_cancelled` is polled and never suspends.
++const asyncifyPauseImports = ['host_read_at', 'host_write_chunk'];
 +
-+  final m = _Module.parse(File(path).readAsBytesSync());
-+  final targets = {
-+    for (var i = 0; i < m.importCount; i++)
-+      if (pause.any(m.importNames[i].contains)) i,
++/// The comma-separated `module.name` of the imports of [wasm] that pause, for
++/// `asyncify-imports`.
++String asyncifyImports(Uint8List wasm) {
++  final graph = WasmCallGraph.parse(wasm);
++  return [
++    for (final i in graph.importsNamed(asyncifyPauseImports).toList()..sort())
++      graph.importNames[i],
++  ].join(',');
++}
++
++/// The comma-separated names to give `asyncify-onlylist`, from the engine wasm
++/// [wasm]: each listed function's index among the defined functions, which is
++/// the name binaryen gives a function the wasm does not name.
++String asyncifyList(Uint8List wasm) {
++  final graph = WasmCallGraph.parse(wasm);
++  return _format(graph, graph.stackFunctions(asyncifyPauseImports));
++}
++
++/// Throws [StateError] unless [list] (as [asyncifyList] writes it) names every
++/// function that can be on the stack at a pause of [wasm]; the message names
++/// the functions missing.
++void verifyAsyncifyList(Uint8List wasm, String list) {
++  final graph = WasmCallGraph.parse(wasm);
++  final listed = {
++    for (final part in list.split(','))
++      if (part.trim().isNotEmpty) int.parse(part.trim()) + graph.importCount,
 +  };
-+  if (targets.length != pause.length) {
-+    stderr.writeln('pausing imports not found: ${m.importNames}');
-+    exit(1);
-+  }
-+
-+  final direct = m.ancestors(targets, indirect: false);
-+  final all = m.ancestors(targets, indirect: true);
-+  final bySig = m.signatureSteps(targets);
-+  stdout
-+    ..writeln(
-+      'functions: ${m.funcType.length} (${m.importCount} imports), '
-+      'address-taken: ${m.addressTaken.length}',
-+    )
-+    ..writeln('pausing imports: ${targets.map((t) => m.importNames[t])}')
-+    ..writeln('callers by direct calls only: ${direct.length}')
-+    ..writeln(
-+      'callers with call_indirect resolved by signature: ${all.length} '
-+      '(${(100 * all.length / m.funcType.length).toStringAsFixed(1)}% of the '
-+      'module)',
-+    )
-+    ..writeln('signature resolution, in the order it grows the set:');
-+  for (final step in bySig) {
-+    stdout.writeln(
-+      '  ${step.signature}  address-taken ancestors ${step.taken}, '
-+      'call-site functions ${step.sites}, adds ${step.added}',
++  final missing = graph
++      .stackFunctions(asyncifyPauseImports)
++      .where((f) => f >= graph.importCount)
++      .toSet()
++      .difference(listed);
++  if (missing.isNotEmpty) {
++    final shown = ([
++      for (final f in missing) f - graph.importCount,
++    ]..sort()).take(10).join(', ');
++    throw StateError(
++      'the asyncify list misses ${missing.length} function(s) the wasm can '
++      'have on the stack at a pause (first: $shown). The list is stale or '
++      'was edited; rebuild it from this wasm.',
 +    );
-+  }
-+  if (out != null) {
-+    final list = [
-+      for (final f in all.toList()..sort())
-+        if (f >= m.importCount) f,
-+    ];
-+    File(out).writeAsStringSync(list.join(','));
-+    stdout.writeln('wrote ${list.length} function indices to $out');
 +  }
 +}
 +
-+/// A function type as the bytes of its parameter and result lists.
-+typedef _Sig = String;
++String _format(WasmCallGraph graph, Set<int> functions) => ([
++  for (final f in functions)
++    if (f >= graph.importCount) f - graph.importCount,
++]..sort()).join(',');
 +
-+String _show(_Sig s) {
++String _show(String signature) {
 +  const names = {0x7f: 'i32', 0x7e: 'i64', 0x7d: 'f32', 0x7c: 'f64'};
-+  final units = s.codeUnits;
++  final units = signature.codeUnits;
 +  final params = units[0];
 +  String t(int v) => names[v] ?? '0x${v.toRadixString(16)}';
 +  final p = [for (var i = 0; i < params; i++) t(units[1 + i])];
@@ -111,16 +569,29 @@ index 0000000..9547dad
 +  return '(${p.join(',')})->(${r.join(',')})';
 +}
 +
-+class _Step {
-+  _Step(this.signature, this.taken, this.sites, this.added);
++/// One signature through which the ancestor set grows.
++class SignatureStep {
++  /// A step of [added] functions for [signature].
++  SignatureStep(this.signature, this.taken, this.sites, this.added);
++
++  /// The signature, as `(params)->(results)`.
 +  final String signature;
++
++  /// Address-taken functions of the signature that were already ancestors.
 +  final int taken;
++
++  /// Functions holding a `call_indirect` of the signature.
 +  final int sites;
++
++  /// Functions the signature's call sites added.
 +  final int added;
 +}
 +
-+class _Module {
-+  _Module({
++/// The call graph of a wasm module, enough to tell which functions can be on
++/// the stack while an import runs.
++class WasmCallGraph {
++  /// Use [parse].
++  WasmCallGraph({
 +    required this.importCount,
 +    required this.importNames,
 +    required this.callees,
@@ -129,16 +600,48 @@ index 0000000..9547dad
 +    required this.addressTaken,
 +  });
 +
++  /// Imported functions come first in the function index space.
 +  final int importCount;
++
++  /// `module.name` of each imported function.
 +  final List<String> importNames;
++
++  /// Direct callees per function.
 +  final List<Set<int>> callees;
-+  final List<Set<_Sig>> indirectTypes;
-+  final List<_Sig> funcType;
++
++  /// Per function, the signatures of its `call_indirect`s, each the bytes of the
++  /// parameter and result lists of the function type.
++  final List<Set<String>> indirectTypes;
++
++  /// Signature of every function by index.
++  final List<String> funcType;
++
++  /// Functions an element segment or `ref.func` names.
 +  final Set<int> addressTaken;
++
++  /// Functions in the module, imports included.
++  int get functionCount => funcType.length;
++
++  /// Indices of the imports whose `module.name` contains one of [parts]; throws
++  /// [StateError] when a part names no import.
++  Set<int> importsNamed(List<String> parts) {
++    final found = <int>{};
++    for (final part in parts) {
++      final hits = [
++        for (var i = 0; i < importCount; i++)
++          if (importNames[i].contains(part)) i,
++      ];
++      if (hits.isEmpty) {
++        throw StateError('no import named *$part* in $importNames');
++      }
++      found.addAll(hits);
++    }
++    return found;
++  }
 +
 +  List<Set<int>> _callers({required bool indirect}) {
 +    final callers = List.generate(funcType.length, (_) => <int>{});
-+    final takenByType = <_Sig, List<int>>{};
++    final takenByType = <String, List<int>>{};
 +    for (final f in addressTaken) {
 +      (takenByType[funcType[f]] ??= []).add(f);
 +    }
@@ -156,7 +659,13 @@ index 0000000..9547dad
 +    return callers;
 +  }
 +
-+  /// [targets] and every function that can be on the stack while one runs.
++  /// The functions that can be on the stack while an import matching one of
++  /// [pauseImports] runs: those imports and their callers, transitively.
++  Set<int> stackFunctions(List<String> pauseImports) =>
++      ancestors(importsNamed(pauseImports), indirect: true);
++
++  /// [targets] and every function that can be on the stack while one runs;
++  /// [indirect] resolves each `call_indirect` by signature.
 +  Set<int> ancestors(Set<int> targets, {required bool indirect}) {
 +    final callers = _callers(indirect: indirect);
 +    final seen = {...targets};
@@ -172,9 +681,9 @@ index 0000000..9547dad
 +  /// The signatures through which the ancestor set grows, in the order they
 +  /// are first reached from the direct callers, each with the functions it
 +  /// added once the call sites of that signature are counted in.
-+  List<_Step> signatureSteps(Set<int> targets) {
++  List<SignatureStep> signatureSteps(Set<int> targets) {
 +    final callers = _callers(indirect: false);
-+    final sitesOf = <_Sig, List<int>>{};
++    final sitesOf = <String, List<int>>{};
 +    for (var f = 0; f < funcType.length; f++) {
 +      for (final t in indirectTypes[f]) {
 +        (sitesOf[t] ??= []).add(f);
@@ -190,10 +699,10 @@ index 0000000..9547dad
 +    }
 +
 +    close([...targets]);
-+    final steps = <_Step>[];
-+    final done = <_Sig>{};
++    final steps = <SignatureStep>[];
++    final done = <String>{};
 +    while (true) {
-+      final next = <_Sig>{
++      final next = <String>{
 +        for (final f in seen)
 +          if (addressTaken.contains(f)) funcType[f],
 +      }..removeAll(done);
@@ -212,7 +721,7 @@ index 0000000..9547dad
 +        close(work);
 +        if (seen.length - before >= 100) {
 +          steps.add(
-+            _Step(
++            SignatureStep(
 +              _show(sig),
 +              taken,
 +              sitesOf[sig]?.length ?? 0,
@@ -224,12 +733,14 @@ index 0000000..9547dad
 +    }
 +  }
 +
-+  static _Module parse(Uint8List bytes) {
++  /// Parses [bytes]. Throws [FormatException] on a binary this reader does not
++  /// understand or whose tables could change at run time.
++  static WasmCallGraph parse(Uint8List bytes) {
 +    final r = _Reader(bytes);
 +    if (bytes.length < 8 || r.u32le() != 0x6d736100 || r.u32le() != 1) {
 +      throw const FormatException('not a wasm binary');
 +    }
-+    final types = <_Sig>[];
++    final types = <String>[];
 +    final importNames = <String>[];
 +    final importTypes = <int>[];
 +    final localTypes = <int>[];
@@ -293,7 +804,7 @@ index 0000000..9547dad
 +      throw const FormatException('function and code counts differ');
 +    }
 +    final callees = List.generate(total, (_) => <int>{});
-+    final indirect = List.generate(total, (_) => <_Sig>{});
++    final indirect = List.generate(total, (_) => <String>{});
 +    for (var i = 0; i < bodies.length; i++) {
 +      final f = importNames.length + i;
 +      _body(
@@ -305,7 +816,7 @@ index 0000000..9547dad
 +        taken,
 +      );
 +    }
-+    return _Module(
++    return WasmCallGraph(
 +      importCount: importNames.length,
 +      importNames: importNames,
 +      callees: callees,
@@ -344,8 +855,8 @@ index 0000000..9547dad
 +    _Reader r,
 +    int end,
 +    Set<int> callees,
-+    Set<_Sig> indirect,
-+    List<_Sig> types,
++    Set<String> indirect,
++    List<String> types,
 +    Set<int> taken,
 +  ) {
 +    for (var n = r.u32(); n > 0; n--) {
@@ -536,3 +1047,2012 @@ index 0000000..9547dad
 +    }
 +  }
 +}
+diff --git a/lib/src/hook/build_constants.dart b/lib/src/hook/build_constants.dart
+index 48e0100..ace5ca6 100644
+--- a/lib/src/hook/build_constants.dart
++++ b/lib/src/hook/build_constants.dart
+@@ -6,6 +6,14 @@
+ import 'dart:convert';
+ import 'dart:io';
+ 
++/// The web asset file of the Asyncify engine: shipped only to apps that set
++/// `asyncify: true`, and fetched by a browser only in Asyncify mode.
++const asyncifyWebAsset = 'pdf_oxide_asyncify_bg.wasm';
++
++/// The largest file Cloudflare Pages and Workers static assets serve: 25 MiB.
++/// Every wasm the release ships stays under it.
++const maxWebAssetBytes = 25 * 1024 * 1024;
++
+ /// The parsed contents of the package's `build.json`.
+ class BuildConstants {
+   BuildConstants._({
+diff --git a/lib/src/hook/engine_compiler.dart b/lib/src/hook/engine_compiler.dart
+index a531dc1..e6e0f42 100644
+--- a/lib/src/hook/engine_compiler.dart
++++ b/lib/src/hook/engine_compiler.dart
+@@ -10,6 +10,8 @@ import 'package:code_assets/code_assets.dart';
+ import 'package:logging/logging.dart';
+ import 'package:path/path.dart' as p;
+ 
++import 'package:pdf_manipulator/src/hook/asyncify_list.dart';
++
+ final _log = Logger('pdf_manipulator:engine_compiler');
+ 
+ /// Rust target triple for [code]'s OS + architecture.
+@@ -319,7 +321,8 @@ String? _latestVersionSubdir(String base) {
+ 
+ /// Compiles the engine to wasm32 and post-processes it (wasm-bindgen +
+ /// wasm-opt) via the workspace's `bindgen_runner` crate, writing
+-/// `pdf_oxide.js` + `pdf_oxide_bg.wasm` into [outDir]. Shared by the
++/// `pdf_oxide.js` + `pdf_oxide_bg.wasm` into [outDir], and with [asyncify]
++/// also `pdf_oxide_asyncify_bg.wasm` ([buildAsyncifyWasm]). Shared by the
+ /// consumer web setup (`hook/build.dart`) and the CI compile driver
+ /// (`tool/compile.dart`) — one wasm compile path, two callers.
+ Future<void> compileWasmEngine({
+@@ -327,6 +330,7 @@ Future<void> compileWasmEngine({
+   required String features,
+   required Directory outDir,
+   Map<String, String> cargoEnv = const {},
++  bool asyncify = false,
+ }) async {
+   ensureCargoVersion(packageRoot);
+   final manifest = p.fromUri(
+@@ -394,6 +398,62 @@ Future<void> compileWasmEngine({
+       'stderr: ${bindgen.stderr}',
+     );
+   }
++
++  if (asyncify) {
++    await buildAsyncifyWasm(
++      packageRoot: packageRoot,
++      wasm: File(p.join(outDir.path, 'pdf_oxide_bg.wasm')),
++      out: File(p.join(outDir.path, 'pdf_oxide_asyncify_bg.wasm')),
++      cargoEnv: cargoEnv,
++    );
++  }
++}
++
++/// Writes to [out] the Asyncify twin of [wasm], the engine wasm
++/// `compileWasmEngine` produced: the same module, instrumented to pause at
++/// the source read and the sink write and resume later.
++///
++/// Only the functions that can be on the stack at a pause are instrumented.
++/// The list is recomputed from [wasm] here, written to a file beside [out] and
++/// checked back against [wasm] before binaryen reads it, so a list that does not
++/// belong to this wasm, or that misses a function, stops the build.
++Future<void> buildAsyncifyWasm({
++  required Uri packageRoot,
++  required File wasm,
++  required File out,
++  Map<String, String> cargoEnv = const {},
++}) async {
++  final bytes = wasm.readAsBytesSync();
++  final listFile = File('${out.path}.list')
++    ..writeAsStringSync(asyncifyList(bytes));
++  try {
++    verifyAsyncifyList(bytes, listFile.readAsStringSync());
++    final env = <String, String>{...Platform.environment, ...cargoEnv};
++    stripXcodeFromPath(env);
++    _log.info('instrumenting the pausing call stack (binaryen asyncify)');
++    final run = await Process.run('cargo', [
++      'run',
++      '--manifest-path',
++      p.fromUri(packageRoot.resolve('vendor/pdf_oxide/Cargo.toml')),
++      '--release',
++      '-p',
++      'bindgen_runner',
++      '--',
++      '--asyncify',
++      wasm.path,
++      out.path,
++      listFile.path,
++      asyncifyImports(bytes),
++    ], environment: env);
++    if (run.exitCode != 0) {
++      throw StateError(
++        'WASM asyncify pass failed (exit ${run.exitCode}).\n'
++        'stderr: ${run.stderr}',
++      );
++    }
++  } finally {
++    if (listFile.existsSync()) listFile.deleteSync();
++  }
+ }
+ 
+ /// Where the build hook's cargo invocation puts its `target/` dir.
+diff --git a/lib/src/hook/pdf_config.dart b/lib/src/hook/pdf_config.dart
+index dfbe56e..378cf54 100644
+--- a/lib/src/hook/pdf_config.dart
++++ b/lib/src/hook/pdf_config.dart
+@@ -36,6 +36,7 @@ class PdfManipulatorConfig {
+     required this.detector,
+     required this.build,
+     required this.scanDirs,
++    required this.asyncify,
+   });
+ 
+   /// What capabilities the engine keeps ([KeepConfig.all] / a manual set /
+@@ -56,10 +57,24 @@ class PdfManipulatorConfig {
+   /// actually scans — see [parse].
+   final List<String> scanDirs;
+ 
++  /// Whether the web setup also provides the Asyncify engine, the wasm that
++  /// lets a browser with neither JSPI nor `SharedArrayBuffer` stream like
++  /// JSPI instead of copying every input to the browser's storage first.
++  /// Web only: the native hook accepts the key, so one pubspec serves both,
++  /// and ships nothing for it. Default false: nothing new is downloaded or
++  /// built.
++  final bool asyncify;
++
+   /// The only keys allowed under `pdf_manipulator:`. Anything else is a typo
+   /// or a stranded option and fails the build (where the key set is visible —
+   /// see [parse]).
+-  static const knownKeys = {'keep', 'detector', 'build', 'scan-dirs'};
++  static const knownKeys = {
++    'keep',
++    'detector',
++    'build',
++    'scan-dirs',
++    'asyncify',
++  };
+ 
+   /// Parses [defines] (the raw `pdf_manipulator:` map). Throws [PdfConfigError]
+   /// on any invalid value, unknown key, or axis mismatch.
+@@ -83,6 +98,7 @@ class PdfManipulatorConfig {
+     final detector = KeepDetector.parse(defines['detector']);
+     final build = EngineBuild.parse(defines['build']);
+     final scanDirs = _parseScanDirs(defines['scan-dirs']);
++    final asyncify = _parseAsyncify(defines['asyncify']);
+ 
+     // The one cross-axis coupling: `detector` picks HOW `auto` detects, so it
+     // means nothing unless `keep` is auto. Setting it otherwise is a mistake —
+@@ -124,9 +140,23 @@ class PdfManipulatorConfig {
+       detector: detector,
+       build: build,
+       scanDirs: scanDirs,
++      asyncify: asyncify,
+     );
+   }
+ 
++  /// Parses the raw `asyncify` value: a YAML boolean. Absent → false.
++  static bool _parseAsyncify(Object? raw) {
++    if (raw == null) return false;
++    if (raw is! bool) {
++      throw PdfConfigError(
++        'asyncify: takes true or false (got "$raw").\n'
++        'Example:\n'
++        '  asyncify: true',
++      );
++    }
++    return raw;
++  }
++
+   /// Parses the raw `scan-dirs` value: a list of app-relative directory
+   /// paths. Absent → empty.
+   ///
+diff --git a/lib/src/runtime/web/host.dart b/lib/src/runtime/web/host.dart
+index e40117d..a4da81c 100644
+--- a/lib/src/runtime/web/host.dart
++++ b/lib/src/runtime/web/host.dart
+@@ -20,11 +20,11 @@ class WebExecutorBooter implements ExecutorBooter {
+   /// Creates a host. [laneWorkerUrl] locates executor_worker.js;
+   /// [forceMode] overrides auto-detection (test runners use this).
+   WebExecutorBooter({String? laneWorkerUrl, PdfIoMode? forceMode})
+-    : _laneWorkerUrl =
+-          laneWorkerUrl ??
+-          _cachedWorkerUrl ??
+-          'pdf_manipulator/executor_worker.js',
+-      mode = _detectMode(forceMode ?? _cachedForceMode) {
++    : _laneWorkerUrl = _workerUrl(laneWorkerUrl),
++      mode = _detectMode(
++        forceMode ?? _cachedForceMode,
++        _baseUrlOf(_workerUrl(laneWorkerUrl)),
++      ) {
+     // Page-level config inheritance: assets live in ONE place per
+     // page, so explicitly-configured URLs/mode become the default
+     // for later bare Pdf() instances (test generators, secondary
+@@ -39,6 +39,9 @@ class WebExecutorBooter implements ExecutorBooter {
+   static String? _cachedWorkerUrl;
+   static PdfIoMode? _cachedForceMode;
+ 
++  static String _workerUrl(String? configured) =>
++      configured ?? _cachedWorkerUrl ?? 'pdf_manipulator/executor_worker.js';
++
+   // ── OPFS namespace + liveness-keyed reclamation ──
+   //
+   // Pre-copied source files live under ONE package-owned directory,
+@@ -288,8 +291,17 @@ class WebExecutorBooter implements ExecutorBooter {
+   int get defaultConcurrency =>
+       suggestedLaneCount(web.window.navigator.hardwareConcurrency);
+ 
+-  static JSObject? _cachedModule;
+-  static Future<void>? _compileInFlight;
++  /// The wasm file a mode loads: the Asyncify engine only in Asyncify mode,
++  /// so a browser fetches the one file it runs.
++  static String wasmFileOf(PdfIoMode mode) =>
++      mode == PdfIoMode.asyncify ? asyncifyWasmFile : 'pdf_oxide_bg.wasm';
++
++  /// The Asyncify engine's file beside `executor_worker.js`, present only in
++  /// an app that set `asyncify: true`.
++  static const asyncifyWasmFile = 'pdf_oxide_asyncify_bg.wasm';
++
++  static final Map<String, JSObject?> _cachedModules = {};
++  static final Map<String, Future<void>> _compilesInFlight = {};
+ 
+   @override
+   String get poolKey => '$_laneWorkerUrl#${mode.name}';
+@@ -393,41 +405,98 @@ class WebExecutorBooter implements ExecutorBooter {
+     }
+   }
+ 
+-  static PdfIoMode _detectMode(PdfIoMode? force) {
+-    if (force != null) return force;
+-    final wasm = globalContext['WebAssembly'];
+-    if (wasm != null &&
+-        (wasm as JSObject).hasProperty('Suspending'.toJS).toDart) {
+-      return PdfIoMode.jspi;
+-    }
+-    if (globalContext.hasProperty('SharedArrayBuffer'.toJS).toDart) {
+-      return PdfIoMode.atomics;
++  /// The mode this page runs. Forced, it must be one the browser can run and
++  /// the app shipped, or [PdfUnsupported] stops the instance at creation.
++  /// Auto-detected, best first: JSPI, Atomics, Asyncify when the app shipped
++  /// its wasm, OPFS.
++  static PdfIoMode _detectMode(PdfIoMode? force, String baseUrl) {
++    if (force != null) {
++      _requireRunnable(force, baseUrl);
++      return force;
+     }
++    if (_hasJspi) return PdfIoMode.jspi;
++    if (_hasSharedArrayBuffer) return PdfIoMode.atomics;
++    if (_asyncifyShipped(baseUrl)) return PdfIoMode.asyncify;
+     return PdfIoMode.opfs;
+   }
+ 
+-  String get _baseUrl {
+-    final url = web.URL(_laneWorkerUrl, web.window.location.href);
+-    final s = url.href;
++  static bool get _hasJspi {
++    final wasm = globalContext['WebAssembly'];
++    return wasm != null &&
++        (wasm as JSObject).hasProperty('Suspending'.toJS).toDart;
++  }
++
++  static bool get _hasSharedArrayBuffer =>
++      globalContext.hasProperty('SharedArrayBuffer'.toJS).toDart;
++
++  static void _requireRunnable(PdfIoMode mode, String baseUrl) {
++    final String? lacks = switch (mode) {
++      PdfIoMode.native => 'the native mode runs only outside a browser',
++      PdfIoMode.jspi =>
++        _hasJspi ? null : 'this browser has no JSPI (WebAssembly.Suspending)',
++      PdfIoMode.atomics =>
++        _hasSharedArrayBuffer
++            ? null
++            : 'this page has no SharedArrayBuffer (it needs the COOP and '
++                  'COEP headers)',
++      PdfIoMode.asyncify =>
++        _asyncifyShipped(baseUrl)
++            ? null
++            : 'the app did not ship $asyncifyWasmFile beside '
++                  'executor_worker.js (set asyncify: true under '
++                  'hooks: user_defines: pdf_manipulator: and run the web '
++                  'setup)',
++      PdfIoMode.opfs =>
++        globalContext
++                .getProperty<JSObject>('navigator'.toJS)
++                .hasProperty('storage'.toJS)
++                .toDart
++            ? null
++            : 'this browser has no origin private file system',
++    };
++    if (lacks != null) {
++      throw PdfUnsupported('webIoMode ${mode.name} cannot run here: $lacks.');
++    }
++  }
++
++  static final Map<String, bool> _asyncifyProbes = {};
++
++  /// Whether the Asyncify wasm sits beside the worker script. A HEAD request,
++  /// so the file itself is never fetched; only a page that could run the mode
++  /// asks, once per location.
++  static bool _asyncifyShipped(String baseUrl) =>
++      _asyncifyProbes.putIfAbsent(baseUrl, () {
++        try {
++          final request = web.XMLHttpRequest()
++            ..open('HEAD', '$baseUrl$asyncifyWasmFile', false)
++            ..send();
++          return request.status == 200;
++        } catch (_) {
++          return false;
++        }
++      });
++
++  static String _baseUrlOf(String workerUrl) {
++    final s = web.URL(workerUrl, web.window.location.href).href;
+     return s.substring(0, s.lastIndexOf('/') + 1);
+   }
+ 
+-  /// Compile the WASM once per page; failures fall back to letting
+-  /// each worker stream-compile its own copy.
++  String get _baseUrl => _baseUrlOf(_laneWorkerUrl);
++
++  /// Compile the WASM once per page, one module per file: the assets live in
++  /// one place per page. Failures fall back to letting each worker
++  /// stream-compile its own copy.
+   Future<JSObject?> _wasmModule() async {
+-    if (_cachedModule != null) return _cachedModule;
+-    _compileInFlight ??= () async {
++    final file = wasmFileOf(mode);
++    await (_compilesInFlight[file] ??= () async {
+       try {
+-        final response = await _fetch(
+-          '${_baseUrl}pdf_oxide_bg.wasm'.toJS,
+-        ).toDart;
+-        _cachedModule = await _wasmCompileStreaming(response).toDart;
++        final response = await _fetch('$_baseUrl$file'.toJS).toDart;
++        _cachedModules[file] = await _wasmCompileStreaming(response).toDart;
+       } catch (_) {
+-        _cachedModule = null;
++        _cachedModules[file] = null;
+       }
+-    }();
+-    await _compileInFlight;
+-    return _cachedModule;
++    }());
++    return _cachedModules[file];
+   }
+ 
+   web.Worker _spawnWorker() {
+diff --git a/lib/src/runtime/web/lease.dart b/lib/src/runtime/web/lease.dart
+index 0f4c0f8..b257a9e 100644
+--- a/lib/src/runtime/web/lease.dart
++++ b/lib/src/runtime/web/lease.dart
+@@ -11,6 +11,8 @@
+ //
+ //   jspi    — worker's host_read_at returns a Promise; this side
+ //             answers with a readAtResult message.
++//   asyncify — the same messages: the worker unwinds its wasm at
++//             host_read_at and rewinds it after the answer.
+ //   atomics — per-job SharedArrayBuffers; this side fills data and
+ //             Atomics.store + notify (allowed on main — only wait
+ //             is forbidden here).
+@@ -183,6 +185,10 @@ class WebLease implements Lease, LanePhase {
+ 
+   PdfIoMode get _mode => _exec._mode;
+ 
++  /// Whether the worker waits for each read and write in the middle of a
++  /// call: JSPI suspends the wasm, Asyncify unwinds it.
++  bool get _suspends => _mode == PdfIoMode.jspi || _mode == PdfIoMode.asyncify;
++
+   final List<_WebJob> _queue = [];
+   _WebJob? _running;
+ 
+@@ -205,13 +211,13 @@ class WebLease implements Lease, LanePhase {
+   bool _dead = false;
+   static int _opfsCounter = 0;
+ 
+-  /// Outstanding JSPI read for the running job (the worker is
+-  /// suspended awaiting readAtResult).
+-  bool _awaitingJspiRead = false;
++  /// Outstanding read for the running job in a mode that suspends (JSPI,
++  /// Asyncify): the worker is waiting for readAtResult.
++  bool _awaitingRead = false;
+ 
+-  /// Outstanding JSPI write for the running job (the worker is
+-  /// suspended awaiting chunkAck).
+-  bool _awaitingJspiWrite = false;
++  /// Outstanding write for the running job in a mode that suspends: the
++  /// worker is waiting for chunkAck.
++  bool _awaitingWrite = false;
+ 
+   /// Outstanding OPFS pre-copy ack, and the write it answers.
+   Completer<String?>? _opfsAck;
+@@ -305,12 +311,12 @@ class WebLease implements Lease, LanePhase {
+     if (running.writeSab != null) {
+       _sabSignal(running.writeSab!, SabStatus.cancelled);
+     }
+-    if (_awaitingJspiRead) {
+-      _awaitingJspiRead = false;
++    if (_awaitingRead) {
++      _awaitingRead = false;
+       _post({LaneMsgFields.type: LaneMsg.readAtResult, 'cancelled': true});
+     }
+-    if (_awaitingJspiWrite) {
+-      _awaitingJspiWrite = false;
++    if (_awaitingWrite) {
++      _awaitingWrite = false;
+       _post({LaneMsgFields.type: LaneMsg.chunkAck, 'cancelled': true});
+     }
+   }
+@@ -509,8 +515,8 @@ class WebLease implements Lease, LanePhase {
+     }
+     if (_running == entry) {
+       _running = null;
+-      _awaitingJspiRead = false;
+-      _awaitingJspiWrite = false;
++      _awaitingRead = false;
++      _awaitingWrite = false;
+     }
+     if (!entry.completer.isCompleted) entry.completer.complete(result);
+     _settle();
+@@ -565,7 +571,7 @@ class WebLease implements Lease, LanePhase {
+         if (entry != null) unawaited(_serveReadAt(obj, entry));
+ 
+       case LaneMsg.chunk:
+-        if (_mode == PdfIoMode.jspi) _awaitingJspiWrite = true;
++        if (_suspends) _awaitingWrite = true;
+         // Chained, never parallel: chunk N+1's sink.write may not
+         // start before chunk N's completes (ordering is the sink
+         // contract; OPFS mode has no worker-side backpressure).
+@@ -704,7 +710,7 @@ class WebLease implements Lease, LanePhase {
+     final offset = _int(obj, 'offset') ?? 0;
+     final count = _int(obj, 'count') ?? 0;
+     final isAtomics = _mode == PdfIoMode.atomics;
+-    if (!isAtomics) _awaitingJspiRead = true;
++    if (!isAtomics) _awaitingRead = true;
+ 
+     // The worker mounts a handle's held readers FIRST (they sit
+     // inside the document at the indices the engine knew them by),
+@@ -758,8 +764,8 @@ class WebLease implements Lease, LanePhase {
+         _sabSignal(sab, SabStatus.ready);
+       }
+     } else {
+-      if (!_awaitingJspiRead) return;
+-      _awaitingJspiRead = false;
++      if (!_awaitingRead) return;
++      _awaitingRead = false;
+       if (cancelled) {
+         _post({LaneMsgFields.type: LaneMsg.readAtResult, 'cancelled': true});
+       } else if (error != null || bytes == null) {
+@@ -810,10 +816,10 @@ class WebLease implements Lease, LanePhase {
+             ? SabStatus.cancelled
+             : (error != null ? SabStatus.error : SabStatus.ready),
+       );
+-    } else if (_mode == PdfIoMode.jspi) {
++    } else if (_suspends) {
+       // A cancel already answered this write.
+-      if (!_awaitingJspiWrite) return;
+-      _awaitingJspiWrite = false;
++      if (!_awaitingWrite) return;
++      _awaitingWrite = false;
+       _post({
+         LaneMsgFields.type: LaneMsg.chunkAck,
+         if (cancelled) 'cancelled': true,
+diff --git a/lib/src/runtime/web/protocol.dart b/lib/src/runtime/web/protocol.dart
+index f2b7909..8c0ca49 100644
+--- a/lib/src/runtime/web/protocol.dart
++++ b/lib/src/runtime/web/protocol.dart
+@@ -194,6 +194,12 @@ abstract final class LaneMsgFields {
+ /// that: a job the fault hits fails after twice this, never hangs.
+ const kCreateHandleWait = Duration(seconds: 5);
+ 
++/// Bytes the Asyncify mode saves an unwound wasm stack in: whole wasm pages,
++/// taken from fresh linear memory outside the engine's heap. The pass writes
++/// the stack without a bound, so the worker compares the fill with this after
++/// each unwind and fails the job on an overflow.
++const kAsyncifyStackBytes = 4 * 1024 * 1024;
++
+ /// The protocol object injected into the worker's init message.
+ /// Keys are stable API for executor_worker.js.
+ Map<String, int> laneProtocolCodes() => {
+@@ -207,4 +213,5 @@ Map<String, int> laneProtocolCodes() => {
+   'sabLengthOffset': SabLayout.lengthOffset,
+   'sabMaxChunk': SabLayout.maxChunk,
+   'createHandleWaitMs': kCreateHandleWait.inMilliseconds,
++  'asyncifyStackBytes': kAsyncifyStackBytes,
+ };
+diff --git a/lib/src/types/pdf_config.dart b/lib/src/types/pdf_config.dart
+index 487f1a6..409f234 100644
+--- a/lib/src/types/pdf_config.dart
++++ b/lib/src/types/pdf_config.dart
+@@ -1,3 +1,4 @@
++import 'package:pdf_manipulator/src/types/errors.dart';
+ import 'package:pdf_manipulator/src/types/pdf_enums.dart';
+ 
+ /// Configuration for a PDF engine instance.
+@@ -9,11 +10,15 @@ final class PdfConfig {
+   final String? webWorkerUrl;
+ 
+   /// Force a specific web I/O mode. Ignored on native. Null = auto-detect.
++  /// A mode the browser cannot run, or the Asyncify mode when the app did not
++  /// ship the Asyncify wasm, throws [PdfUnsupported] when the instance is
++  /// created; there is no silent fallback.
+   ///
+   /// Auto-detection priority (best first):
+   ///   1. [PdfIoMode.jspi] — if `WebAssembly.Suspending` is available
+   ///   2. [PdfIoMode.atomics] — if `SharedArrayBuffer` is available
+-  ///   3. [PdfIoMode.opfs] — universal fallback
++  ///   3. [PdfIoMode.asyncify] — if the app shipped the Asyncify wasm
++  ///   4. [PdfIoMode.opfs] — universal fallback
+   final PdfIoMode? webIoMode;
+ 
+   /// How many operations run at once for this
+diff --git a/lib/src/types/pdf_enums.dart b/lib/src/types/pdf_enums.dart
+index 82c7c08..8a7d1cf 100644
+--- a/lib/src/types/pdf_enums.dart
++++ b/lib/src/types/pdf_enums.dart
+@@ -18,10 +18,18 @@ enum PdfIoMode implements PdfWire {
+   /// Requires COOP/COEP headers.
+   atomics('atomics'),
+ 
++  /// Asyncify — the engine wasm is instrumented to pause at a source read or
++  /// a sink write and resume when the answer arrives, so it streams like
++  /// [jspi] on a browser with neither JSPI nor `SharedArrayBuffer`. Needs
++  /// the Asyncify wasm (`asyncify: true` in the app's
++  /// `hooks: user_defines: pdf_manipulator:`); the larger file is fetched
++  /// only in this mode.
++  asyncify('asyncify'),
++
+   /// OPFS — pre-copy entire source to Origin Private File System disk
+   /// before processing. Universal web fallback, all modern browsers.
+   ///
+-  /// **Trade-offs vs streaming modes (JSPI/Atomics):**
++  /// **Trade-offs vs streaming modes (JSPI/Atomics/Asyncify):**
+   /// - O(N) disk space (full copy of each source file)
+   /// - O(N) latency before first output byte (copy must complete first)
+   /// - Subject to browser storage quota
+@@ -29,8 +37,9 @@ enum PdfIoMode implements PdfWire {
+   ///
+   /// If you tested locally with COOP/COEP headers (getting Atomics) or
+   /// on Chrome 137+ (getting JSPI) and deploy without headers on an
+-  /// older browser, users silently fall back to OPFS. Use
+-  /// `ensureInitialized` to detect the mode and warn if needed.
++  /// older browser, users silently fall back to OPFS, unless the app ships
++  /// the Asyncify wasm. Use `ensureInitialized` to detect the mode and warn
++  /// if needed.
+   opfs('opfs');
+ 
+   const PdfIoMode(this.wire);
+diff --git a/test/guards/wasm_size_test.dart b/test/guards/wasm_size_test.dart
+new file mode 100644
+index 0000000..d7a699d
+--- /dev/null
++++ b/test/guards/wasm_size_test.dart
+@@ -0,0 +1,59 @@
++// The release wall: every wasm the package ships stays under the 25 MiB that
++// Cloudflare Pages and Workers static assets serve per file. A wasm over it
++// would deploy as a broken site, so the wall fails here and in the release
++// compile (tool/compile.dart), not at a customer's deploy.
++//
++// It judges the wasm files built into web_assets/ (the normal one, the
++// Asyncify one) and checks that build.json and the release workflow agree on
++// which wasm files exist.
++//
++// io-exempt: reads web_assets/, build.json and the release workflow from disk.
++
++@TestOn('vm')
++library;
++
++import 'dart:io';
++
++import 'package:pdf_manipulator/src/hook/build_constants.dart';
++import 'package:test/test.dart';
++
++void main() {
++  test('no wasm in web_assets/ reaches the 25 MiB static-asset limit', () {
++    final wasm = [
++      for (final f in Directory('web_assets').listSync().whereType<File>())
++        if (f.path.endsWith('.wasm')) f,
++    ];
++    final over = {
++      for (final f in wasm)
++        if (f.lengthSync() >= maxWebAssetBytes)
++          f.path: '${f.lengthSync()} bytes',
++    };
++    expect(
++      over,
++      isEmpty,
++      reason:
++          'limit is $maxWebAssetBytes bytes; built: '
++          '${{for (final f in wasm) f.path: f.lengthSync()}}',
++    );
++  });
++
++  test('build.json, the build outputs and the release workflow agree', () {
++    final constants = BuildConstants.load(Directory.current.uri);
++    final release = File('.github/workflows/release.yml').readAsStringSync();
++    for (final MapEntry(key: local, value: asset)
++        in constants.webAssets.entries) {
++      if (!local.endsWith('.wasm')) continue;
++      expect(
++        constants.wasmBuildOutputs,
++        contains(local),
++        reason: '$local is a wasm the build produces',
++      );
++      expect(
++        release,
++        contains('            $asset\n'),
++        reason: 'the release verifies $asset is present',
++      );
++    }
++    expect(constants.webAssets, contains(asyncifyWebAsset));
++  });
++}
+diff --git a/test/harness/audited_asset_server.dart b/test/harness/audited_asset_server.dart
+new file mode 100644
+index 0000000..4fcb11f
+--- /dev/null
++++ b/test/harness/audited_asset_server.dart
+@@ -0,0 +1,44 @@
++// Hybrid isolate asset server that reports what the browser asks for and can
++// hide files.
++//
++// Same job as asset_server.dart. The spawn message is a list of paths (as
++// requested, e.g. `web_assets/pdf_oxide_asyncify_bg.wasm`) the server answers
++// with 404. The channel carries the port first, then one string per request,
++// `METHOD path`, in the order the server saw them.
++//
++//   final channel = spawnHybridUri('/test/harness/audited_asset_server.dart',
++//       message: ['web_assets/pdf_oxide_asyncify_bg.wasm'], stayAlive: true);
++//   final events = StreamQueue(channel.stream);
++//   final port = (await events.next as double).toInt();
++
++// io-exempt: hybrid-isolate harness; runs an HttpServer so chrome tests can
++// fetch web_assets/.
++import 'dart:io';
++
++import 'package:shelf/shelf.dart';
++import 'package:shelf/shelf_io.dart' as io;
++import 'package:shelf_static/shelf_static.dart';
++import 'package:stream_channel/stream_channel.dart';
++
++const _headers = {'Access-Control-Allow-Origin': '*'};
++
++Future<void> hybridMain(StreamChannel<Object?> channel, Object? message) async {
++  final hidden = {for (final path in (message as List?) ?? const []) '$path'};
++  final server = await HttpServer.bind('localhost', 0);
++  final files = createStaticHandler('.');
++  io.serveRequests(server, (Request request) async {
++    if (request.method == 'OPTIONS') {
++      return Response.ok(null, headers: _headers);
++    }
++    channel.sink.add('${request.method} ${request.url.path}');
++    if (hidden.contains(request.url.path)) {
++      return Response.notFound('hidden', headers: _headers);
++    }
++    return (await files(request)).change(headers: _headers);
++  });
++  channel.sink.add(server.port);
++  await channel.stream
++      .listen(null)
++      .asFuture<void>()
++      .then<void>((_) => server.close());
++}
+diff --git a/test/harness/audited_server.dart b/test/harness/audited_server.dart
+new file mode 100644
+index 0000000..0b84145
+--- /dev/null
++++ b/test/harness/audited_server.dart
+@@ -0,0 +1,52 @@
++// A running audited_asset_server.dart, from the test's side: its port and the
++// requests it has seen.
++
++import 'dart:async';
++
++import 'package:stream_channel/stream_channel.dart';
++import 'package:test/test.dart';
++
++/// A server that hides some paths and lists every request it gets.
++class AuditedServer {
++  AuditedServer._(this.port, this._events, this.requests);
++
++  final int port;
++  final StreamIterator<Object?> _events;
++  final List<String> requests;
++
++  static Future<AuditedServer> start(List<String> hide) async {
++    final StreamChannel<Object?> channel = spawnHybridUri(
++      '/test/harness/audited_asset_server.dart',
++      message: hide,
++      stayAlive: true,
++    );
++    final events = StreamIterator(channel.stream);
++    await events.moveNext();
++    final audit = AuditedServer._(
++      (events.current as double).toInt(),
++      events,
++      [],
++    );
++    unawaited(audit._collect());
++    return audit;
++  }
++
++  Future<void> _collect() async {
++    while (await _events.moveNext()) {
++      requests.add(_events.current! as String);
++    }
++  }
++
++  String get workerUrl =>
++      'http://localhost:$port/web_assets/executor_worker.js';
++
++  /// The requests whose path ends in `file`, as `METHOD path`.
++  List<String> asked(String file) => [
++    for (final r in requests)
++      if (r.endsWith(file)) r,
++  ];
++
++  /// Lets requests the server has sent but this side has not read yet arrive.
++  Future<void> settle() =>
++      Future<void>.delayed(const Duration(milliseconds: 300));
++}
+diff --git a/test/hook/asyncify_list_test.dart b/test/hook/asyncify_list_test.dart
+new file mode 100644
+index 0000000..108cf0a
+--- /dev/null
++++ b/test/hook/asyncify_list_test.dart
+@@ -0,0 +1,135 @@
++// The Asyncify instrumentation list and its wall. A hand-assembled module
++// stands in for the engine: two pausing imports, a direct caller, a function
++// that reaches the import only through a table, and functions that never do.
++
++@TestOn('vm')
++library;
++
++import 'dart:convert';
++import 'dart:typed_data';
++
++import 'package:pdf_manipulator/src/hook/asyncify_list.dart';
++import 'package:test/test.dart';
++
++List<int> _u32(int v) {
++  final out = <int>[];
++  do {
++    var b = v & 0x7f;
++    v >>= 7;
++    if (v != 0) b |= 0x80;
++    out.add(b);
++  } while (v != 0);
++  return out;
++}
++
++List<int> _name(String s) => [..._u32(s.length), ...utf8.encode(s)];
++
++List<int> _section(int id, List<int> body) => [
++  id,
++  ..._u32(body.length),
++  ...body,
++];
++
++List<int> _body(List<int> code) => [..._u32(code.length + 1), 0, ...code];
++
++/// Function indices: 0 and 1 are the imports; 2 calls import 0; 3 calls 2;
++/// 4 calls index 5-or-7's type through the table; 5 (in the table) calls 2;
++/// 6 calls nothing; 7 (in the table) calls nothing. The list names a defined
++/// function by its index among the defined ones (index minus the 2 imports).
++Uint8List _module({List<int>? extra}) {
++  const t0 = [0x60, 0, 0];
++  const t1 = [0x60, 1, 0x7f, 0];
++  return Uint8List.fromList([
++    0,
++    0x61,
++    0x73,
++    0x6d,
++    1,
++    0,
++    0,
++    0,
++    ..._section(1, [2, ...t0, ...t1]),
++    ..._section(2, [
++      2,
++      ..._name('./g.js'),
++      ..._name('__wbg_host_read_at_1'),
++      0,
++      0,
++      ..._name('./g.js'),
++      ..._name('__wbg_host_write_chunk_2'),
++      0,
++      0,
++    ]),
++    ..._section(3, [6, 0, 0, 0, 1, 0, 1]),
++    ..._section(4, [1, 0x70, 0, 2]),
++    ..._section(9, [1, 0, 0x41, 0, 0x0b, 2, 5, 7]),
++    ..._section(10, [
++      6,
++      ..._body([0x10, 0, 0x0b]),
++      ..._body([0x10, 2, 0x0b]),
++      ..._body([0x41, 0, 0x41, 0, 0x11, 1, 0, 0x0b]),
++      ..._body([0x10, 2, 0x0b]),
++      ..._body(extra ?? [0x0b]),
++      ..._body([0x0b]),
++    ]),
++  ]);
++}
++
++void main() {
++  group('asyncify list', () {
++    test('names the callers of the pausing imports, direct and by table', () {
++      expect(asyncifyList(_module()), '0,1,2,3');
++    });
++
++    test('a function that never reaches an import is not listed', () {
++      final listed = asyncifyList(_module()).split(',');
++      expect(listed, isNot(contains('4')));
++      expect(listed, isNot(contains('5')));
++    });
++
++    test('refuses a module whose table can change at run time', () {
++      // table.set in function 6 (index 6): i32.const 0; ref.null; table.set 0
++      final bytes = _module(extra: [0x41, 0, 0xd0, 0x70, 0x26, 0, 0x0b]);
++      expect(() => asyncifyList(bytes), throwsFormatException);
++    });
++  });
++
++  group('the wall', () {
++    test('passes the list the build computed', () {
++      final wasm = _module();
++      verifyAsyncifyList(wasm, asyncifyList(wasm));
++    });
++
++    test('passes a list with extra functions', () {
++      final wasm = _module();
++      verifyAsyncifyList(wasm, '${asyncifyList(wasm)},4');
++    });
++
++    test('fails when a function reachable from an import is missing', () {
++      final wasm = _module();
++      expect(
++        () => verifyAsyncifyList(wasm, '0,1,3'),
++        throwsA(
++          isA<StateError>().having((e) => e.message, 'message', contains('2')),
++        ),
++      );
++    });
++
++    test('fails on a list numbered with the imports counted', () {
++      // binaryen names a defined function by its index among the defined
++      // ones; the same functions numbered across the imports are the wrong ones.
++      expect(
++        () => verifyAsyncifyList(_module(), '2,3,4,5'),
++        throwsA(isA<StateError>()),
++      );
++    });
++
++    test('fails on a list from another build (stale)', () {
++      // A list made for a module without the table caller misses 2 and 3.
++      expect(
++        () => verifyAsyncifyList(_module(), '0,1'),
++        throwsA(isA<StateError>()),
++      );
++    });
++  });
++}
+diff --git a/test/hook/pdf_config_test.dart b/test/hook/pdf_config_test.dart
+index 00324e7..4262417 100644
+--- a/test/hook/pdf_config_test.dart
++++ b/test/hook/pdf_config_test.dart
+@@ -106,6 +106,44 @@ void main() {
+       });
+     });
+ 
++    group('asyncify', () {
++      test('absent → false; true and false parse', () {
++        expect(PdfManipulatorConfig.parse(const {}).asyncify, isFalse);
++        expect(
++          PdfManipulatorConfig.parse(const {'asyncify': true}).asyncify,
++          isTrue,
++        );
++        expect(
++          PdfManipulatorConfig.parse(const {'asyncify': false}).asyncify,
++          isFalse,
++        );
++      });
++
++      test('stacks with a trimmed keep', () {
++        final cfg = PdfManipulatorConfig.parse(const {
++          'keep': ['render'],
++          'asyncify': true,
++        });
++        expect(cfg.asyncify, isTrue);
++        expect(cfg.keep.mode, KeepMode.manual);
++      });
++
++      for (final bad in <Object>['yes', 'true', 1, <Object>[]]) {
++        test('$bad is refused', () {
++          expect(
++            () => PdfManipulatorConfig.parse({'asyncify': bad}),
++            throwsA(
++              isA<PdfConfigError>().having(
++                (e) => e.message,
++                'message',
++                contains('asyncify'),
++              ),
++            ),
++          );
++        });
++      }
++    });
++
+     group('scan-dirs', () {
+       test('absent → empty, and it parses with keep: auto', () {
+         expect(PdfManipulatorConfig.parse(const {}).scanDirs, isEmpty);
+diff --git a/test/ops/platform/web/web_asyncify_assets_battery.dart b/test/ops/platform/web/web_asyncify_assets_battery.dart
+new file mode 100644
+index 0000000..808f3c6
+--- /dev/null
++++ b/test/ops/platform/web/web_asyncify_assets_battery.dart
+@@ -0,0 +1,115 @@
++// CHARTER — this battery alone proves what a page asks the server for and
++// when the Asyncify mode is refused: a browser fetches only the wasm its mode
++// runs, a page whose app did not ship the Asyncify wasm never requests it, and
++// forcing Asyncify without it is a typed error when the instance is created.
++
++import 'dart:async';
++
++import 'package:pdf_manipulator/pdf_manipulator.dart';
++import 'package:test/test.dart';
++
++import '../../../fixtures/handwritten.dart';
++import '../../../harness/audited_server.dart';
++import '../../../harness/test_source_sink.dart';
++import '../../../harness/timeouts.dart';
++
++const _asyncifyWasm = 'web_assets/pdf_oxide_asyncify_bg.wasm';
++const _normalWasm = 'web_assets/pdf_oxide_bg.wasm';
++
++void registerWebAsyncifyAssetTests({
++  required String Function() workerUrl,
++  required PdfIoMode mode,
++}) {
++  group('web asyncify assets (${mode.name})', () {
++    // Instances here carry their own server's URL, which becomes the page's
++    // inherited default; point it back at the suite's.
++    Future<void> restoreSuiteConfig() async {
++      final restored = Pdf(
++        config: PdfConfig(webWorkerUrl: workerUrl(), webIoMode: mode),
++      );
++      final doc = await restored.open(PdfInput(src(minimalPdf)));
++      await doc.dispose();
++      await restored.dispose();
++    }
++
++    if (mode != PdfIoMode.asyncify) {
++      test('a page without the Asyncify wasm never asks for it', () async {
++        final server = await AuditedServer.start([_asyncifyWasm]);
++        final pdf = Pdf(
++          config: PdfConfig(webWorkerUrl: server.workerUrl, webIoMode: mode),
++        );
++        final doc = await pdf.open(PdfInput(src(minimalPdf)));
++        expect(doc.pageCount, 1);
++        expect(pdf.ioMode, mode);
++        await doc.dispose();
++        await pdf.dispose();
++        await server.settle();
++
++        expect(server.asked('pdf_oxide_asyncify_bg.wasm'), isEmpty);
++        await restoreSuiteConfig();
++      }, timeout: t(4));
++    }
++
++    test(
++      'forcing Asyncify without its wasm is a typed error at creation',
++      () async {
++        final server = await AuditedServer.start([_asyncifyWasm]);
++        expect(
++          () => Pdf(
++            config: PdfConfig(
++              webWorkerUrl: server.workerUrl,
++              webIoMode: PdfIoMode.asyncify,
++            ),
++          ),
++          throwsA(
++            isA<PdfUnsupported>().having(
++              (e) => e.message,
++              'message',
++              allOf(
++                contains('asyncify'),
++                contains('pdf_oxide_asyncify_bg.wasm'),
++              ),
++            ),
++          ),
++        );
++        await server.settle();
++        expect(
++          server.asked('pdf_oxide_asyncify_bg.wasm'),
++          everyElement(startsWith('HEAD ')),
++          reason: 'the page asks whether the file exists and never fetches it',
++        );
++        expect(server.asked(_normalWasm), isEmpty);
++      },
++      timeout: t(4),
++    );
++
++    if (mode == PdfIoMode.asyncify) {
++      test(
++        'Asyncify mode fetches its own wasm and not the normal one',
++        () async {
++          final server = await AuditedServer.start(const []);
++          final pdf = Pdf(
++            config: PdfConfig(
++              webWorkerUrl: server.workerUrl,
++              webIoMode: PdfIoMode.asyncify,
++            ),
++          );
++          final doc = await pdf.open(PdfInput(src(minimalPdf)));
++          expect(doc.pageCount, 1);
++          await doc.dispose();
++          await pdf.dispose();
++          await server.settle();
++
++          // The page compiles each wasm once, so the suite's earlier use of
++          // this file may have served it; what this instance must never do
++          // is ask for the normal one. The engine only starts on the
++          // Asyncify build: the worker refuses a module without its exports.
++          expect(server.asked(_normalWasm), isEmpty);
++
++          await restoreSuiteConfig();
++        },
++        timeout: t(4),
++      );
++    }
++  });
++}
+diff --git a/test/ops/platform/web/web_lane_protocol_battery.dart b/test/ops/platform/web/web_lane_protocol_battery.dart
+index 0a9495e..de27ee4 100644
+--- a/test/ops/platform/web/web_lane_protocol_battery.dart
++++ b/test/ops/platform/web/web_lane_protocol_battery.dart
+@@ -732,7 +732,7 @@ void registerWebLaneProtocolTests({
+       final bytes = minimalPdf;
+ 
+       switch (mode) {
+-        case PdfIoMode.jspi:
++        case PdfIoMode.jspi || PdfIoMode.asyncify:
+           // The first exec suspends on its first read, so the handler is
+           // re-entered by whatever arrives next.
+           final go = Completer<void>();
+diff --git a/test/ops/platform/web/web_runtime_battery.dart b/test/ops/platform/web/web_runtime_battery.dart
+index d69c0b9..72c336a 100644
+--- a/test/ops/platform/web/web_runtime_battery.dart
++++ b/test/ops/platform/web/web_runtime_battery.dart
+@@ -208,7 +208,7 @@ void registerWebPlatformTests({
+     );
+ 
+     test(
+-      'a cancel during a blocked sink write answers within 100 ms (JSPI)',
++      'a cancel during a blocked sink write answers within 100 ms (JSPI, Asyncify)',
+       () async {
+         final pdf = Pdf(
+           config: PdfConfig(
+@@ -239,7 +239,9 @@ void registerWebPlatformTests({
+         await pdf.dispose();
+       },
+       timeout: t(10),
+-      skip: mode == PdfIoMode.jspi ? false : 'JSPI only',
++      skip: mode == PdfIoMode.jspi || mode == PdfIoMode.asyncify
++          ? false
++          : 'JSPI and Asyncify only',
+     );
+ 
+     test(
+diff --git a/test/ops/runners/web_asyncify_runner_test.dart b/test/ops/runners/web_asyncify_runner_test.dart
+new file mode 100644
+index 0000000..4d1419c
+--- /dev/null
++++ b/test/ops/runners/web_asyncify_runner_test.dart
+@@ -0,0 +1,176 @@
++// Asyncify mode — all tests through the Pdf API.
++// Run: dart test test/ops/runners/web_asyncify_runner_test.dart -p chrome
++
++@TestOn('browser')
++library;
++
++import 'package:pdf_manipulator/pdf_manipulator.dart';
++import 'package:pdf_manipulator/src/runtime/web/lease.dart' show WebExecutor;
++import 'package:test/test.dart';
++
++import '../../fixtures/handwritten.dart';
++import '../../harness/test_source_sink.dart';
++import '../core/pdf_doc_battery.dart';
++import '../core/pdf_editor_battery.dart';
++import '../core/pdf_form_battery.dart';
++import '../core/pdf_form_encoding_battery.dart';
++import '../core/pdf_kept_encryption_battery.dart';
++import '../core/pdf_lzw_battery.dart';
++import '../core/pdf_merge_battery.dart';
++import '../core/pdf_builder_battery.dart';
++import '../core/pdf_standalone_battery.dart';
++import '../core/pdf_sugar_battery.dart';
++import '../core/pdf_one_shot_battery.dart';
++import '../core/pdf_render_battery.dart';
++import '../core/pdf_determinism_battery.dart';
++import '../core/pdf_abort_battery.dart';
++import '../core/pdf_cancel_battery.dart';
++import '../core/pdf_combinator_cancel_battery.dart';
++import '../core/pdf_lifecycle_battery.dart';
++import '../core/pdf_instance_battery.dart';
++import '../core/pdf_lane_protocol_battery.dart';
++import '../core/pdf_runtime_safety_battery.dart';
++import '../core/pdf_executor_battery.dart';
++import '../stress/pdf_doc_stress_battery.dart';
++import '../stress/pdf_editor_stress_battery.dart';
++import '../stress/pdf_sugar_stress_battery.dart';
++import '../stress/pdf_standalone_stress_battery.dart';
++import '../stress/pdf_builder_stress_battery.dart';
++import '../stress/pdf_instance_stress_battery.dart';
++import '../platform/web/web_asyncify_assets_battery.dart';
++import '../platform/web/web_cancel_channel_battery.dart';
++import '../platform/web/web_lane_protocol_battery.dart';
++import '../platform/web/web_runtime_battery.dart';
++import '../../harness/timeouts.dart';
++
++void main() {
++  late Pdf pdf;
++  var booted = false;
++  late int serverPort;
++
++  test('engine init', () async {
++    final channel = spawnHybridUri(
++      '/test/harness/asset_server.dart',
++      stayAlive: true,
++    );
++    serverPort = (await channel.stream.first as double).toInt();
++    await purgeOpfsLaneFiles(); // hermetic: judge THIS run only
++
++    pdf = Pdf(
++      config: PdfConfig(
++        webWorkerUrl:
++            'http://localhost:$serverPort/web_assets/executor_worker.js',
++        webIoMode: PdfIoMode.asyncify,
++      ),
++    );
++    booted = true;
++    // Harness setup, not the engine: spawning the hybrid asset server
++    // compiles an isolate, which takes seconds on a loaded machine.
++  }, timeout: t(10));
++
++  test('verify I/O mode is asyncify', () async {
++    final doc = await pdf.open(PdfInput(src(minimalPdf)));
++    await doc.dispose();
++    expect(pdf.ioMode, PdfIoMode.asyncify);
++  }, timeout: t(1));
++
++  // A --name filter can skip 'engine init' — only dispose what booted.
++  tearDownAll(() => booted ? pdf.dispose() : null);
++
++  registerDocTests(() => pdf);
++  registerEditorTests(() => pdf);
++  registerFormEncodingTests(() => pdf);
++  registerKeptEncryptionTests(() => pdf);
++  registerLzwTests(() => pdf);
++  registerMergeTests(() => pdf);
++  registerFormTests(() => pdf);
++  registerBuilderTests(() => pdf);
++  registerStandaloneTests(() => pdf);
++  registerSugarTests(() => pdf);
++  registerOneShotTests(() => pdf);
++  registerRenderTests(() => pdf);
++  registerDeterminismTests(() => pdf);
++  registerCancelTests(() => pdf);
++  registerWebCancelChannelTests(() => pdf);
++  registerCombinatorCancelTests(() => pdf);
++  registerAbortTests(() => pdf);
++  registerLifecycleTests(
++    () => Pdf(
++      config: PdfConfig(
++        webWorkerUrl:
++            'http://localhost:$serverPort/web_assets/executor_worker.js',
++        webIoMode: PdfIoMode.asyncify,
++      ),
++    ),
++  );
++  registerInstanceTests(
++    () => Pdf(
++      config: PdfConfig(
++        webWorkerUrl:
++            'http://localhost:$serverPort/web_assets/executor_worker.js',
++        webIoMode: PdfIoMode.asyncify,
++      ),
++    ),
++  );
++
++  registerRuntimeSafetyTests(
++    config: () => PdfConfig(
++      webWorkerUrl:
++          'http://localhost:$serverPort/web_assets/executor_worker.js',
++      webIoMode: PdfIoMode.asyncify,
++    ),
++  );
++
++  PdfConfig executorConfig() => PdfConfig(
++    webWorkerUrl: 'http://localhost:$serverPort/web_assets/executor_worker.js',
++    webIoMode: PdfIoMode.asyncify,
++  );
++  registerExecutorTests(
++    () => Pdf(config: executorConfig()),
++    config: executorConfig,
++    memBytes: (executor) => (executor as WebExecutor).memBytes,
++  );
++
++  registerLaneProtocolTests(
++    config: () => PdfConfig(
++      webWorkerUrl:
++          'http://localhost:$serverPort/web_assets/executor_worker.js',
++      webIoMode: PdfIoMode.asyncify,
++    ),
++  );
++
++  registerWebLaneProtocolTests(
++    workerUrl: () =>
++        'http://localhost:$serverPort/web_assets/executor_worker.js',
++    mode: PdfIoMode.asyncify,
++  );
++
++  registerWebAsyncifyAssetTests(
++    workerUrl: () =>
++        'http://localhost:$serverPort/web_assets/executor_worker.js',
++    mode: PdfIoMode.asyncify,
++  );
++
++  registerDocStressTests(() => pdf);
++  registerEditorStressTests(() => pdf);
++  registerSugarStressTests(() => pdf);
++  registerStandaloneStressTests(() => pdf);
++  registerBuilderStressTests(() => pdf);
++  registerInstanceStressTests(
++    () => Pdf(
++      config: PdfConfig(
++        webWorkerUrl:
++            'http://localhost:$serverPort/web_assets/executor_worker.js',
++        webIoMode: PdfIoMode.asyncify,
++      ),
++    ),
++  );
++
++  // LAST on purpose: its residue check sweeps the whole suite.
++  registerWebPlatformTests(
++    workerUrl: () =>
++        'http://localhost:$serverPort/web_assets/executor_worker.js',
++    mode: PdfIoMode.asyncify,
++    disposeSharedInstance: () => pdf.dispose(),
++  );
++}
+diff --git a/test/ops/runners/web_atomics_runner_test.dart b/test/ops/runners/web_atomics_runner_test.dart
+index 37eee83..fed234b 100644
+--- a/test/ops/runners/web_atomics_runner_test.dart
++++ b/test/ops/runners/web_atomics_runner_test.dart
+@@ -37,6 +37,7 @@ import '../stress/pdf_sugar_stress_battery.dart';
+ import '../stress/pdf_standalone_stress_battery.dart';
+ import '../stress/pdf_builder_stress_battery.dart';
+ import '../stress/pdf_instance_stress_battery.dart';
++import '../platform/web/web_asyncify_assets_battery.dart';
+ import '../platform/web/web_lane_protocol_battery.dart';
+ import '../platform/web/web_runtime_battery.dart';
+ import '../../harness/timeouts.dart';
+@@ -142,6 +143,12 @@ void main() {
+     mode: PdfIoMode.atomics,
+   );
+ 
++  registerWebAsyncifyAssetTests(
++    workerUrl: () =>
++        'http://localhost:$serverPort/web_assets/executor_worker.js',
++    mode: PdfIoMode.atomics,
++  );
++
+   registerDocStressTests(() => pdf);
+   registerEditorStressTests(() => pdf);
+   registerSugarStressTests(() => pdf);
+diff --git a/test/ops/runners/web_auto_mode_test.dart b/test/ops/runners/web_auto_mode_test.dart
+new file mode 100644
+index 0000000..2166f36
+--- /dev/null
++++ b/test/ops/runners/web_auto_mode_test.dart
+@@ -0,0 +1,99 @@
++// Auto-detection of the web I/O mode, on a page that never forces one (a
++// forced mode is inherited by every later instance of the page, so this has a
++// file of its own). Run: dart test test/ops/runners/web_auto_mode_test.dart -p chrome
++//
++// The order is JSPI, Atomics, Asyncify when the app shipped its wasm, OPFS.
++// Chrome has no switch for JSPI, so the tests take `WebAssembly.Suspending`
++// away from the page, as it is away in a browser older than Chrome 137; a
++// plain `-p chrome` page has no SharedArrayBuffer.
++
++@TestOn('browser')
++library;
++
++import 'dart:js_interop';
++import 'dart:js_interop_unsafe';
++
++import 'package:pdf_manipulator/pdf_manipulator.dart';
++import 'package:test/test.dart';
++
++import '../../fixtures/handwritten.dart';
++import '../../harness/audited_server.dart';
++import '../../harness/test_source_sink.dart';
++import '../../harness/timeouts.dart';
++
++const _asyncifyWasm = 'web_assets/pdf_oxide_asyncify_bg.wasm';
++
++final bool _hasSharedArrayBuffer = globalContext
++    .hasProperty('SharedArrayBuffer'.toJS)
++    .toDart;
++
++final bool _hasJspi = (globalContext['WebAssembly']! as JSObject)
++    .hasProperty('Suspending'.toJS)
++    .toDart;
++
++/// Runs [body] on a page without JSPI: `WebAssembly.Suspending` is removed
++/// from this realm. Workers are other realms and keep theirs; auto-detection
++/// never reads those.
++Future<void> _withoutJspi(Future<void> Function() body) async {
++  final wasm = globalContext['WebAssembly']! as JSObject;
++  final suspending = wasm['Suspending'];
++  wasm.delete('Suspending'.toJS);
++  try {
++    await body();
++  } finally {
++    if (suspending != null) wasm['Suspending'] = suspending;
++  }
++}
++
++Future<PdfIoMode> _modeOf(String workerUrl) async {
++  final pdf = Pdf(config: PdfConfig(webWorkerUrl: workerUrl));
++  final doc = await pdf.open(PdfInput(src(minimalPdf)));
++  expect(doc.pageCount, 1);
++  await doc.dispose();
++  final mode = pdf.ioMode!;
++  await pdf.dispose();
++  return mode;
++}
++
++void main() {
++  test(
++    'JSPI where the browser has it, without asking for the Asyncify wasm',
++    () async {
++      final server = await AuditedServer.start([_asyncifyWasm]);
++      expect(await _modeOf(server.workerUrl), PdfIoMode.jspi);
++      await server.settle();
++      expect(server.asked('pdf_oxide_asyncify_bg.wasm'), isEmpty);
++    },
++    timeout: t(4),
++    skip: _hasJspi ? false : 'this browser has no JSPI',
++  );
++
++  test(
++    'without JSPI and without SharedArrayBuffer, Asyncify when the app shipped it',
++    () async {
++      final server = await AuditedServer.start(const []);
++      late PdfIoMode mode;
++      await _withoutJspi(() async => mode = await _modeOf(server.workerUrl));
++      expect(mode, PdfIoMode.asyncify);
++    },
++    timeout: t(4),
++    skip: _hasSharedArrayBuffer ? 'the page has SharedArrayBuffer' : false,
++  );
++
++  test(
++    'without JSPI and without SharedArrayBuffer, OPFS when the app did not '
++    'ship Asyncify, having only asked whether the file exists',
++    () async {
++      final server = await AuditedServer.start([_asyncifyWasm]);
++      late PdfIoMode mode;
++      await _withoutJspi(() async => mode = await _modeOf(server.workerUrl));
++      expect(mode, PdfIoMode.opfs);
++      await server.settle();
++      expect(server.asked('pdf_oxide_asyncify_bg.wasm'), [
++        'HEAD $_asyncifyWasm',
++      ]);
++    },
++    timeout: t(4),
++    skip: _hasSharedArrayBuffer ? 'the page has SharedArrayBuffer' : false,
++  );
++}
+diff --git a/test/ops/runners/web_io_measure_test.dart b/test/ops/runners/web_io_measure_test.dart
+new file mode 100644
+index 0000000..4b9f743
+--- /dev/null
++++ b/test/ops/runners/web_io_measure_test.dart
+@@ -0,0 +1,161 @@
++// Measurement, not a test of behaviour: times open + extract and merge of one
++// large generated PDF in the Asyncify and OPFS modes (OPFS includes its
++// pre-copy of every input). Skipped unless a size is given:
++//
++//   dart test test/ops/runners/web_io_measure_test.dart -p chrome \
++//       --dart2js-args=-DMEASURE_MB=300
++//
++// Each line is `MEASURE mode op ms`. The PDF is built once in memory, as
++// uncompressed text pages, so extraction does real work on every page.
++
++@TestOn('browser')
++library;
++
++import 'dart:async';
++import 'dart:convert';
++import 'dart:typed_data';
++
++import 'package:pdf_manipulator/pdf_manipulator.dart';
++import 'package:test/test.dart';
++
++import '../../harness/test_source_sink.dart';
++
++const _megabytes = int.fromEnvironment('MEASURE_MB');
++const _extractPages = 50;
++
++/// A text PDF of about [megabytes] MB: pages of 48 KiB of content each.
++Uint8List _bigPdf(int megabytes) {
++  const pageBytes = 48 * 1024;
++  final pages = megabytes * 1024 * 1024 ~/ pageBytes;
++  final out = BytesBuilder(copy: false);
++  final offsets = <int>[];
++  var length = 0;
++  void add(List<int> bytes) {
++    out.add(bytes);
++    length += bytes.length;
++  }
++
++  void object(int number, String body) {
++    offsets.add(length);
++    add(ascii.encode('$number 0 obj\n$body\nendobj\n'));
++  }
++
++  add(ascii.encode('%PDF-1.7\n'));
++  object(1, '<< /Type /Catalog /Pages 2 0 R >>');
++  final kids = [for (var i = 0; i < pages; i++) '${4 + 2 * i} 0 R'].join(' ');
++  object(2, '<< /Type /Pages /Kids [$kids] /Count $pages >>');
++  object(3, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
++  final line = ascii.encode(
++    'BT /F1 10 Tf 40 700 Td (The quick brown fox jumps over the lazy dog) Tj ET\n',
++  );
++  final stream = BytesBuilder(copy: false);
++  for (var n = 0; n < pageBytes ~/ line.length; n++) {
++    stream.add(line);
++  }
++  final content = stream.takeBytes();
++  for (var i = 0; i < pages; i++) {
++    final page = 4 + 2 * i;
++    object(
++      page,
++      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] '
++      '/Resources << /Font << /F1 3 0 R >> >> /Contents ${page + 1} 0 R >>',
++    );
++    offsets.add(length);
++    add(
++      ascii.encode(
++        '${page + 1} 0 obj\n<< /Length ${content.length} >>\nstream\n',
++      ),
++    );
++    add(content);
++    add(ascii.encode('\nendstream\nendobj\n'));
++  }
++  final xref = length;
++  final count = offsets.length + 1;
++  final table = StringBuffer('xref\n0 $count\n0000000000 65535 f \n');
++  for (final o in offsets) {
++    table.write('${o.toString().padLeft(10, '0')} 00000 n \n');
++  }
++  add(ascii.encode(table.toString()));
++  add(
++    ascii.encode(
++      'trailer\n<< /Size $count /Root 1 0 R >>\nstartxref\n$xref\n%%EOF\n',
++    ),
++  );
++  return out.takeBytes();
++}
++
++class _CountingSink implements DataSink {
++  int bytes = 0;
++
++  @override
++  FutureOr<void> write(Uint8List chunk) => bytes += chunk.length;
++
++  @override
++  FutureOr<void> close() {}
++
++  @override
++  FutureOr<void> abort(Object reason) {}
++}
++
++void main() {
++  late Uint8List big;
++  late String workerUrl;
++
++  setUpAll(() async {
++    if (_megabytes == 0) return;
++    final channel = spawnHybridUri(
++      '/test/harness/asset_server.dart',
++      stayAlive: true,
++    );
++    final port = (await channel.stream.first as double).toInt();
++    workerUrl = 'http://localhost:$port/web_assets/executor_worker.js';
++    big = _bigPdf(_megabytes);
++  });
++
++  // Each mode twice, alternating, so a warm-up shows as the first pair.
++  for (final mode in [
++    PdfIoMode.asyncify,
++    PdfIoMode.opfs,
++    PdfIoMode.asyncify,
++    PdfIoMode.opfs,
++  ]) {
++    test(
++      '${mode.name}: open + extract, then merge, of a $_megabytes MB PDF',
++      () async {
++        final pdf = Pdf(
++          config: PdfConfig(webWorkerUrl: workerUrl, webIoMode: mode),
++        );
++        final clock = Stopwatch()..start();
++        var reads = 0;
++        final doc = await pdf.open(
++          PdfInput(TestSource(big, onRead: (_, _) => reads++)),
++        );
++        final extracted = _CountingSink();
++        await doc.extractText(
++          extracted,
++          pages: PdfPages.range(0, _extractPages),
++        );
++        final openExtract = clock.elapsedMilliseconds;
++        await doc.dispose();
++
++        clock
++          ..reset()
++          ..start();
++        final merged = _CountingSink();
++        await pdf.merge([
++          PdfInput(TestSource(big)),
++          PdfInput(TestSource(big)),
++        ], merged);
++        final merge = clock.elapsedMilliseconds;
++        print(
++          'MEASURE ${mode.name} bytes=${big.length} '
++          'open+extract=${openExtract}ms (reads=$reads) merge=${merge}ms '
++          'extracted=${extracted.bytes} merged=${merged.bytes}',
++        );
++        await pdf.dispose();
++      },
++      timeout: Timeout(const Duration(minutes: 30)),
++      skip: _megabytes == 0 ? 'pass --dart2js-args=-DMEASURE_MB=<size>' : false,
++    );
++  }
++}
+diff --git a/test/ops/runners/web_jspi_runner_test.dart b/test/ops/runners/web_jspi_runner_test.dart
+index 1e5a2d8..bf40ec9 100644
+--- a/test/ops/runners/web_jspi_runner_test.dart
++++ b/test/ops/runners/web_jspi_runner_test.dart
+@@ -37,6 +37,7 @@ import '../stress/pdf_sugar_stress_battery.dart';
+ import '../stress/pdf_standalone_stress_battery.dart';
+ import '../stress/pdf_builder_stress_battery.dart';
+ import '../stress/pdf_instance_stress_battery.dart';
++import '../platform/web/web_asyncify_assets_battery.dart';
+ import '../platform/web/web_cancel_channel_battery.dart';
+ import '../platform/web/web_lane_protocol_battery.dart';
+ import '../platform/web/web_runtime_battery.dart';
+@@ -144,6 +145,12 @@ void main() {
+     mode: PdfIoMode.jspi,
+   );
+ 
++  registerWebAsyncifyAssetTests(
++    workerUrl: () =>
++        'http://localhost:$serverPort/web_assets/executor_worker.js',
++    mode: PdfIoMode.jspi,
++  );
++
+   registerDocStressTests(() => pdf);
+   registerEditorStressTests(() => pdf);
+   registerSugarStressTests(() => pdf);
+diff --git a/test/ops/runners/web_opfs_runner_test.dart b/test/ops/runners/web_opfs_runner_test.dart
+index 0df0c4a..8929a58 100644
+--- a/test/ops/runners/web_opfs_runner_test.dart
++++ b/test/ops/runners/web_opfs_runner_test.dart
+@@ -37,6 +37,7 @@ import '../stress/pdf_sugar_stress_battery.dart';
+ import '../stress/pdf_standalone_stress_battery.dart';
+ import '../stress/pdf_builder_stress_battery.dart';
+ import '../stress/pdf_instance_stress_battery.dart';
++import '../platform/web/web_asyncify_assets_battery.dart';
+ import '../platform/web/web_cancel_channel_battery.dart';
+ import '../platform/web/web_lane_protocol_battery.dart';
+ import '../platform/web/web_runtime_battery.dart';
+@@ -150,6 +151,12 @@ void main() {
+     mode: PdfIoMode.opfs,
+   );
+ 
++  registerWebAsyncifyAssetTests(
++    workerUrl: () =>
++        'http://localhost:$serverPort/web_assets/executor_worker.js',
++    mode: PdfIoMode.opfs,
++  );
++
+   registerDocStressTests(() => pdf);
+   registerEditorStressTests(() => pdf);
+   registerSugarStressTests(() => pdf);
+diff --git a/tool/asyncify_list.dart b/tool/asyncify_list.dart
+new file mode 100644
+index 0000000..bc87824
+--- /dev/null
++++ b/tool/asyncify_list.dart
+@@ -0,0 +1,86 @@
++// asyncify_list.dart — which functions of a built engine wasm can be on the
++// call stack while the module is paused at a host import, from the module's
++// own call graph.
++//
++//   dart --packages=.dart_tool/package_config.json tool/asyncify_list.dart \
++//        [--out <file>] [--pause <import-substring>]... <pdf_oxide_bg.wasm>
++//
++// binaryen's `--asyncify` instruments exactly the functions it is told to
++// (`--pass-arg=asyncify-onlylist@@<file>`); a function left out of that list
++// must never be on the stack at a pause. This tool computes the list that is
++// safe to give: the callers of the pausing imports, transitively, where a
++// `call_indirect` reaches every function of its signature that an element
++// segment or a `ref.func` names. It refuses a module whose tables could change
++// at run time (`table.set`, `table.init`, `table.copy`, `table.fill`, an
++// imported table), because the list would then be unsound.
++//
++// Prints the counts that decide whether the list is worth having: the direct
++// callers alone, the signature-resolved set, and for each signature the
++// functions it adds. `--out` writes the list in the form the pass reads: one
++// comma-separated line of names: the module has no name section, and binaryen
++// names an unnamed defined function by its index among the defined functions,
++// imports not counted.
++//
++// `--pause` defaults to the two imports the executor worker suspends,
++// `host_read_at` and `host_write_chunk`. Run from the package root; `dart run`
++// would first run the package's native build hook, hence `dart --packages=`.
++
++import 'dart:io';
++
++import 'package:pdf_manipulator/src/hook/asyncify_list.dart';
++
++void main(List<String> args) {
++  final pause = <String>[];
++  String? out;
++  String? path;
++  for (var i = 0; i < args.length; i++) {
++    switch (args[i]) {
++      case '--out':
++        out = args[++i];
++      case '--pause':
++        pause.add(args[++i]);
++      default:
++        path = args[i];
++    }
++  }
++  if (path == null) {
++    stderr.writeln(
++      'usage: dart --packages=.dart_tool/package_config.json '
++      'tool/asyncify_list.dart [--out file] [--pause import]... <wasm>',
++    );
++    exit(2);
++  }
++  if (pause.isEmpty) pause.addAll(asyncifyPauseImports);
++
++  final bytes = File(path).readAsBytesSync();
++  final m = WasmCallGraph.parse(bytes);
++  final targets = m.importsNamed(pause);
++
++  final direct = m.ancestors(targets, indirect: false);
++  final all = m.ancestors(targets, indirect: true);
++  final bySig = m.signatureSteps(targets);
++  stdout
++    ..writeln(
++      'functions: ${m.functionCount} (${m.importCount} imports), '
++      'address-taken: ${m.addressTaken.length}',
++    )
++    ..writeln('pausing imports: ${targets.map((t) => m.importNames[t])}')
++    ..writeln('callers by direct calls only: ${direct.length}')
++    ..writeln(
++      'callers with call_indirect resolved by signature: ${all.length} '
++      '(${(100 * all.length / m.functionCount).toStringAsFixed(1)}% of the '
++      'module)',
++    )
++    ..writeln('signature resolution, in the order it grows the set:');
++  for (final step in bySig) {
++    stdout.writeln(
++      '  ${step.signature}  address-taken ancestors ${step.taken}, '
++      'call-site functions ${step.sites}, adds ${step.added}',
++    );
++  }
++  if (out != null) {
++    final list = asyncifyList(bytes);
++    File(out).writeAsStringSync(list);
++    stdout.writeln('wrote ${list.split(',').length} function names to $out');
++  }
++}
+diff --git a/tool/compile.dart b/tool/compile.dart
+index b71065d..fd1f375 100644
+--- a/tool/compile.dart
++++ b/tool/compile.dart
+@@ -5,7 +5,9 @@
+ //   dart tool/compile.dart linux        Linux x64 + arm64 (cross-compile)
+ //   dart tool/compile.dart android      Android arm64 + arm + x64 + x86
+ //   dart tool/compile.dart windows      Windows x64 (+ arm64 on MSVC)
+-//   dart tool/compile.dart wasm         WASM + bindgen_runner
++//   dart tool/compile.dart wasm         WASM + bindgen_runner (with
++//                                       COMPILE_OUTPUT_DIR, the Asyncify wasm too)
++//   dart tool/compile.dart wasm-asyncify  the Asyncify twin of web_assets/'s wasm
+ //   dart tool/compile.dart native       Auto-detect what this host builds
+ //   dart tool/compile.dart all          native + wasm
+ //   dart tool/compile.dart --features [native|wasm]   print feature flags
+@@ -93,6 +95,8 @@ Future<void> main(List<String> args) async {
+       await _doWindows();
+     case 'wasm':
+       await _doWasm();
++    case 'wasm-asyncify':
++      await _doWasmAsyncify();
+     case 'native':
+       await _doNative();
+     case 'all':
+@@ -101,7 +105,7 @@ Future<void> main(List<String> args) async {
+     default:
+       stderr.writeln(
+         'usage: dart tool/compile.dart '
+-        '{macos|ios|linux|android|windows|wasm|native|all|'
++        '{macos|ios|linux|android|windows|wasm|wasm-asyncify|native|all|'
+         '--features [native|wasm]}',
+       );
+       exit(1);
+@@ -266,19 +270,61 @@ Future<void> _doWasm() async {
+   final bg = File(p.join(webAssets.path, 'pdf_oxide_bg.wasm'));
+   stderr.writeln('Binary: ${bg.lengthSync()} bytes');
+ 
+-  // Release pipeline mirrors the outputs into COMPILE_OUTPUT_DIR/wasm.
++  // Release pipeline mirrors the outputs into COMPILE_OUTPUT_DIR/wasm, the
++  // Asyncify wasm among them.
+   final rel = Platform.environment['COMPILE_OUTPUT_DIR'];
+   if (rel != null && rel.isNotEmpty) {
++    await _doWasmAsyncify();
+     final base = p.isAbsolute(rel) ? rel : p.join(p.fromUri(_pkgRoot), rel);
+     final wasmOut = Directory(p.join(base, 'wasm'))
+       ..createSync(recursive: true);
+-    for (final f in const ['pdf_oxide.js', 'pdf_oxide_bg.wasm']) {
++    final shipped = const [
++      'pdf_oxide.js',
++      'pdf_oxide_bg.wasm',
++      'pdf_oxide_asyncify_bg.wasm',
++    ];
++    for (final f in shipped) {
+       File(p.join(webAssets.path, f)).copySync(p.join(wasmOut.path, f));
+     }
++    _checkWasmSizes([for (final f in shipped) File(p.join(wasmOut.path, f))]);
+     stderr.writeln('Copied to ${wasmOut.path}');
+   }
+ }
+ 
++/// Builds `web_assets/pdf_oxide_asyncify_bg.wasm` from `web_assets/`'s wasm
++/// and reports its size against the normal one.
++Future<void> _doWasmAsyncify() async {
++  final webAssets = Directory.fromUri(_pkgRoot.resolve('web_assets'));
++  final normal = File(p.join(webAssets.path, 'pdf_oxide_bg.wasm'));
++  if (!normal.existsSync()) await _doWasm();
++  stderr.writeln('=== WASM: asyncify ===');
++  final out = File(p.join(webAssets.path, asyncifyWebAsset));
++  await buildAsyncifyWasm(packageRoot: _pkgRoot, wasm: normal, out: out);
++  final raw = out.lengthSync();
++  final base = normal.lengthSync();
++  stderr.writeln(
++    'Asyncify binary: $raw bytes (${(100 * (raw - base) / base).toStringAsFixed(1)}% '
++    'over the $base of the normal one; gzip ${gzip.encode(out.readAsBytesSync()).length} '
++    'against ${gzip.encode(normal.readAsBytesSync()).length})',
++  );
++}
++
++/// The release wall: no wasm the release ships reaches [maxWebAssetBytes], the
++/// largest file Cloudflare Pages and Workers static assets serve.
++void _checkWasmSizes(List<File> files) {
++  final over = [
++    for (final f in files)
++      if (f.path.endsWith('.wasm') && f.lengthSync() >= maxWebAssetBytes)
++        '${p.basename(f.path)}: ${f.lengthSync()} bytes',
++  ];
++  if (over.isNotEmpty) {
++    throw StateError(
++      'a shipped wasm reaches the $maxWebAssetBytes-byte limit of '
++      'Cloudflare static assets: ${over.join('; ')}',
++    );
++  }
++}
++
+ bool _has(String cmd) {
+   try {
+     final w = Platform.isWindows ? 'where' : 'which';
+diff --git a/web_assets/executor_worker.js b/web_assets/executor_worker.js
+index 6fed60c..d4c2c2f 100644
+--- a/web_assets/executor_worker.js
++++ b/web_assets/executor_worker.js
+@@ -45,8 +45,8 @@
+ //                   the linear memory's size, a diagnostic that never falls;
+ //                   abandoned: the pre-copy files set aside because their
+ //                   handle creation never answered, not removed yet)
+-//   readAtResult { lease, bytes? , error?, cancelled? }    (JSPI reads)
+-//   chunkAck     { lease, error?, cancelled? }             (JSPI writes)
++//   readAtResult { lease, bytes? , error?, cancelled? }    (JSPI and Asyncify reads)
++//   chunkAck     { lease, error?, cancelled? }             (JSPI and Asyncify writes)
+ //   releaseHold  { lease, holdGroupId }
+ //   opfsWrite    { lease, jobId, filename, chunk, offset, last }
+ //                → opfsWriteAck | error { lease, jobId, protocol: true, message }
+@@ -59,10 +59,13 @@
+ //   answers, so a late ack cannot complete the write of another job; retried:
+ //   the handle had to be created a second time)
+ //
+-// ── Three I/O modes (selected by Dart, passed in init) ─────────────
+-//   jspi    — JSPI Promise suspension (host_read_at returns Promise)
+-//   atomics — per-job SAB + Atomics.wait; Dart fills + notifies
+-//   opfs    — sources pre-copied to OPFS; reads via SyncAccessHandle
++// ── Four I/O modes (selected by Dart, passed in init) ──────────────
++//   jspi     — JSPI Promise suspension (host_read_at returns Promise)
++//   atomics  — per-job SAB + Atomics.wait; Dart fills + notifies
++//   asyncify — the instrumented wasm (pdf_oxide_asyncify_bg.wasm) unwinds
++//              at host_read_at / host_write_chunk, the worker awaits the
++//              answer and rewinds; the messages are JSPI's
++//   opfs     — sources pre-copied to OPFS; reads via SyncAccessHandle
+ //
+ // Terminating the worker is worker.terminate() from Dart — this file never sees it.
+ 
+@@ -156,6 +159,12 @@ const CANCEL_POLL_MS = 10;
+ const CANCEL_POLL_TIMEOUT_MS = 500;
+ let jspiReadResolve = null;
+ let jspiWriteResolve = null;
++// Asyncify: where the unwound stack is saved, the host call the worker is
++// waiting for while the wasm is unwound, and the answer the rewound import
++// returns.
++let asyncifyData = 0;
++let asyncifyPending = null;
++let asyncifyAnswer = 0;
+ 
+ async function dropReader(id, r) {
+   // This worker OWNS its pre-copy files: it created them, holds their
+@@ -177,6 +186,7 @@ async function dropReader(id, r) {
+ // ═══════════════════════════════════════════════════════════════════
+ 
+ function hostReadAt(sourceIndex, offset, count, bufPtr) {
++  if (resumingAsyncify()) return asyncifyAnswer;
+   let readerId = sourceIndex;
+   if (activeReaderMap) {
+     for (const [si, rid] of activeReaderMap) {
+@@ -192,11 +202,29 @@ function hostReadAt(sourceIndex, offset, count, bufPtr) {
+   if (reader.opfsHandle) return readFromOpfs(reader.opfsHandle, offset, toRead, bufPtr);
+ 
+   switch (ioMode) {
+-    case 'atomics': return readViaAtomics(sourceIndex, offset, toRead, bufPtr);
+-    default:        return readViaJspi(sourceIndex, offset, toRead, bufPtr);
++    case 'atomics':  return readViaAtomics(sourceIndex, offset, toRead, bufPtr);
++    case 'asyncify': return suspendAsyncify(readViaJspi(sourceIndex, offset, toRead, bufPtr));
++    default:         return readViaJspi(sourceIndex, offset, toRead, bufPtr);
+   }
+ }
+ 
++// Asyncify. The import is called in one of two states. Running, it starts the
++// unwind and returns at once with a dummy; the wasm unwinds to `execute`,
++// which returns to callLaneAsyncify with the host call still pending. After
++// the answer the driver rewinds: `execute` is called again, the wasm replays
++// down to this same call, and the import, now rewinding, returns the answer.
++function resumingAsyncify() {
++  if (ioMode !== 'asyncify' || wasm.asyncify_get_state() !== 2) return false;
++  wasm.asyncify_stop_rewind();
++  return true;
++}
++
++function suspendAsyncify(pending) {
++  asyncifyPending = pending;
++  wasm.asyncify_start_unwind(asyncifyData);
++  return 0;
++}
++
+ function readFromOpfs(handle, offset, count, bufPtr) {
+   const buf = new Uint8Array(count);
+   const n = handle.read(buf, { at: offset });
+@@ -266,11 +294,13 @@ function hostCancelled() {
+ // ═══════════════════════════════════════════════════════════════════
+ 
+ function hostWriteChunk(sinkIndex, bufPtr, len) {
++  if (resumingAsyncify()) return asyncifyAnswer;
+   if (hostCancelled() !== 0) return P.hostIoCancelled;
+   const chunk = new Uint8Array(wasm.memory.buffer).slice(bufPtr, bufPtr + len);
+   switch (ioMode) {
+     case 'atomics': return writeViaAtomics(sinkIndex, chunk);
+     case 'jspi':    return writeViaJspi(sinkIndex, chunk);
++    case 'asyncify': return suspendAsyncify(writeViaJspi(sinkIndex, chunk));
+     default:
+       // OPFS: no blocking primitive — fire-and-forget (the producer
+       // is disk-read bound, never outruns the main-thread consumer).
+@@ -340,7 +370,7 @@ async function ensureInit() {
+   }
+ 
+   try {
+-    await jsModule.default(precompiledModule || (wasmBaseUrl + 'pdf_oxide_bg.wasm'));
++    await jsModule.default(precompiledModule || (wasmBaseUrl + wasmFile()));
+   } finally {
+     WebAssembly.instantiate = origInstantiate;
+     if (origStreaming) WebAssembly.instantiateStreaming = origStreaming;
+@@ -349,9 +379,27 @@ async function ensureInit() {
+   if (ioMode === 'jspi') {
+     jspiLaneExecute = WebAssembly.promising(wasm.execute);
+   }
++  if (ioMode === 'asyncify') {
++    if (typeof wasm.asyncify_start_unwind !== 'function') {
++      throw new Error(wasmFile() + ' is not an Asyncify build');
++    }
++    // The unwound stack is saved outside the engine's heap: fresh pages, which
++    // its allocator neither owns nor counts.
++    const bytes = P.asyncifyStackBytes;
++    asyncifyData = wasm.memory.grow(bytes / 65536) * 65536;
++    const header = new Int32Array(wasm.memory.buffer, asyncifyData, 2);
++    header[0] = asyncifyData + 8;
++    header[1] = asyncifyData + bytes;
++  }
+   initialized = true;
+ }
+ 
++// The wasm a mode loads: the Asyncify engine only in Asyncify mode, so a
++// browser fetches the one file it runs.
++function wasmFile() {
++  return ioMode === 'asyncify' ? 'pdf_oxide_asyncify_bg.wasm' : 'pdf_oxide_bg.wasm';
++}
++
+ function wrapJspiImports(imports) {
+   const patched = {};
+   for (const [mod, fns] of Object.entries(imports)) {
+@@ -365,7 +413,7 @@ function wrapJspiImports(imports) {
+   return patched;
+ }
+ 
+-// JSPI path drives the wasm-bindgen ABI manually (the generated glue
++// The JSPI and Asyncify paths drive the wasm-bindgen ABI manually (the generated glue
+ // is synchronous; promising() needs the raw export). Mirrors the
+ // glue's own calling convention for execute.
+ //
+@@ -373,7 +421,7 @@ function wrapJspiImports(imports) {
+ // __wbindgen_export_N aliases: those are renumbered whenever the module's
+ // export set changes, which turns into memory corruption here.
+ // (__wbindgen_add_to_stack_pointer is a fixed name and safe.)
+-async function callLaneJspi(requestBytes, sourceLengthsPacked, sinkCount) {
++async function callLane(requestBytes, sourceLengthsPacked, sinkCount, run) {
+   const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+   const ptr0 = wasm.executor_alloc(requestBytes.length) >>> 0;
+   if (requestBytes.length && !ptr0) throw new Error('executor_alloc failed');
+@@ -382,7 +430,7 @@ async function callLaneJspi(requestBytes, sourceLengthsPacked, sinkCount) {
+   if (sourceLengthsPacked.length && !ptr1) throw new Error('executor_alloc failed');
+   new Uint8Array(wasm.memory.buffer).set(sourceLengthsPacked, ptr1);
+   try {
+-    await jspiLaneExecute(retptr, statePtr, ptr0, requestBytes.length, ptr1, sourceLengthsPacked.length, sinkCount);
++    await run(retptr, statePtr, ptr0, requestBytes.length, ptr1, sourceLengthsPacked.length, sinkCount);
+     const mem = new DataView(wasm.memory.buffer);
+     const r0 = mem.getInt32(retptr, true);
+     const r1 = mem.getInt32(retptr + 4, true);
+@@ -394,6 +442,29 @@ async function callLaneJspi(requestBytes, sourceLengthsPacked, sinkCount) {
+   }
+ }
+ 
++// Runs `execute` to its end across the pauses of an Asyncify wasm. Every call
++// repeats the first one's arguments: a rewound `execute` replays its frames
++// from the saved stack and ignores them, but the shadow stack and the request
++// buffers must be the ones the paused frames hold.
++async function runAsyncify(...args) {
++  new Int32Array(wasm.memory.buffer, asyncifyData, 1)[0] = asyncifyData + 8;
++  for (;;) {
++    wasm.execute(...args);
++    if (wasm.asyncify_get_state() !== 1) return;
++    wasm.asyncify_stop_unwind();
++    // The pass writes the frames without a bound, so an overflow is found
++    // here, after the fact: the engine is not trusted again.
++    const [used, end] = new Int32Array(wasm.memory.buffer, asyncifyData, 2);
++    if (used > end) {
++      throw new WebAssembly.RuntimeError(
++        'the Asyncify stack of ' + P.asyncifyStackBytes + ' bytes overflowed');
++    }
++    asyncifyAnswer = await asyncifyPending;
++    asyncifyPending = null;
++    wasm.asyncify_start_rewind(asyncifyData);
++  }
++}
++
+ // ═══════════════════════════════════════════════════════════════════
+ // OPFS
+ // ═══════════════════════════════════════════════════════════════════
+@@ -671,7 +742,9 @@ async function exec(msg) {
+   let responseBytes;
+   try {
+     if (ioMode === 'jspi') {
+-      responseBytes = await callLaneJspi(new Uint8Array(requestBytes), packed, sinkCount);
++      responseBytes = await callLane(new Uint8Array(requestBytes), packed, sinkCount, jspiLaneExecute);
++    } else if (ioMode === 'asyncify') {
++      responseBytes = await callLane(new Uint8Array(requestBytes), packed, sinkCount, runAsyncify);
+     } else {
+       const { execute } = await import(wasmBaseUrl + 'pdf_oxide.js');
+       responseBytes = execute(statePtr, new Uint8Array(requestBytes), packed, sinkCount);
+@@ -701,6 +774,7 @@ async function exec(msg) {
+     activeCancelSab = null;
+     activeCancelUrl = null;
+     jspiWriteResolve = null;
++    asyncifyPending = null;
+   }
+ 
+   return responseBytes;
