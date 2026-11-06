@@ -174,6 +174,8 @@ CONTENT RULES (never change)
 - **Breaking:** the page builder's `textField` takes `value` where it took `defaultValue`, `checkbox` takes `isChecked` where it took `checked`, and `radioGroup` takes `PdfRadioOption(value, bounds)` where options were records → rename the arguments
 - **Breaking:** `PdfTextAlignment` is `PdfAlignment`, and the page builder's `image(data, rect, {altText})` is `image(data, bounds, {altText})` where a null `altText` places an artifact → rename the type; pass `altText: 'x'` for a described image
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
+- Added `BlobSource` (`package:pdf_manipulator/web.dart`), which the worker reads in place with `FileReaderSync` in JSPI, Atomics and Asyncify, and copies to OPFS itself in OPFS mode: a `File` from a picker opens with no main-thread read and O(1) memory at any size
+- Changed web sources of any other kind that fit in 16 MiB per lane to be copied into the worker once as a snapshot at job start instead of pre-copied to disk or read through the page, and a source past that budget takes the I/O mode's own path
 - Added `redact(page, regions, {overlay})`, which marks and applies its own regions in one step and returns the report — marks queued before stay queued, and an error leaves nothing marked or applied
 - Added `PdfFormFieldValue.choice`, `.choices` and `.none`: `field(name).setValue` selects an option of a combo box or list box, the options of a multi-select list box, or clears the value, and refuses an option the field does not list
 - Added `PdfEditor.clearRedactions()`, and `field(name).setTooltip`, `setMaxLength`, `setBackgroundColor` and `setBorderColor` take null to remove the tooltip, the limit or the colour

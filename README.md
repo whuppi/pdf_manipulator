@@ -82,6 +82,8 @@ Web can't auto-download native assets, so run setup once. It fetches the prebuil
 flutter pub run pdf_manipulator:setup
 ```
 
+For a `File` from a picker or a drop, import `package:pdf_manipulator/web.dart` and wrap it in a `BlobSource`: the worker reads it in place, with no copy (see **Sources & sinks**).
+
 Pin the version, too, so a `pub upgrade` can't bump it behind your back and leave that fetched asset stale:
 
 ```yaml
@@ -301,7 +303,13 @@ final pdf = Pdf(config: PdfConfig(concurrency: 8)); // default: max(2, cores ÷ 
 
 ## Sources & sinks
 
-Every operation reads from a **source** and writes to a **sink**. You have used the built-ins already: `MemorySource` and `MemorySink` for bytes, `FileSource` and `FileSink` for files. Write your own for anything else (a server, a database, a `Blob`).
+Every operation reads from a **source** and writes to a **sink**. You have used the built-ins already: `MemorySource` and `MemorySink` for bytes, `FileSource` and `FileSink` for files. Write your own for anything else (a server, a database).
+
+| Source | Where | Import |
+|---|---|---|
+| `MemorySource(bytes)` | every platform | `pdf_manipulator.dart` |
+| `FileSource.open(file)`, `PdfFile(file)` | native | `io.dart` |
+| `BlobSource(blob)` (a `File` from a picker is a `Blob`) | web | `web.dart` |
 
 The rule for closing is the same for both: **whoever obtained it closes it.** A source or sink that you pass to an operation stays yours, and the library never closes it. A sink that a factory of yours returns (the `sinkFor` of `split`, `render` or `extractImages`) belongs to the library, and it closes that sink after its item, on success, error and cancel. A source that a `PdfInput.owning` opens, `PdfFile` for one, belongs to the job in the same way.
 
@@ -360,28 +368,21 @@ class UrlSource implements DataSource {
 final doc = await pdf.open(PdfInput(UrlSource(uri, contentLength)));
 ```
 
-Or a browser `Blob` from a file picker or a drag and drop:
+For a browser `Blob` from a file picker or a drag and drop, do not write one: `BlobSource` ships in `package:pdf_manipulator/web.dart` (web only, as `io.dart` is for native):
 
 ```dart
-import 'package:web/web.dart' as web;
+import 'package:pdf_manipulator/web.dart';
 
-class BlobSource implements DataSource {
-  BlobSource(this._blob) : length = _blob.size;
-  final web.Blob _blob;
-  @override
-  final int length;
-
-  @override
-  Future<Uint8List> readAt(int offset, int count) async {
-    final slice = _blob.slice(offset, offset + count);
-    final buffer = await slice.arrayBuffer().toDart;
-    return buffer.toDart.asUint8List();
-  }
-
-  @override
-  void close() {} // a Blob holds nothing to release
-}
+final doc = await pdf.open(PdfInput(BlobSource(file))); // file is a web.File
 ```
+
+On web a source reaches the worker one of three ways, and the I/O mode's own read path serves only a source with none of them:
+
+- **A `BlobSource`** goes to the worker by reference, with no copy. In JSPI, Atomics and Asyncify the worker reads slices of it in place with `FileReaderSync`: memory is O(1) for a file of any size and no read crosses to the main thread. In OPFS mode the worker copies the Blob to its OPFS file itself, from the Blob and without a main-thread read, as the pre-copy of any source in that mode (measured faster there than reading it slice by slice).
+- **Any other source** that fits in what is left of the lane's 16 MiB transfer budget is read whole once on the main thread and copied into the worker, as a snapshot at job start. A merge of 100 small inputs transfers until the budget fills, and the rest take the mode's path.
+- **A source past the budget** takes the mode's path: streamed through the page in JSPI, Atomics and Asyncify, and pre-copied to OPFS disk in OPFS mode.
+
+A file that changes on disk while an operation reads it fails that operation with an I/O error. It never reads wrong bytes.
 
 A custom `DataSink` works the same way. Implement `write(chunk)` for an upload stream, a database column or any other place for the bytes. Implement `abort(reason)` to take the bytes back (cancel the upload, delete the row) when the operation is cancelled or fails. Then a stopped operation leaves no partial output.
 

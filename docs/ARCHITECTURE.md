@@ -543,6 +543,9 @@ of live and peak bytes, and in a process-wide pair.
   executor's figure by its size. That can only keep an executor that should be kept,
   never retire one wrongly.
 - The web `mem` field is the wasm linear memory. It never falls and no decision reads it.
+- On web, a non-Blob source under the transfer budget is copied once into the worker, as the
+  pre-copy copies it to disk. The worker's `held` field is the sum of those copies; it is a
+  diagnostic, and `Blob`-backed readers hold nothing.
 
 ### The keep line
 
@@ -710,7 +713,7 @@ on the main isolate through `NativeCallable.listener`. No helper isolate exists.
 | **JSPI** | `WebAssembly.Suspending` suspends wasm, JS fetches async, wasm resumes | Chrome 137+ / Firefox 139+ |
 | **Atomics** | `Atomics.wait` blocks wasm, JS fills a SAB, `Atomics.notify` wakes it | `SharedArrayBuffer` (COOP/COEP headers) |
 | **Asyncify** | The instrumented wasm unwinds at the read or write, the worker awaits the answer and rewinds | The app shipped the Asyncify module (an entry in `pdf_oxide_manifest.json`, `asyncify: true`) |
-| **OPFS** | Sources are pre-copied to OPFS disk, wasm reads through `SyncAccessHandle` | All modern browsers |
+| **OPFS** | Sources past the transfer budget (see **Web reader backings**) are pre-copied to OPFS disk, wasm reads through `SyncAccessHandle` | All modern browsers |
 
 Detection (`WebExecutorBooter.resolveMode`, asynchronous: it first fetches the manifest, once per page and location), best first:
 
@@ -722,6 +725,32 @@ else if (the manifest lists the  → Asyncify (streaming, no headers, larger was
          Asyncify module)
 else                             → PdfUnsupported naming both
 ```
+
+### Web reader backings
+
+A reader in the worker carries one of three backings, and the mode's read path above is the
+fallback for a reader with none. The lane picks them per source when a job starts
+(`_backSources`), and the worker reads by the first that is set (`hostReadAt`):
+
+| Backing | Source | Moved how | Cost |
+|---|---|---|---|
+| **Blob** | a `BlobSource`, in JSPI, Atomics and Asyncify | the `Blob` goes in the exec message (`blobs`), by reference | none; the worker reads slices with `FileReaderSync`, any size |
+| **Bytes** | any other source whose `length` fits in what is left of the transfer budget | read whole in 64 KB bites on the main thread, then transferred as an `ArrayBuffer` (`buffers`); the caller's bytes are never the transferred buffer | its size, held in the worker |
+| **OPFS handle** | a `BlobSource` in OPFS mode, whatever its size; any other source past the budget, in OPFS mode only | the pre-copy; for a `BlobSource` the worker makes it itself (`copyBlobToOpfs`: `FileReaderSync` slices through the same write, the `Blob` and its `opfsFiles` name both in the exec message, no chunk from the page) | disk, as before |
+
+In OPFS mode a Blob read slice by slice in the worker measured slower than the pre-copy (about 30% on open+extract and 2x on merge of 105 MB), so a `BlobSource` is pre-copied there, and the Blob backing is for the three streaming modes.
+
+The budget is `kTransferBytes` (16 MiB, at most half of `KEEP_BYTES`): the most source bytes
+one lane may hold as copies in its worker, its own sources and its held ones together. A
+source joins when it fits in what is left; one that does not takes the mode's path, and
+nothing is an error. The lane counts the bytes of the copies its held groups keep
+(`_heldCopies`), and the worker reports the same sum as `held` on `result`, `error` and
+`resetDone`. A copied source is a snapshot at job start. A held group may mix backings: its
+readers keep their order in the worker's reader map, and the lane's `_heldSources` holds a
+`DataSource` only for a reader with no backing. A cancel during the whole read of a source
+completes the job cancelled before its exec is posted, and a read that returns fewer bytes
+than asked fails the job. A `File` changed on disk makes `FileReaderSync` throw, which the
+host reports as an I/O error to the engine.
 
 ### Web assets — the manifest and the parts
 
@@ -995,7 +1024,8 @@ lib/
     │       │                                  OPFS session and directory reclaim (part of lease.dart)
     │       └── protocol.dart               ← message tags and codes injected into executor_worker.js
     │
-    ├── io/                                 ← MemorySource/MemorySink; FileSource/FileSink/PdfFile
+    ├── io/                                 ← MemorySource/MemorySink; FileSource/FileSink/PdfFile;
+    │                                          BlobSource (web)
     ├── types/                              ← public and shared types (CancelHook, DataSource,
     │                                          DataSink, PdfTask, PdfError, PdfConfig, ...)
     ├── keep/                               ← trim: capabilities and the detectors (tooling only)

@@ -173,6 +173,11 @@ abstract final class LaneMsgFields {
   /// or retired by.
   static const peakBytes = 'peak';
 
+  /// Worker → Dart, on `result` and `resetDone`: the bytes of the readers that
+  /// are backed by a copy of their source in the worker. A diagnostic: the
+  /// lane counts the budget itself.
+  static const heldBytes = 'held';
+
   /// Worker → Dart, on `resetDone`: the names of the pre-copy files the
   /// worker set aside because the browser never answered their handle
   /// creation, and has not removed yet. A file leaves the list when its
@@ -199,6 +204,12 @@ const kCreateHandleWait = Duration(seconds: 5);
 /// the stack without a bound, so the worker compares the fill with this after
 /// each unwind and fails the job on an overflow.
 const kAsyncifyStackBytes = 4 * 1024 * 1024;
+
+/// The most source bytes one lane may hold as copies in its worker, its own
+/// sources and its held ones together: a source whose bytes fit in what is
+/// left is read whole on the main thread and transferred with its job. Half of
+/// the pool's keep line, so the copies never decide that a worker is retired.
+const kTransferBytes = 16 * 1024 * 1024;
 
 /// The protocol object injected into the worker's init message.
 /// Keys are stable API for executor_worker.js.

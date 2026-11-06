@@ -40,6 +40,7 @@ import '../stress/pdf_instance_stress_battery.dart';
 import '../platform/web/web_asyncify_assets_battery.dart';
 import '../platform/web/web_wasm_parts_battery.dart';
 import '../platform/web/web_cancel_channel_battery.dart';
+import '../platform/web/web_backing_battery.dart';
 import '../platform/web/web_large_offset_battery.dart';
 import '../platform/web/web_lane_protocol_battery.dart';
 import '../platform/web/web_runtime_battery.dart';
@@ -148,6 +149,12 @@ void main() {
   );
 
   registerWebLaneProtocolTests(
+    workerUrl: () =>
+        'http://localhost:$serverPort/web_assets/executor_worker.js',
+    mode: PdfIoMode.opfs,
+  );
+
+  registerWebBackingTests(
     workerUrl: () =>
         'http://localhost:$serverPort/web_assets/executor_worker.js',
     mode: PdfIoMode.opfs,

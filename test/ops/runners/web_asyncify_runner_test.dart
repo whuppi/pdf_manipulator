@@ -5,7 +5,10 @@
 library;
 
 import 'package:pdf_manipulator/pdf_manipulator.dart';
-import 'package:pdf_manipulator/src/runtime/web/lease.dart' show WebExecutor;
+import 'package:pdf_manipulator/src/runtime/web/lease.dart'
+    show WebExecutor, WebExecutorBooter;
+import 'package:pdf_manipulator/src/runtime/web/protocol.dart'
+    show kTransferBytes;
 import 'package:test/test.dart';
 
 import '../../fixtures/handwritten.dart';
@@ -40,6 +43,7 @@ import '../stress/pdf_instance_stress_battery.dart';
 import '../platform/web/web_asyncify_assets_battery.dart';
 import '../platform/web/web_wasm_parts_battery.dart';
 import '../platform/web/web_cancel_channel_battery.dart';
+import '../platform/web/web_backing_battery.dart';
 import '../platform/web/web_large_offset_battery.dart';
 import '../platform/web/web_lane_protocol_battery.dart';
 import '../platform/web/web_runtime_battery.dart';
@@ -92,9 +96,19 @@ void main() {
   registerOneShotTests(() => pdf);
   registerRenderTests(() => pdf);
   registerDeterminismTests(() => pdf);
-  registerCancelTests(() => pdf);
+  group('sources read through the mode', () {
+    // These tests mark the start of an op by a read of its source.
+    setUp(() => WebExecutorBooter.transferBudget = 0);
+    tearDown(() => WebExecutorBooter.transferBudget = kTransferBytes);
+    registerCancelTests(() => pdf);
+  });
   registerWebCancelChannelTests(() => pdf);
-  registerCombinatorCancelTests(() => pdf);
+  group('sources read through the mode', () {
+    // These tests mark the start of an op by a read of its source.
+    setUp(() => WebExecutorBooter.transferBudget = 0);
+    tearDown(() => WebExecutorBooter.transferBudget = kTransferBytes);
+    registerCombinatorCancelTests(() => pdf);
+  });
   registerAbortTests(() => pdf);
   registerLifecycleTests(
     () => Pdf(
@@ -142,6 +156,12 @@ void main() {
   );
 
   registerWebLaneProtocolTests(
+    workerUrl: () =>
+        'http://localhost:$serverPort/web_assets/executor_worker.js',
+    mode: PdfIoMode.asyncify,
+  );
+
+  registerWebBackingTests(
     workerUrl: () =>
         'http://localhost:$serverPort/web_assets/executor_worker.js',
     mode: PdfIoMode.asyncify,

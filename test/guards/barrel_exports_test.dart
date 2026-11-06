@@ -185,6 +185,12 @@ const _io = <String>[
   'PdfFile',
 ];
 
+/// Names `package:pdf_manipulator/web.dart` exports.
+const _web = <String>[
+  // src/io/blob_source.dart
+  'BlobSource',
+];
+
 /// The public names [barrel] (a path under lib) exports, sorted.
 Future<List<String>> exportedNames(
   AnalysisContextCollection analysis,
@@ -227,6 +233,7 @@ void main() {
   for (final (barrel, approved) in [
     ('pdf_manipulator.dart', _pdfManipulator),
     ('io.dart', _io),
+    ('web.dart', _web),
   ]) {
     test('$barrel exports exactly the approved names', () async {
       final actual = await exportedNames(analysis, barrel);
@@ -243,6 +250,7 @@ void main() {
   test('the lists hold no duplicate', () {
     expect(_pdfManipulator.toSet(), hasLength(_pdfManipulator.length));
     expect(_io.toSet(), hasLength(_io.length));
+    expect(_web.toSet(), hasLength(_web.length));
   });
 
   group('difference', () {

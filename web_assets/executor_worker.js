@@ -28,22 +28,29 @@
 //                   worker compiles from it when the host sent no wasmModule)
 //   exec         { lease, jobId, requestBytes, sourceLengths: number[],
 //                  sinkCount, keepSources: number[], holdGroupId?,
-//                  opfsFiles: (string|null)[], sab?, writeSab?,
+//                  opfsFiles: (string|null)[], blobs?: (Blob|null)[],
+//                  buffers?: (ArrayBuffer|null)[], sab?, writeSab?,
 //                  cancelSab?, cancelUrl? }
+//                  (blobs: a source read in place with FileReaderSync, or in OPFS
+//                   mode, where its opfsFiles entry is set, copied by the worker
+//                   into that file before the job; buffers:
+//                   a source copied whole and transferred with the job; a
+//                   source in neither is read by the mode, or from opfsFiles)
 //                  (cancelSab: the job's cancel word, where the page has
 //                   SharedArrayBuffer; cancelUrl: otherwise, a blob URL the
 //                   main thread revokes to cancel, polled by sync XHR)
-//                → result { lease, jobId, data, mem, peak }
-//                | error { lease, jobId, message, trap?, protocol?, mem, peak }
+//                → result { lease, jobId, data, mem, peak, held }
+//                | error { lease, jobId, message, trap?, protocol?, mem, peak, held }
 //                  (trap: the wasm instance trapped; the lane must end;
 //                   protocol: the exec was refused because the worker was
 //                   busy with another exec or a reset, or not serving its
 //                   lease, and never started)
-//   reset        { lease } → resetDone { lease, mem, peak } | error { lease,
+//   reset        { lease } → resetDone { lease, mem, peak, held } | error { lease,
 //                  message, protocol? }: a fresh engine state in this
 //                  worker, same wasm instance. Refused while busy.
 //                  (peak: the most bytes the engine's heap held since the
-//                   last reset, which the host keeps an executor by; mem:
+//                   last reset, which the host keeps an executor by; held: the
+//                   bytes of the readers backed by a copy of their source; mem:
 //                   the linear memory's size, a diagnostic that never falls;
 //                   abandoned: the pre-copy files set aside because their
 //                   handle creation never answered, not removed yet)
@@ -68,6 +75,10 @@
 //              at host_read_at / host_write_chunk, the worker awaits the
 //              answer and rewinds; the messages are JSPI's
 //   opfs     — sources pre-copied to OPFS; reads via SyncAccessHandle
+// A reader backed by a transferred copy, or by a Blob in the three streaming
+// modes, reads in the worker and never reaches the mode's path. In OPFS mode a
+// Blob is copied to the worker's own pre-copy file with FileReaderSync, and that
+// file backs the reader as any pre-copy does.
 //
 // Terminating the worker is worker.terminate() from Dart — this file never sees it.
 
@@ -95,7 +106,10 @@ let wasmBaseUrl = (() => {
 // (holdGroupId); this registry just stores and looks up.
 // ═══════════════════════════════════════════════════════════════════
 
-const readers = new Map();   // readerId → {length, opfsHandle, opfsFile, holdGroupId|null}
+// A reader has at most one backing, and the mode's read path serves a reader
+// with none: `blob` (read in place with FileReaderSync), `bytes` (a copy of the
+// source, transferred with the job) or `opfsHandle` (the pre-copy).
+const readers = new Map();   // readerId → {length, blob, bytes, opfsHandle, opfsFile, holdGroupId|null}
 let nextReaderId = 1;
 
 // ═══════════════════════════════════════════════════════════════════
@@ -202,6 +216,8 @@ function hostReadAt(sourceIndex, offset, count, bufPtr) {
   const toRead = Math.min(count, reader.length - offset, P.sabMaxChunk);
   if (toRead <= 0) return 0;
 
+  if (reader.bytes) return readFromBytes(reader.bytes, offset, toRead, bufPtr);
+  if (reader.blob) return readFromBlob(reader.blob, offset, toRead, bufPtr);
   if (reader.opfsHandle) return readFromOpfs(reader.opfsHandle, offset, toRead, bufPtr);
 
   switch (ioMode) {
@@ -226,6 +242,25 @@ function suspendAsyncify(pending) {
   asyncifyPending = pending;
   wasm.asyncify_start_unwind(asyncifyData);
   return 0;
+}
+
+function readFromBytes(bytes, offset, count, bufPtr) {
+  new Uint8Array(wasm.memory.buffer).set(new Uint8Array(bytes, offset, count), bufPtr);
+  return count;
+}
+
+// A Blob that cannot be read (a File changed on disk) throws; the engine gets
+// the host's I/O error, never wrong bytes.
+function readFromBlob(blob, offset, count, bufPtr) {
+  let data;
+  try {
+    data = new Uint8Array(new FileReaderSync().readAsArrayBuffer(blob.slice(offset, offset + count)));
+  } catch (_) {
+    return P.hostIoError;
+  }
+  if (data.length !== count) return P.hostIoError;
+  new Uint8Array(wasm.memory.buffer).set(data, bufPtr);
+  return count;
 }
 
 function readFromOpfs(handle, offset, count, bufPtr) {
@@ -822,6 +857,13 @@ async function resetLane() {
   statePtr = engine_state_new();
 }
 
+// The bytes of the readers backed by a copy of their source.
+function heldBytes() {
+  let sum = 0;
+  for (const r of readers.values()) if (r.bytes) sum += r.length;
+  return sum;
+}
+
 // The engine's peak heap since the last reset. After a trap the instance
 // cannot be called: the peak is then null.
 function heapPeak() {
@@ -836,9 +878,28 @@ function heapPeak() {
 // Exec — register readers, run execute, promote kept readers
 // ═══════════════════════════════════════════════════════════════════
 
+// The pre-copy of a Blob, made here: the slices come from FileReaderSync and go
+// through the same write as a page-sent chunk, so the file is owned and dropped
+// as any pre-copy is. A Blob that cannot be read is the host's I/O error.
+async function copyBlobToOpfs(jobId, filename, blob) {
+  const reader = new FileReaderSync();
+  for (let offset = 0; offset < blob.size; offset += P.sabMaxChunk) {
+    if (hostCancelled() !== 0) throw new Error('cancelled');
+    let chunk;
+    try {
+      chunk = reader.readAsArrayBuffer(blob.slice(offset, offset + P.sabMaxChunk));
+    } catch (err) {
+      const failure = new Error('Failed to read file: ' + (err.message || String(err)));
+      failure.hostIo = true;
+      throw failure;
+    }
+    await opfsWrite(jobId, filename, chunk, offset, offset + P.sabMaxChunk >= blob.size);
+  }
+}
+
 async function exec(msg) {
   const { jobId, requestBytes, sourceLengths, sinkCount, keepSources,
-          holdGroupId, opfsFiles } = msg;
+          holdGroupId, opfsFiles, blobs, buffers } = msg;
 
   await ensureInit();
   activeSab = msg.sab || null;
@@ -847,6 +908,12 @@ async function exec(msg) {
   activeCancelUrl = msg.cancelUrl || null;
   cancelSeen = 0;
   lastPollAt = performance.now();
+
+  if (ioMode === 'opfs' && blobs) {
+    for (let i = 0; i < blobs.length; i++) {
+      if (blobs[i] && opfsFiles && opfsFiles[i]) await copyBlobToOpfs(jobId, opfsFiles[i], blobs[i]);
+    }
+  }
 
   const readerIds = [];
   const finalLengths = [];
@@ -870,6 +937,10 @@ async function exec(msg) {
   for (let i = 0; i < sourceLengths.length; i++) {
     let handle = null;
     let length = sourceLengths[i];
+    const blob = (ioMode !== 'opfs' && blobs && blobs[i]) || null;
+    const bytes = (buffers && buffers[i]) || null;
+    if (blob) length = blob.size;
+    if (bytes) length = bytes.byteLength;
     const file = (opfsFiles && opfsFiles[i]) || null;
     let onDisk = file;
     if (file) {
@@ -882,7 +953,7 @@ async function exec(msg) {
       jobFiles.get(jobId)?.delete(file);
     }
     const id = nextReaderId++;
-    readers.set(id, { length, opfsHandle: handle, opfsFile: onDisk, holdGroupId: null });
+    readers.set(id, { length, blob, bytes, opfsHandle: handle, opfsFile: onDisk, holdGroupId: null });
     readerIds.push(id);
     finalLengths.push(length);
   }
@@ -1011,7 +1082,7 @@ self.onmessage = async (e) => {
       busy = 'reset';
       try {
         await resetLane();
-        self.postMessage({ type: 'resetDone', lease, mem: wasm.memory.buffer.byteLength, peak: heapPeak(), abandoned: [...abandonedFiles.keys()] });
+        self.postMessage({ type: 'resetDone', lease, mem: wasm.memory.buffer.byteLength, peak: heapPeak(), held: heldBytes(), abandoned: [...abandonedFiles.keys()] });
       } catch (err) {
         self.postMessage({ type: 'error', lease, message: 'reset failed: ' + (err.message || String(err)) });
       } finally {
@@ -1033,13 +1104,13 @@ self.onmessage = async (e) => {
             : responseBytes.buffer.slice(responseBytes.byteOffset, responseBytes.byteOffset + responseBytes.byteLength);
         // mem is the worker's lifetime peak: linear memory never shrinks.
         // The host keeps or retires the worker by peak.
-        self.postMessage({ type: 'result', lease, jobId: msg.jobId, data: owned, mem: wasm.memory.buffer.byteLength, peak: heapPeak() }, [owned]);
+        self.postMessage({ type: 'result', lease, jobId: msg.jobId, data: owned, mem: wasm.memory.buffer.byteLength, peak: heapPeak(), held: heldBytes() }, [owned]);
       } catch (err) {
         // A wasm trap (a Rust panic compiles to `unreachable`) leaves the
         // engine's state unusable. Report it as a trap, apart from every
         // other failure, so the host ends the lane instead of reusing it.
         const trap = err instanceof WebAssembly.RuntimeError;
-        self.postMessage({ type: 'error', lease, jobId: msg.jobId, message: err.message || String(err), trap: trap ? true : undefined, mem: wasm ? wasm.memory.buffer.byteLength : null, peak: wasm ? heapPeak() : null });
+        self.postMessage({ type: 'error', lease, jobId: msg.jobId, message: err.message || String(err), trap: trap ? true : undefined, io: err.hostIo ? true : undefined, mem: wasm ? wasm.memory.buffer.byteLength : null, peak: wasm ? heapPeak() : null, held: heldBytes() });
       } finally {
         busy = null;
       }

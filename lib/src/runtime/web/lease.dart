@@ -77,6 +77,7 @@ import 'package:web/web.dart' show EventStreamProviders;
 
 import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart'
     show WireErrorKind;
+import 'package:pdf_manipulator/src/io/blob_source.dart';
 import 'package:pdf_manipulator/src/runtime/lane.dart';
 import 'package:pdf_manipulator/src/runtime/web/protocol.dart';
 import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
@@ -169,6 +170,18 @@ class _WebJob {
   /// Revoking it is the cancel; null once revoked.
   String? cancelUrl;
 
+  /// Index-aligned with the job's sources: the Blob the worker reads in
+  /// place, or null.
+  List<web.Blob?> blobs = const [];
+
+  /// Index-aligned with the job's sources: the whole bytes of a source copied
+  /// to travel with the job, or null. A fresh buffer, never the caller's.
+  List<Uint8List?> copies = const [];
+
+  /// The sizes of [copies], read before the buffers are transferred, which
+  /// leaves them empty here.
+  List<int> copySizes = const [];
+
   /// OPFS filenames pre-copied for this job's sources (index-aligned;
   /// null where no pre-copy happened). Pure exec-message data — the
   /// WORKER owns the files themselves and their deletion.
@@ -248,7 +261,13 @@ class WebLease implements Lease, LanePhase {
   /// (which carry no sources of their own) must serve reads from the
   /// group's sources. Mount order mirrors the worker's reader map:
   /// held first, own sources after.
-  final Map<int, List<DataSource>> _heldSources = {};
+  /// A reader the worker backs itself (a Blob or a copy) holds a null: the
+  /// list stays aligned with the worker's reader map.
+  final Map<int, List<DataSource?>> _heldSources = {};
+
+  /// Held group → the bytes of the source copies it holds in the worker. Their
+  /// sum is what the transfer budget has used.
+  final Map<int, int> _heldCopies = {};
 
   @override
   String get phase {
@@ -329,6 +348,7 @@ class WebLease implements Lease, LanePhase {
     if (_ending || _abandoned) return;
     final holdGroupId = token as int;
     _heldSources.remove(holdGroupId);
+    _heldCopies.remove(holdGroupId);
     // The worker drops the group's held readers AND deletes their OPFS
     // files — it owns them (same agent as the open handles: no race).
     // Every token of a handle names the same group, so a repeat is a no-op.
@@ -353,6 +373,7 @@ class WebLease implements Lease, LanePhase {
       _post({LaneMsgFields.type: LaneMsg.reset});
       final mem = await answer.future;
       _heldSources.clear();
+      _heldCopies.clear();
       return mem;
     } finally {
       _reset = null;
@@ -423,6 +444,7 @@ class WebLease implements Lease, LanePhase {
     }
     _queue.clear();
     _heldSources.clear();
+    _heldCopies.clear();
     if (!_drained.isCompleted) _drained.complete(false);
   }
 
@@ -449,7 +471,15 @@ class WebLease implements Lease, LanePhase {
         return;
       }
 
-      // OPFS mode: sources must exist on disk before exec (workers
+      // A source the worker can back itself travels with the job; the rest
+      // take the mode's path.
+      await _backSources(entry);
+      if (_abandoned || entry.cancelled) {
+        _finish(entry, JobResult(buildCancelledResponse(), const {}));
+        return;
+      }
+
+      // OPFS mode: the other sources must exist on disk before exec (workers
       // read them via SyncAccessHandle).
       if (_mode == PdfIoMode.opfs) {
         entry.opfsFiles = await _preCopySources(entry);
@@ -472,6 +502,15 @@ class WebLease implements Lease, LanePhase {
       if (job.holdGroupId != null) {
         msg['holdGroupId'] = job.holdGroupId!.toJS;
       }
+      final transfer = <JSObject>[requestJs];
+      if (entry.blobs.any((b) => b != null)) {
+        msg['blobs'] = <JSAny?>[for (final b in entry.blobs) b].toJS;
+      }
+      if (entry.copies.any((c) => c != null)) {
+        final buffers = [for (final c in entry.copies) c?.buffer.toJS];
+        msg['buffers'] = buffers.toJS;
+        transfer.addAll(buffers.nonNulls);
+      }
       if (entry.opfsFiles.any((f) => f != null)) {
         msg['opfsFiles'] = [for (final f in entry.opfsFiles) f?.toJS].toJS;
       }
@@ -490,7 +529,7 @@ class WebLease implements Lease, LanePhase {
       }
 
       entry.posted = true;
-      _exec.js.postMessage(msg, [requestJs].toJS);
+      _exec.js.postMessage(msg, transfer.toJS);
       // Completion arrives via _onMessage (result | error).
     } on PdfIoFailed catch (e) {
       _finish(
@@ -546,6 +585,7 @@ class WebLease implements Lease, LanePhase {
     _dead = true;
     _exec._dead = true;
     _heldSources.clear();
+    _heldCopies.clear();
   }
 
   // ── Inbound messages ──
@@ -564,6 +604,8 @@ class WebLease implements Lease, LanePhase {
         entry != null && _int(obj, LaneMsgFields.jobId) == entry.job.jobId;
     // The engine's heap peak ranks the worker for reuse and retires it past
     // the keep line.
+    final held = _int(obj, LaneMsgFields.heldBytes);
+    if (held != null) _exec._heldBytes = held;
     final peak = _int(obj, LaneMsgFields.peakBytes);
     if (peak != null) _exec._heapBytes = peak;
     final mem = _int(obj, LaneMsgFields.memBytes);
@@ -650,7 +692,12 @@ class WebLease implements Lease, LanePhase {
           final message = _str(obj, 'message') ?? 'web lane error';
           final bytes = entry.cancelled
               ? buildCancelledResponse()
-              : buildErrorResponse(message);
+              : buildErrorResponse(
+                  message,
+                  kind: obj['io'] != null
+                      ? WireErrorKind.io
+                      : WireErrorKind.engine,
+                );
           _finish(entry, JobResult(bytes, const {}));
         }
     }
@@ -699,8 +746,16 @@ class WebLease implements Lease, LanePhase {
       }
       (_heldSources[group] ??= []).addAll([
         for (final i in kept)
-          if (i < entry.job.sources.length) entry.job.sources[i],
+          if (i < entry.job.sources.length)
+            entry.blobs[i] != null || entry.copies[i] != null
+                ? null
+                : entry.job.sources[i],
       ]);
+      final copied = [
+        for (final i in kept)
+          if (i < entry.copySizes.length) entry.copySizes[i],
+      ].fold(0, (a, b) => a + b);
+      if (copied > 0) _heldCopies[group] = (_heldCopies[group] ?? 0) + copied;
     }
 
     return JobResult(bytes, holds);
@@ -722,8 +777,8 @@ class WebLease implements Lease, LanePhase {
     // anything past them is this job's own.
     final holdGroupId = entry.job.holdGroupId;
     final heldSources = holdGroupId == null
-        ? const <DataSource>[]
-        : _heldSources[holdGroupId] ?? const <DataSource>[];
+        ? const <DataSource?>[]
+        : _heldSources[holdGroupId] ?? const <DataSource?>[];
 
     Uint8List? bytes;
     String? error;
@@ -832,6 +887,63 @@ class WebLease implements Lease, LanePhase {
     // OPFS mode: fire-and-forget writes, no ack channel.
   }
 
+  // ── Backings: what the worker reads without asking the page ──
+
+  /// Gives each source of the job the backing the worker reads it by: its Blob,
+  /// or a copy of its bytes while they fit in what is left of the lane's
+  /// transfer budget. A source with neither is read by the mode's own path.
+  /// The sources are read in the engine's own bites, so no read is larger than
+  /// a [DataSource] promises to serve.
+  Future<void> _backSources(_WebJob entry) async {
+    final sources = entry.job.sources;
+    entry.blobs = List<web.Blob?>.filled(sources.length, null);
+    entry.copies = List<Uint8List?>.filled(sources.length, null);
+    entry.copySizes = List<int>.filled(sources.length, 0);
+    var left =
+        math.min(WebExecutorBooter.transferBudget, kTransferBytes) -
+        _heldCopies.values.fold(0, (a, b) => a + b);
+    for (var i = 0; i < sources.length; i++) {
+      final source = sources[i];
+      if (source is BlobSource) {
+        entry.blobs[i] = source.blob;
+        continue;
+      }
+      final length = source.length;
+      if (length <= 0 || length > left) continue;
+      final copy = await _readWhole(source, entry);
+      if (copy == null) return;
+      entry.copies[i] = copy;
+      entry.copySizes[i] = length;
+      left -= length;
+    }
+  }
+
+  /// The whole of [source] in a fresh buffer, or null when the job was
+  /// cancelled meanwhile. A read that comes back short fails the job.
+  Future<Uint8List?> _readWhole(DataSource source, _WebJob entry) async {
+    final length = source.length;
+    final whole = Uint8List(length);
+    for (var offset = 0; offset < length; offset += SabLayout.maxChunk) {
+      if (_abandoned || entry.cancelled) return null;
+      final count = math.min(SabLayout.maxChunk, length - offset);
+      // Raced against the cancel wake: a parked DataSource must never make a
+      // cancelled job unkillable.
+      final chunk = await Future.any([
+        Future<Uint8List?>.value(source.readAt(offset, count)),
+        entry.cancelWake.future.then<Uint8List?>((_) => null),
+      ]);
+      if (_abandoned || entry.cancelled) return null;
+      if (chunk == null || chunk.length != count) {
+        throw PdfIoFailed(
+          'source returned ${chunk?.length ?? 0} bytes for $count at '
+          'offset $offset of $length',
+        );
+      }
+      whole.setRange(offset, offset + count, chunk);
+    }
+    return whole;
+  }
+
   // ── OPFS pre-copy (through the worker — SyncAccessHandle is
   //    worker-only) ──
 
@@ -843,6 +955,12 @@ class WebLease implements Lease, LanePhase {
     for (var i = 0; i < entry.job.sources.length; i++) {
       final source = entry.job.sources[i];
       if (source.length <= 0) continue;
+      if (entry.copies[i] != null) continue;
+      if (entry.blobs[i] != null) {
+        // The worker copies a Blob into its file itself, from the Blob.
+        names[i] = 'pdf_executor_${entry.job.jobId}_${i}_${_opfsCounter++}';
+        continue;
+      }
       final name = 'pdf_executor_${entry.job.jobId}_${i}_${_opfsCounter++}';
       names[i] = name;
 

@@ -11,6 +11,7 @@ import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
 
 import 'package:pdf_manipulator/pdf_manipulator.dart';
+import 'package:pdf_manipulator/src/runtime/web/lease.dart';
 import 'package:pdf_manipulator/src/runtime/web/protocol.dart';
 import 'package:test/test.dart';
 import 'package:web/web.dart' as web;
@@ -39,6 +40,13 @@ void registerWebWasmPartsTests({
       : 'pdf_oxide_asyncify_bg';
 
   group('web wasm parts (${mode.name})', () {
+    // A module is compiled once per page by its content; these tests watch
+    // its parts being fetched, so each starts with nothing compiled, and the
+    // page's compiled modules are put back after it.
+    late Map<String, JSObject> aside;
+    setUp(() => aside = WebExecutorBooter.setCompiledModulesAside());
+    tearDown(() => WebExecutorBooter.restoreCompiledModules(aside));
+
     // Instances here carry their own server's URL, which becomes the page's
     // inherited default; point it back at the suite's.
     Future<void> restoreSuiteConfig() async {

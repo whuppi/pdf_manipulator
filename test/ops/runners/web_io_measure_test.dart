@@ -10,8 +10,13 @@
 // MEASURE_MODES lists jspi, atomics, opfs, asyncify joined by `+` (default all
 // four; `dart test` splits --dart2js-args at a comma, so only `+` gets
 // through); each runs twice, alternating. A mode the platform cannot run is
-// skipped. MEASURE_SOURCE is `memory` (default: an in-memory source) or `blob`
-// (a browser Blob built from the same bytes, read with Blob.slice).
+// skipped. MEASURE_SOURCE is `memory` (default: an in-memory source), `blob`
+// (a browser Blob built from the same bytes, read on the main thread with
+// Blob.slice) or `blobsource` (the same Blob as a BlobSource, which the worker
+// reads in place).
+//
+// -DMEASURE_COPY=true times the main-thread copy of a MemorySource into the
+// buffer a job transfers, at 1, 4 and 16 MiB.
 //
 // Each line is `MEASURE mode source bytes open+extract merge reads ...`. The
 // PDF is built once in memory, as uncompressed text pages, so extraction does
@@ -26,6 +31,7 @@ import 'dart:js_interop';
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/pdf_manipulator.dart';
+import 'package:pdf_manipulator/web.dart';
 import 'package:test/test.dart';
 import 'package:web/web.dart' as web;
 
@@ -40,10 +46,11 @@ const _sourceKind = String.fromEnvironment(
   'MEASURE_SOURCE',
   defaultValue: 'memory',
 );
+const _measureCopy = bool.fromEnvironment('MEASURE_COPY');
 const _extractPages = 50;
 
 /// A [DataSource] over a browser `Blob`: each read is `Blob.slice` then
-/// `arrayBuffer`. The package has no Blob source of its own.
+/// `arrayBuffer`, on the main thread, as a Blob source read before BlobSource.
 class _BlobSource implements DataSource {
   _BlobSource(this._blob, {required this.onRead});
 
@@ -161,7 +168,7 @@ void main() {
     for (final name in _modeList.split(RegExp('[,+]')))
       PdfIoMode.values.singleWhere((m) => m.name == name.trim()),
   ];
-  assert(_sourceKind == 'memory' || _sourceKind == 'blob');
+  assert(const {'memory', 'blob', 'blobsource'}.contains(_sourceKind));
 
   // Each mode twice, alternating, so a warm-up shows as the first pair.
   for (final mode in [...modes, ...modes]) {
@@ -170,9 +177,11 @@ void main() {
       '$_megabytes MB PDF',
       () async {
         var reads = 0;
-        DataSource source() => _sourceKind == 'blob'
-            ? _BlobSource(blob, onRead: () => reads++)
-            : TestSource(big, onRead: (_, _) => reads++);
+        DataSource source() => switch (_sourceKind) {
+          'blob' => _BlobSource(blob, onRead: () => reads++),
+          'blobsource' => BlobSource(blob),
+          _ => TestSource(big, onRead: (_, _) => reads++),
+        };
 
         final pdf = Pdf(
           config: PdfConfig(webWorkerUrl: workerUrl, webIoMode: mode),
@@ -215,5 +224,30 @@ void main() {
       timeout: Timeout(const Duration(minutes: 60)),
       skip: _megabytes == 0 ? 'pass --dart2js-args=-DMEASURE_MB=<size>' : false,
     );
+  }
+
+  // The lane's whole read of a MemorySource (_readWhole): 64 KB bites into
+  // one fresh buffer. The transfer that follows moves no bytes.
+  for (final mib in [1, 4, 16]) {
+    test('copy of a MemorySource of $mib MiB', () {
+      final source = MemorySource(Uint8List(mib * 1024 * 1024));
+      const bite = 65536;
+      double once() {
+        final clock = Stopwatch()..start();
+        final whole = Uint8List(source.length);
+        for (var at = 0; at < source.length; at += bite) {
+          whole.setRange(at, at + bite, source.readAt(at, bite));
+        }
+        return clock.elapsedMicroseconds / 1000;
+      }
+
+      once();
+      final runs = [for (var i = 0; i < 20; i++) once()]..sort();
+      final median = runs[runs.length ~/ 2];
+      print(
+        'MEASURE copy mib=$mib median=${median.toStringAsFixed(2)}ms '
+        'per-mib=${(median / mib).toStringAsFixed(2)}ms',
+      );
+    }, skip: _measureCopy ? false : 'pass --dart2js-args=-DMEASURE_COPY=true');
   }
 }

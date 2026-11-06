@@ -65,6 +65,10 @@ class WebExecutorBooter implements ExecutorBooter {
   // FinalizationRegistry is best-effort by spec and never fires on
   // tab close.
 
+  /// The source bytes a lane may hold as copies in its worker. Internal:
+  /// tests lower it to send every source down the mode's own path.
+  static int transferBudget = kTransferBytes;
+
   /// The package-owned OPFS directory. Everything inside it is
   /// reconciled by this host; nothing outside is ever touched.
   static const opfsRootDir = 'pdf_manipulator_executors';
@@ -338,8 +342,11 @@ class WebExecutorBooter implements ExecutorBooter {
   /// The module every other mode runs.
   static const normalWasmModule = 'pdf_oxide_bg';
 
-  static final Map<String, JSObject?> _cachedModules = {};
-  static final Map<String, Future<void>> _compilesInFlight = {};
+  static final Map<String, JSObject> _cachedModules = {};
+
+  /// Per location and module: the compile that location got, null when it
+  /// failed.
+  static final Map<String, Future<JSObject?>> _compilesInFlight = {};
 
   @override
   String get poolKey => '$_laneWorkerUrl#${_forceMode?.name ?? 'auto'}';
@@ -553,20 +560,44 @@ class WebExecutorBooter implements ExecutorBooter {
 
   String get _baseUrl => _baseUrlOf(_laneWorkerUrl);
 
-  /// Compile the WASM once per page, one module per location: the assets live
-  /// in one place per page. Failures fall back to letting each worker compile
-  /// its own copy from the same manifest entry, which fails with the same
-  /// message when the part is at fault.
+  /// Compiles a module once per page, keyed by what it is: the SHA-256 of
+  /// its parts, which the manifest lists. A page that reaches the same engine
+  /// at two locations compiles it once. A compile that failed is kept per
+  /// location: the parts at fault are fetched once per page, and each worker
+  /// compiles its own copy from the same manifest entry, which fails with the
+  /// same message when the part is at fault.
   Future<JSObject?> _wasmModule(String module, _WasmModuleEntry entry) async {
-    final key = '$_baseUrl$module';
-    await (_compilesInFlight[key] ??= () async {
+    final key = '$module:${entry.parts.map((p) => p.sha256).join(',')}';
+    final compiled = _cachedModules[key];
+    if (compiled != null) return compiled;
+    final here = '$_baseUrl $key';
+    final compiling = _compilesInFlight.putIfAbsent(here, () async {
       try {
-        _cachedModules[key] = await _compileParts(_baseUrl, entry);
+        return _cachedModules[key] = await _compileParts(_baseUrl, entry);
       } catch (_) {
-        _cachedModules[key] = null;
+        return null;
       }
-    }());
-    return _cachedModules[key];
+    });
+    return compiling;
+  }
+
+  /// Sets every compiled module aside, so the next boot fetches and compiles
+  /// its parts again, and returns them for [restoreCompiledModules].
+  /// Internal: for tests that watch that fetch, without costing the rest of
+  /// the page a compile.
+  static Map<String, JSObject> setCompiledModulesAside() {
+    final aside = Map.of(_cachedModules);
+    _cachedModules.clear();
+    _compilesInFlight.clear();
+    return aside;
+  }
+
+  /// Puts back what [setCompiledModulesAside] returned.
+  static void restoreCompiledModules(Map<String, JSObject> aside) {
+    _cachedModules
+      ..clear()
+      ..addAll(aside);
+    _compilesInFlight.clear();
   }
 
   web.Worker _spawnWorker() {
@@ -618,6 +649,7 @@ class WebExecutor implements Executor {
   int _lastLease = 0;
   int _heapBytes = 0;
   int _memBytes = 0;
+  int _heldBytes = 0;
   bool _dead = false;
   bool _terminated = false;
 
@@ -656,6 +688,10 @@ class WebExecutor implements Executor {
   /// The worker's WASM linear memory as of its last answer; it never falls.
   /// A diagnostic: no decision reads it.
   int get memBytes => _memBytes;
+
+  /// The bytes of source copies the worker held as of its last `result` or
+  /// `resetDone`. A diagnostic: no decision reads it.
+  int get heldBytes => _heldBytes;
 
   /// Routes the worker's messages to the lane that holds the lease now.
   void attach() {

@@ -24,7 +24,7 @@ import '../types/data_source.dart';
 ///
 /// Web has no filesystem; this class is exported from
 /// `package:pdf_manipulator/io.dart` (not the main library) so web builds
-/// never pull in `dart:io`. On web, back the source with a `Blob` instead.
+/// never pull in `dart:io`. On web, use `BlobSource` from `package:pdf_manipulator/web.dart`.
 final class FileSource implements DataSource {
   FileSource._(this._raf, this.length);
 

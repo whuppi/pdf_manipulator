@@ -504,7 +504,12 @@ void registerWebLaneProtocolTests({
 
     setUp(() {
       host = WebExecutorBooter(laneWorkerUrl: workerUrl(), forceMode: mode);
+      // The pre-copy is what these tests drive: no source is copied into the
+      // worker instead.
+      if (mode == PdfIoMode.opfs) WebExecutorBooter.transferBudget = 0;
     });
+
+    tearDown(() => WebExecutorBooter.transferBudget = kTransferBytes);
 
     test('a drain answers a parked job at once, settles when the worker has '
         'posted, and the worker serves the next lease', () async {
