@@ -223,8 +223,11 @@ jobs:
             windows-arm64-pdf_oxide.dll
             windows-x64-pdf_oxide.dll
             wasm-pdf_oxide.js
-            wasm-pdf_oxide_bg.wasm
-            wasm-pdf_oxide_asyncify_bg.wasm
+            wasm-pdf_oxide_manifest.json
+            wasm-pdf_oxide_bg.0.wasm
+            wasm-pdf_oxide_bg.1.wasm
+            wasm-pdf_oxide_asyncify_bg.0.wasm
+            wasm-pdf_oxide_asyncify_bg.1.wasm
           )
           MISSING=()
           for f in "${EXPECTED[@]}"; do

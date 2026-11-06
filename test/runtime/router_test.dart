@@ -19,7 +19,6 @@ import 'package:pdf_manipulator/src/runtime/pool.dart';
 import 'package:pdf_manipulator/src/runtime/router.dart';
 import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
 import 'package:pdf_manipulator/src/types/cancel_hook.dart';
-import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:test/test.dart';
 
 import '../harness/fake_executors.dart';
@@ -53,7 +52,7 @@ void main() {
   setUp(() {
     host = FakeLaneHost();
     pool = ExecutorPool(host: host, maxExecutors: 8);
-    router = Router(pool: pool, maxLanes: 2, mode: PdfIoMode.native);
+    router = Router(pool: pool, maxLanes: 2);
   });
 
   tearDown(() => pool.dispose());
@@ -333,7 +332,7 @@ void main() {
     });
 
     test('placement preserves submission order onto a lane', () async {
-      final solo = Router(pool: pool, maxLanes: 1, mode: PdfIoMode.native);
+      final solo = Router(pool: pool, maxLanes: 1);
       final ops = [
         solo.execute(_open()),
         solo.execute(_open()),
@@ -430,11 +429,7 @@ void main() {
           ..onBoot = (executor) => executor.lane.autoResult = _ok();
         final soloPool = ExecutorPool(host: soloHost);
         addTearDown(soloPool.dispose);
-        final soloRouter = Router(
-          pool: soloPool,
-          maxLanes: 1,
-          mode: PdfIoMode.native,
-        );
+        final soloRouter = Router(pool: soloPool, maxLanes: 1);
 
         await soloRouter.execute(_open(), cancel: hook);
         final lane = soloHost.lanes.single;
@@ -755,7 +750,7 @@ void main() {
     });
 
     test('a queued job on the lane keeps the lease', () async {
-      final solo = Router(pool: pool, maxLanes: 1, mode: PdfIoMode.native);
+      final solo = Router(pool: pool, maxLanes: 1);
       final first = solo.execute(_open());
       final second = solo.execute(_open());
       await settle();

@@ -76,7 +76,7 @@ Nothing to do. On iOS, Android, macOS, Windows, and Linux, the build hook downlo
 
 ### Web
 
-Web can't auto-download native assets, so run setup once. It fetches the prebuilt WASM engine. Run it again after any `pub upgrade`, because the asset is tied to the package version:
+Web can't auto-download native assets, so run setup once. It fetches the prebuilt WASM engine into `web/pdf_manipulator/`: `executor_worker.js`, `pdf_oxide.js`, `pdf_oxide_manifest.json` and the wasm in parts of 16 MiB (`pdf_oxide_bg.0.wasm`, `pdf_oxide_bg.1.wasm`, and with `asyncify: true` the `pdf_oxide_asyncify_bg.<n>.wasm` ones). Run it again after any `pub upgrade`, because the assets are tied to the package version:
 
 ```sh
 flutter pub run pdf_manipulator:setup
@@ -844,8 +844,8 @@ Internally the modes differ in *how* the WASM engine gets your bytes: the first 
 |---|---|:---:|---|
 | **JSPI** | Best: streams, zero setup | ✅ | Chrome 137+ · Firefox 139+ |
 | **Atomics** | Streams, but needs two server headers | ✅ | COOP/COEP headers are set |
-| **Asyncify** | Streams without headers on older browsers, with a second, larger WASM file | ✅ | you turned on `asyncify: true` ([below](#asyncify-the-second-wasm)) |
-| **OPFS** | Always works; copies the file to disk first, then reads | ❌ | any modern browser (the fallback) |
+| **OPFS** | Copies the file to disk first, then reads | ❌ | the browser opens its private file system |
+| **Asyncify** | Streams without headers on older browsers, with a second, larger WASM | ✅ | OPFS is refused and you turned on `asyncify: true` ([below](#asyncify-the-second-wasm)) |
 
 <details>
 <summary><b>🧩 ok but what do JSPI, Atomics, Asyncify and OPFS actually mean?</b></summary>
@@ -859,7 +859,7 @@ All four solve the same puzzle (synchronous WASM code needs bytes that arrive as
 - **Asyncify** — a second build of the engine that can stop in the middle of a call and continue later (binaryen's `--asyncify`), so it waits for the next chunk the way JSPI does without needing the browser's help or any header. You opt in; see below.
 - **OPFS** (Origin Private File System) — when none of the above is available, the package copies your file into the browser's private on-disk storage and reads from there. Works everywhere; the copy means a slower first byte and a little disk use.
 
-You never choose; the package tries JSPI, then Atomics, then Asyncify (only if your app ships it), then OPFS, and uses the first that works.
+You never choose; the package tries Atomics, then JSPI, then OPFS (it must open the browser's private file system, which some private-browsing modes refuse), then Asyncify (only if your app ships it), and uses the first that works. OPFS comes before Asyncify because it measured about 2.2 times faster, the copy included. With none of them, `ensureInitialized` throws `PdfUnsupported`.
 
 </details>
 
@@ -875,7 +875,9 @@ final pdf = Pdf(config: PdfConfig(webIoMode: PdfIoMode.atomics)); // pin a mode
 final mode = await pdf.ensureInitialized(); // or just check
 ```
 
-Forcing a mode the browser cannot run, or Asyncify when your app did not ship its WASM file, throws `PdfUnsupported` as soon as the `Pdf` is created; it never falls back silently.
+Forcing a mode the browser cannot run, or Asyncify when your app did not ship its WASM (no entry in `pdf_oxide_manifest.json`), throws `PdfUnsupported` when the `Pdf` initializes (`ensureInitialized`, or its first operation); it never falls back silently. A missing or unreadable `pdf_oxide_manifest.json` is the same error, naming the file and the setup command.
+
+**Self-hosting the assets.** Serve `.wasm` files as `application/wasm` with compression on: a static host picks the compression from the extension, and the parts total 8.1 MB gzipped (10.2 MB with Asyncify). Keep every file beside `executor_worker.js`. A service worker that precaches assets reads `pdf_oxide_manifest.json` and caches the parts it lists. The page checks each part's size and SHA-256 against the manifest.
 
 **Enable streaming on older browsers.** Chrome 137+ / Firefox 139+ already stream via JSPI with no setup. For older browsers that have `SharedArrayBuffer`, two server headers switch the fallback from disk-copy (OPFS) to streaming (Atomics):
 
@@ -911,9 +913,9 @@ hooks:
       asyncify: true   # false (default) ships nothing new
 ```
 
-Setup then also provides `pdf_oxide_asyncify_bg.wasm` next to the normal one: downloaded for the full engine, built from source for a `keep:` subset. A browser fetches only the file its mode runs, so JSPI and Atomics visitors never download the larger one.
+Setup then also provides the Asyncify wasm's parts, `pdf_oxide_asyncify_bg.0.wasm` and onward, next to the normal one and listed in `pdf_oxide_manifest.json`: downloaded for the full engine, built from source for a `keep:` subset. A browser fetches only the parts of the module its mode runs, so JSPI, Atomics and OPFS visitors never download the larger one; auto-detection picks Asyncify only where OPFS cannot run.
 
-The trade-off, plainly: the Asyncify file is about half again as large as the normal one (the full engine: 32.0 MB against 20.9 MB, 12.4 MB against 8.1 MB gzipped), because most of the engine can be in the middle of a read when it stops. That is over the 25 MiB per-file limit of Cloudflare Pages and Workers static assets, so a site hosted there cannot serve it. The instrumented engine also runs slower, and every read is a round trip to the page: on a 300 MB text PDF, opening and extracting 50 pages took 93 s with Asyncify against 41 s with OPFS (the copy included), and merging two such files 16–19 s against 9–10 s. Turn it on when streaming matters more than those costs, and measure your own files.
+The trade-off, plainly: the Asyncify module is about a third larger than the normal one (the full engine: 28.2 MB against 20.9 MB, 10.2 MB against 8.1 MB gzipped), because most of the engine can be in the middle of a read when it stops. Every module ships as parts of 16 MiB, so neither reaches the 25 MiB per-file limit of Cloudflare Pages and Workers static assets. The instrumented engine also runs slower, and every read is a round trip to the page: on a 300 MB text PDF, opening and extracting 50 pages took 93 s with Asyncify against 41 s with OPFS (the copy included), and merging two such files 16–19 s against 9–10 s. Turn it on when streaming matters more than those costs, and measure your own files.
 
 </details>
 

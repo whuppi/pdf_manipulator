@@ -23,7 +23,9 @@
 // message the worker posts echoes the lease of the message it answers.
 //
 // Dart → worker:
-//   init         { protocol, ioMode, baseUrl?, wasmModule? } → ready|error
+//   init         { protocol, ioMode, baseUrl?, wasmModule?, wasmEntry } → ready|error
+//                  (wasmEntry: the manifest entry of the module this mode runs; the
+//                   worker compiles from it when the host sent no wasmModule)
 //   exec         { lease, jobId, requestBytes, sourceLengths: number[],
 //                  sinkCount, keepSources: number[], holdGroupId?,
 //                  opfsFiles: (string|null)[], sab?, writeSab?,
@@ -62,7 +64,7 @@
 // ── Four I/O modes (selected by Dart, passed in init) ──────────────
 //   jspi     — JSPI Promise suspension (host_read_at returns Promise)
 //   atomics  — per-job SAB + Atomics.wait; Dart fills + notifies
-//   asyncify — the instrumented wasm (pdf_oxide_asyncify_bg.wasm) unwinds
+//   asyncify — the instrumented wasm (pdf_oxide_asyncify_bg) unwinds
 //              at host_read_at / host_write_chunk, the worker awaits the
 //              answer and rewinds; the messages are JSPI's
 //   opfs     — sources pre-copied to OPFS; reads via SyncAccessHandle
@@ -81,6 +83,7 @@ let busy = null;            // 'exec' | 'reset' while one runs, else null
 let ioMode = 'opfs';
 let initialized = false;
 let precompiledModule = null;
+let wasmEntry = null;        // the manifest entry of the module this mode runs
 let wasmBaseUrl = (() => {
   try { return new URL(self.location.href).href.replace(/\/[^/]*$/, '/'); }
   catch (_) { return './'; }
@@ -351,10 +354,9 @@ async function ensureInit() {
 
   const jsModule = await import(wasmBaseUrl + 'pdf_oxide.js');
 
-  // Intercept instantiation to (a) capture raw exports, (b) wrap the
-  // host imports in WebAssembly.Suspending for JSPI. Restored after.
+  // Intercept instantiation to capture the raw exports and, for JSPI, wrap the
+  // host imports in WebAssembly.Suspending. Restored after.
   const origInstantiate = WebAssembly.instantiate;
-  const origStreaming = WebAssembly.instantiateStreaming;
 
   WebAssembly.instantiate = async (source, imports) => {
     if (ioMode === 'jspi' && imports) imports = wrapJspiImports(imports);
@@ -362,18 +364,11 @@ async function ensureInit() {
     wasm = (result instanceof WebAssembly.Instance ? result : result.instance).exports;
     return result;
   };
-  if (origStreaming) {
-    WebAssembly.instantiateStreaming = async (response, imports) => {
-      const bytes = await (await response).arrayBuffer();
-      return WebAssembly.instantiate(bytes, imports);
-    };
-  }
 
   try {
-    await jsModule.default(precompiledModule || (wasmBaseUrl + wasmFile()));
+    await jsModule.default(precompiledModule || await compileParts(wasmBaseUrl, wasmEntry));
   } finally {
     WebAssembly.instantiate = origInstantiate;
-    if (origStreaming) WebAssembly.instantiateStreaming = origStreaming;
   }
 
   if (ioMode === 'jspi') {
@@ -381,7 +376,7 @@ async function ensureInit() {
   }
   if (ioMode === 'asyncify') {
     if (typeof wasm.asyncify_start_unwind !== 'function') {
-      throw new Error(wasmFile() + ' is not an Asyncify build');
+      throw new Error('the wasm of the manifest entry is not an Asyncify build');
     }
     // The unwound stack is saved outside the engine's heap: fresh pages, which
     // its allocator neither owns nor counts.
@@ -394,11 +389,169 @@ async function ensureInit() {
   initialized = true;
 }
 
-// The wasm a mode loads: the Asyncify engine only in Asyncify mode, so a
-// browser fetches the one file it runs.
-function wasmFile() {
-  return ioMode === 'asyncify' ? 'pdf_oxide_asyncify_bg.wasm' : 'pdf_oxide_bg.wasm';
+// The one loader of a wasm module. [entry] is a module of
+// pdf_oxide_manifest.json: the module is cut into parts, and nothing fetches a
+// whole `.wasm`. Every part is fetched at once and the parts are joined, in
+// order, into one stream the browser compiles while it arrives. Each part
+// passes through a transform that counts its bytes and checks its SHA-256
+// against the manifest before the stream goes on, so a short or corrupt part
+// errors the stream and the compile rejects with a message naming the part.
+// wasm_loader.dart's _compileParts is the same loader for the main thread; the web
+// battery pins both against the same manifest.
+async function compileParts(baseUrl, entry) {
+  if (!entry || !Array.isArray(entry.parts)) {
+    throw new Error('no manifest entry to compile from');
+  }
+  const abort = new AbortController();
+  const fetches = entry.parts.map((part) => {
+    const response = fetch(baseUrl + part.file, { signal: abort.signal });
+    response.catch(() => {});
+    return response;
+  });
+  let failure = null;
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        for (let i = 0; i < entry.parts.length; i++) {
+          const part = entry.parts[i];
+          const response = await fetches[i];
+          if (!response.ok || !response.body) {
+            throw new Error(part.file + ': HTTP ' + response.status);
+          }
+          const reader = response.body.pipeThrough(verifyPart(part)).getReader();
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            controller.enqueue(value);
+          }
+        }
+        controller.close();
+      } catch (error) {
+        failure = error;
+        abort.abort();
+        controller.error(error);
+      }
+    },
+  });
+  try {
+    return await WebAssembly.compileStreaming(
+      new Response(stream, { headers: { 'content-type': 'application/wasm' } }));
+  } catch (error) {
+    throw failure || error;
+  }
 }
+
+// Passes a part's bytes through, and at its end refuses it unless it is the
+// size and the SHA-256 the manifest lists. The hash is computed as the bytes
+// pass (Sha256 below), so no part is held whole and a page without
+// crypto.subtle, which only a secure context has, is checked the same way.
+function verifyPart(part) {
+  const hash = new Sha256();
+  let count = 0;
+  return new TransformStream({
+    transform(chunk, controller) {
+      count += chunk.byteLength;
+      if (count > part.bytes) {
+        throw new Error(part.file + ': more than the ' + part.bytes + ' bytes the manifest lists');
+      }
+      hash.update(chunk);
+      controller.enqueue(chunk);
+    },
+    flush() {
+      if (count !== part.bytes) {
+        throw new Error(part.file + ': ' + count + ' bytes, the manifest lists ' + part.bytes);
+      }
+      const hex = hash.hex();
+      if (hex !== part.sha256) {
+        throw new Error(part.file + ': sha256 ' + hex + ' is not the ' + part.sha256 + ' the manifest lists');
+      }
+    },
+  });
+}
+
+// SHA-256 (FIPS 180-4) over bytes given in pieces of any size.
+class Sha256 {
+  constructor() {
+    this.h = new Uint32Array([
+      0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+      0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+    ]);
+    this.block = new Uint8Array(64);
+    this.filled = 0;
+    this.length = 0;
+    this.w = new Uint32Array(64);
+  }
+
+  update(bytes) {
+    this.length += bytes.length;
+    let at = 0;
+    if (this.filled > 0) {
+      const take = Math.min(64 - this.filled, bytes.length);
+      this.block.set(bytes.subarray(0, take), this.filled);
+      this.filled += take;
+      at = take;
+      if (this.filled < 64) return;
+      this.compress(this.block, 0);
+      this.filled = 0;
+    }
+    for (; at + 64 <= bytes.length; at += 64) this.compress(bytes, at);
+    if (at < bytes.length) {
+      this.block.set(bytes.subarray(at), 0);
+      this.filled = bytes.length - at;
+    }
+  }
+
+  hex() {
+    const bits = this.length * 8;
+    const tail = new Uint8Array(this.filled < 56 ? 64 : 128);
+    tail.set(this.block.subarray(0, this.filled));
+    tail[this.filled] = 0x80;
+    const view = new DataView(tail.buffer);
+    view.setUint32(tail.length - 8, Math.floor(bits / 0x100000000));
+    view.setUint32(tail.length - 4, bits >>> 0);
+    for (let at = 0; at < tail.length; at += 64) this.compress(tail, at);
+    return Array.from(this.h, (v) => v.toString(16).padStart(8, '0')).join('');
+  }
+
+  compress(bytes, at) {
+    const w = this.w;
+    for (let i = 0; i < 16; i++) {
+      const j = at + i * 4;
+      w[i] = (bytes[j] << 24) | (bytes[j + 1] << 16) | (bytes[j + 2] << 8) | bytes[j + 3];
+    }
+    for (let i = 16; i < 64; i++) {
+      const a = w[i - 15], b = w[i - 2];
+      const s0 = ((a >>> 7) | (a << 25)) ^ ((a >>> 18) | (a << 14)) ^ (a >>> 3);
+      const s1 = ((b >>> 17) | (b << 15)) ^ ((b >>> 19) | (b << 13)) ^ (b >>> 10);
+      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0;
+    }
+    let [a, b, c, d, e, f, g, h] = this.h;
+    for (let i = 0; i < 64; i++) {
+      const S1 = ((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7));
+      const ch = (e & f) ^ (~e & g);
+      const t1 = (h + S1 + ch + SHA256_K[i] + w[i]) | 0;
+      const S0 = ((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10));
+      const maj = (a & b) ^ (a & c) ^ (b & c);
+      const t2 = (S0 + maj) | 0;
+      h = g; g = f; f = e; e = (d + t1) | 0;
+      d = c; c = b; b = a; a = (t1 + t2) | 0;
+    }
+    const s = this.h;
+    s[0] += a; s[1] += b; s[2] += c; s[3] += d;
+    s[4] += e; s[5] += f; s[6] += g; s[7] += h;
+  }
+}
+
+const SHA256_K = new Uint32Array([
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]);
 
 function wrapJspiImports(imports) {
   const patched = {};
@@ -795,6 +948,7 @@ self.onmessage = async (e) => {
       ioMode = msg.ioMode;
       if (msg.baseUrl) wasmBaseUrl = msg.baseUrl;
       if (msg.wasmModule) precompiledModule = msg.wasmModule;
+      if (msg.wasmEntry) wasmEntry = msg.wasmEntry;
       try {
         // The liveness lock must be held BEFORE the WASM instance
         // exists: the host's budget slot, and any OPFS file, must

@@ -3,7 +3,7 @@
 // own call graph.
 //
 //   dart --packages=.dart_tool/package_config.json tool/asyncify_list.dart \
-//        [--out <file>] [--pause <import-substring>]... <pdf_oxide_bg.wasm>
+//        [--out <file>] [--pause <import-substring>]... <whole wasm>
 //
 // binaryen's `--asyncify` instruments exactly the functions it is told to
 // (`--pass-arg=asyncify-onlylist@@<file>`); a function left out of that list

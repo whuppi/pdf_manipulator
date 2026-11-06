@@ -41,11 +41,15 @@ runs:
       if: inputs.save == 'true'
       id: wasm-cache
       with:
-        path: web_assets/pdf_oxide_bg.wasm
+        path: |
+          web_assets/pdf_oxide*_bg.*.wasm
+          web_assets/pdf_oxide_manifest.json
         key: wasm-${{ runner.os }}-${{ runner.arch }}-${{ env.SUBMODULE_PDF_OXIDE }}-${{ env.SUBMODULE_OFFICE_OXIDE }}-${{ env.SUBMODULE_TINY_SKIA }}-${{ hashFiles('build.json', 'tool/versions.env') }}
     - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       if: inputs.save != 'true'
       id: wasm-cache-ro
       with:
-        path: web_assets/pdf_oxide_bg.wasm
+        path: |
+          web_assets/pdf_oxide*_bg.*.wasm
+          web_assets/pdf_oxide_manifest.json
         key: wasm-${{ runner.os }}-${{ runner.arch }}-${{ env.SUBMODULE_PDF_OXIDE }}-${{ env.SUBMODULE_OFFICE_OXIDE }}-${{ env.SUBMODULE_TINY_SKIA }}-${{ hashFiles('build.json', 'tool/versions.env') }}

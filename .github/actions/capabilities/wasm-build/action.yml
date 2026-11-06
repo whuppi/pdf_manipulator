@@ -12,7 +12,7 @@ runs:
     # artifact, and a borrowed file makes that row pass without testing it.
     - shell: bash
       run: |
-        if [ -f web_assets/pdf_oxide_bg.wasm ]; then
+        if [ -f web_assets/pdf_oxide_bg.0.wasm ] && [ -f web_assets/pdf_oxide_manifest.json ]; then
           echo "WASM cached — skipping build"
         else
           make build-wasm

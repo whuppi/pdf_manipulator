@@ -5,9 +5,11 @@
 //   dart tool/compile.dart linux        Linux x64 + arm64 (cross-compile)
 //   dart tool/compile.dart android      Android arm64 + arm + x64 + x86
 //   dart tool/compile.dart windows      Windows x64 (+ arm64 on MSVC)
-//   dart tool/compile.dart wasm         WASM + bindgen_runner (with
+//   dart tool/compile.dart wasm         WASM + bindgen_runner, cut into the parts
+//                                       and manifest of web_assets/ (with
 //                                       COMPILE_OUTPUT_DIR, the Asyncify wasm too)
-//   dart tool/compile.dart wasm-asyncify  the Asyncify twin of web_assets/'s wasm
+//   dart tool/compile.dart wasm-asyncify  the Asyncify twin of web_assets/'s wasm,
+//                                       cut the same way
 //   dart tool/compile.dart native       Auto-detect what this host builds
 //   dart tool/compile.dart all          native + wasm
 //   dart tool/compile.dart --features [native|wasm]   print feature flags
@@ -28,6 +30,7 @@ import 'package:path/path.dart' as p;
 
 import 'package:pdf_manipulator/src/hook/build_constants.dart';
 import 'package:pdf_manipulator/src/hook/engine_compiler.dart';
+import 'package:pdf_manipulator/src/hook/wasm_parts.dart';
 
 final Uri _pkgRoot = Directory.current.uri;
 
@@ -261,66 +264,68 @@ Future<void> _doNative() async {
 Future<void> _doWasm() async {
   final c = BuildConstants.load(_pkgRoot);
   final webAssets = Directory.fromUri(_pkgRoot.resolve('web_assets'));
-  stderr.writeln('=== WASM: compile + bindgen ===');
-  await compileWasmEngine(
+  stderr.writeln('=== WASM: compile + bindgen + cut ===');
+  await buildWasmParts(
     packageRoot: _pkgRoot,
     features: _wasmFeatures(c),
     outDir: webAssets,
   );
-  final bg = File(p.join(webAssets.path, 'pdf_oxide_bg.wasm'));
-  stderr.writeln('Binary: ${bg.lengthSync()} bytes');
+  _reportWasm(webAssets);
 
   // Release pipeline mirrors the outputs into COMPILE_OUTPUT_DIR/wasm, the
-  // Asyncify wasm among them.
+  // Asyncify module among them.
   final rel = Platform.environment['COMPILE_OUTPUT_DIR'];
   if (rel != null && rel.isNotEmpty) {
     await _doWasmAsyncify();
     final base = p.isAbsolute(rel) ? rel : p.join(p.fromUri(_pkgRoot), rel);
     final wasmOut = Directory(p.join(base, 'wasm'))
       ..createSync(recursive: true);
-    final shipped = const [
-      'pdf_oxide.js',
-      'pdf_oxide_bg.wasm',
-      'pdf_oxide_asyncify_bg.wasm',
-    ];
-    for (final f in shipped) {
+    final manifest = WasmManifest.load(webAssets);
+    for (final f in ['pdf_oxide.js', wasmManifestFile, ...manifest.files]) {
       File(p.join(webAssets.path, f)).copySync(p.join(wasmOut.path, f));
     }
-    _checkWasmSizes([for (final f in shipped) File(p.join(wasmOut.path, f))]);
+    _checkWasm(wasmOut, c);
     stderr.writeln('Copied to ${wasmOut.path}');
   }
 }
 
-/// Builds `web_assets/pdf_oxide_asyncify_bg.wasm` from `web_assets/`'s wasm
-/// and reports its size against the normal one.
+/// Builds the Asyncify module from the normal one in `web_assets/` and cuts it
+/// beside it.
 Future<void> _doWasmAsyncify() async {
   final webAssets = Directory.fromUri(_pkgRoot.resolve('web_assets'));
-  final normal = File(p.join(webAssets.path, 'pdf_oxide_bg.wasm'));
-  if (!normal.existsSync()) await _doWasm();
+  if (!WasmManifest.loadOrEmpty(
+    webAssets,
+  ).modules.containsKey(normalWasmModule)) {
+    await _doWasm();
+  }
   stderr.writeln('=== WASM: asyncify ===');
-  final out = File(p.join(webAssets.path, asyncifyWebAsset));
-  await buildAsyncifyWasm(packageRoot: _pkgRoot, wasm: normal, out: out);
-  final raw = out.lengthSync();
-  final base = normal.lengthSync();
-  stderr.writeln(
-    'Asyncify binary: $raw bytes (${(100 * (raw - base) / base).toStringAsFixed(1)}% '
-    'over the $base of the normal one; gzip ${gzip.encode(out.readAsBytesSync()).length} '
-    'against ${gzip.encode(normal.readAsBytesSync()).length})',
-  );
+  await buildAsyncifyParts(packageRoot: _pkgRoot, dir: webAssets);
+  _reportWasm(webAssets);
 }
 
-/// The release wall: no wasm the release ships reaches [maxWebAssetBytes], the
-/// largest file Cloudflare Pages and Workers static assets serve.
-void _checkWasmSizes(List<File> files) {
-  final over = [
-    for (final f in files)
-      if (f.path.endsWith('.wasm') && f.lengthSync() >= maxWebAssetBytes)
-        '${p.basename(f.path)}: ${f.lengthSync()} bytes',
+/// Prints each module's parts, raw and gzip.
+void _reportWasm(Directory dir) {
+  final manifest = WasmManifest.load(dir);
+  for (final MapEntry(:key, :value) in manifest.modules.entries) {
+    stderr.writeln(
+      '$key: ${value.bytes} bytes (gzip '
+      '${gzipBytesOf(joinWasmParts(dir, value))}) in ${value.parts.length} '
+      'parts: ${[for (final part in value.parts) part.bytes].join(', ')}',
+    );
+  }
+}
+
+/// The release wall: [dir], the wasm a release ships, passes every check of
+/// [wasmWallProblems], and the parts it holds are the ones build.json lists
+/// for the release.
+void _checkWasm(Directory dir, BuildConstants c) {
+  final problems = [
+    ...wasmWallProblems(dir),
+    ...buildJsonPartProblems(dir, c, complete: true),
   ];
-  if (over.isNotEmpty) {
+  if (problems.isNotEmpty) {
     throw StateError(
-      'a shipped wasm reaches the $maxWebAssetBytes-byte limit of '
-      'Cloudflare static assets: ${over.join('; ')}',
+      'the wasm of the release fails its wall:\n  ${problems.join('\n  ')}',
     );
   }
 }

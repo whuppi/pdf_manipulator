@@ -14,10 +14,24 @@ class AuditedServer {
   final StreamIterator<Object?> _events;
   final List<String> requests;
 
-  static Future<AuditedServer> start(List<String> hide) async {
+  /// Starts the server. [hide] paths answer 404; [spa], [manifestWithout],
+  /// [corrupt] and [truncate] are the faults audited_asset_server.dart lists.
+  static Future<AuditedServer> start(
+    List<String> hide, {
+    bool spa = false,
+    List<String> manifestWithout = const [],
+    List<String> corrupt = const [],
+    List<String> truncate = const [],
+  }) async {
     final StreamChannel<Object?> channel = spawnHybridUri(
       '/test/harness/audited_asset_server.dart',
-      message: hide,
+      message: {
+        'hide': hide,
+        'spa': spa,
+        'manifestWithout': manifestWithout,
+        'corrupt': corrupt,
+        'truncate': truncate,
+      },
       stayAlive: true,
     );
     final events = StreamIterator(channel.stream);

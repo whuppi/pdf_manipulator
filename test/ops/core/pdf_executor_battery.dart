@@ -32,7 +32,7 @@ class _TrackingHost implements ExecutorBooter {
   final executors = <Executor>[];
 
   @override
-  PdfIoMode get mode => _inner.mode;
+  Future<PdfIoMode> resolveMode() => _inner.resolveMode();
 
   @override
   int get defaultConcurrency => _inner.defaultConcurrency;
@@ -80,7 +80,7 @@ void registerExecutorTests(
       pool = keepBytes == null
           ? ExecutorPool(host: host)
           : ExecutorPool(host: host, keepBytes: keepBytes);
-      router = Router(pool: pool, maxLanes: 1, mode: host.mode);
+      router = Router(pool: pool, maxLanes: 1);
     }
 
     /// Every executor the pool holds is idle: the lane that used the last
@@ -216,7 +216,7 @@ void registerExecutorTests(
         mem.add(memBytes?.call(executor));
         if (i % 10 == 0 && i < 50) {
           await router.dispose();
-          router = Router(pool: pool, maxLanes: 1, mode: host.mode);
+          router = Router(pool: pool, maxLanes: 1);
         }
       }
       printOnFailure('idle heap by cycle: $idle');

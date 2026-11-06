@@ -13,7 +13,7 @@ class NativeExecutorBooter implements ExecutorBooter {
   static bool _bootstrapped = false;
 
   @override
-  PdfIoMode get mode => PdfIoMode.native;
+  Future<PdfIoMode> resolveMode() async => PdfIoMode.native;
 
   @override
   int get defaultConcurrency => suggestedLaneCount(Platform.numberOfProcessors);

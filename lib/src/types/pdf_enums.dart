@@ -22,8 +22,9 @@ enum PdfIoMode implements PdfWire {
   /// a sink write and resume when the answer arrives, so it streams like
   /// [jspi] on a browser with neither JSPI nor `SharedArrayBuffer`. Needs
   /// the Asyncify wasm (`asyncify: true` in the app's
-  /// `hooks: user_defines: pdf_manipulator:`); the larger file is fetched
-  /// only in this mode.
+  /// `hooks: user_defines: pdf_manipulator:`); its larger parts are fetched
+  /// only in this mode, and auto-detection picks it only where [opfs] cannot
+  /// run.
   asyncify('asyncify'),
 
   /// OPFS — pre-copy entire source to Origin Private File System disk

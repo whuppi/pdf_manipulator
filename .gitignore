@@ -318,6 +318,7 @@ vendor/pdf_oxide/target/
 # .d.ts files are wasm-bindgen build artifacts (TypeScript types) — not consumed.
 # Rebuilt locally via tool/build_wasm.sh for development.
 web_assets/*.wasm
+web_assets/pdf_oxide_manifest.json
 web_assets/*.d.ts
 
 # Example app's copy of WASM assets (installed via dart run pdf_manipulator:setup)

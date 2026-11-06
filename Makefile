@@ -241,27 +241,30 @@ build-wasm:
 	$(DART) tool/compile.dart wasm
 
 # make build-wasm-asyncify   The Asyncify twin of the wasm (web_assets/
-#                            pdf_oxide_asyncify_bg.wasm), from the normal one.
+#                            pdf_oxide_asyncify_bg.<n>.wasm and its entry in
+#                            pdf_oxide_manifest.json), from the normal one.
 build-wasm-asyncify:
 	$(DART) tool/compile.dart wasm-asyncify
 
-# The wasm the web tests load. A file target, so it rebuilds exactly when an
-# engine input is newer: every Rust source and manifest under vendor/ (the
-# build output dirs excluded), the wasm feature list in build.json, and the
-# Dart that drives the compile. `make build-wasm` forces a rebuild; the web
+# The wasm the web tests load: the normal module's first part stands for its
+# parts and the manifest, which one cut writes together. A file target, so it
+# rebuilds exactly when an engine input is newer: every Rust source and
+# manifest under vendor/ (the build output dirs excluded), the wasm feature
+# list in build.json, and the Dart that drives the compile and the cut. `make build-wasm` forces a rebuild; the web
 # test targets depend on this file, never on the phony target.
-WASM_OUT := web_assets/pdf_oxide_bg.wasm
+WASM_OUT := web_assets/pdf_oxide_bg.0.wasm
 WASM_INPUTS := $(shell find vendor \( -name target -o -name .git \) -prune -o \
 		-type f \( -name '*.rs' -o -name Cargo.toml -o -name Cargo.lock \) -print) \
 	build.json tool/compile.dart \
-	lib/src/hook/engine_compiler.dart lib/src/hook/build_constants.dart
+	lib/src/hook/engine_compiler.dart lib/src/hook/build_constants.dart \
+	lib/src/hook/wasm_parts.dart
 
 $(WASM_OUT): $(WASM_INPUTS)
 	$(DART) tool/compile.dart wasm
 
 # The Asyncify wasm is a function of the normal one and of the instrumentation
 # code, so it rebuilds when either is newer.
-ASYNCIFY_OUT := web_assets/pdf_oxide_asyncify_bg.wasm
+ASYNCIFY_OUT := web_assets/pdf_oxide_asyncify_bg.0.wasm
 
 # Every read of the Asyncify mode unwinds and rewinds the engine's stack, so
 # its tests need more of the local one-second budget than the other modes;
@@ -385,6 +388,7 @@ test-ops-asyncify: $(ASYNCIFY_OUT)
 	@mkdir -p $(TEST_RESULTS_DIR)
 	$(call run_browser_tests,$(DART) test $(ASYNCIFY_TIMEOUT) test/ops/runners/web_asyncify_runner_test.dart -p chrome --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-asyncify.json)
 	$(call run_browser_tests,$(DART) test $(TIMEOUT) test/ops/runners/web_auto_mode_test.dart -p chrome --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-auto-mode.json)
+	$(call run_browser_tests,$(DART) test $(TIMEOUT) test/ops/runners/web_auto_mode_test.dart -p chrome-coi --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-auto-mode-coi.json)
 
 # Rust unit + integration tests for the three vendored crates. Most of the
 # engine's tests sit behind features we don't ship (ml / ocr / fips /

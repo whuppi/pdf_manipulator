@@ -12,6 +12,7 @@ import 'package:path/path.dart' as p;
 
 import 'package:pdf_manipulator/src/hook/asyncify_list.dart';
 import 'package:pdf_manipulator/src/hook/engine_build.dart';
+import 'package:pdf_manipulator/src/hook/wasm_parts.dart';
 
 final _log = Logger('pdf_manipulator:engine_compiler');
 
@@ -320,13 +321,87 @@ String? _latestVersionSubdir(String base) {
   return p.join(base, names.last);
 }
 
+/// Builds the web assets of the engine into [outDir]: `pdf_oxide.js`, and the
+/// parts and manifest of the normal wasm, with [asyncify] those of the
+/// Asyncify wasm too. The whole modules exist only in a temp folder for the
+/// time of the build. Any Asyncify module [outDir] held is gone unless
+/// [asyncify] builds it again, because it is a function of the normal one.
+Future<void> buildWasmParts({
+  required Uri packageRoot,
+  required String features,
+  required Directory outDir,
+  EngineBuild build = EngineBuild.speed,
+  bool asyncify = false,
+}) async {
+  final whole = Directory.systemTemp.createTempSync('pdf_manipulator_wasm_');
+  try {
+    await compileWasmEngine(
+      packageRoot: packageRoot,
+      features: features,
+      outDir: whole,
+      build: build,
+      asyncify: asyncify,
+    );
+    outDir.createSync(recursive: true);
+    File(
+      p.join(whole.path, 'pdf_oxide.js'),
+    ).copySync(p.join(outDir.path, 'pdf_oxide.js'));
+    removeWasmModule(outDir, asyncifyWasmModule);
+    writeWasmParts(
+      wasm: File(p.join(whole.path, '$normalWasmModule.wasm')),
+      module: normalWasmModule,
+      outDir: outDir,
+    );
+    if (asyncify) {
+      writeWasmParts(
+        wasm: File(p.join(whole.path, '$asyncifyWasmModule.wasm')),
+        module: asyncifyWasmModule,
+        outDir: outDir,
+      );
+    }
+  } finally {
+    whole.deleteSync(recursive: true);
+  }
+}
+
+/// Builds the Asyncify module from the normal one the parts in [dir] hold and
+/// cuts it into [dir] beside them. Returns the Asyncify module's entry.
+Future<WasmModule> buildAsyncifyParts({
+  required Uri packageRoot,
+  required Directory dir,
+  EngineBuild build = EngineBuild.speed,
+}) async {
+  final normal = WasmManifest.load(dir).modules[normalWasmModule];
+  if (normal == null) {
+    throw StateError('${dir.path} holds no $normalWasmModule to instrument');
+  }
+  final whole = Directory.systemTemp.createTempSync('pdf_manipulator_wasm_');
+  try {
+    final input = File(p.join(whole.path, '$normalWasmModule.wasm'))
+      ..writeAsBytesSync(joinWasmParts(dir, normal));
+    final out = File(p.join(whole.path, '$asyncifyWasmModule.wasm'));
+    await buildAsyncifyWasm(
+      packageRoot: packageRoot,
+      wasm: input,
+      out: out,
+      build: build,
+    );
+    return writeWasmParts(
+      wasm: out,
+      module: asyncifyWasmModule,
+      outDir: dir,
+    ).modules[asyncifyWasmModule]!;
+  } finally {
+    whole.deleteSync(recursive: true);
+  }
+}
+
 /// Compiles the engine to wasm32 and post-processes it (wasm-bindgen +
 /// wasm-opt) via the workspace's `bindgen_runner` crate, writing
 /// `pdf_oxide.js` + `pdf_oxide_bg.wasm` into [outDir], and with [asyncify]
 /// also `pdf_oxide_asyncify_bg.wasm` ([buildAsyncifyWasm]). [build] sets
-/// cargo's release profile and wasm-opt's level for both. Shared by the
-/// consumer web setup (`hook/build.dart`) and the CI compile driver
-/// (`tool/compile.dart`) — one wasm compile path, two callers.
+/// cargo's release profile and wasm-opt's level for both. These are whole
+/// modules, the input of the cut ([buildWasmParts]); never a web asset.
 Future<void> compileWasmEngine({
   required Uri packageRoot,
   required String features,

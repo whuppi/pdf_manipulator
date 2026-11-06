@@ -168,7 +168,7 @@ class FakeLaneHost implements ExecutorBooter {
   int bootAttempts = 0;
 
   @override
-  PdfIoMode get mode => PdfIoMode.native;
+  Future<PdfIoMode> resolveMode() async => PdfIoMode.native;
 
   @override
   int get defaultConcurrency => 2;

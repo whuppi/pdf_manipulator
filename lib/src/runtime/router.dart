@@ -125,18 +125,14 @@ class Router implements PdfTransport {
   /// Creates a router over [pool], capping concurrent lanes at
   /// [maxLanes] per instance (the pool's budget lives below — hitting
   /// either cap queues, never errors).
-  Router({
-    required ExecutorPool pool,
-    required int maxLanes,
-    required PdfIoMode mode,
-  }) : assert(maxLanes >= 1, 'maxLanes must be at least 1'),
-       _pool = pool,
-       _maxLanes = maxLanes,
-       _mode = mode;
+  Router({required ExecutorPool pool, required int maxLanes})
+    : assert(maxLanes >= 1, 'maxLanes must be at least 1'),
+      _pool = pool,
+      _maxLanes = maxLanes;
 
   final ExecutorPool _pool;
   final int _maxLanes;
-  final PdfIoMode _mode;
+  PdfIoMode? _mode;
 
   final List<_LaneRecord> _lanes = [];
 
@@ -149,16 +145,14 @@ class Router implements PdfTransport {
   int _nextHandleId = 1;
   int _nextResourceId = 1;
   bool _disposed = false;
-  bool _initialized = false;
 
   @override
-  PdfIoMode? get ioMode => _initialized ? _mode : null;
+  PdfIoMode? get ioMode => _mode;
 
   @override
   Future<PdfIoMode> ensureInitialized() async {
     if (_disposed) throw StateError('Router disposed');
-    _initialized = true;
-    return _mode;
+    return _mode ??= await _pool.resolveMode();
   }
 
   @override

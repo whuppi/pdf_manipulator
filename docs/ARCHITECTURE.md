@@ -103,7 +103,7 @@ runtime, the Rust host layer, the web executor script and every document.
 | **thread budget** | Rust's cap on started executor threads, `MAX_EXECUTORS_GLOBAL`, with a first-in-first-out queue of pending starts. |
 | **slot** | One started-thread allowance in the thread budget. |
 | **host layer** | `vendor/pdf_oxide/src/host/`: everything of ours inside the engine. |
-| **mode** | The I/O mode, `PdfIoMode`: native, jspi, atomics or opfs. |
+| **mode** | The I/O mode, `PdfIoMode`: native, atomics, jspi, opfs or asyncify. |
 
 ---
 
@@ -704,22 +704,57 @@ on the main isolate through `NativeCallable.listener`. No helper isolate exists.
 |---|---|---|
 | **JSPI** | `WebAssembly.Suspending` suspends wasm, JS fetches async, wasm resumes | Chrome 137+ / Firefox 139+ |
 | **Atomics** | `Atomics.wait` blocks wasm, JS fills a SAB, `Atomics.notify` wakes it | `SharedArrayBuffer` (COOP/COEP headers) |
-| **Asyncify** | The instrumented wasm unwinds at the read or write, the worker awaits the answer and rewinds | The app shipped `pdf_oxide_asyncify_bg.wasm` (`asyncify: true`) |
+| **Asyncify** | The instrumented wasm unwinds at the read or write, the worker awaits the answer and rewinds | The app shipped the Asyncify module (an entry in `pdf_oxide_manifest.json`, `asyncify: true`) |
 | **OPFS** | Sources are pre-copied to OPFS disk, wasm reads through `SyncAccessHandle` | All modern browsers |
 
-Detection (`WebExecutorBooter._detectMode`), best first:
+Detection (`WebExecutorBooter.resolveMode`, asynchronous: it first fetches the manifest, once per page and location), best first:
 
 ```
-if ("Suspending" in WebAssembly) → JSPI     (streaming, no headers)
-else if (SharedArrayBuffer)      → Atomics  (streaming, needs COOP/COEP)
-else if (the app shipped the     → Asyncify (streaming, no headers, larger wasm)
-         Asyncify wasm)
-else                             → OPFS     (pre-copy fallback)
+if (SharedArrayBuffer)           → Atomics  (streaming, needs COOP/COEP)
+else if ("Suspending" in WebAssembly) → JSPI (streaming, no headers)
+else if (getDirectory() resolves)→ OPFS     (pre-copy; Asyncify measured ~2.2x slower)
+else if (the manifest lists the  → Asyncify (streaming, no headers, larger wasm)
+         Asyncify module)
+else                             → PdfUnsupported naming both
 ```
+
+### Web assets — the manifest and the parts
+
+Static hosts cap each uploaded file (Cloudflare Pages and Workers: 25 MiB), not the size of
+a module a browser compiles, so every wasm the package ships is cut into parts: consecutive
+pieces of exactly `wasmPartBytes` (16 MiB, `build_constants.dart`), the last one shorter,
+named `<module>.<n>.wasm` (the extension makes hosts pick `application/wasm` and compression).
+The modules are `pdf_oxide_bg` and, with `asyncify: true`, `pdf_oxide_asyncify_bg`. Every module
+is cut, even one that would fit in a file, so every mode runs the same join path.
+
+`pdf_oxide_manifest.json` sits beside `executor_worker.js` and lists each module: its bytes,
+the SHA-256 of the whole, and its parts (file, bytes, SHA-256). It is the only way the runtime
+learns which modules exist: there is no probe, so a host that answers any path with an HTML
+page cannot pass for one that shipped Asyncify. One function, `writeWasmParts`
+(`lib/src/hook/wasm_parts.dart`), cuts and merges a module's entry into the manifest; the make
+targets, the release and the hook's from-source build all call it. The whole modules exist only
+as build intermediates in a temp folder (the Asyncify build joins the normal module's parts
+back for its input).
+
+One loader joins the parts: `compileParts` in `executor_worker.js` and its main-thread twin
+`_compileParts` in `lib/src/runtime/web/wasm_loader.dart` start every part's fetch at once,
+enqueue them in order into one `ReadableStream`, and hand `new Response(stream)` with
+`content-type: application/wasm` to `WebAssembly.compileStreaming`. Each part is counted and its
+SHA-256 checked against the manifest before the stream goes on; a short or corrupt part errors
+the stream and the compile rejects with a message naming the part. The host compiles once per
+page and posts the module to its workers; when that compile fails, each worker compiles from
+the manifest entry the host sends in `init`. The web battery pins both loaders against the same
+manifest.
+
+The walls (`test/guards/wasm_size_test.dart`, and the release in `tool/compile.dart`): every
+file in `web_assets/` and the release output is under 26,214,400 bytes; each module's parts
+concatenated are byte for byte the module the manifest lists; and each module's gzip size,
+which is what a visitor downloads, is within `normalWasmGzipBudget` /
+`asyncifyWasmGzipBudget` (8.5 and 10.5 MiB) — raising one is a decision, not a fix.
 
 Force a mode with `Pdf(config: PdfConfig(webIoMode: PdfIoMode.jspi))`. A forced mode the
-browser cannot run, or Asyncify when the app did not ship its wasm, throws `PdfUnsupported`
-when the instance is created; there is never a silent fallback. All four modes give the Rust
+browser cannot run, or Asyncify when the manifest has no entry for it, throws `PdfUnsupported`
+when the instance initializes; there is never a silent fallback. All four modes give the Rust
 side the same `Read+Seek` trait and `bridge_api.rs` is the same. JSPI, Atomics and OPFS run
 the one wasm binary; Asyncify runs its own twin, and a browser fetches only the wasm its mode
 runs. Only OPFS pre-copies to disk. Call `await pdf.ensureInitialized()` at startup to read
@@ -962,6 +997,7 @@ lib/
     └── hook/                               ← build and setup support (not consumer API)
         ├── asset_hashes.dart               ← SHA-256 hashes for all release assets
         ├── resolver.dart                   ← ResolveRequest + 5-step waterfall
+        ├── wasm_parts.dart                 ← the cut: writeWasmParts, the manifest, the walls
         ├── asyncify_list.dart              ← the wasm call graph, the Asyncify instrumentation
         │                                      list and its wall
         └── (build_constants, engine_compiler, engine_build, keep_plan, pdf_config,
@@ -971,9 +1007,11 @@ web_assets/                                 ← committed in git (except .wasm, 
 ├── executor_worker.js                      ← the executor body: reader registry, 4 I/O modes,
 │                                              reset, execute (no routing logic)
 ├── pdf_oxide.js                            ← wasm-bindgen glue (committed, paired with .wasm)
-├── pdf_oxide_bg.wasm                       ← wasm binary (gitignored; downloaded from releases)
-└── pdf_oxide_asyncify_bg.wasm              ← its Asyncify twin, for apps with `asyncify: true`
-                                               (gitignored; downloaded from releases)
+├── pdf_oxide_bg.<n>.wasm                   ← the wasm binary in 16 MiB parts (gitignored; built or
+│                                              downloaded from releases)
+├── pdf_oxide_asyncify_bg.<n>.wasm          ← its Asyncify twin's parts, for apps with `asyncify: true`
+│                                              (gitignored)
+└── pdf_oxide_manifest.json                 ← the modules, parts and hashes (gitignored)
 
 build.json                                  ← single source of truth: crate name, repo,
                                                cargo features, web asset map
@@ -1609,8 +1647,8 @@ source in the pub tarball compiles locally.
 ## The one-line summary
 
 > **Four layers. One router per instance; lanes lease executors from one pool;
-> adapters decide nothing. One binary format. Native, and three web I/O modes
-> auto-detected (JSPI > Atomics > OPFS), one wasm. Dispose ends lanes and returns
+> adapters decide nothing. One binary format. Native, and four web I/O modes
+> auto-detected (Atomics > JSPI > OPFS > Asyncify), one wasm per mode. Dispose ends lanes and returns
 > executors; an executor is terminated only when it is dead, over the keep line
 > or surplus. Budgets queue, never fail. Bounded memory on every path, measured,
 > with one declared cost per text piece of the page being read.**

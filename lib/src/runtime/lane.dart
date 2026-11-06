@@ -175,9 +175,12 @@ abstract interface class ExecutorBooter {
   /// when the boot fails; a failed boot leaves nothing behind.
   Future<Executor> boot();
 
-  /// This booter's I/O mode — the Router reports it as the instance's
-  /// [PdfIoMode].
-  PdfIoMode get mode;
+  /// Decides this booter's I/O mode, once, and completes with it — the Router
+  /// reports it as the instance's [PdfIoMode]. A web booter learns what the
+  /// app shipped from the network, so the decision is asynchronous; it throws
+  /// `PdfUnsupported` when no mode can run. A failure is not kept: the next
+  /// call decides again.
+  Future<PdfIoMode> resolveMode();
 
   /// How many lanes run at once when the caller doesn't override it, sized
   /// from the platform's CPU count.

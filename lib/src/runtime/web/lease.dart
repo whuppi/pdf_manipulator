@@ -65,11 +65,13 @@
 // session reclaim) and the executor live in host.dart.
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:js_interop';
 import 'dart:math' as math;
 import 'dart:js_interop_unsafe';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:web/web.dart' as web;
 import 'package:web/web.dart' show EventStreamProviders;
 
@@ -84,6 +86,7 @@ import 'package:pdf_manipulator/src/types/pdf_config.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 
 part 'host.dart';
+part 'wasm_loader.dart';
 
 /// Creates the web [ExecutorBooter]. The platform conditional import selects this
 /// where dart:js_interop exists. [config] supplies the lane-worker URL and an

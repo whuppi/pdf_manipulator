@@ -159,7 +159,7 @@ if [ "${SHAKE_AUDIT_WASM:-0}" = "1" ]; then
   [ -n "$WASM_CORE_FEATURES" ] \
     || fail "tool/keep_sets.dart wasm produced no [] features line"
   read -r WASM_CORE_RAW WASM_CORE_GZ <<< "$(measure_wasm "$WASM_CORE_FEATURES")"
-  DEFAULT_RAW=$(fsize "$ROOT/web_assets/pdf_oxide_bg.wasm")
+  DEFAULT_RAW=$(json_get '.pdf_oxide_bg.bytes' "$ROOT/web_assets/pdf_oxide_manifest.json")
   [ "$WASM_CORE_RAW" -lt "$DEFAULT_RAW" ] \
     || fail "core-only wasm not smaller than the full default"
   read -r WASM_FULL_SIZE_RAW WASM_FULL_SIZE_GZ <<< "$(measure_wasm "$WASM_FULL_FEATURES" size)"

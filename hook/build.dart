@@ -95,6 +95,7 @@ import 'package:pdf_manipulator/src/hook/engine_compiler.dart';
 import 'package:pdf_manipulator/src/hook/resolver.dart';
 import 'package:pdf_manipulator/src/hook/keep_plan.dart';
 import 'package:pdf_manipulator/src/hook/pdf_config.dart';
+import 'package:pdf_manipulator/src/hook/wasm_parts.dart';
 
 final _log = Logger('pdf_manipulator:build');
 
@@ -238,11 +239,13 @@ Future<void> _resolveNative({
 // Flutter serves destDir as static files — no registration needed.
 //
 // Two asset types with different compile fallbacks:
-//   WASM build outputs (pdf_oxide_bg.wasm, pdf_oxide.js) → cargo + bindgen_runner
+//   WASM build outputs (the wasm parts, pdf_oxide_manifest.json, pdf_oxide.js)
+//     → cargo + bindgen_runner, cut by writeWasmParts
 //   Hand-written JS (executor_worker.js) → copy from package
 //
-// The Asyncify wasm is resolved only with `asyncify: true`; otherwise nothing
-// of it is downloaded, built or written.
+// The Asyncify parts are resolved only with `asyncify: true`; otherwise
+// nothing of them is downloaded, built or written, and the manifest written
+// beside the worker has no Asyncify entry.
 //
 // Returns the number of files freshly resolved (0 = all cached).
 Future<int> resolveWeb({
@@ -256,51 +259,161 @@ Future<int> resolveWeb({
 }) async {
   final constants = BuildConstants.load(packageRoot);
   // A kept subset OR a non-default build has no prebuilt asset, no pinned
-  // hash, and must not reuse a default-set artifact: force + version 0.0.0
-  // route the resolver straight to a fresh compile.
+  // hash, and must not reuse a default-set artifact: it compiles afresh.
   final custom = wasmFeaturesOverride != null || !engineBuild.isDefault;
-  final effectiveVersion = custom ? '0.0.0' : version;
-  final effectiveForce = force || custom;
 
   if (!destDir.existsSync()) {
     destDir.createSync(recursive: true);
   }
 
+  if (custom) {
+    return _installCustomWeb(
+      packageRoot: packageRoot,
+      destDir: destDir,
+      constants: constants,
+      features: wasmFeaturesOverride ?? constants.wasmFeatures,
+      engineBuild: engineBuild,
+      asyncify: asyncify,
+    );
+  }
+
   var installed = 0;
+  Future<Directory>? outputs;
 
   for (final entry in constants.webAssets.entries) {
     final localName = entry.key;
     final assetName = entry.value;
-    if (localName == asyncifyWebAsset && !asyncify) continue;
-    final dest = File('${destDir.path}/$localName');
-
+    if (!asyncify && localName.startsWith('$asyncifyWasmModule.')) continue;
     final isWasmBuildOutput = constants.wasmBuildOutputs.contains(localName);
-
-    final fresh = await resolveAsset(
-      ResolveRequest(
-        assetName: assetName,
-        downloadUrl: constants.downloadUrl(effectiveVersion, assetName),
-        dest: dest,
-        expectedHash: custom ? null : assetHashes[assetName],
-        version: effectiveVersion,
-        packageRoot: packageRoot,
-        force: effectiveForce,
-        compile: isWasmBuildOutput
-            ? (File d) => _compileWasm(
-                packageRoot,
-                d,
-                localName,
-                wasmFeaturesOverride,
-                engineBuild,
-              )
-            : (File d) => _copyWebAsset(packageRoot, d, localName),
+    Future<void> compile(File d) => _copyBuilt(
+      packageRoot: packageRoot,
+      localName: localName,
+      dest: d,
+      isWasmBuildOutput: isWasmBuildOutput,
+      outputs: () => outputs ??= _defaultWebOutputs(
+        packageRoot,
+        constants,
+        engineBuild,
+        asyncify,
       ),
     );
 
+    final request = ResolveRequest(
+      assetName: assetName,
+      downloadUrl: constants.downloadUrl(version, assetName),
+      dest: File('${destDir.path}/$localName'),
+      expectedHash: assetHashes[assetName],
+      version: version,
+      packageRoot: packageRoot,
+      force: force,
+      compile: compile,
+    );
+
+    final fresh = localName == wasmManifestFile && !asyncify
+        ? await _resolveManifestWithoutAsyncify(request, destDir)
+        : await resolveAsset(request);
     if (fresh) installed++;
   }
 
+  _pruneUnlistedParts(destDir);
   return installed;
+}
+
+/// Resolves the release's manifest, which lists both modules, into [destDir]
+/// without the Asyncify entry. The file on disk is no longer the file the
+/// release hashes, so it stands on the parts instead: it is current when it
+/// has no Asyncify entry and every part it lists is on disk as listed, the
+/// parts having been verified against their pinned hashes.
+Future<bool> _resolveManifestWithoutAsyncify(
+  ResolveRequest request,
+  Directory destDir,
+) async {
+  if (!request.force && request.dest.existsSync()) {
+    try {
+      final onDisk = WasmManifest.load(destDir);
+      if (!onDisk.modules.containsKey(asyncifyWasmModule) &&
+          onDisk.modules.containsKey(normalWasmModule) &&
+          verifyWasmParts(destDir, onDisk).isEmpty) {
+        return false;
+      }
+    } on Object {
+      // Not a manifest: resolved again below.
+    }
+  }
+  final staging = Directory.systemTemp.createTempSync(
+    'pdf_manipulator_manifest_',
+  );
+  try {
+    final full = File('${staging.path}/$wasmManifestFile');
+    await resolveAsset(
+      ResolveRequest(
+        assetName: request.assetName,
+        downloadUrl: request.downloadUrl,
+        dest: full,
+        expectedHash: request.expectedHash,
+        version: request.version,
+        packageRoot: request.packageRoot,
+        force: true,
+        compile: request.compile,
+      ),
+    );
+    WasmManifest.load(staging).without(asyncifyWasmModule).storeIn(destDir);
+    return true;
+  } finally {
+    staging.deleteSync(recursive: true);
+  }
+}
+
+/// A kept subset or a non-default build has no prebuilt asset: one compile in
+/// a temp folder, then every output into [destDir].
+Future<int> _installCustomWeb({
+  required Uri packageRoot,
+  required Directory destDir,
+  required BuildConstants constants,
+  required String features,
+  required EngineBuild engineBuild,
+  required bool asyncify,
+}) async {
+  final built = Directory.systemTemp.createTempSync('pdf_manipulator_wasm_');
+  try {
+    await buildWasmParts(
+      packageRoot: packageRoot,
+      features: features,
+      outDir: built,
+      build: engineBuild,
+      asyncify: asyncify,
+    );
+    final files = [
+      ...WasmManifest.load(built).files,
+      wasmManifestFile,
+      for (final name in constants.wasmBuildOutputs)
+        if (!name.endsWith('.wasm') && name != wasmManifestFile) name,
+    ];
+    for (final name in files) {
+      File('${built.path}/$name').copySync('${destDir.path}/$name');
+    }
+    for (final name in constants.webAssets.keys) {
+      if (constants.wasmBuildOutputs.contains(name)) continue;
+      await _copyWebAsset(packageRoot, File('${destDir.path}/$name'), name);
+      files.add(name);
+    }
+    _pruneUnlistedParts(destDir);
+    return files.length;
+  } finally {
+    built.deleteSync(recursive: true);
+  }
+}
+
+/// Deletes the parts in [destDir] the manifest there does not list: a module
+/// that has fewer parts than it had, or an Asyncify module the app no longer
+/// asks for.
+void _pruneUnlistedParts(Directory destDir) {
+  final listed = WasmManifest.load(destDir).files.toSet();
+  final partName = RegExp(r'^pdf_oxide(_asyncify)?_bg\.\d+\.wasm$');
+  for (final file in destDir.listSync().whereType<File>()) {
+    final name = p.basename(file.path);
+    if (partName.hasMatch(name) && !listed.contains(name)) file.deleteSync();
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -419,84 +532,82 @@ Future<void> _compileNativeFromHook(
   );
 }
 
-// ── Web: WASM build outputs (pdf_oxide.js + pdf_oxide_bg.wasm) ───
+// ── Web: WASM build outputs (pdf_oxide.js, the wasm parts, the manifest) ───
 //
 // Pure Dart + cargo, like the native hook path: compile the engine to
 // wasm32, then run the workspace's own bindgen_runner crate, which
 // executes wasm-bindgen and wasm-opt as library calls resolved from the
 // engine's Cargo.lock. No wasm-bindgen-cli, binaryen, or jq installs —
 // Rust is the only requirement — and the CLI-vs-crate version drift of
-// issue #177 is structurally impossible.
+// issue #177 is structurally impossible. The built modules are cut by
+// writeWasmParts, the cut every producer shares.
 
-Future<void> _compileWasm(
+/// The folder holding the default build's outputs: `web_assets/`, where a
+/// contributor's `make build-wasm` already put them, or built there now. Only
+/// the default build (full features, speed build) may read from or write to
+/// it; a kept subset or a non-default build is a per-app artifact that must
+/// never land there. Built once per setup run.
+Future<Directory> _defaultWebOutputs(
   Uri packageRoot,
-  File dest,
-  String targetFile,
-  String? featuresOverride,
+  BuildConstants constants,
   EngineBuild engineBuild,
+  bool asyncify,
 ) async {
   final webAssets = Directory.fromUri(packageRoot.resolve('web_assets'));
-  final existing = File(p.join(webAssets.path, targetFile));
-
-  // web_assets/ holds the DEFAULT build (full features, speed build).
-  // Only that combination may read from / write to it; a kept subset or a
-  // non-default build is a per-app artifact that must never land there.
-  final isDefaultBuild = featuresOverride == null && engineBuild.isDefault;
-
-  final isAsyncify = targetFile == asyncifyWebAsset;
-  final normal = File(p.join(webAssets.path, 'pdf_oxide_bg.wasm'));
-
-  // Contributor has locally built WASM — copy directly. The Asyncify wasm is
-  // a function of the normal one, so it is copied only while it is newer.
-  if (isDefaultBuild &&
-      existing.existsSync() &&
-      (!isAsyncify ||
-          !normal.existsSync() ||
-          existing.lastModifiedSync().isAfter(normal.lastModifiedSync()))) {
-    dest.parent.createSync(recursive: true);
-    existing.copySync(dest.path);
-    return;
-  }
-
-  if (isDefaultBuild && isAsyncify && normal.existsSync()) {
-    await buildAsyncifyWasm(
-      packageRoot: packageRoot,
-      wasm: normal,
-      out: existing,
-    );
-    dest.parent.createSync(recursive: true);
-    existing.copySync(dest.path);
-    return;
-  }
-
-  final features =
-      featuresOverride ?? BuildConstants.load(packageRoot).wasmFeatures;
-
-  final outDir = isDefaultBuild
-      ? webAssets
-      : Directory.systemTemp.createTempSync('pdf_manipulator_wasm_');
+  final WasmManifest built;
   try {
-    await compileWasmEngine(
+    built = WasmManifest.load(webAssets);
+  } on Object {
+    await buildWasmParts(
       packageRoot: packageRoot,
-      features: features,
-      outDir: outDir,
+      features: constants.wasmFeatures,
+      outDir: webAssets,
       build: engineBuild,
-      asyncify: isAsyncify,
+      asyncify: asyncify,
     );
-
-    final built = File(p.join(outDir.path, targetFile));
-    if (!built.existsSync()) {
-      throw StateError(
-        'WASM compiled but $targetFile not found at ${built.path}',
-      );
-    }
-    dest.parent.createSync(recursive: true);
-    built.copySync(dest.path);
-  } finally {
-    if (!isDefaultBuild) {
-      outDir.deleteSync(recursive: true);
-    }
+    return webAssets;
   }
+  final intact =
+      built.modules.containsKey(normalWasmModule) &&
+      verifyWasmParts(webAssets, built).isEmpty &&
+      File('${webAssets.path}/pdf_oxide.js').existsSync();
+  if (!intact) {
+    await buildWasmParts(
+      packageRoot: packageRoot,
+      features: constants.wasmFeatures,
+      outDir: webAssets,
+      build: engineBuild,
+      asyncify: asyncify,
+    );
+  } else if (asyncify && !built.modules.containsKey(asyncifyWasmModule)) {
+    await buildAsyncifyParts(
+      packageRoot: packageRoot,
+      dir: webAssets,
+      build: engineBuild,
+    );
+  }
+  return webAssets;
+}
+
+/// The compile step of one web asset: the hand-written files are copied from
+/// the package, a build output from [outputs].
+Future<void> _copyBuilt({
+  required Uri packageRoot,
+  required String localName,
+  required File dest,
+  required bool isWasmBuildOutput,
+  required Future<Directory> Function() outputs,
+}) async {
+  if (!isWasmBuildOutput) return _copyWebAsset(packageRoot, dest, localName);
+  final built = File('${(await outputs()).path}/$localName');
+  if (!built.existsSync()) {
+    throw StateError(
+      'WASM compiled but $localName not found at ${built.path}: build.json '
+      'lists a part this build did not cut',
+    );
+  }
+  dest.parent.createSync(recursive: true);
+  built.copySync(dest.path);
 }
 
 // ── Web: hand-written JS (executor_worker.js) ────────────────────────

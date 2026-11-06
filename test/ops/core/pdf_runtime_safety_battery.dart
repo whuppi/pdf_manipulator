@@ -41,7 +41,7 @@ class _ObservedHost implements ExecutorBooter {
   void Function(int jobId)? onResult;
 
   @override
-  PdfIoMode get mode => _inner.mode;
+  Future<PdfIoMode> resolveMode() => _inner.resolveMode();
 
   @override
   int get defaultConcurrency => _inner.defaultConcurrency;
@@ -167,7 +167,7 @@ void registerRuntimeSafetyTests({PdfConfig? Function()? config}) {
     Router make(int maxLanes) {
       host = _ObservedHost(createBooter(config: config?.call()));
       pool = ExecutorPool(host: host);
-      return router = Router(pool: pool, maxLanes: maxLanes, mode: host.mode);
+      return router = Router(pool: pool, maxLanes: maxLanes);
     }
 
     tearDown(() async {

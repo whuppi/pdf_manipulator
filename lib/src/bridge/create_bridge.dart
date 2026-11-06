@@ -21,7 +21,6 @@ PdfBridge createBridge({PdfConfig? config}) {
     Router(
       pool: ExecutorPool.of(host),
       maxLanes: config?.concurrency ?? host.defaultConcurrency,
-      mode: host.mode,
     ),
   );
 }

@@ -47,6 +47,7 @@ import 'dart:async';
 
 import 'package:pdf_manipulator/src/runtime/lane.dart';
 import 'package:pdf_manipulator/src/runtime/wire_peek.dart';
+import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 
 /// Most executors alive at once in one pool. Instances the app never
 /// disposes hold their executor, so the cap must dwarf any sane leak count
@@ -239,6 +240,10 @@ class ExecutorPool {
   bool _prewarmed = false;
   bool _disposed = false;
   int _boots = 0;
+
+  /// The I/O mode of the platform configuration this pool serves, decided by
+  /// its booter; see [ExecutorBooter.resolveMode].
+  Future<PdfIoMode> resolveMode() => _host.resolveMode();
 
   /// Executors this pool booted. Tests only.
   int get bootCount => _boots;

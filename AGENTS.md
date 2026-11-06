@@ -8,7 +8,7 @@
 
 ## What this tool does
 
-**pdf_manipulator** is a cross-platform PDF manipulation package for Dart & Flutter — instance-based API (`final pdf = Pdf()`) with `DataSource` in, `DataSink` out, streaming through bounded buffers (64KB read / 256KB write). Merge, split, compress, encrypt, render, extract text, search, sign, validate, convert, stamp, build from scratch. Powered by vendored forks of pdf_oxide + office_oxide (Rust) at `vendor/`. Lane architecture: one shared Dart Router routing jobs to isolated lanes — detached Rust threads on native, Web Workers + WASM on web (3 I/O modes: JSPI, Atomics, OPFS) — every operation runs off the main thread, with per-op cancellation and instant dispose. No `dart:io` in the barrel. 5-step asset resolution: cached → download → compile → submodule → error.
+**pdf_manipulator** is a cross-platform PDF manipulation package for Dart & Flutter — instance-based API (`final pdf = Pdf()`) with `DataSource` in, `DataSink` out, streaming through bounded buffers (64KB read / 256KB write). Merge, split, compress, encrypt, render, extract text, search, sign, validate, convert, stamp, build from scratch. Powered by vendored forks of pdf_oxide + office_oxide (Rust) at `vendor/`. Lane architecture: one shared Dart Router routing jobs to isolated lanes — detached Rust threads on native, Web Workers + WASM on web (4 I/O modes: Atomics, JSPI, OPFS, Asyncify) — every operation runs off the main thread, with per-op cancellation and instant dispose. No `dart:io` in the barrel. 5-step asset resolution: cached → download → compile → submodule → error.
 
 The architecture, design and reference docs for this code live in `./docs/`. They are the authority on how it is shaped.
 
@@ -32,7 +32,7 @@ make check DART=dart FLUTTER=flutter
 # Individual targets
 make analyze                    # Dart + Rust warnings (all features)
 make test-ops-native            # native FFI ops tests
-make test-ops-web               # web ops tests (JSPI, Atomics, OPFS)
+make test-ops-web               # web ops tests (OPFS, JSPI, Atomics, Asyncify, auto mode)
 make test-example               # integration tests (macOS + 3 web modes)
 make build-wasm                 # rebuild WASM after Rust changes
 ```

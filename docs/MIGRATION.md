@@ -158,6 +158,7 @@ try {
 
 ### Removed
 
+- `pdf_oxide_bg.wasm` and `pdf_oxide_asyncify_bg.wasm` in a precache list, a hosting rule or a deploy script: the web assets are `pdf_oxide_bg.<n>.wasm` (and, with `asyncify: true`, `pdf_oxide_asyncify_bg.<n>.wasm`) listed in `pdf_oxide_manifest.json`. Run setup again, delete the old whole files from `web/pdf_manipulator/`, and list the parts the manifest names where the whole file was listed; serve `.wasm` as `application/wasm`.
 - `compress(garbageCollect:)`: it always collects garbage. Its `images` default is `PdfImagePolicy.lossless`; pass `PdfImagePolicy.ebook` for the old result.
 - `imagesToPdf` on A4 pages: each page has its image's size; pass `page: PdfImagePage(size: PdfImagePageSize.fixed(PdfPageSize.a4()))` for A4.
 - `split`, `splitBySize` and `splitByBookmarks`: one `split(input, sinkFor, by: PdfSplitRule.every(n))`, or `.maxBytes(n)`, or `.bookmarks()`.
