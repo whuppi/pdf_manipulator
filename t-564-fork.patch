@@ -1,0 +1,32 @@
+diff --git a/src/host/wasm/js_reader.rs b/src/host/wasm/js_reader.rs
+index 1f5d1d3..ed4ed72 100644
+--- a/src/host/wasm/js_reader.rs
++++ b/src/host/wasm/js_reader.rs
+@@ -23,10 +23,11 @@ use wasm_bindgen::prelude::*;
+ 
+ // Imported from the JS global scope (self.host_read_at in executor_worker.js).
+ // Uses u32 for buf_ptr because wasm_bindgen doesn't support raw pointers.
+-// WASM pointers are u32. Cast at the call site.
++// WASM pointers are u32. Cast at the call site. The offset is an f64, a JS
++// number: exact to 2^53, where a u32 would wrap a read past 4 GiB.
+ #[wasm_bindgen]
+ extern "C" {
+-    fn host_read_at(source_index: u32, offset: u32, count: u32, buf_ptr: u32) -> i32;
++    fn host_read_at(source_index: u32, offset: f64, count: u32, buf_ptr: u32) -> i32;
+ }
+ 
+ /// Source reader backed by the `host_read_at` extern import.
+@@ -75,11 +76,11 @@ impl Read for JsCallbackReader {
+             }
+             self.window_len = 0;
+             let remaining = self.length - self.position;
+-            let to_read = (remaining as usize).min(self.window.len());
++            let to_read = remaining.min(self.window.len() as u64) as usize;
+ 
+             let n = host_read_at(
+                 self.source_index,
+-                self.position as u32,
++                self.position as f64,
+                 to_read as u32,
+                 self.window.as_mut_ptr() as u32,
+             );
