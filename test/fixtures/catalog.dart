@@ -146,7 +146,7 @@ final List<FixtureSpec> catalog = [
     name: 'outline_chapters',
     why:
         'Three chapters of two pages each with a foreign-produced '
-        'outline tree — planSplitByBookmarks / splitByBookmarks must '
+        'outline tree — bookmarkRanges / splitByBookmarks must '
         'prove themselves against /Outlines this package did not write.',
     truths: {
       'pages': 6,

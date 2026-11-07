@@ -24,9 +24,9 @@ Future<void> use(Pdf pdf, DataSource src, DataSink out) async {
   await pdf.compress(src, out);                                  // render
   await pdf.sign(src, out,
       credentials: const PdfSigningCredentials.pem('c', 'k'));   // signatures
-  await pdf.convertTo(src, out, format: PdfDocumentFormat.docx); // office
+  await pdf.convertTo(src, out, format: PdfOfficeFormat.docx); // office
   final doc = await pdf.open(src);
-  await doc.extract(pages: const PdfPages.all());                // extract
+  await doc.extractText(out);                                       // extract
   await doc.dispose();
   final e = await pdf.edit(src);
   await e.convertToPdfA();                                       // pdfa
@@ -40,7 +40,7 @@ const _unrelated = '''
 class Reporter {
   void sign(String name) {}
   void render(Object canvas) {}
-  String extract(String raw) => raw;
+  String extractText(String raw) => raw;
 }
 ''';
 
@@ -79,7 +79,7 @@ void main() {
     );
     expect(
       result.matchedMembers,
-      containsAll(<String>{'compress', 'sign', 'convertTo', 'extract'}),
+      containsAll(<String>{'compress', 'sign', 'convertTo', 'extractText'}),
     );
   });
 
@@ -107,6 +107,35 @@ void main() {
     expect(result.keep, isEmpty);
   });
 
+  test('redaction alone keeps render', () async {
+    // Redaction rewrites images and meshes, which a build without
+    // rendering refuses, so every redaction member must keep it.
+    const marks = '''
+import 'package:pdf_manipulator/pdf_manipulator.dart';
+
+Future<void> use(PdfEditor editor, PdfRect box) => editor.markRedaction(0, box);
+''';
+    const applies = '''
+import 'package:pdf_manipulator/pdf_manipulator.dart';
+
+Future<void> use(Pdf pdf, DataSource src, DataSink out) =>
+    pdf.applyRedactions(src, out);
+''';
+    const composite = '''
+import 'package:pdf_manipulator/pdf_manipulator.dart';
+
+Future<void> use(PdfEdits edits, PdfRect box) => edits.redact(0, [box]);
+''';
+    for (final source in [marks, applies, composite]) {
+      final dir = _fixture({'main.dart': source});
+      addTearDown(() => dir.deleteSync(recursive: true));
+
+      final result = detectCapabilities(dir.path);
+      expect(result.resolved, isTrue);
+      expect(result.keep, {PdfCapability.render});
+    }
+  });
+
   test('usage through a re-export barrel is detected', () async {
     final dir = _fixture({
       'deps/barrel.dart':
@@ -124,8 +153,8 @@ Future<void> use(Pdf pdf, DataSource src, DataSink out) => pdf.sign(src, out,
       'render_flow.dart': '''
 import 'package:fixture_app/deps/deps.dart';
 
-Stream<RenderedPage> use(PdfDoc doc) =>
-    doc.render(pages: const PdfPages.all());
+Future<List<PdfRenderedPage>> use(PdfDocument doc) =>
+    doc.render((page) => MemorySink(), pages: const PdfPages.all());
 ''',
     });
     addTearDown(() => dir.deleteSync(recursive: true));
@@ -201,7 +230,7 @@ import 'package:pdf_manipulator/pdf_manipulator.dart';
 
 // Merge the pages, then render them.
 /// Later we could render thumbnails here.
-/* A block note: sign and extract are not used.
+/* A block note: sign and extractText are not used.
    /* nested: convertToPdfA */ still inside: convertTo */
 Future<void> use(Pdf pdf, DataSource a, DataSource b, DataSink out) =>
     pdf.merge([a, b], out);
@@ -225,7 +254,8 @@ Future<void> use(Pdf pdf, DataSource a, DataSource b, DataSink out) =>
       'main.dart': '''
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
-String use(PdfDoc doc) => 'pages: \${doc.render(pages: const PdfPages.all())}';
+String use(PdfDocument doc) =>
+    'pages: \${doc.render((p) => MemorySink(), pages: const PdfPages.all())}';
 ''',
     });
     addTearDown(() => dir.deleteSync(recursive: true));
@@ -248,7 +278,7 @@ String use(PdfDoc doc) => 'pages: \${doc.render(pages: const PdfPages.all())}';
       'main.dart': '''
 import 'package:pdf_manipulator/pdf_manipulator.dart';
 
-Future<void> use(PdfDoc doc) async { const u = 'http://x'; await doc.extract(pages: const PdfPages.all()); }
+Future<void> use(PdfDocument doc, DataSink out) async { const u = 'http://x'; await doc.extractText(out); }
 ''',
     });
     addTearDown(() => dir.deleteSync(recursive: true));

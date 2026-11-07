@@ -1,4 +1,4 @@
-// PdfTask — the unhandled-error physics, unit-tested directly.
+// PdfTask — the unhandled-error behaviour, unit-tested directly.
 //
 // These are the load-bearing guarantees the integration suites can
 // only observe as side effects:
@@ -34,7 +34,7 @@ Future<List<Object>> _zoneErrors(Future<void> Function() body) async {
 }
 
 void main() {
-  group('PdfTask zone physics', () {
+  group('PdfTask zone rules', () {
     test('awaited success delivers the value, zone stays clean', () async {
       final errors = await _zoneErrors(() async {
         final completer = Completer<int>();
@@ -106,7 +106,7 @@ void main() {
     test('cancel drives the hook and is idempotent', () {
       final hook = CancelHook();
       var fired = 0;
-      hook.bind(() => fired++);
+      hook.register(() => fired++);
       final task = PdfTask.internal(Completer<int>().future, hook);
 
       expect(task.isCancelled, isFalse);
@@ -119,7 +119,7 @@ void main() {
     test('map preserves the cancel hook — child cancel reaches the job', () {
       final hook = CancelHook();
       var fired = 0;
-      hook.bind(() => fired++);
+      hook.register(() => fired++);
       final completer = Completer<int>();
       final parent = PdfTask.internal(completer.future, hook);
 
@@ -164,7 +164,7 @@ void main() {
     test('group cancel lands on the step currently in flight', () async {
       final stepHook = CancelHook();
       var stepCancelled = 0;
-      stepHook.bind(() => stepCancelled++);
+      stepHook.register(() => stepCancelled++);
       final stepCompleter = Completer<int>();
       final step = PdfTask.internal(stepCompleter.future, stepHook);
 
@@ -190,7 +190,7 @@ void main() {
     test('cancel before guard cancels the next step on sight', () async {
       final stepHook = CancelHook();
       var stepCancelled = 0;
-      stepHook.bind(() => stepCancelled++);
+      stepHook.register(() => stepCancelled++);
       final stepCompleter = Completer<int>();
       final step = PdfTask.internal(stepCompleter.future, stepHook);
 
@@ -213,29 +213,57 @@ void main() {
       await expectLater(task, throwsA(isA<PdfCancelled>()));
     });
 
-    test('a later guard replaces the earlier step binding', () async {
-      final firstHook = CancelHook();
-      var firstCancelled = 0;
-      firstHook.bind(() => firstCancelled++);
-      final secondHook = CancelHook();
-      var secondCancelled = 0;
-      secondHook.bind(() => secondCancelled++);
+    test(
+      'a finished step is unregistered; the live step is cancelled',
+      () async {
+        final firstHook = CancelHook();
+        var firstCancelled = 0;
+        firstHook.register(() => firstCancelled++);
+        final secondHook = CancelHook();
+        var secondCancelled = 0;
+        secondHook.register(() => secondCancelled++);
 
-      final first = Completer<int>();
-      final second = Completer<int>();
+        final first = Completer<int>();
+        final second = Completer<int>();
 
-      final task = PdfTask.group<int>((hook) async {
-        await hook.guard(PdfTask.internal(first.future, firstHook));
-        return hook.guard(PdfTask.internal(second.future, secondHook));
+        final task = PdfTask.group<int>((hook) async {
+          await hook.guard(PdfTask.internal(first.future, firstHook));
+          return hook.guard(PdfTask.internal(second.future, secondHook));
+        });
+
+        first.complete(1); // step one done — its action leaves the group hook
+        await Future<void>.delayed(Duration.zero);
+        task.cancel();
+        expect(firstCancelled, 0, reason: 'finished steps are never poked');
+        expect(secondCancelled, 1);
+
+        second.completeError(const PdfCancelled());
+        await expectLater(task, throwsA(isA<PdfCancelled>()));
+      },
+    );
+
+    test('a cancel reaches every step still in flight', () async {
+      final hooks = [CancelHook(), CancelHook()];
+      final cancelled = [0, 0];
+      for (var i = 0; i < hooks.length; i++) {
+        hooks[i].register(() => cancelled[i]++);
+      }
+      final completers = [Completer<int>(), Completer<int>()];
+
+      final task = PdfTask.group<void>((hook) async {
+        await Future.wait([
+          for (var i = 0; i < hooks.length; i++)
+            hook.guard(PdfTask.internal(completers[i].future, hooks[i])),
+        ]);
       });
 
-      first.complete(1); // step one done — binding moves to step two
       await Future<void>.delayed(Duration.zero);
       task.cancel();
-      expect(firstCancelled, 0, reason: 'finished steps are never poked');
-      expect(secondCancelled, 1);
+      expect(cancelled, [1, 1]);
 
-      second.completeError(const PdfCancelled());
+      for (final c in completers) {
+        c.completeError(const PdfCancelled());
+      }
       await expectLater(task, throwsA(isA<PdfCancelled>()));
     });
   });

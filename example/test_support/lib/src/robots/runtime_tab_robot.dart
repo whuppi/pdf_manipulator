@@ -18,16 +18,13 @@ class RuntimeTabRobot extends Robot {
   /// (The TabBar and TabBarView pager are horizontal; this is the only
   /// vertical one.)
   Finder get _demoList => find.descendant(
-        of: find.byType(ListView),
-        matching: find.byType(Scrollable),
-      );
+    of: find.byType(ListView),
+    matching: find.byType(Scrollable),
+  );
 
   /// Run a demo by its visible title (the button is keyed 'run:<title>').
   Future<void> runDemo(String title) {
-    return scrollToAndTap(
-      find.byKey(ValueKey('run:$title')),
-      list: _demoList,
-    );
+    return scrollToAndTap(find.byKey(ValueKey('run:$title')), list: _demoList);
   }
 
   /// Wait until the status bar contains [text] (a demo's success line),

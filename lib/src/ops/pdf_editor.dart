@@ -1,50 +1,30 @@
-// PdfEditor — mutations only. Parse once, mutate many, save once.
+// PdfEditor — the editor a scope body gets, and PdfEditorHandle, the one
+// `Pdf.edit` returns. Parse once, mutate many, save once.
 //
-// Every method here modifies the document. Read/export ops that don't
-// modify belong on PdfDoc (queries) or PdfStandalone (one-shot export).
-// Even if the Rust engine implements a non-mutating op on DocumentEditor,
-// it must NOT be exposed here — wrap it as standalone or doc query instead.
+// Every edit is declared once on PdfEdits. What is here is what an edit
+// object of one call cannot offer: reads of the edited document, the queued
+// redaction protocol and the per-field editor. Only the handle saves and
+// disposes.
 
-import 'package:pdf_manipulator/src/ops/pdf.dart';
-import 'package:pdf_manipulator/src/ops/pdf_doc.dart';
-import 'package:pdf_manipulator/src/types/data_sink.dart';
-import 'package:pdf_manipulator/src/types/data_source.dart';
-import 'package:pdf_manipulator/src/types/errors.dart';
-import 'package:pdf_manipulator/src/types/pdf_attachment.dart';
-import 'package:pdf_manipulator/src/types/pdf_enums.dart';
-import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
-import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
-import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
-import 'package:pdf_manipulator/src/types/pdf_task.dart';
-import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
-import 'package:pdf_manipulator/src/types/pdf_params.dart';
-import 'package:pdf_manipulator/src/bridge/pdf_bridge.dart';
-import 'package:pdf_manipulator/src/types/pdf_rect.dart';
-import 'package:pdf_manipulator/src/types/pdf_redaction_report.dart';
-import 'package:pdf_manipulator/src/types/pdf_sanitize_options.dart';
-import 'package:pdf_manipulator/src/keep/record_use_shim.dart';
+part of 'pdf.dart';
 
-/// Mutable PDF editor — parse once, mutate many times, save once.
-class PdfEditor {
+/// A mutable PDF editor — what a [Pdf.rewrite] body edits: every edit of
+/// [PdfEdits] plus reads of the document as the edits have left it. The
+/// library saves it when the body returns.
+base class PdfEditor extends PdfEdits {
   /// Internal constructor — use [Pdf.edit] to create instances.
-  PdfEditor.internal(
-    PdfBridge _,
-    this._handle, {
-    PdfEncryptionAlgorithm? sourceEncryption,
-    PdfPermissions? sourcePermissions,
-    String? password,
-    PdfDoc? sourceDoc,
-  }) : _sourceEncryption = sourceEncryption,
-       _sourcePermissions = sourcePermissions,
-       _password = password,
-       _sourceDoc = sourceDoc;
+  @internal
+  PdfEditor.internal(this._pdf, this._handle) : super._();
 
+  final Pdf _pdf;
   final BridgeEditorHandle _handle;
-  final PdfEncryptionAlgorithm? _sourceEncryption;
-  final PdfPermissions? _sourcePermissions;
-  final String? _password;
-  final PdfDoc? _sourceDoc;
   bool _disposed = false;
+
+  @override
+  PdfTask<T> _run<T>(PdfTask<T> Function(BridgeEditorHandle handle) apply) {
+    _check();
+    return apply(_handle);
+  }
 
   void _check() {
     if (_disposed) throw StateError('This PdfEditor has been disposed');
@@ -53,477 +33,144 @@ class PdfEditor {
   // ── Properties ──
 
   /// Current number of pages in the document.
-  PdfTask<int> get pageCount {
+  PdfTask<int> pageCount() {
     _check();
-    return _handle.pageCount;
+    return _handle.pageCount();
   }
 
   /// PDF version string of the document.
-  PdfTask<String> get version {
+  PdfTask<String> version() {
     _check();
-    return _handle.version;
+    return _handle.version();
   }
 
   /// Whether unsaved modifications exist.
-  PdfTask<bool> get isModified {
+  PdfTask<bool> isModified() {
     _check();
-    return _handle.isModified;
+    return _handle.isModified();
   }
 
   // ── Metadata ──
 
-  /// Returns the document title metadata.
-  PdfTask<String> get title {
+  /// Returns the document's standard info fields as the edited document
+  /// has them now; a field it does not carry is null.
+  PdfTask<PdfMetadata> metadata() {
     _check();
-    return _handle.title;
-  }
-
-  /// Sets the document title metadata.
-  PdfTask<void> setTitle(String value) {
-    _check();
-    return _handle.setTitle(value);
-  }
-
-  /// Returns the document author metadata.
-  PdfTask<String> get author {
-    _check();
-    return _handle.author;
-  }
-
-  /// Sets the document author metadata.
-  PdfTask<void> setAuthor(String value) {
-    _check();
-    return _handle.setAuthor(value);
-  }
-
-  /// Returns the document subject metadata.
-  PdfTask<String> get subject {
-    _check();
-    return _handle.subject;
-  }
-
-  /// Sets the document subject metadata.
-  PdfTask<void> setSubject(String value) {
-    _check();
-    return _handle.setSubject(value);
-  }
-
-  /// Returns the document keywords metadata.
-  PdfTask<String> get keywords {
-    _check();
-    return _handle.keywords;
-  }
-
-  /// Sets the document keywords metadata.
-  PdfTask<void> setKeywords(String value) {
-    _check();
-    return _handle.setKeywords(value);
-  }
-
-  /// Returns the document producer metadata (the software that produced the PDF).
-  PdfTask<String> get producer {
-    _check();
-    return _handle.producer;
-  }
-
-  /// Sets the document producer metadata.
-  PdfTask<void> setProducer(String value) {
-    _check();
-    return _handle.setProducer(value);
-  }
-
-  /// Returns the document creation date as a raw PDF date string
-  /// (e.g. `D:20240101120000Z`).
-  PdfTask<String> get creationDate {
-    _check();
-    return _handle.creationDate;
-  }
-
-  /// Sets the document creation date. Expects a raw PDF date string
-  /// (e.g. `D:20240101120000Z`).
-  PdfTask<void> setCreationDate(String value) {
-    _check();
-    return _handle.setCreationDate(value);
+    return _handle.metadata();
   }
 
   // ── Pages ──
 
-  /// Rotates a single [page] by [degrees] (must be a multiple of 90).
-  PdfTask<void> rotatePage(int page, {required int degrees}) {
+  /// Returns the facts of [pages] (every page by default) as the edited
+  /// document has them now: boxes, rotation and label. A label is the
+  /// catalog's page-label entry for the page's position in the edited
+  /// document.
+  PdfTask<List<PdfPageInfo>> pageInfo({PdfPages pages = const PdfPages.all()}) {
     _check();
-    return _handle.rotatePage(page, degrees: degrees);
+    return _handle.pageInfo(pages: pages);
   }
 
-  /// Rotates all pages by [degrees] (must be a multiple of 90).
-  PdfTask<void> rotateAllPages({required int degrees}) {
-    _check();
-    return _handle.rotateAllPages(degrees: degrees);
-  }
-
-  /// Returns the media box (bounding rectangle) of the given [page].
-  PdfTask<PdfRect> pageMediaBox(int page) {
-    _check();
-    return _handle.pageMediaBox(page);
-  }
-
-  /// Returns the crop box (visible/printable rectangle) of the given
-  /// [page], or `null` when the page has no `/CropBox` (it then defaults
-  /// to the media box; absence is reported rather than the inherited
-  /// value).
-  PdfTask<PdfRect?> pageCropBox(int page) {
-    _check();
-    return _handle.pageCropBox(page);
-  }
-
-  /// Sets the media box (bounding rectangle) of the given [page].
-  PdfTask<void> setPageMediaBox(int page, PdfRect box) {
-    _check();
-    return _handle.setPageMediaBox(page, box);
-  }
-
-  /// Sets the crop box (visible/printable rectangle) of the given [page].
-  PdfTask<void> setPageCropBox(int page, PdfRect box) {
-    _check();
-    return _handle.setPageCropBox(page, box);
-  }
-
-  /// Sets the absolute rotation of [page] to [degrees] (0, 90, 180 or
-  /// 270), replacing any existing rotation. Unlike [rotatePage] this does
-  /// not add to the current rotation.
-  PdfTask<void> setPageRotation(int page, {required int degrees}) {
-    _check();
-    if (degrees % 90 != 0) {
-      throw PdfInvalidArgument('degrees must be a multiple of 90: $degrees');
-    }
-    return _handle.setPageRotation(page, degrees: degrees);
-  }
-
-  /// Removes the given [page] (0-based index) from the document.
-  PdfTask<void> deletePage(int page) {
-    _check();
-    return _handle.deletePage(page);
-  }
-
-  /// Moves the page at index [from] to index [to].
-  PdfTask<void> movePage({required int from, required int to}) {
-    _check();
-    return _handle.movePage(from: from, to: to);
-  }
-
-  /// Keeps only the specified [pages] (by index), removing all others.
-  PdfTask<void> selectPages(List<int> pages) {
-    _check();
-    return _handle.selectPages(pages);
-  }
-
-  /// Appends pages from [otherPdf] at the end of this document: every
-  /// page, or only [pages] (0-based, in the order given). An index past
-  /// the other document's last page throws [PdfEngineError].
-  PdfTask<void> mergeFrom(DataSource otherPdf, {List<int>? pages}) {
-    _check();
-    return _handle.mergeFrom(otherPdf, pages: pages);
-  }
-
-  // ── Optimization ──
-
-  /// Re-encodes and downsamples every image drawn on the document's pages
-  /// under [policy] — `PdfImagePolicy.screen`, `.ebook`, `.print`,
-  /// `.lossless`, or your own numbers — and reports one row per image.
-  ///
-  /// Placement never changes: [pageImages] reads the same names, bounds
-  /// and transforms afterwards. A replacement is written only when it is
-  /// smaller than the original; soft masks are resampled with their
-  /// image; JPEG 2000, JBIG2, spot-colour and colour-key-masked images
-  /// are reported as kept. Only images drawn by page content (directly or
-  /// through Form XObjects) are visited: an image referenced solely from an
-  /// annotation appearance stream or a pattern, and inline `BI … EI`
-  /// images, are left as stored and do not appear in the report.
-  PdfTask<PdfImageReport> reduceImages(PdfImagePolicy policy) {
-    KeepRecord.op('render');
-    _check();
-    return _handle.reduceImages(policy);
-  }
-
-  /// Removes embedded copies of standard PDF fonts to reduce file size.
-  PdfTask<int> unembedStandardFonts() {
-    _check();
-    return _handle.unembedStandardFonts();
-  }
-
-  // ── Watermark + stamps ──
-
-  /// Adds a text watermark to the specified [page].
-  PdfTask<void> addWatermark(
-    int page,
-    String text, {
-    PdfWatermarkStyle style = const PdfWatermarkStyle(),
-    PdfWatermarkPosition position = const PdfWatermarkPosition.center(),
-    PdfWatermarkLayer layer = PdfWatermarkLayer.foreground,
+  /// Appends pages from [from] at the end of this document: every page, or
+  /// only [pages] (0-based; the pages of the selection are appended in
+  /// document order). [PdfInput.password] opens an encrypted [from]; a
+  /// missing or wrong one throws the typed password error. A page past the
+  /// other document's last page fails with [PdfEngineFailed].
+  PdfTask<void> appendPages(
+    PdfInput from, {
+    PdfPages pages = const PdfPages.all(),
   }) {
     _check();
-    return _handle.addWatermark(
-      page,
-      text,
-      style: style,
-      position: position,
-      layer: layer,
+    return PdfTask.group((hook) async {
+      final opened = await from.opened;
+      try {
+        final selection = await _resolveFrom(hook, opened.source, from, pages);
+        await hook.guard(
+          _handle.appendPages(
+            opened.source,
+            pages: selection,
+            password: from.password,
+          ),
+        );
+      } finally {
+        await opened.close();
+      }
+    });
+  }
+
+  /// A selection from a page to the last needs the page count of the
+  /// document being appended, which is read by opening it once.
+  Future<PdfPages> _resolveFrom(
+    CancelHook hook,
+    DataSource source,
+    PdfInput from,
+    PdfPages pages,
+  ) async {
+    if (pages is! PdfPagesFrom) return pages;
+    final count = await hook.guard(
+      _own(
+        _pdf.open(PdfInput(source, password: from.password)),
+        (doc, _) async => doc.pageCount,
+      ),
     );
-  }
-
-  /// Adds a predefined stamp annotation to the specified [page].
-  PdfTask<void> addStamp(
-    int page, {
-    required PdfStampType type,
-    required PdfRect rect,
-    double opacity = 1.0,
-  }) {
-    _check();
-    return _handle.addStamp(page, type: type, rect: rect, opacity: opacity);
-  }
-
-  /// Adds a custom image stamp to the specified [page].
-  PdfTask<void> addImageStamp(
-    int page,
-    DataSource imageData, {
-    required PdfRect rect,
-    double opacity = 1.0,
-  }) {
-    _check();
-    return _handle.addImageStamp(page, imageData, rect: rect, opacity: opacity);
-  }
-
-  // ── Content ──
-
-  /// Embeds [data] as an attached file with the given [name].
-  ///
-  /// [description] and [mimeType] go into the file spec, where
-  /// `PdfDoc.attachments` reads them back; [relationship] states how the
-  /// file relates to this document.
-  PdfTask<void> embedFile(
-    String name,
-    DataSource data, {
-    String? description,
-    String? mimeType,
-    PdfAttachmentRelationship? relationship,
-  }) {
-    _check();
-    return _handle.embedFile(
-      name,
-      data,
-      description: description,
-      mimeType: mimeType,
-      relationship: relationship,
-    );
-  }
-
-  /// Erases content within the specified [regions] on [page].
-  PdfTask<void> eraseRegions(int page, List<PdfRect> regions) {
-    _check();
-    return _handle.eraseRegions(page, regions);
-  }
-
-  /// Clears the destructive-erase regions queued on [page] by
-  /// [eraseRegions] without applying them.
-  PdfTask<void> clearEraseRegions(int page) {
-    _check();
-    return _handle.clearEraseRegions(page);
-  }
-
-  /// Flattens interactive form fields into static content. With no
-  /// [page], every page is flattened; with [page], only that page's
-  /// widgets are, leaving the rest of the form fillable.
-  PdfTask<void> flattenForms({int? page}) {
-    _check();
-    return _handle.flattenForms(page: page);
-  }
-
-  /// Flattens annotations (forms, comments, stamps) into static content.
-  /// With no [page], every page is flattened; with [page], only that
-  /// page's annotations are.
-  PdfTask<void> flattenAnnotations({int? page}) {
-    _check();
-    return _handle.flattenAnnotations(page: page);
-  }
-
-  /// Sets the value of the form field identified by [fieldName].
-  ///
-  /// On a button field (checkbox or radio) the value is an appearance-state
-  /// name — `'Yes'`, `'On'`, or whichever name that widget uses — not text to
-  /// draw. Pass `'Off'` to clear it. Use [setCheckboxFieldValue] for a
-  /// checkbox whose state name you do not know.
-  PdfTask<void> setFormFieldValue(String fieldName, String value) {
-    _check();
-    return _handle.setFormFieldValue(fieldName, value);
-  }
-
-  /// Checks or clears the checkbox field identified by [fieldName].
-  ///
-  /// Selects whichever on-state the widget offers, so this works on a box
-  /// named `/On` or `/1` as well as the common `/Yes`.
-  PdfTask<void> setCheckboxFieldValue(String fieldName, bool checked) {
-    _check();
-    return _handle.setCheckboxFieldValue(fieldName, checked);
-  }
-
-  /// Crops all pages by the specified margins (in points).
-  PdfTask<void> cropMargins({
-    double left = 0,
-    double right = 0,
-    double top = 0,
-    double bottom = 0,
-  }) {
-    _check();
-    return _handle.cropMargins(
-      left: left,
-      right: right,
-      top: top,
-      bottom: bottom,
-    );
+    return pages.start < count
+        ? PdfPagesRange(pages.start, count)
+        : PdfPagesSingle(pages.start);
   }
 
   /// Lists the images placed on [page] (0-based): each one's resource
-  /// [PdfPageImage.name], its placement [PdfPageImage.bounds] in points
-  /// and the full [PdfPageImage.transform]. The name is what [resizeImage]
-  /// takes. A page with no images returns an empty list; a page index out
-  /// of range throws [PdfEngineError].
-  PdfTask<List<PdfPageImage>> pageImages(int page) {
+  /// [PdfImagePlacement.name], its placement [PdfImagePlacement.bounds] in points
+  /// and the full [PdfImagePlacement.transform]. The name is what
+  /// [PdfEdits.setImageBounds] takes. A page with no images returns an empty
+  /// list; a page index out of range throws [PdfPageOutOfRange].
+  PdfTask<List<PdfImagePlacement>> pageImages(int page) {
     _check();
     return _handle.pageImages(page);
   }
 
-  /// Resizes the named image on [page] to [width] x [height] points.
-  PdfTask<void> resizeImage(
-    int page,
-    String imageName, {
-    required double width,
-    required double height,
-  }) {
-    _check();
-    return _handle.resizeImage(page, imageName, width: width, height: height);
-  }
+  // ── Forms ──
 
-  /// Moves the named image on [page] so its lower-left corner sits at
-  /// ([x], [y]) in points; the size is unchanged. Names come from
-  /// [pageImages].
-  PdfTask<void> repositionImage(
-    int page,
-    String imageName, {
-    required double x,
-    required double y,
-  }) {
-    _check();
-    return _handle.repositionImage(page, imageName, x: x, y: y);
-  }
-
-  /// Moves and resizes the named image on [page] to [bounds] in points in
-  /// one edit. Names come from [pageImages], whose `bounds` this mirrors.
-  PdfTask<void> setImageBounds(int page, String imageName, PdfRect bounds) {
-    _check();
-    return _handle.setImageBounds(page, imageName, bounds);
-  }
-
-  // ── Form field properties ──
-
-  /// Removes the form field [name], and its widget annotation, from the
-  /// document.
-  PdfTask<void> removeFormField(String name) {
-    _check();
-    return _handle.removeFormField(name);
-  }
-
-  /// Sets whether the form field [name] can be edited by the user.
-  PdfTask<void> setFormFieldReadOnly(String name, bool readOnly) {
-    _check();
-    return _handle.setFormFieldReadOnly(name, readOnly);
-  }
-
-  /// Sets whether the form field [name] must have a value on submit.
-  PdfTask<void> setFormFieldRequired(String name, bool required) {
-    _check();
-    return _handle.setFormFieldRequired(name, required);
-  }
-
-  /// Sets the form field [name]'s tooltip, shown when a viewer hovers it.
-  PdfTask<void> setFormFieldTooltip(String name, String tooltip) {
-    _check();
-    return _handle.setFormFieldTooltip(name, tooltip);
-  }
-
-  /// Sets the bounding rectangle of the form field [name]'s first widget.
-  PdfTask<void> setFormFieldBounds(String name, PdfRect bounds) {
-    _check();
-    return _handle.setFormFieldBounds(name, bounds);
-  }
-
-  /// Sets the maximum number of characters the text field [name] accepts.
-  PdfTask<void> setFormFieldMaxLength(String name, int maxLength) {
-    _check();
-    return _handle.setFormFieldMaxLength(name, maxLength);
-  }
-
-  /// Sets the text field [name]'s content alignment.
-  PdfTask<void> setFormFieldAlignment(String name, PdfTextAlignment alignment) {
-    _check();
-    return _handle.setFormFieldAlignment(name, alignment);
-  }
-
-  /// Sets the form field [name]'s widget background color.
-  PdfTask<void> setFormFieldBackgroundColor(String name, PdfColor color) {
-    _check();
-    return _handle.setFormFieldBackgroundColor(name, color);
-  }
-
-  /// Sets the form field [name]'s widget border color.
-  PdfTask<void> setFormFieldBorderColor(String name, PdfColor color) {
-    _check();
-    return _handle.setFormFieldBorderColor(name, color);
-  }
-
-  /// Sets the form field [name]'s widget border width, in points.
-  PdfTask<void> setFormFieldBorderWidth(String name, double width) {
-    _check();
-    return _handle.setFormFieldBorderWidth(name, width);
-  }
-
-  /// Sets the form field [name]'s default appearance: [font] is a resource
-  /// name such as `Helv`, [fontSize] in points, and text [color].
-  PdfTask<void> setFormFieldAppearance(
-    String name, {
-    required String font,
-    required double fontSize,
-    PdfColor color = PdfColor.black,
-  }) {
-    _check();
-    return _handle.setFormFieldAppearance(
-      name,
-      font: font,
-      fontSize: fontSize,
-      color: color,
-    );
-  }
-
-  /// Sets the form field [name]'s `/Ff` bits to the OR of [flags].
-  PdfTask<void> setFormFieldFlags(String name, Set<PdfFormFieldFlag> flags) {
-    _check();
-    return _handle.setFormFieldFlags(name, flags);
-  }
-
-  /// Converts the document to PDF/A at the given conformance [level].
-  PdfTask<void> convertToPdfA({int level = 1}) {
-    KeepRecord.op('pdfa');
-    _check();
-    return _handle.convertToPdfA(level: level);
-  }
+  /// The edits of the form field [name], its fully qualified (dotted) name.
+  /// Nothing is looked up until an edit runs: a name the document has no
+  /// field for fails that edit with [PdfEngineFailed].
+  PdfFormFieldEditor field(String name) =>
+      PdfFormFieldEditor._((editor: this, name: name));
 
   // ── Redaction ──
 
-  /// Marks a [region] on [page] for redaction (applied with [applyRedactions]).
-  PdfTask<void> addRedaction(int page, PdfRect region, {String? overlayText}) {
+  /// Marks each of [regions] on [page] for redaction: nothing changes until
+  /// [applyRedactions]. [overlay] is what is drawn over each region then, a
+  /// box by default; `PdfRedactionOverlay.none()` draws nothing, so the mark
+  /// erases. The engine draws no text over a redaction. An empty [regions]
+  /// throws [ArgumentError].
+  PdfTask<void> markRedaction(
+    int page,
+    List<PdfRect> regions, {
+    PdfRedactionOverlay overlay = const PdfRedactionOverlay.fill(
+      PdfColor.black,
+    ),
+  }) {
+    if (regions.isEmpty) {
+      throw ArgumentError.value(regions, 'regions', 'must not be empty');
+    }
+    KeepRecord.op('render');
     _check();
-    return _handle.addRedaction(page, region, overlayText: overlayText);
+    return PdfTask.group((hook) async {
+      for (final region in regions) {
+        await hook.guard(_handle.markRedaction(page, region, overlay));
+      }
+    });
   }
 
-  /// Returns the number of pending redaction marks on [page].
+  /// Drops every mark queued by [markRedaction], on every page, without
+  /// applying it. A `/Redact` annotation the document carries is not a queued
+  /// mark and stays.
+  PdfTask<void> clearRedactions() {
+    _check();
+    return _handle.clearRedactions();
+  }
+
+  /// Returns the number of pending redaction marks on [page]: the queued
+  /// ones and the `/Redact` annotations the document carries.
   PdfTask<int> redactionCount(int page) {
     _check();
     return _handle.redactionCount(page);
@@ -532,68 +179,143 @@ class PdfEditor {
   /// Permanently applies all pending redaction marks, removing content,
   /// and reports what was removed.
   PdfTask<PdfRedactionReport> applyRedactions() {
+    KeepRecord.op('render');
     _check();
     return _handle.applyRedactions();
   }
+}
 
-  /// Removes all document metadata (title, author, timestamps, etc.).
-  /// Equivalent to `sanitize(const PdfSanitizeOptions(javascript: false))`.
-  PdfTask<void> scrubMetadata() {
+/// A [PdfEditor] you own: the handle [Pdf.edit] returns.
+///
+/// Call [dispose] when you are done, on every path including errors. For one
+/// edit pass, use [Pdf.rewrite] (several edits, one save) or [Pdf.editOnce]
+/// (one edit), which open, save and always close. A handle you forget is
+/// released when the garbage collector frees it, and in debug mode the leak
+/// is logged with where it was opened; that is a backstop, not a plan.
+final class PdfEditorHandle extends PdfEditor implements _Handle {
+  /// Internal constructor — use [Pdf.edit] to create instances.
+  @internal
+  PdfEditorHandle.internal(
+    super.pdf,
+    super.handle, {
+    required Future<void> Function() release,
+  }) : _close = _closing(handle.dispose, release),
+       super.internal() {
+    HandleBackstop.attach(this, 'PdfEditorHandle', _close);
+  }
+
+  final Future<void> Function() _close;
+
+  @override
+  void _scopeTo(CancelHook hook) => _handle.scope = hook;
+
+  /// Writes the modified document to [output] with the given [save]
+  /// strategy. The sink stays the caller's: it is aborted when the save
+  /// fails or is cancelled, and never closed.
+  PdfTask<void> save(DataSink output, {PdfSave save = const PdfSave.full()}) {
     _check();
-    return _handle.scrubMetadata();
+    return _handle.save(output, save: save);
   }
 
-  /// Strips metadata, JavaScript and/or embedded files per [options].
-  PdfTask<void> sanitize(PdfSanitizeOptions options) {
-    _check();
-    return _handle.sanitize(options);
-  }
-
-  // ── Save ──
-
-  /// Writes the modified document to [output] with the given save [options].
-  PdfTask<void> save(
-    DataSink output, {
-    PdfSaveOptions options = const PdfSaveOptions.fullRewrite(),
-  }) {
-    _check();
-    final resolved = _resolveEncryption(options);
-    return _handle.save(output, options: resolved);
-  }
-
-  PdfSaveOptions _resolveEncryption(PdfSaveOptions options) {
-    if (_sourceEncryption == null) return options;
-    return switch (options) {
-      PdfSaveFullRewrite(
-        :final compress,
-        :final garbageCollect,
-        :final encryption,
-      ) =>
-        encryption is PdfEncryptionKeep
-            ? PdfSaveOptions.fullRewrite(
-                compress: compress,
-                garbageCollect: garbageCollect,
-                encryption: PdfEncryption.config(
-                  ownerPassword: _password ?? '',
-                  userPassword: _password ?? '',
-                  algorithm: _sourceEncryption,
-                  permissions: _sourcePermissions ?? const PdfPermissions.all(),
-                ),
-              )
-            : options,
-      PdfSaveIncremental() => options,
-    };
-  }
-
-  // ── Lifecycle ──
-
-  /// Releases editor resources and the underlying doc handle. Idempotent.
+  /// Releases the editor, and the source when the input owns it.
+  /// Idempotent.
+  @override
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
-    await _handle.dispose();
-    // Dispose the doc handle that edit() opened for metadata reading.
-    // Without this, the doc handle leaks (pinned worker, held source).
-    await _sourceDoc?.dispose();
+    HandleBackstop.detach(this);
+    await _close();
   }
+}
+
+/// The edits of one form field, from `editor.field(name)`. Each edit is one
+/// engine call on the open editor and is saved with it.
+extension type PdfFormFieldEditor._(({PdfEditor editor, String name}) _field) {
+  BridgeEditorHandle get _handle {
+    _field.editor._check();
+    return _field.editor._handle;
+  }
+
+  String get _name => _field.name;
+
+  /// Sets the field's value. [PdfFormFieldValue.text] fills a text field, or
+  /// names the state of a checkbox or radio group; [PdfFormFieldValue.checked]
+  /// checks or clears a checkbox; [PdfFormFieldValue.choice] selects one
+  /// option of a combo box, list box or radio group by its export value,
+  /// and [PdfFormFieldValue.choices] the options of a multi-select list box;
+  /// [PdfFormFieldValue.none] clears the value. A choice the field does not
+  /// offer, and a value of a kind the field cannot hold, throw
+  /// [PdfEngineFailed] and change nothing. The widget is drawn from the
+  /// new value.
+  PdfTask<void> setValue(PdfFormFieldValue value) => switch (value) {
+    PdfTextValue(:final text) => _handle.setFormFieldValue(_name, text),
+    PdfCheckedValue(:final isChecked) => _handle.setCheckboxFieldValue(
+      _name,
+      isChecked,
+    ),
+    PdfChoiceValue(:final choice) => _handle.setFormFieldChoice(_name, choice),
+    PdfMultiChoiceValue(:final choices) => _handle.setFormFieldChoices(
+      _name,
+      choices,
+    ),
+    PdfNoValue() => _handle.clearFormFieldValue(_name),
+  };
+
+  /// Sets whether the user can edit the field.
+  PdfTask<void> setReadOnly(bool isReadOnly) =>
+      _handle.setFormFieldReadOnly(_name, isReadOnly);
+
+  /// Sets whether the field must have a value on submit.
+  PdfTask<void> setRequired(bool isRequired) =>
+      _handle.setFormFieldRequired(_name, isRequired);
+
+  /// Sets the tooltip a viewer shows when it hovers the field; null removes
+  /// it.
+  PdfTask<void> setTooltip(String? tooltip) =>
+      _handle.setFormFieldTooltip(_name, tooltip);
+
+  /// Sets the bounding rectangle of the field's first widget.
+  PdfTask<void> setBounds(PdfRect bounds) =>
+      _handle.setFormFieldBounds(_name, bounds);
+
+  /// Sets the maximum number of characters the text field accepts; null
+  /// removes the limit.
+  PdfTask<void> setMaxLength(int? maxLength) =>
+      _handle.setFormFieldMaxLength(_name, maxLength);
+
+  /// Sets the alignment of the text field's content.
+  PdfTask<void> setAlignment(PdfAlignment alignment) =>
+      _handle.setFormFieldAlignment(_name, alignment);
+
+  /// Sets the widget's background color; null removes it.
+  PdfTask<void> setBackgroundColor(PdfColor? color) =>
+      _handle.setFormFieldBackgroundColor(_name, color);
+
+  /// Sets the widget's border color; null removes it.
+  PdfTask<void> setBorderColor(PdfColor? color) =>
+      _handle.setFormFieldBorderColor(_name, color);
+
+  /// Sets the widget's border width, in points.
+  PdfTask<void> setBorderWidth(double width) =>
+      _handle.setFormFieldBorderWidth(_name, width);
+
+  /// Sets the field's default appearance: [font] is a resource name such as
+  /// `Helv`, [fontSize] in points, and text [color].
+  PdfTask<void> setAppearance({
+    required String font,
+    required double fontSize,
+    PdfColor color = PdfColor.black,
+  }) => _handle.setFormFieldAppearance(
+    _name,
+    font: font,
+    fontSize: fontSize,
+    color: color,
+  );
+
+  /// Sets the field's `/Ff` bits to the OR of [flags].
+  PdfTask<void> setFlags(Set<PdfFormFieldFlag> flags) =>
+      _handle.setFormFieldFlags(_name, flags);
+
+  /// Removes the field and its widget from the document.
+  PdfTask<void> remove() => _handle.removeFormField(_name);
 }

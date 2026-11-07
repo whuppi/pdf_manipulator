@@ -7,7 +7,7 @@ import 'package:meta/meta.dart';
 /// `a` and `d` are its drawn width and height and `e`, `f` its lower-left
 /// corner.
 @immutable
-class PdfMatrix {
+final class PdfMatrix {
   /// Creates a transform from its six coefficients.
   const PdfMatrix({
     required this.a,
@@ -38,6 +38,19 @@ class PdfMatrix {
 
   /// Whether the transform rotates or skews (any non-zero `b` or `c`).
   bool get isAxisAligned => b == 0 && c == 0;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfMatrix &&
+      other.a == a &&
+      other.b == b &&
+      other.c == c &&
+      other.d == d &&
+      other.e == e &&
+      other.f == f;
+
+  @override
+  int get hashCode => Object.hash(a, b, c, d, e, f);
 
   @override
   String toString() => 'PdfMatrix($a, $b, $c, $d, $e, $f)';

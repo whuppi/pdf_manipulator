@@ -14,8 +14,10 @@
 import 'package:pdf_manipulator_example_test_support/pdf_manipulator_example_test_support.dart';
 
 void main() {
-  testJourneyAcrossDevices('runtime: demos reachable + tappable',
-      (tester, device) async {
+  testJourneyAcrossDevices('runtime: demos reachable + tappable', (
+    tester,
+    device,
+  ) async {
     final app = AppRobot(tester);
     await app.launch();
 

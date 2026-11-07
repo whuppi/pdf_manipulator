@@ -36,6 +36,7 @@ class PdfManipulatorConfig {
     required this.detector,
     required this.build,
     required this.scanDirs,
+    required this.asyncify,
   });
 
   /// What capabilities the engine keeps ([KeepConfig.all] / a manual set /
@@ -56,10 +57,24 @@ class PdfManipulatorConfig {
   /// actually scans — see [parse].
   final List<String> scanDirs;
 
+  /// Whether the web setup also provides the Asyncify engine, the wasm that
+  /// lets a browser with neither JSPI nor `SharedArrayBuffer` stream like
+  /// JSPI instead of copying every input to the browser's storage first.
+  /// Web only: the native hook accepts the key, so one pubspec serves both,
+  /// and ships nothing for it. Default false: nothing new is downloaded or
+  /// built.
+  final bool asyncify;
+
   /// The only keys allowed under `pdf_manipulator:`. Anything else is a typo
   /// or a stranded option and fails the build (where the key set is visible —
   /// see [parse]).
-  static const knownKeys = {'keep', 'detector', 'build', 'scan-dirs'};
+  static const knownKeys = {
+    'keep',
+    'detector',
+    'build',
+    'scan-dirs',
+    'asyncify',
+  };
 
   /// Parses [defines] (the raw `pdf_manipulator:` map). Throws [PdfConfigError]
   /// on any invalid value, unknown key, or axis mismatch.
@@ -83,6 +98,7 @@ class PdfManipulatorConfig {
     final detector = KeepDetector.parse(defines['detector']);
     final build = EngineBuild.parse(defines['build']);
     final scanDirs = _parseScanDirs(defines['scan-dirs']);
+    final asyncify = _parseAsyncify(defines['asyncify']);
 
     // The one cross-axis coupling: `detector` picks HOW `auto` detects, so it
     // means nothing unless `keep` is auto. Setting it otherwise is a mistake —
@@ -124,7 +140,21 @@ class PdfManipulatorConfig {
       detector: detector,
       build: build,
       scanDirs: scanDirs,
+      asyncify: asyncify,
     );
+  }
+
+  /// Parses the raw `asyncify` value: a YAML boolean. Absent → false.
+  static bool _parseAsyncify(Object? raw) {
+    if (raw == null) return false;
+    if (raw is! bool) {
+      throw PdfConfigError(
+        'asyncify: takes true or false (got "$raw").\n'
+        'Example:\n'
+        '  asyncify: true',
+      );
+    }
+    return raw;
   }
 
   /// Parses the raw `scan-dirs` value: a list of app-relative directory

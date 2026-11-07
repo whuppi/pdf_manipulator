@@ -14,12 +14,24 @@ import 'dart:typed_data';
 ///
 /// Implement with your backing store: file (pread), memory
 /// (sublistView), HTTP (Range header), IndexedDB, web Blob.slice.
+///
+/// A source must stay readable while a handle opened from it is live: a
+/// document or an editor reads it again for as long as it is open. On web a
+/// source of up to 16 MiB per lane is copied once into the worker when the job
+/// starts, and that copy is what the job reads.
+///
+/// Whoever obtained a source closes it. The library never closes a source
+/// it was passed.
 abstract interface class DataSource {
   /// Total size in bytes.
   int get length;
 
   /// Read [count] bytes starting at [offset].
   FutureOr<Uint8List> readAt(int offset, int count);
+
+  /// Releases whatever the source holds (a file handle, a connection).
+  /// Idempotent. A source that holds nothing implements it as a no-op.
+  FutureOr<void> close();
 }
 
 /// Read the entire DataSource into bytes. Used internally by the

@@ -7,12 +7,20 @@
     "wasm": "wasm,icc,legacy-crypto,rendering,signatures,pdfa,office,extract"
   },
   "web": {
-    "pdf_oxide_bg.wasm": "wasm-pdf_oxide_bg.wasm",
+    "pdf_oxide_bg.0.wasm": "wasm-pdf_oxide_bg.0.wasm",
+    "pdf_oxide_bg.1.wasm": "wasm-pdf_oxide_bg.1.wasm",
+    "pdf_oxide_asyncify_bg.0.wasm": "wasm-pdf_oxide_asyncify_bg.0.wasm",
+    "pdf_oxide_asyncify_bg.1.wasm": "wasm-pdf_oxide_asyncify_bg.1.wasm",
+    "pdf_oxide_manifest.json": "wasm-pdf_oxide_manifest.json",
     "pdf_oxide.js": "wasm-pdf_oxide.js",
-    "lane_worker.js": "wasm-lane_worker.js"
+    "executor_worker.js": "wasm-executor_worker.js"
   },
   "wasmBuildOutputs": [
-    "pdf_oxide_bg.wasm",
+    "pdf_oxide_bg.0.wasm",
+    "pdf_oxide_bg.1.wasm",
+    "pdf_oxide_asyncify_bg.0.wasm",
+    "pdf_oxide_asyncify_bg.1.wasm",
+    "pdf_oxide_manifest.json",
     "pdf_oxide.js"
   ]
 }

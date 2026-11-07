@@ -16,182 +16,420 @@ class _SharedBuilderHandle extends BridgeBuilderHandle {
   final SharedBridge _bridge;
   final int _handleId;
 
+  /// The one resource that covers every image source the builder holds; null
+  /// until the first image is added.
+  int? _heldResourceId;
+
+  /// Runs [op] with [source] held until the builder is disposed: the engine
+  /// reads an image from it when the builder is saved, not when it is added.
+  PdfTask<Map<String, Object?>> _holdingSource(
+    EngineOp op,
+    Map<String, Object?> args,
+    DataSource source,
+  ) => _bridge
+      ._execKeepSource(
+        op,
+        {'handleId': _handleId, ...args},
+        source: source,
+        scope: scope,
+      )
+      .map((res) {
+        _heldResourceId ??= res.resourceId;
+        return res.map;
+      });
+
   PdfTask<Map<String, Object?>> _exec(EngineOp op, Map<String, Object?> args) =>
-      _bridge._exec(op, {'handleId': _handleId, ...args});
+      _bridge._exec(op, {'handleId': _handleId, ...args}, scope: scope);
 
   @override
-  PdfTask<void> setTitle(String value) =>
-      _exec(EngineOp.builderSetMetadata, {'title': value});
-  @override
-  PdfTask<void> setAuthor(String value) =>
-      _exec(EngineOp.builderSetMetadata, {'author': value});
-  @override
-  PdfTask<void> setSubject(String value) =>
-      _exec(EngineOp.builderSetMetadata, {'subject': value});
-  @override
-  PdfTask<void> setKeywords(String value) =>
-      _exec(EngineOp.builderSetMetadata, {'keywords': value});
+  PdfTask<void> setMetadata(PdfMetadata metadata) =>
+      _exec(EngineOp.builderSetMetadata, {
+        'title': metadata.title,
+        'author': metadata.author,
+        'subject': metadata.subject,
+        'keywords': metadata.keywords,
+        'creator': metadata.creator,
+        'producer': metadata.producer,
+        'creationDate': _dateArg(metadata.creationDate),
+        'modDate': _dateArg(metadata.modificationDate),
+      });
 
   @override
-  PdfTask<BridgePageBuilderHandle> addA4Page() => _exec(
+  PdfTask<BridgePageBuilderHandle> addPage(PdfPageSize size) => _exec(
     EngineOp.builderAddPage,
-    {'pageType': 'a4'},
-  ).map((_) => _SharedPageBuilderHandle(_bridge, _handleId));
-  @override
-  PdfTask<BridgePageBuilderHandle> addLetterPage() => _exec(
-    EngineOp.builderAddPage,
-    {'pageType': 'letter'},
-  ).map((_) => _SharedPageBuilderHandle(_bridge, _handleId));
-  @override
-  PdfTask<BridgePageBuilderHandle> addPage({
-    required double width,
-    required double height,
-  }) => _exec(EngineOp.builderAddPage, {
-    'width': width,
-    'height': height,
-  }).map((_) => _SharedPageBuilderHandle(_bridge, _handleId));
+    _pageSizeArgs(size),
+  ).map((_) => _SharedPageBuilderHandle(this, _bridge, _handleId, scope));
 
   @override
-  PdfTask<void> save(DataSink output) => _bridge._exec(
+  PdfTask<BridgePageBuilderHandle> addImagePage(
+    DataSource imageData, {
+    PdfImagePage page = const PdfImagePage(),
+  }) => _holdingSource(
+    EngineOp.builderAddImagePage,
+    {
+      'sourceLength': imageData.length,
+      if (page.size case PdfImagePageSizeFixed(:final size)) ...{
+        'width': size.width,
+        'height': size.height,
+      },
+      'fit': page.fit.wire,
+      'margin': page.margin,
+    },
+    imageData,
+  ).map((_) => _SharedPageBuilderHandle(this, _bridge, _handleId, scope));
+
+  @override
+  PdfTask<void> save(DataSink output, {bool deflate = true}) => _bridge._exec(
     EngineOp.builderSave,
-    {'handleId': _handleId},
+    {'handleId': _handleId, 'deflate': deflate},
     sinks: [output],
+    scope: scope,
   );
   @override
-  Future<void> dispose() => _exec(EngineOp.builderDispose, {});
+  Future<void> dispose() async {
+    await _bridge._exec(EngineOp.builderDispose, {'handleId': _handleId});
+    final resourceId = _heldResourceId;
+    if (resourceId != null) {
+      await _bridge._transport.releaseSource(resourceId);
+    }
+  }
 }
+
+/// The wire arguments of a page size: the engine's own names for the two
+/// it knows, the dimensions for the rest.
+Map<String, Object?> _pageSizeArgs(PdfPageSize size) => switch (size) {
+  PdfPageSizeA4() => {'pageType': 'a4'},
+  PdfPageSizeLetter() => {'pageType': 'letter'},
+  _ => {'width': size.width, 'height': size.height},
+};
+
+/// The wire argument of a date: the PDF date string the editor's dates
+/// travel as.
+String? _dateArg(DateTime? value) =>
+    value == null ? null : codec.putDate(value);
 
 // ══════════════════════════════════════════════════════════════════
 // Page builder handle
 // ══════════════════════════════════════════════════════════════════
 
 class _SharedPageBuilderHandle extends BridgePageBuilderHandle {
-  _SharedPageBuilderHandle(this._bridge, this._handleId);
+  _SharedPageBuilderHandle(
+    this._builder,
+    this._bridge,
+    this._handleId,
+    this._scope,
+  );
+  final _SharedBuilderHandle _builder;
   final SharedBridge _bridge;
   final int _handleId;
+  final CancelHook? _scope;
 
-  PdfTask<void> _op(String op, [Map<String, Object?> extra = const {}]) =>
+  PdfTask<void> _op(PageOp op, [Map<String, Object?> extra = const {}]) =>
       _bridge._exec(EngineOp.builderPageOp, {
         'handleId': _handleId,
-        'pageOp': op,
+        'pageOp': op.wire,
         ...extra,
-      });
+      }, scope: _scope);
+
+  /// Runs [first], then each of [then] that is not null, one engine op
+  /// after the other, in one cancellable task.
+  PdfTask<void> _sequence(
+    PdfTask<void> Function() first,
+    List<PdfTask<void> Function()?> then,
+  ) => PdfTask.group((hook) async {
+    await hook.guard(first());
+    for (final step in then) {
+      if (step != null) await hook.guard(step());
+    }
+  });
+
+  /// The ops that anchor [link] and [markup] on the text just written.
+  List<PdfTask<void> Function()?> _anchors(PdfLink? link, PdfMarkup? markup) =>
+      [
+        if (link != null) () => _link(link),
+        if (markup != null) () => _markup(markup),
+      ];
+
+  PdfTask<void> _link(PdfLink link) => switch (link) {
+    PdfLinkUrl(:final url) => _op(PageOp.linkUrl, {'url': url}),
+    PdfLinkPage(:final page) => _op(PageOp.linkPage, {'targetPage': page}),
+    PdfLinkNamed(:final destination) => _op(PageOp.linkNamed, {
+      'destination': destination,
+    }),
+    PdfLinkJavaScript(:final script) => _op(PageOp.linkJavaScript, {
+      'script': script,
+    }),
+  };
+
+  PdfTask<void> _markup(PdfMarkup markup) {
+    final op = switch (markup.kind) {
+      PdfMarkupKind.highlight => PageOp.highlight,
+      PdfMarkupKind.underline => PageOp.underline,
+      PdfMarkupKind.strikeout => PageOp.strikeout,
+      PdfMarkupKind.squiggly => PageOp.squiggly,
+    };
+    final ink =
+        markup.color ??
+        (markup.kind == PdfMarkupKind.highlight
+            ? PdfColor.yellow
+            : PdfColor.black);
+    return _op(op, codec.encodeColorArgs(ink));
+  }
+
+  /// The ops that attach the scripts a field carries, after the field.
+  List<PdfTask<void> Function()?> _scripts(PdfFieldScripts scripts) => [
+    if (scripts.keystroke case final script?)
+      () => _op(PageOp.fieldKeystroke, {'script': script}),
+    if (scripts.format case final script?)
+      () => _op(PageOp.fieldFormat, {'script': script}),
+    if (scripts.validate case final script?)
+      () => _op(PageOp.fieldValidate, {'script': script}),
+    if (scripts.calculate case final script?)
+      () => _op(PageOp.fieldCalculate, {'script': script}),
+  ];
 
   @override
-  PdfTask<void> font(String name, double size) =>
-      _op('font', {'name': name, 'size': size});
+  PdfTask<void> setFont(String name, double size) =>
+      _op(PageOp.font, {'name': name, 'size': size});
   @override
-  PdfTask<void> at(double x, double y) => _op('at', {'x': x, 'y': y});
+  PdfTask<void> moveTo(PdfPoint point) =>
+      _op(PageOp.at, {'x': point.x, 'y': point.y});
   @override
-  PdfTask<void> text(String text) => _op('text', {'text': text});
+  PdfTask<void> text(
+    String text, {
+    PdfTextStyle? style,
+    PdfLink? link,
+    PdfMarkup? markup,
+  }) => _sequence(
+    () => _op(PageOp.text, {'text': text, ..._styleArgs(style)}),
+    _anchors(link, markup),
+  );
   @override
   PdfTask<void> heading(int level, String text) =>
-      _op('heading', {'level': level, 'text': text});
+      _op(PageOp.heading, {'level': level, 'text': text});
   @override
-  PdfTask<void> paragraph(String text) => _op('paragraph', {'text': text});
+  PdfTask<void> paragraph(String text) => _op(PageOp.paragraph, {'text': text});
   @override
-  PdfTask<void> space(double points) => _op('space', {'points': points});
+  PdfTask<void> space(double points) => _op(PageOp.space, {'points': points});
   @override
-  PdfTask<void> horizontalRule() => _op('horizontalRule');
+  PdfTask<void> horizontalRule() => _op(PageOp.horizontalRule);
   @override
   PdfTask<void> image(
     DataSource imageData,
-    PdfRect rect, {
-    String altText = '',
-  }) => _bridge._exec(
-    EngineOp.builderPageOp,
-    {
-      'handleId': _handleId,
-      'pageOp': 'image',
-      'sourceLength': imageData.length,
-      ...codec.encodeRectArgs(rect),
-      'altText': altText,
-    },
-    sources: [imageData],
+    PdfRect bounds, {
+    String? altText,
+  }) => _builder._holdingSource(EngineOp.builderPageOp, {
+    'pageOp': (altText == null ? PageOp.imageArtifact : PageOp.image).wire,
+    'sourceLength': imageData.length,
+    ...codec.encodeRectArgs(bounds),
+    if (altText != null) 'altText': altText,
+  }, imageData);
+  @override
+  PdfTask<void> watermark(String text) => _op(PageOp.watermark, {'text': text});
+  @override
+  PdfTask<void> textField(
+    String name,
+    PdfRect bounds, {
+    String? value,
+    required PdfFieldScripts scripts,
+  }) => _sequence(
+    () => _op(PageOp.textField, {
+      'name': name,
+      ...codec.encodeRectArgs(bounds),
+      'defaultValue': value,
+    }),
+    _scripts(scripts),
   );
   @override
-  PdfTask<void> watermark(String text) => _op('watermark', {'text': text});
-  @override
-  PdfTask<void> textField(String name, PdfRect rect, {String? defaultValue}) =>
-      _op('textField', {
-        'name': name,
-        ...codec.encodeRectArgs(rect),
-        'defaultValue': defaultValue,
-      });
-  @override
-  PdfTask<void> checkbox(String name, PdfRect rect, {bool checked = false}) =>
-      _op('checkbox', {
-        'name': name,
-        ...codec.encodeRectArgs(rect),
-        'checked': checked,
-      });
+  PdfTask<void> checkbox(
+    String name,
+    PdfRect bounds, {
+    required bool isChecked,
+    required PdfFieldScripts scripts,
+  }) => _sequence(
+    () => _op(PageOp.checkbox, {
+      'name': name,
+      ...codec.encodeRectArgs(bounds),
+      'checked': isChecked,
+    }),
+    _scripts(scripts),
+  );
   @override
   PdfTask<void> comboBox(
     String name,
-    PdfRect rect,
+    PdfRect bounds,
     List<String> options, {
     String? selected,
-  }) => _op('comboBox', {
-    'name': name,
-    ...codec.encodeRectArgs(rect),
-    'options': options,
-    'selected': selected,
-  });
-  @override
-  PdfTask<void> pushButton(String name, PdfRect rect, String caption) => _op(
-    'pushButton',
-    {'name': name, ...codec.encodeRectArgs(rect), 'caption': caption},
+    required PdfFieldScripts scripts,
+  }) => _sequence(
+    () => _op(PageOp.comboBox, {
+      'name': name,
+      ...codec.encodeRectArgs(bounds),
+      'options': options,
+      'selected': selected,
+    }),
+    _scripts(scripts),
   );
   @override
-  PdfTask<void> signatureField(String name, PdfRect rect) =>
-      _op('signatureField', {'name': name, ...codec.encodeRectArgs(rect)});
+  PdfTask<void> pushButton(String name, PdfRect bounds, String caption) => _op(
+    PageOp.pushButton,
+    {'name': name, ...codec.encodeRectArgs(bounds), 'caption': caption},
+  );
+  @override
+  PdfTask<void> signatureField(String name, PdfRect bounds) => _op(
+    PageOp.signatureField,
+    {'name': name, ...codec.encodeRectArgs(bounds)},
+  );
   @override
   PdfTask<void> radioGroup(
     String name,
-    List<({String value, PdfRect rect})> options, {
+    List<PdfRadioOption> options, {
     String? selected,
-  }) => _op('radioGroup', {
-    'name': name,
-    'options': options
-        .map(
-          (o) => <String, Object?>{
-            'value': o.value,
-            ...codec.encodeRectArgs(o.rect),
-          },
-        )
-        .toList(),
-    'selected': selected,
-  });
-  @override
-  PdfTask<void> fieldKeystroke(String script) =>
-      _op('fieldKeystroke', {'script': script});
-  @override
-  PdfTask<void> fieldFormat(String script) =>
-      _op('fieldFormat', {'script': script});
-  @override
-  PdfTask<void> fieldValidate(String script) =>
-      _op('fieldValidate', {'script': script});
-  @override
-  PdfTask<void> fieldCalculate(String script) =>
-      _op('fieldCalculate', {'script': script});
-  @override
-  PdfTask<void> linkUrl(String url) => _op('linkUrl', {'url': url});
-  @override
-  PdfTask<void> linkPage(int targetPage) =>
-      _op('linkPage', {'targetPage': targetPage});
-  @override
-  PdfTask<void> footnote(String refMark, String noteText) =>
-      _op('footnote', {'refMark': refMark, 'noteText': noteText});
-  @override
-  PdfTask<void> columns(int columnCount, double gapPt, String text) => _op(
-    'columns',
-    {'columnCount': columnCount, 'gapPt': gapPt, 'text': text},
+    required PdfFieldScripts scripts,
+  }) => _sequence(
+    () => _op(PageOp.radioGroup, {
+      'name': name,
+      'options': options
+          .map(
+            (o) => <String, Object?>{
+              'value': o.value,
+              ...codec.encodeRectArgs(o.bounds),
+            },
+          )
+          .toList(),
+      'selected': selected,
+    }),
+    _scripts(scripts),
   );
   @override
-  PdfTask<void> newline() => _op('newline');
+  PdfTask<void> footnote(String mark, String note) =>
+      _op(PageOp.footnote, {'refMark': mark, 'noteText': note});
   @override
-  PdfTask<void> newPageSameSize() => _op('newPageSameSize');
+  PdfTask<void> appendText(
+    String text, {
+    PdfTextStyle? style,
+    PdfLink? link,
+    PdfMarkup? markup,
+  }) => _sequence(
+    () => _op(PageOp.inline, {'text': text, ..._styleArgs(style)}),
+    _anchors(link, markup),
+  );
   @override
-  PdfTask<void> done() =>
-      _bridge._exec(EngineOp.builderPageDone, {'handleId': _handleId});
+  PdfTask<void> textIn(
+    PdfRect bounds,
+    String text, {
+    PdfAlignment align = PdfAlignment.left,
+  }) => _op(PageOp.textIn, {
+    ...codec.encodeRectArgs(bounds),
+    'text': text,
+    'align': codec.putEnum(align),
+  });
+  @override
+  PdfTask<void> rect(PdfRect rect, {PdfColor? fill, PdfStroke? stroke}) {
+    return PdfTask.group((hook) async {
+      if (fill != null) {
+        await hook.guard(
+          _op(PageOp.filledRect, {
+            ...codec.encodeRectArgs(rect),
+            ...codec.encodeColorArgs(fill),
+          }),
+        );
+      }
+      if (stroke != null) {
+        await hook.guard(
+          _op(PageOp.strokeRect, {
+            ...codec.encodeRectArgs(rect),
+            ..._strokeArgs(stroke),
+          }),
+        );
+      }
+    });
+  }
+
+  @override
+  PdfTask<void> line(
+    PdfPoint from,
+    PdfPoint to, {
+    PdfStroke stroke = const PdfStroke(),
+  }) => _op(PageOp.strokeLine, {
+    'x1': from.x,
+    'y1': from.y,
+    'x2': to.x,
+    'y2': to.y,
+    ..._strokeArgs(stroke),
+  });
+
+  @override
+  PdfTask<void> stickyNote(String text, {PdfPoint? at}) =>
+      _op(PageOp.stickyNote, {'text': text, 'x': at?.x, 'y': at?.y});
+
+  @override
+  PdfTask<void> stamp(PdfStamp stamp) =>
+      _op(PageOp.stamp, {'stampType': codec.putEnum(stamp)});
+  @override
+  PdfTask<void> freeText(PdfRect bounds, String text) =>
+      _op(PageOp.freeText, {...codec.encodeRectArgs(bounds), 'text': text});
+  @override
+  PdfTask<void> table(
+    List<PdfTableColumn> columns,
+    List<List<PdfTableCell>> rows, {
+    PdfTableOptions options = const PdfTableOptions(),
+  }) {
+    // The engine measures one sample of rows: `autoAll` sends every row
+    // as the sample, so every row is measured.
+    final autoAll = options.sizing == PdfTableSizing.autoAll;
+    final mode = autoAll ? PdfTableSizing.sample : options.sizing;
+    return _op(PageOp.streamingTable, {
+      'headers': columns.map((c) => c.header).toList(),
+      // -1: no width; the engine keeps its own default for the column.
+      'widths': columns.map((c) => c.width ?? -1.0).toList(),
+      'aligns': codec.putEnums(columns.map((c) => c.align)),
+      'cells': [for (final row in rows) ...row.map((c) => c.text)],
+      'rowSpans': [for (final row in rows) ...row.map((c) => c.rowSpan)],
+      'columnCount': columns.length,
+      'repeatHeader': options.repeatHeader,
+      'hasHeader': options.header,
+      'mode': mode.wire,
+      'sampleRows': autoAll
+          ? (rows.isEmpty ? 1 : rows.length)
+          : options.sampleRows,
+      'minColWidth': options.minColumnWidth,
+      'maxColWidth': options.maxColumnWidth,
+      'maxRowSpan': options.maxRowSpan,
+    });
+  }
+
+  @override
+  PdfTask<void> columns(int count, double gap, String text) =>
+      _op(PageOp.columns, {'columnCount': count, 'gapPt': gap, 'text': text});
+  @override
+  PdfTask<void> newline() => _op(PageOp.newline);
+  @override
+  PdfTask<void> onOpen(String script) => _op(PageOp.onOpen, {'script': script});
+  @override
+  PdfTask<void> onClose(String script) =>
+      _op(PageOp.onClose, {'script': script});
 }
+
+/// The wire arguments of a text style: only the fields that override the
+/// page's own font, size and colour travel.
+Map<String, Object?> _styleArgs(PdfTextStyle? style) {
+  if (style == null) return const {};
+  final color = style.color;
+  return {
+    if (style.font != null) 'font': style.font,
+    if (style.size != null) 'size': style.size,
+    if (style.bold) 'bold': true,
+    if (style.italic) 'italic': true,
+    if (color != null) ...codec.encodeColorArgs(color),
+  };
+}
+
+/// The wire arguments of a stroke: the line width, its colour and its
+/// dash pattern.
+Map<String, Object?> _strokeArgs(PdfStroke stroke) => {
+  'lineWidth': stroke.width,
+  ...codec.encodeColorArgs(stroke.color),
+  'dash': stroke.dash,
+  'dashPhase': stroke.dashPhase,
+};

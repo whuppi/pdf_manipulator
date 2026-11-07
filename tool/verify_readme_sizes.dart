@@ -12,8 +12,9 @@
 //   * full + core-only native library and the trim percentage — read from
 //     tool/.shake_sizes.json, which `make shake-audit` (the single
 //     builder/measurer) writes. Missing/stale file → run the audit first.
-//   * default wasm engine, raw and gzipped (web_assets/pdf_oxide_bg.wasm —
-//     the contributor-built artifact; CI rebuilds it at release).
+//   * default wasm engine, raw and gzipped, of the whole module its parts
+//     join to (web_assets/pdf_oxide_manifest.json — the contributor-built
+//     artifact; CI rebuilds it at release).
 //
 // Exit 1 on any mismatch (always) or any SKIP (--strict). Run after an
 // engine bump and before a release, right after `make shake-audit`.
@@ -21,9 +22,12 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:pdf_manipulator/src/hook/wasm_parts.dart';
+
 const _readmePath = 'README.md';
 const _sizesPath = 'tool/.shake_sizes.json';
-const _wasmPath = 'web_assets/pdf_oxide_bg.wasm';
+const _wasmDir = 'web_assets';
+const _wasmPath = '$_wasmDir/pdf_oxide_manifest.json';
 
 void main(List<String> args) {
   final strict = args.contains('--strict');
@@ -110,9 +114,13 @@ void main(List<String> args) {
   if (!wasm.existsSync()) {
     skips.add('wasm sizes ($_wasmPath missing — dart tool/compile.dart wasm)');
   } else {
-    check('wasm raw', [_mb(wasm.lengthSync())]);
-    final gz = gzip.encode(wasm.readAsBytesSync()).length;
-    check('wasm gzipped', [_mb(gz)]);
+    final module = WasmManifest.load(
+      Directory(_wasmDir),
+    ).modules[normalWasmModule]!;
+    check('wasm raw', [_mb(module.bytes)]);
+    check('wasm gzipped', [
+      _mb(gzipBytesOf(joinWasmParts(Directory(_wasmDir), module))),
+    ]);
   }
 
   for (final p in passes) {

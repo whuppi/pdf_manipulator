@@ -7,16 +7,35 @@ For capability status see [`CAPABILITY_ROADMAP.md`](CAPABILITY_ROADMAP.md).
 
 ## Vendored forks
 
-Two git submodules, each a fork of the upstream repo with a named
+Three git submodules, each a fork of the upstream repo with a named
 patch branch.
 
 | Crate | Upstream | Fork | Branch | Base tag | Submodule |
 |---|---|---|---|---|---|
 | pdf_oxide | [`yfedoseev/pdf_oxide`](https://github.com/yfedoseev/pdf_oxide) | [`whuppi/pdf_oxide`](https://github.com/whuppi/pdf_oxide) | `pdf_manipulator/0.3.78-patches` | `v0.3.78` | `vendor/pdf_oxide/` |
-| office_oxide | [`yfedoseev/office_oxide`](https://github.com/yfedoseev/office_oxide) | [`whuppi/office_oxide`](https://github.com/whuppi/office_oxide) | `office_kit/0.1.11-patches` | `v0.1.11` | `vendor/office_oxide/` |
+| office_oxide | [`yfedoseev/office_oxide`](https://github.com/yfedoseev/office_oxide) | [`whuppi/office_oxide`](https://github.com/whuppi/office_oxide) | `office_kit/0.1.16-patches` | `v0.1.16` | `vendor/office_oxide/` |
+| tiny-skia | [`linebender/tiny-skia`](https://github.com/linebender/tiny-skia) | [`whuppi/tiny-skia`](https://github.com/whuppi/tiny-skia) | `pdf_manipulator/0.12.0-patches` | `v0.12.0` | `vendor/tiny_skia/` |
 
-pdf_oxide depends on office_oxide as a path dependency
-(`office_oxide = { path = "../office_oxide" }`).
+**Terms used in this doc:**
+
+| Term | Means |
+|---|---|
+| upstream | The project our fork tracks: `yfedoseev/pdf_oxide` (and `yfedoseev/office_oxide`, `linebender/tiny-skia`). Its git remote in the submodule is `upstream`. We never change it; S1 takes its releases into our fork. |
+| our fork | `whuppi/pdf_oxide` (and `whuppi/office_oxide`, `whuppi/tiny-skia`), the git remote `origin`. Every change we make to the engine is a commit on our fork's patch branch. |
+| upstream code | A file in our fork that came from upstream. We change it only between patch markers (S2), so S1 can rebase our patches onto the next upstream release. |
+| fork-only code | `src/host/` in our fork (pdf_oxide only). Upstream has no such folder, so it needs no markers and S1 never rebases it. tiny-skia has no fork-only folder: every file of it is upstream code. |
+
+No recipe here sends a change upstream. Contributing to upstream is a
+separate, optional choice of the maintainer.
+
+pdf_oxide depends on office_oxide and tiny-skia as path dependencies
+(`office_oxide = { path = "../office_oxide" }`,
+`tiny-skia = { path = "../tiny_skia" }`, which builds its `path/`
+sub-crate `tiny-skia-path` from the same submodule). Page rendering needs
+the tiny-skia fork because a page is painted in bands of rows and the
+bands must give the bytes of the whole page: a vertical clip advances an
+edge instead of chopping it, and gradients do not depend on the band
+origin.
 wasm-bindgen + wasm-opt run as library calls inside the fork's
 `bindgen_runner` workspace crate, version-pinned by the same
 `vendor/pdf_oxide/Cargo.lock` as the engine's wasm-bindgen dependency
@@ -35,17 +54,20 @@ to a new upstream `vX.Y.Z`:
    CI actually uses; it MUST equal the branch's version
 3. the **Branch** and **Base tag** columns in the table above
 
-office_oxide is the same, under its own branch name and `v0.1.11`.
+office_oxide is the same, under its own branch name and `v0.1.16`. tiny-skia
+is the same, under `pdf_manipulator/X.Y.Z-patches` and its own tag (`v0.12.0`);
+it has no `build.json` entry.
 
 ### The fork contract
 
-Each fork carries exactly three things — anything else is debris and
+Each fork carries exactly these refs — anything else is debris and
 gets deleted on sight:
 
 | Ref | Why it exists |
 |---|---|
 | `main` | Clean mirror of upstream main. Synced in S1 step 5; never carries our commits. |
 | The patch branch | All our patches, rebased onto the base tag. The only branch the submodule points at. |
+| Replaced patch branches | The patch branch of each earlier base tag, kept as it was when S1 replaced it. Every commit of this repo's history points its submodule at a commit on one of them; deleting one leaves those commits pointing at nothing, so an old checkout or a bisect can no longer fetch the engine. Never deleted. |
 | `v*` tags | Rebase bases. `make analyze` derives the base tag from the patch-branch name and diffs against it, so the tag must exist on the fork. |
 
 Debris that does NOT belong on a fork: `dependabot/*` branches,
@@ -76,11 +98,11 @@ scheduled scans) validate nothing this repo uses. On each fork, once:
   on every bump; an upstream `on: push tags` Release pipeline fires on that tag
   and can cut a GitHub release / publish a package from your mirror. Disabling
   defuses it.
-- **Off by default.** The fork is home; upstream is just the base. Routine fork
-  work — patches, rebases, tag-moves — never needs the fork's own CI; the
-  parent's CI is the gate. The only exception is a deliberate, standalone
-  upstream PR (occasional, never during a fix): flip Actions on for that one PR,
-  then back off. Off is the resting state.
+- **Off by default.** Our fork is home; upstream is only the base. Routine
+  fork work (patches, rebases, tag moves) never needs the fork's own CI; the
+  parent's CI is the gate. The one exception is a pull request to upstream
+  that the maintainer chose to open: flip Actions on for that one PR, then back
+  off. Off is the resting state.
 
 Disable at the **setting** level — never delete the workflow YAMLs. Deleting
 them diverges the mirror from upstream and breaks the clean rebase-on-tag in
@@ -106,8 +128,13 @@ S1; the files stay byte-identical to upstream and just never fire.
 
 ## Flutter version pinning
 
-`.fvmrc` (root + `example/.fvmrc`) is the single source of truth for
-the Flutter SDK version. Never hardcode the version anywhere else.
+`.fvmrc` (root, plus one in each app folder: `example/` and
+`example_trimmed/`, all at one version) is the single source of truth for
+the Flutter SDK version. Never hardcode the version anywhere else. The
+`flutter-sdk` job of `upgrade-check.yml` bumps every `.fvmrc`, the `lockfiles`
+job refreshes every committed `pubspec.lock`, and Dependabot has one `pub`
+entry per package folder. `test/guards/update_owners_test.dart` enforces both
+the Dependabot entries and the one version.
 
 `upgrade-check.yml` runs daily and splits the work by risk into two draft
 PRs. The `pins` job re-hashes the current pins to catch a repoint, then bumps
@@ -116,6 +143,18 @@ verified binaries in `tool/versions.env`, the zizmor + actionlint gate pins,
 binary sha256s recomputed from the upstream assets) onto `chore/pins`. The
 `lockfiles` job refreshes `pubspec.lock` onto `chore/lockfiles`. Review, test,
 merge each when ready.
+
+---
+
+## Compression bench
+
+Dependabot bumps the exact `pdf_document` pin in `tool/bench`. `bench.yml`
+runs `make bench-gate` on that PR and weekly. A red gate means pdf_document
+produced a smaller file than ours at the same or better quality (its worst
+RMSE no higher and its worst SSIM no lower), or our output lost pages, text
+or (lossless) pixels. A smaller file that is also worse is printed as a note
+and does not fail: the gate never rewards throwing quality away. Read their changelog and diff for the release, then open a
+task to port the idea or fix the regression. Never loosen the gate.
 
 ---
 
@@ -150,6 +189,7 @@ done
 ### 3. Rebase
 
 ```sh
+git switch -c pdf_manipulator/NEW-patches pdf_manipulator/OLD-patches
 git rebase vNEW
 (cd ../.. && make test-rust)
 (cd ../.. && make check-keep-sets)
@@ -157,19 +197,26 @@ git rebase vNEW
 
 Resolve conflicts commit by commit. `Cargo.lock` conflicts: take the
 base (`git checkout vNEW -- Cargo.lock`) and let cargo re-add our
-feature deps on the next build. `make test-rust` runs the full `cargo
-test` (not `--lib`) for both crates — the `tests/` tree catches
-signature drift the lib tests miss. `make check-keep-sets` compiles
+feature deps on the next build. `make test-rust` runs every test of the
+three crates through cargo-nextest, the `tests/` tree included (not
+`--lib`), which catches signature drift the lib tests miss. `make check-keep-sets` compiles
 every keep-set for both targets, so upstream code that uses something
 one of our feature gates removes fails here, before any wasm build.
 
-### 4. Rename branch
+### 4. New patch branch
+
+Step 3 rebased a new branch made from the old one, so the old branch keeps its
+commits.
 
 ```sh
-git branch -m pdf_manipulator/OLD-patches pdf_manipulator/NEW-patches
 git push origin pdf_manipulator/NEW-patches
-git push origin --delete pdf_manipulator/OLD-patches
+gh api -X PATCH repos/whuppi/pdf_oxide -f default_branch=pdf_manipulator/NEW-patches
 ```
+
+The patches branch is the fork's default branch on GitHub, so a visitor lands
+on our code and on the README that says what the fork is. The old branch stays
+on the fork (see "The fork contract"): this repo's history points at its
+commits.
 
 ### 5. Sync the fork mirror
 
@@ -204,16 +251,82 @@ git add vendor/pdf_oxide web_assets/
 git commit -m "build: sync upstream vNEW + rebuild WASM"
 ```
 
+### What the tiny-skia fork changes
+
+A `Pixmap` or `Mask` has an `origin`: the position of its top-left pixel in
+a larger device plane. Everything drawn into it is given in the plane's
+coordinates and is mapped by the caller's transform in full; the origin is
+removed afterwards in whole pixels (in fixed point for edges, as an integer
+added to the pixel row for shaders, as a blitter offset for rects). The
+page renderer paints a page as bands, each a pixmap with an origin, so a
+band holds the bytes the whole page holds. The same machinery carries
+`DrawTiler`'s tiles (sub-windows, nothing translated by a float).
+
+A source pixmap with an origin is sampled the same way. `Pixmap::draw_pixmap_in(area, window, ...)` paints `area`, the whole image's rectangle, under
+the transform, and the pixels come from `window`, a part of the image at its
+origin. The sample positions are left as the transform gives them (folding
+the origin into the transform would round them differently for each window)
+and the sampler takes the whole-number origin off just before it looks a
+sample up (`SamplerCtx::origin_x`, `origin_y`), so every window of an image
+gives the pixels the whole image gives, edges included, as long as the window
+holds every sample a pixel needs and the taps of its filter (three beside
+them is enough for bicubic). The page renderer draws an image band by band
+this way (`host::images::stream`). `draw_pixmap` keeps its meaning and sends
+the origin the same way.
+
+The patch also cuts a vertical clip differently: an edge is not chopped at
+the top or bottom of the window, its scan is advanced to the first visible
+row (`Edge::advance_to`). The exactness has these limits, stated so a
+change in a caller is not a surprise:
+
+- A window must span the columns of the raster. The sides of a path are
+  still chopped at the window's columns, so a narrower window can differ
+  from the same columns of the whole.
+- An edge that runs more than `rows_of_reach` rows (at most 4096) past the
+  window is chopped there, because the scan's fixed point holds 8191 rows.
+- A rect fill goes through the rect path only while the plane is within
+  32767 pixels, and through the path fill beyond.
+- Coordinates beyond `i32` fixed point (8.3 million pixels) saturate, as
+  they did.
+- A non-anti-aliased hairline is still chopped at the window's rows.
+
+The conventions of the upstream tests that changed are in the notes above
+them in `tests/integration/`.
+
+### S1 for tiny-skia
+
+The same routine, run in `vendor/tiny_skia`, with these differences:
+
+- the tag is `vNEW` of `linebender/tiny-skia` and the branch is
+  `pdf_manipulator/NEW-patches`;
+- the default-branch step names the fork: `gh api -X PATCH
+  repos/whuppi/tiny-skia -f default_branch=pdf_manipulator/NEW-patches`,
+  run before the old branch is deleted;
+- step 3 runs the fork's own tests as well (`make test-rust` runs
+  `cargo nextest run --workspace` in `vendor/tiny_skia`), because the
+  fork carries tests of its own (S2);
+- the rebase carries the README notice at the top of `README.md`; it is a
+  patch block like any other;
+- `pdf_oxide` needs no change: its path dependency has no version to
+  bump, but check that `tiny-skia`'s own version still satisfies what
+  `pdf_oxide` uses of its API, and let cargo refresh
+  `vendor/pdf_oxide/Cargo.lock`;
+- there is no `build.json` entry; the base tag lives in the table above
+  and in the branch name.
+
 ---
 
 ## S2 — Edit patches
 
-Our `host/` directory is entirely our code — edit freely, no markers
-needed (the module itself is the marker). Everything outside `host/`
-is upstream code: **mark every change there** with paired
+Every change happens in our fork. `src/host/` is fork-only code: edit it
+freely, with no markers (the folder itself is the marker). Everything
+outside `host/` is upstream code: **mark every change there** with paired
 `── pdf_manipulator patch ──` / `── end pdf_manipulator patch ──`
-boundaries. The markers are the authoritative inventory of what we
-patch:
+lines. Blocks do not nest, and every open has its end;
+`tool/check_patch_markers.sh` (run by `make test-guards`) fails on an end
+without an open, an open never closed, an open inside an open, and any
+line that mentions the phrase but is neither marker form. The markers are
+the full list of what we changed in upstream code:
 
 ```sh
 cd vendor/pdf_oxide
@@ -229,38 +342,64 @@ make check
 **Verify zero warnings:** `make analyze` checks Rust warnings in our
 patched lines automatically (see [S7](#s7--verify-our-code-warnings)).
 
-**Tests in the fork: `host/` unit tests for pure functions only, nothing
-else.** A patch proves itself from this repo, in `test/ops/` — with a
-fixture in `test/fixtures/handwritten.dart` when the engine bug needs a
-PDF no foreign writer emits. Upstream files and `tests/` never carry a
-test of ours: a test in a patched upstream file is extra surface every S1
-rebase has to carry onto the next base tag, for a proof the Dart battery
-already makes at the level a consumer actually experiences (rendered
-pixels, per ARCHITECTURE.md's testing section).
+**Tests in the fork: prove from Dart first.** A patch proves itself from
+this repo, in `test/ops/`, at the level a consumer sees (rendered pixels,
+saved bytes, per ARCHITECTURE.md's testing section). When the engine bug
+needs a PDF that no other writer makes, add a fixture to
+`test/fixtures/handwritten.dart`.
 
-`host/` is different on both counts: it is never rebased, and it holds
-pure functions whose invariants a consumer cannot observe at the right
-granularity — the lane budget, the shared-buffer byte layout, a CCITT
-polarity, a PNG predictor round trip. Those may carry `#[cfg(test)]` unit
-tests, under one boundary: **no PDF bytes, no `PdfDocument`, no
-`DocumentEditor` inside a `host/` test.** The moment a test needs a
-document, it is a behaviour a consumer can see, and it belongs in
-`test/ops/`. One named exception: the trim probes — modules whose name
-contains `trim_probe`, under `#[cfg(all(test, not(feature = "…")))]` in
-`host/dispatch.rs`, run by `tool/shake_audit.sh` against a trimmed build — open a minimal
-in-memory PDF to prove an excluded op answers with the typed "not enabled
-in this build" error, a build that no Dart test can be compiled against.
-`make test-guards` enforces both the boundary and the exception's shape
-(`tool/check_fork_tests.sh`).
+tiny-skia is the one exception: it has no fork-only folder, and its
+patch (a pixmap that shows a window of a larger plane) can only be proved
+at the level of its own pixels, so the fork carries tests of its own, in
+its `tests/` and in test modules of its `src/`, each between patch
+markers (`tests/windows.rs` is the proof; the three goldens it changed
+carry a note). `tool/check_fork_tests.sh` leaves tiny-skia outside the
+wall, and `make test-rust` runs its tests. Every rebase carries them, as
+for any patch.
 
-Prior art: #161 was the same shape as #215 — an engine-side forms bug —
-and landed as a hand-authored fixture plus battery cases here, with the
+Upstream code and `tests/` never get a test of ours (in pdf_oxide). Every S1 rebase
+has to carry such a test onto the next base tag, and the patch markers
+do not list it, so nobody sees what it costs.
+
+A Rust test of ours lives in fork-only code (`host/`), which is never rebased. There are
+three kinds:
+
+- **Pure unit tests**, in a `#[cfg(test)]` module beside the code: the
+  executor thread budget, the shared-buffer byte layout, a CCITT polarity, a PNG
+  predictor round trip. They use no PDF bytes, no `PdfDocument` and no
+  `DocumentEditor`.
+- **Engine proofs**, in `host/engine_proofs/`: a test that opens a
+  document because no Dart battery can see what it proves. Two cases
+  qualify: a path that only the Rust API reaches (for example
+  `write_incremental`), and an internal property that never reaches the
+  bytes or pixels (for example how often an object stream is decoded).
+  The test's doc comment names its case. When a Dart battery can make the
+  proof, the proof goes in the battery. If a test needs a private engine
+  item, add the smallest `pub(crate)` accessor inside a patch block.
+- **Trim probes**, in modules whose name contains `trim_probe`, under
+  `#[cfg(all(test, not(feature = "…")))]` in `host/dispatch.rs`.
+  `tool/shake_audit.sh` runs them against a trimmed build. They open a
+  minimal in-memory PDF to prove that an excluded op answers with the
+  typed "not enabled in this build" error. No Dart test can be compiled
+  against that build.
+
+A proof that bounds time reads the thread's CPU clock (`host/cpu_clock.rs`),
+never the wall clock: the wall clock counts every other test in flight, so a
+busy machine fails it. The clock runs on Linux, macOS and Windows, so no
+timing proof is skipped on any runner. Upstream's own timing guards in
+pdf_oxide's `tests/` read the same clock (`pdf_oxide::host::cpu_clock`), a
+marked line in each guard; an S1 rebase carries them, and a new upstream
+timing guard gets one.
+
+`make test-guards` enforces all of this (`tool/check_fork_tests.sh`): no
+`#[test]` added to upstream code since the base tag, no document in a
+`host/` test outside `engine_proofs/` and the trim probes, a doc comment
+on every engine proof, no file of ours added under `tests/`, and no wall
+clock (`Instant::now`, `SystemTime::now`) in an engine proof.
+
+Prior art: #161 had the same shape as #215, an engine-side forms bug. It
+landed as a hand-written fixture plus battery cases here, with the
 submodule bumped and no Rust test.
-
-If a proof genuinely cannot be made from Dart and is not a pure `host/`
-function, that is a signal the fix belongs upstream: open it as a PR on
-the upstream repo, where its test lives with it
-(see `universal/external-contributions.md`).
 
 **Watch for a detached submodule.** `git submodule update` leaves
 `vendor/pdf_oxide` on a detached HEAD, so a commit made after it lands on
@@ -291,7 +430,7 @@ git commit -m "build: update submodule — <description>"
 | Step | File | Action |
 |---|---|---|
 | 1 | `host/dispatch.rs` | Typed function + result struct |
-| 2 | `host/bridge_api.rs` | Match arm (call dispatch, encode response) |
+| 2 | `host/ops/<unit>.rs` + `host/ops/registry.rs` | `op_unit!` with its handler (call dispatch, encode response) and its registry row |
 | 3 | `protocol/op.dart` | Add `EngineOp` value |
 | 4 | `protocol/codec.dart` | Request builder + response decoder |
 | 5 | `ops/pdf_doc.dart` | Public method |
@@ -309,7 +448,7 @@ Edit mutations are sub-dispatched inside `editorMutate`:
 | Step | File | Action |
 |---|---|---|
 | 1 | `host/dispatch.rs` | `edit_*()` function |
-| 2 | `host/bridge_api.rs` | Match arm in `handle_editor_mutate` |
+| 2 | `host/ops/editor.rs` | Match arm in `do_editor_mutate` |
 | 3 | `protocol/codec.dart` | Param encoder if needed |
 | 4 | `shared_bridge.dart` | `_mutate('opName', params)` on editor handle |
 | 5 | `ops/pdf_editor.dart` | Public method |
@@ -358,7 +497,7 @@ while an audit is running: bash re-reads the file by offset.
 
 ### Branch model
 
-The two-lane branch model (`dev` prereleases, `prod` stable) and the
+The two-branch model (`dev` prereleases, `prod` stable) and the
 squash-vs-merge-commit rule are the shared model. See
 whuppi/ci/docs/ARCHITECTURE.md "The versioned-release model + the stamping
 rule". The pdf-specific promotion steps are in `### Prerelease` / `### Stable
@@ -517,7 +656,7 @@ Last match wins (gitignore semantics): the release/config paths override the def
 4. Diffs against the base tag to find lines we changed
 5. Fails if any warning falls inside our changed lines
 
-Checks both `vendor/pdf_oxide` and `vendor/office_oxide`.
+Checks `vendor/pdf_oxide`, `vendor/office_oxide` and `vendor/tiny_skia`.
 
 ```sh
 make analyze
@@ -563,7 +702,7 @@ point at a checkout of that repo (a sibling of this one). Run from this
 package's root, and set `GITHUB_REPOSITORY` — the script requires it while
 loading, whichever mode you ask for, and exits without it. Some modes want
 more: `--check-versions` also needs `BRANCH` (`dev` or `prod`, picking the
-lane it checks). `--help` lists every mode.
+mode it checks). `--help` lists every mode.
 
 ```sh
 GITHUB_REPOSITORY=whuppi/pdf_manipulator \
@@ -593,6 +732,48 @@ hand-authored in `test/fixtures/handwritten.dart`.
 
 ---
 
+## Disk: the build target and worktrees
+
+One tree's gate fills the vendored crates' cargo `target/` dirs with about
+24 GB: the Rust test build is the bulk (about 21 GB of test binaries), the
+48 keep-set builds add 1.4 GB, and the wasm build, `office_oxide`,
+`tiny_skia` and `target/memprobe` the rest. Budget 25 GB per tree. Four
+mechanisms keep it there, so it does not grow with every run:
+
+| What | How |
+|---|---|
+| `make prune-target` | Removes every `incremental` folder and every file untouched for `PRUNE_DAYS` days (default 2) from the four target dirs. `make test-rust` and `make check-keep-sets` run it when they end, pass or fail. A reused artifact older than that is rebuilt next time: it costs time, never a wrong result. |
+| keep-sets | `tool/check_keep_sets.sh` builds into `vendor/pdf_oxide/target/keep-sets`, apart from the test build, and removes that dir's incremental caches and every file older than its run when it ends. |
+| `memprobe` | Its temp folder is removed when the run ends, however it ends (error, panic, SIGINT, SIGTERM, SIGHUP); a SIGKILLed run's folder is removed by the next run. |
+| Browser leftovers | Each `make test-ops-*` web target runs `tool/clean_browser_leftovers.dart`, which removes what killed Chrome launches left behind, on any OS: the `org.chromium.Chromium.scoped_dir.*` profile folders in the system temp dir and, on macOS, the app-bundle copies in `com.google.Chrome.code_sign_clone/`. It runs only when no Chrome runs, so every one it finds is a leftover. |
+
+### A worktree that does not cost another 25 GB
+
+Do not share one `CARGO_TARGET_DIR` between worktrees. Cargo keys a
+dependency's artifacts without the path, so a second worktree reuses the
+crates.io dependencies (321 crates, about 1 GB). But the three vendored
+crates are path packages: the second worktree rebuilds them and their test
+binaries into the same dir beside the first worktree's, and switching back
+recompiled one crate again. Measured: a second worktree's full test build in
+a shared dir grew it from 24.1 GB to 41.7 GB, 17.7 GB against about 21 GB in its
+own dir, so sharing saves 3.5 GB and no build time; for `pdf_oxide`'s library
+alone, a cold build of the dependencies took 63 to 139 s and the second
+worktree's path crates alone took 103 s.
+
+What the numbers support is bounding each worktree and keeping one at a time:
+
+1. Make the worktree, then give each submodule a worktree of its own at the
+   commit the package pins (a plain `git worktree add` leaves `vendor/*`
+   empty):
+   `git -C <main>/vendor/pdf_oxide worktree add --detach <wt>/vendor/pdf_oxide "$(git -C <main> rev-parse HEAD:vendor/pdf_oxide)"`,
+   the same for `office_oxide` and `tiny_skia`.
+2. Run the gates in the worktree; `make test-rust` and `make check-keep-sets`
+   leave the target pruned.
+3. When the worktree's work is done, run `make clean` in it: that frees its
+   whole target. Removing the worktree's folder frees it too.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Check |
@@ -600,7 +781,7 @@ hand-authored in `test/fixtures/handwritten.dart`.
 | Build hook fails on consumer machine | Binary missing for target — check GitHub Release assets |
 | WASM test fails | Rebuild: `make build-wasm` |
 | Native passes, web fails | bridge_api.rs WASM path missing the op |
-| wire_sync_test fails | EngineOp without matching bridge_api.rs arm |
+| wire_sync_test fails | EngineOp or PageOp without a matching op unit or arm under `host/ops/` |
 | "Handle not found" | Handle disposed or never opened |
 | "Symbol not found" at runtime | Binary older than source — rebuild |
 | `make verify-android` fails without Rust | Hook tries compile → `cargo` not found → error with install URL |

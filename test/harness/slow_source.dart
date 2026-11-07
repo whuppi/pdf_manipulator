@@ -48,4 +48,7 @@ class SlowSource implements DataSource {
     final end = (offset + count).clamp(0, _data.length);
     return Uint8List.sublistView(_data, offset, end);
   }
+
+  @override
+  void close() {}
 }

@@ -1,122 +1,168 @@
-// Form field types — reads live on PdfDoc (PdfDoc.formFields), mutations
-// on PdfEditor, export on PdfDoc.exportFormData.
+// Form field types — reads live on PdfDocument (PdfDocument.formFields), mutations
+// on PdfEditor.field(name), export on PdfDocument.exportFormData.
 
 import 'package:meta/meta.dart';
 
+import 'package:pdf_manipulator/src/types/equality.dart';
+import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
+import 'package:pdf_manipulator/src/types/pdf_wire.dart';
 
 /// The kind of an AcroForm field, refined from the raw `/FT` and `/Ff`
 /// bits so a caller never reads a flag directly.
-enum PdfFormFieldType {
+enum PdfFormFieldKind implements PdfWire {
   /// `/FT /Tx` — single or multi-line text.
-  text,
+  textField('text'),
 
   /// `/FT /Btn` without the Radio or Pushbutton flag.
-  checkbox,
+  checkbox('checkbox'),
 
   /// `/FT /Btn` with the Radio flag (`PdfFormFieldFlag.radio`).
-  radioGroup,
+  radioGroup('radioGroup'),
 
   /// `/FT /Ch` with the Combo flag (`PdfFormFieldFlag.combo`).
-  comboBox,
+  comboBox('comboBox'),
 
   /// `/FT /Ch` without the Combo flag.
-  listBox,
+  listBox('listBox'),
 
   /// `/FT /Btn` with the Pushbutton flag (`PdfFormFieldFlag.pushButton`).
-  button,
+  pushButton('button'),
 
   /// `/FT /Sig`.
-  signature,
+  signatureField('signature'),
 
   /// A field type the engine could not classify.
-  unknown,
+  unknown('unknown');
+
+  const PdfFormFieldKind(this.wire);
+
+  @override
+  final String wire;
 }
 
 /// A field's value, typed by the field kind: [PdfTextValue] for text
-/// fields, [PdfCheckedValue] for a checkbox or radio button,
-/// [PdfChoiceValue] for a single-select choice field, [PdfMultiChoiceValue]
-/// for a multi-select list box, [PdfNoValue] when the field has no value.
+/// fields, [PdfCheckedValue] for a checkbox, [PdfChoiceValue] for a
+/// single-select choice field or a radio group (the selected option's export
+/// name), [PdfMultiChoiceValue] for a multi-select list box, [PdfNoValue]
+/// when the field has no value (a radio group with nothing selected).
 sealed class PdfFormFieldValue {
   const PdfFormFieldValue();
+
+  /// The text of a text field, or a checkbox or radio state name.
+  const factory PdfFormFieldValue.text(String text) = PdfTextValue;
+
+  /// Whether a checkbox is on.
+  const factory PdfFormFieldValue.checked(bool isChecked) = PdfCheckedValue;
+
+  /// The export value of the selected option of a combo box, list box or
+  /// radio group.
+  const factory PdfFormFieldValue.choice(String choice) = PdfChoiceValue;
+
+  /// The export values of the selected options of a multi-select list box.
+  const factory PdfFormFieldValue.choices(List<String> choices) =
+      PdfMultiChoiceValue;
+
+  /// No value: setting it clears the field.
+  const factory PdfFormFieldValue.none() = PdfNoValue;
 }
 
 /// The text content of a text or single-select choice field.
-class PdfTextValue extends PdfFormFieldValue {
+final class PdfTextValue extends PdfFormFieldValue {
   /// Creates a text value.
   const PdfTextValue(this.text);
 
   /// The field's text.
   final String text;
+
+  @override
+  bool operator ==(Object other) => other is PdfTextValue && other.text == text;
+
+  @override
+  int get hashCode => text.hashCode;
 }
 
 /// Whether a checkbox or radio button is on.
-class PdfCheckedValue extends PdfFormFieldValue {
+final class PdfCheckedValue extends PdfFormFieldValue {
   /// Creates a checked value.
-  const PdfCheckedValue(this.checked);
+  const PdfCheckedValue(this.isChecked);
 
   /// Whether the widget is in its on-state.
-  final bool checked;
+  final bool isChecked;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfCheckedValue && other.isChecked == isChecked;
+
+  @override
+  int get hashCode => isChecked.hashCode;
 }
 
 /// The selected option of a single-select choice field.
-class PdfChoiceValue extends PdfFormFieldValue {
+final class PdfChoiceValue extends PdfFormFieldValue {
   /// Creates a choice value.
   const PdfChoiceValue(this.choice);
 
   /// The selected option name.
   final String choice;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfChoiceValue && other.choice == choice;
+
+  @override
+  int get hashCode => choice.hashCode;
 }
 
 /// The selected options of a multi-select list box.
-class PdfMultiChoiceValue extends PdfFormFieldValue {
+final class PdfMultiChoiceValue extends PdfFormFieldValue {
   /// Creates a multi-choice value.
   const PdfMultiChoiceValue(this.choices);
 
   /// The selected option names.
   final List<String> choices;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfMultiChoiceValue && listsEqual(other.choices, choices);
+
+  @override
+  int get hashCode => Object.hashAll(choices);
 }
 
 /// A field with no value set.
-class PdfNoValue extends PdfFormFieldValue {
+final class PdfNoValue extends PdfFormFieldValue {
   /// Creates a no-value marker.
   const PdfNoValue();
+
+  @override
+  bool operator ==(Object other) => other is PdfNoValue;
+
+  @override
+  int get hashCode => (PdfNoValue).hashCode;
 }
 
-/// Text alignment of a text field's content (`/Q`).
-enum PdfTextAlignment {
-  /// `/Q 0`.
-  left,
-
-  /// `/Q 1`.
-  center,
-
-  /// `/Q 2`.
-  right,
-}
-
-/// An AcroForm field as read from a document by `PdfDoc.formFields`.
+/// An AcroForm field as read from a document by `PdfDocument.formFields`.
 @immutable
-class PdfFormField {
+final class PdfFormField {
   /// Creates a form field snapshot.
   const PdfFormField({
     required this.name,
-    required this.type,
+    required this.kind,
     required this.value,
     this.tooltip,
     this.bounds,
     this.maxLength,
     this.alignment,
-    this.readOnly = false,
-    this.required = false,
+    this.isReadOnly = false,
+    this.isRequired = false,
   });
 
-  /// Fully qualified (dotted) field name — what every mutator on
-  /// `PdfEditor` takes.
+  /// Fully qualified (dotted) field name — what `PdfEditor.field` takes.
   final String name;
 
   /// The field's kind.
-  final PdfFormFieldType type;
+  final PdfFormFieldKind kind;
 
   /// The field's current value.
   final PdfFormFieldValue value;
@@ -131,75 +177,109 @@ class PdfFormField {
   final int? maxLength;
 
   /// `/Q`, the text field's content alignment.
-  final PdfTextAlignment? alignment;
+  final PdfAlignment? alignment;
 
   /// `/Ff` bit 1 — the field cannot be edited by the user.
-  final bool readOnly;
+  final bool isReadOnly;
 
   /// `/Ff` bit 2 — the field must have a value on submit.
-  final bool required;
+  final bool isRequired;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfFormField &&
+      other.name == name &&
+      other.kind == kind &&
+      other.value == value &&
+      other.tooltip == tooltip &&
+      other.bounds == bounds &&
+      other.maxLength == maxLength &&
+      other.alignment == alignment &&
+      other.isReadOnly == isReadOnly &&
+      other.isRequired == isRequired;
+
+  @override
+  int get hashCode => Object.hash(
+    name,
+    kind,
+    value,
+    tooltip,
+    bounds,
+    maxLength,
+    alignment,
+    isReadOnly,
+    isRequired,
+  );
 }
 
-/// Format for `PdfDoc.exportFormData`.
-enum PdfFormDataFormat {
+/// Format for `PdfDocument.exportFormData`.
+enum PdfFormDataFormat implements PdfWire {
   /// Binary Forms Data Format (ISO 32000-1 §12.7.7).
-  fdf,
+  fdf('fdf'),
 
   /// XML Forms Data Format.
-  xfdf,
+  xfdf('xfdf');
+
+  const PdfFormDataFormat(this.wire);
+
+  @override
+  final String wire;
 }
 
 /// A form field flag bit (`/Ff`), positioned per ISO 32000-1:2008 Table
 /// 221 (common), 226 (button), 228 (choice) and 230 (text). Pass a set of
-/// these to `PdfEditor.setFormFieldFlags`.
-enum PdfFormFieldFlag {
+/// these to `editor.field(name).setFlags`.
+enum PdfFormFieldFlag implements PdfWire {
   /// Table 221 bit 1 — the field cannot be edited by the user.
-  readOnly(1),
+  readOnly('readOnly', 1),
 
   /// Table 221 bit 2 — the field must have a value on submit.
-  required(1 << 1),
+  required('required', 1 << 1),
 
   /// Table 221 bit 3 — excluded from form export.
-  noExport(1 << 2),
+  noExport('noExport', 1 << 2),
 
   /// Table 230 bit 13 — a text field accepts multiple lines.
-  multiline(1 << 12),
+  multiline('multiline', 1 << 12),
 
   /// Table 230 bit 14 — a text field masks its input.
-  password(1 << 13),
+  password('password', 1 << 13),
 
   /// Table 226 bit 16 — a button field is a radio group.
-  radio(1 << 15),
+  radio('radio', 1 << 15),
 
   /// Table 226 bit 17 — a button field is a pushbutton.
-  pushButton(1 << 16),
+  pushButton('pushButton', 1 << 16),
 
   /// Table 228 bit 18 — a choice field is a combo box.
-  combo(1 << 17),
+  combo('combo', 1 << 17),
 
   /// Table 228 bit 19 — a combo box allows a custom typed value.
-  edit(1 << 18),
+  edit('edit', 1 << 18),
 
   /// Table 228 bit 20 — a choice field's options are sorted.
-  sort(1 << 19),
+  sort('sort', 1 << 19),
 
   /// Table 228 bit 22 — a list box allows multiple selections.
-  multiSelect(1 << 21),
+  multiSelect('multiSelect', 1 << 21),
 
   /// Table 230 bit 23 — a text field's input is not spell-checked.
-  doNotSpellCheck(1 << 22),
+  doNotSpellCheck('doNotSpellCheck', 1 << 22),
 
   /// Table 230 bit 24 — a text field does not scroll past its width.
-  doNotScroll(1 << 23),
+  doNotScroll('doNotScroll', 1 << 23),
 
   /// Table 230 bit 25 — a text field splits input into equal-width combs.
-  comb(1 << 24),
+  comb('comb', 1 << 24),
 
   /// Table 230 bit 26 — a text field's value is rich text.
-  richText(1 << 25);
+  richText('richText', 1 << 25);
 
-  /// Creates a flag with its ISO field-flag bit value.
-  const PdfFormFieldFlag(this.bit);
+  /// Creates a flag with its wire name and ISO field-flag bit value.
+  const PdfFormFieldFlag(this.wire, this.bit);
+
+  @override
+  final String wire;
 
   /// The raw `/Ff` bit value.
   final int bit;

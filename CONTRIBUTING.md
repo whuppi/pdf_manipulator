@@ -43,7 +43,7 @@ make check
 ```
 
 Runs `analyze` (format + Dart + Rust warnings) + `test-guards`
-(mechanical test-suite rules) + `test` (unit + native + 3 web modes)
+(mechanical test-suite rules) + `test` (unit + native + 4 web modes)
 + `test-example` (macOS + 3 web modes). Must pass. Don't suppress
 with `// ignore:` — fix the underlying issue (`make analyze` fails
 on any ignore comment).
@@ -76,11 +76,11 @@ The maintainer handles releases.
 
 - Match existing code in the repo.
 - No `dart:io` in the public API barrel — must stay web-safe.
-- **Shared brain, dumb edges.** Every decision lives in shared code —
-  the Dart `Router` for orchestration, Rust `bridge_api.rs` for
-  dispatch. The four platform adapter files (native + web lane
-  adapters) and `lane_worker.js` only translate verbs into physics; a
-  routing `if` in any of them fails `runtime/dumb_edges_test.dart`.
+- **The adapters decide nothing.** Every decision lives in shared code —
+  the Dart `Router` and `ExecutorPool` for orchestration, Rust `bridge_api.rs` and the op
+  units under `host/ops/` for dispatch. The four platform adapter files (the native and
+  web lease adapters) and `executor_worker.js` only translate verbs into platform calls; a
+  routing `if` in any of them fails `runtime/adapter_decides_nothing_test.dart`.
 - Tests in `test/` mirror the `lib/src/` structure. Read the test
   invariants in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (the
   test-architecture section) before adding tests — foreign fixture
@@ -99,12 +99,13 @@ Step-by-step checklists in [`docs/UPDATING.md`](docs/UPDATING.md).
 
 ## Vendored forks
 
-Two git submodules at `vendor/`. Provenance and recipes in
+Three git submodules at `vendor/`. Provenance and recipes in
 [`docs/UPDATING.md`](docs/UPDATING.md).
 
 **PRs to vendored forks**
 ([`whuppi/pdf_oxide`](https://github.com/whuppi/pdf_oxide),
-[`whuppi/office_oxide`](https://github.com/whuppi/office_oxide)):
+[`whuppi/office_oxide`](https://github.com/whuppi/office_oxide),
+[`whuppi/tiny-skia`](https://github.com/whuppi/tiny-skia)):
 target the patches branch — never `main`, which is a clean mirror of
 upstream. The current patch-branch names are listed in
 [`docs/UPDATING.md`](docs/UPDATING.md).

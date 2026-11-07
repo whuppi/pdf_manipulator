@@ -2,7 +2,7 @@ import 'package:meta/meta.dart';
 
 /// Information about a digital signature in a PDF.
 @immutable
-class PdfSignatureInfo {
+final class PdfSignatureInfo {
   /// Creates signature info.
   const PdfSignatureInfo({
     this.signerName,
@@ -10,6 +10,7 @@ class PdfSignatureInfo {
     this.reason,
     this.location,
     required this.isValid,
+    required this.coversWholeDocument,
     this.certificate,
   });
 
@@ -25,26 +26,56 @@ class PdfSignatureInfo {
   /// Location where the document was signed.
   final String? location;
 
-  /// Whether the signature validates successfully.
+  /// Whether the signature's digest matches the bytes it covers and the
+  /// signer's key verifies it. Certificate trust and revocation are not
+  /// checked.
   final bool isValid;
+
+  /// Whether the signed byte ranges reach the last byte of the file.
+  /// False when the file was changed after signing, by an incremental
+  /// save for example; isValid then still describes the signed revision.
+  final bool coversWholeDocument;
 
   /// Certificate details, if available.
   final PdfCertificateInfo? certificate;
 
   @override
+  bool operator ==(Object other) =>
+      other is PdfSignatureInfo &&
+      other.signerName == signerName &&
+      other.signingTime == signingTime &&
+      other.reason == reason &&
+      other.location == location &&
+      other.isValid == isValid &&
+      other.coversWholeDocument == coversWholeDocument &&
+      other.certificate == certificate;
+
+  @override
+  int get hashCode => Object.hash(
+    signerName,
+    signingTime,
+    reason,
+    location,
+    isValid,
+    coversWholeDocument,
+    certificate,
+  );
+
+  @override
   String toString() =>
       'PdfSignatureInfo(signer: $signerName, valid: $isValid, '
+      'coversWholeDocument: $coversWholeDocument, '
       'time: $signingTime, reason: $reason)';
 }
 
 /// X.509 certificate information.
 @immutable
-class PdfCertificateInfo {
+final class PdfCertificateInfo {
   /// Creates certificate info.
   const PdfCertificateInfo({
     this.subject,
     this.issuer,
-    this.serial,
+    this.serialNumber,
     this.notBefore,
     this.notAfter,
     required this.isValid,
@@ -57,7 +88,7 @@ class PdfCertificateInfo {
   final String? issuer;
 
   /// Serial number.
-  final String? serial;
+  final String? serialNumber;
 
   /// Validity start date.
   final DateTime? notBefore;
@@ -67,6 +98,20 @@ class PdfCertificateInfo {
 
   /// Whether the certificate is currently valid.
   final bool isValid;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PdfCertificateInfo &&
+      other.subject == subject &&
+      other.issuer == issuer &&
+      other.serialNumber == serialNumber &&
+      other.notBefore == notBefore &&
+      other.notAfter == notAfter &&
+      other.isValid == isValid;
+
+  @override
+  int get hashCode =>
+      Object.hash(subject, issuer, serialNumber, notBefore, notAfter, isValid);
 
   @override
   String toString() =>

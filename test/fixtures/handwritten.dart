@@ -4,7 +4,10 @@
 // truncated) and the uncompressed leak probe that only handwriting
 // can provide.
 
+import 'dart:math';
 import 'dart:typed_data';
+
+import 'subset_fallback_font.dart';
 
 const testCertPem = '''
 -----BEGIN CERTIFICATE-----
@@ -59,71 +62,195 @@ gT7yGRIIu9uNETw/d7mV+7Y=
 -----END PRIVATE KEY-----''';
 
 /// Minimal valid PDF — one blank A4 page (595×842 points).
-final Uint8List minimalPdf = _build(
-  '%PDF-1.4\n'
-  '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n'
-  '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n'
-  '3 0 obj\n<< /Type /Page /Parent 2 0 R '
-  '/MediaBox [0 0 595 842] >>\nendobj\n'
-  'xref\n0 4\n'
-  '0000000000 65535 f \n'
-  '0000000009 00000 n \n'
-  '0000000058 00000 n \n'
-  '0000000115 00000 n \n'
-  'trailer\n<< /Size 4 /Root 1 0 R >>\n'
-  'startxref\n190\n%%EOF\n',
-);
+final Uint8List minimalPdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] >>',
+]);
+
+/// [minimalPdf] with a document information dictionary (object 4) that
+/// names a title, an author and a creator.
+final Uint8List infoPdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] >>',
+  // 4: document information
+  '<< /Title (Source Title) /Author (Source Author) /Creator (Source Creator) >>',
+], info: 4);
 
 /// Hand-written single-page PDF whose content stream is UNCOMPRESSED
 /// and contains the visible marker text below. Exists for exactly one
 /// purpose: proving that encryption removes plaintext from the raw
 /// bytes — a claim only checkable when the input provably HAS the
 /// plaintext in its bytes (compressed fixtures never do).
-final Uint8List leakProbePdf = _build(
-  '%PDF-1.4\n'
-  '1 0 obj\n'
-  '<< /Type /Catalog /Pages 2 0 R >>\n'
-  'endobj\n'
-  '2 0 obj\n'
-  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>\n'
-  'endobj\n'
-  '3 0 obj\n'
-  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>\n'
-  'endobj\n'
-  '4 0 obj\n'
-  '<< /Length 60 >>\n'
-  'stream\n'
-  'BT /F1 18 Tf 72 720 Td (LEAKMARK SECRET CONTENT HERE) Tj ET\n'
-  'endstream\n'
-  'endobj\n'
-  '5 0 obj\n'
-  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\n'
-  'endobj\n'
-  'xref\n'
-  '0 6\n'
-  '0000000000 65535 f \n'
-  '0000000009 00000 n \n'
-  '0000000058 00000 n \n'
-  '0000000115 00000 n \n'
-  '0000000241 00000 n \n'
-  '0000000350 00000 n \n'
-  'trailer\n'
-  '<< /Size 6 /Root 1 0 R >>\n'
-  'startxref\n'
-  '420\n'
-  '%%EOF\n',
-);
+final Uint8List leakProbePdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+  // 4: the uncompressed content stream [leakProbeMarker] lives in
+  _streamBody('', 'BT /F1 18 Tf 72 720 Td ($leakProbeMarker) Tj ET'),
+  // 5: Helvetica font
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+]);
+
+/// Three pages of uncompressed text; the middle page's own text holds a
+/// `---` run, so a separator count cannot be fooled by page content.
+final Uint8List dashTextThreePagePdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R] /Count 3 >>',
+  // 3, 5, 7: pages
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 9 0 R >> >> /Contents 4 0 R >>',
+  _streamBody('', 'BT /F1 18 Tf 72 720 Td (FIRSTPAGE alpha) Tj ET'),
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 9 0 R >> >> /Contents 6 0 R >>',
+  _streamBody('', 'BT /F1 18 Tf 72 720 Td (SECONDPAGE --- beta) Tj ET'),
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 9 0 R >> >> /Contents 8 0 R >>',
+  _streamBody('', 'BT /F1 18 Tf 72 720 Td (THIRDPAGE gamma) Tj ET'),
+  // 9: Helvetica font
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+]);
 
 /// The marker drawn (uncompressed) inside [leakProbePdf].
 const leakProbeMarker = 'LEAKMARK SECRET CONTENT HERE';
 
+/// One blank page and one unfiltered stream of [length] pseudo-random bytes.
+/// Random bytes do not deflate, so a rewrite keeps the stream as it is.
+Uint8List randomStreamPdf(int length) {
+  final random = Random(7);
+  final data = String.fromCharCodes(
+    List.generate(length, (_) => random.nextInt(256)),
+  );
+  return _offsetPdf([
+    '<< /Type /Catalog /Pages 2 0 R /Extra 4 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] >>',
+    _streamBody('', data),
+  ]);
+}
+
+/// One blank page and one unfiltered stream of repeated text, [lines] lines
+/// long: a rewrite deflates it to a small part of its size.
+Uint8List repeatedStreamPdf(int lines) {
+  final data = List.generate(
+    lines,
+    (i) => 'line ${i % 7} of the repeated stream\n',
+  ).join();
+  return _offsetPdf([
+    '<< /Type /Catalog /Pages 2 0 R /Extra 4 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] >>',
+    _streamBody('', data),
+  ]);
+}
+
+/// The text drawn on the page of [imageAndFontPdf].
+const imageAndFontMarker = 'IMAGEFONT PAGE';
+
+/// One page with text, a 128×128 gray image of pseudo-random bytes (they do
+/// not deflate) and an embedded TrueType font program. Merged with itself,
+/// every merged page carries its own copy of the image and the font file.
+final Uint8List imageAndFontPdf = _imageAndFontPdf();
+
+Uint8List _imageAndFontPdf() {
+  final random = Random(11);
+  final pixels = String.fromCharCodes(
+    List.generate(128 * 128, (_) => random.nextInt(256)),
+  );
+  final font = String.fromCharCodes(subsetCjkFallbackFont);
+  return _offsetPdf([
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R /F2 6 0 R >> /XObject << /Im1 8 0 R >> >> /Contents 4 0 R >>',
+    _streamBody(
+      '',
+      'BT /F1 18 Tf 72 780 Td ($imageAndFontMarker) Tj ET q 200 0 0 200 72 500 cm /Im1 Do Q',
+    ),
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    '<< /Type /Font /Subtype /TrueType /BaseFont /SubsetFace /FontDescriptor 7 0 R >>',
+    '<< /Type /FontDescriptor /FontName /SubsetFace /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 9 0 R >>',
+    _streamBody(
+      '/Type /XObject /Subtype /Image /Width 128 /Height 128 /ColorSpace /DeviceGray /BitsPerComponent 8',
+      pixels,
+    ),
+    _streamBody('/Length1 ${font.length}', font),
+  ]);
+}
+
+/// The text drawn on the page of [unusedResourcesPdf].
+const unusedResourcesMarker = 'USEDRESOURCES PAGE';
+
+/// One page that draws text in Helvetica and one 128×128 gray image, and
+/// whose resources also list an embedded TrueType font and a second image of
+/// pseudo-random bytes (they do not deflate) that no content uses.
+final Uint8List unusedResourcesPdf = _unusedResourcesPdf();
+
+Uint8List _unusedResourcesPdf() {
+  final random = Random(23);
+  String pixels() => String.fromCharCodes(
+    List.generate(128 * 128, (_) => random.nextInt(256)),
+  );
+  final font = String.fromCharCodes(subsetCjkFallbackFont);
+  const image =
+      '/Type /XObject /Subtype /Image /Width 128 /Height 128 '
+      '/ColorSpace /DeviceGray /BitsPerComponent 8';
+  return _offsetPdf([
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R /F2 6 0 R >> /XObject << /Im1 8 0 R /Im2 10 0 R >> >> /Contents 4 0 R >>',
+    _streamBody(
+      '',
+      'BT /F1 18 Tf 72 780 Td ($unusedResourcesMarker) Tj ET q 200 0 0 200 72 500 cm /Im1 Do Q',
+    ),
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    '<< /Type /Font /Subtype /TrueType /BaseFont /UnusedFace /FontDescriptor 7 0 R >>',
+    '<< /Type /FontDescriptor /FontName /UnusedFace /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 9 0 R >>',
+    _streamBody(image, pixels()),
+    _streamBody('/Length1 ${font.length}', font),
+    _streamBody(image, pixels()),
+  ]);
+}
+
 /// Minimal valid PDF — US Letter page (612×792 points).
-final Uint8List letterPdf = _build(
+final Uint8List letterPdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>',
+]);
+
+/// One blank US-Letter page (612×792 points) — the PDF the lifecycle
+/// battery opens right after a failed open to prove recovery.
+final Uint8List recoverProbePdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>',
+]);
+
+/// [minimalPdf] with its `startxref` pointing 4 bytes past the `xref`
+/// keyword: the DAMAGE IS DELIBERATE — a reader must rebuild the
+/// cross-reference table to open it. qpdf reports it damaged
+/// ("xref not found") and reconstructs it.
+final Uint8List staleStartxrefPdf = _build(
   '%PDF-1.4\n'
   '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n'
   '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n'
   '3 0 obj\n<< /Type /Page /Parent 2 0 R '
-  '/MediaBox [0 0 612 792] >>\nendobj\n'
+  '/MediaBox [0 0 595 842] >>\nendobj\n'
   'xref\n0 4\n'
   '0000000000 65535 f \n'
   '0000000009 00000 n \n'
@@ -139,8 +266,110 @@ final Uint8List garbageBytes = Uint8List.fromList([1, 2, 3, 4, 5, 6, 7, 8]);
 /// Empty bytes.
 final Uint8List emptyBytes = Uint8List(0);
 
-/// Almost a PDF — has header but broken structure.
+/// Almost a PDF: header, then garbage — the damage is deliberate. Every
+/// battery that must prove a non-PDF or corrupt file is refused opens
+/// this instead of random noise, so the failure is a structure failure,
+/// not a header failure.
 final Uint8List brokenPdf = _build('%PDF-1.4\ngarbage after header\n');
+
+/// A valid one-page PDF whose trailer has NO /Size, with 120 objects: the
+/// 116 extra dictionaries are reachable from nothing, so only the
+/// full-rewrite sweep reaches them. A reader that sizes new ids from a
+/// fallback when /Size is missing collides new objects into ids that the
+/// source already uses (it has objects far past 100).
+final noSizePdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /Helv 5 0 R >> >> /Contents 4 0 R >>',
+  // 4: content stream — a marker the battery proves by extraction
+  _streamBody('', 'q BT /Helv 12 Tf 72 720 Td (nosizemark) Tj ET Q\n'),
+  // 5: Helvetica font
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  // 6..120: scratch dictionaries reachable from nothing
+  for (var i = 6; i <= 120; i++) '<< /Type /Scratch /N $i >>',
+], trailerSize: false);
+
+/// A valid one-page PDF whose xref lists one free entry (object 3, the
+/// page) beside its in-use objects — the free-list body that a save with
+/// forbidden free entries would punch a hole in. Object numbers actually
+/// in use run 1, 2, 4; the sweep must skip 3 without erroring.
+final freeEntryPdf = _offsetPdf(
+  [
+    // 1: catalog
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    // 2: page tree
+    '<< /Type /Pages /Kids [4 0 R] /Count 1 >>',
+    // 3: a FREE xref entry — the body below is dead, marked unused
+    'zz dead body: its xref entry says f and no object reads it',
+    // 4: page
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>',
+  ],
+  freeIds: {3},
+);
+
+/// A valid one-page PDF whose font is object 5 at generation 1, referenced
+/// as `5 1 R`: the shape a file takes after an editor freed a number and
+/// reused it. A full rewrite writes every object at generation 0, so it
+/// must write every reference at generation 0 too.
+final genOnePdf = _offsetPdf(
+  [
+    // 1: catalog
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    // 2: page tree
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    // 3: page, its font at generation 1
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /Helv 5 1 R >> >> /Contents 4 0 R >>',
+    // 4: content stream
+    _streamBody('', 'q BT /Helv 12 Tf 72 720 Td (genonemark) Tj ET Q\n'),
+    // 5: Helvetica font, generation 1
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ],
+  generations: {5: 1},
+);
+
+/// A valid PDF except that the xref entry for object 4 (the page's
+/// content stream) points at a non-object offset. The stream is nowhere
+/// in the file, so the full-rewrite sweep cannot load it from where the
+/// table says. Deliberately left out of handwritten_fixtures_test.dart:
+/// its xref does not point where it says — that is the damage the
+/// fixture carries, not a fixture bug.
+final brokenObjectPdf = _brokenObjectPdf();
+
+Uint8List _brokenObjectPdf() {
+  final b = StringBuffer('%PDF-1.7\n');
+  final objects = <String>[
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /Helv 5 0 R >> >> /Contents 4 0 R >>',
+  ];
+  final offsets = <int>[];
+  for (var i = 0; i < objects.length; i++) {
+    offsets.add(b.length);
+    b.write('${i + 1} 0 obj\n${objects[i]}\nendobj\n');
+  }
+  // The not-an-object bytes the content stream's entry points at. The
+  // stream object itself is nowhere in the file — no recovery search can
+  // find a `4 0 obj` header — so the sweep cannot load it at all.
+  final garbageOffset = b.length;
+  b.write('garbage with no object header\n');
+  final xrefOffset = b.length;
+  b.write(
+    'xref\n0 5\n'
+    '0000000000 65535 f \n'
+    '${offsets[0].toString().padLeft(10, '0')} 00000 n \n'
+    '${offsets[1].toString().padLeft(10, '0')} 00000 n \n'
+    '${offsets[2].toString().padLeft(10, '0')} 00000 n \n'
+    '${garbageOffset.toString().padLeft(10, '0')} 00000 n \n'
+    'trailer\n<< /Size 5 /Root 1 0 R >>\n'
+    'startxref\n$xrefOffset\n%%EOF\n',
+  );
+  final content = b.toString();
+  assert(content.codeUnits.every((u) => u <= 0xFF));
+  return Uint8List.fromList(content.codeUnits);
+}
 
 // Fixture strings are byte strings: each char's code unit IS the byte
 // (Latin-1 escapes like ß emit the single PDFDocEncoding byte 0xDF).
@@ -166,21 +395,46 @@ String _streamBody(String dict, String data) =>
 /// PDF with a correct xref table — byte offsets are computed, not hand-typed,
 /// so hand-authored multi-object fixtures can't drift. ASCII-only: a
 /// StringBuffer char position equals the byte offset.
-Uint8List _offsetPdf(List<String> objects, {int root = 1}) {
+///
+/// [trailerSize] omits the trailer's /Size (which readers must then take
+/// from the xref table itself). [freeIds] marks an in-use object number
+/// as a free xref entry — its body still sits in the file unaddressed.
+/// [info] points the trailer's /Info at that object number. [trailerExtra]
+/// is written into the trailer dictionary after the other entries.
+Uint8List _offsetPdf(
+  List<String> objects, {
+  int root = 1,
+  bool trailerSize = true,
+  Set<int> freeIds = const {},
+  Map<int, int> generations = const {},
+  int? info,
+  String trailerExtra = '',
+}) {
   final b = StringBuffer('%PDF-1.7\n');
   final offsets = <int>[];
   for (var i = 0; i < objects.length; i++) {
     offsets.add(b.length);
-    b.write('${i + 1} 0 obj\n${objects[i]}\nendobj\n');
+    final gen = generations[i + 1] ?? 0;
+    b.write('${i + 1} $gen obj\n${objects[i]}\nendobj\n');
   }
   final xrefOffset = b.length;
   final size = objects.length + 1;
   b.write('xref\n0 $size\n0000000000 65535 f \n');
-  for (final off in offsets) {
-    b.write('${off.toString().padLeft(10, '0')} 00000 n \n');
+  for (var i = 0; i < offsets.length; i++) {
+    final gen = (generations[i + 1] ?? 0).toString().padLeft(5, '0');
+    final entry = freeIds.contains(i + 1)
+        ? '0000000000 00001 f \n'
+        : '${offsets[i].toString().padLeft(10, '0')} $gen n \n';
+    b.write(entry);
   }
+  final trailer = StringBuffer('trailer\n<< ');
+  if (trailerSize) trailer.write('/Size $size ');
+  trailer.write('/Root $root 0 R');
+  if (info != null) trailer.write(' /Info $info 0 R');
+  if (trailerExtra.isNotEmpty) trailer.write(' $trailerExtra');
+  trailer.write(' >>\n');
   b.write(
-    'trailer\n<< /Size $size /Root $root 0 R >>\n'
+    '$trailer'
     'startxref\n$xrefOffset\n%%EOF\n',
   );
   final content = b.toString();
@@ -220,6 +474,33 @@ final Uint8List indirectAnnotsForm = _offsetPdf([
   _streamBody('', 'q Q\n'),
 ]);
 
+/// One page with four choice fields over the options `red green blue amber`:
+/// the combo box `combo`, the list box `list`, the multi-select list box
+/// `multi` and the editable combo box `free`, each holding `red`. The form
+/// writer's dart-pdf does not emit a list box, so the fixture is authored.
+final Uint8List choiceFormPdf = _offsetPdf([
+  // 1: catalog with the four fields
+  '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R 7 0 R 8 0 R] /DA (/Helv 12 Tf 0 g) /DR << /Font << /Helv 4 0 R >> >> >> >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 9 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >>',
+  // 4: Helvetica
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  // 5..8: the fields, merged with their widgets
+  _choiceWidget('combo', 1 << 17, '20 250 120 270'),
+  _choiceWidget('list', 0, '20 150 120 230'),
+  _choiceWidget('multi', 1 << 21, '150 150 250 230'),
+  _choiceWidget('free', (1 << 17) | (1 << 18), '20 100 120 120'),
+  // 9: page content
+  _streamBody('', 'q Q\n'),
+]);
+
+String _choiceWidget(String name, int flags, String rect) =>
+    '<< /Type /Annot /Subtype /Widget /FT /Ch /T ($name) /Ff $flags /V (red) '
+    '/Opt [(red) (green) (blue) (amber)] /Rect [$rect] /F 4 /P 3 0 R '
+    '/DA (/Helv 12 Tf 0 g) >>';
+
 /// One page that draws an image XObject (`/Im1`, 2×2 DeviceGray) and a
 /// Form XObject (`/Fx1`, a filled square) with `/Resources` inherited from
 /// the `Pages` node. `pageImages` must list `/Im1` alone: a `Do` is not an
@@ -248,6 +529,29 @@ final Uint8List imageAndFormPdf = _offsetPdf([
     '',
     'q 100 0 0 50 40 700 cm /Im1 Do Q\nq 1 0 0 1 200 600 cm /Fx1 Do Q\n',
   ),
+]);
+
+/// Length of [rampImagePdf]'s image stream: 640×480 gray samples.
+const int rampImageBytes = 640 * 480;
+
+/// One page drawing a 640×480 DeviceGray image whose unfiltered stream is
+/// [rampImageBytes] bytes of a repeating 0..255 ramp, so a save that copies
+/// the stream raw can be proven byte for byte.
+final Uint8List rampImagePdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R >>',
+  // 4: the image, 300 KB with no /Filter
+  _streamBody(
+    '/Type /XObject /Subtype /Image /Width 640 /Height 480 '
+    '/ColorSpace /DeviceGray /BitsPerComponent 8',
+    String.fromCharCodes(List<int>.generate(rampImageBytes, (i) => i % 256)),
+  ),
+  // 5: page content
+  _streamBody('', 'q 320 0 0 240 100 400 cm /Im1 Do Q\n'),
 ]);
 
 /// Returns `width*height` two-digit hex bytes (rows in order, no
@@ -699,1177 +1003,57 @@ final Uint8List yesNoRadioForm = _offsetPdf([
   _streamBody('', 'q Q\n'),
 ]);
 
-final Uint8List bookmarkedPdf = Uint8List.fromList([
-  0x25,
-  0x50,
-  0x44,
-  0x46,
-  0x2D,
-  0x31,
-  0x2E,
-  0x34,
-  0x0A,
-  0x31,
-  0x20,
-  0x30,
-  0x20,
-  0x6F,
-  0x62,
-  0x6A,
-  0x0A,
-  0x3C,
-  0x3C,
-  0x20,
-  0x2F,
-  0x54,
-  0x79,
-  0x70,
-  0x65,
-  0x20,
-  0x2F,
-  0x43,
-  0x61,
-  0x74,
-  0x61,
-  0x6C,
-  0x6F,
-  0x67,
-  0x20,
-  0x2F,
-  0x50,
-  0x61,
-  0x67,
-  0x65,
-  0x73,
-  0x20,
-  0x32,
-  0x20,
-  0x30,
-  0x20,
-  0x52,
-  0x20,
-  0x2F,
-  0x4F,
-  0x75,
-  0x74,
-  0x6C,
-  0x69,
-  0x6E,
-  0x65,
-  0x73,
-  0x20,
-  0x37,
-  0x20,
-  0x30,
-  0x20,
-  0x52,
-  0x20,
-  0x3E,
-  0x3E,
-  0x0A,
-  0x65,
-  0x6E,
-  0x64,
-  0x6F,
-  0x62,
-  0x6A,
-  0x0A,
-  0x32,
-  0x20,
-  0x30,
-  0x20,
-  0x6F,
-  0x62,
-  0x6A,
-  0x0A,
-  0x3C,
-  0x3C,
-  0x20,
-  0x2F,
-  0x54,
-  0x79,
-  0x70,
-  0x65,
-  0x20,
-  0x2F,
-  0x50,
-  0x61,
-  0x67,
-  0x65,
-  0x73,
-  0x20,
-  0x2F,
-  0x4B,
-  0x69,
-  0x64,
-  0x73,
-  0x20,
-  0x5B,
-  0x33,
-  0x20,
-  0x30,
-  0x20,
-  0x52,
-  0x20,
-  0x35,
-  0x20,
-  0x30,
-  0x20,
-  0x52,
-  0x5D,
-  0x20,
-  0x2F,
-  0x43,
-  0x6F,
-  0x75,
-  0x6E,
-  0x74,
-  0x20,
-  0x32,
-  0x20,
-  0x3E,
-  0x3E,
-  0x0A,
-  0x65,
-  0x6E,
-  0x64,
-  0x6F,
-  0x62,
-  0x6A,
-  0x0A,
-  0x31,
-  0x30,
-  0x20,
-  0x30,
-  0x20,
-  0x6F,
-  0x62,
-  0x6A,
-  0x0A,
-  0x3C,
-  0x3C,
-  0x20,
-  0x2F,
-  0x54,
-  0x79,
-  0x70,
-  0x65,
-  0x20,
-  0x2F,
-  0x46,
-  0x6F,
-  0x6E,
-  0x74,
-  0x20,
-  0x2F,
-  0x53,
-  0x75,
-  0x62,
-  0x74,
-  0x79,
-  0x70,
-  0x65,
-  0x20,
-  0x2F,
-  0x54,
-  0x79,
-  0x70,
-  0x65,
-  0x31,
-  0x20,
-  0x2F,
-  0x42,
-  0x61,
-  0x73,
-  0x65,
-  0x46,
-  0x6F,
-  0x6E,
-  0x74,
-  0x20,
-  0x2F,
-  0x48,
-  0x65,
-  0x6C,
-  0x76,
-  0x65,
-  0x74,
-  0x69,
-  0x63,
-  0x61,
-  0x20,
-  0x3E,
-  0x3E,
-  0x0A,
-  0x65,
-  0x6E,
-  0x64,
-  0x6F,
-  0x62,
-  0x6A,
-  0x0A,
-  0x33,
-  0x20,
-  0x30,
-  0x20,
-  0x6F,
-  0x62,
-  0x6A,
-  0x0A,
-  0x3C,
-  0x3C,
-  0x20,
-  0x2F,
-  0x54,
-  0x79,
-  0x70,
-  0x65,
-  0x20,
-  0x2F,
-  0x50,
-  0x61,
-  0x67,
-  0x65,
-  0x20,
-  0x2F,
-  0x50,
-  0x61,
-  0x72,
-  0x65,
-  0x6E,
-  0x74,
-  0x20,
-  0x32,
-  0x20,
-  0x30,
-  0x20,
-  0x52,
-  0x20,
-  0x2F,
-  0x4D,
-  0x65,
-  0x64,
-  0x69,
-  0x61,
-  0x42,
-  0x6F,
-  0x78,
-  0x20,
-  0x5B,
-  0x30,
-  0x20,
-  0x30,
-  0x20,
-  0x36,
-  0x31,
-  0x32,
-  0x20,
-  0x37,
-  0x39,
-  0x32,
-  0x5D,
-  0x20,
-  0x2F,
-  0x43,
-  0x6F,
-  0x6E,
-  0x74,
-  0x65,
-  0x6E,
-  0x74,
-  0x73,
-  0x20,
-  0x34,
-  0x20,
-  0x30,
-  0x20,
-  0x52,
-  0x20,
-  0x2F,
-  0x52,
-  0x65,
-  0x73,
-  0x6F,
-  0x75,
-  0x72,
-  0x63,
-  0x65,
-  0x73,
-  0x20,
-  0x3C,
-  0x3C,
-  0x20,
-  0x2F,
-  0x46,
-  0x6F,
-  0x6E,
-  0x74,
-  0x20,
-  0x3C,
-  0x3C,
-  0x20,
-  0x2F,
-  0x46,
-  0x31,
-  0x20,
-  0x31,
-  0x30,
-  0x20,
-  0x30,
-  0x20,
-  0x52,
-  0x20,
-  0x3E,
-  0x3E,
-  0x20,
-  0x3E,
-  0x3E,
-  0x20,
-  0x3E,
-  0x3E,
-  0x0A,
-  0x65,
-  0x6E,
-  0x64,
-  0x6F,
-  0x62,
-  0x6A,
-  0x0A,
-  0x34,
-  0x20,
-  0x30,
-  0x20,
-  0x6F,
-  0x62,
-  0x6A,
-  0x0A,
-  0x3C,
-  0x3C,
-  0x20,
-  0x2F,
-  0x4C,
-  0x65,
-  0x6E,
-  0x67,
-  0x74,
-  0x68,
-  0x20,
-  0x34,
-  0x31,
-  0x20,
-  0x3E,
-  0x3E,
-  0x0A,
-  0x73,
-  0x74,
-  0x72,
-  0x65,
-  0x61,
-  0x6D,
-  0x0A,
-  0x42,
-  0x54,
-  0x20,
-  0x2F,
-  0x46,
-  0x31,
-  0x20,
-  0x31,
-  0x32,
-  0x20,
-  0x54,
-  0x66,
-  0x20,
-  0x31,
-  0x30,
-  0x30,
-  0x20,
-  0x37,
-  0x30,
-  0x30,
-  0x20,
-  0x54,
-  0x64,
-  0x20,
-  0x28,
-  0x43,
-  0x68,
-  0x61,
-  0x70,
-  0x74,
-  0x65,
-  0x72,
-  0x20,
-  0x31,
-  0x29,
-  0x20,
-  0x54,
-  0x6A,
-  0x20,
-  0x45,
-  0x54,
-  0x0A,
-  0x65,
-  0x6E,
-  0x64,
-  0x73,
-  0x74,
-  0x72,
-  0x65,
-  0x61,
-  0x6D,
-  0x0A,
-  0x65,
-  0x6E,
-  0x64,
-  0x6F,
-  0x62,
-  0x6A,
-  0x0A,
-  0x35,
-  0x20,
-  0x30,
-  0x20,
-  0x6F,
-  0x62,
-  0x6A,
-  0x0A,
-  0x3C,
-  0x3C,
-  0x20,
-  0x2F,
-  0x54,
-  0x79,
-  0x70,
-  0x65,
-  0x20,
-  0x2F,
-  0x50,
-  0x61,
-  0x67,
-  0x65,
-  0x20,
-  0x2F,
-  0x50,
-  0x61,
-  0x72,
-  0x65,
-  0x6E,
-  0x74,
-  0x20,
-  0x32,
-  0x20,
-  0x30,
-  0x20,
-  0x52,
-  0x20,
-  0x2F,
-  0x4D,
-  0x65,
-  0x64,
-  0x69,
-  0x61,
-  0x42,
-  0x6F,
-  0x78,
-  0x20,
-  0x5B,
-  0x30,
-  0x20,
-  0x30,
-  0x20,
-  0x36,
-  0x31,
-  0x32,
-  0x20,
-  0x37,
-  0x39,
-  0x32,
-  0x5D,
-  0x20,
-  0x2F,
-  0x43,
-  0x6F,
-  0x6E,
-  0x74,
-  0x65,
-  0x6E,
-  0x74,
-  0x73,
-  0x20,
-  0x36,
-  0x20,
-  0x30,
-  0x20,
-  0x52,
-  0x20,
-  0x2F,
-  0x52,
-  0x65,
-  0x73,
-  0x6F,
-  0x75,
-  0x72,
-  0x63,
-  0x65,
-  0x73,
-  0x20,
-  0x3C,
-  0x3C,
-  0x20,
-  0x2F,
-  0x46,
-  0x6F,
-  0x6E,
-  0x74,
-  0x20,
-  0x3C,
-  0x3C,
-  0x20,
-  0x2F,
-  0x46,
-  0x31,
-  0x20,
-  0x31,
-  0x30,
-  0x20,
-  0x30,
-  0x20,
-  0x52,
-  0x20,
-  0x3E,
-  0x3E,
-  0x20,
-  0x3E,
-  0x3E,
-  0x20,
-  0x3E,
-  0x3E,
-  0x0A,
-  0x65,
-  0x6E,
-  0x64,
-  0x6F,
-  0x62,
-  0x6A,
-  0x0A,
-  0x36,
-  0x20,
-  0x30,
-  0x20,
-  0x6F,
-  0x62,
-  0x6A,
-  0x0A,
-  0x3C,
-  0x3C,
-  0x20,
-  0x2F,
-  0x4C,
-  0x65,
-  0x6E,
-  0x67,
-  0x74,
-  0x68,
-  0x20,
-  0x34,
-  0x31,
-  0x20,
-  0x3E,
-  0x3E,
-  0x0A,
-  0x73,
-  0x74,
-  0x72,
-  0x65,
-  0x61,
-  0x6D,
-  0x0A,
-  0x42,
-  0x54,
-  0x20,
-  0x2F,
-  0x46,
-  0x31,
-  0x20,
-  0x31,
-  0x32,
-  0x20,
-  0x54,
-  0x66,
-  0x20,
-  0x31,
-  0x30,
-  0x30,
-  0x20,
-  0x37,
-  0x30,
-  0x30,
-  0x20,
-  0x54,
-  0x64,
-  0x20,
-  0x28,
-  0x43,
-  0x68,
-  0x61,
-  0x70,
-  0x74,
-  0x65,
-  0x72,
-  0x20,
-  0x32,
-  0x29,
-  0x20,
-  0x54,
-  0x6A,
-  0x20,
-  0x45,
-  0x54,
-  0x0A,
-  0x65,
-  0x6E,
-  0x64,
-  0x73,
-  0x74,
-  0x72,
-  0x65,
-  0x61,
-  0x6D,
-  0x0A,
-  0x65,
-  0x6E,
-  0x64,
-  0x6F,
-  0x62,
-  0x6A,
-  0x0A,
-  0x37,
-  0x20,
-  0x30,
-  0x20,
-  0x6F,
-  0x62,
-  0x6A,
-  0x0A,
-  0x3C,
-  0x3C,
-  0x20,
-  0x2F,
-  0x54,
-  0x79,
-  0x70,
-  0x65,
-  0x20,
-  0x2F,
-  0x4F,
-  0x75,
-  0x74,
-  0x6C,
-  0x69,
-  0x6E,
-  0x65,
-  0x73,
-  0x20,
-  0x2F,
-  0x46,
-  0x69,
-  0x72,
-  0x73,
-  0x74,
-  0x20,
-  0x38,
-  0x20,
-  0x30,
-  0x20,
-  0x52,
-  0x20,
-  0x2F,
-  0x4C,
-  0x61,
-  0x73,
-  0x74,
-  0x20,
-  0x39,
-  0x20,
-  0x30,
-  0x20,
-  0x52,
-  0x20,
-  0x2F,
-  0x43,
-  0x6F,
-  0x75,
-  0x6E,
-  0x74,
-  0x20,
-  0x32,
-  0x20,
-  0x3E,
-  0x3E,
-  0x0A,
-  0x65,
-  0x6E,
-  0x64,
-  0x6F,
-  0x62,
-  0x6A,
-  0x0A,
-  0x38,
-  0x20,
-  0x30,
-  0x20,
-  0x6F,
-  0x62,
-  0x6A,
-  0x0A,
-  0x3C,
-  0x3C,
-  0x20,
-  0x2F,
-  0x54,
-  0x69,
-  0x74,
-  0x6C,
-  0x65,
-  0x20,
-  0x28,
-  0x43,
-  0x68,
-  0x61,
-  0x70,
-  0x74,
-  0x65,
-  0x72,
-  0x20,
-  0x31,
-  0x29,
-  0x20,
-  0x2F,
-  0x50,
-  0x61,
-  0x72,
-  0x65,
-  0x6E,
-  0x74,
-  0x20,
-  0x37,
-  0x20,
-  0x30,
-  0x20,
-  0x52,
-  0x20,
-  0x2F,
-  0x4E,
-  0x65,
-  0x78,
-  0x74,
-  0x20,
-  0x39,
-  0x20,
-  0x30,
-  0x20,
-  0x52,
-  0x20,
-  0x2F,
-  0x44,
-  0x65,
-  0x73,
-  0x74,
-  0x20,
-  0x5B,
-  0x33,
-  0x20,
-  0x30,
-  0x20,
-  0x52,
-  0x20,
-  0x2F,
-  0x46,
-  0x69,
-  0x74,
-  0x5D,
-  0x20,
-  0x3E,
-  0x3E,
-  0x0A,
-  0x65,
-  0x6E,
-  0x64,
-  0x6F,
-  0x62,
-  0x6A,
-  0x0A,
-  0x39,
-  0x20,
-  0x30,
-  0x20,
-  0x6F,
-  0x62,
-  0x6A,
-  0x0A,
-  0x3C,
-  0x3C,
-  0x20,
-  0x2F,
-  0x54,
-  0x69,
-  0x74,
-  0x6C,
-  0x65,
-  0x20,
-  0x28,
-  0x43,
-  0x68,
-  0x61,
-  0x70,
-  0x74,
-  0x65,
-  0x72,
-  0x20,
-  0x32,
-  0x29,
-  0x20,
-  0x2F,
-  0x50,
-  0x61,
-  0x72,
-  0x65,
-  0x6E,
-  0x74,
-  0x20,
-  0x37,
-  0x20,
-  0x30,
-  0x20,
-  0x52,
-  0x20,
-  0x2F,
-  0x50,
-  0x72,
-  0x65,
-  0x76,
-  0x20,
-  0x38,
-  0x20,
-  0x30,
-  0x20,
-  0x52,
-  0x20,
-  0x2F,
-  0x44,
-  0x65,
-  0x73,
-  0x74,
-  0x20,
-  0x5B,
-  0x35,
-  0x20,
-  0x30,
-  0x20,
-  0x52,
-  0x20,
-  0x2F,
-  0x46,
-  0x69,
-  0x74,
-  0x5D,
-  0x20,
-  0x3E,
-  0x3E,
-  0x0A,
-  0x65,
-  0x6E,
-  0x64,
-  0x6F,
-  0x62,
-  0x6A,
-  0x0A,
-  0x78,
-  0x72,
-  0x65,
-  0x66,
-  0x0A,
-  0x30,
-  0x20,
-  0x31,
-  0x31,
-  0x0A,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x20,
-  0x36,
-  0x35,
-  0x35,
-  0x33,
-  0x35,
-  0x20,
-  0x66,
-  0x20,
-  0x0A,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x39,
-  0x20,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x20,
-  0x6E,
-  0x20,
-  0x0A,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x37,
-  0x34,
-  0x20,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x20,
-  0x6E,
-  0x20,
-  0x0A,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x32,
-  0x30,
-  0x38,
-  0x20,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x20,
-  0x6E,
-  0x20,
-  0x0A,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x33,
-  0x33,
-  0x35,
-  0x20,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x20,
-  0x6E,
-  0x20,
-  0x0A,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x34,
-  0x32,
-  0x36,
-  0x20,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x20,
-  0x6E,
-  0x20,
-  0x0A,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x35,
-  0x35,
-  0x33,
-  0x20,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x20,
-  0x6E,
-  0x20,
-  0x0A,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x36,
-  0x34,
-  0x34,
-  0x20,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x20,
-  0x6E,
-  0x20,
-  0x0A,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x37,
-  0x31,
-  0x35,
-  0x20,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x20,
-  0x6E,
-  0x20,
-  0x0A,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x38,
-  0x30,
-  0x30,
-  0x20,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x20,
-  0x6E,
-  0x20,
-  0x0A,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x31,
-  0x33,
-  0x37,
-  0x20,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x30,
-  0x20,
-  0x6E,
-  0x20,
-  0x0A,
-  0x74,
-  0x72,
-  0x61,
-  0x69,
-  0x6C,
-  0x65,
-  0x72,
-  0x0A,
-  0x3C,
-  0x3C,
-  0x20,
-  0x2F,
-  0x53,
-  0x69,
-  0x7A,
-  0x65,
-  0x20,
-  0x31,
-  0x31,
-  0x20,
-  0x2F,
-  0x52,
-  0x6F,
-  0x6F,
-  0x74,
-  0x20,
-  0x31,
-  0x20,
-  0x30,
-  0x20,
-  0x52,
-  0x20,
-  0x3E,
-  0x3E,
-  0x0A,
-  0x73,
-  0x74,
-  0x61,
-  0x72,
-  0x74,
-  0x78,
-  0x72,
-  0x65,
-  0x66,
-  0x0A,
-  0x38,
-  0x38,
-  0x35,
-  0x0A,
-  0x25,
-  0x25,
-  0x45,
-  0x4F,
-  0x46,
-  0x0A,
+/// A radio group whose `/FT /Btn` and radio `/Ff` sit on the grandparent
+/// only; the parent carries `/T (choice)` and the selected `/V /B`; the two
+/// widgets (`/AS /A` and `/AS /B`) carry no `/T`. Also holds a text-field
+/// group (`/FT /Tx` and `/V (shared)` on the parent) whose kid `/T (kid)`
+/// inherits both.
+final Uint8List inheritedFieldAttrsForm = _offsetPdf([
+  // 1: catalog with an inline AcroForm
+  '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 8 0 R] >> >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [6 0 R 7 0 R] >>',
+  // 4: grandparent — /FT and /Ff (radio, 0x8000) live only here
+  '<< /FT /Btn /Ff 32768 /Kids [5 0 R] >>',
+  // 5: parent — the field name and the selected option
+  '<< /Parent 4 0 R /T (choice) /V /B /Kids [6 0 R 7 0 R] >>',
+  // 6: widget for /A, no /T
+  '<< /Parent 5 0 R /Type /Annot /Subtype /Widget /Rect [72 700 132 760] /AS /Off >>',
+  // 7: widget for /B, no /T
+  '<< /Parent 5 0 R /Type /Annot /Subtype /Widget /Rect [200 700 260 760] /AS /B >>',
+  // 8: text group — /FT and /V live on the parent
+  '<< /T (group) /FT /Tx /V (shared) /Kids [9 0 R] >>',
+  // 9: kid with its own /T and nothing else
+  '<< /Parent 8 0 R /T (kid) >>',
+]);
+
+/// A two-page document with a two-item outline tree (Chapter 1, Chapter 2)
+/// whose destinations point at the /Fit view of their pages — the shape
+/// the bookmark reader walks. dart-pdf emits no /Outlines, so only
+/// hand-authoring can precondition this.
+final Uint8List bookmarkedPdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R /Outlines 8 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [4 0 R 6 0 R] /Count 2 >>',
+  // 3: Helvetica font
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  // 4: page 1
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> >>',
+  // 5: page-1 content stream
+  _streamBody('', 'BT /F1 12 Tf 100 700 Td (Chapter 1) Tj ET'),
+  // 6: page 2
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 7 0 R /Resources << /Font << /F1 3 0 R >> >> >>',
+  // 7: page-2 content stream
+  _streamBody('', 'BT /F1 12 Tf 100 700 Td (Chapter 2) Tj ET'),
+  // 8: outline tree
+  '<< /Type /Outlines /First 9 0 R /Last 10 0 R /Count 2 >>',
+  // 9: outline item 1
+  '<< /Title (Chapter 1) /Parent 8 0 R /Next 10 0 R /Dest [4 0 R /Fit] >>',
+  // 10: outline item 2
+  '<< /Title (Chapter 2) /Parent 8 0 R /Prev 9 0 R /Dest [6 0 R /Fit] >>',
 ]);
 
 /// Valid 2x2 red PNG (73 bytes). Generated with Python zlib.
@@ -10015,115 +9199,692 @@ final Uint8List testPkcs12 = Uint8List.fromList([
 /// Field "Prüfstraße und Hausnr", value "Königsallee 42, München",
 /// title "Straßen-Formular für Prüfung" -- all invented for this
 /// fixture.
-final Uint8List formPdfdocNamePdf = _build(
-  '%PDF-1.4\n'
-  '1 0 obj\n'
-  '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DR << /Font << /Helv 5 0 R >> >> /DA (/Helv 0 Tf 0 g) >> >>\n'
-  'endobj\n'
-  '2 0 obj\n'
-  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>\n'
-  'endobj\n'
-  '3 0 obj\n'
-  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Annots [4 0 R] >>\n'
-  'endobj\n'
-  '4 0 obj\n'
-  '<< /Type /Annot /Subtype /Widget /FT /Tx /T (Pr\u00fcfstra\u00dfe und Hausnr) /V (K\u00f6nigsallee 42, M\u00fcnchen) /Rect [50 700 300 720] /DA (/Helv 12 Tf 0 g) /F 4 >>\n'
-  'endobj\n'
-  '5 0 obj\n'
-  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\n'
-  'endobj\n'
-  '6 0 obj\n'
-  '<< /Title (Stra\u00dfen-Formular f\u00fcr Pr\u00fcfung) >>\n'
-  'endobj\n'
-  'xref\n'
-  '0 7\n'
-  '0000000000 65535 f \n'
-  '0000000009 00000 n \n'
-  '0000000145 00000 n \n'
-  '0000000202 00000 n \n'
-  '0000000289 00000 n \n'
-  '0000000454 00000 n \n'
-  '0000000551 00000 n \n'
-  'trailer\n'
-  '<< /Size 7 /Root 1 0 R /Info 6 0 R >>\n'
-  'startxref\n'
-  '610\n'
-  '%%EOF\n'
-  '',
-);
+final Uint8List formPdfdocNamePdf = _offsetPdf([
+  // 1: catalog with the AcroForm
+  '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DR << /Font << /Helv 5 0 R >> >> /DA (/Helv 0 Tf 0 g) >> >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Annots [4 0 R] >>',
+  // 4: widget with the PDFDocEncoding name and value
+  '<< /Type /Annot /Subtype /Widget /FT /Tx /T (Pr\u00fcfstra\u00dfe und Hausnr) /V (K\u00f6nigsallee 42, M\u00fcnchen) /Rect [50 700 300 720] /DA (/Helv 12 Tf 0 g) /F 4 >>',
+  // 5: Helvetica font
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+  // 6: document info — the PDFDocEncoding title
+  '<< /Title (Stra\u00dfen-Formular f\u00fcr Pr\u00fcfung) >>',
+], info: 6);
 
 /// Minimal AcroForm whose field name is a UTF-16BE hex string with
 /// BOM (`<FEFF...>`) -- the ISO 32000-1 s7.9.2.2 UTF-16 branch.
 /// pdf-lib and headless-Chrome-generated forms ship this /T shape.
 /// Same invented field name as [formPdfdocNamePdf]; no default
 /// value.
-final Uint8List formUtf16NamePdf = _build(
-  '%PDF-1.4\n'
-  '1 0 obj\n'
-  '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DR << /Font << /Helv 5 0 R >> >> /DA (/Helv 0 Tf 0 g) >> >>\n'
-  'endobj\n'
-  '2 0 obj\n'
-  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>\n'
-  'endobj\n'
-  '3 0 obj\n'
-  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Annots [4 0 R] >>\n'
-  'endobj\n'
-  '4 0 obj\n'
-  '<< /Type /Annot /Subtype /Widget /FT /Tx /T <FEFF0050007200FC0066007300740072006100DF006500200075006E006400200048006100750073006E0072> /Rect [50 700 300 720] /DA (/Helv 12 Tf 0 g) /F 4 >>\n'
-  'endobj\n'
-  '5 0 obj\n'
-  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\n'
-  'endobj\n'
-  'xref\n'
-  '0 6\n'
-  '0000000000 65535 f \n'
-  '0000000009 00000 n \n'
-  '0000000145 00000 n \n'
-  '0000000202 00000 n \n'
-  '0000000289 00000 n \n'
-  '0000000492 00000 n \n'
-  'trailer\n'
-  '<< /Size 6 /Root 1 0 R >>\n'
-  'startxref\n'
-  '589\n'
-  '%%EOF\n'
-  '',
-);
+final Uint8List formUtf16NamePdf = _offsetPdf([
+  // 1: catalog with the AcroForm
+  '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DR << /Font << /Helv 5 0 R >> >> /DA (/Helv 0 Tf 0 g) >> >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Annots [4 0 R] >>',
+  // 4: widget with the UTF-16BE hex-string name
+  '<< /Type /Annot /Subtype /Widget /FT /Tx /T <FEFF0050007200FC0066007300740072006100DF006500200075006E006400200048006100750073006E0072> /Rect [50 700 300 720] /DA (/Helv 12 Tf 0 g) /F 4 >>',
+  // 5: Helvetica font
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+]);
 
 /// Minimal AcroForm whose field name is RAW UTF-8 bytes in a literal
 /// string (sharp-s as 0xC3 0x9F) -- spec-violating, but real:
 /// LibreOffice-class producers write /T this way. A spec-strict
 /// PDFDocEncoding decode reads these bytes as mojibake. Same invented
 /// field name as [formPdfdocNamePdf]; no default value.
-final Uint8List formUtf8NamePdf = _build(
-  '%PDF-1.4\n'
-  '1 0 obj\n'
-  '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DR << /Font << /Helv 5 0 R >> >> /DA (/Helv 0 Tf 0 g) >> >>\n'
-  'endobj\n'
-  '2 0 obj\n'
-  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>\n'
-  'endobj\n'
-  '3 0 obj\n'
-  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Annots [4 0 R] >>\n'
-  'endobj\n'
-  '4 0 obj\n'
-  '<< /Type /Annot /Subtype /Widget /FT /Tx /T (Pr\u00c3\u00bcfstra\u00c3\u009fe und Hausnr) /Rect [50 700 300 720] /DA (/Helv 12 Tf 0 g) /F 4 >>\n'
-  'endobj\n'
-  '5 0 obj\n'
-  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\n'
-  'endobj\n'
-  'xref\n'
-  '0 6\n'
-  '0000000000 65535 f \n'
-  '0000000009 00000 n \n'
-  '0000000145 00000 n \n'
-  '0000000202 00000 n \n'
-  '0000000289 00000 n \n'
-  '0000000427 00000 n \n'
-  'trailer\n'
-  '<< /Size 6 /Root 1 0 R >>\n'
-  'startxref\n'
-  '524\n'
-  '%%EOF\n'
-  '',
+final Uint8List formUtf8NamePdf = _offsetPdf([
+  // 1: catalog with the AcroForm
+  '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DR << /Font << /Helv 5 0 R >> >> /DA (/Helv 0 Tf 0 g) >> >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Annots [4 0 R] >>',
+  // 4: widget with the raw-UTF-8-bytes-in-a-literal name
+  '<< /Type /Annot /Subtype /Widget /FT /Tx /T (Pr\u00c3\u00bcfstra\u00c3\u009fe und Hausnr) /Rect [50 700 300 720] /DA (/Helv 12 Tf 0 g) /F 4 >>',
+  // 5: Helvetica font
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+]);
+
+/// Eight pages in a two-level page tree, where every structure that can
+/// point at a page does: the catalog `/Dests` dictionary, a `/Names /Dests`
+/// name tree (with an alias per page that names the page's destination by
+/// name), `/PageLabels` (i, ii, then P-1 …), an outline item per page, a link annotation from each page to
+/// the next, an `/OpenAction` to the last page, and one AcroForm text field
+/// per page. The pages carry no `/MediaBox` and no `/Resources` of their
+/// own: both are inherited from the two inner `/Pages` nodes (300×400, font
+/// `/F1`), so a save that re-parents a page must copy them onto it.
+///
+/// Page `i` shows the text `PAGE-i-SECRET` from an `ASCIIHexDecode` content
+/// stream, which a save copies byte for byte, and its field holds the value
+/// `VALUE-i-SECRET`: [pagePruneTruth] gives the raw bytes of both, so a test
+/// can prove a dropped page's objects are absent from the output. dart-pdf
+/// and qpdf write neither the inherited attributes nor this set of page
+/// references, so the fixture is hand-authored (#261).
+final Uint8List pagePrunePdf = () {
+  final n = pagePruneTruth.pageCount;
+  // Objects 1–9 are shared; page i owns objects 10 + 5i … 14 + 5i: the
+  // page, its content, its link, its field widget, its outline item.
+  int page(int i) => 10 + 5 * i;
+  String ref(int id) => '$id 0 R';
+  String all(String Function(int i) f) =>
+      [for (var i = 0; i < n; i++) f(i)].join(' ');
+
+  final catalog =
+      '<< /Type /Catalog /Pages 2 0 R /Dests 5 0 R /Names 6 0 R '
+      '/Outlines 8 0 R /OpenAction [${ref(page(n - 1))} /Fit] '
+      '/PageLabels << /Nums [0 << /S /r >> 2 << /S /D /P (P-) >>] >> '
+      '/AcroForm << /Fields [${all((i) => ref(page(i) + 3))}] '
+      '/DR << /Font << /Helv 9 0 R >> >> /DA (/Helv 12 Tf 0 g) >> >>';
+  final root =
+      '<< /Type /Pages /Kids [3 0 R 4 0 R] /Count $n /MediaBox [0 0 612 792] >>';
+  String inner(int half) {
+    final kids = [
+      for (var i = 0; i < n ~/ 2; i++) ref(page(half * n ~/ 2 + i)),
+    ];
+    return '<< /Type /Pages /Parent 2 0 R /Count ${n ~/ 2} '
+        '/Kids [${kids.join(' ')}] /MediaBox [0 0 300 400] '
+        '/Resources << /Font << /F1 9 0 R >> >> >>';
+  }
+
+  final dests = '<< ${all((i) => '/d$i [${ref(page(i))} /Fit]')} >>';
+  // Each alias names page i's destination by name, and sorts before it,
+  // so a single pass over the array meets the alias first.
+  final nameTree =
+      '<< /Names [${all((i) => '(${pagePruneTruth.alias(i)}) (n$i)')} '
+      '${all((i) => '(n$i) [${ref(page(i))} /Fit]')}] '
+      '/Limits [(${pagePruneTruth.alias(0)}) (n${n - 1})] >>';
+  final outlines =
+      '<< /Type /Outlines /First ${ref(page(0) + 4)} '
+      '/Last ${ref(page(n - 1) + 4)} /Count $n >>';
+  const font = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>';
+
+  String pageDict(int i) =>
+      '<< /Type /Page /Parent ${i < n ~/ 2 ? 3 : 4} 0 R '
+      '/Contents ${ref(page(i) + 1)} '
+      '/Annots [${ref(page(i) + 2)} ${ref(page(i) + 3)}] >>';
+  String link(int i) =>
+      '<< /Type /Annot /Subtype /Link /Rect [0 0 20 20] '
+      '/Dest [${ref(page((i + 1) % n))} /Fit] >>';
+  String widget(int i) =>
+      '<< /Type /Annot /Subtype /Widget /FT /Tx /T (field_$i) '
+      '/V (${pagePruneTruth.value(i)}) /Rect [20 20 200 40] '
+      '/P ${ref(page(i))} >>';
+  String item(int i) {
+    final prev = i > 0 ? ' /Prev ${ref(page(i - 1) + 4)}' : '';
+    final next = i < n - 1 ? ' /Next ${ref(page(i + 1) + 4)}' : '';
+    return '<< /Title (Page $i) /Parent 8 0 R '
+        '/Dest [${ref(page(i))} /Fit]$prev$next >>';
+  }
+
+  return _offsetPdf([
+    catalog,
+    root,
+    inner(0),
+    inner(1),
+    dests,
+    '<< /Dests 7 0 R >>',
+    nameTree,
+    outlines,
+    font,
+    for (var i = 0; i < n; i++) ...[
+      pageDict(i),
+      _streamBody('/Filter /ASCIIHexDecode', pagePruneTruth.contentHex(i)),
+      link(i),
+      widget(i),
+      item(i),
+    ],
+  ]);
+}();
+
+/// What [pagePrunePdf] holds, per page.
+const pagePruneTruth = PagePruneTruth._();
+
+class PagePruneTruth {
+  const PagePruneTruth._();
+
+  int get pageCount => 8;
+
+  /// The visible text of page [i].
+  String marker(int i) => 'PAGE-$i-SECRET';
+
+  /// The value of page [i]'s form field.
+  String value(int i) => 'VALUE-$i-SECRET';
+
+  /// The name-tree key of the named destination that names page [i]'s.
+  String alias(int i) => 'alias$i';
+
+  /// Page [i]'s label: lower-case roman for the first two, then `P-1` on.
+  String label(int i) => i < 2 ? const ['i', 'ii'][i] : 'P-${i - 1}';
+
+  /// Page [i]'s content stream as its hex bytes, `>` included.
+  String contentHex(int i) {
+    final ops = 'BT /F1 18 Tf 20 200 Td (${marker(i)}) Tj ET';
+    return '${ops.codeUnits.map((u) => u.toRadixString(16).padLeft(2, '0')).join()}>';
+  }
+
+  /// Every page's inherited media box, width and height.
+  (double, double) get mediaBox => (300, 400);
+}
+
+/// A one-page form certified at DocMDP [level] (ISO 32000-1 §12.8.2.2):
+/// the catalog's `/Perms /DocMDP` names a signature dictionary whose
+/// `/Reference` carries the level. The signature itself is a placeholder:
+/// the incremental save reads only the level, and no reader in the
+/// battery verifies the bytes. It has one text field, `name`.
+Uint8List certifiedPdf(int level) {
+  const catalog =
+      '<< /Type /Catalog /Pages 2 0 R /Perms << /DocMDP 5 0 R >> '
+      '/AcroForm << /Fields [4 0 R] /DR << /Font << /Helv 6 0 R >> >> '
+      '/DA (/Helv 12 Tf 0 g) >> >>';
+  const widget =
+      '<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [20 20 200 40] '
+      '/P 3 0 R /DA (/Helv 12 Tf 0 g) >>';
+  final signature =
+      '<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached '
+      '/Contents <00> /ByteRange [0 0 0 0] /Reference [<< /Type /SigRef '
+      '/TransformMethod /DocMDP /TransformParams << /Type /TransformParams '
+      '/P $level /V /1.2 >> >>] >>';
+  return _offsetPdf([
+    catalog,
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Annots [4 0 R] >>',
+    widget,
+    signature,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ]);
+}
+
+/// Two tagged pages whose structure tree and annotations cross pages: each
+/// page has a `/StructElem` with `/Pg` naming it, `/ParentTree` maps both
+/// pages' content, and the note on page 0 replies (`/IRT`) to the note on
+/// page 1. Dropping page 1 leaves the structure element and the reply
+/// pointing at objects the save does not write (objects 4 and 10).
+final Uint8List structTreePdf = () {
+  const resources = '/Resources << /Font << /F1 5 0 R >> >>';
+  String page(int i) =>
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] $resources '
+      '/Contents ${7 + i} 0 R /StructParents $i /Annots [${9 + i} 0 R] >>';
+  String content(int i) => _streamBody(
+    '',
+    '/P << /MCID 0 >> BDC BT /F1 12 Tf 20 200 Td (TAGGED-$i) Tj ET EMC',
+  );
+  String element(int i) =>
+      '<< /Type /StructElem /S /P /P 6 0 R /Pg ${3 + i} 0 R /K 0 >>';
+  const catalog =
+      '<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R '
+      '/MarkInfo << /Marked true >> >>';
+  const reply =
+      '<< /Type /Annot /Subtype /Text /Rect [0 0 20 20] /Contents (reply) '
+      '/IRT 10 0 R >>';
+  return _offsetPdf([
+    catalog,
+    '<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>',
+    page(0),
+    page(1),
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    '<< /Type /StructTreeRoot /K [11 0 R 12 0 R] /ParentTree 13 0 R >>',
+    content(0),
+    content(1),
+    reply,
+    '<< /Type /Annot /Subtype /Text /Rect [0 0 20 20] /Contents (note) >>',
+    element(0),
+    element(1),
+    '<< /Nums [0 [11 0 R] 1 [12 0 R]] >>',
+  ]);
+}();
+
+/// The text of [inheritedPageAttrsPdf]'s page.
+const inheritedPageMarker = 'INHERITEDTEXT';
+
+/// One page whose /MediaBox (300 x 400), /Rotate (90) and /Resources live
+/// only on its /Pages node, so a merge must carry what the page tree gave it.
+final Uint8List inheritedPageAttrsPdf = () {
+  const pages =
+      '<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] '
+      '/Rotate 90 /Resources << /Font << /F1 5 0 R >> >> >>';
+  return _offsetPdf([
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    pages,
+    '<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>',
+    _streamBody('', 'BT /F1 18 Tf 20 200 Td ($inheritedPageMarker) Tj ET'),
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ]);
+}();
+
+/// Three pages under a nested page tree: the root holds an inner /Pages node
+/// (pages 4 and 5) and page 6, none with a /Rotate of its own.
+final Uint8List nestedPageTreePdf = _offsetPdf([
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  '<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 3 >>',
+  '<< /Type /Pages /Parent 2 0 R /Kids [4 0 R 5 0 R] /Count 2 >>',
+  '<< /Type /Page /Parent 3 0 R /MediaBox [0 0 100 100] >>',
+  '<< /Type /Page /Parent 3 0 R /MediaBox [0 0 100 100] >>',
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>',
+]);
+
+const _pagesWithCountedMarks =
+    '<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /Resources << /Font << /Helv 5 0 R >> '
+    '/XObject << /ImA 6 0 R /ImB 9 0 R /Fm 7 0 R >> >> >>';
+
+/// Two pages that draw the same marks through inherited resources, each with
+/// one of every mark a redaction counts under the box `x 20 y 20 w 100 h 100`:
+/// the text `SECRET` (6 glyphs), a filled rectangle inside the box (1 path), a
+/// gray image inside it (`/ImA`, removed), a gray image half under it (`/ImB`,
+/// overwritten), and a form that straddles the box (`/Fm`, specialized) whose
+/// own content fills a rectangle inside the box (1 more path). The wire
+/// reports sum a page's counts and a document's, so a count the engine drops
+/// reads 0 here.
+final Uint8List redactionCountsPdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree holding the resources both pages inherit
+  _pagesWithCountedMarks,
+  // 3, 4: the pages
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 8 0 R >>',
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 8 0 R >>',
+  // 5: font
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  // 6: a 2x2 gray image
+  _streamBody(
+    '/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray '
+        '/BitsPerComponent 8',
+    '\x10\x80\x40\xf0',
+  ),
+  // 7: a form whose box straddles the redaction box and whose content fills
+  // a rectangle inside it once placed at 100,100
+  _streamBody(
+    '/Type /XObject /Subtype /Form /BBox [0 0 100 100]',
+    '0 0 10 10 re f\n',
+  ),
+  // 8: the content of both pages
+  _streamBody(
+    '',
+    'BT /Helv 12 Tf 1 0 0 1 30 100 Tm (SECRET) Tj ET\n'
+        '30 30 20 20 re f\n'
+        'q 20 0 0 20 40 60 cm /ImA Do Q\n'
+        'q 100 0 0 100 90 90 cm /ImB Do Q\n'
+        'q 1 0 0 1 100 100 cm /Fm Do Q\n',
+  ),
+  // 9: the second gray image
+  _streamBody(
+    '/Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray '
+        '/BitsPerComponent 8',
+    '\x10\x80\x40\xf0',
+  ),
+]);
+
+/// A field `a` whose kid `b` lists `a` as its own kid: a /Kids cycle a reader
+/// must end.
+final Uint8List kidsCycleForm = _offsetPdf([
+  '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>',
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>',
+  '<< /T (a) /FT /Tx /Kids [5 0 R] >>',
+  '<< /T (b) /Parent 4 0 R /Kids [4 0 R] >>',
+]);
+
+/// [groups] radio groups. Group `i` is a parent field `g<i>` with one kid
+/// widget that is a named field of its own, `g<i>.k`, whose only state is
+/// `/On`: changing the parent's value and the kid's tooltip both stage the
+/// kid widget, so the save must resolve the two edits in a fixed order.
+Uint8List radioGroupsForm(int groups) {
+  final parents = [for (var i = 0; i < groups; i++) '${4 + 2 * i} 0 R'];
+  String kid(int parent) =>
+      '<< /Subtype /Widget /Parent $parent 0 R /T (k) /Rect [0 0 10 10] '
+      '/AS /Off /AP << /N << /On << >> /Off << >> >> >> >>';
+  return _offsetPdf([
+    '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [${parents.join(' ')}] >> >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>',
+    for (var i = 0; i < groups; i++) ...[
+      '<< /FT /Btn /Ff 32768 /T (g$i) /Kids [${5 + 2 * i} 0 R] /V /Off >>',
+      kid(4 + 2 * i),
+    ],
+  ]);
+}
+
+/// The content stream of [mergeSourcePdf]'s page: one line of text.
+const mergeSourceContent =
+    'BT\n/F1 12 Tf\n1 0 0 1 72 700 Tm\n(MERGEDTEXT) Tj\nET\n';
+
+/// The 48 bytes of the unfiltered 4×4 RGB image of [mergeSourcePdf], none of
+/// them a run a deflate or a re-encode would keep as is.
+final Uint8List mergeSourceImage = Uint8List.fromList(const [
+  7, 200, 13, 91, 42, 250, 3, 118, 66, 29, 180, 5, 99, 141, 77, 230, 18, 61, //
+  154, 9, 205, 88, 37, 172, 24, 111, 246, 53, 130, 2, 195, 70, 16, 223, 84,
+  149, 31, 167, 58, 240, 12, 104, 191, 45, 126, 8, 215, 93,
+]);
+
+/// One 300×400 page with [mergeSourceContent], the unfiltered image
+/// [mergeSourceImage], a link whose /P and /Dest name the page, a text field
+/// `mergedfield`, an /Outlines entry and an AcroForm with /DR. Object 7 is
+/// reached by nothing.
+final Uint8List mergeSourcePdf = _offsetPdf([
+  ('<< /Type /Catalog /Pages 2 0 R /Outlines 9 0 R /AcroForm << /Fields [10 0 R] '
+      '/DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 8 0 R >> >> >> >>'),
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  ('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] /Contents 4 0 R '
+      '/Resources << /Font << /F1 8 0 R >> /XObject << /Im1 5 0 R >> >> '
+      '/Annots [6 0 R 10 0 R] >>'),
+  _streamBody('', mergeSourceContent),
+  _streamBody(
+    '/Type /XObject /Subtype /Image /Width 4 /Height 4 /ColorSpace /DeviceRGB '
+    '/BitsPerComponent 8',
+    String.fromCharCodes(mergeSourceImage),
+  ),
+  ('<< /Type /Annot /Subtype /Link /Rect [10 10 90 40] /P 3 0 R '
+      '/Dest [3 0 R /Fit] /Border [0 0 0] >>'),
+  '<< /Unused true >>',
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  '<< /Type /Outlines /Count 0 >>',
+  ('<< /Type /Annot /Subtype /Widget /FT /Tx /T (mergedfield) '
+      '/Rect [10 100 90 120] /P 3 0 R /DA (/Helv 0 Tf 0 g) >>'),
+]);
+
+/// One 300×400 page per entry of [markers], all sharing one Helvetica font.
+/// The page's text is its marker in parentheses.
+Uint8List markerPagesPdf(List<String> markers) {
+  final fontId = 3 + 2 * markers.length;
+  return _offsetPdf([
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    ('<< /Type /Pages /Kids [${[for (var i = 0; i < markers.length; i++) '${3 + 2 * i} 0 R'].join(' ')}] '
+        '/Count ${markers.length} >>'),
+    for (var i = 0; i < markers.length; i++) ...[
+      ('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] '
+          '/Contents ${4 + 2 * i} 0 R /Resources << /Font << /F1 $fontId 0 R >> >> >>'),
+      _streamBody(
+        '',
+        'BT\n/F1 18 Tf\n1 0 0 1 20 200 Tm\n(${markers[i]}) Tj\nET\n',
+      ),
+    ],
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ]);
+}
+
+/// Two pages, the first with a link whose /Dest names the second.
+final Uint8List linkedPairPdf = _offsetPdf([
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  '<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 /MediaBox [0 0 200 200] >>',
+  '<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>',
+  ('<< /Type /Annot /Subtype /Link /Rect [10 10 50 50] /P 3 0 R '
+      '/Dest [5 0 R /Fit] >>'),
+  '<< /Type /Page /Parent 2 0 R >>',
+]);
+
+/// [data] LZW-compressed the way a PDF's LZWDecode reads it: MSB-first codes
+/// of 9 to 12 bits, a clear code first and whenever the 4096-entry table
+/// fills, an end code last. [earlyChange] is the width switch the filter's
+/// /EarlyChange entry names: true widens a code one table entry early (the
+/// default), false at the entry itself.
+///
+/// `clears` counts the clear codes written, `widths` the code widths used.
+({Uint8List bytes, int clears, Set<int> widths}) lzwEncode(
+  List<int> data, {
+  required bool earlyChange,
+}) {
+  const clear = 256, end = 257, tableFull = 4094;
+  final early = earlyChange ? 1 : 0;
+  final out = <int>[];
+  var acc = 0, accBits = 0;
+  var width = 9, next = 258, clears = 0;
+  final widths = {9};
+  var table = <int, int>{};
+
+  void emit(int code) {
+    acc = (acc << width) | code;
+    accBits += width;
+    while (accBits >= 8) {
+      out.add((acc >> (accBits - 8)) & 0xFF);
+      accBits -= 8;
+    }
+    acc &= (1 << accBits) - 1;
+  }
+
+  // A decoder trails the encoder by one table entry, so a code of the next
+  // width is due once the encoder's next entry passes this point.
+  void widen() {
+    if (width < 12 && next == (1 << width) + 1 - early) {
+      width++;
+      widths.add(width);
+    }
+  }
+
+  emit(clear);
+  clears++;
+  var prefix = -1;
+  for (final byte in data) {
+    if (prefix < 0) {
+      prefix = byte;
+      continue;
+    }
+    final key = (prefix << 8) | byte;
+    final known = table[key];
+    if (known != null) {
+      prefix = known;
+      continue;
+    }
+    emit(prefix);
+    table[key] = next++;
+    widen();
+    if (next >= tableFull) {
+      emit(clear);
+      clears++;
+      table = <int, int>{};
+      next = 258;
+      width = 9;
+    }
+    prefix = byte;
+  }
+  if (prefix >= 0) {
+    emit(prefix);
+    next++;
+    widen();
+  }
+  emit(end);
+  if (accBits > 0) out.add((acc << (8 - accBits)) & 0xFF);
+  return (bytes: Uint8List.fromList(out), clears: clears, widths: widths);
+}
+
+/// The eight-letter tokens [lzwPageTokens] shows, one per line of the page.
+final List<String> lzwPageTokens = () {
+  var state = 20240229;
+  return [
+    for (var i = 0; i < 1500; i++)
+      () {
+        final letters = StringBuffer();
+        for (var c = 0; c < 8; c++) {
+          state = (state * 1664525 + 1013904223) & 0xFFFFFFFF;
+          letters.write('ABCDEFGHIJKLMNOPQRSTUVWXYZ'[(state >> 24) % 26]);
+        }
+        return letters.toString();
+      }(),
+  ];
+}();
+
+/// The content stream of [lzwPagePdf]: a line of text per token of
+/// [lzwPageTokens], long and varied enough that its LZW stream fills the
+/// 4096-entry table several times over and so crosses every code width and
+/// holds clear codes.
+final Uint8List lzwPageContent = Uint8List.fromList(
+  [
+    for (var i = 0; i < lzwPageTokens.length; i++)
+      ('BT /F1 8 Tf 1 0 0 1 ${10 + (i * 37) % 400} ${15800 - 10 * i} Tm '
+          '(${lzwPageTokens[i]}) Tj ET\n'),
+  ].join().codeUnits,
 );
+
+/// One page whose content stream is [stream] under /LZWDecode.
+/// [decodeParms] is the text of the filter's /DecodeParms dictionary, none
+/// when null.
+Uint8List lzwPagePdf(Uint8List stream, {String? decodeParms}) => _offsetPdf([
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  ('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 16000] /Contents 4 0 R '
+      '/Resources << /Font << /F1 5 0 R >> >> >>'),
+  _streamBody(
+    '/Filter /LZWDecode${decodeParms == null ? '' : ' /DecodeParms $decodeParms'}',
+    String.fromCharCodes(stream),
+  ),
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+]);
+
+/// The trailer /ID of [keptEncryptionPdf]: two 16-byte strings.
+const keptEncryptionId =
+    '/ID [<11111111111111111111111111111111> <22222222222222222222222222222222>]';
+
+/// A one-page AES-256 (V 5, R 6) source whose empty user password opens it.
+/// Its /Encrypt dictionary is the engine writer's own, written once and
+/// committed (the key wrapping behind /OE, /UE and /Perms is the part no
+/// Dart code computes): O, U, OE, UE and Perms below belong to the empty user
+/// password, the owner password `owner`, permissions -3900 and a file ID
+/// whose first string is sixteen 0x11 bytes. Neither the page nor the
+/// trailer holds an encrypted string or stream, so the file is valid
+/// encrypted or not.
+///
+/// [encrypt] replaces or adds entries of the /Encrypt dictionary, each as the
+/// text of its value; a null value removes the entry. [cfm] is the method of
+/// the /StdCF crypt filter. [userPassword] swaps in the dictionary made for
+/// the user password `secret`. [id] is the trailer's /ID entry, none when
+/// empty.
+Uint8List keptEncryptionPdf({
+  Map<String, String?> encrypt = const {},
+  String cfm = 'AESV3',
+  bool userPassword = false,
+  String id = keptEncryptionId,
+}) {
+  final entries = <String, String?>{
+    'Filter': '/Standard',
+    'V': '5',
+    'R': '6',
+    'Length': '256',
+    'O': userPassword
+        ? '<e1172bc62acb8c0d0ba33c9a13f4e1fb7cc147dee272d2beb0aa016fecc6e1509bd0688f788cce9e96f93b0f875d42d8>'
+        : '<d7f965012db134a81ef430ac0c5398c835dfab9cde4432662d5a850c1332c0cdfa5f662345e7fbd630917df85f4e9284>',
+    'U': userPassword
+        ? '<e8f07e6f09e596661141685d2462cdfea305def6644f008cb71838cba5b71d49b340cde93350b5dfd7f16014d2ab0457>'
+        : '<68e07762b8fe2531970e8064f96df6c012f641209af3ae044678a467d25bdeca587875ffef6e01b9d1a33370b849c1fc>',
+    'OE': userPassword
+        ? '<e20dd38d80cd96a77e4d38f8c50412376cf93bfb399cd4d469be7e553ea77f5c>'
+        : '<d171584cfa0eb97511af8ca381c72b6b4e25751e47bb36d7f85f8ddb0ffc98b6>',
+    'UE': userPassword
+        ? '<f3ff7911b23123f3f948c4bb64b54eb83d4402e172a48197e77df0f7ee3d6921>'
+        : '<53c94f1aba439a67eda1618d2df9b308af4578c296ac650e2ce6b5ff3cf50fa3>',
+    'P': '-3900',
+    'Perms': userPassword
+        ? '<457c9dad6e5459db95961c79e25c7b2d>'
+        : '<ea01b8c9fd2eea1be81c5e6dd445adfa>',
+    'CF': '<< /StdCF << /AuthEvent /DocOpen /CFM /$cfm /Length 32 >> >>',
+    'StmF': '/StdCF',
+    'StrF': '/StdCF',
+    ...encrypt,
+  };
+  return _offsetPdf([
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>',
+    '<< ${[for (final e in entries.entries)
+      if (e.value != null) '/${e.key} ${e.value}'].join(' ')} >>',
+  ], trailerExtra: '/Encrypt 4 0 R $id');
+}
+
+/// The CMap text of a simple font's /ToUnicode stream: one byte codes, with
+/// [body] as the bf sections.
+String _toUnicodeCmap(String body, {String eol = '\n'}) => [
+  'begincmap',
+  '1 begincodespacerange',
+  '<00> <FF>',
+  'endcodespacerange',
+  body,
+  'endcmap',
+  '',
+].join(eol);
+
+/// One page that draws four lines, each in a Helvetica whose /ToUnicode CMap
+/// is laid out in a way a reader that takes one range per text line loses:
+///
+/// | Line (top down) | Font | The CMap | Text drawn | Extracted |
+/// |---|---|---|---|---|
+/// | 1 | `/F1` | bfrange, every line ends in a bare CR | `!"` | `HI` |
+/// | 2 | `/F2` | three bfrange entries on one line | `!"#` | `HIJ` |
+/// | 3 | `/F3` | notdefrange, every line ends in a bare CR | codes 1, 2 | `AB` |
+/// | 4 | `/F4` | bfrange whose array holds one element per line | `!"#` | `HIJ` |
+final Uint8List splitRangeCmapsPdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R /F2 6 0 R /F3 7 0 R /F4 8 0 R >> >> /Contents 4 0 R >>',
+  // 4: content — one line per font, top down
+  _streamBody(
+    '',
+    'BT /F1 18 Tf 72 720 Td (!") Tj ET\n'
+        'BT /F2 18 Tf 72 680 Td (!"#) Tj ET\n'
+        'BT /F3 18 Tf 72 640 Td (\\001\\002) Tj ET\n'
+        'BT /F4 18 Tf 72 600 Td (!"#) Tj ET',
+  ),
+  // 5-8: the four fonts
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 9 0 R >>',
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 10 0 R >>',
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 11 0 R >>',
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 12 0 R >>',
+  // 9: F1's CMap
+  _streamBody(
+    '',
+    _toUnicodeCmap(
+      '2 beginbfrange\r<21> <21> <0048>\r<22> <22> <0049>\rendbfrange',
+      eol: '\r',
+    ),
+  ),
+  // 10: F2's CMap
+  _streamBody(
+    '',
+    _toUnicodeCmap(
+      '2 beginbfrange\n<21> <21> <0048> <22> <23> [<0049> <004A>]\nendbfrange',
+    ),
+  ),
+  // 11: F3's CMap
+  _streamBody(
+    '',
+    _toUnicodeCmap(
+      '2 beginnotdefrange\r<01> <01> <0041>\r<02> <02> <0042>\rendnotdefrange',
+      eol: '\r',
+    ),
+  ),
+  // 12: F4's CMap
+  _streamBody(
+    '',
+    _toUnicodeCmap(
+      '1 beginbfrange\n<21> <23> [\n<0048>\n<0049>\n<004A>\n]\nendbfrange',
+    ),
+  ),
+]);
+
+/// The name of the font in [delimiterNamePdf]'s resources, as the file spells
+/// it: it holds `(`, `)`, `<`, `>`, `[`, `]`, `{`, `}`, `/`, `%`, `#` and a
+/// space.
+const _delimiterFontName = 'F#28#29#3C#3E#5B#5D#7B#7D#2F#25#23#20';
+
+/// One page that draws `!` in a font whose resource name holds every PDF
+/// delimiter, `#`, a space and a non-ASCII byte. The font maps `!` to `X`
+/// through /ToUnicode and is the only font the page has, so the text reads
+/// `X` only while the name still finds the font.
+final Uint8List delimiterNamePdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /$_delimiterFontName 5 0 R >> >> /Contents 4 0 R >>',
+  // 4: content
+  _streamBody('', 'BT /$_delimiterFontName 18 Tf 72 720 Td (!) Tj ET'),
+  // 5: the font
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 6 0 R >>',
+  // 6: its CMap
+  _streamBody('', _toUnicodeCmap('1 beginbfchar\n<21> <0058>\nendbfchar')),
+]);

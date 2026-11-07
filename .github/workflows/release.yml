@@ -32,7 +32,7 @@ on:
       runner:
         description: "Runner for infra jobs (gate, discover, upload, publish)"
         type: choice
-        options: [ubuntu-24.04, macos-14, windows-2025-vs2026]
+        options: [ubuntu-24.04, macos-15, windows-2025-vs2026]
         default: ubuntu-24.04
 
 permissions: {}
@@ -88,14 +88,14 @@ jobs:
       # release a lane whose changelog adds more than one new version.
       # Checks the lane being released (the pushed branch).
       - name: Version sanity
-        uses: whuppi/ci/actions/release-tool@v2.7.9
+        uses: whuppi/ci/actions/release-tool@v2.7.13
         env:
           BRANCH: ${{ inputs.branch || github.ref_name }}
         with:
           mode: --check-versions
       - name: Check changelog relevance
         id: check
-        uses: whuppi/ci/actions/release-tool@v2.7.9
+        uses: whuppi/ci/actions/release-tool@v2.7.13
         env:
           BRANCH: ${{ inputs.branch || github.ref_name }}
           BEFORE: ${{ github.event.before }}
@@ -128,7 +128,7 @@ jobs:
           persist-credentials: false
       - name: Find + create release
         id: find
-        uses: whuppi/ci/actions/release-tool@v2.7.9
+        uses: whuppi/ci/actions/release-tool@v2.7.13
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BRANCH: ${{ inputs.branch || github.ref_name }}
@@ -143,8 +143,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: macos,   runner: macos-14 }
-          - { name: ios,     runner: macos-14 }
+          - { name: macos,   runner: macos-15 }
+          - { name: ios,     runner: macos-15 }
           - { name: android, runner: ubuntu-24.04 }
           - { name: linux,   runner: ubuntu-24.04 }
           - { name: wasm,    runner: ubuntu-24.04 }
@@ -223,7 +223,11 @@ jobs:
             windows-arm64-pdf_oxide.dll
             windows-x64-pdf_oxide.dll
             wasm-pdf_oxide.js
-            wasm-pdf_oxide_bg.wasm
+            wasm-pdf_oxide_manifest.json
+            wasm-pdf_oxide_bg.0.wasm
+            wasm-pdf_oxide_bg.1.wasm
+            wasm-pdf_oxide_asyncify_bg.0.wasm
+            wasm-pdf_oxide_asyncify_bg.1.wasm
           )
           MISSING=()
           for f in "${EXPECTED[@]}"; do
@@ -250,21 +254,21 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Add git install snippet
-        uses: whuppi/ci/actions/release-tool@v2.7.9
+        uses: whuppi/ci/actions/release-tool@v2.7.13
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           mode: --add-git-install
           tag: ${{ needs.discover.outputs.tag }}
       - name: Stamp asset hashes into tag
-        uses: whuppi/ci/actions/release-tool@v2.7.9
+        uses: whuppi/ci/actions/release-tool@v2.7.13
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           mode: --update-tag-hashes
           tag: ${{ needs.discover.outputs.tag }}
       - name: Build pub.dev changelog for preview
-        uses: whuppi/ci/actions/release-tool@v2.7.9
+        uses: whuppi/ci/actions/release-tool@v2.7.13
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -296,16 +300,16 @@ jobs:
           persist-credentials: false
       # Use the verified fvm capability, not an unverified pub global activate:
       # this job holds the pub.dev credentials, so don't weaken its tooling path.
-      - uses: whuppi/ci/actions/capabilities/fvm@v2.7.9
+      - uses: whuppi/ci/actions/capabilities/fvm@v2.7.13
       - name: Build filtered changelog
-        uses: whuppi/ci/actions/release-tool@v2.7.9
+        uses: whuppi/ci/actions/release-tool@v2.7.13
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           mode: --stamp-changelog
           tag: ${{ needs.discover.outputs.tag }}
       - name: Flatten README banner for pub.dev
-        uses: whuppi/ci/actions/release-tool@v2.7.9
+        uses: whuppi/ci/actions/release-tool@v2.7.13
         with:
           mode: --stamp-readme
       - name: Ephemeral commit (clean git for pub publish)
@@ -325,7 +329,7 @@ jobs:
       - run: fvm dart pub get --no-example
       - run: fvm dart pub publish --force
       - name: Add pub.dev install snippet
-        uses: whuppi/ci/actions/release-tool@v2.7.9
+        uses: whuppi/ci/actions/release-tool@v2.7.13
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:

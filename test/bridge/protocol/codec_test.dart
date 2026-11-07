@@ -5,133 +5,77 @@
 import 'dart:typed_data';
 
 import 'package:pdf_manipulator/src/types/errors.dart';
+import 'package:pdf_manipulator/src/types/pdf_annotation.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
 import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_info.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
+import 'package:pdf_manipulator/src/types/pdf_metadata.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
+import 'package:pdf_manipulator/src/types/pdf_redaction_overlay.dart';
+import 'package:pdf_manipulator/src/types/pdf_render.dart';
 import 'package:pdf_manipulator/src/bridge/protocol/codec.dart';
-import 'package:pdf_manipulator/src/bridge/protocol/op.dart';
 import 'package:test/test.dart';
 
 void main() {
-  // ════════════════════════════════════════════════════
-  // REQUEST ENCODING
-  // ════════════════════════════════════════════════════
-
-  group('request encoding', () {
-    test('openOp', () {
-      expect(openOp().op, EngineOp.open);
-      expect(openOp(password: 'pw').args['password'], 'pw');
-    });
-
-    test('editorMergeFromOp carries pages only when given', () {
-      final all = editorMergeFromOp(handleId: 1, otherBytes: Uint8List(0));
-      expect(all.op, EngineOp.editorMergeFrom);
-      expect(all.args.containsKey('pages'), isFalse);
-      final some = editorMergeFromOp(
-        handleId: 1,
-        otherBytes: Uint8List(0),
-        pages: [1, 2],
-      );
-      expect(some.args['pages'], [1, 2]);
-    });
-
-    test('extractOp', () {
-      final req = extractOp(format: PdfExtractionFormat.markdown, page: 0);
-      expect(req.op, EngineOp.extract);
-      expect(req.args['format'], 'markdown');
-      expect(req.args['page'], 0);
-    });
-
-    test('searchOp', () {
-      final req = searchOp(query: 'hello', page: 2);
-      expect(req.op, EngineOp.search);
-      expect(req.args['query'], 'hello');
-    });
-
-    test('signOp with PKCS12', () {
-      final cert = Uint8List.fromList([1, 2, 3]);
-      final req = signOp(
-        credentials: PdfSigningCredentials.pkcs12(cert, 'p'),
-        reason: 'test',
-      );
-      expect(req.op, EngineOp.sign);
-      expect(req.args['certificate'], cert);
-      expect(req.args['certificatePassword'], 'p');
-    });
-
-    test('signOp with PEM', () {
-      final req = signOp(
-        credentials: const PdfSigningCredentials.pem('CERT', 'KEY'),
-      );
-      expect(req.args['certPem'], 'CERT');
-      expect(req.args['keyPem'], 'KEY');
-    });
-
-    test('convertToOp', () {
-      final req = convertToOp(format: PdfDocumentFormat.docx);
-      expect(req.op, EngineOp.convertTo);
-      expect(req.args['format'], 'docx');
-    });
-
-    test('renderOp', () {
-      final req = renderOp(pageIndices: [0, 1], maxWidth: 800);
-      expect(req.op, EngineOp.render);
-      expect(req.args['pageIndices'], [0, 1]);
-      expect(req.args['maxWidth'], 800);
-    });
-
-    test('editorSaveOp encodes encryption', () {
-      final req = editorSaveOp(
-        handleId: 1,
-        options: const PdfSaveOptions.fullRewrite(
-          encryption: PdfEncryption.config(ownerPassword: 'ow'),
-        ),
-      );
-      expect(req.args['encryptMode'], 2);
-      expect(req.args['encryptOwnerPw'], 'ow');
-    });
-
-    test('editorMutateOp', () {
-      final req = editorMutateOp(
-        handleId: 1,
-        editOp: 'setTitle',
-        extra: {'value': 'T'},
-      );
-      expect(req.args['editOp'], 'setTitle');
-      expect(req.args['value'], 'T');
-    });
-
-    test('builderSetMetadataOp partial', () {
-      final req = builderSetMetadataOp(handleId: 1, title: 'Only Title');
-      expect(req.args['title'], 'Only Title');
-      expect(req.args.containsKey('author'), isFalse);
-    });
-  });
-
-  // ════════════════════════════════════════════════════
-  // RESPONSE DECODING
-  // ════════════════════════════════════════════════════
-
-  group('decodePageList', () {
+  group('decodePageInfos', () {
     test('parses complete page list', () {
-      final pages = decodePageList({
+      final pages = decodePageInfos({
         'pages': [
-          {'index': 0, 'width': 612.0, 'height': 792.0, 'rotation': 0},
-          {'index': 1, 'width': 612.0, 'height': 792.0, 'rotation': 90},
-          {'index': 2, 'width': 842.0, 'height': 595.0, 'rotation': 0},
+          {
+            'index': 0,
+            'x': 0.0,
+            'y': 0.0,
+            'width': 612.0,
+            'height': 792.0,
+            'rotation': 'r0',
+          },
+          {
+            'index': 1,
+            'x': 0.0,
+            'y': 0.0,
+            'width': 612.0,
+            'height': 792.0,
+            'rotation': 'r90',
+          },
+          {
+            'index': 2,
+            'x': 0.0,
+            'y': 0.0,
+            'width': 842.0,
+            'height': 595.0,
+            'rotation': 'r0',
+          },
         ],
       });
       expect(pages, hasLength(3));
-      expect(pages[1].rotation, 90);
+      expect(pages[1].rotation, PdfRotation.r90);
       expect(pages[2].width, 842.0);
     });
 
+    test('refuses a rotation that is not a wire name', () {
+      expect(
+        () => decodePageInfos({
+          'pages': [
+            {
+              'index': 0,
+              'x': 0.0,
+              'y': 0.0,
+              'width': 612.0,
+              'height': 792.0,
+              'rotation': 'r45',
+            },
+          ],
+        }),
+        throwsA(isA<PdfEngineFailed>()),
+      );
+    });
+
     test('handles missing pages key', () {
-      final pages = decodePageList({});
+      final pages = decodePageInfos(<String, Object?>{});
       expect(pages, isEmpty);
     });
   });
@@ -186,6 +130,7 @@ void main() {
       expect(screen['monoPpi'], 300);
       expect(screen['downsampleThreshold'], 1.5);
       expect(screen['convertCmykToRgb'], isTrue);
+      expect(screen['recompressJpeg'], isTrue);
     });
   });
 
@@ -219,7 +164,7 @@ void main() {
       expect(first.encoding, PdfImageEncoding.jpeg);
       expect(first.color, PdfImageColor.cmyk);
       expect(first.hasSoftMask, isTrue);
-      expect(first.ppiMin, 288.0);
+      expect(first.minPpi, 288.0);
       expect(first.action, PdfImageAction.downsampled);
       expect(first.keepReason, isNull);
       expect(first.widthAfter, 16);
@@ -237,7 +182,7 @@ void main() {
       expect(
         decodeImageReport({
           'images': [r],
-        }).images.single.ppiMin,
+        }).images.single.minPpi,
         isNull,
       );
     });
@@ -247,7 +192,7 @@ void main() {
         () => decodeImageReport({
           'images': [row(action: 'vanished')],
         }),
-        throwsA(isA<PdfEngineError>()),
+        throwsA(isA<PdfEngineFailed>()),
       );
     });
 
@@ -258,30 +203,69 @@ void main() {
 
   group('decodeEncryptionAlgorithm', () {
     test('parses known algorithms', () {
-      expect(decodeEncryptionAlgorithm(1), PdfEncryptionAlgorithm.rc4_40);
-      expect(decodeEncryptionAlgorithm(4), PdfEncryptionAlgorithm.aes256);
+      expect(decodeEncryptionAlgorithm(1), PdfEncryptionAlgorithm.rc4Key40);
+      expect(decodeEncryptionAlgorithm(4), PdfEncryptionAlgorithm.aesKey256);
       expect(decodeEncryptionAlgorithm(0), isNull);
       expect(decodeEncryptionAlgorithm(99), isNull);
     });
   });
 
   group('decodePermissions', () {
-    test('parses permission bits', () {
-      final perms = decodePermissions(0xFF);
-      expect(perms.print, isTrue);
-      expect(perms.copy, isTrue);
+    test('reads the /P word at its spec bit positions', () {
+      final perms = decodePermissions(-1);
+      expect(perms.canPrint, isTrue);
+      expect(perms.canCopy, isTrue);
+      expect(perms.canPrintHighQuality, isTrue);
+      expect(perms.canAssemble, isTrue);
+    });
+
+    test('decodes what bits encodes, flag by flag', () {
+      const cases = [
+        PdfPermissions(canPrint: true, canCopy: false),
+        PdfPermissions(canPrint: false, canCopy: true, canFillForms: true),
+        PdfPermissions(
+          canPrintHighQuality: true,
+          canAssemble: true,
+          canExtractForAccessibility: false,
+        ),
+      ];
+      for (final p in cases) {
+        final back = decodePermissions(p.bits);
+        expect(
+          [
+            back.canPrint,
+            back.canPrintHighQuality,
+            back.canModify,
+            back.canCopy,
+            back.canAnnotate,
+            back.canFillForms,
+            back.canExtractForAccessibility,
+            back.canAssemble,
+          ],
+          [
+            p.canPrint,
+            p.canPrintHighQuality,
+            p.canModify,
+            p.canCopy,
+            p.canAnnotate,
+            p.canFillForms,
+            p.canExtractForAccessibility,
+            p.canAssemble,
+          ],
+        );
+      }
     });
 
     test('zero bits means all false', () {
       final perms = decodePermissions(0);
-      expect(perms.print, isFalse);
-      expect(perms.copy, isFalse);
+      expect(perms.canPrint, isFalse);
+      expect(perms.canCopy, isFalse);
     });
   });
 
-  group('decodeSearchResults', () {
+  group('decodeSearchHits', () {
     test('parses hits', () {
-      final results = decodeSearchResults({
+      final results = decodeSearchHits({
         'hits': [
           {
             'page': 0,
@@ -295,11 +279,11 @@ void main() {
       });
       expect(results, hasLength(1));
       expect(results[0].text, 'hello');
-      expect(results[0].rect.x, 72.0);
+      expect(results[0].bounds.x, 72.0);
     });
 
     test('handles empty', () {
-      expect(decodeSearchResults({}), isEmpty);
+      expect(decodeSearchHits({}), isEmpty);
     });
   });
 
@@ -307,13 +291,35 @@ void main() {
     test('parses signature list', () {
       final sigs = decodeSignatures({
         'signatures': [
-          {'signerName': 'Alice', 'reason': 'Approval', 'isValid': true},
+          {
+            'signerName': 'Alice',
+            'reason': 'Approval',
+            'isValid': true,
+            'coversWholeDocument': true,
+            'signingTime': 0,
+          },
         ],
       });
       expect(sigs, hasLength(1));
       expect(sigs[0].signerName, 'Alice');
       expect(sigs[0].isValid, isTrue);
+      expect(sigs[0].coversWholeDocument, isTrue);
+      expect(sigs[0].signingTime, DateTime.utc(1970));
     });
+
+    test(
+      'coversWholeDocument defaults false and absence of time stays null',
+      () {
+        final sigs = decodeSignatures({
+          'signatures': [
+            {'signerName': 'Bob', 'isValid': false},
+          ],
+        });
+        expect(sigs, hasLength(1));
+        expect(sigs[0].coversWholeDocument, isFalse);
+        expect(sigs[0].signingTime, isNull);
+      },
+    );
   });
 
   group('decodeValidationResult', () {
@@ -323,35 +329,109 @@ void main() {
         'errors': 0,
         'warnings': 2,
       });
-      expect(r.compliant, isTrue);
-      expect(r.warnings, 2);
+      expect(r.isCompliant, isTrue);
+      expect(r.warningCount, 2);
     });
   });
 
-  group('decodeRenderedPage', () {
-    test('parses with ByteBuffer', () {
-      final bytes = Uint8List.fromList([1, 2, 3]);
-      final page = decodeRenderedPage({
+  group('decodeRenderFrame', () {
+    test('a header carries the page descriptor and the format', () {
+      final frame = decodeRenderFrame({
+        'kind': 'header',
+        'page': 3,
         'width': 800,
         'height': 600,
-        'data': bytes.buffer,
+        'format': 'rgba',
       });
-      expect(page.width, 800);
-      expect(page.data, hasLength(3));
+      expect(frame, isA<ChunkHeader<PdfRenderedPage>>());
+      expect(
+        (frame as ChunkHeader<PdfRenderedPage>).item,
+        const PdfRenderedPage(page: 3, width: 800, height: 600),
+      );
+    });
+
+    test('a data frame carries its bytes', () {
+      final bytes = Uint8List.fromList([1, 2, 3]);
+      final frame = decodeRenderFrame({'kind': 'data', 'data': bytes});
+      expect(frame, isA<ChunkData<PdfRenderedPage>>());
+      expect((frame as ChunkData<PdfRenderedPage>).bytes, [1, 2, 3]);
+    });
+
+    test('an end frame has no fields', () {
+      expect(
+        decodeRenderFrame({'kind': 'end'}),
+        isA<ChunkEnd<PdfRenderedPage>>(),
+      );
+    });
+
+    test('an unknown kind or format is an engine error, never a guess', () {
+      expect(
+        () => decodeRenderFrame({'kind': 'tile'}),
+        throwsA(isA<PdfEngineFailed>()),
+      );
+      expect(
+        () => decodeRenderFrame({
+          'kind': 'header',
+          'page': 0,
+          'width': 1,
+          'height': 1,
+          'format': 'jpeg',
+        }),
+        throwsA(isA<PdfEngineFailed>()),
+      );
     });
   });
 
-  group('decodePdfImage', () {
-    test('parses full image', () {
-      final img = decodePdfImage({
+  group('decodeImageFrame', () {
+    test('a header carries the image descriptor', () {
+      final frame = decodeImageFrame({
+        'kind': 'header',
+        'page': 2,
+        'index': 1,
         'width': 100,
         'height': 200,
-        'format': 'jpeg',
-        'colorSpace': 'RGB',
         'bitsPerComponent': 8,
-        'data': Uint8List(5),
+        'encoding': 'jpeg',
+        'color': 'rgb',
       });
-      expect(img.format, 'jpeg');
+      expect(frame, isA<ChunkHeader<PdfImageInfo>>());
+      expect(
+        (frame as ChunkHeader<PdfImageInfo>).item,
+        const PdfImageInfo(
+          page: 2,
+          index: 1,
+          width: 100,
+          height: 200,
+          bitsPerComponent: 8,
+          encoding: PdfImageEncoding.jpeg,
+          color: PdfImageColor.rgb,
+        ),
+      );
+    });
+
+    test('data and end frames are the same as a render has', () {
+      final bytes = Uint8List.fromList([9, 8]);
+      expect(
+        decodeImageFrame({'kind': 'data', 'data': bytes}),
+        isA<ChunkData<PdfImageInfo>>(),
+      );
+      expect(decodeImageFrame({'kind': 'end'}), isA<ChunkEnd<PdfImageInfo>>());
+    });
+
+    test('an unknown encoding or colour is an engine error', () {
+      expect(
+        () => decodeImageFrame({
+          'kind': 'header',
+          'page': 0,
+          'index': 0,
+          'width': 1,
+          'height': 1,
+          'bitsPerComponent': 8,
+          'encoding': 'tiff',
+          'color': 'rgb',
+        }),
+        throwsA(isA<PdfEngineFailed>()),
+      );
     });
   });
 
@@ -366,38 +446,83 @@ void main() {
         'keywords': 'kw',
       });
       expect(m.pageCount, 5);
-      expect(m.title, 'My Doc');
+      expect(m.metadata.title, 'My Doc');
+      expect(m.metadata.creator, isNull, reason: 'an absent field is null');
     });
   });
 
-  group('decodeMediaBox', () {
-    test('parses rect', () {
-      final r = decodeMediaBox({
-        'x': 0.0,
-        'y': 0.0,
-        'width': 612.0,
-        'height': 792.0,
+  group('decodePageInfos boxes', () {
+    test('the crop box is null when the page has none', () {
+      final pages = decodePageInfos({
+        'pages': [
+          {
+            'index': 0,
+            'x': 0.0,
+            'y': 0.0,
+            'width': 612.0,
+            'height': 792.0,
+            'hasCrop': false,
+          },
+        ],
       });
-      expect(r.width, 612.0);
+      expect(pages.single.mediaBox.width, 612.0);
+      expect(pages.single.cropBox, isNull);
+    });
+
+    test('parses both boxes when the page has a crop box', () {
+      final pages = decodePageInfos({
+        'pages': [
+          {
+            'index': 0,
+            'x': 0.0,
+            'y': 0.0,
+            'width': 612.0,
+            'height': 792.0,
+            'hasCrop': true,
+            'cropX': 72.0,
+            'cropY': 72.0,
+            'cropWidth': 468.0,
+            'cropHeight': 648.0,
+          },
+        ],
+      });
+      expect(
+        pages.single.cropBox,
+        const PdfRect(x: 72, y: 72, width: 468, height: 648),
+      );
     });
   });
 
-  group('decodeCropBox', () {
-    test('null when has is false', () {
-      expect(decodeCropBox({'has': false}), isNull);
-    });
-
-    test('parses rect when has is true', () {
-      final r = decodeCropBox({
-        'has': true,
-        'x': 72.0,
-        'y': 72.0,
-        'width': 468.0,
-        'height': 648.0,
+  group('encodePages', () {
+    test('every page is a flag, any other scope a list', () {
+      expect(encodePages(const PdfPages.all()), {'pagesAll': true});
+      expect(encodePages(const PdfPages.single(2)), {
+        'pages': [2],
       });
-      expect(r, isNotNull);
-      expect(r!.x, 72.0);
-      expect(r.width, 468.0);
+      expect(encodePages(PdfPages.list([3, 1])), {
+        'pages': [1, 3],
+      });
+      expect(encodePages(const PdfPages.range(1, 4)), {
+        'pages': [1, 2, 3],
+      });
+    });
+  });
+
+  group('encodeRedactionOverlay', () {
+    test('a fill carries its colour and none carries nothing else', () {
+      expect(
+        encodeRedactionOverlay(const PdfRedactionOverlay.fill(PdfColor.red)),
+        {'overlay': 'fill', 'r': 1.0, 'g': 0.0, 'b': 0.0},
+      );
+      expect(encodeRedactionOverlay(const PdfRedactionOverlay.none()), {
+        'overlay': 'none',
+      });
+    });
+  });
+
+  group('encodeMetadataArgs', () {
+    test('a null field is left out', () {
+      expect(encodeMetadataArgs(const PdfMetadata(title: 'T')), {'title': 'T'});
     });
   });
 
@@ -411,7 +536,7 @@ void main() {
         'pathsPruned': 5,
         'xobjectsSpecialized': 6,
       });
-      expect(r.regions, 1);
+      expect(r.regionCount, 1);
       expect(r.glyphsRemoved, 2);
       expect(r.imagesModified, 3);
       expect(r.imagesRemoved, 4);
@@ -438,7 +563,7 @@ void main() {
             'width': 3.0,
             'height': 4.0,
             'maxLength': 12,
-            'alignment': 1,
+            'alignment': 'center',
             'readOnly': true,
             'required': false,
           },
@@ -456,7 +581,7 @@ void main() {
             'width': 0.0,
             'height': 0.0,
             'maxLength': -1,
-            'alignment': -1,
+            'alignment': '',
             'readOnly': false,
             'required': false,
           },
@@ -466,7 +591,7 @@ void main() {
 
       final city = fields[0];
       expect(city.name, 'city');
-      expect(city.type, PdfFormFieldType.text);
+      expect(city.kind, PdfFormFieldKind.textField);
       expect((city.value as PdfTextValue).text, 'Berlin');
       expect(city.tooltip, 'Your city');
       expect(city.bounds?.x, 1.0);
@@ -474,12 +599,12 @@ void main() {
       expect(city.bounds?.width, 3.0);
       expect(city.bounds?.height, 4.0);
       expect(city.maxLength, 12);
-      expect(city.alignment, PdfTextAlignment.center);
-      expect(city.readOnly, isTrue);
+      expect(city.alignment, PdfAlignment.center);
+      expect(city.isReadOnly, isTrue);
 
       final ok = fields[1];
-      expect(ok.type, PdfFormFieldType.checkbox);
-      expect((ok.value as PdfCheckedValue).checked, isTrue);
+      expect(ok.kind, PdfFormFieldKind.checkbox);
+      expect((ok.value as PdfCheckedValue).isChecked, isTrue);
       expect(ok.tooltip, isNull, reason: 'an empty tooltip decodes to null');
       expect(ok.bounds, isNull);
       expect(ok.maxLength, isNull, reason: '-1 on the wire decodes to null');
@@ -521,12 +646,85 @@ void main() {
       });
       expect(files, hasLength(2));
       expect(files[0].name, 'notes.txt');
-      expect(files[0].size, 11);
+      expect(files[0].sizeBytes, 11);
       expect(files[0].description, 'Meeting notes');
       expect(files[0].mimeType, 'text/plain');
-      expect(files[1].size, isNull, reason: '-1 on the wire decodes to null');
+      expect(
+        files[1].sizeBytes,
+        isNull,
+        reason: '-1 on the wire decodes to null',
+      );
       expect(files[1].description, isNull);
       expect(files[1].mimeType, isNull);
+    });
+  });
+
+  group('decodeAnnotations', () {
+    test('parses a row with a rect and all strings', () {
+      final rows = decodeAnnotations({
+        'annotations': [
+          {
+            'subtype': 'Stamp',
+            'hasRect': true,
+            'x': 50.0,
+            'y': 650.0,
+            'width': 200.0,
+            'height': 60.0,
+            'contents': 'Approved',
+            'author': 'Alice',
+            'fieldName': 'sig1',
+          },
+        ],
+      });
+      expect(rows, hasLength(1));
+      final row = rows.single;
+      expect(row.subtype, PdfAnnotationSubtype.stamp);
+      expect(row.subtypeName, 'Stamp');
+      expect(row.bounds, isNotNull);
+      expect(row.bounds!.x, 50.0);
+      expect(row.bounds!.y, 650.0);
+      expect(row.bounds!.width, 200.0);
+      expect(row.bounds!.height, 60.0);
+      expect(row.contents, 'Approved');
+      expect(row.author, 'Alice');
+      expect(row.fieldName, 'sig1');
+    });
+
+    test('hasRect false and empty strings decode to null fields', () {
+      final rows = decodeAnnotations({
+        'annotations': [
+          {
+            'subtype': 'Link',
+            'hasRect': false,
+            'x': 0.0,
+            'y': 0.0,
+            'width': 0.0,
+            'height': 0.0,
+            'contents': '',
+            'author': '',
+            'fieldName': '',
+          },
+        ],
+      });
+      final row = rows.single;
+      expect(row.subtype, PdfAnnotationSubtype.link);
+      expect(row.bounds, isNull);
+      expect(row.contents, isNull);
+      expect(row.author, isNull);
+      expect(row.fieldName, isNull);
+    });
+
+    test('maps "3D" to threeD, "Foo" and "" to unknown', () {
+      final rows = decodeAnnotations({
+        'annotations': [
+          {'subtype': '3D', 'hasRect': false},
+          {'subtype': 'Foo', 'hasRect': false},
+          {'subtype': '', 'hasRect': false},
+        ],
+      });
+      expect(rows[0].subtype, PdfAnnotationSubtype.threeD);
+      expect(rows[1].subtype, PdfAnnotationSubtype.unknown);
+      expect(rows[2].subtype, PdfAnnotationSubtype.unknown);
     });
   });
 
@@ -576,7 +774,7 @@ void main() {
       expect(args['opacity'], 0.3);
       expect(args['fontSize'], 48);
       expect(args['rotation'], 45);
-      expect(args['layer'], 0);
+      expect(args['layer'], 'foreground');
       expect(args['posType'], 0);
     });
 
@@ -592,10 +790,10 @@ void main() {
         PdfWatermarkLayer.background,
       );
       expect(args['posType'], 1);
-      expect(args['corner'], 1); // topRight index
+      expect(args['corner'], 'topRight');
       expect(args['marginX'], 10);
       expect(args['marginY'], 15);
-      expect(args['layer'], 1); // background
+      expect(args['layer'], 'background');
     });
 
     test('encodeWatermarkArgs tiled position includes columns + rows', () {
@@ -614,7 +812,9 @@ void main() {
       final args = encodeWatermarkArgs(
         'E',
         const PdfWatermarkStyle(),
-        const PdfWatermarkPosition.exact(x: 10, y: 20, width: 300, height: 50),
+        const PdfWatermarkPosition.exact(
+          PdfRect(x: 10, y: 20, width: 300, height: 50),
+        ),
         PdfWatermarkLayer.foreground,
       );
       expect(args['posType'], 3);

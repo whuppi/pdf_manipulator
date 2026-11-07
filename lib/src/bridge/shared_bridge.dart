@@ -1,27 +1,42 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:meta/meta.dart';
 import 'package:pdf_manipulator/src/types/data_sink.dart';
 import 'package:pdf_manipulator/src/types/data_source.dart';
+import 'package:pdf_manipulator/src/types/errors.dart';
+import 'package:pdf_manipulator/src/types/pdf_annotation.dart';
 import 'package:pdf_manipulator/src/types/pdf_attachment.dart';
 import 'package:pdf_manipulator/src/types/pdf_enums.dart';
+import 'package:pdf_manipulator/src/types/pdf_field_scripts.dart';
+import 'package:pdf_manipulator/src/types/pdf_link.dart';
+import 'package:pdf_manipulator/src/types/pdf_point.dart';
+import 'package:pdf_manipulator/src/types/pdf_radio_option.dart';
 import 'package:pdf_manipulator/src/types/pdf_form_field.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_page.dart';
+import 'package:pdf_manipulator/src/types/pdf_metadata.dart';
+import 'package:pdf_manipulator/src/types/pdf_page_size.dart';
 import 'package:pdf_manipulator/src/types/pdf_pages.dart';
 import 'package:pdf_manipulator/src/types/pdf_params.dart';
-import 'package:pdf_manipulator/src/types/pdf_image.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_info.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_policy.dart';
 import 'package:pdf_manipulator/src/types/pdf_image_report.dart';
-import 'package:pdf_manipulator/src/types/pdf_page_image.dart';
+import 'package:pdf_manipulator/src/types/pdf_image_placement.dart';
+import 'package:pdf_manipulator/src/types/pdf_page_info.dart';
 import 'package:pdf_manipulator/src/types/pdf_rect.dart';
+import 'package:pdf_manipulator/src/types/pdf_redaction_overlay.dart';
 import 'package:pdf_manipulator/src/types/pdf_redaction_report.dart';
-import 'package:pdf_manipulator/src/types/pdf_sanitize_options.dart';
+import 'package:pdf_manipulator/src/types/pdf_render.dart';
 import 'package:pdf_manipulator/src/types/pdf_signature.dart';
+import 'package:pdf_manipulator/src/types/pdf_stroke.dart';
+import 'package:pdf_manipulator/src/types/pdf_table.dart';
+import 'package:pdf_manipulator/src/types/pdf_text_style.dart';
 import 'package:pdf_manipulator/src/types/pdf_xfa_info.dart';
-import 'package:pdf_manipulator/src/types/search_result.dart';
+import 'package:pdf_manipulator/src/types/pdf_search_hit.dart';
 import 'package:pdf_manipulator/src/bridge/pdf_bridge.dart';
 import 'package:pdf_manipulator/src/bridge/pdf_transport.dart';
 import 'package:pdf_manipulator/src/types/pdf_task.dart';
-import 'package:pdf_manipulator/src/types/errors.dart';
 
 import 'package:pdf_manipulator/src/bridge/protocol/binary_codec.dart' as bin;
 import 'package:pdf_manipulator/src/bridge/protocol/codec.dart' as codec;
@@ -52,56 +67,70 @@ class SharedBridge extends PdfBridge {
   /// Encode → send → decode. The core pattern for every operation.
   /// Births the op's [PdfTask]: the hook created here is what
   /// task.cancel() drives, and the Router binds it to the lane job.
+  ///
+  /// An op issued on a handle a combinator owns passes that handle's
+  /// [scope]: the op's cancel is registered with it for as long as the op
+  /// runs, and a scope already cancelled cancels the op before it is
+  /// submitted.
   PdfTask<Map<String, Object?>> _exec(
     EngineOp op,
     Map<String, Object?> args, {
     List<DataSource> sources = const [],
     List<DataSink> sinks = const [],
+    Set<int> keepSources = const {},
+    CancelHook? scope,
   }) {
     final hook = CancelHook();
+    final unregister = scope?.register(hook.cancel);
     final future = () async {
-      final req = bin.encodeRequest(op.wire, args);
-      final res = await _transport.execute(
-        req,
-        sources: sources,
-        sinks: sinks,
-        cancel: hook,
-      );
-      final map = bin.decodeResponse(res.bytes);
-      if (map.containsKey('error')) {
-        // Typed by contract: every engine failure is a PdfError, so
-        // callers can pattern-match it — and so it can never be
-        // mistaken for a StateError, which is reserved for programmer
-        // errors (use after dispose).
-        throw PdfEngineError(map['error'] as String? ?? 'Engine error');
+      try {
+        final req = bin.encodeRequest(op.wire, args);
+        final res = await _transport.execute(
+          req,
+          sources: sources,
+          sinks: sinks,
+          keepSources: keepSources,
+          cancel: hook,
+        );
+        return bin.decodeResponse(res.bytes);
+      } catch (error) {
+        // An op that ends cancelled or failed leaves no partial output in the
+        // sinks it was handed; one that finished first keeps what it wrote.
+        await (scope ?? hook).abortSinks(sinks, error);
+        rethrow;
+      } finally {
+        unregister?.call();
       }
-      return map;
     }();
     return PdfTask.internal(future, hook);
   }
 
-  /// Execute keeping sources[0] alive for handle lifetime.
+  /// Execute holding sources[0] for handle lifetime. An op issued on a
+  /// handle a combinator owns passes that handle's [scope], as [_exec] does.
   PdfTask<({Map<String, Object?> map, int? resourceId})> _execKeepSource(
     EngineOp op,
     Map<String, Object?> args, {
     required DataSource source,
+    CancelHook? scope,
   }) {
     final hook = CancelHook();
+    final unregister = scope?.register(hook.cancel);
     final future = () async {
-      final req = bin.encodeRequest(op.wire, args);
-      final res = await _transport.execute(
-        req,
-        sources: [source],
-        keepSources: {0},
-        cancel: hook,
-      );
-      final map = bin.decodeResponse(res.bytes);
-      if (map.containsKey('error')) {
-        // Engine failures are PdfError, never StateError (reserved
-        // for use-after-dispose) — same contract as [_exec].
-        throw PdfEngineError(map['error'] as String? ?? 'Engine error');
+      try {
+        final req = bin.encodeRequest(op.wire, args);
+        final res = await _transport.execute(
+          req,
+          sources: [source],
+          keepSources: {0},
+          cancel: hook,
+        );
+        return (
+          map: bin.decodeResponse(res.bytes),
+          resourceId: res.resourceIds[0],
+        );
+      } finally {
+        unregister?.call();
       }
-      return (map: map, resourceId: res.resourceIds[0]);
     }();
     return PdfTask.internal(future, hook);
   }
@@ -131,27 +160,32 @@ class SharedBridge extends PdfBridge {
     required PdfSigningCredentials credentials,
     String? reason,
     String? location,
-  }) {
+  }) => PdfTask.group((hook) async {
     final args = <String, Object?>{
       'sourceLength': source.length,
       'reason': reason,
       'location': location,
+      // The engine has no clock on the web; the signing time comes from here.
+      'signedAt': DateTime.now().millisecondsSinceEpoch ~/ 1000,
     };
     switch (credentials) {
-      case PdfPkcs12Credentials(:final data, :final password):
-        args['certificate'] = data;
+      case PdfPkcs12Credentials(:final bundle, :final password):
+        args['certificate'] = await readAllBytes(bundle);
         args['certificatePassword'] = password;
       case PdfPemCredentials(:final certPem, :final keyPem):
         args['certPem'] = certPem;
         args['keyPem'] = keyPem;
     }
-    return _exec(EngineOp.sign, args, sources: [source], sinks: [output]);
-  }
+    await hook.guard(
+      _exec(EngineOp.sign, args, sources: [source], sinks: [output]),
+    );
+  });
 
   @override
-  PdfTask<void> registerFallbackFont(String kind, Uint8List bytes) {
+  PdfTask<void> registerFallbackFont(String kind, DataSource font) {
     final hook = CancelHook();
     final future = () async {
+      final bytes = await readAllBytes(font);
       final req = bin.encodeRequest(EngineOp.registerFallbackFont.wire, {
         'kind': kind,
         'sourceLength': bytes.length,
@@ -161,27 +195,23 @@ class SharedBridge extends PdfBridge {
         sourceBytes: bytes,
       );
       for (final r in responses) {
-        final map = bin.decodeResponse(r);
-        if (map.containsKey('error')) {
-          // Same contract as [_exec]: engine failures are PdfError.
-          throw PdfEngineError(map['error'] as String? ?? 'Engine error');
-        }
+        bin.decodeResponse(r);
       }
     }();
     return PdfTask.internal(future, hook);
   }
 
   @override
-  PdfTask<void> convertTo(
+  PdfTask<void> convertToOffice(
     DataSource source,
     DataSink output, {
-    required PdfDocumentFormat format,
+    required PdfOfficeFormat format,
     String? password,
   }) => _exec(
     EngineOp.convertTo,
     {
       'sourceLength': source.length,
-      'format': format.name,
+      'format': codec.putEnum(format),
       'password': password,
     },
     sources: [source],
@@ -201,13 +231,13 @@ class SharedBridge extends PdfBridge {
   );
 
   @override
-  PdfTask<void> convertToPdf(
+  PdfTask<void> convertFromOffice(
     DataSource document,
     DataSink output, {
-    required PdfDocumentFormat format,
+    required PdfOfficeFormat format,
   }) => _exec(
     EngineOp.convertToPdf,
-    {'sourceLength': document.length, 'format': format.name},
+    {'sourceLength': document.length, 'format': codec.putEnum(format)},
     sources: [document],
     sinks: [output],
   );
@@ -245,42 +275,56 @@ class SharedBridge extends PdfBridge {
   }
 
   // ── Helpers ──
-
-  List<int> _resolvePages(PdfPages pages, int pageCount) => switch (pages) {
-    PdfPagesAll() => List.generate(pageCount, (i) => i),
-    PdfPagesSingle(:final index) => [index],
-    PdfPagesList(:final indices) => indices,
-    PdfPagesRange(:final start, :final end) => List.generate(
-      end - start,
-      (i) => start + i,
-    ),
-  };
-
-  String _encodeExtractionFormat(PdfExtractionFormat format) =>
-      switch (format) {
-        PdfExtractionFormat.auto => 'auto',
-        PdfExtractionFormat.text => 'text',
-        PdfExtractionFormat.markdown => 'markdown',
-        PdfExtractionFormat.html => 'html',
-        PdfExtractionFormat.plainText => 'plainText',
-      };
 }
+
+/// The `render` request fields a [PdfRenderSize] stands for: its kind by
+/// name (`dpi`, `fit`) and that kind's numbers. The engine works out the
+/// page's pixel size from them.
+Map<String, Object?> _renderSizeArgs(PdfRenderSize size) => switch (size) {
+  PdfRenderDpi(:final dpi) => {'sizeKind': 'dpi', 'dpi': dpi},
+  PdfRenderFit(:final maxWidth, :final maxHeight) => {
+    'sizeKind': 'fit',
+    'maxWidth': maxWidth,
+    'maxHeight': maxHeight,
+  },
+};
 
 // ── O(1)-memory framed sink for streaming ops ──────────────────────
 
-class _FrameCollectorSink implements DataSink {
-  final _buffer = BytesBuilder(copy: false);
-  final _frames = <Uint8List>[];
+/// Test hook: called once for every frame the engine writes, including
+/// frames that arrive after the consumer cancelled its stream.
+@visibleForTesting
+void Function()? onEngineFrame;
 
-  List<Uint8List> get frames => _frames;
+/// The sink the engine's framed writes arrive through: it cuts the stream
+/// into frames and hands each one to [onFrame], in order. Nothing is kept
+/// between frames.
+class _FrameSink implements DataSink {
+  _FrameSink(this.onFrame);
+
+  final FutureOr<void> Function(Uint8List frame) onFrame;
+
+  final _buffer = BytesBuilder(copy: false);
 
   @override
-  void write(Uint8List chunk) {
+  Future<void> write(Uint8List chunk) async {
     _buffer.add(chunk);
-    _parseFrames();
+    for (final frame in _takeFrames()) {
+      await onFrame(frame);
+    }
   }
 
-  void _parseFrames() {
+  /// Drops the partial frame: the caller's sink is aborted by whoever
+  /// handed it to the op.
+  @override
+  void abort(Object reason) => _buffer.clear();
+
+  @override
+  void close() {}
+
+  /// The frames the buffer holds, in order.
+  List<Uint8List> _takeFrames() {
+    final frames = <Uint8List>[];
     while (true) {
       final bytes = _buffer.toBytes();
       if (bytes.length < 4) break;
@@ -293,11 +337,12 @@ class _FrameCollectorSink implements DataSink {
         break;
       }
       if (bytes.length < 4 + len) break;
-      _frames.add(Uint8List.sublistView(bytes, 4, 4 + len));
+      frames.add(Uint8List.sublistView(bytes, 4, 4 + len));
       _buffer.clear();
       if (bytes.length > 4 + len) {
         _buffer.add(Uint8List.sublistView(bytes, 4 + len));
       }
     }
+    return frames;
   }
 }
