@@ -1,0 +1,336 @@
+diff --git a/src/extractors/images.rs b/src/extractors/images.rs
+index 30bf9b7..5631430 100644
+--- a/src/extractors/images.rs
++++ b/src/extractors/images.rs
+@@ -1290,13 +1290,18 @@ pub fn extract_image_from_xobject_at(
+             },
+             None => ImageData::Jpeg(xobject.decode_stream_data()?),
+         }
++    } else if is_ccitt {
++        // A fax image is read from the line decoder, one gray byte a pixel. A fax the line decoder cannot take (not 1-bit DeviceGray, unreadable
++        // /DecodeParms) is an image the engine cannot read, as it is for the
++        // row cursor.
++        let params = fax_params(doc, dict, color_space_map, width, height).ok_or_else(|| {
++            Error::Image("CCITT image is not 1-bit DeviceGray with readable /DecodeParms".to_string())
++        })?;
++        ImageData::Raw { pixels: fax_gray(xobject, params, width, height)?, format: PixelFormat::Grayscale }
+     } else {
+         // A raw-sample image is the rows it declares (`row_geometry` states the
+-        // same size); what the stream holds past them is stray. A fax stream is
+-        // the codec's input, not samples, and is read as it is.
+-        let decoded_data = if is_ccitt {
+-            xobject.decode_stream_data()?
+-        } else {
++        // same size); what the stream holds past them is stray.
++        let decoded_data = {
+             // A depth outside the spec's set has no row size to read: the
+             // image is declined, as every other image this code cannot read.
+             if !matches!(bits_per_component, 1 | 2 | 4 | 8 | 16) {
+@@ -1481,7 +1486,7 @@ pub fn extract_image_from_xobject_at(
+     // 16-bit samples were collapsed to their high byte above (and an Indexed
+     // base always expands to 8-bit RGB), so the stored pixels are 8-bit per
+     // component in those cases too.
+-    let effective_bpc = if is_jbig2 || bits_per_component == 16 {
++    let effective_bpc = if is_jbig2 || is_ccitt || bits_per_component == 16 {
+         8
+     } else {
+         stored_bpc
+@@ -2730,6 +2735,30 @@ fn bilevel_to_gray(packed: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
+ }
+ // ── end pdf_manipulator patch ──
+ 
++// ── pdf_manipulator patch: a fax image is read from the line decoder ──
++#[cfg(feature = "rendering")]
++fn fax_gray(
++    xobject: &crate::object::Object,
++    params: crate::decoders::CcittParams,
++    width: u32,
++    height: u32,
++) -> Result<Vec<u8>> {
++    crate::host::images::stream::fax_gray(xobject, params, width, height)
++}
++
++#[cfg(not(feature = "rendering"))]
++fn fax_gray(
++    _xobject: &crate::object::Object,
++    _params: crate::decoders::CcittParams,
++    _width: u32,
++    _height: u32,
++) -> Result<Vec<u8>> {
++    Err(Error::UnsupportedFilter(
++        "CCITTFaxDecode — rebuild with the `rendering` feature to decode".to_string(),
++    ))
++}
++// ── end pdf_manipulator patch ──
++
+ // ── pdf_manipulator patch: a JPEG painted smaller than itself is decoded from its stream ──
+ /// A gray or RGB JPEG decoded from its stream through the inverse DCT at the
+ /// largest reduction that still holds `painted` samples each way, with the
+diff --git a/src/host/images/stream.rs b/src/host/images/stream.rs
+index 2314d5d..7868523 100644
+--- a/src/host/images/stream.rs
++++ b/src/host/images/stream.rs
+@@ -112,6 +112,44 @@ impl Strips {
+     }
+ }
+ 
++/// A fax image as the gray raster the whole-image extraction stores (an inked
++/// pixel 0, a white one 255), `width` x `height`, read a row at a time from
++/// the stream's reader: the codestream is never held. A row past the stream,
++/// and the pixels of a row past `width`, are white.
++#[cfg(feature = "rendering")]
++pub(crate) fn fax_gray(
++    xobject: &Object,
++    params: CcittParams,
++    width: u32,
++    height: u32,
++) -> Result<Vec<u8>> {
++    let Object::Stream { dict, body } = xobject else {
++        return Err(Error::Image("image XObject is not a stream".to_string()));
++    };
++    let columns = params.columns;
++    let served = params.rows.map_or(height, |rows| rows.min(height));
++    let mut fax = Fax::open(dict, body, params, served)?;
++    let total = (width as usize)
++        .checked_mul(height as usize)
++        .ok_or_else(|| Error::Image("fax raster size overflows".to_string()))?;
++    let mut gray = Vec::new();
++    gray.try_reserve_exact(total)
++        .map_err(|_| Error::Image(format!("Unable to allocate {total} fax bytes")))?;
++    let mut row = vec![0u8; columns as usize];
++    for y in 0..height {
++        crate::cancel::poll()?;
++        if y < served {
++            fax.read(&mut row, columns, Output::Luma)?;
++            let kept = (width as usize).min(row.len());
++            gray.extend_from_slice(&row[..kept]);
++            gray.resize(gray.len() + (width as usize - kept), 255);
++        } else {
++            gray.resize(gray.len() + width as usize, 255);
++        }
++    }
++    Ok(gray)
++}
++
+ /// A fax image's rows, decoded a row at a time from the stream's reader.
+ struct Fax {
+     /// The stream's dictionary as stored, to open its reader again from.
+@@ -147,7 +185,7 @@ impl Fax {
+         body: &crate::object::StreamBody,
+         params: CcittParams,
+         height: u32,
+-    ) -> Result<Kind> {
++    ) -> Result<Self> {
+         // The cursor's engine reads a u16 width; a wider fax image is an
+         // error, and the caller skips that image with a warning.
+         let width = params.columns;
+@@ -158,7 +196,7 @@ impl Fax {
+             )));
+         }
+         let reader = Strips::open_reader(dict, body, None)?;
+-        Ok(Kind::Fax(Self {
++        Ok(Self {
+             dict: dict.clone(),
+             body: body.clone(),
+             height,
+@@ -169,7 +207,7 @@ impl Fax {
+             row: Vec::new(),
+             failed: false,
+             reversed: false,
+-        }))
++        })
+     }
+ 
+     /// Decodes the next row and expands it into `out`: `width` pixels of
+@@ -630,21 +668,24 @@ impl ImageRows {
+         // decode used to produce never exists.
+         if is_filter(&filters, &["CCITTFaxDecode"]) {
+             let geometry = row_geometry(Some(doc), dict, Some(color_spaces))?;
+-            if let Some(params) = crate::extractors::images::fax_params(
++            let Some(params) = crate::extractors::images::fax_params(
+                 Some(doc),
+                 dict,
+                 Some(color_spaces),
+                 geometry.width,
+                 geometry.height,
+-            ) {
+-                // `/Columns` is the row the cursor packs and paints;
+-                // `/Rows` and `/Height` bound the rows it serves, at the
+-                // smaller.
+-                let width = params.columns;
+-                let height = params.rows.map_or(geometry.height, |rows| rows.min(geometry.height));
+-                let kind = Fax::open(dict, body, params, height)?;
+-                return Ok(Self { width, height, output, next: 0, kind });
+-            }
++            ) else {
++                return Err(Error::Image(
++                    "CCITT image is not 1-bit DeviceGray with readable /DecodeParms".to_string(),
++                ));
++            };
++            // `/Columns` is the row the cursor packs and paints;
++            // `/Rows` and `/Height` bound the rows it serves, at the
++            // smaller.
++            let width = params.columns;
++            let height = params.rows.map_or(geometry.height, |rows| rows.min(geometry.height));
++            let kind = Kind::Fax(Fax::open(dict, body, params, height)?);
++            return Ok(Self { width, height, output, next: 0, kind });
+         }
+ 
+         let pdf_image = extract_image_from_xobject_at(Some(doc), xobject, None, Some(color_spaces), target)?;
+@@ -760,11 +801,9 @@ impl ImageRows {
+             // the sample the stencil's `/Decode` puts where the mapping
+             // paints, so the two folds cancel when both say the same.
+             params.black_is_1 = decode_reverses == params.black_is_1;
+-            let mut fax_kind = Fax::open(dict, body, params, mh)?;
+-            if let Kind::Fax(fax) = &mut fax_kind {
+-                fax.reversed = decode_reverses;
+-            }
+-            fax_kind
++            let mut fax = Fax::open(dict, body, params, mh)?;
++            fax.reversed = decode_reverses;
++            Kind::Fax(fax)
+         } else {
+             // Raw and Flate-family filters, through the stream's filter
+             // readers (decryption on, predictor included) a row at a time.
+@@ -1828,3 +1867,141 @@ impl CursorBytes for StencilCursor {
+         self.retained_bytes()
+     }
+ }
++
++#[cfg(test)]
++mod fax_arm {
++    use crate::decoders::CcittParams;
++    use crate::error::Error;
++    use crate::extractors::ccitt_bilevel::{bilevel_to_grayscale, decompress_ccitt};
++    use crate::extractors::images::extract_image_from_xobject_at;
++    use crate::extractors::{ImageData, PixelFormat};
++    use crate::object::Object;
++    use std::collections::HashMap;
++
++    const WIDTH: u32 = 37;
++    const HEIGHT: u32 = 11;
++
++    /// A picture whose runs differ from row to row and whose width is not a
++    /// multiple of eight.
++    fn picture() -> Vec<Vec<bool>> {
++        (0..HEIGHT as usize)
++            .map(|y| (0..WIDTH as usize).map(|x| (x * 7 + y * 13) % 5 < 2 || x == y).collect())
++            .collect()
++    }
++
++    fn group4(picture: &[Vec<bool>]) -> Vec<u8> {
++        let mut encoder = fax::encoder::Encoder::new(fax::VecWriter::new());
++        for row in picture {
++            let pels = row
++                .iter()
++                .map(|&black| if black { fax::Color::Black } else { fax::Color::White });
++            encoder.encode_line(pels, WIDTH).expect("encodes");
++        }
++        encoder.finish().expect("finishes").finish()
++    }
++
++    fn parms(columns: u32, rows: u32, black_is_1: bool) -> Object {
++        Object::Dictionary(HashMap::from([
++            ("K".to_string(), Object::Integer(-1)),
++            ("Columns".to_string(), Object::Integer(i64::from(columns))),
++            ("Rows".to_string(), Object::Integer(i64::from(rows))),
++            ("BlackIs1".to_string(), Object::Boolean(black_is_1)),
++        ]))
++    }
++
++    fn fax_image(code: Vec<u8>, extra: &[(&str, Object)]) -> Object {
++        let mut dict = HashMap::from([
++            ("Subtype".to_string(), Object::Name("Image".to_string())),
++            ("Width".to_string(), Object::Integer(i64::from(WIDTH))),
++            ("Height".to_string(), Object::Integer(i64::from(HEIGHT))),
++            ("ColorSpace".to_string(), Object::Name("DeviceGray".to_string())),
++            ("BitsPerComponent".to_string(), Object::Integer(1)),
++            ("Filter".to_string(), Object::Name("CCITTFaxDecode".to_string())),
++            ("DecodeParms".to_string(), parms(WIDTH, HEIGHT, false)),
++        ]);
++        for (key, value) in extra {
++            dict.insert((*key).to_string(), value.clone());
++        }
++        Object::stream(dict, code)
++    }
++
++    /// The whole decode as it was: the packed bitmap of `decompress_ccitt`,
++    /// one gray byte a pixel.
++    fn oracle(code: &[u8], black_is_1: bool) -> Vec<u8> {
++        let params = CcittParams {
++            k: -1,
++            columns: WIDTH,
++            rows: Some(HEIGHT),
++            black_is_1,
++            ..Default::default()
++        };
++        bilevel_to_grayscale(&decompress_ccitt(code, &params).expect("the oracle decodes"), WIDTH, HEIGHT)
++    }
++
++    /// A fax image's pixels are what the line decoder gives for each polarity
++    /// the dictionary can write, and are held as the gray raster, not as the
++    /// stream.
++    #[test]
++    fn a_fax_image_is_the_gray_raster_of_its_whole_decode() {
++        let code = group4(&picture());
++        let decode = ("Decode", Object::Array(vec![Object::Integer(1), Object::Integer(0)]));
++        let black_is_1 = ("DecodeParms", parms(WIDTH, HEIGHT, true));
++        // `/BlackIs1` and `/Decode [1 0]` each invert, and together cancel.
++        for (name, extra, inverted) in [
++            ("plain", vec![], false),
++            ("BlackIs1", vec![black_is_1.clone()], true),
++            ("Decode [1 0]", vec![decode.clone()], true),
++            ("both", vec![black_is_1, decode], false),
++        ] {
++            let image = extract_image_from_xobject_at(None, &fax_image(code.clone(), &extra), None, None, None)
++                .unwrap_or_else(|e| panic!("{name}: {e}"));
++            let want = oracle(&code, inverted);
++            let ImageData::Raw { pixels, format } = image.data() else {
++                panic!("{name}: a fax image is raw samples");
++            };
++            assert_eq!(*format, PixelFormat::Grayscale, "{name}");
++            assert_eq!(pixels.len(), (WIDTH * HEIGHT) as usize, "{name}: the raster, not the stream");
++            assert_eq!(pixels, &want, "{name}: the gray bytes");
++            assert_eq!(image.bits_per_component(), 8, "{name}");
++            assert_eq!(
++                image.to_dynamic_image().expect("converts").as_bytes(),
++                want.as_slice(),
++                "{name}: the picture"
++            );
++            assert!(image.ccitt_params().is_some(), "{name}: still classed as fax");
++        }
++    }
++
++    /// A stream that ends before `/Height` rows leaves the rows after it
++    /// white, as the cursor serves them.
++    #[test]
++    fn rows_past_the_stream_are_white() {
++        let code = group4(&picture()[..4]);
++        let image = extract_image_from_xobject_at(None, &fax_image(code, &[]), None, None, None)
++            .expect("extracts");
++        let ImageData::Raw { pixels, .. } = image.data() else { panic!("raw samples") };
++        assert_eq!(pixels.len(), (WIDTH * HEIGHT) as usize);
++        assert!(pixels[(4 * WIDTH) as usize..].iter().all(|&p| p == 255));
++        assert!(pixels[..(4 * WIDTH) as usize].contains(&0));
++    }
++
++    /// A fax image the line decoder cannot take (a palette colour space, a
++    /// depth other than one) is declined, never read whole.
++    #[test]
++    fn a_fax_image_the_cursor_cannot_take_is_declined() {
++        let code = group4(&picture());
++        let palette = Object::Array(vec![
++            Object::Name("Indexed".to_string()),
++            Object::Name("DeviceRGB".to_string()),
++            Object::Integer(1),
++            Object::String(vec![0, 0, 0, 255, 255, 255]),
++        ]);
++        for (name, extra) in [
++            ("palette", vec![("ColorSpace", palette)]),
++            ("eight bits", vec![("BitsPerComponent", Object::Integer(8))]),
++        ] {
++            let got = extract_image_from_xobject_at(None, &fax_image(code.clone(), &extra), None, None, None);
++            assert!(matches!(got, Err(Error::Image(_))), "{name}: {got:?}");
++        }
++    }
++}

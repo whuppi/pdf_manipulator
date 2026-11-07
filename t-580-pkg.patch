@@ -1,0 +1,89 @@
+diff --git a/CHANGELOG.pre.md b/CHANGELOG.pre.md
+index e88553e..6d20419 100644
+--- a/CHANGELOG.pre.md
++++ b/CHANGELOG.pre.md
+@@ -307,6 +307,8 @@ CONTENT RULES (never change)
+ - Fixed an image of raw samples holding the bytes its stream carries past its declared rows — it reads the rows it declares
+ - Fixed `render` and `reduceImages` of a gray or RGB JPEG painted smaller than itself holding a copy of the whole file beside the decode — the decoder reads the stream
+ - Fixed `compress` and every full save of an encrypted document copying each stream over 256 KiB as it was, so the file stayed as large as the source — such a stream is now recompressed in pieces and encrypted as it is written
++- Fixed `render` and `reduceImages` of a fax image the engine cannot read (a palette colour space, a depth other than 1, unreadable `/DecodeParms`) reading its whole stream into memory — the image is now declined at its open, and a 64 MiB one stays under 16 MB of engine memory
++- Fixed a fax image extracted whole, or inline, being read into memory as its compressed stream before it is decoded — it is read from the line decoder, a row at a time, into the gray raster
+ 
+ ## 5.0.1-dev.0
+ 
+diff --git a/tool/memprobe/src/main.rs b/tool/memprobe/src/main.rs
+index 658c042..2ce6132 100644
+--- a/tool/memprobe/src/main.rs
++++ b/tool/memprobe/src/main.rs
+@@ -99,6 +99,9 @@ fn limit(op: &str, input: &str) -> usize {
+         // The 50 MiB packed bitmap of the huge fax decodes two transition
+         // lines and one row at a time, in render, extract and reduce alike.
+         ("render" | "reduceImages", "hugeFax") => 16 * MIB,
++        // A 64 MiB fax stream the row cursor cannot take (a palette colour
++        // space): the image is declined at its open, the stream is not read.
++        ("render" | "reduceImages", "fax64") => 16 * MIB,
+         // The huge stencil is a 50 MiB ImageMask whose samples the row
+         // cursor takes off its Flate reader one row at a time, in render
+         // and reduce alike.
+@@ -978,6 +981,17 @@ fn run() -> Result<(), String> {
+             failed.set(true);
+         },
+     }
++    // A 64 MiB fax stream the row cursor cannot take: render and the
++    // reduction decline the image without reading its stream.
++    let fax64 = dir.join("fax64.pdf");
++    generate_fax64(&fax64)?;
++    step(&failed, "render", "fax64", limit("render", "fax64"), |st| {
++        render_to_sink(st, &fax64, 150, &open_sink("fax64", "render"))
++    });
++    verify_render_wire(&failed, "fax64", &open_sink("fax64", "render"));
++    step(&failed, "reduceImages", "fax64", limit("reduceImages", "fax64"), |st| {
++        reduce_to_sink(st, &fax64, &open_sink("fax64", "reduced"))
++    });
+     // The huge stencil: a 50 MiB ImageMask whose packed bitmap the row
+     // cursor never builds. Render and the reduction read back; the
+     // reduction by extracting the file it wrote.
+@@ -2983,6 +2997,34 @@ fn generate_huge_fax(path: &Path) -> Result<(), String> {
+     out.finish()
+ }
+ 
++/// A one-page Letter PDF painted with one 64 MiB CCITT stream whose colour
++/// space is a two-entry palette: a fax image the row cursor does not take, so
++/// the engine declines it. The stream never decodes (its bytes are filler);
++/// what the probe measures is that it is not read.
++fn generate_fax64(path: &Path) -> Result<(), String> {
++    use std::io::Read;
++    const LEN: u64 = 64 * 1024 * 1024;
++    let content = "q 612 0 0 792 0 0 cm /Im0 Do Q";
++    let mut out = PdfOut::create(path)?;
++    out.object(1, "<< /Type /Catalog /Pages 2 0 R >>")?;
++    out.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")?;
++    out.object(
++        3,
++        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
++         /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>",
++    )?;
++    out.stream(4, "", content.len() as u64, content.as_bytes())?;
++    out.stream(
++        5,
++        "/Type /XObject /Subtype /Image /Width 1000 /Height 1000 \
++         /ColorSpace [/Indexed /DeviceRGB 1 <000000FFFFFF>] /BitsPerComponent 1 \
++         /Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns 1000 /Rows 1000 >>",
++        LEN,
++        std::io::repeat(0x55).take(LEN),
++    )?;
++    out.finish()
++}
++
+ /// A one-page Letter PDF painted with one 20000 x 20000 ImageMask stencil,
+ /// Flate coded row by row with a PNG predictor. The row cursor reads its
+ /// samples a row at a time; the packed bitmap the whole decode would build
+diff --git a/tool/whole_buffer_patterns.txt b/tool/whole_buffer_patterns.txt
+index b7eb68e..dcafd81 100644
+--- a/tool/whole_buffer_patterns.txt
++++ b/tool/whole_buffer_patterns.txt
+@@ -19,3 +19,4 @@
+ \bget_page_content_data\(  # PdfDocument::get_page_content_data: the decoded content of a page, copied out
+ \bcached_page_content\(  # PdfDocument::cached_page_content: the decoded content of a page, cached
+ \braw_compressed_bytes\(  # PdfImage::raw_compressed_bytes: an image stream's stored bytes
++\bdecode_slice\(  # decoders::stream::decode_slice: a filter chain applied to a slice, the decoded bytes in one Vec
