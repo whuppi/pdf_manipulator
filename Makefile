@@ -435,6 +435,11 @@ bench:
 test-rust-run: export CARGO_INCREMENTAL := 0
 test-rust-run: export CARGO_PROFILE_DEV_DEBUG := 0
 test-rust-run: export CARGO_PROFILE_TEST_DEBUG := 0
+# The proofs crunch 64 MiB fixtures: at opt-level 0 the suite measures rustc,
+# not the engine. Debug assertions and overflow checks stay on, since they
+# follow debug-assertions and not opt-level.
+test-rust-run: export CARGO_PROFILE_DEV_OPT_LEVEL := 1
+test-rust-run: export CARGO_PROFILE_TEST_OPT_LEVEL := 1
 # public-api + cjk-form-fonts are test-only: shipped builds (build.json
 # feature lists) exclude the crate's own wasm/C API surfaces and the
 # embedded fallback fonts, but the upstream test suites cover both (the
@@ -473,7 +478,7 @@ test-rust:
 test-rust-run:
 	$(ensure_nextest)
 	@echo "=== Rust: pdf_oxide ==="
-	$(CARGO) nextest run --no-fail-fast --manifest-path vendor/pdf_oxide/Cargo.toml \
+	$(CARGO) nextest run --no-fail-fast --config-file tool/nextest.toml --manifest-path vendor/pdf_oxide/Cargo.toml \
 	  --features "$$($(DART) tool/compile.dart --features native),test-support,public-api,cjk-form-fonts,pdfa"
 	$(CARGO) test --doc --manifest-path vendor/pdf_oxide/Cargo.toml \
 	  --features "$$($(DART) tool/compile.dart --features native),test-support,public-api,cjk-form-fonts,pdfa"
@@ -481,10 +486,10 @@ test-rust-run:
 	$(CARGO) test --lib --manifest-path vendor/pdf_oxide/Cargo.toml \
 	  --no-default-features --features icc,legacy-crypto,native-bridge redact_refusal
 	@echo "=== Rust: office_oxide ==="
-	$(CARGO) nextest run --no-fail-fast --manifest-path vendor/office_oxide/Cargo.toml
+	$(CARGO) nextest run --no-fail-fast --config-file tool/nextest.toml --manifest-path vendor/office_oxide/Cargo.toml
 	$(CARGO) test --doc --manifest-path vendor/office_oxide/Cargo.toml
 	@echo "=== Rust: tiny_skia ==="
-	$(CARGO) nextest run --no-fail-fast --workspace --manifest-path vendor/tiny_skia/Cargo.toml
+	$(CARGO) nextest run --no-fail-fast --config-file tool/nextest.toml --workspace --manifest-path vendor/tiny_skia/Cargo.toml
 	$(CARGO) test --doc --workspace --manifest-path vendor/tiny_skia/Cargo.toml
 
 # ═══════════════════════════════════════════════════════════════════
