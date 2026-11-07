@@ -1,0 +1,960 @@
+diff --git a/Makefile b/Makefile
+index 4e98100..4ac3109 100644
+--- a/Makefile
++++ b/Makefile
+@@ -138,6 +138,9 @@ format:
+ #                        code, tool/check_patch_markers.sh
+ #                      - loops over document-scale collections poll for a cancel,
+ #                        tool/check_cancel_polls.sh
++#                      - no engine call reads a whole stream, file or page into
++#                        one buffer unless it is a table by nature or no lane
++#                        reaches it, tool/check_whole_buffers.sh
+ #                      - no dart:io in tests (fixtures are imported Dart
+ #                        source, so VM and browser consume identical
+ #                        bytes; exempt: the hybrid asset server, native
+@@ -180,6 +183,7 @@ test-guards:
+ 	@./tool/check_fork_tests.sh
+ 	@./tool/check_patch_markers.sh
+ 	@./tool/check_cancel_polls.sh
++	@./tool/check_whole_buffers.sh
+ 	@bad=$$(for f in $$(grep -rln "dart:io" test/ --include="*.dart"); do \
+ 	  grep -q "io-exempt:" "$$f" || echo "$$f"; \
+ 	done); \
+diff --git a/README.md b/README.md
+index 4068147..cdeb0a8 100644
+--- a/README.md
++++ b/README.md
+@@ -330,7 +330,7 @@ abstract interface class DataSource {
+ 
+ The engine asks for *64 KB from here*, then the next piece, then the next. So you hand it a **reader**, not your whole file in one giant `Uint8List`. It jumps to any place in the file, so a one-way stream such as a live socket cannot be a source. Keep that data in memory or in a file first.
+ 
+-**Memory** is bounded for any number of pages; one page's text costs a known amount per piece. An operation holds a fixed ceiling of 16 MiB over what the process held before it, and reading the text of one page adds a declared number of bytes for each text piece (run) of that page, because reading order is a sort over all of a page's pieces and no text can leave before every piece is read. The numbers are declared in the engine (`piece_budget`) and held by its tests, so they cannot grow quietly.
++**Memory** is bounded for any number of pages; one page's text costs a known amount per piece. An operation holds a fixed ceiling of 16 MiB over what the process held before it, and reading the text of one page adds a declared number of bytes for each text piece (run) of that page, because reading order is a sort over all of a page's pieces and no text can leave before every piece is read. The numbers are declared in the engine (`piece_budget`) and held by its tests, so they cannot grow quietly. Converting an Office file to PDF is the one operation outside the ceiling: office_oxide parses the whole document into its model, so the conversion costs that model, in proportion to the file. Nothing is skipped or refused at any size.
+ 
+ A **sink** is the other side:
+ 
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+index 899528d..00f6b7c 100644
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -521,6 +521,11 @@ sort that spills sorted runs to storage would keep one page under the plain ceil
+ not built, and the trigger to reconsider it is a user with single pages too large for the
+ per-piece cost and real storage to spill to.
+ 
++Converting an Office file to PDF is the one operation outside the ceiling: office_oxide
++parses the whole document into its model, so the conversion costs that model, in
++proportion to the file. Nothing is skipped or refused at any size. The rows
++`convertToPdf docx64` and `pptx64` of `make test-memory` hold that cost.
++
+ `convertToPdfA` holds the one metadata packet it patches, once, until the save writes it.
+ 
+ ### The counting allocator and the heap
+@@ -578,15 +583,36 @@ ceiling on both probe inputs, and so does the full save of a large encrypted str
+ engine reads through an object cache bounded by `DEFAULT_OBJECT_CACHE_MAX_BYTES`, copies
+ unchanged streams in fixed pieces (an encrypted stream is decrypted in the same pieces),
+ and reads page facts without keeping the page dictionaries. A stream of a document is a
+-window onto the document's bytes that reads itself; only the whole reads listed in
+-`engine_proofs/whole_reads.txt` hold a stream's data in one buffer. Merge keeps the merged
++window onto the document's bytes that reads itself. Merge keeps the merged
+ document open with its own small object cache, records only the ids of the objects each
+ page reaches, and writes every merged object one at a time from that document.
+-`tool/check_whole_buffers.sh` fails the build on any engine call that reads a whole stream,
+-file or page into one buffer unless it is a line of `tool/whole_buffer_allow.txt`, which
+-admits only the kinds that are tables by nature (a font program, a sampled function, an ICC
+-profile, the CMap table, a DER certificate or the DSS, the xref stream, one object-stream
+-member, a progressive JPEG raster, a JPX recompressed at full size).
++
++One lint holds the rest: `tool/check_whole_buffers.sh`. A site is an engine call that
++hands back every byte of a stream, a file or a page in one buffer (the patterns of
++`tool/whole_buffer_patterns.txt`, found in the code of `vendor/pdf_oxide/src` outside tests
++and `engine_proofs/`). A `read_to_end` or `read_to_string` on a chain with a `.take(N)` is a
++window, not a site, and the body of a whole-read helper is not a site either (its callers
++are). Every site fails the build unless it is a line of `tool/whole_buffer_allow.txt`,
++which has two classes:
++
++- `table:` admits the kinds that are whole by nature: a font program, a sampled function, a
++  PostScript calculator function (a Type 4 program, evaluated per sample in O(its own
++  length)), an ICC profile, the CMap table, a DER certificate or the DSS, the xref stream,
++  one object-stream member, a progressive JPEG raster, a JPX recompressed at full size, a
++  JBIG2 stream and its globals and a JPX codestream (the last two because hayro-jbig2 and
++  OpenJPEG take `&[u8]`). Any other word after `table:` fails.
++- `unreached:` admits a site no lane can reach, and the script proves it instead of
++  trusting the line. One proof must hold: the site is under a `#[cfg(feature = "x")]`
++  (or in a module declared under one) where `x` is in neither feature string of
++  `build.json` nor implied by one in the Cargo.toml of the engine; or its function takes a
++  `Path` (a lane holds a `DataSource`, never a path); or the name of its function, and of
++  each function that calls it, appears in no file under `src/host` and none under `lib/`
++  (a caller in `#[cfg(test)]` code or under `engine_proofs/` is not a caller). A line
++  whose proof fails fails the build.
++
++A bound is no class: the `.take(N)` in the code is the window. An allow line that matches
++no site fails too, so the file cannot outlive the code it excuses. `--sites` lists every
++site, its key and the proof that holds for it.
+ 
+ `extractImages` writes each image to a sink the caller's factory returns, on the same
+ chunked wire as `render` (one shared framer in the engine, one shared delivery in Dart).
+@@ -689,7 +715,7 @@ Future<({Uint8List bytes, Map<int, int> resourceIds})> execute(
+ | appendPages | source 0, the other PDF, kept for the handle's lifetime and read again by the save | — |
+ | addImageStamp / addAttachment / builder `image` | source 0, the secondary data | — |
+ | convertToOffice (PDF → DOCX/PPTX/XLSX) | source 0 on demand | streaming ZIP via office_oxide |
+-| convertFromOffice (DOCX/PPTX/XLSX → PDF) | whole input buffered (office_oxide reads the ZIP from an in-memory cursor) | CountingWriter streams objects |
++| convertFromOffice (DOCX/PPTX/XLSX → PDF) | source 0 on demand; the package stays in its source and office_oxide holds the whole document model | CountingWriter streams objects |
+ 
+ ### PositionedWrite — Write without Seek
+ 
+@@ -1075,6 +1101,7 @@ tool/                                       ← .sh = orchestration wrappers; .d
+ ├── versions.env                            ← single source of truth for pinned versions
+ ├── analyze.sh                              ← format + Dart + Rust static analysis
+ ├── check_cancel_polls.sh                   ← the loop poll lint (in make test-guards)
++├── check_whole_buffers.sh                  ← the whole-buffer lint (in make test-guards)
+ ├── compile.dart                            ← Rust → native / wasm / per-target / both
+ ├── asyncify_list.dart                      ← the Asyncify list of a built wasm, with its counts
+ ├── generate_fixtures.dart                  ← test fixture generator (make fixtures; stamp-protected)
+@@ -1114,7 +1141,7 @@ vendor/pdf_oxide/src/
+ │   ├── font_subset/                        ← font subsets (TrueType, CFF)
+ │   ├── font_optimizer.rs                   ← Standard 14 unembedding
+ │   ├── probe.rs                            ← the out-of-crate door that tool/memprobe runs requests through
+-│   ├── engine_proofs/                      ← tests that open documents; shared_state.txt, whole_reads.txt
++│   ├── engine_proofs/                      ← tests that open documents; shared_state.txt
+ │   ├── native/                             ← executors and condvar I/O
+ │   │   ├── executor.rs                     ← the executor body: thread loop, jobs, leases, reset
+ │   │   ├── executor_table.rs               ← registry, thread budget, FFI surface
+diff --git a/tool/check_whole_buffers.sh b/tool/check_whole_buffers.sh
+index 6cf2a7a..c06f122 100755
+--- a/tool/check_whole_buffers.sh
++++ b/tool/check_whole_buffers.sh
+@@ -1,14 +1,15 @@
+ #!/usr/bin/env bash
+-# Whole-buffer lint (d-122): an engine site that reads a whole stream, file or
+-# page into memory fails the build unless it is one of the kinds that are tables
+-# by nature.
++# Whole-buffer lint (d-122, d-132): an engine site that reads a whole stream,
++# file or page into memory fails the build unless it is a table by nature or the
++# build can prove no lane reaches it.
+ #
+ # Memory is bounded for any number of pages, so a call that hands back every byte
+ # of a stream, a source or a page in one buffer is a hole in that promise unless
+-# what it reads is whole by nature: a font program, a sampled function, an ICC
+-# profile, the CMap table, a DER certificate or the DSS, the xref stream, one
+-# object-stream member, a progressive JPEG raster, a JPX recompressed at full
+-# size. Everything else reads in pieces.
++# what it reads is whole by nature: a font program, a sampled function, a
++# PostScript calculator function, an ICC profile, the CMap table, a DER
++# certificate or the DSS, the xref stream, one object-stream member, a
++# progressive JPEG raster, a JPX recompressed at full size, a JBIG2 stream and
++# its globals, a JPX codestream. Everything else reads in pieces.
+ #
+ # Walks the tracked and new .rs files of vendor/pdf_oxide/src (not
+ # src/host/engine_proofs/, not `#[cfg(test)]` or `#[test]` code) and finds each
+@@ -20,15 +21,30 @@
+ # helper's own body (its callers are the sites). It fails with file:line unless
+ # the site is a line of
+ # tool/whole_buffer_allow.txt:
+-#       <path under vendor/pdf_oxide>::<fn>#<n>  # table: why
++#       <path under vendor/pdf_oxide>::<fn>#<n>  # <class>: why
+ # where <n> counts the flagged sites of that function, from 1, in source order.
+-# `table:` is the only class an allow line may name, and its why names one of the
+-# kinds above; any other word fails. A site that reads something that is not a
+-# table is not allowed: it is a bug to fix with a bounded read.
++# There are two classes:
++#   table:      the why names one of the kinds above.
++#   unreached:  no lane can reach the site, and the script proves it rather than
++#               trusting the why. A site is unreached when one of these holds:
++#                 gate    it sits in a `#[cfg(..)]` item, or in a module declared
++#                         under one, that is off for both feature strings of
++#                         build.json (and every feature they imply in the
++#                         engine's Cargo.toml). `not(..)` and target gates prove
++#                         nothing.
++#                 path    its function takes a `Path`, `&Path` or `PathBuf`: a
++#                         lane holds a `DataSource`, never a path.
++#                 callers its function's name appears in no file under
++#                         vendor/pdf_oxide/src/host and none under lib/, and the
++#                         same holds for the name of each function that calls it
++#                         (one level). A caller in `#[cfg(test)]` code or under
++#                         src/host/engine_proofs/ is not a caller.
++# A bound is no class: a `.take(N)` in the code is the window.
+ #
+ # An allow line that matches no flagged site fails too, so the file cannot
+ # outlive the code it excuses. `--sites` prints every flagged site and its key,
+-# for writing the allow list, and the reads it does not count as sites.
++# for writing the allow list, with the proof that holds for it, and the reads it
++# does not count as sites.
+ set -euo pipefail
+ 
+ cd "$(dirname "$0")/.."
+@@ -37,16 +53,19 @@ cd "$(dirname "$0")/.."
+ 
+ git -C vendor/pdf_oxide ls-files --cached --others --exclude-standard -z -- 'src/*.rs' \
+   | python3 -I -c '
++import json
++import os
+ import re
+ import sys
+ 
+ ROOT = "vendor/pdf_oxide/"
+ PATTERNS_FILE = "tool/whole_buffer_patterns.txt"
+ ALLOW_FILE = "tool/whole_buffer_allow.txt"
+-# What an allow line may call a table: the d-122 allow-list.
++# What an allow line may call a table.
+ KINDS = [
+     "font program",
+     "sampled function",
++    "PostScript calculator function",
+     "ICC profile",
+     "CMap table",
+     "DER certificate",
+@@ -55,6 +74,8 @@ KINDS = [
+     "object-stream member",
+     "progressive JPEG raster",
+     "JPX recompressed at full size",
++    "JBIG2 stream and globals",
++    "JPX codestream",
+ ]
+ LIST_SITES = "--sites" in sys.argv[1:]
+ 
+@@ -202,6 +223,252 @@ def enclosing_fn(at, fns):
+     return best
+ 
+ 
++CFG_ATTR = re.compile(r"#\s*(!?)\s*\[\s*cfg\s*\(")
++
++
++def cfg_items(src, text):
++    """Spans of the items under a `#[cfg(..)]` (the whole file for `#![cfg(..)]`),
++    as (start, end, predicate) triples. `src` supplies the feature names that
++    `text` has blanked."""
++    out = []
++    for m in CFG_ATTR.finditer(src):
++        if text[m.start()] != "#":
++            continue
++        depth, k = 1, m.end()
++        while k < len(src) and depth:
++            depth += {"(": 1, ")": -1}.get(src[k], 0)
++            k += 1
++        pred = src[m.end():k - 1]
++        if m.group(1):
++            out.append((0, len(src), pred))
++            continue
++        k = text.find("]", k) + 1
++        while True:
++            skip = re.match(r"\s*#\s*\[[^\]]*\]", text[k:])
++            if not skip:
++                break
++            k += skip.end()
++        brace = text.find("{", k)
++        semi = text.find(";", k)
++        if brace >= 0 and (semi < 0 or brace < semi):
++            end = match_brace(text, brace)
++            out.append((m.start(), len(text) if end < 0 else end + 1, pred))
++        elif semi >= 0:
++            out.append((m.start(), semi + 1, pred))
++    return out
++
++
++def parse_cfg(pred):
++    toks = re.findall(r"[A-Za-z_][A-Za-z0-9_]*|\"[^\"]*\"|[(),=]", pred)
++    pos = 0
++
++    def expr():
++        nonlocal pos
++        name = toks[pos]
++        pos += 1
++        if toks[pos] == "(":
++            pos += 1
++            args = []
++            while toks[pos] != ")":
++                args.append(expr())
++                if toks[pos] == ",":
++                    pos += 1
++            pos += 1
++            return (name, args)
++        if toks[pos] == "=":
++            pos += 2
++            return (name, toks[pos - 1].strip(chr(34)))
++        return (name, None)
++
++    return expr()
++
++
++def provably_off(node, enabled):
++    """True when the predicate is false for every feature set `enabled` allows.
++    `not(..)` and every non-feature gate prove nothing."""
++    name, arg = node
++    if name == "feature":
++        return arg not in enabled
++    if name == "any":
++        return all(provably_off(a, enabled) for a in arg)
++    if name == "all":
++        return any(provably_off(a, enabled) for a in arg)
++    return False
++
++
++def cfg_off(pred, enabled):
++    try:
++        return provably_off(parse_cfg(pred), enabled)
++    except IndexError:
++        return False
++
++
++def enabled_features():
++    """The features the package builds the engine with (both strings of
++    build.json) and every feature those imply in the Cargo.toml of the engine."""
++    with open("build.json", encoding="utf-8") as f:
++        strings = json.load(f)["features"].values()
++    with open(ROOT + "Cargo.toml", encoding="utf-8") as f:
++        cargo = f.read()
++    section = re.search(r"^\[features\]\s*$(.*?)(?=^\[|\Z)", cargo, re.S | re.M).group(1)
++    section = re.sub(r"#[^\n]*", "", section)
++    table = {
++        m.group(1): re.findall(r"\"([^\"]*)\"", m.group(2))
++        for m in re.finditer(r"^([A-Za-z0-9_-]+)\s*=\s*\[(.*?)\]", section, re.S | re.M)
++    }
++    todo = ["default"] + [name for s in strings for name in s.split(",")]
++    enabled = set()
++    while todo:
++        name = todo.pop()
++        if name in enabled:
++            continue
++        enabled.add(name)
++        todo += [e for e in table.get(name, []) if not e.startswith("dep:") and "/" not in e]
++    return enabled
++
++
++class Source:
++    def __init__(self, src):
++        self.src = src
++        self.text = blank(src)
++        self.skip = test_ranges(self.text)
++        self.fns = functions_of(self.text)
++        self.cfgs = cfg_items(src, self.text)
++
++    def in_test(self, at):
++        return any(a <= at < b for a, b in self.skip)
++
++
++def gate_proof(path, at, files, enabled):
++    """The `#[cfg(..)]` that compiles the site out, or None."""
++    rec = files[path]
++    for a, b, pred in rec.cfgs:
++        if a <= at < b and cfg_off(pred, enabled):
++            return f"gate: inside #[cfg({pred})] in {path}"
++    rel = path[len("src/"):]
++    if rel.startswith("bin/") or rel in ("lib.rs", "main.rs"):
++        return None
++    parts = rel[:-len(".rs")].split("/")
++    if parts[-1] == "mod":
++        parts.pop()
++    for depth in range(len(parts), 0, -1):
++        name, parent = parts[depth - 1], "/".join(parts[:depth - 1])
++        for cand in ([f"src/{parent}/mod.rs", f"src/{parent}.rs"] if parent else ["src/lib.rs"]):
++            up = files.get(cand)
++            decl = up and re.search(r"\bmod\s+" + re.escape(name) + r"\s*[;{]", up.text)
++            if not decl:
++                continue
++            for a, b, pred in up.cfgs:
++                if a <= decl.start() < b and cfg_off(pred, enabled):
++                    return f"gate: module {name} is declared under #[cfg({pred})] in {cand}"
++    return None
++
++
++def path_proof(fn, text):
++    """The Path parameter of the enclosing function, or None."""
++    start, name, body_start, _ = fn
++    open_at = None
++    angle = 0
++    for k in range(start, body_start):
++        c = text[k]
++        if c == "<":
++            angle += 1
++        elif c == ">" and text[k - 1] != "-":
++            angle -= 1
++        elif c == "(" and angle <= 0:
++            open_at = k
++            break
++    if open_at is None:
++        return None
++    depth, k = 0, open_at
++    while k < body_start:
++        depth += {"(": 1, ")": -1}.get(text[k], 0)
++        k += 1
++        if depth == 0:
++            break
++    m = re.search(r"\b(?:Path|PathBuf)\b", text[start:k])
++    return f"path: {name} takes a {m.group(0)}" if m else None
++
++
++class Mentions:
++    """Where a name appears under src/host (not engine_proofs, not test code)
++    and under lib/."""
++
++    def __init__(self, files):
++        self.texts = []
++        for base in (ROOT + "src/host", "lib"):
++            for dirpath, dirs, names in os.walk(base):
++                dirs[:] = [d for d in dirs if d != "engine_proofs"]
++                for n in names:
++                    full = os.path.join(dirpath, n)
++                    rel = full[len(ROOT):] if full.startswith(ROOT) else full
++                    rec = files.get(rel)
++                    try:
++                        if rec:
++                            text = "".join(" " if any(a <= k < b for a, b in rec.skip) and c != "\n" else c for k, c in enumerate(rec.src))
++                        else:
++                            with open(full, encoding="utf-8") as f:
++                                text = f.read()
++                    except (UnicodeDecodeError, OSError):
++                        continue
++                    self.texts.append((full, text))
++
++    def find(self, name):
++        pattern = re.compile(r"\b" + re.escape(name) + r"\b")
++        for full, text in self.texts:
++            m = pattern.search(text)
++            if m:
++                return f"{full}:{text.count(chr(10), 0, m.start()) + 1}"
++        return None
++
++
++def callers_proof(fn, path, files, mentions):
++    """None-or-reason: the name of the function and of each function that calls
++    it must appear in no file under src/host or lib/."""
++    name = fn[1]
++    hit = mentions.find(name)
++    if hit:
++        return f"callers: {name} appears at {hit}"
++    pattern = re.compile(r"\b" + re.escape(name) + r"\b")
++    seen = set()
++    for other, rec in files.items():
++        if other.startswith("src/host/engine_proofs/"):
++            continue
++        for m in pattern.finditer(rec.text):
++            if rec.in_test(m.start()) or re.search(r"\bfn\s+$", rec.text[:m.start()]):
++                continue
++            caller = enclosing_fn(m.start(), rec.fns)
++            if caller is None:
++                return f"callers: {name} is used outside a function at {other}:{rec.text.count(chr(10), 0, m.start()) + 1}"
++            if other == path and caller[0] == fn[0]:
++                continue
++            if caller[1] not in seen:
++                seen.add(caller[1])
++                hit = mentions.find(caller[1])
++                if hit:
++                    return f"callers: {name} is called by {caller[1]} ({other}:{rec.text.count(chr(10), 0, m.start()) + 1}), which appears at {hit}"
++    return None
++
++
++def prove(path, at, fn, files, enabled, mentions):
++    """(proof that holds, or None; why each failed)."""
++    failed = []
++    gate = gate_proof(path, at, files, enabled)
++    if gate:
++        return gate, failed
++    failed.append("no cfg gate that is off for the build")
++    if fn:
++        proof = path_proof(fn, files[path].text)
++        if proof:
++            return proof, failed
++        failed.append(f"{fn[1]} takes no Path")
++        reason = callers_proof(fn, path, files, mentions)
++        if not reason:
++            return f"callers: {fn[1]} and its callers appear in no file under src/host or lib/", failed
++        failed.append(reason)
++    return None, failed
++
++
+ patterns = []
+ allow = {}
+ if not LIST_SITES:
+@@ -214,18 +481,19 @@ if not LIST_SITES:
+         if not comment:
+             print(f"{ALLOW_FILE}:{number}: allowed site with no reason")
+             sys.exit(1)
+-        if not comment.startswith("table: "):
+-            print(f"{ALLOW_FILE}:{number}: an allowed site is `# table: <why>`; a read of anything that is not a table is bounded instead")
+-            sys.exit(1)
+-        if not any(kind in comment for kind in KINDS):
+-            print(f"{ALLOW_FILE}:{number}: the why names none of the kinds that are tables by nature: " + ", ".join(KINDS))
++        if comment.startswith("table: "):
++            if not any(kind in comment for kind in KINDS):
++                print(f"{ALLOW_FILE}:{number}: the why names none of the kinds that are tables by nature: " + ", ".join(KINDS))
++                sys.exit(1)
++        elif not comment.startswith("unreached: ") or not comment[len("unreached: "):].strip():
++            print(f"{ALLOW_FILE}:{number}: an allowed site is `# table: <kind>` or `# unreached: <why>`; a read of anything else is bounded instead")
+             sys.exit(1)
+-        allow[text] = [number, False]
++        allow[text] = [number, False, comment.startswith("unreached: ")]
+ else:
+     for number, text, comment in read_lines(PATTERNS_FILE):
+         patterns.append(re.compile(text))
+ 
+-bad = 0
++files = {}
+ for path in sys.stdin.buffer.read().split(b"\0"):
+     if not path:
+         continue
+@@ -234,12 +502,16 @@ for path in sys.stdin.buffer.read().split(b"\0"):
+         continue
+     try:
+         with open(ROOT + path, encoding="utf-8") as f:
+-            src = f.read()
++            files[path] = Source(f.read())
+     except (UnicodeDecodeError, FileNotFoundError, IsADirectoryError):
+         continue
+-    text = blank(src)
+-    skip = test_ranges(text)
+-    fns = functions_of(text)
++
++enabled = enabled_features()
++mentions = Mentions(files)
++
++bad = 0
++for path, rec in files.items():
++    text, skip, fns = rec.text, rec.skip, rec.fns
+     # One site per call: the offset just past the name, which patterns that
+     # name the same call (`std::fs::read(` and `fs::read(`) share.
+     sites = {}
+@@ -272,23 +544,29 @@ for path in sys.stdin.buffer.read().split(b"\0"):
+         counts[name] = counts.get(name, 0) + 1
+         key = f"{path}::{name}#{counts[name]}"
+         if LIST_SITES:
+-            print(f"{ROOT}{path}:{line}: {key}: {called.strip()}")
++            proof, _ = prove(path, start, fn, files, enabled, mentions)
++            print(f"{ROOT}{path}:{line}: {key}: {called.strip()}" + (f"  [unreached by {proof}]" if proof else ""))
+             continue
+-        if key in allow:
+-            allow[key][1] = True
++        if key not in allow:
++            print(f"{ROOT}{path}:{line}: reads a whole stream, file or page into one buffer: {called.strip()}")
++            print(f"    read it in bounded pieces, or allow it as {key}  # table: <kind>  (or `# unreached: <why>` when no lane reaches it)")
++            bad += 1
+             continue
+-        print(f"{ROOT}{path}:{line}: reads a whole stream, file or page into one buffer: {called.strip()}")
+-        print(f"    read it in bounded pieces, or allow it as {key}  # table: <kind>")
+-        bad += 1
++        allow[key][1] = True
++        if allow[key][2]:
++            proof, failed = prove(path, start, fn, files, enabled, mentions)
++            if not proof:
++                print(f"{ALLOW_FILE}:{allow[key][0]}: {key} is not unreached ({ROOT}{path}:{line}): " + "; ".join(failed))
++                bad += 1
+ 
+-for key, (number, used) in allow.items():
++for key, (number, used, _) in allow.items():
+     if not used and not LIST_SITES:
+         print(f"{ALLOW_FILE}:{number}: {key} matches no flagged site")
+         bad += 1
+ 
+ if bad:
+-    print(f"{bad} site(s) read a whole buffer that is not a table")
++    print(f"{bad} site(s) read a whole buffer that is not a table and that no proof shows unreached")
+     sys.exit(1)
+ if not LIST_SITES:
+-    print("every whole-buffer read is a table by nature")
++    print("every whole-buffer read is a table by nature or unreached by proof")
+ ' "$@"
+diff --git a/tool/memprobe/src/main.rs b/tool/memprobe/src/main.rs
+index 92dc303..3c7ba37 100644
+--- a/tool/memprobe/src/main.rs
++++ b/tool/memprobe/src/main.rs
+@@ -117,6 +117,13 @@ fn limit(op: &str, input: &str) -> usize {
+         // streams regions is the task that stops it being an exception.
+         ("render", "hugeJbig2") => 98 * MIB,
+         ("extractImages", "hugeJbig2") => 96 * MIB,
++        // Converting an Office file to PDF is the one operation outside the
++        // ceiling: office_oxide parses the whole document into its model, so
++        // the conversion costs that model, in proportion to the file. Nothing
++        // is skipped or refused at any size. The targets are the measured
++        // peaks rounded up to the next MiB.
++        ("convertToPdf", "docx64") => 530 * MIB,
++        ("convertToPdf", "pptx64") => 387 * MIB,
+         // The ruled exception again: the progressive JPEG is decoded whole, by
+         // the inverse DCT at the reduction that covers the placement.
+         ("reduceImages", "hugeJpeg") => 56 * MIB,
+@@ -1280,12 +1287,301 @@ fn run() -> Result<(), String> {
+     let _ = std::fs::remove_file(&xmp);
+     let _ = std::fs::remove_file(&converted);
+ 
++    convert_office(&failed, &dir)?;
++
+     if failed.get() {
+         return Err("one or more steps exceeded their memory limit".to_string());
+     }
+     Ok(())
+ }
+ 
++/// convertToPdf of a stored-ZIP package that holds one 64 MiB JPEG; the docx
++/// also holds 20,000 paragraphs.
++fn convert_office(failed: &std::cell::Cell<bool>, dir: &Path) -> Result<(), String> {
++    let open_sink = |n: &str, op: &str| dir.join(format!("{n}_{op}.pdf"));
++    let office_jpeg = dir.join("office64.jpg");
++    generate_image_jpeg(&office_jpeg, IMAGE_WIDTH, JPEG_ROWS)?;
++    let jpeg_size = std::fs::metadata(&office_jpeg).map(|m| m.len()).unwrap_or(0);
++    if jpeg_size < 64 * MIB as u64 {
++        return Err(format!("office JPEG is {jpeg_size} bytes, under its {}", 64 * MIB));
++    }
++    for (name, kind) in [("docx64", OfficeKind::Docx), ("pptx64", OfficeKind::Pptx)] {
++        let package = dir.join(format!("{name}.{}", kind.extension()));
++        generate_office_package(&package, kind, &office_jpeg)?;
++        let pdf = open_sink(name, "convertToPdf");
++        step(failed, "convertToPdf", name, limit("convertToPdf", name), |st| {
++            call(
++                st,
++                re("convertToPdf").put("format", strv(kind.extension())),
++                vec![source(&package)],
++                vec![sink(&pdf)],
++            )?;
++            Ok(())
++        });
++        if let Err(e) = check_converted_pdf(&pdf) {
++            eprintln!("memprobe: convertToPdf {name}: READ-BACK FAIL: {e}");
++            failed.set(true);
++        }
++        let _ = std::fs::remove_file(&pdf);
++        let _ = std::fs::remove_file(&package);
++    }
++    let _ = std::fs::remove_file(&office_jpeg);
++    Ok(())
++}
++
++// ── office packages ─────────────────────────────────────────────────
++
++#[derive(Clone, Copy)]
++enum OfficeKind {
++    Docx,
++    Pptx,
++}
++
++impl OfficeKind {
++    fn extension(self) -> &'static str {
++        match self {
++            OfficeKind::Docx => "docx",
++            OfficeKind::Pptx => "pptx",
++        }
++    }
++}
++
++/// A ZIP whose entries are stored as they are, so the package is as large as
++/// what it holds. The local header carries the CRC and the size, so a file
++/// entry is read twice: once to sum, once to copy.
++struct StoredZip {
++    out: std::io::BufWriter<File>,
++    written: u64,
++    central: Vec<u8>,
++    entries: u16,
++}
++
++impl StoredZip {
++    fn create(path: &Path) -> Result<Self, String> {
++        let file = File::create(path).map_err(|e| format!("zip {}: {e}", path.display()))?;
++        Ok(StoredZip { out: std::io::BufWriter::new(file), written: 0, central: Vec::new(), entries: 0 })
++    }
++
++    fn bytes(&mut self, name: &str, data: &[u8]) -> Result<(), String> {
++        let mut crc = flate2::Crc::new();
++        crc.update(data);
++        self.entry(name, crc.sum(), data.len() as u32, &mut std::io::Cursor::new(data))
++    }
++
++    fn file(&mut self, name: &str, path: &Path) -> Result<(), String> {
++        use std::io::Read;
++        let fail = |e: std::io::Error| format!("zip {}: {e}", path.display());
++        let mut crc = flate2::Crc::new();
++        let mut buf = vec![0u8; 64 * 1024];
++        let mut input = File::open(path).map_err(fail)?;
++        loop {
++            let n = input.read(&mut buf).map_err(fail)?;
++            if n == 0 {
++                break;
++            }
++            crc.update(&buf[..n]);
++        }
++        self.entry(name, crc.sum(), crc.amount(), &mut File::open(path).map_err(fail)?)
++    }
++
++    fn entry(&mut self, name: &str, crc: u32, len: u32, data: &mut dyn std::io::Read) -> Result<(), String> {
++        let fail = |e: std::io::Error| format!("zip {name}: {e}");
++        let mut header = Vec::new();
++        header.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
++        header.extend_from_slice(&20u16.to_le_bytes()); // version needed
++        header.extend_from_slice(&[0; 2]); // flags
++        header.extend_from_slice(&[0; 2]); // method: stored
++        header.extend_from_slice(&[0; 2]); // time
++        header.extend_from_slice(&33u16.to_le_bytes()); // date: 1980-01-01
++        header.extend_from_slice(&crc.to_le_bytes());
++        header.extend_from_slice(&len.to_le_bytes());
++        header.extend_from_slice(&len.to_le_bytes());
++        header.extend_from_slice(&(name.len() as u16).to_le_bytes());
++        header.extend_from_slice(&[0; 2]); // extra length
++        header.extend_from_slice(name.as_bytes());
++
++        self.central.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
++        self.central.extend_from_slice(&20u16.to_le_bytes()); // version made by
++        self.central.extend_from_slice(&header[4..30]);
++        self.central.extend_from_slice(&[0; 2]); // comment length
++        self.central.extend_from_slice(&[0; 2]); // disk
++        self.central.extend_from_slice(&[0; 2]); // internal attributes
++        self.central.extend_from_slice(&[0; 4]); // external attributes
++        self.central.extend_from_slice(&(self.written as u32).to_le_bytes());
++        self.central.extend_from_slice(name.as_bytes());
++        self.entries += 1;
++
++        self.out.write_all(&header).map_err(fail)?;
++        let copied = std::io::copy(data, &mut self.out).map_err(fail)?;
++        if copied != u64::from(len) {
++            return Err(format!("zip {name}: {copied} bytes copied of {len}"));
++        }
++        self.written += header.len() as u64 + copied;
++        Ok(())
++    }
++
++    fn finish(mut self) -> Result<(), String> {
++        let fail = |e: std::io::Error| format!("zip: {e}");
++        let mut end = Vec::new();
++        end.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
++        end.extend_from_slice(&[0; 4]); // disk numbers
++        end.extend_from_slice(&self.entries.to_le_bytes());
++        end.extend_from_slice(&self.entries.to_le_bytes());
++        end.extend_from_slice(&(self.central.len() as u32).to_le_bytes());
++        end.extend_from_slice(&(self.written as u32).to_le_bytes());
++        end.extend_from_slice(&[0; 2]); // comment length
++        self.out.write_all(&self.central).map_err(fail)?;
++        self.out.write_all(&end).map_err(fail)?;
++        self.out.flush().map_err(fail)
++    }
++}
++
++/// A docx or pptx package whose one picture is `jpeg`. The docx also holds
++/// 20,000 paragraphs.
++fn generate_office_package(path: &Path, kind: OfficeKind, jpeg: &Path) -> Result<(), String> {
++    const XML: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n";
++    const RELS: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
++    const OD: &str = "http://schemas.openxmlformats.org/officeDocument/2006";
++    const MAIN: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
++    const PIC: &str = "http://schemas.openxmlformats.org/drawingml/2006/picture";
++    let picture = format!(
++        "<pic:pic xmlns:pic=\"{PIC}\"><pic:nvPicPr><pic:cNvPr id=\"1\" name=\"image1.jpg\"/><pic:cNvPicPr/></pic:nvPicPr>\
++         <pic:blipFill><a:blip r:embed=\"rId1\"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>\
++         <pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"3600000\" cy=\"2700000\"/></a:xfrm>\
++         <a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>"
++    );
++    let mut zip = StoredZip::create(path)?;
++    match kind {
++        OfficeKind::Docx => {
++            zip.bytes(
++                "[Content_Types].xml",
++                format!(
++                    "{XML}<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
++                     <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\
++                     <Default Extension=\"xml\" ContentType=\"application/xml\"/>\
++                     <Default Extension=\"jpg\" ContentType=\"image/jpeg\"/>\
++                     <Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>\
++                     </Types>"
++                )
++                .as_bytes(),
++            )?;
++            zip.bytes(
++                "_rels/.rels",
++                format!(
++                    "{XML}<Relationships xmlns=\"{RELS}\"><Relationship Id=\"rId1\" \
++                     Type=\"{OD}/relationships/officeDocument\" Target=\"word/document.xml\"/></Relationships>"
++                )
++                .as_bytes(),
++            )?;
++            zip.bytes(
++                "word/_rels/document.xml.rels",
++                format!(
++                    "{XML}<Relationships xmlns=\"{RELS}\"><Relationship Id=\"rId1\" \
++                     Type=\"{OD}/relationships/image\" Target=\"media/image1.jpg\"/></Relationships>"
++                )
++                .as_bytes(),
++            )?;
++            let mut document = format!(
++                "{XML}<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" xmlns:r=\"{OD}/relationships\" \
++                 xmlns:a=\"{MAIN}\" xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\"><w:body>"
++            );
++            for n in 0..20_000 {
++                document.push_str(&format!("<w:p><w:r><w:t>Paragraph {n} of the probe document.</w:t></w:r></w:p>"));
++            }
++            document.push_str(&format!(
++                "<w:p><w:r><w:drawing><wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">\
++                 <wp:extent cx=\"3600000\" cy=\"2700000\"/><wp:docPr id=\"1\" name=\"Picture 1\"/>\
++                 <a:graphic><a:graphicData uri=\"{PIC}\">{picture}</a:graphicData></a:graphic>\
++                 </wp:inline></w:drawing></w:r></w:p></w:body></w:document>"
++            ));
++            zip.bytes("word/document.xml", document.as_bytes())?;
++            zip.file("word/media/image1.jpg", jpeg)?;
++        },
++        OfficeKind::Pptx => {
++            zip.bytes(
++                "[Content_Types].xml",
++                format!(
++                    "{XML}<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
++                     <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\
++                     <Default Extension=\"xml\" ContentType=\"application/xml\"/>\
++                     <Default Extension=\"jpg\" ContentType=\"image/jpeg\"/>\
++                     <Override PartName=\"/ppt/presentation.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml\"/>\
++                     <Override PartName=\"/ppt/slides/slide1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>\
++                     </Types>"
++                )
++                .as_bytes(),
++            )?;
++            zip.bytes(
++                "_rels/.rels",
++                format!(
++                    "{XML}<Relationships xmlns=\"{RELS}\"><Relationship Id=\"rId1\" \
++                     Type=\"{OD}/relationships/officeDocument\" Target=\"ppt/presentation.xml\"/></Relationships>"
++                )
++                .as_bytes(),
++            )?;
++            zip.bytes(
++                "ppt/presentation.xml",
++                format!(
++                    "{XML}<p:presentation xmlns:a=\"{MAIN}\" xmlns:r=\"{OD}/relationships\" \
++                     xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\"><p:sldIdLst><p:sldId id=\"256\" r:id=\"rId1\"/></p:sldIdLst>\
++                     <p:sldSz cx=\"9144000\" cy=\"6858000\"/></p:presentation>"
++                )
++                .as_bytes(),
++            )?;
++            zip.bytes(
++                "ppt/_rels/presentation.xml.rels",
++                format!(
++                    "{XML}<Relationships xmlns=\"{RELS}\"><Relationship Id=\"rId1\" \
++                     Type=\"{OD}/relationships/slide\" Target=\"slides/slide1.xml\"/></Relationships>"
++                )
++                .as_bytes(),
++            )?;
++            zip.bytes(
++                "ppt/slides/slide1.xml",
++                format!(
++                    "{XML}<p:sld xmlns:a=\"{MAIN}\" xmlns:r=\"{OD}/relationships\" xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\">\
++                     <p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>\
++                     <p:grpSpPr/><p:pic><p:nvPicPr><p:cNvPr id=\"2\" name=\"Picture 1\"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr>\
++                     <p:blipFill><a:blip r:embed=\"rId1\"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>\
++                     <p:spPr><a:xfrm><a:off x=\"914400\" y=\"914400\"/><a:ext cx=\"3600000\" cy=\"2700000\"/></a:xfrm>\
++                     <a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></p:spPr></p:pic></p:spTree></p:cSld></p:sld>"
++                )
++                .as_bytes(),
++            )?;
++            zip.bytes(
++                "ppt/slides/_rels/slide1.xml.rels",
++                format!(
++                    "{XML}<Relationships xmlns=\"{RELS}\"><Relationship Id=\"rId1\" \
++                     Type=\"{OD}/relationships/image\" Target=\"../media/image1.jpg\"/></Relationships>"
++                )
++                .as_bytes(),
++            )?;
++            zip.file("ppt/media/image1.jpg", jpeg)?;
++        },
++    }
++    zip.finish()
++}
++
++/// The converted file is a PDF: it opens with the header, ends in `%%EOF` and
++/// is not empty of pages.
++fn check_converted_pdf(pdf: &Path) -> Result<(), String> {
++    use std::io::{Read, Seek, SeekFrom};
++    let mut file = File::open(pdf).map_err(|e| format!("{}: {e}", pdf.display()))?;
++    let len = file.metadata().map_err(|e| e.to_string())?.len();
++    let mut head = [0u8; 5];
++    file.read_exact(&mut head).map_err(|e| e.to_string())?;
++    if &head != b"%PDF-" {
++        return Err("the file does not open with %PDF-".into());
++    }
++    let mut tail = vec![0u8; 64.min(len as usize)];
++    file.seek(SeekFrom::End(-(tail.len() as i64))).map_err(|e| e.to_string())?;
++    file.read_exact(&mut tail).map_err(|e| e.to_string())?;
++    if !tail.trim_ascii_end().ends_with(b"%%EOF") {
++        return Err("the file does not end in %%EOF".into());
++    }
++    Ok(())
++}
++
+ // ── attachments, embedded files and image stamps ────────────────────
+ 
+ const ATTACHMENT_BYTES: usize = 64 * MIB;
+diff --git a/tool/whole_buffer_allow.txt b/tool/whole_buffer_allow.txt
+index ca44fa0..325c5e5 100644
+--- a/tool/whole_buffer_allow.txt
++++ b/tool/whole_buffer_allow.txt
+@@ -1,36 +1,71 @@
+ # Whole-buffer reads tool/check_whole_buffers.sh finds, one per line:
+-#   <path under vendor/pdf_oxide>::<fn>#<n>  # table: <why>
+-# `table` is the only class: a read of something whole by nature, and the why
+-# names its kind (a font program, a sampled function, an ICC profile, the CMap
+-# table, a DER certificate or the DSS, the xref stream, one object-stream
+-# member, a progressive JPEG raster, a JPX recompressed at full size). A read of
+-# anything else is bounded instead, and the script refuses any other word after
+-# the `#`.
++#   <path under vendor/pdf_oxide>::<fn>#<n>  # <class>: <why>
++# `table` is a read of something whole by nature, and the why names its kind (a
++# font program, a sampled function, a PostScript calculator function, an ICC
++# profile, the CMap table, a DER certificate or the DSS, the xref stream, one
++# object-stream member, a progressive JPEG raster, a JPX recompressed at full
++# size, a JBIG2 stream and globals, a JPX codestream). `unreached` is a site no
++# lane can reach, and the script proves it (a cfg gate that is off for the
++# build, a Path parameter, or a name no file under src/host or lib/ mentions)
++# instead of trusting the why. A read of anything else is bounded instead, and
++# the script refuses any other word after the `#`.
++src/bin/analyze_pdf_features.rs::analyze_raw_pdf_structure#1  # unreached: a command-line tool that reads a path
++src/converters/office/mod.rs::convert#1  # unreached: the office path entry, which reads a file by path
++src/converters/office/mod.rs::convert_docx#1  # unreached: the office path entry, which reads a file by path
++src/converters/office/mod.rs::convert_pptx#1  # unreached: the office path entry, which reads a file by path
++src/converters/office/mod.rs::convert_xlsx#1  # unreached: the office path entry, which reads a file by path
+ src/document.rs::compute_output_intent_cmyk_profile#1  # table: the ICC profile of an output intent
++src/document.rs::open#1  # unreached: open(path), which a lane never calls because it holds a DataSource
++src/editor/document_editor.rs::merge_from#1  # unreached: merge_from(path), which a lane never calls because it holds a DataSource
++src/extractors/auto.rs::http_fetch#1  # unreached: the OCR model download, behind a feature the package does not build
++src/extractors/auto.rs::prefetch_models#1  # unreached: the OCR model download, behind a feature the package does not build
++src/extractors/images.rs::decode_jbig2_bits#1  # table: a JBIG2 stream and globals (the embedded stream), which hayro-jbig2 takes as &[u8]
++src/extractors/images.rs::decode_jbig2_bits#2  # table: a JBIG2 stream and globals (the globals), which hayro-jbig2 takes as &[u8]
++src/extractors/images.rs::decode_jpx_image#1  # table: a JPX codestream, which OpenJPEG takes as &[u8]
+ src/extractors/images.rs::resolve_icc_profile_from_obj#1  # table: an ICC profile
++src/ffi.rs::pdf_document_get_source_bytes#1  # unreached: the C bindings, behind public-api
++src/ffi.rs::pdf_document_has_timestamp#1  # unreached: the C bindings, behind public-api
++src/ffi.rs::pdf_document_sign#1  # unreached: the C bindings, behind public-api
++src/fonts/font_dict.rs::extract_embedded_font_from_descriptor#1  # table: a font program
++src/fonts/font_dict.rs::extract_truetype_cmap_from_descriptor#1  # table: a font program, read for its cmap table
+ src/fonts/font_dict.rs::from_dict#1  # table: a font program (FontFile2)
+ src/fonts/font_dict.rs::from_dict#2  # table: a font program (FontFile3)
+ src/fonts/font_dict.rs::from_dict#3  # table: a font program (FontFile)
+ src/fonts/font_dict.rs::from_dict#4  # table: the CMap table (ToUnicode)
+-src/fonts/font_dict.rs::extract_truetype_cmap_from_descriptor#1  # table: a font program, read for its cmap table
+-src/fonts/font_dict.rs::extract_embedded_font_from_descriptor#1  # table: a font program
+ src/fonts/font_dict.rs::resolve_encoding_writing_mode#1  # table: the CMap table of an embedded encoding
+-src/fonts/unicode_fallback.rs::load_unicode_fallback_bytes#1  # table: a font program, a system fallback font
+ src/fonts/unicode_fallback.rs::load_cjk_fallback_bytes#1  # table: a font program, a system fallback font
++src/fonts/unicode_fallback.rs::load_unicode_fallback_bytes#1  # table: a font program, a system fallback font
+ src/host/font_subset/mod.rs::subset#1  # table: a font program, read to cut it down to the glyphs shown
+ src/host/ops/fonts.rs::handle_register_fallback_font#1  # table: a font program, the caller's fallback font
+ src/host/redact_scrub.rs::rewrite_font#1  # table: the CMap table (ToUnicode)
++src/ocr/detector.rs::new#1  # unreached: OCR, behind a feature the package does not build
++src/ocr/recognizer.rs::new#1  # unreached: OCR, behind a feature the package does not build
++src/ocr/recognizer.rs::new#2  # unreached: OCR, behind a feature the package does not build
++src/python.rs::convert_to_pdf_a#1  # unreached: the Python bindings, behind a feature the package does not build
+ src/rendering/mesh_shading.rs::eval_pdf_function#1  # table: a sampled function (type 0)
++src/rendering/mesh_shading.rs::eval_type4#1  # table: a PostScript calculator function (type 4), a program evaluated per sample in O(its own length)
+ src/rendering/mesh_shading.rs::render_mesh_shading#1  # table: a sampled function (type 0)
++src/rendering/page_renderer.rs::evaluate_bc_tint_function#1  # table: a PostScript calculator function (type 4), a program evaluated per sample in O(its own length)
+ src/rendering/page_renderer.rs::evaluate_type0_multi#1  # table: a sampled function (type 0)
+ src/rendering/page_renderer.rs::parse_type0_transfer_function#1  # table: a sampled function (type 0)
++src/rendering/page_renderer.rs::parse_type4_transfer_function#1  # table: a PostScript calculator function (type 4), a program evaluated per sample in O(its own length)
+ src/rendering/page_renderer.rs::project_iccbased_to_rgb#1  # table: an ICC profile
+ src/rendering/resolution/color.rs::evaluate_type0_sampled#1  # table: a sampled function (type 0)
++src/rendering/resolution/color.rs::evaluate_type4#1  # table: a PostScript calculator function (type 4), a program evaluated per sample in O(its own length)
+ src/rendering/resolution/color.rs::resolve_iccbased#1  # table: an ICC profile (CMYK)
+ src/rendering/resolution/color.rs::resolve_iccbased#2  # table: an ICC profile (RGB)
+ src/rendering/resolution/color.rs::resolve_iccbased#3  # table: an ICC profile (gray)
++src/rendering/resolution/pipeline.rs::eval_separation_alt_cmyk#1  # table: a PostScript calculator function (type 4), a program evaluated per sample in O(its own length)
++src/rendering/separation_renderer.rs::collect_referenced_inks#1  # unreached: the separation renderer, whose plates move after 6.0.0
++src/rendering/separation_renderer.rs::execute_separation_operators#1  # unreached: the separation renderer, whose plates move after 6.0.0
++src/rendering/separation_renderer.rs::paint_image_mask_to_plates#1  # unreached: the separation renderer, whose plates move after 6.0.0
++src/rendering/separation_renderer.rs::render_plates_for_inks#1  # unreached: the separation renderer, whose plates move after 6.0.0
++src/rendering/separation_renderer.rs::scan_operators_for_inks#1  # unreached: the separation renderer, whose plates move after 6.0.0
+ src/rendering/sidecar.rs::try_retarget_cmyk_via_embedded_profile#1  # table: an ICC profile
+ src/signatures/pades/dss_read.rs::stream_array#1  # table: the DSS (its certificate, OCSP and CRL streams)
++src/split_bookmarks.rs::split_by_bookmarks_to_dir#1  # unreached: split_by_bookmarks_to_dir, which reads and writes paths
++src/wasm.rs::export_form_data#1  # unreached: the JS bindings, behind public-api
+ src/writer/font_discovery.rs::resolve#1  # table: a font program, a system font file
+ src/writer/font_manager.rs::from_file#1  # table: a font program, a font file
++src/writer/image_handler.rs::from_file#1  # unreached: from_file(path), which a lane never calls because it holds a DataSource
+ src/xref.rs::parse_xref_stream#1  # table: the xref stream

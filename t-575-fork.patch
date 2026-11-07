@@ -1,0 +1,195 @@
+diff --git a/src/host/engine_proofs/mem_xfa.rs b/src/host/engine_proofs/mem_xfa.rs
+index 3ad1158..0fb82e5 100644
+--- a/src/host/engine_proofs/mem_xfa.rs
++++ b/src/host/engine_proofs/mem_xfa.rs
+@@ -48,9 +48,9 @@ fn document(acroform: &str, streams: Vec<Vec<u8>>) -> PdfDocument {
+ 
+ /// A datasets packet of 64 MiB once decoded is analysed and parsed with the
+ /// thread holding under 1 MiB over where it began, and the form still carries
+-/// the value the packet gives its field. The whole-read wall
+-/// (`whole_reads.rs`) fails when an XFA caller goes back to decoding a packet
+-/// whole. No Dart battery can observe this: Dart reads the same field count
++/// the value the packet gives its field. The whole-buffer lint
++/// (`tool/check_whole_buffers.sh`) fails when an XFA caller goes back to
++/// decoding a packet whole. No Dart battery can observe this: Dart reads the same field count
+ /// either way, and what the parse holds is visible only to the allocator
+ /// counter.
+ #[test]
+diff --git a/src/host/engine_proofs/mem_xmp.rs b/src/host/engine_proofs/mem_xmp.rs
+index 6af51db..f783c4d 100644
+--- a/src/host/engine_proofs/mem_xmp.rs
++++ b/src/host/engine_proofs/mem_xmp.rs
+@@ -30,10 +30,10 @@ fn document(packet: &[u8]) -> PdfDocument {
+ 
+ /// A packet of 20000 properties gives the same properties the string parser
+ /// gives, from the stream alone, and keeps no copy of the packet. The
+-/// whole-read wall (`whole_reads.rs`) is what fails when `extract` goes back
+-/// to decoding the stream whole. No Dart battery can observe this: Dart
+-/// reads the same title either way, and a whole copy of the packet is held
+-/// only for the length of the call.
++/// whole-buffer lint (`tool/check_whole_buffers.sh`) is what fails when
++/// `extract` goes back to decoding the stream whole. No Dart battery can
++/// observe this: Dart reads the same title either way, and a whole copy of
++/// the packet is held only for the length of the call.
+ #[test]
+ fn a_large_xmp_packet_is_read_as_events_and_not_kept() {
+     let bytes = packet(20_000);
+diff --git a/src/host/engine_proofs/mod.rs b/src/host/engine_proofs/mod.rs
+index d7a1771..bc33675 100644
+--- a/src/host/engine_proofs/mod.rs
++++ b/src/host/engine_proofs/mod.rs
+@@ -144,7 +144,6 @@ mod watermark_positions;
+ mod sort_cancel;
+ mod attachment_stream;
+ mod editor_streamed_inputs;
+-mod whole_reads;
+ #[cfg(all(feature = "signatures", feature = "tsa-client"))]
+ mod tsa_reply_cap;
+ #[cfg(feature = "rendering")]
+diff --git a/src/host/engine_proofs/whole_reads.rs b/src/host/engine_proofs/whole_reads.rs
+deleted file mode 100644
+index 5ac1c6f..0000000
+--- a/src/host/engine_proofs/whole_reads.rs
++++ /dev/null
+@@ -1,104 +0,0 @@
+-//! The wall around whole reads of a stream.
+-//!
+-//! `read_whole_raw(`, `read_whole(` and `decode_stream_data(` hold a stream's
+-//! data in one buffer. Every caller in the engine is named in `whole_reads.txt`, one
+-//! `module::function` a line; a call from anywhere else fails this proof,
+-//! and a listed caller that no longer calls fails it too, so the list only
+-//! shrinks as the callers move to readers.
+-
+-use std::collections::BTreeSet;
+-use std::path::Path;
+-
+-const NEEDLES: [&str; 3] = ["read_whole_raw(", "read_whole(", "decode_stream_data("];
+-
+-/// The first line of a `#[cfg(test)]` module: everything after it is test code.
+-fn code_end(lines: &[&str]) -> usize {
+-    for (i, line) in lines.iter().enumerate() {
+-        if line.trim() != "#[cfg(test)]" {
+-            continue;
+-        }
+-        let next = lines[i + 1..].iter().map(|l| l.trim()).find(|l| !l.starts_with("#["));
+-        if next.is_some_and(|l| {
+-            l.trim_start_matches("pub ")
+-                .trim_start_matches("pub(crate) ")
+-                .starts_with("mod ")
+-        }) {
+-            return i;
+-        }
+-    }
+-    lines.len()
+-}
+-
+-/// The name of the function whose body holds line `at`; `None` for a function
+-/// that exists only in a test build (`#[cfg(test)]`).
+-fn enclosing_fn(lines: &[&str], at: usize) -> Option<String> {
+-    for (index, line) in lines[..=at].iter().enumerate().rev() {
+-        let mut rest = line.trim();
+-        for prefix in ["pub(crate) ", "pub(super) ", "pub ", "const ", "async ", "unsafe ", "extern \"C\" "] {
+-            rest = rest.trim_start_matches(prefix);
+-        }
+-        if let Some(after) = rest.strip_prefix("fn ") {
+-            let end = after.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap_or(after.len());
+-            let test_only = lines[..index]
+-                .iter()
+-                .rev()
+-                .map(|l| l.trim())
+-                .take_while(|l| l.starts_with("#[") || l.starts_with("///") || l.starts_with("//"))
+-                .any(|l| l == "#[cfg(test)]");
+-            return (!test_only).then(|| after[..end].to_string());
+-        }
+-    }
+-    panic!("no enclosing fn above line {at}");
+-}
+-
+-fn callers_under(dir: &Path, root: &Path, out: &mut BTreeSet<String>) {
+-    let mut entries: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.path()).collect();
+-    entries.sort();
+-    for path in entries {
+-        if path.is_dir() {
+-            if path.ends_with("host/engine_proofs") {
+-                continue;
+-            }
+-            callers_under(&path, root, out);
+-        } else if path.extension().is_some_and(|e| e == "rs") {
+-            let text = std::fs::read_to_string(&path).unwrap();
+-            let lines: Vec<&str> = text.split('\n').collect();
+-            let relative = path.strip_prefix(root).unwrap().with_extension("");
+-            let mut module = relative.to_string_lossy().replace('/', "::");
+-            if let Some(stripped) = module.strip_suffix("::mod") {
+-                module = stripped.to_string();
+-            }
+-            for at in 0..code_end(&lines) {
+-                let line = lines[at].trim();
+-                let defines = NEEDLES.iter().any(|n| line.contains(&format!("fn {n}")));
+-                if line.starts_with("//") || defines || !NEEDLES.iter().any(|n| line.contains(n)) {
+-                    continue;
+-                }
+-                if let Some(name) = enclosing_fn(&lines, at) {
+-                    out.insert(format!("{module}::{name}"));
+-                }
+-            }
+-        }
+-    }
+-}
+-
+-/// No Dart battery sees it: it reads the engine's own source text, and Dart cannot tell a stream read whole from one read in pieces.
+-#[test]
+-fn only_the_listed_functions_read_a_stream_whole() {
+-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+-    let mut found = BTreeSet::new();
+-    callers_under(&src, &src, &mut found);
+-    let listed: BTreeSet<String> = include_str!("whole_reads.txt")
+-        .lines()
+-        // A line is the caller, then an optional `# why it reads whole`.
+-        .map(|l| l.split('#').next().unwrap_or("").trim())
+-        .filter(|l| !l.is_empty())
+-        .map(str::to_string)
+-        .collect();
+-    let new: Vec<_> = found.difference(&listed).collect();
+-    let gone: Vec<_> = listed.difference(&found).collect();
+-    assert!(
+-        new.is_empty() && gone.is_empty(),
+-        "callers not on the list: {new:?}; listed callers that no longer read whole: {gone:?}"
+-    );
+-}
+diff --git a/src/host/engine_proofs/whole_reads.txt b/src/host/engine_proofs/whole_reads.txt
+deleted file mode 100644
+index bbc4406..0000000
+--- a/src/host/engine_proofs/whole_reads.txt
++++ /dev/null
+@@ -1,31 +0,0 @@
+-decoders::stream::decode_slice
+-document::cached_page_content
+-document::compute_output_intent_cmyk_profile
+-extractors::images::decode_jbig2_bits # the JBIG2 bitstream is the decoder's input; the bitmap is kept at one bit a pixel
+-extractors::images::decode_jpx_image # the codestream is the codec's input, and its decoder returns the raster at the reduction the footprint covers
+-extractors::images::extract_image_from_xobject_at # a codec image's compressed bytes are the decoder's input (DCT, JPX, CCITT); a raw-sample image is read by the row cursor, not here
+-extractors::images::resolve_icc_profile_from_obj
+-fonts::font_dict::extract_embedded_font_from_descriptor
+-fonts::font_dict::extract_truetype_cmap_from_descriptor
+-fonts::font_dict::from_dict
+-fonts::font_dict::resolve_encoding_writing_mode
+-object::decode_stream_data
+-object::read_whole_raw
+-rendering::mesh_shading::eval_pdf_function
+-rendering::mesh_shading::eval_type4
+-rendering::mesh_shading::render_mesh_shading
+-rendering::page_renderer::evaluate_bc_tint_function
+-rendering::page_renderer::evaluate_type0_multi
+-rendering::page_renderer::parse_type0_transfer_function
+-rendering::page_renderer::parse_type4_transfer_function
+-rendering::page_renderer::project_iccbased_to_rgb
+-rendering::resolution::color::evaluate_type0_sampled
+-rendering::resolution::color::evaluate_type4
+-rendering::resolution::color::resolve_iccbased
+-rendering::resolution::pipeline::eval_separation_alt_cmyk
+-rendering::separation_renderer::execute_separation_operators
+-rendering::separation_renderer::paint_image_mask_to_plates
+-rendering::separation_renderer::scan_operators_for_inks
+-rendering::sidecar::try_retarget_cmyk_via_embedded_profile
+-signatures::pades::dss_read::stream_array
+-xref::parse_xref_stream
