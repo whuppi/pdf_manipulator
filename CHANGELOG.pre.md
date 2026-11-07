@@ -20,7 +20,8 @@ THE RELEASED TAG IS THE FLOOR
   Before any edit, fetch the tags and read the changelog as it stands at
   the latest release tag; write the entry from the diff since that tag,
   never from memory. A heading that carries a tag keeps its FACTS: what
-  shipped under it never changes, nothing is added to it, and a bullet
+  shipped under it never changes, nothing is added to it but the
+  migration-guide sentence (CONTENT RULES), and a bullet
   found there for code that came after the tag moves to the open heading.
   Its WORDING may be rewritten to this standard's shape at any time, with
   every fact intact, since the standard moves and the released text
@@ -89,19 +90,21 @@ BULLET SHAPE — one change, one sentence
 
 CONTENT RULES (never change)
   • Migrate from the entry ALONE — breaking changes inline, old → new.
-    (pub.dev freezes each version's CHANGELOG as a snapshot, so an entry
-    can't rely on anything that later moves.)
-  • NEVER link a living doc (README, docs/*) at a branch — it rots when
-    the doc moves on. The one doc an entry links is the migration guide,
-    and only at the release's own tag, which never moves.
+    (A reader may meet the entry without the guide: an offline copy, a
+    diff, a release note.)
+  • NEVER link a living doc (README, docs/*) — it rots when the doc moves
+    on. The one doc an entry links is the migration guide, whose sections
+    are never removed (a wall checks every anchor), on the default branch.
   • MIGRATION GUIDE — when the repo has docs/MIGRATION.md, every entry
-    with a **Breaking:** bullet has this sentence in its lead paragraph
+    with a **Breaking:** bullet, released or open, has this sentence in its
+    lead paragraph
     (the last sentence, when the lead has other prose; one paragraph,
     since a second is refused), linking the guide section for the release:
-      Migrating from <previous>: the [migration guide](https://github.com/whuppi/pdf_manipulator/blob/v<this heading's version>/docs/MIGRATION.md#from-<previous, dots removed>-to-<X.Y.Z, dots removed>) has the before and after code for every breaking change below.
+      Migrating from <previous>: the [migration guide](https://github.com/whuppi/pdf_manipulator/blob/<default branch>/docs/MIGRATION.md#from-<previous, dots removed>-to-<X.Y.Z, dots removed>) has the before and after code for every breaking change below.
     The bullets still carry the inline step (the entry alone must be
     enough when the link is offline); the guide holds the code. Write the
-    guide's section in the same PR as the entry, never after.
+    guide's section in the same PR as the entry, never after. The genesis
+    entry of a rewrite links the guide's direct jump from the old package.
   • Links point only at IMMUTABLE targets. Credit the issue and its
     reporter when a reported issue drove the change:
     ([#N](https://github.com/whuppi/pdf_manipulator/issues/N) reported by
@@ -128,7 +131,7 @@ CONTENT RULES (never change)
 
 ## 6.0.0-dev.0
 
-Migrating from 5.0.1: the [migration guide](https://github.com/whuppi/pdf_manipulator/blob/v6.0.0-dev.0/docs/MIGRATION.md#from-501-to-600) has the before and after code for every breaking change below.
+Migrating from 5.0.1: the [migration guide](https://github.com/whuppi/pdf_manipulator/blob/dev/docs/MIGRATION.md#from-501-to-600) has the before and after code for every breaking change below.
 
 - **Breaking:** `DataSource` has a new `close()`, and `DataSink` has new `abort(Object reason)` and `close()`, where the library calls `abort` on the sink of an operation that ends cancelled or failed → implement all three in your own sources and sinks (clear a buffer, truncate a file, cancel an upload); the built-in ones do
 - **Breaking:** `FileSource` and `FileSink.create` are `await FileSource.open(file)` and `await FileSink.open(file)`, and whoever opens a source or sink closes it → await the factory and call `close()` when the job is over
@@ -311,6 +314,8 @@ Migrating from 5.0.1: the [migration guide](https://github.com/whuppi/pdf_manipu
 
 ## 5.0.0-dev.0
 
+Migrating from 4.2.0: the [migration guide](https://github.com/whuppi/pdf_manipulator/blob/dev/docs/MIGRATION.md#from-420-to-500) has the before and after code for every breaking change below.
+
 - **Breaking:** `PdfEditor.optimizeImages(quality:, minSize:)` is removed → use `reduceImages(PdfImagePolicy(jpegQuality: quality, minPixels: minSize, convertCmykToRgb: true))`; the count it returned is `report.changed`
 - **Breaking:** `compress(imageQuality:)` → `compress(images:)`, a `PdfImagePolicy` defaulting to `PdfImagePolicy.ebook` (150 ppi, JPEG quality 75), so a plain `compress` now downsamples images drawn above 225 ppi; pass `PdfImagePolicy(jpegQuality: q)` for the old behaviour
 - **Breaking:** the editor's reads are noun methods, never with a `get` prefix: `getTitle()` and the other metadata reads → `metadata()`, `getPageMediaBox(page)` → `pageInfo(pages:)`, and on `PdfDoc` `getSignatures()` → `signatures()`
@@ -367,6 +372,8 @@ Migrating from 5.0.1: the [migration guide](https://github.com/whuppi/pdf_manipu
 
 ## 4.0.0-dev.0
 
+Migrating from 3.0.0: the [migration guide](https://github.com/whuppi/pdf_manipulator/blob/dev/docs/MIGRATION.md#from-300-to-400) has the before and after code for every breaking change below.
+
 - **Breaking:** the engine is configured with three flat keys under `hooks: user_defines: pdf_manipulator:` — `keep` (`auto`, `[render, …]`, or omit for everything), `detector` (only with `keep: auto`) and `build`. Migrate: `trim: auto` → `keep: auto`, `trim: {keep: […]}` → `keep: […]`, `trim-detector: X` → `detector: X`, drop `setup --trim` and re-run `flutter pub run pdf_manipulator:setup`; an invalid config fails the build with a clear message
 - Added `build:` in the same block — `speed` (default, prebuilt), `size` (smaller, opt-level z) or `debug` (symbols for native crash traces); `size` and `debug` compile from source and need [Rust](https://rustup.rs)
 - Changed the prebuilt-binary download to retry and resume over HTTP Range, so one network blip on a large asset no longer forces a from-source compile
@@ -381,6 +388,8 @@ Migrating from 5.0.1: the [migration guide](https://github.com/whuppi/pdf_manipu
 
 ## 3.0.0-dev.0
 
+Migrating from 2.1.4: the [migration guide](https://github.com/whuppi/pdf_manipulator/blob/dev/docs/MIGRATION.md#from-214-to-300) has the before and after code for every breaking change below.
+
 - **Breaking:** flattening CJK or emoji form values no longer uses a bundled font (4.4 MB on every install) → register one: `await pdf.registerFallbackFont(PdfFallbackFontKind.cjk, fontBytes)` (`.emoji` for emoji); without one the value is still saved, only the baked-in look falls back to the field's font
 - **Breaking** (only if you took the retracted 2.2.0): `trim-detector: analyzer` is now `scan` → change it or delete the line, it is the default
 - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
@@ -394,6 +403,7 @@ Migrating from 5.0.1: the [migration guide](https://github.com/whuppi/pdf_manipu
 ## 2.2.0-dev.0
 
 > Retracted on pub.dev: the published archive was missing a build file (the engine's `Cargo.lock`), breaking `trim` and compile-from-source installs. Superseded by 3.0.0, which consolidates everything here.
+> Migrating from 2.1.4: the [migration guide](https://github.com/whuppi/pdf_manipulator/blob/dev/docs/MIGRATION.md#from-214-to-300) has the before and after code for this change, in its 3.0.0 section.
 
 
 - **Breaking:** flattening CJK or emoji form values no longer uses a bundled font (4.4 MB on every install) → register one: `await pdf.registerFallbackFont(PdfFallbackFontKind.cjk, fontBytes)` (`.emoji` for emoji); without one the value is still saved, only the baked-in look falls back to the field's font
@@ -448,6 +458,7 @@ Docs-only — no code or API changes.
 
 The concurrency rewrite. Every operation now runs fully isolated on its
 own *lane* — a dedicated Rust thread (native) or Web Worker (web).
+Migrating from 1.0.6: the [migration guide](https://github.com/whuppi/pdf_manipulator/blob/dev/docs/MIGRATION.md#from-106-to-200) has the before and after code for every breaking change below.
 
 - **Breaking:** `webCoordinatorUrl` + `webWorkerUrl` → one `webLaneWorkerUrl`
 - **Breaking:** web now ships `lane_worker.js` (was `coordinator.js` + `worker.js`)
@@ -495,6 +506,7 @@ own *lane* — a dedicated Rust thread (native) or Web Worker (web).
 ## 1.0.0-dev.0
 
 Complete ground-up rewrite — new Rust engine, new instance API, cross-platform (previously Android only). The package docs carry the migration guide and the full capability list.
+Migrating from the Android-only 0.x plugin: the [migration guide](https://github.com/whuppi/pdf_manipulator/blob/dev/docs/MIGRATION.md#from-059-to-600) takes you straight to the current API, with the before and after code for every call.
 
 - **Engine:** pdf_oxide (Rust, MIT/Apache-2.0) replaces the Android-only backend
 - **Targets:** iOS, Android, macOS, Windows, Linux, Web — previously Android only

@@ -91,6 +91,38 @@ while IFS= read -r heading; do
   fi
 done < <(grep '^## ' "$guide")
 
+# Every changelog entry with a Breaking bullet, released or open, links the
+# guide section that migrates to it: an anchor of a `## From A to B` heading
+# whose B is the entry's version. A retracted release (its entry says so)
+# links the section of the release that superseded it.
+anchors=$(sed -nE 's/^## From ([0-9.]+) to ([0-9.]+)$/from-\1-to-\2/p' "$guide" | tr -d .)
+for file in CHANGELOG.md CHANGELOG.pre.md; do
+  while IFS='|' read -r heading entry; do
+    version=$(printf '%s' "$heading" | sed -nE 's/^## ([0-9]+\.[0-9]+\.[0-9]+)(-dev\.[0-9]+)?$/\1/p')
+    [ -n "$version" ] || continue
+    anchor=$(printf '%s' "$entry" | sed -nE 's/.*docs\/MIGRATION\.md#(from-[0-9]+-to-[0-9]+).*/\1/p')
+    if [ -z "$anchor" ]; then
+      echo "$file ($heading): a breaking entry with no link to its section of $guide"
+      bad=1
+    elif ! printf '%s\n' "$anchors" | grep -qxF "$anchor"; then
+      echo "$file ($heading): links #$anchor, which no heading of $guide makes"
+      bad=1
+    elif [ "${anchor##*-to-}" != "$(printf '%s' "$version" | tr -d .)" ] \
+      && ! printf '%s' "$entry" | grep -q 'Retracted'; then
+      echo "$file ($heading): links #$anchor, a section that does not migrate to $version"
+      bad=1
+    fi
+  done < <(awk '
+    function flush() { if (h != "" && brk) print h "|" lead }
+    /^## /{ flush(); h = $0; lead = ""; brk = 0; next }
+    h == "" { next }
+    /^- \*\*Breaking/ { brk = 1; next }
+    /^- / { next }
+    { lead = lead " " $0 }
+    END { flush() }
+  ' "$file")
+done
+
 if [ "$bad" -ne 0 ]; then
   echo "docs/MIGRATION.md must cover every breaking change of the newest release (d-127)."
   exit 1

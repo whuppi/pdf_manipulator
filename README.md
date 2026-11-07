@@ -26,7 +26,7 @@ Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extrac
 
 > like it? a [⭐ star](https://github.com/whuppi/pdf_manipulator) or [👍 like](https://pub.dev/packages/pdf_manipulator) is the entire marketing budget. [Bugs & features →](https://github.com/whuppi/pdf_manipulator/issues)
 
-> **Upgrading from an earlier version?** The [migration guide](docs/MIGRATION.md) takes you from any release, the old Android-only plugin (0.x) included. Find your version in its first table and read the sections it names, in order. Each change shows the code before and after, and both are compiled against their versions.
+> **Upgrading from an earlier version?** The [migration guide](docs/MIGRATION.md) takes you from any release, the old Android-only plugin (0.x) included. Find your version in its first table and read the sections it names, in order. Each change shows the code before and after, and both are compiled against their versions, so you can also hand the guide to an AI assistant ([how](docs/MIGRATION.md#migrating-pdf_manipulator)).
 
 | | What it does |
 |:---|:---|

@@ -12,6 +12,9 @@ WHEN A SECTION IS ADDED
     ## From <previous> to <X.Y.Z>
   <previous> is the newest stable release in CHANGELOG.md below X.Y.Z;
   a retracted release is skipped (3.0.0 covers the retracted 2.2.0).
+  Its changelog entry, in both lanes, carries the migration-guide sentence
+  that links the section (the changelog standard; check_migration.sh
+  checks every breaking entry, released ones included).
   A release with no Breaking bullet gets no section: the top table says
   so ("a release that is not listed broke nothing").
   A prerelease (X.Y.Z-dev.N) migrates under the X.Y.Z heading it ships
@@ -100,6 +103,18 @@ STYLE
 | 2.x | [2.1.4 → 3.0.0](#from-214-to-300), then each one above |
 | 1.x | [1.0.6 → 2.0.0](#from-106-to-200), then each one above |
 | 0.x, the old Android-only plugin | [0.5.9 → 6.0.0](#from-059-to-600) alone: it is a rewrite, so it goes straight to 6.0.0 |
+
+**Migrating with an AI assistant.** The renames are mechanical, so an assistant can do most of the work if it reads this guide instead of guessing. Give it the raw file, <https://raw.githubusercontent.com/whuppi/pdf_manipulator/dev/docs/MIGRATION.md>, and a prompt like:
+
+```text
+Migrate this project from pdf_manipulator <your version> to <the new version>.
+Use only the guide at https://raw.githubusercontent.com/whuppi/pdf_manipulator/dev/docs/MIGRATION.md:
+read the sections its first table names for my version, in order.
+After each change run `dart analyze` and fix every error with the guide's entry for it.
+Do not write a call the guide does not show.
+```
+
+The analyzer is the check, not the assistant: the work is done when `dart analyze` is clean and your tests pass.
 
 Each section covers one release that broke something, newest first; a release that is not listed broke nothing. Every entry has a Before and an After. A wall compiles each Before block against the old version from pub.dev and each After block against the new one, so the code here is code that compiles.
 
