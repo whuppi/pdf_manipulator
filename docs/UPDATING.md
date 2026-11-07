@@ -60,13 +60,14 @@ it has no `build.json` entry.
 
 ### The fork contract
 
-Each fork carries exactly three things — anything else is debris and
+Each fork carries exactly these refs — anything else is debris and
 gets deleted on sight:
 
 | Ref | Why it exists |
 |---|---|
 | `main` | Clean mirror of upstream main. Synced in S1 step 5; never carries our commits. |
 | The patch branch | All our patches, rebased onto the base tag. The only branch the submodule points at. |
+| Replaced patch branches | The patch branch of each earlier base tag, kept as it was when S1 replaced it. Every commit of this repo's history points its submodule at a commit on one of them; deleting one leaves those commits pointing at nothing, so an old checkout or a bisect can no longer fetch the engine. Never deleted. |
 | `v*` tags | Rebase bases. `make analyze` derives the base tag from the patch-branch name and diffs against it, so the tag must exist on the fork. |
 
 Debris that does NOT belong on a fork: `dependabot/*` branches,
@@ -188,6 +189,7 @@ done
 ### 3. Rebase
 
 ```sh
+git switch -c pdf_manipulator/NEW-patches pdf_manipulator/OLD-patches
 git rebase vNEW
 (cd ../.. && make test-rust)
 (cd ../.. && make check-keep-sets)
@@ -201,19 +203,20 @@ three crates through cargo-nextest, the `tests/` tree included (not
 every keep-set for both targets, so upstream code that uses something
 one of our feature gates removes fails here, before any wasm build.
 
-### 4. Rename branch
+### 4. New patch branch
+
+Step 3 rebased a new branch made from the old one, so the old branch keeps its
+commits.
 
 ```sh
-git branch -m pdf_manipulator/OLD-patches pdf_manipulator/NEW-patches
 git push origin pdf_manipulator/NEW-patches
 gh api -X PATCH repos/whuppi/pdf_oxide -f default_branch=pdf_manipulator/NEW-patches
-git push origin --delete pdf_manipulator/OLD-patches
 ```
 
 The patches branch is the fork's default branch on GitHub, so a visitor lands
-on our code and on the README that says what the fork is. GitHub refuses to
-delete the default branch, so the new branch becomes the default before the
-old one is deleted.
+on our code and on the README that says what the fork is. The old branch stays
+on the fork (see "The fork contract"): this repo's history points at its
+commits.
 
 ### 5. Sync the fork mirror
 

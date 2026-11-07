@@ -349,7 +349,13 @@ test-ops: fixtures test-ops-native test-ops-web
 # Memory wall probe (tool/memprobe): release only — debug builds hold
 # far more and would measure the profiler, not the engine. The probe's own
 # tests run first: they prove its temp folder is removed however a run ends.
+# The probes' Cargo.lock is not committed (the workspace ignores *.lock but
+# pubspec.lock), so each run seeds it from the engine's lock: the probe builds
+# against the crate versions the engine ships with, and cargo adds only the
+# probe's own dependencies. Unseeded, a fresh clone resolves the newest
+# semver-compatible crates and can pick a prerelease the engine cannot build.
 test-memory:
+	cp vendor/pdf_oxide/Cargo.lock tool/memprobe/Cargo.lock
 	CARGO_TARGET_DIR="$(CURDIR)/target/memprobe" $(CARGO) test --release --manifest-path tool/memprobe/Cargo.toml
 	CARGO_TARGET_DIR="$(CURDIR)/target/memprobe" $(CARGO) run --release --manifest-path tool/memprobe/Cargo.toml
 
@@ -359,6 +365,7 @@ test-memory:
 # guest; the host binary runs it.
 test-fuel:
 	@bash -c 'source tool/build_lib.sh && ensure_target wasm32-wasip1'
+	cp vendor/pdf_oxide/Cargo.lock tool/fuelprobe/guest/Cargo.lock
 	CARGO_TARGET_DIR="$(CURDIR)/target/fuelprobe-guest" $(CARGO) build --release --target wasm32-wasip1 --manifest-path tool/fuelprobe/guest/Cargo.toml
 	CARGO_TARGET_DIR="$(CURDIR)/target/fuelprobe-host" $(CARGO) run --release --manifest-path tool/fuelprobe/host/Cargo.toml -- "$(CURDIR)/target/fuelprobe-guest/wasm32-wasip1/release/fuelprobe-guest.wasm"
 
