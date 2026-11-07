@@ -127,8 +127,13 @@ S1; the files stay byte-identical to upstream and just never fire.
 
 ## Flutter version pinning
 
-`.fvmrc` (root + `example/.fvmrc`) is the single source of truth for
-the Flutter SDK version. Never hardcode the version anywhere else.
+`.fvmrc` (root, plus one in each app folder: `example/` and
+`example_trimmed/`, all at one version) is the single source of truth for
+the Flutter SDK version. Never hardcode the version anywhere else. The
+`flutter-sdk` job of `upgrade-check.yml` bumps every `.fvmrc`, the `lockfiles`
+job refreshes every committed `pubspec.lock`, and Dependabot has one `pub`
+entry per package folder. `test/guards/update_owners_test.dart` enforces both
+the Dependabot entries and the one version.
 
 `upgrade-check.yml` runs daily and splits the work by risk into two draft
 PRs. The `pins` job re-hashes the current pins to catch a repoint, then bumps
@@ -137,6 +142,18 @@ verified binaries in `tool/versions.env`, the zizmor + actionlint gate pins,
 binary sha256s recomputed from the upstream assets) onto `chore/pins`. The
 `lockfiles` job refreshes `pubspec.lock` onto `chore/lockfiles`. Review, test,
 merge each when ready.
+
+---
+
+## Compression bench
+
+Dependabot bumps the exact `pdf_document` pin in `tool/bench`. `bench.yml`
+runs `make bench-gate` on that PR and weekly. A red gate means pdf_document
+produced a smaller file than ours at the same or better quality (its worst
+RMSE no higher and its worst SSIM no lower), or our output lost pages, text
+or (lossless) pixels. A smaller file that is also worse is printed as a note
+and does not fail: the gate never rewards throwing quality away. Read their changelog and diff for the release, then open a
+task to port the idea or fix the regression. Never loosen the gate.
 
 ---
 
