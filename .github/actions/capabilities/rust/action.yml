@@ -325,14 +325,28 @@ runs:
     # crates are fingerprinted by content), but its engine units are not,
     # and the mtime pin below would make cargo accept them: the row would
     # link the old engine and test it as the new one. So on anything but
-    # an exact hit, drop the engine units' fingerprints; cargo rebuilds
-    # the two engine crates under the pin and reuses every dependency.
+    # an exact hit, drop the fingerprints of every package of the three
+    # vendored workspaces (the engines, tiny-skia and their tools, such as
+    # bindgen_runner, whose old build once ran with arguments it did not
+    # know); cargo rebuilds those under the pin and reuses every
+    # dependency. The names come from cargo metadata, so a member added
+    # upstream is covered without an edit here.
     - name: Drop engine units a fallback restore brought
       if: inputs.cache == 'true' && inputs.ghcr-target == 'true' && steps.ghcr.outputs.cache-hit != 'true'
       shell: bash
       run: |
-        find vendor -path '*/target/*' -path '*/.fingerprint/*' -type d \( -name '*_oxide-*' -o -name 'tiny-skia*' \) -prune -exec rm -rf {} +
-        echo "fallback restore: engine fingerprints dropped, the engine rebuilds"
+        dropped=0
+        for ws in vendor/pdf_oxide vendor/office_oxide vendor/tiny_skia; do
+          names=$(cargo metadata --no-deps --format-version 1 --manifest-path "$ws/Cargo.toml" | jq -r '.packages[].name')
+          [ -n "$names" ] || { echo "::error::cargo metadata listed no package in $ws"; exit 1; }
+          while IFS= read -r name; do
+            while IFS= read -r dir; do
+              rm -rf "${dir:?}"
+              dropped=$((dropped + 1))
+            done < <(find vendor -path '*/target/*' -path '*/.fingerprint/*' -type d -name "$name-*" -prune)
+          done <<< "$names"
+        done
+        echo "fallback restore: $dropped fingerprints of vendored workspace packages dropped; they rebuild"
 
     # A restored tree can hold a library unit's fingerprint whose library
     # is gone or empty: an archive saved after a partial prune, or by a run
