@@ -1,0 +1,442 @@
+diff --git a/src/extractors/images.rs b/src/extractors/images.rs
+index 5631430..05280ed 100644
+--- a/src/extractors/images.rs
++++ b/src/extractors/images.rs
+@@ -227,6 +227,13 @@ impl PdfImage {
+         &self.data
+     }
+ 
++    // ── pdf_manipulator patch: a caller that keeps the samples takes them without a copy ──
++    /// The image data, moved out.
++    pub fn into_data(self) -> ImageData {
++        self.data
++    }
++    // ── end pdf_manipulator patch ──
++
+     /// Get the bounding box if available.
+     pub fn bbox(&self) -> Option<&Rect> {
+         self.bbox.as_ref()
+@@ -1049,7 +1056,9 @@ pub fn extract_image_from_xobject(
+     obj_ref: Option<ObjectRef>,
+     color_space_map: Option<&std::collections::HashMap<String, crate::object::Object>>,
+ ) -> Result<PdfImage> {
+-    extract_image_from_xobject_at(doc, xobject, obj_ref, color_space_map, None)
++    // ── pdf_manipulator patch: the library's entry returns a JPEG as its file ──
++    extract_image(doc, xobject, obj_ref, color_space_map, None, true)
++    // ── end pdf_manipulator patch ──
+ }
+ 
+ /// Extract an image XObject, decoding no larger than `target` where the format
+@@ -1083,6 +1092,22 @@ pub fn extract_image_from_xobject_at(
+     color_space_map: Option<&std::collections::HashMap<String, crate::object::Object>>,
+     target: Option<(u32, u32)>,
+ ) -> Result<PdfImage> {
++    // ── pdf_manipulator patch: a JPEG is its raster here, never its file ──
++    extract_image(doc, xobject, _obj_ref, color_space_map, target, false)
++}
++
++/// The extraction both entries share. `jpeg_as_file` is the library's choice
++/// to return a DCT image as its file; a caller that decodes (every lane) never
++/// makes it.
++fn extract_image(
++    doc: Option<&crate::document::PdfDocument>,
++    xobject: &crate::object::Object,
++    _obj_ref: Option<ObjectRef>,
++    color_space_map: Option<&std::collections::HashMap<String, crate::object::Object>>,
++    target: Option<(u32, u32)>,
++    jpeg_as_file: bool,
++) -> Result<PdfImage> {
++    // ── end pdf_manipulator patch ──
+     use crate::object::Object;
+ 
+     // Set only by the JPX branch, which is the one format here that can honour
+@@ -1280,15 +1305,15 @@ pub fn extract_image_from_xobject_at(
+         jpx_decoded_dims = Some((dec_w, dec_h));
+         data
+     } else if is_jpeg_only || is_jpeg_chain {
+-        match target.and_then(|painted| decode_dct_covering(xobject, painted, &color_space).transpose()) {
+-            Some(reduced) => {
+-                // The samples are the reduced raster, so their size is theirs, as
+-                // for a reduced JPX decode.
+-                let (pixels, format, reduced_w, reduced_h) = reduced?;
+-                jpx_decoded_dims = Some((reduced_w, reduced_h));
+-                ImageData::Raw { pixels, format }
+-            },
+-            None => ImageData::Jpeg(xobject.decode_stream_data()?),
++        if jpeg_as_file {
++            ImageData::Jpeg(jpeg_file(xobject)?)
++        } else {
++            // The samples are the decoded raster, so their size and depth are
++            // theirs, as for a reduced JPX decode.
++            let (pixels, format, decoded_w, decoded_h) = decode_dct_stream(xobject, target)?;
++            jpx_decoded_dims = Some((decoded_w, decoded_h));
++            stored_bpc = 8;
++            ImageData::Raw { pixels, format }
+         }
+     } else if is_ccitt {
+         // A fax image is read from the line decoder, one gray byte a pixel. A fax the line decoder cannot take (not 1-bit DeviceGray, unreadable
+@@ -2759,43 +2784,109 @@ fn fax_gray(
+ }
+ // ── end pdf_manipulator patch ──
+ 
+-// ── pdf_manipulator patch: a JPEG painted smaller than itself is decoded from its stream ──
+-/// A gray or RGB JPEG decoded from its stream through the inverse DCT at the
+-/// largest reduction that still holds `painted` samples each way, with the
+-/// file never held: its dimensions, samples and the reduced raster.
+-/// `PdfImage::to_dynamic_image_covering` makes the same decode from the
+-/// file's bytes. `None` when the JPEG needs no reduction, is not gray or RGB,
+-/// or cannot be read, so that the caller keeps the file and decodes as it
+-/// always has.
+-fn decode_dct_covering(
++// ── pdf_manipulator patch: a JPEG on a lane is decoded from its stream ──
++/// The JPEG's file as the library returns it: a DCT image's bytes, whole.
++fn jpeg_file(xobject: &crate::object::Object) -> Result<Vec<u8>> {
++    xobject.decode_stream_data()
++}
++
++/// A gray, RGB or CMYK JPEG decoded from its stream, the file never held:
++/// the samples, their format and the raster's width and height. A gray or RGB
++/// JPEG painted at `painted` goes through the inverse DCT at the largest
++/// reduction that still holds that many samples each way, as
++/// `PdfImage::to_dynamic_image_covering` does for a file's bytes; with no
++/// target, or when no reduction covers, it is decoded at its own size. A CMYK
++/// JPEG is always decoded at its own size, to the samples
++/// `decode_cmyk_jpeg_to_raw_cmyk` gives. A header the decoder cannot read, or
++/// a pixel format this does not name, is an error: there is no file to fall
++/// back to.
++fn decode_dct_stream(
+     xobject: &crate::object::Object,
+-    painted: (u32, u32),
+-    color_space: &ColorSpace,
+-) -> Result<Option<(Vec<u8>, PixelFormat, u32, u32)>> {
+-    if color_space.components() == 4 {
+-        return Ok(None);
+-    }
++    painted: Option<(u32, u32)>,
++) -> Result<(Vec<u8>, PixelFormat, u32, u32)> {
+     let clamp = |v: u32| u16::try_from(v).unwrap_or(u16::MAX).max(1);
+     let source = std::io::BufReader::with_capacity(64 * 1024, crate::decoders::stream::decoded_reader(xobject)?);
+     let mut decoder = jpeg_decoder::Decoder::new(source);
+-    if decoder.read_info().is_err() {
+-        return Ok(None);
+-    }
+-    let Some(info) = decoder.info() else { return Ok(None) };
++    decoder
++        .read_info()
++        .map_err(|e| Error::Image(format!("Unreadable JPEG header: {e}")))?;
++    let info = decoder
++        .info()
++        .ok_or_else(|| Error::Image("JPEG info unavailable".to_string()))?;
+     let format = match info.pixel_format {
+         jpeg_decoder::PixelFormat::L8 => PixelFormat::Grayscale,
+         jpeg_decoder::PixelFormat::RGB24 => PixelFormat::RGB,
+-        _ => return Ok(None),
++        jpeg_decoder::PixelFormat::CMYK32 => PixelFormat::CMYK,
++        other => return Err(Error::Image(format!("JPEG pixel format {other:?} is not gray, RGB or CMYK"))),
+     };
+-    let full = (info.width, info.height);
+-    let (w, h) = decoder
+-        .scale(clamp(painted.0), clamp(painted.1))
+-        .map_err(|e| Error::Decode(format!("Failed to scale JPEG: {e}")))?;
+-    if (w, h) == full {
+-        return Ok(None);
++    let inverted = format == PixelFormat::CMYK && {
++        let header = std::io::BufReader::with_capacity(64 * 1024, crate::decoders::stream::decoded_reader(xobject)?);
++        matches!(scan_app14_color_transform_stream(header), None | Some(0) | Some(2))
++    };
++    let (w, h) = match painted {
++        Some((want_w, want_h)) if format != PixelFormat::CMYK => decoder
++            .scale(clamp(want_w), clamp(want_h))
++            .map_err(|e| Error::Decode(format!("Failed to scale JPEG: {e}")))?,
++        _ => (info.width, info.height),
++    };
++    let mut pixels = decoder.decode().map_err(|e| Error::Decode(format!("Failed to decode JPEG: {e}")))?;
++    let channels = match format {
++        PixelFormat::Grayscale => 1,
++        PixelFormat::RGB => 3,
++        PixelFormat::CMYK => 4,
++    };
++    let expected = usize::from(w) * usize::from(h) * channels;
++    if pixels.len() < expected {
++        return Err(Error::Decode(format!("JPEG decoded {} bytes, expected {}", pixels.len(), expected)));
++    }
++    pixels.truncate(expected);
++    if inverted {
++        // jpeg-decoder returns the Adobe `255 - x` of the samples; the ink is the samples.
++        for b in &mut pixels {
++            *b = 255 - *b;
++        }
++    }
++    Ok((pixels, format, u32::from(w), u32::from(h)))
++}
++
++/// [`scan_app14_color_transform`] over a stream: the marker segments up to the
++/// scan are walked, and only an APP14 segment is held (a segment is 64 KiB at
++/// most).
++fn scan_app14_color_transform_stream(mut reader: impl std::io::Read) -> Option<u8> {
++    use std::io::Read;
++    fn byte(reader: &mut impl std::io::Read) -> Option<u8> {
++        let mut one = [0u8; 1];
++        reader.read_exact(&mut one).ok().map(|()| one[0])
++    }
++    loop {
++        if byte(&mut reader)? != 0xFF {
++            continue;
++        }
++        let marker = byte(&mut reader)?;
++        if marker == 0x00 || marker == 0xFF || matches!(marker, 0xD0..=0xD9) || marker == 0x01 {
++            continue;
++        }
++        if marker == 0xDA {
++            return None;
++        }
++        let length = usize::from(u16::from_be_bytes([byte(&mut reader)?, byte(&mut reader)?]));
++        if length < 2 {
++            return None;
++        }
++        let payload = length - 2;
++        if marker == 0xEE && length >= 14 {
++            let mut held = vec![0u8; payload];
++            reader.read_exact(&mut held).ok()?;
++            if held.starts_with(b"Adobe") {
++                return Some(held[11]);
++            }
++        } else {
++            let skipped = std::io::copy(&mut reader.by_ref().take(payload as u64), &mut std::io::sink()).ok()?;
++            if skipped < payload as u64 {
++                return None;
++            }
++        }
+     }
+-    let pixels = decoder.decode().map_err(|e| Error::Decode(format!("Failed to decode JPEG: {e}")))?;
+-    Ok(Some((pixels, format, u32::from(w), u32::from(h))))
+ }
+ // ── end pdf_manipulator patch ──
+ 
+diff --git a/src/host/engine_proofs/extract_jpeg_window.rs b/src/host/engine_proofs/extract_jpeg_window.rs
+index 55a56c8..6f3ee92 100644
+--- a/src/host/engine_proofs/extract_jpeg_window.rs
++++ b/src/host/engine_proofs/extract_jpeg_window.rs
+@@ -3,13 +3,18 @@
+ use super::filter_readers::thread_growth;
+ use super::support::{pdf_from_objects, stream_object};
+ use crate::document::PdfDocument;
+-use crate::extractors::images::extract_image_from_xobject_at;
++use crate::extractors::images::{decode_cmyk_jpeg_to_raw_cmyk, extract_image_from_xobject, extract_image_from_xobject_at};
+ use crate::extractors::{ColorSpace, ImageData, PdfImage};
++use crate::host::images::classify::classify_stored;
++use crate::host::images::execute::{Shape, Source};
++use crate::host::images::stream::{ImageCursor, ImageRows, Output};
+ use crate::object::ObjectRef;
++use std::collections::HashMap;
+ 
+ fn noise_jpeg(color: jpeg_encoder::ColorType, width: u16, height: u16, quality: u8) -> Vec<u8> {
+     let bytes = match color {
+         jpeg_encoder::ColorType::Luma => 1,
++        jpeg_encoder::ColorType::Cmyk | jpeg_encoder::ColorType::Ycck => 4,
+         _ => 3,
+     };
+     let mut state = 0x9E37_79B9_7F4A_7C15u64;
+@@ -75,11 +80,17 @@ fn a_jpeg_decodes_at_its_target_to_the_pixels_of_its_bytes() {
+             let want = from_bytes(space, 192, 128, &jpeg, target);
+             assert!(got.as_bytes() == want.as_bytes(), "{name} at {target:?}: the pixels");
+             assert_eq!((got.width(), got.height()), (want.width(), want.height()), "{name} at {target:?}");
+-            assert_eq!(held, target.0 >= 192, "{name} at {target:?}: whether the file is kept");
++            assert!(!held, "{name} at {target:?}: the file is not the image");
+         }
+         let (whole, held) = from_stream(&doc, None);
+-        assert!(held, "{name}: without a target the file is the image");
++        assert!(!held, "{name}: a decode with no target is a decode");
+         assert!(whole.as_bytes() == from_bytes(space, 192, 128, &jpeg, (192, 128)).as_bytes());
++        let object = doc.load_object(ObjectRef::new(4, 0)).unwrap();
++        let library = extract_image_from_xobject(Some(&doc), &object, None, None).unwrap();
++        assert!(
++            matches!(library.data(), ImageData::Jpeg(bytes) if *bytes == jpeg),
++            "{name}: the library's entry returns the file"
++        );
+     }
+ }
+ 
+@@ -96,3 +107,154 @@ fn a_jpeg_painted_smaller_is_not_held_as_a_file() {
+     assert!(!held);
+     assert!(growth < 4 * 1024 * 1024, "decoding a {} byte JPEG at an eighth grew the thread by {growth} bytes", jpeg.len());
+ }
++
++/// The file with its Adobe APP14 segment taken out: a four-component JPEG
++/// that names no transform.
++fn without_app14(jpeg: &[u8]) -> Vec<u8> {
++    let mut out = jpeg[..2].to_vec();
++    let mut at = 2;
++    while at + 4 <= jpeg.len() && jpeg[at] == 0xFF && jpeg[at + 1] != 0xDA {
++        let end = at + 2 + usize::from(u16::from_be_bytes([jpeg[at + 2], jpeg[at + 3]]));
++        if jpeg[at + 1] != 0xEE {
++            out.extend_from_slice(&jpeg[at..end]);
++        }
++        at = end;
++    }
++    out.extend_from_slice(&jpeg[at..]);
++    assert!(out.len() < jpeg.len(), "the fixture has an APP14 segment");
++    out
++}
++
++fn open_rows(doc: &PdfDocument, target: Option<(u32, u32)>) -> ImageRows {
++    let object = doc.load_object(ObjectRef::new(4, 0)).unwrap();
++    ImageRows::open(doc, &object, &HashMap::new(), target, Output::Rgba, None).unwrap()
++}
++
++fn open_cmyk_source(doc: &PdfDocument) -> Source {
++    let object = doc.load_object(ObjectRef::new(4, 0)).unwrap();
++    let Some(crate::object::Object::Stream { dict, .. }) = Some(&object) else { unreachable!() };
++    let kind = classify_stored(doc, dict, 0, &[]);
++    Source::open(doc, &object, &kind, Shape::Cmyk, &HashMap::new(), None).unwrap()
++}
++
++/// Whether two rasters differ by at most `tolerance` in any sample.
++fn within(a: &[u8], b: &[u8], tolerance: u8) -> bool {
++    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.abs_diff(*y) <= tolerance)
++}
++
++/// The rows of a source, end to end.
++fn rows_of(mut read: impl FnMut(&mut [u8]), height: u32, row_bytes: usize) -> Vec<u8> {
++    let mut all = Vec::with_capacity(height as usize * row_bytes);
++    let mut row = vec![0u8; row_bytes];
++    for _ in 0..height {
++        read(&mut row);
++        all.extend_from_slice(&row);
++    }
++    all
++}
++
++/// Each path a lane reads a JPEG by gives the pixels the file's bytes give:
++/// the extractor at a target and without one, the row reader `render` and
++/// `reduceImages` open, and the CMYK rows `reduceImages` reads. RGB at its own
++/// size and reduced, CMYK with no Adobe marker, with transform 0 and with
++/// transform 2. No Dart battery can observe this: it pins the decoder the
++/// stream is read by to the decode the file's bytes got.
++#[test]
++fn a_jpeg_on_a_lane_decodes_to_the_pixels_of_its_bytes_in_every_path() {
++    let rgb = noise_jpeg(jpeg_encoder::ColorType::Rgb, 192, 128, 90);
++    // A file at its own size is decoded by `image`'s decoder, a stream by
++    // `jpeg-decoder`; the two round the colour conversion differently, by 3 at
++    // most. A reduced decode is `jpeg-decoder`'s on both sides.
++    for (name, target, tolerance) in [("rgb at its size", (192, 128), 3), ("rgb reduced", (48, 32), 0)] {
++        let doc = document("/DeviceRGB", 192, 128, &rgb);
++        let want = from_bytes(ColorSpace::DeviceRGB, 192, 128, &rgb, target);
++        let (got, held) = from_stream(&doc, Some(target));
++        assert!(!held && within(got.as_bytes(), want.as_bytes(), tolerance), "{name}: the extractor");
++        let mut rows = open_rows(&doc, Some(target));
++        assert_eq!(rows.size(), (want.width(), want.height()), "{name}: the size");
++        let read = rows_of(|row| rows.read(&doc, row).unwrap(), want.height(), want.width() as usize * 4);
++        assert!(within(&read, &want.to_rgba8().into_raw(), tolerance), "{name}: the rows");
++    }
++
++    let cmyk = noise_jpeg(jpeg_encoder::ColorType::Cmyk, 96, 64, 90);
++    let ycck = noise_jpeg(jpeg_encoder::ColorType::Ycck, 96, 64, 90);
++    for (name, jpeg) in [("cmyk, no marker", without_app14(&cmyk)), ("cmyk, transform 0", cmyk), ("cmyk, transform 2", ycck)] {
++        let doc = document("/DeviceCMYK", 96, 64, &jpeg);
++        let want = from_bytes(ColorSpace::DeviceCMYK, 96, 64, &jpeg, (96, 64));
++        let (got, held) = from_stream(&doc, Some((96, 64)));
++        assert!(!held && got.as_bytes() == want.as_bytes(), "{name}: the extractor");
++        let mut rows = open_rows(&doc, Some((96, 64)));
++        let read = rows_of(|row| rows.read(&doc, row).unwrap(), 64, 96 * 4);
++        assert!(read == want.to_rgba8().into_raw(), "{name}: the rows");
++
++        let mut source = open_cmyk_source(&doc);
++        assert_eq!(source.size(), (96, 64), "{name}: the CMYK size");
++        let read = rows_of(|row| source.read(&doc, row).unwrap(), 64, 96 * 4);
++        assert!(read == decode_cmyk_jpeg_to_raw_cmyk(&jpeg).unwrap(), "{name}: the CMYK rows");
++    }
++}
++
++/// A DCT stream with no readable header is an error at the extractor, not the
++/// file handed on, with a target and without one.
++#[test]
++fn a_jpeg_the_stream_decoder_cannot_name_is_an_error_not_the_file() {
++    let doc = document("/DeviceRGB", 64, 64, b"these bytes are not a JPEG, they are text");
++    let object = doc.load_object(ObjectRef::new(4, 0)).unwrap();
++    for target in [None, Some((64, 64)), Some((8, 8))] {
++        let got = extract_image_from_xobject_at(Some(&doc), &object, None, None, target);
++        assert!(matches!(got, Err(crate::error::Error::Image(_))), "target {target:?}: {got:?}");
++    }
++}
++
++/// A 2048 x 1536 noise JPEG of 12 MiB, whose file is larger than its raster,
++/// painted at its own size, is decoded with the thread growing by what the
++/// decoder holds (its component planes beside the raster it returns) and not
++/// by the file as well. No Dart battery can observe this: the picture
++/// is the same either way.
++#[test]
++fn a_jpeg_painted_at_its_size_is_not_held_as_a_file() {
++    let jpeg = noise_jpeg(jpeg_encoder::ColorType::Rgb, 2048, 1536, 100);
++    let raster = 2048 * 1536 * 3;
++    assert!(jpeg.len() > raster, "the file is {} bytes, the raster {raster}", jpeg.len());
++    let doc = document("/DeviceRGB", 2048, 1536, &jpeg);
++    for target in [(2048, 1536), (3000, 2000)] {
++        let ((_, held), growth) = thread_growth(|| from_stream(&doc, Some(target)));
++        assert!(!held, "{target:?}");
++        assert!(
++            growth < 2 * raster + 4 * 1024 * 1024,
++            "decoding a {} byte JPEG at {target:?} grew the thread by {growth} bytes, the raster is {raster}",
++            jpeg.len()
++        );
++    }
++}
++
++/// A 2048 x 1536 CMYK noise JPEG on a lane, through the rows `reduceImages`
++/// reads and the ones `render` reads, is not held as a file beside its
++/// raster. No Dart battery can observe this: the picture is the same either
++/// way.
++#[test]
++fn a_cmyk_jpeg_on_a_lane_is_not_held_as_a_file() {
++    let jpeg = noise_jpeg(jpeg_encoder::ColorType::Cmyk, 2048, 1536, 100);
++    let raster = 2048 * 1536 * 4;
++    assert!(jpeg.len() > raster, "the file is {} bytes, the raster {raster}", jpeg.len());
++    let doc = document("/DeviceCMYK", 2048, 1536, &jpeg);
++    let object = doc.load_object(ObjectRef::new(4, 0)).unwrap();
++    // The decoder's component planes are held beside the raster it returns.
++    let bound = 2 * raster + 4 * 1024 * 1024;
++
++    let (source, growth) = thread_growth(|| open_cmyk_source(&doc));
++    assert_eq!(source.size(), (2048, 1536));
++    assert!(growth < bound, "CmykRows::open grew the thread by {growth} bytes, the raster is {raster}");
++    drop(source);
++
++    let (rows, growth) = thread_growth(|| open_rows(&doc, Some((2048, 1536))));
++    assert_eq!(rows.size(), (2048, 1536));
++    assert!(growth < bound, "ImageRows::open grew the thread by {growth} bytes, the raster is {raster}");
++    drop(rows);
++
++    let (cursor, growth) = thread_growth(|| {
++        ImageCursor::open(&doc, &object, &HashMap::new(), None, None, Some((2048, 1536))).unwrap()
++    });
++    drop(cursor);
++    assert!(growth < bound, "ImageCursor::open grew the thread by {growth} bytes, the raster is {raster}");
++}
+diff --git a/src/host/images/execute.rs b/src/host/images/execute.rs
+index 7687e7e..f46b865 100644
+--- a/src/host/images/execute.rs
++++ b/src/host/images/execute.rs
+@@ -22,8 +22,7 @@ use crate::document::PdfDocument;
+ use crate::editor::DocumentEditor;
+ use crate::error::{Error, Result};
+ use crate::extractors::images::{
+-    decode_cmyk_jpeg_to_raw_cmyk, extract_image_from_xobject_at, row_geometry, ImageData,
+-    PdfFilter, PixelFormat,
++    extract_image_from_xobject_at, row_geometry, ImageData, PdfFilter, PixelFormat,
+ };
+ use crate::object::{Object, ObjectRef, StreamBody};
+ 
+@@ -359,11 +358,10 @@ impl CmykRows {
+         match kind.encoding {
+             Encoding::Jpeg => {
+                 let image = extract_image_from_xobject_at(Some(doc), object, None, None, None)?;
+-                let ImageData::Jpeg(bytes) = image.data() else {
++                let (width, height) = (image.width(), image.height());
++                let ImageData::Raw { pixels, format: PixelFormat::CMYK } = image.into_data() else {
+                     return Err(Error::Image("CMYK JPEG decoded to another model".to_string()));
+                 };
+-                let pixels = decode_cmyk_jpeg_to_raw_cmyk(bytes)?;
+-                let (width, height) = (image.width(), image.height());
+                 if width == 0 || height == 0 || pixels.len() != width as usize * height as usize * 4 {
+                     return Err(Error::Image(format!(
+                         "decoded {} bytes for {width}x{height}x4",

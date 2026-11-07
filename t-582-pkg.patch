@@ -1,0 +1,189 @@
+diff --git a/CHANGELOG.pre.md b/CHANGELOG.pre.md
+index ae7ee71..b0526ce 100644
+--- a/CHANGELOG.pre.md
++++ b/CHANGELOG.pre.md
+@@ -310,6 +310,7 @@ CONTENT RULES (never change)
+ - Fixed `convertToPdfA` saving the whole document into memory and reading it back before the save that writes the file — its edits are staged like every other edit and the save writes them once
+ - Fixed `render` and `reduceImages` of a fax image the engine cannot read (a palette colour space, a depth other than 1, unreadable `/DecodeParms`) reading its whole stream into memory — the image is now declined at its open, and a 64 MiB one stays under 16 MB of engine memory
+ - Fixed a fax image extracted whole, or inline, being read into memory as its compressed stream before it is decoded — it is read from the line decoder, a row at a time, into the gray raster
++- Fixed `render` and `reduceImages` of a JPEG painted at its own size, or routed as CMYK, holding a copy of the whole file beside the raster — it is decoded from its stream, at the reduction that covers its placement or at its size
+ 
+ ## 5.0.1-dev.0
+ 
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+index 899528d..fa2e022 100644
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -523,6 +523,8 @@ per-piece cost and real storage to spill to.
+ 
+ `convertToPdfA` holds the one metadata packet it patches, once, until the save writes it.
+ 
++A codec's input is read whole only when its decoder cannot read a stream (JPEG 2000, JBIG2). A JPEG on a lane is decoded from its stream at the reduction that covers its placement, or at its size; the file is the image only when the library returns it as bytes.
++
+ ### The counting allocator and the heap
+ 
+ One `#[global_allocator]` (`Counting` in `host/heap.rs`) forwards every allocation to the
+diff --git a/tool/memprobe/src/main.rs b/tool/memprobe/src/main.rs
+index 92dc303..5e036b6 100644
+--- a/tool/memprobe/src/main.rs
++++ b/tool/memprobe/src/main.rs
+@@ -120,6 +120,18 @@ fn limit(op: &str, input: &str) -> usize {
+         // The ruled exception again: the progressive JPEG is decoded whole, by
+         // the inverse DCT at the reduction that covers the placement.
+         ("reduceImages", "hugeJpeg") => 56 * MIB,
++        // A baseline JPEG painted at its own size (4096 x 3072 RGB, 36 MiB of
++        // raster) and a 4096 x 2048 CMYK one (32 MiB), each with a file larger
++        // than its raster, are decoded from their streams and the file is
++        // never held. The ruled exception: jpeg-decoder holds a component
++        // plane for every channel beside the interleaved raster it returns,
++        // so the host holds two rasters at the decode. The targets are the
++        // raster plus 16 MiB (52 and 48 MiB); a decoder that returns rows is
++        // the task that stops this being an exception. The ceilings are the
++        // measured peaks (74.2, 66.3 and 64.2 MiB) rounded up to the next MiB.
++        ("render", "hugeJpeg1to1") => 75 * MIB,
++        ("render", "hugeCmykJpeg") => 67 * MIB,
++        ("reduceImages", "hugeCmykJpeg") => 65 * MIB,
+         // A 2000 pt square at 300 dpi again, now with eight groups inside one
+         // another, a soft mask, blends and patterns: each level holds one band
+         // of its own, and the band is cut by the depth, so the host holds the
+@@ -916,6 +928,56 @@ fn run() -> Result<(), String> {
+         );
+     }
+ 
++    // A baseline JPEG painted at its own size, and a CMYK one: each is
++    // decoded from its stream and its file is not held beside the raster.
++    let huge_jpeg_1to1 = dir.join("huge-jpeg-1to1.pdf");
++    generate_noise_jpeg_page(&huge_jpeg_1to1, 4096, 3072, false)?;
++    step(&failed, "render", "hugeJpeg1to1", limit("render", "hugeJpeg1to1"), |st| {
++        render_to_sink(st, &huge_jpeg_1to1, 150, &open_sink("hugeJpeg1to1", "render"))
++    });
++    verify_render_wire(&failed, "hugeJpeg1to1", &open_sink("hugeJpeg1to1", "render"));
++    let huge_cmyk_jpeg = dir.join("huge-cmyk-jpeg.pdf");
++    generate_noise_jpeg_page(&huge_cmyk_jpeg, 4096, 2048, true)?;
++    step(&failed, "render", "hugeCmykJpeg", limit("render", "hugeCmykJpeg"), |st| {
++        render_to_sink(st, &huge_cmyk_jpeg, 150, &open_sink("hugeCmykJpeg", "render"))
++    });
++    verify_render_wire(&failed, "hugeCmykJpeg", &open_sink("hugeCmykJpeg", "render"));
++    let cmyk_reduced = open_sink("hugeCmykJpeg", "reduced");
++    step(&failed, "reduceImages", "hugeCmykJpeg", limit("reduceImages", "hugeCmykJpeg"), |st| {
++        reduce_to_sink(st, &huge_cmyk_jpeg, &cmyk_reduced)
++    });
++    {
++        let again = open_sink("hugeCmykJpeg", "reduced-extract");
++        let mut state = pdf_oxide::host::engine_state::EngineState::new();
++        let written = if cmyk_reduced.exists() {
++            extract_to_sink(&mut state, &cmyk_reduced, &again)
++        } else {
++            Err("the reduction wrote no file".to_string())
++        };
++        match written {
++            Ok(()) => match pdf_oxide::PdfDocument::open(&cmyk_reduced)
++                .map_err(|e| e.to_string())
++                .and_then(|doc| doc.extract_images(0).map_err(|e| e.to_string()))
++            {
++                Ok(images) if images.len() == 1 && (images[0].width(), images[0].height()) == (1966, 983) => {
++                    eprintln!("memprobe: reduceImages hugeCmykJpeg: read back: one image, 1966x983");
++                },
++                Ok(images) => {
++                    eprintln!("memprobe: reduceImages hugeCmykJpeg: read back: {} images", images.len());
++                    failed.set(true);
++                },
++                Err(e) => {
++                    eprintln!("memprobe: reduceImages hugeCmykJpeg: read back: {e}");
++                    failed.set(true);
++                },
++            },
++            Err(e) => {
++                eprintln!("memprobe: reduceImages hugeCmykJpeg: read back: {e}");
++                failed.set(true);
++            },
++        }
++    }
++
+     // The huge fax: a 50 MiB packed bitmap that decodes a row at a time.
+     // Render and the extraction read back; the reduction by extracting the
+     // file it wrote.
+@@ -2748,6 +2810,83 @@ fn generate_huge_jpeg(path: &Path) -> Result<(), String> {
+     out.finish()
+ }
+ 
++/// A one-page PDF filled by one baseline JPEG of noise, `width` x `height`
++/// pixels, 4:4:4, quality 100, written as it is encoded (CMYK or RGB). The
++/// page is the image's size at 150 dpi, so a render at 150 dpi paints it at
++/// its own size and no reduction covers it.
++fn generate_noise_jpeg_page(path: &Path, width: u32, height: u32, cmyk: bool) -> Result<(), String> {
++    struct Noise {
++        width: u16,
++        height: u16,
++        cmyk: bool,
++    }
++
++    impl jpeg_encoder::ImageBuffer for Noise {
++        fn get_jpeg_color_type(&self) -> jpeg_encoder::JpegColorType {
++            if self.cmyk {
++                jpeg_encoder::JpegColorType::Cmyk
++            } else {
++                jpeg_encoder::JpegColorType::Ycbcr
++            }
++        }
++        fn width(&self) -> u16 {
++            self.width
++        }
++        fn height(&self) -> u16 {
++            self.height
++        }
++        fn fill_buffers(&self, y: u16, buffers: &mut [Vec<u8>; 4]) {
++            let channels = if self.cmyk { 4 } else { 3 };
++            let mut rng = Xorshift::new(0x1F6 ^ (u64::from(y) << 20));
++            let mut row = vec![0u8; self.width as usize * channels];
++            rng.fill_bytes(&mut row);
++            for pixel in row.chunks_exact(channels) {
++                for (buffer, sample) in buffers.iter_mut().zip(pixel) {
++                    buffer.push(*sample);
++                }
++            }
++        }
++    }
++
++    let jpeg_path = path.with_extension("jpg");
++    let fail = |e: std::io::Error| format!("jpeg {}: {e}", jpeg_path.display());
++    let out = std::io::BufWriter::new(File::create(&jpeg_path).map_err(fail)?);
++    let mut encoder = jpeg_encoder::Encoder::new(out, 100);
++    encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::R_4_4_4);
++    encoder
++        .encode_image(Noise { width: width as u16, height: height as u16, cmyk })
++        .map_err(|e| format!("jpeg {}: {e}", jpeg_path.display()))?;
++    let len = std::fs::metadata(&jpeg_path).map_err(fail)?.len();
++    let raster = u64::from(width) * u64::from(height) * if cmyk { 4 } else { 3 };
++    if len <= raster {
++        return Err(format!("{}: the file is {len} bytes, the raster {raster}", jpeg_path.display()));
++    }
++    let (w_pt, h_pt) = (f64::from(width) * 72.0 / 150.0, f64::from(height) * 72.0 / 150.0);
++    let content = format!("q {w_pt} 0 0 {h_pt} 0 0 cm /Im0 Do Q");
++    let mut out = PdfOut::create(path)?;
++    out.object(1, "<< /Type /Catalog /Pages 2 0 R >>")?;
++    out.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")?;
++    out.object(
++        3,
++        &format!(
++            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w_pt} {h_pt}] \
++             /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>"
++        ),
++    )?;
++    out.stream(4, "", content.len() as u64, content.as_bytes())?;
++    out.stream(
++        5,
++        &format!(
++            "/Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace {} \
++             /BitsPerComponent 8 /Filter /DCTDecode",
++            if cmyk { "/DeviceCMYK" } else { "/DeviceRGB" }
++        ),
++        len,
++        File::open(&jpeg_path).map_err(fail)?,
++    )?;
++    out.finish()
++}
++
+ /// Width of the generated images, in pixels.
+ const IMAGE_WIDTH: u32 = 4096;
+ /// Rows of the 64 MiB PNG: 4096 RGBA pixels of noise are 16 KiB a row.
