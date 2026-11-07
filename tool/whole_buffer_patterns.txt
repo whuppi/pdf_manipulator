@@ -19,3 +19,4 @@
 \bget_page_content_data\(  # PdfDocument::get_page_content_data: the decoded content of a page, copied out
 \bcached_page_content\(  # PdfDocument::cached_page_content: the decoded content of a page, cached
 \braw_compressed_bytes\(  # PdfImage::raw_compressed_bytes: an image stream's stored bytes
+\bdecode_slice\(  # decoders::stream::decode_slice: a filter chain applied to a slice, the decoded bytes in one Vec

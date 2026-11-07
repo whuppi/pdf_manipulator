@@ -307,6 +307,9 @@ CONTENT RULES (never change)
 - Fixed an image of raw samples holding the bytes its stream carries past its declared rows — it reads the rows it declares
 - Fixed `render` and `reduceImages` of a gray or RGB JPEG painted smaller than itself holding a copy of the whole file beside the decode — the decoder reads the stream
 - Fixed `compress` and every full save of an encrypted document copying each stream over 256 KiB as it was, so the file stayed as large as the source — such a stream is now recompressed in pieces and encrypted as it is written
+- Fixed `convertToPdfA` saving the whole document into memory and reading it back before the save that writes the file — its edits are staged like every other edit and the save writes them once
+- Fixed `render` and `reduceImages` of a fax image the engine cannot read (a palette colour space, a depth other than 1, unreadable `/DecodeParms`) reading its whole stream into memory — the image is now declined at its open, and a 64 MiB one stays under 16 MB of engine memory
+- Fixed a fax image extracted whole, or inline, being read into memory as its compressed stream before it is decoded — it is read from the line decoder, a row at a time, into the gray raster
 
 ## 5.0.1-dev.0
 

@@ -521,6 +521,8 @@ sort that spills sorted runs to storage would keep one page under the plain ceil
 not built, and the trigger to reconsider it is a user with single pages too large for the
 per-piece cost and real storage to spill to.
 
+`convertToPdfA` holds the one metadata packet it patches, once, until the save writes it.
+
 ### The counting allocator and the heap
 
 One `#[global_allocator]` (`Counting` in `host/heap.rs`) forwards every allocation to the

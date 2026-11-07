@@ -80,7 +80,7 @@ mod size {
     /// A text page the extractor reads whole: its layout passes cost more than a line.
     pub const TEXT_LINES: usize = 1_000;
     pub const TEXT_PAGES_OF_LINES: usize = 20;
-    pub const CONVERT_PAGES: usize = 700;
+    pub const CONVERT_PAGES: usize = 1_600;
     pub const REDACT_LINES: usize = 20_000;
     pub const PATHS: usize = 3_000;
     pub const BIGPAGE: u32 = 1_500;

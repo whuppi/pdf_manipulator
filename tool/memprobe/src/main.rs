@@ -19,6 +19,9 @@ use std::path::Path;
 
 const MIB: usize = 1024 * 1024;
 
+/// The decoded size of the `xmp64` input's metadata packet.
+const XMP_PACKET: usize = 64 * MIB;
+
 /// The page count of the `thousand_page` input.
 const THOUSAND_PAGES: usize = 1_000;
 
@@ -99,6 +102,9 @@ fn limit(op: &str, input: &str) -> usize {
         // The 50 MiB packed bitmap of the huge fax decodes two transition
         // lines and one row at a time, in render, extract and reduce alike.
         ("render" | "reduceImages", "hugeFax") => 16 * MIB,
+        // A 64 MiB fax stream the row cursor cannot take (a palette colour
+        // space): the image is declined at its open, the stream is not read.
+        ("render" | "reduceImages", "fax64") => 16 * MIB,
         // The huge stencil is a 50 MiB ImageMask whose samples the row
         // cursor takes off its Flate reader one row at a time, in render
         // and reduce alike.
@@ -159,13 +165,8 @@ fn limit(op: &str, input: &str) -> usize {
         // own pass and pulled in step a row at a time; the image is never
         // held. The file is 16 MiB: whole, it would show.
         ("imagesToPdf", "interlacedPng") => 16 * MIB,
-        // The measured peak, rounded up to the next MiB. The identification
-        // is spliced into the packet as it is read, so the staging step holds
-        // the patched packet once (engine_proofs/mem_pdfa_xmp.rs holds it to
-        // that); the peak of the whole conversion is set by the checks and
-        // the commit that run on the 64 MiB packet before and after it, which
-        // read it whole and are not this row's subject.
-        ("convertToPdfA", "xmp64") => 129 * MIB,
+        // convertToPdfA holds the one metadata packet it patches, once, until the save writes it.
+        ("convertToPdfA", "xmp64") => 16 * MIB + XMP_PACKET,
         _ => panic!("no memory limit for {op} on {input}: add one to limit()"),
     }
 }
@@ -978,6 +979,17 @@ fn run() -> Result<(), String> {
             failed.set(true);
         },
     }
+    // A 64 MiB fax stream the row cursor cannot take: render and the
+    // reduction decline the image without reading its stream.
+    let fax64 = dir.join("fax64.pdf");
+    generate_fax64(&fax64)?;
+    step(&failed, "render", "fax64", limit("render", "fax64"), |st| {
+        render_to_sink(st, &fax64, 150, &open_sink("fax64", "render"))
+    });
+    verify_render_wire(&failed, "fax64", &open_sink("fax64", "render"));
+    step(&failed, "reduceImages", "fax64", limit("reduceImages", "fax64"), |st| {
+        reduce_to_sink(st, &fax64, &open_sink("fax64", "reduced"))
+    });
     // The huge stencil: a 50 MiB ImageMask whose packed bitmap the row
     // cursor never builds. Render and the reduction read back; the
     // reduction by extracting the file it wrote.
@@ -2625,7 +2637,6 @@ fn generate_huge_drawn(path: &Path) -> Result<(), String> {
 /// one `rdf:RDF` that has no PDF/A identification.
 fn generate_huge_xmp(path: &Path) -> Result<(), String> {
     use flate2::write::ZlibEncoder;
-    const PACKET: usize = 64 * 1024 * 1024;
     let head = "<?xpacket begin='x' id='W5M0MpCehiHzreSzNTczkc9d'?>\n\
                 <x:xmpmeta xmlns:x='adobe:ns:meta/'>\n\
                 <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>\n\
@@ -2636,7 +2647,7 @@ fn generate_huge_xmp(path: &Path) -> Result<(), String> {
     let mut encoder = ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
     let fail = |e: std::io::Error| format!("hugeXmp: {e}");
     encoder.write_all(head.as_bytes()).map_err(fail)?;
-    for _ in 0..PACKET / block.len() {
+    for _ in 0..XMP_PACKET / block.len() {
         encoder.write_all(block.as_bytes()).map_err(fail)?;
     }
     encoder.write_all(tail.as_bytes()).map_err(fail)?;
@@ -2979,6 +2990,34 @@ fn generate_huge_fax(path: &Path) -> Result<(), String> {
          /DecodeParms << /K -1 /Columns 20000 /Rows 20000 >>",
         code.len() as u64,
         std::io::Cursor::new(code),
+    )?;
+    out.finish()
+}
+
+/// A one-page Letter PDF painted with one 64 MiB CCITT stream whose colour
+/// space is a two-entry palette: a fax image the row cursor does not take, so
+/// the engine declines it. The stream never decodes (its bytes are filler);
+/// what the probe measures is that it is not read.
+fn generate_fax64(path: &Path) -> Result<(), String> {
+    use std::io::Read;
+    const LEN: u64 = 64 * 1024 * 1024;
+    let content = "q 612 0 0 792 0 0 cm /Im0 Do Q";
+    let mut out = PdfOut::create(path)?;
+    out.object(1, "<< /Type /Catalog /Pages 2 0 R >>")?;
+    out.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")?;
+    out.object(
+        3,
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+         /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>",
+    )?;
+    out.stream(4, "", content.len() as u64, content.as_bytes())?;
+    out.stream(
+        5,
+        "/Type /XObject /Subtype /Image /Width 1000 /Height 1000 \
+         /ColorSpace [/Indexed /DeviceRGB 1 <000000FFFFFF>] /BitsPerComponent 1 \
+         /Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns 1000 /Rows 1000 >>",
+        LEN,
+        std::io::repeat(0x55).take(LEN),
     )?;
     out.finish()
 }
