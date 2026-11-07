@@ -2,7 +2,7 @@
 # Fork test wall (docs/UPDATING.md, S2): our tests live in fork-only code
 # (src/host/), never in upstream code or the fork's tests/ tree.
 #
-# Four checks per vendored engine:
+# Five checks per vendored engine:
 #   1. no `#[test]` added to upstream code: a file of src/ outside host/, or
 #      of tests/, holds no more `#[test]` than it did at the base tag
 #   2. no PdfDocument / DocumentEditor inside a host/ `#[cfg(test)]` module,
@@ -11,6 +11,9 @@
 #      says why no Dart battery can observe what it proves
 #   4. no file of ours added under tests/ (compared with the base tag the
 #      patches branch is named after: pdf_manipulator/<base>-patches)
+#   5. no wall clock (`Instant::now`, `SystemTime::now`) in an engine proof:
+#      a timing proof reads host::cpu_clock, which the machine's load does
+#      not move
 #
 # The wall covers pdf_oxide and office_oxide. vendor/tiny_skia is outside it
 # on purpose: that fork has no fork-only code to hold a test, and what it
@@ -88,6 +91,18 @@ check_engine() {
         { prev = $0 }
         END { exit missing ? 1 : 0 }' "$file" || bad=1
   done < <(find "$dir/src/$host/engine_proofs" -name '*.rs' 2>/dev/null || true)
+
+  # 5. engine proofs time on the thread's CPU clock, never the wall clock
+  if [ -d "$dir/src/$host/engine_proofs" ]; then
+    local walls
+    walls=$(grep -rn -E 'Instant::now|SystemTime::now' "$dir/src/$host/engine_proofs" 2>/dev/null || true)
+    if [ -n "$walls" ]; then
+      while IFS= read -r line; do
+        echo "${line%%:[!0-9]*}: the wall clock in an engine proof; a busy machine fails it, so time on host::cpu_clock"
+      done <<<"$walls"
+      bad=1
+    fi
+  fi
 
   # 4. files of ours under tests/
   if [ "$have_base" -eq 1 ]; then

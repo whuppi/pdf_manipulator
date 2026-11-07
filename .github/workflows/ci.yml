@@ -222,7 +222,10 @@ jobs:
     needs: [inputs, changes]
     if: needs.changes.outputs.rust == 'true'
     runs-on: ${{ needs.inputs.outputs.runner }}
-    timeout-minutes: 30
+    # A hang guard at twice the cold run: 28.5 min with nothing cached (run
+    # 42347525964: build 9m42s, pdf_oxide tests 185 s). A stuck test is
+    # killed by name first (tool/nextest.toml).
+    timeout-minutes: 57
     permissions:
       contents: read   # checkout + build, read-only
       packages: write  # oci-cache: the Flutter SDK lives on ghcr.io (read on PRs, write from dev)

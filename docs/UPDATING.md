@@ -363,6 +363,12 @@ three kinds:
   typed "not enabled in this build" error. No Dart test can be compiled
   against that build.
 
+A proof that bounds time reads the thread's CPU clock (`host/cpu_clock.rs`),
+never the wall clock: the wall clock counts every other test in flight, so a
+busy machine fails it. Upstream's own timing guards in pdf_oxide's `tests/`
+read the same clock through the `test-support` feature, a marked line in each
+guard; an S1 rebase carries them, and a new upstream timing guard gets one.
+
 `make test-guards` enforces all of this (`tool/check_fork_tests.sh`): no
 `#[test]` added to upstream code since the base tag, no document in a
 `host/` test outside `engine_proofs/` and the trim probes, and a doc
