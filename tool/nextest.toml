@@ -1,12 +1,14 @@
-# The Rust suites' guards (make test-rust passes this file to every nextest run).
-# A test silent past 10 periods is killed and fails with its own name, so a
-# stuck proof never ends the CI job nameless at its timeout. The slowest test
-# takes 57 s on an M4 Pro at opt-level 1 (band_proof over images).
+# The Rust suites' nextest settings (make test-rust passes this file to every
+# nextest run).
 #
 # A test that leaves a child process holding its output fails. No test of the
-# engine starts a process it does not wait for, so a leak is a bug; the window
+# engines starts a process it does not wait for, so a leak is a bug; the window
 # is 1 s because with every core busy nextest reads a test's closed output late
 # and called tests that start no process at all leaky at its default 100 ms.
 [profile.default]
-slow-timeout = { period = "60s", terminate-after = 10 }
 leak-timeout = { period = "1s", result = "fail" }
+
+# On CI a test is killed at 15 minutes and fails with its own name, the limit
+# the Dart suites get from `--timeout=30x` (TIMEOUT in the Makefile).
+[profile.ci]
+slow-timeout = { period = "60s", terminate-after = 15 }

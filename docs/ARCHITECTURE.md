@@ -388,8 +388,11 @@ terminates it. The next job boots another.
 
 ### Web executors
 
-An executor is a Worker running `executor_worker.js`. The booter compiles the wasm module
-once per page and hands it to each executor.
+An executor is a Worker running `executor_worker.js`. The booter compiles a wasm module once
+per page, keyed by the SHA-256 of its parts, and hands it to each executor: a page that reaches
+the same engine at two locations compiles it once. A compile that failed is kept per location,
+so a broken host is not asked again; the parts tests set the compiled modules aside and put
+them back (`setCompiledModulesAside`, `restoreCompiledModules`).
 
 - **Boot.** `booted → init → ready`. The executor announces `booted` when its message handler
   is attached, because a message posted earlier is dropped. No deadline applies: every
@@ -433,11 +436,12 @@ once per page and hands it to each executor.
 - `isCancelled` reports the request, not the outcome. A task nobody listens to absorbs
   `PdfCancelled` silently; any other failure on it is raised into the zone.
 
-A mutating op is all or nothing. Only `reduceImages` and `convertToPdfA` poll for a cancel
-inside a mutation. `reduceImages` stages its replacements after its last image;
-`convertToPdfA` runs under `editor.undoable`, which restores the editor on any error.
-`engine_proofs/cancel_at_every_poll.rs` cancels both at every poll and asserts the editor is
-as before or the op succeeded.
+A mutating op is all or nothing. Three mutations poll for a cancel while they run:
+`reduceImages` stages its replacements after its last image; `convertToPdfA` runs under
+`editor.undoable`, which restores the editor on any error; `applyRedactions` and `redact`
+stage their result only after every page's pass ends. `engine_proofs/cancel_at_every_poll.rs`
+and `cancel_polls.rs` cancel each at every poll and assert the editor is as before or the op
+succeeded.
 
 ### From task to job
 
@@ -528,7 +532,10 @@ proportion to the file. Nothing is skipped or refused at any size. The rows
 
 `convertToPdfA` holds the one metadata packet it patches, once, until the save writes it.
 
-A codec's input is read whole only when its decoder cannot read a stream (JPEG 2000, JBIG2). A JPEG on a lane is decoded from its stream at the reduction that covers its placement, or at its size; the file is the image only when the library returns it as bytes.
+A codec's input is read whole only when its decoder cannot read a stream (JPEG 2000,
+JBIG2). A JPEG on a lane is decoded from its stream at the reduction that covers its
+placement, or at its size; the file is the image only when the library returns it as bytes.
+A fax image is read from the line decoder a row at a time.
 
 ### The counting allocator and the heap
 
@@ -562,9 +569,11 @@ of live and peak bytes, and in a process-wide pair.
 instead of reset. The next job boots a replacement. The line is one resident document
 (its object cache `DEFAULT_OBJECT_CACHE_MAX_BYTES`, its content cache
 `CONTENT_CACHE_BYTES`, its fonts `DOCUMENT_FONT_BYTES`) plus one operation, which peaks at
-most the ceiling above its own baseline. The rows `hugeJpeg` (render, reduceImages) and
-`hugeJbig2` (render, extractImages) in `limit()` are exceptions with their own ceilings.
-Their executors are retired by design. Dart's `kKeepBytes` mirrors the constant, and
+most the ceiling above its own baseline. The rows of `limit()` that hold a whole raster or
+model are exceptions with their own ceilings: `hugeJpeg`, `hugeJpeg1to1` and `hugeCmykJpeg`
+(render, reduceImages), `hugeJbig2` (render, extractImages), `convertToPdfA xmp64` (the
+ceiling plus the packet) and `convertToPdf docx64` and `pptx64`. Their executors are retired
+by design. Dart's `kKeepBytes` mirrors the constant, and
 `keep_bytes_test.dart` reads `heap.rs` and compares them.
 
 ### The wall
@@ -638,8 +647,8 @@ engine holds a strip or the codec's raster, the resampler's rows, and the encode
 of the one image being rewritten, which is the unit the editor stages. A soft mask goes
 through the same pipe at its parent's new size. A stored JPEG that is not downsampled is
 kept (its quality is read from its first megabyte), unless the policy recompresses JPEGs.
-The two exceptions are the `hugeJpeg` row's: a progressive JPEG is one raster, and so is a
-CMYK JPEG.
+The exceptions hold one raster: a progressive JPEG (the `hugeJpeg` row), and a CMYK JPEG,
+which is decoded from its stream at its size (the `hugeCmykJpeg` row).
 
 `render` writes each page to a sink the caller's factory returns. The engine rasters the
 page in bands (`BAND_BUDGET_BYTES` of raster at a time), passes each band's rows to a PNG
@@ -663,6 +672,9 @@ samples a band reaches become pixels. These limits hold:
 
 - A progressive JPEG and a JPEG 2000 image at full size are one raster (the `hugeJpeg` row
   states the peak).
+- A JPEG that no reduction covers is decoded from its stream at its size. jpeg-decoder holds a
+  plane per channel beside the raster it returns, so the peak is about two rasters (the
+  `hugeJpeg1to1` and `hugeCmykJpeg` rows); the file itself is never held.
 - An image whose band footprint in the source is large (a rotation by an eighth turn spans
   the diagonal) holds the rectangle of that footprint.
 - An image drawn flipped or quarter-turned is read again from its first row for each
@@ -714,11 +726,11 @@ Future<({Uint8List bytes, Map<int, int> resourceIds})> execute(
 | extract / search / validate / classify | source 0 on demand | bounded text |
 | render | source 0 on demand | per page: header, data frames of at most `DATA_FRAME_BYTES`, end |
 | extractImages | source 0 on demand | per image: header, data frames, end |
-| editorSave | pinned source 0 | PositionedWrite streams objects |
+| editorSave | pinned source 0 | sink 0, PositionedWrite streams objects; `measure` counts into no sink; a save with neither is refused |
 | builderSave | — | PositionedWrite streams objects |
 | sign | source 0 in read-buffer chunks | sink 0, sequential |
 | appendPages | source 0, the other PDF, kept for the handle's lifetime and read again by the save | — |
-| addImageStamp / addAttachment / builder `image` | source 0, the secondary data | — |
+| addImageStamp / addAttachment / builder `image` | source 0, the secondary data, kept for the handle's lifetime and read by the save | — |
 | convertToOffice (PDF → DOCX/PPTX/XLSX) | source 0 on demand | streaming ZIP via office_oxide |
 | convertFromOffice (DOCX/PPTX/XLSX → PDF) | source 0 on demand; the package stays in its source and office_oxide holds the whole document model | CountingWriter streams objects |
 
@@ -828,10 +840,6 @@ runs. Only OPFS pre-copies to disk. Call `await pdf.ensureInitialized()` at star
 the mode. If it is `PdfIoMode.opfs`, consider telling the user, shipping the Asyncify wasm, or
 serving the COOP/COEP headers.
 
-**Whether the app shipped the Asyncify wasm** is one `HEAD` request for the file beside
-`executor_worker.js`, sent once per location, and only by a page that could run the mode
-(neither JSPI nor `SharedArrayBuffer`) or that forced it. The file itself is not fetched.
-
 #### The Asyncify wasm
 
 `wasm-opt --asyncify` turns the engine into a module that can stop in the middle of a call
@@ -857,19 +865,17 @@ instrument; the rest are left as they are, and the pass is run by `bindgen_runne
   returns the answer. The saved stack lives in pages the worker adds to linear memory
   (`kAsyncifyStackBytes`), outside the engine's heap; the pass writes it without a bound, so
   the worker checks the fill after every unwind and fails the job when it overflowed.
-- **Size.** The list is most of the module, so the twin is about half again as large as the
-  normal wasm (31.97 MB against 20.87 MB raw, 12.4 MB against 8.1 MB gzip, for the full
-  engine), which is more than the 25 MiB per file that Cloudflare Pages and Workers static
-  assets serve. `test/guards/wasm_size_test.dart` and the release compile refuse a shipped
-  wasm that reaches that size. The obstacle is in the call graph: a signature such as
-  `(i32,i32)->()` is shared by thousands of functions, and the graph cannot tell which of
-  them an indirect call reaches.
+- **Size.** The list is most of the module, so the twin is about a third larger than the
+  normal wasm; its gzip size is held under `asyncifyWasmGzipBudget`, and like every module it
+  ships as parts under the 25 MiB per-file limit (see **Web assets**). The list cannot be
+  narrower because of the call graph: a signature such as `(i32,i32)->()` is shared by
+  thousands of functions, and the graph cannot tell which of them an indirect call reaches.
 - **Cost.** A read or write costs a round trip through the main thread like JSPI's, plus the
   unwind and rewind of the stack in between, and the instrumented functions run slower. On
   a 300 MB text PDF on a 4-core machine, open + extract of 50 pages took 93 s in Asyncify against
   41 s in OPFS (pre-copy included), and a merge of two such files 16–19 s against 9–10 s: the
-  source is read in many small pieces, and each costs a round trip. The automatic order puts
-  Asyncify before OPFS all the same, until that is decided.
+  source is read in many small pieces, and each costs a round trip. So the automatic order
+  puts OPFS before Asyncify.
 
 **Web hold registry.** Each web executor keeps a reader map. A kept reader belongs to a group: the
 id of the job that created the handle. A later job on that handle that keeps a source (an
@@ -1004,10 +1010,11 @@ The codec bytes travel in an envelope that the executor reads first. The envelop
   `executor_reset` and `executor_hold_release`. The peak is read with `executor_heap_peak`
   after the post.
 - Web: every message after the boot handshake has a `lease` field. `result`, `error` and
-  `resetDone` carry `peak` and `mem`. `resetDone` also carries `abandoned`, and
-  `opfsWriteAck` carries `retried` when the handle was created twice. An `error` with
-  `protocol: true` means the executor refused the message and it never started; `trap` marks a
-  wasm trap.
+  `resetDone` carry `peak`, `mem` and `held`. `resetDone` also carries `abandoned`, and
+  `opfsWriteAck` carries `retried` when the handle was created twice. An OPFS `result`
+  carries `spool`, the size of each sink's spool file. An `error` with `protocol: true` means
+  the executor refused the message and it never started; `trap` marks a wasm trap, and `io`
+  a failed read of a source.
 
 The message tags and field names are in `lib/src/runtime/web/protocol.dart`.
 `executor_worker_sync_test.dart` pins them against `executor_worker.js`.
@@ -1020,6 +1027,7 @@ The message tags and field names are in `lib/src/runtime/web/protocol.dart`.
 lib/
 ├── pdf_manipulator.dart                    ← barrel export (no dart:io)
 ├── io.dart                                 ← dart:io barrel: FileSource, FileSink, PdfFile
+├── web.dart                                ← web barrel: BlobSource
 └── src/
     ├── ops/                                ← LAYER 1: CONSUMER API
     │   ├── pdf.dart                        ← Pdf: lifecycle, the handle, scope and one-call doors
@@ -1107,6 +1115,7 @@ tool/                                       ← .sh = orchestration wrappers; .d
 ├── analyze.sh                              ← format + Dart + Rust static analysis
 ├── check_cancel_polls.sh                   ← the loop poll lint (in make test-guards)
 ├── check_whole_buffers.sh                  ← the whole-buffer lint (in make test-guards)
+├── nextest.toml                            ← the Rust suites' leak rule, and on CI the per-test limit
 ├── compile.dart                            ← Rust → native / wasm / per-target / both
 ├── asyncify_list.dart                      ← the Asyncify list of a built wasm, with its counts
 ├── generate_fixtures.dart                  ← test fixture generator (make fixtures; stamp-protected)
@@ -1146,6 +1155,7 @@ vendor/pdf_oxide/src/
 │   ├── font_subset/                        ← font subsets (TrueType, CFF)
 │   ├── font_optimizer.rs                   ← Standard 14 unembedding
 │   ├── probe.rs                            ← the out-of-crate door that tool/memprobe runs requests through
+│   ├── cpu_clock.rs                        ← the thread CPU clock every timing proof and guard reads
 │   ├── engine_proofs/                      ← tests that open documents; shared_state.txt
 │   ├── native/                             ← executors and condvar I/O
 │   │   ├── executor.rs                     ← the executor body: thread loop, jobs, leases, reset
@@ -1275,7 +1285,7 @@ every job. The only thing that reuses it is cargo's fingerprint inside
 | Staleness bound | rust-cache prunes artifacts older than seven days at save time, so a warm cache can never drift more than a week from a from-scratch build. |
 | The cold guard | `release.yml` compiles with the cache off, always: a release binary's provenance is the tagged source, not "whatever was cached". `full-test.yml` runs the whole matrix cold every Monday, and both workflows take `cold: true` on manual dispatch. This is the routine proof that a fresh clone builds every target from vendor source — the promise the pub.dev tarball makes. |
 | The test family, the compile rows and the slow hook rows on ghcr | The Rust tests job, every `compile:` row, `verify: Android`, `int: Android`, `verify: macOS` and `pkg: Web` (whose `dart test -p chrome` builds the host engine through the hook first) keep their whole vendored `target` trees (every integration-test and bin executable, which rust-cache always dropped) plus the cargo registry on the GitHub Container Registry, keyed on the vendor revs with a `-latest` fallback so an engine-bump PR rebuilds only what changed; rust-cache is skipped for those families. Each compile row is its own family (`compile-android`, `compile-ios`, …): on the Actions cache the compile rows shared the hook rows' key, rust-cache saves once per key from the first finisher, and the near-empty hook rows always won the race, so the compile rows' dependency trees were never saved and every warm run rebuilt them (Android: 22 min for four ABIs). Gigabytes per revision — fine on GHCR (public, uncapped, pruned at 14 days), impossible on the Actions cache. |
-| Rust test speed | `make test-rust` runs the engines' suites through cargo-nextest — every test its own process across all cores; `cargo test` ran pdf_oxide's ~330 test binaries one after another (9,078 tests: 5 min → 1.8 min) — plus `cargo test --doc` for the doctests nextest skips. Same tests, same pass/fail; nextest is required, never a fallback, so "the suite passed" means one thing on every machine. It is a pinned, sha256-verified download (`NEXTEST_VERSION` in `tool/versions.env`, radar-tracked by `upgrade.sh`). The build half (~2.5 min for ~330 test crates) is rustc-bound on the runner's cores: mold was measured at no gain and dropped; caching the binaries would cost gigabytes per family. |
+| Rust test speed | `make test-rust` runs the engines' suites through cargo-nextest — every test its own process across all cores; `cargo test` ran pdf_oxide's ~330 test binaries one after another (9,078 tests: 5 min → 1.8 min) — plus `cargo test --doc` for the doctests nextest skips. Same tests, same pass/fail; nextest is required, never a fallback, so "the suite passed" means one thing on every machine. It is a pinned, sha256-verified download (`NEXTEST_VERSION` in `tool/versions.env`, radar-tracked by `upgrade.sh`). The tests build at opt-level 1 with debug assertions and overflow checks on: the memory and cancel proofs push 64 MiB fixtures through the engine, and unoptimized they measured the compiler (10,351 tests on an M4 Pro: 440 s → 62 s, the build 2m52s → 4m41s; on the runner 185 s, where the unoptimized run passed 21 min at test 8,871 of 10,351). `tool/nextest.toml` fails a test that leaks a child process and, on CI, kills one at 15 minutes by name, the limit `--timeout=30x` gives the Dart suites. Every timing proof reads the thread's CPU clock (`host/cpu_clock.rs`, Linux, macOS and Windows), never the wall clock, so a busy runner cannot fail it (`tool/check_fork_tests.sh` refuses the wall clock in an engine proof). mold was measured at no gain and dropped; caching the binaries would cost gigabytes per family. |
 | Disk headroom | `make-target`'s `free-disk` is a guard, not a fixed step: it reads live `df` and runs the ~2 min reclaim only when the image has less than `min-free-gb` free (the ubuntu-24.04 image went from ~14 GB to ~80 GB free; the reclaim was pure overhead on every Rust tests run). A post-build `df` line is the evidence for the threshold. |
 | Where the big archives live | The Flutter SDK (~0.8 GB per OS), Gradle homes (~1.3 GB per OS) and AVD snapshots (~1 GB) are stored on the GitHub Container Registry through whuppi/ci's `oci-cache` (`cache-backend: ghcr` on every make-target call): GitHub Packages is free and uncapped for this public repo and Actions pulls are free, while the Actions cache is 10 GB per repo and evicts by last read — a fully warm set is ~19 GB, so on the Actions cache alone every matrix run found rows cold again. The Rust deps + engine archives (~8 GB) stay on the Actions cache, which is what rust-cache's key and cleanup machinery need. `oci-cache-prune.yml` is the ghcr retention (14 days; fallback tags kept). |
 | Scope | GitHub lets a run read caches from its own ref, the PR base, and the default branch only — caches written from a PR ref are invisible to every other PR and only spend the 10 GB quota. So `dev` is the one warm source: `ci.yml` and `full-test.yml` run on push to `dev` (paths = the cache-key inputs) with every save on; PR runs pass `rust-cache-save`/`cache-save: false` and only read — except a PR whose Rust inputs changed, which writes its own cargo cache so its later pushes aren't cold. `cache-cleanup.yml` deletes a PR's caches when it closes. |
@@ -1453,13 +1463,14 @@ test/
 │   │   └── web/                    lease protocol, cancel channel, config
 │   │                               inheritance, clean boot failure, dead-session
 │   │                               reclamation, zero OPFS residue
-│   └── runners/                    4 target runners (the ONLY entry points)
+│   └── runners/                    5 target runners (the ONLY entry points)
 │       ├── native_runner_test.dart
 │       ├── web_opfs_runner_test.dart
 │       ├── web_jspi_runner_test.dart
 │       ├── web_atomics_runner_test.dart
 │       ├── web_asyncify_runner_test.dart
-│       └── web_io_measure_test.dart        ← timing of Asyncify against OPFS (skipped unless sized)
+│       ├── web_auto_mode_test.dart         ← the mode auto-detection picks, with and without COOP/COEP
+│       └── web_io_measure_test.dart        ← timing of the sources and modes (skipped unless sized)
 │
 ├── bridge/                         Unit tests (no engine)
 │   ├── bridge_contract_test.dart
@@ -1546,9 +1557,12 @@ this table summarizes what each patched file carries and why.
 | `source.rs` | Fork-only: `Source` (the reader and the encryption handler behind one lock each), `SourceRead`, `SourceCursor`, `Window`, `Counter` |
 
 | `editor/document_editor.rs` | State accessors, `merge_from_reader()` + shared merge core, zero-clone GC BFS that follows the save's page-prune plan (`host/page_prune.rs`: dropped pages, inner `/Pages` nodes and the dropped pages' own annotations are never written, kept pages are re-parented to the root with their inherited attributes, and destinations, outline items, links, `/OpenAction` and form fields that pointed at a dropped page are removed), `write_full_to_writer(PositionedWrite)` (function-wide streaming offsets), per-save page-ref cache, scoped destructive erase (`erase_regions_destructive`), appearance generation for AP-less annotation types, §12.5.5 appearance placement, `add_page_annotation()`, `all_media_boxes()`, image modifications applied in page space (`rewrite_content_stream_with_image_mods` composes with the enclosing CTM, matching `get_page_images`), `staged_or_source_object()` so the resource walk writes a staged XObject/ExtGState instead of the source copy (the sweep skips ids already written), form field properties reach the saved file (`flush_form_fields_to_modified_objects` writes every dirty wrapper's `/TU`, `/Rect`, `/MaxLen`, `/Q`, `/Ff`, `/MK`, `/BS`, `/DA`, not only `/V`) and `remove_deleted_form_fields_from_acroform` drops removed fields from `/Fields` and `/Annots`, `incremental_refusal()` / `incremental_value_only()` / `incremental_objects()` (what an append can carry, and the objects it appends), and the full-rewrite sweep never copies a source object stream or xref stream |
-| `extractors/images.rs` | `PdfImageHandle::object_ref()` and `ctm()` — the identity and composed placement the host image reducer groups and measures by |
+| `extractors/images.rs` | `PdfImageHandle::object_ref()` and `ctm()` — the identity and composed placement the host image reducer groups and measures by; `extract_image_from_xobject` returns a JPEG's file (`jpeg_file`) while `extract_image_from_xobject_at` decodes it from its stream (`decode_dct_stream`, the Adobe CMYK inversion read from the marker segments); the fax arm reads the line decoder; a palette, a CIDToGIDMap and raw samples are read to their declared length; an illegal bit depth declines its image |
+| `api/pdf_builder.rs` | `to_bytes` saves to memory, with no temporary file |
+| `xfa/parser.rs` | Packets are read as XML events from a reader |
+| `tests/` (nine timing guards) | Each guard reads the thread's CPU clock (`host::cpu_clock`) instead of the wall clock |
 | `encryption/mod.rs` + `encryption/algorithms.rs` | Raw file key exposed to the writer (`file_key`, `build_with_key`) so streams encrypt with the key the dict advertises; PDF 2.0 Algorithm 10 (`/Perms` for R6) |
-| `compliance/converter.rs` | Expose `convert_with_editor`, bundled 12 Liberation fonts (WASM has no system fonts) |
+| `compliance/converter.rs` | Expose `convert_with_editor`, which stages its fixes like every edit (no whole-file commit, no final validation; `convert()` keeps both for the library), the XMP packet patched as XML events, bundled 12 Liberation fonts (WASM has no system fonts) |
 | `writer/pdf_writer.rs` | `finish_to_writer(PositionedWrite)` — streaming save |
 | `writer/document_builder.rs` | `build_to_writer(PositionedWrite)` + `assemble_writer()`; per-page state on the page record, a `PageBuilder` that applies page ops at once through `&mut self` (`FluentPageBuilder` wraps it), and `begin_page` / `end_page` / `page_mut` / `page_has_form_field` / `page_has_text` for the host |
 | `writer/stamp.rs` + `writer/appearance_stream.rs` + `writer/annotation_builder.rs` | Rubber-stamp normal appearance (label + inline font + text escaping) and the appearance-generation dispatch |
@@ -1587,8 +1601,6 @@ float mapping, in whole pixels.
 | `tests/windows.rs` | The proof: windows equal the same rows of a whole canvas |
 
 The limits of the exactness are in `docs/UPDATING.md`.
-
----
 
 ---
 
@@ -1728,5 +1740,6 @@ source in the pub tarball compiles locally.
 > adapters decide nothing. One binary format. Native, and four web I/O modes
 > auto-detected (Atomics > JSPI > OPFS > Asyncify), one wasm per mode. Dispose ends lanes and returns
 > executors; an executor is terminated only when it is dead, over the keep line
-> or surplus. Budgets queue, never fail. Bounded memory on every path, measured,
-> with one declared cost per text piece of the page being read.**
+> or surplus. Budgets queue, never fail. Bounded memory on every path but the
+> Office import, measured, with one declared cost per text piece of the page
+> being read.**

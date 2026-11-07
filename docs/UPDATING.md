@@ -178,9 +178,9 @@ git rebase vNEW
 
 Resolve conflicts commit by commit. `Cargo.lock` conflicts: take the
 base (`git checkout vNEW -- Cargo.lock`) and let cargo re-add our
-feature deps on the next build. `make test-rust` runs the full `cargo
-test` (not `--lib`) for both crates — the `tests/` tree catches
-signature drift the lib tests miss. `make check-keep-sets` compiles
+feature deps on the next build. `make test-rust` runs every test of the
+three crates through cargo-nextest, the `tests/` tree included (not
+`--lib`), which catches signature drift the lib tests miss. `make check-keep-sets` compiles
 every keep-set for both targets, so upstream code that uses something
 one of our feature gates removes fails here, before any wasm build.
 
@@ -365,14 +365,17 @@ three kinds:
 
 A proof that bounds time reads the thread's CPU clock (`host/cpu_clock.rs`),
 never the wall clock: the wall clock counts every other test in flight, so a
-busy machine fails it. Upstream's own timing guards in pdf_oxide's `tests/`
-read the same clock through the `test-support` feature, a marked line in each
-guard; an S1 rebase carries them, and a new upstream timing guard gets one.
+busy machine fails it. The clock runs on Linux, macOS and Windows, so no
+timing proof is skipped on any runner. Upstream's own timing guards in
+pdf_oxide's `tests/` read the same clock (`pdf_oxide::host::cpu_clock`), a
+marked line in each guard; an S1 rebase carries them, and a new upstream
+timing guard gets one.
 
 `make test-guards` enforces all of this (`tool/check_fork_tests.sh`): no
 `#[test]` added to upstream code since the base tag, no document in a
-`host/` test outside `engine_proofs/` and the trim probes, and a doc
-comment on every engine proof.
+`host/` test outside `engine_proofs/` and the trim probes, a doc comment
+on every engine proof, no file of ours added under `tests/`, and no wall
+clock (`Instant::now`, `SystemTime::now`) in an engine proof.
 
 Prior art: #161 had the same shape as #215, an engine-side forms bug. It
 landed as a hand-written fixture plus battery cases here, with the

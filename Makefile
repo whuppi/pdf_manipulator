@@ -1,7 +1,7 @@
 .PHONY: check analyze check-keep-sets check-bindings analyze-floor platforms lint-shell format fixtures test-guards bench \
        build build-native build-wasm build-wasm-asyncify \
        compile-macos compile-ios compile-android compile-linux compile-windows compile-wasm compile-natives \
-       test test-pkg-native test-unit test-rust test-rust-run prune-target shake-audit verify-readme-sizes \
+       test test-pkg-native test-unit test-rust test-rust-run test-memory test-fuel prune-target shake-audit verify-readme-sizes verify-tarball \
        test-ops test-ops-native test-ops-web test-ops-opfs test-ops-jspi test-ops-atomics test-ops-asyncify \
        test-example test-example-matrix test-example-macos test-example-trimmed test-example-linux test-example-windows \
        test-example-android test-example-ios test-example-device \
@@ -22,6 +22,7 @@ FLUTTER ?= fvm flutter
 CARGO   ?= cargo
 TEST_RESULTS_DIR ?= test-results
 TIMEOUT := $(if $(CI),--timeout=30x,)
+NEXTEST_PROFILE := $(if $(CI),--profile ci,)
 VERBOSE := $(if $(CI),--verbose,)
 
 # ═══════════════════════════════════════════════════════════════════
@@ -132,7 +133,9 @@ format:
 #                        migration coverage, tool/check_migration.sh and
 #                        tool/check_migration_snippets.sh
 #                      - fork tests: host/ unit tests for pure functions only;
-#                        none in patched upstream files or tests/, tool/check_fork_tests.sh
+#                        none in patched upstream files or tests/; an engine
+#                        proof times on the thread's CPU clock, never the wall
+#                        clock, tool/check_fork_tests.sh
 #                      - fork patch markers pair: no end without an open, no open
 #                        left open or nested, no typo'd marker line in upstream
 #                        code, tool/check_patch_markers.sh
@@ -179,7 +182,7 @@ test-guards:
 	@$(DART) test $(TIMEOUT) test/guards -p vm --concurrency=1
 	@./tool/check_changelog_shape.sh
 	@./tool/check_migration.sh
-	@./tool/check_migration_snippets.sh
+	@DART="$(DART)" FLUTTER="$(FLUTTER)" ./tool/check_migration_snippets.sh
 	@./tool/check_fork_tests.sh
 	@./tool/check_patch_markers.sh
 	@./tool/check_cancel_polls.sh
@@ -314,17 +317,19 @@ compile-natives:
 # § 5 — Test
 # ═══════════════════════════════════════════════════════════════════
 #
-# make test              Unit + all ops (native + 3 web modes).
+# make test              Unit + all ops (native + 4 web modes) + the memory wall.
 # make test-pkg-native   Unit + native ops only (CI fast gate).
 # make test-unit         Every test/ folder but ops/, fixtures/ and guards/ (VM).
-# make test-ops          All 4 ops runners.
+# make test-ops          All 5 ops runners.
 # make test-ops-native   Ops: native FFI.
 # make test-ops-web      Ops: all 4 web modes.
 # make test-ops-opfs     Ops: web OPFS.
 # make test-ops-jspi     Ops: web JSPI.
 # make test-ops-atomics  Ops: web Atomics.
 # make test-ops-asyncify Ops: web Asyncify (builds the Asyncify wasm first).
-# make test-rust         cargo tests for the three vendored crates.
+# make test-rust         Rust tests of the three vendored crates (cargo-nextest).
+# make test-memory       The memory wall (tool/memprobe), release build.
+# make test-fuel         The cancel fuel wall (tool/fuelprobe).
 
 test: fixtures test-unit test-ops test-memory
 
@@ -394,20 +399,6 @@ test-ops-asyncify: $(ASYNCIFY_OUT)
 	$(call run_browser_tests,$(DART) test $(TIMEOUT) test/ops/runners/web_auto_mode_test.dart -p chrome --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-auto-mode.json)
 	$(call run_browser_tests,$(DART) test $(TIMEOUT) test/ops/runners/web_auto_mode_test.dart -p chrome-coi --concurrency=1 --file-reporter json:$(TEST_RESULTS_DIR)/ops-auto-mode-coi.json)
 
-# Rust unit + integration tests for the three vendored crates. Most of the
-# engine's tests sit behind features we don't ship (ml / ocr / fips /
-# python / wasm), which need ONNX / pdfium / Python / a wasm target and
-# can't run natively here. pdf_oxide reuses build.json's native feature
-# set — the SAME source the build and analyze read — plus test-support,
-# so a feature added to build.json is tested automatically; office_oxide
-# and tiny_skia (with its path crate) run default.
-#
-# Debug symbols dominate Rust test-binary size — a stock CI runner can't hold
-# the full-debug build of both crates' test suites even after the free-disk
-# capability runs (see the rust job in ci.yml). Strip debuginfo + the
-# incremental cache for the test build: every test still compiles and runs
-# identically; only interactive backtraces lose symbol names (CI prints the
-# assertion output regardless).
 # Keep guarantee verifier: core-only build must drop the heavy modules
 # (symbols absent, size under ceiling) and excluded ops must answer the
 # typed not-enabled error. SHAKE_AUDIT_WASM=1 is the full release measurement:
@@ -432,6 +423,20 @@ verify-tarball:
 bench:
 	@cd tool/bench && $(DART) pub get && $(DART) run bin/bench.dart $(BENCH_ARGS)
 
+# Rust unit + integration tests for the three vendored crates. Most of the
+# engine's tests sit behind features we don't ship (ml / ocr / fips /
+# python / wasm), which need ONNX / pdfium / Python / a wasm target and
+# can't run natively here. pdf_oxide reuses build.json's native feature
+# set — the SAME source the build and analyze read — plus test-support,
+# so a feature added to build.json is tested automatically; office_oxide
+# and tiny_skia (with its path crate) run default.
+#
+# Debug symbols dominate Rust test-binary size — a stock CI runner can't hold
+# the full-debug build of both crates' test suites even after the free-disk
+# capability runs (see the rust job in ci.yml). Strip debuginfo + the
+# incremental cache for the test build: every test still compiles and runs
+# identically; only interactive backtraces lose symbol names (CI prints the
+# assertion output regardless).
 test-rust-run: export CARGO_INCREMENTAL := 0
 test-rust-run: export CARGO_PROFILE_DEV_DEBUG := 0
 test-rust-run: export CARGO_PROFILE_TEST_DEBUG := 0
@@ -478,7 +483,7 @@ test-rust:
 test-rust-run:
 	$(ensure_nextest)
 	@echo "=== Rust: pdf_oxide ==="
-	$(CARGO) nextest run --no-fail-fast --config-file tool/nextest.toml --manifest-path vendor/pdf_oxide/Cargo.toml \
+	$(CARGO) nextest run --no-fail-fast --config-file tool/nextest.toml $(NEXTEST_PROFILE) --manifest-path vendor/pdf_oxide/Cargo.toml \
 	  --features "$$($(DART) tool/compile.dart --features native),test-support,public-api,cjk-form-fonts,pdfa"
 	$(CARGO) test --doc --manifest-path vendor/pdf_oxide/Cargo.toml \
 	  --features "$$($(DART) tool/compile.dart --features native),test-support,public-api,cjk-form-fonts,pdfa"
@@ -486,10 +491,10 @@ test-rust-run:
 	$(CARGO) test --lib --manifest-path vendor/pdf_oxide/Cargo.toml \
 	  --no-default-features --features icc,legacy-crypto,native-bridge redact_refusal
 	@echo "=== Rust: office_oxide ==="
-	$(CARGO) nextest run --no-fail-fast --config-file tool/nextest.toml --manifest-path vendor/office_oxide/Cargo.toml
+	$(CARGO) nextest run --no-fail-fast --config-file tool/nextest.toml $(NEXTEST_PROFILE) --manifest-path vendor/office_oxide/Cargo.toml
 	$(CARGO) test --doc --manifest-path vendor/office_oxide/Cargo.toml
 	@echo "=== Rust: tiny_skia ==="
-	$(CARGO) nextest run --no-fail-fast --config-file tool/nextest.toml --workspace --manifest-path vendor/tiny_skia/Cargo.toml
+	$(CARGO) nextest run --no-fail-fast --config-file tool/nextest.toml $(NEXTEST_PROFILE) --workspace --manifest-path vendor/tiny_skia/Cargo.toml
 	$(CARGO) test --doc --workspace --manifest-path vendor/tiny_skia/Cargo.toml
 
 # ═══════════════════════════════════════════════════════════════════
