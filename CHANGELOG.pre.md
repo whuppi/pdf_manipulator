@@ -243,6 +243,7 @@ Migrating from 5.0.1: the [migration guide](https://github.com/whuppi/pdf_manipu
 - Changed `cancel()` when the operation finished before the cancel landed: the task resolves with its result, so a finished edit is not reported as cancelled; an `open` or `edit` that finished is closed and reports `PdfCancelled`
 - Changed `Pdf` instances to lease their web workers and native threads from one shared pool, so creating and disposing instances in a loop reuses them instead of starting a new one each time
 - Changed every engine worker, native and web, to be retired once an operation's heap peaked past 32 MB, where only a web worker past 256 MB of WebAssembly memory was
+- Changed `convertFromOffice` and `convertToOffice` to bound hostile `.doc`, `.xls`, `.ppt` and ZIP input, to keep what a cut-off `.docx`, `.pptx` or `.xlsx` holds before the damage, and to write DOCX tables with no widths that Word no longer collapses (office_oxide 0.1.16)
 - Fixed `keepPages`, `split` and `removePages` writing the pages they drop into the output, so the output kept its original size and the dropped pages' text, images and form values — a save now writes nothing only a dropped page reaches, and drops the links, bookmark targets and form fields that pointed at one ([#261](https://github.com/whuppi/pdf_manipulator/issues/261) reported by [@crurui](https://github.com/crurui))
 - Fixed `sign` dropping the document's bookmarks, form fields, page labels and every other catalog entry, and replacing an earlier signature — the signature now appends to the existing form and page ([#263](https://github.com/whuppi/pdf_manipulator/issues/263))
 - Fixed `sign` writing a cross-reference table that other readers had to repair — each entry is now 20 bytes
@@ -305,6 +306,8 @@ Migrating from 5.0.1: the [migration guide](https://github.com/whuppi/pdf_manipu
 - Fixed `builder.save`, `editor.save` and `extractAttachment` succeeding in web OPFS mode when the sink threw, and a slow sink piling chunks up in memory — the worker now spools output to disk and the sink is awaited chunk by chunk, so its error fails the op
 - Fixed a `Pdf` that was never disposed keeping its workers, lanes and registered fonts for good — they are released when it is garbage collected, with a debug warning
 - Fixed the blob URL of a cross-origin worker bootstrap never being revoked — it goes once the worker has started or failed to
+- Fixed text extraction giving wrong characters for fonts whose ToUnicode CMap ends lines with a bare CR, puts several ranges on one line or splits a range's array across lines — every range entry is read
+- Fixed a full save writing a PDF name that contains a delimiter such as `(` or `<` unescaped, so the name ended early and the rest of its dictionary was misread — delimiters are written as `#XX`
 
 ## 5.0.1-dev.0
 

@@ -9791,3 +9791,100 @@ Uint8List keptEncryptionPdf({
       if (e.value != null) '/${e.key} ${e.value}'].join(' ')} >>',
   ], trailerExtra: '/Encrypt 4 0 R $id');
 }
+
+/// The CMap text of a simple font's /ToUnicode stream: one byte codes, with
+/// [body] as the bf sections.
+String _toUnicodeCmap(String body, {String eol = '\n'}) => [
+  'begincmap',
+  '1 begincodespacerange',
+  '<00> <FF>',
+  'endcodespacerange',
+  body,
+  'endcmap',
+  '',
+].join(eol);
+
+/// One page that draws four lines, each in a Helvetica whose /ToUnicode CMap
+/// is laid out in a way a reader that takes one range per text line loses:
+///
+/// | Line (top down) | Font | The CMap | Text drawn | Extracted |
+/// |---|---|---|---|---|
+/// | 1 | `/F1` | bfrange, every line ends in a bare CR | `!"` | `HI` |
+/// | 2 | `/F2` | three bfrange entries on one line | `!"#` | `HIJ` |
+/// | 3 | `/F3` | notdefrange, every line ends in a bare CR | codes 1, 2 | `AB` |
+/// | 4 | `/F4` | bfrange whose array holds one element per line | `!"#` | `HIJ` |
+final Uint8List splitRangeCmapsPdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R /F2 6 0 R /F3 7 0 R /F4 8 0 R >> >> /Contents 4 0 R >>',
+  // 4: content — one line per font, top down
+  _streamBody(
+    '',
+    'BT /F1 18 Tf 72 720 Td (!") Tj ET\n'
+        'BT /F2 18 Tf 72 680 Td (!"#) Tj ET\n'
+        'BT /F3 18 Tf 72 640 Td (\\001\\002) Tj ET\n'
+        'BT /F4 18 Tf 72 600 Td (!"#) Tj ET',
+  ),
+  // 5-8: the four fonts
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 9 0 R >>',
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 10 0 R >>',
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 11 0 R >>',
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 12 0 R >>',
+  // 9: F1's CMap
+  _streamBody(
+    '',
+    _toUnicodeCmap(
+      '2 beginbfrange\r<21> <21> <0048>\r<22> <22> <0049>\rendbfrange',
+      eol: '\r',
+    ),
+  ),
+  // 10: F2's CMap
+  _streamBody(
+    '',
+    _toUnicodeCmap(
+      '2 beginbfrange\n<21> <21> <0048> <22> <23> [<0049> <004A>]\nendbfrange',
+    ),
+  ),
+  // 11: F3's CMap
+  _streamBody(
+    '',
+    _toUnicodeCmap(
+      '2 beginnotdefrange\r<01> <01> <0041>\r<02> <02> <0042>\rendnotdefrange',
+      eol: '\r',
+    ),
+  ),
+  // 12: F4's CMap
+  _streamBody(
+    '',
+    _toUnicodeCmap(
+      '1 beginbfrange\n<21> <23> [\n<0048>\n<0049>\n<004A>\n]\nendbfrange',
+    ),
+  ),
+]);
+
+/// The name of the font in [delimiterNamePdf]'s resources, as the file spells
+/// it: it holds `(`, `)`, `<`, `>`, `[`, `]`, `{`, `}`, `/`, `%`, `#` and a
+/// space.
+const _delimiterFontName = 'F#28#29#3C#3E#5B#5D#7B#7D#2F#25#23#20';
+
+/// One page that draws `!` in a font whose resource name holds every PDF
+/// delimiter, `#`, a space and a non-ASCII byte. The font maps `!` to `X`
+/// through /ToUnicode and is the only font the page has, so the text reads
+/// `X` only while the name still finds the font.
+final Uint8List delimiterNamePdf = _offsetPdf([
+  // 1: catalog
+  '<< /Type /Catalog /Pages 2 0 R >>',
+  // 2: page tree
+  '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+  // 3: page
+  '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /$_delimiterFontName 5 0 R >> >> /Contents 4 0 R >>',
+  // 4: content
+  _streamBody('', 'BT /$_delimiterFontName 18 Tf 72 720 Td (!) Tj ET'),
+  // 5: the font
+  '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 6 0 R >>',
+  // 6: its CMap
+  _streamBody('', _toUnicodeCmap('1 beginbfchar\n<21> <0058>\nendbfchar')),
+]);
