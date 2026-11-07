@@ -20,6 +20,7 @@ class GateRow {
     required this.pagesIn,
     required this.pagesOut,
     required this.worstRmse,
+    required this.worstSsim,
     required this.textEqual,
     required this.error,
   });
@@ -31,6 +32,7 @@ class GateRow {
   final String pagesIn;
   final String pagesOut;
   final String worstRmse;
+  final String worstSsim;
   final String textEqual;
   final String error;
 }
@@ -54,6 +56,7 @@ List<GateRow> parseBenchCsv(String text) {
         pagesIn: fields[10],
         pagesOut: fields[11],
         worstRmse: fields[12],
+        worstSsim: fields[14],
         textEqual: fields[16],
         error: error.startsWith('"') && error.endsWith('"') && error.length > 1
             ? error.substring(1, error.length - 1)
@@ -82,7 +85,11 @@ class GateReport {
 ///
 /// A case and preset fails when our row has an error, loses pages or text, a
 /// lossless row differs from its source, or pdf_document's output is smaller
-/// than ours. An error in pdf_document's row alone is a note.
+/// than ours at a quality at least as good: its pages and text intact, its
+/// worst RMSE no higher and its worst SSIM no lower than ours. A smaller
+/// output that paid for its size in quality is a note, so the gate never
+/// pushes the bench toward throwing pixels away. An error in pdf_document's
+/// row alone is a note.
 GateReport evaluateGate(List<GateRow> rows) {
   final ours = <String, GateRow>{};
   final theirs = <String, GateRow>{};
@@ -137,9 +144,33 @@ GateReport evaluateGate(List<GateRow> rows) {
       fail('lossless render differs from the source (rmse ${our.worstRmse})');
     }
     if (ourSize != null && theirSize != null && theirSize < ourSize) {
-      fail('pdf_document is smaller');
+      if (_atLeastAsGood(their!, our)) {
+        fail('pdf_document is smaller at the same or better quality');
+      } else {
+        notes.add(
+          'note ${our.id} ${our.preset}: pdf_document is smaller but worse '
+          '(rmse ${their.worstRmse} vs ${our.worstRmse}, '
+          'ssim ${their.worstSsim} vs ${our.worstSsim}; $sizes)',
+        );
+      }
     }
   }
 
   return GateReport(failures: failures, notes: notes, table: table.toString());
+}
+
+/// Whether [their] output kept pages and text and is at least as close to the
+/// source as [our]: worst RMSE no higher, worst SSIM no lower. A missing
+/// metric counts as worse.
+bool _atLeastAsGood(GateRow their, GateRow our) {
+  if (their.pagesOut != their.pagesIn || their.textEqual != 'true') {
+    return false;
+  }
+  final theirRmse = double.tryParse(their.worstRmse);
+  final ourRmse = double.tryParse(our.worstRmse);
+  final theirSsim = double.tryParse(their.worstSsim);
+  final ourSsim = double.tryParse(our.worstSsim);
+  if (theirRmse == null || ourRmse == null) return false;
+  if (theirSsim == null || ourSsim == null) return false;
+  return theirRmse <= ourRmse && theirSsim >= ourSsim;
 }

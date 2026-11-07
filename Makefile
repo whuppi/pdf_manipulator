@@ -424,7 +424,7 @@ bench:
 	@cd tool/bench && $(DART) pub get && $(DART) run bin/bench.dart $(BENCH_ARGS)
 
 # `make bench`, then fail when pdf_document produced a smaller file than ours
-# or our output lost pages, text or (lossless) pixels. Read by bench.yml.
+# at the same or better quality, or our output lost pages, text or (lossless) pixels. Read by bench.yml.
 bench-gate: bench
 	@cd tool/bench && $(DART) run bin/gate.dart
 

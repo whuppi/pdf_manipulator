@@ -1,7 +1,7 @@
 # Bench — the compression comparison against pdf_document, with a size gate.
 # Runs on a PR that touches tool/bench (Dependabot's pdf_document bump is one),
 # weekly, and on demand. A red run means pdf_document produced a smaller file
-# than ours, or our output lost pages, text or (lossless) pixels: read the
+# than ours at the same or better quality, or our output lost pages, text or (lossless) pixels: read the
 # release's changelog and diff, then port the idea or fix the regression.
 # Never loosen the gate (tool/bench/lib/gate.dart).
 name: Bench

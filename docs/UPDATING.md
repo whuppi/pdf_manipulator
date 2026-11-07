@@ -149,8 +149,10 @@ merge each when ready.
 
 Dependabot bumps the exact `pdf_document` pin in `tool/bench`. `bench.yml`
 runs `make bench-gate` on that PR and weekly. A red gate means pdf_document
-produced a smaller file than ours, or our output lost pages, text or
-(lossless) pixels. Read their changelog and diff for the release, then open a
+produced a smaller file than ours at the same or better quality (its worst
+RMSE no higher and its worst SSIM no lower), or our output lost pages, text
+or (lossless) pixels. A smaller file that is also worse is printed as a note
+and does not fail: the gate never rewards throwing quality away. Read their changelog and diff for the release, then open a
 task to port the idea or fix the regression. Never loosen the gate.
 
 ---

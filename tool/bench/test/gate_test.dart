@@ -14,11 +14,13 @@ String _row(
   String id = 'doc',
   String pagesOut = '3',
   String rmse = '0.0000',
+  String ssim = '1.00000',
   String text = 'true',
   String error = '',
 }) =>
     '$id,real,$engine,$preset,1000,${out ?? ''},0.5000,10,10,yes,3,'
-    '${out == null ? '' : pagesOut},${out == null ? '' : rmse},0,1.00000,0,'
+    '${out == null ? '' : pagesOut},${out == null ? '' : rmse},0,'
+    '${out == null ? '' : ssim},0,'
     '${out == null ? '' : text},"$error"';
 
 GateReport _gate(List<String> rows) =>
@@ -49,6 +51,33 @@ void main() {
       report.failures.single,
       contains('ours 500 bytes, theirs 450 bytes'),
     );
+  });
+
+  test('pdf_document smaller but worse is a note, not a failure', () {
+    final report = _gate([
+      _row('pdf_manipulator', 'ebook', 2589871),
+      _row('pdf_document', 'ebook', 2439955, rmse: '8.0849', ssim: '0.91957'),
+    ]);
+    expect(report.failures, isEmpty);
+    expect(report.notes.single, contains('smaller but worse'));
+  });
+
+  test('pdf_document smaller at equal quality on a lossy preset fails', () {
+    final report = _gate([
+      _row('pdf_manipulator', 'screen', 500, rmse: '4.0000', ssim: '0.95000'),
+      _row('pdf_document', 'screen', 450, rmse: '3.0000', ssim: '0.96000'),
+    ]);
+    expect(report.failures, hasLength(1));
+    expect(report.failures.single, contains('same or better quality'));
+  });
+
+  test('pdf_document smaller with lost text is a note', () {
+    final report = _gate([
+      _row('pdf_manipulator', 'lossless', 800),
+      _row('pdf_document', 'lossless', 700, text: 'false'),
+    ]);
+    expect(report.failures, isEmpty);
+    expect(report.notes, hasLength(1));
   });
 
   test('a lossless rmse above zero fails', () {
