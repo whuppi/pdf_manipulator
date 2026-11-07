@@ -306,7 +306,7 @@ runs:
     - name: Restore Rust target (ghcr)
       id: ghcr
       if: inputs.cache == 'true' && inputs.ghcr-target == 'true'
-      uses: whuppi/ci/actions/capabilities/oci-cache@v2.7.10
+      uses: whuppi/ci/actions/capabilities/oci-cache@v2.7.13
       with:
         phase: restore
         # The name is the archive namespace: bump its suffix whenever an
