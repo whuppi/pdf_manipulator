@@ -1,0 +1,72 @@
+diff --git a/CHANGELOG.pre.md b/CHANGELOG.pre.md
+index e88553e..d280bdf 100644
+--- a/CHANGELOG.pre.md
++++ b/CHANGELOG.pre.md
+@@ -307,6 +307,7 @@ CONTENT RULES (never change)
+ - Fixed an image of raw samples holding the bytes its stream carries past its declared rows — it reads the rows it declares
+ - Fixed `render` and `reduceImages` of a gray or RGB JPEG painted smaller than itself holding a copy of the whole file beside the decode — the decoder reads the stream
+ - Fixed `compress` and every full save of an encrypted document copying each stream over 256 KiB as it was, so the file stayed as large as the source — such a stream is now recompressed in pieces and encrypted as it is written
++- Fixed `convertToPdfA` saving the whole document into memory and reading it back before the save that writes the file — its edits are staged like every other edit and the save writes them once
+ 
+ ## 5.0.1-dev.0
+ 
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+index 60bf03c..899528d 100644
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -521,6 +521,8 @@ sort that spills sorted runs to storage would keep one page under the plain ceil
+ not built, and the trigger to reconsider it is a user with single pages too large for the
+ per-piece cost and real storage to spill to.
+ 
++`convertToPdfA` holds the one metadata packet it patches, once, until the save writes it.
++
+ ### The counting allocator and the heap
+ 
+ One `#[global_allocator]` (`Counting` in `host/heap.rs`) forwards every allocation to the
+diff --git a/tool/memprobe/src/main.rs b/tool/memprobe/src/main.rs
+index 658c042..ba0577c 100644
+--- a/tool/memprobe/src/main.rs
++++ b/tool/memprobe/src/main.rs
+@@ -19,6 +19,9 @@ use std::path::Path;
+ 
+ const MIB: usize = 1024 * 1024;
+ 
++/// The decoded size of the `xmp64` input's metadata packet.
++const XMP_PACKET: usize = 64 * MIB;
++
+ /// The page count of the `thousand_page` input.
+ const THOUSAND_PAGES: usize = 1_000;
+ 
+@@ -159,13 +162,8 @@ fn limit(op: &str, input: &str) -> usize {
+         // own pass and pulled in step a row at a time; the image is never
+         // held. The file is 16 MiB: whole, it would show.
+         ("imagesToPdf", "interlacedPng") => 16 * MIB,
+-        // The measured peak, rounded up to the next MiB. The identification
+-        // is spliced into the packet as it is read, so the staging step holds
+-        // the patched packet once (engine_proofs/mem_pdfa_xmp.rs holds it to
+-        // that); the peak of the whole conversion is set by the checks and
+-        // the commit that run on the 64 MiB packet before and after it, which
+-        // read it whole and are not this row's subject.
+-        ("convertToPdfA", "xmp64") => 129 * MIB,
++        // convertToPdfA holds the one metadata packet it patches, once, until the save writes it.
++        ("convertToPdfA", "xmp64") => 16 * MIB + XMP_PACKET,
+         _ => panic!("no memory limit for {op} on {input}: add one to limit()"),
+     }
+ }
+@@ -2625,7 +2623,6 @@ fn generate_huge_drawn(path: &Path) -> Result<(), String> {
+ /// one `rdf:RDF` that has no PDF/A identification.
+ fn generate_huge_xmp(path: &Path) -> Result<(), String> {
+     use flate2::write::ZlibEncoder;
+-    const PACKET: usize = 64 * 1024 * 1024;
+     let head = "<?xpacket begin='x' id='W5M0MpCehiHzreSzNTczkc9d'?>\n\
+                 <x:xmpmeta xmlns:x='adobe:ns:meta/'>\n\
+                 <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>\n\
+@@ -2636,7 +2633,7 @@ fn generate_huge_xmp(path: &Path) -> Result<(), String> {
+     let mut encoder = ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+     let fail = |e: std::io::Error| format!("hugeXmp: {e}");
+     encoder.write_all(head.as_bytes()).map_err(fail)?;
+-    for _ in 0..PACKET / block.len() {
++    for _ in 0..XMP_PACKET / block.len() {
+         encoder.write_all(block.as_bytes()).map_err(fail)?;
+     }
+     encoder.write_all(tail.as_bytes()).map_err(fail)?;
