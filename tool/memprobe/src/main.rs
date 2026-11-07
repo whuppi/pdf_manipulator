@@ -152,8 +152,20 @@ fn limit(op: &str, input: &str) -> usize {
         ("attach", "attach64") => 16 * MIB,
         ("embedFile", "file64") => 16 * MIB,
         // The stamp's image stays in its source like a builder's: a JPEG is
-        // copied in 64 KiB pieces, a PNG is deflated a row at a time.
-        ("addImageStamp", "png64" | "jpeg64") => 16 * MIB,
+        // copied in 64 KiB pieces, a PNG is deflated a row at a time, an
+        // interlaced one by the seven pass readers.
+        ("addImageStamp", "png64" | "jpeg64" | "interlacedPng") => 16 * MIB,
+        // An Adam7 PNG is read by seven decoders over its source, each on its
+        // own pass and pulled in step a row at a time; the image is never
+        // held. The file is 16 MiB: whole, it would show.
+        ("imagesToPdf", "interlacedPng") => 16 * MIB,
+        // The measured peak, rounded up to the next MiB. The identification
+        // is spliced into the packet as it is read, so the staging step holds
+        // the patched packet once (engine_proofs/mem_pdfa_xmp.rs holds it to
+        // that); the peak of the whole conversion is set by the checks and
+        // the commit that run on the 64 MiB packet before and after it, which
+        // read it whole and are not this row's subject.
+        ("convertToPdfA", "xmp64") => 129 * MIB,
         _ => panic!("no memory limit for {op} on {input}: add one to limit()"),
     }
 }
@@ -1159,16 +1171,18 @@ fn run() -> Result<(), String> {
 
     // imagesToPdf of one image of 64 MiB and of 128 MiB: the builder holds the
     // image's source from the add to the save, and the save reads it from there.
-    for (name, kind, rows) in [
-        ("png64", ImageKind::Png, IMAGE_ROWS),
-        ("png128", ImageKind::Png, 2 * IMAGE_ROWS),
-        ("jpeg64", ImageKind::Jpeg, JPEG_ROWS),
-        ("jpeg128", ImageKind::Jpeg, 2 * JPEG_ROWS),
+    for (name, kind, rows, floor_mib) in [
+        ("png64", ImageKind::Png, IMAGE_ROWS, 64),
+        ("png128", ImageKind::Png, 2 * IMAGE_ROWS, 128),
+        ("jpeg64", ImageKind::Jpeg, JPEG_ROWS, 64),
+        ("jpeg128", ImageKind::Jpeg, 2 * JPEG_ROWS, 128),
+        // 1,024 rows of 4,096 RGBA pixels of noise are 16 MiB.
+        ("interlacedPng", ImageKind::PngInterlaced, IMAGE_ROWS / 4, 16),
     ] {
         let image = dir.join(format!("image-{name}.{}", kind.extension()));
         generate_image(&image, kind, rows)?;
         let size = std::fs::metadata(&image).map(|m| m.len()).unwrap_or(0);
-        let floor = if name.ends_with("128") { 128 } else { 64 } * 1024 * 1024;
+        let floor = floor_mib * 1024 * 1024;
         if size < floor {
             return Err(format!("image {name} is {size} bytes, under its {floor}"));
         }
@@ -1224,6 +1238,35 @@ fn run() -> Result<(), String> {
     }
     let _ = std::fs::remove_file(&embedded);
     let _ = std::fs::remove_file(&file);
+
+    // convertToPdfA of a file whose XMP packet is 64 MiB once decoded: the
+    // identification is spliced in as the packet is read, and the packet is
+    // not held as text.
+    let xmp = dir.join("xmp64.pdf");
+    generate_huge_xmp(&xmp)?;
+    let converted = open_sink("xmp64", "convertToPdfA");
+    step(&failed, "convertToPdfA", "xmp64", limit("convertToPdfA", "xmp64"), |st| {
+        let resp = call(st, re("editorOpen"), vec![source(&xmp)], vec![])?;
+        let hid = resp.i32("handleId").expect("editorOpen returns handleId");
+        call(
+            st,
+            re("editorMutate")
+                .put("handleId", i32v(hid))
+                .put("editOp", strv("convertToPdfA"))
+                .put("level", strv("a2")),
+            vec![],
+            vec![],
+        )?;
+        save_full(st, hid, &converted, false)?;
+        dispose(st, hid);
+        Ok(())
+    });
+    if let Err(e) = check_pdfa_identification(&converted) {
+        eprintln!("memprobe: convertToPdfA xmp64: READ-BACK FAIL: {e}");
+        failed.set(true);
+    }
+    let _ = std::fs::remove_file(&xmp);
+    let _ = std::fs::remove_file(&converted);
 
     if failed.get() {
         return Err("one or more steps exceeded their memory limit".to_string());
@@ -2577,6 +2620,79 @@ fn generate_huge_drawn(path: &Path) -> Result<(), String> {
     out.finish()
 }
 
+/// A one-page PDF whose XMP packet is 64 MiB once decoded: properties that
+/// all name one key, Flate-coded block by block as they are generated, inside
+/// one `rdf:RDF` that has no PDF/A identification.
+fn generate_huge_xmp(path: &Path) -> Result<(), String> {
+    use flate2::write::ZlibEncoder;
+    const PACKET: usize = 64 * 1024 * 1024;
+    let head = "<?xpacket begin='x' id='W5M0MpCehiHzreSzNTczkc9d'?>\n\
+                <x:xmpmeta xmlns:x='adobe:ns:meta/'>\n\
+                <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>\n\
+                <rdf:Description xmlns:pdf='http://ns.adobe.com/pdf/1.3/'>\n";
+    let tail = "</rdf:Description>\n</rdf:RDF>\n</x:xmpmeta>\n<?xpacket end='w'?>";
+    let line = "<pdf:Producer>probe</pdf:Producer>\n";
+    let block = line.repeat(64 * 1024 / line.len());
+    let mut encoder = ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+    let fail = |e: std::io::Error| format!("hugeXmp: {e}");
+    encoder.write_all(head.as_bytes()).map_err(fail)?;
+    for _ in 0..PACKET / block.len() {
+        encoder.write_all(block.as_bytes()).map_err(fail)?;
+    }
+    encoder.write_all(tail.as_bytes()).map_err(fail)?;
+    let packet = encoder.finish().map_err(fail)?;
+    let mut out = PdfOut::create(path)?;
+    out.object(1, "<< /Type /Catalog /Pages 2 0 R /Metadata 4 0 R >>")?;
+    out.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")?;
+    out.object(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>")?;
+    out.stream(
+        4,
+        "/Type /Metadata /Subtype /XML /Filter /FlateDecode",
+        packet.len() as u64,
+        std::io::Cursor::new(packet),
+    )?;
+    out.finish()
+}
+
+/// The converted file holds the identification the conversion adds: some
+/// stream of it, plain or Flate-coded, holds `<pdfaid:part>2</pdfaid:part>`,
+/// which the packet does not have until the conversion splices it in. The
+/// converted file is small (the packet is coded), so it is read whole here.
+fn check_pdfa_identification(pdf: &Path) -> Result<(), String> {
+    use std::io::Read;
+    let needle = b"<pdfaid:part>2</pdfaid:part>";
+    let bytes = std::fs::read(pdf).map_err(|e| format!("{}: {e}", pdf.display()))?;
+    let found_in = |data: &mut dyn Read| -> bool {
+        let mut window = vec![0u8; 1024 * 1024 + needle.len()];
+        let mut kept = 0;
+        loop {
+            let Ok(n) = data.read(&mut window[kept..]) else { return false };
+            if n == 0 {
+                return false;
+            }
+            let end = kept + n;
+            if window[..end].windows(needle.len()).any(|w| w == needle) {
+                return true;
+            }
+            let keep = (needle.len() - 1).min(end);
+            window.copy_within(end - keep..end, 0);
+            kept = keep;
+        }
+    };
+    if found_in(&mut &bytes[..]) {
+        return Ok(());
+    }
+    let mut from = 0;
+    while let Some(at) = bytes[from..].windows(7).position(|w| w == b"stream\n") {
+        let start = from + at + 7;
+        if found_in(&mut flate2::read::ZlibDecoder::new(&bytes[start..])) {
+            return Ok(());
+        }
+        from = start;
+    }
+    Err("the converted file has no PDF/A identification".into())
+}
+
 /// A one-page Letter PDF filled by one progressive JPEG of 4096 x 3072 RGB.
 /// A progressive JPEG cannot be decoded a band at a time, and the decoder
 /// holds its coefficients for the whole image; this is the ruled exception to
@@ -2632,13 +2748,15 @@ const JPEG_ROWS: u32 = 3620;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ImageKind {
     Png,
+    /// An Adam7 PNG.
+    PngInterlaced,
     Jpeg,
 }
 
 impl ImageKind {
     fn extension(self) -> &'static str {
         match self {
-            ImageKind::Png => "png",
+            ImageKind::Png | ImageKind::PngInterlaced => "png",
             ImageKind::Jpeg => "jpg",
         }
     }
@@ -2647,15 +2765,17 @@ impl ImageKind {
 /// An image file of noise, written as it is generated.
 fn generate_image(path: &Path, kind: ImageKind, rows: u32) -> Result<(), String> {
     match kind {
-        ImageKind::Png => generate_image_png(path, IMAGE_WIDTH, rows),
+        ImageKind::Png => generate_image_png(path, IMAGE_WIDTH, rows, false),
+        ImageKind::PngInterlaced => generate_image_png(path, IMAGE_WIDTH, rows, true),
         ImageKind::Jpeg => generate_image_jpeg(path, IMAGE_WIDTH, rows),
     }
 }
 
 /// An RGBA PNG of noise, its rows stored in deflate blocks without
 /// compression (noise does not shrink) and framed in 64 KiB `IDAT` chunks as
-/// they are made.
-fn generate_image_png(path: &Path, width: u32, height: u32) -> Result<(), String> {
+/// they are made. Interlaced, the rows are those of the seven Adam7 passes in
+/// turn.
+fn generate_image_png(path: &Path, width: u32, height: u32, interlaced: bool) -> Result<(), String> {
     use std::io::BufWriter;
 
     fn chunk(out: &mut impl Write, kind: &[u8; 4], data: &[u8]) -> std::io::Result<()> {
@@ -2703,17 +2823,29 @@ fn generate_image_png(path: &Path, width: u32, height: u32) -> Result<(), String
     let mut ihdr = Vec::new();
     ihdr.extend_from_slice(&width.to_be_bytes());
     ihdr.extend_from_slice(&height.to_be_bytes());
-    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+    ihdr.extend_from_slice(&[8, 6, 0, 0, u8::from(interlaced)]);
     chunk(&mut out, b"IHDR", &ihdr).map_err(fail)?;
     let mut zlib = flate2::write::ZlibEncoder::new(
         Idat { out, pending: Vec::with_capacity(64 * 1024 + 1) },
         flate2::Compression::none(),
     );
     let mut rng = Xorshift::new(0x1D47);
-    let mut row = vec![0u8; 1 + width as usize * 4];
-    for _ in 0..height {
-        rng.fill_bytes(&mut row[1..]);
-        zlib.write_all(&row).map_err(fail)?;
+    // The passes: x offset, y offset, x step, y step. A plain image is one
+    // pass over every pixel.
+    let passes: &[(u32, u32, u32, u32)] = if interlaced {
+        &[(0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)]
+    } else {
+        &[(0, 0, 1, 1)]
+    };
+    for &(x0, y0, dx, dy) in passes {
+        if x0 >= width || y0 >= height {
+            continue;
+        }
+        let mut row = vec![0u8; 1 + (width - x0).div_ceil(dx) as usize * 4];
+        for _ in 0..(height - y0).div_ceil(dy) {
+            rng.fill_bytes(&mut row[1..]);
+            zlib.write_all(&row).map_err(fail)?;
+        }
     }
     let mut idat = zlib.finish().map_err(fail)?;
     idat.emit().map_err(fail)?;
@@ -2801,7 +2933,7 @@ fn check_images_pdf(image: &Path, pdf: &Path, kind: ImageKind) -> Result<(), Str
                 return Err("the JPEG's stream does not end where the file does".into());
             }
         },
-        ImageKind::Png => {
+        ImageKind::Png | ImageKind::PngInterlaced => {
             if out_len < image_len / 2 {
                 return Err(format!("{out_len} bytes written for a {image_len} byte PNG"));
             }

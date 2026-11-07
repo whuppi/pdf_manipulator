@@ -27,6 +27,7 @@ import '../core/pdf_abort_battery.dart';
 import '../core/pdf_cancel_battery.dart';
 import '../core/pdf_combinator_cancel_battery.dart';
 import '../core/pdf_lifecycle_battery.dart';
+import '../core/pdf_source_failure_battery.dart';
 import '../core/pdf_instance_battery.dart';
 import '../core/pdf_lane_protocol_battery.dart';
 import '../core/pdf_runtime_safety_battery.dart';
@@ -78,6 +79,7 @@ void main() {
   registerCombinatorCancelTests(() => pdf);
   registerAbortTests(() => pdf);
   registerLifecycleTests(() => Pdf());
+  registerSourceFailureTests(() => pdf);
   registerInstanceTests(() => Pdf());
   registerRuntimeSafetyTests();
   registerExecutorTests(() => Pdf());

@@ -1033,6 +1033,23 @@ class WebLease implements Lease, LanePhase {
     }
   }
 
+  /// One read of the caller's [source] on the main thread. Whatever the
+  /// source throws is the source failing, so it fails the job as an I/O
+  /// error, as a read the worker asks for does in every other mode.
+  static Future<Uint8List> _readSource(
+    DataSource source,
+    int offset,
+    int count,
+  ) async {
+    try {
+      return await source.readAt(offset, count);
+    } on PdfError {
+      rethrow;
+    } catch (e) {
+      throw PdfIoFailed('the source failed a read at offset $offset: $e');
+    }
+  }
+
   /// The whole of [source] in a fresh buffer, or null when the job was
   /// cancelled meanwhile. A read that comes back short fails the job.
   Future<Uint8List?> _readWhole(DataSource source, _WebJob entry) async {
@@ -1044,7 +1061,7 @@ class WebLease implements Lease, LanePhase {
       // Raced against the cancel wake: a parked DataSource must never make a
       // cancelled job unkillable.
       final chunk = await Future.any([
-        Future<Uint8List?>.value(source.readAt(offset, count)),
+        _readSource(source, offset, count),
         entry.cancelWake.future.then<Uint8List?>((_) => null),
       ]);
       if (_abandoned || entry.cancelled) return null;
@@ -1088,7 +1105,7 @@ class WebLease implements Lease, LanePhase {
         // Race the caller's read against the cancel wake: a parked
         // DataSource must never make a cancelled job unkillable.
         final chunk = await Future.any([
-          Future<Uint8List>.value(source.readAt(offset, count)),
+          _readSource(source, offset, count),
           entry.cancelWake.future.then((_) => Uint8List(0)),
         ]);
         if (_abandoned || entry.cancelled) return names;

@@ -30,6 +30,7 @@ import '../core/pdf_abort_battery.dart';
 import '../core/pdf_cancel_battery.dart';
 import '../core/pdf_combinator_cancel_battery.dart';
 import '../core/pdf_lifecycle_battery.dart';
+import '../core/pdf_source_failure_battery.dart';
 import '../core/pdf_instance_battery.dart';
 import '../core/pdf_lane_protocol_battery.dart';
 import '../core/pdf_runtime_safety_battery.dart';
@@ -108,6 +109,13 @@ void main() {
     registerCombinatorCancelTests(() => pdf);
   });
   registerAbortTests(() => pdf);
+  group('sources read through the mode', () {
+    // A failing read reaches the engine only when the source is not copied
+    // into the worker first.
+    setUp(() => WebExecutorBooter.transferBudget = 0);
+    tearDown(() => WebExecutorBooter.transferBudget = kTransferBytes);
+    registerSourceFailureTests(() => pdf);
+  });
   registerLifecycleTests(
     () => Pdf(
       config: PdfConfig(

@@ -215,6 +215,8 @@ CONTENT RULES (never change)
 - Changed `verifySignatures` to check each signature's digest and signer key, where it returned `false` for every document; `PdfSignatureInfo` has `isValid`, `coversWholeDocument` and `signingTime` filled
 - Fixed an empty input to `merge` or any other multi-source op shifting every source after it, so the op read the wrong documents — an empty input now throws `PdfCorrupted`
 - Fixed a full-rewrite save of a file with no `/Size` writing new objects over existing ones, and dropping an object it could not read without a word — it now throws `PdfCorrupted`
+- Fixed a source that fails to read while a document opens throwing `PdfCorrupted` — it now throws `PdfIoFailed`, so a broken source is told from a broken file
+- Fixed a source whose read fails once being absorbed, so an open or an op went on and succeeded without the bytes — the op now ends with `PdfIoFailed`
 - Fixed a full-rewrite save of a file holding objects above generation 0 writing references other readers resolve to nothing — each reference now names the generation its object is written at
 - Fixed `render` and `extractImages` returning an empty stream when the engine failed, a page past the end included — they throw the engine's error
 - Fixed a full-rewrite save writing an object over 100 MB truncated — it throws instead
@@ -287,7 +289,7 @@ CONTENT RULES (never change)
 - Fixed an operation whose last write failed or was cancelled still reporting success with its output cut short — the engine now flushes the final bytes before it answers, and a refusal fails or cancels the operation
 - Fixed a web source read past 4 GiB returning the bytes at the offset modulo 4 GiB, with no error — the read offset crosses to the engine as a JS number, not a 32-bit integer
 - Fixed a cancel not reaching a redaction, a text extraction of a form or a change of an image's bounds until the page or form it was reading ended, so a page of millions of operators could not be stopped — each now stops within one operator
-- Fixed a compressing full-rewrite save of a document with a very large rewritten stream holding the whole stream and its compressed copy in memory — the stream is counted, then recompressed in pieces (an encrypted save writes such a stream as it is)
+- Fixed a compressing full-rewrite save of a document with a very large rewritten stream holding the whole stream and its compressed copy in memory — the stream is counted, then recompressed in pieces
 - Fixed listing the images of a page with a very large content stream holding the whole decoded content and every parsed operator in memory — the content is read one operator at a time
 - Fixed `builder.save`, `editor.save` and `extractAttachment` succeeding in web OPFS mode when the sink threw, and a slow sink piling chunks up in memory — the worker now spools output to disk and the sink is awaited chunk by chunk, so its error fails the op
 - Fixed a native lane killed while it waited for a thread slot answering its jobs only when another executor exited — they now complete cancelled at once
@@ -298,6 +300,13 @@ CONTENT RULES (never change)
 - Fixed `extractAttachment` holding the whole decoded attachment in memory before writing it — it now runs the stream's filters as a reader and writes the sink 64 KiB at a time, so a 64 MiB attachment extracts in under 16 MB of engine memory
 - Fixed `addAttachment` reading the whole file into memory — the file stays in its source until the save copies it into the document in 64 KiB pieces, so a 64 MiB file embeds in under 16 MB of engine memory
 - Fixed `addImageStamp` reading the whole image into memory — a JPEG is copied from its source in 64 KiB pieces and a PNG is deflated a row at a time at the save, so a 64 MiB image stamps in under 16 MB of engine memory
+- Fixed `convertToPdfA` holding a large XMP packet three times over while it adds the PDF/A identification — the packet is read as XML events and the patched packet is held once
+- Fixed an interlaced PNG given to `imagesToPdf` or an image page being read whole into memory — it is decoded pass by pass from its source, in memory that does not grow with its height
+- Fixed an Indexed image or colour reading its whole lookup stream when the file declares fewer entries — it reads the `(hival + 1) * N` bytes the file declares
+- Fixed text in a font with a `CIDToGIDMap` stream reading the whole stream, which is at most 65,536 entries — it reads 128 KiB
+- Fixed an image of raw samples holding the bytes its stream carries past its declared rows — it reads the rows it declares
+- Fixed `render` and `reduceImages` of a gray or RGB JPEG painted smaller than itself holding a copy of the whole file beside the decode — the decoder reads the stream
+- Fixed `compress` and every full save of an encrypted document copying each stream over 256 KiB as it was, so the file stayed as large as the source — such a stream is now recompressed in pieces and encrypted as it is written
 
 ## 5.0.1-dev.0
 
