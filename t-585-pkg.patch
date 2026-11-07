@@ -1,0 +1,486 @@
+diff --git a/docs/CAPABILITY_ROADMAP.md b/docs/CAPABILITY_ROADMAP.md
+index 3e19718..1041fa1 100644
+--- a/docs/CAPABILITY_ROADMAP.md
++++ b/docs/CAPABILITY_ROADMAP.md
+@@ -10,208 +10,234 @@ must too. The test guards (TestSource 64KB, TestSink 256KB) enforce the
+ Rust-internal processing is itself a tracked gap (see **Test
+ infrastructure gaps**).
+ 
+-Five files, strict rules:
++Every read and every edit is declared once, and the handles and the
++one-call doors share that declaration:
+ 
+-| File | Role | Rule |
++| File | Declares | Rule |
+ |---|---|---|
+-| `pdf_doc.dart` | Read-only queries | No mutations |
+-| `pdf_editor.dart` | Mutations only | No read/export ops even if Rust has them on editor |
+-| `pdf_builder.dart` | Create from scratch | No reading existing PDFs |
+-| `pdf_standalone.dart` | Source in, sink out, no handle | Non-mutating one-shot ops |
+-| `pdf_sugar.dart` | Convenience wrappers | Over editor/builder only, never standalone (rare exception allowed) |
+-
+-**Where reads live.** `PdfDoc` answers questions about a document as it
+-is. `PdfEditor` answers questions about the session's staged state — the
+-same names, when both exist. Exports (source in, sink out) live on
+-`PdfDoc` or `PdfStandalone`.
++| `pdf.dart` | `Pdf` | Lifecycle and every door: handle, scope, one-shot, several documents |
++| `pdf_doc.dart` | `PdfDocument`, `PdfDocumentHandle` | The facts read at open, plus the reads of `PdfReads`. No mutations |
++| `pdf_reads.dart` | `PdfReads` | Every read, declared once. `PdfDocument` and the object `Pdf.readOnce` returns extend it |
++| `pdf_editor.dart` | `PdfEditor`, `PdfEditorHandle`, `PdfFormFieldEditor` | Only what a one-call edit object cannot offer: reads of the staged state, the queued redactions, the form fields. Only the handle saves and disposes |
++| `pdf_edits.dart` | `PdfEdits` | Every edit, declared once. `PdfEditor` and the object `Pdf.editOnce` returns extend it |
++| `pdf_builder.dart` | `PdfBuilder`, `PdfBuilderHandle`, `PdfPageBuilder` | Create from scratch. No reading of existing PDFs |
++| `pdf_jobs.dart` | `merge`, `split` and `compress` bodies | The doors that open several handles |
++
++**Where reads live.** `PdfDocument` answers questions about a document as it
++is. `PdfEditor` answers questions about the session's staged state:
++`pageCount`, `version`, `isModified`, `metadata`, `pageInfo` and
++`pageImages`. Exports (a read that writes to a sink) are reads: `extractText`,
++`render`, `extractImages`, `exportFormData` and `extractAttachment`.
++
++**Where edits live.** An edit is a member of `PdfEdits`, so it exists on
++`PdfEditor` (many edits, one save) and on `Pdf.editOnce` (one edit, saved)
++the moment it compiles. `Pdf.rewrite` hands its body a `PdfEditor`.
++
++**The doors on `Pdf`.** Every call that opens a PDF takes a `PdfInput`.
++
++| Kind | Calls | Who closes the document |
++|---|---|---|
++| A handle you own | `open`, `edit`, `build` | You, with `dispose()` |
++| A scope | `read`, `rewrite`, `buildTo` | The library, when your function returns |
++| A one-shot: one call on one document | `readOnce`, `editOnce`, `info`, `resave` | The library, after the call |
++| Several documents, or a policy | `merge`, `split`, `compress`, `imagesToPdf`, `sign`, `convertToOffice`, `convertFromOffice`, `convertXfaToAcroForm` | The library, after the call |
+ 
+ ---
+ 
+-## PdfDoc — read-only queries
++## PdfDocument — reads
++
++Each row is a member of `PdfDocument` and of the object `Pdf.readOnce`
++returns, unless the Dart column says it is a field read at open.
+ 
+ | Capability | Rust | Dart | Status |
+ |---|---|---|---|
+-| Page count | `current_page_count` | `pageCount` | DONE |
+-| Version | `version` | `version` | DONE |
+-| Page list (dimensions, rotation, label) | `get_page_media_box`, `get_page_rotation`, `PageLabelExtractor` | `pages` (decoded on open) | DONE — `label` is `null` when the document has no `/PageLabels` |
+-| Title / Author / Subject / Keywords | `title`, `author`, `subject`, `keywords` | decoded on open | DONE |
+-| Encryption info | via open result | `isEncrypted`, `encryptionAlgorithm`, `permissions` | DONE |
+-| Is tagged | via open result | `isTagged` | DONE |
+-| Extract text | `extract_page_text` | `extract()` | DONE |
+-| Search text | `search_text` | `search()` | DONE |
+-| Render pages | `render_pages_streamed` | `render()` | DONE |
+-| Extract images | `extract_images_streamed` | `extractImages()` | DONE |
++| Page count | `open_document` | `pageCount` | DONE — read at open |
++| Version | `open_document` | `version` | DONE — read at open |
++| Metadata (title, author, subject, keywords, creator, producer, dates) | `open_document` | `metadata` | DONE — a `PdfMetadata`; `creationDate` is a UTC `DateTime?` |
++| Encryption info | `open_document` | `encryption` | DONE — a `PdfEncryptionInfo` (`algorithm`, `permissions`, `requiresPassword`); `null` when the document is not encrypted |
++| Is tagged | `open_document` | `isTagged` | DONE |
++| Page list (size, crop box, rotation, label) | `page_info` | `pageInfo` | DONE — `label` is `null` when the document has no `/PageLabels`; `cropBox` is `null` when the page has none |
++| Extract text to a sink | `extract_text_framed` | `extractText` | DONE — page by page, the library never holds the document's text whole |
++| Extract text as a string | `extract_text_framed` | `text` | DONE — `extractText` into a `MemorySink` |
++| Search text | `search_text` | `search` | DONE |
++| Render pages | `render_pages_streamed` | `render` | DONE |
++| Render one page to bytes | `render_pages_streamed` | `bitmap` | DONE — `render` of one page into a `MemorySink` |
++| Extract images | `extract_images_streamed` | `extractImages` | DONE |
+ | Get signatures | `get_signatures` | `signatures` | DONE |
+-| Verify signatures | `verify_signatures` | `verifySignatures()` | DONE — digest over the ByteRange and signer key; no trust chain or revocation |
+-| Validate PDF/A | `validate_pdfa` | `validatePdfA()` | DONE |
+-| Validate PDF/UA | `validate_pdfua` | `validatePdfUa()` | DONE |
+-| Classify page | `classify_page` | `classifyPage()` | DONE |
+-| Classify document | `classify_document` | `classifyDocument()` | DONE |
+-| Plan split by bookmarks | `plan_split_by_bookmarks` | `planSplitByBookmarks()` | DONE |
+-| Get page crop box | `get_page_crop_box` | — | DONE — moved to `PdfEditor.pageCropBox` (staged-state read, see the header rule above) |
+-| Has XFA forms | `has_xfa` | `xfa != null` | DONE — `xfa` is `null` on `minimalPdf` and non-null on `xfaFormPdf`; not a separate member (one concept, one name) |
+-| Analyze XFA | `analyze_xfa_document` | `xfa` | DONE — on `xfaFormPdf` `fieldCount` is 2, `pageCount` 1 and `fieldTypes` `['Checkbox', 'Text']`, the analyzer's own names |
+-| List attachments | host name-tree walk (`host/attachments.rs`) | `attachments` | DONE — on `attachmentPdf` one entry with name, description, mime `text/plain` and declared size 11; empty on `minimalPdf` |
+-| Extract one attachment | host name-tree walk (`host/attachments.rs`) | `extractAttachment(name, sink)` | DONE — the bytes written equal `hello notes`; an unknown name throws `PdfEngineError` |
+-| Get form fields (list all) | `FormExtractor::extract_fields` | `formFields` | DONE — on `fFormFields` the field names and the text field's default value match the fixture truths; on `fFormFieldsProps` `maxLength`/`tooltip` match |
+-| Get form field value | `FormExtractor::extract_fields` | `formField(name)?.value` | DONE — same fixtures; `formFieldValue(name)` is `formField(name)?.value`, no separate wire op |
+-| Has form field | `FormExtractor::extract_fields` | `formField(name) != null` | DONE — `formField('nope')` is `null` on `fFormFieldsProps`; not a separate member (one concept, one name) |
+-| Get page images (list metadata) | `get_page_images` | `pageImages()` | DONE — name, placement bounds and the full transform per image XObject on a page |
+-| Producer / Creator metadata | `producer`, `creator` | `producer`, `creator` (decoded on open) | DONE |
+-| Creation date | `creation_date` | `creationDate` (decoded on open) | DONE |
++| Verify signatures | `verify_signatures` | `verifySignatures` | DONE — digest over the ByteRange and signer key; no trust chain or revocation |
++| Validate PDF/A | `validate_pdf_a` | `validatePdfA` | DONE |
++| Validate PDF/UA | `validate_pdf_ua` | `validatePdfUa` | DONE |
++| Classify pages | `classify_page` | `classifyPages` | DONE |
++| Classify document | `classify_document` | `classifyDocument` | DONE |
++| Page range of each bookmark | `plan_split_by_bookmarks` | `bookmarkRanges` | DONE |
++| Analyze XFA | `doc_xfa` | `xfa` | DONE — `null` on `minimalPdf`; on `xfaFormPdf` `fieldCount` is 2, `pageCount` 1 and `fieldTypes` `['Checkbox', 'Text']`, the analyzer's own names |
++| List attachments | `doc_attachments` | `attachments` | DONE — on `attachmentPdf` one entry with name, description, mime `text/plain` and declared size 11; empty on `minimalPdf` |
++| Extract one attachment | `doc_extract_attachment` | `extractAttachment` | DONE — the bytes written equal `hello notes`; an unknown name throws `PdfNotFound` and writes nothing |
++| List annotations of a page | `doc_annotations` | `annotations` | DONE — the batteries assert "gone after flatten" and the subtype of each link, stamp and free text |
++| Get form fields | `doc_form_fields` | `formFields` | DONE — on `fFormFields` the field names and the text field's default value match the fixture truths; on `fFormFieldsProps` `maxLength`/`tooltip` match. A field by name is a search of this list |
++| Export form data | `doc_export_form_data` | `exportFormData` | DONE — `FdfWriter::from_fields` for `PdfFormDataFormat.fdf` and `XfdfWriter::from_fields` for `xfdf`; `fullname` filled with `'Ada'`, saved, reopened and exported, then `/T (fullname) /V (Ada)` is parsed from the decoded FDF text and the `<field name="fullname"><value>Ada</value></field>` pair out of the XML, not substring-matched |
+ 
+ ---
+ 
+-## PdfEditor — mutations only
++## PdfEdits — edits
++
++Each row is a member of `PdfEdits`: on `PdfEditor` and on the object
++`Pdf.editOnce` returns. A call that takes pages checks all of them before it
++changes one.
+ 
+ | Capability | Rust | Dart | Status |
+ |---|---|---|---|
+-| Set title | `set_title` | `setTitle()` | DONE |
+-| Set author | `set_author` | `setAuthor()` | DONE |
+-| Set subject | `set_subject` | `setSubject()` | DONE |
+-| Set keywords | `set_keywords` | `setKeywords()` | DONE |
+-| Get title | `title` | `title` | DONE |
+-| Get author | `author` | `author` | DONE |
+-| Get subject | `subject` | `subject` | DONE |
+-| Get keywords | `keywords` | `keywords` | DONE |
+-| Get producer | `producer` | `producer` | DONE |
+-| Get creation date | `creation_date` | `creationDate` | DONE |
+-| Scrub metadata | via bridge | `scrubMetadata()` | DONE |
+-| Rotate page | `rotate_page_by` | `rotatePage()` | DONE |
+-| Rotate all pages | `rotate_all_pages` | `rotatePages(const PdfPages.all(), by: PdfRotation.r180)` | DONE |
+-| Delete page | via bridge | `deletePage()` | DONE |
+-| Move page | via bridge | `movePage()` | DONE |
+-| Select pages | `select_pages` | `selectPages()` | DONE |
+-| Merge from another PDF | `merge_from_reader` | `mergeFrom()` | DONE — the merged document's `/AcroForm /Fields` come with its pages, so `formFields` lists `fullname` and `agree` after merging a form into `minimalPdf` |
+-| Reduce images by policy | via bridge (`host/images/`) | `reduceImages(PdfImagePolicy)` | DONE — presets `screen`/`ebook`/`print`/`lossless`; typed `PdfImageReport`, one row per image XObject |
++| Set metadata | `edit_set_metadata` | `setMetadata` | DONE — replaces the standard info fields: a field left `null` is removed, so `setMetadata(await editor.metadata())` changes nothing |
++| Rotate pages | `edit_rotate_pages` | `rotatePages` | DONE — relative to the current rotation |
++| Set rotation | `edit_set_rotation` | `setRotation` | DONE — absolute (unlike `rotatePages`): setting 90 twice leaves the page at 90, not 180 |
++| Set media box | `edit_set_media_box` | `setMediaBox` | DONE — round-tripped through save and `pageInfo` |
++| Set crop box | `edit_set_crop_box` | `setCropBox` | DONE — round-tripped through save and `pageInfo`; `null` removes the crop box |
++| Remove pages | `edit_delete_pages` | `removePages` | DONE — removing every page throws `PdfEngineFailed` |
++| Keep pages | `edit_select_pages` | `keepPages` | DONE — keeps the pages in document order; an out-of-range page throws `PdfPageOutOfRange` |
++| Reorder pages | `edit_select_pages` | `reorderPages` | DONE — a `PdfPageOrder` keeps the order given; the pages it leaves out are removed |
++| Move page | `edit_move_page` | `movePage` | DONE |
++| Add watermark | `edit_watermark` | `addWatermark` | DONE |
++| Add stamp | `edit_add_stamp` | `addStamp` | DONE — a `PdfStamp` in `bounds` at an `opacity` |
++| Add image stamp | `edit_add_image_stamp` | `addImageStamp` | DONE — the pages share one copy of the image |
++| Flatten forms | `edit_flatten_forms` | `flattenForms` | DONE — no `pages` flattens every page; flattening page 0 of a two-page form bakes page 0's field text into content while page 1's field stays an unflattened annotation |
++| Flatten annotations | `edit_flatten_annotations` | `flattenAnnotations` | DONE — same page-scoping proof as `flattenForms`, on stamped pages |
++| Convert to PDF/A | `edit_convert_to_pdf_a` | `convertToPdfA` | DONE — takes a `PdfALevel`, `a2` by default |
++| Redact now | `edit_redact` | `redact` | DONE — removes the content under the regions for good, draws a `PdfRedactionOverlay` (a black box by default; `.none()` draws none) and returns a `PdfRedactionReport`; marks queued earlier stay queued. It is also the erase of a region: `redact(page, regions, overlay: const PdfRedactionOverlay.none())` |
++| Reduce images by policy | `edit_reduce_images` | `reduceImages` | DONE — presets `screen`/`ebook`/`print`/`lossless`; typed `PdfImageReport`, one row per image XObject |
+ | Reduce images inside annotation appearances, patterns and inline images | — | — | PLANNED — `reduceImages` visits page content and Form XObjects only; appearance streams, pattern content and `BI … EI` images are left as stored |
+-| Unembed standard fonts | via bridge | `unembedStandardFonts()` | DONE |
+-| Add watermark | via bridge | `addWatermark()` | DONE |
+-| Add stamp | via bridge | `addStamp()` | DONE |
+-| Add image stamp | via bridge | `addImageStamp()` | DONE |
+-| Embed file | `embed_file_with_options` | `embedFile()` | DONE — `attachments` lists the embedded file after save and `extractAttachment` returns its bytes |
+-| Erase regions | `erase_regions` | `eraseRegions()` | DONE |
+-| Flatten forms | `flatten_forms` | `flattenForms({page})` | DONE — no `page` flattens every page, matching the old no-arg behaviour |
+-| Flatten all annotations | `flatten_all_annotations` | `flattenAnnotations({page})` | DONE — renamed from `flattenAllAnnotations()`; "All" is now the no-`page` default, not the only mode |
+-| Set form field value | `set_form_field_value` | `setFormFieldValue()` | DONE |
+-| Crop margins | `crop_margins` | `cropMargins()` | DONE |
+-| Resize image | `resize_image` | `resizeImage()` | DONE — `pageImages()` supplies the XObject name; the editor battery resizes a listed image and reads the new bounds back from the saved bytes |
+-| Convert to PDF/A | via bridge | `convertToPdfA()` | DONE |
+-| Add redaction | `add_redaction` | `addRedaction()` | DONE |
+-| Redaction count | `redaction_count` | `redactionCount()` | DONE |
+-| Apply redactions | `apply_redactions_destructive` | `applyRedactions()` | DONE — destroys the content now and returns a `PdfRedactionReport` (`glyphsRemoved > 0` and the redacted text gone after save) |
+-| Get page media box | `get_page_media_box` | `pageMediaBox()` | DONE |
+-| Get page crop box | `get_page_crop_box` | `pageCropBox()` | DONE — `null` when the page has no `/CropBox`; the handwritten `croppedPagePdf` truth (x 72, y 72, w 468, h 648) proves it is not the inherited MediaBox |
+-| Is modified | `is_modified` | `isModified` | DONE |
+-| Page count | `current_page_count` | `pageCount` | DONE |
+-| Version | `version` | `version` | DONE |
+-| Save | `write_full_to_writer` | `save()` | DONE |
+-| Incremental save (append to the original bytes) | `host/incremental.rs` | `save(options: PdfSaveOptions.incremental())` | DONE — the output starts with the source bytes, byte for byte, then one update section in the source's xref style (table or stream); a signed source keeps every byte its signature covers. Throws `PdfIncrementalRefused`, writing nothing, after a page removal, reorder or merge, redaction or scrub, a content, annotation or flatten edit, an added or removed form field, an embedded file, and on an encrypted, repaired or DocMDP-certified source the change is not allowed on |
+-| Set producer | `set_producer` | `setProducer()` | DONE |
+-| Set creation date | `set_creation_date` | `setCreationDate()` | DONE |
+-| Set page media box | `set_page_media_box` | `setPageMediaBox()` | DONE — round-tripped through save and `pageMediaBox()` |
+-| Set page crop box | `set_page_crop_box` | `setPageCropBox()` | DONE — round-tripped through save and `pageCropBox()` |
+-| Set page rotation | `set_page_rotation` | `setPageRotation()` | DONE — absolute (unlike `rotatePage`, which is relative): setting 90 twice leaves the page at 90, not 180 |
+-| Flatten forms on single page | `flatten_forms_on_page` | `flattenForms(page:)` | DONE — flattening page 0 of a two-page form bakes page 0's field text into content while page 1's field stays an unflattened annotation |
+-| Flatten annotations on single page | `flatten_page_annotations` | `flattenAnnotations(page:)` | DONE — same page-scoping proof as `flattenForms(page:)`, on stamped pages; `flattenAllAnnotations()` is gone, the mode is a parameter now |
+-| Clear erase regions | `clear_erase_regions` | `clearEraseRegions()` | DONE — wired to the engine's queued (non-destructive) erase map; `eraseRegions()` itself is destructive by contract (see `host/dispatch.rs::edit_erase_regions`), so this only ever clears cosmetic overlays queued by the engine's non-public `erase_regions` path, not anything the public `eraseRegions()` did |
+-| Merge selective pages from | `merge_pages_from_reader` | `mergeFrom(pages:)` | DONE — merging page `[1]` of `fThreePageMarkers` into `minimalPdf` gives 2 pages whose page 1 extracts `MARKER-TWO` and neither other marker; an out-of-range index throws `PdfEngineError` |
+-| Sanitize document | `sanitize_document` | `sanitize()` | DONE — `PdfSanitizeOptions`; `scrubMetadata()` is `sanitize(const PdfSanitizeOptions(javascript: false))` |
+-| Reposition image | `reposition_image` | `repositionImage()` | DONE — verified through `pageImages()` after save |
+-| Set image bounds | `set_image_bounds` | `setImageBounds()` | DONE — takes the same `PdfRect` `pageImages()` reports; verified after save |
+-| Remove form field | `remove_form_field` | `removeFormField()` | DONE — removed from `/AcroForm /Fields` and every page's `/Annots` on save; `formField(name)` is `null` on reopen, the other fields stay listed |
+-| Set form field readonly | `set_form_field_readonly` | `setFormFieldReadOnly()` | DONE — `formField(name).readOnly` reads back `true` after save + reopen |
+-| Set form field required | `set_form_field_required` | `setFormFieldRequired()` | DONE — `formField(name).required` reads back `true` after save + reopen |
+-| Set form field tooltip | `set_form_field_tooltip` | `setFormFieldTooltip()` | DONE — `formField(name).tooltip` reads back the new `/TU` after save + reopen |
+-| Set form field rect | `set_form_field_rect` | `setFormFieldBounds()` | DONE — `formField(name).bounds` reads back the new `/Rect` after save + reopen |
+-| Set form field max length | `set_form_field_max_length` | `setFormFieldMaxLength()` | DONE — `formField(name).maxLength` reads back the new `/MaxLen`, not the fixture default, after save + reopen |
+-| Set form field alignment | `set_form_field_alignment` | `setFormFieldAlignment()` | DONE — `formField(name).alignment` reads back `PdfAlignment.center` after save + reopen |
+-| Set form field background color | `set_form_field_background_color` | `setFormFieldBackgroundColor()` | DONE — proven with border color/width and appearance: the field still flattens, `extract()` shows the filled value, and the rendered page differs from the unstyled render |
+-| Set form field border color | `set_form_field_border_color` | `setFormFieldBorderColor()` | DONE — same proof as background color |
+-| Set form field border width | `set_form_field_border_width` | `setFormFieldBorderWidth()` | DONE — same proof as background color |
+-| Set form field default appearance | `set_form_field_default_appearance` | `setFormFieldAppearance()` | DONE — dispatch builds the `/{font} {size} Tf {r} {g} {b} rg` DA string; same proof as background color |
+-| Set form field flags | `set_form_field_flags` | `setFormFieldFlags()` | DONE — `{readOnly, required}` reads back both flags via `formField(name)`; `{multiline}` leaves the field listed and still flattenable (the type carries only readOnly/required as named properties) |
+-| Convert XFA to AcroForm | `convert_xfa_document` | `PdfStandalone.convertXfaToAcroForm()` | DONE — converting `xfaFormPdf` yields a document that opens with a page and whose `formFields` lists `given` and `agree`; a document without XFA throws `PdfEngineError` |
+-| Embed file with options | `embed_file_with_options` | `embedFile(description:, mimeType:, relationship:)` | DONE — after save, `attachments` reads back the description, the mime type and the declared size |
+-| Export form data FDF | `FdfWriter::from_fields` | `exportFormData(format: .fdf)` | DONE — `fullname` filled with `'Ada'`, saved, reopened, exported, and `/T (fullname) /V (Ada)` parsed from the decoded FDF text (not a byte-grep) |
+-| Export form data XFDF | `XfdfWriter::from_fields` | `exportFormData(format: .xfdf)` | DONE — same fixture; the `<field name="fullname"><value>Ada</value></field>` pair is parsed out of the XML, not substring-matched |
++| Unembed standard fonts | `edit_unembed_standard_fonts` | `unembedStandardFonts` | DONE |
++| Add attachment | `edit_embed_file` | `addAttachment` | DONE — after save, `attachments` reads back the name, the description, the mime type and the declared size, and `extractAttachment` returns its bytes |
++| Crop margins | `edit_crop_margins` | `cropMargins` | DONE |
++| Set image bounds | `edit_set_image_bounds` | `setImageBounds` | DONE — `pageImages` supplies the XObject name and the same `PdfRect`; an unknown name throws `PdfNotFound`; verified through `pageImages` after save |
++| Sanitize document | `edit_sanitize` | `sanitize` | DONE — `stripMetadata`, `stripJavaScript` and `stripAttachments`; the scrub of the metadata alone is `sanitize(stripJavaScript: false)` |
+ 
+ ---
+ 
+-## PdfBuilder — create from scratch
++## PdfEditor — what only an editor adds
++
++The editor reads the staged state, appends pages from another document,
++queues redactions and edits form fields. The handle saves and disposes.
+ 
+ | Capability | Rust | Dart | Status |
+ |---|---|---|---|
+-| Create builder | via bridge | `Pdf.build()` | DONE |
+-| Add page | via bridge | `addPage(PdfPageSize)` | DONE — A4, Letter, Legal, A3, A5 or a custom size |
+-| Add image page | via bridge | `addImagePage()` | DONE — the page takes the image's own size, one point per pixel, unless a size is named |
+-| Set metadata | via bridge | `setMetadata()` | DONE — title, author, subject, keywords, creator, producer and the two dates |
+-| Text | via bridge | `page.text()` | DONE |
+-| Heading | via bridge | `page.heading()` | DONE |
+-| Paragraph | via bridge | `page.paragraph()` | DONE |
+-| Image | via bridge | `page.image()` | DONE |
+-| Watermark | via bridge | `page.watermark()` | DONE |
+-| Font | via bridge | `page.font()` | DONE |
+-| Space | via bridge | `page.space()` | DONE |
+-| Horizontal rule | via bridge | `page.horizontalRule()` | DONE |
+-| Newline | via bridge | `page.newline()` | DONE |
+-| New page same size | via bridge | `page.newPageSameSize()` | DONE |
+-| Text field | via bridge | `page.textField()` | DONE |
+-| Checkbox | via bridge | `page.checkbox()` | DONE |
+-| Combo box | via bridge | `page.comboBox()` | DONE |
+-| Push button | via bridge | `page.pushButton()` | DONE |
+-| Signature field | via bridge | `page.signatureField()` | DONE |
+-| Radio group | via bridge | `page.radioGroup()` | DONE |
+-| Field keystroke | via bridge | `page.fieldKeystroke()` | DONE |
+-| Field format | via bridge | `page.fieldFormat()` | DONE |
+-| Field validate | via bridge | `page.fieldValidate()` | DONE |
+-| Field calculate | via bridge | `page.fieldCalculate()` | DONE |
+-| Link URL | via bridge | `page.linkUrl()` | DONE |
+-| Link page | via bridge | `page.linkPage()` | DONE |
+-| Footnote | via bridge | `page.footnote()` | DONE |
+-| Columns | via bridge | `page.columns()` | DONE |
+-| Page done | via bridge | `page.done()` | DONE |
+-| Save | via bridge | `save()` | DONE |
++| Page count | `edit_get_metadata` | `pageCount` | DONE |
++| Version | `edit_get_metadata` | `version` | DONE |
++| Is modified | `edit_is_modified` | `isModified` | DONE |
++| Metadata | `edit_get_metadata` | `metadata` | DONE |
++| Page facts (size, crop box, rotation, label) | `edit_page_info` | `pageInfo` | DONE — the handwritten `croppedPagePdf` truth (x 72, y 72, w 468, h 648) proves `cropBox` is the page's own and not the inherited MediaBox; `null` when the page has no `/CropBox` |
++| List images on a page | `edit_page_images` | `pageImages` | DONE — name, placement bounds and the full transform per image XObject on a page |
++| Append pages of another PDF | `merge_document` | `appendPages` | DONE — the appended document's `/AcroForm /Fields` come with its pages, so `formFields` lists `fullname` and `agree` after appending a form to `minimalPdf`; appending page `[1]` of `fThreePageMarkers` to `minimalPdf` gives 2 pages whose page 1 extracts `MARKER-TWO` and neither other marker; an out-of-range index throws `PdfEngineFailed` |
++| Mark a redaction | `edit_add_redaction` | `markRedaction` | DONE — queues one mark per region |
++| Count queued marks of a page | `edit_redaction_count` | `redactionCount` | DONE |
++| Apply queued redactions | `edit_apply_redactions` | `applyRedactions` | DONE — destroys the content now and returns a `PdfRedactionReport` (`glyphsRemoved > 0` and the redacted text gone after save) |
++| Clear queued redactions | `edit_clear_redactions` | `clearRedactions` | DONE — drops every queued mark and leaves what `redact` removed |
++| Save | `edit_save_with_options` | `PdfEditorHandle.save` | DONE — `PdfSave.full()` by default, streamed to a `DataSink` |
++| Save and encrypt or decrypt | `edit_save_with_options` | `PdfSave.full(encryption:)` | DONE — `PdfEncryption.password` encrypts, `PdfEncryption.remove()` strips, `PdfEncryption.keep()` is the default |
++| Incremental save (append to the original bytes) | `host/incremental.rs` | `PdfSave.incremental()` | DONE — the output starts with the source bytes, byte for byte, then one update section in the source's xref style (table or stream); a signed source keeps every byte its signature covers. Throws `PdfIncrementalRefused`, writing nothing, after a page removal, reorder or append, redaction or sanitize, a content, annotation or flatten edit, an added or removed form field, an attachment, and on an encrypted, repaired or DocMDP-certified source the change is not allowed on |
++| Incremental save with a fallback | `host/incremental.rs`, `edit_save_with_options` | `PdfSave.incrementalOrRewrite()` | DONE — appends when it can and writes the file again when it cannot; the rewrite breaks a signature, as any full save does |
++| Dispose | — | `PdfEditorHandle.dispose` | DONE |
++
++### PdfFormFieldEditor — `editor.field(name)`
++
++| Capability | Rust | Dart | Status |
++|---|---|---|---|
++| Set a text value | `edit_set_form_field_value` | `setValue(PdfFormFieldValue.text(...))` | DONE |
++| Set a checkbox | `edit_set_checkbox_field_value` | `setValue(PdfFormFieldValue.checked(...))` | DONE |
++| Set a choice | `edit_set_form_field_choice` | `setValue(PdfFormFieldValue.choice(...))` | DONE — a choice that is not an option of the field throws `PdfEngineFailed` and changes nothing |
++| Set several choices | `edit_set_form_field_choices` | `setValue(PdfFormFieldValue.choices(...))` | DONE — a multi-select list box |
++| Clear the value | `edit_clear_form_field_value` | `setValue(PdfFormFieldValue.none())` | DONE |
++| Remove the field | `edit_remove_form_field` | `remove` | DONE — removed from `/AcroForm /Fields` and every page's `/Annots` on save; `formFields` no longer lists it on reopen, the other fields stay listed |
++| Set read-only | `edit_set_form_field_readonly` | `setReadOnly` | DONE — `isReadOnly` reads back `true` after save + reopen |
++| Set required | `edit_set_form_field_required` | `setRequired` | DONE — `isRequired` reads back `true` after save + reopen |
++| Set tooltip | `edit_set_form_field_tooltip` | `setTooltip` | DONE — `tooltip` reads back the new `/TU` after save + reopen; `null` removes it |
++| Set bounds | `edit_set_form_field_bounds` | `setBounds` | DONE — `bounds` reads back the new `/Rect` after save + reopen |
++| Set max length | `edit_set_form_field_max_length` | `setMaxLength` | DONE — `maxLength` reads back the new `/MaxLen`, not the fixture default, after save + reopen; `null` removes it |
++| Set alignment | `edit_set_form_field_alignment` | `setAlignment` | DONE — `alignment` reads back `PdfAlignment.center` after save + reopen |
++| Set background color | `edit_set_form_field_background_color` | `setBackgroundColor` | DONE — proven with border color/width and appearance: the field still flattens, `text` shows the filled value, and the rendered page differs from the unstyled render |
++| Set border color | `edit_set_form_field_border_color` | `setBorderColor` | DONE — same proof as background color |
++| Set border width | `edit_set_form_field_border_width` | `setBorderWidth` | DONE — same proof as background color |
++| Set default appearance | `edit_set_form_field_appearance` | `setAppearance` | DONE — dispatch builds the `/{font} {size} Tf {r} {g} {b} rg` DA string; same proof as background color |
++| Set flags | `edit_set_form_field_flags` | `setFlags` | DONE — a `Set<PdfFormFieldFlag>`; `{readOnly, required}` reads back both flags through `formFields`, and `{multiline}` leaves the field listed and still flattenable |
+ 
+ ---
+ 
+-## PdfStandalone — source in, sink out, no handle
++## PdfBuilder — create from scratch
++
++`PdfBuilder` is the view a `buildTo` body gets. `PdfBuilderHandle` is the one
++`Pdf.build` returns, and the only one that saves and disposes. A page ends
++when the next is added or the document is saved.
++
++| Capability | Rust | Dart | Status |
++|---|---|---|---|
++| Create builder | `handle_builder_create` | `Pdf.build` | DONE |
++| Set metadata | `handle_builder_set_metadata` | `setMetadata` | DONE — title, author, subject, keywords, creator, producer and the two dates |
++| Add page | `handle_builder_add_page` | `addPage` | DONE — A4 by default; `PdfPageSize` also names Letter, Legal, A3, A5 or a custom size |
++| Add image page | `handle_builder_add_image_page` | `addImagePage` | DONE — the page takes the image's own size, one point per pixel, unless a `PdfImagePage` names a size |
++| Save | `handle_builder_save` | `PdfBuilderHandle.save` | DONE — Flate-compresses by default (`deflate: false` keeps streams plain) |
++| Dispose | — | `PdfBuilderHandle.dispose` | DONE |
++
++### PdfPageBuilder — content of a page
++
++Each row reaches the engine as a `PageOp` applied by `apply_page_op`.
+ 
+ | Capability | Rust | Dart | Status |
+ |---|---|---|---|
+-| Sign PDF (PKCS12 / PEM) | `handle_sign` | `sign()` | DONE — keeps the catalog and earlier signatures; update section in the source's xref style |
+-| Convert to format (DOCX/PPTX/XLSX) | `handle_convert_to` | `convertTo()` | DONE |
+-| Convert to PDF | `handle_convert_to_pdf` | `convertToPdf()` | DONE |
+-| Extract pages | `handle_editor_extract_pages` | `edits(...).keepPages([...])` | DONE |
++| Font | `PageOp::Font` | `setFont` | DONE |
++| Move the cursor | `PageOp::At` | `moveTo` | DONE — takes a `PdfPoint` |
++| Text | `PageOp::Text`, `PageOp::StyledText` | `text` | DONE — with a `PdfTextStyle`, and a `PdfLink` or `PdfMarkup` for the text |
++| Append text | `PageOp::Inline`, `PageOp::StyledText` | `appendText` | DONE — same arguments as `text` |
++| Heading | `PageOp::Heading` | `heading` | DONE |
++| Paragraph | `PageOp::Paragraph` | `paragraph` | DONE |
++| Space | `PageOp::Space` | `space` | DONE |
++| Newline | `PageOp::Newline` | `newline` | DONE |
++| Horizontal rule | `PageOp::HorizontalRule` | `horizontalRule` | DONE |
++| Text in a box | `PageOp::TextInRect` | `textIn` | DONE |
++| Image | `PageOp::Image`, `PageOp::ImageArtifact` | `image` | DONE — with `altText` the image is a figure that carries it; without, an artifact |
++| Rectangle | `PageOp::FilledRect`, `PageOp::StrokeRect` | `rect` | DONE — filled, stroked or both |
++| Line | `PageOp::StrokeLine` | `line` | DONE |
++| Watermark | `PageOp::Watermark` | `watermark` | DONE |
++| Stamp | `PageOp::Stamp` | `stamp` | DONE |
++| Sticky note | `PageOp::StickyNote` | `stickyNote` | DONE |
++| Free text | `PageOp::FreeText` | `freeText` | DONE |
++| Footnote | `PageOp::Footnote` | `footnote` | DONE |
++| Columns | `PageOp::Columns` | `columns` | DONE |
++| Table | `PageOp::StreamingTableBlock` | `table` | DONE — a malformed table throws `ArgumentError` before any I/O |
++| Text field | `PageOp::TextField` | `textField` | DONE — `value` and `PdfFieldScripts` |
++| Checkbox | `PageOp::Checkbox` | `checkbox` | DONE |
++| Combo box | `PageOp::ComboBox` | `comboBox` | DONE |
++| Radio group | `PageOp::RadioGroup` | `radioGroup` | DONE |
++| Push button | `PageOp::PushButton` | `pushButton` | DONE |
++| Signature field | `PageOp::SignatureField` | `signatureField` | DONE |
++| Page open action | `PageOp::OnOpen` | `onOpen` | DONE |
++| Page close action | `PageOp::OnClose` | `onClose` | DONE |
+ 
+ ---
+ 
+-## PdfSugar — convenience wrappers over editor/builder
++## Pdf — the doors
+ 
+-| Sugar method | Wraps | Status |
+-|---|---|---|
+-| `merge` | editor: edit → mergeFrom × N → save | DONE |
+-| `split` | editor: extractPages × N chunks | DONE |
+-| `splitBySize` | `split(..., by: PdfSplitRule.maxBytes(...))` | DONE |
+-| `splitByBookmarks` | `split(..., by: PdfSplitRule.bookmarks())` | DONE |
+-| `extractPages` | editor: edit → keepPages → save | DONE |
+-| `deletePages` | editor: edit → deletePage × N → save | DONE |
+-| `reorderPages` | editor: edit → selectPages → save | DONE |
+-| `movePage` | editor: edit → movePage → save | DONE |
+-| `rotatePages` | editor: edit → rotatePage × N → save | DONE |
+-| `rotateAllPages` | editor: edit → rotatePages → save | DONE |
+-| `flattenForms` | editor: edit → flattenForms → save | DONE |
+-| `applyRedactions` | editor: edit → applyRedactions → save | DONE |
+-| `compress` | editor: edit → reduceImages(policy) → save(deflate) | DONE |
+-| `embedFile` | editor: edit → embedFile → save | DONE |
+-| `eraseRegions` | editor: edit → eraseRegions → save | DONE |
+-| `addStamp` | editor: edit → addStamp → save | DONE |
+-| `addImageStamp` | editor: edit → addImageStamp → save | DONE |
+-| `watermark` | editor: edit → addWatermark(-1) → save | DONE |
+-| `encrypt` | editor: edit → save(encryption) | DONE |
+-| `decrypt` | editor: edit(pw) → save(removeEncryption) | DONE |
+-| `convertToPdfA` | editor: edit → convertToPdfA → save | DONE |
+-| `imagesToPdf` | builder: build → addPage+image × N → save | DONE |
++Each row is a member of `Pdf`.
++
++| Capability | Rust | Dart | Status |
++|---|---|---|---|
++| Open a document for many reads | `open_document` | `open` | DONE — a `PdfDocumentHandle` you dispose |
++| Open an editor | `handle_editor_open` | `edit` | DONE — a `PdfEditorHandle` you save and dispose |
++| Create a builder | `handle_builder_create` | `build` | DONE — a `PdfBuilderHandle` you save and dispose |
++| Read in a scope | `open_document` | `read` | DONE — the library closes the document, also after an error or a cancel |
++| Edit in a scope | `edit_save_with_options` | `rewrite` | DONE — parses once, saves once; a body that throws writes nothing |
++| Build in a scope | `handle_builder_save` | `buildTo` | DONE |
++| One read | `open_document` | `readOnce` | DONE — a second call throws `StateError` |
++| One edit | `edit_save_with_options` | `editOnce` | DONE — a second call throws `StateError` |
++| Document info | `open_document` | `info` | DONE — page count, version, metadata and encryption without keeping the file open |
++| Save again with no edit | `edit_save_with_options` | `resave` | DONE — encrypt, decrypt or re-deflate through `PdfSave` |
++| Merge | `merge_document` | `merge` | DONE — the first input is the base and the others are appended whole |
++| Split | `handle_editor_extract_pages` | `split` | DONE — `PdfSplitRule.every`, `.maxBytes` and `.bookmarks`; each part has a sink from `sinkFor`, and the parts delivered before a failure stand |
++| Compress | `edit_reduce_images`, `edit_save_with_options` | `compress` | DONE — `PdfImagePolicy.lossless` unless you pass another; never makes a file larger |
++| Images to PDF | `handle_builder_add_image_page` | `imagesToPdf` | DONE — one image per page, through `buildTo` |
++| Sign (PKCS12 / PEM) | `handle_sign` | `sign` | DONE — keeps the catalog and earlier signatures; update section in the source's xref style; an encrypted input throws `PdfUnsupported` |
++| Convert PDF to Office (DOCX/PPTX/XLSX) | `convert_to_format_writer` | `convertToOffice` | DONE |
++| Convert Office to PDF | `convert_from_format_writer` | `convertFromOffice` | DONE |
++| Convert XFA to AcroForm | `convert_xfa_to_acroform` | `convertXfaToAcroForm` | DONE — converting `xfaFormPdf` yields a document that opens with a page and whose `formFields` lists `given` and `agree`; a document without XFA throws `PdfEngineFailed` |
++| Register a fallback font | `register_fallback_font` | `registerFallbackFont` | DONE — a CJK or emoji face, read whole, for baking form values the field's font cannot render |
+ 
+ ---
+ 
+@@ -224,24 +250,24 @@ same names, when both exist. Exports (source in, sink out) live on
+ | Budgets — queue, never fail (`kMaxExecutors` executors per pool; `MAX_EXECUTORS_GLOBAL` threads process-wide on native; first-in-first-out waiters) | DONE |
+ | Executors reset and leased again under churn (both platforms) | DONE |
+ | Fire-and-forget error rules (cancelled silent, real failures loud) | DONE |
+-| Three web I/O modes (JSPI / Atomics / OPFS), identical suite | DONE |
++| Four web I/O modes (Atomics / JSPI / OPFS / Asyncify), identical suite | DONE |
+ | Item streaming over the job port (multi-result ops without buffering) | PLANNED — the job's result port is already a message channel: promote it to N interim messages + 1 terminal message. Inherits per-job cancel, ending the lane, and the post-driven cleanup protocol unchanged; symmetric on web (`postMessage` to the executor). Never add a second transport method for this. |
+ 
+ ---
+ 
+ ## Summary — API surface
+ 
+-Totals for the five consumer surfaces above. Runtime, build, and roadmap
++Totals for the consumer surfaces above. Runtime, build, and roadmap
+ capabilities are tracked in their own sections.
+ 
+ | Category | Done | Planned |
+ |---|---|---|
+-| PdfDoc | 19 | 7 |
+-| PdfEditor | 40 | 27 |
+-| PdfBuilder | 34 | 0 |
+-| PdfStandalone | 4 | 0 |
+-| PdfSugar | 22 | 0 |
+-| **Total** | **119** | **34** |
++| PdfDocument | 25 | 0 |
++| PdfEdits | 22 | 1 |
++| PdfEditor (with `PdfFormFieldEditor`) | 33 | 0 |
++| PdfBuilder (with `PdfPageBuilder`) | 34 | 0 |
++| Pdf (the doors) | 19 | 0 |
++| **Total** | **133** | **1** |
+ 
+ ---
+ 
+@@ -270,7 +296,7 @@ that don't exist yet.
+ [`WasmAsset` / `JsAsset`](https://github.com/dart-lang/native/issues/988) —
+ dedicated web asset types where the framework (Flutter, Dart, Jaspr)
+ handles bundling and exposes a runtime URI. Web workers and WASM
+-modules need URLs, not raw bytes — `DataAsset` can't provide that.
++modules need URLs, not raw bytes — a plain data asset can't provide that.
+ Same problem affects [drift](https://github.com/simolus3/drift/issues/3770)
+ and [sqlite3](https://github.com/simolus3/sqlite3.dart) — all waiting
+ on the same feature.
+@@ -328,7 +354,7 @@ These exist in the Rust core (`pdf_oxide`) behind cargo features but are exclude
+ | OCR (scanned-page text) | PaddleOCR — DBNet++ detect → SVTR recognize — via ONNX; auto-detects scanned vs native pages; gated on `ocr` / `ocr-tract` / `wasm-ocr` | Adds the ONNX runtime + ~12.5 MB of models per install |
+ | Table extraction | `table_extractor` + `spatial_table_detector`, gated on `table-ml` / `ml` | Same ML stack (ONNX + model weight) |
+ 
+-The planned route to expose these without bloating the default is per-feature opt-in via `user_defines` (see [Binary size — feature trimming](#binary-size--feature-trimming)): the consumer enables the cargo feature in their own pubspec and accepts the ONNX runtime + model download. It's deliberately opt-in, not default — and still extra setup on the consumer's side, not a clean built-in. Open an issue to push it forward; demand is what decides priority.
++The planned route to expose these without bloating the default is per-feature opt-in via `user_defines` (see [Binary size — trim](#binary-size--trim)): the consumer enables the cargo feature in their own pubspec and accepts the ONNX runtime + model download. It's deliberately opt-in, not default — and still extra setup on the consumer's side, not a clean built-in. Open an issue to push it forward; demand is what decides priority.
+ 
+ ---
+ 
+@@ -340,13 +366,13 @@ The planned route to expose these without bloating the default is per-feature op
+ 
+ ---
+ 
+-## Deferred — surfaced by the test overhaul (2026-06-12)
++## Deferred — surfaced by the test overhaul
+ 
+ | Capability | Status | Why |
+ |---|---|---|
+-| Builder output hardening (compress streams by default; richer typesetting) | DONE | `PdfBuilder.save` Flate-compresses by default (`deflate: false` keeps streams plain); the page builder reaches every page operation the engine's builder has, and a wire-sync test fails when the engine adds one Dart lacks. |
+-| Attachment-listing read API | DONE | `PdfDoc.attachments` and `PdfDoc.extractAttachment` — `embedFile` is now proven by listing the saved file and round-tripping its bytes. |
+-| Annotation-listing read API | DONE | `PdfDoc.annotations(page)` — a battery now asserts "gone after flatten" directly, as `formFields` does for forms. |
++| Builder output hardening (compress streams by default; richer typesetting) | DONE | `PdfBuilderHandle.save` Flate-compresses by default (`deflate: false` keeps streams plain); the page builder reaches every page operation the engine's builder has, and a wire-sync test fails when the engine adds one Dart lacks. |
++| Attachment-listing read API | DONE | `PdfDocument.attachments` and `PdfDocument.extractAttachment` — `addAttachment` is proven by listing the saved file and round-tripping its bytes. |
++| Annotation-listing read API | DONE | `PdfDocument.annotations` — a battery asserts "gone after flatten" directly, as `formFields` does for forms. |
+ | Typed wire error codes (PdfWrongPassword, PdfCorrupted, … from Rust) | DONE | Every engine failure reaches Dart as its `PdfError` subtype; kinds on the wire. |
+ 
+ ---
+@@ -355,5 +381,5 @@ The planned route to expose these without bloating the default is per-feature op
+ 
+ | Gap | Detail | Status |
+ |---|---|---|
+-| Field-action and link no-op | The four field scripts on a page with no form field, and `linkUrl`/`linkPage` on a page with no text, throw `PdfInvalidArgument` instead of succeeding without effect. | DONE |
+-| True O(1) memory verification | `make test-memory` (tool/memprobe) measures the Rust peak of open, extractPages, full-rewrite and incremental save, sign, compress and merge on a 10,000-page input and a 60 MB-stream input, each against a ceiling in `make check`. Every op stays under 16 MiB except merge, whose ceiling is today's peak until it imports object by object. | DONE |
++| Field-action and link no-op | The field scripts ride with the field (`scripts:`) and the link or markup rides with the text (`link:`, `markup:`), so neither can name a page that lacks its target; the engine still refuses an unattached `PageOp` with an error instead of succeeding without effect. | DONE |
++| True O(1) memory verification | `make test-memory` (tool/memprobe) measures the Rust peak of open, the page extract behind `split`, full-rewrite and incremental save, sign, compress and merge on a 10,000-page input and a 60 MB-stream input, each against a ceiling in `make check`. Every op stays under 16 MiB except merge, whose ceiling is today's peak until it imports object by object. | DONE |
