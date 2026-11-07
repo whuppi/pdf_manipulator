@@ -309,7 +309,13 @@ runs:
       uses: whuppi/ci/actions/capabilities/oci-cache@v2.7.10
       with:
         phase: restore
-        name: rust-target
+        # The name is the archive namespace: bump its suffix whenever an
+        # archive may hold a build its key does not describe (a stale
+        # unit saved by a run before a fix here), so no run reads one
+        # again. v3: the runs before the path-package drop saved trees
+        # whose bindgen_runner predated their engine. Rename the save in
+        # make-target/action.yml together.
+        name: rust-target-v3
         key: ${{ steps.tkey.outputs.key }}
         fallback: ${{ steps.tkey.outputs.fallback }}
         path: |
@@ -321,32 +327,47 @@ runs:
           ~/.cargo/git/db
 
     # The fallback key restores the target of ANOTHER vendor rev (the
-    # family's latest). Its dependency crates are still right (registry
-    # crates are fingerprinted by content), but its engine units are not,
-    # and the mtime pin below would make cargo accept them: the row would
-    # link the old engine and test it as the new one. So on anything but
-    # an exact hit, drop the fingerprints of every package of the three
-    # vendored workspaces (the engines, tiny-skia and their tools, such as
-    # bindgen_runner, whose old build once ran with arguments it did not
-    # know); cargo rebuilds those under the pin and reuses every
-    # dependency. The names come from cargo metadata, so a member added
-    # upstream is covered without an edit here.
-    - name: Drop engine units a fallback restore brought
+    # family's latest). Its registry crates are still right, but every
+    # PATH package (one whose sources live in this checkout: the engines,
+    # tiny-skia, and tools such as bindgen_runner) was built from other
+    # sources, and the mtime pin below makes cargo accept it anyway: the
+    # row would run the old build as the new one. A hand-kept list of
+    # names once missed bindgen_runner, so a stale binary ran with flags
+    # it did not know. So the set is cargo's own, never a list: every
+    # member of the three vendored workspaces plus every package cargo
+    # resolves with no source (`source == null`, a path package) from each
+    # workspace root. Their fingerprints are dropped and cargo rebuilds
+    # them under the pin; registry crates are reused. A package whose name
+    # a registry crate shares is dropped too, which costs a rebuild and
+    # never a stale build. If cargo cannot list them, the job fails: an
+    # empty list here would mean a stale build, never a clean one.
+    - name: Drop every path package a fallback restore brought
       if: inputs.cache == 'true' && inputs.ghcr-target == 'true' && steps.ghcr.outputs.cache-hit != 'true'
       shell: bash
       run: |
-        dropped=0
+        set -euo pipefail
+        # Every path package pdf_oxide's build resolves (it builds the other
+        # two vendored crates as path dependencies, and has the lock)...
+        names=$(cargo metadata --format-version 1 --locked --manifest-path vendor/pdf_oxide/Cargo.toml \
+          | jq -r '.packages[]|select(.source==null)|.name') \
+          || { echo "::error::cargo metadata failed for vendor/pdf_oxide"; exit 1; }
+        # ...and every member of the three workspaces, each built on its own
+        # for its tests (an optional path dependency is not always resolved).
         for ws in vendor/pdf_oxide vendor/office_oxide vendor/tiny_skia; do
-          names=$(cargo metadata --no-deps --format-version 1 --manifest-path "$ws/Cargo.toml" | jq -r '.packages[].name')
-          [ -n "$names" ] || { echo "::error::cargo metadata listed no package in $ws"; exit 1; }
-          while IFS= read -r name; do
-            while IFS= read -r dir; do
-              rm -rf "${dir:?}"
-              dropped=$((dropped + 1))
-            done < <(find vendor -path '*/target/*' -path '*/.fingerprint/*' -type d -name "$name-*" -prune)
-          done <<< "$names"
+          members=$(cargo metadata --no-deps --format-version 1 --manifest-path "$ws/Cargo.toml" | jq -r '.packages[].name') \
+            || { echo "::error::cargo metadata --no-deps failed in $ws"; exit 1; }
+          [ -n "$members" ] || { echo "::error::cargo metadata listed no package in $ws"; exit 1; }
+          names=$(printf '%s\n%s\n' "$names" "$members")
         done
-        echo "fallback restore: $dropped fingerprints of vendored workspace packages dropped; they rebuild"
+        dropped=0
+        while IFS= read -r name; do
+          [ -n "$name" ] || continue
+          while IFS= read -r dir; do
+            rm -rf "${dir:?}"
+            dropped=$((dropped + 1))
+          done < <(find vendor -path '*/target/*' -path '*/.fingerprint/*' -type d -name "$name-*" -prune)
+        done < <(printf '%s\n' "$names" | sort -u)
+        echo "fallback restore: $dropped fingerprints of path packages dropped ($(printf '%s\n' "$names" | sort -u | grep -c .) packages); they rebuild"
 
     # A restored tree can hold a library unit's fingerprint whose library
     # is gone or empty: an archive saved after a partial prune, or by a run

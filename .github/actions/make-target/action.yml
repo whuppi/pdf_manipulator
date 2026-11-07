@@ -294,7 +294,7 @@ runs:
       with:
         phase: save
         save: ${{ inputs.rust-cache-save }}
-        name: rust-target
+        name: rust-target-v3  # the restore's namespace in capabilities/rust; rename together
         key: ${{ steps.rust.outputs.ghcr-target-key }}
         fallback: ${{ steps.rust.outputs.ghcr-target-fallback }}
         path: |
