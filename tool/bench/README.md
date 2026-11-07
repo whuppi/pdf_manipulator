@@ -1,6 +1,6 @@
 # Compression benchmark
 
-Compares `pdf_manipulator`'s `compress` with `pdf_document` 12.0.0's `PdfCompressor.optimize` on the public files in `corpus.toml` plus three generated cases (self-merge x5, our own output re-compressed, a file saved incrementally twice). Not part of `make check`.
+Compares `pdf_manipulator`'s `compress` with `pdf_document`'s `PdfCompressor.optimize` (the version pinned in `pubspec.yaml`) on the public files in `corpus.toml` plus three generated cases (self-merge x5, our own output re-compressed, a file saved incrementally twice). Not part of `make check`.
 
 Run it from the package root: `make bench` (narrow it with `BENCH_ARGS="--only irs-fw9,plos-0000308 --max-pages 5"`). The first run downloads the corpus into `.corpus/` and checks each file against its SHA-256.
 
