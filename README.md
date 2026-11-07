@@ -330,7 +330,7 @@ abstract interface class DataSource {
 
 The engine asks for *64 KB from here*, then the next piece, then the next. So you hand it a **reader**, not your whole file in one giant `Uint8List`. It jumps to any place in the file, so a one-way stream such as a live socket cannot be a source. Keep that data in memory or in a file first.
 
-**Memory** is bounded for any number of pages; one page's text costs a known amount per piece. An operation holds a fixed ceiling of 16 MiB over what the process held before it, and reading the text of one page adds a declared number of bytes for each text piece (run) of that page, because reading order is a sort over all of a page's pieces and no text can leave before every piece is read. The numbers are declared in the engine (`piece_budget`) and held by its tests, so they cannot grow quietly.
+**Memory** is bounded for any number of pages; one page's text costs a known amount per piece. An operation holds a fixed ceiling of 16 MiB over what the process held before it, and reading the text of one page adds a declared number of bytes for each text piece (run) of that page, because reading order is a sort over all of a page's pieces and no text can leave before every piece is read. The numbers are declared in the engine (`piece_budget`) and held by its tests, so they cannot grow quietly. Converting an Office file to PDF is the one operation outside the ceiling: office_oxide parses the whole document into its model, so the conversion costs that model, in proportion to the file. Nothing is skipped or refused at any size.
 
 A **sink** is the other side:
 

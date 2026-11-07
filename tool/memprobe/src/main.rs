@@ -117,9 +117,28 @@ fn limit(op: &str, input: &str) -> usize {
         // streams regions is the task that stops it being an exception.
         ("render", "hugeJbig2") => 98 * MIB,
         ("extractImages", "hugeJbig2") => 96 * MIB,
+        // Converting an Office file to PDF is the one operation outside the
+        // ceiling: office_oxide parses the whole document into its model, so
+        // the conversion costs that model, in proportion to the file. Nothing
+        // is skipped or refused at any size. The targets are the measured
+        // peaks rounded up to the next MiB.
+        ("convertToPdf", "docx64") => 530 * MIB,
+        ("convertToPdf", "pptx64") => 387 * MIB,
         // The ruled exception again: the progressive JPEG is decoded whole, by
         // the inverse DCT at the reduction that covers the placement.
         ("reduceImages", "hugeJpeg") => 56 * MIB,
+        // A baseline JPEG painted at its own size (4096 x 3072 RGB, 36 MiB of
+        // raster) and a 4096 x 2048 CMYK one (32 MiB), each with a file larger
+        // than its raster, are decoded from their streams and the file is
+        // never held. The ruled exception: jpeg-decoder holds a component
+        // plane for every channel beside the interleaved raster it returns,
+        // so the host holds two rasters at the decode. The targets are the
+        // raster plus 16 MiB (52 and 48 MiB); a decoder that returns rows is
+        // the task that stops this being an exception. The ceilings are the
+        // measured peaks (74.2, 66.3 and 64.2 MiB) rounded up to the next MiB.
+        ("render", "hugeJpeg1to1") => 75 * MIB,
+        ("render", "hugeCmykJpeg") => 67 * MIB,
+        ("reduceImages", "hugeCmykJpeg") => 65 * MIB,
         // A 2000 pt square at 300 dpi again, now with eight groups inside one
         // another, a soft mask, blends and patterns: each level holds one band
         // of its own, and the band is cut by the depth, so the host holds the
@@ -916,6 +935,56 @@ fn run() -> Result<(), String> {
         );
     }
 
+    // A baseline JPEG painted at its own size, and a CMYK one: each is
+    // decoded from its stream and its file is not held beside the raster.
+    let huge_jpeg_1to1 = dir.join("huge-jpeg-1to1.pdf");
+    generate_noise_jpeg_page(&huge_jpeg_1to1, 4096, 3072, false)?;
+    step(&failed, "render", "hugeJpeg1to1", limit("render", "hugeJpeg1to1"), |st| {
+        render_to_sink(st, &huge_jpeg_1to1, 150, &open_sink("hugeJpeg1to1", "render"))
+    });
+    verify_render_wire(&failed, "hugeJpeg1to1", &open_sink("hugeJpeg1to1", "render"));
+    let huge_cmyk_jpeg = dir.join("huge-cmyk-jpeg.pdf");
+    generate_noise_jpeg_page(&huge_cmyk_jpeg, 4096, 2048, true)?;
+    step(&failed, "render", "hugeCmykJpeg", limit("render", "hugeCmykJpeg"), |st| {
+        render_to_sink(st, &huge_cmyk_jpeg, 150, &open_sink("hugeCmykJpeg", "render"))
+    });
+    verify_render_wire(&failed, "hugeCmykJpeg", &open_sink("hugeCmykJpeg", "render"));
+    let cmyk_reduced = open_sink("hugeCmykJpeg", "reduced");
+    step(&failed, "reduceImages", "hugeCmykJpeg", limit("reduceImages", "hugeCmykJpeg"), |st| {
+        reduce_to_sink(st, &huge_cmyk_jpeg, &cmyk_reduced)
+    });
+    {
+        let again = open_sink("hugeCmykJpeg", "reduced-extract");
+        let mut state = pdf_oxide::host::engine_state::EngineState::new();
+        let written = if cmyk_reduced.exists() {
+            extract_to_sink(&mut state, &cmyk_reduced, &again)
+        } else {
+            Err("the reduction wrote no file".to_string())
+        };
+        match written {
+            Ok(()) => match pdf_oxide::PdfDocument::open(&cmyk_reduced)
+                .map_err(|e| e.to_string())
+                .and_then(|doc| doc.extract_images(0).map_err(|e| e.to_string()))
+            {
+                Ok(images) if images.len() == 1 && (images[0].width(), images[0].height()) == (1966, 983) => {
+                    eprintln!("memprobe: reduceImages hugeCmykJpeg: read back: one image, 1966x983");
+                },
+                Ok(images) => {
+                    eprintln!("memprobe: reduceImages hugeCmykJpeg: read back: {} images", images.len());
+                    failed.set(true);
+                },
+                Err(e) => {
+                    eprintln!("memprobe: reduceImages hugeCmykJpeg: read back: {e}");
+                    failed.set(true);
+                },
+            },
+            Err(e) => {
+                eprintln!("memprobe: reduceImages hugeCmykJpeg: read back: {e}");
+                failed.set(true);
+            },
+        }
+    }
+
     // The huge fax: a 50 MiB packed bitmap that decodes a row at a time.
     // Render and the extraction read back; the reduction by extracting the
     // file it wrote.
@@ -1280,8 +1349,297 @@ fn run() -> Result<(), String> {
     let _ = std::fs::remove_file(&xmp);
     let _ = std::fs::remove_file(&converted);
 
+    convert_office(&failed, &dir)?;
+
     if failed.get() {
         return Err("one or more steps exceeded their memory limit".to_string());
+    }
+    Ok(())
+}
+
+/// convertToPdf of a stored-ZIP package that holds one 64 MiB JPEG; the docx
+/// also holds 20,000 paragraphs.
+fn convert_office(failed: &std::cell::Cell<bool>, dir: &Path) -> Result<(), String> {
+    let open_sink = |n: &str, op: &str| dir.join(format!("{n}_{op}.pdf"));
+    let office_jpeg = dir.join("office64.jpg");
+    generate_image_jpeg(&office_jpeg, IMAGE_WIDTH, JPEG_ROWS)?;
+    let jpeg_size = std::fs::metadata(&office_jpeg).map(|m| m.len()).unwrap_or(0);
+    if jpeg_size < 64 * MIB as u64 {
+        return Err(format!("office JPEG is {jpeg_size} bytes, under its {}", 64 * MIB));
+    }
+    for (name, kind) in [("docx64", OfficeKind::Docx), ("pptx64", OfficeKind::Pptx)] {
+        let package = dir.join(format!("{name}.{}", kind.extension()));
+        generate_office_package(&package, kind, &office_jpeg)?;
+        let pdf = open_sink(name, "convertToPdf");
+        step(failed, "convertToPdf", name, limit("convertToPdf", name), |st| {
+            call(
+                st,
+                re("convertToPdf").put("format", strv(kind.extension())),
+                vec![source(&package)],
+                vec![sink(&pdf)],
+            )?;
+            Ok(())
+        });
+        if let Err(e) = check_converted_pdf(&pdf) {
+            eprintln!("memprobe: convertToPdf {name}: READ-BACK FAIL: {e}");
+            failed.set(true);
+        }
+        let _ = std::fs::remove_file(&pdf);
+        let _ = std::fs::remove_file(&package);
+    }
+    let _ = std::fs::remove_file(&office_jpeg);
+    Ok(())
+}
+
+// ── office packages ─────────────────────────────────────────────────
+
+#[derive(Clone, Copy)]
+enum OfficeKind {
+    Docx,
+    Pptx,
+}
+
+impl OfficeKind {
+    fn extension(self) -> &'static str {
+        match self {
+            OfficeKind::Docx => "docx",
+            OfficeKind::Pptx => "pptx",
+        }
+    }
+}
+
+/// A ZIP whose entries are stored as they are, so the package is as large as
+/// what it holds. The local header carries the CRC and the size, so a file
+/// entry is read twice: once to sum, once to copy.
+struct StoredZip {
+    out: std::io::BufWriter<File>,
+    written: u64,
+    central: Vec<u8>,
+    entries: u16,
+}
+
+impl StoredZip {
+    fn create(path: &Path) -> Result<Self, String> {
+        let file = File::create(path).map_err(|e| format!("zip {}: {e}", path.display()))?;
+        Ok(StoredZip { out: std::io::BufWriter::new(file), written: 0, central: Vec::new(), entries: 0 })
+    }
+
+    fn bytes(&mut self, name: &str, data: &[u8]) -> Result<(), String> {
+        let mut crc = flate2::Crc::new();
+        crc.update(data);
+        self.entry(name, crc.sum(), data.len() as u32, &mut std::io::Cursor::new(data))
+    }
+
+    fn file(&mut self, name: &str, path: &Path) -> Result<(), String> {
+        use std::io::Read;
+        let fail = |e: std::io::Error| format!("zip {}: {e}", path.display());
+        let mut crc = flate2::Crc::new();
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut input = File::open(path).map_err(fail)?;
+        loop {
+            let n = input.read(&mut buf).map_err(fail)?;
+            if n == 0 {
+                break;
+            }
+            crc.update(&buf[..n]);
+        }
+        self.entry(name, crc.sum(), crc.amount(), &mut File::open(path).map_err(fail)?)
+    }
+
+    fn entry(&mut self, name: &str, crc: u32, len: u32, data: &mut dyn std::io::Read) -> Result<(), String> {
+        let fail = |e: std::io::Error| format!("zip {name}: {e}");
+        let mut header = Vec::new();
+        header.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
+        header.extend_from_slice(&20u16.to_le_bytes()); // version needed
+        header.extend_from_slice(&[0; 2]); // flags
+        header.extend_from_slice(&[0; 2]); // method: stored
+        header.extend_from_slice(&[0; 2]); // time
+        header.extend_from_slice(&33u16.to_le_bytes()); // date: 1980-01-01
+        header.extend_from_slice(&crc.to_le_bytes());
+        header.extend_from_slice(&len.to_le_bytes());
+        header.extend_from_slice(&len.to_le_bytes());
+        header.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        header.extend_from_slice(&[0; 2]); // extra length
+        header.extend_from_slice(name.as_bytes());
+
+        self.central.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+        self.central.extend_from_slice(&20u16.to_le_bytes()); // version made by
+        self.central.extend_from_slice(&header[4..30]);
+        self.central.extend_from_slice(&[0; 2]); // comment length
+        self.central.extend_from_slice(&[0; 2]); // disk
+        self.central.extend_from_slice(&[0; 2]); // internal attributes
+        self.central.extend_from_slice(&[0; 4]); // external attributes
+        self.central.extend_from_slice(&(self.written as u32).to_le_bytes());
+        self.central.extend_from_slice(name.as_bytes());
+        self.entries += 1;
+
+        self.out.write_all(&header).map_err(fail)?;
+        let copied = std::io::copy(data, &mut self.out).map_err(fail)?;
+        if copied != u64::from(len) {
+            return Err(format!("zip {name}: {copied} bytes copied of {len}"));
+        }
+        self.written += header.len() as u64 + copied;
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<(), String> {
+        let fail = |e: std::io::Error| format!("zip: {e}");
+        let mut end = Vec::new();
+        end.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+        end.extend_from_slice(&[0; 4]); // disk numbers
+        end.extend_from_slice(&self.entries.to_le_bytes());
+        end.extend_from_slice(&self.entries.to_le_bytes());
+        end.extend_from_slice(&(self.central.len() as u32).to_le_bytes());
+        end.extend_from_slice(&(self.written as u32).to_le_bytes());
+        end.extend_from_slice(&[0; 2]); // comment length
+        self.out.write_all(&self.central).map_err(fail)?;
+        self.out.write_all(&end).map_err(fail)?;
+        self.out.flush().map_err(fail)
+    }
+}
+
+/// A docx or pptx package whose one picture is `jpeg`. The docx also holds
+/// 20,000 paragraphs.
+fn generate_office_package(path: &Path, kind: OfficeKind, jpeg: &Path) -> Result<(), String> {
+    const XML: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n";
+    const RELS: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
+    const OD: &str = "http://schemas.openxmlformats.org/officeDocument/2006";
+    const MAIN: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+    const PIC: &str = "http://schemas.openxmlformats.org/drawingml/2006/picture";
+    let picture = format!(
+        "<pic:pic xmlns:pic=\"{PIC}\"><pic:nvPicPr><pic:cNvPr id=\"1\" name=\"image1.jpg\"/><pic:cNvPicPr/></pic:nvPicPr>\
+         <pic:blipFill><a:blip r:embed=\"rId1\"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>\
+         <pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"3600000\" cy=\"2700000\"/></a:xfrm>\
+         <a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>"
+    );
+    let mut zip = StoredZip::create(path)?;
+    match kind {
+        OfficeKind::Docx => {
+            zip.bytes(
+                "[Content_Types].xml",
+                format!(
+                    "{XML}<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
+                     <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\
+                     <Default Extension=\"xml\" ContentType=\"application/xml\"/>\
+                     <Default Extension=\"jpg\" ContentType=\"image/jpeg\"/>\
+                     <Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>\
+                     </Types>"
+                )
+                .as_bytes(),
+            )?;
+            zip.bytes(
+                "_rels/.rels",
+                format!(
+                    "{XML}<Relationships xmlns=\"{RELS}\"><Relationship Id=\"rId1\" \
+                     Type=\"{OD}/relationships/officeDocument\" Target=\"word/document.xml\"/></Relationships>"
+                )
+                .as_bytes(),
+            )?;
+            zip.bytes(
+                "word/_rels/document.xml.rels",
+                format!(
+                    "{XML}<Relationships xmlns=\"{RELS}\"><Relationship Id=\"rId1\" \
+                     Type=\"{OD}/relationships/image\" Target=\"media/image1.jpg\"/></Relationships>"
+                )
+                .as_bytes(),
+            )?;
+            let mut document = format!(
+                "{XML}<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" xmlns:r=\"{OD}/relationships\" \
+                 xmlns:a=\"{MAIN}\" xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\"><w:body>"
+            );
+            for n in 0..20_000 {
+                document.push_str(&format!("<w:p><w:r><w:t>Paragraph {n} of the probe document.</w:t></w:r></w:p>"));
+            }
+            document.push_str(&format!(
+                "<w:p><w:r><w:drawing><wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">\
+                 <wp:extent cx=\"3600000\" cy=\"2700000\"/><wp:docPr id=\"1\" name=\"Picture 1\"/>\
+                 <a:graphic><a:graphicData uri=\"{PIC}\">{picture}</a:graphicData></a:graphic>\
+                 </wp:inline></w:drawing></w:r></w:p></w:body></w:document>"
+            ));
+            zip.bytes("word/document.xml", document.as_bytes())?;
+            zip.file("word/media/image1.jpg", jpeg)?;
+        },
+        OfficeKind::Pptx => {
+            zip.bytes(
+                "[Content_Types].xml",
+                format!(
+                    "{XML}<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
+                     <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\
+                     <Default Extension=\"xml\" ContentType=\"application/xml\"/>\
+                     <Default Extension=\"jpg\" ContentType=\"image/jpeg\"/>\
+                     <Override PartName=\"/ppt/presentation.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml\"/>\
+                     <Override PartName=\"/ppt/slides/slide1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>\
+                     </Types>"
+                )
+                .as_bytes(),
+            )?;
+            zip.bytes(
+                "_rels/.rels",
+                format!(
+                    "{XML}<Relationships xmlns=\"{RELS}\"><Relationship Id=\"rId1\" \
+                     Type=\"{OD}/relationships/officeDocument\" Target=\"ppt/presentation.xml\"/></Relationships>"
+                )
+                .as_bytes(),
+            )?;
+            zip.bytes(
+                "ppt/presentation.xml",
+                format!(
+                    "{XML}<p:presentation xmlns:a=\"{MAIN}\" xmlns:r=\"{OD}/relationships\" \
+                     xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\"><p:sldIdLst><p:sldId id=\"256\" r:id=\"rId1\"/></p:sldIdLst>\
+                     <p:sldSz cx=\"9144000\" cy=\"6858000\"/></p:presentation>"
+                )
+                .as_bytes(),
+            )?;
+            zip.bytes(
+                "ppt/_rels/presentation.xml.rels",
+                format!(
+                    "{XML}<Relationships xmlns=\"{RELS}\"><Relationship Id=\"rId1\" \
+                     Type=\"{OD}/relationships/slide\" Target=\"slides/slide1.xml\"/></Relationships>"
+                )
+                .as_bytes(),
+            )?;
+            zip.bytes(
+                "ppt/slides/slide1.xml",
+                format!(
+                    "{XML}<p:sld xmlns:a=\"{MAIN}\" xmlns:r=\"{OD}/relationships\" xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\">\
+                     <p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>\
+                     <p:grpSpPr/><p:pic><p:nvPicPr><p:cNvPr id=\"2\" name=\"Picture 1\"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr>\
+                     <p:blipFill><a:blip r:embed=\"rId1\"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>\
+                     <p:spPr><a:xfrm><a:off x=\"914400\" y=\"914400\"/><a:ext cx=\"3600000\" cy=\"2700000\"/></a:xfrm>\
+                     <a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></p:spPr></p:pic></p:spTree></p:cSld></p:sld>"
+                )
+                .as_bytes(),
+            )?;
+            zip.bytes(
+                "ppt/slides/_rels/slide1.xml.rels",
+                format!(
+                    "{XML}<Relationships xmlns=\"{RELS}\"><Relationship Id=\"rId1\" \
+                     Type=\"{OD}/relationships/image\" Target=\"../media/image1.jpg\"/></Relationships>"
+                )
+                .as_bytes(),
+            )?;
+            zip.file("ppt/media/image1.jpg", jpeg)?;
+        },
+    }
+    zip.finish()
+}
+
+/// The converted file is a PDF: it opens with the header, ends in `%%EOF` and
+/// is not empty of pages.
+fn check_converted_pdf(pdf: &Path) -> Result<(), String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = File::open(pdf).map_err(|e| format!("{}: {e}", pdf.display()))?;
+    let len = file.metadata().map_err(|e| e.to_string())?.len();
+    let mut head = [0u8; 5];
+    file.read_exact(&mut head).map_err(|e| e.to_string())?;
+    if &head != b"%PDF-" {
+        return Err("the file does not open with %PDF-".into());
+    }
+    let mut tail = vec![0u8; 64.min(len as usize)];
+    file.seek(SeekFrom::End(-(tail.len() as i64))).map_err(|e| e.to_string())?;
+    file.read_exact(&mut tail).map_err(|e| e.to_string())?;
+    if !tail.trim_ascii_end().ends_with(b"%%EOF") {
+        return Err("the file does not end in %%EOF".into());
     }
     Ok(())
 }
@@ -2744,6 +3102,83 @@ fn generate_huge_jpeg(path: &Path) -> Result<(), String> {
          /BitsPerComponent 8 /Filter /DCTDecode",
         jpeg.len() as u64,
         std::io::Cursor::new(jpeg),
+    )?;
+    out.finish()
+}
+
+/// A one-page PDF filled by one baseline JPEG of noise, `width` x `height`
+/// pixels, 4:4:4, quality 100, written as it is encoded (CMYK or RGB). The
+/// page is the image's size at 150 dpi, so a render at 150 dpi paints it at
+/// its own size and no reduction covers it.
+fn generate_noise_jpeg_page(path: &Path, width: u32, height: u32, cmyk: bool) -> Result<(), String> {
+    struct Noise {
+        width: u16,
+        height: u16,
+        cmyk: bool,
+    }
+
+    impl jpeg_encoder::ImageBuffer for Noise {
+        fn get_jpeg_color_type(&self) -> jpeg_encoder::JpegColorType {
+            if self.cmyk {
+                jpeg_encoder::JpegColorType::Cmyk
+            } else {
+                jpeg_encoder::JpegColorType::Ycbcr
+            }
+        }
+        fn width(&self) -> u16 {
+            self.width
+        }
+        fn height(&self) -> u16 {
+            self.height
+        }
+        fn fill_buffers(&self, y: u16, buffers: &mut [Vec<u8>; 4]) {
+            let channels = if self.cmyk { 4 } else { 3 };
+            let mut rng = Xorshift::new(0x1F6 ^ (u64::from(y) << 20));
+            let mut row = vec![0u8; self.width as usize * channels];
+            rng.fill_bytes(&mut row);
+            for pixel in row.chunks_exact(channels) {
+                for (buffer, sample) in buffers.iter_mut().zip(pixel) {
+                    buffer.push(*sample);
+                }
+            }
+        }
+    }
+
+    let jpeg_path = path.with_extension("jpg");
+    let fail = |e: std::io::Error| format!("jpeg {}: {e}", jpeg_path.display());
+    let out = std::io::BufWriter::new(File::create(&jpeg_path).map_err(fail)?);
+    let mut encoder = jpeg_encoder::Encoder::new(out, 100);
+    encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::R_4_4_4);
+    encoder
+        .encode_image(Noise { width: width as u16, height: height as u16, cmyk })
+        .map_err(|e| format!("jpeg {}: {e}", jpeg_path.display()))?;
+    let len = std::fs::metadata(&jpeg_path).map_err(fail)?.len();
+    let raster = u64::from(width) * u64::from(height) * if cmyk { 4 } else { 3 };
+    if len <= raster {
+        return Err(format!("{}: the file is {len} bytes, the raster {raster}", jpeg_path.display()));
+    }
+    let (w_pt, h_pt) = (f64::from(width) * 72.0 / 150.0, f64::from(height) * 72.0 / 150.0);
+    let content = format!("q {w_pt} 0 0 {h_pt} 0 0 cm /Im0 Do Q");
+    let mut out = PdfOut::create(path)?;
+    out.object(1, "<< /Type /Catalog /Pages 2 0 R >>")?;
+    out.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")?;
+    out.object(
+        3,
+        &format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w_pt} {h_pt}] \
+             /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>"
+        ),
+    )?;
+    out.stream(4, "", content.len() as u64, content.as_bytes())?;
+    out.stream(
+        5,
+        &format!(
+            "/Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace {} \
+             /BitsPerComponent 8 /Filter /DCTDecode",
+            if cmyk { "/DeviceCMYK" } else { "/DeviceRGB" }
+        ),
+        len,
+        File::open(&jpeg_path).map_err(fail)?,
     )?;
     out.finish()
 }

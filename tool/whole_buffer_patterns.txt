@@ -20,3 +20,5 @@
 \bcached_page_content\(  # PdfDocument::cached_page_content: the decoded content of a page, cached
 \braw_compressed_bytes\(  # PdfImage::raw_compressed_bytes: an image stream's stored bytes
 \bdecode_slice\(  # decoders::stream::decode_slice: a filter chain applied to a slice, the decoded bytes in one Vec
+\bdecode_stream_with_params\(  # decoders::decode_stream_with_params: a filter chain with its parameters applied to a slice, the decoded bytes in one Vec
+\bdecode_stream\(  # decoders::decode_stream: decode_stream_with_params with no parameters

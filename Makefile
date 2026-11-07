@@ -138,6 +138,9 @@ format:
 #                        code, tool/check_patch_markers.sh
 #                      - loops over document-scale collections poll for a cancel,
 #                        tool/check_cancel_polls.sh
+#                      - no engine call reads a whole stream, file or page into
+#                        one buffer unless it is a table by nature or no lane
+#                        reaches it, tool/check_whole_buffers.sh
 #                      - no dart:io in tests (fixtures are imported Dart
 #                        source, so VM and browser consume identical
 #                        bytes; exempt: the hybrid asset server, native
@@ -180,6 +183,7 @@ test-guards:
 	@./tool/check_fork_tests.sh
 	@./tool/check_patch_markers.sh
 	@./tool/check_cancel_polls.sh
+	@./tool/check_whole_buffers.sh
 	@bad=$$(for f in $$(grep -rln "dart:io" test/ --include="*.dart"); do \
 	  grep -q "io-exempt:" "$$f" || echo "$$f"; \
 	done); \

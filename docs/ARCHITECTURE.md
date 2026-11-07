@@ -521,7 +521,14 @@ sort that spills sorted runs to storage would keep one page under the plain ceil
 not built, and the trigger to reconsider it is a user with single pages too large for the
 per-piece cost and real storage to spill to.
 
+Converting an Office file to PDF is the one operation outside the ceiling: office_oxide
+parses the whole document into its model, so the conversion costs that model, in
+proportion to the file. Nothing is skipped or refused at any size. The rows
+`convertToPdf docx64` and `pptx64` of `make test-memory` hold that cost.
+
 `convertToPdfA` holds the one metadata packet it patches, once, until the save writes it.
+
+A codec's input is read whole only when its decoder cannot read a stream (JPEG 2000, JBIG2). A JPEG on a lane is decoded from its stream at the reduction that covers its placement, or at its size; the file is the image only when the library returns it as bytes.
 
 ### The counting allocator and the heap
 
@@ -578,15 +585,39 @@ ceiling on both probe inputs, and so does the full save of a large encrypted str
 engine reads through an object cache bounded by `DEFAULT_OBJECT_CACHE_MAX_BYTES`, copies
 unchanged streams in fixed pieces (an encrypted stream is decrypted in the same pieces),
 and reads page facts without keeping the page dictionaries. A stream of a document is a
-window onto the document's bytes that reads itself; only the whole reads listed in
-`engine_proofs/whole_reads.txt` hold a stream's data in one buffer. Merge keeps the merged
+window onto the document's bytes that reads itself. Merge keeps the merged
 document open with its own small object cache, records only the ids of the objects each
 page reaches, and writes every merged object one at a time from that document.
-`tool/check_whole_buffers.sh` fails the build on any engine call that reads a whole stream,
-file or page into one buffer unless it is a line of `tool/whole_buffer_allow.txt`, which
-admits only the kinds that are tables by nature (a font program, a sampled function, an ICC
-profile, the CMap table, a DER certificate or the DSS, the xref stream, one object-stream
-member, a progressive JPEG raster, a JPX recompressed at full size).
+
+One lint holds the rest: `tool/check_whole_buffers.sh`. A site is an engine call that
+hands back every byte of a stream, a file or a page in one buffer (the patterns of
+`tool/whole_buffer_patterns.txt`, found in the code of `vendor/pdf_oxide/src` outside tests
+and `engine_proofs/`). A `read_to_end` or `read_to_string` on a chain with a `.take(N)` is a
+window, not a site, and the body of a whole-read helper is not a site either (its callers
+are). Every site fails the build unless it is a line of `tool/whole_buffer_allow.txt`,
+which has two classes:
+
+- `table:` admits the kinds that are whole by nature: a font program, a sampled function, a
+  PostScript calculator function (a Type 4 program, evaluated per sample in O(its own
+  length)), an ICC profile, the CMap table, a DER certificate or the DSS, the xref stream,
+  one object-stream member, a progressive JPEG raster, a JPX recompressed at full size, a
+  JBIG2 stream and its globals and a JPX codestream (the last two because hayro-jbig2 and
+  OpenJPEG take `&[u8]`). Any other word after `table:` fails.
+- `unreached:` admits a site no lane can reach, and the script proves it instead of
+  trusting the line. One proof must hold: the site is under a `#[cfg(feature = "x")]`
+  (or in a module declared under one) where `x` is in neither feature string of
+  `build.json` nor implied by one in the Cargo.toml of the engine, or in a file no `mod`
+  line declares; or its function takes a `Path` (a lane holds a `DataSource`, never a
+  path); or the names its function is called through, and those of each function that
+  calls it, appear in no file under `src/host` and none under `lib/`. A free function is
+  called through its name, a method through its type and its trait, since a method name
+  is never unique; a `use`, `struct`, `enum`, `trait` or `impl` line is no call, and a
+  caller in `#[cfg(test)]` code or under `engine_proofs/` is not a caller. A line whose
+  proof fails fails the build.
+
+A bound is no class: the `.take(N)` in the code is the window. An allow line that matches
+no site fails too, so the file cannot outlive the code it excuses. `--sites` lists every
+site, its key and the proof that holds for it.
 
 `extractImages` writes each image to a sink the caller's factory returns, on the same
 chunked wire as `render` (one shared framer in the engine, one shared delivery in Dart).
@@ -689,7 +720,7 @@ Future<({Uint8List bytes, Map<int, int> resourceIds})> execute(
 | appendPages | source 0, the other PDF, kept for the handle's lifetime and read again by the save | — |
 | addImageStamp / addAttachment / builder `image` | source 0, the secondary data | — |
 | convertToOffice (PDF → DOCX/PPTX/XLSX) | source 0 on demand | streaming ZIP via office_oxide |
-| convertFromOffice (DOCX/PPTX/XLSX → PDF) | whole input buffered (office_oxide reads the ZIP from an in-memory cursor) | CountingWriter streams objects |
+| convertFromOffice (DOCX/PPTX/XLSX → PDF) | source 0 on demand; the package stays in its source and office_oxide holds the whole document model | CountingWriter streams objects |
 
 ### PositionedWrite — Write without Seek
 
@@ -1075,6 +1106,7 @@ tool/                                       ← .sh = orchestration wrappers; .d
 ├── versions.env                            ← single source of truth for pinned versions
 ├── analyze.sh                              ← format + Dart + Rust static analysis
 ├── check_cancel_polls.sh                   ← the loop poll lint (in make test-guards)
+├── check_whole_buffers.sh                  ← the whole-buffer lint (in make test-guards)
 ├── compile.dart                            ← Rust → native / wasm / per-target / both
 ├── asyncify_list.dart                      ← the Asyncify list of a built wasm, with its counts
 ├── generate_fixtures.dart                  ← test fixture generator (make fixtures; stamp-protected)
@@ -1114,7 +1146,7 @@ vendor/pdf_oxide/src/
 │   ├── font_subset/                        ← font subsets (TrueType, CFF)
 │   ├── font_optimizer.rs                   ← Standard 14 unembedding
 │   ├── probe.rs                            ← the out-of-crate door that tool/memprobe runs requests through
-│   ├── engine_proofs/                      ← tests that open documents; shared_state.txt, whole_reads.txt
+│   ├── engine_proofs/                      ← tests that open documents; shared_state.txt
 │   ├── native/                             ← executors and condvar I/O
 │   │   ├── executor.rs                     ← the executor body: thread loop, jobs, leases, reset
 │   │   ├── executor_table.rs               ← registry, thread budget, FFI surface
