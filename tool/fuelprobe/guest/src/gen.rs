@@ -86,12 +86,6 @@ pub fn stream(dict: &str, data: &[u8]) -> Vec<u8> {
     out
 }
 
-pub fn flate(data: &[u8]) -> Vec<u8> {
-    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
-    z.write_all(data).expect("deflates");
-    z.finish().expect("finishes")
-}
-
 /// Pseudo-random numbers that do not depend on the platform.
 pub struct Lcg(pub u32);
 
@@ -158,10 +152,6 @@ impl Shell {
         Self { pdf, catalog, pages, font, kids: Vec::new(), fanout: 0, chunks: Vec::new(), catalog_extra: String::new() }
     }
 
-    pub fn catalog_id(&self) -> u32 {
-        self.catalog
-    }
-
     pub fn pages_id(&self) -> u32 {
         self.pages
     }
@@ -194,10 +184,6 @@ impl Shell {
             chunk.1.push(page);
         }
         page
-    }
-
-    pub fn page_count(&self) -> usize {
-        self.kids.len()
     }
 
     pub fn finish_parts(&mut self) {

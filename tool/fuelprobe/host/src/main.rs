@@ -237,7 +237,7 @@ fn guest(
     let result = start.call(&mut store, ());
     let exit = match result {
         Ok(()) => 0,
-        Err(e) if probe.lock().unwrap().last.is_some() && store.get_fuel().is_ok_and(|left| left == 0) => {
+        Err(_) if probe.lock().unwrap().last.is_some() && store.get_fuel().is_ok_and(|left| left == 0) => {
             let mut measured = std::mem::take(&mut *probe.lock().unwrap());
             let tail = MAX_TOTAL - measured.last.unwrap_or(0);
             measured.max_gap = measured.max_gap.max(tail);
