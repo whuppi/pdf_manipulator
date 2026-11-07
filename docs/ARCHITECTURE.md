@@ -829,7 +829,7 @@ The walls (`test/guards/wasm_size_test.dart`, and the release in `tool/compile.d
 file in `web_assets/` and the release output is under 26,214,400 bytes; each module's parts
 concatenated are byte for byte the module the manifest lists; and each module's gzip size,
 which is what a visitor downloads, is within `normalWasmGzipBudget` /
-`asyncifyWasmGzipBudget` (8.5 and 10.5 MiB) — raising one is a decision, not a fix.
+`asyncifyWasmGzipBudget` (8.875 and 11.25 MiB) — raising one is a decision, not a fix.
 
 Force a mode with `Pdf(config: PdfConfig(webIoMode: PdfIoMode.jspi))`. A forced mode the
 browser cannot run, or Asyncify when the manifest has no entry for it, throws `PdfUnsupported`

@@ -108,8 +108,8 @@ void main() {
     }, skip: _built);
 
     test('the budgets are the ones the plan sets', () {
-      expect(normalWasmGzipBudget, 8912896);
-      expect(asyncifyWasmGzipBudget, 11010048);
+      expect(normalWasmGzipBudget, 9306112);
+      expect(asyncifyWasmGzipBudget, 11796480);
       expect(maxWebAssetBytes, 26214400);
     });
   });

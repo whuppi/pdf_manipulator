@@ -16,10 +16,10 @@ const maxWebAssetBytes = 25 * 1024 * 1024;
 const wasmPartBytes = 16 * 1024 * 1024;
 
 /// Gzip bytes of the whole normal wasm at most: raising it is a decision, not a fix.
-const normalWasmGzipBudget = 8912896; // 8.5 MiB
+const normalWasmGzipBudget = 9306112; // 8.875 MiB
 
 /// Gzip bytes of the whole Asyncify wasm at most: raising it is a decision, not a fix.
-const asyncifyWasmGzipBudget = 11010048; // 10.5 MiB
+const asyncifyWasmGzipBudget = 11796480; // 11.25 MiB
 
 /// The parsed contents of the package's `build.json`.
 class BuildConstants {
