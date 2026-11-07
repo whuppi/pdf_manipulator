@@ -35,7 +35,8 @@ Cross-platform PDF manipulation for Dart & Flutter. Merge, split, render, extrac
 | **Secure** | encrypt, decrypt, sign, verify signatures, strip metadata and scripts |
 | **Standards** | validate PDF/A and PDF/UA, convert to PDF/A |
 | **Shrink** | compress, reduce images, drop embedded copies of the standard fonts |
-| **Make** | pages with text, tables, shapes, images and form fields; photos to PDF; DOCX, PPTX and XLSX to PDF and back; XFA forms to AcroForm |
+| **Make** | pages with text, tables, shapes, images and form fields; photos to PDF |
+| **Convert** | DOCX, PPTX and XLSX to PDF and back; XFA forms to AcroForm |
 
 ---
 
