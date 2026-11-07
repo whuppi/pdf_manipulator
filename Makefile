@@ -585,10 +585,17 @@ test-example-windows:
 	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart -d windows --file-reporter json:../$(TEST_RESULTS_DIR)/int-windows.json
 
 # Runs on the connected/booted device. CI boots the emulator via setup-android.
+# The app's own output (Dart errors, native crashes) is on the device, not in
+# `flutter test`'s report, so logcat for the run goes to logcat-android.txt
+# beside it: a failure the report names without text has its text there.
 test-example-android:
 	@echo "=== Example: Android ==="
 	@mkdir -p $(TEST_RESULTS_DIR)
-	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart --file-reporter json:../$(TEST_RESULTS_DIR)/int-android.json
+	@adb=$$(command -v adb || echo "$${ANDROID_HOME:-$$ANDROID_SDK_ROOT}/platform-tools/adb"); \
+	"$$adb" logcat -c >/dev/null 2>&1 || true; \
+	"$$adb" logcat -v time flutter:V AndroidRuntime:E DEBUG:V '*:S' > $(TEST_RESULTS_DIR)/logcat-android.txt 2>&1 & logcat=$$!; \
+	cd example && $(FLUTTER) test $(VERBOSE) $(TIMEOUT) integration_test/pdf_smoke_test.dart --file-reporter json:../$(TEST_RESULTS_DIR)/int-android.json; \
+	rc=$$?; kill $$logcat 2>/dev/null; exit $$rc
 
 # Runs on the booted simulator. CI boots the simulator via setup-ios.
 test-example-ios:
