@@ -452,6 +452,9 @@ void _registerDependencies(BuildInput input, BuildOutputBuilder output) {
   output.dependencies.add(input.packageRoot.resolve('hook/build.dart'));
   output.dependencies.add(input.packageRoot.resolve('pubspec.yaml'));
   output.dependencies.add(input.packageRoot.resolve('build.json'));
+  // The Rust pin: a new floor re-runs the hook, so the version gate checks
+  // the toolchain again and cargo rebuilds with the newer one.
+  output.dependencies.add(input.packageRoot.resolve('tool/versions.env'));
 
   if (hasVendorSource(input.packageRoot)) {
     for (final crate in const [
