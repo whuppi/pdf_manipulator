@@ -53,16 +53,20 @@ ADDING A VERSION
 ENTRY SHAPE
   ## X.Y.Z-dev.0
   <one prose lead paragraph — to frame a big release or signal "no
-   behavior change", and the migration-guide sentence when a Breaking
-   bullet follows (CONTENT RULES); omit when the bullets speak for themselves>
-  - **Breaking:** <what changed> → <migration step, INLINE>   ← always first
-  - <upgrade action, when one is required>                    ← any required action next
-  - Added/Changed <capability or improvement>                ← then improvements
+   behavior change", at most 80 words, then the migration-guide sentence
+   when a Breaking bullet follows (CONTENT RULES, not counted); omit when
+   the bullets speak for themselves>
+  - **Action:** <a step every user must take, that no tool flags>  ← always first
+  - **Breaking:** <what changed> → <migration step, INLINE>        ← then breaks
+  - Added/Changed <capability or improvement>                     ← then improvements
   - Fixed <symptom> — <the fix, one clause> ([#N](issue-url) reported by [@user](abs-url))  ← fixes last
 
-  Order IS the grouping — Breaking → action → added/changed → fixed. No
-  `###` subsections: bullet order carries the categories. Only Breaking
-  is bold-tagged; everything else is verb-led. Fixes start with "Fixed".
+  Order IS the grouping — action → Breaking → added/changed → fixed. An
+  action comes first because nothing reminds a user who skips it, while
+  the analyzer finds every breaking change. No `###` subsections: bullet
+  order carries the categories. Only Action and Breaking are bold-tagged;
+  everything else is verb-led. Fixes start with "Fixed". No GitHub alert
+  blocks (`> [!NOTE]`): the bold tags already carry the emphasis.
 
 BULLET SHAPE — one change, one sentence
   A reader asks two things: does this touch me, and what do I change.
@@ -118,8 +122,8 @@ CONTENT RULES (never change)
   • Engine/submodule bump → web re-fetch action (NEVER miss this). When a
     release bumps a vendored engine submodule (vendor/pdf_oxide,
     vendor/office_oxide), the web WASM is rebuilt and consumers must
-    re-fetch it, so ALWAYS add the action bullet:
-      - Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
+    re-fetch it, so ALWAYS add the action bullet, first in the entry:
+      - **Action:** engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
     Native self-updates via the build hook; only web needs the manual step.
     When cutting a release, diff the submodule pointer against the previous
     tag (`git ls-tree <prev-tag> vendor/pdf_oxide`) so an engine bump never
@@ -131,8 +135,9 @@ CONTENT RULES (never change)
 
 ## 6.0.0-dev.0
 
-Migrating from 5.0.1: the [migration guide](https://github.com/whuppi/pdf_manipulator/blob/dev/docs/MIGRATION.md#from-501-to-600) has the before and after code for every breaking change below.
+6.0.0 runs every operation in bounded engine memory: a 10,000-page file opens, saves, merges and extracts its text in under 16 MB, where it took up to 163 MB. Redaction removes everything under the box, not only the text; `compress` and every full save write smaller files; and the API is rebuilt around one input type, one page-set type, one error family and three ways to call it. Migrating from 5.0.1: the [migration guide](https://github.com/whuppi/pdf_manipulator/blob/dev/docs/MIGRATION.md#from-501-to-600) has the before and after code for every breaking change below.
 
+- **Action:** engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - **Breaking:** `DataSource` has a new `close()`, and `DataSink` has new `abort(Object reason)` and `close()`, where the library calls `abort` on the sink of an operation that ends cancelled or failed → implement all three in your own sources and sinks (clear a buffer, truncate a file, cancel an upload); the built-in ones do
 - **Breaking:** `FileSource` and `FileSink.create` are `await FileSource.open(file)` and `await FileSink.open(file)`, and whoever opens a source or sink closes it → await the factory and call `close()` when the job is over
 - **Breaking:** `open`, `edit`, `merge`, `split`, `compress`, `sign` and every other call that opens a PDF take a `PdfInput` where they took a `DataSource` and a `password:` → write `PdfInput(source, password: 'x')`; `PdfFile(file)` and `PdfInput.owning` open and close the source for the job
@@ -156,15 +161,14 @@ Migrating from 5.0.1: the [migration guide](https://github.com/whuppi/pdf_manipu
 - **Breaking:** `render` returns a `Future` of the `PdfRenderedPage` descriptors and writes each page to the sink that `sinkFor` returns, where it returned a `Stream` of `RenderedPage` with the bytes; `pages` is optional → pass `(page) => MemorySink()`, or call `doc.bitmap(0)` for one page's bytes
 - **Breaking:** `extractImages` returns a `Future` of `PdfImageInfo` and writes each image to the sink that `sinkFor` returns, where it returned a `Stream` of `PdfImage` with the bytes; `pages` is optional → pass `(image) => sink`
 - **Breaking:** `PdfRenderSize(maxWidth:, maxHeight:)` and `PdfRenderSize.thumbnail(n)` are `PdfRenderSize.fit(maxWidth:, maxHeight:)`, and `PdfRenderSize.dpi(n)` is new → rename the constructor; `thumbnail(n)` is `fit(maxWidth: n, maxHeight: n)`
-- **Breaking:** `signatures`, `formFields`, `xfa` and `attachments` are methods now, where they were getters → add the parentheses
+- **Breaking:** the document's `signatures`, `formFields`, `xfa` and `attachments` and the editor's `pageCount`, `version` and `isModified` are methods, where they were getters → add the parentheses: `await editor.pageCount()`
 - **Breaking:** `PdfDoc.formField(name)` is gone → find the field in `await doc.formFields()`
 - **Breaking:** `validatePdfA` and `validatePdfUa` answer a `PdfValidationReport` (`isCompliant`, `errorCount`, `warningCount`) and take a `PdfALevel` or `PdfUaLevel`, where `PdfValidationResult` had `compliant`, `errors` and `warnings`, `validatePdfUa` answered a bool and `level` was an `int` → read `report.isCompliant`
 - **Breaking:** `convertToPdfA` takes a `PdfALevel` (`a1`, `a2`, `a3`) and defaults to `a2`, where it took an `int` and defaulted to level 1 → pass `level: PdfALevel.a1` for the old default
 - **Breaking:** `planSplitByBookmarks` is `bookmarkRanges()`, and `PdfBookmarkSplit` with `startPage` and `endPage` is `PdfBookmarkRange` with `start` and `end` → rename the call and the fields
 - **Breaking:** `classifyPage` is `classifyPages({pages})`, a page's `type` string and `confidence` are a `kind` (`PdfPageKind`), and `classifyDocument` answers a `PdfDocumentKind` where it answered a `PdfDocumentClassification` → read `result.first.kind`
 - **Breaking:** `PdfFormField` has `kind` (`PdfFormFieldKind`, with `textField`, `pushButton` and `signatureField`), `isReadOnly` and `isRequired`, where it had `type` (`PdfFormFieldType`), `readOnly` and `required`; `PdfCheckedValue.checked` is `isChecked` → rename the fields and the type
-- **Breaking:** a radio group's value reads as `PdfChoiceValue` with the selected option's name, or `PdfNoValue` when none is selected, where it read as `PdfCheckedValue` → match on `PdfChoiceValue` for radio groups
-- **Breaking:** a combo box's or list box's value reads as `PdfChoiceValue` (`PdfMultiChoiceValue` for several options), where it read as `PdfTextValue` → match on `PdfChoiceValue` for choice fields
+- **Breaking:** the value of a radio group, combo box or list box reads as `PdfChoiceValue` with the selected option (`PdfMultiChoiceValue` for several, `PdfNoValue` for none), where a radio group read as `PdfCheckedValue` and the others as `PdfTextValue` → match on `PdfChoiceValue`
 - **Breaking:** `size` of `PdfAttachment` is `sizeBytes`, `serial` of `PdfCertificateInfo` is `serialNumber`, and `regions` of `PdfRedactionReport` is `regionCount` → rename the fields
 - **Breaking:** `PdfSignatureInfo` has a required `coversWholeDocument` parameter → pass it where you construct one, in test fakes for example
 - **Breaking:** the fields of `PdfPermissions` are `canPrint`, `canPrintHighQuality`, `canModify`, `canCopy`, `canAnnotate`, `canFillForms`, `canExtractForAccessibility` and `canAssemble`, where they were `print`, `printHq`, `modify`, `copy`, `annotate`, `fillForms`, `accessibility` and `assemble`, and `toBits` is gone → rename the arguments and the fields
@@ -172,7 +176,6 @@ Migrating from 5.0.1: the [migration guide](https://github.com/whuppi/pdf_manipu
 - **Breaking:** `rotation` of `PdfWatermarkStyle` is `angleDegrees` → rename the argument
 - **Breaking:** `PdfExtractionFormat.plainText` is `plain` and `.text` is `layout`, and `PdfEncryptionAlgorithm` has `rc4Key40`, `rc4Key128`, `aesKey128` and `aesKey256` where it had `rc4_40`, `rc4_128`, `aes128` and `aes256` → rename the values
 - **Breaking:** `PdfConfig(webLaneWorkerUrl:, maxLanes:)` is `PdfConfig(webWorkerUrl:, concurrency:)` → rename the arguments; `concurrency` defaults to `max(2, cores / 2)` operations at once
-- **Breaking:** `PdfEditor.pageCount`, `version` and `isModified` are methods → write `await editor.pageCount()`
 - **Breaking:** the `setTitle`, `setAuthor`, `setSubject`, `setKeywords`, `setProducer` and `setCreationDate` of the editor and the builder are one `setMetadata(PdfMetadata)`, which replaces the standard fields, and the editor reads them with `metadata()` → change one with `setMetadata((await editor.metadata()).copyWith(title: 'X'))`
 - **Breaking:** `rotatePage`, `rotateAllPages` and `setPageRotation` are `rotatePages(by:, pages:)` and `setRotation(rotation, pages:)`, which take a `PdfRotation` (`r0`, `r90`, `r180`, `r270`) where they took `degrees:` → call `rotatePages(by: PdfRotation.r90)`
 - **Breaking:** `pageMediaBox`, `pageCropBox`, `setPageMediaBox` and `setPageCropBox` are `pageInfo({pages})` with `mediaBox` and `cropBox`, `setMediaBox(box, {pages})` and `setCropBox(box, {pages})` → a null crop box removes the crop box
@@ -203,7 +206,6 @@ Migrating from 5.0.1: the [migration guide](https://github.com/whuppi/pdf_manipu
 - **Breaking:** the page builder's `fieldKeystroke`, `fieldFormat`, `fieldValidate` and `fieldCalculate`, and its `linkUrl` and `linkPage`, are arguments of the call that writes the field or text → pass `scripts: const PdfFieldScripts(format: 'x')` or `link: const PdfLink.url('https://example.com')`
 - **Breaking:** the page builder's `textField` takes `value` where it took `defaultValue`, `checkbox` takes `isChecked` where it took `checked`, and `radioGroup` takes `PdfRadioOption(value, bounds)` where options were records → rename the arguments
 - **Breaking:** `PdfTextAlignment` is `PdfAlignment`, and the page builder's `image(data, rect, {altText})` is `image(data, bounds, {altText})` where a null `altText` places an artifact → rename the type; pass `altText: 'x'` for a described image
-- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Added `redact(page, regions, {overlay})`, which marks and applies its own regions in one step and returns the report — marks queued before stay queued, and an error leaves nothing marked or applied
 - Added `PdfRedactionOverlay`, `fill(color)` or `none()`: a redaction with no overlay removes the content and draws no box
 - Added `PdfEditor.clearRedactions()`, and `field(name).setTooltip`, `setMaxLength`, `setBackgroundColor` and `setBorderColor` take null to remove the tooltip, the limit or the colour
@@ -311,7 +313,7 @@ Migrating from 5.0.1: the [migration guide](https://github.com/whuppi/pdf_manipu
 
 ## 5.0.1-dev.0
 
-- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
+- **Action:** engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Fixed a `keep:` list without `extract`, such as `keep: []`, failing to compile the engine with `cannot find search in crate` — the search module now compiles in every keep-set ([#256](https://github.com/whuppi/pdf_manipulator/issues/256) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack))
 - Fixed a PDF encrypted with Standard Security R2–R4 (RC4) failing to open on web with `compiled without 'legacy-crypto'` — the web engine now carries the same legacy encryption and ICC colour support as native ([#257](https://github.com/whuppi/pdf_manipulator/issues/257) reported by [@crurui](https://github.com/crurui))
 
@@ -319,13 +321,13 @@ Migrating from 5.0.1: the [migration guide](https://github.com/whuppi/pdf_manipu
 
 Migrating from 4.2.0: the [migration guide](https://github.com/whuppi/pdf_manipulator/blob/dev/docs/MIGRATION.md#from-420-to-500) has the before and after code for every breaking change below.
 
+- **Action:** engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - **Breaking:** `PdfEditor.optimizeImages(quality:, minSize:)` is removed → use `reduceImages(PdfImagePolicy(jpegQuality: quality, minPixels: minSize, convertCmykToRgb: true))`; the count it returned is `report.changed`
 - **Breaking:** `compress(imageQuality:)` → `compress(images:)`, a `PdfImagePolicy` defaulting to `PdfImagePolicy.ebook` (150 ppi, JPEG quality 75), so a plain `compress` now downsamples images drawn above 225 ppi; pass `PdfImagePolicy(jpegQuality: q)` for the old behaviour
 - **Breaking:** the editor's reads are noun methods, never with a `get` prefix: `getTitle()` and the other metadata reads → `metadata()`, `getPageMediaBox(page)` → `pageInfo(pages:)`, and on `PdfDoc` `getSignatures()` → `signatures()`
 - **Breaking:** `flattenAllAnnotations()` is `flattenAnnotations({int? page})`, and `flattenForms()` gains the same optional `page`; without it both flatten every page as before
 - **Breaking:** `applyRedactions()` now returns a `PdfRedactionReport` (regions, glyphs removed, images modified or removed, paths pruned) instead of `void`; awaiting it still applies the redactions
 - **Breaking:** `mergeFrom(other)` gains `pages:` (a 0-based list; `null` merges every page) and `embedFile(name, data)` gains `description:`, `mimeType:` and `relationship:`; positional callers are unchanged
-- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Added `PdfEditor.pageImages(page)` — every image XObject drawn on a page with its resource name, bounds and transform; the name is what `setImageBounds` takes
 - Added `PdfEditor.setImageBounds(page, name, bounds)` — move, or move and resize, an image by the name `pageImages` lists
 - Added `PdfEditor.reduceImages(PdfImagePolicy)` — downsamples images to the resolution they are drawn at and re-encodes them by kind (JPEG, predicted Flate, CCITT G4), soft masks included, presets `screen`/`ebook`/`print`/`lossless`, one `PdfImageReport` row per image with the reason when it is kept; images reached only through annotation appearances, patterns or inline `BI … EI` stay as stored
@@ -345,7 +347,7 @@ Migrating from 4.2.0: the [migration guide](https://github.com/whuppi/pdf_manipu
 
 ## 4.2.1-dev.0
 
-- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
+- **Action:** engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Fixed a DOCX table converting to PDF several times wider than declared, columns off the page — the converter now honours the `w:tblGrid` widths, scaled to the printable width ([#243](https://github.com/whuppi/pdf_manipulator/issues/243) reported by [@kampmapa1-design](https://github.com/kampmapa1-design))
 - Fixed a web instance failing with `WASM init failed: Out of memory` during rapid create-and-dispose churn — a worker slot is freed when the browser confirms the worker is gone, not at `terminate()`
 - Fixed a page's media box reporting the far corner as its width and height whenever the MediaBox origin is not (0, 0)
@@ -360,15 +362,15 @@ Migrating from 4.2.0: the [migration guide](https://github.com/whuppi/pdf_manipu
 
 ## 4.2.0-dev.0
 
-- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
+- **Action:** engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Added `setCheckboxFieldValue(fieldName, checked)` — checks a checkbox without knowing its on-state name (`/Yes`, `/On`, `/1` …); `setFormFieldValue` still takes the name directly
 - Fixed a checked checkbox flattening as an empty box and losing its value on reopen — button values are read, resolved and written as appearance-state names, and flattening draws the state that was set ([#215](https://github.com/whuppi/pdf_manipulator/issues/215) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack))
 - Fixed radio groups being impossible to select — the state is set on the kid widget that offers it (siblings cleared), and the Radio/Pushbutton flag bits are read per ISO 32000-1
 
 ## 4.1.0-dev.0
 
+- **Action:** verify your app after upgrading: `keep: auto` now actually trims the native engine; if something is missing, state it with `keep: [render, …]`
 - Added `scan-dirs` — extra directories for `keep: auto` to scan beyond `lib/` and `bin/` (`scan-dirs: [tools, packages/shared/lib]`, relative to your app); a directory that is not there keeps the full binary rather than scanning less
-- Verify your app after upgrading: `keep: auto` now actually trims the native engine; if something is missing, state it with `keep: [render, …]`
 - Fixed `setup` ignoring your config when run from a subfolder of your project — both lanes now locate your app from its own `.dart_tool/`, not from the working directory
 - Fixed `keep: auto` keeping every capability on native — the build hook scanned its own package instead of your app; it now derives your app from the hook's output path (web was never affected)
 - Fixed the native keep decision never re-evaluating — your source is now a hook dependency, so adding a `sign()` call recompiles the engine with signatures
@@ -384,7 +386,7 @@ Migrating from 3.0.0: the [migration guide](https://github.com/whuppi/pdf_manipu
 
 ## 3.0.0-dev.1
 
-- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
+- **Action:** engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Changed the web build to compile wasm-bindgen and wasm-opt inside the engine's cargo workspace — `wasm-bindgen-cli`, `binaryen` and `jq` are no longer needed, [Rust](https://rustup.rs) is the only requirement ([#177](https://github.com/whuppi/pdf_manipulator/issues/177) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack))
 - Fixed `trim: auto` counting member names inside comments as usage — the scan ignores comments and prints where each kept member matched, e.g. `render (lib/preview.dart:12)` ([#175](https://github.com/whuppi/pdf_manipulator/issues/175) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack))
 - Fixed source builds failing with "rustup: command not found" on Rust installs not managed by rustup — the build asks rustc which targets are installed and uses rustup only as the fallback ([#176](https://github.com/whuppi/pdf_manipulator/issues/176) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack))
@@ -393,9 +395,9 @@ Migrating from 3.0.0: the [migration guide](https://github.com/whuppi/pdf_manipu
 
 Migrating from 2.1.4: the [migration guide](https://github.com/whuppi/pdf_manipulator/blob/dev/docs/MIGRATION.md#from-214-to-300) has the before and after code for every breaking change below.
 
+- **Action:** engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - **Breaking:** flattening CJK or emoji form values no longer uses a bundled font (4.4 MB on every install) → register one: `await pdf.registerFallbackFont(PdfFallbackFontKind.cjk, fontBytes)` (`.emoji` for emoji); without one the value is still saved, only the baked-in look falls back to the field's font
 - **Breaking** (only if you took the retracted 2.2.0): `trim-detector: analyzer` is now `scan` → change it or delete the line, it is the default
-- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Added trim — keep only the features your app uses: `trim: auto` under `hooks: user_defines: pdf_manipulator:`, or `trim: {keep: [render, signatures]}`; on web also run `flutter pub run pdf_manipulator:setup --trim`; needs [Rust](https://rustup.rs), compiled once and cached ([#167](https://github.com/whuppi/pdf_manipulator/issues/167))
 - Added `Pdf.registerFallbackFont(PdfFallbackFontKind, Uint8List)`
 - Changed the default binary — dead engine surfaces, barcode support and the embedded fonts are gone: native 28.7 MB → 21.1 MB, gzipped web download 11.3 MB → 7.2 MB; no action needed
@@ -409,22 +411,22 @@ Migrating from 2.1.4: the [migration guide](https://github.com/whuppi/pdf_manipu
 > Migrating from 2.1.4: the [migration guide](https://github.com/whuppi/pdf_manipulator/blob/dev/docs/MIGRATION.md#from-214-to-300) has the before and after code for this change, in its 3.0.0 section.
 
 
+- **Action:** engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - **Breaking:** flattening CJK or emoji form values no longer uses a bundled font (4.4 MB on every install) → register one: `await pdf.registerFallbackFont(PdfFallbackFontKind.cjk, fontBytes)` (`.emoji` for emoji); without one the value is still saved, only the baked-in look falls back to the field's font
-- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Added trim — keep only the features your app uses: `trim: auto` under `hooks: user_defines: pdf_manipulator:`, or `trim: {keep: [render, signatures]}`; on web also run `flutter pub run pdf_manipulator:setup --trim`; needs [Rust](https://rustup.rs), compiled once and cached ([#167](https://github.com/whuppi/pdf_manipulator/issues/167))
 - Added `Pdf.registerFallbackFont(PdfFallbackFontKind, Uint8List)`
 - Changed the default binary — dead engine surfaces, barcode support and the embedded fonts are gone: native 28.7 MB → 21.1 MB, gzipped web download 11.3 MB → 7.2 MB; no action needed
 
 ## 2.1.4-dev.0
 
-- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
+- **Action:** engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Fixed `flattenForms` dropping a field's value when fill and flatten happen in separate editor sessions — the appearance is regenerated from the persisted `/V` ([#161](https://github.com/whuppi/pdf_manipulator/issues/161) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack))
 - Fixed `addImageStamp` erasing a page's form widgets when `/Annots` is an indirect reference ([#161](https://github.com/whuppi/pdf_manipulator/issues/161) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack))
 - Fixed a reopened filled form rendering blank where its value should appear — the renderer regenerates a widget's appearance from `/V` under `/NeedAppearances`, matching the flattener
 
 ## 2.1.3-dev.0
 
-- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
+- **Action:** engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Fixed `setFormFieldValue` reporting field-not-found on forms whose field names are raw UTF-8 (LibreOffice-class producers) — one spec-tolerant text-string decoder covers UTF-16, UTF-8 and PDFDocEncoding ([#155](https://github.com/whuppi/pdf_manipulator/issues/155))
 - Fixed `flattenForms` baking mojibake for values outside ASCII (`ß` → `ÃŸ`) — values decode per ISO 32000-1 §7.9.2.2 and appearance text is written in WinAnsi ([#155](https://github.com/whuppi/pdf_manipulator/issues/155))
 - Fixed fill → flatten silently dropping the value on widgets without an appearance stream when the field name is non-ASCII — the flattener and the form extractor decode names the same way ([#155](https://github.com/whuppi/pdf_manipulator/issues/155))
@@ -433,7 +435,7 @@ Migrating from 2.1.4: the [migration guide](https://github.com/whuppi/pdf_manipu
 
 ## 2.1.2-dev.0
 
-- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
+- **Action:** engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Fixed a Flutter Web WASM (`dart2wasm`) compile failure — a switch over `Object?` that dart2js accepted was non-exhaustive under dart2wasm ([#145](https://github.com/whuppi/pdf_manipulator/issues/145) reported by [@DarkWingMcQuack](https://github.com/DarkWingMcQuack))
 - Fixed pub.dev not advertising Flutter Web support — the web runtime resolves to a stub default that `pana` can analyze
 
@@ -443,7 +445,7 @@ Migrating from 2.1.4: the [migration guide](https://github.com/whuppi/pdf_manipu
 
 ## 2.1.0-dev.0
 
-- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
+- **Action:** engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Added document producer and creation-date metadata — `PdfEditor.setProducer()` / `getProducer()` and `setCreationDate()` / `getCreationDate()` (raw PDF date strings, e.g. `D:20240101120000Z`), plus `PdfDoc.producer`, `PdfDoc.creator`, and `PdfDoc.creationDate` read on open
 
 ## 2.0.2-dev.0
@@ -463,9 +465,9 @@ The concurrency rewrite. Every operation now runs fully isolated on its
 own *lane* — a dedicated Rust thread (native) or Web Worker (web).
 Migrating from 1.0.6: the [migration guide](https://github.com/whuppi/pdf_manipulator/blob/dev/docs/MIGRATION.md#from-106-to-200) has the before and after code for every breaking change below.
 
+- **Action:** engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - **Breaking:** `webCoordinatorUrl` + `webWorkerUrl` → one `webLaneWorkerUrl`
 - **Breaking:** web now ships `lane_worker.js` (was `coordinator.js` + `worker.js`)
-- Engine updated — web: re-run `flutter pub run pdf_manipulator:setup --force web` (native updates itself)
 - Every method returns `PdfTask<T>` — a `Future` plus `cancel()`; cancelling kills just that job
 - `pdf.dispose()` is instant — no joins, no timeouts, no leaks; in-flight ops resolve with `PdfCancelled`
 - Operations on different handles now run truly parallel on native (1.x serialized them)
