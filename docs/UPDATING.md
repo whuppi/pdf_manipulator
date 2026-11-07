@@ -13,7 +13,7 @@ patch branch.
 | Crate | Upstream | Fork | Branch | Base tag | Submodule |
 |---|---|---|---|---|---|
 | pdf_oxide | [`yfedoseev/pdf_oxide`](https://github.com/yfedoseev/pdf_oxide) | [`whuppi/pdf_oxide`](https://github.com/whuppi/pdf_oxide) | `pdf_manipulator/0.3.78-patches` | `v0.3.78` | `vendor/pdf_oxide/` |
-| office_oxide | [`yfedoseev/office_oxide`](https://github.com/yfedoseev/office_oxide) | [`whuppi/office_oxide`](https://github.com/whuppi/office_oxide) | `office_kit/0.1.11-patches` | `v0.1.11` | `vendor/office_oxide/` |
+| office_oxide | [`yfedoseev/office_oxide`](https://github.com/yfedoseev/office_oxide) | [`whuppi/office_oxide`](https://github.com/whuppi/office_oxide) | `office_kit/0.1.16-patches` | `v0.1.16` | `vendor/office_oxide/` |
 | tiny-skia | [`linebender/tiny-skia`](https://github.com/linebender/tiny-skia) | [`whuppi/tiny-skia`](https://github.com/whuppi/tiny-skia) | `pdf_manipulator/0.12.0-patches` | `v0.12.0` | `vendor/tiny_skia/` |
 
 **Terms used in this doc:**
@@ -54,7 +54,7 @@ to a new upstream `vX.Y.Z`:
    CI actually uses; it MUST equal the branch's version
 3. the **Branch** and **Base tag** columns in the table above
 
-office_oxide is the same, under its own branch name and `v0.1.11`. tiny-skia
+office_oxide is the same, under its own branch name and `v0.1.16`. tiny-skia
 is the same, under `pdf_manipulator/X.Y.Z-patches` and its own tag (`v0.12.0`);
 it has no `build.json` entry.
 

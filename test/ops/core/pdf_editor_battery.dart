@@ -3798,6 +3798,30 @@ void registerEditorTests(Pdf Function() createPdf) {
       await editor.dispose();
     }, timeout: t(1));
 
+    test('a saved name holding a delimiter still finds its font', () async {
+      final pdf = createPdf();
+      final source = await pdf.open(PdfInput(src(delimiterNamePdf)));
+      expect(
+        (await extractTextToString(source, pages: const PdfPages.all())).trim(),
+        'X',
+      );
+      await source.dispose();
+      final editor = await pdf.edit(PdfInput(src(delimiterNamePdf)));
+      await editor.addStamp(
+        PdfStamp.draft,
+        bounds: const PdfRect(x: 50, y: 50, width: 100, height: 40),
+        pages: const PdfPages.single(0),
+      );
+      final sink = TestSink();
+      await editor.save(sink);
+      await editor.dispose();
+      final doc = await pdf.open(PdfInput(src(sink.takeBytes())));
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
+      expect(text, contains('X'));
+      expect(text, isNot(contains('!')));
+      await doc.dispose();
+    }, timeout: t(1));
+
     test('the one-shot door runs an edit of this unit', () async {
       final pdf = createPdf();
       final sink = TestSink();

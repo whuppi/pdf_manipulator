@@ -1571,7 +1571,7 @@ this table summarizes what each patched file carries and why.
 
 ### office_oxide — streaming OPC writer
 
-Branch `office_kit/0.1.11-patches`. Marked with `── office_kit patch ──`.
+Branch `office_kit/0.1.16-patches`. Marked with `── office_kit patch ──`.
 
 | File | Patch |
 |---|---|

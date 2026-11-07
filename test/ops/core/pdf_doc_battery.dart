@@ -447,6 +447,19 @@ void registerDocTests(Pdf Function() createPdf) {
       await doc.dispose();
     }, timeout: t(1));
 
+    test('a ToUnicode CMap is read whatever its line breaks and ranges per '
+        'line', () async {
+      final doc = await createPdf().open(PdfInput(src(splitRangeCmapsPdf)));
+      final text = await extractTextToString(doc, pages: const PdfPages.all());
+      final lines = text
+          .split('\n')
+          .map((line) => line.trim())
+          .where((line) => line.isNotEmpty)
+          .toList();
+      expect(lines, ['HI', 'HIJ', 'AB', 'HIJ']);
+      await doc.dispose();
+    }, timeout: t(1));
+
     // ── Extract images ────────────────────────────────────────────
 
     test('extractImages from blank PDF returns empty', () async {
